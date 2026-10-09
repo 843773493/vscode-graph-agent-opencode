@@ -53,7 +53,7 @@ class ContextProjectionOwnerMixin:
             for entry in snapshot.selection
             if entry.included and entry.ref.ref_type == "canonical_item"
         )
-        items = self._storage.read_items(
+        items = self._storage.storage.read_items(
             snapshot.session_id,
             snapshot.thread_id,
             checkpoint_ns=checkpoint_ns,
@@ -100,7 +100,7 @@ class ContextProjectionOwnerMixin:
         )
         return project_native_request(
             committed,
-            self._storage.read_items(
+            self._storage.storage.read_items(
                 session_id, thread_id, checkpoint_ns=checkpoint_ns, item_ids=item_ids
             ),
             self._request_content_for_plan(
@@ -293,7 +293,7 @@ class ContextProjectionOwnerMixin:
         """request source 的 typed owner 与用途必须在读取正文前一致。"""
         detail_ref.require_owner(session_id, thread_id)
         record = prepared.record if prepared is not None else detail_record_from_mapping(
-            self._storage.get_context_plan_detail(
+            self._storage.assemblies.get_context_plan_detail(
                 session_id,
                 thread_id,
                 detail_ref=detail_ref,
@@ -330,7 +330,7 @@ class ContextProjectionOwnerMixin:
         """新 assembly 复用旧 sealed source 的详情，绝不读取当前源文件。"""
         if isinstance(ref.source_ref, DetailRef):
             ref.source_ref.require_owner(session_id, thread_id)
-        for snapshot in self._storage.list_context_assemblies(
+        for snapshot in self._storage.assemblies.list_context_assemblies(
             session_id,
             thread_id,
             checkpoint_ns=checkpoint_ns,

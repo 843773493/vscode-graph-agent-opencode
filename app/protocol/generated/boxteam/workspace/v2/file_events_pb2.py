@@ -22,19 +22,20 @@ _runtime_version.ValidateProtobufRuntimeVersion(
 _sym_db = _symbol_database.Default()
 
 
+from boxteam.workspace.v2 import public_pb2 as boxteam_dot_workspace_dot_v2_dot_public__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n&boxteam/workspace/v2/file_events.proto\x12\x14\x62oxteam.workspace.v2\"=\n\x13WorkspaceFileChange\x12\x12\n\x04kind\x18\x01 \x01(\tR\x04kind\x12\x12\n\x04path\x18\x02 \x01(\tR\x04path\"{\n\x18WorkspaceFileChangeBatch\x12\x43\n\x07\x63hanges\x18\x01 \x03(\x0b\x32).boxteam.workspace.v2.WorkspaceFileChangeR\x07\x63hanges\x12\x1a\n\x08overflow\x18\x02 \x01(\x08R\x08overflow\"$\n\x08SseError\x12\x18\n\x07message\x18\x01 \x01(\tR\x07messageb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n&boxteam/workspace/v2/file_events.proto\x12\x14\x62oxteam.workspace.v2\x1a!boxteam/workspace/v2/public.proto\"=\n\x13WorkspaceFileChange\x12\x12\n\x04kind\x18\x01 \x01(\tR\x04kind\x12\x12\n\x04path\x18\x02 \x01(\tR\x04path\"\xe4\x02\n\x18WorkspaceFileChangeBatch\x12\x43\n\x07\x63hanges\x18\x01 \x03(\x0b\x32).boxteam.workspace.v2.WorkspaceFileChangeR\x07\x63hanges\x12\x1a\n\x08overflow\x18\x02 \x01(\x08R\x08overflow\x12U\n\x0b\x64irectories\x18\x03 \x03(\x0b\x32\x33.boxteam.workspace.v2.WorkspaceDirectoryRevisionDTOR\x0b\x64irectories\x12\x19\n\x08\x65vent_id\x18\x04 \x01(\x03R\x07\x65ventId\x12+\n\x11invalidated_roots\x18\x05 \x03(\tR\x10invalidatedRoots\x12H\n\tsnapshots\x18\x06 \x03(\x0b\x32*.boxteam.workspace.v2.WorkspaceFileListDTOR\tsnapshots\"$\n\x08SseError\x12\x18\n\x07message\x18\x01 \x01(\tR\x07messageb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'boxteam.workspace.v2.file_events_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_WORKSPACEFILECHANGE']._serialized_start=64
-  _globals['_WORKSPACEFILECHANGE']._serialized_end=125
-  _globals['_WORKSPACEFILECHANGEBATCH']._serialized_start=127
-  _globals['_WORKSPACEFILECHANGEBATCH']._serialized_end=250
-  _globals['_SSEERROR']._serialized_start=252
-  _globals['_SSEERROR']._serialized_end=288
+  _globals['_WORKSPACEFILECHANGE']._serialized_start=99
+  _globals['_WORKSPACEFILECHANGE']._serialized_end=160
+  _globals['_WORKSPACEFILECHANGEBATCH']._serialized_start=163
+  _globals['_WORKSPACEFILECHANGEBATCH']._serialized_end=519
+  _globals['_SSEERROR']._serialized_start=521
+  _globals['_SSEERROR']._serialized_end=557
 # @@protoc_insertion_point(module_scope)

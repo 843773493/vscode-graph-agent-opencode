@@ -100,9 +100,10 @@ class SessionTurnHistoryService:
         session_id: str,
         request: TurnHistoryLoadRequest,
         *,
+        thread_id: str | None = None,
         history_loading: HistoryLoadingConfig | None = None,
     ) -> TurnHistoryPageDTO:
-        thread_id = await self._session_service.resolve_main_thread(session_id)
+        thread_id = await self._session_service.resolve_main_thread(session_id) if thread_id is None else await self._session_service.resolve_thread(session_id, thread_id)
         page = self._checkpointer.load_history(
             session_id,
             thread_id,

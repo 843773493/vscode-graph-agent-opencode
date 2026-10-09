@@ -23,6 +23,22 @@ from app.services.infrastructure.resource_platform.derivation.types import (
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
+from app.services.infrastructure.rollout_context.activation.body import (
+    BODY_UNAVAILABLE_CODE,
+    PAYLOAD_DETAIL_KIND,
+    PAYLOAD_RETENTION_CLASS,
+    ResourceActivationBodyStore,
+)
+from app.services.infrastructure.rollout_context.activation.common import (
+    HASH_MISMATCH_CODE,
+    ResourceActivationStoreError,
+)
+from app.services.infrastructure.rollout_context.activation.lineage import (
+    ActivationLineageBodyStore,
+)
+from app.services.infrastructure.rollout_context.activation.store import (
+    ResourceActivationStore,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -32,23 +48,7 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     ContextPlanDetailStore,
 )
-from app.services.infrastructure.rollout_context.storage.resource_activation_body import (
-    BODY_UNAVAILABLE_CODE,
-    PAYLOAD_DETAIL_KIND,
-    PAYLOAD_RETENTION_CLASS,
-    ResourceActivationBodyStore,
-)
-from app.services.infrastructure.rollout_context.storage.resource_activation_common import (
-    HASH_MISMATCH_CODE,
-    ResourceActivationStoreError,
-)
-from app.services.infrastructure.rollout_context.storage.resource_activation_lineage import (
-    ActivationLineageBodyStore,
-)
-from app.services.infrastructure.rollout_context.storage.resource_activation_store import (
-    ResourceActivationStore,
-)
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from app.services.orchestration.resource_activation import (
     ResourceActivationCoordinator,
     ResourceActivationPolicySnapshot,
@@ -80,8 +80,8 @@ def body_workspace(request: pytest.FixtureRequest) -> Path:
 def activation_body_store(body_workspace: Path):
     sessions_root = body_workspace / ".boxteam" / "sessions"
     bundle = seed_catalog_session_bundle(sessions_root, SESSION_ID)
-    storage = RolloutStorage(sessions_root, message_codec=LangChainMessageCodec())
-    storage.initialize(SESSION_ID, validate_jsonl_items=False)
+    storage = RolloutContextStore(sessions_root, message_codec=LangChainMessageCodec())
+    storage.storage.initialize(SESSION_ID, validate_jsonl_items=False)
     detail_store = ContextPlanDetailStore(sessions_root)
     return (
         storage,
@@ -149,7 +149,7 @@ def test_payload_is_required_protected_and_uses_canonical_hash_and_length(
     )
 
     record = detail_record_from_mapping(
-        storage.get_context_plan_detail(SESSION_ID, thread_id, detail_ref=detail_ref)
+        storage.assemblies.get_context_plan_detail(SESSION_ID, thread_id, detail_ref=detail_ref)
     )
     assert record.detail_kind == PAYLOAD_DETAIL_KIND
     assert record.retention_class == PAYLOAD_RETENTION_CLASS
@@ -161,7 +161,7 @@ def test_payload_is_required_protected_and_uses_canonical_hash_and_length(
     record.detail_ref.require_owner(SESSION_ID, thread_id, SNAPSHOT_ID)
 
     manifest = detail_record_from_mapping(
-        storage.get_context_plan_detail(
+        storage.assemblies.get_context_plan_detail(
             SESSION_ID,
             thread_id,
             detail_ref=record.detail_ref,
@@ -188,7 +188,7 @@ def test_payload_read_rejects_resource_ordinal_and_hash_conflicts(
         activation_ordinal=0,
     )
     record = detail_record_from_mapping(
-        storage.get_context_plan_detail(SESSION_ID, thread_id, detail_ref=detail_ref)
+        storage.assemblies.get_context_plan_detail(SESSION_ID, thread_id, detail_ref=detail_ref)
     )
     snapshot, binding = _snapshot_with_detail(record.detail_ref, payload, thread_id)
 
@@ -218,7 +218,7 @@ def test_payload_read_rejects_wrong_owner_and_retention_tombstone(
         activation_ordinal=0,
     )
     record = detail_record_from_mapping(
-        storage.get_context_plan_detail(SESSION_ID, thread_id, detail_ref=detail_ref)
+        storage.assemblies.get_context_plan_detail(SESSION_ID, thread_id, detail_ref=detail_ref)
     )
     snapshot, binding = _snapshot_with_detail(record.detail_ref, payload, thread_id)
     wrong_owner_binding = replace(
@@ -238,7 +238,7 @@ def test_payload_read_rejects_wrong_owner_and_retention_tombstone(
         body_store.read_payload(snapshot=snapshot, binding=wrong_owner_binding)
     assert binding_error.value.code == HASH_MISMATCH_CODE
 
-    storage.mark_context_plan_details_unavailable(
+    storage.assemblies.mark_context_plan_details_unavailable(
         SESSION_ID,
         thread_id,
         detail_refs=(record.detail_ref,),
@@ -251,8 +251,8 @@ def test_payload_read_rejects_wrong_owner_and_retention_tombstone(
 def test_exact_sensitive_payload_persists_without_key_dependencies(body_workspace: Path) -> None:
     sessions_root = body_workspace / ".boxteam" / "sessions"
     bundle = seed_catalog_session_bundle(sessions_root, SESSION_ID)
-    storage = RolloutStorage(sessions_root, message_codec=LangChainMessageCodec())
-    storage.initialize(SESSION_ID, validate_jsonl_items=False)
+    storage = RolloutContextStore(sessions_root, message_codec=LangChainMessageCodec())
+    storage.storage.initialize(SESSION_ID, validate_jsonl_items=False)
     body_store = ResourceActivationBodyStore(storage, ContextPlanDetailStore(sessions_root))
     payload = {"secret": "exact activation body"}
     ref = body_store.write_resource_body(
@@ -260,7 +260,7 @@ def test_exact_sensitive_payload_persists_without_key_dependencies(body_workspac
         activation_snapshot_id=SNAPSHOT_ID, checkpoint_ns="",
         payload=payload, resource_id="skill:body-owner", activation_ordinal=0,
     )
-    record = detail_record_from_mapping(storage.get_context_plan_detail(
+    record = detail_record_from_mapping(storage.assemblies.get_context_plan_detail(
         SESSION_ID, bundle.main_thread_id, detail_ref=ref,
     ))
     snapshot, binding = _snapshot_with_detail(record.detail_ref, payload, bundle.main_thread_id)
@@ -335,7 +335,7 @@ def test_same_turn_resume_payload_reuse_verifies_complete_protected_members(
     activation_body_store,
 ) -> None:
     storage, body_store, thread_id = activation_body_store
-    accepted = storage.accept_turn(
+    accepted = storage.executions.accept_turn(
         SESSION_ID, thread_id=thread_id, turn_id="turn-members",
         accepted_ingress_id="evt-members", acceptance_idempotency_key="accept-members",
         job_id="job-members", admission_idempotency_key="admit-members", payload="验证成员",
@@ -362,11 +362,11 @@ def test_same_turn_resume_payload_reuse_verifies_complete_protected_members(
         storage, ActivationLineageBodyStore(storage, body_store._detail_store),
     )
     store.save_snapshot(first)
-    storage.mark_execution_lost(
+    storage.executions.mark_execution_lost(
         SESSION_ID, thread_id=thread_id, turn_id=first.turn_id,
         execution_id=first.execution_id, reason="activation-test-resume",
     )
-    resumed = storage.resume_turn(
+    resumed = storage.executions.resume_turn(
         SESSION_ID, thread_id=thread_id, job_id="job-members-resumed", turn_id=first.turn_id,
     )
     retry = replace(

@@ -128,13 +128,13 @@ def browser_runtime(
 def _projection_evidence(saver, session_id, snapshot):
     plan = snapshot.as_sealed_plan()
     history, history_loss = saver.project_context_plan_to_history_with_diagnostics(
-        session_id, saver._storage.main_thread_id(session_id), plan
+        session_id, saver._storage.storage.main_thread_id(session_id), plan
     )
     _, langchain_loss = saver.project_context_plan_with_diagnostics(
-        session_id, saver._storage.main_thread_id(session_id), plan
+        session_id, saver._storage.storage.main_thread_id(session_id), plan
     )
     native = saver.project_context_plan_to_native(
-        session_id, saver._storage.main_thread_id(session_id), plan
+        session_id, saver._storage.storage.main_thread_id(session_id), plan
     )
     selection = [entry.to_dict() for entry in snapshot.selection]
     assert native["selection"] == selection
@@ -184,7 +184,7 @@ async def browser_source(browser_runtime, native_http_server):
         await invoke_provider_dispatch(saver, session_id, turn_id, endpoint, state.api_key, target_format="responses")
         with dispatch_execution_scope(saver, session_id, turn_id):
             (first,) = saver.list_context_assemblies(
-                session_id, saver._storage.main_thread_id(session_id)
+                session_id, saver._storage.storage.main_thread_id(session_id)
             )
             first_evidence = _projection_evidence(saver, session_id, first)
             assert (
@@ -222,11 +222,11 @@ async def browser_source(browser_runtime, native_http_server):
                         turn_scope="turn_member",
                     ),
                 ),
-                thread_id=saver._storage.main_thread_id(session_id),
+                thread_id=saver._storage.storage.main_thread_id(session_id),
             )
             draft = saver.compose_committed_context_plan(
                 session_id,
-                saver._storage.main_thread_id(session_id),
+                saver._storage.storage.main_thread_id(session_id),
                 plan_id=f"browser-{uuid4().hex}",
                 tool_set=ToolSetSnapshot(
                     selection_revision=sha256_jcs({"inspect_file": True}),
@@ -261,11 +261,11 @@ async def browser_source(browser_runtime, native_http_server):
             execution_id = saver.execution_for_turn(
                 session_id,
                 turn_id=turn_id,
-                thread_id=saver._storage.main_thread_id(session_id),
+                thread_id=saver._storage.storage.main_thread_id(session_id),
             )
             rich = saver.seal_context_plan(
                 session_id,
-                saver._storage.main_thread_id(session_id),
+                saver._storage.storage.main_thread_id(session_id),
                 draft,
                 wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
                 turn_id=turn_id,
@@ -277,14 +277,14 @@ async def browser_source(browser_runtime, native_http_server):
             # 第三个真实封存快照用于通过 UI 翻页找到最早请求。
             third_plan = saver.compose_committed_context_plan(
                 session_id,
-                saver._storage.main_thread_id(session_id),
+                saver._storage.storage.main_thread_id(session_id),
                 plan_id=f"browser-{uuid4().hex}",
                 tool_set=EMPTY_TOOL_SET,
             )
             third_plan = register_projection_draft(saver, session_id, third_plan)
             saver.seal_context_plan(
                 session_id,
-                saver._storage.main_thread_id(session_id),
+                saver._storage.storage.main_thread_id(session_id),
                 third_plan,
                 wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{third_plan.plan_id}",
                 turn_id=turn_id,
@@ -323,7 +323,7 @@ async def browser_source(browser_runtime, native_http_server):
                 turn_status="completed",
                 items=(turn_final,),
                 final_item_id=turn_final.item_id,
-                thread_id=saver._storage.main_thread_id(session_id),
+                thread_id=saver._storage.storage.main_thread_id(session_id),
             )
     first_evidence["assembly_ref"] = context_assembly_identity(
         session["resource_identity"], first_evidence["assembly_id"]

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 
 import pytest
@@ -17,13 +16,11 @@ from app.services.business.session_resource_registry import (
     SessionResourceProviderRegistry,
 )
 from app.services.business.session_resource_service import SessionResourceService
-from app.services.infrastructure.background_task_history_store import (
-    BackgroundTaskHistoryStore,
-)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.mapping.session_resource_mapper import SessionResourceMapper
+from tests.support.background_work import build_background_registry, spawn_waiting_task
 from tests.support.message_service import build_message_service
 
 
@@ -399,9 +396,7 @@ async def test_browser_provider_excludes_deleted_records(
     session_id = "ses_019bb7ec49017d8cac52d5b674fa1b7e"
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     session_bundle_factory(sessions_dir, session_id)
-    registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
-    )
+    registry = build_background_registry(sessions_dir)
     browser_owner = FakeBrowserResourceOwner(
         browsers=[
             {
@@ -437,18 +432,9 @@ async def test_list_includes_closed_background_task_history(
     session_id = "ses_019c7618ac207a1e89d845aa0622881f"
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     session_bundle_factory(sessions_dir, session_id)
-    registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
-    )
+    registry = build_background_registry(sessions_dir)
 
-    async def wait_forever() -> None:
-        await asyncio.Event().wait()
-
-    handle = registry.spawn(
-        session_id=session_id,
-        task_name="emit_system_time_messages",
-        runner=wait_forever,
-    )
+    handle = await spawn_waiting_task(registry, sessions_dir, session_id)
     await registry.cancel(session_id, handle.task_id)
     service = SessionResourceService(
         session_service=FakeSessionService(),
@@ -477,18 +463,9 @@ async def test_list_excludes_deleted_background_task_history(
     session_id = "ses_019beb2ad93f78668af7471f0ac9538c"
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     session_bundle_factory(sessions_dir, session_id)
-    registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
-    )
+    registry = build_background_registry(sessions_dir)
 
-    async def wait_forever() -> None:
-        await asyncio.Event().wait()
-
-    handle = registry.spawn(
-        session_id=session_id,
-        task_name="emit_system_time_messages",
-        runner=wait_forever,
-    )
+    handle = await spawn_waiting_task(registry, sessions_dir, session_id)
     await registry.delete(session_id, handle.task_id)
     service = SessionResourceService(
         session_service=FakeSessionService(),
@@ -514,18 +491,9 @@ async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(
     session_id = "ses_019b7fe1fe727dcf8650ad9c92cb293e"
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     session_bundle_factory(sessions_dir, session_id)
-    registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
-    )
+    registry = build_background_registry(sessions_dir)
 
-    async def long_running_task() -> None:
-        await asyncio.sleep(60)
-
-    handle = registry.spawn(
-        session_id=session_id,
-        task_name="emit_system_time_messages",
-        runner=long_running_task,
-    )
+    handle = await spawn_waiting_task(registry, sessions_dir, session_id)
     terminal_client = FakeTerminalResourceOwner(
         terminals=[
             {
@@ -575,7 +543,7 @@ async def test_cancel_background_task_does_not_inject_monitor_reminder(
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     session_bundle_factory(sessions_dir, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=sessions_dir)
-    owner = saver.resolve_main_thread_owner(session_id)
+    owner = saver.forks.source.resolve_main_thread_owner(session_id)
     saver.accept_turn(
         session_id, thread_id=owner.thread_id, accepted_ingress_id="request-cancel-monitor",
         acceptance_idempotency_key="acceptance-cancel-monitor", job_id="job-cancel-monitor",
@@ -584,22 +552,9 @@ async def test_cancel_background_task_does_not_inject_monitor_reminder(
         root_item_id="item-cancel-monitor", initial_execution_id="execution-cancel-monitor",
     )
 
-    registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
-    )
+    registry = build_background_registry(sessions_dir)
 
-    async def long_running_task() -> None:
-        await asyncio.sleep(60)
-
-    handle = registry.spawn(
-        session_id=session_id,
-        task_name="emit_system_time_messages",
-        runner=long_running_task,
-        metadata={
-            "target_session_id": "ses_019c5c7f1b45719b82d809baecd377f0",
-            "source_id": "monitor:ses_019c5c7f1b45719b82d809baecd377f0:test",
-        },
-    )
+    handle = await spawn_waiting_task(registry, sessions_dir, session_id)
     message_service = build_message_service(sessions_dir, checkpointer=saver)
     service = SessionResourceService(
         session_service=FakeSessionService(),

@@ -16,6 +16,7 @@ from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.schemas.internal_v2.common import JobStatus
 from app.services.business.job.service import JobService, JobState
 from app.services.business.session_service import SessionService
+from app.services.infrastructure.background_work_store import BackgroundWorkStore
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.harness.python.run_context import TestRunContext
@@ -57,7 +58,7 @@ async def admission_harness() -> AsyncIterator[_AdmissionHarness]:
         path_resolver=workspace.resolver,
         creation_service=workspace.creation_service,
     )
-    message_bus = BackgroundMessageBus()
+    message_bus = BackgroundMessageBus(store=BackgroundWorkStore(sessions_dir=workspace.sessions_root))
     executor = _InstantJobExecutor()
     guard_calls: list[str] = []
 
@@ -111,8 +112,8 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
     target_thread_id = workspace.resolver.main_thread_id(target_session_id)
     active_thread_id = workspace.resolver.main_thread_id(active_session_id)
 
-    message_bus.emit(target_session_id, "default", "待清理消息")
-    active_message = message_bus.emit(active_session_id, "default", "保留消息")
+    target_message = await message_bus.emit(target_session_id, target_thread_id, "default", "待清理消息", message_id="target-message")
+    active_message = await message_bus.emit(active_session_id, active_thread_id, "default", "保留消息", message_id="active-message")
     cleanup_reads: list[str] = []
 
     async def close_bus_then_fail(session_id: str) -> None:
@@ -141,8 +142,11 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
     assert workspace.session_dir(target_session_id).is_dir()
     assert target_session_id not in job_service._deleting_sessions
     assert workspace.store.get_node(active_session_id).state == "active"
-    assert await message_bus.list_messages(target_session_id, "default") == []
-    assert await message_bus.list_messages(active_session_id, "default") == [
+    with pytest.raises(SessionDeletionPendingError):
+        await message_bus.list_messages(target_session_id, target_thread_id, "default")
+    with message_bus._store.control(target_session_id, read_only=True) as control:
+        assert control.list_background_messages(target_thread_id, "default") == [target_message]
+    assert await message_bus.list_messages(active_session_id, active_thread_id, "default") == [
         active_message
     ]
 
@@ -192,10 +196,8 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
         for job in job_service._jobs.values()
     )
     assert job_service._pending_queue.ids(target_session_id) == ()
-    assert not any(
-        owner_session_id == target_session_id
-        for owner_session_id, _agent_id in message_bus._messages
-    )
+    with message_bus._store.control(target_session_id, read_only=True) as control:
+        assert control.list_background_messages(target_thread_id, "default") == [target_message]
     assert workspace.store.get_subtree_delete_record(delete_key) == deletion_record
 
     assert session_service.assert_session_active(active_session_id) is None
@@ -232,7 +234,7 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
         active_session_id,
     ]
     assert admission_harness.executor.session_ids == [active_session_id]
-    assert await message_bus.list_messages(active_session_id, "default") == [
+    assert await message_bus.list_messages(active_session_id, active_thread_id, "default") == [
         active_message
     ]
 

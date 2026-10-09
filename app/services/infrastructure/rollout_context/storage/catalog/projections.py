@@ -12,6 +12,9 @@ from app.domain.itemized.enums import (
     TurnScope,
 )
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutNotMaterializedError,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_text,
@@ -263,56 +266,57 @@ class RolloutProjectionMixin:
         """读取 item 级轻量 projection，不打开 JSONL 正文。"""
         session_id = thread_id
         owner_thread_id = self.main_thread_id(session_id)
-        self.initialize(session_id, checkpoint_ns, validate_jsonl_items=False)
         values = tuple(dict.fromkeys(item_ids or ()))
-        with self._connect(
-            owner_thread_id,
-            checkpoint_ns,
-            session_id=session_id,
-            read_only=True,
-        ) as connection:
-            self._require_v2_runtime(connection)
-            columns = "item_sequence, item_id, id, semantic_kind, payload_kind, status, turn_id, turn_scope, message_group_id, wire_role, content, content_length, content_truncated, has_reasoning, has_tool_calls, phase, content_hash, projection_version, created_at, updated_at"
-            invalid = connection.execute(
-                "SELECT ip.item_id FROM item_projections AS ip "
-                "LEFT JOIN item_catalog AS ic ON ic.item_id = ip.item_id "
-                "AND ic.item_sequence = ip.item_sequence "
-                "AND ic.semantic_kind = ip.semantic_kind "
-                "AND ic.payload_kind = ip.payload_kind "
-                "AND ic.status = ip.status "
-                "AND ic.turn_id IS ip.turn_id "
-                "AND ic.turn_scope IS ip.turn_scope "
-                "AND ic.message_group_id IS ip.message_group_id "
-                "AND ic.wire_role IS ip.wire_role "
-                "AND ic.content_hash = ip.content_hash "
-                "AND ic.created_at = ip.created_at "
-                "WHERE ic.item_id IS NULL LIMIT 1"
-            ).fetchone()
-            if invalid is not None:
-                raise RuntimeError(
-                    "item projection 与 canonical catalog identity/hash 不一致: "
-                    f"{invalid[0]}"
-                )
-            if values:
-                placeholders = ",".join("?" for _ in values)
-                rows = connection.execute(
-                    f"SELECT {columns} FROM item_projections WHERE item_id IN ({placeholders}) ORDER BY item_sequence",
-                    values,
-                ).fetchall()
-                found_ids = {
-                    strict_text(row[1], field="item_projections.item_id")
-                    for row in rows
-                }
-                missing_ids = tuple(
-                    item_id for item_id in values if item_id not in found_ids
-                )
-                if missing_ids:
-                    raise KeyError(
-                        "item projection 缺少请求的 canonical item: "
-                        + ",".join(missing_ids)
+        try:
+            with self.read_connection(session_id, owner_thread_id, checkpoint_ns) as connection:
+                self._require_v2_runtime(connection)
+                columns = "item_sequence, item_id, id, semantic_kind, payload_kind, status, turn_id, turn_scope, message_group_id, wire_role, content, content_length, content_truncated, has_reasoning, has_tool_calls, phase, content_hash, projection_version, created_at, updated_at"
+                invalid = connection.execute(
+                    "SELECT ip.item_id FROM item_projections AS ip "
+                    "LEFT JOIN item_catalog AS ic ON ic.item_id = ip.item_id "
+                    "AND ic.item_sequence = ip.item_sequence "
+                    "AND ic.semantic_kind = ip.semantic_kind "
+                    "AND ic.payload_kind = ip.payload_kind "
+                    "AND ic.status = ip.status "
+                    "AND ic.turn_id IS ip.turn_id "
+                    "AND ic.turn_scope IS ip.turn_scope "
+                    "AND ic.message_group_id IS ip.message_group_id "
+                    "AND ic.wire_role IS ip.wire_role "
+                    "AND ic.content_hash = ip.content_hash "
+                    "AND ic.created_at = ip.created_at "
+                    "WHERE ic.item_id IS NULL LIMIT 1"
+                ).fetchone()
+                if invalid is not None:
+                    raise RuntimeError(
+                        "item projection 与 canonical catalog identity/hash 不一致: "
+                        f"{invalid[0]}"
                     )
-            else:
-                rows = connection.execute(
-                    f"SELECT {columns} FROM item_projections ORDER BY item_sequence"
-                ).fetchall()
+                if values:
+                    placeholders = ",".join("?" for _ in values)
+                    rows = connection.execute(
+                        f"SELECT {columns} FROM item_projections WHERE item_id IN ({placeholders}) ORDER BY item_sequence",
+                        values,
+                    ).fetchall()
+                    found_ids = {
+                        strict_text(row[1], field="item_projections.item_id")
+                        for row in rows
+                    }
+                    missing_ids = tuple(
+                        item_id for item_id in values if item_id not in found_ids
+                    )
+                    if missing_ids:
+                        raise KeyError(
+                            "item projection 缺少请求的 canonical item: "
+                            + ",".join(missing_ids)
+                        )
+                else:
+                    rows = connection.execute(
+                        f"SELECT {columns} FROM item_projections ORDER BY item_sequence"
+                    ).fetchall()
+        except RolloutNotMaterializedError:
+            if values:
+                raise KeyError(
+                    "item projection 缺少请求的 canonical item: " + ",".join(values)
+                ) from None
+            return []
         return [_decode_item_projection_row(row) for row in rows]

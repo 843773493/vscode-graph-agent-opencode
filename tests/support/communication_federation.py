@@ -31,6 +31,7 @@ from tests.harness.python.browser_manager import (
     start_browser_manager_processes,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
@@ -83,6 +84,7 @@ async def open_communication_triad(
     prepare_workspace: Callable[[TestRunContext, int, int], Path],
     *,
     resource_service_nodes: tuple[str, ...] = (),
+    shared_session_ids: tuple[str, ...] = (),
 ) -> AsyncIterator[dict[str, CommunicationNode]]:
     ports = integration_port_block_for_file(context.test_file)
     root = context.project_root
@@ -121,6 +123,9 @@ async def open_communication_triad(
             workspace = prepare_workspace(node_context, ports.port(10), ports.port(offset + 1))
             # 模板身份不能被三个独立工作区共享；由正式启动 owner 创建各自 UUID。
             workspace_identity_path(workspace).unlink()
+            for session_id in shared_session_ids:
+                seed_catalog_session_bundle(workspace / ".boxteam/sessions", session_id,
+                    title="显式歧义测试资源")
             reset_gateway_persistent_state(workspace_root=workspace)
             environment = {"BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{ports.port(offset + 1)}"}
             terminal_url = None

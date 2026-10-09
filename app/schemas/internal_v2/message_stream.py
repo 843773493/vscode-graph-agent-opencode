@@ -187,6 +187,7 @@ class MessageStreamSnapshotDTO(_MessageStreamDTO):
     """消息流快照 HTTP 投影；字段与 message_stream.proto 的公共投影一一对应。"""
 
     session_id: str = Field(min_length=1)
+    thread_id: str = Field(min_length=1)
     turn_id: str = Field(min_length=1)
     turn_stream_id: str = Field(min_length=1)
     workspace_id: str | None = Field(default=None, min_length=1)

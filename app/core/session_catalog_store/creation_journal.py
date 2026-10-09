@@ -485,26 +485,21 @@ class CreationJournalMixin:
                         f"expected_revision={int(frozen_revision)}, "
                         f"actual_revision={actual_revision}"
                     )
-            # 目标占用预检（UNIQUE 兜底）。
-            self._require_node_id_available(connection, session_id)
-            self._require_unique_session_fields(
-                connection, workspace_id, locator, main_thread_id
-            )
-            connection.execute(
-                "INSERT INTO nodes (node_id, kind, parent_node_id, display_name, "
-                "title_source, state, revision, workspace_id, created_at, "
-                "storage_relative_locator, main_thread_id) "
-                "VALUES (?, 'session', ?, ?, ?, 'active', 1, ?, ?, ?, ?)",
-                (
-                    session_id,
-                    parent_node_id,
-                    display_name,
-                    title_source,
-                    workspace_id,
-                    created_at.isoformat(),
-                    locator,
-                    main_thread_id,
+            # 冻结 intent 只在首次发布时初始化 nodes；后续读取与业务更新不回读 journal。
+            metadata = json.loads(row["session_metadata_json"])
+            origin = metadata["generation_origin"]
+            node = self.create_session_node(
+                session_id, workspace_id, parent_node_id, display_name,
+                created_at, locator, main_thread_id, title_source,
+                current_agent_id=metadata["current_agent_id"],
+                current_provider_id=metadata["current_provider_id"],
+                session_kind=metadata["kind"],
+                context_source_session_id=metadata["context_source_session_id"],
+                generation_origin_json=(
+                    json.dumps(origin, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                    if origin is not None else None
                 ),
+                connection=connection,
             )
             connection.execute(
                 "UPDATE session_creation_records "
@@ -512,7 +507,7 @@ class CreationJournalMixin:
                 "WHERE session_creation_idempotency_key = ?",
                 (datetime.now(UTC).isoformat(), idempotency_key),
             )
-            return self._node_from_row(self._require_node(connection, session_id))
+            return node
 
     def abort_creation_record(
         self,

@@ -39,22 +39,22 @@ from app.services.infrastructure.rollout_context.migration.staging import (
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from app.services.infrastructure.rollout_context.storage.transaction import strict_text
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
 
 class LegacyRolloutImporter:
     """CLI 显式创建的导入流程；不向正常 runtime 暴露 v1 storage API。"""
 
-    def __init__(self, storage: RolloutStorage) -> None:
+    def __init__(self, storage: RolloutContextStore) -> None:
         self.storage = storage
 
     def _main_owner(self, session_id: str, thread_id: str) -> None:
         strict_text(session_id, field="migration.session_id")
         strict_text(thread_id, field="migration.thread_id")
-        if self.storage._resolve_thread_identity(
+        if self.storage.storage._resolve_thread_identity(
             session_id, thread_id
-        ) != self.storage.main_thread_id(session_id):
+        ) != self.storage.storage.main_thread_id(session_id):
             raise ValueError("一次性 v1 import 必须显式绑定 catalog main thread")
 
     def read_report(
@@ -62,11 +62,11 @@ class LegacyRolloutImporter:
     ) -> dict[str, object]:
         self._main_owner(source_session_id, source_thread_id)
         strict_text(checkpoint_ns, field="migration.checkpoint_ns", allow_empty=True)
-        source = self.storage.root(
+        source = self.storage.storage.root(
             source_session_id, checkpoint_ns, thread_id=source_thread_id
         )
         require_safe_path(source.parent / ".rollout.write.lock")
-        with self.storage._lock(
+        with self.storage.storage._lock(
             source_thread_id, checkpoint_ns, session_id=source_session_id
         ):
             return {
@@ -92,10 +92,10 @@ class LegacyRolloutImporter:
         self._main_owner(source_session_id, source_thread_id)
         self._main_owner(target_session_id, target_thread_id)
         strict_text(checkpoint_ns, field="migration.checkpoint_ns", allow_empty=True)
-        source = self.storage.root(
+        source = self.storage.storage.root(
             source_session_id, checkpoint_ns, thread_id=source_thread_id
         )
-        target = self.storage.root(
+        target = self.storage.storage.root(
             target_session_id, checkpoint_ns, thread_id=target_thread_id
         )
         audit_root = target.parent / "legacy-import"
@@ -112,8 +112,8 @@ class LegacyRolloutImporter:
             )
         )
         with (
-            self.storage._lock(first[1], checkpoint_ns, session_id=first[0]),
-            self.storage._lock(second[1], checkpoint_ns, session_id=second[0]),
+            self.storage.storage._lock(first[1], checkpoint_ns, session_id=first[0]),
+            self.storage.storage._lock(second[1], checkpoint_ns, session_id=second[0]),
         ):
             self._recover(
                 target_session_id, target_thread_id, checkpoint_ns, audit_root
@@ -152,13 +152,14 @@ class LegacyRolloutImporter:
                         "checkpoint_ns": checkpoint_ns,
                     }
                 )
-                staged = ImportStagingStorage(
+                staging_storage = ImportStagingStorage(
                     self.storage,
                     session_id=target_session_id,
                     thread_id=target_thread_id,
                     checkpoint_ns=checkpoint_ns,
                     root=staging,
                 )
+                staged = RolloutContextStore(self.storage.storage.sessions_dir, storage=staging_storage)
                 result = LegacyImportBuilder(staged).build_import(
                     source_session_id,
                     source_thread_id=source_thread_id,
@@ -179,7 +180,7 @@ class LegacyRolloutImporter:
                     raise RuntimeError(
                         "v1_full_copy_not_lossless: 详见 migration report 的 loss/rejected"
                     )
-                with staged._connect(
+                with staged.storage._connect(
                     target_thread_id, checkpoint_ns, session_id=target_session_id
                 ) as connection:
                     now = utc_now_text()
@@ -256,12 +257,12 @@ class LegacyRolloutImporter:
     ) -> list[dict[str, object]]:
         self._main_owner(target_session_id, target_thread_id)
         strict_text(checkpoint_ns, field="migration.checkpoint_ns", allow_empty=True)
-        target = self.storage.root(
+        target = self.storage.storage.root(
             target_session_id, checkpoint_ns, thread_id=target_thread_id
         )
         require_safe_path(target)
         require_safe_path(target.parent / ".rollout.write.lock")
-        with self.storage._lock(
+        with self.storage.storage._lock(
             target_thread_id, checkpoint_ns, session_id=target_session_id
         ):
             return self._recover(
@@ -277,7 +278,7 @@ class LegacyRolloutImporter:
         require_safe_path(audit_root)
         if not audit_root.exists():
             return []
-        target = self.storage.root(session_id, namespace, thread_id=thread_id)
+        target = self.storage.storage.root(session_id, namespace, thread_id=thread_id)
         reports: list[dict[str, object]] = []
         for audit in sorted(audit_root.iterdir()):
             require_safe_path(audit)
@@ -388,7 +389,7 @@ class LegacyRolloutImporter:
                         raise RuntimeError(
                             "migration recovery install marker 与已提交 report 不一致"
                         )
-                    self.storage._validate_v2_commit_offsets(
+                    self.storage.storage._validate_v2_commit_offsets(
                         connection, target / "rollout.jsonl"
                     )
                 if owner != (2, "active", session_id, thread_id):

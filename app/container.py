@@ -86,9 +86,10 @@ from app.services.infrastructure.artifact_service import ArtifactService
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
 )
-from app.services.infrastructure.background_task_history_store import (
-    BackgroundTaskHistoryStore,
+from app.services.infrastructure.background_work_handlers import (
+    SystemTimeEmitterHandler,
 )
+from app.services.infrastructure.background_work_store import BackgroundWorkStore
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.config import WorkspaceSourceOwner
 from app.services.infrastructure.config_service import ConfigService
@@ -132,11 +133,11 @@ from app.services.infrastructure.resource_platform.sources.workspace_file_resour
 from app.services.infrastructure.rollout_checkpoint_runtime import (
     RolloutCheckpointRuntime,
 )
+from app.services.infrastructure.rollout_context.activation.body import (
+    ResourceActivationBodyStore,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
-)
-from app.services.infrastructure.rollout_context.storage.resource_activation_body import (
-    ResourceActivationBodyStore,
 )
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.session_changes_store import SessionChangesStore
@@ -172,6 +173,7 @@ from app.services.orchestration.session_subagent_service import (
     SessionSubagentService,
 )
 from app.services.orchestration.session_title_service import SessionTitleService
+from app.services.orchestration.team.fanout_service import TeamFanoutService
 from app.services.orchestration.terminal_steering_service import TerminalSteeringService
 from app.services.orchestration.thread_initial_execution_service import (
     ThreadInitialExecutionService,
@@ -348,6 +350,7 @@ class AppContainer:
     session_generation_service: SessionGenerationService
     session_subagent_service: SessionSubagentService
     team_service: TeamCoordinationService
+    team_fanout_service: TeamFanoutService
     llm_request_log_service: LLMRequestLogService
     log_service: LogService
     tool_service: ToolService
@@ -361,6 +364,7 @@ class AppContainer:
     agent_execution_service: AgentExecutionService
     node_debug_service: NodeDebugService
     job_event_bus: JobEventBusProtocol
+    thread_residency_tracker: ThreadResidencyTracker
     background_task_registry: BackgroundTaskRegistry
     background_message_bus: BackgroundMessageBus
     trace_event_store: TraceEventStore
@@ -525,10 +529,13 @@ def _build_app_container(
     session_creation_service = session_catalog.creation_service
     session_path_resolver.initialize()
     job_event_bus = JobEventBus()
+    thread_residency_tracker = ThreadResidencyTracker()
+    background_work_store = BackgroundWorkStore(sessions_dir=resolved_sessions_root)
     background_task_registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(sessions_dir=resolved_sessions_root)
+        store=background_work_store, residency_tracker=thread_residency_tracker,
+        handlers=(SystemTimeEmitterHandler(),),
     )
-    background_message_bus = BackgroundMessageBus()
+    background_message_bus = BackgroundMessageBus(store=background_work_store)
     trace_event_store = TraceEventStore(sessions_dir=resolved_sessions_root)
     trace_event_recorder = TraceEventRecorder(
         bus=job_event_bus,
@@ -608,7 +615,6 @@ def _build_app_container(
         workspace_id=workspace_service.workspace_id,
         path_resolver=session_path_resolver,
         creation_service=session_creation_service,
-        fork_relationship_checker=checkpointer,
     )
     file_tree_settings_service = FileTreeSettingsService(
         workspace_root=resolved_workspace_root,
@@ -649,7 +655,6 @@ def _build_app_container(
     )
     workspace_file_watch_service = resource_platform.file_watch_service
     workspace_file_resource_registry = resource_platform.file_registry
-    thread_residency_tracker = ThreadResidencyTracker()
     terminal_resource_owner = TerminalResourceOwner(
         workspace_root=resolved_workspace_root, workspace_id=workspace_id,
         sessions=session_service, threads=session_path_resolver,
@@ -724,6 +729,9 @@ def _build_app_container(
         residency_tracker=thread_residency_tracker,
         resource_activation_factory=lambda registry: ResourceActivationCoordinator(
             registry=registry, saver=checkpointer, body_store=resource_activation_body,
+        ),
+        team_resource_subscriber=lambda session_id, thread_id, registry, scope: team_fanout_service.subscribe(
+            session_id, thread_id, registry, scope,
         ),
     )
     session_catalog_service = SessionCatalogService(
@@ -812,13 +820,18 @@ def _build_app_container(
         bind_owner=thread_initial_execution_service.bind_owner,
     )
     dependency_provider.set_session_subagent_service(session_subagent_service)
+    team_fanout_service = TeamFanoutService(
+        factory=thread_creation_factory, sessions=session_service, saver=checkpointer,
+        dispatcher=runtime_source_dispatcher, publication_lock=mcp_catalog_owner.publication_lock,
+    )
     team_service = TeamCoordinationService(
-        store=TeamStore(path_resolver=session_path_resolver),
+        store=TeamStore(factory=thread_creation_factory, write_admission=session_service.session_write_admission),
         session_service=session_service,
-        session_orchestrator=session_orchestrator,
+        fanout=team_fanout_service,
         session_subagent_service=session_subagent_service,
         thread_creation_factory=thread_creation_factory,
     )
+    team_fanout_service.bind_wakeup_finalizer(team_service.finalize_wakeup)
     dependency_provider.set_team_service(team_service)
     session_turn_replay_service = SessionTurnReplayService(
         checkpointer=checkpointer,
@@ -885,9 +898,11 @@ def _build_app_container(
         # session 的生命周期 gate 内执行，并且先于 fence、物理隔离和
         # drain 进度记录，保证部分失败可按 record 定点重试。
         async def drain_session_resources(session_id: str) -> None:
+            checkpointer.release_fork_retentions(session_id)
             await node_debug_service.drain_session(session_id)
             await session_resource_service.cleanup_session(session_id)
             await session_communication_service.observations.drain_session(session_id)
+            await team_fanout_service.drain_session(session_id)
             background_message_bus.close_session(session_id)
             # 附件引用释放与 ingest/claim 定点收敛必须先于 fence CAS 与物理
             # 隔离：删除 owner 按 pin 阻断 canonical 使用、释放 reference 后
@@ -981,6 +996,7 @@ def _build_app_container(
         session_generation_service=session_generation_service,
         session_subagent_service=session_subagent_service,
         team_service=team_service,
+        team_fanout_service=team_fanout_service,
         llm_request_log_service=llm_request_log_service,
         log_service=log_service,
         tool_service=tool_service,
@@ -994,6 +1010,7 @@ def _build_app_container(
         agent_execution_service=agent_execution_service,
         node_debug_service=node_debug_service,
         job_event_bus=job_event_bus,
+        thread_residency_tracker=thread_residency_tracker,
         background_task_registry=background_task_registry,
         background_message_bus=background_message_bus,
         trace_event_store=trace_event_store,

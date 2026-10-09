@@ -28,7 +28,7 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
 from app.services.infrastructure.rollout_context.storage.primitives import (
     _RolloutFileLock,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
 if TYPE_CHECKING:
     from app.services.infrastructure.node_debug.session.fork import (
@@ -185,7 +185,7 @@ def freeze_request_only_content(
 
 
 def capture_fork_rollout_snapshot(
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
     *,
     source_session_id: str,
     source_thread_id: str,
@@ -195,7 +195,7 @@ def capture_fork_rollout_snapshot(
     rollout_lock_held: bool = False,
 ) -> ForkRolloutSourceSnapshot:
     """复制 source rollout 与已登记普通 detail，不触碰 live SQLite reader。"""
-    source_rollout = storage.root(
+    source_rollout = storage.storage.root(
         source_session_id,
         thread_id=source_thread_id,
     )
@@ -209,14 +209,19 @@ def capture_fork_rollout_snapshot(
     snapshot_rollout = snapshot_session_node / "rollout"
     snapshot_session_node.chmod(0o700)
 
+    source_lock_path = source_rollout.parent / ".rollout.write.lock"
     lock = None
     if not rollout_lock_held:
         lock = _RolloutFileLock(
-            source_rollout.parent / ".rollout.write.lock",
+            source_lock_path,
             exclusive=False,
         )
         lock.acquire()
     try:
+        if not source_lock_path.is_file() or source_lock_path.is_symlink():
+            raise RuntimeError("source-mismatch: fork source 缺少既有普通写锁文件")
+        # 显式冻结副本携带既有锁，后续共享读取不得自行创建文件。
+        shutil.copy2(source_lock_path, snapshot_session_node / ".rollout.write.lock")
         source_files = _tree_manifest(
             source_rollout, excluded_root_files=frozenset(SQLITE_COPY_FILES),
         )
@@ -233,7 +238,7 @@ def capture_fork_rollout_snapshot(
                 "source-mismatch: fork source snapshot bytes 与冻结 source manifest 不一致"
             )
         copy_live_sqlite_snapshot(
-            storage._resolve_session_node(source_session_id), snapshot_session_node,
+            storage.storage._resolve_session_node(source_session_id), snapshot_session_node,
             filenames=(CONTROL_DATABASE_NAME, CONTROL_DATABASE_NAME + "-wal",
                        CONTROL_DATABASE_NAME + "-journal"),
         )

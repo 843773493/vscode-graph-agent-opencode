@@ -671,6 +671,11 @@ class ExecutionIntentMixin:
                     "mark bound CAS 失败（intent 已被并发推进，fail "
                     f"closed）: admission_key={admission_idempotency_key!r}"
                 )
+            creation = self.get_thread_creation_record(str(row["creation_idempotency_key"]))
+            if creation.delegation_id is not None:
+                self._freeze_collaboration_member_change_transaction(
+                    connection, creation.delegation_id, "member.ready",
+                )
             updated = _fetch_execution_intent_row(connection, admission_idempotency_key)
             if updated is None:
                 # 防御性兜底：同事务内已确认存在。

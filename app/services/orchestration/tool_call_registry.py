@@ -9,6 +9,7 @@ from langchain_core.messages import BaseMessage, ToolMessage
 from app.domain.itemized.enums import CanonicalItemStatus
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.orchestration.event_stream.contracts import CanonicalItemObserverError
 
 
 class StreamToolRegistryMixin:
@@ -328,6 +329,7 @@ class StreamToolRegistryMixin:
                     tool_invocation_id=str(payload["tool_invocation_id"]),
                     tool_attempt_id=tool_execution_id,
                 )
+            observer_error: Exception | None = None
             if (
                 persist_canonical
                 and self._canonical_item_sink is not None
@@ -382,13 +384,21 @@ class StreamToolRegistryMixin:
                     message_group_id=f"message-{tool_execution_id}",
                     wire_role="tool",
                 )
-                await self._canonical_item_sink((result_item,))
+                try:
+                    await self._canonical_item_sink((result_item,))
+                except CanonicalItemObserverError as observer_failure:
+                    if observer_failure.committed_item_ids != (result_item.item_id,):
+                        raise
+                    # 已提交结果只更新既有运行镜像，失败清理不得再生成同 ID 的结果。
+                    observer_error = observer_failure.observer_error
             self._active_tool_executions.pop(tool_execution_id, None)
             self._completed_tool_execution_ids.add(tool_execution_id)
             self._completed_tool_result_call_ids.add(tool_call_id)
             self._completed_tool_result_execution_by_call_id[tool_call_id] = (
                 tool_execution_id
             )
+            if observer_error is not None:
+                raise observer_error
 
     async def complete_tool_from_message(self, message: BaseMessage) -> None:
         """在模型请求边界闭合已进入请求的 ToolMessage。

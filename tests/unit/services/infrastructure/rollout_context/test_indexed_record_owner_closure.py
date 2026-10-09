@@ -32,7 +32,7 @@ from app.services.infrastructure.rollout_context.checkpoint.reader import (
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
 WORKSPACE_ID = "ws-indexed-record-owner"
 
@@ -40,7 +40,7 @@ WORKSPACE_ID = "ws-indexed-record-owner"
 @pytest.fixture
 def indexed_threads(
     tmp_path: Path,
-) -> tuple[RolloutStorage, str, str, str, Path]:
+) -> tuple[RolloutContextStore, str, str, str, Path]:
     boxteam_root = tmp_path / ".boxteam"
     sessions_root = boxteam_root / "sessions"
     sessions_root.mkdir(parents=True)
@@ -114,14 +114,14 @@ def indexed_threads(
         return session, child, control
 
     session, child, control = asyncio.run(create_session_and_thread())
-    storage = RolloutStorage(
+    storage = RolloutContextStore(
         sessions_root,
         serde=JsonPlusSerializer(),
         message_codec=LangChainMessageCodec(),
     )
-    main_thread_id = storage.main_thread_id(session.session_id)
+    main_thread_id = storage.storage.main_thread_id(session.session_id)
     child_thread_id = child.child_thread_id
-    assert storage.root(session.session_id, thread_id=main_thread_id) != storage.root(
+    assert storage.storage.root(session.session_id, thread_id=main_thread_id) != storage.storage.root(
         session.session_id,
         thread_id=child_thread_id,
     )
@@ -184,7 +184,7 @@ def _write_indexed_turn(
 
 
 def test_projection_reads_use_snapshot_session_thread_pair(
-    indexed_threads: tuple[RolloutStorage, str, str, str, Path],
+    indexed_threads: tuple[RolloutContextStore, str, str, str, Path],
 ) -> None:
     storage, session_id, main_thread_id, child_thread_id, sessions_root = (
         indexed_threads
@@ -201,7 +201,7 @@ def test_projection_reads_use_snapshot_session_thread_pair(
             thread_id=thread_id,
             label=label,
         )
-        assert storage.root(session_id, thread_id=thread_id).is_dir()
+        assert storage.storage.root(session_id, thread_id=thread_id).is_dir()
         with reader.open_snapshot(session_id, thread_id) as snapshot:
             message_rows = snapshot.connection.execute(
                 "SELECT message_sequence, message_id FROM messages "
@@ -240,7 +240,7 @@ def test_projection_reads_use_snapshot_session_thread_pair(
             ] == expected_message_ids
 
             with pytest.raises(ValueError, match="snapshot owner"):
-                storage.read_indexed_records(
+                storage.checkpoints.read_indexed_records(
                     f"ses_{create_uuid_hex()}",
                     thread_id,
                     "",
@@ -249,7 +249,7 @@ def test_projection_reads_use_snapshot_session_thread_pair(
                     snapshot=snapshot,
                 )
             with pytest.raises(ValueError, match="snapshot owner"):
-                storage.read_indexed_records(
+                storage.checkpoints.read_indexed_records(
                     session_id,
                     thread_id,
                     "different-namespace",
@@ -258,7 +258,7 @@ def test_projection_reads_use_snapshot_session_thread_pair(
                     snapshot=snapshot,
                 )
 
-        direct_records = storage.read_indexed_records(
+        direct_records = storage.checkpoints.read_indexed_records(
             session_id,
             thread_id,
             "",

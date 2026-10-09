@@ -12,7 +12,7 @@ from langchain_core.messages import (
 from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 
 from app.abstractions.session_context import AgentContextState
-from app.agents.cache_preserving_summarization import apply_summarization_event
+from app.agents.summarization.projection import apply_summarization_event
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.identifier import create_prefixed_id
 from app.core.session_thread_context import session_thread_owner_scope

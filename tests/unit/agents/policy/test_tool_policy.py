@@ -10,9 +10,6 @@ from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 from app.agents.agent_tools import build_default_tools
-from app.agents.cache_preserving_summarization import (
-    NoDurableOwnerCompactionPreflight,
-)
 from app.agents.deep_agent_stack import build_deep_agent_middleware
 from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.policy import (
@@ -22,6 +19,7 @@ from app.agents.policy import (
     validate_tool_dependencies,
 )
 from app.agents.policy.tool_capability import ToolMetadata, ToolPolicyResolver
+from app.agents.summarization.preflight import NoDurableOwnerCompactionPreflight
 from app.agents.tool_invocation_context import (
     ToolInvocationContext,
     ToolInvocationContextMiddleware,

@@ -55,8 +55,8 @@ class ForkAcceptanceMappingMixin:
         target_session_id = required_text(target_session_id, field="target_session_id")
         fork_id = required_text(fork_id, field="fork_id")
         timestamp = required_text(timestamp, field="timestamp")
-        source_thread_id = self._resolve_thread_identity(source_session_id, None)
-        target_thread_id = self._resolve_thread_identity(target_session_id, None)
+        source_thread_id = self._storage._resolve_thread_identity(source_session_id, None)
+        target_thread_id = self._storage._resolve_thread_identity(target_session_id, None)
         rows = connection.execute(
             "SELECT accepted_ingress_id, acceptance_idempotency_key, turn_id, payload_hash, identity_origin FROM turn_acceptances"
         ).fetchall()
@@ -470,7 +470,7 @@ class ForkAcceptanceMappingMixin:
         ).fetchall()
         if not internal_rows:
             return
-        with self._connect(source_thread_id, checkpoint_ns, session_id=source_session_id,
+        with self._storage._connect(source_thread_id, checkpoint_ns, session_id=source_session_id,
                            read_only=True) as source_connection:
             for execution_id, job_id, key, payload_hash, turn_id, ingress in internal_rows:
                 if turn_id is not None or ingress is not None:

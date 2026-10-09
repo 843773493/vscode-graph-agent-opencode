@@ -7,9 +7,10 @@ branch、fork 和 projection 状态都保存在同一份 SQLite 中。
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import threading
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
@@ -25,85 +26,11 @@ from app.core.session_catalog_store import (
 )
 from app.core.session_thread_context import require_current_session_thread_owner
 from app.domain.itemized.records import CanonicalItemRecord
-from app.services.infrastructure.rollout_context.assembly.store import (
-    ContextAssemblyStorageMixin,
-)
-from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
-    RolloutCompactionPreflightOwnerMixin,
-)
-from app.services.infrastructure.rollout_context.checkpoint.boundary.fork_boundary import (
-    RolloutForkBoundaryOwnerMixin,
-)
-from app.services.infrastructure.rollout_context.checkpoint.durable.context_source_versions import (
-    ContextSourceVersionsStorageMixin,
-)
-from app.services.infrastructure.rollout_context.checkpoint.durable.operations import (
-    RolloutCheckpointOperationsMixin,
-)
-from app.services.infrastructure.rollout_context.checkpoint.durable.persistence import (
-    RolloutCheckpointPersistenceMixin,
-)
-from app.services.infrastructure.rollout_context.checkpoint.durable.view_anchor import (
-    RolloutViewAnchorMixin,
-)
-from app.services.infrastructure.rollout_context.checkpoint.owner.context_source_control import (
-    ContextSourceControlStorageMixin,
-)
-from app.services.infrastructure.rollout_context.checkpoint.projection.message_materializer import (
-    RolloutMessageMaterializerMixin,
-)
-from app.services.infrastructure.rollout_context.checkpoint.projection.message_projections import (
-    RolloutMessageProjectionMixin,
-)
-from app.services.infrastructure.rollout_context.checkpoint.projection.message_view import (
-    RolloutMessageViewMixin,
-)
-from app.services.infrastructure.rollout_context.execution.executions import (
-    RolloutExecutionsMixin,
-)
-from app.services.infrastructure.rollout_context.execution.lifecycle import (
-    RolloutTurnLifecycleMixin,
-)
-from app.services.infrastructure.rollout_context.execution.model_calls import (
-    RolloutModelCallsMixin,
-)
-from app.services.infrastructure.rollout_context.execution.replay import (
-    RolloutReplayMixin,
-)
-from app.services.infrastructure.rollout_context.execution.runtime_wakeup import (
-    RuntimeWakeupStorageMixin,
-)
-from app.services.infrastructure.rollout_context.execution.turn_index import (
-    RolloutTurnIndexMixin,
-)
-from app.services.infrastructure.rollout_context.execution.turns import (
-    RolloutTurnsMixin,
-)
-from app.services.infrastructure.rollout_context.fork.completion import (
-    ForkCompletionMixin,
-)
-from app.services.infrastructure.rollout_context.fork.copy_items import (
-    ForkItemCopyMixin,
-)
-from app.services.infrastructure.rollout_context.fork.identity import (
-    RolloutIdentityMixin,
-)
-from app.services.infrastructure.rollout_context.fork.identity_mapping import (
-    ForkIdentityMappingMixin,
-)
-from app.services.infrastructure.rollout_context.fork.materialization import (
-    ForkMaterializationMixin,
-)
-from app.services.infrastructure.rollout_context.fork.metadata import ForkMetadataMixin
-from app.services.infrastructure.rollout_context.fork.remap import ForkRemapMixin
-from app.services.infrastructure.rollout_context.operations.pruning_owner import (
-    RolloutPruningOwner,
-)
-from app.services.infrastructure.rollout_context.storage.catalog.indexed_records import (
-    IndexedRecordQueryMixin,
-)
 from app.services.infrastructure.rollout_context.storage.catalog.internal_history import (
     InternalExecutionHistoryMixin,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.item_reader import (
+    RolloutCanonicalReadMixin,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.items import (
     RolloutItemsMixin,
@@ -123,19 +50,16 @@ from app.services.infrastructure.rollout_context.storage.catalog.turn_projection
 from app.services.infrastructure.rollout_context.storage.catalog.view_membership import (
     RolloutViewMembershipMixin,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.view_sequences import (
+    RolloutViewSequenceMixin,
+)
 from app.services.infrastructure.rollout_context.storage.primitives import (
     MessageCodec,
     RolloutCheckpointIndex,
     RolloutManifest,
-    RolloutPruningCandidate,
-    RolloutPruningPlan,
     RolloutReadSnapshot,
-    RolloutTurnAnchor,
     _RolloutOperationLock,
     _RolloutSQLiteConnection,
-)
-from app.services.infrastructure.rollout_context.storage.queries import (
-    RolloutCheckpointQueriesMixin,
 )
 from app.services.infrastructure.rollout_context.storage.rollout_maintenance_owner import (
     RolloutMaintenanceOwner,
@@ -145,16 +69,6 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
 )
 from app.services.infrastructure.rollout_context.storage.transaction_projections import (
     RolloutTransactionProjectionMixin,
-)
-from app.services.infrastructure.rollout_context.storage.writes import RolloutWriteMixin
-
-__all__ = (
-    "RolloutCheckpointIndex",
-    "RolloutManifest",
-    "RolloutPruningCandidate",
-    "RolloutPruningPlan",
-    "RolloutReadSnapshot",
-    "RolloutTurnAnchor",
 )
 
 _ROLLOUT_FILE_LOCK_TIMEOUT_SECONDS = 10.0
@@ -187,43 +101,17 @@ class SerializerPort(Protocol):
 
 
 class RolloutStorage(
-    RuntimeWakeupStorageMixin,
-    RolloutTurnsMixin,
-    RolloutReplayMixin,
-    RolloutTurnIndexMixin,
-    RolloutExecutionsMixin,
-    RolloutModelCallsMixin,
-    RolloutTurnLifecycleMixin,
-    RolloutCheckpointPersistenceMixin,
-    RolloutViewAnchorMixin,
-    RolloutCheckpointOperationsMixin,
-    RolloutCompactionPreflightOwnerMixin,
-    RolloutForkBoundaryOwnerMixin,
-    RolloutCheckpointQueriesMixin,
-    RolloutMessageViewMixin,
-    RolloutMessageMaterializerMixin,
-    IndexedRecordQueryMixin,
     TurnProjectionQueryMixin,
     TurnProjectionReadMixin,
-    RolloutWriteMixin,
-    ForkIdentityMappingMixin,
-    RolloutIdentityMixin,
-    ForkMetadataMixin,
-    ForkRemapMixin,
-    ForkMaterializationMixin,
-    ForkCompletionMixin,
-    ForkItemCopyMixin,
     RolloutItemsMixin,
     RolloutViewMembershipMixin,
     InternalExecutionHistoryMixin,
     RolloutPartsMixin,
-    ContextAssemblyStorageMixin,
-    ContextSourceControlStorageMixin,
-    ContextSourceVersionsStorageMixin,
     RolloutSerializationMixin,
     RolloutTransactionProjectionMixin,
-    RolloutMessageProjectionMixin,
     RolloutProjectionMixin,
+    RolloutCanonicalReadMixin,
+    RolloutViewSequenceMixin,
 ):
     """一个会话的单 JSONL canonical message 文件和权威 SQLite。"""
 
@@ -233,6 +121,8 @@ class RolloutStorage(
         *,
         serde: SerializerPort | None = None,
         message_codec: MessageCodec | None = None,
+        fork_recovery: Callable[[str, str, str, sqlite3.Connection, Path], None],
+        initialize_activation: Callable[[sqlite3.Connection], None],
     ) -> None:
         self.sessions_dir = Path(sessions_dir).resolve()
         self._path_resolver = get_session_path_resolver(self.sessions_dir)
@@ -242,7 +132,8 @@ class RolloutStorage(
         self._locks_guard = threading.Lock()
         self._active_fork_materializations: set[tuple[str, str, str]] = set()
         self._maintenance_owner = RolloutMaintenanceOwner(self)
-        self._pruning_owner = RolloutPruningOwner(self)
+        self._fork_recovery = fork_recovery
+        self._initialize_activation = initialize_activation
 
     def _codec(self) -> MessageCodec:
         """返回由 checkpoint 组装层注入的消息适配器。"""
@@ -550,27 +441,38 @@ class RolloutStorage(
             raise RuntimeError("rollout read snapshot 已关闭")
         return snapshot.connection
 
-    def plan_pruning(
+    @contextmanager
+    def read_connection(
         self,
+        session_id: str,
         thread_id: str,
         checkpoint_ns: str = "",
         *,
-        retain_checkpoint_ids: Iterable[str] = (),
-        audit_before_sequence: int | None = None,
-    ) -> RolloutPruningPlan:
-        """委托 pruning owner 规划逻辑裁剪。"""
-        return self._pruning_owner.plan_pruning(
-            thread_id,
-            checkpoint_ns,
-            retain_checkpoint_ids=retain_checkpoint_ids,
-            audit_before_sequence=audit_before_sequence,
-        )
+        snapshot: RolloutReadSnapshot | None = None,
+        connection: sqlite3.Connection | None = None,
+    ) -> Iterator[sqlite3.Connection]:
+        """复用严格快照；writer 可借用自己已持锁的事务连接。"""
+        if snapshot is not None:
+            if connection is not None:
+                raise ValueError("读取不能同时指定 snapshot 和 connection")
+            if (snapshot.session_id, snapshot.thread_id, snapshot.checkpoint_ns) != (
+                session_id, thread_id, checkpoint_ns,
+            ):
+                raise ValueError("read snapshot 与目标 rollout 不一致")
+            yield self._snapshot_connection(snapshot)
+        elif connection is not None:
+            self._require_v2_runtime(connection)
+            owner = connection.execute(
+                "SELECT session_id, thread_id FROM database_meta WHERE singleton_id = 1"
+            ).fetchone()
+            if owner != (session_id, thread_id):
+                raise ValueError("借用的 writer connection 与目标 rollout owner 不一致")
+            yield connection
+        else:
+            with self.open_read_snapshot(session_id, thread_id, checkpoint_ns) as owned:
+                yield owned.connection
 
-    def execute_pruning(
-        self, thread_id: str, plan: RolloutPruningPlan, checkpoint_ns: str = ""
-    ) -> tuple[str, ...]:
-        """委托 pruning owner 执行已规划的逻辑裁剪。"""
-        return self._pruning_owner.execute_pruning(thread_id, plan, checkpoint_ns)
+
 
     def _require_regular_file(self, path: Path, *, field: str) -> None:
         return self._maintenance_owner._require_regular_file(path, field=field)
@@ -619,7 +521,7 @@ class RolloutStorage(
         connection: sqlite3.Connection,
         jsonl_path: Path,
     ) -> None:
-        self._maintenance_owner._recover_fork_materialization(
+        self._fork_recovery(
             session_id,
             thread_id,
             checkpoint_ns,
@@ -671,8 +573,23 @@ class RolloutStorage(
     def repair_index(self, thread_id: str, checkpoint_ns: str='', *, session_id: str, manifest: RolloutManifest | None=None) -> None:
         return self._maintenance_owner.repair_index(thread_id, checkpoint_ns, session_id=session_id, manifest=manifest)
 
-    def _append_v2_records_transaction(self, connection: sqlite3.Connection, thread_id: str, checkpoint_ns: str, items: Sequence[CanonicalItemRecord], *, session_id: str, commit_kind: str, commit_mode: str | None=None, outcome: str | None=None, metadata: Mapping[str, object] | None=None, subject_id: str | None=None, idempotency_key: str | None=None, begin_transaction: bool=True) -> tuple[int, int]:
-        return self._maintenance_owner._append_v2_records_transaction(connection, thread_id, checkpoint_ns, items, session_id=session_id, commit_kind=commit_kind, commit_mode=commit_mode, outcome=outcome, metadata=metadata, subject_id=subject_id, idempotency_key=idempotency_key, begin_transaction=begin_transaction)
+    def _append_v2_records_transaction(
+        self, connection: sqlite3.Connection, thread_id: str, checkpoint_ns: str,
+        items: Sequence[CanonicalItemRecord], *, session_id: str, commit_kind: str,
+        commit_mode: str | None = None, outcome: str | None = None,
+        metadata: Mapping[str, object] | None = None, subject_id: str | None = None,
+        idempotency_key: str | None = None, begin_transaction: bool = True,
+        transaction_id: str | None = None, timestamp: str | None = None,
+        first_message_sequence: int | None = None, last_message_sequence: int | None = None,
+    ) -> tuple[int, int]:
+        return self._maintenance_owner._append_v2_records_transaction(
+            connection, thread_id, checkpoint_ns, items, session_id=session_id,
+            commit_kind=commit_kind, commit_mode=commit_mode, outcome=outcome,
+            metadata=metadata, subject_id=subject_id, idempotency_key=idempotency_key,
+            begin_transaction=begin_transaction, transaction_id=transaction_id,
+            timestamp=timestamp, first_message_sequence=first_message_sequence,
+            last_message_sequence=last_message_sequence,
+        )
 
     def _checkpoint_index(self, row: Sequence[object]) -> RolloutCheckpointIndex:
         return self._maintenance_owner._checkpoint_index(row)
@@ -689,8 +606,14 @@ class RolloutStorage(
     def _reject_unpublished_migration(self, thread_id: str, checkpoint_ns: str, *, session_id: str) -> None:
         return self._maintenance_owner._reject_unpublished_migration(thread_id, checkpoint_ns, session_id=session_id)
 
-    def repair_active_context_view(self, thread_id: str, checkpoint_ns: str='', *, session_id: str) -> bool:
-        return self._maintenance_owner.repair_active_context_view(thread_id, checkpoint_ns, session_id=session_id)
 
-    def ensure_active_view_contains_turn_root(self, session_id: str, thread_id: str, *, turn_id: str, checkpoint_ns: str='') -> bool:
-        return self._maintenance_owner.ensure_active_view_contains_turn_root(session_id, thread_id, turn_id=turn_id, checkpoint_ns=checkpoint_ns)
+
+    def _rollout_id(
+        self, session_id: str, *, thread_id: str, checkpoint_ns: str
+    ) -> str:
+        return (
+            "rollout-"
+            + hashlib.sha256(
+                str(self.root(session_id, checkpoint_ns, thread_id=thread_id)).encode()
+            ).hexdigest()[:24]
+        )

@@ -18,6 +18,7 @@ from app.services.infrastructure.rollout_context.fork.assembly_copy import (
     validate_source_assemblies,
 )
 from app.services.infrastructure.rollout_context.fork.full_copy.staging import (
+    FullCopyForkStore,
     FullCopyStagingStorage,
 )
 from app.services.infrastructure.rollout_context.fork.node_debug_materialization import (
@@ -36,11 +37,11 @@ from app.services.infrastructure.rollout_context.runtime.detail_fork import (
 from app.services.infrastructure.rollout_context.storage.primitives import (
     _RolloutFileLock,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
 
 def full_rollout_copy(
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
     *,
     source_session_id: str,
     target_session_id: str,
@@ -69,20 +70,20 @@ def full_rollout_copy(
         raise ValueError("source_snapshot_sha256 必须是小写 SHA-256 hex digest")
     fork_id = fork_id or uuid4().hex
     materialization_id = materialization_id or uuid4().hex
-    source_thread_id = storage._resolve_thread_identity(source_session_id, None)
-    target_thread_id = storage._resolve_thread_identity(target_session_id, None)
-    target = storage.root(
+    source_thread_id = storage.storage._resolve_thread_identity(source_session_id, None)
+    target_thread_id = storage.storage._resolve_thread_identity(target_session_id, None)
+    target = storage.storage.root(
         target_session_id,
         checkpoint_ns,
         thread_id=target_thread_id,
     )
-    source = storage.root(
+    source = storage.storage.root(
         source_session_id,
         checkpoint_ns,
         thread_id=source_thread_id,
     )
-    storage._safe_session_relative_path(target.parent, target.name)
-    with storage._lock(
+    storage.storage._safe_session_relative_path(target.parent, target.name)
+    with storage.storage._lock(
         target_thread_id,
         checkpoint_ns,
         session_id=target_session_id,
@@ -93,12 +94,16 @@ def full_rollout_copy(
             prefix=".fork-staging-", dir=target.parent
         ) as temporary:
             stage_root = Path(temporary) / "rollout"
-            stage = FullCopyStagingStorage(
+            staging_storage = FullCopyStagingStorage(
                 storage,
                 source=source_session_id,
                 target=target_session_id,
                 root=stage_root,
                 capability=detail_capability,
+            )
+            stage = RolloutContextStore(
+                storage.storage.sessions_dir, storage=staging_storage,
+                fork_store_factory=FullCopyForkStore,
             )
             # 从读取 source manifest 到全部正文认证保持共享锁；不修改 source SQLite。
             with ExitStack() as source_locks:
@@ -107,7 +112,7 @@ def full_rollout_copy(
                 )
                 source_lock.acquire()
                 source_locks.callback(source_lock.release)
-                source_view = stage.clone_rollout(
+                source_view = stage.forks.clone_rollout(
                     source_session_id=source_session_id,
                     source_thread_id=source_thread_id,
                     target_session_id=target_session_id,
@@ -128,7 +133,7 @@ def full_rollout_copy(
                     "target_thread_id": target_thread_id,
                     "source_snapshot_sha256": source_snapshot_sha256,
                 }
-                materialization, fork_id = stage.begin_fork_materialization(
+                materialization, fork_id = stage.forks.begin_fork_materialization(
                     **fields,
                     fork_id=fork_id,
                     materialization_id=materialization_id,
@@ -152,19 +157,19 @@ def full_rollout_copy(
                         target_session_id=target_session_id,
                         checkpoint_ns=checkpoint_ns,
                     )
-                stage.commit_fork_materialization(
+                stage.forks.commit_fork_materialization(
                     materialization, **fields, defer_completion=True
                 )
-            with stage._connect(
+            with stage.storage._connect(
                 target_thread_id,
                 checkpoint_ns,
                 session_id=target_session_id,
             ) as connection:
-                stage._validate_schema_state(connection)
-                stage._validate_v2_commit_offsets(
+                stage.storage._validate_schema_state(connection)
+                stage.storage._validate_v2_commit_offsets(
                     connection, stage_root / "rollout.jsonl"
                 )
-                validate_source_assemblies(stage, connection, checkpoint_ns)
+                validate_source_assemblies(stage.forks, connection, checkpoint_ns)
                 if connection.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
                     raise RuntimeError("fork staging SQLite integrity_check failed")
                 if connection.execute("PRAGMA foreign_key_check").fetchall():
@@ -175,7 +180,7 @@ def full_rollout_copy(
                 ):
                     raise RuntimeError("fork staging SQLite checkpoint failed")
             install_staging(stage_root, target)
-            storage._active_fork_materializations.add(
+            storage.storage._active_fork_materializations.add(
                 (target_session_id, target_thread_id, checkpoint_ns)
             )
             if debug_snapshot is not None and prepared_debug is not None:
@@ -199,7 +204,7 @@ def full_rollout_copy(
                 )
         # 安装后 journal 为 target_committed；retention 失败由既有恢复链重试。
         if not defer_completion:
-            storage.complete_fork_materialization(
+            storage.forks.complete_fork_materialization(
                 materialization_id=materialization,
                 target_session_id=target_session_id,
                 target_thread_id=target_thread_id,

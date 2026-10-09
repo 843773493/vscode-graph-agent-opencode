@@ -1,4 +1,4 @@
-"""RolloutStorage 注解可解析性回归合同。
+"""RolloutContextStore 注解可解析性回归合同。
 
 背景：storage/service.py 的 `_append_v2_records_transaction` 曾引用未导入的
 `CanonicalItemRecord`。由于模块带 `from __future__ import annotations`，注解只在

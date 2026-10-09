@@ -56,6 +56,10 @@ class SessionGoalService:
         shard = zlib.crc32(session_id.encode("utf-8")) % len(self._locks)
         return self._locks[shard]
 
+    async def assert_agent_thread(self, session_id: str, thread_id: str) -> None:
+        if thread_id != await self._session_service.resolve_main_thread(session_id):
+            raise ValueError("Goal 只属于 Session main thread，child thread 不得读取、创建或修改 Goal")
+
     async def get(self, session_id: str) -> SessionGoalDTO | None:
         thread_id = await self._session_service.resolve_main_thread(session_id)
         async with self.lock_for(session_id):

@@ -23,7 +23,7 @@ from app.services.infrastructure import message_stream_store as store_module
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
-_IDENTITY_FIELDS = ("session_id", "turn_id", "turn_stream_id")
+_IDENTITY_FIELDS = ("session_id", "thread_id", "turn_id", "turn_stream_id")
 
 
 @pytest.fixture
@@ -82,7 +82,7 @@ async def test_snapshot_control_frame_matches_http_snapshot_payload(
     # 只有 block 增量：current_attempt 恒为 0，tool_calls/activities 等全为空数组。
     monkeypatch.setattr(store_module, "MESSAGE_STREAM_MAX_BYTES", 1_000)
     monkeypatch.setattr(store_module, "MESSAGE_STREAM_RETAINED_BYTES", 260)
-    writer = await store.open(session_id=session_id, turn_id=turn_id)
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id=turn_id)
     for index in range(12):
         await writer.commit(
             "block.delta",
@@ -152,7 +152,7 @@ async def test_non_snapshot_event_wire_format_is_unchanged(
     message_stream_api: tuple[FastAPI, MessageStreamStore, str, str],
 ) -> None:
     _, store, session_id, turn_id = message_stream_api
-    writer = await store.open(session_id=session_id, turn_id=turn_id)
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id=turn_id)
     cases = [
         (
             "model.started",
@@ -228,6 +228,7 @@ async def test_non_snapshot_event_wire_format_is_unchanged(
         event = {
             "event_id": f"evt_{index}",
             "session_id": session_id,
+            "thread_id": store._path_resolver.main_thread_id(session_id),
             "turn_id": turn_id,
             "turn_stream_id": writer.turn_stream_id,
             "event_seq": index,

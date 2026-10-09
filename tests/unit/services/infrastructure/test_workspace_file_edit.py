@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import codecs
 import io
 import os
@@ -7,16 +8,20 @@ import shutil
 import zipfile
 from pathlib import Path
 from unittest.mock import Mock
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
+from app.schemas.internal_v2.workspace_file_operations import (
+    WorkspaceFileMutationIntentDTO,
+)
 from app.services.infrastructure import workspace_service as workspace_service_module
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_service import (
     WorkspaceFileConflictError,
     WorkspaceService,
 )
+from tests.support.workspaces import prepare_default_test_workspace
 
 
 def _workspace_config_service_mock() -> Mock:
@@ -33,7 +38,7 @@ def workspace_service(
     monkeypatch: pytest.MonkeyPatch,
 ) -> WorkspaceService:
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    return WorkspaceService(config_service=_workspace_config_service_mock())
+    return WorkspaceService(config_service=_workspace_config_service_mock(), workspace_root=tmp_path)
 
 
 @pytest.mark.asyncio
@@ -186,7 +191,7 @@ async def test_filesystem_scope_lists_and_reads_absolute_path(
     workspace_root.mkdir(parents=True)
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
     workspace_service = WorkspaceService(
-        config_service=_workspace_config_service_mock()
+        config_service=_workspace_config_service_mock(), workspace_root=workspace_root
     )
     external_root = filesystem_scope_root / "external"
     external_root.mkdir()
@@ -224,12 +229,14 @@ async def test_directory_listing_cursor_reads_every_page(
     file_manager_service: tuple[WorkspaceService, Path, Path],
 ) -> None:
     workspace_service, project_root, _ = file_manager_service
+    page_root = project_root / "pages"
+    page_root.mkdir()
     for name in ["c.txt", "a.txt", "d.txt", "b.txt", "e.txt"]:
-        (project_root / name).write_text(name, encoding="utf-8")
+        (page_root / name).write_text(name, encoding="utf-8")
 
-    first = await workspace_service.list_files(limit=2)
-    second = await workspace_service.list_files(limit=2, cursor=first.next_cursor)
-    third = await workspace_service.list_files(limit=2, cursor=second.next_cursor)
+    first = await workspace_service.list_files(path="pages", limit=2)
+    second = await workspace_service.list_files(path="pages", limit=2, cursor=first.next_cursor)
+    third = await workspace_service.list_files(path="pages", limit=2, cursor=second.next_cursor)
 
     assert [item.name for item in first.items] == ["a.txt", "b.txt"]
     assert [item.name for item in second.items] == ["c.txt", "d.txt"]
@@ -249,26 +256,45 @@ async def test_directory_listing_rejects_invalid_cursor(
 
 
 @pytest.fixture
-def file_manager_service(
+async def file_manager_service(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[WorkspaceService, Path, Path]:
+):
     output_root = (
         Path.cwd()
         / "out/tests/unit/services/infrastructure/test_workspace_file_edit"
-        / "workspace/file_manager"
+        / "workspace"
     )
     if output_root.exists():
         shutil.rmtree(output_root)
-    project_root = output_root / "project"
+    project_root = prepare_default_test_workspace(workspace_root=output_root / "project",
+                                                  template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace")
     source_root = output_root / "clipboard"
-    project_root.mkdir(parents=True)
     source_root.mkdir()
     monkeypatch.setenv("WORKSPACE_ROOT", str(project_root))
-    return (
-        WorkspaceService(config_service=_workspace_config_service_mock()),
-        project_root,
-        source_root,
+    service = WorkspaceService(config_service=_workspace_config_service_mock(), workspace_root=project_root)
+    await service.start()
+    yield service, project_root, source_root
+    await service.stop()
+    service.close()
+
+
+async def _file_intent(service: WorkspaceService, path: str = "") -> WorkspaceFileMutationIntentDTO:
+    listing = await service.list_files(path=path)
+    return WorkspaceFileMutationIntentDTO(
+        client_operation_id="op_" + uuid4().hex, client_sequence=1,
+        expected_directory_revision=listing.directory_revision, directory_key=listing.directory_key,
     )
+
+
+async def _terminal(service: WorkspaceService, receipt):
+    for _ in range(300):
+        current = service.file_operations.status([receipt.operation_id], actor="local").operations[0]
+        if current.state in ("committed", "rejected", "cancelled", "dependency_failed"):
+            return current
+        if service.file_operations.worker_state == "failed":
+            raise RuntimeError(service.file_operations.worker_error)
+        await asyncio.sleep(0.01)
+    raise AssertionError("文件操作未在有界时间收口")
 
 
 @pytest.mark.asyncio
@@ -276,24 +302,31 @@ async def test_file_manager_creates_file_and_directory_with_parent_snapshot(
     file_manager_service: tuple[WorkspaceService, Path, Path],
 ) -> None:
     service, project_root, _ = file_manager_service
+    original_names = {item.name for item in (await service.list_files()).items}
+    assert ".boxteam" in original_names
 
     after_file = await service.create_file_entry(
         directory_path="",
         scope="workspace",
         name="notes.txt",
         kind="file",
+        intent=await _file_intent(service), actor="local",
     )
+    after_file = await _terminal(service, after_file)
     after_directory = await service.create_file_entry(
         directory_path="",
         scope="workspace",
         name="models",
         kind="directory",
+        intent=await _file_intent(service), actor="local",
     )
+    after_directory = await _terminal(service, after_directory)
 
     assert (project_root / "notes.txt").read_text(encoding="utf-8") == ""
     assert (project_root / "models").is_dir()
-    assert [item.name for item in after_file.items] == ["notes.txt"]
-    assert [item.name for item in after_directory.items] == ["models", "notes.txt"]
+    assert after_file.state == after_directory.state == "committed"
+    assert {item.name for item in after_file.snapshots[0].items} == original_names | {"notes.txt"}
+    assert {item.name for item in after_directory.snapshots[0].items} == original_names | {"models", "notes.txt"}
 
 
 @pytest.mark.asyncio
@@ -307,13 +340,17 @@ async def test_file_manager_pastes_multiple_paths_and_rejects_overwrite(
     source_directory.mkdir()
     (source_directory / "index.json").write_text("{}\n", encoding="utf-8")
 
+    original_names = {item.name for item in (await service.list_files()).items}
     listing = await service.paste_file_entries(
         directory_path="",
         scope="workspace",
         source_paths=[str(source_file), str(source_directory)],
+        intent=await _file_intent(service), actor="local",
     )
+    listing = await _terminal(service, listing)
 
-    assert [item.name for item in listing.items] == ["torch_home", "weights.txt"]
+    assert listing.state == "committed"
+    assert {item.name for item in listing.snapshots[0].items} == original_names | {"torch_home", "weights.txt"}
     assert (project_root / "weights.txt").read_text(encoding="utf-8") == "weights\n"
     assert (project_root / "torch_home/index.json").read_text(encoding="utf-8") == "{}\n"
     with pytest.raises(FileExistsError, match="已存在"):
@@ -321,6 +358,7 @@ async def test_file_manager_pastes_multiple_paths_and_rejects_overwrite(
             directory_path="",
             scope="workspace",
             source_paths=[str(source_file)],
+            intent=await _file_intent(service), actor="local",
         )
 
 
@@ -339,9 +377,12 @@ async def test_file_manager_copies_workspace_entry_by_scoped_path(
         scope="workspace",
         source_path="source.txt",
         source_scope="workspace",
+        intent=await _file_intent(service, "target"), actor="local",
     )
+    listing = await _terminal(service, listing)
 
-    assert [item.name for item in listing.items] == ["source.txt"]
+    assert listing.state == "committed"
+    assert [item.name for item in listing.snapshots[0].items] == ["source.txt"]
     assert (target / "source.txt").read_text(encoding="utf-8") == "workspace copy\n"
 
 
@@ -351,18 +392,22 @@ async def test_file_manager_uploads_multiple_files_with_relative_paths(
 ) -> None:
     service, project_root, _ = file_manager_service
 
+    original_names = {item.name for item in (await service.list_files()).items}
     listing = await service.upload_file_entries(
         directory_path="",
         scope="workspace",
         entries=[
             ("notes.txt", io.BytesIO(b"notes\n")),
-            ("assets/logo.bin", io.BytesIO(b"\x00\x01logo")),
+            ("uploaded_assets/logo.bin", io.BytesIO(b"\x00\x01logo")),
         ],
+        intent=await _file_intent(service), actor="local",
     )
+    listing = await _terminal(service, listing)
 
-    assert [item.name for item in listing.items] == ["assets", "notes.txt"]
+    assert listing.state == "committed"
+    assert {item.name for item in listing.snapshots[0].items} == original_names | {"uploaded_assets", "notes.txt"}
     assert (project_root / "notes.txt").read_bytes() == b"notes\n"
-    assert (project_root / "assets/logo.bin").read_bytes() == b"\x00\x01logo"
+    assert (project_root / "uploaded_assets/logo.bin").read_bytes() == b"\x00\x01logo"
 
 
 def test_file_manager_prepares_directory_download_as_zip(

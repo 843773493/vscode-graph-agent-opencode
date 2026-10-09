@@ -8,6 +8,7 @@ import {
   type WorkspaceFileChangesEventDetail,
 } from "../../../state/workspaceFileTreeEvents";
 import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
+import { installWorkspaceFileIntentStoreMock } from "../../../tests/workspaceFileIntentStoreMock";
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -24,6 +25,7 @@ const originalOverlayGlobals = Object.fromEntries(
 );
 
 const mountedRenderers: ReactTestRenderer[] = [];
+const intentMocks: ReturnType<typeof installWorkspaceFileIntentStoreMock>[] = [];
 
 type Listener = (event: Event) => void;
 
@@ -63,6 +65,10 @@ function installWindow(port: number, promptValue: string | null = null): Documen
 }
 
 function apiResponse(data: unknown): Response {
+  if (data && typeof data === "object" && "items" in data && "path" in data) {
+    data = { directory_key: { workspace_id: "backend_files", scope: "workspace", root: "/w/project", path: data.path },
+      directory_revision: 1, ...data };
+  }
   return Response.json({
     code: 0,
     message: "ok",
@@ -91,6 +97,7 @@ interface Harness {
 
 /** 每次 GET /workspace/files 都按 directoryItems 的当前快照返回，便于断言重载次数与被替换内容。 */
 async function mountTree(port: number, promptValue: string | null = null): Promise<Harness> {
+  intentMocks.push(installWorkspaceFileIntentStoreMock());
   const windowHandle = installWindow(port, promptValue);
   const listingRequests: string[] = [];
   const directoryItems = new Map<string, Array<Record<string, unknown>>>([
@@ -98,13 +105,22 @@ async function mountTree(port: number, promptValue: string | null = null): Promi
     ["src", [fileNode("src/old.ts", "file")]],
     ["other", [fileNode("other/b.ts", "file")]],
   ]);
-  globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+  const receipts = new Map<string, Record<string, unknown>>();
+  globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input), "http://127.0.0.1");
     if (url.pathname === "/api/gateway/auth/local-credential") {
       return apiResponse({ token: "token" });
     }
     if (url.pathname === "/api/gateway/users/current") {
       return apiResponse({ kind: "guest", user_id: null });
+    }
+    if (url.pathname === "/api/gateway/health") return apiResponse({ gateway_id: "gateway_files" });
+    if (url.pathname === "/api/v1/workspace") return apiResponse({ workspace_id: "backend_files", root_path: "/w/project" });
+    if (url.pathname === "/api/v1/workspace/files/operations") {
+      expect(url.searchParams.get("expected_workspace_id")).toBe("backend_files");
+      const receipt = receipts.get(url.searchParams.get("operation_id") ?? "");
+      return receipt ? apiResponse({ operations: [receipt], worker_state: "running" })
+        : Response.json({ detail: "原操作不存在" }, { status: 404 });
     }
     if (url.pathname === "/api/v1/workspace/files") {
       const path = url.searchParams.get("path") ?? "";
@@ -121,7 +137,16 @@ async function mountTree(port: number, promptValue: string | null = null): Promi
       const path = url.searchParams.get("path") ?? "";
       const next = [...(directoryItems.get(path) ?? []), fileNode(`${path}/new.ts`, "file")];
       directoryItems.set(path, next);
-      return apiResponse({ root_path: path, path, items: next, truncated: false, next_cursor: null });
+      const command = JSON.parse(String(init?.body));
+      const key = command.intent.directory_key;
+      expect(command.intent.expected_directory_revision).toBe(1);
+      const snapshot = { root_path: "/w/project", path, items: next, truncated: false, limit: 500,
+        next_cursor: null, directory_key: key, directory_revision: 2 };
+      const queued = { operation_id: command.intent.client_operation_id, client_sequence: command.intent.client_sequence,
+        queue_seq: 1, kind: "create", state: "queued", receipt_revision: 1, effect: "none", items: [], directories: [], snapshots: [] };
+      receipts.set(queued.operation_id, { ...queued, state: "committed", effect: "complete", receipt_revision: 3,
+        directories: [{ directory_key: key, directory_revision: 2, exists: true }], snapshots: [snapshot] });
+      return Response.json({ request_id: "request-file-tree-202", data: queued }, { status: 202 });
     }
     throw new Error("未声明请求: " + url.pathname);
   }, { preconnect: originalFetch.preconnect });
@@ -197,7 +222,7 @@ function dispatchChange(handle: Harness, kind: string, absolutePath: string): vo
   act(() => {
     handle.window.dispatch(new CustomEvent<WorkspaceFileChangesEventDetail>(
       WORKSPACE_FILE_CHANGES_EVENT,
-      { detail: { workspaceId: "gw_conv", changes: [{ kind, path: absolutePath }] } },
+      { detail: { workspaceId: "gw_conv", directories: [], snapshots: [], changes: [{ kind, path: absolutePath }] } },
     ));
   });
 }
@@ -210,6 +235,7 @@ afterEach(() => {
   act(() => {
     mountedRenderers.splice(0).forEach((renderer) => renderer.unmount());
   });
+  intentMocks.splice(0).forEach((mock) => mock.restore());
   globalThis.fetch = originalFetch;
   restoreGlobalDescriptor("window", originalWindowDescriptor);
   for (const [name, descriptor] of Object.entries(originalOverlayGlobals)) {
@@ -235,7 +261,9 @@ describe("工作区文件树精确收敛", () => {
     openMenu(handle.renderer, "/w/project/src");
     await settle();
     clickLabel(handle.renderer, "新建文件");
-    await settle(60);
+    for (let attempt = 0; attempt < 150 && !titlesOf(handle.renderer).includes("/w/project/src/new.ts"); attempt += 1) {
+      await settle(10);
+    }
 
     // 成功路径用后端返回的完整目录对象替换该目录：不得再重拉任何目录。
     expect(requestCount(handle, "src")).toBe(1);

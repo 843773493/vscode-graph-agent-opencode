@@ -97,6 +97,7 @@ class AgentExecutionService(JobStepExecutor):
         tool_timeout_seconds: float | None = None,
         residency_tracker: ThreadResidencyTracker,
         resource_activation_factory: Callable[[ResourceRegistry], ResourceActivationCoordinator],
+        team_resource_subscriber: Callable[[str, str, ResourceRegistry, LifetimeScope], None],
         # Turn 控制 inbox 状态路径解析器；None 时用 SQLite catalog 解析到会话节点。
         control_inbox_state_path: Callable[[str, str], Path] | None = None,
     ):
@@ -127,6 +128,7 @@ class AgentExecutionService(JobStepExecutor):
         self._graph_binding_store = graph_binding_store
         self._residency_tracker = residency_tracker
         self._resource_activation_factory = resource_activation_factory
+        self._team_resource_subscriber = team_resource_subscriber
         self._model_timeout_seconds = model_timeout_seconds
         self._tool_timeout_seconds = tool_timeout_seconds
         self._sweep_task: asyncio.Task[None] | None = None
@@ -138,6 +140,7 @@ class AgentExecutionService(JobStepExecutor):
                 tool_selection_store=tool_selection_store,
                 session_changes_service=session_changes_service,
                 message_stream_store=message_stream_store,
+                background_message_bus=background_message_bus,
                 workspace_root=workspace_root,
                 control_inbox_state_path=self._control_inbox_state_path,
                 agent_factory=self._acquire_step_agent,
@@ -275,6 +278,7 @@ class AgentExecutionService(JobStepExecutor):
                         publication_lock=mcp_owner.publication_lock,
                         capture_validator=mcp_owner.validate_resource_capture,
                     )
+                    self._team_resource_subscriber(session_id, thread_id, resource_registry, scope)
                     resource_activation = self._resource_activation_factory(resource_registry)
                     agent = self._build_agent(
                         session_id=session_id,

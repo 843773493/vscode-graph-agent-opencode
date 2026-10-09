@@ -8,12 +8,15 @@ import threading
 from collections.abc import AsyncIterator, Callable
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID
 
+import httpx
 import pytest
+from fastapi import FastAPI
 from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt.tool_node import ToolCallRequest
@@ -36,6 +39,9 @@ from app.agents.skill_runtime import (
     resolve_bundled_skill_groups,
 )
 from app.agents.tool_invocation_context import ToolInvocationContextMiddleware
+from app.api import message_stream as message_stream_api
+from app.api.deps import get_message_stream_store, get_request_id, verify_local_token
+from app.core.background_task_contracts import BackgroundTaskDescriptor
 from app.core.execution_admission_context import (
     current_execution_admission,
     execution_admission_scope,
@@ -60,6 +66,7 @@ from app.schemas.internal_v2.job import JobControlRequest
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogUnavailableError,
 )
+from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservation,
 )
@@ -235,6 +242,7 @@ async def runtime_case(
     if not case.shutdown_owned_by_lifespan:
         await runner_case.container.mcp_catalog_owner.start()
         await runner_case.container.workspace_file_resource_registry.start()
+        await runner_case.container.team_fanout_service.start()
     try:
         yield case
     finally:
@@ -248,6 +256,7 @@ async def runtime_case(
                 await runner_case.container.job_service.force_interrupt_active(
                     reason="测试结束"
                 )
+                await runner_case.container.team_fanout_service.stop()
                 await runner_case.container.agent_execution_service.shutdown()
                 await runner_case.container.resource_platform.close()
                 await runner_case.container.mcp_catalog_owner.shutdown()
@@ -268,7 +277,7 @@ async def _complete_job(
     )
 
 
-async def _child(case: RuntimeCase, session_id: str) -> str:
+async def _child(case: RuntimeCase, session_id: str, *, creation_key: str = "runtime-child") -> str:
     container = case.runner.container
     sessions_root = case.runner.workspace / ".boxteam" / "sessions"
     control = SessionControlStore(
@@ -287,7 +296,7 @@ async def _child(case: RuntimeCase, session_id: str) -> str:
             workspace_id=container.workspace_service.workspace_id,
             compute_capability_profile_hash=compute_capability_profile_hash,
         ).create(
-            idempotency_key="runtime-child",
+            idempotency_key=creation_key,
             session_id=session_id,
             thread_id=None,
             delegation_id=None,
@@ -343,6 +352,137 @@ async def test_real_runner_reuses_main_graph_with_fresh_admissions_and_isolates_
     tracker = case.tracker
     assert tracker.snapshot(session_id, main_thread_id).execution_state == "idle"
     assert tracker.snapshot(session_id, child_id).execution_state == "idle"
+
+
+@pytest.fixture
+async def cold_message_stream_client(runtime_case: RuntimeCase):
+    """局部 HTTP Integration：仅鉴权/请求 ID 是替身，读取真实 Runner 的冷持久流。"""
+    store = MessageStreamStore(path_resolver=runtime_case.runner.container.session_service.path_resolver)
+    application = FastAPI()
+    application.include_router(message_stream_api.router, prefix="/api/v1")
+    application.dependency_overrides[get_message_stream_store] = lambda: store
+    application.dependency_overrides[verify_local_token] = lambda: "local-test"
+    application.dependency_overrides[get_request_id] = lambda: "request-message-owner"
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://test") as client:
+        yield client
+
+
+async def test_real_runner_message_v1_child_owner_matches_model_admission_and_rejects_main_selector(
+    runtime_case: RuntimeCase, cold_message_stream_client: httpx.AsyncClient, request: pytest.FixtureRequest,
+) -> None:
+    case = runtime_case
+    session_id, main = await _session(case.runner)
+    child = await _child(case, session_id)
+    admission = await _complete_job(case, session_id, child, timeout_seconds=20)
+    before = len(case.compiled)
+    turn_id = admission.turn_id
+    assert turn_id is not None
+    root = f"/api/v1/sessions/{session_id}/turns/{turn_id}/message-stream"
+    client = cold_message_stream_client
+    snapshot = await client.get(root + "/snapshot", params={"thread_id": child})
+    assert snapshot.status_code == 200, snapshot.text
+    frozen = snapshot.json()["data"]
+    assert frozen["thread_id"] == child and frozen["turn_id"] == turn_id
+    selector = {"thread_id": child, "turn_stream_id": frozen["turn_stream_id"]}
+    events = await client.get(root + "/events", params=selector)
+    assert events.status_code == 200, events.text
+    records = events.json()["data"]
+    assert records and all((event["session_id"], event["thread_id"], event["turn_id"]) == (
+        session_id, child, turn_id) for event in records)
+    model_ids = {event["model_call_id"] for event in records if event["type"] == "model.started"}
+    assert model_ids
+    storage = case.runner.saver._storage
+    with storage.storage._connect(child, session_id=session_id, read_only=True) as connection:
+        for model_id in model_ids:
+            assert connection.execute(
+                "SELECT m.session_id,m.thread_id,m.execution_id,e.turn_id FROM model_calls m "
+                "JOIN executions e ON e.session_id=m.session_id AND e.thread_id=m.thread_id "
+                "AND e.execution_id=m.execution_id WHERE m.model_call_id=?", (model_id,),
+            ).fetchone() == (session_id, child, admission.execution_id, turn_id)
+    sse = await client.get(root, params=selector)
+    assert sse.status_code == 200, sse.text
+    replay = [json.loads(line.removeprefix("data: ")) for line in sse.text.splitlines() if line.startswith("data: ")]
+    assert replay and all(event["thread_id"] == child for event in replay)
+    assert sse.headers["X-Message-Stream-ID"] == frozen["turn_stream_id"]
+    cursor = records[1]["event_seq"]
+    resumed = await client.get(root + "/events", params={**selector, "after_seq": cursor})
+    assert resumed.status_code == 200, resumed.text
+    assert all(event["thread_id"] == child and event["event_seq"] > cursor for event in resumed.json()["data"])
+    for suffix in ("", "/snapshot", "/events"):
+        for stream_id in (None, frozen["turn_stream_id"]):
+            wrong = {"thread_id": main}
+            if stream_id is not None:
+                wrong["turn_stream_id"] = stream_id
+            rejected = await client.get(root + suffix, params=wrong)
+            assert rejected.status_code == 404, rejected.text
+    assert len(case.compiled) == before
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    context.artifacts_dir.joinpath("message-v1-real-child-owner.json").write_text(json.dumps({
+        "session_id": session_id, "thread_id": child, "execution_id": admission.execution_id,
+        "turn_id": turn_id, "model_call_ids": sorted(model_ids), "snapshot": frozen,
+        "events": records, "sse_events": replay, "compiled_before_after": [before, len(case.compiled)],
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+@pytest.fixture
+def runtime_clock(runtime_case: RuntimeCase, monkeypatch: pytest.MonkeyPatch):
+    seconds = [0.0]
+    monkeypatch.setattr(runtime_case.tracker, "_clock", lambda: seconds[0])
+    return seconds
+
+
+@pytest.mark.asyncio
+async def test_real_compiler_cold_reads_idle_boundary_background_blocker_and_exact_rehydrate(
+    runtime_case: RuntimeCase, runtime_clock,
+):
+    case = runtime_case
+    container = case.runner.container
+    session_id, main = await _session(case.runner)
+    child = await _child(case, session_id)
+    sibling = await _child(case, session_id, creation_key="runtime-sibling")
+    assert case.compiled == []
+    await container.session_service.get(session_id)
+    from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
+    for thread in (main, child, sibling):
+        page = await container.session_turn_history_service.load_history(session_id, TurnHistoryLoadRequest(), thread_id=thread)
+        assert page.thread_id == thread
+    assert case.compiled == []
+    for thread in (main, main, child, child, sibling):
+        await _complete_job(case, session_id, thread, timeout_seconds=20)
+    assert [pair for pair, _graph, _scope in case.compiled] == [(session_id, main), (session_id, child), (session_id, sibling)]
+    assert case.bindings == [DEEP_AGENT_GRAPH_BINDING] * 3
+    registry = container.background_task_registry
+    handle = await registry.spawn(session_id=session_id, thread_id=main, agent_id="default",
+        task_id="bgt_idle-runtime", descriptor=BackgroundTaskDescriptor(
+            kind="emit_system_time_messages", version=1, payload={
+                "interval_seconds": 7200, "message_count": 1, "source_id": "idle-runtime",
+                "started_at": (datetime.now(UTC) + timedelta(hours=2)).isoformat(),
+            }))
+    runtime_clock[0] = 1799
+    await case.tracker.sweep()
+    assert all(case.tracker.snapshot(session_id, thread).residency == "resident" for thread in (main, child, sibling))
+    runtime_clock[0] = 1800
+    await case.tracker.sweep()
+    assert case.tracker.snapshot(session_id, main).residency == "resident"
+    assert [blocker.kind for blocker in case.tracker.snapshot(session_id, main).blockers] == ["background_task"]
+    assert all(case.tracker.snapshot(session_id, thread).residency == "cold" for thread in (child, sibling))
+    assert all(scope.state == "closed" for _pair, _graph, scope in case.compiled[1:])
+    await registry.cancel(session_id, handle.task_id)
+    assert case.tracker.snapshot(session_id, main).blockers == ()
+    runtime_clock[0] = 3599
+    await case.tracker.sweep()
+    assert case.tracker.snapshot(session_id, main).residency == "resident"
+    runtime_clock[0] = 3600
+    await case.tracker.sweep()
+    assert case.tracker.snapshot(session_id, main).residency == "cold"
+    assert case.compiled[0][2].state == "closed"
+    await container.session_service.get(session_id)
+    assert len(case.compiled) == 3
+    for thread in (main, child, sibling):
+        await _complete_job(case, session_id, thread, timeout_seconds=20)
+    assert len(case.compiled) == 6
+    assert case.bindings == [DEEP_AGENT_GRAPH_BINDING] * 6
+    assert all(case.compiled[index][1] is not case.compiled[index + 3][1] for index in range(3))
 
 
 @pytest.mark.asyncio
@@ -795,9 +935,22 @@ async def test_lifespan_starts_cold_worker_and_closes_runtime_before_resource_pl
     registry_start = container.workspace_file_resource_registry.start
     platform_type = type(container.resource_platform)
     close_resources = platform_type.close
+    job_drain = container.job_service.drain_finalizations
+    fanout_stop = container.team_fanout_service.stop
     order: list[str] = []
 
+    async def drain_jobs():
+        await job_drain()
+        order.append("jobs-drained")
+
+    async def stop_fanout():
+        assert order == ["jobs-drained"]
+        await fanout_stop()
+        assert container.team_fanout_service._worker is None
+        order.append("fanout-stopped")
+
     async def close_runtime():
+        assert order == ["jobs-drained", "fanout-stopped"]
         order.append("runtime")
         await shutdown()
 
@@ -812,6 +965,8 @@ async def test_lifespan_starts_cold_worker_and_closes_runtime_before_resource_pl
         _isolate_non_navigation_services(container, lifespan_patch)
         lifespan_patch.setattr(service, "start", start)
         lifespan_patch.setattr(service, "shutdown", close_runtime)
+        lifespan_patch.setattr(container.job_service, "drain_finalizations", drain_jobs)
+        lifespan_patch.setattr(container.team_fanout_service, "stop", stop_fanout)
         # 生命周期用例由同一个 lifespan task 真实启动并关闭 MCP 和文件 registry。
         lifespan_patch.setattr(container.mcp_catalog_owner, "start", mcp_start)
         lifespan_patch.setattr(container.mcp_catalog_owner, "shutdown", mcp_shutdown)
@@ -827,7 +982,7 @@ async def test_lifespan_starts_cold_worker_and_closes_runtime_before_resource_pl
             lease = await _lease(case, _admit(case.runner, session_id, thread_id, "user"))
             async with lease:
                 lease.release()
-    assert order == ["runtime", "resource-platform"]
+    assert order == ["jobs-drained", "fanout-stopped", "runtime", "resource-platform"]
     assert main.app.state.workspace_container_registry is None
 
 
@@ -966,7 +1121,7 @@ async def test_real_runner_skill_tool_consumes_frozen_provenance_after_live_refr
     assert all(receipt["error"] is None for receipt in receipts)
 
     saver = case.runner.saver
-    with saver._storage._connect(
+    with saver._storage.storage._connect(
         thread_id, "", session_id=session_id, read_only=True,
     ) as connection:
         rows = connection.execute(
@@ -1036,7 +1191,7 @@ async def test_real_runner_skill_tool_consumes_frozen_provenance_after_live_refr
             ),
             turn_id=admission.turn_id, turn_scope="turn_member", wire_role="assistant",
         ),), thread_id=thread_id)
-    with restarted._storage._connect(
+    with restarted._storage.storage._connect(
         thread_id, "", session_id=session_id, read_only=True,
     ) as connection:
         assert connection.execute(
@@ -1048,13 +1203,13 @@ async def test_real_runner_skill_tool_consumes_frozen_provenance_after_live_refr
         model_call_id=callback_ids[0],
     )
     assert raw_bound == resolutions[0][1] and raw_model_call_id == callback_ids[0]
-    rollout_path = restarted._storage.jsonl_path(session_id, "", thread_id=thread_id)
+    rollout_path = restarted._storage.storage.jsonl_path(session_id, "", thread_id=thread_id)
     rollout_before = rollout_path.read_bytes()
     with pytest.raises(ExtensionCatalogUnavailableError, match="无 model-call scope.*scoped ID"):
         restarted.load_tool_call_resource_activation(
             session_id, thread_id=thread_id, tool_call_id=raw_only_call_id,
         )
-    with restarted._storage._connect(
+    with restarted._storage.storage._connect(
         thread_id, "", session_id=session_id, read_only=True,
     ) as connection:
         assert tuple(connection.iterdump()) == durable_before

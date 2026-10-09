@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from contextlib import aclosing
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -33,11 +34,9 @@ from app.schemas.internal_v2.workspace import (
     WorkspaceContextDTO,
     WorkspaceDTO,
     WorkspaceFileChangeBatchDTO,
-    WorkspaceFileChangeDTO,
     WorkspaceFileContentDTO,
     WorkspaceFileCopyRequest,
     WorkspaceFileCreateRequest,
-    WorkspaceFileListDTO,
     WorkspaceFilePasteRequest,
     WorkspaceFileRevealDTO,
     WorkspaceFileScope,
@@ -46,8 +45,21 @@ from app.schemas.internal_v2.workspace import (
     WorkspaceIndexRebuildDTO,
     WorkspaceIndexStatusDTO,
 )
+from app.schemas.internal_v2.workspace_file_operations import (
+    WorkspaceFileListDTO,
+    WorkspaceFileMutationIntentDTO,
+    WorkspaceFileOperationReceiptDTO,
+    WorkspaceFileOperationStatusDTO,
+)
+from app.services.business.session_navigation.operations_service import (
+    local_navigation_scope,
+)
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
+)
+from app.services.infrastructure.workspace_files.events import file_events
+from app.services.infrastructure.workspace_files.store import (
+    WorkspaceFileOperationConflictError,
 )
 from app.services.infrastructure.workspace_service import (
     WorkspaceFileConflictError,
@@ -65,7 +77,7 @@ def _file_operation_error(error: Exception) -> HTTPException:
     """
     if isinstance(error, FileNotFoundError):
         return HTTPException(status_code=404, detail=str(error))
-    if isinstance(error, FileExistsError):
+    if isinstance(error, (FileExistsError, WorkspaceFileOperationConflictError)):
         return state_conflict_http_error(error)
     if isinstance(error, ForbiddenError):
         return forbidden_http_error(error)
@@ -94,6 +106,8 @@ async def stream_workspace_file_events(
     watch_service: WorkspaceFileWatchService = Depends(
         get_workspace_file_watch_service
     ),
+    *,
+    workspace_service: Annotated[WorkspaceService, Depends(get_workspace_service)],
 ):
     try:
         roots = watch_service.resolve_watch_roots(payload.paths)
@@ -107,7 +121,7 @@ async def stream_workspace_file_events(
     async def generate():
         async with aclosing(
             stream_sse_with_heartbeat(
-                watch_service.subscribe_roots(roots),
+                file_events(workspace_service.file_operations, watch_service, roots, payload.after_event_id),
                 heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS,
                 close_source_on_exit=True,
             )
@@ -129,6 +143,10 @@ async def stream_workspace_file_events(
                         file_change_batch_to_proto(
                             {
                                 "overflow": batch.overflow,
+                                "directories": [item.model_dump() for item in batch.directories],
+                                "event_id": batch.event_id,
+                                "invalidated_roots": list(batch.invalidated_roots),
+                                "snapshots": [item.model_dump() for item in batch.snapshots],
                                 "changes": [
                                     {"kind": change.kind, "path": change.path}
                                     for change in batch.changes
@@ -231,6 +249,8 @@ async def list_workspace_files(
             limit=limit,
             cursor=cursor,
         )
+    except WorkspaceFileOperationConflictError as error:
+        raise state_conflict_http_error(error) from error
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ForbiddenError as error:
@@ -363,7 +383,8 @@ async def update_workspace_file_content(
 
 @router.post(
     "/files/entries",
-    response_model=APIResponse[WorkspaceFileListDTO],
+    response_model=APIResponse[WorkspaceFileOperationReceiptDTO],
+    status_code=202,
     summary="在目录中创建文件或文件夹",
 )
 async def create_workspace_file_entry(
@@ -380,15 +401,18 @@ async def create_workspace_file_entry(
             scope=scope,
             name=payload.name,
             kind=payload.kind,
+            intent=payload.intent,
+            actor=local_navigation_scope(workspace_service.workspace_id).actor,
         )
-    except (ForbiddenError, OSError, ValueError) as error:
+    except (ForbiddenError, OSError, ValueError, WorkspaceFileOperationConflictError) as error:
         raise _file_operation_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
 @router.post(
     "/files/paste",
-    response_model=APIResponse[WorkspaceFileListDTO],
+    response_model=APIResponse[WorkspaceFileOperationReceiptDTO],
+    status_code=202,
     summary="把剪贴板路径对应的文件或目录复制到目标目录",
 )
 async def paste_workspace_file_entries(
@@ -404,15 +428,18 @@ async def paste_workspace_file_entries(
             directory_path=path,
             scope=scope,
             source_paths=payload.source_paths,
+            intent=payload.intent,
+            actor=local_navigation_scope(workspace_service.workspace_id).actor,
         )
-    except (ForbiddenError, OSError, ValueError) as error:
+    except (ForbiddenError, OSError, ValueError, WorkspaceFileOperationConflictError) as error:
         raise _file_operation_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
 @router.post(
     "/files/copy",
-    response_model=APIResponse[WorkspaceFileListDTO],
+    response_model=APIResponse[WorkspaceFileOperationReceiptDTO],
+    status_code=202,
     summary="在工作区主机内复制文件或目录",
 )
 async def copy_workspace_file_entry(
@@ -429,20 +456,24 @@ async def copy_workspace_file_entry(
             scope=scope,
             source_path=payload.source_path,
             source_scope=payload.source_scope,
+            intent=payload.intent,
+            actor=local_navigation_scope(workspace_service.workspace_id).actor,
         )
-    except (ForbiddenError, OSError, ValueError) as error:
+    except (ForbiddenError, OSError, ValueError, WorkspaceFileOperationConflictError) as error:
         raise _file_operation_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
 @router.post(
     "/files/upload",
-    response_model=APIResponse[WorkspaceFileListDTO],
+    response_model=APIResponse[WorkspaceFileOperationReceiptDTO],
+    status_code=202,
     summary="上传本地文件到工作区目录",
 )
 async def upload_workspace_file_entries(
     files: list[UploadFile] = File(min_length=1, max_length=100),
     relative_paths: list[str] = Form(min_length=1, max_length=100),
+    intent: str = Form(description="与其它文件入口相同的 JSON mutation intent"),
     path: str = Query(default="", description="目标目录路径"),
     scope: WorkspaceFileScope = Query(default="workspace"),
     _: str = Depends(verify_local_token),
@@ -455,13 +486,34 @@ async def upload_workspace_file_entries(
         result = await workspace_service.upload_file_entries(
             directory_path=path,
             scope=scope,
+            intent=WorkspaceFileMutationIntentDTO.model_validate_json(intent),
+            actor=local_navigation_scope(workspace_service.workspace_id).actor,
             entries=[
                 (relative_path, upload.file)
                 for upload, relative_path in zip(files, relative_paths, strict=True)
             ],
         )
-    except (ForbiddenError, OSError, ValueError) as error:
+    except (ForbiddenError, OSError, ValueError, WorkspaceFileOperationConflictError) as error:
         raise _file_operation_error(error) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.get("/files/operations", response_model=APIResponse[WorkspaceFileOperationStatusDTO], summary="查询原文件操作的持久受理和逐项效果")
+async def get_workspace_file_operations(
+    operation_id: Annotated[list[str], Query(min_length=1, max_length=100)],
+    expected_workspace_id: Annotated[str, Query(min_length=1)],
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    workspace_service: Annotated[WorkspaceService, Depends(get_workspace_service)],
+):
+    if expected_workspace_id != workspace_service.workspace_id:
+        raise HTTPException(status_code=409, detail="原文件 operation 的工作区 owner 与当前 route 不一致，禁止改投")
+    try:
+        result = workspace_service.file_operations.status(operation_id, actor=local_navigation_scope(workspace_service.workspace_id).actor)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except (TypeError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 

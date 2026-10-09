@@ -28,7 +28,7 @@ TurnInclude = Literal[
 # 上限直接从闭集派生，避免闭集与计数两份清单漂移。
 MAX_TURN_INCLUDE_FIELDS = len(get_args(TurnInclude))
 TurnCursorDirection = Literal["head", "tail", "before", "after", "around", "older"]
-TurnCursorQueryMode = Literal["tail", "linear", "window"]
+TurnCursorQueryMode = Literal["tail", "linear", "window", "execution"]
 TurnProjectionState = Literal["ready", "partial"]
 
 
@@ -310,6 +310,7 @@ class TurnHistoryLoadRequest(BaseModel):
     cursor: str | None = None
     anchor_turn_id: str | None = Field(default=None, min_length=1, max_length=256)
     turn_ids: list[str] | None = Field(default=None, min_length=1, max_length=4)
+    execution_id: str | None = Field(default=None, min_length=1, max_length=256)
     # 只用于单个 Turn 内的 ToolRow 定点补载；不允许退化成整轮工具详情读取。
     tool_call_ids: list[str] | None = Field(default=None, min_length=1, max_length=4)
     turns: int | None = Field(default=None, ge=1, le=256)
@@ -322,6 +323,17 @@ class TurnHistoryLoadRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_around_budget(self) -> TurnHistoryLoadRequest:
+        if self.execution_id is not None:
+            if any(value is not None for value in (
+                self.turn_ids, self.tool_call_ids, self.anchor_turn_id,
+                self.turns, self.before_turns, self.after_turns,
+            )):
+                raise ValueError("execution_id 详情不能混用 Turn 选择器或窗口")
+            if self.direction not in {"tail", "before"}:
+                raise ValueError("execution_id 详情只支持 tail 与 before 续读")
+            if self.include is not None and "internal" not in self.include:
+                raise ValueError("execution_id 详情必须包含 internal")
+            return self
         if self.turn_ids is not None:
             if len(set(self.turn_ids)) != len(self.turn_ids):
                 raise ValueError("turn_ids 不能重复")
@@ -510,12 +522,15 @@ class TurnCursorDTO(BaseModel):
     anchor_turn_id: str | None = Field(default=None, min_length=1, max_length=256)
     window_before_turns: int | None = Field(default=None, ge=0, le=256, strict=True)
     window_after_turns: int | None = Field(default=None, ge=0, le=256, strict=True)
+    execution_id: str | None = Field(default=None, min_length=1, max_length=256)
     stage: int = Field(default=0, ge=0, strict=True)
     turn_ordinal: int | None = Field(default=None, ge=1, strict=True)
     logical_item_ordinal: int | None = Field(default=None, ge=0, strict=True)
 
     @model_validator(mode="after")
     def validate_query_binding(self) -> TurnCursorDTO:
+        if (self.query_mode == "execution") != (self.execution_id is not None):
+            raise ValueError("execution 历史游标必须冻结精确 execution_id")
         if self.effective_include != tuple(sorted(set(self.effective_include))):
             raise ValueError("历史游标 effective_include 必须排序且唯一")
         window_values = (

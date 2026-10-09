@@ -31,11 +31,11 @@ class RolloutExecutionRecoveryMixin:
         strict_text(turn_id, field='turn_id')
         strict_text(checkpoint_ns, field='checkpoint_ns', allow_empty=True)
         job_id = strict_text(job_id, field='job_id')
-        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
-        with self._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
-            with self._connect(owner_thread_id, checkpoint_ns, session_id=session_id) as connection:
-                self._require_v2_runtime(connection)
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
+        with self._storage._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
+            self._storage.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
+            with self._storage._connect(owner_thread_id, checkpoint_ns, session_id=session_id) as connection:
+                self._storage._require_v2_runtime(connection)
                 row = connection.execute('SELECT status, accepted_ingress_id FROM turn_records WHERE session_id = ? AND thread_id = ? AND turn_id = ?', (session_id, owner_thread_id, turn_id)).fetchone()
                 if row is None:
                     raise KeyError(f'Turn 不存在: {turn_id}')
@@ -75,14 +75,14 @@ class RolloutExecutionRecoveryMixin:
                     raise RuntimeError(f'可恢复 Turn 缺少匹配 owner acceptance: {turn_id}')
                 payload_hash = strict_text(acceptance[1], field='turn_acceptances.payload_hash')
                 connection.execute('BEGIN IMMEDIATE')
-                _commit_id, _commit_offset = self._append_v2_records_transaction(connection, owner_thread_id, checkpoint_ns, (), session_id=session_id, commit_kind=CommitKind.TERMINAL_CONVERGENCE.value, commit_mode=CommitMode.METADATA_ONLY.value, outcome=ControlOutcome.UNKNOWN.value, subject_id=turn_id, idempotency_key=f'resume:{turn_id}:{execution_id}', metadata={'phase': 'resume_started', 'execution_id': execution_id, 'previous_execution_id': previous_execution_id}, begin_transaction=False)
+                _commit_id, _commit_offset = self._storage._append_v2_records_transaction(connection, owner_thread_id, checkpoint_ns, (), session_id=session_id, commit_kind=CommitKind.TERMINAL_CONVERGENCE.value, commit_mode=CommitMode.METADATA_ONLY.value, outcome=ControlOutcome.UNKNOWN.value, subject_id=turn_id, idempotency_key=f'resume:{turn_id}:{execution_id}', metadata={'phase': 'resume_started', 'execution_id': execution_id, 'previous_execution_id': previous_execution_id}, begin_transaction=False)
                 admission_key = f'resume:{turn_id}:{execution_id}'
                 admission_hash = user_turn_admission_payload_hash(session_id=session_id, thread_id=owner_thread_id, turn_id=turn_id, execution_id=execution_id, job_id=resumed_job_id, accepted_ingress_id=accepted_ingress_id, admission_idempotency_key=admission_key, payload_hash=payload_hash)
                 timestamp = _now()
                 connection.execute("INSERT INTO executions(execution_id, session_id, thread_id, turn_id, execution_origin, job_id, admission_idempotency_key, admission_payload_hash, attempt, execution_ordinal, accepted_ingress_id, outcome, resumed_from_execution_id, replay_of_execution_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'user_turn', ?, ?, ?, ?, ?, ?, 'unknown', ?, NULL, ?, ?)", (execution_id, session_id, owner_thread_id, turn_id, resumed_job_id, admission_key, admission_hash, attempt, attempt, accepted_ingress_id, previous_execution_id, timestamp, timestamp))
                 connection.execute("INSERT INTO turn_execution_links(session_id, thread_id, turn_id, execution_id, execution_role, execution_ordinal, link_idempotency_key, created_at) VALUES (?, ?, ?, ?, 'resume', ?, ?, ?)", (session_id, owner_thread_id, turn_id, execution_id, attempt, f'{turn_id}:resume:{execution_id}', timestamp))
                 connection.execute("UPDATE turn_records SET status = 'active', last_execution_id = ?, updated_at = ? WHERE session_id = ? AND thread_id = ? AND turn_id = ?", (execution_id, timestamp, session_id, owner_thread_id, turn_id))
-                self._commit_connection(connection)
+                self._storage._commit_connection(connection)
                 return {'turn_id': turn_id, 'execution_id': execution_id, 'job_id': resumed_job_id, 'admission_idempotency_key': admission_key, 'attempt': attempt}
 
     def mark_execution_lost(
@@ -97,7 +97,7 @@ class RolloutExecutionRecoveryMixin:
     ) -> dict[str, object]:
         """把 dispatch 后、terminal commit 前丢失的 execution 收敛为 unknown。"""
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
         turn_id = strict_optional_text(turn_id, field="turn_id")
         strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
         strict_text(reason, field="execution lost reason")
@@ -120,21 +120,21 @@ class RolloutExecutionRecoveryMixin:
                 "outcome": ControlOutcome.EXECUTION_LOST.value,
                 "reason": reason,
             }
-        with self._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
-            target_execution = execution_id or self.execution_for_turn(
-                session_id, thread_id=owner_thread_id,
-                turn_id=turn_id, checkpoint_ns=checkpoint_ns,
-            )
-            admission = self.execution_admission(
-                session_id, thread_id=owner_thread_id,
-                execution_id=target_execution, checkpoint_ns=checkpoint_ns,
-            )
-            if admission.turn_id != turn_id:
-                raise KeyError(f"execution 不存在或不属于 Turn: {target_execution}")
-            with self._connect(
+        with self._storage._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
+            self._storage.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
+            with self._storage._connect(
                 owner_thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
+                target_execution = execution_id or self.execution_for_turn(
+                    session_id, thread_id=owner_thread_id,
+                    turn_id=turn_id, checkpoint_ns=checkpoint_ns, writer_connection=connection,
+                )
+                admission = self.execution_admission(
+                    session_id, thread_id=owner_thread_id,
+                    execution_id=target_execution, checkpoint_ns=checkpoint_ns, writer_connection=connection,
+                )
+                if admission.turn_id != turn_id:
+                    raise KeyError(f"execution 不存在或不属于 Turn: {target_execution}")
                 turn = connection.execute(
                     "SELECT status FROM turn_records "
                     "WHERE session_id = ? AND thread_id = ? AND turn_id = ?",

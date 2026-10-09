@@ -12,12 +12,14 @@ from app.services.infrastructure.rollout_context.fork.full_copy.plans import (
     detach_copied_plan_registry,
     write_copied_plan_registry,
 )
+from app.services.infrastructure.rollout_context.fork.lineage.remap_lineage import (
+    record_full_copy_lineage,
+)
 from app.services.infrastructure.rollout_context.fork.remap_files import (
     materialize_full_copy_files,
     restore_full_copy_files,
 )
 from app.services.infrastructure.rollout_context.fork.remap_finalize import (
-    record_full_copy_lineage,
     refresh_full_copy_projections,
 )
 from app.services.infrastructure.rollout_context.fork.remap_prepare import (

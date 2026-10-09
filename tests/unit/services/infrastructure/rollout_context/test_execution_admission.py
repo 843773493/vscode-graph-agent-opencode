@@ -54,7 +54,7 @@ def _internal_notice(message_id: str, *, control: str = "任务已完成") -> Hu
 def test_internal_admission_creates_turnless_execution_and_reuses_exact_identity(
     saver: RolloutCheckpointSaver,
 ) -> None:
-    thread_id = get_session_path_resolver(saver._storage.sessions_dir).main_thread_id(
+    thread_id = get_session_path_resolver(saver._storage.storage.sessions_dir).main_thread_id(
         SESSION_ID
     )
     message = _internal_notice("msg-internal-admission")
@@ -63,7 +63,7 @@ def test_internal_admission_creates_turnless_execution_and_reuses_exact_identity
         execution_id="execution-internal-1",
         admission_idempotency_key="team-task:event-1",
     )
-    expected_notice = saver._storage._codec().items_for_message(
+    expected_notice = saver._storage.storage._codec().items_for_message(
         message,
         item_sequence=1,
         message_id=intent.message_id,
@@ -106,7 +106,7 @@ def test_internal_admission_creates_turnless_execution_and_reuses_exact_identity
         SESSION_ID, thread_id=thread_id, job_id=expected.job_id
     ) == expected
     with sqlite3.connect(
-        saver._storage.index_path(SESSION_ID, thread_id=thread_id)
+        saver._storage.storage.index_path(SESSION_ID, thread_id=thread_id)
     ) as db:
         row = db.execute(
             "SELECT turn_id, accepted_ingress_id, execution_origin, job_id, "
@@ -129,14 +129,14 @@ def test_internal_admission_creates_turnless_execution_and_reuses_exact_identity
             request_input={"kind": "runtime_notice", "payload": expected_notice.payload},
         )),
     )
-    item = saver._storage.read_items(
+    item = saver._storage.storage.read_items(
         SESSION_ID,
         thread_id,
         item_ids=(intent.notice_item_id,),
     )[0]
     assert item.item_id == intent.notice_item_id
     with sqlite3.connect(
-        saver._storage.index_path(SESSION_ID, thread_id=thread_id)
+        saver._storage.storage.index_path(SESSION_ID, thread_id=thread_id)
     ) as db:
         item_row = db.execute(
             "SELECT turn_id, turn_scope, execution_id FROM item_catalog "
@@ -157,7 +157,7 @@ def test_internal_admission_creates_turnless_execution_and_reuses_exact_identity
 def test_internal_admission_rejects_key_replay_with_changed_preimage(
     saver: RolloutCheckpointSaver,
 ) -> None:
-    thread_id = get_session_path_resolver(saver._storage.sessions_dir).main_thread_id(
+    thread_id = get_session_path_resolver(saver._storage.storage.sessions_dir).main_thread_id(
         SESSION_ID
     )
     kwargs = {
@@ -188,7 +188,7 @@ def test_internal_admission_rejects_key_replay_with_changed_preimage(
 def test_internal_execution_lost_converges_without_creating_a_turn(
     saver: RolloutCheckpointSaver,
 ) -> None:
-    thread_id = get_session_path_resolver(saver._storage.sessions_dir).main_thread_id(
+    thread_id = get_session_path_resolver(saver._storage.storage.sessions_dir).main_thread_id(
         SESSION_ID
     )
     intent = InternalExecutionIntent(
@@ -222,7 +222,7 @@ def test_internal_execution_lost_converges_without_creating_a_turn(
     assert replayed == lost
     assert lost["status"] == "execution_lost"
     with sqlite3.connect(
-        saver._storage.index_path(SESSION_ID, thread_id=thread_id)
+        saver._storage.storage.index_path(SESSION_ID, thread_id=thread_id)
     ) as db:
         execution = db.execute(
             "SELECT turn_id, execution_origin, outcome FROM executions "
@@ -243,7 +243,7 @@ def test_internal_execution_lost_converges_without_creating_a_turn(
 def test_user_turn_admission_hash_binds_acceptance_payload_without_conflating_hashes(
     saver: RolloutCheckpointSaver,
 ) -> None:
-    thread_id = get_session_path_resolver(saver._storage.sessions_dir).main_thread_id(
+    thread_id = get_session_path_resolver(saver._storage.storage.sessions_dir).main_thread_id(
         SESSION_ID
     )
     payload = "accepted user payload"
@@ -284,7 +284,7 @@ def test_user_turn_admission_hash_binds_acceptance_payload_without_conflating_ha
 def test_job_admission_lookup_rejects_missing_and_ambiguous_identity(
     saver: RolloutCheckpointSaver,
 ) -> None:
-    thread_id = get_session_path_resolver(saver._storage.sessions_dir).main_thread_id(
+    thread_id = get_session_path_resolver(saver._storage.storage.sessions_dir).main_thread_id(
         SESSION_ID
     )
     with pytest.raises(KeyError, match="Job execution admission 不存在") as missing:
@@ -319,8 +319,8 @@ def test_job_admission_lookup_keeps_session_owner_and_nullable_turn(
     session_bundle_factory,
 ) -> None:
     other_session = "ses_019c3dbcb2f6749b85bed7b51dfe889e"
-    session_bundle_factory(saver._storage.sessions_dir, other_session)
-    resolver = get_session_path_resolver(saver._storage.sessions_dir)
+    session_bundle_factory(saver._storage.storage.sessions_dir, other_session)
+    resolver = get_session_path_resolver(saver._storage.storage.sessions_dir)
     expected = []
     for session_id in (SESSION_ID, other_session):
         thread_id = resolver.main_thread_id(session_id)

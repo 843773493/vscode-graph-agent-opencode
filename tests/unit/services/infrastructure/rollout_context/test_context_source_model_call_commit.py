@@ -69,7 +69,7 @@ def test_failed_real_seal_never_advances_memory_applied_or_events(source_seal_ca
     batch = manager.prepare_pending()
     owner, saver = source_seal_case.owner, source_seal_case.saver
     before = saver.load_context_source_control_states(owner)
-    with closing(saver._storage._connect(owner.thread_id, session_id=owner.session_id)) as connection:
+    with closing(saver._storage.storage._connect(owner.thread_id, session_id=owner.session_id)) as connection:
         connection.execute(
             "CREATE TRIGGER refuse_source_seal BEFORE INSERT ON context_assemblies "
             "BEGIN SELECT RAISE(ABORT, 'injected assembly failure'); END"

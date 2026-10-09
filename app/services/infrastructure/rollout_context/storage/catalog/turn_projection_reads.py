@@ -224,11 +224,3 @@ class TurnProjectionReadMixin:
         )
         _finalize_projections(result, discarded_activity_indices)
         return result
-
-    def decode_indexed_message(
-        self, value: object, *, summary_only: bool = False
-    ) -> object:
-        del summary_only
-        if not isinstance(value, dict):
-            raise TypeError("rollout message 必须是对象")
-        return self._codec().from_dict(value)

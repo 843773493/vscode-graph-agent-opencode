@@ -20,6 +20,10 @@ function installWindow(port: number): void {
 }
 
 function apiResponse(data: unknown): Response {
+  if (data && typeof data === "object" && "items" in data && "path" in data) {
+    data = { directory_key: { workspace_id: "backend_files", scope: "workspace", root: "/w/project", path: data.path },
+      directory_revision: 1, ...data };
+  }
   return Response.json({
     code: 0,
     message: "ok",
@@ -48,7 +52,7 @@ function fileNode(path: string): Record<string, unknown> {
 interface HarnessHandle {
   loadDirectory: (path: string, force?: boolean, append?: boolean) => Promise<boolean>;
   directoriesRef: { current: Record<string, unknown> };
-  reloadExpandedDirectories: () => void;
+  reloadExpandedDirectories: (roots: readonly string[]) => void;
   invalidateDirectoriesUnder: (treePath: string) => void;
   abortAllDirectoryRequests: () => string[];
   commitExpanded: (paths: string[]) => void;
@@ -268,7 +272,7 @@ describe("workspace 文件树目录缓存", () => {
     await act(async () => {
       // ghost 已展开但从未加载过，不得因为它被展开就补发请求。
       handle.commitExpanded(["src", "ghost"]);
-      handle.reloadExpandedDirectories();
+      handle.reloadExpandedDirectories(["/w/project"]);
       await Promise.resolve();
     });
     expect(requestedPaths.filter((path) => path === "src").length).toBe(2);

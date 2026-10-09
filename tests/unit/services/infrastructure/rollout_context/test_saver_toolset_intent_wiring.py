@@ -49,7 +49,7 @@ def saver(tmp_path: Path, session_bundle_factory) -> RolloutCheckpointSaver:
 
 
 def _main_thread_id(saver: RolloutCheckpointSaver) -> str:
-    return saver._storage._resolve_thread_identity(SESSION_ID, None)
+    return saver._storage.storage._resolve_thread_identity(SESSION_ID, None)
 
 
 @pytest.fixture
@@ -153,7 +153,7 @@ def test_prepare_boundary_switches_and_sealed_retry_keeps_applied(frozen_provide
         execution_admission_scope(admission, langgraph_thread_id=thread_id),
     ):
         first = saver.prepare_context_for_provider(SESSION_ID, thread_id, **options, **frozen_provider_activation(saver, plan_creation_idempotency_key=(options)['plan_creation_idempotency_key']))
-        first_snapshot = saver._storage.get_context_assembly(
+        first_snapshot = saver._storage.assemblies.get_context_assembly(
             SESSION_ID, thread_id, assembly_id=first["assembly_id"],
         )
         binding = first_snapshot.seal_binding
@@ -170,7 +170,7 @@ def test_prepare_boundary_switches_and_sealed_retry_keeps_applied(frozen_provide
                "seal_idempotency_key": "toolset-seal-b"},
             **frozen_provider_activation(saver, plan_creation_idempotency_key=({**options, 'tool_set_supplier': lambda: tools_b, 'plan_creation_idempotency_key': 'toolset-create-b', 'seal_idempotency_key': 'toolset-seal-b'})['plan_creation_idempotency_key']),
         )
-        second_snapshot = saver._storage.get_context_assembly(
+        second_snapshot = saver._storage.assemblies.get_context_assembly(
             SESSION_ID, thread_id, assembly_id=second["assembly_id"],
         )
         assert second_snapshot.seal_binding.applied_toolset_revision == tools_b.revision
@@ -187,11 +187,11 @@ def test_prepare_boundary_switches_and_sealed_retry_keeps_applied(frozen_provide
             **frozen_provider_activation(saver, plan_creation_idempotency_key=({**options, 'tool_set_supplier': refuse_supplier})['plan_creation_idempotency_key']),
         )
     assert retry["assembly_id"] == first["assembly_id"]
-    assert saver._storage.get_context_assembly(
+    assert saver._storage.assemblies.get_context_assembly(
         SESSION_ID, thread_id, assembly_id=first["assembly_id"],
     ) == first_snapshot
     with saver._context_reader.open_snapshot(SESSION_ID, thread_id) as snapshot:
-        latest = saver._storage.latest_context_assembly(snapshot)
+        latest = saver._storage.assemblies.latest_context_assembly(snapshot)
     assert latest.assembly_id == second["assembly_id"]
     assert latest.seal_binding.applied_toolset_revision == tools_b.revision
     assert latest.seal_binding.tool_set_snapshot_id == tools_b.snapshot_id
@@ -208,7 +208,7 @@ def test_unregistered_thread_cannot_prepare_or_receive_applied_toolset(
     ):
         pytest.fail("未注册 thread 不应建立 execution admission")
     assert saver.list_context_assemblies(SESSION_ID, _main_thread_id(saver)) == ()
-    session_dir = saver._storage._path_resolver.resolve_session_node(SESSION_ID)
+    session_dir = saver._storage.storage._path_resolver.resolve_session_node(SESSION_ID)
     control = SessionControlStore(session_dir / "session-control.sqlite")
     try:
         with pytest.raises(KeyError):
@@ -225,7 +225,7 @@ def test_sealed_retry_after_saver_restart_keeps_revision_and_bytes(frozen_provid
         first_result, first = prepare(tools_a, key="a")
         frozen = first.to_dict()
         with RolloutCheckpointSaver(
-            saver._storage.sessions_dir,
+            saver._storage.storage.sessions_dir,
         ) as restarted:
             admission = restarted.execution_admission(
                 SESSION_ID, thread_id=thread, execution_id=accepted["initial_execution_id"],
@@ -260,7 +260,7 @@ def test_successful_seal_applies_toolset_to_published_child_thread(
     saver, sealed_toolset_context,
 ) -> None:
     child_thread_id = create_prefixed_id("thr")
-    session_dir = saver._storage._path_resolver.resolve_session_node(SESSION_ID)
+    session_dir = saver._storage.storage._path_resolver.resolve_session_node(SESSION_ID)
     control = SessionControlStore(session_dir / "session-control.sqlite")
     try:
         control.create_or_get_thread_creation_record(
@@ -319,7 +319,7 @@ def test_failed_seal_keeps_previous_applied_and_retries_atomically(
         _, first = prepare(tools_a, key="a")
         before = first.to_dict()
         pending = manager.prepare_pending()
-        with saver._storage._connect(thread, "", session_id=SESSION_ID) as connection:
+        with saver._storage.storage._connect(thread, "", session_id=SESSION_ID) as connection:
             connection.execute(
                 "CREATE TRIGGER refuse_toolset_seal BEFORE INSERT ON context_assemblies "
                 "BEGIN SELECT RAISE(ABORT, 'toolset-seal-injected'); END"
@@ -330,13 +330,13 @@ def test_failed_seal_keeps_previous_applied_and_retries_atomically(
         assert saver.get_context_assembly(SESSION_ID, thread, assembly_id=first.assembly_id).to_dict() == before
         assert manager.prepare_pending() == pending
         with saver._context_reader.open_snapshot(SESSION_ID, thread) as snapshot:
-            latest = saver._storage.latest_context_assembly(snapshot)
+            latest = saver._storage.assemblies.latest_context_assembly(snapshot)
             assert latest.assembly_id == first.assembly_id
             assert latest.seal_binding.applied_toolset_revision == tools_a.revision
             assert snapshot.connection.execute(
                 "SELECT count(*) FROM storage_commits WHERE commit_kind = 'assembly_sealed' AND status = 'committed'"
             ).fetchone()[0] == 1
-        with saver._storage._connect(thread, "", session_id=SESSION_ID) as connection:
+        with saver._storage.storage._connect(thread, "", session_id=SESSION_ID) as connection:
             connection.execute("DROP TRIGGER refuse_toolset_seal")
         _, changed = prepare(tools_b, key="b")
         assert changed.seal_binding.applied_toolset_revision == tools_b.revision

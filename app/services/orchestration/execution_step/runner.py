@@ -290,6 +290,7 @@ class StepRunner:
             session_id=session_id,
             thread_id=thread_id,
             checkpoint_ns=rollout_checkpoint_ns,
+            committed_item_observer=self.ports.background_message_bus.acknowledge_tool_results,
         )
         model_call_adapter = StepModelCallAdapter(
             checkpointer=checkpointer,
@@ -530,6 +531,7 @@ class StepRunner:
             if turn_id is not None:
                 stream_open_task = asyncio.create_task(self.ports.message_stream_store.open(
                     session_id=session_id,
+                    thread_id=admission.thread_id,
                     turn_id=turn_id,
                     job_id=job_id,
                 ))

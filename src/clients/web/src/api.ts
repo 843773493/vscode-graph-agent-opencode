@@ -38,6 +38,7 @@ export {
   getSessionFileTreeSettings,
   getWorkspaceFileContent,
   getWorkspaceFiles,
+  getWorkspaceFileOperations,
   getWorkspaceRawFileBlob,
   pasteWorkspaceFileEntries,
   removeSessionFileTreeShortcut,

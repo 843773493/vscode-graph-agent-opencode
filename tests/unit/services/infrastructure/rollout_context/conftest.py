@@ -105,6 +105,6 @@ def source_seal_case(
         payload="真实 source seal 合同",
     )
     return SourceSealCase(
-        saver, ContextSourceOwnerKey(session, saver._storage.main_thread_id(session)),
+        saver, ContextSourceOwnerKey(session, saver._storage.storage.main_thread_id(session)),
         accepted, frozen_provider_wire, frozen_provider_activation,
     )

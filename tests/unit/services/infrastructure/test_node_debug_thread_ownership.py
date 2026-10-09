@@ -566,7 +566,7 @@ async def test_mutation_admission_rejects_missing_and_deleted_session(
             )
         )
 
-    await resolver.delete_session_subtree(_PARENT_SESSION_ID)
+    await resolver.delete_subtree(idempotency_key="node-debug-owner-delete", root_node_id=_PARENT_SESSION_ID)
     with pytest.raises(FileNotFoundError, match="不存在或已删除"):
         await service.activate_configuration(
             _PARENT_SESSION_ID,

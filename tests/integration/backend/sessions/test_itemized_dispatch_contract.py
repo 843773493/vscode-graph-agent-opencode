@@ -54,6 +54,9 @@ from app.schemas.internal_v2.tool_test import ToolTestStartRequest
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
+from app.services.infrastructure.rollout_context.activation.body import (
+    ResourceActivationBodyStore,
+)
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     ToolProtocolBoundaryConflict,
 )
@@ -75,9 +78,6 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
 )
 from app.services.infrastructure.rollout_context.runtime.stream_accumulator import (
     CanonicalBlockAccumulator,
-)
-from app.services.infrastructure.rollout_context.storage.resource_activation_body import (
-    ResourceActivationBodyStore,
 )
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
@@ -116,7 +116,7 @@ def dispatch_bridge(dispatch_saver, registered_tool_set_producer_factory):
     saver, _session_id, _turn_id, _sessions = dispatch_saver
 
     def create(*, session_id, instruction, checkpointer, tools=()):
-        thread = saver._storage.main_thread_id(session_id)
+        thread = saver._storage.storage.main_thread_id(session_id)
         manager = ContextSourceManager(
             owner=ContextSourceOwnerKey(session_id, thread), control_state_port=saver
         )
@@ -196,28 +196,28 @@ async def test_native_dispatch_sends_sealed_selection_over_real_http(
         if mode == "sync":
             result = agent.invoke(
                 {"messages": []},
-                build_checkpoint_config(saver._storage.main_thread_id(session_id)),
+                build_checkpoint_config(saver._storage.storage.main_thread_id(session_id)),
             )
         else:
             result = await agent.ainvoke(
                 {"messages": []},
-                build_checkpoint_config(saver._storage.main_thread_id(session_id)),
+                build_checkpoint_config(saver._storage.storage.main_thread_id(session_id)),
             )
     assert "native-http-result" in json.dumps(result["messages"][-1].content)
     assert read_sealed_assembly_dispatch(invocation_purpose="tool_test") is None
     assert len(state.requests) == 1
     (snapshot,) = saver.list_context_assemblies(
-        session_id, saver._storage.main_thread_id(session_id)
+        session_id, saver._storage.storage.main_thread_id(session_id)
     )
     with RolloutCheckpointSaver(sessions) as restarted:
         restored = restarted.get_context_assembly(
             session_id,
-            restarted._storage.main_thread_id(session_id),
+            restarted._storage.storage.main_thread_id(session_id),
             assembly_id=snapshot.assembly_id,
         )
         projection = restarted.project_context_plan_to_native(
             session_id,
-            restarted._storage.main_thread_id(session_id),
+            restarted._storage.storage.main_thread_id(session_id),
             restored.as_sealed_plan(),
         )
     body = state.requests[0]["body"]
@@ -303,18 +303,18 @@ async def test_concurrent_native_dispatch_does_not_share_context(
         with dispatch_execution_scope(saver, session_id, turn_id):
             await agent.ainvoke(
                 {"messages": []},
-                build_checkpoint_config(saver._storage.main_thread_id(session_id)),
+                build_checkpoint_config(saver._storage.storage.main_thread_id(session_id)),
             )
 
     await asyncio.gather(dispatch(first_session), dispatch(second_session))
     assert len(state.requests) == 2
     for session_id in (first_session, second_session):
         (snapshot,) = saver.list_context_assemblies(
-            session_id, saver._storage.main_thread_id(session_id)
+            session_id, saver._storage.storage.main_thread_id(session_id)
         )
         expected = saver.project_context_plan_to_native(
             session_id,
-            saver._storage.main_thread_id(session_id),
+            saver._storage.storage.main_thread_id(session_id),
             snapshot.as_sealed_plan(),
         )
         matching = [
@@ -366,7 +366,7 @@ async def test_native_http_tool_loop_replays_canonical_call_and_result(
         checkpointer=saver,
     )
     with dispatch_execution_scope(saver, session_id, turn_id):
-        config = build_checkpoint_config(saver._storage.main_thread_id(session_id))
+        config = build_checkpoint_config(saver._storage.storage.main_thread_id(session_id))
         if mode == "sync":
             result = agent.invoke({"messages": []}, config)
         else:
@@ -375,18 +375,18 @@ async def test_native_http_tool_loop_replays_canonical_call_and_result(
     assert len(state.requests) == 2
     with RolloutCheckpointSaver(sessions) as restarted:
         snapshots = restarted.list_context_assemblies(
-            session_id, restarted._storage.main_thread_id(session_id)
+            session_id, restarted._storage.storage.main_thread_id(session_id)
         )
         assert len(snapshots) == 2
         projections = [
             restarted.project_context_plan_to_native(
                 session_id,
-                restarted._storage.main_thread_id(session_id),
+                restarted._storage.storage.main_thread_id(session_id),
                 snapshot.as_sealed_plan(),
             )
             for snapshot in snapshots
         ]
-        restored = restarted.get_tuple(build_checkpoint_config(saver._storage.main_thread_id(session_id)))
+        restored = restarted.get_tuple(build_checkpoint_config(saver._storage.storage.main_thread_id(session_id)))
         restored_messages = restored.checkpoint["channel_values"]["messages"]
         (assistant,) = [message for message in restored_messages if isinstance(message, AIMessage) and message.tool_calls]
         (tool_result,) = [message for message in restored_messages if isinstance(message, ToolMessage)]
@@ -403,8 +403,8 @@ async def test_native_http_tool_loop_replays_canonical_call_and_result(
         assert reasoning_carrier.payload["value"] == assistant.content[0]
         assert reasoning_carrier.projection_identity.model_call_id == snapshots[0].model_call_id
         assert f"{reasoning_carrier.item_id}:reasoning/extension" in projections[1]["losses"]
-        index = restarted._storage._path_resolver.resolve_thread_node(
-            session_id, restarted._storage.main_thread_id(session_id),
+        index = restarted._storage.storage._path_resolver.resolve_thread_node(
+            session_id, restarted._storage.storage.main_thread_id(session_id),
         ) / "rollout/index.sqlite"
         with sqlite3.connect(index.as_uri() + "?mode=ro", uri=True) as connection:
             pairs = connection.execute(
@@ -464,17 +464,17 @@ async def test_missing_saver_owner_fails_before_provider_http(
         if mode == "sync":
             agent.invoke(
                 {"messages": []},
-                build_checkpoint_config(saver._storage.main_thread_id(session_id)),
+                build_checkpoint_config(saver._storage.storage.main_thread_id(session_id)),
             )
         else:
             await agent.ainvoke(
                 {"messages": []},
-                build_checkpoint_config(saver._storage.main_thread_id(session_id)),
+                build_checkpoint_config(saver._storage.storage.main_thread_id(session_id)),
             )
     assert state.requests == []
     assert (
         saver.list_context_assemblies(
-            session_id, saver._storage.main_thread_id(session_id)
+            session_id, saver._storage.storage.main_thread_id(session_id)
         )
         == ()
     )
@@ -513,7 +513,7 @@ async def test_provider_parameters_cannot_override_sealed_input(
     ):
         await agent.ainvoke(
             {"messages": []},
-            build_checkpoint_config(saver._storage.main_thread_id(session_id)),
+            build_checkpoint_config(saver._storage.storage.main_thread_id(session_id)),
         )
     assert state.requests == []
     assert read_sealed_assembly_dispatch(invocation_purpose="tool_test") is None
@@ -528,7 +528,7 @@ async def test_new_seals_bind_effective_parameters_and_profile_over_real_http(
     """同 epoch 两次新 seal 使用相同来源与历史，实际正文和 hash 绑定有效参数。"""
     saver, session_id, turn_id, _ = dispatch_saver
     state, endpoint = native_http_server
-    thread = saver._storage.main_thread_id(session_id)
+    thread = saver._storage.storage.main_thread_id(session_id)
     checkpoint_id = saver.get_tuple(build_checkpoint_config(thread)).checkpoint["id"]
     bridge = dispatch_bridge(
         session_id=session_id, instruction="相同的已登记说明", checkpointer=saver,
@@ -618,7 +618,7 @@ async def test_dispatch_reads_committed_owner_namespace_before_real_provider_htt
     """真实 prepare/storage/send 共用 rollout owner；读回失败时发网前暴露原始错误。"""
     saver, session_id, turn_id, sessions = dispatch_saver
     state, endpoint = native_http_server
-    thread = saver._storage.main_thread_id(session_id)
+    thread = saver._storage.storage.main_thread_id(session_id)
     checkpoint_id = saver.get_tuple(build_checkpoint_config(thread)).checkpoint["id"]
     bridge = dispatch_bridge(
         session_id=session_id, instruction="namespace owner contract", checkpointer=saver,
@@ -635,7 +635,7 @@ async def test_dispatch_reads_committed_owner_namespace_before_real_provider_htt
             task_id="namespace-contract",
         )),
     )
-    original_getter = saver._storage.get_context_assembly
+    original_getter = saver._storage.assemblies.get_context_assembly
     missing = KeyError(f"injected committed assembly lookup loss: namespace={owner_namespace!r}")
     seen_owners = []
 
@@ -646,7 +646,7 @@ async def test_dispatch_reads_committed_owner_namespace_before_real_provider_htt
         return original_getter(*args, **kwargs)
 
     # prepare 从真实 storage 读回同一已提交 snapshot，dispatch 直接消费该事实。
-    monkeypatch.setattr(saver._storage, "get_context_assembly", checked_getter)
+    monkeypatch.setattr(saver._storage.assemblies, "get_context_assembly", checked_getter)
 
     async def send_actual_request(prepared: ModelRequest) -> ModelResponse:
         return ModelResponse(result=[await prepared.model.ainvoke(prepared.messages)])
@@ -681,7 +681,7 @@ async def test_profile_capability_is_bound_and_same_epoch_change_rejected_over_r
     """两种能力各自首次封存发网；同 epoch 换 profile 必须重建且零额外 HTTP。"""
     saver, session_id, turn_id, _ = dispatch_saver
     state, endpoint = native_http_server
-    thread = saver._storage.main_thread_id(session_id)
+    thread = saver._storage.storage.main_thread_id(session_id)
     checkpoint_id = saver.get_tuple(build_checkpoint_config(thread)).checkpoint["id"]
     bridge = dispatch_bridge(
         session_id=session_id, instruction="相同的已登记说明", checkpointer=saver,
@@ -765,7 +765,7 @@ async def test_agent_without_dispatch_binding_fails_before_provider_http(
     )
     # 保留真实 Saver 与 admission；只漏装无状态 dispatch bridge。
     agent = create_agent(model, checkpointer=saver)
-    thread = saver._storage.main_thread_id(session_id)
+    thread = saver._storage.storage.main_thread_id(session_id)
     with (
         dispatch_execution_scope(saver, session_id, turn_id),
         pytest.raises(ValueError, match="source-mismatch.*binding"),
@@ -788,7 +788,7 @@ async def test_provider_drift_after_committed_seal_fails_before_http(
     """先由真实 Saver 提交封存，再改实际模型；不得把发送漂移误当成新 seal。"""
     saver, session_id, turn_id, _ = dispatch_saver
     state, endpoint = native_http_server
-    thread = saver._storage.main_thread_id(session_id)
+    thread = saver._storage.storage.main_thread_id(session_id)
     model_type = {
         "chat_completions": BoxteamLiteLLMChatModel,
         "responses": BoxteamOpenAIResponsesModel,
@@ -841,8 +841,8 @@ def test_foreign_session_plan_is_rejected_without_io(
     saver, source_id, turn_id, sessions = dispatch_saver
     target_id = f"ses_{create_uuid_hex()}"
     target = session_bundle_factory(sessions, target_id)
-    source_thread = saver._storage.main_thread_id(source_id)
-    target_thread = saver._storage.main_thread_id(target_id)
+    source_thread = saver._storage.storage.main_thread_id(source_id)
+    target_thread = saver._storage.storage.main_thread_id(target_id)
     draft = saver.compose_committed_context_plan(
         source_id,
         source_thread,
@@ -958,9 +958,9 @@ async def test_chat_rejects_unknown_overlay_before_assembly_and_provider_http(
     session_id = f"ses_{create_uuid_hex()}"
     session_bundle_factory(sessions, session_id)
     turn_id = seed_dispatch_history(saver, session_id)
-    thread = saver._storage.main_thread_id(session_id)
+    thread = saver._storage.storage.main_thread_id(session_id)
     state, endpoint = native_http_server
-    thread_root = saver._storage._path_resolver.resolve_thread_node(session_id, thread)
+    thread_root = saver._storage.storage._path_resolver.resolve_thread_node(session_id, thread)
     detail_dirs = (
         thread_root / "rollout" / "context-plan-details",
     )
@@ -991,8 +991,8 @@ async def test_chat_rejects_unknown_overlay_before_assembly_and_provider_http(
     manager = bridge._context_source_manager
     pending = manager.prepare_pending()
     control_before = saver.load_context_source_control_states(manager._owner)
-    canonical_before = saver._storage.jsonl_path(session_id).read_bytes()
-    with saver._storage._connect(thread, "", read_only=True, session_id=session_id) as connection:
+    canonical_before = saver._storage.storage.jsonl_path(session_id).read_bytes()
+    with saver._storage.storage._connect(thread, "", read_only=True, session_id=session_id) as connection:
         overlay_before = connection.execute(
             "SELECT * FROM source_overlays WHERE overlay_id = 'unsupported-chat-overlay'"
         ).fetchall()
@@ -1019,8 +1019,8 @@ async def test_chat_rejects_unknown_overlay_before_assembly_and_provider_http(
     assert saver.list_context_assemblies(session_id, thread) == ()
     assert manager.prepare_pending() == pending
     assert saver.load_context_source_control_states(manager._owner) == control_before
-    assert saver._storage.jsonl_path(session_id).read_bytes() == canonical_before
-    with saver._storage._connect(thread, "", read_only=True, session_id=session_id) as connection:
+    assert saver._storage.storage.jsonl_path(session_id).read_bytes() == canonical_before
+    with saver._storage.storage._connect(thread, "", read_only=True, session_id=session_id) as connection:
         assert connection.execute(
             "SELECT * FROM source_overlays WHERE overlay_id = 'unsupported-chat-overlay'"
         ).fetchall() == overlay_before
@@ -1062,7 +1062,7 @@ async def test_new_process_restores_overlay_for_real_provider_http_dispatch(
     await invoke_provider_dispatch(
         saver, session_id, turn_id, endpoint, state.api_key, target_format=target_format,
     )
-    thread = saver._storage.main_thread_id(session_id)
+    thread = saver._storage.storage.main_thread_id(session_id)
     (first,) = saver.list_context_assemblies(session_id, thread)
     restart_code = """import asyncio,sys
 from pathlib import Path
@@ -1188,11 +1188,11 @@ async def test_history_http_matches_inflight_dispatch_canonical_view(
         try:
             assert await asyncio.to_thread(state.request_ready.wait, 20)
             (snapshot,) = saver.list_context_assemblies(
-                session_id, saver._storage.main_thread_id(session_id)
+                session_id, saver._storage.storage.main_thread_id(session_id)
             )
             expected = saver.project_context_plan_to_history(
                 session_id,
-                saver._storage.main_thread_id(session_id),
+                saver._storage.storage.main_thread_id(session_id),
                 snapshot.as_sealed_plan(),
             )
             response = await integration_client.post(
@@ -1239,7 +1239,7 @@ async def test_restart_rejects_corrupt_detail_owner_before_native_http(
     state, endpoint = native_http_server
     await invoke_provider_dispatch(saver, session_id, turn_id, endpoint, state.api_key, target_format="responses")
     (snapshot,) = saver.list_context_assemblies(
-        session_id, saver._storage.main_thread_id(session_id)
+        session_id, saver._storage.storage.main_thread_id(session_id)
     )
     source = next(
         entry for entry in snapshot.selection if entry.base_delta_role == "base"
@@ -1403,7 +1403,7 @@ async def test_structured_output_graph_seals_registered_tools_once_over_http(
         model, tools=[inspect_file], middleware=[bridge], response_format=response_format,
         checkpointer=saver,
     )
-    thread = saver._storage.main_thread_id(session_id)
+    thread = saver._storage.storage.main_thread_id(session_id)
     with dispatch_execution_scope(saver, session_id, turn_id):
         result = await agent.ainvoke({"messages": []}, build_checkpoint_config(thread))
     assert result["structured_response"] == StructuredAnswer(answer="native-http-result")
@@ -1461,7 +1461,7 @@ async def test_schema_named_credentials_and_timestamp_survive_real_provider_http
         model, tools=[inspect_file], middleware=[bridge],
         response_format=ProviderStrategy(schema), checkpointer=saver,
     )
-    thread = saver._storage.main_thread_id(session_id)
+    thread = saver._storage.storage.main_thread_id(session_id)
     with dispatch_execution_scope(saver, session_id, turn_id):
         result = await agent.ainvoke({"messages": []}, build_checkpoint_config(thread))
     assert result["structured_response"] == {"answer": "native-http-result"}
@@ -1510,7 +1510,7 @@ def toolset_dispatch_case(dispatch_saver, native_http_server, dispatch_bridge, t
     """ToolSelectionStore→正式 producer→实际 Bridge/Saver/HTTP，响应仍是协议桩。"""
     saver, session, turn, sessions = dispatch_saver
     state, endpoint = native_http_server
-    thread = saver._storage.main_thread_id(session)
+    thread = saver._storage.storage.main_thread_id(session)
     checkpoint_id = saver.get_tuple(build_checkpoint_config(thread)).checkpoint["id"]
     tools = (inspect_file, inspect_folder, search_notes)
     model_type = {
@@ -1588,7 +1588,7 @@ def _sealed_contract_rows(case):
 
 def _latest_contract_assembly(case):
     with case.saver._context_reader.open_snapshot(case.session, case.thread) as snapshot:
-        return case.saver._storage.latest_context_assembly(snapshot)
+        return case.saver._storage.assemblies.latest_context_assembly(snapshot)
 
 
 def _contract_wire_tool_names(case, body):
@@ -1798,7 +1798,7 @@ async def test_real_bridge_seal_transaction_failure_keeps_applied_and_retry_comm
         "instruction:native-contract", "重试后才能 applied 的说明", revision="native-contract:retry-only",
     )
     pending = case.manager.prepare_pending()
-    with case.saver._storage._connect(case.thread, "", session_id=case.session) as connection:
+    with case.saver._storage.storage._connect(case.thread, "", session_id=case.session) as connection:
         connection.execute(
             "CREATE TRIGGER refuse_toolset_refs BEFORE INSERT ON assembly_item_refs "
             "BEGIN SELECT RAISE(ABORT, 'toolset-ref-seal-injected'); END"
@@ -1819,7 +1819,7 @@ async def test_real_bridge_seal_transaction_failure_keeps_applied_and_retry_comm
         assert snapshot.connection.execute(
             "SELECT count(*) FROM storage_commits WHERE commit_kind = 'assembly_sealed' AND status = 'committed'"
         ).fetchone()[0] == 1
-    with case.saver._storage._connect(case.thread, "", session_id=case.session) as connection:
+    with case.saver._storage.storage._connect(case.thread, "", session_id=case.session) as connection:
         connection.execute("DROP TRIGGER refuse_toolset_refs")
     changed = await case.dispatch("toolset-rollback-next")
     assert changed.seal_binding.prefix.state.epoch.ordinal == 2

@@ -100,7 +100,7 @@ def committed_retry(
         or registered.seal_input_hash != input_hash
     ):
         raise ValueError("assembly-idempotency-conflict: plan 已绑定另一个 seal key")
-    committed = owner._storage.get_context_assembly(
+    committed = owner._storage.assemblies.get_context_assembly(
         draft.session_id,
         thread_id,
         assembly_id=registered.assembly_id,

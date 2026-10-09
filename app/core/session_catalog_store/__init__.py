@@ -36,6 +36,7 @@ from app.core.session_catalog_store._schema import (
     _IDX_CREATION_RECORDS_STATE_DDL,
     _IDX_FORK_RETENTION_SOURCE_DDL,
     _IDX_NODES_PARENT_DDL,
+    _IDX_NODES_SESSION_LIST_DDL,
     _IDX_NODES_WORKSPACE_DDL,
     _IDX_SUBTREE_DELETE_STATE_DDL,
     _NAVIGATION_REVISION_TRIGGER_DDLS,
@@ -62,7 +63,10 @@ from app.core.session_catalog_store.contracts import (
 from app.core.session_catalog_store.creation_journal import CreationJournalMixin
 from app.core.session_catalog_store.fork_retention import ForkRetentionMixin
 from app.core.session_catalog_store.nodes import CatalogNodesMixin
-from app.core.session_catalog_store.queries import CatalogQueriesMixin
+from app.core.session_catalog_store.queries import (
+    CatalogQueriesMixin,
+    _register_session_list_functions,
+)
 from app.core.session_catalog_store.subtree_delete import SubtreeDeleteMixin
 from app.core.session_catalog_store.validators import (
     SessionLifecycleFence,
@@ -115,7 +119,7 @@ class SessionCatalogStore(
     创建和删除 journal 与 nodes 同库，由事务保证目录可见性和恢复进度的一致性。
     """
 
-    SCHEMA_VERSION = 7
+    SCHEMA_VERSION = 8
 
     def __init__(self, database_path: Path, sessions_root: Path) -> None:
         self.database_path = database_path.expanduser().resolve()
@@ -178,6 +182,7 @@ class SessionCatalogStore(
             check_same_thread=False,
         )
         connection.row_factory = sqlite3.Row
+        _register_session_list_functions(connection)
         try:
             # 已存在的库若页结构损坏（被截断/覆写），``PRAGMA`` 本身即抛
             # ``sqlite3.DatabaseError``；统一转成维护模式错误，绝不允许以
@@ -202,7 +207,7 @@ class SessionCatalogStore(
         return connection
 
     def _initialize(self) -> None:
-        """只初始化全新 v7 catalog；其它版本必须经显式维护处理。"""
+        """只初始化全新 v8 catalog；其它版本必须经显式维护处理。"""
         current = int(
             self._connection.execute("PRAGMA user_version").fetchone()[0]
         )
@@ -239,6 +244,7 @@ class SessionCatalogStore(
             self._connection.execute(_NODES_TABLE_DDL)
             self._connection.execute(_IDX_NODES_PARENT_DDL)
             self._connection.execute(_IDX_NODES_WORKSPACE_DDL)
+            self._connection.execute(_IDX_NODES_SESSION_LIST_DDL)
             self._connection.execute(_CREATION_RECORDS_TABLE_DDL)
             self._connection.execute(_IDX_CREATION_RECORDS_STATE_DDL)
             self._connection.execute(_SUBTREE_DELETE_RECORDS_TABLE_DDL)
@@ -310,13 +316,15 @@ class SessionCatalogStore(
             ).fetchall()
         }
         if (
-            "title_source" not in node_columns
+            not {"title_source", "session_kind", "current_agent_id", "current_provider_id",
+                 "context_source_session_id", "generation_origin_json", "updated_at"}
+            <= node_columns
             or not {"title_source", "purpose", "session_metadata_json", "request_intent_json",
                     "graph_id", "graph_revision", "graph_schema_hash", "capability_profile_hash"}
             <= creation_columns
         ):
             raise CatalogMaintenanceRequiredError(
-                "session catalog v7 缺少权威创建字段，拒绝自动修复: "
+                "session catalog v8 缺少权威会话字段，拒绝自动修复: "
                 f"path={self.database_path}, nodes={sorted(node_columns)}, "
                 f"creation_records={sorted(creation_columns)}"
             )

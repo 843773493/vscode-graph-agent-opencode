@@ -38,7 +38,7 @@ class ContextReconciliationMixin:
             session_id, thread_id, checkpoint_ns
         ) as snapshot:
             manifest = snapshot.manifest
-            committed_overlays = self._storage.list_source_overlays(
+            committed_overlays = self._storage.assemblies.list_source_overlays(
                 session_id,
                 thread_id,
                 checkpoint_ns=checkpoint_ns,

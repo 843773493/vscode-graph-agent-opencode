@@ -48,6 +48,9 @@ from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.node_debug.service import NodeDebugService
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.tool_service import ToolService
 from app.services.infrastructure.workspace_file_watch_service import (
@@ -57,6 +60,7 @@ from app.services.infrastructure.workspace_service import WorkspaceService
 from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
 from app.services.orchestration.communication.service import SessionCommunicationService
 from app.services.orchestration.goal_runtime_service import GoalRuntimeService
+from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from app.tool_testing.service import ToolTestService
 
 
@@ -354,3 +358,11 @@ def get_session_catalog_service(request: Request) -> SessionCatalogService:
 
 def get_session_generation_service(request: Request) -> SessionGenerationService:
     return _require_service(request, "session_generation_service", SessionGenerationService, "SessionGenerationService 尚未在应用启动阶段初始化")
+
+
+def get_thread_residency_tracker(request: Request) -> ThreadResidencyTracker:
+    return _require_service(request, "thread_residency_tracker", ThreadResidencyTracker, "ThreadResidencyTracker 尚未初始化")
+
+
+def get_rollout_checkpoint_saver(request: Request) -> RolloutCheckpointSaver:
+    return _require_service(request, "checkpointer", RolloutCheckpointSaver, "RolloutCheckpointSaver 尚未初始化")

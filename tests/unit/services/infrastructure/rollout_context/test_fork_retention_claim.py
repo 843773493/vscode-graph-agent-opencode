@@ -16,7 +16,7 @@ from app.core.session_catalog_store import (
     SessionCatalogStore,
     SourceRetentionOperationPendingError,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 SOURCE_SESSION_ID = "ses_019c16981d377a1680b0a175104f5e29"
@@ -37,9 +37,9 @@ def sessions_root(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def storage(sessions_root: Path, monkeypatch: pytest.MonkeyPatch) -> RolloutStorage:
+def storage(sessions_root: Path, monkeypatch: pytest.MonkeyPatch) -> RolloutContextStore:
     monkeypatch.setenv("WORKSPACE_ROOT", str(sessions_root.parent.parent))
-    return RolloutStorage(sessions_root)
+    return RolloutContextStore(sessions_root)
 
 
 def _catalog(sessions_root: Path) -> SessionCatalogStore:
@@ -50,9 +50,9 @@ def _catalog(sessions_root: Path) -> SessionCatalogStore:
 
 
 def test_begin_pinned_claim_creates_preparing_on_catalog(
-    storage: RolloutStorage, sessions_root: Path
+    storage: RolloutContextStore, sessions_root: Path
 ) -> None:
-    claim = storage.begin_pinned_fork_retention_claim(
+    claim = storage.forks.begin_pinned_fork_retention_claim(
         claim_id=CLAIM_ID,
         source_session_id=SOURCE_SESSION_ID,
         target_session_id=TARGET_SESSION_ID,
@@ -70,22 +70,22 @@ def test_begin_pinned_claim_creates_preparing_on_catalog(
 
 
 def test_activate_then_release_claim_by_target(
-    storage: RolloutStorage, sessions_root: Path
+    storage: RolloutContextStore, sessions_root: Path
 ) -> None:
-    storage.begin_pinned_fork_retention_claim(
+    storage.forks.begin_pinned_fork_retention_claim(
         claim_id=CLAIM_ID,
         source_session_id=SOURCE_SESSION_ID,
         target_session_id=TARGET_SESSION_ID,
         source_lifecycle_generation=1,
     )
-    activated = storage.activate_pinned_fork_retention_claim(
+    activated = storage.forks.activate_pinned_fork_retention_claim(
         CLAIM_ID, expected_generation=1
     )
     assert activated is not None and activated.state == "active"
     catalog = _catalog(sessions_root)
     try:
         # target 删除 → 释放精确 claim。
-        storage.release_fork_retentions(TARGET_SESSION_ID)
+        storage.forks.release_fork_retentions(TARGET_SESSION_ID)
         assert catalog.get_fork_retention_claim(CLAIM_ID).state == "released"
         assert catalog.list_pinned_claims_for_source(SOURCE_SESSION_ID) == []
     finally:
@@ -93,7 +93,7 @@ def test_activate_then_release_claim_by_target(
 
 
 def test_claim_rejected_when_source_deleting(
-    storage: RolloutStorage, sessions_root: Path
+    storage: RolloutContextStore, sessions_root: Path
 ) -> None:
     catalog = _catalog(sessions_root)
     try:
@@ -101,7 +101,7 @@ def test_claim_rejected_when_source_deleting(
     finally:
         catalog.close()
     with pytest.raises(RuntimeError, match="零副作用失败"):
-        storage.begin_pinned_fork_retention_claim(
+        storage.forks.begin_pinned_fork_retention_claim(
             claim_id=CLAIM_ID,
             source_session_id=SOURCE_SESSION_ID,
             target_session_id=TARGET_SESSION_ID,
@@ -115,9 +115,9 @@ def test_claim_rejected_when_source_deleting(
 
 
 def test_claim_blocks_subtree_delete_before_commit(
-    storage: RolloutStorage, sessions_root: Path
+    storage: RolloutContextStore, sessions_root: Path
 ) -> None:
-    storage.begin_pinned_fork_retention_claim(
+    storage.forks.begin_pinned_fork_retention_claim(
         claim_id=CLAIM_ID,
         source_session_id=SOURCE_SESSION_ID,
         target_session_id=TARGET_SESSION_ID,
@@ -147,7 +147,7 @@ def test_source_generation_read_fails_closed_without_control_db(
     root = tmp_path / ".boxteam" / "sessions"
     root.mkdir(parents=True)
     seed_catalog_session_bundle(root, SOURCE_SESSION_ID, title="无 control")
-    storage = RolloutStorage(root)
+    storage = RolloutContextStore(root)
     # 手工删除 control 库模拟缺失。
     from app.core.path_utils import get_session_path_resolver
 
@@ -156,4 +156,4 @@ def test_source_generation_read_fails_closed_without_control_db(
     )
     (session_dir / "session-control.sqlite").unlink()
     with pytest.raises(RuntimeError, match="session-control.sqlite"):
-        storage._source_lifecycle_generation(SOURCE_SESSION_ID)
+        storage.forks._source_lifecycle_generation(SOURCE_SESSION_ID)

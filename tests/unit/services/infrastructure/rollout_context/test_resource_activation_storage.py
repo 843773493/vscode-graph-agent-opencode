@@ -16,6 +16,20 @@ from app.domain.itemized.resource_activation import (
     ResourceProvenanceRef,
     SourceLineageRef,
 )
+from app.services.infrastructure.rollout_context.activation.lineage import (
+    ActivationLineageBodyStore,
+)
+from app.services.infrastructure.rollout_context.activation.schema import (
+    RESOURCE_ACTIVATION_SCHEMA_VERSION,
+    RESOURCE_ACTIVATION_TABLES,
+)
+from app.services.infrastructure.rollout_context.activation.store import (
+    SCHEMA_UNAVAILABLE_CODE,
+    ResourceActivationStore,
+    ResourceActivationStoreError,
+    lineage_manifest,
+    lineage_manifest_digest,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -25,21 +39,7 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     ContextPlanDetailStore,
 )
-from app.services.infrastructure.rollout_context.storage.resource_activation_lineage import (
-    ActivationLineageBodyStore,
-)
-from app.services.infrastructure.rollout_context.storage.resource_activation_schema import (
-    RESOURCE_ACTIVATION_SCHEMA_VERSION,
-    RESOURCE_ACTIVATION_TABLES,
-)
-from app.services.infrastructure.rollout_context.storage.resource_activation_store import (
-    SCHEMA_UNAVAILABLE_CODE,
-    ResourceActivationStore,
-    ResourceActivationStoreError,
-    lineage_manifest,
-    lineage_manifest_digest,
-)
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 POLICY = ResourceActivationPolicySnapshot.from_dict({"default_boundary": "turn", "overrides": {"mcp_tool_catalog": "model_call"}})
@@ -50,7 +50,7 @@ SESSION_ID = "ses_019c13b18bcc7288beace1cd3b7c4c84"
 def _binding(
     resource_id: str,
     *,
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
     ordinal: int,
     boundary: str,
     revision: str = "rev-1",
@@ -80,31 +80,31 @@ def _binding(
         effective_boundary=boundary,
         captured_registry_generation=3,
         snapshot_ref=DetailRef(
-            SESSION_ID, storage.main_thread_id(SESSION_ID), "snapshot-body-1", "body-1"
+            SESSION_ID, storage.storage.main_thread_id(SESSION_ID), "snapshot-body-1", "body-1"
         ),
     )
 
 
 def _execution_snapshot(
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
     turn_id: str = "turn-1", model_call_id: str | None = None
 ) -> ResourceActivationSnapshotRef:
     execution_id = f"execution-{turn_id}"
-    storage.accept_turn(
-        SESSION_ID, thread_id=storage.main_thread_id(SESSION_ID),
+    storage.executions.accept_turn(
+        SESSION_ID, thread_id=storage.storage.main_thread_id(SESSION_ID),
         accepted_ingress_id=f"evt-{turn_id}", acceptance_idempotency_key=f"accept-{turn_id}",
         job_id=f"job-{turn_id}", admission_idempotency_key=f"admit-{turn_id}", payload="问题",
         turn_id=turn_id, root_item_id=f"item-root-{turn_id}", initial_execution_id=execution_id,
     )
     return ResourceActivationSnapshotRef(
-        activation_snapshot_id=f"execution:{SESSION_ID}:{storage.main_thread_id(SESSION_ID)}:{turn_id}",
+        activation_snapshot_id=f"execution:{SESSION_ID}:{storage.storage.main_thread_id(SESSION_ID)}:{turn_id}",
         snapshot_kind="execution",
         activation_policy_revision=POLICY.revision,
         activation_policy_hash=POLICY.hash,
         activation_policy=POLICY,
         registry_generation=3,
         owner_session_id=SESSION_ID,
-        owner_thread_id=storage.main_thread_id(SESSION_ID),
+        owner_thread_id=storage.storage.main_thread_id(SESSION_ID),
         execution_id=execution_id,
         turn_id=turn_id,
         captured_at="2026-09-24T00:00:00+00:00",
@@ -115,7 +115,7 @@ def _execution_snapshot(
 
 def _model_call_snapshot(
     parent: ResourceActivationSnapshotRef,
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
 ) -> ResourceActivationSnapshotRef:
     return ResourceActivationSnapshotRef(
         activation_snapshot_id=parent.activation_snapshot_id + ":call-1",
@@ -125,7 +125,7 @@ def _model_call_snapshot(
         activation_policy=parent.activation_policy,
         registry_generation=4,
         owner_session_id=SESSION_ID,
-        owner_thread_id=storage.main_thread_id(SESSION_ID),
+        owner_thread_id=storage.storage.main_thread_id(SESSION_ID),
         execution_id=parent.execution_id,
         turn_id=parent.turn_id,
         captured_at="2026-09-24T00:00:01+00:00",
@@ -147,15 +147,15 @@ def sessions_root(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def storage(sessions_root: Path) -> RolloutStorage:
-    instance = RolloutStorage(sessions_root, message_codec=LangChainMessageCodec())
-    instance.initialize(SESSION_ID, validate_jsonl_items=False)
+def storage(sessions_root: Path) -> RolloutContextStore:
+    instance = RolloutContextStore(sessions_root, message_codec=LangChainMessageCodec())
+    instance.storage.initialize(SESSION_ID, validate_jsonl_items=False)
     return instance
 
 
 @pytest.fixture
 def activation_store(
-    sessions_root: Path, storage: RolloutStorage
+    sessions_root: Path, storage: RolloutContextStore
 ) -> ResourceActivationStore:
     detail_store = ContextPlanDetailStore(sessions_root)
     return ResourceActivationStore(
@@ -165,14 +165,14 @@ def activation_store(
 
 
 def test_save_and_read_round_trip_preserves_identity(
-    activation_store: ResourceActivationStore, storage: RolloutStorage
+    activation_store: ResourceActivationStore, storage: RolloutContextStore
 ) -> None:
     snapshot = _execution_snapshot(storage=storage)
     body_ref = activation_store.save_snapshot(snapshot)
 
     assert body_ref.session_id == SESSION_ID
     restored = activation_store.read_snapshot(
-        SESSION_ID, thread_id=storage.main_thread_id(SESSION_ID), activation_snapshot_id=snapshot.activation_snapshot_id
+        SESSION_ID, thread_id=storage.storage.main_thread_id(SESSION_ID), activation_snapshot_id=snapshot.activation_snapshot_id
     )
 
     assert restored.to_dict() == snapshot.to_dict()
@@ -181,7 +181,7 @@ def test_save_and_read_round_trip_preserves_identity(
 
     # 幂等：相同 identity 再次保存返回同一 lineage ref，不新增行。
     assert activation_store.save_snapshot(snapshot) == body_ref
-    with closing(sqlite3.connect(storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, ""))) as connection:
         count = connection.execute(
             "SELECT COUNT(*) FROM resource_activation_snapshots"
         ).fetchone()[0]
@@ -189,7 +189,7 @@ def test_save_and_read_round_trip_preserves_identity(
 
 
 def test_model_call_snapshot_reuses_parent_bytes(
-    activation_store: ResourceActivationStore, storage: RolloutStorage
+    activation_store: ResourceActivationStore, storage: RolloutContextStore
 ) -> None:
     turn = _execution_snapshot(storage=storage)
     activation_store.save_snapshot(turn)
@@ -198,7 +198,7 @@ def test_model_call_snapshot_reuses_parent_bytes(
 
     restored = activation_store.read_snapshot(
         SESSION_ID,
-        thread_id=storage.main_thread_id(SESSION_ID),
+        thread_id=storage.storage.main_thread_id(SESSION_ID),
         activation_snapshot_id=model_call.activation_snapshot_id,
     )
 
@@ -209,10 +209,10 @@ def test_model_call_snapshot_reuses_parent_bytes(
 
 
 def test_runtime_without_activation_schema_fails_closed(
-    activation_store: ResourceActivationStore, storage: RolloutStorage
+    activation_store: ResourceActivationStore, storage: RolloutContextStore
 ) -> None:
     # 模拟已有 rollout 的 activation marker/对象被删除，正常访问必须拒绝。
-    with closing(sqlite3.connect(storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, ""))) as connection:
         for table in reversed(RESOURCE_ACTIVATION_TABLES):
             connection.execute(f"DROP TABLE {table}")
         connection.commit()
@@ -222,11 +222,11 @@ def test_runtime_without_activation_schema_fails_closed(
 
     with pytest.raises(ResourceActivationStoreError) as read_error:
         activation_store.read_snapshot(
-            SESSION_ID, thread_id=storage.main_thread_id(SESSION_ID), activation_snapshot_id="turn:missing"
+            SESSION_ID, thread_id=storage.storage.main_thread_id(SESSION_ID), activation_snapshot_id="turn:missing"
         )
     assert read_error.value.code == SCHEMA_UNAVAILABLE_CODE
 
-    with closing(sqlite3.connect(storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, ""))) as connection:
         tables = {
             row[0]
             for row in connection.execute(
@@ -237,26 +237,26 @@ def test_runtime_without_activation_schema_fails_closed(
 
 
 def test_unregistered_schema_version_fails_closed(
-    activation_store: ResourceActivationStore, storage: RolloutStorage
+    activation_store: ResourceActivationStore, storage: RolloutContextStore
 ) -> None:
-    with closing(sqlite3.connect(storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, ""))) as connection:
         connection.execute(
             "UPDATE resource_activation_schema_state SET activation_schema_version = 99"
         )
         connection.commit()
     with pytest.raises(ResourceActivationStoreError) as error:
         activation_store.read_snapshot(
-            SESSION_ID, thread_id=storage.main_thread_id(SESSION_ID), activation_snapshot_id="turn:any"
+            SESSION_ID, thread_id=storage.storage.main_thread_id(SESSION_ID), activation_snapshot_id="turn:any"
         )
     assert error.value.code == SCHEMA_UNAVAILABLE_CODE
 
 
 def test_tampered_binding_digest_is_rejected(
-    activation_store: ResourceActivationStore, storage: RolloutStorage
+    activation_store: ResourceActivationStore, storage: RolloutContextStore
 ) -> None:
     snapshot = _execution_snapshot(storage=storage)
     activation_store.save_snapshot(snapshot)
-    with closing(sqlite3.connect(storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, ""))) as connection:
         connection.execute(
             "UPDATE resource_activation_bindings SET content_hash = ?",
             ("sha256:jcs:v1:" + "b" * 64,),
@@ -265,20 +265,20 @@ def test_tampered_binding_digest_is_rejected(
     with pytest.raises(ResourceActivationStoreError) as error:
         activation_store.read_snapshot(
             SESSION_ID,
-            thread_id=storage.main_thread_id(SESSION_ID),
+            thread_id=storage.storage.main_thread_id(SESSION_ID),
             activation_snapshot_id=snapshot.activation_snapshot_id,
         )
     assert error.value.code == "resource-activation-hash-mismatch"
 
 
 def test_tampered_lineage_digest_is_rejected(
-    activation_store: ResourceActivationStore, storage: RolloutStorage
+    activation_store: ResourceActivationStore, storage: RolloutContextStore
 ) -> None:
     """binding 列的 lineage digest 必须与受保护 manifest 逐字节一致。"""
 
     snapshot = _execution_snapshot(storage=storage)
     activation_store.save_snapshot(snapshot)
-    with closing(sqlite3.connect(storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, ""))) as connection:
         connection.execute(
             "UPDATE resource_activation_bindings SET source_lineage_digest = ?",
             ("sha256:jcs:v1:" + "c" * 64,),
@@ -287,14 +287,14 @@ def test_tampered_lineage_digest_is_rejected(
     with pytest.raises(ResourceActivationStoreError) as error:
         activation_store.read_snapshot(
             SESSION_ID,
-            thread_id=storage.main_thread_id(SESSION_ID),
+            thread_id=storage.storage.main_thread_id(SESSION_ID),
             activation_snapshot_id=snapshot.activation_snapshot_id,
         )
     assert error.value.code == "resource-activation-hash-mismatch"
 
 
 def test_conflicting_snapshot_identity_is_rejected(
-    activation_store: ResourceActivationStore, storage: RolloutStorage
+    activation_store: ResourceActivationStore, storage: RolloutContextStore
 ) -> None:
     """同一 activation_snapshot_id 不得被不同 binding 选择覆盖。"""
 
@@ -308,7 +308,7 @@ def test_conflicting_snapshot_identity_is_rejected(
         activation_policy=snapshot.activation_policy,
         registry_generation=snapshot.registry_generation,
         owner_session_id=SESSION_ID,
-        owner_thread_id=storage.main_thread_id(SESSION_ID),
+        owner_thread_id=storage.storage.main_thread_id(SESSION_ID),
         execution_id=snapshot.execution_id,
         turn_id=snapshot.turn_id,
         captured_at=snapshot.captured_at,
@@ -324,13 +324,13 @@ def test_conflicting_snapshot_identity_is_rejected(
 
 
 def test_tampered_catalog_lineage_digest_is_rejected(
-    activation_store: ResourceActivationStore, storage: RolloutStorage
+    activation_store: ResourceActivationStore, storage: RolloutContextStore
 ) -> None:
     """catalog 的 lineage manifest digest 必须与受保护正文重算一致。"""
 
     snapshot = _execution_snapshot(storage=storage)
     activation_store.save_snapshot(snapshot)
-    with closing(sqlite3.connect(storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, ""))) as connection:
         connection.execute(
             "UPDATE resource_activation_snapshots SET lineage_manifest_digest = ?",
             ("sha256:jcs:v1:" + "e" * 64,),
@@ -339,20 +339,20 @@ def test_tampered_catalog_lineage_digest_is_rejected(
     with pytest.raises(ResourceActivationStoreError) as error:
         activation_store.read_snapshot(
             SESSION_ID,
-            thread_id=storage.main_thread_id(SESSION_ID),
+            thread_id=storage.storage.main_thread_id(SESSION_ID),
             activation_snapshot_id=snapshot.activation_snapshot_id,
         )
     assert error.value.code == "resource-activation-hash-mismatch"
 
 
 def test_tampered_binding_count_is_rejected(
-    activation_store: ResourceActivationStore, storage: RolloutStorage
+    activation_store: ResourceActivationStore, storage: RolloutContextStore
 ) -> None:
     """snapshot 的 binding_count 必须与实际 binding 行数一致。"""
 
     snapshot = _execution_snapshot(storage=storage)
     activation_store.save_snapshot(snapshot)
-    with closing(sqlite3.connect(storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, ""))) as connection:
         connection.execute(
             "UPDATE resource_activation_snapshots SET binding_count = 7"
         )
@@ -360,19 +360,19 @@ def test_tampered_binding_count_is_rejected(
     with pytest.raises(ResourceActivationStoreError) as error:
         activation_store.read_snapshot(
             SESSION_ID,
-            thread_id=storage.main_thread_id(SESSION_ID),
+            thread_id=storage.storage.main_thread_id(SESSION_ID),
             activation_snapshot_id=snapshot.activation_snapshot_id,
         )
     assert error.value.code == "resource-activation-hash-mismatch"
 
 
 def test_lineage_manifest_is_protected_and_absent_from_catalog(
-    activation_store: ResourceActivationStore, storage: RolloutStorage
+    activation_store: ResourceActivationStore, storage: RolloutContextStore
 ) -> None:
     snapshot = _execution_snapshot(storage=storage)
     activation_store.save_snapshot(snapshot)
 
-    with closing(sqlite3.connect(storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, ""))) as connection:
         columns = {
             row[1]
             for row in connection.execute(
@@ -385,7 +385,7 @@ def test_lineage_manifest_is_protected_and_absent_from_catalog(
     assert "source_lineage_ref" not in columns
     # lineage manifest digest 覆盖全部 binding 的来源向量，不等于单条 binding digest。
     assert lineage_manifest_digest(snapshot) != snapshot.bindings[0].source_lineage_digest
-    with closing(sqlite3.connect(storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, ""))) as connection:
         stored_digest = connection.execute(
             "SELECT lineage_manifest_digest FROM resource_activation_snapshots"
         ).fetchone()[0]
@@ -393,13 +393,13 @@ def test_lineage_manifest_is_protected_and_absent_from_catalog(
 
 
 def test_bind_assembly_requires_committed_snapshot(
-    activation_store: ResourceActivationStore, storage: RolloutStorage
+    activation_store: ResourceActivationStore, storage: RolloutContextStore
 ) -> None:
     snapshot = _execution_snapshot(storage=storage)
     with (
         pytest.raises(ResourceActivationStoreError) as error,
-        storage._lock(storage.main_thread_id(SESSION_ID), "", session_id=SESSION_ID),
-        storage._connect(storage.main_thread_id(SESSION_ID), "", session_id=SESSION_ID) as connection,
+        storage.storage._lock(storage.storage.main_thread_id(SESSION_ID), "", session_id=SESSION_ID),
+        storage.storage._connect(storage.storage.main_thread_id(SESSION_ID), "", session_id=SESSION_ID) as connection,
     ):
         connection.execute("BEGIN IMMEDIATE")
         activation_store.bind_assembly(
@@ -414,7 +414,7 @@ def test_bind_assembly_requires_committed_snapshot(
     assert error.value.code == "resource-activation-hash-mismatch"
 
     activation_store.save_snapshot(snapshot)
-    with storage._lock(storage.main_thread_id(SESSION_ID), "", session_id=SESSION_ID), storage._connect(storage.main_thread_id(SESSION_ID), "", session_id=SESSION_ID) as connection:
+    with storage.storage._lock(storage.storage.main_thread_id(SESSION_ID), "", session_id=SESSION_ID), storage.storage._connect(storage.storage.main_thread_id(SESSION_ID), "", session_id=SESSION_ID) as connection:
         connection.execute("BEGIN IMMEDIATE")
         connection.execute(
             "INSERT INTO context_assemblies(assembly_id, session_id, thread_id, turn_id, "
@@ -436,7 +436,7 @@ def test_bind_assembly_requires_committed_snapshot(
         connection.commit()
 
     binding = activation_store.read_assembly_binding(
-        SESSION_ID, thread_id=activation_store._storage.main_thread_id(SESSION_ID),
+        SESSION_ID, thread_id=activation_store._storage.storage.main_thread_id(SESSION_ID),
                     assembly_id="assembly-1"
     )
     assert binding["activation_snapshot_id"] == snapshot.activation_snapshot_id
@@ -444,9 +444,9 @@ def test_bind_assembly_requires_committed_snapshot(
 
 
 def test_fresh_schema_has_current_marker_without_legacy_migration_or_fabricated_rows(
-    activation_store: ResourceActivationStore, storage: RolloutStorage,
+    activation_store: ResourceActivationStore, storage: RolloutContextStore,
 ) -> None:
-    with closing(sqlite3.connect(storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, ""))) as connection:
         activation_store.require_schema(connection)
         version = connection.execute(
             "SELECT activation_schema_version FROM resource_activation_schema_state"
@@ -466,9 +466,9 @@ def test_fresh_schema_has_current_marker_without_legacy_migration_or_fabricated_
 
 @pytest.mark.parametrize("marker", [None, 1, 2, 99])
 def test_existing_missing_or_old_marker_is_never_repaired(
-    activation_store: ResourceActivationStore, storage: RolloutStorage, marker: int | None,
+    activation_store: ResourceActivationStore, storage: RolloutContextStore, marker: int | None,
 ) -> None:
-    with closing(sqlite3.connect(storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, ""))) as connection:
         if marker is None:
             connection.execute("DROP TABLE resource_activation_schema_state")
         else:
@@ -478,10 +478,10 @@ def test_existing_missing_or_old_marker_is_never_repaired(
         connection.commit()
     with pytest.raises(ResourceActivationStoreError) as error:
         activation_store.find_snapshot(
-            SESSION_ID, thread_id=storage.main_thread_id(SESSION_ID), activation_snapshot_id="absent"
+            SESSION_ID, thread_id=storage.storage.main_thread_id(SESSION_ID), activation_snapshot_id="absent"
         )
     assert error.value.code == SCHEMA_UNAVAILABLE_CODE
-    with closing(sqlite3.connect(storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, ""))) as connection:
         present = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE name = 'resource_activation_schema_state'"
         ).fetchone()
@@ -494,12 +494,12 @@ def test_existing_missing_or_old_marker_is_never_repaired(
 
 
 def test_lineage_detail_classification_guards_exact_body_read(
-    sessions_root: Path, storage: RolloutStorage, activation_store: ResourceActivationStore,
+    sessions_root: Path, storage: RolloutContextStore, activation_store: ResourceActivationStore,
 ) -> None:
     snapshot = _execution_snapshot(storage=storage)
     body_ref = activation_store.save_snapshot(snapshot)
     detail_store = ContextPlanDetailStore(sessions_root)
-    record = detail_record_from_mapping(storage.get_context_plan_detail(
+    record = detail_record_from_mapping(storage.assemblies.get_context_plan_detail(
         SESSION_ID, snapshot.owner_thread_id, detail_ref=body_ref, checkpoint_ns="",
     ))
     assert (record.detail_kind, record.retention_class) == (
@@ -508,13 +508,13 @@ def test_lineage_detail_classification_guards_exact_body_read(
     assert (record.required, record.sensitive, record.protection, record.visibility) == (
         True, True, "protected", "internal",
     )
-    with closing(sqlite3.connect(storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, ""))) as connection:
         before = tuple(connection.iterdump())
     with pytest.raises(PermissionError, match="未授权读取"):
         detail_store.read(
             session_id=SESSION_ID, thread_id=snapshot.owner_thread_id, record=record,
         )
-    with closing(sqlite3.connect(storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, ""))) as connection:
         assert tuple(connection.iterdump()) == before
     assert detail_store.read(
         session_id=SESSION_ID, thread_id=snapshot.owner_thread_id, record=record,
@@ -527,7 +527,7 @@ def test_lineage_detail_classification_guards_exact_body_read(
 
 
 def test_snapshot_cannot_borrow_other_execution_turn(
-    activation_store: ResourceActivationStore, storage: RolloutStorage,
+    activation_store: ResourceActivationStore, storage: RolloutContextStore,
 ) -> None:
     from dataclasses import replace
 
@@ -536,12 +536,12 @@ def test_snapshot_cannot_borrow_other_execution_turn(
     with pytest.raises(ResourceActivationStoreError) as error:
         activation_store.save_snapshot(wrong)
     assert error.value.code == "resource-activation-snapshot-conflict"
-    with closing(sqlite3.connect(storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, ""))) as connection:
         assert connection.execute("SELECT COUNT(*) FROM resource_activation_snapshots").fetchone() == (0,)
 
 
 def test_complete_members_live_only_in_protected_manifest_and_survive_restart(
-    activation_store: ResourceActivationStore, storage: RolloutStorage, sessions_root: Path,
+    activation_store: ResourceActivationStore, storage: RolloutContextStore, sessions_root: Path,
 ) -> None:
     from dataclasses import replace
 
@@ -576,11 +576,11 @@ def test_complete_members_live_only_in_protected_manifest_and_survive_restart(
         ActivationLineageBodyStore(storage, ContextPlanDetailStore(sessions_root)),
     )
     restored = restarted.read_snapshot(
-        SESSION_ID, thread_id=storage.main_thread_id(SESSION_ID),
+        SESSION_ID, thread_id=storage.storage.main_thread_id(SESSION_ID),
         activation_snapshot_id=snapshot.activation_snapshot_id,
     )
     assert restored.to_dict() == snapshot.to_dict()
-    with closing(sqlite3.connect(storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, ""))) as connection:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(resource_activation_bindings)")}
     assert "members" not in columns and "targets" not in columns
 
@@ -598,13 +598,13 @@ def test_complete_members_live_only_in_protected_manifest_and_survive_restart(
             activation_store.save_snapshot(altered)
         assert conflict.value.code == "resource-activation-hash-mismatch"
         assert restarted.read_snapshot(
-            SESSION_ID, thread_id=storage.main_thread_id(SESSION_ID),
+            SESSION_ID, thread_id=storage.storage.main_thread_id(SESSION_ID),
             activation_snapshot_id=snapshot.activation_snapshot_id,
         ).to_dict() == snapshot.to_dict()
 
 
 def test_old_protected_manifest_is_rejected_even_with_valid_catalog_digest(
-    activation_store: ResourceActivationStore, storage: RolloutStorage,
+    activation_store: ResourceActivationStore, storage: RolloutContextStore,
 ) -> None:
     from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 
@@ -616,11 +616,11 @@ def test_old_protected_manifest_is_rejected_even_with_valid_catalog_digest(
         "activation_snapshot_id": snapshot.activation_snapshot_id,
     }
     old_ref = activation_store._lineage_body.write_lineage_manifest(
-        owner_session_id=SESSION_ID, owner_thread_id=storage.main_thread_id(SESSION_ID),
+        owner_session_id=SESSION_ID, owner_thread_id=storage.storage.main_thread_id(SESSION_ID),
         activation_snapshot_id=snapshot.activation_snapshot_id,
         checkpoint_ns="", manifest=old_body,
     )
-    with closing(sqlite3.connect(storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, ""))) as connection:
         connection.execute(
             "UPDATE resource_activation_snapshots SET lineage_detail_ref = ?, lineage_manifest_digest = ?",
             (canonical_json_bytes(old_ref.to_dict()).decode(), sha256_jcs(old_body)),
@@ -628,11 +628,11 @@ def test_old_protected_manifest_is_rejected_even_with_valid_catalog_digest(
         connection.commit()
     with pytest.raises(ResourceActivationStoreError) as rejected:
         activation_store.read_snapshot(
-            SESSION_ID, thread_id=storage.main_thread_id(SESSION_ID),
+            SESSION_ID, thread_id=storage.storage.main_thread_id(SESSION_ID),
             activation_snapshot_id=snapshot.activation_snapshot_id,
         )
     assert rejected.value.code == "resource-activation-lineage-invalid"
-    with closing(sqlite3.connect(storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, ""))) as connection:
         assert connection.execute(
             "SELECT activation_schema_version FROM resource_activation_schema_state"
         ).fetchone() == (RESOURCE_ACTIVATION_SCHEMA_VERSION,)

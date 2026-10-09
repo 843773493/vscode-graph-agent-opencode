@@ -21,7 +21,8 @@ mixin）与连接生命周期方法（``__init__``/``connection``/``close``/
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+import threading
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -42,11 +43,17 @@ from app.core.session_control_primitives import (
     validate_thread_creation_key as validate_thread_creation_key,
 )
 from app.core.session_control_store._schema import SchemaInitMixin
+from app.core.session_control_store.background_mailbox import BackgroundMailboxMixin
+from app.core.session_control_store.background_work import BackgroundWorkMixin
 from app.core.session_control_store.collaboration import (
     CollaborationMember as CollaborationMember,
 )
 from app.core.session_control_store.collaboration import (
     CollaborationMixin,
+)
+from app.core.session_control_store.collaboration_fanout import (
+    CollaborationFanoutMixin,
+    CollaborationFanoutRecord,
 )
 from app.core.session_control_store.contracts import (
     ThreadGraphBindingRecord as ThreadGraphBindingRecord,
@@ -97,6 +104,9 @@ __all__ = [
 
 
 class SessionControlStore(
+    CollaborationFanoutMixin,
+    BackgroundWorkMixin,
+    BackgroundMailboxMixin,
     CommunicationLedgerMixin,
     OperationLeaseMixin,
     ThreadCatalogMixin,
@@ -112,11 +122,11 @@ class SessionControlStore(
     lease（2.3-E）/ 跨 Session 通信 outbox+inbox ledger（D5）。
 
     构造时创建 database_path 父目录并幂等建表；``user_version`` 只接受
-    全新库0与当前版本11。旧生成数据在任何 journal/WAL 设置前显式拒绝，
+    全新库0与当前版本13。旧生成数据在任何 journal/WAL 设置前显式拒绝，
     不迁移、不回填；当前 GraphBinding 仍由 thread_catalog 唯一持有。
     """
 
-    SCHEMA_VERSION = 11
+    SCHEMA_VERSION = 13
 
     def __init__(self, database_path: Path, *, read_only: bool = False) -> None:
         if not isinstance(database_path, Path):
@@ -124,6 +134,9 @@ class SessionControlStore(
         self.database_path = database_path.expanduser().resolve()
         validate_sqlite_path_budget(self.database_path)
         self._read_only = read_only
+        self._collaboration_notifications: list[int] = []
+        self._collaboration_publication: Callable[[CollaborationFanoutRecord], None] | None = None
+        self._publication_lock = threading.RLock()
         if not read_only:
             self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._closed = False
@@ -156,6 +169,13 @@ class SessionControlStore(
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError(f"session control store 已关闭: {self.database_path}")
+
+    def bind_collaboration_publication(self, callback: Callable[[CollaborationFanoutRecord], None], publication_lock) -> None:
+        """writer 与 Registry capture 共用发布锁；通知只镜像已提交 fanout。"""
+        if self._connection.in_transaction:
+            raise RuntimeError("不能在活动事务中替换 collaboration publication")
+        self._collaboration_publication = callback
+        self._publication_lock = publication_lock
 
     def _begin_immediate(self) -> None:
         """开启写事务（BEGIN IMMEDIATE），锁冲突转明确领域错误。
@@ -204,27 +224,35 @@ class SessionControlStore(
         手写模式保持不变；8.5-A 新增方法统一走本 CM）。
         """
         # 不变量与锁冲突翻译统一在 _begin_immediate 内（单点实现）。
-        self._begin_immediate()
-        try:
-            yield self._connection
-            self._connection.execute("COMMIT")
-        except BaseException as error:
+        with self._publication_lock:
+            self._begin_immediate()
+            self._collaboration_notifications.clear()
             try:
-                if self._connection.in_transaction:
-                    self._connection.execute("ROLLBACK")
-            except BaseException as rollback_error:  # noqa: BLE001 - 回滚失败不能覆盖原异常
-                error.add_note(
-                    "session control 写事务回滚失败；原始事务异常仍优先保留: "
-                    f"{rollback_error!r}"
-                )
+                yield self._connection
+                self._connection.execute("COMMIT")
+            except BaseException as error:
+                self._collaboration_notifications.clear()
                 try:
-                    self.close()
-                except BaseException as close_error:  # noqa: BLE001 - 关闭失败也只作为诊断附加
+                    if self._connection.in_transaction:
+                        self._connection.execute("ROLLBACK")
+                except BaseException as rollback_error:  # noqa: BLE001 - 回滚失败不能覆盖原异常
                     error.add_note(
-                        "session control 关闭失败；原始事务异常仍优先保留: "
-                        f"{close_error!r}"
+                        "session control 写事务回滚失败；原始事务异常仍优先保留: "
+                        f"{rollback_error!r}"
                     )
-            raise
+                    try:
+                        self.close()
+                    except BaseException as close_error:  # noqa: BLE001 - 关闭失败也只作为诊断附加
+                        error.add_note(
+                            "session control 关闭失败；原始事务异常仍优先保留: "
+                            f"{close_error!r}"
+                        )
+                raise
+            revisions = tuple(self._collaboration_notifications)
+            self._collaboration_notifications.clear()
+            if self._collaboration_publication is not None:
+                for revision in revisions:
+                    self._collaboration_publication(self.get_collaboration_fanout(revision))
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(

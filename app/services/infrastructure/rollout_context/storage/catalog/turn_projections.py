@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Iterable
 from sqlite3 import Connection
 from typing import TYPE_CHECKING
@@ -9,6 +10,7 @@ from typing import TYPE_CHECKING
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_non_negative_int,
+    strict_optional_text,
     strict_text,
 )
 
@@ -291,3 +293,102 @@ class TurnProjectionQueryMixin:
             (view_id, *ids),
         ).fetchall()
         return [_turn_page_row(row) for row in rows]
+
+    def _upsert_turn(
+        self,
+        connection: sqlite3.Connection,
+        turn_id: str,
+        sequence: int,
+        message_id: str,
+        role: str,
+        branch_id: str,
+        timestamp: str,
+    ) -> None:
+        turn_id = strict_text(turn_id, field="turns.turn_id")
+        sequence = strict_non_negative_int(sequence, field="turns.message_sequence")
+        if sequence == 0:
+            raise ValueError(f"turns.message_sequence 必须为正数: {turn_id}")
+        message_id = strict_text(message_id, field="turns.message_id")
+        role = strict_text(role, field="turns.role")
+        branch_id = strict_text(branch_id, field="turns.branch_id")
+        timestamp = strict_text(timestamp, field="turns.updated_at")
+        row = connection.execute(
+            "SELECT first_message_sequence, last_message_sequence, user_message_sequence, final_message_sequence, final_message_id FROM turns WHERE turn_id = ?",
+            (turn_id,),
+        ).fetchone()
+        if row is None:
+            if role != "user" or turn_id.startswith("internal-"):
+                return
+            ordinal = strict_non_negative_int(
+                connection.execute(
+                    "SELECT COALESCE(MAX(turn_ordinal), 0) + 1 FROM turns"
+                ).fetchone()[0],
+                field="turns.turn_ordinal",
+            )
+            if ordinal == 0:
+                raise RuntimeError("turns.turn_ordinal 必须为正数")
+            connection.execute(
+                "INSERT INTO turns(turn_id, turn_ordinal, turn_kind, branch_id, first_message_sequence, last_message_sequence, user_message_sequence, final_message_sequence, final_message_id, status, created_at, updated_at) VALUES (?, ?, 'normal', ?, ?, ?, ?, NULL, NULL, 'running', ?, ?)",
+                (
+                    turn_id,
+                    ordinal,
+                    branch_id,
+                    sequence,
+                    sequence,
+                    sequence,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            return
+        first_sequence = strict_non_negative_int(
+            row[0], field=f"turns.first_message_sequence: {turn_id}"
+        )
+        last_sequence = strict_non_negative_int(
+            row[1], field=f"turns.last_message_sequence: {turn_id}"
+        )
+        user_sequence_stored = strict_optional_non_negative_int(
+            row[2], field=f"turns.user_message_sequence: {turn_id}"
+        )
+        final_sequence = strict_optional_non_negative_int(
+            row[3], field=f"turns.final_message_sequence: {turn_id}"
+        )
+        final_message_id = strict_optional_text(
+            row[4], field=f"turns.final_message_id: {turn_id}"
+        )
+        if final_sequence is not None and final_message_id is None:
+            raise RuntimeError(f"turns final message identity 缺失: {turn_id}")
+        if first_sequence == 0 or last_sequence == 0:
+            raise RuntimeError(f"turns message sequence 必须为正数: {turn_id}")
+        if last_sequence < first_sequence:
+            raise RuntimeError(f"turns message sequence 倒序: {turn_id}")
+        user_sequence = (
+            user_sequence_stored
+            if user_sequence_stored is not None
+            else sequence
+            if role == "user"
+            else None
+        )
+        reopened = (
+            final_sequence is not None
+            and role in {"assistant", "tool"}
+            and sequence > final_sequence
+        )
+        updated = connection.execute(
+            "UPDATE turns SET last_message_sequence = ?, user_message_sequence = COALESCE(user_message_sequence, ?), final_message_sequence = ?, final_message_id = ?, status = ?, updated_at = ? WHERE turn_id = ?",
+            (
+                sequence,
+                user_sequence,
+                None if reopened else final_sequence,
+                None if reopened else final_message_id,
+                "running"
+                if reopened
+                else "completed"
+                if final_sequence is not None
+                else "running",
+                timestamp,
+                turn_id,
+            ),
+        )
+        if updated.rowcount != 1:
+            raise RuntimeError(f"turns 更新失败: {turn_id}")

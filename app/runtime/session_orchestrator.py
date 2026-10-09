@@ -205,7 +205,7 @@ class SessionOrchestrator:
             dispatch,
         )
 
-    async def create_message(self, session_id: str, payload: MessageRunRequest) -> MessageRunAccepted:
+    async def create_message(self, session_id: str, payload: MessageRunRequest, *, thread_id: str | None = None) -> MessageRunAccepted:
         import logging
         logger = logging.getLogger(__name__)
         logger.info("[session_orchestrator] create_message begin: session_id=%s", session_id)
@@ -221,6 +221,7 @@ class SessionOrchestrator:
             requested_agent_id=requested_agent_id,
             delivery_policy=delivery_policy,
             internal=False,
+            thread_id=thread_id,
         )
 
     async def _create_and_dispatch(
@@ -239,7 +240,9 @@ class SessionOrchestrator:
                 existing = self._idempotency_store.get(session_id, idempotency_key)
                 if existing is not None:
                     return existing
-            message = await self._message_service.create(session_id, message_request)
+            target_thread_id = thread_id if thread_id is not None else await self._session_service.resolve_main_thread(session_id)
+            self._session_service.path_resolver.resolve_thread_node(session_id, target_thread_id)
+            message = await self._message_service.create(session_id, message_request, thread_id=target_thread_id)
             execution_binding: ExecutionBinding | None = None
             if internal:
                 execution_binding = InternalExecutionIntent(
@@ -253,7 +256,7 @@ class SessionOrchestrator:
                 requested_agent_id=requested_agent_id,
                 delivery_policy=delivery_policy,
                 execution_binding=execution_binding,
-                thread_id=thread_id,
+                thread_id=target_thread_id,
             )
             if idempotency_key is not None and self._idempotency_store is not None:
                 self._idempotency_store.put(session_id, idempotency_key, result)
@@ -326,6 +329,7 @@ class SessionOrchestrator:
             payload={
                 "message_id": message.message_id,
                 "session_id": message.session_id,
+                "thread_id": thread_id,
                 "role": message.role,
                 "content": display_projection.content,
                 "attachments": [

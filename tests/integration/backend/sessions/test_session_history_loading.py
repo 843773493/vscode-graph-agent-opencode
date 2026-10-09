@@ -37,7 +37,7 @@ from app.services.infrastructure.rollout_context.checkpoint.reader import (
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 from tests.support.api_helpers import checkpoint_fixture, create_session
 from tests.support.ports import integration_port_block_for_file
@@ -158,7 +158,7 @@ def _history_user_execution(
     turn_id: str,
 ) -> Iterator[None]:
     """经真实用户准入绑定历史 fixture 的 checkpoint writer。"""
-    owner = saver.resolve_main_thread_owner(session_id)
+    owner = saver.forks.source.resolve_main_thread_owner(session_id)
     payload = user_input_payload(user.content, user.response_metadata.get("attachments"))
     execution_id = f"history-execution:{turn_id}"
     saver.accept_turn(
@@ -195,7 +195,7 @@ def _seed_rollout(
 ) -> Path:
     sessions_dir = workspace_root / ".boxteam" / "sessions"
     saver = RolloutCheckpointSaver(sessions_dir)
-    thread_id = saver._storage.main_thread_id(session_id)
+    thread_id = saver._storage.storage.main_thread_id(session_id)
     config = build_checkpoint_config(thread_id)
     all_messages: list[object] = []
     for turn_index in range(1, count + 1):
@@ -333,7 +333,7 @@ async def test_history_loads_rollout_summary_and_tool_details(
     saver = RolloutCheckpointSaver(
         Path(integration_workspace_root_path) / ".boxteam" / "sessions"
     )
-    owner = saver.resolve_main_thread_owner(session_id)
+    owner = saver.forks.source.resolve_main_thread_owner(session_id)
     with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
         checkpoint = await saver.aget_tuple(
             build_checkpoint_config(owner.thread_id)
@@ -485,7 +485,7 @@ async def test_history_user_projection_keeps_canonical_preview_out_of_display_co
     )
     sessions_dir = Path(integration_workspace_root_path) / ".boxteam" / "sessions"
     saver = RolloutCheckpointSaver(sessions_dir)
-    owner = saver.resolve_main_thread_owner(session_id)
+    owner = saver.forks.source.resolve_main_thread_owner(session_id)
     with _history_user_execution(saver, session_id, user, "job-attachment-projection"):
         saver.put(
             build_checkpoint_config(owner.thread_id),
@@ -551,14 +551,14 @@ async def test_history_tool_selector_only_materializes_requested_tool(
         count=1,
         tool_count=2,
     )
-    storage = RolloutStorage(
+    storage = RolloutContextStore(
         Path(integration_workspace_root_path) / ".boxteam" / "sessions",
         message_codec=LangChainMessageCodec(),
     )
     reader = RolloutHistoryReader(RolloutContextReader(storage))
-    thread_id = storage.main_thread_id(session_id)
+    thread_id = storage.storage.main_thread_id(session_id)
     read_sequences: list[list[int]] = []
-    original_read = storage._read_record_envelopes
+    original_read = storage.checkpoints._read_record_envelopes
 
     def capture_read(
         session_id: str,
@@ -574,7 +574,7 @@ async def test_history_tool_selector_only_materializes_requested_tool(
             session_id, thread_id, checkpoint_ns, indexed_rows, connection=connection
         )
 
-    monkeypatch.setattr(storage, "_read_record_envelopes", capture_read)
+    monkeypatch.setattr(storage.checkpoints, "_read_record_envelopes", capture_read)
     reader.load(
         session_id,
         thread_id,
@@ -744,7 +744,7 @@ async def test_history_deduplicates_final_checkpoint_reasoning_by_part_ref(
         Path(integration_workspace_root_path) / ".boxteam" / "sessions"
     )
     saver = RolloutCheckpointSaver(sessions_dir)
-    thread_id = saver.resolve_main_thread_owner(session_id).thread_id
+    thread_id = saver.forks.source.resolve_main_thread_owner(session_id).thread_id
     with _history_user_execution(saver, session_id, messages[0], turn_id):
         config = saver.put(
             build_checkpoint_config(thread_id),
@@ -761,8 +761,8 @@ async def test_history_deduplicates_final_checkpoint_reasoning_by_part_ref(
             final_message_id="assistant-final-shared-reasoning",
         )
 
-    storage = RolloutStorage(sessions_dir, message_codec=LangChainMessageCodec())
-    with storage.open_read_snapshot(session_id, thread_id) as snapshot:
+    storage = RolloutContextStore(sessions_dir, message_codec=LangChainMessageCodec())
+    with storage.storage.open_read_snapshot(session_id, thread_id) as snapshot:
         snapshot.connection.backup(history_catalog_copy)
         canonical_reasoning = history_catalog_copy.execute(
             "SELECT item_sequence, projection_manifest_json FROM item_catalog "
@@ -798,7 +798,7 @@ async def test_history_deduplicates_final_checkpoint_reasoning_by_part_ref(
             ("同一条持久 reasoning", reasoning_sequence),
         )
         copied = replace(snapshot, connection=history_catalog_copy)
-        projection = storage.read_turn_projections(copied, [turn_id])[turn_id]
+        projection = storage.storage.read_turn_projections(copied, [turn_id])[turn_id]
 
     assert [item["kind"] for item in projection["activity_items"]] == [
         "reasoning",
@@ -1041,7 +1041,7 @@ async def test_turn_finalize_pointer_wins_over_heuristic_final_response(
     session_id = await create_session(integration_client, "finalization 指针优先")
     sessions_dir = Path(integration_workspace_root_path) / ".boxteam" / "sessions"
     saver = RolloutCheckpointSaver(sessions_dir)
-    thread_id = saver.resolve_main_thread_owner(session_id).thread_id
+    thread_id = saver.forks.source.resolve_main_thread_owner(session_id).thread_id
     config = build_checkpoint_config(thread_id)
     user = HumanMessage(
         id="user-finalization",
@@ -1078,7 +1078,7 @@ async def test_turn_finalize_pointer_wins_over_heuristic_final_response(
 
     reader = RolloutHistoryReader(
         RolloutContextReader(
-            RolloutStorage(sessions_dir, message_codec=LangChainMessageCodec())
+            RolloutContextStore(sessions_dir, message_codec=LangChainMessageCodec())
         )
     )
     page = reader.load(
@@ -1095,7 +1095,7 @@ async def test_finalization_window_keeps_unfinalized_history_readable(
     session_id = await create_session(integration_client, "finalization 崩溃窗口")
     sessions_dir = Path(integration_workspace_root_path) / ".boxteam" / "sessions"
     saver = RolloutCheckpointSaver(sessions_dir)
-    owner = saver.resolve_main_thread_owner(session_id)
+    owner = saver.forks.source.resolve_main_thread_owner(session_id)
     config = build_checkpoint_config(owner.thread_id)
     turn_id = "job-finalization-window"
     user = HumanMessage(
@@ -1118,7 +1118,7 @@ async def test_finalization_window_keeps_unfinalized_history_readable(
     # 故意不调用 finalize_turn，模拟最终消息 JSONL 已提交但控制记录尚未提交。
     page = RolloutHistoryReader(
         RolloutContextReader(
-            RolloutStorage(sessions_dir, message_codec=LangChainMessageCodec())
+            RolloutContextStore(sessions_dir, message_codec=LangChainMessageCodec())
         )
     ).load(
         session_id,
@@ -1163,7 +1163,7 @@ async def test_bounded_history_uses_sqlite_turn_spans_without_materializing_all_
     )
     _seed_rollout(Path(integration_workspace_root_path), session_id, count=128)
 
-    storage = RolloutStorage(
+    storage = RolloutContextStore(
         Path(integration_workspace_root_path) / ".boxteam" / "sessions",
         message_codec=LangChainMessageCodec(),
     )
@@ -1172,9 +1172,9 @@ async def test_bounded_history_uses_sqlite_turn_spans_without_materializing_all_
     def fail_if_materialized(*args: object, **kwargs: object) -> list[object]:
         raise AssertionError("有 SQLite Turn 索引时不应 materialize 全量消息")
 
-    monkeypatch.setattr(storage, "materialize_messages", fail_if_materialized)
+    monkeypatch.setattr(storage.checkpoints, "materialize_messages", fail_if_materialized)
     decoded_types: list[str] = []
-    decode_indexed_message = storage.decode_indexed_message
+    decode_indexed_message = storage.checkpoints.decode_indexed_message
 
     def record_decoded_message(*args: object, **kwargs: object) -> object:
         value = args[2] if len(args) > 2 else kwargs.get("value")
@@ -1182,9 +1182,9 @@ async def test_bounded_history_uses_sqlite_turn_spans_without_materializing_all_
             decoded_types.append(value["type"])
         return decode_indexed_message(*args, **kwargs)
 
-    monkeypatch.setattr(storage, "decode_indexed_message", record_decoded_message)
+    monkeypatch.setattr(storage.checkpoints, "decode_indexed_message", record_decoded_message)
 
-    thread_id = storage.main_thread_id(session_id)
+    thread_id = storage.storage.main_thread_id(session_id)
     latest, older_cursor, _ = reader.bootstrap(session_id, thread_id)
     assert latest is not None
     assert latest.ordinal == 128
@@ -1223,7 +1223,7 @@ async def test_internal_leading_messages_do_not_create_empty_indexed_turn(
     saver = RolloutCheckpointSaver(
         Path(integration_workspace_root_path) / ".boxteam" / "sessions"
     )
-    owner = saver.resolve_main_thread_owner(session_id)
+    owner = saver.forks.source.resolve_main_thread_owner(session_id)
     config = build_checkpoint_config(owner.thread_id)
     internal = AIMessage(
         content="内部委派已开始",
@@ -1290,7 +1290,7 @@ async def test_internal_leading_messages_do_not_create_empty_indexed_turn(
 
     reader = RolloutHistoryReader(
         RolloutContextReader(
-            RolloutStorage(
+            RolloutContextStore(
                 Path(integration_workspace_root_path) / ".boxteam" / "sessions",
                 message_codec=LangChainMessageCodec(),
             )
@@ -1318,7 +1318,7 @@ async def test_history_detail_enforces_per_item_budget(
         tool_result_size=100_000,
     )
 
-    storage = RolloutStorage(
+    storage = RolloutContextStore(
         Path(integration_workspace_root_path) / ".boxteam" / "sessions",
         message_codec=LangChainMessageCodec(),
     )
@@ -1326,7 +1326,7 @@ async def test_history_detail_enforces_per_item_budget(
 
     summary = reader.load(
         session_id,
-        storage.main_thread_id(session_id),
+        storage.storage.main_thread_id(session_id),
         TurnHistoryLoadRequest(direction="tail"),
     )
     assert summary.items[0].items[1].raw == {}
@@ -1393,7 +1393,7 @@ async def test_history_final_summary_never_reads_final_jsonl_body(
     messages = _turn_messages(1)
     final_text = "最终正文" * 30_000
     messages[-1] = messages[-1].model_copy(update={"content": final_text})
-    owner = saver.resolve_main_thread_owner(session_id)
+    owner = saver.forks.source.resolve_main_thread_owner(session_id)
     with _history_user_execution(saver, session_id, messages[0], "job-0001"):
         saver.put(
             build_checkpoint_config(owner.thread_id),
@@ -1408,10 +1408,10 @@ async def test_history_final_summary_never_reads_final_jsonl_body(
             turn_id="job-0001",
             final_message_id="assistant-final-0001",
         )
-    storage = RolloutStorage(sessions_dir, message_codec=LangChainMessageCodec())
-    jsonl_path = storage.jsonl_path(session_id, thread_id=owner.thread_id)
+    storage = RolloutContextStore(sessions_dir, message_codec=LangChainMessageCodec())
+    jsonl_path = storage.storage.jsonl_path(session_id, thread_id=owner.thread_id)
     committed_bytes = jsonl_path.read_bytes()
-    original_read = storage._read_record_envelopes
+    original_read = storage.checkpoints._read_record_envelopes
     read_sequences: list[int] = []
 
     def bounded_read(session_id, thread_id, checkpoint_ns, rows, *, connection=None):
@@ -1423,7 +1423,7 @@ async def test_history_final_summary_never_reads_final_jsonl_body(
             session_id, thread_id, checkpoint_ns, rows, connection=connection
         )
 
-    monkeypatch.setattr(storage, "_read_record_envelopes", bounded_read)
+    monkeypatch.setattr(storage.checkpoints, "_read_record_envelopes", bounded_read)
     reader = RolloutHistoryReader(RolloutContextReader(storage))
     page = reader.load(
         session_id,
@@ -1470,12 +1470,12 @@ async def test_history_turn_visibility_uses_canonical_root_membership(
 ) -> None:
     session_id = await create_session(integration_client, "canonical root 可见性")
     _seed_rollout(Path(integration_workspace_root_path), session_id, count=1)
-    storage = RolloutStorage(
+    storage = RolloutContextStore(
         Path(integration_workspace_root_path) / ".boxteam" / "sessions",
         message_codec=LangChainMessageCodec(),
     )
-    with storage.open_read_snapshot(
-        session_id, storage.main_thread_id(session_id)
+    with storage.storage.open_read_snapshot(
+        session_id, storage.storage.main_thread_id(session_id)
     ) as snapshot:
         snapshot.connection.backup(history_catalog_copy)
         history_catalog_copy.execute(mutation)
@@ -1483,9 +1483,9 @@ async def test_history_turn_visibility_uses_canonical_root_membership(
         view_id = history_catalog_copy.execute(
             "SELECT head_view_id FROM branches WHERE status = 'active'"
         ).fetchone()[0]
-        assert storage.context_turn_count(copied, view_id) == expected
-        bounds = storage.read_history_snapshot_bounds(copied, view_id)
-        rows, has_more = storage.read_context_turn_page(
+        assert storage.checkpoints.context_turn_count(copied, view_id) == expected
+        bounds = storage.storage.read_history_snapshot_bounds(copied, view_id)
+        rows, has_more = storage.storage.read_context_turn_page(
             copied,
             view_id,
             direction="tail",
@@ -1495,7 +1495,7 @@ async def test_history_turn_visibility_uses_canonical_root_membership(
         )
         assert len(rows) == expected
         assert has_more is False
-        assert len(storage.read_context_turn_ids(copied, view_id, ["job-0001"])) == expected
+        assert len(storage.storage.read_context_turn_ids(copied, view_id, ["job-0001"])) == expected
 
 
 @pytest.mark.asyncio
@@ -1506,21 +1506,21 @@ async def test_history_bounded_final_rejects_mismatched_canonical_pointer(
 ) -> None:
     session_id = await create_session(integration_client, "final pointer 必须一致")
     _seed_rollout(Path(integration_workspace_root_path), session_id, count=1)
-    storage = RolloutStorage(
+    storage = RolloutContextStore(
         Path(integration_workspace_root_path) / ".boxteam" / "sessions",
         message_codec=LangChainMessageCodec(),
     )
-    thread_id = storage.main_thread_id(session_id)
-    jsonl_bytes = storage.jsonl_path(session_id, thread_id=thread_id).read_bytes()
-    with storage.open_read_snapshot(session_id, thread_id) as snapshot:
+    thread_id = storage.storage.main_thread_id(session_id)
+    jsonl_bytes = storage.storage.jsonl_path(session_id, thread_id=thread_id).read_bytes()
+    with storage.storage.open_read_snapshot(session_id, thread_id) as snapshot:
         snapshot.connection.backup(history_catalog_copy)
         history_catalog_copy.execute(
             "UPDATE turns SET final_message_sequence = 2, final_message_id = 'assistant-tool-0001'"
         )
         copied = replace(snapshot, connection=history_catalog_copy)
         with pytest.raises(RuntimeError, match="final projection 与 canonical Turn/item 指针不一致"):
-            storage.read_turn_projections(copied, ["job-0001"])
+            storage.storage.read_turn_projections(copied, ["job-0001"])
     assert (
-        storage.jsonl_path(session_id, thread_id=thread_id).read_bytes()
+        storage.storage.jsonl_path(session_id, thread_id=thread_id).read_bytes()
         == jsonl_bytes
     )

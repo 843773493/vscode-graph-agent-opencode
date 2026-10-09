@@ -51,7 +51,8 @@ export function applyMessageStreamEvent(
   const state = current
     ? cloneMessageStreamState(current)
     : createMessageStreamState(event.session_id, event.turn_id);
-  if (state.sessionId !== event.session_id || state.turnId !== event.turn_id) {
+  if (state.sessionId !== event.session_id || state.turnId !== event.turn_id
+    || (state.threadId !== null && state.threadId !== event.thread_id)) {
     return {
       ...state,
       connectionStatus: "gap",
@@ -72,6 +73,7 @@ export function applyMessageStreamEvent(
       protocolError: "消息流 turn_stream_id 在同一 Turn 内发生变化",
     };
   }
+  state.threadId = event.thread_id;
   // 终态互斥且幂等：completed/interrupted/failed 一旦确定，后续业务事件一律不得
   // 改写 streamStatus、failure 或连接镜像，否则第二个终态会覆盖第一个，乱序或重复
   // 帧还会把连接状态翻回 connected。后端在同一状态机上以 MessageStreamTerminalError

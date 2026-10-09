@@ -10,16 +10,38 @@ import {
 describe("生成的 SSE runtime validator", () => {
   test("接受权威 DTO 并拒绝非法文件变更 kind", () => {
     expect(validateWorkspaceFileChangeBatch({
-      overflow: false,
+      directories: [], event_id: 0, invalidated_roots: [], snapshots: [], overflow: false,
       changes: [{ kind: "edit", path: "/tmp/a.ts" }],
     })).toEqual({
-      overflow: false,
+      directories: [], event_id: 0, invalidated_roots: [], snapshots: [], overflow: false,
       changes: [{ kind: "edit", path: "/tmp/a.ts" }],
     });
     expect(() => validateWorkspaceFileChangeBatch({
-      overflow: false,
+      directories: [], event_id: 0, invalidated_roots: [], snapshots: [], overflow: false,
       changes: [{ kind: "rename", path: "/tmp/a.ts" }],
     })).toThrow("WorkspaceFileChangeBatchDTO 校验失败");
+  });
+
+  test("保留配对的有界目录页并拒绝旧版本、错误owner或缺字段快照", () => {
+    const key = { workspace_id: "workspace-sse", scope: "workspace", root: "/workspace", path: "src" };
+    const snapshot = { root_path: "/workspace", path: "src", directory_key: key, directory_revision: 12,
+      items: [{ name: "a.ts", path: "src/a.ts", kind: "file", has_children: false, size: 7 }],
+      truncated: true, limit: 1, next_cursor: "revision-bound-cursor" };
+    const batch = { changes: [], overflow: false, event_id: 24, invalidated_roots: [],
+      directories: [{ directory_key: key, directory_revision: 12, exists: true }], snapshots: [snapshot] };
+    expect(validateWorkspaceFileChangeBatch(batch)).toEqual(batch);
+    for (const invalid of [
+      { ...snapshot, directory_revision: 11 },
+      { ...snapshot, directory_key: { ...key, workspace_id: "other-owner" } },
+      { ...snapshot, path: "other" },
+      { ...snapshot, directory_key: undefined },
+      { ...snapshot, items: undefined },
+    ]) {
+      expect(() => validateWorkspaceFileChangeBatch({ ...batch, snapshots: [invalid] }))
+        .toThrow("校验失败");
+    }
+    expect(() => validateWorkspaceFileChangeBatch({ ...batch,
+      directories: [{ ...batch.directories[0], exists: false }] })).toThrow("同次目录键/revision 配对");
   });
 
   test("拒绝缺少字段或时间无效的 Trace", () => {

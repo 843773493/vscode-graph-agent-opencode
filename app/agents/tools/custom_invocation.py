@@ -24,7 +24,7 @@ from app.services.infrastructure.mcp.extension_catalog import (
     build_extension_catalog_binding,
     extension_schema_hash,
 )
-from app.services.infrastructure.rollout_context.storage.resource_activation_common import (
+from app.services.infrastructure.rollout_context.activation.common import (
     ResourceActivationStoreError,
 )
 

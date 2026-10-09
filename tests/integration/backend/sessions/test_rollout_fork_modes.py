@@ -22,6 +22,7 @@ from app.core.path_utils import (
     get_session_creation_service,
     get_session_path_resolver,
 )
+from app.core.session_catalog_store.contracts import SessionGenerationOriginDTO
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.enums import SemanticKind
@@ -43,7 +44,6 @@ from app.schemas.internal_v2.node_debug import (
 from app.schemas.internal_v2.session import (
     SessionCreateRequest,
     SessionDTO,
-    SessionGenerationOriginDTO,
 )
 from app.services.business.job.service import JobService
 from app.services.business.session_context_fork_service import SessionContextForkService
@@ -63,7 +63,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.rollout_context.fork.full_copy import (
     operation as full_copy_operation,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_test_workspace import (
@@ -106,13 +106,16 @@ def fork_context(
             workspace, config_service.get_debug_runtime_config()
         ),
     )
+    resolver = get_session_path_resolver(sessions_dir)
+    async def drain_fork_owner(session_id: str) -> None:
+        saver.release_fork_retentions(session_id)
+    resolver.bind_session_drain_callback(drain_fork_owner)
     sessions = SessionService(
         config_service=config_service,
         trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
         workspace_id=load_or_create_workspace_id(workspace),
         path_resolver=get_session_path_resolver(sessions_dir),
         creation_service=get_session_creation_service(sessions_dir),
-        fork_relationship_checker=saver,
     )
     return ForkIntegrationContext(
         workspace=workspace,
@@ -179,7 +182,7 @@ async def _seed_source(context: ForkIntegrationContext):
     source = await context.sessions.create(
         SessionCreateRequest(title="Fork 集成源会话")
     )
-    thread_id = context.saver._storage.main_thread_id(source.session_id)
+    thread_id = context.saver._storage.storage.main_thread_id(source.session_id)
     owner = MutationIntentOwner(
         session_id=source.session_id,
         thread_id=thread_id,
@@ -396,7 +399,7 @@ async def _get_tuple(
     checkpoint_id: str | None = None,
 ):
     checkpoint_saver = saver or context.saver
-    owner = checkpoint_saver.resolve_main_thread_owner(session_id)
+    owner = checkpoint_saver.forks.source.resolve_main_thread_owner(session_id)
     with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
         return await checkpoint_saver.aget_tuple(
             build_checkpoint_config(
@@ -463,7 +466,7 @@ def _identity_mapping_rows(
 
 
 def _main_thread_node(context: ForkIntegrationContext, session_id: str) -> Path:
-    thread_id = context.saver._storage.main_thread_id(session_id)
+    thread_id = context.saver._storage.storage.main_thread_id(session_id)
     return context.sessions.path_resolver.resolve_thread_node(session_id, thread_id)
 
 
@@ -567,10 +570,11 @@ async def test_public_fork_modes_copy_only_portable_debug_configurations(
 @pytest.mark.asyncio
 async def test_debug_config_drift_aborts_entire_public_fork(
     fork_context: ForkIntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = await _seed_source(fork_context)
     _seed_debug_configurations(fork_context, source.session_id)
-    provider = fork_context.saver._node_debug_workspace_config
+    provider = fork_context.saver.forks.source._node_debug_workspace_config
     assert provider is not None
     stable = provider()
     drifted = replace(
@@ -585,7 +589,12 @@ async def test_debug_config_drift_aborts_entire_public_fork(
         calls += 1
         return stable if calls <= 2 else drifted
 
-    fork_context.saver._node_debug_workspace_config = drifting_provider
+    monkeypatch.setattr(
+        fork_context.saver.forks.source, "_node_debug_workspace_config", drifting_provider
+    )
+    monkeypatch.setattr(
+        fork_context.saver.forks.copy, "_node_debug_workspace_config", drifting_provider
+    )
     before = {item.session_id for item in (await fork_context.sessions.list()).items}
 
     with pytest.raises(NodeDebugTargetValidationError, match="配置 revision 已漂移"):
@@ -616,18 +625,18 @@ async def test_restart_recovers_debug_published_before_materialization_commit(
     )
     target_thread_id = _main_thread_id(fork_context, target.session_id)
     storage = fork_context.saver._storage
-    original_commit = storage.commit_fork_materialization
+    original_commit = storage.forks.commit_fork_materialization
 
     def crash_before_materialization_commit(*_args, **_kwargs):
         raise RuntimeError("injected crash before materialization commit")
 
     monkeypatch.setattr(
-        storage,
+        storage.forks,
         "commit_fork_materialization",
         crash_before_materialization_commit,
     )
     with pytest.raises(RuntimeError, match="injected crash"):
-        await fork_context.saver.afork(
+        await fork_context.saver.forks.afork(
             source_session_id=source.session_id,
             target_session_id=target.session_id,
             mode="context_fork",
@@ -641,20 +650,20 @@ async def test_restart_recovers_debug_published_before_materialization_commit(
         is not None
     )
 
-    monkeypatch.setattr(storage, "commit_fork_materialization", original_commit)
-    provider = fork_context.saver._node_debug_workspace_config
+    monkeypatch.setattr(storage.forks, "commit_fork_materialization", original_commit)
+    provider = fork_context.saver.forks.source._node_debug_workspace_config
     with RolloutCheckpointSaver(
-        storage.sessions_dir,
+        storage.storage.sessions_dir,
         node_debug_workspace_config=provider,
     ) as restarted:
-        restarted._storage.initialize(target.session_id)
+        restarted._storage.storage.initialize(target.session_id)
         assert (
             restarted._node_debug_store.read_manifest(
                 target.session_id, target_thread_id
             )
             is None
         )
-        with restarted._storage._connect(
+        with restarted._storage.storage._connect(
             target_thread_id, "", session_id=target.session_id, read_only=True
         ) as connection:
             assert connection.execute(
@@ -689,7 +698,7 @@ async def test_full_copy_restart_publishes_ready_debug_after_rollout_install(
         crash_after_rollout_install,
     )
     with pytest.raises(RuntimeError, match="injected crash after rollout install"):
-        await fork_context.saver.afork(
+        await fork_context.saver.forks.afork(
             source_session_id=source.session_id,
             target_session_id=target.session_id,
             mode="full_rollout_copy",
@@ -720,12 +729,12 @@ async def test_full_copy_restart_publishes_ready_debug_after_rollout_install(
         "publish_ready_node_debug_fork",
         original_publish,
     )
-    provider = fork_context.saver._node_debug_workspace_config
+    provider = fork_context.saver.forks.source._node_debug_workspace_config
     with RolloutCheckpointSaver(
-        fork_context.saver._storage.sessions_dir,
+        fork_context.saver._storage.storage.sessions_dir,
         node_debug_workspace_config=provider,
     ) as restarted:
-        restarted._storage.initialize(target.session_id)
+        restarted._storage.storage.initialize(target.session_id)
         manifest = restarted._node_debug_store.read_manifest(
             target.session_id, target_thread_id
         )
@@ -735,7 +744,7 @@ async def test_full_copy_restart_publishes_ready_debug_after_rollout_install(
         assert manifest.active_configuration_id is None
         assert manifest.actions == []
         assert not staging.exists()
-        with restarted._storage._connect(
+        with restarted._storage.storage._connect(
             target_thread_id, "", session_id=target.session_id, read_only=True
         ) as connection:
             assert connection.execute(
@@ -844,7 +853,7 @@ async def test_all_fork_modes_materialize_independent_rollouts(
     assert _pending_write_rows(fork_context, context_child.session_id) == [
         ("task-pending", "parent/child", 0, "scratchpad", "pending")
     ]
-    prefix_owner = fork_context.saver.resolve_main_thread_owner(prefix_child.session_id)
+    prefix_owner = fork_context.saver.forks.source.resolve_main_thread_owner(prefix_child.session_id)
     with session_thread_owner_scope(prefix_owner, langgraph_thread_id=prefix_owner.thread_id):
         prefix_pending = [item async for item in fork_context.saver.alist(
             build_checkpoint_config(prefix_owner.thread_id)
@@ -936,7 +945,7 @@ async def test_all_fork_modes_materialize_independent_rollouts(
     assert (child_root / "index.sqlite").is_file()
     assert not list(child_root.glob("segment-*.jsonl"))
 
-    await fork_context.sessions.delete(source.session_id)
+    await fork_context.sessions.path_resolver.delete_subtree(idempotency_key=f"fork-delete-{source.session_id}", root_node_id=source.session_id)
     for child in (context_child, prefix_child, full_child):
         assert (
             await _get_tuple(fork_context, child.session_id)
@@ -953,7 +962,7 @@ async def test_full_copy_localizes_detail_and_source_overlay_lineage(
     source_overlay = SimpleNamespace(
         overlay_id="overlay-source-policy",
         session_id=source.session_id,
-        thread_id=fork_context.saver._storage.main_thread_id(source.session_id),
+        thread_id=fork_context.saver._storage.storage.main_thread_id(source.session_id),
         checkpoint_ns="",
         source_kind="policy",
         source_revision="policy-revision-1",
@@ -983,7 +992,7 @@ async def test_full_copy_localizes_detail_and_source_overlay_lineage(
     )
     detail = fork_context.saver._detail_store.write(
         session_id=source.session_id,
-        thread_id=fork_context.saver._storage.main_thread_id(source.session_id),
+        thread_id=fork_context.saver._storage.storage.main_thread_id(source.session_id),
         assembly_id="assembly-source-detail",
         detail_kind="request_source",
         retention_class="request_replay",
@@ -992,7 +1001,7 @@ async def test_full_copy_localizes_detail_and_source_overlay_lineage(
         required=True,
         source_revision="detail-revision-1",
     )
-    fork_context.saver._storage.register_context_plan_detail(detail)
+    fork_context.saver._storage.assemblies.register_context_plan_detail(detail)
 
     child = await fork_context.forks.fork(
         source.session_id,
@@ -1000,8 +1009,8 @@ async def test_full_copy_localizes_detail_and_source_overlay_lineage(
         checkpoint_id="cp2",
     )
 
-    source_thread_id = fork_context.saver._storage.main_thread_id(source.session_id)
-    target_thread_id = fork_context.saver._storage.main_thread_id(child.session_id)
+    source_thread_id = fork_context.saver._storage.storage.main_thread_id(source.session_id)
+    target_thread_id = fork_context.saver._storage.storage.main_thread_id(child.session_id)
     source_overlays = fork_context.saver.list_source_overlays(
         source.session_id,
         source_thread_id,
@@ -1072,9 +1081,9 @@ async def test_full_copy_localizes_detail_and_source_overlay_lineage(
     target_detail_ref = detail_ref_from_key(detail_mapping[5])
     target_detail_ref.require_owner(
         child.session_id,
-        fork_context.saver._storage.main_thread_id(child.session_id),
+        fork_context.saver._storage.storage.main_thread_id(child.session_id),
     )
-    target_detail = fork_context.saver._storage.get_context_plan_detail(
+    target_detail = fork_context.saver._storage.assemblies.get_context_plan_detail(
         child.session_id,
         target_detail_ref.thread_id,
         detail_ref=target_detail_ref,
@@ -1119,7 +1128,7 @@ async def test_history_replay_reuses_turn_root_without_execution(
 
     latest = await _get_tuple(fork_context, source.session_id)
     assert latest is not None
-    source_owner = fork_context.saver.resolve_main_thread_owner(source.session_id)
+    source_owner = fork_context.saver.forks.source.resolve_main_thread_owner(source.session_id)
     with session_thread_owner_scope(source_owner, langgraph_thread_id=source_owner.thread_id):
         replay_config = fork_context.saver.history_replay(
             latest.config, turn_id="turn-1", anchor_mode="inclusive",
@@ -1281,7 +1290,7 @@ async def test_interrupted_fork_materialization_is_rolled_back_on_next_open(
         b"synthetic-source-snapshot:interrupted-fork"
     ).hexdigest()
     materialization_id, _fork_id = (
-        fork_context.saver._storage.begin_fork_materialization(
+        fork_context.saver._storage.forks.begin_fork_materialization(
             target_session_id=target.session_id,
             source_session_id=source.session_id,
             source_checkpoint_id=None,
@@ -1295,12 +1304,12 @@ async def test_interrupted_fork_materialization_is_rolled_back_on_next_open(
         )
     )
 
-    # 新的 RolloutStorage 实例模拟进程重启：内存中的 active 标记不存在，
+    # 新的 RolloutContextStore 实例模拟进程重启：内存中的 active 标记不存在，
     # initialize 必须按 journal 清理目标，而不是把半成品当成空 checkpoint。
-    restarted_storage = RolloutStorage(
+    restarted_storage = RolloutContextStore(
         fork_context.sessions.path_resolver.sessions_root
     )
-    restarted_storage.initialize(target.session_id)
+    restarted_storage.storage.initialize(target.session_id)
     target_root = _main_thread_node(fork_context, target.session_id)
     with sqlite3.connect(target_root / "rollout" / "index.sqlite") as connection:
         assert connection.execute(
@@ -1419,7 +1428,7 @@ async def test_pinned_fork_keeps_source_deletion_blocked(
         place_under_source=True,
     )
     with pytest.raises(RuntimeError, match=child.session_id):
-        await fork_context.sessions.delete(source.session_id)
+        await fork_context.sessions.path_resolver.delete_subtree(idempotency_key=f"fork-delete-{source.session_id}", root_node_id=source.session_id)
 
 
 @pytest.mark.asyncio
@@ -1440,11 +1449,11 @@ async def test_pinned_fork_retention_released_when_child_is_deleted(
     assert active_refs[0][3] == child.session_id
     assert active_refs[0][4] == "active"
 
-    await fork_context.sessions.delete(child.session_id)
+    await fork_context.sessions.path_resolver.delete_subtree(idempotency_key=f"fork-delete-{child.session_id}", root_node_id=child.session_id)
 
     released_refs = _retention_refs(fork_context, source.session_id)
     assert released_refs[0][4] == "released"
-    await fork_context.sessions.delete(source.session_id)
+    await fork_context.sessions.path_resolver.delete_subtree(idempotency_key=f"fork-delete-{source.session_id}", root_node_id=source.session_id)
 
 
 @pytest.mark.asyncio
@@ -1526,7 +1535,7 @@ async def test_full_copy_cancelled_historical_is_not_resumable_but_new_replay_is
         source.session_id,
         mode="full_rollout_copy",
     )
-    child_thread_id = fork_context.saver._storage.main_thread_id(child.session_id)
+    child_thread_id = fork_context.saver._storage.storage.main_thread_id(child.session_id)
     child_root = _main_thread_node(fork_context, child.session_id)
     with sqlite3.connect(child_root / "rollout" / "index.sqlite") as connection:
         target_turn_id, target_root_id, target_status = connection.execute(
@@ -1596,7 +1605,7 @@ async def test_full_copy_interrupted_turn_is_cancelled_historical_with_source_jo
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = await _seed_source(fork_context)
-    source_thread_id = fork_context.saver._storage.main_thread_id(source.session_id)
+    source_thread_id = fork_context.saver._storage.storage.main_thread_id(source.session_id)
     fork_context.saver.converge_execution(
         source.session_id,
         thread_id=source_thread_id,
@@ -1670,7 +1679,7 @@ async def test_full_copy_interrupted_turn_is_cancelled_historical_with_source_jo
             (source.session_id, source_thread_id, "turn-2"),
         ).fetchone()
         source_payload_hash = source_acceptance[2]
-    target_thread_id = fork_context.saver._storage.main_thread_id(child.session_id)
+    target_thread_id = fork_context.saver._storage.storage.main_thread_id(child.session_id)
     with sqlite3.connect(target_root / "rollout" / "index.sqlite") as connection:
         target_turn = connection.execute(
             "SELECT session_id, thread_id, turn_id, status, initial_execution_id, "
@@ -1886,33 +1895,33 @@ async def test_production_lifespan_recovers_unpublished_fork(
         context_source_session_id=source.session_id,
     )
     fork_id = f"lifespan-fork-{crash_state}"
-    context.saver.begin_pinned_fork_retention_claim(
+    context.saver.forks.recovery.begin_pinned_fork_retention_claim(
         fork_id=fork_id, source_session_id=source.session_id,
         target_session_id=target.session_id,
     )
     storage = context.saver._storage
     method = "materialize_fork_checkpoint" if crash_state == "prepared" else "complete_fork_materialization"
-    original = getattr(storage, method)
+    original = getattr(storage.forks, method)
 
     def crash(**_kwargs: object) -> None:
         raise RuntimeError("模拟进程在 fork journal 边界中断")
 
     if crash_state != "committed":
-        monkeypatch.setattr(storage, method, crash)
+        monkeypatch.setattr(storage.forks, method, crash)
     try:
         if crash_state == "committed":
-            await context.saver.afork(source_session_id=source.session_id,
+            await context.saver.forks.afork(source_session_id=source.session_id,
                                      target_session_id=target.session_id,
                                      creation_record=record, fork_id=fork_id,
                                      relationship="pinned")
         else:
             with pytest.raises(RuntimeError, match="模拟进程"):
-                await context.saver.afork(source_session_id=source.session_id,
+                await context.saver.forks.afork(source_session_id=source.session_id,
                                          target_session_id=target.session_id,
                                          creation_record=record, fork_id=fork_id,
                                          relationship="pinned")
     finally:
-        monkeypatch.setattr(storage, method, original)
+        monkeypatch.setattr(storage.forks, method, original)
     assert context.sessions.path_resolver.catalog_store.get_creation_record(
         record.session_creation_idempotency_key
     ).state == "preparing"
@@ -1963,7 +1972,7 @@ async def test_fork_notification_failure_never_aborts_published_target(
 async def _seed_retry_tool_source(context: ForkIntegrationContext) -> tuple[SessionDTO, str]:
     """通过真实 notice/user admission、lost/resume 和 checkpoint 生成执行谱系。"""
     source = await context.sessions.create(SessionCreateRequest(title="重试和工具源会话"))
-    owner = context.saver.resolve_main_thread_owner(source.session_id)
+    owner = context.saver.forks.source.resolve_main_thread_owner(source.session_id)
     prepared = internal_message_factory.build(
         kind="generated_session_result", control="检查内部任务结果",
         sections=(PromptSection("control_context", {"source": "fork-test"}),
@@ -2047,11 +2056,11 @@ async def test_fork_preserves_real_retry_internal_and_closed_tool_lineage(
 ) -> None:
     context = _production_fork_context(production_fork_container)
     source, retry_id = await _seed_retry_tool_source(context)
-    source_owner = context.saver.resolve_main_thread_owner(source.session_id)
-    source_items = context.saver._storage.read_items(source.session_id, source_owner.thread_id)
+    source_owner = context.saver.forks.source.resolve_main_thread_owner(source.session_id)
+    source_items = context.saver._storage.storage.read_items(source.session_id, source_owner.thread_id)
     child = await context.forks.fork(source.session_id, mode=mode)
-    target_owner = context.saver.resolve_main_thread_owner(child.session_id)
-    target_items = context.saver._storage.read_items(child.session_id, target_owner.thread_id)
+    target_owner = context.saver.forks.source.resolve_main_thread_owner(child.session_id)
+    target_items = context.saver._storage.storage.read_items(child.session_id, target_owner.thread_id)
     assert len(target_items) == len(source_items)
     mappings = {(row[3], row[4]): row[5] for row in _identity_mapping_rows(context, child.session_id)}
     with sqlite3.connect(_main_thread_node(context, child.session_id) / "rollout" / "index.sqlite") as connection:
@@ -2096,7 +2105,7 @@ async def test_fork_preserves_real_retry_internal_and_closed_tool_lineage(
         assert preimage["execution_id"] == "execution-internal-notice"
         assert preimage["input"]["kind"] == "runtime_notice"
         assert internal[5] == sha256_jcs(preimage) == lineage["source"]["admission_payload_hash"]
-        assert context.saver._storage.internal_execution_request_input(
+        assert context.saver._storage.executions.internal_execution_request_input(
             child.session_id, target_owner.thread_id, internal[0],
         ) == preimage["input"]
     with sqlite3.connect(_main_thread_node(context, child.session_id) / "rollout" / "index.sqlite") as connection:
@@ -2126,15 +2135,15 @@ async def test_detached_fork_uses_frozen_lineage_after_source_deletion(
     context = _production_fork_context(production_fork_container)
     source, retry_id = await _seed_retry_tool_source(context)
     source_node = _main_thread_node(context, source.session_id)
-    capture = context.saver._capture_fork_source_snapshot
+    capture = context.saver.forks.source._capture_fork_source_snapshot
 
     async def capture_then_delete(**kwargs: object):
         snapshot = await capture(**kwargs)
-        await context.sessions.delete(source.session_id)
+        await context.sessions.path_resolver.delete_subtree(idempotency_key=f"fork-delete-{source.session_id}", root_node_id=source.session_id)
         assert not source_node.exists()
         return snapshot
 
-    monkeypatch.setattr(context.saver, "_capture_fork_source_snapshot", capture_then_delete)
+    monkeypatch.setattr(context.saver.forks.source, "_capture_fork_source_snapshot", capture_then_delete)
     child = await context.forks.fork(source.session_id, mode=mode)
     assert child.context_source_session_id == source.session_id
     assert (await context.sessions.list(limit=100)).total == 1
@@ -2167,7 +2176,7 @@ async def test_generation_fork_reuses_one_durable_target_after_source_deletion(
             "SELECT COUNT(*) FROM session_creation_records WHERE purpose = 'context_fork'"
         ).fetchone()) == (1,)
     assert len(_fork_materialization_rows(context, target.session_id)) == 1
-    await context.sessions.delete(source.session_id)
+    await context.sessions.path_resolver.delete_subtree(idempotency_key=f"fork-delete-{source.session_id}", root_node_id=source.session_id)
     restarted_service = SessionContextForkService(session_service=context.sessions, checkpointer=context.saver)
     repeated = await restarted_service.fork(
         source.session_id, generation_origin=origin, title="幂等生成副本", turn_id="turn-1",
@@ -2200,7 +2209,7 @@ async def test_generation_fork_intent_drift_rejects_before_any_side_effect(
                                        idempotency_key="key-intent", generator_type_id="context-fork",
                                        generator_type_version="1")
     entered, release = asyncio.Event(), asyncio.Event()
-    capture = context.saver._capture_fork_source_snapshot
+    capture = context.saver.forks.source._capture_fork_source_snapshot
 
     async def wait_before_capture(**kwargs: object):
         entered.set()
@@ -2208,7 +2217,7 @@ async def test_generation_fork_intent_drift_rejects_before_any_side_effect(
         return await capture(**kwargs)
 
     if state == "preparing":
-        monkeypatch.setattr(context.saver, "_capture_fork_source_snapshot", wait_before_capture)
+        monkeypatch.setattr(context.saver.forks.source, "_capture_fork_source_snapshot", wait_before_capture)
     initial = asyncio.create_task(context.forks.fork(
         source.session_id, generation_origin=origin, title="冻结分叉意图", turn_id="turn-1",
     ))
@@ -2216,7 +2225,7 @@ async def test_generation_fork_intent_drift_rejects_before_any_side_effect(
         await asyncio.wait_for(entered.wait(), timeout=10)
     else:
         await initial
-        await context.sessions.delete(source.session_id)
+        await context.sessions.path_resolver.delete_subtree(idempotency_key=f"fork-delete-{source.session_id}", root_node_id=source.session_id)
     overrides: dict[str, object] = {
         "mode": "full_rollout_copy", "pinned": True, "title": "另一标题",
         "parent_node_id": source.session_id, "place_under_source": True,
@@ -2256,7 +2265,7 @@ async def test_generation_implicit_latest_fork_replays_frozen_request_after_sour
     assert "source_checkpoint_id" not in intent and "source_view_id" not in intent
     assert "request_intent_json" not in json.loads((context.sessions.path_resolver.resolve_session_node(target.session_id)
                                                    / "session.json").read_text())
-    await context.sessions.delete(source.session_id)
+    await context.sessions.path_resolver.delete_subtree(idempotency_key=f"fork-delete-{source.session_id}", root_node_id=source.session_id)
     repeated_service = SessionContextForkService(session_service=context.sessions, checkpointer=context.saver)
     before = _fork_intent_state(context)
     repeated = await repeated_service.fork(source.session_id, generation_origin=origin, title="")
@@ -2301,7 +2310,7 @@ async def test_folder_move_keeps_context_fork_kind_across_restart(
     assert moved.parent_session_id is None
     assert moved.context_source_session_id == parent.session_id
     assert manifest_path.read_bytes() == manifest_before
-    assert json.loads(manifest_before)["kind"] == "context_fork"
+    assert resolver.catalog_store.get_node(child.session_id).session_kind == "context_fork"
     assert resolver.get_node(folder_id).parent_node_id is None
     assert resolver.get_node(child.session_id).parent_node_id == folder_id
     assert _fork_materialization_rows(context, child.session_id) == journal_before
@@ -2391,16 +2400,16 @@ async def test_pinned_preparing_claim_blocks_source_deletion_before_capture(
 ) -> None:
     context = _production_fork_context(production_fork_container)
     source = await _seed_source(context)
-    generation = context.saver._storage._source_lifecycle_generation(source.session_id)
+    generation = context.saver._storage.forks._source_lifecycle_generation(source.session_id)
     entered, proceed = asyncio.Event(), asyncio.Event()
-    capture = context.saver._capture_fork_source_snapshot
+    capture = context.saver.forks.source._capture_fork_source_snapshot
 
     async def paused_capture(**kwargs: object):
         entered.set()
         await proceed.wait()
         return await capture(**kwargs)
 
-    monkeypatch.setattr(context.saver, "_capture_fork_source_snapshot", paused_capture)
+    monkeypatch.setattr(context.saver.forks.source, "_capture_fork_source_snapshot", paused_capture)
     pending = asyncio.create_task(context.forks.fork(source.session_id, pinned=True))
     try:
         await asyncio.wait_for(entered.wait(), timeout=5)
@@ -2413,8 +2422,8 @@ async def test_pinned_preparing_claim_blocks_source_deletion_before_capture(
         assert claim[2:] == (generation, "preparing")
         assert (await context.sessions.get(source.session_id)).session_id == source.session_id
         with pytest.raises(RuntimeError, match="source_retention_operation_pending"):
-            await context.sessions.delete(source.session_id)
-        assert context.saver._storage._source_lifecycle_generation(source.session_id) == generation
+            await context.sessions.path_resolver.delete_subtree(idempotency_key=f"fork-delete-{source.session_id}", root_node_id=source.session_id)
+        assert context.saver._storage.forks._source_lifecycle_generation(source.session_id) == generation
         assert _main_thread_node(context, source.session_id).is_dir()
     finally:
         proceed.set()
@@ -2435,7 +2444,7 @@ async def test_source_deletion_before_pinned_claim_aborts_prepared_target(
 
     async def prepare_then_delete(**kwargs: object):
         prepared = await prepare(**kwargs)
-        await context.sessions.delete(source.session_id)
+        await context.sessions.path_resolver.delete_subtree(idempotency_key=f"fork-delete-{source.session_id}", root_node_id=source.session_id)
         return prepared
 
     monkeypatch.setattr(context.sessions, "prepare_context_fork", prepare_then_delete)
@@ -2458,22 +2467,22 @@ async def test_unpublished_fork_proof_or_publish_failure_releases_exact_retentio
     context = _production_fork_context(production_fork_container)
     source = await _seed_source(context)
     if fault == "completion_proof":
-        afork = context.saver.afork
+        afork = context.saver.forks.afork
 
         async def corrupt_completion(**kwargs: object):
             result = await afork(**kwargs)
             return replace(result, source_snapshot_sha256="0" * 64)
 
-        monkeypatch.setattr(context.saver, "afork", corrupt_completion)
+        monkeypatch.setattr(context.saver.forks, "afork", corrupt_completion)
     else:
-        capture = context.saver._capture_fork_source_snapshot
+        capture = context.saver.forks.source._capture_fork_source_snapshot
 
         async def drift_parent_revision(**kwargs: object):
             snapshot = await capture(**kwargs)
-            context.sessions.path_resolver.update_node_name(source.session_id, "发布前修改父节点")
+            context.sessions.path_resolver.get_node(context.sessions.path_resolver.catalog_store.rename_node(source.session_id, '发布前修改父节点').node_id)
             return snapshot
 
-        monkeypatch.setattr(context.saver, "_capture_fork_source_snapshot", drift_parent_revision)
+        monkeypatch.setattr(context.saver.forks.source, "_capture_fork_source_snapshot", drift_parent_revision)
     failure = "committed fork journal.*snapshot 合同不一致" if fault == "completion_proof" else "父节点 revision 已漂移"
     with pytest.raises(RuntimeError, match=failure):
         await context.forks.fork(source.session_id, mode=mode, pinned=True, place_under_source=True)
@@ -2499,27 +2508,27 @@ async def test_production_lifespan_recovers_detached_fork_after_source_deletion(
         idempotency_key=f"detached-recovery-{crash_state}", title="源已删除的待恢复副本",
         agent_id=source.current_agent_id, parent_session_id=None, context_source_session_id=source.session_id,
     )
-    capture = context.saver._capture_fork_source_snapshot
+    capture = context.saver.forks.source._capture_fork_source_snapshot
 
     async def capture_then_delete(**kwargs: object):
         snapshot = await capture(**kwargs)
-        await context.sessions.delete(source.session_id)
+        await context.sessions.path_resolver.delete_subtree(idempotency_key=f"fork-delete-{source.session_id}", root_node_id=source.session_id)
         return snapshot
 
-    monkeypatch.setattr(context.saver, "_capture_fork_source_snapshot", capture_then_delete)
-    completion = context.saver._storage.complete_fork_materialization
+    monkeypatch.setattr(context.saver.forks.source, "_capture_fork_source_snapshot", capture_then_delete)
+    completion = context.saver._storage.forks.complete_fork_materialization
 
     def crash(**_kwargs: object) -> None:
         raise RuntimeError("detached target_committed 后中断")
 
     if crash_state == "target_committed":
-        monkeypatch.setattr(context.saver._storage, "complete_fork_materialization", crash)
+        monkeypatch.setattr(context.saver._storage.forks, "complete_fork_materialization", crash)
         with pytest.raises(RuntimeError, match="target_committed 后中断"):
-            await context.saver.afork(source_session_id=source.session_id,
+            await context.saver.forks.afork(source_session_id=source.session_id,
                                      target_session_id=target.session_id, creation_record=record)
-        monkeypatch.setattr(context.saver._storage, "complete_fork_materialization", completion)
+        monkeypatch.setattr(context.saver._storage.forks, "complete_fork_materialization", completion)
     else:
-        await context.saver.afork(source_session_id=source.session_id,
+        await context.saver.forks.afork(source_session_id=source.session_id,
                                  target_session_id=target.session_id, creation_record=record)
     production_fork_container.workspace_activity_service.store.close()
     production_fork_container.session_catalog.close()
@@ -2553,7 +2562,7 @@ async def test_fork_of_imported_internal_lineage_uses_local_committed_proof(
         ).fetchone()
     assert head == (first_checkpoint.checkpoint["id"],)
     assert first_checkpoint.checkpoint["id"] != "cp-retry-final"
-    await context.sessions.delete(source.session_id)
+    await context.sessions.path_resolver.delete_subtree(idempotency_key=f"fork-delete-{source.session_id}", root_node_id=source.session_id)
     second = await context.forks.fork(first.session_id)
     assert second.context_source_session_id == first.session_id
     restored = await _get_tuple(context, second.session_id)

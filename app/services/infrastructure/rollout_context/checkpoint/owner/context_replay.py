@@ -17,7 +17,7 @@ class ContextReplayMixin:
         acceptance_idempotency_key: str | None = None,
     ) -> dict[str, object]:
         """显式创建新 Turn 的 replay；不复用 source Turn/root。"""
-        return self._storage.replay_as_new_turn(
+        return self._storage.executions.replay_as_new_turn(
             session_id,
             thread_id,
             source_turn_id=source_turn_id,

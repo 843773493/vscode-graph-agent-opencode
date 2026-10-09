@@ -10,6 +10,7 @@ const ACTION_LABELS: Record<SessionResourceAction, string> = {
   resume: "继续",
   cancel: "取消",
   delete: "删除",
+  reconcile: "对账",
 };
 
 export function actionLabelForKind(

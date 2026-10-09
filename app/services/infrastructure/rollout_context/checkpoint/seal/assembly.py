@@ -69,7 +69,7 @@ def _seal_tool_pairings(
     )
     if not entries:
         return ()
-    items = owner._storage.read_items(
+    items = owner._storage.storage.read_items(
         snapshot.session_id,
         snapshot.thread_id,
         checkpoint_ns=checkpoint_ns,
@@ -156,7 +156,7 @@ def seal_snapshot(
             raise ValueError(
                 "assembly-idempotency-conflict: snapshot seal key/input 不一致"
             )
-        committed = owner._storage.get_context_assembly(
+        committed = owner._storage.assemblies.get_context_assembly(
             session_id,
             thread_id,
             assembly_id=registered.assembly_id,
@@ -168,7 +168,7 @@ def seal_snapshot(
             raise ValueError(
                 "assembly-idempotency-conflict: snapshot 与已提交 assembly 不一致"
             )
-        detail_ref = owner._storage.get_context_assembly_detail_ref(
+        detail_ref = owner._storage.assemblies.get_context_assembly_detail_ref(
             session_id,
             thread_id,
             assembly_id=committed.assembly_id,
@@ -180,7 +180,7 @@ def seal_snapshot(
             )
         if detail_ref is not None:
             record = detail_record_from_mapping(
-                owner._storage.get_context_plan_detail(
+                owner._storage.assemblies.get_context_plan_detail(
                     session_id,
                     thread_id,
                     detail_ref=detail_ref,
@@ -206,7 +206,7 @@ def seal_snapshot(
             raise ValueError(
                 "assembly-idempotency-conflict: 无正文的 header detail flags 不一致"
             )
-        return owner._storage.seal_context_assembly(
+        return owner._storage.assemblies.seal_context_assembly(
             session_id,
             thread_id,
             committed,
@@ -240,7 +240,7 @@ def seal_snapshot(
                 sensitive=sensitive_detail,
                 checkpoint_ns=checkpoint_ns,
             )
-        return owner._storage.seal_context_assembly(
+        return owner._storage.assemblies.seal_context_assembly(
             session_id,
             thread_id,
             snapshot,

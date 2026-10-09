@@ -17,6 +17,7 @@ const build = await Bun.build({
   entrypoints: [
     path.join(projectRoot, "src/clients/web/src/state/session/sessionCatalogOutbox.ts"),
     path.join(projectRoot, "src/clients/web/src/state/session/sessionCatalogOutboxStore.ts"),
+    path.join(projectRoot, "src/clients/web/src/state/session/sessionCatalogProjection.ts"),
   ],
   target: "browser",
   outdir: bundleDirectory,
@@ -30,7 +31,7 @@ if (!build.success) {
 const bundlePaths = new Map(
   build.outputs.map((output) => [`/${path.basename(output.path)}`, output.path]),
 );
-for (const moduleName of ["sessionCatalogOutbox.js", "sessionCatalogOutboxStore.js"]) {
+for (const moduleName of ["sessionCatalogOutbox.js", "sessionCatalogOutboxStore.js", "sessionCatalogProjection.js"]) {
   if (!bundlePaths.has(`/${moduleName}`)) {
     throw new Error(`浏览器 harness 缺少生产模块: ${moduleName}`);
   }
@@ -43,7 +44,8 @@ const html = `<!doctype html>
     <script type="module">
       import * as state from "/sessionCatalogOutbox.js";
       import * as storage from "/sessionCatalogOutboxStore.js";
-      window.outboxModules = { state, storage };
+      import * as projection from "/sessionCatalogProjection.js";
+      window.outboxModules = { state, storage, projection };
     </script>
   </body>
 </html>`;
@@ -357,6 +359,76 @@ try {
     "主键冲突必须回滚高水位并保留原记录",
   );
 
+  const chainPartition = { ...partition, workspaceId: `pending-parent-${randomUUID()}` };
+  const chainIds = Array.from({ length: 4 }, () => `op_${randomUUID().replaceAll("-", "")}`);
+  const chain = await pageA.evaluate(async ({ partitionValue, ids }) => {
+    const { state, storage, projection } = window.outboxModules;
+    let outbox = state.createCatalogOutbox(partitionValue);
+    for (const [index, name] of ["父目录", "子目录", "孙目录", "独立目录"].entries()) {
+      const parent = index === 1 || index === 2
+        ? state.catalogOutboxParentCreation(outbox, ids[index - 1]) : null;
+      outbox = state.addCatalogOutboxIntent(outbox, ids[index], {
+        kind: "create_folder", name, parentNodeId: parent?.parentNodeId ?? null,
+        parentCreatedByOperationId: parent?.createdBy,
+      }, { baseCatalogRevision: 7, dependsOn: parent ? [parent.createdBy] : [] });
+      const operation = outbox.operations.at(-1);
+      const inserted = await storage.persistCatalogOutboxPendingOperation(window.outboxPort, partitionValue, operation);
+      outbox = state.assignCatalogOutboxOperationSequence(outbox, ids[index], inserted.client_sequence);
+      outbox = state.markCatalogOutboxOperationPersisted(outbox, ids[index]);
+    }
+    const input = { confirmedNodes: [], outbox };
+    return {
+      child: projection.projectPendingCatalogChildren(ids[0], input).items
+        .map((node) => [node.name, node.parent_node_id]),
+      grandchild: projection.projectPendingCatalogChildren(ids[1], input).items
+        .map((node) => [node.name, node.parent_node_id]),
+    };
+  }, { partitionValue: chainPartition, ids: chainIds });
+  equal(chain.child, [["子目录", chainIds[0]]], "pending 父目录内必须展示原子项");
+  equal(chain.grandchild, [["孙目录", chainIds[1]]], "pending 父链不能把孙项错误投影到根");
+  await pageA.reload({ waitUntil: "load" });
+  await pageA.waitForFunction(() => Boolean(window.outboxModules));
+  const recoveredChain = await pageA.evaluate(async ({ partitionValue, ids }) => {
+    const { state, storage, projection } = window.outboxModules;
+    const database = await storage.openCatalogOutboxDatabase();
+    window.outboxDatabase = database;
+    window.outboxPort = storage.createIndexedDbCatalogOutboxPort(database);
+    const outbox = await storage.loadCatalogOutbox(window.outboxPort, partitionValue);
+    const intents = state.catalogOutboxBatchToIntents(state.planCatalogOutboxBatch(outbox, { maxBatchSize: 10 }));
+    const failed = state.applyCatalogOutboxReceipts(outbox, outbox.operations.slice(0, 3).map((operation, index) => ({
+      operation_id: operation.client_operation_id, client_sequence: operation.client_sequence,
+      queue_seq: operation.client_sequence, kind: "create_folder",
+      state: index === 0 ? "rejected" : "dependency_failed", created_node_id: null,
+      committed_catalog_revision: null, error_code: "parent_creation_failed",
+      error_detail: "父目录被明确拒绝", pending_settlement: false,
+      receipt_revision: 2, updated_at: "2026-10-08T00:00:00Z",
+    })));
+    const pruned = state.pruneReconciledCatalogOutbox(failed, 7, ids.slice(0, 3));
+    await storage.deleteCatalogOutboxOperations(window.outboxPort, partitionValue, ids.slice(0, 3));
+    const root = projection.projectCatalogBranch({
+      revision: "fixture-7", catalog_revision: 7, parent_node_id: null,
+      items: [], cursor: null, total: 0, consistency_warning: null,
+    }, { confirmedNodes: [], outbox: pruned });
+    database.close();
+    window.outboxDatabase = null;
+    window.outboxPort = null;
+    return {
+      states: outbox.operations.map((operation) => operation.state),
+      replay: intents.map((intent) => [intent.client_operation_id, intent.created_by_operation_id, intent.parent_node_id]),
+      afterFailureNames: root.items.map((node) => node.name),
+      confirmedTotal: root.total,
+    };
+  }, { partitionValue: chainPartition, ids: chainIds });
+  equal(recoveredChain.states, ["persisted", "persisted", "persisted", "persisted"], "刷新重开后父链可按原身份重放");
+  equal(recoveredChain.replay, [
+    [chainIds[0], null, null], [chainIds[1], chainIds[0], null],
+    [chainIds[2], chainIds[1], null], [chainIds[3], null, null],
+  ], "刷新重开必须保留同一父创建引用，不将 client_ref 交给后端父 ID");
+  equal(recoveredChain.afterFailureNames, ["独立目录"], "父创建失败后终结整个依赖链并保留独立意图");
+  assert(recoveredChain.confirmedTotal === 0, "pending 数量不得改写 confirmed total");
+  const chainAfterFailure = await readPartition(pageA, chainPartition);
+  equal(chainAfterFailure.map((record) => record.operation.client_operation_id), [chainIds[3]], "失败清理后的真实 IDB 重开不能复活依赖链");
+
   assert(browserErrors.length === 0, `浏览器 harness 出错: ${browserErrors.join("; ")}`);
   outcome = {
     status: "passed",
@@ -367,9 +439,12 @@ try {
     restored_operation_ids: restored.operations.map((operation) => operation.client_operation_id),
     duplicate_operation_id_rejected: duplicateIdRejected,
     conflicting_primary_key_rejected: sequenceConflictRejected,
+    pending_parent_chain: { ids: chainIds, ...chain, ...recoveredChain,
+      retained_after_failure_reopen: chainAfterFailure.map((record) => record.operation.client_operation_id) },
     artifacts: [
       path.relative(projectRoot, path.join(bundleDirectory, "sessionCatalogOutbox.js")),
       path.relative(projectRoot, path.join(bundleDirectory, "sessionCatalogOutboxStore.js")),
+      path.relative(projectRoot, path.join(bundleDirectory, "sessionCatalogProjection.js")),
     ],
   };
   await writeFile(

@@ -80,9 +80,11 @@ class FakeJobService:
         session_id: str,
         boundary: str,
         *,
+        thread_id: str,
         tool_result_available: bool,
     ) -> None:
         assert session_id == self.job.session_id
+        assert thread_id == self.job.thread_id
         assert boundary == "after_interrupt"
         self.boundary_notifications.append((boundary, tool_result_available))
 
@@ -307,7 +309,7 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
     assert event_bus.events
     assert event_bus.events[-1]["event_type"] == "session_interrupted"
 
-    projections = saver._storage.read_item_projections(session_id)
+    projections = saver._storage.storage.read_item_projections(session_id)
     reminders = [
         projection
         for projection in projections
@@ -327,12 +329,12 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
     else:
         assert "文本生成" in reminder_content
 
-    with saver._storage._connect(binding.thread_id, "", session_id=session_id, read_only=True) as connection:
+    with saver._storage.storage._connect(binding.thread_id, "", session_id=session_id, read_only=True) as connection:
         metadata_json = connection.execute(
-            "SELECT metadata_json FROM item_catalog WHERE item_id = ?",
+            "SELECT projection_manifest_json FROM item_catalog WHERE item_id = ?",
             (reminder["item_id"],),
         ).fetchone()[0]
-    metadata = json.loads(metadata_json)
+    metadata = json.loads(metadata_json)["extensions"]["boxteam.checkpoint.annotations"]["value"]
     assert metadata["source"] == "user_interrupt"
     assert metadata["user_initiated"] is True
     assert metadata["phase"] == phase
@@ -404,7 +406,7 @@ async def test_user_interrupt_submits_reminder_without_existing_checkpoint(
     assert result.job_id == job_id
     assert job_service.control_requests
     assert SessionInterruptState.get(session_id).user_interrupt_reminder_injected is True
-    projections = saver._storage.read_item_projections(session_id)
+    projections = saver._storage.storage.read_item_projections(session_id)
     reminders = [
         projection
         for projection in projections

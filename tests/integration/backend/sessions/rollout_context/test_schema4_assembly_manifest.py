@@ -81,8 +81,8 @@ def assembly_case(
         payload="assembly 恢复必须使用同一 plan registry",
         payload_kind="text",
     )
-    with saver._storage._connect(
-        saver._storage.main_thread_id(session_id),
+    with saver._storage.storage._connect(
+        saver._storage.storage.main_thread_id(session_id),
         "",
         read_only=True,
         session_id=session_id,
@@ -98,11 +98,11 @@ def assembly_case(
             saver,
             sessions,
             session_id,
-            saver._storage.main_thread_id(session_id),
+            saver._storage.storage.main_thread_id(session_id),
             str(accepted["turn_id"]),
             str(accepted["initial_execution_id"]),
             connection,
-            saver._storage.jsonl_path(session_id),
+            saver._storage.storage.jsonl_path(session_id),
         )
     finally:
         connection.close()
@@ -168,7 +168,7 @@ def _candidate(case: AssemblyCase, plan_id: str) -> ContextAssemblySnapshot:
         detail=contributions[0].body,
         source_revision=contributions[0].source_revision,
     )
-    case.saver._storage.register_context_plan_detail(detail)
+    case.saver._storage.assemblies.register_context_plan_detail(detail)
     return ContextPlanComposer().assembly(
         plan=registered.draft,
         assembly_id=assembly_id,
@@ -184,7 +184,7 @@ def _candidate(case: AssemblyCase, plan_id: str) -> ContextAssemblySnapshot:
 
 def _seal(case: AssemblyCase, plan_id: str) -> ContextAssemblySnapshot:
     snapshot = _candidate(case, plan_id)
-    case.saver._storage.seal_context_assembly(
+    case.saver._storage.assemblies.seal_context_assembly(
         case.session_id, case.thread_id, snapshot,
         seal_idempotency_key=f"seal-{plan_id}",
         seal_input_hash=sha256_jcs("storage-seal-test-input"),
@@ -463,7 +463,7 @@ def test_domain_enum_snapshot_uses_canonical_json_boundary(assembly_case):
     )
     snapshot.validate_hashes()
     before_jsonl = case.jsonl_path.read_bytes()
-    case.saver._storage.seal_context_assembly(
+    case.saver._storage.assemblies.seal_context_assembly(
         case.session_id, case.thread_id, snapshot,
         seal_idempotency_key="seal-enum-boundary",
         seal_input_hash=sha256_jcs("storage-seal-test-input"),
@@ -525,14 +525,14 @@ def test_omitted_existing_contribution_binding_uses_plan_owner(
     before = _state(case)
     if contribution_id != "omitted-source":
         with pytest.raises(ValueError, match="plan-order-integrity|source-mismatch"):
-            case.saver._storage.seal_context_assembly(
+            case.saver._storage.assemblies.seal_context_assembly(
                 case.session_id, case.thread_id, snapshot,
                 seal_idempotency_key="seal-omitted-binding",
                 seal_input_hash=sha256_jcs("storage-seal-test-input"),
             )
         assert _state(case) == before
         return
-    case.saver._storage.seal_context_assembly(
+    case.saver._storage.assemblies.seal_context_assembly(
         case.session_id, case.thread_id, snapshot,
         seal_idempotency_key="seal-omitted-binding",
         seal_input_hash=sha256_jcs("storage-seal-test-input"),

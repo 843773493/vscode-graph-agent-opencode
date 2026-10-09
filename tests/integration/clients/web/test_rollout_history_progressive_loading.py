@@ -30,7 +30,7 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from tests.integration.stubs.http_stubs import openai_chat_stub
 from tests.support.custom_tool_test_workspace import (
     prepare_custom_tool_test_workspace,
@@ -188,7 +188,7 @@ def seed_long_rollout_history(workspace_root: Path) -> None:
     turn_order: list[str] = []
     user_texts: dict[str, str] = {}
     result_turns: set[str] = set()
-    for item in RolloutStorage(sessions_dir).read_items(STATIC_LONG_SESSION_ID):
+    for item in RolloutContextStore(sessions_dir).storage.read_items(STATIC_LONG_SESSION_ID):
         if item.turn_id is None:
             continue
         if item.semantic_kind == "user_input":
@@ -207,7 +207,7 @@ def seed_long_rollout_history(workspace_root: Path) -> None:
         )
     shutil.rmtree(session_dir / "rollout")
     saver = RolloutCheckpointSaver(sessions_dir)
-    owner = saver.resolve_main_thread_owner(STATIC_LONG_SESSION_ID)
+    owner = saver.forks.source.resolve_main_thread_owner(STATIC_LONG_SESSION_ID)
     codec = LangChainMessageCodec()
     timestamp = datetime.now(UTC).isoformat()
     for index, turn_id in enumerate(turn_order, start=1):
@@ -391,17 +391,11 @@ def browser_backend(
     # stub provider，不修改只读 fixture 源目录。
     sessions_dir = workspace_root / ".boxteam" / "sessions"
     with fixture_catalog_scope():
-        session_path = (
-            get_session_path_resolver(sessions_dir).resolve_session_node(
-                STATIC_LONG_SESSION_ID
-            )
-            / "session.json"
-        )
-        session = json.loads(session_path.read_text(encoding="utf-8"))
-        session["current_provider_id"] = "primary"
-        session_path.write_text(
-            json.dumps(session, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
+        resolver = get_session_path_resolver(sessions_dir)
+        node = resolver.catalog_store.get_node(STATIC_LONG_SESSION_ID)
+        resolver.catalog_store.update_session_configuration(
+            STATIC_LONG_SESSION_ID, current_agent_id=node.current_agent_id,
+            current_provider_id="primary", updated_at=datetime.fromisoformat(node.updated_at),
         )
     with openai_chat_stub(port_block.port(10)):
         backend = start_backend_process(

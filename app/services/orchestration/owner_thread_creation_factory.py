@@ -17,6 +17,7 @@ owner Session 目录惰性建立并缓存，gate 为工厂级共享实例（同�
 from __future__ import annotations
 
 from collections import OrderedDict
+from collections.abc import Callable
 from pathlib import Path
 
 from app.agents.graph_binding import compute_capability_profile_hash
@@ -24,6 +25,9 @@ from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
+from app.core.session_control_store.collaboration_fanout import (
+    CollaborationFanoutRecord,
+)
 from app.core.session_lifecycle_gate import NavigationTopologyGate
 from app.core.thread_creation import ThreadCreationService
 
@@ -68,6 +72,14 @@ class OwnerThreadCreationFactory:
         )
         self._gate = NavigationTopologyGate(self._sessions_root)
         self._services: OrderedDict[str, ThreadCreationService] = OrderedDict()
+        self._collaboration_publication: Callable[[CollaborationFanoutRecord], None] | None = None
+        self._collaboration_lock = None
+
+    def bind_collaboration_publication(self, callback: Callable[[CollaborationFanoutRecord], None], publication_lock) -> None:
+        self._collaboration_publication = callback
+        self._collaboration_lock = publication_lock
+        for service in self._services.values():
+            service.control_store.bind_collaboration_publication(callback, publication_lock)
 
     def for_owner_session(self, session_id: str) -> ThreadCreationService:
         """返回绑定 owner Session 的 ThreadCreationService（进程内缓存）。"""
@@ -78,6 +90,8 @@ class OwnerThreadCreationFactory:
             return service
         session_dir = self._session_dir_for(session_id)
         control_store = SessionControlStore(session_dir / CONTROL_DATABASE_NAME)
+        if self._collaboration_publication is not None:
+            control_store.bind_collaboration_publication(self._collaboration_publication, self._collaboration_lock)
         service = ThreadCreationService(
             store=resolver.catalog_store,
             control_store=control_store,

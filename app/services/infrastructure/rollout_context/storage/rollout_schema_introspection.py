@@ -276,6 +276,13 @@ class RolloutSchemaIntrospectionMixin:
                 "rollout JSONL message format 版本不受支持: "
                 f"database={row[1]}, supported={storage_version.MESSAGE_FORMAT_VERSION}"
             )
+        if connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='index' "
+            "AND name='item_catalog_background_result_identity'"
+        ).fetchone() is None:
+            raise RuntimeError(
+                "schema-incompatible: rollout 缺少必需的 canonical ToolResult identity 索引"
+            )
         validate_schema_journal(connection, schema_version)
 
     @staticmethod

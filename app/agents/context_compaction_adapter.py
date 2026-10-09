@@ -6,12 +6,12 @@ from deepagents.backends import CompositeBackend
 from langchain_core.messages import AnyMessage, BaseMessage
 
 from app.agents.agent_factory import build_runtime_for_agent
-from app.agents.cache_preserving_summarization import (
-    NoDurableOwnerCompactionPreflight,
-    apply_summarization_event,
-    build_safe_compaction_partition,
+from app.agents.summarization.factory import (
     create_cache_preserving_summarization_middleware,
 )
+from app.agents.summarization.planning import build_safe_compaction_partition
+from app.agents.summarization.preflight import NoDurableOwnerCompactionPreflight
+from app.agents.summarization.projection import apply_summarization_event
 from app.services.infrastructure.config_service import ConfigService
 
 

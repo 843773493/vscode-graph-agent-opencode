@@ -40,6 +40,7 @@ import { useMainAreaResize } from "./hooks/panel/useMainAreaResize";
 import { useBottomPanelResize } from "./hooks/panel/useBottomPanelResize";
 import { useNodeDebugWorkbench } from "./hooks/nodeDebug/useNodeDebugWorkbench";
 import { useChildThreadLoader } from "./hooks/session/useChildThreadLoader";
+import { useChildThreadConversation } from "./hooks/sessionTurnHistory/useChildThreadConversation";
 import { useGatewayExtensionResources } from "./hooks/gatewayExtensions/useGatewayExtensionResources";
 import { useGatewayExtensionWindow } from "./hooks/gatewayExtensions/useGatewayExtensionWindow";
 import { useWorkbenchPanelRouting } from "./hooks/panel/useWorkbenchPanelRouting";
@@ -395,6 +396,13 @@ export default function AppShell() {
     apiPort: resolvedApiPort,
     workspaceId: activeSessionWorkspaceId,
     sessionId: activeSession?.session_id ?? null,
+    enabled: childThreadPanelActive,
+  });
+  const childConversation = useChildThreadConversation({
+    apiPort: resolvedApiPort,
+    workspaceId: activeSessionWorkspaceId,
+    sessionId: activeSession?.session_id ?? null,
+    threads: childThreads.threads,
     enabled: childThreadPanelActive,
   });
 
@@ -1068,6 +1076,7 @@ export default function AppShell() {
                               void childThreads.refresh();
                             }}
                             onSelectThread={selectDebugThread}
+                            conversation={childConversation}
                           />
                         </>
                       )

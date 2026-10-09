@@ -94,7 +94,7 @@ def prefix_has_open_tool_group(
 class RolloutCompactionPreflightOwnerMixin:
     """compaction preflight 只读 owner：state 切点 → durable view 前缀闭包。
 
-    由 RolloutStorage 组合；唯一配对事实来源仍是 tool_calls 投影与
+    由 RolloutContextStore 组合；唯一配对事实来源仍是 tool_calls 投影与
     validate_tool_protocol_closure，本模块不维护第二套配对判断。
     """
 
@@ -124,87 +124,83 @@ class RolloutCompactionPreflightOwnerMixin:
                 raise TypeError(
                     f"compaction preflight 切点必须是 int，实际值: {cutoff!r}"
                 )
-        with self._lock(thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-            with self._connect(
-                thread_id, checkpoint_ns, session_id=session_id
-            ) as connection:
-                self._require_v2_runtime(connection)
-                head = self._checkpoint_row(connection, checkpoint_ns, None)
-                if head is None:
-                    raise RuntimeError(
-                        "compaction preflight 缺少 durable owner: "
-                        f"session={session_id} checkpoint_ns={checkpoint_ns!r} "
-                        "没有 active checkpoint"
-                    )
-                view_id = strict_text(head[6], field="checkpoints.view_id")
-                view_sequences = self._view_message_sequences(
-                    thread_id,
-                    checkpoint_ns,
-                    view_id,
-                    set(),
-                    session_id=session_id,
-                    connection=connection,
+        with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
+            self._storage._require_v2_runtime(connection)
+            head = self._checkpoint_row(connection, checkpoint_ns, None)
+            if head is None:
+                raise RuntimeError(
+                    "compaction preflight 缺少 durable owner: "
+                    f"session={session_id} checkpoint_ns={checkpoint_ns!r} "
+                    "没有 active checkpoint"
                 )
-                view_positions = {
-                    sequence: index for index, sequence in enumerate(view_sequences)
-                }
-                codec = self._codec()
-                state_sequences: list[int | None] = []
-                for index, message in enumerate(state_messages):
-                    message_id = codec.message_id(message, index)
-                    row = connection.execute(
-                        "SELECT message_sequence FROM messages WHERE message_id = ?",
-                        (message_id,),
-                    ).fetchone()
-                    if row is None:
-                        # in-flight 未持久化消息只允许出现在已持久化前缀之后。
-                        state_sequences.append(None)
-                        continue
-                    sequence = strict_non_negative_int(
-                        row[0], field="messages.message_sequence"
-                    )
-                    if sequence not in view_positions:
-                        raise RuntimeError(
-                            "compaction preflight 映射损坏: state 消息已持久化"
-                            f"但不在 active view 内 index={index} "
-                            f"message_id={message_id} message_sequence={sequence}"
-                        )
-                    state_sequences.append(sequence)
-                persisted = list(
-                    dict.fromkeys(
-                        sequence
-                        for sequence in state_sequences
-                        if sequence is not None
-                    )
+            view_id = strict_text(head[6], field="checkpoints.view_id")
+            view_sequences = self._storage._view_message_sequences(
+                thread_id,
+                checkpoint_ns,
+                view_id,
+                set(),
+                session_id=session_id,
+                connection=connection,
+            )
+            view_positions = {
+                sequence: index for index, sequence in enumerate(view_sequences)
+            }
+            codec = self._storage._codec()
+            state_sequences: list[int | None] = []
+            for index, message in enumerate(state_messages):
+                message_id = codec.message_id(message, index)
+                row = connection.execute(
+                    "SELECT message_sequence FROM messages WHERE message_id = ?",
+                    (message_id,),
+                ).fetchone()
+                if row is None:
+                    # in-flight 未持久化消息只允许出现在已持久化前缀之后。
+                    state_sequences.append(None)
+                    continue
+                sequence = strict_non_negative_int(
+                    row[0], field="messages.message_sequence"
                 )
-                if persisted != view_sequences[: len(persisted)]:
+                if sequence not in view_positions:
                     raise RuntimeError(
-                        "compaction preflight 映射损坏: state 持久化前缀与 "
-                        "active view 前缀顺序不一致 "
-                        f"persisted={persisted[:8]} view={view_sequences[:8]}"
+                        "compaction preflight 映射损坏: state 消息已持久化"
+                        f"但不在 active view 内 index={index} "
+                        f"message_id={message_id} message_sequence={sequence}"
                     )
-                safe: set[int] = set()
-                for cutoff in candidates:
-                    if cutoff < 0 or cutoff > len(state_messages):
-                        raise ValueError(
-                            "compaction preflight 切点超出 state 消息范围: "
-                            f"cutoff={cutoff}, state_messages={len(state_messages)}"
-                        )
-                    if prefix_has_open_tool_group(state_messages, cutoff):
-                        continue
-                    durable_cutoff = sum(
-                        1
-                        for sequence in state_sequences[:cutoff]
-                        if sequence is not None
+                state_sequences.append(sequence)
+            persisted = list(
+                dict.fromkeys(
+                    sequence
+                    for sequence in state_sequences
+                    if sequence is not None
+                )
+            )
+            if persisted != view_sequences[: len(persisted)]:
+                raise RuntimeError(
+                    "compaction preflight 映射损坏: state 持久化前缀与 "
+                    "active view 前缀顺序不一致 "
+                    f"persisted={persisted[:8]} view={view_sequences[:8]}"
+                )
+            safe: set[int] = set()
+            for cutoff in candidates:
+                if cutoff < 0 or cutoff > len(state_messages):
+                    raise ValueError(
+                        "compaction preflight 切点超出 state 消息范围: "
+                        f"cutoff={cutoff}, state_messages={len(state_messages)}"
                     )
-                    try:
-                        validate_tool_protocol_closure(
-                            connection,
-                            view_sequences,
-                            durable_cutoff,
-                        )
-                    except ToolProtocolBoundaryConflict:
-                        continue
-                    safe.add(cutoff)
-                return frozenset(safe)
+                if prefix_has_open_tool_group(state_messages, cutoff):
+                    continue
+                durable_cutoff = sum(
+                    1
+                    for sequence in state_sequences[:cutoff]
+                    if sequence is not None
+                )
+                try:
+                    validate_tool_protocol_closure(
+                        connection,
+                        view_sequences,
+                        durable_cutoff,
+                    )
+                except ToolProtocolBoundaryConflict:
+                    continue
+                safe.add(cutoff)
+            return frozenset(safe)

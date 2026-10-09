@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_session_path_resolver
 from app.schemas.event import (
     AgentStartEvent,
@@ -642,7 +643,7 @@ async def test_store_rejects_manual_session_move_before_writing(
     store, source = _create_store(tmp_path, session_bundle_factory, session_id)
     resolver = get_session_path_resolver(tmp_path)
 
-    resolver.create_folder(name="手工移动目标", parent_node_id=None)
+    resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '手工移动目标').node_id)
     # SQLite catalog 是唯一权威；把日期桶目录手工挪到 sessions 树外，
     # 解析必须 fail closed，不扫描物理树。
     target = tmp_path / "手工挪走" / source.name

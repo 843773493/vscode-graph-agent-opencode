@@ -5,6 +5,7 @@
 // source: boxteam/workspace/v2/file_events.proto
 
 /* eslint-disable */
+import { WorkspaceDirectoryRevisionDTO, WorkspaceFileListDTO } from "./public.js";
 
 export const protobufPackage = "boxteam.workspace.v2";
 
@@ -16,6 +17,10 @@ export interface WorkspaceFileChange {
 export interface WorkspaceFileChangeBatch {
   changes: WorkspaceFileChange[];
   overflow: boolean;
+  directories: WorkspaceDirectoryRevisionDTO[];
+  event_id: number;
+  invalidated_roots: string[];
+  snapshots: WorkspaceFileListDTO[];
 }
 
 export interface SseError {
@@ -57,7 +62,7 @@ export const WorkspaceFileChange: MessageFns<WorkspaceFileChange> = {
 };
 
 function createBaseWorkspaceFileChangeBatch(): WorkspaceFileChangeBatch {
-  return { changes: [], overflow: false };
+  return { changes: [], overflow: false, directories: [], event_id: 0, invalidated_roots: [], snapshots: [] };
 }
 
 export const WorkspaceFileChangeBatch: MessageFns<WorkspaceFileChangeBatch> = {
@@ -67,6 +72,16 @@ export const WorkspaceFileChangeBatch: MessageFns<WorkspaceFileChangeBatch> = {
         ? object.changes.map((e: any) => WorkspaceFileChange.fromJSON(e))
         : [],
       overflow: isSet(object.overflow) ? globalThis.Boolean(object.overflow) : false,
+      directories: globalThis.Array.isArray(object?.directories)
+        ? object.directories.map((e: any) => WorkspaceDirectoryRevisionDTO.fromJSON(e))
+        : [],
+      event_id: isSet(object.event_id) ? globalThis.Number(object.event_id) : 0,
+      invalidated_roots: globalThis.Array.isArray(object?.invalidated_roots)
+        ? object.invalidated_roots.map((e: any) => globalThis.String(e))
+        : [],
+      snapshots: globalThis.Array.isArray(object?.snapshots)
+        ? object.snapshots.map((e: any) => WorkspaceFileListDTO.fromJSON(e))
+        : [],
     };
   },
 
@@ -78,6 +93,18 @@ export const WorkspaceFileChangeBatch: MessageFns<WorkspaceFileChangeBatch> = {
     if (message.overflow !== false) {
       obj.overflow = message.overflow;
     }
+    if (message.directories?.length) {
+      obj.directories = message.directories.map((e) => WorkspaceDirectoryRevisionDTO.toJSON(e));
+    }
+    if (message.event_id !== 0) {
+      obj.event_id = Math.round(message.event_id);
+    }
+    if (message.invalidated_roots?.length) {
+      obj.invalidated_roots = message.invalidated_roots;
+    }
+    if (message.snapshots?.length) {
+      obj.snapshots = message.snapshots.map((e) => WorkspaceFileListDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -88,6 +115,10 @@ export const WorkspaceFileChangeBatch: MessageFns<WorkspaceFileChangeBatch> = {
     const message = createBaseWorkspaceFileChangeBatch();
     message.changes = object.changes?.map((e) => WorkspaceFileChange.fromPartial(e)) || [];
     message.overflow = object.overflow ?? false;
+    message.directories = object.directories?.map((e) => WorkspaceDirectoryRevisionDTO.fromPartial(e)) || [];
+    message.event_id = object.event_id ?? 0;
+    message.invalidated_roots = object.invalidated_roots?.map((e) => e) || [];
+    message.snapshots = object.snapshots?.map((e) => WorkspaceFileListDTO.fromPartial(e)) || [];
     return message;
   },
 };

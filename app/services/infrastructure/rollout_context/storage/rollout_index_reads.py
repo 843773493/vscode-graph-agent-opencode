@@ -10,11 +10,11 @@ from collections.abc import (
 )
 from contextlib import contextmanager
 
-from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutCheckpointIndex,
     RolloutManifest,
+    RolloutNotMaterializedError,
     RolloutReadSnapshot,
     _RolloutFileLock,
 )
@@ -41,18 +41,35 @@ class RolloutIndexMixin:
         root = self._host.root(session_id, checkpoint_ns, thread_id=thread_id)
         jsonl_path = root / "rollout.jsonl"
         index_path = root / "index.sqlite"
-        if not root.is_dir() or not jsonl_path.is_file() or not index_path.is_file():
-            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-        file_lock = _RolloutFileLock(root.parent / ".rollout.write.lock", exclusive=False)
+        lock_path = root.parent / ".rollout.write.lock"
+        if (
+            not root.exists() and not root.is_symlink()
+            and not lock_path.exists() and not lock_path.is_symlink()
+        ):
+            raise RolloutNotMaterializedError(
+                f"rollout 尚未物化: session_id={session_id}, thread_id={thread_id}, root={root}"
+            )
+        file_lock = _RolloutFileLock(lock_path, exclusive=False)
+        if not lock_path.is_file() or lock_path.is_symlink():
+            raise RuntimeError(f"recovery_required: rollout 缺少既有普通写锁文件: {lock_path}")
         file_lock.acquire()
         connection: sqlite3.Connection | None = None
         try:
+            if (
+                not root.is_dir() or root.is_symlink()
+                or not jsonl_path.is_file() or jsonl_path.is_symlink()
+                or not index_path.is_file() or index_path.is_symlink()
+            ):
+                raise RuntimeError(
+                    f"recovery_required: rollout 权威文件缺失或路径非法；禁止读取时重建: {root}"
+                )
             connection = self._host._connect(
                 thread_id,
                 checkpoint_ns,
                 session_id=session_id,
                 read_only=True,
             )
+            connection.execute("BEGIN")
             self._validate_schema_state(connection)
             self._host._validate_reasoning_projection_connection(connection)
             self._host._require_v2_runtime(connection)
@@ -79,36 +96,17 @@ class RolloutIndexMixin:
                 field="database_meta.committed_jsonl_offset",
             )
             if jsonl_path.stat().st_size < committed_offset:
-                raise RuntimeError("rollout.jsonl 小于 SQLite 已提交偏移，无法安全恢复")
+                raise RuntimeError("recovery_required: rollout.jsonl 小于 SQLite 已提交偏移")
             integrity = (
                 connection.execute("PRAGMA integrity_check").fetchone()[0]
                 if validate_integrity
                 else "ok"
             )
             if integrity != "ok":
-                connection.rollback()
-                connection.close()
-                file_lock.release()
-                with (
-                    self._host._lock(
-                        thread_id, checkpoint_ns, session_id=session_id
-                    ),
-                    self._host._connect(
-                        thread_id, checkpoint_ns, session_id=session_id
-                    ) as writable,
-                ):
-                    writable.execute(
-                        "UPDATE database_meta SET database_state = 'recovery_required', updated_at = ? WHERE singleton_id = 1",
-                        (_now(),),
-                    )
-                index_path = self._host.index_path(
-                    session_id, checkpoint_ns, thread_id=thread_id
-                )
                 raise RuntimeError(
-                    "rollout SQLite integrity_check 失败: "
+                    "recovery_required: rollout SQLite integrity_check 失败: "
                     f"{index_path}: {integrity}"
                 )
-            connection.execute("BEGIN")
             manifest = self._manifest_from_connection(connection, checkpoint_ns)
         except sqlite3.DatabaseError as error:
             if connection is not None:
@@ -172,6 +170,10 @@ class RolloutIndexMixin:
         subject_id: str | None = None,
         idempotency_key: str | None = None,
         begin_transaction: bool = True,
+        transaction_id: str | None = None,
+        timestamp: str | None = None,
+        first_message_sequence: int | None = None,
+        last_message_sequence: int | None = None,
     ) -> tuple[int, int]:
         """通过统一 coordinator 执行 v2 item-bearing 原子提交。"""
         coordinator = V2ItemCommitCoordinator(
@@ -192,6 +194,10 @@ class RolloutIndexMixin:
             subject_id=subject_id,
             idempotency_key=idempotency_key,
             begin_transaction=begin_transaction,
+            transaction_id=transaction_id,
+            timestamp=timestamp,
+            first_message_sequence=first_message_sequence,
+            last_message_sequence=last_message_sequence,
         )
 
     def _checkpoint_index(self, row: Sequence[object]) -> RolloutCheckpointIndex:
@@ -230,12 +236,8 @@ class RolloutIndexMixin:
     def rollout_id(
         self, thread_id: str, checkpoint_ns: str = "", *, session_id: str
     ) -> str:
-        manifest = self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-        with self._host._connect(
-            thread_id, checkpoint_ns, session_id=session_id, read_only=True
-        ) as connection:
-            self._host._require_v2_runtime(connection)
-        return manifest.rollout_id
+        with self.open_read_snapshot(session_id, thread_id, checkpoint_ns) as snapshot:
+            return snapshot.rollout_id
 
     @contextmanager
     def _existing_index_connection(

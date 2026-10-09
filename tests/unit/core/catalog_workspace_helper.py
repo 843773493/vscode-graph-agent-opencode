@@ -16,11 +16,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Self
 from uuid import UUID, uuid4
 
+from app.core.identifier import create_prefixed_id
 from app.core.session_catalog_resolver import (
     SessionCatalogNodeProjection,
     SessionCatalogPathResolver,
@@ -60,42 +60,10 @@ def make_session_metadata(**overrides: Any) -> dict[str, Any]:
     return metadata
 
 
-def complete_manifest(
-    session_id: str,
-    title: str,
-    *,
-    workspace_id: str,
-    parent_session_id: str | None = None,
-    **overrides: Any,
-) -> dict[str, Any]:
-    """构造测试读取用的完整 session.json 内容。"""
-    now = datetime.now(UTC).isoformat()
-    manifest: dict[str, Any] = {
-        **make_session_metadata(),
-        "session_id": session_id,
-        "workspace_id": workspace_id,
-        "title": title,
-        "title_source": "user",
-        "parent_session_id": parent_session_id,
-        "created_at": now,
-        "updated_at": now,
-    }
-    manifest.update(overrides)
-    return manifest
-
-
 def read_manifest(directory: Path) -> dict[str, Any]:
     """读取目录内 session.json（helper 自身与示例测试使用）。"""
     return json.loads(
         (directory / SESSION_MANIFEST_NAME).read_text(encoding="utf-8")
-    )
-
-
-def write_manifest(directory: Path, manifest: dict[str, Any]) -> None:
-    """写入测试用 session.json。"""
-    (directory / SESSION_MANIFEST_NAME).write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
     )
 
 
@@ -141,7 +109,7 @@ class CatalogWorkspaceContext:
 
     def create_folder(self, name: str, parent: str | None = None) -> str:
         """创建 folder（SQLite-only 节点，无物理目录），返回 folder_id。"""
-        node = self.resolver.create_folder(name=name, parent_node_id=parent)
+        node = self.store.create_folder(create_prefixed_id("ses"), self.workspace_id, parent, name)
         return node.node_id
 
     # ------------------------------------------------------------------

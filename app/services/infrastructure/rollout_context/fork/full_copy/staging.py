@@ -4,16 +4,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.services.infrastructure.rollout_context.fork.store import RolloutForkStore
 from app.services.infrastructure.rollout_context.runtime.detail_fork import (
     ForkDetailCapability,
 )
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
 
 class FullCopyStagingStorage(RolloutStorage):
     def __init__(
         self,
-        owner: RolloutStorage,
+        owner: RolloutContextStore,
         *,
         source: str,
         target: str,
@@ -21,9 +23,10 @@ class FullCopyStagingStorage(RolloutStorage):
         capability: ForkDetailCapability,
     ) -> None:
         super().__init__(
-            owner.sessions_dir, serde=owner._serde, message_codec=owner._message_codec
+            owner.storage.sessions_dir, serde=owner.storage._serde, message_codec=owner.storage._message_codec,
+            fork_recovery=owner.storage._fork_recovery, initialize_activation=owner.storage._initialize_activation
         )
-        self._owner = owner
+        self._owner = owner.storage
         self._source = source
         self._target = target
         self._stage_root = root
@@ -65,13 +68,15 @@ class FullCopyStagingStorage(RolloutStorage):
             )
         raise ValueError("fork staging 只能访问显式 source/target")
 
+class FullCopyForkStore(RolloutForkStore):
+    """私有 full-copy owner 把 detail capability 限定在 staging 存储。"""
+
     def _require_private_detail_staging(self) -> None:
-        if self._stage_root == self._owner.root(self._target):
+        stage = self._storage
+        if stage._stage_root == stage._owner.root(stage._target):
             raise RuntimeError("fork staging 不得绑定已注册 target rollout")
 
     def _remap_full_copy_v2_entities(self, connection, **kwargs) -> None:
         super()._remap_full_copy_v2_entities(
-            connection,
-            **kwargs,
-            detail_capability=self._capability,
+            connection, **kwargs, detail_capability=self._storage._capability,
         )

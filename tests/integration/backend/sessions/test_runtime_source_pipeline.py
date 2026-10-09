@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import sqlite3
@@ -30,6 +31,7 @@ from app.domain.itemized.records import CanonicalItemRecord, RuntimeNoticePayloa
 from app.prompting import PromptSection, internal_message_factory
 from app.services.business.message_display import project_message_for_display
 from app.services.business.system_reminder_checkpoint_service import (
+    persist_interrupt_checkpoint,
     submit_checkpoint_reminder,
 )
 from app.services.infrastructure.mcp.catalog_activation import MCP_GUIDANCE_SOURCE_ID
@@ -44,6 +46,9 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
 )
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     detail_relative_path,
@@ -81,7 +86,7 @@ class RuntimeSourceCase:
         )
 
     def sql(self, session_id: str, thread_id: str, query: str, params: tuple = ()) -> list[tuple]:
-        root = self.container.checkpointer._storage.root(session_id, thread_id=thread_id)
+        root = self.container.checkpointer._storage.storage.root(session_id, thread_id=thread_id)
         with sqlite3.connect(root / "index.sqlite") as connection:
             return connection.execute(query, params).fetchall()
 
@@ -209,8 +214,8 @@ async def _team_child(case: RuntimeSourceCase) -> tuple[dict[str, object], dict[
         nonlocal child_started
         messages = payload["messages"]
         assert isinstance(messages, list)
-        human = next((_wire_text(m["content"]) for m in reversed(messages)
-                      if m["role"] == "user" and m["content"]), "")
+        human = "\n".join(_wire_text(m["content"]) for m in messages
+                          if m["role"] == "user" and m["content"])
         if "<generated_session_result" in human:
             return {"content": "parent-result-ack-h1"}
         if "<delegated_task" in human and "private-seed-h1" in human:
@@ -254,7 +259,7 @@ def _assert_generated_notice(
     *, expected_provenance: dict[str, str], private_result: str,
 ) -> dict[str, object]:
     storage = case.container.checkpointer._storage
-    (notice,) = storage.read_items(session_id, thread_id, item_ids=(item_id,))
+    (notice,) = storage.storage.read_items(session_id, thread_id, item_ids=(item_id,))
     payload = RuntimeNoticePayload.from_dict(notice.payload)
     assert notice.semantic_kind == "runtime_notice" and notice.payload_kind == "structured_content"
     assert notice.turn_id is None and notice.turn_scope == "pending_next_turn"
@@ -266,7 +271,7 @@ def _assert_generated_notice(
     annotations = notice.extensions["boxteam.checkpoint.annotations"]["value"]
     assert set(annotations) == {"structured_prompt_kind", "structured_prompt_schema_version", "boxteam_session_provider_id"}
     # 从权威持久 item 构造全新 codec 冷投影，再核对封存 selection 和 hash。
-    assemblies = storage.list_context_assemblies(session_id, thread_id)
+    assemblies = storage.assemblies.list_context_assemblies(session_id, thread_id)
     report_assemblies = tuple(a for a in assemblies if a.execution_id == notice.producer_ref["invocation_id"])
     assert report_assemblies
     assert any(entry.included and entry.content_hash == notice.content_hash
@@ -281,7 +286,7 @@ def _assert_generated_notice(
     display = project_message_for_display(projected.content, projected.response_metadata)
     assert display.content == payload.display_part.text
     assert private_result not in canonical_json_bytes(display.metadata).decode()
-    assert canonical_json_bytes([storage.get_context_assembly(session_id, thread_id, assembly_id=a.assembly_id).to_dict()
+    assert canonical_json_bytes([storage.assemblies.get_context_assembly(session_id, thread_id, assembly_id=a.assembly_id).to_dict()
                                  for a in report_assemblies]) == sealed_before
     return {"canonical": cold_item.to_dict(), "cold_projection_metadata": projected.response_metadata,
             "sealed_assemblies_hash": sha256_jcs(json.loads(sealed_before))}
@@ -298,7 +303,7 @@ async def test_h1_http_team_child_seed_binder_and_exact_parent_report(source_cas
     assert case.sql(session_id, intent.thread_id, "SELECT COUNT(*) FROM turn_records")[0][0] == 0
     assert case.sql(session_id, intent.thread_id,
         "SELECT COUNT(*) FROM item_catalog WHERE semantic_kind='runtime_notice'")[0][0] == 0
-    request = case.container.checkpointer._storage.internal_execution_request_input(
+    request = case.container.checkpointer._storage.executions.internal_execution_request_input(
         session_id, intent.thread_id, intent.execution_binding_id,
     )
     assert request["kind"] == "seed_reference"
@@ -309,8 +314,11 @@ async def test_h1_http_team_child_seed_binder_and_exact_parent_report(source_cas
     assert board.session_id == session_id
     assert {member.thread_id for member in board.members} == {parent_job["thread_id"], intent.thread_id}
     assert all(member.status == "active" for member in board.members)
-    board_path = case.container.session_service.path_resolver.resolve_session_node(session_id) / "teams" / board.team_id / "team.json"
-    assert json.loads(board_path.read_text())["members"] == []
+    control = case.container.thread_initial_execution_service._factory.for_owner_session(session_id).control_store
+    persisted_boards = control.collaboration_boards(board.team_id)
+    assert len(persisted_boards) == 1
+    assert json.loads(persisted_boards[0])["members"] == []
+    assert not (control.database_path.parent / "teams").exists()
     seed_wire = [r["json"] for r in case.model.requests if any(
         m["role"] == "user" and "<delegated_task" in _wire_text(m["content"])
         and "private-seed-h1" in _wire_text(m["content"])
@@ -481,9 +489,157 @@ async def test_h3_four_retries_share_one_real_execution(source_case: RuntimeSour
         "JOIN model_calls m ON m.model_call_id=a.model_call_id ORDER BY m.created_at")
     assert len(assemblies) == calls and all(row[1] == "terminal" for row in assemblies)
     assert assemblies[-1][2] == expected_outcome
+    source_kind = {"empty": "empty_response_retry", "custom": "missing_custom_tool_retry",
+                   "delegated": "delegated_report_retry", "question": "session_question_reply_retry"}[retry_kind]
+    expected_ids = {f"retry:{job_id}:{source_kind}:{attempt}" for attempt in (1, 2)}
+    assert {row[0] for row in retry_items} == {f"item-{value.removeprefix('retry:')}" for value in expected_ids}
+    saver = case.container.checkpointer
+    frozen_items = [value for value in saver._storage.storage.read_items(session_id, thread_id)
+                    if value.item_id in {row[0] for row in retry_items}]
+    assert {value.producer_ref["producer_id"] for value in frozen_items} == expected_ids
+    assert all(value.turn_scope == "pending_next_turn" and value.turn_id is None for value in frozen_items)
+    assert all(value.extensions["boxteam.checkpoint.annotations"]["value"]["structured_prompt_kind"] == source_kind
+               for value in frozen_items)
+    sealed = [saver.get_context_assembly(session_id, thread_id, assembly_id=row[0]) for row in assemblies]
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        assert canonical_json_bytes([value.to_dict() for value in cold._storage.storage.read_items(
+            session_id, thread_id, item_ids=tuple(row[0] for row in retry_items))]) == canonical_json_bytes(
+                [value.to_dict() for value in frozen_items])
+        assert not any(value.source_id in expected_ids for value in cold.load_context_source_control_states(
+            ContextSourceOwnerKey(session_id, thread_id)))
+        for snapshot in sealed:
+            restored = cold.get_context_assembly(session_id, thread_id, assembly_id=snapshot.assembly_id)
+            assert canonical_json_bytes(restored.to_dict()) == canonical_json_bytes(snapshot.to_dict())
     case.write_actual(f"h3-{retry_kind}", {"job": result, "executions": executions,
         "retry_items": retry_items, "model_calls": model_calls, "assemblies": assemblies,
-        "provider_requests": calls})
+        "provider_requests": calls, "retry_source_kind": source_kind, "retry_sources": sorted(expected_ids),
+        "sealed_bytes_hash": sha256_jcs([snapshot.to_dict() for snapshot in sealed])})
+
+
+@pytest.mark.asyncio
+async def test_e07_reminder_reasons_commit_once_and_cold_restore_without_checkpoint_mutation(source_case: RuntimeSourceCase) -> None:
+    case = source_case
+    case.model.response_callback = lambda _payload: {"content": "E07 原执行完成"}
+    session_id = await create_session(case.client, "E07-reminder-owner")
+    thread_id = await case.container.session_service.resolve_main_thread(session_id)
+    accepted = await _send(case, session_id, "E07 建立唯一真实 execution")
+    await _job(case, accepted["job_id"])
+    saver = case.container.checkpointer
+    active = saver.execution_admission_for_job(session_id, thread_id=thread_id, job_id=accepted["job_id"])
+    checkpoint_headers = case.sql(session_id, thread_id, "SELECT * FROM checkpoints ORDER BY checkpoint_id")
+    checkpoint_channels = case.sql(session_id, thread_id, "SELECT * FROM checkpoint_channels ORDER BY checkpoint_id,channel_name")
+    calls = len(case.model.requests)
+    reasons = ("interrupt", "job_startup_timeout", "job_timeout", "scope_deadline_exceeded",
+               "tool_dispatch_timeout", "execution_lost", "execution_error", "resource_cancel")
+    for reason in reasons:
+        for _attempt in range(2):
+            persist_interrupt_checkpoint(checkpointer=saver, session_id=session_id, thread_id=thread_id,
+                active_tool_name="exec_command" if reason in {"tool_dispatch_timeout", "resource_cancel"} else None,
+                checkpoint_source=reason, event_identity=f"{active.execution_id}:{reason}", execution_id=active.execution_id)
+    source_ids = {f"checkpoint:{reason}:{active.execution_id}:{reason}" for reason in reasons}
+    item_ids = {f"item-{source}" for source in source_ids}
+    items = saver._storage.storage.read_items(session_id, thread_id, item_ids=item_ids)
+    assert len(items) == len(reasons)
+    assert all(item.semantic_kind == "runtime_notice" and item.turn_id is None
+               and item.turn_scope == "pending_next_turn" for item in items)
+    bindings = case.sql(session_id, thread_id,
+        "SELECT item_id,execution_id FROM item_catalog WHERE item_id IN (" + ",".join("?" for _item in item_ids) + ")",
+        tuple(sorted(item_ids)))
+    assert {row[0] for row in bindings} == item_ids and all(row[1] == active.execution_id for row in bindings)
+    assert {item.producer_ref["producer_id"] for item in items} == source_ids
+    assert {item.extensions["boxteam.checkpoint.annotations"]["value"]["checkpoint_source"] for item in items} == set(reasons)
+    assert not any(value.source_id in source_ids for value in saver.load_context_source_control_states(
+        ContextSourceOwnerKey(session_id, thread_id)))
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        assert canonical_json_bytes([item.to_dict() for item in cold._storage.storage.read_items(
+            session_id, thread_id, item_ids=item_ids)]) == canonical_json_bytes([item.to_dict() for item in items])
+        for reason in reasons:
+            persist_interrupt_checkpoint(checkpointer=cold, session_id=session_id, thread_id=thread_id,
+                active_tool_name="exec_command" if reason in {"tool_dispatch_timeout", "resource_cancel"} else None,
+                checkpoint_source=reason, event_identity=f"{active.execution_id}:{reason}", execution_id=active.execution_id)
+        assert not any(value.source_id in source_ids for value in cold.load_context_source_control_states(
+            ContextSourceOwnerKey(session_id, thread_id)))
+        with pytest.raises((RuntimeError, ValueError)):
+            submit_checkpoint_reminder(checkpointer=cold, session_id=session_id, thread_id=thread_id,
+                reminder="同一事件正文漂移必须拒绝", response_metadata={"source": "interrupt"}, checkpoint_source="interrupt",
+                event_identity=f"{active.execution_id}:interrupt", execution_id=active.execution_id)
+    assert case.sql(session_id, thread_id, "SELECT * FROM checkpoints ORDER BY checkpoint_id") == checkpoint_headers
+    assert case.sql(session_id, thread_id, "SELECT * FROM checkpoint_channels ORDER BY checkpoint_id,channel_name") == checkpoint_channels
+    assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM executions")[0][0] == 1
+    assert len(await case.container.job_service.list(session_id=session_id)) == 1
+    assert len(case.model.requests) == calls
+    assert len(saver._storage.storage.read_items(session_id, thread_id, item_ids=item_ids)) == len(reasons)
+    case.write_actual("e07-reminder-reasons", {"execution_id": active.execution_id, "sources": sorted(source_ids),
+        "canonical_bytes_hash": sha256_jcs([item.to_dict() for item in items]),
+        "unchanged_checkpoint_ids": [row[0] for row in checkpoint_headers], "provider_requests": calls})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_case", [{"terminal": True}], indirect=True)
+async def test_e05_terminal_completion_rehydrates_exact_cold_child_owner(source_case: RuntimeSourceCase, monkeypatch) -> None:
+    case = source_case
+    parent, _child, intent = await _team_child(case)
+    session_id, thread_id, main_thread = parent["session_id"], intent.thread_id, parent["thread_id"]
+    steering = case.container.terminal_steering_service
+    await steering.shutdown()
+    tracker = case.container.agent_execution_service._residency_tracker
+    clock = [tracker._clock()]
+    monkeypatch.setattr(tracker, "_clock", lambda: clock[0])
+    original = tracker._states[(session_id, thread_id)].runtime
+    assert original is not None and tracker.snapshot(session_id, thread_id).blockers == ()
+    clock[0] += 1800
+    await tracker.sweep()
+    assert tracker.snapshot(session_id, thread_id).residency == "cold"
+    assert original.lifetime_scope.state == "closed"
+    main_count = case.sql(session_id, main_thread, "SELECT COUNT(*) FROM executions")[0][0]
+    client = steering._terminal_client
+    async with client.operation(session_id=session_id, thread_id=thread_id,
+        holder_id="e05-cold-terminal", operation_id="e05-command") as operation:
+        created = await operation.create_terminal(retention_scope="workspace", title="E05 精确 cold child")
+        terminal_id = created["terminal_id"]
+        await operation.write_terminal(terminal_id=terminal_id, source="agent", command="printf E05-final",
+            data="printf '\\n__BOXTEAM_CMD_START_e05__\\n'; printf 'E05-final\\n'; printf '\\n__BOXTEAM_CMD_DONE_e05__:0\\n'\r")
+        await operation.mark_terminal_backgrounded(terminal_id)
+    assert tracker.snapshot(session_id, thread_id).residency == "cold"
+    async with asyncio.timeout(20):
+        while True:
+            terminal = next(value for value in await client.list_resources() if value["terminal_id"] == terminal_id)
+            if terminal["last_command_status"] == "completed":
+                break
+            await asyncio.sleep(0.05)
+    assert terminal["source_thread_id"] == thread_id and terminal["completion_event_id"]
+
+    def reply(payload):
+        tools = [value for value in payload["messages"] if value["role"] == "tool" and value.get("name") == "write_stdin"]
+        if not tools:
+            return _tool_reply("write_stdin", {"session_id": terminal_id, "chars": "", "yield_time_ms": 1000}, "call_e05_stdin")
+        assert "E05-final" in tools[-1]["content"]
+        return {"content": "E05 cold child 已读取真实终端输出"}
+
+    case.model.response_callback = reply
+    await steering.scan_once()
+    wakeups = case.sql(session_id, thread_id,
+        "SELECT w.source_id,w.source_item_id,w.admission_idempotency_key,e.job_id FROM runtime_execution_wakeups w JOIN executions e ON e.execution_id=w.execution_id WHERE w.source_id=?",
+        (f"terminal:{terminal_id}:completion",))
+    assert len(wakeups) == 1
+    wakeup = case.container.checkpointer.runtime_wakeup_for_admission(session_id, thread_id, wakeups[0][2])
+    event_digest = hashlib.sha256(
+        f"runtime-source\0{session_id}\0{thread_id}\0{terminal['completion_event_id']}".encode()).hexdigest()
+    assert wakeup.admission_idempotency_key == f"radm_{event_digest}"
+    result = await _job(case, wakeups[0][3])
+    assert result["thread_id"] == thread_id
+    assert tracker.snapshot(session_id, thread_id).generation > original.generation
+    assert not tracker.is_current_generation(session_id, thread_id, original.generation)
+    assert case.sql(session_id, main_thread, "SELECT COUNT(*) FROM executions")[0][0] == main_count
+    notices = case.container.checkpointer._storage.storage.read_items(session_id, thread_id, item_ids=(wakeups[0][1],))
+    assert len(notices) == 1 and notices[0].turn_id is None
+    assert notices[0].semantic_kind == "runtime_notice" and notices[0].turn_scope == "pending_next_turn"
+    await steering.scan_once()
+    assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM runtime_execution_wakeups WHERE source_id=?",
+                    (f"terminal:{terminal_id}:completion",))[0][0] == 1
+    case.write_actual("e05-cold-terminal", {"terminal_id": terminal_id, "source_thread_id": thread_id,
+        "old_generation": original.generation, "new_generation": tracker.snapshot(session_id, thread_id).generation,
+        "wakeup": wakeups, "job": result, "canonical_notice": notices[0].to_dict()})
 
 
 @pytest.mark.asyncio
@@ -574,7 +730,7 @@ sessions, source_session, source_thread, target_session, phase = sys.argv[1:]
 with fixture_catalog_scope(), RolloutCheckpointSaver(sessions) as saver:
     storage = saver._storage
     if phase != 'read':
-        target_thread = storage.main_thread_id(target_session)
+        target_thread = storage.storage.main_thread_id(target_session)
         if phase == 'publication_crash':
             publish = saver._detail_store.publish
             def crash_after_publication(*args, **kwargs):
@@ -584,7 +740,7 @@ with fixture_catalog_scope(), RolloutCheckpointSaver(sessions) as saver:
         if phase == 'finish_crash':
             def crash_before_completion(*, materialization_id, target_session_id,
                                         target_thread_id, checkpoint_ns):
-                with storage._connect(target_thread_id, checkpoint_ns,
+                with storage.storage._connect(target_thread_id, checkpoint_ns,
                                       session_id=target_session_id, read_only=True) as connection:
                     journal = connection.execute(
                         'SELECT status FROM fork_materializations WHERE materialization_id=?',
@@ -594,8 +750,8 @@ with fixture_catalog_scope(), RolloutCheckpointSaver(sessions) as saver:
                 print(json.dumps({'pid': os.getpid(), 'phase': phase,
                                   'journal': journal}), flush=True)
                 os._exit(74)
-            storage.complete_fork_materialization = crash_before_completion
-        result = asyncio.run(saver.afork(
+            storage.forks.complete_fork_materialization = crash_before_completion
+        result = asyncio.run(saver.forks.afork(
             source_session_id=source_session, target_session_id=target_session,
             source_owner=MutationIntentOwner(session_id=source_session, thread_id=source_thread),
             target_owner=MutationIntentOwner(session_id=target_session, thread_id=target_thread),
@@ -604,9 +760,9 @@ with fixture_catalog_scope(), RolloutCheckpointSaver(sessions) as saver:
         session, thread = target_session, target_thread
     else:
         session, thread = source_session, source_thread
-    items = storage.read_items(session, thread)
-    assemblies = storage.list_context_assemblies(session, thread)
-    with storage.open_read_snapshot(session, thread) as snapshot:
+    items = storage.storage.read_items(session, thread)
+    assemblies = storage.assemblies.list_context_assemblies(session, thread)
+    with storage.storage.open_read_snapshot(session, thread) as snapshot:
         connection = snapshot.connection
         executions = connection.execute(
             'SELECT execution_id,execution_origin,turn_id,outcome FROM executions'
@@ -620,7 +776,7 @@ with fixture_catalog_scope(), RolloutCheckpointSaver(sessions) as saver:
     request = None
     if executions:
         assert len(executions) == 1 and executions[0][1:] == ('internal', None, 'completed')
-        request = storage.internal_execution_request_input(session, thread, executions[0][0])
+        request = storage.executions.internal_execution_request_input(session, thread, executions[0][0])
         seed = saver.internal_seed_source(session, thread, executions[0][0]).content
     detail_owners = []
     for assembly in assemblies:
@@ -646,7 +802,7 @@ def cold_fork_process(source_case: RuntimeSourceCase):
 
     async def invoke(session_id: str, thread_id: str, target_session_id: str = "", *, phase: str = "read"):
         command = [sys.executable, "-c", _COLD_FORK_PROCESS,
-                   str(case.container.checkpointer._storage.sessions_dir), session_id,
+                   str(case.container.checkpointer._storage.storage.sessions_dir), session_id,
                    thread_id, target_session_id, phase]
         result = await asyncio.to_thread(
             subprocess.run, command, cwd=Path.cwd(), capture_output=True, text=True, timeout=90,
@@ -827,8 +983,9 @@ async def test_h6_backend_hard_restart_keeps_child_and_runtime_report_identity(
 
     def reply(payload: dict[str, object]) -> dict[str, object]:
         messages = payload["messages"]
-        human = next((_wire_text(message["content"]) for message in reversed(messages)
-                      if message["role"] == "user" and message["content"]), "")
+        # 团队 facet 指引也使用 user 角色，不能把最后一帧当成唯一请求正文。
+        human = "\n".join(_wire_text(message["content"]) for message in messages
+                          if message["role"] == "user" and message["content"])
         if "<generated_session_result" in human:
             report_requests.append(payload)
             report_started.set()
@@ -927,7 +1084,7 @@ async def test_replay_and_manual_compaction_http_keep_catalog_main_owner(
         "fixture": "model_tool_test_workspace", "workspace_root": str(registry.workspace_root),
     })
     saver = case.container.checkpointer
-    owner = saver.resolve_main_thread_owner(session_id)
+    owner = saver.forks.source.resolve_main_thread_owner(session_id)
     assert owner.thread_id != session_id
     with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
         original = await saver.aget_tuple(build_checkpoint_config(owner.thread_id))
@@ -980,7 +1137,7 @@ async def test_replay_and_manual_compaction_http_keep_catalog_main_owner(
         assert len(applied) == (1 if ordinal == 0 else 0)
     assert case.sql(session_id, owner.thread_id,
         "SELECT COUNT(*) FROM context_source_control_states WHERE source_id=?", (MCP_GUIDANCE_SOURCE_ID,))[0][0] == 0
-    with RolloutCheckpointSaver(saver._storage.sessions_dir) as cold:
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         for snapshot in assemblies:
             restored = cold.get_context_assembly(session_id, owner.thread_id, assembly_id=snapshot.assembly_id)
             assert canonical_json_bytes(restored.to_dict()) == canonical_json_bytes(snapshot.to_dict())

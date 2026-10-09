@@ -30,7 +30,7 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
 SESSION_ID = "ses_019c3635a6c278efb831fe265bdcd656"
 OTHER_SESSION_ID = "ses_019c3635a6c278efb831fe265bdcd657"
@@ -52,11 +52,11 @@ def _make_saver(
     session_bundle_factory,
     *,
     session_ids: tuple[str, ...] = (SESSION_ID,),
-) -> tuple[RolloutStorage, RolloutCheckpointSaver, str]:
+) -> tuple[RolloutContextStore, RolloutCheckpointSaver, str]:
     sessions_dir = tmp_path / "sessions"
     for session_id in session_ids:
         session_bundle_factory(sessions_dir, session_id)
-    storage = RolloutStorage(
+    storage = RolloutContextStore(
         sessions_dir,
         serde=JsonPlusSerializer(),
         message_codec=LangChainMessageCodec(),
@@ -120,14 +120,14 @@ def _put_with_admission(
 
 
 def _query(
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
     session_id: str,
     thread_id: str,
     sql: str,
     parameters: tuple[object, ...] = (),
 ) -> list[tuple[object, ...]]:
     with sqlite3.connect(
-        storage.index_path(session_id, thread_id=thread_id)
+        storage.storage.index_path(session_id, thread_id=thread_id)
     ) as connection:
         return connection.execute(sql, parameters).fetchall()
 
@@ -184,7 +184,7 @@ def head_selection_case(tmp_path: Path, session_bundle_factory) -> Iterator[Head
             ),
         )
         saver.accept_turn(
-            OTHER_SESSION_ID, thread_id=storage.main_thread_id(OTHER_SESSION_ID),
+            OTHER_SESSION_ID, thread_id=storage.storage.main_thread_id(OTHER_SESSION_ID),
             accepted_ingress_id="other-scope-ingress", acceptance_idempotency_key="other-scope-acceptance",
             job_id="other-scope-job", admission_idempotency_key="other-scope-admission",
             payload="other scope question",
@@ -434,7 +434,7 @@ def test_new_checkpoint_message_requires_admission_and_rejects_cross_thread_owne
         )
 
     other_thread_id = get_session_path_resolver(
-        saver._storage.sessions_dir
+        saver._storage.storage.sessions_dir
     ).main_thread_id(OTHER_SESSION_ID)
     other_owner = _owner(OTHER_SESSION_ID, other_thread_id)
     with (
@@ -460,7 +460,7 @@ def test_new_checkpoint_message_requires_admission_and_rejects_cross_thread_owne
         thread_id,
         "SELECT message_id FROM messages",
     ) == []
-    jsonl = storage.jsonl_path(SESSION_ID, thread_id=thread_id)
+    jsonl = storage.storage.jsonl_path(SESSION_ID, thread_id=thread_id)
     assert jsonl.read_bytes() == b""
 
 
@@ -470,7 +470,7 @@ def test_checkpoint_append_rolls_back_jsonl_and_attribution_on_projection_failur
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     storage, saver, thread_id = _make_saver(tmp_path, session_bundle_factory)
-    storage.initialize(SESSION_ID, thread_id=thread_id)
+    storage.storage.initialize(SESSION_ID, thread_id=thread_id)
     assert _query(
         storage,
         SESSION_ID,
@@ -497,7 +497,7 @@ def test_checkpoint_append_rolls_back_jsonl_and_attribution_on_projection_failur
         ),
         message=internal_notice,
     )
-    jsonl = storage.jsonl_path(SESSION_ID, thread_id=thread_id)
+    jsonl = storage.storage.jsonl_path(SESSION_ID, thread_id=thread_id)
     original_jsonl = jsonl.read_bytes()
     # admission notice 已提交；失败的 checkpoint 必须恢复这一真实前像。
     original_attribution = _query(
@@ -513,7 +513,7 @@ def test_checkpoint_append_rolls_back_jsonl_and_attribution_on_projection_failur
     def fail_projection(connection, sequence, value, timestamp) -> None:
         raise RuntimeError("message projection failure")
 
-    monkeypatch.setattr(storage, "_insert_message_projection", fail_projection)
+    monkeypatch.setattr(storage.checkpoints, "_insert_message_projection", fail_projection)
     owner = _owner(SESSION_ID, thread_id)
     with (
         session_thread_owner_scope(owner, langgraph_thread_id=thread_id),

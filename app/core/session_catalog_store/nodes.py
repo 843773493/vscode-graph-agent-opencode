@@ -10,6 +10,7 @@ apply_navigation_mutation/set_node_state 等节点写操作。
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import nullcontext
 from datetime import UTC, date, datetime
@@ -21,6 +22,7 @@ from app.core.session_catalog_store._schema import (
 from app.core.session_catalog_store.contracts import (
     _UNSET,
     SessionCatalogNode,
+    SessionGenerationOriginDTO,
 )
 from app.core.session_catalog_store.validators import (
     validate_path_budget,
@@ -85,6 +87,12 @@ class CatalogNodesMixin:
                 if row["main_thread_id"] is not None
                 else None
             ),
+            session_kind=row["session_kind"],
+            current_agent_id=row["current_agent_id"],
+            current_provider_id=row["current_provider_id"],
+            context_source_session_id=row["context_source_session_id"],
+            generation_origin_json=row["generation_origin_json"],
+            updated_at=row["updated_at"],
         )
 
     @staticmethod
@@ -256,6 +264,14 @@ class CatalogNodesMixin:
         storage_relative_locator: str,
         main_thread_id: str,
         title_source: str = "user",
+        *,
+        current_agent_id: str,
+        current_provider_id: str | None = None,
+        session_kind: str = "normal",
+        context_source_session_id: str | None = None,
+        generation_origin_json: str | None = None,
+        updated_at: datetime | None = None,
+        connection: sqlite3.Connection | None = None,
     ) -> SessionCatalogNode:
         """创建 session 节点；locator 日期必须等于 created_at 的 UTC 日期。"""
         validate_session_id(node_id)
@@ -273,20 +289,27 @@ class CatalogNodesMixin:
             storage_relative_locator,
         )
         self._validate_locator_budget(storage_relative_locator)
-        with self.write_transaction() as connection:
-            self._require_node_id_available(connection, node_id)
+        updated_at = updated_at or created_at
+        self._validate_session_fields(
+            session_kind, current_agent_id, current_provider_id,
+            context_source_session_id, generation_origin_json, updated_at,
+        )
+        transaction = self.write_transaction() if connection is None else nullcontext(connection)
+        with transaction as active:
+            self._require_node_id_available(active, node_id)
             self._require_unique_session_fields(
-                connection,
+                active,
                 workspace_id,
                 storage_relative_locator,
                 main_thread_id,
             )
-            self._require_mutable_parent(connection, parent_node_id, workspace_id)
-            connection.execute(
+            self._require_mutable_parent(active, parent_node_id, workspace_id)
+            active.execute(
                 "INSERT INTO nodes (node_id, kind, parent_node_id, display_name, "
                 "title_source, state, revision, workspace_id, created_at, "
-                "storage_relative_locator, main_thread_id) "
-                "VALUES (?, 'session', ?, ?, ?, 'active', 1, ?, ?, ?, ?)",
+                "storage_relative_locator, main_thread_id, session_kind, current_agent_id, "
+                "current_provider_id, context_source_session_id, generation_origin_json, updated_at) "
+                "VALUES (?, 'session', ?, ?, ?, 'active', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     node_id,
                     parent_node_id,
@@ -296,7 +319,71 @@ class CatalogNodesMixin:
                     created_at.isoformat(),
                     storage_relative_locator,
                     main_thread_id,
+                    session_kind,
+                    current_agent_id,
+                    current_provider_id,
+                    context_source_session_id,
+                    generation_origin_json,
+                    updated_at.isoformat(),
                 ),
+            )
+            return self._node_from_row(self._require_node(active, node_id))
+
+    @staticmethod
+    def _validate_session_fields(
+        session_kind: str,
+        current_agent_id: str,
+        current_provider_id: str | None,
+        context_source_session_id: str | None,
+        generation_origin_json: str | None,
+        updated_at: datetime,
+    ) -> None:
+        if not isinstance(current_agent_id, str) or not current_agent_id:
+            raise ValueError(f"current_agent_id 不能为空: {current_agent_id!r}")
+        if current_provider_id is not None and (
+            not isinstance(current_provider_id, str) or not current_provider_id
+        ):
+            raise ValueError(f"current_provider_id 非法: {current_provider_id!r}")
+        if session_kind not in ("normal", "context_fork") or (
+            session_kind == "normal" and context_source_session_id is not None
+        ) or (
+            session_kind == "context_fork" and not context_source_session_id
+        ):
+            raise ValueError(
+                "session kind/source 不一致: "
+                f"kind={session_kind!r}, source={context_source_session_id!r}"
+            )
+        if context_source_session_id is not None:
+            validate_session_id(context_source_session_id)
+        if generation_origin_json is not None:
+            origin = SessionGenerationOriginDTO.model_validate_json(generation_origin_json)
+            canonical = json.dumps(origin.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            if canonical != generation_origin_json:
+                raise ValueError("generation_origin_json 必须是 typed canonical JSON")
+        if not isinstance(updated_at, datetime) or updated_at.tzinfo is None:
+            raise ValueError(f"updated_at 必须是带时区 datetime: {updated_at!r}")
+
+    def update_session_configuration(
+        self,
+        node_id: str,
+        *,
+        current_agent_id: str,
+        current_provider_id: str | None,
+        updated_at: datetime,
+    ) -> SessionCatalogNode:
+        """持有 Session 写准入时更新业务配置，允许删除 drain 等待中的已准入写完成。"""
+        with self.write_transaction() as connection:
+            node = self._require_node(connection, node_id)
+            if node["kind"] != "session":
+                raise RuntimeError(f"会话配置更新要求 session 节点: {node_id}")
+            self._validate_session_fields(
+                node["session_kind"], current_agent_id, current_provider_id,
+                node["context_source_session_id"], node["generation_origin_json"], updated_at,
+            )
+            connection.execute(
+                "UPDATE nodes SET current_agent_id = ?, current_provider_id = ?, "
+                "updated_at = ? WHERE node_id = ?",
+                (current_agent_id, current_provider_id, updated_at.isoformat(), node_id),
             )
             return self._node_from_row(self._require_node(connection, node_id))
 

@@ -10,9 +10,6 @@ from langchain.agents.middleware import TodoListMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
-from app.agents.cache_preserving_summarization import (
-    NoDurableOwnerCompactionPreflight,
-)
 from app.agents.deep_agent_stack import build_deep_agent_middleware
 from app.agents.instruction_producers import runtime_instruction_producers
 from app.agents.middleware_prompts import (
@@ -31,6 +28,7 @@ from app.agents.skill_runtime import (
 from app.agents.structured_prompt_validation_middleware import (
     StructuredPromptValidationMiddleware,
 )
+from app.agents.summarization.preflight import NoDurableOwnerCompactionPreflight
 from app.agents.tool_invocation_context import (
     ToolInvocationContext,
     ToolInvocationContextMiddleware,

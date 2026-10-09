@@ -29,6 +29,7 @@ export type MessageStreamEventType =
 interface MessageStreamEventEnvelope {
   event_id: string;
   session_id: string;
+  thread_id: string;
   turn_id: string;
   turn_stream_id: string;
   event_seq: number;
@@ -132,6 +133,7 @@ export interface MessageStreamActiveState {
 export interface MessageStreamState {
   workspaceId: string | null;
   sessionId: string;
+  threadId: string | null;
   turnId: string;
   turnStreamId: string;
   lastEventSeq: number;

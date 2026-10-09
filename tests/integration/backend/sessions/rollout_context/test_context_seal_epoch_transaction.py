@@ -58,7 +58,7 @@ __all__ = ["registry_db"]
 @pytest.fixture
 def seal_inputs(registry_db):
     saver, session, _connection, accepted = registry_db
-    thread = saver._storage.main_thread_id(session)
+    thread = saver._storage.storage.main_thread_id(session)
     tools = ToolSetSnapshot(
         selection_revision=sha256_jcs({"read_file": True}),
         tools=({"type": "function", "function": {"name": "read_file", "description": "读文件"}},),
@@ -118,7 +118,7 @@ def seal_inputs(registry_db):
             plan = saver.compose_committed_context_plan(
                 session, thread, plan_id=name, tool_set=selected_tools, read_snapshot=read_snapshot,
             )
-            items = saver._storage.committed_context_items(read_snapshot)
+            items = saver._storage.checkpoints.committed_context_items(read_snapshot)
         by_id = {source.contribution_id: source for source in plan.contributions}
         sources = tuple(
             RootCandidateSource(
@@ -231,8 +231,8 @@ def _sealed_facts(saver, connection):
         tuple((key, tuple(item["assembly_id"] for item in queue))
               for key, queue in sorted(saver._prepared_dispatches.items())),
         tuple(
-            (path.relative_to(saver._storage.sessions_dir).as_posix(), path.read_bytes())
-            for path in sorted(saver._storage.sessions_dir.rglob("*"))
+            (path.relative_to(saver._storage.storage.sessions_dir).as_posix(), path.read_bytes())
+            for path in sorted(saver._storage.storage.sessions_dir.rglob("*"))
             if path.is_file() and (
                 "context-plan-details" in path.parts
             )
@@ -277,7 +277,7 @@ def test_success_applies_sources_tools_epoch_once_and_restart_retry_reuses_them(
     def refuse_allocation(*_args, **_kwargs):
         pytest.fail("重启重试不得分配 assembly/detail 或再编译准备值")
 
-    with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
         monkeypatch.setattr(
             "app.services.infrastructure.rollout_context.checkpoint.seal.lifecycle.uuid4",
             refuse_allocation,
@@ -315,7 +315,7 @@ def test_failure_after_source_update_rolls_back_every_applied_fact(
         )
         connection.commit()
     else:
-        original_commit = saver._storage._commit_connection
+        original_commit = saver._storage.storage._commit_connection
 
         def refuse_commit(candidate):
             if candidate.execute("SELECT count(*) FROM context_assemblies").fetchone() == (1,):
@@ -324,7 +324,7 @@ def test_failure_after_source_update_rolls_back_every_applied_fact(
             # 失败 control outcome 是独立事务，仍应正常提交并暴露原始失败。
             original_commit(candidate)
 
-        monkeypatch.setattr(saver._storage, "_commit_connection", refuse_commit)
+        monkeypatch.setattr(saver._storage.storage, "_commit_connection", refuse_commit)
     with pytest.raises((RuntimeError, sqlite3.IntegrityError), match="injected"):
         _seal(registry_db, inputs)
     _assert_unsealed(connection, inputs[0], before, before_commits)
@@ -337,7 +337,7 @@ def test_first_sensitive_header_failure_leaves_no_detail_or_key(
     registry_db, monkeypatch, failure,
 ):
     saver, session, connection, accepted = registry_db
-    thread = saver._storage.main_thread_id(session)
+    thread = saver._storage.storage.main_thread_id(session)
     plan = saver.create_context_plan(session, ContextRequestPlan(
         session_id=session, thread_id=thread, plan_id="sensitive-header",
         refs=(), plan_creation_idempotency_key="sensitive-header:create",
@@ -361,14 +361,14 @@ def test_first_sensitive_header_failure_leaves_no_detail_or_key(
 
             injected.setattr(saver._detail_store._files, "publish", refuse_publish)
         else:
-            original_commit = saver._storage._commit_connection
+            original_commit = saver._storage.storage._commit_connection
 
             def refuse_commit(candidate):
                 if candidate.execute("SELECT count(*) FROM context_assemblies").fetchone() == (1,):
                     raise RuntimeError("injected detail commit failure")
                 original_commit(candidate)
 
-            injected.setattr(saver._storage, "_commit_connection", refuse_commit)
+            injected.setattr(saver._storage.storage, "_commit_connection", refuse_commit)
         with pytest.raises(RuntimeError, match="injected detail"):
             saver.seal_context_assembly(session, thread, snapshot, **options)
     assert _sealed_facts(saver, connection) == before
@@ -376,7 +376,7 @@ def test_first_sensitive_header_failure_leaves_no_detail_or_key(
         "SELECT plan_state, assembly_id FROM context_plans WHERE plan_id=?", (plan.plan_id,),
     ).fetchone() == ("unsealed", None)
     saver.seal_context_assembly(session, thread, snapshot, **options)
-    assert saver._storage.get_context_assembly(
+    assert saver._storage.assemblies.get_context_assembly(
         session, thread, assembly_id=snapshot.assembly_id,
     ).to_dict() == snapshot.to_dict()
     assert connection.execute(

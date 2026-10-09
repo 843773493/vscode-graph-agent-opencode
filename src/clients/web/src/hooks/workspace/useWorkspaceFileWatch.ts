@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import {
   registerWorkspaceObservation,
   useWorkspaceObservationState,
@@ -17,7 +17,7 @@ interface UseWorkspaceFileWatchOptions {
   port: number;
   workspaceId: string | null;
   paths: readonly string[];
-  onOverflow: () => void;
+  onOverflow: (roots: readonly string[]) => void;
   onStatusChange: (message: string) => void;
 }
 
@@ -33,6 +33,7 @@ export function useWorkspaceFileWatch({
 }: UseWorkspaceFileWatchOptions): void {
   const observationState = useWorkspaceObservationState(workspaceId);
   const pathKey = JSON.stringify([...new Set(paths)].sort());
+  const cursor = useRef<{ scope: string; eventId: number | undefined }>({ scope: "", eventId: undefined });
 
   useEffect(() => {
     if (!active || observationState.paused) {
@@ -41,18 +42,21 @@ export function useWorkspaceFileWatch({
     const controller = new AbortController();
     const unregisterObservation = registerWorkspaceObservation(workspaceId, controller);
     const watchPaths = JSON.parse(pathKey) as string[];
+    const cursorScope = `${port}:${workspaceId}:${pathKey}`;
+    if (cursor.current.scope !== cursorScope) cursor.current = { scope: cursorScope, eventId: undefined };
     let reconnectDelayMs = 500;
     let reconnectAttempt = 0;
     let reconnectTimer: number | null = null;
 
     const handleBatch = (batch: WorkspaceFileStreamBatch) => {
       reconnectDelayMs = 500;
+      cursor.current.eventId = Math.max(cursor.current.eventId ?? 0, batch.event_id);
       if (batch.overflow) {
-        onOverflow();
+        onOverflow(batch.invalidated_roots);
         onStatusChange("文件变化过快，已重新同步展开目录");
         return;
       }
-      dispatchWorkspaceFileChanges(workspaceId, batch.changes);
+      dispatchWorkspaceFileChanges(workspaceId, batch.changes, batch.directories, batch.snapshots);
     };
 
     const connect = async (): Promise<void> => {
@@ -60,6 +64,7 @@ export function useWorkspaceFileWatch({
       try {
         await streamWorkspaceFileEvents(port, watchPaths, {
           workspaceId,
+          afterEventId: cursor.current.eventId,
           signal: controller.signal,
           onBatch: handleBatch,
           onConnected: () => {

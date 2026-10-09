@@ -171,7 +171,7 @@ class EpochCase:
 
     def restart(self) -> None:
         self.saver = self.stack.enter_context(RolloutCheckpointSaver(
-            self.saver._storage.sessions_dir,
+            self.saver._storage.storage.sessions_dir,
         ))
         self.bind_manager()
 
@@ -266,8 +266,8 @@ def epoch_db(request, session_bundle_factory):
             job_id="epoch-job", admission_idempotency_key="epoch-admission",
             payload="真实用户输入", payload_kind="text", root_item_id="item-epoch-ingress",
         )
-        with saver._storage._connect(
-            saver._storage.main_thread_id(session), "", session_id=session,
+        with saver._storage.storage._connect(
+            saver._storage.storage.main_thread_id(session), "", session_id=session,
         ) as owner_connection:
             database_path = owner_connection.execute("PRAGMA database_list").fetchone()[2]
         connection = sqlite3.connect(database_path)
@@ -281,7 +281,7 @@ def epoch_db(request, session_bundle_factory):
 @pytest.fixture
 def epoch_case(epoch_db, frozen_provider_wire, frozen_provider_activation):
     saver, session, connection, accepted = epoch_db
-    thread = saver._storage.main_thread_id(session)
+    thread = saver._storage.storage.main_thread_id(session)
     publisher = PublishedResourceOwner()
     publisher.publish(AGENTS_URI, "agents:1", "基础规则第一版")
     publisher.publish(SKILL_URI, "skill:1", SKILL_FRONTMATTER + "v1\n")
@@ -356,7 +356,7 @@ def test_real_rebuild_intent_uses_boundary_transaction_and_rolls_back_before_ret
 ):
     case = epoch_case
     before = tuple(case.connection.iterdump())
-    jsonl = case.saver._storage.jsonl_path(case.owner.session_id, thread_id=case.owner.thread_id)
+    jsonl = case.saver._storage.storage.jsonl_path(case.owner.session_id, thread_id=case.owner.thread_id)
     before_jsonl = jsonl.read_bytes()
     before_facades = tuple(
         (owner, facade.consumed_keys) for owner, facade in case.saver._mutation_intent_facades.items()
@@ -433,7 +433,7 @@ async def test_explicit_rewind_target_refusal_keeps_storage_and_runtime_before_v
         ).rowcount == 1
         case.connection.commit()
     before = tuple(case.connection.iterdump())
-    jsonl = case.saver._storage.jsonl_path(case.owner.session_id, thread_id=case.owner.thread_id)
+    jsonl = case.saver._storage.storage.jsonl_path(case.owner.session_id, thread_id=case.owner.thread_id)
     before_jsonl = jsonl.read_bytes()
     before_view, before_config = case.active_view(), deepcopy(case.config)
     cache_names = (
@@ -518,7 +518,7 @@ def test_source_failure_keeps_view_pending_versions_and_retry_is_atomic(epoch_ca
     before_items = case.connection.execute("SELECT item_id, content_hash FROM item_catalog ORDER BY item_sequence").fetchall()
     before_details = case.connection.execute("SELECT assembly_id, detail_ref FROM context_assemblies ORDER BY rowid").fetchall()
     def detail_files():
-        root = case.saver._storage.root(case.owner.session_id, thread_id=case.owner.thread_id)
+        root = case.saver._storage.storage.root(case.owner.session_id, thread_id=case.owner.thread_id)
         return tuple(
             (path.relative_to(root).as_posix(), path.read_bytes()) for path in sorted(root.rglob("*"))
             if path.is_file() and (
@@ -1118,7 +1118,7 @@ def test_replay_before_as_new_turn_seals_real_admission_and_reuses_after_restart
         session_id=case.owner.session_id, thread_id=case.owner.thread_id,
         turn_id=source_turn, status="cancelled",
     )
-    (old_root,) = case.saver._storage.read_items(
+    (old_root,) = case.saver._storage.storage.read_items(
         case.owner.session_id, case.owner.thread_id, item_ids=(source_root,),
     )
     old_root_bytes = canonical_json_bytes(old_root.to_dict())
@@ -1162,7 +1162,7 @@ def test_replay_before_as_new_turn_seals_real_admission_and_reuses_after_restart
         "SELECT root_input_item_id, initial_execution_id, replay_of_turn_id, status "
         "FROM turn_records WHERE turn_id=?", (replay["turn_id"],),
     ).fetchone() == (replay["root_input_item_id"], admission.execution_id, source_turn, "active")
-    (new_root,) = case.saver._storage.read_items(
+    (new_root,) = case.saver._storage.storage.read_items(
         case.owner.session_id, case.owner.thread_id, item_ids=(str(replay["root_input_item_id"]),),
     )
     assert (new_root.payload_kind, new_root.payload) == (old_root.payload_kind, old_root.payload)
@@ -1209,7 +1209,7 @@ def test_replay_before_as_new_turn_seals_real_admission_and_reuses_after_restart
     assert case.manager.prepare_pending() is None
     assert case.checkpoint_versions() == versions
     assert tuple(canonical_json_bytes(case.snapshot(value).to_dict()) for value in (case.first, visible)) == old_snapshots
-    assert canonical_json_bytes(case.saver._storage.read_items(
+    assert canonical_json_bytes(case.saver._storage.storage.read_items(
         case.owner.session_id, case.owner.thread_id, item_ids=(source_root,),
     )[0].to_dict()) == old_root_bytes
     sealed_bytes = canonical_json_bytes(rebuilt.to_dict())
@@ -1299,21 +1299,21 @@ async def test_full_copy_localizes_versions_transition_and_prefix_before_target_
         "SELECT final_item_id FROM turn_records WHERE turn_id=?", (case.accepted["turn_id"],),
     ).fetchone() == (None,)
     source_reads = tuple(case.publisher.reads)
-    source_jsonl = case.saver._storage.jsonl_path(
+    source_jsonl = case.saver._storage.storage.jsonl_path(
         case.owner.session_id, "", thread_id=case.owner.thread_id,
     )
     original_jsonl = source_jsonl.read_bytes()
     target_session = f"ses_{create_uuid_hex()}"
-    session_bundle_factory(case.saver._storage.sessions_dir, target_session)
-    await case.saver.afork(
+    session_bundle_factory(case.saver._storage.storage.sessions_dir, target_session)
+    await case.saver.forks.afork(
         source_session_id=case.owner.session_id, target_session_id=target_session,
         mode="full_rollout_copy",
     )
     saver = case.stack.enter_context(RolloutCheckpointSaver(
-        case.saver._storage.sessions_dir,
+        case.saver._storage.storage.sessions_dir,
     ))
-    target_thread = saver._storage.main_thread_id(target_session)
-    connection = case.stack.enter_context(saver._storage._connect(
+    target_thread = saver._storage.storage.main_thread_id(target_session)
+    connection = case.stack.enter_context(saver._storage.storage._connect(
         target_thread, "", session_id=target_session,
     ))
     assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -1450,10 +1450,10 @@ async def test_full_copy_rejects_broken_prefix_dependency_without_installing_tar
     continued = case.prepare("same-epoch-negative")
     latest = case.snapshot(continued)
     assert latest.seal_binding.prefix.parent is not None
-    source_index = case.saver._storage.index_path(
+    source_index = case.saver._storage.storage.index_path(
         case.owner.session_id, "", thread_id=case.owner.thread_id,
     )
-    source_jsonl = case.saver._storage.jsonl_path(
+    source_jsonl = case.saver._storage.storage.jsonl_path(
         case.owner.session_id, "", thread_id=case.owner.thread_id,
     )
     before_database, before_jsonl = source_index.read_bytes(), source_jsonl.read_bytes()
@@ -1464,9 +1464,9 @@ async def test_full_copy_rejects_broken_prefix_dependency_without_installing_tar
         "SELECT * FROM context_epoch_transitions ORDER BY transition_id",
     ))
     target_session = f"ses_{create_uuid_hex()}"
-    session_bundle_factory(case.saver._storage.sessions_dir, target_session)
-    target_thread = case.saver._storage.main_thread_id(target_session)
-    target_rollout = case.saver._storage.root(target_session, "", thread_id=target_thread)
+    session_bundle_factory(case.saver._storage.storage.sessions_dir, target_session)
+    target_thread = case.saver._storage.storage.main_thread_id(target_session)
+    target_rollout = case.saver._storage.storage.root(target_session, "", thread_id=target_thread)
     assert not target_rollout.exists()
     seen = []
 
@@ -1493,7 +1493,7 @@ async def test_full_copy_rejects_broken_prefix_dependency_without_installing_tar
         inject_broken_binding,
     )
     with pytest.raises(RuntimeError, match="source-mismatch"):
-        await case.saver.afork(
+        await case.saver.forks.afork(
             source_session_id=case.owner.session_id, target_session_id=target_session,
             mode="full_rollout_copy",
         )

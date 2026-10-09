@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import logging
 import sqlite3
+from collections.abc import Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -16,6 +19,7 @@ from langgraph.checkpoint.base import empty_checkpoint
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
+from app.core.job_event_bus import EventType
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.enums import (
@@ -50,9 +54,12 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceManager,
 )
 from app.services.mapping.itemized.canonical_langchain import project_canonical_items
+from app.services.orchestration.execution_step.failures import handle_step_failure
 from app.services.orchestration.execution_step.model_call import StepModelCallAdapter
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from tests.harness.python.run_context import TestRunContext
+from tests.support.workspaces import prepare_default_test_workspace
 
 SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
 EMPTY_TOOL_SET = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
@@ -63,7 +70,7 @@ def execution_scope():
     """dispatch 用例显式注入真实准入上下文；不封存、不补造业务结果。"""
     @contextmanager
     def activate(saver: RolloutCheckpointSaver, accepted: dict[str, object]):
-        thread = saver._storage.main_thread_id(SESSION_ID)
+        thread = saver._storage.storage.main_thread_id(SESSION_ID)
         admission = saver.execution_admission(
             SESSION_ID, thread_id=thread,
             execution_id=str(accepted["initial_execution_id"]),
@@ -87,7 +94,7 @@ def _accept(
 ) -> dict[str, object]:
     return saver.accept_turn(
         session_id,
-        thread_id=saver._storage.main_thread_id(session_id),
+        thread_id=saver._storage.storage.main_thread_id(session_id),
         accepted_ingress_id="ingress-user-1",
         acceptance_idempotency_key="acceptance-user-1",
         job_id="job-user-1",
@@ -190,12 +197,12 @@ def test_item_commit_rejects_non_canonical_locator_metadata(
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     accepted = _accept(saver, SESSION_ID)
-    thread = saver._storage.main_thread_id(SESSION_ID)
-    rollout_path = saver._storage.jsonl_path(SESSION_ID)
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
+    rollout_path = saver._storage.storage.jsonl_path(SESSION_ID)
     before = rollout_path.read_bytes()
 
     with pytest.raises(ItemSchemaError, match="source_revision|block_id|block_index"):
-        saver._storage.append_item(
+        saver._storage.executions.append_item(
             SESSION_ID,
             thread,
             _assistant_item(
@@ -233,7 +240,7 @@ def test_item_commit_uses_canonical_writer_for_block_part_projection(
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     accepted = _accept(saver, SESSION_ID)
-    thread = saver._storage.main_thread_id(SESSION_ID)
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
 
     item = _assistant_item(
         "item-block-projection",
@@ -241,7 +248,7 @@ def test_item_commit_uses_canonical_writer_for_block_part_projection(
             model_call_id="model-call-1", block_id="block-1", block_index=0
         ),
     )
-    commit_id = saver._storage.append_item(
+    commit_id = saver._storage.executions.append_item(
         SESSION_ID, thread, item,
         execution_id=str(accepted["initial_execution_id"]),
     )
@@ -259,7 +266,7 @@ def test_item_commit_uses_canonical_writer_for_block_part_projection(
         ).fetchone()
     assert part[:4] == (item.item_id, "block-1", 0, item.content_hash)
     assert locator[2] == commit_id
-    raw = saver._storage.jsonl_path(SESSION_ID).read_bytes()
+    raw = saver._storage.storage.jsonl_path(SESSION_ID).read_bytes()
     assert (
         part[4] == hashlib.sha256(raw[locator[0] : locator[0] + locator[1]]).hexdigest()
     )
@@ -468,8 +475,8 @@ def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
         saver.append_items(SESSION_ID, (live_call,), thread_id=thread)
         saver.append_items(SESSION_ID, (checkpoint_shadow, result), thread_id=thread)
 
-    with saver._storage.open_read_snapshot(SESSION_ID, thread) as snapshot:
-        projection = saver._storage.read_turn_projections(snapshot, ("turn-user-1",))[
+    with saver._storage.storage.open_read_snapshot(SESSION_ID, thread) as snapshot:
+        projection = saver._storage.storage.read_turn_projections(snapshot, ("turn-user-1",))[
             "turn-user-1"
         ]
 
@@ -580,8 +587,8 @@ def test_canonical_tool_call_recovers_coordinates_from_scoped_block_id(
     with execution_scope(saver, accepted):
         saver.append_items(SESSION_ID, (live_call,), thread_id=thread)
 
-    with saver._storage.open_read_snapshot(SESSION_ID, thread) as snapshot:
-        projection = saver._storage.read_turn_projections(
+    with saver._storage.storage.open_read_snapshot(SESSION_ID, thread) as snapshot:
+        projection = saver._storage.storage.read_turn_projections(
             snapshot, ("turn-tool-call",)
         )["turn-tool-call"]
 
@@ -604,8 +611,8 @@ def test_item_catalog_reads_fail_closed_on_missing_item_and_view_reference(
     _accept(saver, SESSION_ID)
 
     with pytest.raises(KeyError, match="canonical item catalog 缺少请求的 item"):
-        saver._storage.read_items(
-            SESSION_ID, saver._storage.main_thread_id(SESSION_ID),
+        saver._storage.storage.read_items(
+            SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID),
             item_ids=("item-does-not-exist",),
         )
 
@@ -631,12 +638,12 @@ def test_item_catalog_reads_fail_closed_on_missing_item_and_view_reference(
         connection.commit()
 
     with (
-        saver._storage.open_read_snapshot(
-            SESSION_ID, saver._storage.main_thread_id(SESSION_ID),
+        saver._storage.storage.open_read_snapshot(
+            SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID),
         ) as snapshot,
         pytest.raises(KeyError, match="canonical item catalog 缺少请求的 item"),
     ):
-        saver._storage.read_items_for_view(snapshot, view_id)
+        saver._storage.checkpoints.read_items_for_view(snapshot, view_id)
 
 
 def test_index_validation_rejects_catalog_sequence_gaps_even_when_jsonl_matches(
@@ -662,7 +669,7 @@ def test_index_validation_rejects_catalog_sequence_gaps_even_when_jsonl_matches(
         connection.commit()
 
     with pytest.raises(RuntimeError, match="item_sequence 不连续"):
-        saver._storage.validate_index(SESSION_ID, saver._storage.main_thread_id(SESSION_ID))
+        saver._storage.storage.validate_index(SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID))
 
 
 def test_item_projection_read_rejects_catalog_hash_drift(
@@ -681,7 +688,7 @@ def test_item_projection_read_rejects_catalog_hash_drift(
         connection.commit()
 
     with pytest.raises(RuntimeError, match="item projection 与 canonical catalog"):
-        saver._storage.read_item_projections(SESSION_ID, item_ids=("item-user-1",))
+        saver._storage.storage.read_item_projections(SESSION_ID, item_ids=("item-user-1",))
 
 
 @pytest.mark.parametrize(
@@ -712,7 +719,7 @@ def test_item_projection_read_rejects_typed_or_identity_drift(
         connection.commit()
 
     with pytest.raises(RuntimeError, match="item_projections|item projection"):
-        saver._storage.read_item_projections(SESSION_ID, item_ids=("item-user-1",))
+        saver._storage.storage.read_item_projections(SESSION_ID, item_ids=("item-user-1",))
 
 
 def test_execution_lost_resume_creates_execution_without_a_new_user_root(
@@ -722,7 +729,7 @@ def test_execution_lost_resume_creates_execution_without_a_new_user_root(
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    thread_id = saver._storage.main_thread_id(SESSION_ID)
+    thread_id = saver._storage.storage.main_thread_id(SESSION_ID)
     accepted = _accept(saver, SESSION_ID)
     with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         accepted_offset = connection.execute(
@@ -808,7 +815,7 @@ def test_interrupted_turn_resumes_after_restart_without_new_user_root(
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    thread_id = saver._storage.main_thread_id(SESSION_ID)
+    thread_id = saver._storage.storage.main_thread_id(SESSION_ID)
     accepted = _accept(saver, SESSION_ID)
     saver.converge_execution(
         SESSION_ID,
@@ -822,7 +829,7 @@ def test_interrupted_turn_resumes_after_restart_without_new_user_root(
     restarted = RolloutCheckpointSaver(sessions_dir)
     resumed = restarted.resume_turn(
         SESSION_ID,
-        thread_id=restarted._storage.main_thread_id(SESSION_ID),
+        thread_id=restarted._storage.storage.main_thread_id(SESSION_ID),
         job_id="job-user-resume-2",
         turn_id="turn-user-1",
     )
@@ -856,7 +863,7 @@ def test_interrupted_turn_resumes_after_restart_without_new_user_root(
 
     restarted.converge_execution(
         SESSION_ID,
-        thread_id=restarted._storage.main_thread_id(SESSION_ID),
+        thread_id=restarted._storage.storage.main_thread_id(SESSION_ID),
         turn_id="turn-user-1",
         execution_id=str(resumed["execution_id"]),
         outcome="completed_empty",
@@ -877,10 +884,10 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(frozen_pro
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     accepted = _accept(saver, SESSION_ID, initial_execution_id=model_call_id)
-    thread = saver._storage.main_thread_id(SESSION_ID)
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
     resolver = get_session_path_resolver(sessions_dir)
     stream_store = MessageStreamStore(path_resolver=resolver)
-    writer = await stream_store.open(
+    writer = await stream_store.open(thread_id=stream_store._path_resolver.main_thread_id(SESSION_ID),
         session_id=SESSION_ID,
         turn_id="turn-user-1",
     )
@@ -946,7 +953,7 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(frozen_pro
 
     partial_items = [
         item
-        for item in saver._storage.read_items(SESSION_ID, thread)
+        for item in saver._storage.storage.read_items(SESSION_ID, thread)
         if item.status == CanonicalItemStatus.PARTIAL.value
     ]
     assert len(partial_items) == 1
@@ -1004,11 +1011,11 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(frozen_pro
         content_hash=content_hash,
     )
     saver.register_content_part_anchor(
-        SESSION_ID, anchor, thread_id=saver._storage.main_thread_id(SESSION_ID)
+        SESSION_ID, anchor, thread_id=saver._storage.storage.main_thread_id(SESSION_ID)
     )
 
     restarted_saver = RolloutCheckpointSaver(sessions_dir)
-    restarted_items = restarted_saver._storage.read_items(SESSION_ID, thread)
+    restarted_items = restarted_saver._storage.storage.read_items(SESSION_ID, thread)
     restored_item = next(
         item for item in restarted_items if item.item_id == partial_item.item_id
     )
@@ -1016,7 +1023,7 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(frozen_pro
     assert (
         restarted_saver.resolve_content_part_anchor(
             SESSION_ID,
-            thread_id=restarted_saver._storage.main_thread_id(SESSION_ID),
+            thread_id=restarted_saver._storage.storage.main_thread_id(SESSION_ID),
             anchor_id=anchor.anchor_id,
         )
         == anchor
@@ -1087,7 +1094,7 @@ def test_acceptance_root_identity_survives_checkpoint_seal_and_restart(frozen_pr
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    thread = saver._storage.main_thread_id(SESSION_ID)
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
     payload = "接受根项的真实投影"
 
     def accept(checkpoint_saver: RolloutCheckpointSaver) -> dict[str, object]:
@@ -1110,7 +1117,7 @@ def test_acceptance_root_identity_survives_checkpoint_seal_and_restart(frozen_pr
         assert root_id == root_options["root_item_id"]
     else:
         assert root_id.startswith("item-root-")
-    jsonl_path = saver._storage.jsonl_path(SESSION_ID, thread_id=thread)
+    jsonl_path = saver._storage.storage.jsonl_path(SESSION_ID, thread_id=thread)
     accepted_jsonl = jsonl_path.read_bytes()
     database_path = _rollout_db(sessions_dir, SESSION_ID)
     with sqlite3.connect(database_path) as connection:
@@ -1123,7 +1130,7 @@ def test_acceptance_root_identity_survives_checkpoint_seal_and_restart(frozen_pr
         assert tuple(connection.iterdump()) == accepted_dump
     assert jsonl_path.read_bytes() == accepted_jsonl
 
-    roots = saver._storage.read_items(SESSION_ID, thread)
+    roots = saver._storage.storage.read_items(SESSION_ID, thread)
     assert len(roots) == 1
     root = roots[0]
     assert root.item_id == root_id
@@ -1171,7 +1178,7 @@ def test_acceptance_root_identity_survives_checkpoint_seal_and_restart(frozen_pr
     snapshot_bytes = canonical_json_bytes(
         saver.get_context_assembly(SESSION_ID, thread, assembly_id=assembly_id).to_dict()
     )
-    assert saver._storage.read_items(SESSION_ID, thread) == roots
+    assert saver._storage.storage.read_items(SESSION_ID, thread) == roots
     assert jsonl_path.read_bytes() == accepted_jsonl
     with sqlite3.connect(database_path) as connection:
         sealed_dump = tuple(connection.iterdump())
@@ -1181,7 +1188,7 @@ def test_acceptance_root_identity_survives_checkpoint_seal_and_restart(frozen_pr
     assert {key: restarted_acceptance[key] for key in accepted} == {
         **accepted, "idempotent": True,
     }
-    assert restarted._storage.read_items(SESSION_ID, thread) == roots
+    assert restarted._storage.storage.read_items(SESSION_ID, thread) == roots
 
     def refuse_live_supplier(*_args):
         pytest.fail("已封存的 root 重启重试不得重新读取 ToolSet 或 published source")
@@ -1286,7 +1293,7 @@ def test_committed_overlay_selection_is_epoch_stable_after_restart(
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     _accept(saver, SESSION_ID)
-    thread_id = saver._storage._path_resolver.main_thread_id(SESSION_ID)
+    thread_id = saver._storage.storage._path_resolver.main_thread_id(SESSION_ID)
 
     def overlay(epoch: int) -> SimpleNamespace:
         return SimpleNamespace(
@@ -1371,7 +1378,7 @@ def test_source_overlay_registration_rejects_coerced_manifest_values(
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     _accept(saver, SESSION_ID)
-    thread_id = saver._storage._path_resolver.main_thread_id(SESSION_ID)
+    thread_id = saver._storage.storage._path_resolver.main_thread_id(SESSION_ID)
     overlay = _source_overlay_for_test(thread_id=thread_id, **{field_name: value})
 
     with pytest.raises((TypeError, ValueError)):
@@ -1391,7 +1398,7 @@ def test_source_overlay_registration_rejects_ref_identity_collision(
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     _accept(saver, SESSION_ID)
-    thread_id = saver._storage._path_resolver.main_thread_id(SESSION_ID)
+    thread_id = saver._storage.storage._path_resolver.main_thread_id(SESSION_ID)
     overlay = _source_overlay_for_test(
         thread_id=thread_id,
         delta_ref="policy-base",
@@ -1419,7 +1426,7 @@ def test_source_overlay_writer_persists_the_complete_session_thread_owner(
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     _accept(saver, SESSION_ID)
-    thread_id = saver._storage._path_resolver.main_thread_id(SESSION_ID)
+    thread_id = saver._storage.storage._path_resolver.main_thread_id(SESSION_ID)
     overlay = _source_overlay_for_test(thread_id=thread_id, idempotency_key=None)
 
     saver.register_source_overlay(
@@ -1429,7 +1436,7 @@ def test_source_overlay_writer_persists_the_complete_session_thread_owner(
         base_content={"policy": "persisted"},
     )
 
-    index_path = saver._storage.index_path(SESSION_ID, thread_id=thread_id)
+    index_path = saver._storage.storage.index_path(SESSION_ID, thread_id=thread_id)
     with sqlite3.connect(index_path) as connection:
         owner = connection.execute(
             "SELECT session_id, thread_id FROM database_meta WHERE singleton_id = 1"
@@ -1471,7 +1478,7 @@ def test_source_overlay_restore_rejects_corrupted_registry_rows(
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     _accept(saver, SESSION_ID)
-    thread_id = saver._storage._path_resolver.main_thread_id(SESSION_ID)
+    thread_id = saver._storage.storage._path_resolver.main_thread_id(SESSION_ID)
     saver.register_source_overlay(
         _source_overlay_for_test(thread_id=thread_id),
         session_id=SESSION_ID,
@@ -1533,8 +1540,8 @@ def test_item_bearing_terminal_convergence_materializes_output_and_restart(
     )
 
     restarted = RolloutCheckpointSaver(sessions_dir)
-    assert [item.item_id for item in restarted._storage.read_items(
-        SESSION_ID, restarted._storage.main_thread_id(SESSION_ID),
+    assert [item.item_id for item in restarted._storage.storage.read_items(
+        SESSION_ID, restarted._storage.storage.main_thread_id(SESSION_ID),
     )] == [
         "item-user-1",
         output.item_id,
@@ -1580,7 +1587,7 @@ def test_item_bearing_terminal_convergence_materializes_output_and_restart(
     assert projected_turn == (1, 2, 1, 2, "output-without-projection", "completed")
     assert view_turn == (1, 2)
     latest, cursor, projection_epoch = restarted._history_reader.bootstrap(
-        SESSION_ID, restarted._storage.main_thread_id(SESSION_ID),
+        SESSION_ID, restarted._storage.storage.main_thread_id(SESSION_ID),
     )
     assert latest is not None
     assert latest.turn_id == "turn-user-1"
@@ -1669,8 +1676,8 @@ def test_item_bearing_terminal_projection_failure_rolls_back_jsonl_and_sqlite(
         )
 
     restarted = RolloutCheckpointSaver(sessions_dir)
-    assert [item.item_id for item in restarted._storage.read_items(
-        SESSION_ID, restarted._storage.main_thread_id(SESSION_ID),
+    assert [item.item_id for item in restarted._storage.storage.read_items(
+        SESSION_ID, restarted._storage.storage.main_thread_id(SESSION_ID),
     )] == [
         "item-user-1"
     ]
@@ -1699,7 +1706,7 @@ def test_cancelled_turn_rejects_original_dispatch_and_replays_as_new_turn(
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    thread_id = saver._storage.main_thread_id(SESSION_ID)
+    thread_id = saver._storage.storage.main_thread_id(SESSION_ID)
     accepted = _accept(saver, SESSION_ID)
     execution_id = str(accepted["initial_execution_id"])
 
@@ -1783,7 +1790,7 @@ def test_terminal_turn_rejects_resume_and_original_dispatch_without_mutation(
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    thread_id = saver._storage.main_thread_id(SESSION_ID)
+    thread_id = saver._storage.storage.main_thread_id(SESSION_ID)
     accepted = _accept(saver, SESSION_ID)
     saver.converge_execution(
         SESSION_ID,
@@ -1834,7 +1841,7 @@ def test_replay_as_new_turn_is_idempotent_after_saver_restart(
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    thread_id = saver._storage.main_thread_id(SESSION_ID)
+    thread_id = saver._storage.storage.main_thread_id(SESSION_ID)
     _accept(saver, SESSION_ID)
 
     first = saver.replay_as_new_turn(
@@ -1846,7 +1853,7 @@ def test_replay_as_new_turn_is_idempotent_after_saver_restart(
     restarted = RolloutCheckpointSaver(sessions_dir)
     second = restarted.replay_as_new_turn(
         SESSION_ID,
-        thread_id=restarted._storage.main_thread_id(SESSION_ID),
+        thread_id=restarted._storage.storage.main_thread_id(SESSION_ID),
         source_turn_id="turn-user-1",
         acceptance_idempotency_key="replay-acceptance-restart-1",
     )
@@ -1891,7 +1898,7 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
     )
     saver.register_content_part(
         SESSION_ID,
-        thread_id=saver._storage.main_thread_id(SESSION_ID),
+        thread_id=saver._storage.storage.main_thread_id(SESSION_ID),
         item_id=str(accepted["root_input_item_id"]),
         part=part,
         locator={
@@ -1932,13 +1939,13 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
         content_hash=sha256_jcs(root),
     )
     saver.register_content_part_anchor(
-        SESSION_ID, anchor, thread_id=saver._storage.main_thread_id(SESSION_ID)
+        SESSION_ID, anchor, thread_id=saver._storage.storage.main_thread_id(SESSION_ID)
     )
 
     restarted = RolloutCheckpointSaver(sessions_dir)
     resolved = restarted.resolve_content_part_anchor(
         SESSION_ID,
-        thread_id=restarted._storage.main_thread_id(SESSION_ID),
+        thread_id=restarted._storage.storage.main_thread_id(SESSION_ID),
         anchor_id=anchor.anchor_id,
     )
     assert resolved == anchor
@@ -1959,7 +1966,7 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
         == hashlib.sha256(raw_line[item_offset : item_offset + item_length]).hexdigest()
     )
     assert (
-        restarted._storage.read_items(SESSION_ID, thread)[0].item_id
+        restarted._storage.storage.read_items(SESSION_ID, thread)[0].item_id
         == accepted["root_input_item_id"]
     )
 
@@ -1977,7 +1984,7 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
         restarted.register_content_part_anchor(
             SESSION_ID,
             unreachable,
-            thread_id=restarted._storage.main_thread_id(SESSION_ID),
+            thread_id=restarted._storage.storage.main_thread_id(SESSION_ID),
         )
 
     inactive_view_id = "view-inactive-anchor"
@@ -2024,7 +2031,7 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
         restarted.register_content_part_anchor(
             SESSION_ID,
             inactive_anchor,
-            thread_id=restarted._storage.main_thread_id(SESSION_ID),
+            thread_id=restarted._storage.storage.main_thread_id(SESSION_ID),
         )
 
     jsonl_path = _rollout_db(sessions_dir, SESSION_ID).parent / "rollout.jsonl"
@@ -2033,7 +2040,7 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
     with pytest.raises(ValueError, match="line hash 不匹配"):
         restarted.resolve_content_part_anchor(
             SESSION_ID,
-            thread_id=restarted._storage.main_thread_id(SESSION_ID),
+            thread_id=restarted._storage.storage.main_thread_id(SESSION_ID),
             anchor_id=anchor.anchor_id,
         )
 
@@ -2072,19 +2079,19 @@ def test_sealed_selection_drives_langchain_and_provider_projection_after_restart
             **frozen_provider_activation(saver, plan_creation_idempotency_key='projection:create'),
         )
     assembly_id = str(prepared["assembly_id"])
-    snapshot = saver.get_context_assembly(SESSION_ID, saver._storage.main_thread_id(SESSION_ID), assembly_id=assembly_id)
+    snapshot = saver.get_context_assembly(SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID), assembly_id=assembly_id)
     plan = snapshot.as_sealed_plan()
-    first_messages, first_tools, first_losses = saver.project_context_plan_to_provider(SESSION_ID, saver._storage.main_thread_id(SESSION_ID), plan, target_format='chat_completions')
+    first_messages, first_tools, first_losses = saver.project_context_plan_to_provider(SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID), plan, target_format='chat_completions')
     assert [entry.plan_ordinal for entry in plan.selection] == list(
         range(len(plan.selection))
     )
     assert [message.content for message in first_messages] == ["请检查当前状态"]
     assert [tool["function"]["name"] for tool in first_tools] == ["read_file"]
     assert first_losses == ()
-    history_messages = saver.project_context_plan_to_messages(SESSION_ID, saver._storage.main_thread_id(SESSION_ID), plan)
-    history_projection = saver.project_context_plan_to_history(SESSION_ID, saver._storage.main_thread_id(SESSION_ID), plan)
+    history_messages = saver.project_context_plan_to_messages(SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID), plan)
+    history_projection = saver.project_context_plan_to_history(SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID), plan)
     diagnostic_messages, diagnostic_losses = (
-        saver.project_context_plan_with_diagnostics(SESSION_ID, saver._storage.main_thread_id(SESSION_ID), plan)
+        saver.project_context_plan_with_diagnostics(SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID), plan)
     )
     assert [message.content for message in history_messages] == [
         message.content for message in first_messages
@@ -2104,9 +2111,9 @@ def test_sealed_selection_drives_langchain_and_provider_projection_after_restart
     assert diagnostic_losses == first_losses
 
     restarted = RolloutCheckpointSaver(sessions_dir)
-    restored_snapshot = restarted.get_context_assembly(SESSION_ID, restarted._storage.main_thread_id(SESSION_ID), assembly_id=assembly_id)
+    restored_snapshot = restarted.get_context_assembly(SESSION_ID, restarted._storage.storage.main_thread_id(SESSION_ID), assembly_id=assembly_id)
     second_messages, second_tools, second_losses = (
-        restarted.project_context_plan_to_provider(SESSION_ID, restarted._storage.main_thread_id(SESSION_ID), restored_snapshot.as_sealed_plan(), target_format='chat_completions')
+        restarted.project_context_plan_to_provider(SESSION_ID, restarted._storage.storage.main_thread_id(SESSION_ID), restored_snapshot.as_sealed_plan(), target_format='chat_completions')
     )
     assert restored_snapshot.selection == snapshot.selection
     assert [message.content for message in second_messages] == [
@@ -2124,7 +2131,7 @@ def test_optional_omitted_selection_skips_detail_body_and_provider_tools(
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     accepted = _accept(saver, SESSION_ID)
-    thread = saver._storage.main_thread_id(SESSION_ID)
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
     body = {"policy": "只在需要时注入", "scope": "optional"}
     contribution = ContextContribution(
         contribution_id="optional-policy-1",
@@ -2134,7 +2141,7 @@ def test_optional_omitted_selection_skips_detail_body_and_provider_tools(
         body=body,
         source_ordinal=0,
     )
-    saver.register_context_contribution(SESSION_ID, saver._storage.main_thread_id(SESSION_ID), contribution, request_content=body)
+    saver.register_context_contribution(SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID), contribution, request_content=body)
 
     draft = saver.compose_committed_context_plan(
         SESSION_ID, thread, plan_id="optional-omission", tool_set=EMPTY_TOOL_SET,
@@ -2161,7 +2168,7 @@ def test_optional_omitted_selection_skips_detail_body_and_provider_tools(
     assert omitted.content_length == contribution.content_length
     assert omitted.loss == ("selection_omitted",)
 
-    messages, tools, losses = saver.project_context_plan_to_provider(SESSION_ID, saver._storage.main_thread_id(SESSION_ID), snapshot.as_sealed_plan(), target_format='chat_completions')
+    messages, tools, losses = saver.project_context_plan_to_provider(SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID), snapshot.as_sealed_plan(), target_format='chat_completions')
     assert [message.content for message in messages] == ["请检查当前状态"]
     assert tools == []
     assert losses == ("selection_omitted",)
@@ -2182,7 +2189,7 @@ def test_request_only_detail_and_selection_restore_without_memory_body(
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     accepted = _accept(saver, SESSION_ID)
-    thread = saver._storage.main_thread_id(SESSION_ID)
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
     body = {"policy": "先读取工作区配置", "scope": "request"}
     contribution = ContextContribution(
         contribution_id="policy-contribution-1",
@@ -2235,16 +2242,16 @@ def test_request_only_detail_and_selection_restore_without_memory_body(
     assert first_tools == [{"type": "function", "function": {"name": "read_file"}}]
 
     restarted = RolloutCheckpointSaver(sessions_dir)
-    restored = restarted.get_context_assembly(SESSION_ID, restarted._storage.main_thread_id(SESSION_ID), assembly_id=assembly_id)
+    restored = restarted.get_context_assembly(SESSION_ID, restarted._storage.storage.main_thread_id(SESSION_ID), assembly_id=assembly_id)
     restored_plan = restored.as_sealed_plan()
-    messages, tools, losses = restarted.project_context_plan_to_provider(SESSION_ID, restarted._storage.main_thread_id(SESSION_ID), restored_plan, target_format='chat_completions')
+    messages, tools, losses = restarted.project_context_plan_to_provider(SESSION_ID, restarted._storage.storage.main_thread_id(SESSION_ID), restored_plan, target_format='chat_completions')
     assert restored_plan.selection == plan.selection
     assert [message.content for message in messages] == [
         message.content for message in first_messages
     ]
     assert tools == first_tools
     assert losses == ()
-    history_messages = restarted.project_context_plan_to_history(SESSION_ID, restarted._storage.main_thread_id(SESSION_ID), restored_plan)
+    history_messages = restarted.project_context_plan_to_history(SESSION_ID, restarted._storage.storage.main_thread_id(SESSION_ID), restored_plan)
     assert [message.content for message in history_messages] == ["请检查当前状态"]
     assert all(
         message.id != contribution.contribution_id for message in history_messages
@@ -2261,7 +2268,7 @@ def test_protected_request_only_detail_projects_after_restart_with_injected_key(
         sessions_dir,
     )
     accepted = _accept(saver, SESSION_ID)
-    thread = saver._storage.main_thread_id(SESSION_ID)
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
     body = {"secret_policy": "只允许 provider 使用"}
     contribution = ContextContribution(
         contribution_id="protected-policy-1",
@@ -2305,16 +2312,16 @@ def test_protected_request_only_detail_projects_after_restart_with_injected_key(
     restarted = RolloutCheckpointSaver(
         sessions_dir,
     )
-    restored = restarted.get_context_assembly(SESSION_ID, restarted._storage.main_thread_id(SESSION_ID), assembly_id=snapshot.assembly_id)
+    restored = restarted.get_context_assembly(SESSION_ID, restarted._storage.storage.main_thread_id(SESSION_ID), assembly_id=snapshot.assembly_id)
     restored_plan = restored.as_sealed_plan()
-    messages, _, losses = restarted.project_context_plan_to_provider(SESSION_ID, restarted._storage.main_thread_id(SESSION_ID), restored_plan, target_format='chat_completions')
+    messages, _, losses = restarted.project_context_plan_to_provider(SESSION_ID, restarted._storage.storage.main_thread_id(SESSION_ID), restored_plan, target_format='chat_completions')
     assert losses == ()
     assert [message.content for message in messages] == [
         [body],
         "请检查当前状态",
     ]
     assert (
-        restarted.read_context_plan_detail(SESSION_ID, restarted._storage.main_thread_id(SESSION_ID), detail_ref=protected_entries[0].detail_ref, include_sensitive=True)["detail"]
+        restarted.read_context_plan_detail(SESSION_ID, restarted._storage.storage.main_thread_id(SESSION_ID), detail_ref=protected_entries[0].detail_ref, include_sensitive=True)["detail"]
         == body
     )
 
@@ -2363,7 +2370,7 @@ def test_sealed_assembly_restore_rejects_coerced_sqlite_manifest_values(frozen_p
         connection.commit()
 
     with pytest.raises((RuntimeError, TypeError), match="assembly manifest|manifest"):
-        saver.get_context_assembly(SESSION_ID, saver._storage.main_thread_id(SESSION_ID), assembly_id=assembly_id)
+        saver.get_context_assembly(SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID), assembly_id=assembly_id)
 
 
 def test_sealed_assembly_restore_rejects_missing_detail_manifest(
@@ -2374,7 +2381,7 @@ def test_sealed_assembly_restore_rejects_missing_detail_manifest(
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     accepted = _accept(saver, SESSION_ID)
-    thread = saver._storage.main_thread_id(SESSION_ID)
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
     body = {"policy": "只能在本次请求使用"}
     contribution = ContextContribution(
         contribution_id="restore-detail-missing",
@@ -2409,4 +2416,330 @@ def test_sealed_assembly_restore_rejects_missing_detail_manifest(
         connection.commit()
 
     with pytest.raises(RuntimeError, match="detail-unavailable"):
-        saver.get_context_assembly(SESSION_ID, saver._storage.main_thread_id(SESSION_ID), assembly_id=str(snapshot.assembly_id))
+        saver.get_context_assembly(SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID), assembly_id=str(snapshot.assembly_id))
+
+
+def test_itemized_capability_uses_context_owner_for_model_namespace_without_mutation(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    """模型子 namespace 读同一 context owner，查询不能补建或隐藏真实损坏。"""
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, SESSION_ID)
+    saver = RolloutCheckpointSaver(sessions_dir)
+    _accept(saver, SESSION_ID)
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
+    database = _rollout_db(sessions_dir, SESSION_ID)
+    before = database.read_bytes()
+    with sqlite3.connect(database) as connection:
+        namespaces_before = connection.execute(
+            "SELECT checkpoint_ns FROM checkpoint_namespace_state ORDER BY checkpoint_ns"
+        ).fetchall()
+
+    assert saver.supports_itemized_context(SESSION_ID, thread, checkpoint_ns="model:provider-call")
+    with pytest.raises(RuntimeError, match="namespace 状态缺失"):
+        saver.supports_itemized_context(SESSION_ID, thread, checkpoint_ns="named-owner")
+    with sqlite3.connect(database) as connection:
+        namespaces_after = connection.execute(
+            "SELECT checkpoint_ns FROM checkpoint_namespace_state ORDER BY checkpoint_ns"
+        ).fetchall()
+    assert namespaces_after == namespaces_before == [("",)]
+    assert database.read_bytes() == before
+
+    with sqlite3.connect(database) as connection:
+        connection.execute("DELETE FROM checkpoint_namespace_state WHERE checkpoint_ns = ''")
+    with pytest.raises(RuntimeError, match="namespace 状态缺失"):
+        saver.supports_itemized_context(SESSION_ID, thread, checkpoint_ns="model:provider-call")
+
+
+@pytest.mark.asyncio
+async def test_post_commit_tool_observer_failure_keeps_result_and_converges_execution(
+    frozen_provider_activation,
+    frozen_provider_wire,
+    request: pytest.FixtureRequest,
+    session_bundle_factory,
+    execution_scope,
+) -> None:
+    """真实工具结果已提交后 observer 抛错，失败收口不得重写 canonical item。"""
+
+    class PostCommitObserverFailure(RuntimeError):
+        pass
+
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    workspace_root = prepare_default_test_workspace(
+        workspace_root=context.workspace_root,
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+    )
+    sessions_dir = workspace_root / ".boxteam" / "sessions"
+    session_bundle_factory(sessions_dir, SESSION_ID)
+    saver = RolloutCheckpointSaver(sessions_dir)
+    accepted = _accept(saver, SESSION_ID)
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
+    resolver = get_session_path_resolver(sessions_dir)
+    stream_store = MessageStreamStore(path_resolver=resolver)
+    writer = await stream_store.open(
+        session_id=SESSION_ID,
+        thread_id=thread,
+        turn_id="turn-user-1",
+        job_id="job-user-1",
+    )
+    model_call_id = str(uuid4())
+    tool_execution_id = "tool-execution-post-commit"
+    result_text = "Saver 中已提交的工具结果"
+    observer_error = PostCommitObserverFailure("commit observer failed after append")
+    observer_results: list[dict[str, object]] = []
+    observer_failures = 0
+
+    def observe_committed_items(
+        session_id: str,
+        observed_thread_id: str,
+        items: Sequence[CanonicalItemRecord],
+    ) -> None:
+        nonlocal observer_failures
+        for item in items:
+            if item.semantic_kind != SemanticKind.TOOL_RESULT.value:
+                continue
+            persisted_items = saver._storage.storage.read_items(
+                session_id,
+                observed_thread_id,
+                item_ids=(item.item_id,),
+            )
+            persisted_item = persisted_items[0] if len(persisted_items) == 1 else None
+            observer_results.append(
+                {
+                    "item_id": item.item_id,
+                    "persisted": persisted_item is not None,
+                    "same_item_id": (
+                        persisted_item is not None and persisted_item.item_id == item.item_id
+                    ),
+                    "same_payload": (
+                        persisted_item is not None and persisted_item.payload == item.payload
+                    ),
+                    "same_content_hash": (
+                        persisted_item is not None
+                        and persisted_item.content_hash == item.content_hash
+                    ),
+                    "content": (
+                        persisted_item.payload["content"] if persisted_item else None
+                    ),
+                    "content_hash": (
+                        persisted_item.content_hash if persisted_item else None
+                    ),
+                }
+            )
+            observer_failures += 1
+            if observer_failures == 1:
+                raise observer_error
+
+    canonical_sink = CanonicalItemSink(
+        saver,
+        session_id=SESSION_ID,
+        thread_id=thread,
+        checkpoint_ns="",
+        committed_item_observer=observe_committed_items,
+    )
+    model_calls = StepModelCallAdapter(
+        checkpointer=saver,
+        session_id=SESSION_ID,
+        thread_id=thread,
+        job_id=str(accepted["job_id"]),
+        checkpoint_ns="",
+    )
+    runtime = MessageStreamRuntime(
+        writer,
+        canonical_item_sink=canonical_sink.append,
+        canonical_turn_id="turn-user-1",
+        model_call_registrar=model_calls.register,
+        model_call_outcome_sink=model_calls.update_outcome,
+    )
+    published: list[tuple[str, dict[str, object]]] = []
+    settlement_error: Exception | None = None
+    primary_error: Exception | None = None
+
+    async def publish(event_type: str, payload: dict[str, object]) -> None:
+        published.append((event_type, payload))
+
+    with execution_scope(saver, accepted) as (thread, manager):
+        saver.prepare_context_for_provider(
+            SESSION_ID,
+            thread,
+            turn_id="turn-user-1",
+            execution_id=str(accepted["initial_execution_id"]),
+            plan_creation_idempotency_key="post-commit-failure:create",
+            seal_idempotency_key="post-commit-failure:seal",
+            context_source_manager=manager,
+            tool_set_supplier=lambda: EMPTY_TOOL_SET,
+            **frozen_provider_wire("test-provider", "chat_completions"),
+            **frozen_provider_activation(
+                saver,
+                plan_creation_idempotency_key="post-commit-failure:create",
+                model_call_id=model_call_id,
+            ),
+        )
+        await runtime.start_model(model_call_id, "test-provider")
+        await runtime.accept_message_chunk(
+            AIMessageChunk(
+                content="",
+                tool_call_chunks=[
+                    {
+                        "index": 0,
+                        "id": "provider-call-post-commit",
+                        "name": "read_fixture",
+                        "args": '{"path":"test.md"}',
+                    }
+                ]
+            )
+        )
+        await runtime.prepare_tool_execution(model_call_id)
+        tool_call_id = runtime.claim_tool_call_id("read_fixture", {"path": "test.md"})
+        assert tool_call_id is not None
+        await runtime.start_tool(
+            tool_execution_id=tool_execution_id,
+            tool_call_id=tool_call_id,
+            tool_name="read_fixture",
+        )
+        try:
+            await runtime.complete_tool(
+                tool_execution_id=tool_execution_id,
+                tool_call_id=tool_call_id,
+                tool_name="read_fixture",
+                status="succeeded",
+                result=result_text,
+                outcome="success",
+            )
+        except RuntimeError as error:
+            primary_error = error
+            try:
+                await handle_step_failure(
+                    error=error,
+                    interrupt_state=SimpleNamespace(
+                        interrupt_request_id=None,
+                        cancellation_reason=None,
+                        tool_name="read_fixture",
+                    ),
+                    message_stream_runtime=runtime,
+                    message_stream_writer=writer,
+                    checkpointer=saver,
+                    session_id=SESSION_ID,
+                    thread_id=thread,
+                    job_id=str(accepted["job_id"]),
+                    turn_id="turn-user-1",
+                    execution_id=str(accepted["initial_execution_id"]),
+                    checkpoint_ns="",
+                    publish=publish,
+                    logger=logging.getLogger(__name__),
+                )
+            except RuntimeError as cleanup_error:
+                settlement_error = cleanup_error
+
+    result_items = [
+        item
+        for item in saver._storage.storage.read_items(SESSION_ID, thread)
+        if item.semantic_kind == SemanticKind.TOOL_RESULT.value
+    ]
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
+        result_row_count = connection.execute(
+            "SELECT COUNT(*) FROM item_catalog WHERE semantic_kind = 'tool_result'"
+        ).fetchone()[0]
+        turn_status = connection.execute(
+            "SELECT status FROM turn_records WHERE turn_id = ?",
+            ("turn-user-1",),
+        ).fetchone()[0]
+        execution_outcome = connection.execute(
+            "SELECT outcome FROM executions WHERE execution_id = ?",
+            (accepted["initial_execution_id"],),
+        ).fetchone()[0]
+        model_call = connection.execute(
+            "SELECT outcome, dispatch_state FROM model_calls WHERE model_call_id = ?",
+            (model_call_id,),
+        ).fetchone()
+    stream_state = await stream_store.get_state(writer.turn_stream_id)
+    stream_events = await stream_store.list_events(
+        session_id=SESSION_ID,
+        turn_stream_id=writer.turn_stream_id,
+    )
+    actual = {
+        "observer_confirmed_commit": observer_results,
+        "observer_failure_count": observer_failures,
+        "primary_error_is_injected": primary_error is observer_error,
+        "settlement_error": (
+            {
+                "type": type(settlement_error).__name__,
+                "message": str(settlement_error),
+            }
+            if settlement_error is not None
+            else None
+        ),
+        "canonical_result_count": result_row_count,
+        "canonical_results": [
+            {
+                "item_id": item.item_id,
+                "content": item.payload["content"],
+                "outcome": item.payload["tool_outcome"],
+                "content_hash": item.content_hash,
+            }
+            for item in result_items
+        ],
+        "turn_status": turn_status,
+        "execution_outcome": execution_outcome,
+        "model_call": model_call,
+        "stream": {
+            "status": stream_state["stream_status"],
+            "agent_loop_status": stream_state["agent_loop_status"],
+            "failure_code": (stream_state["failure"] or {}).get("code"),
+            "resumable": stream_state["resumable"],
+        },
+        "tool_completed_events": [
+            {
+                "status": event["payload"].get("status"),
+                "result": event["payload"].get("result"),
+            }
+            for event in stream_events
+            if event["type"] == "tool.completed"
+        ],
+        "published": published,
+    }
+    expected_item_id = f"item-{tool_execution_id}-result-{tool_call_id}"
+    expected = {
+        "observer_confirmed_commit": [
+            {
+                "item_id": expected_item_id,
+                "persisted": True,
+                "same_item_id": True,
+                "same_payload": True,
+                "same_content_hash": True,
+                "content": result_text,
+                "content_hash": result_items[0].content_hash if result_items else None,
+            }
+        ],
+        "observer_failure_count": 1,
+        "primary_error_is_injected": True,
+        "settlement_error": None,
+        "canonical_result_count": 1,
+        "canonical_results": [
+            {
+                "item_id": expected_item_id,
+                "content": result_text,
+                "outcome": "success",
+                "content_hash": result_items[0].content_hash if result_items else None,
+            }
+        ],
+        "turn_status": "failed",
+        "execution_outcome": "failed",
+        "model_call": ("failed", "failed"),
+        "stream": {
+            "status": "failed",
+            "agent_loop_status": "failed",
+            "failure_code": "execution_error",
+            "resumable": False,
+        },
+        "tool_completed_events": [{"status": "completed", "result": result_text}],
+        "published": [
+            (
+                EventType.ERROR,
+                {"error": str(observer_error), "phase": "agent_execution"},
+            )
+        ],
+    }
+    print("TC001_ACTUAL=" + json.dumps(actual, ensure_ascii=False, default=str))
+    assert actual == expected

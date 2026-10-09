@@ -47,7 +47,7 @@ def materialize_details(state: FullCopyRemapState) -> None:
     raw_rows = cursor.fetchall()
     rows = [_detail_mapping(tuple(row)) for row in raw_rows]
     state.detail_rows = tuple((row[0], row[3], row[9]) for row in raw_rows)
-    state.session_root = state.service.root(
+    state.session_root = state.service._storage.root(
         state.target_session_id,
         state.checkpoint_ns,
         thread_id=state.target_thread_id,

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { validateMessageStreamSnapshot } from "./messageStreamSnapshot";
 
 function minimalSnapshot(): Record<string, unknown> {
-  return {
+  return { thread_id: "thr_00000000400070008000000000000002",
     session_id: "ses_123",
     turn_id: "turn_123",
     turn_stream_id: "stream_123",

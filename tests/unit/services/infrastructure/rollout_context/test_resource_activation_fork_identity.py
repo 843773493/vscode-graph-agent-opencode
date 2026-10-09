@@ -23,7 +23,7 @@ from app.services.infrastructure.resource_platform.derivation.types import (
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
-from app.services.infrastructure.rollout_context.storage.resource_activation_body import (
+from app.services.infrastructure.rollout_context.activation.body import (
     ResourceActivationBodyStore,
 )
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
@@ -63,10 +63,10 @@ async def test_full_copy_rebuilds_target_local_activation_identity(
         ).hexdigest(),
     )
 
-    target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
+    target_thread_id = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
     with closing(
         sqlite3.connect(
-            saver._storage.index_path(
+            saver._storage.storage.index_path(
                 TARGET_SESSION_ID, "", thread_id=target_thread_id
             )
         )
@@ -118,10 +118,10 @@ async def test_full_copy_rebuilds_target_local_activation_identity(
 
     # target 侧按 sealed ref 读回，且与 source 语义等价。
     restarted = _saver(sessions_dir)
-    target_thread_id = restarted._storage.main_thread_id(TARGET_SESSION_ID)
+    target_thread_id = restarted._storage.storage.main_thread_id(TARGET_SESSION_ID)
     with closing(
         sqlite3.connect(
-            restarted._storage.index_path(
+            restarted._storage.storage.index_path(
                 TARGET_SESSION_ID, "", thread_id=target_thread_id
             )
         )
@@ -131,7 +131,7 @@ async def test_full_copy_rebuilds_target_local_activation_identity(
         ).fetchone()
     restored = restarted.load_sealed_resource_activation(
         TARGET_SESSION_ID,
-        thread_id=restarted._storage.main_thread_id(TARGET_SESSION_ID),
+        thread_id=restarted._storage.storage.main_thread_id(TARGET_SESSION_ID),
         assembly_id=target_assembly[0],
         plan_hash=target_assembly[1],
         request_hash=target_assembly[2],

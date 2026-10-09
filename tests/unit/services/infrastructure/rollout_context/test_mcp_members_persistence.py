@@ -23,14 +23,14 @@ from app.services.infrastructure.mcp.catalog_activation import (
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
+from app.services.infrastructure.rollout_context.activation.store import (
+    lineage_manifest,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.fork.full_copy.operation import (
     full_rollout_copy,
-)
-from app.services.infrastructure.rollout_context.storage.resource_activation_store import (
-    lineage_manifest,
 )
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     registry_db as registry_db,  # noqa: PLC0414 - 正式 SQLite fixture 按当前测试路径隔离
@@ -109,7 +109,7 @@ async def test_complete_mixed_members_survive_five_real_persistence_paths(
 ):
     _owner, factory, registry, _scope = catalog_runtime
     saver, session, _connection, _accepted = registry_db
-    thread = saver._storage.main_thread_id(session)
+    thread = saver._storage.storage.main_thread_id(session)
     published = registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
     assert published.display_uri is None
     assert len(published.members) == 3
@@ -155,22 +155,22 @@ async def test_complete_mixed_members_survive_five_real_persistence_paths(
     retry, retry_ref = guidance_prepare("members-five-paths")
     assert retry["messages"] == result["messages"]
     assert retry_ref.to_dict() == frozen.to_dict()
-    with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
         restored = restarted.load_sealed_resource_activation(
             session, thread_id=thread, assembly_id=assembly.assembly_id,
             plan_hash=assembly.plan_hash, request_hash=assembly.request_hash,
         )
         assert restored.to_dict() == frozen.to_dict()
         assert restored.parent.to_dict() == frozen.parent.to_dict()
-        session_bundle_factory(restarted._storage.sessions_dir, TARGET_SESSION_ID)
+        session_bundle_factory(restarted._storage.storage.sessions_dir, TARGET_SESSION_ID)
         _view, fork_id = full_rollout_copy(
             restarted._storage, source_session_id=session, target_session_id=TARGET_SESSION_ID,
             source_checkpoint_id=None, relationship="detached", checkpoint_ns="",
             detail_capability=restarted._detail_store.fork_detail_capability(),
             source_snapshot_sha256=hashlib.sha256(canonical_json_bytes(frozen.to_dict())).hexdigest(),
         )
-        target_thread = restarted._storage.main_thread_id(TARGET_SESSION_ID)
-        target_path = restarted._storage.index_path(TARGET_SESSION_ID, "", thread_id=target_thread)
+        target_thread = restarted._storage.storage.main_thread_id(TARGET_SESSION_ID)
+        target_path = restarted._storage.storage.index_path(TARGET_SESSION_ID, "", thread_id=target_thread)
         with closing(sqlite3.connect(target_path)) as connection:
             mappings = {
                 (kind, source):target
@@ -213,7 +213,7 @@ async def test_complete_mixed_members_survive_five_real_persistence_paths(
             )
             placeholders = ",".join("?" for _ in protected_keys)
         # 以未来 GC cutoff 取得原 manifest 一致的候选，不篡改不可变正文的到期字段。
-        candidates = restarted._storage.list_expired_context_plan_details(
+        candidates = restarted._storage.assemblies.list_expired_context_plan_details(
             TARGET_SESSION_ID, target_thread,
             expired_before=datetime.now(UTC) + timedelta(days=31),
         )
@@ -222,7 +222,7 @@ async def test_complete_mixed_members_survive_five_real_persistence_paths(
         }
         assert set(protected_keys) <= candidate_keys
         with pytest.raises(RuntimeError, match="detail-retention-protected"):
-            restarted._storage.mark_context_plan_details_unavailable(
+            restarted._storage.assemblies.mark_context_plan_details_unavailable(
                 TARGET_SESSION_ID, target_thread,
                 detail_refs=tuple(DetailRef.from_dict(json.loads(key)) for key in protected_keys),
             )

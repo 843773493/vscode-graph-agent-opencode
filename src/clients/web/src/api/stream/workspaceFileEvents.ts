@@ -22,6 +22,7 @@ export async function streamWorkspaceFileEvents(
     onBatch?: (batch: WorkspaceFileStreamBatch) => void;
     onConnected?: () => void;
     signal?: AbortSignal;
+    afterEventId?: number;
   },
 ): Promise<void> {
   // SSE 长期连接只共享统一凭据与刷新重试；生命周期内的断线重连由调用方负责。
@@ -37,7 +38,7 @@ export async function streamWorkspaceFileEvents(
         "Content-Type": "application/json",
         ...workspaceHeader(options?.workspaceId),
       },
-      body: JSON.stringify({ paths }),
+      body: JSON.stringify({ paths, after_event_id: options?.afterEventId }),
     },
   );
   if (!response.body) {

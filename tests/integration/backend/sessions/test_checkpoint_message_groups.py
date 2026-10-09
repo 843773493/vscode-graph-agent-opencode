@@ -94,7 +94,7 @@ def group_case(tmp_path, session_bundle_factory):
         "updated_channels": ["messages"],
     }
     saver = RolloutCheckpointSaver(tmp_path)
-    thread_id = saver._storage.main_thread_id(session_id)
+    thread_id = saver._storage.storage.main_thread_id(session_id)
     saver.accept_turn(
         session_id,
         thread_id=thread_id,
@@ -127,7 +127,7 @@ def _save(tmp_path, group_case):
     saver = RolloutCheckpointSaver(tmp_path)
     config = {
         "configurable": {
-            "thread_id": saver._storage.main_thread_id(session_id),
+            "thread_id": saver._storage.storage.main_thread_id(session_id),
             "checkpoint_ns": "",
         }
     }
@@ -201,7 +201,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import Rollout
 from tests.support.session_catalog_owner import fixture_catalog_scope
 with fixture_catalog_scope():
     saver = RolloutCheckpointSaver(Path(sys.argv[1]))
-    thread_id = saver._storage.main_thread_id(sys.argv[2])
+    thread_id = saver._storage.storage.main_thread_id(sys.argv[2])
     with session_thread_owner_scope(MutationIntentOwner(sys.argv[2], thread_id), langgraph_thread_id=thread_id):
         restored = saver.get_tuple({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}})
     print(json.dumps(restored.checkpoint["channel_values"]["messages"][1].response_metadata["canonical_item_manifests"], ensure_ascii=False))
@@ -238,7 +238,7 @@ with fixture_catalog_scope():
         assert manifests == [
             {"item_id": item.item_id, **item.projection_manifest()} for item in expected
         ]
-        items = reopened._storage.read_items(
+        items = reopened._storage.storage.read_items(
             session_id, config["configurable"]["thread_id"]
         )
         actual = [
@@ -351,10 +351,10 @@ def test_indexed_reader_keeps_reused_provider_tool_call_within_requested_model_s
         ),
     ]
     saver, config = _save(tmp_path, group_case)
-    with saver._storage.open_read_snapshot(
+    with saver._storage.storage.open_read_snapshot(
         session_id, config["configurable"]["thread_id"]
     ) as snapshot:
-        records = saver._storage.read_indexed_records_batch(
+        records = saver._storage.checkpoints.read_indexed_records_batch(
             snapshot,
             turn_ids=("turn-tool-result",),
             message_roles=(),
@@ -393,10 +393,10 @@ def test_indexed_reader_keeps_reused_provider_tool_call_within_requested_model_s
     assert len(detail.items) == 2
     assert {item.part_id for item in detail.items} == {expected_id}
     assert len(detail.tool_summary) == 2
-    with saver._storage.open_read_snapshot(
+    with saver._storage.storage.open_read_snapshot(
         session_id, config["configurable"]["thread_id"]
     ) as snapshot:
-        assert saver._storage.read_indexed_records_batch(
+        assert saver._storage.checkpoints.read_indexed_records_batch(
             snapshot,
             turn_ids=("turn-tool-result",),
             message_roles=(),
@@ -511,7 +511,7 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from tests.support.session_catalog_owner import fixture_catalog_scope
 with fixture_catalog_scope():
     saver = RolloutCheckpointSaver(sys.argv[1])
-    thread_id = saver._storage.main_thread_id(sys.argv[2])
+    thread_id = saver._storage.storage.main_thread_id(sys.argv[2])
     with session_thread_owner_scope(MutationIntentOwner(sys.argv[2], thread_id), langgraph_thread_id=thread_id):
         value = saver.get_tuple({'configurable': {'thread_id': thread_id, 'checkpoint_ns': ''}})
     print(json.dumps([{'id': message.id, 'content': message.content, 'metadata': message.response_metadata, 'calls': getattr(message, 'tool_calls', [])} for message in value.checkpoint['channel_values']['messages']], ensure_ascii=False))
@@ -692,7 +692,7 @@ def test_group_sql_failure_rolls_back_jsonl_catalog_and_locators(tmp_path, group
     saver = RolloutCheckpointSaver(tmp_path)
     config = {
         "configurable": {
-            "thread_id": saver._storage.main_thread_id(session_id),
+            "thread_id": saver._storage.storage.main_thread_id(session_id),
             "checkpoint_ns": "",
         }
     }
@@ -741,9 +741,9 @@ def test_request_tool_group_rejects_existing_group_semantic_changes(
     before = path.read_bytes()
     turn_id = json.loads(before.splitlines()[0])["turn_id"]
     assert (
-        saver._storage.ensure_request_items(
+        saver.ensure_request_items(
             session_id,
-            saver._storage.main_thread_id(session_id),
+            saver._storage.storage.main_thread_id(session_id),
             execution_id="execution-group",
             turn_id=turn_id,
             messages=messages,
@@ -758,9 +758,9 @@ def test_request_tool_group_rejects_existing_group_semantic_changes(
         }
     )
     with pytest.raises(RuntimeError, match="canonical.*group"):
-        saver._storage.ensure_request_items(
+        saver.ensure_request_items(
             session_id,
-            saver._storage.main_thread_id(session_id),
+            saver._storage.storage.main_thread_id(session_id),
             execution_id="execution-group",
             turn_id=turn_id,
             messages=[changed],
@@ -775,7 +775,7 @@ def test_request_tool_groups_are_committed_once_and_reused_by_checkpoint(
     saver = RolloutCheckpointSaver(tmp_path)
     config = {
         "configurable": {
-            "thread_id": saver._storage.main_thread_id(session_id),
+            "thread_id": saver._storage.storage.main_thread_id(session_id),
             "checkpoint_ns": "",
         }
     }
@@ -788,9 +788,9 @@ def test_request_tool_groups_are_committed_once_and_reused_by_checkpoint(
     )
     path = session_dir / "rollout" / "rollout.jsonl"
     turn_id = json.loads(path.read_bytes().splitlines()[0])["turn_id"]
-    committed = saver._storage.ensure_request_items(
+    committed = saver.ensure_request_items(
         session_id,
-        saver._storage.main_thread_id(session_id),
+        saver._storage.storage.main_thread_id(session_id),
         execution_id="execution-group",
         turn_id=turn_id,
         messages=messages[1:3],
@@ -805,9 +805,9 @@ def test_request_tool_groups_are_committed_once_and_reused_by_checkpoint(
     before = path.read_bytes()
     assert len(before.splitlines()) == 6
     assert (
-        saver._storage.ensure_request_items(
+        saver.ensure_request_items(
             session_id,
-            saver._storage.main_thread_id(session_id),
+            saver._storage.storage.main_thread_id(session_id),
             execution_id="execution-group",
             turn_id=turn_id,
             messages=messages[1:3],
@@ -842,9 +842,9 @@ def test_tool_result_shadow_reuses_completed_result_with_different_lifecycle_ids
     tool_result_message = messages[2].model_copy(
         update={"response_metadata": {"model_call_id": "model-call-1"}}
     )
-    shadow_ids = saver._storage.ensure_request_items(
+    shadow_ids = saver.ensure_request_items(
         session_id,
-        saver._storage.main_thread_id(session_id),
+        saver._storage.storage.main_thread_id(session_id),
         execution_id="execution-group",
         turn_id="turn-tool-result",
         messages=[tool_result_message],
@@ -879,7 +879,7 @@ def test_tool_result_shadow_reuses_completed_result_with_different_lifecycle_ids
     )
     before = (session_dir / "rollout" / "rollout.jsonl").read_bytes()
     saver.append_items(
-        session_id, (result,), thread_id=saver._storage.main_thread_id(session_id)
+        session_id, (result,), thread_id=saver._storage.storage.main_thread_id(session_id)
     )
     assert (session_dir / "rollout" / "rollout.jsonl").read_bytes() == before
 

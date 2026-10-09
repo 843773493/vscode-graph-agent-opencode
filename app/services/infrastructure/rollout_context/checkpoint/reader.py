@@ -16,7 +16,7 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutReadSnapshot,
     RolloutTurnAnchor,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,12 +30,12 @@ class ContextChain:
 class RolloutContextReader:
     """统一执行 projection、detail 和 full 三种 context 读取。
 
-    `RolloutStorage` 只在本类内部提供 SQLite/JSONL 低层 primitive。调用方
+    `RolloutContextStore` 只在本类内部提供 SQLite/JSONL 低层 primitive。调用方
     必须先取得一个 snapshot，再通过本类解析逻辑引用链，避免不同读取路径
     各自实现 boundary、branch 或 offset 定位。
     """
 
-    def __init__(self, storage: RolloutStorage) -> None:
+    def __init__(self, storage: RolloutContextStore) -> None:
         self._storage = storage
 
     def open_snapshot(
@@ -44,36 +44,21 @@ class RolloutContextReader:
         thread_id: str,
         checkpoint_ns: str = "",
         *,
-        recover: bool = False,
         validate_integrity: bool = False,
     ) -> RolloutReadSnapshot:
-        if recover:
-            self._storage.initialize(
-                session_id,
-                checkpoint_ns,
-                thread_id=thread_id,
-            )
-        return self._storage.open_read_snapshot(
+        return self._storage.storage.open_read_snapshot(
             session_id,
             thread_id,
             checkpoint_ns,
             validate_integrity=validate_integrity,
         )
 
-    def repair_active_context_view(
-        self,
-        thread_id: str,
-        checkpoint_ns: str = "",
-    ) -> bool:
-        """在建立历史只读快照前修复旧版本生成的 active Turn 索引。"""
-        return self._storage.repair_active_context_view(thread_id, checkpoint_ns)
-
     def latest_checkpoint(
         self,
         snapshot: RolloutReadSnapshot,
         checkpoint_id: str | None = None,
     ) -> RolloutCheckpointIndex | None:
-        return self._storage.latest_checkpoint(
+        return self._storage.checkpoints.latest_checkpoint(
             snapshot.session_id,
             snapshot.thread_id,
             snapshot.checkpoint_ns,
@@ -86,7 +71,7 @@ class RolloutContextReader:
         snapshot: RolloutReadSnapshot,
         message_sequence: int,
     ) -> ContextChain:
-        ranges = self._storage.resolve_context_chain_ranges(
+        ranges = self._storage.checkpoints.resolve_context_chain_ranges(
             snapshot,
             message_sequence,
         )
@@ -101,7 +86,7 @@ class RolloutContextReader:
     ) -> list[BaseMessage]:
         """显式 full 模式，返回 LangGraph 可执行的完整消息列表。"""
         resolved_chain = chain or self.resolve_chain(snapshot, message_sequence)
-        return self._storage.materialize_messages(
+        return self._storage.checkpoints.materialize_messages(
             snapshot.session_id,
             snapshot.thread_id,
             snapshot.checkpoint_ns,
@@ -117,7 +102,7 @@ class RolloutContextReader:
         item_ids: Iterable[str] | None = None,
     ) -> list[CanonicalItemRecord]:
         """按已提交 catalog 读取 canonical item，不扫描 JSONL 头部。"""
-        return self._storage.read_items(
+        return self._storage.storage.read_items(
             snapshot.session_id,
             snapshot.thread_id,
             checkpoint_ns=snapshot.checkpoint_ns,
@@ -132,7 +117,7 @@ class RolloutContextReader:
         chain: ContextChain,
     ) -> list[CanonicalItemRecord]:
         """按 context view 的 logical item ordinal 读取已提交 item。"""
-        return self._storage.read_items_for_view(snapshot, self.context_view_id(chain))
+        return self._storage.checkpoints.read_items_for_view(snapshot, self.context_view_id(chain))
 
     def resolve_turn_anchor(
         self,
@@ -142,7 +127,7 @@ class RolloutContextReader:
         anchor_mode: str = "inclusive",
         require_completed: bool = False,
     ) -> RolloutTurnAnchor:
-        return self._storage.resolve_turn_anchor(
+        return self._storage.checkpoints.resolve_turn_anchor(
             snapshot,
             turn_id,
             anchor_mode=anchor_mode,
@@ -155,7 +140,7 @@ class RolloutContextReader:
         *,
         anchor_mode: str = "inclusive",
     ) -> RolloutTurnAnchor | None:
-        return self._storage.resolve_latest_completed_turn_anchor(
+        return self._storage.checkpoints.resolve_latest_completed_turn_anchor(
             snapshot,
             anchor_mode=anchor_mode,
         )
@@ -165,7 +150,14 @@ class RolloutContextReader:
         snapshot: RolloutReadSnapshot,
         anchor: RolloutTurnAnchor,
     ) -> list[BaseMessage]:
-        return self._storage.materialize_turn_anchor(snapshot, anchor)
+        connection = self._storage.storage._snapshot_connection(snapshot)
+        sequences = self._storage.storage._view_message_sequences_from_connection(connection, anchor.view_id)
+        values = self._storage.checkpoints._read_messages(
+            snapshot.session_id, snapshot.thread_id, snapshot.checkpoint_ns,
+            [sequence for sequence in sequences if sequence <= anchor.cutoff_message_sequence],
+            connection=connection,
+        )
+        return [self._storage.storage._codec().from_dict(value) for value in values]
 
     def read_projection_records(
         self,
@@ -179,7 +171,7 @@ class RolloutContextReader:
         kinds: Iterable[str] | None = None,
     ) -> list[dict[str, object]]:
         """projection/detail 模式的有限 offset 记录读取。"""
-        return self._storage.read_indexed_records(
+        return self._storage.checkpoints.read_indexed_records(
             snapshot.session_id,
             snapshot.thread_id,
             snapshot.checkpoint_ns,
@@ -197,7 +189,7 @@ class RolloutContextReader:
         snapshot: RolloutReadSnapshot,
         turn_ids: Iterable[str],
     ) -> dict[str, dict[str, object]]:
-        return self._storage.read_turn_projections(snapshot, turn_ids)
+        return self._storage.storage.read_turn_projections(snapshot, turn_ids)
 
     def read_projection_records_batch(
         self,
@@ -211,7 +203,7 @@ class RolloutContextReader:
         tool_call_ids: Iterable[str] | None = None,
         required_sequences: Mapping[str, Iterable[int]] | None = None,
     ) -> dict[str, list[dict[str, object]]]:
-        return self._storage.read_indexed_records_batch(
+        return self._storage.checkpoints.read_indexed_records_batch(
             snapshot,
             turn_ids=turn_ids,
             sequence_ranges=chain.ranges,
@@ -227,7 +219,7 @@ class RolloutContextReader:
         snapshot: RolloutReadSnapshot,
         chain: ContextChain,
     ) -> list[tuple[str, int, int]]:
-        return self._storage.indexed_turn_spans_for_ranges(snapshot, chain.ranges)
+        return self._storage.checkpoints.indexed_turn_spans_for_ranges(snapshot, chain.ranges)
 
     def context_view_id(self, chain: ContextChain) -> str:
         if not chain.ranges:
@@ -239,7 +231,7 @@ class RolloutContextReader:
         snapshot: RolloutReadSnapshot,
         chain: ContextChain,
     ) -> int:
-        return self._storage.context_turn_count(
+        return self._storage.checkpoints.context_turn_count(
             snapshot,
             self.context_view_id(chain),
         )
@@ -250,7 +242,7 @@ class RolloutContextReader:
         chain: ContextChain,
     ) -> HistorySnapshotBounds:
         """读取本 snapshot/view 的冻结 history revision 与分页上界。"""
-        return self._storage.read_history_snapshot_bounds(
+        return self._storage.storage.read_history_snapshot_bounds(
             snapshot,
             self.context_view_id(chain),
         )
@@ -265,7 +257,7 @@ class RolloutContextReader:
         upper_ordinal: int | None,
         limit: int,
     ) -> tuple[list[tuple[str, int, int, int]], bool]:
-        return self._storage.read_context_turn_page(
+        return self._storage.storage.read_context_turn_page(
             snapshot,
             self.context_view_id(chain),
             direction=direction,
@@ -283,7 +275,7 @@ class RolloutContextReader:
         before: int,
         after: int,
     ) -> list[tuple[str, int, int, int]]:
-        return self._storage.read_context_turn_window(
+        return self._storage.storage.read_context_turn_window(
             snapshot,
             self.context_view_id(chain),
             anchor_ordinal=anchor_ordinal,
@@ -297,7 +289,7 @@ class RolloutContextReader:
         chain: ContextChain,
         turn_ids: Iterable[str],
     ) -> list[tuple[str, int, int, int]]:
-        return self._storage.read_context_turn_ids(
+        return self._storage.storage.read_context_turn_ids(
             snapshot,
             self.context_view_id(chain),
             turn_ids,
@@ -312,7 +304,7 @@ class RolloutContextReader:
         last_logical_turn_ordinal: int,
     ) -> ContextTurnItemWindow:
         """在本 snapshot 中解析 Turn window 对应的 membership ordinal bounds。"""
-        return self._storage.resolve_context_turn_item_window(
+        return self._storage.storage.resolve_context_turn_item_window(
             snapshot,
             self.context_view_id(chain),
             first_logical_turn_ordinal=first_logical_turn_ordinal,
@@ -329,9 +321,10 @@ class RolloutContextReader:
         lower_logical_item_ordinal: int | None,
         upper_logical_item_ordinal: int | None,
         limit: int,
+        execution_id: str | None = None,
     ) -> InternalExecutionHistoryPage:
         """复用已解析的 view 与 snapshot 读取一页 internal execution history。"""
-        return self._storage.read_internal_execution_history_page(
+        return self._storage.storage.read_internal_execution_history_page(
             snapshot,
             self.context_view_id(chain),
             direction=direction,
@@ -339,6 +332,7 @@ class RolloutContextReader:
             lower_logical_item_ordinal=lower_logical_item_ordinal,
             upper_logical_item_ordinal=upper_logical_item_ordinal,
             limit=limit,
+            execution_id=execution_id,
         )
 
     def decode_message(
@@ -347,7 +341,7 @@ class RolloutContextReader:
         *,
         summary_only: bool = False,
     ) -> BaseMessage:
-        return self._storage.decode_indexed_message(
+        return self._storage.checkpoints.decode_indexed_message(
             value,
             summary_only=summary_only,
         )

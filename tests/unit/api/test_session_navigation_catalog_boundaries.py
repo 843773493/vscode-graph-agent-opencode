@@ -4,9 +4,6 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import session_navigation as nav
-from app.services.business.session_navigation.service import (
-    SessionCatalogRevisionChangedError,
-)
 
 
 class _FailingCatalogService:
@@ -103,10 +100,10 @@ async def test_search_maps_malformed_cursor_shape_to_409() -> None:
 
 
 @pytest.mark.asyncio
-async def test_children_maps_snapshot_revision_drift_to_409() -> None:
+async def test_children_maps_stale_catalog_cursor_to_409() -> None:
     service = _FailingCatalogService(
-        SessionCatalogRevisionChangedError(
-            "revision_changed: 会话目录在异步加载节点元数据期间已更新"
+        ValueError(
+            "会话目录已更新，请从第一页重新加载"
         )
     )
 
@@ -120,4 +117,4 @@ async def test_children_maps_snapshot_revision_drift_to_409() -> None:
         )
 
     assert captured.value.status_code == 409
-    assert "revision_changed" in captured.value.detail
+    assert "请从第一页重新加载" in captured.value.detail

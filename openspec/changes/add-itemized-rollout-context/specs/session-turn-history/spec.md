@@ -115,6 +115,8 @@ Turn acceptance identity、`turn_ordinal`、root item、history view 和 `final_
 
 打开child thread列表、状态或历史 MUST 使用持久metadata/history projection，不得唤醒cold Agent runtime。用户从右侧侧边栏向child发送消息时，客户端 MUST 携带精确`session_id + thread_id`，响应和SSE/history cursor也必须返回并校验同一thread；不得退回裸Session默认main-thread路由。
 
+公开 HTTP 合同 SHALL 提供 `POST /api/v1/sessions/{session_id}/threads/{thread_id}/messages` 与同一路径下的 `POST .../history`，复用既有消息请求/准入响应和历史请求/分页响应。child 列表 SHALL 返回只读 `runtime` 及 `report_execution_id/report_status`；`completed` 是执行展示状态，不替代 residency 或删除状态。每个 child 的草稿与异步响应 MUST 按精确 thread 隔离；打开报告 MUST 从其来源 thread 的既有 history owner 读取，不能创建新的 Turn 或将来源历史合并到 main。
+
 #### Scenario: 在右侧侧边栏查看 cold child 历史
 
 - **WHEN** 用户在当前Session右侧侧边栏选择一个已经卸载运行资源的child thread
@@ -253,6 +255,18 @@ Turn acceptance identity、`turn_ordinal`、root item、history view 和 `final_
 ### Requirement: Internal execution history 使用独立 envelope 和 typed display coordinate
 
 顶层 history envelope MUST 仅在有效 include 包含 `internal` 时填充 `internal_executions: InternalExecutionHistoryDTO[]`；有效 include 与默认 Web 集合以「内部 execution history 由持久 admission 独立加载」为准。每个 `InternalExecutionHistoryDTO` 的字段固定为 `execution_id`、`job_id`、`session_id`、`thread_id`、`status`、`created_at`、`updated_at`、`display_parts` 和 `response_parts`；不得套用 `TurnDetailDTO`，也不得增加 `turn_id`、root/final Turn 字段或把内部 execution 映射成 synthetic Turn。`status` 与时间来自目标 thread 的 durable execution/admission owner；`response_parts` 只表示该 `execution_id` 下本页命中的内部输出 history，跨页完整性由同一 history cursor 保证，不声明单页已包含该 execution 的全部输出。
+
+`TurnHistoryLoadRequest` SHALL 接受可选 `execution_id`（1–256 字符）以读取同一 owner 的单个 internal execution。请求 MUST 只使用 `tail` 或 `before`，不得同时提供 `turn_ids`、`tool_call_ids`、`anchor_turn_id`、`turns`、`before_turns` 或 `after_turns`；显式 `include` MUST 包含 `internal`。唯一 history reader MUST 在 SQL/索引边界联合约束 Session、thread、选定 view/checkpoint 和 execution，保持原分页硬上限与独立 envelope。`TurnCursorDTO.query_mode=execution` MUST 冻结精确 `execution_id` 及原 owner/view/checkpoint；续读选择器或归属冲突必须明确拒绝，不切换目标，不启动 runtime。
+
+#### Scenario: 精确报告读取和有界续页
+
+- **WHEN** 用户从 child 报告引用请求其来源 thread 的 `execution_id`，再以同一选择器和游标向前续读
+- **THEN** 每页只返回该 owner/view 中同一 internal execution 的有界内容，runtime 保持 cold，不创建 Turn、Job 或 graph，main 与 sibling 历史不变
+
+#### Scenario: execution 选择器不能混用或改变游标绑定
+
+- **WHEN** 请求混用 execution 与 Turn/tool/window 选择器、使用非 tail/before 方向、显式 include 缺少 internal，或续页更改 execution、Session/thread、view/checkpoint
+- **THEN** 系统明确拒绝请求，不返回其它 owner 的内容，也不重新解释为默认历史读取
 
 每个 `display_parts` 元素 MUST 使用 `InternalExecutionDisplayPartDTO={kind,text,item_id,item_sequence,logical_item_ordinal,created_at,provenance}`。`item_id` 和 `item_sequence` 必须指向当前 canonical display carrier item 的稳定 identity 与物理坐标；`kind` 为 `generated_session_result`。`provenance` 是 typed source identity object，仅允许有值时出现的 `source_session_id`、`source_thread_id`、`delegation_id`、`source_execution_id`、`source_item_id`，不得携带 run/generator/control ID 或分支正文。普通 Turn history、SSE 与 Web 默认展示不得把这些 provenance ID 当可见文本；Web 对生成回报只展示安全 `text` 和“会话生成”标签，不展示私有 prompt、source branch 正文或可由其推导的内容。
 

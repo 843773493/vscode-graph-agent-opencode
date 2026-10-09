@@ -249,6 +249,7 @@ class InternalExecutionHistoryMixin:
         lower_logical_item_ordinal: int | None,
         upper_logical_item_ordinal: int | None,
         limit: int,
+        execution_id: str | None = None,
     ) -> InternalExecutionHistoryPage:
         """按显式 display-only membership ordinal 做有界 keyset page。"""
         view_id = strict_text(view_id, field="context_views.view_id")
@@ -311,6 +312,9 @@ class InternalExecutionHistoryMixin:
             "execution.turn_id IS NULL",
         ]
         parameters: list[object] = [view_id, session_id, thread_id]
+        if execution_id is not None:
+            predicates.append("execution.execution_id = ?")
+            parameters.append(strict_text(execution_id, field="execution_id"))
         if lower_logical_item_ordinal is not None:
             predicates.append("membership.logical_item_ordinal >= ?")
             parameters.append(lower_logical_item_ordinal)

@@ -52,6 +52,12 @@ function panelProps(overrides: {
     activeThreadId: "thr_main_canonical",
     onRefresh: overrides.onRefresh ?? (() => {}),
     onSelectThread: overrides.onSelectThread ?? (() => {}),
+    conversation: {
+      selectedThread: null,
+      snapshot: { history: null, report: null, view: "history" as const, draft: "", loading: false, sending: false, error: null, accepted: null, paged: false },
+      selectThread: () => {}, close: () => {}, setDraft: () => {},
+      refresh: async () => {}, openReport: async () => {}, loadEarlier: async () => {}, send: async () => {}, isUnread: () => false,
+    },
   };
 }
 
@@ -82,7 +88,7 @@ describe("子会话线程面板", () => {
     expect(html).toContain("general-purpose");
     expect(html).toContain("等待启动");
     expect(html).toContain("运行中");
-    expect(html).toContain("启动失败");
+    expect(html).toContain("失败");
     // created_at 走 formatDateTime（本地时区），断言包含日期部分即可。
     expect(html).toContain("2026/09/15");
     expect(html).toContain('data-start-status="failed"');
@@ -183,9 +189,8 @@ describe("子会话线程面板", () => {
       );
     });
 
-    const rows = renderer!.root.findAll(
-      (node) => node.props.className === "child-thread-main"
-        && node.props["aria-label"] !== "切换到主线程调试",
+    const rows = renderer!.root.findAllByType("button").filter(
+      (node) => String(node.props["aria-label"]).startsWith("调试子线程："),
     );
     expect(rows).toHaveLength(2);
     act(() => rows[0]!.props.onClick());
@@ -194,12 +199,13 @@ describe("子会话线程面板", () => {
     });
     act(() => mainRow.props.onClick());
     expect(selected).toEqual(["thr_child_1", "thr_main_canonical"]);
-    // 当前调试 owner 对应行标记“当前调试”。
+    // 执行状态独立展示；调试 owner 通过专用按钮表达。
     const statuses = renderer!.root.findAll(
       (node) => typeof node.props.className === "string"
         && node.props.className.split(" ").includes("child-thread-status"),
     );
-    expect(statuses.map((node) => textOf(node))).toEqual(["主线程", "运行中", "当前调试"]);
+    expect(statuses.map((node) => textOf(node))).toEqual(["主线程", "运行中", "运行中"]);
+    expect(rows[1]!.props.title).toBe("当前调试 owner");
     renderer!.unmount();
   });
 
@@ -250,7 +256,8 @@ describe("子会话线程状态展示口径", () => {
   test("协议状态映射中文标签和配色", () => {
     expect(childThreadStatusLabel("pending")).toBe("等待启动");
     expect(childThreadStatusLabel("running")).toBe("运行中");
-    expect(childThreadStatusLabel("failed")).toBe("启动失败");
+    expect(childThreadStatusLabel("completed")).toBe("已完成");
+    expect(childThreadStatusLabel("failed")).toBe("失败");
     expect(childThreadStatusClass("pending")).toBe("child-thread-status-pending");
     expect(childThreadStatusClass("running")).toBe("child-thread-status-running");
     expect(childThreadStatusClass("failed")).toBe("child-thread-status-failed");

@@ -49,7 +49,7 @@ def test_session_source_revision_cannot_rewrite_frozen_plan_after_restart(regist
     )
     saver.register_context_contribution(
         session,
-        saver._storage.main_thread_id(session),
+        saver._storage.storage.main_thread_id(session),
         original,
         request_content=old_body,
     )
@@ -58,7 +58,7 @@ def test_session_source_revision_cannot_rewrite_frozen_plan_after_restart(regist
         session,
         saver.compose_committed_context_plan(
             session,
-            saver._storage.main_thread_id(session),
+            saver._storage.storage.main_thread_id(session),
             plan_id="frozen-source",
             tool_set=EMPTY_TOOL_SET,
         ),
@@ -141,7 +141,7 @@ def test_session_source_revision_cannot_rewrite_frozen_plan_after_restart(regist
         registered = restarted.get_context_plan_registration(
             session,
             plan_id=plan.plan_id,
-            thread_id=restarted._storage.main_thread_id(session),
+            thread_id=restarted._storage.storage.main_thread_id(session),
         )
         assert registered.draft.contributions[0].source_revision == "source-v1"
         assert _seal(restarted, session, registered.draft, accepted) == snapshot
@@ -180,7 +180,7 @@ def test_header_detail_survives_committed_response_loss_and_restart(
         plan_id="header-lost",
         refs=(),
         plan_creation_idempotency_key="header-lost-create",
-        thread_id=saver._storage.main_thread_id(session),
+        thread_id=saver._storage.storage.main_thread_id(session),
     )
     plan = saver.create_context_plan(session, draft).draft
     snapshot = ContextPlanComposer().assembly(
@@ -190,7 +190,7 @@ def test_header_detail_survives_committed_response_loss_and_restart(
         turn_id=accepted["turn_id"],
         execution_id=accepted["initial_execution_id"],
         provider_version="header-provider",
-        thread_id=saver._storage.main_thread_id(session),
+        thread_id=saver._storage.storage.main_thread_id(session),
     )
     options = {
         "seal_idempotency_key": "header-lost-seal",
@@ -198,26 +198,26 @@ def test_header_detail_survives_committed_response_loss_and_restart(
         "detail": {"audit": "已提交正文不能删"},
         "required_detail": True,
     }
-    original = saver._storage.seal_context_assembly
+    original = saver._storage.assemblies.seal_context_assembly
     commits = []
 
     def lose_response(*args, **kwargs):
         commits.append(original(*args, **kwargs))
         raise RuntimeError("injected committed header response loss")
 
-    monkeypatch.setattr(saver._storage, "seal_context_assembly", lose_response)
+    monkeypatch.setattr(saver._storage.assemblies, "seal_context_assembly", lose_response)
     with pytest.raises(RuntimeError, match="injected committed header response loss"):
         saver.seal_context_assembly(
-            session, saver._storage.main_thread_id(session), snapshot, **options
+            session, saver._storage.storage.main_thread_id(session), snapshot, **options
         )
-    detail = saver._storage.get_context_assembly_detail_ref(
+    detail = saver._storage.assemblies.get_context_assembly_detail_ref(
         session,
-        saver._storage.main_thread_id(session),
+        saver._storage.storage.main_thread_id(session),
         assembly_id=snapshot.assembly_id,
     )
     assert (
         saver.read_context_plan_detail(
-            session, saver._storage.main_thread_id(session), detail_ref=detail
+            session, saver._storage.storage.main_thread_id(session), detail_ref=detail
         )["detail"]
         == options["detail"]
     )
@@ -229,7 +229,7 @@ def test_header_detail_survives_committed_response_loss_and_restart(
         monkeypatch.setattr(restarted._detail_store, "write", _no_allocation)
         assert (
             restarted.seal_context_assembly(
-                session, saver._storage.main_thread_id(session), snapshot, **options
+                session, saver._storage.storage.main_thread_id(session), snapshot, **options
             )
             == commits[0]
         )

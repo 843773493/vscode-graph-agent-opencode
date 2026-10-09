@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 from app.domain.itemized.enums import TurnStatus
 from app.services.infrastructure.rollout_context.storage.transaction import strict_text
 
@@ -16,6 +18,7 @@ class RolloutExecutionDispatchMixin:
         turn_id: str,
         thread_id: str | None = None,
         checkpoint_ns: str = "",
+        writer_connection: sqlite3.Connection | None = None,
     ) -> str:
         """返回可 dispatch 的 Turn execution，供 provider adapter 建立关联。
 
@@ -25,15 +28,10 @@ class RolloutExecutionDispatchMixin:
         active Turn/execution。
         """
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
         turn_id = strict_text(turn_id, field="turn_id")
-        self.initialize(
-            session_id, checkpoint_ns, thread_id=owner_thread_id
-        )
-        with self._connect(
-            owner_thread_id, checkpoint_ns, session_id=session_id, read_only=True
-        ) as connection:
-            self._require_v2_runtime(connection)
+        with self._storage.read_connection(session_id, owner_thread_id, checkpoint_ns, connection=writer_connection) as connection:
+            self._storage._require_v2_runtime(connection)
             row = connection.execute(
                 """
                 SELECT tr.status, e.execution_id

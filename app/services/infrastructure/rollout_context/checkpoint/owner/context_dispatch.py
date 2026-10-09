@@ -36,7 +36,7 @@ class ContextDispatchOwnerMixin:
             )
             if registered is None or registered.plan_state != "sealed":
                 return None
-            snapshot = self._storage.get_context_assembly(
+            snapshot = self._storage.assemblies.get_context_assembly(
                 session_id, thread_id, assembly_id=registered.assembly_id,
                 checkpoint_ns=checkpoint_ns,
             )

@@ -72,7 +72,7 @@ def dispatch_session(
         payload="请基于最新策略继续工作",
         payload_kind=PayloadKind.TEXT,
     )
-    thread = saver._storage.main_thread_id(session_id)
+    thread = saver._storage.storage.main_thread_id(session_id)
     admission = saver.execution_admission(
         session_id, thread_id=thread, execution_id=str(accepted["initial_execution_id"]),
     )
@@ -92,7 +92,7 @@ EMPTY_TOOL_SET = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
 def dispatch_manager(dispatch_session) -> ContextSourceManager:
     saver, session, _turn, _sessions = dispatch_session
     manager = ContextSourceManager(
-        owner=ContextSourceOwnerKey(session, saver._storage.main_thread_id(session)),
+        owner=ContextSourceOwnerKey(session, saver._storage.storage.main_thread_id(session)),
         control_state_port=saver,
     )
     manager.register(ContextSourceDescriptor(
@@ -127,13 +127,13 @@ def test_dispatch_projects_pending_source_to_chat_and_responses(frozen_provider_
     ), tracking_status="tracked")
     dispatch_manager.observe("skill:debugging", source_body, revision="debugging-v1")
 
-    prepared = saver.prepare_context_for_provider(session_id, saver._storage.main_thread_id(session_id), turn_id=turn_id, **frozen_provider_wire('contract-provider-v2', 'chat_completions'),  plan_creation_idempotency_key='pending-source-chat:create', seal_idempotency_key='pending-source-chat:seal', execution_id=saver.execution_for_turn(session_id, thread_id=saver._storage.main_thread_id(session_id), turn_id=turn_id), context_source_manager=dispatch_manager, tool_set_supplier=lambda: EMPTY_TOOL_SET, **frozen_provider_activation(saver, plan_creation_idempotency_key='pending-source-chat:create'))
+    prepared = saver.prepare_context_for_provider(session_id, saver._storage.storage.main_thread_id(session_id), turn_id=turn_id, **frozen_provider_wire('contract-provider-v2', 'chat_completions'),  plan_creation_idempotency_key='pending-source-chat:create', seal_idempotency_key='pending-source-chat:seal', execution_id=saver.execution_for_turn(session_id, thread_id=saver._storage.storage.main_thread_id(session_id), turn_id=turn_id), context_source_manager=dispatch_manager, tool_set_supplier=lambda: EMPTY_TOOL_SET, **frozen_provider_activation(saver, plan_creation_idempotency_key='pending-source-chat:create'))
 
     assert any(
         message.type == "human" and message.text == source_body
         for message in prepared["messages"]
     )
-    native = saver.project_context_plan_to_native(session_id, saver._storage.main_thread_id(session_id), prepared['plan'])
+    native = saver.project_context_plan_to_native(session_id, saver._storage.storage.main_thread_id(session_id), prepared['plan'])
     assert {
         "role": "user",
         "content": [{"type": "input_text", "text": source_body}],
@@ -196,10 +196,10 @@ def test_dispatch_excludes_late_stream_shadow_after_checkpoint_result(frozen_pro
         wire_role="assistant",
         **common,
     )
-    saver.append_items(session_id, (checkpoint_call, result), thread_id=saver._storage.main_thread_id(session_id))
-    saver.append_items(session_id, (late_stream_call,), thread_id=saver._storage.main_thread_id(session_id))
+    saver.append_items(session_id, (checkpoint_call, result), thread_id=saver._storage.storage.main_thread_id(session_id))
+    saver.append_items(session_id, (late_stream_call,), thread_id=saver._storage.storage.main_thread_id(session_id))
 
-    prepared = saver.prepare_context_for_provider(session_id, saver._storage.main_thread_id(session_id), turn_id=turn_id, **frozen_provider_wire('contract-provider-v2', 'chat_completions'),  plan_creation_idempotency_key='late-shadow:create', seal_idempotency_key='late-shadow:seal', execution_id=saver.execution_for_turn(session_id, thread_id=saver._storage.main_thread_id(session_id), turn_id=turn_id), context_source_manager=dispatch_manager, tool_set_supplier=lambda: EMPTY_TOOL_SET, **frozen_provider_activation(saver, plan_creation_idempotency_key='late-shadow:create'))
+    prepared = saver.prepare_context_for_provider(session_id, saver._storage.storage.main_thread_id(session_id), turn_id=turn_id, **frozen_provider_wire('contract-provider-v2', 'chat_completions'),  plan_creation_idempotency_key='late-shadow:create', seal_idempotency_key='late-shadow:seal', execution_id=saver.execution_for_turn(session_id, thread_id=saver._storage.storage.main_thread_id(session_id), turn_id=turn_id), context_source_manager=dispatch_manager, tool_set_supplier=lambda: EMPTY_TOOL_SET, **frozen_provider_activation(saver, plan_creation_idempotency_key='late-shadow:create'))
 
     selected_ids = {
         entry.ref.ref_id for entry in prepared["plan"].selection if entry.included
@@ -241,9 +241,9 @@ def test_composition_preserves_checkpoint_supersession_for_tool_call(
         turn_scope=TurnScope.TURN_MEMBER,
         wire_role="assistant",
     )
-    saver.append_items(session_id, (old_call, final), thread_id=saver._storage.main_thread_id(session_id))
+    saver.append_items(session_id, (old_call, final), thread_id=saver._storage.storage.main_thread_id(session_id))
 
-    plan = saver.compose_committed_context_plan(session_id, saver._storage.main_thread_id(session_id), plan_id='checkpoint-supersession-plan', include_pending_notices=False, tool_set=EMPTY_TOOL_SET)
+    plan = saver.compose_committed_context_plan(session_id, saver._storage.storage.main_thread_id(session_id), plan_id='checkpoint-supersession-plan', include_pending_notices=False, tool_set=EMPTY_TOOL_SET)
 
     ref_ids = {ref.ref_id for ref in plan.refs}
     assert old_call.item_id not in ref_ids
@@ -266,8 +266,8 @@ def test_composer_rejects_detail_binding_outside_included_request_scope(
     dispatch_session, case
 ):
     saver, session_id, turn_id, _sessions = dispatch_session
-    saver.register_context_contribution(session_id, saver._storage.main_thread_id(session_id), _prompt('detail-scope-policy'))
-    plan = saver.compose_committed_context_plan(session_id, saver._storage.main_thread_id(session_id), plan_id='detail-scope-plan', tool_set=EMPTY_TOOL_SET)
+    saver.register_context_contribution(session_id, saver._storage.storage.main_thread_id(session_id), _prompt('detail-scope-policy'))
+    plan = saver.compose_committed_context_plan(session_id, saver._storage.storage.main_thread_id(session_id), plan_id='detail-scope-plan', tool_set=EMPTY_TOOL_SET)
     request_ref = next(ref for ref in plan.refs if ref.ref_type == "request_only")
     canonical_ref = next(ref for ref in plan.refs if ref.ref_type == "canonical_item")
     ref_id = request_ref.ref_id
@@ -295,7 +295,7 @@ def test_composer_rejects_detail_binding_outside_included_request_scope(
         detail = DetailRef(session_id, plan.thread_id, "foreign-assembly", "detail")
     elif case == "untyped":
         detail = "detail"
-    root = saver._storage.root(session_id)
+    root = saver._storage.storage.root(session_id)
     before = (root / "rollout.jsonl").read_bytes()
     with pytest.raises(
         (TypeError, ValueError), match="source-mismatch|plan-order-integrity"
@@ -311,8 +311,8 @@ def test_dispatch_preserves_overlay_and_excludes_previous_prompt( frozen_provide
     target_format: str,
 ) -> None:
     saver, session_id, turn_id, sessions = dispatch_session
-    thread_id = saver._storage._path_resolver.main_thread_id(session_id)
-    saver.register_context_contribution(session_id, saver._storage.main_thread_id(session_id), _prompt('previous-prompt'))
+    thread_id = saver._storage.storage._path_resolver.main_thread_id(session_id)
+    saver.register_context_contribution(session_id, saver._storage.storage.main_thread_id(session_id), _prompt('previous-prompt'))
     saver.register_source_overlay(
         SimpleNamespace(
             overlay_id="policy-overlay",
@@ -338,7 +338,7 @@ def test_dispatch_preserves_overlay_and_excludes_previous_prompt( frozen_provide
         delta_content=[{"type": "text", "text": "本轮规则变化"}],
     )
     dispatch_manager.observe("agents:dispatch", "current-prompt", revision="current-prompt")
-    prepared = saver.prepare_context_for_provider(session_id, saver._storage.main_thread_id(session_id), turn_id=turn_id, **frozen_provider_wire('contract-provider-v2', target_format),  plan_creation_idempotency_key='test_context_dispatch:132:create', seal_idempotency_key='test_context_dispatch:132:seal', execution_id=saver.execution_for_turn(session_id, thread_id=saver._storage.main_thread_id(session_id), turn_id=turn_id), context_source_manager=dispatch_manager, tool_set_supplier=lambda: EMPTY_TOOL_SET, **frozen_provider_activation(saver, plan_creation_idempotency_key='test_context_dispatch:132:create'))
+    prepared = saver.prepare_context_for_provider(session_id, saver._storage.storage.main_thread_id(session_id), turn_id=turn_id, **frozen_provider_wire('contract-provider-v2', target_format),  plan_creation_idempotency_key='test_context_dispatch:132:create', seal_idempotency_key='test_context_dispatch:132:seal', execution_id=saver.execution_for_turn(session_id, thread_id=saver._storage.storage.main_thread_id(session_id), turn_id=turn_id), context_source_manager=dispatch_manager, tool_set_supplier=lambda: EMPTY_TOOL_SET, **frozen_provider_activation(saver, plan_creation_idempotency_key='test_context_dispatch:132:create'))
     plan = prepared["plan"]
     assert isinstance(plan, ContextRequestPlan)
     assert {
@@ -362,7 +362,7 @@ def test_dispatch_preserves_overlay_and_excludes_previous_prompt( frozen_provide
     )
     restarted_manager.register(dispatch_manager.descriptors()[0])
     restarted_manager.observe("agents:dispatch", "current-prompt", revision="current-prompt")
-    next_request = restarted.prepare_context_for_provider(session_id, restarted._storage.main_thread_id(session_id), turn_id=turn_id, **frozen_provider_wire('contract-provider-v2', target_format),  plan_creation_idempotency_key='test_context_dispatch:151:create', seal_idempotency_key='test_context_dispatch:151:seal', execution_id=restarted.execution_for_turn(session_id, thread_id=restarted._storage.main_thread_id(session_id), turn_id=turn_id), context_source_manager=restarted_manager, tool_set_supplier=lambda: EMPTY_TOOL_SET, **frozen_provider_activation(restarted, plan_creation_idempotency_key='test_context_dispatch:151:create'))
+    next_request = restarted.prepare_context_for_provider(session_id, restarted._storage.storage.main_thread_id(session_id), turn_id=turn_id, **frozen_provider_wire('contract-provider-v2', target_format),  plan_creation_idempotency_key='test_context_dispatch:151:create', seal_idempotency_key='test_context_dispatch:151:seal', execution_id=restarted.execution_for_turn(session_id, thread_id=restarted._storage.storage.main_thread_id(session_id), turn_id=turn_id), context_source_manager=restarted_manager, tool_set_supplier=lambda: EMPTY_TOOL_SET, **frozen_provider_activation(restarted, plan_creation_idempotency_key='test_context_dispatch:151:create'))
     next_plan = next_request["plan"]
     assert isinstance(next_plan, ContextRequestPlan)
     # 同 epoch 保留已封存的当前来源；旧 registry prompt 始终不进入 selection。
@@ -408,7 +408,7 @@ def test_responses_rejects_non_text_overlay_before_assembly_commit(frozen_provid
     frozen_provider_wire, dispatch_session, dispatch_manager,
 ) -> None:
     saver, session, turn, _sessions = dispatch_session
-    thread = saver._storage.main_thread_id(session)
+    thread = saver._storage.storage.main_thread_id(session)
     saver.register_source_overlay(
         SimpleNamespace(
             session_id=session, thread_id=thread, checkpoint_ns="",
@@ -442,32 +442,32 @@ def test_gc_protects_sealed_selection_detail_even_with_stale_candidate( frozen_p
 ) -> None:
     saver, session_id, turn_id, sessions = dispatch_session
     dispatch_manager.observe("agents:dispatch", "retained-policy", revision="retained-policy")
-    prepared = saver.prepare_context_for_provider(session_id, saver._storage.main_thread_id(session_id), turn_id=turn_id, **frozen_provider_wire('contract-provider-v2', 'chat_completions'),  plan_creation_idempotency_key='test_context_dispatch:170:create', seal_idempotency_key='test_context_dispatch:170:seal', execution_id=saver.execution_for_turn(session_id, thread_id=saver._storage.main_thread_id(session_id), turn_id=turn_id), context_source_manager=dispatch_manager, tool_set_supplier=lambda: EMPTY_TOOL_SET, **frozen_provider_activation(saver, plan_creation_idempotency_key='test_context_dispatch:170:create'))
+    prepared = saver.prepare_context_for_provider(session_id, saver._storage.storage.main_thread_id(session_id), turn_id=turn_id, **frozen_provider_wire('contract-provider-v2', 'chat_completions'),  plan_creation_idempotency_key='test_context_dispatch:170:create', seal_idempotency_key='test_context_dispatch:170:seal', execution_id=saver.execution_for_turn(session_id, thread_id=saver._storage.storage.main_thread_id(session_id), turn_id=turn_id), context_source_manager=dispatch_manager, tool_set_supplier=lambda: EMPTY_TOOL_SET, **frozen_provider_activation(saver, plan_creation_idempotency_key='test_context_dispatch:170:create'))
     plan = prepared["plan"]
     assert isinstance(plan, ContextRequestPlan)
     entry = next(entry for entry in plan.selection if entry.contribution_id)
     detail_ref = entry.detail_ref
     assert isinstance(detail_ref, DetailRef)
-    manifest = saver._storage.get_context_plan_detail(session_id, saver._storage.main_thread_id(session_id), detail_ref=detail_ref)
+    manifest = saver._storage.assemblies.get_context_plan_detail(session_id, saver._storage.storage.main_thread_id(session_id), detail_ref=detail_ref)
     session = get_session_path_resolver(sessions).resolve_thread_node(
-        session_id, saver._storage.main_thread_id(session_id),
+        session_id, saver._storage.storage.main_thread_id(session_id),
     )
     target = session / str(manifest["relative_path"])
-    assert saver._storage.context_assembly_references_detail(session_id, saver._storage.main_thread_id(session_id), assembly_id=str(plan.assembly_id), detail_ref=detail_ref)
+    assert saver._storage.assemblies.context_assembly_references_detail(session_id, saver._storage.storage.main_thread_id(session_id), assembly_id=str(plan.assembly_id), detail_ref=detail_ref)
     expired = datetime.now(UTC) + timedelta(days=365)
-    assert saver.gc_context_plan_details(session_id, saver._storage.main_thread_id(session_id), expired_before=expired) == ()
+    assert saver.gc_context_plan_details(session_id, saver._storage.storage.main_thread_id(session_id), expired_before=expired) == ()
     assert target.is_file()
 
     # 模拟 GC 候选检查后发生 seal：即便候选已过时，tombstone 写锁内仍须保护引用。
     monkeypatch.setattr(
-        saver._storage,
+        saver._storage.assemblies,
         "context_assembly_references_detail",
         lambda *args, **kwargs: False,
     )
     with pytest.raises(RuntimeError, match="detail-retention-protected"):
-        saver.gc_context_plan_details(session_id, saver._storage.main_thread_id(session_id), expired_before=expired)
+        saver.gc_context_plan_details(session_id, saver._storage.storage.main_thread_id(session_id), expired_before=expired)
     assert target.is_file()
-    restored = RolloutCheckpointSaver(sessions)._storage.get_context_plan_detail(session_id, RolloutCheckpointSaver(sessions)._storage.main_thread_id(session_id), detail_ref=detail_ref)
+    restored = RolloutCheckpointSaver(sessions)._storage.assemblies.get_context_plan_detail(session_id, RolloutCheckpointSaver(sessions)._storage.storage.main_thread_id(session_id), detail_ref=detail_ref)
     assert restored["status"] == restored["availability"] == "available"
 
 
@@ -493,10 +493,10 @@ def test_same_plan_and_source_ids_stay_with_their_session_owner(
     }
     for session_id in (first_session, second_session):
         body = f"当前策略仅属于 {session_id}"
-        saver.register_context_contribution(session_id, saver._storage.main_thread_id(session_id), ContextContribution(contribution_id='same-source-id', source_kind='workspace_policy', source_revision='same-revision', body=body, content_hash=contribution_content_hash('prompt', body)), request_content=body)
+        saver.register_context_contribution(session_id, saver._storage.storage.main_thread_id(session_id), ContextContribution(contribution_id='same-source-id', source_kind='workspace_policy', source_revision='same-revision', body=body, content_hash=contribution_content_hash('prompt', body)), request_content=body)
     # 在两个 registry 都登记后才生成计划，避免“先读再覆盖”的测试假隔离。
     for session_id in (first_session, second_session):
-        plan = saver.compose_committed_context_plan(session_id, saver._storage.main_thread_id(session_id), plan_id='same-plan-id', tool_set=EMPTY_TOOL_SET)
+        plan = saver.compose_committed_context_plan(session_id, saver._storage.storage.main_thread_id(session_id), plan_id='same-plan-id', tool_set=EMPTY_TOOL_SET)
         plans.append(plan)
         assert plan.session_id == plan.to_dict()["session_id"] == session_id
         assert {ref.session_id for ref in plan.refs} == {session_id}
@@ -514,8 +514,8 @@ def test_same_plan_and_source_ids_stay_with_their_session_owner(
             session_id,
             replace(plan, plan_creation_idempotency_key="same-plan-create"),
         )
-        snapshot = saver.seal_context_plan(session_id, saver._storage.main_thread_id(session_id), registered.draft, wire_profile=None, wire_params=None, turn_id=turns[session_id], seal_idempotency_key='same-plan-seal', execution_id=saver.execution_for_turn(session_id, turn_id=turns[session_id]), provider_version='owner-isolation-contract')
-        restored = RolloutCheckpointSaver(sessions).project_context_plan_to_native(session_id, RolloutCheckpointSaver(sessions)._storage.main_thread_id(session_id), snapshot.as_sealed_plan())
+        snapshot = saver.seal_context_plan(session_id, saver._storage.storage.main_thread_id(session_id), registered.draft, wire_profile=None, wire_params=None, turn_id=turns[session_id], seal_idempotency_key='same-plan-seal', execution_id=saver.execution_for_turn(session_id, turn_id=turns[session_id]), provider_version='owner-isolation-contract')
+        restored = RolloutCheckpointSaver(sessions).project_context_plan_to_native(session_id, RolloutCheckpointSaver(sessions)._storage.storage.main_thread_id(session_id), snapshot.as_sealed_plan())
         wire = json.dumps(restored, ensure_ascii=False)
         assert session_id in wire
         other_session = second_session if session_id == first_session else first_session
@@ -542,14 +542,14 @@ def test_detail_manifest_mismatch_prevents_assembly_commit(frozen_provider_activ
 ) -> None:
     saver, session_id, turn_id, _ = dispatch_session
     activation = frozen_provider_activation(saver, plan_creation_idempotency_key='test_context_dispatch:279:create')
-    before = saver._storage.jsonl_path(session_id).read_bytes()
-    with saver._storage._connect(
-        saver._storage.main_thread_id(session_id), "", session_id=session_id, read_only=True,
+    before = saver._storage.storage.jsonl_path(session_id).read_bytes()
+    with saver._storage.storage._connect(
+        saver._storage.storage.main_thread_id(session_id), "", session_id=session_id, read_only=True,
     ) as connection:
         before_details = connection.execute(
             "SELECT * FROM context_plan_details ORDER BY detail_ref"
         ).fetchall()
-    register = saver._storage._register_context_plan_detail
+    register = saver._storage.assemblies._register_context_plan_detail
 
     def register_with_corrupt_manifest(connection, record: DetailRecord, **owner) -> None:
         register(connection, record, **owner)
@@ -560,16 +560,16 @@ def test_detail_manifest_mismatch_prevents_assembly_commit(frozen_provider_activ
             )
 
     monkeypatch.setattr(
-        saver._storage, "_register_context_plan_detail", register_with_corrupt_manifest
+        saver._storage.assemblies, "_register_context_plan_detail", register_with_corrupt_manifest
     )
     dispatch_manager.observe("agents:dispatch", "preflight-policy", revision="preflight-policy")
     with pytest.raises(
         RuntimeError, match="source-mismatch: sealed assembly detail source manifest 不一致"
     ):
-        saver.prepare_context_for_provider(session_id, saver._storage.main_thread_id(session_id), turn_id=turn_id, **frozen_provider_wire('detail-preflight-contract', 'chat_completions'),  plan_creation_idempotency_key='test_context_dispatch:279:create', seal_idempotency_key='test_context_dispatch:279:seal', execution_id=saver.execution_for_turn(session_id, thread_id=saver._storage.main_thread_id(session_id), turn_id=turn_id), context_source_manager=dispatch_manager, tool_set_supplier=lambda: EMPTY_TOOL_SET, **activation)
-    assert saver._storage.jsonl_path(session_id).read_bytes() == before
-    with saver._storage._connect(
-        saver._storage.main_thread_id(session_id),
+        saver.prepare_context_for_provider(session_id, saver._storage.storage.main_thread_id(session_id), turn_id=turn_id, **frozen_provider_wire('detail-preflight-contract', 'chat_completions'),  plan_creation_idempotency_key='test_context_dispatch:279:create', seal_idempotency_key='test_context_dispatch:279:seal', execution_id=saver.execution_for_turn(session_id, thread_id=saver._storage.storage.main_thread_id(session_id), turn_id=turn_id), context_source_manager=dispatch_manager, tool_set_supplier=lambda: EMPTY_TOOL_SET, **activation)
+    assert saver._storage.storage.jsonl_path(session_id).read_bytes() == before
+    with saver._storage.storage._connect(
+        saver._storage.storage.main_thread_id(session_id),
         "",
         read_only=True,
         session_id=session_id,

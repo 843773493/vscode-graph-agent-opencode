@@ -366,6 +366,7 @@ message MessageStreamEvent {
   optional string tool_call_id = 13;
   optional string tool_invocation_id = 14;
   optional string tool_attempt_id = 15;
+  string thread_id = 16;
   oneof payload {
     StreamOpened stream_opened = 20;
     ModelStarted model_started = 21;

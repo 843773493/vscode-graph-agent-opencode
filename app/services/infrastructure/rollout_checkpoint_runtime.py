@@ -23,16 +23,16 @@ from app.services.infrastructure.rollout_context.checkpoint.reader import (
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.checkpoint.writer import (
+    RolloutAppendWriter,
+)
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
 )
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     ContextPlanDetailStore,
 )
-from app.services.infrastructure.rollout_context.storage.append_writer import (
-    RolloutAppendWriter,
-)
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 
 
@@ -54,7 +54,7 @@ class RolloutCheckpointRuntime:
     ) -> None:
         self.sessions_dir = Path(sessions_dir).resolve()
         self.serde = serde or JsonPlusSerializer()
-        self.storage = RolloutStorage(
+        self.storage = RolloutContextStore(
             self.sessions_dir,
             serde=self.serde,
             message_codec=LangChainMessageCodec(),

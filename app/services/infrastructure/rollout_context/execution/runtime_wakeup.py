@@ -10,33 +10,10 @@ from app.core.sqlite_state import utc_now_text
 from app.domain.itemized.mutation_intents import ApplySourceLifecycleDecision
 from app.domain.itemized.records import CanonicalItemRecord, InternalDisplayProvenance
 from app.domain.itemized.runtime_wakeup import RuntimeExecutionWakeup
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutNotMaterializedError,
+)
 
-RUNTIME_WAKEUP_SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS runtime_execution_wakeups (
-    admission_idempotency_key TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    thread_id TEXT NOT NULL,
-    source_id TEXT NOT NULL,
-    source_item_id TEXT NOT NULL UNIQUE,
-    execution_id TEXT NOT NULL UNIQUE,
-    job_id TEXT NOT NULL UNIQUE,
-    agent_id TEXT NOT NULL,
-    message_created_at TEXT NOT NULL,
-    gateway_id TEXT,
-    request_id TEXT,
-    lease_id TEXT NOT NULL,
-    lifecycle_generation INTEGER NOT NULL,
-    lease_fencing_token INTEGER NOT NULL,
-    delivery_policy TEXT NOT NULL,
-    dispatch_generation INTEGER NOT NULL DEFAULT 0,
-    dispatch_receipt_json TEXT,
-    state TEXT NOT NULL CHECK(state IN ('pending','dispatched')),
-    last_error TEXT,
-    updated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS runtime_execution_wakeup_state
-    ON runtime_execution_wakeups(state, message_created_at, admission_idempotency_key);
-"""
 _COLUMNS = tuple(RuntimeExecutionWakeup.__dataclass_fields__)
 
 
@@ -86,7 +63,7 @@ class RuntimeWakeupStorageMixin:
                 runtime_notice_item=item,
                 request_input={"kind": "runtime_notice", "payload": item.payload},
             )
-            self._apply_source_lifecycle_decision_transaction(connection, decision, item)
+            self._context.checkpoints._apply_source_lifecycle_decision_transaction(connection, decision, item)
             expected = tuple(values[column] for column in _COLUMNS)
             connection.execute(
                 f"INSERT INTO runtime_execution_wakeups ({','.join(_COLUMNS)},state,updated_at) "
@@ -99,39 +76,43 @@ class RuntimeWakeupStorageMixin:
         self, session_id: str, thread_id: str, admission_idempotency_key: str,
     ) -> RuntimeExecutionWakeup | None:
         """按准入键读取首次冻结的 wakeup，不从当前配置补造执行参数。"""
-        self.initialize(session_id, "", thread_id=thread_id)
-        with self._connect(thread_id, "", session_id=session_id, read_only=True) as connection:
-            self._require_v2_runtime(connection)
-            row = connection.execute(
-                f"SELECT {','.join(_COLUMNS)} FROM runtime_execution_wakeups "
-                "WHERE session_id=? AND thread_id=? AND admission_idempotency_key=?",
-                (session_id, thread_id, admission_idempotency_key),
-            ).fetchone()
+        try:
+            with self._storage.read_connection(session_id, thread_id, "") as connection:
+                self._storage._require_v2_runtime(connection)
+                row = connection.execute(
+                    f"SELECT {','.join(_COLUMNS)} FROM runtime_execution_wakeups "
+                    "WHERE session_id=? AND thread_id=? AND admission_idempotency_key=?",
+                    (session_id, thread_id, admission_idempotency_key),
+                ).fetchone()
+        except RolloutNotMaterializedError:
+            return None
         return None if row is None else RuntimeExecutionWakeup(**dict(zip(_COLUMNS, row, strict=True)))
 
     def pending_runtime_wakeups(
         self, session_id: str, thread_id: str,
     ) -> tuple[RuntimeExecutionWakeup, ...]:
-        self.initialize(session_id, "", thread_id=thread_id)
-        with self._connect(thread_id, "", session_id=session_id, read_only=True) as connection:
-            rows = connection.execute(
-                f"SELECT {','.join(_COLUMNS)} FROM runtime_execution_wakeups "
-                "WHERE state = 'pending' OR execution_id IN "
-                "(SELECT execution_id FROM executions WHERE outcome = 'unknown') "
-                "ORDER BY message_created_at, admission_idempotency_key",
-            ).fetchall()
+        try:
+            with self._storage.read_connection(session_id, thread_id, "") as connection:
+                rows = connection.execute(
+                    f"SELECT {','.join(_COLUMNS)} FROM runtime_execution_wakeups "
+                    "WHERE state = 'pending' OR execution_id IN "
+                    "(SELECT execution_id FROM executions WHERE outcome = 'unknown') "
+                    "ORDER BY message_created_at, admission_idempotency_key",
+                ).fetchall()
+        except RolloutNotMaterializedError:
+            return ()
         return tuple(RuntimeExecutionWakeup(**dict(zip(_COLUMNS, row, strict=True))) for row in rows)
 
     def runtime_wakeup_input(self, wakeup: RuntimeExecutionWakeup) -> CanonicalItemRecord:
-        with self._connect(wakeup.thread_id, "", session_id=wakeup.session_id, read_only=True) as connection:
-            self._require_v2_runtime(connection)
-            return self._read_canonical_item_from_catalog(
+        with self._storage.read_connection(wakeup.session_id, wakeup.thread_id, "") as connection:
+            self._storage._require_v2_runtime(connection)
+            return self._storage._read_canonical_item_from_catalog(
                 connection, session_id=wakeup.session_id, thread_id=wakeup.thread_id,
                 checkpoint_ns="", item_id=wakeup.source_item_id,
             )
 
     def internal_execution_request_input(self, session_id: str, thread_id: str, execution_id: str) -> dict[str, object]:
-        with self._connect(thread_id, "", session_id=session_id, read_only=True) as connection:
+        with self._storage.read_connection(session_id, thread_id, "") as connection:
             row = connection.execute(
                 "SELECT job_id,admission_idempotency_key,admission_payload_hash FROM executions "
                 "WHERE session_id=? AND thread_id=? AND execution_id=? "
@@ -140,15 +121,15 @@ class RuntimeWakeupStorageMixin:
             ).fetchone()
             if row is None:
                 raise KeyError(f"internal execution 不存在: {execution_id}")
-            preimage = self._validate_fork_internal_admission(
+            preimage = self._context.forks._validate_fork_internal_admission(
                 connection, session_id=session_id, thread_id=thread_id, checkpoint_ns="",
                 execution_id=execution_id, job_id=row[0], admission_key=row[1], admission_hash=row[2],
             )
             return dict(preimage["input"])
 
     def execution_output(self, session_id: str, thread_id: str, execution_id: str) -> tuple[str, InternalDisplayProvenance]:
-        with self._connect(thread_id, "", session_id=session_id, read_only=True) as connection:
-            self._require_v2_runtime(connection)
+        with self._storage.read_connection(session_id, thread_id, "") as connection:
+            self._storage._require_v2_runtime(connection)
             if connection.execute(
                 "SELECT 1 FROM executions WHERE session_id=? AND thread_id=? AND execution_id=?",
                 (session_id, thread_id, execution_id),
@@ -158,10 +139,10 @@ class RuntimeWakeupStorageMixin:
                 "SELECT item_id FROM item_catalog WHERE execution_id = ? "
                 "AND semantic_kind = 'assistant_output' ORDER BY item_sequence", (execution_id,),
             ).fetchall()
-            items = tuple(self._read_canonical_item_from_catalog(
+            items = tuple(self._storage._read_canonical_item_from_catalog(
                 connection, session_id=session_id, thread_id=thread_id, checkpoint_ns="", item_id=str(row[0]),
             ) for row in rows)
-        codec = self._codec()
+        codec = self._storage._codec()
         return (
             "\n".join(codec.visible_text(codec.project_message((item,))) for item in items),
             InternalDisplayProvenance(
@@ -173,7 +154,7 @@ class RuntimeWakeupStorageMixin:
 
     def cold_execution_observations(self, session_id: str, thread_id: str, *, job_ids: list[str] | None = None, turn_id: str | None = None) -> list[dict[str, str]]:
         """只读 execution owner；不 initialize、不物化 Agent，不列举 JobService。"""
-        root = self.root(session_id, thread_id=thread_id)
+        root = self._storage.root(session_id, thread_id=thread_id)
         if not (root / "index.sqlite").is_file():
             return []
         clauses = ["session_id=?", "thread_id=?"]
@@ -186,8 +167,8 @@ class RuntimeWakeupStorageMixin:
         if turn_id is not None:
             clauses.append("turn_id=?")
             params.append(turn_id)
-        with self._connect(thread_id, "", session_id=session_id, read_only=True) as connection:
-            self._require_v2_runtime(connection)
+        with self._storage._connect(thread_id, "", session_id=session_id, read_only=True) as connection:
+            self._storage._require_v2_runtime(connection)
             rows = connection.execute(
                 "SELECT job_id,execution_id,outcome,updated_at,last_model_call_id FROM executions WHERE " + " AND ".join(clauses) + " ORDER BY execution_ordinal DESC,attempt DESC,created_at DESC,execution_id", params,
             ).fetchall()
@@ -206,7 +187,7 @@ class RuntimeWakeupStorageMixin:
         return result
 
     def runtime_execution_outcome(self, session_id: str, thread_id: str, execution_id: str) -> str:
-        with self._connect(thread_id, "", session_id=session_id, read_only=True) as connection:
+        with self._storage._connect(thread_id, "", session_id=session_id, read_only=True) as connection:
             row = connection.execute(
                 "SELECT outcome FROM executions WHERE session_id = ? AND thread_id = ? AND execution_id = ?",
                 (session_id, thread_id, execution_id),
@@ -247,4 +228,4 @@ class RuntimeWakeupStorageMixin:
                 raise RuntimeError("runtime wakeup dispatch callback 已失效（generation CAS 失败）")
 
 
-__all__ = ["RUNTIME_WAKEUP_SCHEMA_SQL", "RuntimeWakeupStorageMixin"]
+__all__ = ["RuntimeWakeupStorageMixin"]

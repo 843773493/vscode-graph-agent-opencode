@@ -32,12 +32,6 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutManifest,
     RolloutReadSnapshot,
 )
-from app.services.infrastructure.rollout_context.storage.rollout_active_view import (
-    RolloutActiveViewMixin,
-)
-from app.services.infrastructure.rollout_context.storage.rollout_fork_recovery import (
-    RolloutForkRecoveryMixin,
-)
 from app.services.infrastructure.rollout_context.storage.rollout_index_reads import (
     RolloutIndexMixin,
 )
@@ -98,9 +92,7 @@ class RolloutMaintenanceOwner(
     RolloutMaintenanceFsSafetyMixin,
     RolloutSchemaIntrospectionMixin,
     RolloutOfflineRestoreMixin,
-    RolloutForkRecoveryMixin,
     RolloutIndexMixin,
-    RolloutActiveViewMixin,
 ):
     """备份/恢复/schema 迁移/维护/启动 owner；只通过 host 的锁与连接薄壳工作。"""
 
@@ -319,7 +311,7 @@ class RolloutMaintenanceOwner(
         with self._host._connect(
             thread_id, checkpoint_ns, session_id=session_id
         ) as connection:
-            initialize_rollout_schema(connection)
+            initialize_rollout_schema(connection, initialize_activation=self._host._initialize_activation)
 
     def initialize(
         self,
@@ -588,7 +580,7 @@ class RolloutMaintenanceOwner(
                     thread_id,
                     checkpoint_ns,
                 ) not in self._host._active_fork_materializations:
-                    self._recover_fork_materialization(
+                    self._host._recover_fork_materialization(
                         session_id,
                         thread_id,
                         checkpoint_ns,

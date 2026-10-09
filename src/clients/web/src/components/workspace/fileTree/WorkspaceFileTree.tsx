@@ -14,7 +14,6 @@ import {
 } from "../../../api";
 import type {
   SessionFileTreeSettings,
-  WorkspaceFileList,
   WorkspaceFileNode,
 } from "../../../types/backend";
 import {
@@ -25,7 +24,6 @@ import { useWorkspaceFileWatch } from "../../../hooks/workspace/useWorkspaceFile
 import { errorDisplayMessage } from "../../../utils/errorMessage";
 import { formatByteSize } from "../../../utils/format";
 import {
-  loadedDirectoryEntry,
   restoreDirectoriesInOrder,
 } from "./workspaceFileTreeCache";
 import { useWorkspaceFileTreeDirectories } from "./useWorkspaceFileTreeDirectories";
@@ -126,7 +124,7 @@ export default function WorkspaceFileTree({
     paths: string[];
   } | null>(null);
   const expandedPersistenceTimerRef = useRef<number | null>(null);
-  const pendingFileChangesRef = useRef<Map<string, { kind: string; path: string }>>(
+  const pendingFileChangesRef = useRef<Map<string, { kind: string; path: string; parentCovered: boolean }>>(
     new Map(),
   );
   const fileChangeFlushTimerRef = useRef<number | null>(null);
@@ -137,6 +135,9 @@ export default function WorkspaceFileTree({
     updateDirectories,
     loadDirectory,
     reloadExpandedDirectories,
+    reconcileDirectories,
+    acceptSnapshots,
+    directoryVersion,
     invalidateDirectoriesUnder,
     abortAllDirectoryRequests,
     resetDirectories,
@@ -254,7 +255,7 @@ export default function WorkspaceFileTree({
             }
           }
         }
-        changedParents.add(parentFileTreePath(treePath));
+        if (!change.parentCovered) changedParents.add(parentFileTreePath(treePath));
       }
 
       if (expandedChanged) {
@@ -291,9 +292,23 @@ export default function WorkspaceFileTree({
       if (detail.workspaceId && detail.workspaceId !== workspaceId) {
         return;
       }
-      for (const change of detail.changes) {
-        pendingFileChangesRef.current.set(`${change.kind}:${change.path}`, change);
+      if (detail.directories.length > 0) {
+        acceptSnapshots(detail.snapshots);
+        void reconcileDirectories(detail.directories).catch((error: unknown) => {
+          onStatusChange(`文件目录版本同步失败: ${errorDisplayMessage(error)}`);
+        });
       }
+      for (const change of detail.changes) {
+        const treePath = changedPathToTreePath(change.path, workspaceRoot);
+        const parent = treePath === null ? null : parentFileTreePath(treePath);
+        const covered = parent !== null && detail.directories.some((revision) => (
+          (revision.directory_key.scope === "filesystem"
+            ? filesystemFileTreePath(revision.directory_key.path) : revision.directory_key.path) === parent
+        ));
+        if (covered && change.kind !== "delete") continue;
+        pendingFileChangesRef.current.set(`${change.kind}:${change.path}`, { ...change, parentCovered: covered });
+      }
+      if (pendingFileChangesRef.current.size === 0) return;
       if (fileChangeFlushTimerRef.current !== null) {
         window.clearTimeout(fileChangeFlushTimerRef.current);
       }
@@ -311,6 +326,8 @@ export default function WorkspaceFileTree({
     };
   }, [
     loadDirectory,
+    reconcileDirectories,
+    acceptSnapshots,
     onStatusChange,
     invalidateDirectoriesUnder,
     workspaceId,
@@ -460,25 +477,20 @@ export default function WorkspaceFileTree({
     onStatusChange(status);
   };
 
-  const replaceDirectory = (result: WorkspaceFileList) => {
-    updateDirectories((prev) => ({
-      ...prev,
-      [result.path]: loadedDirectoryEntry(result, Date.now()),
-    }));
-    if (!expandedPathsRef.current.has(result.path)) {
-      const next = new Set(expandedPathsRef.current);
-      next.add(result.path);
-      commitExpandedPaths(next);
-      scheduleExpandedPathsPersistence([...next].sort());
-    }
-  };
-
   const menu: WorkspaceFileTreeContextMenuApi = useWorkspaceFileTreeContextMenu({
     port,
     workspaceId,
     sessionId,
     absolutePathForTreePath,
-    replaceDirectory,
+    reconcileDirectories,
+    acceptSnapshots,
+    directoryVersion,
+    onCommitted: (path) => {
+      const next = new Set(expandedPathsRef.current);
+      next.add(path);
+      commitExpandedPaths(next);
+      scheduleExpandedPathsPersistenceRef.current([...next].sort());
+    },
     loadDirectory,
     acceptFileTreeSettings,
     onStatusChange,
@@ -826,6 +838,16 @@ export default function WorkspaceFileTree({
           </button>
         </div>
       ) : null}
+      {menu.pendingCreations.map((entry) => (
+        <button type="button" className="files-tree-item files-tree-row muted" key={entry.clientRef}
+          disabled={entry.state === "pending_local"}
+          onContextMenu={(event) => openContextMenu(event,
+            `${entry.directoryPath}${entry.directoryPath.endsWith("/") || !entry.directoryPath ? "" : "/"}${entry.name}`,
+            entry.name, "directory", null, entry.operationId)}>
+          <span className="file-label">{entry.name}</span>
+          <span className="files-tree-meta">{entry.state === "pending_local" ? "等待受理" : "已受理，等待完成"}</span>
+        </button>
+      ))}
       {showSettingsError ? (
         <div className="files-tree-error files-tree-settings-error" role="alert">
           <span>快捷路径加载失败：{settingsError}</span>

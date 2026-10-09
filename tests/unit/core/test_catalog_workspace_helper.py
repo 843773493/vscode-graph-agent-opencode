@@ -84,10 +84,7 @@ async def test_logical_move_keeps_manifest_and_updates_catalog_parents(
         manifest_before = workspace.manifest(session_id)
         session_dir = workspace.session_dir(session_id)
 
-        workspace.resolver.move_node(
-            node_id=first_folder,
-            parent_node_id=second_folder,
-        )
+        workspace.resolver.get_node(workspace.resolver.catalog_store.move_node(first_folder, second_folder).node_id)
 
         # 物理目录与 manifest 字节保持不变（逻辑移动不搬磁盘）。
         assert workspace.session_dir(session_id) == session_dir

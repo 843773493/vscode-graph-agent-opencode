@@ -511,7 +511,7 @@ async def test_handwritten_provider_interrupt_stops_pending_sse_read(
     client = httpx.AsyncClient(transport=transport)
     previous_session, previous_factory = _install_litellm_client(client)
 
-    writer = await store.open(
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id=f"job_provider_interrupt_{provider}_{stage}",
         job_id=f"job_provider_interrupt_{provider}_{stage}",
@@ -670,7 +670,7 @@ async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_re
     client = httpx.AsyncClient(transport=transport)
     previous_session, previous_factory = _install_litellm_client(client)
 
-    writer = await store.open(
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id=f"job_provider_tool_interrupt_{provider}",
         job_id=f"job_provider_tool_interrupt_{provider}",
@@ -812,7 +812,7 @@ async def test_handwritten_provider_interrupt_closes_real_tcp_sse_connection(
     client = httpx.AsyncClient()
     previous_session, previous_factory = _install_litellm_client(client)
 
-    writer = await store.open(
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id=f"job_provider_tcp_interrupt_{provider}",
         job_id=f"job_provider_tcp_interrupt_{provider}",
@@ -879,7 +879,7 @@ async def test_interrupt_during_block_delta_persistence_closes_started_block(
     """delta 尚未线性化时中断，不能留下只有 block.started 的运行块。"""
     _, resolver, session_id = message_stream_context
     store = _BlockDeltaBarrierStore(path_resolver=resolver)
-    writer = await store.open(
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_block_delta_commit_race",
     )
@@ -954,7 +954,7 @@ async def test_tool_interrupt_reaps_real_subprocess_and_projects_unknown_result(
 ) -> None:
     """真实工具子进程被打断后必须回收，结果仍投影为未知。"""
     store, resolver, session_id = message_stream_context
-    writer = await store.open(
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_real_subprocess_tool_interrupt",
     )

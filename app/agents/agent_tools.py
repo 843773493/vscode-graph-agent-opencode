@@ -91,12 +91,13 @@ def build_default_tools(
             session_id=session_id,
             agent_id=agent_id,
             background_task_registry=background_task_registry,
-            background_message_bus=background_message_bus,
+            invocation_context=invocation_context,
         ),
         create_background_message_collection_tool(
             session_id=session_id,
             agent_id=agent_id,
             background_message_bus=background_message_bus,
+            invocation_context=invocation_context,
         ),
         create_exec_command_tool(
             session_id=session_id,
@@ -137,7 +138,7 @@ def build_default_tools(
     ]
     if goal_service is not None:
         tools.extend(
-            create_goal_tools(session_id=session_id, goal_service=goal_service)
+            create_goal_tools(session_id=session_id, goal_service=goal_service, invocation_context=invocation_context)
         )
     if include_test_tools:
         tools.insert(0, create_test_tool())

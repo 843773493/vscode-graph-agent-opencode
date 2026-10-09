@@ -61,8 +61,8 @@ def registry_db(request, session_bundle_factory):
         payload="独立草稿",
         payload_kind="text",
     )
-    with saver._storage._connect(
-        saver._storage.main_thread_id(session_id), "", session_id=session_id
+    with saver._storage.storage._connect(
+        saver._storage.storage.main_thread_id(session_id), "", session_id=session_id
     ) as owner_connection:
         database_path = owner_connection.execute("PRAGMA database_list").fetchone()[2]
     connection = sqlite3.connect(database_path)
@@ -79,7 +79,7 @@ def registry_db(request, session_bundle_factory):
 @pytest.fixture
 def draft(registry_db):
     saver, session, _connection, _accepted = registry_db
-    thread_id = saver._storage.main_thread_id(session)
+    thread_id = saver._storage.storage.main_thread_id(session)
     body = {"instructions": "草稿正文不能复制进 SQLite", "value": 0.0000001}
     contribution = ContextContribution(
         contribution_id="source-contribution",
@@ -142,7 +142,7 @@ def test_runtime_registration_rejects_import_evidence(registry_db, draft, field)
 
 def test_registry_roundtrip_has_no_early_binding_or_body(registry_db, draft):
     saver, session, connection, _accepted = registry_db
-    before = (saver._storage.root(session) / "rollout.jsonl").read_bytes()
+    before = (saver._storage.storage.root(session) / "rollout.jsonl").read_bytes()
     committed_offset = connection.execute(
         "SELECT committed_jsonl_offset FROM database_meta"
     ).fetchone()
@@ -164,14 +164,14 @@ def test_registry_roundtrip_has_no_early_binding_or_body(registry_db, draft):
         "SELECT count(*) FROM context_assembly_selections"
     ).fetchone() == (0,)
     assert "草稿正文不能复制进 SQLite" not in "\n".join(connection.iterdump())
-    with saver._storage._connect(
-        saver._storage.main_thread_id(session), "", read_only=True, session_id=session
+    with saver._storage.storage._connect(
+        saver._storage.storage.main_thread_id(session), "", read_only=True, session_id=session
     ) as restarted:
         assert (
             read_registration(restarted, session, draft.thread_id, draft.plan_id)
             == registered
         )
-    assert (saver._storage.root(session) / "rollout.jsonl").read_bytes() == before
+    assert (saver._storage.storage.root(session) / "rollout.jsonl").read_bytes() == before
     assert (
         connection.execute(
             "SELECT committed_jsonl_offset FROM database_meta"
@@ -363,7 +363,7 @@ def test_seal_requires_current_draft_and_atomic_snapshot(registry_db):
     saver, session, connection, accepted = registry_db
     draft = ContextRequestPlan(
         session_id=session,
-        thread_id=saver._storage.main_thread_id(session),
+        thread_id=saver._storage.storage.main_thread_id(session),
         plan_id="empty-plan",
         refs=(),
         plan_creation_idempotency_key="empty-key",
@@ -508,7 +508,7 @@ def test_saver_registry_restarts_and_revises_through_one_owner(registry_db, draf
     original = saver.create_context_plan(session, draft)
     # catalog 模式下 rollout 物理路径带日期分层，sessions 根必须取 storage
     # 的权威值，不能用 rollout 路径反向推导。
-    restarted = RolloutCheckpointSaver(saver._storage.sessions_dir)
+    restarted = RolloutCheckpointSaver(saver._storage.storage.sessions_dir)
     assert (
         restarted.get_context_plan_registration(
             session, thread_id=draft.thread_id, plan_id=draft.plan_id
@@ -584,12 +584,37 @@ def test_saver_plan_body_cache_never_overwrites_another_plan(registry_db, draft)
         )
 
 
-def test_nested_body_mutation_is_rejected_before_manifest_redaction(registry_db, draft):
-    saver, session, connection, _accepted = registry_db
+def test_nested_body_mutation_is_isolated_before_manifest_redaction(registry_db, draft):
+    saver, session, connection, accepted = registry_db
+    contribution = draft.contributions[0]
+    original_body = contribution.body
+    original_hash = contribution.content_hash
     draft.contributions[0].body["instructions"] = "调用方篡改了原始正文"
-    with pytest.raises(ValueError, match="content_hash 与 body 不一致"):
-        saver.create_context_plan(session, draft)
-    assert connection.execute("SELECT count(*) FROM context_plans").fetchone() == (0,)
+    assert contribution.body == original_body
+    assert contribution.content_hash == original_hash
+    registered = saver.create_context_plan(session, draft)
+    assert registered.draft.contributions[0].body is None
+    assert registered.draft.contributions[0].content_hash == original_hash
+    assert connection.execute("SELECT count(*) FROM context_plans").fetchone() == (1,)
+    snapshot = saver.seal_context_plan(
+        session,
+        draft.thread_id,
+        registered.draft,
+        turn_id=accepted["turn_id"],
+        execution_id=accepted["initial_execution_id"],
+        provider_version="registry-provider",
+        wire_profile=None,
+        wire_params=None,
+        seal_idempotency_key="seal-isolated-body",
+    )
+    detail_ref = next(
+        entry.detail_ref for entry in snapshot.selection
+        if entry.included and entry.ref.ref_id == "request-ref"
+    )
+    assert saver.read_context_plan_detail(
+        session, draft.thread_id, detail_ref=detail_ref,
+    )["detail"] == original_body
+    assert "调用方篡改了原始正文" not in "\n".join(connection.iterdump())
 
 
 @pytest.mark.parametrize("field", ["draft_json", "creation_json"])

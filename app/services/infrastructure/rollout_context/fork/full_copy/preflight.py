@@ -9,13 +9,13 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
 
 
 def read_source_format(storage, session_id: str, checkpoint_ns: str) -> int:
-    source = storage.root(session_id, checkpoint_ns)
+    source = storage.storage.root(session_id, checkpoint_ns)
     if not source.is_dir() or source.is_symlink():
         raise ValueError("source-mismatch: fork source rollout 不存在或不是普通目录")
     lock = _RolloutFileLock(source.parent / ".rollout.write.lock", exclusive=False)
     lock.acquire()
     try:
-        with _source_snapshot(source, storage.sessions_dir) as connection:
-            return storage._rollout_format(connection)
+        with _source_snapshot(source, storage.storage.sessions_dir) as connection:
+            return storage.storage._rollout_format(connection)
     finally:
         lock.release()

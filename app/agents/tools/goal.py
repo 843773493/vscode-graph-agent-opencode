@@ -2,16 +2,24 @@ from __future__ import annotations
 
 from langchain_core.tools import BaseTool, tool
 
+from app.agents.tool_invocation_context import ToolInvocationContext
 from app.schemas.internal_v2.goal import GoalStatus
 from app.services.business.session_goal_service import SessionGoalService
 
 
 def create_goal_tools(
-    *, session_id: str, goal_service: SessionGoalService
+    *, session_id: str, goal_service: SessionGoalService, invocation_context: ToolInvocationContext
 ) -> list[BaseTool]:
+    async def assert_main_thread() -> None:
+        binding = invocation_context.thread_binding
+        if binding is None or binding.session_id != session_id:
+            raise RuntimeError("Goal 工具缺少精确 ThreadRuntimeBinding")
+        await goal_service.assert_agent_thread(session_id, binding.thread_id)
+
     @tool
     async def get_goal() -> dict[str, object] | None:
         """读取当前会话的持久化 Goal，包括状态、预算、token 与耗时用量。"""
+        await assert_main_thread()
         goal = await goal_service.get(session_id)
         return None if goal is None else goal.model_dump(mode="json")
 
@@ -20,6 +28,7 @@ def create_goal_tools(
         objective: str, token_budget: int | None = None
     ) -> dict[str, object]:
         """仅当用户或 system/developer 指令明确要求时创建 Goal，不得从普通任务自行推断。只有明确要求 token 预算时才传 token_budget；存在未完成 Goal 时调用失败。"""
+        await assert_main_thread()
         goal = await goal_service.create_for_agent(session_id, objective, token_budget)
         return goal.model_dump(mode="json")
 
@@ -30,6 +39,7 @@ def create_goal_tools(
             parsed = GoalStatus(status)
         except ValueError as exc:
             raise ValueError("status 只能是 complete 或 blocked") from exc
+        await assert_main_thread()
         goal = await goal_service.update_for_agent(session_id, parsed)
         return goal.model_dump(mode="json")
 

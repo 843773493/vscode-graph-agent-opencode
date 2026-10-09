@@ -1,12 +1,15 @@
 import asyncio
 import json
+import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
+from time import perf_counter
 
 import pytest
 from pydantic import ValidationError
 
 from app.core.exceptions import NotFoundError
+from app.core.identifier import create_prefixed_id
 from app.core.path_utils import (
     get_session_creation_service,
     get_session_file,
@@ -24,6 +27,7 @@ from app.schemas.internal_v2.session import (
 from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.trace_event_store import TraceEventStore
+from tests.harness.python.run_context import TestRunContext
 from tests.support.session_navigation_queue import (
     create_catalog_intent,
     submit_catalog_intent,
@@ -115,6 +119,13 @@ class TestSessionService:
         assert receipt.state == "committed", receipt.error_detail
         return await self.service.get(node_id)
 
+    async def _delete_catalog_session(self, session_id: str):
+        receipt = await submit_catalog_intent(self.catalog, create_catalog_intent(
+            self.catalog, "delete_session", target_node_id=session_id,
+        ))
+        assert receipt.state == "committed", receipt.error_detail
+        return receipt
+
     @pytest.mark.asyncio
     async def test_create_session(self):
         request = SessionCreateRequest(title="Test Session")
@@ -143,16 +154,15 @@ class TestSessionService:
             self.service.path_resolver.get_node(session.session_id).name
             == "Test Session"
         )
-        assert data["current_agent_id"] == session.current_agent_id
-        assert data["current_provider_id"] == "primary"
+        assert set(data) == {"session_id", "workspace_id", "created_at"}
+        node = self.path_resolver.catalog_store.get_node(session.session_id)
+        assert node.current_agent_id == session.current_agent_id
+        assert node.current_provider_id == "primary"
 
     @pytest.mark.asyncio
     async def test_list_uses_index_projection_when_physical_tree_has_orphan(self):
         session = await self.service.create(SessionCreateRequest(title="目录读模型"))
-        folder = self.service.path_resolver.create_folder(
-            name="归档",
-            parent_node_id=None,
-        )
+        folder = self.service.path_resolver.get_node(self.service.path_resolver.catalog_store.create_folder(create_prefixed_id("ses"), self.service.path_resolver.workspace_id, None, '归档').node_id)
         await self._move_catalog_node(session.session_id, folder.node_id)
 
         # 只模拟遗留的空物理目录，不删除或修正它；列表必须保留索引中的会话。
@@ -227,10 +237,8 @@ class TestSessionService:
         )
         restored = await restarted_service.get(created.session_id)
         assert restored.current_provider_id == "backup"
-        persisted = json.loads(
-            get_session_file(created.session_id).read_text(encoding="utf-8")
-        )
-        assert persisted["current_provider_id"] == "backup"
+        persisted = self.path_resolver.catalog_store.get_node(created.session_id)
+        assert persisted.current_provider_id == "backup"
 
         with pytest.raises(ValueError, match="不允许使用 provider"):
             await service.update(
@@ -352,16 +360,14 @@ class TestSessionService:
         session_file.write_text(json.dumps(data), encoding="utf-8")
         persisted_bytes = session_file.read_bytes()
 
-        restarted_service = SessionService(
-            config_service=self.config_service,
-            trace_event_store=self.trace_event_store,
-            workspace_id=self.workspace_id,
-            path_resolver=self.path_resolver,
-            creation_service=self.creation_service,
-        )
-
         with pytest.raises(RuntimeError, match="会话与当前工作区后端标识不一致"):
-            await restarted_service.get(session.session_id)
+            SessionService(
+                config_service=self.config_service,
+                trace_event_store=self.trace_event_store,
+                workspace_id=self.workspace_id,
+                path_resolver=self.path_resolver,
+                creation_service=self.creation_service,
+            )
 
         assert session_file.read_bytes() == persisted_bytes
 
@@ -418,10 +424,7 @@ class TestSessionService:
         original_path = self.service.path_resolver.resolve_session_node(
             session.session_id
         )
-        target_folder = self.service.path_resolver.create_folder(
-            name="目标文件夹",
-            parent_node_id=None,
-        )
+        target_folder = self.service.path_resolver.get_node(self.service.path_resolver.catalog_store.create_folder(create_prefixed_id("ses"), self.service.path_resolver.workspace_id, None, '目标文件夹').node_id)
 
         await self._rename_catalog_node(session.session_id, "Updated Title")
         await self._move_catalog_node(session.session_id, target_folder.node_id)
@@ -453,7 +456,7 @@ class TestSessionService:
             await self._move_catalog_node(parent.session_id, child.session_id)
 
     @pytest.mark.asyncio
-    async def test_delete_parent_requires_confirmation_and_cascades_children(self):
+    async def test_delete_operation_cascades_catalog_children(self):
         parent = await self.service.create(SessionCreateRequest(title="Parent"))
         child = await self.service.create(SessionCreateRequest(title="Child"))
         grandchild = await self.service.create(SessionCreateRequest(title="Grandchild"))
@@ -469,10 +472,7 @@ class TestSessionService:
         assert child_path.parent == parent_path.parent
         assert grandchild_path.parent == child_path.parent
 
-        with pytest.raises(RuntimeError, match="显式确认级联删除"):
-            await self.service.delete(parent.session_id)
-
-        await self.service.delete(parent.session_id, cascade=True)
+        await self._delete_catalog_session(parent.session_id)
 
         assert not parent_path.exists()
         with pytest.raises(NotFoundError):
@@ -498,10 +498,10 @@ class TestSessionService:
             artifact.parent.mkdir(parents=True, exist_ok=True)
             artifact.write_text("{}\n", encoding="utf-8")
 
-        result = await self.service.delete(created.session_id)
+        result = await self._delete_catalog_session(created.session_id)
 
-        assert result.session_id == created.session_id
-        assert result.status == "deleted"
+        assert result.result_node_id == created.session_id
+        assert result.state == "committed"
         assert not session_dir.exists()
 
         with pytest.raises(NotFoundError):
@@ -509,8 +509,11 @@ class TestSessionService:
 
     @pytest.mark.asyncio
     async def test_delete_nonexistent_session(self):
-        with pytest.raises(NotFoundError, match="Session .* not found"):
-            await self.service.delete("nonexistent-session-id")
+        receipt = await submit_catalog_intent(self.catalog, create_catalog_intent(
+            self.catalog, "delete_session", target_node_id=create_prefixed_id("ses"),
+        ))
+        assert receipt.state == "rejected"
+        assert receipt.error_code == "node_not_found"
 
     @pytest.mark.asyncio
     async def test_list_sessions(self):
@@ -757,7 +760,7 @@ class TestSessionService:
         sub_dir.mkdir()
         (sub_dir / "nested.txt").write_text("nested content")
 
-        await self.service.delete(session.session_id)
+        await self._delete_catalog_session(session.session_id)
 
         assert not session_dir.exists()
 
@@ -794,11 +797,14 @@ class TestSessionListReadAmplification:
             context.close()
 
     @pytest.mark.asyncio
-    async def test_list_reads_only_current_page_manifests(
+    @pytest.mark.parametrize("population", [30, 200])
+    async def test_list_projects_only_current_page_without_manifests(
         self,
         workspace_base: Path,
         session_config_service: SessionServiceConfigStub,
         monkeypatch: pytest.MonkeyPatch,
+        request: pytest.FixtureRequest,
+        population: int,
     ):
         from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 
@@ -821,7 +827,7 @@ class TestSessionListReadAmplification:
                 await workspace.create_session(
                     f"读放大-{index:02d}", current_provider_id="primary"
                 )
-                for index in range(30)
+                for index in range(population)
             ]
 
             # 统计 session.json 读次数（生产读路径唯一入口是 Path.read_text）。
@@ -833,25 +839,67 @@ class TestSessionListReadAmplification:
                 return original_read_text(self, *args, **kwargs)
 
             monkeypatch.setattr(Path, "read_text", counting_read_text)
+            original_project = service.project_catalog_session
+            projections: list[str] = []
+            original_node_from_row = workspace.store._node_from_row
+            full_rows: list[str] = []
 
-            reads.clear()
-            small = await service.list(limit=5)
-            small_manifest_reads = sum(
-                1 for path in reads if path.endswith("session.json")
-            )
-            reads.clear()
-            large = await service.list(limit=30)
-            large_manifest_reads = sum(
-                1 for path in reads if path.endswith("session.json")
-            )
+            def counted_projection(node):
+                projections.append(node.node_id)
+                return original_project(node)
 
-            # 读取次数与页大小相关（=limit），而非工作区会话总数（30）。
-            assert small_manifest_reads == 5
-            assert large_manifest_reads == 30
-            assert small_manifest_reads != len(session_ids)
-            assert small.total == len(session_ids)
-            assert large.total == len(session_ids)
+            def counted_full_row(row):
+                full_rows.append(str(row["node_id"]))
+                return original_node_from_row(row)
 
+            monkeypatch.setattr(service, "project_catalog_session", counted_projection)
+            monkeypatch.setattr(workspace.store, "_node_from_row", counted_full_row)
+            returned_rows: list[tuple[str, ...]] = []
+            original_factory = workspace.store.connection.row_factory
+
+            def counted_query_row(cursor, row):
+                returned_rows.append(tuple(column[0] for column in cursor.description))
+                return original_factory(cursor, row)
+
+            workspace.store.connection.row_factory = counted_query_row
+            udf_calls: list[str] = []
+
+            def rejected_query_udf(*_args):
+                udf_calls.append("逐成员 Python 回调")
+                raise AssertionError("分页查询必须消费写入时已派生的索引值")
+
+            workspace.store.connection.create_function("session_list_created_us", 1, rejected_query_udf, deterministic=True)
+            workspace.store.connection.create_function("session_list_member_part", 3, rejected_query_udf, deterministic=True)
+
+            measured = []
+            pages = []
+            for limit, offset in ((5, 0), (20, 0), (50, 0), (5, 10)):
+                reads.clear()
+                projections.clear()
+                full_rows.clear()
+                returned_rows.clear()
+                udf_calls.clear()
+                started = perf_counter()
+                page = await service.list(limit=limit, skip=offset)
+                elapsed_ms = (perf_counter() - started) * 1000
+                manifest_reads = sum(path.endswith("session.json") for path in reads)
+                assert manifest_reads == 0
+                assert len(projections) == len(full_rows) == min(limit, population - offset)
+                assert page.total == population
+                # 包含此前漏掉的轻量结果；根级页只返回1条COUNT/指纹摘要
+                # 与本页完整行，不允许全表成员 fetchall 或 Python UDF 全扫。
+                assert len(returned_rows) == len(page.items) + 1
+                assert udf_calls == []
+                measured.append({
+                    "population": population, "limit": limit, "offset": offset,
+                    "manifest_read_api_count": manifest_reads, "elapsed_ms": elapsed_ms,
+                    "dto_projection_count": len(projections), "complete_node_count": len(full_rows),
+                    "all_query_result_rows": len(returned_rows), "scalar_summary_rows": 1,
+                    "query_udf_calls": len(udf_calls),
+                })
+                pages.append((offset, page))
+
+            workspace.store.connection.row_factory = sqlite3.Row
             # 外部契约逐字段不变：list 页与逐会话 get() 完全一致。
             got_by_id = {
                 session_id: await service.get(session_id)
@@ -862,10 +910,15 @@ class TestSessionListReadAmplification:
                 key=lambda item: item.created_at,
                 reverse=True,
             )
-            assert [item.session_id for item in large.items] == [
-                item.session_id for item in expected_order
-            ]
-            for listed, expected in zip(large.items, expected_order, strict=True):
-                assert listed.model_dump() == expected.model_dump()
+            for offset, page in pages:
+                expected_page = expected_order[offset:offset + len(page.items)]
+                assert [item.session_id for item in page.items] == [item.session_id for item in expected_page]
+                for listed, expected in zip(page.items, expected_page, strict=True):
+                    assert listed.model_dump() == expected.model_dump()
+            artifacts = TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir
+            artifacts.mkdir(parents=True, exist_ok=True)
+            (artifacts / f"session-list-read-work-{population}.json").write_text(
+                json.dumps(measured, ensure_ascii=False, indent=2) + "\n",
+            )
         finally:
             workspace.close()

@@ -1,6 +1,6 @@
 """v2 checkpoint boundary、rewind 与 active view/anchor 的持久化 owner。
 
-这里在 RolloutStorage 的同一 SQLite 事务内提交 view、branch 与 control 状态，
+这里在 RolloutContextStore 的同一 SQLite 事务内提交 view、branch 与 control 状态，
 并委托唯一 tool protocol validator 判定闭合边界。
 """
 
@@ -16,11 +16,11 @@ from app.domain.itemized.mutation_intents import (
     MutationIntentOwner,
     RebuildContextEpochIntent,
 )
+from app.services.infrastructure.rollout_context.activation.reads import (
+    read_activation_refs_for_turns,
+)
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     validate_tool_protocol_closure,
-)
-from app.services.infrastructure.rollout_context.storage.resource_activation_reads import (
-    read_activation_refs_for_turns,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
@@ -83,13 +83,13 @@ class RolloutCheckpointOperationsMixin:
             raise ValueError(
                 "context boundary 必须是 rewind、history_replay 或 compaction"
             )
-        session_id = self._session_id_from_owner_scope(thread_id)
-        with self._lock(thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-            with self._connect(
+        session_id = self._storage._session_id_from_owner_scope(thread_id)
+        with self._storage._lock(thread_id, checkpoint_ns, session_id=session_id):
+            self._storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._storage._connect(
                 thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
-                self._require_v2_runtime(connection)
+                self._storage._require_v2_runtime(connection)
                 connection.execute("BEGIN IMMEDIATE")
                 if source_turn_id is not None:
                     resolved = self._resolve_turn_anchor_connection(
@@ -119,7 +119,7 @@ class RolloutCheckpointOperationsMixin:
                 source_view_id = source_view_id or strict_text(
                     source[6], field="checkpoints.view_id"
                 )
-                source_sequences = self._view_message_sequences(
+                source_sequences = self._storage._view_message_sequences(
                     thread_id,
                     checkpoint_ns,
                     source_view_id,
@@ -179,12 +179,12 @@ class RolloutCheckpointOperationsMixin:
                     cutoff,
                 )
                 timestamp = _now()
-                old_active_branch, _projection_epoch = self._namespace_state(
+                old_active_branch, _projection_epoch = self._storage._namespace_state(
                     connection, checkpoint_ns
                 )
                 history_only = boundary == "history_replay"
                 branch_id = old_active_branch if history_only else "branch-" + uuid4().hex[:12]
-                view_id = self._create_view(
+                view_id = self._storage._create_view(
                     connection,
                     branch_id,
                     source_view_id,
@@ -232,7 +232,7 @@ class RolloutCheckpointOperationsMixin:
                     control_payload["resource_activation_refs"] = [
                         dict(ref) for ref in activation_refs
                     ]
-                control_sequence = self._insert_control(
+                control_sequence = self._storage._insert_control(
                     connection,
                     boundary,
                     "view" if history_only else "branch",
@@ -274,7 +274,7 @@ class RolloutCheckpointOperationsMixin:
                     consumer = self.consume_context_epoch_rebuild_intent if consume_epoch_intent is None else consume_epoch_intent
                     consumer(intent, connection)
                 connection.commit()
-                return self._manifest_from_connection(connection, checkpoint_ns), view_id
+                return self._storage._manifest_from_connection(connection, checkpoint_ns), view_id
 
     def rewind_to_checkpoint(
         self,

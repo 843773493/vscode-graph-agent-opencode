@@ -5,7 +5,6 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
-from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Self
@@ -18,14 +17,13 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.history_loading import HistoryLoadingConfig
 from app.core.path_utils import get_session_path_resolver
+from app.core.sqlite_state import utc_now_text
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
 )
 from app.domain.itemized.identity.item_projection import ItemProvenanceRelation
 from app.domain.itemized.mutation_intents import (
-    AppendCanonicalItemIntent,
     MutationIntentOwner,
 )
 from app.domain.itemized.parts import ContentPart, ContentPartAnchor
@@ -42,8 +40,23 @@ from app.services.infrastructure.node_debug.session.fork import (
 from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
-from app.services.infrastructure.rollout_context.checkpoint.fork_compaction import (
-    ForkCompactionMixin,
+from app.services.infrastructure.rollout_context.activation.lineage import (
+    ActivationLineageBodyStore,
+)
+from app.services.infrastructure.rollout_context.activation.store import (
+    ResourceActivationStore,
+)
+from app.services.infrastructure.rollout_context.checkpoint.fork_copy import (
+    CheckpointForkCopy,
+)
+from app.services.infrastructure.rollout_context.checkpoint.fork_owner import (
+    CheckpointForkOwner,
+)
+from app.services.infrastructure.rollout_context.checkpoint.fork_recovery import (
+    CheckpointForkRecovery,
+)
+from app.services.infrastructure.rollout_context.checkpoint.fork_source import (
+    CheckpointForkSource,
 )
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
@@ -53,6 +66,8 @@ from app.services.infrastructure.rollout_context.checkpoint.mutation.mutation_in
 )
 from app.services.infrastructure.rollout_context.checkpoint.mutation.saver_mutation_intents import (
     RolloutMutationIntentPortMixin,
+    _append_intent_for,
+    _AppendIntentBatch,
 )
 from app.services.infrastructure.rollout_context.checkpoint.owner.context_epoch_transition import (
     ContextEpochTransitionOwnerMixin,
@@ -72,7 +87,7 @@ from app.services.infrastructure.rollout_context.checkpoint.owner.context_replay
 from app.services.infrastructure.rollout_context.checkpoint.owner.context_source import (
     ContextSourceOverlayMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.owner.context_source_control import (
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_source_control_port import (
     ContextSourceControlOwnerMixin,
 )
 from app.services.infrastructure.rollout_context.checkpoint.owner.runtime_execution import (
@@ -87,6 +102,9 @@ from app.services.infrastructure.rollout_context.checkpoint.runtime.async_api im
 from app.services.infrastructure.rollout_context.checkpoint.runtime.langgraph_api import (
     RolloutLangGraphCheckpointMixin,
 )
+from app.services.infrastructure.rollout_context.checkpoint.writer import (
+    RolloutAppendWriter,
+)
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
 )
@@ -96,114 +114,13 @@ from app.services.infrastructure.rollout_context.runtime.detail_store import (
 from app.services.infrastructure.rollout_context.runtime.reconciliation import (
     ContextReconciliation,
 )
-from app.services.infrastructure.rollout_context.storage.append_writer import (
-    RolloutAppendWriter,
-)
-from app.services.infrastructure.rollout_context.storage.resource_activation_lineage import (
-    ActivationLineageBodyStore,
-)
-from app.services.infrastructure.rollout_context.storage.resource_activation_store import (
-    ResourceActivationStore,
-)
-from app.services.infrastructure.rollout_context.storage.service import (
-    RolloutStorage,
+from app.services.infrastructure.rollout_context.store import (
+    RolloutContextStore,
 )
 
 if TYPE_CHECKING:
     from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 
-
-# SemanticKind → AppendCanonicalItemIntent.item_kind 的闭合映射；
-# runtime_notice/compaction_summary/extension 不属于 canonical append intent，
-# 走各自 owner 端口。
-_APPEND_ITEM_KINDS: Mapping[str, str] = {
-    SemanticKind.USER_INPUT: "user_message",
-    SemanticKind.ATTACHMENT: "attachment",
-    SemanticKind.ASSISTANT_OUTPUT: "assistant_message",
-    SemanticKind.REASONING: "reasoning",
-    SemanticKind.TOOL_CALL: "tool_call",
-    SemanticKind.TOOL_RESULT: "tool_result",
-}
-
-
-def _append_intent_for(
-    owner: MutationIntentOwner,
-    item: CanonicalItemRecord,
-    *,
-    execution_id: str,
-) -> AppendCanonicalItemIntent:
-    """从 canonical record 构造 append intent；字段不完整时显式失败。"""
-    item_kind = _APPEND_ITEM_KINDS.get(item.semantic_kind)
-    if item_kind is None:
-        raise ValueError(
-            "semantic_kind 不在 append intent 闭合集内: "
-            f"{item.semantic_kind!r} (item_id={item.item_id!r})"
-        )
-    tool_call_id: str | None = None
-    if item_kind in {"tool_call", "tool_result"}:
-        tool_call_id = _tool_call_id_for_intent(item)
-    return AppendCanonicalItemIntent(
-        owner=owner,
-        item_id=item.item_id,
-        item_kind=item_kind,
-        execution_id=execution_id,
-        origin_turn_id=item.turn_id,
-        tool_call_id=tool_call_id,
-    )
-
-
-def _tool_call_id_for_intent(item: CanonicalItemRecord) -> str:
-    """提取 tool_call/tool_result 与 intent 配对的 tool_call_id。
-
-    - tool_call 接受单 call 形态与单元素 tool_calls 列表（checkpoint
-      shadow 投影形态）；多元素列表无法映射为单个 append intent 的
-      配对身份，显式拒绝。
-    - tool_result 的身份按 v2 合同位于 typed payload；text payload 的
-      身份由 metadata 携带，二者都支持。
-    """
-    payload = item.payload if isinstance(item.payload, Mapping) else {}
-    if item.semantic_kind == SemanticKind.TOOL_CALL:
-        if isinstance(payload.get("tool_calls"), list):
-            calls = payload["tool_calls"]
-            if len(calls) != 1:
-                raise ValueError(
-                    "多 call 批式 tool_call 不能构造 append intent: "
-                    f"{item.item_id!r} (tool_calls={len(calls)})"
-                )
-            call = calls[0] if isinstance(calls[0], Mapping) else {}
-            raw_tool_call_id = call.get("id")
-        else:
-            raw_tool_call_id = payload.get("tool_call_id")
-    else:
-        raw_tool_call_id = payload.get("tool_call_id")
-        if raw_tool_call_id is None:
-            raw_tool_call_id = (
-                item.tool_result_evidence.tool_call_id
-                if item.tool_result_evidence is not None
-                else None
-            )
-    if not isinstance(raw_tool_call_id, str) or not raw_tool_call_id:
-        raise ValueError(
-            f"{item.semantic_kind} 缺少配对 tool_call_id: {item.item_id!r}"
-        )
-    return raw_tool_call_id
-
-
-@dataclass(slots=True)
-class _AppendIntentBatch:
-    """一次 append_items 调用的 in-flight 批上下文。
-
-    批内 intent 先全部构造、再逐个经 facade 消费；首个 intent 消费时由
-    owner 端口单事务提交整批，后续 intent 只做校验，保持 storage 既有的
-    同批原子提交边界。
-    """
-
-    owner: MutationIntentOwner
-    checkpoint_ns: str
-    execution_id: str
-    records: tuple[CanonicalItemRecord, ...]
-    item_ids: frozenset[str]
-    commit_ids: tuple[int, ...] | None = None
 
 
 class RolloutCheckpointSaver(
@@ -218,7 +135,6 @@ class RolloutCheckpointSaver(
     ContextReplayMixin,
     RolloutLangGraphAsyncMixin,
     RolloutLangGraphCheckpointMixin,
-    ForkCompactionMixin,
     BaseCheckpointSaver[str],
     AbstractContextManager,
     AbstractAsyncContextManager,
@@ -230,7 +146,7 @@ class RolloutCheckpointSaver(
         sessions_dir: str | Path,
         *,
         serde: JsonPlusSerializer | None = None,
-        storage: RolloutStorage | None = None,
+        storage: RolloutContextStore | None = None,
         writer: RolloutAppendWriter | None = None,
         context_reader: RolloutContextReader | None = None,
         history_reader: RolloutHistoryReader | None = None,
@@ -241,7 +157,7 @@ class RolloutCheckpointSaver(
     ) -> None:
         super().__init__(serde=serde)
         self._serde = serde or JsonPlusSerializer()
-        self._storage = storage or RolloutStorage(
+        self._storage = storage or RolloutContextStore(
             sessions_dir,
             serde=self._serde,
             message_codec=LangChainMessageCodec(),
@@ -268,7 +184,6 @@ class RolloutCheckpointSaver(
         self._node_debug_store = node_debug_store or NodeDebugSessionStore(
             get_session_path_resolver(Path(sessions_dir).resolve())
         )
-        self._node_debug_workspace_config = node_debug_workspace_config
         self._context_plan_composers: dict[
             tuple[str, str, str], ContextPlanComposer
         ] = {}
@@ -300,7 +215,87 @@ class RolloutCheckpointSaver(
         # 正在经 intent 端口消费的 append 批；由 append_items 持锁注册/清理。
         self._append_intent_batches: dict[MutationIntentOwner, _AppendIntentBatch] = {}
         self._lock = threading.RLock()
+        fork_source = CheckpointForkSource(
+            checkpoint=self, storage=self._storage, context_reader=self._context_reader,
+            detail_store=self._detail_store, node_debug_store=self._node_debug_store,
+            node_debug_workspace_config=node_debug_workspace_config,
+            capture_request_only_content=self._capture_request_only_content_for_fork,
+        )
+        self.forks = CheckpointForkOwner(
+            storage=self._storage, source=fork_source,
+            copy=CheckpointForkCopy(
+                checkpoint=self, source=fork_source, storage=self._storage,
+                context_reader=self._context_reader, detail_store=self._detail_store,
+                node_debug_workspace_config=node_debug_workspace_config,
+                copy_request_only_content=self._copy_request_only_context_for_fork,
+            ),
+            recovery=CheckpointForkRecovery(storage=self._storage, source=fork_source),
+        )
 
+
+
+
+
+
+
+
+
+
+
+    def ensure_request_items(
+        self, session_id: str, thread_id: str, *, turn_id: str | None,
+        execution_id: str, messages: Sequence[object], checkpoint_ns: str = "",
+    ) -> tuple[str, ...]:
+        """模型请求先映射完整 canonical group，再交唯一 storage owner 原子提交。"""
+        codec = self._storage.storage._codec()
+        eligible = []
+        for index, message in enumerate(messages):
+            role = codec.message_role(message)
+            metadata = getattr(message, "response_metadata", {})
+            is_context_source = (
+                role == "user" and isinstance(metadata, Mapping)
+                and isinstance(metadata.get("context_source_kind"), str)
+                and isinstance(metadata.get("context_revision"), str)
+            )
+            if role == "tool" or codec.tool_calls(message) or is_context_source:
+                eligible.append((index, message, codec.message_id(message, index), role))
+        with self._storage.storage._lock(thread_id, checkpoint_ns, session_id=session_id):
+            with self._storage.storage._connect(
+                thread_id, checkpoint_ns, session_id=session_id, read_only=True,
+            ) as connection:
+                existing_groups = self._storage.storage.read_request_groups(
+                    session_id, thread_id, turn_id=turn_id, execution_id=execution_id,
+                    message_ids=tuple(value[2] for value in eligible), checkpoint_ns=checkpoint_ns,
+                    writer_connection=connection,
+                )
+            pending = []
+            for (index, message, message_id, role), stored in zip(eligible, existing_groups, strict=True):
+                model_call_id = (
+                    codec.tool_message_model_call_id(message, messages[:index]) if role == "tool"
+                    else codec.model_call_id(message) if role == "assistant" else None
+                )
+                group = tuple(codec.items_for_message(
+                    message, item_sequence=1, message_id=message_id,
+                    turn_id=stored.turn_id, execution_id=stored.execution_id,
+                    timestamp=utc_now_text(), model_call_id=model_call_id,
+                ))
+                if stored.items:
+                    if (
+                        len(group) != len(stored.items)
+                        or codec.project_message(group) != codec.project_message(stored.items)
+                        or any(
+                            item.item_id != saved.item_id or item.semantic_kind != saved.semantic_kind
+                            or item.content_hash != saved.content_hash or item.turn_id != saved.turn_id
+                            or item.turn_scope != saved.turn_scope
+                            for item, saved in zip(group, stored.items, strict=True)
+                        )
+                    ):
+                        raise RuntimeError(f"request 与既有 canonical message group 不一致: {message_id}")
+                else:
+                    pending.append(group)
+            return self._storage.executions.append_request_groups(
+                session_id, thread_id, groups=pending, execution_id=execution_id, checkpoint_ns=checkpoint_ns,
+            )
 
     def accept_turn(
         self,
@@ -328,7 +323,7 @@ class RolloutCheckpointSaver(
         identity_origin: str = "runtime",
     ) -> dict[str, object]:
         """在 checkpoint owner 内接受一个真实用户 Turn。"""
-        return self._storage.accept_turn(
+        return self._storage.executions.accept_turn(
             session_id,
             thread_id=thread_id,
             accepted_ingress_id=accepted_ingress_id,
@@ -422,7 +417,7 @@ class RolloutCheckpointSaver(
         thread_id: str | None = None,
         checkpoint_ns: str = "",
     ) -> str:
-        return self._storage.execution_for_turn(
+        return self._storage.executions.execution_for_turn(
             session_id,
             turn_id=turn_id,
             thread_id=thread_id,
@@ -437,7 +432,7 @@ class RolloutCheckpointSaver(
         job_id: str,
         checkpoint_ns: str = "",
     ) -> ExecutionAdmission:
-        return self._storage.execution_admission_for_job(
+        return self._storage.executions.execution_admission_for_job(
             session_id,
             thread_id=thread_id,
             job_id=job_id,
@@ -452,7 +447,7 @@ class RolloutCheckpointSaver(
         execution_id: str,
         checkpoint_ns: str = "",
     ) -> ExecutionAdmission:
-        return self._storage.execution_admission(
+        return self._storage.executions.execution_admission(
             session_id,
             thread_id=thread_id,
             execution_id=execution_id,
@@ -469,7 +464,7 @@ class RolloutCheckpointSaver(
         cutoff_indexes: Sequence[int],
     ) -> frozenset[int]:
         """compaction preflight 只读端口；唯一实现由 storage owner 提供。"""
-        return self._storage.safe_compaction_prefix_cutoffs(
+        return self._storage.checkpoints.safe_compaction_prefix_cutoffs(
             session_id,
             thread_id,
             checkpoint_ns=checkpoint_ns,
@@ -486,7 +481,7 @@ class RolloutCheckpointSaver(
         checkpoint_ns: str = "",
     ) -> str:
         """通过 Saver 绑定原 Turn dispatch，不创建新的 Turn。"""
-        return self._storage.dispatch_replay(
+        return self._storage.executions.dispatch_replay(
             session_id,
             thread_id=thread_id,
             turn_id=turn_id,
@@ -508,7 +503,7 @@ class RolloutCheckpointSaver(
         dispatch_state: str = "ready",
         checkpoint_ns: str = "",
     ) -> None:
-        self._storage.register_model_call(
+        self._storage.executions.register_model_call(
             session_id,
             thread_id=thread_id,
             execution_id=execution_id,
@@ -532,7 +527,7 @@ class RolloutCheckpointSaver(
         dispatch_state: str | None = None,
         checkpoint_ns: str = "",
     ) -> None:
-        self._storage.update_model_call_outcome(
+        self._storage.executions.update_model_call_outcome(
             session_id,
             thread_id=thread_id,
             model_call_id=model_call_id,
@@ -550,7 +545,7 @@ class RolloutCheckpointSaver(
         checkpoint_ns: str = "",
     ) -> ContextAssemblySnapshot:
         """由 Saver 提供已提交 assembly，屏蔽底层 SQLite 读取。"""
-        return self._storage.get_context_assembly(
+        return self._storage.assemblies.get_context_assembly(
             session_id,
             thread_id,
             assembly_id=assembly_id,
@@ -565,7 +560,7 @@ class RolloutCheckpointSaver(
         turn_id: str | None = None,
     ) -> tuple[ContextAssemblySnapshot, ...]:
         """由 Saver 提供已提交 assembly 列表。"""
-        return self._storage.list_context_assemblies(
+        return self._storage.assemblies.list_context_assemblies(
             session_id,
             thread_id,
             turn_id=turn_id,
@@ -587,7 +582,7 @@ class RolloutCheckpointSaver(
         loss_reason: str | None = None,
     ) -> int:
         """通过 Saver 原子收敛 execution、output item、assembly 与 Turn。"""
-        return self._storage.converge_execution(
+        return self._storage.executions.converge_execution(
             session_id,
             thread_id=thread_id,
             turn_id=turn_id,
@@ -610,7 +605,7 @@ class RolloutCheckpointSaver(
         job_id: str,
         checkpoint_ns: str = "",
     ) -> dict[str, object]:
-        return self._storage.resume_turn(
+        return self._storage.executions.resume_turn(
             session_id,
             turn_id=turn_id,
             thread_id=thread_id,
@@ -629,7 +624,7 @@ class RolloutCheckpointSaver(
         reason: str = "provider_result_commit_missing",
     ) -> dict[str, object]:
         """通过 Saver 记录 provider dispatch 后丢失的 execution。"""
-        return self._storage.mark_execution_lost(
+        return self._storage.executions.mark_execution_lost(
             session_id,
             turn_id=turn_id,
             thread_id=thread_id,
@@ -649,7 +644,7 @@ class RolloutCheckpointSaver(
         checkpoint_ns: str = "",
     ) -> None:
         """通过 Saver 持久化 canonical item 的 content-part locator。"""
-        self._storage.register_content_part(
+        self._storage.storage.register_content_part(
             session_id,
             thread_id=thread_id,
             item_id=item_id,
@@ -667,7 +662,7 @@ class RolloutCheckpointSaver(
         checkpoint_ns: str = "",
     ) -> None:
         """通过 Saver 持久化可恢复的 content-part 操作锚点。"""
-        self._storage.register_content_part_anchor(
+        self._storage.storage.register_content_part_anchor(
             session_id,
             anchor,
             thread_id=thread_id,
@@ -683,7 +678,7 @@ class RolloutCheckpointSaver(
         checkpoint_ns: str = "",
     ) -> ContentPartAnchor:
         """通过 Saver 恢复并校验 durable content-part anchor。"""
-        return self._storage.resolve_content_part_anchor(
+        return self._storage.storage.resolve_content_part_anchor(
             session_id,
             thread_id=thread_id,
             anchor_id=anchor_id,
@@ -699,7 +694,7 @@ class RolloutCheckpointSaver(
         checkpoint_ns: str = "",
     ) -> None:
         """通过 Saver 持久化 item/replay/fork provenance。"""
-        self._storage.register_provenance_edge(
+        self._storage.storage.register_provenance_edge(
             session_id,
             thread_id,
             edge,
@@ -767,6 +762,9 @@ class RolloutCheckpointSaver(
             request,
             policy=policy,
         )
+
+    def has_committed_tool_result(self, session_id: str, thread_id: str, model_call_id: str, tool_call_id: str) -> bool:
+        return self._storage.storage.has_committed_tool_result(session_id, thread_id, model_call_id, tool_call_id)
 
     def get_next_version(self, current: str | None, channel: None) -> str:
         if current is None:

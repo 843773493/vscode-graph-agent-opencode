@@ -20,6 +20,10 @@ from app.core.session_catalog_store import (
     validate_session_id,
     validate_thread_id,
 )
+from app.core.session_catalog_store.contracts import (
+    SessionGenerationOriginDTO,
+    SessionKind,
+)
 from app.core.session_control_store import SessionControlStore
 from app.core.workspace_identity import load_or_create_workspace_id
 from tests.support.canonical_id_at import thread_id_at, thread_id_for_name_at
@@ -37,6 +41,12 @@ class CatalogSessionBundleSpec:
     parent_node_id: str | None = None
     created_at: datetime | None = None
     main_thread_id: str | None = None
+    current_agent_id: str = "default"
+    current_provider_id: str | None = None
+    session_kind: SessionKind = "normal"
+    context_source_session_id: str | None = None
+    generation_origin: SessionGenerationOriginDTO | None = None
+    updated_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +132,16 @@ def seed_catalog_session(spec: CatalogSessionBundleSpec) -> CatalogSessionBundle
                 created_at,
                 locator,
                 main_thread_id,
+                current_agent_id=spec.current_agent_id,
+                current_provider_id=spec.current_provider_id,
+                session_kind=spec.session_kind,
+                context_source_session_id=spec.context_source_session_id,
+                generation_origin_json=(
+                    json.dumps(spec.generation_origin.model_dump(mode="json"),
+                               ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                    if spec.generation_origin is not None else None
+                ),
+                updated_at=spec.updated_at,
             )
         else:
             if node.storage_relative_locator != locator:
@@ -137,14 +157,7 @@ def seed_catalog_session(spec: CatalogSessionBundleSpec) -> CatalogSessionBundle
         manifest = {
             "session_id": spec.session_id,
             "workspace_id": spec.workspace_id,
-            "kind": "normal",
-            "delegation": None,
-            "generation_origin": None,
-            "current_agent_id": "default",
-            "current_provider_id": None,
-            "context_source_session_id": None,
             "created_at": node.created_at or created_at.isoformat(),
-            "updated_at": node.created_at or created_at.isoformat(),
         }
         (directory / "session.json").write_text(
             json.dumps(manifest, ensure_ascii=False, sort_keys=True) + "\n",
@@ -179,6 +192,11 @@ def seed_catalog_session_bundle(
     title: str | None = None,
     parent_node_id: str | None = None,
     main_thread_id: str | None = None,
+    current_agent_id: str = "default",
+    current_provider_id: str | None = None,
+    session_kind: SessionKind = "normal",
+    context_source_session_id: str | None = None,
+    updated_at: datetime | None = None,
 ) -> CatalogSessionBundle:
     """按测试常用参数构造并播种一个固定 ID 会话。"""
 
@@ -194,6 +212,11 @@ def seed_catalog_session_bundle(
             title=title or f"测试会话 {session_id}",
             parent_node_id=parent_node_id,
             main_thread_id=main_thread_id,
+            current_agent_id=current_agent_id,
+            current_provider_id=current_provider_id,
+            session_kind=session_kind,
+            context_source_session_id=context_source_session_id,
+            updated_at=updated_at,
         )
     )
 

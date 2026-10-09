@@ -34,7 +34,7 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from tests.support.canonical_id_at import thread_id_at
 from tests.support.catalog_session_bundle import (
     seed_catalog_session_bundle,
@@ -114,11 +114,11 @@ def _publish_child_thread(
 
 
 @pytest.fixture
-def storage(tmp_path: Path) -> RolloutStorage:
+def storage(tmp_path: Path) -> RolloutContextStore:
     root = tmp_path / ".boxteam" / "sessions"
     root.mkdir(parents=True)
     seed_catalog_session_bundle(root, SESSION_ID, title="thread 定位")
-    return RolloutStorage(
+    return RolloutContextStore(
         root,
         serde=JsonPlusSerializer(),
         message_codec=LangChainMessageCodec(),
@@ -126,62 +126,62 @@ def storage(tmp_path: Path) -> RolloutStorage:
 
 
 def test_main_thread_resolves_to_session_node_rollout(
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
 ) -> None:
-    main_thread_id = storage._path_resolver.main_thread_id(SESSION_ID)
-    session_node = storage._path_resolver.resolve_session_node(SESSION_ID)
-    thread_node = storage._path_resolver.resolve_thread_node(SESSION_ID, main_thread_id)
-    assert storage.root(SESSION_ID) == thread_node / "rollout"
-    assert storage.root(SESSION_ID, thread_id=main_thread_id) == thread_node / "rollout"
-    assert storage.index_path(SESSION_ID) == thread_node / "rollout" / "index.sqlite"
-    assert storage.jsonl_path(SESSION_ID) == thread_node / "rollout" / "rollout.jsonl"
+    main_thread_id = storage.storage._path_resolver.main_thread_id(SESSION_ID)
+    session_node = storage.storage._path_resolver.resolve_session_node(SESSION_ID)
+    thread_node = storage.storage._path_resolver.resolve_thread_node(SESSION_ID, main_thread_id)
+    assert storage.storage.root(SESSION_ID) == thread_node / "rollout"
+    assert storage.storage.root(SESSION_ID, thread_id=main_thread_id) == thread_node / "rollout"
+    assert storage.storage.index_path(SESSION_ID) == thread_node / "rollout" / "index.sqlite"
+    assert storage.storage.jsonl_path(SESSION_ID) == thread_node / "rollout" / "rollout.jsonl"
     assert thread_node == session_node
 
 
 def test_main_thread_owner_resolves_to_one_rollout_lock_and_rejects_session_alias(
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
 ) -> None:
-    thread_id = storage.main_thread_id(SESSION_ID)
-    assert storage._lock(thread_id, "", session_id=SESSION_ID) is storage._lock(
+    thread_id = storage.storage.main_thread_id(SESSION_ID)
+    assert storage.storage._lock(thread_id, "", session_id=SESSION_ID) is storage.storage._lock(
         thread_id,
         "",
         session_id=SESSION_ID,
     )
     with pytest.raises(RuntimeError, match="拒绝 thread alias"):
-        storage._lock(SESSION_ID, "", session_id=SESSION_ID)
+        storage.storage._lock(SESSION_ID, "", session_id=SESSION_ID)
 
 
 def test_child_thread_resolves_to_own_thread_node_rollout(
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
 ) -> None:
-    session_node = storage._path_resolver.resolve_session_node(SESSION_ID)
+    session_node = storage.storage._path_resolver.resolve_session_node(SESSION_ID)
     thread_dir = _publish_child_thread(
         session_node,
         thread_id=CHILD_THREAD_ID,
     )
-    child_root = storage.root(SESSION_ID, thread_id=CHILD_THREAD_ID)
+    child_root = storage.storage.root(SESSION_ID, thread_id=CHILD_THREAD_ID)
     assert child_root == thread_dir / "rollout"
     assert child_root != session_node / "rollout"
-    assert storage.index_path(SESSION_ID, thread_id=CHILD_THREAD_ID) == (
+    assert storage.storage.index_path(SESSION_ID, thread_id=CHILD_THREAD_ID) == (
         thread_dir / "rollout" / "index.sqlite"
     )
 
 
 def test_unpublished_thread_id_fails_closed(
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
 ) -> None:
     with pytest.raises(KeyError):
-        storage.root(SESSION_ID, thread_id=CHILD_THREAD_ID)
+        storage.storage.root(SESSION_ID, thread_id=CHILD_THREAD_ID)
 
 
 def test_unknown_session_fails_closed(tmp_path: Path) -> None:
     with pytest.raises(TypeError, match="非空字符串"):
-        storage = RolloutStorage(tmp_path / "does-not-exist")
-        storage.root("")
+        storage = RolloutContextStore(tmp_path / "does-not-exist")
+        storage.storage.root("")
 
 
 def test_main_and_child_rollout_stores_are_physically_isolated(
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
 ) -> None:
     """OpenSpec 8.3 Scenario：main 与 child 的 rollout 落点互不重叠。
 
@@ -189,19 +189,19 @@ def test_main_and_child_rollout_stores_are_physically_isolated(
     `index.sqlite` 与 `rollout.jsonl` 落在不同物理目录，故两库各自的单行
     `database_meta` 与 `committed_jsonl_offset` 不会互相串扰。
     """
-    session_node = storage._path_resolver.resolve_session_node(SESSION_ID)
+    session_node = storage.storage._path_resolver.resolve_session_node(SESSION_ID)
     _publish_child_thread(
         session_node,
         thread_id=CHILD_THREAD_ID,
     )
-    main_root = storage.root(SESSION_ID)
-    child_root = storage.root(SESSION_ID, thread_id=CHILD_THREAD_ID)
+    main_root = storage.storage.root(SESSION_ID)
+    child_root = storage.storage.root(SESSION_ID, thread_id=CHILD_THREAD_ID)
     assert main_root != child_root
     assert main_root.parent != child_root.parent
-    assert storage.index_path(SESSION_ID) != storage.index_path(
+    assert storage.storage.index_path(SESSION_ID) != storage.storage.index_path(
         SESSION_ID, thread_id=CHILD_THREAD_ID
     )
-    assert storage.jsonl_path(SESSION_ID) != storage.jsonl_path(
+    assert storage.storage.jsonl_path(SESSION_ID) != storage.storage.jsonl_path(
         SESSION_ID, thread_id=CHILD_THREAD_ID
     )
 
@@ -214,7 +214,7 @@ def test_acceptance_owner_roundtrips_same_local_ids_in_sibling_threads(
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     storage = saver._storage
-    session_node = storage._path_resolver.resolve_session_node(SESSION_ID)
+    session_node = storage.storage._path_resolver.resolve_session_node(SESSION_ID)
     thread_ids = (f"thr_{create_uuid_hex()}", f"thr_{create_uuid_hex()}")
     for thread_id in thread_ids:
         _publish_child_thread(
@@ -237,7 +237,7 @@ def test_acceptance_owner_roundtrips_same_local_ids_in_sibling_threads(
         )
 
     for thread_id in thread_ids:
-        index_path = storage.index_path(SESSION_ID, thread_id=thread_id)
+        index_path = storage.storage.index_path(SESSION_ID, thread_id=thread_id)
         with sqlite3.connect(index_path) as connection:
             assert connection.execute(
                 "SELECT session_id, thread_id FROM database_meta WHERE singleton_id = 1"
@@ -318,15 +318,15 @@ def _write_admitted_checkpoint(
 
 
 def test_main_and_child_checkpoints_restore_through_exact_owner(
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
 ) -> None:
-    session_node = storage._path_resolver.resolve_session_node(SESSION_ID)
+    session_node = storage.storage._path_resolver.resolve_session_node(SESSION_ID)
     _publish_child_thread(
         session_node,
         thread_id=CHILD_THREAD_ID,
     )
-    saver = RolloutCheckpointSaver(storage.sessions_dir, storage=storage)
-    main_thread_id = storage.main_thread_id(SESSION_ID)
+    saver = RolloutCheckpointSaver(storage.storage.sessions_dir, storage=storage)
+    main_thread_id = storage.storage.main_thread_id(SESSION_ID)
     main_config, _main_turn_id = _write_admitted_checkpoint(
         saver,
         session_id=SESSION_ID,
@@ -351,7 +351,7 @@ def test_main_and_child_checkpoints_restore_through_exact_owner(
         ),
     }
     for thread_id, (label, item_ids) in expected_by_thread.items():
-        items = storage.read_items(
+        items = storage.storage.read_items(
             SESSION_ID,
             thread_id,
             item_ids=item_ids,
@@ -361,8 +361,8 @@ def test_main_and_child_checkpoints_restore_through_exact_owner(
             f"{label} question",
             f"{label} answer",
         ]
-        with storage.open_read_snapshot(SESSION_ID, thread_id) as snapshot:
-            snapshot_items = storage.read_items(
+        with storage.storage.open_read_snapshot(SESSION_ID, thread_id) as snapshot:
+            snapshot_items = storage.storage.read_items(
                 SESSION_ID,
                 thread_id,
                 item_ids=item_ids,
@@ -430,15 +430,15 @@ def test_main_and_child_checkpoints_restore_through_exact_owner(
 
 
 def test_checkpoint_reads_reject_cross_owner_config_and_snapshot(
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
 ) -> None:
-    session_node = storage._path_resolver.resolve_session_node(SESSION_ID)
+    session_node = storage.storage._path_resolver.resolve_session_node(SESSION_ID)
     _publish_child_thread(
         session_node,
         thread_id=CHILD_THREAD_ID,
     )
-    saver = RolloutCheckpointSaver(storage.sessions_dir, storage=storage)
-    main_thread_id = storage.main_thread_id(SESSION_ID)
+    saver = RolloutCheckpointSaver(storage.storage.sessions_dir, storage=storage)
+    main_thread_id = storage.storage.main_thread_id(SESSION_ID)
     main_config, _ = _write_admitted_checkpoint(
         saver,
         session_id=SESSION_ID,
@@ -471,10 +471,10 @@ def test_checkpoint_reads_reject_cross_owner_config_and_snapshot(
             )
 
     with (
-        storage.open_read_snapshot(SESSION_ID, CHILD_THREAD_ID) as child_snapshot,
+        storage.storage.open_read_snapshot(SESSION_ID, CHILD_THREAD_ID) as child_snapshot,
         pytest.raises(ValueError, match="目标 rollout 不一致"),
     ):
-        storage.latest_checkpoint(
+        storage.checkpoints.latest_checkpoint(
             SESSION_ID,
             main_thread_id,
             "",

@@ -9,6 +9,9 @@ from collections.abc import Iterable, Mapping
 from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.infrastructure.rollout_context.activation.schema import (
+    require_resource_activation_schema,
+)
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
     detail_ref_key,
@@ -19,6 +22,10 @@ from app.services.infrastructure.rollout_context.fork.detail_mapping import (
 )
 from app.services.infrastructure.rollout_context.fork.full_copy.plans import (
     collect_plan_identities,
+)
+from app.services.infrastructure.rollout_context.fork.full_copy.source_catalog import (
+    read_full_copy_item_rows,
+    read_full_copy_overlay_epochs,
 )
 from app.services.infrastructure.rollout_context.fork.identity import (
     remap_canonical_item,
@@ -38,9 +45,6 @@ from app.services.infrastructure.rollout_context.storage import (
 from app.services.infrastructure.rollout_context.storage.catalog.integrity import (
     validate_catalog_body,
     validate_catalog_projection,
-)
-from app.services.infrastructure.rollout_context.storage.resource_activation_schema import (
-    require_resource_activation_schema,
 )
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_line as _v2_json_line,
@@ -67,8 +71,8 @@ def prepare_full_copy_remap(
     self = service
     source_session_id = required_text(source_session_id, field="source_session_id")
     target_session_id = required_text(target_session_id, field="target_session_id")
-    source_thread_id = self._resolve_thread_identity(source_session_id, None)
-    target_thread_id = self._resolve_thread_identity(target_session_id, None)
+    source_thread_id = self._storage._resolve_thread_identity(source_session_id, None)
+    target_thread_id = self._storage._resolve_thread_identity(target_session_id, None)
     fork_id = required_text(fork_id, field="fork_id")
     if source_session_id == target_session_id:
         raise ValueError("full_rollout_copy source/target session 不能相同")
@@ -76,7 +80,7 @@ def prepare_full_copy_remap(
         raise TypeError("full_rollout_copy checkpoint_ns 必须是字符串")
     if not isinstance(timestamp, str) or not timestamp:
         raise RuntimeError("full_rollout_copy timestamp 必须是非空字符串")
-    if self._rollout_format(connection) != storage_version.ROLLOUT_FORMAT_VERSION:
+    if self._storage._rollout_format(connection) != storage_version.ROLLOUT_FORMAT_VERSION:
         return
     overlay_owner = connection.execute(
         "SELECT session_id, thread_id FROM database_meta WHERE singleton_id = 1"
@@ -149,53 +153,13 @@ def prepare_full_copy_remap(
             ).fetchall()
         )
 
-    item_rows = tuple(
-        connection.execute(
-            "SELECT item_sequence, item_id, turn_id, jsonl_offset, jsonl_length, projection_manifest_json FROM item_catalog ORDER BY item_sequence"
-        ).fetchall()
-    )
-    normalized_item_rows: list[tuple[object, ...]] = []
-    seen_item_sequences: set[int] = set()
-    seen_item_ids: set[str] = set()
-    for row in item_rows:
-        if len(row) != 6:
-            raise RuntimeError("full_rollout_copy item catalog 字段数量不一致")
-        sequence = non_negative_int(row[0], field="item_catalog.item_sequence")
-        if sequence == 0 or sequence in seen_item_sequences:
-            raise RuntimeError(
-                f"full_rollout_copy item sequence 非法或重复: {sequence}"
-            )
-        item_id = required_text(row[1], field="item_catalog.item_id")
-        if item_id in seen_item_ids:
-            raise RuntimeError(f"full_rollout_copy item identity 重复: {item_id}")
-        turn_id = optional_text(row[2], field="item_catalog.turn_id")
-        offset = non_negative_int(row[3], field="item_catalog.jsonl_offset")
-        length = non_negative_int(row[4], field="item_catalog.jsonl_length")
-        if length == 0:
-            raise RuntimeError(f"full_rollout_copy item JSONL length 为 0: {item_id}")
-        if not isinstance(row[5], str) or not row[5]:
-            raise RuntimeError(
-                f"full_rollout_copy item projection_manifest_json 非空字符串: {item_id}"
-            )
-        normalized_item_rows.append(
-            (sequence, item_id, turn_id, offset, length, row[5])
-        )
-        seen_item_sequences.add(sequence)
-        seen_item_ids.add(item_id)
-    item_rows = tuple(normalized_item_rows)
+    item_rows = read_full_copy_item_rows(connection)
     # full copy 的目标 rollout 是从 source 副本建立的独立根；overlay epoch
     # 也必须在目标坐标系重新编号，不能把 source 的全局进度当成 target 的
     # 本地历史。保留排序后的相对顺序，保证同一 source 的多 overlay 在
     # target 中仍可按 epoch 重放。
-    source_overlay_epochs = sorted(
-        {
-            non_negative_int(row[0], field="source_overlays.source_overlay_epoch")
-            for row in connection.execute(
-                "SELECT source_overlay_epoch FROM source_overlays "
-                "WHERE session_id = ? AND thread_id = ?",
-                (target_session_id, target_thread_id),
-            ).fetchall()
-        }
+    source_overlay_epochs = read_full_copy_overlay_epochs(
+        connection, target_session_id, target_thread_id,
     )
     overlay_epoch_map = {
         source_epoch: target_epoch
@@ -563,7 +527,7 @@ def prepare_full_copy_remap(
     def remap_payload(value: object) -> object:
         return remap_tool_payload(value, mapped)
 
-    jsonl_path = self.jsonl_path(
+    jsonl_path = self._storage.jsonl_path(
         target_session_id, checkpoint_ns, thread_id=target_thread_id
     )
     if not jsonl_path.is_file() or jsonl_path.is_symlink():

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Mapping
 
@@ -15,6 +16,9 @@ from app.services.infrastructure.rollout_context.storage import (
 )
 from app.services.infrastructure.rollout_context.storage.format_dispatch import (
     require_v2_runtime,
+)
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutNotMaterializedError,
 )
 
 
@@ -166,14 +170,12 @@ class RolloutSerializationMixin:
         checkpoint_ns: str = "",
     ) -> bool:
         """判断 rollout 是否允许 v2 item/context owner 参与 provider 请求。"""
-        self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-        with self._connect(
-            thread_id,
-            checkpoint_ns,
-            session_id=session_id,
-            read_only=True,
-        ) as connection:
-            self._require_v2_runtime(connection)
+        try:
+            with self.read_connection(session_id, thread_id, checkpoint_ns) as connection:
+                self._require_v2_runtime(connection)
+                return True
+        except RolloutNotMaterializedError:
+            # 尚未物化的合法 owner 首次写入仍使用唯一 v2 runtime。
             return True
 
 
@@ -182,3 +184,15 @@ __all__ = [
     "canonical_json_line",
     "canonical_json_text",
 ]
+
+
+def json_mapping(value: object, *, field: str) -> Mapping[str, object]:
+    if not isinstance(value, str):
+        raise TypeError(f"fork manifest {field} 必须是 JSON 文本")
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"fork manifest {field} JSON 非法") from error
+    if not isinstance(parsed, Mapping):
+        raise TypeError(f"fork manifest {field} 必须是 object")
+    return parsed

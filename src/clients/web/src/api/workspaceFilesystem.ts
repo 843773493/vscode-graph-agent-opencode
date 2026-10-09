@@ -3,9 +3,13 @@ import type {
   FileTreeShortcutRequest,
   SessionFileTreeSettings,
   WorkspaceFileContent,
+  WorkspaceFileCopyRequest,
   WorkspaceFileCreateRequest,
   WorkspaceFileList,
   WorkspaceFileNode,
+  WorkspaceFileMutationIntent,
+  WorkspaceFileOperationReceipt,
+  WorkspaceFileOperationStatus,
   WorkspaceFilePasteRequest,
   WorkspaceFileReveal,
   WorkspaceFileUpdateRequest,
@@ -86,6 +90,13 @@ function encodeWorkspaceFileList(
   if (!Array.isArray(result.items)) {
     throw new Error("工作区文件列表响应 items 必须是数组");
   }
+  const key = result.directory_key;
+  if (!key || typeof key.workspace_id !== "string" || !key.workspace_id
+    || key.scope !== scope || typeof key.root !== "string" || !key.root
+    || typeof key.path !== "string" || key.path !== result.path
+    || !Number.isSafeInteger(result.directory_revision) || result.directory_revision < 1) {
+    throw new Error("工作区文件列表响应缺少配对的目录键和 revision");
+  }
   return {
     ...result,
     path: encodeFileTreeResultPath(result.path, scope),
@@ -126,9 +137,9 @@ export async function createWorkspaceFileEntry(
   directoryPath: string,
   payload: WorkspaceFileCreateRequest,
   workspaceId?: string | null,
-): Promise<WorkspaceFileList> {
-  const { location, query } = fileTreeLocationQuery(directoryPath);
-  const result = unwrapApiData(await requestJson<APIResponse<WorkspaceFileList>>(
+): Promise<WorkspaceFileOperationReceipt> {
+  const { query } = fileTreeLocationQuery(directoryPath);
+  return unwrapApiData(await requestJson<APIResponse<WorkspaceFileOperationReceipt>>(
     port,
     `/api/v1/workspace/files/entries?${query.toString()}`,
     {
@@ -137,7 +148,6 @@ export async function createWorkspaceFileEntry(
       body: JSON.stringify(payload),
     },
   ));
-  return encodeWorkspaceFileList(result, location.scope);
 }
 
 export async function pasteWorkspaceFileEntries(
@@ -145,10 +155,10 @@ export async function pasteWorkspaceFileEntries(
   directoryPath: string,
   payload: WorkspaceFilePasteRequest,
   workspaceId?: string | null,
-): Promise<WorkspaceFileList> {
+): Promise<WorkspaceFileOperationReceipt> {
   assertBatchWithinLimit(payload.source_paths.length, "粘贴");
-  const { location, query } = fileTreeLocationQuery(directoryPath);
-  const result = unwrapApiData(await requestJson<APIResponse<WorkspaceFileList>>(
+  const { query } = fileTreeLocationQuery(directoryPath);
+  return unwrapApiData(await requestJson<APIResponse<WorkspaceFileOperationReceipt>>(
     port,
     `/api/v1/workspace/files/paste?${query.toString()}`,
     {
@@ -158,48 +168,51 @@ export async function pasteWorkspaceFileEntries(
       body: JSON.stringify(payload),
     },
   ));
-  return encodeWorkspaceFileList(result, location.scope);
 }
 
 export async function copyWorkspaceFileEntry(
   port: number,
   directoryPath: string,
-  source: WorkspaceFileLocation,
+  payload: WorkspaceFileCopyRequest,
   workspaceId?: string | null,
-): Promise<WorkspaceFileList> {
-  const { location: destination, query } = fileTreeLocationQuery(directoryPath);
-  const result = unwrapApiData(await requestJson<APIResponse<WorkspaceFileList>>(
+): Promise<WorkspaceFileOperationReceipt> {
+  const { query } = fileTreeLocationQuery(directoryPath);
+  return unwrapApiData(await requestJson<APIResponse<WorkspaceFileOperationReceipt>>(
     port,
     `/api/v1/workspace/files/copy?${query.toString()}`,
     {
       method: "POST",
       headers: workspaceHeader(workspaceId),
       timeoutMs: BULK_FILE_OPERATION_TIMEOUT_MS,
-      body: JSON.stringify({
-        source_path: source.path,
-        source_scope: source.scope,
-      }),
+      body: JSON.stringify(payload),
     },
   ));
-  return encodeWorkspaceFileList(result, destination.scope);
+}
+
+export interface WorkspaceUploadEntry {
+  file: Blob;
+  name: string;
+  relativePath: string;
 }
 
 export async function uploadWorkspaceFileEntries(
   port: number,
   directoryPath: string,
-  files: readonly File[],
+  files: readonly WorkspaceUploadEntry[],
+  intent: WorkspaceFileMutationIntent,
   workspaceId?: string | null,
-): Promise<WorkspaceFileList> {
+): Promise<WorkspaceFileOperationReceipt> {
   if (files.length === 0) {
     throw new Error("没有需要上传的本地文件");
   }
   assertBatchWithinLimit(files.length, "上传");
-  const { location: destination, query } = fileTreeLocationQuery(directoryPath);
+  const { query } = fileTreeLocationQuery(directoryPath);
   const body = new FormData();
   for (const file of files) {
-    body.append("files", file, file.name);
-    body.append("relative_paths", file.webkitRelativePath || file.name);
+    body.append("files", file.file, file.name);
+    body.append("relative_paths", file.relativePath);
   }
+  body.append("intent", JSON.stringify(intent));
   // multipart 上传自行携带 FormData，只共享统一凭据与刷新重试。
   const response = await requestGatewayResponse(
     port,
@@ -211,8 +224,15 @@ export async function uploadWorkspaceFileEntries(
       skipGatewayUserSession: true,
     },
   );
-  const result = unwrapApiData(await response.json() as APIResponse<WorkspaceFileList>);
-  return encodeWorkspaceFileList(result, destination.scope);
+  return unwrapApiData(await response.json() as APIResponse<WorkspaceFileOperationReceipt>);
+}
+
+export async function getWorkspaceFileOperations(port: number, operationIds: readonly string[], workspaceId: string,
+  backendWorkspaceId: string): Promise<WorkspaceFileOperationStatus> {
+  const query = new URLSearchParams({ expected_workspace_id: backendWorkspaceId });
+  for (const operationId of operationIds) query.append("operation_id", operationId);
+  return unwrapApiData(await requestJson<APIResponse<WorkspaceFileOperationStatus>>(port,
+    `/api/v1/workspace/files/operations?${query}`, { headers: workspaceHeader(workspaceId) }));
 }
 
 export interface WorkspaceFileDownloadRequest {

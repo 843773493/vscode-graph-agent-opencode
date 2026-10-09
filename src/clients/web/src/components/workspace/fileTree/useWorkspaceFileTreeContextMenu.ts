@@ -2,20 +2,18 @@ import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouse
 import {
   addSessionFileTreeShortcut,
   applyFileTreeShortcutToWorkspace,
-  copyWorkspaceFileEntry,
   createWorkspaceFileDownloadRequest,
-  createWorkspaceFileEntry,
   decodeFileTreePath,
   getSessionFileTreeSettings,
-  pasteWorkspaceFileEntries,
   removeSessionFileTreeShortcut,
   revealWorkspaceFileEntry,
-  uploadWorkspaceFileEntries,
   type WorkspaceFileLocation,
 } from "../../../api";
 import type {
   FileTreeShortcut,
   SessionFileTreeSettings,
+  WorkspaceDirectoryRevision,
+  WorkspaceDirectoryKey,
   WorkspaceFileList,
   WorkspaceFileNode,
 } from "../../../types/backend";
@@ -27,6 +25,7 @@ import {
 } from "../../../utils/clipboard";
 import { filesFromClipboardData, getFileTransferHost } from "../../../utils/fileTransferHost";
 import { FILESYSTEM_ROOT_PATH, parentFileTreePath, parseClipboardFilePaths, ROOT_PATH } from "./workspaceFileTreePaths";
+import { useWorkspaceFileOperations, type PendingFileCreation } from "./useWorkspaceFileOperations";
 
 export interface FileTreeContextMenuTarget {
   treePath: string;
@@ -36,6 +35,7 @@ export interface FileTreeContextMenuTarget {
   shortcutSource: "session" | "workspace" | null;
   x: number;
   y: number;
+  createdByOperationId?: string;
 }
 
 export interface WorkspaceClipboardEntry {
@@ -55,7 +55,10 @@ export interface WorkspaceFileTreeContextMenuOptions {
   workspaceId: string | null;
   sessionId: string;
   absolutePathForTreePath: (treePath: string) => string;
-  replaceDirectory: (result: WorkspaceFileList) => void;
+  reconcileDirectories: (directories: readonly WorkspaceDirectoryRevision[], forcePath?: string) => Promise<void>;
+  acceptSnapshots: (snapshots: readonly WorkspaceFileList[], forcePath?: string) => void;
+  directoryVersion: (path: string) => { key: WorkspaceDirectoryKey; revision: number } | null;
+  onCommitted: (directoryPath: string) => void;
   loadDirectory: (path: string, force?: boolean, append?: boolean) => Promise<boolean>;
   acceptFileTreeSettings: (result: SessionFileTreeSettings) => void;
   onStatusChange: (text: string) => void;
@@ -65,6 +68,7 @@ export interface WorkspaceFileTreeContextMenuApi {
   contextMenu: FileTreeContextMenuTarget | null;
   copiedEntry: WorkspaceClipboardEntry | null;
   actionError: string | null;
+  pendingCreations: PendingFileCreation[];
   clearActionError: () => void;
   closeContextMenu: () => void;
   openContextMenu: (
@@ -73,6 +77,7 @@ export interface WorkspaceFileTreeContextMenuApi {
     label: string,
     kind: WorkspaceFileNode["kind"],
     shortcutSource?: "session" | "workspace" | null,
+    createdByOperationId?: string,
   ) => void;
   runContextAction: (failurePrefix: string, action: () => Promise<unknown>) => void;
   /** 与 runContextAction 的区别：只把失败写进状态栏，不弹动作错误横幅。 */
@@ -126,7 +131,10 @@ export function useWorkspaceFileTreeContextMenu({
   workspaceId,
   sessionId,
   absolutePathForTreePath,
-  replaceDirectory,
+  reconcileDirectories,
+  acceptSnapshots,
+  directoryVersion,
+  onCommitted,
   loadDirectory,
   acceptFileTreeSettings,
   onStatusChange,
@@ -136,6 +144,8 @@ export function useWorkspaceFileTreeContextMenu({
   const [actionError, setActionError] = useState<string | null>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const uploadTargetRef = useRef<FileTreeContextMenuTarget | null>(null);
+  const operations = useWorkspaceFileOperations({ port, workspaceId, reconcileDirectories, acceptSnapshots, directoryVersion, onCommitted, onStatusChange,
+    onError: (message) => { setActionError(message); onStatusChange(message); } });
 
   const openContextMenu = (
     event: ReactMouseEvent,
@@ -143,6 +153,7 @@ export function useWorkspaceFileTreeContextMenu({
     label: string,
     kind: WorkspaceFileNode["kind"],
     shortcutSource: "session" | "workspace" | null = null,
+    createdByOperationId?: string,
   ) => {
     event.preventDefault();
     setContextMenu({
@@ -153,6 +164,7 @@ export function useWorkspaceFileTreeContextMenu({
       shortcutSource,
       x: event.clientX,
       y: event.clientY,
+      createdByOperationId,
     });
   };
 
@@ -165,14 +177,7 @@ export function useWorkspaceFileTreeContextMenu({
       return;
     }
     const directoryPath = contextTargetDirectory(target);
-    const result = await createWorkspaceFileEntry(
-      port,
-      directoryPath,
-      { name, kind },
-      workspaceId,
-    );
-    replaceDirectory(result);
-    onStatusChange(`已创建${kind === "file" ? "文件" : "文件夹"}: ${name}`);
+    await operations.submit(directoryPath, { kind: "create", name, entryKind: kind }, target.createdByOperationId);
   };
 
   const pasteEntries = async (
@@ -192,24 +197,11 @@ export function useWorkspaceFileTreeContextMenu({
         if (copiedEntry.workspaceId !== workspaceId) {
           throw new Error("暂不支持跨工作区粘贴，请在来源工作区下载后再上传");
         }
-        const result = await copyWorkspaceFileEntry(
-          port,
-          directoryPath,
-          copiedEntry.location,
-          workspaceId,
-        );
-        replaceDirectory(result);
-        onStatusChange(`已粘贴: ${copiedEntry.label}`);
+        await operations.submit(directoryPath, { kind: "copy", sourcePath: copiedEntry.location.path,
+          sourceScope: copiedEntry.location.scope }, target.createdByOperationId);
         return;
       }
-      const result = await pasteWorkspaceFileEntries(
-        port,
-        directoryPath,
-        { source_paths: sourcePaths },
-        workspaceId,
-      );
-      replaceDirectory(result);
-      onStatusChange(`已粘贴 ${sourcePaths.length} 个文件或目录`);
+      await operations.submit(directoryPath, { kind: "paste", sourcePaths }, target.createdByOperationId);
     } catch (error) {
       await loadDirectory(directoryPath, true);
       throw error;
@@ -222,14 +214,9 @@ export function useWorkspaceFileTreeContextMenu({
   ) => {
     const directoryPath = contextTargetDirectory(target);
     try {
-      const result = await uploadWorkspaceFileEntries(
-        port,
-        directoryPath,
-        files,
-        workspaceId,
-      );
-      replaceDirectory(result);
-      onStatusChange(`已上传 ${files.length} 个本地文件`);
+      await operations.submit(directoryPath, { kind: "upload", entries: files.map((file) => ({
+        file, name: file.name, relativePath: file.webkitRelativePath || file.name,
+      })) }, target.createdByOperationId);
     } catch (error) {
       await loadDirectory(directoryPath, true);
       throw error;
@@ -431,6 +418,7 @@ export function useWorkspaceFileTreeContextMenu({
   }, [onStatusChange]);
 
   return {
+    pendingCreations: operations.pendingCreations,
     contextMenu,
     copiedEntry,
     actionError,

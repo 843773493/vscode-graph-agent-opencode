@@ -62,6 +62,7 @@ export function createMessageStreamState(
   return {
     workspaceId: null,
     sessionId,
+    threadId: null,
     turnId,
     turnStreamId,
     lastEventSeq: 0,

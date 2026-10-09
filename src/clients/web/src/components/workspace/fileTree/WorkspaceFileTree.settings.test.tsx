@@ -33,6 +33,10 @@ function installWindow(port: number): void {
 }
 
 function apiResponse(data: unknown): Response {
+  if (data && typeof data === "object" && "items" in data && "path" in data) {
+    data = { directory_key: { workspace_id: "backend_files", scope: "workspace", root: "/w/project", path: data.path },
+      directory_revision: 1, ...data };
+  }
   return Response.json({
     code: 0,
     message: "ok",

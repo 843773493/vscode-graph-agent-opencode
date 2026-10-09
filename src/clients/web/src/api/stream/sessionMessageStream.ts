@@ -50,11 +50,14 @@ export async function getSessionMessageStreamSnapshot(
   turnId: string,
   options: {
     workspaceId?: string | null;
+    threadId?: string | null;
     turnStreamId?: string | null;
     signal?: AbortSignal;
   } = {},
 ): Promise<MessageStreamSnapshotResponse> {
+  const targetThreadId = options.threadId;
   const params = new URLSearchParams();
+  if (targetThreadId) params.set("thread_id", targetThreadId);
   if (options.turnStreamId) params.set("turn_stream_id", options.turnStreamId);
   try {
     const response = await requestJson<APIResponse<MessageStreamSnapshotResponse>>(
@@ -65,7 +68,12 @@ export async function getSessionMessageStreamSnapshot(
         signal: options.signal,
       },
     );
-    return validateMessageStreamSnapshot(unwrapApiData(response));
+    const snapshot = validateMessageStreamSnapshot(unwrapApiData(response));
+    if (snapshot.session_id !== sessionId || snapshot.turn_id !== turnId
+      || (targetThreadId && snapshot.thread_id !== targetThreadId)) {
+      throw new Error("消息流快照 owner 与请求不一致");
+    }
+    return snapshot;
   } catch (error) {
     if (error instanceof HttpRequestError && error.status === 410) {
       throw new MessageStreamCursorGoneError(0);
@@ -80,6 +88,7 @@ export async function streamSessionMessageEvents(
   turnId: string,
   options: {
     workspaceId?: string | null;
+    threadId?: string | null;
     turnStreamId?: string | null;
     afterSeq?: number;
     onEvent?: (event: MessageStreamEvent) => void;
@@ -88,7 +97,9 @@ export async function streamSessionMessageEvents(
     signal?: AbortSignal;
   } = {},
 ): Promise<void> {
+  const targetThreadId = options.threadId;
   const params = new URLSearchParams();
+  if (targetThreadId) params.set("thread_id", targetThreadId);
   if (options.turnStreamId) params.set("turn_stream_id", options.turnStreamId);
   if (options.afterSeq !== undefined) params.set("after_seq", String(options.afterSeq));
   // SSE 长期连接只共享统一凭据与刷新重试；生命周期内的断线重连由调用方负责。
@@ -120,6 +131,7 @@ export async function streamSessionMessageEvents(
   }
   options.onConnected?.(response.headers.get("X-Message-Stream-ID"));
   const deliveredEventSeqs = new Set<number>();
+  let frozenThreadId = targetThreadId;
   await consumeSseResponse(response, {
     signal: options.signal,
     // 服务端每 15s 发一次 `: heartbeat` 注释；阈值必须大于该间隔，否则健康空闲
@@ -133,6 +145,11 @@ export async function streamSessionMessageEvents(
         (data, frame) => {
           if (!frame.id) throw new Error("SSE 消息流缺少 event_seq id 行");
           const event = validateMessageStreamEvent(decodeJsonSseData(data, frame));
+          if (event.session_id !== sessionId || event.turn_id !== turnId
+            || (frozenThreadId && event.thread_id !== frozenThreadId)) {
+            throw new Error("消息流事件 owner 与冻结请求不一致");
+          }
+          frozenThreadId = event.thread_id;
           const frameEventSeq = Number(frame.id);
           if (!Number.isSafeInteger(frameEventSeq) || frameEventSeq < 0) {
             throw new Error(`SSE 消息流 id 必须是非负整数: ${frame.id}`);
@@ -158,11 +175,12 @@ function validateMessageStreamEvent(value: unknown): MessageStreamEvent {
   if (!isRecord(value)) throw new Error("消息流事件必须是对象");
   const eventId = stringValue(value.event_id);
   const sessionId = stringValue(value.session_id);
+  const threadId = stringValue(value.thread_id);
   const turnId = stringValue(value.turn_id);
   const streamId = stringValue(value.turn_stream_id);
   const type = stringValue(value.type);
   const eventSeq = value.event_seq;
-  if (!eventId || !sessionId || !turnId || !streamId || !type || !isMessageStreamEventType(type)) {
+  if (!eventId || !sessionId || !threadId || !turnId || !streamId || !type || !isMessageStreamEventType(type)) {
     throw new Error("消息流事件缺少合法的信封字段");
   }
   if (typeof eventSeq !== "number" || !Number.isInteger(eventSeq) || eventSeq < 0) {
@@ -195,6 +213,7 @@ function validateMessageStreamEvent(value: unknown): MessageStreamEvent {
   const envelope = {
     event_id: eventId,
     session_id: sessionId,
+    thread_id: threadId,
     turn_id: turnId,
     turn_stream_id: streamId,
     event_seq: eventSeq,

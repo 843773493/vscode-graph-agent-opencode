@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Mapping
 from contextlib import aclosing
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from google.protobuf import json_format
 from pydantic import ValidationError
 
-from app.api.canonical_params import CanonicalSessionId
+from app.api.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.api.deps import (
     get_message_stream_store,
     get_request_id,
@@ -39,7 +40,7 @@ from app.services.infrastructure.message_stream_store import (
 router = APIRouter(prefix="/sessions", tags=["message-stream"])
 MessageStreamEventRecord = Mapping[str, object]
 # stream.snapshot 的定位字段只保留在事件信封中，payload 不重复承载。
-_SNAPSHOT_ENVELOPE_FIELDS = ("session_id", "turn_id", "turn_stream_id")
+_SNAPSHOT_ENVELOPE_FIELDS = ("session_id", "thread_id", "turn_id", "turn_stream_id")
 
 
 def _parse_after_seq(after_seq: int | None, last_event_id: str | None) -> int:
@@ -95,6 +96,7 @@ def _snapshot_projection(event: MessageStreamEventRecord) -> MessageStreamSnapsh
     projected.update(
         {
             "session_id": event["session_id"],
+            "thread_id": event["thread_id"],
             "turn_id": event["turn_id"],
             "turn_stream_id": event["turn_stream_id"],
             "snapshot_seq": source["snapshot_seq"],
@@ -121,6 +123,7 @@ def _public_snapshot(
     event = {
         "event_id": f"snapshot_{turn_stream_id}_{snapshot['snapshot_seq']}",
         "session_id": session_id,
+        "thread_id": snapshot["thread_id"],
         "turn_id": turn_id,
         "turn_stream_id": turn_stream_id,
         "event_seq": int(snapshot["snapshot_seq"]),
@@ -189,6 +192,7 @@ async def stream_message_events(
     turn_id: str,
     request: Request,
     turn_stream_id: str | None = Query(default=None),
+    thread_id: Annotated[CanonicalThreadId | None, Query()] = None,
     after_seq: int | None = Query(default=None, ge=0),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     _: str = Depends(verify_local_token),
@@ -200,6 +204,7 @@ async def stream_message_events(
         writer = await store.open_existing(
             session_id=session_id,
             turn_id=turn_id,
+            thread_id=thread_id,
             turn_stream_id=turn_stream_id,
         )
     except (KeyError, NotFoundError) as error:
@@ -256,6 +261,7 @@ async def get_message_stream_snapshot(
     session_id: CanonicalSessionId,
     turn_id: str,
     turn_stream_id: str | None = Query(default=None),
+    thread_id: Annotated[CanonicalThreadId | None, Query()] = None,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     store: MessageStreamStore = Depends(get_message_stream_store),  # noqa: B008
@@ -264,6 +270,7 @@ async def get_message_stream_snapshot(
         writer = await store.open_existing(
             session_id=session_id,
             turn_id=turn_id,
+            thread_id=thread_id,
             turn_stream_id=turn_stream_id,
         )
         snapshot = await store.get_state(writer.turn_stream_id)
@@ -292,6 +299,7 @@ async def list_message_stream_events(
     session_id: CanonicalSessionId,
     turn_id: str,
     turn_stream_id: str | None = Query(default=None),
+    thread_id: Annotated[CanonicalThreadId | None, Query()] = None,
     after_seq: int = Query(default=0, ge=0),
     limit: int = Query(default=1000, ge=1, le=5000),
     _: str = Depends(verify_local_token),
@@ -302,6 +310,7 @@ async def list_message_stream_events(
         writer = await store.open_existing(
             session_id=session_id,
             turn_id=turn_id,
+            thread_id=thread_id,
             turn_stream_id=turn_stream_id,
         )
         events = await store.list_events(

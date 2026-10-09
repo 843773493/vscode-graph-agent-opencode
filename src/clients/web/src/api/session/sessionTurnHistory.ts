@@ -112,8 +112,12 @@ export async function loadSessionHistory(
   request: TurnHistoryLoadRequestPayload,
   workspaceId?: string | null,
   signal?: AbortSignal,
+  threadId?: string,
 ): Promise<TurnHistoryPage> {
-  const path = `/api/v1/sessions/${encodeURIComponent(sessionId)}/history`;
+  const owner = `/api/v1/sessions/${encodeURIComponent(sessionId)}`;
+  const path = threadId === undefined
+    ? `${owner}/history`
+    : `${owner}/threads/${encodeURIComponent(threadId)}/history`;
   try {
     return unwrapApiData(await requestJson<APIResponse<TurnHistoryPage>>(port, path, {
       method: "POST",

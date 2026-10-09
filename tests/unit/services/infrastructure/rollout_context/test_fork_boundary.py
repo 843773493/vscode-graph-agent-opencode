@@ -28,7 +28,7 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
 SOURCE_SESSION_ID = "ses_019c3635a6c278efb831fe265bdcd656"
 TARGET_SESSION_ID = "ses_019c40c2b8e9796588b3e3c86dee2e44"
@@ -56,7 +56,7 @@ def _put_checkpoint(
     messages: list[object],
     step: int,
 ) -> object:
-    thread = saver._storage.main_thread_id(SOURCE_SESSION_ID)
+    thread = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
     if step == 1:
         saver.accept_turn(
             SOURCE_SESSION_ID, thread_id=thread, accepted_ingress_id="user-1",
@@ -87,7 +87,7 @@ def _seed_pending_tool_call(saver: RolloutCheckpointSaver) -> None:
     user = HumanMessage(content="读取配置", id="user-1")
     first_config = _put_checkpoint(
         saver,
-        build_checkpoint_config(saver._storage.main_thread_id(SOURCE_SESSION_ID)),
+        build_checkpoint_config(saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)),
         "checkpoint-1",
         [user],
         1,
@@ -113,7 +113,7 @@ def _seed_closed_tool_group(saver: RolloutCheckpointSaver) -> None:
     user = HumanMessage(content="读取配置", id="user-1")
     first_config = _put_checkpoint(
         saver,
-        build_checkpoint_config(saver._storage.main_thread_id(SOURCE_SESSION_ID)),
+        build_checkpoint_config(saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)),
         "checkpoint-1",
         [user],
         1,
@@ -148,7 +148,7 @@ def fork_saver(
     sessions_dir = tmp_path / "sessions"
     for session_id in (SOURCE_SESSION_ID, TARGET_SESSION_ID):
         session_bundle_factory(sessions_dir, session_id)
-    storage = RolloutStorage(
+    storage = RolloutContextStore(
         sessions_dir,
         serde=JsonPlusSerializer(),
         message_codec=LangChainMessageCodec(),
@@ -157,7 +157,7 @@ def fork_saver(
 
 
 async def _target_checkpoint(saver: RolloutCheckpointSaver):
-    thread = saver._storage.main_thread_id(TARGET_SESSION_ID)
+    thread = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
     with session_thread_owner_scope(
         MutationIntentOwner(TARGET_SESSION_ID, thread), langgraph_thread_id=thread,
     ):
@@ -168,11 +168,11 @@ async def test_context_fork_conflict_blocks_target_materialization(
     fork_saver: RolloutCheckpointSaver,
 ) -> None:
     _seed_pending_tool_call(fork_saver)
-    source_manifest_before = fork_saver._storage.initialize(SOURCE_SESSION_ID)
+    source_manifest_before = fork_saver._storage.storage.initialize(SOURCE_SESSION_ID)
     assert await _target_checkpoint(fork_saver) is None
 
     with pytest.raises(ToolProtocolBoundaryConflict) as exc_info:
-        await fork_saver.afork(
+        await fork_saver.forks.afork(
             source_session_id=SOURCE_SESSION_ID,
             target_session_id=TARGET_SESSION_ID,
             mode="context_fork",
@@ -182,7 +182,7 @@ async def test_context_fork_conflict_blocks_target_materialization(
 
     # target staging/checkpoint 零副作用；source view 状态零变化。
     assert await _target_checkpoint(fork_saver) is None
-    assert fork_saver._storage.initialize(SOURCE_SESSION_ID) == source_manifest_before
+    assert fork_saver._storage.storage.initialize(SOURCE_SESSION_ID) == source_manifest_before
 
 
 async def test_history_prefix_fork_conflict_blocks_target_materialization(
@@ -191,7 +191,7 @@ async def test_history_prefix_fork_conflict_blocks_target_materialization(
     _seed_pending_tool_call(fork_saver)
 
     with pytest.raises(ToolProtocolBoundaryConflict) as exc_info:
-        await fork_saver.afork(
+        await fork_saver.forks.afork(
             source_session_id=SOURCE_SESSION_ID,
             target_session_id=TARGET_SESSION_ID,
             mode="history_prefix_fork",
@@ -205,23 +205,23 @@ async def test_preflight_fork_conflict_rejects_before_session_creation(
     fork_saver: RolloutCheckpointSaver,
 ) -> None:
     _seed_pending_tool_call(fork_saver)
-    source_manifest_before = fork_saver._storage.initialize(SOURCE_SESSION_ID)
+    source_manifest_before = fork_saver._storage.storage.initialize(SOURCE_SESSION_ID)
 
     with pytest.raises(ToolProtocolBoundaryConflict) as exc_info:
-        await fork_saver.preflight_fork(
+        await fork_saver.forks.source.preflight_fork(
             source_session_id=SOURCE_SESSION_ID,
             mode="context_fork",
             checkpoint_id="checkpoint-2",
         )
     assert exc_info.value.code == CONFLICT_CODE
-    assert fork_saver._storage.initialize(SOURCE_SESSION_ID) == source_manifest_before
+    assert fork_saver._storage.storage.initialize(SOURCE_SESSION_ID) == source_manifest_before
 
 
 async def test_context_fork_closed_boundary_succeeds(
     fork_saver: RolloutCheckpointSaver,
 ) -> None:
     _seed_closed_tool_group(fork_saver)
-    result = await fork_saver.afork(
+    result = await fork_saver.forks.afork(
         source_session_id=SOURCE_SESSION_ID,
         target_session_id=TARGET_SESSION_ID,
         mode="context_fork",
@@ -233,17 +233,17 @@ async def test_context_fork_closed_boundary_succeeds(
     assert target_tuple is not None
     target_messages = target_tuple.checkpoint["channel_values"]["messages"]
     source_message_ids = ("user-1", "assistant-call-1", "tool-result-1")
-    source_thread = fork_saver._storage.main_thread_id(SOURCE_SESSION_ID)
-    target_thread = fork_saver._storage.main_thread_id(TARGET_SESSION_ID)
+    source_thread = fork_saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
+    target_thread = fork_saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
     source_items = {
         item.projection_identity.projection_message_id: item
-        for item in fork_saver._storage.read_items(SOURCE_SESSION_ID, source_thread)
+        for item in fork_saver._storage.storage.read_items(SOURCE_SESSION_ID, source_thread)
         if item.projection_identity is not None
         and item.projection_identity.projection_message_id in source_message_ids
     }
     target_items = {
         item.projection_identity.projection_message_id: item
-        for item in fork_saver._storage.read_items(TARGET_SESSION_ID, target_thread)
+        for item in fork_saver._storage.storage.read_items(TARGET_SESSION_ID, target_thread)
         if item.projection_identity is not None
         and item.projection_identity.projection_message_id is not None
     }

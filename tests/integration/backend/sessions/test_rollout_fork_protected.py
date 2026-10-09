@@ -69,7 +69,7 @@ def protected_source(fork_workspace, session_bundle_factory):
     for session in (SOURCE_SESSION_ID, TARGET_SESSION_ID):
         session_bundle_factory(sessions, session)
     with RolloutCheckpointSaver(sessions) as saver:
-        source_thread_id = saver._storage.main_thread_id(SOURCE_SESSION_ID)
+        source_thread_id = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
         checkpoint = empty_checkpoint()
         checkpoint["id"] = "source-checkpoint"
         checkpoint["channel_values"] = {
@@ -163,7 +163,7 @@ def protected_source(fork_workspace, session_bundle_factory):
             entry for entry in sealed.selection if entry.ref.ref_type == "request_only"
         )
         record = detail_record_from_mapping(
-            saver._storage.get_context_plan_detail(
+            saver._storage.assemblies.get_context_plan_detail(
                 SOURCE_SESSION_ID,
                 source_thread_id,
                 detail_ref=entry.detail_ref,
@@ -185,23 +185,23 @@ async def test_full_copy_protected_detached_restarts_without_source(
     protected_source
 ):
     saver, sealed, source_record, body = protected_source
-    source_thread_id = saver._storage.main_thread_id(SOURCE_SESSION_ID)
-    source = saver._storage.root(SOURCE_SESSION_ID, thread_id=source_thread_id)
+    source_thread_id = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
+    source = saver._storage.storage.root(SOURCE_SESSION_ID, thread_id=source_thread_id)
     original = _artifacts(source)
     source_blob = (
         source.parent / detail_relative_path(source_record.detail_ref)
     ).read_bytes()
-    await saver.afork(
+    await saver.forks.afork(
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy"
     )
     assert _artifacts(source) == original
 
-    target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
-    target = saver._storage.root(
+    target_thread_id = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
+    target = saver._storage.storage.root(
         TARGET_SESSION_ID,
         thread_id=target_thread_id,
     )
-    with saver._storage._connect(
+    with saver._storage.storage._connect(
         target_thread_id,
         "",
         session_id=TARGET_SESSION_ID,
@@ -238,7 +238,7 @@ async def test_full_copy_protected_detached_restarts_without_source(
         entry for entry in snapshot.selection if entry.ref.ref_type == "request_only"
     )
     target_record = detail_record_from_mapping(
-        saver._storage.get_context_plan_detail(
+        saver._storage.assemblies.get_context_plan_detail(
             TARGET_SESSION_ID,
             target_thread_id,
             detail_ref=entry.detail_ref,
@@ -267,7 +267,7 @@ async def test_full_copy_protected_detached_restarts_without_source(
     assert json.loads(target_blob)["detail_content_hash"] == sha256_jcs(body)
     source.rename(source.with_name("source-preserved"))
     with RolloutCheckpointSaver(
-        saver._storage.sessions_dir
+        saver._storage.storage.sessions_dir
     ) as restarted:
         assert (
             restarted.read_context_plan_detail(
@@ -312,8 +312,8 @@ async def test_full_copy_protected_detached_restarts_without_source(
 )
 async def test_sensitive_failure_never_installs_target(protected_source, failure):
     saver, _, record, body = protected_source
-    source_thread_id = saver._storage.main_thread_id(SOURCE_SESSION_ID)
-    source = saver._storage.root(SOURCE_SESSION_ID, thread_id=source_thread_id)
+    source_thread_id = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
+    source = saver._storage.storage.root(SOURCE_SESSION_ID, thread_id=source_thread_id)
     path = source.parent / detail_relative_path(record.detail_ref)
     if failure == "invalid_json":
         path.write_bytes(b"{")
@@ -325,13 +325,13 @@ async def test_sensitive_failure_never_installs_target(protected_source, failure
         path.unlink()
     original = _artifacts(source)
     with pytest.raises((RuntimeError, ValueError, DetailUnavailableError)) as error:
-        await saver.afork(
+        await saver.forks.afork(
             source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID,
             mode="full_rollout_copy",
         )
     assert body[0]["text"] not in str(error.value)
-    target_root = saver._storage.root(
-        TARGET_SESSION_ID, thread_id=saver._storage.main_thread_id(TARGET_SESSION_ID),
+    target_root = saver._storage.storage.root(
+        TARGET_SESSION_ID, thread_id=saver._storage.storage.main_thread_id(TARGET_SESSION_ID),
     )
     assert not target_root.exists()
     assert not tuple(target_root.parent.glob(".fork-staging-*"))
@@ -341,25 +341,25 @@ async def test_sensitive_failure_never_installs_target(protected_source, failure
 @pytest.mark.asyncio
 async def test_pinned_protected_copy_retains_lineage_not_shared_body(protected_source):
     saver, _, record, _ = protected_source
-    source_thread_id = saver._storage.main_thread_id(SOURCE_SESSION_ID)
-    source_root = saver._storage.root(SOURCE_SESSION_ID, thread_id=source_thread_id)
+    source_thread_id = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
+    source_root = saver._storage.storage.root(SOURCE_SESSION_ID, thread_id=source_thread_id)
     original_body = (
         source_root.parent / detail_relative_path(record.detail_ref)
     ).read_bytes()
     fork_id = uuid4().hex
-    generation = saver.begin_pinned_fork_retention_claim(
+    generation = saver.forks.recovery.begin_pinned_fork_retention_claim(
         fork_id=fork_id,
         source_session_id=SOURCE_SESSION_ID,
         target_session_id=TARGET_SESSION_ID,
     )
-    await saver.afork(
+    await saver.forks.afork(
         source_session_id=SOURCE_SESSION_ID,
         target_session_id=TARGET_SESSION_ID,
         mode="full_rollout_copy",
         relationship="pinned",
         fork_id=fork_id,
     )
-    with saver._storage._connect(
+    with saver._storage.storage._connect(
         source_thread_id,
         "",
         session_id=SOURCE_SESSION_ID,
@@ -369,7 +369,7 @@ async def test_pinned_protected_copy_retains_lineage_not_shared_body(protected_s
             "SELECT owner_session_id, status FROM retention_refs WHERE reference_kind='fork'"
         ).fetchall()
         assert rows == [(TARGET_SESSION_ID, "active")]
-    claim = saver._storage._catalog_store().get_fork_retention_claim(fork_id)
+    claim = saver._storage.forks._catalog_store().get_fork_retention_claim(fork_id)
     assert claim.state == "active"
     assert claim.source_lifecycle_generation == generation
     assert (
@@ -386,10 +386,10 @@ async def test_failure_before_install_has_no_publication(protected_source, monke
     )
 
     saver, _, _, body = protected_source
-    source_thread_id = saver._storage.main_thread_id(SOURCE_SESSION_ID)
-    target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
-    original = _artifacts(saver._storage.root(SOURCE_SESSION_ID, thread_id=source_thread_id))
-    target = saver._storage.root(TARGET_SESSION_ID, thread_id=target_thread_id)
+    source_thread_id = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
+    target_thread_id = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
+    original = _artifacts(saver._storage.storage.root(SOURCE_SESSION_ID, thread_id=source_thread_id))
+    target = saver._storage.storage.root(TARGET_SESSION_ID, thread_id=target_thread_id)
 
     def fail_install(stage_root, target_root):
         assert target_root == target
@@ -407,14 +407,14 @@ async def test_failure_before_install_has_no_publication(protected_source, monke
     else:
         monkeypatch.setattr(details, "write_private", fail_body_write)
     with pytest.raises((OSError, DetailUnavailableError)) as error:
-        await saver.afork(
+        await saver.forks.afork(
             source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID,
             mode="full_rollout_copy",
         )
     assert body[0]["text"] not in str(error.value)
     assert not target.exists()
     assert not tuple(target.parent.glob(".fork-staging-*"))
-    assert _artifacts(saver._storage.root(SOURCE_SESSION_ID, thread_id=source_thread_id)) == original
+    assert _artifacts(saver._storage.storage.root(SOURCE_SESSION_ID, thread_id=source_thread_id)) == original
 
 
 @pytest.mark.parametrize(
@@ -439,7 +439,7 @@ def test_capability_rejects_tampered_source_manifest(protected_source, field, va
         new_ref = replace(source_record.detail_ref, **changes)
         changes["relative_path"] = detail_relative_path(new_ref).as_posix()
     tampered = replace(source_record, **changes)
-    target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
+    target_thread_id = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
     with pytest.raises((ValueError, DetailUnavailableError)):
         saver._detail_store.fork_detail_capability().prepare_detail(
             source_record=tampered,
@@ -450,9 +450,9 @@ def test_capability_rejects_tampered_source_manifest(protected_source, field, va
                 "target-detail",
             ),
         )
-    assert not saver._storage.root(
+    assert not saver._storage.storage.root(
         TARGET_SESSION_ID,
-        thread_id=saver._storage.main_thread_id(TARGET_SESSION_ID),
+        thread_id=saver._storage.storage.main_thread_id(TARGET_SESSION_ID),
     ).exists()
 
 
@@ -460,7 +460,7 @@ def test_capability_binds_exact_body_and_target_local_identity(protected_source)
     saver, _, record, body = protected_source
     capability = saver._detail_store.fork_detail_capability()
     target_ref = DetailRef(
-        TARGET_SESSION_ID, saver._storage.main_thread_id(TARGET_SESSION_ID),
+        TARGET_SESSION_ID, saver._storage.storage.main_thread_id(TARGET_SESSION_ID),
         "target-assembly", "target-detail",
     )
     first = capability.prepare_detail(source_record=record, target_ref=target_ref)
@@ -476,7 +476,7 @@ def test_capability_binds_exact_body_and_target_local_identity(protected_source)
     assert first.record.length == record.length == len(canonical_json_bytes(body))
     assert first.record.source_revision == record.source_revision
     assert first.record.expires_at == record.expires_at
-    assert not saver._storage.root(TARGET_SESSION_ID, thread_id=target_ref.thread_id).exists()
+    assert not saver._storage.storage.root(TARGET_SESSION_ID, thread_id=target_ref.thread_id).exists()
 
 
 def test_capability_cannot_reuse_source_owner(protected_source):
@@ -495,12 +495,12 @@ def header_detail_factory(protected_source):
     def create(*, required: bool):
         plan = ContextRequestPlan(
             session_id=SOURCE_SESSION_ID,
-            thread_id=saver._storage.main_thread_id(SOURCE_SESSION_ID),
+            thread_id=saver._storage.storage.main_thread_id(SOURCE_SESSION_ID),
             plan_id="header-plan",
             refs=(),
             plan_creation_idempotency_key="header-plan-create",
         )
-        source_thread_id = saver._storage.main_thread_id(SOURCE_SESSION_ID)
+        source_thread_id = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
         saver.create_context_plan(SOURCE_SESSION_ID, plan)
         snapshot = ContextPlanComposer().assembly(
             plan=plan,
@@ -525,7 +525,7 @@ def header_detail_factory(protected_source):
             seal_idempotency_key="header-plan-seal",
             seal_input_hash=sha256_jcs({"required": required, "source": "header-plan"}),
         )
-        with saver._storage._connect(
+        with saver._storage.storage._connect(
             source_thread_id,
             "",
             session_id=SOURCE_SESSION_ID,
@@ -535,7 +535,7 @@ def header_detail_factory(protected_source):
                 "SELECT detail_ref FROM context_assemblies WHERE assembly_id='header-assembly'"
             ).fetchone()[0]
         record = detail_record_from_mapping(
-            saver._storage.get_context_plan_detail(
+            saver._storage.assemblies.get_context_plan_detail(
                 SOURCE_SESSION_ID,
                 source_thread_id,
                 detail_ref=detail_ref_from_key(key),
@@ -559,17 +559,17 @@ async def test_optional_header_preserves_explicit_availability(
     saver, record = optional_header
     if not available:
         (
-            saver._storage.root(
+            saver._storage.storage.root(
                 SOURCE_SESSION_ID,
-                thread_id=saver._storage.main_thread_id(SOURCE_SESSION_ID),
+                thread_id=saver._storage.storage.main_thread_id(SOURCE_SESSION_ID),
             ).parent
             / detail_relative_path(record.detail_ref)
         ).unlink()
-    await saver.afork(
+    await saver.forks.afork(
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy"
     )
-    target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
-    with saver._storage._connect(
+    target_thread_id = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
+    with saver._storage.storage._connect(
         target_thread_id,
         "",
         session_id=TARGET_SESSION_ID,
@@ -582,7 +582,7 @@ async def test_optional_header_preserves_explicit_availability(
             "SELECT availability FROM context_plan_details WHERE detail_ref=?",
             (detail_key,),
         ).fetchone() == ("available" if available else "unavailable",)
-    target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
+    target_thread_id = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
     saver.get_context_assembly(
         TARGET_SESSION_ID,
         target_thread_id,
@@ -605,8 +605,8 @@ async def test_required_header_unavailable_rejects_restore_and_fork(
     saver, record = header_detail_factory(required=True)
     assert record.required is True
     assert record.detail_kind == "assembly_snapshot"
-    source_thread_id = saver._storage.main_thread_id(SOURCE_SESSION_ID)
-    with saver._storage._connect(
+    source_thread_id = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
+    with saver._storage.storage._connect(
         source_thread_id,
         "",
         session_id=SOURCE_SESSION_ID,
@@ -627,14 +627,14 @@ async def test_required_header_unavailable_rejects_restore_and_fork(
             assembly_id=record.assembly_id,
         )
     with pytest.raises(RuntimeError, match="detail-unavailable"):
-        await saver.afork(
+        await saver.forks.afork(
             source_session_id=SOURCE_SESSION_ID,
             target_session_id=TARGET_SESSION_ID,
             mode="full_rollout_copy",
         )
-    target_root = saver._storage.root(
+    target_root = saver._storage.storage.root(
         TARGET_SESSION_ID,
-        thread_id=saver._storage.main_thread_id(TARGET_SESSION_ID),
+        thread_id=saver._storage.storage.main_thread_id(TARGET_SESSION_ID),
     )
     assert not target_root.exists()
     assert not tuple(target_root.parent.glob(".fork-staging-*"))
@@ -651,8 +651,8 @@ async def test_included_source_unavailable_rejects_corrupted_optional_flag(
     assert entry.included is True
     assert record.required is True
     assert record.detail_kind == "request_source"
-    source_thread_id = saver._storage.main_thread_id(SOURCE_SESSION_ID)
-    with saver._storage._connect(
+    source_thread_id = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
+    with saver._storage.storage._connect(
         source_thread_id,
         "",
         session_id=SOURCE_SESSION_ID,
@@ -673,14 +673,14 @@ async def test_included_source_unavailable_rejects_corrupted_optional_flag(
             assembly_id=record.assembly_id,
         )
     with pytest.raises(RuntimeError, match="detail-unavailable"):
-        await saver.afork(
+        await saver.forks.afork(
             source_session_id=SOURCE_SESSION_ID,
             target_session_id=TARGET_SESSION_ID,
             mode="full_rollout_copy",
         )
-    target_root = saver._storage.root(
+    target_root = saver._storage.storage.root(
         TARGET_SESSION_ID,
-        thread_id=saver._storage.main_thread_id(TARGET_SESSION_ID),
+        thread_id=saver._storage.storage.main_thread_id(TARGET_SESSION_ID),
     )
     assert not target_root.exists()
     assert not tuple(target_root.parent.glob(".fork-staging-*"))
@@ -689,26 +689,26 @@ async def test_included_source_unavailable_rejects_corrupted_optional_flag(
 def test_low_level_clone_never_publishes_protected_source(protected_source):
     saver, _, _, _ = protected_source
     with pytest.raises(DetailUnavailableError, match="staging"):
-        saver._storage.clone_rollout(
+        saver._storage.forks.clone_rollout(
             source_session_id=SOURCE_SESSION_ID,
-            source_thread_id=saver._storage.main_thread_id(SOURCE_SESSION_ID),
+            source_thread_id=saver._storage.storage.main_thread_id(SOURCE_SESSION_ID),
             target_session_id=TARGET_SESSION_ID,
-            target_thread_id=saver._storage.main_thread_id(TARGET_SESSION_ID),
+            target_thread_id=saver._storage.storage.main_thread_id(TARGET_SESSION_ID),
             source_checkpoint_id=None,
             detail_capability=saver._detail_store.fork_detail_capability(),
         )
-    assert not saver._storage.root(
+    assert not saver._storage.storage.root(
         TARGET_SESSION_ID,
-        thread_id=saver._storage.main_thread_id(TARGET_SESSION_ID),
+        thread_id=saver._storage.storage.main_thread_id(TARGET_SESSION_ID),
     ).exists()
 
 
 @pytest.mark.asyncio
 async def test_fork_does_not_copy_unregistered_detail_orphans(protected_source):
     saver, _, record, _ = protected_source
-    source_root = saver._storage.root(
+    source_root = saver._storage.storage.root(
         SOURCE_SESSION_ID,
-        thread_id=saver._storage.main_thread_id(SOURCE_SESSION_ID),
+        thread_id=saver._storage.storage.main_thread_id(SOURCE_SESSION_ID),
     )
     orphan = (
         source_root
@@ -717,13 +717,13 @@ async def test_fork_does_not_copy_unregistered_detail_orphans(protected_source):
         / "unregistered-detail"
     )
     orphan.write_bytes(b"private orphan must not be copied")
-    await saver.afork(
+    await saver.forks.afork(
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy"
     )
     assert orphan.read_bytes() == b"private orphan must not be copied"
     assert not tuple(
-        saver._storage.root(
+        saver._storage.storage.root(
             TARGET_SESSION_ID,
-            thread_id=saver._storage.main_thread_id(TARGET_SESSION_ID),
+            thread_id=saver._storage.storage.main_thread_id(TARGET_SESSION_ID),
         ).rglob("unregistered-detail")
     )

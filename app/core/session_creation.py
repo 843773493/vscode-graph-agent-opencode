@@ -95,11 +95,7 @@ _ORPHANED_DIR_NAME = "orphaned"
 _ORPHANED_CREATION_DIR_NAME = "session-creation"
 _SESSION_ID_PATH_PLACEHOLDER = "ses_00000000000070008000000000000000"
 
-# 调用方须提供的剥离 manifest 字段闭集（与真实 session.json 的剥离版一致：
-# 真实 manifest 含 created_at/updated_at/session_id/workspace_id/kind/
-# delegation/generation_origin/current_agent_id/current_provider_id/
-# context_source_session_id 十字段，剥去 title/title_source/
-# parent_session_id 后剩余的调用方侧六字段）。
+# 创建意图六字段闭集；发布时初始化 nodes，session.json 只保留不可变身份。
 _METADATA_CALLER_KEYS = frozenset(
     {
         "kind",
@@ -110,10 +106,6 @@ _METADATA_CALLER_KEYS = frozenset(
         "context_source_session_id",
     }
 )
-
-# 禁止进入剥离 manifest 的可变导航字段（catalog 是唯一权威）。
-_FORBIDDEN_MANIFEST_KEYS = ("title", "title_source", "parent_session_id")
-
 
 def validate_session_metadata_keys(session_metadata: dict[str, object]) -> None:
     """校验调用方 session_metadata 字段闭集（缺/多一律 fail closed）。
@@ -246,26 +238,13 @@ def build_session_creation_manifest(
     record: SessionCreationRecord,
     session_metadata: dict[str, object],
 ) -> dict[str, object]:
-    """构造剥离版 session.json 内容（确定性纯函数）。
-
-    - 调用方六字段闭集校验（:func:`validate_session_metadata_keys`）；
-    - session_id / workspace_id / created_at 来自 record 冻结值；
-    - updated_at 初始等于 created_at（确定性：幂等重入校验 staging 字节
-      一致的前提）；
-    - 最终 manifest 复查不得含可变导航字段（防御性，闭集校验已保证）。
-    """
+    """构造不可变 Session 身份 envelope；业务字段只归 catalog nodes。"""
     validate_session_metadata_keys(session_metadata)
-    manifest: dict[str, object] = dict(session_metadata)
-    manifest["session_id"] = record.session_id
-    manifest["workspace_id"] = record.workspace_id
-    manifest["created_at"] = record.created_at
-    manifest["updated_at"] = record.created_at
-    for key in _FORBIDDEN_MANIFEST_KEYS:
-        if key in manifest:
-            raise RuntimeError(
-                f"剥离 manifest 不允许包含可变导航字段: {key!r}"
-            )
-    return manifest
+    return {
+        "session_id": record.session_id,
+        "workspace_id": record.workspace_id,
+        "created_at": record.created_at,
+    }
 
 
 def serialize_session_creation_manifest(
@@ -529,7 +508,7 @@ class SessionCreationService:
         self,
         record: SessionCreationRecord,
     ) -> dict[str, object]:
-        """从 record 精确 locator 对应的 stage/frozen manifest 恢复 metadata。"""
+        """读取尚未发布的冻结创建意图，并核验其身份 envelope 与控制目录。"""
         current = self._require_record_capability(record)
         if current.state != "preparing":
             raise RuntimeError(
@@ -537,41 +516,7 @@ class SessionCreationService:
                 f"session_id={current.session_id}, state={current.state}"
             )
         directory = self._prepared_directory(current)
-        manifest_path = directory / _SESSION_MANIFEST_NAME
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as error:
-            raise RuntimeError(
-                "prepared session.json 无法读取（fail closed）: "
-                f"path={manifest_path}: {error}"
-            ) from error
-        if not isinstance(manifest, dict):
-            raise RuntimeError(  # noqa: TRY004 - 磁盘数据损坏属于语义冲突。
-                f"prepared session.json 必须是 JSON 对象: {manifest_path}"
-            )
-        try:
-            metadata = {
-                key: manifest[key]
-                for key in _METADATA_CALLER_KEYS
-            }
-        except KeyError as error:
-            raise RuntimeError(
-                "prepared session.json 缺少冻结 metadata 字段（fail closed）: "
-                f"path={manifest_path}, field={error.args[0]!r}"
-            ) from error
-        validate_session_metadata_keys(metadata)
-        try:
-            _validate_creation_purpose_metadata(current.purpose, metadata)
-        except ValueError as error:
-            raise RuntimeError(
-                "prepared purpose 与 session_metadata 不匹配（fail closed）: "
-                f"session_id={current.session_id}"
-            ) from error
-        if _serialize_session_creation_metadata(metadata) != current.session_metadata_json:
-            raise RuntimeError(
-                "prepared session.json metadata 与 durable creation envelope 不一致"
-                f"（fail closed）: session_id={current.session_id}"
-            )
+        metadata = self._session_metadata_from_record(current)
         self._verify_record_preimage(current, metadata)
         self._verify_session_directory(
             directory,
@@ -1039,13 +984,10 @@ class SessionCreationService:
         node: SessionCatalogNode,
         record: SessionCreationRecord,
     ) -> None:
-        """校验已发布 node 行与 record 冻结值一致；不一致 fail closed。"""
+        """校验已发布不可变身份；显示名、父链与配置只由当前 nodes 行拥有。"""
         expected = {
             "kind": "session",
             "state": "active",
-            "parent_node_id": record.parent_node_id,
-            "display_name": record.display_name,
-            "title_source": record.title_source,
             "workspace_id": record.workspace_id,
             "created_at": record.created_at,
             "storage_relative_locator": record.storage_relative_locator,
@@ -1054,9 +996,6 @@ class SessionCreationService:
         actual = {
             "kind": node.kind,
             "state": node.state,
-            "parent_node_id": node.parent_node_id,
-            "display_name": node.display_name,
-            "title_source": node.title_source,
             "workspace_id": node.workspace_id,
             "created_at": node.created_at,
             "storage_relative_locator": node.storage_relative_locator,

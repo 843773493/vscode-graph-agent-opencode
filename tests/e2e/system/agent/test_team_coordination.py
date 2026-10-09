@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+import sqlite3
 from collections.abc import AsyncIterator, Generator
 from pathlib import Path
 
@@ -188,13 +189,26 @@ async def _run_required_tool_turn(
     return job_id
 
 
-def _team_board_path(workspace_root: Path, session_id: str, team_id: str) -> Path:
+def _team_control_path(workspace_root: Path, session_id: str) -> Path:
     session_node = get_session_path_resolver(
         workspace_root / ".boxteam" / "sessions"
     ).resolve_session_node(session_id)
-    path = session_node / "teams" / team_id / "team.json"
+    path = session_node / "session-control.sqlite"
     assert path.is_file(), path
+    assert not (session_node / "teams").exists()
     return path
+
+
+def _read_team_board(control_path: Path, session_id: str, team_id: str) -> dict[str, object]:
+    with sqlite3.connect(f"{control_path.as_uri()}?mode=ro", uri=True) as connection:
+        row = connection.execute(
+            "SELECT board_json FROM collaboration_boards WHERE team_id=?",
+            (team_id,),
+        ).fetchone()
+    assert row is not None, f"权威 ledger 中没有团队: {team_id}"
+    board = json.loads(row[0])
+    assert (board["session_id"], board["team_id"]) == (session_id, team_id)
+    return board
 
 
 async def _child_threads(
@@ -221,7 +235,8 @@ async def _session_ids(client: httpx.AsyncClient) -> set[str]:
 async def _wait_for_review_completion(
     client: httpx.AsyncClient,
     *,
-    board_path: Path,
+    control_path: Path,
+    team_id: str,
     session_id: str,
     reviewer_thread_id: str,
     task_id: str,
@@ -229,7 +244,7 @@ async def _wait_for_review_completion(
 ) -> dict[str, object]:
     assigned_job_id = None
     for _ in range(max_attempts):
-        board = json.loads(board_path.read_text(encoding="utf-8"))
+        board = _read_team_board(control_path, session_id, team_id)
         task = next(task for task in board["tasks"] if task["task_id"] == task_id)
         assert task["assignee_thread_id"] == reviewer_thread_id
         assigned_job_id = task["assigned_job_id"]
@@ -286,7 +301,7 @@ async def test_parent_creates_reviewer_and_drives_review_cycle(
     )
     assert board["session_id"] == session_id and board["name"] == team_name
     team_id = board["team_id"]
-    board_path = _team_board_path(workspace_root, session_id, team_id)
+    control_path = _team_control_path(workspace_root, session_id)
     member_job_id = await _run_required_tool_turn(
         client,
         session_id=session_id,
@@ -313,8 +328,8 @@ async def test_parent_creates_reviewer_and_drives_review_cycle(
     assert len(children) == 1
     assert children[0]["thread_id"] == reviewer_thread_id
     assert children[0]["delegation_id"] == operation["child_delegation_id"]
-    # 成员以控制库为权威，磁盘 team.json 不保存第二份成员投影。
-    assert json.loads(board_path.read_text(encoding="utf-8"))["members"] == []
+    # 成员与任务均以 Session control ledger 为权威，board 不保存第二份成员投影。
+    assert _read_team_board(control_path, session_id, team_id)["members"] == []
 
     assign_job_id = await _run_required_tool_turn(
         client,
@@ -334,7 +349,8 @@ async def test_parent_creates_reviewer_and_drives_review_cycle(
     )
     task = await _wait_for_review_completion(
         client,
-        board_path=board_path,
+        control_path=control_path,
+        team_id=team_id,
         session_id=session_id,
         reviewer_thread_id=reviewer_thread_id,
         task_id=assignment["task"]["task_id"],
@@ -372,7 +388,7 @@ async def test_parent_reuses_refined_reviewer_child_without_creating_another(
         client, session_id=session_id, job_id=team_job_id, tool_name="create_team"
     )
     team_id = board["team_id"]
-    board_path = _team_board_path(workspace_root, session_id, team_id)
+    control_path = _team_control_path(workspace_root, session_id)
     member_job_id = await _run_required_tool_turn(
         client,
         session_id=session_id,
@@ -410,7 +426,8 @@ async def test_parent_reuses_refined_reviewer_child_without_creating_another(
     )
     rules_task = await _wait_for_review_completion(
         client,
-        board_path=board_path,
+        control_path=control_path,
+        team_id=team_id,
         session_id=session_id,
         reviewer_thread_id=reviewer_thread_id,
         task_id=rules_assignment["task"]["task_id"],
@@ -449,7 +466,8 @@ async def test_parent_reuses_refined_reviewer_child_without_creating_another(
     )
     task = await _wait_for_review_completion(
         client,
-        board_path=board_path,
+        control_path=control_path,
+        team_id=team_id,
         session_id=session_id,
         reviewer_thread_id=reviewer_thread_id,
         task_id=assignment["task"]["task_id"],

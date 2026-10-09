@@ -55,8 +55,8 @@ def projection_saver(
     with RolloutCheckpointSaver(
         sessions,
     ) as saver:
-        thread = saver._storage.main_thread_id(session_id)
-        owner_root = saver._storage._path_resolver.resolve_thread_node(session_id, thread)
+        thread = saver._storage.storage.main_thread_id(session_id)
+        owner_root = saver._storage.storage._path_resolver.resolve_thread_node(session_id, thread)
         accepted = saver.accept_turn(
             session_id, thread_id=thread,
             accepted_ingress_id="user-1", acceptance_idempotency_key="projection-accept",
@@ -98,7 +98,7 @@ def projection_saver(
 @pytest.fixture
 def projection_draft(projection_saver):
     saver, session_id, _ = projection_saver
-    thread = saver._storage.main_thread_id(session_id)
+    thread = saver._storage.storage.main_thread_id(session_id)
     body = [{"type": "text", "text": "贡献正文，必须按 contribution identity 恢复"}]
     contribution = ContextContribution(
         contribution_id="contribution-z",
@@ -171,7 +171,7 @@ def register_projection_draft(
 
 
 def _project(saver: RolloutCheckpointSaver, session_id: str, assembly_id: str) -> dict:
-    thread = saver._storage.main_thread_id(session_id)
+    thread = saver._storage.storage.main_thread_id(session_id)
     snapshot = saver.get_context_assembly(session_id, thread, assembly_id=assembly_id)
     plan = snapshot.as_sealed_plan()
     messages, losses = saver.project_context_plan_with_diagnostics(session_id, thread, plan)
@@ -194,7 +194,7 @@ def _project(saver: RolloutCheckpointSaver, session_id: str, assembly_id: str) -
 @pytest.fixture
 def overlay_source(projection_saver):
     saver, session_id, _ = projection_saver
-    thread_id = saver._storage._path_resolver.main_thread_id(session_id)
+    thread_id = saver._storage.storage._path_resolver.main_thread_id(session_id)
     base = [{"type": "text", "text": "AGENTS 稳定 base A"}]
     delta = [{"type": "text", "text": "AGENTS diff A→B"}]
     source = SimpleNamespace(

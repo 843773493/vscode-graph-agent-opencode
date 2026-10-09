@@ -5,24 +5,18 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.core.session_catalog_store.contracts import (
+    SessionGenerationOriginDTO,
+    SessionKind,
+)
+
 from .common import TimestampedDTO
 from .session_context import SessionContextScope, SessionResourceIdentity
 from .session_resource import SessionResourceKind
 
 TitleSource = Literal["default", "user", "auto"]
-SessionKind = Literal["normal", "context_fork"]
 SessionForkMode = Literal["context_fork", "history_prefix_fork", "full_rollout_copy"]
-ChildThreadStatus = Literal["pending", "running", "failed"]
-
-
-class SessionGenerationOriginDTO(BaseModel):
-    """会话由通用生成器创建时的不可变来源。"""
-
-    generator_id: str
-    run_id: str
-    idempotency_key: str
-    generator_type_id: str
-    generator_type_version: str
+ChildThreadStatus = Literal["pending", "running", "completed", "failed"]
 
 
 class SessionCreateRequest(BaseModel):
@@ -82,6 +76,20 @@ class SessionListResultDTO(BaseModel):
     has_more: bool = False
 
 
+class ChildThreadBlockerDTO(BaseModel):
+    kind: str
+    reason: str
+
+
+class ChildThreadRuntimeDTO(BaseModel):
+    residency: Literal["cold", "loading", "resident", "unloading"]
+    cold_eligible: bool
+    execution_state: str
+    last_activity_at: datetime | None
+    idle_deadline: datetime | None
+    blockers: list[ChildThreadBlockerDTO]
+
+
 class ChildThreadSummaryDTO(BaseModel):
     """owner Session 内 durable child thread 的只读投影。
 
@@ -100,6 +108,9 @@ class ChildThreadSummaryDTO(BaseModel):
     collaboration_state: str | None = None
     admission_state: str | None = None
     status: ChildThreadStatus
+    runtime: ChildThreadRuntimeDTO | None = None
+    report_execution_id: str | None = None
+    report_status: str | None = None
 
 
 class ChildThreadListDTO(BaseModel):

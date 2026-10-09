@@ -9,11 +9,19 @@ session ID、按 main thread 反查、全表一致性校验与 locator 绝对路
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import json
+import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.session_catalog_store._schema import (
     _LOCATOR_PREFIX,
     _NODE_COLUMNS,
+    _SESSION_LIST_FINGERPRINT_PARTS,
+    _SESSION_LIST_INDEX_NAME,
 )
 from app.core.session_catalog_store.contracts import (
     CatalogMaintenanceRequiredError,
@@ -23,6 +31,25 @@ from app.core.session_catalog_store.validators import (
     validate_path_budget,
     validate_storage_relative_locator,
 )
+
+# 根级 active session 直接可见；其它候选只有完整 active 祖先链到根才可见。
+# UNION 在损坏的环上收敛；孤儿/环与旧从根遍历行为一致，不成为列表成员。
+_SESSION_LIST_VISIBLE = """
+    kind = 'session' AND state = 'active'
+    AND (candidate.parent_node_id IS NULL OR (
+        WITH RECURSIVE ancestors(node_id, parent_node_id, state) AS (
+            SELECT node_id, parent_node_id, state FROM nodes
+            WHERE node_id = candidate.parent_node_id
+            UNION
+            SELECT parent.node_id, parent.parent_node_id, parent.state
+            FROM nodes AS parent JOIN ancestors AS child
+                ON parent.node_id = child.parent_node_id
+            WHERE child.state = 'active'
+        )
+        SELECT MIN(state = 'active') AND MAX(parent_node_id IS NULL)
+        FROM ancestors
+    ))
+"""
 
 
 class CatalogQueriesMixin:
@@ -42,6 +69,91 @@ class CatalogQueriesMixin:
         """返回节点投影；不存在抛 KeyError。"""
         with self.read_transaction() as connection:
             return self._node_from_row(self._require_node(connection, node_id))
+
+    def read_node_with_session_parent(
+        self, node_id: str
+    ) -> tuple[SessionCatalogNode, str | None]:
+        """同一读事务取得节点及最近会话祖先，不拼接第二套父子关系。"""
+        with self.read_transaction() as connection:
+            node = self._node_from_row(self._require_node(connection, node_id))
+            current_id = node.parent_node_id
+            visited = {node_id}
+            while current_id is not None:
+                if current_id in visited:
+                    raise RuntimeError(f"会话目录包含循环: {current_id}")
+                visited.add(current_id)
+                row = connection.execute(
+                    "SELECT kind, parent_node_id FROM nodes WHERE node_id = ?",
+                    (current_id,),
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError(f"物理会话节点父节点不存在: {current_id}")
+                if row["kind"] == "session":
+                    return node, current_id
+                current_id = row["parent_node_id"]
+            return node, None
+
+    def read_session_list_page(
+        self, *, skip: int, limit: int, cursor: str | None
+    ) -> tuple[list[SessionCatalogNode], dict[str, str | None], int, str | None, bool]:
+        """SQLite 索引确定可见成员与排序；Python 只读取本页及其最近会话祖先。"""
+        if limit < 1:
+            raise ValueError(f"会话列表 limit 必须大于 0: limit={limit}")
+        with self.read_transaction() as connection:
+            # 分量已由同一 nodes 表的表达式索引在写入时算好；COUNT/SUM
+            # 只返回固定大小标量，不把全表成员或逐成员 UDF 搬回 Python。
+            sums = ", ".join(
+                f"COALESCE(SUM(session_list_member_part(node_id, created_at, {part})), 0)"
+                for part in range(_SESSION_LIST_FINGERPRINT_PARTS)
+            )
+            summary = connection.execute(
+                f"SELECT COUNT(*), {sums} FROM nodes AS candidate "
+                f"INDEXED BY {_SESSION_LIST_INDEX_NAME} WHERE {_SESSION_LIST_VISIBLE}"
+            ).fetchone()
+            total = int(summary[0])
+            revision = hashlib.sha256(json.dumps(
+                tuple(summary), separators=(",", ":"),
+            ).encode("utf-8")).hexdigest()
+            offset = _decode_session_list_cursor(cursor, revision=revision) if cursor is not None else skip
+            if offset < 0 or offset > total:
+                raise ValueError(f"会话列表 cursor offset 越界: offset={offset}, total={total}")
+            page_rows = connection.execute(
+                f"SELECT {_NODE_COLUMNS} FROM nodes AS candidate "
+                f"INDEXED BY {_SESSION_LIST_INDEX_NAME} WHERE {_SESSION_LIST_VISIBLE} "
+                "ORDER BY session_list_created_us(created_at) DESC, node_id ASC "
+                "LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+            nodes = [self._node_from_row(row) for row in page_rows]
+            ancestors: dict[str, sqlite3.Row] = {}
+            parents: dict[str, str | None] = {}
+            for node in nodes:
+                current_id = node.parent_node_id
+                visited = {node.node_id}
+                while current_id is not None:
+                    if current_id in visited:
+                        raise RuntimeError(f"会话目录包含循环: {current_id}")
+                    visited.add(current_id)
+                    if current_id not in ancestors:
+                        parent = connection.execute(
+                            "SELECT kind, parent_node_id FROM nodes WHERE node_id = ?",
+                            (current_id,),
+                        ).fetchone()
+                        if parent is None:
+                            raise RuntimeError(f"物理会话节点父节点不存在: {current_id}")
+                        ancestors[current_id] = parent
+                    parent = ancestors[current_id]
+                    if parent["kind"] == "session":
+                        break
+                    current_id = parent["parent_node_id"]
+                parents[node.node_id] = current_id
+            next_offset = offset + len(nodes)
+            has_more = next_offset < total
+            return (
+                nodes, parents, total,
+                _encode_session_list_cursor(next_offset, revision=revision) if has_more else None,
+                has_more,
+            )
 
     def read_nodes_snapshot(self) -> tuple[int, list[SessionCatalogNode]]:
         """在同一只读事务中返回 navigation revision 与全部节点行。"""
@@ -208,3 +320,56 @@ class CatalogQueriesMixin:
         relative = locator[len(_LOCATOR_PREFIX):]
         validate_path_budget(self.sessions_root, relative)
         return self.sessions_root / relative
+
+def _session_list_created_us(created_at: str) -> int:
+    """排序精度与 Python aware datetime 一致，不使用 SQLite 毫秒日期函数。"""
+    moment = datetime.fromisoformat(created_at).astimezone(UTC)
+    delta = moment - datetime(1970, 1, 1, tzinfo=UTC)
+    return (delta.days * 86400 + delta.seconds) * 1_000_000 + delta.microseconds
+
+
+def _session_list_member_part(node_id: str, created_at: str, part: int) -> int:
+    """表达式索引的成员指纹；保留旧成员定义中的 datetime 文本规范化。"""
+    encoded = json.dumps(
+        (node_id, str(datetime.fromisoformat(created_at))),
+        ensure_ascii=False, separators=(",", ":"),
+    ).encode("utf-8")
+    fingerprint = hashlib.sha256(encoded).digest()
+    return int.from_bytes(fingerprint[part * 4:(part + 1) * 4], "big")
+
+
+def _register_session_list_functions(connection: sqlite3.Connection) -> None:
+    """每个 catalog 连接都注册同一派生索引函数，包含只读重开。"""
+    connection.create_function("session_list_created_us", 1, _session_list_created_us, deterministic=True)
+    connection.create_function("session_list_member_part", 3, _session_list_member_part, deterministic=True)
+
+
+def _encode_session_list_cursor(offset: int, *, revision: str) -> str:
+    payload = json.dumps(
+        {"offset": offset, "revision": revision},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_session_list_cursor(cursor: str, *, revision: str) -> int:
+    """解析会话列表分页 cursor；revision 变化时显式报错，不静默降级。"""
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+    except (
+        ValueError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        binascii.Error,
+    ) as error:
+        raise ValueError("会话列表 cursor 格式无效") from error
+    if not isinstance(payload, dict):
+        raise TypeError("会话列表 cursor 格式无效")
+    if payload.get("revision") != revision:
+        raise ValueError("会话列表已更新，请从第一页重新加载")
+    offset = payload.get("offset")
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise ValueError("会话列表 cursor offset 无效")
+    return offset

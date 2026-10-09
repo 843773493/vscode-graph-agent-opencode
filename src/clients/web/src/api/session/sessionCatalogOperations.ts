@@ -12,9 +12,7 @@ import type { GatewayWorkspaceRequestTarget } from "../workspaceIdentity";
  * 同步 PATCH/PUT/DELETE 目录端点不得成为第二业务 writer：本模块是目录写协议的
  * **唯一** HTTP 入口，所有导航写操作都先经本地 outbox 持久化，再走这里的批量入队。
  *
- * TODO(8.1-G/8.1-H 后端接线)：URL 按 design.md 与 tasks.md 原文写死，但工作区后端
- * 尚未注册这些路由（当前 app/api/session_navigation.py 仍是同步 mutation 端点）。
- * 后端落地前调用这些函数会收到 404，属于预期；不得为此另写兼容分支或第二路径。
+ * 工作区后端通过 operations:enqueue 持久入队；状态与事件接口返回权威终态。
  */
 
 export type NavigationMutationKind =

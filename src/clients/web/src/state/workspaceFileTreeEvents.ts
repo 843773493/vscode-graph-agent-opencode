@@ -1,5 +1,5 @@
 import { rawTracePayload } from "./traceEvents";
-import type { TraceEvent } from "../types/backend";
+import type { TraceEvent, WorkspaceDirectoryRevision, WorkspaceFileList } from "../types/backend";
 
 export const WORKSPACE_FILE_CHANGES_EVENT = "boxteam:workspace-file-changes";
 
@@ -11,6 +11,8 @@ export interface WorkspaceFileChangeNotice {
 export interface WorkspaceFileChangesEventDetail {
   workspaceId: string | null;
   changes: WorkspaceFileChangeNotice[];
+  directories: WorkspaceDirectoryRevision[];
+  snapshots: WorkspaceFileList[];
 }
 
 function fileChangeNotice(value: unknown): WorkspaceFileChangeNotice | null {
@@ -53,12 +55,14 @@ export function fileChangesFromTraceEvents(
 export function dispatchWorkspaceFileChanges(
   workspaceId: string | null,
   changes: readonly WorkspaceFileChangeNotice[],
+  directories: readonly WorkspaceDirectoryRevision[] = [],
+  snapshots: readonly WorkspaceFileList[] = [],
 ): void {
-  if (changes.length === 0) {
+  if (changes.length === 0 && directories.length === 0) {
     return;
   }
   window.dispatchEvent(new CustomEvent<WorkspaceFileChangesEventDetail>(
     WORKSPACE_FILE_CHANGES_EVENT,
-    { detail: { workspaceId, changes: [...changes] } },
+    { detail: { workspaceId, changes: [...changes], directories: [...directories], snapshots: [...snapshots] } },
   ));
 }

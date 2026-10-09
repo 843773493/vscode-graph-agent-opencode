@@ -81,7 +81,7 @@ class ContextSourceOverlayMixin:
             raise ValueError("source overlay base_ref 与 delta_ref 不能复用同一 ref")
         # storage 在同一 owner boundary 计算并持久化 base/delta manifest；
         # 内存正文只作为本次注册时的校验输入，不成为重启后的第二事实源。
-        self._storage.register_source_overlay(
+        self._storage.assemblies.register_source_overlay(
             overlay,
             session_id=session_id,
             thread_id=thread_id,
@@ -210,13 +210,13 @@ class ContextSourceOverlayMixin:
     ) -> None:
         """只用 capture 前冻结的 request-only bytes 绑定 target-local ref。"""
         frozen_content = {item.ref: item.value_bytes for item in source_content_snapshot}
-        mappings = self._storage.list_fork_identity_mappings(
+        mappings = self._storage.forks.list_fork_identity_mappings(
             target_session_id,
             fork_id=fork_id,
             entity_type="source_overlay",
             checkpoint_ns=checkpoint_ns,
         )
-        source_contributions = self._storage.list_context_contributions(
+        source_contributions = self._storage.assemblies.list_context_contributions(
             source_session_id,
             source_thread_id,
             checkpoint_ns=checkpoint_ns,
@@ -226,7 +226,7 @@ class ContextSourceOverlayMixin:
                 row["contribution_id"],
                 field="context_contributions.contribution_id",
             )
-            for row in self._storage.list_context_contributions(
+            for row in self._storage.assemblies.list_context_contributions(
                 target_session_id,
                 target_thread_id,
                 checkpoint_ns=checkpoint_ns,
@@ -330,7 +330,7 @@ class ContextSourceOverlayMixin:
         source_overlay_epoch: int | None = None,
         checkpoint_ns: str = "",
     ) -> list[dict[str, object]]:
-        return self._storage.list_source_overlays(
+        return self._storage.assemblies.list_source_overlays(
             session_id,
             thread_id,
             source_overlay_epoch=source_overlay_epoch,

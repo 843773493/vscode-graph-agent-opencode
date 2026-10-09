@@ -10,8 +10,8 @@
 - **folder 无物理目录**：新模型 folder 是 SQLite-only 节点，使用独立的
   ``SessionCatalogFolderProjection``；``resolve_folder_dir`` 恒
   ``RuntimeError``。
-- **逻辑移动不搬磁盘**：``move_node``（folder）与 ``relocate_session``
-  （session）只改 SQLite ``parent_node_id``，不搬任何物理目录、不改写
+- **逻辑移动不搬磁盘**：导航 operation executor 只改 SQLite
+  ``parent_node_id``，不搬任何物理目录、不改写
   ``session.json``、不改 fork/delegation lineage/Session kind 或已封存
   context；执行中 Session 可移动（design.md §9）。
 语义基准：design.md §9（统一两级 resolver；逻辑导航移动不搬磁盘；
@@ -24,15 +24,13 @@ folder 无物理目录；Gateway 只消费受控 catalog export）。
 
 from __future__ import annotations
 
-import threading
-import uuid
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Literal, TypeAlias
 
-from app.core.identifier import create_prefixed_id
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
@@ -40,7 +38,11 @@ from app.core.session_catalog_store import (
     SubtreeDeleteRecord,
     validate_thread_id,
 )
-from app.core.session_catalog_store.contracts import CatalogTransactionHook
+from app.core.session_catalog_store.contracts import (
+    CatalogTransactionHook,
+    SessionGenerationOriginDTO,
+    SessionKind,
+)
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.core.session_subtree_delete import (
@@ -96,6 +98,14 @@ class SessionCatalogSessionProjection:
     created_at: datetime
     updated_at: datetime
     storage_relative_path: str
+    workspace_id: str
+    main_thread_id: str
+    session_kind: SessionKind
+    current_agent_id: str
+    current_provider_id: str | None
+    context_source_session_id: str | None
+    generation_origin: SessionGenerationOriginDTO | None
+    parent_session_id: str | None = None
     state: Literal["active", "deleting"] = "active"
 
 
@@ -107,8 +117,8 @@ SessionCatalogNodeProjection: TypeAlias = (
 class SessionCatalogPathResolver:
     """以 SessionCatalogStore（SQLite catalog）为数据源的会话路径解析器。
 
-    进程内 ``threading.RLock`` 只保护子树删除 idempotency key；节点读取
-    全部走 store 的 SQLite 直读，天然进程内新鲜。
+    节点与父链全部消费 store 的 SQLite 同一读快照；导航写入由 operation
+    executor 持有，解析器只转发共享删除恢复生命周期。
     """
 
     def __init__(
@@ -141,8 +151,6 @@ class SessionCatalogPathResolver:
         self._store = store
         self._workspace_id = workspace_id
         self._delete_service = delete_service
-        self._lock = threading.RLock()
-        self._subtree_delete_keys: dict[str, str] = {}
         self._consistency_verified = False
 
     # ------------------------------------------------------------------
@@ -191,7 +199,9 @@ class SessionCatalogPathResolver:
     # 节点投影
     # ------------------------------------------------------------------
 
-    def _project_node(self, node: SessionCatalogNode) -> SessionCatalogNodeProjection:
+    def _project_node(
+        self, node: SessionCatalogNode, parent_session_id: str | None = None
+    ) -> SessionCatalogNodeProjection:
         """把 catalog 行投影为明确的 catalog 节点类型。
 
         ``name`` 只来自 catalog；folder 无物理目录或时间字段，session 的
@@ -225,6 +235,14 @@ class SessionCatalogPathResolver:
             )
         self._store.resolve_session_locator(node.storage_relative_locator)
         created_at = datetime.fromisoformat(node.created_at)
+        if node.updated_at is None or not node.current_agent_id or node.main_thread_id is None:
+            raise RuntimeError(f"session 节点缺少权威业务字段: node_id={node.node_id}")
+        if node.session_kind not in ("normal", "context_fork"):
+            raise RuntimeError(f"session 节点业务 kind 非法: node_id={node.node_id}, kind={node.session_kind!r}")
+        generation_origin = (
+            SessionGenerationOriginDTO.model_validate_json(node.generation_origin_json)
+            if node.generation_origin_json is not None else None
+        )
         return SessionCatalogSessionProjection(
             node_id=node.node_id,
             kind=node.kind,
@@ -233,8 +251,16 @@ class SessionCatalogPathResolver:
             title_source=node.title_source,
             node_revision=node.revision,
             created_at=created_at,
-            updated_at=created_at,
+            updated_at=datetime.fromisoformat(node.updated_at),
             storage_relative_path=node.storage_relative_locator[len("sessions/"):],
+            workspace_id=node.workspace_id,
+            main_thread_id=node.main_thread_id,
+            session_kind=node.session_kind,
+            current_agent_id=node.current_agent_id,
+            current_provider_id=node.current_provider_id,
+            context_source_session_id=node.context_source_session_id,
+            generation_origin=generation_origin,
+            parent_session_id=parent_session_id,
             state=node.state,
         )
 
@@ -315,9 +341,25 @@ class SessionCatalogPathResolver:
         store 已构造即视为可读；启动装配仍显式调用本方法，确保工作区
         catalog 在业务服务接管前通过完整性校验。
         """
-        with self._lock:
-            self._store.verify_workspace_consistency()
-            self._consistency_verified = True
+        self._store.verify_workspace_consistency()
+        _, nodes = self._store.read_nodes_snapshot()
+        for node in nodes:
+            if node.kind != "session" or node.state != "active":
+                continue
+            directory = self._store.resolve_session_locator(node.storage_relative_locator)
+            manifest = json.loads((directory / "session.json").read_text(encoding="utf-8"))
+            expected = {
+                "session_id": node.node_id,
+                "workspace_id": node.workspace_id,
+                "created_at": node.created_at,
+            }
+            if manifest != expected or node.workspace_id != self._workspace_id:
+                raise RuntimeError(
+                    "会话与当前工作区后端标识不一致或身份 envelope 损坏: "
+                    f"session_id={node.node_id}, manifest={manifest!r}, "
+                    f"catalog_identity={expected!r}, backend_workspace_id={self._workspace_id!r}"
+                )
+        self._consistency_verified = True
 
     def list_nodes(self) -> list[SessionCatalogNodeProjection]:
         """返回 SQLite catalog 全量节点投影（按 node_id 稳定排序）。"""
@@ -332,7 +374,28 @@ class SessionCatalogPathResolver:
         """在同一 catalog 读快照中返回 navigation revision 与节点投影。"""
         self._ensure_consistency_verified()
         navigation_revision, nodes = self._store.read_nodes_snapshot()
-        return navigation_revision, [self._project_node(node) for node in nodes]
+        by_id = {node.node_id: node for node in nodes}
+        return navigation_revision, [
+            self._project_node(
+                node, self._nearest_session_ancestor_from_map(node.parent_node_id, by_id)
+            ) for node in nodes
+        ]
+
+    def session_list_page(
+        self, *, skip: int, limit: int, cursor: str | None
+    ) -> tuple[list[SessionCatalogSessionProjection], int, str | None, bool]:
+        """索引分页与完整 DTO 投影均只消费同一 catalog 读事务。"""
+        self._ensure_consistency_verified()
+        nodes, parents, total, next_cursor, has_more = self._store.read_session_list_page(
+            skip=skip, limit=limit, cursor=cursor
+        )
+        projected = [self._project_node(node, parents[node.node_id]) for node in nodes]
+        sessions: list[SessionCatalogSessionProjection] = []
+        for node in projected:
+            if not isinstance(node, SessionCatalogSessionProjection):
+                raise RuntimeError(f"会话列表返回非 session 节点: {node.node_id}")  # noqa: TRY004 - catalog 行损坏。
+            sessions.append(node)
+        return sessions, total, next_cursor, has_more
 
     # ------------------------------------------------------------------
     # 读方法
@@ -341,7 +404,8 @@ class SessionCatalogPathResolver:
     def get_node(self, node_id: str) -> SessionCatalogNodeProjection:
         """返回节点投影；不存在抛 KeyError。"""
         self._ensure_consistency_verified()
-        return self._project_node(self._store.get_node(node_id))
+        node, parent_session_id = self._store.read_node_with_session_parent(node_id)
+        return self._project_node(node, parent_session_id)
 
     def resolve_session_node(self, session_id: str) -> Path:
         """按稳定会话 ID 返回日期桶中的绝对会话目录（含存在性校验）。"""
@@ -675,74 +739,6 @@ class SessionCatalogPathResolver:
         return self._store.current_navigation_revision()
 
     # ------------------------------------------------------------------
-    # 导航写方法（SQLite-only，不动物理）
-    # ------------------------------------------------------------------
-
-    def update_node_name(self, node_id: str, name: str) -> SessionCatalogNodeProjection:
-        """重命名 catalog 显示名；物理目录保持稳定。"""
-        return self._project_node(self._store.rename_node(node_id, name))
-
-    def create_folder(
-        self,
-        *,
-        name: str,
-        parent_node_id: str | None,
-    ) -> SessionCatalogNodeProjection:
-        """创建 folder 节点：软件分配 ID、无物理目录、无 manifest。
-
-        folder 与 session 共用 ``ses_`` ID profile（R10 口径）；显示名只
-        存 catalog。
-        """
-        # TODO(identifier): "thr" 同款约束——folder 复用 "ses" 前缀是
-        # R10 确定的共用口径，见 session_catalog_store.create_folder。
-        folder_id = create_prefixed_id("ses")
-        node = self._store.create_folder(
-            folder_id,
-            self._workspace_id,
-            parent_node_id,
-            name,
-        )
-        return self._project_node(node)
-
-    def move_node(
-        self,
-        *,
-        node_id: str,
-        parent_node_id: str | None,
-    ) -> SessionCatalogNodeProjection:
-        """逻辑移动 folder，只改 ``parent_node_id``，不搬物理目录。"""
-        node = self._store.get_node(node_id)
-        if node.kind != "folder":
-            raise ValueError(
-                f"move_node 只允许移动会话文件夹，会话必须走 relocate_session: "
-                f"{node_id}"
-            )
-        return self._project_node(self._store.move_node(node_id, parent_node_id))
-
-    def relocate_session(
-        self,
-        *,
-        session_id: str,
-        parent_node_id: str | None,
-    ) -> SessionCatalogNodeProjection:
-        """逻辑移动 session（改 parent；不搬目录、不改 manifest）。
-
-        ``parent_session_id`` 是 catalog 派生关系，不改写 session.json；
-        fork/delegation lineage 与 Session kind 不受逻辑移动影响。
-        """
-        node = self._store.get_node(session_id)
-        if node.kind != "session":
-            raise RuntimeError(f"节点不是会话: {session_id}")
-        return self._project_node(self._store.move_node(session_id, parent_node_id))
-
-    def delete_folder(self, folder_id: str) -> None:
-        """删除空 folder（非递归）；非空/非 folder/非 active 均 RuntimeError。
-
-        递归删除统一走子树删除协议（:meth:`begin_subtree_delete` /
-        :meth:`finish_subtree_delete`)。
-        """
-        self._store.delete_empty_folder(folder_id)
-
     def resolve_operation_replay_node(self, session_id: str, *, now: datetime) -> Path:
         """仅供独立 operation owner 核原请求后只读恢复，不开放普通 resolver。"""
         return self._delete_service.resolve_operation_replay_node(session_id, now=now)
@@ -778,64 +774,3 @@ class SessionCatalogPathResolver:
                 )
             )
         return results
-
-    # 子树删除协议
-    # ------------------------------------------------------------------
-
-    def begin_subtree_delete(self, folder_id: str) -> None:
-        """冻结 folder 子树：create record + mark（整树 deleting）。
-
-        mark 的单事务 CAS（active→deleting + revision+1）是唯一逻辑可见
-        性关闭点；idempotency_key=uuid4 记入实例表，供
-        :meth:`finish_subtree_delete` 定位。同一 resolver 实例在 drain 或
-        finish 失败后重入时复用既有删除锁，继续处理原 record。
-        """
-        with self._lock:
-            if folder_id in self._subtree_delete_keys:
-                return
-            node = self._store.get_node(folder_id)
-            if node.kind != "folder":
-                raise RuntimeError(f"节点不是会话文件夹: {folder_id}")
-            idempotency_key = uuid.uuid4().hex
-            self._store.create_or_get_subtree_delete_record(
-                idempotency_key=idempotency_key,
-                workspace_id=self._workspace_id,
-                root_node_id=folder_id,
-            )
-            self._store.mark_subtree_deleting(idempotency_key)
-            self._subtree_delete_keys[folder_id] = idempotency_key
-
-    async def finish_subtree_delete(self, folder_id: str) -> None:
-        """对应 :meth:`begin_subtree_delete`：drain（fence CAS + 物理隔离）
-        + finish（tombstone）。
-
-        无对应 begin 记录 → ``RuntimeError``；drain/finish 失败保留实例
-        表条目，调用方可按 record 定点重入（幂等恢复）。
-        """
-        with self._lock:
-            idempotency_key = self._subtree_delete_keys.get(folder_id)
-            if idempotency_key is None:
-                raise RuntimeError(f"会话文件夹子树删除锁不存在: {folder_id}")
-        await self._delete_service.delete(
-            idempotency_key=idempotency_key,
-            root_node_id=folder_id,
-        )
-        with self._lock:
-            self._subtree_delete_keys.pop(folder_id, None)
-
-    async def delete_session_subtree(self, session_id: str) -> list[str]:
-        """删除完整会话子树，返回被删后代 session ID。"""
-        with self._lock:
-            node = self._store.get_node(session_id)
-            if node.kind != "session":
-                raise RuntimeError(f"节点不是会话: {session_id}")
-            idempotency_key = uuid.uuid4().hex
-        result = await self.delete_subtree(
-            idempotency_key=idempotency_key,
-            root_node_id=session_id,
-        )
-        return sorted(
-            candidate_id
-            for candidate_id in result.drained_session_ids
-            if candidate_id != session_id
-        )

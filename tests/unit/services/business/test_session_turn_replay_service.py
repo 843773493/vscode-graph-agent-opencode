@@ -86,7 +86,7 @@ class RecordingDispatcher:
         *,
         requested_agent_id: str | None,
     ) -> MessageRunAccepted:
-        owner = self.saver.resolve_main_thread_owner(session_id)
+        owner = self.saver.forks.source.resolve_main_thread_owner(session_id)
         with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
             checkpoint_tuple = await self.saver.aget_tuple(
                 build_checkpoint_config(owner.thread_id)
@@ -212,7 +212,7 @@ async def _build_service(
 ):
     session_bundle_factory(tmp_path, "ses_019c205391bb7a4b81b6728df70f63e6")
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
-    owner = saver.resolve_main_thread_owner("ses_019c205391bb7a4b81b6728df70f63e6")
+    owner = saver.forks.source.resolve_main_thread_owner("ses_019c205391bb7a4b81b6728df70f63e6")
     config = build_checkpoint_config(owner.thread_id)
     saver.accept_turn(
         owner.session_id, thread_id=owner.thread_id, accepted_ingress_id="msg_1",
@@ -278,7 +278,7 @@ async def _build_service(
         return SimpleNamespace(current_agent_id="default")
 
     async def resolve_main_thread(session_id: str) -> str:
-        return saver.resolve_main_thread_owner(session_id).thread_id
+        return saver.forks.source.resolve_main_thread_owner(session_id).thread_id
 
     session_service.get = get_session
     session_service.resolve_main_thread = resolve_main_thread
@@ -294,7 +294,7 @@ async def _build_service(
 
 
 async def _read_latest(saver: RolloutCheckpointSaver):
-    owner = saver.resolve_main_thread_owner("ses_019c205391bb7a4b81b6728df70f63e6")
+    owner = saver.forks.source.resolve_main_thread_owner("ses_019c205391bb7a4b81b6728df70f63e6")
     with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
         return await saver.aget_tuple(build_checkpoint_config(owner.thread_id))
 

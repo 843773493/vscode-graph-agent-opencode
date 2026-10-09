@@ -2,7 +2,7 @@
 
 本 mixin 只封装 Saver 对已提交 context plan/assembly 的 ownership、detail
 和 projector 调用；checkpoint/fork persistence 仍由 Saver/persistence owner
-提供，避免业务层旁路 RolloutStorage。
+提供，避免业务层旁路 RolloutContextStore。
 """
 
 from __future__ import annotations
@@ -330,7 +330,7 @@ class ContextOwnerMixin(
             if include_request_only
             else {}
         )
-        items = self._storage.read_items(
+        items = self._storage.storage.read_items(
             session_id,
             thread_id,
             checkpoint_ns=checkpoint_ns,
@@ -373,10 +373,10 @@ class ContextOwnerMixin(
         checkpoint_ns: str = "",
     ) -> bool:
         """返回当前 rollout 是否已切换到 v2 item owner。"""
-        return self._storage.supports_itemized_context(
+        return self._storage.storage.supports_itemized_context(
             session_id,
             thread_id,
-            checkpoint_ns=checkpoint_ns,
+            checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
         )
 
     def _committed_context_snapshot(
@@ -397,7 +397,7 @@ class ContextOwnerMixin(
         self._require_context_plan_owner(session_id, thread_id, plan)
         if plan.plan_state != "sealed" or plan.assembly_id is None:
             raise ValueError("context plan 未 sealed，不能进入 projector")
-        persisted = self._storage.get_context_assembly(
+        persisted = self._storage.assemblies.get_context_assembly(
             session_id,
             thread_id,
             assembly_id=plan.assembly_id,
@@ -435,7 +435,7 @@ class ContextOwnerMixin(
         checkpoint_ns: str = "",
     ) -> CanonicalItemRecord | None:
         """读取已提交 item，供 finalization 复用标准 checkpoint 已写入的事实。"""
-        items = self._storage.read_items(
+        items = self._storage.storage.read_items(
             session_id,
             thread_id,
             checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
@@ -451,9 +451,9 @@ class ContextOwnerMixin(
     ) -> tuple[CanonicalItemRecord, ...]:
         """提供已提交 canonical item 的只读 owner API。"""
         return tuple(
-            self._storage.read_items(
+            self._storage.storage.read_items(
                 session_id,
-                self._storage.main_thread_id(session_id),
+                self._storage.storage.main_thread_id(session_id),
                 checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
             )
         )

@@ -12,6 +12,10 @@ from watchfiles import Change, awatch
 from watchfiles.filters import DefaultFilter
 
 from app.core.shielded_cleanup import run_cleanup_shielded
+from app.schemas.internal_v2.workspace_file_operations import (
+    WorkspaceDirectoryRevisionDTO,
+    WorkspaceFileListDTO,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +43,10 @@ class WorkspaceFileChangeBatch:
     changes: tuple[WorkspaceFileChange, ...] = ()
     overflow: bool = False
     error: str | None = None
+    directories: tuple[WorkspaceDirectoryRevisionDTO, ...] = ()
+    event_id: int = 0
+    invalidated_roots: tuple[str, ...] = ()
+    snapshots: tuple[WorkspaceFileListDTO, ...] = ()
 
 
 @dataclass(slots=True)

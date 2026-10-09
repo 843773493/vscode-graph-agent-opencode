@@ -23,10 +23,12 @@ import type {
 import {
   projectCatalogBranch,
   projectCatalogBreadcrumb,
+  projectPendingCatalogChildren,
   type CatalogProjectedNode,
 } from "../../state/session/sessionCatalogProjection";
 import {
   catalogOutboxOperationIsTerminal,
+  catalogOutboxParentCreation,
   type CatalogOutbox,
   type CatalogOutboxIntent,
 } from "../../state/session/sessionCatalogOutbox";
@@ -53,8 +55,11 @@ export interface CatalogBranchState extends Omit<SessionCatalogPage, "catalog_re
   error: string | null;
 }
 
-export interface ProjectedCatalogBranchState extends Omit<CatalogBranchState, "items"> {
+export interface ProjectedCatalogBranchState extends Omit<CatalogBranchState, "items" | "total"> {
   items: CatalogProjectedNode[];
+  /** 未提交父 Folder 没有后端计数；其本地子项不进入分页 total。 */
+  total: number | null;
+  local_pending?: true;
   pending_node_ids: string[];
   locally_removed_node_ids: string[];
 }
@@ -296,18 +301,6 @@ export function useSessionResourceExplorer({
     return node;
   }, []);
 
-  const parentCreationFor = useCallback((outbox: CatalogOutbox, parentNodeId: string | null) => {
-    if (!parentNodeId) return null;
-    const operation = outbox.operations.find(
-      (item) => item.kind === "create_folder"
-        && (item.client_ref === parentNodeId || item.created_node_id === parentNodeId),
-    );
-    if (!operation) return null;
-    return catalogOutboxOperationIsTerminal(operation)
-      ? { parentNodeId: operation.created_node_id, createdBy: null }
-      : { parentNodeId: null, createdBy: operation.client_operation_id };
-  }, []);
-
   const submitCatalogIntent = useCallback(async (
     workspaceId: string,
     intent: CatalogOutboxIntent,
@@ -362,6 +355,11 @@ export function useSessionResourceExplorer({
       });
     }
     const key = branchKey(workspaceId, parentNodeId);
+    const parent = readCatalogOutbox(workspaceId)?.operations.find(
+      (operation) => operation.kind === "create_folder" && operation.client_ref === parentNodeId,
+    );
+    // 未确认 Folder 没有后端 node；其子项由 outbox 纯投影展示，不能拿 client_ref 请求 API。
+    if (parent && !parent.created_node_id) return undefined;
     const requestKey = `${key}:${append ? "append" : "replace"}`;
     const inFlight = branchInFlightRequestsRef.current.get(requestKey);
     if (inFlight) {
@@ -443,7 +441,7 @@ export function useSessionResourceExplorer({
     })();
     trackInFlightRequest(branchInFlightRequestsRef.current, requestKey, request);
     return request;
-  }, [apiPort, gatewayUserAccess, openCatalogOutbox, sessionCatalogOutboxRuntime, workspaceRequestTarget]);
+  }, [apiPort, gatewayUserAccess, openCatalogOutbox, readCatalogOutbox, sessionCatalogOutboxRuntime, workspaceRequestTarget]);
 
   const loadCatalogBranch = useCallback(async (
     workspaceId: string,
@@ -546,7 +544,11 @@ export function useSessionResourceExplorer({
       ?? terminalOperations.map((operation) => operation.client_operation_id);
     for (const operation of terminalOperations) {
       if (operation.kind === "create_folder") {
-        parentNodeIds.add(operation.parent_node_id);
+        const createdParent = currentOutbox?.operations.find(
+          (item) => item.client_operation_id === operation.created_by_operation_id,
+        );
+        if (operation.created_by_operation_id === null) parentNodeIds.add(operation.parent_node_id);
+        else if (createdParent?.created_node_id) parentNodeIds.add(createdParent.created_node_id);
       }
       if (operation.target_node_id) {
         for (const [key, branch] of branchesRef.current.entries()) {
@@ -923,23 +925,22 @@ export function useSessionResourceExplorer({
     parentFolderId?: string | null,
   ) => {
     const handle = await openCatalogOutbox(workspaceId);
-    const parent = parentCreationFor(
+    const parent = catalogOutboxParentCreation(
       handle.driver.current(),
       parentFolderId ?? null,
     );
-    if (parent?.createdBy) {
-      throw new Error("父文件夹尚未提交，当前目录协议不能在待提交文件夹下新建子文件夹");
-    }
     const result = await submitCatalogIntent(workspaceId, {
       kind: "create_folder",
       name,
       parentNodeId: parent ? parent.parentNodeId : parentFolderId ?? null,
+      parentCreatedByOperationId: parent?.createdBy,
     }, {});
     if ("handle" in result) {
-      trackCatalogIntent(workspaceId, result.handle, result.operationId, [parentFolderId ?? null]);
+      trackCatalogIntent(workspaceId, result.handle, result.operationId, [parent?.createdBy ? null : parentFolderId ?? null]);
     }
-    await loadBranch(workspaceId, parentFolderId);
-  }, [loadBranch, openCatalogOutbox, parentCreationFor, submitCatalogIntent, trackCatalogIntent]);
+    if (!parent?.createdBy) await loadBranch(workspaceId, parent ? parent.parentNodeId : parentFolderId);
+    return result.dispatchOutcome;
+  }, [loadBranch, openCatalogOutbox, submitCatalogIntent, trackCatalogIntent]);
 
   const renameWorkspaceFolder = useCallback(async (nodeId: string, name: string) => {
     const requestId = navigationRequestRef.current + 1;
@@ -1008,7 +1009,7 @@ export function useSessionResourceExplorer({
   ) => {
     const node = confirmedNodeFor(workspaceId, folderId);
     const handle = await openCatalogOutbox(workspaceId);
-    const parent = parentCreationFor(handle.driver.current(), parentFolderId ?? null);
+    const parent = catalogOutboxParentCreation(handle.driver.current(), parentFolderId ?? null);
     const result = await submitCatalogIntent(workspaceId, {
       kind: "move_node",
       targetNodeId: folderId,
@@ -1023,7 +1024,7 @@ export function useSessionResourceExplorer({
         [previousParentId ?? null, parentFolderId ?? null],
       );
     }
-  }, [confirmedNodeFor, openCatalogOutbox, parentCreationFor, submitCatalogIntent, trackCatalogIntent]);
+  }, [confirmedNodeFor, openCatalogOutbox, submitCatalogIntent, trackCatalogIntent]);
 
   const deleteSessionFolder = useCallback(async (
     workspaceId: string,
@@ -1122,7 +1123,7 @@ export function useSessionResourceExplorer({
   ) => {
     const node = confirmedNodeFor(workspaceId, nodeId);
     const handle = await openCatalogOutbox(workspaceId);
-    const parent = parentCreationFor(handle.driver.current(), parentNodeId);
+    const parent = catalogOutboxParentCreation(handle.driver.current(), parentNodeId);
     const result = await submitCatalogIntent(workspaceId, {
       kind: "move_node",
       targetNodeId: nodeId,
@@ -1137,7 +1138,7 @@ export function useSessionResourceExplorer({
         [previousParentNodeId, parentNodeId],
       );
     }
-  }, [confirmedNodeFor, openCatalogOutbox, parentCreationFor, submitCatalogIntent, trackCatalogIntent]);
+  }, [confirmedNodeFor, openCatalogOutbox, submitCatalogIntent, trackCatalogIntent]);
 
   const assignSessionFolder = useCallback(async (
     workspaceId: string,
@@ -1147,7 +1148,7 @@ export function useSessionResourceExplorer({
   ) => {
     const node = confirmedNodeFor(workspaceId, sessionId);
     const handle = await openCatalogOutbox(workspaceId);
-    const parent = parentCreationFor(handle.driver.current(), folderId ?? null);
+    const parent = catalogOutboxParentCreation(handle.driver.current(), folderId ?? null);
     const result = await submitCatalogIntent(workspaceId, {
       kind: "move_node",
       targetNodeId: node.node_id,
@@ -1162,7 +1163,7 @@ export function useSessionResourceExplorer({
         [previousParentId ?? null, folderId ?? null],
       );
     }
-  }, [confirmedNodeFor, openCatalogOutbox, parentCreationFor, submitCatalogIntent, trackCatalogIntent]);
+  }, [confirmedNodeFor, openCatalogOutbox, submitCatalogIntent, trackCatalogIntent]);
 
   const projectedBranches = useMemo(() => {
     const confirmedByWorkspace = new Map<string, Map<string, SessionCatalogNode>>();
@@ -1209,6 +1210,20 @@ export function useSessionResourceExplorer({
         pending_node_ids: [],
         locally_removed_node_ids: [],
       });
+    }
+    for (const [workspaceId, confirmedNodes] of confirmedByWorkspace) {
+      const outbox = readCatalogOutbox(workspaceId);
+      if (!outbox) continue;
+      for (const operation of outbox.operations) {
+        if (operation.kind !== "create_folder" || !operation.client_ref || operation.created_node_id) continue;
+        projected.set(branchKey(workspaceId, operation.client_ref), {
+          ...projectPendingCatalogChildren(operation.client_ref, {
+            confirmedNodes: [...confirmedNodes.values()], outbox,
+          }),
+          revision: "", total: null, cursor: null, consistency_warning: null,
+          local_pending: true, loading: false, error: null,
+        });
+      }
     }
     return projected;
   }, [branches, readCatalogOutbox]);

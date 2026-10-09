@@ -21,10 +21,20 @@ from app.core.session_control_operation_lease.operation_lease import (
     IDX_SESSION_OPERATION_LEASES_NON_TERMINAL_DDL,
     SESSION_OPERATION_LEASES_TABLE_DDL,
 )
+from app.core.session_control_store.background_mailbox import (
+    BACKGROUND_CONSUMPTIONS_DDL,
+    BACKGROUND_MAILBOX_DDL,
+    BACKGROUND_MAILBOX_OWNER_DDL,
+)
+from app.core.session_control_store.background_work import (
+    BACKGROUND_TASKS_ACTIVE_DDL,
+    BACKGROUND_TASKS_DDL,
+)
 from app.core.session_control_store.collaboration import (
     _COLLABORATION_LEDGER_TABLE_DDL,
     _COLLABORATION_MEMBERS_TABLE_DDL,
 )
+from app.core.session_control_store.collaboration_fanout import COLLABORATION_STATE_DDL
 from app.core.session_control_store.execution_intent import (
     _IDX_THREAD_EXECUTION_INTENT_STATE_DDL,
     _IDX_THREAD_EXECUTION_INTENT_THREAD_DDL,
@@ -70,6 +80,8 @@ class SchemaInitMixin:
             self._connection.execute(_IDX_THREAD_EXECUTION_INTENT_STATE_DDL)
             self._connection.execute(SESSION_OPERATION_LEASES_TABLE_DDL)
             self._connection.execute(IDX_SESSION_OPERATION_LEASES_NON_TERMINAL_DDL)
+            for statement in COLLABORATION_STATE_DDL:
+                self._connection.execute(statement)
             self._connection.execute(THREAD_OWNER_BINDINGS_TABLE_DDL)
             self._connection.execute(COMMUNICATION_OUTBOX_TABLE_DDL)
             self._connection.execute(COMMUNICATION_INBOX_TABLE_DDL)
@@ -78,6 +90,11 @@ class SchemaInitMixin:
             self._connection.execute(REMOTE_OBSERVATION_KEY_DDL)
             self._connection.execute(REMOTE_OBSERVATION_EXPIRY_DDL)
             self._connection.execute(IDX_COMMUNICATION_INBOX_TARGET_ACCEPTED_DDL)
+            self._connection.execute(BACKGROUND_TASKS_DDL)
+            self._connection.execute(BACKGROUND_TASKS_ACTIVE_DDL)
+            self._connection.execute(BACKGROUND_MAILBOX_DDL)
+            self._connection.execute(BACKGROUND_MAILBOX_OWNER_DDL)
+            self._connection.execute(BACKGROUND_CONSUMPTIONS_DDL)
             if current != self.SCHEMA_VERSION:
                 self._connection.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
         except BaseException:

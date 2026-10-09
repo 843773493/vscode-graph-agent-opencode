@@ -43,7 +43,7 @@ from app.services.infrastructure.rollout_context.migration.artifacts import (
 from app.services.infrastructure.rollout_context.migration.importer import (
     LegacyRolloutImporter,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -90,13 +90,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         with catalog_provider_scope(components):
-            storage = RolloutStorage(
+            storage = RolloutContextStore(
                 sessions_root,
                 serde=JsonPlusSerializer(),
                 message_codec=LangChainMessageCodec(),
             )
             importer = LegacyRolloutImporter(storage)
-            source_thread_id = storage.main_thread_id(args.source_session_id)
+            source_thread_id = storage.storage.main_thread_id(args.source_session_id)
             if args.report_only:
                 result = importer.read_report(
                     source_session_id=args.source_session_id,
@@ -108,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
                     source_session_id=args.source_session_id,
                     source_thread_id=source_thread_id,
                     target_session_id=args.target_session_id,
-                    target_thread_id=storage.main_thread_id(args.target_session_id),
+                    target_thread_id=storage.storage.main_thread_id(args.target_session_id),
                     checkpoint_ns=args.checkpoint_ns,
                 )
     finally:

@@ -28,8 +28,6 @@ PreparedMessage = tuple[
     str,
     int,
     int,
-    bytes,
-    str,
     str,
     tuple[ItemLocation, ...],
     str,
@@ -237,12 +235,10 @@ def prepare_messages(
                 continue
             sequence = batch.last_message_sequence + 1
             locations: list[ItemLocation] = []
-            raw_parts: list[bytes] = []
             if not stored:
                 for item in group:
                     raw = canonical_json_line(item.to_dict())
                     locations.append((item, offset, len(raw)))
-                    raw_parts.append(raw)
                     offset += len(raw)
                 _, message_offset, message_length = locations[-1]
                 batch.next_item_sequence += len(group)
@@ -259,9 +255,7 @@ def prepare_messages(
                     canonical_json_text(serialized),
                     message_offset,
                     message_length,
-                    b"".join(raw_parts),
                     "internal" if codec.is_internal(message) else "visible",
-                    "{}",
                     tuple(locations),
                     execution_id,
                 )

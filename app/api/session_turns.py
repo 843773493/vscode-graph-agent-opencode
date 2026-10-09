@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.api.canonical_params import CanonicalSessionId
+from app.api.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.api.deps import (
     get_request_id,
     get_session_turn_history_service,
@@ -111,6 +111,30 @@ async def load_session_history(
             history_loading=parse_history_loading_header(
                 request.headers.get("X-BoxTeam-History-Loading")
             ),
+        )
+    except NotFoundError as error:
+        raise not_found_http_error(error) from error
+    except Exception as error:
+        raise _turn_history_http_error(session_id, error) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post(
+    "/{session_id}/threads/{thread_id}/history",
+    response_model=APIResponse[TurnHistoryPageDTO],
+    summary="读取精确 thread 的有界冷历史",
+)
+async def load_thread_history(
+    session_id: CanonicalSessionId, thread_id: CanonicalThreadId,
+    payload: TurnHistoryLoadRequest, request: Request,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    turn_history_service: Annotated[SessionTurnHistoryService, Depends(get_session_turn_history_service)],
+):
+    try:
+        result = await turn_history_service.load_history(
+            session_id, payload, thread_id=thread_id,
+            history_loading=parse_history_loading_header(request.headers.get("X-BoxTeam-History-Loading")),
         )
     except NotFoundError as error:
         raise not_found_http_error(error) from error

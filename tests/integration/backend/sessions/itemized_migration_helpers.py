@@ -12,7 +12,7 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from tests.harness.python.run_context import TestRunContext
 from tests.support.workspaces import prepare_default_test_workspace
 
@@ -108,8 +108,8 @@ def _write_v1_source(
     return lines
 
 
-def _storage(sessions_root: Path) -> RolloutStorage:
-    return RolloutStorage(
+def _storage(sessions_root: Path) -> RolloutContextStore:
+    return RolloutContextStore(
         sessions_root,
         serde=JsonPlusSerializer(),
         message_codec=LangChainMessageCodec(),
@@ -151,9 +151,9 @@ def _accepted_records() -> list[dict[str, object]]:
     ]
 
 
-def _table_counts(storage: RolloutStorage, session_id: str) -> dict[str, int]:
-    with storage._connect(
-        storage.main_thread_id(session_id), "", session_id=session_id, read_only=True
+def _table_counts(storage: RolloutContextStore, session_id: str) -> dict[str, int]:
+    with storage.storage._connect(
+        storage.storage.main_thread_id(session_id), "", session_id=session_id, read_only=True
     ) as connection:
         return {
             table: int(
@@ -169,6 +169,6 @@ def _table_counts(storage: RolloutStorage, session_id: str) -> dict[str, int]:
         }
 
 
-def migration_audits(storage: RolloutStorage) -> list[dict[str, object]]:
-    root = storage.root(TARGET_SESSION_ID).parent / "legacy-import"
+def migration_audits(storage: RolloutContextStore) -> list[dict[str, object]]:
+    root = storage.storage.root(TARGET_SESSION_ID).parent / "legacy-import"
     return [json.loads(path.read_text()) for path in sorted(root.glob("*/report.json"))]

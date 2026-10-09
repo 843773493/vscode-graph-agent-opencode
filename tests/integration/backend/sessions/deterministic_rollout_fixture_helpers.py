@@ -79,7 +79,7 @@ def seed_deterministic_v2_rollout(
             )
             saver.finalize_turn(
                 session_id=session_id,
-                thread_id=saver._storage.main_thread_id(session_id),
+                thread_id=saver._storage.storage.main_thread_id(session_id),
                 turn_id=turn_id,
                 final_message_id=final_id,
             )

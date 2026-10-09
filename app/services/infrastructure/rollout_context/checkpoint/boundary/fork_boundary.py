@@ -18,7 +18,7 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 
 
 class RolloutForkBoundaryOwnerMixin:
-    """fork source view 前缀闭合验证 owner（由 RolloutStorage 组合）。"""
+    """fork source view 前缀闭合验证 owner（由 RolloutContextStore 组合）。"""
 
     def validate_fork_source_closure(
         self,
@@ -54,10 +54,10 @@ class RolloutForkBoundaryOwnerMixin:
                 "fork_boundary.cutoff_message_sequence 必须是 int 或 None: "
                 + repr(cutoff_message_sequence)
             )
-        with self._connect(
+        with self._storage._connect(
             thread_id, checkpoint_ns, session_id=session_id, read_only=True
         ) as connection:
-            self._require_v2_runtime(connection)
+            self._storage._require_v2_runtime(connection)
             source = self._checkpoint_row(
                 connection,
                 checkpoint_ns,
@@ -74,7 +74,7 @@ class RolloutForkBoundaryOwnerMixin:
                 # 空 runtime 没有任何可见消息，边界平凡闭合。
                 return
             view_id = strict_text(source[6], field="checkpoints.view_id")
-            source_sequences = self._view_message_sequences(
+            source_sequences = self._storage._view_message_sequences(
                 thread_id,
                 checkpoint_ns,
                 view_id,

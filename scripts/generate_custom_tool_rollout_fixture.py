@@ -10,6 +10,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final
+from uuid import uuid4
 
 PROJECT_ROOT = Path.cwd().resolve()
 if str(PROJECT_ROOT) not in sys.path:
@@ -421,43 +422,6 @@ def _catalog_resolver(sessions_dir: Path) -> SessionCatalogPathResolver:
     return resolver
 
 
-def _write_session_manifest(
-    session_dir: Path,
-    session_id: str,
-    title: str,
-    *,
-    workspace_id: str,
-    created_at: str,
-    context_source_session_id: str | None = None,
-) -> None:
-    existing = json.loads(
-        (session_dir / "session.json").read_text(encoding="utf-8")
-    )
-    persisted_created_at = existing.get("created_at")
-    if not isinstance(persisted_created_at, str) or not persisted_created_at:
-        persisted_created_at = created_at
-    (session_dir / "session.json").write_text(
-        json.dumps(
-            {
-                "created_at": persisted_created_at,
-                "updated_at": created_at,
-                "session_id": session_id,
-                "workspace_id": workspace_id,
-                "current_agent_id": "default",
-                "current_provider_id": "primary",
-                "context_source_session_id": context_source_session_id,
-                "kind": "normal",
-                "delegation": None,
-                "generation_origin": None,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-
 def _create_session(
     *,
     sessions_dir: Path,
@@ -474,16 +438,16 @@ def _create_session(
     checkpoint_prefix: str = "checkpoint",
     final_compaction_cutoff: int | None = None,
 ) -> None:
-    resolver = _catalog_resolver(sessions_dir)
-    bundle = seed_catalog_session_bundle(sessions_dir, session_id, title=title)
-    session_dir = bundle.directory
-    _write_session_manifest(
-        session_dir,
-        session_id,
-        title,
-        workspace_id=resolver.workspace_id,
-        created_at=_stamp(0),
+    bundle = seed_catalog_session_bundle(
+        sessions_dir, session_id, title=title,
+        current_agent_id="default", current_provider_id="primary",
+        session_kind="context_fork" if fork_source else "normal",
         context_source_session_id=fork_source[0] if fork_source else None,
+        updated_at=datetime.fromisoformat(_stamp(0)),
+    )
+    _catalog_resolver(sessions_dir).catalog_store.update_session_configuration(
+        session_id, current_agent_id="default", current_provider_id="primary",
+        updated_at=datetime.fromisoformat(_stamp(0)),
     )
     thread_id = bundle.main_thread_id
     owner = MutationIntentOwner(session_id, thread_id)
@@ -638,7 +602,7 @@ def _write_fixture(workspace_root: Path, *, clean: bool) -> None:
                 resolver.catalog_store.get_node(session_id)
             except KeyError:
                 continue
-            asyncio.run(resolver.delete_session_subtree(session_id))
+            asyncio.run(resolver.delete_subtree(idempotency_key=f"fixture-clean-{uuid4().hex}", root_node_id=session_id))
     _create_session(
         sessions_dir=sessions_dir,
         session_id=STATIC_LONG_SESSION_ID,
@@ -775,7 +739,7 @@ def _write_static_long_session(workspace_root: Path) -> None:
     except KeyError:
         pass
     else:
-        asyncio.run(resolver.delete_session_subtree(STATIC_LONG_SESSION_ID))
+        asyncio.run(resolver.delete_subtree(idempotency_key=f"fixture-clean-{uuid4().hex}", root_node_id=STATIC_LONG_SESSION_ID))
     _create_session(
         sessions_dir=sessions_dir,
         session_id=STATIC_LONG_SESSION_ID,
@@ -848,7 +812,7 @@ def main() -> None:
             except KeyError:
                 pass
             else:
-                asyncio.run(resolver.delete_session_subtree(LARGE_LONG_SESSION_ID))
+                asyncio.run(resolver.delete_subtree(idempotency_key=f"fixture-clean-{uuid4().hex}", root_node_id=LARGE_LONG_SESSION_ID))
             _create_session(
                 sessions_dir=sessions_dir,
                 session_id=LARGE_LONG_SESSION_ID,

@@ -35,14 +35,14 @@ from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
+from app.services.infrastructure.rollout_context.activation.body import (
+    ResourceActivationBodyStore,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.skill_catalog import (
     skill_catalog_from_activation,
-)
-from app.services.infrastructure.rollout_context.storage.resource_activation_body import (
-    ResourceActivationBodyStore,
 )
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
@@ -59,7 +59,7 @@ from tests.integration.backend.sessions.rollout_context.test_context_plan_regist
 @pytest.fixture
 def factory_context(registry_db, request, monkeypatch):
     saver, session, connection, accepted = registry_db
-    thread = saver._storage.main_thread_id(session)
+    thread = saver._storage.storage.main_thread_id(session)
     workspace = TestRunContext.from_test_file(Path(request.node.path)).workspace_root
     skill_file = workspace / ".boxteam" / "skills" / "example" / "SKILL.md"
     skill_file.parent.mkdir(parents=True, exist_ok=True)
@@ -182,7 +182,7 @@ def test_real_factory_bridge_registers_all_seven_sources_and_uses_sealed_request
     assert outbound.system_message is None
     assert isinstance(outbound.messages[0], SystemMessage)
     assert sum(isinstance(message, SystemMessage) for message in outbound.messages) == 1
-    snapshot = saver._storage.list_context_assemblies(session, thread)[-1]
+    snapshot = saver._storage.assemblies.list_context_assemblies(session, thread)[-1]
     sources = snapshot.seal_binding.root.sources
     assert {source.source_identity for source in sources} == {
         "instruction:agent-instructions", "instruction:runtime-identity",
@@ -201,7 +201,7 @@ def test_real_factory_bridge_registers_all_seven_sources_and_uses_sealed_request
 def test_runtime_selection_hard_rebase_preserves_retry_and_graph_registration(factory_context, monkeypatch):
     saver, session, thread, _connection, selection, manager, captured, registered, dispatch = factory_context
     first = dispatch("first")
-    original = saver._storage.list_context_assemblies(session, thread)[-1]
+    original = saver._storage.assemblies.list_context_assemblies(session, thread)[-1]
     selection.apply_changes(agent_id="default", changes={"write_todos": (False, False)})
 
     def no_live_desired(*_args: object, **_kwargs: object):
@@ -214,7 +214,7 @@ def test_runtime_selection_hard_rebase_preserves_retry_and_graph_registration(fa
         retry = dispatch("first")
     assert retry.messages == first.messages and retry.tools == first.tools
     second = dispatch("second")
-    changed = saver._storage.list_context_assemblies(session, thread)[-1]
+    changed = saver._storage.assemblies.list_context_assemblies(session, thread)[-1]
     assert "write_todos" in registered
     assert "write_todos" not in {schema["function"]["name"] for schema in second.tools}
     assert changed.seal_binding.prefix.state.epoch.ordinal == original.seal_binding.prefix.state.epoch.ordinal + 1
@@ -236,7 +236,7 @@ def test_frozen_skill_tool_uses_durable_body_after_live_catalog_changes(
 ):
     saver, session, thread, _connection, _selection, manager, captured, _registered, dispatch = factory_context
     dispatch("skill-catalog-initial")
-    sealed = saver._storage.list_context_assemblies(session, thread)[-1]
+    sealed = saver._storage.assemblies.list_context_assemblies(session, thread)[-1]
     activation = saver.load_sealed_resource_activation(
         session, thread_id=thread, assembly_id=sealed.assembly_id,
         plan_hash=sealed.plan_hash, request_hash=sealed.request_hash,
@@ -283,7 +283,7 @@ def test_frozen_skill_tool_uses_durable_body_after_live_catalog_changes(
         assert result["status"] == "loaded" and not result["tracked"]
         assert tuple(reads) == before_reads
 
-    with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
         restored = restarted.load_sealed_resource_activation(
             session, thread_id=thread, assembly_id=sealed.assembly_id,
             plan_hash=sealed.plan_hash, request_hash=sealed.request_hash,

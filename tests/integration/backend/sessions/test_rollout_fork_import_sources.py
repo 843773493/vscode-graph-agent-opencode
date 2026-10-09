@@ -58,7 +58,7 @@ def omitted_source(fork_workspace, session_bundle_factory, forbid_detail_body, r
     for session in (SOURCE_SESSION_ID, TARGET_SESSION_ID, GRANDCHILD_SESSION_ID):
         session_bundle_factory(sessions, session)
     with RolloutCheckpointSaver(sessions) as saver:
-        thread_id = saver._storage.main_thread_id(SOURCE_SESSION_ID)
+        thread_id = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
         accepted = saver.accept_turn(
             SOURCE_SESSION_ID,
             thread_id=thread_id,
@@ -148,7 +148,7 @@ def omitted_source(fork_workspace, session_bundle_factory, forbid_detail_body, r
             seal_idempotency_key="actual-runtime-seal",
             seal_input_hash=sha256_jcs({"fixture": "registered omitted source"}),
         )
-        with saver._storage._connect(
+        with saver._storage.storage._connect(
             thread_id, "", session_id=SOURCE_SESSION_ID, read_only=True
         ) as connection:
             assert connection.execute(
@@ -161,12 +161,12 @@ def omitted_source(fork_workspace, session_bundle_factory, forbid_detail_body, r
 
 
 def _only_registration(saver, session):
-    with saver._storage._connect(
-        saver._storage.main_thread_id(session), "", session_id=session, read_only=True
+    with saver._storage.storage._connect(
+        saver._storage.storage.main_thread_id(session), "", session_id=session, read_only=True
     ) as connection:
         plan_id = connection.execute("SELECT plan_id FROM context_plans").fetchone()[0]
     return saver.get_context_plan_registration(
-        session, thread_id=saver._storage.main_thread_id(session), plan_id=plan_id
+        session, thread_id=saver._storage.storage.main_thread_id(session), plan_id=plan_id
     )
 
 
@@ -180,9 +180,9 @@ async def test_full_copy_omitted_existing_source_survives_recursive_import_and_r
     omitted_source,
 ):
     saver, original, mode = omitted_source
-    source_root = saver._storage.root(SOURCE_SESSION_ID)
+    source_root = saver._storage.storage.root(SOURCE_SESSION_ID)
     source_before = _artifacts(source_root)
-    await saver.afork(
+    await saver.forks.afork(
         source_session_id=SOURCE_SESSION_ID,
         target_session_id=TARGET_SESSION_ID,
         mode="full_rollout_copy",
@@ -194,20 +194,20 @@ async def test_full_copy_omitted_existing_source_survives_recursive_import_and_r
         target.source_manifest["contributions"][0]["contribution_id"]
         != original.selection[0].contribution_id
     )
-    target_before = _artifacts(saver._storage.root(TARGET_SESSION_ID))
-    await saver.afork(
+    target_before = _artifacts(saver._storage.storage.root(TARGET_SESSION_ID))
+    await saver.forks.afork(
         source_session_id=TARGET_SESSION_ID,
         target_session_id=GRANDCHILD_SESSION_ID,
         mode="full_rollout_copy",
     )
-    assert _artifacts(saver._storage.root(TARGET_SESSION_ID)) == target_before
-    with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
+    assert _artifacts(saver._storage.storage.root(TARGET_SESSION_ID)) == target_before
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
         for session in (TARGET_SESSION_ID, GRANDCHILD_SESSION_ID):
             restored = _only_registration(restarted, session)
             manifest = restored.source_manifest
             copied = restarted.get_context_assembly(
                 session,
-                thread_id=restarted._storage.main_thread_id(session),
+                thread_id=restarted._storage.storage.main_thread_id(session),
                 assembly_id=restored.assembly_id,
             )
             assert (
@@ -246,8 +246,8 @@ async def test_full_copy_omitted_existing_source_survives_recursive_import_and_r
                     contribution["source_binding"]["source_overlay_epoch"]
                     == ref["source_overlay_epoch"]
                 )
-            with restarted._storage._connect(
-                restarted._storage.main_thread_id(session),
+            with restarted._storage.storage._connect(
+                restarted._storage.storage.main_thread_id(session),
                 "",
                 session_id=session,
                 read_only=True,
@@ -272,13 +272,13 @@ async def test_recursive_fork_rejects_import_evidence_tampering_before_publicati
     omitted_source, mutation
 ):
     saver = omitted_source[0]
-    await saver.afork(
+    await saver.forks.afork(
         source_session_id=SOURCE_SESSION_ID,
         target_session_id=TARGET_SESSION_ID,
         mode="full_rollout_copy",
     )
-    with saver._storage._connect(
-        saver._storage.main_thread_id(TARGET_SESSION_ID),
+    with saver._storage.storage._connect(
+        saver._storage.storage.main_thread_id(TARGET_SESSION_ID),
         "",
         session_id=TARGET_SESSION_ID,
     ) as connection:
@@ -299,12 +299,12 @@ async def test_recursive_fork_rejects_import_evidence_tampering_before_publicati
                 "UPDATE context_plans SET source_manifest_json=?",
                 (json_text(manifest),),
             )
-    target_before = _artifacts(saver._storage.root(TARGET_SESSION_ID))
+    target_before = _artifacts(saver._storage.storage.root(TARGET_SESSION_ID))
     with pytest.raises(ValueError, match="source-mismatch|plan-order-integrity"):
-        await saver.afork(
+        await saver.forks.afork(
             source_session_id=TARGET_SESSION_ID,
             target_session_id=GRANDCHILD_SESSION_ID,
             mode="full_rollout_copy",
         )
-    assert not saver._storage.root(GRANDCHILD_SESSION_ID).exists()
-    assert _artifacts(saver._storage.root(TARGET_SESSION_ID)) == target_before
+    assert not saver._storage.storage.root(GRANDCHILD_SESSION_ID).exists()
+    assert _artifacts(saver._storage.storage.root(TARGET_SESSION_ID)) == target_before

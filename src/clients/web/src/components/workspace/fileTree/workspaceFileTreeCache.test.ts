@@ -11,6 +11,7 @@ import {
 
 function entry(lastAccessedAt: number, itemCount = 1): DirectoryCacheEntry {
   return {
+    directoryKey: null, directoryRevision: null,
     items: Array.from({ length: itemCount }, (_, index) => ({
       name: `file-${index}`,
       path: `file-${index}`,
@@ -37,6 +38,7 @@ describe("文件树目录缓存", () => {
     };
 
     expect(loadingDirectoryEntry(previous, 7)).toEqual({
+      directoryKey: null, directoryRevision: null,
       items: previous.items,
       loading: true,
       error: null,
@@ -45,6 +47,7 @@ describe("文件树目录缓存", () => {
       lastAccessedAt: 7,
     });
     expect(loadingDirectoryEntry(undefined, 7)).toEqual({
+      directoryKey: null, directoryRevision: null,
       items: [],
       loading: true,
       error: null,
@@ -55,8 +58,10 @@ describe("文件树目录缓存", () => {
   });
 
   test("后端快照条目清空错误并允许覆盖条目", () => {
-    const result = { items: entry(0, 2).items, truncated: true, next_cursor: "cursor-2" };
+    const key = { workspace_id: "backend_files", scope: "workspace", root: "/w/project", path: "" };
+    const result = { directory_key: key, directory_revision: 7, items: entry(0, 2).items, truncated: true, next_cursor: "cursor-2" };
     expect(loadedDirectoryEntry(result, 9)).toEqual({
+      directoryKey: key, directoryRevision: 7,
       items: result.items,
       loading: false,
       error: null,
@@ -64,8 +69,8 @@ describe("文件树目录缓存", () => {
       nextCursor: "cursor-2",
       lastAccessedAt: 9,
     });
-    expect(loadedDirectoryEntry({ items: undefined, truncated: undefined, next_cursor: undefined }, 9)).toEqual({
-      items: [], loading: false, error: null, truncated: false, nextCursor: null, lastAccessedAt: 9,
+    expect(loadedDirectoryEntry({ directory_key: key, directory_revision: 7, items: undefined, truncated: undefined, next_cursor: undefined }, 9)).toEqual({
+      directoryKey: key, directoryRevision: 7, items: [], loading: false, error: null, truncated: false, nextCursor: null, lastAccessedAt: 9,
     });
     const overridden = loadedDirectoryEntry(result, 9, []);
     expect(overridden.items).toEqual([]);
@@ -73,6 +78,7 @@ describe("文件树目录缓存", () => {
 
   test("失败条目保留旧快照并写入错误", () => {
     expect(failedDirectoryEntry(entry(1, 3), "读取失败", 8)).toEqual({
+      directoryKey: null, directoryRevision: null,
       items: entry(1, 3).items,
       loading: false,
       error: "读取失败",

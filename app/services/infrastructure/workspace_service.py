@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import codecs
 import heapq
-import json
 import mimetypes
 import os
 import shutil
@@ -28,13 +26,27 @@ from app.schemas.internal_v2.workspace import (
     WorkspaceContextDTO,
     WorkspaceDTO,
     WorkspaceFileContentDTO,
-    WorkspaceFileListDTO,
-    WorkspaceFileNodeDTO,
     WorkspaceFileScope,
     WorkspaceIndexRebuildDTO,
     WorkspaceIndexStatusDTO,
 )
+from app.schemas.internal_v2.workspace_file_operations import (
+    WorkspaceDirectoryKeyDTO,
+    WorkspaceFileListDTO,
+    WorkspaceFileMutationIntentDTO,
+    WorkspaceFileNodeDTO,
+    WorkspaceFileOperationReceiptDTO,
+)
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.workspace_files.operations import (
+    WorkspaceFileOperations,
+)
+from app.services.infrastructure.workspace_files.store import (
+    WorkspaceFileOperationConflictError,
+    decode_directory_cursor,
+    digest,
+    encode_directory_cursor,
+)
 
 
 class WorkspaceFileConflictError(RuntimeError):
@@ -83,6 +95,29 @@ class WorkspaceService:
         self.user_workspace_root = str(get_user_workspace_root())
         self.name = os.path.basename(self.root_path)
         self._config_service = config_service
+        self._file_operations: WorkspaceFileOperations | None = None
+
+    @property
+    def file_operations(self) -> WorkspaceFileOperations:
+        if self._file_operations is None:
+            self._file_operations = WorkspaceFileOperations(
+                workspace=self._workspace_root, workspace_id=self.workspace_id,
+                resolve=self._resolve_file_tree_path, normalize=self._normalize_workspace_relative_path,
+                validate_name=self._validate_entry_name, observe=self._directory_observation,
+                snapshot=self._operation_snapshot,
+            )
+        return self._file_operations
+
+    async def start(self) -> None:
+        await self.file_operations.start()
+
+    async def stop(self) -> None:
+        if self._file_operations is not None:
+            await self._file_operations.stop()
+
+    def close(self) -> None:
+        if self._file_operations is not None:
+            self._file_operations.close()
 
     @property
     def workspace_id(self) -> str:
@@ -154,15 +189,21 @@ class WorkspaceService:
         if not target_path.is_dir():
             raise NotADirectoryError(f"文件树路径不是目录: {display_path or '.'}")
 
-        cursor_key = self._decode_directory_cursor(cursor) if cursor else None
-        items, next_cursor = await asyncio.to_thread(
-            self._scan_directory,
-            target_path,
-            display_path,
-            scope,
-            resolved_limit,
-            cursor_key,
-        )
+        owner = self.file_operations
+        key, _ = owner.directory_key(display_path, scope)
+        cursor_value = decode_directory_cursor(cursor) if cursor else None
+        cursor_key = None if cursor_value is None else cursor_value["after"]
+        def snapshot():
+            with owner.observation_lock:
+                items, next_key, signature = self._scan_directory(
+                    target_path, display_path, scope, resolved_limit, cursor_key,
+                )
+                revision = owner.store.observe([(key, str(target_path), signature, True)])[0].directory_revision
+                return items, next_key, revision
+        items, next_key, revision = await asyncio.to_thread(snapshot)
+        if cursor_value is not None and (cursor_value["directory_key"] != key.model_dump() or cursor_value["revision"] != revision):
+            raise WorkspaceFileOperationConflictError("目录分页游标的原 revision 已失效，请重新读取目录")
+        next_cursor = None if next_key is None else encode_directory_cursor(key, revision, next_key)
 
         return WorkspaceFileListDTO(
             root_path=(
@@ -175,6 +216,8 @@ class WorkspaceService:
             truncated=next_cursor is not None,
             limit=resolved_limit,
             next_cursor=next_cursor,
+            directory_key=key,
+            directory_revision=revision,
         )
 
     def _scan_directory(
@@ -184,57 +227,58 @@ class WorkspaceService:
         scope: WorkspaceFileScope,
         limit: int,
         cursor_key: tuple[bool, str, str] | None,
-    ) -> tuple[list[WorkspaceFileNodeDTO], str | None]:
-        def entry_key(entry: os.DirEntry[str]) -> tuple[bool, str, str]:
+    ) -> tuple[list[WorkspaceFileNodeDTO], tuple[bool, str, str] | None, str]:
+        def entry_key(entry: WorkspaceFileNodeDTO) -> tuple[bool, str, str]:
             return (
-                not entry.is_dir(follow_symlinks=False),
+                entry.kind != "directory",
                 entry.name.lower(),
                 entry.name,
             )
 
+        fingerprint = 0
+        count = 0
+        staging = self._file_operations.staging_roots() if self._file_operations is not None else set()
+        def observed_entries(directory_entries):
+            nonlocal fingerprint, count
+            for entry in directory_entries:
+                if Path(entry.path) in staging:
+                    continue
+                node = self._entry_to_file_node(entry, display_path, scope=scope)
+                fingerprint ^= int(digest({"name": node.name, "kind": node.kind, "size": node.size,
+                                          "modified_at": node.modified_at}), 16)
+                count += 1
+                if cursor_key is None or entry_key(node) > cursor_key:
+                    yield node
         with os.scandir(target_path) as directory_entries:
             entries = heapq.nsmallest(
                 limit + 1,
-                (
-                    entry
-                    for entry in directory_entries
-                    if cursor_key is None or entry_key(entry) > cursor_key
-                ),
+                observed_entries(directory_entries),
                 key=entry_key,
             )
         page = entries[:limit]
         next_cursor = (
-            self._encode_directory_cursor(entry_key(page[-1]))
+            entry_key(page[-1])
             if len(entries) > limit and page
             else None
         )
         return (
-            [self._entry_to_file_node(entry, display_path, scope=scope) for entry in page],
+            page,
             next_cursor,
+            digest({"count": count, "members": f"{fingerprint:064x}"}),
         )
 
-    @staticmethod
-    def _encode_directory_cursor(key: tuple[bool, str, str]) -> str:
-        raw = json.dumps(key, ensure_ascii=False, separators=(",", ":")).encode()
-        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    def _directory_observation(self, key: WorkspaceDirectoryKeyDTO, target: Path):
+        if target.is_symlink() or target.resolve() != target or not target.is_dir():
+            return key, str(target), digest({"directory_missing": True}), False
+        _items, _cursor, signature = self._scan_directory(target, key.path, key.scope, 0, None)
+        return key, str(target), signature, True
 
-    @staticmethod
-    def _decode_directory_cursor(cursor: str) -> tuple[bool, str, str]:
-        try:
-            padded = cursor + "=" * (-len(cursor) % 4)
-            raw = base64.urlsafe_b64decode(padded.encode()).decode()
-            value = json.loads(raw)
-        except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise ValueError("目录分页游标格式错误") from error
-        if (
-            not isinstance(value, list)
-            or len(value) != 3
-            or not isinstance(value[0], bool)
-            or not isinstance(value[1], str)
-            or not isinstance(value[2], str)
-        ):
-            raise ValueError("目录分页游标内容错误")
-        return value[0], value[1], value[2]
+    def _operation_snapshot(self, key: WorkspaceDirectoryKeyDTO, target: Path):
+        limit = self._config_service.get_workspace_file_default_limit()
+        items, after, signature = self._scan_directory(target, key.path, key.scope, limit, None)
+        return {"root_path": self.root_path if key.scope == "workspace" else key.root,
+                "path": key.path, "items": [item.model_dump() for item in items],
+                "limit": limit, "after": after}, signature
 
     def _normalize_workspace_relative_path(self, path: str) -> str:
         normalized = path.replace("\\", "/").strip()
@@ -468,198 +512,30 @@ class WorkspaceService:
 
         return await self.get_file_content(path=relative_path, scope=scope)
 
-    async def create_file_entry(
-        self,
-        *,
-        directory_path: str,
-        scope: WorkspaceFileScope,
-        name: str,
-        kind: str,
-    ) -> WorkspaceFileListDTO:
-        target_directory, display_path = self._resolve_file_tree_path(
-            directory_path,
-            scope=scope,
-            allow_empty=True,
-        )
-        if not target_directory.exists():
-            raise FileNotFoundError(f"目标目录不存在: {display_path or '.'}")
-        if not target_directory.is_dir():
-            raise NotADirectoryError(f"目标路径不是目录: {display_path or '.'}")
-        entry_name = self._validate_entry_name(name)
-        target = target_directory / entry_name
-        if target.exists() or target.is_symlink():
-            raise FileExistsError(f"目标已存在: {target}")
-        if kind == "directory":
-            target.mkdir()
-        elif kind == "file":
-            with target.open("x", encoding="utf-8"):
-                pass
-        else:
-            raise ValueError(f"不支持的文件条目类型: {kind}")
-        return await self.list_files(path=display_path, scope=scope)
+    async def create_file_entry(self, *, directory_path: str, scope: WorkspaceFileScope,
+                                name: str, kind: str, intent: WorkspaceFileMutationIntentDTO,
+                                actor: str) -> WorkspaceFileOperationReceiptDTO:
+        return await self.file_operations.enqueue(kind="create", directory_path=directory_path, scope=scope,
+                                                  intent=intent, actor=actor, data={"name": name, "kind": kind})
 
-    async def paste_file_entries(
-        self,
-        *,
-        directory_path: str,
-        scope: WorkspaceFileScope,
-        source_paths: list[str],
-    ) -> WorkspaceFileListDTO:
-        target_directory, display_path = self._resolve_file_tree_path(
-            directory_path,
-            scope=scope,
-            allow_empty=True,
-        )
-        if not target_directory.exists():
-            raise FileNotFoundError(f"目标目录不存在: {display_path or '.'}")
-        if not target_directory.is_dir():
-            raise NotADirectoryError(f"目标路径不是目录: {display_path or '.'}")
+    async def paste_file_entries(self, *, directory_path: str, scope: WorkspaceFileScope,
+                                 source_paths: list[str], intent: WorkspaceFileMutationIntentDTO,
+                                 actor: str) -> WorkspaceFileOperationReceiptDTO:
+        return await self.file_operations.enqueue(kind="paste", directory_path=directory_path, scope=scope,
+                                                  intent=intent, actor=actor, data={"source_paths": source_paths})
 
-        copy_pairs: list[tuple[Path, Path]] = []
-        destinations: set[Path] = set()
-        for raw_source_path in source_paths:
-            source = Path(raw_source_path).expanduser()
-            if not source.is_absolute():
-                raise ValueError(f"粘贴来源必须是绝对路径: {raw_source_path}")
-            if source.is_symlink():
-                raise ValueError(f"暂不支持粘贴符号链接: {source}")
-            source = source.resolve()
-            if not source.exists():
-                raise FileNotFoundError(f"粘贴来源不存在: {source}")
-            if not source.is_file() and not source.is_dir():
-                raise ValueError(f"粘贴来源不是文件或目录: {source}")
-            if not source.name:
-                raise ValueError(f"不能粘贴文件系统根目录: {source}")
-            if source.is_dir() and target_directory.is_relative_to(source):
-                raise ValueError(f"不能把目录粘贴到自身内部: {source}")
-            destination = target_directory / source.name
-            if destination in destinations:
-                raise FileExistsError(f"多个粘贴来源具有相同名称: {source.name}")
-            if destination.exists() or destination.is_symlink():
-                raise FileExistsError(f"粘贴目标已存在: {destination}")
-            destinations.add(destination)
-            copy_pairs.append((source, destination))
+    async def copy_file_entry(self, *, directory_path: str, scope: WorkspaceFileScope,
+                              source_path: str, source_scope: WorkspaceFileScope,
+                              intent: WorkspaceFileMutationIntentDTO, actor: str) -> WorkspaceFileOperationReceiptDTO:
+        return await self.file_operations.enqueue(kind="copy", directory_path=directory_path, scope=scope,
+                                                  intent=intent, actor=actor,
+                                                  data={"source_path": source_path, "source_scope": source_scope})
 
-        for source, destination in copy_pairs:
-            if source.is_dir():
-                shutil.copytree(source, destination)
-            else:
-                shutil.copy2(source, destination)
-        return await self.list_files(path=display_path, scope=scope)
-
-    async def copy_file_entry(
-        self,
-        *,
-        directory_path: str,
-        scope: WorkspaceFileScope,
-        source_path: str,
-        source_scope: WorkspaceFileScope,
-    ) -> WorkspaceFileListDTO:
-        source, source_display_path = self._resolve_file_tree_path(
-            source_path,
-            scope=source_scope,
-            allow_empty=False,
-        )
-        if source.is_symlink():
-            raise ValueError(f"暂不支持复制符号链接: {source_display_path}")
-        if not source.exists():
-            raise FileNotFoundError(f"复制来源不存在: {source_display_path}")
-        if not source.is_file() and not source.is_dir():
-            raise ValueError(f"复制来源不是文件或目录: {source_display_path}")
-
-        target_directory, display_path = self._resolve_file_tree_path(
-            directory_path,
-            scope=scope,
-            allow_empty=True,
-        )
-        if not target_directory.exists():
-            raise FileNotFoundError(f"目标目录不存在: {display_path or '.'}")
-        if not target_directory.is_dir():
-            raise NotADirectoryError(f"目标路径不是目录: {display_path or '.'}")
-        if source.is_dir() and target_directory.is_relative_to(source):
-            raise ValueError(f"不能把目录复制到自身内部: {source_display_path}")
-
-        destination = target_directory / source.name
-        if destination.exists() or destination.is_symlink():
-            raise FileExistsError(f"复制目标已存在: {destination}")
-
-        def copy_entry() -> None:
-            staging_root = Path(
-                tempfile.mkdtemp(prefix=f".{source.name}-copy-", dir=target_directory)
-            )
-            staged = staging_root / source.name
-            try:
-                if source.is_dir():
-                    shutil.copytree(source, staged)
-                else:
-                    shutil.copy2(source, staged)
-                os.replace(staged, destination)
-            finally:
-                shutil.rmtree(staging_root, ignore_errors=True)
-
-        await asyncio.to_thread(copy_entry)
-        return await self.list_files(path=display_path, scope=scope)
-
-    async def upload_file_entries(
-        self,
-        *,
-        directory_path: str,
-        scope: WorkspaceFileScope,
-        entries: list[tuple[str, BinaryIO]],
-    ) -> WorkspaceFileListDTO:
-        target_directory, display_path = self._resolve_file_tree_path(
-            directory_path,
-            scope=scope,
-            allow_empty=True,
-        )
-        if not target_directory.exists():
-            raise FileNotFoundError(f"上传目标目录不存在: {display_path or '.'}")
-        if not target_directory.is_dir():
-            raise NotADirectoryError(f"上传目标路径不是目录: {display_path or '.'}")
-        if not entries:
-            raise ValueError("上传内容不能为空")
-
-        destinations: list[tuple[Path, BinaryIO]] = []
-        unique_destinations: set[Path] = set()
-        for relative_path, stream in entries:
-            normalized = relative_path.replace("\\", "/").strip("/")
-            parts = normalized.split("/") if normalized else []
-            if not parts or any(part in {"", ".", ".."} for part in parts):
-                raise ValueError(f"上传文件相对路径无效: {relative_path}")
-            destination = safe_join(target_directory, normalized)
-            if destination in unique_destinations:
-                raise FileExistsError(f"上传内容包含重复路径: {normalized}")
-            if destination.exists() or destination.is_symlink():
-                raise FileExistsError(f"上传目标已存在: {destination}")
-            unique_destinations.add(destination)
-            destinations.append((destination, stream))
-
-        created_files: list[Path] = []
-        created_directories: list[Path] = []
-
-        def write_entries() -> None:
-            try:
-                for destination, stream in destinations:
-                    missing_parents: list[Path] = []
-                    parent = destination.parent
-                    while parent != target_directory and not parent.exists():
-                        missing_parents.append(parent)
-                        parent = parent.parent
-                    for missing_parent in reversed(missing_parents):
-                        missing_parent.mkdir()
-                        created_directories.append(missing_parent)
-                    with destination.open("xb") as output:
-                        created_files.append(destination)
-                        shutil.copyfileobj(stream, output)
-            except BaseException:
-                for created_file in reversed(created_files):
-                    created_file.unlink(missing_ok=True)
-                for created_directory in reversed(created_directories):
-                    created_directory.rmdir()
-                raise
-
-        await asyncio.to_thread(write_entries)
-        return await self.list_files(path=display_path, scope=scope)
+    async def upload_file_entries(self, *, directory_path: str, scope: WorkspaceFileScope,
+                                  entries: list[tuple[str, BinaryIO]], intent: WorkspaceFileMutationIntentDTO,
+                                  actor: str) -> WorkspaceFileOperationReceiptDTO:
+        return await self.file_operations.enqueue(kind="upload", directory_path=directory_path, scope=scope,
+                                                  intent=intent, actor=actor, data={}, uploads=entries)
 
     def prepare_file_download(
         self,

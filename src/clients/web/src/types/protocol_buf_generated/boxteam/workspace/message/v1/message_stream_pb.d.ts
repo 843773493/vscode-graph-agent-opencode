@@ -1408,6 +1408,11 @@ export declare type MessageStreamEvent = Message<"boxteam.workspace.message.v1.M
   toolAttemptId?: string | undefined;
 
   /**
+   * @generated from field: string thread_id = 16;
+   */
+  threadId: string;
+
+  /**
    * @generated from oneof boxteam.workspace.message.v1.MessageStreamEvent.payload
    */
   payload: {

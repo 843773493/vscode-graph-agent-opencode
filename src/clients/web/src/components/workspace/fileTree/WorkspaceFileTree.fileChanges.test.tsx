@@ -51,6 +51,10 @@ function installWindow(port: number): DocumentedWindow {
 }
 
 function apiResponse(data: unknown): Response {
+  if (data && typeof data === "object" && "items" in data && "path" in data) {
+    data = { directory_key: { workspace_id: "backend_files", scope: "workspace", root: "/w/project", path: data.path },
+      directory_revision: 1, ...data };
+  }
   return Response.json({
     code: 0,
     message: "ok",
@@ -178,7 +182,7 @@ function dispatchDelete(handle: Harness, absolutePath: string): void {
   act(() => {
     handle.window.dispatch(new CustomEvent<WorkspaceFileChangesEventDetail>(
       WORKSPACE_FILE_CHANGES_EVENT,
-      { detail: { workspaceId: "gw_changes", changes: [{ kind: "delete", path: absolutePath }] } },
+      { detail: { workspaceId: "gw_changes", directories: [], snapshots: [], changes: [{ kind: "delete", path: absolutePath }] } },
     ));
   });
   handle.deletedPaths.add(absolutePath.replace("/w/project/", ""));

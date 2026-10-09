@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 
 from app.abstractions.job_service import JobServiceProtocol
-from app.api.canonical_params import CanonicalSessionId
+from app.api.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.api.deps import (
     get_attachment_blob_store,
     get_job_service,
@@ -200,6 +200,27 @@ async def create_message_and_run(
     except JobAdmissionClosedError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     return APIResponse(message="ok", data=result, request_id=request_id)
+
+
+@router.post(
+    "/{session_id}/threads/{thread_id}/messages",
+    response_model=APIResponse[MessageRunAccepted],
+    summary="向精确 thread 发送消息并创建任务",
+)
+async def create_thread_message_and_run(
+    session_id: CanonicalSessionId, thread_id: CanonicalThreadId, payload: MessageRunRequest,
+    _: Annotated[str, Depends(verify_local_token)], request_id: Annotated[str, Depends(get_request_id)],
+    session_orchestrator: Annotated[SessionOrchestrator, Depends(get_session_orchestrator)],
+):
+    try:
+        result = await session_orchestrator.create_message(session_id, payload, thread_id=thread_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except JobAdmissionClosedError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
 
 
 @router.post(

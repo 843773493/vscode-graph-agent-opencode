@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import shutil
 import sqlite3
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -30,6 +30,7 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
 from app.core.path_utils import catalog_provider_scope, get_session_path_resolver
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
@@ -86,24 +87,15 @@ def _configured_environment_names(config_paths: tuple[Path, ...]) -> set[str]:
     return names
 
 
-def _session_manifest(
-    session_dir: Path,
-    session_id: str,
+def _update_fixture_configuration(
+    resolver: SessionCatalogPathResolver,
     *,
     current_provider_id: str = "primary",
 ) -> None:
-    manifest_path = session_dir / "session.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest.update({
-        "session_id": session_id,
-        "title": "真实模型 128 Turn checkpoint 压测",
-        "title_source": "user",
-        "current_agent_id": "default",
-        "current_provider_id": current_provider_id,
-    })
-    manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+    """fixture 业务配置只写 catalog，身份 envelope 保持不可变。"""
+    resolver.catalog_store.update_session_configuration(
+        SESSION_ID, current_agent_id="default", current_provider_id=current_provider_id,
+        updated_at=datetime.fromisoformat(resolver.catalog_store.get_node(SESSION_ID).updated_at),
     )
 
 
@@ -304,7 +296,7 @@ def generate(
                 previous_rollout_backup = session_dir / f".rollout-backup-{uuid4().hex}"
                 shutil.copytree(rollout_dir, previous_rollout_backup)
             shutil.rmtree(rollout_dir)
-        _session_manifest(session_dir, SESSION_ID)
+        _update_fixture_configuration(resolver)
 
         config_service = ConfigService(
             workspace_root=workspace_root,
@@ -545,9 +537,8 @@ def generate(
             )
         if previous_rollout_backup is not None:
             shutil.rmtree(previous_rollout_backup)
-        _session_manifest(
-            session_dir,
-            SESSION_ID,
+        _update_fixture_configuration(
+            resolver,
             current_provider_id=last_provider_id,
         )
 

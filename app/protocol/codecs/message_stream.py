@@ -7,7 +7,7 @@ from typing import Any, cast
 from google.protobuf import json_format
 from google.protobuf.message import Message
 
-from app.protocol.canonical import validate_session_id
+from app.protocol.canonical import validate_session_id, validate_thread_id
 from app.protocol.codecs.json import message_to_json, timestamp_from_datetime
 from app.protocol.generated.boxteam.workspace.message.v1 import message_stream_pb2
 
@@ -129,9 +129,11 @@ def message_stream_to_proto(
     """把内部事件字典转换为严格的 v1 Protobuf 消息。"""
     # 2.1：wire 上的 session_id 必须过唯一 canonical 验证器（encode 边界）。
     validate_session_id(_required_string(value, "session_id"))
+    validate_thread_id(_required_string(value, "thread_id"))
     event = message_stream_pb2.MessageStreamEvent(
         event_id=_required_string(value, "event_id"),
         session_id=_required_string(value, "session_id"),
+        thread_id=_required_string(value, "thread_id"),
         turn_id=_required_string(value, "turn_id"),
         turn_stream_id=_required_string(value, "turn_stream_id"),
         event_seq=_required_int(value, "event_seq"),
@@ -212,6 +214,7 @@ def message_stream_to_json(
     result: dict[str, Any] = {
         "event_id": value.event_id,
         "session_id": value.session_id,
+        "thread_id": value.thread_id,
         "turn_id": value.turn_id,
         "turn_stream_id": value.turn_stream_id,
         "event_seq": value.event_seq,
@@ -297,7 +300,7 @@ def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str,
     if event_type == "stream.snapshot":
         snapshot = normalized.get("snapshot", normalized)
         if isinstance(snapshot, dict):
-            for envelope_field in ("session_id", "turn_id", "turn_stream_id", "job_id"):
+            for envelope_field in ("session_id", "thread_id", "turn_id", "turn_stream_id", "job_id"):
                 snapshot.pop(envelope_field, None)
             if isinstance(snapshot.get("stream_status"), str):
                 snapshot["stream_status"] = enum_maps["status"].get(

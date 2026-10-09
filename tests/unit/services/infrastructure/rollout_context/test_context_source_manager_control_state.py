@@ -244,7 +244,7 @@ def test_different_threads_do_not_share_control_state(
     seal_sources,
 ) -> None:
     main_owner = source_seal_case.owner
-    resolver = get_session_path_resolver(control_state_port._storage.sessions_dir)
+    resolver = get_session_path_resolver(control_state_port._storage.storage.sessions_dir)
     session_root = resolver.resolve_session_node(main_owner.session_id)
     with closing(SessionControlStore(session_root / "session-control.sqlite")) as control:
         key = "control-state-child"

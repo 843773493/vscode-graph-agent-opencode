@@ -5,6 +5,13 @@ import {
   uploadWorkspaceFileEntries,
 } from "./workspaceFilesystem";
 
+import type { WorkspaceFileMutationIntent } from "../types/backend";
+
+const intent: WorkspaceFileMutationIntent = { client_operation_id: "op_00000000000040008000000000000001",
+  client_sequence: 1, expected_directory_revision: 1, depends_on: [], created_by_operation_id: null,
+  relative_child_path: "", directory_revision_from_operation_id: null, client_ref: "file-unit",
+  directory_key: { workspace_id: "backend_files", scope: "workspace", root: "/repo", path: "dest" } };
+
 const originalFetch = globalThis.fetch;
 
 /** mock fetch：第一次返回 Gateway 本地凭据，之后返回给定的 API 响应。 */
@@ -29,7 +36,8 @@ afterEach(() => {
 describe("工作区文件列表 API 的 items 契约", () => {
   test("合法空数组正常返回并完成路径编码", async () => {
     installFetchMock(() => Response.json({
-      data: { root_path: "/", path: "/repo", items: [] },
+      data: { root_path: "/", path: "/repo", items: [],
+        directory_key: { workspace_id: "backend_files", scope: "workspace", root: "/", path: "/repo" }, directory_revision: 1 },
       request_id: "req-files-empty",
     }));
 
@@ -66,23 +74,23 @@ describe("批量文件操作的条目上限前置校验", () => {
       return Response.json({ data: { token: "t" } });
     }, { preconnect: originalFetch.preconnect });
     const files = Array.from({ length: 101 }, (_, index) =>
-      new File(["x"], `f${index}.txt`));
+      ({ file: new File(["x"], `f${index}.txt`), name: `f${index}.txt`, relativePath: `f${index}.txt` }));
 
-    await expect(uploadWorkspaceFileEntries(48_320, "dest", files)).rejects
+    await expect(uploadWorkspaceFileEntries(48_320, "dest", files, intent)).rejects
       .toThrow("上传一次最多 100 项，当前 101 项，请分批操作");
     expect(requests).toBe(0);
   });
 
   test("上传恰好 100 个文件仍放行", async () => {
     installFetchMock(() => Response.json({
-      data: { root_path: "/", path: "dest", items: [] },
+      data: { operation_id: intent.client_operation_id, state: "queued", effect: "none" },
       request_id: "req-files-upload-100",
     }));
     const files = Array.from({ length: 100 }, (_, index) =>
-      new File(["x"], `f${index}.txt`));
+      ({ file: new File(["x"], `f${index}.txt`), name: `f${index}.txt`, relativePath: `f${index}.txt` }));
 
-    await expect(uploadWorkspaceFileEntries(48_321, "dest", files)).resolves
-      .toMatchObject({ path: "dest" });
+    await expect(uploadWorkspaceFileEntries(48_321, "dest", files, intent)).resolves
+      .toMatchObject({ operation_id: intent.client_operation_id, state: "queued" });
   });
 
   test("粘贴超过 100 个来源时在发请求前失败并说明分批", async () => {
@@ -91,10 +99,10 @@ describe("批量文件操作的条目上限前置校验", () => {
       requests += 1;
       return Response.json({ data: { token: "t" } });
     }, { preconnect: originalFetch.preconnect });
-    const sourcePaths = Array.from({ length: 101 }, (_, index) => `/tmp/f${index}`);
+    const sourcePaths = Array.from({ length: 101 }, (_, index) => `/clipboard/f${index}`);
 
     await expect(
-      pasteWorkspaceFileEntries(48_322, "dest", { source_paths: sourcePaths }),
+      pasteWorkspaceFileEntries(48_322, "dest", { source_paths: sourcePaths, intent }),
     ).rejects.toThrow("粘贴一次最多 100 项，当前 101 项，请分批操作");
     expect(requests).toBe(0);
   });

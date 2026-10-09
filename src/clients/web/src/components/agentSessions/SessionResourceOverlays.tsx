@@ -352,12 +352,13 @@ export default function SessionResourceOverlays({
           return;
         }
         if (resourceDialog.kind === "create_session_folder") {
-          await explorer.createSessionFolder(
+          const outcome = await explorer.createSessionFolder(
             resourceDialog.workspaceId,
             value,
             resourceDialog.folderId,
           );
-          onStatusChange(`已创建文件夹 ${value}`);
+          onStatusChange(outcome === "unknown"
+            ? `文件夹 ${value} 状态待确认` : `新建文件夹 ${value} 已受理，等待提交`);
           return;
         }
         if (resourceDialog.kind === "rename_session_folder") {

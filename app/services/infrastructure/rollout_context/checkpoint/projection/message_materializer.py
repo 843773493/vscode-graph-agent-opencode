@@ -6,20 +6,13 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, BinaryIO
+from typing import TYPE_CHECKING
 
 from app.domain.itemized.records import CanonicalItemRecord
-from app.services.infrastructure.rollout_context.storage.catalog.integrity import (
-    validate_catalog_projection,
-)
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     read_message_group,
-)
-from app.services.infrastructure.rollout_context.storage.serialization import (
-    canonical_json_line as _v2_json_line,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
@@ -59,11 +52,7 @@ class RolloutMessageMaterializerMixin:
             return []
         values: list[tuple[tuple[CanonicalItemRecord, ...], dict[str, object]]] = []
         if connection is None:
-            with self._connect(
-                thread_id,
-                checkpoint_ns,
-                session_id=session_id,
-            ) as owned_connection:
+            with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as owned_connection:
                 return self._read_messages(
                     session_id,
                     thread_id,
@@ -82,7 +71,7 @@ class RolloutMessageMaterializerMixin:
             (session_id, *sequence_values),
         ).fetchall()
         found_sequences: set[int] = set()
-        with self.jsonl_path(
+        with self._storage.jsonl_path(
             session_id,
             checkpoint_ns,
             thread_id=thread_id,
@@ -127,10 +116,10 @@ class RolloutMessageMaterializerMixin:
                     stream,
                     offset=offset,
                     length=length,
-                    read_item=self._read_v2_item_at,
+                    read_item=self._storage._read_v2_item_at,
                 )
                 item = items[-1]
-                message = self._codec().project_message(items)
+                message = self._storage._codec().project_message(items)
                 item_message_id = (item.projection_identity.projection_message_id if item.projection_identity is not None else None)
                 item_message_id = strict_optional_text(
                     item_message_id,
@@ -170,85 +159,6 @@ class RolloutMessageMaterializerMixin:
                 if not all(item.item_id in superseded for item in group)]
 
 
-    @staticmethod
-    def _read_v2_item_at(
-        connection: sqlite3.Connection,
-        stream: BinaryIO,
-        *,
-        sequence: int,
-        offset: int,
-        length: int,
-    ) -> CanonicalItemRecord:
-        """从 catalog 指向的 JSONL line 读取并校验唯一 canonical item。
-
-        ``messages`` 只是 LangGraph 的投影定位表。任何 history/checkpoint
-        恢复都必须先通过它定位 item，再从 JSONL/catalog 校验 identity、hash
-        和不可变 envelope；envelope 不允许包含 message projection。
-        """
-        sequence = strict_non_negative_int(sequence, field="v2 item sequence")
-        offset = strict_non_negative_int(offset, field="v2 item offset")
-        length = strict_non_negative_int(length, field="v2 item length")
-        if length == 0:
-            raise RuntimeError(
-                f"v2 item locator 非法: sequence={sequence}, offset={offset}, length={length}"
-            )
-        stream.seek(offset)
-        raw = stream.read(length)
-        if len(raw) != length:
-            raise RuntimeError(f"v2 item locator 超出 JSONL: sequence={sequence}")
-        try:
-            envelope = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise RuntimeError(
-                f"v2 item envelope 无法解码: sequence={sequence}"
-            ) from error
-        if not isinstance(envelope, Mapping):
-            raise TypeError(f"v2 item envelope 非 object: sequence={sequence}")
-        if raw != _v2_json_line(envelope):
-            raise RuntimeError(
-                f"v2 item envelope 不是 canonical JCS line: sequence={sequence}"
-            )
-        item = CanonicalItemRecord.from_dict(envelope)
-        catalog = connection.execute(
-            "SELECT item_sequence, content_hash, jsonl_offset, jsonl_length, projection_manifest_json, tool_call_id FROM item_catalog WHERE item_id = ?",
-            (item.item_id,),
-        ).fetchone()
-        if catalog is None:
-            raise RuntimeError(f"v2 item 缺少 item_catalog: {item.item_id}")
-        catalog_sequence = strict_non_negative_int(
-            catalog[0], field=f"item_catalog.item_sequence: {item.item_id}"
-        )
-        catalog_offset = strict_non_negative_int(
-            catalog[2], field=f"item_catalog.jsonl_offset: {item.item_id}"
-        )
-        catalog_length = strict_non_negative_int(
-            catalog[3], field=f"item_catalog.jsonl_length: {item.item_id}"
-        )
-        if catalog_length == 0:
-            raise RuntimeError(
-                f"item_catalog.jsonl_length 必须大于 0: {item.item_id}"
-            )
-        if (
-            catalog_sequence != sequence
-            or strict_text(catalog[1], field="item_catalog.content_hash")
-            != item.content_hash
-            or catalog_offset != offset
-            or catalog_length != length
-        ):
-            raise RuntimeError(
-                f"v2 item catalog 与 JSONL locator/hash 不一致: {item.item_id}"
-            )
-        relations = connection.execute(
-            "SELECT canonical_relation_ordinal, relation, source_ref, target_ref "
-            "FROM item_relations WHERE canonical_item_id = ? ORDER BY canonical_relation_ordinal",
-            (item.item_id,),
-        ).fetchall()
-        validate_catalog_projection(
-            item, projection_manifest_json=strict_text(catalog[4], field="item_catalog.projection_manifest_json"),
-            tool_call_id=strict_optional_text(catalog[5], field="item_catalog.tool_call_id"),
-            relation_rows=relations,
-        )
-        return item
 
 
     @staticmethod
@@ -311,73 +221,48 @@ class RolloutMessageMaterializerMixin:
     ) -> list[object]:
         session_id = strict_text(session_id, field="materialize_messages.session_id")
         thread_id = strict_text(thread_id, field="materialize_messages.thread_id")
-        if snapshot is not None:
-            if (
-                snapshot.session_id != session_id
-                or snapshot.thread_id != thread_id
-                or snapshot.checkpoint_ns != checkpoint_ns
-            ):
-                raise ValueError("materialize_messages snapshot 与目标 rollout 不一致")
-            self._require_v2_runtime(self._snapshot_connection(snapshot))
-        else:
-            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-            with self._connect(
-                thread_id,
-                checkpoint_ns,
-                session_id=session_id,
-                read_only=True,
-            ) as check_connection:
-                self._require_v2_runtime(check_connection)
-        connection = (
-            self._snapshot_connection(snapshot) if snapshot is not None else None
-        )
-        ranges = tuple(context_ranges or ())
-        if ranges:
-            sequences = self._view_message_sequences(
-                thread_id,
-                checkpoint_ns,
-                ranges[-1][0],
-                set(),
-                connection=connection,
-            )
-        else:
-            if connection is None:
-                with self._connect(
+        with self._storage.read_connection(
+            session_id, thread_id, checkpoint_ns, snapshot=snapshot,
+        ) as connection:
+            ranges = tuple(context_ranges or ())
+            if ranges:
+                sequences = self._storage._view_message_sequences(
                     thread_id,
                     checkpoint_ns,
-                    session_id=session_id,
-                ) as owned_connection:
-                    row = self._checkpoint_row(owned_connection, checkpoint_ns, None)
-            else:
-                row = self._checkpoint_row(connection, checkpoint_ns, None)
-            sequences = (
-                self._view_message_sequences(
-                    thread_id,
-                    checkpoint_ns,
-                    strict_text(row[6], field="checkpoints.view_id"),
+                    ranges[-1][0],
                     set(),
                     connection=connection,
                 )
-                if row
-                else []
-            )
-        return [
-            self._codec().from_dict(value)
-            for value in self._read_messages(
-                session_id,
-                thread_id,
-                checkpoint_ns,
-                sequences,
-                connection=connection,
-            )
-        ]
+            else:
+                row = self._checkpoint_row(connection, checkpoint_ns, None)
+                sequences = (
+                    self._storage._view_message_sequences(
+                        thread_id,
+                        checkpoint_ns,
+                        strict_text(row[6], field="checkpoints.view_id"),
+                        set(),
+                        connection=connection,
+                    )
+                    if row
+                    else []
+                )
+            return [
+                self._storage._codec().from_dict(value)
+                for value in self._read_messages(
+                    session_id,
+                    thread_id,
+                    checkpoint_ns,
+                    sequences,
+                    connection=connection,
+                )
+            ]
 
 
     def resolve_context_chain_ranges(
         self, snapshot: RolloutReadSnapshot, message_sequence: int
     ) -> tuple[tuple[str, int, int], ...]:
-        connection = self._snapshot_connection(snapshot)
-        self._require_v2_runtime(connection)
+        connection = self._storage._snapshot_connection(snapshot)
+        self._storage._require_v2_runtime(connection)
         row = connection.execute(
             "SELECT c.view_id, c.message_sequence, cv.control_sequence "
             "FROM checkpoints AS c LEFT JOIN context_views AS cv ON cv.view_id = c.view_id "
@@ -414,11 +299,8 @@ class RolloutMessageMaterializerMixin:
         view_id: str,
     ) -> None:
         """校验 context view 父链、jump table 和消息范围，发现损坏立即失败。"""
-        session_id = self._session_id_from_owner_scope(thread_id)
-        self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-        with self._connect(
-            thread_id, checkpoint_ns, session_id=session_id
-        ) as connection:
+        session_id = self._storage._session_id_from_owner_scope(thread_id)
+        with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
             self._validate_context_view_chain_connection(connection, view_id)
 
 
@@ -510,3 +392,11 @@ class RolloutMessageMaterializerMixin:
                 raise RuntimeError(
                     f"context view range 引用不存在消息: view={view_id}, start={start}, end={end}"
                 )
+
+    def decode_indexed_message(
+        self, value: object, *, summary_only: bool = False
+    ) -> object:
+        del summary_only
+        if not isinstance(value, dict):
+            raise TypeError("rollout message 必须是对象")
+        return self._storage._codec().from_dict(value)

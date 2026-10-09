@@ -66,10 +66,10 @@ export type ControlAction =
   | "append_instruction"
   | "retry";
 
-export type ChildThreadStatus = "pending" | "running" | "failed";
+export type ChildThreadStatus = "pending" | "running" | "completed" | "failed";
 
 export function parseChildThreadStatus(value: unknown): ChildThreadStatus {
-  if (value === "pending" || value === "running" || value === "failed") {
+  if (value === "pending" || value === "running" || value === "completed" || value === "failed") {
     return value;
   }
   throw new Error(`child thread status 协议值无效: ${String(value)}`);
@@ -85,6 +85,9 @@ export type ChildThreadSummary = Omit<
   | "collaboration_state"
   | "admission_state"
   | "status"
+  | "runtime"
+  | "report_execution_id"
+  | "report_status"
 > & {
   created_at: string;
   delegation_id?: string | null;
@@ -94,6 +97,12 @@ export type ChildThreadSummary = Omit<
   collaboration_state?: string | null;
   admission_state?: string | null;
   status: ChildThreadStatus;
+  runtime?: Omit<WorkspaceProtocol.ChildThreadRuntimeDTO, "last_activity_at" | "idle_deadline"> & {
+    last_activity_at: string | null;
+    idle_deadline: string | null;
+  } | null;
+  report_execution_id?: string | null;
+  report_status?: InternalExecutionStatus | null;
 };
 export type ChildThreadList = Omit<WorkspaceProtocol.ChildThreadListDTO, "items"> & {
   items: ChildThreadSummary[];
@@ -475,7 +484,7 @@ export type SessionResource = Omit<WorkspaceProtocol.SessionResourceDTO, "kind" 
   updated_at: string;
   started_at?: string | null;
   ended_at?: string | null;
-  available_actions: ("pause" | "resume" | "cancel" | "delete")[];
+  available_actions: ("pause" | "resume" | "cancel" | "delete" | "reconcile")[];
   metadata: JsonObject;
 };
 export type SessionResourceList = Omit<WorkspaceProtocol.SessionResourceListDTO, "items"> & {
@@ -523,7 +532,7 @@ export type TurnDetail = Omit<WorkspaceProtocol.TurnDetailDTO, "created_at" | "u
   items?: TraceEventDTO[];
   activity_stats?: TurnActivityStats;
 };
-export type TurnHistoryLoadRequest = Omit<WorkspaceProtocol.TurnHistoryLoadRequest, "turn_ids" | "include"> & {
+export type TurnHistoryLoadRequest = Omit<WorkspaceProtocol.TurnHistoryLoadRequest, "turn_ids" | "tool_call_ids" | "include"> & {
   turn_ids?: string[] | null;
   tool_call_ids?: string[] | null;
   include?: string[];
@@ -653,9 +662,13 @@ export type WorkspaceInfo = Omit<WorkspaceProtocol.WorkspaceDTO, "project_type" 
 export type WorkspaceFileContent = Omit<WorkspaceProtocol.WorkspaceFileContentDTO, "modified_at"> & {
   modified_at?: string | null;
 };
-export type WorkspaceFileStreamBatch = WorkspaceProtocol.WorkspaceFileChangeBatchDTO;
+export type WorkspaceFileStreamBatch = Omit<WorkspaceProtocol.WorkspaceFileChangeBatchDTO, "directories" | "snapshots"> & {
+  directories: WorkspaceDirectoryRevision[];
+  snapshots: WorkspaceFileList[];
+};
 export type WorkspaceFileStreamChange = WorkspaceProtocol.WorkspaceFileChangeDTO;
-export type WorkspaceFileList = Omit<WorkspaceProtocol.WorkspaceFileListDTO, "items" | "truncated" | "limit" | "next_cursor"> & {
+export type WorkspaceFileList = Omit<WorkspaceProtocol.WorkspaceFileListDTO, "items" | "truncated" | "limit" | "next_cursor" | "directory_key"> & {
+  directory_key: WorkspaceProtocol.WorkspaceDirectoryKeyDTO;
   items?: WorkspaceFileNode[];
   truncated?: boolean;
   limit?: number;
@@ -667,10 +680,25 @@ export type WorkspaceFileNode = Omit<WorkspaceProtocol.WorkspaceFileNodeDTO, "ha
   modified_at?: string | null;
 };
 export type WorkspaceFileReveal = WorkspaceProtocol.WorkspaceFileRevealDTO;
-export type WorkspaceFileCopyRequest = WorkspaceProtocol.WorkspaceFileCopyRequest;
+export type WorkspaceDirectoryKey = WorkspaceProtocol.WorkspaceDirectoryKeyDTO;
+export type WorkspaceDirectoryRevision = Omit<WorkspaceProtocol.WorkspaceDirectoryRevisionDTO, "directory_key"> & { directory_key: WorkspaceDirectoryKey };
+export type WorkspaceFileMutationIntent = Omit<WorkspaceProtocol.WorkspaceFileMutationIntentDTO,
+  "directory_key" | "expected_directory_revision" | "directory_revision_from_operation_id" | "created_by_operation_id"> & {
+  directory_key: WorkspaceDirectoryKey;
+  expected_directory_revision?: number | null;
+  directory_revision_from_operation_id?: string | null;
+  created_by_operation_id?: string | null;
+};
+export type WorkspaceFileOperationReceipt = Omit<WorkspaceProtocol.WorkspaceFileOperationReceiptDTO, "state" | "directories" | "snapshots"> & {
+  state: import("../api/session/sessionCatalogOperations").NavigationMutationState;
+  directories: WorkspaceDirectoryRevision[];
+  snapshots: WorkspaceFileList[];
+};
+export type WorkspaceFileOperationStatus = Omit<WorkspaceProtocol.WorkspaceFileOperationStatusDTO, "operations"> & { operations: WorkspaceFileOperationReceipt[] };
+export type WorkspaceFileCopyRequest = Omit<WorkspaceProtocol.WorkspaceFileCopyRequest, "intent"> & { intent: WorkspaceFileMutationIntent };
 export type WorkspaceFileUpdateRequest = WorkspaceProtocol.WorkspaceFileUpdateRequest;
-export type WorkspaceFileCreateRequest = WorkspaceProtocol.WorkspaceFileCreateRequest;
-export type WorkspaceFilePasteRequest = WorkspaceProtocol.WorkspaceFilePasteRequest;
+export type WorkspaceFileCreateRequest = Omit<WorkspaceProtocol.WorkspaceFileCreateRequest, "intent"> & { intent: WorkspaceFileMutationIntent };
+export type WorkspaceFilePasteRequest = Omit<WorkspaceProtocol.WorkspaceFilePasteRequest, "intent"> & { intent: WorkspaceFileMutationIntent };
 export type WorkspaceFileWatchRequest = WorkspaceProtocol.WorkspaceFileWatchRequest;
 
 // 业务代码仍会使用 DTO 后缀；这些别名只保留命名兼容，实际结构统一来自本文件的协议适配类型。

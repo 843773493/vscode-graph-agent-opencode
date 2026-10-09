@@ -208,7 +208,7 @@ def test_owner_gc_removes_expired_file_and_leaves_unavailable_tombstone(
         detail={"value": "过期详情"},
         retention_days=0,
     )
-    saver._storage.register_context_plan_detail(record)
+    saver._storage.assemblies.register_context_plan_detail(record)
     target = _thread_node(detail_sessions, SESSION_ID) / record.relative_path
     assert target.is_file()
 
@@ -255,7 +255,7 @@ def test_detail_manifest_restore_rejects_coerced_or_unknown_values(
         visibility="internal",
         detail={"value": "safe"},
     )
-    saver._storage.register_context_plan_detail(record)
+    saver._storage.assemblies.register_context_plan_detail(record)
 
     with sqlite3.connect(
         _session_rollout(detail_sessions, SESSION_ID) / "index.sqlite"
@@ -340,8 +340,8 @@ def test_typed_record_and_registry_roundtrip(
         public_record.detail_id,
     )
     saver = RolloutCheckpointSaver(detail_sessions)
-    saver._storage.register_context_plan_detail(public_record)
-    restored = saver._storage.get_context_plan_detail(
+    saver._storage.assemblies.register_context_plan_detail(public_record)
+    restored = saver._storage.assemblies.get_context_plan_detail(
         SESSION_ID, ref.thread_id, detail_ref=ref
     )
     assert restored["detail_ref"] == ref
@@ -684,7 +684,7 @@ def test_publish_failure_preserves_existing_target(
     outside.parent.mkdir()
     outside.write_bytes(b"existing-owner-content")
 
-    def fail_publish(ref, raw):
+    def fail_publish(ref, raw, *, creation_record=None):
         attempted.append(ref)
         target = detail_store._files.path(ref, create=True)
         if failure == "collision":
@@ -693,7 +693,7 @@ def test_publish_failure_preserves_existing_target(
             target.symlink_to(outside)
         else:
             raise OSError("injected publication failure")
-        return original_publish(ref, raw)
+        return original_publish(ref, raw, creation_record=creation_record)
 
     monkeypatch.setattr(detail_store._files, "publish", fail_publish)
     with pytest.raises((DetailUnavailableError, OSError)):

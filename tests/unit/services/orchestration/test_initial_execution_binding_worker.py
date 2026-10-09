@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import json
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from contextlib import closing
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -103,6 +104,83 @@ def make_worker(
         claim_generation=1,
         binder=binder,
     )
+
+
+@pytest.fixture
+def two_pending_intents(store: SessionControlStore):
+    first = prepare_published_intent(store)
+    created_at = DEFAULT_CREATED_AT + timedelta(seconds=1)
+    store.create_or_get_thread_creation_record(
+        idempotency_key="key-2", initial_state="running", preimage_hash="b" * 64,
+        graph_binding=TEST_THREAD_GRAPH_BINDING_JSON, capability_profile='{"tools":["read_file"]}',
+        created_at=created_at, thread_id=thread_id_at(created_at),
+        task_seed='{"task":"第二件事"}', task_reference=None,
+    )
+    store.freeze_thread_creation_artifact_manifest("key-2", artifact_manifest="{}", artifact_manifest_hash="d" * 64)
+    store.publish_thread_creation_record("key-2", session_id=first.session_id)
+    return first, store.get_initial_execution_intent("key-2")
+
+
+def test_partial_round_failure_keeps_other_binding_and_cold_next_round_recovers(
+    store: SessionControlStore, two_pending_intents,
+) -> None:
+    first, second = two_pending_intents
+    seen = []
+
+    def partial(target: InitialExecutionBindingTarget) -> InitialExecutionBindOutcome:
+        seen.append(target.intent.admission_idempotency_key)
+        if target.intent.admission_idempotency_key == first.admission_idempotency_key:
+            raise RuntimeError("首项暂时无法绑定")
+        return identity_binder(target)
+
+    worker = make_worker(store, binder=partial)
+    worker.start()
+    with pytest.raises(InitialExecutionBindingError, match="首项暂时无法绑定"):
+        worker.bind_pending_once()
+    assert seen == ["key-1", "key-2"]
+    assert store.get_initial_execution_intent("key-1").state == "pending"
+    assert store.get_initial_execution_intent("key-2").state == "bound"
+    worker.stop()
+    with closing(SessionControlStore(store.database_path)) as cold:
+        recovered_calls = []
+
+        def recover(target: InitialExecutionBindingTarget) -> InitialExecutionBindOutcome:
+            recovered_calls.append(target)
+            return identity_binder(target)
+
+        recovered = InitialExecutionBindingWorker(store=cold, claim_owner="worker-a", claim_generation=2, binder=recover)
+        recovered.start()
+        assert [attempt.admission_idempotency_key for attempt in recovered.bind_pending_once()] == ["key-1"]
+        assert recovered.bind_pending_once() == ()
+        assert [(target.execution_binding_id, target.job_id) for target in recovered_calls] == [
+            (first.execution_binding_id, first.job_id)]
+        assert cold.get_initial_execution_intent("key-2").job_id == second.job_id
+        assert cold.get_initial_execution_intent("key-1").claim_generation == 2
+        recovered.stop()
+
+
+def test_cold_higher_claim_generation_rejects_old_mark_before_single_binding(
+    store: SessionControlStore,
+) -> None:
+    first = prepare_published_intent(store)
+    store.claim_initial_execution_intent("key-1", claim_owner="worker-a", claim_generation=1)
+    with closing(SessionControlStore(store.database_path)) as cold:
+        seen = []
+
+        def bind(target: InitialExecutionBindingTarget) -> InitialExecutionBindOutcome:
+            with pytest.raises(RuntimeError, match="claim"):
+                store.mark_initial_execution_bound("key-1", execution_binding_id=first.execution_binding_id,
+                    job_id=first.job_id, claim_owner="worker-a", claim_generation=1)
+            seen.append((target.execution_binding_id, target.job_id))
+            return identity_binder(target)
+
+        recovered = InitialExecutionBindingWorker(store=cold, claim_owner="worker-a", claim_generation=2, binder=bind)
+        recovered.start()
+        assert [attempt.outcome for attempt in recovered.bind_pending_once()] == ["bound"]
+        assert recovered.bind_pending_once() == ()
+        assert seen == [(first.execution_binding_id, first.job_id)]
+        assert cold.get_initial_execution_intent("key-1").claim_generation == 2
+        recovered.stop()
 
 
 def test_bind_success_marks_bound(store: SessionControlStore) -> None:

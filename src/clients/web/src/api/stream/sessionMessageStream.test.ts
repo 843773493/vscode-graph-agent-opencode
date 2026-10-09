@@ -54,7 +54,7 @@ function streamResponse(chunks: string[]): Response {
 }
 
 function messageEvent(eventSeq: number) {
-  return {
+  return { thread_id: "thr_00000000400070008000000000000002",
     event_id: `evt_message_${eventSeq}`,
     session_id: "ses_message_test",
     turn_id: "turn_message_test",

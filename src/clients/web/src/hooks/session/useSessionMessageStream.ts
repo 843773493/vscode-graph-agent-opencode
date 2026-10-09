@@ -61,6 +61,7 @@ export function useSessionMessageStream({
     const pendingStreamKey = `pending:${targetSessionId}:${targetTurnId}`;
     let lastEventSeq = 0;
     let turnStreamId: string | null = null;
+    let frozenThreadId: string | null = null;
     let terminalSeen = false;
     let terminalStateApplied = false;
     let terminalStatus: MessageStreamState["streamStatus"] = "open";
@@ -138,6 +139,7 @@ export function useSessionMessageStream({
         targetTurnId,
         {
           workspaceId: targetWorkspaceId,
+          threadId: frozenThreadId,
           turnStreamId,
           signal: controller.signal,
         },
@@ -146,6 +148,8 @@ export function useSessionMessageStream({
       if (typeof snapshotTurnStreamId === "string" && snapshotTurnStreamId) {
         turnStreamId = snapshotTurnStreamId;
       }
+      if (frozenThreadId && snapshot.thread_id !== frozenThreadId) throw new Error("消息流快照 thread owner 在重连中变化");
+      frozenThreadId = snapshot.thread_id;
       updateState((current) => applyMessageStreamSnapshot(current, snapshot));
       lastEventSeq = Math.max(lastEventSeq, snapshot.snapshot_seq);
       terminalSeen = snapshot.stream_status === "completed"
@@ -195,6 +199,8 @@ export function useSessionMessageStream({
     };
 
     const applyEvent = (event: MessageStreamEvent) => {
+      if (frozenThreadId && event.thread_id !== frozenThreadId) throw new Error("消息流 thread owner 在重连中变化");
+      frozenThreadId = event.thread_id;
       turnStreamId = event.turn_stream_id;
       // React 的函数式 setState updater 可能在当前回调返回后才执行，不能
       // 在 updater 内给这里的游标和终态变量赋值。否则真实浏览器会一直用旧
@@ -232,6 +238,7 @@ export function useSessionMessageStream({
             targetTurnId,
             {
               workspaceId: targetWorkspaceId,
+          threadId: frozenThreadId,
               turnStreamId,
               afterSeq: lastEventSeq,
               signal: controller.signal,

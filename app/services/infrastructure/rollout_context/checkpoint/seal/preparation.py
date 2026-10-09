@@ -53,44 +53,51 @@ from app.services.infrastructure.rollout_context.runtime.prefix_compiler import 
     compile_prefix_context,
     source_contributions,
 )
+from app.services.infrastructure.team.activation import (
+    TEAM_FACETS,
+    TEAM_RESOURCE_IDS,
+    TEAM_SOURCE_IDS,
+    team_guidance_content,
+)
 
 
 def _activation_guidance_batch(
     owner, activation: ResourceActivationSnapshotRef, previous: ContextAssemblySnapshot | None,
     batch: PendingContextSourceBatch, *, checkpoint_ns: str,
 ) -> PendingContextSourceBatch:
-    """MCP exact body 只由本次冻结 activation 派生，不登记第二个 CSM owner。"""
-    if any(source.descriptor.source_id == MCP_GUIDANCE_SOURCE_ID for source in batch.sources):
-        raise ValueError("context-source-owner-conflict: MCP guidance 不得登记为 CSM source")
-    parents = tuple(binding for binding in activation.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
-    if len(parents) > 1:
-        raise ValueError("resource-activation-snapshot-conflict: MCP parent 不唯一")
+    """来源正文只由本次冻结 activation 派生，不登记第二个 CSM owner。"""
+    specs = ((MCP_TOOL_CATALOG_RESOURCE_ID, MCP_GUIDANCE_SOURCE_ID, "mcp_tool_catalog", "MCP 工具指引", mcp_guidance_content),
+             *((TEAM_RESOURCE_IDS[facet], TEAM_SOURCE_IDS[facet], "team_state", f"团队{facet}", team_guidance_content)
+               for facet in TEAM_FACETS))
     previous_frames = () if previous is None or previous.seal_binding is None else previous.seal_binding.prefix.state.frames
-    previous_revision = next((
-        frame.item_ref.source_revision for frame in reversed(previous_frames)
-        if frame.item_ref.source_identity == MCP_GUIDANCE_SOURCE_ID
-    ), None)
-    if not parents and previous_revision is None:
-        return batch
-    content = mcp_guidance_content(owner.read_resource_activation_payload(
-        activation, parents[0], checkpoint_ns=checkpoint_ns,
-    )) if parents else ""
-    revision = parents[0].revision if parents else sha256_jcs({"content": ""})
-    source = ContextSourceSnapshot(
-        descriptor=ContextSourceDescriptor(
-            source_id=MCP_GUIDANCE_SOURCE_ID, source_kind="mcp_tool_catalog",
-            name="MCP 工具指引", description="本次冻结的 MCP 工具目录正文",
-            internal_locator=MCP_TOOL_CATALOG_RESOURCE_ID, root_placement="tail_only",
-        ),
-        revision=revision, content=content, applied_revision=previous_revision, tracked=False,
-    )
-    deltas = () if revision == previous_revision else (ContextSourceDelta(
-        source_id=MCP_GUIDANCE_SOURCE_ID, source_kind="mcp_tool_catalog",
-        source_name=source.descriptor.name, revision=revision, previous_revision=previous_revision,
-        content=content, content_hash=sha256_jcs(content),
-        kind="activation" if previous_revision is None else "delta",
-    ),)
-    return PendingContextSourceBatch(deltas=(*batch.deltas, *deltas), sources=(*batch.sources, source))
+    sources, deltas = list(batch.sources), list(batch.deltas)
+    for resource_id, source_id, source_kind, name, read_content in specs:
+        if any(source.descriptor.source_id == source_id for source in batch.sources):
+            raise ValueError("context-source-owner-conflict: activation guidance 不得登记为 CSM source")
+        parents = tuple(binding for binding in activation.bindings if binding.resource_id == resource_id)
+        if len(parents) > 1:
+            raise ValueError("resource-activation-snapshot-conflict: guidance parent 不唯一")
+        previous_revision = next((frame.item_ref.source_revision for frame in reversed(previous_frames)
+                                  if frame.item_ref.source_identity == source_id), None)
+        if not parents and previous_revision is None:
+            continue
+        content = read_content(owner.read_resource_activation_payload(
+            activation, parents[0], checkpoint_ns=checkpoint_ns,
+        )) if parents else ""
+        revision = parents[0].revision if parents else sha256_jcs({"content": ""})
+        sources.append(ContextSourceSnapshot(
+            descriptor=ContextSourceDescriptor(source_id=source_id, source_kind=source_kind, name=name,
+                                               description="本次冻结的来源正文", internal_locator=resource_id,
+                                               root_placement="tail_only"),
+            revision=revision, content=content, applied_revision=previous_revision, tracked=False,
+        ))
+        if revision != previous_revision:
+            deltas.append(ContextSourceDelta(
+                source_id=source_id, source_kind=source_kind, source_name=name, revision=revision,
+                previous_revision=previous_revision, content=content, content_hash=sha256_jcs(content),
+                kind="activation" if previous_revision is None else "delta",
+            ))
+    return PendingContextSourceBatch(deltas=tuple(deltas), sources=tuple(sources))
 
 
 def prepared_context_plan_id(creation_key: str) -> str:
@@ -153,7 +160,7 @@ def prepare_registered_context(
         if registered is not None and registered.plan_state == "sealed":
             if registered.seal_idempotency_key != seal_idempotency_key:
                 raise ValueError("assembly-idempotency-conflict: 已绑定另一个 seal key")
-            snapshot = owner._storage.get_context_assembly(
+            snapshot = owner._storage.assemblies.get_context_assembly(
                 session_id, thread_id, assembly_id=registered.assembly_id, checkpoint_ns=checkpoint_ns,
             )
             # prepare 输入身份由 seal 提交记录（snapshot.request_input_hash）承载；
@@ -178,10 +185,10 @@ def prepare_registered_context(
             if not isinstance(tool_set, ToolSetSnapshot):
                 raise TypeError("Tool producer 必须返回正向 ToolSetSnapshot")
             if turn_id is not None:
-                owner._storage.ensure_active_view_contains_turn_root(
+                owner._storage.checkpoints.ensure_active_view_contains_turn_root(
                     session_id, thread_id, turn_id=turn_id, checkpoint_ns=checkpoint_ns,
                 )
-            owner._storage.ensure_request_items(
+            owner.ensure_request_items(
                 session_id, thread_id, turn_id=turn_id, execution_id=execution_id,
                 messages=request_messages, checkpoint_ns=checkpoint_ns,
             )
@@ -220,7 +227,7 @@ def prepare_registered_context(
                 if seed_source is not None:
                     batch = PendingContextSourceBatch(deltas=batch.deltas, sources=(*batch.sources, seed_source))
             with owner._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns) as read_snapshot:
-                previous = owner._storage.latest_context_assembly(read_snapshot)
+                previous = owner._storage.assemblies.latest_context_assembly(read_snapshot)
             batch = _activation_guidance_batch(
                 owner, activation_snapshot, previous, batch, checkpoint_ns=checkpoint_ns,
             )
@@ -232,12 +239,12 @@ def prepare_registered_context(
                 )
                 bodies[contribution.contribution_id] = contribution.body
             with owner._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns) as read_snapshot:
-                previous = owner._storage.latest_context_assembly(read_snapshot)
+                previous = owner._storage.assemblies.latest_context_assembly(read_snapshot)
                 full_plan = owner.compose_committed_context_plan(
                     session_id, thread_id, plan_id=plan_id, tool_set=tool_set,
                     checkpoint_ns=checkpoint_ns, read_snapshot=read_snapshot,
                 )
-                items = owner._storage.committed_context_items(read_snapshot)
+                items = owner._storage.checkpoints.committed_context_items(read_snapshot)
                 sequences = owner.selected_context_message_sequences(read_snapshot)
                 validate_tool_protocol_closure(read_snapshot.connection, sequences, len(sequences))
             overlay_bodies = {}

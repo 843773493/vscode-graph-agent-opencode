@@ -1,6 +1,6 @@
 """Rollout v2 Turn/execution/model-call 持久化 owner。
 
-这些 mixin 只依赖 RolloutStorage 提供的 SQLite、JSONL transaction 和 domain
+这些 mixin 只依赖 RolloutContextStore 提供的 SQLite、JSONL transaction 和 domain
 ports；它们不承担 LangChain/provider projection，也不读取 v1 数据。
 """
 
@@ -79,7 +79,7 @@ class RolloutTurnsMixin:
     ) -> dict[str, object]:
         """在同一事务建立 acceptance、Turn、root item 与 initial execution。"""
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
         strict_text(accepted_ingress_id, field="accepted_ingress_id")
         strict_text(
             acceptance_idempotency_key,
@@ -115,12 +115,12 @@ class RolloutTurnsMixin:
             field="replay_of_turn_id",
         )
         strict_text(identity_origin, field="identity_origin")
-        with self._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
-            with self._connect(
+        with self._storage._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
+            self._storage.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
+            with self._storage._connect(
                 owner_thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
-                self._require_v2_runtime(connection)
+                self._storage._require_v2_runtime(connection)
                 if branch_id is None:
                     active_branch_row = connection.execute(
                         "SELECT active_branch_id FROM checkpoint_namespace_state WHERE checkpoint_ns = ?",
@@ -287,14 +287,14 @@ class RolloutTurnsMixin:
                     ).fetchone()
                     if execution is None:
                         raise RuntimeError("acceptance 已存在但 initial execution 缺失")
-                    with self.jsonl_path(
+                    with self._storage.jsonl_path(
                         session_id, checkpoint_ns, thread_id=owner_thread_id
                     ).open("rb") as root_stream:
                         root_locator = connection.execute(
                             "SELECT item_sequence, jsonl_offset, jsonl_length FROM item_catalog WHERE item_id = ?",
                             (stored_root_item_id,),
                         ).fetchone()
-                        restored_root = self._read_v2_item_at(
+                        restored_root = self._storage._read_v2_item_at(
                             connection,
                             root_stream,
                             sequence=strict_non_negative_int(
@@ -499,7 +499,7 @@ class RolloutTurnsMixin:
                     wire_role="user",
                 )
                 connection.execute("BEGIN IMMEDIATE")
-                commit_id, _offset = self._append_v2_records_transaction(
+                commit_id, _offset = self._storage._append_v2_records_transaction(
                     connection,
                     owner_thread_id,
                     checkpoint_ns,
@@ -514,7 +514,7 @@ class RolloutTurnsMixin:
                         "turn_id": turn_value,
                     },
                 )
-                self._bind_canonical_item_execution(
+                self._storage._bind_canonical_item_execution(
                     connection,
                     item_id=root.item_id,
                     execution_id=execution_id,
@@ -530,7 +530,7 @@ class RolloutTurnsMixin:
                     field="database_meta.last_message_sequence",
                 )
                 root_message_sequence = previous_last_message_sequence + 1
-                materialized = self._materialize_canonical_message_projection(
+                materialized = self._context.checkpoints._materialize_canonical_message_projection(
                     connection,
                     root,
                     thread_id=owner_thread_id,
@@ -549,7 +549,7 @@ class RolloutTurnsMixin:
                 ) = materialized
                 if materialized_sequence != root_message_sequence:
                     raise RuntimeError("acceptance user root message sequence 冲突")
-                self._upsert_turn(
+                self._storage._upsert_turn(
                     connection,
                     turn_value,
                     root_message_sequence,
@@ -585,7 +585,7 @@ class RolloutTurnsMixin:
                     (branch_value,),
                 ).fetchone()
                 if active_view is not None and active_view[0] is not None:
-                    self._append_context_view_items(
+                    self._storage._append_context_view_items(
                         connection,
                         checkpoint_ns=checkpoint_ns,
                         item_ids=(root.item_id,),
@@ -632,7 +632,7 @@ class RolloutTurnsMixin:
                 # Turn logical ordinal；否则 replay_as_new_turn/新输入虽然
                 # 已经有 root，却会在即时 history/root lookup 中暂时消失，
                 # 直到下一次 checkpoint 偶然重建派生索引。
-                view_id = self._active_context_view_id(connection, checkpoint_ns, branch_value)
+                view_id = self._storage._active_context_view_id(connection, checkpoint_ns, branch_value)
                 if view_id is not None:
                     existing_view_turn = connection.execute(
                         "SELECT logical_turn_ordinal, root_input_item_id FROM context_view_turns WHERE view_id = ? AND turn_id = ?",
@@ -697,7 +697,7 @@ class RolloutTurnsMixin:
                         timestamp,
                     ),
                 )
-                self._commit_connection(connection)
+                self._storage._commit_connection(connection)
                 return {
                     "turn_id": turn_value,
                     "root_input_item_id": root.item_id,

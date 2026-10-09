@@ -46,7 +46,7 @@ class ForkOverlayCopyMixin:
         source revision/epoch/lineage 和 target-local ref。正文缺失时，后续
         projector 会返回 capability loss，而不会偷偷读取 source session。
         """
-        source_root = self.root(
+        source_root = self._storage.root(
             source_session_id,
             checkpoint_ns,
             thread_id=source_thread_id,
@@ -57,7 +57,7 @@ class ForkOverlayCopyMixin:
         )
         source_lock.acquire()
         try:
-            with self._connect(
+            with self._storage._connect(
                 source_thread_id,
                 checkpoint_ns,
                 session_id=source_session_id,

@@ -48,7 +48,7 @@ async def test_event_commit_is_idempotent_and_terminal_gate_is_strict(
     message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, _, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_message_stream_test")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_message_stream_test")
     subscription = await store.subscribe(writer.turn_stream_id)
     first = await writer.commit(
         "block.started",
@@ -117,7 +117,7 @@ async def test_tool_event_identity_is_persisted_and_mismatch_is_rejected(
 ) -> None:
     _, resolver, session_id = message_stream_store
     store = MessageStreamStore(path_resolver=resolver, workspace_id="workspace_1")
-    writer = await store.open(session_id=session_id, turn_id="job_tool_identity")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_tool_identity")
     event = await writer.commit(
         "tool.completed",
         {
@@ -162,7 +162,7 @@ async def test_stream_terminal_event_survives_unrelated_catalog_drift(
     session_dir = resolver.resolve_session_node(session_id)
     (session_dir.parent / "ses_unindexed_runtime_drift_12345678").mkdir()
 
-    writer = await store.open(
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_runtime_drift_terminal",
     )
@@ -182,7 +182,7 @@ async def test_stream_events_do_not_duplicate_full_checkpoint_on_disk(
     message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, resolver, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_compact_checkpoint")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_compact_checkpoint")
     for _ in range(32):
         await writer.commit(
             "block.delta",
@@ -207,7 +207,7 @@ async def test_stream_events_do_not_duplicate_full_checkpoint_on_disk(
     assert stream_path.stat().st_size < 100_000
 
     restarted = MessageStreamStore(path_resolver=resolver)
-    restarted_writer = await restarted.open(
+    restarted_writer = await restarted.open(thread_id=restarted._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_compact_checkpoint",
     )
@@ -221,7 +221,7 @@ async def test_live_projection_bounds_large_text_until_canonical_history_is_read
     message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, _, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_large_live_text")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_large_live_text")
     await writer.commit(
         "block.started",
         {"block_id": "block_large", "block_index": 0, "carrier_type": "text"},
@@ -285,7 +285,7 @@ async def test_fanout_does_not_wait_for_slow_state_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store, _, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_snapshot_fanout")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_snapshot_fanout")
     subscription = await store.subscribe(writer.turn_stream_id)
     monkeypatch.setattr(
         message_stream_store_module,
@@ -344,7 +344,7 @@ async def test_oversized_stream_retains_tail_and_recovers_from_snapshot(
     store, resolver, session_id = message_stream_store
     monkeypatch.setattr(message_stream_store_module, "MESSAGE_STREAM_MAX_BYTES", 1_000)
     monkeypatch.setattr(message_stream_store_module, "MESSAGE_STREAM_RETAINED_BYTES", 260)
-    writer = await store.open(session_id=session_id, turn_id="job_stream_retention")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_stream_retention")
 
     for index in range(12):
         await writer.commit(
@@ -375,7 +375,7 @@ async def test_oversized_stream_retains_tail_and_recovers_from_snapshot(
     assert snapshot["payload"]["blocks"][0]["text"].endswith("event-11")
 
     restarted = MessageStreamStore(path_resolver=resolver)
-    restarted_writer = await restarted.open(
+    restarted_writer = await restarted.open(thread_id=restarted._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_stream_retention",
     )
@@ -399,7 +399,7 @@ async def test_restart_rejects_corrupt_event_log_identity_and_order(
     error_pattern: str,
 ) -> None:
     store, resolver, session_id = message_stream_store
-    writer = await store.open(
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id=f"job_corrupt_message_stream_{mutation}",
     )
@@ -447,7 +447,7 @@ async def test_restart_rejects_state_snapshot_with_foreign_identity(
     message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, resolver, session_id = message_stream_store
-    writer = await store.open(
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_foreign_message_stream_snapshot",
     )
@@ -481,7 +481,7 @@ async def test_restart_rejects_damaged_state_snapshot(
     message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, resolver, session_id = message_stream_store
-    writer = await store.open(
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_damaged_message_stream_snapshot",
     )
@@ -510,7 +510,7 @@ async def test_completed_stream_rejects_unfinished_entities(
 ) -> None:
     store, _, session_id = message_stream_store
 
-    model_writer = await store.open(
+    model_writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_completed_with_model_running",
     )
@@ -523,7 +523,7 @@ async def test_completed_stream_rejects_unfinished_entities(
         await model_writer.close_completed()
     assert (await store.get_state(model_writer.turn_stream_id))["stream_status"] == "open"
 
-    tool_writer = await store.open(
+    tool_writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_completed_with_tool_running",
     )
@@ -539,7 +539,7 @@ async def test_completed_stream_rejects_unfinished_entities(
     with pytest.raises(MessageStreamError, match="tool_executions"):
         await tool_writer.close_completed()
 
-    activity_writer = await store.open(
+    activity_writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_completed_with_activity_running",
     )
@@ -560,7 +560,7 @@ async def test_existing_stream_ids_skip_legacy_turns_without_creating_streams(
     message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, resolver, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_with_stream")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_with_stream")
 
     streams = await store.existing_stream_ids(
         session_id=session_id,
@@ -580,7 +580,7 @@ async def test_existing_stream_ids_does_not_materialize_historical_snapshots(
     message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, resolver, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_with_snapshot")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_with_snapshot")
     await writer.close_completed()
     if store._snapshot_tasks:
         await asyncio.gather(*store._snapshot_tasks.values())
@@ -609,7 +609,7 @@ async def test_terminal_stream_cache_is_bounded_and_evicted_state_reloads(
     )
     stream_ids: list[str] = []
     for index in range(6):
-        writer = await store.open(
+        writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
             session_id=session_id,
             turn_id=f"job_terminal_cache_{index}",
         )
@@ -645,7 +645,7 @@ async def test_restart_does_not_retain_terminal_history_in_memory(
 ) -> None:
     store, resolver, session_id = message_stream_store
     for index in range(4):
-        writer = await store.open(
+        writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
             session_id=session_id,
             turn_id=f"job_restart_terminal_{index}",
         )
@@ -664,7 +664,7 @@ async def test_tool_call_projection_does_not_erase_known_name_or_arguments(
     message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, _, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_tool_call_merge")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_tool_call_merge")
 
     await writer.commit(
         "tool_call",
@@ -705,7 +705,7 @@ async def test_validation_retry_marks_previous_model_blocks_intermediate(
     message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, _, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_retry_projection")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_retry_projection")
     await writer.commit(
         "model.started",
         {"model_call_id": "model_1", "attempt": 1, "model": "primary"},
@@ -761,7 +761,7 @@ async def test_restart_reconciles_interrupt_and_unknown_tool_result(
     message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, resolver, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_restart_test")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_restart_test")
     await writer.commit(
         "tool.started",
         {
@@ -791,7 +791,7 @@ async def test_terminal_stream_conservatively_closes_running_activities(
     message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, _, session_id = message_stream_store
-    writer = await store.open(
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_activity_terminal_projection",
     )
@@ -832,7 +832,7 @@ async def test_interrupt_gate_rejects_late_delta_and_preserves_request(
     message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, _, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_interrupt_gate")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_interrupt_gate")
     await writer.commit(
         "block.started",
         {"block_id": "block_1", "block_index": 0, "carrier_type": "reasoning"},
@@ -888,7 +888,7 @@ async def test_delta_boundary_interrupt_matrix_has_same_live_checkpoint_snapshot
     stage: str,
 ) -> None:
     store, resolver, session_id = message_stream_store
-    writer = await store.open(
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id=f"job_delta_interrupt_{stage}",
     )
@@ -980,7 +980,7 @@ async def test_interrupt_and_model_completion_race_has_one_terminal_winner(
     message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, _, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_interrupt_completion_race")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_interrupt_completion_race")
 
     async def request_interrupt() -> dict[str, object]:
         return await writer.commit(
@@ -1017,7 +1017,7 @@ async def test_restart_keeps_event_idempotence_and_open_is_serialized(
 ) -> None:
     store, resolver, session_id = message_stream_store
     writers = await asyncio.gather(*(
-        store.open(session_id=session_id, turn_id="job_open_race")
+        store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_open_race")
         for _ in range(4)
     ))
     assert len({writer.turn_stream_id for writer in writers}) == 1
@@ -1028,7 +1028,7 @@ async def test_restart_keeps_event_idempotence_and_open_is_serialized(
         event_id="evt_restart_idempotent",
     )
     restarted_store = MessageStreamStore(path_resolver=resolver)
-    restarted_writer = await restarted_store.open(
+    restarted_writer = await restarted_store.open(thread_id=restarted_store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_open_race",
     )
@@ -1046,7 +1046,7 @@ async def test_commit_failure_before_persist_does_not_publish_or_recover_delta(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store, resolver, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_fsync_failure")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_fsync_failure")
 
     def fail_encode(*_: object, **__: object) -> str:
         raise OSError("模拟 event/checkpoint 编码失败")
@@ -1065,7 +1065,7 @@ async def test_commit_failure_before_persist_does_not_publish_or_recover_delta(
     assert state["snapshot_seq"] == 1
     assert state["blocks"] == []
     restarted_store = MessageStreamStore(path_resolver=resolver)
-    restarted_writer = await restarted_store.open(
+    restarted_writer = await restarted_store.open(thread_id=restarted_store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_fsync_failure",
     )
@@ -1079,7 +1079,7 @@ async def test_event_application_failure_does_not_consume_event_seq(
     message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, _, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_apply_failure")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_apply_failure")
 
     with pytest.raises(MessageStreamError, match="block 事件缺少 block_id"):
         await writer.commit(
@@ -1100,7 +1100,7 @@ async def test_fsync_failure_reloads_uncertain_append_before_next_commit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store, resolver, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_fsync_uncertain")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_fsync_uncertain")
     subscription = await store.subscribe(writer.turn_stream_id)
 
     original_fsync = os.fsync
@@ -1149,7 +1149,7 @@ async def test_fsync_failure_reloads_uncertain_append_before_next_commit(
         subscription.queue.get_nowait()
 
     restarted_store = MessageStreamStore(path_resolver=resolver)
-    restarted_writer = await restarted_store.open(
+    restarted_writer = await restarted_store.open(thread_id=restarted_store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_fsync_uncertain",
     )
@@ -1164,7 +1164,7 @@ async def test_fanout_failure_keeps_durable_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store, resolver, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_fanout_failure")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_fanout_failure")
     subscription = await store.subscribe(writer.turn_stream_id)
 
     def fail_offer(_: object) -> bool:
@@ -1177,7 +1177,7 @@ async def test_fanout_failure_keeps_durable_event(
     )
     assert event["event_seq"] == 2
     restarted_store = MessageStreamStore(path_resolver=resolver)
-    restarted_writer = await restarted_store.open(
+    restarted_writer = await restarted_store.open(thread_id=restarted_store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_fanout_failure",
     )
@@ -1191,7 +1191,7 @@ async def test_snapshot_control_frame_uses_checkpoint_high_water_without_new_eve
     message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, _, session_id = message_stream_store
-    writer = await store.open(
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_snapshot_high_water",
         job_id="job_snapshot_high_water",
@@ -1226,7 +1226,7 @@ async def test_activity_lifecycle_is_replayable_and_snapshot_safe(
     message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, resolver, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_activity_lifecycle")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_activity_lifecycle")
     runtime = ActivityRuntime(writer, ActivityHandlerRegistry())
 
     await runtime.started(
@@ -1278,7 +1278,7 @@ async def test_repeated_compaction_keeps_ordered_lifecycles_across_snapshot_and_
     message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
     store, resolver, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_repeated_compaction")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_repeated_compaction")
     runtime = ActivityRuntime(writer, ActivityHandlerRegistry())
 
     await writer.commit(
@@ -1434,7 +1434,7 @@ async def test_completed_stream_closes_running_blocks_with_public_events(
 ) -> None:
     """终态原子收口必须以规范 block.completed 事件表达，而不是内部标记。"""
     store, resolver, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_autoclose_public")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_autoclose_public")
     subscription = await store.subscribe(writer.turn_stream_id)
     await writer.commit(
         "model.started",
@@ -1536,7 +1536,7 @@ async def test_completed_stream_rejects_deprecated_auto_closed_blocks(
 ) -> None:
     """手工提交已下线的 auto_closed_blocks 必须响亮失败，且不得改写内部状态。"""
     store, _, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_autoclose_rejected")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_autoclose_rejected")
     await writer.commit(
         "block.started",
         {"block_id": "block_still_running", "block_index": 0, "carrier_type": "text"},
@@ -1576,7 +1576,7 @@ async def test_stream_records_delivers_terminal_event_beyond_list_events_page_li
     收到前 1000 条后永久转圈。
     """
     store, _, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_sse_long_tail")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_sse_long_tail")
     for index in range(1100):
         await writer.commit(
             "block.delta",
@@ -1622,7 +1622,7 @@ async def test_evicted_terminal_streams_release_serial_locks(
     """大量终态 Turn 后，逐流串行锁必须随缓存淘汰一起收敛。"""
     store, _, session_id = message_stream_store
     for index in range(64):
-        writer = await store.open(
+        writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
             session_id=session_id,
             turn_id=f"job_lock_eviction_{index:04d}",
         )
@@ -1655,7 +1655,7 @@ async def test_terminal_stream_converges_running_model_calls(
     """
     store, _, session_id = message_stream_store
 
-    interrupted = await store.open(
+    interrupted = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_terminal_model_call_interrupted",
     )
@@ -1678,7 +1678,7 @@ async def test_terminal_stream_converges_running_model_calls(
         == "user_interrupt"
     )
 
-    failed = await store.open(
+    failed = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_terminal_model_call_failed",
     )
@@ -1698,7 +1698,7 @@ async def test_terminal_stream_converges_running_model_calls(
     assert failed_state["model_calls"][0]["retryable"] is False
 
     # 重启恢复路径（reconcile 提交 stream.failed）同样不得遗留 running model_call。
-    crashed = await store.open(
+    crashed = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_terminal_model_call_restart",
     )
@@ -1747,7 +1747,7 @@ async def test_stream_records_closes_when_cursor_is_at_terminal_event(
     任何帧，表现为连接一直挂着。
     """
     store, _, session_id = message_stream_store
-    writer = await store.open(
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_sse_terminal_cursor",
     )
@@ -1814,7 +1814,7 @@ async def test_stream_records_rejects_cursor_beyond_high_water_without_hanging(
     并保留「游标恰好等于最高水位」是合法追平态这一既有契约。
     """
     store, _, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_sse_future_cursor")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_sse_future_cursor")
     await writer.commit(
         "block.started",
         {"block_id": "block_1", "block_index": 0, "carrier_type": "text"},
@@ -1859,7 +1859,7 @@ async def test_require_cursor_reachable_rejects_cursor_beyond_high_water(
 ) -> None:
     """SSE 建流前的游标校验必须与 ``list_events`` 共用同一越界判定。"""
     store, _, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_sse_cursor_gate")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_sse_cursor_gate")
     await writer.commit(
         "block.started",
         {"block_id": "block_1", "block_index": 0, "carrier_type": "text"},
@@ -1892,7 +1892,7 @@ async def test_explicit_event_id_idempotence_survives_retention_compaction(
     store, _, session_id = message_stream_store
     monkeypatch.setattr(message_stream_store_module, "MESSAGE_STREAM_MAX_BYTES", 1_200)
     monkeypatch.setattr(message_stream_store_module, "MESSAGE_STREAM_RETAINED_BYTES", 500)
-    writer = await store.open(session_id=session_id, turn_id="job_idempotent_compaction")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_idempotent_compaction")
     first = await writer.commit(
         "block.delta",
         {"block_id": "block_1", "operation": "append", "text": "DUP"},
@@ -1936,7 +1936,7 @@ async def test_explicit_event_id_idempotence_survives_restart_after_compaction(
     store, resolver, session_id = message_stream_store
     monkeypatch.setattr(message_stream_store_module, "MESSAGE_STREAM_MAX_BYTES", 1_200)
     monkeypatch.setattr(message_stream_store_module, "MESSAGE_STREAM_RETAINED_BYTES", 500)
-    writer = await store.open(session_id=session_id, turn_id="job_idempotent_restart")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_idempotent_restart")
     first = await writer.commit(
         "block.delta",
         {"block_id": "block_1", "operation": "append", "text": "DUP"},
@@ -1951,7 +1951,7 @@ async def test_explicit_event_id_idempotence_survives_restart_after_compaction(
         )
 
     restarted = MessageStreamStore(path_resolver=resolver)
-    restarted_writer = await restarted.open(
+    restarted_writer = await restarted.open(thread_id=restarted._path_resolver.main_thread_id(session_id),
         session_id=session_id,
         turn_id="job_idempotent_restart",
     )
@@ -1977,7 +1977,7 @@ async def test_fresh_explicit_event_id_is_accepted_after_compaction(
     store, _, session_id = message_stream_store
     monkeypatch.setattr(message_stream_store_module, "MESSAGE_STREAM_MAX_BYTES", 1_200)
     monkeypatch.setattr(message_stream_store_module, "MESSAGE_STREAM_RETAINED_BYTES", 500)
-    writer = await store.open(session_id=session_id, turn_id="job_fresh_after_compaction")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_fresh_after_compaction")
     for _ in range(30):
         await writer.commit(
             "block.delta",

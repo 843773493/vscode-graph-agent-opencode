@@ -35,10 +35,10 @@ from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogUnavailableError,
     ExtensionDispatchBindingRef,
 )
-from app.services.infrastructure.rollout_context.storage.resource_activation_body import (
+from app.services.infrastructure.rollout_context.activation.body import (
     ResourceActivationBodyStore,
 )
-from app.services.infrastructure.rollout_context.storage.resource_activation_store import (
+from app.services.infrastructure.rollout_context.activation.store import (
     ResourceActivationStore,
 )
 
@@ -110,10 +110,10 @@ class ResourceActivationOwnerMixin:
     ) -> tuple[ResourceActivationSnapshotRef, str]:
         """tool_call 只按 canonical assistant provenance 定位原 model-call/assembly。"""
         checkpoint_ns = self._context_owner_namespace(checkpoint_ns)
-        with self._storage._connect(
+        with self._storage.storage._connect(
             thread_id, checkpoint_ns, session_id=session_id, read_only=True,
         ) as connection:
-            self._storage._require_v2_runtime(connection)
+            self._storage.storage._require_v2_runtime(connection)
             # raw ID 必须带 emitting assistant 的 model-call scope；重启读取
             # 可直接用精确持久 ID。归一只消费同一 canonical typed owner。
             call_rows = connection.execute(
@@ -165,7 +165,7 @@ class ResourceActivationOwnerMixin:
                     f"tool_call 原 model-call 缺少 sealed assembly: {tool_call_id}"
                 )
             assembly_id = row[0]
-        assembly = self._storage.get_context_assembly(
+        assembly = self._storage.assemblies.get_context_assembly(
             session_id, thread_id, assembly_id=assembly_id, checkpoint_ns=checkpoint_ns,
         )
         if assembly.model_call_id != model_call_id:
@@ -378,13 +378,13 @@ class ResourceActivationOwnerMixin:
         """幂等重试：只读核对已提交 assembly 的 activation 绑定，不写任何行。"""
 
         checkpoint_ns = self._context_owner_namespace(checkpoint_ns)
-        with self._storage._connect(
+        with self._storage.storage._connect(
             activation_snapshot.owner_thread_id,
             checkpoint_ns,
             session_id=session_id,
             read_only=True,
         ) as connection:
-            self._storage._require_v2_runtime(connection)
+            self._storage.storage._require_v2_runtime(connection)
             self._activation_store().require_schema(connection)
             row = connection.execute(
                 "SELECT session_id, thread_id, activation_snapshot_id, "

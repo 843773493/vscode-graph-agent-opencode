@@ -1,4 +1,4 @@
-"""v2 checkpoint/view pruning owner（由 RolloutStorage 组合）。
+"""v2 checkpoint/view pruning owner（由 RolloutContextStore 组合）。
 
 pruning 只通过 host 的锁、连接与事务薄壳工作，不持有第二套连接、提交
 路径或锁；规划与执行都沿用 host 已冻结的 offset/lineage 不变量。
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     )
     from app.services.infrastructure.rollout_context.storage.service import (
         RolloutStorage,
-)
+    )
 
 
 class RolloutPruningOwner:
@@ -42,11 +42,9 @@ class RolloutPruningOwner:
         )
 
         session_id = self._host._session_id_from_owner_scope(thread_id)
-        self._host.initialize(session_id, checkpoint_ns, thread_id=thread_id)
         retained = tuple(dict.fromkeys(retain_checkpoint_ids))
-        with self._host._connect(
-            thread_id, checkpoint_ns, session_id=session_id
-        ) as connection:
+        with self._host.open_read_snapshot(session_id, thread_id, checkpoint_ns) as snapshot:
+            connection = snapshot.connection
             self._host._require_v2_runtime(connection)
             meta = connection.execute(
                 "SELECT active_branch_id, projection_epoch, last_message_sequence FROM database_meta WHERE singleton_id = 1"
@@ -100,15 +98,9 @@ class RolloutPruningOwner:
                         reason="unreferenced_checkpoint",
                     )
                 )
-        return RolloutPruningPlan(
-            self._host.rollout_id(
-                thread_id, checkpoint_ns, session_id=session_id
-            ),
-            self._host.initialize(
-                session_id, checkpoint_ns, thread_id=thread_id
-            ).committed_sequence,
-            tuple(candidates),
-        )
+            return RolloutPruningPlan(
+                snapshot.rollout_id, snapshot.manifest.committed_sequence, tuple(candidates),
+            )
 
     def execute_pruning(
         self, thread_id: str, plan: RolloutPruningPlan, checkpoint_ns: str = ""

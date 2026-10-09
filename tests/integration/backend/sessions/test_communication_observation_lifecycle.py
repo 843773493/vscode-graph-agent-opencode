@@ -15,6 +15,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.core.resource_uri import parse_resource_uri
 from app.core.session_control_communication_ledger.observations import (
     RemoteObservationError,
 )
@@ -103,6 +104,14 @@ class _Transport:
         self.denied = False
 
     async def resolve_main(self, *, source: GlobalThreadAddress, session_id: str, workspace_id: str | None) -> ResolvedMainTargetBinding:
+        # 与真实 Gateway transport 一致，URI 通过中央 grammar 取得 catalog 稳定 ID。
+        if session_id.startswith("boxteam://"):
+            parsed = parse_resource_uri(session_id, local_gateway_id=source.gateway_id)
+            if parsed.scope != "workspace" or parsed.kind != "session" or len(parsed.tail_segments) != 1 or parsed.tail_segments == ("inventory",):
+                raise ValueError("通信 target URI 必须指向单个 workspace Session")
+            if workspace_id is not None and workspace_id != parsed.scope_id:
+                raise ValueError("通信 target URI 与 workspace_id 冲突")
+            session_id = parsed.tail_segments[0]
         thread = await self.sessions.resolve_main_thread(session_id)
         target = GlobalThreadAddress(GATEWAY, self.sessions.workspace_id, session_id, thread)
         return ResolvedMainTargetBinding(session_id, thread, target)
@@ -147,7 +156,7 @@ class _Case:
         return await self.service.read(session_id=self.source, thread_id=self.source_thread, source_call_id=call, source_call_created_at=self.call_times.setdefault(call, self.clock.now), request=request or self.read_request())
 
     async def delete_target(self) -> None:
-        await self.workspace.resolver.delete_session_subtree(self.target)
+        await self.workspace.resolver.delete_subtree(idempotency_key="observation-target-delete", root_node_id=self.target)
 
 
 @pytest.fixture
@@ -537,7 +546,7 @@ async def test_real_source_delete_during_reply_closes_live_and_replayed_callback
     try:
         await asyncio.wait_for(reply.wait(), 3)
         async with asyncio.timeout(3):
-            await case.workspace.resolver.delete_session_subtree(case.source)
+            await case.workspace.resolver.delete_subtree(idempotency_key="observation-source-delete", root_node_id=case.source)
         release.set()
         if replayed:
             assert await asyncio.wait_for(pending, 3) == first

@@ -88,14 +88,14 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
             raise ValueError(
                 f"context assembly hash 校验失败，拒绝 seal: {snapshot.assembly_id}: {error}"
             ) from error
-        with self._lock(thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(
+        with self._storage._lock(thread_id, checkpoint_ns, session_id=session_id):
+            self._storage.initialize(
                 session_id, checkpoint_ns, thread_id=thread_id
             )
-            with self._connect(
+            with self._storage._connect(
                 thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
-                self._require_v2_runtime(connection)
+                self._storage._require_v2_runtime(connection)
                 # 同一个写事务覆盖注册核验、快照/selection 和最终 plan 绑定。
                 # 未注册的快照不能绕过 draft 生命周期进入 dispatch。
                 connection.execute("BEGIN IMMEDIATE")
@@ -203,7 +203,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                         thread_id=thread_id, checkpoint_ns=checkpoint_ns,
                     )
                 validate_assembly_details(connection, snapshot, checkpoint_ns, detail_key)
-                commit_id, _offset = self._append_v2_records_transaction(
+                commit_id, _offset = self._storage._append_v2_records_transaction(
                     connection,
                     thread_id,
                     checkpoint_ns,
@@ -259,8 +259,8 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                     # 同一回滚边界内，绝不留下「assembly 已 dispatch 但无
                     # provenance」或反之的半发布状态。
                     activation_binding(connection)
-                self._apply_sealed_context_sources(connection, snapshot)
-                self._consume_context_epoch_transition(connection, snapshot, checkpoint_ns)
+                self._context.checkpoints._apply_sealed_context_sources(connection, snapshot)
+                self._context.checkpoints._consume_context_epoch_transition(connection, snapshot, checkpoint_ns)
                 self._validate_context_assembly_manifest(
                     connection, snapshot, registration=registration,
                     header_detail_ref=detail_key, checkpoint_ns=checkpoint_ns,
@@ -269,7 +269,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                 try:
                     for prepared in prepared_details:
                         published.extend(detail_store.publish(prepared))
-                    self._commit_connection(connection)
+                    self._storage._commit_connection(connection)
                 except BaseException:
                     if connection.in_transaction:
                         connection.rollback()

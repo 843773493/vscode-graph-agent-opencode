@@ -80,9 +80,9 @@ def prepare_selected_detail_mappings(
     """在 prepared journal 事务中登记实际将发布的 typed detail 身份。"""
     if source_checkpoint_id is None:
         return
-    if service._fork_source_snapshot_for_session(source_session_id) is None:
+    if service._storage._fork_source_snapshot_for_session(source_session_id) is None:
         raise RuntimeError("source-mismatch: context fork 必须消费冻结 source snapshot")
-    with service._connect(source_thread_id, checkpoint_ns, session_id=source_session_id,
+    with service._storage._connect(source_thread_id, checkpoint_ns, session_id=source_session_id,
                           read_only=True) as source_connection:
         header = source_connection.execute(
             "SELECT session_id,thread_id,source_assembly_id FROM checkpoint_context_source_snapshots "
@@ -92,7 +92,7 @@ def prepare_selected_detail_mappings(
             raise RuntimeError("source-mismatch: fork checkpoint 缺少精确 source selection")
         if header[2] is None:
             return
-        source, _audit = service._read_context_assembly_connection(
+        source, _audit = service._context.assemblies._read_context_assembly_connection(
             source_connection, source_session_id, source_thread_id,
             assembly_id=header[2], checkpoint_ns=checkpoint_ns,
         )
@@ -140,7 +140,7 @@ def validate_source_assemblies(
             raise ValueError("source-mismatch: fork assembly registry owner 不一致")
         _, _, raw, detail_ref = row
         snapshot = ContextAssemblySnapshot.from_dict(json.loads(raw))
-        service._validate_context_assembly_manifest(
+        service._context.assemblies._validate_context_assembly_manifest(
             connection,
             snapshot,
             registration=read_registration(connection, session_id, thread_id, snapshot.plan_id),
@@ -219,9 +219,9 @@ def copy_selected_context_for_fork(
     """普通 fork 导入 checkpoint 的真实封存上下文，正文只消费冻结 capability。"""
     if source_checkpoint_id is None:
         return ()
-    if service._fork_source_snapshot_for_session(source_session_id) is None:
+    if service._storage._fork_source_snapshot_for_session(source_session_id) is None:
         raise RuntimeError("source-mismatch: context fork 必须消费冻结 source snapshot")
-    with service._connect(source_thread_id, checkpoint_ns, session_id=source_session_id,
+    with service._storage._connect(source_thread_id, checkpoint_ns, session_id=source_session_id,
                           read_only=True) as source_connection:
         header = source_connection.execute(
             "SELECT session_id,thread_id,source_assembly_id FROM checkpoint_context_source_snapshots "
@@ -231,7 +231,7 @@ def copy_selected_context_for_fork(
             raise RuntimeError("source-mismatch: fork checkpoint 缺少精确 source selection")
         if header[2] is None:
             return ()
-        source, _audit_ref = service._read_context_assembly_connection(
+        source, _audit_ref = service._context.assemblies._read_context_assembly_connection(
             source_connection, source_session_id, source_thread_id,
             assembly_id=header[2], checkpoint_ns=checkpoint_ns,
         )
@@ -290,8 +290,9 @@ def copy_selected_context_for_fork(
     target_execution = local("execution", source.execution_id, required=True)
     target_turn = local("turn", source.turn_id, required=True)
     target_model = local("model_call", source.model_call_id, required=True)
-    target_items = {item.item_id: item for item in service.read_items(
+    target_items = {item.item_id: item for item in service._storage.read_items(
         target_session_id, target_thread_id, checkpoint_ns=checkpoint_ns,
+        connection=connection,
     )}
     meta = connection.execute(
         "SELECT history_view_revision,source_overlay_epoch FROM database_meta WHERE singleton_id=1"
@@ -442,9 +443,11 @@ def copy_selected_context_for_fork(
             )
             frames.extend(localized)
         else:
+            # context/history fork 只继承已封存快照；目标 CSM 独立建立 tracking。
             frames.append(replace(frame, item_ref=replace(
                 ref, ref_id=local("request_ref", ref.ref_id),
-                source_identity=maps.get("source_identity", {}).get(ref.source_identity, ref.source_identity))))
+                source_identity=maps.get("source_identity", {}).get(ref.source_identity, ref.source_identity),
+                tracking_state="not_tracked")))
     state = append_items(state, frames, desired_provider_profile=state.provider_profile,
                          desired_tool_compatibility_key=state.tool_compatibility_key)
     target_binding = replace(binding, prefix=seal_assembly(state, assembly_id=target_assembly),
@@ -488,7 +491,7 @@ def copy_selected_context_for_fork(
              item.source_ordinal,canonical_json_text(item.binding_manifest()),timestamp),
         )
     for detail in prepared:
-        service._register_context_plan_detail(connection, detail.record, session_id=target_session_id,
+        service._context.assemblies._register_context_plan_detail(connection, detail.record, session_id=target_session_id,
                                               thread_id=target_thread_id, checkpoint_ns=checkpoint_ns)
     connection.execute(
         "INSERT INTO context_assemblies(assembly_id,session_id,thread_id,turn_id,execution_id,plan_id,plan_hash,"
@@ -497,7 +500,7 @@ def copy_selected_context_for_fork(
         (target_assembly,target_session_id,target_thread_id,target_turn,target_execution,target_plan,target.plan_hash,
          target.request_hash,meta[0],meta[1],canonical_json_text(target.to_dict()),target_model,outcome,timestamp,timestamp,timestamp),
     )
-    service._write_context_assembly_manifest(connection, target, checkpoint_ns=checkpoint_ns)
+    service._context.assemblies._write_context_assembly_manifest(connection, target, checkpoint_ns=checkpoint_ns)
     sources_by_id = {ref.ref_id: ref for ref in registered_refs}
     if any(sources_by_id.get(ref.ref_id) != ref for ref in source.refs):
         raise RuntimeError("source-mismatch: fork selection 与冻结 plan source refs 不一致")
@@ -508,7 +511,7 @@ def copy_selected_context_for_fork(
             refs=target_refs, contributions=target_registry),
         seal_idempotency_key=service._full_copy_identity(fork_id,target_session_id,"plan_seal",source.plan_id),
     )
-    service._validate_context_assembly_manifest(
+    service._context.assemblies._validate_context_assembly_manifest(
         connection, target, registration=read_registration(connection,target_session_id,target_thread_id,target_plan),
         checkpoint_ns=checkpoint_ns,
     )

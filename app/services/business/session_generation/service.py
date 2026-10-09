@@ -13,11 +13,9 @@ from jsonschema.exceptions import ValidationError
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.core.path_segments import validate_generator_physical_segment
+from app.core.session_catalog_store.contracts import SessionGenerationOriginDTO
 from app.runtime.session_orchestrator import SessionOrchestrator
-from app.schemas.internal_v2.session import (
-    SessionDTO,
-    SessionGenerationOriginDTO,
-)
+from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation import (
     SessionGenerationCapabilitiesDTO,
     SessionGenerationCapabilityDTO,

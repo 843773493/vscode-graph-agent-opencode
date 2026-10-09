@@ -71,7 +71,7 @@ async def test_message_stream_sse_replay_and_terminal_close(
     message_stream_api: tuple[FastAPI, MessageStreamStore, str, str],
 ) -> None:
     api, store, session_id, turn_id = message_stream_api
-    writer = await store.open(session_id=session_id, turn_id=turn_id)
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id=turn_id)
     await writer.commit(
         "block.started",
         {
@@ -123,7 +123,7 @@ async def test_message_stream_snapshot_replaces_state_and_preserves_request_id(
     message_stream_api: tuple[FastAPI, MessageStreamStore, str, str],
 ) -> None:
     api, store, session_id, turn_id = message_stream_api
-    writer = await store.open(session_id=session_id, turn_id=turn_id)
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id=turn_id)
     await writer.commit(
         "model.started",
         {"model_call_id": "model_1", "attempt": 1, "model": "primary"},
@@ -218,7 +218,7 @@ async def test_failed_legacy_snapshot_drops_internal_tool_call_error_without_500
     message_stream_api: tuple[FastAPI, MessageStreamStore, str, str],
 ) -> None:
     api, store, session_id, turn_id = message_stream_api
-    writer = await store.open(session_id=session_id, turn_id=turn_id)
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id=turn_id)
     await writer.commit(
         "tool_call",
         {
@@ -258,7 +258,7 @@ async def test_active_snapshot_projects_model_failure_without_500(
     message_stream_api: tuple[FastAPI, MessageStreamStore, str, str],
 ) -> None:
     api, store, session_id, turn_id = message_stream_api
-    writer = await store.open(session_id=session_id, turn_id=turn_id)
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id=turn_id)
     await writer.commit(
         "model.failed",
         {
@@ -295,7 +295,7 @@ async def test_message_stream_availability_does_not_create_missing_streams(
     message_stream_api: tuple[FastAPI, MessageStreamStore, str, str],
 ) -> None:
     api, store, session_id, turn_id = message_stream_api
-    writer = await store.open(session_id=session_id, turn_id=turn_id)
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id=turn_id)
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=api),
@@ -318,7 +318,7 @@ async def test_message_stream_replay_after_cursor_and_unknown_stream_error(
     message_stream_api: tuple[FastAPI, MessageStreamStore, str, str],
 ) -> None:
     api, store, session_id, turn_id = message_stream_api
-    writer = await store.open(session_id=session_id, turn_id=turn_id)
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id=turn_id)
     await writer.commit(
         "interrupt.requested",
         {"interrupt_request_id": "intr_api", "reason": "user_requested"},
@@ -365,7 +365,7 @@ async def test_message_stream_cursor_beyond_high_water_is_rejected_not_hung(
     并带 ``message_stream_cursor_ahead`` 诊断码。
     """
     api, store, session_id, turn_id = message_stream_api
-    writer = await store.open(session_id=session_id, turn_id=turn_id)
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id=turn_id)
     await writer.commit(
         "block.started",
         {"block_id": "block_1", "block_index": 0, "carrier_type": "text"},

@@ -399,6 +399,7 @@ async def test_shutdown_waits_for_pre_body_cancel_finalization_writer(
 @pytest.mark.asyncio
 async def test_double_mount_event_trace_message_background_and_catalog_isolation(
     mounted_case: MountedCase,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async with main.lifespan(main.app):
         a, b = mounted_case.containers
@@ -438,7 +439,7 @@ async def test_double_mount_event_trace_message_background_and_catalog_isolation
                 assert node.is_relative_to(container.workspace_root / ".boxteam/sessions")
                 assert (node / "logs/traces/events.jsonl").is_file()
             for container, session_id in zip((a, b), sessions, strict=True):
-                writer = await container.message_stream_store.open(
+                writer = await container.message_stream_store.open(thread_id=container.message_stream_store._path_resolver.main_thread_id(session_id),
                     session_id=session_id, turn_id=job_id, job_id=job_id,
                 )
                 writers.append(writer)
@@ -474,28 +475,49 @@ async def test_double_mount_event_trace_message_background_and_catalog_isolation
 
             started_a, started_b, finish_b = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
-            async def background_a():
-                started_a.set()
-                await asyncio.Event().wait()
+            from datetime import UTC, datetime
 
-            async def background_b():
-                started_b.set()
-                await finish_b.wait()
-                return "B 完成"
+            from app.core.background_task_contracts import BackgroundTaskDescriptor
+            from app.services.infrastructure.background_work_handlers import (
+                SystemTimeEmitterHandler,
+            )
 
-            handle_a = a.background_task_registry.spawn(session_a, "shared-name", background_a)
-            handle_b = b.background_task_registry.spawn(session_b, "shared-name", background_b)
+            real_step = SystemTimeEmitterHandler.step
+
+            async def controlled_step(handler, handle):
+                if handle.descriptor.payload["source_id"] == "A":
+                    started_a.set()
+                    await asyncio.Event().wait()
+                else:
+                    started_b.set()
+                    await finish_b.wait()
+                return await real_step(handler, handle)
+
+            monkeypatch.setattr(SystemTimeEmitterHandler, "step", controlled_step)
+            handles = []
+            for container, session_id, source in ((a, session_a, "A"), (b, session_b, "B")):
+                handles.append(await container.background_task_registry.spawn(
+                    session_id=session_id, thread_id=container.session_catalog.resolver.main_thread_id(session_id),
+                    agent_id="default", task_id="bgt_" + source,
+                    descriptor=BackgroundTaskDescriptor(kind="emit_system_time_messages", version=1, payload={
+                        "interval_seconds": 0.001, "message_count": 1, "source_id": source,
+                        "started_at": datetime.now(UTC).isoformat(),
+                    }),
+                ))
+            handle_a, handle_b = handles
             await asyncio.wait_for(asyncio.gather(started_a.wait(), started_b.wait()), 2)
             await a.background_task_registry.cancel(session_a, handle_a.task_id)
             task_b = b.background_task_registry.get_task(session_b, handle_b.task_id)
             assert task_b is not None and not task_b.done()
-            assert handle_b.status == "running"
+            assert b.background_task_registry.get_handle(session_b, handle_b.task_id).status == "running"
             finish_b.set()
             await asyncio.wait_for(task_b, 2)
             assert [(handle.task_id, handle.status) for handle in a.background_task_registry.list_closed_handles(session_a)] == [(handle_a.task_id, "cancelled")]
             assert [(handle.task_id, handle.status) for handle in b.background_task_registry.list_closed_handles(session_b)] == [(handle_b.task_id, "completed")]
-            assert [record["task_id"] for record in json.loads((nodes[0] / "resources/background_tasks.json").read_text())] == [handle_a.task_id]
-            assert [record["task_id"] for record in json.loads((nodes[1] / "resources/background_tasks.json").read_text())] == [handle_b.task_id]
+            for container, session_id, expected in ((a, session_a, handle_a.task_id), (b, session_b, handle_b.task_id)):
+                with container.background_task_registry._store.control(session_id, read_only=True) as control:
+                    assert [item.task_id for item in control.list_background_tasks()] == [expected]
+                assert not (container.session_catalog.resolver.resolve_session_node(session_id) / "resources/background_tasks.json").exists()
 
             store_a, store_b = (container.session_catalog.resolver.catalog_store for container in (a, b))
             before_a, before_b = store_a.current_generation(), store_b.current_generation()

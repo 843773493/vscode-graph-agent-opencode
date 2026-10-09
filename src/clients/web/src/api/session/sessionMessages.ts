@@ -117,11 +117,15 @@ export async function sendMessage(
   sessionId: string,
   payload: MessageRunRequest,
   workspaceId?: string | null,
+  threadId?: string,
 ): Promise<MessageRunAccepted> {
+  const owner = `/api/v1/sessions/${encodeURIComponent(sessionId)}`;
   const accepted = unwrapApiData(
     await requestJson<APIResponse<MessageRunAccepted>>(
       port,
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
+      threadId === undefined
+        ? `${owner}/messages`
+        : `${owner}/threads/${encodeURIComponent(threadId)}/messages`,
       {
         method: "POST",
         headers: workspaceHeader(workspaceId),
@@ -146,6 +150,7 @@ export async function sendUserMessage(
   attachments: AttachmentRef[] = [],
   workspaceId?: string | null,
   deliveryPolicy: DeliveryPolicy = "after_turn",
+  threadId?: string,
 ): Promise<MessageRunAccepted> {
   const payload: MessageRunRequest = {
     message: {
@@ -163,7 +168,7 @@ export async function sendUserMessage(
     },
   };
 
-  return sendMessage(port, sessionId, payload, workspaceId);
+  return sendMessage(port, sessionId, payload, workspaceId, threadId);
 }
 
 export async function replayMessageTurn(

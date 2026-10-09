@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -26,6 +25,7 @@ from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.identity.tool_call_identity import (
     matches_tool_call_id,
     provider_tool_call_id,
+    software_tool_operation_id,
 )
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogBindingRef,
@@ -124,10 +124,8 @@ class ToolInvocationContext:
         if invocation is None or self.thread_binding is None:
             raise RuntimeError("通信工具缺少精确 thread invocation binding")
         call_id = provider_tool_call_id(invocation.projection_identity, invocation.tool_call_id)
-        preimage = json.dumps([operation, self.thread_binding.session_id,
-                              self.thread_binding.thread_id, model_call_id, call_id],
-                             ensure_ascii=False, separators=(",", ":"))
-        return "cop_" + hashlib.sha256(preimage.encode()).hexdigest()
+        return software_tool_operation_id(operation, self.thread_binding.session_id,
+                                          self.thread_binding.thread_id, model_call_id, call_id)
 
     def set_extension_catalog_binding(
         self,

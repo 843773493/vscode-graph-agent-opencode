@@ -24,7 +24,6 @@ from app.services.infrastructure.rollout_context.fork.identity import (
     target_local_acceptance_identity,
 )
 from app.services.infrastructure.rollout_context.fork.validation import (
-    json_mapping,
     non_negative_int,
     one_of_text,
     optional_text,
@@ -32,6 +31,9 @@ from app.services.infrastructure.rollout_context.fork.validation import (
 )
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
+)
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    json_mapping,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     load_committed_idempotency_commit,
@@ -129,14 +131,14 @@ class ForkCompletionMixin(ForkCloneMixin):
         source_session_id = required_text(
             source_session_id, field="completed_finalizations.source_session_id"
         )
-        source_thread_id = self._resolve_thread_identity(source_session_id, source_thread_id)
+        source_thread_id = self._storage._resolve_thread_identity(source_session_id, source_thread_id)
         source_checkpoint_id = optional_text(
             source_checkpoint_id,
             field="completed_finalizations.source_checkpoint_id",
         )
         if not isinstance(checkpoint_ns, str):
             raise TypeError("completed_finalizations.checkpoint_ns 必须是字符串")
-        source_root = self.root(
+        source_root = self._storage.root(
             source_session_id, checkpoint_ns, thread_id=source_thread_id
         )
         if not source_root.is_dir():
@@ -147,12 +149,12 @@ class ForkCompletionMixin(ForkCloneMixin):
         )
         source_lock.acquire()
         try:
-            with self._connect(
+            with self._storage._connect(
                 source_thread_id,
                 checkpoint_ns,
                 session_id=source_session_id,
             ) as connection:
-                self._require_v2_runtime(connection)
+                self._storage._require_v2_runtime(connection)
                 if source_checkpoint_id is not None:
                     source_view_row = connection.execute(
                         "SELECT view_id FROM checkpoints WHERE checkpoint_id = ? AND checkpoint_ns = ? AND status = 'active'",
@@ -220,8 +222,8 @@ class ForkCompletionMixin(ForkCloneMixin):
         )
 
         """读取 source v2 Turn/acceptance 的只读 lineage 输入。"""
-        source_thread_id = self._resolve_thread_identity(source_session_id, source_thread_id)
-        source_root = self.root(
+        source_thread_id = self._storage._resolve_thread_identity(source_session_id, source_thread_id)
+        source_root = self._storage.root(
             source_session_id, checkpoint_ns, thread_id=source_thread_id
         )
         if not source_root.is_dir():
@@ -232,13 +234,13 @@ class ForkCompletionMixin(ForkCloneMixin):
         )
         source_lock.acquire()
         try:
-            with self._connect(
+            with self._storage._connect(
                 source_thread_id,
                 checkpoint_ns,
                 session_id=source_session_id,
                 read_only=True,
             ) as connection:
-                self._require_v2_runtime(connection)
+                self._storage._require_v2_runtime(connection)
                 for table in ("turn_records", "turn_acceptances", "executions"):
                     other_owner = connection.execute(
                         f"SELECT COUNT(*) FROM {table} "
@@ -477,7 +479,7 @@ class ForkCompletionMixin(ForkCloneMixin):
             if committed_items:
                 raise RuntimeError("fork source seed/reference admission 不得含 canonical item")
             return preimage
-        notice = self._read_canonical_item_from_catalog(
+        notice = self._storage._read_canonical_item_from_catalog(
             connection, session_id=session_id, thread_id=thread_id,
             checkpoint_ns=checkpoint_ns, item_id=notice_id,
         )
@@ -539,7 +541,7 @@ class ForkCompletionMixin(ForkCloneMixin):
         if branch is None:
             raise RuntimeError("fork target active branch 缺失")
         target_branch = required_text(branch[0], field="target.active_branch_id")
-        with self._connect(source_thread_id, checkpoint_ns, session_id=source_session_id,
+        with self._storage._connect(source_thread_id, checkpoint_ns, session_id=source_session_id,
                            read_only=True) as source_connection:
             used_executions = {execution_id for item_id, execution_id in source_connection.execute(
                 "SELECT item_id, execution_id FROM item_catalog"

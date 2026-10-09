@@ -33,7 +33,7 @@ def context_saver(
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     with RolloutCheckpointSaver(sessions_dir) as saver:
-        owner = saver.resolve_main_thread_owner(SESSION_ID)
+        owner = saver.forks.source.resolve_main_thread_owner(SESSION_ID)
         assert owner.thread_id != SESSION_ID
         with session_thread_owner_scope(
             MutationIntentOwner(owner.session_id, owner.thread_id),
@@ -48,10 +48,10 @@ def accept_context_turn(
 ) -> Callable[[HumanMessage, str], ExecutionAdmission]:
     """先走真实 acceptance，再给 checkpoint writer 注入该执行的 admission。"""
     saver = context_saver
-    thread_id = saver.resolve_main_thread_owner(SESSION_ID).thread_id
+    thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
 
     def accept(message: HumanMessage, turn_id: str) -> ExecutionAdmission:
-        codec = saver._storage._codec()
+        codec = saver._storage.storage._codec()
         message_id = codec.message_id(message, 0)
         execution_id = f"execution-{turn_id}"
         root = codec.items_for_message(
@@ -105,7 +105,7 @@ def test_context_view_filters_control_records_and_keeps_business_messages(
     accept_context_turn: Callable[[HumanMessage, str], ExecutionAdmission],
 ) -> None:
     saver = context_saver
-    thread_id = saver.resolve_main_thread_owner(SESSION_ID).thread_id
+    thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
     user = HumanMessage(content="读取配置", id="user-1")
     internal_steering = HumanMessage(
         content="控制：工具返回后重新检查",
@@ -179,7 +179,7 @@ def test_context_view_filters_control_records_and_keeps_business_messages(
         is True
     )
 
-    root = saver._storage.root(SESSION_ID, thread_id=thread_id)
+    root = saver._storage.storage.root(SESSION_ID, thread_id=thread_id)
     records = [
         json.loads(line)
         for line in (root / "rollout.jsonl").read_text(encoding="utf-8").splitlines()
@@ -261,7 +261,7 @@ def test_incremental_checkpoint_keeps_tool_call_with_later_tool_result(
 ) -> None:
     """增量 checkpoint 不能只恢复 ToolMessage 而丢掉其 assistant call。"""
     saver = context_saver
-    thread_id = saver.resolve_main_thread_owner(SESSION_ID).thread_id
+    thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
     user = HumanMessage(
         content="读取 README",
         id="user-tool-call",
@@ -311,7 +311,7 @@ def test_incremental_checkpoint_keeps_tool_call_with_later_tool_result(
             {"messages": "2"},
         )
 
-    root = saver._storage.root(SESSION_ID, thread_id=thread_id)
+    root = saver._storage.storage.root(SESSION_ID, thread_id=thread_id)
     with sqlite3.connect(root / "index.sqlite") as connection:
         view_id = connection.execute(
             "SELECT view_id FROM checkpoints WHERE checkpoint_id = 'checkpoint-tool-result'"
@@ -367,7 +367,7 @@ def test_parallel_tool_continuation_restores_all_call_declarations(
 ) -> None:
     """并行工具组之后的 continuation 不能只携带 ToolMessage 结果。"""
     saver = context_saver
-    thread_id = saver.resolve_main_thread_owner(SESSION_ID).thread_id
+    thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
     parallel_calls = [
         {
             "name": "read_file",
@@ -432,7 +432,7 @@ def test_parallel_tool_continuation_restores_all_call_declarations(
         f"call-parallel-{index}" for index in range(4)
     }
 
-    root = saver._storage.root(SESSION_ID, thread_id=thread_id)
+    root = saver._storage.storage.root(SESSION_ID, thread_id=thread_id)
     with sqlite3.connect(root / "index.sqlite") as connection:
         child_view = connection.execute(
             "SELECT view_id FROM checkpoints WHERE checkpoint_id = 'parallel-continuation'"
@@ -484,7 +484,7 @@ def test_context_view_validation_accepts_single_message_range(
 ) -> None:
     """单消息 view range 的起止序号相同，校验时仍应视为完整范围。"""
     saver = context_saver
-    thread_id = saver.resolve_main_thread_owner(SESSION_ID).thread_id
+    thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
     user = HumanMessage(content="单条消息", id="single")
     admission = accept_context_turn(user, "turn-single")
     with execution_admission_scope(admission, langgraph_thread_id=thread_id):
@@ -495,13 +495,13 @@ def test_context_view_validation_accepts_single_message_range(
             {"messages": "1"},
         )
 
-    root = saver._storage.root(SESSION_ID, thread_id=thread_id)
+    root = saver._storage.storage.root(SESSION_ID, thread_id=thread_id)
     with sqlite3.connect(root / "index.sqlite") as connection:
         view_id = connection.execute(
             "SELECT view_id FROM checkpoints WHERE checkpoint_id = 'single-message'"
         ).fetchone()[0]
 
-    saver._storage.validate_context_view_chain(thread_id, "", str(view_id))
+    saver._storage.checkpoints.validate_context_view_chain(thread_id, "", str(view_id))
 
 
 def test_compaction_control_event_keeps_message_cutoff_identity(
@@ -509,7 +509,7 @@ def test_compaction_control_event_keeps_message_cutoff_identity(
     accept_context_turn: Callable[[HumanMessage, str], ExecutionAdmission],
 ) -> None:
     saver = context_saver
-    thread_id = saver.resolve_main_thread_owner(SESSION_ID).thread_id
+    thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
     user = HumanMessage(
         content="问题", id="u1", response_metadata={"turn_id": "turn-1"}
     )
@@ -548,7 +548,7 @@ def test_compaction_control_event_keeps_message_cutoff_identity(
             {"source": "compaction"},
             {"messages": "2", "_summarization_event": "2"},
         )
-    root = saver._storage.root(SESSION_ID, thread_id=thread_id)
+    root = saver._storage.storage.root(SESSION_ID, thread_id=thread_id)
     with sqlite3.connect(root / "index.sqlite") as connection:
         payload = connection.execute(
             "SELECT payload_json FROM control_events WHERE checkpoint_id = 'cp-2'"
@@ -562,7 +562,7 @@ def test_turn_anchor_reports_unreachable_when_no_complete_view_remains(
     accept_context_turn: Callable[[HumanMessage, str], ExecutionAdmission],
 ) -> None:
     saver = context_saver
-    thread_id = saver.resolve_main_thread_owner(SESSION_ID).thread_id
+    thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
     user = HumanMessage(
         content="不可达问题",
         id="unreachable-user",
@@ -579,7 +579,7 @@ def test_turn_anchor_reports_unreachable_when_no_complete_view_remains(
             {"messages": "1"},
         )
     with sqlite3.connect(
-        saver._storage.index_path(SESSION_ID, thread_id=thread_id)
+        saver._storage.storage.index_path(SESSION_ID, thread_id=thread_id)
     ) as connection:
         connection.execute(
             "DELETE FROM context_view_turns WHERE turn_id = 'turn-unreachable'"
@@ -597,7 +597,7 @@ def test_turn_anchor_walks_active_lineage_after_message_level_compaction(
     accept_context_turn: Callable[[HumanMessage, str], ExecutionAdmission],
 ) -> None:
     saver = context_saver
-    thread_id = saver.resolve_main_thread_owner(SESSION_ID).thread_id
+    thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
     turn_messages = [
         HumanMessage(
             content="检查部署",
@@ -700,7 +700,7 @@ def test_turn_anchor_walks_active_lineage_after_message_level_compaction(
     assert before.cutoff_message_sequence == before.user_message_sequence - 1
 
     with sqlite3.connect(
-        saver._storage.index_path(SESSION_ID, thread_id=thread_id)
+        saver._storage.storage.index_path(SESSION_ID, thread_id=thread_id)
     ) as connection:
         assert (
             connection.execute(
@@ -730,7 +730,7 @@ def test_logical_pruning_marks_unreferenced_checkpoints_without_touching_jsonl(
     accept_context_turn: Callable[[HumanMessage, str], ExecutionAdmission],
 ) -> None:
     saver = context_saver
-    thread_id = saver.resolve_main_thread_owner(SESSION_ID).thread_id
+    thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
     config = build_checkpoint_config(thread_id)
     messages: list[object] = []
     for index in range(3):
@@ -753,7 +753,7 @@ def test_logical_pruning_marks_unreferenced_checkpoints_without_touching_jsonl(
     assert {candidate.checkpoint_id for candidate in plan.candidates} == {"cp-1"}
     assert all(candidate.view_id.startswith("view-") for candidate in plan.candidates)
 
-    rollout_path = saver._storage.jsonl_path(SESSION_ID, thread_id=thread_id)
+    rollout_path = saver._storage.storage.jsonl_path(SESSION_ID, thread_id=thread_id)
     original_jsonl = rollout_path.read_bytes()
     assert saver.execute_pruning(thread_id, plan) == ("cp-1",)
     assert rollout_path.read_bytes() == original_jsonl
@@ -771,7 +771,7 @@ def test_context_view_jump_validation_rejects_cycle_or_wrong_ancestor(
     accept_context_turn: Callable[[HumanMessage, str], ExecutionAdmission],
 ) -> None:
     saver = context_saver
-    thread_id = saver.resolve_main_thread_owner(SESSION_ID).thread_id
+    thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
     user = HumanMessage(content="一", id="u1")
     admission = accept_context_turn(user, "turn-jump")
     with execution_admission_scope(admission, langgraph_thread_id=thread_id):
@@ -787,7 +787,7 @@ def test_context_view_jump_validation_rejects_cycle_or_wrong_ancestor(
             {"source": "jump-test"},
             {"messages": "2"},
         )
-    root = saver._storage.root(SESSION_ID, thread_id=thread_id)
+    root = saver._storage.storage.root(SESSION_ID, thread_id=thread_id)
     with sqlite3.connect(root / "index.sqlite") as connection:
         view_id, parent_view_id = connection.execute(
             "SELECT view_id, parent_view_id FROM context_views WHERE parent_view_id IS NOT NULL LIMIT 1"
@@ -799,7 +799,7 @@ def test_context_view_jump_validation_rejects_cycle_or_wrong_ancestor(
         )
 
     with pytest.raises(RuntimeError, match="jump 非法"):
-        saver._storage.validate_context_view_chain(thread_id, "", view_id)
+        saver._storage.checkpoints.validate_context_view_chain(thread_id, "", view_id)
 
 
 def test_pruning_preserves_all_canonical_bytes_and_item_offsets(
@@ -807,7 +807,7 @@ def test_pruning_preserves_all_canonical_bytes_and_item_offsets(
     accept_context_turn: Callable[[HumanMessage, str], ExecutionAdmission],
 ) -> None:
     saver = context_saver
-    thread_id = saver.resolve_main_thread_owner(SESSION_ID).thread_id
+    thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
     first_user = HumanMessage(content="保留的问题", id="u1")
     first_messages = [first_user, AIMessage(content="保留的回答", id="a1")]
     first_admission = accept_context_turn(first_user, "turn-retained")
@@ -855,7 +855,7 @@ def test_pruning_preserves_all_canonical_bytes_and_item_offsets(
             {"source": "compaction-test", "step": 3},
             {"messages": "3"},
         )
-    root = saver._storage.root(SESSION_ID, thread_id=thread_id)
+    root = saver._storage.storage.root(SESSION_ID, thread_id=thread_id)
     rollout_path = root / "rollout.jsonl"
     before = rollout_path.read_bytes()
     with sqlite3.connect(root / "index.sqlite") as connection:

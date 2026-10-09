@@ -115,7 +115,7 @@ def test_corrupt_commit_boundary_preserves_all_jsonl_bytes(
         connection.execute(corruption)
     restarted = RolloutCheckpointSaver(rollout.sessions)
     with pytest.raises(RuntimeError):
-        restarted._storage.initialize(
+        restarted._storage.storage.initialize(
             rollout.session_id, validate_jsonl_items=validate_jsonl_items
         )
     assert rollout.jsonl.read_bytes() == before
@@ -130,7 +130,7 @@ def test_valid_commit_chain_reclaims_only_uncommitted_tail(
     with rollout.jsonl.open("ab") as stream:
         stream.write(b'{"unfinished":')
     restarted = RolloutCheckpointSaver(rollout.sessions)
-    restarted._storage.initialize(
+    restarted._storage.storage.initialize(
         rollout.session_id, validate_jsonl_items=validate_jsonl_items
     )
     assert rollout.jsonl.read_bytes() == rollout.committed
@@ -169,7 +169,7 @@ def test_invalid_catalog_preserves_committed_body_and_tail(
         connection.execute("UPDATE item_catalog SET jsonl_length = jsonl_length - 1")
     restarted = RolloutCheckpointSaver(rollout.sessions)
     with pytest.raises(RuntimeError, match="JCS line|无法解码|locator|不一致"):
-        restarted._storage.initialize(rollout.session_id)
+        restarted._storage.storage.initialize(rollout.session_id)
     assert rollout.jsonl.read_bytes() == before
 
 
@@ -200,7 +200,7 @@ def test_startup_rejects_catalog_manifest_corruption_without_repair(
         stream.write(b"uncommitted-tail")
     before = rollout.jsonl.read_bytes()
     with pytest.raises(RuntimeError, match=match):
-        RolloutCheckpointSaver(rollout.sessions)._storage.initialize(rollout.session_id)
+        RolloutCheckpointSaver(rollout.sessions)._storage.storage.initialize(rollout.session_id)
     assert rollout.jsonl.read_bytes() == before
     with sqlite3.connect(rollout.index) as connection:
         assert (
@@ -221,12 +221,12 @@ def test_startup_does_not_rebuild_optional_item_projections(
         item_id = connection.execute("SELECT item_id FROM item_catalog").fetchone()[0]
         connection.execute("DELETE FROM item_projections")
     storage = RolloutCheckpointSaver(rollout.sessions)._storage
-    storage.initialize(rollout.session_id)
+    storage.storage.initialize(rollout.session_id)
     # 合同允许只保留最小 catalog；启动不创建第二套事实，也不自动重建可选索引。
     assert rollout.jsonl.read_bytes() == rollout.committed
-    assert storage.read_item_projections(rollout.session_id) == []
+    assert storage.storage.read_item_projections(rollout.session_id) == []
     with pytest.raises(KeyError, match="item projection 缺少"):
-        storage.read_item_projections(rollout.session_id, item_ids=(item_id,))
+        storage.storage.read_item_projections(rollout.session_id, item_ids=(item_id,))
 
 
 def test_summary_reads_never_open_jsonl_body(
@@ -243,10 +243,10 @@ def test_summary_reads_never_open_jsonl_body(
 
     monkeypatch.setattr(Path, "open", forbid_jsonl_body)
     storage = RolloutCheckpointSaver(rollout.sessions)._storage
-    projections = storage.read_item_projections(rollout.session_id)
+    projections = storage.storage.read_item_projections(rollout.session_id)
     assert len(projections) == 1
-    thread_id = storage.main_thread_id(rollout.session_id)
-    with storage.open_read_snapshot(rollout.session_id, thread_id) as snapshot:
+    thread_id = storage.storage.main_thread_id(rollout.session_id)
+    with storage.storage.open_read_snapshot(rollout.session_id, thread_id) as snapshot:
         assert snapshot.thread_id == thread_id
         assert snapshot.session_id == rollout.session_id
 
@@ -267,7 +267,7 @@ def test_bounded_projection_preserves_original_text_length(
         payload="界" * text_length,
         payload_kind=PayloadKind.TEXT,
     )
-    projections = saver._storage.read_item_projections(
+    projections = saver._storage.storage.read_item_projections(
         rollout.session_id, item_ids=(accepted["root_input_item_id"],)
     )
     assert len(projections) == 1
@@ -293,10 +293,10 @@ def test_removed_physical_compaction_journal_is_rejected_without_recovery(
         RuntimeError, match="recovery-required.*物理 compaction journal"
     ):
         if operation == "initialize":
-            storage.initialize(rollout.session_id)
+            storage.storage.initialize(rollout.session_id)
         else:
-            with storage.open_read_snapshot(
-                rollout.session_id, storage.main_thread_id(rollout.session_id)
+            with storage.storage.open_read_snapshot(
+                rollout.session_id, storage.storage.main_thread_id(rollout.session_id)
             ):
                 pytest.fail("未完成的旧物理回收不能成为可读 snapshot")
     assert rollout.jsonl.read_bytes() == before
@@ -322,7 +322,7 @@ def test_nullable_source_revision_uses_stable_canonical_revision(
             }
         },
     )
-    restarted = RolloutCheckpointSaver(rollout.sessions)._storage
+    restarted = RolloutCheckpointSaver(rollout.sessions)._storage.storage
     items = restarted.read_items(
         rollout.session_id,
         restarted.main_thread_id(rollout.session_id),
@@ -345,7 +345,7 @@ def test_startup_rejects_unpublished_migration_without_resetting_target(
         connection.execute("UPDATE database_meta SET database_state = 'migrating'")
         catalog = connection.execute("SELECT * FROM item_catalog").fetchall()
     with pytest.raises(RuntimeError, match="rollout-publication-incomplete"):
-        RolloutCheckpointSaver(rollout.sessions)._storage.initialize(rollout.session_id)
+        RolloutCheckpointSaver(rollout.sessions)._storage.storage.initialize(rollout.session_id)
     assert rollout.jsonl.read_bytes() == rollout.committed
     with sqlite3.connect(rollout.index) as connection:
         assert connection.execute("SELECT * FROM item_catalog").fetchall() == catalog

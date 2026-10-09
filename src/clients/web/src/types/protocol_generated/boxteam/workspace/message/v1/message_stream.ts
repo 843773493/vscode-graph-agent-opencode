@@ -690,6 +690,7 @@ export interface MessageStreamEvent {
   tool_call_id?: string | undefined;
   tool_invocation_id?: string | undefined;
   tool_attempt_id?: string | undefined;
+  thread_id: string;
   payload:
     | { $case: "stream_opened"; stream_opened: StreamOpened }
     | { $case: "model_started"; model_started: ModelStarted }
@@ -2589,6 +2590,7 @@ function createBaseMessageStreamEvent(): MessageStreamEvent {
     tool_call_id: undefined,
     tool_invocation_id: undefined,
     tool_attempt_id: undefined,
+    thread_id: "",
     payload: undefined,
   };
 }
@@ -2611,6 +2613,7 @@ export const MessageStreamEvent: MessageFns<MessageStreamEvent> = {
       tool_call_id: isSet(object.tool_call_id) ? globalThis.String(object.tool_call_id) : undefined,
       tool_invocation_id: isSet(object.tool_invocation_id) ? globalThis.String(object.tool_invocation_id) : undefined,
       tool_attempt_id: isSet(object.tool_attempt_id) ? globalThis.String(object.tool_attempt_id) : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
       payload: isSet(object.stream_opened)
         ? { $case: "stream_opened", stream_opened: StreamOpened.fromJSON(object.stream_opened) }
         : isSet(object.model_started)
@@ -2702,6 +2705,9 @@ export const MessageStreamEvent: MessageFns<MessageStreamEvent> = {
     if (message.tool_attempt_id !== undefined) {
       obj.tool_attempt_id = message.tool_attempt_id;
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     if (message.payload?.$case === "stream_opened") {
       obj.stream_opened = StreamOpened.toJSON(message.payload.stream_opened);
     } else if (message.payload?.$case === "model_started") {
@@ -2766,6 +2772,7 @@ export const MessageStreamEvent: MessageFns<MessageStreamEvent> = {
     message.tool_call_id = object.tool_call_id ?? undefined;
     message.tool_invocation_id = object.tool_invocation_id ?? undefined;
     message.tool_attempt_id = object.tool_attempt_id ?? undefined;
+    message.thread_id = object.thread_id ?? "";
     switch (object.payload?.$case) {
       case "stream_opened": {
         if (object.payload?.stream_opened !== undefined && object.payload?.stream_opened !== null) {

@@ -93,7 +93,7 @@ def fork_case(request, session_bundle_factory, fork_plan_kind):
     body = [{"type": "text", "text": "草稿正文不能复制进 SQLite"}]
     with RolloutCheckpointSaver(sessions) as saver:
         storage = saver._storage
-        source_thread, target_thread = (storage.main_thread_id(session) for session in (source, target))
+        source_thread, target_thread = (storage.storage.main_thread_id(session) for session in (source, target))
         accepted = saver.accept_turn(
             source, thread_id=source_thread, accepted_ingress_id="source-ingress",
             acceptance_idempotency_key="source-accept", job_id="source-job",
@@ -167,7 +167,7 @@ def fork_case(request, session_bundle_factory, fork_plan_kind):
                 execution_id=accepted["initial_execution_id"], provider_version="import-fixture",
                 seal_idempotency_key="source-plan-seal",
             )
-        source_view = storage.clone_rollout(
+        source_view = storage.forks.clone_rollout(
             source_session_id=source, source_thread_id=source_thread,
             target_session_id=target, target_thread_id=target_thread, source_checkpoint_id=None,
         )
@@ -177,12 +177,12 @@ def fork_case(request, session_bundle_factory, fork_plan_kind):
             "fork_mode": "full_rollout_copy", "relationship": "detached", "checkpoint_ns": "",
             "source_thread_id": source_thread, "target_thread_id": target_thread,
             "source_snapshot_sha256": hashlib.sha256(
-                canonical_json_bytes(artifact_manifest(storage.root(source)))
+                canonical_json_bytes(artifact_manifest(storage.storage.root(source)))
             ).hexdigest(),
         }
-        materialization, fork_id = storage.begin_fork_materialization(**fields)
-        storage.commit_fork_materialization(materialization, **fields)
-        with storage._connect(target_thread, "", read_only=True, session_id=target) as owner_connection:
+        materialization, fork_id = storage.forks.begin_fork_materialization(**fields)
+        storage.forks.commit_fork_materialization(materialization, **fields)
+        with storage.storage._connect(target_thread, "", read_only=True, session_id=target) as owner_connection:
             database_path = owner_connection.execute("PRAGMA database_list").fetchone()[2]
             target_assembly = owner_connection.execute(
                 "SELECT target_local_id FROM fork_identity_mappings WHERE fork_id=? "
@@ -194,7 +194,7 @@ def fork_case(request, session_bundle_factory, fork_plan_kind):
         connection.execute("PRAGMA foreign_keys=ON")
         registration = read_imported_registration(connection, target, target_thread, current.plan_id)
         provenance = registration.source_provenance
-        with storage._connect(source_thread, "", read_only=True, session_id=source) as source_connection:
+        with storage.storage._connect(source_thread, "", read_only=True, session_id=source) as source_connection:
             source_version = source_connection.execute(
                 "SELECT schema_version FROM database_meta WHERE singleton_id=1"
             ).fetchone()[0]

@@ -198,6 +198,9 @@ class CollaborationMixin:
                 "UPDATE collaboration_ledger SET revision = revision + 1 "
                 "WHERE id = 1"
             )
+            self._freeze_collaboration_member_change_transaction(
+                connection, delegation_id, "member.registered", bump_revision=False,
+            )
             return self.get_collaboration_ledger_revision()
 
     def get_collaboration_member(self, delegation_id: str) -> CollaborationMember:

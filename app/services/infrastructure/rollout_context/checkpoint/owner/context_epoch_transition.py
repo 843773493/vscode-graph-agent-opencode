@@ -6,7 +6,7 @@ from app.domain.itemized.epoch.prefix_epoch import (
     EpochReason,
     PendingPrefixEpochTransition,
 )
-from app.services.infrastructure.rollout_context.checkpoint.owner.context_source_control import (
+from app.services.infrastructure.rollout_context.checkpoint.durable.context_source_control import (
     _state_from_row,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
@@ -27,7 +27,7 @@ class ContextEpochTransitionOwnerMixin:
     ) -> ContextSourceRebuildState | None:
         if not isinstance(owner, ContextSourceOwnerKey):
             raise TypeError("load_context_source_rebuild_state 需要精确 ContextSourceOwnerKey")
-        rows = self._storage.read_context_source_rebuild_rows(
+        rows = self._storage.checkpoints.read_context_source_rebuild_rows(
             owner.session_id, owner.thread_id, checkpoint_ns=checkpoint_ns,
         )
         if rows is None:

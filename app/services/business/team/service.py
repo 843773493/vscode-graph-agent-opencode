@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
+import json
+
 from app.abstractions.session_subagent import (
     OwnerThreadCreationFactoryProtocol,
     SessionReaderProtocol,
     SessionSubagentProtocol,
 )
-from app.abstractions.team import TeamStoreProtocol
+from app.abstractions.team import TeamFanoutProtocol, TeamStoreProtocol
+from app.core.session_control_store.collaboration_fanout import (
+    CollaborationFanoutRecord,
+)
 from app.schemas.internal_v2.team import (
     TeamBoardDTO,
     TeamListDTO,
@@ -18,20 +22,20 @@ from app.schemas.internal_v2.team import (
 )
 
 from .board_manager import TeamBoardManager
-from .messages import task_assignment_message, task_update_message, trusted_team_context
-from .rules import RESOLUTION_STATUSES, require_active_member, required_text
+from .messages import trusted_team_context
+from .rules import find_task, require_active_member, required_text
 
 
 class TeamCoordinationService:
     """同一 Session 的成员 publication、任务面板与精确线程通知。"""
 
     def __init__(self, *, store: TeamStoreProtocol, session_service: SessionReaderProtocol,
-                 session_orchestrator: SessionOrchestratorProtocol,
+                 fanout: TeamFanoutProtocol,
                  session_subagent_service: SessionSubagentProtocol,
                  thread_creation_factory: OwnerThreadCreationFactoryProtocol) -> None:
         self._boards = TeamBoardManager(store=store, factory=thread_creation_factory)
         self._sessions = session_service
-        self._orchestrator = session_orchestrator
+        self._fanout = fanout
         self._subagents = session_subagent_service
         self._factory = thread_creation_factory
 
@@ -40,7 +44,7 @@ class TeamCoordinationService:
         if requester_thread_id != session.thread_id:
             raise PermissionError("只有当前 Session 的 main thread 可以创建团队")
         self._factory.validate_owner_thread(requester_session_id, requester_thread_id)
-        return self._boards.create(session_id=requester_session_id, coordinator_thread_id=requester_thread_id, name=name)
+        return await self._boards.create(session_id=requester_session_id, coordinator_thread_id=requester_thread_id, name=name)
 
     async def list_teams(self, *, requester_session_id: str, requester_thread_id: str) -> TeamListDTO:
         self._factory.validate_owner_thread(requester_session_id, requester_thread_id)
@@ -77,42 +81,45 @@ class TeamCoordinationService:
                           cycle: int, depends_on_task_ids: list[str], start_assignee: bool) -> TeamTaskOperationDTO:
         if start_assignee and assignee_thread_id == requester_thread_id:
             raise ValueError("当前线程登记自行执行的任务时必须使用 start_assignee=false")
-        board, task = await self._boards.assign_task(
+        board, task, revision = await self._boards.assign_task(
             requester_session_id=requester_session_id, requester_thread_id=requester_thread_id,
             team_id=team_id, assignee_thread_id=assignee_thread_id, title=title, description=description,
             phase=phase, cycle=cycle, depends_on_task_ids=depends_on_task_ids, start_assignee=start_assignee,
         )
-        accepted = None
+        job_id = None
         if start_assignee:
             try:
-                accepted = await self._orchestrator.submit_runtime_event(
-                    requester_session_id, task_assignment_message(board=board, task=task), thread_id=assignee_thread_id,
-                    source_id=f"team:{team_id}:task:{task.task_id}:assignment",
-                    idempotency_key=f"team-assignment:{task.task_id}",
-                )
+                job_id = await self._fanout.dispatch(requester_session_id, revision)
             except Exception as error:
                 await self._boards.set_task_dispatch_failure(
                     session_id=requester_session_id, team_id=team_id, task_id=task.task_id,
                     actor_thread_id=requester_thread_id, error=str(error),
                 )
                 raise RuntimeError(f"团队任务已记录，目标线程调度失败: team_id={team_id} task_id={task.task_id}: {error}") from error
-            board, task = await self._boards.set_task_dispatched(
-                session_id=requester_session_id, team_id=team_id, task_id=task.task_id,
-                actor_thread_id=requester_thread_id, job_id=accepted.job_id,
-            )
-        return TeamTaskOperationDTO(board=board, task=task, dispatched_job_id=accepted.job_id if accepted else None)
+            board = self._boards.get_for_coordinator(session_id=requester_session_id, thread_id=requester_thread_id, team_id=team_id)
+            task = find_task(board, task.task_id)
+        return TeamTaskOperationDTO(board=board, task=task, dispatched_job_id=job_id)
 
     async def update_task(self, *, requester_session_id: str, requester_thread_id: str, team_id: str,
                           task_id: str, status: TeamTaskStatus, summary: str) -> TeamTaskOperationDTO:
-        board, task = await self._boards.update_task(
+        board, task, revision = await self._boards.update_task(
             requester_session_id=requester_session_id, requester_thread_id=requester_thread_id,
             team_id=team_id, task_id=task_id, status=status, summary=summary,
         )
-        accepted = None
-        if requester_thread_id != board.coordinator_thread_id and status in RESOLUTION_STATUSES:
-            accepted = await self._orchestrator.submit_runtime_event(
-                requester_session_id, task_update_message(board=board, task=task), thread_id=board.coordinator_thread_id,
-                source_id=f"team:{team_id}:task:{task_id}:update",
-                idempotency_key=f"team-update:{task_id}:{board.version}",
-            )
-        return TeamTaskOperationDTO(board=board, task=task, dispatched_job_id=accepted.job_id if accepted else None)
+        job_id = await self._fanout.dispatch(requester_session_id, revision)
+        return TeamTaskOperationDTO(board=board, task=task, dispatched_job_id=job_id)
+
+    async def finalize_wakeup(self, record: CollaborationFanoutRecord, job_id: str) -> None:
+        """消费原 fanout 回执；恢复不得把任务换绑到另一 Job。"""
+        wakeup = json.loads(record.wakeup_json)
+        metadata = wakeup["metadata"]
+        if metadata["source"] == "team_task_update":
+            return
+        if metadata["source"] != "team_task_assignment":
+            raise RuntimeError("collaboration wakeup 不是既有团队任务通知")
+        board = next(board for board in json.loads(record.payload_json)["boards"]
+                     if board["team_id"] == metadata["team_id"])
+        await self._boards.set_task_dispatched(
+            session_id=record.session_id, team_id=metadata["team_id"], task_id=metadata["team_task_id"],
+            actor_thread_id=board["coordinator_thread_id"], job_id=job_id,
+        )

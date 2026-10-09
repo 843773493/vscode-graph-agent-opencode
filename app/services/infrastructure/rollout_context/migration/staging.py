@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
 
 class ImportStagingStorage(RolloutStorage):
@@ -13,7 +14,7 @@ class ImportStagingStorage(RolloutStorage):
 
     def __init__(
         self,
-        owner: RolloutStorage,
+        owner: RolloutContextStore,
         *,
         session_id: str,
         thread_id: str,
@@ -21,7 +22,8 @@ class ImportStagingStorage(RolloutStorage):
         root: Path,
     ) -> None:
         super().__init__(
-            owner.sessions_dir, serde=owner._serde, message_codec=owner._message_codec
+            owner.storage.sessions_dir, serde=owner.storage._serde, message_codec=owner.storage._message_codec,
+            fork_recovery=owner.storage._fork_recovery, initialize_activation=owner.storage._initialize_activation
         )
         self._session_id = session_id
         self._thread_id = thread_id
@@ -48,16 +50,16 @@ class ImportStagingStorage(RolloutStorage):
 
 
 def validate_staging(
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
     session_id: str,
     thread_id: str,
     checkpoint_ns: str,
 ) -> None:
     """由真实 v2 初始化和 reader 校验提交链、正文、owner 与关系闭合。"""
-    storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+    storage.storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
     by_id = {
         item.item_id: item
-        for item in storage.read_items(
+        for item in storage.storage.read_items(
             session_id, thread_id, checkpoint_ns=checkpoint_ns
         )
     }
@@ -78,7 +80,7 @@ def validate_staging(
                 if call.payload[field] != item.payload[field]:
                     raise RuntimeError(f"migration staging {field} 不一致")
             results.add(call_id)
-    with storage._connect(
+    with storage.storage._connect(
         thread_id, checkpoint_ns, session_id=session_id
     ) as connection:
         if connection.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:

@@ -72,7 +72,7 @@ export interface SessionCatalogFetchRequest {
  */
 export type SessionCatalogFetchHandler = (
   request: SessionCatalogFetchRequest,
-) => Response | undefined;
+) => Response | Promise<Response> | undefined;
 
 /**
  * 安装共享 fetch 桩。

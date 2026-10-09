@@ -84,14 +84,14 @@ def terminal_case(
         root_item_id=f"item-root-{session_id}",
         initial_execution_id=f"execution-{session_id}",
     )
-    thread_id = saver._storage._resolve_thread_identity(session_id, None)
+    thread_id = saver._storage.storage._resolve_thread_identity(session_id, None)
     case = TerminalCase(
         sessions=sessions,
         session_id=session_id,
         thread_id=thread_id,
         turn_id=str(accepted["turn_id"]),
         execution_id=str(accepted["initial_execution_id"]),
-        root=saver._storage.root(session_id, thread_id=thread_id),
+        root=saver._storage.storage.root(session_id, thread_id=thread_id),
         saver=saver,
     )
     admission = saver.execution_admission(
@@ -185,7 +185,7 @@ def test_acceptance_root_binding_and_turnless_internal_terminal_are_atomic(
         ).fetchone()
     assert root_binding == (case.execution_id, case.execution_id, case.turn_id)
 
-    thread_id = case.saver._storage._resolve_thread_identity(case.session_id, None)
+    thread_id = case.saver._storage.storage._resolve_thread_identity(case.session_id, None)
     internal_execution_id = f"internal-{case.session_id}"
     internal_job_id = f"job-{internal_execution_id}"
     internal_message_id = f"message-{internal_execution_id}"
@@ -618,7 +618,7 @@ with fixture_catalog_scope():
     assert len(crash_tail) > len(before)
 
     restarted = RolloutCheckpointSaver(case.sessions)
-    restarted._storage.initialize(case.session_id)
+    restarted._storage.storage.initialize(case.session_id)
     assert case.jsonl.read_bytes() == before
     commit_id = restarted.converge_execution(
         case.session_id,

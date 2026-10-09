@@ -28,7 +28,7 @@ pytestmark = pytest.mark.parametrize("registry_db", ["protected"], indirect=True
 @pytest.fixture
 def production_context(frozen_provider_activation, frozen_provider_wire, registry_db):
     saver, session, connection, accepted = registry_db
-    thread = saver._storage.main_thread_id(session)
+    thread = saver._storage.storage.main_thread_id(session)
     manager = ContextSourceManager(
         owner=ContextSourceOwnerKey(session, thread), control_state_port=saver,
     )
@@ -70,7 +70,7 @@ def test_initial_and_delta_use_one_seal_and_exact_prefix(production_context):
     assert [type(message) for message in first["messages"]] == [SystemMessage, HumanMessage]
     assert first["messages"][0].content == "基础规则第一版"
     assert first["tools"] == []
-    first_snapshot = saver._storage.get_context_assembly(
+    first_snapshot = saver._storage.assemblies.get_context_assembly(
         session, thread, assembly_id=first["assembly_id"],
     )
     assert len(first_snapshot.tool_set_refs) == 1
@@ -79,7 +79,7 @@ def test_initial_and_delta_use_one_seal_and_exact_prefix(production_context):
     ).fetchone() == ("instructions:1",)
     manager.observe("instruction:R01", "基础规则第二版", revision="instructions:2")
     second = prepare("second")
-    second_snapshot = saver._storage.get_context_assembly(
+    second_snapshot = saver._storage.assemblies.get_context_assembly(
         session, thread, assembly_id=second["assembly_id"],
     )
     assert second_snapshot.seal_binding.root == first_snapshot.seal_binding.root
@@ -125,7 +125,7 @@ def test_sealed_retry_does_not_read_live_desired(production_context, monkeypatch
     assert retry["messages"] == first["messages"]
     assert pending is not None
     assert tuple(manager._pending.values()) == pending.deltas
-    restored = saver._storage.get_context_assembly(session, thread, assembly_id=retry["assembly_id"])
+    restored = saver._storage.assemblies.get_context_assembly(session, thread, assembly_id=retry["assembly_id"])
     assert restored.seal_binding.source_revisions[0].revision == "instructions:1"
 
 

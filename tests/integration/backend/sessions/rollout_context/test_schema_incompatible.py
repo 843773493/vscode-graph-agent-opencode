@@ -26,8 +26,8 @@ def incompatible_rollout(request: pytest.FixtureRequest, session_bundle_factory)
     session_bundle_factory(sessions, session)
     with RolloutCheckpointSaver(sessions) as saver:
         storage = saver._storage
-        thread = storage.main_thread_id(session)
-        root = storage.root(session, thread_id=thread)
+        thread = storage.storage.main_thread_id(session)
+        root = storage.storage.root(session, thread_id=thread)
         shape = request.param
         if shape == "frozen-schema3":
             root.mkdir(parents=True, exist_ok=True)
@@ -61,6 +61,10 @@ def incompatible_rollout(request: pytest.FixtureRequest, session_bundle_factory)
             with closing(sqlite3.connect(root / "index.sqlite")) as connection, connection:
                 if shape == "old-version":
                     connection.execute("UPDATE database_meta SET schema_version=3")
+                elif shape == "old-schema13":
+                    connection.execute("UPDATE database_meta SET schema_version=13")
+                elif shape == "missing-tool-result-index":
+                    connection.execute("DROP INDEX item_catalog_background_result_identity")
                 elif shape == "contribution-metadata":
                     connection.execute(
                         "ALTER TABLE context_contributions RENAME COLUMN binding_manifest_json TO metadata_json"
@@ -86,21 +90,28 @@ def _source_files(root: Path) -> dict[str, tuple[bytes, int, int]]:
 
 @pytest.mark.parametrize(
     "incompatible_rollout",
-    ["frozen-schema3", "old-version", "contribution-metadata", "item-metadata"],
+    ["frozen-schema3", "old-version", "old-schema13", "missing-tool-result-index", "contribution-metadata", "item-metadata"],
     indirect=True,
 )
-@pytest.mark.parametrize("operation", ["initialize", "open_read_snapshot", "read_items"])
+@pytest.mark.parametrize("operation", ["initialize", "open_read_snapshot", "read_items", "has_committed_tool_result"])
 def test_old_experimental_shape_is_rejected_without_source_rewrite(
     incompatible_rollout, operation: str
 ) -> None:
     saver, session, thread, root, shape = incompatible_rollout
     before = _source_files(root)
     with pytest.raises(RuntimeError, match="schema-incompatible") as caught:
-        if operation == "read_items":
-            saver._storage.read_items(session, thread)
+        if operation == "has_committed_tool_result":
+            saver.has_committed_tool_result(session, thread, "model", "call")
+        elif operation == "read_items":
+            saver._storage.storage.read_items(session, thread)
         else:
-            getattr(saver._storage, operation)(session, thread_id=thread)
-    assert "metadata" in str(caught.value) if "metadata" in shape or shape == "frozen-schema3" else "current=3" in str(caught.value)
+            getattr(saver._storage.storage, operation)(session, thread_id=thread)
+    if "metadata" in shape or shape == "frozen-schema3":
+        assert "metadata" in str(caught.value)
+    elif shape == "missing-tool-result-index":
+        assert "ToolResult identity 索引" in str(caught.value)
+    else:
+        assert f"current={13 if shape == 'old-schema13' else 3}" in str(caught.value)
     assert _source_files(root) == before
     assert not tuple(root.glob("index.sqlite.migration-*.backup"))
     assert not tuple(root.glob("schema-upgrade-*"))

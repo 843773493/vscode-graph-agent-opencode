@@ -72,6 +72,7 @@ export type MessageStreamSnapshot = WireStreamSnapshot;
 
 export type MessageStreamSnapshotResponse = MessageStreamSnapshot & {
   session_id: string;
+  thread_id: string;
   turn_id: string;
   turn_stream_id: string;
   workspace_id?: string;
@@ -100,11 +101,11 @@ const SNAPSHOT_FIELDS = new Set([
 export function validateMessageStreamSnapshot(value: unknown): MessageStreamSnapshotResponse {
   if (!isRecord(value)) throw new Error("消息流快照必须是对象");
   for (const field of Object.keys(value)) {
-    if (!SNAPSHOT_FIELDS.has(field) && !["session_id", "turn_id", "turn_stream_id"].includes(field)) {
+    if (!SNAPSHOT_FIELDS.has(field) && !["session_id", "thread_id", "turn_id", "turn_stream_id"].includes(field)) {
       throw new Error(`消息流快照包含未知字段: ${field}`);
     }
   }
-  const requiredStrings = ["session_id", "turn_id", "turn_stream_id"] as const;
+  const requiredStrings = ["session_id", "thread_id", "turn_id", "turn_stream_id"] as const;
   for (const field of requiredStrings) {
     if (typeof value[field] !== "string" || value[field].length === 0) {
       throw new Error(`消息流快照 ${field} 必须是非空字符串`);
@@ -112,6 +113,7 @@ export function validateMessageStreamSnapshot(value: unknown): MessageStreamSnap
   }
   const payload = { ...value };
   delete payload.session_id;
+  delete payload.thread_id;
   delete payload.turn_id;
   delete payload.turn_stream_id;
   validateSnapshotPayload(payload, true);
@@ -126,7 +128,7 @@ export function validateMessageStreamSnapshotPayload(value: unknown): MessageStr
 
 function validateSnapshotPayload(value: Record<string, unknown>, allowIdentityFields: boolean): void {
   for (const field of Object.keys(value)) {
-    if (!SNAPSHOT_FIELDS.has(field) && !(allowIdentityFields && ["session_id", "turn_id", "turn_stream_id"].includes(field))) {
+    if (!SNAPSHOT_FIELDS.has(field) && !(allowIdentityFields && ["session_id", "thread_id", "turn_id", "turn_stream_id"].includes(field))) {
       throw new Error(`消息流快照包含未知字段: ${field}`);
     }
   }

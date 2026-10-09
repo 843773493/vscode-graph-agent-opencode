@@ -47,9 +47,9 @@ def fork_source(request: pytest.FixtureRequest, session_bundle_factory) -> Calla
 
 
 def _complete_copy(storage, source: str, target: str) -> str:
-    view = storage.clone_rollout(
-        source_thread_id=storage.main_thread_id(source),
-        target_thread_id=storage.main_thread_id(target),
+    view = storage.forks.clone_rollout(
+        source_thread_id=storage.storage.main_thread_id(source),
+        target_thread_id=storage.storage.main_thread_id(target),
         source_checkpoint_id=None,
         source_session_id=source,
         target_session_id=target,
@@ -62,14 +62,14 @@ def _complete_copy(storage, source: str, target: str) -> str:
         "fork_mode": "full_rollout_copy",
         "relationship": "detached",
         "checkpoint_ns": "",
-        "source_thread_id": storage.main_thread_id(source),
-        "target_thread_id": storage.main_thread_id(target),
+        "source_thread_id": storage.storage.main_thread_id(source),
+        "target_thread_id": storage.storage.main_thread_id(target),
         "source_snapshot_sha256": hashlib.sha256(
             f"synthetic-source-snapshot:{source}:{target}".encode()
         ).hexdigest(),
     }
-    materialization, fork_id = storage.begin_fork_materialization(**fields)
-    assert storage.commit_fork_materialization(materialization, **fields) == fork_id
+    materialization, fork_id = storage.forks.begin_fork_materialization(**fields)
+    assert storage.forks.commit_fork_materialization(materialization, **fields) == fork_id
     return fork_id
 
 
@@ -78,17 +78,17 @@ def test_full_copy_rejects_v1_without_migration_side_effects(
 ) -> None:
     records = _accepted_records()
     storage = fork_source(records)
-    before = artifact_manifest(storage.root(SOURCE_SESSION_ID))
+    before = artifact_manifest(storage.storage.root(SOURCE_SESSION_ID))
     with pytest.raises(FormatDispatchError, match="unsupported_legacy_rollout"):
-        storage.clone_rollout(
-            source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
-            target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+        storage.forks.clone_rollout(
+            source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
+            target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
             source_checkpoint_id=None,
             source_session_id=SOURCE_SESSION_ID,
             target_session_id=TARGET_SESSION_ID,
         )
-    assert not storage.root(TARGET_SESSION_ID).exists()
-    assert artifact_manifest(storage.root(SOURCE_SESSION_ID)) == before
+    assert not storage.storage.root(TARGET_SESSION_ID).exists()
+    assert artifact_manifest(storage.storage.root(SOURCE_SESSION_ID)) == before
     assert migration_audits(storage) == []
 
 
@@ -134,30 +134,30 @@ def test_explicit_v1_import_then_v2_full_copy_keeps_tool_lineage_local(
         ]
     )
     storage = fork_source(records)
-    source_before = artifact_manifest(storage.root(SOURCE_SESSION_ID))
+    source_before = artifact_manifest(storage.storage.root(SOURCE_SESSION_ID))
     result = LegacyRolloutImporter(storage).import_v1(
         source_session_id=SOURCE_SESSION_ID,
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+        source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
         target_session_id=TARGET_SESSION_ID,
-        target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+        target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
         checkpoint_ns="",
         require_lossless=True,
     )
     assert result["status"] == "completed"
-    items = storage.read_items(
-        TARGET_SESSION_ID, storage.main_thread_id(TARGET_SESSION_ID)
+    items = storage.storage.read_items(
+        TARGET_SESSION_ID, storage.storage.main_thread_id(TARGET_SESSION_ID)
     )
     assert len(items) == 5
     call = next(item for item in items if item.semantic_kind == "tool_call")
-    target_before = artifact_manifest(storage.root(TARGET_SESSION_ID))
+    target_before = artifact_manifest(storage.storage.root(TARGET_SESSION_ID))
     fork_id = _complete_copy(storage, TARGET_SESSION_ID, GRANDCHILD_SESSION_ID)
-    assert artifact_manifest(storage.root(SOURCE_SESSION_ID)) == source_before
-    assert artifact_manifest(storage.root(TARGET_SESSION_ID)) == target_before
-    child_items = storage.read_items(
-        GRANDCHILD_SESSION_ID, storage.main_thread_id(GRANDCHILD_SESSION_ID)
+    assert artifact_manifest(storage.storage.root(SOURCE_SESSION_ID)) == source_before
+    assert artifact_manifest(storage.storage.root(TARGET_SESSION_ID)) == target_before
+    child_items = storage.storage.read_items(
+        GRANDCHILD_SESSION_ID, storage.storage.main_thread_id(GRANDCHILD_SESSION_ID)
     )
-    with storage._connect(
-        storage.main_thread_id(GRANDCHILD_SESSION_ID),
+    with storage.storage._connect(
+        storage.storage.main_thread_id(GRANDCHILD_SESSION_ID),
         "",
         read_only=True,
         session_id=GRANDCHILD_SESSION_ID,
@@ -184,9 +184,9 @@ def test_explicit_v1_import_then_v2_full_copy_keeps_tool_lineage_local(
     assert child_call.payload["args"] == {"body": "literal source-call"}
     assert child_result.payload["content"] == "unmodified result body"
     # 删除父节点的运行时 artifact 后仍必须可读；仅移动本测试生成的精确目录。
-    source_root = storage.root(TARGET_SESSION_ID)
+    source_root = storage.storage.root(TARGET_SESSION_ID)
     source_root.rename(source_root.with_name("rollout-archived"))
-    restarted = _storage(storage.sessions_dir)
+    restarted = _storage(storage.storage.sessions_dir).storage
     assert (
         restarted.read_items(
             GRANDCHILD_SESSION_ID, restarted.main_thread_id(GRANDCHILD_SESSION_ID)

@@ -30,7 +30,7 @@ def record_failed_seal(
         "request-hash-mismatch",
     }:
         error_code = "seal-storage-failure"
-    owner._storage.record_context_plan_seal_failure(
+    owner._storage.assemblies.record_context_plan_seal_failure(
         session_id,
         thread_id,
         plan_id=plan_id,

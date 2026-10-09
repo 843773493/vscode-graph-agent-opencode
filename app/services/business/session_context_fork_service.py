@@ -7,9 +7,10 @@ from uuid import uuid4
 
 from app.core.key_lock_pool import KeyLockPool
 from app.core.session_catalog_store import SessionCreationRecord
+from app.core.session_catalog_store.contracts import SessionGenerationOriginDTO
 from app.core.session_creation import compute_session_creation_preimage_hash
 from app.domain.itemized.hashing import canonical_json_bytes
-from app.schemas.internal_v2.session import SessionDTO, SessionGenerationOriginDTO
+from app.schemas.internal_v2.session import SessionDTO
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -103,7 +104,7 @@ class SessionContextForkService:
                     if existing.state == "published":
                         return await self._session_service.get(existing.session_id)
                     if existing.state == "preparing":
-                        proof = await self._checkpointer.recover_prepared_fork_completion(existing)
+                        proof = await self._checkpointer.forks.recovery.recover_prepared_fork_completion(existing)
                         if proof is not None:
                             return await self._session_service.publish_prepared_context_fork(existing, fork_completion=proof)
                         await self._abort_if_unpublished(existing, "generation fork prepared 未完成，已回滚")
@@ -111,12 +112,12 @@ class SessionContextForkService:
             source_session = await self._session_service.get(source_session_id)
             source_thread_id = source_thread_id or await self._session_service.resolve_main_thread(source_session_id)
             self._session_service.path_resolver.resolve_thread_node(source_session_id, source_thread_id)
-            source_owner = self._checkpointer.resolve_thread_owner(source_session_id, source_thread_id)
+            source_owner = self._checkpointer.forks.source.resolve_thread_owner(source_session_id, source_thread_id)
             # context/history fork 的规范要求在创建目标 session/catalog 之前
             # 拒绝运行态 Turn、无 completed anchor 和非法 source checkpoint。
             # 预检只读 source，不创建 target journal；afork 随后会再次解析并在
             # target-local materialization 中提交同一份 source 合同。
-            source_preflight = await self._checkpointer.preflight_fork(
+            source_preflight = await self._checkpointer.forks.source.preflight_fork(
                 source_session_id=source_session_id,
                 source_owner=source_owner,
                 mode=mode,
@@ -148,18 +149,18 @@ class SessionContextForkService:
                 return await self._session_service.get(creation_record.session_id)
 
             try:
-                target_owner = self._checkpointer.resolve_prepared_main_thread_owner(
+                target_owner = self._checkpointer.forks.source.resolve_prepared_main_thread_owner(
                     creation_record
                 )
                 fork_id = uuid4().hex
                 materialization_id = uuid4().hex
                 if pinned:
-                    self._checkpointer.begin_pinned_fork_retention_claim(
+                    self._checkpointer.forks.recovery.begin_pinned_fork_retention_claim(
                         fork_id=fork_id,
                         source_session_id=source_session_id,
                         target_session_id=child_session.session_id,
                     )
-                result = await self._checkpointer.afork(
+                result = await self._checkpointer.forks.afork(
                     source_session_id=source_session_id,
                     target_session_id=child_session.session_id,
                     source_owner=source_owner,
@@ -176,7 +177,7 @@ class SessionContextForkService:
                     checkpoint_ns=checkpoint_ns,
                     source_preflight=source_preflight,
                 )
-                proof = self._checkpointer.read_committed_fork_completion_proof(
+                proof = self._checkpointer.forks.recovery.read_committed_fork_completion_proof(
                     record=creation_record,
                     source_session_id=source_session_id,
                     source_owner=source_owner,
@@ -204,7 +205,7 @@ class SessionContextForkService:
         )
         if current.state != "preparing":
             return
-        self._checkpointer.release_prepared_fork_retentions(current)
+        self._checkpointer.forks.recovery.release_prepared_fork_retentions(current)
         await self._session_service.abort_prepared_context_fork(current, reason)
 
     async def recover_prepared_forks(self) -> int:
@@ -213,7 +214,7 @@ class SessionContextForkService:
         for record in self._session_service.list_preparing_creation_records(purpose="context_fork"):
             async with self._key_locks.lock_for(record.session_creation_idempotency_key):
                 try:
-                    proof = await self._checkpointer.recover_prepared_fork_completion(record)
+                    proof = await self._checkpointer.forks.recovery.recover_prepared_fork_completion(record)
                     if proof is None:
                         await self._abort_if_unpublished(record, "startup fork prepared 未完成，已回滚")
                     else:

@@ -121,7 +121,7 @@ class ContextPlanCompositionMixin:
         with self._lock:
             # SQLite registry 是提交边界；先完成持久化，再更新运行时 ledger/body
             # cache，避免 storage 失败后出现仅内存可见的 source。
-            self._storage.register_context_contribution(
+            self._storage.assemblies.register_context_contribution(
                 session_id,
                 thread_id,
                 contribution,
@@ -135,7 +135,7 @@ class ContextPlanCompositionMixin:
             persisted = next(
                 (
                     row
-                    for row in self._storage.list_context_contributions(
+                    for row in self._storage.assemblies.list_context_contributions(
                         session_id,
                         thread_id,
                         checkpoint_ns=checkpoint_ns,
@@ -162,11 +162,11 @@ class ContextPlanCompositionMixin:
 
     def selected_context_message_sequences(self, snapshot: RolloutReadSnapshot) -> list[int]:
         """闭合校验与计划选择共用同一 typed carrier 去重规则。"""
-        view_id = self._storage.active_view_id(snapshot)
-        sequences = self._storage._view_message_sequences_from_connection(
+        view_id = self._storage.checkpoints.active_view_id(snapshot)
+        sequences = self._storage.storage._view_message_sequences_from_connection(
             snapshot.connection, view_id,
         )
-        superseded = superseded_stream_item_ids(self._storage.committed_context_items(snapshot))
+        superseded = superseded_stream_item_ids(self._storage.checkpoints.committed_context_items(snapshot))
         if not superseded:
             return sequences
         rows = snapshot.connection.execute(
@@ -195,7 +195,7 @@ class ContextPlanCompositionMixin:
     ) -> ContextRequestPlan:
         """由 Saver 从已提交 active view 生成一次 request plan。
 
-        业务层不需要、也不允许直接遍历 RolloutStorage；此方法在 Saver 内部
+        业务层不需要、也不允许直接遍历 RolloutContextStore；此方法在 Saver 内部
         持有同一个 read snapshot，同时读取 item refs 和 revision，避免 plan
         在 view 切换过程中拼出跨 snapshot 的混合上下文。
         """
@@ -208,7 +208,7 @@ class ContextPlanCompositionMixin:
                 session_id, thread_id, checkpoint_ns,
             ):
                 raise ValueError("source-mismatch: composition snapshot owner 不一致")
-            committed_items = self._storage.committed_context_items(
+            committed_items = self._storage.checkpoints.committed_context_items(
                 snapshot,
                 include_pending_notices=include_pending_notices,
             )
@@ -220,7 +220,7 @@ class ContextPlanCompositionMixin:
             superseded_item_ids = superseded_stream_item_ids(committed_items)
             committed_refs = tuple(
                 ref
-                for ref in self._storage.committed_context_refs(
+                for ref in self._storage.checkpoints.committed_context_refs(
                     snapshot,
                     include_pending_notices=include_pending_notices,
                 )
@@ -229,7 +229,7 @@ class ContextPlanCompositionMixin:
             refs = list(committed_refs)
             seen_overlay_bindings: set[tuple[str, str]] = set()
             active_overlay_contribution_ids: set[str] = set()
-            persisted_overlays = self._storage.list_source_overlays(
+            persisted_overlays = self._storage.assemblies.list_source_overlays(
                 session_id,
                 thread_id,
                 checkpoint_ns=checkpoint_ns,
@@ -382,10 +382,10 @@ class ContextPlanCompositionMixin:
                     )
             history_view_revision = snapshot.manifest.history_view_revision
             source_overlay_epoch = snapshot.manifest.source_overlay_epoch
-            active_view_id = self._storage.active_view_id(snapshot)
+            active_view_id = self._storage.checkpoints.active_view_id(snapshot)
             composer = self._composer_for(session_id, thread_id, checkpoint_ns)
             loaded_contributions: list[ContextContribution] = []
-            for raw in self._storage.list_context_contributions(
+            for raw in self._storage.assemblies.list_context_contributions(
                 session_id,
                 thread_id,
                 checkpoint_ns=checkpoint_ns,

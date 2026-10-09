@@ -31,7 +31,7 @@ def materialize_full_copy_files(state: FullCopyRemapState) -> None:
     checkpoint_ns = state.checkpoint_ns
     new_lines = state.new_lines
     mapped = state.mapped
-    jsonl_path = self.jsonl_path(
+    jsonl_path = self._storage.jsonl_path(
         target_session_id, checkpoint_ns, thread_id=state.target_thread_id
     )
     temporary = jsonl_path.with_name(f".{jsonl_path.name}.{fork_id}.tmp")
@@ -62,7 +62,7 @@ def materialize_full_copy_files(state: FullCopyRemapState) -> None:
         ).fetchall()
     )
 
-    session_root = self.root(
+    session_root = self._storage.root(
         target_session_id, checkpoint_ns, thread_id=state.target_thread_id
     ).parent
 
@@ -84,7 +84,7 @@ def materialize_full_copy_files(state: FullCopyRemapState) -> None:
         )
         if relative_path_text != detail_relative_path(source_ref).as_posix():
             raise RuntimeError(f"full_rollout_copy detail path 越界: {old_detail_ref}")
-        old_path = self._safe_session_relative_path(session_root, old_relative)
+        old_path = self._storage._safe_session_relative_path(session_root, old_relative)
         new_detail_ref = mapped("detail", old_detail_ref)
         if new_detail_ref is None:
             raise RuntimeError(
@@ -96,7 +96,7 @@ def materialize_full_copy_files(state: FullCopyRemapState) -> None:
         # detail 的 assembly 段是 activation snapshot id，不在 assembly mapping 中。
         target_ref.require_owner(state.target_session_id, state.target_thread_id)
         new_relative = detail_relative_path(target_ref)
-        self._safe_session_relative_path(session_root, new_relative.parent)
+        self._storage._safe_session_relative_path(session_root, new_relative.parent)
         new_path = session_root / new_relative
         if old_path.exists():
             if old_path.is_symlink() or not old_path.is_file():
@@ -104,7 +104,7 @@ def materialize_full_copy_files(state: FullCopyRemapState) -> None:
                     f"full_rollout_copy detail source 不是安全普通文件: {old_path}"
                 )
             new_path.parent.mkdir(parents=True, exist_ok=True)
-            new_path = self._safe_session_relative_path(session_root, new_relative)
+            new_path = self._storage._safe_session_relative_path(session_root, new_relative)
             if new_path.exists() or new_path.is_symlink():
                 raise RuntimeError(
                     f"full_rollout_copy detail target 已存在: {new_path}"

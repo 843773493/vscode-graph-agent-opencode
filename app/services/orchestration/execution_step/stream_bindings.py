@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.orchestration.event_stream.contracts import CanonicalItemObserverError
 
 
 class StepEventPublisher:
@@ -36,6 +37,7 @@ class CanonicalItemSink:
         session_id: str,
         thread_id: str,
         checkpoint_ns: str,
+        committed_item_observer: Callable[[str, str, Sequence[CanonicalItemRecord]], None] | None = None,
     ) -> None:
         append_items = getattr(checkpointer, "append_items", None)
         if not callable(append_items):
@@ -44,6 +46,7 @@ class CanonicalItemSink:
         self._session_id = session_id
         self._thread_id = thread_id
         self._checkpoint_ns = checkpoint_ns
+        self._committed_item_observer = committed_item_observer
 
     async def append(self, items: Sequence[object]) -> None:
         typed_items = tuple(
@@ -58,6 +61,13 @@ class CanonicalItemSink:
             thread_id=self._thread_id,
             checkpoint_ns=self._checkpoint_ns,
         )
+        if self._committed_item_observer is not None:
+            try:
+                self._committed_item_observer(self._session_id, self._thread_id, typed_items)
+            except Exception as error:
+                raise CanonicalItemObserverError(
+                    error, committed_item_ids=tuple(item.item_id for item in typed_items),
+                ) from error
 
 
 __all__ = ["CanonicalItemSink", "StepEventPublisher"]

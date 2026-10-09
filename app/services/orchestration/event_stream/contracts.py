@@ -25,6 +25,17 @@ class AgentEventStreamTimeoutError(TimeoutError):
         super().__init__(message)
 
 
+class CanonicalItemObserverError(RuntimeError):
+    """Saver 已提交精确 item 集合，随后 observer 失败；原异常仍必须向上传递。"""
+
+    def __init__(
+        self, observer_error: Exception, *, committed_item_ids: tuple[str, ...],
+    ) -> None:
+        self.observer_error = observer_error
+        self.committed_item_ids = committed_item_ids
+        super().__init__(f"canonical item 已提交但 observer 失败: items={committed_item_ids}: {observer_error}")
+
+
 @dataclass(frozen=True, slots=True)
 class SuccessfulToolCall:
     tool_name: str

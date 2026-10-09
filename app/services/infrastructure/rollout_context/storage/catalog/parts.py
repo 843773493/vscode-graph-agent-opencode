@@ -12,11 +12,11 @@ from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.parts import ContentPart, ContentPartAnchor
 from app.domain.itemized.runtime import ProvenanceEdge
-from app.services.infrastructure.rollout_context.fork.validation import (
-    json_mapping,
-)
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
+)
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    json_mapping,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
@@ -82,18 +82,7 @@ class RolloutPartsMixin:
         # anchor 自己还要用 item_parts.line_hash 给出精确的 stale 诊断；
         # 先跳过通用 item 内容校验，避免把可定位的 anchor 损坏误报成
         # 泛化的 rollout integrity error。offset/commit chain 仍然照常校验。
-        self.initialize(
-            session_id,
-            checkpoint_ns,
-            thread_id=owner_thread_id,
-            validate_jsonl_items=False,
-        )
-        with self._connect(
-            owner_thread_id,
-            checkpoint_ns,
-            session_id=session_id,
-            read_only=True,
-        ) as connection:
+        with self.read_connection(session_id, owner_thread_id, checkpoint_ns) as connection:
             self._require_v2_runtime(connection)
             row = connection.execute(
                 "SELECT anchor_id, item_id, part_id, mode, view_id, branch_id, "

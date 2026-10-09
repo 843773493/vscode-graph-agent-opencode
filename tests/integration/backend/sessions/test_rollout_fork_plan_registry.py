@@ -43,7 +43,7 @@ TARGET_SESSION_ID = "ses_019b9187b87f78c78ef242bbd6043bfc"
 @pytest.fixture
 def draft_factory(protected_source):
     saver = protected_source[0]
-    thread_id = saver._storage.main_thread_id(SOURCE_SESSION_ID)
+    thread_id = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
 
     def create(plan_id, *, tool_name="read_file"):
         tool = ToolSetRef.from_tool_snapshot(
@@ -88,13 +88,13 @@ async def test_full_copy_keeps_true_draft_revision_initial_and_nullable_tool_bin
     protected_source, draft_factory
 ):
     saver, sealed, _record, _body = protected_source
-    target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
+    target_thread_id = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
     initial = draft_factory("real-draft")
     current = replace(initial, tool_set_refs=(), history_view_revision=2)
     saver.revise_context_plan(SOURCE_SESSION_ID, current, expected_revision=0)
-    source = saver._storage.root(SOURCE_SESSION_ID)
-    with saver._storage._connect(
-        saver._storage.main_thread_id(SOURCE_SESSION_ID), "",
+    source = saver._storage.storage.root(SOURCE_SESSION_ID)
+    with saver._storage.storage._connect(
+        saver._storage.storage.main_thread_id(SOURCE_SESSION_ID), "",
         session_id=SOURCE_SESSION_ID, read_only=True,
     ) as source_connection:
         source_schema_version = source_connection.execute(
@@ -104,11 +104,11 @@ async def test_full_copy_keeps_true_draft_revision_initial_and_nullable_tool_bin
             "SELECT to_version FROM schema_migrations WHERE status='completed' ORDER BY rowid DESC LIMIT 1"
         ).fetchone()[0] == source_schema_version
     before = _artifacts(source)
-    await saver.afork(
+    await saver.forks.afork(
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy"
     )
     assert _artifacts(source) == before
-    with saver._storage._connect(saver._storage.main_thread_id(TARGET_SESSION_ID), "", session_id=TARGET_SESSION_ID, read_only=True) as connection:
+    with saver._storage.storage._connect(saver._storage.storage.main_thread_id(TARGET_SESSION_ID), "", session_id=TARGET_SESSION_ID, read_only=True) as connection:
         target_draft_id = _target_plan_id(connection, "real-draft")
         target_sealed_id = _target_plan_id(connection, sealed.plan_id)
         draft = read_registration(
@@ -152,7 +152,7 @@ async def test_full_copy_keeps_true_draft_revision_initial_and_nullable_tool_bin
         assert json.loads(raw_current) == draft_manifest(draft.draft)
         assert not connection.execute("PRAGMA foreign_key_check").fetchall()
     with RolloutCheckpointSaver(
-        saver._storage.sessions_dir
+        saver._storage.storage.sessions_dir
     ) as restarted:
         assert (
             restarted.get_context_plan_registration(
@@ -175,13 +175,13 @@ async def test_full_copy_same_tool_local_id_stays_scoped_to_each_draft(
     protected_source, draft_factory
 ):
     saver = protected_source[0]
-    target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
+    target_thread_id = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
     first = draft_factory("draft-a", tool_name="read_file")
     second = draft_factory("draft-b", tool_name="write_file")
-    await saver.afork(
+    await saver.forks.afork(
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy"
     )
-    with saver._storage._connect(saver._storage.main_thread_id(TARGET_SESSION_ID), "", session_id=TARGET_SESSION_ID, read_only=True) as connection:
+    with saver._storage.storage._connect(saver._storage.storage.main_thread_id(TARGET_SESSION_ID), "", session_id=TARGET_SESSION_ID, read_only=True) as connection:
         targets = [
             read_registration(
                 connection,
@@ -213,18 +213,18 @@ async def test_source_registry_corruption_rejects_copy_before_publication(
 ):
     saver = protected_source[0]
     draft_factory("unsealed-with-tool")
-    with saver._storage._connect(saver._storage.main_thread_id(SOURCE_SESSION_ID), "", session_id=SOURCE_SESSION_ID) as connection:
+    with saver._storage.storage._connect(saver._storage.storage.main_thread_id(SOURCE_SESSION_ID), "", session_id=SOURCE_SESSION_ID) as connection:
         connection.execute(f"DELETE FROM {table}")
-    source = saver._storage.root(SOURCE_SESSION_ID)
+    source = saver._storage.storage.root(SOURCE_SESSION_ID)
     before = _artifacts(source)
     with pytest.raises(ValueError, match="source-mismatch"):
-        await saver.afork(
+        await saver.forks.afork(
             source_session_id=SOURCE_SESSION_ID,
             target_session_id=TARGET_SESSION_ID,
             mode="full_rollout_copy",
         )
     assert _artifacts(source) == before
-    assert not saver._storage.root(TARGET_SESSION_ID).exists()
+    assert not saver._storage.storage.root(TARGET_SESSION_ID).exists()
 
 
 @pytest.mark.asyncio
@@ -234,7 +234,7 @@ async def test_import_failure_leaves_source_and_target_unpublished(
     from app.services.infrastructure.rollout_context.fork.full_copy import plans
 
     saver = protected_source[0]
-    source = saver._storage.root(SOURCE_SESSION_ID)
+    source = saver._storage.storage.root(SOURCE_SESSION_ID)
     before = _artifacts(source)
 
     def reject(*args, **kwargs):
@@ -242,13 +242,13 @@ async def test_import_failure_leaves_source_and_target_unpublished(
 
     monkeypatch.setattr(plans, "write_imported_registration", reject)
     with pytest.raises(RuntimeError, match="injected import"):
-        await saver.afork(
+        await saver.forks.afork(
             source_session_id=SOURCE_SESSION_ID,
             target_session_id=TARGET_SESSION_ID,
             mode="full_rollout_copy",
         )
     assert _artifacts(source) == before
-    assert not saver._storage.root(TARGET_SESSION_ID).exists()
+    assert not saver._storage.storage.root(TARGET_SESSION_ID).exists()
 
 
 @pytest.mark.asyncio
@@ -257,11 +257,11 @@ async def test_fork_source_fingerprint_is_verified_on_restore(
     protected_source, mutation
 ):
     saver, sealed, _record, _body = protected_source
-    target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
-    await saver.afork(
+    target_thread_id = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
+    await saver.forks.afork(
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy"
     )
-    with saver._storage._connect(saver._storage.main_thread_id(TARGET_SESSION_ID), "", session_id=TARGET_SESSION_ID) as connection:
+    with saver._storage.storage._connect(saver._storage.storage.main_thread_id(TARGET_SESSION_ID), "", session_id=TARGET_SESSION_ID) as connection:
         target_plan = _target_plan_id(connection, sealed.plan_id)
         if mutation == "provenance":
             row = connection.execute(
@@ -289,7 +289,7 @@ async def test_draft_omission_stub_stays_target_local_without_body_or_contributi
     protected_source,
 ):
     saver = protected_source[0]
-    source_thread_id = saver._storage.main_thread_id(SOURCE_SESSION_ID)
+    source_thread_id = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
     plan = ContextRequestPlan(
         session_id=SOURCE_SESSION_ID,
         thread_id=source_thread_id,
@@ -306,11 +306,11 @@ async def test_draft_omission_stub_stays_target_local_without_body_or_contributi
         plan_creation_idempotency_key="omitted-create",
     )
     saver.create_context_plan(SOURCE_SESSION_ID, plan)
-    await saver.afork(
+    await saver.forks.afork(
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy"
     )
-    target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
-    with saver._storage._connect(saver._storage.main_thread_id(TARGET_SESSION_ID), "", session_id=TARGET_SESSION_ID, read_only=True) as connection:
+    target_thread_id = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
+    with saver._storage.storage._connect(saver._storage.storage.main_thread_id(TARGET_SESSION_ID), "", session_id=TARGET_SESSION_ID, read_only=True) as connection:
         target_id = _target_plan_id(connection, plan.plan_id)
         copied = read_registration(
             connection, TARGET_SESSION_ID, target_thread_id, target_id
@@ -331,7 +331,7 @@ async def test_draft_only_contributions_and_aliases_are_remapped_without_source_
     protected_source,
 ):
     saver = protected_source[0]
-    source_thread_id = saver._storage.main_thread_id(SOURCE_SESSION_ID)
+    source_thread_id = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
     for plan_id, text in (("source-draft-a", "a"), ("source-draft-b", "b")):
         contribution = ContextContribution(
             contribution_id="draft-contribution",
@@ -362,11 +362,11 @@ async def test_draft_only_contributions_and_aliases_are_remapped_without_source_
                 plan_creation_idempotency_key=f"create-{plan_id}",
             ),
         )
-    await saver.afork(
+    await saver.forks.afork(
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy"
     )
-    target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
-    with saver._storage._connect(saver._storage.main_thread_id(TARGET_SESSION_ID), "", session_id=TARGET_SESSION_ID, read_only=True) as connection:
+    target_thread_id = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
+    with saver._storage.storage._connect(saver._storage.storage.main_thread_id(TARGET_SESSION_ID), "", session_id=TARGET_SESSION_ID, read_only=True) as connection:
         for source_id, text in (("source-draft-a", "a"), ("source-draft-b", "b")):
             target_id = _target_plan_id(connection, source_id)
             copied = read_registration(
@@ -391,7 +391,7 @@ async def test_tool_json_schema_property_names_are_not_identity_fields(
     protected_source, property_name
 ):
     saver = protected_source[0]
-    source_thread_id = saver._storage.main_thread_id(SOURCE_SESSION_ID)
+    source_thread_id = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
     tools = (
         {
             "name": "read_file",
@@ -420,11 +420,11 @@ async def test_tool_json_schema_property_names_are_not_identity_fields(
             plan_creation_idempotency_key="schema-create",
         ),
     )
-    await saver.afork(
+    await saver.forks.afork(
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy"
     )
-    target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
-    with saver._storage._connect(saver._storage.main_thread_id(TARGET_SESSION_ID), "", session_id=TARGET_SESSION_ID, read_only=True) as connection:
+    target_thread_id = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
+    with saver._storage.storage._connect(saver._storage.storage.main_thread_id(TARGET_SESSION_ID), "", session_id=TARGET_SESSION_ID, read_only=True) as connection:
         target_id = _target_plan_id(connection, "schema-draft")
         copied = read_registration(
             connection, TARGET_SESSION_ID, target_thread_id, target_id

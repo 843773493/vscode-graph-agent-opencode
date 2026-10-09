@@ -43,7 +43,7 @@ export interface CatalogOutboxIntent {
   targetNodeId?: string | null;
   /** move 的目标父节点稳定 ID；移到根为 null。 */
   parentNodeId?: string | null;
-  /** move 到本 outbox 内 pending 新建的 Folder 时，引用创建它的 operation。 */
+  /** 在本 outbox 内 pending Folder 下创建或移动时，引用父创建 operation。 */
   parentCreatedByOperationId?: string | null;
   name?: string | null;
   recursive?: boolean;
@@ -116,6 +116,19 @@ export function catalogOutboxPartitionKey(
 export function createCatalogOutbox(partition: CatalogOutboxPartition): CatalogOutbox {
   catalogOutboxPartitionKey(partition);
   return { partition, operations: [] };
+}
+
+/** 根据同一 outbox 的父创建记录保留依赖；失败父项也不得变成根目录。 */
+export function catalogOutboxParentCreation(outbox: CatalogOutbox, parentNodeId: string | null) {
+  if (!parentNodeId) return null;
+  const operation = outbox.operations.find((item) => item.kind === "create_folder"
+    && (item.client_ref === parentNodeId || item.created_node_id === parentNodeId));
+  if (!operation) return null;
+  if (operation.state === "committed") {
+    if (!operation.created_node_id) throw new Error("已提交父文件夹缺少 canonical ID");
+    return { parentNodeId: operation.created_node_id, createdBy: null };
+  }
+  return { parentNodeId: null, createdBy: operation.client_operation_id };
 }
 
 /** 终态判定的唯一实现：终态集合来自后端协议，本地不得再写第二份。 */
@@ -200,11 +213,11 @@ export function addCatalogOutboxIntent(
       "parent_created_by_operation_id",
       createdBy,
     );
-    if (intent.kind !== "move_node") {
-      throw new Error("只有 move_node 可以用 created_by_operation_id 引用 pending 新建的父节点");
+    if (intent.kind !== "move_node" && intent.kind !== "create_folder") {
+      throw new Error("只有 create_folder 和 move_node 可以引用 pending 父文件夹");
     }
     if (intent.parentNodeId) {
-      throw new Error("move_node 不能同时给出 parent_node_id 与 parentCreatedByOperationId");
+      throw new Error("不能同时给出 parent_node_id 与 parentCreatedByOperationId");
     }
   }
   if (intent.kind === "create_folder") {

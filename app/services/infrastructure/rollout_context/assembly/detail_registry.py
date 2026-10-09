@@ -106,13 +106,13 @@ class DetailRegistryMixin(DetailRetentionMixin):
         if not isinstance(detail, DetailRecord):
             raise TypeError("detail registry 只接受完整 DetailRecord")
         ref = detail.detail_ref
-        with self._lock(
+        with self._storage._lock(
             ref.thread_id, detail.checkpoint_ns, session_id=ref.session_id
         ):
-            self.initialize(
+            self._storage.initialize(
                 ref.session_id, detail.checkpoint_ns, thread_id=ref.thread_id
             )
-            with self._connect(
+            with self._storage._connect(
                 ref.thread_id, detail.checkpoint_ns, session_id=ref.session_id
             ) as connection:
                 connection.execute("BEGIN IMMEDIATE")
@@ -129,7 +129,7 @@ class DetailRegistryMixin(DetailRetentionMixin):
         """唯一 manifest writer；不初始化、不另开 connection、不提交事务。"""
         if not connection.in_transaction:
             raise RuntimeError("detail manifest 登记需要调用方的活动事务")
-        self._require_v2_runtime(connection)
+        self._storage._require_v2_runtime(connection)
         if not isinstance(detail, DetailRecord):
             raise TypeError("detail registry 只接受完整 DetailRecord")
         ref = detail.detail_ref
@@ -141,8 +141,8 @@ class DetailRegistryMixin(DetailRetentionMixin):
         if detail.relative_path != expected_path.as_posix():
             raise ValueError("detail locator 必须严格等于 typed owner 的 assembly/detail_id 路径")
         # 使用正文唯一 path owner 校验既存路径；尚未发布的父目录可不存在。
-        DetailFiles(self._path_resolver).path(
-            ref, creation_record=self._prepared_target_record(ref.session_id),
+        DetailFiles(self._storage._path_resolver).path(
+            ref, creation_record=self._storage._prepared_target_record(ref.session_id),
         )
         values = (
             key, ref.session_id, ref.thread_id, detail.checkpoint_ns, ref.assembly_id, ref.detail_id,
@@ -183,11 +183,8 @@ class DetailRegistryMixin(DetailRetentionMixin):
         checkpoint_ns = strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
         key = detail_ref_key(detail_ref)
         detail_ref.require_owner(session_id, thread_id)
-        self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-        with self._connect(
-            thread_id, checkpoint_ns, session_id=session_id, read_only=True
-        ) as connection:
-            self._require_v2_runtime(connection)
+        with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
+            self._storage._require_v2_runtime(connection)
             row = connection.execute(
                 f"SELECT {','.join(_COLUMNS)} FROM context_plan_details "
                 "WHERE detail_ref = ? AND session_id = ? AND thread_id = ? AND checkpoint_ns = ?",

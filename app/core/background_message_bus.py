@@ -1,236 +1,182 @@
+"""持久精确 Thread 邮箱；进程内 Event 只唤醒，消息与消费回执全部读控制库。"""
+
 from __future__ import annotations
 
 import asyncio
-from collections import deque
-from datetime import datetime, timezone
-from typing import Deque, Dict, Set
+from collections.abc import Sequence
+from datetime import UTC, datetime
+from typing import Protocol
+
+from pydantic import JsonValue
 
 from app.abstractions.background_message_bus import (
     BackgroundMessageBatchDTO,
     BackgroundMessageDTO,
     BackgroundMessageKind,
 )
-from app.core.identifier import create_prefixed_id
+from app.core.background_task_contracts import BackgroundToolResultIdentity
+from app.core.background_task_registry import BackgroundWorkStoreProtocol
+from app.core.session_lifecycle_gate import OperationHolderGate
+from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.identity.tool_call_identity import (
+    provider_tool_call_id,
+    software_tool_operation_id,
+)
+from app.domain.itemized.records import CanonicalItemRecord
+
+
+class BackgroundToolResultReader(Protocol):
+    def has_committed_tool_result(self, session_id: str, thread_id: str, model_call_id: str, tool_call_id: str) -> bool: ...
 
 
 class BackgroundMessageBus:
-    def __init__(self):
-        self._messages: Dict[tuple[str, str], Deque[BackgroundMessageDTO]] = {}
-        self._subscribers: Dict[tuple[str, str], Set[asyncio.Queue[BackgroundMessageDTO]]] = {}
-        self._max_history = 1000
-
-    def _key(self, session_id: str, agent_id: str) -> tuple[str, str]:
-        return session_id, agent_id
+    def __init__(self, *, store: BackgroundWorkStoreProtocol) -> None:
+        self._store = store
+        self._consumers = OperationHolderGate(store.sessions_dir, namespace="background_consumers")
+        self._waiters: dict[tuple[str, str, str], set[asyncio.Event]] = {}
 
     def close_session(self, session_id: str) -> None:
-        """生产者与收集任务排空后，释放该会话的全部消息缓存。"""
-        active_agents = sorted(
-            agent_id
-            for (owner_id, agent_id), queues in self._subscribers.items()
-            if owner_id == session_id and queues
-        )
-        if active_agents:
-            raise RuntimeError(
-                f"后台消息收集尚未排空: session_id={session_id!r}, "
-                f"agent_ids={active_agents!r}"
-            )
-        for key in tuple(self._messages):
-            if key[0] == session_id:
-                del self._messages[key]
+        active = [key for key, events in self._waiters.items() if key[0] == session_id and events]
+        if active:
+            raise RuntimeError(f"后台消息收集尚未排空: session_id={session_id}, owners={active}")
+        # durable 邮箱随整个 Session 物理节点删除；关闭连接不丢弃冷历史。
 
-    async def subscribe(self, session_id: str, agent_id: str) -> asyncio.Queue[BackgroundMessageDTO]:
-        queue: asyncio.Queue[BackgroundMessageDTO] = asyncio.Queue(maxsize=100)
-        key = self._key(session_id, agent_id)
-        if key not in self._subscribers:
-            self._subscribers[key] = set()
-        self._subscribers[key].add(queue)
-        return queue
-
-    async def unsubscribe(self, session_id: str, agent_id: str, queue: asyncio.Queue[BackgroundMessageDTO]) -> None:
-        key = self._key(session_id, agent_id)
-        if key in self._subscribers:
-            self._subscribers[key].discard(queue)
-            if not self._subscribers[key]:
-                del self._subscribers[key]
-
-    async def list_messages(
-        self,
-        session_id: str,
-        agent_id: str,
-        *,
-        source_id: str | None = None,
-        after_message_id: str | None = None,
-        limit: int = 100,
-    ) -> list[BackgroundMessageDTO]:
-        key = self._key(session_id, agent_id)
-        messages = list(self._messages.get(key, []))
-
-        if source_id is not None:
-            messages = [message for message in messages if message.source_id == source_id]
-
-        if after_message_id:
-            for index, message in enumerate(messages):
-                if message.message_id == after_message_id:
-                    messages = messages[index + 1 :]
-                    break
-
-        return messages[-limit:]
-
-    def emit(
-        self,
-        session_id: str,
-        agent_id: str,
-        content: str,
-        *,
-        kind: BackgroundMessageKind | str = BackgroundMessageKind.normal,
-        source_id: str | None = None,
-        payload: dict | None = None,
-        message_id: str | None = None,
+    async def emit(
+        self, session_id: str, thread_id: str, agent_id: str, content: str, *,
+        message_id: str, kind: BackgroundMessageKind | str = BackgroundMessageKind.normal,
+        source_id: str | None = None, payload: dict[str, JsonValue] | None = None,
     ) -> BackgroundMessageDTO:
-        if not content:
-            raise ValueError("content 不能为空")
-
-        normalized_kind = BackgroundMessageKind(kind)
+        if not message_id or not content or not agent_id:
+            raise ValueError("message_id、content 和 agent selector 必须显式提供")
         message = BackgroundMessageDTO(
-            message_id=message_id or create_prefixed_id("bgm"),
-            session_id=session_id,
-            agent_id=agent_id,
-            source_id=source_id or create_prefixed_id("src"),
-            kind=normalized_kind,
-            content=content,
-            payload=payload or {},
-            timestamp=datetime.now(timezone.utc),
+            message_id=message_id, session_id=session_id, thread_id=thread_id,
+            agent_id=agent_id, source_id=source_id or message_id,
+            kind=BackgroundMessageKind(kind), content=content, payload=payload or {},
+            timestamp=datetime.now(UTC),
         )
-
-        key = self._key(session_id, agent_id)
-        if key not in self._messages:
-            self._messages[key] = deque(maxlen=self._max_history)
-        self._messages[key].append(message)
-
-        for queue in list(self._subscribers.get(key, set())):
-            try:
-                queue.put_nowait(message)
-            except asyncio.QueueFull:
-                pass
-
+        async with self._store.admission(session_id):
+            self._store.resolve_thread(session_id, thread_id)
+            with self._store.control(session_id) as control:
+                message = control.emit_background_message(message)
+        for waiter in self._waiters.get((session_id, thread_id, agent_id), ()):
+            waiter.set()
         return message
 
+    async def list_messages(
+        self, session_id: str, thread_id: str, agent_id: str, *,
+        source_id: str | None = None, after_message_id: str | None = None, limit: int = 100,
+    ) -> list[BackgroundMessageDTO]:
+        async with self._store.admission(session_id):
+            self._store.resolve_thread(session_id, thread_id)
+            with self._store.control(session_id, read_only=True) as control:
+                return control.list_background_messages(thread_id, agent_id, source_id=source_id,
+                                                        after_message_id=after_message_id, limit=limit)
+
     async def collect(
-        self,
-        session_id: str,
-        agent_id: str,
-        *,
-        source_id: str | None = None,
-        after_message_id: str | None = None,
-        timeout_seconds: int = 300,
-        poll_interval_seconds: float = 1.0,
+        self, session_id: str, thread_id: str, agent_id: str, *, consumption_id: str,
+        source_id: str | None = None, after_message_id: str | None = None,
+        timeout_seconds: int = 300, poll_interval_seconds: float = 1.0,
         stop_on_interrupt: bool = True,
+        tool_result_identity: BackgroundToolResultIdentity | None = None,
     ) -> BackgroundMessageBatchDTO:
-        if timeout_seconds <= 0:
-            raise ValueError("timeout_seconds 必须大于 0")
-        if poll_interval_seconds <= 0:
-            raise ValueError("poll_interval_seconds 必须大于 0")
-
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout_seconds
-        collected: list[BackgroundMessageDTO] = []
-        last_message_id = after_message_id
-        seen_message_ids: set[str] = set()
-
-        queue = await self.subscribe(session_id, agent_id)
-
-        try:
-            backlog = await self.list_messages(
-                session_id,
-                agent_id,
-                source_id=source_id,
-                after_message_id=after_message_id,
-                limit=self._max_history,
+        async with self._consumers.lock_for(f"{session_id}:{consumption_id}"):
+            return await self._collect(
+                session_id, thread_id, agent_id, consumption_id=consumption_id,
+                source_id=source_id, after_message_id=after_message_id,
+                timeout_seconds=timeout_seconds, poll_interval_seconds=poll_interval_seconds,
+                stop_on_interrupt=stop_on_interrupt,
+                tool_result_identity=tool_result_identity,
             )
 
-            for message in backlog:
-                if message.message_id in seen_message_ids:
-                    continue
-                seen_message_ids.add(message.message_id)
-                collected.append(message)
-                last_message_id = message.message_id
-                if stop_on_interrupt and message.kind == BackgroundMessageKind.interrupt:
-                    return BackgroundMessageBatchDTO(
-                        session_id=session_id,
-                        agent_id=agent_id,
-                        source_id=source_id,
-                        messages=collected,
-                        interrupted=True,
-                        timed_out=False,
-                        last_message_id=last_message_id,
-                        collected_at=datetime.now(),
+    async def _collect(
+        self, session_id: str, thread_id: str, agent_id: str, *, consumption_id: str,
+        source_id: str | None, after_message_id: str | None, timeout_seconds: int,
+        poll_interval_seconds: float, stop_on_interrupt: bool,
+        tool_result_identity: BackgroundToolResultIdentity | None,
+    ) -> BackgroundMessageBatchDTO:
+        if timeout_seconds <= 0 or poll_interval_seconds <= 0 or not consumption_id or not agent_id:
+            raise ValueError("消费 identity/agent selector 必须显式提供，超时和轮询间隔必须大于 0")
+        preimage_hash = sha256_jcs({
+            "session_id": session_id, "thread_id": thread_id, "agent_id": agent_id,
+            "source_id": source_id, "after_message_id": after_message_id,
+            "timeout_seconds": timeout_seconds, "poll_interval_seconds": poll_interval_seconds,
+            "stop_on_interrupt": stop_on_interrupt,
+            "tool_result_identity": tool_result_identity.model_dump() if tool_result_identity else None,
+        })
+        async with self._store.admission(session_id):
+            self._store.resolve_thread(session_id, thread_id)
+            with self._store.control(session_id) as control:
+                batch = control.get_background_consumption(consumption_id, preimage_hash=preimage_hash)
+                if batch is None:
+                    batch = BackgroundMessageBatchDTO(
+                        session_id=session_id, thread_id=thread_id, agent_id=agent_id,
+                        consumption_id=consumption_id, source_id=source_id,
+                        last_message_id=after_message_id, collected_at=datetime.now(UTC),
+                        tool_result_identity=tool_result_identity,
                     )
-
+                    control.checkpoint_background_consumption(batch, preimage_hash=preimage_hash)
+                if batch.interrupted or batch.timed_out:
+                    return batch
+        key = (session_id, thread_id, agent_id)
+        waiter = asyncio.Event()
+        self._waiters.setdefault(key, set()).add(waiter)
+        # 重启继续原 durable 消费窗口，不能每次重新延长超时。
+        remaining_window = timeout_seconds - (datetime.now(UTC) - batch.collected_at).total_seconds()
+        deadline = asyncio.get_running_loop().time() + max(0, remaining_window)
+        try:
             while True:
-                remaining = deadline - loop.time()
-                if remaining <= 0:
-                    return BackgroundMessageBatchDTO(
-                        session_id=session_id,
-                        agent_id=agent_id,
-                        source_id=source_id,
-                        messages=collected,
-                        interrupted=False,
-                        timed_out=True,
-                        last_message_id=last_message_id,
-                        collected_at=datetime.now(),
-                    )
-
+                waiter.clear()
+                messages = await self.list_messages(session_id, thread_id, agent_id, source_id=source_id,
+                                                     after_message_id=batch.last_message_id, limit=1000)
+                for message in messages:
+                    batch.messages.append(message)
+                    batch.last_message_id = message.message_id
+                    if stop_on_interrupt and message.kind == BackgroundMessageKind.interrupt:
+                        batch.interrupted = True
+                        break
+                remaining = deadline - asyncio.get_running_loop().time()
+                batch.timed_out = remaining <= 0 and not batch.interrupted
+                async with self._store.admission(session_id):
+                    with self._store.control(session_id) as control:
+                        batch = control.checkpoint_background_consumption(batch, preimage_hash=preimage_hash)
+                if batch.interrupted or batch.timed_out:
+                    return batch
+                if len(messages) == 1000:
+                    continue
                 try:
-                    message = await asyncio.wait_for(queue.get(), timeout=remaining)
-                except asyncio.TimeoutError:
-                    return BackgroundMessageBatchDTO(
-                        session_id=session_id,
-                        agent_id=agent_id,
-                        source_id=source_id,
-                        messages=collected,
-                        interrupted=False,
-                        timed_out=True,
-                        last_message_id=last_message_id,
-                        collected_at=datetime.now(),
-                    )
-
-                if source_id is not None and message.source_id != source_id:
+                    await asyncio.wait_for(waiter.wait(), timeout=min(remaining, poll_interval_seconds))
+                except TimeoutError:
+                    # Event 是提示；跨进程 producer 和合并通知都从 durable sequence 对账。
                     continue
-                if message.message_id in seen_message_ids:
-                    continue
-
-                seen_message_ids.add(message.message_id)
-                collected.append(message)
-                last_message_id = message.message_id
-
-                if stop_on_interrupt and message.kind == BackgroundMessageKind.interrupt:
-                    return BackgroundMessageBatchDTO(
-                        session_id=session_id,
-                        agent_id=agent_id,
-                        source_id=source_id,
-                        messages=collected,
-                        interrupted=True,
-                        timed_out=False,
-                        last_message_id=last_message_id,
-                        collected_at=datetime.now(),
-                    )
         finally:
-            await self.unsubscribe(session_id, agent_id, queue)
+            self._waiters[key].discard(waiter)
+            if not self._waiters[key]:
+                del self._waiters[key]
 
+    def acknowledge(self, session_id: str, consumption_id: str) -> None:
+        with self._store.control(session_id) as control:
+            control.acknowledge_background_consumption(consumption_id)
 
-def emit_background_message(
-    content: str,
-    *,
-    kind: BackgroundMessageKind | str = BackgroundMessageKind.normal,
-    source_id: str | None = None,
-    payload: dict | None = None,
-    session_id: str | None = None,
-    agent_id: str | None = None,
-    message_id: str | None = None,
-) -> BackgroundMessageDTO:
-    if not session_id:
-        raise RuntimeError("session_id 不能为空，必须显式传入")
-    if not agent_id:
-        raise RuntimeError("agent_id 不能为空，必须显式传入")
+    def acknowledge_tool_results(self, session_id: str, thread_id: str, items: Sequence[CanonicalItemRecord]) -> None:
+        """仅供 canonical sink 在真实 append 提交后调用；不从工具返回正文取身份。"""
+        for item in items:
+            identity = item.projection_identity
+            if item.semantic_kind != "tool_result" or item.status != "completed" or identity is None or identity.model_call_id is None or item.tool_call_id is None:
+                continue
+            consumption_id = software_tool_operation_id("background_collect", session_id, thread_id,
+                identity.model_call_id, provider_tool_call_id(identity, item.tool_call_id))
+            with self._store.control(session_id) as control:
+                control.acknowledge_background_consumption(consumption_id, if_present=True)
 
-    raise RuntimeError("BackgroundMessageBus 需要通过应用容器显式注入，不能直接调用 emit_background_message")
+    async def reconcile(self, reader: BackgroundToolResultReader) -> int:
+        """补齐 canonical 已提交、ack 未提交的重启窗口；未提交结果保持原 batch。"""
+        acknowledged = 0
+        for session_id in self._store.session_ids():
+            with self._store.control(session_id, read_only=True) as control:
+                pending = control.unacknowledged_background_consumptions()
+            for consumption_id, thread_id, identity in pending:
+                async with self._store.admission(session_id):
+                    if reader.has_committed_tool_result(session_id, thread_id, identity.model_call_id, identity.tool_call_id):
+                        self.acknowledge(session_id, consumption_id)
+                        acknowledged += 1
+        return acknowledged

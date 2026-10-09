@@ -73,7 +73,7 @@ function streamEvent(
   type: MessageStreamEvent["type"],
   payload: Record<string, unknown>,
 ): MessageStreamEvent {
-  return {
+  return { thread_id: "thr_00000000400070008000000000000002",
     event_id: `evt_${streamId}_${eventSeq}`,
     session_id: sessionId,
     turn_id: turnId,
@@ -172,7 +172,7 @@ function failedStreamResponse(payload: Record<string, unknown>): Response {
 function streamSnapshot(
   overrides: Record<string, unknown>,
 ): Record<string, unknown> {
-  return {
+  return { thread_id: "thr_00000000400070008000000000000002",
     session_id: "ses_snapshot",
     turn_id: "turn_snapshot",
     turn_stream_id: "strm_snapshot",
@@ -303,7 +303,7 @@ describe("useSessionMessageStream 有界重连", () => {
     const streamSpy = spyOn(messageStreamApi, "streamSessionMessageEvents")
       .mockRejectedValue(new MessageStreamCursorGoneError(7));
     const snapshotSpy = spyOn(messageStreamApi, "getSessionMessageStreamSnapshot")
-      .mockResolvedValue(streamSnapshot({
+      .mockResolvedValue(streamSnapshot({ thread_id: "thr_00000000400070008000000000000002",
         session_id: "ses_gone_loop",
         turn_id: "turn_gone_loop",
         turn_stream_id: "strm_gone_loop",
@@ -333,7 +333,7 @@ describe("useSessionMessageStream 有界重连", () => {
     const streamSpy = spyOn(messageStreamApi, "streamSessionMessageEvents")
       .mockRejectedValue(new MessageStreamCursorGoneError(7));
     const snapshotSpy = spyOn(messageStreamApi, "getSessionMessageStreamSnapshot")
-      .mockResolvedValue(streamSnapshot({
+      .mockResolvedValue(streamSnapshot({ thread_id: "thr_00000000400070008000000000000002",
         session_id: "ses_gone_terminal",
         turn_id: "turn_gone_terminal",
         turn_stream_id: "strm_gone_terminal",
@@ -779,7 +779,7 @@ describe("useSessionMessageStream 连接与终态语义", () => {
     const snapshotSpy = spyOn(messageStreamApi, "getSessionMessageStreamSnapshot")
       .mockImplementation(async () => {
         snapshotRequests += 1;
-        return streamSnapshot({
+        return streamSnapshot({ thread_id: "thr_00000000400070008000000000000002",
           session_id: "ses_gap_rescue",
           turn_id: "turn_gap_rescue",
           turn_stream_id: "strm_gap_rescue",

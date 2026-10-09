@@ -32,10 +32,4 @@ export interface TraceEventDTO {
   raw?: Record<string, unknown>;
 }
 
-export interface WorkspaceFileChangeBatchDTO {
-  changes: Array<{
-    kind: "create" | "edit" | "delete";
-    path: string;
-  }>;
-  overflow: boolean;
-}
+export type WorkspaceFileChangeBatchDTO = import("../types/protocol").WorkspaceFileStreamBatch;

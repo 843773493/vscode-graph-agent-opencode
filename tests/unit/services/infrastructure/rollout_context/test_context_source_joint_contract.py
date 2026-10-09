@@ -160,7 +160,7 @@ def empty_tool_set() -> ToolSetSnapshot:
 def source_seal_owner(
     saver: RolloutCheckpointSaver, frozen_provider_wire, frozen_provider_activation,
 ) -> SourceSealCase:
-    owner = ContextSourceOwnerKey(MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID))
+    owner = ContextSourceOwnerKey(MAIN_SESSION_ID, saver._storage.storage.main_thread_id(MAIN_SESSION_ID))
     accepted = saver.accept_turn(
         owner.session_id, thread_id=owner.thread_id,
         accepted_ingress_id="joint-ingress", acceptance_idempotency_key="joint-accept",
@@ -230,9 +230,9 @@ def _register(
     contribution: ContextContribution,
 ) -> int:
     """经唯一 owner 注册；返回 registry 分配的 typed source_ordinal。"""
-    saver.register_context_contribution(session_id, saver._storage.main_thread_id(session_id), contribution)
-    thread_id = saver._storage.main_thread_id(session_id)
-    for row in saver._storage.list_context_contributions(session_id, thread_id):
+    saver.register_context_contribution(session_id, saver._storage.storage.main_thread_id(session_id), contribution)
+    thread_id = saver._storage.storage.main_thread_id(session_id)
+    for row in saver._storage.assemblies.list_context_contributions(session_id, thread_id):
         if row["contribution_id"] == contribution.contribution_id:
             ordinal = row["source_ordinal"]
             assert isinstance(ordinal, int) and not isinstance(ordinal, bool)
@@ -241,8 +241,8 @@ def _register(
 
 
 def _rows(saver: RolloutCheckpointSaver, session_id: str) -> list[dict]:
-    thread_id = saver._storage.main_thread_id(session_id)
-    return list(saver._storage.list_context_contributions(session_id, thread_id))
+    thread_id = saver._storage.storage.main_thread_id(session_id)
+    return list(saver._storage.assemblies.list_context_contributions(session_id, thread_id))
 
 
 # ---------------------------------------------------------------- 对抗 key
@@ -263,14 +263,14 @@ class TestAdversarialControlKeys:
         ordinal_clean = _register(saver, MAIN_SESSION_ID, clean)
         assert ordinal_clean == 0
         plan_clean = saver.compose_committed_context_plan(
-            MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID),
+            MAIN_SESSION_ID, saver._storage.storage.main_thread_id(MAIN_SESSION_ID),
             plan_id="plan-1", tool_set=empty_tool_set,
         )
 
         # 同一 session 内只换 metadata：SQL 清理后经全新 owner（重启等价）
         # 重注册对抗孪生，typed 事实逐字段相同。
-        with saver._storage._connect(
-            saver._storage.main_thread_id(MAIN_SESSION_ID),
+        with saver._storage.storage._connect(
+            saver._storage.storage.main_thread_id(MAIN_SESSION_ID),
             "",
             session_id=MAIN_SESSION_ID,
         ) as probe:
@@ -286,7 +286,7 @@ class TestAdversarialControlKeys:
         # SQL 清理后重注册：registry slot 仍从 0 起且与清理前一致。
         assert ordinal_adversarial == ordinal_clean
         plan_adversarial = restarted.compose_committed_context_plan(
-            MAIN_SESSION_ID, restarted._storage.main_thread_id(MAIN_SESSION_ID),
+            MAIN_SESSION_ID, restarted._storage.storage.main_thread_id(MAIN_SESSION_ID),
             plan_id="plan-1", tool_set=empty_tool_set,
         )
         # metadata 是开放 provenance，不进入 plan hash preimage；typed 事实
@@ -323,7 +323,7 @@ class TestAdversarialControlKeys:
         _register(saver, MAIN_SESSION_ID, overlay_without_flag)
 
         plan = saver.compose_committed_context_plan(
-            MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID),
+            MAIN_SESSION_ID, saver._storage.storage.main_thread_id(MAIN_SESSION_ID),
             plan_id="plan-2", tool_set=empty_tool_set,
         )
         ref_ids = {ref.ref_id for ref in plan.refs if ref.ref_type == "request_only"}
@@ -336,7 +336,7 @@ class TestAdversarialControlKeys:
     ) -> None:
         owner = ContextSourceOwnerKey(
             session_id=MAIN_SESSION_ID,
-            thread_id=saver._storage.main_thread_id(MAIN_SESSION_ID),
+            thread_id=saver._storage.storage.main_thread_id(MAIN_SESSION_ID),
         )
 
         def observation(**extensions: object) -> SourceObservation:
@@ -425,8 +425,8 @@ class TestMissingTypedFieldsFailClosed:
         empty_tool_set: ToolSetSnapshot,
     ) -> None:
         _register(saver, MAIN_SESSION_ID, _contribution("null-ordinal"))
-        with saver._storage._connect(
-            saver._storage.main_thread_id(MAIN_SESSION_ID),
+        with saver._storage.storage._connect(
+            saver._storage.storage.main_thread_id(MAIN_SESSION_ID),
             "",
             session_id=MAIN_SESSION_ID,
         ) as probe:
@@ -443,7 +443,7 @@ class TestMissingTypedFieldsFailClosed:
         restarted = _restarted(sessions_root)
         with pytest.raises((ValueError, RuntimeError), match="source_ordinal"):
             restarted.compose_committed_context_plan(
-                MAIN_SESSION_ID, restarted._storage.main_thread_id(MAIN_SESSION_ID),
+                MAIN_SESSION_ID, restarted._storage.storage.main_thread_id(MAIN_SESSION_ID),
                 plan_id="plan-3", tool_set=empty_tool_set,
             )
 
@@ -461,7 +461,7 @@ class TestMissingTypedFieldsFailClosed:
     ) -> None:
         owner = ContextSourceOwnerKey(
             session_id=MAIN_SESSION_ID,
-            thread_id=saver._storage.main_thread_id(MAIN_SESSION_ID),
+            thread_id=saver._storage.storage.main_thread_id(MAIN_SESSION_ID),
         )
         manager = ContextSourceManager(owner=owner, control_state_port=saver)
         manager.register(
@@ -480,8 +480,8 @@ class TestMissingTypedFieldsFailClosed:
         assert batch is not None
         committed, _binding = source_seal_owner.seal(manager)
         assert committed.deltas == batch.deltas
-        with saver._storage._connect(
-            saver._storage.main_thread_id(MAIN_SESSION_ID),
+        with saver._storage.storage._connect(
+            saver._storage.storage.main_thread_id(MAIN_SESSION_ID),
             "",
             session_id=MAIN_SESSION_ID,
         ) as probe:
@@ -605,7 +605,7 @@ class TestRegistryStabilityAcrossRestart:
             content_hash=contribution_content_hash("prompt", "v2"),
             body="v2",
         )
-        saver.register_context_contribution(MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID), updated, expected_source_revision=original.source_revision)
+        saver.register_context_contribution(MAIN_SESSION_ID, saver._storage.storage.main_thread_id(MAIN_SESSION_ID), updated, expected_source_revision=original.source_revision)
         rows = _rows(saver, MAIN_SESSION_ID)
         assert len(rows) == 1
         assert rows[0]["source_ordinal"] == first
@@ -626,7 +626,7 @@ class TestRegistryStabilityAcrossRestart:
             content_length=None,
             body="updated body",
         )
-        saver.register_context_contribution(MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID), updated, expected_source_revision=original.source_revision)
+        saver.register_context_contribution(MAIN_SESSION_ID, saver._storage.storage.main_thread_id(MAIN_SESSION_ID), updated, expected_source_revision=original.source_revision)
         rows = _rows(saver, MAIN_SESSION_ID)
         assert len(rows) == 1
         assert rows[0]["source_ordinal"] == first
@@ -651,7 +651,7 @@ class TestRegistryStabilityAcrossRestart:
             body="drifted body",
         )
         with pytest.raises(ValueError, match="identity.*冲突"):
-            saver.register_context_contribution(MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID), drifted)
+            saver.register_context_contribution(MAIN_SESSION_ID, saver._storage.storage.main_thread_id(MAIN_SESSION_ID), drifted)
         rows = _rows(saver, MAIN_SESSION_ID)
         assert len(rows) == 1
         assert rows[0]["source_ordinal"] == first
@@ -667,14 +667,14 @@ class TestRegistryStabilityAcrossRestart:
         contribution = _contribution("prepare-source")
         first = _register(saver, MAIN_SESSION_ID, contribution)
         # 重注册使用与首次完全相同的 caller 内容（ordinal 仍为 None）。
-        saver.register_context_contribution(MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID), contribution)
+        saver.register_context_contribution(MAIN_SESSION_ID, saver._storage.storage.main_thread_id(MAIN_SESSION_ID), contribution)
         rows = _rows(saver, MAIN_SESSION_ID)
         assert len(rows) == 1
         assert rows[0]["source_ordinal"] == first
         # 内容漂移（source_revision 变化）仍必须显式拒绝。
         drifted = replace(contribution, source_revision="rev-drift")
         with pytest.raises(ValueError, match="identity.*冲突"):
-            saver.register_context_contribution(MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID), drifted)
+            saver.register_context_contribution(MAIN_SESSION_ID, saver._storage.storage.main_thread_id(MAIN_SESSION_ID), drifted)
 
     def test_owner_threads_are_isolated(
         self,
@@ -698,11 +698,11 @@ class TestRegistryStabilityAcrossRestart:
         # CSM 控制状态同轮隔离：main 的 tracking 事实不出现在 child owner。
         main_owner = ContextSourceOwnerKey(
             session_id=MAIN_SESSION_ID,
-            thread_id=saver._storage.main_thread_id(MAIN_SESSION_ID),
+            thread_id=saver._storage.storage.main_thread_id(MAIN_SESSION_ID),
         )
         child_owner = ContextSourceOwnerKey(
             session_id=CHILD_SESSION_ID,
-            thread_id=saver._storage.main_thread_id(CHILD_SESSION_ID),
+            thread_id=saver._storage.storage.main_thread_id(CHILD_SESSION_ID),
         )
         main_manager = ContextSourceManager(
             owner=main_owner,
@@ -738,9 +738,9 @@ class TestComposerThreadIdentity:
         # catalog 解析后显式传入；request-only ref 必须携带该 main_thread_id，
         # 不能留空或自造，否则 (session_id, thread_id) 定位与其它 ref 不一致。
         _register(saver, MAIN_SESSION_ID, _contribution("thread-identity"))
-        expected_thread_id = saver._storage.main_thread_id(MAIN_SESSION_ID)
+        expected_thread_id = saver._storage.storage.main_thread_id(MAIN_SESSION_ID)
         plan = saver.compose_committed_context_plan(
-            MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID),
+            MAIN_SESSION_ID, saver._storage.storage.main_thread_id(MAIN_SESSION_ID),
             plan_id="plan-thread", tool_set=empty_tool_set,
         )
         request_only_refs = [ref for ref in plan.refs if ref.ref_type == "request_only"]
@@ -766,7 +766,7 @@ class TestComposerThreadIdentity:
         from app.domain.itemized.mutation_intents import MutationIntentOwner
         from app.domain.itemized.records import CanonicalItemRecord
 
-        expected_thread_id = saver._storage.main_thread_id(MAIN_SESSION_ID)
+        expected_thread_id = saver._storage.storage.main_thread_id(MAIN_SESSION_ID)
         accepted = saver.accept_turn(
             MAIN_SESSION_ID,
             thread_id=expected_thread_id,
@@ -804,7 +804,7 @@ class TestComposerThreadIdentity:
         ):
             saver.append_items(MAIN_SESSION_ID, (item,), thread_id=expected_thread_id)
         plan = saver.compose_committed_context_plan(
-            MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID),
+            MAIN_SESSION_ID, saver._storage.storage.main_thread_id(MAIN_SESSION_ID),
             plan_id="plan-canonical-thread", tool_set=empty_tool_set,
             include_pending_notices=False,
         )
@@ -827,7 +827,7 @@ class TestSealedTypedFieldConsumption:
         当前 effective entry 的完整 activation；旧 source frame/detail 逐字节不变。"""
         owner = ContextSourceOwnerKey(
             session_id=MAIN_SESSION_ID,
-            thread_id=saver._storage.main_thread_id(MAIN_SESSION_ID),
+            thread_id=saver._storage.storage.main_thread_id(MAIN_SESSION_ID),
         )
         manager = ContextSourceManager(
             owner=owner,
@@ -888,8 +888,8 @@ class TestSealedTypedFieldConsumption:
                              if frame.item_ref.source_identity == "skill:gateway:demo")
         assert old_frame.content == old_bodies[old_frame.item_ref.ref_id] == "gateway body\n"
 
-        with saver._storage._connect(
-            saver._storage.main_thread_id(MAIN_SESSION_ID),
+        with saver._storage.storage._connect(
+            saver._storage.storage.main_thread_id(MAIN_SESSION_ID),
             "",
             session_id=MAIN_SESSION_ID,
         ) as probe:
@@ -1017,14 +1017,14 @@ class TestSealedTypedFieldConsumption:
             ),
         )
         before = saver.compose_committed_context_plan(
-            MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID),
+            MAIN_SESSION_ID, saver._storage.storage.main_thread_id(MAIN_SESSION_ID),
             plan_id="plan-6", tool_set=empty_tool_set,
         )
         before_hash = context_plan_hash(before)
 
         restarted = _restarted(sessions_root)
         after = restarted.compose_committed_context_plan(
-            MAIN_SESSION_ID, restarted._storage.main_thread_id(MAIN_SESSION_ID),
+            MAIN_SESSION_ID, restarted._storage.storage.main_thread_id(MAIN_SESSION_ID),
             plan_id="plan-6", tool_set=empty_tool_set,
         )
         # 恢复只消费 registry 封存 typed 字段：metadata 中的旧 ordinal 键与
@@ -1140,7 +1140,7 @@ class TestTypedBindingRegistryBoundary:
         ordinal = _register(saver, MAIN_SESSION_ID, contribution)
         restarted = _restarted(sessions_root)
         plan = restarted.compose_committed_context_plan(
-            MAIN_SESSION_ID, restarted._storage.main_thread_id(MAIN_SESSION_ID),
+            MAIN_SESSION_ID, restarted._storage.storage.main_thread_id(MAIN_SESSION_ID),
             plan_id="opaque-restart-plan", tool_set=empty_tool_set,
         )
         (restored,) = plan.contributions
@@ -1157,8 +1157,8 @@ class TestTypedBindingRegistryBoundary:
         _register(saver, MAIN_SESSION_ID, contribution)
         invalid = contribution.binding_manifest()
         del invalid[missing]
-        thread_id = saver._storage.main_thread_id(MAIN_SESSION_ID)
-        with saver._storage._connect(thread_id, "", session_id=MAIN_SESSION_ID) as connection:
+        thread_id = saver._storage.storage.main_thread_id(MAIN_SESSION_ID)
+        with saver._storage.storage._connect(thread_id, "", session_id=MAIN_SESSION_ID) as connection:
             with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
                 connection.execute(
                     "UPDATE context_contributions SET binding_manifest_json = ?",
@@ -1171,8 +1171,8 @@ class TestTypedBindingRegistryBoundary:
     @pytest.mark.parametrize("ordinal", [None, -1, 1.5])
     def test_sql_rejects_missing_or_invalid_registry_ordinal(self, saver, ordinal):
         _register(saver, MAIN_SESSION_ID, _contribution("sql-required-ordinal"))
-        thread_id = saver._storage.main_thread_id(MAIN_SESSION_ID)
-        with saver._storage._connect(thread_id, "", session_id=MAIN_SESSION_ID) as connection:
+        thread_id = saver._storage.storage.main_thread_id(MAIN_SESSION_ID)
+        with saver._storage.storage._connect(thread_id, "", session_id=MAIN_SESSION_ID) as connection:
             with pytest.raises(sqlite3.IntegrityError):
                 connection.execute(
                     "UPDATE context_contributions SET source_ordinal = ?", (ordinal,),
@@ -1186,8 +1186,8 @@ class TestTypedBindingRegistryBoundary:
         _register(saver, MAIN_SESSION_ID, contribution)
         invalid = contribution.binding_manifest()
         del invalid["source_binding"]
-        thread_id = saver._storage.main_thread_id(MAIN_SESSION_ID)
-        with saver._storage._connect(thread_id, "", session_id=MAIN_SESSION_ID) as connection:
+        thread_id = saver._storage.storage.main_thread_id(MAIN_SESSION_ID)
+        with saver._storage.storage._connect(thread_id, "", session_id=MAIN_SESSION_ID) as connection:
             connection.execute("PRAGMA ignore_check_constraints = ON")
             connection.execute(
                 "UPDATE context_contributions SET binding_manifest_json = ?",
@@ -1201,22 +1201,22 @@ class TestTypedBindingRegistryBoundary:
 
     def test_old_experimental_schema_is_rejected_and_preserved(self, saver, sessions_root, empty_tool_set):
         _register(saver, MAIN_SESSION_ID, _contribution("old-schema-source"))
-        thread_id = saver._storage.main_thread_id(MAIN_SESSION_ID)
-        with saver._storage._connect(thread_id, "", session_id=MAIN_SESSION_ID) as connection:
+        thread_id = saver._storage.storage.main_thread_id(MAIN_SESSION_ID)
+        with saver._storage.storage._connect(thread_id, "", session_id=MAIN_SESSION_ID) as connection:
             connection.execute("UPDATE database_meta SET schema_version = 9")
         restarted = _restarted(sessions_root)
         with pytest.raises(RuntimeError, match="schema-incompatible"):
             restarted.compose_committed_context_plan(
                 MAIN_SESSION_ID, thread_id, plan_id="old-schema-plan", tool_set=empty_tool_set,
             )
-        with saver._storage._connect(thread_id, "", session_id=MAIN_SESSION_ID) as connection:
+        with saver._storage.storage._connect(thread_id, "", session_id=MAIN_SESSION_ID) as connection:
             assert connection.execute("SELECT schema_version FROM database_meta").fetchone() == (9,)
             assert connection.execute("SELECT contribution_id FROM context_contributions").fetchone() == ("old-schema-source",)
 
 
 class TestContributionRevisionCAS:
     def test_late_revision_is_rejected_before_registry_and_runtime_change(self, saver):
-        thread_id = saver._storage.main_thread_id(MAIN_SESSION_ID)
+        thread_id = saver._storage.storage.main_thread_id(MAIN_SESSION_ID)
         original = _contribution("cas-slot", replacement_policy="replaceable", body="revision a")
         ordinal = _register(saver, MAIN_SESSION_ID, original)
         second = replace(
@@ -1247,7 +1247,7 @@ class TestContributionRevisionCAS:
         updated = replace(original, source_revision="rev-changed")
         with pytest.raises(ValueError, match="expected source revision CAS"):
             saver.register_context_contribution(
-                MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID), updated,
+                MAIN_SESSION_ID, saver._storage.storage.main_thread_id(MAIN_SESSION_ID), updated,
             )
         assert _rows(saver, MAIN_SESSION_ID)[0]["source_revision"] == original.source_revision
 
@@ -1256,7 +1256,7 @@ class TestContributionRevisionCAS:
         _register(saver, MAIN_SESSION_ID, original)
         with pytest.raises(ValueError, match="immutable"):
             saver.register_context_contribution(
-                MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID),
+                MAIN_SESSION_ID, saver._storage.storage.main_thread_id(MAIN_SESSION_ID),
                 replace(original, source_revision="new", replacement_policy="replaceable"),
                 expected_source_revision=original.source_revision,
             )
@@ -1265,8 +1265,8 @@ class TestContributionRevisionCAS:
     def test_registry_bound_to_sealed_assembly_is_immutable(self, saver):
         original = _contribution("sealed-slot", replacement_policy="replaceable")
         ordinal = _register(saver, MAIN_SESSION_ID, original)
-        thread_id = saver._storage.main_thread_id(MAIN_SESSION_ID)
-        with saver._storage._connect(thread_id, "", session_id=MAIN_SESSION_ID) as connection:
+        thread_id = saver._storage.storage.main_thread_id(MAIN_SESSION_ID)
+        with saver._storage.storage._connect(thread_id, "", session_id=MAIN_SESSION_ID) as connection:
             connection.execute(
                 "UPDATE context_contributions SET assembly_id='sealed-assembly', contribution_ordinal=0 WHERE contribution_id=?",
                 (original.contribution_id,),
@@ -1282,7 +1282,7 @@ class TestContributionRevisionCAS:
 
 
 def test_observation_unknown_extension_survives_owner_commit_and_restart(saver, sessions_root):
-    thread_id = saver._storage.main_thread_id(MAIN_SESSION_ID)
+    thread_id = saver._storage.storage.main_thread_id(MAIN_SESSION_ID)
     extensions = {"vendor.future/context": {
         "extension_version": "future-19", "protection": "public", "encoding": "jcs:v1",
         "value": {"source_ordinal": 900, "model_call_id": "opaque-call", "nested": {"session_id": MAIN_SESSION_ID}},
@@ -1295,7 +1295,7 @@ def test_observation_unknown_extension_survives_owner_commit_and_restart(saver, 
     )
     decision = build_source_lifecycle_decision(observation, decision_kind="base")
     saver.consume_mutation_intent(decision)
-    restored = _restarted(sessions_root)._storage.read_items(
+    restored = _restarted(sessions_root)._storage.storage.read_items(
         MAIN_SESSION_ID, thread_id, item_ids=(decision.item_id,),
     )[0]
     assert restored.extensions == extensions
@@ -1306,7 +1306,7 @@ def test_observation_unknown_extension_survives_owner_commit_and_restart(saver, 
 def test_source_observation_rejects_unversioned_extension(saver):
     with pytest.raises(ItemSchemaError, match="extension_version"):
         SourceObservation(
-            owner=ContextSourceOwnerKey(MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID)),
+            owner=ContextSourceOwnerKey(MAIN_SESSION_ID, saver._storage.storage.main_thread_id(MAIN_SESSION_ID)),
             source_id="skill:invalid-extension", source_kind="skill", name="invalid-extension",
             revision="rev-1", tracking_mode="tracked", content="正文",
             extensions={"vendor.future/context": {"value": {}, "protection": "public"}},
@@ -1314,7 +1314,7 @@ def test_source_observation_rejects_unversioned_extension(saver):
 
 
 def test_real_sealed_assembly_rejects_registry_cas_without_mutating_owner_state(saver, empty_tool_set):
-    thread_id = saver._storage.main_thread_id(MAIN_SESSION_ID)
+    thread_id = saver._storage.storage.main_thread_id(MAIN_SESSION_ID)
     accepted = saver.accept_turn(
         MAIN_SESSION_ID, thread_id=thread_id,
         accepted_ingress_id="seal-cas-ingress", acceptance_idempotency_key="seal-cas-accept",
@@ -1333,8 +1333,8 @@ def test_real_sealed_assembly_rejects_registry_cas_without_mutating_owner_state(
         request_only_content={original.contribution_id: original.body},
     )
     assert snapshot.sealed and snapshot.contributions[0].source_revision == original.source_revision
-    before_jsonl = saver._storage.jsonl_path(MAIN_SESSION_ID, thread_id=thread_id).read_bytes()
-    with saver._storage._connect(thread_id, "", session_id=MAIN_SESSION_ID) as connection:
+    before_jsonl = saver._storage.storage.jsonl_path(MAIN_SESSION_ID, thread_id=thread_id).read_bytes()
+    with saver._storage.storage._connect(thread_id, "", session_id=MAIN_SESSION_ID) as connection:
         before_sql = tuple(connection.iterdump())
     before_ledger = saver._composer_for(MAIN_SESSION_ID, thread_id).ledger.contributions.copy()
     before_body = saver._request_only_content.copy()
@@ -1343,9 +1343,9 @@ def test_real_sealed_assembly_rejects_registry_cas_without_mutating_owner_state(
             MAIN_SESSION_ID, thread_id, replace(original, source_revision="seal-cas-new"),
             expected_source_revision=original.source_revision, request_content="拒绝的正文",
         )
-    with saver._storage._connect(thread_id, "", session_id=MAIN_SESSION_ID) as connection:
+    with saver._storage.storage._connect(thread_id, "", session_id=MAIN_SESSION_ID) as connection:
         assert tuple(connection.iterdump()) == before_sql
-    assert saver._storage.jsonl_path(MAIN_SESSION_ID, thread_id=thread_id).read_bytes() == before_jsonl
+    assert saver._storage.storage.jsonl_path(MAIN_SESSION_ID, thread_id=thread_id).read_bytes() == before_jsonl
     assert saver._composer_for(MAIN_SESSION_ID, thread_id).ledger.contributions == before_ledger
     assert saver._request_only_content == before_body
     row = next(row for row in _rows(saver, MAIN_SESSION_ID) if row["contribution_id"] == original.contribution_id)

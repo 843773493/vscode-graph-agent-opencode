@@ -1,10 +1,12 @@
-import type { WorkspaceFileList, WorkspaceFileNode } from "../../../types/backend";
+import type { WorkspaceDirectoryKey, WorkspaceFileList, WorkspaceFileNode } from "../../../types/backend";
 
 export const MAX_FILE_TREE_CACHED_DIRECTORIES = 256;
 export const MAX_FILE_TREE_CACHED_NODES = 20_000;
 export const RESTORED_DIRECTORY_CONCURRENCY = 3;
 
 export interface DirectoryCacheEntry {
+  directoryKey: WorkspaceDirectoryKey | null;
+  directoryRevision: number | null;
   items: WorkspaceFileNode[];
   loading: boolean;
   error: string | null;
@@ -18,11 +20,13 @@ export interface DirectoryCacheEntry {
  * 不同，其余字段必须由这里统一补齐，避免每个调用点各写一份七字段字面量。
  */
 export function loadedDirectoryEntry(
-  result: Pick<WorkspaceFileList, "items" | "truncated" | "next_cursor">,
+  result: Pick<WorkspaceFileList, "items" | "truncated" | "next_cursor" | "directory_key" | "directory_revision">,
   lastAccessedAt: number,
   items: WorkspaceFileNode[] = result.items ?? [],
 ): DirectoryCacheEntry {
   return {
+    directoryKey: result.directory_key,
+    directoryRevision: result.directory_revision,
     items,
     loading: false,
     error: null,
@@ -37,6 +41,8 @@ export function loadingDirectoryEntry(
   lastAccessedAt: number,
 ): DirectoryCacheEntry {
   return {
+    directoryKey: previous?.directoryKey ?? null,
+    directoryRevision: previous?.directoryRevision ?? null,
     items: previous?.items ?? [],
     loading: true,
     error: null,
@@ -52,6 +58,8 @@ export function failedDirectoryEntry(
   lastAccessedAt: number,
 ): DirectoryCacheEntry {
   return {
+    directoryKey: previous?.directoryKey ?? null,
+    directoryRevision: previous?.directoryRevision ?? null,
     items: previous?.items ?? [],
     loading: false,
     error,

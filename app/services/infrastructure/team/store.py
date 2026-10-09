@@ -1,89 +1,73 @@
+"""任务板只在所属 Session control ledger 中提交，不再维护 JSON/event 双写。"""
+
 from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 
+from app.abstractions.session_subagent import OwnerThreadCreationFactoryProtocol
 from app.core.exceptions import NotFoundError
-from app.core.session_catalog_resolver import SessionCatalogPathResolver
+from app.core.session_control_store import SessionControlStore
 from app.schemas.internal_v2.team import TeamBoardDTO, TeamEventDTO
 
 TEAM_ID_PATTERN = re.compile(r"^team_[0-9a-f]{32}$")
 
 
 class TeamStore:
-    """任务板位于 owner Session 物理目录；成员与 readiness 不在 JSON 落库。"""
+    def __init__(self, *, factory: OwnerThreadCreationFactoryProtocol,
+                 write_admission: Callable[[str], AbstractAsyncContextManager[None]]) -> None:
+        self._factory = factory
+        self._write_admission = write_admission
 
-    def __init__(self, *, path_resolver: SessionCatalogPathResolver) -> None:
-        self._resolver = path_resolver
+    def control(self, session_id: str) -> SessionControlStore:
+        control = self._factory.for_owner_session(session_id).control_store
+        if (control.database_path.parent / "teams").exists():
+            raise RuntimeError("旧团队 JSON 存储不受支持，禁止作为第二权威读取或迁移")
+        return control
 
-    def create(self, board: TeamBoardDTO) -> TeamBoardDTO:
-        team_dir = self._team_dir(board.session_id, board.team_id)
-        if team_dir.exists():
-            raise FileExistsError(f"团队已存在: {board.team_id}")
-        team_dir.mkdir(parents=True)
-        self.save(board)
-        return board
+    async def commit(self, board: TeamBoardDTO, event: TeamEventDTO,
+                     *, wakeup: dict[str, object] | None = None) -> int:
+        self._validate_team_id(board.team_id)
+        async with self._write_admission(board.session_id):
+            control = self.control(board.session_id)
+            return control.commit_collaboration_board(
+                session_id=board.session_id, team_id=board.team_id, version=board.version,
+                board_json=board.model_copy(update={"members": [], "recent_events": []}).model_dump_json(),
+                event_json=event.model_dump_json(),
+                wakeup_json=None if wakeup is None else json.dumps(wakeup, ensure_ascii=False),
+            )
 
     def get(self, session_id: str, team_id: str) -> TeamBoardDTO:
-        board_path = self._board_path(session_id, team_id)
-        if not board_path.is_file():
+        self._validate_team_id(team_id)
+        rows = self.control(session_id).collaboration_boards(team_id)
+        if not rows:
             raise NotFoundError(f"团队不存在: {team_id}")
-        with board_path.open("r", encoding="utf-8") as file:
-            board = TeamBoardDTO.model_validate(json.load(file))
+        board = TeamBoardDTO.model_validate(json.loads(rows[0]))
         if (board.session_id, board.team_id) != (session_id, team_id):
-            raise RuntimeError(f"团队快照 owner/ID 与路径冲突: {board_path}")
+            raise RuntimeError("团队权威 board owner/ID 与 ledger 不一致")
         return board
 
     def list(self, session_id: str) -> list[TeamBoardDTO]:
-        teams_root = self._resolver.resolve_session_node(session_id) / "teams"
-        if not teams_root.exists():
-            return []
-        boards: list[TeamBoardDTO] = []
-        for team_dir in sorted(teams_root.iterdir()):
-            if not team_dir.is_dir():
-                raise RuntimeError(f"团队存储目录出现非法文件: {team_dir}")
-            boards.append(self.get(session_id, team_dir.name))
-        return boards
-
-    def save(self, board: TeamBoardDTO) -> TeamBoardDTO:
-        team_dir = self._team_dir(board.session_id, board.team_id)
-        if not team_dir.is_dir():
-            raise NotFoundError(f"团队目录不存在: {board.team_id}")
-        target = team_dir / "team.json"
-        temporary = team_dir / "team.json.tmp"
-        with temporary.open("w", encoding="utf-8") as file:
-            json.dump(
-                board.model_copy(update={"members": [], "recent_events": []}).model_dump(mode="json"),
-                file,
-                ensure_ascii=False,
-                indent=2,
-            )
-            file.flush()
-        temporary.replace(target)
-        return board
-
-    def append_event(self, event: TeamEventDTO) -> None:
-        event_path = self._team_dir(event.session_id, event.team_id) / "events.jsonl"
-        if not event_path.parent.is_dir():
-            raise NotFoundError(f"团队目录不存在: {event.team_id}")
-        with event_path.open("a", encoding="utf-8") as file:
-            file.write(event.model_dump_json())
-            file.write("\n")
-            file.flush()
+        return [self.get(session_id, TeamBoardDTO.model_validate_json(row).team_id)
+                for row in self.control(session_id).collaboration_boards()]
 
     def recent_events(self, session_id: str, team_id: str, *, limit: int = 20) -> list[TeamEventDTO]:
-        event_path = self._team_dir(session_id, team_id) / "events.jsonl"
-        if not event_path.exists():
-            return []
-        with event_path.open("r", encoding="utf-8") as file:
-            lines = file.readlines()
-        return [TeamEventDTO.model_validate_json(line) for line in lines[-limit:]]
+        self._validate_team_id(team_id)
+        return [TeamEventDTO.model_validate_json(row) for row in self.control(session_id).collaboration_recent_events(team_id, limit)]
 
-    def _board_path(self, session_id: str, team_id: str) -> Path:
-        return self._team_dir(session_id, team_id) / "team.json"
+    def latest_task_event(self, session_id: str, team_id: str, task_id: str) -> TeamEventDTO | None:
+        self._validate_team_id(team_id)
+        row = self.control(session_id).collaboration_latest_task_event(team_id, task_id)
+        if row is None:
+            return None
+        event = TeamEventDTO.model_validate_json(row)
+        if (event.session_id, event.team_id, event.payload.get("task_id")) != (session_id, team_id, task_id):
+            raise RuntimeError("团队任务事件与权威 owner/ID 不一致")
+        return event
 
-    def _team_dir(self, session_id: str, team_id: str) -> Path:
+    @staticmethod
+    def _validate_team_id(team_id: str) -> None:
         if not TEAM_ID_PATTERN.fullmatch(team_id):
             raise ValueError(f"非法 team_id: {team_id}")
-        return self._resolver.resolve_session_node(session_id) / "teams" / team_id

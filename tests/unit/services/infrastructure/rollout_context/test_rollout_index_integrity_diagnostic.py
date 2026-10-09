@@ -11,23 +11,23 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
     LangChainMessageCodec,
 )
 from app.services.infrastructure.rollout_context.storage import rollout_index_reads
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 
 @pytest.fixture
-def storage_owner(tmp_path: Path) -> tuple[RolloutStorage, str, str]:
+def storage_owner(tmp_path: Path) -> tuple[RolloutContextStore, str, str]:
     sessions_root = tmp_path / ".boxteam" / "sessions"
     sessions_root.mkdir(parents=True)
     session_id = f"ses_{create_uuid_hex()}"
     seed_catalog_session_bundle(sessions_root, session_id, title="integrity diagnostic")
-    storage = RolloutStorage(
+    storage = RolloutContextStore(
         sessions_root,
         serde=JsonPlusSerializer(),
         message_codec=LangChainMessageCodec(),
     )
-    thread_id = storage.main_thread_id(session_id)
-    storage.initialize(session_id, thread_id=thread_id)
+    thread_id = storage.storage.main_thread_id(session_id)
+    storage.storage.initialize(session_id, thread_id=thread_id)
     return storage, session_id, thread_id
 
 
@@ -49,15 +49,15 @@ def _damage_database_page_count(index_path: Path) -> None:
 
 
 def test_integrity_failure_reports_session_thread_path_and_releases_handles(
-    storage_owner: tuple[RolloutStorage, str, str],
+    storage_owner: tuple[RolloutContextStore, str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     storage, session_id, thread_id = storage_owner
-    index_path = storage.index_path(session_id, thread_id=thread_id)
+    index_path = storage.storage.index_path(session_id, thread_id=thread_id)
     _damage_database_page_count(index_path)
 
     opened_connections: list[sqlite3.Connection] = []
-    original_connect = storage._connect
+    original_connect = storage.storage._connect
 
     def track_connection(
         owner_thread_id: str,
@@ -88,11 +88,11 @@ def test_integrity_failure_reports_session_thread_path_and_releases_handles(
         read_locks.append(file_lock)
         return file_lock
 
-    monkeypatch.setattr(storage, "_connect", track_connection)
+    monkeypatch.setattr(storage.storage, "_connect", track_connection)
     monkeypatch.setattr(rollout_index_reads, "_RolloutFileLock", track_file_lock)
 
     with pytest.raises(RuntimeError, match="integrity_check 失败") as raised:
-        storage.validate_index(session_id, thread_id)
+        storage.storage.validate_index(session_id, thread_id)
 
     assert str(index_path) in str(raised.value)
     assert len(opened_connections) == 1
@@ -103,15 +103,15 @@ def test_integrity_failure_reports_session_thread_path_and_releases_handles(
 
 
 def test_existing_index_error_reports_pair_path(
-    storage_owner: tuple[RolloutStorage, str, str],
+    storage_owner: tuple[RolloutContextStore, str, str],
 ) -> None:
     storage, session_id, thread_id = storage_owner
-    index_path = storage.index_path(session_id, thread_id=thread_id)
+    index_path = storage.storage.index_path(session_id, thread_id=thread_id)
     index_path.write_bytes(b"not a SQLite database")
 
     with (
         pytest.raises(RuntimeError, match="recovery_required") as raised,
-        storage._existing_index_connection(
+        storage.storage._existing_index_connection(
             thread_id,
             "",
             session_id=session_id,

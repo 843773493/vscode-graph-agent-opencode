@@ -5,9 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
 SessionResourceKind = Literal["background_task", "terminal", "browser"]
-SessionResourceAction = Literal["pause", "resume", "cancel", "delete"]
+SessionResourceAction = Literal["pause", "resume", "cancel", "delete", "reconcile"]
 
 
 class SessionResourceDTO(BaseModel):

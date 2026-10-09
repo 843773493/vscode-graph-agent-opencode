@@ -14,20 +14,20 @@ from __future__ import annotations
 import json
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.services.infrastructure.rollout_context.activation.common import (
+    ASSEMBLY_BINDING_COLUMNS,
+    BINDING_COLUMNS,
+    SNAPSHOT_COLUMNS,
+)
+from app.services.infrastructure.rollout_context.activation.schema import (
+    require_resource_activation_schema,
+)
 from app.services.infrastructure.rollout_context.fork.remap_state import (
     FullCopyRemapState,
 )
 from app.services.infrastructure.rollout_context.fork.validation import (
     non_negative_int,
     required_text,
-)
-from app.services.infrastructure.rollout_context.storage.resource_activation_common import (
-    ASSEMBLY_BINDING_COLUMNS,
-    BINDING_COLUMNS,
-    SNAPSHOT_COLUMNS,
-)
-from app.services.infrastructure.rollout_context.storage.resource_activation_schema import (
-    require_resource_activation_schema,
 )
 from app.services.mapping.itemized.projection import build_projection_evidence
 

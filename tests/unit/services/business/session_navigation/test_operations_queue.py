@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core.path_utils import get_session_path_resolver
+from app.core.path_utils import get_session_creation_service, get_session_path_resolver
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_catalog_store.contracts import (
@@ -28,10 +28,6 @@ from app.schemas.internal_v2.session_navigation.operations import (
     NavigationMutationEnqueueResultDTO,
     NavigationMutationIntentDTO,
 )
-from app.services.business.session_context_resource import (
-    session_resource_identity,
-    session_resource_uri,
-)
 from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_navigation.executor import NavigationMutationExecutor
 from app.services.business.session_navigation.operations_service import (
@@ -44,6 +40,8 @@ from app.services.business.session_navigation.queue_store import (
     NavigationMutationQueueStore,
     NavigationQueueOwnerError,
 )
+from app.services.business.session_service import SessionService
+from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.harness.python.run_context import TestRunContext
 from tests.support.canonical_id_at import uuid7_hex_from_name
 from tests.support.session_navigation_queue import (
@@ -51,6 +49,9 @@ from tests.support.session_navigation_queue import (
     submit_catalog_intent,
 )
 from tests.support.workspaces import prepare_default_test_workspace
+from tests.unit.services.business.session_service_test_support import (
+    SessionServiceConfigStub,
+)
 
 
 def canonical(name: str) -> str:
@@ -64,33 +65,21 @@ def operation_id(seed: str) -> str:
     return f"op_{digest[:32]}"
 
 
-class _SessionService:
-    """最小 session service 桩：只提供 resolver 与元数据读取。"""
-
+class _SessionService(SessionService):
+    """真实 SessionService 与离线配置；记录旧逐会话入口是否被误调用。"""
     def __init__(self, sessions_root: Path) -> None:
-        self.path_resolver = get_session_path_resolver(sessions_root)
-        self.path_resolver.initialize()
-
-    def register_change_listener(self, listener) -> None:
-        del listener
+        resolver = get_session_path_resolver(sessions_root)
+        super().__init__(
+            config_service=SessionServiceConfigStub(),
+            trace_event_store=TraceEventStore(sessions_dir=sessions_root),
+            workspace_id=resolver.workspace_id, path_resolver=resolver,
+            creation_service=get_session_creation_service(sessions_root),
+        )
+        self.get_calls: list[str] = []
 
     async def get(self, session_id: str) -> SessionDTO:
-        import json
-
-        session_path = self.path_resolver.resolve_session_node_for_runtime(session_id)
-        payload = json.loads((session_path / "session.json").read_text(encoding="utf-8"))
-        payload["title"] = self.path_resolver.get_node(session_id).name
-        payload.setdefault("workspace_id", "ws-test")
-        payload.setdefault("current_agent_id", "test-agent")
-        payload.update(
-            resource_identity=session_resource_identity(
-                payload["workspace_id"],
-                session_id,
-            ),
-            uri=session_resource_uri(payload["workspace_id"], session_id),
-            scope="workspace",
-        )
-        return SessionDTO.model_validate(payload)
+        self.get_calls.append(session_id)
+        return await super().get(session_id)
 
 
 class _Stack:

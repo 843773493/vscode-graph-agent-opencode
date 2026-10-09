@@ -300,7 +300,7 @@ async def test_mutation_requires_existing_session(
         )
     assert missing.value.status_code == 404
 
-    await resolver.delete_session_subtree(_SESSION_ID)
+    await resolver.delete_subtree(idempotency_key="node-debug-scope-delete", root_node_id=_SESSION_ID)
     with pytest.raises(HTTPException) as deleted:
         await create_node_debug_configuration(
             payload=NodeDebugConfigurationCreateRequest(

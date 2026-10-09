@@ -7,6 +7,8 @@ source overlay 与 selection manifest 的 SQLite 边界；RolloutStorage 提供
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.services.infrastructure.rollout_context.assembly.overlays import (
     ContextOverlayStorageMixin,
@@ -32,13 +34,21 @@ def _v2_json(value: object) -> str:
     return _json(value)
 
 
-class ContextAssemblyStorageMixin(
+if TYPE_CHECKING:
+    from app.services.infrastructure.rollout_context.store import RolloutContextStore
+
+
+class ContextAssemblyStore(
     ContextPlanRegistryStorageMixin,
     ContextAssemblyReaderMixin,
     ContextAssemblySealMixin,
     ContextOverlayStorageMixin,
     AssemblyRegistryMixin,
 ):
+    def __init__(self, context: RolloutContextStore) -> None:
+        self._context = context
+        self._storage = context.storage
+
     @staticmethod
     def _assembly_json(snapshot: ContextAssemblySnapshot) -> str:
         # v2 sealed assembly 是不可变便携副本，与 JSONL envelope 共用

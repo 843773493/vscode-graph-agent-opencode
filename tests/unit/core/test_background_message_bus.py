@@ -1,102 +1,90 @@
 from __future__ import annotations
 
+import asyncio
+import shutil
+from pathlib import Path
+
 import pytest
 
 from app.abstractions.background_message_bus import BackgroundMessageKind
-from app.core.background_message_bus import (
-    BackgroundMessageBus,
-    emit_background_message,
-)
+from app.core.background_message_bus import BackgroundMessageBus
+from app.core.path_utils import get_session_path_resolver
+from app.services.infrastructure.background_work_store import BackgroundWorkStore
+from tests.harness.python.run_context import TestRunContext
+from tests.support.workspaces import prepare_default_test_workspace
 
 
-@pytest.fixture(autouse=True)
-def reset_background_message_service():
-    yield
+@pytest.fixture
+def mailbox_case(request, session_bundle_factory):
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    workspace = prepare_default_test_workspace(
+        workspace_root=context.workspace_root,
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+    )
+    shutil.rmtree(workspace / ".boxteam")
+    sessions = workspace / ".boxteam" / "sessions"
+    owners = ["ses_019c3df7f8527d568e834acf3c0f6612", "ses_019c70f868da751480de63aa344e28c9"]
+    for session in owners:
+        session_bundle_factory(sessions, session)
+    threads = [get_session_path_resolver(sessions).main_thread_id(owner) for owner in owners]
+    store = BackgroundWorkStore(sessions_dir=sessions)
+    return store, owners, threads, BackgroundMessageBus(store=store)
 
 
 @pytest.mark.asyncio
-async def test_collect_background_messages_stops_on_interrupt():
-    service = BackgroundMessageBus()
-    session_id = "session_test"
-    agent_id = "deep_agent"
-    source_id = "clock-stream"
-
-    service.emit(session_id, agent_id, "first", kind=BackgroundMessageKind.normal, source_id=source_id)
-    service.emit(session_id, agent_id, "second", kind=BackgroundMessageKind.normal, source_id=source_id)
-    service.emit(session_id, agent_id, "stop", kind=BackgroundMessageKind.interrupt, source_id=source_id)
-
-    batch = await service.collect(
-        session_id,
-        agent_id,
-        source_id=source_id,
-        timeout_seconds=1,
-        poll_interval_seconds=0.05,
-    )
-
-    assert batch.interrupted is True
-    assert batch.timed_out is False
+async def test_collect_checkpoint_ack_replays_identical_batch_after_restart(mailbox_case):
+    store, owners, threads, bus = mailbox_case
+    for index, content in enumerate(("first", "second", "stop")):
+        await bus.emit(owners[0], threads[0], "agent", content, message_id=f"message-{index}",
+                       source_id="clock-stream", kind=BackgroundMessageKind.interrupt if content == "stop" else BackgroundMessageKind.normal)
+    batch = await bus.collect(owners[0], threads[0], "agent", consumption_id="consumer-one", source_id="clock-stream", timeout_seconds=1)
+    assert batch.interrupted and not batch.timed_out
     assert [message.content for message in batch.messages] == ["first", "second", "stop"]
-    assert batch.messages[-1].kind == BackgroundMessageKind.interrupt
+    restarted = BackgroundMessageBus(store=store)
+    bus.acknowledge(owners[0], batch.consumption_id)
+    replay = await restarted.collect(owners[0], threads[0], "agent", consumption_id="consumer-one", source_id="clock-stream", timeout_seconds=1)
+    assert replay == batch
+    with pytest.raises(RuntimeError, match="请求内容冲突"):
+        await restarted.collect(owners[0], threads[0], "other-agent", consumption_id="consumer-one", source_id="clock-stream", timeout_seconds=1)
 
 
 @pytest.mark.asyncio
-async def test_collect_background_messages_filters_source():
-    service = BackgroundMessageBus()
-    session_id = "session_test"
-    agent_id = "deep_agent"
-
-    service.emit(session_id, agent_id, "alpha-1", source_id="alpha")
-    service.emit(session_id, agent_id, "beta-1", source_id="beta")
-
-    batch = await service.collect(
-        session_id,
-        agent_id,
-        source_id="alpha",
-        timeout_seconds=1,
-        poll_interval_seconds=0.05,
-    )
-
-    assert batch.interrupted is False
-    assert batch.timed_out is True
-    assert [message.content for message in batch.messages] == ["alpha-1"]
-
-
-def test_emit_background_message_requires_explicit_identifiers():
-    with pytest.raises(RuntimeError, match="session_id 不能为空"):
-        emit_background_message("missing session", agent_id="deep_agent")
-
-    with pytest.raises(RuntimeError, match="agent_id 不能为空"):
-        emit_background_message("missing agent", session_id="session_test")
+async def test_mailbox_is_durable_exact_owner_and_idempotent(mailbox_case):
+    store, owners, threads, bus = mailbox_case
+    original = await bus.emit(owners[0], threads[0], "agent", "first", message_id="stable-id", source_id="one")
+    replay = await bus.emit(owners[0], threads[0], "agent", "first", message_id="stable-id", source_id="one")
+    assert replay == original
+    with pytest.raises(RuntimeError, match="内容冲突"):
+        await bus.emit(owners[0], threads[0], "agent", "changed", message_id="stable-id", source_id="one")
+    cold = BackgroundMessageBus(store=store)
+    assert await cold.list_messages(owners[0], threads[0], "agent") == [original]
+    assert await cold.list_messages(owners[0], threads[0], "another-agent") == []
+    assert await cold.list_messages(owners[1], threads[1], "agent") == []
+    with pytest.raises(ValueError, match="不属于"):
+        await cold.list_messages(owners[1], threads[1], "agent", after_message_id="stable-id")
+    bus.close_session(owners[0])
+    assert await cold.list_messages(owners[0], threads[0], "agent") == [original]
 
 
 @pytest.mark.asyncio
-async def test_close_session_releases_all_agent_backlogs_and_preserves_other_session():
-    service = BackgroundMessageBus()
-    for agent_id in ("agent-a", "agent-b"):
-        service.emit("deleted-session", agent_id, "已删除会话的消息")
-    retained = service.emit("retained-session", "agent-a", "保留会话的消息")
-
-    service.close_session("deleted-session")
-    service.close_session("deleted-session")
-
-    assert all(key[0] != "deleted-session" for key in service._messages)
-    for agent_id in ("agent-a", "agent-b"):
-        assert await service.list_messages("deleted-session", agent_id) == []
-    assert await service.list_messages("retained-session", "agent-a") == [retained]
-
-
-@pytest.mark.asyncio
-async def test_close_session_rejects_active_collector_without_dropping_backlog():
-    service = BackgroundMessageBus()
-    original = service.emit("session", "agent", "收集者仍需读取")
-    queue = await service.subscribe("session", "agent")
-
-    with pytest.raises(RuntimeError, match="后台消息收集尚未排空.*session.*agent"):
-        service.close_session("session")
-
-    assert await service.list_messages("session", "agent") == [original]
-    following = service.emit("session", "agent", "失败后保留订阅")
-    assert queue.get_nowait() == following
-    await service.unsubscribe("session", "agent", queue)
-    service.close_session("session")
-    assert service._messages == {}
+async def test_interrupted_consumer_resumes_checkpoint_without_losing_messages(mailbox_case):
+    store, owners, threads, bus = mailbox_case
+    await bus.emit(owners[0], threads[0], "agent", "first", message_id="first", source_id="one")
+    task = asyncio.create_task(bus.collect(owners[0], threads[0], "agent", consumption_id="resume", timeout_seconds=1, poll_interval_seconds=0.01))
+    for _ in range(100):
+        with store.control(owners[0], read_only=True) as control:
+            count = control.connection.execute("SELECT count(*) FROM background_consumptions WHERE consumption_id='resume' AND batch_json LIKE '%first%'").fetchone()[0]
+        if count:
+            break
+        await asyncio.sleep(0.01)
+    assert count == 1
+    with pytest.raises(RuntimeError, match="尚未排空"):
+        bus.close_session(owners[0])
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await bus.emit(owners[0], threads[0], "agent", "stop", message_id="stop", kind="interrupt")
+    batch = await BackgroundMessageBus(store=store).collect(owners[0], threads[0], "agent", consumption_id="resume", timeout_seconds=1, poll_interval_seconds=0.01)
+    assert [message.message_id for message in batch.messages] == ["first", "stop"]
+    assert batch.interrupted
+    bus.close_session(owners[0])

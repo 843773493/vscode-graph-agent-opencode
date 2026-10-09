@@ -28,7 +28,6 @@ from app.services.infrastructure.rollout_context.checkpoint.mutation.mutation_in
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
-    _append_intent_for,
 )
 
 SESSION_ID = "ses_019be3a6514379e7a28a7ad83396e698"
@@ -38,7 +37,7 @@ SESSION_ID = "ses_019be3a6514379e7a28a7ad83396e698"
 def saver(tmp_path: Path, session_bundle_factory) -> Iterator[RolloutCheckpointSaver]:
     session_bundle_factory(tmp_path, SESSION_ID)
     with RolloutCheckpointSaver(sessions_dir=tmp_path) as owner:
-        thread = owner._storage.main_thread_id(SESSION_ID)
+        thread = owner._storage.storage.main_thread_id(SESSION_ID)
         accepted = owner.accept_turn(
             SESSION_ID, thread_id=thread, accepted_ingress_id="append-ingress",
             acceptance_idempotency_key="append-accept", job_id="append-job",
@@ -101,7 +100,7 @@ def test_append_items_consumes_intents_and_commits_batch(
 ) -> None:
     call = _tool_call_item("item-call-1")
     result = _tool_result_item("item-result-1")
-    commit_ids = saver.append_items(SESSION_ID, (call, result), thread_id=saver._storage.main_thread_id(SESSION_ID))
+    commit_ids = saver.append_items(SESSION_ID, (call, result), thread_id=saver._storage.storage.main_thread_id(SESSION_ID))
     # 整批落在同一个 item-bearing commit，保持 storage 批提交语义。
     assert len(commit_ids) == 1
     assert isinstance(commit_ids[0], int)
@@ -131,12 +130,12 @@ def test_append_items_duplicate_replay_fails_loudly(
     saver: RolloutCheckpointSaver,
 ) -> None:
     call = _tool_call_item("item-call-1")
-    saver.append_items(SESSION_ID, (call,), thread_id=saver._storage.main_thread_id(SESSION_ID))
+    saver.append_items(SESSION_ID, (call,), thread_id=saver._storage.storage.main_thread_id(SESSION_ID))
     with pytest.raises(MutationIntentDuplicateConsumption) as exc_info:
-        saver.append_items(SESSION_ID, (call,), thread_id=saver._storage.main_thread_id(SESSION_ID))
+        saver.append_items(SESSION_ID, (call,), thread_id=saver._storage.storage.main_thread_id(SESSION_ID))
     assert exc_info.value.code == "mutation-intent-duplicate"
     assert exc_info.value.idempotency_key == (
-        f"append:{SESSION_ID}:{saver._storage.main_thread_id(SESSION_ID)}:item-call-1"
+        f"append:{SESSION_ID}:{saver._storage.storage.main_thread_id(SESSION_ID)}:item-call-1"
     )
     stored = saver.read_canonical_items(SESSION_ID)
     assert [item.item_id for item in stored] == ["item-ingress-1", "item-call-1"]
@@ -152,15 +151,15 @@ def test_append_items_port_failure_keeps_zero_half_state_and_retry(
     def _fail(*args: object, **kwargs: object) -> None:
         raise OSError("owner 事务失败")
 
-    monkeypatch.setattr(saver._storage, "append_items", _fail)
+    monkeypatch.setattr(saver._storage.executions, "append_items", _fail)
     with pytest.raises(MutationIntentConsumptionRejected) as exc_info:
-        saver.append_items(SESSION_ID, (call,), thread_id=saver._storage.main_thread_id(SESSION_ID))
+        saver.append_items(SESSION_ID, (call,), thread_id=saver._storage.storage.main_thread_id(SESSION_ID))
     assert exc_info.value.code == "mutation-intent-rejected"
     assert exc_info.value.failure_outcome == "reject_atomic"
     monkeypatch.undo()
     # 失败零半状态：存储未被触碰。
     assert saver.read_canonical_items(SESSION_ID) == before
-    commit_ids = saver.append_items(SESSION_ID, (call,), thread_id=saver._storage.main_thread_id(SESSION_ID))
+    commit_ids = saver.append_items(SESSION_ID, (call,), thread_id=saver._storage.storage.main_thread_id(SESSION_ID))
     assert len(commit_ids) == 1
     stored = saver.read_canonical_items(SESSION_ID)
     assert [item.item_id for item in stored] == ["item-ingress-1", "item-call-1"]
@@ -182,11 +181,11 @@ def test_append_items_rejects_kind_outside_intent_closure(
     )
     with pytest.raises(ValueError, match="append intent 闭合集"):
         _append_intent_for(
-            MutationIntentOwner(SESSION_ID, saver._storage.main_thread_id(SESSION_ID)),
+            MutationIntentOwner(SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID)),
             notice, execution_id=require_current_execution_admission().execution_id,
         )
     with pytest.raises(RuntimeError, match="Turn attribution 与 execution admission 不一致"):
-        saver.append_items(SESSION_ID, (notice,), thread_id=saver._storage.main_thread_id(SESSION_ID))
+        saver.append_items(SESSION_ID, (notice,), thread_id=saver._storage.storage.main_thread_id(SESSION_ID))
     assert saver.read_canonical_items(SESSION_ID) == before
 
 
@@ -205,7 +204,7 @@ def test_append_items_supports_shadow_tool_call_single_call_list(
         turn_id="turn-1",
         turn_scope=TurnScope.TURN_MEMBER,
     )
-    commit_ids = saver.append_items(SESSION_ID, (shadow,), thread_id=saver._storage.main_thread_id(SESSION_ID))
+    commit_ids = saver.append_items(SESSION_ID, (shadow,), thread_id=saver._storage.storage.main_thread_id(SESSION_ID))
     assert len(commit_ids) == 1
     stored = saver.read_canonical_items(SESSION_ID)
     assert [item.item_id for item in stored] == ["item-ingress-1", "item-shadow-call-1"]
@@ -233,7 +232,7 @@ def test_append_items_rejects_multi_call_tool_call(
         turn_scope=TurnScope.TURN_MEMBER,
     )
     with pytest.raises(ValueError, match="多 call 批式 tool_call"):
-        saver.append_items(SESSION_ID, (call,), thread_id=saver._storage.main_thread_id(SESSION_ID))
+        saver.append_items(SESSION_ID, (call,), thread_id=saver._storage.storage.main_thread_id(SESSION_ID))
     assert saver.read_canonical_items(SESSION_ID) == before
 
 
@@ -252,7 +251,7 @@ def test_append_items_rejects_item_without_origin_turn(
         payload="ambient 输出",
     )
     with pytest.raises(RuntimeError, match="Turn attribution 与 execution admission 不一致"):
-        saver.append_items(SESSION_ID, (output,), thread_id=saver._storage.main_thread_id(SESSION_ID))
+        saver.append_items(SESSION_ID, (output,), thread_id=saver._storage.storage.main_thread_id(SESSION_ID))
     assert saver.read_canonical_items(SESSION_ID) == before
 
 
@@ -272,7 +271,11 @@ def test_append_items_supports_text_tool_result_identity_from_metadata(
         turn_id="turn-1",
         turn_scope=TurnScope.TURN_MEMBER,
     )
-    commit_ids = saver.append_items(SESSION_ID, (result,), thread_id=saver._storage.main_thread_id(SESSION_ID))
+    commit_ids = saver.append_items(SESSION_ID, (result,), thread_id=saver._storage.storage.main_thread_id(SESSION_ID))
     assert len(commit_ids) == 1
     stored = saver.read_canonical_items(SESSION_ID)
     assert [item.item_id for item in stored] == ["item-ingress-1", "item-text-result-1"]
+
+from app.services.infrastructure.rollout_context.checkpoint.mutation.saver_mutation_intents import (
+    _append_intent_for,
+)

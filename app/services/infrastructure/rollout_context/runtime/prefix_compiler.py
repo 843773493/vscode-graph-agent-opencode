@@ -40,6 +40,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.models 
     ContextSourceSnapshot,
     PendingContextSourceBatch,
 )
+from app.services.infrastructure.team.activation import TEAM_SOURCE_IDS
 from app.services.mapping.itemized.prefix_frames import project_canonical_prefix_frames
 
 
@@ -223,7 +224,7 @@ def compile_prefix_context(
     if rebuilding and retained_source_assembly is not None:
         # 携带 cutoff 前已封存的 snapshot/untracked 帧；不生成 CSM 恢复决策。
         for frame in retained_source_assembly.seal_binding.prefix.state.frames:
-            if frame.item_ref.source_identity == MCP_GUIDANCE_SOURCE_ID:
+            if frame.item_ref.source_identity in {MCP_GUIDANCE_SOURCE_ID, *TEAM_SOURCE_IDS.values()}:
                 continue
             if (frame.item_ref.ref_id, frame.item_ref.source_revision) not in retained_source_refs or frame.role != "user":
                 continue

@@ -879,6 +879,10 @@ main thread 是 Session 默认且唯一的用户任务入口，承载该 Session
 
 durable child thread 是同一 Session 内的可恢复协作执行单元。main thread 为避免上下文膨胀，可以只向 child thread提交明确的任务 seed、必要引用和能力 profile，而不是复制整条 main history；child 的原始 Turn/tool/reasoning/history 保持 thread-local，完成后只把带 `source_thread_id`、source execution/item 和 delegation identity 的报告作为 ambient/runtime item提交给精确 parent thread。用户仍可在当前 Session 的右侧侧边栏查看 child 列表、状态和独立历史，并直接向选定 child thread发送真实用户消息；该消息在 child 内创建正常 user Turn，但不因此为 child 启用 Goal或把历史并入 main conversation。
 
+公开入口固定为 `POST /api/v1/sessions/{session_id}/threads/{thread_id}/messages` 与同一 thread 路径下的 `POST .../history`，分别复用 `MessageRunRequest/Accepted` 和 `TurnHistoryLoadRequest/Page`，业务准入与读取仍由既有 owner 执行。列表的 `runtime` 是只读 `ThreadResidencySnapshot`，`report_execution_id/report_status` 定位报告；child 的 `completed` 展示状态不等于 runtime 已卸载或 thread 已删除。右侧侧边栏的 child 对话编排 hook 负责精确 thread 请求、独立草稿和迟到响应隔离，组件只呈现结果；main 对话和左侧产品 Session 导航保持各自归属。
+
+报告跳转复用唯一 `RolloutHistoryReader`，在 `TurnHistoryLoadRequest` 中新增可选 `execution_id`（1–256 字符）。该选择器只支持 `tail` 和 `before`，不得混用 `turn_ids/tool_call_ids/anchor_turn_id/turns/before_turns/after_turns`；显式 `include` 必须包含 `internal`。响应使用既有 `internal_executions`，按精确 Session/thread、view/checkpoint 与 execution 过滤并沿原硬上限分页。游标的 `query_mode=execution` 冻结同一 `execution_id` 及原 owner/view/checkpoint，续读改变任一绑定时明确失败；冷读取不得实例化 graph 或执行资源。
+
 main 与 child 必须复用相同的 `SessionThread` storage、Job、checkpoint、ContextStore、CSM、ToolSet、stream 和恢复实现，只通过显式 profile配置能力。当前产品合同固定 main profile 可承载 Goal，child profile `goal_enabled=false`；Goal API 的裸 `session_id` 只解析 main thread。团队成员、角色和任务分配状态属于 Session 共享的内部 collaboration ledger，并以 `member_id → child_thread_id` 定位成员；相关 source delta再分别提交给需要感知它的 thread，不允许以另一个 product Session 作为 team member。
 
 collaboration ledger每次mutation必须先通过Session生命周期准入，并在同一`session-control.sqlite`事务中冻结fence generation、revision、event hash、精确recipient thread集合和逐recipient delivery state；其`CollaborationFanoutRecord`在全部recipient terminal前承担operation lease。fanout worker按`(ledger_revision, recipient_thread_id)`幂等提交pending resource observation；每次提交都校验原fanout lease/fence generation，不跨thread提交、不唤醒cold runtime，也不在提交后按当前成员重算recipient。ResourceRegistry异步reconcile并发布team snapshot，CSM只按`team_state`配置的activation boundary消费内存snapshot：默认`turn`在execution取得active slot时冻结整个Turn的上界，不能使用更早的queue acceptance时刻，后续tool-loop model call不得漂移；显式`model_call`才在每次model-call preparation重新冻结最新已提交Registry generation。两种边界都必须先满足snapshot内required revision，允许合并未seal连续变化但不得改写已提交item，也不得在请求路径读取ledger。部分失败/崩溃只重试未完成recipient，Session进入deleting后未提交recipient以明确terminal outcome收敛，不能形成晚到source append。
@@ -899,9 +903,9 @@ collaboration ledger每次mutation必须先通过Session生命周期准入，并
 
 目标`app/services/orchestration/thread_residency.py`中的residency owner先依据上述条件和generation fence作业务准入决定，再关闭该generation的`LifetimeScope`；scope只负责取消/排空其持有的task并释放该Thread独占的compiled Agent graph、线程级模型/工具句柄、in-memory ContextStore/CSM cache和stream execution fanout等可重建资源，不计算30分钟、不更改status/ledger或停止进程级共享watch和terminal/browser/MCP等跨Turn外部资源。关闭完成后才能把residency投影推进cold；释放失败必须显式报告，不得伪报cold或让旧generation继续提交callback。thread catalog、GraphBinding、canonical JSONL、SQLite checkpoint/view、CSM registration/revision、ToolSet applied binding、等待所需的 Job 状态与历史都保持不变。普通 list/get/history/detail 和右侧侧边栏浏览走 cold metadata/history read path，不得 materialize Agent runtime。新的真实消息、内部 wakeup 或需要模型执行的恢复操作在 execution admission 时获取唯一 runtime generation/lease，从持久状态重建同一 `ThreadRuntimeBinding` 并按原GraphBinding懒编译该Thread的graph；tracked source继续由共享resource monitor/reconciler异步更新，runtime只在配置的activation boundary消费Registry内存snapshot，不在before-model读源。idle unload 不创建 context item、不推进 prefix epoch、不使 Skill/上下文自动到期，也不等价于删除、停止或归档 thread。
 
-Thread后台任务与邮箱的事实各有明确记录，但权威读写统一复用现有SessionControlStore及同一Session的`session-control.sqlite`；精确`(session_id, thread_id)`由权威catalog/resolver定位，`agent_id`仅作业务selector，不替代Thread owner。运行时registry只持执行句柄与已提交状态镜像，不维护第二份恢复权威；旧`background_tasks.json` writer/reader及无持久owner注入的内存emit旁路物理下线，开发旧数据按授权失效，不兼容双读。不序列化协程、asyncio任务、compiled graph或进程句柄。任务创建必须先持久化精确`(session_id, thread_id)` owner、稳定`task_id`、handler及版本、输入身份和首次状态checkpoint，再向调用方确认；任务checkpoint通过递增revision记录可恢复进度和外部操作幂等身份。只有显式声明恢复能力且handler版本可用的任务，才可在进程重启或Thread runtime重建后按最近已提交checkpoint继续。活动任务持有精确Thread的任务lease，直到终态或已核实挂起，因此阻止该Thread被判为空闲。恢复若遇到无法判断是否已发生的外部副作用，owner必须保留`reconcile_required`并阻止自动重放；缺少恢复描述的任务显式进入中断/丢失终态，不伪装为已恢复。
+Thread后台任务与邮箱的事实各有明确记录，但权威读写统一复用现有SessionControlStore及同一Session的`session-control.sqlite`；精确`(session_id, thread_id)`由权威catalog/resolver定位，`agent_id`仅作业务selector，不替代Thread owner。运行时registry只持执行句柄与已提交状态镜像，不维护第二份恢复权威；旧`background_tasks.json` writer/reader及无持久owner注入的内存emit旁路物理下线，开发旧数据按授权失效，不兼容双读。不序列化协程、asyncio任务、compiled graph或进程句柄。任务创建必须在同一SessionControlStore写事务中持久化精确`(session_id, thread_id)` owner、稳定`task_id`、handler及版本、输入身份、首次状态checkpoint和任务lease，再向调用方确认；lease复用既有operation owner，不能先提交lease再以孤立lease恢复分支补任务。任务checkpoint通过递增revision记录可恢复进度和外部操作幂等身份。只有显式声明恢复能力且handler版本可用的任务，才可在进程重启或Thread runtime重建后按最近已提交checkpoint继续。活动任务持有精确Thread的任务lease，直到终态或已核实挂起，因此阻止该Thread被判为空闲。恢复若遇到无法判断是否已发生的外部副作用，owner必须保留`reconcile_required`并阻止自动重放；资源动作`reconcile`只调用原注册handler的typed核实入口，确认后按原identity/checkpoint推进，未确认时保留阻断和恢复证据，不能删除记录或调用普通step重放。缺少恢复描述的任务显式进入中断/丢失终态，不伪装为已恢复。
 
-每个Thread的邮箱以稳定`message_id`和单调的Thread内顺序持久保存。已有时间任务使用版本化typed step handler，在同一SessionControlStore写事务中提交输出消息及任务checkpoint；任何一步失败均无部分已提交结果，外部执行不持有数据库事务或lifecycle gate。其它恢复窗口仍用同一message identity和已提交checkpoint对账，不能把外部操作发出等同于效果已确认。写入邮箱成功后才可确认发送；相同identity与相同内容的重试返回原消息，不同内容冲突。后台任务输出消息使用由任务identity和输出序号稳定派生或预先记录的message identity，使“邮箱写入成功、任务checkpoint尚未推进”后的恢复不会生成第二条逻辑消息。目标Thread只有在其checkpoint/已提交消费记录记下该`message_id`后才确认消费；未提交时可用同一identity重新投递，已提交时不得再次作为新消息应用。冷Thread的只读邮箱/任务查询不得加载graph；要处理待收消息时必须按精确Thread执行准入并取得新的runtime generation，不能写入旧generation或回退到Session main thread。
+每个Thread的邮箱以稳定`message_id`和单调的Thread内顺序持久保存。已有时间任务使用版本化typed step handler，在同一SessionControlStore写事务中提交输出消息及任务checkpoint；任何一步失败均无部分已提交结果，外部执行不持有数据库事务或lifecycle gate。其它恢复窗口仍用同一message identity和已提交checkpoint对账，不能把外部操作发出等同于效果已确认。写入邮箱成功后才可确认发送；相同identity与相同内容的重试返回原消息，不同内容冲突。后台任务输出消息使用由任务identity和输出序号稳定派生或预先记录的message identity，使输出/进度恢复不会生成第二条逻辑消息。目标Thread只有在其checkpoint/已提交消费记录记下该`message_id`后才确认消费；未提交时可用同一identity重新投递，已提交时不得再次作为新消息应用。收集工具只冻结返回batch及消费identity，不能在返回前ack；真实CanonicalItemSink提交ToolResult后通知邮箱owner确认。canonical提交后、ack前崩溃时，启动对账只读既有canonical SQL locator，以冻结的精确Thread/model-call/tool-call identity证明提交后补ack；未提交结果保留原batch，不读取返回正文猜身份，不重建另一套消费账本。冷Thread的只读邮箱/任务查询不得加载graph；要处理待收消息时必须按精确Thread执行准入并取得新的runtime generation，不能写入旧generation或回退到Session main thread。
 
 调试进程是跨Turn业务资源，其真实状态及持久lease由debug owner提供；residency owner只消费已核实的blocker和终态时间，不从进程内scope关闭、缓存缺项或wall-clock猜停止/自动到期。无法核实或stop失败时继续保持resident及脱敏`debug_reconcile_required`阻断；`LifetimeScope`不负责杀Node进程。
 
@@ -1052,11 +1056,24 @@ E2E 必须通过用户可见 DOM 语义、Gateway/workspace 网络回执、threa
 
 #### 9.2.2 同一意图协议与文件树量化前置
 
-Gateway 工作区导航接入 §9.0 的唯一意图协议核心，operation 记录、worker、事件和唯一键空间由 Gateway owner 实例化；认证归属取自路由，不借工作区后端业务队列。接线后的旧旁路写通道必须物理下线，不保留双 writer。
+Gateway工作区导航只在tasks10.1判定该面需改造时接入9.0的唯一意图协议核心，operation记录、worker、事件和唯一键空间由Gateway owner实例化；认证归属取自路由，不借工作区后端业务队列。未有独立开工证据按10.7登记本轮不实施；文件树门控不得代替该判定。接线后的旧旁路写通道必须物理下线，不保留双writer。
 
 文件树继续单目录替换、精确子树失效和权威事件增量。仅当 tasks 10.4b 的量化判定成立才接入同一异步协议，进入该分支前按 10.4c 固定目录行 revision 的 owner、基于路径的成员身份和因果依赖，以及实际 mutation 端点；不得借用 Session catalog revision、在前端补造 revision，或照搬稳定 node ID 的假设。无瓶颈分支不得新增 operation 表、worker或 202 接口。
 
 文件变更 SSE 继续作为权威增量修正通道，外部 Agent/终端变更按受影响父目录更新，不依赖全量重载。这条既定义务不取决于是否新增异步受理。
+
+#### 9.2.2a 文件树异步受理的四项结构合同（2026-10-09 定稿）
+
+原10.4b量化分支①成立时按本节实施；触发证据与统计口径只在10.4b/10.7登记。本节细化既有「文件树必须精确失效与权威收敛，Gateway导航必须接入同一意图协议」requirement，不新增通用文件工具、URI文件根或另一套意图协议。
+
+1. **目录revision**：既有WorkspaceService的文件owner统一拥有目录索引、操作记录和恢复worker，持久状态放当前工作区`.boxteam/navigation/workspace-files.sqlite`，不借Session catalog或Gateway控制面。目录键为固定`workspace_id + scope + root + normalized_directory_path`；`workspace|filesystem`继续沿既有根解析和权限合同，跨scope别名解析到同一真实目标时须共用执行锁，不能制造两个writer。`directory_revision`是owner发布的目录观察版本，只有该目录的成员或列表展示元数据变化才递增；重复list/事件不递增。真实文件系统仍是文件正文与成员事实，索引保存有界目录观察，不注册逐文件长期ResourceIdentity/上下文快照。list、受影响目录的operation结果与SSE均携带同一目录键/revision；分页cursor绑定该目录revision，变更后明确失效。外部Agent/终端变更由同owner按watch/list核实并发布新版本；漏事件/overflow只使受影响根失效，按需重读。前端仅保存/比较后端版本，不自造版本，也不以目录revision替代文件正文hash。
+2. **mutation范围**：本批迁移已有create（文件/目录）、paste（文本）、copy（文件/目录）、multipart upload四入口到唯一202受理/worker链；既有URL保留并直接改变响应合同，旧同步直接写caller物理下线。普通正文`PUT /files/content`继续原expected_revision同步合同，不属于集合成员异步优化。本批不新增delete/rename/move端点或对应UI；本requirement中的「删除集合成员」验收用于已实现的Session/Gateway导航，不虚构文件删除用例。后续新文件成员操作须再按本节公共合同接入，不预写未实现端点。
+3. **path身份和依赖**：受理时固定workspace、scope/root及规范path，保正常中文、点号和空格命名，使用既有唯一文件路径校验。`client_operation_id`/preimage去重和有序意图语义复用9.0；“同一目标”由真实根和path确定，涉及源/目标及其祖先链的操作串行并显式声明依赖，不借稳定Session node ID。未接受创建使用本地client_ref；accepted后以`created_by_operation_id + relative_child_path`解析后继到原创建结果，创建失败则后继dependency_failed，不能改accepted payload或用当前同名路径替代原目标。worker在实际执行前校验受影响目录的expected revision与目标不存在/源仍符合已捕获事实，外部冲突明确失败；无关目录变更不触发全workspace CAS。未来rename/move必须先定义原operation输出到新path的映射及其依赖解析，本批不实现也不猜路径重写。
+4. **multipart acceptance**：`POST /files/upload`继续FormData入口与既有文件数/路径/权限上限，新增同一client_operation_id、sequence、依赖及目录expected revision；路由固定原workspace/root。`skipGatewayUserSession`只表示现有传输选项，不授权worker猜actor或绕过原认证；沿既有local-token认证scope生成稳定actor，不强行引入Gateway用户状态。202之前将全部payload流写入本operation的工作区staging并完成长度/hash及路径校验，再durably记录accepted及payload清单；202只表示可恢复受理，不能把尚未落稳的UploadFile句柄交后台。同ID同preimage重试返回原receipt，正文/路径变化冲突；202丢失保原ID查询/重试。恢复按持久清单执行，terminal后回收本operation暂存；未接受临时数据可删除，不使用全局或`/tmp`。
+
+worker是上述四入口唯一文件副作用owner，按持久operation/有界step证明恢复；依赖项的expected revision从声明的前序operation结果解析，避免队列自身更新造成伪冲突，不用当前目录版本补缺。不宣称SQLite与真实文件系统跨介质原子。多文件copy/upload先完整preflight/staging，再按记录发布并保逐项结果；失败结果必须区分无效果、已发布部分及待核实效果，不能伪报回滚、换ID重放或覆盖外部新增文件。原operation核实完成前不释放其执行归属；恢复只核该operation的源/目标与暂存证明，不扫盘吸收旧数据或建立第二目录事实源。成功terminal与目录revision/事件outbox由文件owner同事务发布，前端只替换受影响目录；失败重读这些目录并重放独立意图。验收覆盖durable202/刷新恢复、同key冲突、同目标依赖、外部冲突、上传受理前后崩溃及部分效果透明、cold目录按需读取和原10.4三项精确收敛/变异。
+
+成功terminal的状态查询与outbox事件同时携带受影响父目录的有界分页快照，快照与目录键、观察revision及分页信息来自同次owner观察并随terminal发布，不只返回一个迫使前端另GET的revision。前端按该快照替换对应目录，成功后零目录重拉，兄弟目录和未受影响cold目录不请求；生成意图优先复用已持有的后端目录键/revision，目标尚无权威基线时才按需读取该目标。迟到receipt不得覆盖更新的权威版本，缺页或事件缺口沿原有精确失效与恢复合同处理，不返回整树快照或引入新端点。
 
 #### 9.2.3 目录列表读取工作量必须有界
 
@@ -1112,8 +1129,8 @@ Gateway 工作区导航接入 §9.0 的唯一意图协议核心，operation 记�
 
 - 集合型 mutation 的文档判据已按 tasks 10.6 落实：`docs/design-decisions/frontend-state-management-backend-first.md` 具名引用唯一 requirement，四类操作表及未知结果/失败收敛经独立文档审查；这不代表其它源码或 UI 验收完成。
 - 消除会话目录列表读放大前，需要先确认 `SessionDTO` 是否存在只能从 `session.json` 取得、无法由目录索引提供的字段；若存在，必须先扩展索引再改读路径，不得边改边补。该字段清单尚未取证。
-- 文件树新增异步协议的结构选择只在 tasks 10.4b 判定成立后按 10.4c 定稿；现有无瓶颈/不实施分支不以未定目录 revision 阻塞收口，也不为该未来分支预写 schema。
-- 量化实测（design 9.2.4）的规模基线、观测口径（是否含首次冷缓存、是否含浏览器渲染耗时）尚未冻结，实施前需裁定。
+- 文件树新增异步协议的四项结构合同已由9.2.2a定稿，开工证据仍引用tasks10.4b/10.7；不为未触发分支或未实现delete/rename/move预写schema。
+- A06 navigation011的量化口径为真实文件树组件和Gateway导航hook＋真实Gateway/Workspace进程，200会话/200目录、展开1/20/200、每类20样本；端到端从真实菜单动作到UI确认，含浏览器渲染和已建立连接的请求，不外推完整主窗口首次冷启动。FS计数覆盖read-open/scandir/listdir/Path.stat/DirEntry.stat，非内核全部I/O统计；其证据仅用于原10.4b顺序判定，不新增性能阈值。
 
 - SQLite item projection 的名称和 Python 类型归属已经冻结：canonical item 的最小事实索引是 `item_catalog`，关系/来源是 `item_relations`，content-part locator 是 `item_parts`，按需历史/消息投影是 `item_projections`；不得复用 `messages` 作为 canonical item 表，也不得新增未在本设计中登记的并行 item 事实表。当前聚合文件若因 import 迁移暂留，只能是有删除门槛的临时 import shim；目标类型位置以 1.1 的 `app/domain/itemized/` 和 infrastructure/mapping 目录为准，shim 最迟在 7.5/change 完成前删除。
 - `content_part` 的 domain 类型固定进入 `app/domain/itemized/parts.py`，其 `item_parts` locator 由 `app/services/infrastructure/rollout_context/storage/catalog/`（子包，非单文件路径） 维护，JSON Pointer/part resolver 属于同一 storage catalog 边界；这些物理模块位置不改变 payload 作为唯一 canonical 正文来源、`content_hash` 输入、part locator 校验、anchor identity/hash/recovery contract 或 detail-store 敏感边界。

@@ -57,16 +57,16 @@ class ForkItemCopyMixin:
         materialization_id = strict_text(
             materialization_id, field="fork.materialization_id"
         )
-        if self._fork_source_snapshot_for_session(source_session_id) is None:
+        if self._storage._fork_source_snapshot_for_session(source_session_id) is None:
             raise RuntimeError(
                 "fork canonical materialization 必须消费冻结 source snapshot"
             )
-        source_items = self.read_items(
+        source_items = self._storage.read_items(
             source_session_id,
             source_thread_id,
             checkpoint_ns=checkpoint_ns,
         )
-        with self._connect(
+        with self._storage._connect(
             source_thread_id,
             checkpoint_ns,
             session_id=source_session_id,
@@ -235,7 +235,7 @@ class ForkItemCopyMixin:
                 if anchor.message_group_id is not None
                 else (anchor,)
             )
-            projection = self._codec().project_message(group)
+            projection = self._storage._codec().project_message(group)
             projection["data"]["response_metadata"] = producer_response_metadata(
                 projection["data"]["response_metadata"]
             )
@@ -250,8 +250,8 @@ class ForkItemCopyMixin:
                 projection["data"]["response_metadata"]["model_call_id"] = (
                     target_model_call_id
                 )
-            projected = self._codec().from_dict(projection)
-            target_group = self._codec().items_for_message(
+            projected = self._storage._codec().from_dict(projection)
+            target_group = self._storage._codec().items_for_message(
                 projected,
                 item_sequence=group[0].item_sequence,
                 message_id=source_message_map[source_message_id],
@@ -378,8 +378,8 @@ class ForkItemCopyMixin:
                 )
             )
         with (
-            self._lock(target_thread_id, checkpoint_ns, session_id=target_session_id),
-            self._connect(
+            self._storage._lock(target_thread_id, checkpoint_ns, session_id=target_session_id),
+            self._storage._connect(
                 target_thread_id, checkpoint_ns, session_id=target_session_id
             ) as connection,
         ):
@@ -400,7 +400,7 @@ class ForkItemCopyMixin:
                     "fork canonical materialization 与 prepared journal scope 不一致"
                 )
             connection.execute("BEGIN IMMEDIATE")
-            self._append_v2_records_transaction(
+            self._storage._append_v2_records_transaction(
                 connection,
                 target_thread_id,
                 checkpoint_ns,
@@ -437,7 +437,7 @@ class ForkItemCopyMixin:
                     raise RuntimeError(
                         f"fork canonical item 缺少真实 execution mapping: {source_execution}"
                     )
-                self._bind_canonical_item_execution(
+                self._storage._bind_canonical_item_execution(
                     connection,
                     item_id=target_item.item_id,
                     execution_id=target_execution[0],
@@ -465,5 +465,5 @@ class ForkItemCopyMixin:
                     },
                     timestamp=timestamp,
                 )
-            self._commit_connection(connection)
+            self._storage._commit_connection(connection)
         return tuple(item.item_id for item in remapped)

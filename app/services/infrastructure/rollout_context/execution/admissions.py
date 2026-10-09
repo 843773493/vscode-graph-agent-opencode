@@ -42,7 +42,7 @@ class RolloutExecutionAdmissionMixin:
         checkpoint_ns: str = "",
     ) -> ExecutionAdmission:
         """原子接受唯一 canonical request；seed/reference 不产生 notice。"""
-        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
         with self._execution_input_transaction(session_id, owner_thread_id, checkpoint_ns) as connection:
             return self._admit_internal_execution_transaction(
                 connection, session_id, thread_id=owner_thread_id,
@@ -57,16 +57,16 @@ class RolloutExecutionAdmissionMixin:
         self, session_id: str, thread_id: str, checkpoint_ns: str = "",
     ) -> Iterator[sqlite3.Connection]:
         """执行输入事务共用同一 SQLite connection 与 JSONL 回滚边界。"""
-        with self._lock(thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-            jsonl_path = self.jsonl_path(session_id, checkpoint_ns, thread_id=thread_id)
+        with self._storage._lock(thread_id, checkpoint_ns, session_id=session_id):
+            self._storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            jsonl_path = self._storage.jsonl_path(session_id, checkpoint_ns, thread_id=thread_id)
             original_size = jsonl_path.stat().st_size
-            with self._connect(thread_id, checkpoint_ns, session_id=session_id) as connection:
-                self._require_v2_runtime(connection)
+            with self._storage._connect(thread_id, checkpoint_ns, session_id=session_id) as connection:
+                self._storage._require_v2_runtime(connection)
                 connection.execute("BEGIN IMMEDIATE")
                 try:
                     yield connection
-                    self._commit_connection(connection)
+                    self._storage._commit_connection(connection)
                 except BaseException as error:
                     cleanup_error: BaseException | None = None
                     try:
@@ -99,7 +99,7 @@ class RolloutExecutionAdmissionMixin:
         if not connection.in_transaction:
             raise RuntimeError("internal admission 需要活动 ContextStore 事务")
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
         execution_id = strict_text(execution_id, field="execution_id")
         job_id = strict_text(job_id, field="job_id")
         admission_idempotency_key = strict_text(
@@ -143,7 +143,7 @@ class RolloutExecutionAdmissionMixin:
             field="checkpoint_ns",
             allow_empty=True,
         )
-        self._require_v2_runtime(connection)
+        self._storage._require_v2_runtime(connection)
         existing = connection.execute(
             "SELECT execution_id, turn_id, execution_origin, job_id, "
             "admission_idempotency_key, admission_payload_hash, "
@@ -198,7 +198,7 @@ class RolloutExecutionAdmissionMixin:
                     admission_idempotency_key=admission_idempotency_key,
                     execution_origin="internal", turn_id=None,
                 )
-            stored_item = self._read_canonical_item_from_catalog(
+            stored_item = self._storage._read_canonical_item_from_catalog(
                 connection,
                 session_id=session_id,
                 thread_id=owner_thread_id,
@@ -251,7 +251,7 @@ class RolloutExecutionAdmissionMixin:
                     f"item_id={notice_item.item_id}"
                 )
             if has_display_part:
-                view_id = self._active_context_view_id(
+                view_id = self._storage._active_context_view_id(
                     connection,
                     checkpoint_ns,
                 )
@@ -330,7 +330,7 @@ class RolloutExecutionAdmissionMixin:
             ),
         )
         if committed_notice is not None:
-            _commit_id, _offset = self._append_v2_records_transaction(
+            _commit_id, _offset = self._storage._append_v2_records_transaction(
                 connection,
                 owner_thread_id,
                 checkpoint_ns,
@@ -342,12 +342,12 @@ class RolloutExecutionAdmissionMixin:
                 metadata=commit_metadata,
                 begin_transaction=False,
             )
-            self._bind_canonical_item_execution(
+            self._storage._bind_canonical_item_execution(
                 connection,
                 item_id=committed_notice.item_id,
                 execution_id=execution_id,
             )
-            if has_display_part and not self._append_context_view_items(
+            if has_display_part and not self._storage._append_context_view_items(
                 connection,
                 checkpoint_ns=checkpoint_ns,
                 item_ids=(committed_notice.item_id,),
@@ -359,7 +359,7 @@ class RolloutExecutionAdmissionMixin:
                     f"item_id={committed_notice.item_id}"
                 )
         else:
-            self._append_v2_records_transaction(
+            self._storage._append_v2_records_transaction(
                 connection, owner_thread_id, checkpoint_ns, (), session_id=session_id,
                 commit_kind=CommitKind.EXECUTION_ADMISSION.value, commit_mode="metadata_only",
                 subject_id=execution_id, idempotency_key=commit_key,
@@ -385,19 +385,13 @@ class RolloutExecutionAdmissionMixin:
     ) -> ExecutionAdmission:
         """按精确 owner 和 Job 查唯一准入，不从 trace 或 main 别名补身份。"""
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
         job_id = strict_text(job_id, field="job_id")
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
         )
-        self.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
-        with self._connect(
-            owner_thread_id,
-            checkpoint_ns,
-            session_id=session_id,
-            read_only=True,
-        ) as connection:
-            self._require_v2_runtime(connection)
+        with self._storage.read_connection(session_id, owner_thread_id, checkpoint_ns) as connection:
+            self._storage._require_v2_runtime(connection)
             rows = connection.execute(
                 "SELECT execution_id FROM executions "
                 "WHERE session_id = ? AND thread_id = ? AND job_id = ? "
@@ -426,28 +420,19 @@ class RolloutExecutionAdmissionMixin:
         thread_id: str,
         execution_id: str,
         checkpoint_ns: str = "",
+        writer_connection: sqlite3.Connection | None = None,
     ) -> ExecutionAdmission:
         """读取并核验 owner 下的 user-turn/internal execution admission。"""
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
         execution_id = strict_text(execution_id, field="execution_id")
         checkpoint_ns = strict_text(
             checkpoint_ns,
             field="checkpoint_ns",
             allow_empty=True,
         )
-        self.initialize(
-            session_id,
-            checkpoint_ns,
-            thread_id=owner_thread_id,
-        )
-        with self._connect(
-            owner_thread_id,
-            checkpoint_ns,
-            session_id=session_id,
-            read_only=True,
-        ) as connection:
-            self._require_v2_runtime(connection)
+        with self._storage.read_connection(session_id, owner_thread_id, checkpoint_ns, connection=writer_connection) as connection:
+            self._storage._require_v2_runtime(connection)
             row = connection.execute(
                 "SELECT turn_id, execution_origin, job_id, "
                 "admission_idempotency_key, admission_payload_hash, accepted_ingress_id "

@@ -51,9 +51,9 @@ class NodeDebugForkJournalMixin:
             }
             for artifact in snapshot.configuration_artifacts
         ]
-        with self._lock(
+        with self._storage._lock(
             target_thread_id, checkpoint_ns, session_id=target_session_id
-        ), self._connect(
+        ), self._storage._connect(
             target_thread_id, checkpoint_ns, session_id=target_session_id
         ) as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -160,9 +160,9 @@ class NodeDebugForkJournalMixin:
         checkpoint_ns: str = "",
         target_manifest_sha256: str | None,
     ) -> None:
-        with self._lock(
+        with self._storage._lock(
             target_thread_id, checkpoint_ns, session_id=target_session_id
-        ), self._connect(
+        ), self._storage._connect(
             target_thread_id, checkpoint_ns, session_id=target_session_id
         ) as connection:
             row = connection.execute(
@@ -205,9 +205,9 @@ class NodeDebugForkJournalMixin:
         target_manifest_sha256: str,
     ) -> None:
         """在最终配置复核后冻结可恢复发布所需的 target manifest hash。"""
-        with self._lock(
+        with self._storage._lock(
             target_thread_id, checkpoint_ns, session_id=target_session_id
-        ), self._connect(
+        ), self._storage._connect(
             target_thread_id, checkpoint_ns, session_id=target_session_id
         ) as connection:
             row = connection.execute(

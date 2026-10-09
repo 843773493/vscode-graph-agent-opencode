@@ -409,7 +409,7 @@ export function restoreSessionHookGlobals(): void {
   }
 }
 
-function emptyGeneratorResources(): SessionGeneratorResourcesController {
+export function emptyGeneratorResources(): SessionGeneratorResourcesController {
   return {
     generators: null,
     generationRuns: new Map(),

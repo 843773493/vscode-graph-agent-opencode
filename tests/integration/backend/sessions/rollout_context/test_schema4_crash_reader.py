@@ -60,8 +60,8 @@ def reader_case(
         payload="保留合法读连接",
     )
     return ReaderCase(
-        saver, session, saver._storage.main_thread_id(session), accepted,
-        saver._storage.index_path(session), context
+        saver, session, saver._storage.storage.main_thread_id(session), accepted,
+        saver._storage.storage.index_path(session), context
     )
 
 
@@ -120,8 +120,8 @@ def test_opening_connection_preserves_idle_readers_kernel_lock(
     before = _evidence(case)
     assert before["db_locks"], "已执行 SELECT 的 WAL 连接必须持有 database SHARED lock"
     if opener == "storage":
-        extra = case.saver._storage._connect(
-            case.saver._storage.main_thread_id(case.session),
+        extra = case.saver._storage.storage._connect(
+            case.saver._storage.storage.main_thread_id(case.session),
             read_only=read_only,
             session_id=case.session,
         )
@@ -163,20 +163,20 @@ from tests.support.session_catalog_owner import fixture_catalog_scope
 with fixture_catalog_scope():
     saver = RolloutCheckpointSaver(sys.argv[1])
     session = sys.argv[2]
-    thread = saver._storage.main_thread_id(session)
+    thread = saver._storage.storage.main_thread_id(session)
     draft = saver.get_context_plan_registration(session, thread_id=thread, plan_id='reader-plan').draft
     snapshot = ContextPlanComposer().assembly(
         plan=draft, assembly_id='reader-assembly', session_id=session, thread_id=thread,
         turn_id=sys.argv[3], execution_id=sys.argv[4], provider_version='reader-contract',
     )
-    commit = saver._storage._commit_connection
+    commit = saver._storage.storage._commit_connection
     def hard_exit(connection):
         assert connection.execute('SELECT plan_state FROM context_plans').fetchone() == ('sealed',)
         if sys.argv[5] == 'after_commit':
             commit(connection)
         os._exit(66)
-    saver._storage._commit_connection = hard_exit
-    saver._storage.seal_context_assembly(
+    saver._storage.storage._commit_connection = hard_exit
+    saver._storage.assemblies.seal_context_assembly(
         session, thread, snapshot, seal_idempotency_key='reader-seal', seal_input_hash=sys.argv[6],
     )
 
@@ -217,7 +217,7 @@ def test_crash_recovery_preserves_commit_with_independent_idle_reader(
         "crash_point": crash_point,
         "before_create": _evidence(case),
     }
-    original_jsonl = case.saver._storage.jsonl_path(case.session).read_bytes()
+    original_jsonl = case.saver._storage.storage.jsonl_path(case.session).read_bytes()
     case.saver.create_context_plan(case.session, plan)
     assembly_options = {
         "turn_id": str(case.accepted["turn_id"]),
@@ -242,7 +242,7 @@ def test_crash_recovery_preserves_commit_with_independent_idle_reader(
                 sys.executable,
                 "-c",
                 _WRITER,
-                str(case.saver._storage.sessions_dir),
+                str(case.saver._storage.storage.sessions_dir),
                 case.session,
                 str(case.accepted["turn_id"]),
                 str(case.accepted["initial_execution_id"]),
@@ -261,7 +261,7 @@ def test_crash_recovery_preserves_commit_with_independent_idle_reader(
         }
         assert child.returncode == 66, child.stdout + child.stderr
         evidence["after_child"] = _evidence(case)
-        restarted = RolloutCheckpointSaver(case.saver._storage.sessions_dir)
+        restarted = RolloutCheckpointSaver(case.saver._storage.storage.sessions_dir)
         registration = restarted.get_context_plan_registration(
             case.session, thread_id=case.thread, plan_id=plan.plan_id
         )
@@ -279,13 +279,13 @@ def test_crash_recovery_preserves_commit_with_independent_idle_reader(
             execution_id=str(case.accepted["initial_execution_id"]),
             provider_version="reader-contract",
         )
-        restarted._storage.seal_context_assembly(
+        restarted._storage.assemblies.seal_context_assembly(
             case.session, case.thread, snapshot,
             seal_idempotency_key="reader-seal",
             seal_input_hash=input_hash,
         )
-        with restarted._storage._connect(
-            restarted._storage.main_thread_id(case.session),
+        with restarted._storage.storage._connect(
+            restarted._storage.storage.main_thread_id(case.session),
             read_only=True,
             session_id=case.session,
         ) as final:
@@ -294,7 +294,7 @@ def test_crash_recovery_preserves_commit_with_independent_idle_reader(
                 "SELECT count(*) FROM storage_commits WHERE commit_kind='assembly_sealed'"
             ).fetchone() == (1,)
         assert (
-            case.saver._storage.jsonl_path(case.session).read_bytes() == original_jsonl
+            case.saver._storage.storage.jsonl_path(case.session).read_bytes() == original_jsonl
         )
     finally:
         artifact.write_text(json.dumps(evidence, indent=2))

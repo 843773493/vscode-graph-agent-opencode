@@ -57,7 +57,7 @@ NODE_DEBUG_ACTION_PROTO_FIELDS = {
 
 def _message_fields(source: str, message_name: str) -> set[str]:
     match = re.search(
-        rf"^message {re.escape(message_name)} \{{\n(?P<body>.*?)^\}}$",
+        rf"^message {re.escape(message_name)} (?:\{{\n(?P<body>.*?)^\}}|\{{[ \t]*\}})$",
         source,
         flags=re.MULTILINE | re.DOTALL,
     )
@@ -68,7 +68,7 @@ def _message_fields(source: str, message_name: str) -> set[str]:
         for field in re.finditer(
             r"^\s*(?:optional\s+|repeated\s+)?[.\w<>]+\s+"
             r"(?P<name>[a-z][a-z0-9_]*)\s*=\s*\d+\s*;",
-            match.group("body"),
+            match.group("body") or "",
             flags=re.MULTILINE,
         )
     }

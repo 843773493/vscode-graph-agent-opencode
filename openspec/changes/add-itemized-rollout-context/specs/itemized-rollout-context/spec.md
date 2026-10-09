@@ -186,18 +186,32 @@ worker MUST在实际执行时按最新已提交SQLite和`NavigationTopologyGate`
 
 ### Requirement: 文件树必须精确失效与权威收敛，Gateway 导航必须接入同一意图协议
 
-右侧文件树 MUST 保持对象级替换与精确子树失效，MUST NOT 退回全量重载；Gateway 工作区导航的集合成员 mutation MUST 接入本 change 已冻结的同一意图协议核心（唯一 `client_operation_id`、同分区有序 `client_sequence`、durable acceptance 不等于完成、按 ID 查询操作状态、迟到重放返回原终态、同 key 异 preimage 冲突），MUST NOT 另立第二套协议语义。
+右侧文件树 MUST 保持对象级替换与精确子树失效，MUST NOT 退回全量重载；Gateway 工作区导航的集合成员mutation只有在tasks10.1判定该面需改造时，MUST接入本change已冻结的同一意图协议核心（唯一 `client_operation_id`、同分区有序 `client_sequence`、durable acceptance 不等于完成、按 ID 查询操作状态、迟到重放返回原终态、同 key 异 preimage 冲突），MUST NOT另立第二套协议语义。未有该面独立开工证据时按10.7登记不实施，不借文件树或Session catalog的判定开工。
 
 协议核心是共享语义，**operation 记录、执行 worker、事件通道与唯一键空间由该集合的权威 owner 各自实例化**：工作区目录的 owner 是工作区后端（`NavigationMutationRecord`）；Gateway 工作区导航的 owner 是 Gateway 控制面自身（MUST NOT 被读成「Gateway 不许接管自有导航」）。文件树是否引入异步受理，**由量化前置决定**（见 tasks §10.4b）：量化证明无瓶颈时 MUST NOT 引入，MUST NOT 以「一致性更好」为由先行实现。量化结果未达到开工条件时也 MUST NOT 默认引入，SHALL 按 10.4b/10.7 具名登记本轮不实施及证据原因，不将其伪称为已验证无瓶颈；精确失效、单目录替换和权威增量义务持续有效。
 
 文件树的影响面 MUST 用精确子树失效（丢弃该路径及其后代缓存并中止在途请求）表达，MUST NOT 以把全部已展开目录标记为过期再逐个重载的方式作为成功路径。文件变更事件流 MUST 接成权威增量修正通道，使外部变更（Agent、终端）驱动树增量更新，与本地乐观投影形成收敛闭环。
 
+当原tasks10.4b分支①成立时，文件owner MUST按design9.2.2a统一目录索引、持久operation与恢复worker，目录观察revision由当前工作区后端发布并经list/operation/SSE携带；MUST NOT借Session catalog revision或前端自证。真实文件系统保留文件事实，目录索引 MUST NOT隐式注册逐文件长期身份或上下文快照。目录分页绑定目录revision，外部变更按同owner观察发布。四个现有集合写入口create/paste/copy/upload MUST直接迁入同一202协议，不保留同步旁路；正文PUT的expected_revision合同保留，本批MUST NOT新增未实现的文件delete/rename/move端点或UI。
+
+文件operation MUST固定workspace/scope/root及规范path，以真实目标path及源/目标祖先链确定同目标冲突和因果依赖；未接受client_ref与accepted后的`created_by_operation_id + relative_child_path`不得冒充稳定文件ID。worker MUST执行时校验受影响目录版本与路径事实，外部冲突明确失败，不对无关目录做全局CAS。上传 MUST在202之前把全部payload及其路径/长度/hash清单durably保存到本工作区operation staging，恢复不得依赖HTTP UploadFile句柄或当前激活workspace。原local-token认证scope和稳定actor由现有认证owner提供，传输选项不得成为免认证合同。202丢失、同ID重试和异preimage冲突遵循既有意图协议。
+
+文件系统副作用与SQLite记录 MUST有本operation的恢复证明，MUST NOT伪称跨介质原子；多文件失败 MUST明确报告已发布部分及未知效果，不能伪报全部未执行/回滚或盲重放。terminal结果、目录revision与事件由唯一文件owner发布；成功terminal的查询和事件 MUST携带与同次目录键/revision配对的受影响父目录有界分页快照，使前端直接替换该目录，MUST NOT只给版本再要求成功路径GET目录。迟到结果 MUST NOT覆盖更新的权威版本，MUST NOT返回整树快照。恢复只核原operation的目标与暂存，不扫盘重建另一套事实。全部四项结构及边界取值以design9.2.2a为本requirement的细化，验收须覆盖目录版本/路径依赖/上传恢复及既有精确收敛义务。
+
+#### Scenario: 文件集合操作受理后重开
+- **WHEN** 已有文件create/paste/copy/upload返回202后进程退出，或受理响应丢失且浏览器重开
+- **THEN** 同operation ID查询或重试返回原受理/终态，worker按持久路径和payload清单恢复，前端仍显示pending直到权威terminal；不得改投当前激活工作区或重复写入
+
+#### Scenario: 上传失败保留真实效果
+- **WHEN** 多文件上传在受理前失败，或accepted后部分文件已发布而下一发布失败
+- **THEN** 前者不得返回202且无accepted operation；后者报告原operation的已发布部分和待核实效果，并按原证明恢复或明确失败，不伪报完整回滚，不覆盖其它客户端新文件
+
 #### Scenario: 新增文件只失效受影响子树
 - **WHEN** 用户在已展开的目录树中新建一个文件
-- **THEN** 只有包含该文件的目录行被失效并重载，其它已展开目录的缓存与凭证不变，MUST NOT 重载全部已展开目录
+- **THEN** 成功结果仅替换包含该文件的目录，后续成功路径目录GET为零，其它已展开与未受影响cold目录的缓存和凭证不变；进入202分支后使用同owner terminal的配对目录快照，MUST NOT 重载全部已展开目录。意图所需目标无权威基线时可在受理前按需读取该目标，MUST NOT为了补版本重读已有权威基线
 
 #### Scenario: 文件树无瓶颈时不引入异步受理
-- **WHEN** 文件树的量化实测证明单次 mutation 的 p95 低于阈值且不出现丢失更新
+- **WHEN** 文件树的完整量化按tasks10.4b原顺序判定命中无瓶颈分支②的全部条件（含分支①各开工条件均不成立）
 - **THEN** 文件树 MUST NOT 引入异步受理，只保留对象级替换、精确子树失效与事件增量收敛，MUST NOT 为「统一协议」而增加未证实的复杂度
 
 #### Scenario: 外部变更经权威增量收敛
@@ -205,7 +219,7 @@ worker MUST在实际执行时按最新已提交SQLite和`NavigationTopologyGate`
 - **THEN** 前端按该增量修正对应目录的投影，MUST NOT 依赖全量重载来体现该变更
 
 #### Scenario: 已进入意图协议的集合型 mutation 不得绕开核心
-- **WHEN** 为会话目录树或 Gateway 工作区导航新增成员写操作，或文件树按量化前置进入异步受理分支后新增成员写操作
+- **WHEN** 为已进入意图协议的会话目录树/Gateway工作区导航新增成员写操作，或文件树按量化前置进入异步受理分支后新增成员写操作
 - **THEN** 该操作 MUST 接入同一协议核心，MUST NOT 定义冲突语义；operation 记录与 worker 由该集合的权威 owner 实例化，MUST NOT 保留绕开幂等与终态语法的同步直接写入通道。文件树未进入异步受理分支时仍遵守单目录替换、精确子树失效与权威事件增量，MUST NOT 因本 Scenario 新增异步机制
 
 ### Requirement: 目录列表读取工作量必须与页大小相关
@@ -528,14 +542,21 @@ target workspace MUST 由单一`InboxAdmissionWorker`恢复未绑定communicatio
 
 后台任务和邮箱 MUST 归属于精确的 `(session_id, thread_id)`，不得只用 Session、可复用的 Agent 名称或内存对象作为 owner。可由 Agent 工具启动的后台任务 MUST 具有版本化 typed 恢复描述和 checkpoint handler；缺少该恢复能力时，任务 MUST 在接受前明确失败。任务创建 MUST 先持久化稳定 `task_id`、handler 及版本、输入身份、状态和初始 checkpoint，再向调用方确认；checkpoint MUST 记录可恢复的 typed 进度与外部操作幂等身份，不得序列化 Python 协程、进程句柄或 compiled graph。backend 重启后 MUST 按最近已提交 checkpoint 恢复同一任务。活动任务的 Thread lease 在任务进入已核实终态或安全挂起状态前 MUST 阻止 Thread idle unload。恢复时若无法确认外部副作用是否已经发生，owner MUST 暴露 `reconcile_required` 并停止自动重放；已有数据缺少可用 handler 或 checkpoint 时 MUST 明确报告中断/待恢复状态，不得伪报成功或静默丢弃。
 
-后台任务和邮箱的权威读写 MUST 复用现有 SessionControlStore 与同一 Session 的 `session-control.sqlite`，按精确 Thread identity 分区并由权威 catalog/resolver 定位。运行时注册表 MUST 只持执行句柄和已提交事实镜像；`agent_id` MAY 作业务 selector，但 MUST NOT 代替 Thread owner。旧 `background_tasks.json` 与无持久 owner 注入的内存 emit 旁路 MUST 物理下线，不保双读、双写或旧数据迁移。现有时间任务 MUST 使用版本化 typed step handler，在同一 SQLite 写事务中提交输出 mailbox 消息及任务 checkpoint；失败 MUST 不留下部分已提交事实，外部执行 MUST NOT 持有数据库事务或 lifecycle gate。
+后台任务和邮箱的权威读写 MUST 复用现有 SessionControlStore 与同一 Session 的 `session-control.sqlite`，按精确 Thread identity 分区并由权威 catalog/resolver 定位。运行时注册表 MUST 只持执行句柄和已提交事实镜像；`agent_id` MAY 作业务 selector，但 MUST NOT 代替 Thread owner。任务 descriptor、初始 checkpoint 和既有 operation owner 的任务 lease MUST 在同一写事务中创建或恢复；提交前崩溃 MUST 不留下孤立 lease 或部分任务，不能用另一套恢复记录补偿分离提交。旧 `background_tasks.json` 与无持久 owner 注入的内存 emit 旁路 MUST 物理下线，不保双读、双写或旧数据迁移。现有时间任务 MUST 使用版本化 typed step handler，在同一 SQLite 写事务中提交输出 mailbox 消息及任务 checkpoint；失败 MUST 不留下部分已提交事实，外部执行 MUST NOT 持有数据库事务或 lifecycle gate。
 
 每个 Thread 的 mailbox MUST 保存在该 Thread 的 durable storage owner 中，并由稳定 `message_id`、精确 Thread owner、来源身份、顺序、内容和消费状态组成；存储位置 MUST 通过权威 Session/Thread catalog 与统一 resolver 定位。发送只有在消息已持久接收后才可确认；相同 identity/相同内容的重试 MUST 返回同一消息，不同内容 MUST 明确冲突。目标 Thread 只有在其 checkpoint 或等价的原子消费记录已提交该 `message_id` 后才可确认消费；checkpoint 未提交时允许以同一 identity 重投，已提交时不得再次应用该消息。任务输出和 mailbox 写入之间的崩溃恢复 MUST 复用同一 message identity，不能产生重复逻辑消息。冷 Thread 的任务和 mailbox 读取 MUST 不加载 Agent graph；实际执行或消费消息 MUST 经该 Thread 的 execution admission 创建/恢复唯一 runtime generation，不得回退到 main thread 或向旧 generation 写入。
+
+收集工具返回冻结 batch MUST NOT 提前确认消费。消费 ack MUST 由真实 canonical ToolResult 提交触发；提交后、ack 前崩溃的恢复 MUST 通过既有 canonical SQL locator 与冻结的精确 Thread/model-call/tool-call identity证明提交，随后补齐同一消费 identity 的 ack。未提交结果 MUST 保留原 batch 和可重试状态；不得根据工具返回正文、内存返回值或当前最新 ToolResult 猜测已提交。未知外部效果的资源 `reconcile` 动作 MUST 只调用原注册 handler 的 typed 核实入口；未确认时保留原恢复证据和 lease 阻断，确认后沿原 identity/checkpoint 收敛，不得盲重放普通 step 或删除待核实记录。
 
 #### Scenario: 任务创建在确认前已进入持久记录
 
 - **WHEN** Agent 工具请求在 Thread 中启动可恢复后台任务
 - **THEN** 系统先提交该 Thread 的 `task_id`、handler 版本、输入身份和初始 checkpoint，再返回任务 identity；同一创建请求重试返回同一任务，不同输入不得复用原 identity
+
+#### Scenario: 创建 lease 后、descriptor 写入前进程退出
+
+- **WHEN** 独立进程在同一创建事务内写入任务 lease 后、写入 descriptor 前退出，随后重开持久存储
+- **THEN** 未提交的 lease 和任务均不存在；重试沿原稳定 identity 原子创建完整任务，不保孤立 lease 或新增补偿恢复权威
 
 #### Scenario: 进程重启后从已提交 checkpoint 恢复任务
 
@@ -557,10 +578,15 @@ target workspace MUST 由单一`InboxAdmissionWorker`恢复未绑定communicatio
 - **WHEN** Thread 收到一条消息后，在 checkpoint/消费记录提交前崩溃，并在恢复后重试同一消息
 - **THEN** 邮箱以同一 `message_id` 重新投递；checkpoint 提交后该消息被标记已消费，后续恢复不会将它作为新消息再次应用
 
+#### Scenario: canonical ToolResult 已提交、消费 ack 前进程退出
+
+- **WHEN** 真实 CanonicalItemSink 提交收集工具的 ToolResult 后、通知邮箱 ack 前独立进程退出，随后重启
+- **THEN** owner 只读既有 canonical 索引核实精确 Thread 和原 tool-result identity，补齐原 batch 的 ack；重试仍返回同一冻结 batch，不重新收集或应用消息，未提交的其它 batch 不受影响
+
 #### Scenario: 任务输出写入邮箱后、checkpoint 推进前崩溃
 
-- **WHEN** 后台任务已把一条输出消息持久写入目标 Thread 邮箱，但尚未提交包含该输出序号的新任务 checkpoint 时 backend 崩溃
-- **THEN** 恢复使用原 `message_id` 对账并继续推进 checkpoint；目标邮箱只保留一条逻辑消息
+- **WHEN** 时间任务在同一写事务中执行了 mailbox 插入、尚未完成输出序号 checkpoint 提交时独立进程退出
+- **THEN** 重开后消息与 checkpoint 的未提交变化均不存在；恢复从原已提交 checkpoint 继续，复用原 `message_id`，目标邮箱只保留一条逻辑消息
 
 #### Scenario: 旧 runtime callback 不得写入替代 Thread
 

@@ -25,8 +25,8 @@ from app.services.infrastructure.node_debug.session.thread_owner import (
 )
 
 if TYPE_CHECKING:
-    from app.services.infrastructure.rollout_context.storage.service import (
-        RolloutStorage,
+    from app.services.infrastructure.rollout_context.store import (
+        RolloutContextStore,
     )
 
 
@@ -151,7 +151,7 @@ def _target_manifest_sha256(
 
 
 def prepare_node_debug_fork(
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
     snapshot: NodeDebugSourceCopySnapshot | None,
     workspace_config_provider: Callable[[], NodeDebugWorkspaceForkConfig] | None,
     *,
@@ -176,15 +176,15 @@ def prepare_node_debug_fork(
             fork_id, source_id
         ),
     )
-    target_thread_id = storage.main_thread_id(target_session_id)
+    target_thread_id = storage.storage.main_thread_id(target_session_id)
     target_owner = NodeDebugThreadOwner(
         session_id=target_session_id,
         thread_id=target_thread_id,
-        thread_node=storage._resolve_thread_node(target_session_id, target_thread_id),
+        thread_node=storage.storage._resolve_thread_node(target_session_id, target_thread_id),
     )
     publish_target_node = target_owner.thread_node
     staging_root = target_staging_root(
-        storage.root(
+        storage.storage.root(
             target_owner.session_id,
             checkpoint_ns,
             thread_id=target_owner.thread_id,
@@ -198,7 +198,7 @@ def prepare_node_debug_fork(
         target_thread_id=target_owner.thread_id,
         configuration_id_map=configuration_map,
     )
-    storage.prepare_fork_debug_snapshot(
+    storage.forks.prepare_fork_debug_snapshot(
         materialization_id,
         fork_id,
         snapshot,
@@ -230,7 +230,7 @@ def prepare_node_debug_fork(
 
 
 def publish_node_debug_fork(
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
     snapshot: NodeDebugSourceCopySnapshot,
     prepared: PreparedNodeDebugFork,
     workspace_config_provider: Callable[[], NodeDebugWorkspaceForkConfig] | None,
@@ -258,7 +258,7 @@ def publish_node_debug_fork(
 
 
 def ready_node_debug_fork(
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
     snapshot: NodeDebugSourceCopySnapshot,
     prepared: PreparedNodeDebugFork,
     workspace_config_provider: Callable[[], NodeDebugWorkspaceForkConfig] | None,
@@ -279,7 +279,7 @@ def ready_node_debug_fork(
         target_workspace_id=current.workspace_id,
         launch_profiles=current.launch_profiles,
     )
-    storage.mark_fork_debug_snapshot_ready(
+    storage.forks.mark_fork_debug_snapshot_ready(
         materialization_id,
         target_session_id=target_session_id,
         target_thread_id=prepared.target_thread_id,
@@ -289,7 +289,7 @@ def ready_node_debug_fork(
 
 
 def publish_ready_node_debug_fork(
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
     prepared: PreparedNodeDebugFork,
     *,
     materialization_id: str,
@@ -298,7 +298,7 @@ def publish_ready_node_debug_fork(
 ) -> None:
     """只消费已冻结 ready proof 发布 target，不再读取 source。"""
     publish_target_snapshot(prepared.staging_root, prepared.target_node)
-    storage.mark_fork_debug_snapshot_published(
+    storage.forks.mark_fork_debug_snapshot_published(
         materialization_id,
         target_session_id=target_session_id,
         target_thread_id=prepared.target_thread_id,

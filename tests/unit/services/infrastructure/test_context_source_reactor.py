@@ -399,7 +399,7 @@ async def test_optional_agents_reactor_and_rebuild_consume_only_published_revisi
         workspace_root=workspace, watch_service=watch, project_root=tmp_path,
     )
     saver, session, _connection, _accepted = registry_db
-    owner = ContextSourceOwnerKey(session, saver._storage.main_thread_id(session))
+    owner = ContextSourceOwnerKey(session, saver._storage.storage.main_thread_id(session))
     manager = ContextSourceManager(owner=owner, control_state_port=saver)
     manager.register(
         ContextSourceDescriptor(

@@ -26,19 +26,19 @@ class ContextPlanRegistryStorageMixin:
         checkpoint_ns: str = "",
     ) -> str:
         """封存事务回滚后独立记录失败，不创建 assembly 或 storage commit。"""
-        with self._lock(thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-            with self._connect(
+        with self._storage._lock(thread_id, checkpoint_ns, session_id=session_id):
+            self._storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._storage._connect(
                 thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
-                self._require_v2_runtime(connection)
+                self._storage._require_v2_runtime(connection)
                 connection.execute("BEGIN IMMEDIATE")
                 failure_id = record_seal_failure(
                     connection, session_id, thread_id, plan_id,
                     seal_idempotency_key=seal_idempotency_key,
                     error_code=error_code,
                 )
-                self._commit_connection(connection)
+                self._storage._commit_connection(connection)
                 return failure_id
 
     def create_context_plan(
@@ -47,19 +47,19 @@ class ContextPlanRegistryStorageMixin:
         *,
         checkpoint_ns: str = "",
     ) -> ContextPlanRegistration:
-        with self._lock(
+        with self._storage._lock(
             plan.thread_id, checkpoint_ns, session_id=plan.session_id
         ):
-            self.initialize(
+            self._storage.initialize(
                 plan.session_id, checkpoint_ns, thread_id=plan.thread_id
             )
-            with self._connect(
+            with self._storage._connect(
                 plan.thread_id, checkpoint_ns, session_id=plan.session_id
             ) as connection:
-                self._require_v2_runtime(connection)
+                self._storage._require_v2_runtime(connection)
                 connection.execute("BEGIN IMMEDIATE")
                 registered = create_registration(connection, plan)
-                self._commit_connection(connection)
+                self._storage._commit_connection(connection)
                 return registered
 
     def revise_context_plan(
@@ -69,21 +69,21 @@ class ContextPlanRegistryStorageMixin:
         expected_revision: int,
         checkpoint_ns: str = "",
     ) -> ContextPlanRegistration:
-        with self._lock(
+        with self._storage._lock(
             plan.thread_id, checkpoint_ns, session_id=plan.session_id
         ):
-            self.initialize(
+            self._storage.initialize(
                 plan.session_id, checkpoint_ns, thread_id=plan.thread_id
             )
-            with self._connect(
+            with self._storage._connect(
                 plan.thread_id, checkpoint_ns, session_id=plan.session_id
             ) as connection:
-                self._require_v2_runtime(connection)
+                self._storage._require_v2_runtime(connection)
                 connection.execute("BEGIN IMMEDIATE")
                 registered = revise_registration(
                     connection, plan, expected_revision=expected_revision
                 )
-                self._commit_connection(connection)
+                self._storage._commit_connection(connection)
                 return registered
 
     def get_context_plan_registration(
@@ -94,10 +94,6 @@ class ContextPlanRegistryStorageMixin:
         checkpoint_ns: str = "",
         thread_id: str,
     ) -> ContextPlanRegistration:
-        self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-        with self._connect(
-            thread_id, checkpoint_ns, session_id=session_id, read_only=True
-        ) as connection:
-            self._require_v2_runtime(connection)
-            connection.execute("BEGIN")
+        with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
+            self._storage._require_v2_runtime(connection)
             return read_registration(connection, session_id, thread_id, plan_id)

@@ -10,7 +10,7 @@ import asyncio
 import inspect
 import logging
 import time
-from collections.abc import Awaitable, Callable, Hashable, Sequence
+from collections.abc import Awaitable, Callable, Hashable
 from contextvars import Context
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -18,6 +18,7 @@ from typing import Generic, Literal, Protocol, TypeAlias, TypeVar, cast
 
 from app.core.lifecycle import LifetimeScope
 from app.core.shielded_cleanup import run_cleanup_shielded
+from app.core.thread_residency_contracts import ResidencyBlocker, ResidencyBlockerSource
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 
@@ -42,18 +43,6 @@ WallClock: TypeAlias = Callable[[], datetime]
 ThreadResidencyStateName: TypeAlias = Literal[
     "cold", "loading", "resident", "unloading"
 ]
-
-
-@dataclass(frozen=True, slots=True)
-class ResidencyBlocker:
-    """idle blocker 的脱敏视图。
-
-    只携带 blocker 类别与固定话术 reason；绝不携带 PID、端口、路径或
-    process_instance_id 正文（脱敏由上报方负责，本模块原样透传）。
-    """
-
-    kind: str
-    reason: str
 
 
 RuntimeValue_co = TypeVar("RuntimeValue_co", covariant=True)
@@ -130,18 +119,6 @@ class ThreadRuntimeLease(Generic[LeaseValue]):
 
     async def __aexit__(self, *_: object) -> None:
         self.release()
-
-
-class ResidencyBlockerSource(Protocol):
-    """blocker 拉取源协议：评估时向 owner（如 debug 服务）查询活跃 blocker。
-
-    用于 backend 重启恢复（pull）：tracker 无需 owner 推送也能看到磁盘上的活跃
-    durable claim。实现方必须只上报"owner 已核实的占用"，不做进程状态猜测。
-    """
-
-    def residency_blockers(
-        self, session_id: str, thread_id: str
-    ) -> Sequence[ResidencyBlocker]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -751,8 +728,6 @@ class ThreadResidencyTracker:
 
 __all__ = [
     "THREAD_IDLE_UNLOAD_SECONDS",
-    "ResidencyBlocker",
-    "ResidencyBlockerSource",
     "ResidencyClock",
     "ThreadResidencySnapshot",
     "ThreadResidencyTracker",

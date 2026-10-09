@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import { catalogOutboxParentCreation } from "../../state/session/sessionCatalogOutbox";
 import {
   DEFAULT_SESSION_TITLE,
 } from "../../api";
@@ -151,25 +152,13 @@ export function useSessionCatalogActions({
       workspaceTarget,
       access,
     );
-    let resolvedParentNodeId = parentNodeId;
-    if (parentNodeId) {
-      const parentCreation = handle.driver.current().operations.find(
-        (operation) => operation.kind === "create_folder"
-          && (operation.client_ref === parentNodeId
-            || operation.created_node_id === parentNodeId),
-      );
-      if (parentCreation && !parentCreation.created_node_id) {
-        throw new Error("父文件夹尚未提交，当前目录协议不能在待提交文件夹下新建子文件夹");
-      }
-      if (parentCreation?.created_node_id) {
-        resolvedParentNodeId = parentCreation.created_node_id;
-      }
-    }
+    const parent = catalogOutboxParentCreation(handle.driver.current(), parentNodeId);
     const catalog = await fetchSessionCatalogSnapshot(apiPort, workspaceTarget);
     const submitted = await runtime.submit(
       workspaceTarget,
       access,
-      { kind: "create_folder", name, parentNodeId: resolvedParentNodeId },
+      { kind: "create_folder", name, parentNodeId: parent ? parent.parentNodeId : parentNodeId,
+        parentCreatedByOperationId: parent?.createdBy },
       { baseCatalogRevision: catalog.catalog_revision },
     );
     if (submitted.dispatchOutcome === "accepted") {

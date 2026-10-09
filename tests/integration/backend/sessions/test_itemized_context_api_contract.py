@@ -156,7 +156,7 @@ def _assert_snapshot(items, snapshot, saver, session_id):
     assert selection == [entry.to_dict() for entry in snapshot.selection]
     assert [entry["plan_ordinal"] for entry in selection] == list(range(len(selection)))
     history, loss = saver.project_context_plan_to_history_with_diagnostics(
-        session_id, saver._storage.main_thread_id(session_id), snapshot.as_sealed_plan()
+        session_id, saver._storage.storage.main_thread_id(session_id), snapshot.as_sealed_plan()
     )
     messages = [item for item in items if item["kind"] == "message"]
     assert [item["data"]["message_id"] for item in messages] == [
@@ -192,7 +192,7 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
     state, endpoint = native_http_server
     await invoke_provider_dispatch(saver, session_id, turn_id, endpoint, state.api_key, target_format="responses")
     (snapshot,) = saver.list_context_assemblies(
-        session_id, saver._storage.main_thread_id(session_id)
+        session_id, saver._storage.storage.main_thread_id(session_id)
     )
     resource = _resource(session, snapshot)
     items, pages = await _read_pages(integration_client, resource, state.artifacts)
@@ -200,7 +200,7 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
     assert len(pages) > 1
     assert "native-http-result" not in json.dumps(messages)
     native = saver.project_context_plan_to_native(
-        session_id, saver._storage.main_thread_id(session_id), snapshot.as_sealed_plan()
+        session_id, saver._storage.storage.main_thread_id(session_id), snapshot.as_sealed_plan()
     )
     assert state.requests[0]["body"]["input"] == native["request"]["input"]
     assert native["selection"] == [entry.to_dict() for entry in snapshot.selection]
@@ -260,7 +260,7 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
     second = next(
         value
         for value in saver.list_context_assemblies(
-            session_id, saver._storage.main_thread_id(session_id)
+            session_id, saver._storage.storage.main_thread_id(session_id)
         )
         if value.assembly_id != snapshot.assembly_id
     )
@@ -301,7 +301,7 @@ async def test_http_selection_preserves_order_omission_toolset_and_typed_details
     state, _ = native_http_server
     draft = saver.compose_committed_context_plan(
         session_id,
-        saver._storage.main_thread_id(session_id),
+        saver._storage.storage.main_thread_id(session_id),
         plan_id=f"api-plan-{uuid4().hex}",
         tool_set=ToolSetSnapshot(
             selection_revision=sha256_jcs({"inspect_file": True}),
@@ -336,14 +336,14 @@ async def test_http_selection_preserves_order_omission_toolset_and_typed_details
     draft = register_projection_draft(saver, session_id, draft)
     snapshot = saver.seal_context_plan(
         session_id,
-        saver._storage.main_thread_id(session_id),
+        saver._storage.storage.main_thread_id(session_id),
         draft,
         wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
         turn_id=turn_id,
         execution_id=saver.execution_for_turn(
             session_id,
             turn_id=turn_id,
-            thread_id=saver._storage.main_thread_id(session_id),
+            thread_id=saver._storage.storage.main_thread_id(session_id),
         ),
         provider_version="api-contract",
         omitted_ref_ids=omitted,
@@ -392,7 +392,7 @@ async def test_context_http_rejects_invalid_selectors_and_cross_owner_cursors(
     for _ in range(2):
         plan = saver.compose_committed_context_plan(
             session_id,
-            saver._storage.main_thread_id(session_id),
+            saver._storage.storage.main_thread_id(session_id),
             plan_id=f"api-{uuid4().hex}",
             tool_set=EMPTY_TOOL_SET,
         )
@@ -400,14 +400,14 @@ async def test_context_http_rejects_invalid_selectors_and_cross_owner_cursors(
         snapshots.append(
             saver.seal_context_plan(
                 session_id,
-                saver._storage.main_thread_id(session_id),
+                saver._storage.storage.main_thread_id(session_id),
                 plan,
                 wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{plan.plan_id}",
                 turn_id=turn_id,
                 execution_id=saver.execution_for_turn(
                     session_id,
                     turn_id=turn_id,
-                    thread_id=saver._storage.main_thread_id(session_id),
+                    thread_id=saver._storage.storage.main_thread_id(session_id),
                 ),
                 provider_version="api-contract",
             )
@@ -459,10 +459,10 @@ async def test_context_http_rejects_invalid_selectors_and_cross_owner_cursors(
         json.dumps(errors, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     assert saver.list_context_assemblies(
-        session_id, saver._storage.main_thread_id(session_id)
+        session_id, saver._storage.storage.main_thread_id(session_id)
     ) == tuple(snapshots)
     assert (
-        saver.list_context_assemblies(other_id, saver._storage.main_thread_id(other_id))
+        saver.list_context_assemblies(other_id, saver._storage.storage.main_thread_id(other_id))
         == ()
     )
 
@@ -478,21 +478,21 @@ async def test_context_http_selection_chunks_are_bounded_and_lossless(
     state, _ = native_http_server
     plan = saver.compose_committed_context_plan(
         session_id,
-        saver._storage.main_thread_id(session_id),
+        saver._storage.storage.main_thread_id(session_id),
         plan_id=f"api-{uuid4().hex}",
         tool_set=EMPTY_TOOL_SET,
     )
     plan = register_projection_draft(saver, session_id, plan)
     snapshot = saver.seal_context_plan(
         session_id,
-        saver._storage.main_thread_id(session_id),
+        saver._storage.storage.main_thread_id(session_id),
         plan,
         wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{plan.plan_id}",
         turn_id=turn_id,
         execution_id=saver.execution_for_turn(
             session_id,
             turn_id=turn_id,
-            thread_id=saver._storage.main_thread_id(session_id),
+            thread_id=saver._storage.storage.main_thread_id(session_id),
         ),
         provider_version="api-contract",
     )
@@ -536,25 +536,25 @@ async def test_context_http_reports_protected_reasoning_capability_loss(
         turn_scope="turn_member",
     )
     saver.append_items(
-        session_id, (opaque,), thread_id=saver._storage.main_thread_id(session_id)
+        session_id, (opaque,), thread_id=saver._storage.storage.main_thread_id(session_id)
     )
     plan = saver.compose_committed_context_plan(
         session_id,
-        saver._storage.main_thread_id(session_id),
+        saver._storage.storage.main_thread_id(session_id),
         plan_id=f"api-{uuid4().hex}",
         tool_set=EMPTY_TOOL_SET,
     )
     plan = register_projection_draft(saver, session_id, plan)
     snapshot = saver.seal_context_plan(
         session_id,
-        saver._storage.main_thread_id(session_id),
+        saver._storage.storage.main_thread_id(session_id),
         plan,
         wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{plan.plan_id}",
         turn_id=turn_id,
         execution_id=saver.execution_for_turn(
             session_id,
             turn_id=turn_id,
-            thread_id=saver._storage.main_thread_id(session_id),
+            thread_id=saver._storage.storage.main_thread_id(session_id),
         ),
         provider_version="api-contract",
     )
@@ -563,10 +563,10 @@ async def test_context_http_reports_protected_reasoning_capability_loss(
     )
     _assert_snapshot(items, snapshot, saver, session_id)
     _, langchain_losses = saver.project_context_plan_with_diagnostics(
-        session_id, saver._storage.main_thread_id(session_id), snapshot.as_sealed_plan()
+        session_id, saver._storage.storage.main_thread_id(session_id), snapshot.as_sealed_plan()
     )
     native = saver.project_context_plan_to_native(
-        session_id, saver._storage.main_thread_id(session_id), snapshot.as_sealed_plan()
+        session_id, saver._storage.storage.main_thread_id(session_id), snapshot.as_sealed_plan()
     )
     losses = [
         item["data"]["loss"]
@@ -606,21 +606,21 @@ async def test_context_http_reads_selection_without_request_source_body(
     state, _ = native_http_server
     plan = saver.compose_committed_context_plan(
         session_id,
-        saver._storage.main_thread_id(session_id),
+        saver._storage.storage.main_thread_id(session_id),
         plan_id=f"api-{uuid4().hex}",
         tool_set=EMPTY_TOOL_SET,
     )
     plan = register_projection_draft(saver, session_id, plan)
     snapshot = saver.seal_context_plan(
         session_id,
-        saver._storage.main_thread_id(session_id),
+        saver._storage.storage.main_thread_id(session_id),
         plan,
         wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{plan.plan_id}",
         turn_id=turn_id,
         execution_id=saver.execution_for_turn(
             session_id,
             turn_id=turn_id,
-            thread_id=saver._storage.main_thread_id(session_id),
+            thread_id=saver._storage.storage.main_thread_id(session_id),
         ),
         provider_version="api-contract",
     )
@@ -642,7 +642,7 @@ async def test_context_http_reads_selection_without_request_source_body(
         with pytest.raises(DetailUnavailableError) as failure:
             saver.project_context_plan_to_native(
                 session_id,
-                saver._storage.main_thread_id(session_id),
+                saver._storage.storage.main_thread_id(session_id),
                 snapshot.as_sealed_plan(),
             )
         assert isinstance(failure.value.__cause__, FileNotFoundError)
@@ -661,7 +661,7 @@ async def test_context_http_discovers_only_sealed_assemblies_and_binds_list_curs
     for _ in range(3):
         plan = saver.compose_committed_context_plan(
             session_id,
-            saver._storage.main_thread_id(session_id),
+            saver._storage.storage.main_thread_id(session_id),
             plan_id=f"list-{uuid4().hex}",
             tool_set=EMPTY_TOOL_SET,
         )
@@ -669,14 +669,14 @@ async def test_context_http_discovers_only_sealed_assemblies_and_binds_list_curs
         snapshots.append(
             saver.seal_context_plan(
                 session_id,
-                saver._storage.main_thread_id(session_id),
+                saver._storage.storage.main_thread_id(session_id),
                 plan,
                 wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{plan.plan_id}",
                 turn_id=turn_id,
                 execution_id=saver.execution_for_turn(
                     session_id,
                     turn_id=turn_id,
-                    thread_id=saver._storage.main_thread_id(session_id),
+                    thread_id=saver._storage.storage.main_thread_id(session_id),
                 ),
                 provider_version="api-list-contract",
             )
@@ -684,7 +684,7 @@ async def test_context_http_discovers_only_sealed_assemblies_and_binds_list_curs
     # 未封存 draft 不能进入 UI 的请求列表。
     draft = saver.compose_committed_context_plan(
         session_id,
-        saver._storage.main_thread_id(session_id),
+        saver._storage.storage.main_thread_id(session_id),
         plan_id=f"draft-{uuid4().hex}",
         tool_set=EMPTY_TOOL_SET,
     )
@@ -714,14 +714,14 @@ async def test_context_http_discovers_only_sealed_assemblies_and_binds_list_curs
     assert draft.plan_id not in json.dumps([first, last])
     saver.seal_context_plan(
         session_id,
-        saver._storage.main_thread_id(session_id),
+        saver._storage.storage.main_thread_id(session_id),
         draft,
         wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
         turn_id=turn_id,
         execution_id=saver.execution_for_turn(
             session_id,
             turn_id=turn_id,
-            thread_id=saver._storage.main_thread_id(session_id),
+            thread_id=saver._storage.storage.main_thread_id(session_id),
         ),
         provider_version="api-list-contract",
     )

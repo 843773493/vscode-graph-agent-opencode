@@ -4,6 +4,7 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { Message } from "@bufbuild/protobuf";
+import type { WorkspaceDirectoryRevisionDTO, WorkspaceFileListDTO } from "./public_pb.js";
 
 /**
  * Describes the file boxteam/workspace/v2/file_events.proto.
@@ -44,6 +45,26 @@ export declare type WorkspaceFileChangeBatch = Message<"boxteam.workspace.v2.Wor
    * @generated from field: bool overflow = 2;
    */
   overflow: boolean;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.WorkspaceDirectoryRevisionDTO directories = 3;
+   */
+  directories: WorkspaceDirectoryRevisionDTO[];
+
+  /**
+   * @generated from field: int64 event_id = 4;
+   */
+  eventId: bigint;
+
+  /**
+   * @generated from field: repeated string invalidated_roots = 5;
+   */
+  invalidatedRoots: string[];
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.WorkspaceFileListDTO snapshots = 6;
+   */
+  snapshots: WorkspaceFileListDTO[];
 };
 
 /**

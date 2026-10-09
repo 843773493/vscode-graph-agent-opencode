@@ -20,6 +20,7 @@ lease 无墙钟自动到期；删除 drain 与恢复路径只消费 active|settl
 from __future__ import annotations
 
 import sqlite3
+from contextlib import nullcontext
 from datetime import UTC, datetime
 
 from app.core.identifier import create_prefixed_id
@@ -116,6 +117,7 @@ class OperationLeaseMixin:
         preimage_hash: str,
         expected_generation: int | None = None,
         recovery_ref: str | None = None,
+        transaction_connection: sqlite3.Connection | None = None,
     ) -> SessionOperationLease:
         """create-or-get 一条 operation lease（gate 内短事务调用）。
 
@@ -146,7 +148,10 @@ class OperationLeaseMixin:
                 f"recovery_ref 必须是非空字符串或 None: {recovery_ref!r}"
             )
         now_text = datetime.now(UTC).isoformat()
-        with self._write_transaction() as connection:
+        if transaction_connection is not None and (transaction_connection is not self._connection or not transaction_connection.in_transaction):
+            raise ValueError("lease 只能复用当前 owner 已开启的同一 connection 事务")
+        transaction = self._write_transaction() if transaction_connection is None else nullcontext(transaction_connection)
+        with transaction as connection:
             row = read_fence_row(
                 connection, database_path=self.database_path
             )
@@ -211,14 +216,17 @@ class OperationLeaseMixin:
             return _lease_from_row(inserted)
 
     def mark_lease_settling(
-        self, *, lease_id: str, expected_fencing_token: int
+        self, *, lease_id: str, expected_fencing_token: int,
+        transaction_connection: sqlite3.Connection | None = None,
     ) -> SessionOperationLease:
         """CAS active → settling（主体 durable commit 阶段开始）。
 
         只允许当前 fencing token 持有者推进；token 不符或状态非 active
         即 fail loud（旧 holder 不得继续，不静默重试）。
         """
-        with self._write_transaction() as connection:
+        if transaction_connection is not None and (transaction_connection is not self._connection or not transaction_connection.in_transaction):
+            raise ValueError("lease 只能复用当前 owner 已开启的同一 connection 事务")
+        with self._write_transaction() if transaction_connection is None else nullcontext(transaction_connection) as connection:
             updated = connection.execute(
                 "UPDATE session_operation_leases "
                 "SET state = 'settling', revision = revision + 1, "
@@ -247,6 +255,7 @@ class OperationLeaseMixin:
         lease_id: str,
         expected_fencing_token: int,
         outcome: str,
+        transaction_connection: sqlite3.Connection | None = None,
     ) -> SessionOperationLease:
         """CAS settling → 终态（跨库顺序：主体已 durable commit 之后调用）。
 
@@ -259,7 +268,9 @@ class OperationLeaseMixin:
                 f"lease 终态非法: {outcome!r}"
                 f"（闭集 {SESSION_OPERATION_LEASE_TERMINAL_STATES!r}）"
             )
-        with self._write_transaction() as connection:
+        if transaction_connection is not None and (transaction_connection is not self._connection or not transaction_connection.in_transaction):
+            raise ValueError("lease 只能复用当前 owner 已开启的同一 connection 事务")
+        with self._write_transaction() if transaction_connection is None else nullcontext(transaction_connection) as connection:
             updated = connection.execute(
                 "UPDATE session_operation_leases "
                 "SET state = ?, revision = revision + 1, updated_at = ? "

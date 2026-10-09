@@ -77,7 +77,7 @@ def frozen_provider_activation() -> Callable[..., dict[str, object]]:
     from app.services.infrastructure.resource_platform.registry.semantic_registry import (
         ResourceRegistry,
     )
-    from app.services.infrastructure.rollout_context.storage.resource_activation_body import (
+    from app.services.infrastructure.rollout_context.activation.body import (
         ResourceActivationBodyStore,
     )
     from app.services.orchestration.resource_activation import (

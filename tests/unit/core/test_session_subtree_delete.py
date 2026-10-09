@@ -87,6 +87,7 @@ def create_physical_session(
         _MOMENT,
         locator,
         make_thread_id(),
+        current_agent_id="default",
     )
     build_session_directory(
         sessions_root / _DATE_DIR / session_id,

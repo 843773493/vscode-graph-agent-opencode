@@ -12,14 +12,14 @@ from app.services.infrastructure.rollout_context.migration.semantics import (
     candidate_audit,
     terminal_evidence,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
 )
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
 
 class LegacyImportBuilder:
-    def __init__(self, storage: RolloutStorage) -> None:
+    def __init__(self, storage: RolloutContextStore) -> None:
         self.storage = storage
 
     def build_import(
@@ -38,7 +38,7 @@ class LegacyImportBuilder:
             LegacyRolloutAdapter,
         )
 
-        self.storage.initialize(
+        self.storage.storage.initialize(
             target_session_id, checkpoint_ns, thread_id=target_thread_id
         )
         adapter = LegacyRolloutAdapter(source_session_id)
@@ -90,7 +90,7 @@ class LegacyImportBuilder:
             target_accepted_ingress_id = f"legacy-ingress:{target_identity_seed}"
             target_acceptance_key = f"legacy-migration:{target_identity_seed}"
             target_initial_execution_id = f"legacy-execution:{target_identity_seed}"
-            accepted = self.storage.accept_turn(
+            accepted = self.storage.executions.accept_turn(
                 target_session_id,
                 thread_id=target_thread_id,
                 accepted_ingress_id=target_accepted_ingress_id,
@@ -133,7 +133,7 @@ class LegacyImportBuilder:
             target_items = [accepted]
             target_item_by_source_id = {root.item_id: target_root_item_id}
             target_members: list[CanonicalItemRecord] = []
-            with self.storage._connect(
+            with self.storage.storage._connect(
                 target_thread_id,
                 checkpoint_ns,
                 session_id=target_session_id,
@@ -237,7 +237,7 @@ class LegacyImportBuilder:
             runtime_notices = tuple(
                 member for member in target_members if member not in terminal_members
             )
-            self.storage.converge_execution(
+            self.storage.executions.converge_execution(
                 target_session_id,
                 thread_id=target_thread_id,
                 turn_id=target_turn,
@@ -251,7 +251,7 @@ class LegacyImportBuilder:
             for notice in runtime_notices:
                 notice_seed = hashlib.sha256(notice.item_id.encode()).hexdigest()
                 notice_execution_id = f"legacy-notice-execution:{notice_seed}"
-                self.storage.admit_internal_execution(
+                self.storage.executions.admit_internal_execution(
                     target_session_id,
                     thread_id=target_thread_id,
                     execution_id=notice_execution_id,
@@ -261,7 +261,7 @@ class LegacyImportBuilder:
                     request_input={"kind": "runtime_notice", "payload": notice.payload},
                     checkpoint_ns=checkpoint_ns,
                 )
-                self.storage.converge_execution(
+                self.storage.executions.converge_execution(
                     target_session_id,
                     thread_id=target_thread_id,
                     turn_id=None,

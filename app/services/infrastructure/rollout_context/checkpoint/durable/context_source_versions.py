@@ -12,6 +12,9 @@ from app.services.infrastructure.rollout_context.assembly.manifest import (
     _frozen_source_refs,
 )
 from app.services.infrastructure.rollout_context.assembly.validation import json_text
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutNotMaterializedError,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_text,
@@ -36,7 +39,7 @@ class ContextSourceVersionsStorageMixin:
         """核验真实 view/control 后在同一事务恢复版本并登记 pending。"""
         if not connection.in_transaction:
             raise RuntimeError("epoch-rebuild-transaction-required: 必须传入边界的活动 SQLite 事务")
-        self._require_v2_runtime(connection)
+        self._storage._require_v2_runtime(connection)
         meta = connection.execute(
             "SELECT session_id, thread_id, history_view_revision, last_control_sequence "
             "FROM database_meta WHERE singleton_id=1"
@@ -181,7 +184,7 @@ class ContextSourceVersionsStorageMixin:
         assembly_id = strict_optional_text(header[3], field="checkpoint.source_assembly_id")
         source_assembly = None
         if assembly_id is not None:
-            source_assembly = self._read_context_assembly_connection(
+            source_assembly = self._context.assemblies._read_context_assembly_connection(
                 connection, session_id, thread_id,
                 assembly_id=assembly_id, checkpoint_ns=checkpoint_ns,
             )[0]
@@ -288,42 +291,39 @@ class ContextSourceVersionsStorageMixin:
         thread_id = self._context_source_rollout_owner_or_none(session_id, thread_id)
         if thread_id is None:
             return None
-        if not self._context_source_control_index_ready(session_id, thread_id):
+        try:
+            with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
+                self._require_context_source_control_runtime(connection)
+                states = connection.execute(
+                    f"SELECT {_SOURCE_COLUMNS} FROM context_source_control_states "
+                    "WHERE session_id = ? AND thread_id = ? ORDER BY created_at, source_id",
+                    (session_id, thread_id),
+                ).fetchall()
+                pending = self._pending_context_epoch_row(connection, checkpoint_ns)
+                if pending is None:
+                    return None
+                header = connection.execute(
+                    "SELECT session_id, thread_id, source_assembly_id "
+                    "FROM checkpoint_context_source_snapshots WHERE checkpoint_id = ? AND checkpoint_ns = ?",
+                    (pending[3], checkpoint_ns),
+                ).fetchone()
+                if header is None or header[:2] != (session_id, thread_id):
+                    raise RuntimeError("checkpoint-context-state-conflict: rebuild 缺少目标 checkpoint source selection")
+                assembly_id = strict_optional_text(header[2], field="checkpoint.source_assembly_id")
+                source_assembly = None
+                if assembly_id is not None:
+                    source_assembly = self._context.assemblies._read_context_assembly_connection(
+                        connection, session_id, thread_id,
+                        assembly_id=assembly_id, checkpoint_ns=checkpoint_ns,
+                    )[0]
+                    if source_assembly.seal_binding is None:
+                        raise RuntimeError("checkpoint-context-state-conflict: 目标 source assembly 缺少 immutable prefix")
+                retained_refs = self._retained_context_source_refs(
+                    connection, pending, states, source_assembly,
+                )
+                return tuple(pending), tuple(tuple(row) for row in states), source_assembly, retained_refs
+        except RolloutNotMaterializedError:
             return None
-        with self._connect(
-            thread_id, checkpoint_ns, session_id=session_id, read_only=True,
-        ) as connection:
-            self._require_context_source_control_runtime(connection)
-            self._validate_schema_state(connection)
-            connection.execute("BEGIN")
-            states = connection.execute(
-                f"SELECT {_SOURCE_COLUMNS} FROM context_source_control_states "
-                "WHERE session_id = ? AND thread_id = ? ORDER BY created_at, source_id",
-                (session_id, thread_id),
-            ).fetchall()
-            pending = self._pending_context_epoch_row(connection, checkpoint_ns)
-            if pending is None:
-                return None
-            header = connection.execute(
-                "SELECT session_id, thread_id, source_assembly_id "
-                "FROM checkpoint_context_source_snapshots WHERE checkpoint_id = ? AND checkpoint_ns = ?",
-                (pending[3], checkpoint_ns),
-            ).fetchone()
-            if header is None or header[:2] != (session_id, thread_id):
-                raise RuntimeError("checkpoint-context-state-conflict: rebuild 缺少目标 checkpoint source selection")
-            assembly_id = strict_optional_text(header[2], field="checkpoint.source_assembly_id")
-            source_assembly = None
-            if assembly_id is not None:
-                source_assembly = self._read_context_assembly_connection(
-                    connection, session_id, thread_id,
-                    assembly_id=assembly_id, checkpoint_ns=checkpoint_ns,
-                )[0]
-                if source_assembly.seal_binding is None:
-                    raise RuntimeError("checkpoint-context-state-conflict: 目标 source assembly 缺少 immutable prefix")
-            retained_refs = self._retained_context_source_refs(
-                connection, pending, states, source_assembly,
-            )
-            return tuple(pending), tuple(tuple(row) for row in states), source_assembly, retained_refs
 
     def _retained_context_source_refs(
         self,
@@ -428,7 +428,7 @@ class ContextSourceVersionsStorageMixin:
         if mode not in {"before", "inclusive"} or (anchor is not None and source_turn is not None):
             raise RuntimeError("source-cut-frontier-conflict: control anchor 声明非法")
         if anchor is None and source_turn is None:
-            source_sequences = self._view_message_sequences_from_connection(connection, source_view)
+            source_sequences = self._storage._view_message_sequences_from_connection(connection, source_view)
             if payload.get("cutoff_message_sequence") != (source_sequences[-1] if source_sequences else None):
                 raise RuntimeError("source-cut-frontier-conflict: 部分 canonical cut 缺少显式 anchor")
             return "complete", None
@@ -505,7 +505,7 @@ class ContextSourceVersionsStorageMixin:
             consumed.transition_id != pending[0] or consumed.reason.value != pending[1]
         ):
             raise RuntimeError("context-epoch-transition-conflict: 首个 rebuild seal 必须消费精确 pending transition")
-        active_branch, _epoch = self._namespace_state(connection, checkpoint_ns)
+        active_branch, _epoch = self._storage._namespace_state(connection, checkpoint_ns)
         row = connection.execute(
             "SELECT branch_id FROM context_views WHERE view_id = ?", (pending[2],),
         ).fetchone()

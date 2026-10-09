@@ -60,7 +60,7 @@ class ContextAssemblyReaderMixin:
         checkpoint_ns: str,
     ) -> tuple[ContextAssemblySnapshot, DetailRef | None]:
         required_text(assembly_id, field="assembly_id")
-        with self.open_read_snapshot(session_id, thread_id, checkpoint_ns) as snapshot:
+        with self._storage.open_read_snapshot(session_id, thread_id, checkpoint_ns) as snapshot:
             return self._read_context_assembly_connection(
                 snapshot.connection, session_id, thread_id,
                 assembly_id=assembly_id, checkpoint_ns=checkpoint_ns,
@@ -88,7 +88,7 @@ class ContextAssemblyReaderMixin:
         self, connection: sqlite3.Connection, session_id: str, thread_id: str,
         *, assembly_id: str, checkpoint_ns: str,
     ) -> tuple[ContextAssemblySnapshot, DetailRef | None]:
-        self._require_v2_runtime(connection)
+        self._storage._require_v2_runtime(connection)
         row = connection.execute(
             "SELECT snapshot_json, status, plan_id, plan_hash, request_hash, turn_id, execution_id, history_view_revision, source_overlay_epoch, detail_ref FROM context_assemblies WHERE assembly_id = ? AND session_id = ? AND thread_id = ?",
             (assembly_id, session_id, thread_id),
@@ -156,7 +156,7 @@ class ContextAssemblyReaderMixin:
         checkpoint_ns: str = "",
     ) -> tuple[ContextAssemblySnapshot, ...]:
         """按 immutable creation order 返回已提交 assembly。"""
-        with self.open_read_snapshot(session_id, thread_id, checkpoint_ns) as snapshot:
+        with self._storage.open_read_snapshot(session_id, thread_id, checkpoint_ns) as snapshot:
             query = (
                 "SELECT assembly_id FROM context_assemblies "
                 "WHERE session_id = ? AND thread_id = ? AND status IN ('sealed','terminal')"

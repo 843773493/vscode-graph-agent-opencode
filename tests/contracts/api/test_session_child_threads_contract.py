@@ -35,6 +35,7 @@ def test_child_thread_status_has_one_authoritative_openapi_field(
     assert schema["properties"]["status"]["enum"] == [  # type: ignore[index]
         "pending",
         "running",
+        "completed",
         "failed",
     ]
 
@@ -64,4 +65,4 @@ def test_child_thread_status_proto_and_pydantic_fields_match() -> None:
     }
     assert fields == set(ChildThreadSummaryDTO.model_fields)
     assert re.search(r"^\s*string status = 9;", match.group("body"), re.MULTILINE)
-    assert get_args(ChildThreadStatus) == ("pending", "running", "failed")
+    assert get_args(ChildThreadStatus) == ("pending", "running", "completed", "failed")

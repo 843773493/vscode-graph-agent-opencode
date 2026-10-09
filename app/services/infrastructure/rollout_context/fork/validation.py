@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
-from collections.abc import Mapping, Sequence
+import re
+from collections.abc import Sequence
 
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
@@ -16,18 +16,6 @@ from app.services.infrastructure.rollout_context.assembly.validation import (
     required_text,
     sqlite_bool,
 )
-
-
-def json_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, str):
-        raise TypeError(f"fork manifest {field} 必须是 JSON 文本")
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError as error:
-        raise RuntimeError(f"fork manifest {field} JSON 非法") from error
-    if not isinstance(parsed, Mapping):
-        raise TypeError(f"fork manifest {field} 必须是 object")
-    return parsed
 
 
 def detail_copy_row(
@@ -48,12 +36,25 @@ def detail_copy_row(
     )
 
 
+def optional_identity(value: object, *, field: str) -> str | None:
+    if value is None:
+        return None
+    return required_text(value, field=field)
+
+def required_sha256(value: object, *, field: str) -> str:
+    digest = required_text(value, field=field)
+    if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ValueError(f"{field} 必须是小写 SHA-256 hex digest")
+    return digest
+
+
 __all__ = [
     "detail_copy_row",
-    "json_mapping",
     "non_negative_int",
     "one_of_text",
+    "optional_identity",
     "optional_text",
+    "required_sha256",
     "required_text",
     "sqlite_bool",
 ]

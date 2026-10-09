@@ -508,6 +508,21 @@ export declare type ChildThreadSummaryDTO = Message<"boxteam.workspace.v2.ChildT
    * @generated from field: string status = 9;
    */
   status: string;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ChildThreadRuntimeDTO runtime = 10;
+   */
+  runtime?: ChildThreadRuntimeDTO | undefined;
+
+  /**
+   * @generated from field: optional string report_execution_id = 11;
+   */
+  reportExecutionId?: string | undefined;
+
+  /**
+   * @generated from field: optional string report_status = 12;
+   */
+  reportStatus?: string | undefined;
 };
 
 /**
@@ -515,6 +530,68 @@ export declare type ChildThreadSummaryDTO = Message<"boxteam.workspace.v2.ChildT
  * Use `create(ChildThreadSummaryDTOSchema)` to create a new message.
  */
 export declare const ChildThreadSummaryDTOSchema: GenMessage<ChildThreadSummaryDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ChildThreadBlockerDTO
+ */
+export declare type ChildThreadBlockerDTO = Message<"boxteam.workspace.v2.ChildThreadBlockerDTO"> & {
+  /**
+   * @generated from field: string kind = 1;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: string reason = 2;
+   */
+  reason: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ChildThreadBlockerDTO.
+ * Use `create(ChildThreadBlockerDTOSchema)` to create a new message.
+ */
+export declare const ChildThreadBlockerDTOSchema: GenMessage<ChildThreadBlockerDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ChildThreadRuntimeDTO
+ */
+export declare type ChildThreadRuntimeDTO = Message<"boxteam.workspace.v2.ChildThreadRuntimeDTO"> & {
+  /**
+   * @generated from field: string residency = 1;
+   */
+  residency: string;
+
+  /**
+   * @generated from field: bool cold_eligible = 2;
+   */
+  coldEligible: boolean;
+
+  /**
+   * @generated from field: string execution_state = 3;
+   */
+  executionState: string;
+
+  /**
+   * @generated from field: optional google.protobuf.Timestamp last_activity_at = 4;
+   */
+  lastActivityAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: optional google.protobuf.Timestamp idle_deadline = 5;
+   */
+  idleDeadline?: Timestamp | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.ChildThreadBlockerDTO blockers = 6;
+   */
+  blockers: ChildThreadBlockerDTO[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ChildThreadRuntimeDTO.
+ * Use `create(ChildThreadRuntimeDTOSchema)` to create a new message.
+ */
+export declare const ChildThreadRuntimeDTOSchema: GenMessage<ChildThreadRuntimeDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.CursorPage
@@ -7899,6 +7976,16 @@ export declare type TurnHistoryLoadRequest = Message<"boxteam.workspace.v2.TurnH
    * @generated from field: repeated string include = 8;
    */
   include: string[];
+
+  /**
+   * @generated from field: optional string execution_id = 9;
+   */
+  executionId?: string | undefined;
+
+  /**
+   * @generated from field: repeated string tool_call_ids = 10;
+   */
+  toolCallIds: string[];
 };
 
 /**
@@ -7960,6 +8047,11 @@ export declare type TurnHistoryPageDTO = Message<"boxteam.workspace.v2.TurnHisto
    * @generated from field: repeated boxteam.workspace.v2.InternalExecutionHistoryDTO internal_executions = 10;
    */
   internalExecutions: InternalExecutionHistoryDTO[];
+
+  /**
+   * @generated from field: optional string thread_id = 11;
+   */
+  threadId?: string | undefined;
 };
 
 /**
@@ -8774,6 +8866,26 @@ export declare type WorkspaceFileChangeBatchDTO = Message<"boxteam.workspace.v2.
    * @generated from field: bool overflow = 2;
    */
   overflow: boolean;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.WorkspaceDirectoryRevisionDTO directories = 3;
+   */
+  directories: WorkspaceDirectoryRevisionDTO[];
+
+  /**
+   * @generated from field: int64 event_id = 4;
+   */
+  eventId: bigint;
+
+  /**
+   * @generated from field: repeated string invalidated_roots = 5;
+   */
+  invalidatedRoots: string[];
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.WorkspaceFileListDTO snapshots = 6;
+   */
+  snapshots: WorkspaceFileListDTO[];
 };
 
 /**
@@ -8867,6 +8979,11 @@ export declare type WorkspaceFileCopyRequest = Message<"boxteam.workspace.v2.Wor
    * @generated from field: optional string source_scope = 2;
    */
   sourceScope?: string | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.WorkspaceFileMutationIntentDTO intent = 3;
+   */
+  intent?: WorkspaceFileMutationIntentDTO | undefined;
 };
 
 /**
@@ -8888,6 +9005,11 @@ export declare type WorkspaceFileCreateRequest = Message<"boxteam.workspace.v2.W
    * @generated from field: string kind = 2;
    */
   kind: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.WorkspaceFileMutationIntentDTO intent = 3;
+   */
+  intent?: WorkspaceFileMutationIntentDTO | undefined;
 };
 
 /**
@@ -8929,6 +9051,16 @@ export declare type WorkspaceFileListDTO = Message<"boxteam.workspace.v2.Workspa
    * @generated from field: optional string next_cursor = 6;
    */
   nextCursor?: string | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.WorkspaceDirectoryKeyDTO directory_key = 7;
+   */
+  directoryKey?: WorkspaceDirectoryKeyDTO | undefined;
+
+  /**
+   * @generated from field: int64 directory_revision = 8;
+   */
+  directoryRevision: bigint;
 };
 
 /**
@@ -8986,6 +9118,11 @@ export declare type WorkspaceFilePasteRequest = Message<"boxteam.workspace.v2.Wo
    * @generated from field: repeated string source_paths = 1;
    */
   sourcePaths: string[];
+
+  /**
+   * @generated from field: boxteam.workspace.v2.WorkspaceFileMutationIntentDTO intent = 2;
+   */
+  intent?: WorkspaceFileMutationIntentDTO | undefined;
 };
 
 /**
@@ -8993,6 +9130,252 @@ export declare type WorkspaceFilePasteRequest = Message<"boxteam.workspace.v2.Wo
  * Use `create(WorkspaceFilePasteRequestSchema)` to create a new message.
  */
 export declare const WorkspaceFilePasteRequestSchema: GenMessage<WorkspaceFilePasteRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.WorkspaceDirectoryKeyDTO
+ */
+export declare type WorkspaceDirectoryKeyDTO = Message<"boxteam.workspace.v2.WorkspaceDirectoryKeyDTO"> & {
+  /**
+   * @generated from field: string workspace_id = 1;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string scope = 2;
+   */
+  scope: string;
+
+  /**
+   * @generated from field: string root = 3;
+   */
+  root: string;
+
+  /**
+   * @generated from field: string path = 4;
+   */
+  path: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceDirectoryKeyDTO.
+ * Use `create(WorkspaceDirectoryKeyDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceDirectoryKeyDTOSchema: GenMessage<WorkspaceDirectoryKeyDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.WorkspaceDirectoryRevisionDTO
+ */
+export declare type WorkspaceDirectoryRevisionDTO = Message<"boxteam.workspace.v2.WorkspaceDirectoryRevisionDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.WorkspaceDirectoryKeyDTO directory_key = 1;
+   */
+  directoryKey?: WorkspaceDirectoryKeyDTO | undefined;
+
+  /**
+   * @generated from field: int64 directory_revision = 2;
+   */
+  directoryRevision: bigint;
+
+  /**
+   * @generated from field: bool exists = 3;
+   */
+  exists: boolean;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceDirectoryRevisionDTO.
+ * Use `create(WorkspaceDirectoryRevisionDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceDirectoryRevisionDTOSchema: GenMessage<WorkspaceDirectoryRevisionDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.WorkspaceFileMutationIntentDTO
+ */
+export declare type WorkspaceFileMutationIntentDTO = Message<"boxteam.workspace.v2.WorkspaceFileMutationIntentDTO"> & {
+  /**
+   * @generated from field: string client_operation_id = 1;
+   */
+  clientOperationId: string;
+
+  /**
+   * @generated from field: int64 client_sequence = 2;
+   */
+  clientSequence: bigint;
+
+  /**
+   * @generated from field: optional int64 expected_directory_revision = 3;
+   */
+  expectedDirectoryRevision?: bigint | undefined;
+
+  /**
+   * @generated from field: repeated string depends_on = 4;
+   */
+  dependsOn: string[];
+
+  /**
+   * @generated from field: optional string created_by_operation_id = 5;
+   */
+  createdByOperationId?: string | undefined;
+
+  /**
+   * @generated from field: string relative_child_path = 6;
+   */
+  relativeChildPath: string;
+
+  /**
+   * @generated from field: optional string directory_revision_from_operation_id = 7;
+   */
+  directoryRevisionFromOperationId?: string | undefined;
+
+  /**
+   * @generated from field: optional string client_ref = 8;
+   */
+  clientRef?: string | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.WorkspaceDirectoryKeyDTO directory_key = 9;
+   */
+  directoryKey?: WorkspaceDirectoryKeyDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceFileMutationIntentDTO.
+ * Use `create(WorkspaceFileMutationIntentDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceFileMutationIntentDTOSchema: GenMessage<WorkspaceFileMutationIntentDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.WorkspaceFileOperationItemDTO
+ */
+export declare type WorkspaceFileOperationItemDTO = Message<"boxteam.workspace.v2.WorkspaceFileOperationItemDTO"> & {
+  /**
+   * @generated from field: string path = 1;
+   */
+  path: string;
+
+  /**
+   * @generated from field: string kind = 2;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: string state = 3;
+   */
+  state: string;
+
+  /**
+   * @generated from field: optional string error = 4;
+   */
+  error?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceFileOperationItemDTO.
+ * Use `create(WorkspaceFileOperationItemDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceFileOperationItemDTOSchema: GenMessage<WorkspaceFileOperationItemDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.WorkspaceFileOperationReceiptDTO
+ */
+export declare type WorkspaceFileOperationReceiptDTO = Message<"boxteam.workspace.v2.WorkspaceFileOperationReceiptDTO"> & {
+  /**
+   * @generated from field: string operation_id = 1;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: int64 client_sequence = 2;
+   */
+  clientSequence: bigint;
+
+  /**
+   * @generated from field: int64 queue_seq = 3;
+   */
+  queueSeq: bigint;
+
+  /**
+   * @generated from field: string kind = 4;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: string state = 5;
+   */
+  state: string;
+
+  /**
+   * @generated from field: int64 receipt_revision = 6;
+   */
+  receiptRevision: bigint;
+
+  /**
+   * @generated from field: string effect = 7;
+   */
+  effect: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.WorkspaceFileOperationItemDTO items = 8;
+   */
+  items: WorkspaceFileOperationItemDTO[];
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.WorkspaceDirectoryRevisionDTO directories = 9;
+   */
+  directories: WorkspaceDirectoryRevisionDTO[];
+
+  /**
+   * @generated from field: optional string created_path = 10;
+   */
+  createdPath?: string | undefined;
+
+  /**
+   * @generated from field: optional string error_code = 11;
+   */
+  errorCode?: string | undefined;
+
+  /**
+   * @generated from field: optional string error_detail = 12;
+   */
+  errorDetail?: string | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.WorkspaceFileListDTO snapshots = 13;
+   */
+  snapshots: WorkspaceFileListDTO[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceFileOperationReceiptDTO.
+ * Use `create(WorkspaceFileOperationReceiptDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceFileOperationReceiptDTOSchema: GenMessage<WorkspaceFileOperationReceiptDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.WorkspaceFileOperationStatusDTO
+ */
+export declare type WorkspaceFileOperationStatusDTO = Message<"boxteam.workspace.v2.WorkspaceFileOperationStatusDTO"> & {
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.WorkspaceFileOperationReceiptDTO operations = 1;
+   */
+  operations: WorkspaceFileOperationReceiptDTO[];
+
+  /**
+   * @generated from field: string worker_state = 2;
+   */
+  workerState: string;
+
+  /**
+   * @generated from field: optional string worker_error = 3;
+   */
+  workerError?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceFileOperationStatusDTO.
+ * Use `create(WorkspaceFileOperationStatusDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceFileOperationStatusDTOSchema: GenMessage<WorkspaceFileOperationStatusDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.WorkspaceFileRevealDTO
@@ -9039,6 +9422,11 @@ export declare type WorkspaceFileWatchRequest = Message<"boxteam.workspace.v2.Wo
    * @generated from field: repeated string paths = 1;
    */
   paths: string[];
+
+  /**
+   * @generated from field: optional int64 after_event_id = 2;
+   */
+  afterEventId?: bigint | undefined;
 };
 
 /**

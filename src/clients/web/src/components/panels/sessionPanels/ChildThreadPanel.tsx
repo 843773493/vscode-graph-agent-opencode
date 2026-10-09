@@ -7,6 +7,8 @@ import {
   childThreadStatusLabel,
 } from "../../../state/childThreadDisplay";
 import { errorMessage } from "../../../utils/errorMessage";
+import type { useChildThreadConversation } from "../../../hooks/sessionTurnHistory/useChildThreadConversation";
+import ChildThreadConversation from "./ChildThreadConversation";
 
 /** child thread 在列表中的图标；用分支语义表达“从 owner 会话派生”。 */
 const CHILD_THREAD_ICON = "codicon-git-branch";
@@ -27,6 +29,7 @@ export default function ChildThreadPanel({
   activeThreadId,
   onRefresh,
   onSelectThread,
+  conversation,
 }: {
   threads: ChildThreadSummary[];
   total: number;
@@ -40,6 +43,7 @@ export default function ChildThreadPanel({
   activeThreadId: string | null;
   onRefresh: () => void;
   onSelectThread: (threadId: string) => void;
+  conversation: ReturnType<typeof useChildThreadConversation>;
 }) {
   const [notice, setNotice] = useState("");
   const [noticeError, setNoticeError] = useState(false);
@@ -161,13 +165,14 @@ export default function ChildThreadPanel({
                 className="child-thread-item"
                 role="listitem"
                 data-start-status={thread.status}
+                data-thread-id={thread.thread_id}
               >
                 <div className="child-thread-row">
                   <button
                     type="button"
                     className="child-thread-main"
-                    onClick={() => onSelectThread(thread.thread_id)}
-                    title={`切换调试 owner：${thread.title ?? thread.thread_id}`}
+                    onClick={() => conversation.selectThread(thread.thread_id)}
+                    title={`打开子线程对话：${thread.title ?? thread.thread_id}`}
                   >
                     <span
                       className={`child-thread-icon codicon ${CHILD_THREAD_ICON}`}
@@ -182,8 +187,11 @@ export default function ChildThreadPanel({
                     <span
                       className={`child-thread-status ${childThreadStatusClass(thread.status)}`}
                     >
-                      {isCurrent ? "当前调试" : childThreadStatusLabel(thread.status)}
+                      {childThreadStatusLabel(thread.status)}
                     </span>
+                  </button>
+                  <button type="button" className="child-thread-copy-id" onClick={() => onSelectThread(thread.thread_id)} aria-label={`调试子线程：${thread.thread_id}`} title={isCurrent ? "当前调试 owner" : "调试此子线程"}>
+                    <span className="codicon codicon-debug" aria-hidden="true" />
                   </button>
                   <button
                     type="button"
@@ -195,6 +203,20 @@ export default function ChildThreadPanel({
                     <span className="codicon codicon-copy" aria-hidden="true" />
                   </button>
                 </div>
+                {thread.runtime ? (
+                  <div className="child-thread-runtime">
+                    {{ cold: "运行时已释放", loading: "正在装载运行时", resident: "运行时驻留", unloading: "正在释放运行时" }[thread.runtime.residency]}
+                    {thread.runtime.cold_eligible ? " · 可释放" : ""}
+                    {thread.runtime.last_activity_at ? ` · 最近活动 ${formatDateTime(thread.runtime.last_activity_at)}` : ""}
+                    {thread.runtime.idle_deadline ? ` · 空闲释放时间 ${formatDateTime(thread.runtime.idle_deadline)}` : ""}
+                    {thread.runtime.blockers.map((blocker) => <div key={blocker.kind}>{blocker.reason}</div>)}
+                  </div>
+                ) : null}
+                {thread.report_execution_id && thread.report_status && thread.report_status !== "unknown" ? (
+                  <button type="button" className="child-thread-report-link" onClick={() => conversation.selectThread(thread.thread_id, "report")}>
+                    {conversation.isUnread(thread) ? "新报告 · " : ""}查看子线程报告
+                  </button>
+                ) : null}
                 {thread.admission_state || thread.collaboration_state ? (
                   <div className="child-thread-job-status">
                     admission: {thread.admission_state ?? "未知"} · collaboration: {thread.collaboration_state ?? "未知"}
@@ -205,6 +227,7 @@ export default function ChildThreadPanel({
           })}
         </div>
       ) : null}
+      {conversation.selectedThread ? <ChildThreadConversation thread={conversation.selectedThread} conversation={conversation} /> : null}
     </section>
   );
 }

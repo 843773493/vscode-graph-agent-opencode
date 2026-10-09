@@ -124,6 +124,23 @@ export interface ChildThreadSummaryDTO {
   collaboration_state?: string | undefined;
   admission_state?: string | undefined;
   status: string;
+  runtime?: ChildThreadRuntimeDTO | undefined;
+  report_execution_id?: string | undefined;
+  report_status?: string | undefined;
+}
+
+export interface ChildThreadBlockerDTO {
+  kind: string;
+  reason: string;
+}
+
+export interface ChildThreadRuntimeDTO {
+  residency: string;
+  cold_eligible: boolean;
+  execution_state: string;
+  last_activity_at?: string | undefined;
+  idle_deadline?: string | undefined;
+  blockers: ChildThreadBlockerDTO[];
 }
 
 export interface CursorPage {
@@ -1740,6 +1757,8 @@ export interface TurnHistoryLoadRequest {
   before_turns?: number | undefined;
   after_turns?: number | undefined;
   include: string[];
+  execution_id?: string | undefined;
+  tool_call_ids: string[];
 }
 
 export interface TurnHistoryPageDTO {
@@ -1753,6 +1772,7 @@ export interface TurnHistoryPageDTO {
   projection_epoch: number;
   summaries: TurnSummaryDTO[];
   internal_executions: InternalExecutionHistoryDTO[];
+  thread_id?: string | undefined;
 }
 
 export interface InternalExecutionHistoryDTO {
@@ -1931,6 +1951,10 @@ export interface WorkspaceDefaultProviderUpdateRequest {
 export interface WorkspaceFileChangeBatchDTO {
   changes: WorkspaceFileChangeDTO[];
   overflow: boolean;
+  directories: WorkspaceDirectoryRevisionDTO[];
+  event_id: number;
+  invalidated_roots: string[];
+  snapshots: WorkspaceFileListDTO[];
 }
 
 export interface WorkspaceFileChangeDTO {
@@ -1952,11 +1976,13 @@ export interface WorkspaceFileContentDTO {
 export interface WorkspaceFileCopyRequest {
   source_path: string;
   source_scope?: string | undefined;
+  intent: WorkspaceFileMutationIntentDTO | undefined;
 }
 
 export interface WorkspaceFileCreateRequest {
   name: string;
   kind: string;
+  intent: WorkspaceFileMutationIntentDTO | undefined;
 }
 
 export interface WorkspaceFileListDTO {
@@ -1966,6 +1992,8 @@ export interface WorkspaceFileListDTO {
   truncated?: boolean | undefined;
   limit?: number | undefined;
   next_cursor?: string | undefined;
+  directory_key: WorkspaceDirectoryKeyDTO | undefined;
+  directory_revision: number;
 }
 
 export interface WorkspaceFileNodeDTO {
@@ -1979,6 +2007,61 @@ export interface WorkspaceFileNodeDTO {
 
 export interface WorkspaceFilePasteRequest {
   source_paths: string[];
+  intent: WorkspaceFileMutationIntentDTO | undefined;
+}
+
+export interface WorkspaceDirectoryKeyDTO {
+  workspace_id: string;
+  scope: string;
+  root: string;
+  path: string;
+}
+
+export interface WorkspaceDirectoryRevisionDTO {
+  directory_key: WorkspaceDirectoryKeyDTO | undefined;
+  directory_revision: number;
+  exists: boolean;
+}
+
+export interface WorkspaceFileMutationIntentDTO {
+  client_operation_id: string;
+  client_sequence: number;
+  expected_directory_revision?: number | undefined;
+  depends_on: string[];
+  created_by_operation_id?: string | undefined;
+  relative_child_path: string;
+  directory_revision_from_operation_id?: string | undefined;
+  client_ref?: string | undefined;
+  directory_key: WorkspaceDirectoryKeyDTO | undefined;
+}
+
+export interface WorkspaceFileOperationItemDTO {
+  path: string;
+  kind: string;
+  state: string;
+  error?: string | undefined;
+}
+
+export interface WorkspaceFileOperationReceiptDTO {
+  operation_id: string;
+  client_sequence: number;
+  queue_seq: number;
+  kind: string;
+  state: string;
+  receipt_revision: number;
+  effect: string;
+  items: WorkspaceFileOperationItemDTO[];
+  directories: WorkspaceDirectoryRevisionDTO[];
+  created_path?: string | undefined;
+  error_code?: string | undefined;
+  error_detail?: string | undefined;
+  snapshots: WorkspaceFileListDTO[];
+}
+
+export interface WorkspaceFileOperationStatusDTO {
+  operations: WorkspaceFileOperationReceiptDTO[];
+  worker_state: string;
+  worker_error?: string | undefined;
 }
 
 export interface WorkspaceFileRevealDTO {
@@ -1992,6 +2075,7 @@ export interface WorkspaceFileUpdateRequest {
 
 export interface WorkspaceFileWatchRequest {
   paths: string[];
+  after_event_id?: number | undefined;
 }
 
 export interface WorkspaceIndexRebuildDTO {
@@ -2674,6 +2758,9 @@ function createBaseChildThreadSummaryDTO(): ChildThreadSummaryDTO {
     collaboration_state: undefined,
     admission_state: undefined,
     status: "",
+    runtime: undefined,
+    report_execution_id: undefined,
+    report_status: undefined,
   };
 }
 
@@ -2691,6 +2778,11 @@ export const ChildThreadSummaryDTO: MessageFns<ChildThreadSummaryDTO> = {
         : undefined,
       admission_state: isSet(object.admission_state) ? globalThis.String(object.admission_state) : undefined,
       status: isSet(object.status) ? globalThis.String(object.status) : "",
+      runtime: isSet(object.runtime) ? ChildThreadRuntimeDTO.fromJSON(object.runtime) : undefined,
+      report_execution_id: isSet(object.report_execution_id)
+        ? globalThis.String(object.report_execution_id)
+        : undefined,
+      report_status: isSet(object.report_status) ? globalThis.String(object.report_status) : undefined,
     };
   },
 
@@ -2723,6 +2815,15 @@ export const ChildThreadSummaryDTO: MessageFns<ChildThreadSummaryDTO> = {
     if (message.status !== "") {
       obj.status = message.status;
     }
+    if (message.runtime !== undefined) {
+      obj.runtime = ChildThreadRuntimeDTO.toJSON(message.runtime);
+    }
+    if (message.report_execution_id !== undefined) {
+      obj.report_execution_id = message.report_execution_id;
+    }
+    if (message.report_status !== undefined) {
+      obj.report_status = message.report_status;
+    }
     return obj;
   },
 
@@ -2740,6 +2841,108 @@ export const ChildThreadSummaryDTO: MessageFns<ChildThreadSummaryDTO> = {
     message.collaboration_state = object.collaboration_state ?? undefined;
     message.admission_state = object.admission_state ?? undefined;
     message.status = object.status ?? "";
+    message.runtime = (object.runtime !== undefined && object.runtime !== null)
+      ? ChildThreadRuntimeDTO.fromPartial(object.runtime)
+      : undefined;
+    message.report_execution_id = object.report_execution_id ?? undefined;
+    message.report_status = object.report_status ?? undefined;
+    return message;
+  },
+};
+
+function createBaseChildThreadBlockerDTO(): ChildThreadBlockerDTO {
+  return { kind: "", reason: "" };
+}
+
+export const ChildThreadBlockerDTO: MessageFns<ChildThreadBlockerDTO> = {
+  fromJSON(object: any): ChildThreadBlockerDTO {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : "",
+    };
+  },
+
+  toJSON(message: ChildThreadBlockerDTO): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.reason !== "") {
+      obj.reason = message.reason;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ChildThreadBlockerDTO>, I>>(base?: I): ChildThreadBlockerDTO {
+    return ChildThreadBlockerDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ChildThreadBlockerDTO>, I>>(object: I): ChildThreadBlockerDTO {
+    const message = createBaseChildThreadBlockerDTO();
+    message.kind = object.kind ?? "";
+    message.reason = object.reason ?? "";
+    return message;
+  },
+};
+
+function createBaseChildThreadRuntimeDTO(): ChildThreadRuntimeDTO {
+  return {
+    residency: "",
+    cold_eligible: false,
+    execution_state: "",
+    last_activity_at: undefined,
+    idle_deadline: undefined,
+    blockers: [],
+  };
+}
+
+export const ChildThreadRuntimeDTO: MessageFns<ChildThreadRuntimeDTO> = {
+  fromJSON(object: any): ChildThreadRuntimeDTO {
+    return {
+      residency: isSet(object.residency) ? globalThis.String(object.residency) : "",
+      cold_eligible: isSet(object.cold_eligible) ? globalThis.Boolean(object.cold_eligible) : false,
+      execution_state: isSet(object.execution_state) ? globalThis.String(object.execution_state) : "",
+      last_activity_at: isSet(object.last_activity_at) ? globalThis.String(object.last_activity_at) : undefined,
+      idle_deadline: isSet(object.idle_deadline) ? globalThis.String(object.idle_deadline) : undefined,
+      blockers: globalThis.Array.isArray(object?.blockers)
+        ? object.blockers.map((e: any) => ChildThreadBlockerDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: ChildThreadRuntimeDTO): unknown {
+    const obj: any = {};
+    if (message.residency !== "") {
+      obj.residency = message.residency;
+    }
+    if (message.cold_eligible !== false) {
+      obj.cold_eligible = message.cold_eligible;
+    }
+    if (message.execution_state !== "") {
+      obj.execution_state = message.execution_state;
+    }
+    if (message.last_activity_at !== undefined) {
+      obj.last_activity_at = message.last_activity_at;
+    }
+    if (message.idle_deadline !== undefined) {
+      obj.idle_deadline = message.idle_deadline;
+    }
+    if (message.blockers?.length) {
+      obj.blockers = message.blockers.map((e) => ChildThreadBlockerDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ChildThreadRuntimeDTO>, I>>(base?: I): ChildThreadRuntimeDTO {
+    return ChildThreadRuntimeDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ChildThreadRuntimeDTO>, I>>(object: I): ChildThreadRuntimeDTO {
+    const message = createBaseChildThreadRuntimeDTO();
+    message.residency = object.residency ?? "";
+    message.cold_eligible = object.cold_eligible ?? false;
+    message.execution_state = object.execution_state ?? "";
+    message.last_activity_at = object.last_activity_at ?? undefined;
+    message.idle_deadline = object.idle_deadline ?? undefined;
+    message.blockers = object.blockers?.map((e) => ChildThreadBlockerDTO.fromPartial(e)) || [];
     return message;
   },
 };
@@ -13614,6 +13817,8 @@ function createBaseTurnHistoryLoadRequest(): TurnHistoryLoadRequest {
     before_turns: undefined,
     after_turns: undefined,
     include: [],
+    execution_id: undefined,
+    tool_call_ids: [],
   };
 }
 
@@ -13630,6 +13835,10 @@ export const TurnHistoryLoadRequest: MessageFns<TurnHistoryLoadRequest> = {
       before_turns: isSet(object.before_turns) ? globalThis.Number(object.before_turns) : undefined,
       after_turns: isSet(object.after_turns) ? globalThis.Number(object.after_turns) : undefined,
       include: globalThis.Array.isArray(object?.include) ? object.include.map((e: any) => globalThis.String(e)) : [],
+      execution_id: isSet(object.execution_id) ? globalThis.String(object.execution_id) : undefined,
+      tool_call_ids: globalThis.Array.isArray(object?.tool_call_ids)
+        ? object.tool_call_ids.map((e: any) => globalThis.String(e))
+        : [],
     };
   },
 
@@ -13659,6 +13868,12 @@ export const TurnHistoryLoadRequest: MessageFns<TurnHistoryLoadRequest> = {
     if (message.include?.length) {
       obj.include = message.include;
     }
+    if (message.execution_id !== undefined) {
+      obj.execution_id = message.execution_id;
+    }
+    if (message.tool_call_ids?.length) {
+      obj.tool_call_ids = message.tool_call_ids;
+    }
     return obj;
   },
 
@@ -13675,6 +13890,8 @@ export const TurnHistoryLoadRequest: MessageFns<TurnHistoryLoadRequest> = {
     message.before_turns = object.before_turns ?? undefined;
     message.after_turns = object.after_turns ?? undefined;
     message.include = object.include?.map((e) => e) || [];
+    message.execution_id = object.execution_id ?? undefined;
+    message.tool_call_ids = object.tool_call_ids?.map((e) => e) || [];
     return message;
   },
 };
@@ -13691,6 +13908,7 @@ function createBaseTurnHistoryPageDTO(): TurnHistoryPageDTO {
     projection_epoch: 0,
     summaries: [],
     internal_executions: [],
+    thread_id: undefined,
   };
 }
 
@@ -13711,6 +13929,7 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
       internal_executions: globalThis.Array.isArray(object?.internal_executions)
         ? object.internal_executions.map((e: any) => InternalExecutionHistoryDTO.fromJSON(e))
         : [],
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : undefined,
     };
   },
 
@@ -13746,6 +13965,9 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
     if (message.internal_executions?.length) {
       obj.internal_executions = message.internal_executions.map((e) => InternalExecutionHistoryDTO.toJSON(e));
     }
+    if (message.thread_id !== undefined) {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -13765,6 +13987,7 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
     message.summaries = object.summaries?.map((e) => TurnSummaryDTO.fromPartial(e)) || [];
     message.internal_executions = object.internal_executions?.map((e) => InternalExecutionHistoryDTO.fromPartial(e)) ||
       [];
+    message.thread_id = object.thread_id ?? undefined;
     return message;
   },
 };
@@ -14949,7 +15172,7 @@ export const WorkspaceDefaultProviderUpdateRequest: MessageFns<WorkspaceDefaultP
 };
 
 function createBaseWorkspaceFileChangeBatchDTO(): WorkspaceFileChangeBatchDTO {
-  return { changes: [], overflow: false };
+  return { changes: [], overflow: false, directories: [], event_id: 0, invalidated_roots: [], snapshots: [] };
 }
 
 export const WorkspaceFileChangeBatchDTO: MessageFns<WorkspaceFileChangeBatchDTO> = {
@@ -14959,6 +15182,16 @@ export const WorkspaceFileChangeBatchDTO: MessageFns<WorkspaceFileChangeBatchDTO
         ? object.changes.map((e: any) => WorkspaceFileChangeDTO.fromJSON(e))
         : [],
       overflow: isSet(object.overflow) ? globalThis.Boolean(object.overflow) : false,
+      directories: globalThis.Array.isArray(object?.directories)
+        ? object.directories.map((e: any) => WorkspaceDirectoryRevisionDTO.fromJSON(e))
+        : [],
+      event_id: isSet(object.event_id) ? globalThis.Number(object.event_id) : 0,
+      invalidated_roots: globalThis.Array.isArray(object?.invalidated_roots)
+        ? object.invalidated_roots.map((e: any) => globalThis.String(e))
+        : [],
+      snapshots: globalThis.Array.isArray(object?.snapshots)
+        ? object.snapshots.map((e: any) => WorkspaceFileListDTO.fromJSON(e))
+        : [],
     };
   },
 
@@ -14970,6 +15203,18 @@ export const WorkspaceFileChangeBatchDTO: MessageFns<WorkspaceFileChangeBatchDTO
     if (message.overflow !== false) {
       obj.overflow = message.overflow;
     }
+    if (message.directories?.length) {
+      obj.directories = message.directories.map((e) => WorkspaceDirectoryRevisionDTO.toJSON(e));
+    }
+    if (message.event_id !== 0) {
+      obj.event_id = Math.round(message.event_id);
+    }
+    if (message.invalidated_roots?.length) {
+      obj.invalidated_roots = message.invalidated_roots;
+    }
+    if (message.snapshots?.length) {
+      obj.snapshots = message.snapshots.map((e) => WorkspaceFileListDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -14980,6 +15225,10 @@ export const WorkspaceFileChangeBatchDTO: MessageFns<WorkspaceFileChangeBatchDTO
     const message = createBaseWorkspaceFileChangeBatchDTO();
     message.changes = object.changes?.map((e) => WorkspaceFileChangeDTO.fromPartial(e)) || [];
     message.overflow = object.overflow ?? false;
+    message.directories = object.directories?.map((e) => WorkspaceDirectoryRevisionDTO.fromPartial(e)) || [];
+    message.event_id = object.event_id ?? 0;
+    message.invalidated_roots = object.invalidated_roots?.map((e) => e) || [];
+    message.snapshots = object.snapshots?.map((e) => WorkspaceFileListDTO.fromPartial(e)) || [];
     return message;
   },
 };
@@ -15092,7 +15341,7 @@ export const WorkspaceFileContentDTO: MessageFns<WorkspaceFileContentDTO> = {
 };
 
 function createBaseWorkspaceFileCopyRequest(): WorkspaceFileCopyRequest {
-  return { source_path: "", source_scope: undefined };
+  return { source_path: "", source_scope: undefined, intent: undefined };
 }
 
 export const WorkspaceFileCopyRequest: MessageFns<WorkspaceFileCopyRequest> = {
@@ -15100,6 +15349,7 @@ export const WorkspaceFileCopyRequest: MessageFns<WorkspaceFileCopyRequest> = {
     return {
       source_path: isSet(object.source_path) ? globalThis.String(object.source_path) : "",
       source_scope: isSet(object.source_scope) ? globalThis.String(object.source_scope) : undefined,
+      intent: isSet(object.intent) ? WorkspaceFileMutationIntentDTO.fromJSON(object.intent) : undefined,
     };
   },
 
@@ -15111,6 +15361,9 @@ export const WorkspaceFileCopyRequest: MessageFns<WorkspaceFileCopyRequest> = {
     if (message.source_scope !== undefined) {
       obj.source_scope = message.source_scope;
     }
+    if (message.intent !== undefined) {
+      obj.intent = WorkspaceFileMutationIntentDTO.toJSON(message.intent);
+    }
     return obj;
   },
 
@@ -15121,12 +15374,15 @@ export const WorkspaceFileCopyRequest: MessageFns<WorkspaceFileCopyRequest> = {
     const message = createBaseWorkspaceFileCopyRequest();
     message.source_path = object.source_path ?? "";
     message.source_scope = object.source_scope ?? undefined;
+    message.intent = (object.intent !== undefined && object.intent !== null)
+      ? WorkspaceFileMutationIntentDTO.fromPartial(object.intent)
+      : undefined;
     return message;
   },
 };
 
 function createBaseWorkspaceFileCreateRequest(): WorkspaceFileCreateRequest {
-  return { name: "", kind: "" };
+  return { name: "", kind: "", intent: undefined };
 }
 
 export const WorkspaceFileCreateRequest: MessageFns<WorkspaceFileCreateRequest> = {
@@ -15134,6 +15390,7 @@ export const WorkspaceFileCreateRequest: MessageFns<WorkspaceFileCreateRequest> 
     return {
       name: isSet(object.name) ? globalThis.String(object.name) : "",
       kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      intent: isSet(object.intent) ? WorkspaceFileMutationIntentDTO.fromJSON(object.intent) : undefined,
     };
   },
 
@@ -15145,6 +15402,9 @@ export const WorkspaceFileCreateRequest: MessageFns<WorkspaceFileCreateRequest> 
     if (message.kind !== "") {
       obj.kind = message.kind;
     }
+    if (message.intent !== undefined) {
+      obj.intent = WorkspaceFileMutationIntentDTO.toJSON(message.intent);
+    }
     return obj;
   },
 
@@ -15155,12 +15415,24 @@ export const WorkspaceFileCreateRequest: MessageFns<WorkspaceFileCreateRequest> 
     const message = createBaseWorkspaceFileCreateRequest();
     message.name = object.name ?? "";
     message.kind = object.kind ?? "";
+    message.intent = (object.intent !== undefined && object.intent !== null)
+      ? WorkspaceFileMutationIntentDTO.fromPartial(object.intent)
+      : undefined;
     return message;
   },
 };
 
 function createBaseWorkspaceFileListDTO(): WorkspaceFileListDTO {
-  return { root_path: "", path: "", items: [], truncated: undefined, limit: undefined, next_cursor: undefined };
+  return {
+    root_path: "",
+    path: "",
+    items: [],
+    truncated: undefined,
+    limit: undefined,
+    next_cursor: undefined,
+    directory_key: undefined,
+    directory_revision: 0,
+  };
 }
 
 export const WorkspaceFileListDTO: MessageFns<WorkspaceFileListDTO> = {
@@ -15174,6 +15446,8 @@ export const WorkspaceFileListDTO: MessageFns<WorkspaceFileListDTO> = {
       truncated: isSet(object.truncated) ? globalThis.Boolean(object.truncated) : undefined,
       limit: isSet(object.limit) ? globalThis.Number(object.limit) : undefined,
       next_cursor: isSet(object.next_cursor) ? globalThis.String(object.next_cursor) : undefined,
+      directory_key: isSet(object.directory_key) ? WorkspaceDirectoryKeyDTO.fromJSON(object.directory_key) : undefined,
+      directory_revision: isSet(object.directory_revision) ? globalThis.Number(object.directory_revision) : 0,
     };
   },
 
@@ -15197,6 +15471,12 @@ export const WorkspaceFileListDTO: MessageFns<WorkspaceFileListDTO> = {
     if (message.next_cursor !== undefined) {
       obj.next_cursor = message.next_cursor;
     }
+    if (message.directory_key !== undefined) {
+      obj.directory_key = WorkspaceDirectoryKeyDTO.toJSON(message.directory_key);
+    }
+    if (message.directory_revision !== 0) {
+      obj.directory_revision = Math.round(message.directory_revision);
+    }
     return obj;
   },
 
@@ -15211,6 +15491,10 @@ export const WorkspaceFileListDTO: MessageFns<WorkspaceFileListDTO> = {
     message.truncated = object.truncated ?? undefined;
     message.limit = object.limit ?? undefined;
     message.next_cursor = object.next_cursor ?? undefined;
+    message.directory_key = (object.directory_key !== undefined && object.directory_key !== null)
+      ? WorkspaceDirectoryKeyDTO.fromPartial(object.directory_key)
+      : undefined;
+    message.directory_revision = object.directory_revision ?? 0;
     return message;
   },
 };
@@ -15270,7 +15554,7 @@ export const WorkspaceFileNodeDTO: MessageFns<WorkspaceFileNodeDTO> = {
 };
 
 function createBaseWorkspaceFilePasteRequest(): WorkspaceFilePasteRequest {
-  return { source_paths: [] };
+  return { source_paths: [], intent: undefined };
 }
 
 export const WorkspaceFilePasteRequest: MessageFns<WorkspaceFilePasteRequest> = {
@@ -15279,6 +15563,7 @@ export const WorkspaceFilePasteRequest: MessageFns<WorkspaceFilePasteRequest> = 
       source_paths: globalThis.Array.isArray(object?.source_paths)
         ? object.source_paths.map((e: any) => globalThis.String(e))
         : [],
+      intent: isSet(object.intent) ? WorkspaceFileMutationIntentDTO.fromJSON(object.intent) : undefined,
     };
   },
 
@@ -15286,6 +15571,9 @@ export const WorkspaceFilePasteRequest: MessageFns<WorkspaceFilePasteRequest> = 
     const obj: any = {};
     if (message.source_paths?.length) {
       obj.source_paths = message.source_paths;
+    }
+    if (message.intent !== undefined) {
+      obj.intent = WorkspaceFileMutationIntentDTO.toJSON(message.intent);
     }
     return obj;
   },
@@ -15296,6 +15584,389 @@ export const WorkspaceFilePasteRequest: MessageFns<WorkspaceFilePasteRequest> = 
   fromPartial<I extends Exact<DeepPartial<WorkspaceFilePasteRequest>, I>>(object: I): WorkspaceFilePasteRequest {
     const message = createBaseWorkspaceFilePasteRequest();
     message.source_paths = object.source_paths?.map((e) => e) || [];
+    message.intent = (object.intent !== undefined && object.intent !== null)
+      ? WorkspaceFileMutationIntentDTO.fromPartial(object.intent)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseWorkspaceDirectoryKeyDTO(): WorkspaceDirectoryKeyDTO {
+  return { workspace_id: "", scope: "", root: "", path: "" };
+}
+
+export const WorkspaceDirectoryKeyDTO: MessageFns<WorkspaceDirectoryKeyDTO> = {
+  fromJSON(object: any): WorkspaceDirectoryKeyDTO {
+    return {
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      scope: isSet(object.scope) ? globalThis.String(object.scope) : "",
+      root: isSet(object.root) ? globalThis.String(object.root) : "",
+      path: isSet(object.path) ? globalThis.String(object.path) : "",
+    };
+  },
+
+  toJSON(message: WorkspaceDirectoryKeyDTO): unknown {
+    const obj: any = {};
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.scope !== "") {
+      obj.scope = message.scope;
+    }
+    if (message.root !== "") {
+      obj.root = message.root;
+    }
+    if (message.path !== "") {
+      obj.path = message.path;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceDirectoryKeyDTO>, I>>(base?: I): WorkspaceDirectoryKeyDTO {
+    return WorkspaceDirectoryKeyDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceDirectoryKeyDTO>, I>>(object: I): WorkspaceDirectoryKeyDTO {
+    const message = createBaseWorkspaceDirectoryKeyDTO();
+    message.workspace_id = object.workspace_id ?? "";
+    message.scope = object.scope ?? "";
+    message.root = object.root ?? "";
+    message.path = object.path ?? "";
+    return message;
+  },
+};
+
+function createBaseWorkspaceDirectoryRevisionDTO(): WorkspaceDirectoryRevisionDTO {
+  return { directory_key: undefined, directory_revision: 0, exists: false };
+}
+
+export const WorkspaceDirectoryRevisionDTO: MessageFns<WorkspaceDirectoryRevisionDTO> = {
+  fromJSON(object: any): WorkspaceDirectoryRevisionDTO {
+    return {
+      directory_key: isSet(object.directory_key) ? WorkspaceDirectoryKeyDTO.fromJSON(object.directory_key) : undefined,
+      directory_revision: isSet(object.directory_revision) ? globalThis.Number(object.directory_revision) : 0,
+      exists: isSet(object.exists) ? globalThis.Boolean(object.exists) : false,
+    };
+  },
+
+  toJSON(message: WorkspaceDirectoryRevisionDTO): unknown {
+    const obj: any = {};
+    if (message.directory_key !== undefined) {
+      obj.directory_key = WorkspaceDirectoryKeyDTO.toJSON(message.directory_key);
+    }
+    if (message.directory_revision !== 0) {
+      obj.directory_revision = Math.round(message.directory_revision);
+    }
+    if (message.exists !== false) {
+      obj.exists = message.exists;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceDirectoryRevisionDTO>, I>>(base?: I): WorkspaceDirectoryRevisionDTO {
+    return WorkspaceDirectoryRevisionDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceDirectoryRevisionDTO>, I>>(
+    object: I,
+  ): WorkspaceDirectoryRevisionDTO {
+    const message = createBaseWorkspaceDirectoryRevisionDTO();
+    message.directory_key = (object.directory_key !== undefined && object.directory_key !== null)
+      ? WorkspaceDirectoryKeyDTO.fromPartial(object.directory_key)
+      : undefined;
+    message.directory_revision = object.directory_revision ?? 0;
+    message.exists = object.exists ?? false;
+    return message;
+  },
+};
+
+function createBaseWorkspaceFileMutationIntentDTO(): WorkspaceFileMutationIntentDTO {
+  return {
+    client_operation_id: "",
+    client_sequence: 0,
+    expected_directory_revision: undefined,
+    depends_on: [],
+    created_by_operation_id: undefined,
+    relative_child_path: "",
+    directory_revision_from_operation_id: undefined,
+    client_ref: undefined,
+    directory_key: undefined,
+  };
+}
+
+export const WorkspaceFileMutationIntentDTO: MessageFns<WorkspaceFileMutationIntentDTO> = {
+  fromJSON(object: any): WorkspaceFileMutationIntentDTO {
+    return {
+      client_operation_id: isSet(object.client_operation_id) ? globalThis.String(object.client_operation_id) : "",
+      client_sequence: isSet(object.client_sequence) ? globalThis.Number(object.client_sequence) : 0,
+      expected_directory_revision: isSet(object.expected_directory_revision)
+        ? globalThis.Number(object.expected_directory_revision)
+        : undefined,
+      depends_on: globalThis.Array.isArray(object?.depends_on)
+        ? object.depends_on.map((e: any) => globalThis.String(e))
+        : [],
+      created_by_operation_id: isSet(object.created_by_operation_id)
+        ? globalThis.String(object.created_by_operation_id)
+        : undefined,
+      relative_child_path: isSet(object.relative_child_path) ? globalThis.String(object.relative_child_path) : "",
+      directory_revision_from_operation_id: isSet(object.directory_revision_from_operation_id)
+        ? globalThis.String(object.directory_revision_from_operation_id)
+        : undefined,
+      client_ref: isSet(object.client_ref) ? globalThis.String(object.client_ref) : undefined,
+      directory_key: isSet(object.directory_key) ? WorkspaceDirectoryKeyDTO.fromJSON(object.directory_key) : undefined,
+    };
+  },
+
+  toJSON(message: WorkspaceFileMutationIntentDTO): unknown {
+    const obj: any = {};
+    if (message.client_operation_id !== "") {
+      obj.client_operation_id = message.client_operation_id;
+    }
+    if (message.client_sequence !== 0) {
+      obj.client_sequence = Math.round(message.client_sequence);
+    }
+    if (message.expected_directory_revision !== undefined) {
+      obj.expected_directory_revision = Math.round(message.expected_directory_revision);
+    }
+    if (message.depends_on?.length) {
+      obj.depends_on = message.depends_on;
+    }
+    if (message.created_by_operation_id !== undefined) {
+      obj.created_by_operation_id = message.created_by_operation_id;
+    }
+    if (message.relative_child_path !== "") {
+      obj.relative_child_path = message.relative_child_path;
+    }
+    if (message.directory_revision_from_operation_id !== undefined) {
+      obj.directory_revision_from_operation_id = message.directory_revision_from_operation_id;
+    }
+    if (message.client_ref !== undefined) {
+      obj.client_ref = message.client_ref;
+    }
+    if (message.directory_key !== undefined) {
+      obj.directory_key = WorkspaceDirectoryKeyDTO.toJSON(message.directory_key);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceFileMutationIntentDTO>, I>>(base?: I): WorkspaceFileMutationIntentDTO {
+    return WorkspaceFileMutationIntentDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceFileMutationIntentDTO>, I>>(
+    object: I,
+  ): WorkspaceFileMutationIntentDTO {
+    const message = createBaseWorkspaceFileMutationIntentDTO();
+    message.client_operation_id = object.client_operation_id ?? "";
+    message.client_sequence = object.client_sequence ?? 0;
+    message.expected_directory_revision = object.expected_directory_revision ?? undefined;
+    message.depends_on = object.depends_on?.map((e) => e) || [];
+    message.created_by_operation_id = object.created_by_operation_id ?? undefined;
+    message.relative_child_path = object.relative_child_path ?? "";
+    message.directory_revision_from_operation_id = object.directory_revision_from_operation_id ?? undefined;
+    message.client_ref = object.client_ref ?? undefined;
+    message.directory_key = (object.directory_key !== undefined && object.directory_key !== null)
+      ? WorkspaceDirectoryKeyDTO.fromPartial(object.directory_key)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseWorkspaceFileOperationItemDTO(): WorkspaceFileOperationItemDTO {
+  return { path: "", kind: "", state: "", error: undefined };
+}
+
+export const WorkspaceFileOperationItemDTO: MessageFns<WorkspaceFileOperationItemDTO> = {
+  fromJSON(object: any): WorkspaceFileOperationItemDTO {
+    return {
+      path: isSet(object.path) ? globalThis.String(object.path) : "",
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+    };
+  },
+
+  toJSON(message: WorkspaceFileOperationItemDTO): unknown {
+    const obj: any = {};
+    if (message.path !== "") {
+      obj.path = message.path;
+    }
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceFileOperationItemDTO>, I>>(base?: I): WorkspaceFileOperationItemDTO {
+    return WorkspaceFileOperationItemDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceFileOperationItemDTO>, I>>(
+    object: I,
+  ): WorkspaceFileOperationItemDTO {
+    const message = createBaseWorkspaceFileOperationItemDTO();
+    message.path = object.path ?? "";
+    message.kind = object.kind ?? "";
+    message.state = object.state ?? "";
+    message.error = object.error ?? undefined;
+    return message;
+  },
+};
+
+function createBaseWorkspaceFileOperationReceiptDTO(): WorkspaceFileOperationReceiptDTO {
+  return {
+    operation_id: "",
+    client_sequence: 0,
+    queue_seq: 0,
+    kind: "",
+    state: "",
+    receipt_revision: 0,
+    effect: "",
+    items: [],
+    directories: [],
+    created_path: undefined,
+    error_code: undefined,
+    error_detail: undefined,
+    snapshots: [],
+  };
+}
+
+export const WorkspaceFileOperationReceiptDTO: MessageFns<WorkspaceFileOperationReceiptDTO> = {
+  fromJSON(object: any): WorkspaceFileOperationReceiptDTO {
+    return {
+      operation_id: isSet(object.operation_id) ? globalThis.String(object.operation_id) : "",
+      client_sequence: isSet(object.client_sequence) ? globalThis.Number(object.client_sequence) : 0,
+      queue_seq: isSet(object.queue_seq) ? globalThis.Number(object.queue_seq) : 0,
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+      receipt_revision: isSet(object.receipt_revision) ? globalThis.Number(object.receipt_revision) : 0,
+      effect: isSet(object.effect) ? globalThis.String(object.effect) : "",
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => WorkspaceFileOperationItemDTO.fromJSON(e))
+        : [],
+      directories: globalThis.Array.isArray(object?.directories)
+        ? object.directories.map((e: any) => WorkspaceDirectoryRevisionDTO.fromJSON(e))
+        : [],
+      created_path: isSet(object.created_path) ? globalThis.String(object.created_path) : undefined,
+      error_code: isSet(object.error_code) ? globalThis.String(object.error_code) : undefined,
+      error_detail: isSet(object.error_detail) ? globalThis.String(object.error_detail) : undefined,
+      snapshots: globalThis.Array.isArray(object?.snapshots)
+        ? object.snapshots.map((e: any) => WorkspaceFileListDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: WorkspaceFileOperationReceiptDTO): unknown {
+    const obj: any = {};
+    if (message.operation_id !== "") {
+      obj.operation_id = message.operation_id;
+    }
+    if (message.client_sequence !== 0) {
+      obj.client_sequence = Math.round(message.client_sequence);
+    }
+    if (message.queue_seq !== 0) {
+      obj.queue_seq = Math.round(message.queue_seq);
+    }
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    if (message.receipt_revision !== 0) {
+      obj.receipt_revision = Math.round(message.receipt_revision);
+    }
+    if (message.effect !== "") {
+      obj.effect = message.effect;
+    }
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => WorkspaceFileOperationItemDTO.toJSON(e));
+    }
+    if (message.directories?.length) {
+      obj.directories = message.directories.map((e) => WorkspaceDirectoryRevisionDTO.toJSON(e));
+    }
+    if (message.created_path !== undefined) {
+      obj.created_path = message.created_path;
+    }
+    if (message.error_code !== undefined) {
+      obj.error_code = message.error_code;
+    }
+    if (message.error_detail !== undefined) {
+      obj.error_detail = message.error_detail;
+    }
+    if (message.snapshots?.length) {
+      obj.snapshots = message.snapshots.map((e) => WorkspaceFileListDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceFileOperationReceiptDTO>, I>>(
+    base?: I,
+  ): WorkspaceFileOperationReceiptDTO {
+    return WorkspaceFileOperationReceiptDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceFileOperationReceiptDTO>, I>>(
+    object: I,
+  ): WorkspaceFileOperationReceiptDTO {
+    const message = createBaseWorkspaceFileOperationReceiptDTO();
+    message.operation_id = object.operation_id ?? "";
+    message.client_sequence = object.client_sequence ?? 0;
+    message.queue_seq = object.queue_seq ?? 0;
+    message.kind = object.kind ?? "";
+    message.state = object.state ?? "";
+    message.receipt_revision = object.receipt_revision ?? 0;
+    message.effect = object.effect ?? "";
+    message.items = object.items?.map((e) => WorkspaceFileOperationItemDTO.fromPartial(e)) || [];
+    message.directories = object.directories?.map((e) => WorkspaceDirectoryRevisionDTO.fromPartial(e)) || [];
+    message.created_path = object.created_path ?? undefined;
+    message.error_code = object.error_code ?? undefined;
+    message.error_detail = object.error_detail ?? undefined;
+    message.snapshots = object.snapshots?.map((e) => WorkspaceFileListDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseWorkspaceFileOperationStatusDTO(): WorkspaceFileOperationStatusDTO {
+  return { operations: [], worker_state: "", worker_error: undefined };
+}
+
+export const WorkspaceFileOperationStatusDTO: MessageFns<WorkspaceFileOperationStatusDTO> = {
+  fromJSON(object: any): WorkspaceFileOperationStatusDTO {
+    return {
+      operations: globalThis.Array.isArray(object?.operations)
+        ? object.operations.map((e: any) => WorkspaceFileOperationReceiptDTO.fromJSON(e))
+        : [],
+      worker_state: isSet(object.worker_state) ? globalThis.String(object.worker_state) : "",
+      worker_error: isSet(object.worker_error) ? globalThis.String(object.worker_error) : undefined,
+    };
+  },
+
+  toJSON(message: WorkspaceFileOperationStatusDTO): unknown {
+    const obj: any = {};
+    if (message.operations?.length) {
+      obj.operations = message.operations.map((e) => WorkspaceFileOperationReceiptDTO.toJSON(e));
+    }
+    if (message.worker_state !== "") {
+      obj.worker_state = message.worker_state;
+    }
+    if (message.worker_error !== undefined) {
+      obj.worker_error = message.worker_error;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceFileOperationStatusDTO>, I>>(base?: I): WorkspaceFileOperationStatusDTO {
+    return WorkspaceFileOperationStatusDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceFileOperationStatusDTO>, I>>(
+    object: I,
+  ): WorkspaceFileOperationStatusDTO {
+    const message = createBaseWorkspaceFileOperationStatusDTO();
+    message.operations = object.operations?.map((e) => WorkspaceFileOperationReceiptDTO.fromPartial(e)) || [];
+    message.worker_state = object.worker_state ?? "";
+    message.worker_error = object.worker_error ?? undefined;
     return message;
   },
 };
@@ -15362,18 +16033,26 @@ export const WorkspaceFileUpdateRequest: MessageFns<WorkspaceFileUpdateRequest> 
 };
 
 function createBaseWorkspaceFileWatchRequest(): WorkspaceFileWatchRequest {
-  return { paths: [] };
+  return { paths: [], after_event_id: undefined };
 }
 
 export const WorkspaceFileWatchRequest: MessageFns<WorkspaceFileWatchRequest> = {
   fromJSON(object: any): WorkspaceFileWatchRequest {
-    return { paths: globalThis.Array.isArray(object?.paths) ? object.paths.map((e: any) => globalThis.String(e)) : [] };
+    return {
+      paths: globalThis.Array.isArray(object?.paths)
+        ? object.paths.map((e: any) => globalThis.String(e))
+        : [],
+      after_event_id: isSet(object.after_event_id) ? globalThis.Number(object.after_event_id) : undefined,
+    };
   },
 
   toJSON(message: WorkspaceFileWatchRequest): unknown {
     const obj: any = {};
     if (message.paths?.length) {
       obj.paths = message.paths;
+    }
+    if (message.after_event_id !== undefined) {
+      obj.after_event_id = Math.round(message.after_event_id);
     }
     return obj;
   },
@@ -15384,6 +16063,7 @@ export const WorkspaceFileWatchRequest: MessageFns<WorkspaceFileWatchRequest> = 
   fromPartial<I extends Exact<DeepPartial<WorkspaceFileWatchRequest>, I>>(object: I): WorkspaceFileWatchRequest {
     const message = createBaseWorkspaceFileWatchRequest();
     message.paths = object.paths?.map((e) => e) || [];
+    message.after_event_id = object.after_event_id ?? undefined;
     return message;
   },
 };

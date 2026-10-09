@@ -53,7 +53,7 @@ def restore_case(
         admission_idempotency_key="restore-admission",
         payload="恢复备份不能创建同名双 inode",
     )
-    thread = saver._storage.main_thread_id(session)
+    thread = saver._storage.storage.main_thread_id(session)
     plan = ContextRequestPlan(
         session_id=session, thread_id=thread,
         plan_id="restore-plan",
@@ -62,18 +62,18 @@ def restore_case(
     )
     registered = saver.create_context_plan(session, plan)
     assert registered.revision == 0 and registered.plan_state == "unsealed"
-    with saver._storage._connect(
-        saver._storage.main_thread_id(session), read_only=True, session_id=session
+    with saver._storage.storage._connect(
+        saver._storage.storage.main_thread_id(session), read_only=True, session_id=session
     ) as connection:
         assert connection.execute(
             "SELECT schema_version FROM database_meta"
         ).fetchone() == (ROLLOUT_SCHEMA_VERSION,)
-    backup = saver._storage.backup_index(
+    backup = saver._storage.storage.backup_index(
         thread,
         destination=context.artifacts_dir / f"{session}.before.sqlite",
      session_id=session)
     return RestoreCase(
-        saver, session, thread, plan, saver._storage.index_path(session), backup, context
+        saver, session, thread, plan, saver._storage.storage.index_path(session), backup, context
     )
 
 
@@ -117,7 +117,7 @@ def _restore_with_reader(case: RestoreCase, reader_mode: str) -> dict[str, objec
         "reader_mode": reader_mode,
         "sqlite_version": sqlite3.sqlite_version,
     }
-    original_jsonl = case.saver._storage.jsonl_path(case.session).read_bytes()
+    original_jsonl = case.saver._storage.storage.jsonl_path(case.session).read_bytes()
     original_backup = case.backup.read_bytes()
     backup_stat = case.backup.stat()
     artifact = case.context.artifacts_dir / f"{case.session}.restore.json"
@@ -139,7 +139,7 @@ def _restore_with_reader(case: RestoreCase, reader_mode: str) -> dict[str, objec
             assert _observe(reader)["revision"] == 1
             assert not reader.in_transaction
         evidence["before_restore"] = _files(case)
-        with case.saver._storage.restore_index_backup(
+        with case.saver._storage.storage.restore_index_backup(
             case.thread, case.backup
         , session_id=case.session) as restored:
             evidence["restored_snapshot"] = _observe(restored.connection)
@@ -148,9 +148,9 @@ def _restore_with_reader(case: RestoreCase, reader_mode: str) -> dict[str, objec
         if reader is not None:
             evidence["old_reader"] = _observe(reader)
             assert not reader.in_transaction
-        restarted = RolloutCheckpointSaver(case.saver._storage.sessions_dir)
-        with restarted._storage._connect(
-            restarted._storage.main_thread_id(case.session),
+        restarted = RolloutCheckpointSaver(case.saver._storage.storage.sessions_dir)
+        with restarted._storage.storage._connect(
+            restarted._storage.storage.main_thread_id(case.session),
             read_only=True,
             session_id=case.session,
         ) as fresh:
@@ -170,14 +170,14 @@ def _restore_with_reader(case: RestoreCase, reader_mode: str) -> dict[str, objec
             evidence["post_restore_write"] = {"revision": written.revision}
             if reader is not None:
                 evidence["old_reader_after_write"] = _observe(reader)
-            with restarted._storage._connect(
-                restarted._storage.main_thread_id(case.session),
+            with restarted._storage.storage._connect(
+                restarted._storage.storage.main_thread_id(case.session),
                 read_only=True,
                 session_id=case.session,
             ) as fresh:
                 evidence["new_connection_after_write"] = _observe(fresh)
         assert (
-            case.saver._storage.jsonl_path(case.session).read_bytes() == original_jsonl
+            case.saver._storage.storage.jsonl_path(case.session).read_bytes() == original_jsonl
         )
         evidence["jsonl_unchanged"] = True
         assert case.backup.read_bytes() == original_backup
@@ -229,7 +229,7 @@ def test_restore_cannot_detach_live_database_reader(restore_case, reader_mode):
 def test_restore_preserves_active_wal_snapshot(restore_case, reader_mode):
     case = restore_case
     storage = case.saver._storage
-    original_jsonl = storage.jsonl_path(case.session).read_bytes()
+    original_jsonl = storage.storage.jsonl_path(case.session).read_bytes()
     original_backup = case.backup.read_bytes()
     inode = case.index.stat().st_ino
     revised = case.saver.revise_context_plan(
@@ -247,7 +247,7 @@ def test_restore_preserves_active_wal_snapshot(restore_case, reader_mode):
             "history_view_revision": 7,
             "integrity": [("ok",)],
         }
-        with storage.restore_index_backup(case.thread, case.backup, session_id=case.session) as snapshot:
+        with storage.storage.restore_index_backup(case.thread, case.backup, session_id=case.session) as snapshot:
             restored = _observe(snapshot.connection)
             assert restored == {
                 "revision": 0,
@@ -276,7 +276,7 @@ def test_restore_preserves_active_wal_snapshot(restore_case, reader_mode):
             "integrity": [("ok",)],
         }
     assert case.index.stat().st_ino == inode
-    assert storage.jsonl_path(case.session).read_bytes() == original_jsonl
+    assert storage.storage.jsonl_path(case.session).read_bytes() == original_jsonl
     assert case.backup.read_bytes() == original_backup
     (case.context.artifacts_dir / f"{case.session}.snapshot.json").write_text(
         json.dumps(
@@ -299,7 +299,7 @@ def test_restore_accepts_readonly_backup_without_changing_it(restore_case):
     before = case.backup.stat()
     case.backup.chmod(0o444)
     try:
-        with case.saver._storage.restore_index_backup(
+        with case.saver._storage.storage.restore_index_backup(
             case.thread, case.backup
         , session_id=case.session) as snapshot:
             assert _observe(snapshot.connection)["revision"] == 0
@@ -319,7 +319,7 @@ def test_restore_rejects_readonly_target_without_modification(restore_case):
     case.index.chmod(0o444)
     try:
         with pytest.raises(sqlite3.OperationalError, match="readonly") as caught:
-            case.saver._storage.restore_index_backup(case.thread, case.backup, session_id=case.session)
+            case.saver._storage.storage.restore_index_backup(case.thread, case.backup, session_id=case.session)
         assert caught.value.sqlite_errorcode == sqlite3.SQLITE_READONLY
         assert str(case.index) in " ".join(caught.value.__notes__)
         assert case.index.read_bytes() == original
@@ -338,12 +338,12 @@ def test_restore_rejects_invalid_source_before_target_write(restore_case, payloa
     inode = case.index.stat().st_ino
     expected_error = sqlite3.DatabaseError if payload else RuntimeError
     with pytest.raises(expected_error, match="not a database|空数据库"):
-        case.saver._storage.restore_index_backup(case.thread, broken, session_id=case.session)
+        case.saver._storage.storage.restore_index_backup(case.thread, broken, session_id=case.session)
     assert broken.read_bytes() == payload
     assert case.index.read_bytes() == before
     assert case.index.stat().st_ino == inode
-    with case.saver._storage._connect(
-        case.saver._storage.main_thread_id(case.session),
+    with case.saver._storage.storage._connect(
+        case.saver._storage.storage.main_thread_id(case.session),
         read_only=True,
         session_id=case.session,
     ) as connection:
@@ -379,7 +379,7 @@ def test_restore_rejects_unsafe_source_or_sidecar(restore_case, alias_kind):
         case.index.symlink_to(artifact)
         source, expected_error = case.backup, RuntimeError
     with pytest.raises(expected_error, match="同一文件|符号链接"):
-        case.saver._storage.restore_index_backup(case.thread, source, session_id=case.session)
+        case.saver._storage.storage.restore_index_backup(case.thread, source, session_id=case.session)
     assert case.index.read_bytes() == original
     assert case.index.stat().st_ino == inode
     assert case.backup.read_bytes() == original_backup
@@ -423,7 +423,7 @@ def test_restore_validates_source_integrity_before_writing_target(
     inode = case.index.stat().st_ino
     check_name = "integrity_check" if violation == "check" else "foreign_key_check"
     with pytest.raises(RuntimeError, match=f"source {check_name}.*context_plans"):
-        case.saver._storage.restore_index_backup(case.thread, broken, session_id=case.session)
+        case.saver._storage.storage.restore_index_backup(case.thread, broken, session_id=case.session)
     assert broken.read_bytes() == broken_before
     assert case.backup.read_bytes() == original_backup
     assert case.index.read_bytes() == target_before
@@ -437,7 +437,7 @@ def test_restore_does_not_create_missing_target(restore_case):
     inode = case.index.stat().st_ino
     case.index.rename(preserved)
     with pytest.raises(FileNotFoundError):
-        case.saver._storage.restore_index_backup(case.thread, case.backup, session_id=case.session)
+        case.saver._storage.storage.restore_index_backup(case.thread, case.backup, session_id=case.session)
     assert not case.index.exists()
     assert preserved.read_bytes() == original
     assert preserved.stat().st_ino == inode
@@ -446,14 +446,14 @@ def test_restore_does_not_create_missing_target(restore_case):
 def test_restore_rejects_corrupt_target_without_replacement(restore_case):
     case = restore_case
     original_backup = case.backup.read_bytes()
-    original_jsonl = case.saver._storage.jsonl_path(case.session).read_bytes()
+    original_jsonl = case.saver._storage.storage.jsonl_path(case.session).read_bytes()
     # 当前 fixture 所有连接已关闭；仅在独立正式工作区注入真实损坏。
     case.index.write_bytes(b"corrupted")
     before = case.index.stat()
     unrelated = case.index.with_name(f".index.sqlite.{case.session}.restore")
     unrelated.write_bytes(b"belongs-to-another-operation")
     with pytest.raises(sqlite3.DatabaseError, match="not a database") as caught:
-        case.saver._storage.restore_index_backup(case.thread, case.backup, session_id=case.session)
+        case.saver._storage.storage.restore_index_backup(case.thread, case.backup, session_id=case.session)
     assert caught.value.sqlite_errorcode == sqlite3.SQLITE_NOTADB
     assert str(case.index) in " ".join(caught.value.__notes__)
     assert str(case.backup) in " ".join(caught.value.__notes__)
@@ -461,7 +461,7 @@ def test_restore_rejects_corrupt_target_without_replacement(restore_case):
     assert case.index.stat().st_ino == before.st_ino
     assert case.index.stat().st_mtime_ns == before.st_mtime_ns
     assert case.backup.read_bytes() == original_backup
-    assert case.saver._storage.jsonl_path(case.session).read_bytes() == original_jsonl
+    assert case.saver._storage.storage.jsonl_path(case.session).read_bytes() == original_jsonl
     assert unrelated.read_bytes() == b"belongs-to-another-operation"
     (case.context.artifacts_dir / f"{case.session}.corrupt-target.json").write_text(
         json.dumps(
@@ -487,7 +487,7 @@ def test_corrupt_target_enters_explicit_recovery_required(restore_case, operatio
     case.index.write_bytes(b"corrupted")
     before = case.index.stat()
 
-    action = getattr(case.saver._storage, operation)
+    action = getattr(case.saver._storage.storage, operation)
     with pytest.raises(
         RuntimeError,
         match="recovery_required.*SQLite backup.*禁止从 JSONL 重建",
@@ -505,10 +505,10 @@ def test_offline_restore_installs_exact_owner_backup_and_preserves_quarantine(re
     case = restore_case
     storage = case.saver._storage
     original_backup = case.backup.read_bytes()
-    original_jsonl = storage.jsonl_path(case.session).read_bytes()
+    original_jsonl = storage.storage.jsonl_path(case.session).read_bytes()
     case.index.write_bytes(b"corrupted-target")
 
-    with storage.restore_index_backup_offline(
+    with storage.storage.restore_index_backup_offline(
         case.thread, case.backup, session_id=case.session
     ) as snapshot:
         assert _observe(snapshot.connection) == {
@@ -525,8 +525,8 @@ def test_offline_restore_installs_exact_owner_backup_and_preserves_quarantine(re
     assert manifest["source_path"] == str(case.backup)
     assert manifest["source_sha256"] == manifest["installed_sha256"]
     assert case.backup.read_bytes() == original_backup
-    assert storage.jsonl_path(case.session).read_bytes() == original_jsonl
-    restarted = RolloutCheckpointSaver(storage.sessions_dir)
+    assert storage.storage.jsonl_path(case.session).read_bytes() == original_jsonl
+    restarted = RolloutCheckpointSaver(storage.storage.sessions_dir)
     assert restarted.get_context_plan_registration(
         case.session, thread_id=case.thread, plan_id=case.plan.plan_id
     ).revision == 0
@@ -544,18 +544,18 @@ def test_offline_restore_rejects_foreign_owner_before_publication(restore_case, 
             f"UPDATE database_meta SET {owner_field} = ?", (prefix + create_uuid_hex(),)
         )
     source_before = source.read_bytes()
-    original_jsonl = storage.jsonl_path(case.session).read_bytes()
+    original_jsonl = storage.storage.jsonl_path(case.session).read_bytes()
     case.index.write_bytes(b"corrupted-target")
     target_stat = case.index.stat()
 
     with pytest.raises(RuntimeError, match="offline restore source session identity 不匹配"):
-        storage.restore_index_backup_offline(case.thread, source, session_id=case.session)
+        storage.storage.restore_index_backup_offline(case.thread, source, session_id=case.session)
 
     assert source.read_bytes() == source_before
     assert case.index.read_bytes() == b"corrupted-target"
     assert case.index.stat().st_ino == target_stat.st_ino
     assert case.index.stat().st_mtime_ns == target_stat.st_mtime_ns
-    assert storage.jsonl_path(case.session).read_bytes() == original_jsonl
+    assert storage.storage.jsonl_path(case.session).read_bytes() == original_jsonl
     assert not (case.index.parent / "recovery-quarantine").exists()
     assert not tuple(case.index.parent.glob(".index.sqlite.*.offline-restore"))
 
@@ -567,7 +567,7 @@ def test_offline_restore_rejects_readable_target_without_replacement(restore_cas
     inode = case.index.stat().st_ino
 
     with pytest.raises(RuntimeError, match="只允许恢复无法打开的损坏 target"):
-        case.saver._storage.restore_index_backup_offline(case.thread, case.backup, session_id=case.session)
+        case.saver._storage.storage.restore_index_backup_offline(case.thread, case.backup, session_id=case.session)
 
     assert case.index.read_bytes() == original_target
     assert case.index.stat().st_ino == inode
@@ -584,7 +584,7 @@ def test_offline_restore_rejects_invalid_source_before_quarantine(restore_case):
     broken.write_bytes(b"not-a-sqlite-database")
 
     with pytest.raises(sqlite3.DatabaseError, match="not a database"):
-        case.saver._storage.restore_index_backup_offline(case.thread, broken, session_id=case.session)
+        case.saver._storage.storage.restore_index_backup_offline(case.thread, broken, session_id=case.session)
 
     assert case.index.read_bytes() == b"corrupted-target"
     assert case.index.stat().st_ino == before.st_ino
@@ -609,12 +609,12 @@ def test_restore_fails_promptly_when_another_writer_holds_target(restore_case):
                 "-c",
                 (
                     "import sys\n"
-                    "from app.services.infrastructure.rollout_context.storage.service import RolloutStorage\n"
+                    "from app.services.infrastructure.rollout_context.store import RolloutContextStore\n"
                     "from tests.support.session_catalog_owner import fixture_catalog_scope\n"
                     "with fixture_catalog_scope():\n"
-                    "    RolloutStorage(sys.argv[1]).restore_index_backup(sys.argv[2], sys.argv[3], session_id=sys.argv[4])\n"
+                    "    RolloutContextStore(sys.argv[1]).storage.restore_index_backup(sys.argv[2], sys.argv[3], session_id=sys.argv[4])\n"
                 ),
-                str(case.saver._storage.sessions_dir),
+                str(case.saver._storage.storage.sessions_dir),
                 case.thread,
                 str(case.backup),
                 case.session,
@@ -635,7 +635,7 @@ def test_restore_fails_promptly_when_another_writer_holds_target(restore_case):
         writer.rollback()
     assert case.index.stat().st_ino == inode
     assert case.backup.read_bytes() == original_backup
-    with case.saver._storage.restore_index_backup(
+    with case.saver._storage.storage.restore_index_backup(
         case.thread, case.backup
     , session_id=case.session) as snapshot:
         assert _observe(snapshot.connection) == before

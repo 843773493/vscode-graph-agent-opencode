@@ -10,6 +10,9 @@ from app.domain.itemized.hashing import (
     contribution_content_hash,
     sha256_jcs,
 )
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutNotMaterializedError,
+)
 
 if TYPE_CHECKING:
     from app.services.infrastructure.rollout_context.storage.primitives import (
@@ -282,12 +285,12 @@ class ContextOverlayStorageMixin:
         )
         if status == "active" and not values["delta_ref"] and not values["base_ref"]:
             raise ValueError("active source overlay 必须声明 base_ref 或 delta_ref")
-        with self._lock(thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-            with self._connect(
+        with self._storage._lock(thread_id, checkpoint_ns, session_id=session_id):
+            self._storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._storage._connect(
                 thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
-                self._require_v2_runtime(connection)
+                self._storage._require_v2_runtime(connection)
                 existing = connection.execute(
                     'SELECT session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, delta_source_revision, delta_content_length, delta_content_hash, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key FROM source_overlays WHERE overlay_id = ? AND session_id = ? AND thread_id = ?',
                     (overlay_id, session_id, thread_id),
@@ -470,33 +473,20 @@ class ContextOverlayStorageMixin:
             or snapshot.checkpoint_ns != checkpoint_ns
         ):
             raise ValueError("source overlay snapshot 与目标 rollout 不一致")
-        owned_connection = None
-        if snapshot is None:
-            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-            owned_connection = self._connect(
-                thread_id,
-                checkpoint_ns,
-                session_id=session_id,
-                read_only=True,
-            )
-        connection = (
-            self._snapshot_connection(snapshot)
-            if snapshot is not None
-            else owned_connection
-        )
-        assert connection is not None
         try:
-            self._require_v2_runtime(connection)
-            query = 'SELECT overlay_id, session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, delta_source_revision, delta_content_length, delta_content_hash, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at FROM source_overlays WHERE session_id = ? AND thread_id = ? AND checkpoint_ns = ?'
-            params: list[object] = [session_id, thread_id, checkpoint_ns]
-            if source_overlay_epoch is not None:
-                query += " AND source_overlay_epoch = ?"
-                params.append(source_overlay_epoch)
-            query += " ORDER BY source_overlay_epoch, created_at, overlay_id"
-            rows = connection.execute(query, params).fetchall()
-        finally:
-            if owned_connection is not None:
-                owned_connection.close()
+            with self._storage.read_connection(
+                session_id, thread_id, checkpoint_ns, snapshot=snapshot,
+            ) as connection:
+                self._storage._require_v2_runtime(connection)
+                query = 'SELECT overlay_id, session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, delta_source_revision, delta_content_length, delta_content_hash, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at FROM source_overlays WHERE session_id = ? AND thread_id = ? AND checkpoint_ns = ?'
+                params: list[object] = [session_id, thread_id, checkpoint_ns]
+                if source_overlay_epoch is not None:
+                    query += " AND source_overlay_epoch = ?"
+                    params.append(source_overlay_epoch)
+                query += " ORDER BY source_overlay_epoch, created_at, overlay_id"
+                rows = connection.execute(query, params).fetchall()
+        except RolloutNotMaterializedError:
+            return ()
         keys = (
             "overlay_id",
             "session_id",

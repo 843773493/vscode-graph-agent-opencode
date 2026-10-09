@@ -36,6 +36,7 @@ describe("文件树搜索命中判定", () => {
 
 function directory(items: WorkspaceFileNode[]): DirectoryCacheEntry {
   return {
+    directoryKey: null, directoryRevision: null,
     items,
     loading: false,
     error: null,

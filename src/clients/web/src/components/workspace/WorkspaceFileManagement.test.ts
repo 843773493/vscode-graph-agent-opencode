@@ -15,6 +15,13 @@ import {
   type RecordedRequest,
 } from "./workspaceFileRequestMock";
 
+import type { WorkspaceFileMutationIntent } from "../../types/backend";
+
+const intent: WorkspaceFileMutationIntent = { client_operation_id: "op_00000000000040008000000000000002",
+  client_sequence: 1, expected_directory_revision: 1, depends_on: [], created_by_operation_id: null,
+  relative_child_path: "", directory_revision_from_operation_id: null, client_ref: "file-api-unit",
+  directory_key: { workspace_id: "backend_files", scope: "filesystem", root: "/", path: "/home/hyf" } };
+
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
@@ -34,6 +41,10 @@ function installFileManagementBackend(
     requests,
     token: "file-manager-token",
     handler: ({ pathname }) => {
+      if (["/entries", "/paste", "/copy", "/upload"].some((suffix) => pathname.endsWith(suffix))) {
+        return Response.json({ request_id: "req_file_accepted", data: { operation_id: intent.client_operation_id,
+          state: "queued", effect: "none", directories: [], snapshots: [] } }, { status: 202 });
+      }
       if (pathname.endsWith("/reveal")) {
         return Response.json({
           request_id: "req_file_reveal",
@@ -44,6 +55,8 @@ function installFileManagementBackend(
         return Response.json({
           request_id: "req_file_management",
           data: {
+            directory_key: { workspace_id: "backend_files", scope: "filesystem", root: "/", path: "/home/hyf" },
+            directory_revision: 7,
             root_path: "/",
             path: "/home/hyf",
             items: [{
@@ -66,14 +79,14 @@ function installFileManagementBackend(
 }
 
 describe("文件树管理 API", () => {
-  test("外部根目录创建文件夹后使用后端完整目录快照", async () => {
+  test("外部根目录创建文件夹返回原操作202回执", async () => {
     const requests: RecordedRequest[] = [];
     installFileManagementBackend(38_014, requests);
 
     const result = await createWorkspaceFileEntry(
       38_014,
       "filesystem:/home/hyf",
-      { name: "torch_home", kind: "directory" },
+      { name: "torch_home", kind: "directory", intent },
       "workspace-files",
     );
 
@@ -84,10 +97,11 @@ describe("文件树管理 API", () => {
     expect(request.init?.body).toBe(JSON.stringify({
       name: "torch_home",
       kind: "directory",
+      intent,
     }));
     expect(request.init?.method).toBe("POST");
-    expect(result.path).toBe("filesystem:/home/hyf");
-    expect(result.items?.[0]?.path).toBe("filesystem:/home/hyf/torch_home");
+    expect(result.operation_id).toBe(intent.client_operation_id);
+    expect(result.state).toBe("queued");
   });
 
   test("粘贴发送多个绝对来源路径", async () => {
@@ -97,7 +111,7 @@ describe("文件树管理 API", () => {
     await pasteWorkspaceFileEntries(
       38_015,
       "filesystem:/home/hyf",
-      { source_paths: ["/data/model.bin", "/tmp/cache"] },
+      { source_paths: ["/data/model.bin", "/clipboard/cache"], intent },
       "workspace-files",
     );
 
@@ -106,7 +120,8 @@ describe("文件树管理 API", () => {
       "/api/v1/workspace/files/paste?path=%2Fhome%2Fhyf&scope=filesystem",
     );
     expect(request.init?.body).toBe(JSON.stringify({
-      source_paths: ["/data/model.bin", "/tmp/cache"],
+      source_paths: ["/data/model.bin", "/clipboard/cache"],
+      intent,
     }));
     expect(request.init?.method).toBe("POST");
   });
@@ -118,7 +133,7 @@ describe("文件树管理 API", () => {
     await copyWorkspaceFileEntry(
       38_018,
       "target",
-      { path: "source.txt", scope: "workspace" },
+      { source_path: "source.txt", source_scope: "workspace", intent },
       "workspace-files",
     );
 
@@ -129,6 +144,7 @@ describe("文件树管理 API", () => {
     expect(request.init?.body).toBe(JSON.stringify({
       source_path: "source.txt",
       source_scope: "workspace",
+      intent,
     }));
     expect(new Headers(request.init?.headers).get("X-Local-Token"))
       .toBe("file-manager-token");
@@ -142,7 +158,8 @@ describe("文件树管理 API", () => {
     await uploadWorkspaceFileEntries(
       38_019,
       "uploads",
-      [file],
+      [{ file, name: file.name, relativePath: file.name }],
+      intent,
       "workspace-files",
     );
 
@@ -153,6 +170,7 @@ describe("文件树管理 API", () => {
     const body = request.init?.body;
     expect(body).toBeInstanceOf(FormData);
     expect((body as FormData).get("relative_paths")).toBe("hello.txt");
+    expect((body as FormData).get("intent")).toBe(JSON.stringify(intent));
     expect(((body as FormData).get("files") as File).name).toBe("hello.txt");
     // 上传走 skipGatewayUserSession 的 multipart 通路，不建立用户会话屏障。
     expect(

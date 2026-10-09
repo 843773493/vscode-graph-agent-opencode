@@ -14,14 +14,22 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_session_service
+from app.api.deps import (
+    get_rollout_checkpoint_saver,
+    get_session_service,
+    get_thread_residency_tracker,
+)
 from app.api.sessions import list_session_child_threads, router
 from app.core.session_control_store import SessionControlStore
 from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 
 WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
@@ -46,6 +54,16 @@ def service(workspace) -> SessionService:
         path_resolver=workspace.resolver,
         creation_service=workspace.creation_service,
     )
+
+
+@pytest.fixture
+def residency_tracker() -> ThreadResidencyTracker:
+    return ThreadResidencyTracker()
+
+
+@pytest.fixture
+def saver(workspace) -> RolloutCheckpointSaver:
+    return RolloutCheckpointSaver(workspace.sessions_root)
 
 
 def _seed_child_thread(
@@ -105,6 +123,8 @@ async def _seed_parent_with_child_thread(
 
 async def test_child_threads_api_returns_thread_payload(
     service: SessionService,
+    residency_tracker: ThreadResidencyTracker,
+    saver: RolloutCheckpointSaver,
 ) -> None:
     parent_session_id, thread_id = await _seed_parent_with_child_thread(service)
 
@@ -113,6 +133,8 @@ async def test_child_threads_api_returns_thread_payload(
         _="local",
         request_id="req_child_threads",
         session_service=service,
+        residency_tracker=residency_tracker,
+        saver=saver,
     )
 
     assert response.data is not None
@@ -128,10 +150,15 @@ async def test_child_threads_api_returns_thread_payload(
     assert item.collaboration_state == "published"
     assert item.status == "pending"
     assert item.created_at is not None
+    assert item.runtime is not None
+    assert item.runtime.residency == "cold"
+    assert item.runtime.blockers == []
 
 
 async def test_child_threads_api_maps_missing_parent_to_404(
     service: SessionService,
+    residency_tracker: ThreadResidencyTracker,
+    saver: RolloutCheckpointSaver,
 ) -> None:
     with pytest.raises(HTTPException) as raised:
         await list_session_child_threads(
@@ -139,6 +166,8 @@ async def test_child_threads_api_maps_missing_parent_to_404(
             _="local",
             request_id="req_child_threads",
             session_service=service,
+            residency_tracker=residency_tracker,
+            saver=saver,
         )
 
     assert raised.value.status_code == 404
@@ -147,6 +176,8 @@ async def test_child_threads_api_maps_missing_parent_to_404(
 
 def test_child_threads_api_http_envelope_and_auth(
     service: SessionService,
+    residency_tracker: ThreadResidencyTracker,
+    saver: RolloutCheckpointSaver,
 ) -> None:
     parent_session_id, thread_id = asyncio.run(
         _seed_parent_with_child_thread(service)
@@ -155,6 +186,8 @@ def test_child_threads_api_http_envelope_and_auth(
     app.add_middleware(TraceMiddleware)
     app.include_router(router, prefix="/api/v1")
     app.dependency_overrides[get_session_service] = lambda: service
+    app.dependency_overrides[get_thread_residency_tracker] = lambda: residency_tracker
+    app.dependency_overrides[get_rollout_checkpoint_saver] = lambda: saver
     try:
         with TestClient(app) as client:
             unauthorized = client.get(
@@ -180,4 +213,5 @@ def test_child_threads_api_http_envelope_and_auth(
     assert data["items"][0]["thread_id"] == thread_id
     assert data["items"][0]["collaboration_state"] == "published"
     assert data["items"][0]["status"] == "pending"
+    assert data["items"][0]["runtime"]["residency"] == "cold"
     assert "session_id" not in data["items"][0]

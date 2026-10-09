@@ -43,7 +43,7 @@ from app.services.infrastructure.rollout_context.checkpoint.reader import (
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 from app.services.mapping.itemized.canonical_langchain import project_canonical_items
 from app.services.mapping.itemized.message_reasoning_merge import (
@@ -93,7 +93,7 @@ def accept_previous_message():
     """先建立真实已提交 root；空库不能伪造一个有 commit 的 checkpoint。"""
 
     def accept(saver: RolloutCheckpointSaver, session_id: str) -> HumanMessage:
-        thread_id = saver._storage.main_thread_id(session_id)
+        thread_id = saver._storage.storage.main_thread_id(session_id)
         message = HumanMessage(
             id="msg_previous",
             content="上一条已接受的输入",
@@ -130,7 +130,7 @@ async def test_persist_user_message_checkpoint_is_idempotent(
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     previous_message = accept_previous_message(saver, session_id)
-    thread_id = saver._storage.main_thread_id(session_id)
+    thread_id = saver._storage.storage.main_thread_id(session_id)
     config = build_checkpoint_config(thread_id)
     with session_thread_owner_scope(
         MutationIntentOwner(session_id, thread_id),
@@ -266,7 +266,7 @@ def test_persist_internal_execution_keeps_notice_outside_user_turn_history(
         thread_id=thread_id,
         execution_id=intent.execution_id,
     )
-    database_path = saver._storage.index_path(session_id, thread_id=thread_id)
+    database_path = saver._storage.storage.index_path(session_id, thread_id=thread_id)
     with sqlite3.connect(database_path) as connection:
         row = connection.execute(
             "SELECT turn_id, turn_scope, semantic_kind FROM item_catalog "
@@ -282,7 +282,7 @@ def test_persist_internal_execution_keeps_notice_outside_user_turn_history(
         assert connection.execute("SELECT COUNT(*) FROM turns").fetchone() == (0,)
     page = RolloutHistoryReader(
         RolloutContextReader(
-            RolloutStorage(tmp_path, message_codec=LangChainMessageCodec())
+            RolloutContextStore(tmp_path, message_codec=LangChainMessageCodec())
         )
     ).load(
         session_id,
@@ -304,7 +304,7 @@ async def test_persist_user_message_checkpoint_discards_stale_execution_tasks(
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     previous_message = accept_previous_message(saver, session_id)
-    thread_id = saver._storage.main_thread_id(session_id)
+    thread_id = saver._storage.storage.main_thread_id(session_id)
     config = build_checkpoint_config(thread_id)
     stale_send = Send(
         "tools",
@@ -421,7 +421,7 @@ async def test_internal_seed_checkpoint_keeps_graph_messages_and_cleans_stale_ta
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     previous_message = accept_previous_message(saver, session_id)
-    thread_id = saver._storage.main_thread_id(session_id)
+    thread_id = saver._storage.storage.main_thread_id(session_id)
     config = build_checkpoint_config(thread_id)
     channels = {"messages": [previous_message]}
     versions = {"messages": "1"}
@@ -466,7 +466,7 @@ async def test_internal_seed_checkpoint_keeps_graph_messages_and_cleans_stale_ta
     assert admission.execution_origin == "internal" and admission.turn_id is None
     assert admission.job_id == "job-seed-reference"
     assert [item.item_id for item in saver.read_canonical_items(session_id)] == ["item-msg_previous"]
-    with sqlite3.connect(saver._storage.index_path(session_id, thread_id=thread_id)) as connection:
+    with sqlite3.connect(saver._storage.storage.index_path(session_id, thread_id=thread_id)) as connection:
         assert connection.execute("SELECT COUNT(*) FROM turn_records").fetchone() == (1,)
         assert connection.execute("SELECT COUNT(*) FROM item_catalog").fetchone() == (1,)
 
@@ -481,7 +481,7 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
     reasoning_text = "用户只要求回复 OK。"
     final_text = "OK"
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
-    thread_id = saver._storage.main_thread_id(session_id)
+    thread_id = saver._storage.storage.main_thread_id(session_id)
     turn_id = "turn-standard-assistant"
     admission = _accept_user_turn(
         saver,
@@ -653,7 +653,7 @@ async def test_final_before_persist_convergence_replays_without_typed_provenance
     session_id = "ses_019e8f046abe7813889184829fac0231"
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
-    thread_id = saver._storage.main_thread_id(session_id)
+    thread_id = saver._storage.storage.main_thread_id(session_id)
     turn_id = "turn-final-provenance"
     job_id = "job-final-provenance"
     model_call_id = "model-call-final-provenance"
@@ -744,7 +744,7 @@ async def test_final_before_persist_convergence_replays_without_typed_provenance
             before_persist=adapter.converge_final_message,
         )
         await adapter.converge_final_checkpoint(final_message_id)
-        stored_items = saver._storage.read_items(session_id, thread_id)
+        stored_items = saver._storage.storage.read_items(session_id, thread_id)
         by_id = {item.item_id: item for item in stored_items}
         final_item = by_id[f"item-{final_message_id}"]
         assert by_id[f"item-{source_message_id}"].projection_identity.model_call_id == (
@@ -779,7 +779,7 @@ async def test_final_before_persist_convergence_replays_without_typed_provenance
             {},
         )
         assert [
-            item.to_dict() for item in saver._storage.read_items(session_id, thread_id)
+            item.to_dict() for item in saver._storage.storage.read_items(session_id, thread_id)
         ] == canonical_before_replay
         replayed = saver.get_tuple(config)
         assert replayed is not None
@@ -810,7 +810,7 @@ async def test_final_before_persist_convergence_replays_without_typed_provenance
                 "messages": [*replayed_messages[:-1], conflicting],
             },
         }
-        jsonl_path = saver._storage.jsonl_path(session_id, "", thread_id=thread_id)
+        jsonl_path = saver._storage.storage.jsonl_path(session_id, "", thread_id=thread_id)
         jsonl_before_failure = jsonl_path.read_bytes()
 
         with pytest.raises(ValueError, match="typed provenance/extensions 不一致"):
@@ -823,7 +823,7 @@ async def test_final_before_persist_convergence_replays_without_typed_provenance
 
         assert jsonl_path.read_bytes() == jsonl_before_failure
         assert [
-            item.to_dict() for item in saver._storage.read_items(session_id, thread_id)
+            item.to_dict() for item in saver._storage.storage.read_items(session_id, thread_id)
         ] == canonical_before_replay
         latest_after_failure = saver.get_tuple(config)
         assert latest_after_failure is not None
@@ -841,7 +841,7 @@ async def test_persist_checkpoint_keeps_encrypted_response_reasoning(
     session_id = "ses_019bfa27d86b7e5e8bef9be8c2075691"
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
-    thread_id = saver._storage.main_thread_id(session_id)
+    thread_id = saver._storage.storage.main_thread_id(session_id)
     turn_id = "turn-encrypted-reasoning"
     admission = _accept_user_turn(
         saver,
@@ -975,7 +975,7 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_source(
     )
 
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
-    thread_id = saver._storage.main_thread_id(session_id)
+    thread_id = saver._storage.storage.main_thread_id(session_id)
     turn_id = "turn-reminder-assistant"
     user_admission = _accept_user_turn(
         saver,

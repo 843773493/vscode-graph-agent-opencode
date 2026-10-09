@@ -353,6 +353,10 @@ class ThreadCreationPublishMixin:
                 session_id=session_id, thread_id=child_thread_id,
                 initial_state=str(row["initial_state"]), creation_idempotency_key=idempotency_key,
             )
+            if row["collaboration_precondition_revision"] is not None:
+                self._freeze_collaboration_member_change_transaction(
+                    connection, str(row["delegation_id"]), "member.published",
+                )
             updated = self._fetch_thread_creation_record(connection, idempotency_key)
             if updated is None:
                 # 防御性兜底：同事务内更新后必然可见。
@@ -408,6 +412,9 @@ class ThreadCreationPublishMixin:
                     "SET state = 'cancelled', updated_at = ? "
                     "WHERE delegation_id = ? AND state = 'registering'",
                     (datetime.now(UTC).isoformat(), str(row["delegation_id"])),
+                )
+                self._freeze_collaboration_member_change_transaction(
+                    connection, str(row["delegation_id"]), "member.cancelled",
                 )
             updated = self._fetch_thread_creation_record(connection, idempotency_key)
             if updated is None:

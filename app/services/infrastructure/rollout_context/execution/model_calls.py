@@ -1,6 +1,6 @@
 """Rollout v2 Turn/execution/model-call 持久化 owner。
 
-这些 mixin 只依赖 RolloutStorage 提供的 SQLite、JSONL transaction 和 domain
+这些 mixin 只依赖 RolloutContextStore 提供的 SQLite、JSONL transaction 和 domain
 ports；它们不承担 LangChain/provider projection，也不读取 v1 数据。
 """
 
@@ -51,7 +51,7 @@ class RolloutModelCallsMixin:
     ) -> None:
         """登记 provider call；provider request id 只作审计，不进入 request hash。"""
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
         model_call_id = strict_text(model_call_id, field="model_call_id")
         execution_id = strict_text(execution_id, field="execution_id")
         provider = strict_text(provider, field="model_call.provider")
@@ -71,14 +71,14 @@ class RolloutModelCallsMixin:
             or attempt <= 0
         ):
             raise ValueError("model call identity/provider/attempt 非法")
-        with self._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(
+        with self._storage._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
+            self._storage.initialize(
                 session_id, checkpoint_ns, thread_id=owner_thread_id
             )
-            with self._connect(
+            with self._storage._connect(
                 owner_thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
-                self._require_v2_runtime(connection)
+                self._storage._require_v2_runtime(connection)
                 existing = connection.execute(
                     "SELECT execution_id, attempt, provider, provider_request_id, "
                     "retry_of_model_call_id, assembly_id, dispatch_state, outcome "
@@ -338,7 +338,7 @@ class RolloutModelCallsMixin:
     ) -> None:
         """原子更新已登记 model call 的控制 outcome。"""
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
         model_call_id = strict_text(model_call_id, field="model_call_id")
         outcome = strict_text(outcome, field="model_call.outcome")
         dispatch_state = strict_optional_text(
@@ -346,14 +346,14 @@ class RolloutModelCallsMixin:
         )
         if outcome not in {value.value for value in ControlOutcome}:
             raise ValueError(f"未知 model call outcome: {outcome}")
-        with self._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(
+        with self._storage._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
+            self._storage.initialize(
                 session_id, checkpoint_ns, thread_id=owner_thread_id
             )
-            with self._connect(
+            with self._storage._connect(
                 owner_thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
-                self._require_v2_runtime(connection)
+                self._storage._require_v2_runtime(connection)
                 row = connection.execute(
                     "SELECT outcome, dispatch_state FROM model_calls WHERE session_id = ? AND thread_id = ? AND model_call_id = ?",
                     (session_id, owner_thread_id, model_call_id),

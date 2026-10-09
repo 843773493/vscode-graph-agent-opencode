@@ -24,7 +24,7 @@ from app.services.infrastructure.rollout_context.migration.artifacts import (
 from app.services.infrastructure.rollout_context.migration.importer import (
     LegacyRolloutImporter,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.itemized_migration_helpers import (
     _accepted_records,
@@ -44,7 +44,7 @@ def migration_setup(request: pytest.FixtureRequest, session_bundle_factory) -> C
     workspace = prepare_migration_workspace(request)
     sessions = workspace / ".boxteam" / "sessions"
 
-    def setup(records: list[dict[str, object]] | None = None) -> RolloutStorage:
+    def setup(records: list[dict[str, object]] | None = None) -> RolloutContextStore:
         _write_v1_source(
             sessions,
             session_id=SOURCE_SESSION_ID,
@@ -62,9 +62,9 @@ def test_preexisting_target_is_preserved(
     migration_setup: Callable, existing: str
 ) -> None:
     storage = migration_setup()
-    target = storage.root(TARGET_SESSION_ID)
+    target = storage.storage.root(TARGET_SESSION_ID)
     if existing == "empty_v2":
-        storage.initialize(TARGET_SESSION_ID)
+        storage.storage.initialize(TARGET_SESSION_ID)
     else:
         target.mkdir()
         if existing == "partial":
@@ -73,15 +73,15 @@ def test_preexisting_target_is_preserved(
     if existing == "empty_directory":
         LegacyRolloutImporter(storage).import_v1(
             source_session_id=SOURCE_SESSION_ID,
-            source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+            source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
             target_session_id=TARGET_SESSION_ID,
-            target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+            target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
             checkpoint_ns="",
         )
         assert (
             len(
-                storage.read_items(
-                    TARGET_SESSION_ID, storage.main_thread_id(TARGET_SESSION_ID)
+                storage.storage.read_items(
+                    TARGET_SESSION_ID, storage.storage.main_thread_id(TARGET_SESSION_ID)
                 )
             )
             == 2
@@ -90,9 +90,9 @@ def test_preexisting_target_is_preserved(
         with pytest.raises(RuntimeError, match="空 rollout"):
             LegacyRolloutImporter(storage).import_v1(
                 source_session_id=SOURCE_SESSION_ID,
-                source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+                source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
                 target_session_id=TARGET_SESSION_ID,
-                target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+                target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
                 checkpoint_ns="",
             )
         assert artifact_manifest(target) == before
@@ -113,17 +113,17 @@ def test_symlink_path_is_rejected_without_touching_external_files(
     migration_setup: Callable, location: str
 ) -> None:
     storage = migration_setup()
-    external = storage.root(TARGET_SESSION_ID).parent / "external"
+    external = storage.storage.root(TARGET_SESSION_ID).parent / "external"
     external.mkdir()
     sentinel = external / "sentinel"
     sentinel.write_bytes(b"must not change")
     paths = {
-        "source_jsonl": storage.jsonl_path(SOURCE_SESSION_ID),
-        "source_index": storage.index_path(SOURCE_SESSION_ID),
-        "source_root": storage.root(SOURCE_SESSION_ID),
-        "target_root": storage.root(TARGET_SESSION_ID),
-        "audit_root": storage.root(TARGET_SESSION_ID).parent / "legacy-import",
-        "target_lock": storage.root(TARGET_SESSION_ID).parent / ".rollout.write.lock",
+        "source_jsonl": storage.storage.jsonl_path(SOURCE_SESSION_ID),
+        "source_index": storage.storage.index_path(SOURCE_SESSION_ID),
+        "source_root": storage.storage.root(SOURCE_SESSION_ID),
+        "target_root": storage.storage.root(TARGET_SESSION_ID),
+        "audit_root": storage.storage.root(TARGET_SESSION_ID).parent / "legacy-import",
+        "target_lock": storage.storage.root(TARGET_SESSION_ID).parent / ".rollout.write.lock",
     }
     path = paths[location]
     if path.exists():
@@ -133,9 +133,9 @@ def test_symlink_path_is_rejected_without_touching_external_files(
     with pytest.raises(RuntimeError, match="符号链接|symlink"):
         LegacyRolloutImporter(storage).import_v1(
             source_session_id=SOURCE_SESSION_ID,
-            source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+            source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
             target_session_id=TARGET_SESSION_ID,
-            target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+            target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
             checkpoint_ns="",
         )
     assert artifact_manifest(external) == before
@@ -144,18 +144,18 @@ def test_symlink_path_is_rejected_without_touching_external_files(
 def test_hardlink_source_is_rejected(migration_setup: Callable) -> None:
     storage = migration_setup()
     os.link(
-        storage.jsonl_path(SOURCE_SESSION_ID),
-        storage.root(SOURCE_SESSION_ID) / "linked.jsonl",
+        storage.storage.jsonl_path(SOURCE_SESSION_ID),
+        storage.storage.root(SOURCE_SESSION_ID) / "linked.jsonl",
     )
     with pytest.raises(RuntimeError, match="硬链接"):
         LegacyRolloutImporter(storage).import_v1(
             source_session_id=SOURCE_SESSION_ID,
-            source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+            source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
             target_session_id=TARGET_SESSION_ID,
-            target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+            target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
             checkpoint_ns="",
         )
-    assert not storage.root(TARGET_SESSION_ID).exists()
+    assert not storage.storage.root(TARGET_SESSION_ID).exists()
 
 
 @pytest.mark.parametrize("phase", ["during_build", "before_install", "after_install"])
@@ -165,7 +165,7 @@ def test_process_exit_preserves_originals_and_recovers_only_audit(
     phase: str,
 ) -> None:
     storage = migration_setup()
-    before = artifact_manifest(storage.root(SOURCE_SESSION_ID))
+    before = artifact_manifest(storage.storage.root(SOURCE_SESSION_ID))
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     script = """
 import os
@@ -187,7 +187,7 @@ def exit_during_build(*args, **kwargs):
 with patch.object(owner, method, exit_during_build if sys.argv[2] == "during_build" else crash):
     with fixture_catalog_scope():
         storage = _storage(sys.argv[1])
-        LegacyRolloutImporter(storage).import_v1(source_session_id=sys.argv[3], source_thread_id=storage.main_thread_id(sys.argv[3]), target_session_id=sys.argv[4], target_thread_id=storage.main_thread_id(sys.argv[4]), checkpoint_ns="")
+        LegacyRolloutImporter(storage).import_v1(source_session_id=sys.argv[3], source_thread_id=storage.storage.main_thread_id(sys.argv[3]), target_session_id=sys.argv[4], target_thread_id=storage.storage.main_thread_id(sys.argv[4]), checkpoint_ns="")
 """
     process = subprocess.run(
         [
@@ -202,7 +202,7 @@ with patch.object(owner, method, exit_during_build if sys.argv[2] == "during_bui
             "python",
             "-c",
             script,
-            str(storage.sessions_dir),
+            str(storage.storage.sessions_dir),
             phase,
             SOURCE_SESSION_ID,
             TARGET_SESSION_ID,
@@ -214,39 +214,39 @@ with patch.object(owner, method, exit_during_build if sys.argv[2] == "during_bui
     )
     (context.artifacts_dir / f"{phase}.log").write_text(process.stdout + process.stderr)
     assert process.returncode == 73, process.stderr
-    assert artifact_manifest(storage.root(SOURCE_SESSION_ID)) == before
+    assert artifact_manifest(storage.storage.root(SOURCE_SESSION_ID)) == before
     assert migration_audits(storage)[0]["status"] == (
         "running" if phase == "during_build" else "ready"
     )
     installed = phase == "after_install"
     target_before = (
-        artifact_manifest(storage.root(TARGET_SESSION_ID)) if installed else None
+        artifact_manifest(storage.storage.root(TARGET_SESSION_ID)) if installed else None
     )
-    recovered = LegacyRolloutImporter(_storage(storage.sessions_dir)).recover(
+    recovered = LegacyRolloutImporter(_storage(storage.storage.sessions_dir)).recover(
         target_session_id=TARGET_SESSION_ID,
-        target_thread_id=_storage(storage.sessions_dir).main_thread_id(
+        target_thread_id=_storage(storage.storage.sessions_dir).storage.main_thread_id(
             TARGET_SESSION_ID
         ),
         checkpoint_ns="",
     )
     assert recovered[0]["status"] == ("installed" if installed else "failed")
     if installed:
-        assert artifact_manifest(storage.root(TARGET_SESSION_ID)) == target_before
+        assert artifact_manifest(storage.storage.root(TARGET_SESSION_ID)) == target_before
         assert (
             len(
-                storage.read_items(
-                    TARGET_SESSION_ID, storage.main_thread_id(TARGET_SESSION_ID)
+                storage.storage.read_items(
+                    TARGET_SESSION_ID, storage.storage.main_thread_id(TARGET_SESSION_ID)
                 )
             )
             == 2
         )
     else:
-        assert not storage.root(TARGET_SESSION_ID).exists()
+        assert not storage.storage.root(TARGET_SESSION_ID).exists()
         LegacyRolloutImporter(storage).import_v1(
             source_session_id=SOURCE_SESSION_ID,
-            source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+            source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
             target_session_id=TARGET_SESSION_ID,
-            target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+            target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
             checkpoint_ns="",
         )
         assert [report["status"] for report in migration_audits(storage)].count(
@@ -280,7 +280,7 @@ def test_initial_audit_process_exit_does_not_block_fresh_import(
     entry: str,
 ) -> None:
     storage = migration_setup()
-    source_before = artifact_manifest(storage.root(SOURCE_SESSION_ID))
+    source_before = artifact_manifest(storage.storage.root(SOURCE_SESSION_ID))
     namespace = "迁移审计" if phase == "initial_report_utf8_truncated" else ""
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     script = """
@@ -316,7 +316,7 @@ else:
 with patch.object(owner, method, replacement):
     with fixture_catalog_scope():
         storage = _storage(sys.argv[1])
-        LegacyRolloutImporter(storage).import_v1(source_session_id=sys.argv[3], source_thread_id=storage.main_thread_id(sys.argv[3]), target_session_id=sys.argv[4], target_thread_id=storage.main_thread_id(sys.argv[4]), checkpoint_ns=sys.argv[5])
+        LegacyRolloutImporter(storage).import_v1(source_session_id=sys.argv[3], source_thread_id=storage.storage.main_thread_id(sys.argv[3]), target_session_id=sys.argv[4], target_thread_id=storage.storage.main_thread_id(sys.argv[4]), checkpoint_ns=sys.argv[5])
 """
     process = subprocess.run(
         [
@@ -331,7 +331,7 @@ with patch.object(owner, method, replacement):
             "python",
             "-c",
             script,
-            str(storage.sessions_dir),
+            str(storage.storage.sessions_dir),
             phase,
             SOURCE_SESSION_ID,
             TARGET_SESSION_ID,
@@ -346,7 +346,7 @@ with patch.object(owner, method, replacement):
         process.stdout + process.stderr
     )
     assert process.returncode == 73, process.stderr
-    audit_root = storage.root(TARGET_SESSION_ID).parent / "legacy-import"
+    audit_root = storage.storage.root(TARGET_SESSION_ID).parent / "legacy-import"
     (audit,) = audit_root.iterdir()
     assert not (audit / "report.json").exists()
     pending = list(audit.iterdir())
@@ -373,8 +373,8 @@ with patch.object(owner, method, replacement):
         (context.artifacts_dir / f"{phase}-{entry}.initial-next.txt").write_bytes(
             partial
         )
-    assert artifact_manifest(storage.root(SOURCE_SESSION_ID)) == source_before
-    assert not storage.root(TARGET_SESSION_ID).exists()
+    assert artifact_manifest(storage.storage.root(SOURCE_SESSION_ID)) == source_before
+    assert not storage.storage.root(TARGET_SESSION_ID).exists()
     restart_script = """
 import os
 import sys
@@ -388,7 +388,7 @@ from tests.integration.backend.sessions.itemized_migration_helpers import _stora
 with fixture_catalog_scope():
     storage = _storage(sys.argv[1])
     source, target = sys.argv[3:5]
-    original = artifact_manifest(storage.root(source))
+    original = artifact_manifest(storage.storage.root(source))
     namespace = sys.argv[8]
     if sys.argv[2] == "recover_exit_after_partial_unlink":
         unlink = Path.unlink
@@ -397,7 +397,7 @@ with fixture_catalog_scope():
             if path.name == Path(sys.argv[7]).name:
                 os._exit(74)
         with patch.object(Path, "unlink", crash):
-            LegacyRolloutImporter(storage).recover(target_session_id=target, target_thread_id=storage.main_thread_id(target), checkpoint_ns=namespace)
+            LegacyRolloutImporter(storage).recover(target_session_id=target, target_thread_id=storage.storage.main_thread_id(target), checkpoint_ns=namespace)
         raise AssertionError("recovery 未到达指定删除退出窗口")
     if sys.argv[2].startswith("recover_exit"):
         replace = os.replace
@@ -407,20 +407,20 @@ with fixture_catalog_scope():
                 os._exit(74)
             replace(source, target)
         with patch.object(importer.os, "replace", crash):
-            LegacyRolloutImporter(storage).recover(target_session_id=target, target_thread_id=storage.main_thread_id(target), checkpoint_ns=namespace)
+            LegacyRolloutImporter(storage).recover(target_session_id=target, target_thread_id=storage.storage.main_thread_id(target), checkpoint_ns=namespace)
         raise AssertionError("recovery 未到达指定退出窗口")
     if sys.argv[2] == "recover_then_import":
-        recovered = LegacyRolloutImporter(storage).recover(target_session_id=target, target_thread_id=storage.main_thread_id(target), checkpoint_ns=namespace)
+        recovered = LegacyRolloutImporter(storage).recover(target_session_id=target, target_thread_id=storage.storage.main_thread_id(target), checkpoint_ns=namespace)
         if sys.argv[5] == "initial_report_before_replace":
             assert len(recovered) == 1 and recovered[0]["status"] == "failed"
             assert recovered[0]["rollback"] == "uninstalled_staging_quarantined"
         else:
             assert recovered == [] and not Path(sys.argv[6]).exists()
-        assert artifact_manifest(storage.root(source)) == original
-        assert not storage.root(target).exists()
-        assert LegacyRolloutImporter(_storage(sys.argv[1])).recover(target_session_id=target, target_thread_id=storage.main_thread_id(target), checkpoint_ns=namespace) == []
+        assert artifact_manifest(storage.storage.root(source)) == original
+        assert not storage.storage.root(target).exists()
+        assert LegacyRolloutImporter(_storage(sys.argv[1])).recover(target_session_id=target, target_thread_id=storage.storage.main_thread_id(target), checkpoint_ns=namespace) == []
     storage = _storage(sys.argv[1])
-    LegacyRolloutImporter(storage).import_v1(source_session_id=source, source_thread_id=storage.main_thread_id(source), target_session_id=target, target_thread_id=storage.main_thread_id(target), checkpoint_ns=namespace)
+    LegacyRolloutImporter(storage).import_v1(source_session_id=source, source_thread_id=storage.storage.main_thread_id(source), target_session_id=target, target_thread_id=storage.storage.main_thread_id(target), checkpoint_ns=namespace)
 """
     restarted = subprocess.run(
         [
@@ -435,7 +435,7 @@ with fixture_catalog_scope():
             "python",
             "-c",
             restart_script,
-            str(storage.sessions_dir),
+            str(storage.storage.sessions_dir),
             entry,
             SOURCE_SESSION_ID,
             TARGET_SESSION_ID,
@@ -454,28 +454,28 @@ with fixture_catalog_scope():
     )
     if entry.startswith("recover_exit"):
         assert restarted.returncode == 74, restarted.stderr
-        assert artifact_manifest(storage.root(SOURCE_SESSION_ID)) == source_before
-        assert not storage.root(TARGET_SESSION_ID).exists()
-        fresh = _storage(storage.sessions_dir)
+        assert artifact_manifest(storage.storage.root(SOURCE_SESSION_ID)) == source_before
+        assert not storage.storage.root(TARGET_SESSION_ID).exists()
+        fresh = _storage(storage.storage.sessions_dir)
         recovered = LegacyRolloutImporter(fresh).recover(
             target_session_id=TARGET_SESSION_ID,
-            target_thread_id=fresh.main_thread_id(TARGET_SESSION_ID),
+            target_thread_id=fresh.storage.main_thread_id(TARGET_SESSION_ID),
             checkpoint_ns=namespace,
         )
         if entry == "recover_exit_after_partial_unlink":
             assert recovered == [] and not audit.exists()
         else:
             assert recovered[0]["status"] == "failed"
-        LegacyRolloutImporter(_storage(storage.sessions_dir)).import_v1(
+        LegacyRolloutImporter(_storage(storage.storage.sessions_dir)).import_v1(
             source_session_id=SOURCE_SESSION_ID,
-            source_thread_id=fresh.main_thread_id(SOURCE_SESSION_ID),
+            source_thread_id=fresh.storage.main_thread_id(SOURCE_SESSION_ID),
             target_session_id=TARGET_SESSION_ID,
-            target_thread_id=fresh.main_thread_id(TARGET_SESSION_ID),
+            target_thread_id=fresh.storage.main_thread_id(TARGET_SESSION_ID),
             checkpoint_ns=namespace,
         )
     else:
         assert restarted.returncode == 0, restarted.stderr
-    fresh = _storage(storage.sessions_dir)
+    fresh = _storage(storage.storage.sessions_dir)
     reports = migration_audits(fresh)
     assert [report["status"] for report in reports].count("installed") == 1
     assert [report["status"] for report in reports].count("failed") == (
@@ -487,10 +487,10 @@ with fixture_catalog_scope():
         assert {
             key: recovered_report[key] for key in initial_record if key != "status"
         } == {key: value for key, value in initial_record.items() if key != "status"}
-    assert artifact_manifest(storage.root(SOURCE_SESSION_ID)) == source_before
+    assert artifact_manifest(storage.storage.root(SOURCE_SESSION_ID)) == source_before
     assert (
         len(
-            fresh.read_items(TARGET_SESSION_ID, fresh.main_thread_id(TARGET_SESSION_ID))
+            fresh.storage.read_items(TARGET_SESSION_ID, fresh.storage.main_thread_id(TARGET_SESSION_ID))
         )
         == 2
     )
@@ -526,12 +526,12 @@ def test_unpublished_initial_audit_rejects_unknown_and_unreadable_artifacts(
         with pytest.raises(OSError, match="发布前中断"):
             LegacyRolloutImporter(storage).import_v1(
                 source_session_id=SOURCE_SESSION_ID,
-                source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+                source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
                 target_session_id=TARGET_SESSION_ID,
-                target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+                target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
                 checkpoint_ns="",
             )
-    audit_root = storage.root(TARGET_SESSION_ID).parent / "legacy-import"
+    audit_root = storage.storage.root(TARGET_SESSION_ID).parent / "legacy-import"
     (audit,) = audit_root.iterdir()
     (pending,) = audit.iterdir()
     sentinel = audit_root.parent / "audit-sentinel"
@@ -564,31 +564,31 @@ def test_unpublished_initial_audit_rejects_unknown_and_unreadable_artifacts(
 
         monkeypatch.setattr(migration_importer, "read_regular", read_failure)
         error_type, message = OSError, "读取首份审计失败"
-    source_before = artifact_manifest(storage.root(SOURCE_SESSION_ID))
+    source_before = artifact_manifest(storage.storage.root(SOURCE_SESSION_ID))
     names_before = sorted(path.name for path in audit.iterdir())
     pending_before = pending.read_bytes()
-    fresh = _storage(storage.sessions_dir)
+    fresh = _storage(storage.storage.sessions_dir)
     owner = LegacyRolloutImporter(fresh)
     with pytest.raises(error_type, match=message):
         owner.recover(
             target_session_id=TARGET_SESSION_ID,
-            target_thread_id=fresh.main_thread_id(TARGET_SESSION_ID),
+            target_thread_id=fresh.storage.main_thread_id(TARGET_SESSION_ID),
             checkpoint_ns="",
         )
     with pytest.raises(error_type, match=message):
         owner.import_v1(
             source_session_id=SOURCE_SESSION_ID,
-            source_thread_id=fresh.main_thread_id(SOURCE_SESSION_ID),
+            source_thread_id=fresh.storage.main_thread_id(SOURCE_SESSION_ID),
             target_session_id=TARGET_SESSION_ID,
-            target_thread_id=fresh.main_thread_id(TARGET_SESSION_ID),
+            target_thread_id=fresh.storage.main_thread_id(TARGET_SESSION_ID),
             checkpoint_ns="",
         )
     assert sorted(path.name for path in audit.iterdir()) == names_before
     assert pending.read_bytes() == pending_before
     assert pending.is_symlink() == (damage == "symlink")
     assert sentinel.read_bytes() == b"{"
-    assert artifact_manifest(storage.root(SOURCE_SESSION_ID)) == source_before
-    assert not storage.root(TARGET_SESSION_ID).exists()
+    assert artifact_manifest(storage.storage.root(SOURCE_SESSION_ID)) == source_before
+    assert not storage.storage.root(TARGET_SESSION_ID).exists()
 
 
 @pytest.mark.parametrize(
@@ -608,12 +608,12 @@ def test_published_audit_damage_is_rejected_without_changing_artifacts(
     storage = migration_setup()
     LegacyRolloutImporter(storage).import_v1(
         source_session_id=SOURCE_SESSION_ID,
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+        source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
         target_session_id=TARGET_SESSION_ID,
-        target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+        target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
         checkpoint_ns="",
     )
-    audit_root = storage.root(TARGET_SESSION_ID).parent / "legacy-import"
+    audit_root = storage.storage.root(TARGET_SESSION_ID).parent / "legacy-import"
     (audit,) = audit_root.iterdir()
     report_path = audit / "report.json"
     if damage == "invalid_json":
@@ -624,27 +624,27 @@ def test_published_audit_damage_is_rejected_without_changing_artifacts(
         report_path.write_text(json.dumps(report))
     else:
         report_path.unlink()
-    source_before = artifact_manifest(storage.root(SOURCE_SESSION_ID))
-    target_before = artifact_manifest(storage.root(TARGET_SESSION_ID))
+    source_before = artifact_manifest(storage.storage.root(SOURCE_SESSION_ID))
+    target_before = artifact_manifest(storage.storage.root(TARGET_SESSION_ID))
     audit_before = artifact_manifest(audit_root)
-    fresh = _storage(storage.sessions_dir)
+    fresh = _storage(storage.storage.sessions_dir)
     importer = LegacyRolloutImporter(fresh)
     with pytest.raises(error_type, match=message):
         importer.recover(
             target_session_id=TARGET_SESSION_ID,
-            target_thread_id=fresh.main_thread_id(TARGET_SESSION_ID),
+            target_thread_id=fresh.storage.main_thread_id(TARGET_SESSION_ID),
             checkpoint_ns="",
         )
     with pytest.raises(error_type, match=message):
         importer.import_v1(
             source_session_id=SOURCE_SESSION_ID,
-            source_thread_id=fresh.main_thread_id(SOURCE_SESSION_ID),
+            source_thread_id=fresh.storage.main_thread_id(SOURCE_SESSION_ID),
             target_session_id=TARGET_SESSION_ID,
-            target_thread_id=fresh.main_thread_id(TARGET_SESSION_ID),
+            target_thread_id=fresh.storage.main_thread_id(TARGET_SESSION_ID),
             checkpoint_ns="",
         )
-    assert artifact_manifest(storage.root(SOURCE_SESSION_ID)) == source_before
-    assert artifact_manifest(storage.root(TARGET_SESSION_ID)) == target_before
+    assert artifact_manifest(storage.storage.root(SOURCE_SESSION_ID)) == source_before
+    assert artifact_manifest(storage.storage.root(TARGET_SESSION_ID)) == target_before
     assert artifact_manifest(audit_root) == audit_before
 
 
@@ -662,19 +662,19 @@ def test_post_install_error_cannot_erase_published_history(
     with pytest.raises(OSError, match="post-rename"):
         LegacyRolloutImporter(storage).import_v1(
             source_session_id=SOURCE_SESSION_ID,
-            source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+            source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
             target_session_id=TARGET_SESSION_ID,
-            target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+            target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
             checkpoint_ns="",
         )
-    before = artifact_manifest(storage.root(TARGET_SESSION_ID))
+    before = artifact_manifest(storage.storage.root(TARGET_SESSION_ID))
     assert migration_audits(storage)[0]["status"] == "installed_audit_failed"
     LegacyRolloutImporter(storage).recover(
         target_session_id=TARGET_SESSION_ID,
-        target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+        target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
         checkpoint_ns="",
     )
-    assert artifact_manifest(storage.root(TARGET_SESSION_ID)) == before
+    assert artifact_manifest(storage.storage.root(TARGET_SESSION_ID)) == before
 
 
 def test_source_change_before_install_is_detected(
@@ -685,19 +685,19 @@ def test_source_change_before_install_is_detected(
 
     def mutate(*args: object) -> None:
         validate(*args)
-        with storage.jsonl_path(SOURCE_SESSION_ID).open("ab") as stream:
+        with storage.storage.jsonl_path(SOURCE_SESSION_ID).open("ab") as stream:
             stream.write(b"concurrent source change")
 
     monkeypatch.setattr(migration_importer, "validate_staging", mutate)
     with pytest.raises(RuntimeError, match="source-mismatch"):
         LegacyRolloutImporter(storage).import_v1(
             source_session_id=SOURCE_SESSION_ID,
-            source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+            source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
             target_session_id=TARGET_SESSION_ID,
-            target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+            target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
             checkpoint_ns="",
         )
-    assert not storage.root(TARGET_SESSION_ID).exists()
+    assert not storage.storage.root(TARGET_SESSION_ID).exists()
 
 
 @pytest.mark.parametrize("filename", ["index.sqlite", "rollout.jsonl"])
@@ -717,13 +717,13 @@ def test_recovery_rejects_replaced_artifact_symlink(
     with pytest.raises(OSError, match="post-rename"):
         LegacyRolloutImporter(storage).import_v1(
             source_session_id=SOURCE_SESSION_ID,
-            source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+            source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
             target_session_id=TARGET_SESSION_ID,
-            target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+            target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
             checkpoint_ns="",
         )
-    target_file = storage.root(TARGET_SESSION_ID) / filename
-    external = storage.root(TARGET_SESSION_ID).parent / f"external-{filename}"
+    target_file = storage.storage.root(TARGET_SESSION_ID) / filename
+    external = storage.storage.root(TARGET_SESSION_ID).parent / f"external-{filename}"
     target_file.rename(external)
     target_file.symlink_to(external)
     original = external.read_bytes()
@@ -731,7 +731,7 @@ def test_recovery_rejects_replaced_artifact_symlink(
     with pytest.raises(RuntimeError, match="符号链接"):
         LegacyRolloutImporter(storage).recover(
             target_session_id=TARGET_SESSION_ID,
-            target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+            target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
             checkpoint_ns="",
         )
     assert external.read_bytes() == original
@@ -747,9 +747,9 @@ def test_final_marker_cannot_hide_failed_message_state(
     storage = migration_setup(records)
     result = LegacyRolloutImporter(storage).import_v1(
         source_session_id=SOURCE_SESSION_ID,
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+        source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
         target_session_id=TARGET_SESSION_ID,
-        target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+        target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
         checkpoint_ns="",
     )
     assert result["migrated"][0]["status"] == "unknown"
@@ -764,20 +764,20 @@ def test_unmapped_metadata_is_protected_and_explicitly_lossy(
     secret = "source-only-private-metadata"
     records[0]["metadata"]["private_extension"] = secret
     storage = migration_setup(records)
-    original = artifact_manifest(storage.root(SOURCE_SESSION_ID))
+    original = artifact_manifest(storage.storage.root(SOURCE_SESSION_ID))
     result = LegacyRolloutImporter(storage).import_v1(
         source_session_id=SOURCE_SESSION_ID,
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+        source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
         target_session_id=TARGET_SESSION_ID,
-        target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+        target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
         checkpoint_ns="",
     )
     assert result["lossless"] is False
     assert "metadata.private_extension" in json.dumps(result["loss"])
     assert secret not in json.dumps(result)
-    assert secret.encode() not in storage.jsonl_path(TARGET_SESSION_ID).read_bytes()
-    assert secret.encode() not in storage.index_path(TARGET_SESSION_ID).read_bytes()
-    assert artifact_manifest(storage.root(SOURCE_SESSION_ID)) == original
+    assert secret.encode() not in storage.storage.jsonl_path(TARGET_SESSION_ID).read_bytes()
+    assert secret.encode() not in storage.storage.index_path(TARGET_SESSION_ID).read_bytes()
+    assert artifact_manifest(storage.storage.root(SOURCE_SESSION_ID)) == original
 
 
 @pytest.mark.parametrize(
@@ -805,17 +805,17 @@ def test_strict_manifest_envelope_coordinates(
         records[0]["record_type"] = "item"
     storage = migration_setup(records)
     if corruption in {"overlap", "gap"}:
-        with sqlite3.connect(storage.index_path(SOURCE_SESSION_ID)) as connection:
+        with sqlite3.connect(storage.storage.index_path(SOURCE_SESSION_ID)) as connection:
             connection.execute(
                 "UPDATE messages SET jsonl_offset=jsonl_offset+? WHERE message_sequence=2",
                 (-1 if corruption == "overlap" else 1,),
             )
     if corruption == "trailing_committed":
-        with sqlite3.connect(storage.index_path(SOURCE_SESSION_ID)) as connection:
+        with sqlite3.connect(storage.storage.index_path(SOURCE_SESSION_ID)) as connection:
             connection.execute("DELETE FROM messages WHERE message_sequence=2")
     if corruption in {"duplicate_key", "unfinished_line"}:
         lines = (
-            storage.jsonl_path(SOURCE_SESSION_ID).read_bytes().splitlines(keepends=True)
+            storage.storage.jsonl_path(SOURCE_SESSION_ID).read_bytes().splitlines(keepends=True)
         )
         lines[0] = (
             lines[0].replace(
@@ -824,8 +824,8 @@ def test_strict_manifest_envelope_coordinates(
             if corruption == "duplicate_key"
             else lines[0].rstrip(b"\n")
         )
-        storage.jsonl_path(SOURCE_SESSION_ID).write_bytes(b"".join(lines))
-        with sqlite3.connect(storage.index_path(SOURCE_SESSION_ID)) as connection:
+        storage.storage.jsonl_path(SOURCE_SESSION_ID).write_bytes(b"".join(lines))
+        with sqlite3.connect(storage.storage.index_path(SOURCE_SESSION_ID)) as connection:
             connection.execute(
                 "UPDATE messages SET jsonl_length=? WHERE message_sequence=1",
                 (len(lines[0]),),
@@ -838,17 +838,17 @@ def test_strict_manifest_envelope_coordinates(
                 "UPDATE database_meta SET committed_jsonl_offset=?",
                 (sum(map(len, lines)),),
             )
-    before = artifact_manifest(storage.root(SOURCE_SESSION_ID))
+    before = artifact_manifest(storage.storage.root(SOURCE_SESSION_ID))
     with pytest.raises((FormatDispatchError, RuntimeError)):
         LegacyRolloutImporter(storage).import_v1(
             source_session_id=SOURCE_SESSION_ID,
-            source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+            source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
             target_session_id=TARGET_SESSION_ID,
-            target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+            target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
             checkpoint_ns="",
         )
-    assert artifact_manifest(storage.root(SOURCE_SESSION_ID)) == before
-    assert not storage.root(TARGET_SESSION_ID).exists()
+    assert artifact_manifest(storage.storage.root(SOURCE_SESSION_ID)) == before
+    assert not storage.storage.root(TARGET_SESSION_ID).exists()
 
 
 def test_multiple_final_markers_converge_unknown(migration_setup: Callable) -> None:
@@ -859,9 +859,9 @@ def test_multiple_final_markers_converge_unknown(migration_setup: Callable) -> N
     storage = migration_setup([*records, extra])
     result = LegacyRolloutImporter(storage).import_v1(
         source_session_id=SOURCE_SESSION_ID,
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+        source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
         target_session_id=TARGET_SESSION_ID,
-        target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+        target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
         checkpoint_ns="",
     )
     assert result["migrated"][0]["status"] == "unknown"
@@ -886,24 +886,24 @@ def test_legacy_hashes_and_source_coordinates_are_frozen(
     seed = sha256_jcs({**coordinate, "legacy_message_hash": message_hash})
     candidate = LegacyRolloutImporter(storage).read_report(
         source_session_id=SOURCE_SESSION_ID,
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+        source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
         checkpoint_ns="",
     )["candidates"][0]
     assert candidate["candidate_key"] == f"legacy-missing-turn:{message_hash}"
     assert candidate["legacy_seed_hash"] == seed
     first = LegacyRolloutImporter(storage).import_v1(
         source_session_id=SOURCE_SESSION_ID,
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+        source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
         target_session_id=TARGET_SESSION_ID,
-        target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+        target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
         checkpoint_ns="",
     )["migrated"][0]
-    session_bundle_factory(storage.sessions_dir, OTHER_TARGET_SESSION_ID)
+    session_bundle_factory(storage.storage.sessions_dir, OTHER_TARGET_SESSION_ID)
     second = LegacyRolloutImporter(storage).import_v1(
         source_session_id=SOURCE_SESSION_ID,
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+        source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
         target_session_id=OTHER_TARGET_SESSION_ID,
-        target_thread_id=storage.main_thread_id(OTHER_TARGET_SESSION_ID),
+        target_thread_id=storage.storage.main_thread_id(OTHER_TARGET_SESSION_ID),
         checkpoint_ns="",
     )["migrated"][0]
     assert first["source_accepted_ingress_id"] == f"legacy-ingress:{seed}"
@@ -916,8 +916,8 @@ def test_legacy_hashes_and_source_coordinates_are_frozen(
         "target_initial_execution_id",
     ):
         assert first[field] != second[field]
-    root = storage.read_items(
-        TARGET_SESSION_ID, storage.main_thread_id(TARGET_SESSION_ID)
+    root = storage.storage.read_items(
+        TARGET_SESSION_ID, storage.storage.main_thread_id(TARGET_SESSION_ID)
     )[0]
     assert (
         next(
@@ -967,30 +967,30 @@ def test_raw_quarantine_is_complete_private_and_reported(
     else:
         raw["message"]["data"]["additional_kwargs"] = {"protected_prompt": secret}
     storage = migration_setup(records)
-    original = storage.jsonl_path(SOURCE_SESSION_ID).read_bytes()
+    original = storage.storage.jsonl_path(SOURCE_SESSION_ID).read_bytes()
     result = LegacyRolloutImporter(storage).import_v1(
         source_session_id=SOURCE_SESSION_ID,
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+        source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
         target_session_id=TARGET_SESSION_ID,
-        target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+        target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
         checkpoint_ns="",
     )
     snapshot = (
-        storage.root(TARGET_SESSION_ID).parent
+        storage.storage.root(TARGET_SESSION_ID).parent
         / result["raw_artifact_ref"]
         / "rollout.jsonl"
     )
     assert snapshot.read_bytes() == original
     assert snapshot.stat().st_mode & 0o077 == 0
     assert secret not in json.dumps(result)
-    assert secret.encode() not in storage.jsonl_path(TARGET_SESSION_ID).read_bytes()
-    assert secret.encode() not in storage.index_path(TARGET_SESSION_ID).read_bytes()
+    assert secret.encode() not in storage.storage.jsonl_path(TARGET_SESSION_ID).read_bytes()
+    assert secret.encode() not in storage.storage.index_path(TARGET_SESSION_ID).read_bytes()
     if kind not in {"request_context", "provider_metadata"}:
         assert result["rejected"][0]["candidate_status"] == "legacy_unsupported_role"
         assert len(result["rejected"][0]["records"]) == 2
         assert (
-            storage.read_items(
-                TARGET_SESSION_ID, storage.main_thread_id(TARGET_SESSION_ID)
+            storage.storage.read_items(
+                TARGET_SESSION_ID, storage.storage.main_thread_id(TARGET_SESSION_ID)
             )
             == []
         )
@@ -1004,8 +1004,8 @@ def test_raw_quarantine_is_complete_private_and_reported(
         )
         assert (
             len(
-                storage.read_items(
-                    TARGET_SESSION_ID, storage.main_thread_id(TARGET_SESSION_ID)
+                storage.storage.read_items(
+                    TARGET_SESSION_ID, storage.storage.main_thread_id(TARGET_SESSION_ID)
                 )
             )
             == 1
@@ -1016,22 +1016,22 @@ def test_full_copy_lossless_gate_preserves_overlay_raw_and_refuses_install(
     migration_setup: Callable,
 ) -> None:
     storage = migration_setup()
-    with sqlite3.connect(storage.index_path(SOURCE_SESSION_ID)) as connection:
+    with sqlite3.connect(storage.storage.index_path(SOURCE_SESSION_ID)) as connection:
         connection.executescript(
             "CREATE TABLE source_overlays(base TEXT, delta TEXT); INSERT INTO source_overlays VALUES ('old base','new delta');"
         )
-    original = storage.index_path(SOURCE_SESSION_ID).read_bytes()
+    original = storage.storage.index_path(SOURCE_SESSION_ID).read_bytes()
     with pytest.raises(RuntimeError, match="v1_full_copy_not_lossless"):
         LegacyRolloutImporter(storage).import_v1(
             source_session_id=SOURCE_SESSION_ID,
-            source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+            source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
             target_session_id=TARGET_SESSION_ID,
-            target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+            target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
             checkpoint_ns="",
             require_lossless=True,
         )
-    assert not storage.root(TARGET_SESSION_ID).exists()
-    assert storage.index_path(SOURCE_SESSION_ID).read_bytes() == original
+    assert not storage.storage.root(TARGET_SESSION_ID).exists()
+    assert storage.storage.index_path(SOURCE_SESSION_ID).read_bytes() == original
     report = migration_audits(storage)[0]
     assert report["result"]["lossless"] is False
     assert report["result"]["loss"][0]["tables"] == {"source_overlays": 1}
@@ -1047,27 +1047,27 @@ def test_corrupt_staging_is_not_initialized_as_recovered_target(
     validate = migration_importer.validate_staging
 
     def corrupt(
-        staged: RolloutStorage, target: str, thread: str, namespace: str
+        staged: RolloutContextStore, target: str, thread: str, namespace: str
     ) -> None:
         queries = {
             "offset": "UPDATE database_meta SET committed_jsonl_offset=0",
             "final": "UPDATE turn_records SET final_item_id=root_input_item_id",
             "view": "DELETE FROM context_view_items",
         }
-        with sqlite3.connect(staged.index_path(target)) as connection:
+        with sqlite3.connect(staged.storage.index_path(target)) as connection:
             connection.execute(queries[corruption])
         validate(staged, target, thread, namespace)
 
     monkeypatch.setattr(migration_importer, "validate_staging", corrupt)
-    original = artifact_manifest(storage.root(SOURCE_SESSION_ID))
+    original = artifact_manifest(storage.storage.root(SOURCE_SESSION_ID))
     with pytest.raises(RuntimeError):
         LegacyRolloutImporter(storage).import_v1(
             source_session_id=SOURCE_SESSION_ID,
-            source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+            source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
             target_session_id=TARGET_SESSION_ID,
-            target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+            target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
             checkpoint_ns="",
         )
-    assert not storage.root(TARGET_SESSION_ID).exists()
-    assert artifact_manifest(storage.root(SOURCE_SESSION_ID)) == original
+    assert not storage.storage.root(TARGET_SESSION_ID).exists()
+    assert artifact_manifest(storage.storage.root(SOURCE_SESSION_ID)) == original
     assert migration_audits(storage)[0]["status"] == "failed"

@@ -10,9 +10,10 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 from uuid import uuid4
 
 from app.core.sqlite_state import utc_now_text as _now
@@ -30,9 +31,18 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
 )
 
-CanonicalItemWriter = Callable[
-    [sqlite3.Connection, CanonicalItemRecord, int, int, int, str], None
-]
+
+class CanonicalItemWriter(Protocol):
+    def __call__(
+        self,
+        connection: sqlite3.Connection,
+        item: CanonicalItemRecord,
+        *,
+        commit_id: int,
+        jsonl_offset: int,
+        jsonl_length: int,
+        created_at: str,
+    ) -> None: ...
 
 
 def validate_commit_contract(
@@ -359,6 +369,10 @@ class V2ItemCommitCoordinator:
         subject_id: str | None = None,
         idempotency_key: str | None = None,
         begin_transaction: bool = True,
+        transaction_id: str | None = None,
+        timestamp: str | None = None,
+        first_message_sequence: int | None = None,
+        last_message_sequence: int | None = None,
     ) -> tuple[int, int]:
         if commit_mode is None:
             commit_mode = (
@@ -372,6 +386,18 @@ class V2ItemCommitCoordinator:
             item_count=len(items),
             outcome=outcome,
         )
+        if first_message_sequence is not None:
+            _non_negative_int(first_message_sequence, field="storage_commits.first_message_sequence")
+            if last_message_sequence is None or _non_negative_int(
+                last_message_sequence, field="storage_commits.last_message_sequence"
+            ) < first_message_sequence:
+                raise ValueError("storage commit message sequence 范围非法")
+        elif last_message_sequence is not None:
+            raise ValueError("storage commit 缺少 first_message_sequence")
+        if transaction_id is not None:
+            _required_text(transaction_id, field="storage_commits.transaction_id")
+        if timestamp is not None:
+            _required_text(timestamp, field="storage_commits.created_at")
         if metadata is None:
             commit_metadata: dict[str, object] = {}
         elif isinstance(metadata, Mapping):
@@ -483,16 +509,18 @@ class V2ItemCommitCoordinator:
                         stream.write(raw)
                     stream.flush()
                     os.fsync(stream.fileno())
-            timestamp = _now()
+            timestamp = _now() if timestamp is None else timestamp
             commit_cursor = connection.execute(
                 "INSERT INTO storage_commits(transaction_id, first_message_sequence, "
                 "last_message_sequence, jsonl_start_offset, jsonl_end_offset, "
                 "jsonl_fsync_at, status, created_at, commit_kind, commit_mode, "
                 "jsonl_offset_before, jsonl_offset_after, jsonl_record_count, "
                 "subject_id, idempotency_key, outcome, metadata_json) VALUES "
-                "(?, NULL, NULL, ?, ?, ?, 'prepared', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    uuid4().hex,
+                    uuid4().hex if transaction_id is None else transaction_id,
+                    first_message_sequence,
+                    last_message_sequence,
                     current_offset,
                     offset,
                     timestamp if prepared else None,
@@ -553,6 +581,7 @@ class V2ItemCommitCoordinator:
 
 
 __all__ = [
+    "CanonicalItemWriter",
     "CommittedStorageCommit",
     "V2ItemCommitCoordinator",
     "load_committed_idempotency_commit",

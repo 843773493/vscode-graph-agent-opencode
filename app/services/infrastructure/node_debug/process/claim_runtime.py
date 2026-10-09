@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import urlparse
 
+from app.core.thread_residency_contracts import ResidencyBlocker
 from app.schemas.internal_v2.node_debug import (
     NodeDebugLaunchClaimDTO,
 )
@@ -29,7 +30,6 @@ from app.services.infrastructure.node_debug.session.session_store import (
 )
 from app.services.infrastructure.node_debug.session.thread_owner import NodeDebugOwner
 from app.services.orchestration.thread_residency import (
-    ResidencyBlocker,
     ThreadResidencyTracker,
 )
 

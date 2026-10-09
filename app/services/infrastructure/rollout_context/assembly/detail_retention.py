@@ -7,12 +7,15 @@ from collections.abc import Iterable
 from datetime import datetime
 
 from app.domain.itemized.identity.detail_ref import DetailRef
+from app.services.infrastructure.rollout_context.activation.schema import (
+    require_resource_activation_schema,
+)
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
     detail_ref_key,
 )
-from app.services.infrastructure.rollout_context.storage.resource_activation_schema import (
-    require_resource_activation_schema,
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutNotMaterializedError,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import strict_text
 
@@ -90,18 +93,18 @@ class DetailRetentionMixin:
         checkpoint_ns = strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
         if not isinstance(expired_before, datetime):
             raise TypeError("expired_before 必须是 datetime")
-        self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-        with self._connect(
-            thread_id, checkpoint_ns, session_id=session_id, read_only=True
-        ) as connection:
-            self._require_v2_runtime(connection)
-            rows = connection.execute(
-                "SELECT detail_ref, assembly_id FROM context_plan_details "
-                "WHERE session_id = ? AND thread_id = ? AND checkpoint_ns = ? "
-                "AND status IN ('available','unavailable') "
-                "AND expires_at IS NOT NULL AND expires_at < ? ORDER BY detail_ref",
-                (session_id, thread_id, checkpoint_ns, expired_before.isoformat()),
-            ).fetchall()
+        try:
+            with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
+                self._storage._require_v2_runtime(connection)
+                rows = connection.execute(
+                    "SELECT detail_ref, assembly_id FROM context_plan_details "
+                    "WHERE session_id = ? AND thread_id = ? AND checkpoint_ns = ? "
+                    "AND status IN ('available','unavailable') "
+                    "AND expires_at IS NOT NULL AND expires_at < ? ORDER BY detail_ref",
+                    (session_id, thread_id, checkpoint_ns, expired_before.isoformat()),
+                ).fetchall()
+        except RolloutNotMaterializedError:
+            return ()
         result: list[tuple[DetailRef, str]] = []
         for key, assembly in rows:
             ref = detail_ref_from_key(key)
@@ -125,14 +128,14 @@ class DetailRetentionMixin:
         key = detail_ref_key(detail_ref)
         detail_ref.require_owner(session_id, thread_id, assembly_id)
         checkpoint_ns = strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
-        self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-        with self._connect(
-            thread_id, checkpoint_ns, session_id=session_id, read_only=True
-        ) as connection:
-            self._require_v2_runtime(connection)
-            return _referenced(
-                connection, session_id, thread_id, checkpoint_ns, key, assembly_id
-            )
+        try:
+            with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
+                self._storage._require_v2_runtime(connection)
+                return _referenced(
+                    connection, session_id, thread_id, checkpoint_ns, key, assembly_id
+                )
+        except RolloutNotMaterializedError:
+            return False
 
     def mark_context_plan_details_unavailable(
         self,
@@ -153,10 +156,10 @@ class DetailRetentionMixin:
         refs = tuple(dict.fromkeys(keys))
         if not refs:
             return
-        with self._lock(thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-            with self._connect(thread_id, checkpoint_ns, session_id=session_id) as connection:
-                self._require_v2_runtime(connection)
+        with self._storage._lock(thread_id, checkpoint_ns, session_id=session_id):
+            self._storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._storage._connect(thread_id, checkpoint_ns, session_id=session_id) as connection:
+                self._storage._require_v2_runtime(connection)
                 # 候选扫描和实际 tombstone 之间可能发生 seal；在同一个写锁内
                 # 重新检查，不能依赖 GC 调用方之前拿到的过期候选快照。
                 protected = tuple(

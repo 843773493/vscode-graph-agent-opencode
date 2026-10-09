@@ -137,6 +137,58 @@
   background: color-mix(in srgb, var(--bt-status-success) 18%, transparent);
 }
 
+.child-thread-status-completed {
+  color: var(--bt-status-success);
+}
+
+.child-thread-runtime,
+.child-thread-report-link {
+  margin: 4px 8px;
+  color: var(--bt-text-muted);
+  font-size: 11px;
+}
+
+.child-thread-report-link,
+.child-thread-conversation button {
+  border: var(--bt-surface-border);
+  border-radius: 4px;
+  background: var(--bt-input-background);
+  color: var(--bt-text-primary);
+  cursor: pointer;
+}
+
+.child-thread-conversation {
+  margin: 8px;
+  padding: 8px;
+  border: var(--bt-surface-border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.child-thread-conversation-header,
+.child-thread-conversation-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.child-thread-conversation-header strong { overflow-wrap: anywhere; }
+.child-thread-conversation-history { max-height: 420px; overflow: auto; }
+.child-thread-turn,
+.child-thread-report { padding: 8px 0; border-bottom: var(--bt-surface-border); }
+.child-thread-user { margin-bottom: 10px; }
+.child-thread-error { color: var(--bt-status-danger); overflow-wrap: anywhere; }
+.child-thread-conversation form { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.child-thread-conversation textarea {
+  box-sizing: border-box;
+  width: 100%;
+  resize: vertical;
+  background: var(--bt-input-background);
+  color: var(--bt-text-primary);
+  border: var(--bt-surface-border);
+}
+
 .child-thread-status-failed {
   color: var(--bt-status-danger);
   background: color-mix(in srgb, var(--bt-status-danger) 18%, transparent);

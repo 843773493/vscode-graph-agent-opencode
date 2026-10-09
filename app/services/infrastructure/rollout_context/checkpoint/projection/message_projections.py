@@ -107,16 +107,16 @@ class RolloutMessageProjectionMixin:
                 "canonical item 与 item_catalog identity 不一致，拒绝建立 message projection: "
                 f"{item.item_id}"
             )
-        with self.jsonl_path(
+        with self._storage.jsonl_path(
             session_id,
             checkpoint_ns,
             thread_id=thread_id,
         ).open("rb") as stream:
             items = read_message_group(
                 connection, stream, offset=catalog_offset, length=catalog_length,
-                read_item=self._read_v2_item_at,
+                read_item=self._storage._read_v2_item_at,
             )
-        message = self._codec().project_message(items)
+        message = self._storage._codec().project_message(items)
         raw_data = message.get("data")
         if not isinstance(raw_data, Mapping):
             raise TypeError(f"message projection data 必须是 object: {item.item_id}")
@@ -217,7 +217,7 @@ class RolloutMessageProjectionMixin:
         value: Mapping[str, object],
         timestamp: str,
     ) -> None:
-        codec = self._codec()
+        codec = self._storage._codec()
         visible = codec.visible_text(value)
         data = value.get("data")
         calls = codec.tool_calls(value)

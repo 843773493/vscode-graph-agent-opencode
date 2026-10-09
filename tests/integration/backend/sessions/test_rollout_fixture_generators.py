@@ -66,8 +66,9 @@ def test_provider_stub_generator_writes_real_canonical_owner_and_admissions(
     generator.generate(workspace, end_turn=2, tool_every=0)
     manifest = json.loads((bundle.directory / "session.json").read_text(encoding="utf-8"))
     assert manifest["workspace_id"] == bundle.node.workspace_id
-    assert manifest["current_provider_id"] == "provider-b"
+    assert set(manifest) == {"session_id", "workspace_id", "created_at"}
     resolver = get_session_path_resolver(workspace / ".boxteam" / "sessions")
+    assert resolver.catalog_store.get_node(bundle.session_id).current_provider_id == "provider-b"
     rollout = resolver.resolve_thread_node(bundle.session_id, bundle.main_thread_id) / "rollout"
     assert rollout.is_dir()
     with sqlite3.connect(rollout / "index.sqlite") as connection:

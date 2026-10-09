@@ -25,7 +25,7 @@ class ContextPlanRegistryOwnerMixin:
         self._find_runtime_context_plan(
             session_id, plan.thread_id, plan.plan_id, checkpoint_ns
         )
-        registered = self._storage.create_context_plan(
+        registered = self._storage.assemblies.create_context_plan(
             plan, checkpoint_ns=checkpoint_ns
         )
         runtime_draft(registered)
@@ -51,7 +51,7 @@ class ContextPlanRegistryOwnerMixin:
                 checkpoint_ns=checkpoint_ns,
             )
         )
-        registered = self._storage.revise_context_plan(
+        registered = self._storage.assemblies.revise_context_plan(
             plan,
             expected_revision=expected_revision,
             checkpoint_ns=checkpoint_ns,
@@ -68,7 +68,7 @@ class ContextPlanRegistryOwnerMixin:
         plan_id: str,
         checkpoint_ns: str = "",
     ) -> ContextPlanRegistration:
-        return self._storage.get_context_plan_registration(
+        return self._storage.assemblies.get_context_plan_registration(
             session_id,
             thread_id=thread_id,
             plan_id=plan_id,

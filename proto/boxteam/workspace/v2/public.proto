@@ -126,6 +126,23 @@ message ChildThreadSummaryDTO {
   optional string collaboration_state = 7;
   optional string admission_state = 8;
   string status = 9;
+  optional ChildThreadRuntimeDTO runtime = 10;
+  optional string report_execution_id = 11;
+  optional string report_status = 12;
+}
+
+message ChildThreadBlockerDTO {
+  string kind = 1;
+  string reason = 2;
+}
+
+message ChildThreadRuntimeDTO {
+  string residency = 1;
+  bool cold_eligible = 2;
+  string execution_state = 3;
+  optional google.protobuf.Timestamp last_activity_at = 4;
+  optional google.protobuf.Timestamp idle_deadline = 5;
+  repeated ChildThreadBlockerDTO blockers = 6;
 }
 
 message CursorPage {
@@ -1775,6 +1792,8 @@ message TurnHistoryLoadRequest {
   optional int64 before_turns = 6;
   optional int64 after_turns = 7;
   repeated string include = 8;
+  optional string execution_id = 9;
+  repeated string tool_call_ids = 10;
 }
 
 message TurnHistoryPageDTO {
@@ -1788,6 +1807,7 @@ message TurnHistoryPageDTO {
   int64 projection_epoch = 8;
   repeated TurnSummaryDTO summaries = 9;
   repeated InternalExecutionHistoryDTO internal_executions = 10;
+  optional string thread_id = 11;
 }
 
 message InternalExecutionHistoryDTO {
@@ -1968,6 +1988,10 @@ message WorkspaceDefaultProviderUpdateRequest {
 message WorkspaceFileChangeBatchDTO {
   repeated WorkspaceFileChangeDTO changes = 1;
   bool overflow = 2;
+  repeated WorkspaceDirectoryRevisionDTO directories = 3;
+  int64 event_id = 4;
+  repeated string invalidated_roots = 5;
+  repeated WorkspaceFileListDTO snapshots = 6;
 }
 
 message WorkspaceFileChangeDTO {
@@ -1989,11 +2013,13 @@ message WorkspaceFileContentDTO {
 message WorkspaceFileCopyRequest {
   string source_path = 1;
   optional string source_scope = 2;
+  WorkspaceFileMutationIntentDTO intent = 3;
 }
 
 message WorkspaceFileCreateRequest {
   string name = 1;
   string kind = 2;
+  WorkspaceFileMutationIntentDTO intent = 3;
 }
 
 message WorkspaceFileListDTO {
@@ -2003,6 +2029,8 @@ message WorkspaceFileListDTO {
   optional bool truncated = 4;
   optional int64 limit = 5;
   optional string next_cursor = 6;
+  WorkspaceDirectoryKeyDTO directory_key = 7;
+  int64 directory_revision = 8;
 }
 
 message WorkspaceFileNodeDTO {
@@ -2016,6 +2044,61 @@ message WorkspaceFileNodeDTO {
 
 message WorkspaceFilePasteRequest {
   repeated string source_paths = 1;
+  WorkspaceFileMutationIntentDTO intent = 2;
+}
+
+message WorkspaceDirectoryKeyDTO {
+  string workspace_id = 1;
+  string scope = 2;
+  string root = 3;
+  string path = 4;
+}
+
+message WorkspaceDirectoryRevisionDTO {
+  WorkspaceDirectoryKeyDTO directory_key = 1;
+  int64 directory_revision = 2;
+  bool exists = 3;
+}
+
+message WorkspaceFileMutationIntentDTO {
+  string client_operation_id = 1;
+  int64 client_sequence = 2;
+  optional int64 expected_directory_revision = 3;
+  repeated string depends_on = 4;
+  optional string created_by_operation_id = 5;
+  string relative_child_path = 6;
+  optional string directory_revision_from_operation_id = 7;
+  optional string client_ref = 8;
+  WorkspaceDirectoryKeyDTO directory_key = 9;
+}
+
+message WorkspaceFileOperationItemDTO {
+  string path = 1;
+  string kind = 2;
+  string state = 3;
+  optional string error = 4;
+}
+
+message WorkspaceFileOperationReceiptDTO {
+  string operation_id = 1;
+  int64 client_sequence = 2;
+  int64 queue_seq = 3;
+  string kind = 4;
+  string state = 5;
+  int64 receipt_revision = 6;
+  string effect = 7;
+  repeated WorkspaceFileOperationItemDTO items = 8;
+  repeated WorkspaceDirectoryRevisionDTO directories = 9;
+  optional string created_path = 10;
+  optional string error_code = 11;
+  optional string error_detail = 12;
+  repeated WorkspaceFileListDTO snapshots = 13;
+}
+
+message WorkspaceFileOperationStatusDTO {
+  repeated WorkspaceFileOperationReceiptDTO operations = 1;
+  string worker_state = 2;
+  optional string worker_error = 3;
 }
 
 message WorkspaceFileRevealDTO {
@@ -2029,6 +2112,7 @@ message WorkspaceFileUpdateRequest {
 
 message WorkspaceFileWatchRequest {
   repeated string paths = 1;
+  optional int64 after_event_id = 2;
 }
 
 message WorkspaceIndexRebuildDTO {

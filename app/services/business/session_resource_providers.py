@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.abstractions.session_resources import (
     BackgroundTaskRegistryProtocol,
 )
-from app.core.background_task_registry import BackgroundTaskHandle
+from app.core.background_task_contracts import BackgroundTaskHandle
 from app.schemas.internal_v2.session_resource import (
     SessionResourceAction,
     SessionResourceControlResultDTO,
@@ -60,13 +60,16 @@ class BackgroundTaskResourceProvider:
         action: SessionResourceAction,
         operation_id: str,
     ) -> SessionResourceControlResultDTO:
-        if action == "cancel":
+        if action in {"cancel", "reconcile"}:
             existing_handle = self._task_registry.get_handle(session_id, resource_id)
             if existing_handle is None:
                 raise ValueError(
                     f"后台任务不存在: session_id={session_id}, task_id={resource_id}"
                 )
-            handle = await self._task_registry.cancel(session_id, resource_id)
+            handle = await (
+                self._task_registry.reconcile(session_id, resource_id) if action == "reconcile"
+                else self._task_registry.cancel(session_id, resource_id)
+            )
             return SessionResourceControlResultDTO(
                 session_id=session_id,
                 resource_id=resource_id,

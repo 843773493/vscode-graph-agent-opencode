@@ -1,20 +1,21 @@
 # 目录用途
 
-存放同一 Session 内团队任务面板的持久化实现，负责所属 Session 节点 `teams/` 下任务快照和事件日志的原子读写。
+存放同一Session团队任务面板的存储访问及冻结状态纯投影。board、task、event、membership和fanout事实统一由SessionControlStore的collaboration ledger持久化；`activation.py`从已冻结团队正文生成membership/tasks两个facet。
 
 # 可修改内容
 
-- 团队快照、事件日志的文件存储。
-- 经权威 Session catalog resolver 定位的团队存储路径校验和序列化。
+- 团队存储访问、序列化以及冻结membership/tasks的纯投影。
+- 同一Session ledger的读取适配与对应测试，不另持JSON快照。
 
 # 不可修改内容
 
-- 不实现成员权限、任务状态流转或 Agent 调度规则；不保存第二份成员 publication、readiness 或 activation 权威。
-- 不调用模型、SessionOrchestrator 或 Agent 工具。
+- 不在本目录实现第二ledger、fanout worker、Registry发布或Agent调度。
+- 不写canonical context，不把任务面板投影作为成员publication/readiness权威。
+- 不恢复旧`teams/` JSON快照、事件文件、跨Session成员兼容或双读。
 
 # 规范
 
-- 团队数据只能写入所属 Session 的 `teams/`；先通过显式工作区的权威 catalog resolver 取得物理 Session 节点，不假设固定的 `sessions/{session_id}` 路径，不写工作区级 `.boxteam/teams/`。
-- 同 Session 精确 main/child thread 成员及其就绪状态归既有 Session SQLite collaboration ledger，任务面板只消费其投影。
-- 快照写入必须使用同目录临时文件原子替换。
-- 文件损坏或 ID 非法时直接抛错，不得跳过或返回空对象。
+- 先由权威catalog resolver取得所属Session的SessionControlStore，不拼接固定会话目录。
+- 业务mutation与fanout记录走同一ledger事务，禁止persist board后单独提交事件。
+- activation纯投影只消费冻结输入，不读当前文件、ledger、Registry或调用模型。
+- 非法身份、版本及损坏数据明确报错，不返回伪造空面板；旧开发数据可清理，当前格式仍需完整验证。

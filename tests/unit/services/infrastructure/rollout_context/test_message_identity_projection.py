@@ -19,8 +19,8 @@ from app.services.infrastructure.rollout_context.checkpoint.codec.metadata impor
     CANONICAL_GROUP_FIELD,
     TOOL_BINDING_FIELD,
 )
-from app.services.infrastructure.rollout_context.checkpoint.fork_compaction import (
-    ForkCompactionMixin,
+from app.services.infrastructure.rollout_context.checkpoint.fork_source import (
+    CheckpointForkSource,
 )
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
@@ -46,9 +46,9 @@ def test_fork_anchor_accepts_turn_and_message_but_rejects_job_identity() -> None
             "message_metadata": {"turn_id": "turn-real", "job_id": "job-real"},
         },
     )
-    assert ForkCompactionMixin._message_matches_anchor(message, "message-real")
-    assert ForkCompactionMixin._message_matches_anchor(message, "turn-real")
-    assert not ForkCompactionMixin._message_matches_anchor(message, "job-real")
+    assert CheckpointForkSource._message_matches_anchor(message, "message-real")
+    assert CheckpointForkSource._message_matches_anchor(message, "turn-real")
+    assert not CheckpointForkSource._message_matches_anchor(message, "job-real")
 
 
 def test_assistant_rebinding_does_not_inherit_or_forge_job_identity() -> None:

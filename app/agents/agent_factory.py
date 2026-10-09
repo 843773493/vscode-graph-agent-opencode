@@ -26,9 +26,6 @@ from app.abstractions.session_target import SessionTargetResolverProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.abstractions.tool_selection import ToolSelectionReader
 from app.agents.agent_tools import build_default_tools
-from app.agents.cache_preserving_summarization import (
-    NoDurableOwnerCompactionPreflight,
-)
 from app.agents.custom_tools import build_custom_tool_bundle
 from app.agents.deep_agent_stack import (
     build_deep_agent_middleware,
@@ -68,6 +65,7 @@ from app.agents.skill_runtime import (
     build_workspace_skill_catalog,
     resolve_bundled_skill_groups,
 )
+from app.agents.summarization.preflight import NoDurableOwnerCompactionPreflight
 from app.agents.tool_identity import tool_definition_name
 from app.agents.tool_invocation_context import (
     ThreadRuntimeBinding,
@@ -112,6 +110,9 @@ from app.services.infrastructure.resource_platform.registry.semantic_registry im
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
+from app.services.infrastructure.rollout_context.activation.common import (
+    ResourceActivationStoreError,
+)
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
     CompactionPreflightPort,
 )
@@ -130,9 +131,6 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.models 
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.skill_catalog import (
     skill_catalog_from_activation,
-)
-from app.services.infrastructure.rollout_context.storage.resource_activation_common import (
-    ResourceActivationStoreError,
 )
 from app.services.infrastructure.tool_output_store import ToolOutputStore
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator

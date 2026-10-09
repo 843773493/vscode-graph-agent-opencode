@@ -16,6 +16,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from pydantic import BaseModel, ConfigDict
+
 if TYPE_CHECKING:
     from app.core.session_control_store.contracts import ThreadGraphBindingRecord
 
@@ -24,7 +26,20 @@ from app.core.session_catalog_store.validators import (
     validate_storage_relative_locator,
 )
 
-SessionCreationPurpose = Literal["normal", "context_fork"]
+SessionKind = Literal["normal", "context_fork"]
+SessionCreationPurpose = SessionKind
+
+
+class SessionGenerationOriginDTO(BaseModel):
+    """nodes 与 API 共用的不可变生成来源合同，不依赖业务 schema 聚合出口。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    generator_id: str
+    run_id: str
+    idempotency_key: str
+    generator_type_id: str
+    generator_type_version: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +57,13 @@ class SessionCatalogNode:
     created_at: str | None
     storage_relative_locator: str | None
     main_thread_id: str | None
+    # SessionDTO 业务字段只归 nodes；folder 对应槽全部为空。
+    session_kind: str | None
+    current_agent_id: str | None
+    current_provider_id: str | None
+    context_source_session_id: str | None
+    generation_origin_json: str | None
+    updated_at: str | None
 
 
 @dataclass(frozen=True, slots=True)

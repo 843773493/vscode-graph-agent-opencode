@@ -18,7 +18,7 @@ from app.core.execution_admission_context import (
 from app.core.path_utils import workspace_context
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.epoch.prefix_epoch import EpochReason
-from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.mcp import (
     MCP_GUIDANCE_SOURCE_ID,
@@ -27,6 +27,12 @@ from app.services.infrastructure.mcp import (
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
+)
+from app.services.infrastructure.team.activation import (
+    TEAM_LEDGER_SOURCE_ID,
+    TEAM_RESOURCE_IDS,
+    TEAM_SOURCE_IDS,
+    team_guidance_content,
 )
 from configs.runtime import read_jsonc_object
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
@@ -286,6 +292,35 @@ async def test_real_run_mode_reload_rebuilds_r03_registration_and_preserves_old_
                     activation, parents[0],
                     checkpoint_ns=saved_request.runtime.execution_info.checkpoint_ns,
                 ))
+                frames = [frame for frame in binding.prefix.state.frames
+                          if frame.item_ref.source_identity == revision.source_id
+                          and frame.item_ref.source_revision == revision.revision]
+                assert len(frames) == 1 and frames[0].role == "user"
+                assert frames[0].content == content
+                assert revision.source_id not in control
+            elif revision.source_id in TEAM_SOURCE_IDS.values():
+                facet = next(facet for facet, source_id in TEAM_SOURCE_IDS.items()
+                             if source_id == revision.source_id)
+                parents = [entry for entry in activation.bindings
+                           if entry.resource_id == TEAM_RESOURCE_IDS[facet]]
+                if parents:
+                    assert len(parents) == 1
+                    parent = parents[0]
+                    assert parent.resource_kind == "team_state" and parent.facet == facet
+                    assert parent.source_lineage_ref is not None
+                    # 本例只切换真实工具策略，没有提交任何团队 mutation。
+                    assert dict(parent.source_lineage_ref.sources)[TEAM_LEDGER_SOURCE_ID] == "0"
+                    payload = saver.read_resource_activation_payload(
+                        activation, parent,
+                        checkpoint_ns=saved_request.runtime.execution_info.checkpoint_ns,
+                    )
+                    assert parent.revision == parent.content_hash == sha256_jcs(payload)
+                    content = team_guidance_content(payload)
+                else:
+                    assert not team_enabled
+                    content = ""
+                assert revision.revision == sha256_jcs({"content": content})
+                assert revision.expected_control_revision is None
                 frames = [frame for frame in binding.prefix.state.frames
                           if frame.item_ref.source_identity == revision.source_id
                           and frame.item_ref.source_revision == revision.revision]

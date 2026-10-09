@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from app.core.background_task_registry import BackgroundTaskHandle
+from app.core.background_task_contracts import BackgroundTaskHandle
 from app.schemas.internal_v2.session_resource import (
     SessionResourceAction,
     SessionResourceDTO,
@@ -28,7 +28,8 @@ class SessionResourceMapper:
             started_at=handle.started_at,
             ended_at=handle.ended_at,
             available_actions=available_actions,
-            metadata=handle.metadata,
+            metadata={**handle.metadata, "thread_id": handle.thread_id, "agent_id": handle.agent_id,
+                      "descriptor_kind": handle.descriptor.kind, "descriptor_version": handle.descriptor.version},
         )
 
     def terminal_to_resource(
@@ -200,4 +201,4 @@ def parse_optional_datetime(
 def normalize_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value.astimezone(UTC).replace(tzinfo=None)

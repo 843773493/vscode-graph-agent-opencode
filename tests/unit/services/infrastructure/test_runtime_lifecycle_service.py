@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_session_path_resolver, workspace_context
 from app.domain.itemized.execution_admission import UserExecutionIdentity
@@ -25,12 +24,10 @@ from app.services.business.job.service import (
     JobService,
     JobState,
 )
-from app.services.infrastructure.background_task_history_store import (
-    BackgroundTaskHistoryStore,
-)
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.trace_event_store import TraceEventStore
+from tests.support.background_work import build_background_registry
 
 
 class RecordingJobEventBus:
@@ -82,9 +79,7 @@ def build_runtime(
         workspace_id="00000000-0000-4000-8000-000000000001",
         workspace_root=tmp_path,
         job_service=jobs,
-        background_task_registry=BackgroundTaskRegistry(
-            history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
-        ),
+        background_task_registry=build_background_registry(sessions_dir),
         trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
         message_stream_store=MessageStreamStore(
             # R18 catalog 模式适配：经 path_utils 开关工厂取 resolver

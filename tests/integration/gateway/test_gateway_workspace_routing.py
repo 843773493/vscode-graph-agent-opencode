@@ -159,7 +159,7 @@ async def _write_session_context_checkpoint(
     )
 
 
-    owner = saver.resolve_main_thread_owner(session_id)
+    owner = saver.forks.source.resolve_main_thread_owner(session_id)
     config = build_checkpoint_config(owner.thread_id)
     turn_id = f"context-turn:{checkpoint_id}"
     execution_id = f"context-execution:{checkpoint_id}"

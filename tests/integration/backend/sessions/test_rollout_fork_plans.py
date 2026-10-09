@@ -50,7 +50,7 @@ from app.services.infrastructure.rollout_context.runtime.prefix_compiler import 
     full_source_id,
     source_contributions,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
     EMPTY_TOOL_SET,
     dispatch_execution_scope,
@@ -65,7 +65,7 @@ COPY_TARGET_SESSION_ID = "ses_019bf2257d7e7fd38db6585cdd161690"
 
 
 def _manual_fork_journal_fields(
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
     *,
     source_session_id: str,
     target_session_id: str,
@@ -79,10 +79,10 @@ def _manual_fork_journal_fields(
         "fork_mode": "full_rollout_copy",
         "relationship": "detached",
         "checkpoint_ns": "",
-        "source_thread_id": storage.main_thread_id(source_session_id),
-        "target_thread_id": storage.main_thread_id(target_session_id),
+        "source_thread_id": storage.storage.main_thread_id(source_session_id),
+        "target_thread_id": storage.storage.main_thread_id(target_session_id),
         "source_snapshot_sha256": hashlib.sha256(
-            canonical_json_bytes(artifact_manifest(storage.root(source_session_id)))
+            canonical_json_bytes(artifact_manifest(storage.storage.root(source_session_id)))
         ).hexdigest(),
     }
 
@@ -93,7 +93,7 @@ def committed_source(request: pytest.FixtureRequest, session_bundle_factory):
     for session in (SOURCE_SESSION_ID, TARGET_SESSION_ID):
         session_bundle_factory(sessions, session)
     with RolloutCheckpointSaver(sessions) as saver:
-        thread = saver._storage.main_thread_id(SOURCE_SESSION_ID)
+        thread = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
         accepted = saver.accept_turn(
             SOURCE_SESSION_ID, thread_id=thread, accepted_ingress_id="source-user",
             acceptance_idempotency_key="source-plan-accept", job_id="source-plan-job",
@@ -125,7 +125,7 @@ def committed_source(request: pytest.FixtureRequest, session_bundle_factory):
 @pytest.fixture
 def plan_source(committed_source):
     saver, accepted = committed_source
-    thread = saver._storage.main_thread_id(SOURCE_SESSION_ID)
+    thread = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
     body = [{"type": "text", "text": "source plan 明文不是 identity，必须保持"}]
     saver.register_context_contribution(
         SOURCE_SESSION_ID, thread,
@@ -168,15 +168,15 @@ def plan_source(committed_source):
 def test_full_copy_sealed_sources_restore_from_target_only(plan_source) -> None:
     saver, sealed, body = plan_source
     storage = saver._storage
-    source_root = storage.root(SOURCE_SESSION_ID)
+    source_root = storage.storage.root(SOURCE_SESSION_ID)
     before = artifact_manifest(source_root)
-    result = asyncio.run(saver.afork(
+    result = asyncio.run(saver.forks.afork(
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID,
         mode="full_rollout_copy",
     ))
     fork_id = result.fork_id
     assert artifact_manifest(source_root) == before
-    with storage._connect(storage.main_thread_id(TARGET_SESSION_ID), "", read_only=True, session_id=TARGET_SESSION_ID) as connection:
+    with storage.storage._connect(storage.storage.main_thread_id(TARGET_SESSION_ID), "", read_only=True, session_id=TARGET_SESSION_ID) as connection:
         target_assembly = connection.execute(
             "SELECT target_local_id FROM fork_identity_mappings WHERE fork_id=? AND entity_type='assembly' AND source_local_id=?",
             (fork_id, sealed.assembly_id),
@@ -186,8 +186,8 @@ def test_full_copy_sealed_sources_restore_from_target_only(plan_source) -> None:
             (fork_id,),
         ).fetchone()[0]
     source_root.rename(source_root.with_name("rollout-archived"))
-    with RolloutCheckpointSaver(storage.sessions_dir) as restarted:
-        snapshot = restarted.get_context_assembly(TARGET_SESSION_ID, storage.main_thread_id(TARGET_SESSION_ID), assembly_id=target_assembly)
+    with RolloutCheckpointSaver(storage.storage.sessions_dir) as restarted:
+        snapshot = restarted.get_context_assembly(TARGET_SESSION_ID, storage.storage.main_thread_id(TARGET_SESSION_ID), assembly_id=target_assembly)
         assert snapshot.session_id == TARGET_SESSION_ID
         target_plan = snapshot.as_sealed_plan()
         assert target_plan.plan_id == target_plan_id != sealed.plan_id
@@ -209,7 +209,7 @@ def test_full_copy_sealed_sources_restore_from_target_only(plan_source) -> None:
                 entry.detail_ref.require_owner(
                     TARGET_SESSION_ID, snapshot.thread_id, target_assembly
                 )
-                manifest = restarted._storage.get_context_plan_detail(
+                manifest = restarted._storage.assemblies.get_context_plan_detail(
                     TARGET_SESSION_ID,
                     snapshot.thread_id,
                     detail_ref=entry.detail_ref,
@@ -257,9 +257,9 @@ def test_full_copy_rejects_invalid_source_without_rebuilding_it(
 ) -> None:
     saver, sealed, _ = plan_source
     storage = saver._storage
-    source_root = storage.root(SOURCE_SESSION_ID)
+    source_root = storage.storage.root(SOURCE_SESSION_ID)
     with (
-        closing(sqlite3.connect(storage.index_path(SOURCE_SESSION_ID))) as connection,
+        closing(sqlite3.connect(storage.storage.index_path(SOURCE_SESSION_ID))) as connection,
         connection,
     ):
         if corruption == "ref_owner":
@@ -298,39 +298,39 @@ def test_full_copy_rejects_invalid_source_without_rebuilding_it(
                 )
     before = artifact_manifest(source_root)
     with pytest.raises((RuntimeError, ValueError)) as error:
-        storage.clone_rollout(
+        storage.forks.clone_rollout(
             source_session_id=SOURCE_SESSION_ID,
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
-            target_session_id=TARGET_SESSION_ID, target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+        source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
+            target_session_id=TARGET_SESSION_ID, target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
             source_checkpoint_id=None,
         )
     if corruption == "source_schema":
         assert "schema-upgrade-required" in str(error.value)
         assert "v1_migration_required" not in str(error.value)
     assert artifact_manifest(source_root) == before
-    assert not storage.root(TARGET_SESSION_ID).exists()
-    assert not (storage.root(TARGET_SESSION_ID).parent / "legacy-import").exists()
+    assert not storage.storage.root(TARGET_SESSION_ID).exists()
+    assert not (storage.storage.root(TARGET_SESSION_ID).parent / "legacy-import").exists()
 
 
 def test_full_copy_preflight_observes_wal_without_modifying_source(plan_source) -> None:
     saver, _, _ = plan_source
     storage = saver._storage
-    source = storage.root(SOURCE_SESSION_ID)
-    with closing(sqlite3.connect(storage.index_path(SOURCE_SESSION_ID))) as connection:
+    source = storage.storage.root(SOURCE_SESSION_ID)
+    with closing(sqlite3.connect(storage.storage.index_path(SOURCE_SESSION_ID))) as connection:
         connection.execute("PRAGMA wal_autocheckpoint=0")
         connection.execute("UPDATE database_meta SET schema_version=1")
         connection.commit()
         assert (source / "index.sqlite-wal").stat().st_size > 0
         before = artifact_manifest(source)
         with pytest.raises(RuntimeError, match="schema-upgrade-required"):
-            storage.clone_rollout(
+            storage.forks.clone_rollout(
                 source_session_id=SOURCE_SESSION_ID,
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
-                target_session_id=TARGET_SESSION_ID, target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+        source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
+                target_session_id=TARGET_SESSION_ID, target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
                 source_checkpoint_id=None,
             )
         assert artifact_manifest(source) == before
-        assert not storage.root(TARGET_SESSION_ID).exists()
+        assert not storage.storage.root(TARGET_SESSION_ID).exists()
 
 
 @pytest.mark.parametrize("failure_phase", ["during_detail", "after_detail"])
@@ -342,8 +342,8 @@ def test_failed_full_copy_discards_staging_without_changing_source(
 
     saver, _, _ = plan_source
     storage = saver._storage
-    source_before = artifact_manifest(storage.root(SOURCE_SESSION_ID))
-    target_root = storage.root(TARGET_SESSION_ID)
+    source_before = artifact_manifest(storage.storage.root(SOURCE_SESSION_ID))
+    target_root = storage.storage.root(TARGET_SESSION_ID)
     original_write = details.write_private
     original_restore = remap.restore_full_copy_files
     restored = []
@@ -368,7 +368,7 @@ def test_failed_full_copy_discards_staging_without_changing_source(
     else:
         monkeypatch.setattr(remap, "rewrite_full_copy_fast_columns", fail_after_files)
     with pytest.raises(RuntimeError, match="injected detail materialization failure"):
-        asyncio.run(saver.afork(
+        asyncio.run(saver.forks.afork(
             source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID,
             mode="full_rollout_copy",
         ))
@@ -377,7 +377,7 @@ def test_failed_full_copy_discards_staging_without_changing_source(
         assert published and all(not path.exists() for path in published)
     assert not target_root.exists()
     assert not tuple(target_root.parent.glob(".fork-staging-*"))
-    assert artifact_manifest(storage.root(SOURCE_SESSION_ID)) == source_before
+    assert artifact_manifest(storage.storage.root(SOURCE_SESSION_ID)) == source_before
 
 
 @pytest.fixture
@@ -388,9 +388,9 @@ def typed_detail_mapping_state(request: pytest.FixtureRequest, session_bundle_fa
         session_bundle_factory(sessions, session)
     with RolloutCheckpointSaver(sessions) as saver:
         storage = saver._storage
-        storage.initialize(SOURCE_SESSION_ID)
+        storage.storage.initialize(SOURCE_SESSION_ID)
         refs = tuple(
-            DetailRef(SOURCE_SESSION_ID, storage.main_thread_id(SOURCE_SESSION_ID), assembly, leaf)
+            DetailRef(SOURCE_SESSION_ID, storage.storage.main_thread_id(SOURCE_SESSION_ID), assembly, leaf)
             for assembly, leaf in (
                 ("assembly-a", "same-leaf"),
                 ("assembly-a", "another-leaf"),
@@ -399,10 +399,10 @@ def typed_detail_mapping_state(request: pytest.FixtureRequest, session_bundle_fa
         )
         for ref in refs:
             relative = detail_relative_path(ref)
-            (storage.root(SOURCE_SESSION_ID).parent / relative).parent.mkdir(
+            (storage.storage.root(SOURCE_SESSION_ID).parent / relative).parent.mkdir(
                 parents=True, exist_ok=True
             )
-            storage.register_context_plan_detail(
+            storage.assemblies.register_context_plan_detail(
                 DetailRecord(
                     session_id=ref.session_id,
                     thread_id=ref.thread_id,
@@ -421,19 +421,19 @@ def typed_detail_mapping_state(request: pytest.FixtureRequest, session_bundle_fa
                     availability="unavailable",
                 )
             )
-        storage.clone_rollout(
+        storage.forks.clone_rollout(
             source_session_id=SOURCE_SESSION_ID,
-            source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+            source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
             target_session_id=TARGET_SESSION_ID,
-            target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+            target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
             source_checkpoint_id=None,
         )
-        with storage._connect(
-            storage.main_thread_id(TARGET_SESSION_ID), "",
+        with storage.storage._connect(
+            storage.storage.main_thread_id(TARGET_SESSION_ID), "",
             read_only=True, session_id=TARGET_SESSION_ID,
         ) as connection:
             state = prepare_full_copy_remap(
-                storage,
+                storage.forks,
                 connection,
                 source_session_id=SOURCE_SESSION_ID,
                 target_session_id=TARGET_SESSION_ID,
@@ -523,13 +523,13 @@ def test_full_copy_unavailable_detail_manifest_localizes_typed_owner(
     typed_detail_mapping_state, session_bundle_factory
 ) -> None:
     refs, state = typed_detail_mapping_state
-    storage = state.service
-    session_bundle_factory(storage.sessions_dir, COPY_TARGET_SESSION_ID)
-    source_before = artifact_manifest(storage.root(SOURCE_SESSION_ID))
-    source_view = storage.clone_rollout(
+    storage = state.service._context
+    session_bundle_factory(storage.storage.sessions_dir, COPY_TARGET_SESSION_ID)
+    source_before = artifact_manifest(storage.storage.root(SOURCE_SESSION_ID))
+    source_view = storage.forks.clone_rollout(
         source_session_id=SOURCE_SESSION_ID,
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
-        target_session_id=COPY_TARGET_SESSION_ID, target_thread_id=storage.main_thread_id(COPY_TARGET_SESSION_ID),
+        source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
+        target_session_id=COPY_TARGET_SESSION_ID, target_thread_id=storage.storage.main_thread_id(COPY_TARGET_SESSION_ID),
         source_checkpoint_id=None,
     )
     fields = _manual_fork_journal_fields(
@@ -538,10 +538,10 @@ def test_full_copy_unavailable_detail_manifest_localizes_typed_owner(
         target_session_id=COPY_TARGET_SESSION_ID,
         source_view_id=source_view,
     )
-    materialization, fork_id = storage.begin_fork_materialization(**fields)
-    storage.commit_fork_materialization(materialization, **fields)
+    materialization, fork_id = storage.forks.begin_fork_materialization(**fields)
+    storage.forks.commit_fork_materialization(materialization, **fields)
     for source_ref in refs:
-        key = storage.fork_target_identity(
+        key = storage.forks.fork_target_identity(
             COPY_TARGET_SESSION_ID,
             fork_id=fork_id,
             source_session_id=SOURCE_SESSION_ID,
@@ -550,19 +550,19 @@ def test_full_copy_unavailable_detail_manifest_localizes_typed_owner(
         )
         target_ref = detail_ref_from_key(key)
         target_ref.require_owner(
-            COPY_TARGET_SESSION_ID, storage.main_thread_id(COPY_TARGET_SESSION_ID)
+            COPY_TARGET_SESSION_ID, storage.storage.main_thread_id(COPY_TARGET_SESSION_ID)
         )
-        manifest = storage.get_context_plan_detail(
+        manifest = storage.assemblies.get_context_plan_detail(
             COPY_TARGET_SESSION_ID, target_ref.thread_id, detail_ref=target_ref
         )
         assert manifest["detail_id"] == target_ref.detail_id != source_ref.detail_id
         assert manifest["status"] == manifest["availability"] == "unavailable"
         assert manifest["relative_path"] == detail_relative_path(target_ref).as_posix()
         with pytest.raises(ValueError, match="source-mismatch"):
-            storage.get_context_plan_detail(
+            storage.assemblies.get_context_plan_detail(
                 COPY_TARGET_SESSION_ID, target_ref.thread_id, detail_ref=source_ref
             )
-    assert artifact_manifest(storage.root(SOURCE_SESSION_ID)) == source_before
+    assert artifact_manifest(storage.storage.root(SOURCE_SESSION_ID)) == source_before
 
 
 @pytest.mark.parametrize("mode", ["context_fork", "history_prefix_fork", "full_rollout_copy"])
@@ -572,7 +572,7 @@ def test_fork_preserves_distinct_source_detail_and_sealed_detail(
 ) -> None:
     saver, accepted = committed_source
     storage = saver._storage
-    thread = storage.main_thread_id(SOURCE_SESSION_ID)
+    thread = storage.storage.main_thread_id(SOURCE_SESSION_ID)
     body = "已有 typed source detail 正文不可丢失"
     source = ContextSourceSnapshot(
         descriptor=ContextSourceDescriptor(
@@ -597,7 +597,7 @@ def test_fork_preserves_distinct_source_detail_and_sealed_detail(
                 SOURCE_SESSION_ID, thread, plan_id=plan_id, tool_set=EMPTY_TOOL_SET,
                 read_snapshot=snapshot,
             )
-            items = storage.committed_context_items(snapshot)
+            items = storage.checkpoints.committed_context_items(snapshot)
         if source_detail is not None:
             plan = replace(plan, refs=tuple(
                 replace(ref, source_ref=source_detail) if ref.ref_id == ref_id else ref
@@ -638,14 +638,14 @@ def test_fork_preserves_distinct_source_detail_and_sealed_detail(
         session_id=SOURCE_SESSION_ID, thread_id=thread,
         turn_id="source-turn", final_message_id="source-final",
     )
-    source_root = storage.root(SOURCE_SESSION_ID)
+    source_root = storage.storage.root(SOURCE_SESSION_ID)
     before = artifact_manifest(source_root)
-    result = asyncio.run(saver.afork(
+    result = asyncio.run(saver.forks.afork(
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID,
         mode=mode,
     ))
     fork_id = result.fork_id
-    target_assembly = storage.fork_target_identity(
+    target_assembly = storage.forks.fork_target_identity(
         TARGET_SESSION_ID,
         fork_id=fork_id,
         source_session_id=SOURCE_SESSION_ID,
@@ -654,8 +654,8 @@ def test_fork_preserves_distinct_source_detail_and_sealed_detail(
     )
     assert artifact_manifest(source_root) == before
     source_root.rename(source_root.with_name("rollout-archived"))
-    with RolloutCheckpointSaver(storage.sessions_dir) as restarted:
-        target = restarted.get_context_assembly(TARGET_SESSION_ID, storage.main_thread_id(TARGET_SESSION_ID), assembly_id=target_assembly)
+    with RolloutCheckpointSaver(storage.storage.sessions_dir) as restarted:
+        target = restarted.get_context_assembly(TARGET_SESSION_ID, storage.storage.main_thread_id(TARGET_SESSION_ID), assembly_id=target_assembly)
         entry = next(
             entry
             for entry in target.selection

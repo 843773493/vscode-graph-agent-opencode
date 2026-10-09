@@ -1,13 +1,12 @@
 """v2 checkpoint/view/anchor durable owner。
 
-这里只调用 RolloutStorage 提供的 SQLite、JSONL 和 domain ports，不创建
+这里只调用 RolloutContextStore 提供的 SQLite、JSONL 和 domain ports，不创建
 LangChain message，也不读取 v1 数据。
 """
 
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 from collections.abc import Callable, Mapping
 from uuid import uuid4
@@ -28,12 +27,6 @@ from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protoc
 from app.services.infrastructure.rollout_context.checkpoint.message_commit.prepare import (
     prepare_messages,
 )
-from app.services.infrastructure.rollout_context.storage.guards import (
-    register_jsonl_guard,
-)
-from app.services.infrastructure.rollout_context.storage.serialization import (
-    canonical_json_line,
-)
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
 )
@@ -43,10 +36,6 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_optional_text,
     strict_text,
 )
-
-
-def _v2_json_line(value: object) -> bytes:
-    return canonical_json_line(value)
 
 
 class RolloutCheckpointPersistenceMixin:
@@ -67,34 +56,26 @@ class RolloutCheckpointPersistenceMixin:
         owner = require_current_session_thread_owner(
             langgraph_thread_id=thread_id
         )
-        with self._lock(
+        with self._storage._lock(
             owner.thread_id,
             checkpoint_ns,
             session_id=owner.session_id,
         ):
-            self.initialize(
+            self._storage.initialize(
                 owner.session_id,
                 checkpoint_ns,
                 thread_id=owner.thread_id,
             )
-            jsonl = self.jsonl_path(
+            jsonl = self._storage.jsonl_path(
                 owner.session_id,
                 checkpoint_ns,
                 thread_id=owner.thread_id,
             )
-            with self._connect(
+            with self._storage._connect(
                 owner.thread_id,
                 checkpoint_ns,
                 session_id=owner.session_id,
             ) as connection:
-                # append_checkpoint 的 JSONL 与 SQLite 共享一个失败回滚边界。
-                # _RolloutSQLiteConnection.__exit__ 会在任意异常退出时把已
-                # fsync 但尚未提交到 catalog/commit 的尾部截回原坐标。
-                register_jsonl_guard(
-                    connection,
-                    jsonl,
-                    original_size=jsonl.stat().st_size,
-                )
                 meta = connection.execute(
                     "SELECT last_commit_id, last_message_sequence, "
                     "committed_jsonl_offset, last_item_sequence "
@@ -102,7 +83,7 @@ class RolloutCheckpointPersistenceMixin:
                 ).fetchone()
                 if meta is None:
                     raise RuntimeError("rollout database_meta 缺失")
-                self._require_v2_runtime(connection)
+                self._storage._require_v2_runtime(connection)
                 checkpoint_id = checkpoint.get("id")
                 if not isinstance(checkpoint_id, str) or not checkpoint_id:
                     raise ValueError("checkpoint 缺少字符串 id")
@@ -173,7 +154,7 @@ class RolloutCheckpointPersistenceMixin:
                         raise ValueError(
                             f"checkpoint_id 已存在但内容不一致: {checkpoint_id}"
                         )
-                active_branch, _projection_epoch = self._namespace_state(
+                active_branch, _projection_epoch = self._storage._namespace_state(
                     connection, checkpoint_ns
                 )
                 if branch_id is not None and branch_id != active_branch:
@@ -189,8 +170,8 @@ class RolloutCheckpointPersistenceMixin:
                 if jsonl.stat().st_size != jsonl_offset_before:
                     raise RuntimeError("checkpoint append 前 JSONL 与 committed offset 不一致")
                 batch = prepare_messages(
-                    connection=connection, jsonl=jsonl, codec=self._codec(),
-                    read_item=self._read_v2_item_at, thread_id=thread_id,
+                    connection=connection, jsonl=jsonl, codec=self._storage._codec(),
+                    read_item=self._storage._read_v2_item_at, thread_id=thread_id,
                     messages=current_messages,
                     last_message_sequence=strict_non_negative_int(meta[1], field="database_meta.last_message_sequence"),
                     next_item_sequence=strict_non_negative_int(meta[3], field="database_meta.last_item_sequence") + 1,
@@ -199,7 +180,6 @@ class RolloutCheckpointPersistenceMixin:
                 prepared = batch.prepared
                 first_sequence = batch.first_message_sequence
                 last_sequence = batch.last_message_sequence
-                next_item_sequence = batch.next_item_sequence
                 visible_sequences = batch.visible_sequences
                 if repeated_checkpoint:
                     if prepared:
@@ -227,36 +207,22 @@ class RolloutCheckpointPersistenceMixin:
                 # checkpoint/view 和 database_meta 才共享同一个 rollback guard；
                 # 不能先写文件再 BEGIN，否则失败窗口会留下无法由事务回滚的尾部。
                 connection.execute("BEGIN IMMEDIATE")
-                if prepared:
-                    with jsonl.open("ab") as stream:
-                        for row in prepared:
-                            stream.write(row[7])
-                        stream.flush()
-                        os.fsync(stream.fileno())
                 transaction_id = uuid4().hex
                 timestamp = _now()
-                jsonl_offset_after = jsonl.stat().st_size
-                new_jsonl_records = sum(len(row[10]) for row in prepared)
-                if new_jsonl_records:
-                    commit_cursor = connection.execute(
-                        "INSERT INTO storage_commits(transaction_id, first_message_sequence, last_message_sequence, jsonl_start_offset, jsonl_end_offset, jsonl_fsync_at, status, created_at, commit_kind, commit_mode, jsonl_offset_before, jsonl_offset_after, jsonl_record_count, subject_id, idempotency_key, outcome, metadata_json) VALUES (?, ?, ?, ?, ?, ?, 'prepared', ?, 'item_convergence', 'item_bearing', ?, ?, ?, ?, ?, NULL, '{}')",
-                        (
-                            transaction_id,
-                            first_sequence,
-                            last_sequence if first_sequence is not None else None,
-                            jsonl_offset_before,
-                            jsonl_offset_after,
-                            timestamp,
-                            timestamp,
-                            jsonl_offset_before,
-                            jsonl_offset_after,
-                            new_jsonl_records,
-                            checkpoint_id,
-                            f"checkpoint-view:{checkpoint_id}",
-                        ),
-                    )
-                    commit_id = strict_non_negative_int(
-                        commit_cursor.lastrowid, field="storage_commits.commit_id"
+                canonical_items = tuple(
+                    item for row in prepared for item, _offset, _length in row[8]
+                )
+                if canonical_items:
+                    # 唯一 storage writer 在本事务内完成 durability/catalog/offset；
+                    # checkpoint/view 失败时，连接的 guard 回滚同一 JSONL 尾部。
+                    commit_id, _offset = self._storage._append_v2_records_transaction(
+                        connection, owner.thread_id, checkpoint_ns, canonical_items,
+                        session_id=owner.session_id, commit_kind="item_convergence",
+                        subject_id=checkpoint_id,
+                        idempotency_key=f"checkpoint-view:{checkpoint_id}",
+                        begin_transaction=False, transaction_id=transaction_id,
+                        timestamp=timestamp, first_message_sequence=first_sequence,
+                        last_message_sequence=last_sequence if first_sequence is not None else None,
                     )
                 else:
                     if meta[0] is None:
@@ -279,9 +245,7 @@ class RolloutCheckpointPersistenceMixin:
                     serialized_json,
                     message_offset,
                     byte_length,
-                    _raw,
                     visibility,
-                    _envelope,
                     canonical_locations,
                     execution_id,
                 ) in prepared:
@@ -310,7 +274,7 @@ class RolloutCheckpointPersistenceMixin:
                         ),
                     )
                     if turn_id is not None:
-                        self._upsert_turn(
+                        self._storage._upsert_turn(
                             connection,
                             turn_id,
                             sequence,
@@ -319,40 +283,11 @@ class RolloutCheckpointPersistenceMixin:
                             active_branch,
                             timestamp,
                         )
-                    for canonical_item, item_offset, item_length in canonical_locations:
-                        self._insert_canonical_item(
-                            connection,
-                            canonical_item,
-                            commit_id=commit_id,
-                            jsonl_offset=item_offset,
-                            jsonl_length=item_length,
-                            created_at=timestamp,
+                    for canonical_item, _item_offset, _item_length in canonical_locations:
+                        self._storage._bind_canonical_item_execution(
+                            connection, item_id=canonical_item.item_id,
+                            execution_id=execution_id,
                         )
-                        stored_execution = connection.execute(
-                            "SELECT execution_id FROM item_catalog WHERE item_id = ?",
-                            (canonical_item.item_id,),
-                        ).fetchone()
-                        if stored_execution is None:
-                            raise RuntimeError(
-                                "canonical item 插入后 catalog 行缺失: "
-                                f"{canonical_item.item_id}"
-                            )
-                        if stored_execution[0] is None:
-                            update = connection.execute(
-                                "UPDATE item_catalog SET execution_id = ? "
-                                "WHERE item_id = ? AND execution_id IS NULL",
-                                (execution_id, canonical_item.item_id),
-                            )
-                            if update.rowcount != 1:
-                                raise RuntimeError(
-                                    "canonical item execution attribution 写入失败: "
-                                    f"{canonical_item.item_id}"
-                                )
-                        elif stored_execution[0] != execution_id:
-                            raise RuntimeError(
-                                "canonical item execution attribution 冲突: "
-                                f"{canonical_item.item_id}"
-                            )
                         # fork checkpoint 只是把 source 的临时 LangChain view
                         # 写入 target，真实 Turn identity 要等 canonical item
                         # remap 和 fork completion 一起建立。若在这里按 source
@@ -362,7 +297,7 @@ class RolloutCheckpointPersistenceMixin:
                             canonical_item.turn_id is not None
                             and metadata.get("source") != "fork"
                         ):
-                            self._ensure_v2_turn_record_from_root(
+                            self._context.executions._ensure_v2_turn_record_from_root(
                                 connection,
                                 session_id=owner.session_id,
                                 thread_id=owner.thread_id,
@@ -375,7 +310,7 @@ class RolloutCheckpointPersistenceMixin:
                     )
                 # Turn-less 输出与 typed display notice 在同一事务登记；fork 的
                 # target-local item 也从已校验的 canonical group 恢复 membership。
-                self._append_context_view_items(
+                self._storage._append_context_view_items(
                     connection, checkpoint_ns=checkpoint_ns,
                     item_ids=batch.display_only_item_ids, branch_id=active_branch,
                     require_view=True, source_kind="display_only",
@@ -431,7 +366,7 @@ class RolloutCheckpointPersistenceMixin:
                 )
                 if view_kind == "compaction":
                     validate_tool_protocol_closure(connection, visible_sequences, len(visible_sequences))
-                view_id = self._create_view(
+                view_id = self._storage._create_view(
                     connection,
                     active_branch,
                     parent_view_id,
@@ -464,13 +399,13 @@ class RolloutCheckpointPersistenceMixin:
                             raise RuntimeError("跨分支 checkpoint 缺少权威 active view selection")
                         # rewind 后只保留父 channel 中仍被当前分支选中的前缀；
                         # 本次写入可以是 delta，不能丢掉前缀或带回已移除消息。
-                        selected = set(self._view_message_sequences_from_connection(connection, active_view_id))
+                        selected = set(self._storage._view_message_sequences_from_connection(connection, active_view_id))
                         messages_sequences = [
-                            sequence for sequence in self._view_message_sequences_from_connection(connection, parent_messages_view)
+                            sequence for sequence in self._storage._view_message_sequences_from_connection(connection, parent_messages_view)
                             if sequence in selected
                         ] + visible_sequences
                         parent_messages_view = None
-                messages_view_id = self._create_view(
+                messages_view_id = self._storage._create_view(
                     connection, active_branch, parent_messages_view, messages_sequences,
                     timestamp, view_kind="checkpoint_messages",
                 )
@@ -479,8 +414,8 @@ class RolloutCheckpointPersistenceMixin:
                     versions_seen_blob,
                     versions_seen_length,
                     versions_seen_hash,
-                ) = self._encode(checkpoint.get("versions_seen", {}))
-                pending_type, pending_blob, pending_length, pending_hash = self._encode(
+                ) = self._storage._encode(checkpoint.get("versions_seen", {}))
+                pending_type, pending_blob, pending_length, pending_hash = self._storage._encode(
                     checkpoint.get("pending_sends", [])
                 )
                 message_sequence = max(visible_sequences, default=last_sequence)
@@ -511,7 +446,7 @@ class RolloutCheckpointPersistenceMixin:
                         pending_hash,
                     ),
                 )
-                self._insert_checkpoint_channels(
+                self._storage._insert_checkpoint_channels(
                     connection, checkpoint_id, checkpoint, messages_view_id, timestamp
                 )
                 self._capture_checkpoint_context_sources(
@@ -531,7 +466,7 @@ class RolloutCheckpointPersistenceMixin:
                         "checkpoint branch head 更新行数异常: "
                         f"branch_id={active_branch}, rowcount={branch_cursor.rowcount}"
                     )
-                control_sequence = self._insert_control(
+                control_sequence = self._storage._insert_control(
                     connection,
                     "checkpoint_created",
                     "checkpoint",
@@ -556,24 +491,11 @@ class RolloutCheckpointPersistenceMixin:
                         "checkpoint view control_sequence 更新行数异常: "
                         f"view_id={view_id}, messages_view_id={messages_view_id}, rowcount={view_cursor.rowcount}"
                     )
-                if new_jsonl_records:
-                    commit_cursor = connection.execute(
-                        "UPDATE storage_commits SET status = 'committed', committed_at = ? WHERE commit_id = ?",
-                        (timestamp, commit_id),
-                    )
-                    if commit_cursor.rowcount != 1:
-                        raise RuntimeError(
-                            "checkpoint storage commit 收敛更新行数异常: "
-                            f"commit_id={commit_id}, rowcount={commit_cursor.rowcount}"
-                        )
                 meta_cursor = connection.execute(
-                    "UPDATE database_meta SET last_commit_id = ?, last_message_sequence = ?, last_control_sequence = ?, committed_jsonl_offset = ?, last_item_sequence = ?, history_view_revision = history_view_revision + 1, updated_at = ? WHERE singleton_id = 1",
+                    "UPDATE database_meta SET last_message_sequence = ?, last_control_sequence = ?, history_view_revision = history_view_revision + 1, updated_at = ? WHERE singleton_id = 1",
                     (
-                        commit_id,
                         last_sequence,
                         control_sequence,
-                        jsonl_offset_after,
-                        next_item_sequence - 1,
                         timestamp,
                     ),
                 )
@@ -599,7 +521,7 @@ class RolloutCheckpointPersistenceMixin:
                     )
                     consumer = self.consume_context_epoch_rebuild_intent if consume_epoch_intent is None else consume_epoch_intent
                     consumer(intent, connection)
-                self._commit_connection(connection)
+                self._storage._commit_connection(connection)
 
     @staticmethod
     def _checkpoint_control_payload(

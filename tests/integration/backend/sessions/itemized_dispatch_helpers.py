@@ -39,6 +39,9 @@ from app.domain.itemized.resource_activation import ResourceActivationPolicySnap
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
+from app.services.infrastructure.rollout_context.activation.body import (
+    ResourceActivationBodyStore,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -48,9 +51,6 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceDescriptor,
     ContextSourceManager,
-)
-from app.services.infrastructure.rollout_context.storage.resource_activation_body import (
-    ResourceActivationBodyStore,
 )
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
@@ -69,7 +69,7 @@ def dispatch_execution_scope(
     saver: RolloutCheckpointSaver, session_id: str, turn_id: str
 ) -> Iterator[str]:
     """真实测试 fixture 与 native dispatch 共用当前执行授权，不伪造 owner。"""
-    thread = saver._storage.main_thread_id(session_id)
+    thread = saver._storage.storage.main_thread_id(session_id)
     admission = saver.execution_admission(
         session_id,
         thread_id=thread,
@@ -109,7 +109,7 @@ def dispatch_execution_scope(
 
 def seed_dispatch_history(saver: RolloutCheckpointSaver, session_id: str) -> str:
     """正式 Saver ingress 创建 canonical history，不手工构造 sealed plan。"""
-    thread = saver._storage.main_thread_id(session_id)
+    thread = saver._storage.storage.main_thread_id(session_id)
     saver.accept_turn(
         session_id,
         thread_id=thread,
@@ -144,7 +144,7 @@ def seed_dispatch_history(saver: RolloutCheckpointSaver, session_id: str) -> str
 
 
 def seed_dispatch_overlay(saver: RolloutCheckpointSaver, session_id: str) -> None:
-    thread_id = saver._storage._path_resolver.main_thread_id(session_id)
+    thread_id = saver._storage.storage._path_resolver.main_thread_id(session_id)
     base = [{"type": "text", "text": "HTTP overlay base"}]
     delta = [{"type": "text", "text": "HTTP overlay delta"}]
     saver.register_source_overlay(
@@ -464,7 +464,7 @@ async def invoke_provider_dispatch(
         streaming=True,
         max_retries=0,
     )
-    thread = saver._storage.main_thread_id(session_id)
+    thread = saver._storage.storage.main_thread_id(session_id)
     manager = ContextSourceManager(
         owner=ContextSourceOwnerKey(session_id, thread),
         control_state_port=saver,
@@ -485,7 +485,7 @@ async def invoke_provider_dispatch(
     )
     producer = RegisteredToolSetProducer(
         agent_id="native-http-test",
-        selection_reader=ToolSelectionStore(boxteam_root=saver._storage.sessions_dir.parent),
+        selection_reader=ToolSelectionStore(boxteam_root=saver._storage.storage.sessions_dir.parent),
         policy_resolver=ToolPolicyResolver(policy_defaults={}, policy_rules={}, restrictions={}),
         tools=(), metadata={},
     )

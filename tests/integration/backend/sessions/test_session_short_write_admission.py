@@ -327,7 +327,7 @@ async def test_admitted_session_update_finishes_before_delete_drain(
         "删除前标题",
         current_provider_id="test-provider",
     )
-    initial_updated_at = harness.workspace.manifest(session_id)["updated_at"]
+    initial_updated_at = harness.workspace.node(session_id).updated_at.isoformat()
     write_admitted = asyncio.Event()
     continue_write = asyncio.Event()
     drain_started = asyncio.Event()
@@ -361,8 +361,7 @@ async def test_admitted_session_update_finishes_before_delete_drain(
         assert current_session_id == session_id
         node = harness.workspace.node(session_id)
         assert node.state == "deleting"
-        manifest = harness.workspace.manifest(session_id)
-        drain_snapshot = (manifest["updated_at"], manifest["current_agent_id"])
+        drain_snapshot = (node.updated_at.isoformat(), node.current_agent_id)
         drain_started.set()
         raise RuntimeError("injected drain failure")
 
@@ -380,7 +379,7 @@ async def test_admitted_session_update_finishes_before_delete_drain(
         delete_task = asyncio.create_task(
             harness.job_service.run_session_delete_operation(
                 session_id,
-                lambda: harness.session_service.delete(session_id),
+                lambda: harness.workspace.resolver.delete_subtree(idempotency_key=f"short-write-delete-{session_id}", root_node_id=session_id),
             )
         )
         for _ in range(300):
@@ -456,7 +455,7 @@ async def test_deleting_session_rejects_all_new_short_write_endpoints(
     with pytest.raises(RuntimeError, match="injected drain failure"):
         await harness.job_service.run_session_delete_operation(
             session_id,
-            lambda: harness.session_service.delete(session_id),
+            lambda: harness.workspace.resolver.delete_subtree(idempotency_key=f"short-write-delete-{session_id}", root_node_id=session_id),
         )
     harness.runtime.probe_settle_admission = False
 

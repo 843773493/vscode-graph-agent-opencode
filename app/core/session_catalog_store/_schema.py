@@ -33,7 +33,9 @@ _LOCATOR_PREFIX = "sessions/"
 
 _NODE_COLUMNS = (
     "node_id, kind, parent_node_id, display_name, title_source, state, revision, "
-    "workspace_id, created_at, storage_relative_locator, main_thread_id"
+    "workspace_id, created_at, storage_relative_locator, main_thread_id, "
+    "session_kind, current_agent_id, current_provider_id, context_source_session_id, "
+    "generation_origin_json, updated_at"
 )
 
 _NODES_TABLE_DDL = """
@@ -49,17 +51,35 @@ CREATE TABLE IF NOT EXISTS nodes (
     created_at TEXT,
     storage_relative_locator TEXT,
     main_thread_id TEXT,
+    session_kind TEXT CHECK (session_kind IN ('normal', 'context_fork')),
+    current_agent_id TEXT CHECK (length(current_agent_id) > 0),
+    current_provider_id TEXT CHECK (current_provider_id IS NULL OR length(current_provider_id) > 0),
+    context_source_session_id TEXT,
+    generation_origin_json TEXT CHECK (generation_origin_json IS NULL OR json_valid(generation_origin_json)),
+    updated_at TEXT,
     CHECK (
         (kind = 'session'
             AND created_at IS NOT NULL
             AND storage_relative_locator IS NOT NULL
             AND main_thread_id IS NOT NULL
-            AND title_source IS NOT NULL)
+            AND title_source IS NOT NULL
+            AND session_kind IS NOT NULL
+            AND current_agent_id IS NOT NULL
+            AND updated_at IS NOT NULL
+            AND ((session_kind = 'normal' AND context_source_session_id IS NULL)
+                 OR (session_kind = 'context_fork' AND context_source_session_id IS NOT NULL
+                     AND length(context_source_session_id) > 0)))
         OR (kind = 'folder'
             AND created_at IS NULL
             AND storage_relative_locator IS NULL
             AND main_thread_id IS NULL
-            AND title_source IS NULL)
+            AND title_source IS NULL
+            AND session_kind IS NULL
+            AND current_agent_id IS NULL
+            AND current_provider_id IS NULL
+            AND context_source_session_id IS NULL
+            AND generation_origin_json IS NULL
+            AND updated_at IS NULL)
     ),
     UNIQUE (workspace_id, main_thread_id),
     UNIQUE (workspace_id, storage_relative_locator)
@@ -71,6 +91,20 @@ _IDX_NODES_PARENT_DDL = (
 )
 _IDX_NODES_WORKSPACE_DDL = (
     "CREATE INDEX IF NOT EXISTS idx_nodes_workspace ON nodes(workspace_id)"
+)
+
+# 页读取只消费既有 nodes 权威。微秒排序键与256bit成员指纹的8个分量
+# 在同一表达式索引写入时派生；COUNT/SUM 无需逐成员 Python 回调。
+_SESSION_LIST_INDEX_NAME = "idx_nodes_session_list"
+_SESSION_LIST_FINGERPRINT_PARTS = 8
+_IDX_NODES_SESSION_LIST_DDL = (
+    f"CREATE INDEX IF NOT EXISTS {_SESSION_LIST_INDEX_NAME} ON nodes("
+    "session_list_created_us(created_at) DESC, node_id ASC, parent_node_id, "
+    + ", ".join(
+        f"session_list_member_part(node_id, created_at, {part})"
+        for part in range(_SESSION_LIST_FINGERPRINT_PARTS)
+    )
+    + ") WHERE kind = 'session' AND state = 'active'"
 )
 
 # SessionCreationRecord journal 表（8.1-A）：与导航 node 同库、不是第二权威。
@@ -206,7 +240,9 @@ _NAVIGATION_REVISION_TRIGGER_DDLS = (
     CREATE TRIGGER IF NOT EXISTS nodes_navigation_revision_update
     AFTER UPDATE OF node_id, kind, parent_node_id, display_name, title_source,
                     state, revision,
-                    workspace_id, created_at, storage_relative_locator, main_thread_id
+                    workspace_id, created_at, storage_relative_locator, main_thread_id,
+                    session_kind, current_agent_id, current_provider_id,
+                    context_source_session_id, generation_origin_json, updated_at
     ON nodes
     WHEN OLD.node_id IS NOT NEW.node_id
       OR OLD.kind IS NOT NEW.kind
@@ -219,6 +255,12 @@ _NAVIGATION_REVISION_TRIGGER_DDLS = (
       OR OLD.created_at IS NOT NEW.created_at
       OR OLD.storage_relative_locator IS NOT NEW.storage_relative_locator
       OR OLD.main_thread_id IS NOT NEW.main_thread_id
+      OR OLD.session_kind IS NOT NEW.session_kind
+      OR OLD.current_agent_id IS NOT NEW.current_agent_id
+      OR OLD.current_provider_id IS NOT NEW.current_provider_id
+      OR OLD.context_source_session_id IS NOT NEW.context_source_session_id
+      OR OLD.generation_origin_json IS NOT NEW.generation_origin_json
+      OR OLD.updated_at IS NOT NEW.updated_at
     BEGIN
         UPDATE catalog_metadata
         SET navigation_revision = navigation_revision + 1
@@ -248,11 +290,11 @@ _REQUIRED_NAVIGATION_REVISION_TRIGGERS = (
     "nodes_navigation_revision_delete",
 )
 
-# 已登记为 v7 的目录缺少权威表、元数据列或 revision triggers 说明 catalog
+# 已登记为 v8 的目录缺少权威表、元数据列或 revision triggers 说明 catalog
 # 被外部改写，必须在任何 DDL 前 fail closed。旧 schema 不作运行期迁移；只能由
 # 明确维护流程处理，不能把日期目录或旧 JSON 当作回退来源。
 _REQUIRED_TABLES_BY_VERSION = {
-    7: (
+    8: (
         "nodes",
         "session_creation_records",
         "subtree_delete_records",

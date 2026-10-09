@@ -26,6 +26,9 @@ from app.domain.itemized.records import (
     RuntimeNoticePayload,
 )
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest, TurnHistoryPageDTO
+from app.services.infrastructure.rollout_context.activation.schema import (
+    create_resource_activation_schema,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -44,17 +47,48 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_line,
     canonical_json_text,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from app.services.infrastructure.rollout_context.storage.transaction import (
     validate_item_storage_projection,
 )
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from app.services.infrastructure.rollout_history.paging import HistoryPageReadMixin
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+from app.services.infrastructure.turn_history.models import InvalidTurnCursorError
 
 _CREATED_AT = "2026-10-04T00:00:00Z"
 _UPDATED_AT = "2026-10-04T00:00:01Z"
 _VIEW_ID = "view-internal-display"
 _BRANCH_ID = "branch-001"
+
+
+def test_cold_execution_selector_is_exact_and_has_frozen_bounded_continuation(history_environment):
+    environment = history_environment(turns=(), displays=tuple(
+        DisplaySpec(index, index * 10, execution_id="report-owner" if index % 2 else "sibling-report")
+        for index in range(1, 521)
+    ))
+    page = environment.history_reader.load(
+        environment.session_id, environment.thread_id,
+        TurnHistoryLoadRequest(execution_id="report-owner", include=["internal"]),
+    )
+    assert page.items == []
+    assert len(page.internal_executions) == 1
+    assert page.internal_executions[0].execution_id == "report-owner"
+    assert len(page.internal_executions[0].display_parts) == 256
+    assert page.has_before and page.before_cursor is not None
+    following = environment.history_reader.load(
+        environment.session_id, environment.thread_id,
+        TurnHistoryLoadRequest(direction="before", execution_id="report-owner", cursor=page.before_cursor),
+    )
+    assert following.items == []
+    assert len(following.internal_executions[0].display_parts) == 4
+    assert not following.has_before
+    ids = {part.item_id for part in page.internal_executions[0].display_parts}
+    assert ids.isdisjoint(part.item_id for part in following.internal_executions[0].display_parts)
+    with pytest.raises(InvalidTurnCursorError, match="execution_id"):
+        environment.history_reader.load(
+            environment.session_id, environment.thread_id,
+            TurnHistoryLoadRequest(direction="before", execution_id="sibling-report", cursor=page.before_cursor),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +116,7 @@ class HistoryEnvironment:
     session_id: str
     thread_id: str
     view_id: str
-    storage: RolloutStorage
+    storage: RolloutContextStore
     context_reader: RolloutContextReader
     history_reader: RolloutHistoryReader
 
@@ -105,7 +139,7 @@ def history_environment(
     session_id = f"ses_{create_uuid_hex()}"
     session_bundle_factory(sessions_root, session_id)
     thread_id = get_session_path_resolver(sessions_root).main_thread_id(session_id)
-    storage = RolloutStorage(sessions_root, message_codec=LangChainMessageCodec())
+    storage = RolloutContextStore(sessions_root, message_codec=LangChainMessageCodec())
     _initialize_rollout_fixture(storage, session_id=session_id, thread_id=thread_id)
     context_reader = RolloutContextReader(storage)
     history_reader = RolloutHistoryReader(context_reader)
@@ -146,7 +180,7 @@ def history_environment(
 
 
 def _seed_rollout(
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
     *,
     session_id: str,
     thread_id: str,
@@ -230,7 +264,7 @@ def _seed_rollout(
                 )
         items.append((item, execution_id))
 
-    jsonl_path = storage.jsonl_path(session_id, thread_id=thread_id)
+    jsonl_path = storage.storage.jsonl_path(session_id, thread_id=thread_id)
     item_lines = [canonical_json_line(item.to_dict()) for item, _ in items]
     jsonl_bytes = b"".join(item_lines)
     with jsonl_path.open("wb") as stream:
@@ -238,7 +272,7 @@ def _seed_rollout(
         stream.flush()
         os.fsync(stream.fileno())
 
-    with storage._connect(thread_id, session_id=session_id) as connection:
+    with storage.storage._connect(thread_id, session_id=session_id) as connection:
         branch_row = connection.execute(
             "SELECT head_view_id FROM branches WHERE branch_id = ? AND status = 'active'",
             (_BRANCH_ID,),
@@ -429,18 +463,18 @@ def _seed_rollout(
 
 
 def _initialize_rollout_fixture(
-    storage: RolloutStorage,
+    storage: RolloutContextStore,
     *,
     session_id: str,
     thread_id: str,
 ) -> None:
     """只通过正式 rollout DDL 建立最小 v2 root view 与 owner meta。"""
-    root = storage.root(session_id, thread_id=thread_id)
+    root = storage.storage.root(session_id, thread_id=thread_id)
     root.mkdir(parents=True)
-    storage.jsonl_path(session_id, thread_id=thread_id).touch()
-    connection = sqlite3.connect(storage.index_path(session_id, thread_id=thread_id))
+    storage.storage.jsonl_path(session_id, thread_id=thread_id).touch()
+    connection = sqlite3.connect(storage.storage.index_path(session_id, thread_id=thread_id))
     try:
-        initialize_rollout_schema(connection)
+        initialize_rollout_schema(connection, initialize_activation=create_resource_activation_schema)
         connection.execute(
             "INSERT INTO schema_migrations "
             "(from_version, to_version, migration_name, migration_checksum, status, "
@@ -1075,7 +1109,7 @@ def test_v1_rollout_is_rejected_by_the_real_context_reader(
     history_environment: Callable[..., HistoryEnvironment],
 ) -> None:
     environment = history_environment()
-    with environment.storage._connect(
+    with environment.storage.storage._connect(
         environment.thread_id,
         session_id=environment.session_id,
     ) as connection:
@@ -1097,7 +1131,7 @@ def test_context_view_order_integrity_rejects_corrupt_coordinates(
     corruption: str,
 ) -> None:
     environment = history_environment()
-    with environment.storage._connect(
+    with environment.storage.storage._connect(
         environment.thread_id,
         session_id=environment.session_id,
     ) as connection:

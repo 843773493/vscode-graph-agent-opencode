@@ -14,7 +14,7 @@ function streamEvent(
   type: Exclude<MessageStreamEvent["type"], "stream.snapshot">,
   payload: Record<string, unknown>,
 ): MessageStreamDataEvent {
-  return {
+  return { thread_id: "thr_00000000400070008000000000000002",
     event_id: `evt_${eventSeq}`,
     session_id: "ses_1",
     turn_id: "turn_1",

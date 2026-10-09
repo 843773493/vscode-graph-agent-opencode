@@ -99,6 +99,7 @@ class SessionInterruptService:
         if turn_id is not None:
             message_stream = await self._message_stream_store.open(
                 session_id=session_id,
+                thread_id=active_job.thread_id,
                 turn_id=turn_id,
                 job_id=active_job.job_id,
             )

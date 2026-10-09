@@ -39,7 +39,7 @@ def _locks(index: Path) -> list[str]:
 @pytest.fixture
 def source_reader(protected_source, request):
     saver = protected_source[0]
-    connection = sqlite3.connect(saver._storage.index_path(SOURCE_SESSION_ID))
+    connection = sqlite3.connect(saver._storage.storage.index_path(SOURCE_SESSION_ID))
     if request.param:
         connection.execute("BEGIN")
     connection.execute("SELECT count(*) FROM context_plans").fetchone()
@@ -58,7 +58,7 @@ def lock_artifacts(request):
 
 @pytest.fixture
 def forbid_parent_sqlite_copy(protected_source, monkeypatch):
-    source_root = protected_source[0]._storage.root(SOURCE_SESSION_ID)
+    source_root = protected_source[0]._storage.storage.root(SOURCE_SESSION_ID)
     original = shutil.copyfile
 
     def checked_copyfile(source, destination, *, follow_symlinks=True):
@@ -85,7 +85,7 @@ from tests.support.session_catalog_owner import fixture_catalog_scope
 
 with fixture_catalog_scope(), RolloutCheckpointSaver(Path(sys.argv[1])) as saver:
     session = sys.argv[2]
-    thread = saver._storage.main_thread_id(session)
+    thread = saver._storage.storage.main_thread_id(session)
     saver.create_context_plan(session, ContextRequestPlan(
         session_id=session, thread_id=thread, plan_id='independent-writer', refs=(),
         plan_creation_idempotency_key='writer-after-fork',
@@ -110,7 +110,7 @@ async def test_fork_preserves_live_reader_and_independent_writer(
     operation,
 ):
     saver = protected_source[0]
-    index = saver._storage.index_path(SOURCE_SESSION_ID)
+    index = saver._storage.storage.index_path(SOURCE_SESSION_ID)
     before = _locks(index)
     assert before, "合法 source reader 必须持有 SQLite database SHARED lock"
     transaction_reader = source_reader.in_transaction
@@ -118,9 +118,9 @@ async def test_fork_preserves_live_reader_and_independent_writer(
         "SELECT count(*) FROM context_plans"
     ).fetchone()[0]
     if operation == "preflight":
-        await saver.preflight_fork(source_session_id=SOURCE_SESSION_ID, mode="full_rollout_copy")
+        await saver.forks.source.preflight_fork(source_session_id=SOURCE_SESSION_ID, mode="full_rollout_copy")
     else:
-        await saver.afork(
+        await saver.forks.afork(
             source_session_id=SOURCE_SESSION_ID,
             target_session_id=TARGET_SESSION_ID,
             mode="full_rollout_copy",
@@ -130,7 +130,7 @@ async def test_fork_preserves_live_reader_and_independent_writer(
     assert source_reader.in_transaction == transaction_reader
     result = await asyncio.to_thread(
         subprocess.run,
-        [sys.executable, "-c", _WRITER, str(saver._storage.sessions_dir), SOURCE_SESSION_ID],
+        [sys.executable, "-c", _WRITER, str(saver._storage.storage.sessions_dir), SOURCE_SESSION_ID],
         check=False,
         capture_output=True,
         text=True,
@@ -161,8 +161,8 @@ async def test_fork_preserves_live_reader_and_independent_writer(
     assert source_reader.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
     assert source_reader.execute("PRAGMA foreign_key_check").fetchall() == []
     if operation == "full-copy":
-        with saver._storage._connect(
-            saver._storage.main_thread_id(TARGET_SESSION_ID), "",
+        with saver._storage.storage._connect(
+            saver._storage.storage.main_thread_id(TARGET_SESSION_ID), "",
             session_id=TARGET_SESSION_ID, read_only=True,
         ) as target:
             assert target.execute(

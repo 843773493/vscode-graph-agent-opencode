@@ -44,7 +44,7 @@ def run_context(request):
 @pytest.fixture
 def tool_draft(registry_db):
     saver, session, _connection, _accepted = registry_db
-    thread = saver._storage.main_thread_id(session)
+    thread = saver._storage.storage.main_thread_id(session)
     return ContextRequestPlan(
         session_id=session,
         thread_id=thread,
@@ -97,7 +97,7 @@ def test_toolsets_jsonl_sqlite_and_saver_restart(
     registry_db, run_context, tool_draft, omitted, reverse_rows
 ):
     saver, session, connection, accepted = registry_db
-    canonical_path = saver._storage.root(session) / "rollout.jsonl"
+    canonical_path = saver._storage.storage.root(session) / "rollout.jsonl"
     canonical_before = canonical_path.read_bytes()
     assert canonical_before
     assert all(

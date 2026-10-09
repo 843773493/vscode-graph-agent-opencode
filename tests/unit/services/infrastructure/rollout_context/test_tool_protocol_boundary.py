@@ -42,7 +42,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceDescriptor,
     ContextSourceManager,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from app.services.mapping.itemized.provider_request import (
     project_runtime_notice_content,
 )
@@ -53,14 +53,14 @@ SESSION_ID = "ses_019c3635a6c278efb831fe265bdcd656"
 @pytest.fixture
 def protocol_case(
     tmp_path: Path, session_bundle_factory,
-) -> Iterator[tuple[RolloutCheckpointSaver, RolloutStorage, str, dict[str, object]]]:
+) -> Iterator[tuple[RolloutCheckpointSaver, RolloutContextStore, str, dict[str, object]]]:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
-    storage = RolloutStorage(
+    storage = RolloutContextStore(
         sessions_dir, serde=JsonPlusSerializer(), message_codec=LangChainMessageCodec()
     )
     saver = RolloutCheckpointSaver(sessions_dir, storage=storage)
-    thread = storage.main_thread_id(SESSION_ID)
+    thread = storage.storage.main_thread_id(SESSION_ID)
     accepted = saver.accept_turn(
         SESSION_ID, thread_id=thread, accepted_ingress_id="user-1",
         acceptance_idempotency_key="protocol-accept", job_id="protocol-job",
@@ -321,10 +321,10 @@ def _seed_closed_tool_group(saver: RolloutCheckpointSaver, thread: str) -> None:
 def test_rewind_conflict_keeps_old_view_zero_side_effects(protocol_case) -> None:
     saver, storage, thread, _accepted = protocol_case
     _seed_closed_tool_group(saver, thread)
-    manifest_before = storage.initialize(SESSION_ID)
+    manifest_before = storage.storage.initialize(SESSION_ID)
 
     with pytest.raises(ToolProtocolBoundaryConflict) as exc_info:
-        storage.rewind_to_checkpoint(
+        storage.checkpoints.rewind_to_checkpoint(
             thread_id=thread,
             checkpoint_id="checkpoint-2",
             source_anchor="assistant-call-1",
@@ -342,7 +342,7 @@ def test_rewind_conflict_keeps_old_view_zero_side_effects(protocol_case) -> None
             or type(anchor.cutoff_message_sequence) is int
         )
 
-    manifest_after = storage.initialize(SESSION_ID)
+    manifest_after = storage.storage.initialize(SESSION_ID)
     assert manifest_after == manifest_before
 
 
@@ -370,10 +370,10 @@ def test_rewind_conflict_for_pending_call_has_no_safe_anchor_above(protocol_case
         [user, call],
         2,
     )
-    manifest_before = storage.initialize(SESSION_ID)
+    manifest_before = storage.storage.initialize(SESSION_ID)
 
     with pytest.raises(ToolProtocolBoundaryConflict) as exc_info:
-        storage.rewind_to_checkpoint(
+        storage.checkpoints.rewind_to_checkpoint(
             thread_id=thread,
             checkpoint_id="checkpoint-2",
             source_anchor="assistant-call-1",
@@ -382,16 +382,16 @@ def test_rewind_conflict_for_pending_call_has_no_safe_anchor_above(protocol_case
     # pending call 没有任何 terminal result：包含 call 的前缀全部未闭合，
     # 因此只有 call 之前的候选，没有更大的安全切点。
     assert [anchor.cutoff_index for anchor in exc_info.value.safe_anchors] == [1]
-    assert storage.initialize(SESSION_ID) == manifest_before
+    assert storage.storage.initialize(SESSION_ID) == manifest_before
 
 
 def test_rewind_at_closed_boundaries_succeeds(protocol_case) -> None:
     saver, storage, thread, _accepted = protocol_case
     _seed_closed_tool_group(saver, thread)
-    manifest_before = storage.initialize(SESSION_ID)
+    manifest_before = storage.storage.initialize(SESSION_ID)
 
     # 包含完整 call+result 的闭合边界：rewind 成功并推进 view revision。
-    manifest = storage.rewind_to_checkpoint(
+    manifest = storage.checkpoints.rewind_to_checkpoint(
         thread_id=thread,
         checkpoint_id="checkpoint-2",
         source_anchor="tool-result-1",
@@ -400,7 +400,7 @@ def test_rewind_at_closed_boundaries_succeeds(protocol_case) -> None:
     assert manifest.history_view_revision == manifest_before.history_view_revision + 1
 
     # 位于 tool-call group 之前的 user 锚点同样是闭合边界。
-    manifest_user = storage.rewind_to_checkpoint(
+    manifest_user = storage.checkpoints.rewind_to_checkpoint(
         thread_id=thread,
         checkpoint_id="checkpoint-1",
         source_anchor="user-1",
@@ -451,7 +451,7 @@ def test_rewind_keeps_sealed_assembly_bytes_unchanged(frozen_provider_activation
         [user, call, result],
         2,
     )
-    manifest_before = storage.initialize(SESSION_ID)
+    manifest_before = storage.storage.initialize(SESSION_ID)
 
     manager = ContextSourceManager(
         owner=ContextSourceOwnerKey(SESSION_ID, thread), control_state_port=saver,
@@ -480,12 +480,12 @@ def test_rewind_keeps_sealed_assembly_bytes_unchanged(frozen_provider_activation
     sealed_before = saver.list_context_assemblies(SESSION_ID, thread)
     assert len(sealed_before) == 1
     assembly_before = sealed_before[0]
-    detail_ref_before = storage.get_context_assembly_detail_ref(
+    detail_ref_before = storage.assemblies.get_context_assembly_detail_ref(
         SESSION_ID, thread, assembly_id=assembly_before.assembly_id
     )
 
     # rewind 到闭合边界（user 锚点）并推进 view revision。
-    manifest = storage.rewind_to_checkpoint(
+    manifest = storage.checkpoints.rewind_to_checkpoint(
         thread_id=thread,
         checkpoint_id="checkpoint-1",
         source_anchor="user-1",
@@ -500,7 +500,7 @@ def test_rewind_keeps_sealed_assembly_bytes_unchanged(frozen_provider_activation
         == assembly_before
     )
     assert (
-        storage.get_context_assembly_detail_ref(
+        storage.assemblies.get_context_assembly_detail_ref(
             SESSION_ID, thread, assembly_id=assembly_before.assembly_id
         )
         == detail_ref_before

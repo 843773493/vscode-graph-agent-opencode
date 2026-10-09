@@ -23,7 +23,7 @@ from app.services.infrastructure import message_stream_store as store_module
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
-_IDENTITY_FIELDS = ("session_id", "turn_id", "turn_stream_id")
+_IDENTITY_FIELDS = ("session_id", "thread_id", "turn_id", "turn_stream_id")
 _REPEATED_FIELDS = (
     "blocks",
     "tool_calls",
@@ -73,12 +73,13 @@ def test_projection_matrix_is_key_identical_for_zero_and_edge_states(
     message_stream_api: tuple[FastAPI, MessageStreamStore, str, str],
 ) -> None:
     """直接对同一 state 跑两个出口，覆盖 proto3 会省略零值/空 repeated 的字段。"""
-    _, _, session_id, turn_id = message_stream_api
+    _, store, session_id, turn_id = message_stream_api
     turn_stream_id = "strm_projection_matrix"
 
     def state(**overrides: object) -> dict[str, object]:
         base: dict[str, object] = {
             "session_id": session_id,
+            "thread_id": store._path_resolver.main_thread_id(session_id),
             "turn_id": turn_id,
             "turn_stream_id": turn_stream_id,
             "job_id": None,
@@ -211,6 +212,7 @@ def test_projection_matrix_is_key_identical_for_zero_and_edge_states(
         event = {
             "event_id": f"snapshot_{name}",
             "session_id": session_id,
+            "thread_id": store._path_resolver.main_thread_id(session_id),
             "turn_id": turn_id,
             "turn_stream_id": turn_stream_id,
             "event_seq": int(snapshot["snapshot_seq"]),
@@ -255,7 +257,7 @@ async def test_recovery_control_frame_matches_http_snapshot(
     # 收紧保留上限：游标早于保留范围，订阅必须改推 stream.snapshot 控制帧。
     monkeypatch.setattr(store_module, "MESSAGE_STREAM_MAX_BYTES", 1_000)
     monkeypatch.setattr(store_module, "MESSAGE_STREAM_RETAINED_BYTES", 260)
-    writer = await store.open(session_id=session_id, turn_id=turn_id)
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id=turn_id)
     await writer.commit(
         "model.started",
         {"model_call_id": "mc_1", "attempt": 1, "model": "primary"},

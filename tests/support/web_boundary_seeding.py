@@ -104,7 +104,7 @@ def seed_boundary_turn(
     final_item_id: str | None = None,
 ) -> None:
     saver = RolloutCheckpointSaver(sessions_dir)
-    owner = saver.resolve_main_thread_owner(session_id)
+    owner = saver.forks.source.resolve_main_thread_owner(session_id)
     accepted = saver.accept_turn(
         session_id,
         thread_id=owner.thread_id,

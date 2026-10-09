@@ -25,6 +25,16 @@ from app.services.infrastructure.rollout_context.storage.guards import (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class RequestMessageGroup:
+    """本次请求复用的已提交 canonical group 与权威 execution 归属。"""
+
+    message_id: str
+    turn_id: str | None
+    execution_id: str
+    items: tuple[CanonicalItemRecord, ...]
+
+
 class MessageCodec(Protocol):
     """checkpoint 组装层注入的消息适配端口。"""
 
@@ -170,6 +180,10 @@ class InternalExecutionHistoryPage:
     has_more: bool
 
 
+class RolloutNotMaterializedError(KeyError):
+    """真实 owner 尚未执行首次 durable 写入，磁盘上没有 rollout。"""
+
+
 class _RolloutFileLock:
     """为 JSONL 与 SQLite 的跨文件读取/写入提供进程间文件锁。"""
 
@@ -188,15 +202,16 @@ class _RolloutFileLock:
         self._handle: BinaryIO | None = None
 
     def acquire(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        handle = self._path.open("a+b")
+        if self._exclusive:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+        handle = self._path.open("a+b" if self._exclusive else "rb")
         try:
             if os.name == "nt":
                 # TODO: Windows CI 覆盖共享读锁；Windows 当前使用独占锁保证跨文件一致性。
                 import msvcrt
 
                 handle.seek(0, os.SEEK_END)
-                if handle.tell() == 0:
+                if self._exclusive and handle.tell() == 0:
                     handle.write(b" ")
                     handle.flush()
                 handle.seek(0)

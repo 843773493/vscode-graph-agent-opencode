@@ -73,6 +73,7 @@ class _FakeContextReader:
         lower_logical_item_ordinal: int | None,
         upper_logical_item_ordinal: int | None,
         limit: int,
+        execution_id: str | None = None,
     ) -> InternalExecutionHistoryPage:
         self.internal_queries.append(
             (

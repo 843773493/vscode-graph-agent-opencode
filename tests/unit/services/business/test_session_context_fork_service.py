@@ -47,13 +47,16 @@ def fork_services(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ForkServic
     # register 校验 manifest workspace_id 与分配一致，不再硬编码假 UUID。
     from app.core.workspace_identity import load_or_create_workspace_id
 
+    resolver = get_session_path_resolver(sessions_dir)
+    async def drain_fork_owner(session_id: str) -> None:
+        checkpointer.release_fork_retentions(session_id)
+    resolver.bind_session_drain_callback(drain_fork_owner)
     session_service = SessionService(
         config_service=ConfigService(workspace_root=tmp_path),
         trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
         workspace_id=load_or_create_workspace_id(tmp_path),
         path_resolver=get_session_path_resolver(sessions_dir),
         creation_service=get_session_creation_service(sessions_dir),
-        fork_relationship_checker=checkpointer,
     )
     return ForkServices(
         session_service=session_service,
@@ -79,7 +82,7 @@ def write_checkpoint(
         config: RunnableConfig | None = None,
     ) -> RunnableConfig:
         saver = fork_services.checkpointer
-        owner = saver.resolve_main_thread_owner(session_id)
+        owner = saver.forks.source.resolve_main_thread_owner(session_id)
         user = next(
             message for message in checkpoint["channel_values"]["messages"]
             if isinstance(message, HumanMessage)
@@ -118,7 +121,7 @@ def read_checkpoint(
 
     async def read(session_id: str) -> CheckpointTuple | None:
         saver = fork_services.checkpointer
-        owner = saver.resolve_main_thread_owner(session_id)
+        owner = saver.forks.source.resolve_main_thread_owner(session_id)
         with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
             return await saver.aget_tuple(build_checkpoint_config(owner.thread_id))
 
@@ -162,7 +165,7 @@ async def test_fork_copies_agent_state_into_independent_child(
     )
     fork_services.checkpointer.finalize_turn(
         session_id=source.session_id,
-        thread_id=fork_services.checkpointer._storage.main_thread_id(source.session_id),
+        thread_id=fork_services.checkpointer._storage.storage.main_thread_id(source.session_id),
         turn_id="turn-1",
         final_message_id="source-final-1",
     )
@@ -250,13 +253,13 @@ async def test_detached_fork_survives_parent_deletion(
     )
     fork_services.checkpointer.finalize_turn(
         session_id=source.session_id,
-        thread_id=fork_services.checkpointer._storage.main_thread_id(source.session_id),
+        thread_id=fork_services.checkpointer._storage.storage.main_thread_id(source.session_id),
         turn_id="turn-1",
         final_message_id="a1",
     )
 
     child = await fork_services.fork_service.fork(source.session_id)
-    await fork_services.session_service.delete(source.session_id)
+    await fork_services.session_service.path_resolver.delete_subtree(idempotency_key=f"fork-delete-{source.session_id}", root_node_id=source.session_id)
 
     restored = await read_checkpoint(child.session_id)
     assert restored is not None
@@ -298,7 +301,7 @@ async def test_pinned_fork_blocks_parent_deletion(
     )
     fork_services.checkpointer.finalize_turn(
         session_id=source.session_id,
-        thread_id=fork_services.checkpointer._storage.main_thread_id(source.session_id),
+        thread_id=fork_services.checkpointer._storage.storage.main_thread_id(source.session_id),
         turn_id="pinned-turn-1",
         final_message_id="pinned-final-1",
     )
@@ -309,7 +312,7 @@ async def test_pinned_fork_blocks_parent_deletion(
     )
 
     with pytest.raises(RuntimeError, match=child.session_id):
-        await fork_services.session_service.delete(source.session_id)
+        await fork_services.session_service.path_resolver.delete_subtree(idempotency_key=f"fork-delete-{source.session_id}", root_node_id=source.session_id)
 
 
 @pytest.mark.asyncio
@@ -373,7 +376,7 @@ async def test_history_prefix_fork_copies_checkpoints_without_parent_dependency(
         child.session_id
     )
     assert child_path.parent == source_path.parent
-    owner = fork_services.checkpointer.resolve_main_thread_owner(child.session_id)
+    owner = fork_services.checkpointer.forks.source.resolve_main_thread_owner(child.session_id)
     with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
         child_checkpoints = [
             item
@@ -400,7 +403,7 @@ async def test_history_prefix_fork_copies_checkpoints_without_parent_dependency(
         "step": 2
     }
 
-    await fork_services.session_service.delete(source.session_id)
+    await fork_services.session_service.path_resolver.delete_subtree(idempotency_key=f"fork-delete-{source.session_id}", root_node_id=source.session_id)
     restored = await read_checkpoint(child.session_id)
     assert restored is not None
     assert [
@@ -448,11 +451,11 @@ async def test_full_rollout_copy_clones_single_rollout_as_independent_storage(
     )
     fork_services.checkpointer.finalize_turn(
         session_id=source.session_id,
-        thread_id=fork_services.checkpointer._storage.main_thread_id(source.session_id),
+        thread_id=fork_services.checkpointer._storage.storage.main_thread_id(source.session_id),
         turn_id="turn-1",
         final_message_id="a1",
     )
-    owner = fork_services.checkpointer.resolve_main_thread_owner(source.session_id)
+    owner = fork_services.checkpointer.forks.source.resolve_main_thread_owner(source.session_id)
     with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
         fork_services.checkpointer.rewind(
             build_checkpoint_config(owner.thread_id),
@@ -482,7 +485,7 @@ async def test_full_rollout_copy_clones_single_rollout_as_independent_storage(
         fork_services.checkpointer.rollout_id(child.session_id)
     )
 
-    await fork_services.session_service.delete(source.session_id)
+    await fork_services.session_service.path_resolver.delete_subtree(idempotency_key=f"fork-delete-{source.session_id}", root_node_id=source.session_id)
     restored = await read_checkpoint(child.session_id)
     assert restored is not None
     assert restored.checkpoint["channel_values"]["messages"][0].content == "原始内容"
@@ -497,7 +500,7 @@ async def test_full_rollout_copy_accepts_empty_catalog_and_rejects_missing_marke
 ) -> None:
     """fresh 空 catalog 合法；既有库缺 marker 则不能回退成无 activation 事实。"""
 
-    from app.services.infrastructure.rollout_context.storage.resource_activation_store import (
+    from app.services.infrastructure.rollout_context.activation.store import (
         ResourceActivationStoreError,
     )
 
@@ -531,12 +534,12 @@ async def test_full_rollout_copy_accepts_empty_catalog_and_rejects_missing_marke
     )
     fork_services.checkpointer.finalize_turn(
         session_id=source.session_id,
-        thread_id=fork_services.checkpointer._storage.main_thread_id(source.session_id),
+        thread_id=fork_services.checkpointer._storage.storage.main_thread_id(source.session_id),
         turn_id="turn-1",
         final_message_id="a1",
     )
 
-    source_index = fork_services.checkpointer._storage.index_path(source.session_id, "")
+    source_index = fork_services.checkpointer._storage.storage.index_path(source.session_id, "")
     with sqlite3.connect(source_index) as connection:
         tables = {
             row[0]
@@ -562,7 +565,7 @@ async def test_full_rollout_copy_accepts_empty_catalog_and_rejects_missing_marke
         mode="full_rollout_copy",
     )
 
-    child_index = fork_services.checkpointer._storage.index_path(child.session_id, "")
+    child_index = fork_services.checkpointer._storage.storage.index_path(child.session_id, "")
     assert child_index.is_file()
     restored = await read_checkpoint(child.session_id)
     assert restored is not None

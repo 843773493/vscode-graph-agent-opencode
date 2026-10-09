@@ -45,14 +45,14 @@ class RolloutReplayMixin:
             acceptance_idempotency_key,
             field="acceptance_idempotency_key",
         )
-        self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-        with self._connect(
+        self._storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+        with self._storage._connect(
             thread_id,
             checkpoint_ns,
             session_id=session_id,
             read_only=True,
         ) as connection:
-            self._require_v2_runtime(connection)
+            self._storage._require_v2_runtime(connection)
             source = connection.execute(
                 "SELECT root_input_item_id FROM turn_records WHERE turn_id = ?",
                 (source_turn_id,),
@@ -62,7 +62,7 @@ class RolloutReplayMixin:
             root_item_id = strict_text(
                 source[0], field=f"turn_records.root_input_item_id: {source_turn_id}"
             )
-        roots = self.read_items(
+        roots = self._storage.read_items(
             session_id,
             thread_id,
             item_ids=(root_item_id,),
@@ -77,7 +77,7 @@ class RolloutReplayMixin:
         )
         existing_commit: CommittedStorageCommit | None = None
         if acceptance_idempotency_key is not None:
-            with self._connect(
+            with self._storage._connect(
                 thread_id,
                 checkpoint_ns,
                 session_id=session_id,
@@ -212,7 +212,7 @@ class RolloutReplayMixin:
             replay_of_turn_id=source_turn_id,
             identity_origin="replay_as_new_turn",
         )
-        self.register_provenance_edge(
+        self._storage.register_provenance_edge(
             session_id,
             thread_id,
             ProvenanceEdge(

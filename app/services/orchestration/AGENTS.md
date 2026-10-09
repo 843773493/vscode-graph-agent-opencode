@@ -6,6 +6,7 @@
 
 - 可以新增、修改、删除编排服务实现文件。
 - 可以维护 job / session / agent 之间的执行顺序与控制逻辑。
+- `team/`编排Session协作fanout、冷投递恢复和Registry发布，消费既有ledger及Thread pending owner，不另持协作事实。
 
 ## 不可修改内容
 

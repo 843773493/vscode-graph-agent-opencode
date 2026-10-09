@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core.identifier import create_uuid_hex
+from app.core.identifier import create_prefixed_id, create_uuid_hex
 from app.core.session_catalog_resolver import (
     SessionCatalogFolderProjection,
     SessionCatalogPathResolver,
@@ -157,11 +157,11 @@ async def build_catalog_tree(
     resolver: SessionCatalogPathResolver,
 ) -> dict[str, str]:
     """构造嵌套树：根folder F1{会话 S1{folder F2{会话 S2}}, 会话 S3}。"""
-    f1 = resolver.create_folder(name="团队", parent_node_id=None)
+    f1 = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '团队').node_id)
     s1, _ = await allocated_session(
         resolver, title="根会话", parent_node_id=f1.node_id
     )
-    f2 = resolver.create_folder(name="子文件夹", parent_node_id=s1)
+    f2 = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, s1, '子文件夹').node_id)
     s2, _ = await allocated_session(
         resolver,
         title="子会话",
@@ -278,7 +278,7 @@ class TestInitializeAndProperties:
     def test_initialize_passes_on_consistent_catalog(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
-        resolver.create_folder(name="空目录", parent_node_id=None)
+        resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '空目录').node_id)
         resolver.initialize()
 
     def test_initialize_fail_closed_on_cycle(
@@ -306,19 +306,19 @@ class TestInitializeAndProperties:
     def test_revision_tracks_node_changes_but_not_queue_writes(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
-        folder = resolver.create_folder(name="目录", parent_node_id=None)
+        folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '目录').node_id)
         before = resolver.revision
         assert before == 1
         with resolver.catalog_store.write_transaction():
             pass
         assert resolver.revision == before
-        resolver.update_node_name(folder.node_id, "新名")
+        resolver.get_node(resolver.catalog_store.rename_node(folder.node_id, '新名').node_id)
         assert resolver.revision == before + 1
 
     def test_list_nodes_reads_latest_catalog_projection(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
-        folder = resolver.create_folder(name="目录", parent_node_id=None)
+        folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '目录').node_id)
         nodes = resolver.list_nodes()
         assert [node.node_id for node in nodes] == [folder.node_id]
 
@@ -348,7 +348,7 @@ class TestProjection:
     def test_folder_projection_path_is_none(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
-        folder = resolver.create_folder(name="目录", parent_node_id=None)
+        folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '目录').node_id)
         node = resolver.get_node(folder.node_id)
         assert isinstance(node, SessionCatalogFolderProjection)
         assert node.kind == "folder"
@@ -402,7 +402,7 @@ class TestReadMethods:
     def test_resolve_session_node_rejects_folder(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
-        folder = resolver.create_folder(name="目录", parent_node_id=None)
+        folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '目录').node_id)
         with pytest.raises(RuntimeError, match="节点不是会话"):
             resolver.resolve_session_node(folder.node_id)
 
@@ -496,7 +496,7 @@ class TestReadMethods:
     def test_resolve_folder_dir_always_runtime_error(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
-        folder = resolver.create_folder(name="目录", parent_node_id=None)
+        folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '目录').node_id)
         with pytest.raises(RuntimeError, match="folder 无物理目录"):
             resolver.resolve_folder_dir(folder.node_id)
         with pytest.raises(KeyError):
@@ -516,7 +516,7 @@ class TestReadMethods:
     def test_relative_path_rejects_folder(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
-        folder = resolver.create_folder(name="目录", parent_node_id=None)
+        folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '目录').node_id)
         with pytest.raises(RuntimeError, match="folder 无物理目录"):
             resolver.relative_path(folder.node_id)
 
@@ -589,7 +589,7 @@ class TestReadMethods:
     async def test_child_session_summary_rejects_invalid_input(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
-        folder = resolver.create_folder(name="目录", parent_node_id=None)
+        folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '目录').node_id)
         with pytest.raises(KeyError):
             resolver.child_session_summary(folder.node_id, limit=10)
         with pytest.raises(KeyError):
@@ -664,7 +664,8 @@ class TestNavigationWrites:
         # 建树后全部 active，投影 state 全为 active。
         assert all(node.state == "active" for node in resolver.list_nodes())
         # 只把 f1 子树标 deleting（不隔离物理目录）。
-        resolver.begin_subtree_delete(ids["f1"])
+        resolver.catalog_store.create_or_get_subtree_delete_record(idempotency_key=f"fixture-mark-{ids['f1']}", workspace_id=resolver.workspace_id, root_node_id=ids['f1'])
+        resolver.catalog_store.mark_subtree_deleting(f"fixture-mark-{ids['f1']}")
         visible = {node.node_id for node in resolver.list_nodes()}
         # 不抛错；deleting 子树被暂时隐藏，子树外节点仍在。
         assert visible == {ids["s3"]}
@@ -676,12 +677,13 @@ class TestNavigationWrites:
         self, resolver: SessionCatalogPathResolver
     ) -> None:
         ids = await build_catalog_tree(resolver)
-        folder_child = resolver.create_folder(name="子目录", parent_node_id=ids["s3"])
+        folder_child = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, ids['s3'], '子目录').node_id)
         assert {node.node_id for node in resolver.child_nodes(ids["s3"])} == {
             folder_child.node_id
         }
         # 该子 folder 标 deleting 后从 child_nodes 隐藏。
-        resolver.begin_subtree_delete(folder_child.node_id)
+        resolver.catalog_store.create_or_get_subtree_delete_record(idempotency_key=f"fixture-mark-{folder_child.node_id}", workspace_id=resolver.workspace_id, root_node_id=folder_child.node_id)
+        resolver.catalog_store.mark_subtree_deleting(f"fixture-mark-{folder_child.node_id}")
         assert resolver.child_nodes(ids["s3"]) == []
 
     @pytest.mark.asyncio
@@ -693,7 +695,8 @@ class TestNavigationWrites:
         """deleting 节点的物理目录已隔离时，breadcrumb 仍可解析并带 state。"""
         ids = await build_catalog_tree(resolver)
         s1_dir = resolver.resolve_session_node(ids["s1"])
-        resolver.begin_subtree_delete(ids["f1"])
+        resolver.catalog_store.create_or_get_subtree_delete_record(idempotency_key=f"fixture-mark-{ids['f1']}", workspace_id=resolver.workspace_id, root_node_id=ids['f1'])
+        resolver.catalog_store.mark_subtree_deleting(f"fixture-mark-{ids['f1']}")
         # 模拟 drain 已把 s1 的日期桶目录隔离到 .deleting/。
         target = sessions_root / ".deleting" / "manual" / ids["s1"]
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -706,13 +709,13 @@ class TestNavigationWrites:
         assert states[ids["s2"]] == "deleting"
 
     @pytest.mark.asyncio
-    async def test_update_node_name_only_changes_catalog(
+    async def test_catalog_rename_only_changes_display_name(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
         session_id, session_dir = await allocated_session(resolver)
         manifest_before = (session_dir / "session.json").read_bytes()
         revision_before = resolver.revision
-        node = resolver.update_node_name(session_id, "新标题")
+        node = resolver.get_node(resolver.catalog_store.rename_node(session_id, '新标题').node_id)
         assert node.name == "新标题"
         assert resolver.get_node(session_id).name == "新标题"
         # 物理目录与 manifest 不动（旧语义 rename 物理目录名，新语义仅 SQLite）。
@@ -724,61 +727,44 @@ class TestNavigationWrites:
     async def test_move_node_changes_parent_without_disk_move(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
-        target = resolver.create_folder(name="目标", parent_node_id=None)
-        mover = resolver.create_folder(name="被移动夹", parent_node_id=None)
+        target = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '目标').node_id)
+        mover = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '被移动夹').node_id)
         child_id, child_dir = await allocated_session(
             resolver, title="子会话", parent_node_id=mover.node_id
         )
         fingerprint = directory_fingerprint(child_dir)
-        node = resolver.move_node(
-            node_id=mover.node_id, parent_node_id=target.node_id
-        )
+        node = resolver.get_node(resolver.catalog_store.move_node(mover.node_id, target.node_id).node_id)
         assert node.parent_node_id == target.node_id
         # 逻辑移动不搬磁盘：子会话物理目录路径、mtime、字节、条目集不变。
         assert resolver.resolve_session_node(child_id) == child_dir
         assert directory_fingerprint(child_dir) == fingerprint
 
-    @pytest.mark.asyncio
-    async def test_move_node_rejects_session_node(
-        self, resolver: SessionCatalogPathResolver
-    ) -> None:
-        session_id, _ = await allocated_session(resolver)
-        with pytest.raises(ValueError, match="relocate_session"):
-            resolver.move_node(node_id=session_id, parent_node_id=None)
 
     def test_move_node_cycle_rejected(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
-        f1 = resolver.create_folder(name="外层", parent_node_id=None)
-        f2 = resolver.create_folder(name="内层", parent_node_id=f1.node_id)
+        f1 = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '外层').node_id)
+        f2 = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, f1.node_id, '内层').node_id)
         # 自环
         with pytest.raises(RuntimeError, match="自身"):
-            resolver.move_node(node_id=f1.node_id, parent_node_id=f1.node_id)
+            resolver.get_node(resolver.catalog_store.move_node(f1.node_id, f1.node_id).node_id)
         with pytest.raises(RuntimeError, match="循环"):
-            resolver.move_node(node_id=f1.node_id, parent_node_id=f2.node_id)
+            resolver.get_node(resolver.catalog_store.move_node(f1.node_id, f2.node_id).node_id)
 
     @pytest.mark.asyncio
-    async def test_relocate_session_changes_parent_without_disk_move(
+    async def test_catalog_move_changes_parent_without_disk_move(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
         target_session, _ = await allocated_session(resolver, title="目标会话")
         session_id, session_dir = await allocated_session(resolver)
         fingerprint = directory_fingerprint(session_dir)
-        node = resolver.relocate_session(
-            session_id=session_id, parent_node_id=target_session
-        )
+        node = resolver.get_node(resolver.catalog_store.move_node(session_id, target_session).node_id)
         assert node.parent_node_id == target_session
         assert resolver.resolve_session_node(session_id) == session_dir
         assert directory_fingerprint(session_dir) == fingerprint
         # manifest 的 parent_session_id 由 catalog 派生，不改写文件。
         assert "parent_session_id" not in read_manifest(session_dir)
 
-    def test_relocate_session_rejects_folder(
-        self, resolver: SessionCatalogPathResolver
-    ) -> None:
-        folder = resolver.create_folder(name="目录", parent_node_id=None)
-        with pytest.raises(RuntimeError, match="节点不是会话"):
-            resolver.relocate_session(session_id=folder.node_id, parent_node_id=None)
 
     @pytest.mark.asyncio
     async def test_move_folder_tree_moves_root_only(
@@ -793,7 +779,7 @@ class TestNavigationWrites:
         # S2 在 F1 子树内，抓 S2 目录指纹验证不动磁盘。
         s2_dir = resolver.resolve_session_node(ids["s2"])
         s2_fingerprint = directory_fingerprint(s2_dir)
-        moved = resolver.move_node(node_id=ids["f1"], parent_node_id=target)
+        moved = resolver.get_node(resolver.catalog_store.move_node(ids['f1'], target).node_id)
         assert moved.parent_node_id == target
         # 根改父，后代父子关系不变；会话物理目录不动。
         assert resolver.get_node(ids["s1"]).parent_node_id == ids["f1"]
@@ -804,21 +790,21 @@ class TestNavigationWrites:
     async def test_delete_folder_empty_ok_and_nonempty_rejected(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
-        empty = resolver.create_folder(name="空夹", parent_node_id=None)
-        resolver.delete_folder(empty.node_id)
+        empty = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '空夹').node_id)
+        resolver.catalog_store.delete_empty_folder(empty.node_id)
         with pytest.raises(KeyError):
             resolver.get_node(empty.node_id)
-        nonempty = resolver.create_folder(name="非空夹", parent_node_id=None)
+        nonempty = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '非空夹').node_id)
         await allocated_session(resolver, parent_node_id=nonempty.node_id)
         with pytest.raises(RuntimeError, match="非空"):
-            resolver.delete_folder(nonempty.node_id)
+            resolver.catalog_store.delete_empty_folder(nonempty.node_id)
         with pytest.raises(KeyError):
-            resolver.delete_folder(make_node_id())
+            resolver.catalog_store.delete_empty_folder(make_node_id())
 
     def test_create_folder_no_physical_dir_no_manifest(
         self, resolver: SessionCatalogPathResolver, sessions_root: Path
     ) -> None:
-        folder = resolver.create_folder(name="目录", parent_node_id=None)
+        folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '目录').node_id)
         assert folder.node_id.startswith("ses_")
         assert len(folder.node_id) == 36
         # 无物理目录、无 manifest：sessions 树中不存在同名路径。
@@ -834,109 +820,25 @@ class TestNavigationWrites:
 
 class TestSubtreeDelete:
     @pytest.mark.asyncio
-    async def test_begin_marks_whole_tree_deleting(
-        self, resolver: SessionCatalogPathResolver, store: SessionCatalogStore
-    ) -> None:
+    async def test_shared_delete_drains_and_replays(self, resolver: SessionCatalogPathResolver,
+                                                   store: SessionCatalogStore) -> None:
         ids = await build_catalog_tree(resolver)
-        resolver.begin_subtree_delete(ids["f1"])
-        for node_id in (ids["f1"], ids["s1"], ids["f2"], ids["s2"]):
-            assert store.get_node(node_id).state == "deleting"
-        # 子树外节点不受影响。
+        paths = [resolver.resolve_session_node(ids[key]) for key in ("s1", "s2")]
+        result = await resolver.delete_subtree(idempotency_key="resolver-delete", root_node_id=ids["f1"])
+        assert result.record_state == "completed"
+        assert sorted(result.drained_session_ids) == sorted([ids["s1"], ids["s2"]])
+        assert all(not path.exists() for path in paths)
         assert store.get_node(ids["s3"]).state == "active"
-        # 同一 resolver 实例重入时复用既有删除锁，供 drain/finish 失败后
-        # 继续处理原 record；不得重新冻结或创建第二条删除记录。
-        resolver.begin_subtree_delete(ids["f1"])
-        for node_id in (ids["f1"], ids["s1"], ids["f2"], ids["s2"]):
-            assert store.get_node(node_id).state == "deleting"
+        replay = await resolver.delete_subtree(idempotency_key="resolver-delete", root_node_id=ids["f1"])
+        assert replay == result
 
     @pytest.mark.asyncio
-    async def test_begin_rejects_non_folder_and_missing(
-        self, resolver: SessionCatalogPathResolver
-    ) -> None:
-        session_id, _ = await allocated_session(resolver)
-        with pytest.raises(RuntimeError, match="会话文件夹"):
-            resolver.begin_subtree_delete(session_id)
-        with pytest.raises(KeyError):
-            resolver.begin_subtree_delete(make_node_id())
-
-    @pytest.mark.asyncio
-    async def test_finish_drains_and_tombstones(
-        self,
-        resolver: SessionCatalogPathResolver,
-        store: SessionCatalogStore,
-        sessions_root: Path,
-    ) -> None:
-        ids = await build_catalog_tree(resolver)
-        s1_dir = resolver.resolve_session_node(ids["s1"])
-        s2_dir = resolver.resolve_session_node(ids["s2"])
-        resolver.begin_subtree_delete(ids["f1"])
-        await resolver.finish_subtree_delete(ids["f1"])
-        # tombstone：全部冻结行删除。
-        for node_id in (ids["f1"], ids["s1"], ids["f2"], ids["s2"]):
-            with pytest.raises(KeyError):
-                store.get_node(node_id)
-        # 物理隔离：日期桶目录移入 .deleting/<key>/<session_id>/。
-        deleting_root = sessions_root / ".deleting"
-        isolated = [
-            entry
-            for entry in deleting_root.rglob("*")
-            if entry.is_dir() and entry.name in (ids["s1"], ids["s2"])
-        ]
-        assert {entry.name for entry in isolated} == {ids["s1"], ids["s2"]}
-        assert not s1_dir.exists()
-        assert not s2_dir.exists()
-        # 无对应 begin 的 finish → RuntimeError。
-        with pytest.raises(RuntimeError, match="删除锁不存在"):
-            await resolver.finish_subtree_delete(ids["f1"])
-
-    @pytest.mark.asyncio
-    async def test_finish_without_begin_rejected(
-        self, resolver: SessionCatalogPathResolver
-    ) -> None:
-        folder = resolver.create_folder(name="目录", parent_node_id=None)
-        with pytest.raises(RuntimeError, match="删除锁不存在"):
-            await resolver.finish_subtree_delete(folder.node_id)
-
-    @pytest.mark.asyncio
-    async def test_delete_session_subtree_single_call(
-        self,
-        resolver: SessionCatalogPathResolver,
-        store: SessionCatalogStore,
-        sessions_root: Path,
-    ) -> None:
-        parent_id, parent_dir = await allocated_session(resolver, title="父会话")
-        child_id, child_dir = await allocated_session(
-            resolver, title="子会话", parent_node_id=parent_id
-        )
-        deleted = await resolver.delete_session_subtree(parent_id)
-        assert deleted == [child_id]
-        with pytest.raises(KeyError):
-            store.get_node(parent_id)
-        with pytest.raises(KeyError):
-            store.get_node(child_id)
-        assert not parent_dir.exists()
-        assert not child_dir.exists()
-        isolated = [
-            entry
-            for entry in (sessions_root / ".deleting").rglob("*")
-            if entry.is_dir() and entry.name in (parent_id, child_id)
-        ]
-        assert {entry.name for entry in isolated} == {parent_id, child_id}
-
-    @pytest.mark.asyncio
-    async def test_delete_session_subtree_rejects_folder_and_missing(
-        self, resolver: SessionCatalogPathResolver
-    ) -> None:
-        folder = resolver.create_folder(name="目录", parent_node_id=None)
-        with pytest.raises(RuntimeError, match="节点不是会话"):
-            await resolver.delete_session_subtree(folder.node_id)
-        with pytest.raises(KeyError):
-            await resolver.delete_session_subtree(make_node_id())
-
-
-# ----------------------------------------------------------------------
-# store.create_or_get_creation_record 的可选 session_id（R17 §2.1-A）
-# ----------------------------------------------------------------------
+    async def test_shared_delete_uses_session_owner(self, resolver: SessionCatalogPathResolver) -> None:
+        parent, parent_dir = await allocated_session(resolver, title="父")
+        child, child_dir = await allocated_session(resolver, title="子", parent_node_id=parent)
+        result = await resolver.delete_subtree(idempotency_key="resolver-session-delete", root_node_id=parent)
+        assert sorted(result.drained_session_ids) == sorted([parent, child])
+        assert not parent_dir.exists() and not child_dir.exists()
 
 
 class TestStoreCreationRecordHonorsSessionId:

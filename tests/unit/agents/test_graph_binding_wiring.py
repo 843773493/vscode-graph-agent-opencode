@@ -102,6 +102,7 @@ def test_execution_service_passes_store_to_runtime() -> None:
         graph_binding_store=store,
         residency_tracker=ThreadResidencyTracker(),
         resource_activation_factory=MagicMock(),
+        team_resource_subscriber=MagicMock(),
     )
 
     with patch(

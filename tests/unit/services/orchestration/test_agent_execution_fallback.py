@@ -350,6 +350,7 @@ def _make_service(deps):
         graph_binding_store=deps["graph_binding_store"],
         residency_tracker=deps["residency_tracker"],
         resource_activation_factory=deps["resource_activation_factory"],
+        team_resource_subscriber=lambda _session, _thread, _registry, _scope: None,
         config_service=deps["config_service"],
         background_task_registry=deps["registry"],
         background_message_bus=deps["msg_bus"],

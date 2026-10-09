@@ -120,10 +120,47 @@ export function parseWorkspaceFileChangeBatch(
       ),
     };
   });
+  if (!Array.isArray(source.directories) || !Array.isArray(source.invalidated_roots) || !Array.isArray(source.snapshots)
+    || !Number.isSafeInteger(source.event_id) || (source.event_id as number) < 0) {
+    throw new Error("WorkspaceFileChangeBatchDTO 校验失败: 缺少目录版本、事件序号或失效根");
+  }
+  const directories = source.directories.map((item, index) => {
+    const revision = asRecord(item, `/directories/${index}`);
+    const key = asRecord(revision.directory_key, `/directories/${index}/directory_key`);
+    if (!Number.isSafeInteger(revision.directory_revision) || (revision.directory_revision as number) < 1
+      || typeof revision.exists !== "boolean" || typeof key.path !== "string"
+      || !["workspace", "filesystem"].includes(String(key.scope))) {
+      throw new Error("WorkspaceFileChangeBatchDTO 校验失败: 目录观察格式无效");
+    }
+    return { directoryKey: {
+      workspaceId: requiredString(key, "workspace_id", "/directories", "WorkspaceFileChangeBatchDTO"),
+      root: requiredString(key, "root", "/directories", "WorkspaceFileChangeBatchDTO"),
+      scope: key.scope as string, path: key.path,
+    }, directoryRevision: revision.directory_revision as number, exists: revision.exists };
+  });
+  if (!source.invalidated_roots.every((root) => typeof root === "string" && root.length > 0)) {
+    throw new Error("WorkspaceFileChangeBatchDTO 校验失败: 失效根必须为非空路径");
+  }
+  const snapshots = source.snapshots.map((item, index) => {
+    const path = `/snapshots/${index}`;
+    const snapshot = asRecord(item, path);
+    const key = asRecord(snapshot.directory_key, `${path}/directory_key`);
+    const revision = directories.find((value) => value.directoryKey.workspaceId === key.workspace_id
+      && value.directoryKey.scope === key.scope && value.directoryKey.root === key.root
+      && value.directoryKey.path === key.path);
+    if (!revision?.exists || !Number.isSafeInteger(snapshot.directory_revision)
+      || snapshot.directory_revision !== revision.directoryRevision
+      || typeof snapshot.path !== "string" || snapshot.path !== key.path
+      || snapshot.root_path !== key.root || !Array.isArray(snapshot.items)) {
+      throw new Error(`WorkspaceFileChangeBatchDTO 校验失败: ${path} 缺少同次目录键/revision 配对`);
+    }
+    return snapshot as JsonObject;
+  });
   return parseProto("WorkspaceFileChangeBatchDTO", () =>
     fromJson(
       WorkspaceFileChangeBatchSchema,
-      { changes, overflow },
+      { changes, overflow, directories, eventId: source.event_id as number,
+        invalidatedRoots: source.invalidated_roots as string[], snapshots },
       { ignoreUnknownFields: false },
     ),
   );

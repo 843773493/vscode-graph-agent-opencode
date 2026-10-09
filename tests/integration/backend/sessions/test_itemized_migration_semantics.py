@@ -14,7 +14,7 @@ from app.domain.itemized.errors import FormatDispatchError
 from app.services.infrastructure.rollout_context.migration.importer import (
     LegacyRolloutImporter,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from tests.integration.backend.sessions.itemized_migration_helpers import (
     _accepted_records,
     _storage,
@@ -30,7 +30,7 @@ TARGET_SESSION_ID = "ses_019b9187b87f78c78ef242bbd6043bfc"
 def migration_setup(request: pytest.FixtureRequest, session_bundle_factory) -> Callable:
     sessions = prepare_migration_workspace(request) / ".boxteam" / "sessions"
 
-    def setup(records: list[dict[str, object]]) -> RolloutStorage:
+    def setup(records: list[dict[str, object]]) -> RolloutContextStore:
         _write_v1_source(
             sessions,
             session_id=SOURCE_SESSION_ID,
@@ -90,14 +90,14 @@ def test_tool_calls_and_results_get_target_local_linked_identity(
     storage = migration_setup([*records, result, final])
     imported = LegacyRolloutImporter(storage).import_v1(
         source_session_id=SOURCE_SESSION_ID,
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+        source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
         target_session_id=TARGET_SESSION_ID,
-        target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+        target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
         checkpoint_ns="",
         require_lossless=True,
     )
-    items = storage.read_items(
-        TARGET_SESSION_ID, storage.main_thread_id(TARGET_SESSION_ID)
+    items = storage.storage.read_items(
+        TARGET_SESSION_ID, storage.storage.main_thread_id(TARGET_SESSION_ID)
     )
     call = next(item for item in items if item.semantic_kind == "tool_call")
     result_item = next(item for item in items if item.semantic_kind == "tool_result")
@@ -157,9 +157,9 @@ def test_conflicting_candidates_never_create_turns(
     storage = migration_setup(records)
     result = LegacyRolloutImporter(storage).import_v1(
         source_session_id=SOURCE_SESSION_ID,
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+        source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
         target_session_id=TARGET_SESSION_ID,
-        target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+        target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
         checkpoint_ns="",
     )
     assert not result["migrated"]
@@ -170,7 +170,7 @@ def test_conflicting_candidates_never_create_turns(
         records
     )
     assert (
-        storage.read_items(TARGET_SESSION_ID, storage.main_thread_id(TARGET_SESSION_ID))
+        storage.storage.read_items(TARGET_SESSION_ID, storage.storage.main_thread_id(TARGET_SESSION_ID))
         == []
     )
 
@@ -187,14 +187,14 @@ def test_system_reminder_never_becomes_a_turn_member(
     storage = migration_setup([*records, notice])
     result = LegacyRolloutImporter(storage).import_v1(
         source_session_id=SOURCE_SESSION_ID,
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+        source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
         target_session_id=TARGET_SESSION_ID,
-        target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+        target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
         checkpoint_ns="",
     )
     if trusted:
-        item = storage.read_items(
-            TARGET_SESSION_ID, storage.main_thread_id(TARGET_SESSION_ID)
+        item = storage.storage.read_items(
+            TARGET_SESSION_ID, storage.storage.main_thread_id(TARGET_SESSION_ID)
         )[-1]
         assert (item.semantic_kind, item.turn_id, item.turn_scope) == (
             "runtime_notice",
@@ -204,8 +204,8 @@ def test_system_reminder_never_becomes_a_turn_member(
     else:
         assert result["rejected"][0]["candidate_status"] == "legacy_unsupported_role"
         assert (
-            storage.read_items(
-                TARGET_SESSION_ID, storage.main_thread_id(TARGET_SESSION_ID)
+            storage.storage.read_items(
+                TARGET_SESSION_ID, storage.storage.main_thread_id(TARGET_SESSION_ID)
             )
             == []
         )
@@ -218,7 +218,7 @@ def test_manifest_final_pointer_is_validated(
     records = _accepted_records()
     records[1]["metadata"] = {}
     storage = migration_setup(records)
-    with sqlite3.connect(storage.index_path(SOURCE_SESSION_ID)) as connection:
+    with sqlite3.connect(storage.storage.index_path(SOURCE_SESSION_ID)) as connection:
         connection.execute(
             "CREATE TABLE turns(turn_id TEXT,status TEXT,final_message_id TEXT,final_message_sequence INTEGER)"
         )
@@ -230,18 +230,18 @@ def test_manifest_final_pointer_is_validated(
         with pytest.raises(FormatDispatchError, match="final pointer"):
             LegacyRolloutImporter(storage).import_v1(
                 source_session_id=SOURCE_SESSION_ID,
-                source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+                source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
                 target_session_id=TARGET_SESSION_ID,
-                target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+                target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
                 checkpoint_ns="",
             )
-        assert not storage.root(TARGET_SESSION_ID).exists()
+        assert not storage.storage.root(TARGET_SESSION_ID).exists()
     else:
         result = LegacyRolloutImporter(storage).import_v1(
             source_session_id=SOURCE_SESSION_ID,
-            source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+            source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
             target_session_id=TARGET_SESSION_ID,
-            target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+            target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
             checkpoint_ns="",
         )
         assert result["migrated"][0]["status"] == "completed"
@@ -254,7 +254,7 @@ def test_legacy_manifest_content_identity_is_checked(
 ) -> None:
     records = _accepted_records()
     storage = migration_setup(records)
-    with sqlite3.connect(storage.index_path(SOURCE_SESSION_ID)) as connection:
+    with sqlite3.connect(storage.storage.index_path(SOURCE_SESSION_ID)) as connection:
         connection.executescript(
             "ALTER TABLE messages ADD COLUMN role TEXT; ALTER TABLE messages ADD COLUMN content_hash TEXT; ALTER TABLE messages ADD COLUMN content_length INTEGER;"
         )
@@ -287,19 +287,19 @@ def test_legacy_manifest_content_identity_is_checked(
         ):
             LegacyRolloutImporter(storage).import_v1(
                 source_session_id=SOURCE_SESSION_ID,
-                source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+                source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
                 target_session_id=TARGET_SESSION_ID,
-                target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+                target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
                 checkpoint_ns="",
             )
-        assert not storage.root(TARGET_SESSION_ID).exists()
+        assert not storage.storage.root(TARGET_SESSION_ID).exists()
     else:
         assert (
             LegacyRolloutImporter(storage).import_v1(
                 source_session_id=SOURCE_SESSION_ID,
-                source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+                source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
                 target_session_id=TARGET_SESSION_ID,
-                target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+                target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
                 checkpoint_ns="",
             )["lossless"]
             is True

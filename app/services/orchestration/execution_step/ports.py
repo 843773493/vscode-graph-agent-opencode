@@ -13,6 +13,7 @@ from app.services.orchestration.thread_residency import ThreadRuntimeLease
 if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
 
+    from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
     from app.abstractions.job_event_bus import JobEventBusProtocol
     from app.abstractions.session_changes import SessionChangesRecorderProtocol
     from app.abstractions.session_context import SessionLookupProtocol
@@ -60,6 +61,7 @@ class StepExecutionPorts:
     tool_selection_store: ToolSelectionReader
     session_changes_service: SessionChangesRecorderProtocol
     message_stream_store: MessageStreamStore
+    background_message_bus: BackgroundMessageBusProtocol
     workspace_root: Path
     agent_factory: StepAgentFactory
     # Turn 控制 inbox 的持久状态路径解析器：把 (session_id, turn_stream_id)

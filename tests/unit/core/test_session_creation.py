@@ -21,6 +21,7 @@ from app.core.session_catalog_store import (
     SessionCatalogStore,
     SessionCreationRecord,
 )
+from app.core.session_catalog_store.queries import _register_session_list_functions
 from app.core.session_control_store import SessionControlStore
 from app.core.session_creation import (
     ForkCompletionProof,
@@ -44,19 +45,8 @@ from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 WORKSPACE_ID = "ws-create"
 _SESSION_ID_PATH_PLACEHOLDER = "ses_00000000000070008000000000000000"
 
-# 剥离 manifest 的完整字段闭集（调用方六字段 + 服务派生四字段）。
-_STRIPPED_MANIFEST_KEYS = {
-    "session_id",
-    "workspace_id",
-    "kind",
-    "delegation",
-    "generation_origin",
-    "created_at",
-    "updated_at",
-    "current_agent_id",
-    "current_provider_id",
-    "context_source_session_id",
-}
+# 身份 envelope 仅保留不可变的三键。
+_STRIPPED_MANIFEST_KEYS = {"session_id", "workspace_id", "created_at"}
 
 
 def make_metadata(**overrides: object) -> dict[str, object]:
@@ -512,7 +502,7 @@ async def test_context_fork_cas_failure_preserves_prepared_state_until_abort(
 async def test_create_writes_stripped_session_json(
     service: SessionCreationService, sessions_root: Path
 ) -> None:
-    generation_origin = {"generator_id": "gen-1", "run_id": "run-1"}
+    generation_origin = {"generator_id": "gen-1", "run_id": "run-1", "idempotency_key": "origin-1", "generator_type_id": "test", "generator_type_version": "1"}
     metadata = make_metadata(
         kind="normal",
         generation_origin=generation_origin,
@@ -524,7 +514,7 @@ async def test_create_writes_stripped_session_json(
         / "session.json"
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    # 字段集恰为剥离版十字段；不含可变导航字段
+    # 业务字段只初始化 catalog，身份 envelope 不承载可变状态。
     assert set(manifest) == _STRIPPED_MANIFEST_KEYS
     assert "title" not in manifest
     assert "title_source" not in manifest
@@ -532,13 +522,12 @@ async def test_create_writes_stripped_session_json(
     assert manifest["session_id"] == result.session_id
     assert manifest["workspace_id"] == WORKSPACE_ID
     assert manifest["created_at"] == result.node.created_at
-    assert manifest["updated_at"] == manifest["created_at"]
-    assert manifest["kind"] == "normal"
-    assert manifest["generation_origin"] == generation_origin
-    assert manifest["current_agent_id"] == "default"
-    assert manifest["current_provider_id"] == "provider-x"
-    assert manifest["context_source_session_id"] is None
-    assert manifest["delegation"] is None
+    assert result.node.updated_at == result.node.created_at
+    assert result.node.session_kind == "normal"
+    assert json.loads(result.node.generation_origin_json) == generation_origin
+    assert result.node.current_agent_id == "default"
+    assert result.node.current_provider_id == "provider-x"
+    assert result.node.context_source_session_id is None
 
 
 async def test_create_initializes_session_control_database(
@@ -620,6 +609,37 @@ async def test_create_idempotent_same_result(
     assert second.record_state == "published"
     assert count_rows(store, "nodes") == 1
     assert count_rows(store, "session_creation_records") == 1
+
+
+async def test_published_replay_preserves_current_catalog_business_fields(
+    service: SessionCreationService,
+    store: SessionCatalogStore,
+    sessions_root: Path,
+) -> None:
+    """creation journal 只冻结首次发布意图，重放不得恢复旧业务字段。"""
+    first = await do_create(service)
+    record = store.get_creation_record("key-1")
+    manifest_path = date_bucket_dir(sessions_root, record.storage_relative_locator) / "session.json"
+    manifest_bytes = manifest_path.read_bytes()
+    folder = store.create_folder(make_node_id(), WORKSPACE_ID, None, "发布后归档")
+    store.move_node(first.session_id, folder.node_id)
+    store.rename_node(first.session_id, "发布后名称")
+    updated = store.update_session_configuration(
+        first.session_id,
+        current_agent_id="coder",
+        current_provider_id=None,
+        updated_at=datetime(2026, 10, 9, tzinfo=UTC),
+    )
+
+    replayed = await do_create(service)
+
+    assert replayed.node == updated
+    assert replayed.node.current_agent_id == "coder"
+    assert replayed.node.current_provider_id is None
+    assert replayed.node.parent_node_id == folder.node_id
+    assert replayed.node.display_name == "发布后名称"
+    assert store.get_creation_record("key-1") == record
+    assert manifest_path.read_bytes() == manifest_bytes
 
 
 async def test_create_idempotent_three_times(
@@ -989,6 +1009,7 @@ async def test_recovery_published_record_missing_node_fails_closed(
     record = store.get_creation_record("key-1")
     connection = sqlite3.connect(store.database_path)
     try:
+        _register_session_list_functions(connection)
         connection.execute("PRAGMA foreign_keys = OFF")
         connection.execute(
             "DELETE FROM nodes WHERE node_id = ?", (record.session_id,)
@@ -1073,14 +1094,15 @@ async def test_cas_failure_locator_occupied_preserves_until_explicit_abort(
     store.connection.execute(
         "INSERT INTO nodes (node_id, kind, parent_node_id, display_name, "
         "title_source, state, revision, workspace_id, created_at, "
-        "storage_relative_locator, main_thread_id) "
-        "VALUES (?, 'session', NULL, '占位', 'user', 'active', 1, ?, ?, ?, ?)",
+        "storage_relative_locator, main_thread_id, session_kind, current_agent_id, updated_at) "
+        "VALUES (?, 'session', NULL, '占位', 'user', 'active', 1, ?, ?, ?, ?, 'normal', 'default', ?)",
         (
             make_node_id(),
             WORKSPACE_ID,
             record.created_at,
             record.storage_relative_locator,
             f"thr_{create_uuid_hex()}",
+            record.created_at,
         ),
     )
     with pytest.raises(RuntimeError, match="CAS 失败") as error:

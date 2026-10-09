@@ -134,6 +134,38 @@ async def test_unknown_tool_terminal_paths_keep_registered_provider_identity(
 
 
 @pytest.mark.asyncio
+async def test_canonical_append_failure_keeps_tool_for_failed_cleanup(
+    runtime: MessageStreamRuntime,
+    item_sink: AsyncMock,
+    active_provider_tool: str,
+) -> None:
+    """未提交的 Saver 失败不得被误认成 observer 的提交后失败。"""
+    append_error = RuntimeError("canonical append 没有提交")
+    item_sink.side_effect = append_error
+    with pytest.raises(RuntimeError) as captured:
+        await runtime.complete_tool(
+            tool_execution_id="exec_1",
+            tool_call_id=active_provider_tool,
+            tool_name="shell",
+            status="succeeded",
+            result="尚未提交的结果",
+        )
+    assert captured.value is append_error
+
+    item_sink.side_effect = None
+    await runtime.fail_active_tool_executions(
+        completion_reason="execution_error",
+        error="canonical append 没有提交",
+    )
+
+    assert item_sink.await_count == 3
+    result, = item_sink.await_args_list[-1].args[0]
+    assert result.semantic_kind == "tool_result"
+    assert result.payload["tool_call_id"] == active_provider_tool
+    assert result.payload["tool_outcome"] == "unknown"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("canonical_mode", ["no_sink", "disabled"])
 async def test_display_tool_completion_without_provider_registration(
     runtime: MessageStreamRuntime,

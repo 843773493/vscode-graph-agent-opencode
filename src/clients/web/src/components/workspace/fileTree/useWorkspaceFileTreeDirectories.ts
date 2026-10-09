@@ -1,5 +1,7 @@
 import { useCallback, useRef, useState, type MutableRefObject } from "react";
-import { getWorkspaceFiles } from "../../../api";
+import { filesystemFileTreePath, getWorkspaceFiles } from "../../../api";
+import { HttpRequestError } from "../../../api/http";
+import type { WorkspaceDirectoryKey, WorkspaceDirectoryRevision, WorkspaceFileList } from "../../../types/backend";
 import { errorDisplayMessage } from "../../../utils/errorMessage";
 import {
   failedDirectoryEntry,
@@ -19,6 +21,7 @@ import {
 interface DirectoryRequest {
   controller: AbortController;
   promise: Promise<boolean>;
+  minimumRevision: number;
 }
 
 interface UseWorkspaceFileTreeDirectoriesOptions {
@@ -39,7 +42,10 @@ interface WorkspaceFileTreeDirectories {
     ) => Record<string, DirectoryCacheEntry>,
   ) => void;
   loadDirectory: (path: string, force?: boolean, append?: boolean) => Promise<boolean>;
-  reloadExpandedDirectories: () => void;
+  reloadExpandedDirectories: (roots: readonly string[]) => void;
+  reconcileDirectories: (directories: readonly WorkspaceDirectoryRevision[], forcePath?: string) => Promise<void>;
+  acceptSnapshots: (snapshots: readonly WorkspaceFileList[], forcePath?: string) => void;
+  directoryVersion: (path: string) => { key: WorkspaceDirectoryKey; revision: number } | null;
   invalidateDirectoriesUnder: (treePath: string) => void;
   abortAllDirectoryRequests: () => string[];
   resetDirectories: () => void;
@@ -61,13 +67,15 @@ export function useWorkspaceFileTreeDirectories({
   const [directories, setDirectories] = useState<Record<string, DirectoryCacheEntry>>({});
   const directoriesRef = useRef<Record<string, DirectoryCacheEntry>>({});
   const directoryRequestsRef = useRef<Map<string, DirectoryRequest>>(new Map());
+  const minimumRevisionsRef = useRef<Map<string, number>>(new Map());
 
   const updateDirectories = useCallback((
     updater: (
       current: Record<string, DirectoryCacheEntry>,
     ) => Record<string, DirectoryCacheEntry>,
   ) => {
-    setDirectories((current) => {
+    {
+      const current = directoriesRef.current;
       const candidate = updater(current);
       const protectedPaths = new Set(expandedPathsRef.current);
       protectedPaths.add(ROOT_PATH);
@@ -85,8 +93,11 @@ export function useWorkspaceFileTreeDirectories({
       }
       const next = pruneDirectoryCache(candidate, protectedPaths);
       directoriesRef.current = next;
-      return next;
-    });
+      for (const path of minimumRevisionsRef.current.keys()) {
+        if (!next[path]) minimumRevisionsRef.current.delete(path);
+      }
+      setDirectories(next);
+    }
   }, [activeFilePathRef, expandedPathsRef, shortcutTreePathsRef]);
 
   const loadDirectory = useCallback(
@@ -119,6 +130,17 @@ export function useWorkspaceFileTreeDirectories({
           if (directoryRequestsRef.current.get(path)?.controller !== controller) {
             return false;
           }
+          const previous = directoriesRef.current[path];
+          if ((result.directory_revision < (minimumRevisionsRef.current.get(path) ?? 0))
+            || (sameDirectoryKey(previous?.directoryKey, result.directory_key)
+              && result.directory_revision < (previous?.directoryRevision ?? 0))) {
+            updateDirectories((prev) => ({ ...prev, [path]: { ...prev[path], loading: false } }));
+            return false;
+          }
+          if (append && (!sameDirectoryKey(previous?.directoryKey, result.directory_key)
+            || previous?.directoryRevision !== result.directory_revision)) {
+            return await loadDirectory(path, true);
+          }
           updateDirectories((prev) => {
             const previousItems = append ? prev[path]?.items ?? [] : [];
             const itemsByPath = new Map(
@@ -140,6 +162,9 @@ export function useWorkspaceFileTreeDirectories({
           if (directoryRequestsRef.current.get(path)?.controller !== controller) {
             return false;
           }
+          if (append && error instanceof HttpRequestError && error.status === 409) {
+            return await loadDirectory(path, true);
+          }
           const message = errorDisplayMessage(error);
           updateDirectories((prev) => ({
             ...prev,
@@ -153,7 +178,7 @@ export function useWorkspaceFileTreeDirectories({
           }
         }
       })();
-      directoryRequestsRef.current.set(path, { controller, promise });
+      directoryRequestsRef.current.set(path, { controller, promise, minimumRevision: minimumRevisionsRef.current.get(path) ?? 0 });
       return promise;
     },
     [onStatusChange, port, updateDirectories, workspaceId],
@@ -179,20 +204,68 @@ export function useWorkspaceFileTreeDirectories({
     });
   }, [updateDirectories]);
 
-  // 全树重同步的唯一实现：SSE 溢出无法得知漏了哪些目录时，先按根失效整棵树
-  //（两个作用域各一次），再按展开态自父到子精确重取。不保留第二套 stale 标记。
-  const reloadExpandedDirectories = useCallback(() => {
-    const cachedExpanded = [...expandedPathsRef.current].filter(
-      (path) => directoriesRef.current[path],
-    );
-    invalidateDirectoriesUnder(ROOT_PATH);
-    invalidateDirectoriesUnder(FILESYSTEM_ROOT_PATH);
+  // overflow 只使后端指定根下的已观察目录失效，cold 根不触发读取。
+  const reloadExpandedDirectories = useCallback((roots: readonly string[]) => {
+    const affected = Object.entries(directoriesRef.current).filter(([, entry]) => {
+      const key = entry.directoryKey;
+      if (!key) return false;
+      const absolute = (key.scope === "filesystem" ? key.path : `${key.root}/${key.path}`).replace(/\\/g, "/").replace(/\/$/, "");
+      return roots.some((root) => {
+        const normalized = root.replace(/\\/g, "/").replace(/\/$/, "");
+        return absolute === normalized || absolute.startsWith(`${normalized}/`);
+      });
+    }).map(([path]) => path);
+    const cachedExpanded = affected.filter((path) => expandedPathsRef.current.has(path));
+    for (const path of affected) invalidateDirectoriesUnder(path);
     void restoreDirectoriesInOrder(
       cachedExpanded,
       (path) => loadDirectory(path),
       parentFileTreePath,
     );
   }, [expandedPathsRef, directoriesRef, invalidateDirectoriesUnder, loadDirectory]);
+
+  const reconcileDirectories = useCallback(async (revisions: readonly WorkspaceDirectoryRevision[], forcePath?: string) => {
+    const reload = new Set<string>();
+    for (const revision of revisions) {
+      const key = revision.directory_key;
+      const path = key.scope === "filesystem" ? filesystemFileTreePath(key.path) : key.path;
+      const cached = directoriesRef.current[path];
+      if (!cached && path !== forcePath) continue;
+      if (cached?.directoryKey && !sameDirectoryKey(cached.directoryKey, key)) continue;
+      if (!revision.exists) { invalidateDirectoriesUnder(path); continue; }
+      const minimum = Math.max(minimumRevisionsRef.current.get(path) ?? 0, revision.directory_revision);
+      minimumRevisionsRef.current.set(path, minimum);
+      const request = directoryRequestsRef.current.get(path);
+      if ((cached?.directoryRevision ?? 0) < minimum && (!request || request.minimumRevision < minimum)) reload.add(path);
+    }
+    if (forcePath !== undefined && (revisions.length === 0 || !directoriesRef.current[forcePath])) reload.add(forcePath);
+    await Promise.all([...reload].map((path) => loadDirectory(path, true)));
+  }, [invalidateDirectoriesUnder, loadDirectory]);
+
+  const acceptSnapshots = useCallback((snapshots: readonly WorkspaceFileList[], forcePath?: string) => {
+    for (const snapshot of snapshots) {
+      const key = snapshot.directory_key;
+      const path = key.scope === "filesystem" ? filesystemFileTreePath(key.path) : key.path;
+      const cached = directoriesRef.current[path];
+      if (!cached && path !== forcePath) continue;
+      if (cached?.directoryKey && !sameDirectoryKey(cached.directoryKey, key)) continue;
+      if (snapshot.directory_revision < Math.max(cached?.directoryRevision ?? 0, minimumRevisionsRef.current.get(path) ?? 0)) continue;
+      const request = directoryRequestsRef.current.get(path);
+      request?.controller.abort();
+      directoryRequestsRef.current.delete(path);
+      minimumRevisionsRef.current.set(path, snapshot.directory_revision);
+      const result = { ...snapshot, path, items: snapshot.items?.map((item) => ({ ...item,
+        path: key.scope === "filesystem" && !item.path.startsWith("filesystem:") ? filesystemFileTreePath(item.path) : item.path,
+      })) };
+      updateDirectories((current) => ({ ...current, [path]: loadedDirectoryEntry(result, Date.now()) }));
+    }
+  }, [updateDirectories]);
+
+  const directoryVersion = useCallback((path: string) => {
+    const cached = directoriesRef.current[path];
+    return cached?.directoryKey && cached.directoryRevision !== null
+      ? { key: cached.directoryKey, revision: cached.directoryRevision } : null;
+  }, []);
 
   const abortAllDirectoryRequests = useCallback((): string[] => {
     const abortedPaths = [...directoryRequestsRef.current.keys()];
@@ -204,6 +277,7 @@ export function useWorkspaceFileTreeDirectories({
   }, []);
 
   const resetDirectories = useCallback(() => {
+    minimumRevisionsRef.current.clear();
     directoriesRef.current = {};
     setDirectories({});
   }, []);
@@ -214,8 +288,16 @@ export function useWorkspaceFileTreeDirectories({
     updateDirectories,
     loadDirectory,
     reloadExpandedDirectories,
+    reconcileDirectories,
+    acceptSnapshots,
+    directoryVersion,
     invalidateDirectoriesUnder,
     abortAllDirectoryRequests,
     resetDirectories,
   };
+}
+
+function sameDirectoryKey(left: WorkspaceDirectoryKey | null | undefined, right: WorkspaceDirectoryKey): boolean {
+  return !!left && left.workspace_id === right.workspace_id && left.scope === right.scope
+    && left.root === right.root && left.path === right.path;
 }

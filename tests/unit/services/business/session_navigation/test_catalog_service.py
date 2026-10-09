@@ -1,28 +1,27 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, TypeVar
 
 import pytest
 
-from app.core.path_utils import get_session_path_resolver
+from app.core.identifier import create_prefixed_id
+from app.core.path_utils import get_session_creation_service, get_session_path_resolver
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.session import SessionDTO
-from app.services.business.session_context_resource import (
-    session_resource_identity,
-    session_resource_uri,
-)
 from app.services.business.session_navigation import SessionCatalogService
-from app.services.business.session_navigation.service import (
-    SessionCatalogRevisionChangedError,
-)
+from app.services.business.session_service import SessionService
+from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.support.canonical_id_at import uuid7_hex_from_name
 from tests.support.session_navigation_queue import (
     create_catalog_intent,
     submit_catalog_intent,
+)
+from tests.unit.services.business.session_service_test_support import (
+    SessionServiceConfigStub,
 )
 
 T = TypeVar("T")
@@ -39,43 +38,29 @@ def _relocate(
     parent_node_id: str,
 ) -> None:
     """仅更新 SQLite catalog 中的逻辑父节点。"""
-    resolver.relocate_session(
-        session_id=session_id,
-        parent_node_id=parent_node_id,
-    )
+    resolver.get_node(resolver.catalog_store.move_node(session_id, parent_node_id).node_id)
 
 
-class _SessionService:
-    def __init__(self, sessions_root: Path) -> None:
-        self.path_resolver = get_session_path_resolver(sessions_root)
-        self.path_resolver.initialize()
+class _SessionService(SessionService):
+    """真实 SessionService 与离线配置；记录旧逐会话入口是否被误调用。"""
+    def __init__(
+        self,
+        sessions_root: Path,
+        *,
+        config_service: SessionServiceConfigStub | None = None,
+    ) -> None:
+        resolver = get_session_path_resolver(sessions_root)
+        super().__init__(
+            config_service=config_service or SessionServiceConfigStub(),
+            trace_event_store=TraceEventStore(sessions_dir=sessions_root),
+            workspace_id=resolver.workspace_id, path_resolver=resolver,
+            creation_service=get_session_creation_service(sessions_root),
+        )
         self.get_calls: list[str] = []
-
-    def register_change_listener(self, listener) -> None:
-        del listener
 
     async def get(self, session_id: str) -> SessionDTO:
         self.get_calls.append(session_id)
-        session_path = self.path_resolver.resolve_session_node_for_runtime(session_id)
-        payload = json.loads(
-            (session_path / "session.json").read_text(encoding="utf-8")
-        )
-        # R17：对齐生产 session_service.get 的换源读路径——title 以权威
-        # 索引/目录节点显示名为准回填（catalog 模式 manifest 为剥离形态，
-        # 不含 title/title_source/parent_session_id）。
-        node = self.path_resolver.get_node(session_id)
-        payload["title"] = node.name
-        payload.setdefault("workspace_id", "ws-test")
-        payload.setdefault("current_agent_id", "test-agent")
-        payload.update(
-            resource_identity=session_resource_identity(
-                payload["workspace_id"],
-                session_id,
-            ),
-            uri=session_resource_uri(payload["workspace_id"], session_id),
-            scope="workspace",
-        )
-        return SessionDTO.model_validate(payload)
+        return await super().get(session_id)
 
 
 class _JobService:
@@ -156,7 +141,7 @@ async def test_catalog_cache_detects_manual_physical_move(
     sessions_root = tmp_path / "sessions"
     session_service = _SessionService(sessions_root)
     resolver = session_service.path_resolver
-    source_folder = resolver.create_folder(name="原目录", parent_node_id=None)
+    source_folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '原目录').node_id)
     session_id = "ses_019c3db33a627857869df585e7b8a084"
     session_dir = session_bundle_factory(sessions_root, session_id)
     _relocate(resolver, session_id, source_folder.node_id)
@@ -189,15 +174,28 @@ async def test_catalog_cache_detects_manual_physical_move(
 async def test_catalog_snapshot_enriches_session_nodes_and_reuses_cached_metadata(
     tmp_path: Path,
     session_bundle_factory,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sessions_root = tmp_path / "sessions"
     session_service = _SessionService(sessions_root)
     resolver = session_service.path_resolver
-    folder = resolver.create_folder(name="目录元数据", parent_node_id=None)
+    folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '目录元数据').node_id)
     session_id = "ses_019bfa471b36790187e1d914607718e5"
     session_bundle_factory(sessions_root, session_id)
     _relocate(resolver, session_id, folder.node_id)
     catalog = SessionCatalogService(session_service=session_service)
+    original_open = Path.open
+
+    def reject_manifest_open(path: Path, *args, **kwargs):
+        if path.name == "session.json":
+            raise AssertionError("导航快照不得打开会话 manifest")
+        return original_open(path, *args, **kwargs)
+
+    def reject_single_node_read(*args, **kwargs):
+        raise AssertionError("导航 DTO 与父链必须来自同一次 catalog 快照")
+
+    monkeypatch.setattr(Path, "open", reject_manifest_open)
+    monkeypatch.setattr(resolver.catalog_store, "get_node", reject_single_node_read)
 
     first = await catalog.list_children(
         parent_node_id=folder.node_id,
@@ -218,7 +216,55 @@ async def test_catalog_snapshot_enriches_session_nodes_and_reuses_cached_metadat
     # manifest workspace_id 由工厂写入 resolver 真实绑定值。
     assert session_node.session.workspace_id == resolver._workspace_id
     assert second.items[0].session == session_node.session
-    assert session_service.get_calls == [session_id]
+    assert session_service.get_calls == []
+
+
+@pytest.mark.asyncio
+async def test_catalog_cached_null_provider_tracks_config_default_without_catalog_read(
+    tmp_path: Path,
+    session_bundle_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NULL provider 继续动态解析配置；缓存不冻结旧默认值或重读会话。"""
+    model = {"primary_provider": "primary", "fallback_providers": ["backup"]}
+    config = SessionServiceConfigStub({
+        "default_agent": "default",
+        "agents": {"default": {"model": model}},
+        "llm": {"providers": [{"id": "primary"}, {"id": "backup"}]},
+    })
+    sessions_root = tmp_path / "sessions"
+    service = _SessionService(sessions_root, config_service=config)
+    resolver = service.path_resolver
+    default_id, explicit_id = canonical("dynamic-default"), canonical("explicit-provider")
+    session_bundle_factory(sessions_root, default_id)
+    session_bundle_factory(sessions_root, explicit_id)
+    explicit = resolver.catalog_store.get_node(explicit_id)
+    assert explicit.updated_at is not None
+    resolver.catalog_store.update_session_configuration(
+        explicit_id,
+        current_agent_id="default",
+        current_provider_id="primary",
+        updated_at=datetime.fromisoformat(explicit.updated_at),
+    )
+    count = _count_catalog_snapshots(monkeypatch, resolver)
+    catalog = SessionCatalogService(session_service=service)
+    first = await catalog.export_index()
+    first_sessions = {node.node_id: node.session for node in first.items}
+    assert first_sessions[default_id] is not None
+    assert first_sessions[default_id].current_provider_id == "primary"
+
+    model["primary_provider"] = "backup"
+    second = await catalog.export_index()
+    second_sessions = {node.node_id: node.session for node in second.items}
+
+    assert second_sessions[default_id] is not None
+    assert second_sessions[default_id].current_provider_id == "backup"
+    assert second_sessions[explicit_id] == first_sessions[explicit_id]
+    assert second.catalog_revision == first.catalog_revision
+    assert second.revision != first.revision
+    assert count == [1]
+    assert service.get_calls == []
+    assert resolver.catalog_store.get_node(default_id).current_provider_id is None
 
 
 @pytest.mark.asyncio
@@ -230,7 +276,7 @@ async def test_catalog_read_keeps_authoritative_nodes_when_physical_tree_has_orp
     sessions_root = tmp_path / "sessions"
     session_service = _SessionService(sessions_root)
     resolver = session_service.path_resolver
-    folder = resolver.create_folder(name="归档", parent_node_id=None)
+    folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '归档').node_id)
     session_id = "ses_019c1d3a6c9b7150818dc58e43efafb1"
     session_bundle_factory(sessions_root, session_id)
     _relocate(resolver, session_id, folder.node_id)
@@ -268,11 +314,8 @@ async def test_renaming_folder_does_not_require_descendant_sessions_idle(
     sessions_root = tmp_path / "sessions"
     session_service = _SessionService(sessions_root)
     resolver = session_service.path_resolver
-    folder = resolver.create_folder(name="任务目录", parent_node_id=None)
-    nested = resolver.create_folder(
-        name="日期目录",
-        parent_node_id=folder.node_id,
-    )
+    folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '任务目录').node_id)
+    nested = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, folder.node_id, '日期目录').node_id)
     session_ids = [
         canonical("ses_guard_alpha"),
         canonical("ses_guard_beta"),
@@ -317,10 +360,7 @@ async def test_deep_search_builds_breadcrumbs_only_for_returned_page(
     resolver = session_service.path_resolver
     parent_id: str | None = None
     for depth in range(100):
-        folder = resolver.create_folder(
-            name=f"needle-{depth:03d}",
-            parent_node_id=parent_id,
-        )
+        folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, parent_id, f'needle-{depth:03d}').node_id)
         parent_id = folder.node_id
     catalog = SessionCatalogService(session_service=session_service)
     breadcrumb_calls = 0
@@ -376,8 +416,8 @@ async def test_recursive_delete_uses_catalog_subtree_protocol_without_folder_pat
     sessions_root = tmp_path / "sessions"
     session_service = _SessionService(sessions_root)
     resolver = session_service.path_resolver
-    parent = resolver.create_folder(name="删除父目录", parent_node_id=None)
-    nested = resolver.create_folder(name="删除子目录", parent_node_id=parent.node_id)
+    parent = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '删除父目录').node_id)
+    nested = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, parent.node_id, '删除子目录').node_id)
     session_ids = [
         canonical("delete_catalog_alpha"),
         canonical("delete_catalog_beta"),
@@ -452,7 +492,7 @@ async def test_snapshot_aggregates_full_catalog_once(
     sessions_root = tmp_path / "sessions"
     session_service = _SessionService(sessions_root)
     resolver = session_service.path_resolver
-    folder = resolver.create_folder(name="目录", parent_node_id=None)
+    folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '目录').node_id)
     session_id = canonical("aggregate_once")
     session_bundle_factory(sessions_root, session_id)
     _relocate(resolver, session_id, folder.node_id)
@@ -491,10 +531,10 @@ async def test_revision_tracks_generation_without_full_scan(
 
     count = _count_full_catalog_aggregations(monkeypatch, resolver)
 
-    folder = resolver.create_folder(name="目录", parent_node_id=None)
+    folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '目录').node_id)
     before = resolver.revision
     assert count[0] == 0
-    resolver.update_node_name(folder.node_id, "新名")
+    resolver.get_node(resolver.catalog_store.rename_node(folder.node_id, '新名').node_id)
     assert resolver.revision == before + 1
     assert count[0] == 0
 
@@ -514,7 +554,7 @@ async def test_snapshot_cache_invalidates_on_direct_catalog_writes(
     sessions_root = tmp_path / "sessions"
     session_service = _SessionService(sessions_root)
     resolver = session_service.path_resolver
-    folder = resolver.create_folder(name="原目录", parent_node_id=None)
+    folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '原目录').node_id)
     session_id = canonical("cache_invalidate")
     session_bundle_factory(sessions_root, session_id)
     _relocate(resolver, session_id, folder.node_id)
@@ -522,33 +562,33 @@ async def test_snapshot_cache_invalidates_on_direct_catalog_writes(
 
     first = await catalog.list_children(parent_node_id=None, limit=50, cursor=None)
     assert [node.node_id for node in first.items] == [folder.node_id]
-    assert session_service.get_calls == [session_id]
+    assert session_service.get_calls == []
 
     # 改名：目录读模型对 folder 直接取目录显示名，命名变化必须可见。
-    resolver.update_node_name(folder.node_id, "改名后")
+    resolver.get_node(resolver.catalog_store.rename_node(folder.node_id, '改名后').node_id)
     calls_before = len(session_service.get_calls)
     renamed = await catalog.list_children(
         parent_node_id=None, limit=50, cursor=None
     )
     assert [node.name for node in renamed.items] == ["改名后"]
-    assert len(session_service.get_calls) > calls_before  # 触发物理重算
+    assert len(session_service.get_calls) == calls_before == 0
 
     # 移动：把会话移出目录回到根，根页必须出现该会话。
-    resolver.relocate_session(session_id=session_id, parent_node_id=None)
+    resolver.get_node(resolver.catalog_store.move_node(session_id, None).node_id)
     moved = await catalog.list_children(parent_node_id=None, limit=50, cursor=None)
     assert sorted(node.node_id for node in moved.items) == sorted(
         [folder.node_id, session_id]
     )
 
     # 新建：新增 folder 必须出现在根页。
-    created = resolver.create_folder(name="新目录", parent_node_id=None)
+    created = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '新目录').node_id)
     after_create = await catalog.list_children(
         parent_node_id=None, limit=50, cursor=None
     )
     assert created.node_id in {node.node_id for node in after_create.items}
 
     # 删除：删除空 folder 后必须从根页消失。
-    resolver.delete_folder(created.node_id)
+    resolver.catalog_store.delete_empty_folder(created.node_id)
     after_delete = await catalog.list_children(
         parent_node_id=None, limit=50, cursor=None
     )
@@ -567,11 +607,11 @@ async def test_children_cursor_is_scoped_to_parent(tmp_path: Path) -> None:
     sessions_root = tmp_path / "sessions"
     session_service = _SessionService(sessions_root)
     resolver = session_service.path_resolver
-    folder_a = resolver.create_folder(name="A", parent_node_id=None)
-    folder_b = resolver.create_folder(name="B", parent_node_id=None)
+    folder_a = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, 'A').node_id)
+    folder_b = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, 'B').node_id)
     for index in range(3):
-        resolver.create_folder(name=f"a{index}", parent_node_id=folder_a.node_id)
-        resolver.create_folder(name=f"b{index}", parent_node_id=folder_b.node_id)
+        resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, folder_a.node_id, f'a{index}').node_id)
+        resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, folder_b.node_id, f'b{index}').node_id)
     catalog = SessionCatalogService(session_service=session_service)
 
     first_a = await catalog.list_children(
@@ -606,8 +646,8 @@ async def test_search_cursor_is_scoped_to_query(tmp_path: Path) -> None:
     session_service = _SessionService(sessions_root)
     resolver = session_service.path_resolver
     for index in range(3):
-        resolver.create_folder(name=f"alpha-{index}", parent_node_id=None)
-        resolver.create_folder(name=f"beta-{index}", parent_node_id=None)
+        resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, f'alpha-{index}').node_id)
+        resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, f'beta-{index}').node_id)
     catalog = SessionCatalogService(session_service=session_service)
 
     first = await catalog.search(query="alpha", limit=1, cursor=None)
@@ -628,10 +668,10 @@ async def test_revision_tracks_node_changes_without_full_scan(
 
     count = _count_catalog_snapshots(monkeypatch, resolver)
 
-    folder = resolver.create_folder(name="目录", parent_node_id=None)
+    folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '目录').node_id)
     before = resolver.revision
     assert count[0] == 0
-    resolver.update_node_name(folder.node_id, "新名")
+    resolver.get_node(resolver.catalog_store.rename_node(folder.node_id, '新名').node_id)
     assert resolver.revision == before + 1
     assert count[0] == 0
 
@@ -641,7 +681,7 @@ async def test_children_cursor_rejects_boolean_and_out_of_range_offsets(
     session_service = _SessionService(tmp_path / "sessions")
     resolver = session_service.path_resolver
     for index in range(3):
-        resolver.create_folder(name=f"目录{index}", parent_node_id=None)
+        resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, f'目录{index}').node_id)
     catalog = SessionCatalogService(session_service=session_service)
     first = await catalog.list_children(parent_node_id=None, limit=1, cursor=None)
 
@@ -665,8 +705,8 @@ async def test_search_cursor_offset_uses_filtered_match_count(tmp_path: Path) ->
     session_service = _SessionService(tmp_path / "sessions")
     resolver = session_service.path_resolver
     for index in range(3):
-        resolver.create_folder(name=f"alpha-{index}", parent_node_id=None)
-        resolver.create_folder(name=f"beta-{index}", parent_node_id=None)
+        resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, f'alpha-{index}').node_id)
+        resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, f'beta-{index}').node_id)
     catalog = SessionCatalogService(session_service=session_service)
     first = await catalog.search(query="alpha", limit=1, cursor=None)
 
@@ -686,7 +726,7 @@ async def test_catalog_read_dtos_expose_snapshot_and_node_revisions(
     sessions_root = tmp_path / "sessions"
     session_service = _SessionService(sessions_root)
     resolver = session_service.path_resolver
-    folder = resolver.create_folder(name="版本目录", parent_node_id=None)
+    folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '版本目录').node_id)
     session_id = canonical("版本会话")
     session_bundle_factory(sessions_root, session_id)
     _relocate(resolver, session_id, folder.node_id)
@@ -722,7 +762,7 @@ async def test_deleting_breadcrumb_keeps_catalog_and_node_revisions(
 ) -> None:
     session_service = _SessionService(tmp_path / "sessions")
     resolver = session_service.path_resolver
-    folder = resolver.create_folder(name="删除中", parent_node_id=None)
+    folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '删除中').node_id)
     deleting_node = resolver.catalog_store.set_node_state(folder.node_id, "deleting")
     catalog = SessionCatalogService(session_service=session_service)
 
@@ -732,32 +772,45 @@ async def test_deleting_breadcrumb_keeps_catalog_and_node_revisions(
     assert breadcrumb.items[-1].state == "deleting"
     assert breadcrumb.items[-1].node_revision == deleting_node.revision
 
-async def test_catalog_snapshot_rejects_navigation_revision_drift_after_metadata_await(
-    tmp_path: Path,
-    session_bundle_factory,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_catalog_snapshot_keeps_one_revision_when_writer_commits_after_read(
+    tmp_path: Path, session_bundle_factory, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sessions_root = tmp_path / "sessions"
-    session_service = _SessionService(sessions_root)
-    resolver = session_service.path_resolver
-    folder = resolver.create_folder(name="元数据目录", parent_node_id=None)
-    session_id = canonical("metadata_drift")
-    session_bundle_factory(sessions_root, session_id)
-    _relocate(resolver, session_id, folder.node_id)
-    catalog = SessionCatalogService(session_service=session_service)
-    original_get = session_service.get
+    service = _SessionService(sessions_root)
+    resolver = service.path_resolver
+    child_id, parent_id = canonical("snapshot-child"), canonical("snapshot-parent")
+    session_bundle_factory(sessions_root, child_id)
+    session_bundle_factory(sessions_root, parent_id)
+    catalog = SessionCatalogService(session_service=service)
+    before = resolver.catalog_store.get_node(child_id)
+    original = resolver.catalog_store.read_nodes_snapshot
 
-    async def write_after_metadata(session_id: str) -> SessionDTO:
-        metadata = await original_get(session_id)
-        resolver.create_folder(name="并发新增", parent_node_id=None)
-        return metadata
+    def write_after_snapshot():
+        revision, rows = original()
+        resolver.catalog_store.move_node(child_id, parent_id)
+        resolver.catalog_store.update_session_configuration(
+            child_id, current_agent_id="default", current_provider_id="backup",
+            updated_at=datetime(2026, 10, 9, tzinfo=UTC),
+        )
+        return revision, rows
 
-    monkeypatch.setattr(session_service, "get", write_after_metadata)
-
-    with pytest.raises(SessionCatalogRevisionChangedError, match="revision_changed"):
-        await catalog.export_index()
-
-    assert catalog._cached_snapshot is None
+    monkeypatch.setattr(resolver.catalog_store, "read_nodes_snapshot", write_after_snapshot)
+    first = await catalog.export_index()
+    first_child = next(node for node in first.items if node.node_id == child_id)
+    assert first_child.session is not None
+    assert first_child.parent_node_id is first_child.session.parent_session_id is None
+    assert first_child.session.current_provider_id == "primary"
+    assert first_child.session.updated_at.isoformat() == before.updated_at
+    assert first.catalog_revision < resolver.revision
+    assert service.get_calls == []
+    monkeypatch.setattr(resolver.catalog_store, "read_nodes_snapshot", original)
+    second = await catalog.export_index()
+    second_child = next(node for node in second.items if node.node_id == child_id)
+    assert second_child.session is not None
+    assert second_child.parent_node_id == second_child.session.parent_session_id == parent_id
+    assert second_child.session.current_provider_id == "backup"
+    assert second_child.session.updated_at == datetime(2026, 10, 9, tzinfo=UTC)
+    assert second.catalog_revision == resolver.revision
 
 async def test_cursor_survives_catalog_writes_without_node_changes(
     tmp_path: Path,
@@ -765,7 +818,7 @@ async def test_cursor_survives_catalog_writes_without_node_changes(
     session_service = _SessionService(tmp_path / "sessions")
     resolver = session_service.path_resolver
     for index in range(3):
-        resolver.create_folder(name=f"节点{index}", parent_node_id=None)
+        resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, f'节点{index}').node_id)
     catalog = SessionCatalogService(session_service=session_service)
 
     first = await catalog.list_children(parent_node_id=None, limit=1, cursor=None)

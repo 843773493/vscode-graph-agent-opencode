@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from app.core.background_task_registry import BackgroundTaskHandle
+from app.core.background_task_contracts import BackgroundTaskHandle
 from app.schemas.internal_v2.session_resource import (
     SessionResourceAction,
     SessionResourceControlResultDTO,

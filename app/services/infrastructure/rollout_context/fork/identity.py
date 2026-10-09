@@ -11,20 +11,6 @@ from app.domain.itemized.identity.item_projection import ItemProvenanceRelation
 from app.domain.itemized.records import CanonicalItemRecord
 
 
-class RolloutIdentityMixin:
-    """生成 rollout 的稳定本地标识。"""
-
-    def _rollout_id(
-        self, session_id: str, *, thread_id: str, checkpoint_ns: str
-    ) -> str:
-        return (
-            "rollout-"
-            + hashlib.sha256(
-                str(self.root(session_id, checkpoint_ns, thread_id=thread_id)).encode()
-            ).hexdigest()[:24]
-        )
-
-
 def target_local_acceptance_identity(
     *,
     target_session_id: str,
@@ -150,4 +136,4 @@ def remap_canonical_item(
     return result
 
 
-__all__ = ["RolloutIdentityMixin", "remap_canonical_item", "remap_tool_payload", "target_local_acceptance_identity"]
+__all__ = ["remap_canonical_item", "remap_tool_payload", "target_local_acceptance_identity"]

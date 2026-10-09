@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import base64
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from app.abstractions.job_service import JobServiceProtocol
@@ -79,16 +78,13 @@ def _raise_for_rejected(record: NavigationMutationRecord) -> None:
     raise RuntimeError(detail)
 
 
-class SessionCatalogRevisionChangedError(RuntimeError):
-    """目录行快照加载异步元数据期间已被并发写入推进。"""
-
-
 @dataclass(frozen=True)
 class _SessionCatalogReadSnapshot:
     catalog_revision: int
     revision: str
     nodes: list[SessionCatalogNodeDTO]
     nodes_by_id: dict[str, SessionCatalogNodeDTO]
+    default_provider_nodes: list[SessionCatalogSessionProjection]
 
 
 @dataclass(frozen=True, slots=True)
@@ -583,6 +579,25 @@ class SessionCatalogService:
             and self._cached_snapshot is not None
             and self._cached_snapshot.catalog_revision == current_revision
         ):
+            # provider=None 的含义是当前配置默认值，缓存不能把它冻结成旧 provider。
+            replacements = {
+                node.node_id: self._session_service.project_catalog_session(node)
+                for node in self._cached_snapshot.default_provider_nodes
+            }
+            if any(
+                self._cached_snapshot.nodes_by_id[node_id].session != session
+                for node_id, session in replacements.items()
+            ):
+                nodes = [
+                    node.model_copy(update={"session": replacements[node.node_id]})
+                    if node.node_id in replacements else node
+                    for node in self._cached_snapshot.nodes
+                ]
+                self._cached_snapshot = replace(
+                    self._cached_snapshot, nodes=nodes,
+                    nodes_by_id={**self._cached_snapshot.nodes_by_id, **{node.node_id: node for node in nodes}},
+                    revision=self._revision(nodes),
+                )
             return self._cached_snapshot
 
         catalog_revision, all_physical_nodes = self._path_resolver.catalog_snapshot()
@@ -590,16 +605,8 @@ class SessionCatalogService:
         child_parent_ids = {
             node.parent_node_id for node in physical_nodes if node.parent_node_id is not None
         }
-        session_metadata = await self._load_session_metadata(physical_nodes)
-        current_revision = self._path_resolver.revision
-        if current_revision != catalog_revision:
-            raise SessionCatalogRevisionChangedError(
-                "revision_changed: 会话目录在异步加载节点元数据期间已更新，"
-                f"snapshot={catalog_revision}, current={current_revision}"
-            )
-
         nodes = [
-            self._to_catalog_node(node, child_parent_ids, session_metadata)
+            self._to_catalog_node(node, child_parent_ids)
             for node in physical_nodes
         ]
         nodes_by_id = {node.node_id: node for node in nodes}
@@ -622,6 +629,10 @@ class SessionCatalogService:
             revision=revision,
             nodes=nodes,
             nodes_by_id=all_nodes_by_id,
+            default_provider_nodes=[
+                node for node in physical_nodes
+                if isinstance(node, SessionCatalogSessionProjection) and node.current_provider_id is None
+            ],
         )
         self._cached_snapshot = snapshot
         return snapshot
@@ -646,45 +657,15 @@ class SessionCatalogService:
                 frontier.append(node.node_id)
         return sorted(visible, key=lambda node: node.node_id)
 
-    async def _load_session_metadata(
-        self,
-        physical_nodes: list[SessionCatalogNodeProjection],
-    ) -> dict[str, SessionDTO]:
-        session_nodes = [node for node in physical_nodes if node.kind == "session"]
-        if not session_nodes:
-            return {}
-        sessions = await asyncio.gather(
-            *(self._session_service.get(node.node_id) for node in session_nodes)
-        )
-        metadata: dict[str, SessionDTO] = {}
-        for node, session in zip(session_nodes, sessions, strict=True):
-            if session.session_id != node.node_id:
-                raise RuntimeError(
-                    "会话目录节点与 session manifest ID 不一致: "
-                    f"node_id={node.node_id}, session_id={session.session_id}"
-                )
-            if session.session_id in metadata:
-                raise RuntimeError(
-                    f"会话目录返回重复会话元数据: session_id={session.session_id}"
-                )
-            if session.title != node.name:
-                raise RuntimeError(
-                    "会话目录节点名称与会话元数据标题不一致: "
-                    f"session_id={node.node_id}, node_name={node.name}, "
-                    f"session_title={session.title}"
-                )
-            metadata[session.session_id] = session
-        return metadata
-
     def _to_catalog_node(
         self,
         node: SessionCatalogNodeProjection,
         child_parent_ids: set[str],
-        session_metadata: dict[str, SessionDTO],
     ) -> SessionCatalogNodeDTO:
-        session = session_metadata.get(node.node_id)
-        if node.kind == "session" and session is None:
-            raise RuntimeError(f"会话目录节点缺少会话元数据: session_id={node.node_id}")
+        session = (
+            self._session_service.project_catalog_session(node)
+            if isinstance(node, SessionCatalogSessionProjection) else None
+        )
         session_projection = (
             node if isinstance(node, SessionCatalogSessionProjection) else None
         )

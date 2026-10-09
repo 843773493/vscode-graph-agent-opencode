@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import ClassVar
+from uuid import UUID
 
 import pytest
 from langchain.tools import ToolRuntime
@@ -13,13 +13,18 @@ from app.agents.agent_tools import (
     build_default_tools,
     create_system_time_emitter_tool,
 )
-from app.agents.tool_invocation_context import ToolInvocationContext
-from app.core.background_task_registry import BackgroundTaskRegistry
+from app.agents.tool_invocation_context import (
+    ThreadRuntimeBinding,
+    ToolInvocationContext,
+)
+from app.core.background_message_bus import BackgroundMessageBus
+from app.core.identifier import create_uuid_hex
+from app.core.path_utils import get_session_path_resolver
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.runtime.agent_runtime import build_agent_tool_definitions
 from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
-from app.services.infrastructure.background_task_history_store import (
-    BackgroundTaskHistoryStore,
-)
+from app.services.infrastructure.background_work_store import BackgroundWorkStore
+from tests.support.background_work import build_background_registry
 
 pytestmark = pytest.mark.usefixtures("workspace_scope")
 
@@ -60,90 +65,8 @@ class _DummyConfigService:
         }
 
 
-class _FakeBackgroundMessageBus:
-    def __init__(self):
-        self.messages = []
-
-    def emit(self, session_id, agent_id, content, *, kind, source_id=None, payload=None, message_id=None):
-        self.messages.append(
-            {
-                "session_id": session_id,
-                "agent_id": agent_id,
-                "content": content,
-                "kind": kind,
-                "source_id": source_id,
-                "payload": payload,
-            }
-        )
-
-        class _FakeMessage:
-            def __init__(self, value):
-                self._value = value
-
-            def model_dump(self, mode="json"):
-                return self._value
-
-            def model_dump_json(self):
-                import json
-
-                return json.dumps(self._value)
-
-        return _FakeMessage(self.messages[-1])
-
-    async def collect(self, *args, **kwargs):
-        class _Batch:
-            interrupted = False
-            timed_out = True
-            messages: ClassVar[list] = []
-
-            def model_dump(self, mode="json"):
-                return {
-                    "interrupted": self.interrupted,
-                    "timed_out": self.timed_out,
-                    "messages": self.messages,
-                }
-
-        return _Batch()
-
-
-class _FakeBackgroundTaskRegistry:
-    def __init__(self):
-        self.tasks = {}
-
-    def spawn(self, session_id, task_name, runner, *, metadata=None):
-        task_id = f"task_{len(self.tasks) + 1}"
-        async def _noop_task():
-            return None
-
-        self.tasks[(session_id, task_id)] = _noop_task
-
-        class _Handle:
-            def __init__(self, task_id, session_id, task_name, metadata):
-                self.task_id = task_id
-                self.session_id = session_id
-                self.task_name = task_name
-                self.status = "running"
-                self.created_at = datetime.now(UTC)
-                self.started_at = self.created_at
-                self.ended_at = None
-                self.metadata = metadata or {}
-
-            def to_dict(self):
-                return {
-                    "task_id": self.task_id,
-                    "session_id": self.session_id,
-                    "task_name": self.task_name,
-                    "status": self.status,
-                    "created_at": self.created_at.isoformat(),
-                    "started_at": self.started_at.isoformat(),
-                    "ended_at": None,
-                    "metadata": self.metadata,
-                }
-
-        return _Handle(task_id, session_id, task_name, metadata)
-
-    def get_task(self, session_id, task_id):
-        return self.tasks.get((session_id, task_id))
+class _BlueprintBackgroundService:
+    """只用于工具定义装配；执行测试使用正式 mailbox/registry。"""
 
 
 class _FakeJobEventBus:
@@ -340,8 +263,8 @@ def test_mcp_catalog_definition_uses_extension_group_metadata():
 @pytest.mark.asyncio
 async def test_agent_includes_background_message_collection_tool(communication_probe, monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    background_message_bus = _FakeBackgroundMessageBus()
-    background_task_registry = _FakeBackgroundTaskRegistry()
+    background_message_bus = _BlueprintBackgroundService()
+    background_task_registry = _BlueprintBackgroundService()
     job_event_bus = _FakeJobEventBus()
     message_service = _FakeMessageService()
     session_service = _FakeSessionService()
@@ -393,8 +316,8 @@ async def test_agent_omits_test_tool_without_development_config(communication_pr
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
     tools = build_default_tools(session_communication_service=communication_probe,
         session_id="session_production",
-        background_task_registry=_FakeBackgroundTaskRegistry(),
-        background_message_bus=_FakeBackgroundMessageBus(),
+        background_task_registry=_BlueprintBackgroundService(),
+        background_message_bus=_BlueprintBackgroundService(),
         job_event_bus=_FakeJobEventBus(),
         job_service=_FakeJobService(),
         message_service=_FakeMessageService(),
@@ -417,8 +340,8 @@ async def test_single_agent_tool_set_omits_team_board_tools(communication_probe,
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
     tools = build_default_tools(session_communication_service=communication_probe,
         session_id="session_single_agent",
-        background_task_registry=_FakeBackgroundTaskRegistry(),
-        background_message_bus=_FakeBackgroundMessageBus(),
+        background_task_registry=_BlueprintBackgroundService(),
+        background_message_bus=_BlueprintBackgroundService(),
         job_event_bus=_FakeJobEventBus(),
         job_service=_FakeJobService(),
         message_service=_FakeMessageService(),
@@ -464,8 +387,8 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(communica
     tools = build_default_tools(session_communication_service=communication_probe,
         session_id="session_denylist",
         agent_id="deep_agent",
-        background_task_registry=_FakeBackgroundTaskRegistry(),
-        background_message_bus=_FakeBackgroundMessageBus(),
+        background_task_registry=_BlueprintBackgroundService(),
+        background_message_bus=_BlueprintBackgroundService(),
         job_event_bus=job_event_bus,
         job_service=_FakeJobService(),
         message_service=_FakeMessageService(),
@@ -513,20 +436,23 @@ async def test_emit_system_time_messages_tool_emits_periodic_messages(
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     session_bundle_factory(sessions_dir, "ses_019bca51019973818b63e9d44c0e94f5")
-    background_message_bus = _FakeBackgroundMessageBus()
-    background_task_registry = BackgroundTaskRegistry(
-        history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
-    )
+    background_message_bus = BackgroundMessageBus(store=BackgroundWorkStore(sessions_dir=sessions_dir))
+    background_task_registry = build_background_registry(sessions_dir)
+    thread_id = get_session_path_resolver(sessions_dir).main_thread_id("ses_019bca51019973818b63e9d44c0e94f5")
+    invocation = ToolInvocationContext(thread_binding=ThreadRuntimeBinding("ses_019bca51019973818b63e9d44c0e94f5", thread_id))
+    invocation.set_tool_call_id("clock_call", projection_identity=ItemProjectionIdentity(
+        projection_message_id="clock-assistant", model_call_id=str(UUID(hex=create_uuid_hex())),
+    ))
 
     async def fake_sleep(_seconds):
         return None
 
-    monkeypatch.setattr("app.agents.tools.background.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("app.services.infrastructure.background_work_handlers.asyncio.sleep", fake_sleep)
 
     tool = create_system_time_emitter_tool(
         "ses_019bca51019973818b63e9d44c0e94f5",
         background_task_registry=background_task_registry,
-        background_message_bus=background_message_bus,
+        invocation_context=invocation,
     )
 
     result = await tool.ainvoke({"interval_seconds": 0.01, "message_count": 3, "source_id": "clock-stream"})
@@ -543,6 +469,6 @@ async def test_emit_system_time_messages_tool_emits_periodic_messages(
     assert handle.metadata["source_id"] == "clock-stream"
     assert isinstance(handle.metadata["result"], dict)
 
-    messages = background_message_bus.messages
+    messages = await background_message_bus.list_messages("ses_019bca51019973818b63e9d44c0e94f5", thread_id, "default")
     assert len(messages) == 3
-    assert all(message["content"] for message in messages)
+    assert all(message.content for message in messages)

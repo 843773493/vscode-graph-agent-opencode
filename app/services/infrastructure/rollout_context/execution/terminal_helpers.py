@@ -2,18 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
-from collections.abc import Mapping
 
-from app.domain.itemized.records import CanonicalItemRecord
-from app.services.infrastructure.rollout_context.storage.serialization import (
-    canonical_json_line,
-)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_non_negative_int,
-    strict_optional_text,
     strict_text,
 )
 
@@ -21,88 +14,7 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 class RolloutTerminalProjectionMixin:
     """只负责 terminal projection 所需的 durable item/view 辅助读取。"""
 
-    @staticmethod
-    def _bind_canonical_item_execution(
-        connection: sqlite3.Connection,
-        *,
-        item_id: str,
-        execution_id: str,
-    ) -> None:
-        """在同一 writer 事务内把 canonical item 绑定到确定的 execution。"""
-        row = connection.execute(
-            "SELECT execution_id FROM item_catalog WHERE item_id = ?",
-            (item_id,),
-        ).fetchone()
-        if row is None:
-            raise RuntimeError(f"canonical item 缺少 item_catalog: {item_id}")
-        current_execution_id = strict_optional_text(
-            row[0], field=f"item_catalog.execution_id:{item_id}"
-        )
-        if current_execution_id is not None:
-            if current_execution_id != execution_id:
-                raise RuntimeError(
-                    "canonical item 已绑定不同 execution: "
-                    f"item={item_id}, execution={current_execution_id}"
-                )
-            return
-        cursor = connection.execute(
-            "UPDATE item_catalog SET execution_id = ? "
-            "WHERE item_id = ? AND execution_id IS NULL",
-            (execution_id, item_id),
-        )
-        if cursor.rowcount != 1:
-            raise RuntimeError(f"canonical item execution 绑定失败: {item_id}")
 
-    def _read_canonical_item_from_catalog(
-        self,
-        connection: sqlite3.Connection,
-        *,
-        session_id: str,
-        thread_id: str,
-        checkpoint_ns: str,
-        item_id: str,
-    ) -> CanonicalItemRecord:
-        """在同一写事务中恢复一个已提交 catalog item，供 projection 补齐。"""
-        row = connection.execute(
-            "SELECT item_sequence, content_hash, jsonl_offset, jsonl_length "
-            "FROM item_catalog WHERE item_id = ?",
-            (item_id,),
-        ).fetchone()
-        if row is None:
-            raise RuntimeError(f"canonical item 不存在: {item_id}")
-        sequence = strict_non_negative_int(
-            row[0], field="item_catalog.item_sequence"
-        )
-        expected_hash = strict_text(
-            row[1], field="item_catalog.content_hash"
-        )
-        offset = strict_non_negative_int(row[2], field="item_catalog.jsonl_offset")
-        length = strict_non_negative_int(row[3], field="item_catalog.jsonl_length")
-        if length == 0:
-            raise RuntimeError(f"canonical item JSONL locator 长度非法: {item_id}")
-        jsonl_path = self.jsonl_path(
-            session_id,
-            checkpoint_ns,
-            thread_id=thread_id,
-        )
-        with jsonl_path.open("rb") as stream:
-            stream.seek(offset)
-            raw = stream.read(length)
-        if len(raw) != length:
-            raise RuntimeError(f"canonical item JSONL locator 长度不足: {item_id}")
-        envelope = json.loads(raw.decode("utf-8"))
-        if not isinstance(envelope, Mapping):
-            raise TypeError(f"canonical item JSONL envelope 非法: {item_id}")
-        if raw != canonical_json_line(envelope):
-            raise RuntimeError(f"canonical item JSONL 不是 canonical line: {item_id}")
-        item = CanonicalItemRecord.from_dict(envelope)
-        if (
-            item.item_id != item_id
-            or item.item_sequence != sequence
-            or item.content_hash != expected_hash
-        ):
-            raise RuntimeError(f"canonical item catalog 与 JSONL identity 冲突: {item_id}")
-        return item
 
     def _ensure_active_view_turn(
         self,
@@ -157,7 +69,7 @@ class RolloutTerminalProjectionMixin:
         ).fetchone()
         if existing == (user_sequence, final_sequence, root_item_id):
             return
-        view_id = self._writable_active_context_view_id(connection, checkpoint_ns, branch_id)
+        view_id = self._storage._writable_active_context_view_id(connection, checkpoint_ns, branch_id)
         if existing is not None:
             connection.execute(
                 "UPDATE context_view_turns SET user_message_sequence = ?, "

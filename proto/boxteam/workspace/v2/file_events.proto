@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package boxteam.workspace.v2;
 
+import "boxteam/workspace/v2/public.proto";
+
 message WorkspaceFileChange {
   string kind = 1;
   string path = 2;
@@ -10,6 +12,10 @@ message WorkspaceFileChange {
 message WorkspaceFileChangeBatch {
   repeated WorkspaceFileChange changes = 1;
   bool overflow = 2;
+  repeated WorkspaceDirectoryRevisionDTO directories = 3;
+  int64 event_id = 4;
+  repeated string invalidated_roots = 5;
+  repeated WorkspaceFileListDTO snapshots = 6;
 }
 
 message SseError {

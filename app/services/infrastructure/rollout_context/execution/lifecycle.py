@@ -1,6 +1,6 @@
 """Rollout v2 Turn/execution/model-call 持久化 owner。
 
-这些 mixin 只依赖 RolloutStorage 提供的 SQLite、JSONL transaction 和 domain
+这些 mixin 只依赖 RolloutContextStore 提供的 SQLite、JSONL transaction 和 domain
 ports；它们不承担 LangChain/provider projection，也不读取 v1 数据。
 """
 
@@ -62,15 +62,15 @@ class RolloutTurnLifecycleMixin:
             final_message_sequence,
             field="final_message_sequence",
         )
-        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
-        with self._lock(
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
+        with self._storage._lock(
             owner_thread_id, checkpoint_ns, session_id=session_id
         ):
-            self.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
-            with self._connect(
+            self._storage.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
+            with self._storage._connect(
                 owner_thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
-                self._require_v2_runtime(connection)
+                self._storage._require_v2_runtime(connection)
                 row = connection.execute(
                     "SELECT message_id FROM messages WHERE message_sequence = ?",
                     (final_message_sequence,),
@@ -134,7 +134,7 @@ class RolloutTurnLifecycleMixin:
                 )
                 timestamp = _now()
                 connection.execute("BEGIN IMMEDIATE")
-                commit_id, _commit_offset = self._append_v2_records_transaction(
+                commit_id, _commit_offset = self._storage._append_v2_records_transaction(
                     connection,
                     owner_thread_id,
                     checkpoint_ns,
@@ -191,7 +191,7 @@ class RolloutTurnLifecycleMixin:
                 self._ensure_active_view_turn(
                     connection, checkpoint_ns=checkpoint_ns, turn_id=turn_id
                 )
-                self._insert_control(
+                self._storage._insert_control(
                     connection,
                     "turn_finalized",
                     "turn",
@@ -207,7 +207,7 @@ class RolloutTurnLifecycleMixin:
                     f"terminal-control:{commit_id}",
                     timestamp,
                 )
-                self._commit_connection(connection)
+                self._storage._commit_connection(connection)
 
     def cancel_unfinished_turns(
         self,
@@ -223,15 +223,15 @@ class RolloutTurnLifecycleMixin:
         显示“正在处理”。没有最终消息指针的 Turn 在子会话中只能明确标记为取消，
         等用户需要时再通过重试创建新的 Job。
         """
-        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
-        with self._lock(
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
+        with self._storage._lock(
             owner_thread_id, checkpoint_ns, session_id=session_id
         ):
-            self.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
-            with self._connect(
+            self._storage.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
+            with self._storage._connect(
                 owner_thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
-                self._require_v2_runtime(connection)
+                self._storage._require_v2_runtime(connection)
                 rows = connection.execute(
                     "SELECT turn_id, status, last_execution_id "
                     "FROM turn_records "
@@ -261,7 +261,7 @@ class RolloutTurnLifecycleMixin:
                         strict_text(execution_id, field="executions.execution_id")
                     )
                 connection.execute("BEGIN IMMEDIATE")
-                commit_id, _commit_offset = self._append_v2_records_transaction(
+                commit_id, _commit_offset = self._storage._append_v2_records_transaction(
                     connection,
                     owner_thread_id,
                     checkpoint_ns,
@@ -326,7 +326,7 @@ class RolloutTurnLifecycleMixin:
                         "WHERE turn_id = ? AND final_message_sequence IS NULL",
                         (timestamp, turn_id),
                     )
-                    self._insert_control(
+                    self._storage._insert_control(
                         connection,
                         "turn_status",
                         "turn",
@@ -363,7 +363,7 @@ class RolloutTurnLifecycleMixin:
                         timestamp,
                     ),
                 )
-                self._commit_connection(connection)
+                self._storage._commit_connection(connection)
                 return len(rows)
 
     def mark_job_terminal_status(
@@ -399,16 +399,16 @@ class RolloutTurnLifecycleMixin:
     ) -> bool:
         """独立 Turn 控制也通过真实 execution 委派唯一 convergence 事务。"""
         session_id = strict_text(session_id, field="session_id")
-        thread_id = self._resolve_thread_identity(session_id, thread_id)
+        thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
         turn_id = strict_text(turn_id, field="turn_id")
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True,
         )
-        self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-        with self._connect(
+        self._storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+        with self._storage._connect(
             thread_id, checkpoint_ns, session_id=session_id, read_only=True,
         ) as connection:
-            self._require_v2_runtime(connection)
+            self._storage._require_v2_runtime(connection)
             execution = connection.execute(
                 "SELECT COALESCE(last_execution_id, initial_execution_id) "
                 "FROM turn_records WHERE session_id = ? AND thread_id = ? "
@@ -450,13 +450,13 @@ class RolloutTurnLifecycleMixin:
         turn_status = (
             TurnStatus.UNKNOWN.value if status == "execution_lost" else outcome
         ) if admission.turn_id is not None else None
-        with self._lock(
+        with self._storage._lock(
             admission.thread_id, checkpoint_ns, session_id=admission.session_id,
         ):
-            with self._connect(
+            with self._storage._connect(
                 admission.thread_id, checkpoint_ns, session_id=admission.session_id,
             ) as connection:
-                self._require_v2_runtime(connection)
+                self._storage._require_v2_runtime(connection)
                 execution = connection.execute(
                     "SELECT outcome FROM executions WHERE session_id = ? "
                     "AND thread_id = ? AND execution_id = ?",
@@ -512,12 +512,9 @@ class RolloutTurnLifecycleMixin:
         final_message_id: str,
     ) -> int:
         """解析已提交 final message 的物理序号，供受控 writer 使用。"""
-        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
-        self.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
-        with self._connect(
-            owner_thread_id, checkpoint_ns, session_id=session_id
-        ) as connection:
-            self._require_v2_runtime(connection)
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
+        with self._storage.read_connection(session_id, owner_thread_id, checkpoint_ns) as connection:
+            self._storage._require_v2_runtime(connection)
             row = connection.execute(
                 "SELECT message_sequence FROM messages WHERE turn_id = ? AND message_id = ? ORDER BY message_sequence DESC LIMIT 1",
                 (turn_id, final_message_id),

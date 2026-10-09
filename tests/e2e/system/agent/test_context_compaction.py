@@ -21,9 +21,7 @@ from langchain_core.messages import (
 from langgraph.checkpoint.base import empty_checkpoint
 
 from app.agents.agent_factory import build_model_from_provider
-from app.agents.cache_preserving_summarization import (
-    CachePreservingSummarizationMiddleware,
-)
+from app.agents.summarization.middleware import CachePreservingSummarizationMiddleware
 from app.agents.upstream_request_trace import (
     begin_upstream_capture,
     end_upstream_capture,

@@ -47,7 +47,7 @@ async def test_model_tool_scopes_share_turn_cancellation_and_close_provider(
     runtime_context: tuple[MessageStreamStore, object, str, Path],
 ) -> None:
     store, _, session_id, _ = runtime_context
-    writer = await store.open(session_id=session_id, turn_id="job_scope_propagation")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_scope_propagation")
     runtime = MessageStreamRuntime(writer)
     turn_scope = TurnExecutionScope(writer.turn_stream_id)
     model_scope = turn_scope.child("model-1")
@@ -99,7 +99,7 @@ async def test_concurrent_turn_events_allocate_contiguous_event_sequences(
     runtime_context: tuple[MessageStreamStore, object, str, Path],
 ) -> None:
     store, _, session_id, _ = runtime_context
-    writer = await store.open(session_id=session_id, turn_id="job_concurrent_events")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_concurrent_events")
 
     await asyncio.gather(
         *(
@@ -182,7 +182,7 @@ async def test_control_race_accepts_interrupt_once_and_rejects_steer(
     runtime_context: tuple[MessageStreamStore, object, str, Path],
 ) -> None:
     store, _, session_id, _ = runtime_context
-    writer = await store.open(session_id=session_id, turn_id="job_control_race")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_control_race")
     scope = TurnExecutionScope(writer.turn_stream_id)
     inbox = AgentControlInbox(writer.turn_stream_id)
     coordinator = AgentLoopControlCoordinator(scope, inbox, writer)
@@ -217,7 +217,7 @@ async def test_disconnect_does_not_cancel_background_turn_and_snapshot_recovers(
     runtime_context: tuple[MessageStreamStore, object, str, Path],
 ) -> None:
     store, resolver, session_id, _ = runtime_context
-    writer = await store.open(session_id=session_id, turn_id="job_disconnect")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_disconnect")
     scope = TurnExecutionScope(writer.turn_stream_id)
     subscription = await store.subscribe(writer.turn_stream_id)
     await store.unsubscribe(subscription)
@@ -252,7 +252,7 @@ async def test_crash_after_interrupt_request_recovers_execution_lost(
     runtime_context: tuple[MessageStreamStore, object, str, Path],
 ) -> None:
     store, resolver, session_id, _ = runtime_context
-    writer = await store.open(session_id=session_id, turn_id="job_crash_recovery")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_crash_recovery")
     await writer.commit(
         "tool.started",
         {

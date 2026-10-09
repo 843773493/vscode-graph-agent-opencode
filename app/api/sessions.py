@@ -17,6 +17,7 @@ from app.api.deps import (
     get_goal_service,
     get_llm_request_log_service,
     get_request_id,
+    get_rollout_checkpoint_saver,
     get_session_changes_service,
     get_session_context_fork_service,
     get_session_information_service,
@@ -24,6 +25,7 @@ from app.api.deps import (
     get_session_resource_service,
     get_session_service,
     get_session_skill_tracking_service,
+    get_thread_residency_tracker,
     verify_local_token,
 )
 from app.api.errors import not_found_http_error, state_conflict_http_error
@@ -44,6 +46,7 @@ from app.schemas.internal_v2.goal import (
 from app.schemas.internal_v2.llm_request_log import LLMRequestLogRecordDTO
 from app.schemas.internal_v2.session import (
     ChildThreadListDTO,
+    ChildThreadRuntimeDTO,
     SessionCompactResultDTO,
     SessionCreateRequest,
     SessionDTO,
@@ -93,11 +96,15 @@ from app.services.infrastructure.file_tree_settings_service import (
     FileTreeSettingsService,
 )
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.infrastructure.trace_event_store import TraceCursorGoneError
 from app.services.infrastructure.turn_history.trace_page import (
     TracePageBudgetExceededError,
 )
 from app.services.orchestration.goal_runtime_service import GoalRuntimeService
+from app.services.orchestration.thread_residency import ThreadResidencyTracker
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -263,12 +270,28 @@ async def get_session(
 )
 async def list_session_child_threads(
     session_id: CanonicalSessionId,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    session_service: SessionService = Depends(get_session_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    session_service: Annotated[SessionService, Depends(get_session_service)],
+    residency_tracker: Annotated[ThreadResidencyTracker, Depends(get_thread_residency_tracker)],
+    saver: Annotated[RolloutCheckpointSaver, Depends(get_rollout_checkpoint_saver)],
 ):
     try:
         result = await session_service.list_child_threads(session_id)
+        for item in result.items:
+            snapshot = residency_tracker.snapshot(session_id, item.thread_id)
+            item.runtime = ChildThreadRuntimeDTO(
+                residency=snapshot.residency, cold_eligible=snapshot.cold_eligible,
+                execution_state=snapshot.execution_state, last_activity_at=snapshot.last_activity_at,
+                idle_deadline=snapshot.idle_deadline,
+                blockers=[{"kind": blocker.kind, "reason": blocker.reason} for blocker in snapshot.blockers],
+            )
+            if item.report_execution_id is not None:
+                item.report_status = saver.runtime_execution_outcome(session_id, item.thread_id, item.report_execution_id)
+                if item.report_status in {"completed", "completed_empty"}:
+                    item.status = "completed"
+                elif item.report_status in {"failed", "cancelled", "interrupted", "execution_lost"}:
+                    item.status = "failed"
     except NotFoundError as error:
         raise not_found_http_error(error) from error
     except (RuntimeError, TimeoutError) as error:

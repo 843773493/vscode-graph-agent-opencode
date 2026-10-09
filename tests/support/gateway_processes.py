@@ -132,6 +132,7 @@ def start_gateway_process(
     refresh_config: bool = False,
     boxteam_home: Path | None = None,
     artifacts_dir: Path | None = None,
+    asgi_app: str = "app.gateway.main:app",
 ) -> GatewayProcess:
     ensure_local_port_available(port, service_name="Gateway")
     project_root = Path.cwd().resolve()
@@ -186,7 +187,7 @@ def start_gateway_process(
             str(python_executable),
             "-m",
             "uvicorn",
-            "app.gateway.main:app",
+            asgi_app,
             "--host",
             "127.0.0.1",
             "--port",

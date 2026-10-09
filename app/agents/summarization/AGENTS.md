@@ -1,6 +1,6 @@
 # 目录用途
 
-`app/agents/summarization/` 是缓存优先上下文压缩链路的垂直子包：原先集中在 `app/agents/cache_preserving_summarization.py` 的单一实体，按“常量/状态 → 事件投影 → 分区与事件构造 → 摘要生成辅助 → 响应解释 → 中间件 → 工具中间件 → 工厂”的单向依赖顺序拆分为多个模块。对外契约仍由原路径 `app/agents/cache_preserving_summarization.py` 这个 facade 逐字重导出，调用方无需改动。
+`app/agents/summarization/` 是缓存优先上下文压缩链路的垂直子包，按“常量/状态 → 事件投影 → 分区与事件构造 → 摘要生成辅助 → 响应解释 → 中间件 → 工具中间件 → 工厂”的单向依赖顺序组织模块。生产、测试及动态引用直接使用符号的实际 owner 模块；完整迁移调用方后删除旧 `app/agents/cache_preserving_summarization.py` 重导出层。
 
 各模块职责：
 
@@ -16,12 +16,12 @@
 
 # 可修改内容
 
-- 可以在保持原路径 facade 导出面不变的前提下，调整各模块内部实现与模块划分。
+- 可以调整各模块内部实现与模块划分，并将调用方导入迁到实际 owner 模块。
 - 可以按业务子链路继续下沉拆分过大的模块（当前 `middleware.py` 最大）。
 
 # 不可修改内容
 
-- 不得改动 `app/agents/cache_preserving_summarization.py` 的重导出面：它必须逐字保持原模块全部顶层符号（含私有/非 `__all__` 名），这是零回归契约。
+- 不得新增旧路径重导出或兼容入口；删除旧入口前必须全仓核对并迁移直接、间接导入与测试字符串引用。
 - 不得合并同步 `wrap_model_call` 与异步 `awrap_model_call`/`_awrap_model_call_impl`：二者是对等实现，语义差异只登记不合并。
 - 不得改变 LangGraph 状态注解（如 `_force_cache_compaction: Annotated[NotRequired[bool], PrivateStateAttr]`）与 `serialized_name`、`state_schema` 等运行期契约。
 - 不在本目录直接读写 checkpoint 中的原消息，不做业务规则或会话状态计算。

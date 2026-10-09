@@ -7,6 +7,7 @@
 - 浏览器性能、会话历史和网络交互集成测试。
 - 真实浏览器加载局部组件 harness 的集成测试。
 - 测试专用 Playwright 驱动脚本。
+- `workspace_files/` 下工作区文件操作的真实 owner、持久浏览器意图与最小 HTTP 支撑；保持为明确受控边界的 Integration。
 
 ## 不可修改内容
 

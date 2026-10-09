@@ -93,13 +93,13 @@ async def _run(args: argparse.Namespace) -> None:
     seed_catalog_session_bundle(sessions_root, args.session_id)
     resolver = get_session_path_resolver(sessions_root)
     if not isinstance(resolver, SessionCatalogPathResolver):
-        raise RuntimeError(
+        raise TypeError(
             "崩溃 worker 要求 SQLite catalog resolver: "
             f"sessions_root={args.sessions_root}"
         )
     resolver.initialize()
     store = MessageStreamStore(path_resolver=resolver)
-    writer = await store.open(
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(args.session_id),
         session_id=args.session_id,
         turn_id=args.turn_id,
         job_id=args.turn_id,

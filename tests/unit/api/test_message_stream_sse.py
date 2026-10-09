@@ -76,7 +76,7 @@ async def test_message_stream_sse_emits_event_block_without_heartbeat(
 ) -> None:
     """有事件时输出完整事件帧，且不掺入心跳。"""
     store, session_id = message_stream_store
-    writer = await store.open(session_id=session_id, turn_id="job_sse_event")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_sse_event")
     await writer.commit(
         "block.started",
         {"block_id": "block_1", "block_index": 0, "carrier_type": "reasoning"},

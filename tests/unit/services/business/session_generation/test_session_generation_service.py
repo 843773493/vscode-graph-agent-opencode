@@ -8,6 +8,7 @@ from typing import ClassVar
 
 import pytest
 
+from app.core.session_catalog_store.contracts import SessionGenerationOriginDTO
 from app.domain.itemized.execution_admission import (
     UserExecutionIdentity,
 )
@@ -15,7 +16,7 @@ from app.domain.itemized.records import InternalDisplayProvenance
 from app.schemas.event import JobCompletedEvent
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import MessageDTO
-from app.schemas.internal_v2.session import SessionDTO, SessionGenerationOriginDTO
+from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation import (
     SessionGenerationExecuteRequest,
     SessionGenerationExecuteResultDTO,

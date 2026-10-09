@@ -21,8 +21,6 @@ from app.schemas.internal_v2.turn import (
 from app.services.infrastructure.rollout_context.checkpoint.reader import ContextChain
 from app.services.infrastructure.rollout_context.storage.primitives import (
     InternalExecutionHistoryPage,
-)
-from app.services.infrastructure.rollout_context.storage.service import (
     RolloutReadSnapshot,
 )
 from app.services.infrastructure.rollout_history.snapshot import (
@@ -48,6 +46,7 @@ class HistoryCursorBinding:
     anchor_turn_id: str | None = None
     window_before_turns: int | None = None
     window_after_turns: int | None = None
+    execution_id: str | None = None
 
 
 class HistoryPageReadMixin:
@@ -122,6 +121,26 @@ class HistoryPageReadMixin:
                 projection_epoch=projection_epoch,
             )
         include = binding.effective_include
+
+        if binding.execution_id is not None:
+            internal_page = self._read_internal_page(
+                snapshot, indexed.chain, include=include, direction="before",
+                anchor_logical_item_ordinal=decoded_cursor.logical_item_ordinal if decoded_cursor else None,
+                lower_logical_item_ordinal=None,
+                upper_logical_item_ordinal=binding.logical_item_read_upper_bound,
+                execution_id=binding.execution_id,
+            )
+            before_cursor = self._indexed_before_cursor(
+                session_id, indexed, binding=binding, stage=0, turn_ordinal=None,
+                logical_item_ordinal=internal_page.entries[0].logical_item_ordinal,
+            ) if internal_page.has_more else None
+            return self._indexed_page(
+                session_id, [], include=include, next_cursor=before_cursor,
+                has_more=internal_page.has_more, before_cursor=before_cursor,
+                has_before=internal_page.has_more, projection_epoch=projection_epoch,
+                snapshot=snapshot, chain=indexed.chain,
+                internal_entries=internal_page.entries,
+            )
 
         if request.turn_ids is not None:
             rows = self._context_reader.read_context_turn_ids(
@@ -482,6 +501,15 @@ class HistoryPageReadMixin:
         logical_item_read_upper_bound: int | None,
     ) -> HistoryCursorBinding:
         if decoded is None:
+            if request.execution_id is not None:
+                return HistoryCursorBinding(
+                    query_mode="execution",
+                    effective_include=cls._canonical_include(request.include or ("internal", "text", "final_response")),
+                    history_view_revision=history_view_revision,
+                    turn_read_upper_bound=turn_read_upper_bound,
+                    logical_item_read_upper_bound=logical_item_read_upper_bound,
+                    execution_id=request.execution_id,
+                )
             if request.turn_ids is not None:
                 include = request.include
                 if include is None:
@@ -538,6 +566,8 @@ class HistoryPageReadMixin:
         normalized_direction = (
             "before" if request.direction == "older" else request.direction
         )
+        if request.execution_id != decoded.execution_id:
+            raise InvalidTurnCursorError("历史游标 execution_id 与请求不一致")
         if request.include is not None and cls._canonical_include(
             request.include
         ) != decoded.effective_include:
@@ -592,6 +622,7 @@ class HistoryPageReadMixin:
             anchor_turn_id=decoded.anchor_turn_id,
             window_before_turns=decoded.window_before_turns,
             window_after_turns=decoded.window_after_turns,
+            execution_id=decoded.execution_id,
         )
 
     @staticmethod
@@ -617,6 +648,7 @@ class HistoryPageReadMixin:
         lower_logical_item_ordinal: int | None,
         upper_logical_item_ordinal: int | None,
         limit: int = _INTERNAL_HISTORY_PAGE_LIMIT,
+        execution_id: str | None = None,
     ) -> InternalExecutionHistoryPage:
         if "internal" not in include or upper_logical_item_ordinal is None:
             return InternalExecutionHistoryPage(entries=(), has_more=False)
@@ -628,6 +660,7 @@ class HistoryPageReadMixin:
             lower_logical_item_ordinal=lower_logical_item_ordinal,
             upper_logical_item_ordinal=upper_logical_item_ordinal,
             limit=limit,
+            execution_id=execution_id,
         )
 
     @staticmethod
@@ -674,6 +707,7 @@ class HistoryPageReadMixin:
             stage=stage,
             turn_ordinal=turn_ordinal,
             logical_item_ordinal=logical_item_ordinal,
+            execution_id=binding.execution_id,
         )
 
     def _indexed_after_cursor(
@@ -710,6 +744,7 @@ class HistoryPageReadMixin:
             stage=stage,
             turn_ordinal=turn_ordinal,
             logical_item_ordinal=logical_item_ordinal,
+            execution_id=binding.execution_id,
         )
 
     @staticmethod
@@ -821,6 +856,7 @@ class HistoryPageReadMixin:
             stage=decoded.stage,
             turn_ordinal=decoded.turn_ordinal,
             logical_item_ordinal=decoded.logical_item_ordinal,
+            execution_id=decoded.execution_id,
         ) != cursor:
             raise InvalidTurnCursorError("历史游标 JSON 不是规范编码")
         return decoded
@@ -846,6 +882,7 @@ class HistoryPageReadMixin:
         stage: int,
         turn_ordinal: int | None,
         logical_item_ordinal: int | None,
+        execution_id: str | None = None,
     ) -> str:
         cursor = TurnCursorDTO(
             session_id=session_id,
@@ -866,6 +903,7 @@ class HistoryPageReadMixin:
             stage=stage,
             turn_ordinal=turn_ordinal,
             logical_item_ordinal=logical_item_ordinal,
+            execution_id=execution_id,
         )
         payload = json.dumps(
             cursor.model_dump(mode="json"),

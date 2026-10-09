@@ -176,7 +176,7 @@ def seal_registered_plan(
                     entry.ref.ref_id for entry in snapshot.selection
                     if entry.included and entry.ref.ref_type == "canonical_item"
                 )
-                items = owner._storage.read_items(
+                items = owner._storage.storage.read_items(
                     session_id, thread_id, item_ids=item_ids, checkpoint_ns=checkpoint_ns,
                 )
                 bodies = owner._request_content_for_plan(
@@ -231,7 +231,7 @@ def seal_registered_plan(
             activation_binding=activation_binding,
             prepared_details=prepared_details,
         )
-        return owner._storage.get_context_assembly(
+        return owner._storage.assemblies.get_context_assembly(
             session_id,
             thread_id,
             assembly_id=assembly_id,

@@ -54,8 +54,8 @@ class ForkIdentityMappingMixin(ForkAcceptanceMappingMixin):
         """
         source_session_id = required_text(source_session_id, field="source_session_id")
         target_session_id = required_text(target_session_id, field="target_session_id")
-        source_thread_id = self._resolve_thread_identity(source_session_id, None)
-        target_thread_id = self._resolve_thread_identity(target_session_id, None)
+        source_thread_id = self._storage._resolve_thread_identity(source_session_id, None)
+        target_thread_id = self._storage._resolve_thread_identity(target_session_id, None)
         fork_id = required_text(fork_id, field="fork_id")
         timestamp = required_text(timestamp, field="timestamp")
         mapped_entity_types = {

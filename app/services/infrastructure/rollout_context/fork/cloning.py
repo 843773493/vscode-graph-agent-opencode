@@ -94,11 +94,11 @@ class ForkCloneMixin:
         target_session_id = required_text(
             target_session_id, field="clone.target_session_id"
         )
-        source_thread_id = self._resolve_thread_identity(
+        source_thread_id = self._storage._resolve_thread_identity(
             source_session_id,
             required_text(source_thread_id, field="clone.source_thread_id"),
         )
-        target_thread_id = self._resolve_thread_identity(
+        target_thread_id = self._storage._resolve_thread_identity(
             target_session_id,
             required_text(target_thread_id, field="clone.target_thread_id"),
         )
@@ -114,25 +114,25 @@ class ForkCloneMixin:
         )
         if detail_capability is not None:
             self._require_private_detail_staging()
-        source = self.root(
+        source = self._storage.root(
             source_session_id,
             checkpoint_ns,
             thread_id=source_thread_id,
         )
-        target = self.root(
+        target = self._storage.root(
             target_session_id,
             checkpoint_ns,
             thread_id=target_thread_id,
         )
-        self._safe_session_relative_path(source.parent, source.name)
-        self._safe_session_relative_path(target.parent, target.name)
+        self._storage._safe_session_relative_path(source.parent, source.name)
+        self._storage._safe_session_relative_path(target.parent, target.name)
         if not source.is_dir():
             raise KeyError(source_thread_id)
         source_lock = _RolloutFileLock(
             source.parent / ".rollout.write.lock",
             exclusive=False,
         )
-        target_lock = self._lock(
+        target_lock = self._storage._lock(
             target_thread_id,
             checkpoint_ns,
             session_id=target_session_id,
@@ -142,7 +142,7 @@ class ForkCloneMixin:
         source_detail_rows: tuple[tuple[object, ...], ...] = ()
         try:
             with _source_snapshot(source, target.parent) as source_connection:
-                source_format_version = self._rollout_format(source_connection)
+                source_format_version = self._storage._rollout_format(source_connection)
                 if source_format_version == 1:
                     raise FormatDispatchError(
                         "unsupported_legacy_rollout: full_rollout_copy 不接受旧格式"
@@ -158,8 +158,8 @@ class ForkCloneMixin:
                     raise RuntimeError(
                         "schema-upgrade-required: full-copy source 必须先显式升级 v2 schema"
                     )
-                self._validate_schema_state(source_connection)
-                self._validate_v2_commit_offsets(
+                self._storage._validate_schema_state(source_connection)
+                self._storage._validate_v2_commit_offsets(
                     source_connection, source / "rollout.jsonl"
                 )
                 state = source_connection.execute(
@@ -213,7 +213,7 @@ class ForkCloneMixin:
                         raise RuntimeError(
                             f"source context detail locator 非法: {detail_ref}"
                         )
-                    candidate = self._safe_session_relative_path(
+                    candidate = self._storage._safe_session_relative_path(
                         source.parent,
                         detail_path,
                     )
@@ -243,7 +243,7 @@ class ForkCloneMixin:
                     f"source rollout session node 不能是符号链接: {source}"
                 )
             with target_lock:
-                self._safe_session_relative_path(target.parent, target.name)
+                self._storage._safe_session_relative_path(target.parent, target.name)
                 if target.exists():
                     raise FileExistsError(target)
                 ignored_details = shutil.ignore_patterns(
@@ -267,7 +267,7 @@ class ForkCloneMixin:
                     ignore=ignore_live_sqlite,
                 )
                 copy_live_sqlite_snapshot(source, target)
-                with self._connect(
+                with self._storage._connect(
                     target_thread_id,
                     checkpoint_ns,
                     session_id=target_session_id,
@@ -276,7 +276,7 @@ class ForkCloneMixin:
                     # execution 与 activation 的复合 owner 引用必须在同一事务内
                     # 一起平移；提交时仍检查全部外键，不关闭或丢弃任何运行事实。
                     connection.execute("PRAGMA defer_foreign_keys = ON")
-                    target_rollout_id = self._rollout_id(
+                    target_rollout_id = self._storage._rollout_id(
                         target_session_id,
                         thread_id=target_thread_id,
                         checkpoint_ns=checkpoint_ns,
@@ -405,7 +405,7 @@ class ForkCloneMixin:
                         if detail_capability is not None:
                             # staging 按 typed registry 重新物化正文，不复制未登记的 orphan。
                             continue
-                        detail_path = self._safe_session_relative_path(
+                        detail_path = self._storage._safe_session_relative_path(
                             target.parent,
                             Path(relative_path),
                         )

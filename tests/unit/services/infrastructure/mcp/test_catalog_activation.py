@@ -225,7 +225,7 @@ async def test_empty_catalog_keeps_explicit_lineage_and_custom_typed_members(cat
 def guidance_prepare(catalog_runtime, registry_db, frozen_provider_activation, frozen_provider_wire):
     _owner, _factory, registry, _scope = catalog_runtime
     saver, session, _connection, accepted = registry_db
-    thread = saver._storage.main_thread_id(session)
+    thread = saver._storage.storage.main_thread_id(session)
     admission = saver.execution_admission(
         session, thread_id=thread, execution_id=accepted["initial_execution_id"],
     )
@@ -262,7 +262,7 @@ async def test_owner_freeze_seal_and_restart_use_exact_guidance_and_members(
 ):
     _owner, factory, registry, _scope = catalog_runtime
     saver, session, _connection, _accepted = registry_db
-    thread = saver._storage.main_thread_id(session)
+    thread = saver._storage.storage.main_thread_id(session)
     first, before = guidance_prepare("owner-guidance-first")
     parent = next(binding for binding in before.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
     assert parent.display_uri is None
@@ -307,7 +307,7 @@ async def test_owner_freeze_seal_and_restart_use_exact_guidance_and_members(
         retry, restored_activation = guidance_prepare("owner-guidance-first")
     assert retry["messages"] == first["messages"]
     assert restored_activation == before
-    with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
         restored = restarted.load_sealed_resource_activation(
             session, thread_id=thread, assembly_id=second["assembly_id"],
             plan_hash=later.plan_hash, request_hash=later.request_hash,
@@ -324,7 +324,7 @@ async def test_guidance_seal_rejects_invalid_receipt_or_body_atomically(
 ):
     owner, factory, _registry, _scope = catalog_runtime
     saver, session, connection, accepted = registry_db
-    thread = saver._storage.main_thread_id(session)
+    thread = saver._storage.storage.main_thread_id(session)
     first, _activation = guidance_prepare("guidance-guard-first")
     original = saver.get_context_assembly(session, thread, assembly_id=first["assembly_id"])
     original_bytes = canonical_json_bytes(original.to_dict())

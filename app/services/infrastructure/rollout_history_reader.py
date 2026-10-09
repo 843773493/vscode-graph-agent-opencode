@@ -30,8 +30,6 @@ from app.services.infrastructure.rollout_context.checkpoint.reader import (
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
     InternalExecutionHistoryEntry,
-)
-from app.services.infrastructure.rollout_context.storage.service import (
     RolloutReadSnapshot,
 )
 from app.services.infrastructure.rollout_history.paging import (
@@ -44,6 +42,10 @@ from app.services.infrastructure.rollout_history.snapshot import (
 from app.services.infrastructure.turn_history.load_plan import (
     DetailReadBudget,
     LoadLimits,
+)
+from app.services.infrastructure.turn_history.models import (
+    InvalidTurnCursorError,
+    StaleTurnReferenceError,
 )
 from app.services.mapping.itemized.history_turns.detail import build_detail
 from app.services.mapping.itemized.history_turns.projection import (
@@ -88,6 +90,8 @@ class RolloutHistoryReader(HistoryPageReadMixin):
         policy: HistoryLoadingConfig | None = None,
     ) -> tuple[TurnSummaryDTO | None, str | None, int]:
         indexed = self._snapshots.read(session_id, thread_id)
+        if indexed is None:
+            return None, None, 1
         try:
             rollout_id = indexed.rollout_id
             projection_epoch = indexed.projection_epoch
@@ -166,6 +170,22 @@ class RolloutHistoryReader(HistoryPageReadMixin):
         policy: HistoryLoadingConfig | None = None,
     ) -> TurnHistoryPageDTO:
         indexed = self._snapshots.read(session_id, thread_id)
+        if indexed is None:
+            if request.turn_ids is not None and request.cursor is not None:
+                raise InvalidTurnCursorError("按 turn_ids 加载详情不能使用历史分页游标")
+            if request.cursor is not None:
+                raise InvalidTurnCursorError("尚未物化的历史不能使用分页游标")
+            binding = self._cursor_binding(
+                request, policy or default_history_loading_config(), None,
+                history_view_revision=0, turn_read_upper_bound=None,
+                logical_item_read_upper_bound=None,
+            )
+            references = request.turn_ids or (
+                [binding.anchor_turn_id] if binding.anchor_turn_id is not None else []
+            )
+            if references:
+                raise StaleTurnReferenceError(session_id=session_id, turn_ids=references)
+            return TurnHistoryPageDTO(items=[], next_cursor=None, has_more=False, projection_epoch=1)
         try:
             return self._load_indexed_history(
                 session_id,

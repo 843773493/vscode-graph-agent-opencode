@@ -44,7 +44,7 @@ function menuTarget(overrides: Partial<FileTreeContextMenuTarget> = {}): FileTre
 interface HarnessOptions {
   sessionId?: string;
   absolutePathForTreePath?: (treePath: string) => string;
-  replaceDirectory?: (result: unknown) => void;
+  reconcileDirectories?: () => Promise<void>;
   loadDirectory?: (path: string, force?: boolean, append?: boolean) => Promise<boolean>;
   acceptFileTreeSettings?: (result: SessionFileTreeSettings) => void;
 }
@@ -68,7 +68,10 @@ function mountMenu(options: HarnessOptions = {}): {
       sessionId: options.sessionId ?? "ses_1",
       absolutePathForTreePath: options.absolutePathForTreePath
         ?? ((treePath: string) => `/ws/${treePath}`),
-      replaceDirectory: options.replaceDirectory ?? ((result: unknown) => { replaced.push(result); }),
+      reconcileDirectories: options.reconcileDirectories ?? (async () => {}),
+      acceptSnapshots: (result) => { replaced.push(result); },
+      directoryVersion: () => null,
+      onCommitted: () => {},
       loadDirectory: options.loadDirectory ?? (async () => true),
       acceptFileTreeSettings: options.acceptFileTreeSettings ?? (() => {}),
       onStatusChange: (text: string) => statuses.push(text),

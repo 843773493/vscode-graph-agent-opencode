@@ -29,7 +29,7 @@ class _MissingSessionStore:
         raise CATALOG_KEY_ERROR
 
     async def open_existing(
-        self, *, session_id: str, turn_id: str, turn_stream_id=None
+        self, *, session_id: str, turn_id: str, turn_stream_id=None, thread_id=None
     ):
         raise CATALOG_KEY_ERROR
 

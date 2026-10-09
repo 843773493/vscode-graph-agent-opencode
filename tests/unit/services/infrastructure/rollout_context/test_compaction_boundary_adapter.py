@@ -29,7 +29,7 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
 SESSION_ID = "ses_019c3635a6c278efb831fe265bdcd656"
 
@@ -83,7 +83,7 @@ def _put_checkpoint(
     messages: list[object],
     step: int,
 ) -> object:
-    thread = saver._storage.main_thread_id(SESSION_ID)
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
     if step == 1:
         saver.accept_turn(
             SESSION_ID, thread_id=thread, accepted_ingress_id="user-1",
@@ -116,7 +116,7 @@ def _seed_closed_tool_group(
     user = HumanMessage(content="读取配置", id="user-1")
     first_config = _put_checkpoint(
         saver,
-        build_checkpoint_config(saver._storage.main_thread_id(SESSION_ID)),
+        build_checkpoint_config(saver._storage.storage.main_thread_id(SESSION_ID)),
         "checkpoint-1",
         [user],
         1,
@@ -150,7 +150,7 @@ def _make_saver(
 ) -> RolloutCheckpointSaver:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
-    storage = RolloutStorage(
+    storage = RolloutContextStore(
         sessions_dir,
         serde=JsonPlusSerializer(),
         message_codec=LangChainMessageCodec(),
@@ -167,7 +167,7 @@ def test_safe_cutoffs_exclude_pair_splitting_prefixes(
     state = [user, call, result]
     # 切点 2 会把 durable call 与 terminal result 拆到边界两侧。
     assert saver.safe_compaction_prefix_cutoffs(
-        SESSION_ID, saver._storage.main_thread_id(SESSION_ID),
+        SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID),
         checkpoint_ns="",
         state_messages=state,
         cutoff_indexes=[0, 1, 2, 3],
@@ -182,7 +182,7 @@ def test_safe_cutoffs_reject_out_of_range_candidate(
     user, call, result = _seed_closed_tool_group(saver)
     with pytest.raises(ValueError, match="切点超出 state 消息范围"):
         saver.safe_compaction_prefix_cutoffs(
-            SESSION_ID, saver._storage.main_thread_id(SESSION_ID),
+            SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID),
             checkpoint_ns="",
             state_messages=[user, call, result],
             cutoff_indexes=[4],
@@ -211,7 +211,7 @@ def test_safe_cutoffs_fail_closed_on_inflight_open_group(
     state = [user, call, result, inflight_call, inflight_result]
     # in-flight call 未闭合的切点 4 必须被排除；闭合切点 3/5 保留。
     assert saver.safe_compaction_prefix_cutoffs(
-        SESSION_ID, saver._storage.main_thread_id(SESSION_ID),
+        SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID),
         checkpoint_ns="",
         state_messages=state,
         cutoff_indexes=[3, 4, 5],
@@ -225,7 +225,7 @@ def test_safe_cutoffs_require_active_checkpoint(
     saver = _make_saver(tmp_path, session_bundle_factory)
     with pytest.raises(RuntimeError, match="缺少 durable owner"):
         saver.safe_compaction_prefix_cutoffs(
-            SESSION_ID, saver._storage.main_thread_id(SESSION_ID),
+            SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID),
             checkpoint_ns="",
             state_messages=[HumanMessage(content="hello", id="user-1")],
             cutoff_indexes=[0],
@@ -240,7 +240,7 @@ def test_saver_satisfies_typed_preflight_port(
     port: CompactionPreflightPort = saver
     user, call, result = _seed_closed_tool_group(saver)
     assert port.safe_compaction_prefix_cutoffs(
-        SESSION_ID, saver._storage.main_thread_id(SESSION_ID),
+        SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID),
         checkpoint_ns="",
         state_messages=[user, call, result],
         cutoff_indexes=[0, 3],

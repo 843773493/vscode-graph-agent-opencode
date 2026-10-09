@@ -131,12 +131,14 @@ class MessageStreamWriter:
         store: MessageStreamStore,
         *,
         session_id: str,
+        thread_id: str,
         turn_id: str,
         turn_stream_id: str,
         job_id: str | None = None,
     ) -> None:
         self._store = store
         self.session_id = session_id
+        self.thread_id = thread_id
         self.turn_id = turn_id
         self.turn_stream_id = turn_stream_id
         self.job_id = job_id
@@ -448,12 +450,14 @@ class MessageStreamStore:
         self,
         *,
         session_id: str,
+        thread_id: str,
         turn_id: str,
         turn_stream_id: str,
         job_id: str | None = None,
     ) -> dict[str, Any]:
         return {
             "session_id": session_id,
+            "thread_id": thread_id,
             "turn_id": turn_id,
             "turn_stream_id": turn_stream_id,
             "job_id": job_id,
@@ -518,10 +522,12 @@ class MessageStreamStore:
         path: Path,
         expected_session_id: str | None = None,
         expected_turn_id: str | None = None,
+        expected_thread_id: str | None = None,
         expected_turn_stream_id: str | None = None,
     ) -> tuple[str, str, str, int, str]:
         event_id = event.get("event_id")
         session_id = event.get("session_id")
+        thread_id = event.get("thread_id")
         turn_id = event.get("turn_id")
         turn_stream_id = event.get("turn_stream_id")
         event_seq = event.get("event_seq")
@@ -531,6 +537,8 @@ class MessageStreamStore:
             raise MessageStreamError(f"消息流事件缺少 event_id: path={path}")
         if not isinstance(session_id, str) or not session_id:
             raise MessageStreamError(f"消息流事件缺少 session_id: path={path}")
+        if not isinstance(thread_id, str) or not thread_id:
+            raise MessageStreamError(f"消息流事件缺少 thread_id: path={path}")
         if not isinstance(turn_id, str) or not turn_id:
             raise MessageStreamError(f"消息流事件缺少 turn_id: path={path}")
         if not isinstance(turn_stream_id, str) or not turn_stream_id:
@@ -566,6 +574,7 @@ class MessageStreamStore:
         )
         expected_values = (
             ("session_id", session_id, expected_session_id),
+            ("thread_id", thread_id, expected_thread_id),
             ("turn_id", turn_id, expected_turn_id),
             ("turn_stream_id", turn_stream_id, expected_turn_stream_id),
         )
@@ -589,6 +598,7 @@ class MessageStreamStore:
         records: list[MessageStreamRecord] = []
         seen_event_ids: set[str] = set()
         expected_turn_id: str | None = None
+        expected_thread_id: str | None = None
         previous_event_seq: int | None = None
         valid_offset = 0
         with path.open("rb") as stream:
@@ -621,8 +631,11 @@ class MessageStreamStore:
                     path=path,
                     expected_session_id=expected_session_id,
                     expected_turn_id=expected_turn_id,
+                    expected_thread_id=expected_thread_id,
                     expected_turn_stream_id=expected_turn_stream_id,
                 )
+                if expected_thread_id is None:
+                    expected_thread_id = event["thread_id"]
                 if expected_turn_id is None:
                     expected_turn_id = event_turn_id
                 if previous_event_seq is not None and event_seq != previous_event_seq + 1:
@@ -667,12 +680,14 @@ class MessageStreamStore:
         *,
         path: Path,
         session_id: str,
+        thread_id: str,
         turn_id: str,
         turn_stream_id: str,
         last_event_seq: int,
     ) -> int:
         for field_name, expected in (
             ("session_id", session_id),
+            ("thread_id", thread_id),
             ("turn_id", turn_id),
             ("turn_stream_id", turn_stream_id),
         ):
@@ -873,37 +888,32 @@ class MessageStreamStore:
                     "消息流状态快照缺失且事件日志已经被裁剪: "
                     f"session_id={session_id} turn_stream_id={turn_stream_id}"
                 )
-            # TODO: 迁移完成后删除旧版内嵌 checkpoint 的读取分支；当前仅用于读取既有消息流。
-            # 兼容旧版每条记录都内嵌完整 checkpoint 的 JSONL。新格式的
-            # checkpoint 字段为空，需要从已 fsync 的事件日志重放恢复。
-            legacy_checkpoint = records[-1].checkpoint
-            if legacy_checkpoint:
-                state = copy.deepcopy(legacy_checkpoint)
-            else:
-                first_event = records[0].event
-                if first_event.get("type") != "stream.opened":
-                    raise MessageStreamError(
-                        "消息流状态快照缺失且事件日志不是完整流: "
-                        f"session_id={session_id} turn_stream_id={turn_stream_id}"
-                    )
-                state = self._empty_state(
-                    session_id=session_id,
-                    turn_id=str(first_event["turn_id"]),
-                    turn_stream_id=turn_stream_id,
-                    job_id=(
-                        str(first_event["job_id"])
-                        if first_event.get("job_id") is not None
-                        else None
-                    ),
+            first_event = records[0].event
+            if first_event.get("type") != "stream.opened":
+                raise MessageStreamError(
+                    "消息流状态快照缺失且事件日志不是完整流: "
+                    f"session_id={session_id} turn_stream_id={turn_stream_id}"
                 )
-                for record in records:
-                    state = apply_event(state, record.event)
-                    state["snapshot_seq"] = int(record.event["event_seq"])
+            state = self._empty_state(
+                session_id=session_id,
+                thread_id=str(first_event["thread_id"]),
+                turn_id=str(first_event["turn_id"]),
+                turn_stream_id=turn_stream_id,
+                job_id=(
+                    str(first_event["job_id"])
+                    if first_event.get("job_id") is not None
+                    else None
+                ),
+            )
+            for record in records:
+                state = apply_event(state, record.event)
+                state["snapshot_seq"] = int(record.event["event_seq"])
         else:
             snapshot_seq = self._validate_state_snapshot(
                 state,
                 path=self._state_path(session_id, turn_stream_id),
                 session_id=session_id,
+                thread_id=str(records[0].event["thread_id"]),
                 turn_id=str(records[0].event["turn_id"]),
                 turn_stream_id=turn_stream_id,
                 last_event_seq=int(records[-1].event["event_seq"]),
@@ -963,10 +973,12 @@ class MessageStreamStore:
         self,
         *,
         session_id: str,
+        thread_id: str,
         turn_id: str,
         turn_stream_id: str | None = None,
         job_id: str | None = None,
     ) -> MessageStreamWriter:
+        self._path_resolver.resolve_thread_node(session_id, thread_id)
         async with self._index_lock_for(session_id):
             index = self._read_index(session_id)
             resolved_stream_id = turn_stream_id or index.get(turn_id)
@@ -974,6 +986,7 @@ class MessageStreamStore:
                 resolved_stream_id = create_prefixed_id("strm")
                 state = self._empty_state(
                     session_id=session_id,
+                    thread_id=thread_id,
                     turn_id=turn_id,
                     turn_stream_id=resolved_stream_id,
                     job_id=job_id,
@@ -984,6 +997,7 @@ class MessageStreamStore:
                 writer = MessageStreamWriter(
                     self,
                     session_id=session_id,
+                    thread_id=thread_id,
                     turn_id=turn_id,
                     turn_stream_id=resolved_stream_id,
                     job_id=job_id,
@@ -991,7 +1005,7 @@ class MessageStreamStore:
                 await writer.commit("stream.opened", {"status": "open"})
                 return writer
         state = self._load_state(session_id, resolved_stream_id)
-        if state["turn_id"] != turn_id or state["session_id"] != session_id:
+        if state["turn_id"] != turn_id or state["session_id"] != session_id or (thread_id is not None and state["thread_id"] != thread_id):
             raise MessageStreamError(
                 "消息流关联键不匹配: "
                 "turn_stream_id="
@@ -1000,6 +1014,7 @@ class MessageStreamStore:
         return MessageStreamWriter(
             self,
             session_id=session_id,
+            thread_id=thread_id,
             turn_id=turn_id,
             turn_stream_id=resolved_stream_id,
             job_id=job_id or state.get("job_id"),
@@ -1009,6 +1024,7 @@ class MessageStreamStore:
         self,
         *,
         session_id: str,
+        thread_id: str | None = None,
         turn_id: str,
         turn_stream_id: str | None = None,
     ) -> MessageStreamWriter:
@@ -1021,7 +1037,7 @@ class MessageStreamStore:
                 f"消息流不存在: session_id={session_id} turn_id={turn_id}"
             )
         state = self._load_state(session_id, resolved_stream_id)
-        if state["turn_id"] != turn_id or state["session_id"] != session_id:
+        if state["turn_id"] != turn_id or state["session_id"] != session_id or (thread_id is not None and state["thread_id"] != thread_id):
             raise MessageStreamError(
                 "消息流关联键不匹配: "
                 "turn_stream_id="
@@ -1030,6 +1046,7 @@ class MessageStreamStore:
         return MessageStreamWriter(
             self,
             session_id=session_id,
+            thread_id=str(state["thread_id"]),
             turn_id=turn_id,
             turn_stream_id=resolved_stream_id,
             job_id=state.get("job_id"),
@@ -1235,6 +1252,7 @@ class MessageStreamStore:
         event: dict[str, Any] = {
             "event_id": event_id or create_prefixed_id("evt"),
             "session_id": state["session_id"],
+            "thread_id": state["thread_id"],
             "turn_id": state["turn_id"],
             "turn_stream_id": turn_stream_id,
             "event_seq": next_seq,
@@ -1356,6 +1374,7 @@ class MessageStreamStore:
         return {
             "event_id": create_prefixed_id("snapshot"),
             "session_id": state["session_id"],
+            "thread_id": state["thread_id"],
             "turn_id": state["turn_id"],
             "turn_stream_id": turn_stream_id,
             "event_seq": snapshot_seq,

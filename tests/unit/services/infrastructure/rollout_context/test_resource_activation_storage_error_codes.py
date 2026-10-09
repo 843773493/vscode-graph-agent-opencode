@@ -1,6 +1,6 @@
 """activation storage 错误码的单点化防漂移合同。
 
-同一 code 只允许在 storage/resource_activation_common.py 定义一次；store/reads/
+同一 code 只允许在 activation/common.py 定义一次；store/reads/
 schema/lineage 必须引用常量，不得重新裸写同一字面量。
 """
 
@@ -9,19 +9,17 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from app.services.infrastructure.rollout_context.storage import (
-    resource_activation_common,
-)
+from app.services.infrastructure.rollout_context.activation import common
 
-_STORAGE_DIR = Path("app/services/infrastructure/rollout_context/storage")
-# 只扫描 storage 侧的 code 归属模块；checkpoint 目录里的同名字符串是异常消息
+_ACTIVATION_DIR = Path("app/services/infrastructure/rollout_context/activation")
+# 只扫描 activation 侧的 code 归属模块；checkpoint 目录里的同名字符串是异常消息
 # 文本（无 .code 语义），不属于本闭合集。
 _SCANNED_MODULES = (
-    "resource_activation_common.py",
-    "resource_activation_store.py",
-    "resource_activation_reads.py",
-    "resource_activation_schema.py",
-    "resource_activation_lineage.py",
+    "common.py",
+    "store.py",
+    "reads.py",
+    "schema.py",
+    "lineage.py",
 )
 _CODE_LITERAL = re.compile(
     r'"(resource-activation-(?:schema-invalid|schema-conflict|snapshot-conflict|'
@@ -41,7 +39,7 @@ _EXPECTED_CODES = {
 
 def test_declared_codes_are_stable():
     actual = {
-        name: getattr(resource_activation_common, name) for name in _EXPECTED_CODES
+        name: getattr(common, name) for name in _EXPECTED_CODES
     }
     assert actual == _EXPECTED_CODES
 
@@ -49,7 +47,7 @@ def test_declared_codes_are_stable():
 def test_each_code_has_exactly_one_definition_point():
     counts: dict[str, int] = {}
     for module in _SCANNED_MODULES:
-        text = (_STORAGE_DIR / module).read_text(encoding="utf-8")
+        text = (_ACTIVATION_DIR / module).read_text(encoding="utf-8")
         for code in _CODE_LITERAL.findall(text):
             counts[code] = counts.get(code, 0) + 1
     # 每个 code 的唯一字面量必须是 common.py 里的常量定义行。
@@ -59,8 +57,8 @@ def test_each_code_has_exactly_one_definition_point():
 def test_no_inline_code_literals_outside_common():
     inline: list[tuple[str, str]] = []
     for module in _SCANNED_MODULES:
-        if module == "resource_activation_common.py":
+        if module == "common.py":
             continue
-        text = (_STORAGE_DIR / module).read_text(encoding="utf-8")
+        text = (_ACTIVATION_DIR / module).read_text(encoding="utf-8")
         inline.extend((module, code) for code in _CODE_LITERAL.findall(text))
     assert inline == []

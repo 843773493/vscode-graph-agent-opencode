@@ -15,6 +15,9 @@ from app.domain.itemized.schema import validate_extensions
 from app.services.infrastructure.rollout_context.assembly.detail_registry import (
     DetailRegistryMixin,
 )
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutNotMaterializedError,
+)
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
 )
@@ -165,12 +168,12 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
         )
         validate_extensions(values["extensions"], field="ContextContribution.extensions")
         binding_manifest_json = _json(contribution.binding_manifest())
-        with self._lock(thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-            with self._connect(
+        with self._storage._lock(thread_id, checkpoint_ns, session_id=session_id):
+            self._storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._storage._connect(
                 thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
-                self._require_v2_runtime(connection)
+                self._storage._require_v2_runtime(connection)
                 connection.execute("BEGIN IMMEDIATE")
                 existing = connection.execute(
                     'SELECT source_kind, source_revision, content_hash, content_length, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, binding_manifest_json FROM context_contributions WHERE contribution_id = ?',
@@ -301,26 +304,16 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
             or snapshot.checkpoint_ns != checkpoint_ns
         ):
             raise ValueError("context contribution snapshot 与目标 rollout 不一致")
-        owned_connection = None
-        if snapshot is None:
-            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-            owned_connection = self._connect(
-                thread_id, checkpoint_ns, session_id=session_id, read_only=True
-            )
-        connection = (
-            self._snapshot_connection(snapshot)
-            if snapshot is not None
-            else owned_connection
-        )
-        assert connection is not None
         try:
-            self._require_v2_runtime(connection)
-            rows = connection.execute(
-                'SELECT contribution_id, source_kind, source_revision, content_hash, content_length, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, assembly_id, contribution_ordinal, source_ordinal, binding_manifest_json, created_at FROM context_contributions ORDER BY source_ordinal, contribution_id'
-            ).fetchall()
-        finally:
-            if owned_connection is not None:
-                owned_connection.close()
+            with self._storage.read_connection(
+                session_id, thread_id, checkpoint_ns, snapshot=snapshot,
+            ) as connection:
+                self._storage._require_v2_runtime(connection)
+                rows = connection.execute(
+                    'SELECT contribution_id, source_kind, source_revision, content_hash, content_length, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, assembly_id, contribution_ordinal, source_ordinal, binding_manifest_json, created_at FROM context_contributions ORDER BY source_ordinal, contribution_id'
+                ).fetchall()
+        except RolloutNotMaterializedError:
+            return ()
         result: list[dict[str, object]] = []
         for row in rows:
             if len(row) != 16:

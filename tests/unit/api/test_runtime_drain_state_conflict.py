@@ -26,16 +26,13 @@ from app.api.runtime import (
     force_runtime_drain,
     router,
 )
-from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.path_utils import get_session_path_resolver
 from app.core.trace_middleware import TraceMiddleware
 from app.services.business.job.service import JobService
-from app.services.infrastructure.background_task_history_store import (
-    BackgroundTaskHistoryStore,
-)
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.trace_event_store import TraceEventStore
+from tests.support.background_work import build_background_registry
 
 
 class _NeverFinishExecutor:
@@ -64,9 +61,7 @@ def _build_runtime(tmp_path: Path, session_lifecycle_guard) -> RuntimeService:
         workspace_id="00000000-0000-4000-8000-000000000001",
         workspace_root=tmp_path,
         job_service=jobs,
-        background_task_registry=BackgroundTaskRegistry(
-            history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
-        ),
+        background_task_registry=build_background_registry(sessions_dir),
         trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
         message_stream_store=MessageStreamStore(
             path_resolver=get_session_path_resolver(sessions_dir)

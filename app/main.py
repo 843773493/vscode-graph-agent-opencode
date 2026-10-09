@@ -100,12 +100,16 @@ async def _workspace_lifespan(container: AppContainer):
         async with AsyncExitStack() as resources:
             # 先登记持有资源的关闭动作，部分启动失败也沿同一顺序排空。
             resources.callback(container.workspace_source_owner.close)
+            resources.callback(container.workspace_service.close)
+            resources.push_async_callback(container.workspace_service.stop)
             resources.push_async_callback(container.mcp_catalog_owner.shutdown)
             resources.callback(container.workspace_activity_service.close)
             resources.push_async_callback(container.trace_event_recorder.stop)
             resources.push_async_callback(container.tool_test_service.shutdown)
             resources.push_async_callback(container.resource_platform.close)
             resources.push_async_callback(container.agent_execution_service.shutdown)
+            resources.push_async_callback(container.team_fanout_service.stop)
+            resources.push_async_callback(container.background_task_registry.stop)
             resources.push_async_callback(container.config_service.close)
             resources.push_async_callback(
                 container.job_event_bus.unregister_durable_listener,
@@ -154,6 +158,7 @@ async def _workspace_lifespan(container: AppContainer):
             resources.push_async_callback(operations.stop)
 
             container.config_service.validate_workspace_config()
+            await container.workspace_service.start()
             await container.mcp_catalog_owner.start()
             await container.workspace_file_resource_registry.start()
             removed = container.workspace_activity_service.prune()
@@ -206,6 +211,9 @@ async def _workspace_lifespan(container: AppContainer):
             if recovered:
                 logger.info("已恢复 %s 个未发布 context fork", recovered)
             await container.agent_execution_service.start()
+            await container.team_fanout_service.start()
+            await container.background_message_bus.reconcile(container.checkpointer)
+            await container.background_task_registry.start()
             await container.thread_initial_execution_service.start()
             await container.job_event_bus.register_durable_listener(container.session_communication_service.observations.on_event)
             await container.session_communication_service.start()

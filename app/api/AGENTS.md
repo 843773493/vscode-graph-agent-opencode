@@ -8,6 +8,7 @@
 - `canonical_params.py`：`Annotated` 形式的 canonical `session_id` / `thread_id` 校验类型，复用 `app.core.session_catalog_store` 的唯一校验器。
 - `sse_heartbeat.py`：把异步事件源包装成带空闲心跳的 SSE 流的统一实现。
 - 其余 `*.py`：按业务域（`sessions`、`messages`、`workspace`、`jobs`、`tools`、`mcp`、`node_debug`、`runtime` 等）拆分的路由实现。同层不再有前端 TS 文件；浏览器前端的 gateway API 客户端位于 `src/clients/web/src/gatewayApi.ts`，pending request 客户端位于 `src/clients/web/src/pendingRequestsApi.ts`，二者不属于本目录。
+- `messages.py` 与 `session_turns.py` 分别适配 `sessions/{session_id}/threads/{thread_id}/messages` 和同 thread 的 `/history`，复用消息准入和唯一历史 reader；Session-only 入口仍由业务 owner 解析 main thread。
 
 # 可修改内容
 
@@ -29,3 +30,4 @@
 - 处理函数签名中的依赖参数应按仓库既有顺序排列：路径/查询参数、请求体、`Depends(verify_local_token)`、`Depends(get_request_id)`、服务依赖。
 - 失败必须显式抛出 `HTTPException` 或业务异常，禁止用虚假默认值或静默降级掩盖错误。
 - 本目录的单元测试放在 `tests/unit/api/`，公开协议契约测试放在 `tests/contracts/api/`。
+- 精确 thread 历史请求的 execution 选择器及游标合同归 DTO/history owner；API 只校验与转发，不建立第二历史投影、伪造 Turn 或唤醒 cold runtime。

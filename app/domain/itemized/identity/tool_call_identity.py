@@ -8,9 +8,18 @@ canonical item 投影到 provider 协议的位置都必须经过这里的还原�
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 
 _TOOL_CALL_SCOPE_SEPARATOR = ":tool-call:"
+
+
+def software_tool_operation_id(operation: str, session_id: str, thread_id: str, model_call_id: str, call_id: str) -> str:
+    """软件操作 identity 只取自持久的 emitting call 与精确 owner。"""
+    preimage = json.dumps([operation, session_id, thread_id, model_call_id, call_id], ensure_ascii=False, separators=(",", ":"))
+    return "cop_" + hashlib.sha256(preimage.encode()).hexdigest()
 
 
 def provider_tool_call_id(identity: ItemProjectionIdentity | None, tool_call_id: str) -> str:

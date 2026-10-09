@@ -34,6 +34,7 @@ import websockets
 
 from app.core.lifecycle import LifetimeScope, ReleaseCallback
 from app.core.path_utils import get_session_path_resolver
+from app.core.thread_residency_contracts import ResidencyBlocker
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.schemas.internal_v2.node_debug import (
@@ -68,7 +69,6 @@ from app.services.infrastructure.node_debug.session.session_store import (
 )
 from app.services.orchestration.thread_residency import (
     THREAD_IDLE_UNLOAD_SECONDS,
-    ResidencyBlocker,
     ThreadResidencyTracker,
     ThreadRuntimeLease,
     ThreadUnloadBlocked,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from threading import RLock
+from types import SimpleNamespace
 from typing import Self
 
 import pytest
@@ -61,7 +62,7 @@ class _Reader:
         return _Snapshot(*owner, self._manifests[owner])
 
 
-class _Storage:
+class _Assemblies:
     def list_source_overlays(
         self,
         session_id: str,
@@ -89,7 +90,7 @@ class _Saver(ContextReconciliationMixin):
     def __init__(self) -> None:
         self._lock = RLock()
         self._context_reader = _Reader()
-        self._storage = _Storage()
+        self._storage = SimpleNamespace(assemblies=_Assemblies())
         self._context_reconciliations = {}
 
 

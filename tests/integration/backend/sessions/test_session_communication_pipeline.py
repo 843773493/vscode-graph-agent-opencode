@@ -472,6 +472,7 @@ async def communication_triad(request: pytest.FixtureRequest) -> AsyncIterator[t
         async with open_communication_triad(
             context, _prepare_workspace,
             resource_service_nodes=getattr(request, "param", {}).get("resource_service_nodes", ()),
+            shared_session_ids=getattr(request, "param", {}).get("shared_session_ids", ()),
         ) as nodes:
             try:
                 yield nodes, model, artifacts

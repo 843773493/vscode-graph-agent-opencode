@@ -158,7 +158,8 @@ function buildEffectiveNodes(input: CatalogProjectionInput): Map<string, Effecti
           node_id: nodeId,
           kind: "folder",
           name: operation.name ?? "",
-          parent_node_id: operation.parent_node_id,
+          parent_node_id: operation.created_by_operation_id === null
+            ? operation.parent_node_id : resolveReference(operation),
           session_id: null,
           folder_id: null,
           has_children: false,
@@ -304,6 +305,30 @@ export function projectCatalogBranch(
     consistency_warning: page.consistency_warning ?? null,
     pending_node_ids: pendingNodeIds,
     locally_removed_node_ids: locallyRemoved,
+  };
+}
+
+/** 未提交父 Folder 只有本地子项投影，没有后端页、revision 或 total。 */
+export function projectPendingCatalogChildren(
+  parentNodeId: string,
+  input: CatalogProjectionInput,
+): Pick<CatalogBranchProjection, "parent_node_id" | "items" | "pending_node_ids" | "locally_removed_node_ids"> {
+  const live = buildEffectiveNodes(input);
+  const parent = live.get(parentNodeId);
+  if (!parent || parent.confirmed || parent.node.client_ref === null) {
+    throw new Error(`本地父 Folder 不存在或已经提交: ${parentNodeId}`);
+  }
+  const items = [...live.values()]
+    .filter((entry) => entry.node.parent_node_id === parentNodeId)
+    .map((entry) => entry.node)
+    .sort((left, right) => (left.pending_operation_id ?? "").localeCompare(
+      right.pending_operation_id ?? "",
+    ));
+  return {
+    parent_node_id: parentNodeId,
+    items,
+    pending_node_ids: items.map((node) => node.node_id),
+    locally_removed_node_ids: [],
   };
 }
 

@@ -40,6 +40,9 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugStartRequest,
 )
 from app.schemas.internal_v2.workspace import WorkspaceFileCreateRequest
+from app.schemas.internal_v2.workspace_file_operations import (
+    WorkspaceFileMutationIntentDTO,
+)
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_service import WorkspaceService
 
@@ -63,11 +66,15 @@ def workspace_root(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def workspace_service(workspace_root: Path) -> WorkspaceService:
-    return WorkspaceService(
+async def workspace_service(workspace_root: Path):
+    service = WorkspaceService(
         config_service=_workspace_config_service_mock(),
         workspace_root=workspace_root,
     )
+    await service.start()
+    yield service
+    await service.stop()
+    service.close()
 
 
 # --- 映射层单元：ForbiddenError -> 403 + 消息本体 -----------------------------
@@ -242,7 +249,12 @@ async def test_workspace_create_entry_symlink_escape_is_403(
 
     with pytest.raises(HTTPException) as raised:
         await workspace_api.create_workspace_file_entry(
-            payload=WorkspaceFileCreateRequest(name="a", kind="file"),
+            payload=WorkspaceFileCreateRequest(name="a", kind="file", intent=WorkspaceFileMutationIntentDTO(
+                client_operation_id="op_00000000000040008000000000000002", client_sequence=1,
+                expected_directory_revision=1,
+                directory_key={"workspace_id": workspace_service.workspace_id, "scope": "workspace",
+                               "root": str(workspace_root), "path": "escape_dir"},
+            )),
             path="escape_dir", scope="workspace",
             _="local", request_id="req", workspace_service=workspace_service,
         )

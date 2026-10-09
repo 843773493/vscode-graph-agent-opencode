@@ -19,8 +19,6 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from app.core.session_control_store.contracts import ThreadGraphBindingRecord
-
 from app.core.identifier import (
     create_prefixed_id,
     to_epoch_ms,
@@ -28,6 +26,7 @@ from app.core.identifier import (
 )
 from app.core.session_catalog_store import validate_thread_id
 from app.core.session_control_primitives import validate_thread_creation_key
+from app.core.session_control_store.contracts import ThreadGraphBindingRecord
 from app.core.session_control_store.sql import (
     SELECT_THREAD_CATALOG_CHILD_ROW,
     SELECT_THREAD_CATALOG_ROW_COUNT,

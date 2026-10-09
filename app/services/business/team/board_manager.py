@@ -4,6 +4,7 @@ import asyncio
 import json
 from datetime import UTC, datetime
 
+from app.abstractions.internal_message import PreparedInternalMessage
 from app.abstractions.session_subagent import OwnerThreadCreationFactoryProtocol
 from app.abstractions.team import TeamStoreProtocol
 from app.core.identifier import create_prefixed_id
@@ -17,6 +18,7 @@ from app.schemas.internal_v2.team import (
     TeamTaskStatus,
 )
 
+from .messages import task_assignment_message, task_update_message
 from .rules import (
     RESOLUTION_STATUSES,
     TASK_TRANSITIONS,
@@ -36,15 +38,14 @@ class TeamBoardManager:
         self._factory = factory
         self._locks: dict[str, asyncio.Lock] = {}
 
-    def create(self, *, session_id: str, coordinator_thread_id: str, name: str) -> TeamBoardDTO:
+    async def create(self, *, session_id: str, coordinator_thread_id: str, name: str) -> TeamBoardDTO:
         now = self._now()
         board = TeamBoardDTO(
             team_id=create_prefixed_id("team"), name=required_text(name, "name"),
             session_id=session_id, coordinator_thread_id=coordinator_thread_id,
             version=1, created_at=now, updated_at=now,
         )
-        self._store.create(board)
-        self._store.append_event(self._event(
+        await self._store.commit(board, self._event(
             board, event_type="team.created", actor_thread_id=coordinator_thread_id,
             payload={"name": board.name},
         ))
@@ -77,7 +78,7 @@ class TeamBoardManager:
         cycle: int,
         depends_on_task_ids: list[str],
         start_assignee: bool,
-    ) -> tuple[TeamBoardDTO, TeamTaskDTO]:
+    ) -> tuple[TeamBoardDTO, TeamTaskDTO, int]:
         if cycle < 1:
             raise ValueError("cycle 必须大于等于 1")
         async with self._lock(team_id):
@@ -113,7 +114,7 @@ class TeamBoardManager:
                 updated_at=now,
             )
             board = self._replace_board(board, tasks=[*board.tasks, task])
-            board = self._persist(
+            board, revision = await self._persist(
                 board,
                 self._event(
                     board,
@@ -127,8 +128,13 @@ class TeamBoardManager:
                         "start_assignee": start_assignee,
                     },
                 ),
+                wakeup=self._wakeup(
+                    task_assignment_message(board=board, task=task), target_thread_id=assignee_thread_id,
+                    source_id=f"team:{team_id}:task:{task.task_id}:assignment",
+                    idempotency_key=f"team-assignment:{task.task_id}",
+                ) if start_assignee else None,
             )
-            return board, task
+            return board, task, revision
 
     async def update_task(
         self,
@@ -139,7 +145,7 @@ class TeamBoardManager:
         task_id: str,
         status: TeamTaskStatus,
         summary: str,
-    ) -> tuple[TeamBoardDTO, TeamTaskDTO]:
+    ) -> tuple[TeamBoardDTO, TeamTaskDTO, int]:
         normalized_summary = summary.strip()
         if status in RESOLUTION_STATUSES and not normalized_summary:
             raise ValueError(f"status={status} 时 summary 不能为空")
@@ -166,7 +172,7 @@ class TeamBoardManager:
                 }
             )
             board = self._replace_task(board, task)
-            board = self._persist(
+            board, revision = await self._persist(
                 board,
                 self._event(
                     board,
@@ -178,8 +184,13 @@ class TeamBoardManager:
                         "summary": normalized_summary,
                     },
                 ),
+                wakeup=self._wakeup(
+                    task_update_message(board=board, task=task), target_thread_id=board.coordinator_thread_id,
+                    source_id=f"team:{team_id}:task:{task_id}:update",
+                    idempotency_key=f"team-update:{task_id}:{board.version}",
+                ) if requester_thread_id != board.coordinator_thread_id and status in RESOLUTION_STATUSES else None,
             )
-            return board, task
+            return board, task, revision
 
     async def set_task_dispatched(
         self,
@@ -192,15 +203,22 @@ class TeamBoardManager:
     ) -> tuple[TeamBoardDTO, TeamTaskDTO]:
         async with self._lock(team_id):
             board = self._store.get(session_id, team_id)
-            task = find_task(board, task_id).model_copy(
-                update={
-                    "assigned_job_id": job_id,
-                    "updated_at": self._now(),
-                    "updated_by_thread_id": actor_thread_id,
-                }
-            )
+            existing = find_task(board, task_id)
+            latest = self._store.latest_task_event(session_id, team_id, task_id)
+            recovering_failure = latest is not None and latest.type == "task.dispatch_failed"
+            if existing.assigned_job_id == job_id and not recovering_failure:
+                return self.with_recent_events(board), existing
+            if existing.assigned_job_id is not None and existing.assigned_job_id != job_id:
+                raise RuntimeError("团队任务已绑定其它 Job，拒绝恢复换绑")
+            # 只撤销原调度失败写入；后续 task.updated 的用户结论由原事件因果保留。
+            restored = latest.payload["previous"] if latest is not None and latest.type == "task.dispatch_failed" else {}
+            task = TeamTaskDTO.model_validate(existing.model_dump() | restored | {
+                "assigned_job_id": job_id,
+                "updated_at": self._now(),
+                "updated_by_thread_id": actor_thread_id,
+            })
             board = self._replace_task(board, task)
-            board = self._persist(
+            board, _revision = await self._persist(
                 board,
                 self._event(
                     board,
@@ -222,7 +240,12 @@ class TeamBoardManager:
     ) -> None:
         async with self._lock(team_id):
             board = self._store.get(session_id, team_id)
-            task = find_task(board, task_id).model_copy(
+            original = find_task(board, task_id)
+            latest = self._store.latest_task_event(session_id, team_id, task_id)
+            previous = latest.payload["previous"] if latest is not None and latest.type == "task.dispatch_failed" else {
+                "status": original.status, "summary": original.summary, "error": original.error,
+            }
+            task = original.model_copy(
                 update={
                     "status": "failed",
                     "error": error,
@@ -232,13 +255,13 @@ class TeamBoardManager:
                 }
             )
             board = self._replace_task(board, task)
-            self._persist(
+            await self._persist(
                 board,
                 self._event(
                     board,
                     event_type="task.dispatch_failed",
                     actor_thread_id=actor_thread_id,
-                    payload={"task_id": task_id, "error": error},
+                    payload={"task_id": task_id, "error": error, "previous": previous},
                 ),
             )
 
@@ -272,10 +295,15 @@ class TeamBoardManager:
             "members": members, "recent_events": self._store.recent_events(board.session_id, board.team_id),
         })
 
-    def _persist(self, board: TeamBoardDTO, event: TeamEventDTO) -> TeamBoardDTO:
-        self._store.save(board.model_copy(update={"members": [], "recent_events": []}))
-        self._store.append_event(event)
-        return self.with_recent_events(board)
+    async def _persist(self, board: TeamBoardDTO, event: TeamEventDTO,
+                       *, wakeup: dict[str, object] | None = None) -> tuple[TeamBoardDTO, int]:
+        revision = await self._store.commit(board, event, wakeup=wakeup)
+        return self.with_recent_events(board), revision
+
+    @staticmethod
+    def _wakeup(message: PreparedInternalMessage, *, target_thread_id: str, source_id: str, idempotency_key: str) -> dict[str, object]:
+        return {"target_thread_id": target_thread_id, "source_id": source_id,
+                "idempotency_key": idempotency_key, "content": message.content, "metadata": dict(message.metadata)}
 
     def _replace_board(self, board: TeamBoardDTO, **updates: object) -> TeamBoardDTO:
         return board.model_copy(

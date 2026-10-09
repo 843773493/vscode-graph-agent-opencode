@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.core.exceptions import ForbiddenError
-from app.core.identifier import create_uuid_hex
+from app.core.identifier import create_prefixed_id, create_uuid_hex
 from app.core.path_segments import physical_segment
 from app.core.path_utils import (
     get_boxteam_home,
@@ -123,7 +123,7 @@ class TestPathUtils:
         resolver = get_session_path_resolver()
         folder_name = '项目/会话:*?"<>'
         session_title = '测试/会话:*?"<>'
-        folder = resolver.create_folder(name=folder_name, parent_node_id=None)
+        folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, folder_name).node_id)
         # canonical ID 由 v7 唯一工厂生成（uuidv7 迁移后不再是 v4 形态常量）。
         session_id = f"ses_{create_uuid_hex()}"
         session_dir = seed_catalog_session_bundle(
@@ -160,8 +160,8 @@ class TestPathUtils:
         from app.core.path_utils import get_session_path_resolver
 
         resolver = get_session_path_resolver()
-        source_folder = resolver.create_folder(name="移动前", parent_node_id=None)
-        resolver.create_folder(name="移动后", parent_node_id=None)
+        source_folder = resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '移动前').node_id)
+        resolver.get_node(resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, '移动后').node_id)
         # canonical ID 由 v7 唯一工厂生成（uuidv7 迁移后不再是 v4 形态常量）。
         session_id = f"ses_{create_uuid_hex()}"
         source = seed_catalog_session_bundle(

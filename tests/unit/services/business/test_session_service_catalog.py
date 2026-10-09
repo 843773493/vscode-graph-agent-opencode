@@ -151,8 +151,8 @@ async def test_create_and_get_reads_title_and_parent_from_resolver(
     assert "title" not in manifest
     assert "title_source" not in manifest
     assert "parent_session_id" not in manifest
-    # 其余字段仍读 manifest。
-    assert manifest["kind"] == "normal"
+    assert set(manifest) == {"session_id", "workspace_id", "created_at"}
+    assert workspace.node(child.session_id).session_kind == "normal"
 
     # child thread 列表读 owner control store：普通 Session 无控制库 →
     # 空列表（delegated child Session manifest 不再参与投影）。

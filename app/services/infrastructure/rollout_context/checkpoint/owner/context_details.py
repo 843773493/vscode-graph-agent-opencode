@@ -127,7 +127,7 @@ class ContextDetailOwnerMixin:
         if not isinstance(detail_ref, DetailRef):
             raise TypeError("source-mismatch: detail_ref 必须是 typed DetailRef")
         detail_ref.require_owner(session_id, thread_id)
-        raw = self._storage.get_context_plan_detail(
+        raw = self._storage.assemblies.get_context_plan_detail(
             session_id,
             thread_id,
             detail_ref=detail_ref,
@@ -150,7 +150,7 @@ class ContextDetailOwnerMixin:
         checkpoint_ns: str = "",
     ) -> tuple[DetailRef, ...]:
         """只清理未被 sealed assembly 引用的过期 detail。"""
-        candidates = self._storage.list_expired_context_plan_details(
+        candidates = self._storage.assemblies.list_expired_context_plan_details(
             session_id,
             thread_id,
             expired_before=expired_before,
@@ -159,7 +159,7 @@ class ContextDetailOwnerMixin:
         removable = tuple(
             detail_ref
             for detail_ref, assembly_id in candidates
-            if not self._storage.context_assembly_references_detail(
+            if not self._storage.assemblies.context_assembly_references_detail(
                 session_id,
                 thread_id,
                 assembly_id=assembly_id,
@@ -169,7 +169,7 @@ class ContextDetailOwnerMixin:
         )
         # 先提交可恢复 tombstone；标记失败时绝不能先删除正文。若进程在
         # 标记后崩溃，registry 的 GC candidates 必须允许重试物理清理。
-        self._storage.mark_context_plan_details_unavailable(
+        self._storage.assemblies.mark_context_plan_details_unavailable(
             session_id,
             thread_id,
             detail_refs=removable,

@@ -146,7 +146,7 @@ async def _start_job(case: RunnerCase, origin: str, session_id: str, thread_id: 
 def _facts(
     case: RunnerCase, session_id: str, thread_id: str
 ) -> tuple[list[tuple], list[tuple], int]:
-    root = case.saver._storage.root(session_id, thread_id=thread_id)
+    root = case.saver._storage.storage.root(session_id, thread_id=thread_id)
     with sqlite3.connect(root / "index.sqlite") as connection:
         executions = connection.execute(
             "SELECT execution_id, execution_origin, turn_id, outcome FROM executions"
@@ -173,7 +173,7 @@ async def test_job_cancel_waits_for_real_admission_settlement(
     entered, release = threading.Event(), threading.Event()
     storage = runner_case.saver._storage
     if window == "admission_writer":
-        original = storage._append_v2_records_transaction
+        original = storage.storage._append_v2_records_transaction
 
         def blocked_write(*args, **kwargs):
             if not entered.is_set():
@@ -182,7 +182,7 @@ async def test_job_cancel_waits_for_real_admission_settlement(
                     raise TimeoutError("测试 Saver writer 屏障未释放")
             return original(*args, **kwargs)
 
-        monkeypatch.setattr(storage, "_append_v2_records_transaction", blocked_write)
+        monkeypatch.setattr(storage.storage, "_append_v2_records_transaction", blocked_write)
     else:
         original = runner_case.saver.execution_admission_for_job
 
@@ -397,7 +397,7 @@ async def test_control_corrects_execution_lost_and_failed_preserves_recovery(fro
     assert executions[0][3] == outcome
     assert turns == ([(admission.turn_id, outcome)] if origin == "user" else [])
     with sqlite3.connect(
-        runner_case.saver._storage.root(session_id, thread_id=thread_id)
+        runner_case.saver._storage.storage.root(session_id, thread_id=thread_id)
         / "index.sqlite"
     ) as connection:
         assert connection.execute(
@@ -474,7 +474,7 @@ async def test_cancelled_writer_without_committed_admission_creates_no_facts(
         raise RuntimeError("真实准入事务未提交")
 
     monkeypatch.setattr(
-        runner_case.saver._storage, "_append_v2_records_transaction", rejected_write
+        runner_case.saver._storage.storage, "_append_v2_records_transaction", rejected_write
     )
     job = await _start_job(runner_case, origin, session_id, thread_id)
     try:

@@ -22,7 +22,7 @@ from app.services.infrastructure.rollout_context.checkpoint.reader import (
 from app.services.infrastructure.rollout_context.storage.schema import (
     ROLLOUT_SCHEMA_VERSION,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 from tests.integration.backend.sessions.deterministic_rollout_fixture_helpers import (
     seed_deterministic_v2_rollout,
@@ -148,7 +148,7 @@ def test_custom_tool_fixture_asset_contract(
 def _reader(workspace_root: Path) -> RolloutHistoryReader:
     return RolloutHistoryReader(
         RolloutContextReader(
-            RolloutStorage(
+            RolloutContextStore(
                 workspace_root / ".boxteam" / "sessions",
                 message_codec=LangChainMessageCodec(),
             )
@@ -260,11 +260,11 @@ def test_provider_128_turn_fixture_preserves_canonical_semantics(
             >= 16
         )
 
-    storage = RolloutStorage(
+    storage = RolloutContextStore(
         sessions_dir,
         message_codec=LangChainMessageCodec(),
     )
-    items = storage.read_items(REAL_SESSION_ID)
+    items = storage.storage.read_items(REAL_SESSION_ID)
     assert len(items) >= 288
     assert all(item.format_version == 2 for item in items)
     assert {item.semantic_kind for item in items} >= {
@@ -318,7 +318,7 @@ def test_deterministic_v2_128_turn_history_is_bounded_and_preserves_tool_body(
     session_id, tool_bodies = deterministic_v2_rollout
     reader = _reader(real_rollout_workspace)
     storage = reader._context_reader._storage
-    items = storage.read_items(session_id)
+    items = storage.storage.read_items(session_id)
     assert len([item for item in items if item.semantic_kind == "user_input"]) == 128
     assert all(item.format_version == 2 for item in items)
     stored_results = [item for item in items if item.semantic_kind == "tool_result"]
@@ -328,13 +328,13 @@ def test_deterministic_v2_128_turn_history_is_bounded_and_preserves_tool_body(
             body in json.dumps(item.payload, ensure_ascii=False)
             for item in stored_results
         )
-    with storage._connect(session_id, "", read_only=True) as connection:
+    with storage.storage._connect(session_id, "", read_only=True) as connection:
         assert connection.execute(
             "SELECT schema_version, rollout_format_version FROM database_meta"
         ).fetchone() == (ROLLOUT_SCHEMA_VERSION, 2)
     source_by_sequence = {item.item_sequence: item for item in items}
     accessed: list[int] = []
-    original_read = storage._read_record_envelopes
+    original_read = storage.checkpoints._read_record_envelopes
 
     def capture_read(thread_id, checkpoint_ns, rows, *, connection=None):
         rows = list(rows)
@@ -344,8 +344,8 @@ def test_deterministic_v2_128_turn_history_is_bounded_and_preserves_tool_body(
     def reject_full_scan(*args, **kwargs):
         raise AssertionError("有界 history 不得 materialize 全量消息")
 
-    monkeypatch.setattr(storage, "_read_record_envelopes", capture_read)
-    monkeypatch.setattr(storage, "materialize_messages", reject_full_scan)
+    monkeypatch.setattr(storage.checkpoints, "_read_record_envelopes", capture_read)
+    monkeypatch.setattr(storage.checkpoints, "materialize_messages", reject_full_scan)
     tail = reader.load(session_id, TurnHistoryLoadRequest(direction="tail", turns=1))
     assert [item.ordinal for item in tail.items] == [128]
     assert tail.items[0].final_response == "确定性集成回答 128"

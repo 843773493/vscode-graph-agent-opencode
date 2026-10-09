@@ -19,10 +19,6 @@ from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
-from app.agents.cache_preserving_summarization import (
-    CachePreservingSummarizationToolMiddleware,
-    create_cache_preserving_summarization_middleware,
-)
 from app.agents.custom_tool_confirmation_middleware import (
     CustomToolConfirmationMiddleware,
 )
@@ -46,6 +42,12 @@ from app.agents.structured_prompt_validation_middleware import (
     StructuredPromptValidationMiddleware,
 )
 from app.agents.structured_tool_call_middleware import StructuredToolCallMiddleware
+from app.agents.summarization.factory import (
+    create_cache_preserving_summarization_middleware,
+)
+from app.agents.summarization.tool_middleware import (
+    CachePreservingSummarizationToolMiddleware,
+)
 from app.agents.tool_identity import tool_definition_name
 from app.agents.tool_invocation_context import ToolInvocationContextMiddleware
 from app.agents.tool_output_middleware import ToolOutputMiddleware

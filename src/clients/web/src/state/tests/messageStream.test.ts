@@ -16,7 +16,7 @@ function event(
   type: MessageStreamEvent["type"],
   payload: Record<string, unknown>,
 ): MessageStreamEvent {
-  const envelope = {
+  const envelope = { thread_id: "thr_00000000400070008000000000000002",
     event_id: `evt_${seq}`,
     session_id: "ses_1",
     turn_id: "turn_1",
