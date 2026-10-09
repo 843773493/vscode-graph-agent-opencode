@@ -6,7 +6,7 @@
 
 2026-10-03 调度整理：handoff 文档提交为 `9bc4246b`；模型、派单、路径和提交方法改由 [团队协作技能](../../.codex/skills/team-collaboration-gpt/memory/2026/10/09/team-collaboration-workflow.md) 维护。两种模型版本已准备，本轮仅整理文档及遗留目录，未继续 OpenSpec。目录问题与待审建议见 [目录审查](20261003-151500-team-collaboration-directory-review.md)。
 
-2026-10-04 迁移更新：仓库物理根为 `/data1/hyf/20260822_agent/vscode-graph-agent-opencode`，原路径为软链接；后续不复用历史临时测试工作区。默认工作区与 `/data1/hyf/test_workspace/drive_bicicle` 的旧 `.boxteam/` 数据已分别按用户授权清理，普通文件保留，两个连接均恢复 `ready`。完整开发服务已恢复（前端 8027、Gateway 8030）。以上为迁移时的历史服务状态，恢复时需重新核验。当前 goal 已继续本交接及七个关联 OpenSpec 的实施与独立验收，实际进展以技能实时台账为准。 2026-10-09 最新状态：Sol 核心最终批已 STOP、固定并通过两方独审，完整候选待串行集成；后续精确对表发现的原10.3分页全表轻量读取已由同Sol003修复，114测试通过；Luna增量独审唯一恢复fixture遗漏经004原node红→绿闭合。核心准备串行集成；导航测试消费者另批由Luna窄修DOM辅助并独验原300/40/20，最终原goal验收与Provider403/C1仍未完成。用户随后授权按架构熵减自主决策，开发生成的新旧中间数据可直接删除，不保留旧兼容，不再逐项询问。
+2026-10-04 迁移更新：仓库物理根为 `/data1/hyf/20260822_agent/vscode-graph-agent-opencode`，原路径为软链接；后续不复用历史临时测试工作区。默认工作区与 `/data1/hyf/test_workspace/drive_bicicle` 的旧 `.boxteam/` 数据已分别按用户授权清理，普通文件保留，两个连接均恢复 `ready`。完整开发服务已恢复（前端 8027、Gateway 8030）。以上为迁移时的历史服务状态，恢复时需重新核验。当前 goal 已继续本交接及七个关联 OpenSpec 的实施与独立验收，实际进展以技能实时台账为准。 2026-10-09 最新状态：原核心最终批及查询003/恢复fixture004已通过具名验收并串行集成`e11c8c6b`。导航006的fixture布局修订经独立017完成300文件样本，首双页并发因观察器等待本页POST而超时；共享队列由另一页派发，同operation ID已complete且两文件存在，Gateway样本0，完整300/40/20量化仍未通过。Luna只核跨页测试观察器窄修及已接受任务证据，Sol独占ROOT完成10.3真实失败对账、权威目录刷新与本地pending投影闭包。最终原goal、Provider403/C1验收仍未完成，实际租约与收据见技能实时台账。用户随后授权按架构熵减自主决策，开发生成的新旧中间数据可直接删除，不保留旧兼容，不再逐项询问。
 
 ---
 
@@ -124,11 +124,11 @@
 
 ## 五、规范与实现缺口（历史调查，按当前 owner 与授权推进）
 
-1. **delegated child 准备/发布已收敛到唯一 SQLite owner**：最终 Sol 批次使用 Session `session-control.sqlite` 的 collaboration/creation ledger，child/member 同事务发布，binder 只消费 published readiness；不增加 Team JSON intent 或发布后回滚。team finalizer 真实提交后失败窗口与 351 项 owner 单测已有具名证据，最终核心独审已收口；当前源码固定待集成，完整 8.5 验收按原子要求对表，不能整项猜勾。
+1. **delegated child 准备/发布已收敛到唯一 SQLite owner**：最终 Sol 批次使用 Session `session-control.sqlite` 的 collaboration/creation ledger，child/member 同事务发布，binder 只消费 published readiness；不增加 Team JSON intent 或发布后回滚。team finalizer 真实提交后失败窗口与 351 项 owner 单测已有具名证据，最终核心独审已收口；当前源码已集成e11c8c6b，完整 8.5 验收按原子要求对表，不能整项猜勾。
 2. **Resource activation/provenance 真实执行闭包已集成**：`16f09ee7` 接通 execution-owned activation → Runner/Factory/CSM/Provider/Saver 与 Skill/MCP，精确正文 detail、typed/hash、默认 history/API 脱敏及 restore/fork/retention 有具名证据；本地 AES、两个 key 与 thread HMAC 已按用户要求删除。整项门槛按 accepted A01–A03 与当前原任务对表，不重派“尚无生产调用方”。
 3. **自由 metadata 决策字段已迁 typed owner**：`ContextContribution` 的 selection_role/replacement_policy/source_binding 与不可变正文合同已接受，middleware 无旧 replaceable_source 双读；producer、封存、恢复与 Provider 按现有收据验收，不恢复旧 metadata 链。
 4. **SessionThread 与继承调用闭包已完成最终源码批及独审**：ContextRef、assembly、detail、canonical/checkpoint/fork、GraphBinding/residency 和后台任务携带精确 thread；旧历史 fixture 与 admission 调用方已随批迁齐。真实 cold fork、生成分支、硬重启、通信与 Session URI 联合有具名通过证据；原失败组合保真，产品 Provider403 仍 UNMET，不由 integration 替代。
-5. **目录消费者已修，原导航量化仍在验收**：pending 父 Folder 两处 UI、Session 分页与目录 outbox 已随 Sol 批实现；10.3 catalog nodes 六字段成为唯一持续权威，session.json 只留三键 identity，导航零 manifest 读取，所有 writer 与旧同步入口清理已闭合。文件 202 真控件与 receipt 验收已通过，Gateway 原条件未触发、不新增 worker。Sol 窄修消费者后代表性 5＋2 样本通过；独立原规模 340011 完成 64 个样本后 fs-reads 请求超时，尚未定位阻塞层，无完整性能结论。当前 Sol 仅补两个测试消费者的分层证据与原计量口径，核心生产源码保持 STOP；最终原 300 文件/40 Gateway/20 并发门仍须通过。
+5. **目录消费者已实现，原导航量化与失败收敛仍在验收**：pending父Folder两UI、Session分页与catalog nodes唯一持续权威已集成e11c8c6b，session.json只留三键identity，零manifest读取及旧同步链清理已有证据。文件202真控件已通过；005修fixture回调风暴，016完成283样本后在结果DOM虚拟化边缘超时，原300文件/40Gateway/20并发量化未完成。Sol006一次修完整测量消费者，不扩大生产hook。10.3旧两测试只查询operation-status，最新confirmed刷新→独立pending本地投影重放仍核真实调用顺序；交同Sol修核心，Luna只独核。
 6. **配置来源轴与公共地址字段已完成独立切片**：用户确定 layer 表示逻辑来源，读侧 `sqlite` → `runtime_override`，precedence 不变，active/pending snapshot 从来源清单分开；`f42b6f77` 已实施验收。公共配置字段 `path/schema_path` → nullable `uri/schema_uri` 由 `69d77eea` 完成，R11 独审及 46+10+73+2 项关联验证通过；字段已随统一资源寻址术语迁移正名；其它资源 URI 持久化接线仍须完成。
 7. **uuidv7 change** 的前缀数已实核为 33 个、33 个唯一值；自然创建、真实时钟回拨及路径预算已集成验收，49/49 任务完成。关联 SessionThread 与端到端迁移验收仍按 `add-itemized` 第 8 节单独推进，不能由 UUID 验收代替；证据见 `coordinator/artifacts/u07-main-validation.json` 与实时台账。
 

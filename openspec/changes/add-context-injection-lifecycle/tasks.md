@@ -1,4 +1,4 @@
-当前验收坐标（2026-10-09）：A01–A03、R01/R03 已接受范围沿原具名收据复用；4.6 的已证部分仅 R01/R03，不整项补勾。最终 Sol 批已将八个 summarization caller 迁唯一 owner 并物理删除旧 facade，TC001 真实 canonical 提交后 observer 失败、namespace 归一及锁内 writer connection 闭包已通过核心/受影响边界及独立审查，固定源码待集成。6.8 的真实产品 Provider403 仍 UNMET，integration 不能代替。旧阶段缺口仅作历史事实，不据未勾复建已关闭链路。
+当前验收坐标（2026-10-09）：A01–A03、R01/R03 已接受范围沿原具名收据复用；4.6 的已证部分仅 R01/R03，不整项补勾。最终 Sol 批已将八个 summarization caller 迁唯一 owner 并物理删除旧 facade，TC001 真实 canonical 提交后 observer 失败、namespace 归一及锁内 writer connection 闭包已通过核心/受影响边界及独立审查，已集成 `e11c8c6b`。6.8 的真实产品 Provider403 仍 UNMET，integration 不能代替。旧阶段缺口仅作历史事实，不据未勾复建已关闭链路。
 
 ## 1. Context mutation、stable-prefix 与 source domain contract
 
@@ -166,9 +166,9 @@
 
 判据沿用仓库既有门槛：目标目录 MUST 满足「直接源码文件 ≤20」「单文件 ≤800 行」「不与两个以上领域职责混合」，任一越界即 MUST 附拆分方案或含文件清单、职责/owner 映射、import graph、行数统计与复核结论的架构审查证据；本 change 归口 Agent 运行时/instruction-produced source 与派生 signal 面，session/catalog/storage 权威面归 add-itemized-rollout-context 7.5-F。豁免：生成目录（app/protocol/generated/**、src/**/*protocol*_generated/**）由上层 generated/AGENTS.md 声明不可手改，不计越限。
 
-- **2026-10-09 当前固定候选复核**：`f6b87311`的CIL自有架构最终报告覆盖Agent/abstraction全清单、owner映射、import graph、行数统计与结论，123条源码记录SHA经主代理核验；材料保存在`out/tests/temp/2026/10/09/a06-final-review/coordinator/artifacts/cil-runtime-architecture-001/`。factory、debugging、event processor及Provider规模作为维护风险记录，未发现重复权威事实或隐藏持久写入，不仅按行数要求拆分。唯一P2 `CIL-ARCH-01`为旧summarization重导出层：8个导入点、22符号待同批迁到实际owner并删除旧入口；子AGENTS保旧层的冲突约束已纠正，源码清理未完成。本证据只闭合本change架构审查材料，不替Session/catalog/storage、运行时或整体7.5验收签字；后续实际差异增审。
+- **2026-10-09 当前集成复核**：`f6b87311`的CIL自有架构最终报告覆盖Agent/abstraction全清单、owner映射、import graph、行数统计与结论，123条源码记录SHA经主代理核验；材料保存在`out/tests/temp/2026/10/09/a06-final-review/coordinator/artifacts/cil-runtime-architecture-001/`。factory、debugging、event processor及Provider规模作为维护风险记录，未发现重复权威事实或隐藏持久写入，不仅按行数要求拆分。唯一P2 `CIL-ARCH-01`已随 `e11c8c6b` 关闭：8个导入点、22符号迁到 `app/agents/summarization/` 的实际 owner，旧 `app/agents/cache_preserving_summarization.py` 重导出入口物理删除；子AGENTS冲突已纠正，核心/受影响边界和固定增审沿原收据复用。本证据只闭合本change架构审查材料与该清理项，不替Session/catalog/storage、运行时或整体7.5验收签字；后续仅审实际新增差异。
 
-- 实测快照（提交 69cc08fb）：本 change 归口的单文件 >800 行：app/agents/agent_factory.py=995、app/agents/providers/litellm_chat.py=1007、app/agents/providers/openai_responses.py=820、app/agents/tools/debugging.py=1233、app/agents/cache_preserving_summarization.py=1335、app/services/orchestration/event_stream/processor.py=819、app/services/infrastructure/node_debug/service.py=920、app/services/business/session_service.py=815、app/api/sessions.py=836。这些模块承载 sealed-assembly dispatch 装配、Provider 投影、debug 工具组、压缩/派生 signal、事件通道与 Session 业务/控制 API 边界（3.5 的受信 Session 控制 API 路由即 app/api/sessions.py），须在实施期拆分（agent_factory/providers 已在 7.5-F A9/A11 审计范围，本 change 3.x/7.x 消费其投影）。
+- 历史实测快照（提交 69cc08fb，当前判定采用上面的固定架构复核）：本 change 归口的单文件 >800 行：app/agents/agent_factory.py=995、app/agents/providers/litellm_chat.py=1007、app/agents/providers/openai_responses.py=820、app/agents/tools/debugging.py=1233、app/agents/cache_preserving_summarization.py=1335、app/services/orchestration/event_stream/processor.py=819、app/services/infrastructure/node_debug/service.py=920、app/services/business/session_service.py=815、app/api/sessions.py=836。其中旧summarization入口已删除，实际owner包继续使用；其余模块按职责与固定证据判断，不以旧行数重复派拆分。
 - 本 change 归口的目录直接 .py >20：app/agents=34（建议拆 middleware/、skills/、graph/）、app/abstractions=23（typed port/纯值对象面，本 change 在 app/abstractions/ 建立 typed port，见 3.9）。
 
 ### 2026-09-28 1.5/3.11/4.8/5.5 完成度复核（部分达标，按缺口保留未勾选）

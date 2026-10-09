@@ -236,3 +236,21 @@ final340009运行285.675s后在copy_1_006 DOM locator失败，67mutation完成�
 查询003独审发现外部SQLite DML caller遗漏：test_session_creation.py的published record missing-node恢复夹具仍裸connect后DELETE nodes，未注册新表达式索引UDF；此前只迁test_session_catalog_store内9处直接连接，114绿不覆盖此caller。静态明确回归，由同Sol待独审一次收齐后迁必要fixture，只重验受影响节点。索引增加连接级UDF依赖时，全仓盘点直接SQL写入及损坏/恢复夹具，不仅搜索owner构造；不把注册重复包装成第二owner。
 
 Q003-1后续效果：Sol004只2行import/注册，保持原独立连接DELETE与RuntimeError恢复断言，实际原node由unknown function红（actual1）转1pass（actual0），5query源码原SHA不变；固定b9f959dc严格重建0，主窄核finding关闭。规则盘点已在本次发现并闭合遗漏；不重复114通过项。
+
+### 导航014重复刷新与003证据缺口
+
+014原规模实际1/315.023s：67操作均committed/complete且UI完成，下一菜单准备等aria-busy=false超时；末次窗口32HTTP/15目录重拉/FS26722，未形成完整P95。Sol核完整caller发现harness每render生成onStatusChange，使loadDirectory身份变化连带重置目录cache、重读settings及SSE重连；产品App传稳定React setter。先在fixture稳定该callback，保原统计/加载屏障与300/40/20门，Luna只读旧raw核时间链，不把症状派成多个修订，也不扩大生产hook重构。005唯一原minimal实际0/77.096s（pytest72.96s），5file/2Gateway全部原目标/持久/UI断言通过，各file目录重拉0；200目录/120source保持。全运行仅9目录GET/3settings/3SSE，不能直接与014的67操作比倍率；独立原规模仍待。Luna015核重复组吻合，无扩生产hook证据；末段15–30s迟滞仍缺逐跳ID/Backend原日志，不提前宣称此修彻底消除。
+
+DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具退出0）；旧报告少记一次失败、2.3s没有独立计时来源，stdout/stderr未落raw。原报告保字节，补充报告明确工具转录和缺口，精确耗时及003进程0不采用，不重跑补日志。014正式raw已逐SHA核并保必要14文件2.7MB，未复制bundle/整业务工作区。具名收据见`RV/coordinator/artifacts/navigation-original340014-verified/receipt.json`与`RV/wire_contract_reviewer/artifacts/navigation-evidence004/incremental-evidence-report.json`。
+
+后续016原full实际1/outer612.725s（pytest577.92s），283样本完成；200档第4上传已committed/complete、snapshot/物理正确，finishFileMutation在新增目标DOM行等待可见时超时。只修准备阶段虚拟行helper仍漏结果阶段的同一虚拟化边界，5样本minimal也未触及该累计规模；UI完成未直接记录，不能称产品更新丢失。下一修订由同Sol一次盘点准备/提交完成/结果验证的完整测量callee，针对实际阈值做一次有限真实组件验证，不再逐helper冻结并全矩阵撞新症状。保原计时/FS合同，定位或滚动是否属于统计终点须先核原要求，不能静默增减；原raw含Backend两日志已保，性能结论仍无。
+
+10.3失败收敛006两既有测试actual0/2pass，但只桩operation-status，未调用权威catalog snapshot；driver清失败闭包后flush，Explorer异步终态刷新不能证明confirmed先刷新。验收核真实owner和调用顺序，不凭测试名“权威”判已完成；base revision仅对账不是全局CAS，revision12/intent7本身不能升级为缺陷，禁止为求绿改已accepted preimage/ID。wire007只读收窄、Sol后续完整修订，效果待验证。
+
+006临时诊断手写mount漏字段（Backend exit3），改用原DTO后启动60s未就绪，均无浏览器/DOM数据；不能把启动失败当产品DOM结论。主停该旧业务workspace启动链，以已核303×24+48几何上界授权fixture8000一行修正，原统计终点/FS/门保持，正式fresh full017验证效果，DOM尚未测如实保留。可复用正式fixture时不自建平行launcher反复接线，不因临时装配故障默认加超时；此规则效果待017。007报告一SHA漏字与共享index误判live已主核纠正；hash直接程序序列化，旧报告原字节保留，不为补报告重跑用例。
+
+007组合首红是新fixture漏expectedRevision，未到业务断言；主曾误称捕获缺陷，读raw后立即纠正。补必填字段、不改validator后baseline002 actual1/0.356s在权威branchGate未释放时捕获C提前派发/B-D已清/旧external投影，证明真实顺序缺口。测试红先核失败阶段，输入合同错误不能作生产复现；修共同fixture再判实际断言，原失败raw保留。
+
+017原full文件300样本均完成（8000布局跨越016结果挂载边界已实测），随后第一concurrent pair失败：a/b POST都由page4派发，page5只有同b ID committed状态，但fixture等待本页POST而30s超时；a/b物理与快照完整，Gateway0，整体actual1/外层613.164430108s（pytest609.64s），不称丢失更新或完整gate绿。共享IndexedDB每页pump可承接其它页intent，UI发起与HTTP派发归属不可混同；跨页按冻结operation ID配对真实request/receipt，origin UI完成另核。wire008只读完整callee建议，暂不打断Sol ROOT核心007，修法效果待后续。主核14必要raw与7源SHA、进程0，receipt=`RV/coordinator/artifacts/navigation-original340017-verified/receipt.json`。原报告将max P951048.869ms称为failure predicate不准确：MJS据此分类10.4b-1，pytest接受1/2/3；分类阈值不能新增为≤1s通过门。原报告字节保留，纠正独立记录，实际跨页失败不改写为绿。
+
+007与010/008本轮被模型服务high demand中断，不能归因为业务测试或据此比较实现质量；保源码、已有指纹与原raw，同模型只续接一次，重复同因后不密集重试。主从完整稳定七源执行原受保护命令，真实核心4pass/1.121s，受影响组34pass/6fail（5个旧Runtime fixture缺新注册方法、1个定位原因未定），Webbuild0；原失败不改写为绿。完整patch恢复tree888a0127严格重建后，仅将两个测试fixture交新短上下文Luna011，Sol生产源码停写保留，试验效果尚待验证。类型检查用项目CLI `bun x --no-install tsc`；主直接用Bun解释compiler触发内存保护-6，另一次缺bunx shim退出127，均在实际诊断前，原raw保留、不改环境或加上限。正确CLI实际2给出3个测试类型错误，不把执行器失败冒充源码错误。

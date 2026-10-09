@@ -35,6 +35,14 @@
 
 `mask install release` 会检查当前平台的本地打包指纹；产物缺失或源码变化时，先重新打包，再从本地 CLI 与 runtime tarball 安装，不从公共 npm registry 获取 BoxTeam 包。安装完成后运行 `boxteam start`；安装版 Launcher 会启动内置 Gateway，Gateway 再启动 Workspace 后端并托管打包后的 Web UI，不会启动 Vite dev server。
 
+## 工作区 API 的显式身份
+
+直接调用 Workspace 后端时，使用 `/api/v1/workspaces/{workspace_id}/...`，例如 `/api/v1/workspaces/{workspace_id}/sessions`。这里的 `workspace_id` 是后端已挂载工作区的稳定 UUID。也可以在 `/api/v1/...` 请求中提供等价的 `X-BoxTeam-Workspace-Id` 请求头；同时提供路径和请求头时，两者必须一致。
+
+旧的无工作区路径前缀、也无身份请求头的后端调用会被拒绝；后端不再用激活工作区或 `WORKSPACE_ROOT` 补齐身份。缺少或非法身份返回 400，两载体冲突返回 400，合法但未挂载的 UUID 返回 404。客户端应在调用前固定目标，不能靠切换激活态改变已指定的工作区。
+
+浏览器经过 Gateway 的同源 `/api/v1/...` 调用继续由 Gateway 选路并显式注入后端 UUID。Gateway 注册表中的 target ID 用于控制面选路，不能替代直接后端请求的 UUID。Gateway 自有接口仍为 `/api/gateway/*`。当前接口合同以相应服务的 OpenAPI 为准。
+
 ## 测试分层
 
 - `tests/unit/`：单模块或纯函数测试。

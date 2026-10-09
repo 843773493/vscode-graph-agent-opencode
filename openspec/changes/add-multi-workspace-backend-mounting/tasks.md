@@ -1,28 +1,28 @@
-当前实施范围（2026-10-09）：A05 挂载生命周期/DTO 完整消费闭包由 `aef566ae` 集成并接受，证据取协作收据 `accepted_A05`。9.2/9.3 已按具名证据勾选，其余原任务须按完整要求映射验收，源码接受不能替代整项验收；不按历史单根装配或旧未接线清单重复派实施。
+当前实施范围（2026-10-09）：A05 挂载生命周期/DTO 完整消费闭包由 `aef566ae` 集成并接受，证据取协作收据 `accepted_A05`。§1–§3 中13项按固定源码、原测试与009只读投影经主核后勾选；主核收据为 `out/tests/temp/2026/10/09/a06-final-review/coordinator/artifacts/a05-task-projection009-verified/receipt.json`。3.5已在README补齐对外迁移边界；1.7全仓命中清单已保留，逐调用方语义分类仍待收口，010只补文档证据；9.2/9.3原勾选保持。其余原任务按完整要求映射验收，源码接受不等于整change完成，不按历史单根装配或旧未接线清单重复派实施。
 
 ## 1. 已挂载工作区注册表与身份层
 
-- [ ] 1.1 引入进程内权威的「已挂载工作区注册表」：每项含稳定 `workspace_id`（严格 UUID 文本，复用 `app/core/workspace_identity.validate_workspace_id`）与其根目录；提供按 `workspace_id` 的精确查找与「未登记即 fail-closed」行为，不提供默认工作区回退。
-- [ ] 1.2 把工作区根目录与 `.boxteam/` 数据目录定位从 `app/core/path_utils.py` 的环境变量单例改为「显式 `workspace_id` → 注册表」；`get_workspace_root()`/`get_boxteam_root()`/`get_sessions_dir()` 不再作为业务解析入口（保留或删除由实施时确认调用方全量平移后决定）。
-- [ ] 1.3 把 `get_session_path_resolver()`/`get_session_creation_service()` 的 `lru_cache` 键从「会话根目录」改为 workspace 维度；每工作区独立 catalog 连接与 `SQLiteProcessOwnership` 锁。
-- [ ] 1.4 确认 workspace_id 只有**一个**命名空间：寻址层统一使用后端身份 UUID；`app/gateway/workspace_ids.py` 的 `gw_` ID 若保留，MUST 只作 Gateway 控制面内部标识，不进入工作区寻址。且 MUST 与 URI `workspace` scope 必填 `scope_id` 取值同源（同一个稳定 workspace_id）。
-- [ ] 1.5 落实 `scope_id` 推导原则（权威表 R2）：`scope_id` MUST 推导自该 scope 的稳定身份、MUST NOT 硬编码；`workspace` scope 取真实 workspace_id，`gateway` scope 取真实 gateway_id，`inline`（原 `builtin`）scope 取真实 distribution_id（来源与编码已由「统一资源寻址」change 定稿为 manifest 的 `distribution` + `version`，此处只引用）。
-- [ ] 1.6 登记两处既存硬编码违反点并定界：`gateway` 与 `inline`（原 `builtin`）的 scope_id 硬编码违反点**均已修复**：`inline` 由 `298ef599`+`f3bd8213` 装配、`gateway` 由 `64ba30c8`/`53befbfc`/`9881a3b2` 装配，原 `skill_runtime.py` 的 `else "local"` 分支已物理删除；`distribution_id` 来源为发行包 runtime manifest（`packages/launcher/runtime-manifest.schema.json`）的 `distribution` + `version`（编码规则与缺失 fail-closed 见「统一资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」），装配提交 `298ef599`+`f3bd8213`。**2026-10-01 第八轮复核更正**。
+- [x] 1.1 引入进程内权威的「已挂载工作区注册表」：每项含稳定 `workspace_id`（严格 UUID 文本，复用 `app/core/workspace_identity.validate_workspace_id`）与其根目录；提供按 `workspace_id` 的精确查找与「未登记即 fail-closed」行为，不提供默认工作区回退。
+- [x] 1.2 把工作区根目录与 `.boxteam/` 数据目录定位从 `app/core/path_utils.py` 的环境变量单例改为「显式 `workspace_id` → 注册表」；`get_workspace_root()`/`get_boxteam_root()`/`get_sessions_dir()` 不再作为业务解析入口（保留或删除由实施时确认调用方全量平移后决定）。
+- [x] 1.3 把 `get_session_path_resolver()`/`get_session_creation_service()` 的 `lru_cache` 键从「会话根目录」改为 workspace 维度；每工作区独立 catalog 连接与 `SQLiteProcessOwnership` 锁。
+- [x] 1.4 确认 workspace_id 只有**一个**命名空间：寻址层统一使用后端身份 UUID；`app/gateway/workspace_ids.py` 的 `gw_` ID 若保留，MUST 只作 Gateway 控制面内部标识，不进入工作区寻址。且 MUST 与 URI `workspace` scope 必填 `scope_id` 取值同源（同一个稳定 workspace_id）。
+- [x] 1.5 落实 `scope_id` 推导原则（权威表 R2）：`scope_id` MUST 推导自该 scope 的稳定身份、MUST NOT 硬编码；`workspace` scope 取真实 workspace_id，`gateway` scope 取真实 gateway_id，`inline`（原 `builtin`）scope 取真实 distribution_id（来源与编码已由「统一资源寻址」change 定稿为 manifest 的 `distribution` + `version`，此处只引用）。
+- [x] 1.6 登记两处既存硬编码违反点并定界：`gateway` 与 `inline`（原 `builtin`）的 scope_id 硬编码违反点**均已修复**：`inline` 由 `298ef599`+`f3bd8213` 装配、`gateway` 由 `64ba30c8`/`53befbfc`/`9881a3b2` 装配，原 `skill_runtime.py` 的 `else "local"` 分支已物理删除；`distribution_id` 来源为发行包 runtime manifest（`packages/launcher/runtime-manifest.schema.json`）的 `distribution` + `version`（编码规则与缺失 fail-closed 见「统一资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」），装配提交 `298ef599`+`f3bd8213`。**2026-10-01 第八轮复核更正**。
 - [ ] 1.7 全仓 `rg` 复核「当前激活工作区 / active workspace / WORKSPACE_ROOT / 进程级单根」全部调用方，形成平移清单，确认无遗留悬空调用。
 
 ## 2. 服务图按 workspace_id 分区
 
-- [ ] 2.1 把 `app/container.py` 的 `build_app_container` 从「构造期单根装配」改为「持有注册表 + 按 `workspace_id` 惰性构造并缓存服务图」；同 `workspace_id` 只构造一次（进程内幂等）。
-- [ ] 2.2 逐项把设计 D3/D4 与 spec「进程级资源必须按 workspace_id 分区」列举的资源改为按工作区分区：配置服务及其工作区根绑定、工作区活动/资源注册表、持久资源账本、会话生命周期 gate 与 operation lease、Job 事件总线与事件通道、后台任务注册表、消息流与 trace 存储。
-- [ ] 2.3 校验分区后的隔离：为同一进程挂载两个工作区，断言 A 的会话/事件/任务/SQLite 状态不出现在 B 的请求结果中，且两工作区锁互不阻塞。
+- [x] 2.1 把 `app/container.py` 的 `build_app_container` 从「构造期单根装配」改为「持有注册表 + 按 `workspace_id` 惰性构造并缓存服务图」；同 `workspace_id` 只构造一次（进程内幂等）。
+- [x] 2.2 逐项把设计 D3/D4 与 spec「进程级资源必须按 workspace_id 分区」列举的资源改为按工作区分区：配置服务及其工作区根绑定、工作区活动/资源注册表、持久资源账本、会话生命周期 gate 与 operation lease、Job 事件总线与事件通道、后台任务注册表、消息流与 trace 存储。
+- [x] 2.3 校验分区后的隔离：为同一进程挂载两个工作区，断言 A 的会话/事件/任务/SQLite 状态不出现在 B 的请求结果中，且两工作区锁互不阻塞。
 
 ## 3. API 契约的破坏性迁移
 
-- [ ] 3.1 按设计 D1 引入路径段载体 `/api/v1/workspaces/{workspace_id}/...`；保留 `X-BoxTeam-Workspace-Id` 作为 Gateway 代理层等价载体，并实现「两载体不一致即显式失败」。
-- [ ] 3.2 实现「缺失 workspace 身份即显式拒绝」：不复用激活态、不使用默认工作区补齐。
-- [ ] 3.3 更新 Gateway：仍负责选目标，但 MUST 显式把目标传给后端；移除「每个工作区一个后端进程」的默认假设，使一个后端进程可服务多个工作区。跨 gateway 时**网关授权段 / gateway authority**承载稳定 gateway_id，拓扑为**星型解析 / star-topology resolution**（hub-spoke）；解析命中只返回稳定**资源身份 / ResourceIdentity**与内容、不返回 locator，不可解析 fail-closed；上界（visited set / max_transit_gateways=1 / max_gateway_hops=2 / 总 deadline）作为显式策略常量。解析链本体引用「统一资源寻址」change。
-- [ ] 3.4 校验 gateway 身份的接口前提：`gateway` scope 的 `scope_id` MUST 是**真实 gateway_id**；**来源与注入 owner 已裁定**——owner = Gateway 侧按请求注入，取值按「统一资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」推导（本 change 只引用、不复述取值规则），**通道与装配均已落地**（`64ba30c8`/`53befbfc`/`9881a3b2`，原硬编码字面量分支已物理删除），跨 gateway 寻址的接口前提已满足（**2026-10-01 第八轮复核更正**）；`gateway` 身份与 workspace 身份同属寻址层身份、都必须显式可表达。
-- [ ] 3.5 明确破坏边界并更新对外说明：不带工作区前缀或依赖激活态的既有客户端调用失效。
+- [x] 3.1 按设计 D1 引入路径段载体 `/api/v1/workspaces/{workspace_id}/...`；保留 `X-BoxTeam-Workspace-Id` 作为 Gateway 代理层等价载体，并实现「两载体不一致即显式失败」。
+- [x] 3.2 实现「缺失 workspace 身份即显式拒绝」：不复用激活态、不使用默认工作区补齐。
+- [x] 3.3 更新 Gateway：仍负责选目标，但 MUST 显式把目标传给后端；移除「每个工作区一个后端进程」的默认假设，使一个后端进程可服务多个工作区。跨 gateway 时**网关授权段 / gateway authority**承载稳定 gateway_id，拓扑为**星型解析 / star-topology resolution**（hub-spoke）；解析命中只返回稳定**资源身份 / ResourceIdentity**与内容、不返回 locator，不可解析 fail-closed；上界（visited set / max_transit_gateways=1 / max_gateway_hops=2 / 总 deadline）作为显式策略常量。解析链本体引用「统一资源寻址」change。
+- [x] 3.4 校验 gateway 身份的接口前提：`gateway` scope 的 `scope_id` MUST 是**真实 gateway_id**；**来源与注入 owner 已裁定**——owner = Gateway 侧按请求注入，取值按「统一资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」推导（本 change 只引用、不复述取值规则），**通道与装配均已落地**（`64ba30c8`/`53befbfc`/`9881a3b2`，原硬编码字面量分支已物理删除），跨 gateway 寻址的接口前提已满足（**2026-10-01 第八轮复核更正**）；`gateway` 身份与 workspace 身份同属寻址层身份、都必须显式可表达。
+- [x] 3.5 明确破坏边界并更新对外说明：`README.md` 的“工作区 API 的显式身份”说明直接Backend的路径/header载体、缺失/冲突/未挂载拒绝，以及Gateway既有同源路径继续由代理注入UUID的边界；不将所有无前缀Gateway请求误判为失效。后端不依赖激活态补齐身份。
 
 ## 4. 持久化与迁移
 
