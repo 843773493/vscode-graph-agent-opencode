@@ -41,8 +41,8 @@ class FastApiWebSocketTransport:
     async def close(self, *, code: int, reason: str) -> None:
         if self._closed:
             return
-        self._closed = True
         await self._websocket.close(code=code, reason=reason)
+        self._closed = True
 
 
 class WebSocketsClientTransport:
@@ -75,9 +75,9 @@ class WebSocketsClientTransport:
     async def close(self, *, code: int, reason: str) -> None:
         if self._closed:
             return
-        self._closed = True
         del code, reason
         await self._connection.close()
+        self._closed = True
 
 
 __all__ = ["FastApiWebSocketTransport", "WebSocketsClientTransport"]

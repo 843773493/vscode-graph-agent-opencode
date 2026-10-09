@@ -16,8 +16,10 @@ from app.gateway.federation.channel import (
     ChannelHandshake,
     FederationChannelSession,
 )
+from app.gateway.federation.errors import FEDERATION_CHANNEL_CLOSED, FederationError
 from app.gateway.federation.identity import FederationPeerIdentity
 from app.gateway.federation.policy import FederationPolicyStore
+from app.gateway.federation.protocol import build_request_frame
 from app.gateway.federation.rpc import FederationRpcService
 from app.gateway.federation.store import (
     FederationControlStore,
@@ -45,6 +47,84 @@ class _IdleTransport:
         del code, reason
         self.closed.set()
         self.receive_gate.set()
+
+
+class _FailingCloseTransport(_IdleTransport):
+    def __init__(self, request: str | None = None) -> None:
+        super().__init__()
+        self.request = request
+        self.close_error = OSError("socket close failed")
+        self.close_calls = 0
+
+    async def receive_text(self) -> str | None:
+        if self.request is not None:
+            request, self.request = self.request, None
+            return request
+        return await super().receive_text()
+
+    async def close(self, *, code: int, reason: str) -> None:
+        del code, reason
+        self.close_calls += 1
+        raise self.close_error
+
+
+class _BlockingCloseTransport(_IdleTransport):
+    def __init__(self) -> None:
+        super().__init__()
+        self.close_started = asyncio.Event()
+        self.release_close = asyncio.Event()
+
+    async def close(self, *, code: int, reason: str) -> None:
+        self.close_started.set()
+        await self.release_close.wait()
+        await super().close(code=code, reason=reason)
+
+
+class _RequestTransport(_IdleTransport):
+    def __init__(self, request: str) -> None:
+        super().__init__()
+        self.request: str | None = request
+
+    async def receive_text(self) -> str | None:
+        if self.request is not None:
+            request, self.request = self.request, None
+            return request
+        return await super().receive_text()
+
+
+class _ObservedCloseTransport(_IdleTransport):
+    def __init__(self) -> None:
+        super().__init__()
+        self.close_started = asyncio.Event()
+
+    async def close(self, *, code: int, reason: str) -> None:
+        self.close_started.set()
+        await super().close(code=code, reason=reason)
+
+
+class _BlockingCancellationCleanupHandler:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.cleanup_started = asyncio.Event()
+        self.release_cleanup = asyncio.Event()
+
+    async def handle(
+        self,
+        *,
+        method: str,
+        request: dict[str, object],
+        session: FederationChannelSession,
+        deadline_at: float | None,
+    ) -> dict[str, object]:
+        del method, request, session, deadline_at
+        self.started.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            self.cleanup_started.set()
+            await self.release_cleanup.wait()
+            raise
+        return {}
 
 
 class _NoopHandler:
@@ -92,8 +172,10 @@ def _session(
     channel_id: str,
     peer_id: str,
     connection_id: str,
+    transport: _IdleTransport | None = None,
+    handler: _NoopHandler | _BlockingCancellationCleanupHandler | None = None,
 ) -> tuple[FederationChannelSession, _IdleTransport]:
-    transport = _IdleTransport()
+    transport = transport or _IdleTransport()
     session = FederationChannelSession(
         transport=transport,
         handshake=ChannelHandshake(
@@ -108,7 +190,7 @@ def _session(
             credential_digest="0" * 64,
             local_role="hub",
         ),
-        handler=_NoopHandler(),
+        handler=handler if handler is not None else _NoopHandler(),
         heartbeat_interval_seconds=3600,
         heartbeat_timeout_seconds=3600,
     )
@@ -250,3 +332,199 @@ async def test_close_channels_unregisters_all_sessions_without_errors(
         assert tuple(case.service._channels) == ()
     finally:
         await _finish_sessions(sessions)
+
+
+@pytest.mark.asyncio
+async def test_close_failure_preserves_registered_channel_and_joins_session(
+    federation_case: _FederationCase,
+) -> None:
+    case = federation_case
+    transport = _FailingCloseTransport()
+    session, _ = _session(
+        "channel_close_failure",
+        "gateway_peer_close_failure",
+        "connection_close_failure",
+        transport,
+    )
+    await _register_sessions(case.service, ((session, transport),))
+
+    try:
+        with pytest.raises(FederationError) as close_error:
+            await case.service.close_channels()
+
+        assert close_error.value.code == FEDERATION_CHANNEL_CLOSED
+        assert "socket close failed" in " ".join(close_error.value.__notes__)
+        assert _active_ids(case) == ("channel_close_failure",)
+        assert tuple(case.service._local_channels) == ("channel_close_failure",)
+        assert tuple(case.service._channels) == ("gateway_peer_close_failure",)
+        assert all(task.done() for task in session._tasks)
+        assert transport.close_calls == 1
+    finally:
+        for task in session._tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*session._tasks, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_close_channels_starts_later_close_before_first_session_cleanup_finishes(
+    federation_case: _FederationCase,
+) -> None:
+    case = federation_case
+    handler = _BlockingCancellationCleanupHandler()
+    first_transport = _RequestTransport(
+        build_request_frame(
+            correlation_id="request_close_race",
+            method="federation.status",
+            request={},
+        ).encode()
+    )
+    second_transport = _ObservedCloseTransport()
+    sessions = (
+        _session(
+            "channel_blocked_cleanup",
+            "gateway_peer_blocked_cleanup",
+            "connection_blocked_cleanup",
+            first_transport,
+            handler,
+        ),
+        _session(
+            "channel_later_close",
+            "gateway_peer_later_close",
+            "connection_later_close",
+            second_transport,
+        ),
+    )
+    await _register_sessions(case.service, sessions)
+    close_task: asyncio.Task[None] | None = None
+
+    try:
+        await asyncio.wait_for(handler.started.wait(), timeout=5)
+        close_task = asyncio.create_task(case.service.close_channels())
+        await asyncio.wait_for(handler.cleanup_started.wait(), timeout=5)
+        await asyncio.wait_for(second_transport.close_started.wait(), timeout=1)
+        assert not handler.release_cleanup.is_set()
+        handler.release_cleanup.set()
+        await asyncio.wait_for(close_task, timeout=5)
+
+        assert all(transport.closed.is_set() for _, transport in sessions)
+        assert all(
+            all(task.done() for task in session._tasks)
+            for session, _ in sessions
+        )
+        assert _active_ids(case) == ()
+    finally:
+        handler.release_cleanup.set()
+        if close_task is not None:
+            await asyncio.wait_for(close_task, timeout=5)
+        await _finish_sessions(sessions)
+
+@pytest.mark.asyncio
+async def test_close_channels_preserves_outer_cancellation_during_blocked_join(
+    federation_case: _FederationCase,
+) -> None:
+    case = federation_case
+    handler = _BlockingCancellationCleanupHandler()
+    transport = _FailingCloseTransport(
+        build_request_frame(
+            correlation_id="request_close_cancel",
+            method="federation.status",
+            request={},
+        ).encode()
+    )
+    failing_session, _ = _session(
+        "channel_cancelled_close_failure",
+        "gateway_peer_cancelled_close_failure",
+        "connection_cancelled_close_failure",
+        transport,
+        handler,
+    )
+    healthy_session, healthy_transport = _session(
+        "channel_cancelled_close_healthy",
+        "gateway_peer_cancelled_close_healthy",
+        "connection_cancelled_close_healthy",
+    )
+    sessions = ((failing_session, transport), (healthy_session, healthy_transport))
+    await _register_sessions(case.service, sessions)
+    close_task = asyncio.create_task(case.service.close_channels())
+
+    try:
+        await asyncio.wait_for(handler.started.wait(), timeout=5)
+        await asyncio.wait_for(handler.cleanup_started.wait(), timeout=5)
+        close_error = failing_session._transport_close_task
+        assert close_error is not None and close_error.done()
+        assert isinstance(close_error.exception(), OSError)
+
+        close_task.cancel()
+        handler.release_cleanup.set()
+        with pytest.raises(asyncio.CancelledError) as cancellation:
+            await asyncio.wait_for(close_task, timeout=5)
+
+        assert any("socket close failed" in note for note in cancellation.value.__notes__)
+        assert _active_ids(case) == ("channel_cancelled_close_failure",)
+        assert tuple(case.service._local_channels) == ("channel_cancelled_close_failure",)
+        assert tuple(case.service._channels) == ("gateway_peer_cancelled_close_failure",)
+        assert all(task.done() for task in failing_session._tasks)
+        assert all(task.done() for task in healthy_session._tasks)
+    finally:
+        handler.release_cleanup.set()
+        if not close_task.done():
+            close_task.cancel()
+        await asyncio.gather(close_task, return_exceptions=True)
+        for session, _transport in sessions:
+            for task in session._tasks:
+                if not task.done():
+                    task.cancel()
+        await asyncio.gather(*(task for session, _ in sessions for task in session._tasks), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_close_channels_preserves_outer_cancellation_during_close_batch(
+    federation_case: _FederationCase,
+) -> None:
+    case = federation_case
+    failing_session, failing_transport = _session(
+        "channel_close_stage_failure",
+        "gateway_peer_close_stage_failure",
+        "connection_close_stage_failure",
+        _FailingCloseTransport(),
+    )
+    blocking_transport = _BlockingCloseTransport()
+    healthy_session, _ = _session(
+        "channel_close_stage_healthy",
+        "gateway_peer_close_stage_healthy",
+        "connection_close_stage_healthy",
+        blocking_transport,
+    )
+    sessions = ((failing_session, failing_transport), (healthy_session, blocking_transport))
+    await _register_sessions(case.service, sessions)
+    close_task = asyncio.create_task(case.service.close_channels())
+
+    try:
+        await asyncio.wait_for(blocking_transport.close_started.wait(), timeout=5)
+        close_error = failing_session._transport_close_task
+        assert close_error is not None
+        with pytest.raises(OSError, match="socket close failed"):
+            await asyncio.wait_for(asyncio.shield(close_error), timeout=5)
+
+        close_task.cancel()
+        blocking_transport.release_close.set()
+        with pytest.raises(asyncio.CancelledError) as cancellation:
+            await asyncio.wait_for(close_task, timeout=5)
+
+        assert any("socket close failed" in note for note in cancellation.value.__notes__)
+        assert _active_ids(case) == ("channel_close_stage_failure",)
+        assert tuple(case.service._local_channels) == ("channel_close_stage_failure",)
+        assert tuple(case.service._channels) == ("gateway_peer_close_stage_failure",)
+        assert all(task.done() for session, _ in sessions for task in session._tasks)
+    finally:
+        blocking_transport.release_close.set()
+        if not close_task.done():
+            close_task.cancel()
+        await asyncio.gather(close_task, return_exceptions=True)
+        for session, _transport in sessions:
+            for task in session._tasks:
+                if not task.done():
+                    task.cancel()
+        await asyncio.gather(*(task for session, _ in sessions for task in session._tasks), return_exceptions=True)
+

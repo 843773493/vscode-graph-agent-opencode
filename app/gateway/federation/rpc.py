@@ -191,10 +191,55 @@ class FederationRpcService:
 
     async def close_channels(self) -> None:
         sessions = tuple(self._local_channels.values())
-        await asyncio.gather(*(session.close() for session in sessions))
-        await asyncio.gather(*(session.join() for session in sessions))
+        first_error: BaseException | None = None
+        cancellation_error: asyncio.CancelledError | None = None
+        released_sessions: list[FederationChannelSession] = []
+
+        def retain_error(error: BaseException, action: str) -> None:
+            nonlocal first_error
+            if first_error is None:
+                first_error = error
+            elif error is not first_error:
+                first_error.add_note(
+                    f"{action}：{type(error).__name__}: {error}"
+                )
+
+        def retain_cancellation(error: asyncio.CancelledError) -> None:
+            nonlocal cancellation_error
+            if cancellation_error is None:
+                cancellation_error = error
+            elif error is not cancellation_error:
+                cancellation_error.add_note(
+                    f"清理期间再次收到取消：{type(error).__name__}: {error}"
+                )
+
+        async def await_batch(
+            batch: asyncio.Future[list[None | BaseException]],
+        ) -> list[None | BaseException]:
+            while True:
+                try:
+                    return await asyncio.shield(batch)
+                except asyncio.CancelledError as error:
+                    retain_cancellation(error)
+
+        close_tasks = [asyncio.create_task(session.close()) for session in sessions]
+        close_batch = asyncio.gather(*close_tasks, return_exceptions=True)
+        close_results = await await_batch(close_batch)
+        for error in close_results:
+            if isinstance(error, BaseException):
+                retain_error(error, "关闭其他联邦 channel 时也失败")
+
+        join_tasks = [asyncio.create_task(session.join()) for session in sessions]
+        join_batch = asyncio.gather(*join_tasks, return_exceptions=True)
+        join_results = await await_batch(join_batch)
+        for session, result in zip(sessions, join_results, strict=True):
+            if isinstance(result, BaseException):
+                retain_error(result, "等待其他联邦 channel 结束时也失败")
+            else:
+                released_sessions.append(session)
+
         unregister_error: Exception | None = None
-        for session in sessions:
+        for session in released_sessions:
             try:
                 self.unregister_channel(session.channel_instance_id)
             except Exception as error:  # noqa: BLE001 - 注销失败后仍须尝试其余 channel
@@ -206,7 +251,25 @@ class FederationRpcService:
                         f"{type(error).__name__}: {error}"
                     )
         if unregister_error is not None:
-            raise unregister_error
+            if first_error is None:
+                first_error = unregister_error
+            else:
+                first_error.add_note(
+                    "注销已关闭的联邦 channel 时也失败："
+                    f"{type(unregister_error).__name__}: {unregister_error}"
+                )
+        if cancellation_error is not None:
+            if first_error is not None and first_error is not cancellation_error:
+                cancellation_error.add_note(
+                    "外层取消前后的 channel 清理也失败："
+                    f"{type(first_error).__name__}: {first_error}"
+                )
+                for note in getattr(first_error, "__notes__", ()):
+                    if note not in getattr(cancellation_error, "__notes__", ()):
+                        cancellation_error.add_note(note)
+            raise cancellation_error
+        if first_error is not None:
+            raise first_error
 
     # --- 入站请求分发 -----------------------------------------------------
 

@@ -70,6 +70,32 @@ class _BlockingCloseTransport(_MemoryTransport):
         await super().close(code=code, reason=reason)
 
 
+class _FailingCloseTransport(_MemoryTransport):
+    def __init__(self, close_error: OSError) -> None:
+        super().__init__()
+        self.close_error = close_error
+        self.close_calls = 0
+
+    async def close(self, *, code: int, reason: str) -> None:
+        del code, reason
+        self.close_calls += 1
+        raise self.close_error
+
+
+class _BlockingFailingCloseTransport(_FailingCloseTransport):
+    def __init__(self, close_error: OSError) -> None:
+        super().__init__(close_error)
+        self.close_started = asyncio.Event()
+        self.release_close = asyncio.Event()
+
+    async def close(self, *, code: int, reason: str) -> None:
+        del code, reason
+        self.close_calls += 1
+        self.close_started.set()
+        await self.release_close.wait()
+        raise self.close_error
+
+
 class _Handler:
     async def handle(self, *, method, request, session, deadline_at):
         return {"echo": method}
@@ -216,6 +242,75 @@ async def test_join_and_concurrent_close_wait_for_transport_close() -> None:
     assert "federation-malformed-frame" in transport.closed[1]
     assert not transport.close_cancelled
     assert transport.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_wait_closed_close_failure_is_reported_and_join_drains_tasks() -> None:
+    close_error = OSError("socket close failed")
+    transport = _FailingCloseTransport(close_error)
+    session = _session(transport, heartbeat_interval_seconds=30)
+    session.start()
+    await transport.incoming.put("not-json")
+
+    try:
+        with pytest.raises(FederationError) as wait_error:
+            await asyncio.wait_for(session.wait_closed(), timeout=5)
+
+        reason = session._closed_reason
+        assert reason is not None
+        assert reason.code == "federation-malformed-frame"
+        assert wait_error.value is reason
+        assert any("socket close failed" in note for note in reason.__notes__)
+
+        with pytest.raises(FederationError) as join_error:
+            await session.join()
+
+        assert join_error.value is reason
+        assert any("socket close failed" in note for note in reason.__notes__)
+        assert all(task.done() for task in session._tasks)
+        assert transport.close_calls == 1
+    finally:
+        for task in session._tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*session._tasks, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_join_cancellation_survives_transport_close_failure_and_drains_tasks() -> None:
+    close_error = OSError("socket close failed")
+    transport = _BlockingFailingCloseTransport(close_error)
+    session = _session(transport, heartbeat_interval_seconds=30)
+    session.start()
+    close_task = asyncio.create_task(session.close())
+    await asyncio.wait_for(transport.close_started.wait(), timeout=5)
+
+    join_task = asyncio.create_task(session.join())
+    await asyncio.sleep(0)
+    join_task.cancel()
+    transport.release_close.set()
+
+    try:
+        with pytest.raises(asyncio.CancelledError) as cancellation:
+            await asyncio.wait_for(join_task, timeout=5)
+        with pytest.raises(FederationError) as close_failure:
+            await asyncio.wait_for(close_task, timeout=5)
+
+        assert cancellation.value.__notes__
+        assert any("socket close failed" in note for note in cancellation.value.__notes__)
+        assert close_failure.value.code == FEDERATION_CHANNEL_CLOSED
+        assert any("socket close failed" in note for note in close_failure.value.__notes__)
+        assert all(task.done() for task in session._tasks)
+        assert transport.close_calls == 1
+    finally:
+        for task in (close_task, join_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(close_task, join_task, return_exceptions=True)
+        for task in session._tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*session._tasks, return_exceptions=True)
 
 
 @pytest.mark.parametrize(

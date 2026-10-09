@@ -154,18 +154,82 @@ class FederationChannelSession:
     async def wait_closed(self) -> FederationError | None:
         await self._closing.wait()
         if self._transport_close_task is not None:
-            await asyncio.shield(self._transport_close_task)
+            try:
+                await asyncio.shield(self._transport_close_task)
+            except asyncio.CancelledError:
+                raise
+            except Exception as close_error:
+                reason = self._closed_reason
+                if reason is None:
+                    raise
+                note = (
+                    "关闭联邦 channel 的底层传输失败："
+                    f"{type(close_error).__name__}: {close_error}"
+                )
+                if note not in getattr(reason, "__notes__", ()):
+                    reason.add_note(note)
+                raise reason
         return self._closed_reason
 
     async def join(self) -> None:
         """等待收帧与心跳任务结束；供服务端 handler 与测试收口使用。"""
 
-        await self.wait_closed()
+        first_error: BaseException | None = None
+        try:
+            await self.wait_closed()
+        except BaseException as error:  # noqa: BLE001 - 即使关闭失败也须回收 session 任务
+            first_error = error
         pending = [task for task in self._tasks if not task.done()]
         for task in pending:
             task.cancel()
         if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+            try:
+                await asyncio.gather(*pending, return_exceptions=True)
+            except BaseException as error:  # noqa: BLE001 - 回收时保留最早的关闭错误或取消
+                if first_error is None:
+                    first_error = error
+                elif error is not first_error:
+                    first_error.add_note(
+                        "等待联邦 channel session 任务结束时也失败："
+                        f"{type(error).__name__}: {error}"
+                    )
+                await asyncio.gather(*pending, return_exceptions=True)
+        close_task = self._transport_close_task
+        if close_task is not None and not close_task.done():
+            try:
+                await asyncio.shield(close_task)
+            except BaseException as error:  # noqa: BLE001 - 保留首个关闭错误或取消
+                if first_error is None:
+                    first_error = error
+                elif error is not first_error:
+                    note = (
+                        "等待联邦 channel 底层传输关闭时也失败："
+                        f"{type(error).__name__}: {error}"
+                    )
+                    if note not in getattr(first_error, "__notes__", ()):
+                        first_error.add_note(note)
+        elif close_task is not None and not close_task.cancelled():
+            close_error = close_task.exception()
+            if close_error is not None:
+                if first_error is None:
+                    first_error = self._closed_reason or close_error
+                if self._closed_reason is not None:
+                    note = (
+                        "关闭联邦 channel 的底层传输失败："
+                        f"{type(close_error).__name__}: {close_error}"
+                    )
+                else:
+                    note = (
+                        "等待联邦 channel 底层传输关闭时也失败："
+                        f"{type(close_error).__name__}: {close_error}"
+                    )
+                if (
+                    first_error is not close_error
+                    and note not in getattr(first_error, "__notes__", ())
+                ):
+                    first_error.add_note(note)
+        if first_error is not None:
+            raise first_error
 
     async def request(
         self,
@@ -233,8 +297,7 @@ class FederationChannelSession:
         notify_peer: bool,
     ) -> None:
         if self._closing.is_set():
-            if self._transport_close_task is not None:
-                await asyncio.shield(self._transport_close_task)
+            await self.wait_closed()
             return
         self._closed_reason = error
         self._closing.set()
@@ -245,7 +308,7 @@ class FederationChannelSession:
         self._transport_close_task = asyncio.create_task(
             self._close_transport(error)
         )
-        await asyncio.shield(self._transport_close_task)
+        await self.wait_closed()
         del notify_peer
 
     async def _close_transport(self, error: FederationError) -> None:
@@ -254,12 +317,13 @@ class FederationChannelSession:
                 code=close_code_for(error),
                 reason=f"{error.code}: {error.message}"[:120],
             )
-        except Exception as close_error:  # noqa: BLE001 - 关闭失败不掩盖原始错误
+        except Exception as close_error:
             logger.warning(
                 "联邦 channel 关闭底层传输失败: channel=%s, error=%s",
                 self.channel_instance_id,
                 close_error,
             )
+            raise
 
     async def _receive_loop(self) -> None:
         try:

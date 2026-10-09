@@ -12,7 +12,10 @@ from app.gateway.federation.errors import (
     FederationError,
 )
 from app.gateway.federation.identity import FederationPeerIdentity
-from app.gateway.federation.transport import WebSocketsClientTransport
+from app.gateway.federation.transport import (
+    FastApiWebSocketTransport,
+    WebSocketsClientTransport,
+)
 
 
 class FakeConnection:
@@ -29,6 +32,28 @@ class FakeConnection:
 
     async def close(self) -> None:
         return None
+
+
+class _FailOnceConnection(FakeConnection):
+    def __init__(self) -> None:
+        super().__init__("frame")
+        self.close_calls = 0
+
+    async def close(self) -> None:
+        self.close_calls += 1
+        if self.close_calls == 1:
+            raise OSError("connection close failed")
+
+
+class _FailOnceWebSocket:
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    async def close(self, *, code: int, reason: str) -> None:
+        del code, reason
+        self.close_calls += 1
+        if self.close_calls == 1:
+            raise OSError("websocket close failed")
 
 
 async def _receive(result: str | bytes | Exception) -> str | None:
@@ -52,6 +77,30 @@ async def test_binary_frame_is_an_explicit_protocol_error() -> None:
 async def test_programming_error_from_recv_is_preserved() -> None:
     with pytest.raises(TypeError, match="recv failure"):
         await _receive(TypeError("recv failure"))
+
+
+@pytest.mark.asyncio
+async def test_client_adapter_close_failure_does_not_mark_transport_closed() -> None:
+    connection = _FailOnceConnection()
+    transport = WebSocketsClientTransport(connection)
+
+    with pytest.raises(OSError, match="connection close failed"):
+        await transport.close(code=1000, reason="shutdown")
+    await transport.close(code=1000, reason="shutdown")
+
+    assert connection.close_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_server_adapter_close_failure_does_not_mark_transport_closed() -> None:
+    websocket = _FailOnceWebSocket()
+    transport = FastApiWebSocketTransport(websocket)  # type: ignore[arg-type]
+
+    with pytest.raises(OSError, match="websocket close failed"):
+        await transport.close(code=1000, reason="shutdown")
+    await transport.close(code=1000, reason="shutdown")
+
+    assert websocket.close_calls == 2
 
 
 def _channel(transport: WebSocketsClientTransport) -> FederationChannelSession:
