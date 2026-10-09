@@ -1,4 +1,28 @@
+导航024独立minimal actual1/39.56s：copy实际202/正文完整，但requestfinished先标completed，response.allHeaders异步未写proxy ID即被判不匹配；原四源码/PGID0已主核，不是owner事故。022–024仅静态派单把真正callee时序漏到交付阶段，主收回微包静态门，由同Sol025整闭包最多2次代表入口调试后STOP，Luna独验；效果待运行。
+
+对表015只核源码与摘要未展开已接受raw，不能把本轮未核解释成全局缺证，更不能要求一个新HEAD的一条联合命令替代可复用多收据。该报告另存baseline末位更正；裸status违租约，主核sharedindex仍4ea3原字节，撤回该agent全部Git权。旧规则重复未落实，不再加一套同义流程。
+
+导航023静态增审：响应partial已保存，但exchange在完整请求读完后才登记，中途abort/error会丢已到代理的前缀。024仅补请求接收生命周期证据，不改生产owner或原量化门；效果待独立运行。诊断登记在首次读取前建立，失败保已收字节和未完整状态，不倒填完整preimage/已执行。
+
+导航021 minimal两次真实失败：首multipart Playwright postData为空，但proxy真实body/202/terminal/UI成功；次跨页同ID出现两POST，freeze/wait/measurement多个exactly-one门拒绝。旧产物缺完整preimage/exchange，不能倒填判合法。022一次迁完整观察callee，保归一preimage/rawhash/每exchange/真实请求数；协议允许丢响应后同ID重试，不能要求所有attempt都有202或制造随机peer派发门。静态修法后独立minimal/full验证，效果未定。
+
+019独审P2：显式workspace_root与fixture的context root被迁成同一路径，原“只写显式根”的断言虽保留且绿，已不能证明优先级。原作者021在正式fixture下建立不同显式子根，保文件/journal两侧断言，独审只增量复核；021最终固定bfaa独立增审无新finding/P2关闭，已集成a26；效果限显式root优先断言。
+
+外围019：作者首次hook测试漏外部保护，随后受保护20/20、类型/build及apply_patch20通过；首轮仅工具转录且排除验收，后raw保留。既有外部保护规则无需新增一套，派单给字面受保护命令并要求首个测试即使用。最终消息一个SHA抄错，原report/主固定blob一致，以程序manifest为准；这不是源码交付不一致。后续改善效果待下一轮验证。
+
+路由恢复012：用户确认旧请求被上游路由到失效模型；修复后原Sol与两Luna实际工具调用均恢复。保原终态及中断证据，路由/排队与实现效率分列；目前只验证执行恢复，完整交付效果待后续STOP/独审。收据见实时台账当前012。
+
 # 按任务查询的交付失败细则
+
+恢复010在goal恢复后重新计审计；保持原三个turn到真实终态，最终均high demand/failed且无工具调用，原源码交付未恢复，不把这次等待算模型实现效率。当前只计恢复后的首个明确终态阻断goal turn；不能沿用恢复前3次或按3个agent计3次。不立即重派；收据`RV/coordinator/artifacts/recovery010-resumed/terminal-failure.json`。避免重复请求的规则再次有效，源码推进效果仍未证明。
+
+Gateway排序复核017发现既有绿测试明确断言：后端active_workspace_id=null且列表不含旧目标，UI仍保留旧ID/root/name。固定527原用例实际1pass、19filtered、exit0/2.965s，raw/SHA见`RV/coordinator/artifacts/gateway-reorder-null017/receipt.json`；这是当前行为复现，不是所需合同通过，更不证明生产已发生该事故。成功镜像完整权威DTO的合同应决定预期；后续Luna只迁两份排序hook/测试并复用既有activeGatewayWorkspaceFields，删除旧fallback，不新增状态owner。修法尚未实施/验证；现有绿灯不能为违反owner合同的回退提供依据。
+
+恢复009：同一请求的verified wait最终由app权威确认三个turn均failed，原错误为`We’re currently experiencing high demand, which may cause temporary errors.`；各耗时约931–934秒，无工具调用，租约源码及共享index未变。009/018/016租约已结束。此前等待记录仅代表当时状态，恢复以`RV/coordinator/artifacts/recovery009-live-wait/terminal-failure.json`及`source-preservation.json`为准。保持同一turn至真实终态避免重复请求已验证；没有证明源码恢复或模型提速。同一阻断累计三个root goal turn、无授权源码替代，结束空转并标blocked；不得按三个agent计三次，也不静默换模型。模型服务错误不能作为实现质量结论。
+
+恢复008：Sol与两新Luna显示running，但各本轮可见工具调用均为0，约定时间内无可交付结果，主中断后核全部租约SHA及共享index不变。此前服务明确high demand；本轮仅能证明无响应，不能补造服务错误，也不能用等待时间比较实现质量。状态界面不是交付证据，按本次时间盒检查实际源码/进程后结束无进展请求；本次阻止继续空等，尚未恢复源码推进。收据 `RV/coordinator/artifacts/recovery008-lease-audit/outcome.json`。
+
+A05原§6测试迁移015：旧apply_patch用例只setenv(WORKSPACE_ROOT)而未建立显式workspace_context，真实原入口actual1，生产正确拒绝缺失绑定。helper同名不证明旧环境单根链仍存，需核实现与owner装配；测试按正式workspace/明确fixture迁移，不新增全局默认context或恢复生产环境回退。raw与退出码保 `RV/coordinator/artifacts/caller-fixture-probe015/`；Luna尚未实施，修订效果待验。
 
 N16 v1六文件/27相关用例绿，但独审确认RPC逐个close→join回归原并发关闭：首handler异步取消清理挂起时，后续channel尚未close。固定tree6d74377c拒收，报告原字节保留。revision2恢复close-all/join-all后，独审又发现普通清理错误先发生时，后续调用者取消被降为note；revision3两阶段取消反例红→绿、受影响31项及六路径Ruff通过，最终增审STOP后固定blob集成63a32e27。效果限关闭/取消直接闭包，不新增生命周期框架、不外推全联邦。
 
@@ -123,7 +147,7 @@ A05 030 actual1、4pass/6fail（83.88s）：旧真实编译夹具整段替换 `b
 冻结参数须核真实绑定和发送结果：框架会按 structured-output strategy 改写或省略 `tool_choice`，adapter 还会强制 `stream/include/store`。直接抄 `ModelRequest` 字段曾在固定增量早审中漏掉这些事实；先修提取再接封存，不等完整 HTTP 验收才查。 Auto策略fixture还须核框架模型名兜底，profile=False未必选工具策略；按实际策略提供HTTP输出，不将错配fixture归生产回归。
 
 - **交付残缺、漏真实入口。** 手筛hunk曾漏签名、删除和Web caller。用[交付校验脚本](../../../../scripts/verify_delivery.py)从固定树严格重建，核blob/hash及候选外源码；调用清单包括API/UI、CLI/进程启动、恢复、协议、间接kwargs消费者及实际分发的resources/skills和提示模板。A04生产/API验收后才发现gateway-context技能仍教模型调用旧resource/expected_revision/locator；运行时说明也是直接caller，须随唯一工具schema迁齐，不能把它误当纯规划文档。同类必填签名一次迁完，核真实callee再跑代表入口；不存在的Saver属性曾阻断28项，旧签名曾让15项连续失败耗时299秒，不能加alias求绿。完整模型E2E前先核真实路由状态码、异步回执和各窗口可见控件；主测试误设enqueue200、误点扩展窗口隐藏会话树，曾到末端才暴露并重复整场景。迁移规划也核原输入/输出和正式用例：曾漏图片读取、文本补丁删除/移动，新增能力延期不能废除已有能力。可行动增量先交，未知及后续范围分开，不等全量调查才回报。主独占验收候选固定后合并通知一次；状态消息不新增实现前置，作者不重复承担已分配的测试独审。连续通知曾引出重复读测试、下一生产增量延迟，收窄后的效果待实际交付。
-- **合同与基线错配。** live、旧HEAD、固定候选混读曾误判接口。先辨Git对象ID与文件SHA256，后者不能交cat-file；一次误用曾引出无关环境调查。tree没有提交历史；tree到worktree比较须用该tree初始化的私有index或直接blob，错误index曾让主把未变fixture报成删除。唯一提供者先交完整合同和依赖，消费者待实现字段不能阻挡取得前置。闭集只在owner登记，消费者具名引用；同步清旧spec/验收要求，严格校验不能发现全部语义矛盾。early包可先审，必要caller闭合才集成。
+- **合同与基线错配。** live、旧HEAD、固定候选混读曾误判接口。先辨Git对象ID与文件SHA256，后者不能交cat-file；023又将同一MJS的40位blob `2548feac`与64位SHA256 `9435010c`比较，误报漂移并STOP。主实算同字节后恢复原派单，无需回滚或搜另一作者；一次误用曾引出无关环境调查。tree没有提交历史；tree到worktree比较须用该tree初始化的私有index或直接blob，错误index曾让主把未变fixture报成删除。唯一提供者先交完整合同和依赖，消费者待实现字段不能阻挡取得前置。闭集只在owner登记，消费者具名引用；同步清旧spec/验收要求，严格校验不能发现全部语义矛盾。early包可先审，必要caller闭合才集成。
 - **身份、writer和跨载体约束漏项。** Thread/Session混用、内部通知伪造user Turn、取消后未收to_thread writer都曾过helper测试。核真实user/internal/child、HTTP/WS和恢复入口，只消费已校验admission；prepare与封存读取须消费同一规范checkpoint namespace，曾漏传namespace而查错owner，缺失记录必须明确报source-mismatch并保原因；幂等比durable原请求。首次final与checkpoint重复提交、重放和fork须联验同一model-call身份；codec从消息自身取权威值，显式caller或持久字段冲突必须拒绝，不能放宽typed provenance guard。typed字段核owner/slot/revision CAS及未封存约束；descriptor/root policy、prefix/ToolSet与public/protected binding须联校，各自hash合法不足以通过。
 - **未知结果和镜像脱节。** 确定拒绝漏回执、以资源存活证明动作完成、释放失败先丢句柄均曾污染owner。原业务owner在真实转换边界记录结果并同步镜像；未知副作用继续阻断，按精确身份/revision/终态核实后结清。回滚或释放失败不得发布verified/closed，普通列表不能清unknown。传输授权只接受精确入口的专用no-effect拒绝和同身份、工作区、verified、非倒退revision快照；一般409/超时不能当确定拒绝。
 - **生命周期被缓存遮蔽。** LRU驱逐仍被服务持有的catalog、关闭listener漏派生writer、卸载await窗口接受新claim都曾出错。唯一registry持有到真实释放；写前消费同一closing准入，先收finalizer/后台writer再关catalog，失败保重试句柄和generation fence。backend unload依赖aux时先完成backend关闭再停aux；整组同时TERM曾令revision同步失败、owner未知和Application shutdown failed，safe restart保aux的成功不能代此验收。核精确owned进程组的活成员，根PID退出不能证明子进程已退；root-only检查曾让真实关闭绿仍漏子进程。测试清理也从首个进程起覆盖，按原组回执重扫；child尚未登记时依赖child PID会漏收，须覆盖根已退/子回执未写的故障窗口。超时强杀只证明回收，不能证明drain/unload完成；原handle保失败，已退出后重试也不能洗掉事实，不能增大预算求绿。测试重启的新handle交原fixture管理，不能被临时function scope提前回收。
@@ -254,3 +278,9 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 017原full文件300样本均完成（8000布局跨越016结果挂载边界已实测），随后第一concurrent pair失败：a/b POST都由page4派发，page5只有同b ID committed状态，但fixture等待本页POST而30s超时；a/b物理与快照完整，Gateway0，整体actual1/外层613.164430108s（pytest609.64s），不称丢失更新或完整gate绿。共享IndexedDB每页pump可承接其它页intent，UI发起与HTTP派发归属不可混同；跨页按冻结operation ID配对真实request/receipt，origin UI完成另核。wire008只读完整callee建议，暂不打断Sol ROOT核心007，修法效果待后续。主核14必要raw与7源SHA、进程0，receipt=`RV/coordinator/artifacts/navigation-original340017-verified/receipt.json`。原报告将max P951048.869ms称为failure predicate不准确：MJS据此分类10.4b-1，pytest接受1/2/3；分类阈值不能新增为≤1s通过门。原报告字节保留，纠正独立记录，实际跨页失败不改写为绿。
 
 007与010/008本轮被模型服务high demand中断，不能归因为业务测试或据此比较实现质量；保源码、已有指纹与原raw，同模型只续接一次，重复同因后不密集重试。主从完整稳定七源执行原受保护命令，真实核心4pass/1.121s，受影响组34pass/6fail（5个旧Runtime fixture缺新注册方法、1个定位原因未定），Webbuild0；原失败不改写为绿。完整patch恢复tree888a0127严格重建后，仅将两个测试fixture交新短上下文Luna011，Sol生产源码停写保留，试验效果尚待验证。类型检查用项目CLI `bun x --no-install tsc`；主直接用Bun解释compiler触发内存保护-6，另一次缺bunx shim退出127，均在实际诊断前，原raw保留、不改环境或加上限。正确CLI实际2给出3个测试类型错误，不把执行器失败冒充源码错误。
+
+### 失败对账的持久清理顺序（Sol013）
+
+012固定候选的8文件组合85/0仍漏IndexedDB删除失败窗口：finalize先从内存outbox移除terminal/依赖闭包，再await持久delete；异常后原receipt重放找不到ID，该driver持续阻塞。独审是静态真实分支finding，不冒称已发生生产事故。交原Sol一次修同闭包，保可重试terminal记录到持久清理成功，并核await期间新intent及principal失效；不建第二清理owner、不重跑已绿未变入口。012report/raw保留，013固定增审前不记有效。导航022再次用`bun --check`执行顶层而退出1，已纠正为Bun.Transpiler纯解析；同类错误重现说明提醒未稳定执行，不能把该退出记成语法红或静态绿。
+
+022导航独审曾将原有`missing_from_disk -> 10.4b-1`误认新增分类；主比固定input527/candidate1fec证实分支未变，原10.4b也要求真实丢失更新触发①。撤该finding、保原报告与`report-correction001.json`，只修逐attempt报文证据。审查须先比实际delta和原合同，避免删合法原断言或扩大返工。修订效果待023固定增审。
