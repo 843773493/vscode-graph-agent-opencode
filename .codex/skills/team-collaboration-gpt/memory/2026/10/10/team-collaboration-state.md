@@ -6,12 +6,12 @@
 
 | Agent | 实际模型 | 当前范围与状态 |
 |---|---|---|
-| `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **036 active**：034全部STOP/37pass/独审0finding/机械0，已集成1e9eea6c。原单正文4.7剩余路径/seal/projection门由Sol同完整闭包一次收齐，复用033123pass与既有正文投影断言，不逐门微冻结；NWT导航禁写 |
+| `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **041 active**：036整体STOP，唯一测试文件SHA c75d1124、生产编辑0；001未变37例＋002真实50pass＋033同源123例合取，机械0，独审在途。041只在NWT一次修四导航消费者完整callee，按冻结op核跨页完成，保原计时/规模，先代表入口有限调试再STOP |
 | `/root/caller_inventory013` | `gpt-6-luna/max` | **029唯一full STOP/失败**：测试exit1、pytest636.73s、wrapper wall639.109s；300文件完成后首并发UI等待超时，Gateway0。17SHA同、owned0、alias撤；不重跑 |
 | `/root/a06_navigation_independent` | `gpt-6-luna/max` | **037只读定位STOP**：reportbe96d1d3，两operation均committed complete，分别由另一页处理；等待器只看发起页全局status。下一同Sol按op ID核处理页完成及原发起页真实UI，不改统计合同。034及029固定增审已STOP/0finding，031 correction保 |
-| `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **039原8.3-E只读对表STOP**：reportd4f48597，API/SSE/cursor局部已证，领域/SQLite/cache/原负向门仍待；query-plan与每个子面单独变异不属原门，另存纠正。033已STOP/123pass、actual0、87.021s，原argv/PID漏记不能补造 |
+| `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **046只读准备包 active**：只按039纠正/040/043与原规范给同Sol下个完整Section8批提供最小依赖/复用收据，不泛查、不实施。039/044已STOP；不加EXPLAIN或每子面单独变异门。033已STOP/123pass，原argv/PID漏记不补造 |
 | `/root/luna_federation_codes032` | `gpt-6-luna/max` | **035已集成82f518e8**：四relay预期一次迁齐，原直连/业务异常保；1pass/37.61s、Ruff0、owned0、五源SHA同。未变32unit复用 |
-| `/root/a06_architecture_final` | `gpt-6-luna/max` | **035窄增审STOP/0finding**：report3d4a6b65关闭F032-API-OBS-001；六路径固定521c6622已串行集成，040只读核原8.1-G/H完整App验收剩余，不重复030或联邦矩阵 |
+| `/root/a06_architecture_final` | `gpt-6-luna/max` | **036固定独审 active**：固定e0dc18e4/原4.7四门及有效正对照/033同源复用，仅只读；035 finding已关闭。040/043已STOP，完整App pending/reopen及确定性replay/外置harness仍待同Sol，不重复既有收据 |
 
 至少3常驻、最多15活动agent；闲置不制造改动。主统一调度、禁止派生；主只维护文档/固定交付/串行集成，不手写业务源码。Luna只外围小修/独审/验收，不做大型核心改造。
 
@@ -20,7 +20,7 @@
 - ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧`/data/hyf/20260629_agent/vscode-graph-agent-opencode`为软链接。
 - T=ROOT/out/tests/temp/2026/10/04/024121-team-execution；A=T/coordinator/artifacts/sol-efficiency-trial；RV=ROOT/out/tests/temp/2026/10/09/a06-final-review。
 - NWT=`ROOT/out/worktrees/2026/10/09/a06-final-review/navigation-fixture-receipt`，仅此活跃代码worktree；禁止复用迁移排除的历史业务工作区、/tmp、整仓复制和新venv。
-- 最新已核源码HEAD=`82f518e8fc42a7d7f2eabb64d9d99e887ba930fb`，收据`RV/coordinator/artifacts/federation-codes035-integration/receipt.json`；恢复仍须核实际HEAD。共享`.git/index` SHA=`4ea3d8d2b20107d2153748714d659e2a1c982039edd2d848a72fdb3d07049958`，保原字节，禁止裸Git写index、reset/rebase/amend/清暂存。
+- 最新已核HEAD=`07e1b8dc6f1d8647b5d1363b1accca7bec2645a6`，收据`RV/coordinator/artifacts/current-docs045-integration/receipt.json`；最新源码集成仍82f518e8，恢复仍须核实际HEAD。共享`.git/index` SHA=`4ea3d8d2b20107d2153748714d659e2a1c982039edd2d848a72fdb3d07049958`，保原字节，禁止裸Git写index、reset/rebase/amend/清暂存。
 - 主Git用fresh私有index，固定blob串行集成；旧`doc-overlay012.idx`不可提交。每次从当前HEAD read-tree并核精确路径，record/verify0后检查祖先链/sharedindex。status/read也显式index与GIT_OPTIONAL_LOCKS=0。
 - 官方dev停止；不改全局配置、不按端口杀别人的registry。Python复用ROOT `.venv`，UV_PROJECT_ENVIRONMENT显式ROOT/.venv、UV_NO_SYNC=1、uv run --no-sync、唯一PYTHONPATH、PYTHONDONTWRITEBYTECODE=1；任何测试timeout＋ulimit-d4194304。
 - 正式导航业务workspace/日志在NWT/out/tests/integration/clients/web/test_navigation_mutation_measurements/，沿完整正式fixture；不能把源码根注册为业务工作区。
@@ -65,7 +65,7 @@
 - 原core最终清单`E/navigation-index-only-10-3/remaining-original-goal.json`（E=T/sol_vertical_implementer/artifacts/final-original-scope-source-bulk-core-and-boundaries），原ledger=`E/a06-final-task-evidence-ledger.json`。已接受A01–A03/R01/R03/Section8/H4/H5/H6/URI按具名键复用；旧组合actual1/124保真，补绿nodes单列。
 - 离线OpenAPI81Python/15TS与schema等价已通过；146caller语义清单已主核，未变输入复用。新文件工具/Skill目录根/child编码只有规划，不纳本goal源码实施。
 - Gateway条件不实施分支原create_folder/move_workspace p95=94.910/75.451ms，HTTP1/FS8，无原独立开工证据；不加operation worker、不称全局无瓶颈。10.4b文件原1199.272ms触发①，202已实现，但当前独立full未完。
-- **外部UNMET**：真实Provider403 quota产品E2E（tests/e2e/clients/web/test_basic_chat_tool_loop.py）、A04补充C1常驻35000 registry setup；不重试/换profile/杀registry，integration不代产品E2E。不因核心通过结束原goal。
+- **外部UNMET**：原真实Provider403 quota收据、A04补充C1常驻35000 registry setup；不重试/换profile/杀registry。043确认原8.13还有确定性SessionThread/model-call replay与外置phase harness实施缺口，不把整项永久归为quota；唯一Web E2E owner仍test_basic_chat_tool_loop.py，由同Sol下个完整Section8批推进。044核C1为启动前端口占用，非fixture附着外部registry，不推业务回归。integration不代产品E2E，不因核心通过结束原goal。
 
 ## 文档、历史与实际效果
 
