@@ -8,10 +8,10 @@
 |---|---|---|
 | `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **036 active**：034全部STOP/37pass/独审0finding/机械0，已集成1e9eea6c。原单正文4.7剩余路径/seal/projection门由Sol同完整闭包一次收齐，复用033123pass与既有正文投影断言，不逐门微冻结；NWT导航禁写 |
 | `/root/caller_inventory013` | `gpt-6-luna/max` | **029唯一full STOP/失败**：测试exit1、pytest636.73s、wrapper wall639.109s；300文件完成后首并发UI等待超时，Gateway0。17SHA同、owned0、alias撤；不重跑 |
-| `/root/a06_navigation_independent` | `gpt-6-luna/max` | **037只读定位active**：核029当前failed-measurements与跨页两operation的请求/回执/UI调用链，不改码、不测试、不Git。034及029固定增审已STOP/0finding，031 correction保 |
-| `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **039原8.3-E只读对表active**：复用具名领域/SQLite/API与负向变异收据，只给精确未覆盖节点。033已STOP/123pass、actual0、87.021s，原argv/PID漏记不能补造 |
+| `/root/a06_navigation_independent` | `gpt-6-luna/max` | **037只读定位STOP**：reportbe96d1d3，两operation均committed complete，分别由另一页处理；等待器只看发起页全局status。下一同Sol按op ID核处理页完成及原发起页真实UI，不改统计合同。034及029固定增审已STOP/0finding，031 correction保 |
+| `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **039原8.3-E只读对表STOP**：reportd4f48597，API/SSE/cursor局部已证，领域/SQLite/cache/原负向门仍待；query-plan与每个子面单独变异不属原门，另存纠正。033已STOP/123pass、actual0、87.021s，原argv/PID漏记不能补造 |
 | `/root/luna_federation_codes032` | `gpt-6-luna/max` | **035已集成82f518e8**：四relay预期一次迁齐，原直连/业务异常保；1pass/37.61s、Ruff0、owned0、五源SHA同。未变32unit复用 |
-| `/root/a06_architecture_final` | `gpt-6-luna/max` | **035窄增审STOP/0finding**：report3d4a6b65关闭F032-API-OBS-001；六路径固定521c6622已串行集成，待036固定后独审，不重复联邦矩阵 |
+| `/root/a06_architecture_final` | `gpt-6-luna/max` | **035窄增审STOP/0finding**：report3d4a6b65关闭F032-API-OBS-001；六路径固定521c6622已串行集成，040只读核原8.1-G/H完整App验收剩余，不重复030或联邦矩阵 |
 
 至少3常驻、最多15活动agent；闲置不制造改动。主统一调度、禁止派生；主只维护文档/固定交付/串行集成，不手写业务源码。Luna只外围小修/独审/验收，不做大型核心改造。
 
@@ -86,3 +86,5 @@
 031原反例`foo-1.0.0`含点号被原pattern拒绝，原报告保字节、更正`RV/a06_navigation_independent/artifacts/a04-grammar031/correction001.json` SHA`b8cefcc1f76b5182c260393d642ece03e687150c7b15f79c1fcfe18be5a5fee2`。真正原接受charset域外例是`foo-1/2`与`foo/1-2`同为`foo-1-2`，仍不在schema枚举；034修法不变。029增审报告`RV/a06_navigation_independent/artifacts/navigation-polling029-review/report.json` SHAb88bded0、0finding已STOP。full命令/17固定来源实际SHA主已写runner lease，NWT HEAD与candidate tree不同属预期，禁止为HEAD名称checkout覆盖旧文档。
 
 034已串行集成`1e9eea6c16c356dd0d281558ab20f679b61b89cf`，收据`RV/coordinator/artifacts/distribution-domain034-integration/receipt.json`。035组合固定`521c66222c9357cf4d5fcc904367bf5b70662430`、六路径strict/机械/独审/guard0，已串行集成`82f518e8fc42a7d7f2eabb64d9d99e887ba930fb`；032其余复用。033 reporte5af/actualfaa0/rawf89f主核，四门具体未覆盖交同Sol036，不把123总数代整项闭合。036lease初始1e9已通知82f联邦不冲突增量；必要source闭包只detail/path/seal/projector/同链test，排除联邦和NWT导航。036已盘调用闭包，现无源码finding；一次补必要路径、真实seal与union负向节点，再统一protected batch/STOP，不重跑033123项。
+
+037已核冻结A/B两原请求与202/terminal：A由page5处理、B由page4处理，均revision3 committed/effect complete，发布项和目录快照完整。report SHA`be96d1d30f7287404bbcac3993859b44bf8acd4071e9123783dbec364c496639`；只支持跨页等待归属缺口，不宣布任意页generic完成能作某operation证明。036 attempt001真实49pass/30fail、pytest70.12s、wall76.369s、owned0；新测试C前置缺合法epoch/D改ref_id撞UNIQUE，均fixture错误，原raw保留。同Sol一次修真实prepare与union输入正对照后只重跑受影响nodes，无生产finding不改码。

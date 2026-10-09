@@ -111,7 +111,7 @@
 
 ### D7：拒绝码分三套集中登记，不可混用
 
-**理由与裁定**：规范包含三个独立拒绝码闭集——`ResourceUriGrammarError.reason_code` 的分段编码修订闭集（现行17码快照、修订18码，见唯一spec登记）、resolve 解析/授权期闭集 7 个（原有 6 个加 `unsupported_view`）与**联邦解析期第三套**（`app/gateway/federation/errors.py` 的 `FederationError.code`，归属 `app/gateway/federation/`）。`unsupported_view` 专用于已识别的 view 与资源 kind 不兼容。当前生产 resolver 仍只登记原有 6 个 resolve 码；任务 1.3 保持未完成，须在实现中加入 `unsupported_view` 并维持闭集构造校验。三套分别对应「字符串→ParsedResourceUri 的语法期」「已解析后的解析/授权期」与「跨 gateway 联邦解析期」，混用会让阶段职责错位。集中登记可机械检查「无自造同义码」。
+**理由与裁定**：规范包含三个独立拒绝码闭集——`ResourceUriGrammarError.reason_code` 的分段编码修订闭集（现行17码快照、修订18码，见唯一spec登记）、resolve 解析/授权期闭集 7 个（原有 6 个加 `unsupported_view`）与**联邦解析期第三套**（`app/gateway/federation/errors.py` 的 `FederationError.code`，归属 `app/gateway/federation/`）。`unsupported_view` 专用于已识别的 view 与资源 kind 不兼容。当前生产 resolver 已登记七码并维持闭集构造校验；任务 1.3 还包含其它阶段登记的整体验收。三套分别对应「字符串→ParsedResourceUri 的语法期」「已解析后的解析/授权期」与「跨 gateway 联邦解析期」，混用会让阶段职责错位。集中登记可机械检查「无自造同义码」。
 
 **备选**：合并为一套码（被否：语义阶段不同，合并会丢掉「哪一期拒绝」的信息）；每个模块自带枚举（被否：正是要消除的多份定义）。
 
