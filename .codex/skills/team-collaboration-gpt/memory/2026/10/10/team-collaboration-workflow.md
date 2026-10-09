@@ -80,17 +80,21 @@ Chromium 等 Unix socket 若因路径长度上限失败，主代理可在 `out/`
 
 ```bash
 TASK_INDEX="$TASK_GIT_DIR/integration.idx"
+export GIT_INDEX_FILE="$TASK_INDEX" GIT_OPTIONAL_LOCKS=0
 git rev-parse HEAD
-GIT_INDEX_FILE="$TASK_INDEX" git read-tree HEAD
-GIT_INDEX_FILE="$TASK_INDEX" git add <精确路径...>
-GIT_INDEX_FILE="$TASK_INDEX" git diff --cached --name-only
+git read-tree HEAD
+# 按本批机器manifest逐项装入固定blob；删除项用update-index --force-remove。
+git update-index --add --cacheinfo <mode>,<固定blob>,<精确路径>
+git diff --cached --name-only
 bun scripts/assert_isolated_index_commit.mjs record --index "$TASK_INDEX" --task "$TASK_NAME"
-GIT_INDEX_FILE="$TASK_INDEX" git commit -F "$TASK_GIT_DIR/commit-message.txt"
+git commit -F "$TASK_GIT_DIR/commit-message.txt"
 bun scripts/assert_isolated_index_commit.mjs verify --index "$TASK_INDEX" --task "$TASK_NAME" --commit <本笔提交hash>
 git show --name-status <本笔提交hash>
 git merge-base --is-ancestor <提交前HEAD> HEAD
 git merge-base --is-ancestor <本笔提交hash> HEAD
 ```
+
+上块在同一shell内执行；分拆工具调用或使用subprocess时，每次显式传完整私有index环境。不得用live作者文件的git add代替固定blob。
 
 恢复后的第一条 Git 命令同样受索引隔离约束；`--git-dir/--work-tree` 不隔离 index。已经重复误操作的agent收回全部Git权限，包括`status/rev-parse/show`等只读查询；`status`也可能刷新共享index的stat缓存，不能因“只读”省略隔离。固定对象读取、冻结与导出由主代理承担；测试权限另行明确，不因禁止Git操作而默认禁止作者受保护跑测试。该任务边界没有工具沙箱保证。恢复/集成窗口前主代理保存共享索引及 `ls-files --stage` 清单到分配的产物根；共享路径从该工作树的 `git rev-parse --absolute-git-dir` 加 `/index` 取得，不能用受 `GIT_INDEX_FILE` 影响的 `--git-path index`。观察私有状态索引时另标完整路径，恢复前核目标路径与备份来源。发现 hash 改变先保现场，不凭状态文字或陈旧摘要假称精确恢复。
 

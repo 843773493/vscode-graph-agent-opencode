@@ -322,3 +322,7 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 050 core-web003漏cassette独立user parts、004最终旧roles断言、005扩展误用后端workspace身份作Gateway注册路由，分别actual1/155.62s、133.786s、146.98s；005基线两轮真实loop/roles已过。006又在两轮baseline后因PageDTO.session_id旧断言失败（actual1/169.639695s），同driver还误写binding hash形状，作者已一次按真实entry owner与sha256:64修齐、静态0，未实跑扩展。旧fixture身份/断言未随完整闭包迁齐，反复付整组启动与基础两轮成本；纠正为先批量盘齐生产/driver/fixture共同前置，唯一产品owner可选受影响具名场景并按依赖复用未变基线，原A–S完整要求保留。A/F持久观测不能证明AgentLoop重启续接，原Job/checkpoint恢复仍须实现。完整交付与效率效果待收，不加逐字段冻结门。
 
 067主供caller漏扫描owner且读取范围被解释为只限manifest，未启动；开放同闭包后068又误写NWT相对ART、裸python不存在且包装漏exit。迁回绝对ART修同loop/静态后，protected命令再次选ROOT cwd，8.08s actual1/owner未初始化；fingerprint还把实际config_service package写成不存在的.py，仅改cwd不能修。重复路径漂移按既有规则中断/撤脚本写入及运行权、核进程0，固定15200bytes脚本和原raw交072整体核装配；不重复复制fixture、不加同义规则。交072后实际效果待收，不将装配失败归生产或未启动算模型失败。
+
+072静态0及cwd/source断言通过，真实命令却缺唯一代码根PYTHONPATH，外置脚本在owner前ModuleNotFoundError(app)，actual1/内部15.743ms，无revision观察。保原件，主供072b完整env/保护命令一次修已知装配；不再让作者自行拼启动环境，效果待真实owner。072还违反禁Git执行ROOT裸status及rev-parse/show；074共享index字节改变但stage/flags逐字同，主保现场、核无Git进程/lock后23:40:00Z精确恢复原字节。无损不认可越界，自报status是刷新线索而非排他证明；收据shared-index074-incident/restore-receipt.json。
+
+050 core007虽已采用原owner具名focus，仍因同driver遗漏的history DTO断言actual1/132.183036s，未到A/F。选场景减少未变流程开销，不能替代全量核现行DTO及共同前置；同作者批量收齐，再集中调试，原失败保留，尚不宣称效率改善。
