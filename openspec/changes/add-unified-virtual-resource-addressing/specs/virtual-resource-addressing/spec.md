@@ -404,6 +404,8 @@ URI 解析 MUST 按唯一顺序执行：本地 parse（fail-closed）→ 无 aut
 
 文件内容冲突、补丁失败及执行未知结果属于文件操作 owner 的执行合同，不冒充寻址阶段错误；该合同见 `add-unified-resource-file-tools`。上述三套寻址闭集 MUST NOT 混用：语法期 MUST NOT 抛 resolve 码或联邦解析期码，解析/授权期 MUST NOT 抛 grammar 码或联邦解析期码，联邦解析期 MUST NOT 抛 grammar 码或 resolve 码。新增码 MUST 只出现在集中登记处一次，其它模块与其它 change MUST 只引用、MUST NOT 自造同义码。
 
+联邦完整协议闭集由 `app/gateway/federation/errors.py` 的 `FEDERATION_ERROR_CODES` 唯一登记，`FederationError` MUST 在构造时拒绝未登记码。目标 owner 已识别的资源解析、上下文 revision 或 communication observation 拒绝，跨联邦传输时外层 MUST 使用此处登记的 `federation-target-owner-rejected`，detail 恰为 `{owner, code}`，owner 分别为 `resource_uri_resolver`、`context_revision` 或 `communication_observation`；内层 code 仍归原 owner 管理，不加入联邦闭集。业务消费者 MUST 还原其原 owner 的拒绝语义，不以外层联邦码替代业务错误。对端 error frame 含未知联邦码时，接收边界 MUST 报 `federation-malformed-frame`、保留原异常原因并以协议错误关闭 channel，不将未知码伪装成正常断线。
+
 #### Scenario: 三套拒绝码分别登记且不混用
 
 - **WHEN** 需要引用一个拒绝码
@@ -413,6 +415,16 @@ URI 解析 MUST 按唯一顺序执行：本地 parse（fail-closed）→ 无 aut
 
 - **WHEN** 某实现抛出一个不在对应闭集内的拒绝码
 - **THEN** 构造该错误时即显式失败（现有构造函数已对未登记 code 抛 `ValueError`），不允许闭集被静默扩展
+
+#### Scenario: 目标 owner 拒绝跨端传输后仍保留业务归属
+
+- **WHEN** 目标工作区以其已登记的资源解析、revision 或 observation 错误拒绝请求
+- **THEN** 联邦外层使用 `federation-target-owner-rejected`，detail 只携带原 owner 和 code；业务消费者还原原拒绝，联邦构造不接受该业务码
+
+#### Scenario: 未知联邦 wire 错误码显式终止协议
+
+- **WHEN** 接收的 error frame 使用不在唯一联邦闭集中的 code
+- **THEN** 接收边界报 `federation-malformed-frame`，保留构造失败原因并按协议错误关闭 channel
 
 #### Scenario: 其它 change 不得自造拒绝码
 

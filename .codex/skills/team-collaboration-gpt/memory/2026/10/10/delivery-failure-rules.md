@@ -1,4 +1,6 @@
-027派单纠正及实测：026浏览器代表入口完整但Pythonsample漏owner_preimage_sha256（actual1/59.708s）；025此前漏client_sequence，作者逐key补漏，主逐字段STOP交接又放大返工。同Sol盘齐producer/projection/Python minimal/full全部字段，统一转发31项真实facts后集中调试。027首轮actual1/43.552s不再漏字段，但全局UI在已完成屏障后被另一operation更新，末断言跨工具往返读到更晚忙碌状态。改为同一有界浏览器任务联合等真实完成→原双rAF→捕获不可变text/count/page时间快照；双rAF末仍忙则在原deadline继续等待，末断言只核该结束时刻，额外诊断不计elapsed。第二轮actual0/40.760s，5file＋2跨页＋2Gateway及完整Python断言通过，整体STOP/固定/机械交付0；效果限输出闭包与代表入口，原full独验仍待。旧失败保原字节，不猜operation、不倒填默认、不延时限或改统计合同。
+029真实API纠正：027固定增审0finding、minimal0，但独立full实际1/pytest319.34s；162file完成，第163copy已202/committed，等待快照解包后message undefined。当前Playwright poller同步判断predicate返回值，不await Promise；async谓词的Promise先被当真值，后来resolve(false)也不重新轮询。029同调用形态Chromium探针002实际0：busy与双rAF期间重新busy均返回boolean false，持续完成才返回snapshot。历史027未保存返回值，不能倒填其类型。同步predicate配合原双rAF快照的修法先短真实API验证，再原minimal与独立full；不延deadline/放宽UI/改统计合同。探针001把函数源码字符串当expression、返回函数而失败，已保raw，不能据此推翻同形实测。语法和静态审查漏了此API语义，不能反复用几百秒矩阵定位共同前置。
+
+027派单纠正及实测：026浏览器代表入口完整但Pythonsample漏owner_preimage_sha256（actual1/59.708s）；025此前漏client_sequence，作者逐key补漏，主逐字段STOP交接又放大返工。同Sol盘齐producer/projection/Python minimal/full全部字段，统一转发31项真实facts后集中调试。027首轮actual1/43.552s不再漏字段，但全局UI在已完成屏障后被另一operation更新，末断言跨工具往返读到更晚忙碌状态。第二轮actual0/40.760s，5file＋2跨页＋2Gateway及完整Python断言通过，整体STOP/固定/机械交付0；效果仅证明完整字段迁齐与代表入口，full随后失败说明async UI屏障尚未有效收口，不能仍写“待验”或宣称提速。旧失败保原字节，不猜operation、不倒填默认。
 
 导航025作者两次受保护minimal实际1/46.334s、1/51.049s。001浏览器5文件＋2跨页＋2Gateway完成，但输出遗漏client_sequence；002发起页全局completionCount可由A完成增加，B仍queued，旧等待穿透。HTTP仅证明A committed、B queued、另一页B committed，不证明同operation状态倒退。025STOP/raw/四SHA/PGID0已保；同Sol026联合等真实UI文本与计数、保双rAF/elapsed/原规模，效果待运行，不交独审代调试。
 
@@ -17,6 +19,8 @@
 外围019：作者首次hook测试漏外部保护，随后受保护20/20、类型/build及apply_patch20通过；首轮仅工具转录且排除验收，后raw保留。既有外部保护规则无需新增一套，派单给字面受保护命令并要求首个测试即使用。最终消息一个SHA抄错，原report/主固定blob一致，以程序manifest为准；这不是源码交付不一致。后续改善效果待下一轮验证。
 
 路由恢复012：用户确认旧请求被上游路由到失效模型；修复后原Sol与两Luna实际工具调用均恢复。保原终态及中断证据，路由/排队与实现效率分列；目前只验证执行恢复，完整交付效果待后续STOP/独审。收据见实时台账当前012。
+
+031合同审查发现：联邦错误注释声明闭集，构造却只验非空，既有绿测试还固化resolve码穿透联邦；distribution仅校验字符集，漏掉已定稿四值枚举，使域外名称进入组合身份。版本单独编码的穷举不证明整个组合合同。032由Luna修错误分域，发行身份排同Sol窄修；先保当前编码和唯一owner，修订效果待真实交付验收。 031首碰撞例含点号、实际不通过distribution pattern，Sol034核出后原报告保留并另存correction；真正charset域外例`foo-1/2`与`foo/1-2`同码，均不属合法枚举。主也曾沿用错误反例；反例必须先核每条准入条件，不把未执行推演写成已接受输入。
 
 # 按任务查询的交付失败细则
 
@@ -290,3 +294,9 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 012固定候选的8文件组合85/0仍漏IndexedDB删除失败窗口：finalize先从内存outbox移除terminal/依赖闭包，再await持久delete；异常后原receipt重放找不到ID，该driver持续阻塞。独审是静态真实分支finding，不冒称已发生生产事故。交原Sol一次修同闭包，保可重试terminal记录到持久清理成功，并核await期间新intent及principal失效；不建第二清理owner、不重跑已绿未变入口。012report/raw保留，013固定增审前不记有效。导航022再次用`bun --check`执行顶层而退出1，已纠正为Bun.Transpiler纯解析；同类错误重现说明提醒未稳定执行，不能把该退出记成语法红或静态绿。
 
 022导航独审曾将原有`missing_from_disk -> 10.4b-1`误认新增分类；主比固定input527/candidate1fec证实分支未变，原10.4b也要求真实丢失更新触发①。撤该finding、保原报告与`report-correction001.json`，只修逐attempt报文证据。审查须先比实际delta和原合同，避免删合法原断言或扩大返工。修订效果待023固定增审。
+
+032构造闭集小修先盘unit却漏真实relay HTTP断言，独审找到后同作者035一次迁齐invalid/mismatch/expired/deleted四消费者，并实际1pass/37.61s、清理0；不能只改最后一个报错断言，也不为已有32unit重复运行。034同时纠正031域反例、保原编码补四enum校验，唯一37pass/15.10s与独审0finding后集成；两例效果限各自闭包，不外推整个A04。
+
+### 导航029：短入口通过仍漏跨页顺序
+
+029先真实API探针修Playwright同步谓词合同，作者minimal58.11s通过；独立唯一full仍actual1/636.73s，300文件样本完成后首跨页UI等待超时，Gateway0。page5记录完成后又受理，但尚未按operation和生产callee核定，不写成已证实状态回退。当前failed JSON与browser PID1141894匹配；同目录measurements JSON是旧minimal，主初读后即时纠正，未用其5file/2Gateway验收full。17源SHA同、owned0、alias撤，真实失败raw保留。Luna037只读精确定位，Sol036先收正文核心；导航下一批仍交同Sol完整callee，不延长deadline或重跑长矩阵定位。实际修订效果待收；已有跨页最小入口仍未稳定覆盖本次事件顺序，应核不同运行机制而非继续加串行样本。
