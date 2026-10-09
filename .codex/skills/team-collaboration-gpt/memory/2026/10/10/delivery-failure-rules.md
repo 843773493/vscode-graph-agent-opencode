@@ -313,4 +313,6 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 
 054纠正：design1133/10.4b只要求真实动作至渲染后UI确认，没有通用文案须持续到迟到读取的合同；主先前沿旧predicate补此门过严。现有callback完成后92.7ms新queued并不能证明期间DOM，真正证据缺口是操作后才安装观察且只有事件。055沿三个测试callee操作前持续DOM观察、即时双rAF/op快照与真实端点计时，原失败/审查保留，clock映射与效果待本次真实入口验证；不让错误门驱动生产改造。回报引用程序actual/manifest/raw，避免手抄机器字段及重复长历史。
 
-055首次minimal实际1/51.23s，MJS `sample`块作用域错误；纯Transpiler解析未捕获该运行错误。作者恢复时漏读已返回终态，又把session_id18014交functions.wait，误报无法恢复。主精确解码原rollout终态，保工具转录和正式browser raw，不重跑坏候选、不造pretest指纹。改为区分session/cell handle，并在进程内直接落本attempt raw/source/actual；同作者集中修调用方后原第2次minimal验证，效果待收。裸status越界另有incident，共享index原字节；不据无损结果认可越界，不追加同义禁令。
+055首次minimal实际1/51.23s，MJS `sample`块作用域错误；纯Transpiler解析未捕获该运行错误。作者恢复时漏读已返回终态，又把session_id18014交functions.wait，误报无法恢复。主精确解码原rollout终态，保工具转录和正式browser raw，不重跑坏候选、不造pretest指纹。改为区分session/cell handle，并由进程直接落本attempt raw/source/actual；002实际执行了机器落盘，actual1/65.09s，故只证明收据恢复方式改善，未证明业务验收通过。裸status越界另有incident，共享index原字节；不据无损结果认可越界，不追加同义禁令。
+
+059固定增审复用13个未变依赖与054，只核055增量：Python又把可选query hold当每op必需，导致002测完5file/2cross/2Gateway后StopIteration；同类041曾纠正，说明规则未稳定落实。另7个FS样本中5个timer早于deadline0.1–0.5ms，单修hold仍会红；实际FS读取均晚于端点663–917ms。060交原作者一次修两个消费者：保真实跨页operation/DOM/顺序门，hold只核实际分支；同Chromium时间域复核deadline后采样，保650ms下界和原规模，不让诊断分支变产品门。报告`RV/a06_navigation_independent/artifacts/navigation055-delta059-review/report.json` SHA47139340，原055失败保留；060效果待真实入口与固定增审，不先记有效。
