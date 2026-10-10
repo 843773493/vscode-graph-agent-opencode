@@ -418,3 +418,27 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 129 queued短门 actual1/63.206409s 已证明accepted后history200，但第一execution第二次Provider请求仍包含后入队正文。此前checkpoint Turn cutoff未覆盖composition/selected sequences/seal两次compile共用的committed_context_items，pending notice还无共享fence；不能把一个读取入口过滤过当整条选择链已隔离。统一原storage_commits的typed admission cursor，由同canonical selection owner供checkpoint/closure/assembly；user及internal都在入队前冻结输入，queue只存调度引用，恢复/DTO读原canonical projection。132提前只读确认initial binder/runtime-source已有prequeue事实，通用internal仍需同批接线，已交唯一Sol作者；141同原HTTP具名节点actual0/58.567s、434源同/raw主核：接受即时可读、旧请求隔离及后继真实正文正向断言均过；提前消费者盘点补入的正向断言已验证，取消恢复与Web原门仍待，不量化避免长跑时间、不新增验收门。
 
 146/149/150首次闭包仍有遗漏：core021实际1/327.991s，原排队历史入口已越过，新首红等待计划回报ModelCall。原backend明确internal回报builder没注共享AttachmentBlobStore而catalog owner报错；原user/child已completed、回报尚无ModelCall，不混报“登记call卡终态”。150提前查出user入口同缺注入及唯一store关闭遗漏；146静态另查出imported internal冻结source hash被local cursor重算、恢复wakeup仍按时间排序。共同owner迁移要同批核本地/导入、恢复/回报及创建关闭消费者，沿原validator/store/commit收口；149既有取消恢复生产闭包已通，不重写，只补remove/clear缺失的durable断言。证据=`COORD/artifacts/core149-formal-verification.json`及146/149/150消息；真实修后短门/原产品效果待验，不能宣称已节省某轮耗时或证明Luna/固定手续阻塞Sol。
+
+152 后续短门26pass/4fail（actual1/75.969s）：三fork模式target typed cursor与真实新/旧plan已过，提前消费核查所对应边界有真实结果；pending取消crash-window也过。剩红暴露作者fixture重建Store漏codec、误用不存在saver.close及冷Job错误契约变化；沿既有真实组装/关闭接口修fixture、原owner保非物化缺失Job语义，不把fixture红外推fork失败或重跑未变三mode。证据=`COORD/artifacts/queued152-short-verification.json`与`queued152-fork-scope-verification.json`；DI真实回报、remove/clear、seed和原Web仍待，效果只归已验边界。
+
+153/154 修订后实际结果：只四红+扩展remove/clear node集中5pass（27.136s），durable取消/冷恢复/逆同时间顺序已验证；原H1真实HTTP1pass（93.243s）验证共享store注入后的团队seed、child终态和parent回报internal execution及lifespan退出。提前完整消费者核查对应的业务边界已修通，但还不代表Web或全部050；继续原产品，不据此量化整体速度或Luna独自避免的运行轮次。
+
+156/157 区分故障再调度：core022停在Gateway既有60s初始化门，限时只读确认probe路径/鉴权一致、无确定源码修法，STOP后Sol继续seed边界，不让调查成为等待门。H5原扩展三mode actual1/201.098s、444源同/raw核/组0，14 factory节点过；context测试漏cursor必需connection、history的seed-only/no Turn输入违现有合法anchor合同、FULL另报content_part target identity不唯一。主首次汇总误把FULL并作fixture红，逐参数读raw后另存纠正分类，原件不改。157提前读者已核出history合同错配并交作者，不为测试放宽生产；同批修真实fixture、原FULL映射，复用152合法三mode。效果目前只证明错误范围已提前识别，合法seed业务回验仍待，不把全族红归同因或声明全部通过。
+
+158/159 提前核查确定FULL是裸Provider projection ref与physical item:part身份类别混用，ordinal实际0匹配，原“不唯一”错误不能证明重复；同批迁唯一projection_part类别和全部caller/审计。157另见completed_empty无item合法来源因按items推execution而漏target admission；按冻结anchor和原metadata-only commit物化，不伪造业务item。159提前核原取消/reasoning构造、准入/恢复/关闭未见漏接并STOP，不把静态无finding当业务绿或留作阻塞门。五生产路径静态actual0/14.077s，修后真实seed/空来源及受影响FULL原门仍待，当前效果只归确定缺口的提前发现。
+
+160/161 提前静态无finding仍有真实consumer漏闭：H5集中actual1/174.169s、446源同/raw核/owned0，三原fork模式过，四seed参数红。FULL旧physical part错误已越过，但thread_task_seed冻结creation_key逻辑source alias被当普通request ID重映射，与保原preimage的accepted reference/hash不符；同原source identity owner保逻辑alias、operational IDs仍target-local，不加reader fallback。空context fixture在seal前写cp，输出context初始团队45s超时未进fork且teardown回报遇admission drain，不能全部算映射同因。按真实consumer继续同批闭合，原件=`COORD/artifacts/queued160-h5-verification.json`；合法seed回验待。提前审查只补盲点，不能替代运行，当前证据不支持宣称返工已消失或整体提速。
+
+161/162 实践调序：H5-002正常有输出context/FULL的fork/refork和真实seed/hash/metadata/detail断言通过、empty FULL整例pass，但3崩溃/fixture边界未闭（actual1/179.467s）。不把新增边界接线当下一核心前置，保原scope，Sol立即跑原取消/reasoning后core023；后者已进真实产品，仍待终态。取消/reasoning原集中12fail/28pass（66.754s）：2屏障在start_job准入投影提前命中、5非法open直达completed、2fixture直接打开未物化SQLite、3漏workspace request上下文。159签名核查未覆盖实际阶段/状态前提，不记有效。主给现NWT无独有改动的两测试最新preimage，Luna162仅隔离fixture小修/静态，Sol核心不中断；当前ROOT冻结不提前同步，修后实际效果待原节点。减少Sol手修边界返工的安排已执行，未声称整体速度倍率。
+
+163 core023真实Web在queued live断言红（actual1/376.367s，pytest368.34s、446源同），截图正文完整，README.md被inline-flex路径chip渲染；先读截图与DOM结构后撤回“正文遗漏”分类，避免错误改生产。同原driver精确核Markdown节点textContent与权威history正文，live/refresh、旧请求隔离、后继消费和原六focus都保留。resources500是原triad辅助服务未启的独立接线问题，按capability/lease补齐，不降级。主原件核=`COORD/artifacts/core163-product-verification.json`；163只读前移核后续消费者，162隔离fixture修继续并行，效果待下一真实运行。
+
+164 162小修作者又把Git diff --check当只读豁免，违反全禁Git；立即撤作者/运行权、保postimage交独审，不再仅补同义禁令。静态0但429前作者report缺失，主只固定实际两字节对象/原静态，不补造作者报告。ROOT index相对150仅bytes变、stage/flags3266项同，未恢复旧快照；NWT无前快照不能证明未变。core024超时124/1537.983s且raw空，正式browser仍023旧mtime，只证明保护终态；按本次owned服务日志定位和精确SSH归属回收，不旧formal代本次、延deadline或盲重跑。规则已存在，本次只留证据与执行结果，不堆重复禁令。
+
+164屏障初报随后撤回：审查者先将original后的回执交付屏障当P2，主未核原phase就交作者、写入通用要求，造成一次无必要顺序改动。原目标是worker结算/消费者收到回执前，候选可以覆盖；查询本身取消是另一窗口，不能自动增加门。撤回“必须操作前”条款，保“核真实阶段/合法状态、先核原phase”。Sol已改的顺序若仍覆盖原目标不强制撤改/重复测，效果归后续原节点。
+
+
+168/169→170前移核查：025原Web有限phase给出了fixture→build0→真实Chromium→首FIFO tool-result屏障超时的完整阶段，actual1/362.677s，不把024 raw空超时反推同因或声称提速；旧queued正文门未执行。Luna提前分核下一已计划Store取消闭包的生产锁/worker/finalizer与原unit观察边界，结论与Sol预案一致，不计新增bug发现；确定缺口即消息交作者然后STOP，无额外报告/门。静态语义不足以称已复现，效果留待原fsync barrier及真实产品；不能再凭人数或短静态耗时解释同链返工。
+
+
+171实测：原生产取消probe两参数在真实fsync未退出时first.done=True红（actual1/14.827s），仅证早取消/锁语义，不冒称seq碰撞已实复现。Sol复用统一shield原语持Turn锁drain/reload，集中三文件001只有新cold fixture最后未open_existing两红、其余73pass；fixture迁齐后仅两参数002 actual0/4.973s，worker结算/后继seq/去重/fanout/冷恢复过，复用未变73项。与此同时，170的plan/key静态闭合漏了真实ToolMessage caller的persist_canonical=False，原FIFO phase不在正常carrier持久化必经路。Sol同批在真实consumer/持rollout锁前补同phase，不把hook字段相符当真实路径证明，也不在会堵queued接受的锁内等待。首FIFO修复和同轮六focus仍待产品实跑，不能宣称050完成或整体提速。

@@ -36,6 +36,7 @@ class FastApiWebSocketTransport:
         try:
             return await self._websocket.receive_text()
         except WebSocketDisconnect:
+            self._closed = True
             return None
 
     async def close(self, *, code: int, reason: str) -> None:

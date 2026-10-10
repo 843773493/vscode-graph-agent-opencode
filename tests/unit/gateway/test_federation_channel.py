@@ -19,13 +19,17 @@ from typing import Self
 import pytest
 import uvicorn
 from fastapi import FastAPI
-from starlette.websockets import WebSocketDisconnect
+from starlette.websockets import WebSocket, WebSocketDisconnect
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
 from app.core.trace_middleware import reset_current_request_id, set_current_request_id
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation.dialer import HubDialRequest, dial_spoke_channel
+from app.gateway.federation.endpoint import (
+    FederationChannelServer,
+    serve_federation_channel,
+)
 from app.gateway.federation.errors import (
     CLOSE_CODE_POLICY_VIOLATION,
     CLOSE_CODE_PROTOCOL_ERROR,
@@ -84,6 +88,80 @@ pytestmark = pytest.mark.contract
 
 PORT_RANGE = (8790, 8799)
 CHAIN = ("gateway_origin", "gateway_hub", "gateway_spoke")
+
+
+@pytest.mark.asyncio
+async def test_hello_disconnect_does_not_send_a_second_asgi_close(
+    tmp_path: Path,
+) -> None:
+    credential_store = FederationCredentialStore(
+        storage_path=tmp_path / "credentials.json"
+    )
+    credential = credential_store.issue(
+        connection_id="connection_hub", peer_gateway_id="gateway_hub"
+    )
+    incoming = iter(
+        [
+            {"type": "websocket.connect"},
+            {"type": "websocket.disconnect", "code": 1000, "reason": ""},
+        ]
+    )
+    sent: list[dict[str, object]] = []
+
+    async def receive() -> dict[str, object]:
+        return next(incoming)
+
+    async def send(message: dict[str, object]) -> None:
+        sent.append(message)
+
+    async def on_channel_ready(session) -> None:
+        del session
+        raise AssertionError("hello 前断开不得登记 channel")
+
+    class Handler:
+        async def handle(
+            self,
+            *,
+            method: str,
+            request: dict[str, object],
+            session: object,
+            deadline_at: float | None,
+        ) -> dict[str, object]:
+            del method, request, session, deadline_at
+            raise AssertionError("hello 前断开不得处理 RPC")
+
+    websocket = WebSocket(
+        {
+            "type": "websocket",
+            "asgi": {"version": "3.0", "spec_version": "2.4"},
+            "http_version": "1.1",
+            "scheme": "ws",
+            "path": "/channel",
+            "raw_path": b"/channel",
+            "query_string": b"",
+            "headers": [
+                (b"x-boxteam-federation-token", credential.token.encode())
+            ],
+            "client": ("test", 1),
+            "server": ("test", 2),
+            "subprotocols": [],
+        },
+        receive,
+        send,
+    )
+    server = FederationChannelServer(
+        local_gateway_id="gateway_spoke",
+        gateway_root=tmp_path,
+        credential_store=credential_store,
+        handler=Handler(),
+        local_role="spoke",
+        on_channel_ready=on_channel_ready,
+        on_channel_closed=lambda channel_id: None,
+    )
+
+    await serve_federation_channel(websocket=websocket, server=server)
+
+    assert [message["type"] for message in sent] == ["websocket.accept"]
 
 
 @pytest.fixture(autouse=True)
@@ -493,6 +571,7 @@ async def test_missing_credential_is_closed_with_1008(tmp_path: Path) -> None:
             await asyncio.wait_for(websocket.recv(), timeout=5)
         assert error.value.rcvd is not None
         assert int(error.value.rcvd.code) == CLOSE_CODE_POLICY_VIOLATION
+        assert "federation-missing-credential" in error.value.rcvd.reason
 
 
 @pytest.mark.asyncio
@@ -520,6 +599,25 @@ async def test_hello_gateway_id_mismatch_is_closed_with_1008(tmp_path: Path) -> 
             await asyncio.wait_for(websocket.recv(), timeout=5)
         assert error.value.rcvd is not None
         assert int(error.value.rcvd.code) == CLOSE_CODE_POLICY_VIOLATION
+        assert "federation-unknown-peer" in error.value.rcvd.reason
+
+
+@pytest.mark.asyncio
+async def test_malformed_first_frame_is_closed_with_reason(tmp_path: Path) -> None:
+    async with _spoke_with_hub(
+        tmp_path, catalog=_Catalog({}), session_main=_SessionMain({}), role="spoke"
+    ) as (spoke, hub, _root):
+        websocket = await connect(
+            spoke.ws_url,
+            additional_headers={"X-BoxTeam-Federation-Token": _issue(spoke, hub=hub)},
+        )
+        await websocket.send("not-json")
+        with pytest.raises(ConnectionClosed) as error:
+            await asyncio.wait_for(websocket.recv(), timeout=5)
+        assert error.value.rcvd is not None
+        assert int(error.value.rcvd.code) == CLOSE_CODE_POLICY_VIOLATION
+        assert "federation-malformed-frame" in error.value.rcvd.reason
+        assert "JSON" in error.value.rcvd.reason
 
 
 @pytest.mark.asyncio

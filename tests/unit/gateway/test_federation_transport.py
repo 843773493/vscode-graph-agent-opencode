@@ -103,6 +103,49 @@ async def test_server_adapter_close_failure_does_not_mark_transport_closed() -> 
     assert websocket.close_calls == 2
 
 
+@pytest.mark.asyncio
+async def test_server_adapter_close_keeps_code_and_reason_when_connected() -> None:
+    from starlette.websockets import WebSocket
+
+    sent: list[dict[str, object]] = []
+
+    async def receive() -> dict[str, object]:
+        return {"type": "websocket.connect"}
+
+    async def send(message: dict[str, object]) -> None:
+        sent.append(message)
+
+    websocket = WebSocket(
+        {
+            "type": "websocket",
+            "asgi": {"version": "3.0", "spec_version": "2.4"},
+            "http_version": "1.1",
+            "scheme": "ws",
+            "path": "/channel",
+            "raw_path": b"/channel",
+            "query_string": b"",
+            "headers": [],
+            "client": ("test", 1),
+            "server": ("test", 2),
+            "subprotocols": [],
+        },
+        receive,
+        send,
+    )
+    await websocket.accept()
+    transport = FastApiWebSocketTransport(websocket)
+
+    await transport.close(code=1008, reason="federation-missing-credential: missing")
+    await transport.close(code=1008, reason="ignored duplicate")
+
+    assert sent[-1] == {
+        "type": "websocket.close",
+        "code": 1008,
+        "reason": "federation-missing-credential: missing",
+    }
+    assert sum(message["type"] == "websocket.close" for message in sent) == 1
+
+
 def _channel(transport: WebSocketsClientTransport) -> FederationChannelSession:
     class Handler:
         async def handle(self, *, method, request, session, deadline_at):

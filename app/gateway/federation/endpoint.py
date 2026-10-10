@@ -80,7 +80,9 @@ async def serve_federation_channel(
         logger.warning(
             "联邦 channel 握手失败: code=%s, reason=%s", error.code, error.message
         )
-        await websocket.close(code=1008, reason=f"{error.code}: {error.message}"[:120])
+        await transport.close(
+            code=1008, reason=f"{error.code}: {error.message}"[:120]
+        )
         return
     try:
         await server.on_channel_ready(session)
