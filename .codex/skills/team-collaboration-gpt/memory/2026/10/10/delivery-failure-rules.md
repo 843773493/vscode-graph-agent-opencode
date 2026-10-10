@@ -326,3 +326,11 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 072静态0及cwd/source断言通过，真实命令却缺唯一代码根PYTHONPATH，外置脚本在owner前ModuleNotFoundError(app)，actual1/内部15.743ms，无revision观察。保原件，主供072b完整env/保护命令一次修已知装配；不再让作者自行拼启动环境，效果待真实owner。072还违反禁Git执行ROOT裸status及rev-parse/show；074共享index字节改变但stage/flags逐字同，主保现场、核无Git进程/lock后23:40:00Z精确恢复原字节。无损不认可越界，自报status是刷新线索而非排他证明；收据shared-index074-incident/restore-receipt.json。
 
 050 core007虽已采用原owner具名focus，仍因同driver遗漏的history DTO断言actual1/132.183036s，未到A/F。选场景减少未变流程开销，不能替代全量核现行DTO及共同前置；同作者批量收齐，再集中调试，原失败保留，尚不宣称效率改善。
+
+072b导入已纠正，但4处log(kind,kind=...)观测代码冲突使首次enqueue前退出；076整体签名审查另确认原probe先等A终态而消除了full两页并发时序。修完整日志/时序闭包，不只改首个报错。主逐次限制单次短启动又造成微交接，纠正为同一短诊断批总300s/最多2次受保护调试、保存各attempt原件后一次STOP；原full仍禁止盲重跑。072c同批修后仅一次启动actual0/内部3.236s、547events，A/B目录12→13、listing均发布前读11；核source12不变、owned0。观测装配纠正已验证，原12→14冲突未复现，不据此判业务修复或无缺陷。下一077回原真实两页并发owner被动观察，不能用短probe代完整full。
+
+050 core008越过旧history getter后在正文logical_item_ordinal断言失败（actual1/154.668834s）。该字段已在公开DTO，真实read_turn_projections/mapper未传view membership坐标，内部执行还缺elapsed；不能按旧fixture错误处理或放松原语义。同作者一次迁完整SQL/mapper/DOM来源链，先定向核实际返回再产品。原008SQLite只读canonical probe actual0/1.691525s、5parts坐标齐/DB SHA不变，合法fixture修后boundary-history002三例actual0；009实际越过坐标。效果限该传递闭包，不称整场通过。004的2个新negative因domain/schema先拒而未到所测SQL边界，显式损坏注入修正后005六例过；43原stream/event已过，只限具名核心，不代表A/F产品恢复。
+
+077静态阶段wrapper的__call__缩进错尚未运行测试，又误将禁用的git status --short混入并行命令。已有禁令与主提供index仍未阻止模板误用；禁Git作者在调用工具前删除状态查询模板，不用“只读”豁免。主保ROOT/NWT index现场，ROOT共享原SHA未变、无lock/ROOT.boxteam；未取得NWT逐次preimage不声称其无变化。不把静态失败计actual测试attempt，也不据无损认可越界。test wrapper同批收齐后才开始原受保护focus，效果待交。
+
+050 core009 actual1/187.957914s，child创建及正文坐标已越过，但completeOwnerTurn→verifyOwnerTurns刷新后等待父Session导航按钮30s超时。原raw/receipt已主核且原PID退出；此时尚未确证页面初始化、权威目录、虚拟化selector或业务Session缺失原因，不能先改生产或换目标求绿。Sol同批按真实HTTP/DOM现场定位，旧失败保字节，不新增逐微修冻结门；完整A–S产品仍未通过。

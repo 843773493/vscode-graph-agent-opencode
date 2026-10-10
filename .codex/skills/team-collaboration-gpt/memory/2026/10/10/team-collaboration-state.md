@@ -6,10 +6,10 @@
 
 | Agent | 实际模型 | 当前任务 |
 |---|---|---|
-| `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **050 active/ROOT唯一核心作者**：Section8必要生产/调用/fixture/E2E完整闭包一次收齐，正在现有copy/attachment owner的capture→claim→settlement→恢复/删除协议；不微交接、不跑半成品矩阵 |
+| `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **050 active/ROOT唯一核心作者**：Section8完整闭包；009越过历史坐标后在刷新父Session导航超时，按原现场定位并同批修齐，A–S仍待 |
 | `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **067/068 STOP/撤写入与运行权**：重复路径漂移，protected命令在owner初始化前actual1/8.08s；STOP收据已核，进程0，误建空目录已撤 |
-| `/root/a06_navigation_independent` | `gpt-6-luna/max` | **072 STOP；072b active/已知启动修正**：072因缺PYTHONPATH在owner前退出；主提供完整env/保护命令，复用同fixture一次真实短观察；源码/Git只读限制继续 |
-| `/root/a06_architecture_final` | `gpt-6-luna/max` | **063/065/069/069b/073 STOP/常驻独审**：恢复规范增审无新finding；原5artifact已澄清，不代050真实恢复 |
+| `/root/a06_navigation_independent` | `gpt-6-luna/max` | **072c STOP；077 active**：NWT三测试消费者可选原两页并发focus与被动signature/revision观察；静态缩进修订中，尚未启动测试。生产只读、禁Git，最多2次protected focus，无full授权 |
+| `/root/a06_architecture_final` | `gpt-6-luna/max` | **073/076 STOP/常驻独审**：恢复规范无新finding；076确定探针4处kind冲突和串行时序差异，未判产品根因 |
 | `/root/caller_inventory013` | `gpt-6-luna/max` | **062 STOP**：原full actual1/588.85s，300串行完成、pair5版本冲突/Gateway0；误选旧JSON已另correction001，未重跑 |
 
 至少3常驻、最多15活动；闲置不制造任务。主统一调度、禁派生；主维护规范/技能、机械固定与串行集成，不手写业务源码。Luna只隔离小修/独审/验收；37mixin与平行状态表不能据结构风险派大型改造。
@@ -19,7 +19,7 @@
 - ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧`/data/hyf/20260629_agent/vscode-graph-agent-opencode`为软链接。
 - T=ROOT/out/tests/temp/2026/10/04/024121-team-execution；A=T/coordinator/artifacts/sol-efficiency-trial；RV=ROOT/out/tests/temp/2026/10/09/a06-final-review。
 - NWT=ROOT/out/worktrees/2026/10/09/a06-final-review/navigation-fixture-receipt，仅此活跃代码worktree。禁/tmp、整仓复制、新venv、历史排除业务工作区、源码根注册测试业务工作区。
-- 恢复核实际HEAD；最近已核文档提交`d8fb9eb3862b1166c4abda4c9543246555228325`。最近源码集成`375600b2936aaeb819533354f050fc1d947d5769`；ROOT当前050源码在途，未固定/未接受。
+- 恢复核实际HEAD；最近已核文档提交`18eb684ec56d8d544ef9f2cd9361dc50c282e439`（075，parent d8fb9eb3）。最近源码集成`375600b2936aaeb819533354f050fc1d947d5769`；ROOT当前050源码在途，未固定/未接受。
 - 共享`.git/index` SHA=`4ea3d8d2b20107d2153748714d659e2a1c982039edd2d848a72fdb3d07049958`，保原字节；禁止裸Git/index写入、reset/rebase/amend/清暂存。主每次fresh私有index从当前HEAD读树，只灌固定blob/精确路径，strict重建及guard record→commit→verify0。作者/当前审查者禁全部Git操作。
 - 官方dev停止；不改全局配置、不按端口杀未知服务。Python显式ROOT/.venv、UV_PROJECT_ENVIRONMENT、UV_NO_SYNC=1、uv run --no-sync、唯一所属代码根PYTHONPATH、PYTHONDONTWRITEBYTECODE=1；任何测试/探针timeout＋ulimit-d4194304。
 - NWT正式测试workspace/日志在NWT/out/tests/integration/clients/web/test_navigation_mutation_measurements/；055 alias已owned0后撤。060 alias已owned0后撤；062 short alias已owned0后撤。050 alias `ROOT/out/.section8-050-tmp`→ROOT/out/tests/e2e/clients/web/test_basic_chat_tool_loop/runtime/test-control/tmp。仅owned0后核target并unlink；正式输出保留。
@@ -29,6 +29,8 @@
 恢复066主误用裸status刷新共享index的stat缓存，已保现场、机器核stage/flags完全相同后恢复原字节；收据`RV/coordinator/artifacts/recovery-index066-incident/receipt.json`。不据无损认可越界，不追加同义禁令。062 short alias已核owned0后撤。
 
 074又出现共享index字节变化；072作者自报ROOT裸status及直接rev-parse/show。主保现场、机器核stage/flags逐字相同且无Git进程/lock，于23:40:00Z精确恢复上述原SHA；收据`RV/coordinator/artifacts/shared-index074-incident/restore-receipt.json`。未改暂存语义或源码，不将自报线索写成排他归因。禁Git租约继续；后续执行完整主供命令，不能靠“只读”措辞豁免。
+
+077作者自报又将`git status --short`混入静态并行命令。主00:11:54Z核ROOT共享index仍上述SHA、无lock/ROOT.boxteam；NWT现场index SHA=`63aafc313e8cbeb6f7dbd00943293cb2935bc6097801944a814856adbc76bed2`。收据`RV/coordinator/artifacts/navigation077-git-query-incident/observation.json`；无NWT逐次preimage就不声称无变化。全禁Git不是只禁写命令，作者需交工具原上下文，不手造时刻。
 
 ## 050核心批
 
@@ -61,6 +63,10 @@ lease/report根=`RV/sol_vertical_implementer/artifacts/section8-product050-full-
 062原full actual1/pytest588.85s/wrapper591.961345s，300串行完成，第5对`concurrent_b_5.txt`的`op_bbd12381c6dc4531b83237c4825673e5`被拒：directory revision expected12/actual14、effect=none；Gateway0，无本次成功measurements，不能完整分类门。17前后同、owned0/alias撤。作者误把旧060 `measurements.json`（273577bytes）另存失败JSON；主唯一固定真实24,401,400bytes/SHA `cee093256f451146460b4dd066052e671aa10fba867a82342cd113c986b82086`于`RV/coordinator/artifacts/navigation062-provenance/failed-measurements-current062.json`。原report保字节，correction001 SHA0eaa5ff8已核，不重跑补证。064 ART=`RV/a06_navigation_independent/artifacts/navigation062-conflict064-review/`，index=`RV/a06_navigation_independent/git/navigation062-conflict064-review.idx`，index主init d339；只核真实失败/18报文/10固定生产callee及060四源，已STOP，report SHAee3f44ee；B依赖声明合法，staging登记/创建及删除/done顺序均按签名过滤；没有两次revision变化的观察输入，不确证根因。禁止改accepted payload、拿当前revision补缺或新全局CAS；核心finding交Sol自然边界。
 
 067短观察由原Luna作者执行，ART=`RV/candidate_boundary_reviewer/artifacts/navigation-conflict067-short-observation/`，index同名已init d339；NWT只读，业务workspace显式`RV/candidate_boundary_reviewer/workspace/`。仅ART脚本/原raw/actual/report，可读固定owner及真实unit fixture；最多一次protected300s、不启动Web/Provider/dev、不改生产/CAS/accepted payload、不盲重跑full。真实observe输入wrapper只记录、不伪造业务事实；核心finding交Sol自然边界。
+
+072c已STOP：日志/时序同批修后仅一次protected启动，actual0/内部3236.350793ms、547events、两操作committed目录12→13；两并发listing均在发布前读取11，未复现原12→14冲突。12source前后同、owned0，probe临时业务数据已清，fixture源保留。主核`RV/coordinator/artifacts/navigation072c-observation-check/receipt.json`；只证明观测链可用，不证明原生产修复或无缺陷。
+
+077租约：workdir=NWT；ART=`RV/a06_navigation_independent/artifacts/navigation077-real-concurrent-observation/`；index=`RV/a06_navigation_independent/git/navigation077-real-concurrent-observation.idx`，主init固定d339。仅可写`tests/integration/clients/web/{navigation_measurement_app.py,navigation_mutation_measurements.mjs,test_navigation_mutation_measurements.py}`，生产只读。可选`BOXTEAM_NAVIGATION_FOCUS=concurrent`复用原owner跑10pair/20两页Promise.all动作，空值保完整原矩阵/统计/门；不当完整性能验收。backend有界内存被动记录真实scan成员/signature、store.observe前后revision与stage/op，经既有test wrapper endpoint取回，不新增业务扫描/observe/SQL或锁内日志I/O。正式workspace/产物仍NWT镜像输出路径，短TMPDIR别名指向其runtime/test-control/tmp，owned0后才撤。Ruff＋MJS parse-only后最多2次protected240s focus；各attempt机器raw/actual/source/argv/time/PID，不授权full、不改accepted payload/当前revision求绿。严重核心finding交主→Sol自然边界。
 
 ## 已接受实现与余下原门
 
@@ -97,10 +103,12 @@ A/current-recovery-receipt.json只读当前具名键/historical_receipts，不�
 
 本页压缩前完整状态与SHA保`RV/coordinator/artifacts/current-state-compaction055/{state-before.md,receipt.json}`；更早快照`RV/coordinator/artifacts/current-state-compaction014/`。当前只维护10/10一份memory；旧过程按A具名收据恢复，不重新累积长历史。
 
-最新050：E双真实child/team、queued-active、turn/model_call冻结、cold与跨Session负向断言已写，尚未跑到E。core006 actual1/169.639695s，baseline两轮通过，扩展PageDTO旧断言失败；core007已选原owner具名focus，actual1/132.183036s，仍在history旧DTO断言退出，未到A/F。raw/receipt保ART/core-web-007*；同作者正在一次清理Page/TurnDetail/entry/envelope全部同类合同。A/F已开始实现：startup inspector只读证明完整typed projection group、commit/owner/sealed hash且无terminal convergence；精确GraphBinding与公开aget_state.next=('tools',)由StepRunner既有durable admission执行owner在None输入前核验。canonical去重沿原typed owner，缺证仍execution_lost；尚无恢复实测。B/D/I/J/K/L/M/O/P/Q/R/S故障/竞争/negative仍待实现，weekly/copy/pinned/compaction未实跑。先收齐生产/driver/fixture共同前置，再在唯一owner选受影响入口集中调试，按实际依赖复用未变基础流程，保原A–S。
+最新050：Edriver已写但尚未通过；006/007分别actual1/169.639695s、132.183036s，旧Page/Turn getter已修（TurnDetail只有session_id，thread归Page/内部execution，未新增DTO字段）。A/F原checkpoint/None接线已写；004 actual1/28.103s，43受影响stream/event过，2新negative被schema先拒；显式SQL损坏注入修合法前提后005 actual0/11.264s、seal/commit6例全过（与004重叠，不累加）。008六focus跳过未变基础，actual1/154.668834s，assertTurnDom缺logical_item_ordinal。现有DTO有字段但SQL/mapper漏当前view membership，standalone internal缺elapsed；同作者同批收齐。`history-core008-canonical-001` actual0/1.691525s，原008SQLite只读返回5parts完整坐标且DB SHA不变；`boundary-history-002` actual0/6.755733s、3pass，覆盖真实view/hidden/compaction（与001重叠）。009 actual1/187.957914s，越过坐标，在child→completeOwnerTurn→verifyOwnerTurns刷新后selectSession父会话导航按钮30s超时；主核raw/receipt及原PID退出，收据`RV/coordinator/artifacts/section8-050-core009-check/receipt.json`。同作者按原HTTP/DOM现场定位，共同闭包同批修，不再跑未变基础两轮。A/F/E仍无新增产品通过，B/D/I/J/K/L/M/O/P/Q/R/S及weekly/copy/pinned/compaction待收齐；保原全部A–S，不逐字段冻结。
+
+context079已交原作者：从已提交d8 tasks提取原8.1-G/H、8.3-E、8.13 A–S、8.14及ToolSet/root-placement到050 ART/context079/original-tasks-section8.txt；24308bytes/SHA=`15fee9d79fbae07d3e328dbb117326bd773c0eb2d7ecf5432694c78402f8d750`，receipt同目录。补恢复丢失的原需求，不新增门，不凭摘要漏验收。
 
 067 report/lease原字节保，未启动探针/进程/workspace；068 ART/index同agent同名`navigation-conflict068-short-observation`，主init d339、新增workspace_service.py固定24968bytes与NWT同。23:16:32Z仍未启动：probe误写NWT相对ART、裸python不存在、包装漏精确exit；作者如实纠正。唯一脚本迁到分配ROOT绝对ART后修同loop/静态0，但23:28:09Z protected命令又在ROOT cwd运行，8.08s actual1/source_hashes失败，owner尚未初始化、无actual.json。config_service.py在ROOT/NWT均不存在（实际package），仅改cwd仍无法执行；不能把装配失败归生产。主中断并沿既有规则撤本批脚本写入/测试权、核probe进程0，固定15200bytes/SHA`99800a71623e38319082875527eeb455592b25b6c780c491c27cb6cc8df98aa7`交072；保原raw/receipt，不追加同义禁令、不复制workspace。短STOP收据待收。
 
 069 ART/index同原架构reviewer同名`section8-recovery069-contract`；主init410，固定三spec390922bytes/manifest，主逐SHA核report`1bb96ef7`；因A/F在tasks而非spec，主补同410完整tasks281245bytes/SHA0424ad31，069b另addendum不改原report。两次均STOP；边界原文不精确，不能据此直接判候选违规。主已澄清原5artifact：可证明完整模型projection group、sealed request及精确GraphBinding/唯一pending幂等send/read/wait且尚无terminal convergence才能续接原checkpoint＋None；cold/startup只读不编译graph，最终校验由已有执行owner承接；缺证/外部副作用/已有lost终止，显式resume创建新execution。strict0，不勾A/F，不代真实恢复。
 
-072 ART/index同navigation reviewer同名`navigation-conflict072-short-observation`；主init d339；business workspace复用`RV/candidate_boundary_reviewer/workspace/`，NWT只读。072 actual1/内部15.743ms，ModuleNotFoundError(app)，owner未初始化、无raw；12源前后同，report SHA0be55319、probe SHA6fbf2119，保原件，不能记revision结论。072b只修完整启动环境，原件移本ART/attempt001-import-failure/，主供显式workdir/ROOT venv/唯一NWT PYTHONPATH/私有index env/timeout300/ulimit命令。最多一次真实owner；无复现或仍装配失败即STOP，不循环full；finding交Sol自然边界。
+072 ART/index同navigation reviewer同名`navigation-conflict072-short-observation`；主init d339；business workspace复用`RV/candidate_boundary_reviewer/workspace/`，NWT只读。072 actual1/内部15.743ms，ModuleNotFoundError(app)，owner未初始化，原件保attempt001-import-failure/。072b完整主供env纠正导入，actual1/内部4067.702ms，真实owner启动后log(kind,kind=...)冲突，第一项未入队；仅空目录signature/rev1，无A/B，原件保attempt002-pythonpath/，12源前后与当前NWT同、owned0。076固定probe SHA6fbf2119，report SHAaf1aaf10，核另外prepare/stage/publish同类冲突，以及原probe等A终态后B而full两页Promise.all；主核收据navigation076-source-check/receipt.json保归档映射，不改原report。072c同批修完整日志字段及立即依赖B、并发真实list_files；总300s/最多2次protected短调试，不逐报错微交接，保每次raw/actual/SHA，运行前只清确证本probe生成的数据。true finding或未复现整体STOP，核心finding交Sol自然边界；不重跑full、不改payload/业务锁/CAS。
