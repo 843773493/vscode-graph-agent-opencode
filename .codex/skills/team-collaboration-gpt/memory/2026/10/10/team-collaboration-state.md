@@ -2,14 +2,24 @@
 
 原goal **active、未完成**。模型/边界见[技能入口](../../../../SKILL.md)，路径/Git见[共同流程](team-collaboration-workflow.md)，事故按关键词读[失败细则](delivery-failure-rules.md)。只恢复本页当前租约与具名收据；旧过程保存在下方历史入口，不重新展开全部历史。
 
+## 当前恢复坐标（2026-10-10 03:00 UTC后）
+
+- 本批文档集成前HEAD=`b9f83e06887eb8377dcf1dead2c3471cbb133536`；050核心ROOT在途，未STOP/固定/接受。主本批仅固定技能、流程、台账、失败细则与运行脚本，不纳作者live源码。
+- 固定runner已有真实050收据：identity-boundary001 41pass（pytest305.609s/wrapper331.078s）、identity-web-boundary002 33pass、types003/build001/driver003 actual0；主核raw SHA。仅具名身份/SQL history/消费者边界，不替代原A–S。
+- core012 actual1/wrapper225.527741s、pytest173.72s：fixture19000后端60s未就绪，driver未进入、owned group0。原件`RV/sol_vertical_implementer/artifacts/section8-product050-full-closure/runs/core-web-012/`；formal旧011结果不可归012。现有stderr含LiteLLM model-cost-map SSL timeout，不能据一条日志认定唯一根因。086只读诊断限5分钟，Sol同时盘原8.14实际compile/acquire实例观察闭包，暂不另起长run。
+- 083 correction001已补full/focus actions producer、失败保留完成侧与原error，保原规模/门；主核两个静态runner actual0，live Python SHA为`a10498152c27046d1defdbd37afa07a3aab58c5a616a63ded8e737305fc143f8`（消息f340为不符，按机器原件）。尚未跑原full，不宣称race已修。20依赖已并入profile，focus明确空、trace=concurrent；等唯一重测试窗口。
+- 085 runner中断修订SIGTERM实测actual-15/tool143/owned0；Git禁令为任务边界，非沙箱，其它环境有意继承。已过未变产品项不重跑。
+- 共享index曾反复仅stat字节刷新，stage/blob/flags与原件逐字同；主保每次preimage并核语义，记录缓存hash，不再恢复循环，不归因未知触发者。主所有Git仍显式私有index；真实暂存变化停集成。
+- 077/081既有固定与有限20op通过保持，原full导航10.4b/10.4c/10.8未闭合；旧详细原件按具名任务读，不重做泛查。所有七change收口和原goal仍未完成。
+
 ## 当前队伍
 
 | Agent | 实际模型 | 当前任务 |
 |---|---|---|
-| `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **050 active/ROOT唯一核心作者**：Section8完整闭包；009越过历史坐标后在刷新父Session导航超时，按原现场定位并同批修齐，A–S仍待 |
+| `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **050 active/ROOT唯一核心作者**：身份/locator/DTO消费者边界已过；012启动失败未进入driver，继续原8.14实例证据闭包，A–S仍待 |
 | `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **067/068 STOP/撤写入与运行权**：重复路径漂移，protected命令在owner初始化前actual1/8.08s；STOP收据已核，进程0，误建空目录已撤 |
-| `/root/a06_navigation_independent` | `gpt-6-luna/max` | **072c STOP；077 active**：NWT三测试消费者可选原两页并发focus与被动signature/revision观察；静态缩进修订中，尚未启动测试。生产只读、禁Git，最多2次protected focus，无full授权 |
-| `/root/a06_architecture_final` | `gpt-6-luna/max` | **073/076 STOP/常驻独审**：恢复规范无新finding；076确定探针4处kind冲突和串行时序差异，未判产品根因 |
+| `/root/a06_navigation_independent` | `gpt-6-luna/max` | **077 STOP固定/081增审；083 active**：NWT三测试消费者恢复200目录/120sources、trace与focus解耦；生产只读/禁Git，暂无测试服务权，完整运行等资源窗口 |
+| `/root/a06_architecture_final` | `gpt-6-luna/max` | **086 active/常驻只读**：仅核012启动raw与必要启动callee，限5分钟；不修改Sol源码、不启动服务/网络 |
 | `/root/caller_inventory013` | `gpt-6-luna/max` | **062 STOP**：原full actual1/588.85s，300串行完成、pair5版本冲突/Gateway0；误选旧JSON已另correction001，未重跑 |
 
 至少3常驻、最多15活动；闲置不制造任务。主统一调度、禁派生；主维护规范/技能、机械固定与串行集成，不手写业务源码。Luna只隔离小修/独审/验收；37mixin与平行状态表不能据结构风险派大型改造。
@@ -19,8 +29,8 @@
 - ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧`/data/hyf/20260629_agent/vscode-graph-agent-opencode`为软链接。
 - T=ROOT/out/tests/temp/2026/10/04/024121-team-execution；A=T/coordinator/artifacts/sol-efficiency-trial；RV=ROOT/out/tests/temp/2026/10/09/a06-final-review。
 - NWT=ROOT/out/worktrees/2026/10/09/a06-final-review/navigation-fixture-receipt，仅此活跃代码worktree。禁/tmp、整仓复制、新venv、历史排除业务工作区、源码根注册测试业务工作区。
-- 恢复核实际HEAD；最近已核文档提交`18eb684ec56d8d544ef9f2cd9361dc50c282e439`（075，parent d8fb9eb3）。最近源码集成`375600b2936aaeb819533354f050fc1d947d5769`；ROOT当前050源码在途，未固定/未接受。
-- 共享`.git/index` SHA=`4ea3d8d2b20107d2153748714d659e2a1c982039edd2d848a72fdb3d07049958`，保原字节；禁止裸Git/index写入、reset/rebase/amend/清暂存。主每次fresh私有index从当前HEAD读树，只灌固定blob/精确路径，strict重建及guard record→commit→verify0。作者/当前审查者禁全部Git操作。
+- 恢复核实际HEAD；本次文档集成前HEAD=`b9f83e06887eb8377dcf1dead2c3471cbb133536`（080，parent18eb684e）。最近源码集成`375600b2936aaeb819533354f050fc1d947d5769`；ROOT当前050源码在途，未固定/未接受。
+- 共享`.git/index`历史备份SHA=`4ea3d8d2b20107d2153748714d659e2a1c982039edd2d848a72fdb3d07049958`；当前缓存观察SHA见本轮收据，保护stage/blob/flags暂存语义，不循环恢复纯stat缓存；禁止裸Git/index写入、reset/rebase/amend/清暂存。主每次fresh私有index从当前HEAD读树，只灌固定blob/精确路径，strict重建及guard record→commit→verify0。作者/当前审查者禁全部Git操作。
 - 官方dev停止；不改全局配置、不按端口杀未知服务。Python显式ROOT/.venv、UV_PROJECT_ENVIRONMENT、UV_NO_SYNC=1、uv run --no-sync、唯一所属代码根PYTHONPATH、PYTHONDONTWRITEBYTECODE=1；任何测试/探针timeout＋ulimit-d4194304。
 - NWT正式测试workspace/日志在NWT/out/tests/integration/clients/web/test_navigation_mutation_measurements/；055 alias已owned0后撤。060 alias已owned0后撤；062 short alias已owned0后撤。050 alias `ROOT/out/.section8-050-tmp`→ROOT/out/tests/e2e/clients/web/test_basic_chat_tool_loop/runtime/test-control/tmp。仅owned0后核target并unlink；正式输出保留。
 - 七保护路径沿已接受HEAD：`app/domain/itemized/request_plan.py`；`app/gateway/federation/{channel,transport,rpc}.py`；`tests/unit/gateway/{test_federation_channel_engine.py,test_federation_transport.py,federation/test_rpc_close_cleanup.py}`。032的channel response-error窄例外已接受；不开放其它片段。
@@ -112,3 +122,17 @@ context079已交原作者：从已提交d8 tasks提取原8.1-G/H、8.3-E、8.13 
 069 ART/index同原架构reviewer同名`section8-recovery069-contract`；主init410，固定三spec390922bytes/manifest，主逐SHA核report`1bb96ef7`；因A/F在tasks而非spec，主补同410完整tasks281245bytes/SHA0424ad31，069b另addendum不改原report。两次均STOP；边界原文不精确，不能据此直接判候选违规。主已澄清原5artifact：可证明完整模型projection group、sealed request及精确GraphBinding/唯一pending幂等send/read/wait且尚无terminal convergence才能续接原checkpoint＋None；cold/startup只读不编译graph，最终校验由已有执行owner承接；缺证/外部副作用/已有lost终止，显式resume创建新execution。strict0，不勾A/F，不代真实恢复。
 
 072 ART/index同navigation reviewer同名`navigation-conflict072-short-observation`；主init d339；business workspace复用`RV/candidate_boundary_reviewer/workspace/`，NWT只读。072 actual1/内部15.743ms，ModuleNotFoundError(app)，owner未初始化，原件保attempt001-import-failure/。072b完整主供env纠正导入，actual1/内部4067.702ms，真实owner启动后log(kind,kind=...)冲突，第一项未入队；仅空目录signature/rev1，无A/B，原件保attempt002-pythonpath/，12源前后与当前NWT同、owned0。076固定probe SHA6fbf2119，report SHAaf1aaf10，核另外prepare/stage/publish同类冲突，以及原probe等A终态后B而full两页Promise.all；主核收据navigation076-source-check/receipt.json保归档映射，不改原report。072c同批修完整日志字段及立即依赖B、并发真实list_files；总300s/最多2次protected短调试，不逐报错微交接，保每次raw/actual/SHA，运行前只清确证本probe生成的数据。true finding或未复现整体STOP，核心finding交Sol自然边界；不重跑full、不改payload/业务锁/CAS。
+
+
+用户最新效率调整已执行：新增固定runner `scripts/run_task.py`（技能内），ROOT/.venv/bin/python可从任意cwd启动；050/083 profile已分配，原env/正式fixture合同不变。主实测normal0、故意failure7、timeout124、重复attempt拒绝且原结果字节不变；不据探针绿声明产品验收。原件目录ART/runs/<attempt>，主直接引用。取消禁Git成员逐任务index初始化，并删共同流程矛盾要求；050仍同Sol完整批，082提前发现replay运行时必填identity漏校与generic admission缺真实Turn↔Job关联，已同批交作者，未完成修订验收。效率工作贯穿goal，按实际失败阶段/返工/重复运行及主补救核效果，不另造总结文档。
+
+
+当前共享index缓存字节又返回444d9bc1而stage/flags仍与原4ea3一致。此前082精确恢复仅代表当时，不能反复复原元数据循环；主以后保每次preimage、核stage/flags语义不变再集成，缓存hash变化具名记录，真正暂存变化停集成。触发者仍未知。新runner已经在050真实静态中使用：Python/driver/Webbuild0，types2须原作者修，少量schema/history边界在途；不只靠smoke声称有效，也不把build绿当产品绿。
+
+
+085固定runner独审：确认spawn与wait之间抛中断可绕清理的静态finding，主统一signal handler/生命周期finally后实测SIGTERM：actual-15、tool143、signal15、owned group0。unused forbidden_git字段已删；Git禁令是任务授权边界，runner不宣称沙箱。其它环境有意继承，只固定约定变量；报告原件保留、主followup在current-docs084-evidence-update/runner085-followup.json。不因此重跑已过产品子项。
+
+083完整三消费者主早审发现确定缺口：full Python新读20个actions，但MJS仍仅focus填actions，默认full必在长矩阵末失败。已在任何测试启动前交原Luna同批迁producer/consumer，不为单行修再建索引/微门；原report保留，新版本另存，真实效率收益目前只证明避免启动这个坏候选，不倒填节省秒数。
+
+
+050固定runner真实使用效果：identity-boundary001 actual0/305.609s/41pass，identity-web-boundary002 actual0/33pass，types003/build001/driver003实际0；主逐raw SHA与result核原件。只覆盖本次DTO/authority Job/SQL history/consumer边界，不替代原A–S。core-web012六focus已唯一启动，handle64313、主核started PID/start ticks live一致；ART/runs/core-web-012终态尚待。新source fingerprints由run直接落盘，无重复源码/业务workspace副本。完整批仍活跃，不整体冻结。

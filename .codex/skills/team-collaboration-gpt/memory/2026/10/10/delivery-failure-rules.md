@@ -334,3 +334,22 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 077静态阶段wrapper的__call__缩进错尚未运行测试，又误将禁用的git status --short混入并行命令。已有禁令与主提供index仍未阻止模板误用；禁Git作者在调用工具前删除状态查询模板，不用“只读”豁免。主保ROOT/NWT index现场，ROOT共享原SHA未变、无lock/ROOT.boxteam；未取得NWT逐次preimage不声称其无变化。不把静态失败计actual测试attempt，也不据无损认可越界。test wrapper同批收齐后才开始原受保护focus，效果待交。
 
 050 core009 actual1/187.957914s，child创建及正文坐标已越过，但completeOwnerTurn→verifyOwnerTurns刷新后等待父Session导航按钮30s超时。原raw/receipt已主核且原PID退出；此时尚未确证页面初始化、权威目录、虚拟化selector或业务Session缺失原因，不能先改生产或换目标求绿。Sol同批按真实HTTP/DOM现场定位，旧失败保字节，不新增逐微修冻结门；完整A–S产品仍未通过。
+
+
+050 core010实际1/134.768s：共享`.chat-turn`选择器把standalone internal误算为Turn，列表出现null。同作者核真实对象来源、active reload和Virtuoso完整消费者，不以过滤null掩盖错误，也不把可选诊断新增为门。tsc002/36个受影响边界/Webbuild001实际0；core011越过该阶段后又暴露external read_sql按旧`threads/{id}`拼接。它与DTO旧Turn=Job alias都属未迁齐的真实消费者共同前置，catalog locator和authority Job须同作者批量贯穿生产、driver和fixture；本次仅静态/受影响边界已过，产品及完整A–S仍未通过。
+
+077真实两页focus actual0/pytest59.40s、20operation均committed/complete，revision1→21单步；但fixture仅d000，不含原200目录/120sources，且trace跟focus开关绑定，默认full仍不能解释062 expected12/actual14。诊断必须保留原背景规模，观测开关独立于场景缩减，并保存失败trace/原error；083整批迁三测试消费者，修法效果尚未实跑，不宣称race已修或不存在。077又复制整workspace/artifacts；主核owned0后清可复现副本70,765,574bytes及重复输出31,504,342bytes，只移动独有旧raw，formal保留。新派单明确无需备份整树，以固定必要raw继续。
+
+082恢复共享index又仅stat相关字节漂移，stage/flags与原备份逐字同；主保现场、核无lock/相关Git进程后恢复原字节，触发者未知。没有本次作者命令证据，不把历史违规写成当前排他原因；沿原私有index/all-Git-ban规则执行，不再新增同义禁令。
+
+
+用户指出禁Git任务仍逐任务初始化索引、反复拼cwd/env/保护和复制raw无实际收益。主落实固定profile＋runner、exclusive attempt目录和actual透传，禁Git成员不再新建索引；固定与集成仍主私有index。runner故意失败/超时/重复名实测7/124/拒覆盖，normal0；050/083后续真实任务效果待验，不以多写禁令替代执行入口。082短审给出早期消费者finding后继续扩大live读取，超过约3分钟并用不存在的全局python校验JSON；主及时STOP并用ROOT venv核报告0，将两具名发现并入Sol已有闭包。时间盒用于及时交行动结论，不让格式校验成为新微门。
+
+
+084主两次集成准备被共享index缓存hash断言拦截；stage/flags始终逐字同，先前恢复的原字节又被未知观察者刷新。反复恢复仅stat缓存没有保护业务收益。主保现场后改为核stage/blob/flags语义、记录元数据hash，不再循环复原；所有主Git仍私有index，真实暂存变化仍停集成。新方法对本次文档提交效果待实测，不能据无语义变化归因某agent。
+
+
+083trace独立后漏迁actions producer：Python default full要求20个op，MJS却仍只在focus填actions。主固定三消费者diff提前发现，未运行坏候选，交原作者同批核全输出闭包；实际修法待验，不捏造节省时间。085确认runner抛中断的保护窗口遗漏；统一不抛signal记录/转发和spawn后finally后，SIGTERM探针actual-15/tool143、owned0。另两意见涉及未承诺的完全环境隔离和Git沙箱，删无用forbidden_git字段、明确只固定任务变量，不新增环境框架或命令过滤伪沙箱。
+
+
+012固定runner保存真实actual1/225.528s与原raw，fixture19000未就绪、driver未进；formal目录仍留旧011结果。只按本attempt判定，不复制旧结果或重启求绿；已有启动stderr仅证明LiteLLM成本表SSL超时，唯一根因尚未确认。短只读诊断与Sol原8.14独立实现并行，效果待下次真实入口；不把启动失败计为业务验证失败。
