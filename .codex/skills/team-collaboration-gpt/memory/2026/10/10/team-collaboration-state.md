@@ -4,20 +4,21 @@
 
 ## 当前坐标与队伍
 
-- ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧`/data/hyf/20260629_agent/vscode-graph-agent-opencode`为软链接。最近技能四路径集成`4d325cab02ea9ff9619db6f22a58a4f33dc4b961`（parent170bbb8b），strict/guard/共享暂存语义均同；最近业务源码接受为`375600b2936aaeb819533354f050fc1d947d5769`；导航五测试路径已接受`15ee9cfef86feda631501bec38e49a137d56b5e9`（parent4d325cab/tree a65b50fc）。当前 ROOT 050 大量源码在途，不能整体 add/覆盖；112 runner及本轮协作文档集成状态见`RV/coordinator/artifacts/efficiency114-skill-batch/receipt.json`。
+- ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧`/data/hyf/20260629_agent/vscode-graph-agent-opencode`为软链接。当前HEAD=`f3de74a7f60d6920478dc5aadce02f218acc55e8`，本轮协作runner/技能/三memory及task10.4b六路径集中集成（parent15ee9cfe），strict/guard/共享index字节同；最近业务源码接受为`375600b2936aaeb819533354f050fc1d947d5769`；导航五测试路径已接受`15ee9cfef86feda631501bec38e49a137d56b5e9`（parent4d325cab/tree a65b50fc）。当前 ROOT 050 大量源码在途，不能整体 add/覆盖；112 runner及本轮协作文档集成状态见`RV/coordinator/artifacts/efficiency114-skill-batch/receipt.json`。
 - RV=ROOT/out/tests/temp/2026/10/09/a06-final-review；T=ROOT/out/tests/temp/2026/10/04/024121-team-execution；A=T/coordinator/artifacts/sol-efficiency-trial。NWT=ROOT/out/worktrees/2026/10/09/a06-final-review/navigation-fixture-receipt，为唯一活跃代码 worktree。
 - ART050=RV/sol_vertical_implementer/artifacts/section8-product050-full-closure；ART083=RV/a06_navigation_independent/artifacts/navigation083-full-background-trace；ART089=RV/caller_inventory013/artifacts/navigation089-auth-diagnostic；本轮主核收据=RV/coordinator/artifacts/efficiency090-continuation。
 
 | Agent | 实际模型 | 当前租约 |
 |---|---|---|
-| `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **050 active/ROOT唯一核心作者**：L durable release/schema15和source lease生产caller同批补齐，static005后defaults/cold/L回归→原六focus；111已终态释放重测试窗口，未STOP |
+| `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **050 active/ROOT唯一核心作者**：共用sealed dispatch fixture完整迁齐，代表transport原node已绿；继续L capture/产品driver，重测试短窗口交115导航独验，未STOP |
 | `/root/caller_inventory013` | `gpt-6-luna/max` | **101 STOP/撤作者与运行权**：再次使用裸Git模板，主中断并保现场；两文件仍同097、无独有源码，不再恢复作者租约；仅固定原件只读 |
-| `/root/navigation_evidence103` | 创建参数`gpt-6-luna/max` | **109 STOP/NWT两测量源**：删除probe/额外CDP，拒绝ring带联合身份/浏览器时钟；两纯解析0/21源同/raw主核，110增审通过，111在途 |
-| `/root/a06_architecture_final` | `gpt-6-luna/max` | **112 STOP/只读常驻**：110导航增审无finding/report SHA c8046eaa；112固定runner启动前基线检查无阻断，结论为工具消息转录，无新增报告；禁Git/运行 |
+| `/root/navigation_evidence103` | 创建参数`gpt-6-luna/max` | **109 STOP/NWT两测量源**：删除probe/额外CDP，拒绝ring带联合身份/浏览器时钟；两纯解析0/21源同/raw主核，110增审通过，111已通过并集成 |
+| `/root/a06_architecture_final` | `gpt-6-luna/max` | **115 STOP运行/收据收尾**：三门定向红及全缓存force重拉补门红，13项恢复绿；owner63项/Chromium full/build/tsc全0，2693源恢复/raw核/group0；窗口已归Sol |
+| `/root/navigation_remaining114` | 创建参数`gpt-6-luna/max` | **115只读结构收尾**：原四结构/四入口同单owner贯通，无结构阻断；final-structure115原件待落；correction002不移植整组旧PASS |
 | `/root/a06_navigation_independent` | `gpt-6-luna/max` | **083 STOP/撤作者及运行权**：复犯禁Git；独有源码交089，固定原件可只读，不恢复原执行租约 |
 | `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **067/068 STOP/撤写入运行权**：重复路径漂移，owner前失败，误建空目录已撤；不重派实现 |
 
-至少3常驻、最多15活动；等待者不必运行，不为人数制造工作。主唯一调度、禁派生。全禁Git作者/审查者不分配索引；主独持固定与集成索引，不手写业务源码。Luna仅隔离小修/独审/验收，不据37mixin或平行状态表结构风险派核心重构。
+至少3常驻、最多15活动；等待者不必运行，不为人数制造工作。主唯一调度、禁派生。全禁Git作者/审查者不分配索引；主独持固定与集成索引，不手写业务源码。Luna仅隔离小修/独审/验收，不据37mixin或平行状态表结构风险派核心重构。116当前a06只读盘capture真实source读取caller，navigation_remaining只读核两个Responses matcher边界；都限3分钟结论，Sol独占源码/重测试，不增加正式门。
 
 ## 执行防线
 
@@ -106,3 +107,15 @@ A/current-recovery-receipt.json与A/efficiency-comparison.json只读当前具名
 050 L最新作者回报：target ForkRetentionReleaseRecord/schema15（旧14显式拒绝），gate外delete/abort及async caller迁齐，旧bulk claim release和同步source completion物理删除；capture预分配/source EX准入和精确Thread激活、3 crash phases/跨gate/缺source ref测试已写。static004为当时源码0，无runtime绿。作者再发现原规范声明source fork_retention lease却无生产create/settle caller，继续同批补现有source EX阶段唯一lease，不增加平行authority；static005后defaults/cold/L小组→原六focus。L真实产品crash driver及I/J/K/M/O/P/Q/B/S原门仍待，未整批STOP。
 
 050 defaults-cold-retention-unit-regression-001主核actual1/99.19910777593032s，244源前后同/raw核/组0，39pass/6fail；defaults、L record/claim/schema15与business7已具名过，失败均为model_stream_transport六node，作者判断缺真实sealed dispatch、未进入transport。只一次迁共用真实dispatch fixture后复跑六红＋L集成，39未变项复用，不造tool_test豁免。主核=`RV/coordinator/artifacts/efficiency114-skill-batch/retention-unit001-verification.json`；整批仍未STOP/接受。
+
+114已STOP：原10.4c七崩溃断点、部分发布/未知效果有真实owner测试，Chromium五入口和上传202响应丢失恢复有原raw；不要求每断点再新增产品Web E2E。correction002确认store/operations测试/Chromium脚本已漂移，旧53/full绿不能整体代当前候选；operations/recovery/backend harness的相同SHA只窄复用。报告=`RV/navigation_remaining114/artifacts/original-navigation-closure/{report.json,correction002.json}`。旧53组39.145s、Chromium full32.637s，主停止继续追溯，115直接原短重验；当前63项/Chromium/build/tsc总173.455s全过，不重跑已接受300+40+20量化。不把新旧运行规模/宿主差异换算模型倍率或精确节省秒数。
+
+L integration001主核actual1/70.66327582020313s、244源同/raw核/group0，16pass/1fail；唯一红`test_production_lifespan_recovers_unpublished_fork[target_committed]`是冻结rollout hash/length变化，Sol正在核真实变动，不放松原hash门。16未变项复用，修后仅该node＋实际影响边界；核原件=`RV/coordinator/artifacts/efficiency114-skill-batch/retention-integration001-verification.json`。没有因此新增长矩阵或归为环境。
+
+115代表前置策略已取得首个实际结果：`ART050/runs/transport-sealed-owner-representative-001` actual0/39.098953s、1pass，真实两次checkpoint/seal→reasoning/tool/final及controller清理；245源前后同、raw核/组0。对应static actual0/2.188146s。同组其余5红仍待，不据代表绿宣告全部transport或050完成。capture真实SQLite变化定位到completion.py的`_fork_completed_turn_finalizations`全SELECT却用默认writer连接并执行journal_mode=WAL；Sol统一read_only与freeze拒writer，原hash门保留，单node回归待窗口归还后运行。
+
+115导航独验根=`ROOT/out/tests/temp/2026/10/10/navigation115-independent/artifacts`，主从111-002已核固定源码清单建立source_baseline（2693/a65）。green001/002/003各13pass；red001全清cache使父缓存undefined，red002成功回调整树reload导致src1→2，red003外部SSE整树reload导致兄弟other1→2，补red004所有缓存force重拉使目标仍loading触发原删除断言，均是对应业务断言红、非语法失败。11attempt的raw核/前后源同/group0，全部2693源码最终恢复a65。
+
+当前固定候选独立owner115-001 actual0/67.790s/63pass，涵七crash phases/partial/unverified/独立intent/recovery；chromium115-001 actual0/45.393s/full，五入口warm0GET及上传202丢响应恢复；build115-001 actual0/28.990s、types115-001 actual0/31.283s。精确fixture-owned0，正式原件保NWT镜像输出不复制。主核=`ART/coordinator-verification115-final.json`；短原门173.455s、变异/绿运行20.623s（不是全部墙钟成本）。窗口已明确归Sol继续5transport＋capture单node，主只收口原导航任务/文档，不占重测试。115 report SHA=2a98da8a...，结构独审SHA=3d742853...无阻断；主按实际caller补全仓具名检索/AST，30个Python调用全携intent/actor，Web四路唯一hook/OpenAPI202，旧owner/API同步writer无旁路，收据`ART/caller-closure115.json`。已据合取更新10.4/10.4c/10.7完成，itemized60/89；10.8 umbrella仍有8.1-H等产品验收，不据此勾整个10.8。四路径文档同批固定集成待本轮receipt。
+
+116 Sol其余transport actual1/97.920s，3pass/2fail，245源同/raw核/group0；chat3项保留，两个Responses strict matcher为input_types=<unknown>，已到native请求边界，沿实际serializer/matcher只读核，不放宽fixture求绿。capture原target_committed actual1/39.709s定位durable/writes.copy_pending_writes纯SELECT默认writer，被冻结writer拒绝；Sol连同copy_turn_finalizations一次read_only，未放松manifest hash。Luna沿实际freeze调用闭包提前盘剩余source reader，避免单node逐次揭下一个遗漏，结论/修后actual待收。

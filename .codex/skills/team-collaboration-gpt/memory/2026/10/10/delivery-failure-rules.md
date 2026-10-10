@@ -388,3 +388,7 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 111主基线核验遗漏：21窄指纹虽同固定tree，NWT旧HEAD之外四个生产文件仍旧，实际运行树不等于待集成候选。111-001在148.273s控制停止、actual1/raw保原/组0，不记业务失败或模型效率。主从候选blob机械同步30个tracked差异（含四生产与既有测试/文档），完整content diff0、额外仅依赖symlink、共享index字节同；111-002改记录2693源码前后指纹后再跑原门。fresh read-tree的空stat会让原始diff-files误列全树，须刷新私有stat或比较blob后再判断内容，不打印全路径清单。此次补齐基线有效，正式gate待终态；主补救成本单列。
 
 112把上述纠正接入现有runner而非只加禁令：固定候选profile给`source_baseline`完整指纹，错配写启动前收据并拒绝Popen；live作者调试不加冻结门。受保护smoke用已接受distribution_identity的旧SHA模拟遗漏，actual1且command_started=false；正确固定SHA时actual0/组0。Ruff和短只读独审通过；原件=`RV/coordinator/artifacts/baseline112-guard/verification.json`。这证明该错配可在命令启动前拦截，不证明主生成的清单自动完整，也不称长测试提速已实测。恢复期间主读取旧单行JSON日志造成巨大无用输出，后续精确attempt读取同时限制字节、选所需键，不以tail行数冒充输出上限。
+
+050 cold-transport-capture-red001在共用fixture改造后仍六transport同因红（Turn/root冲突），并六teardown ERROR（调用不存在的saver.close）；另capture真实index.sqlite hash变化，actual1/96.517s/244源同/raw核/组0。此前unit001六例均因缺真实dispatch失败，静态绿没有验证新fixture的Turn准入及关闭合同。调整为同批迁完整fixture，用代表node先确认共用前置，再恢复其余原未通过例；capture独立链仍单独定位，不修改hash门。115代表原node实际0/39.099s、1pass，245源同/raw核/组0，真实两轮checkpoint/seal与关闭通过，未再展开六个相同前置红；这证明代表准入已修，不代其余5例或050全验收，也不推算节省秒数。39及16个依赖未变通过项继续复用。
+
+114导航剩余对表把已有owner崩溃/部分效果测试误称为仍需逐分支产品Web E2E，主按原10.4c文字撤额外门。随后确认旧53组/full的store与部分测试/脚本已漂移；原运行仅39.145s/32.637s，继续查旧依赖不能省成本。115直接原短重验：owner63pass/67.790s、Chromium full45.393s、build28.990s、types31.283s，全actual0，总运行173.455s；2693源同/raw核/精确owned0。原三门变异及字面全缓存force重拉补门皆真实断言红，最终13绿恢复a65；已接受300+40+20长量化复用，没有另派依赖追溯或整仓复制。已证明必要短门可直接闭合，不能推算未发生调查的节省秒数；不移植漂移PASS，也不把全清cache red001冒称实际全树reload。
