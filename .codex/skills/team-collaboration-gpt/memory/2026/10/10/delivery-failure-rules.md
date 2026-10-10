@@ -392,3 +392,11 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 050 cold-transport-capture-red001在共用fixture改造后仍六transport同因红（Turn/root冲突），并六teardown ERROR（调用不存在的saver.close）；另capture真实index.sqlite hash变化，actual1/96.517s/244源同/raw核/组0。此前unit001六例均因缺真实dispatch失败，静态绿没有验证新fixture的Turn准入及关闭合同。调整为同批迁完整fixture，用代表node先确认共用前置，再恢复其余原未通过例；capture独立链仍单独定位，不修改hash门。115代表原node实际0/39.099s、1pass，245源同/raw核/组0，真实两轮checkpoint/seal与关闭通过，未再展开六个相同前置红；这证明代表准入已修，不代其余5例或050全验收，也不推算节省秒数。39及16个依赖未变通过项继续复用。
 
 114导航剩余对表把已有owner崩溃/部分效果测试误称为仍需逐分支产品Web E2E，主按原10.4c文字撤额外门。随后确认旧53组/full的store与部分测试/脚本已漂移；原运行仅39.145s/32.637s，继续查旧依赖不能省成本。115直接原短重验：owner63pass/67.790s、Chromium full45.393s、build28.990s、types31.283s，全actual0，总运行173.455s；2693源同/raw核/精确owned0。原三门变异及字面全缓存force重拉补门皆真实断言红，最终13绿恢复a65；已接受300+40+20长量化复用，没有另派依赖追溯或整仓复制。已证明必要短门可直接闭合，不能推算未发生调查的节省秒数；不移植漂移PASS，也不把全清cache red001冒称实际全树reload。
+
+117 产品017实际1/171.471s后，Sol已定位checkpoint冻结view与active successor错选，改用真实accept后checkpoint前单node：red-002在6.179s复现原StaleTurnReferenceError；先前red-001输入提前DTO拒绝不算复现。green-001越过原边界但41.678s后fixture缺owner仍actual1，继续同一node调试，不能标绿。此法已证明无需每次启动完整产品链即可复现该故障，修复及整个产品门仍待；主核原件引用`ROOT/out/tests/temp/2026/10/10/efficiency116/coordinator/artifacts/history117-verification.json`，不把单次运行差值当总交付提速。
+
+117 matcher窄审保未变通过项，只增审detail类型guard/引用与新增unit；原TypeError finding已关闭。主派错Python3.13路径，审查者依记忆称image detail可选；实际3.12 SDK明确Required，纠正并撤回该finding，不能据未核版本合同加宽实现。主固定前也误猜runner原件名`sources-before.json`，命令在源码/索引写入前停止；恢复用实际`source-before.json`。这些主补救与审查误判成本单列，沿现有精确路径规则处理，不再追加同义禁令。
+
+117 后续history green-002实际0/25.156s，warm/cold新Turn及显式checkpoint冻结语义均过，248源同/raw主核/组0。这验证短真实节点先调同因闭包的调整有效，下一步仍回原核心产品门；独审在既有runtime窗口只读，不阻断作者启动、不新增重复验收。
+
+117 matcher隔离小修后，Sol只跑两个Responses原红＋3个新增unit，actual0/60.935s/5pass，248源前后同/raw核/组0；代表与chat3未变通过项保留。history独审在同一窗口完成、原核心018已直接启动，未把窄审变成额外等待门。此轮支持继续由Sol贯穿核心、Luna处理测试边界并增量独审的分工，未证明模型速度倍率或全部产品验收完成。

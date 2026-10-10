@@ -19,6 +19,8 @@ _SENSITIVE_KEYS = {
     "set-cookie",
     "x-api-key",
 }
+_RESPONSES_MESSAGE_ROLES = frozenset({"assistant", "developer", "system", "user"})
+_IMAGE_DETAILS = frozenset({"auto", "high", "low", "original"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,9 +87,54 @@ def _safe_input_types(value: object) -> list[str] | None:
         if not isinstance(item, Mapping):
             types.append("<unknown>")
             continue
-        item_type = item.get("type")
-        types.append(item_type if isinstance(item_type, str) else "<unknown>")
+        if "type" in item:
+            item_type = item["type"]
+            types.append(item_type if isinstance(item_type, str) else "<unknown>")
+        elif (
+            isinstance(item.get("role"), str)
+            and item["role"] in _RESPONSES_MESSAGE_ROLES
+            and "content" in item
+            and _is_responses_message_content(item["content"])
+        ):
+            types.append("message")
+        else:
+            types.append("<unknown>")
     return types
+
+
+def _is_responses_message_content(value: object) -> bool:
+    if isinstance(value, str):
+        return True
+    if not isinstance(value, list):
+        return False
+    for block in value:
+        if not isinstance(block, Mapping):
+            return False
+        block_type = block.get("type")
+        if block_type == "input_text" and isinstance(block.get("text"), str):
+            continue
+        if (
+            block_type == "input_image"
+            and isinstance(block.get("detail"), str)
+            and block["detail"] in _IMAGE_DETAILS
+            and _has_responses_reference(block, ("image_url", "file_id"))
+        ):
+            continue
+        if block_type == "input_file" and _has_responses_reference(
+            block, ("file_data", "file_id", "file_url")
+        ):
+            continue
+        return False
+    return True
+
+
+def _has_responses_reference(
+    block: Mapping[str, object], keys: tuple[str, ...]
+) -> bool:
+    values = [block[key] for key in keys if key in block]
+    return bool(values) and all(
+        value is None or (isinstance(value, str) and bool(value)) for value in values
+    ) and any(isinstance(value, str) and value for value in values)
 
 
 def _safe_message_roles(value: object) -> list[str] | None:
