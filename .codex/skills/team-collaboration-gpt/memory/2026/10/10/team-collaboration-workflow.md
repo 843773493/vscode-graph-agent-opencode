@@ -58,6 +58,8 @@ agent 空回复、报错或中断时先核对实际改动、提交与后台进�
 
 [run_task.py](../../../../scripts/run_task.py) 自动设置cwd、ROOT venv、唯一代码根PYTHONPATH、UV_NO_SYNC、路径与timeout/ulimit保护；其它环境继承调用者，不宣称完全隔绝环境。profile由主建立；必要新源码相对路径可补`source_paths`，与已有manifest取并集，不改原历史指纹。禁Git任务使用不可用index标记，不初始化索引；这不是工具沙箱或Git命令授权。正式fixture继续写原`out/tests/<同名测试>/`，不创建平行产品入口或业务工作区。
 
+对只应按具名场景运行的产品文件，profile可登记`pytest_node_ids`对象：键为该文件路径，值为允许的完整node ID列表。runner只识别`uv run pytest`与`uv run --no-sync pytest`，显式传入登记文件时核相对/绝对路径；裸文件或未登记node在child启动前exit2，保存`command-selection-check.json`及原始结果。`--ignore`、`--deselect`的紧邻独立值只作排除项，继续检查其后真实selector。无规则或其它命令保持原行为；目录选择、其它命令前缀和未公布的pytest选项语义不由此检查覆盖，不宣称命令沙箱。作者仍传完整具名selector，主不因防错检查增加业务验收门。
+
 固定候选正式验收的profile另给`source_baseline`，指向主从候选生成的完整源码清单JSON：`{"candidate_tree": "<固定tree>", "files": {"<相对路径>": {"sha256": "<固定SHA256>", "bytes": 123}}}`。runner将这些路径并入指纹，在启动前保存`source-baseline-check.json`，错配明确拒绝且不启动命令。主仍核清单完整性、额外源码及运行后同一指纹；脚本不会自行证明清单覆盖整棵树。作者live集中调试不传此项，避免逐次冻结；禁Git作者无需读Git或生成候选。
 
 每次直接保存唯一 `ART/runs/<attempt>/` 的started/result、stdout/stderr原件与源码前后指纹；同名目录拒绝覆盖，actual非零和timeout原样传出。主直接引用并核原件，不再复制整workspace/artifacts或手抄报告字段；必要外部正式失败文件只保独有原件，历史通过项按源码依赖复用。检查手段按改动收敛，整批停写后集中固定/独审/集成，不逐字段微提交。

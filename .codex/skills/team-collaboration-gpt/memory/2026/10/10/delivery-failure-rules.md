@@ -406,3 +406,11 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 119/121 实测后续core019已越过该tab click，实际1/219.652s停在child FIFO工具提交前ack，390源同/raw主核/组0；DOM接线调整在此入口有效，不代六focus全部通过。正常协议生成14.462s预期六bindings变化，不能把“source前后同”套到生成命令。主给accepted20925037 Buf image避免禁Git作者等待索引；同时发现默认breaking命令自比当前proto、flag缺值静默跳过。Luna隔离三文件小修（脚本/package/唯一mask caller），static/json0、三个缺值负向actual2、真实image正向0/3.957s，增审无finding；主仅固定blob在无运行窗口同步，既有check/gen保持，050继续独立定位。用现成入口消除假检查，比追加文字禁令或给作者Git权限更直接。
 
 121报告路径复犯：原独审报告实际写入NWT/out，主读取明确ROOT路径失败，未同步或接受；原agent补回后两份SHA同5b34462f...。主核原件后完成三blob同步并立即释放Sol窗口，结束该agent产物写入及全部作者/运行权，保常驻只读消息职责；不再追加同义路径规则或重审未变候选。本轮主恢复也曾裸rev-parse一次，未写索引；后续统一私有subprocess环境，同步共享index字节同，主错误单列，不归作者。
+
+122短边界避免盲重产品：普通真实Runner工具提交节点已过，而默认None与同一显式Provider让generation1→2已由真实短节点复现。Sol在同一冻结snapshot解析有效provider_id，同值用于generation key/builder；两节点green0/26.217s、391源同/raw主核。仅该换代缺陷已修，core019 child工具事件缺失仍未证明同因，继续沿真实child initial→direct前置收敛，不堆平行helper测试。收据=`T116/coordinator/artifacts/runtime122-verification.json`。
+
+124运行选择错误：020传整个产品owner文件，主场景queued Turn404之外又启动持久资源测试，Gateway提前退出；全run两failed/290.181s如实保留，不外推额外节点根因或精确节省时间。已给主节点完整selector；并行在既有runner补profile可选pytest_node_ids，匹配该文件时启动前拒绝裸文件/错node，以真实--version短探针核防错，不增加业务验收门，效果待交付。
+
+124首候选被主拒收：新增node guard只识别uv run pytest，实际所有作者命令带uv run --no-sync pytest，因此会完全绕过；且为精确文件防错新增约144行/完整pytest选项表，维护成本过大。主要求在固定入口按两个真实前缀识别、只核显式登记文件token，删除通用parser，重验真实--no-sync负向/正向，不再扩抽象。作者又误带git --version（无repo/index访问参数），按禁Git租约违规记，不虚报共享索引变化；再次复犯即撤执行权限。新版本与效果待核，不将首候选探针绿等价有效防错。
+
+125增审发现窄guard误阻：124十个--version探针及严格树重建已主核，但`--ignore <登记文件>`、`--deselect <未登记node>`的排除值被当正向selector。候选未接受，126只修这两个真实排除选项并验证其后的正向selector，四增量probe共2.605s、raw核/指纹同，127增审闭原finding/无新finding；128空运行窗口固定blob同步后立即释放Sol，效果限于已测防错，不宣称产品提速倍率。保原件、不恢复完整选项表；旧探针不能冒充修改后源码运行。queued404同因已由真实HTTP短红46.738s复现，复用原Saver/admission/fence前移接受，移除可选编辑；不因不可变root另造撤回状态机。其实现与产品效果仍待验收。

@@ -252,6 +252,8 @@ child thread MUST 拥有独立 Turn、item、history、active view和执行状�
 
 同一thread任意时刻至多一个active root execution，其余保持runnable/pending并严格按ordinal FIFO准入，workspace容量调度只能延迟、不能越序。前一execution终态后，owner MUST 在同一事务激活下一entry、推进其visibility并冻结新fence，完成后才允许before-model和seal；不得让queued root提前进入旧execution。取消/失败保留ordinal及terminal queue/Turn record，不得删除后重排；未admit取消的真实用户Turn保持可审计cancelled且不调用Provider。属于现有execution的tool result、provider callback或resume signal必须绑定原execution并由generation fence提交，不能伪装成新queue entry；显式interrupt/cancel是控制操作，不是高优先级插队。不同thread拥有独立active slot，sibling child和其它Session可以并行。
 
+真实用户消息入口 MUST 在返回 accepted/queued 回执前，经唯一 acceptance owner 提交 Turn、不可变 root 和 initial execution；Runner MUST 只核验并消费同一 acceptance，MUST NOT 将首次持久化延迟到执行启动。queued Turn MUST 立即可由 history API 读取，但 MUST NOT 提前占用 active slot、启动 checkpoint 或冻结资源激活 snapshot。排队消息 SHALL 只保留 policy 设置和删除；正文、附件编辑 API、DTO 和 Web 入口 MUST 物理下线，不保留兼容接口，也不新增撤回再接受链路。policy 更新 MUST 保持原 identity/ordinal；删除 MUST 保留原 Turn/root/ordinal 及 cancelled 终态，不修改已接受的正文和附件。
+
 delegated child 的初始 execution 绑定 MUST 由生产提供真实 thread binder：worker MUST 只消费 `session-control.sqlite` 的持久状态索引，经 claim + `pending -> bound` CAS 幂等推进，并在 backend 重启后按同一 admission/claim identity 补齐全部未绑定 intent。缺少 binder 或 binder 无法绑定 identity 时，intent MUST NOT 永久停留 `pending`：系统 MUST 可观测地 fail-closed 报告 `unavailable`（含具体 admission identity 与原因），MUST NOT 静默停留、MUST NOT 把 intent 标成 `bound`、MUST NOT 以任何占位或伪造 execution 掩盖缺口。
 
 #### Scenario: 多个 Session main thread 承担不同长期任务
@@ -278,6 +280,16 @@ delegated child 的初始 execution 绑定 MUST 由生产提供真实 thread bin
 
 - **WHEN**Turn B已queued并取得较早的物理item sequence，而active Turn A随后提交tool result和final item
 - **THEN**A的model context与历史仍按A root→A tool/final完整排序，B只在A终态后进入下一execution；storage sequence只作append坐标，不得使B正文泄露给A或把A结果显示到B之后
+
+#### Scenario: queued 回执之前已提交唯一 acceptance
+
+- **WHEN** 真实 HTTP 消息入口在同一 child 的 active tool-loop 期间接受第二条用户消息，并返回 queued 回执
+- **THEN** 立即通过 history API 可以读取该 Turn 的原 root/initial execution；第一条 execution 的后续请求仍排除该 root，第二条只能按原 ordinal 取得 active slot。相同 key/payload 的重试复用原 acceptance，不创建第二份记录
+
+#### Scenario: 排队控制不改写已接受输入
+
+- **WHEN** 用户查看 queued 消息、修改其 policy 或删除尚未消费的消息
+- **THEN** 产品不提供正文、附件编辑入口或旧编辑 API；policy 更新保持 identity/ordinal，删除留下同一 Turn/root/ordinal 的 cancelled 历史且不调用 Provider，其余消息顺序不变
 
 #### Scenario: queue admission 崩溃恢复不重排
 

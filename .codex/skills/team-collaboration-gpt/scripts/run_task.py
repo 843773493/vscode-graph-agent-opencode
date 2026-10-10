@@ -38,6 +38,106 @@ def source_fingerprints(workdir: Path, paths: list[str]) -> dict[str, object]:
     return result
 
 
+def pytest_node_id_rules(profile: dict[str, object], workdir: Path) -> dict[Path, set[str]]:
+    configured = profile.get("pytest_node_ids")
+    if configured is None:
+        return {}
+    if not isinstance(configured, dict):
+        raise TypeError("profile.pytest_node_ids 必须是文件路径到 node ID 列表的对象")
+    rules: dict[Path, set[str]] = {}
+    for raw_path, raw_node_ids in configured.items():
+        if not isinstance(raw_path, str) or not raw_path or "::" in raw_path:
+            raise ValueError("profile.pytest_node_ids 的键必须是 pytest 文件路径")
+        if not isinstance(raw_node_ids, list) or not raw_node_ids:
+            raise ValueError(f"profile.pytest_node_ids[{raw_path!r}] 必须是非空 node ID 列表")
+        file_path = Path(raw_path)
+        if not file_path.is_absolute():
+            file_path = workdir / file_path
+        file_path = file_path.resolve()
+        if not file_path.is_relative_to(workdir):
+            raise ValueError(f"profile.pytest_node_ids 文件路径不在 workdir 内: {raw_path}")
+        allowed: set[str] = set()
+        for raw_node_id in raw_node_ids:
+            if not isinstance(raw_node_id, str) or not raw_node_id:
+                raise ValueError(f"profile.pytest_node_ids[{raw_path!r}] 含非法 node ID")
+            node_path, separator, registered_node = raw_node_id.partition("::")
+            resolved_node_path = Path(node_path)
+            if not resolved_node_path.is_absolute():
+                resolved_node_path = workdir / resolved_node_path
+            if not separator or not registered_node or resolved_node_path.resolve() != file_path:
+                raise ValueError(
+                    f"profile.pytest_node_ids node ID 必须属于登记文件: {raw_node_id}"
+                )
+            allowed.add(registered_node)
+        if not allowed:
+            raise ValueError(f"profile.pytest_node_ids[{raw_path!r}] 没有有效 node ID")
+        rules.setdefault(file_path, set()).update(allowed)
+    return rules
+
+
+def enforce_pytest_node_selection(
+    command: list[str], profile: dict[str, object], workdir: Path, result_dir: Path,
+) -> str | None:
+    if command[:3] == ["uv", "run", "pytest"]:
+        selector_arguments = command[3:]
+    elif command[:4] == ["uv", "run", "--no-sync", "pytest"]:
+        selector_arguments = command[4:]
+    else:
+        return None
+    rules = pytest_node_id_rules(profile, workdir)
+    if not rules:
+        return None
+    selected: list[dict[str, object]] = []
+    failures: list[str] = []
+    skip_option_value = False
+    for raw_selector in selector_arguments:
+        if skip_option_value:
+            skip_option_value = False
+            continue
+        if raw_selector in {"--ignore", "--deselect"}:
+            skip_option_value = True
+            continue
+        if raw_selector.startswith("-"):
+            continue
+        raw_path, separator, node_id = raw_selector.partition("::")
+        file_path = Path(raw_path)
+        if not file_path.is_absolute():
+            file_path = workdir / file_path
+        file_path = file_path.resolve()
+        allowed_node_ids = rules.get(file_path)
+        if allowed_node_ids is None:
+            continue
+        selected.append({
+            "raw": raw_selector,
+            "file": str(file_path),
+            "node_id": node_id if separator else None,
+        })
+        if not separator:
+            failures.append(f"裸文件选择器会运行整个测试文件: {raw_selector}")
+        elif node_id not in allowed_node_ids:
+            failures.append(f"profile 未登记该 node ID: {raw_selector}")
+    if not selected:
+        return None
+    check_path = result_dir / "command-selection-check.json"
+    write_json(check_path, {
+        "checked_at": utc_now(),
+        "command": command,
+        "selected": selected,
+        "allowed_node_ids": {
+            str(path): sorted(node_ids) for path, node_ids in rules.items()
+        },
+        "passed": not failures,
+        "launch_blocked": bool(failures),
+        "failures": failures,
+    })
+    if failures:
+        return (
+            "pytest 命令选择违反 profile node ID 合同；未启动 child："
+            f"{'; '.join(failures)}；原件：{check_path}\n"
+        )
+    return None
+
+
 def group_members(pgid: int) -> list[int]:
     members = []
     for entry in Path("/proc").iterdir():
@@ -122,9 +222,40 @@ def main() -> int:
         })
         if mismatches:
             raise ValueError(f"源码与固定候选不一致，未启动命令：{result_dir / 'source-baseline-check.json'}")
+    started = time.monotonic()
+    selection_error = enforce_pytest_node_selection(
+        command, profile, workdir, result_dir
+    )
+    if selection_error is not None:
+        (result_dir / "stdout.raw").write_bytes(b"")
+        (result_dir / "stderr.raw").write_text(selection_error, encoding="utf-8")
+        logs = {}
+        for name in ("stdout", "stderr"):
+            path = result_dir / f"{name}.raw"
+            with path.open("rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            logs[name] = {
+                "path": str(path), "sha256": digest, "bytes": path.stat().st_size,
+            }
+        source_after = source_fingerprints(workdir, paths)
+        write_json(result_dir / "source-after.json", source_after)
+        result_path = result_dir / "result.json"
+        write_json(result_path, {
+            "ended_utc": utc_now(), "duration_seconds": time.monotonic() - started,
+            "exit_code": 2, "child_started": False, "launch_blocked": True,
+            "cwd": str(workdir), "profile": str(profile_path),
+            "profile_sha256": hashlib.sha256(profile_path.read_bytes()).hexdigest(),
+            "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "requested_command": command, "logs": logs,
+            "source_before": fingerprints, "source_after": source_after,
+            "command_selection_check": str(result_dir / "command-selection-check.json"),
+        })
+        print(json.dumps({
+            "result": str(result_path), "exit_code": 2, "launch_blocked": True,
+        }), flush=True)
+        return 2
     argv = ["timeout", "--kill-after=10", str(args.seconds), "bash", "-c",
             'ulimit -d 4194304; exec "$@"', "bash", *command]
-    started = time.monotonic()
     start = {"started_utc": utc_now(), "runner_pid": os.getpid(),
              "cwd": str(workdir), "profile": str(profile_path),
              "profile_sha256": hashlib.sha256(profile_path.read_bytes()).hexdigest(),
