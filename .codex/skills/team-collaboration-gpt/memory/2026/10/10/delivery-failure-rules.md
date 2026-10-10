@@ -353,3 +353,16 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 
 
 012固定runner保存真实actual1/225.528s与原raw，fixture19000未就绪、driver未进；formal目录仍留旧011结果。只按本attempt判定，不复制旧结果或重启求绿；已有启动stderr仅证明LiteLLM成本表SSL超时，唯一根因尚未确认。短只读诊断与Sol原8.14独立实现并行，效果待下次真实入口；不把启动失败计为业务验证失败。
+
+
+083 full001在backend spawn前36700占用actual1/15.258s，主查为ESTAB出站连接，并核integration28800..38799与Linux临时端口32768..60999重叠。原Luna同批统一测试端口到8800..18799，保e2e/排序/偏移，full002实际越过setup且启动浏览器；只证明此确定冲突避开。002随后20个file样本后菜单30s超时、trace401，完整门仍未通过；分开定位两条失败，不盲跑或把端口修好称业务修复。
+
+
+013已越过启动进入driver，public navigation snapshot被sessionCatalogNode当作含main_thread_id的authority记录，actual1/321.987s，尚未到six-focus。087仅核新的graph观察接口/消费者且无finding，不能推共同identity前置也已完整；未变观察源按SHA复用，同Sol一次核getter所有caller及authority/locator真实来源，Luna088提前对表，不只改第一个undefined再长跑。184源前后同/owned0，修法效果待实际入口。
+
+
+083同一作者再次执行NWT git status/diff，且把bun --check误当静态解析（实际缺参数立即exit1，未到服务入口）；主撤本批写入/运行权，独有MJS保留交089收尾，不再追加同义禁令复用同作者。现场receipt在navigation089-stop-index-observation：ROOT stage/flags与021提交后逐字同；NWT没有本次命令前preimage，不声称无影响、不恢复陈旧缓存。089固定入口纯构建/无Git效果待实际交付。
+
+014再次在A后端监听前失败（actual1/161.393s，184源不变/owned0），本次没有012的cost-map SSL warning；最后watcher日志只能定位初始化区间，不能断言watcher就是根因。090核registry→watcher.ready在首次awatch yield才释放，但后续owner无分阶段日志，clock请求也未记录；同Sol最少加原logger begin/end后只启现有fixture的A，保300s/原timeout，B/C与Provider不启动，实际定位效果待收。graph-history-boundary002同时取得三个factory/runtime PASS，SQL首例因旧fixture缺正式写锁失败（整组actual1/64.396s）；同作者迁fixture只复跑分页文件，003 actual0/63.766s、23pass，185源不变/owned0，未重验graph三例。不能据此算完整8.14/A–S或捏造节省秒数。
+
+090单A实际1/79.229s、187源同/owned0，却只有load env、未到lifespan begin，不能沿014最后watcher日志继续认定阻塞await。作者D/folio_wait_bit_common工具转录与主当时IO full约51%相符，但不证明排他根因；不改环境或重复长跑，作者继续独立整批实现。091固定增审又提前发现失败诊断的page.evaluate无局部deadline，可能挡原30s异常直到600s wrapper（静态finding、未复现）；093同作者只给诊断采集/写盘3000ms总期限并保原异常，解析0，精确差异独审与真实full仍待。避免新坏候选进入长跑有实证，具体节省时间不推算。当前台账从35119压到14104bytes，保当前租约/收据/剩余门，关闭派单走既有历史原件，不在每次恢复重读全过程。
