@@ -97,6 +97,12 @@ def main() -> int:
     paths = profile.get("source_paths", [])
     if "source_manifest" in profile:
         paths = sorted(set(paths) | set(json.loads(Path(profile["source_manifest"]).read_text())["files"]))
+    baseline_path = None
+    baseline = None
+    if "source_baseline" in profile:
+        baseline_path = Path(profile["source_baseline"]).resolve(strict=True)
+        baseline = json.loads(baseline_path.read_text())
+        paths = sorted(set(paths) | set(baseline["files"]))
     fingerprints = source_fingerprints(workdir, paths)
     # mkdir 不允许复用 attempt；失败原件不会被下一次同名运行覆盖。
     attempts = artifact_root / "runs"
@@ -104,6 +110,18 @@ def main() -> int:
     result_dir = attempts / args.attempt
     result_dir.mkdir()
     write_json(result_dir / "source-before.json", fingerprints)
+    if baseline is not None:
+        # 固定验收在启动进程前比较源码，不能仅记录错配后的指纹。
+        mismatches = [relative for relative, expected in baseline["files"].items()
+                      if fingerprints[relative] != expected]
+        write_json(result_dir / "source-baseline-check.json", {
+            "baseline": str(baseline_path), "candidate_tree": baseline["candidate_tree"],
+            "baseline_sha256": hashlib.sha256(baseline_path.read_bytes()).hexdigest(),
+            "source_count": len(baseline["files"]), "mismatched_paths": mismatches,
+            "passed": not mismatches,
+        })
+        if mismatches:
+            raise ValueError(f"源码与固定候选不一致，未启动命令：{result_dir / 'source-baseline-check.json'}")
     argv = ["timeout", "--kill-after=10", str(args.seconds), "bash", "-c",
             'ulimit -d 4194304; exec "$@"', "bash", *command]
     started = time.monotonic()

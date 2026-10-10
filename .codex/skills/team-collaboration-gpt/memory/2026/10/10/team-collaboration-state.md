@@ -4,16 +4,16 @@
 
 ## 当前坐标与队伍
 
-- ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧`/data/hyf/20260629_agent/vscode-graph-agent-opencode`为软链接。恢复实查 HEAD；本轮技能三路径已集成`170bbb8b46fad61d5e7424ea972862827a559c4e`（parent021be8df），strict/guard/共享暂存语义均同；最近业务源码接受为`375600b2936aaeb819533354f050fc1d947d5769`。当前 ROOT 050 大量源码在途，不能整体 add/覆盖。
+- ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧`/data/hyf/20260629_agent/vscode-graph-agent-opencode`为软链接。最近技能四路径集成`4d325cab02ea9ff9619db6f22a58a4f33dc4b961`（parent170bbb8b），strict/guard/共享暂存语义均同；最近业务源码接受为`375600b2936aaeb819533354f050fc1d947d5769`；导航五测试路径已接受`15ee9cfef86feda631501bec38e49a137d56b5e9`（parent4d325cab/tree a65b50fc）。当前 ROOT 050 大量源码在途，不能整体 add/覆盖；112 runner及本轮协作文档集成状态见`RV/coordinator/artifacts/efficiency114-skill-batch/receipt.json`。
 - RV=ROOT/out/tests/temp/2026/10/09/a06-final-review；T=ROOT/out/tests/temp/2026/10/04/024121-team-execution；A=T/coordinator/artifacts/sol-efficiency-trial。NWT=ROOT/out/worktrees/2026/10/09/a06-final-review/navigation-fixture-receipt，为唯一活跃代码 worktree。
 - ART050=RV/sol_vertical_implementer/artifacts/section8-product050-full-closure；ART083=RV/a06_navigation_independent/artifacts/navigation083-full-background-trace；ART089=RV/caller_inventory013/artifacts/navigation089-auth-diagnostic；本轮主核收据=RV/coordinator/artifacts/efficiency090-continuation。
 
 | Agent | 实际模型 | 当前租约 |
 |---|---|---|
-| `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **050 active/ROOT唯一核心作者**：整批补唯一产品 driver A–S、必要身份/路由/DTO/fixture与原8.14；暂无产品运行，不因启动等待停独立实现 |
+| `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **050 active/ROOT唯一核心作者**：L durable release/schema15和source lease生产caller同批补齐，static005后defaults/cold/L回归→原六focus；111已终态释放重测试窗口，未STOP |
 | `/root/caller_inventory013` | `gpt-6-luna/max` | **101 STOP/撤作者与运行权**：再次使用裸Git模板，主中断并保现场；两文件仍同097、无独有源码，不再恢复作者租约；仅固定原件只读 |
-| `/root/navigation_evidence103` | 创建参数`gpt-6-luna/max` | **109 active/NWT两测量源**：107拒收106的身份错配/OR归因/成功热路径额外DOM；同作者一次修齐，只有纯解析权限 |
-| `/root/a06_architecture_final` | `gpt-6-luna/max` | **107 STOP/只读常驻**：诊断增量四finding，report SHA2cb1d025；后续只增审109，旧范围复用 |
+| `/root/navigation_evidence103` | 创建参数`gpt-6-luna/max` | **109 STOP/NWT两测量源**：删除probe/额外CDP，拒绝ring带联合身份/浏览器时钟；两纯解析0/21源同/raw主核，110增审通过，111在途 |
+| `/root/a06_architecture_final` | `gpt-6-luna/max` | **112 STOP/只读常驻**：110导航增审无finding/report SHA c8046eaa；112固定runner启动前基线检查无阻断，结论为工具消息转录，无新增报告；禁Git/运行 |
 | `/root/a06_navigation_independent` | `gpt-6-luna/max` | **083 STOP/撤作者及运行权**：复犯禁Git；独有源码交089，固定原件可只读，不恢复原执行租约 |
 | `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **067/068 STOP/撤写入运行权**：重复路径漂移，owner前失败，误建空目录已撤；不重派实现 |
 
@@ -49,18 +49,11 @@
 
 050最新：`core-web-015`已actual1/212.040790969s、213源前后同/raw匹配/group0，源码期间停写；A/B启动后C backend19040健康60s未监听，未进Gateway/browser/六focus。作者现有采样D/folio_wait_bit_common只是等待线索，不证明排他根因；沿本次原raw定位、继续边界driver/必要接线，不盲重跑。两staticactual0/212与202源同；control-attachment-regression-001实际177pass/1fail（非法UUID反例未到unknown404），迁合法不存在ID后untrack-valid-unknown-regression-001 actual0/74.619s、213源同/owned0，177未变通过项复用。主原件核收据=`RV/coordinator/artifacts/navigation098-independent-full/core015-verification001.json`及control-regression-verification001。102暂未见cold context guard/ToolSet lease或GC retention caller明确缺口，只live预检；两个关键callee app/agents/{sealed_assembly_dispatch,tool_set_producer}.py未在015指纹，已交Sol下次profile补入，不为补指纹重跑。边界driver不再卡首次核心启动的调度已落实，业务效果尚待实际进入driver。
 
-## 导航当前候选与下一步
+## 导航当前交付
 
-原合同：200目录/120sources、300file/40Gateway/20并发、8000布局、真实DOM完成＋双rAF、FS650ms/30s。10.4b阈值用于实施分支分类，不新增≤1s通过门。
+111-002原量化完整通过，固定五测试路径已接受15ee9cfe，详细当前收据见本页末段。原合同仍为200目录/120sources、300file/40Gateway/20并发、8000布局、真实DOM完成＋双rAF、FS650ms/30s；10.4b分类阈值不增加通用≤1s通过门。10.4b已接受，10.4c/10.8尚未全部兑现，不重复完整long gate。
 
-- 060固定`d3390786...`与061增审闭合650ms/真实DOM消费者，minimal有限通过；062原full actual1/591.961345s在pair5 directory revision expected12/actual14失败，300串行已完成，Gateway0。真实24,401,400bytes失败JSON保`RV/coordinator/artifacts/navigation062-provenance/failed-measurements-current062.json`，不要读旧成功measurements。064无确证根因；072c短owner观测actual0/3.236s但未复现冲突，不算修复。
-- 077真实两页focus20op通过却缩掉原背景，083已恢复200/120并解耦trace/focus、迁full actions producer及失败保完成侧。候选旧baseline=`005142091a137a676d2c644433884605ff654649`，correction001 tree=`db96a37d...`，17源未变。
-- 083 full001 actual1/15.258s：36700是ESTAB出站连接，integration旧28800..38799重叠系统临时端口；NWT ports.py改8800..18799，保e2e18800..28799/排序/偏移。full002 actual1/196.506541s越过setup，25mutation样本后d000右键30s超时，第26mutation未派发，trace另401。21源同/owned0，完整门无结论。独有78文件/1,062,910bytes失败原件在ART083/runs/navigation-full-083-002/formal-failure/，原report003不改。
-- 原083作者复犯禁Git及误用bun --check，撤执行租约。089同原MJS改context.request（共享已登录Cookie）、response释放及context.close前trace fallback，补失败现场鼠标/DOM/hit-test/menu诊断；STOP SHA=`b1b42f5d...`、parse002 actual0/3.851596584s/21源同/owned0，未验运行。报告SHA=`88e7f7a5...`。
-- 主固定完整21源候选`03efed35dddca32bebc68643301b8b768059c271`、strict重建0，manifest=`RV/coordinator/artifacts/navigation089-fixed/manifest.json`。相对083只增MJS/ports；**最终相对ROOT HEAD有五个测试路径**，包含此前harness及新measurement_app，不可只交四个增量漏掉前置。生产依赖与HEAD同。
-- 091只读增审无额外auth/ports/规模/门finding，但NAV091-1确认失败后的两次page.evaluate无局部期限，renderer卡死可能拖原异常/cleanup至600s。报告`RV/a06_architecture_final/artifacts/navigation091-fixed-delta-review/report.json`已STOP。093原窄作者只给best-effort诊断短总deadline、仍throw原异常，纯构建后STOP；随后只复审该精确差异。091固定和旧报告保留。
-- 093固定tree=`d43dc9590c84516b87ff93ef0cd4da9e04853c5d`，MJS SHA=`ba6b6444...`，pure build actual0/0.319s；094仅复审精确Promise/timer增量，NAV091-1静态关闭，底层evaluate/writeFile可能迟到但不挡诊断控制流，运行效果待。已授权095唯一原full给caller_inventory013，profile=`RV/caller_inventory013/artifacts/navigation095-full-current-fixed/run-profile.json`，attempt=`navigation-full-095-001`，保原背景/规模/分类门及600s wrapper，进程外1500s，不重复minimal/build、失败不重试。本次已终态actual1/738.060643s，300串行样本完成后600s内部wrapper超时，20并发/40Gateway未达；21SHA前后与093固定逐一相同，raw已主核，runner group0，fixture-owned0已核并释放Sol窗口。没有本次measurements/trace终态，正式目录旧同名文件不可引用；当前不重试。
-- 主在095运行期间从093固定blob准备当前HEAD完整五路径组合tree=`3c87487ea23aae2eeb1495d909df0aa7537b12ba`，基线170bbb8b，strict重建/diff-check通过；17依赖与HEAD逐blob相同。原件=`RV/coordinator/artifacts/navigation095-integration-prepared/manifest.json`，未写ROOT源码、未接受/提交；095已失败，本候选不能因300样本完成就接受。
+需要追溯失败时按精确原件读：062真实directory revision冲突→`RV/coordinator/artifacts/navigation062-provenance/failed-measurements-current062.json`；083端口/菜单失败→ART083/runs/navigation-full-083-{001,002}；095整批保护到期→`RV/coordinator/artifacts/efficiency096-continuation/navigation095-verified.json`；098缺阶段证据→`RV/coordinator/artifacts/navigation098-independent-full/verified-result001.json`；109诊断修订与110增审→`RV/coordinator/artifacts/navigation110-fixed/manifest.json`及`RV/a06_architecture_final/artifacts/navigation110-fixed-diagnostic-review/report.json`。必要原件保留，历史formal成功/不同attempt不作当前证据。未变auth/规模/ports审查复用，不重派泛查。
 
 ## 已接受项与原goal剩余
 
@@ -78,11 +71,13 @@
 
 原core清单=`E/navigation-index-only-10-3/remaining-original-goal.json`；原ledger=`E/a06-final-task-evidence-ledger.json`；E=T/sol_vertical_implementer/artifacts/final-original-scope-source-bulk-core-and-boundaries。itemized原56/89仅历史进度，原7.5-F材料与8.4三节点46pass不代全change。049/053与056–065字段owner/API/proto审计只支持具名局部，原1.5–1.7的逐例typed/notice Web/checkpoint/admission durable→intent CAS/hash复合门仍待050后同Sol收齐，不重新泛查旧A02。
 
-Gateway性能条件原create_folder/move_workspace p95=94.910/75.451ms、HTTP1/FS8，无独立开工证据；10.5/10.5a/10.7不实施，不新增worker。新文件工具、files/Skill目录根与child编码只有规划，不扩本goal源码。外部UNMET仍有原Provider403 quota、A04 C1 35000未知listener；不换profile求绿、不杀未知服务，不以integration冒充产品。原七change、A–S、导航10.4b/10.4c/10.8及复合门尚未完成。
+Gateway性能条件原create_folder/move_workspace p95=94.910/75.451ms、HTTP1/FS8，无独立开工证据；10.5/10.5a/10.7不实施，不新增worker。新文件工具、files/Skill目录根与child编码只有规划，不扩本goal源码。外部UNMET仍有原Provider403 quota、A04 C1 35000未知listener；不换profile求绿、不杀未知服务，不以integration冒充产品。原七change、A–S、导航10.4c/10.8及复合门尚未完成；10.4b已具名接受。
 
 ## 效率维护与历史入口
 
 固定runner已提交`021be8df`五文件，smoke7/124/拒覆盖与SIGTERM-15/owned0已有原件，不重验。真实050/089均使用入口、原raw与机器指纹，主直接引用，禁Git成员不初始化索引。已过检查按真实依赖复用；当前瓶颈从driver前置遗漏转为启动/宿主I/O等待，已执行只读定位＋一次单A诊断，Sol并行整批实现，不据单条日志猜环境或盲跑长矩阵。严重失败窄改技能并用下一相关actual核效果，不另派统计、报告搬运或无同起点模型倍率比较。
+
+112已在ROOT runner补`source_baseline`机械启动前检查（固定SHA5b58bc12...）；受保护smoke旧accepted依赖SHA被拒且命令未启动，匹配时actual0/组0，Ruff0，固定源短独审无阻断。原件=`RV/coordinator/artifacts/baseline112-guard/verification.json`，未声称整棵清单由runner自动生成或长验收提速；作者live profile不加该门，不影响在途111使用的旧已加载runner。技能补机械入口与大JSON按键/字节读，文档与脚本在114批集中固定，收据见本批receipt。
 
 A/current-recovery-receipt.json与A/efficiency-comparison.json只读当前具名键。旧详细台账原文保`RV/coordinator/artifacts/efficiency090-continuation/team-collaboration-state.md`（本轮恢复时的快照，后续有效新增已写入本页），更早在current-state-compaction055/014与具名原件；恢复只读本页当前状态，需要事故再按路径取证。当前memory只一份，不按天复制。
 
@@ -96,8 +91,18 @@ A/current-recovery-receipt.json与A/efficiency-comparison.json只读当前具名
 
 104 STOP：只读确认正常app.main→testing.model_stream eager package export与tool_testing.model_invocation exception import两条冷导入都会拉LiteLLM，SDK同步fetch成本表；wrapper真正模型构建已是函数内import，无需大改provider。建议沿runtime轻入口延后，包init陷阱/安装先于首client/lifespanclose合同已交Sol；replay启用仍需要SDK，不承诺该调整让015 profile跳过成本表。Sol继续K源preflight/snapshot统一source read admission和capture新record同事务active，既有captured恢复不依赖已deleting source，L retention release owner继续盘真实链。
 
-105已实际停止本任务旧泛搜索：主进程env thread/session＋精确session_meta确认PID4012352属于a06_architecture_final，核startticks320420695及argv，累计read_bytes754527252480后SIGTERM，rg/bash/head均退出；未知find未杀。agent先前否认仅是记忆/工具记录不全，不能取代元数据。收据=`RV/coordinator/artifacts/navigation098-independent-full/owned-search-retirement105.json`；主先扫大对话无收益后改线程元信息直达，规则已收敛。后续I/O full avg10观察降至1.74%，本轮再核2.54%/avg60=5.05%，不证明启动唯一根因或产品提速；已通知Sol在下一相关core016观察，不另跑效率探针。未来检索用精确报告路径/限定owner源码目录＋短timeout，不扫out/tmp。当前SKILL/workflow/state/失败细则四文档在途，集中维护、不微提交。
+105已实际停止本任务旧泛搜索：主进程env thread/session＋精确session_meta确认PID4012352属于a06_architecture_final，核startticks320420695及argv，累计read_bytes754527252480后SIGTERM，rg/bash/head均退出；未知find未杀。agent先前否认仅是记忆/工具记录不全，不能取代元数据。收据=`RV/coordinator/artifacts/navigation098-independent-full/owned-search-retirement105.json`；主先扫大对话无收益后改线程元信息直达，规则已收敛。后续I/O full avg10观察降至1.74%，本轮再核2.54%/avg60=5.05%，不证明启动唯一根因或产品提速；已通知Sol在下一相关core016观察，不另跑效率探针。未来检索用精确报告路径/限定owner源码目录＋短timeout，不扫out/tmp。四协作文档已集中提交`4d325cab02ea9ff9619db6f22a58a4f33dc4b961`，parent170bbb8b，strict/guard0、共享index字节/stage/flags同；收据=`RV/coordinator/artifacts/efficiency108-skill-fixed/final-manifest.json`。后续实时状态变动下批集中提交，不微提交。
 
 106：103两源STOP，MJS SHA=`d877d952...`、TSX SHA=`6c5bbfc2...`，pure build各actual0/0.352s与0.191s、21源前后同、raw已核。主从097固定完整21源tree=`17dc473a9098a9e6dc702e7e448a632af87d74ee`，增量与HEAD完整五路径均严格重建/check0，共享index字节同；manifest=`RV/coordinator/artifacts/navigation106-fixed/manifest.json`。107仅审新增诊断，原auth/规模/ports复用，确认snake_case/camelCase错配、身份OR归因、成功热路径额外DOM与缺browser timeOrigin，report SHA=`2cb1d0250a7854db59ed0a45d5f3bc1950069d1b29a6b6122a719ae8f47772df`。106未实跑/接受/写ROOT；主撤该版准入，109同两源一次修齐并取消post-start专用CDP往返，不微交接或重复full。
 
 050新source-copy-admission-regression-001实际12pass/3fail：新deleting三mode、captured后删除源三mode、pinned双顺序与live SQLite reader锁通过；旧API fixture缺ResourceIdentity/URI/scope未到业务断言。作者迁正常身份fixture后仅fork-api-resource-regression-001 actual0/12.554785642s，3pass，主核raw/SHA/前后指纹同/group0；12未变项复用。冷导入Controller/installer与error classifier已迁唯一runtime，原facade exports移除、实际分类才导SDK；cold-model-runtime-static-003 actual0/0.230s、222源同/raw/组0已主核。核心016 actual1/203.565494393s，222源同/raw SHA核/group0，三节点成功启动进入真实浏览器，首红是首次task父user Turn＋child报告触发的main internal display总数（driver957→assertTranscriptDom547）；作者后续核SQL两者completed、live缺安全internal notice，尚未到第二sibling，不再停在startup。停止旧搜索＋冷导入迁移后真实准入改善已观察，不证明单因或总体倍率。Sol恢复独占核心与运行，沿本次result定位并盘齐同assert/verify helper其余focus，导航109仅静态、不占运行；边界driver不再卡首次核心调试，完整六focus与原全部门仍未过。
+
+111-002已完整通过并释放Sol重测试窗口：actual0/680.475333943963s，原300文件＋40Gateway＋20并发完整，2693源码前后与a65候选均同/raw核/runner和精确fixture-owned0，16700/16701无监听。主独立从逐样本重算15组p95/FS与重载，最高p95=1906.818ms、max reload1、growth=true；并发UI/磁盘缺项0，原分类仍10.4b-1，不称性能达标或纯后端瓶颈。ART=`RV/coordinator/artifacts/navigation111-independent-full`，正式原件仍在NWT原镜像输出目录，没有复制或借用历史成功；核验=`verification113.json`，重算=`numeric113-recalculation.json`。
+
+完整五测试路径固定交付已集成`15ee9cfef86feda631501bec38e49a137d56b5e9`（parent4d325cab/tree a65b50fc），严格重建/diff-check/guard均0、共享index字节同；只写固定五blob，ROOT旧live原件保存为Git对象，不动050核心。receipt=`RV/coordinator/artifacts/navigation113-integration/receipt.json`。110独立增审无finding（SHA c8046eaa）复用；10.4b依据本次终态与独立重算勾选，10.4c/10.8原余门不勾，不重复导航long gate。
+
+111-001主漏核整树基线控制停止，actual1/148.273081539s，不是业务失败；窄21源之外四个已接受生产依赖落后。主按a65固定blob同步30 tracked差异，content diff0/额外仅依赖symlink/共享index同，之后002完整2693指纹实跑。原件保001/formal-cancelled；收据=`ART/complete-baseline-sync.json`。空stat原始diff-files误报全树的列表不是内容证据，主补救成本单列。112将此教训机械化到现有runner，不只增加文字规则。
+
+050 L最新作者回报：target ForkRetentionReleaseRecord/schema15（旧14显式拒绝），gate外delete/abort及async caller迁齐，旧bulk claim release和同步source completion物理删除；capture预分配/source EX准入和精确Thread激活、3 crash phases/跨gate/缺source ref测试已写。static004为当时源码0，无runtime绿。作者再发现原规范声明source fork_retention lease却无生产create/settle caller，继续同批补现有source EX阶段唯一lease，不增加平行authority；static005后defaults/cold/L小组→原六focus。L真实产品crash driver及I/J/K/M/O/P/Q/B/S原门仍待，未整批STOP。
+
+050 defaults-cold-retention-unit-regression-001主核actual1/99.19910777593032s，244源前后同/raw核/组0，39pass/6fail；defaults、L record/claim/schema15与business7已具名过，失败均为model_stream_transport六node，作者判断缺真实sealed dispatch、未进入transport。只一次迁共用真实dispatch fixture后复跑六红＋L集成，39未变项复用，不造tool_test豁免。主核=`RV/coordinator/artifacts/efficiency114-skill-batch/retention-unit001-verification.json`；整批仍未STOP/接受。

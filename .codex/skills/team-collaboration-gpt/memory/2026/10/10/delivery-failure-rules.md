@@ -384,3 +384,7 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 105发现旧报告检索`rg -uuu`仍遍扫out/visualizations/tmp，累计read_bytes754527252480；agent回忆否认不能排除归属。主从进程CODEX_THREAD_ID/SESSION_ID与精确session_meta确认属于本root/a06_architecture_final，再核startticks/argv、SIGTERM仅该rg，bash/head均退出。先扫882MB主对话没有定位价值；改为线程ID→元信息，避免再次全历史搜索。后续I/O full avg10已观察降到约2%；停止无收益I/O有效。Sol同批将非必要重SDK导入移runtime后，016三节点实际启动并进入浏览器，首次红到首次task父user Turn＋child报告main internal display的DOM总数（作者初报第二child Turn，后沿SQL与截图纠正）；不能从同时两项调整推算单因或总体倍率。收据=`RV/coordinator/artifacts/navigation098-independent-full/owned-search-retirement105.json`；未知find未杀。
 
 107增审在长跑前拒收106诊断候选：Node传snake_case却浏览器解构camelCase，使冻结身份变undefined并退回path关联；OR身份匹配也会混入错op，新增diagnostic helper还在原成功inspect/双rAF路径重复全树扫描、读rect，并新增post-start page.evaluate等待。两纯静态绿未发现这些合同与成本问题。109同两源一次修齐：复用原观察事实，失败后补详情；op+sequence联合配对并带browser timeOrigin，删除额外成功同步栅栏。旧规模/身份/ports审查复用，只审真实新差异；真实效果待下一正式gate，不为诊断另跑长矩阵。
+
+111主基线核验遗漏：21窄指纹虽同固定tree，NWT旧HEAD之外四个生产文件仍旧，实际运行树不等于待集成候选。111-001在148.273s控制停止、actual1/raw保原/组0，不记业务失败或模型效率。主从候选blob机械同步30个tracked差异（含四生产与既有测试/文档），完整content diff0、额外仅依赖symlink、共享index字节同；111-002改记录2693源码前后指纹后再跑原门。fresh read-tree的空stat会让原始diff-files误列全树，须刷新私有stat或比较blob后再判断内容，不打印全路径清单。此次补齐基线有效，正式gate待终态；主补救成本单列。
+
+112把上述纠正接入现有runner而非只加禁令：固定候选profile给`source_baseline`完整指纹，错配写启动前收据并拒绝Popen；live作者调试不加冻结门。受保护smoke用已接受distribution_identity的旧SHA模拟遗漏，actual1且command_started=false；正确固定SHA时actual0/组0。Ruff和短只读独审通过；原件=`RV/coordinator/artifacts/baseline112-guard/verification.json`。这证明该错配可在命令启动前拦截，不证明主生成的清单自动完整，也不称长测试提速已实测。恢复期间主读取旧单行JSON日志造成巨大无用输出，后续精确attempt读取同时限制字节、选所需键，不以tail行数冒充输出上限。
