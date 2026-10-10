@@ -400,3 +400,9 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 117 后续history green-002实际0/25.156s，warm/cold新Turn及显式checkpoint冻结语义均过，248源同/raw主核/组0。这验证短真实节点先调同因闭包的调整有效，下一步仍回原核心产品门；独审在既有runtime窗口只读，不阻断作者启动、不新增重复验收。
 
 117 matcher隔离小修后，Sol只跑两个Responses原红＋3个新增unit，actual0/60.935s/5pass，248源前后同/raw核/组0；代表与chat3未变通过项保留。history独审在同一窗口完成、原核心018已直接启动，未把窄审变成额外等待门。此轮支持继续由Sol贯穿核心、Luna处理测试边界并增量独审的分工，未证明模型速度倍率或全部产品验收完成。
+
+118 产品018 actual1/258.944s已越过旧409，失败是旧title selector找不到真实role=tab，count0静默跳过必需导航后才在child DOM等30s；同一误选还在team断言。Sol一次迁两处accessible role/name并删除skip。主利用独立L合同实施窗口让Luna只读核同因UI消费者，避免长跑逐个发现旧接线；不新加测试ID、通用selector框架或运行门，修订效果待下一产品actual。
+
+119/121 实测后续core019已越过该tab click，实际1/219.652s停在child FIFO工具提交前ack，390源同/raw主核/组0；DOM接线调整在此入口有效，不代六focus全部通过。正常协议生成14.462s预期六bindings变化，不能把“source前后同”套到生成命令。主给accepted20925037 Buf image避免禁Git作者等待索引；同时发现默认breaking命令自比当前proto、flag缺值静默跳过。Luna隔离三文件小修（脚本/package/唯一mask caller），static/json0、三个缺值负向actual2、真实image正向0/3.957s，增审无finding；主仅固定blob在无运行窗口同步，既有check/gen保持，050继续独立定位。用现成入口消除假检查，比追加文字禁令或给作者Git权限更直接。
+
+121报告路径复犯：原独审报告实际写入NWT/out，主读取明确ROOT路径失败，未同步或接受；原agent补回后两份SHA同5b34462f...。主核原件后完成三blob同步并立即释放Sol窗口，结束该agent产物写入及全部作者/运行权，保常驻只读消息职责；不再追加同义路径规则或重审未变候选。本轮主恢复也曾裸rev-parse一次，未写索引；后续统一私有subprocess环境，同步共享index字节同，主错误单列，不归作者。

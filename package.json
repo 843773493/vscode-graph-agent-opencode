@@ -17,7 +17,7 @@
     "build:web": "bun run --cwd=src/clients/web build",
     "install:config": "uv run python -m configs.boxteam --project-root .",
     "check:protocol": "bun run ./scripts/generate_protocol.mjs --check",
-    "check:protocol:breaking": "bun run ./scripts/generate_protocol.mjs --check --breaking-against proto",
+    "check:protocol:breaking": "bun run ./scripts/generate_protocol.mjs --check --breaking-against",
     "gen:protocol": "bun run ./scripts/generate_protocol.mjs",
     "package:linux-x64": "bun run scripts/release/package-linux-x64.mjs",
     "package:windows-x64": "bun run scripts/release/package-windows-x64.mjs",

@@ -11,6 +11,10 @@ const breakingAgainstIndex = scriptArguments.indexOf("--breaking-against");
 const breakingAgainst = breakingAgainstIndex >= 0
   ? scriptArguments[breakingAgainstIndex + 1]
   : null;
+if (breakingAgainstIndex >= 0 && (!breakingAgainst || breakingAgainst.startsWith("-"))) {
+  console.error("协议参数错误：--breaking-against 后必须提供基线 image/path。\n用法：--breaking-against <image-or-path>");
+  process.exit(2);
+}
 const stagingRootIndex = scriptArguments.indexOf("--staging-root");
 const stagingRoot = path.resolve(
   workspaceRoot,

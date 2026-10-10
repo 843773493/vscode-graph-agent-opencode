@@ -112,10 +112,11 @@
 ```sh
   bun run gen:protocol
 ```
-> ### breaking
-> [协议] 检查相对于现有 proto 的破坏性变更
+> ### breaking [baseline]
+> [协议] 使用已接受的 Buf image 或 descriptor 文件检查破坏性变更
 ```sh
-  bun run check:protocol:breaking
+  baseline="${baseline:?请提供已接受的 Buf image 或 descriptor 文件路径}"
+  bun run check:protocol:breaking "$baseline"
 ```
 ## openspec
 > ### status (change)
