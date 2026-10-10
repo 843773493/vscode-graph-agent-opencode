@@ -86,6 +86,7 @@ Chromium 等 Unix socket 若因路径长度上限失败，主代理可在 `out/`
 - 独立源码不自动隔离运行状态；需要启动服务时配套业务工作区、BOXTEAM_HOME、端口与 Gateway registry。重启全组开发服务由主代理协调；重测试按资源串行或有限并行，15 个 agent 不代表 15 个重测试槽位。
 - 进程测试显式指定生命周期 owner：既有 backend URL 表示 attached，空目标才表示 Gateway-managed；健康探测只验证就绪，不能把超时解释为切换 owner 再启动一个进程。清理范围从首个进程启动开始覆盖后续启动失败，不能只在全部 ready 后进入清理块。子进程PID尚未登记也不能跳过原owned组；按leader实例回执重扫原PGID/session，核已退出根与未知子回执的窗口。
 - 清理只终止已登记 handle 所属进程或进程组；端口号不能证明进程归属，端口被其它服务重占后不得按端口强杀。registry 尚未交给 lifespan 前，构造函数仍负责失败时关闭已创建的 runtime，并保留启动与清理错误。
+- Linux 遗留进程没有 handle 时，先只提取其 `CODEX_THREAD_ID`/`CODEX_SESSION_ID`，按精确 thread 文件的 `session_meta` 核 parent 与 agent_path，再核 PID/startticks/argv；不打印其他环境值，不扫描完整对话或 out/tmp 猜归属。确认为本任务所有才能停止；未知归属保留。agent 没记住旧命令不证明未执行。报告路径已知时直接读取，缺失就明确缺失；源码搜索限定必要目录和短 timeout，不以无界 `rg -uuu` 扫运行树补报告。
 - 结束时登记目录、进程、集成状态与保留理由；可复现临时数据和副本主动清理，必要的原始失败/验收报告与独有源码保留，不反复复制整树。正式测试输出按仓库规范默认保留；用户明确授权的开发数据清理优先。worktree 已集成且无未提交改动后才能移除，不用 force 清理未知工作。清理的私有状态索引须初始化到该worktree登记HEAD，不能沿用主树集成tree，否则会把干净源码误报为修改。
 
 ## 集成与索引

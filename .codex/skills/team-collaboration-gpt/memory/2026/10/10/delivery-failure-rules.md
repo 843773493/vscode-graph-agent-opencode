@@ -366,3 +366,21 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 014再次在A后端监听前失败（actual1/161.393s，184源不变/owned0），本次没有012的cost-map SSL warning；最后watcher日志只能定位初始化区间，不能断言watcher就是根因。090核registry→watcher.ready在首次awatch yield才释放，但后续owner无分阶段日志，clock请求也未记录；同Sol最少加原logger begin/end后只启现有fixture的A，保300s/原timeout，B/C与Provider不启动，实际定位效果待收。graph-history-boundary002同时取得三个factory/runtime PASS，SQL首例因旧fixture缺正式写锁失败（整组actual1/64.396s）；同作者迁fixture只复跑分页文件，003 actual0/63.766s、23pass，185源不变/owned0，未重验graph三例。不能据此算完整8.14/A–S或捏造节省秒数。
 
 090单A实际1/79.229s、187源同/owned0，却只有load env、未到lifespan begin，不能沿014最后watcher日志继续认定阻塞await。作者D/folio_wait_bit_common工具转录与主当时IO full约51%相符，但不证明排他根因；不改环境或重复长跑，作者继续独立整批实现。091固定增审又提前发现失败诊断的page.evaluate无局部deadline，可能挡原30s异常直到600s wrapper（静态finding、未复现）；093同作者只给诊断采集/写盘3000ms总期限并保原异常，解析0，精确差异独审与真实full仍待。避免新坏候选进入长跑有实证，具体节省时间不推算。当前台账从35119压到14104bytes，保当前租约/收据/剩余门，关闭派单走既有历史原件，不在每次恢复重读全过程。
+
+096短时只读在050产品运行前确认B/I/M正常入口缺口：联邦权限配置被分到restart而未达现有热发布consumer，attachment GC有方法无生产caller，所查cold history未持shared guard且skill/ToolSet缺phase观测。结论直接交Sol；作者一度等待其它生产owner，主明确同唯一作者补必要调用闭包，不再制造交接等待。只证明前置缺口已定位和归属已纠正，真实修复/效率效果待050实际入口。与此同时，主从已STOP的093固定blob严格重建095相对HEAD完整五文件补丁，17依赖逐blob不变；准备与唯一full重验并行、未动作者源码或提前接受，不再于终态后重新复制/构建候选。
+
+095原full实际1/738.061s、21源前后与093固定相同；原300串行样本和600个backend FS probe均完成，但600s内部wrapper到期，20并发与40Gateway未进入。主直接核原件并从probe分三组估算：每100样本首before到末after172.936/179.960/196.772s，样本间gap均值292.967/356.962/358.841ms；这些边界不能归给未记录的单callee。正常旧measurements/trace仍在formal目录，不计本次。先依据现成数据查重复观察/准备开销，不延长timeout或盲重跑；prepared五文件候选不接受。receipt=`RV/coordinator/artifacts/efficiency096-continuation/navigation095-verified.json`，真实减时效果待修后验证。
+
+097纠正主调度自己的过度约束：600s只是整批browser subprocess保护，不是原10.1/10.4b/10.8业务验收门；原规范也未要求650ms后重复确认同一目标持续可见。caller只读确认`initiatingPathPromise`已在原30s内检查同一发起页目标视口，追加`requireVisibleTreeRow`另查相同谓词；095并未测该callee耗时，不能推算节省值。主授权同Luna仅两测试文件减法并将整批保护调900s，原300+40+20、30s操作期限、650ms、真实DOM双rAF及1500s进程外保护均保留；规范/实际规模校核后调整保护，不盲延业务期限。owned0后先释放Sol窗口，解析/静态及完整门效果待收。
+
+098原full实际1/619.904s：157样本完成，第158个paste已202、后端committed/published且page2消费匹配terminal，却未在30s内取得DOM双帧快照。21源前后固定、raw主核、owned0；不同完成规模不能声称097提速。已有失败产物没有冻结sample.start、目标行viewport/快照拒绝条件或response阶段钟；同op request→正文观察55.730s无法归因单一owner。100/100b只读后立即停，不再盲重跑十分钟或凭空改生产；101一次补两测量文件的有界证据，保原门和3000ms诊断总期限，效果待真实入口。
+
+050首次核心运行不能被全部边界driver未写完拖住。主明确必要生产闭包＋少量核心场景就绪即可集中调试；Sol接受并启动control-attachment-regression-001，actual1/142.851s、177pass/1fail。唯一红是unknown-thread404反例传入非法UUID version，400在业务边界前发生；同作者迁合法不存在ID，只重验受影响节点，177未变项按依赖保留后进入原六focus015，不整组反复跑。节奏调整已有执行响应，产品效果待015，不提前记全批通过。
+
+101再次禁Git失守：caller在首读模板执行status/rev-parse后承认，未改两测量源。主立即中断、撤作者/运行租约，保存ROOT/NWT index现场，ROOT同05:05Z preimage、NWT无即刻preimage不称无影响；没有源码成果可交。103改短上下文新作者接同两文件/固定runner，不再只追加同义提醒恢复原作者。严重成本为重启派单与窗口浪费，实际交付效果待103；不把索引无损当违规可接受。
+
+015实际1/212.041s，213源不变/raw核验/group0，A/B已启而C19040未在60s就绪，driver未进。作者固定C日志显示cost-map远端读取超时后registry/lifespan约2.451s完成；与早先090仅load-env的不同证据分别保留，不能认定唯一宿主或业务锁根因。104短只读检查启动时无需执行的重SDK导入是否可移到已有runtime边界，降低启动耦合；不盲重复启动、不更改全局环境或延deadline。修法与实际启动效果待核。
+
+105发现旧报告检索`rg -uuu`仍遍扫out/visualizations/tmp，累计read_bytes754527252480；agent回忆否认不能排除归属。主从进程CODEX_THREAD_ID/SESSION_ID与精确session_meta确认属于本root/a06_architecture_final，再核startticks/argv、SIGTERM仅该rg，bash/head均退出。先扫882MB主对话没有定位价值；改为线程ID→元信息，避免再次全历史搜索。后续I/O full avg10已观察降到约2%；停止无收益I/O有效。Sol同批将非必要重SDK导入移runtime后，016三节点实际启动并进入浏览器，首次红到首次task父user Turn＋child报告main internal display的DOM总数（作者初报第二child Turn，后沿SQL与截图纠正）；不能从同时两项调整推算单因或总体倍率。收据=`RV/coordinator/artifacts/navigation098-independent-full/owned-search-retirement105.json`；未知find未杀。
+
+107增审在长跑前拒收106诊断候选：Node传snake_case却浏览器解构camelCase，使冻结身份变undefined并退回path关联；OR身份匹配也会混入错op，新增diagnostic helper还在原成功inspect/双rAF路径重复全树扫描、读rect，并新增post-start page.evaluate等待。两纯静态绿未发现这些合同与成本问题。109同两源一次修齐：复用原观察事实，失败后补详情；op+sequence联合配对并带browser timeOrigin，删除额外成功同步栅栏。旧规模/身份/ports审查复用，只审真实新差异；真实效果待下一正式gate，不为诊断另跑长矩阵。
