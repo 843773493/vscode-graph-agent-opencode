@@ -328,7 +328,7 @@ Node调试的`debug process identity` MUST是每次启动唯一`process_instance
 
 ### Requirement: 统一资源寻址 必须隐藏locator并固定资源来源
 
-**归属声明（消除两套定义并存）**：本 requirement 涉及的资源 URI 语法、scope/scope_id、gateway authority、kind 闭集、星型解析顺序与拒绝码，一律以 `add-unified-virtual-resource-addressing` 的具名 requirements 为唯一 owner 与唯一实现：语法引用「URI 语法必须保留固定段序并单一实现」，scope 引用「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」，kind 引用「kind 闭集定稿且描述符闭集独立不可混用」，错误引用其集中登记。本 change 不复述闭集表，也不自行发明取值或解析器；普通 files 导航不产生语义来源描述符。本 requirement 只声明管理资源的隐藏 locator、四个标识分离、activation snapshot 恢复、skill_load name-only 与安全 display URI 合同。
+**归属声明（消除两套定义并存）**：本 requirement 涉及的资源 URI 语法、scope/scope_id、gateway authority、kind 闭集、星型解析顺序与拒绝码，一律以 `add-unified-virtual-resource-addressing` 的具名 requirements 为唯一 owner 与唯一实现：语法引用「URI 语法必须保留固定段序并单一实现」，scope 引用「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」，kind 引用「kind 闭集定稿且描述符闭集独立不可混用」，错误引用其集中登记。scope 明确采用该 owner 的 `workspace`/`user`/`gateway`/`inline` 闭集，`memory` 不是 URI scope；本 change 不另维护取值表，也不自行发明取值或解析器；普通 files 导航不产生语义来源描述符。本 requirement 只声明管理资源的隐藏 locator、四个标识分离、activation snapshot 恢复、skill_load name-only 与安全 display URI 合同。
 
 系统 SHALL为可寻址且可向模型或客户端展示的管理资源提供规范`boxteam://`虚拟资源URI。workspace AGENTS、workspace/Gateway/inline Skill条目 MUST分别使用可区分的逻辑scope/kind/name（`memory` 已确证不是 URI scope，MUST NOT 作为 scope 出现）；URI中不得出现绝对路径、真实网络endpoint、credential、provider私有handle或正文。内部语义聚合的必填 nullable display_uri 只引用统一寻址owner requirement「内部语义聚合资源不得伪造 URI」，不得用catalog身份伪造可访问地址。每个资源 MUST区分模型可见`display_uri`、内部稳定`source_id`、语义`resource_id`和provider私有`provider_locator`：URI只是locator/provenance，不是任一资源身份、授权凭据、dedupe key或业务幂等键，revision/hash/snapshot reference不得编码进URI。
 
@@ -412,9 +412,9 @@ ResourceActivationCoordinator MUST只通过唯一Saver/ContextStore port提交ty
 
 ### Requirement: SkillCatalog 必须隐藏路径并分离 metadata 与 activation
 
-系统 SHALL 从 bundled、`${BOXTEAM_HOME}/skills/` 和当前 workspace Skill 来源构造确定性的有效 catalog，并只向模型暴露唯一 Skill 名称及描述。workspace 同名项优先于 Gateway 全局项，Gateway 全局项优先于 bundled 项。模型不得看到或传入 Skill 的绝对路径、相对路径或 catalog locator。一个 `SKILL.md` 的 metadata 与 activation SHALL共享同一个已登记`source_id`，但拥有不同语义`resource_id`/facet identity并分别生效：安全frontmatter parser禁止custom tag/alias/object构造，name/description必须是唯一、有界scalar；其它字段不进入metadata/activation payload、facet revision或策略。activation只使用frontmatter结束offset之后的精确正文bytes。工具name只可作为已构造catalog map的受校验精确key，绝不得参与路径拼接。
+系统 SHALL 从 inline、`${BOXTEAM_HOME}/skills/` 和当前 workspace Skill 来源构造确定性的有效 catalog，并只向模型暴露唯一 Skill 名称及描述。workspace 同名项优先于 Gateway 全局项，Gateway 全局项优先于 inline 项。模型不得看到或传入 Skill 的绝对路径、相对路径或 catalog locator。一个 `SKILL.md` 的 metadata 与 activation SHALL共享同一个已登记`source_id`，但拥有不同语义`resource_id`/facet identity并分别生效：安全frontmatter parser禁止custom tag/alias/object构造，name/description必须是唯一、有界scalar；其它字段不进入metadata/activation payload、facet revision或策略。activation只使用frontmatter结束offset之后的精确正文bytes。工具name只可作为已构造catalog map的受校验精确key，绝不得参与路径拼接。
 
-SkillCatalog MUST由ResourceRegistry发布版本化immutable catalog snapshot/revision。bundled使用发布manifest；Gateway global和workspace file provider只监视并reconcile各自固定`skills/<entry>/SKILL.md`一层边界，拒绝越界symlink/未知递归且不运行`rg`。Gateway只返回带安全display URI、不含物理路径的descriptor，不写Session状态；资源变化异步更新catalog desired snapshot但不主动唤醒thread或广播context item，实际metadata delta只在该thread配置的activation boundary形成。
+SkillCatalog MUST由ResourceRegistry发布版本化immutable catalog snapshot/revision。inline使用发布manifest；Gateway global和workspace file provider只监视并reconcile各自固定`skills/<entry>/SKILL.md`一层边界，拒绝越界symlink/未知递归且不运行`rg`。Gateway只返回带安全display URI、不含物理路径的descriptor，不写Session状态；资源变化异步更新catalog desired snapshot但不主动唤醒thread或广播context item，实际metadata delta只在该thread配置的activation boundary形成。
 
 activation registration MUST 绑定`name + catalog_entry_identity + resolved_source_identity`。snapshot/tracked自动逻辑不得因同名优先级变化而改绑文件；原tracked source不可读返回`tracked-source-unavailable`并阻止未记录dispatch。显式再次`skill_load(name, tracked)`时，相同entry幂等复用，不同effective entry则在一个owner事务中冻结旧registration、追加当前完整activation并建立新tracking，返回安全`source_rebound=true`且不删除旧item。同source/revision已在active view可见的重复snapshot返回`already_active`且不追加；不同revision的显式snapshot可追加新immutable activation。tool invocation retry必须先按调用幂等identity恢复原结果。
 
@@ -427,8 +427,8 @@ activation registration MUST 绑定`name + catalog_entry_identity + resolved_sou
 
 #### Scenario: 同名 Skill 按固定优先级解析
 
-- **WHEN** workspace、Gateway 全局或 bundled 层存在同名 Skill
-- **THEN** 系统按 `workspace > gateway-global > bundled` 选择唯一 entry，并保持内部 origin provenance，不向模型泄露路径
+- **WHEN** workspace、Gateway 全局或 inline 层存在同名 Skill
+- **THEN** 系统按 `workspace > gateway-global > inline` 选择唯一 entry，并保持内部 origin provenance，不向模型泄露路径
 
 #### Scenario: tracked 期间出现同名高优先级 Skill
 

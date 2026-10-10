@@ -5,7 +5,7 @@
 ## 坐标与租约
 
 - ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`，旧`/data/hyf/20260629_agent/vscode-graph-agent-opencode`为软链接。
-- 当前HEAD=`b4dc469509915efd4a4dcfd52ff8c185119fa697`，parent=`20925037af67c1a41e88369d0f12d936f5837d1c`；121三工具blob＋三协作文档已接受，receipt=`COORD/artifacts/protocol121-skill-batch/receipt.json`，strict/diffcheck/guard全0、共享index字节同。matcher两blob已接受20925037，receipt=`COORD/artifacts/matcher117-skill-batch/receipt.json`。ROOT 050大量源码在途，禁止整体add、覆盖或提交live。
+- 当前HEAD=`055cf2e3cbcff4ec8751fea208e94c6f00d8d5ce`，parent=`b4dc469509915efd4a4dcfd52ff8c185119fa697`；128固定runner＋四规划/四协作文档九路径已接受，receipt=`COORD/artifacts/runner128-doc-skill-batch/receipt.json`，strict/diffcheck/guard全0、共享index窗口字节同，未收050源码。121三工具＋三协作已接受b4dc，receipt=`COORD/artifacts/protocol121-skill-batch/receipt.json`；matcher两blob已接受20925037。ROOT 050大量源码在途，禁止整体add、覆盖或提交live。
 - RV=`ROOT/out/tests/temp/2026/10/09/a06-final-review`；ART050=`RV/sol_vertical_implementer/artifacts/section8-product050-full-closure`。
 - T116=`ROOT/out/tests/temp/2026/10/10/efficiency116`；COORD=`T116/coordinator`。
 - NWT=`ROOT/out/worktrees/2026/10/09/a06-final-review/navigation-fixture-receipt`，唯一活跃代码worktree，禁止新建源码副本。
@@ -14,11 +14,11 @@
 | Agent | 实际模型 | 当前权限和任务 |
 |---|---|---|
 | `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **050 active/ROOT唯一核心作者、重测试owner**；020已终态，原工具phase实际到达；新首红queued accepted Turn history404，沿真实边界短红闭包，随后命名主产品节点；generation短修已绿，未整批STOP |
-| `/root/navigation_remaining114` | `gpt-6-luna/max` | **126 STOP**；runner窄修、4增量探针已主核/增审无新finding，128固定blob已短同步ROOT；只读常驻，不业务测试/ROOT写入 |
+| `/root/navigation_remaining114` | `gpt-6-luna/max` | **137 active/只读常驻**；提前核完整排队场景测试/fixture消费者，5分钟消息交Sol，不写/跑；134文档finding已闭 |
 | `/root/a06_architecture_final` | `gpt-6-luna/max` | **只读常驻，撤产物写入与全部作者/运行权**；121报告再次写到NWT/out，已核原件并补到ROOT精确路径；123 STOP仅消息源码结论，无身份/filter确定错配；未读真实原件不当缺证，核心不等它；不再派该会话查路径 |
 | `/root/caller_inventory013` | `gpt-6-luna/max` | **101 STOP/撤作者运行及全部Git权**，复犯裸Git；两文件无独有源码，只保固定原件只读 |
 | `/root/a06_navigation_independent` | `gpt-6-luna/max` | **083 STOP/撤作者运行权**，复犯禁Git；独有源码已转交 |
-| `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **127 STOP/只读消息审查**，保持撤写入运行权；125选项值finding已闭，增审无新finding；不重派实现 |
+| `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **136 active/只读常驻**，提前核接受→选择→后继→取消恢复生产消费者，5分钟消息交Sol，撤写入运行权不变 |
 
 至少3常驻、最多15活动；等待者不必运行，不为人数制造任务。主唯一调度、禁自行派生。全禁Git作者与审查者不分配索引；主负责规范/技能、固定和串行集成，不手写业务源码。Luna只做隔离小修和只读核查，37mixin与平行状态表没有实证故障，不派大型改动。
 
@@ -36,9 +36,23 @@ Sol沿019确认两个FIFO model-call identity与driver一致，第二请求含�
 
 queued短红=`ART050/runs/queued-http-boundary-red-001`，单真实HTTP节点actual1/46.737623s，391源前后同/raw主核/group0/PID消失；第二POST queued回执后立即history404，不是schema提前拒绝。主核=`COORD/artifacts/queued127-red-verification.json`。Sol复用current_execution_admission的ordinal cutoff，入口提交后Runtime读取冻结root，不重建附件/accept_turn；Turn仍open，active仅实际启动时推进。主已同步itemized proposal/design/spec/tasks8.13-G：MessageService/Saver在调度/回执前提交唯一acceptance，queued可读但不提前占slot/checkpoint/activation；物理下线queued正文/附件编辑，保policy/删除，删除保root/ordinal/cancelled历史；不造撤回再接受链路。主核原FIFO规范将编辑列为可选；OpenSpec strict0，当前仍未验收/未勾。
 
-124/126效率修复与核心并行：124十原probe已主核；旧fixed=`COORD/artifacts/runner124-fixed/manifest.json`，tree e55b754b。125独审发现ignore/deselect值误当selector，该候选未接受。126只窄修这两个排除值，四新probe实际0/0/2/2、共2.604756s，源码前后同/raw主核；旧十probe只归旧SHA，不冒称新版本运行。fixed=`COORD/artifacts/runner126-fixed/manifest.json`，base b4dc/tree05d90222、blob89b343af/SHA c4d3446e、strict/diffcheck0，127增审原finding闭/无新finding；消息转录`review127.json`不冒充agent文件报告。128经Sol空运行窗口仅同步固定runner与profile node规则，保新增275条source_paths/其它字段，立即释放；receipt=`同fixed/root-sync128.json`，ROOT Ruff0、未碰050其它源码。暂待工具＋规划/技能集中提交；后续产品仅按明确named node运行。首轮profile末尾字面量反斜杠n的JSON错误如实披露，另建126b，不覆盖原件。
+124/126效率修复与核心并行：124十原probe已主核；旧fixed=`COORD/artifacts/runner124-fixed/manifest.json`，tree e55b754b。125独审发现ignore/deselect值误当selector，该候选未接受。126只窄修这两个排除值，四新probe实际0/0/2/2、共2.604756s，源码前后同/raw主核；旧十probe只归旧SHA，不冒称新版本运行。fixed=`COORD/artifacts/runner126-fixed/manifest.json`，base b4dc/tree05d90222、blob89b343af/SHA c4d3446e、strict/diffcheck0，127增审原finding闭/无新finding；消息转录`review127.json`不冒充agent文件报告。128经Sol空运行窗口仅同步固定runner与profile node规则，保新增275条source_paths/其它字段，立即释放；receipt=`同fixed/root-sync128.json`，ROOT Ruff0、未碰050其它源码。工具＋规划/技能九路径集中接受055cf2e3；后续产品仅按明确named node运行。首轮profile末尾字面量反斜杠n的JSON错误如实披露，另建126b，不覆盖原件。
+
+queued-http-boundary-green-001 actual1/63.206409s、398源前后同/raw主核/group0/PID消失；queued history已200，同Job/message/root及无提前graph/model/assembly断言通过，第二Provider request泄露queued正文仍红。局部改善不勾FIFO；主核=`COORD/artifacts/queued129-green001-verification.json`。Sol统一durable cutoff与sealed view/assembly消费，129 Luna仅提前只读盘共同输入及晚到tool/final，不另写核心或运行测试。
+
+129/130提前只读已交Sol、未写代码/报告或运行。129定位`committed_context_items`整view＋全量Turn-less pending_next_turn notice，composition/selected sequences/seal两次compile共用该漏点；internal notice有execution绑定、seed已entry-scoped，但无持久共享fence解析器。主采用原storage_commits精确acceptance/execution_admission commit_id作typed admission cursor/ordinal，同queue/canonical/checkpoint/closure/assembly统一消费，不按任意commit/itemsequence/时间排序、不增journal；晚到当前tool/final及ambient保留，design/spec已补，尚待实现验证。130盘真实user HTTP唯一accept_user_message在start_job前；Runner残留persist_user_message_checkpoint任务及user-origin _start_job helper需同批迁，新FakeMessageService需accept行为；纯Saver历史fixture与只读API stub不因文本命中批量重写。
+
+131恢复核HEAD仍055cf2e3、原七change范围保留；此前一轮分类为progress（固定九路径接受＋规范/真实短原件），不是仅等待。Sol统一cursor静态002已0，仍同批接Runtime受保护to_thread、queued remove/clear先canonical terminal再移除及用户fixture。主选择pending JSONL control-only：只留调度字段/引用，正文附件从canonical input/message projection读，移除raw请求镜像/回填/旧兼容；design/spec/tasks8.13-G已同步，不新增验收门，尚待真实运行。Luna131并行只读核寻址6.1–6.4当前规范，独立于核心，不据accepted源码泛勾整项。
+
+同闭包补齐internal排队输入：Sol指出notice/seed原在active Runtime首次admit，直接去raw镜像会使恢复缺输入。主确认user/internal均在Job入队前由原admission owner提交冻结input/typed preimage，初始binder/runtime-source直接caller复用create-or-get，Runtime只消费；internal不造Turn/slot/activation，不保独立正文双轨。design/spec已明确原owner，Sol一次迁齐。后台API删除静态遇13项既有FastAPI Depends B008及fixture import，保原件；只修import，API按现DI规范单独忽略B008，不改无关依赖写法。整批仍未验收。
 
 128索引观察：共享index当前SHA d50477ab与121前SHA444d9bc1字节不同，私有副本`ls-files --stage -v -z`一致（SHAf6499f7d）；stage/flags未变，不恢复旧index。同步窗口前后仍字节同；receipt=`COORD/artifacts/runner126-fixed/shared-index-observation128.json`。所有主Git subprocess保持私有env。
+
+136/137效率调整：用户指出Sol持续实现但同一链未闭合，现有证据不支持Luna或固定手续把核心等住。两个只读成员分看生产消费者/测试场景，同核排队可见、旧请求隔离、后继消费和取消恢复，确定遗漏直接交Sol当前批，无须等待完整审查；只读允许必要定向callee，不把盘点清单当逐路径审批。下一真实场景检验减少返工的效果；静态/27s类型检查不能用来量化实现和等待时间。
+
+135当前效率动作：132提前只读确认initial binder/runtime-source已有prequeue准入；通用internal入口需由JobService typed前置覆盖，恢复/DTO从原canonical frozen projection读，Sol同批迁齐control-only队列及Web编辑下线，不让核心等待文档审查。static/cursor与backend静态实际0，Web首误用不存在脚本actual1后正确tsc actual0/26.769s，四attempt raw/SHA及源码前后均主核，leader均消失，记录组0；原件核验=`COORD/artifacts/queued135-static-verification.json`。这些仅静态证据，新的真实HTTP短门及产品效果尚待，050仍未STOP。
+
+131/133/134文档独审已闭：CIL owner引用补scope_id/kind及四scope闭集，现行Skill层统一inline，proposal两处遗漏在增审修正；U6.1–6.4按文档动作全条件勾，U为12/46，仅文档收口，不计源码/新导航实施完成。三相关change strict0（工具转录）；独审是agent消息原件，不假造文件报告。下一合理批只集中固定主维护文档，不收050 live源码。
 
 ## 已过且可按依赖复用的边界
 

@@ -254,6 +254,10 @@ child thread MUST 拥有独立 Turn、item、history、active view和执行状�
 
 真实用户消息入口 MUST 在返回 accepted/queued 回执前，经唯一 acceptance owner 提交 Turn、不可变 root 和 initial execution；Runner MUST 只核验并消费同一 acceptance，MUST NOT 将首次持久化延迟到执行启动。queued Turn MUST 立即可由 history API 读取，但 MUST NOT 提前占用 active slot、启动 checkpoint 或冻结资源激活 snapshot。排队消息 SHALL 只保留 policy 设置和删除；正文、附件编辑 API、DTO 和 Web 入口 MUST 物理下线，不保留兼容接口，也不新增撤回再接受链路。policy 更新 MUST 保持原 identity/ordinal；删除 MUST 保留原 Turn/root/ordinal 及 cancelled 终态，不修改已接受的正文和附件。
 
+pending queue 持久记录 MUST 只保必要调度字段、policy/原序号及已接受输入的引用，MUST NOT 保存 raw 正文、附件镜像或参与正文权威判定。user 与 internal notice/seed MUST 在 Job 入队前经原 admission owner 提交冻结输入及 typed identity/preimage；internal MUST NOT 创建 Turn、提前占 active slot 或冻结 activation，初始 binder、runtime-source 等直接 Job caller MUST 复用同一幂等 admission。Runtime MUST 只核验并消费已提交输入；Runtime、恢复与公开 queued DTO MUST 经原 canonical/admission input projection 读取正文和附件，不得保 user/internal 两套正文存储。队列引用与已提交 root/admission 共同满足内容持久化合同。旧开发队列格式不兼容、不回填；缺失或冲突的当前格式 owner 引用 MUST 明确失败，不得用 raw 请求或空正文继续执行。
+
+`ExecutionContextFence` 的 entry 顺序 SHALL 复用同一 thread `storage_commits` owner 的唯一 `acceptance` / `execution_admission` 提交。owner MUST 按完整 admission identity 解析并冻结该提交的 `commit_id` 为可不连续的 admission cursor/ordinal；FIFO 准入与 canonical/checkpoint/closure/sealed assembly 选择 MUST 消费同一 typed fence。系统 MUST 排除更晚 entry-scoped root、notice 及其 execution，但保留当前 execution 随后产生的 tool/final 和按原 activation 合同生效的独立 ambient/resource revision。该 cursor MUST NOT 作为全部 context 的排序依据；缺失、重复或 identity 冲突 MUST 明确失败，不得从 item_sequence、时间戳或当前 view 推断，也不得新增平行 admission journal。
+
 delegated child 的初始 execution 绑定 MUST 由生产提供真实 thread binder：worker MUST 只消费 `session-control.sqlite` 的持久状态索引，经 claim + `pending -> bound` CAS 幂等推进，并在 backend 重启后按同一 admission/claim identity 补齐全部未绑定 intent。缺少 binder 或 binder 无法绑定 identity 时，intent MUST NOT 永久停留 `pending`：系统 MUST 可观测地 fail-closed 报告 `unavailable`（含具体 admission identity 与原因），MUST NOT 静默停留、MUST NOT 把 intent 标成 `bound`、MUST NOT 以任何占位或伪造 execution 掩盖缺口。
 
 #### Scenario: 多个 Session main thread 承担不同长期任务

@@ -162,7 +162,7 @@ hard rebase不修改已有 canonical item identity、正文或因果顺序，也
 SkillCatalog 合并三层来源：
 
 ```text
-bundled resources/skills
+inline resources/skills
     < ${BOXTEAM_HOME}/skills
     < ${workspace_abs_path}/.boxteam/skills
 ```
@@ -300,7 +300,7 @@ SkillCatalog的published snapshot至少绑定catalog revision、entry/resource/s
 
 模型只看到当前有效 entry 的 `name` 和 `description`。frontmatter通过禁用custom tag/alias/object构造的安全解析器处理，name/description必须是唯一、有界scalar；语法错误、重复字段或类型错误使entry显式invalid。其它字段可存在但暂不进入metadata/activation payload、facet revision或策略判断；它们改变时`source_snapshot_hash`可变化，两个facet payload不变则不追加metadata/activation item。activation正文从已接受snapshot的frontmatter结束byte offset后精确取得，不把未支持字段带入模型。工具输入`name`只作为已构造catalog map的精确key，统一校验长度、控制字符、分隔符、`.`/`..`和编码歧义，绝不用于路径拼接；路径解析和稳定读取均在软件内部完成，路径不得进入模型可见参数、普通工具结果或历史正文。
 
-activation registration绑定`name + catalog_entry_identity + resolved_source_identity`，不是只绑定可被覆盖的name；同时每个`(session_id, thread_id, normalized_skill_name)`至多一个active tracked registration。snapshot/tracked自动检查都不会因同名workspace/global/bundled优先级变化而静默改绑另一个文件；原tracked source不可读时返回明确`tracked-source-unavailable`并阻止未记录的dispatch。模型显式再次调用`skill_load(name, tracked)`时，若effective entry identity未变则幂等复用；若已变化，则在一个owner事务中把旧registration冻结为untracked、为当前effective entry追加完整activation并建立新tracked registration，旧context item保持不变，结果返回不含路径的`source_rebound=true`。同一source revision已在active view可见时，重复snapshot调用返回`already_active`而不追加；revision不同的显式snapshot调用可追加新的不可变activation。tool invocation retry仍以调用幂等键优先恢复原结果。
+activation registration绑定`name + catalog_entry_identity + resolved_source_identity`，不是只绑定可被覆盖的name；同时每个`(session_id, thread_id, normalized_skill_name)`至多一个active tracked registration。snapshot/tracked自动检查都不会因同名workspace/global/inline优先级变化而静默改绑另一个文件；原tracked source不可读时返回明确`tracked-source-unavailable`并阻止未记录的dispatch。模型显式再次调用`skill_load(name, tracked)`时，若effective entry identity未变则幂等复用；若已变化，则在一个owner事务中把旧registration冻结为untracked、为当前effective entry追加完整activation并建立新tracked registration，旧context item保持不变，结果返回不含路径的`source_rebound=true`。同一source revision已在active view可见时，重复snapshot调用返回`already_active`而不追加；revision不同的显式snapshot调用可追加新的不可变activation。tool invocation retry仍以调用幂等键优先恢复原结果。
 
 Metadata 与 activation 独立生效：metadata 让模型知道可选 Skill；activation 是 `skill_load` 后实际进入上下文的 Skill 正文。首次组装已有 metadata 可进入 root system item，运行中 metadata 变化只能追加 user-role delta，不能改写 root item。
 

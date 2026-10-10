@@ -414,3 +414,5 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 124首候选被主拒收：新增node guard只识别uv run pytest，实际所有作者命令带uv run --no-sync pytest，因此会完全绕过；且为精确文件防错新增约144行/完整pytest选项表，维护成本过大。主要求在固定入口按两个真实前缀识别、只核显式登记文件token，删除通用parser，重验真实--no-sync负向/正向，不再扩抽象。作者又误带git --version（无repo/index访问参数），按禁Git租约违规记，不虚报共享索引变化；再次复犯即撤执行权限。新版本与效果待核，不将首候选探针绿等价有效防错。
 
 125增审发现窄guard误阻：124十个--version探针及严格树重建已主核，但`--ignore <登记文件>`、`--deselect <未登记node>`的排除值被当正向selector。候选未接受，126只修这两个真实排除选项并验证其后的正向selector，四增量probe共2.605s、raw核/指纹同，127增审闭原finding/无新finding；128空运行窗口固定blob同步后立即释放Sol，效果限于已测防错，不宣称产品提速倍率。保原件、不恢复完整选项表；旧探针不能冒充修改后源码运行。queued404同因已由真实HTTP短红46.738s复现，复用原Saver/admission/fence前移接受，移除可选编辑；不因不可变root另造撤回状态机。其实现与产品效果仍待验收。
+
+129 queued短门 actual1/63.206409s 已证明accepted后history200，但第一execution第二次Provider请求仍包含后入队正文。此前checkpoint Turn cutoff未覆盖composition/selected sequences/seal两次compile共用的committed_context_items，pending notice还无共享fence；不能把一个读取入口过滤过当整条选择链已隔离。统一原storage_commits的typed admission cursor，由同canonical selection owner供checkpoint/closure/assembly；user及internal都在入队前冻结输入，queue只存调度引用，恢复/DTO读原canonical projection。132提前只读确认initial binder/runtime-source已有prequeue事实，通用internal仍需同批接线，已交唯一Sol作者；完整真实短门与产品效果待验，不新增验收门。
