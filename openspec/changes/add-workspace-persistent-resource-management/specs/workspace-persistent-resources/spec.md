@@ -34,6 +34,8 @@
 
 **归属与引用**：本 capability 的持久记录引用政策（含「位置一律以 `资源身份 / ResourceIdentity` + `资源 URI` 表达、禁持久化 `真实路径 / real path`、覆盖 API 响应体与模型可见载荷」）的正名 normative 出处为 `add-unified-virtual-resource-addressing` 的 requirement「默认寻址政策必须以 URI 为默认形式」；「位置 vs 非位置」的判定（D-A2 可由 owner 身份推导者不落盘、D-A3 不可推导者用既有 API 端点、owner 自身运行态字段以工作区内相对路径持久化这一唯一例外）的正名出处为该 change 的 requirement「「位置」必须有可机械判定的统一判据」。本 capability 只**具名引用**上述两条 requirement，MUST NOT 复述其正文、MUST NOT 另立第二套判据。`作用域 / scope` 闭集与 `scope_id` 取值语义、URI 语法、kind 闭集与 `拒绝码 / rejection code` 登记同样由 `add-unified-virtual-resource-addressing` change 唯一 owner 定义，本 capability 只引用。本 capability 的稳定 `resource_id` 与该身份/寻址政策不冲突，继续作为资源身份使用。
 
+此处“引用外部资源的记录”指记录 owner 之外的资源/产物引用，必须继续兑现所引用的 identity + URI 政策。资源 owner 为自己创建并管理的同一资源保存的主记录不是此类 locator：终端/浏览器 owner 在调用 transport 创建实现前生成业务 `resource_id`，主记录保存该身份及关联、保留范围与生命周期事实，再以同一 ID 经既有 API/transport 控制资源。该主记录 MUST NOT 保存 real path 或 provider locator；没有登记资源 URI 模板时，操作引用按唯一寻址 owner 的 D-A3 使用既有 API 端点，MUST NOT 为主记录伪造 URI、扩展 kind 或把业务 ID 当成 URI。此边界不豁免真正的外部资源/产物引用，也不放宽 owner 运行态字段的规范化要求。
+
 #### Scenario: 持久记录只承载身份与 URI
 
 - **WHEN** owner 写入一条引用外部资源的工作区持久记录

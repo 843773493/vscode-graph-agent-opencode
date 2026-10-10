@@ -71,9 +71,9 @@ Thread unload 是独立的、立即执行的清理路径：对临时资源，own
 
 新格式记录必须支持同版本进程重启后的恢复：保持 resource_id、来源 Thread、关联、原始孤儿期限和未收敛操作事实，核实外部实例后恢复；未知结果保留可发现的 unknown/reconcile_required 状态，不重复创建或盲目重放。旧格式输入必须明确失败，不能恢复第二套读写链路。
 
-### 7. 持久记录只承载身份与 URI，逐条消除已确证的 real path 持久化
+### 7. 外部资源引用承载身份与 URI，逐条消除已确证的 real path 持久化
 
-本 change 的工作区持久记录、API 响应体与模型可见载荷 MUST 只承载 `资源身份 / ResourceIdentity` 与 `资源 URI`（必要时加并列 revision 字段），MUST NOT 承载 `真实路径 / real path`。该 prohibition 与 `add-unified-virtual-resource-addressing` 的 requirement「三层职责必须严格分离」同源；{scope} 闭集、`scope_id` 取值、URI 语法、kind 与 `拒绝码 / rejection code` 均引该 change，本 change 不复述、不自造。
+本 change 的工作区持久记录、API 响应体与模型可见载荷中，用于引用 owner 外部资源或产物位置的字段 MUST 按唯一寻址合同承载 `资源身份 / ResourceIdentity` 与 `资源 URI`（必要时加并列 revision 字段；D-A3 使用既有 API 端点），MUST NOT 承载 `真实路径 / real path` 或 provider locator。owner 主记录保存其自己创建管理的同一业务资源的身份及生命周期事实，边界引用本 change spec；运行态字段仍遵守 owner 规范化要求。该 prohibition 与 `add-unified-virtual-resource-addressing` 的 requirement「三层职责必须严格分离」同源；{scope} 闭集、`scope_id` 取值、URI 语法、kind 与 `拒绝码 / rejection code` 均引该 change，本 change 不复述、不自造。
 
 **已确证与「real path 不持久化」冲突的字段与行为（逐条给出修正方向）**：
 
@@ -86,6 +86,8 @@ Thread unload 是独立的、立即执行的清理路径：对临时资源，own
 **已登记的行为变更（非零回归）**：终端工作目录改存相对路径后，工作区被移动时 restore 会把相对路径重锚定到新根，而旧实现落盘的绝对路径会指向旧位置。这是有意且有方向正确的行为变更，本节在此显式登记，不再声称「搬迁前后逐字节相同」；相对子目录、越界绝对路径（按 `path.relative` 的 `..` 表达保留原语义）与符号链接三类与旧实现逐字节等价。**旧开发格式下线**：仅接受新格式的 `cwd_relative` 与 PTY 事实记录；只有绝对 `cwd` 的旧开发记录不再隐式导入或物理升级。旧输入 MUST fail-closed，不回退进程 cwd；新格式同版本重启的资源核实义务保留。
 
 **经核实的正面结论（避免为收严而收严）**：本 change 的稳定 `resource_id` **不是** real path（`session_resource_mapper.py:21/80/156` 分别取 `handle.task_id`、`terminal_id`、`browser_id`，即 owner 生成的不透明 ID），故 proposal 层「`resource_id` 与身份/寻址政策不冲突」成立；收严不是纠正 `resource_id`，而是把这些**既存真实路径字段**纳入规范层 prohibition，使其从「proposal 意图」升格为可验证义务。
+
+**当前身份绑定核账（2026-10-10）**：终端/浏览器的 owner 主记录只保存不透明 `resource_id`、工作区身份和关联/生命周期事实，ID 经既有 `/api/v1/resources/{resource_id}` 路由到相应 owner，再与 transport 返回的同 ID 运行事实核对。该记录没有承载外部资源位置，不是将 identity 当作 URI 解析；按统一寻址的位置判据 D-A3 保留既有 API 端点。当前没有终端/浏览器的资源 URI 绑定，不自造 URI kind、不往主记录补 locator 镜像；真正的 owner 外部资源/产物引用仍须兑现唯一 owner 的 identity + URI 义务；本 owner 在 transport 创建实现前生成同一 resource_id 的主记录不是外部 locator，规范正文已明确这一区分。
 
 **边界**：本 change 只新增约束与引用，不扩大既有能力边界；具体字段改名、URI 化与投影清理的实现归属见 tasks 第 6 节，取值来源一律引 `add-unified-virtual-resource-addressing`。
 
