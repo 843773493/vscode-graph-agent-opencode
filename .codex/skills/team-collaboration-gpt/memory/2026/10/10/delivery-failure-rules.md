@@ -470,6 +470,12 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 
 209长产品030超时取证不足：fixture已yield，build_begin后直到实际124/1528.071959s无build_end；原build使用`capture_output=True`，child未退出时输出未交pytest，因此外层raw空不足以定位卡点。历史外部同命令成功不证明本次原因，backend watchfiles日志只证明同期活动。唯一作者在原正式入口及时落盘build raw/PID/actual/阶段，保护与工作区不变；不盲重复长跑或新增launcher。修后实际效果待原产品，收据=`COORD/artifacts/core209-product030-verification.json`。
 
-210审查误报纠正：最初称tombstone-success回程跨期未覆盖，复核原replayed=True参数后撤回并即时通知唯一作者。主核原spec/生产/测试后只保`_DELETED` catch回程跨期与target ledger唯一/原expires_at不变断言缺口；无需重写已有分支或新增恢复窗数值要求。按原实际参数核覆盖能减少无效返工，修后实际测试尚待；不能据本次静态纠正宣称总体提速。
+210审查误报纠正：最初称tombstone-success回程跨期未覆盖，复核原replayed=True参数后撤回并即时通知唯一作者。主核原spec/生产/测试后只保`_DELETED` catch回程跨期与target ledger唯一/原expires_at不变断言缺口；无需重写已有分支或新增恢复窗数值要求。按原实际参数核覆盖能减少无效返工；214原reply-expiry参数及target ledger冻结唯一断言已过，仍不代完整产品或宣称总体提速。
 
 211/212下一完整场景核查：211从旧reader/admission分层test推断R/S缺真实全链，主要求先读当前唯一driver后撤回；两具名产品场景已接，不因此重写/扩矩阵。审查覆盖从当前产品入口与真实分支出发，不能将自己没读到的实现派成新任务。212按B原spec提前发现hub discovery fan-out只查discovery、漏transit policy，主核后即时交同Sol迁齐；这是确定源码遗漏，尚未运行复现/证明提速。两会话限时仅消息并STOP，不制造全审等待或另建报告。
+
+215只回验失败的真实效果：boundary001其余5pass后，作者只修spoke测试取现有hub channel，002只跑原失败节点1pass/21.923532s；两attempt仅测试文件变化，生产同。原raw/SHA/owned0由主直接核，保原1fail，不重跑5项或复制运行树。新规则只证明该次失败项闭合与复用有效，完整B/J产品仍待。
+
+217构建前置漏接：032实际1/213.587599s，setup B Gateway19021 ready60s失败，真实stderr报dist/index.html缺失；未到build/K/M/O，不归030/031同因。消费fixture没有显式依赖build，原旧dist存在时隐藏了接线缺口。同Sol在唯一原owner声明build→Gateway→browser依赖，module scope/最终test参数不能保证启动前置。219核033原phase：build_end0先于fixture_begin，即时build原raw可读，两个规则在该初始化阶段有效；随后A backend ready60失败，完整产品未进。不吞Gateway错误、扩ready期限或新增launcher，原日志指纹与归因见`COORD/artifacts/core217-product032-gateway-cause.json`。
+
+218两阶段回执遗漏（历史发现）：核查当时Q后端mark把目录逻辑committed且pending_settlement=True，finish才settle；Web DTO已有字段，但outbox未保存、terminal更新直接忽略，runtime/prune只看committed与目录revision，UI报删除完成且未展示confirmed deleting。主沿原spec与生产消费链核实，交同Sol贯通DTO→持久镜像→晚到对账/终态缓存→清理/展示；不只补interface，不新增状态owner。221上游补核当时DTO只报bool、mark后异常只日志返旧committed，无repair_required及原因投影。222独审时当前050源码已出现三态、receipt_revision、正常与恢复错误投影、持久outbox/晚到更新/保留未结算项和Explorer展示；源码仍live未接受，原Q产品未验。保留发现与修订时态，不把历史快照重复派成当前缺口；224提前只核新语义差异。尚未证明完整行为闭合或交付提速，后续用原Q产品验收。
