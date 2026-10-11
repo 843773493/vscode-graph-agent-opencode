@@ -5,7 +5,7 @@
 ## 坐标与租约
 
 - ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`，旧`/data/hyf/20260629_agent/vscode-graph-agent-opencode`为软链接。
-- 当前已接受HEAD=`d46555c2dc442a3a4f251702ca287dc518f4cfb7`，tree=`15900c60eed00dd43d8ed15eb2537b090372089d`（三团队文档），receipt=`COORD/artifacts/docs213-scenario-forward-review/receipt.json`；strict/diffcheck/guard全0，共享index字节同，未收050源码。上一204文档HEAD=`690aecd500339ca8322321a544caac7fd2982dfa`，业务接受166 HEAD=`c6bb5c7f7a8b5cb74a52bc2e74495b5694091aca`；历史坐标仍按原件。
+- 当前已接受HEAD=`86924c1a49de3e210a0eb256fa2d2bef2938e336`，tree=`fbb401f9325911a17bc73630ba57166adb0829c6`（三团队文档），receipt=`COORD/artifacts/docs222-initialization-settlement/revision2/receipt.json`；strict/diffcheck/quick_validate/guard全0，独审增量无finding，共享index字节同，未收050源码。上一213文档HEAD=`d46555c2dc442a3a4f251702ca287dc518f4cfb7`，业务接受166 HEAD=`c6bb5c7f7a8b5cb74a52bc2e74495b5694091aca`；历史坐标仍按原件。
 - RV=`ROOT/out/tests/temp/2026/10/09/a06-final-review`；ART050=`RV/sol_vertical_implementer/artifacts/section8-product050-full-closure`。
 - T116=`ROOT/out/tests/temp/2026/10/10/efficiency116`；COORD=`T116/coordinator`。
 - NWT=`ROOT/out/worktrees/2026/10/09/a06-final-review/navigation-fixture-receipt`，唯一活跃代码worktree，禁止新建源码副本。
@@ -27,10 +27,11 @@
 
 | `/root/terminal_replay201_readonly` | `gpt-6-luna/max`（创建显式参数） | **shutdown/不可复用**；原team锁序/装配审查无新确定finding，未运行不代验收 |
 | `/root/creation_recovery202_readonly` | `gpt-6-luna/max`（创建显式参数） | **shutdown/不可复用**；P原正常入口交Sol，新resolver/视图审查无确定finding |
-| `/root/product030_failure209_readonly` | `gpt-6-luna/max`（创建显式参数） | **222 STOP/文档只读常驻**；独审发现Q台账未区分历史缺口与Sol当前源码，接受前修正并只审新增差异。220顶层重依赖与测试LiteLLM价格表发现保留，033全部ready根因未定；本地价格表仅测试侧建议，效果未核。无Git/写入/测试/服务 |
-| `/root/expiry210_assertion_readonly` | `gpt-6-luna/max`（创建显式参数） | **224 active/提前只读核Q新差异**；限时核正常/恢复producer、晚到receipt版本、持久outbox/cache/prune/UI语义，不重复218旧缺字段结论。223 S无确定生产finding，原冻结上界/mixed双lane/around gap/首尾notice专门断言仍未验；221 I已有owner闭包，不重构。无Git/写入/测试/服务 |
+| `/root/product030_failure209_readonly` | `gpt-6-luna/max`（创建显式参数） | **243 STOP/撤作者、运行与扩查权，不再续派**；241全禁Git仍执行约十条裸Git，并误读diff方向称aef566ae无rename赋值，主固定对象反证后已撤回。共享index与240字节同，未覆盖源码/恢复暂存。236两文件固定证据仍有效，240已同步ROOT，待批末构建；原25hook不重跑 |
+| `/root/expiry210_assertion_readonly` | `gpt-6-luna/max`（创建显式参数） | **245 STOP/只读常驻**；核I整个当前driver及真实phase/API/锁和恢复收尾，无新确定接线缺口；未运行不当通过。242同样无新生产finding；239独审两activation文件无finding，race stub限制保留。无Git/写入/运行 |
+| `/root/a05_web_caller244_readonly` | `gpt-6-luna/max`（创建显式参数） | **244 STOP/只读常驻**；A05 Web28逐文件分类已完成，核最终request target与镜像收尾，无新增finding。消息结论与主捕获指纹见库存`readonly-caller-conclusions244.json`；未读Git基线，不据此勾1.7。无Git/写入/测试/服务 |
 
-至少3常驻、最多15活动；当前Sol＋209＋210，201/202等shutdown不可复用；等待者不必运行，不为人数制造任务。主唯一调度、禁自行派生。全禁Git作者与审查者不分配索引；主负责规范/技能、固定和串行集成，不手写业务源码。Luna只做隔离小修和只读核查，37mixin与平行状态表没有实证故障，不派大型改动。
+至少3常驻、最多15活动；当前Sol＋210＋244，209撤权，201/202等shutdown不可复用；等待者不必运行，不为人数制造任务。主唯一调度、禁自行派生。全禁Git作者与审查者不分配索引；主负责规范/技能、固定和串行集成，不手写业务源码。Luna只做隔离小修和只读核查，37mixin与平行状态表没有实证故障，不派大型改动。
 
 ## 当前050与下一步
 
@@ -164,3 +165,33 @@ Buf真实accepted209基线=`COORD/artifacts/proto119-baseline/accepted-20925037.
 218/220已消息STOP：218核查当时，Q后端mark hook为committed+pending_settlement，finish才settle；Web outbox未存字段、terminal receipt直接跳过、prune与runtime cache只看committed/revision，Overlay报递归删除完成，confirmed deleting未显示。主核原spec121/157交同Sol贯通；到222独审时，当前050源码已有settlement三态/receipt_revision、正常与恢复producer、outbox保存/晚到对账/保留未结算项及Explorer状态展示。以上源码仍live、未接受，原Q完整产品行为尚未验，不把218旧快照当当前缺口。220主核033 55s真实container导入栈及后继测试LiteLLM远端价格表超时，顶层重依赖违规有据、全部ready根因未定；本地价格表仅原测试child环境建议、不改用户配置/生产，未宣称优化效果。
 
 221只读收尾无确定I生产finding：target inbox binding沿原Job prep/delete guard与Job/observation drain收敛，独立skill_load/ToolSet control沿原context-control gate及shield worker结算，既有abandoned settle已接入；专门I产品断言仍未验，不重构已闭生产。221主补核Q上游时，receipt只有bool、mark后失败只日志返旧committed，无repair原因投影，已交同Sol沿唯一owner同批修订；222时已见三态、原因与版本投影，不能再记为当前未实现。223 S沿真实API/reader/SQL/DTO/Web未确认生产缺口，单execution超页续读/256上限/去重/共同坐标已有driver；首次上界冻结、mixed双lane、around dense gap续读及首尾notice是原未验断言，已交Sol后续补。224只读追踪Q新语义差异，确定遗漏直交同作者，不增加等待门或验收门；静态发现不代真实产品验收/整体提速。
+
+222 revision2已接受，仅三团队文档；历史Q发现/当前源码/产品验收时态已纠正，独审增量无finding，未占核心停写。225主核static011 actual0/2.046733s，源码前后同/raw核/owned0，Q后端静态通过不代完整产品。224提前只读仅追新语义差异，Sol继续原050完整范围。
+
+227–229新原件已直接核：static012实际0/11.628809s、505源同；runtime重依赖懒导入与原test child本地价格表开关已落，启动效果待原产品。types034实际2/37.324925s、505源同，原hook两fixture参数与confirmed projection缺settlement字段；consumers013实际1/15.387724s、506源同、135pass/1原pending父Folder fixture红。原raw/hash/bytes/owned0保留，同Sol继续闭合，只回验失败/受影响项，不将局部135pass当Q产品通过。224未确认新生产finding；overlay待settled才报成功，勿重复修旧问题。原176Q真实DOM/outbox断言保留，226只推进已接受A05根路径caller语义，不占核心。
+
+230主核原static013 actual0/6.167842s与settlement014 actual0/68.440361s（原operations_queue文件31pass），506源前后同/raw核/owned0；Q后端三态/恢复/回执版本的原边界有通过证据，仍不代真实Web乐观协议。consumers013唯一红是旧“持久受理”文案断言，作者按真实“已保存本地待同步”修fixture，135未变项按依赖复用。
+
+226已STOP：主库存522命中/161文件，27 live不同accepted HEAD，命中不代缺陷。Luna已核Skill/apply_patch/Python/LLM日志/WorkspaceService/附件生产caller显式root或ContextVar；logs/artifacts/cache无生产caller，Gateway环境root仅启动payload，无新确定finding。原库存与消息结论=`COORD/artifacts/a05-identity-inventory226/{inventory,readonly-caller-conclusions}.json`；activation全量语义及live差异仍待固定批收口，不勾1.7，不重复重构已闭生产，不加核心等待门。
+
+
+233/234库存补核：首次226后缀白名单漏JS/shell，233补6文件12命中；234核manager由每mount固定root/id、attach frontend沿URL workspaceId和Gateway auxiliary route固定目标，跨平台两脚本只为单次test action设置root，没有确认缺绑定生产caller。结论修正原统计范围，不能再称生产WORKSPACE_ROOT仅writer/无reader；A05 1.7未勾。
+
+236/237/238本轮按完整场景推进：236已派209在唯一旧NWT隔离activation两文件；232核查时后台失败只写错误、无authority active重取；236派出时尚未复现/修毕，当前原件和固定候选见239。Sol真实原turn仍inProgress，已声明不改这两文件；050新Q driver已覆盖真实DOM/outbox连续创建移动、丢回执刷新/Backend重启与递归删除pending→settled，尚未真实运行，末尾repair UI/乱序cursor-gone/分页门仍TODO。237提前只读核本批运行阻点，不重复224旧审或制造全审等待。238合并技能同链闭合/场景进展的重复说明；局部效果和整体提速待新产品证据，不改变050原全部范围或任务checkbox。
+
+
+239已核236原件：repro实际1/61.381058s，旧实现未重取authority；修后原hook整文件实际0/38.789687s、25pass，622源前后同/raw SHA与bytes核/owned0。候选`65b985c74e7f285809d5955ace9893bfba15c56b`仅两个activation文件，严格重建/diffcheck0/shared index字节同；manifest=`COORD/artifacts/background-activation236-fixed/manifest.json`。210独审核真实finishWorkspaceRefresh世代，不以test stub代真实owner安全；未build/ROOT同步/接受。237只读无确定首红finding，静态不代原Q全部验收。
+
+239资源实测：05:04 UTC load181.63/170.39/103.26，可用内存6234MB/128811MB、无swap；05:05快照20核、IO full avg60=67.99、memory full avg60=25.98。两大codex RSS约42GB/26GB无可核任务ID，不终止未知/控制进程。035 OpenAPI实际124/167.019514s、508源前后同/raw均0B/owned0，不能由空raw认定唯一导入原因；Sol已收资源前提，源码可继续，长跑不盲重/不延业务期限。原件=`COORD/artifacts/docs238-scene-closure/resource-pressure239.json`，实现耗时与环境压力分列，不宣称所有历史慢同因。
+
+
+240短同步已完成：Sol明确无活动runner且不读取两activation文件；主核两ROOT preimage后只写239已独审固定blob，SHA/共享index字节同，立即释放。ROOT两文件静态解析实际0，源码前后同/raw核/owned0。同步receipt=`COORD/artifacts/background-activation236-fixed/root-sync240.json`；两路径此前不在050 profile effective508 union，已交Sol加入下一同批build/types。25hook复用，未Web build/完整050接受/任务勾选。238技能窄改quick_validate0，当前文档待集中接受，不为台账时点微提交。
+
+
+241–243推进：上一goal turn为progress（236固定独审/240ROOT同步与技能窄改），原七change CLI仍60/89、23/23、13/46、20/59、29/44、37/37、49/49，不缩scope。Sol原turn真实inProgress，I新增只读phase正在接唯一Web操作；209限时补A05 Web28语义、210提前核I新装配，核心不等待。241已核036原raw/actual124/163.010884s、508源同/owned0；55s栈停importlib get_data读取Pydantic，不混LiteLLM远端价格表或未启动，receipt=`COORD/artifacts/lifecycle241-openapi036-verification.json`。观察私有index未read-tree误报process.py删除，main立即按已知流程纠正：真实文件在，仅新增asgi_app启动参数，未写共享index/源码，不归Sol事故、不叠新规则。
+
+241 Web核查先交新可行动live finding：rename非当前/另workspace Session后caller无条件覆盖currentSessionWorkspaceId；主核真实菜单→rename API固定目标→metadata owner保current→caller覆盖→当前request target同链，同收尾cacheKey优先当前session亦交唯一Sol核事件归属。243主核aef566ae相同赋值与cacheKey，确认继承问题，不归050新返工；此前209声称接受版没有赋值的结论已反证撤回。发现时尚未运行复现，不派Luna触050核心。243补launch/configs/proto库存=`COORD/artifacts/a05-identity-inventory226/supplement243-launch-and-proto.json`，默认启动工作区选择不自动判业务缺身份回退，1.7仍未勾。
+
+244–246本轮继续按完整场景推进：撤209权限并新建只读244接A05，210的242无finding已STOP，245只核I当前driver接线；不改变核心分工或增加等待门。Sol将rename归属与事件队列同批迁到原metadata owner；主核static016实际0/19.706143s、consumers014实际1/40.242108s（46pass1新测试误写列表顺序）、015实际0/44.001305s（47pass），512源前后同/raw SHA与bytes核/owned0。014→015仅测试变化，生产同；receipt=`COORD/artifacts/lifecycle246-navigation-consumer-verification.json`。240两activation文件已纳入本批指纹；仍待同批Web build/最终types及050完整产品验收，不勾任务。技能只替换既有同链条款，明确首次核心验相互影响，实测仅证明rename消费者闭合，不能宣布整体提速；后续仍I/J/P/Q→K/M/O→其余原全部范围。
+
+244/245收尾：244 Web28分类沿普通workspace header、local catalog双身份header和Gateway控制路径核至实际API及回包，没有新确定finding；库存消息结论由主保在`a05-identity-inventory226/readonly-caller-conclusions244.json`，主捕获SHA不冒充固定候选证明。245核完整I含child/control/team/inbox/cold读/重启phase，未确认新接线缺口，两会话STOP常驻；静态无finding不能代I产品。247主核最终组合types037实际0/250.874284s，512源前后同/raw核/owned0，两activation固定SHA纳入；receipt=`COORD/artifacts/lifecycle247-types037-verification.json`。Sol继续本批Web build和唯一原具名产品门；资源等待与源码返工分列，不用本次types耗时声称提速。本轮文档集中固定为`docs238-scene-closure/revision2/`，接受后最新HEAD/tree以该目录receipt为准，050核心仍未接受。

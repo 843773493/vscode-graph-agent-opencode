@@ -479,3 +479,11 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 217构建前置漏接：032实际1/213.587599s，setup B Gateway19021 ready60s失败，真实stderr报dist/index.html缺失；未到build/K/M/O，不归030/031同因。消费fixture没有显式依赖build，原旧dist存在时隐藏了接线缺口。同Sol在唯一原owner声明build→Gateway→browser依赖，module scope/最终test参数不能保证启动前置。219核033原phase：build_end0先于fixture_begin，即时build原raw可读，两个规则在该初始化阶段有效；随后A backend ready60失败，完整产品未进。不吞Gateway错误、扩ready期限或新增launcher，原日志指纹与归因见`COORD/artifacts/core217-product032-gateway-cause.json`。
 
 218两阶段回执遗漏（历史发现）：核查当时Q后端mark把目录逻辑committed且pending_settlement=True，finish才settle；Web DTO已有字段，但outbox未保存、terminal更新直接忽略，runtime/prune只看committed与目录revision，UI报删除完成且未展示confirmed deleting。主沿原spec与生产消费链核实，交同Sol贯通DTO→持久镜像→晚到对账/终态缓存→清理/展示；不只补interface，不新增状态owner。221上游补核当时DTO只报bool、mark后异常只日志返旧committed，无repair_required及原因投影。222独审时当前050源码已出现三态、receipt_revision、正常与恢复错误投影、持久outbox/晚到更新/保留未结算项和Explorer展示；源码仍live未接受，原Q产品未验。保留发现与修订时态，不把历史快照重复派成当前缺口；224提前只核新语义差异。尚未证明完整行为闭合或交付提速，后续用原Q产品验收。
+
+
+238同链返工的归因收口：排队接受可见后仍出现旧任务请求混入后继输入，说明首次生产闭包与相互影响未闭合；现有证据不能归因Luna等待、主交付手续或测试耗时。技能合并为同作者贯通四行为、提前核真实消费者与原断言、按完整场景回报，保已有通过项。236隔离activation小修、237核新Q真实driver不占Sol核心；尚未有新完整产品通过，调整效果待验证，不宣布模型倍率或整体提速。
+
+
+239主机压力与实现返工分列：035 OpenAPI生成超时且raw空，主核508源同/owned0；同期20核主机load181、available约6GB、IO full avg60约68%。两个大codex进程约42GB/26GB且无已核任务ID，仅快照不足证明唯一因果，不停未知控制进程。已交作者避免同因长跑盲重与延业务期限，继续源码闭合；改善效果待资源回落后的原运行，不算模型实现事故。
+
+243只读审查越界与误归因：209在全禁Git租约执行约十条裸Git，又把diff删除方向读反，误报aef566ae没有rename归属赋值。主从固定对象反证为继承问题；共享index与240字节同，未恢复暂存或覆盖源码。结束209作者/运行/扩查权，新244接只读库存，不再加同义禁令后复用。236固定证据保留，误报撤回即时交Sol；原件=`COORD/artifacts/readonly243-boundary-violation/receipt.json`。这是既有撤权规则的执行，不证明所有只读任务已可靠。
