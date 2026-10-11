@@ -8,6 +8,8 @@
 
 2026-10-04 迁移更新：仓库物理根为 `/data1/hyf/20260822_agent/vscode-graph-agent-opencode`，原路径为软链接；后续不复用历史临时测试工作区。默认工作区与 `/data1/hyf/test_workspace/drive_bicicle` 的旧 `.boxteam/` 数据已分别按用户授权清理，普通文件保留，两个连接均恢复 `ready`。完整开发服务已恢复（前端 8027、Gateway 8030）。以上为迁移时的历史服务状态，恢复时需重新核验。当前 goal 已继续本交接及七个关联 OpenSpec 的实施与独立验收，实际进展以技能实时台账为准。 2026-10-09 最新状态：原核心最终批及查询003/恢复fixture004已通过具名验收并串行集成`e11c8c6b`。导航006的fixture布局修订经独立017完成300文件样本，首双页并发因观察器等待本页POST而超时；共享队列由另一页派发，同operation ID已complete且两文件存在，Gateway样本0，完整300/40/20量化仍未通过。Luna只核跨页测试观察器窄修及已接受任务证据，Sol独占ROOT完成10.3真实失败对账、权威目录刷新与本地pending投影闭包。2026-10-10 增量：Sol013失败收敛及持久清理重试经固定增审后已集成`faad271c`，§10.3原合取要求已完成；导航024独立minimal在异步响应配对处actual1/39.56s，未启动full；Sol025接手完整观察器闭包及代表入口调试，Luna随后独验。最终原goal、Provider403/C1验收仍未完成，实际租约与收据见技能实时台账。用户随后授权按架构熵减自主决策，开发生成的新旧中间数据可直接删除，不保留旧兼容，不再逐项询问。
 
+2026-10-11 当前：上文日期条目为历史快照；导航原量化及失败收敛已完成具名接受，见第五节第5项。050产品闭包仍在实施，最新028/029均停在后端启动，未进入K/M/O；创建排空、半成品恢复及observation终态重放按原I/J/P/Q同批推进，未经完整验收不勾任务。原goal与七个已授权change范围不变；Provider403与A04 C1仍UNMET。当前租约、原件与接受边界只以技能实时台账为准。
+
 ---
 
 ## 一、本轮边界说明
@@ -128,7 +130,7 @@
 2. **Resource activation/provenance 真实执行闭包已集成**：`16f09ee7` 接通 execution-owned activation → Runner/Factory/CSM/Provider/Saver 与 Skill/MCP，精确正文 detail、typed/hash、默认 history/API 脱敏及 restore/fork/retention 有具名证据；本地 AES、两个 key 与 thread HMAC 已按用户要求删除。整项门槛按 accepted A01–A03 与当前原任务对表，不重派“尚无生产调用方”。
 3. **自由 metadata 决策字段已迁 typed owner**：`ContextContribution` 的 selection_role/replacement_policy/source_binding 与不可变正文合同已接受，middleware 无旧 replaceable_source 双读；producer、封存、恢复与 Provider 按现有收据验收，不恢复旧 metadata 链。
 4. **SessionThread 与继承调用闭包已完成最终源码批及独审**：ContextRef、assembly、detail、canonical/checkpoint/fork、GraphBinding/residency 和后台任务携带精确 thread；旧历史 fixture 与 admission 调用方已随批迁齐。真实 cold fork、生成分支、硬重启、通信与 Session URI 联合有具名通过证据；原失败组合保真，产品 Provider403 仍 UNMET，不由 integration 替代。
-5. **目录消费者已实现，原导航量化与失败收敛仍在验收**：pending父Folder两UI、Session分页与catalog nodes唯一持续权威已集成e11c8c6b，session.json只留三键identity，零manifest读取及旧同步链清理已有证据。文件202真控件已通过；005修fixture回调风暴，016完成283样本后在结果DOM虚拟化边缘超时，原300文件/40Gateway/20并发量化未完成。Sol006一次修完整测量消费者，不扩大生产hook。10.3旧两测试只查询operation-status，最新confirmed刷新→独立pending本地投影重放仍核真实调用顺序；交同Sol修核心，Luna只独核。
+5. **目录消费者与原导航量化、失败收敛已具名验收**：pending父Folder两UI、Session分页与catalog nodes唯一持续权威已集成，session.json仅保identity，旧manifest读取/同步链已清理。§10.3接受`faad271c`；原200目录/120sources、300文件/40Gateway/20并发、8000节点布局及FS650ms/30s量化由111-002完整通过后接受`15ee9cfef86feda631501bec38e49a137d56b5e9`；115代表原入口63项与Chromium、build/types通过后，§10.4/10.4c/10.7接受`d64fb573`。原件及依赖复用边界见技能实时台账，不重开旧观察器失败。§10.8及8.1-H、8.13-P/Q完整Web场景仍保留，不能由上述导航收据代替。
 6. **配置来源轴与公共地址字段已完成独立切片**：用户确定 layer 表示逻辑来源，读侧 `sqlite` → `runtime_override`，precedence 不变，active/pending snapshot 从来源清单分开；`f42b6f77` 已实施验收。公共配置字段 `path/schema_path` → nullable `uri/schema_uri` 由 `69d77eea` 完成，R11 独审及 46+10+73+2 项关联验证通过；字段已随统一资源寻址术语迁移正名；其它资源 URI 持久化接线仍须完成。
 7. **uuidv7 change** 的前缀数已实核为 33 个、33 个唯一值；自然创建、真实时钟回拨及路径预算已集成验收，49/49 任务完成。关联 SessionThread 与端到端迁移验收仍按 `add-itemized` 第 8 节单独推进，不能由 UUID 验收代替；证据见 `coordinator/artifacts/u07-main-validation.json` 与实时台账。
 

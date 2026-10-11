@@ -277,10 +277,10 @@ storage resolver MUST 在读取catalog或构造路径前用共享canonical valid
 - **WHEN** 调用方只提供 session_id 而要求 rollout/index/JSONL 落点，或提供 canonical `thr_` thread id / 裸 `main` 别名充当 session_id
 - **THEN** resolver 显式失败并指明缺少或错误的 owner 维度，不得回退到 session 级 `rollout/`、不得以 session node 冒充 main thread node、也不得把 `checkpoint_ns` 升级为 owner
 
-#### Scenario: detail 与 redaction key 归入 thread node
+#### Scenario: 单份 detail 归入 thread node
 
-- **WHEN** 为某个 assembly 写入或读取 request-only detail，或首次创建 SessionThread 的 redaction key
-- **THEN** 目标路径根为该 thread 的 thread node 下的 `rollout/context-plan-details/...` 或 `rollout/context-plan-details-protected/...`，同一 Session 的另一 thread 不能经 session node 读取或写入这些 detail
+- **WHEN** 为某个 assembly 写入或读取 request-only detail
+- **THEN** 唯一正文位于该 thread 的 thread node 下的 `rollout/context-plan-details/<assembly_id>/<detail_id>`，同一 Session 的另一 thread 不能经 session node 读取或写入这些 detail；不创建本地密钥或第二密文落点
 
 ### Requirement: 附件正文必须使用 workspace 级内容寻址 blob store
 
