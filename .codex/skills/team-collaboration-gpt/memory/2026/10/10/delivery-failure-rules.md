@@ -487,3 +487,9 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 239主机压力与实现返工分列：035 OpenAPI生成超时且raw空，主核508源同/owned0；同期20核主机load181、available约6GB、IO full avg60约68%。两个大codex进程约42GB/26GB且无已核任务ID，仅快照不足证明唯一因果，不停未知控制进程。已交作者避免同因长跑盲重与延业务期限，继续源码闭合；改善效果待资源回落后的原运行，不算模型实现事故。
 
 243只读审查越界与误归因：209在全禁Git租约执行约十条裸Git，又把diff删除方向读反，误报aef566ae没有rename归属赋值。主从固定对象反证为继承问题；共享index与240字节同，未恢复暂存或覆盖源码。结束209作者/运行/扩查权，新244接只读库存，不再加同义禁令后复用。236固定证据保留，误报撤回即时交Sol；原件=`COORD/artifacts/readonly243-boundary-violation/receipt.json`。这是既有撤权规则的执行，不证明所有只读任务已可靠。
+
+257效率继续前移：251Q driver与252生产闭包只读均无新确定finding，不重复审查或代产品通过；255/256改核Sol下一批ToolSet/root_placement原场景及完整生产消费者，作者不等全审。build038 actual124/235.045s、fixture-static017 actual0/158.885s，513源同/raw核/owned0，主件=`COORD/artifacts/lifecycle254-build038-fixture-verification.json`。同期主机memory/IO full avg10约26%/75%，Ruff明显变慢，不能全算实现返工；不杀未知进程。原产品fixture拥有build前置，下一次直接用此入口，避免standalone成功后立即再build。主核构建Popen无独立group、terminate_process只关单PID；Sol已确认并沿既有owner补拥有的后代清理，运行效果待核。主误用read_thread(turnLimit=1)直接展开整轮长活动turn，输出逾百万token并截断；turn数和单项字符上限不能限制items总数，改用wait_threads compact，必要详情先工具内筛末尾项。该协调错误归主，不归Sol；无同起点A/B，不宣布效率倍率。
+
+255/256前移L182核查：唯一Web owner无ToolSet/MCP原场景，分层catalog activation用EMPTY_TOOL_SET，fork测试未过target真实Provider placement；三项是原验收缺口，提前交同Sol整批。256初报fork copy无compiler调用为“明确候选缺口”，接上target latest assembly和source manifest校验后撤回生产finding；主区分复制历史与target首次执行新root，不按函数调用数量重构。源码补齐与真实验收仍待，不宣称已提速。
+
+261/263原Q037 actual-9/1536.636s，514源同/raw0B/runner组空。build原fixture一次返回0约25秒，已进入browser launch，但原browser.log/model-stream是旧件。浏览器子进程仍capture_output且日志只在finally有CompletedProcess时写，MJS启动newContext/newPage在外try前；这正是已有“长子进程实时原件＋拥有后代清理”规则的漏消费，不再加同义框架。交同Sol盘原browser启动/超时/清理闭包，尚未证明037唯一卡点。主按thread/session_meta、实例startticks和正式pidfile核3个owned SSH孤儿，PIDFD TERM均退出，收据=`COORD/artifacts/lifecycle262-owned-q037-ssh-cleanup.json`；未知backend未按端口杀。原Sol turn随后429终止，260原会话续接，无静默换模型或新作者，恢复效果待实际工具交付。
