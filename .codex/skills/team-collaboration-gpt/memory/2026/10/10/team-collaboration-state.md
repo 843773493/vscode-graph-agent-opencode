@@ -5,7 +5,7 @@
 ## 坐标与租约
 
 - ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`，旧`/data/hyf/20260629_agent/vscode-graph-agent-opencode`为软链接。
-- 当前已接受HEAD=`c6bb5c7f7a8b5cb74a52bc2e74495b5694091aca`，tree=`23932c23f0c7e902b144efc7d23b9c6f9071743f`（166四固定blob＋三协作文档），坐标以`COORD/artifacts/federation166-skill-batch/receipt.json`为准；上一接受HEAD=`a2cbb5fc87f4a4823415eaa35c6a6be5dddcb8ca`，tree=`965ed5f6c6a7acdde83b5053eb700e8cfefdf086`、收据=`COORD/artifacts/resource145-contract-fixed/receipt.json`；历史138接受HEAD=`27f5ddefffd314c4a46fdd6260712401795f82d4`；parent=`055cf2e3cbcff4ec8751fea208e94c6f00d8d5ce`；138十一规范/技能文档固定接受，strict重建/diffcheck/guard全0，共享index字节同，receipt=`COORD/artifacts/docs138-contract-efficiency/receipt.json`；未收050源码。128固定runner＋四规划/四协作文档九路径已接受，receipt=`COORD/artifacts/runner128-doc-skill-batch/receipt.json`，strict/diffcheck/guard全0、共享index窗口字节同，未收050源码。121三工具＋三协作已接受b4dc，receipt=`COORD/artifacts/protocol121-skill-batch/receipt.json`；matcher两blob已接受20925037。ROOT 050大量源码在途，禁止整体add、覆盖或提交live。
+- 当前已接受HEAD=`690aecd500339ca8322321a544caac7fd2982dfa`，tree=`9cf1cc18ddd3e8b16088da61c5779bb0e24cff5b`（六技能/台账/handoff/规范文档），receipt=`COORD/artifacts/docs204-contract-efficiency/receipt.json`；strict/diffcheck/guard全0，共享index字节同，未收050源码。上一接受166 HEAD=`c6bb5c7f7a8b5cb74a52bc2e74495b5694091aca`、tree=`23932c23f0c7e902b144efc7d23b9c6f9071743f`，历史坐标仍按以下原件。
 - RV=`ROOT/out/tests/temp/2026/10/09/a06-final-review`；ART050=`RV/sol_vertical_implementer/artifacts/section8-product050-full-closure`。
 - T116=`ROOT/out/tests/temp/2026/10/10/efficiency116`；COORD=`T116/coordinator`。
 - NWT=`ROOT/out/worktrees/2026/10/09/a06-final-review/navigation-fixture-receipt`，唯一活跃代码worktree，禁止新建源码副本。
@@ -13,7 +13,7 @@
 
 | Agent | 实际模型 | 当前权限和任务 |
 |---|---|---|
-| `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **050 active/ROOT唯一核心作者、重测试owner**；同会话 gpt-6.1-sol/max。创建record排空/partial staging及atomic temp三consumer、J terminal_replay与回程expiry已落；NULL manifest恢复/删除原fixture已迁。static003 actual0/0.979379s、478源同/raw核/owned0。I/J/P/Q原driver正在接线，201提前核Q发现事件cursor无Web消费已直交作者。无030或新产品入口；原027child、K/M/O及全后续门保留，未整体STOP/固定/接受 |
+| `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **050 active/ROOT唯一核心作者、重测试owner**；同会话 gpt-6.1-sol/max，原生状态running，未因观察超时另开作者。创建排空/partial staging、J重放/回程expiry、NULL manifest原fixture、Q事件runtime/team holder闭包已落。原具名核心001 actual0/47.861741s、13pass，483源同/raw核/owned0；生成后Web build001 actual0/24.038065s。030实际124/1528.071959s，fixture已yield、build未end，K/M/O尚无通过证明。I/J/P/Q及全后续门继续；未整体STOP/固定/接受 |
 | `/root/navigation_remaining114` | `gpt-6-luna/max` | **163 STOP/会话closed不可复用**；当前FIFO后续断言与辅助服务lease无新确定缺口，原023后段未执行；不新增取消gate、不重复已知定位；无写/Git/测试/服务 |
 | `/root/a06_architecture_final` | `gpt-6-luna/max` | **只读常驻，撤产物写入与全部作者/运行权**；121报告再次写到NWT/out，已核原件并补到ROOT精确路径；123 STOP仅消息源码结论，无身份/filter确定错配；未读真实原件不当缺证，核心不等它；不再派该会话查路径 |
 | `/root/caller_inventory013` | `gpt-6-luna/max` | **101 STOP/撤作者运行及全部Git权**，复犯裸Git；两文件无独有源码，只保固定原件只读 |
@@ -25,16 +25,22 @@
 | `/root/stream168_production_readonly` | `gpt-6-luna/max` | **shutdown/不可复用**；196创建record排空、partial staging、source tombstone重开三finding已主核并交Sol同批，不重做旧调查；静态不代运行，后继只读改用201/202 |
 | `/root/stream169_assertion_readonly` | `gpt-6-luna/max` | **shutdown/191复犯禁Git，不再续派**；本轮明确禁Git仍执行`git status --short && git rev-parse --show-toplevel && rg ...`，包装未保actual；附件仅重复189/O外层未核，无新增finding。主补核O两阶段catalog/drain路径后直发Sol，不设等待。当前shared index相对旧166收据字节变，无191前快照不能单归此actor、不回滚用户暂存；无源码/测试/服务/报告写入实证 |
 
-| `/root/terminal_replay201_readonly` | `gpt-6-luna/max`（创建显式参数） | **201 J/Q审查STOP/只读常驻**；J回程expiry已落待运行。Q确定finding为navigation事件API仅定义、event_seq/cursor_gone无真实Web消费，主核spec123/155后直交Sol；SessionActivity SSE只更新摘要，不桥接navigation，原精确ID周期/恢复对账仍有效。REST不推出必须新增SSE端点，不设等待门。无Git/写入/测试/服务/派生 |
-| `/root/creation_recovery202_readonly` | `gpt-6-luna/max`（创建显式参数） | **202 STOP/只读常驻**；新staging/atomic temp三consumer、holder/删除/GC无确定生产finding；确认原helper已freeze而漏合法NULL manifest崩溃窗口，已直交Sol并同批迁原恢复/删除fixture，行为待运行。无Git/写入/测试/服务/派生 |
+| `/root/terminal_replay201_readonly` | `gpt-6-luna/max`（创建显式参数） | **shutdown/不可复用**；原team锁序/装配审查无新确定finding，未运行不代验收 |
+| `/root/creation_recovery202_readonly` | `gpt-6-luna/max`（创建显式参数） | **shutdown/不可复用**；P原正常入口交Sol，新resolver/视图审查无确定finding |
+| `/root/product030_failure209_readonly` | `gpt-6-luna/max`（创建显式参数） | **212 STOP/只读常驻**；209定位030停build、输出未交回，根因未定。212提前发现hub discovery fan-out漏最新transit policy，主核原owner/spec后同批交Sol；热撤权/reallow属原B未验门，未发现第二生产finding。无Git/写入/测试/服务 |
+| `/root/expiry210_assertion_readonly` | `gpt-6-luna/max`（创建显式参数） | **211 STOP/只读常驻**；210纠正误报后仅原`_DELETED`回程跨期/target observation冻结唯一缺口已由Sol落并静态0，行为待验。211又撤回仅凭旧分层test推断R/S缺入口判断：当前唯一driver已有两真实场景，无确定新finding。无Git/写入/测试/服务 |
 
-至少3常驻、最多15活动；Sol与201/202未撤权会话可复用，stream168/startup165等shutdown不可复用；等待者不必运行，不为人数制造任务。主唯一调度、禁自行派生。全禁Git作者与审查者不分配索引；主负责规范/技能、固定和串行集成，不手写业务源码。Luna只做隔离小修和只读核查，37mixin与平行状态表没有实证故障，不派大型改动。
+至少3常驻、最多15活动；当前Sol＋209＋210，201/202等shutdown不可复用；等待者不必运行，不为人数制造任务。主唯一调度、禁自行派生。全禁Git作者与审查者不分配索引；主负责规范/技能、固定和串行集成，不手写业务源码。Luna只做隔离小修和只读核查，37mixin与平行状态表没有实证故障，不派大型改动。
 
 ## 当前050与下一步
 
-**050未整体STOP、固定、独审或接受；goal仍active。** 原需求=`ART050/context079/original-tasks-section8.txt`，唯一产品owner=`tests/e2e/clients/web/test_basic_chat_tool_loop.py`。Sol独占ROOT/重测试；主不手写业务源码和作者测试。`core-web-027`已终态actual1/764.556s，455源前后同、raw核、owned0；源码/profile冻结已解除。首红是child第二次发送textarea可定位但fill30s不可交互，余五focus未到；不能把sendingRef静态窗口直接当本次根因。Sol先核已有events/截图，同批修child发送状态＋M可用性链并补K/M/O。179/180两个Luna已限时STOP：179确认accepted后UI启用但sendingRef等history导致第二点击静默忽略；原hook probe001 actual1/3.555s（2pass1fail，第二POST未发），主核`child183-hook-probe-verification.json`。Sol已迁live且catch/finally内无异步read；unit001 actual0/0.848s/7pass含失败恢复，types002 actual0/22.168s，459源同，主核`child185-consumer-verification.json`。此局部闭合不代027fill或M生命周期。180只确认selector/右侧区域吻合及fill先于click/回执，既有原件不证明本次actionability根因；waiter结算/失败现场交Sol同批，不追加运行/trace门。核心不等待全审。原六focus及1500s/browser1200s保护不放宽。
+**050未整体STOP、固定、独审或接受；goal仍active。** 原需求=`ART050/context079/original-tasks-section8.txt`，唯一产品owner=`tests/e2e/clients/web/test_basic_chat_tool_loop.py`。Sol独占ROOT/重测试；主不手写业务源码和作者测试。CLI仍60/89、剩29，不以嵌套计数或局部绿勾整项。
 
-当前同批先完成 **I/J/P/Q必要生产及真实消费者→回原K/M/O和I/J/P/Q产品门→B/R/S/L182与8.14**，随后收齐CIL typed/notice、checkpoint/admission durable→intent CAS/hash原门。029仍setup红，不能靠重跑挡住下一独立闭包。四类用户行为各自完整闭合，复用唯一driver具名focus/共同fixture，按真实共享clock与状态安排顺序，不合成新超长场景。8.1-G/H、8.3-E、8.13 A–S、ToolSet/root placement完整产品合取全部保留；不因局部绿/粗计数缩scope。原Web支持逗号FOCUS，共用一次fixture/build；未测到整体时间节省。原dynamic identifier、owner身份、DTO/proto/mapper、fixture与实际consumer同批迁齐，真正跨租约才协调，不逐文件审批。
+当前先完成 **I/J/P/Q必要生产及真实消费者→原K/M/O与I/J/P/Q产品门→B/R/S/L182与8.14**，随后收齐CIL typed/notice、checkpoint/admission durable→intent CAS/hash。创建排空/partial staging、J重放/回程expiry、NULL manifest原fixture、Q事件runtime/team holder闭包已落；原八具名核心13pass、Q两个原Web consumer文件14pass、协议/OpenAPI生成与生成后Web build实际0。最终types须用生成后的组合，已有绿按实际依赖复用；这些都不代完整产品。
+
+最新030实际124/1528.071959s、483源同/owned0：fixture已yield，build_begin后无build_end，child capture_output未保本次输出，根因未定。209限时取证已STOP，原入口实时落盘build输出/PID/actual建议已由Sol实施并过静态；不盲031或扩保护，独立闭包不等调查。210误报已纠正，只补原_DELETED回程跨期与target ledger冻结/唯一断言。211/212已分别前移只读R/S共用history链、B discovery/权限/重试链并STOP，仅消息、确定finding直交唯一作者，不设等待门。
+
+旧027第二child fill30秒失败仍待原产品闭合；179确认的UI accepted后发送锁窗口已修，原hook7pass/types过，局部结果不能代027或M生命周期。历史原raw/主核收据见下表。原六focus及1500s/browser1200s保护不放宽；8.1-G/H、8.3-E、8.13 A–S、ToolSet/root placement完整产品合取全部保留，I/J/P/Q不是全部goal。通过项按真实共享clock/状态和源码依赖复用，复用唯一driver具名focus，不合成新超长场景或重复入口。
 
 当前生产闭包：
 
@@ -126,3 +132,21 @@ Buf真实accepted209基线=`COORD/artifacts/proto119-baseline/accepted-20925037.
 204当前核验：原static003 actual0/0.9793792902491987s，478源前后同，stdout19B/stderr0、原raw/hash/bytes与result吻合，profile47bfeec7与runner c4d3446e未变、owned0；主收据=`COORD/artifacts/lifecycle204-static003-verification.json`。Sol已给source tombstone成功/target-deleted及末尾_DELETED返回核冻结expiry；原恢复测试以freeze_manifest=False覆盖record-only，删除取消加入record_only参数。202只读核查限时STOP、未发现相应生产缺口；这些是live源码/静态事实，行为未验、050未接受。技能仅窄补恢复fixture停在真实事务边界，不能由helper先提交崩溃点后的步骤。201续接Q，仅前移原事件与outbox消费者，不重复旧J调查。Q发现listSessionCatalogNavigationEvents仅定义、event_seq/cursor_gone无真实UI消费，主核原spec123/155和8.13-Q后直交唯一作者；按既有事件owner收口，不以REST形态增加SSE端点门。提前发现有实证，交付提速仍待原相关场景。
 
 204收尾：201 Q静态核查STOP，现有SessionActivity SSE仅标未读/刷新摘要，不带navigation operation ID或桥接cursor；仍保有原exact-ID恢复/周期对账。技能quick_validate工具实际0（转录），未将静态检查记成业务验收；原itemized strict校验见本轮工具结果。050继续同Sol，本批所有产品门仍未整体完成。
+
+204文档接受：六路径固定tree/补丁严格重建、diffcheck及guard record/verify全0；共享index字节同，未包含050源码。commit/tree/patch/blob/hash原件见`COORD/artifacts/docs204-contract-efficiency/{manifest,receipt}.json`。Q事件已沿REST页接原outbox runtime，team holder删除锁序同批在迁；均live未运行。201仅核team新差异、202仅核P原消费者，各7分钟消息收尾，不添加作者等待门。此前未初始化私有索引的diff误报六文件删除，read-tree HEAD后确认真实六文档差异；未写共享index或业务源码，不将误报当数据丢失，不加同义规则。
+
+204提前审查收尾：202 P无新确定finding，正常identifier_date/API创建、只读catalog/restart与删除phase入口直交Sol；201 team新差异无新确定finding，锁序为holder在Session gate外等待，container绑定同fanout owner/原drain，启动恢复沿原resolver。两会话STOP常驻，未启动测试/服务或写文件；局部静态结论不能代产品。主提醒原profile两Web必要consumer不在旧manifest，应在下一集中运行前并入source_paths；另两team路径已在旧manifest，提示不是实际运行漏指纹事故。
+
+205/206当前前置与核心：static004 actual0/2.4967957069166005s与Web types001 actual0/28.707226959988475s，同483源指纹/raw核/owned0；四提示caller实际均在运行指纹，profile SHA=`b6b46fa1700ca9c10236ebcb10fcfce6b22d01495451dc803a3e125e7a0811f8`，主收据=`COORD/artifacts/lifecycle205-preflight-verification.json`。core001原八具名节点含参数共13pass，actual0/47.8617405211553s，stdout811B/stderr0、483源前后同/owned0，主收据=`COORD/artifacts/lifecycle206-core-verification.json`。NULL manifest record-only创建重入、删除原记录取消与partial/atomic temp等参数已有核心运行证据，fixture事务窗口窄规则本轮执行；J三返回期限、Q真实Web事件消费以及I/J/P/Q/K/M/O完整产品仍不能由13pass替代。原§8全部合取与七change后续范围保留，050仍live。
+
+207正式生成/构建：协议生成001 actual0/10.750930s，仅6个官方generated bindings变化；Web build001 actual0/24.038065s、483源前后同，已经消费新bindings；OpenAPI生成001 actual0/25.670267s，仅`src/clients/web/openapi.json`与`src/clients/web/src/types/openapi/index.json`变化。主核三原raw/hash/bytes/owned0，收据=`COORD/artifacts/lifecycle207-generators-build-verification.json`。types001先于协议生成，最终组合须在新bindings上集中类型检查，不因此微重全部核心测试。主前一次只读收据构造误猜OpenAPI输出路径断言失败，已按机器两真实输出纠正，无源码写入或生成器重跑；协调错误不计Sol失败。Sol已在原section8 fixture加入测试专用import-time观察，原ready/进程保护不延，I/J/P/Q唯一driver仍继续，原所有产品与后续门未完成。
+
+208原fixture静态005 actual0/2.471813s，protocol-check001 actual0/2.044582s，483源前后同/raw/owned0已核，收据=`COORD/artifacts/lifecycle208-fixture-protocol-verification.json`。`check:protocol`仅证生成一致，不清除旧compatibility对授权下线DTO的原红。
+
+209产品030实际124/1528.071959s、483源同、stdout/stderr各0B/owned0，收据=`COORD/artifacts/core209-product030-verification.json`。本次phase同PID805782：02:50:34 fixture_begin→02:52:50.822 fixture_yield→02:52:50.885 build_begin，直到03:15:45超时无build_end；本次已过fixture，不沿用028/029 setup失败诊断。真实build argv=`bun run build`、cwd=`ROOT/src/clients/web`，`to_thread(subprocess.run(capture_output=True))`使输出等退出才交回，当前缺child原raw，根因未定。原formal primary/b/c日志按时间可归本次fixture，watchfiles不是卡住因果；021旧截图不归030。不盲031/扩保护，原入口及时落盘建议交同Sol；独立I/J/P/Q继续，不等调查全审。
+
+210主核原生产返回分支、原测试和spec后保留有限缺口；Luna已撤回tombstone-success未覆盖判断，并即时通知Sol。原`replayed=True`已覆盖source tombstone成功重放跨期；未覆盖先删除source再回传时`_DELETED` catch跨期，缺原target observation唯一及冻结expires_at不变断言。只在原文件复用clock/transport补对应断言，不另建harness/矩阵、不将一天恢复窗误作30min规范缺陷。静态finding不计已运行事故或提速。
+
+211主核原静态006 actual0/3.173705s、007 actual0/1.313426s及Q两个原Web consumer文件14pass/10.532908s；各483源前后同/raw核/owned0，收据=`COORD/artifacts/lifecycle211-preflight-consumer-verification.json`。Sol在原正式入口实时保存build stdout/stderr、child PID/退出/阶段；原expiry测试新增reply-expiry参数与target observation冻结唯一断言，均静态0，原产品/新增expiry行为尚待。不重跑未变13核心/Q14项求报告。
+
+211/212前移审查STOP：211最初仅凭两个分层test认为R/S未贯通，核当前唯一MJS后撤回；`generated_internal_history`与`initial_admission_recovery`已是原真实admission→history API→SQLite/DTO坐标→safe live/reload及admission后CAS前重启入口，无新确定finding、不重写driver。212确定`rpc._serve_discovery_as_hub/_fan_out_discovery`只有discovery、漏transit policy；主沿原spec364/372、policy与relay实际鉴权核后交唯一Sol同批补B准入/每spoke派发/回程，不新增policy owner或矩阵。此为静态生产遗漏，尚未运行复现；B reallow/new-grant/原operation属原未验门，不另列生产事故。两会话只读常驻，核心不等待全审。

@@ -465,3 +465,11 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 196后续闭包核查：取消未发布创建不能对正常准备中半成品套发布后的完整inventory校验，否则删除一直deleting；原atomic_fs还会在replace前crash留随机temp，须沿真实写入副产物同批盘create恢复/abort/delete消费，不只修单个caller。J tombstone source已存terminal page却仍_transport.operation后丢结果，原请求未到target时可重开snapshot/baseline。新授权与定点重放同时保留，不让terminal重放执行首次观察；主核原spec390/history186后交同Sol，均未运行复现/验收，不宣称提速。
 
 201/202前移核查：J tombstone source的transport回程/末尾删除分支漏按冻结expires_at再核，target授权时未过期不保证回程仍有效；主核原期限合同后交Sol同批迁齐，static003过，行为未验。202无生产finding，但原record INSERT与manifest freeze是独立提交；恢复helper先freeze使两个原崩溃测试跳过合法NULL状态。原helper添加record-only态并用于创建恢复及删除取消，未另建入口/验收门。201后续Q核出navigation事件API零真实Web caller，event_seq/cursor_gone合同尚未消费；主核原spec123/155后直交核心同批收口。静态提前发现和源码落地不能代产品验收或宣称节省多少时间；原raw/主收据见`COORD/artifacts/lifecycle204-static003-verification.json`。
+
+206本轮验证：作者先迁必要生产/fixture、通过静态和类型后跑原八具名核心节点，共13pass、actual0/47.861741s，483源前后同/raw核/owned0。原record-only恢复节点明确断言manifest/hash NULL后走实际create，删除取消的record_only/partial/atomic_temp等原参数走实际delete，202提前发现的fixture窗口已真实覆盖。只证明该窄规则执行与这些核心边界闭合；不推断长期提速/模型倍率，不代I/J/P/Q/K/M/O产品。原件见`COORD/artifacts/lifecycle206-core-verification.json`，没有另建统计任务、复制运行树或重跑此13项求报告。
+
+209长产品030超时取证不足：fixture已yield，build_begin后直到实际124/1528.071959s无build_end；原build使用`capture_output=True`，child未退出时输出未交pytest，因此外层raw空不足以定位卡点。历史外部同命令成功不证明本次原因，backend watchfiles日志只证明同期活动。唯一作者在原正式入口及时落盘build raw/PID/actual/阶段，保护与工作区不变；不盲重复长跑或新增launcher。修后实际效果待原产品，收据=`COORD/artifacts/core209-product030-verification.json`。
+
+210审查误报纠正：最初称tombstone-success回程跨期未覆盖，复核原replayed=True参数后撤回并即时通知唯一作者。主核原spec/生产/测试后只保`_DELETED` catch回程跨期与target ledger唯一/原expires_at不变断言缺口；无需重写已有分支或新增恢复窗数值要求。按原实际参数核覆盖能减少无效返工，修后实际测试尚待；不能据本次静态纠正宣称总体提速。
+
+211/212下一完整场景核查：211从旧reader/admission分层test推断R/S缺真实全链，主要求先读当前唯一driver后撤回；两具名产品场景已接，不因此重写/扩矩阵。审查覆盖从当前产品入口与真实分支出发，不能将自己没读到的实现派成新任务。212按B原spec提前发现hub discovery fan-out只查discovery、漏transit policy，主核后即时交同Sol迁齐；这是确定源码遗漏，尚未运行复现/证明提速。两会话限时仅消息并STOP，不制造全审等待或另建报告。
