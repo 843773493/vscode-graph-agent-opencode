@@ -54,6 +54,15 @@ Sol 改完整核心场景；Luna 提前沿真实入口盘齐消费者、SQL 列�
 
 Git 只交本轮唯一集成者；每个 Git 子进程使用绝对私有 `GIT_INDEX_FILE` 与 `GIT_OPTIONAL_LOCKS=0`，保留共享暂存。禁 Git 的作者和审查者不建索引。用户已授权的普通提交与 push 可直接执行，核提交树和远端 SHA；不 force、不改写历史。上游审查失败不能记作 GO；必要替代审查须保持作者独立性，并明确记录替代范围。
 
+集成者调用 [run_git.py](../team-collaboration-gpt/scripts/run_git.py) 自动接好私有索引，`--task-dir` 使用本批产物绝对路径：
+
+~~~bash
+<ROOT>/.venv/bin/python <ROOT>/.codex/skills/team-collaboration-gpt/scripts/run_git.py \
+  --task-dir <ROOT>/out/tests/temp/YYYY/MM/DD/<run_id>/<role>/artifacts -- status --short
+~~~
+
+同批 Git 命令复用该 task-dir；新批次使用新目录。入口只在索引不存在时从 HEAD 初始化，不清空已有私有暂存；它不代替最终树核验或扩大 Git 授权。
+
 ## 路径与运行证据
 
 默认共用当前真实工作树，不复制整仓或新建临时工作树。已有授权确需 worktree 时，只放 `out/worktrees/YYYY/MM/DD/<run_id>/<task>/`，日期按北京时间冻结。
@@ -81,4 +90,6 @@ Git 只交本轮唯一集成者；每个 Git 子进程使用绝对私有 `GIT_IN
 
 入口由主线程维护；交付协调者维护当前接续记录与[实时台账](../team-collaboration-gpt/memory/2026/10/10/team-collaboration-state.md)的当前段，按需加载准确原件，不默认展开旧长流程与失败历史。旧 GPT 的 `scripts/` 保持执行工具唯一实现。
 
-本轮已观察到：协调者接续失忆、误唤醒旧扁平成员、诊断微交接、形式审查阻塞及把旧运行的错误套到新候选，造成返工。审查先绑定候选指纹和准确 attempt 原件，阶段变化同步当前接续记录。分层结构是否降低总 token 或加快交付尚未证明。比较实际完整场景交付、返工、主线程展开报告量和同口径 token；“落盘到启动”的短间隔不代表整轮准备耗时。后续只保留有实践效果的规则，删除无效步骤，不把建议直接变成禁令。
+RUN05 仍反复出现协调者丢失集成职责、再次向主线程请示、误唤旧直系、裸 Git 查询，以及另造 runner/整仓导出导致输出根错误；既有文字约束没有自动阻止这些行为，主线程仍需多次纠偏。改用 `run_git.py` 后，18 项合成检查和真实仓库只读检查通过，共享 index 指纹不变；验证中发现的索引符号链接穿透已修复。这只证明入口的隔离行为，下一次实际集成是否减少返工仍需观察。候选与准确 attempt 绑定，阶段变化直接替换当前记录，不继续叠加同义禁令。
+
+本轮合并同次历史读取后，一次 24 轮 frozen-provider 诊断的 reader 调用从 119 降至 72，`provider.prepare_context_for_provider` 阶段耗时下降 14.63%，`provider.prepare_total` 总准备耗时下降 12.83%；不能外推到真实 Provider，原 427 门仍在 600 秒超时。这是代码优化证据，不是分层调度提速证据。分层结构是否降低总 token 或交付成本仍未证明，应比较完整场景交付、返工、主线程展开报告量及同口径 token；不以活跃人数、局部测试或“落盘到启动”的短间隔代替。
