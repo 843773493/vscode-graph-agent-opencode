@@ -79,7 +79,7 @@ class ContextDetailOwnerMixin:
             wire_params=wire_params,
             activation_snapshot=activation_snapshot,
             context_preparation=context_preparation,
-        )
+        ).snapshot
 
     def seal_context_assembly(
         self,
@@ -116,7 +116,7 @@ class ContextDetailOwnerMixin:
             checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
             activation_binding=activation_binding,
             prepared_details=prepared_details,
-        )
+        ).commit_id
 
     def read_context_plan_detail(
         self,

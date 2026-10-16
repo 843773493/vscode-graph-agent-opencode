@@ -773,8 +773,8 @@ class ContextRequestPlan:
     def plan_hash(self) -> str:
         return context_plan_hash(self)
 
-    def to_dict(self) -> dict[str, object]:
-        return {
+    def to_dict(self, *, include_plan_hash: bool = True) -> dict[str, object]:
+        result = {
             "session_id": self.session_id,
             "thread_id": self.thread_id,
             "format_version": self.format_version,
@@ -794,5 +794,7 @@ class ContextRequestPlan:
             "selection": [entry.to_dict() for entry in self.selection],
             "compiler_version": self.compiler_version,
             "plan_creation_idempotency_key": self.plan_creation_idempotency_key,
-            "plan_hash": self.plan_hash(),
         }
+        if include_plan_hash:
+            result["plan_hash"] = self.plan_hash()
+        return result

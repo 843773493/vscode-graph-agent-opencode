@@ -534,6 +534,8 @@ class ContextSourceVersionsStorageMixin:
         connection: sqlite3.Connection,
         snapshot: ContextAssemblySnapshot,
         checkpoint_ns: str,
+        *,
+        previous: ContextAssemblySnapshot | None,
     ) -> None:
         binding = snapshot.seal_binding
         if binding is None:
@@ -557,10 +559,8 @@ class ContextSourceVersionsStorageMixin:
         if confirmation is not None and confirmation[1] != notice_ref.selection_hash:
             raise RuntimeError("runtime-notice-acceptance-conflict: 已消费 selection hash 不一致")
         frozen_ids = self._context.executions.runtime_notice_excluded_item_ids(admission, connection=connection)
-        previous = None if binding.previous_assembly_id is None else self._context.assemblies._read_context_assembly_connection(
-            connection, snapshot.session_id, snapshot.thread_id,
-            assembly_id=binding.previous_assembly_id, checkpoint_ns=checkpoint_ns,
-        )[0]
+        if binding.previous_assembly_id != (None if previous is None else previous.assembly_id):
+            raise RuntimeError("context-epoch-transition-conflict: seal predecessor 与同事务最新 assembly 不一致")
         prior_ids = set() if previous is None or previous.seal_binding is None else {
             frame.item_ref.ref_id for frame in previous.seal_binding.prefix.state.frames
             if frame.item_ref.ref_type == "canonical_item"

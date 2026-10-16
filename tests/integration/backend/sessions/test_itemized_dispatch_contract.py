@@ -72,6 +72,7 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.checkpoint.seal import preparation
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
 )
@@ -622,11 +623,11 @@ async def test_new_seals_bind_effective_parameters_and_profile_over_real_http(
     "checkpoint_ns, owner_namespace", [("", ""), ("model:namespace-contract", "")]
 )
 @pytest.mark.parametrize("missing_assembly", [False, True])
-async def test_dispatch_reads_committed_owner_namespace_before_real_provider_http(
+async def test_cold_dispatch_retry_reads_committed_owner_namespace_before_real_provider_http(
     dispatch_saver, native_http_server, dispatch_bridge, monkeypatch,
     checkpoint_ns, owner_namespace, missing_assembly,
 ) -> None:
-    """真实 prepare/storage/send 共用 rollout owner；读回失败时发网前暴露原始错误。"""
+    """真实 sealed retry 经 authority reader 冷恢复；失败时不得发送第二个 HTTP。"""
     saver, session_id, turn_id, sessions = dispatch_saver
     state, endpoint = native_http_server
     thread = saver._storage.storage.main_thread_id(session_id)
@@ -646,29 +647,45 @@ async def test_dispatch_reads_committed_owner_namespace_before_real_provider_htt
             task_id="namespace-contract",
         )),
     )
-    original_getter = saver._storage.assemblies.get_context_assembly
+    original_reader = saver._storage.assemblies._read_context_assembly_connection
     missing = KeyError(f"injected committed assembly lookup loss: namespace={owner_namespace!r}")
     seen_owners = []
 
-    def checked_getter(*args, **kwargs):
-        seen_owners.append((args[0], args[1], kwargs["checkpoint_ns"], kwargs["assembly_id"]))
+    def checked_reader(
+        connection, owner_session_id, owner_thread_id, *, assembly_id, checkpoint_ns,
+        registration=None,
+    ):
+        seen_owners.append((owner_session_id, owner_thread_id, checkpoint_ns, assembly_id))
         if missing_assembly:
             raise missing
-        return original_getter(*args, **kwargs)
-
-    # prepare 从真实 storage 读回同一已提交 snapshot，dispatch 直接消费该事实。
-    monkeypatch.setattr(saver._storage.assemblies, "get_context_assembly", checked_getter)
+        return original_reader(
+            connection, owner_session_id, owner_thread_id,
+            assembly_id=assembly_id, checkpoint_ns=checkpoint_ns, registration=registration,
+        )
 
     async def send_actual_request(prepared: ModelRequest) -> ModelResponse:
         return ModelResponse(result=[await prepared.model.ainvoke(prepared.messages)])
 
+    # 首次 seal 的 request-local snapshot 完成真实 HTTP dispatch；随后同一 attempt 的
+    # cold retry 必须通过 authority reader 重新验证持久事实。
     with dispatch_execution_scope(saver, session_id, turn_id):
-        if missing_assembly:
-            with pytest.raises(KeyError, match="committed assembly lookup loss") as error:
+        await bridge.awrap_model_call(request, send_actual_request)
+    assert len(state.requests) == 1
+
+    with monkeypatch.context() as cold_read_patch:
+        cold_read_patch.setattr(
+            saver._storage.assemblies,
+            "_read_context_assembly_connection",
+            checked_reader,
+        )
+        with dispatch_execution_scope(saver, session_id, turn_id):
+            if missing_assembly:
+                with pytest.raises(KeyError, match="committed assembly lookup loss") as error:
+                    await bridge.awrap_model_call(request, send_actual_request)
+                assert error.value is missing
+            else:
                 await bridge.awrap_model_call(request, send_actual_request)
-            assert error.value is missing
-        else:
-            await bridge.awrap_model_call(request, send_actual_request)
+
     (snapshot,) = saver.list_context_assemblies(session_id, thread)
     assert seen_owners
     assert set(seen_owners) == {(session_id, thread, owner_namespace, snapshot.assembly_id)}
@@ -677,9 +694,8 @@ async def test_dispatch_reads_committed_owner_namespace_before_real_provider_htt
             session_id, thread, assembly_id=snapshot.assembly_id, checkpoint_ns=checkpoint_ns,
         )
     assert restored == snapshot
-    assert len(state.requests) == (0 if missing_assembly else 1)
-    if not missing_assembly:
-        assert snapshot.request_hash_preimage == normalize_wire_request(state.requests[0]["body"])
+    assert len(state.requests) == (1 if missing_assembly else 2)
+    assert snapshot.request_hash_preimage == normalize_wire_request(state.requests[-1]["body"])
     assert read_sealed_assembly_dispatch(invocation_purpose="tool_test") is None
 
 
@@ -844,7 +860,7 @@ async def test_provider_drift_after_committed_seal_fails_before_http(
 
 @pytest.mark.parametrize("empty", [False, True])
 @pytest.mark.parametrize(
-    "port", ["provider", "native", "messages", "history", "bind", "seal"]
+    "port", ["dispatch", "provider", "native", "messages", "history", "bind", "seal"]
 )
 def test_foreign_session_plan_is_rejected_without_io(
     dispatch_saver, session_bundle_factory, monkeypatch, empty, port
@@ -888,23 +904,33 @@ def test_foreign_session_plan_is_rejected_without_io(
 
     # 先经真实 Saver seal/read 取得 plan，再在 I/O 边界设置哨兵；错误 owner
     # 必须在 source lookup 前拒绝，不能只依靠目标文件最终未变化来推断。
+    expected_owner_error = (
+        "source-mismatch: target rollout is not materialized; "
+        "frozen history scope cannot be authorized"
+        if port in {"dispatch", "provider", "native", "messages", "history"}
+        else "source-mismatch.*session/thread owner"
+    )
     with monkeypatch.context() as io_patch:
         for owner, names in (
             (
-                saver._storage,
+                saver._storage.assemblies,
                 (
                     "get_context_assembly",
-                    "read_items",
                     "get_context_plan_detail",
                     "register_context_plan_detail",
                 ),
             ),
+            (saver._storage.storage, ("read_items",)),
             (saver._detail_store, ("read", "write", "remove")),
         ):
             for name in names:
                 io_patch.setattr(owner, name, reject_io)
-        with pytest.raises(ValueError, match="source-mismatch.*session/thread owner"):
-            if port == "provider":
+        with pytest.raises(ValueError, match=expected_owner_error):
+            if port == "dispatch":
+                saver.project_context_plan_for_dispatch(
+                    target_id, target_thread, draft, target_format="responses"
+                )
+            elif port == "provider":
                 saver.project_context_plan_to_provider(
                     target_id, target_thread, draft, target_format="responses"
                 )
@@ -1544,6 +1570,7 @@ def toolset_dispatch_case(dispatch_saver, native_http_server, dispatch_bridge, t
         agent_id="dispatch-test",
         changes={item.name: (item.name == "inspect_file", item.name == "inspect_file") for item in tools},
     )
+    dispatches = []
 
     async def dispatch(task_id, *, messages=()):
         incoming = ModelRequest(
@@ -1559,6 +1586,13 @@ def toolset_dispatch_case(dispatch_saver, native_http_server, dispatch_bridge, t
             # handler 只读已成功提交的 assembly，真实 SDK 还会联校 finalized wire/hash。
             handle = read_sealed_assembly_dispatch(invocation_purpose="agent")
             assert handle is not None
+            if target_format == "responses":
+                native, snapshot = handle.native_projection, handle.snapshot
+                assert (native["session_id"], native["assembly_id"], native["plan_hash"]) == (
+                    snapshot.session_id, snapshot.assembly_id, snapshot.plan_hash,
+                )
+                assert native["selection"] == [entry.to_dict() for entry in snapshot.selection]
+            dispatches.append(handle)
             outbound.append(handle.snapshot)
             bound = request.model.bind_tools(request.tools)
             answer = await bound.ainvoke(request.messages, **request.model_settings)
@@ -1574,8 +1608,59 @@ def toolset_dispatch_case(dispatch_saver, native_http_server, dispatch_bridge, t
         saver=saver, session=session, turn=turn, thread=thread, sessions=sessions,
         state=state, target_format=target_format, bridge=bridge, producer=producer,
         selection=selection, manager=bridge._context_source_manager,
-        tools=tools, dispatch=dispatch,
+        tools=tools, dispatch=dispatch, dispatches=dispatches,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
+async def test_real_bridge_dispatch_uses_seal_projection_without_post_ack_reread(
+    toolset_dispatch_case, monkeypatch, target_format,
+):
+    """真实 Bridge 和 HTTP 复用本次 seal 收据，ack 后不再冷读 assembly。"""
+    case = toolset_dispatch_case
+    storage = case.saver._storage.storage
+    original_ack = case.manager.acknowledge_sealed_pending
+    original_open = storage.open_read_snapshot
+    original_cold_project = case.saver.project_context_plan_for_dispatch
+    acknowledged, post_ack_snapshots, cold_projection_calls = [], [], []
+
+    def acknowledge(*args, **kwargs):
+        receipt = original_ack(*args, **kwargs)
+        acknowledged.append(receipt.assembly_id)
+        return receipt
+
+    def open_snapshot(*args, **kwargs):
+        snapshot = original_open(*args, **kwargs)
+        if acknowledged:
+            post_ack_snapshots.append(snapshot)
+        return snapshot
+
+    def cold_project(*args, **kwargs):
+        cold_projection_calls.append((args, kwargs))
+        return original_cold_project(*args, **kwargs)
+
+    monkeypatch.setattr(case.manager, "acknowledge_sealed_pending", acknowledge)
+    monkeypatch.setattr(storage, "open_read_snapshot", open_snapshot)
+    monkeypatch.setattr(case.saver, "project_context_plan_for_dispatch", cold_project)
+    snapshot = await case.dispatch("single-seal-receipt")
+    (handle,) = case.dispatches
+    assert acknowledged == [snapshot.assembly_id]
+    assert cold_projection_calls == []
+    assert post_ack_snapshots == []
+    assert len(case.state.requests) == 1
+    body = case.state.requests[-1]["body"]
+    assert snapshot.request_hash_preimage == normalize_wire_request(body)
+    if target_format == "responses":
+        native = handle.native_projection
+        assert native is not None
+        assert native["selection"] == [entry.to_dict() for entry in snapshot.selection]
+        assert (native["session_id"], native["assembly_id"], native["plan_hash"]) == (
+            snapshot.session_id, snapshot.assembly_id, snapshot.plan_hash,
+        )
+        assert (body["input"], body["tools"]) == (native["request"]["input"], native["request"]["tools"])
+    else:
+        assert handle.native_projection is None
 
 
 def _select_contract_tools(case, *names):
@@ -1824,7 +1909,7 @@ async def test_real_bridge_waits_for_paired_terminal_result_before_sources_or_se
     originals = {
         "sources": case.manager.prepare_sources,
         "rebuild": case.manager.prepare_rebuild_sources,
-        "seal": case.saver.seal_context_plan,
+        "seal": preparation.seal_registered_plan,
     }
 
     def record_sources(*args, **kwargs):
@@ -1841,7 +1926,7 @@ async def test_real_bridge_waits_for_paired_terminal_result_before_sources_or_se
 
     monkeypatch.setattr(case.manager, "prepare_sources", record_sources)
     monkeypatch.setattr(case.manager, "prepare_rebuild_sources", record_rebuild)
-    monkeypatch.setattr(case.saver, "seal_context_plan", record_seal)
+    monkeypatch.setattr(preparation, "seal_registered_plan", record_seal)
     call = AIMessage(
         content="", id="toolset-outstanding-call",
         tool_calls=[{"name": "inspect_file", "args": {"path": "README.md"}, "id": "toolset-call"}],
@@ -2085,7 +2170,8 @@ async def test_real_prepare_rejects_noncompleted_unknown_canonical_tool_result(
         count_call("rebuild", case.manager.prepare_rebuild_sources),
     )
     monkeypatch.setattr(
-        case.saver, "seal_context_plan", count_call("seal", case.saver.seal_context_plan),
+        preparation, "seal_registered_plan",
+        count_call("seal", preparation.seal_registered_plan),
     )
     with pytest.raises(ToolProtocolBoundaryConflict) as error:
         await case.dispatch("toolset-noncompleted-unknown-next")
@@ -2179,7 +2265,8 @@ async def test_real_prepare_observes_completed_unknown_canonical_terminal_notifi
         count_call("rebuild", case.manager.prepare_rebuild_sources),
     )
     monkeypatch.setattr(
-        case.saver, "seal_context_plan", count_call("seal", case.saver.seal_context_plan),
+        preparation, "seal_registered_plan",
+        count_call("seal", preparation.seal_registered_plan),
     )
     projected_tool_results = []
     projected_message_lists = []

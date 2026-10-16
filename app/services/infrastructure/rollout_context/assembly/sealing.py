@@ -24,6 +24,9 @@ from app.services.infrastructure.rollout_context.assembly.plans.sealing import (
     bind_sealed_registration,
     preflight_seal,
 )
+from app.services.infrastructure.rollout_context.assembly.plans.types import (
+    ContextAssemblySealReceipt,
+)
 from app.services.infrastructure.rollout_context.assembly.validation import (
     json_text,
     non_negative_int,
@@ -58,7 +61,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
         activation_binding: Callable[[sqlite3.Connection], None] | None = None,
         prepared_details: tuple[PreparedDetail, ...] = (),
         detail_store: ContextPlanDetailStore | None = None,
-    ) -> int:
+    ) -> ContextAssemblySealReceipt:
         """在 dispatch 前持久化不可变 assembly snapshot。
 
         ``activation_binding`` 是 activation coordinator 冻结 snapshot 的显式
@@ -153,7 +156,10 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                             connection, snapshot, registration=registration,
                             header_detail_ref=detail_key, checkpoint_ns=checkpoint_ns,
                         )
-                        return non_negative_int(commit_row[0], field="commit_id")
+                        return ContextAssemblySealReceipt(
+                            non_negative_int(commit_row[0], field="commit_id"),
+                            seal.snapshot,
+                        )
                     raise ValueError("assembly-idempotency-conflict: assembly_id 已存在但输入不一致")
                 turn = connection.execute(
                     "SELECT status FROM turn_records WHERE session_id = ? AND thread_id = ? AND turn_id = ?",
@@ -250,14 +256,16 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                     # provenance」或反之的半发布状态。
                     activation_binding(connection)
                 if snapshot.selection_policy != "summary_candidate":
-                    self._context.checkpoints._apply_sealed_context_sources(
-                        connection, snapshot,
-                        previous=self._latest_context_assembly_connection(
-                            connection, session_id, thread_id, checkpoint_ns=checkpoint_ns,
-                            excluding_assembly_id=snapshot.assembly_id,
-                        ),
+                    previous = self._latest_context_assembly_connection(
+                        connection, session_id, thread_id, checkpoint_ns=checkpoint_ns,
+                        excluding_assembly_id=snapshot.assembly_id,
                     )
-                    self._context.checkpoints._consume_context_epoch_transition(connection, snapshot, checkpoint_ns)
+                    self._context.checkpoints._apply_sealed_context_sources(
+                        connection, snapshot, previous=previous,
+                    )
+                    self._context.checkpoints._consume_context_epoch_transition(
+                        connection, snapshot, checkpoint_ns, previous=previous,
+                    )
                 self._validate_context_assembly_manifest(
                     connection, snapshot, registration=registration,
                     header_detail_ref=detail_key, checkpoint_ns=checkpoint_ns,
@@ -279,4 +287,4 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                     if committed is None and published:
                         detail_store.discard_published(published)
                     raise
-                return commit_id
+                return ContextAssemblySealReceipt(commit_id, seal.snapshot)

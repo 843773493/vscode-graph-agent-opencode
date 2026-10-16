@@ -74,7 +74,7 @@ def test_real_seal_commits_plan_tools_selection_once_and_reopens(
     original = saver._storage.storage.jsonl_path(session).read_bytes()
     saver.create_context_plan(session, plan)
     snapshot = snapshot_factory()
-    commit_id = saver._storage.assemblies.seal_context_assembly(
+    receipt = saver._storage.assemblies.seal_context_assembly(
         session, plan.thread_id, snapshot,
         seal_idempotency_key="transaction-seal",
         seal_input_hash=sha256_jcs("storage-seal-test-input"),
@@ -91,12 +91,13 @@ def test_real_seal_commits_plan_tools_selection_once_and_reopens(
     assert connection.execute(
         "SELECT commit_kind, commit_mode, jsonl_offset_before, jsonl_offset_after "
         "FROM storage_commits WHERE commit_id=?",
-        (commit_id,),
+        (receipt.commit_id,),
     ).fetchone() == ("assembly_sealed", "metadata_only", len(original), len(original))
     restarted = RolloutCheckpointSaver(saver._storage.storage.sessions_dir)
     restored = restarted._storage.assemblies.get_context_assembly(
         session, plan.thread_id, assembly_id=snapshot.assembly_id
     )
+    assert receipt.snapshot.to_dict() == restored.to_dict()
     assert restored.to_dict() == snapshot.to_dict()
     assert (
         restarted._storage.assemblies.seal_context_assembly(
@@ -104,7 +105,7 @@ def test_real_seal_commits_plan_tools_selection_once_and_reopens(
             seal_idempotency_key="transaction-seal",
             seal_input_hash=sha256_jcs("storage-seal-test-input"),
         )
-        == commit_id
+        == receipt
     )
     assert connection.execute(
         "SELECT count(*) FROM storage_commits WHERE commit_kind='assembly_sealed'"

@@ -318,15 +318,20 @@ class RolloutSchemaIntrospectionMixin:
         )
         jsonl_size = jsonl_path.stat().st_size
         commits = connection.execute(
-            "SELECT commit_id, jsonl_start_offset, jsonl_end_offset, "
+            "SELECT commit_record.commit_id, jsonl_start_offset, jsonl_end_offset, "
             "jsonl_offset_before, jsonl_offset_after, jsonl_record_count, status, "
-            "commit_kind, commit_mode, outcome, metadata_json, jsonl_fsync_at "
-            "FROM storage_commits ORDER BY commit_id"
+            "commit_kind, commit_mode, outcome, metadata_json, jsonl_fsync_at, "
+            "COALESCE(catalog.item_count, 0) "
+            "FROM storage_commits commit_record LEFT JOIN "
+            "(SELECT commit_id, COUNT(*) AS item_count FROM item_catalog GROUP BY commit_id) catalog "
+            "ON catalog.commit_id=commit_record.commit_id ORDER BY commit_record.commit_id"
         )
         previous = 0
         last_seen_commit_id: int | None = None
         commit_kinds = {value.value for value in CommitKind}
         commit_modes = {value.value for value in CommitMode}
+        validated_metadata: set[str] = set()
+        commit_bounds: dict[int, tuple[int, int, int]] = {}
         for commit in commits:
             commit_id = strict_non_negative_int(
                 commit[0], field="storage_commits.commit_id"
@@ -340,7 +345,7 @@ class RolloutSchemaIntrospectionMixin:
             before = strict_non_negative_int(
                 commit[3], field=f"storage commit jsonl_start_offset: {commit_id}"
             )
-            end_offset = strict_non_negative_int(
+            after = strict_non_negative_int(
                 commit[4], field=f"storage commit jsonl_offset_after: {commit_id}"
             )
             record_count = strict_non_negative_int(
@@ -363,13 +368,6 @@ class RolloutSchemaIntrospectionMixin:
                 raise RuntimeError(
                     f"v2 storage commit mode 非法: commit_id={commit_id}, mode={commit_mode}"
                 )
-            after = strict_non_negative_int(
-                commit[4], field=f"storage commit jsonl_offset_after: {commit_id}"
-            )
-            if end_offset != after:
-                raise RuntimeError(
-                    f"v2 storage commit end offset 字段不一致: commit_id={commit_id}"
-                )
             outcome = commit[9]
             if outcome is not None and not isinstance(outcome, str):
                 raise RuntimeError(
@@ -391,22 +389,25 @@ class RolloutSchemaIntrospectionMixin:
                 raise RuntimeError(
                     f"v2 storage commit metadata_json 必须是非空字符串: commit_id={commit_id}"
                 )
-            try:
-                metadata_value = json.loads(metadata_json)
-            except (TypeError, json.JSONDecodeError) as error:
-                raise RuntimeError(
-                    f"v2 storage commit metadata_json 非法: commit_id={commit_id}"
-                ) from error
-            if not isinstance(metadata_value, Mapping) or _json(metadata_value) != metadata_json:
-                raise RuntimeError(
-                    "v2 storage commit metadata_json 不是 RFC 8785 JCS object: "
-                    f"commit_id={commit_id}"
-                )
-            if "physical_record_count" in metadata_value or "compacted" in metadata_value:
-                raise RuntimeError(
-                    "immutable JSONL 不允许已提交记录被物理压缩或重写: "
-                    f"commit_id={commit_id}"
-                )
+            # 仅在本次完整校验内复用相同字节的纯解析结果；每条 commit 的合同和边界仍独立校验。
+            if metadata_json not in validated_metadata:
+                try:
+                    metadata_value = json.loads(metadata_json)
+                except (TypeError, json.JSONDecodeError) as error:
+                    raise RuntimeError(
+                        f"v2 storage commit metadata_json 非法: commit_id={commit_id}"
+                    ) from error
+                if not isinstance(metadata_value, Mapping) or _json(metadata_value) != metadata_json:
+                    raise RuntimeError(
+                        "v2 storage commit metadata_json 不是 RFC 8785 JCS object: "
+                        f"commit_id={commit_id}"
+                    )
+                if "physical_record_count" in metadata_value or "compacted" in metadata_value:
+                    raise RuntimeError(
+                        "immutable JSONL 不允许已提交记录被物理压缩或重写: "
+                        f"commit_id={commit_id}"
+                    )
+                validated_metadata.add(metadata_json)
             if start != before or end != after:
                 raise RuntimeError(
                     "v2 storage commit JSONL offset 链断裂（offset 字段不一致）: "
@@ -442,12 +443,8 @@ class RolloutSchemaIntrospectionMixin:
                 raise RuntimeError(
                     f"item-bearing commit 必须包含 item: commit_id={commit_id}"
                 )
-            catalog_row = connection.execute(
-                "SELECT COUNT(*) FROM item_catalog WHERE commit_id = ?",
-                (commit_id,),
-            ).fetchone()
             catalog_count = strict_non_negative_int(
-                catalog_row[0], field=f"item catalog count: {commit_id}"
+                commit[12], field=f"item catalog count: {commit_id}"
             )
             if catalog_count != record_count:
                 raise RuntimeError(
@@ -455,6 +452,7 @@ class RolloutSchemaIntrospectionMixin:
                     f"commit_id={commit_id}, catalog={catalog_count}, "
                     f"record_count={record_count}"
                 )
+            commit_bounds[commit_id] = (start, end, record_count)
             previous = after
             last_seen_commit_id = commit_id
         if last_seen_commit_id is not None and database_last_commit_id != last_seen_commit_id:
@@ -482,9 +480,8 @@ class RolloutSchemaIntrospectionMixin:
         item_rows = connection.execute(
             "SELECT item.item_sequence,item.item_id,item.content_hash,item.jsonl_offset,item.jsonl_length,"
             "item.commit_id,item.payload_length,item.source_revision,"
-            "commit_record.jsonl_start_offset,commit_record.jsonl_end_offset,commit_record.jsonl_record_count,"
             "execution.session_id,execution.thread_id,turn.session_id,turn.thread_id "
-            "FROM item_catalog item LEFT JOIN storage_commits commit_record ON commit_record.commit_id=item.commit_id "
+            "FROM item_catalog item "
             "LEFT JOIN executions execution ON execution.execution_id=item.execution_id "
             "LEFT JOIN turn_records turn ON turn.turn_id=item.turn_id ORDER BY item.jsonl_offset"
         )
@@ -501,9 +498,6 @@ class RolloutSchemaIntrospectionMixin:
             item_commit_id,
             logical_length,
             source_revision,
-            commit_start,
-            commit_end,
-            commit_record_count,
             execution_session_id,
             execution_thread_id,
             turn_session_id,
@@ -572,13 +566,12 @@ class RolloutSchemaIntrospectionMixin:
             item_commit_id_value = strict_non_negative_int(
                 item_commit_id, field=f"item_catalog.commit_id: {item_id}"
             )
-            if commit_start is None:
+            bounds = commit_bounds.get(item_commit_id_value)
+            if bounds is None:
                 raise RuntimeError(
                     f"v2 item catalog 指向不存在的 storage commit: item_id={item_id}"
                 )
-            commit_start = strict_non_negative_int(commit_start, field="storage commit start offset")
-            commit_end = strict_non_negative_int(commit_end, field="storage commit end offset")
-            commit_record_count = strict_non_negative_int(commit_record_count, field="storage commit record count")
+            commit_start, commit_end, commit_record_count = bounds
             if (
                 item_offset < commit_start
                 or end > commit_end

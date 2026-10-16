@@ -14,6 +14,7 @@ from app.domain.itemized.identity.item_projection import ItemSourceManifest
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.checkpoint.seal import preparation
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     CommittedContextSourceBatch,
     ContextSourceDescriptor,
@@ -336,14 +337,14 @@ def test_frozen_batch_keeps_source_arriving_after_seal_pending(source_seal_case,
     manager = source_seal_case.manager(lifecycle_event_sink=events.append)
     _activate(manager, "src_a", "a", "alpha")
     original_batch = manager.prepare_pending()
-    original = source_seal_case.saver.seal_context_plan
+    original = preparation.seal_registered_plan
 
     def seal_then_activate(*args, **kwargs):
         snapshot = original(*args, **kwargs)
         _activate(manager, "src_b", "b", "beta")
         return snapshot
 
-    monkeypatch.setattr(source_seal_case.saver, "seal_context_plan", seal_then_activate)
+    monkeypatch.setattr(preparation, "seal_registered_plan", seal_then_activate)
     receipt, _ = source_seal_case.seal(manager)
     assert receipt.deltas == original_batch.deltas
     assert [event.source_id for event in events] == ["src_a"]
@@ -353,7 +354,7 @@ def test_frozen_batch_keeps_source_arriving_after_seal_pending(source_seal_case,
     assert stored["src_a"].latest_visible_committed_revision == stored["src_a"].latest_revision
     assert stored["src_b"].latest_visible_committed_revision is None
 
-    monkeypatch.setattr(source_seal_case.saver, "seal_context_plan", original)
+    monkeypatch.setattr(preparation, "seal_registered_plan", original)
     source_seal_case.seal(manager)
     assert [event.source_id for event in events] == ["src_a", "src_b"]
     assert manager.prepare_pending() is None

@@ -42,6 +42,9 @@ from app.services.infrastructure.rollout_context.assembly.plans.types import (
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     validate_tool_protocol_closure,
 )
+from app.services.infrastructure.rollout_context.checkpoint.seal.lifecycle import (
+    seal_registered_plan,
+)
 from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (
     require_key,
 )
@@ -205,6 +208,10 @@ def prepare_registered_context(
             )
             if snapshot.model_call_id != model_call_id:
                 raise ValueError("assembly-idempotency-conflict: sealed model-call identity 不一致")
+            projection = owner.project_context_plan_for_dispatch(
+                session_id, thread_id, snapshot.as_sealed_plan(),
+                target_format=target_format, checkpoint_ns=checkpoint_ns,
+            )
         else:
             # 只有新请求读取 desired；已 sealed/in-flight attempt 完全复用旧 binding。
             tool_set = tool_set_supplier()
@@ -391,32 +398,31 @@ def prepare_registered_context(
                 session_id, replace(plan, plan_creation_idempotency_key=plan_creation_idempotency_key),
                 checkpoint_ns=checkpoint_ns,
             )
-            snapshot = owner.seal_context_plan(
-                session_id, thread_id, registered.draft,
-                seal_idempotency_key=seal_idempotency_key, turn_id=turn_id,
-                execution_id=execution_id, provider_version=provider_version,
+            sealed = seal_registered_plan(
+                owner, session_id, thread_id, registered.draft,
+                # 复用本次创建返回值；写事务仍重新读取并校验当前 registry/CAS。
+                registered=registered,
+                seal_idempotency_key=seal_idempotency_key,
+                assembly_options={
+                    "turn_id": turn_id, "execution_id": execution_id,
+                    "provider_version": provider_version, "model_call_id": model_call_id,
+                    "target_format": target_format, "loss": (), "omitted_ref_ids": frozenset(omitted),
+                },
                 wire_profile=wire_profile, wire_params=wire_params,
-                target_format=target_format, request_input_hash=input_hash,
+                request_input_hash=input_hash,
                 request_only_content=bodies, context_preparation=preparation,
-                model_call_id=model_call_id, activation_snapshot=activation_snapshot,
+                activation_snapshot=activation_snapshot,
                 checkpoint_ns=checkpoint_ns,
-                omitted_ref_ids=omitted,
             )
+            snapshot, projection = sealed.snapshot, sealed.projection
+            if projection is None:
+                raise RuntimeError("source-mismatch: Provider seal 未返回本次 wire projection")
             if summary_candidate is None:
                 context_source_manager.acknowledge_sealed_pending(csm_batch, snapshot.seal_binding)
         plan = snapshot.as_sealed_plan()
-        messages, tools, losses = owner.project_context_plan_to_provider(
-            session_id, thread_id, plan, target_format=target_format,
-            checkpoint_ns=checkpoint_ns, include_runtime_notices=True, include_summaries=True,
-        )
-        native_request = None
-        if target_format == "responses":
-            native = owner.project_context_plan_to_native(
-                session_id, thread_id, plan, checkpoint_ns=checkpoint_ns,
-            )
-            native_request = native["request"]
+        messages, tools, losses, native = projection
         preimage = normalize_wire_request(finalize_provider_wire(
-            messages=messages, tools=tools, native_request=native_request,
+            messages=messages, tools=tools, native_request=None if native is None else native["request"],
             profile=wire_profile, params=wire_params,
         ))
         if canonical_json_bytes(snapshot.request_hash_preimage) != canonical_json_bytes(preimage):
@@ -425,6 +431,8 @@ def prepare_registered_context(
             "assembly_id": snapshot.assembly_id, "execution_id": snapshot.execution_id,
             "snapshot": snapshot, "plan": plan, "messages": messages, "tools": tools, "losses": losses,
         }
+        if native is not None:
+            pending["native_projection"] = native
         queue = owner._prepared_dispatches.setdefault((session_id, thread_id, checkpoint_ns, execution_id), [])
         if not any(item["assembly_id"] == snapshot.assembly_id for item in queue):
             queue.append(pending)

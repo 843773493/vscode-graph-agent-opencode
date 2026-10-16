@@ -14,6 +14,7 @@ from app.domain.itemized.hashing import (
 )
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import (
     ContextRequestPlan,
     resolve_contribution_for_ref,
@@ -28,6 +29,7 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
     require_historical_scope,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutNotMaterializedError,
     RolloutReadSnapshot,
 )
 
@@ -56,13 +58,19 @@ class ContextProjectionOwnerMixin:
             return
         if plan.plan_state != "sealed":
             self._require_context_plan_owner(session_id, thread_id, plan)
-        with self._storage.storage.read_connection(
-            session_id, thread_id, checkpoint_ns, snapshot=snapshot,
-        ) as connection:
-            require_historical_scope(
-                connection, plan.session_id, plan.thread_id,
-                current_owner=(session_id, thread_id),
-            )
+        try:
+            with self._storage.storage.read_connection(
+                session_id, thread_id, checkpoint_ns, snapshot=snapshot,
+            ) as connection:
+                require_historical_scope(
+                    connection, plan.session_id, plan.thread_id,
+                    current_owner=(session_id, thread_id),
+                )
+        except RolloutNotMaterializedError as error:
+            raise ValueError(
+                "source-mismatch: target rollout is not materialized; "
+                "frozen history scope cannot be authorized"
+            ) from error
 
     def _validate_snapshot_sources(
         self, snapshot: ContextAssemblySnapshot, checkpoint_ns: str, *,
@@ -105,14 +113,31 @@ class ContextProjectionOwnerMixin:
         checkpoint_ns: str = "",
     ) -> dict[str, object]:
         """从同一已提交 selection 直接编码 Responses input，不经过 LangChain。"""
-        from app.services.infrastructure.rollout_context.provider.native_request import (
-            project_native_request,
+        snapshot, items, request_content = self._read_committed_context_projection(
+            session_id, thread_id, plan,
+            checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
+        )
+        return self._project_native_context(
+            session_id, thread_id, snapshot, items, request_content,
         )
 
+    def _read_committed_context_projection(
+        self,
+        session_id: str,
+        thread_id: str,
+        plan: ContextRequestPlan,
+        *,
+        checkpoint_ns: str,
+        request_only_content: Mapping[str, object] | None = None,
+        include_request_only: bool = True,
+    ) -> tuple[ContextAssemblySnapshot, list[CanonicalItemRecord], dict[str, object]]:
+        """一次 fresh authority 读取冻结投影材料，关闭连接后才运行各 projector。"""
         if plan.plan_state != "sealed" or plan.assembly_id is None:
             self._require_context_plan_owner(session_id, thread_id, plan)
             raise ValueError("context plan 未 sealed，不能进入 projector")
-        checkpoint_ns = self.context_owner_namespace(checkpoint_ns)
+        self._require_context_plan_read_owner(
+            session_id, thread_id, plan, checkpoint_ns,
+        )
         with self._storage.storage.open_read_snapshot(
             session_id, thread_id, checkpoint_ns,
         ) as read_snapshot:
@@ -124,24 +149,42 @@ class ContextProjectionOwnerMixin:
                 snapshot=read_snapshot,
             )
             committed = committed_snapshot.as_sealed_plan()
-            item_ids = tuple(
+            item_ids = [
                 entry.ref.ref_id
                 for entry in committed.selection
-                if entry.ref.ref_type == "canonical_item" and (
-                    entry.included or committed.selection_policy == "summary_candidate"
+                if (entry.included or committed.selection_policy == "summary_candidate")
+                and isinstance(entry.ref, ContextRef)
+                and entry.ref.ref_type == "canonical_item"
+            ]
+            request_content = (
+                self._request_content_for_plan(
+                    session_id, thread_id, checkpoint_ns, committed, request_only_content,
+                    snapshot=read_snapshot,
                 )
+                if include_request_only else {}
             )
             items = self._storage.storage.read_items(
                 session_id, thread_id, checkpoint_ns=checkpoint_ns, item_ids=item_ids,
                 snapshot=read_snapshot,
             )
-            request_content = self._request_content_for_plan(
-                session_id, thread_id, checkpoint_ns, committed, None,
-                snapshot=read_snapshot,
-            )
+        return committed_snapshot, items, request_content
+
+    def _project_native_context(
+        self,
+        session_id: str,
+        thread_id: str,
+        snapshot: ContextAssemblySnapshot,
+        items: list[CanonicalItemRecord],
+        request_content: Mapping[str, object],
+    ) -> dict[str, object]:
+        """只消费本次读取的材料，不自行重读或重新选择 context。"""
+        from app.services.infrastructure.rollout_context.provider.native_request import (
+            project_native_request,
+        )
+
         return project_native_request(
-            committed, items, request_content,
-            seal_binding=committed_snapshot.seal_binding,
+            snapshot.as_sealed_plan(), items, request_content,
+            seal_binding=snapshot.seal_binding,
             attachment_projector=lambda payload: self._storage.storage.project_attachment_payload(session_id, thread_id, payload),
         )
 
@@ -155,7 +198,7 @@ class ContextProjectionOwnerMixin:
     ) -> tuple[list[BaseMessage], tuple[str, ...]]:
         """history 保留 selection loss，同时避免读取 request-only 正文。"""
         checkpoint_ns = self.context_owner_namespace(checkpoint_ns)
-        messages, _, losses = self._project_committed_context_plan(
+        messages, _, losses, _ = self._project_committed_context_plan(
             session_id,
             thread_id,
             plan,

@@ -10,6 +10,7 @@ from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.services.infrastructure.rollout_context.assembly.plans.types import (
+    ContextAssemblySealReceipt,
     ContextPlanRegistration,
 )
 from app.services.infrastructure.rollout_context.assembly.seal_preflight import (
@@ -120,7 +121,7 @@ def seal_snapshot(
     checkpoint_ns: str,
     activation_binding: ActivationSealBinding | None = None,
     prepared_details: tuple[PreparedDetail, ...] = (),
-) -> int:
+) -> ContextAssemblySealReceipt:
 
     if (snapshot.session_id, snapshot.thread_id) != (session_id, thread_id):
         raise ValueError("source-mismatch: assembly seal owner 不一致")

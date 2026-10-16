@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import replace
 
 import pytest
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.agents.providers.wire_finalize import finalize_provider_wire
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.model_request_context import SummaryCandidateScope
 from app.core.session_thread_context import session_thread_owner_scope
@@ -17,10 +19,15 @@ from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.serialization import normalize_wire_request
+from app.services.infrastructure.rollout_context.assembly.plans import (
+    sealing as plan_sealing,
+)
 from app.services.infrastructure.rollout_context.checkpoint.owner import context_owner
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.checkpoint.seal import preparation
 from app.services.infrastructure.rollout_context.provider import native_request
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
@@ -172,14 +179,16 @@ def test_cold_assembly_recomputes_one_plan_hash_per_validation(
     assert set(validated) == {result["assembly_id"]}
 
 
-def test_new_prepare_validates_once_before_ack_and_cold_reads_after_ack(
+def test_new_prepare_reuses_seal_validation_and_cold_projection_revalidates(
     production_context, monkeypatch,
 ):
-    saver, _session, _thread, _connection, manager, prepare = production_context
+    saver, session, thread, _connection, manager, prepare = production_context
     validated, reads = [], []
     original_validate = ContextAssemblySnapshot.validate_hashes
     original_read = saver._storage.assemblies._read_context_assembly_connection
+    original_registration = plan_sealing.read_registration
     original_ack = manager.acknowledge_sealed_pending
+    registration_reads = []
 
     def validate(snapshot):
         original_validate(snapshot)
@@ -189,6 +198,11 @@ def test_new_prepare_validates_once_before_ack_and_cold_reads_after_ack(
         reads.append(kwargs["assembly_id"])
         return original_read(*args, **kwargs)
 
+    def read_registration(connection, *args):
+        assert connection.in_transaction
+        registration_reads.append(args)
+        return original_registration(connection, *args)
+
     def acknowledge(*args, **kwargs):
         assert len(validated) == 1
         assert reads == []
@@ -196,15 +210,22 @@ def test_new_prepare_validates_once_before_ack_and_cold_reads_after_ack(
 
     monkeypatch.setattr(ContextAssemblySnapshot, "validate_hashes", validate)
     monkeypatch.setattr(saver._storage.assemblies, "_read_context_assembly_connection", read)
+    monkeypatch.setattr(plan_sealing, "read_registration", read_registration)
     monkeypatch.setattr(manager, "acknowledge_sealed_pending", acknowledge)
     result = prepare("one-seal-admission")
+    assert validated == [result["assembly_id"]]
+    assert reads == []
+    assert registration_reads == [(session, thread, result["plan"].plan_id)]
+    assert saver.project_context_plan_for_dispatch(
+        session, thread, result["plan"], target_format="chat_completions",
+    ) == (result["messages"], result["tools"], result["losses"], None)
     assert validated == [result["assembly_id"], result["assembly_id"]]
     assert reads == [result["assembly_id"]]
 
 
 @pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
-def test_final_projection_reads_fresh_snapshot_after_ack_and_maps_after_close(
-    production_context, monkeypatch, target_format,
+def test_seal_projection_is_reused_and_independent_cold_projection_maps_after_close(
+    production_context, frozen_provider_wire, monkeypatch, target_format,
 ):
     saver, session, thread, _connection, manager, prepare = production_context
     manager.observe("instruction:R01", "基础规则第一版", revision=sha256_jcs("基础规则第一版"))
@@ -212,16 +233,20 @@ def test_final_projection_reads_fresh_snapshot_after_ack_and_maps_after_close(
     original_open = storage.open_read_snapshot
     original_ack = manager.acknowledge_sealed_pending
     original_read_assembly = assemblies._read_context_assembly_connection
+    original_seal = preparation.seal_registered_plan
+    original_dispatch = saver.project_context_plan_for_dispatch
     snapshots, lifecycle = [], []
     phase = {"name": "prepare", "ack_done": False}
-    observed = {}
+    observed = {"snapshots": [], "reads": set(), "counts": {}, "callbacks": 0}
+    sealed = []
+    prepare_callbacks = []
 
     def open_snapshot(*args, **kwargs):
         snapshot = original_open(*args, **kwargs)
         snapshots.append(snapshot)
         if phase["ack_done"]:
-            assert phase["name"] in {"provider", "native"}
-            observed[phase["name"]]["snapshots"].append(snapshot)
+            assert phase["name"] == "cold"
+            observed["snapshots"].append(snapshot)
         return snapshot
 
     def lifecycle_sink(event):
@@ -235,45 +260,51 @@ def test_final_projection_reads_fresh_snapshot_after_ack_and_maps_after_close(
         phase["ack_done"] = True
         return receipt
 
-    def projection(original, name):
-        def project(*args, **kwargs):
-            assert phase["ack_done"]
-            phase["name"] = name
-            observed[name] = {"snapshots": [], "reads": set(), "callbacks": 0}
-            result = original(*args, **kwargs)
-            assert len(observed[name]["snapshots"]) == 1
-            assert observed[name]["snapshots"][0].closed
-            phase["name"] = "prepare"
-            return result
-        return project
+    def seal(*args, **kwargs):
+        receipt = original_seal(*args, **kwargs)
+        assert not phase["ack_done"]
+        assert receipt.projection is not None
+        sealed.append(receipt)
+        return receipt
+
+    def cold_projection(*args, **kwargs):
+        assert phase["ack_done"]
+        assert phase["name"] == "cold"
+        return original_dispatch(*args, **kwargs)
 
     def read(original, label):
         def read_with_snapshot(*args, **kwargs):
-            if phase["name"] in observed:
-                current = observed[phase["name"]]
+            if phase["name"] == "cold":
+                current = observed
                 assert len(current["snapshots"]) == 1
                 assert kwargs.get("snapshot") is current["snapshots"][0]
                 assert not kwargs["snapshot"].closed
                 current["reads"].add(label)
+                current["counts"][label] = current["counts"].get(label, 0) + 1
                 if label == "detail_body":
                     current["reads"].add(kwargs["record"].detail_kind)
             return original(*args, **kwargs)
         return read_with_snapshot
 
     def read_assembly(connection, *args, **kwargs):
-        if phase["name"] in observed:
-            current = observed[phase["name"]]
+        if phase["name"] == "cold":
+            current = observed
             assert connection is current["snapshots"][0].connection
             assert connection.in_transaction
             current["reads"].add("assembly")
+            current["counts"]["assembly"] = current["counts"].get("assembly", 0) + 1
         return original_read_assembly(connection, *args, **kwargs)
 
     def unlocked(original):
         def callback(*args, **kwargs):
-            if phase["name"] in observed:
-                current = observed[phase["name"]]
+            assert all(snapshot.closed for snapshot in snapshots)
+            if phase["name"] == "cold":
+                current = observed
                 assert current["snapshots"][0].closed
                 current["callbacks"] += 1
+            elif phase["name"] == "prepare":
+                assert not phase["ack_done"]
+                prepare_callbacks.append(original)
             return original(*args, **kwargs)
         return callback
 
@@ -288,11 +319,8 @@ def test_final_projection_reads_fresh_snapshot_after_ack_and_maps_after_close(
         (storage, "read_items", "items"),
     ):
         monkeypatch.setattr(owner, name, read(getattr(owner, name), label))
-    for name, label in (
-        ("project_context_plan_to_provider", "provider"),
-        ("project_context_plan_to_native", "native"),
-    ):
-        monkeypatch.setattr(saver, name, projection(getattr(saver, name), label))
+    monkeypatch.setattr(preparation, "seal_registered_plan", seal)
+    monkeypatch.setattr(saver, "project_context_plan_for_dispatch", cold_projection)
     for owner, name in (
         (context_owner, "project_context_plan"),
         (native_request, "project_native_request"),
@@ -301,27 +329,62 @@ def test_final_projection_reads_fresh_snapshot_after_ack_and_maps_after_close(
     ):
         monkeypatch.setattr(owner, name, unlocked(getattr(owner, name)))
 
-    result = prepare("fresh-final", target_format=target_format)
-    assert set(observed) == ({"provider", "native"} if target_format == "responses" else {"provider"})
-    for current in observed.values():
-        assert current["reads"] == {
-            "assembly", "activation", "detail_manifest", "detail_body", "items",
-            "resource_activation_lineage", "request_source",
-        }
-        assert current["callbacks"] > 1
+    result = prepare("seal-receipt-final", target_format=target_format)
+    assert observed["snapshots"] == []
+    assert len(sealed) == 1
+    assert sealed[0].snapshot == result["snapshot"]
+    assert sealed[0].projection == (
+        result["messages"], result["tools"], result["losses"], result.get("native_projection"),
+    )
+    assert len(prepare_callbacks) > 1
+    phase["name"] = "cold"
+    assert saver.project_context_plan_for_dispatch(
+        session, thread, result["plan"], target_format=target_format,
+    ) == sealed[0].projection
+    assert len(observed["snapshots"]) == 1
+    assert observed["snapshots"][0].closed
+    assert observed["reads"] == {
+        "assembly", "activation", "detail_manifest", "detail_body", "items",
+        "resource_activation_lineage", "request_source",
+    }
+    assert {label: observed["counts"][label] for label in ("assembly", "activation", "items")} == {
+        "assembly": 1, "activation": 1, "items": 1,
+    }
+    assert observed["callbacks"] > 1
+    phase["name"] = "restore"
+    native = result.get("native_projection")
+    if target_format == "responses":
+        snapshot = result["snapshot"]
+        assert (native["session_id"], native["assembly_id"], native["plan_hash"]) == (
+            session, snapshot.assembly_id, snapshot.plan_hash,
+        )
+        assert native["selection"] == [entry.to_dict() for entry in snapshot.selection]
+    else:
+        assert native is None
+    wire = frozen_provider_wire("production-provider", target_format)
+    assert normalize_wire_request(finalize_provider_wire(
+        messages=result["messages"], tools=result["tools"],
+        native_request=None if native is None else native["request"],
+        profile=wire["wire_profile"], params=wire["wire_params"],
+    )) == result["snapshot"].request_hash_preimage
     with RolloutCheckpointSaver(storage.sessions_dir) as cold:
         restored = cold.get_context_assembly(session, thread, assembly_id=result["assembly_id"])
         assert cold.project_context_plan_to_provider(
             session, thread, restored.as_sealed_plan(), target_format=target_format,
             include_runtime_notices=True, include_summaries=True,
         ) == (result["messages"], result["tools"], result["losses"])
+        if native is not None:
+            assert cold.project_context_plan_to_native(
+                session, thread, restored.as_sealed_plan(),
+            ) == native
 
 
 @pytest.mark.parametrize("damage", ["assembly-manifest", "activation-binding"])
-def test_final_projection_rejects_persisted_damage_after_ack(
-    production_context, monkeypatch, damage,
+@pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
+def test_independent_cold_projection_and_retry_reject_persisted_damage_after_ack(
+    production_context, monkeypatch, damage, target_format,
 ):
-    saver, _session, _thread, connection, manager, prepare = production_context
+    saver, session, thread, connection, manager, prepare = production_context
     original_ack = manager.acknowledge_sealed_pending
     acknowledged = []
 
@@ -341,15 +404,66 @@ def test_final_projection_rejects_persisted_damage_after_ack(
 
     monkeypatch.setattr(manager, "acknowledge_sealed_pending", acknowledge_then_damage)
     expected_error = "context assembly header" if damage == "assembly-manifest" else "resource-activation-hash-mismatch"
+    result = prepare("damaged-after-ack", target_format=target_format)
+    sealed_json = connection.execute(
+        "SELECT snapshot_json FROM context_assemblies WHERE assembly_id=?",
+        (result["assembly_id"],),
+    ).fetchone()
+    with (
+        RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold,
+        pytest.raises((ValueError, RuntimeError), match=expected_error),
+    ):
+        cold.project_context_plan_for_dispatch(
+            session, thread, result["plan"], target_format=target_format,
+        )
     with pytest.raises((ValueError, RuntimeError), match=expected_error):
-        prepare("damaged-after-ack")
+        prepare("damaged-after-ack", target_format=target_format)
     assert len(acknowledged) == 1
     assert manager.prepare_pending() is None
     assert connection.execute(
         "SELECT latest_visible_committed_revision FROM context_source_control_states"
     ).fetchone() == ("instructions:1",)
     assert connection.execute("SELECT assembly_id FROM context_assemblies").fetchall() == [(acknowledged[0],)]
-    assert saver._prepared_dispatches == {}
+    assert list(saver._prepared_dispatches.values()) == [[result]]
+    assert connection.execute(
+        "SELECT snapshot_json FROM context_assemblies WHERE assembly_id=?",
+        (result["assembly_id"],),
+    ).fetchone() == sealed_json
+
+
+@pytest.mark.parametrize(("column", "damaged_value", "error_type", "reason"), [
+    ("session_id", "ses_foreign_header", ValueError, "source-mismatch"),
+    ("thread_id", "thr_foreign_header", ValueError, "source-mismatch"),
+    ("plan_id", "plan:foreign-header", KeyError, "context plan 不存在"),
+    ("plan_hash", "forged-plan-hash", RuntimeError, "context assembly header"),
+    ("request_hash", "forged-request-hash", RuntimeError, "context assembly header"),
+    ("turn_id", "turn:foreign-header", RuntimeError, "context assembly header"),
+    ("execution_id", "execution:foreign-header", RuntimeError, "context assembly header"),
+    ("history_view_revision", 10001, RuntimeError, "context assembly header"),
+    ("source_overlay_epoch", 10001, RuntimeError, "context assembly header"),
+    ("status", "not-sealed", RuntimeError, "context assembly manifest status"),
+])
+def test_restart_rejects_changed_assembly_header_identity(
+    production_context, column, damaged_value, error_type, reason,
+):
+    saver, session, thread, connection, _manager, prepare = production_context
+    result = prepare("changed-header:" + column)
+    original_body = saver._storage.storage.jsonl_path(session).read_bytes()
+    connection.execute(
+        f"UPDATE context_assemblies SET {column}=? WHERE assembly_id=?",
+        (damaged_value, result["assembly_id"]),
+    )
+    connection.commit()
+    damaged = connection.execute("SELECT * FROM context_assemblies").fetchall()
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        with pytest.raises(error_type, match=reason):
+            cold.get_context_assembly(session, thread, assembly_id=result["assembly_id"])
+        with pytest.raises(error_type, match=reason):
+            cold.project_context_plan_for_dispatch(
+                session, thread, result["plan"], target_format="chat_completions",
+            )
+    assert connection.execute("SELECT * FROM context_assemblies").fetchall() == damaged
+    assert saver._storage.storage.jsonl_path(session).read_bytes() == original_body
 
 
 @pytest.mark.parametrize("damage", ["unexpected", "nested-value", "missing", "order"])
@@ -568,15 +682,15 @@ def test_sealed_retry_does_not_read_live_desired(production_context, monkeypatch
 def test_late_desired_after_seal_is_preserved_and_next_call_applies_exact_base(
     production_context, monkeypatch, target_format,
 ):
-    saver, _session, _thread, connection, manager, prepare = production_context
-    original_seal = saver.seal_context_plan
+    _saver, _session, _thread, connection, manager, prepare = production_context
+    original_seal = preparation.seal_registered_plan
 
     def seal_then_observe(*args, **kwargs):
         snapshot = original_seal(*args, **kwargs)
         manager.observe("instruction:R01", "封存后到达的第二版", revision="instructions:2")
         return snapshot
 
-    monkeypatch.setattr(saver, "seal_context_plan", seal_then_observe)
+    monkeypatch.setattr(preparation, "seal_registered_plan", seal_then_observe)
     first = prepare("late-first", target_format=target_format)
     assert first["messages"][0].content == "基础规则第一版"
     pending = manager.prepare_pending()
@@ -585,7 +699,7 @@ def test_late_desired_after_seal_is_preserved_and_next_call_applies_exact_base(
     assert connection.execute(
         "SELECT latest_visible_committed_revision, latest_revision FROM context_source_control_states"
     ).fetchone() == ("instructions:1", "instructions:2")
-    monkeypatch.setattr(saver, "seal_context_plan", original_seal)
+    monkeypatch.setattr(preparation, "seal_registered_plan", original_seal)
     second = prepare("late-second", target_format=target_format)
     assert second["messages"][0].content == first["messages"][0].content
     assert "封存后到达的第二版" in second["messages"][-1].content
@@ -605,14 +719,26 @@ def test_same_body_new_semantic_revision_is_not_discarded(production_context):
     ).fetchone() == ("instructions:2", "instructions:2")
 
 
-def test_final_request_is_rechecked_against_sealed_wire(production_context, monkeypatch):
-    saver, _session, _thread, _connection, _manager, prepare = production_context
-    original = saver.project_context_plan_to_provider
+@pytest.mark.parametrize(("target_format", "damage"), [
+    ("chat_completions", "messages"), ("responses", "input"), ("responses", "tools"),
+])
+def test_final_request_is_rechecked_against_sealed_wire(
+    production_context, monkeypatch, target_format, damage,
+):
+    _saver, _session, _thread, _connection, _manager, prepare = production_context
+    original = preparation.seal_registered_plan
 
     def drifted_projection(*args, **kwargs):
-        messages, tools, losses = original(*args, **kwargs)
-        return [*messages, HumanMessage(content="未封存的额外正文")], tools, losses
+        receipt = original(*args, **kwargs)
+        messages, tools, losses, native = receipt.projection
+        if damage == "messages":
+            messages = [*messages, HumanMessage(content="未封存的额外正文")]
+        elif damage == "input":
+            native["request"]["input"].append({"role": "user", "content": "未封存的额外正文"})
+        else:
+            native["request"]["tools"].append({"type": "function", "name": "unsealed_tool", "parameters": {}})
+        return replace(receipt, projection=(messages, tools, losses, native))
 
-    monkeypatch.setattr(saver, "project_context_plan_to_provider", drifted_projection)
+    monkeypatch.setattr(preparation, "seal_registered_plan", drifted_projection)
     with pytest.raises(ValueError, match="最终 Provider request"):
-        prepare("wire-drift")
+        prepare("wire-drift", target_format=target_format)

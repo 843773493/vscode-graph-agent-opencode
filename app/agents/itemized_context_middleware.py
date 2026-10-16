@@ -430,17 +430,9 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
             raise ValueError("source-mismatch: Saver assembly 与当前 prepared owner/plan 不一致")
         prepared["snapshot"] = snapshot
         if _target_format(request.model) == "responses":
-            project_native = getattr(
-                self._checkpointer, "project_context_plan_to_native", None
-            )
-            if not callable(project_native):
-                raise TypeError(
-                    "itemized context 缺少必需的 Saver native projector 端口"
-                )
-            native = project_native(
-                session_id, thread_id, prepared["plan"], checkpoint_ns=checkpoint_ns
-            )
-            prepared["native_projection"] = native
+            native = prepared.get("native_projection")
+            if not isinstance(native, Mapping):
+                raise TypeError("itemized context 缺少本次 Saver prepare 的 native projection")
             prepared["losses"] = tuple(native["losses"])
         logger.warning(
             "[itemized-context] provider prepare completed: session_id=%s turn_id=%s checkpoint_ns=%s assembly_id=%s",

@@ -45,3 +45,11 @@ class ContextPlanSeal:
     seal_input_hash: str
     detail_key: str | None
     seal_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class ContextAssemblySealReceipt:
+    """storage authority 已提交且完整核验的 assembly，不跨请求缓存。"""
+
+    commit_id: int
+    snapshot: ContextAssemblySnapshot

@@ -98,7 +98,7 @@ def read_registration(
     if same_json:
         # 同一 SQL 行的相同文本已完整冷校验；只在本次读取中复用 typed 值和投影。
         initial = plan
-        initial_manifest = plan.to_dict()
+        initial_manifest = plan.to_dict(include_plan_hash=False)
     else:
         initial_value = json.loads(row[9])
         if row[9] != json_text(initial_value):
@@ -106,7 +106,7 @@ def read_registration(
         initial = unsealed_context_plan_from_dict(initial_value)
         if any(item.body is not None for item in initial.contributions):
             raise ValueError("source-mismatch: creation registry 不得包含 inline body")
-        initial_manifest = initial.to_dict()
+        initial_manifest = initial.to_dict(include_plan_hash=False)
     if (initial.session_id, initial.thread_id, initial.plan_id, initial.plan_creation_idempotency_key) != (
         session_id,
         thread_id,
@@ -114,7 +114,7 @@ def read_registration(
         row[8],
     ) or row[2] != _creation_hash_manifest(initial_manifest):
         raise ValueError("source-mismatch: plan creation preimage 不一致")
-    if row[3] == 0 and not same_json and initial_manifest != plan.to_dict():
+    if row[3] == 0 and not same_json and initial_manifest != plan.to_dict(include_plan_hash=False):
         raise ValueError(
             "source-mismatch: 未修订 draft 与初始 creation manifest 不一致"
         )

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from uuid import uuid4
+
+from langchain_core.messages import BaseMessage
 
 from app.agents.providers.wire_finalize import (
     WIRE_PROJECTOR_ID,
@@ -16,10 +18,12 @@ from app.agents.providers.wire_finalize import (
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.seal_binding import ContextSealPreparation
 from app.domain.itemized.hash.request_hash import context_request_hash
-from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.domain.itemized.serialization import normalize_wire_request
+from app.services.infrastructure.rollout_context.assembly.plans.types import (
+    ContextPlanRegistration,
+)
 from app.services.infrastructure.rollout_context.checkpoint.seal.assembly import (
     seal_snapshot,
 )
@@ -32,13 +36,14 @@ from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (
     require_registered_draft,
     seal_input_hash,
 )
-from app.services.infrastructure.rollout_context.provider.native_request import (
-    project_native_request,
-)
-from app.services.infrastructure.rollout_context.provider.toolset_request_bridge import (
-    project_tool_set_ref,
-)
-from app.services.mapping.itemized.prefix_frames import project_sealed_prefix
+
+
+@dataclass(frozen=True, slots=True)
+class ContextPlanSealResult:
+    """本次 seal 的提交结果；投影只随当前调用返回，不进入跨请求缓存。"""
+
+    snapshot: ContextAssemblySnapshot
+    projection: tuple[list[BaseMessage], list[dict[str, object]], tuple[str, ...], dict[str, object] | None] | None
 
 
 def seal_registered_plan(
@@ -56,7 +61,8 @@ def seal_registered_plan(
     wire_params: Mapping[str, object] | None,
     activation_snapshot: ResourceActivationSnapshotRef | None = None,
     context_preparation: ContextSealPreparation | None = None,
-) -> ContextAssemblySnapshot:
+    registered: ContextPlanRegistration | None = None,
+) -> ContextPlanSealResult:
     require_key(seal_idempotency_key, field="seal_idempotency_key")
     if (wire_profile is None) != (wire_params is None):
         raise ValueError("source-mismatch: wire profile/params 必须成对提供")
@@ -89,7 +95,8 @@ def seal_registered_plan(
         }
     with owner._lock:
         registered = require_registered_draft(
-            owner, session_id, thread_id, plan, checkpoint_ns
+            owner, session_id, thread_id, plan, checkpoint_ns,
+            registered=registered,
         )
         draft = registered.draft
         # activation binding identity 进入 seal input preimage：重试必须复用同一
@@ -134,7 +141,13 @@ def seal_registered_plan(
                     activation_snapshot=activation_snapshot,
                     checkpoint_ns=checkpoint_ns,
                 )
-            return retry
+            return ContextPlanSealResult(
+                retry,
+                None if wire_profile is None else owner.project_context_plan_for_dispatch(
+                    session_id, thread_id, retry.as_sealed_plan(),
+                    target_format=retry.target_format, checkpoint_ns=checkpoint_ns,
+                ),
+            )
         # activation 正文必须在 assemble 之前准备：正文写入失败不能留下已完成
         # assemble 的中间状态；绑定闭包只在 assembly_sealed 事务内使用。
         activation_binding = None
@@ -143,6 +156,7 @@ def seal_registered_plan(
                 activation_snapshot, checkpoint_ns=checkpoint_ns
             )
         assembly_id = f"assembly-{uuid4().hex}"
+        projection = None
         try:
             bound, prepared_details, detail_refs = owner._bind_request_detail_refs(
                 session_id,
@@ -186,25 +200,15 @@ def seal_registered_plan(
                     session_id, thread_id, checkpoint_ns, sealed_plan, None,
                     prepared_details=prepared_details,
                 )
-                if isinstance(wire_profile, ResponsesWireProfile):
-                    native_request = project_native_request(
-                        sealed_plan, items, bodies, seal_binding=snapshot.seal_binding,
-                        attachment_projector=lambda payload: owner._storage.storage.project_attachment_payload(session_id, thread_id, payload),
-                    )["request"]
-                    messages, tools = (), ()
-                else:
-                    native_request = None
-                    messages = project_sealed_prefix(
-                        sealed_plan, snapshot.seal_binding, items, bodies,
-                    )
-                    messages = owner.project_message_attachment_refs(session_id, thread_id, messages)
-                    tools = [
-                        tool for entry in snapshot.selection
-                        if entry.included and isinstance(entry.ref, ToolSetRef)
-                        for tool in project_tool_set_ref(entry.ref, target_format=snapshot.target_format)
-                    ]
+                projection = owner._project_context_projection(
+                    session_id, thread_id, snapshot, items, bodies,
+                    include_runtime_notices=True, include_summaries=True,
+                    target_format=snapshot.target_format,
+                    include_native=isinstance(wire_profile, ResponsesWireProfile),
+                )
+                messages, tools, _losses, native = projection
                 preimage = normalize_wire_request(finalize_provider_wire(
-                    messages=messages, tools=tools, native_request=native_request,
+                    messages=messages, tools=tools, native_request=None if native is None else native["request"],
                     profile=wire_profile, params=wire_params,
                 ))
                 snapshot = replace(
@@ -226,7 +230,7 @@ def seal_registered_plan(
                 error,
             )
             raise
-        seal_snapshot(
+        committed = seal_snapshot(
             owner,
             session_id,
             thread_id,
@@ -239,6 +243,6 @@ def seal_registered_plan(
             activation_binding=activation_binding,
             prepared_details=prepared_details,
         )
-        # storage owner 已原子提交并核对同一 immutable snapshot；ack 后的
-        # 最终投影仍从新的只读快照恢复，不能跨越该边界复用本对象。
-        return snapshot
+        # storage owner 已核对 hash、registry CAS、manifest 和 activation 并原子提交。
+        # ack 只同步 CSM 内存，不修改这些 sealed 事实；本次输出不再冷读同一 assembly。
+        return ContextPlanSealResult(committed.snapshot, projection)

@@ -10,6 +10,9 @@ from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
     draft_manifest,
 )
+from app.services.infrastructure.rollout_context.assembly.plans.types import (
+    ContextPlanRegistration,
+)
 
 
 def require_key(value: str, *, field: str) -> str:
@@ -52,16 +55,23 @@ def require_registered_draft(
     thread_id: str,
     plan: ContextRequestPlan,
     checkpoint_ns: str,
-):
+    *,
+    registered: ContextPlanRegistration | None = None,
+) -> ContextPlanRegistration:
     owner._require_context_plan_owner(session_id, thread_id, plan)
     if plan.plan_state != "unsealed" or plan.assembly_id is not None:
         raise ValueError("plan-order-integrity: seal 输入必须是已注册 unsealed plan")
-    registered = owner.get_context_plan_registration(
-        session_id,
-        thread_id=thread_id,
-        plan_id=plan.plan_id,
-        checkpoint_ns=checkpoint_ns,
-    )
+    if registered is None:
+        registered = owner.get_context_plan_registration(
+            session_id,
+            thread_id=thread_id,
+            plan_id=plan.plan_id,
+            checkpoint_ns=checkpoint_ns,
+        )
+    if (registered.session_id, registered.thread_id, registered.draft.plan_id) != (
+        session_id, thread_id, plan.plan_id,
+    ):
+        raise ValueError("source-mismatch: seal registration owner/plan 不一致")
     if draft_manifest(plan) != draft_manifest(registered.draft):
         raise ValueError(
             "assembly-idempotency-conflict: seal 输入与当前注册 draft 不一致"

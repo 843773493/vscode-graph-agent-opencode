@@ -231,6 +231,6 @@ def test_header_detail_survives_committed_response_loss_and_restart(
             restarted.seal_context_assembly(
                 session, saver._storage.storage.main_thread_id(session), snapshot, **options
             )
-            == commits[0]
+            == commits[0].commit_id
         )
     assert _state(saver, session, connection) == before

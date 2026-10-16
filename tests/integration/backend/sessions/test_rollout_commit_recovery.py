@@ -198,6 +198,44 @@ def test_valid_commit_chain_reclaims_only_uncommitted_tail(
     ]
 
 
+@pytest.mark.parametrize("operation", ["initialize", "snapshot"])
+@pytest.mark.parametrize(("corruption", "match"), [
+    (
+        "UPDATE storage_commits SET jsonl_record_count = 2 WHERE commit_kind = 'acceptance'",
+        "item catalog 数量不一致",
+    ),
+    (
+        "UPDATE storage_commits SET metadata_json = '[1]' WHERE commit_kind = 'terminal_convergence'",
+        "metadata_json 不是 RFC 8785 JCS object",
+    ),
+    (
+        "UPDATE storage_commits SET metadata_json = '{\"compacted\":true}' WHERE commit_kind = 'terminal_convergence'",
+        "immutable JSONL 不允许",
+    ),
+])
+def test_warm_owner_revalidates_commit_catalog_and_metadata_before_reclaiming_tail(
+    committed_rollout: CommittedRollout, operation: str, corruption: str, match: str,
+) -> None:
+    rollout = committed_rollout
+    storage = RolloutCheckpointSaver(rollout.sessions)._storage.storage
+    thread_id = storage.main_thread_id(rollout.session_id)
+    with storage.open_read_snapshot(rollout.session_id, thread_id) as snapshot:
+        assert snapshot.session_id == rollout.session_id
+    # 已成功读过的 owner 也必须重新校验权威记录；复用不能跨调用掩盖后续损坏。
+    with sqlite3.connect(rollout.index) as connection:
+        connection.execute(corruption)
+    with rollout.jsonl.open("ab") as stream:
+        stream.write(b"uncommitted-tail")
+    before = rollout.jsonl.read_bytes()
+    with pytest.raises(RuntimeError, match=match):
+        if operation == "initialize":
+            storage.initialize(rollout.session_id, thread_id=thread_id)
+        else:
+            with storage.open_read_snapshot(rollout.session_id, thread_id):
+                pytest.fail("后续 commit/catalog 损坏不得复用先前的校验结果")
+    assert rollout.jsonl.read_bytes() == before
+
+
 def test_invalid_catalog_preserves_committed_body_and_tail(
     committed_rollout: CommittedRollout,
 ) -> None:
