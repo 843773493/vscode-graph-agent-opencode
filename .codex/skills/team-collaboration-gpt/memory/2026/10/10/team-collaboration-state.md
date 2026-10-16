@@ -3,10 +3,10 @@
 ## 当前恢复：功能边界已提交；原 goal 仍未完成
 
 - **交付固定点**：RuntimeNotice 功能边界已普通提交并 push：`9e0e812c2020a1265d3989e935bad186a616fb70`，tree=`d5fbf2ad540143f716e0fd79093fe40ce096762b`；主代理核得 `HEAD=origin/main`。该候选重建为 35 条 delta，6 个 deferred paths 未纳入。提交、远端和技能 blob 原件位于 `out/tests/temp/2026/10/16/hierarchical-goal-resume-01/primary_skill_maintenance/artifacts/runs/final-{head,remote,skill-blob}-readonly-01/`；技能 blob SHA256=`6173857716b0f516f803179a806014ac8134218f40646ee81ec8ba83b38e66e1`。
-- **局部验证**：本候选 OpenSpec strict validation、改动 Python 文件 Ruff 和增量独审通过。集中回归 `core-notice-contract-regression-01` 为 257 passed / 4 failed；四项分别是 replay 测试误期望 Turn status=`active`（持久记录为 `open`）、compaction rebuild fixture 未产生 transition、omitted-ToolSet 测试 setup 未构造 omitted ref、epoch reason 闭合集合断言漏了 `RUNTIME_NOTICE_CONSUMED`。之后只改这 4 个测试文件，生产源码未变；相关证据入口为 `sol_vertical_implementer/artifacts/runs/core-notice-evidence-audit-01/stdout.raw`。
+- **局部验证**：本候选 OpenSpec strict validation、改动 Python 文件 Ruff 和增量独审通过。集中回归 `core-notice-contract-regression-01` 为 257 passed / 4 failed；四项分别是 replay 测试误期望 Turn status=`active`（持久记录为 `open`）、compaction rebuild fixture 未产生 transition、omitted 项实际为 `ToolSetIdentityRef` 但旧测试用 `ToolSetRef` 筛选，令 `guarded` 为空、epoch reason 闭合集合断言漏了 `RUNTIME_NOTICE_CONSUMED`。之后只改这 4 个测试文件，生产源码未变；相关证据入口为 `sol_vertical_implementer/artifacts/runs/core-notice-evidence-audit-01/stdout.raw`。
 - **定向回归**：修订测试后的 `core-notice-regression-nodes-02` 是 5 passed / 1 failed（当时 replay 断言仍处中间版本）；随后 `core-notice-replay-node-03` 的 replay 用例单独 1 passed。保留身份和顺序断言，未以放宽契约掩盖问题。两组原件在 `sol_vertical_implementer/artifacts/runs/core-notice-{regression-nodes-02,replay-node-03}/`。
 - **完整验收仍未闭**：whole goal 未完成。H4 原 node 未重验；外部 Provider 403、A04 C1 registry setup 仍为 UNMET；128/427 原规模门在 600 秒、actual 124 时未到完整断言。R2449 generated-internal-history Web E2E 实际退出 1，R2429 initial-admission-recovery→generated/forks 产品链实际退出 1；R2455/R2456 的窄 seal/origin 证据不能代替真实 Provider/Gateway/Web 全链路。验收审计为 `acceptance_audit/artifacts/acceptance-audit.md`。
-- **证据限制**：部分较早产品运行的原始 profile 未能找回；保留的 result、raw log 与 receipt 只能支持其中明确记载的实际退出阶段和断言，不能复原未留存的 profile 配置、完整源码覆盖或环境，也不据此补称验收通过。
+- **证据限制**：已证遗失的 profile 是 `hierarchy_auxiliary/artifacts/profile-fork-plan-registry-v1.json`：该文件被覆盖，5 个相关 run 只留原 profile SHA256，没有原字节备份；因此无法恢复这份 profile 内容或复核其完整配置，只能按各 run 保留的记录说明其实际执行结果。
 - **团队与后续边界**：本轮 canonical 作者及审查成员均已 STOP，无业务写租约；当前只做台账同步，不续开新业务工作。原七个 OpenSpec change、H4、真实产品链和规模门未因本次功能提交而完成。
 - **效率结论**：没有同口径总体基线与 A/B 数据，不声称团队协作、总耗时或 token 使用获得整体提速；局部回归/静态检查通过不能替代产品验收或证明效率倍率。
 
