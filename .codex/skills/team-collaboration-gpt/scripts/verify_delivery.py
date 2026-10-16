@@ -263,6 +263,7 @@ def is_secret_path(path: str) -> bool:
     name = PurePosixPath(path).name.lower()
     return (
         name in SECRET_NAMES
+        or any(name.startswith(f"{key_name}_") for key_name in ("id_ed25519", "id_rsa"))
         or (name.startswith(".env.") and name not in {".env.example", ".env.sample"})
         or Path(name).suffix in SECRET_SUFFIXES
         or name.startswith("credentials.")

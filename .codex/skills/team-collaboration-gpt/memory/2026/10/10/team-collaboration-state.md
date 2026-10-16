@@ -1,4 +1,16 @@
-# 当前协作状态（北京时间 2026-10-16；原 goal 已续跑）
+# 当前协作状态（北京时间 2026-10-16；RUN03）
+
+## 当前接续：RUN03 context-owner 优化已提交；128 门通过，427 门在 fixture setup 失败
+
+- **范围与授权**：本 RUN 只减少真实 rollout fixture/Provider 准备链有证据的重复工作，保留行为、身份、顺序、错误归属、hash 和冷恢复语义；原 handoff 的其它闭包仍未完成。
+- **固定候选与提交**：`run03-context-owner-seal-fix-006` 基于 `f81582e6d64561aff5bfddade59d2960a7674f16`，20 个源码路径。tree=`6ec7d9941cf49228711e37c1b4e94f4c0851af11`，指纹文件 `out/tests/temp/2026/10/16/hierarchical-goal-resume-03/hierarchy_delivery/artifacts/candidate-source-fingerprints-006.json`；严格补丁=`out/tests/temp/2026/10/16/hierarchical-goal-resume-03/hierarchy_delivery/artifacts/delivery-candidate-006-rebuild-003/delivery-6ec7d9941cf4.patch`，SHA256=`da73e30ec930021a169bd335dc63e42899aa71d6207775c7187c645054755c11`，manifest SHA256=`8efe65de9a5a7def938b9700ae1ba5afe606fdfe8f28511b2454a55c052a46f5`。20 个 Git blob 与冻结指纹逐一匹配，cached apply/check 严格重建到相同 tree。
+- **验证结果**：128 精确节点门 `1 passed in 425.01s`，setup 421.11s；394 个源码输入的前后基线无 mismatch，原件为 `out/tests/temp/2026/10/16/hierarchical-goal-resume-03/hierarchy_delivery/artifacts/runs/run03-128-candidate-006-001/`。427 门在 setup 484.80s 后、测试断言开始前失败：fixture 在 `checkpoint_each_turn=True` 时用累计历史设置 cutoff，却将单轮 `latest_turn_messages` 写入 checkpoint，导致 `ValueError: compaction cutoff_index 超过真实 checkpoint messages`；原件为 `out/tests/temp/2026/10/16/hierarchical-goal-resume-03/hierarchy_delivery/artifacts/runs/run03-427-candidate-006-001/`，因此 427 门尚未通过。
+- **交付补丁修正**：旧 `candidate-patch-006.patch` 误从全删除的共享索引差异生成，未用于提交；改从私有 index 固定 20 条源码路径并重新构建 tree/patch。严格重建与 blob 核验原件位于 `out/tests/temp/2026/10/16/hierarchical-goal-resume-03/hierarchy_delivery/artifacts/runs/run03-verify-delivery-candidate-006-004/` 和 `out/tests/temp/2026/10/16/hierarchical-goal-resume-03/hierarchy_delivery/artifacts/runs/run03-candidate-tree-blob-audit-001/`。精确 deferred 是两份协作文档、`verify_delivery.py`，以及两个 examples JSON、egg-info 元数据和两个 known_hosts 文件；私钥文件由 verifier 的 secret filter 排除且未读取。
+- **已提交推送**：普通提交 `73c4a96e7735498e16ea51808deb75661920ad06`（tree=`6ec7d9941cf49228711e37c1b4e94f4c0851af11`，parent=`f81582e6d64561aff5bfddade59d2960a7674f16`）已 push `origin/main`；无 force。业务 Git 原件分别在 `artifacts/runs/run03-business-commit-001/` 与 `artifacts/runs/run03-business-push-001/`。共享 index SHA 仍为 `61ccaf8334659817cbd9788a6aba4247850ecdea9712c695fc0c15378912e8ff`。
+- **边界与剩余工作**：seal receipt 的首轮复用经同事务 preflight/CAS/manifest/activation 校验与冷恢复 caller 审核确认，不增加冗余 read-after-commit。427 的 fixture cutoff 坐标仍需窄修并重跑该门；此失败发生在 setup，不能记作候选行为断言失败或门通过。原 handoff 其它未完成验收仍按其授权记录。
+- **协作与接续**：分层技能、当前状态和 `verify_delivery.py` 私钥过滤修复作为独立技能提交；分层技能此前 `quick_validate` exit 0。全部源码 Git 命令用绝对私有 `GIT_INDEX_FILE` 与 `GIT_OPTIONAL_LOCKS=0`；保留共享 index，不 force push。当前交付协调者为 `/root/hierarchy_delivery`，核心实现者与辅助者已 STOP。
+
+## 上一批已交付状态（不代表本轮 goal 完成）
 
 ## 当前恢复：功能已提交并推送；原 goal 仍未完成
 
