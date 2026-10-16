@@ -7,6 +7,7 @@ from collections.abc import Mapping
 
 from app.core.sqlite_state import utc_now_text
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.epoch.prefix_epoch import EpochReason
 from app.domain.itemized.mutation_intents import RebuildContextEpochIntent
 from app.services.infrastructure.rollout_context.assembly.manifest import (
     _frozen_source_refs,
@@ -141,7 +142,8 @@ class ContextSourceVersionsStorageMixin:
             "JOIN context_views view ON view.view_id=transition.target_view_id "
             "JOIN checkpoint_namespace_state namespace ON namespace.checkpoint_ns=transition.checkpoint_ns "
             "AND namespace.active_branch_id=view.branch_id "
-            "WHERE transition.checkpoint_ns = ? AND transition.status = 'pending'",
+            "WHERE transition.checkpoint_ns = ? AND transition.status = 'pending' "
+            "AND transition.reason IN ('rewind','compaction')",
             (checkpoint_ns,),
         ).fetchone()
         if source_view_id is not None:
@@ -278,7 +280,7 @@ class ContextSourceVersionsStorageMixin:
         transition_id = f"epoch-rebuild:{target_view_id}:{control_sequence}"
         connection.execute(
             "UPDATE context_epoch_transitions SET status = 'superseded' "
-            "WHERE checkpoint_ns = ? AND status = 'pending' AND target_view_id IN "
+            "WHERE checkpoint_ns = ? AND status = 'pending' AND reason IN ('rewind','compaction') AND target_view_id IN "
             "(SELECT view.view_id FROM context_views view JOIN checkpoint_namespace_state namespace "
             "ON namespace.active_branch_id=view.branch_id WHERE namespace.checkpoint_ns=?)",
             (checkpoint_ns, checkpoint_ns),
@@ -305,7 +307,8 @@ class ContextSourceVersionsStorageMixin:
             "FROM context_epoch_transitions transition JOIN context_views view "
             "ON view.view_id=transition.target_view_id JOIN checkpoint_namespace_state namespace "
             "ON namespace.active_branch_id=view.branch_id AND namespace.checkpoint_ns=transition.checkpoint_ns "
-            "WHERE transition.checkpoint_ns=? AND transition.status='pending' LIMIT 2",
+            "WHERE transition.checkpoint_ns=? AND transition.status='pending' "
+            "AND transition.reason IN ('rewind','compaction') LIMIT 2",
             (checkpoint_ns,),
         ).fetchall()
         if len(rows) > 1:
@@ -533,31 +536,79 @@ class ContextSourceVersionsStorageMixin:
         checkpoint_ns: str,
     ) -> None:
         binding = snapshot.seal_binding
+        if binding is None:
+            return
+        admission = self._context.executions.execution_admission(
+            snapshot.session_id, thread_id=snapshot.thread_id, execution_id=snapshot.execution_id,
+            checkpoint_ns=checkpoint_ns, writer_connection=connection,
+        )
+        notice_ref, _selection = self._context.executions.runtime_notice_acceptance(admission, connection=connection)
+        if binding.notice_acceptance != notice_ref:
+            raise RuntimeError("runtime-notice-acceptance-conflict: seal 未绑定精确冻结 acceptance")
+        outcome = connection.execute(
+            "SELECT outcome FROM executions WHERE execution_id=?", (snapshot.execution_id,),
+        ).fetchone()[0]
+        if outcome in {"cancelled", "failed"}:
+            raise RuntimeError("runtime-notice-owner-terminal: cancelled/failed execution 不得恢复 seal")
+        confirmation = None if notice_ref is None else connection.execute(
+            "SELECT transition_id,notice_selection_hash FROM context_epoch_transitions "
+            "WHERE notice_consumption_acceptance_id=?", (notice_ref.acceptance_commit_id,),
+        ).fetchone()
+        if confirmation is not None and confirmation[1] != notice_ref.selection_hash:
+            raise RuntimeError("runtime-notice-acceptance-conflict: 已消费 selection hash 不一致")
+        frozen_ids = self._context.executions.runtime_notice_excluded_item_ids(admission, connection=connection)
+        previous = None if binding.previous_assembly_id is None else self._context.assemblies._read_context_assembly_connection(
+            connection, snapshot.session_id, snapshot.thread_id,
+            assembly_id=binding.previous_assembly_id, checkpoint_ns=checkpoint_ns,
+        )[0]
+        prior_ids = set() if previous is None or previous.seal_binding is None else {
+            frame.item_ref.ref_id for frame in previous.seal_binding.prefix.state.frames
+            if frame.item_ref.ref_type == "canonical_item"
+        }
+        current_ids = {frame.item_ref.ref_id for frame in binding.prefix.state.frames
+                       if frame.item_ref.ref_type == "canonical_item"}
+        removed = (prior_ids & frozen_ids) - current_ids
+        confirm_notice = notice_ref is not None and bool(removed) and confirmation is None
         consumed = binding.prefix.consumed_transition if binding is not None else None
+        source_consumed = consumed if consumed is not None and consumed.reason in {
+            EpochReason.REWIND, EpochReason.COMPACTION,
+        } else None
         pending = self._pending_context_epoch_row(connection, checkpoint_ns)
         if pending is None:
-            if consumed is not None:
+            if source_consumed is not None:
                 raise RuntimeError("context-epoch-transition-conflict: seal 携带不存在的 pending transition")
-            return
-        if consumed is None or not consumed.consumed or (
-            consumed.transition_id != pending[0] or consumed.reason.value != pending[1]
+        elif source_consumed is None or not source_consumed.consumed or (
+            source_consumed.transition_id != pending[0] or source_consumed.reason.value != pending[1]
         ):
             raise RuntimeError("context-epoch-transition-conflict: 首个 rebuild seal 必须消费精确 pending transition")
         active_branch, _epoch = self._storage._namespace_state(connection, checkpoint_ns)
-        row = connection.execute(
-            "SELECT branch_id FROM context_views WHERE view_id = ?", (pending[2],),
-        ).fetchone()
-        if row is None or row[0] != active_branch:
-            raise RuntimeError("context-epoch-transition-conflict: pending rebuild 已不属于 active view branch")
-        cursor = connection.execute(
-            "UPDATE context_epoch_transitions SET status = 'consumed', "
-            "consumed_assembly_id = ?, consumed_at = ? "
-            "WHERE transition_id = ? AND status = 'pending'",
-            (snapshot.assembly_id, utc_now_text(),
-             strict_text(pending[0], field="transition_id")),
-        )
-        if cursor.rowcount != 1:
-            raise RuntimeError("context-epoch-transition-conflict: pending transition 消费未命中")
+        if pending is not None:
+            row = connection.execute("SELECT branch_id FROM context_views WHERE view_id=?", (pending[2],)).fetchone()
+            if row is None or row[0] != active_branch:
+                raise RuntimeError("context-epoch-transition-conflict: pending rebuild 已不属于 active view branch")
+            cursor = connection.execute(
+                "UPDATE context_epoch_transitions SET status='consumed',consumed_assembly_id=?,consumed_at=?,"
+                "notice_consumption_acceptance_id=?,notice_selection_hash=? WHERE transition_id=? AND status='pending'",
+                (snapshot.assembly_id, utc_now_text(),
+                 notice_ref.acceptance_commit_id if confirm_notice else None,
+                 notice_ref.selection_hash if confirm_notice else None, pending[0]),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("context-epoch-transition-conflict: pending transition 消费未命中")
+        elif confirm_notice:
+            view = connection.execute("SELECT head_view_id FROM branches WHERE branch_id=?", (active_branch,)).fetchone()
+            connection.execute(
+                "INSERT INTO context_epoch_transitions (transition_id,checkpoint_ns,target_view_id,reason,status,"
+                "consumed_assembly_id,created_at,consumed_at,notice_consumption_acceptance_id,notice_selection_hash) "
+                "VALUES (?,?,?,'runtime_notice_consumed','consumed',?,?,?,?,?)",
+                (f"epoch-notice:{notice_ref.acceptance_commit_id}", checkpoint_ns, view[0], snapshot.assembly_id,
+                 utc_now_text(), utc_now_text(), notice_ref.acceptance_commit_id, notice_ref.selection_hash),
+            )
+        if consumed is not None and consumed.reason == EpochReason.RUNTIME_NOTICE_CONSUMED and (
+            not confirm_notice or pending is not None or consumed.notice_acceptance != notice_ref
+            or consumed.transition_id != f"epoch-notice:{notice_ref.acceptance_commit_id}"
+        ):
+            raise RuntimeError("runtime-notice-epoch-conflict: notice epoch 未绑定首次消费的冻结 owner")
 
 
 __all__ = ["ContextSourceVersionsStorageMixin"]

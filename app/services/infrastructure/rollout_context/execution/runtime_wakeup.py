@@ -16,6 +16,7 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
 )
+from app.services.mapping.itemized.carrier_dedup import superseded_item_ids
 
 _COLUMNS = tuple(RuntimeExecutionWakeup.__dataclass_fields__)
 
@@ -98,8 +99,8 @@ class RuntimeWakeupStorageMixin:
             with self._storage.read_connection(session_id, thread_id, "") as connection:
                 rows = connection.execute(
                     f"SELECT {','.join(_COLUMNS)} FROM runtime_execution_wakeups "
-                    "WHERE session_id=? AND thread_id=? AND (state = 'pending' OR execution_id IN "
-                    "(SELECT execution_id FROM executions WHERE outcome = 'unknown'))",
+                    "WHERE session_id=? AND thread_id=? AND execution_id IN "
+                    "(SELECT execution_id FROM executions WHERE outcome = 'unknown')",
                     (session_id, thread_id),
                 ).fetchall()
                 ordered = []
@@ -197,6 +198,8 @@ class RuntimeWakeupStorageMixin:
             items = tuple(self._storage._read_canonical_item_from_catalog(
                 connection, session_id=session_id, thread_id=thread_id, checkpoint_ns="", item_id=str(row[0]),
             ) for row in rows)
+        superseded = superseded_item_ids(items)
+        items = tuple(item for item in items if item.item_id not in superseded)
         codec = self._storage._codec()
         return (
             "\n".join(codec.visible_text(codec.project_message((item,))) for item in items),

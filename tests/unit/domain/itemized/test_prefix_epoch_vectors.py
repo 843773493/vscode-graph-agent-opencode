@@ -23,6 +23,7 @@ from app.domain.itemized.epoch.prefix_epoch import (
     PrefixEpochState,
     ProviderProfileChangeRequiresRebuildError,
     ProviderProfileItemFrame,
+    RuntimeNoticeAcceptanceRef,
     SourceIdentityConflictError,
     StablePrefixViolationError,
     ToolSetRebaseRequiredError,
@@ -393,7 +394,7 @@ def test_illegal_epoch_combinations_are_rejected() -> None:
     state = initial_epoch_state(
         provider_profile=PROFILE, tool_compatibility_key=KEY_A, turn_id="turn-0001"
     )
-    # epoch_reason 是闭合集合:第五类 reason(如 provider profile 变化)不存在。
+    # epoch_reason 是闭合集合，provider profile 变化不是独立 reason。
     for illegal in ("initial", "provider_profile_changed", EpochReason.INITIAL):
         with pytest.raises(EpochContractError):
             open_rebuild_epoch(
@@ -402,13 +403,18 @@ def test_illegal_epoch_combinations_are_rejected() -> None:
                 provider_profile=PROFILE,
                 tool_compatibility_key=KEY_A,
             )
-    # pending transition 只接受 compaction/rewind。
+    # initial/toolset_changed 不经过 pending transition。
     for reason in (EpochReason.INITIAL, EpochReason.TOOLSET_CHANGED):
         with pytest.raises(EpochContractError):
             PendingPrefixEpochTransition(transition_id="t-illegal", reason=reason)
     # 非 typed 的裸字符串 reason 不是 EpochReason 成员。
     with pytest.raises(EpochContractError):
         PendingPrefixEpochTransition(transition_id="t-str", reason="rewind")
+    with pytest.raises(EpochContractError):
+        PendingPrefixEpochTransition(
+            transition_id="t-notice-missing-acceptance",
+            reason=EpochReason.RUNTIME_NOTICE_CONSUMED,
+        )
     # compaction/rewind 必须携带匹配且未消费的 transition。
     rewind_transition = PendingPrefixEpochTransition(
         transition_id="t-rewind", reason=EpochReason.REWIND
@@ -473,11 +479,41 @@ def test_illegal_epoch_combinations_are_rejected() -> None:
         )
     # 闭合集合常量即全部合法 reason。
     assert REBUILD_EPOCH_REASONS == frozenset(
-        {EpochReason.COMPACTION, EpochReason.REWIND, EpochReason.TOOLSET_CHANGED}
+        {
+            EpochReason.COMPACTION, EpochReason.REWIND,
+            EpochReason.TOOLSET_CHANGED, EpochReason.RUNTIME_NOTICE_CONSUMED,
+        }
     )
     assert PENDING_TRANSITION_REASONS == frozenset(
-        {EpochReason.COMPACTION, EpochReason.REWIND}
+        {EpochReason.COMPACTION, EpochReason.REWIND, EpochReason.RUNTIME_NOTICE_CONSUMED}
     )
+
+
+def test_runtime_notice_epoch_requires_frozen_acceptance_and_one_seal() -> None:
+    state = initial_epoch_state(provider_profile=PROFILE, tool_compatibility_key=KEY_A)
+    acceptance = RuntimeNoticeAcceptanceRef(acceptance_commit_id=7, selection_hash=KEY_B)
+    transition = PendingPrefixEpochTransition(
+        transition_id="notice-acceptance-7", reason=EpochReason.RUNTIME_NOTICE_CONSUMED,
+        notice_acceptance=acceptance,
+    )
+    rebuilt = open_rebuild_epoch(
+        state, reason=EpochReason.RUNTIME_NOTICE_CONSUMED, provider_profile=PROFILE,
+        tool_compatibility_key=KEY_A, transition=transition,
+    )
+    assert rebuilt.epoch.ordinal == state.epoch.ordinal + 1
+    assert rebuilt.epoch.reason == EpochReason.RUNTIME_NOTICE_CONSUMED
+    with pytest.raises(EpochContractError):
+        seal_assembly(rebuilt, assembly_id="notice-missing-transition")
+    sealed = seal_assembly(rebuilt, assembly_id="notice-first-seal", transition=transition)
+    assert sealed.state.epoch_applied
+    assert sealed.consumed_transition is not None
+    assert sealed.consumed_transition.notice_acceptance == acceptance
+    assert sealed.consumed_transition.consumed
+    with pytest.raises(EpochContractError):
+        seal_assembly(
+            sealed.state, assembly_id="notice-second-consumption", transition=transition,
+        )
+    assert seal_assembly(sealed.state, assembly_id="notice-next-seal").consumed_transition is None
 
 
 def test_toolset_mismatch_requires_rebase() -> None:

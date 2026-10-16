@@ -8,8 +8,8 @@ appended item refs。只提供纯值对象与合同校验,不读取 rollout、Pr
 CSM 或任何运行时状态。
 
 合同要点:
-- 只有 initial、compaction、rewind、toolset_changed 四种 epoch_reason,
-  不存在第五类 epoch(如 provider profile 变化)。
+- epoch_reason 包含 initial、compaction、rewind、toolset_changed 与
+  runtime_notice_consumed；Provider profile 变化不是独立原因。
 - pending transition 没有 wire bytes 且不是 applied epoch;只有首个
   assembly 成功 seal 才应用 epoch 并消费 transition。
 - 同一 epoch 内只能追加,父 assembly 前缀必须逐字节一致;阈值与 hash
@@ -79,6 +79,7 @@ class EpochReason(StrEnum):
     COMPACTION = "compaction"
     REWIND = "rewind"
     TOOLSET_CHANGED = "toolset_changed"
+    RUNTIME_NOTICE_CONSUMED = "runtime_notice_consumed"
 
 
 REBUILD_EPOCH_REASONS: frozenset[EpochReason] = frozenset(
@@ -86,10 +87,11 @@ REBUILD_EPOCH_REASONS: frozenset[EpochReason] = frozenset(
         EpochReason.COMPACTION,
         EpochReason.REWIND,
         EpochReason.TOOLSET_CHANGED,
+        EpochReason.RUNTIME_NOTICE_CONSUMED,
     }
 )
 PENDING_TRANSITION_REASONS: frozenset[EpochReason] = frozenset(
-    {EpochReason.COMPACTION, EpochReason.REWIND}
+    {EpochReason.COMPACTION, EpochReason.REWIND, EpochReason.RUNTIME_NOTICE_CONSUMED}
 )
 
 
@@ -103,7 +105,7 @@ def _validate_epoch_reason(value: object, field_name: str) -> EpochReason:
     if not isinstance(value, EpochReason):
         raise EpochContractError(
             f"{field_name} 必须是 EpochReason 闭合集合成员,收到 {value!r};"
-            "不存在第五类 epoch reason"
+            "不接受闭合集合之外的 epoch reason"
         )
     return value
 
@@ -161,8 +163,20 @@ class ParentAssemblyRef:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeNoticeAcceptanceRef:
+    """指向 acceptance commit 中冻结选集的不可变引用，不复制消费账本。"""
+
+    acceptance_commit_id: int
+    selection_hash: str
+
+    def __post_init__(self) -> None:
+        _positive_int(self.acceptance_commit_id, "notice.acceptance_commit_id")
+        validate_hash_token(self.selection_hash, "notice.selection_hash")
+
+
+@dataclass(frozen=True, slots=True)
 class PendingPrefixEpochTransition:
-    """rewind/compaction 预提交的 pending epoch 迁移。
+    """source boundary 或 acceptance 求差产生的 pending epoch 迁移。
 
     pending transition 没有 wire bytes 且不是 applied epoch;只有首个
     assembly 成功 seal 后才允许消费一次。initial 与 toolset_changed 不走
@@ -173,19 +187,26 @@ class PendingPrefixEpochTransition:
     reason: EpochReason
     turn_id: str | None = None
     consumed: bool = False
+    notice_acceptance: RuntimeNoticeAcceptanceRef | None = None
 
     def __post_init__(self) -> None:
         _non_empty_string(self.transition_id, "PendingPrefixEpochTransition.transition_id")
         _validate_epoch_reason(self.reason, "PendingPrefixEpochTransition.reason")
         if self.reason not in PENDING_TRANSITION_REASONS:
             raise EpochContractError(
-                "PendingPrefixEpochTransition.reason 只能是 compaction/rewind,"
+                "PendingPrefixEpochTransition.reason 必须是持久边界原因,"
                 f"收到 {self.reason.value!r}"
             )
         if self.turn_id is not None:
             _non_empty_string(self.turn_id, "PendingPrefixEpochTransition.turn_id")
         if not isinstance(self.consumed, bool):
             raise ItemSchemaError("PendingPrefixEpochTransition.consumed 必须是 boolean")
+        if self.notice_acceptance is not None and not isinstance(
+            self.notice_acceptance, RuntimeNoticeAcceptanceRef
+        ):
+            raise ItemSchemaError("pending notice acceptance 必须是 typed ref")
+        if self.reason == EpochReason.RUNTIME_NOTICE_CONSUMED and self.notice_acceptance is None:
+            raise EpochContractError("runtime notice boundary 缺少冻结 acceptance 引用")
 
     def consume(self) -> PendingPrefixEpochTransition:
         """返回已消费副本;重复消费直接失败,不允许二次应用。"""
@@ -485,7 +506,7 @@ def open_rebuild_epoch(
     """在合法重建边界开启新 epoch,返回尚未 applied 的 pending 状态。
 
     desired provider profile 与 toolset compatibility key 在此处原子
-    applied;compaction/rewind 必须携带匹配且未消费的 pending transition,
+    applied;compaction/rewind/runtime_notice_consumed 必须携带匹配且未消费的 pending transition,
     toolset_changed 必须是有效变化且不接受 pending transition。
     """
     if not isinstance(state, PrefixEpochState):
@@ -494,7 +515,7 @@ def open_rebuild_epoch(
     if reason not in REBUILD_EPOCH_REASONS:
         raise EpochContractError(
             f"epoch_reason={reason.value!r} 不是合法重建边界;"
-            "只有首次组装、compaction、rewind 与 ToolSet hard rebase 能开新 epoch"
+            "只有首次组装、compaction、rewind、runtime_notice_consumed 与 ToolSet hard rebase 能开新 epoch"
         )
     if reason in PENDING_TRANSITION_REASONS:
         if not isinstance(transition, PendingPrefixEpochTransition):
@@ -536,9 +557,10 @@ def append_items(
 ) -> PrefixEpochState:
     """在同一 epoch 内追加 frames;desired 与 applied 不一致时显式失败。
 
-    desired profile 变化返回 provider-profile-change-requires-rebuild,
-    desired ToolSet/policy 变化返回 toolset-hard-rebase-required;两者都
-    不允许静默沿用或形成第五类 epoch。
+    desired profile 变化返回 provider-profile-change-requires-rebuild,只能随
+    compaction、rewind 或有效 ToolSet hard rebase 原子应用;desired ToolSet/policy
+    变化返回 toolset-hard-rebase-required,必须开启 toolset_changed epoch。两者
+    都只能使用既有合法 reason,不能新增 epoch reason。
     """
     if not isinstance(state, PrefixEpochState):
         raise EpochContractError("append_items 需要当前 PrefixEpochState")

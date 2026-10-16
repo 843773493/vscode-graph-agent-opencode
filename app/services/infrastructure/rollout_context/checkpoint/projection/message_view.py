@@ -85,6 +85,23 @@ class RolloutMessageViewMixin:
                     f"WHERE item.item_id IN ({placeholders})", tuple(excluded_ids),
                 )}
                 sequences = [sequence for sequence in sequences if sequence not in excluded_sequences]
+            allowed = set(self.execution_context_item_ids(
+                connection, session_id=session_id, thread_id=thread_id,
+                checkpoint_ns=checkpoint_ns, view_id=execution_view_id or view_id,
+            ))
+            # frozen raw 中的 canonical 历史保持原序；display_only 必须经过
+            # 与 Provider 完全相同的 current-admission/applied-prefix selection。
+            allowed.update(row[0] for row in connection.execute(
+                "SELECT item_id FROM context_view_items WHERE view_id=? "
+                "AND visible=1 AND source_kind='canonical'", (view_id,),
+            ))
+            placeholders = ",".join("?" for _ in sequences)
+            by_sequence = dict(connection.execute(
+                "SELECT message.message_sequence,item.item_id FROM messages message JOIN item_catalog item "
+                "ON item.jsonl_offset=message.jsonl_offset AND item.jsonl_length=message.jsonl_length "
+                f"WHERE message.message_sequence IN ({placeholders})", sequences,
+            ))
+            sequences = [sequence for sequence in sequences if by_sequence.get(sequence) in allowed]
         if not sequences:
             return []
         values = self._read_messages(

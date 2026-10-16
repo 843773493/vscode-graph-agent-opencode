@@ -153,7 +153,7 @@ class ContextAssemblyManifestMixin:
         binding = snapshot.seal_binding
         predecessor_id = binding.previous_assembly_id
         transition = binding.prefix.consumed_transition
-        if transition is not None:
+        if transition is not None and transition.reason.value in {"rewind", "compaction"}:
             inherited = connection.execute(
                 "SELECT header.source_assembly_id FROM context_epoch_transitions AS transition "
                 "JOIN checkpoint_context_source_snapshots AS header "

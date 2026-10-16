@@ -30,6 +30,9 @@ from app.services.infrastructure.rollout_context.execution.recovery import (
 from app.services.infrastructure.rollout_context.execution.replay import (
     RolloutReplayMixin,
 )
+from app.services.infrastructure.rollout_context.execution.runtime_notice_consumption import (
+    RuntimeNoticeConsumptionMixin,
+)
 from app.services.infrastructure.rollout_context.execution.runtime_wakeup import (
     RuntimeWakeupStorageMixin,
 )
@@ -48,6 +51,7 @@ if TYPE_CHECKING:
 
 
 class RolloutExecutionStore(
+    RuntimeNoticeConsumptionMixin,
     RuntimeWakeupStorageMixin,
     RolloutTurnsMixin,
     RolloutReplayMixin,

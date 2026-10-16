@@ -232,7 +232,7 @@ def select_view_prefix(
                     )
                 predecessor_ids = {assembly.seal_binding.previous_assembly_id} if assembly.seal_binding is not None else set()
                 transition = assembly.seal_binding.prefix.consumed_transition if assembly.seal_binding is not None else None
-                if transition is not None:
+                if transition is not None and transition.reason.value in {"rewind", "compaction"}:
                     inherited = connection.execute(
                         "SELECT header.checkpoint_id,header.source_assembly_id "
                         "FROM context_epoch_transitions transition "

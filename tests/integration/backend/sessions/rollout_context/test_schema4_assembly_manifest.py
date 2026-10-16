@@ -32,7 +32,7 @@ from app.domain.itemized.hashing import (
     contribution_content_hash,
     sha256_jcs,
 )
-from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
+from app.domain.itemized.identity.refs import ContextRef, ToolSetIdentityRef, ToolSetRef
 from app.domain.itemized.request_plan import (
     ContextContribution,
     ContextRequestPlan,
@@ -227,8 +227,10 @@ def _candidate(
 
 
 def _with_admission_root_binding(
-    snapshot: ContextAssemblySnapshot,
+    snapshot: ContextAssemblySnapshot, case: AssemblyCase,
 ) -> ContextAssemblySnapshot:
+    admission = case.saver.execution_admission(case.session_id, thread_id=case.thread_id, execution_id=case.execution_id)
+    notice_ref, _selection = case.saver._storage.executions.runtime_notice_acceptance(admission, connection=case.connection)
     tool_ref = next(
         entry.ref
         for entry in snapshot.selection
@@ -284,6 +286,7 @@ def _with_admission_root_binding(
             applied_toolset_revision=tool_ref.source_revision,
             selection_revision=sha256_jcs({"plan_id": snapshot.plan_id}),
             previous_assembly_id=None,
+            notice_acceptance=notice_ref,
         ),
     )
 
@@ -305,7 +308,7 @@ def _seal_snapshot(case: AssemblyCase, snapshot: ContextAssemblySnapshot) -> Non
 def test_admission_root_uses_visible_canonical_membership_outside_selection(assembly_case):
     case = assembly_case
     snapshot = _with_admission_root_binding(
-        _candidate(case, "admission-root-visible", admission_root=True)
+        _candidate(case, "admission-root-visible", admission_root=True), case
     )
     root_id = case.connection.execute(
         "SELECT root_input_item_id FROM turn_records WHERE turn_id = ?",
@@ -335,7 +338,7 @@ def test_admission_root_uses_visible_canonical_membership_outside_selection(asse
 def test_seal_rejects_unknown_snapshot_turn_without_writes(assembly_case):
     case = assembly_case
     snapshot = _with_admission_root_binding(
-        _candidate(case, "unknown-snapshot-turn", admission_root=True)
+        _candidate(case, "unknown-snapshot-turn", admission_root=True), case
     )
     foreign_turn_snapshot = replace(snapshot, turn_id="foreign-turn")
 
@@ -358,7 +361,7 @@ def test_seal_rejects_missing_foreign_or_noncanonical_admission_root(
 ):
     case = assembly_case
     snapshot = _with_admission_root_binding(
-        _candidate(case, f"invalid-admission-root-{corruption}", admission_root=True)
+        _candidate(case, f"invalid-admission-root-{corruption}", admission_root=True), case
     )
     root_id = case.connection.execute(
         "SELECT root_input_item_id FROM turn_records WHERE turn_id = ?",
@@ -688,16 +691,16 @@ def test_tool_identity_corruption_is_checked_by_plan_registry(assembly_case, ref
 def test_manifest_does_not_read_omitted_candidate_tools(assembly_case, monkeypatch):
     case = assembly_case
     snapshot = _seal(case, "omitted-body")
-    guarded = {
-        id(ref) for ref in snapshot.tool_set_refs if ref.ref_id == "omitted-tools"
-    }
-    guarded.update(
-        id(entry.ref)
+    omitted = tuple(
+        entry.ref
         for entry in snapshot.selection
-        if not entry.included and isinstance(entry.ref, ToolSetRef)
+        if not entry.included and isinstance(entry.ref, ToolSetIdentityRef)
     )
-    assert guarded
-    original = ToolSetRef.__getattribute__
+    assert tuple(ref.ref_id for ref in omitted) == ("omitted-tools",)
+    assert all(not isinstance(ref, ToolSetRef) for ref in omitted)
+    assert tuple(ref.ref_id for ref in snapshot.tool_set_refs) == ("included-tools",)
+    guarded = {id(ref) for ref in omitted}
+    original = ToolSetIdentityRef.__getattribute__
 
     def reject_definition_read(ref, name):
         if id(ref) in guarded and name in {"tools", "tool_policy"}:
@@ -706,7 +709,7 @@ def test_manifest_does_not_read_omitted_candidate_tools(assembly_case, monkeypat
 
     before = _state(case)
     with monkeypatch.context() as guard:
-        guard.setattr(ToolSetRef, "__getattribute__", reject_definition_read)
+        guard.setattr(ToolSetIdentityRef, "__getattribute__", reject_definition_read)
         _validate(case, snapshot)
     assert _state(case) == before
 

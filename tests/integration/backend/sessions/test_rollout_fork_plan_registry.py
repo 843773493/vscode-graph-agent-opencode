@@ -17,6 +17,7 @@ from app.services.infrastructure.rollout_context.assembly.plans.registry import 
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from tests.integration.backend.sessions import test_rollout_fork_protected
 from tests.integration.backend.sessions.itemized_projection_helpers import (
     copy_rollout_snapshot,
 )
@@ -24,12 +25,9 @@ from tests.integration.backend.sessions.test_rollout_fork_protected import (
     SOURCE_SESSION_ID,
     TARGET_SESSION_ID,
 )
-from tests.integration.backend.sessions.test_rollout_fork_protected import (
-    fork_workspace as fork_workspace,
-)
-from tests.integration.backend.sessions.test_rollout_fork_protected import (
-    protected_source as protected_source,
-)
+
+fork_workspace = test_rollout_fork_protected.fork_workspace
+protected_source = test_rollout_fork_protected.protected_source
 
 
 @pytest.fixture
@@ -158,6 +156,8 @@ async def test_cold_history_rejects_tampered_original_registry_hash(protected_so
     thread = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
     with saver._storage.storage._connect(thread, "", session_id=TARGET_SESSION_ID) as connection:
         connection.execute(f"UPDATE context_plans SET {column}=? WHERE plan_id=?", (sha256_jcs({"tampered": column}), sealed.plan_id))
-    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
-        with pytest.raises(ValueError, match="source-mismatch"):
-            restarted.get_context_plan_registration(TARGET_SESSION_ID, thread_id=thread, plan_id=sealed.plan_id)
+    with (
+        RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted,
+        pytest.raises(ValueError, match="source-mismatch"),
+    ):
+        restarted.get_context_plan_registration(TARGET_SESSION_ID, thread_id=thread, plan_id=sealed.plan_id)

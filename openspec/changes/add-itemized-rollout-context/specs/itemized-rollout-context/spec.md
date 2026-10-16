@@ -672,10 +672,48 @@ item `status` 只描述单个 canonical payload 的持久化/语义完成事实�
 
 `acceptance_idempotency_key` 在 `(session_id, thread_id, acceptance_idempotency_key)` 范围内唯一。同一 key 重复提交相同 ingress payload hash 时，系统 MUST 返回原 `turn_id`、root item 和 `initial_execution_id`；同一 key 对应不同 payload 时 MUST 返回幂等冲突，不得创建第二个 Turn/root。acceptance-time 的 Turn、root item 和首次 execution 必须作为同一可重试提交边界可见。
 
+首次 acceptance MUST 在唯一 owner 的 `BEGIN IMMEDIATE` 事务内、追加 `root_input_item_id` 前，冻结 source/admission cut 之前的 head view 中可见、`display_only` 且 `context_selected` 的 head-internal `runtime_notice`。每个 notice entry 按该 view 的 `context_ordinal` 排序，保存 notice item ID、execution/admission identity、source branch/view identity 与 ordinal；同一 canonical internal execution/admission 中经 typed provenance 关联的私有 `assistant_output` 只保存按同一 view ordinal 排序且依 typed carrier supersession 规则筛出的 survivor item IDs，不得从正文、物理邻接或时间推断归属。不可变的规范化选集、cut 与 `selection_hash` 写入同一 `acceptance` commit metadata，hash 绑定所有身份及归属，但不保存私有正文。该选集表示本次 user request 必须排除的旧 internal notice 及其私有 response，不是可由 Runner 或 preparation 重选的当前 pending 列表。
+
+相同 acceptance key 重放 MUST 读回原冻结值，即使 catalog、view membership、队列或 notice 状态已变化也不得重选；同 key 不同 payload 仍按既有 acceptance conflict 处理。用户 payload digest 与 `user_turn_admission_payload_hash` 不含 notice 集合、私有输出 IDs、cut 或 selection hash。每个用户 acceptance 的 seal binding MUST 使用 `RuntimeNoticeAcceptanceRef(acceptance_commit_id, selection_hash)` 精确引用该 acceptance 的冻结选集，不复制选集或建立第二 ledger；即使没有 notice wire ref 需要移除，也必须绑定当前 acceptance 自己的 ref。
+
+execution preparation MUST 按 acceptance 冻结集合与已应用的 notice 及私有输出 wire refs 求差；该消费判断独立于 CSM source `applied_revision`，也不取代 canonical `pending_next_turn`/`include_pending_notices` 查询。集合相同则复用当前 applied epoch；仅当必须移除已处理 notice 或其私有输出的旧 wire refs 时，才通过唯一 `context_epoch_transitions`/prefix-epoch applied owner 登记并消费 `runtime_notice_consumed` transition。queued acceptance B 即使与已消费 acceptance A 的选集相同，也必须在自己的 seal binding 上引用 B 的 `RuntimeNoticeAcceptanceRef`，继承当前 applied epoch，不创建第二条 transition 或消费确认。纯 `runtime_notice_consumed` row 的 source checkpoint、control sequence 与 canonical source-cut 字段 MUST 为空；若消费与真实 rewind/compaction 同 seal，保留该 transition 原有 source reason 和真实 source boundary 字段，只另挂 acceptance ref。
+
+该 transition 只改变新 request 的 wire refs，不 claim/delete canonical item、不改 history view、`display_only` membership、`pending_next_turn` scope、source overlay、ToolSet 或旧 sealed snapshot；现有 source restore、checkpoint capture、fork/copy lineage consumers MUST 明确排除纯 `runtime_notice_consumed`，不能把它当作 rewind/compaction source boundary。`runtime_notice_consumed` 与 rewind/compaction 同时待应用时必须由同一 transition owner 提交并分别保留 notice consumption 与 source rebuild 两类原因事实，不新增第二 ledger。首次成功 seal MUST 在同一 SQLite 事务原子提交 assembly snapshot、prefix epoch 及 consumption confirmation；若同 seal 执行合法 CSM source restore，source owner 的 applied revision、source transition、assembly 和 notice consumption 也必须原子可见，但仍由各自唯一 owner 维护各自事实。seal 前失败不消费，冷恢复沿用 acceptance 冻结集合，seal 后取消不回滚。`unknown` 或可恢复 owner MUST 保留原 acceptance 并恢复同一执行；只有 canonical terminal cancel/failure 可放弃该 owner 的未 seal 消费权，后续 acceptance MUST NOT 接管或重选其冻结集合。
+
 #### Scenario: 普通用户消息开启新 Turn
 
 - **WHEN** 一条真实用户输入被接受并准备进入 AgentLoop
 - **THEN** 系统以 acceptance idempotency key 原子确定新的 `turn_id`、`turn_ordinal`、`root_input_item_id`、`source_branch_id` 和 `initial_execution_id`，再将用户 input item 纳入该 Turn；后续 assistant、tool 和持久化 runtime notice 通过明确关系加入，而不是重新猜测 Turn 起点
+
+#### Scenario: acceptance 重放复用已冻结的 notice cut
+
+- **WHEN** acceptance commit 已提交但 HTTP 回执丢失，重试前又出现新的 internal notice 或队列状态变化
+- **THEN** 同 key 重试返回原 Turn/root/initial execution，并复用原 ordered notice IDs、execution/admission/source cut 与 selection hash；不重新选择 notice，用户 payload digest 和 `user_turn_admission_payload_hash` 保持原语义
+
+#### Scenario: notice 消费与首次 assembly seal 原子提交
+
+- **WHEN** preparation 发现 acceptance 冻结集合要求从旧 sealed wire refs 移除已处理 internal notice，并成功 seal 新 assembly
+- **THEN** 唯一 transition/applied owner 在同一 SQLite 事务提交新 assembly、epoch 与 notice consumption；seal 前失败只保留 acceptance 冻结事实，冷恢复使用同一集合；`runtime_notice_consumed` 不改变历史 view/source overlay/ToolSet，也不触发 fork/source restore
+
+#### Scenario: 可恢复 owner 不转移 notice consumption
+
+- **WHEN** notice consumption owner 对应的 execution 为 `unknown`/可恢复并在 dispatch、Job 启动或 HTTP cancel 请求后重启
+- **THEN** queue 按 canonical execution outcome 恢复同一 acceptance owner及冻结集合，不因 `dispatch_generation`、已启动 Job 或 cancel 请求释放/转移；只有 canonical terminal cancel/failure 可放弃未 seal 的消费权，后续 acceptance 不继承该集合
+
+#### Scenario: 排队 acceptance 保留重叠 notice 冻结集合
+
+- **WHEN** 两个用户 acceptance 在同一 thread 排队且冻结的已处理 notice IDs 有重叠，随后又追加 cut 之后的 internal notice
+- **THEN** 两个 acceptance 各自保留其不可变有序集合与 admission/source cut，不 claim/delete 公共 notice、不相互转交消费权；后追加 notice 不回写任一集合并由各自 admission fence 排除
+
+#### Scenario: 无差集的排队 acceptance 引用自身冻结选集
+
+- **WHEN** acceptance A 已消费 notice 并 seal，排队 acceptance B 冻结相同选集，且 B preparation 无需从已应用 prefix 移除任何 notice 或私有输出 wire ref
+- **THEN** B 的 seal binding 引用 B 自己的 `RuntimeNoticeAcceptanceRef`，复用 A 已应用的 epoch，不新增 `runtime_notice_consumed` transition 或消费确认；A 的冻结 metadata 与既有消费记录保持不变
+
+#### Scenario: seal 回执丢失后冷重试复用同一 assembly
+
+- **WHEN** 首次 assembly seal 已提交但调用方未收到回执，进程重启后以原 acceptance 恢复并重试
+- **THEN** 重试返回同一 sealed assembly、prefix epoch 和 consumption confirmation，不重新选择 notice、不重复消费或创建第二个 assembly；既有旧 sealed snapshot 保持不可变
 
 #### Scenario: 打断提醒不创建新 Turn
 
@@ -1119,9 +1157,9 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 
 需要跨 checkpoint 或后续请求恢复的 delta MUST 追加为 `semantic_kind=runtime_notice`、`turn_scope=ambient`、`payload_kind=structured_content` 的 canonical item，并通过 `supersedes`/`materializes` relation 连接 source revision；只对当前 request 有效的 delta 可以保持 request-only，不能因此伪造 canonical item。overlay item 不得成为 Turn root/member，也不能因 wire role 为 `user` 而改变 Turn 顺序。多次 source change 必须形成 `A(base) -> B(delta) -> C(delta)` 的可恢复链，不得把 C 的 diff 错当作 A 的完整内容。
 
-同一`prefix_epoch`内的replay、branch/view读取、checkpoint restore和普通source edit MUST完整继承上一sealed assembly的wire bytes，并且只能在尾部追加新的canonical/source item。只有首次组装、实际compaction、rewind重建和Provider可见ToolSet hard rebase可以登记并在下一份成功sealed assembly中应用不继承旧字节前缀的新epoch；`overlay_materialized`也只能在这四类边界内发生。rewind/compaction可先提交view和`PendingPrefixEpochTransition`，但pending记录没有wire bytes且不是applied epoch。rewind目标checkpoint若仍保留tracked registration但最新已注入revision已被移出active view，下一次真正model-call preparation必须从activation coordinator冻结的ResourceRegistry内存snapshot取得当前published revision，持久化完整恢复事实并与首个新epochassembly和transition消费原子提交；只有source owner typed `root_placement=root_eligible`且实际重建新epoch时才能把有效状态合并新root，`tail_only`仍为独立user-role item。snapshot不可用时保留view/transition但不产生半item或dispatch，且不得读文件、网络或其它provider。snapshot/untracked不自动恢复。普通source edit只追加delta。source base/detail不可恢复、source删除或source detail读取授权变化、revision/hash mismatch、Provider/projector profile不兼容或required detail缺失必须返回invalid/mismatch并阻止dispatch，不能用当前source静默重建旧request或以显式refresh暗中改写前缀。Gateway federation operation policy不属于source读取授权，也不参加该reconciliation。
+同一`prefix_epoch`内的replay、branch/view读取、checkpoint restore和普通source edit MUST完整继承上一sealed assembly的wire bytes，并且只能在尾部追加新的canonical/source item。source/root重建边界仍为首次组装、实际compaction、rewind重建和Provider可见ToolSet hard rebase；另一个合法transition reason为`runtime_notice_consumed`，仅在移除已处理head-internal notice refs确有需要时推进epoch，不重建history view、source overlay、ToolSet或source/root。上述reason均由同一`PendingPrefixEpochTransition`/prefix-epoch applied owner管理，source restore/fork/copy consumers MUST只把`rewind`/`compaction`识别为source restore boundary；与其同时发生的notice consumption须由该owner保留两类原因事实，不能覆写source reason或另建ledger。`overlay_materialized`只允许发生在source/root重建边界。rewind/compaction可先提交view和`PendingPrefixEpochTransition`，但pending记录没有wire bytes且不是applied epoch。rewind目标checkpoint若仍保留tracked registration但最新已注入revision已被移出active view，下一次真正model-call preparation必须从activation coordinator冻结的ResourceRegistry内存snapshot取得当前published revision，持久化完整恢复事实并与首个新epochassembly和source transition消费原子提交；只有source owner typed `root_placement=root_eligible`且实际重建新epoch时才能把有效状态合并新root，`tail_only`仍为独立user-role item。snapshot不可用时保留view/transition但不产生半item或dispatch，且不得读文件、网络或其它provider。snapshot/untracked不自动恢复。普通source edit只追加delta。source base/detail不可恢复、source删除或source detail读取授权变化、revision/hash mismatch、Provider/projector profile不兼容或required detail缺失必须返回invalid/mismatch并阻止dispatch，不能用当前source静默重建旧request或以显式refresh暗中改写前缀。Gateway federation operation policy不属于source读取授权，也不参加该reconciliation。
 
-每次会改变运行时上下文的操作都必须比较 history view 与 source overlay 两类状态，并形成 reconciliation outcome：`history_view_changed`、`overlay_reused`、`delta_appended`、`overlay_materialized` 或 `overlay_invalid`，同时记录 `prefix_epoch_reason`。只有合法新 prefix epoch 内的 `overlay_materialized` 才能改变 source base。source 不可读、source detail读取授权改变、revision/hash mismatch 或 detail 缺失时，系统必须显式返回 source-mismatch/detail-unavailable，不能用当前 source 静默重建旧 request。
+每次会改变运行时上下文的操作都必须比较 history view 与 source overlay 两类状态，并形成 reconciliation outcome：`history_view_changed`、`overlay_reused`、`delta_appended`、`overlay_materialized` 或 `overlay_invalid`，同时记录 `prefix_epoch_reason`。`prefix_epoch_reason=runtime_notice_consumed` 只记录 wire notice-ref removal，不表示 CSM source revision applied 或 source restore；与`rewind`/`compaction`合并时保留两个原因事实。只有合法 source/root 重建边界内的 `overlay_materialized` 才能改变 source base。source 不可读、source detail读取授权改变、revision/hash mismatch 或 detail 缺失时，系统必须显式返回 source-mismatch/detail-unavailable，不能用当前 source 静默重建旧 request。
 
 #### Scenario: `AGENTS.md` 变化不破坏稳定缓存前缀
 

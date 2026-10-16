@@ -27,11 +27,14 @@ from app.domain.itemized.identity.item_projection import (
 )
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.schema import validate_extensions
+from app.services.infrastructure.rollout_context.execution.runtime_notice_consumption import (
+    acceptance_metadata,
+    freeze_runtime_notice_selection,
+)
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
-    load_committed_idempotency_commit,
     strict_non_negative_int,
     strict_optional_text,
     strict_text,
@@ -121,6 +124,7 @@ class RolloutTurnsMixin:
                 owner_thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
                 self._storage._require_v2_runtime(connection)
+                connection.execute("BEGIN IMMEDIATE")
                 if branch_id is None:
                     active_branch_row = connection.execute(
                         "SELECT active_branch_id FROM checkpoint_namespace_state WHERE checkpoint_ns = ?",
@@ -313,18 +317,9 @@ class RolloutTurnsMixin:
                         raise ValueError(
                             "acceptance identity 冲突：typed provenance relations 不一致"
                         )
-                    accepted_commit = load_committed_idempotency_commit(
-                        connection,
-                        commit_kind=CommitKind.ACCEPTANCE.value,
-                        subject_id=stored_turn_id,
-                        idempotency_key=acceptance_idempotency_key,
-                        commit_mode="item_bearing",
-                        outcome=None,
-                        metadata={
-                            "accepted_ingress_id": accepted_ingress_id,
-                            "turn_id": stored_turn_id,
-                        },
-                        item_count=1,
+                    accepted_commit = acceptance_metadata(
+                        connection, turn_id=stored_turn_id,
+                        ingress_id=accepted_ingress_id, acceptance_key=acceptance_idempotency_key,
                     )
                     if accepted_commit is None:
                         identity_origin_row = connection.execute(
@@ -367,7 +362,7 @@ class RolloutTurnsMixin:
                             )
                         commit_id = checkpoint_commit[0]
                     else:
-                        commit_id = accepted_commit.commit_id
+                        commit_id = accepted_commit[1]
                     return {
                         "turn_id": stored_turn_id,
                         "root_input_item_id": stored_root_item_id,
@@ -497,7 +492,12 @@ class RolloutTurnsMixin:
                     turn_scope=TurnScope.TURN_ROOT,
                     wire_role="user",
                 )
-                connection.execute("BEGIN IMMEDIATE")
+                notice_selection = freeze_runtime_notice_selection(
+                    connection, storage=self._storage, session_id=session_id,
+                    thread_id=owner_thread_id, checkpoint_ns=checkpoint_ns,
+                    branch_id=branch_value, execution_id=execution_id,
+                    admission_key=admission_key,
+                )
                 commit_id, _offset = self._storage._append_v2_records_transaction(
                     connection,
                     owner_thread_id,
@@ -511,6 +511,7 @@ class RolloutTurnsMixin:
                     metadata={
                         "accepted_ingress_id": accepted_ingress_id,
                         "turn_id": turn_value,
+                        "runtime_notice_selection": notice_selection,
                     },
                 )
                 self._storage._bind_canonical_item_execution(

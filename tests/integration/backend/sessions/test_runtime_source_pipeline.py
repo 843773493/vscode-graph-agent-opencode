@@ -286,7 +286,7 @@ def _assert_generated_notice(
     assert notice.semantic_kind == "runtime_notice" and notice.payload_kind == "structured_content"
     assert notice.turn_id is None and notice.turn_scope == "pending_next_turn"
     assert payload.display_part.provenance.to_dict() == expected_provenance
-    assert private_result in payload.prompt
+    assert payload.prompt.count(private_result) == 1
     assert private_result not in canonical_json_bytes(payload.display_part.to_dict()).decode()
     assert private_result not in canonical_json_bytes(notice.extensions).decode()
     assert notice.content_hash == content_hash(notice.payload_kind, notice.payload)
@@ -824,11 +824,14 @@ async def test_h4_generated_branch_returns_to_frozen_child_thread(source_case: R
     session_id, child_thread_id = parent_job["session_id"], intent.thread_id
     main_thread_id = parent_job["thread_id"]
     generated_contexts: list[str] = []
+    report_prompts: list[str] = []
 
     def reply(payload: dict[str, object]) -> dict[str, object]:
         human = "\n".join(_wire_text(m["content"]) for m in payload["messages"]
                           if m["role"] == "user" and m["content"])
         if "<generated_session_result" in human:
+            report_prompts.extend(_wire_text(m["content"]) for m in payload["messages"]
+                                  if m["role"] == "user" and "<generated_session_result" in _wire_text(m["content"]))
             return {"content": "H4-exact-child-origin-ack"}
         assert "H4-private-generator-prompt" in human
         generated_contexts.append(_wire_text(payload["messages"]))
@@ -870,23 +873,62 @@ async def test_h4_generated_branch_returns_to_frozen_child_thread(source_case: R
     assert len(child_notices) == 1
     generated_thread_id = generated_job["thread_id"]
     generated_execution = case.sql(generated_session_id, generated_thread_id,
-        "SELECT execution_id FROM executions WHERE job_id=?", (generated_job["job_id"],))
+        "SELECT execution.execution_id, turn.final_item_id FROM executions AS execution "
+        "JOIN turn_records AS turn ON turn.turn_id=execution.turn_id WHERE execution.job_id=?",
+        (generated_job["job_id"],))
     assert len(generated_execution) == 1
+    assert generated_execution[0][1] is not None
     generated_outputs = case.sql(generated_session_id, generated_thread_id,
         "SELECT item_id FROM item_catalog WHERE semantic_kind='assistant_output' AND execution_id=? ORDER BY item_sequence",
         (generated_execution[0][0],))
+    generated_items = case.container.checkpointer._storage.storage.read_items(
+        generated_session_id, generated_thread_id, item_ids=tuple(row[0] for row in generated_outputs),
+    )
+    assert len(generated_items) > 1
+    final_item = next(item for item in generated_items if item.item_id == generated_execution[0][1])
+    identity = final_item.projection_identity
+    assert identity is not None and identity.content_part_refs
+    assert any(
+        item.projection_identity is not None
+        and item.projection_identity.model_call_id == identity.model_call_id
+        and (item.projection_identity.block_id, item.projection_identity.block_index)
+        == (f"{identity.model_call_id}:block:{ref.id}", ref.index)
+        for item in generated_items for ref in identity.content_part_refs
+    )
+    assert any(
+        relation.relation == "replaces" and relation.target_kind == "projection_message"
+        and item.projection_identity is not None
+        and item.projection_identity.projection_message_id == relation.target_id
+        for relation in final_item.provenance_relations for item in generated_items
+    )
     canonical_report = _assert_generated_notice(
         case, session_id, child_thread_id, child_notices[0][0],
         expected_provenance={"source_session_id": generated_session_id, "source_thread_id": generated_thread_id,
-            "source_execution_id": generated_execution[0][0], "source_item_id": generated_outputs[-1][0]},
+            "source_execution_id": generated_execution[0][0], "source_item_id": generated_execution[0][1]},
         private_result="H4-generated-result",
     )
+    assert len(report_prompts) == 1 and report_prompts[0].count("H4-generated-result") == 1
+    report_admission = case.container.checkpointer.execution_admission_for_job(
+        session_id, thread_id=child_thread_id, job_id=report_job["job_id"],
+    )
+    history_response = await case.client.post(
+        f"/api/v1/sessions/{session_id}/threads/{child_thread_id}/history",
+        json={"execution_id": report_admission.execution_id, "include": ["internal"]},
+    )
+    assert history_response.status_code == 200, history_response.text
+    history = history_response.json()["data"]
+    report_history = next(entry for entry in history["internal_executions"]
+                          if entry["execution_id"] == report_admission.execution_id)
+    assert [part["text"] for part in report_history["display_parts"]] == ["生成分支已结束，主会话正在处理返回结果。"]
+    assert all(private not in canonical_json_bytes(history).decode()
+               for private in ("H4-generated-result", "H4-private-generator-prompt"))
     repeat = await case.client.post("/api/v1/session-generations/execute", json=payload)
     assert repeat.status_code == 200 and repeat.json()["data"] == result, repeat.text
     assert case.sql(session_id, child_thread_id, "SELECT COUNT(*) FROM executions")[0][0] == 2
     case.write_actual("h4", {"generated_session_id": generated_session_id, "generated_job": generated_job,
         "report_job": report_job, "result": result, "exact_origin_thread_id": child_thread_id,
         "child_runtime_inputs": child_notices, "canonical_report": canonical_report,
+        "report_provider_prompts": report_prompts, "report_history": report_history,
         "private_seed_in_generated_context": any("private-seed-h1" in value for value in generated_contexts),
         "child_output_in_generated_context": any("child-result-h1" in value for value in generated_contexts)})
     assert generated_contexts and all("private-seed-h1" in value and "child-result-h1" in value for value in generated_contexts)

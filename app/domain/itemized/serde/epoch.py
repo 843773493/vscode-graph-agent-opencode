@@ -13,6 +13,7 @@ from app.domain.itemized.epoch.prefix_epoch import (
     PrefixEpoch,
     PrefixEpochState,
     ProviderProfileItemFrame,
+    RuntimeNoticeAcceptanceRef,
     SealedPrefixAssembly,
 )
 from app.domain.itemized.epoch.root_compilation import (
@@ -63,6 +64,13 @@ def _item_ref(value: object) -> AppendedItemRef:
     return AppendedItemRef(**raw)
 
 
+def _notice_acceptance(value: object) -> RuntimeNoticeAcceptanceRef | None:
+    if value is None:
+        return None
+    raw = _object(value, {"acceptance_commit_id", "selection_hash"}, "RuntimeNoticeAcceptanceRef")
+    return RuntimeNoticeAcceptanceRef(**raw)
+
+
 def context_seal_binding_to_dict(binding: ContextSealBinding) -> dict[str, object]:
     """完整封存值；不派生缺失字段，不读取资源或任何状态 owner。"""
     result = asdict(binding)
@@ -82,7 +90,7 @@ def context_seal_binding_from_dict(payload: object) -> ContextSealBinding:
         payload,
         {
             "prefix", "root", "tool_set_snapshot_id", "applied_toolset_revision",
-            "selection_revision", "previous_assembly_id", "source_revisions",
+            "selection_revision", "previous_assembly_id", "source_revisions", "notice_acceptance",
         },
         "ContextSealBinding",
     )
@@ -117,7 +125,7 @@ def context_seal_binding_from_dict(payload: object) -> ContextSealBinding:
     transition = prefix["consumed_transition"]
     if transition is not None:
         transition = _object(
-            transition, {"transition_id", "reason", "turn_id", "consumed"},
+            transition, {"transition_id", "reason", "turn_id", "consumed", "notice_acceptance"},
             "PendingPrefixEpochTransition",
         )
         transition = PendingPrefixEpochTransition(
@@ -125,6 +133,7 @@ def context_seal_binding_from_dict(payload: object) -> ContextSealBinding:
             reason=EpochReason(transition["reason"]),
             turn_id=transition["turn_id"],
             consumed=transition["consumed"],
+            notice_acceptance=_notice_acceptance(transition["notice_acceptance"]),
         )
     sealed_prefix = SealedPrefixAssembly(
         assembly_id=prefix["assembly_id"],
@@ -186,4 +195,5 @@ def context_seal_binding_from_dict(payload: object) -> ContextSealBinding:
         selection_revision=raw["selection_revision"],
         previous_assembly_id=raw["previous_assembly_id"],
         source_revisions=tuple(revisions),
+        notice_acceptance=_notice_acceptance(raw["notice_acceptance"]),
     )

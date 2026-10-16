@@ -20,6 +20,6 @@ compatibility key，以及新 epoch 的 root 编译投影。它只提供纯值�
 
 # 规范
 
-- 只有 initial、compaction、rewind、toolset_changed 四种 epoch reason，不存在第五类。
+- epoch reason 闭集为 initial、compaction、rewind、toolset_changed、runtime_notice_consumed；notice 消费绑定真实 user acceptance，不伪造 source boundary。
 - pending transition 不是 applied epoch；只有首个 assembly 成功 seal 才应用并消费。
 - 同一 epoch 内只能尾部追加，父前缀必须逐字节一致；hash 算法固定，不可由调用方覆盖。

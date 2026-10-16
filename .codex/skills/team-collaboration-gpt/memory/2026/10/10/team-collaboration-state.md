@@ -1,6 +1,16 @@
-# 当前协作状态（北京时间 2026-10-16；沿用 2026/10/13 的 F12 run）
+# 当前协作状态（北京时间 2026-10-16；原 goal 已续跑）
 
-## 恢复首读：功能已提交推送，停止扩大业务任务
+## 当前恢复：原 goal 与七个既有 OpenSpec 继续执行
+
+- **授权与运行根**：用户恢复原 handoff、已确认的七个 OpenSpec、缺陷修复和冗余清理；沿用原产品与验收范围，不增加新产品规划。本轮 RUN=`out/tests/temp/2026/10/16/hierarchical-goal-resume-01`。用户已授权当前功能边界完成后提交并 push；本轮候选尚未提交，禁止 force 或改写共享历史。
+- **固定基线**：交付协调者使用 RUN 内绝对私有 `GIT_INDEX_FILE` 初始化 `HEAD` 后核得 `HEAD=5ca6861f91f288771c1a4f5f9be6bd67525956c9`、tree=`daa70799a2bf05ffead1087b5df888c0f6bfadf4`，真实工作树零差异；不使用共享暂存。机械收据=`delivery/artifacts/private-observation-receipt-01.json`。
+- **当前单链路**：优先 `add-itemized-rollout-context` §1.7 `generated_internal_history` 的 `RuntimeNoticePayload`：durable internal admission 首 notice→冷恢复/首次消费→Provider wire 与 internal/Web history。R2449 原产品首用户 `messages[0]` 的 `system_reminder` 含 head `privateResult` 三次且缺 head prompt；R2456 两份 Provider log 也观察到 historical generated head `system_reminder`，根因尚未定。要保 admission/intent identity、hash、既有拒绝断言；Provider 只投影私有 `payload.prompt`，history/Web 只投影 typed safe `display_part`，branch result 不进入展示字段。原正式产品实际退出 1，尚未通过。
+- **活动租约**：唯一核心 `/root/hierarchy_delivery/sol_vertical_implementer`，gpt-6.1-sol/max/fork_turns:none，已创建并接读入/闭包盘查；写入前尚无源码变化、无测试。独立审查协调者 `/root/hierarchy_review` 按 gpt-6-luna/max只读推进原范围与准确证据。辅助读链 grandchild `/root/hierarchy_delivery/notice_consumer_precheck`，gpt-6-luna/max/fork_turns:none，已创建，获准只读核 §1.7 callers/测试前提并直接辅助 Sol；不得派生。
+- **派生接口故障**：独立审查曾报告一次 gpt-5.6-luna/max、fork_turns:none 的创建请求被 API 参数校验拒绝：`client_metadata.cpu_cores` 期望 string、收到 integer，request id=`202610160331040066968248268d9d6QWYYOfIY`；该请求未创建成员，未重试。树上另有 `/root/hierarchy_review/acceptance_audit` 执行七 change/验收盘点，审查者确认它不是失败请求的产物；当前树不暴露其创建模型/effort。错误记录=`delivery/artifacts/review-grandchild-create-error-01.json`。之后按既定 gpt-6-luna/max 创建本切片辅助读链成员成功，不改模型/环境。
+- **运行 profile 与失败记录**：核心 profile=`sol_vertical_implementer/artifacts/profile-core-01.json`；交付私有 Git 观察 profile=`delivery/artifacts/profile-01.json`。第一次摘要子命令内裸 `python` 不存在，run_task actual=127；已保留原件且没有重试同命令，后续改用 awk 只读 Git 摘要 actual=0。私有 Git 初始观察的 run_task 原件均在 `delivery/artifacts/runs/`，mechanical verify receipt 包含全部原actual和空进程组。
+- **尚未闭合的门**：本切片集中回归已完成，但七 change 未全验收，notice 重放、H4 原 node、128/427及正式产品终验仍未全部通过。沿依赖复用既有证据，不重跑无关绿项；Sol STOP 后由交付协调者固定候选、完成必要增量独审，再按用户授权普通提交并 push 当前边界，不把未完成验收描述为已通过。
+
+## 上批收尾快照（新续跑请求前的历史状态）
 
 - **当前用户要求**：本轮只创建分层协作技能；不启动新业务团队，不续派历史未闭任务。全部业务作者与收尾审查者 STOP。
 - **已提交推送**：功能提交 `d726bd0b3adb60c867b62c8ffaf2e1b9f7d00d0e`，固定树 `22a1df110c1ce21b142e1b305b2be866d60b3d41`，主1945提交、1946普通push、1947核远端main同SHA。完整909路径补丁严格重建通过；保留共享暂存和6个deferred路径。

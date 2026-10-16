@@ -93,7 +93,7 @@ fork SHALL 使用既有 operation journal 固定请求 preimage、来源 snapsho
 
 ### Requirement: Compaction 创建 SQLite context view
 
-系统 SHALL将compaction表达为SQLite中新的context view和控制事件，不创建新的JSONL segment或控制记录。摘要和保留的canonical item继续作为不可变item追加到rollout.jsonl，新的view通过item range/reference选择摘要和保留范围。实际compaction是四类合法prefix epoch边界之一；compaction事务提交view及`PendingPrefixEpochTransition(reason=compaction)`，但pending记录没有wire bytes且不是applied epoch。下一次真正model-call preparation可以精确复用source base/delta，也可以从activation coordinator冻结的ResourceRegistry内存snapshot取得tracked published revision并物化为完整source，然后把source decision、首个新epoch assembly seal与transition消费原子提交。snapshot不可用时保留compaction view/transition但不产生半assembly或dispatch，且不读取文件、网络或其它provider。所有第一条真实用户消息后的summary/source完整或增量内容必须保持独立user-role item。source/detail失效不能被解释为物化理由来修复旧sealed assembly；精确恢复仍显式失败。
+系统 SHALL将compaction表达为SQLite中新的context view和控制事件，不创建新的JSONL segment或控制记录。摘要和保留的canonical item继续作为不可变item追加到rollout.jsonl，新的view通过item range/reference选择摘要和保留范围。实际compaction是source/root重建的prefix epoch边界；compaction事务提交view及`PendingPrefixEpochTransition(reason=compaction)`，但pending记录没有wire bytes且不是applied epoch。下一次真正model-call preparation可以精确复用source base/delta，也可以从activation coordinator冻结的ResourceRegistry内存snapshot取得tracked published revision并物化为完整source，然后把source decision、首个新epoch assembly seal与transition消费原子提交。仅为移除已处理 head-internal notice refs 的`runtime_notice_consumed` transition必须复用同一 transition/applied owner，不能当作compaction/rewind source boundary；与compaction同 seal 时由该 owner保留两个reason事实并原子提交。source restore/fork/copy consumers MUST 过滤 `runtime_notice_consumed`，不从其恢复source checkpoint或继承fork lineage。snapshot不可用时保留compaction view/transition但不产生半assembly或dispatch，且不读取文件、网络或其它provider。所有第一条真实用户消息后的summary/source完整或增量内容必须保持独立user-role item。source/detail失效不能被解释为物化理由来修复旧sealed assembly；精确恢复仍显式失败。
 
 #### Scenario: 压缩后继续运行
 
@@ -212,17 +212,17 @@ rewind、compaction 与 checkpoint branch MUST 只重建其 selected `SessionThr
 
 `history_replay` MUST 在所选 `(session_id, thread_id, checkpoint_ns)` owner 下创建不可变历史 view，并返回显式 `history_view_id`。它复用所选 source Turn、root 和 ordinal；不得创建 execution、切换 namespace 的 active branch、改变 branch status/head 或恢复当前 CSM/source、ToolSet/applied epoch。历史 view 和其 control snapshot 归现有 view owner，不维护第二个 execution head。
 
-`get_tuple` 使用该 selector 时 MUST 校验 owner 和 `history_replay` view 类型后只读投影；`put` 或其它执行写入使用历史 selector 时 MUST 在任何持久化前明确拒绝。普通执行调用仍解析唯一 execution active branch/head。已有 rewind/compaction pending transition 的 target view、branch 和完整 payload 不得因历史读取改变或被重绑；后续真实新输入或 `replay_as_new_turn` 创建新 Turn/execution 后，按原 owner guard 在首个成功新 epoch seal 原子消费该 pending transition。
+`get_tuple` 使用该 selector 时 MUST 校验 owner 和 `history_replay` view 类型后只读投影；`put` 或其它执行写入使用历史 selector 时 MUST 在任何持久化前明确拒绝。普通执行调用仍解析唯一 execution active branch/head。已有 rewind/compaction pending transition 的 target view、branch 和完整 payload 不得因历史读取改变或被重绑。`runtime_notice_consumed` 不是 seal 前持久化的 pending transition：同一接受 Turn 的 preparation 只可从该 Turn 冻结的 `RuntimeNoticeAcceptanceRef` 在内存中构造消费候选，不得将候选写成可由其它 owner 接管的 pending 状态；若该候选使本次 assembly 新增被排除的 selected ref，首个成功 seal 才在同一 SQLite 事务写入 consumption transition、acceptance ref、assembly 与 epoch。若没有新增排除 ref，则仍引用本次 acceptance，沿用已应用 epoch，不创建 consumption transition。消费事实和 `RuntimeNoticeAcceptanceRef` 归原接受 Turn，不得由 `history_replay` 重绑或转交后续 acceptance。`runtime_notice_consumed` 不作为 source restore/fork lineage boundary。
 
 #### Scenario: 历史读取不替换当前执行状态
 
-- **WHEN** 同 owner 已有 rewind/compaction pending transition，调用方创建 `history_replay` 并用返回的 `history_view_id` 执行 `get_tuple`
-- **THEN** 返回所选历史 projection，原 Turn/root/ordinal 复用且不新增 execution/model-call/dispatch；execution active branch/head、当前 CSM、ToolSet/applied epoch 和 pending transition 的完整状态保持不变
+- **WHEN** 同 owner 已有 rewind/compaction pending transition，或已有与接受 Turn 绑定的 `runtime_notice_consumed` transition，调用方创建 `history_replay` 并用返回的 `history_view_id` 执行 `get_tuple`
+- **THEN** 返回所选历史 projection，原 Turn/root/ordinal 复用且不新增 execution/model-call/dispatch；execution active branch/head、当前 CSM、ToolSet/applied epoch、rewind/compaction pending transition 和已提交 notice consumption fact 均保持不变，notice consumption 不触发 source restore
 
 #### Scenario: 历史 selector 拒绝写入而新 Turn 可以继续
 
 - **WHEN** 调用方对历史 selector 执行 `put`，或随后通过正式 acceptance 创建新的真实 Turn
-- **THEN** 历史写入明确失败且没有持久化副作用；新 Turn 使用原 execution branch 的独立 root/acceptance/execution identity，在正确 branch seal/reopen 后只消费一次原 pending transition，不复用旧 Turn/execution 或放宽 branch guard
+- **THEN** 历史写入明确失败且没有持久化副作用；新 Turn 使用原 execution branch 的独立 root/acceptance/execution identity，只能从自身冻结的 acceptance selection 构造瞬时 notice-consumption candidate，并在自身首个成功 seal 中按原唯一 owner guard 原子提交；不得复用旧 Turn/execution 的消费候选或放宽 branch guard
 
 ### Requirement: Checkpoint 区分 canonical view 与 request-only assembly
 

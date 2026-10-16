@@ -18,6 +18,10 @@ from app.agents.skill_runtime import install_frozen_skill_catalog
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.model_request_context import SummaryCandidateScope
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.epoch.prefix_epoch import (
+    EpochReason,
+    PendingPrefixEpochTransition,
+)
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.refs import ContextRef
@@ -285,6 +289,12 @@ def prepare_registered_context(
                     previous.session_id, previous.thread_id
                 ) != (session_id, thread_id)
                 items = owner._storage.checkpoints.committed_context_items(read_snapshot)
+                notice_acceptance, _notice_selection = owner._storage.executions.runtime_notice_acceptance(
+                    admission, connection=read_snapshot.connection,
+                )
+                excluded_notices = owner._storage.executions.runtime_notice_excluded_item_ids(
+                    admission, connection=read_snapshot.connection,
+                )
                 full_plan = owner._compose_committed_context_plan(
                     read_snapshot, plan_id=plan_id, tool_set=tool_set, committed_items=items,
                     predecessor=previous,
@@ -320,6 +330,20 @@ def prepare_registered_context(
                 )
                 bodies.update(retained_bodies)
             compile_plan = full_plan
+            transition = rebuild.transition if rebuild is not None else None
+            if notice_acceptance is not None and summary_candidate is None:
+                applied_ids = set() if previous is None or previous.seal_binding is None else {
+                    frame.item_ref.ref_id for frame in previous.seal_binding.prefix.state.frames
+                    if frame.item_ref.ref_type == "canonical_item"
+                }
+                if transition is not None:
+                    transition = replace(transition, notice_acceptance=notice_acceptance)
+                elif applied_ids & excluded_notices:
+                    transition = PendingPrefixEpochTransition(
+                        transition_id=f"epoch-notice:{notice_acceptance.acceptance_commit_id}",
+                        reason=EpochReason.RUNTIME_NOTICE_CONSUMED, turn_id=turn_id,
+                        notice_acceptance=notice_acceptance,
+                    )
             if summary_candidate is not None:
                 compile_plan = replace(full_plan, refs=tuple(
                     ref for ref in full_plan.refs if ref.ref_type != "canonical_item"
@@ -329,11 +353,12 @@ def prepare_registered_context(
                 compile_plan, () if summary_candidate is not None else items, batch, tool_set, overlay_bodies=overlay_bodies,
                 previous=None if summary_candidate is not None else previous,
                 initial_assembly=initial_assembly if summary_candidate is None else False,
-                transition=rebuild.transition if rebuild is not None else None,
+                transition=transition,
                 retained_source_assembly=None if summary_candidate is not None else retained,
                 retained_source_refs=frozenset() if summary_candidate is not None else retained_refs,
                 retained_source_bodies=retained_bodies,
                 provider_profile=f"{target_format}:{provider_version}", turn_id=turn_id,
+                notice_acceptance=notice_acceptance,
             )
             omitted = ()
             if summary_candidate is not None:

@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from app.domain.itemized.epoch.prefix_epoch import (
     PendingPrefixEpochTransition,
     PrefixEpochState,
+    RuntimeNoticeAcceptanceRef,
     SealedPrefixAssembly,
     append_items,
     initial_epoch_state,
@@ -55,12 +56,15 @@ class ContextSealPreparation:
     previous_assembly_id: str | None
     source_revisions: tuple[AppliedSourceRevision, ...] = ()
     transition: PendingPrefixEpochTransition | None = None
+    notice_acceptance: RuntimeNoticeAcceptanceRef | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.prefix_state, PrefixEpochState):
             raise ItemSchemaError("ContextSealPreparation.prefix_state 类型非法")
         if not isinstance(self.tool_set, ToolSetSnapshot):
             raise ItemSchemaError("ContextSealPreparation.tool_set 类型非法")
+        if self.notice_acceptance is not None and not isinstance(self.notice_acceptance, RuntimeNoticeAcceptanceRef):
+            raise ItemSchemaError("prepared notice acceptance 必须是 typed ref")
         if self.previous_assembly_id is not None:
             _non_empty_string(self.previous_assembly_id, "previous_assembly_id")
         if self.root is not None and (
@@ -89,6 +93,7 @@ class ContextSealPreparation:
             "previous_assembly_id": self.previous_assembly_id,
             "source_revisions": [asdict(source) for source in self.source_revisions],
             "transition": asdict(self.transition) if self.transition is not None else None,
+            "notice_acceptance": asdict(self.notice_acceptance) if self.notice_acceptance is not None else None,
         })
 
     def bind(self, assembly_id: str) -> ContextSealBinding:
@@ -103,6 +108,7 @@ class ContextSealPreparation:
             selection_revision=self.tool_set.selection_revision,
             previous_assembly_id=self.previous_assembly_id,
             source_revisions=self.source_revisions,
+            notice_acceptance=self.notice_acceptance,
         )
 
 
@@ -122,6 +128,7 @@ class ContextSealBinding:
     selection_revision: str
     previous_assembly_id: str | None
     source_revisions: tuple[AppliedSourceRevision, ...] = ()
+    notice_acceptance: RuntimeNoticeAcceptanceRef | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.prefix, SealedPrefixAssembly):
@@ -129,6 +136,10 @@ class ContextSealBinding:
         if not self.prefix.state.epoch_applied:
             raise ItemSchemaError("ContextSealBinding 只能绑定成功 seal 的 epoch")
         prefix = self.prefix
+        if self.notice_acceptance is not None and not isinstance(self.notice_acceptance, RuntimeNoticeAcceptanceRef):
+            raise ItemSchemaError("sealed notice acceptance 必须是 typed ref")
+        if prefix.consumed_transition is not None and prefix.consumed_transition.notice_acceptance != self.notice_acceptance:
+            raise ItemSchemaError("sealed transition 与 acceptance 引用不一致")
         # 对恢复帧重新执行同一领域校验，避免序列化绕过追加顺序和来源冲突。
         append_items(
             initial_epoch_state(

@@ -11,6 +11,7 @@ from app.domain.itemized.epoch.prefix_epoch import (
     EpochReason,
     PendingPrefixEpochTransition,
     ProviderProfileItemFrame,
+    RuntimeNoticeAcceptanceRef,
     append_items,
     initial_epoch_state,
     open_rebuild_epoch,
@@ -94,6 +95,7 @@ def compile_prefix_context(
     retained_source_assembly: ContextAssemblySnapshot | None = None,
     retained_source_refs: frozenset[tuple[str, str]] = frozenset(),
     retained_source_bodies: Mapping[str, object] | None = None,
+    notice_acceptance: RuntimeNoticeAcceptanceRef | None = None,
 ) -> tuple[ContextRequestPlan, ContextSealPreparation]:
     """同 epoch 精确继承已封存 prefix，只在真实边界重编 root。"""
     tool_ref = plan.tool_set_refs[0]
@@ -116,8 +118,9 @@ def compile_prefix_context(
     else:
         state = previous_binding.prefix.state
     rebuilding = not state.epoch_applied
-    if rebuilding and transition is None and previous_binding is not None and not initial_assembly:
-        # ToolSet hard rebase 只替换执行能力；已封存的 untracked 用户来源仍属于
+    source_rebuild = transition is not None and transition.reason in {EpochReason.REWIND, EpochReason.COMPACTION}
+    if rebuilding and not source_rebuild and previous_binding is not None and not initial_assembly:
+        # ToolSet/notice rebase 不修改 source 状态；已封存的 untracked 用户来源仍属于
         # 当前 owner 的有效上下文。复用真实 selection/frame，不重新观察来源。
         retained_source_assembly = previous
         retained_source_refs = frozenset(
@@ -126,6 +129,22 @@ def compile_prefix_context(
             if frame.role == "user" and frame.item_ref.ref_type == "source_item"
             and frame.item_ref.tracking_state == "not_tracked"
         )
+        if transition is not None and transition.reason == EpochReason.RUNTIME_NOTICE_CONSUMED:
+            retained_source_refs |= frozenset(
+                (frame.item_ref.ref_id, frame.item_ref.source_revision)
+                for frame in previous_binding.prefix.state.frames
+                if frame.role == "user" and frame.item_ref.ref_type == "source_item"
+            )
+            prior_roots = {(source.source_identity, source.revision) for source in (
+                () if previous_binding.root is None else previous_binding.root.sources
+            ) if source.included_reason != "toolset_policy"}
+            retained_source_refs |= frozenset(
+                (entry.ref.ref_id, source.source_revision)
+                for entry in previous.selection if entry.included
+                and (source := resolve_contribution_for_ref(entry.ref, previous.contributions)) is not None
+                and source.source_binding is not None and source.root_placement == "root_eligible"
+                and (source.source_binding.source_ref, source.source_revision) in prior_roots
+            )
     by_id = {ref.ref_id: ref for ref in plan.refs}
     by_contribution = {source.contribution_id: source for source in plan.contributions}
     selected_ids: list[str] = []
@@ -323,12 +342,13 @@ def compile_prefix_context(
                 source.expected_control_revision is not None
                 or source.revision != source.applied_revision
             ))
-            if transition is not None else tuple(AppliedSourceRevision(
+            if source_rebuild else tuple(AppliedSourceRevision(
                 delta.source_id, delta.revision,
                 f"source-seal:{delta.source_id}:{delta.revision}:{delta.kind}",
                 delta.previous_revision,
             ) for delta in batch.deltas)
         ),
         transition=transition,
+        notice_acceptance=notice_acceptance,
     )
     return selected_plan, preparation

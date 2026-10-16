@@ -95,7 +95,15 @@ def seal_inputs(registry_db):
             if reason is None:
                 messages.append(AIMessage(content="下一次请求前的真实回答", id="seal-input:" + name))
             checkpoint["channel_values"] = {"messages": messages}
-            checkpoint["channel_versions"] = {"messages": checkpoint["id"]}
+            if reason == EpochReason.COMPACTION:
+                checkpoint["channel_values"]["_summarization_event"] = {
+                    "cutoff_index": len(messages),
+                    "cutoff_message_id": messages[-1].id,
+                    "summary_message": HumanMessage(content="已完成对话的真实摘要", id="summary:" + name),
+                }
+            checkpoint["channel_versions"] = {
+                key: checkpoint["id"] for key in checkpoint["channel_values"]
+            }
             admission = saver.execution_admission(
                 session, thread_id=thread, execution_id=str(accepted["initial_execution_id"]),
             )
@@ -177,6 +185,11 @@ def seal_inputs(registry_db):
             previous_assembly_id=None if previous is None else previous.assembly_id,
             source_revisions=applied, transition=transition,
         )
+        admission = saver.execution_admission(session, thread_id=thread, execution_id=str(accepted["initial_execution_id"]))
+        with saver._storage.storage.read_connection(session, thread, "") as connection:
+            notice_ref, _selection = saver._storage.executions.runtime_notice_acceptance(admission, connection=connection)
+        preparation = replace(preparation, notice_acceptance=notice_ref,
+                              transition=None if transition is None else replace(transition, notice_acceptance=notice_ref))
         registered = saver.create_context_plan(session, replace(
             plan, plan_creation_idempotency_key="create:" + name,
         ))

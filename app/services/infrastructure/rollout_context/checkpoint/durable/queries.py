@@ -259,12 +259,7 @@ class RolloutCheckpointQueriesMixin:
         *,
         include_pending_notices: bool = True,
     ) -> tuple[CanonicalItemRecord, ...]:
-        """返回当前已提交 view 的 item；不从 JSONL 物理顺序推导上下文。
-
-        active view 是历史 selection 的权威来源。pending runtime notice 不属于
-        view membership，但可以作为下一次 assembly 的显式 pending reference，
-        因此在调用方选择 ``include_pending_notices`` 时按 catalog 顺序追加。
-        """
+        """canonical 历史加当前 internal 准入；已 applied 内部前缀只精确继承。"""
         view_id = self.active_view_id(snapshot)
         if view_id is None:
             # v2 初始化会先建立 active view，acceptance/stream sink 只会补充
@@ -274,46 +269,59 @@ class RolloutCheckpointQueriesMixin:
             raise RuntimeError(
                 "rollout active view 缺失，拒绝从 item_catalog 物理顺序推导 context"
             )
-        selected = snapshot.connection.execute(
+        selected_ids = self.execution_context_item_ids(
+            snapshot.connection, session_id=snapshot.session_id, thread_id=snapshot.thread_id,
+            checkpoint_ns=snapshot.checkpoint_ns, view_id=view_id,
+            include_pending_notices=include_pending_notices,
+        )
+        by_id = {item.item_id: item for item in self._storage.read_items(
+            snapshot.session_id, snapshot.thread_id, checkpoint_ns=snapshot.checkpoint_ns,
+            item_ids=selected_ids, snapshot=snapshot,
+        )}
+        return tuple(by_id[item_id] for item_id in selected_ids)
+
+    def execution_context_item_ids(
+        self, connection: sqlite3.Connection, *, session_id: str, thread_id: str,
+        checkpoint_ns: str, view_id: str, include_pending_notices: bool = True,
+    ) -> tuple[str, ...]:
+        """Provider 与 LangGraph 执行读取共用 canonical/current admission selection。"""
+        selected = connection.execute(
             "SELECT item_id, context_ordinal FROM context_view_items WHERE view_id=? "
-            "AND visible=1 AND context_selected=1 ORDER BY context_ordinal", (view_id,),
+            "AND visible=1 AND context_selected=1 AND source_kind='canonical' "
+            "ORDER BY context_ordinal", (view_id,),
         ).fetchall()
         if any(type(ordinal) is not int or ordinal < 0 for _item_id, ordinal in selected):
             raise RuntimeError("active context selection 缺少合法顺序")
-        items = list(self._storage.read_items(
-            snapshot.session_id, snapshot.thread_id, checkpoint_ns=snapshot.checkpoint_ns,
-            item_ids=[item_id for item_id, _ordinal in selected], snapshot=snapshot,
-        ))
-        by_id = {item.item_id: item for item in items}
-        items = [by_id[item_id] for item_id, _ordinal in selected]
         excluded = self.execution_context_excluded_item_ids(
-            snapshot.connection, session_id=snapshot.session_id, thread_id=snapshot.thread_id,
-            checkpoint_ns=snapshot.checkpoint_ns,
+            connection, session_id=session_id, thread_id=thread_id, checkpoint_ns=checkpoint_ns,
         )
-        items = [item for item in items if item.item_id not in excluded]
-        if not include_pending_notices:
-            return tuple(items)
-        connection = self._storage._snapshot_connection(snapshot)
-        pending_rows = connection.execute(
-            "SELECT item_id FROM item_catalog WHERE turn_scope = 'pending_next_turn' AND turn_id IS NULL ORDER BY item_sequence"
-        ).fetchall()
-        known = {item.item_id for item in items}
+        item_ids = [item_id for item_id, _ordinal in selected if item_id not in excluded]
+        admission = current_execution_admission(langgraph_thread_id=thread_id)
+        if not include_pending_notices or admission is None or admission.execution_origin != "internal":
+            return tuple(item_ids)
+        self._context.executions.execution_admission_cursor(
+            admission, connection=connection, checkpoint_ns=checkpoint_ns,
+        )
         pending_ids = []
-        for row in pending_rows:
-            item_id = strict_text(row[0], field="item_catalog.item_id")
+        # internal 不消费旧 notice。连续 internal 从唯一 applied assembly 携带
+        # 精确前缀，然后只追加当前 durable admission 自己的输入和输出。
+        previous = self._context.assemblies._latest_context_assembly_connection(
+            connection, session_id, thread_id, checkpoint_ns=checkpoint_ns,
+        )
+        if previous is not None and self._pending_context_epoch_row(connection, checkpoint_ns) is None:
+            pending_ids.extend(entry.ref.ref_id for entry in previous.selection
+                               if entry.included and entry.ref.ref_type == "canonical_item")
+        pending_ids.extend(row[0] for row in connection.execute(
+            "SELECT item_id FROM item_catalog WHERE execution_id=? ORDER BY item_sequence",
+            (admission.execution_id,),
+        ).fetchall())
+        known = set(item_ids)
+        for raw_id in pending_ids:
+            item_id = strict_text(raw_id, field="item_catalog.item_id")
             if item_id not in known and item_id not in excluded:
-                pending_ids.append(item_id)
-        if pending_ids:
-            items.extend(
-                self._storage.read_items(
-                    snapshot.session_id,
-                    snapshot.thread_id,
-                    checkpoint_ns=snapshot.checkpoint_ns,
-                    item_ids=pending_ids,
-                    snapshot=snapshot,
-                )
-            )
-        return tuple(items)
+                item_ids.append(item_id)
+                known.add(item_id)
+        return tuple(item_ids)
 
     def selected_context_message_sequences(
         self,

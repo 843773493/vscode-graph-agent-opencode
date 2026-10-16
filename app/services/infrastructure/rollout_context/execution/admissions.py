@@ -19,6 +19,9 @@ from app.domain.itemized.execution_admission import (
 )
 from app.domain.itemized.hashing import sha256_jcs, validate_hash_token
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.infrastructure.rollout_context.execution.runtime_notice_consumption import (
+    acceptance_metadata,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
     current_scope,
     require_historical_scope,
@@ -130,7 +133,12 @@ class RolloutExecutionAdmissionMixin:
             kind, subject, key = CommitKind.ACCEPTANCE.value, admission.turn_id, strict_text(
                 root[1], field="turn_acceptances.acceptance_idempotency_key",
             )
-            metadata = {"accepted_ingress_id": root[0], "turn_id": admission.turn_id}
+            frozen = acceptance_metadata(
+                connection, turn_id=admission.turn_id, ingress_id=root[0], acceptance_key=key,
+            )
+            if frozen is None:
+                raise RuntimeError("准入游标缺少冻结 acceptance commit")
+            metadata = frozen[0]
             item_ids = ((root[3], root[4], root[5]),)
             mode = "item_bearing"
         else:
@@ -212,7 +220,7 @@ class RolloutExecutionAdmissionMixin:
             "AND (execution.execution_id=turn.initial_execution_id OR turn.turn_id IS NULL))",
             (admission.session_id, admission.thread_id),
         ).fetchall()
-        excluded: set[str] = set()
+        excluded = set(self.runtime_notice_excluded_item_ids(admission, connection=connection))
         for row in rows:
             future = self._read_execution_admission_connection(
                 connection, session_id=admission.session_id, thread_id=admission.thread_id,

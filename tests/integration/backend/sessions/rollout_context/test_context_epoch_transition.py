@@ -1162,7 +1162,10 @@ def test_replay_before_as_new_turn_seals_real_admission_and_reuses_after_restart
     assert case.connection.execute(
         "SELECT root_input_item_id, initial_execution_id, replay_of_turn_id, status "
         "FROM turn_records WHERE turn_id=?", (replay["turn_id"],),
-    ).fetchone() == (replay["root_input_item_id"], admission.execution_id, source_turn, "active")
+    ).fetchone() == (replay["root_input_item_id"], admission.execution_id, source_turn, "open")
+    assert case.connection.execute(
+        "SELECT COUNT(*) FROM model_calls WHERE execution_id=?", (admission.execution_id,),
+    ).fetchone() == (0,)
     (new_root,) = case.saver._storage.storage.read_items(
         case.owner.session_id, case.owner.thread_id, item_ids=(str(replay["root_input_item_id"]),),
     )

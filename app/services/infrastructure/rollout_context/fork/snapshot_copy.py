@@ -111,7 +111,7 @@ def prepare_target_snapshot(
         connection.execute("DROP INDEX IF EXISTS context_epoch_pending_namespace")
         connection.execute(
             "CREATE UNIQUE INDEX context_epoch_pending_namespace ON context_epoch_transitions"
-            "(checkpoint_ns,target_view_id) WHERE status='pending'",
+            "(checkpoint_ns,target_view_id) WHERE status='pending' AND reason IN ('rewind','compaction')",
         )
         if current_scope(connection) != (snapshot.source_session_id, snapshot.source_thread_id):
             raise ValueError("source-mismatch: captured SQLite 与精确 source Thread 不一致")

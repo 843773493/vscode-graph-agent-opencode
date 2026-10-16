@@ -9,8 +9,10 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import HumanMessage
 
+from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_control_store import SessionControlStore
+from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.enums import PayloadKind
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
@@ -18,6 +20,13 @@ from app.domain.itemized.execution_admission import (
     internal_execution_request_preimage,
 )
 from app.domain.itemized.hashing import content_hash, sha256_jcs
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ItemProvenanceRelation,
+    ProjectionPartRef,
+)
+from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.domain.itemized.records import CanonicalItemRecord, InternalDisplayProvenance
 from app.domain.itemized.runtime_wakeup import RuntimeExecutionWakeup
 from app.prompting.factory import PromptSection, internal_message_factory
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
@@ -98,6 +107,23 @@ def test_pending_runtime_wakeups_keep_admission_order_after_restart(
                 connection=connection,
             ).commit_id for wakeup in accepted]
             assert cursors[0] < cursors[1]
+        for wakeup in accepted:
+            generation = restarted.claim_runtime_wakeup(wakeup)
+            restarted.finish_runtime_wakeup(wakeup, dispatch_generation=generation, receipt={"started": True})
+    with RolloutCheckpointSaver(sessions_dir=sessions_dir) as restarted:
+        # dispatch generation/CAS 与 Job started 不能释放 canonical unknown owner。
+        assert restarted.pending_runtime_wakeups(SESSION_ID, thread_id) == tuple(accepted)
+        cancelled = accepted[0]
+        restarted.converge_execution(
+            SESSION_ID, thread_id=thread_id, turn_id=None, execution_id=cancelled.execution_id,
+            outcome="cancelled", turn_status=None,
+        )
+    with RolloutCheckpointSaver(sessions_dir=sessions_dir) as restarted:
+        assert restarted.pending_runtime_wakeups(SESSION_ID, thread_id) == (accepted[1],)
+        assert restarted.runtime_wakeup_before_provider(
+            SESSION_ID, thread_id, execution_id=cancelled.execution_id, job_id=cancelled.job_id,
+            admission_idempotency_key=cancelled.admission_idempotency_key,
+        ) is None
 
 
 def test_internal_admission_creates_turnless_execution_and_reuses_exact_identity(
@@ -248,6 +274,73 @@ def test_internal_admission_rejects_key_replay_with_changed_preimage(
             intent=intent,
             message=_internal_notice(intent.message_id, control="任务失败"),
         )
+
+
+@pytest.mark.parametrize("late_shadow", [False, True])
+@pytest.mark.parametrize("shadow_matches_final", [False, True])
+def test_execution_output_excludes_typed_shadows_after_restart(
+    saver: RolloutCheckpointSaver, late_shadow: bool, shadow_matches_final: bool,
+) -> None:
+    thread_id = get_session_path_resolver(saver._storage.storage.sessions_dir).main_thread_id(SESSION_ID)
+    intent = InternalExecutionIntent(
+        message_id="msg-output", execution_id="execution-output",
+        admission_idempotency_key="generated-session:output",
+    )
+    content = "不同模型调用可以产生相同正文。"
+    items: list[CanonicalItemRecord] = []
+    for model_call_id in ("model-first", "model-second"):
+        checkpoint_id = f"checkpoint-{model_call_id}"
+        carriers = (
+            ("stream", ItemProjectionIdentity(
+                model_call_id=model_call_id, block_id=f"{model_call_id}:block:part-0", block_index=0,
+            ), ()),
+            ("checkpoint", ItemProjectionIdentity(
+                model_call_id=model_call_id, projection_message_id=checkpoint_id,
+            ), ()),
+            ("final", ItemProjectionIdentity(
+                model_call_id=model_call_id, projection_message_id=f"final-{model_call_id}",
+                content_part_refs=(ProjectionPartRef("part-0", 0, "text"),),
+            ), (ItemProvenanceRelation(
+                relation="replaces", target_kind="projection_message", target_id=checkpoint_id,
+                target_model_call_id=model_call_id,
+            ),)),
+        )
+        items.extend(CanonicalItemRecord.create(
+            item_sequence=1, item_id=f"item-{kind}-{model_call_id}",
+            semantic_kind="assistant_output", payload_kind="text", status="completed",
+            producer_ref={"producer_kind": "provider", "producer_id": model_call_id,
+                          "invocation_id": model_call_id},
+            payload=content if kind == "final" or shadow_matches_final else f"不得进入输出的 {kind} shadow",
+            created_at="2026-10-16T00:00:00+00:00", wire_role="assistant",
+            projection_identity=identity, provenance_relations=relations,
+        ) for kind, identity, relations in carriers)
+    if late_shadow:
+        # 最后落盘的 shadow 不能覆盖最终保留结果的来源引用。
+        items.append(items.pop(0))
+    expected = (f"{content}\n{content}", InternalDisplayProvenance(
+        source_session_id=SESSION_ID, source_thread_id=thread_id,
+        source_execution_id=intent.execution_id, source_item_id="item-final-model-second",
+    ))
+    sessions_dir = saver._storage.storage.sessions_dir
+    with saver:
+        admission = saver.admit_internal_execution(
+            SESSION_ID, thread_id=thread_id, job_id="job-output", intent=intent,
+            message=_internal_notice(intent.message_id),
+        )
+        with (
+            session_thread_owner_scope(MutationIntentOwner(SESSION_ID, thread_id), langgraph_thread_id=thread_id),
+            execution_admission_scope(admission, langgraph_thread_id=thread_id),
+        ):
+            saver.append_items(SESSION_ID, items, thread_id=thread_id)
+        assert saver.execution_output(SESSION_ID, thread_id, intent.execution_id) == expected
+        assert len(saver._storage.storage.read_items(
+            SESSION_ID, thread_id, item_ids=tuple(item.item_id for item in items),
+        )) == 6
+    with RolloutCheckpointSaver(sessions_dir=sessions_dir) as restarted:
+        assert restarted.execution_output(SESSION_ID, thread_id, intent.execution_id) == expected
+        assert restarted.execution_admission(
+            SESSION_ID, thread_id=thread_id, execution_id=intent.execution_id,
+        ) == admission
 
 
 def test_internal_execution_lost_converges_without_creating_a_turn(
