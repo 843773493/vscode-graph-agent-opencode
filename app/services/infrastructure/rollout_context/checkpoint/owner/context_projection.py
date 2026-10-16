@@ -74,6 +74,7 @@ class ContextProjectionOwnerMixin:
 
     def _validate_snapshot_sources(
         self, snapshot: ContextAssemblySnapshot, checkpoint_ns: str, *,
+        items: list[CanonicalItemRecord],
         prepared_details: tuple[PreparedDetail, ...] = (),
     ) -> None:
         """校验已选正文；摘要候选同时核对冻结的 canonical 来源。"""
@@ -85,12 +86,6 @@ class ContextProjectionOwnerMixin:
             if entry.ref.ref_type == "canonical_item" and (
                 entry.included or snapshot.selection_policy == "summary_candidate"
             )
-        )
-        items = self._storage.storage.read_items(
-            snapshot.session_id,
-            snapshot.thread_id,
-            checkpoint_ns=checkpoint_ns,
-            item_ids=tuple(entry.ref.ref_id for entry in entries),
         )
         by_id = {item.item_id: item for item in items}
         for entry in entries:

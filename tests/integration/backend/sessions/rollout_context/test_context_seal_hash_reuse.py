@@ -7,6 +7,9 @@ import pytest
 from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.request_plan import ContextRequestPlan
+from app.services.infrastructure.rollout_context.checkpoint.seal import (
+    assembly as assembly_seal,
+)
 from app.services.infrastructure.rollout_context.checkpoint.seal import lifecycle, retry
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
@@ -122,10 +125,10 @@ def test_prepare_reuses_only_current_draft_and_final_wire_plan_digest(
     original_input_hash = lifecycle.seal_input_hash
     original_plan_hash = ContextRequestPlan.plan_hash
     original_assembly = ContextPlanComposer.assembly
-    original_projection = _saver._project_context_projection
+    original_wire_hash = assembly_seal._context_request_hash_preimage
     original_seal = lifecycle.seal_snapshot
     phase = {"name": "prepare"}
-    manifests, consumed, composed, hashes = [], [], [], []
+    manifests, consumed, composed, hashes, finalized = [], [], [], [], []
 
     def manifest(plan):
         value = original_manifest(plan)
@@ -141,17 +144,23 @@ def test_prepare_reuses_only_current_draft_and_final_wire_plan_digest(
         return original_plan_hash(plan)
 
     def assembly(composer, *args, **kwargs):
+        previous = phase["name"]
         phase["name"] = "composer"
-        snapshot = original_assembly(composer, *args, **kwargs)
-        composed.append(snapshot)
-        phase["name"] = "final-wire"
-        return snapshot
+        try:
+            snapshot = original_assembly(composer, *args, **kwargs)
+            composed.append(snapshot)
+            return snapshot
+        finally:
+            phase["name"] = previous
 
-    def projection(*args, **kwargs):
-        phase["name"] = "projection"
-        result = original_projection(*args, **kwargs)
+    def wire_hash(plan, *args, **kwargs):
+        previous = phase["name"]
         phase["name"] = "final-wire"
-        return result
+        try:
+            finalized.append(plan.assembly_id)
+            return original_wire_hash(plan, *args, **kwargs)
+        finally:
+            phase["name"] = previous
 
     def seal(*args, **kwargs):
         phase["name"] = "seal"
@@ -163,13 +172,14 @@ def test_prepare_reuses_only_current_draft_and_final_wire_plan_digest(
     monkeypatch.setattr(lifecycle, "seal_input_hash", input_hash)
     monkeypatch.setattr(ContextRequestPlan, "plan_hash", plan_hash)
     monkeypatch.setattr(ContextPlanComposer, "assembly", assembly)
-    monkeypatch.setattr(_saver, "_project_context_projection", projection)
+    monkeypatch.setattr(assembly_seal, "_context_request_hash_preimage", wire_hash)
     monkeypatch.setattr(lifecycle, "seal_snapshot", seal)
     first = prepare("reuse-first", target_format=target_format)
     manager.observe("instruction:R01", "基础规则第二版", revision="instructions:2")
     second = prepare("reuse-second", target_format=target_format)
     assert len(manifests) == len(consumed) == len(composed) == 2
     assert all(value is consumed[index] for index, value in enumerate(manifests))
+    assert finalized == [first["assembly_id"], second["assembly_id"]]
     assert not [event for event in hashes if event[0] == "final-wire"]
     assert [event[2] for event in hashes if event[:2] == ("composer", "sealed")] == [
         first["assembly_id"], second["assembly_id"],

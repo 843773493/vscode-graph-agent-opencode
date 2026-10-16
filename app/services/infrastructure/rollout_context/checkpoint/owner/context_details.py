@@ -99,7 +99,7 @@ class ContextDetailOwnerMixin:
         """在 provider dispatch 前完成 snapshot 与可选详情的 sealed 提交。"""
         if (snapshot.session_id, snapshot.thread_id) != (session_id, thread_id):
             raise ValueError("source-mismatch: assembly seal owner 不一致")
-        return seal_snapshot(
+        receipt, _projection = seal_snapshot(
             self,
             session_id,
             thread_id,
@@ -114,9 +114,11 @@ class ContextDetailOwnerMixin:
             required_detail=required_detail,
             sensitive_detail=sensitive_detail,
             checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
+            wire=None,
             activation_binding=activation_binding,
             prepared_details=prepared_details,
-        ).commit_id
+        )
+        return receipt.commit_id
 
     def read_context_plan_detail(
         self,

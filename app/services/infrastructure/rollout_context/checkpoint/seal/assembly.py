@@ -3,12 +3,25 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Protocol
 
-from app.agents.providers.wire_finalize import WIRE_PROJECTOR_ID, WIRE_PROJECTOR_VERSION
+from langchain_core.messages import BaseMessage
+
+from app.agents.providers.wire_finalize import (
+    WIRE_PROJECTOR_ID,
+    WIRE_PROJECTOR_VERSION,
+    ChatWireProfile,
+    ResponsesWireProfile,
+    finalize_provider_wire,
+)
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.enums import SemanticKind
+from app.domain.itemized.hash.request_hash import _context_request_hash_preimage
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.serialization import normalize_wire_request
 from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextAssemblySealReceipt,
     ContextPlanRegistration,
@@ -30,6 +43,10 @@ from app.services.infrastructure.rollout_context.runtime.detail_store import (
 )
 from app.services.mapping.itemized.projection import build_projection_evidence
 
+ContextProjection = tuple[
+    list[BaseMessage], list[dict[str, object]], tuple[str, ...], dict[str, object] | None,
+]
+
 
 class ActivationSealBinding(Protocol):
     """assembly 事务内的 activation 绑定参与者（唯一 Saver 提供）。
@@ -49,33 +66,44 @@ class ActivationSealBinding(Protocol):
         selection_manifest_hash: str,
     ) -> None: ...
 
-def _seal_tool_pairings(
+
+def _project_wire_snapshot(
     owner,
     snapshot: ContextAssemblySnapshot,
+    sealed_plan: ContextRequestPlan,
+    items: list[CanonicalItemRecord],
+    prepared_details: tuple[PreparedDetail, ...],
+    wire_profile: ChatWireProfile | ResponsesWireProfile,
+    wire_params: Mapping[str, object],
     checkpoint_ns: str,
-) -> tuple[tuple[str, str], ...]:
-    """唯一 seal owner 边界的显式 tool 配对来源。
-
-    只从已提交 canonical items 的显式 tool_call_id 派生；assembly 不含
-    included tool 条目时不读取 storage，直接返回空配对。
-    """
-    entries = tuple(
-        entry
-        for entry in snapshot.selection
-        if entry.included
-        and entry.ref.ref_type == "canonical_item"
-        and entry.ref.semantic_kind
-        in (SemanticKind.TOOL_CALL.value, SemanticKind.TOOL_RESULT.value)
+) -> tuple[ContextAssemblySnapshot, ContextProjection]:
+    """在 authority 读取已关闭后生成本次 wire；不重读 canonical 正文。"""
+    bodies = owner._request_content_for_plan(
+        snapshot.session_id, snapshot.thread_id, checkpoint_ns, sealed_plan, None,
+        prepared_details=prepared_details,
     )
-    if not entries:
-        return ()
-    items = owner._storage.storage.read_items(
-        snapshot.session_id,
-        snapshot.thread_id,
-        checkpoint_ns=checkpoint_ns,
-        item_ids=tuple(entry.ref.ref_id for entry in entries),
+    projection = owner._project_context_projection(
+        snapshot.session_id, snapshot.thread_id, snapshot, items, bodies,
+        include_runtime_notices=True, include_summaries=True,
+        target_format=snapshot.target_format,
+        include_native=isinstance(wire_profile, ResponsesWireProfile),
     )
-    return canonical_tool_pairings(items)
+    messages, tools, _losses, native = projection
+    preimage = normalize_wire_request(finalize_provider_wire(
+        messages=messages, tools=tools, native_request=None if native is None else native["request"],
+        profile=wire_profile, params=wire_params,
+    ))
+    # snapshot 来自本次 composer，只替换 wire；冷读仍独立验证所有 hash。
+    snapshot = replace(
+        snapshot, request_hash_preimage=preimage,
+        request_hash=sha256_jcs(_context_request_hash_preimage(
+            sealed_plan, snapshot.provider_version,
+            projector_id=snapshot.projector_id, projector_version=snapshot.projector_version,
+            target_format=snapshot.target_format, wire_request=preimage,
+            recomputed_plan_hash=snapshot.plan_hash,
+        )),
+    )
+    return snapshot, projection
 
 
 def _activation_binding_callable(
@@ -119,10 +147,43 @@ def seal_snapshot(
     required_detail: bool,
     sensitive_detail: bool,
     checkpoint_ns: str,
+    wire: tuple[ChatWireProfile | ResponsesWireProfile, Mapping[str, object]] | None,
     activation_binding: ActivationSealBinding | None = None,
     prepared_details: tuple[PreparedDetail, ...] = (),
-) -> ContextAssemblySealReceipt:
-
+) -> tuple[ContextAssemblySealReceipt, ContextProjection | None]:
+    source_ids = tuple(
+        entry.ref.ref_id for entry in snapshot.selection
+        if entry.ref.ref_type == "canonical_item" and (
+            entry.included or snapshot.selection_policy == "summary_candidate"
+        )
+    )
+    tool_ids = tuple(
+        entry.ref.ref_id for entry in snapshot.selection
+        if entry.included and entry.ref.ref_type == "canonical_item"
+        and entry.ref.semantic_kind in (SemanticKind.TOOL_CALL.value, SemanticKind.TOOL_RESULT.value)
+    )
+    tool_id_set = frozenset(tool_ids)
+    items: list[CanonicalItemRecord] = []
+    projection = None
+    if wire is not None:
+        try:
+            sealed_plan = snapshot.as_sealed_plan()
+            if snapshot.seal_binding is None:
+                raise ValueError("source-mismatch: wire seal 缺少已绑定 prefix")
+            # wire 首次投影、tool preflight 与 source 验证只消费本次 fresh 读。
+            # read_items 返回前已关闭读 snapshot，后续 projector 不持有读锁。
+            items = owner._storage.storage.read_items(
+                session_id, thread_id, item_ids=source_ids, checkpoint_ns=checkpoint_ns,
+            )
+            snapshot, projection = _project_wire_snapshot(
+                owner, snapshot, sealed_plan, items, prepared_details, wire[0], wire[1], checkpoint_ns,
+            )
+        except BaseException as error:
+            record_failed_seal(
+                owner, session_id, thread_id, snapshot.plan_id,
+                seal_idempotency_key, checkpoint_ns, error,
+            )
+            raise
     if (snapshot.session_id, snapshot.thread_id) != (session_id, thread_id):
         raise ValueError("source-mismatch: assembly seal owner 不一致")
     if (snapshot.projector_id, snapshot.projector_version) == (
@@ -134,11 +195,16 @@ def seal_snapshot(
     # 已提交 assembly 的幂等重试不重新绑定 activation：旧 assembly 若在接入前
     # 封存，其 activation 事实必须由显式迁移 quarantine 表达，不得在重试时补造。
     bind_activation = _activation_binding_callable(activation_binding, snapshot)
+    if wire is None and tool_ids:
+        # 直接 snapshot seal 保留 tool-first：非工具正文错误不得抢先于 preflight。
+        items = owner._storage.storage.read_items(
+            session_id, thread_id, item_ids=tool_ids, checkpoint_ns=checkpoint_ns,
+        )
     # seal 与已提交 retry 都必须先通过唯一 preflight；冲突 fail closed，
     # 不进入字节比对或 detail 写入。
     validate_seal_dispatch_invariants(
         snapshot,
-        tool_pairings=_seal_tool_pairings(owner, snapshot, checkpoint_ns),
+        tool_pairings=canonical_tool_pairings(item for item in items if item.item_id in tool_id_set),
     )
     if (registered.session_id, registered.thread_id, registered.draft.plan_id) != (
         snapshot.session_id, snapshot.thread_id, snapshot.plan_id,
@@ -212,10 +278,17 @@ def seal_snapshot(
             seal_input_hash=seal_input_hash,
             detail_ref=detail_ref,
             checkpoint_ns=checkpoint_ns,
-        )
+        ), None
     try:
+        if wire is None:
+            # tool 读取后至此只有纯 preflight；同次局部值不重复解码。
+            # 空补集仍经过 fresh reader，保留原 source authority 边界。
+            items.extend(owner._storage.storage.read_items(
+                session_id, thread_id, checkpoint_ns=checkpoint_ns,
+                item_ids=tuple(item_id for item_id in source_ids if item_id not in tool_id_set),
+            ))
         owner._validate_snapshot_sources(
-            snapshot, checkpoint_ns, prepared_details=prepared_details,
+            snapshot, checkpoint_ns, items=items, prepared_details=prepared_details,
         )
         if required_detail and detail is None:
             raise DetailUnavailableError(
@@ -237,7 +310,7 @@ def seal_snapshot(
                 sensitive=sensitive_detail,
                 checkpoint_ns=checkpoint_ns,
             )
-        return owner._storage.assemblies.seal_context_assembly(
+        receipt = owner._storage.assemblies.seal_context_assembly(
             session_id,
             thread_id,
             snapshot,
@@ -249,6 +322,7 @@ def seal_snapshot(
             prepared_details=prepared_details + ((header,) if header is not None else ()),
             detail_store=owner._detail_store,
         )
+        return receipt, projection
     except BaseException as error:
         record_failed_seal(
             owner,

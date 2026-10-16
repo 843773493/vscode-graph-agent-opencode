@@ -3,22 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from uuid import uuid4
-
-from langchain_core.messages import BaseMessage
 
 from app.agents.providers.wire_finalize import (
     WIRE_PROJECTOR_ID,
     WIRE_PROJECTOR_VERSION,
     ChatWireProfile,
     ResponsesWireProfile,
-    finalize_provider_wire,
 )
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.seal_binding import ContextSealPreparation
-from app.domain.itemized.hash.request_hash import _context_request_hash_preimage
-from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.domain.itemized.serialization import normalize_wire_request
@@ -26,6 +21,7 @@ from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextPlanRegistration,
 )
 from app.services.infrastructure.rollout_context.checkpoint.seal.assembly import (
+    ContextProjection,
     seal_snapshot,
 )
 from app.services.infrastructure.rollout_context.checkpoint.seal.cleanup import (
@@ -44,7 +40,7 @@ class ContextPlanSealResult:
     """本次 seal 的提交结果；投影只随当前调用返回，不进入跨请求缓存。"""
 
     snapshot: ContextAssemblySnapshot
-    projection: tuple[list[BaseMessage], list[dict[str, object]], tuple[str, ...], dict[str, object] | None] | None
+    projection: ContextProjection | None
 
 
 def seal_registered_plan(
@@ -68,11 +64,13 @@ def seal_registered_plan(
     if (wire_profile is None) != (wire_params is None):
         raise ValueError("source-mismatch: wire profile/params 必须成对提供")
     wire_configuration = None
+    wire_projection = None
     if wire_profile is not None:
         if not isinstance(wire_profile, (ChatWireProfile, ResponsesWireProfile)):
             raise TypeError("source-mismatch: wire seal 需要纯值 profile")
         if not isinstance(wire_params, Mapping):
             raise TypeError("source-mismatch: wire seal 需要纯数据 params")
+        wire_projection = (wire_profile, wire_params)
         target_format = "responses" if isinstance(wire_profile, ResponsesWireProfile) else "chat_completions"
         if assembly_options["provider_version"] != wire_profile.identity() or assembly_options["target_format"] != target_format:
             raise ValueError("source-mismatch: wire profile 与 seal 声明不一致")
@@ -157,7 +155,6 @@ def seal_registered_plan(
                 activation_snapshot, checkpoint_ns=checkpoint_ns
             )
         assembly_id = f"assembly-{uuid4().hex}"
-        projection = None
         try:
             bound, prepared_details, detail_refs = owner._bind_request_detail_refs(
                 session_id,
@@ -184,45 +181,6 @@ def seal_registered_plan(
                 ),
                 **assembly_options,
             )
-            if wire_profile is not None:
-                sealed_plan = snapshot.as_sealed_plan()
-                if snapshot.seal_binding is None:
-                    raise ValueError("source-mismatch: wire seal 缺少已绑定 prefix")
-                item_ids = tuple(
-                    entry.ref.ref_id for entry in snapshot.selection
-                    if entry.ref.ref_type == "canonical_item" and (
-                        entry.included or snapshot.selection_policy == "summary_candidate"
-                    )
-                )
-                items = owner._storage.storage.read_items(
-                    session_id, thread_id, item_ids=item_ids, checkpoint_ns=checkpoint_ns,
-                )
-                bodies = owner._request_content_for_plan(
-                    session_id, thread_id, checkpoint_ns, sealed_plan, None,
-                    prepared_details=prepared_details,
-                )
-                projection = owner._project_context_projection(
-                    session_id, thread_id, snapshot, items, bodies,
-                    include_runtime_notices=True, include_summaries=True,
-                    target_format=snapshot.target_format,
-                    include_native=isinstance(wire_profile, ResponsesWireProfile),
-                )
-                messages, tools, _losses, native = projection
-                preimage = normalize_wire_request(finalize_provider_wire(
-                    messages=messages, tools=tools, native_request=None if native is None else native["request"],
-                    profile=wire_profile, params=wire_params,
-                ))
-                # digest 来自本函数刚完成的 composer；sealed_plan 的 hash scope
-                # 相同，仅 wire preimage 改变。冷读或外部 snapshot 不得复用此入口。
-                snapshot = replace(
-                    snapshot, request_hash_preimage=preimage,
-                    request_hash=sha256_jcs(_context_request_hash_preimage(
-                        sealed_plan, snapshot.provider_version,
-                        projector_id=snapshot.projector_id, projector_version=snapshot.projector_version,
-                        target_format=snapshot.target_format, wire_request=preimage,
-                        recomputed_plan_hash=snapshot.plan_hash,
-                    )),
-                )
         except BaseException as error:
             record_failed_seal(
                 owner,
@@ -234,7 +192,7 @@ def seal_registered_plan(
                 error,
             )
             raise
-        committed = seal_snapshot(
+        committed, projection = seal_snapshot(
             owner,
             session_id,
             thread_id,
@@ -243,6 +201,7 @@ def seal_registered_plan(
             seal_idempotency_key=seal_idempotency_key,
             seal_input_hash=input_hash,
             checkpoint_ns=checkpoint_ns,
+            wire=wire_projection,
             detail=None, required_detail=False, sensitive_detail=False,
             activation_binding=activation_binding,
             prepared_details=prepared_details,
