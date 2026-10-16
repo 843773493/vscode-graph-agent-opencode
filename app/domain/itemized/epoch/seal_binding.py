@@ -86,7 +86,7 @@ class ContextSealPreparation:
         """随机 assembly identity 分配前冻结完整准备 preimage。"""
         return sha256_jcs({
             "schema": "context-seal-preparation:v1",
-            "prefix_state": asdict(self.prefix_state),
+            "prefix_state": self.prefix_state.to_dict(),
             "root": self.root.frame_manifest() if self.root is not None else None,
             "tool_set_snapshot_id": self.tool_set.snapshot_id,
             "selection_revision": self.tool_set.selection_revision,

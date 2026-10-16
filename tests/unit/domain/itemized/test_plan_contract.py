@@ -635,6 +635,7 @@ def test_assembly_snapshot_does_not_persist_unselected_tool_definitions(
     with_selected_tool = replace(
         with_unselected_tool,
         selection=(selected,),
+        tool_snapshot=tool_ref.tools,
     )
     assert with_selected_tool.to_dict()["tool_snapshot"] == [
         {"type": "function", "function": {"name": "secret_tool"}}

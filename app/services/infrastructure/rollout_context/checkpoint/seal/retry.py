@@ -22,7 +22,7 @@ def require_key(value: str, *, field: str) -> str:
 
 
 def seal_input_hash(
-    draft: ContextRequestPlan,
+    registered_manifest: Mapping[str, object],
     checkpoint_ns: str,
     assembly_options: Mapping[str, object],
     request_input_hash: str | None,
@@ -31,11 +31,12 @@ def seal_input_hash(
     wire_configuration: Mapping[str, object] | None,
     context_preparation_hash: str | None = None,
 ) -> str:
+    """仅消费本次核验过的 draft manifest，不重新投影或跨调用缓存。"""
     preimage = {
         "schema": "saver-context-seal-input:v2",
-        "session_id": draft.session_id,
+        "session_id": registered_manifest["session_id"],
         "checkpoint_ns": checkpoint_ns,
-        "draft_manifest": draft_manifest(draft),
+        "draft_manifest": registered_manifest,
         "assembly_options": {
             **assembly_options,
             "omitted_ref_ids": sorted(assembly_options["omitted_ref_ids"]),
@@ -57,7 +58,7 @@ def require_registered_draft(
     checkpoint_ns: str,
     *,
     registered: ContextPlanRegistration | None = None,
-) -> ContextPlanRegistration:
+) -> tuple[ContextPlanRegistration, dict[str, object]]:
     owner._require_context_plan_owner(session_id, thread_id, plan)
     if plan.plan_state != "unsealed" or plan.assembly_id is not None:
         raise ValueError("plan-order-integrity: seal 输入必须是已注册 unsealed plan")
@@ -72,11 +73,16 @@ def require_registered_draft(
         session_id, thread_id, plan.plan_id,
     ):
         raise ValueError("source-mismatch: seal registration owner/plan 不一致")
-    if draft_manifest(plan) != draft_manifest(registered.draft):
+    # 同对象也先完整投影，保留 creation key 与规范 JSON 的首次校验。
+    input_manifest = draft_manifest(plan)
+    registered_manifest = (
+        input_manifest if plan is registered.draft else draft_manifest(registered.draft)
+    )
+    if input_manifest != registered_manifest:
         raise ValueError(
             "assembly-idempotency-conflict: seal 输入与当前注册 draft 不一致"
         )
-    return registered
+    return registered, registered_manifest
 
 
 def committed_retry(

@@ -44,7 +44,10 @@ def _context_request_hash_preimage(
     wire_request: object | None,
     recomputed_plan_hash: str | None = None,
 ) -> dict[str, object]:
-    """只允许复用同次校验对当前 plan 刚重算的摘要；公开入口自行重算。"""
+    """仅复用同次组装或校验中，对相同 hash scope 刚计算的摘要。
+
+    不得信任冷读或外部 snapshot 携带的摘要；公开入口始终自行重算。
+    """
     for name, value in (
         ("provider", provider),
         ("projector_id", projector_id),

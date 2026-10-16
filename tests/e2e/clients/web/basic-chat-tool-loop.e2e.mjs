@@ -26,8 +26,34 @@ const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefi
 const focusedScenarios = (process.env.BOXTEAM_E2E_SECTION8_FOCUS ?? "").split(",").map((name) => name.trim()).filter(Boolean);
 const TRANSCRIPT_NAVIGATION_TIMEOUT_MS = 60_000;
 const VIRTUOSO_AT_BOTTOM_THRESHOLD_PX = 4;
+const HISTORY_TIMING_EVENT_LIMIT = 32;
 // 生产 residency worker 每 60 秒扫描；后台卸载观察统一覆盖一个扫描周期。
 const residencyScanObservationTimeoutMs = 70_000;
+
+function recordHistoryTiming(timing, phase, startedAt, outcome, details = {}) {
+  if (!timing) return;
+  recordHistoryDuration(timing, phase, performance.now() - startedAt, outcome, details);
+}
+
+function recordHistoryDuration(timing, phase, durationMs, outcome, details = {}) {
+  if (!timing || timing.events.length >= HISTORY_TIMING_EVENT_LIMIT) return;
+  timing.events.push({ phase, duration_ms: Number(durationMs.toFixed(3)), outcome, ...details });
+}
+
+async function measureHistoryPhase(timing, phase, operation, details = {}) {
+  if (!timing) return operation();
+  const startedAt = performance.now();
+  let outcome = "completed";
+  try {
+    return await operation();
+  } catch (error) {
+    outcome = "failed";
+    throw error;
+  } finally {
+    recordHistoryTiming(timing, phase, startedAt, outcome,
+      typeof details === "function" ? details() : details);
+  }
+}
 
 async function localToken(page) {
   return page.evaluate(async () => {
@@ -39,33 +65,53 @@ async function localToken(page) {
   });
 }
 
-async function api(page, pathname, init = {}, expectedStatus) {
+async function api(page, pathname, init = {}, expectedStatus, timing = null) {
   const token = await localToken(page);
-  return page.evaluate(
-    async ({ pathname: path, init: requestInit, token: localTokenValue, expectedStatusValue }) => {
-      const headers = new Headers(requestInit.headers ?? {});
-      headers.set("X-Local-Token", localTokenValue);
-      const response = await fetch(path, {
-        ...requestInit,
-        headers,
-        credentials: "include",
-      });
-      const body = await response.text();
-      const statusMatches = expectedStatusValue === undefined ? response.ok : response.status === expectedStatusValue;
-      if (!statusMatches) throw new Error(`API ${response.status}: ${body}`);
-      const payload = body ? JSON.parse(body) : null;
-      const requestId = response.headers.get("X-Request-ID");
-      if (!requestId || payload?.request_id && payload.request_id !== requestId) throw new Error(`API 请求身份不一致: ${path}`);
-      return payload;
-    },
-    { pathname, init, token, expectedStatusValue: expectedStatus },
-  );
+  const requestStartedAt = timing ? performance.now() : null;
+  let value;
+  try {
+    value = await page.evaluate(
+      async ({ pathname: path, init: requestInit, token: localTokenValue, expectedStatusValue, collectTiming }) => {
+        const headers = new Headers(requestInit.headers ?? {});
+        headers.set("X-Local-Token", localTokenValue);
+        const requestStartedAt = collectTiming ? performance.now() : null;
+        const response = await fetch(path, {
+          ...requestInit,
+          headers,
+          credentials: "include",
+        });
+        const body = await response.text();
+        const statusMatches = expectedStatusValue === undefined ? response.ok : response.status === expectedStatusValue;
+        if (!statusMatches) throw new Error(`API ${response.status}: ${body}`);
+        const payload = body ? JSON.parse(body) : null;
+        const requestToBodyParseMs = collectTiming ? performance.now() - requestStartedAt : null;
+        const responseBodyUtf8Bytes = collectTiming ? new TextEncoder().encode(body).byteLength : null;
+        const requestId = response.headers.get("X-Request-ID");
+        if (!requestId || payload?.request_id && payload.request_id !== requestId) throw new Error(`API 请求身份不一致: ${path}`);
+        return collectTiming ? { payload, requestToBodyParseMs, responseBodyUtf8Bytes } : payload;
+      },
+      { pathname, init, token, expectedStatusValue: expectedStatus, collectTiming: Boolean(timing) },
+    );
+  } catch (error) {
+    if (timing) {
+      timing.requestToBodyParseMs = performance.now() - requestStartedAt;
+      timing.outcome = "failed";
+    }
+    throw error;
+  }
+  if (timing) {
+    timing.requestToBodyParseMs = value.requestToBodyParseMs;
+    timing.responseBodyUtf8Bytes = value.responseBodyUtf8Bytes;
+    timing.outcome = "completed";
+    return value.payload;
+  }
+  return value;
 }
 
-async function ownerApi(owner, pathname, init = {}, expectedStatus) {
+async function ownerApi(owner, pathname, init = {}, expectedStatus, timing = null) {
   return api(owner.page, pathname, {
     ...init, headers: { ...init.headers, "X-BoxTeam-Workspace-Id": owner.gatewayWorkspaceId },
-  }, expectedStatus);
+  }, expectedStatus, timing);
 }
 
 async function ownerApiResponse(owner, pathname, init = {}) {
@@ -850,29 +896,54 @@ async function assertCurrentInternalExecutionJobs(executions, owner) {
   }
 }
 
-async function loadThreadHistory(owner, options = {}) {
-  const value = await ownerApi(owner, `/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/history`, {
-    method: "POST", headers: { "Content-Type": "application/json", "X-BoxTeam-Workspace-Id": owner.gatewayWorkspaceId },
-    body: JSON.stringify({ direction: "tail", turns: 256, include: HISTORY_INCLUDE, ...options }),
-  });
-  assert.equal(value.data.thread_id, owner.threadId);
-  assert.ok(value.data.items.every((turn) => turn.session_id === owner.sessionId));
-  for (const turn of value.data.items) {
-    canonicalUuid7(turn.turn_id, "turn");
-    assert.deepEqual([turn.source_view_id, turn.source_view_revision],
-      [value.data.source_view_id, value.data.source_view_revision], "Turn 坐标必须对应本页实际读取快照");
-    assert.equal(typeof turn.job_id, "string");
-    assert.ok(turn.job_id.length > 0);
-    assert.notEqual(turn.turn_id, turn.job_id);
-    assert.ok(turn.items.every((item) => item.session_id === owner.sessionId && item.job_id === turn.job_id));
+async function loadThreadHistory(owner, options = {}, timing = null) {
+  const requestTiming = timing ? {} : null;
+  const requestStartedAt = timing ? performance.now() : null;
+  let requestOutcome = "completed";
+  try {
+    const value = await ownerApi(owner, `/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/history`, {
+      method: "POST", headers: { "Content-Type": "application/json", "X-BoxTeam-Workspace-Id": owner.gatewayWorkspaceId },
+      body: JSON.stringify({ direction: "tail", turns: 256, include: HISTORY_INCLUDE, ...options }),
+    }, undefined, requestTiming);
+    return await validateThreadHistoryPage(owner, value, timing);
+  } catch (error) {
+    requestOutcome = "failed";
+    throw error;
+  } finally {
+    if (timing) recordHistoryDuration(timing, "history.http_response_body_parse",
+      requestTiming.requestToBodyParseMs ?? performance.now() - requestStartedAt, requestTiming.outcome ?? requestOutcome,
+      requestTiming.responseBodyUtf8Bytes === undefined ? {} : { responseBodyUtf8Bytes: requestTiming.responseBodyUtf8Bytes });
   }
-  const rootOrder = value.data.items.map((turn) => turn.root_logical_item_ordinal);
-  assert.deepEqual(rootOrder, [...rootOrder].sort((left, right) => left - right));
-  assert.equal(new Set(value.data.internal_executions.map((execution) => execution.execution_id)).size, value.data.internal_executions.length);
-  for (const execution of value.data.internal_executions) assertInternalExecutionOwner(execution, owner);
-  await assertCurrentInternalExecutionJobs(value.data.internal_executions, owner);
-  assert.equal(new Set(value.data.items.map((turn) => turn.turn_id)).size, value.data.items.length);
-  return value.data;
+}
+
+async function validateThreadHistoryPage(owner, value, timing) {
+  const validationStartedAt = performance.now();
+  let validationOutcome = "completed";
+  try {
+    assert.equal(value.data.thread_id, owner.threadId);
+    assert.ok(value.data.items.every((turn) => turn.session_id === owner.sessionId));
+    for (const turn of value.data.items) {
+      canonicalUuid7(turn.turn_id, "turn");
+      assert.deepEqual([turn.source_view_id, turn.source_view_revision],
+        [value.data.source_view_id, value.data.source_view_revision], "Turn 坐标必须对应本页实际读取快照");
+      assert.equal(typeof turn.job_id, "string");
+      assert.ok(turn.job_id.length > 0);
+      assert.notEqual(turn.turn_id, turn.job_id);
+      assert.ok(turn.items.every((item) => item.session_id === owner.sessionId && item.job_id === turn.job_id));
+    }
+    const rootOrder = value.data.items.map((turn) => turn.root_logical_item_ordinal);
+    assert.deepEqual(rootOrder, [...rootOrder].sort((left, right) => left - right));
+    assert.equal(new Set(value.data.internal_executions.map((execution) => execution.execution_id)).size, value.data.internal_executions.length);
+    for (const execution of value.data.internal_executions) assertInternalExecutionOwner(execution, owner);
+    await assertCurrentInternalExecutionJobs(value.data.internal_executions, owner);
+    assert.equal(new Set(value.data.items.map((turn) => turn.turn_id)).size, value.data.items.length);
+    return value.data;
+  } catch (error) {
+    validationOutcome = "failed";
+    throw error;
+  } finally {
+    recordHistoryTiming(timing, "history.single_page_validation", validationStartedAt, validationOutcome);
+  }
 }
 
 function mergeThreadHistoryPages(pages) {
@@ -906,8 +977,8 @@ function mergeThreadHistoryPages(pages) {
     internal_executions: [...internals.values()], has_more: false, next_cursor: null };
 }
 
-async function loadCompleteThreadHistory(owner, options = {}) {
-  const pages = [await loadThreadHistory(owner, options)];
+async function loadCompleteThreadHistory(owner, options = {}, timing = null) {
+  const pages = [await loadThreadHistory(owner, options, timing)];
   const direction = ["head", "after"].includes(options.direction) ? "after" : "before";
   const continuationOptions = { ...options };
   delete continuationOptions.anchor_turn_id;
@@ -916,9 +987,9 @@ async function loadCompleteThreadHistory(owner, options = {}) {
   while (pages.at(-1).has_more) {
     const page = pages.at(-1);
     assert.equal(typeof page.next_cursor, "string");
-    pages.push(await loadThreadHistory(owner, { ...continuationOptions, direction, cursor: page.next_cursor }));
+    pages.push(await loadThreadHistory(owner, { ...continuationOptions, direction, cursor: page.next_cursor }, timing));
   }
-  return mergeThreadHistoryPages(pages);
+  return measureHistoryPhase(timing, "history.multi_page_merge_hydration", async () => mergeThreadHistoryPages(pages));
 }
 
 async function openOwner(owner) {
@@ -1382,7 +1453,7 @@ async function assertTranscriptDom(owner, history, stage) {
   }
 }
 
-async function assertTurnDom(owner, turn, stage, history) {
+async function assertTurnDom(owner, turn, stage, history, timing = null) {
   let phase = "transcript navigation";
   let expected = [];
   let latestActual = null;
@@ -1394,7 +1465,9 @@ async function assertTurnDom(owner, turn, stage, history) {
       const transcriptItems = expectedTranscript(history);
       const index = transcriptItems.findIndex((entry) => entry.turnId === turn.turn_id);
       phase = "reconfirm transcript item identity";
-      const { observed } = await visitTranscriptIndex(owner, index, transcriptItems[index]);
+      const locateTarget = stage === "live" && timing?.targetTurnId === turn.turn_id ? timing : null;
+      const { observed } = await measureHistoryPhase(locateTarget, `transcript.old_turn_virtual_location.${stage}`,
+        () => visitTranscriptIndex(owner, index, transcriptItems[index]));
       assert.deepEqual(observed, { kind: "turn", turnId: turn.turn_id }, `${stage}: 回看 Turn 必须核对同一身份`);
     }
 
@@ -1431,10 +1504,18 @@ async function assertTurnDom(owner, turn, stage, history) {
     assert.equal(await activity.getAttribute("data-status-kind"), boundary?.kind ?? null, `${stage}: 终态提示必须对应后端 Turn/tool 事实`);
     assert.equal(await activity.locator(".chat-thinking-preview").innerText(), expectedActivityPreview(turn.activity_stats.duration_ms, turn.activity_stats.item_count, boundary));
     phase = "canonical response part count";
-    await waitUntil(async () => {
+    const countTarget = stage === "live" && timing?.targetTurnId === turn.turn_id ? timing : null;
+    const pageDomNodeCount = countTarget
+      ? await owner.page.evaluate(() => document.querySelectorAll("*").length)
+      : null;
+    await measureHistoryPhase(countTarget, `transcript.canonical_response_part_count.${stage}`, () => waitUntil(async () => {
       latestActual = await article.locator("[data-response-sources]").evaluateAll((elements) => elements.flatMap((element) => JSON.parse(element.getAttribute("data-response-sources"))));
       return latestActual.length === expected.length;
-    }, `${stage} 全部 canonical response part 展示`);
+    }, `${stage} 全部 canonical response part 展示`), () => ({
+      expectedPartCount: expected.length,
+      livePartCount: latestActual?.length ?? null,
+      pageDomNodeCount,
+    }));
     phase = "canonical response part identity/order/elapsed";
     assert.deepEqual(latestActual.map(partCoordinate), expected, `${stage}: actual DOM 的 Item identity/order/elapsed 与 history 不一致`);
     return { turnId: turn.turn_id, rootOrdinal: turn.root_logical_item_ordinal, activity: turn.activity_stats, parts: expected,
@@ -1677,11 +1758,11 @@ async function assertInternalHistory(owner, history, stage) {
   return facts;
 }
 
-async function verifyOwnerTurns(owner, { reload = true } = {}) {
-  const page = await loadCompleteThreadHistory(owner);
+async function verifyOwnerTurns(owner, { reload = true, historyTiming = null } = {}) {
+  const page = await loadCompleteThreadHistory(owner, {}, historyTiming);
   await assertTranscriptDom(owner, page, "live");
   const facts = [];
-  for (const turn of page.items) facts.push(await assertTurnDom(owner, turn, "live", page));
+  for (const turn of page.items) facts.push(await assertTurnDom(owner, turn, "live", page, historyTiming));
   const internal = await assertInternalHistory(owner, page, "live");
   // 必须在测试驱动主动刷新之前证明当前页面已完成真实历史校准。
   historyLiveProofs.push({ pageId: owner.page.diagnosticId, documentId: owner.page.diagnosticDocumentId,
@@ -1733,6 +1814,7 @@ async function completeOwnerTurn(owner, prompt, responses, attachments = [], {
   expectedJobStatus = "completed",
   expectedExecutionOutcome = "completed",
   expectedTurnStatus = "completed",
+  historyTiming = null,
 } = {}) {
   const calls = await planChatCalls(owner.sessionId, owner.threadId, responses);
   await openOwner(owner);
@@ -1742,7 +1824,7 @@ async function completeOwnerTurn(owner, prompt, responses, attachments = [], {
   const executions = await waitForPlannedExecutions(owner, calls, expectedExecutionOutcome);
   const turn = await assertAcceptedTurn(owner, sent);
   assert.equal(turn.status, expectedTurnStatus);
-  const evidence = await verifyOwnerTurns(owner);
+  const evidence = await verifyOwnerTurns(owner, { historyTiming });
   return { calls, sent, job, executions, turn, evidence };
 }
 
@@ -5171,6 +5253,38 @@ async function runCopyAttachmentFocus(surface) {
   return { lifecycle, missing };
 }
 
+async function runOptionalSeedRevisit(surface) {
+  const owners = [];
+  const input = await createAttachmentSource(surface, "optional seed history revisit", owners, { prefixTurns: 4 });
+  const seeds = [];
+  let measurement = null;
+  for (let index = 0; index < 3; index += 1) {
+    let historyTiming = null;
+    if (index === 2) {
+      const target = seeds[0].turn;
+      assert.equal(target.ordinal, 6, "optional-seed-0 必须是第六轮回访目标");
+      assert.equal(seeds[1].turn.ordinal, 7, "第三个 seed 前必须已完成第七轮");
+      historyTiming = { targetTurnId: target.turn_id, events: [] };
+      measurement = {
+        owner: { sessionId: input.source.sessionId, threadId: input.source.threadId, workspaceId: input.source.gatewayWorkspaceId },
+        targetTurnId: target.turn_id,
+        targetRootLogicalItemOrdinal: target.root_logical_item_ordinal,
+        historyTiming,
+      };
+      // 先挂到结果上，第三轮 live/reload 校准失败时也保留已采集计时。
+      result.section8.optional_seed_revisit = measurement;
+    }
+    const seed = await completeOwnerTurn(input.source,
+      `附件后的上下文素材 ${index}：${"这段详细过程必须由真实压缩归纳。".repeat(160)}`, [
+        toolResponse(`optional-seed-${index}`, "read_file", { path: "README.md" }),
+        finalResponse(`optional-seed-final-${index}`, `第 ${index} 轮素材已核对。${"详细过程只作为旧上下文。".repeat(160)}`),
+      ], [], { historyTiming });
+    seeds.push(seed);
+    if (index === 2) assert.equal(seed.turn.ordinal, 8, "第三个 seed 必须完成第八轮");
+  }
+  return { ...measurement, source: input.source.sessionId, prefix: input.prefix, material: input.material, seeds };
+}
+
 async function runRealCompaction(surface) {
   const tools = (await ownerApi(surface, "/api/v1/tools?agent_id=default")).data;
   const compact = tools.find((tool) => tool.name === "compact_conversation");
@@ -7174,6 +7288,7 @@ async function runSection8Product(browser, primaryPage) {
       fork_child_ui: () => runDefaultChildForkUi(surfaces.a),
       forks: () => runPublicForks(surfaces),
       copy_attachments: () => runCopyAttachmentFocus(surfaces.a),
+      optional_seed_revisit: () => runOptionalSeedRevisit(surfaces.a),
       compaction: () => runRealCompaction(surfaces.a),
       communication_recovery: () => runCommunicationRecovery(surfaces),
       read_recovery: () => facts.weekly?.frozenRead ?? runReadRecovery(surfaces),
@@ -7188,7 +7303,7 @@ async function runSection8Product(browser, primaryPage) {
       read_cursor_expiry: () => runReadCursorExpiry(surfaces, facts.read_recovery),
     };
     const requested = focusedScenarios.length ? focusedScenarios
-      : Object.keys(scenarios).filter((name) => name !== "copy_attachments");
+      : Object.keys(scenarios).filter((name) => !["copy_attachments", "optional_seed_revisit"].includes(name));
     if (requested.includes("read_cursor_expiry")) {
       assert.ok(requested.includes("read_recovery"), "expiry focus 必须包含同轮 read_recovery");
       assert.equal(requested.at(-1), "read_cursor_expiry", "wait 时钟不回拨，cursor expiry 必须在所有场景之后");

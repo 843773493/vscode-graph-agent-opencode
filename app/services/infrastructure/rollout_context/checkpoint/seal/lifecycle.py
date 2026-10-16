@@ -17,7 +17,8 @@ from app.agents.providers.wire_finalize import (
 )
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.seal_binding import ContextSealPreparation
-from app.domain.itemized.hash.request_hash import context_request_hash
+from app.domain.itemized.hash.request_hash import _context_request_hash_preimage
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.domain.itemized.serialization import normalize_wire_request
@@ -94,7 +95,7 @@ def seal_registered_plan(
             "projector_version": WIRE_PROJECTOR_VERSION,
         }
     with owner._lock:
-        registered = require_registered_draft(
+        registered, registered_manifest = require_registered_draft(
             owner, session_id, thread_id, plan, checkpoint_ns,
             registered=registered,
         )
@@ -109,7 +110,7 @@ def seal_registered_plan(
             f"{activation_snapshot.activation_provenance_hash}"
         )
         input_hash = seal_input_hash(
-            draft,
+            registered_manifest,
             checkpoint_ns,
             assembly_options,
             request_input_hash,
@@ -211,13 +212,16 @@ def seal_registered_plan(
                     messages=messages, tools=tools, native_request=None if native is None else native["request"],
                     profile=wire_profile, params=wire_params,
                 ))
+                # digest 来自本函数刚完成的 composer；sealed_plan 的 hash scope
+                # 相同，仅 wire preimage 改变。冷读或外部 snapshot 不得复用此入口。
                 snapshot = replace(
                     snapshot, request_hash_preimage=preimage,
-                    request_hash=context_request_hash(
+                    request_hash=sha256_jcs(_context_request_hash_preimage(
                         sealed_plan, snapshot.provider_version,
                         projector_id=snapshot.projector_id, projector_version=snapshot.projector_version,
                         target_format=snapshot.target_format, wire_request=preimage,
-                    ),
+                        recomputed_plan_hash=snapshot.plan_hash,
+                    )),
                 )
         except BaseException as error:
             record_failed_seal(

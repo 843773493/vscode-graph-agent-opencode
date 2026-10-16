@@ -21,7 +21,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 
 from app.domain.itemized.enums import PayloadKind
@@ -266,6 +266,7 @@ class ProviderProfileItemFrame:
     payload_kind: str
     content: object
     item_ref: AppendedItemRef
+    _canonical_bytes: bytes = field(init=False, repr=False, compare=False)
 
     def __getattribute__(self, name: str) -> object:
         value = object.__getattribute__(self, name)
@@ -282,6 +283,8 @@ class ProviderProfileItemFrame:
         if not isinstance(self.item_ref, AppendedItemRef):
             raise ItemSchemaError("ProviderProfileItemFrame.item_ref 必须是 AppendedItemRef")
         _ensure_json_value(self.content, "ProviderProfileItemFrame.content")
+        # 正文已隔离且 frame 不可变；同一 frame 的 JCS v1 编码只生成一次。
+        object.__setattr__(self, "_canonical_bytes", canonical_json_bytes(self.frame_manifest()))
 
     def frame_manifest(self) -> dict[str, object]:
         return {
@@ -293,10 +296,14 @@ class ProviderProfileItemFrame:
         }
 
     def frame_bytes(self) -> bytes:
-        return canonical_json_bytes(self.frame_manifest())
+        return self._canonical_bytes
 
     def frame_hash(self) -> str:
-        return sha256_jcs(self.frame_manifest())
+        return "sha256:jcs:v1:" + hashlib.sha256(self._canonical_bytes).hexdigest()
+
+    def to_dict(self) -> dict[str, object]:
+        """持久 frame 只包含原始合同字段，不暴露派生 JCS 字节。"""
+        return {**self.frame_manifest(), "item_ref": asdict(self.item_ref)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,6 +351,22 @@ class PrefixEpochState:
             raise EpochContractError("PrefixEpochState.parent 必须是 ParentAssemblyRef")
         if self.parent is not None and self.parent.epoch_ordinal != self.epoch.ordinal:
             raise EpochContractError("parent assembly 必须属于当前 prefix epoch")
+
+    def to_dict(self) -> dict[str, object]:
+        """prepare hash 与封存 DTO 共用同一显式状态投影。"""
+        return {
+            "epoch": {
+                "ordinal": self.epoch.ordinal,
+                "reason": self.epoch.reason.value,
+                "turn_id": self.epoch.turn_id,
+            },
+            "provider_profile": self.provider_profile,
+            "tool_compatibility_key": self.tool_compatibility_key,
+            "epoch_applied": self.epoch_applied,
+            "frames": tuple(frame.to_dict() for frame in self.frames),
+            "appended_refs": tuple(asdict(ref) for ref in self.appended_refs),
+            "parent": asdict(self.parent) if self.parent is not None else None,
+        }
 
     @property
     def prefix_byte_length(self) -> int:

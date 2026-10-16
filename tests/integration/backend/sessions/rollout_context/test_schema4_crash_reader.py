@@ -16,6 +16,9 @@ import pytest
 from app.core.identifier import create_uuid_hex
 from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.request_plan import ContextRequestPlan
+from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
+    draft_manifest,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -229,7 +232,7 @@ def test_crash_recovery_preserves_commit_with_independent_idle_reader(
         "loss": (),
     }
     input_hash = seal_input_hash(
-        plan, "", assembly_options, None, wire_configuration=None,
+        draft_manifest(plan), "", assembly_options, None, wire_configuration=None,
     )
     evidence["after_create"] = _evidence(case)
     if not keep_reader:

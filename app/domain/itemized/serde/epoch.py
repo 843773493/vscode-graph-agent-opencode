@@ -73,15 +73,32 @@ def _notice_acceptance(value: object) -> RuntimeNoticeAcceptanceRef | None:
 
 def context_seal_binding_to_dict(binding: ContextSealBinding) -> dict[str, object]:
     """完整封存值；不派生缺失字段，不读取资源或任何状态 owner。"""
-    result = asdict(binding)
-    prefix = result["prefix"]
-    prefix["state"]["epoch"]["reason"] = binding.prefix.state.epoch.reason.value
-    transition = binding.prefix.consumed_transition
-    if transition is not None:
-        prefix["consumed_transition"]["reason"] = transition.reason.value
-    if binding.root is not None:
-        result["root"]["epoch"]["reason"] = binding.root.epoch.reason.value
-    return result
+    prefix = binding.prefix
+    transition = prefix.consumed_transition
+    stored_transition = asdict(transition) if transition is not None else None
+    if stored_transition is not None:
+        stored_transition["reason"] = transition.reason.value
+    root = asdict(binding.root) if binding.root is not None else None
+    if root is not None:
+        root["epoch"]["reason"] = binding.root.epoch.reason.value
+    return {
+        "prefix": {
+            "assembly_id": prefix.assembly_id,
+            "state": prefix.state.to_dict(),
+            "parent": asdict(prefix.parent) if prefix.parent is not None else None,
+            "appended_refs": tuple(asdict(ref) for ref in prefix.appended_refs),
+            "prefix_byte_length": prefix.prefix_byte_length,
+            "prefix_hash": prefix.prefix_hash,
+            "consumed_transition": stored_transition,
+        },
+        "root": root,
+        "tool_set_snapshot_id": binding.tool_set_snapshot_id,
+        "applied_toolset_revision": binding.applied_toolset_revision,
+        "selection_revision": binding.selection_revision,
+        "previous_assembly_id": binding.previous_assembly_id,
+        "source_revisions": tuple(asdict(source) for source in binding.source_revisions),
+        "notice_acceptance": asdict(binding.notice_acceptance) if binding.notice_acceptance is not None else None,
+    }
 
 
 def context_seal_binding_from_dict(payload: object) -> ContextSealBinding:
