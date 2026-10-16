@@ -614,6 +614,16 @@ def _create_session(
                     f"{checkpoint_prefix}-{turn_index:04d}" if boundary
                     else f"{checkpoint_prefix}-ingress-{turn_index:04d}"
                 )
+                checkpoint_messages = (
+                    messages
+                    if boundary
+                    and (
+                        not checkpoint_each_turn
+                        or turn_index == turn_count
+                        or event is not None
+                    )
+                    else latest_turn_messages
+                )
                 with execution_admission_scope(admission, langgraph_thread_id=thread_id):
                     with timed_fixture_stage(
                         observer,
@@ -636,9 +646,7 @@ def _create_session(
                             config,
                             _checkpoint(
                                 checkpoint_id,
-                                messages if boundary and (
-                                    not checkpoint_each_turn or turn_index == turn_count
-                                ) else latest_turn_messages,
+                                checkpoint_messages,
                                 channel_version=turn_index,
                                 event=event,
                             ),
