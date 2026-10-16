@@ -1,5 +1,7 @@
 # 团队协作共同流程与实时台账
 
+GPT 团队现采用[分层协作技能](../../../../../team-collaboration-gpt-hierarchical/SKILL.md)。下文主线程直管、主持索引及禁止派生的调度描述适用于 DeepSeek/旧扁平团队；分层 GPT 的角色分工由新技能确定，只按需读取这里的运行、路径和交付细节。
+
 由两个团队技能共同引用，不是第三个版本。主代理维护流程、范围和台账；subagent 交付实现或审查证据，不并发改写本文件。具体事故详情见 [目录审查与处理记录](../../../../../../../docs/handoff/20261003-151500-team-collaboration-directory-review.md)。
 
 ## 授权、goal 与恢复
