@@ -9,6 +9,7 @@ from app.abstractions.internal_message import PreparedInternalMessage
 from app.core.job_event_bus import EventType
 from app.domain.itemized.records import InternalDisplayProvenance
 from app.prompting import PromptSection, internal_message_factory
+from app.schemas.event import Event, JobFailedEvent
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation import (
     SessionGenerationExecuteRequest,
@@ -93,7 +94,7 @@ class SessionGenerationReportingSupport:
         job_id: str,
     ) -> None:
         try:
-            terminal_status = await self._wait_for_job_terminal(
+            terminal_event = await self._wait_for_job_terminal(
                 job_id,
                 session_id=session_id,
                 subscriber_kind="session_generation_completion",
@@ -101,13 +102,16 @@ class SessionGenerationReportingSupport:
             )
             status = (
                 "completed"
-                if terminal_status == EventType.JOB_COMPLETED
+                if terminal_event.type == EventType.JOB_COMPLETED
                 else "failed"
             )
             error = (
                 None
                 if status == "completed"
-                else f"生成 Job 失败: {terminal_status}"
+                else (
+                    "生成 Job 失败: "
+                    f"{self._terminal_event_description(terminal_event)}"
+                )
             )
             self._delete_message_intent(
                 payload,
@@ -169,7 +173,7 @@ class SessionGenerationReportingSupport:
     ) -> None:
         report_back_job_id = existing_report_back_job_id
         try:
-            terminal_status = await self._wait_for_job_terminal(
+            terminal_event = await self._wait_for_job_terminal(
                 generated_job_id,
                 session_id=generated_session_id,
                 subscriber_kind="session_generation_report_back",
@@ -180,15 +184,15 @@ class SessionGenerationReportingSupport:
                 generated_session_id,
                 "fork_child",
             )
-            report_terminal_status = (
-                await self._known_terminal_status(
+            report_terminal_event = (
+                await self._known_terminal_event(
                     target_session_id,
                     report_back_job_id,
                 )
                 if report_back_job_id is not None
                 else None
             )
-            if report_terminal_status is None:
+            if report_terminal_event is None:
                 branch_result, provenance = await self._branch_result(generated_session_id, generated_job_id)
                 report_back_job_id = await self._dispatch_report_back_message(
                     payload,
@@ -196,7 +200,7 @@ class SessionGenerationReportingSupport:
                     self._report_back_message(
                         payload,
                         provenance=provenance,
-                        terminal_status=terminal_status,
+                        terminal_status=terminal_event.type,
                         branch_result=branch_result,
                     ),
                     ledger_path=ledger_path,
@@ -207,15 +211,15 @@ class SessionGenerationReportingSupport:
                     report_back_job_id=report_back_job_id,
                     error=None,
                 )
-            report_terminal_status = await self._wait_for_job_terminal(
+            report_terminal_event = await self._wait_for_job_terminal(
                 report_back_job_id,
                 session_id=target_session_id,
                 subscriber_kind="session_generation_report_back_completion",
                 run_id=payload.run_id,
             )
             if (
-                report_terminal_status == EventType.JOB_COMPLETED
-                and terminal_status == EventType.JOB_COMPLETED
+                report_terminal_event.type == EventType.JOB_COMPLETED
+                and terminal_event.type == EventType.JOB_COMPLETED
             ):
                 self._update_report_ledger(
                     ledger_path,
@@ -229,9 +233,11 @@ class SessionGenerationReportingSupport:
                 status="failed",
                 report_back_job_id=report_back_job_id,
                 error=(
-                    f"分支 Job 失败: {terminal_status}"
-                    if terminal_status != EventType.JOB_COMPLETED
-                    else f"回写 Job 失败: {report_terminal_status}"
+                    "分支 Job 失败: "
+                    f"{self._terminal_event_description(terminal_event)}"
+                    if terminal_event.type != EventType.JOB_COMPLETED
+                    else "回写 Job 失败: "
+                    f"{self._terminal_event_description(report_terminal_event)}"
                 ),
             )
         except Exception as error:
@@ -273,9 +279,9 @@ class SessionGenerationReportingSupport:
         session_id: str,
         subscriber_kind: str,
         run_id: str,
-    ) -> str:
+    ) -> Event:
         terminal_types = self._terminal_event_types()
-        persisted = self._persisted_terminal_status(
+        persisted = self._persisted_terminal_event(
             session_id,
             job_id,
             terminal_types,
@@ -295,15 +301,15 @@ class SessionGenerationReportingSupport:
                 None,
             )
             if terminal_event is not None:
-                return terminal_event.type
-            persisted = self._persisted_terminal_status(
+                return terminal_event
+            persisted = self._persisted_terminal_event(
                 session_id,
                 job_id,
                 terminal_types,
             )
             if persisted is not None:
                 return persisted
-            return (await subscription.get()).type
+            return await subscription.get()
         finally:
             await self._job_event_bus.unsubscribe(
                 job_id,
@@ -311,14 +317,14 @@ class SessionGenerationReportingSupport:
                 reason="会话生成回写已结束",
             )
 
-    def _persisted_terminal_status(
+    def _persisted_terminal_event(
         self,
         session_id: str,
         job_id: str,
         terminal_types: frozenset[str],
-    ) -> str | None:
+    ) -> Event | None:
         events = self._trace_event_store.read_events(session_id)
-        terminal_event = next(
+        return next(
             (
                 event
                 for event in reversed(events)
@@ -326,15 +332,23 @@ class SessionGenerationReportingSupport:
             ),
             None,
         )
-        return terminal_event.type if terminal_event is not None else None
 
-    async def _known_terminal_status(
+    def _persisted_terminal_status(
         self,
         session_id: str,
         job_id: str,
+        terminal_types: frozenset[str],
     ) -> str | None:
+        event = self._persisted_terminal_event(session_id, job_id, terminal_types)
+        return event.type if event is not None else None
+
+    async def _known_terminal_event(
+        self,
+        session_id: str,
+        job_id: str,
+    ) -> Event | None:
         terminal_types = self._terminal_event_types()
-        persisted = self._persisted_terminal_status(
+        persisted = self._persisted_terminal_event(
             session_id,
             job_id,
             terminal_types,
@@ -342,11 +356,26 @@ class SessionGenerationReportingSupport:
         if persisted is not None:
             return persisted
         history = await self._job_event_bus.list_events(job_id, limit=1_000)
-        terminal_event = next(
+        return next(
             (event for event in reversed(history) if event.type in terminal_types),
             None,
         )
-        return terminal_event.type if terminal_event is not None else None
+
+    async def _known_terminal_status(
+        self,
+        session_id: str,
+        job_id: str,
+    ) -> str | None:
+        event = await self._known_terminal_event(session_id, job_id)
+        return event.type if event is not None else None
+
+    @staticmethod
+    def _terminal_event_description(event: Event) -> str:
+        if not isinstance(event, JobFailedEvent):
+            return event.type
+        if event.payload.code is None:
+            return f"{event.type}: {event.payload.error}"
+        return f"{event.type}: {event.payload.error} (code: {event.payload.code})"
 
     @staticmethod
     def _terminal_event_types() -> frozenset[str]:

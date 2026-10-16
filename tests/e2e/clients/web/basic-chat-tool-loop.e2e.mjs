@@ -13,10 +13,11 @@ function requiredEnvironment(name) {
   return value;
 }
 
-const baseUrl = requiredEnvironment("BOXTEAM_BROWSER_BASE_URL");
-const expectedWorkspaceId = requiredEnvironment("BOXTEAM_BROWSER_WORKSPACE_ID");
-const resultPath = requiredEnvironment("BOXTEAM_BROWSER_RESULT_PATH");
-const screenshotPath = requiredEnvironment("BOXTEAM_BROWSER_SCREENSHOT_PATH");
+const messageStreamDiagnosticsSelfTest = process.argv.includes("--message-stream-diagnostics-self-test");
+const baseUrl = messageStreamDiagnosticsSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_BASE_URL");
+const expectedWorkspaceId = messageStreamDiagnosticsSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_WORKSPACE_ID");
+const resultPath = messageStreamDiagnosticsSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_RESULT_PATH");
+const screenshotPath = messageStreamDiagnosticsSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_SCREENSHOT_PATH");
 const firstPrompt = "请读取 README.md，并确认首轮工具调用已完成。";
 const firstFinalText = "首轮工具调用已完成。";
 const secondPrompt = "请再次读取 README.md，确认历史上下文仍然可用。";
@@ -119,6 +120,356 @@ function streamKind(url) {
   if (url.includes("/traces/stream")) return "trace";
   if (url.includes("/message-stream?")) return "message";
   return null;
+}
+
+function messageStreamTarget(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  const match = /^\/api\/v1\/sessions\/([^/]+)\/turns\/([^/]+)\/message-stream$/.exec(parsed.pathname);
+  if (!match) return null;
+  const threadIds = parsed.searchParams.getAll("thread_id");
+  const afterSeqs = parsed.searchParams.getAll("after_seq");
+  if (threadIds.length > 1 || afterSeqs.length > 1) return null;
+  return {
+    sessionId: match[1],
+    turnId: match[2],
+    threadId: threadIds.length === 0 ? null : threadIds[0],
+    afterSeq: afterSeqs.length === 0 ? null : afterSeqs[0],
+  };
+}
+
+function isEventStreamResponse(response) {
+  const contentType = response.headers?.contentType;
+  return typeof contentType === "string"
+    && contentType.split(";", 1)[0].trim().toLowerCase() === "text/event-stream";
+}
+
+async function readBoundedMessageStreamErrorBody(response, fact) {
+  const maxBytes = 4096;
+  const contentLength = response.headers()["content-length"];
+  if (!/^(0|[1-9][0-9]*)$/.test(contentLength ?? "")) {
+    fact.bodyError = "404 响应缺少有效 Content-Length，未读取响应体";
+    return;
+  }
+  if (!Number.isSafeInteger(Number(contentLength)) || Number(contentLength) > maxBytes) {
+    fact.bodyTooLarge = true;
+    fact.bodyLimitBytes = maxBytes;
+    return;
+  }
+  const bytes = await response.body();
+  fact.bodyBytes = bytes.byteLength;
+  if (bytes.byteLength > maxBytes) {
+    fact.bodyTooLarge = true;
+    fact.bodyLimitBytes = maxBytes;
+    return;
+  }
+  fact.body = JSON.parse(bytes.toString("utf8"));
+}
+
+function runningAdmissionThreadId(admission, refusal, target) {
+  const data = admission.body?.data;
+  const dispatch = data?.dispatch;
+  const admissionUrl = new URL(admission.url);
+  const admissionPath = /^\/api\/v1\/sessions\/([^/]+)\/(?:threads\/([^/]+)\/)?messages$/.exec(admissionUrl.pathname);
+  const ownerThreadId = data?.thread_id;
+  const refusalUrl = new URL(refusal.url);
+  const isOwner = admission.kind === "admission"
+    && admission.status === 200
+    && admission.method === "POST"
+    && admissionUrl.origin === refusalUrl.origin
+    && admissionPath?.[1] === target.sessionId
+    && (admissionPath[2] === undefined || admissionPath[2] === ownerThreadId)
+    && admission.threadId === (admissionPath?.[2] ?? null)
+    && admission.pageId === refusal.pageId
+    && admission.documentId === refusal.documentId
+    && Number.isInteger(admission.pageId)
+    && Number.isInteger(admission.documentId)
+    && Number.isInteger(refusal.pageId)
+    && Number.isInteger(refusal.documentId)
+    && admission.sessionId === target.sessionId
+    && admission.workspaceHeader === refusal.workspaceHeader
+    && typeof admission.workspaceHeader === "string"
+    && admission.workspaceHeader.length > 0
+    && Number.isFinite(admission.requestedAt)
+    && Number.isFinite(admission.receivedAt)
+    && admission.requestedAt <= admission.receivedAt
+    && Number.isFinite(refusal.requestedAt)
+    && admission.receivedAt <= refusal.requestedAt
+    && typeof admission.requestId === "string"
+    && admission.requestId.length > 0
+    && admission.body?.request_id === admission.requestId
+    && typeof data?.job_id === "string"
+    && data.job_id.length > 0
+    && typeof ownerThreadId === "string"
+    && ownerThreadId.length > 0
+    && (target.threadId === null || target.threadId === ownerThreadId)
+    && dispatch?.job_id === data.job_id
+    && data?.turn_id === target.turnId
+    && data?.status === "running"
+    && dispatch?.thread_id === ownerThreadId
+    && dispatch?.session_id === target.sessionId
+    && dispatch?.job_status === "running"
+    && data?.thread_id === dispatch?.thread_id;
+  return isOwner ? ownerThreadId : null;
+}
+
+function classifyMessageStreamErrors(consoleErrorFacts, consoleErrors, messageStreamResponses, admissions) {
+  const handled = [];
+  const consumedFacts = new Set();
+  for (const error of consoleErrorFacts) {
+    if (error.text !== "Failed to load resource: the server responded with a status of 404 (Not Found)"
+        || typeof error.url !== "string" || !error.url) continue;
+    const target = messageStreamTarget(error.url);
+    if (!target || target.threadId === "" || target.afterSeq !== "0") continue;
+    const candidates = messageStreamResponses.filter((response) => response.status === 404
+      && !consumedFacts.has(response)
+      && response.method === "GET"
+      && response.pageId === error.pageId
+      && response.documentId === error.documentId
+      && Number.isInteger(response.pageId)
+      && Number.isInteger(response.documentId)
+      && response.url === error.url
+      && response.sessionId === target.sessionId
+      && response.turnId === target.turnId
+      && response.threadId === target.threadId
+      && response.afterSeq === target.afterSeq
+      && (() => {
+        const responseTarget = messageStreamTarget(response.url);
+        return responseTarget?.sessionId === target.sessionId
+          && responseTarget.turnId === target.turnId
+          && responseTarget.threadId === target.threadId
+          && responseTarget.afterSeq === "0";
+      })()
+      && response.requestId
+      && response.workspaceHeader);
+    const eligible = candidates.map((refusal) => {
+      if (typeof refusal.requestId !== "string" || refusal.requestId.length === 0
+          || typeof refusal.body?.request_id !== "string"
+          || refusal.body.request_id !== refusal.requestId
+          || typeof refusal.body?.detail !== "string"
+          || refusal.body.detail !== `消息流不存在: session_id=${target.sessionId} turn_id=${target.turnId}`
+          || refusal.bodyTooLarge === true || refusal.bodyError
+          || !Number.isFinite(refusal.requestedAt) || !Number.isFinite(refusal.receivedAt)
+          || refusal.receivedAt < refusal.requestedAt) return null;
+      const owners = admissions.map((admission) => ({ admission,
+        threadId: consumedFacts.has(admission) ? null : runningAdmissionThreadId(admission, refusal, target) }))
+        .filter((owner) => owner.threadId !== null);
+      if (owners.length !== 1) return null;
+      const { admission: owner, threadId: ownerThreadId } = owners[0];
+      const recoveries = messageStreamResponses.filter((response) => response.status === 200
+        && !consumedFacts.has(response)
+        && response.method === "GET"
+        && response.pageId === error.pageId
+        && response.documentId === error.documentId
+        && new URL(response.url).origin === new URL(refusal.url).origin
+        && response.sessionId === target.sessionId
+        && response.turnId === target.turnId
+        && response.afterSeq === "0"
+        && (response.threadId === null || response.threadId === ownerThreadId)
+        && (() => {
+          const responseTarget = messageStreamTarget(response.url);
+          return responseTarget?.sessionId === target.sessionId
+            && responseTarget.turnId === target.turnId
+            && responseTarget.afterSeq === "0"
+            && (responseTarget.threadId === null || responseTarget.threadId === ownerThreadId)
+            && response.threadId === responseTarget.threadId;
+        })()
+        && response.workspaceHeader === refusal.workspaceHeader
+        && typeof response.workspaceHeader === "string"
+        && response.workspaceHeader.length > 0
+        && typeof response.requestId === "string"
+        && response.requestId.length > 0
+        && isEventStreamResponse(response)
+        && Number.isFinite(response.requestedAt)
+        && response.requestedAt >= refusal.receivedAt
+        && Number.isFinite(response.receivedAt)
+        && response.receivedAt >= response.requestedAt
+        && typeof response.messageStreamId === "string"
+        && response.messageStreamId.length > 0);
+      if (recoveries.length === 0) return null;
+      const recovery = recoveries[0];
+      return {
+        responseFact: refusal,
+        recoveryFact: recovery,
+        admissionFact: owner,
+        responseRequestId: refusal.requestId,
+        responseBodyRequestId: refusal.body.request_id,
+        admissionRequestId: owner.requestId,
+        recoveryRequestId: recovery.requestId,
+        recoveryStreamId: recovery.messageStreamId,
+        jobId: owner.body.data.job_id,
+        sessionId: target.sessionId,
+        threadId: ownerThreadId,
+        turnId: target.turnId,
+      };
+    });
+    if (eligible.length !== 1 || eligible[0] === null) continue;
+    const fact = eligible[0];
+    if (consumedFacts.has(fact.responseFact) || consumedFacts.has(fact.recoveryFact)
+        || consumedFacts.has(fact.admissionFact)) continue;
+    consumedFacts.add(fact.responseFact);
+    consumedFacts.add(fact.recoveryFact);
+    consumedFacts.add(fact.admissionFact);
+    const { responseFact, recoveryFact, admissionFact, ...diagnostic } = fact;
+    handled.push({ consoleIndex: error.index, ...diagnostic });
+  }
+  return {
+    handledMessageStreamErrors: handled,
+    unhandledConsoleErrors: consoleErrors.filter((_error, index) => !handled.some((fact) => fact.consoleIndex === index)),
+  };
+}
+
+function runMessageStreamDiagnosticsSelfTest() {
+  const url = "http://127.0.0.1:19000/api/v1/sessions/ses_owner/turns/turn_appended/message-stream?thread_id=thr_owner&after_seq=0";
+  const owner = {
+    url: "http://127.0.0.1:19000/api/v1/sessions/ses_owner/messages",
+    method: "POST", status: 200, pageId: 1, documentId: 2, kind: "admission",
+    sessionId: "ses_owner", threadId: null, workspaceHeader: "workspace-owner",
+    requestId: "request-admission", requestedAt: 10, receivedAt: 20,
+    body: { request_id: "request-admission", data: { job_id: "job_appended", turn_id: "turn_appended", thread_id: "thr_owner", status: "running",
+      dispatch: { session_id: "ses_owner", thread_id: "thr_owner", job_id: "job_appended", job_status: "running" } } },
+  };
+  const refusal = {
+    url, method: "GET", status: 404, pageId: 1, documentId: 2, sessionId: "ses_owner", turnId: "turn_appended",
+    threadId: "thr_owner", afterSeq: "0", workspaceHeader: "workspace-owner", requestId: "request-refusal",
+    requestedAt: 30, receivedAt: 40,
+    body: { detail: "消息流不存在: session_id=ses_owner turn_id=turn_appended", request_id: "request-refusal" },
+  };
+  const recovery = {
+    url, method: "GET", status: 200, pageId: 1, documentId: 2, sessionId: "ses_owner", turnId: "turn_appended",
+    threadId: "thr_owner", afterSeq: "0", workspaceHeader: "workspace-owner", requestId: "request-recovery", messageStreamId: "stream-appended",
+    headers: { contentType: "text/event-stream; charset=utf-8" },
+    requestedAt: 50, receivedAt: 60,
+  };
+  const consoleError = { index: 0, text: "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    url, pageId: 1, documentId: 2 };
+  const classify = (responses = [refusal, recovery], admissions = [owner], errors = [consoleError], texts = [consoleError.text]) =>
+    classifyMessageStreamErrors(errors, texts, responses, admissions);
+
+  assert.equal(classify().handledMessageStreamErrors.length, 1, "精确匹配 admission、404 与后续 SSE 应分类为瞬态");
+  assert.equal(classify().unhandledConsoleErrors.length, 0);
+  const threadlessUrl = "http://127.0.0.1:19000/api/v1/sessions/ses_owner/turns/turn_appended/message-stream?after_seq=0";
+  const threadlessRefusal = { ...refusal, url: threadlessUrl, threadId: null };
+  const threadlessRecovery = { ...recovery, url: threadlessUrl, threadId: null };
+  const threadlessConsoleError = { ...consoleError, url: threadlessUrl };
+  const classifyThreadless = (responses = [threadlessRefusal, threadlessRecovery], admissions = [owner]) =>
+    classify(responses, admissions, [threadlessConsoleError], [threadlessConsoleError.text]);
+  const threadlessResult = classifyThreadless();
+  assert.equal(threadlessResult.handledMessageStreamErrors.length, 1,
+    "缺少 thread_id 的 404 只能由唯一 running admission 和后续无 thread_id SSE 恢复");
+  assert.equal(threadlessResult.handledMessageStreamErrors[0].threadId, "thr_owner",
+    "缺失的 stream thread 必须从 admission owner 恢复");
+  assert.equal(classifyThreadless([threadlessRefusal, { ...threadlessRecovery,
+    url: `${threadlessUrl}&thread_id=thr_owner`, threadId: "thr_owner" }]).unhandledConsoleErrors.length, 0,
+  "缺失 thread_id 的拒绝允许后续 SSE 显式携带 admission owner thread");
+  assert.equal(classifyThreadless([threadlessRefusal]).unhandledConsoleErrors.length, 1,
+    "缺失 thread_id 的拒绝没有后续 SSE 必须保留");
+  assert.equal(classifyThreadless([threadlessRefusal, threadlessRecovery], []).unhandledConsoleErrors.length, 1,
+    "缺失 thread_id 的拒绝没有 owner admission 必须保留");
+  assert.equal(classifyThreadless([threadlessRefusal, threadlessRecovery], [owner, { ...owner,
+    requestId: "request-admission-duplicate", body: { ...owner.body, request_id: "request-admission-duplicate" },
+  }]).unhandledConsoleErrors.length, 1, "多个 owner admission 必须保留为未处理错误");
+  const conflictingAdmission = { ...owner,
+    url: "http://127.0.0.1:19000/api/v1/sessions/ses_owner/threads/thr_other/messages",
+    threadId: "thr_other",
+  };
+  assert.equal(classifyThreadless([threadlessRefusal, threadlessRecovery], [conflictingAdmission]).unhandledConsoleErrors.length, 1,
+    "准入路径 thread 与响应 body owner 冲突必须保留");
+  assert.equal(classifyThreadless([threadlessRefusal, threadlessRecovery], [{ ...owner, body: { ...owner.body, data: {
+    ...owner.body.data, thread_id: "thr_other",
+  } } }]).unhandledConsoleErrors.length, 1, "准入 body thread 与 dispatch owner 冲突必须保留");
+  assert.equal(classifyThreadless([threadlessRefusal, { ...threadlessRecovery,
+    url: `${threadlessUrl}&thread_id=thr_other`, threadId: "thr_other",
+  }]).unhandledConsoleErrors.length, 1, "后续 SSE thread 与 admission owner 冲突必须保留");
+  const otherUrl = "http://127.0.0.1:19000/api/v1/sessions/ses_other/turns/turn_other/message-stream?thread_id=thr_other&after_seq=0";
+  const otherOwner = {
+    ...owner,
+    url: "http://127.0.0.1:19000/api/v1/sessions/ses_other/messages",
+    pageId: 3,
+    documentId: 4,
+    sessionId: "ses_other",
+    workspaceHeader: "workspace-other",
+    requestId: "request-admission-other",
+    body: { request_id: "request-admission-other", data: { ...owner.body.data, job_id: "job_other", turn_id: "turn_other",
+      thread_id: "thr_other", dispatch: { ...owner.body.data.dispatch, session_id: "ses_other", thread_id: "thr_other", job_id: "job_other" } } },
+  };
+  const otherRefusal = {
+    ...refusal,
+    url: otherUrl,
+    pageId: 3,
+    documentId: 4,
+    sessionId: "ses_other",
+    turnId: "turn_other",
+    threadId: "thr_other",
+    workspaceHeader: "workspace-other",
+    body: { detail: "消息流不存在: session_id=ses_other turn_id=turn_other", request_id: refusal.requestId },
+  };
+  const otherRecovery = { ...recovery, url: otherUrl, pageId: 3, documentId: 4, sessionId: "ses_other", turnId: "turn_other",
+    threadId: "thr_other", workspaceHeader: "workspace-other", requestId: "request-recovery-other", messageStreamId: "stream-other" };
+  const otherConsoleError = { ...consoleError, index: 1, url: otherUrl, pageId: 3, documentId: 4 };
+  const duplicateRequestIdResult = classify(
+    [refusal, recovery, otherRefusal, otherRecovery], [owner, otherOwner], [consoleError, otherConsoleError],
+    [consoleError.text, otherConsoleError.text],
+  );
+  assert.equal(otherRefusal.requestId, refusal.requestId, "两个独立 404 响应可复用 request ID");
+  assert.equal(duplicateRequestIdResult.handledMessageStreamErrors.length, 2,
+    "不同 page/document/URL 的合法 404 即使 request ID 相同也都应分类");
+  assert.equal(duplicateRequestIdResult.unhandledConsoleErrors.length, 0);
+  assert.equal(classify([refusal, recovery], []).unhandledConsoleErrors.length, 1, "缺 admission 必须保留为未处理错误");
+  assert.equal(classify([refusal, { ...recovery, threadId: "thr_other" }]).unhandledConsoleErrors.length, 1,
+    "后续 SSE owner thread 错误必须保留");
+  assert.equal(classify([refusal, recovery], [{ ...owner, body: { ...owner.body, data: {
+    ...owner.body.data, thread_id: "thr_other", dispatch: { ...owner.body.data.dispatch, thread_id: "thr_other" },
+  } } }]).unhandledConsoleErrors.length, 1, "准入 owner thread 错误必须保留");
+  assert.equal(classify([refusal, recovery], [{ ...owner, body: { ...owner.body, data: {
+    ...owner.body.data, job_id: "job_other",
+  } } }]).unhandledConsoleErrors.length, 1, "准入 job target 不一致必须保留");
+  assert.equal(classify([refusal, recovery], [{ ...owner, workspaceHeader: "workspace_other" }]).unhandledConsoleErrors.length, 1,
+    "准入 workspace 不一致必须保留");
+  assert.equal(classify([refusal]).unhandledConsoleErrors.length, 1, "缺后续 200 SSE 必须保留");
+  assert.equal(classify([refusal, { ...recovery, headers: { contentType: "application/json" } }]).unhandledConsoleErrors.length, 1,
+    "后续 200 非 SSE 响应必须保留");
+  assert.equal(classify([{ ...refusal, body: { ...refusal.body, request_id: "request-other" } }, recovery])
+    .unhandledConsoleErrors.length, 1, "404 body/header request ID 不一致必须保留");
+  assert.equal(classify([{ ...refusal, body: { detail: refusal.body.detail } }, recovery])
+    .unhandledConsoleErrors.length, 1, "404 body 缺少 request ID 必须保留");
+  assert.equal(classify([{ ...refusal, body: { detail: "消息流不存在: session_id=ses_owner turn_id=turn_missing" } }, recovery])
+    .unhandledConsoleErrors.length, 1, "缺失 Turn 或其它 detail 必须保留");
+  assert.equal(classify([refusal, { ...recovery, messageStreamId: "" }]).unhandledConsoleErrors.length, 1,
+    "缺 X-Message-Stream-ID 必须保留");
+  assert.equal(classify([refusal, recovery], [{ ...owner, body: { ...owner.body, request_id: "request-other" } }])
+    .unhandledConsoleErrors.length, 1, "admission body/header request ID 不一致必须保留");
+  assert.equal(classify([refusal, recovery], [{ ...owner, status: 404 }]).unhandledConsoleErrors.length, 1,
+    "准入不是 HTTP 200 必须保留");
+  assert.equal(classify([refusal, recovery], [{ ...owner, body: { ...owner.body, data: {
+    ...owner.body.data, status: "queued", dispatch: { ...owner.body.data.dispatch, job_status: "queued" },
+  } } }]).unhandledConsoleErrors.length, 1, "非 running 准入必须保留");
+  assert.equal(classify([refusal, { ...recovery, documentId: 3 }]).unhandledConsoleErrors.length, 1,
+    "跨 document 的后续 SSE 必须保留");
+  assert.equal(classify([refusal, { ...recovery, workspaceHeader: "workspace_other" }]).unhandledConsoleErrors.length, 1,
+    "后续 SSE workspace 不一致必须保留");
+  assert.equal(classify([refusal, { ...recovery, requestId: null }]).unhandledConsoleErrors.length, 1,
+    "后续 SSE 缺 request ID 必须保留");
+  assert.equal(classify([refusal, recovery], [owner], [{ ...consoleError, pageId: 2 }], [consoleError.text])
+    .unhandledConsoleErrors.length, 1, "跨 page 的 console error 不得借用响应证据");
+  assert.equal(classify([refusal, recovery], [owner], [{ ...consoleError, url: `${url}&turn_stream_id=other` }],
+    [consoleError.text]).unhandledConsoleErrors.length, 1, "console URL 必须精确匹配实际 404 URL");
+  assert.equal(classify([refusal, recovery], [owner], [{ ...consoleError, url: url.replace("&after_seq=0", "") }],
+    [consoleError.text]).unhandledConsoleErrors.length, 1, "初始 stream 之外的游标必须保持未处理");
+  const duplicate = { ...consoleError, index: 1 };
+  const duplicateResult = classify([refusal, recovery], [owner], [consoleError, duplicate], [consoleError.text, duplicate.text]);
+  assert.equal(duplicateResult.handledMessageStreamErrors.length, 1, "单个 404 response fact 只能消费一次");
+  assert.equal(duplicateResult.unhandledConsoleErrors.length, 1, "重复 console error 不能借用已消费 response");
+}
+
+if (messageStreamDiagnosticsSelfTest) {
+  runMessageStreamDiagnosticsSelfTest();
+  process.stdout.write("message-stream diagnostics self-test passed\n");
+  process.exit(0);
 }
 
 function isExpectedBrowserAbort(request) {
@@ -6893,15 +7244,22 @@ const turnNavigationMissingTurnProofs = [];
 const historyLiveProofs = [];
 const transcriptDomFailures = [];
 const navigationReads = new Set();
+const messageStreamResponses = [];
 let diagnosticPageId = 0;
 
 function classifyConsoleErrors() {
   const handled = [];
   const handledLifecycle = [];
   const handledTurnNavigation = [];
+  const messageStreamClassification = classifyMessageStreamErrors(
+    consoleErrorFacts, consoleErrors, messageStreamResponses, jobOwnerResponses,
+  );
+  const handledMessageStream = messageStreamClassification.handledMessageStreamErrors;
+  const handledMessageStreamIndexes = new Set(handledMessageStream.map((fact) => fact.consoleIndex));
   const consumed = new Set();
   const consumedTurnNavigationRequests = new Set();
   for (const error of consoleErrorFacts) {
+    if (handledMessageStreamIndexes.has(error.index)) continue;
     const status = error.text === "Failed to load resource: the server responded with a status of 409 (Conflict)" ? 409
       : error.text === "Failed to load resource: the server responded with a status of 404 (Not Found)" ? 404 : null;
     if (status === null || typeof error.url !== "string" || !error.url) continue;
@@ -7051,10 +7409,12 @@ function classifyConsoleErrors() {
     consumed.add(candidates[index].requestId);
     handled.push({ consoleIndex: error.index, ...recoveries[index] });
   }
+  const handledConsoleIndexes = new Set([...handled, ...handledLifecycle, ...handledTurnNavigation, ...handledMessageStream]
+    .map((fact) => fact.consoleIndex));
   return { handledHistoryConflicts: handled, handledLifecycleErrors: handledLifecycle,
     handledTurnNavigationErrors: handledTurnNavigation,
-    unhandledConsoleErrors: consoleErrors.filter((_error, index) => ![...handled, ...handledLifecycle, ...handledTurnNavigation]
-      .some((fact) => fact.consoleIndex === index)) };
+    handledMessageStreamErrors: handledMessageStream,
+    unhandledConsoleErrors: consoleErrors.filter((_error, index) => !handledConsoleIndexes.has(index)) };
 }
 
 function installPageDiagnostics(page) {
@@ -7096,6 +7456,41 @@ page.on("requestfailed", (request) => {
 });
 page.on("response", (response) => {
   const url = new URL(response.url());
+  const streamTarget = messageStreamTarget(response.url());
+  if (streamTarget) {
+    const request = response.request();
+    const requestDocument = requestDocuments.get(request);
+    const responseHeaders = response.headers();
+    const fact = {
+      url: response.url(),
+      method: request.method(),
+      status: response.status(),
+      pageId: page.diagnosticId,
+      documentId: requestDocument?.documentId ?? null,
+      requestedAt: requestDocument?.requestedAt ?? null,
+      receivedAt: Date.now(),
+      sessionId: streamTarget.sessionId,
+      turnId: streamTarget.turnId,
+      threadId: streamTarget.threadId,
+      afterSeq: streamTarget.afterSeq,
+      workspaceHeader: request.headers()["x-boxteam-workspace-id"] ?? null,
+      requestId: responseHeaders["x-request-id"] ?? null,
+      messageStreamId: responseHeaders["x-message-stream-id"] ?? null,
+      headers: {
+        requestId: responseHeaders["x-request-id"] ?? null,
+        messageStreamId: responseHeaders["x-message-stream-id"] ?? null,
+        contentType: responseHeaders["content-type"] ?? null,
+        contentLength: responseHeaders["content-length"] ?? null,
+      },
+    };
+    messageStreamResponses.push(fact);
+    if (fact.status === 404) {
+      const read = readBoundedMessageStreamErrorBody(response, fact)
+        .catch((error) => { fact.bodyError = String(error); });
+      navigationReads.add(read);
+      void read.then(() => navigationReads.delete(read));
+    }
+  }
   const history = /^\/api\/v1\/sessions\/([^/]+)\/(?:(bootstrap|history)|threads\/([^/]+)\/history)$/.exec(url.pathname);
   const historyKind = history?.[2] ?? (history?.[3] ? "history" : null);
   const pending = /^\/api\/v1\/sessions\/([^/]+)\/main-thread\/pending-requests$/.exec(url.pathname);
@@ -7170,6 +7565,7 @@ const result = {
   persisted: null,
   streams: { trace: 0, message: 0 },
   diagnostics: { pageErrors, consoleErrors, consoleErrorFacts, failedRequests },
+  messageStreamResponses,
   navigationResponses,
   historyConflictResponses,
   conflictResponses,

@@ -352,10 +352,32 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
             diagnostics["handledHistoryConflicts"]
             + diagnostics["handledLifecycleErrors"]
             + diagnostics["handledTurnNavigationErrors"]
+            + diagnostics["handledMessageStreamErrors"]
         )
         assert sorted(fact["consoleIndex"] for fact in handled) == list(
             range(len(diagnostics["consoleErrors"])),
         )
+        message_stream_responses = result["messageStreamResponses"]
+        assert all(
+            isinstance(response["pageId"], int)
+            and isinstance(response["documentId"], int)
+            and isinstance(response["requestedAt"], int)
+            and isinstance(response["receivedAt"], int)
+            and response["receivedAt"] >= response["requestedAt"]
+            for response in message_stream_responses
+        )
+        assert all(
+            "body" not in response
+            and isinstance(response["messageStreamId"], str)
+            and response["messageStreamId"]
+            for response in message_stream_responses
+            if response["status"] == 200
+        ), "SSE 成功响应只记录 headers 与 target，不读取流 body"
+        assert all(
+            response.get("bodyBytes", 0) <= 4096
+            for response in message_stream_responses
+            if response["status"] == 404
+        ), "404 diagnostic body 必须有界"
         focus = [name.strip() for name in os.getenv("BOXTEAM_E2E_SECTION8_FOCUS", "").split(",") if name.strip()]
         if focus:
             assert result["focusedScenarios"] == focus

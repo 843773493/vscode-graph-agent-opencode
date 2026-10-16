@@ -13,7 +13,7 @@ from app.domain.itemized.execution_admission import (
     UserExecutionIdentity,
 )
 from app.domain.itemized.records import InternalDisplayProvenance
-from app.schemas.event import JobCompletedEvent
+from app.schemas.event import Event, JobCompletedEvent, JobFailedEvent
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import MessageDTO
 from app.schemas.internal_v2.session import SessionDTO
@@ -78,6 +78,30 @@ class _CompletedEventBus:
         ]
 
 
+class _TerminalEventSubscription:
+    def __init__(self, event: Event) -> None:
+        self._event = event
+
+    async def get(self) -> Event:
+        return self._event
+
+
+class _LiveTerminalEventBus:
+    def __init__(self, events: list[Event]) -> None:
+        self._events = iter(events)
+
+    async def subscribe(self, job_id: str, **_kwargs):
+        event = next(self._events)
+        assert event.job_id == job_id
+        return _TerminalEventSubscription(event)
+
+    async def unsubscribe(self, *_args, **_kwargs) -> None:
+        return None
+
+    async def list_events(self, *_args, **_kwargs) -> list[Event]:
+        return []
+
+
 class _EmptyTraceStore:
     def read_events(self, *_args, **_kwargs):
         return []
@@ -97,6 +121,14 @@ class _CompletedTraceStore:
                 timestamp=datetime.now(UTC),
             )
         ]
+
+
+class _SingleEventTraceStore:
+    def __init__(self, event: Event) -> None:
+        self._event = event
+
+    def read_events(self, *_args, **_kwargs) -> list[Event]:
+        return [self._event]
 
 
 class _ShouldNotSubscribeEventBus:
@@ -730,6 +762,224 @@ async def test_completed_child_stays_completed_when_session_was_deleted(
     record = service._read_ledger(ledger_path)
     assert record["status"] == "completed"
     assert record["result"]["status"] == "completed"
+
+
+@pytest.mark.parametrize(
+    (
+        "source",
+        "terminal_type",
+        "failure_error",
+        "failure_code",
+        "expected_status",
+        "expected_error",
+    ),
+    [
+        pytest.param(
+            "live_bus",
+            "job_failed",
+            "Provider timed out",
+            "provider_timeout",
+            "failed",
+            "生成 Job 失败: job_failed: Provider timed out (code: provider_timeout)",
+            id="live-job-failed-with-code",
+        ),
+        pytest.param(
+            "persisted_trace",
+            "job_failed",
+            "Persisted worker failure",
+            None,
+            "failed",
+            "生成 Job 失败: job_failed: Persisted worker failure",
+            id="trace-job-failed-without-code",
+        ),
+        pytest.param(
+            "live_bus",
+            "job_completed",
+            None,
+            None,
+            "completed",
+            None,
+            id="live-job-completed",
+        ),
+        pytest.param(
+            "persisted_trace",
+            "job_completed",
+            None,
+            None,
+            "completed",
+            None,
+            id="trace-job-completed",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_child_terminal_event_details_reach_ledger_and_result(
+    tmp_path: Path,
+    source: str,
+    terminal_type: str,
+    failure_error: str | None,
+    failure_code: str | None,
+    expected_status: str,
+    expected_error: str | None,
+) -> None:
+    payload = _new_per_run_request()
+    session_id = "ses_terminal_result"
+    job_id = "job_terminal_result"
+    event_fields = {
+        "event_id": "evt_terminal_result",
+        "job_id": job_id,
+        "timestamp": datetime.now(UTC),
+    }
+    if terminal_type == "job_failed":
+        terminal_event = JobFailedEvent(
+            **event_fields,
+            payload={"error": failure_error, "code": failure_code},
+        )
+    else:
+        terminal_event = JobCompletedEvent(**event_fields)
+    if source == "live_bus":
+        job_event_bus = _LiveTerminalEventBus([terminal_event])
+        trace_event_store = _EmptyTraceStore()
+    else:
+        job_event_bus = _ShouldNotSubscribeEventBus()
+        trace_event_store = _SingleEventTraceStore(terminal_event)
+
+    service = SessionGenerationService(
+        workspace_root=tmp_path,
+        session_service=_UnusedDependency(),  # type: ignore[arg-type]
+        session_catalog_service=_test_catalog(tmp_path),  # type: ignore[arg-type]
+        session_context_fork_service=_UnusedDependency(),  # type: ignore[arg-type]
+        session_orchestrator=_UnusedDependency(),  # type: ignore[arg-type]
+        job_event_bus=job_event_bus,  # type: ignore[arg-type]
+        message_service=_UnusedDependency(),  # type: ignore[arg-type]
+        trace_event_store=trace_event_store,  # type: ignore[arg-type]
+        providers=[],
+    )
+    ledger_path = service._ledger_path(payload.generator_id, payload.idempotency_key)
+    initial_result = SessionGenerationExecuteResultDTO(
+        run_id=payload.run_id,
+        status="queued",
+        outputs=[
+            SessionGenerationOutputDTO(
+                workspace_id=payload.execution_workspace_id,
+                session_id=session_id,
+            )
+        ],
+        message_id="msg_terminal_result",
+        job_id=job_id,
+    )
+    service._write_ledger(
+        ledger_path,
+        {
+            "schema_version": 1,
+            "status": "running",
+            "request": payload.model_dump(mode="json"),
+            "result": initial_result.model_dump(mode="json"),
+        },
+    )
+
+    await service._complete_after_child_job(
+        payload,
+        ledger_path=ledger_path,
+        session_id=session_id,
+        job_id=job_id,
+    )
+
+    record = service._read_ledger(ledger_path)
+    result = service.get_run_status(
+        generator_id=payload.generator_id,
+        idempotency_key=payload.idempotency_key,
+    )
+    assert record["status"] == expected_status
+    assert record["result"]["error"] == expected_error
+    assert result.status == expected_status
+    assert result.error == expected_error
+
+
+@pytest.mark.asyncio
+async def test_report_back_failure_keeps_job_failed_payload_in_result_error(
+    runtime_reporting_case,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = runtime_reporting_case
+    payload = case.payload
+    child_event = JobCompletedEvent(
+        event_id="evt_child_completed",
+        job_id="job_child_recovery",
+        timestamp=datetime.now(UTC),
+    )
+    report_event = JobFailedEvent(
+        event_id="evt_report_failed",
+        job_id="job_report_runtime",
+        timestamp=datetime.now(UTC),
+        payload={
+            "error": "Report target rejected the message",
+            "code": "report_rejected",
+        },
+    )
+    monkeypatch.setattr(
+        case.service,
+        "_job_event_bus",
+        _LiveTerminalEventBus([child_event, report_event]),
+    )
+    provenance = InternalDisplayProvenance(
+        source_session_id="ses_child_recovery",
+        source_thread_id="thr_child_recovery",
+        source_execution_id="execution_child_recovery",
+        source_item_id="item_child_recovery",
+    )
+
+    async def branch_result(_session_id: str, _job_id: str):
+        return "分支结果", provenance
+
+    async def dispatch_report_back(*_args, **_kwargs) -> str:
+        return "job_report_runtime"
+
+    monkeypatch.setattr(case.service, "_branch_result", branch_result)
+    monkeypatch.setattr(
+        case.service,
+        "_dispatch_report_back_message",
+        dispatch_report_back,
+    )
+    case.service._write_ledger(
+        case.ledger_path,
+        {
+            "schema_version": 1,
+            "status": "reporting",
+            "run_id": payload.run_id,
+            "generator_id": payload.generator_id,
+            "idempotency_key": payload.idempotency_key,
+            "request": payload.model_dump(mode="json"),
+            "result": SessionGenerationExecuteResultDTO(
+                run_id=payload.run_id,
+                status="reporting",
+                outputs=[
+                    SessionGenerationOutputDTO(
+                        workspace_id=payload.execution_workspace_id,
+                        session_id="ses_child_recovery",
+                    )
+                ],
+                message_id="msg_child_recovery",
+                job_id="job_child_recovery",
+            ).model_dump(mode="json"),
+        },
+    )
+
+    await case.service._report_back_after_job(
+        payload,
+        ledger_path=case.ledger_path,
+        target_session_id="ses_parent_recovery",
+        generated_session_id="ses_child_recovery",
+        generated_job_id="job_child_recovery",
+        existing_report_back_job_id=None,
+    )
+
+    record = case.service._read_ledger(case.ledger_path)
+    assert record["status"] == "failed"
+    assert record["result"]["error"] == (
+        "回写 Job 失败: job_failed: Report target rejected the message "
+        "(code: report_rejected)"
+    )
 
 
 @pytest.mark.asyncio
