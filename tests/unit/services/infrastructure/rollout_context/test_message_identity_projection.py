@@ -339,6 +339,7 @@ def test_stream_tool_projection_preserves_exact_payload_hash_and_lifecycle(
 ):
     item = stream_tool_projection_item
     projected = projection_codec.project_message((item,))
+    assert projected["data"]["tool_calls"][0]["id"] == "provider-call-1"
     binding = projected["data"]["response_metadata"][CANONICAL_GROUP_FIELD][0][TOOL_BINDING_FIELD]
     assert set(binding) <= {"tool_call_id", "tool_invocation_id", "tool_attempt_id"}
     assert binding["tool_invocation_id"] == "invocation-explicit"
@@ -400,6 +401,7 @@ def test_stream_tool_result_projection_preserves_exact_payload_hash_and_lifecycl
 ):
     item = stream_tool_result_projection_item
     projected = projection_codec.project_message((item,))
+    assert projected["data"]["tool_call_id"] == "provider-call-1"
     binding = projected["data"]["response_metadata"][CANONICAL_GROUP_FIELD][0][TOOL_BINDING_FIELD]
     assert set(binding) <= {"tool_call_id", "tool_invocation_id", "tool_attempt_id", "result_id"}
     assert binding["result_id"] == "result-explicit"

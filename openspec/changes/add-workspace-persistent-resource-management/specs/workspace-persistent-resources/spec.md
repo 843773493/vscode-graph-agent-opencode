@@ -186,6 +186,18 @@ Thread runtime unload 或 Thread 删除 MUST 向领域 owner 发出带精确 `se
 
 Workspace backend MUST 在 `/api/v1/resources` 提供工作区级资源列表和详情查询，以及资源持久化、Thread attach/detach、显式 stop 和 delete 操作。列表 MUST 支持按资源类型、保留范围、当前 Thread 关联和不可变来源 `(session_id, thread_id)` 过滤；查询来源 Thread 时也 MUST 返回仍在 30 分钟宽限期内的临时孤儿资源。列表 MUST 能查询没有任何 Thread 关联的 Workspace 资源。写操作 MUST 由领域 owner 执行并返回完整权威结果；失败时返回具体错误且不返回虚假的成功状态。此 API MUST 通过 Workspace Gateway 透明代理，Gateway 不得直接读写工作区 `.boxteam/` 业务数据。
 
+`available_actions` SHALL 表示 owner 按已核实生命周期状态与当前持久 Thread 关联筛选的候选用户动作。有 Thread 关联的资源 MUST NOT 包含 `delete`；未知或不允许操作的过渡状态 MUST NOT 提供虚假的动作。该列表不承诺提交时没有 operation lease 或版本竞争；执行入口 MUST 继续校验 `expected_revision`、实时关联和 lease，拒绝时保持原有错误与零副作用合同。客户端 MUST 消费该 owner 投影，不另行推导第二套动作事实。
+
+#### Scenario: 关联资源不展示删除候选动作
+
+- **WHEN** 已核实资源仍有 Thread 关联，客户端读取其完整资源投影
+- **THEN** `available_actions` 不包含 `delete`；直接提交删除仍由 owner 明确拒绝，资源记录、修订与外部状态不变
+
+#### Scenario: 解除关联后删除仍须通过提交校验
+
+- **WHEN** 资源解除最后一项 Thread 关联且状态允许删除
+- **THEN** 完整资源投影可以包含 `delete`；实际删除仍校验当前 revision 与 operation lease，发生竞争时明确拒绝而不伪报成功
+
 #### Scenario: 用户按 Thread 查看关联资源和临时孤儿
 
 - **WHEN** 用户以 `session_id` 和 `thread_id` 查询 `/api/v1/resources`
@@ -252,3 +264,19 @@ Session 删除流程 MUST 在关闭新准入后，由各资源 owner 收敛目�
 
 - **WHEN** backend 在外部资源操作结果确认前崩溃，且 owner 无法证明该操作未产生副作用
 - **THEN** owner 保留操作结果未知状态并要求显式核实，不自动重放可能造成重复副作用的操作
+
+### Requirement: Fork 资源关联必须消费统一目标检查结果
+
+工作区资源owner SHALL 消费统一寻址requirement「资源目标处理必须复用 owner 事实并单点决策」，提供现有resource_id、workspace_id、retention_scope、来源/关联、owner_revision、status及available_actions的权威事实，并执行实际的目标关联、保留或拒绝。通用fork入口不修改scope、复制运行句柄、启动/停止实例或建立第二生命周期事实。
+
+默认fork不继承终端、浏览器等额外运行资源。显式选择工作区范围资源时，可以复用其原身份和实例并按owner合同关联目标thread；thread范围仍不能关联其它thread，也不因fork自动promote。跨工作区只在该kind的owner实际支持可移植快照导出/导入时处理配置/正文；业务资源ID、活进程、连接和端口不随历史复制。保留范围与读取权限分开校验，不能仅根据workspace URI推断复用资格。
+
+#### Scenario: 显式复用工作区资源保持身份
+
+- **WHEN** 用户显式选择同工作区的workspace范围资源且owner允许关联目标thread
+- **THEN** 保持resource_id和实际实例，建立去重的目标关联，不复制正文或运行句柄；source Session删除只移除source关联，不销毁仍受owner保留的资源
+
+#### Scenario: thread范围资源不自动提升
+
+- **WHEN** fork请求把thread范围终端关联新child，或跨端复制不支持导出的浏览器实例
+- **THEN** owner明确拒绝该资源处理，不promote、不生成伪资源、不恢复连接，通用入口不得覆盖其scope/lease决定

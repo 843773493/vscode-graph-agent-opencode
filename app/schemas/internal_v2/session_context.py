@@ -55,7 +55,7 @@ class SessionContextReadRequest(BaseModel):
     recent_rounds: int = Field(default=3, ge=1, le=50)
     include_initial_goal: bool = True
     cursor: str | None = None
-    limit: int = Field(default=20, ge=1, le=200)
+    limit: int = Field(default=20, ge=1, le=200, description="投影 items 的单页条数上限；messages 中用户与助手消息分别计条，max_chars 可进一步截短。不是 recent_rounds、Turn 数或完整 snapshot，续页由 has_more/next_cursor 判定。")
     max_chars: int = Field(default=16_384, ge=256, le=65_536)
     revision: str | None = None
 

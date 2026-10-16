@@ -290,6 +290,7 @@ async def test_real_run_mode_reload_rebuilds_r03_registration_and_preserves_old_
                 assert len(parents) == 1 and parents[0].revision == revision.revision
                 content = mcp_guidance_content(saver.read_resource_activation_payload(
                     activation, parents[0],
+                    storage_owner=(session_id, thread_id),
                     checkpoint_ns=saved_request.runtime.execution_info.checkpoint_ns,
                 ))
                 frames = [frame for frame in binding.prefix.state.frames
@@ -312,6 +313,7 @@ async def test_real_run_mode_reload_rebuilds_r03_registration_and_preserves_old_
                     assert dict(parent.source_lineage_ref.sources)[TEAM_LEDGER_SOURCE_ID] == "0"
                     payload = saver.read_resource_activation_payload(
                         activation, parent,
+                        storage_owner=(session_id, thread_id),
                         checkpoint_ns=saved_request.runtime.execution_info.checkpoint_ns,
                     )
                     assert parent.revision == parent.content_hash == sha256_jcs(payload)

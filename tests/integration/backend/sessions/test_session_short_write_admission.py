@@ -52,6 +52,9 @@ from app.services.infrastructure.node_debug.session.session_admission import (
 from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.infrastructure.session_goal_store import SessionGoalStore
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.harness.python.run_context import TestRunContext
@@ -184,6 +187,7 @@ async def harness() -> AsyncIterator[_Harness]:
         workspace_id=workspace.workspace_id,
         path_resolver=workspace.resolver,
         creation_service=workspace.creation_service,
+        initialize_thread_storage=RolloutCheckpointSaver(workspace.sessions_root).initialize_thread_storage,
     )
     job_service = JobService(
         job_event_bus=JobEventBus(),

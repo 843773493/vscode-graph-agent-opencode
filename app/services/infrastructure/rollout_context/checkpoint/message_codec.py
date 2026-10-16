@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 
 from langchain_core.messages import (
     AIMessage,
@@ -25,12 +26,16 @@ from app.domain.itemized.enums import (
     SemanticKind,
     TurnScope,
 )
-from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.hashing import canonical_json_bytes, content_hash
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
     ItemProvenanceRelation,
     ItemSourceManifest,
     ProjectionPartRef,
+)
+from app.domain.itemized.identity.tool_call_identity import (
+    matches_tool_call_id,
+    provider_tool_call_id,
 )
 from app.domain.itemized.records import (
     CanonicalItemRecord,
@@ -265,13 +270,31 @@ class LangChainMessageCodec:
             model_call_id = self.model_call_id(preceding)
             if model_call_id is None:
                 continue
+            identity = ItemProjectionIdentity(model_call_id=model_call_id)
             if any(
-                call.get("id") == tool_call_id
-                or call.get("tool_call_id") == tool_call_id
+                isinstance(call.get("id") or call.get("tool_call_id"), str)
+                and matches_tool_call_id(
+                    identity, call.get("id") or call["tool_call_id"], tool_call_id,
+                )
                 for call in self.tool_calls(preceding)
             ):
                 return model_call_id
         return None
+
+    def tool_result_call_ids(self, messages: Sequence[object]) -> tuple[str, ...]:
+        """从真实 ToolMessage 与其 emitting assistant 取得结果的 scoped identity。"""
+        call_ids = []
+        for index, message in enumerate(messages):
+            if not isinstance(message, ToolMessage):
+                continue
+            model_call_id = self.tool_message_model_call_id(message, messages[:index])
+            identity = ItemProjectionIdentity(model_call_id=model_call_id)
+            raw_call_id = provider_tool_call_id(identity, message.tool_call_id)
+            call_ids.append(
+                f"{model_call_id}:tool-call:{raw_call_id}"
+                if model_call_id is not None else raw_call_id
+            )
+        return tuple(dict.fromkeys(call_ids))
 
     def items_for_message(
         self,
@@ -283,7 +306,14 @@ class LangChainMessageCodec:
         execution_id: str | None = None,
         timestamp: str,
         model_call_id: str | None = None,
+        canonical_items: Sequence[CanonicalItemRecord] = (),
     ) -> tuple[CanonicalItemRecord, ...]:
+        """timestamp 是消息 canonical 业务 UTC 时刻；fork 保留源 item.created_at。
+
+        canonical_items 只接受 locator 读出的完整已存消息组，仅复用 item_id/
+        message_group_id；正文与 typed 元数据重新解析，调用方完整比较后引用原组。
+        空序列走新身份，候选 item_sequence 不改变已存组的索引或写入坐标。
+        """
         if turn_id is not None and (not isinstance(turn_id, str) or not turn_id):
             raise ValueError("items_for_message.turn_id 必须是非空字符串或 None")
         if execution_id is not None and (
@@ -306,6 +336,21 @@ class LangChainMessageCodec:
         message_value = self.to_dict(message)
         data = message_value.get("data")
         data_mapping = data if isinstance(data, Mapping) else {}
+        if canonical_items and canonical_items[-1].semantic_kind == SemanticKind.COMPACTION_SUMMARY:
+            stored = canonical_items[-1]
+            if (len(canonical_items) != 1 or not isinstance(message, HumanMessage)
+                or turn_id != stored.turn_id or message_id != message_projection_id(stored)
+                or execution_id != stored.producer_ref.get("invocation_id")):
+                raise ValueError("compaction summary 必须复用同一执行归属的唯一 canonical 来源")
+            metadata = self._metadata(message)
+            if metadata.get("compaction_summary") is not True or metadata.get("internal") is not True:
+                raise ValueError("compaction summary 缺少真实 typed 消息标记")
+            raw_relations = metadata.get("provenance_relations", [])
+            if not isinstance(raw_relations, list) or tuple(ItemProvenanceRelation.from_dict(entry) for entry in raw_relations) != stored.provenance_relations:
+                raise ValueError("compaction summary 的来源关系发生变化")
+            payload = {**stored.payload, "summary": data_mapping.get("content")}
+            return (replace(stored, item_sequence=item_sequence, payload=payload,
+                            content_hash=content_hash(PayloadKind.SUMMARY, payload)),)
         role = self.message_role(message)
         internal = self.is_internal(message)
         content = data_mapping.get("content")
@@ -444,7 +489,7 @@ class LangChainMessageCodec:
         )
         primary = CanonicalItemRecord.create(
             item_sequence=item_sequence,
-            item_id=f"item-{message_id}",
+            item_id=canonical_items[-1].item_id if canonical_items else f"item-{message_id}",
             semantic_kind=semantic_kind,
             payload_kind=payload_kind,
             status=item_status,
@@ -469,13 +514,17 @@ class LangChainMessageCodec:
             provenance_relations=relations,
             turn_id=item_turn_id,
             turn_scope=turn_scope,
-            message_group_id=f"message-{message_id}",
+            message_group_id=canonical_items[-1].message_group_id if canonical_items else f"message-{message_id}",
             wire_role=role,
         )
-        return restore_group_manifests(
-            expand_tool_message(primary, data_mapping.get("content", "")),
-            response_metadata,
-        )
+        group = expand_tool_message(primary, data_mapping.get("content", ""))
+        if canonical_items and len(group) == len(canonical_items):
+            # 身份只来自 locator 读出的规范组；正文和 typed 镜像仍须逐成员重验。
+            group = tuple(
+                replace(item, item_id=stored.item_id, message_group_id=stored.message_group_id)
+                for item, stored in zip(group, canonical_items, strict=True)
+            )
+        return restore_group_manifests(group, response_metadata)
 
     def project_message(
         self,
@@ -493,6 +542,9 @@ class LangChainMessageCodec:
                 ),
                 id=message_id,
             )
+        elif item.semantic_kind == SemanticKind.COMPACTION_SUMMARY:
+            message = HumanMessage(content=item.payload["summary"], id=message_id,
+                                   response_metadata={"internal": True, "compaction_summary": True})
         elif item.semantic_kind == SemanticKind.RUNTIME_NOTICE:
             # runtime notice 仍沿用 checkpoint 的 HumanMessage wire projection，
             # 但通过 canonical semantic kind 恢复 internal 标记，避免它被
@@ -540,10 +592,9 @@ class LangChainMessageCodec:
                 calls = raw_calls if isinstance(raw_calls, list) else [payload]
                 tool_calls.extend(
                     {
-                        "id": str(
-                            call.get("id")
-                            or call.get("tool_call_id")
-                            or group_item.item_id
+                        "id": provider_tool_call_id(
+                            group_item.projection_identity,
+                            str(call.get("id") or call.get("tool_call_id") or group_item.item_id),
                         ),
                         "name": str(call.get("name") or "tool"),
                         "args": dict(call.get("args") or {})

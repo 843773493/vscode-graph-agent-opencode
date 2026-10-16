@@ -18,15 +18,13 @@ from app.services.business.job.lifecycle import (
     transition_job_status,
 )
 from app.services.business.job.pending_queue import JobPendingQueue
+from app.services.business.job.pending_request_controller import PendingJob
 from app.services.business.job.pending_request_service import (
     JobPendingRequestService,
 )
 
 
-class JobControlTarget(Protocol):
-    job_id: str
-    session_id: str
-    status: JobStatus
+class JobControlTarget(PendingJob, Protocol):
     task: asyncio.Task | None
 
 
@@ -103,6 +101,7 @@ class JobControlService:
         dispatch_lock: asyncio.Lock,
         start_job_task: Callable[[JobControlTarget], None],
         schedule_after_cancel: Callable[[JobControlTarget], Awaitable[None]],
+        persist_terminal_status: Callable[[PendingJob, str], Awaitable[bool]],
     ) -> None:
         self._get_jobs = get_jobs
         self._get_current_jobs = get_current_jobs
@@ -110,6 +109,7 @@ class JobControlService:
         self._pending_requests = pending_requests
         self._dispatch_lock = dispatch_lock
         self._start_job_task = start_job_task
+        self._persist_terminal_status = persist_terminal_status
         # 把「暂停中的 Job 被取消」接入与权威取消终态写入点同一条收尾链路：
         # 终态写入与活动槽释放、FIFO 唤醒必须成对发生。
         self._schedule_after_cancel = schedule_after_cancel
@@ -160,6 +160,7 @@ class JobControlService:
                 else:
                     self._resume_job_locked(job)
             elif job.status == JobStatus.queued:
+                await self._persist_terminal_status(job, "cancelled")
                 if not self._pending_queue.remove(job.session_id, job.job_id):
                     raise JobControlRuntimeError.queue_mismatch(job_id)
                 transition_job_status(

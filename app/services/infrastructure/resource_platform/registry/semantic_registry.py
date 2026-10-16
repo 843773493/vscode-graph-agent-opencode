@@ -140,6 +140,12 @@ class ResourceRegistry:
                 raise KeyError(f"语义资源从未有效发布: resource_id={resource_id}")
             return snapshot
 
+    def withdraw(self, resource_id: str) -> None:
+        """撤销已消失来源的当前发布面；已冻结正文与 last-valid 审计事实不变。"""
+        with self._lock:
+            self._descriptors.pop(resource_id, None)
+            self._snapshots.pop(resource_id, None)
+
     def latest_revision(self, resource_id: str) -> str | None:
         with self._lock:
             snapshot = self._snapshots.get(resource_id)

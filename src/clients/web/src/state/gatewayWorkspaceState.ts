@@ -30,6 +30,7 @@ export function applyGatewayWorkspaceListAfterRemoval<
   state: State,
   removedWorkspaceId: string,
   workspaceList: GatewayWorkspaceList,
+  applySelection: boolean,
 ): State {
   const sessionsByWorkspace = new Map(state.sessionsByWorkspace);
   sessionsByWorkspace.delete(removedWorkspaceId);
@@ -46,12 +47,10 @@ export function applyGatewayWorkspaceListAfterRemoval<
 
   return {
     ...withFreshGatewayWorkspaceList(state, workspaceList.items),
-    activeGatewayWorkspaceId: workspaceList.active_workspace_id,
+    ...(applySelection ? { activeGatewayWorkspaceId: workspaceList.active_workspace_id } : {}),
     sessionsByWorkspace,
     sessionGatewayWorkspaceById,
     removingGatewayWorkspaceIds,
-    gatewayError: null,
-    error: null,
-    status: "工作区已删除",
+    ...(applySelection ? { gatewayError: null, error: null, status: "工作区已删除" } : {}),
   };
 }

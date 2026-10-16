@@ -93,7 +93,7 @@ def resolve_event_timeouts(
 async def iter_agent_events(
     *,
     agent: AgentEventSource,
-    input_payload: dict[str, Any],
+    input_payload: dict[str, Any] | None,
     stream_config: dict[str, Any],
     session_id: str,
     job_id: str,
@@ -113,7 +113,9 @@ async def iter_agent_events(
     timeout_triggered = False
     first_progress_deadline: float | None = loop.time() + initial_event_timeout_seconds
     model_deadline: float | None = None
+    model_active = False
     tool_dispatch_deadline: float | None = None
+    previous_pending_tool_call_ids: frozenset[str] = frozenset()
 
     async def raise_stream_timeout(phase: str, *, code: str) -> None:
         if code == "tool_dispatch_timeout" and message_stream_runtime is not None:
@@ -146,13 +148,22 @@ async def iter_agent_events(
                 if message_stream_runtime is not None
                 else ()
             )
-            if model_deadline is None and pending_tool_calls:
-                if tool_dispatch_deadline is None:
+            pending_tool_call_ids = frozenset(
+                tool_call_id for tool_call_id, _name, _complete in pending_tool_calls
+            )
+            if not model_active and pending_tool_calls:
+                # 精确 canonical call 退出 pending 才是分派进展；新增调用和
+                # chain 等事件不能把整批调用的真实停滞无限续期。
+                if (
+                    tool_dispatch_deadline is None
+                    or previous_pending_tool_call_ids - pending_tool_call_ids
+                ):
                     tool_dispatch_deadline = (
                         loop.time() + effective_tool_dispatch_timeout_seconds
                     )
             else:
                 tool_dispatch_deadline = None
+            previous_pending_tool_call_ids = pending_tool_call_ids
             deadlines = [
                 (model_deadline, "模型响应", "agent_event_timeout"),
                 (
@@ -176,20 +187,20 @@ async def iter_agent_events(
                 deadline = None
                 phase = "Agent 事件流"
                 timeout_code = "agent_event_timeout"
-            if deadline is None:
-                try:
-                    event = await event_iterator.__anext__()
-                except StopAsyncIteration:
-                    return
-            else:
-                timeout = deadline - loop.time()
-                if timeout <= 0:
-                    await raise_stream_timeout(phase, code=timeout_code)
-                if next_event_task is None:
-                    next_event_task = asyncio.create_task(
-                        event_iterator.__anext__(),
-                    )
-                try:
+            try:
+                if deadline is None:
+                    if next_event_task is None:
+                        event = await event_iterator.__anext__()
+                    else:
+                        event = await next_event_task
+                elif next_event_task is not None and next_event_task.done():
+                    event = next_event_task.result()
+                else:
+                    timeout = deadline - loop.time()
+                    if timeout <= 0:
+                        await raise_stream_timeout(phase, code=timeout_code)
+                    if next_event_task is None:
+                        next_event_task = asyncio.create_task(event_iterator.__anext__())
                     # wait_for 直接包住异步生成器的 __anext__ 时，超时会把
                     # CancelledError 注入 AgentLoop。使用独立 task 配合 wait，
                     # 保证这里的等待超时只产生本地 tool_dispatch_timeout；
@@ -203,11 +214,16 @@ async def iter_agent_events(
                         timeout_triggered = True
                         await raise_stream_timeout(phase, code=timeout_code)
                     event = next_event_task.result()
-                    next_event_task = None
-                except StopAsyncIteration:
-                    next_event_task = None
-                    return
+                next_event_task = None
+            except StopAsyncIteration:
+                next_event_task = None
+                return
+            consumption_started = loop.time()
             yield event
+            if tool_dispatch_deadline is not None:
+                # 分派 watchdog 只累计事件源等待；processor 正在提交/发布
+                # 已到达事件时，不能把其处理耗时算作工具未分派的空闲。
+                tool_dispatch_deadline += loop.time() - consumption_started
             if _is_progress_event(event):
                 first_progress_deadline = None
             elif first_progress_deadline is not None and _is_agent_lifecycle_event(
@@ -218,12 +234,14 @@ async def iter_agent_events(
                 # 没有卡死；把首事件 watchdog 作为“无事件空闲超时”续期。
                 first_progress_deadline = loop.time() + initial_event_timeout_seconds
             if _is_model_start_event(event):
+                model_active = True
                 model_deadline = (
                     loop.time() + idle_model_timeout_seconds
                     if idle_model_timeout_seconds is not None
                     else None
                 )
             elif _is_model_end_event(event):
+                model_active = False
                 model_deadline = None
             elif model_deadline is not None:
                 # 这是模型空闲 watchdog，而不是从模型开始事件起算的固定
@@ -243,16 +261,19 @@ async def iter_agent_events(
             except asyncio.CancelledError:
                 if not timeout_triggered and primary_exception is None:
                     raise
-            except BaseException:
+            except BaseException as cleanup_error:
                 if not timeout_triggered and primary_exception is None:
                     raise
+                if primary_exception is not None and cleanup_error is not primary_exception:
+                    primary_exception.add_note(f"等待 Agent 事件任务清理失败: {cleanup_error!r}")
         close_iterator = getattr(event_iterator, "aclose", None)
         if callable(close_iterator):
             try:
                 await close_iterator()
-            except asyncio.CancelledError:
-                if not timeout_triggered and primary_exception is None:
+            except BaseException as cleanup_error:
+                if not timeout_triggered and (
+                    primary_exception is None or isinstance(primary_exception, GeneratorExit)
+                ):
                     raise
-            except RuntimeError:
-                if not timeout_triggered and primary_exception is None:
-                    raise
+                if primary_exception is not None:
+                    primary_exception.add_note(f"关闭 Agent 事件迭代器失败: {cleanup_error!r}")

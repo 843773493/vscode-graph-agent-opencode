@@ -38,6 +38,7 @@ class RolloutContextStore:
         message_codec: MessageCodec | None = None,
         storage: RolloutStorage | None = None,
         fork_store_factory: Callable[[RolloutContextStore], RolloutForkStore] = RolloutForkStore,
+        attachment_ref_projector: Callable[[str, str, str], dict[str, str]] | None = None,
     ) -> None:
         def recover_materialization(
             session_id: str,
@@ -53,6 +54,7 @@ class RolloutContextStore:
         self.storage = storage or RolloutStorage(
             sessions_dir, serde=serde, message_codec=message_codec,
             fork_recovery=recover_materialization, initialize_activation=create_resource_activation_schema,
+            attachment_ref_projector=attachment_ref_projector,
         )
         if storage is not None:
             storage._fork_recovery = recover_materialization

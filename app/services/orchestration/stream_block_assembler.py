@@ -140,6 +140,8 @@ class StreamBlockAssemblyMixin:
         model_call_id: str | None = None,
     ) -> None:
         effective_model_call_id = self._resolve_model_call_id(model_call_id)
+        if self.is_summary_candidate(model_call_id or effective_model_call_id):
+            return
         content = getattr(chunk, "content", None)
         if isinstance(content, list):
             for block in content:
@@ -489,22 +491,25 @@ class StreamBlockAssemblyMixin:
             )
         accumulated_args = self._tool_call_arguments.get(tool_call_id, "")
         arguments: dict[str, object]
+        arguments_complete = False
         if accumulated_args:
             try:
                 parsed = json.loads(accumulated_args)
             except json.JSONDecodeError:
-                parsed = {"raw": accumulated_args}
-            arguments = (
-                parsed if isinstance(parsed, dict) else {"raw": accumulated_args}
-            )
+                arguments = {"raw": accumulated_args}
+            else:
+                if isinstance(parsed, dict):
+                    arguments = parsed
+                    arguments_complete = True
+                else:
+                    arguments = {"raw": accumulated_args}
         elif isinstance(raw_args, Mapping):
             arguments = dict(raw_args)
+            arguments_complete = True
         else:
             arguments = {}
         self._tool_call_arguments_by_id[tool_call_id] = arguments
-        self._tool_call_arguments_complete[tool_call_id] = bool(
-            isinstance(arguments, dict) and arguments and "raw" not in arguments
-        )
+        self._tool_call_arguments_complete[tool_call_id] = arguments_complete
         for block_id in tuple(self._active_blocks):
             await self._close_block(
                 block_id,
@@ -627,12 +632,12 @@ class StreamBlockAssemblyMixin:
         existing = self._tool_invocation_ids_by_call_id.get(tool_call_id)
         if existing is not None:
             return existing
-        owner_model_call_id = (
-            self._tool_call_model_call_ids.get(tool_call_id)
-            or model_call_id
-            or self.current_model_call_id
-            or "unknown-model-call"
-        )
+        if tool_call_id in self._tool_call_model_call_ids:
+            owner_model_call_id = self._tool_call_model_call_ids[tool_call_id]
+        else:
+            owner_model_call_id = model_call_id or self.current_model_call_id
+        if owner_model_call_id is None:
+            owner_model_call_id = "unknown-model-call"
         provider_tool_call_id = self._provider_tool_call_ids_by_id.get(
             tool_call_id,
             tool_call_id,

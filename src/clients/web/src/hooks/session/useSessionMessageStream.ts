@@ -28,6 +28,8 @@ import {
 import { waitForReconnect } from "../sessionEventStream/waitForReconnect";
 import { isTransientNetworkError, HttpRequestError } from "../../api/http";
 import { errorMessage } from "../../utils/errorMessage";
+import { sessionScopeKey } from "../../state/session/sessionScope";
+import { hasSessionOwner } from "../../state/session/sessions";
 
 export function useSessionMessageStream({
   apiPort,
@@ -58,7 +60,8 @@ export function useSessionMessageStream({
     const targetSessionId = sessionId;
     const targetTurnId = turnId;
     const targetWorkspaceId = workspaceId;
-    const pendingStreamKey = `pending:${targetSessionId}:${targetTurnId}`;
+    const streamCacheKey = (streamId: string) => `${sessionCacheKey}::${streamId}`;
+    const pendingStreamKey = streamCacheKey(`pending:${targetTurnId}`);
     let lastEventSeq = 0;
     let turnStreamId: string | null = null;
     let frozenThreadId: string | null = null;
@@ -71,20 +74,21 @@ export function useSessionMessageStream({
 
     const updateState = (update: (current: MessageStreamState) => MessageStreamState) => {
       setState((previous) => {
+        if (controller.signal.aborted || !hasSessionOwner(previous, targetSessionId, targetWorkspaceId)) return previous;
         const next = cloneMaps(previous);
         const messageStreams = next.messageStreamsByTurnStream ?? new Map();
         next.messageStreamsByTurnStream = messageStreams;
-        const currentKey = turnStreamId ?? pendingStreamKey;
+        const currentKey = turnStreamId ? streamCacheKey(turnStreamId) : pendingStreamKey;
         const existingEntry = [...messageStreams.entries()].find(([key, value]) =>
-          key === currentKey
-          || (value.sessionId === targetSessionId && value.turnId === targetTurnId),
+          value.sessionCacheKey === sessionCacheKey
+          && (key === currentKey || value.turnId === targetTurnId),
         );
         const existing = existingEntry?.[1];
         const current = existing && existing.turnId === targetTurnId
           ? existing
-          : createMessageStreamState(targetSessionId, targetTurnId);
+          : createMessageStreamState(targetSessionId, targetTurnId, "", sessionCacheKey);
         const updated = update(current);
-        const resolvedKey = updated.turnStreamId || currentKey;
+        const resolvedKey = updated.turnStreamId ? streamCacheKey(updated.turnStreamId) : currentKey;
         next.messageStreamsByTurnStream = writeMessageStreamCache(
           messageStreams,
           resolvedKey,
@@ -103,13 +107,21 @@ export function useSessionMessageStream({
       terminalStateApplied = true;
       setState((previous) => {
         const next = cloneMaps(previous);
-        if (previous.activeJobIdsBySession.get(sessionCacheKey) === targetTurnId) {
+        const currentSessionId = previous.currentSession?.session_id;
+        const currentWorkspaceId = previous.currentSessionWorkspaceId
+          ?? previous.activeGatewayWorkspaceId;
+        const ownsGlobalStatus = currentSessionId === targetSessionId
+          && sessionScopeKey(currentWorkspaceId, currentSessionId)
+            === sessionScopeKey(targetWorkspaceId, targetSessionId);
+        const conversation = previous.pendingConversations.get(sessionCacheKey)?.find((item) => item.turnId === targetTurnId);
+        const terminalJobId = conversation?.jobId;
+        if (terminalJobId && previous.activeJobIdsBySession.get(sessionCacheKey) === terminalJobId) {
           next.activeJobIdsBySession.delete(sessionCacheKey);
         }
-        completePendingForJob(
+        if (terminalJobId) completePendingForJob(
           next.pendingConversations,
           targetSessionId,
-          targetTurnId,
+          terminalJobId,
           terminalStatus === "completed"
             ? "completed"
             : terminalStatus === "interrupted"
@@ -117,9 +129,9 @@ export function useSessionMessageStream({
               : "failed",
           sessionCacheKey,
         );
-        if (terminalStatus === "failed" && terminalFailure?.message) {
+        if (ownsGlobalStatus && terminalStatus === "failed" && terminalFailure?.message) {
           next.status = `任务失败: ${terminalFailure.message}`;
-        } else if (terminalStatus === "interrupted") {
+        } else if (ownsGlobalStatus && terminalStatus === "interrupted") {
           next.status = "任务已取消";
         }
         return next;

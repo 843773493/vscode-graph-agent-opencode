@@ -14,9 +14,11 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
+from html import escape
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote
+from xml.etree.ElementTree import fromstring
 
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_store import (
@@ -72,7 +74,15 @@ from app.services.infrastructure.rollout_context.storage.transaction_projections
 )
 
 _ROLLOUT_FILE_LOCK_TIMEOUT_SECONDS = 10.0
-_prepared_fork_target: ContextVar[SessionCreationRecord | None] = ContextVar(
+@dataclass(frozen=True, slots=True)
+class _PreparedForkTarget:
+    session_id: str
+    thread_id: str
+    session_node: Path
+    thread_node: Path
+
+
+_prepared_fork_target: ContextVar[_PreparedForkTarget | None] = ContextVar(
     "prepared_fork_target",
     default=None,
 )
@@ -123,6 +133,7 @@ class RolloutStorage(
         message_codec: MessageCodec | None = None,
         fork_recovery: Callable[[str, str, str, sqlite3.Connection, Path], None],
         initialize_activation: Callable[[sqlite3.Connection], None],
+        attachment_ref_projector: Callable[[str, str, str], dict[str, str]] | None = None,
     ) -> None:
         self.sessions_dir = Path(sessions_dir).resolve()
         self._path_resolver = get_session_path_resolver(self.sessions_dir)
@@ -134,6 +145,81 @@ class RolloutStorage(
         self._maintenance_owner = RolloutMaintenanceOwner(self)
         self._fork_recovery = fork_recovery
         self._initialize_activation = initialize_activation
+        self._attachment_ref_projector = attachment_ref_projector
+
+    def project_message_attachments(self, session_id: str, thread_id: str, message: dict[str, object]) -> dict[str, object]:
+        """投影附件 owner 冻结的引用和可用性，不改 canonical bytes/hash。"""
+        if self._attachment_ref_projector is None:
+            return message
+        data = message.get("data")
+        if not isinstance(data, Mapping):
+            return message
+        projected = dict(data)
+        mappings: dict[str, dict[str, str]] = {}
+        for field in ("content", "response_metadata"):
+            if field in data:
+                projected[field] = self.project_attachment_payload(session_id, thread_id, data[field], mappings=mappings)
+        return {**message, "data": projected}
+
+    def project_attachment_payload(
+        self, session_id: str, thread_id: str, payload: object, *,
+        mappings: dict[str, dict[str, str]] | None = None,
+    ) -> object:
+        """只投影 typed 附件坐标及系统生成的 block，用户原始正文不参与替换。"""
+        if self._attachment_ref_projector is None:
+            return payload
+        cache = {} if mappings is None else mappings
+
+        def project(file_id: str) -> dict[str, str]:
+            if file_id not in cache:
+                cache[file_id] = self._attachment_ref_projector(session_id, thread_id, file_id)
+            return cache[file_id]
+
+        if isinstance(payload, Mapping):
+            projected = dict(payload)
+            if "attachments" in payload:
+                attachments = payload["attachments"]
+                if not isinstance(attachments, list):
+                    raise TypeError("message attachments 必须是 typed list")
+                mapped = []
+                for attachment in attachments:
+                    if not isinstance(attachment, Mapping) or not isinstance(attachment.get("file_id"), str):
+                        raise TypeError("message attachment projection 必须使用 typed logical file_id")
+                    mapped.append({**attachment, **project(attachment["file_id"])})
+                projected["attachments"] = mapped
+            if "content" in payload:
+                projected["content"] = self.project_attachment_payload(session_id, thread_id, payload["content"], mappings=cache)
+            return projected
+        if not isinstance(payload, list):
+            return payload
+        blocks = []
+        for block in payload:
+            metadata = block.get("metadata") if isinstance(block, Mapping) else None
+            if not isinstance(metadata, Mapping) or metadata.get("origin") != "generated" or metadata.get("kind") not in {"attachment_manifest", "attachment_preview"}:
+                blocks.append(block)
+                continue
+            file_id = metadata.get("file_id")
+            if not isinstance(file_id, str):
+                raise TypeError("generated attachment block 必须有 typed file_id")
+            if not file_id.startswith("boxteam-session://"):
+                blocks.append(block)
+                continue
+            if metadata.get("schema_version") != 1 or metadata.get("path") != file_id:
+                raise ValueError("source-mismatch: generated attachment block 缺少精确 logical reference")
+            reference = project(file_id)
+            projected_block = {**block, "metadata": {**metadata, **reference, "path": reference["file_id"]}}
+            if metadata["kind"] == "attachment_manifest" and reference["file_id"] != file_id:
+                text = block.get("text")
+                if not isinstance(text, str):
+                    raise TypeError("generated attachment manifest 必须有 text")
+                element = fromstring(text + "</attachment>")
+                if element.tag != "attachment" or element.attrib.get("id") != file_id or element.attrib.get("path") != file_id:
+                    raise ValueError("source-mismatch: attachment manifest 与 metadata 不一致")
+                element.attrib.update(id=reference["file_id"], path=reference["file_id"])
+                attributes = " ".join(f'{key}="{escape(value, quote=True)}"' for key, value in element.attrib.items())
+                projected_block["text"] = f"<attachment {attributes}>"
+            blocks.append(projected_block)
+        return blocks
 
     def _codec(self) -> MessageCodec:
         """返回由 checkpoint 组装层注入的消息适配器。"""
@@ -183,9 +269,38 @@ class RolloutStorage(
         if not isinstance(record, SessionCreationRecord):
             raise TypeError("prepared fork target 必须是 SessionCreationRecord")
         target_path = self._path_resolver.resolve_prepared_session_node(record)
-        token: Token[SessionCreationRecord | None] = _prepared_fork_target.set(record)
+        target = _PreparedForkTarget(record.session_id, record.main_thread_id, target_path, target_path)
+        token = _prepared_fork_target.set(target)
         try:
             yield target_path
+        finally:
+            _prepared_fork_target.reset(token)
+
+    @contextmanager
+    def prepared_child_fork_target_scope(self, session_id: str, record) -> Iterator[Path]:
+        """Thread creation owner 的冻结 record 只授予该未发布 child 的路径能力。"""
+        from app.core.session_control_store import (
+            SessionControlStore,
+            ThreadCreationRecord,
+        )
+
+        if not isinstance(record, ThreadCreationRecord) or record.purpose != "fork":
+            raise TypeError("prepared child fork target 必须是 fork ThreadCreationRecord")
+        session_node = self._path_resolver.resolve_session_node(session_id)
+        control = SessionControlStore(session_node / "session-control.sqlite", read_only=True)
+        try:
+            current = control.get_thread_creation_record(record.thread_creation_idempotency_key)
+            if current != record or current.state not in {"preparing", "published"}:
+                raise RuntimeError("prepared child fork target 的冻结 creation intent 已变化")
+        finally:
+            control.close()
+        thread_node = session_node / record.final_relative_locator
+        if thread_node.is_symlink() or not thread_node.is_dir():
+            raise RuntimeError("prepared child fork target 缺少已 rename 的普通节点目录")
+        target = _PreparedForkTarget(session_id, record.child_thread_id, session_node, thread_node)
+        token = _prepared_fork_target.set(target)
+        try:
+            yield thread_node
         finally:
             _prepared_fork_target.reset(token)
 
@@ -197,7 +312,12 @@ class RolloutStorage(
         thread_id: str,
         session_node: Path,
     ) -> Iterator[Path]:
-        """把 fork source 的所有 rollout I/O 定向到已冻结的私有目录。"""
+        """把 source Thread 的 rollout I/O 定向到私有 snapshot session_node。
+
+        ``session_id``/``thread_id`` 仅标识来源历史 owner，thread_id 可为 child；
+        物理 I/O 只使用调用方传入的私有捕获副本 ``session_node``，不按 main_thread_id
+        或 thread_id 推导路径。
+        """
         validate_session_id(session_id)
         validate_thread_id(thread_id)
         if not isinstance(session_node, Path):
@@ -213,7 +333,7 @@ class RolloutStorage(
             or not thread_node.is_dir()
         ):
             raise RuntimeError(
-                "fork source snapshot 必须是含冻结 main thread 的普通目录: "
+                "fork source Thread 的私有 snapshot session_node 必须是普通目录: "
                 f"session_node={snapshot_node}, thread_id={thread_id}"
             )
         snapshot = _ForkSourceSnapshot(session_id, thread_id, snapshot_node)
@@ -235,32 +355,28 @@ class RolloutStorage(
     @staticmethod
     def _prepared_target_record(
         session_id: str,
-    ) -> SessionCreationRecord | None:
+    ) -> _PreparedForkTarget | None:
         record = _prepared_fork_target.get()
         return record if record is not None and record.session_id == session_id else None
 
     def _resolve_session_node(self, session_id: str) -> Path:
         record = self._prepared_target_record(session_id)
         if record is not None:
-            return self._path_resolver.resolve_prepared_session_node(record)
+            return record.session_node
         snapshot = self._fork_source_snapshot_for_session(session_id)
         if snapshot is not None:
             return snapshot.session_node
         return self._path_resolver.resolve_session_node(session_id)
 
     def _resolve_thread_node(self, session_id: str, thread_id: str) -> Path:
-        record = self._prepared_target_record(session_id)
-        if record is not None:
-            return self._path_resolver.resolve_prepared_thread_node(record, thread_id)
         snapshot = self._fork_source_snapshot_for_session(session_id)
-        if snapshot is not None:
-            if thread_id != snapshot.thread_id:
-                raise RuntimeError(
-                    "fork source snapshot 只包含冻结的 source main thread: "
-                    f"session_id={session_id}, expected={snapshot.thread_id}, "
-                    f"actual={thread_id}"
-                )
+        if snapshot is not None and thread_id == snapshot.thread_id:
             return snapshot.session_node
+        record = self._prepared_target_record(session_id)
+        if record is not None and thread_id == record.thread_id:
+            return record.thread_node
+        if snapshot is not None:
+            raise RuntimeError("fork source snapshot 只授予冻结 source Thread 的路径能力")
         return self._path_resolver.resolve_thread_node(session_id, thread_id)
 
     def _resolve_thread_identity(self, session_id: str, thread_id: str | None) -> str:
@@ -283,7 +399,7 @@ class RolloutStorage(
             record = self._prepared_target_record(session_id)
             snapshot = self._fork_source_snapshot_for_session(session_id)
             thread_id = (
-                record.main_thread_id
+                record.thread_id
                 if record is not None
                 else snapshot.thread_id
                 if snapshot is not None
@@ -302,9 +418,6 @@ class RolloutStorage(
             raise RuntimeError(
                 f"rollout 定位的 thread_id 不是 canonical Thread 身份: {thread_id!r}"
             ) from error
-        record = self._prepared_target_record(session_id)
-        if record is not None:
-            self._path_resolver.resolve_prepared_thread_node(record, thread_id)
         return thread_id
 
     def root(
@@ -387,6 +500,11 @@ class RolloutStorage(
     ) -> sqlite3.Connection:
         if not isinstance(checkpoint_ns, str):
             raise TypeError("rollout checkpoint_ns 必须是字符串")
+        if not read_only and self._fork_source_snapshot_for_session(session_id) is not None:
+            raise RuntimeError(
+                "fork frozen source snapshot 禁止可写 SQLite 连接: "
+                f"session_id={session_id}, thread_id={thread_id}, checkpoint_ns={checkpoint_ns!r}"
+            )
         owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
         index_path = self.index_path(
             session_id, checkpoint_ns, thread_id=owner_thread_id
@@ -403,11 +521,12 @@ class RolloutStorage(
         # 不能裸 open/read/close 数据库文件：POSIX close 会释放同进程
         # 其它 SQLite 连接的文件锁。格式校验由下方 SQLite schema 查询完成。
         if read_only:
-            # 历史读取不能执行任何会创建 WAL/SHM 或修改 SQLite 文件的操作。
-            # 使用 mode=ro 也能让连接层直接拒绝误写，避免只读请求污染工作区
-            # 文件监听并触发无意义的前端文件树刷新。
+            # mode=ro 在连接层拒绝业务写入，但在线 WAL 读取仍会更新 SHM read-mark。
+            # SHM 是 SQLite 协调状态；数据库、WAL 与 canonical 正文不得被读取链改写。
+            # 仅冻结 source snapshot 使用 immutable，在线源必须读到已提交 WAL。
             connection = sqlite3.connect(
-                f"file:{quote(str(index_path), safe='/')}?mode=ro",
+                f"file:{quote(str(index_path), safe='/')}?mode=ro"
+                + ("&immutable=1" if self._fork_source_snapshot_for_session(session_id) is not None else ""),
                 uri=True,
                 timeout=30,
                 check_same_thread=False,

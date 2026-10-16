@@ -128,6 +128,7 @@ class HistoryPageReadMixin:
                 anchor_logical_item_ordinal=decoded_cursor.logical_item_ordinal if decoded_cursor else None,
                 lower_logical_item_ordinal=None,
                 upper_logical_item_ordinal=binding.logical_item_read_upper_bound,
+                snapshot_upper_logical_item_ordinal=binding.logical_item_read_upper_bound,
                 execution_id=binding.execution_id,
             )
             before_cursor = self._indexed_before_cursor(
@@ -153,12 +154,12 @@ class HistoryPageReadMixin:
                 missing = [
                     turn_id for turn_id in request.turn_ids if turn_id not in by_turn_id
                 ]
-                canonical_projections = self._context_reader.read_turn_projections(
+                known_turns = self._context_reader.read_existing_turn_ids(
                     snapshot,
                     missing,
                 )
                 stale = [
-                    turn_id for turn_id in missing if turn_id in canonical_projections
+                    turn_id for turn_id in missing if turn_id in known_turns
                 ]
                 if stale:
                     raise StaleTurnReferenceError(
@@ -198,6 +199,7 @@ class HistoryPageReadMixin:
                 anchor_logical_item_ordinal=None,
                 lower_logical_item_ordinal=None,
                 upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
+                snapshot_upper_logical_item_ordinal=binding.logical_item_read_upper_bound,
             )
             selected = [self._span_from_row(row) for row in turn_rows]
             has_before = turn_has_more or internal_page.has_more
@@ -282,6 +284,7 @@ class HistoryPageReadMixin:
                     ),
                     lower_logical_item_ordinal=None,
                     upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
+                    snapshot_upper_logical_item_ordinal=binding.logical_item_read_upper_bound,
                 )
                 if internal_lane_active
                 else InternalExecutionHistoryPage(entries=(), has_more=False)
@@ -333,11 +336,11 @@ class HistoryPageReadMixin:
                     [binding.anchor_turn_id],
                 )
                 if not anchor_rows:
-                    canonical_projections = self._context_reader.read_turn_projections(
+                    known_turns = self._context_reader.read_existing_turn_ids(
                         snapshot,
                         [binding.anchor_turn_id],
                     )
-                    if binding.anchor_turn_id in canonical_projections:
+                    if binding.anchor_turn_id in known_turns:
                         raise StaleTurnReferenceError(
                             session_id=session_id,
                             turn_ids=[binding.anchor_turn_id],
@@ -400,6 +403,7 @@ class HistoryPageReadMixin:
                 anchor_logical_item_ordinal=None,
                 lower_logical_item_ordinal=turn_window.lower_logical_item_ordinal,
                 upper_logical_item_ordinal=turn_window.upper_logical_item_ordinal,
+                snapshot_upper_logical_item_ordinal=binding.logical_item_read_upper_bound,
             )
             internal_before = False
             internal_after = internal_page.has_more
@@ -418,6 +422,7 @@ class HistoryPageReadMixin:
                     upper_logical_item_ordinal=(
                         bounds.upper_logical_item_ordinal
                     ),
+                    snapshot_upper_logical_item_ordinal=binding.logical_item_read_upper_bound,
                     limit=1,
                 )
                 internal_before = bool(before_internal.entries)
@@ -435,6 +440,7 @@ class HistoryPageReadMixin:
                     upper_logical_item_ordinal=(
                         bounds.upper_logical_item_ordinal
                     ),
+                    snapshot_upper_logical_item_ordinal=binding.logical_item_read_upper_bound,
                     limit=1,
                 ) if turn_window.upper_logical_item_ordinal is not None else InternalExecutionHistoryPage(
                     entries=(),
@@ -647,6 +653,7 @@ class HistoryPageReadMixin:
         anchor_logical_item_ordinal: int | None,
         lower_logical_item_ordinal: int | None,
         upper_logical_item_ordinal: int | None,
+        snapshot_upper_logical_item_ordinal: int | None,
         limit: int = _INTERNAL_HISTORY_PAGE_LIMIT,
         execution_id: str | None = None,
     ) -> InternalExecutionHistoryPage:
@@ -659,6 +666,7 @@ class HistoryPageReadMixin:
             anchor_logical_item_ordinal=anchor_logical_item_ordinal,
             lower_logical_item_ordinal=lower_logical_item_ordinal,
             upper_logical_item_ordinal=upper_logical_item_ordinal,
+            snapshot_upper_logical_item_ordinal=snapshot_upper_logical_item_ordinal,
             limit=limit,
             execution_id=execution_id,
         )
@@ -784,6 +792,14 @@ class HistoryPageReadMixin:
             or value.get("rollout_id") != rollout_id
         ):
             raise InvalidTurnCursorError("历史游标不属于当前 rollout")
+        raw_direction = value.get("direction")
+        if not isinstance(raw_direction, str) or raw_direction not in {
+            "before",
+            "after",
+        }:
+            raise InvalidTurnCursorError("历史游标 direction 非法")
+        if expected_direction is not None and raw_direction != expected_direction:
+            raise InvalidTurnCursorError("历史游标 direction 与请求不一致")
         raw_epoch = value.get("projection_epoch")
         if (
             isinstance(raw_epoch, bool)
@@ -797,9 +813,6 @@ class HistoryPageReadMixin:
                 cursor_epoch=raw_epoch,
                 current_epoch=projection_epoch,
             )
-        raw_view_id = value.get("view_id")
-        if view_id is None or raw_view_id != view_id:
-            raise InvalidTurnCursorError("历史游标不属于当前 context view")
         raw_history_revision = value.get("history_view_revision")
         if (
             isinstance(raw_history_revision, bool)
@@ -817,6 +830,9 @@ class HistoryPageReadMixin:
                 cursor_history_view_revision=raw_history_revision,
                 current_history_view_revision=history_view_revision,
             )
+        raw_view_id = value.get("view_id")
+        if view_id is None or raw_view_id != view_id:
+            raise InvalidTurnCursorError("历史游标不属于当前 context view")
         if (
             value.get("turn_read_upper_bound") != turn_read_upper_bound
             or value.get("logical_item_read_upper_bound")
@@ -825,14 +841,6 @@ class HistoryPageReadMixin:
             raise RuntimeError(
                 "相同 history_view_revision 下 rollout history upper bound 漂移"
             )
-        raw_direction = value.get("direction")
-        if not isinstance(raw_direction, str) or raw_direction not in {
-            "before",
-            "after",
-        }:
-            raise InvalidTurnCursorError("历史游标 direction 非法")
-        if expected_direction is not None and raw_direction != expected_direction:
-            raise InvalidTurnCursorError("历史游标 direction 与请求不一致")
         try:
             decoded = TurnCursorDTO.model_validate(value)
         except ValueError as error:

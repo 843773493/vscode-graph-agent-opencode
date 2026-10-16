@@ -91,7 +91,11 @@ async def discover_communication_target(payload: CommunicationDiscoveryRequest, 
 async def relay_communication(payload: CommunicationGatewayRequest, request: Request, _: Annotated[str, Depends(verify_gateway_token)]):
     service = request.app.state.federation_rpc_service
     try:
-        if payload.resource_target is not None:
+        if payload.fork_target is not None:
+            if payload.body.get("source_gateway_id") != service.gateway_id:
+                raise ValueError("fork relay origin 不是当前 Gateway")
+            target = payload.fork_target
+        elif payload.resource_target is not None:
             if payload.body.get("source_gateway_id") != service.gateway_id:
                 raise ValueError("上下文查询 origin 不是当前 Gateway")
             target = payload.resource_target

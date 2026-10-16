@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { loadSessionHistory } from "../../api/session/sessionTurnHistory";
 import { sendUserMessage } from "../../api/session/sessionMessages";
+import type { ResourceThreadRef } from "../../api/workspaceResources";
 import type { ChildThreadSummary, MessageRunAccepted, TurnHistoryPage } from "../../types/backend";
 import { mergeChildThreadHistory } from "../../state/childThreadDisplay";
 import { errorMessage } from "../../utils/errorMessage";
@@ -21,7 +22,42 @@ const EMPTY: ChildThreadConversationSnapshot = {
   history: null, report: null, view: "history", draft: "", loading: false,
   sending: false, error: null, accepted: null, paged: false,
 };
-const INCLUDE = ["user", "text", "final_response", "internal"] as const;
+const INCLUDE = ["user", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"] as const;
+
+export interface ChildThreadSelectionIntent {
+  workspaceId: string;
+  sessionId: string;
+  threadId: string;
+  view: "history" | "report";
+}
+
+export function resolveTerminalResourceTarget({
+  childPanelVisible,
+  selectionIntent,
+  selectedThread,
+  bottomPanelWorkspaceId,
+  mainThread,
+}: {
+  childPanelVisible: boolean;
+  selectionIntent: ChildThreadSelectionIntent | null;
+  selectedThread: ChildThreadSummary | null;
+  bottomPanelWorkspaceId: string | null;
+  mainThread: ResourceThreadRef | null;
+}): { thread: ResourceThreadRef | null; unavailable: boolean } {
+  if (!childPanelVisible || !selectionIntent) {
+    return { thread: mainThread, unavailable: false };
+  }
+  if (
+    selectionIntent.workspaceId !== bottomPanelWorkspaceId
+    || selectedThread?.thread_id !== selectionIntent.threadId
+  ) {
+    return { thread: null, unavailable: true };
+  }
+  return {
+    thread: { session_id: selectionIntent.sessionId, thread_id: selectionIntent.threadId },
+    unavailable: false,
+  };
+}
 
 /** 子线程对话只读取精确 owner 的冷历史；缓存与草稿属于展示态。 */
 export function useChildThreadConversation({
@@ -38,8 +74,10 @@ export function useChildThreadConversation({
   const [seen, setSeen] = useState<Record<string, string>>({});
   const readRef = useRef<AbortController | null>(null);
   const sendingRef = useRef(new Set<string>());
-  const selectedThread = selection?.scope === scope
-    ? threads.find((thread) => thread.thread_id === selection.threadId) ?? null : null;
+  const selectionIntent: ChildThreadSelectionIntent | null = selection?.scope === scope && workspaceId && sessionId
+    ? { workspaceId, sessionId, threadId: selection.threadId, view: selection.view } : null;
+  const selectedThread = selectionIntent
+    ? threads.find((thread) => thread.thread_id === selectionIntent.threadId) ?? null : null;
   const threadId = selectedThread?.thread_id ?? null;
   const key = threadId ? JSON.stringify([scope, threadId]) : null;
   const activeKeyRef = useRef(key);
@@ -71,8 +109,8 @@ export function useChildThreadConversation({
         include: [...INCLUDE],
       }, workspaceId, controller.signal, threadId);
       if (controller.signal.aborted || scopeRef.current !== ownerScope) return;
-      if (page.thread_id !== threadId || page.items.some((turn) => turn.session_id !== sessionId)
-        || (page.internal_executions ?? []).some((execution) => execution.thread_id !== threadId || execution.session_id !== sessionId)) {
+      // page 属于请求的真实容器；继承的历史成员保留其原 Session/Thread scope。
+      if (page.thread_id !== threadId) {
         throw new Error("子线程历史响应的 owner 与请求不一致");
       }
       if (view === "report" && !(page.internal_executions ?? []).some((execution) => execution.execution_id === selectedThread?.report_execution_id)) {
@@ -114,6 +152,7 @@ export function useChildThreadConversation({
     const content = latestRef.current.draft.trim();
     if (!content) return;
     const ownerScope = scope;
+    let failure: string | null = null;
     sendingRef.current.add(key);
     update(key, (prior) => ({ ...prior, sending: true, error: null }));
     try {
@@ -121,21 +160,41 @@ export function useChildThreadConversation({
       if (accepted.thread_id !== threadId) throw new Error("子线程消息响应的 owner 与请求不一致");
       if (scopeRef.current !== ownerScope) return;
       update(key, (prior) => ({ ...prior, accepted, sending: false, draft: prior.draft.trim() === content ? "" : prior.draft }));
-      await read("history");
     } catch (error) {
       if (scopeRef.current !== ownerScope) return;
-      const failure = errorMessage(error);
-      await read("history");
-      update(key, (prior) => ({ ...prior, sending: false, error: prior.error ? `${failure}；重新读取失败：${prior.error}` : failure }));
+      failure = errorMessage(error);
+      update(key, (prior) => ({ ...prior, sending: false, error: failure }));
     } finally {
+      // 发送锁只覆盖接受请求；历史刷新不能阻止同一 child 的后继 queued 消息。
       sendingRef.current.delete(key);
     }
+    await read("history");
+    if (failure !== null) update(key, (prior) => ({ ...prior, error: prior.error ? `${failure}；重新读取失败：${prior.error}` : failure }));
   }, [apiPort, key, read, scope, sessionId, threadId, update, workspaceId]);
 
+  const selectThreadForOwner = useCallback((
+    owner: { workspaceId: string; sessionId: string },
+    id: string,
+    view: "history" | "report" = "history",
+  ) => {
+    const ownerScope = JSON.stringify([owner.workspaceId, owner.sessionId]);
+    setSelection((prior) => prior?.scope === ownerScope && prior.threadId === id && prior.view === view
+      ? prior : { scope: ownerScope, threadId: id, view });
+  }, []);
+  const selectThread = useCallback((id: string, view: "history" | "report" = "history") => {
+    if (!workspaceId || !sessionId) return;
+    selectThreadForOwner({ workspaceId, sessionId }, id, view);
+  }, [selectThreadForOwner, sessionId, workspaceId]);
+  const close = useCallback(() => {
+    readRef.current?.abort();
+    setSelection(null);
+  }, []);
+
   return {
-    selectedThread, snapshot,
-    selectThread: (id: string, view: "history" | "report" = "history") => { if (id !== threadId) readRef.current?.abort(); setSelection({ scope, threadId: id, view }); },
-    close: () => { readRef.current?.abort(); setSelection(null); },
+    selectedThread, selectionIntent, snapshot,
+    selectThread,
+    selectThreadForOwner,
+    close,
     setDraft: (draft: string) => { if (key) update(key, (prior) => ({ ...prior, draft })); },
     refresh: () => read("history"),
     openReport: () => read("report"),

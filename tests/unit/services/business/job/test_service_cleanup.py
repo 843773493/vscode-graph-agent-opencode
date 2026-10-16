@@ -73,12 +73,14 @@ async def test_delete_session_jobs_removes_running_and_queued_jobs(
     service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] = running_job.job_id
     service._pending_queue.append(session_id, queued_job.job_id, "after_turn", thread_id=queued_job.thread_id)
 
-    deleted_count = await service.delete_session_jobs(session_id)
+    deleted_count = await service.run_session_delete_operation(
+        session_id, lambda: service.delete_session_jobs(session_id),
+    )
 
     assert deleted_count == 2
     assert running_task.cancelled()
     assert running_job.job_id not in service._jobs
     assert queued_job.job_id not in service._jobs
     assert other_job.job_id in service._jobs
-    assert session_id not in service._thread_current_job
+    assert all(key[0] != session_id for key in service._thread_current_job)
     assert service._pending_queue.ids(session_id) == ()

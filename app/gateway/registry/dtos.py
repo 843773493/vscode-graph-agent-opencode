@@ -20,6 +20,7 @@ from .core import WorkspaceTarget
 
 class RegistryDtosMixin:
     async def list_dtos(self, *, check_health: bool = True) -> list[GatewayWorkspaceDTO]:
+        active_workspace_id = self._active_workspace_id
         targets = list(self._targets.values())
         backend_owners = tuple((owner, owner.contract) for owner in self._backend_owners.values())
         backend_contracts = {
@@ -229,7 +230,7 @@ class RegistryDtosMixin:
                     backend_url=target.backend_url,
                     connection_kind=target.connection_kind,
                     status=status,
-                    active=target.workspace_id == self._active_workspace_id,
+                    active=target.workspace_id == active_workspace_id,
                     managed=target.managed,
                     removable=target.removable,
                     system_default=target.system_default,

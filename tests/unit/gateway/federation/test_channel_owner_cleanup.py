@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 import pytest
 
 from app.core.sqlite_state import SQLiteStateDatabase
@@ -111,20 +112,21 @@ class _FederationCase:
 
 
 @pytest.fixture
-def federation_case(tmp_path: Path) -> Iterator[_FederationCase]:
+async def federation_case(tmp_path: Path) -> AsyncIterator[_FederationCase]:
     gateway_root = tmp_path / "gateway"
     database = federation_control_database(gateway_root=gateway_root)
     control_store = FederationControlStore(database=database)
     credential_store = FederationCredentialStore(
         storage_path=tmp_path / "credentials" / "federation.json"
     )
+    http_client = httpx.AsyncClient(trust_env=False)
     service = FederationRpcService(
         gateway_id="gateway_local",
         policy_store=FederationPolicyStore(),
         control_store=control_store,
         signing_key=object(),
         catalog=WorkspaceCatalogPort(),
-        session_main=WorkspaceSessionMainPort(),
+        session_main=WorkspaceSessionMainPort(http_client=http_client),
         credential_store=credential_store,
     )
     owner = FederationChannelOwner(
@@ -148,6 +150,7 @@ def federation_case(tmp_path: Path) -> Iterator[_FederationCase]:
             ),
         )
     finally:
+        await http_client.aclose()
         control_store.close()
 
 

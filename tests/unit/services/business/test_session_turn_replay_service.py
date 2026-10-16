@@ -139,6 +139,7 @@ class RecordingDispatcher:
             return MessageRunAccepted(
                 message_id=message.message_id,
                 job_id="job_replayed",
+                turn_id=accepted["turn_id"],
                 status="running",
                 thread_id=owner.thread_id,
                 dispatch=JobDispatchSnapshotDTO(
@@ -205,6 +206,7 @@ async def _put_checkpoint(
 
 
 async def _build_service(
+    prepare_execution,
     tmp_path,
     session_bundle_factory,
     jobs: list[dict[str, object]],
@@ -223,6 +225,11 @@ async def _build_service(
     first_admission = saver.execution_admission(
         owner.session_id, thread_id=owner.thread_id, execution_id="execution-turn-1",
     )
+    with (
+        session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id),
+        execution_admission_scope(first_admission, langgraph_thread_id=owner.thread_id),
+    ):
+        prepare_execution(saver, key="replay-source-create")
     first_messages = [
         HumanMessage(content="第一问", response_metadata=_metadata("msg_1")),
         AIMessage(content="第一答", response_metadata=_metadata("assistant_1")),
@@ -303,8 +310,9 @@ async def _read_latest(saver: RolloutCheckpointSaver):
 async def test_edit_first_turn_removes_all_following_turns(
     tmp_path,
     session_bundle_factory,
+    frozen_provider_prepare,
 ) -> None:
-    service, saver, dispatcher = await _build_service(
+    service, saver, dispatcher = await _build_service(frozen_provider_prepare,
         tmp_path,
         session_bundle_factory,
         [
@@ -343,8 +351,9 @@ async def test_edit_first_turn_removes_all_following_turns(
 async def test_replay_turn_uses_turn_anchor_resolver(
     tmp_path,
     session_bundle_factory,
+    frozen_provider_prepare,
 ) -> None:
-    service, saver, dispatcher = await _build_service(
+    service, saver, dispatcher = await _build_service(frozen_provider_prepare,
         tmp_path,
         session_bundle_factory,
         [_job("msg_1", JobStatus.completed, job_id="job_1")],
@@ -373,8 +382,9 @@ async def test_replay_turn_uses_turn_anchor_resolver(
 async def test_regenerate_last_reply_reuses_original_prompt(
     tmp_path,
     session_bundle_factory,
+    frozen_provider_prepare,
 ) -> None:
-    service, _, dispatcher = await _build_service(
+    service, _, dispatcher = await _build_service(frozen_provider_prepare,
         tmp_path,
         session_bundle_factory,
         [_job("msg_2", JobStatus.completed)],
@@ -399,8 +409,9 @@ async def test_retry_failed_clears_partial_tool_messages(
     tmp_path,
     session_bundle_factory,
     failure_status: JobStatus,
+    frozen_provider_prepare,
 ) -> None:
-    service, saver, dispatcher = await _build_service(
+    service, saver, dispatcher = await _build_service(frozen_provider_prepare,
         tmp_path,
         session_bundle_factory,
         [_job("msg_2", failure_status)],
@@ -439,8 +450,9 @@ async def test_retry_failed_clears_partial_tool_messages(
 async def test_retry_failed_uses_persisted_trace_after_job_service_restart(
     tmp_path,
     session_bundle_factory,
+    frozen_provider_prepare,
 ) -> None:
-    service, _, _ = await _build_service(
+    service, _, _ = await _build_service(frozen_provider_prepare,
         tmp_path,
         session_bundle_factory,
         [],
@@ -465,8 +477,9 @@ async def test_retry_failed_uses_persisted_trace_after_job_service_restart(
 async def test_retry_failed_accepts_execution_lost_session_interrupted_trace(
     tmp_path,
     session_bundle_factory,
+    frozen_provider_prepare,
 ):
-    service, _, _ = await _build_service(
+    service, _, _ = await _build_service(frozen_provider_prepare,
         tmp_path,
         session_bundle_factory,
         [],
@@ -494,8 +507,9 @@ async def test_retry_failed_accepts_execution_lost_session_interrupted_trace(
 async def test_retry_requires_failed_or_timed_out_job(
     tmp_path,
     session_bundle_factory,
+    frozen_provider_prepare,
 ) -> None:
-    service, _, _ = await _build_service(
+    service, _, _ = await _build_service(frozen_provider_prepare,
         tmp_path,
         session_bundle_factory,
         [_job("msg_2", JobStatus.completed)],
@@ -516,8 +530,9 @@ async def test_retry_requires_failed_or_timed_out_job(
 async def test_replay_rejects_running_job_before_mutating_checkpoint(
     tmp_path,
     session_bundle_factory,
+    frozen_provider_prepare,
 ) -> None:
-    service, saver, dispatcher = await _build_service(
+    service, saver, dispatcher = await _build_service(frozen_provider_prepare,
         tmp_path,
         session_bundle_factory,
         [_job("msg_2", JobStatus.running)],
@@ -546,8 +561,9 @@ async def test_replay_rejects_running_job_before_mutating_checkpoint(
 async def test_replay_requires_explicit_context_only_acknowledgement(
     tmp_path,
     session_bundle_factory,
+    frozen_provider_prepare,
 ) -> None:
-    service, _, _ = await _build_service(
+    service, _, _ = await _build_service(frozen_provider_prepare,
         tmp_path,
         session_bundle_factory,
         [_job("msg_2", JobStatus.completed)],
@@ -565,13 +581,14 @@ async def test_replay_requires_explicit_context_only_acknowledgement(
 async def test_replay_lock_table_stays_bounded_across_many_sessions(
     tmp_path,
     session_bundle_factory,
+    frozen_provider_prepare,
 ) -> None:
     """Replay 锁池对 session 数量必须有固定上界。
 
     旧实现为每个 session 新建一把锁，长驻进程会随历史会话数无界增长；且
     ``setdefault`` 发生在入参校验之前，连被拒绝的非法请求也会永久留下一个锁。
     """
-    service, _, _ = await _build_service(
+    service, _, _ = await _build_service(frozen_provider_prepare,
         tmp_path,
         session_bundle_factory,
         [_job("msg_2", JobStatus.completed)],
@@ -588,9 +605,10 @@ async def test_replay_lock_table_stays_bounded_across_many_sessions(
 async def test_replay_lock_is_stable_and_serializes_same_session(
     tmp_path,
     session_bundle_factory,
+    frozen_provider_prepare,
 ) -> None:
     """分片锁池：同一 session 恒得同一把锁，同 session 临界区仍严格互斥。"""
-    service, _, _ = await _build_service(
+    service, _, _ = await _build_service(frozen_provider_prepare,
         tmp_path,
         session_bundle_factory,
         [_job("msg_2", JobStatus.completed)],

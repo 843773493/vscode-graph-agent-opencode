@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Final
 
 from app.domain.itemized.errors import CodeCarryingError
@@ -85,6 +85,15 @@ def _snapshot_id(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _ModelCallPreparation:
+    parent: ResourceActivationSnapshotRef
+    model_call_id: str
+    checkpoint_ns: str
+    snapshots: tuple[ResourceSnapshot, ...]
+    frozen: ResourceActivationSnapshotRef | None
+
+
 class ResourceActivationCoordinator:
     """把 ResourceRegistry published snapshot 冻结成 domain activation snapshot。"""
 
@@ -116,6 +125,7 @@ class ResourceActivationCoordinator:
 
         if not isinstance(admission, ExecutionAdmission):
             raise TypeError("freeze_execution 必须使用真实 typed admission")
+        checkpoint_ns = self._saver.context_owner_namespace(checkpoint_ns)
         frozen = self._saver.frozen_resource_activation_for_admission(
             admission, checkpoint_ns=checkpoint_ns
         )
@@ -160,18 +170,20 @@ class ResourceActivationCoordinator:
                 model_call_id=None,
                 checkpoint_ns=checkpoint_ns,
             )
-        await self._saver.save_resource_activation_snapshot(snapshot)
+        await self._saver.save_resource_activation_snapshot(
+            snapshot, checkpoint_ns=checkpoint_ns,
+        )
         return snapshot
 
-    async def prepare_model_call(
+    async def capture_model_call(
         self,
         *,
         parent: ResourceActivationSnapshotRef,
         model_call_id: str,
         policy: ResourceActivationPolicySnapshot | None = None,
         checkpoint_ns: str = "",
-    ) -> ResourceActivationSnapshotRef:
-        """没有 model_call kind 时复用 parent；否则建立 parent-linked snapshot。
+    ) -> _ModelCallPreparation:
+        """在写准入之外等待 Registry；这里只捕获内存/已封存事实，不写 owner。
 
         传入的 ``policy`` 必须与 parent 逐字节一致（Turn 内禁止 policy 漂移）；
         model-call binding 只允许追加，parent 的 turn-bound binding 逐字节复用。
@@ -182,6 +194,7 @@ class ResourceActivationCoordinator:
                 _CODE_PARENT_INVALID,
                 f"model call preparation 的 parent 必须是 execution snapshot: {parent.snapshot_kind}",
             )
+        checkpoint_ns = self._saver.context_owner_namespace(checkpoint_ns)
         if policy is not None and (
             policy.revision != parent.activation_policy_revision
             or policy.hash != parent.activation_policy_hash
@@ -192,7 +205,7 @@ class ResourceActivationCoordinator:
             )
         frozen_policy = parent.activation_policy
         if not frozen_policy.has_model_call_boundary():
-            return parent
+            return _ModelCallPreparation(parent, model_call_id, checkpoint_ns, (), parent)
         snapshot_id = _snapshot_id(
             snapshot_kind="model_call",
             owner_session_id=parent.owner_session_id,
@@ -209,22 +222,31 @@ class ResourceActivationCoordinator:
                 raise ResourceActivationError(
                     _CODE_PARENT_INVALID, "model_call 冻结事实与 execution parent 不一致"
                 )
-            return frozen
+            return _ModelCallPreparation(parent, model_call_id, checkpoint_ns, (), frozen)
         snapshots = await self._await_required_snapshots(frozen_policy, boundary="model_call")
+        return _ModelCallPreparation(parent, model_call_id, checkpoint_ns, snapshots, None)
+
+    async def commit_model_call(self, preparation: _ModelCallPreparation) -> ResourceActivationSnapshotRef:
+        """调用者持精确 Session 的短控制准入后才写正文与冻结 snapshot。"""
+        if preparation.frozen is not None:
+            return preparation.frozen
+        parent = preparation.parent
         snapshot = self._build_snapshot(
             snapshot_kind="model_call",
             owner_session_id=parent.owner_session_id,
             owner_thread_id=parent.owner_thread_id,
             execution_id=parent.execution_id,
             turn_id=parent.turn_id,
-            policy=frozen_policy,
-            snapshots=snapshots,
+            policy=parent.activation_policy,
+            snapshots=preparation.snapshots,
             parent=parent,
-            model_call_id=model_call_id,
-            checkpoint_ns=checkpoint_ns,
+            model_call_id=preparation.model_call_id,
+            checkpoint_ns=preparation.checkpoint_ns,
             reuse_parent_bindings=parent.bindings,
         )
-        await self._saver.save_resource_activation_snapshot(snapshot)
+        await self._saver.save_resource_activation_snapshot(
+            snapshot, checkpoint_ns=preparation.checkpoint_ns,
+        )
         return snapshot
 
     def _validate_policy_kinds(

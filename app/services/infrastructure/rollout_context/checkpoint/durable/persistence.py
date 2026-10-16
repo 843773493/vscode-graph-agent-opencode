@@ -24,6 +24,10 @@ from app.domain.itemized.mutation_intents import (
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     validate_tool_protocol_closure,
 )
+from app.services.infrastructure.rollout_context.checkpoint.message_commit.compaction import (
+    new_compaction_event,
+    prepare_compaction,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_commit.prepare import (
     prepare_messages,
 )
@@ -177,6 +181,18 @@ class RolloutCheckpointPersistenceMixin:
                     next_item_sequence=strict_non_negative_int(meta[3], field="database_meta.last_item_sequence") + 1,
                     offset=jsonl_offset_before,
                 )
+                compaction_event = new_compaction_event(
+                    connection, checkpoint, parent_checkpoint_id=parent_checkpoint_id,
+                )
+                compaction_selection = None
+                compaction_summary_sequence = None
+                if compaction_event is not None:
+                    compaction_selection, compaction_summary_sequence = prepare_compaction(
+                        connection=connection, codec=self._storage._codec(), batch=batch,
+                        event=compaction_event, messages=current_messages, thread_id=thread_id,
+                        checkpoint_id=checkpoint_id, timestamp=checkpoint_timestamp_value,
+                        offset=jsonl_offset_before + sum(location[2] for row in batch.prepared for location in row[8]),
+                    )
                 prepared = batch.prepared
                 first_sequence = batch.first_message_sequence
                 last_sequence = batch.last_message_sequence
@@ -185,8 +201,8 @@ class RolloutCheckpointPersistenceMixin:
                     if prepared:
                         raise ValueError("重复 checkpoint 的 canonical message group 发生变化")
                     old_view = connection.execute(
-                        "SELECT view_id FROM checkpoints WHERE checkpoint_id = ? AND checkpoint_ns = ?",
-                        (checkpoint_id, checkpoint_ns),
+                        "SELECT context_view_id FROM checkpoint_channels WHERE checkpoint_id = ? AND channel_name='messages'",
+                        (checkpoint_id,),
                     ).fetchone()
                     ranges = connection.execute(
                         "SELECT start_message_sequence, end_message_sequence FROM context_view_ranges "
@@ -288,11 +304,8 @@ class RolloutCheckpointPersistenceMixin:
                             connection, item_id=canonical_item.item_id,
                             execution_id=execution_id,
                         )
-                        # fork checkpoint 只是把 source 的临时 LangChain view
-                        # 写入 target，真实 Turn identity 要等 canonical item
-                        # remap 和 fork completion 一起建立。若在这里按 source
-                        # turn_id 建 checkpoint-origin TurnRecord，completion
-                        # 只能把它取消，最终留下 source/target 两套 Turn。
+                        # fork 的历史 Turn 与 canonical item 由冻结快照保留；
+                        # checkpoint 只登记目标读取投影，不新建执行身份。
                         if (
                             canonical_item.turn_id is not None
                             and metadata.get("source") != "fork"
@@ -306,7 +319,8 @@ class RolloutCheckpointPersistenceMixin:
                                 timestamp=timestamp,
                             )
                     self._insert_message_projection(
-                        connection, sequence, message_value, timestamp
+                        connection, sequence, message_value, timestamp,
+                        canonical_items=tuple(item for item, _offset, _length in canonical_locations),
                     )
                 # Turn-less 输出与 typed display notice 在同一事务登记；fork 的
                 # target-local item 也从已校验的 canonical group 恢复 membership。
@@ -350,29 +364,43 @@ class RolloutCheckpointPersistenceMixin:
                     if parent
                     else None
                 )
-                channel_values = checkpoint.get("channel_values")
-                has_compaction_event = isinstance(channel_values, Mapping) and (
-                    "_summarization_event" in channel_values
-                )
-                view_kind = (
-                    "compaction"
-                    if has_compaction_event
-                    or checkpoint.get("checkpoint_kind") == "compaction"
-                    or metadata.get("source") == "compaction"
-                    else "checkpoint"
-                )
+                view_kind = "compaction" if compaction_event is not None else "checkpoint"
                 checkpoint_kind = (
                     "compaction" if view_kind == "compaction" else "normal"
                 )
                 if view_kind == "compaction":
-                    validate_tool_protocol_closure(connection, visible_sequences, len(visible_sequences))
+                    # raw channel 仍保存被压缩的声明；协议闭合必须核新的
+                    # prefix/summary/tail，不能用历史完整性掩盖尾部孤立结果。
+                    selected_messages = dict(connection.execute(
+                        "SELECT item.item_id,message.message_sequence FROM item_catalog item "
+                        "JOIN messages message ON message.jsonl_offset=item.jsonl_offset "
+                        "AND message.jsonl_length=item.jsonl_length",
+                    ).fetchall())
+                    selected_sequences = list(dict.fromkeys(
+                        selected_messages[item_id] for item_id in compaction_selection if item_id in selected_messages
+                    ))
+                    validate_tool_protocol_closure(connection, selected_sequences, len(selected_sequences))
+                # 完整 Turn 只补展示历史；Provider 选择继承冻结成员和本次新消息。
+                parent_members = connection.execute(
+                    "SELECT item_id, context_selected, context_ordinal FROM context_view_items "
+                    "WHERE view_id=? AND visible=1", (parent_view_id,),
+                ).fetchall() if parent_view_id is not None else []
+                parent_item_ids = {row[0] for row in parent_members}
+                inherited = [row[0] for row in sorted(
+                    (row for row in parent_members if row[1] == 1),
+                    key=lambda row: strict_non_negative_int(row[2], field="context_view_items.context_ordinal"),
+                )]
+                context_selection = compaction_selection if compaction_selection is not None else (
+                    *inherited, *(item_id for item_id in batch.item_ids if item_id not in parent_item_ids)
+                )
                 view_id = self._storage._create_view(
                     connection,
                     active_branch,
                     parent_view_id,
-                    visible_sequences,
+                    [*visible_sequences, compaction_summary_sequence] if compaction_summary_sequence is not None else visible_sequences,
                     timestamp,
                     view_kind=view_kind,
+                    ordered_context_item_ids=context_selection,
                 )
                 # canonical history 保留两个 sink 的全部事实；LangGraph messages
                 # channel 只冻结本次提供的消息和声明的父 channel，不能夹带尚未
@@ -478,6 +506,7 @@ class RolloutCheckpointPersistenceMixin:
                         connection,
                         checkpoint=checkpoint,
                         message_count=len(current_messages),
+                        compaction_event=compaction_event,
                     ),
                     transaction_id,
                     timestamp,
@@ -529,15 +558,11 @@ class RolloutCheckpointPersistenceMixin:
         *,
         checkpoint: Checkpoint,
         message_count: int,
+        compaction_event: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
         """保存 checkpoint 控制信息，并保留 compaction 的 message cutoff。"""
         payload: dict[str, object] = {"message_count": message_count}
-        channel_values = checkpoint.get("channel_values")
-        event = (
-            channel_values.get("_summarization_event")
-            if isinstance(channel_values, Mapping)
-            else None
-        )
+        event = compaction_event
         if not isinstance(event, Mapping):
             return payload
         cutoff_index = event.get("cutoff_index")

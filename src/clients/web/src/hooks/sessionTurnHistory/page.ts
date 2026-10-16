@@ -1,4 +1,4 @@
-import { useCallback, type MutableRefObject } from "react";
+import { useCallback, useRef, type MutableRefObject } from "react";
 import { HttpRequestError, isTransientNetworkError } from "../../api/http";
 import {
   loadSessionHistory,
@@ -486,12 +486,41 @@ export function useAroundTurnLoader({
   requestSignal,
   setState,
 }: Omit<Parameters<typeof useDirectionalTurnLoader>[0], "direction">):
-  (anchorTurnId: string) => Promise<void> {
-  return useCallback(async (anchorTurnId: string) => {
-    if (!apiPort || !sessionId || !sessionCacheKey || !anchorTurnId) return;
+  (anchorTurnId: string, signal?: AbortSignal) => Promise<void> {
+  const activeRequestRef = useRef<AbortController | null>(null);
+  return useCallback(async (anchorTurnId: string, navigationSignal?: AbortSignal) => {
+    if (!apiPort || !sessionId || !sessionCacheKey || !anchorTurnId) {
+      throw new Error("当前会话尚未就绪，无法定位轮次");
+    }
     const targetGeneration = generationRef.current;
     const currentTimeline = getCurrentTimeline();
-    if (!currentTimeline || currentTimeline.generation !== targetGeneration) return;
+    if (!currentTimeline?.threadId || currentTimeline.generation !== targetGeneration) {
+      throw new Error("当前线程历史尚未就绪，请稍后重试");
+    }
+    activeRequestRef.current?.abort();
+    const controller = new AbortController();
+    activeRequestRef.current = controller;
+    const signal = AbortSignal.any([requestSignal, controller.signal, ...(navigationSignal ? [navigationSignal] : [])]);
+    const isCurrentRequest = () => activeRequestRef.current === controller
+      && generationRef.current === targetGeneration
+      && getCurrentTimeline()?.threadId === currentTimeline.threadId;
+    const releaseLoading = () => {
+      setState((previous) => {
+        const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
+        // 离开 owner 后仍可清原 generation；同代后继请求的标志由它自己持有。
+        if (activeRequestRef.current !== controller
+          || timeline.generation !== targetGeneration
+          || timeline.threadId !== currentTimeline.threadId) return previous;
+        return {
+          ...previous,
+          turnTimelinesBySession: writeTurnTimelineCache(
+            previous.turnTimelinesBySession,
+            sessionCacheKey,
+            { ...timeline, loadingBefore: false, loadingAfter: false },
+          ),
+        };
+      });
+    };
     setState((previous) => {
       const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
       if (timeline.generation !== targetGeneration) return previous;
@@ -520,45 +549,23 @@ export function useAroundTurnLoader({
           after_turns: CURSOR_HISTORY_TURNS,
         },
         workspaceId,
-        requestSignal,
+        signal,
+        currentTimeline.threadId,
       );
+      signal.throwIfAborted();
+      if (!isCurrentRequest()) throw new Error("轮次定位请求的会话线程已切换");
+      if (page.thread_id !== currentTimeline.threadId) throw new Error("指定轮次历史的 thread owner 与请求不一致");
+      if (![...page.items, ...(page.summaries ?? [])].some((turn) => turn.turn_id === anchorTurnId)) {
+        throw new Error("当前会话线程中未找到指定轮次：" + anchorTurnId);
+      }
+      const epochDecision = decideTurnProjectionEpoch(getCurrentTimeline()?.projectionEpoch ?? null, page.projection_epoch);
+      if (epochDecision !== "apply") {
+        throw new Error("轮次历史版本已变化，请刷新历史后重试指定轮次");
+      }
       setState((previous) => {
+        if (signal.aborted || !isCurrentRequest()) return previous;
         const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
         if (timeline.generation !== targetGeneration) return previous;
-        const epochDecision = decideTurnProjectionEpoch(
-          timeline.projectionEpoch,
-          page.projection_epoch,
-        );
-        if (epochDecision === "discard_older") {
-          return {
-            ...previous,
-            turnTimelinesBySession: writeTurnTimelineCache(
-              previous.turnTimelinesBySession,
-              sessionCacheKey,
-              {
-                ...timeline,
-                loadingBefore: false,
-                loadingAfter: false,
-              },
-            ),
-          };
-        }
-        if (epochDecision === "refresh_bootstrap") {
-          return {
-            ...previous,
-            sessionHistoryReloadNonce: previous.sessionHistoryReloadNonce + 1,
-            turnTimelinesBySession: writeTurnTimelineCache(
-              previous.turnTimelinesBySession,
-              sessionCacheKey,
-              {
-                ...timeline,
-                loadingBefore: false,
-                loadingAfter: false,
-              },
-            ),
-            status: "Turn 投影已更新，正在重新加载",
-          };
-        }
         return {
           ...previous,
           turnTimelinesBySession: writeTurnTimelineCache(
@@ -569,78 +576,19 @@ export function useAroundTurnLoader({
         };
       });
     } catch (error) {
-      if (requestSignal.aborted) {
-        setState((previous) => {
-          const timeline = timelineForScope(
-            previous.turnTimelinesBySession,
-            sessionCacheKey,
-          );
-          if (timeline.generation !== targetGeneration) return previous;
-          return {
-            ...previous,
-            turnTimelinesBySession: writeTurnTimelineCache(
-              previous.turnTimelinesBySession,
-              sessionCacheKey,
-              {
-                ...timeline,
-                loadingBefore: false,
-                loadingAfter: false,
-              },
-            ),
-          };
-        });
-        return;
+      if (signal.aborted) {
+        releaseLoading();
+        throw error;
       }
-      if (error instanceof StaleTurnCursorHttpError) {
-        setState((previous) => {
-          const timeline = timelineForScope(
-            previous.turnTimelinesBySession,
-            sessionCacheKey,
-          );
-          if (timeline.generation !== targetGeneration) return previous;
-          return {
-            ...previous,
-            sessionHistoryReloadNonce: previous.sessionHistoryReloadNonce + 1,
-            turnTimelinesBySession: writeTurnTimelineCache(
-              previous.turnTimelinesBySession,
-              sessionCacheKey,
-              {
-                ...timeline,
-                loadingBefore: false,
-                loadingAfter: false,
-              },
-            ),
-            status: "Turn 历史游标已失效，正在重新校准",
-          };
-        });
-        return;
-      }
-      if (error instanceof StaleTurnReferenceHttpError) {
-        setState((previous) => {
-          const timeline = timelineForScope(
-            previous.turnTimelinesBySession,
-            sessionCacheKey,
-          );
-          if (timeline.generation !== targetGeneration) return previous;
-          return {
-            ...previous,
-            turnTimelinesBySession: writeTurnTimelineCache(
-              previous.turnTimelinesBySession,
-              sessionCacheKey,
-              {
-                ...timeline,
-                loadingBefore: false,
-                loadingAfter: false,
-              },
-            ),
-            status: "保存的历史位置已失效，已准备从最新位置加载",
-          };
-        });
-        return;
+      if (!isCurrentRequest()) throw error;
+      if (error instanceof HttpRequestError && error.status === 404) {
+        // 指定目标不存在只属于本次导航；保留可用历史与它的事件流。
+        releaseLoading();
+        throw error;
       }
       if (isTransientNetworkError(error)) {
         writeTransientNetworkPreserved(setState, sessionCacheKey, targetGeneration);
-        return;
+        throw error;
       }
       const message = errorMessage(error);
       writeTurnLoadFailure(setState, sessionCacheKey, targetGeneration, message);

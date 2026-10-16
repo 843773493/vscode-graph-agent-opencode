@@ -82,6 +82,32 @@ async def test_thread_unload_immediately_deletes_detached_temporary_resource(bun
 
 
 @pytest.mark.asyncio
+async def test_delete_is_unavailable_until_thread_association_is_detached(bundle: Bundle) -> None:
+    resource = await bundle.create()
+    rid = str(resource["resource_id"])
+    ref = ThreadRef(SESSION_A, THREAD_A)
+    assert "delete" not in resource["available_actions"]
+
+    with pytest.raises(ResourceConflict, match="仍有关联"):
+        await bundle.command(rid, action="delete", expected_revision=1)
+
+    associated = await bundle.owner.get_resource(rid)
+    assert associated["thread_associations"] == [{"session_id": SESSION_A, "thread_id": THREAD_A}]
+    assert associated["owner_revision"] == 1
+    assert associated["status"] == "running"
+    assert bundle.transport.revisions[rid] == 1
+    assert bundle.transport.deleted == []
+    assert bundle.leases.leases_for_resource(rid) == []
+
+    detached = await bundle.command(rid, action="detach", expected_revision=1, thread=ref)
+    assert detached["thread_associations"] == []
+    assert "delete" in detached["available_actions"]
+    deleted = await bundle.command(rid, action="delete", expected_revision=2)
+    assert deleted["status"] == "deleted"
+    assert bundle.transport.deleted == [rid]
+
+
+@pytest.mark.asyncio
 async def test_lease_blocks_own_detach_but_not_other_thread_and_is_released_on_failure(bundle: Bundle) -> None:
     resource = await bundle.create(scope="workspace")
     rid = str(resource["resource_id"])
@@ -628,3 +654,53 @@ async def test_due_orphan_reclaim_waits_for_real_active_lease_then_converges(
     assert bundle.transport.deleted == [rid]
     assert bundle.transport.creates == 1
     assert bundle.leases.leases_for_resource(rid) == []
+
+
+@pytest.mark.asyncio
+async def test_fork_commit_receipt_survives_recover_and_later_detach_without_second_attach(bundle: Bundle) -> None:
+    resource = await bundle.create(scope="workspace")
+    rid = resource["resource_id"]
+    target = ThreadRef(SESSION_B, THREAD_B)
+    attached, receipt = await bundle.owner.attach_for_fork(rid, creation_key="fork-cold-commit", expected_revision=1, thread=target)
+    assert attached["owner_revision"] == 2 and receipt.state == "committed" and receipt.committed_revision == 2
+    bundle.restart()
+    cold, historical = await bundle.owner.attach_for_fork(rid, creation_key="fork-cold-commit", expected_revision=1, thread=target)
+    assert cold["owner_revision"] == 3 and historical == receipt
+    assert bundle.leases.get_lease(receipt.lease_id).status == "released"
+    detached = await bundle.command(rid, action="detach", expected_revision=3, thread=target)
+    replayed, replay_receipt = await bundle.owner.attach_for_fork(rid, creation_key="fork-cold-commit", expected_revision=1, thread=target)
+    assert replayed["owner_revision"] == detached["owner_revision"] == 4
+    assert target not in bundle.owner._store.records[rid].thread_associations
+    assert replay_receipt == receipt and bundle.transport.creates == 1
+
+
+@pytest.mark.asyncio
+async def test_fork_dispatching_marker_does_not_replay_after_lost_transport_receipt(
+    bundle: Bundle, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resource = await bundle.create(scope="workspace")
+    rid = resource["resource_id"]
+    target = ThreadRef(SESSION_B, THREAD_B)
+    original = bundle.transport.sync_owner_revision
+    calls = 0
+
+    async def sync_then_lose(resource_id: str, revision: int) -> None:
+        nonlocal calls
+        calls += 1
+        await original(resource_id, revision)
+        raise ConnectionError("传输已更新但响应丢失")
+
+    monkeypatch.setattr(bundle.transport, "sync_owner_revision", sync_then_lose)
+    current, receipt = await bundle.owner.attach_for_fork(rid, creation_key="fork-lost-response", expected_revision=1, thread=target)
+    assert receipt.state == "dispatching" and receipt.committed_revision is None
+    assert current["owner_revision"] == 2 and current["reconciliation_status"] == "unknown"
+    assert target not in bundle.owner._store.records[rid].thread_associations
+    replay, repeated = await bundle.owner.attach_for_fork(rid, creation_key="fork-lost-response", expected_revision=1, thread=target)
+    assert calls == 1 and replay["owner_revision"] == 2 and repeated == receipt
+    monkeypatch.setattr(bundle.transport, "sync_owner_revision", original)
+    bundle.restart()
+    cold, repeated_cold = await bundle.owner.attach_for_fork(rid, creation_key="fork-lost-response", expected_revision=1, thread=target)
+    assert cold["owner_revision"] == 3 and repeated_cold == receipt
+    assert cold["reconciliation_status"] == "unknown"
+    assert target not in bundle.owner._store.records[rid].thread_associations
+    assert bundle.transport.creates == 1

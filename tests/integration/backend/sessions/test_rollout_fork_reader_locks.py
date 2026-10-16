@@ -14,6 +14,9 @@ from pathlib import Path
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
+from tests.integration.backend.sessions.itemized_projection_helpers import (
+    copy_rollout_snapshot,
+)
 from tests.integration.backend.sessions.test_rollout_fork_protected import (
     fork_workspace as fork_workspace,  # noqa: PLC0414 - 当前正式路径独立工作区
 )
@@ -120,11 +123,7 @@ async def test_fork_preserves_live_reader_and_independent_writer(
     if operation == "preflight":
         await saver.forks.source.preflight_fork(source_session_id=SOURCE_SESSION_ID, mode="full_rollout_copy")
     else:
-        await saver.forks.afork(
-            source_session_id=SOURCE_SESSION_ID,
-            target_session_id=TARGET_SESSION_ID,
-            mode="full_rollout_copy",
-        )
+        await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID)
     after = _locks(index)
     assert after, "fork 不得因父进程 open/close 原始 DB 而释放其它 SQLite reader 的锁"
     assert source_reader.in_transaction == transaction_reader

@@ -11,6 +11,9 @@ from collections.abc import (
 from contextlib import contextmanager
 
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    current_scope,
+)
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutCheckpointIndex,
     RolloutManifest,
@@ -70,12 +73,9 @@ class RolloutIndexMixin:
                 read_only=True,
             )
             connection.execute("BEGIN")
+            self._host._require_v2_runtime(connection)
             self._validate_schema_state(connection)
             self._host._validate_reasoning_projection_connection(connection)
-            self._host._require_v2_runtime(connection)
-            self._validate_v2_commit_offsets(
-                connection, jsonl_path, validate_jsonl_items=validate_integrity
-            )
             database_state = connection.execute(
                 "SELECT database_state FROM database_meta WHERE singleton_id = 1"
             ).fetchone()
@@ -86,6 +86,16 @@ class RolloutIndexMixin:
                 raise RuntimeError(
                     "rollout 正在进行 legacy migration，暂不可建立业务 context snapshot"
                 )
+            actual_owner = current_scope(connection)
+            expected_owner = (session_id, thread_id)
+            if actual_owner != expected_owner:
+                raise ValueError(
+                    "source-mismatch: 读取方与目标 rollout catalog owner 不一致; "
+                    f"expected={expected_owner!r}, actual={actual_owner!r}"
+                )
+            self._validate_v2_commit_offsets(
+                connection, jsonl_path, validate_jsonl_items=validate_integrity
+            )
             committed_row = connection.execute(
                 "SELECT committed_jsonl_offset FROM database_meta WHERE singleton_id = 1"
             ).fetchone()

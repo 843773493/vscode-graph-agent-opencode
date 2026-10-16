@@ -34,6 +34,8 @@ async def test_catalog_loads_unassociated_workspace_browser_without_source_sessi
         resources, errors=await service._load_workspace(target, request_id="req_resources")
     assert errors == []
     assert len(resources) == 1
+    assert resources[0].workspace_id == target.workspace_id == "gw_test"
+    assert resources[0].resource.workspace_id == WORKSPACE_ID
     assert resources[0].resource.thread_associations == []
     assert resources[0].resource.retention_scope == "workspace"
     assert calls == ["http://workspace.test/api/v1/resources"]

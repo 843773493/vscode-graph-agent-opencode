@@ -253,6 +253,9 @@ def gateway_config_policy() -> ConfigPolicyRegistry:
         default_policy="restart_gateway",
         rules=(
             ConfigPolicyRule("/ui/*", "immediate_read", "current"),
+            ConfigPolicyRule("/permissions", "immediate_read", "current"),
+            ConfigPolicyRule("/permissions/federation", "immediate_read", "current"),
+            ConfigPolicyRule("/permissions/federation/*", "immediate_read", "current"),
             ConfigPolicyRule("/features/session_catalog/*", "next_job", "next_job"),
             ConfigPolicyRule("/features/session_generators/*", "next_job", "next_job"),
             ConfigPolicyRule("/runtime/gateway/process/*", "restart_gateway", "restart_gateway"),

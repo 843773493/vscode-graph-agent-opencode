@@ -176,6 +176,7 @@ function mapPayload(type: string, payload: JsonRecord): JsonObject {
       const result: JsonObject = {
         messageId: requiredString(payload, "message_id", path),
         sessionId: requiredString(payload, "session_id", path),
+        threadId: requiredString(payload, "thread_id", path),
         role: requiredString(payload, "role", path),
         content: requiredString(payload, "content", path),
         attachments: payload.attachments === undefined ? [] : (payload.attachments as JsonValue),

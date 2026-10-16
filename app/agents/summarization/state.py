@@ -21,26 +21,29 @@ _MIN_CACHE_PREFIX_MESSAGES = 2
 _PREFERRED_CACHE_PREFIX_MESSAGES = 4
 _MAX_CACHE_PREFIX_MESSAGES = 8
 _MAX_SUMMARY_OVERFLOW_RETRIES = 3
-_TOOL_PAYLOAD_RETRY_MAX_CHARS = 4096
-_TOOL_PAYLOAD_RETRY_TOTAL_CHARS = 8192
-_MEDIA_BLOCK_MARKERS = {
-    "document": "[document]",
-    "file": "[document]",
-    "image": "[image]",
-    "image_url": "[image]",
-    "input_file": "[document]",
-    "input_image": "[image]",
-}
 
 
 class SummaryToolCallError(RuntimeError):
     """摘要模型违反纯文本约束并尝试调用工具。"""
 
 
+class SummaryTextError(ValueError):
+    """摘要响应没有可见正文。"""
+
+
+class SummaryGenerationError(RuntimeError):
+    """第三方摘要器明确返回生成失败。"""
+
+
+class CompactionReductionError(RuntimeError):
+    """生成的摘要没有缩短本次上下文。"""
+
+
 class CachePreservingSummarizationState(SummarizationState):
     """缓存压缩额外维护一次性强制压缩标记。"""
 
     _force_cache_compaction: Annotated[NotRequired[bool], PrivateStateAttr]
+    _compaction_continuation: Annotated[NotRequired[bool], PrivateStateAttr]
 
 
 @dataclass(slots=True)

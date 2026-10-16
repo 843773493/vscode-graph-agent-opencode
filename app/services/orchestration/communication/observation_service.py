@@ -10,7 +10,7 @@ import json
 import secrets
 import time
 import zlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager, closing
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
@@ -22,6 +22,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from app.core.exceptions import NotFoundError
+from app.core.phase_observer import observe_phase
 from app.core.session_control_communication_ledger.observations import (
     RemoteObservation,
     RemoteObservationError,
@@ -45,7 +46,9 @@ from app.schemas.internal_v2.session_context import (
 )
 from app.services.business.communication.addresses import GlobalThreadAddress
 from app.services.business.communication.wait import (
+    DeadlineTimer,
     DurableDeadline,
+    WaitClock,
     WaitObservation,
     WaitSelector,
     WaitSelectorKind,
@@ -86,6 +89,11 @@ class SystemWaitClock:
 
     def utc_now(self) -> datetime:
         return datetime.now(UTC)
+
+
+class SystemDeadlineTimer:
+    async def wait(self, signal: Awaitable[object], timeout: float | None) -> None:
+        await asyncio.wait_for(signal, timeout=timeout)
 
 
 def _hash(value: object) -> str:
@@ -164,10 +172,11 @@ def _result(value: dict[str, object]) -> dict[str, object]:
 
 
 class CommunicationObservationService:
-    def __init__(self, communication: SessionCommunicationService, query: SessionContextQueryService) -> None:
+    def __init__(self, communication: SessionCommunicationService, query: SessionContextQueryService, *, clock: WaitClock | None = None, deadline_timer: DeadlineTimer | None = None) -> None:
         self._communication = communication
         self._query = query
-        self._clock = SystemWaitClock()
+        self._clock = clock if clock is not None else SystemWaitClock()
+        self._deadline_timer = deadline_timer if deadline_timer is not None else SystemDeadlineTimer()
         self._changed = asyncio.Condition()
         self._change_revision = 0
         self._gc_changed = asyncio.Event()
@@ -347,12 +356,21 @@ class CommunicationObservationService:
             budget = remaining_wait_budget_seconds(DurableDeadline(**cast(dict[str, object], envelope.query["deadline"])), self._clock) if operation == "wait" else None
             # 原结果重放仍经过新授权，source/target gate 与网络等待完全分离。
             try:
-                target_result = await service._transport.operation(operation=operation, target=request.target, body=request.model_dump(mode="json"), timeout=max(budget or 0, 0) + 15 if operation == "wait" else None)
+                transport_request = request.model_copy(update={"terminal_replay": previous is not None})
+                target_result = await service._transport.operation(operation=operation, target=request.target, body=transport_request.model_dump(mode="json"), timeout=max(budget or 0, 0) + 15 if operation == "wait" else None)
             except RemoteObservationError as error:
+                if deleted and previous is not None and error.code == "target-deleted" and observation_error_code(previous.get("error")) == "target-deleted":
+                    # 新授权已通过；原 source 取消而 target 尚未准入时只重放
+                    # 自己已保存的 terminal，不建立目标 snapshot/baseline。
+                    if envelope.expires_at <= self._clock.utc_now():
+                        raise RemoteObservationError("operation-retry-expired") from error
+                    return _result(previous)
                 if not deleted and previous is None:
                     await self._record_failure(session_id, request, root_lease, page_lease, error, side="source")
                 raise
             if deleted:
+                if envelope.expires_at <= self._clock.utc_now():
+                    raise RemoteObservationError("operation-retry-expired")
                 return _result(cast(dict[str, object], previous))
             try:
                 if previous is not None:
@@ -367,6 +385,7 @@ class CommunicationObservationService:
                     if envelope.expires_at <= self._clock.utc_now():
                         raise RemoteObservationError("operation-retry-expired")
                     return _result(previous)
+                await observe_phase(source_call_id, "observation.source.response_received")
                 async with service._sessions.session_write_admission(session_id):
                     with closing(service._store(session_id)) as store:
                         _assert_current(store, page_lease)
@@ -391,6 +410,8 @@ class CommunicationObservationService:
                         page = store.get_remote_page(observation_id, side="source", page_identity=page_id)
                         if page.request != page_request or page.result is None:
                             raise RemoteObservationError("target-deleted") from None
+                        if envelope.expires_at <= self._clock.utc_now():
+                            raise RemoteObservationError("operation-retry-expired")
                         return _result(page.result)
 
     async def read(self, *, session_id: str, thread_id: str, source_call_id: str, source_call_created_at: datetime, request: SessionContextReadRequest) -> SessionContextReadResultDTO:
@@ -455,7 +476,12 @@ class CommunicationObservationService:
 
     async def _replay_target(self, request: CommunicationObservationRequest) -> dict[str, object]:
         async with self._gate().shared(request.target.session_id):
-            with closing(self._replay_store(request.target.session_id)) as store:
+            try:
+                self._communication._sessions.assert_session_active(request.target.session_id)
+                store = self._communication._store(request.target.session_id)
+            except _DELETED:
+                store = self._replay_store(request.target.session_id)
+            with closing(store):
                 observation = store.get_remote_observation(request.observation_id, side="target")
                 if observation is None:
                     raise RemoteObservationError("target-deleted")
@@ -465,9 +491,12 @@ class CommunicationObservationService:
                 page = next((page for page in pages if page.page_identity == request.page_identity), None)
                 if page is None:
                     raise RemoteObservationError("target-deleted")
-                if page.page_ordinal != request.page_ordinal or page.request != request.model_dump(mode="json"):
+                durable_request = request.model_copy(update={"terminal_replay": False})
+                if page.page_ordinal != request.page_ordinal or page.request != durable_request.model_dump(mode="json"):
                     raise RemoteObservationError("read-snapshot-mismatch")
                 if page.result is None:
+                    if request.terminal_replay:
+                        raise RemoteObservationError("target-deleted")
                     raise RuntimeError("删除 drain 未终结原 observation page")
                 return _result(page.result)
 
@@ -494,7 +523,11 @@ class CommunicationObservationService:
         async with self._hold("target", request.observation_id):
             if request.expires_at <= self._clock.utc_now():
                 raise RemoteObservationError("operation-retry-expired")
-            result = await self._observe_target(request)
+            # 模式被本次 grant 覆盖，但原冻结业务 envelope 始终不变。
+            if request.terminal_replay:
+                result = await self._replay_target(request)
+            else:
+                result = await self._observe_target(request)
             if request.expires_at <= self._clock.utc_now():
                 raise RemoteObservationError("operation-retry-expired")
             return result
@@ -524,6 +557,12 @@ class CommunicationObservationService:
                     page_lease = _lease(store, "target-page|" + request.page_identity, request.model_dump(mode="json"))
                     if recovery and await service._sessions.resolve_main_thread(target.session_id) != target.thread_id:
                         raise RemoteObservationError("read-snapshot-mismatch")
+            await observe_phase(request.source_call_id, "observation.target.admitted", details={
+                "operation": request.operation, "session_id": target.session_id,
+                "observation_id": request.observation_id, "page_identity": request.page_identity,
+                "lease_id": root_lease.lease_id,
+                "captured_lifecycle_generation": root_lease.captured_lifecycle_generation,
+            })
             self._gc_changed.set()
             if previous is not None:
                 async with service._sessions.session_write_admission(target.session_id):
@@ -535,14 +574,13 @@ class CommunicationObservationService:
             if request.operation == "read":
                 frozen = observation.snapshot
                 if frozen is None:
-                    async with self._gate().shared(target.session_id):
-                        service._sessions.assert_session_active(target.session_id)
-                        snapshot = await self._query.freeze_read_context(read_query)
+                    snapshot = await self._query.freeze_read_context(read_query)
                     frozen = snapshot.model_dump(mode="json")
                     async with service._sessions.session_write_admission(target.session_id):
                         with closing(service._store(target.session_id)) as store:
                             _assert_current(store, root_lease, allow_completed=True)
                             store.commit_remote_observation(request.observation_id, side="target", snapshot=frozen)
+                await observe_phase(request.source_call_id, "observation.target.snapshot_frozen")
                 async with self._gate().shared(target.session_id):
                     service._sessions.assert_session_active(target.session_id)
                     with closing(service._store(target.session_id)) as store:
@@ -606,12 +644,15 @@ class CommunicationObservationService:
         with closing(service._store(target.session_id)) as store:
             if identities is None:
                 if selector is not None and selector.kind == "communication":
-                    store.get_communication_inbox(selector.selector_id)
+                    try:
+                        store.get_communication_inbox(selector.selector_id)
+                    except KeyError:
+                        raise RemoteObservationError("selector_not_found") from None
                     identities = [{"kind": "communication", "id": selector.selector_id}]
                 else:
                     rows = service._saver.cold_execution_observations(target.session_id, target.thread_id, job_ids=[selector.selector_id] if selector is not None and selector.kind == "job" else None, turn_id=selector.selector_id if selector is not None and selector.kind == "turn" else None)
                     if selector is not None and not rows:
-                        raise ValueError(f"selector_not_found: {selector.kind}={selector.selector_id}")
+                        raise RemoteObservationError("selector_not_found")
                     if selector is None:
                         rows = [row for row in rows if row["state"] in {"pending", "running"}]
                     identities = [{"kind": selector.kind if selector is not None else "job", "id": selector.selector_id if selector is not None else row["job_id"], "job_id": row["job_id"], "execution_id": row["execution_id"]} for row in rows]
@@ -650,6 +691,7 @@ class CommunicationObservationService:
                 with closing(service._store(request.target.session_id)) as store:
                     _assert_current(store, lease)
                     store.commit_remote_observation(request.observation_id, side="target", snapshot=frozen)
+        await observe_phase(request.source_call_id, "observation.target.baseline_frozen")
         identities = frozen["identities"]
         while True:
             revision = self._change_revision
@@ -671,7 +713,7 @@ class CommunicationObservationService:
                 if revision != self._change_revision:
                     continue
                 try:
-                    await asyncio.wait_for(self._changed.wait(), timeout=remaining)
+                    await self._deadline_timer.wait(self._changed.wait(), remaining)
                 except TimeoutError:
                     pass
 
@@ -834,6 +876,6 @@ class CommunicationObservationService:
             next_expiry = await self.collect_expired()
             timeout = None if next_expiry is None else max((next_expiry - self._clock.utc_now()).total_seconds(), 0)
             try:
-                await asyncio.wait_for(self._gc_changed.wait(), timeout=timeout)
+                await self._deadline_timer.wait(self._gc_changed.wait(), timeout)
             except TimeoutError:
                 pass

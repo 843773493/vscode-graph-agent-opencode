@@ -163,8 +163,27 @@ class ExecutionAdmission:
             )
 
 
+@dataclass(frozen=True, slots=True)
+class ExecutionAdmissionCursor:
+    """同一 thread 的准入提交顺序；可不连续，不表示全部 context 的排序。"""
+
+    admission: ExecutionAdmission
+    commit_id: int
+    commit_kind: Literal["acceptance", "execution_admission"]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.admission, ExecutionAdmission):
+            raise TypeError("准入游标必须绑定完整 ExecutionAdmission")
+        if not isinstance(self.commit_id, int) or isinstance(self.commit_id, bool) or self.commit_id < 1:
+            raise ValueError("准入游标必须引用真实 storage commit")
+        expected = "acceptance" if self.admission.execution_origin == "user_turn" else "execution_admission"
+        if self.commit_kind != expected:
+            raise ValueError("准入游标 commit kind 与 execution origin 不一致")
+
+
 __all__ = [
     "ExecutionAdmission",
+    "ExecutionAdmissionCursor",
     "ExecutionBinding",
     "ExecutionOrigin",
     "InternalExecutionIntent",

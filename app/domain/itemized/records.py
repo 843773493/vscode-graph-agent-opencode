@@ -319,6 +319,7 @@ def _validate_payload(
             raise ItemSchemaError("compaction_summary payload 必须是 object")
         _non_empty_string(payload.get("summary_id"), "payload.summary_id")
         _non_empty_string(payload.get("view_revision"), "payload.view_revision")
+        _non_empty_string(payload.get("summary"), "payload.summary")
 
 
 def parse_item_projection_manifest(value: object) -> dict[str, object]:
@@ -379,14 +380,16 @@ class CanonicalItemRecord:
     producer_ref: Mapping[str, object]
     payload: object
     content_hash: str
+    # 不可变源 item 创建事实；create 缺省取当前 UTC，显式值原样保留，不是本次提交/投影更新时间。
     created_at: str
     # 未知扩展保留版本与 value；禁止由它控制归属、去重、工具确认或恢复。
     extensions: Mapping[str, object]
     turn_id: str | None = None
     turn_scope: str | None = None
+    # writer 赋予的消息/ModelCall 关联标识；相等不证明存在可投影多成员组。
     message_group_id: str | None = None
     wire_role: str | None = None
-    # 仅显式拆分的 carrier 成组；单 item 为 None，不从邻接猜测 group。
+    # 显式 size/ordinal/content_form 定义完整有序投影组；无 manifest 按单项投影。
     projection_group: ProjectionGroup | None = None
     # checkpoint/stream 身份可空；不可从 item ID、正文或 extension 补造。
     projection_identity: ItemProjectionIdentity | None = None

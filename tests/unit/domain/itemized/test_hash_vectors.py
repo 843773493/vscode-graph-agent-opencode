@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import struct
+from copy import deepcopy
 from dataclasses import replace
 from decimal import Decimal
 
@@ -11,12 +12,13 @@ from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hash import plan_hash, request_hash
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
+    canonical_json_bytes_and_hash,
     content_hash,
     contribution_content_hash,
     payload_content_length,
     sha256_jcs,
 )
-from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextRequestPlan
 
@@ -37,10 +39,13 @@ def test_shared_jcs_vectors(hash_vectors: dict[str, object], input_kind: str) ->
         if row.get("error"):
             with pytest.raises(ItemSchemaError):
                 canonical_json_bytes(value)
+            with pytest.raises(ItemSchemaError):
+                canonical_json_bytes_and_hash(value)
             continue
         expected = row["canonical"].encode("utf-8")
         assert canonical_json_bytes(value) == expected, row["id"]
         assert sha256_jcs(value) == row["hash"], row["id"]
+        assert canonical_json_bytes_and_hash(value) == (expected, row["hash"]), row["id"]
         # 模拟重启后默认 JSON parser 的数值类型选择，而非保留旧进程 float。
         assert canonical_json_bytes(json.loads(expected)) == expected, row["id"]
 
@@ -124,6 +129,17 @@ def test_item_recovery_keeps_the_same_content_preimage(
         producer_ref={"producer_kind": "user", "producer_id": "other-ingress"},
     )
     assert changed_envelope.content_hash == item.content_hash
+
+
+def test_jcs_bytes_and_hash_freeze_same_input_without_caching() -> None:
+    value = {"a": [1, {"value": "before"}]}
+    encoded, digest = canonical_json_bytes_and_hash(value)
+    value["a"][1]["value"] = "after"
+    assert encoded == b'{"a":[1,{"value":"before"}]}'
+    assert digest == sha256_jcs(json.loads(encoded))
+    changed_bytes, changed_digest = canonical_json_bytes_and_hash(value)
+    assert changed_bytes == b'{"a":[1,{"value":"after"}]}'
+    assert changed_digest != digest
 
 
 @pytest.mark.parametrize(
@@ -281,6 +297,41 @@ def test_request_hash_excludes_transport_and_binds_model_and_wire_content(
             )
             != baseline
         )
+
+
+def test_public_request_hash_isolates_policy_reads_and_hashes_new_policy(
+    golden_plan: ContextRequestPlan,
+) -> None:
+    golden_plan = deepcopy(golden_plan)
+    before_preimage = request_hash.context_request_hash_preimage(golden_plan, "provider")
+    before_hash = request_hash.context_request_hash(golden_plan, "provider")
+    assert before_hash == sha256_jcs(before_preimage)
+    wire_order = golden_plan.tool_set_refs[0].tool_policy["wire_tool_order"]
+    assert isinstance(wire_order, list) and len(wire_order) > 1
+    wire_order.reverse()
+    assert request_hash.context_request_hash_preimage(golden_plan, "provider") == before_preimage
+    assert request_hash.context_request_hash(golden_plan, "provider") == before_hash
+    original = golden_plan.tool_set_refs[0]
+    changed = ToolSetRef.from_tool_snapshot(
+        snapshot_id=original.ref_id, session_id=original.session_id,
+        thread_id=original.thread_id, plan_id=original.plan_id,
+        source_revision=original.source_revision, tools=original.tools,
+        tool_policy={**original.tool_policy, "wire_tool_order": wire_order},
+        tool_set_schema=original.tool_set_schema,
+        tool_set_schema_version=original.tool_set_schema_version,
+        tool_policy_version=original.tool_policy_version,
+        assembly_id=original.assembly_id,
+    )
+    changed_plan = replace(golden_plan, tool_set_refs=(changed,), selection=tuple(
+        replace(entry, ref=changed, content_hash=changed.content_hash, content_length=changed.content_length)
+        if isinstance(entry.ref, ToolSetRef) else entry for entry in golden_plan.selection
+    ))
+    after_preimage = request_hash.context_request_hash_preimage(changed_plan, "provider")
+    after_hash = request_hash.context_request_hash(changed_plan, "provider")
+    assert after_preimage["plan_hash"] == changed_plan.plan_hash()
+    assert after_preimage["plan_hash"] != before_preimage["plan_hash"]
+    assert after_hash == sha256_jcs(after_preimage)
+    assert after_hash != before_hash
 
 
 def test_jcs_is_order_independent_and_rejects_non_finite_values() -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager
 from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
@@ -42,6 +43,8 @@ class TurnMigrationSnapshot(BaseModel):
 
 @runtime_checkable
 class TurnSessionLookupProtocol(Protocol):
+    def session_read_admission(self, session_id: str) -> AbstractAsyncContextManager[None]: ...
+
     async def get(self, session_id: str) -> SessionDTO: ...
 
     async def resolve_main_thread(self, session_id: str) -> str: ...

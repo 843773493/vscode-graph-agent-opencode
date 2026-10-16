@@ -33,6 +33,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from uuid import uuid4
 
+from app.core.phase_observer import observe_phase
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import (
     SessionCatalogStore,
@@ -227,14 +228,20 @@ class NavigationMutationExecutor:
                     "待恢复的子树删除对应非 committed 导航终态，拒绝改写 tombstone: "
                     f"operation_id={operation.operation_id}, state={operation.state}"
                 )
-            recovered.append(
-                await self._path_resolver.delete_subtree(
+            try:
+                result = await self._path_resolver.delete_subtree(
                     idempotency_key=delete_record.subtree_delete_idempotency_key,
                     root_node_id=delete_record.root_node_id,
                     mark_transaction_hook=self._subtree_delete_mark_hook,
                     finish_transaction_hook=self._subtree_delete_finish_hook,
                 )
-            )
+            except Exception as error:
+                if operation is None:
+                    raise
+                self._record_delete_settlement_failure(operation, error)
+                logger.exception("递归删除恢复排空失败，原回执需修复: operation_id=%s", operation.operation_id)
+            else:
+                recovered.append(result)
         return recovered
 
     async def execute_record(
@@ -249,6 +256,10 @@ class NavigationMutationExecutor:
         self._require_owner()
         if record.is_terminal:
             return NavigationExecutionOutcome(record=record, settled=True)
+        await observe_phase(record.operation_id, "navigation.before_commit", details={
+            "workspace_id": self._workspace_id, "kind": record.kind,
+            "name": record.params.get("name"), "target_node_id": record.target_node_id,
+        })
         if record.kind == "delete_folder" and not bool(
             record.params.get("recursive", False)
         ):
@@ -451,19 +462,21 @@ class NavigationMutationExecutor:
             committed = self._read_committed_delete(claimed)
             if committed is None:
                 return self._reject(claimed, error, claim=False)
+            committed = self._record_delete_settlement_failure(committed, error)
             logger.error(
-                "递归删除已逻辑提交但物理 settlement 失败，保留 pending 状态: "
+                "递归删除已逻辑提交但物理 settlement 失败，原回执需修复: "
                 "operation_id=%s, error=%s",
                 claimed.operation_id,
                 error,
             )
             return self._terminal_outcome(committed)
-        except Exception:
+        except Exception as error:
             committed = self._read_committed_delete(claimed)
             if committed is None:
                 raise
+            committed = self._record_delete_settlement_failure(committed, error)
             logger.exception(
-                "递归删除已逻辑提交但物理 settlement 异常，保留 pending 状态: "
+                "递归删除已逻辑提交但物理 settlement 异常，原回执需修复: "
                 "operation_id=%s",
                 claimed.operation_id,
             )
@@ -571,6 +584,23 @@ class NavigationMutationExecutor:
             self._queue.settle_delete_operation_in(
                 connection,
                 record=operation,
+                now=utc_now_text(),
+            )
+
+    def _record_delete_settlement_failure(
+        self,
+        record: NavigationMutationRecord,
+        error: Exception,
+    ) -> NavigationMutationRecord:
+        """正常执行与启动恢复共享原 receipt 的失败结算写口。"""
+        owner = self._require_owner()
+        with self._store.write_transaction() as connection:
+            self._queue.require_owner_generation(
+                connection, workspace_id=self._workspace_id,
+                owner_id=owner.owner_id, generation=owner.generation,
+            )
+            return self._queue.mark_delete_repair_required_in(
+                connection, record=record, detail=f"{type(error).__name__}: {error}",
                 now=utc_now_text(),
             )
 

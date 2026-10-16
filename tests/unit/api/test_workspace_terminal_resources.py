@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from app.api.deps import (
@@ -13,11 +13,13 @@ from app.api.deps import (
     verify_local_token,
 )
 from app.api.resources import router
+from app.core.path_utils import workspace_context
 from app.core.trace_middleware import TraceMiddleware
 from tests.support.browser_owner import BrowserBundle, build_browser_bundle
 from tests.support.terminal_owner import (
     SESSION_A,
     THREAD_A,
+    WORKSPACE_ID,
     Bundle,
     build_terminal_bundle,
 )
@@ -33,10 +35,18 @@ def client(bundle: Bundle, browser_bundle: BrowserBundle) -> Iterator[TestClient
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
     app.include_router(router, prefix="/api/v1")
-    app.dependency_overrides[get_terminal_resource_owner] = lambda: bundle.owner
+
+    async def terminal_owner_for_request(request: Request) -> AsyncIterator[object]:
+        workspace_id = request.headers.get("X-BoxTeam-Workspace-Id")
+        if workspace_id != WORKSPACE_ID:
+            raise RuntimeError("资源 API 测试请求缺少显式工作区身份")
+        with workspace_context(workspace_id, bundle.root):
+            yield bundle.owner
+
+    app.dependency_overrides[get_terminal_resource_owner] = terminal_owner_for_request
     app.dependency_overrides[get_browser_resource_owner] = lambda: browser_bundle.owner
     app.dependency_overrides[verify_local_token] = lambda: "authenticated-test"
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-BoxTeam-Workspace-Id": WORKSPACE_ID}) as client:
         yield client
     app.dependency_overrides.clear()
 
@@ -132,6 +142,80 @@ def test_api_unknown_delete_reports_503_without_leaking_path_or_disappearing(
     assert listed[0]["resource_id"] == rid
     assert listed[0]["reconciliation_status"] == "unknown"
     assert listed[0]["status"] != "deleted"
+
+
+def test_terminal_api_delete_rejects_thread_association_without_side_effects(
+    client: TestClient, bundle: Bundle, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = _create(client)
+    resource_id = created["resource_id"]
+    response = client.get(f"/api/v1/resources/{resource_id}")
+    assert response.status_code == 200, response.text
+    associated = response.json()["data"]
+    assert associated["workspace_id"] == WORKSPACE_ID
+    assert associated["kind"] == "terminal"
+    assert associated["status"] == "running"
+    assert associated["reconciliation_status"] == "verified"
+    assert associated["thread_associations"] == [
+        {"session_id": SESSION_A, "thread_id": THREAD_A},
+    ]
+    assert "delete" not in associated["available_actions"]
+
+    transport_revision = bundle.transport.revisions[resource_id]
+    transport_status = bundle.transport.records[resource_id]["status"]
+    delete_calls: list[str] = []
+    delete_resource = bundle.transport.delete_resource
+
+    async def record_delete(terminal_id: str) -> dict[str, object]:
+        delete_calls.append(terminal_id)
+        return await delete_resource(terminal_id)
+
+    monkeypatch.setattr(bundle.transport, "delete_resource", record_delete)
+    rejected = client.post(
+        f"/api/v1/resources/{resource_id}/delete",
+        json={"expected_revision": associated["owner_revision"]},
+    )
+    assert rejected.status_code == 409, rejected.text
+
+    unchanged_response = client.get(f"/api/v1/resources/{resource_id}")
+    assert unchanged_response.status_code == 200, unchanged_response.text
+    unchanged = unchanged_response.json()["data"]
+    assert unchanged == associated
+    assert bundle.transport.revisions[resource_id] == transport_revision
+    assert bundle.transport.records[resource_id]["transport_owner_revision"] == transport_revision
+    assert bundle.transport.records[resource_id]["status"] == transport_status
+    assert delete_calls == []
+    assert bundle.transport.deleted == []
+    assert bundle.leases.leases_for_resource(resource_id) == []
+
+    association = associated["thread_associations"][0]
+    detached_response = client.post(
+        f"/api/v1/resources/{resource_id}/detach",
+        json={"expected_revision": associated["owner_revision"], "thread": association},
+    )
+    assert detached_response.status_code == 200, detached_response.text
+    detached = detached_response.json()["data"]
+    assert detached["thread_associations"] == []
+    assert "delete" in detached["available_actions"]
+    assert detached["owner_revision"] == associated["owner_revision"] + 1
+
+    deleted_response = client.post(
+        f"/api/v1/resources/{resource_id}/delete",
+        json={"expected_revision": detached["owner_revision"]},
+    )
+    assert deleted_response.status_code == 200, deleted_response.text
+    deleted = deleted_response.json()["data"]
+    assert deleted["status"] == "deleted"
+    assert deleted["thread_associations"] == []
+    assert deleted["owner_revision"] == detached["owner_revision"] + 1
+    assert bundle.transport.revisions[resource_id] == deleted["owner_revision"]
+    assert bundle.transport.records[resource_id]["status"] == "deleted"
+    assert delete_calls == [resource_id]
+    assert bundle.transport.deleted == [resource_id]
+    assert bundle.leases.leases_for_resource(resource_id) == []
+    listed = client.get("/api/v1/resources", params={"kind": "terminal"})
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["data"]["items"] == []
 
 
 def test_grant_requires_real_association_and_cannot_create_one(client: TestClient) -> None:

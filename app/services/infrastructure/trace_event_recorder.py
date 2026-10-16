@@ -63,7 +63,9 @@ class TraceEventRecorder:
 
         async with self._session_lock(session_id):
             await self._store.append(session_id, event)
-            if event.type == "job_created":
+            if event.type in {"job_created", "job_started"}:
+                # 恢复沿原 Job 发布真实 started，不重造 created；持久写入成功后
+                # 重建本进程的事件路由，供同一 publisher 的全部后续事件使用。
                 self._job_sessions[event.job_id] = session_id
             elif event.type in _TERMINAL_JOB_EVENT_TYPES:
                 # Job 终态：后续事件要么属于别的 job_id，要么自带 session_id，

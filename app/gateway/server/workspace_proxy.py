@@ -90,6 +90,7 @@ def _is_streaming_workspace_path(path: str) -> bool:
         or path.endswith("/events/stream")
         or path.endswith("/files/events")
         or path.endswith("/message-stream")
+        or path.endswith("/observations/stream")
     )
 
 
@@ -137,7 +138,7 @@ def _navigation_actor(
     auth: GatewayAuthContext | None,
     user_access: UserAccessContext | None,
 ) -> str | None:
-    """从本跳已验证身份构造导航幂等 actor；公开读取路由不附加主体。"""
+    """从本跳已验证身份构造导航 operation 的幂等 actor。"""
     if auth is None:
         return None
     if auth.kind == "federation":
@@ -163,8 +164,7 @@ def _proxy_headers(
     target: WorkspaceTarget | None = None,
     *,
     include_credentials: bool = True,
-    auth: GatewayAuthContext | None = None,
-    user_access: UserAccessContext | None = None,
+    navigation_actor: str | None = None,
 ) -> dict[str, str]:
     headers = filter_hop_by_hop_headers(
         (key, value)
@@ -175,9 +175,8 @@ def _proxy_headers(
     # 按请求注入 Gateway 自身稳定身份；客户端同名头部已在上面的剥离集合里剔除，
     # 故这里写入的永远是本机 Gateway 的权威 gateway_id。
     headers["X-BoxTeam-Gateway-Id"] = load_proxy_gateway_id()
-    actor = _navigation_actor(auth, user_access)
-    if actor is not None:
-        headers[NAVIGATION_ACTOR_HEADER] = actor
+    if navigation_actor is not None:
+        headers[NAVIGATION_ACTOR_HEADER] = navigation_actor
     application = request.scope.get("app")
     gateway_config = getattr(getattr(application, "state", None), "gateway_config", None)
     history_loading = getattr(gateway_config, "history_loading", None)
@@ -415,6 +414,15 @@ async def _proxy_workspace_request(
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}
         else None
     )
+    # 认证主体与导航幂等 scope 分离；只有已解析的两条 operation 路由消费 actor。
+    navigation_actor = (
+        _navigation_actor(auth, user_access)
+        if (request.method, path) in {
+            ("POST", "session-catalog/operations:enqueue"),
+            ("GET", "session-catalog/operations"),
+        }
+        else None
+    )
     retry_availability = _is_retryable_message_stream_availability(
         request.method,
         path,
@@ -511,18 +519,21 @@ async def _proxy_workspace_request(
                         detail=str(error),
                     ) from error
             # 联邦凭据缺失/过期在这里响亮失败；此处抛错也必须归还上面持有的引用。
+            headers = _proxy_headers(
+                request,
+                target,
+                include_credentials=include_credentials,
+                navigation_actor=navigation_actor,
+            )
+            if request_body is not None:
+                # typed 请求已由路由 owner 重写，长度必须属于重写后的 UTF-8 字节。
+                _set_authoritative_header(headers, "Content-Length", str(len(request_body)))
             forwarded = client.build_request(
                 request.method,
                 target_url,
-                params=request.query_params,
+                params=request.query_params.multi_items(),
                 content=request_content,
-                headers=_proxy_headers(
-                    request,
-                    target,
-                    include_credentials=include_credentials,
-                    auth=auth,
-                    user_access=user_access,
-                ),
+                headers=headers,
             )
             try:
                 response = await send_upstream_request(client, forwarded)

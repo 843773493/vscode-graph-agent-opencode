@@ -95,8 +95,7 @@ class ContextSourceManager(
         self._published_revision_supplier: Callable[
             [tuple[ContextSourceDescriptor, ...]], tuple[PublishedContextSourceRevision, ...]
         ] | None = None
-        if owner is not None and control_state_port is not None:
-            self._restore_control_states(owner, control_state_port)
+        self.refresh_control_states()
 
     def _set_tracking_status(self, state: SourceState, status: str) -> None:
         """由 CSM facade 统一改写来源 tracking 状态。"""
@@ -119,7 +118,11 @@ class ContextSourceManager(
         *,
         checkpoint_ns: str = "",
     ) -> ContextSourceRebuildState | None:
-        """对齐已提交的目标 tracking/CAS；只回放控制状态，不恢复正文或消费 epoch。"""
+        """对齐已提交的目标 tracking/CAS；只回放控制状态，不恢复正文或消费 epoch。
+
+        替换状态前会把当前 manager 已有的内存正文沿用到已发布版本缓存；正文
+        不从 rebuild snapshot 或 source owner 读取，冷启动时没有旧内存正文可沿用。
+        """
         owner, port = self._owner, self._control_state_port
         if owner is None or port is None:
             return None

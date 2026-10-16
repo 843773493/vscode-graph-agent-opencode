@@ -63,7 +63,7 @@ class ContextDetailOwnerMixin:
             thread_id,
             plan,
             seal_idempotency_key=seal_idempotency_key,
-            checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
+            checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
             assembly_options={
                 "turn_id": turn_id,
                 "execution_id": execution_id,
@@ -104,12 +104,16 @@ class ContextDetailOwnerMixin:
             session_id,
             thread_id,
             snapshot,
+            registered=self.get_context_plan_registration(
+                session_id, thread_id=thread_id, plan_id=snapshot.plan_id,
+                checkpoint_ns=checkpoint_ns,
+            ),
             seal_idempotency_key=seal_idempotency_key,
             seal_input_hash=seal_input_hash,
             detail=detail,
             required_detail=required_detail,
             sensitive_detail=sensitive_detail,
-            checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
+            checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
             activation_binding=activation_binding,
             prepared_details=prepared_details,
         )
@@ -123,10 +127,14 @@ class ContextDetailOwnerMixin:
         include_sensitive: bool = False,
         checkpoint_ns: str = "",
     ) -> dict[str, object]:
-        """通过 Saver 读取 assembly detail，执行 session/敏感权限边界。"""
+        """以当前目标 storage owner 读取详情；DetailRef 保留原历史 scope。
+
+        正文由目标本地 binding 与详情 store 解析，不把请求正文详情误作整体 assembly 审计详情。
+        返回 detail store 校验后的 JSON envelope 映射，其中 ``detail`` 是正文，其余
+        字段是 envelope 元数据；不是 SQLite registry manifest，也不是裸正文。
+        """
         if not isinstance(detail_ref, DetailRef):
             raise TypeError("source-mismatch: detail_ref 必须是 typed DetailRef")
-        detail_ref.require_owner(session_id, thread_id)
         raw = self._storage.assemblies.get_context_plan_detail(
             session_id,
             thread_id,

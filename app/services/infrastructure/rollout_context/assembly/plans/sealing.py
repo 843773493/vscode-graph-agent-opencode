@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
     runtime_seal_hash,
     validate_sealed_plan,
@@ -15,7 +16,14 @@ from app.services.infrastructure.rollout_context.assembly.plans.manifest import 
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
     ContextPlanRegistration,
     read_registration,
+    require_owner,
     require_transaction,
+)
+from app.services.infrastructure.rollout_context.assembly.plans.rows import (
+    validate_registry,
+)
+from app.services.infrastructure.rollout_context.assembly.plans.types import (
+    ContextPlanSeal,
 )
 
 
@@ -26,15 +34,14 @@ def preflight_seal(
     seal_idempotency_key: str,
     seal_input_hash: str,
     detail_key: str | None,
-) -> ContextPlanRegistration:
+) -> ContextPlanSeal:
+    require_owner(connection, snapshot.session_id, snapshot.thread_id)
     if not isinstance(seal_idempotency_key, str) or not seal_idempotency_key:
         raise ValueError("assembly-idempotency-conflict: seal 必须有非空幂等键")
     input_bound_hash = runtime_seal_hash(snapshot, detail_key, seal_input_hash)
     registered = read_registration(
         connection, snapshot.session_id, snapshot.thread_id, snapshot.plan_id
     )
-    if registered.draft is None or registered.registration_origin != "runtime":
-        raise ValueError("assembly-idempotency-conflict: 导入快照没有运行时 draft，不可再次 seal")
     if registered.plan_state == "sealed" and (
         registered.assembly_id != snapshot.assembly_id
         or registered.seal_idempotency_key != seal_idempotency_key
@@ -43,26 +50,22 @@ def preflight_seal(
     ):
         raise ValueError("assembly-idempotency-conflict: 同一 plan 已封存为不同请求")
     validate_sealed_plan(registered.draft, snapshot)
-    return registered
+    return ContextPlanSeal(
+        registered=registered, snapshot=snapshot,
+        snapshot_json=canonical_json_bytes(snapshot.to_dict()).decode("utf-8"),
+        seal_idempotency_key=seal_idempotency_key, seal_input_hash=seal_input_hash,
+        detail_key=detail_key, seal_hash=input_bound_hash,
+    )
 
 
 def bind_sealed_registration(
     connection: sqlite3.Connection,
-    snapshot: ContextAssemblySnapshot,
-    *,
-    seal_idempotency_key: str,
-    seal_input_hash: str,
-    detail_key: str | None,
+    prepared: ContextPlanSeal,
 ) -> ContextPlanRegistration:
-    """由 assembly owner 在同一事务写入 snapshot/selection 后绑定 plan。"""
+    """消费同一事务的 preflight 结果，在 snapshot/selection 写入后绑定 plan。"""
     require_transaction(connection)
-    registered = preflight_seal(
-        connection,
-        snapshot,
-        seal_idempotency_key=seal_idempotency_key,
-        seal_input_hash=seal_input_hash,
-        detail_key=detail_key,
-    )
+    snapshot, registered = prepared.snapshot, prepared.registered
+    require_owner(connection, snapshot.session_id, snapshot.thread_id)
     row = connection.execute(
         "SELECT snapshot_json, detail_ref FROM context_assemblies "
         "WHERE session_id = ? AND thread_id = ? AND plan_id = ? AND assembly_id = ?",
@@ -70,13 +73,7 @@ def bind_sealed_registration(
     ).fetchone()
     if (
         row is None
-        or row[1] != detail_key
-        or runtime_seal_hash(
-            ContextAssemblySnapshot.from_dict(json.loads(row[0])),
-            row[1],
-            seal_input_hash,
-        )
-        != runtime_seal_hash(snapshot, detail_key, seal_input_hash)
+        or row != (prepared.snapshot_json, prepared.detail_key)
     ):
         raise ValueError(
             "source-mismatch: plan seal 必须与同事务 assembly snapshot 相符"
@@ -86,20 +83,31 @@ def bind_sealed_registration(
     cursor = connection.execute(
         "UPDATE context_plans SET plan_state = 'sealed', assembly_id = ?, "
         "seal_idempotency_key = ?, seal_hash = ?, seal_input_hash = ?, updated_at = ? "
-        "WHERE session_id = ? AND thread_id = ? AND plan_id = ? AND plan_state = 'unsealed' AND revision = ?",
+        "WHERE session_id = ? AND thread_id = ? AND plan_id = ? AND plan_state = 'unsealed' AND revision = ? "
+        "AND draft_hash = ? AND draft_json = ? AND creation_hash = ?",
         (
             snapshot.assembly_id,
-            seal_idempotency_key,
-            runtime_seal_hash(snapshot, detail_key, seal_input_hash),
-            seal_input_hash,
+            prepared.seal_idempotency_key,
+            prepared.seal_hash,
+            prepared.seal_input_hash,
             datetime.now(UTC).isoformat(),
             snapshot.session_id,
             snapshot.thread_id,
             snapshot.plan_id,
             registered.revision,
+            registered.draft_hash, registered.draft_json, registered.creation_hash,
         ),
     )
     if cursor.rowcount != 1:
+        current = connection.execute(
+            "SELECT revision, draft_hash, draft_json FROM context_plans "
+            "WHERE session_id = ? AND thread_id = ? AND plan_id = ?",
+            (snapshot.session_id, snapshot.thread_id, snapshot.plan_id),
+        ).fetchone()
+        if current is not None and current[0] == registered.revision and current[1:] != (
+            registered.draft_hash, registered.draft_json,
+        ):
+            raise ValueError("source-mismatch: plan draft manifest hash/文本在 seal preflight 后变化")
         raise RuntimeError("assembly-idempotency-conflict: plan seal CAS 失败")
     cursor = connection.execute(
         "UPDATE tool_set_snapshots SET assembly_id = ? "
@@ -108,8 +116,12 @@ def bind_sealed_registration(
     )
     if cursor.rowcount != len(registered.draft.tool_set_refs):
         raise RuntimeError("source-mismatch: draft ToolSetSnapshot 绑定行数不一致")
-    return read_registration(
-        connection, snapshot.session_id, snapshot.thread_id, snapshot.plan_id
+    validate_registry(connection, registered.draft, snapshot.assembly_id)
+    return replace(
+        registered, plan_state="sealed", assembly_id=snapshot.assembly_id,
+        seal_idempotency_key=prepared.seal_idempotency_key,
+        seal_hash=prepared.seal_hash, seal_input_hash=prepared.seal_input_hash,
+        sealed_snapshot=snapshot,
     )
 
 
@@ -124,6 +136,7 @@ def record_seal_failure(
 ) -> str:
     """失败仅记录闭合的错误分类，禁止把含敏感正文的异常信息落盘。"""
     require_transaction(connection)
+    require_owner(connection, session_id, thread_id)
     registered = read_registration(connection, session_id, thread_id, plan_id)
     if registered.plan_state != "unsealed":
         raise ValueError("assembly-idempotency-conflict: sealed plan 不能新增失败尝试")

@@ -38,7 +38,10 @@ export interface CatalogProjectedNode {
   /** 非空表示该节点（或其父链）来自本地 pending 意图，UI 必须显式标注而不是 success。 */
   pending_state: CatalogOutboxOperationState | null;
   pending_operation_id: string | null;
-  /** 未确认 Folder 的本地引用；拿到 canonical ID 后为 null。 */
+  /** 后端删除回执的排空镜像；不改变 confirmed 节点或本地 operation 状态。 */
+  settlement: CatalogOutboxOperation["settlement"];
+  settlement_error: string | null;
+  /** 尚无 confirmed DTO 的 Folder 创建引用；预留 ID 不会清除这条依赖身份。 */
   client_ref: string | null;
 }
 
@@ -73,7 +76,7 @@ interface EffectiveNode {
 
 /** 会话节点在投影中的唯一 ID：confirmed 用 node_id，本地新建用 canonical ID 或 client_ref。 */
 function effectiveNodeId(operation: CatalogOutboxOperation): string {
-  return operation.created_node_id ?? operation.client_ref ?? operation.client_operation_id;
+  return operation.created_node_id ?? operation.client_operation_id;
 }
 
 function confirmedNodeToProjected(node: SessionCatalogNode): CatalogProjectedNode {
@@ -93,6 +96,8 @@ function confirmedNodeToProjected(node: SessionCatalogNode): CatalogProjectedNod
     session: node.session ?? null,
     pending_state: null,
     pending_operation_id: null,
+    settlement: null,
+    settlement_error: null,
     client_ref: null,
   };
 }
@@ -113,9 +118,10 @@ function buildEffectiveNodes(input: CatalogProjectionInput): Map<string, Effecti
     table.set(node.node_id, {
       node: confirmedNodeToProjected(node),
       confirmed: true,
-      deleted: false,
+      deleted: node.state === "deleting",
       createdByOperationId: null,
     });
+    if (node.state === "deleting") deletingRoots.add(node.node_id);
   }
 
   const operations = orderedCatalogOutboxOperations(input.outbox);
@@ -171,7 +177,9 @@ function buildEffectiveNodes(input: CatalogProjectionInput): Map<string, Effecti
           session: null,
           pending_state: operation.state,
           pending_operation_id: operation.client_operation_id,
-          client_ref: operation.client_ref,
+          settlement: null,
+          settlement_error: null,
+          client_ref: operation.client_operation_id,
         },
         confirmed: false,
         deleted: false,
@@ -194,6 +202,9 @@ function buildEffectiveNodes(input: CatalogProjectionInput): Map<string, Effecti
     } else {
       target.deleted = true;
       target.node.state = "deleting";
+      target.node.settlement = operation.settlement;
+      target.node.settlement_error = operation.settlement === "repair_required"
+        ? operation.error_detail ?? operation.error_code : null;
       deletingRoots.add(operation.target_node_id);
     }
     if (deletingRoots.has(operation.target_node_id ?? "")

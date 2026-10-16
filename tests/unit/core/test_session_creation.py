@@ -386,22 +386,27 @@ async def test_context_fork_request_intent_is_frozen_without_entering_business_m
     sessions_root: Path,
 ) -> None:
     metadata = make_metadata(kind="context_fork", context_source_session_id=make_node_id())
-    request_intent = {"mode": "context_fork", "pinned": False, "turn_id": None}
+    request_intent = {"request": {"mode": "context_fork"}, "goal_snapshot": None}
     kwargs = {
         "idempotency_key": "fork-intent-key", "title": "冻结请求的分叉",
         "title_source": "auto", "parent_node_id": None, "purpose": "context_fork",
         "session_metadata": metadata, "request_intent": request_intent,
         "graph_binding": TEST_THREAD_GRAPH_BINDING,
+        "fork_delivery_request_id": "req-first-fork-delivery",
     }
     record = await service.prepare(**kwargs)
     assert json.loads(record.request_intent_json) == request_intent
     assert await service.prepare(**kwargs) == record
+    assert record.fork_delivery_request_id == "req-first-fork-delivery"
+    assert await service.prepare(**{**kwargs, "fork_delivery_request_id": "req-retried-fork-delivery"}) == record
     assert service.read_prepared_session_metadata(record) == metadata
     manifest = json.loads((sessions_root / ".staging" / record.session_id / "session.json").read_text())
     assert set(manifest) == _STRIPPED_MANIFEST_KEYS
     assert "request_intent" not in manifest and "request_intent_json" not in manifest
     with pytest.raises(RuntimeError, match="preimage 冲突"):
-        await service.prepare(**{**kwargs, "request_intent": {**request_intent, "pinned": True}})
+        await service.prepare(**{**kwargs, "request_intent": {
+            **request_intent, "request": {"mode": "full_rollout_copy"},
+        }})
     assert store.get_creation_record("fork-intent-key") == record
 
 

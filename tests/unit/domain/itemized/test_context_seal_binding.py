@@ -30,7 +30,10 @@ from app.domain.itemized.epoch.tool_set import (
     ToolSetSnapshot,
 )
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.hash.request_hash import context_request_hash
+from app.domain.itemized.hash.request_hash import (
+    context_request_hash,
+    context_request_hash_preimage,
+)
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.request_plan import ContextRequestPlan
@@ -205,6 +208,78 @@ def test_snapshot_serializes_the_same_applied_binding(snapshot, binding):
         replace(snapshot, seal_binding=replace(
             binding, applied_toolset_revision=sha256_jcs("different"),
         ))
+
+
+def test_snapshot_rejects_tool_snapshot_without_matching_manifest(snapshot):
+    with pytest.raises(ItemSchemaError, match="tool_snapshot.*ToolSet"):
+        replace(snapshot, tool_snapshot=())
+    raw = snapshot.to_dict()
+    raw["tool_snapshot"] = []
+    with pytest.raises(ItemSchemaError, match="tool_snapshot.*ToolSet"):
+        ContextAssemblySnapshot.from_dict(raw)
+
+
+def test_validate_hashes_recomputes_plan_once_per_call(snapshot, monkeypatch):
+    original = ContextRequestPlan.plan_hash
+    plans = []
+
+    def recompute(plan):
+        plans.append(plan)
+        return original(plan)
+
+    monkeypatch.setattr(ContextRequestPlan, "plan_hash", recompute)
+    snapshot.validate_hashes()
+    assert len(plans) == 1
+    snapshot.validate_hashes()
+    assert len(plans) == 2
+    assert plans[0] is not plans[1]
+    assert all(plan.assembly_id == snapshot.assembly_id for plan in plans)
+
+
+@pytest.mark.parametrize("damaged_hash", ["plan_hash", "request_hash"])
+def test_validate_hashes_rejects_declared_hash_damage(snapshot, damaged_hash):
+    forged = sha256_jcs({"forged": damaged_hash})
+    if damaged_hash == "plan_hash":
+        # 同时伪造与声明 plan_hash 一致的 request，仍须先拒绝真实 plan 不匹配。
+        preimage = context_request_hash_preimage(
+            snapshot.as_sealed_plan(), snapshot.provider_version,
+            projector_id=snapshot.projector_id,
+            projector_version=snapshot.projector_version,
+            target_format=snapshot.target_format,
+            wire_request=snapshot.request_hash_preimage,
+        )
+        preimage["plan_hash"] = forged
+        damaged = replace(snapshot, plan_hash=forged, request_hash=sha256_jcs(preimage))
+    else:
+        damaged = replace(snapshot, request_hash=forged)
+    with pytest.raises(ItemSchemaError, match=f"context assembly {damaged_hash}"):
+        damaged.validate_hashes()
+
+
+def test_wire_request_is_isolated_from_input_getter_and_serialization(snapshot):
+    messages = [{"role": "user", "content": "原始正文"}]
+    wire = {"model": "fixture-model", "messages": messages}
+    snapshot = replace(
+        snapshot,
+        request_hash_preimage=wire,
+        request_hash=context_request_hash(
+            snapshot.as_sealed_plan(), snapshot.provider_version,
+            projector_id=snapshot.projector_id,
+            projector_version=snapshot.projector_version,
+            target_format=snapshot.target_format,
+            wire_request=wire,
+        ),
+    )
+    snapshot.validate_hashes()
+    expected = snapshot.request_hash_preimage
+    messages[0]["content"] = "构造后被篡改的正文"
+    snapshot.request_hash_preimage["messages"][0]["content"] = "getter 副本"
+    snapshot.to_dict()["request_hash_preimage"]["messages"][0]["content"] = "序列化副本"
+    assert snapshot.request_hash_preimage == expected
+    snapshot.validate_hashes()
+    object.__setattr__(snapshot, "request_hash_preimage", wire)
+    with pytest.raises(ItemSchemaError, match="context assembly request_hash"):
+        snapshot.validate_hashes()
 
 
 @pytest.fixture

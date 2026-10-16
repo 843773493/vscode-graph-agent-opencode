@@ -100,6 +100,42 @@ class AttachmentOwnerRef:
     updated_at: str
 
 
+@dataclass(frozen=True, slots=True)
+class ForkAttachmentSnapshot:
+    """冻结附件 backing owner、目标消费 scope 和保活 owner；只携带 blob 坐标。"""
+
+    source_attachment_id: str
+    source_file_id: str
+    source_owner_ref_id: str
+    # 正文 backing owner 可能不同于用户选择的来源 Thread。
+    source_session_id: str
+    source_thread_id: str
+    target_attachment_id: str
+    target_owner_ref_id: str
+    # 目标消费 scope；复用 main 正文时不等于下方保活 Thread。
+    target_session_id: str
+    target_thread_id: str
+    # 消费者 Thread 与正文保活 Thread 分离；复用 main 引用时两者不同。
+    target_owner_thread_id: str
+    source_item_ref: str | None
+    target_item_ref: str | None
+    blob_id: str
+    # 摘要格式为 sha256:<hex>，正文长度的单位为 bytes。
+    digest: str
+    length: int
+    relative_locator: str
+    variant: str
+    catalog_revision: int
+    file_name: str | None
+    mime_type: str | None
+    availability: str
+    required: bool
+    claim_id: str | None
+    source_file_aliases: tuple[str, ...] = ()
+    target_action: str = "retain_reference"
+    unavailable_reason: str | None = None
+
+
 def derive_attachment_id(
     *,
     blob_id: str,

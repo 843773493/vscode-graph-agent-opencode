@@ -21,7 +21,7 @@ from .config import (
     load_model_stream_config,
     load_model_stream_config_from_environment,
 )
-from .context import current_replay_session_id, replay_session
+from .context import ModelCallIdentity, current_model_call_identity, replay_model_call
 from .errors import (
     ModelStreamAssetError,
     ModelStreamConfigError,
@@ -40,14 +40,13 @@ from .protocols import (
 from .replay import ReplayCoordinator
 from .transport import (
     ModelStreamHTTPTransport,
-    ModelStreamTransportController,
-    install_model_stream_from_environment,
 )
 
 __all__ = [
     "MODEL_STREAM_CONFIG_ENV",
     "AnthropicMessagesCodec",
     "Interaction",
+    "ModelCallIdentity",
     "ModelStreamAssetError",
     "ModelStreamCassette",
     "ModelStreamConfig",
@@ -57,7 +56,6 @@ __all__ = [
     "ModelStreamMatchError",
     "ModelStreamProtocolError",
     "ModelStreamTransportConfig",
-    "ModelStreamTransportController",
     "OpenAIChatCompletionsCodec",
     "OpenAIResponsesCodec",
     "ProtocolId",
@@ -69,16 +67,15 @@ __all__ = [
     "StreamProtocolCodec",
     "StreamScenario",
     "build_cassette",
-    "current_replay_session_id",
+    "current_model_call_identity",
     "data_frame",
     "done_frame",
     "get_protocol_codec",
-    "install_model_stream_from_environment",
     "load_cassette",
     "load_cassette_from_object",
     "load_model_stream_config",
     "load_model_stream_config_from_environment",
     "load_scenario",
     "promote_recorded_cassette",
-    "replay_session",
+    "replay_model_call",
 ]

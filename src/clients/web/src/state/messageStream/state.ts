@@ -33,7 +33,7 @@ export function writeMessageStreamCache(
   for (const [existingKey, existing] of next.entries()) {
     if (
       existingKey !== key
-      && existing.sessionId === state.sessionId
+      && existing.sessionCacheKey === state.sessionCacheKey
       && existing.turnId === state.turnId
     ) {
       next.delete(existingKey);
@@ -57,9 +57,11 @@ export function writeMessageStreamCache(
 export function createMessageStreamState(
   sessionId: string,
   turnId: string,
-  turnStreamId: string = "",
+  turnStreamId: string,
+  sessionCacheKey: string,
 ): MessageStreamState {
   return {
+    sessionCacheKey,
     workspaceId: null,
     sessionId,
     threadId: null,

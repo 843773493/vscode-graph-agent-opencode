@@ -23,7 +23,7 @@ CATALOG_DATABASE_NAME = "catalog.sqlite"
 # 表的 CHECK 约束单点冻结，不在此重复声明。
 INGEST_RECORD_TERMINAL_STATES = ("published", "aborted")
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 3
 
 _BLOBS_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS attachment_blobs (
@@ -96,6 +96,53 @@ CREATE TABLE IF NOT EXISTS attachment_owner_refs (
 )
 """
 
+_FORK_CLAIMS_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS fork_attachment_claims (
+    claim_id TEXT PRIMARY KEY,
+    copy_operation_id TEXT NOT NULL,
+    source_snapshot_id TEXT NOT NULL,
+    source_attachment_id TEXT NOT NULL,
+    target_owner_ref_id TEXT NOT NULL,
+    target_session_id TEXT NOT NULL,
+    target_thread_id TEXT NOT NULL,
+    blob_id TEXT NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    operation_preimage_hash TEXT NOT NULL,
+    preimage_hash TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('preparing', 'owner_reserved', 'committed', 'aborted', 'target_deleted')),
+    UNIQUE (copy_operation_id, source_attachment_id, target_owner_ref_id)
+)
+"""
+
+_FORK_CLAIMS_INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS idx_fork_attachment_claims_blob
+ON fork_attachment_claims(blob_id, state)
+"""
+
+_FORK_MAPPINGS_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS fork_attachment_mappings (
+    copy_operation_id TEXT NOT NULL,
+    source_file_id TEXT NOT NULL,
+    target_session_id TEXT NOT NULL,
+    target_thread_id TEXT NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    PRIMARY KEY (copy_operation_id, source_file_id)
+)
+"""
+
+_FORK_MAPPINGS_INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS fork_attachment_mappings_target
+ON fork_attachment_mappings(target_session_id, target_thread_id, source_file_id)
+"""
+
+_REVISION_DDL = (
+    "CREATE TABLE IF NOT EXISTS attachment_catalog_revision (id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL)",
+    "INSERT INTO attachment_catalog_revision VALUES (1, 1) ON CONFLICT DO NOTHING",
+    *(f"CREATE TRIGGER IF NOT EXISTS attachment_revision_{table}_{action} AFTER {action.upper()} ON {table} "
+      "BEGIN UPDATE attachment_catalog_revision SET revision = revision + 1 WHERE id = 1; END"
+      for table in ("attachment_blobs", "attachment_owner_refs") for action in ("insert", "update", "delete")),
+)
+
 _IDX_OWNER_REFS_BLOB_DDL = (
     "CREATE INDEX IF NOT EXISTS idx_attachment_owner_refs_blob "
     "ON attachment_owner_refs(blob_id, state)"
@@ -118,6 +165,9 @@ _REQUIRED_TABLES = (
     "attachment_ingest_records",
     "attachment_blob_commit_claims",
     "attachment_owner_refs",
+    "fork_attachment_claims",
+    "fork_attachment_mappings",
+    "attachment_catalog_revision",
 )
 
 

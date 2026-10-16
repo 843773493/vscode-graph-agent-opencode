@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 class TraceEventDTO(BaseModel):
     event_id: str
-    part_id: str | None = None
+    part_id: str | None = Field(default=None, description="来源路径提供的部件引用；历史工具路径在已知 emitting ModelCall 时使用其限定的聚合引用，通用 Trace 不承诺所有 part_id 都遵循该格式。")
     session_id: str
     job_id: str
     type: Literal[
@@ -41,5 +41,5 @@ class TraceEventDTO(BaseModel):
     tool_name: str | None = None
     skill_names: list[str] = Field(default_factory=list)
     step_id: str | None = None
-    timestamp: datetime
+    timestamp: datetime = Field(description="来源事件的带时区时间，Trace 映射保留其时刻与显式时区偏移，不在投影时重新取时；历史工具事件沿对应 canonical 消息/item 时间。")
     raw: dict[str, Any] = Field(default_factory=dict)

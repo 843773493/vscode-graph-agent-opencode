@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import zlib
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
+from app.core.session_catalog_store import SessionCreationRecord
 from app.schemas.internal_v2.goal import (
     MAX_GOAL_OBJECTIVE_CHARS,
     GoalJobAccountingDTO,
@@ -67,6 +69,30 @@ class SessionGoalService:
         if goal is None:
             return None
         return goal.model_copy(update={"thread_id": thread_id})
+
+    async def install_fork_goal(self, record: SessionCreationRecord) -> str | None:
+        """发布前消费冻结目标；恢复只复验，不重置已发布后用户修改的 Goal。"""
+        if record.request_intent_json is None:
+            raise RuntimeError("fork Goal 缺少冻结请求")
+        snapshot = json.loads(record.request_intent_json).get("goal_snapshot")
+        if snapshot is None:
+            return None
+        if record.state != "preparing":
+            raise RuntimeError("fork Goal 只能安装到未发布的新 Session main")
+        created_at = datetime.fromisoformat(record.created_at)
+        goal = SessionGoalDTO(
+            goal_id=snapshot["goal_id"], session_id=record.session_id,
+            objective=_normalize_objective(snapshot["objective"]), status=GoalStatus.paused,
+            token_budget=snapshot["token_budget"], created_at=created_at, updated_at=created_at,
+        )
+        async with self.lock_for(record.session_id):
+            current = self._store.read(record.session_id, creation=record)
+            if current is not None:
+                if current != goal:
+                    raise RuntimeError("fork Goal 与冻结创建意图不一致")
+            else:
+                self._store.write(goal, creation=record)
+        return goal.goal_id
 
     async def set(
         self,

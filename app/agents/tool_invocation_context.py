@@ -14,9 +14,13 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
 from app.core.identifier import uuid7_datetime_from_hex
-from app.core.model_delta_context import get_current_model_delta_sink
+from app.core.model_delta_context import (
+    get_current_model_delta_sink,
+    model_tool_invocation_scope,
+)
 from app.core.session_catalog_store import validate_thread_id
 from app.core.turn_execution_scope import (
+    ScopeCancelledError,
     get_current_turn_execution_scope,
     reset_current_turn_execution_scope,
     set_current_turn_execution_scope,
@@ -55,6 +59,8 @@ class ThreadRuntimeBinding:
 
 @dataclass(frozen=True, slots=True)
 class _ToolInvocationBinding:
+    """ToolNode 的 Provider 原始调用 ID；ModelCall 归属独立保存在 projection_identity。"""
+
     tool_call_id: str
     projection_identity: ItemProjectionIdentity | None
 
@@ -98,12 +104,14 @@ class ToolInvocationContext:
         self._invocation.reset(token)
 
     def require_tool_call_id(self) -> str:
+        """返回 Provider 原始调用 ID，不拼接 canonical carrier 的 ModelCall scope。"""
         invocation = self._invocation.get()
         if invocation is None:
             raise RuntimeError("当前工具执行上下文缺少 tool_call_id")
         return invocation.tool_call_id
 
     def require_model_call_id(self) -> str:
+        """返回 emitting ModelCall 的稳定身份，不从工具调用 ID 反推。"""
         invocation = self._invocation.get()
         identity = invocation.projection_identity if invocation is not None else None
         if identity is None or identity.model_call_id is None:
@@ -189,7 +197,25 @@ class ToolInvocationContextMiddleware(AgentMiddleware):
             delta_sink = get_current_model_delta_sink()
             if delta_sink is not None:
                 await delta_sink.prepare_tool_execution(self._context.require_model_call_id())
-            return await handler(request)
+            try:
+                if delta_sink is None:
+                    return await handler(request)
+                with model_tool_invocation_scope(
+                    self._context.require_model_call_id(), self._context.require_tool_call_id(),
+                ):
+                    return await handler(request)
+            except (TimeoutError, ScopeCancelledError):
+                raise
+            except Exception as error:
+                # 原工具异常只能在同一调用的 canonical 失败结果提交后交给
+                # LangGraph，避免 task error 先落盘而 ToolResult 仍未提交。
+                if delta_sink is not None:
+                    await delta_sink.fail_tool_invocation(
+                        self._context.require_model_call_id(),
+                        self._context.require_tool_call_id(),
+                        error=str(error),
+                    )
+                raise
 
         task = asyncio.create_task(invoke_tool())
         abort_hook_id = (

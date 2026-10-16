@@ -82,7 +82,7 @@ export function useWorkspaceTerminalResources(apiPort: number, workspaceId: stri
   const control = useCallback((resource: WorkspaceResourceDTO, action: ResourceAction, thread?: ResourceThreadRef) =>
     mutate(() => controlWorkspaceResource(apiPort, workspaceId!, resource, action, thread)), [apiPort, mutate, workspaceId]);
   const create = useCallback((thread: ResourceThreadRef, retentionScope: "thread" | "workspace") =>
-    mutate(() => createWorkspaceTerminal(apiPort, workspaceId!, thread.session_id, retentionScope, thread.thread_id)), [apiPort, mutate, workspaceId]);
+    mutate(() => createWorkspaceTerminal(apiPort, workspaceId!, thread, retentionScope)), [apiPort, mutate, workspaceId]);
   return { items, loading, mutating, error: [operationError, readError].filter(Boolean).join("；") || null, refresh, control, create };
 }
 

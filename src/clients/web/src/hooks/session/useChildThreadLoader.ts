@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listChildThreads } from "../../api";
-import type { ChildThreadSummary } from "../../types/backend";
+import type { ChildThreadList, ChildThreadSummary } from "../../types/backend";
 import { errorMessage } from "../../utils/errorMessage";
+import { sessionScopeKey } from "../../state/session/sessionScope";
 
 export interface ChildThreadSnapshot {
   threads: ChildThreadSummary[];
+  teams: ChildThreadList["teams"];
   /** 后端返回的 total；列表被截断时可用于提示“后端共 N 条”。 */
   total: number;
   loading: boolean;
@@ -12,8 +14,10 @@ export interface ChildThreadSnapshot {
   loadedAt: string | null;
 }
 
-const EMPTY_SNAPSHOT: ChildThreadSnapshot = {
+const EMPTY_SNAPSHOT: ChildThreadSnapshot & { ownerKey: string | null } = {
+  ownerKey: null,
   threads: [],
+  teams: [],
   total: 0,
   loading: false,
   error: null,
@@ -39,8 +43,9 @@ export function useChildThreadLoader({
 }): ChildThreadSnapshot & {
   refresh: (options?: { silent?: boolean }) => Promise<void>;
 } {
-  const [snapshot, setSnapshot] = useState<ChildThreadSnapshot>(EMPTY_SNAPSHOT);
+  const [snapshot, setSnapshot] = useState(EMPTY_SNAPSHOT);
   const requestIdRef = useRef(0);
+  const ownerKey = sessionId ? `${apiPort}::${sessionScopeKey(workspaceId, sessionId)}` : null;
 
   const refresh = useCallback(
     async (options: { silent?: boolean } = {}) => {
@@ -52,8 +57,9 @@ export function useChildThreadLoader({
       requestIdRef.current = requestId;
 
       setSnapshot((prev) => ({
-        ...prev,
-        loading: silent ? prev.loading : true,
+        ...(prev.ownerKey === ownerKey ? prev : EMPTY_SNAPSHOT),
+        ownerKey,
+        loading: silent && prev.ownerKey === ownerKey ? prev.loading : true,
         error: null,
       }));
 
@@ -64,7 +70,9 @@ export function useChildThreadLoader({
           return;
         }
         setSnapshot({
+          ownerKey,
           threads: result.items,
+          teams: result.teams,
           total: result.total,
           loading: false,
           error: null,
@@ -76,13 +84,14 @@ export function useChildThreadLoader({
         }
         // 失败时保留已有数据用于展示，错误透明呈现，等待下次刷新重新获取。
         setSnapshot((prev) => ({
-          ...prev,
+          ...(prev.ownerKey === ownerKey ? prev : EMPTY_SNAPSHOT),
+          ownerKey,
           loading: false,
           error: errorMessage(error),
         }));
       }
     },
-    [apiPort, sessionId, workspaceId],
+    [apiPort, ownerKey, sessionId, workspaceId],
   );
 
   // 会话或可见性变化：使在途请求失效，清空旧会话数据并按需重新加载。
@@ -123,7 +132,7 @@ export function useChildThreadLoader({
   }, [enabled, refresh, sessionId]);
 
   return {
-    ...snapshot,
+    ...(enabled && snapshot.ownerKey === ownerKey ? snapshot : EMPTY_SNAPSHOT),
     refresh,
   };
 }

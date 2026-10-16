@@ -5,6 +5,9 @@
   "x-boxteam-config-domain": "gateway",
   "x-boxteam-policy-manifest": [
     { "pattern": "/ui/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/permissions", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/permissions/federation", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/permissions/federation/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/features/session_catalog/*", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
     { "pattern": "/features/session_generators/*", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
     { "pattern": "/runtime/gateway/process/*", "policy": "restart_gateway", "activation_scope": "restart_gateway", "identity_key": null },
@@ -45,6 +48,36 @@
     },
     "features": {
       "$ref": "#/$defs/featuresConfig"
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "federation": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "权限按当前 snapshot 原子热发布；已建立 channel 保持连接。",
+          "properties": {
+            "default_effect": { "enum": ["allow", "deny"], "default": "allow" },
+            "hardening_enabled": { "type": "boolean", "default": false },
+            "rules": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["capability"],
+                "properties": {
+                  "capability": { "enum": ["discovery", "send", "read", "wait", "reply", "transit"] },
+                  "effect": { "enum": ["allow", "deny"], "default": "deny" },
+                  "origin_gateway_id": { "type": ["string", "null"], "minLength": 1 },
+                  "principal_ref": { "type": ["string", "null"], "minLength": 1 }
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "runtime": {
       "$ref": "#/$defs/runtimeConfig"

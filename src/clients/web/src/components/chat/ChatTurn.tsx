@@ -44,19 +44,18 @@ function ChatTurn({
   onLoadTurnDetails,
   onLoadToolDetails,
   onReplayTurn,
-  onUpdatePending,
   onRemovePending,
   onChangePendingPolicy,
   onOpenAttachment,
+  onForkConversation,
 }: ChatTurnProps): React.ReactNode {
   const actions = useChatTurnActions({
     conversation,
     sessionBusy,
     onReplayTurn,
-    onUpdatePending,
   });
   return (
-    <article className="chat-turn" data-conversation-id={conversation.conversationId}>
+    <article className="chat-turn" data-conversation-id={conversation.conversationId} data-turn-id={conversation.turnId} data-root-logical-item-ordinal={conversation.rootLogicalItemOrdinal}>
       <ChatTurnUserSection
         apiPort={apiPort}
         workspaceId={workspaceId}
@@ -67,6 +66,7 @@ function ChatTurn({
         onRemovePending={onRemovePending}
         onChangePendingPolicy={onChangePendingPolicy}
         onOpenAttachment={onOpenAttachment}
+        onForkConversation={onForkConversation}
       />
       <div className="chat-assistant-row">
         <div className="chat-assistant-avatar-menu">
@@ -77,10 +77,12 @@ function ChatTurn({
         <div className="chat-assistant-content">
           <ChatTurnResponseBody
             conversation={conversation}
+            workspaceId={workspaceId}
             showRawDetails={showRawDetails}
             actions={actions}
             onLoadTurnDetails={onLoadTurnDetails}
             onLoadToolDetails={onLoadToolDetails}
+            onForkConversation={onForkConversation}
           />
         </div>
       </div>
@@ -156,10 +158,10 @@ export function areChatTurnPropsEqual(
     || previous.onLoadTurnDetails !== next.onLoadTurnDetails
     || previous.onLoadToolDetails !== next.onLoadToolDetails
     || previous.onReplayTurn !== next.onReplayTurn
-    || previous.onUpdatePending !== next.onUpdatePending
     || previous.onRemovePending !== next.onRemovePending
     || previous.onChangePendingPolicy !== next.onChangePendingPolicy
     || previous.onOpenAttachment !== next.onOpenAttachment
+    || previous.onForkConversation !== next.onForkConversation
   ) {
     return false;
   }
@@ -179,6 +181,10 @@ export function areChatTurnPropsEqual(
   }
   return left.turnId === right.turnId
     && left.turnRevision === right.turnRevision
+    && left.sessionId === right.sessionId
+    && left.threadId === right.threadId
+    && left.sourceViewId === right.sourceViewId
+    && left.sourceViewRevision === right.sourceViewRevision
     && left.turnItemsView === right.turnItemsView
     && left.status === right.status
     && left.pending === right.pending

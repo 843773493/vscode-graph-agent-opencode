@@ -1,4 +1,4 @@
-"""Saver 的 internal request/input 唯一端口；调度事实归 execution owner。"""
+"""Saver 的已接受 request/input 唯一端口；调度事实归 execution owner。"""
 
 from __future__ import annotations
 
@@ -23,14 +23,43 @@ from app.domain.itemized.mutation_intents import (
 )
 from app.domain.itemized.records import CanonicalItemRecord, InternalDisplayProvenance
 from app.domain.itemized.runtime_wakeup import RuntimeExecutionWakeup
+from app.prompting import internal_message_factory
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
     ContextSourceDescriptor,
     ContextSourceSnapshot,
 )
-from app.services.mapping.itemized.thread_seed import frozen_thread_seed
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    require_historical_scope,
+)
+from app.services.mapping.itemized.thread_seed import (
+    THREAD_SEED_DISPLAY_CONTENT,
+    frozen_thread_seed,
+)
 
 
 class RuntimeExecutionOwnerMixin:
+    def accepted_user_message(
+        self, session_id: str, *, thread_id: str, job_id: str, message_id: str,
+        checkpoint_ns: str = "",
+    ) -> HumanMessage:
+        """Runtime 消费已冻结的用户正文与附件，不重新读取或生成附件预览。"""
+        admission = self._storage.executions.execution_admission_for_job(
+            session_id, thread_id=thread_id, job_id=job_id, checkpoint_ns=checkpoint_ns,
+        )
+        item = self._storage.executions.accepted_user_input(admission, checkpoint_ns=checkpoint_ns)
+        if item.producer_ref["producer_id"] != message_id:
+            raise ValueError("Job 消息身份与已接受的用户根输入不一致")
+        codec = self._storage.storage._codec()
+        message = codec.from_dict(codec.project_message((item,)))
+        if not isinstance(message, HumanMessage) or message.id != message_id:
+            raise TypeError("已接受用户根输入未投影为同 ID 的 HumanMessage")
+        return message.model_copy(update={"response_metadata": {
+            **message.response_metadata,
+            "message_id": message_id, "created_at": item.created_at, "updated_at": item.created_at,
+            "message_metadata": {**message.response_metadata.get("message_metadata", {}),
+                                 "turn_id": admission.turn_id, "job_id": job_id},
+        }})
+
     def admit_internal_execution(
         self, session_id: str, *, thread_id: str, job_id: str,
         intent: InternalExecutionIntent, message: HumanMessage | None,
@@ -43,6 +72,60 @@ class RuntimeExecutionOwnerMixin:
             runtime_notice_item=notice, request_input=request_input,
             checkpoint_ns=checkpoint_ns,
         )
+
+    def accepted_internal_message(
+        self, session_id: str, *, thread_id: str, job_id: str, message_id: str,
+        intent: InternalExecutionIntent,
+        checkpoint_ns: str = "",
+    ) -> HumanMessage:
+        """notice 与 seed/reference 统一从已提交准入投影，不从 pending 正文恢复。"""
+        admission = self._storage.executions.execution_admission_for_job(
+            session_id, thread_id=thread_id, job_id=job_id, checkpoint_ns=checkpoint_ns,
+        )
+        if (admission.execution_origin != "internal" or admission.execution_id != intent.execution_id
+                or admission.admission_idempotency_key != intent.admission_idempotency_key
+                or message_id != intent.message_id):
+            raise ValueError("内部输入 reader 必须绑定同一完整 internal identity")
+        request_input = self._storage.executions.internal_execution_request_input(
+            session_id, thread_id, admission.execution_id,
+        )
+        supplied_reference = json.loads(intent.input_reference_json) if intent.input_reference_json is not None else None
+        if supplied_reference != request_input.get("reference"):
+            raise ValueError("内部输入 reader 的 seed/reference 与已接受 preimage 不一致")
+        with self._storage.storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
+            created_at = connection.execute(
+                "SELECT created_at FROM executions WHERE execution_id=?", (admission.execution_id,),
+            ).fetchone()[0]
+            if request_input["kind"] == "runtime_notice":
+                rows = connection.execute(
+                    "SELECT item.item_id FROM item_catalog AS item JOIN storage_commits AS commit_record "
+                    "ON commit_record.commit_id=item.commit_id WHERE item.execution_id=? "
+                    "AND commit_record.commit_kind='execution_admission' AND commit_record.subject_id=?",
+                    (admission.execution_id, admission.execution_id),
+                ).fetchall()
+                if len(rows) != 1:
+                    raise RuntimeError("内部输入缺少唯一 admission notice")
+                item = self._storage.storage.read_items(
+                    session_id, thread_id, checkpoint_ns=checkpoint_ns,
+                    item_ids=(rows[0][0],), connection=connection,
+                )[0]
+                codec = self._storage.storage._codec()
+                human = codec.from_dict(codec.project_message((item,)))
+                if not isinstance(human, HumanMessage) or human.id != message_id:
+                    raise TypeError("已接受 notice 未投影为同 ID 的 HumanMessage")
+                return human.model_copy(update={"response_metadata": {
+                    **human.response_metadata, "message_id": message_id,
+                    "created_at": item.created_at, "updated_at": item.created_at,
+                }})
+        source = self.internal_seed_source(session_id, thread_id, admission.execution_id)
+        if source is None:
+            raise RuntimeError("已接受 seed/reference 缺少冻结输入")
+        return HumanMessage(id=message_id, content=source.content, response_metadata={
+            "message_id": message_id, "created_at": created_at, "updated_at": created_at,
+            "message_metadata": internal_message_factory.metadata_for(
+                kind="delegated_task", display_content=THREAD_SEED_DISPLAY_CONTENT,
+            ),
+        })
 
     def _internal_execution_input(
         self, intent: InternalExecutionIntent, message: HumanMessage | None,
@@ -120,6 +203,15 @@ class RuntimeExecutionOwnerMixin:
     ) -> tuple[RuntimeExecutionWakeup, ...]:
         return self._storage.executions.pending_runtime_wakeups(session_id, thread_id)
 
+    def runtime_wakeup_before_provider(
+        self, session_id: str, thread_id: str, *, execution_id: str,
+        job_id: str, admission_idempotency_key: str,
+    ) -> RuntimeExecutionWakeup | None:
+        return self._storage.executions.runtime_wakeup_before_provider(
+            session_id, thread_id, execution_id=execution_id, job_id=job_id,
+            admission_idempotency_key=admission_idempotency_key,
+        )
+
     def runtime_wakeup_message(self, wakeup: RuntimeExecutionWakeup) -> HumanMessage:
         item = self._storage.executions.runtime_wakeup_input(wakeup)
         message = self._storage.storage._codec().from_dict(self._storage.storage._codec().project_message((item,)))
@@ -185,16 +277,18 @@ class RuntimeExecutionOwnerMixin:
         source_id = f"thread-seed:{reference['creation_idempotency_key']}"
         revision = sha256_jcs(reference)
         with self._storage.storage.open_read_snapshot(session_id, thread_id) as snapshot:
-            imported = snapshot.connection.execute(
-                "SELECT 1 FROM fork_identity_mappings WHERE entity_type='execution' "
-                "AND target_session_id=? AND target_local_id=?",
-                (session_id, execution_id),
-            ).fetchone() is not None
+            execution_owner = snapshot.connection.execute(
+                "SELECT session_id,thread_id FROM executions WHERE execution_id=?", (execution_id,),
+            ).fetchone()
+            if execution_owner is None:
+                raise KeyError(f"internal execution 不存在: {execution_id}")
+            require_historical_scope(snapshot.connection, *execution_owner, current_owner=(session_id, thread_id))
+            imported = execution_owner != (session_id, thread_id)
             if imported:
                 row = snapshot.connection.execute(
                     "SELECT assembly_id FROM context_assemblies WHERE execution_id=? "
                     "AND session_id=? AND thread_id=? AND status='terminal' ORDER BY rowid DESC LIMIT 1",
-                    (execution_id, session_id, thread_id),
+                    (execution_id, *execution_owner),
                 ).fetchone()
                 if row is None:
                     raise RuntimeError("source-mismatch: fork seed 缺少本地冻结 assembly")

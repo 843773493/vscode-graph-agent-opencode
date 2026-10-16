@@ -79,23 +79,17 @@ class JobServiceProtocol(Protocol):
 
     async def delete_session_jobs(self, session_id: str) -> int: ...
 
-    async def list_pending(self, session_id: str) -> PendingRequestListDTO: ...
+    async def list_pending(
+        self, session_id: str, *, thread_id: str | None = None,
+    ) -> PendingRequestListDTO: ...
 
     async def list_pending_summaries(
         self,
         session_id: str,
         *,
         limit: int,
+        thread_id: str | None = None,
     ) -> PendingRequestSummaryListDTO: ...
-
-    async def update_pending(
-        self,
-        session_id: str,
-        message_id: str,
-        *,
-        content: str,
-        attachments: list[AttachmentRef],
-    ) -> PendingRequestListDTO: ...
 
     async def update_pending_policy(
         self,

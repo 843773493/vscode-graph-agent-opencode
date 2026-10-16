@@ -24,13 +24,20 @@ import {
 const SESSION_ID = "ses_turns";
 const SCOPE_KEY = `workspace::${SESSION_ID}`;
 
-function summary(turnId: string, ordinal: number, revision = 1): TurnSummary {
+function summary(
+  turnId: string,
+  ordinal: number,
+  revision = 1,
+  sourceViewRevision = 1,
+): TurnSummary {
   return {
     turn_id: turnId,
     job_id: turnId,
     session_id: SESSION_ID,
     ordinal,
     root_logical_item_ordinal: ordinal * 10,
+    source_view_id: "view_history_fixture",
+    source_view_revision: sourceViewRevision,
     revision,
     status: "completed",
     created_at: `2026-07-28T00:00:0${ordinal}Z`,
@@ -51,13 +58,20 @@ function summary(turnId: string, ordinal: number, revision = 1): TurnSummary {
   };
 }
 
-function detail(turnId: string, ordinal: number, revision = 1): TurnDetail {
+function detail(
+  turnId: string,
+  ordinal: number,
+  revision = 1,
+  sourceViewRevision = 1,
+): TurnDetail {
   return {
     turn_id: turnId,
     job_id: turnId,
     session_id: SESSION_ID,
     ordinal,
     root_logical_item_ordinal: ordinal * 10,
+    source_view_id: "view_history_fixture",
+    source_view_revision: sourceViewRevision,
     revision,
     status: "completed",
     created_at: `2026-07-28T00:00:0${ordinal}Z`,
@@ -102,6 +116,7 @@ function projectedToolDetail(
 
 function bootstrap(latestTurn: TurnSummary, epoch = 1): SessionTurnBootstrap {
   return {
+    thread_id: "thr_018f0000000070008000000000000001",
     session: {
       session_id: SESSION_ID,
       workspace_id: "workspace",
@@ -122,6 +137,25 @@ function bootstrap(latestTurn: TurnSummary, epoch = 1): SessionTurnBootstrap {
 }
 
 describe("Turn timeline revision 合并", () => {
+  test("同 revision 的不同读取快照整体替换，旧部件不借新 binding 展示", () => {
+    const old = { ...detail("job_2", 2), final_response: "旧快照完整正文" };
+    let timeline = upsertTurn(createSessionTurnTimeline(SCOPE_KEY), old);
+    const next = { ...summary("job_2", 2), source_view_id: "view_next", source_view_revision: 2 };
+    timeline = upsertTurn(timeline, next);
+    expect(timeline.turnsById.job_2).toEqual(next);
+    expect("final_response" in timeline.turnsById.job_2!).toBe(false);
+  });
+
+  test("同一快照保留 Turn revision 对低版本详情的保护", () => {
+    const current = { ...detail("job_2", 2), revision: 3, final_response: "新详情" };
+    const stale = { ...detail("job_2", 2), revision: 2, final_response: "旧详情" };
+    const timeline = upsertTurn(
+      upsertTurn(createSessionTurnTimeline(SCOPE_KEY), current),
+      stale,
+    );
+
+    expect(timeline.turnsById.job_2).toEqual(current);
+  });
   test("低 revision 和同 revision summary 不覆盖较新的 full detail", () => {
     let timeline = createSessionTurnTimeline(SCOPE_KEY);
     timeline = upsertTurn(timeline, detail("job_2", 2, 3));
@@ -337,6 +371,9 @@ describe("Turn timeline revision 合并", () => {
       after_cursor: "newer-1",
       has_before: false,
       has_after: true,
+      thread_id: "thr_018f0000000070008000000000000001",
+      source_view_id: "view_history_fixture",
+      source_view_revision: 1,
       projection_epoch: 1,
     }, "around");
 
@@ -355,6 +392,9 @@ describe("Turn timeline revision 合并", () => {
       after_cursor: "newer-around",
       has_before: true,
       has_after: true,
+      thread_id: "thr_018f0000000070008000000000000001",
+      source_view_id: "view_history_fixture",
+      source_view_revision: 1,
       projection_epoch: 1,
     }, "around");
 
@@ -381,6 +421,9 @@ describe("Turn timeline revision 合并", () => {
       after_cursor: "newer-internal",
       has_before: true,
       has_after: true,
+      thread_id: "thr_018f0000000070008000000000000001",
+      source_view_id: "view_history_fixture",
+      source_view_revision: 1,
       projection_epoch: 1,
     }, "around");
 
@@ -396,6 +439,150 @@ describe("Turn timeline revision 合并", () => {
     expect(resumed.afterCursor).toBe("newer-internal");
     expect(resumed.hasBefore).toBe(true);
     expect(resumed.hasAfter).toBe(true);
+  });
+
+  test("跨 COW view 的旧 history page 不回退 Turn、internal execution 或游标", () => {
+    const execution = (
+      status: InternalExecutionHistory["status"],
+    ): InternalExecutionHistory => ({
+      execution_id: "execution-cow",
+      job_id: "job-cow",
+      session_id: SESSION_ID,
+      thread_id: "thr_main",
+      status,
+      created_at: "2026-07-28T00:00:01Z",
+      updated_at: "2026-07-28T00:00:02Z",
+      display_parts: [],
+      response_parts: [],
+    });
+    const page = (
+      sourceViewId: string,
+      sourceViewRevision: number,
+      response: string,
+      cursorPrefix: string,
+      executionStatus: InternalExecutionHistory["status"],
+      extraTurn = false,
+    ) => ({
+      thread_id: "thr_018f0000000070008000000000000001",
+      source_view_id: sourceViewId,
+      source_view_revision: sourceViewRevision,
+      items: [
+        {
+          ...detail("job_cow", 1, 1, sourceViewRevision),
+          source_view_id: sourceViewId,
+          final_response: response,
+        },
+        ...(extraTurn
+          ? [{
+              ...detail("job_old_page", 2, 1, sourceViewRevision),
+              source_view_id: sourceViewId,
+            }]
+          : []),
+      ],
+      internal_executions: [execution(executionStatus)],
+      before_cursor: `${cursorPrefix}-before`,
+      after_cursor: `${cursorPrefix}-after`,
+      has_before: true,
+      has_after: true,
+      projection_epoch: 1,
+    });
+
+    let timeline = applyTurnHistoryPage(
+      createSessionTurnTimeline(SCOPE_KEY),
+      page("view_a", 5, "A snapshot", "a", "completed"),
+      "around",
+    );
+    timeline = applyTurnHistoryPage(
+      timeline,
+      page("view_a", 6, "A latest", "a-latest", "completed"),
+      "around",
+    );
+    timeline = { ...timeline, loadingBefore: true, loadingAfter: true };
+    const afterLateSameViewPage = applyTurnHistoryPage(
+      timeline,
+      page("view_a", 5, "late A snapshot", "late-a", "unknown", true),
+      "before",
+    );
+
+    expect(afterLateSameViewPage.historyViewRevision).toBe(6);
+    expect(afterLateSameViewPage.turnsById.job_cow).toMatchObject({
+      source_view_revision: 6,
+      final_response: "A latest",
+    });
+    expect(afterLateSameViewPage.internalExecutions[0]?.status).toBe("completed");
+    expect(afterLateSameViewPage.beforeCursor).toBe("a-latest-before");
+    expect(afterLateSameViewPage.loadingBefore).toBe(false);
+    expect(afterLateSameViewPage.loadingAfter).toBe(true);
+
+    timeline = applyTurnHistoryPage(
+      afterLateSameViewPage,
+      page("view_b", 7, "B snapshot", "b", "failed"),
+      "around",
+    );
+    timeline = { ...timeline, loadingBefore: true, loadingAfter: true };
+    const afterLatePage = applyTurnHistoryPage(
+      timeline,
+      page("view_a", 6, "late A snapshot", "late-a", "unknown", true),
+      "before",
+    );
+
+    expect(afterLatePage.historyViewRevision).toBe(7);
+    expect(afterLatePage.orderedTurnIds).toEqual(["job_cow"]);
+    expect(afterLatePage.turnsById.job_cow).toMatchObject({
+      source_view_id: "view_b",
+      source_view_revision: 7,
+      final_response: "B snapshot",
+    });
+    expect(afterLatePage.internalExecutions[0]?.status).toBe("failed");
+    expect(afterLatePage.beforeCursor).toBe("b-before");
+    expect(afterLatePage.afterCursor).toBe("b-after");
+    expect(afterLatePage.loadingBefore).toBe(false);
+    expect(afterLatePage.loadingAfter).toBe(true);
+
+    const oldDetail = {
+      ...detail("job_cow", 1, 1, 6),
+      source_view_id: "view_a",
+      final_response: "late A detail",
+    };
+    const afterLateDetail = applyTurnDetails(
+      markTurnsLoading(afterLatePage, ["job_cow"]),
+      { items: [oldDetail], projection_epoch: 1 },
+    );
+    expect(afterLateDetail.turnsById.job_cow).toMatchObject({
+      source_view_id: "view_b",
+      source_view_revision: 7,
+      final_response: "B snapshot",
+    });
+    expect(afterLateDetail.loadingDetailIds).not.toContain("job_cow");
+
+    const invalidated = markTurnsLoading(dropTurn(afterLatePage, "job_cow"), ["job_cow"]);
+    const afterInvalidatedLateDetail = applyTurnDetails(
+      invalidated,
+      { items: [oldDetail], projection_epoch: 1 },
+    );
+    expect(afterInvalidatedLateDetail.turnsById.job_cow).toBeUndefined();
+    expect(afterInvalidatedLateDetail.invalidatedTurnIds).toContain("job_cow");
+    expect(afterInvalidatedLateDetail.loadingDetailIds).not.toContain("job_cow");
+  });
+
+  test("无 binding 的未物化空 history page 不伪造 owner revision", () => {
+    const timeline = applyTurnHistoryPage(createSessionTurnTimeline(SCOPE_KEY), {
+      thread_id: "thr_018f0000000070008000000000000001",
+      items: [],
+      before_cursor: "empty-page-cursor",
+      has_before: true,
+      projection_epoch: 1,
+    });
+
+    expect(timeline.historyViewRevision).toBeNull();
+    expect(timeline.orderedTurnIds).toEqual([]);
+    expect(timeline.beforeCursor).toBe("empty-page-cursor");
+    expect(timeline.hasBefore).toBe(true);
+    expect(() => applyTurnHistoryPage(createSessionTurnTimeline(SCOPE_KEY), {
+      thread_id: "thr_018f0000000070008000000000000001",
+      items: [detail("job_without_binding", 1)],
+      projection_epoch: 1,
+    })).toThrow("已物化 Turn history 缺少 source view/revision");
   });
 
   test("历史分页和详情水合保留已加载 Turn", () => {
@@ -705,6 +892,9 @@ describe("Turn timeline revision 合并", () => {
       {
         items: summaries.map((item) => detail(item.turn_id, item.ordinal)),
         summaries,
+        thread_id: "thr_018f0000000070008000000000000001",
+        source_view_id: "view_history_fixture",
+        source_view_revision: 1,
         projection_epoch: 1,
       },
       "before",
@@ -781,6 +971,9 @@ describe("Turn timeline revision 合并", () => {
             ),
             execution("execution-3", "2026-07-28T00:00:03Z", "completed", 3, 100),
           ],
+          thread_id: "thr_main",
+          source_view_id: "view_history_fixture",
+          source_view_revision: 1,
           projection_epoch: 1,
         },
         "before",
@@ -801,6 +994,9 @@ describe("Turn timeline revision 合并", () => {
               ],
             ),
         ],
+        thread_id: "thr_main",
+        source_view_id: "view_history_fixture",
+        source_view_revision: 1,
         projection_epoch: 1,
       },
       "before",
@@ -839,7 +1035,14 @@ describe("Turn timeline revision 合并", () => {
     };
     const timeline = applyTurnHistoryPage(
       createSessionTurnTimeline(SCOPE_KEY),
-      { items: [], internal_executions: [execution], projection_epoch: 1 },
+      {
+        thread_id: "thr_main",
+        source_view_id: "view_history_fixture",
+        source_view_revision: 1,
+        items: [],
+        internal_executions: [execution],
+        projection_epoch: 1,
+      },
       "before",
     );
 
@@ -851,6 +1054,9 @@ describe("Turn timeline revision 合并", () => {
           ...execution,
           display_parts: [{ ...execution.display_parts[0], item_sequence: 11 }],
         }],
+        thread_id: "thr_main",
+        source_view_id: "view_history_fixture",
+        source_view_revision: 1,
         projection_epoch: 1,
       },
       "before",
@@ -886,7 +1092,14 @@ describe("Turn timeline revision 合并", () => {
     };
     const timeline = applyTurnHistoryPage(
       createSessionTurnTimeline(SCOPE_KEY),
-      { items: [], internal_executions: [execution], projection_epoch: 1 },
+      {
+        thread_id: "thr_main",
+        source_view_id: "view_history_fixture",
+        source_view_revision: 1,
+        items: [],
+        internal_executions: [execution],
+        projection_epoch: 1,
+      },
       "before",
     );
 
@@ -901,6 +1114,9 @@ describe("Turn timeline revision 合并", () => {
             source: { ...responsePart.source, item_sequence: 11 },
           }],
         }],
+        thread_id: "thr_main",
+        source_view_id: "view_history_fixture",
+        source_view_revision: 1,
         projection_epoch: 1,
       },
       "before",

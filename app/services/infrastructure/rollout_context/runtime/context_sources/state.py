@@ -21,6 +21,15 @@ class SourceState:
     ``descriptor`` 为 ``None`` 表示该 registration 由持久化控制状态恢复，
     但 source owner 还没有用当前 catalog descriptor 重新绑定 locator；此时
     identity/revision 仍然有效，只是不能解析内部 locator。
+
+    ``binding_revision`` 是目录/来源绑定版本，``latest_revision`` 是最近
+    观察的内容版本；``latest_visible_committed_revision`` 是成功 seal 事务
+    推进、由 receipt 确认的上下文可见版本。晚到的 desired 仍可 pending，
+    内容 revision 允许 source owner 显式给出非空字符串，不承诺递增数字
+    或固定 hash。
+
+    持久控制行的 ``state_revision`` 用于 CAS；这里的
+    ``persisted_state_revision`` 仅保存运行时已由 owner 确认的 CAS 基准。
     """
 
     source_id: str

@@ -21,7 +21,7 @@ function attachmentsFromPayload(value: unknown): AttachmentRef[] {
 
 export function updateSessionAttachmentSummary(
   summaries: Map<string, SessionAttachmentSummary>,
-  sessionId: string,
+  sessionCacheKey: string,
   attachments: AttachmentRef[],
   createdAt: string | null,
 ) {
@@ -29,12 +29,12 @@ export function updateSessionAttachmentSummary(
     return;
   }
 
-  const previous = summaries.get(sessionId);
+  const previous = summaries.get(sessionCacheKey);
   const names = new Set(previous?.names ?? []);
   for (const attachment of attachments) {
     names.add(attachmentDisplayName(attachment));
   }
-  summaries.set(sessionId, {
+  summaries.set(sessionCacheKey, {
     count: Math.max(previous?.count ?? 0, names.size, attachments.length),
     names: Array.from(names).slice(0, 3),
     latestAt: createdAt ?? previous?.latestAt ?? null,
@@ -44,6 +44,7 @@ export function updateSessionAttachmentSummary(
 export function updateAttachmentSummariesFromTraces(
   summaries: Map<string, SessionAttachmentSummary>,
   sessionId: string,
+  sessionCacheKey: string,
   traceEvents: TraceEvent[],
 ) {
   for (const event of traceEvents) {
@@ -51,8 +52,7 @@ export function updateAttachmentSummariesFromTraces(
       continue;
     }
     const payload = rawTracePayload(event);
-    const payloadSessionId =
-      typeof payload.session_id === "string" ? payload.session_id : sessionId;
+    if (payload.session_id !== sessionId) continue;
     const attachments = attachmentsFromPayload(payload.attachments);
     const createdAt =
       typeof payload.created_at === "string"
@@ -60,7 +60,7 @@ export function updateAttachmentSummariesFromTraces(
         : event.timestamp;
     updateSessionAttachmentSummary(
       summaries,
-      payloadSessionId,
+      sessionCacheKey,
       attachments,
       createdAt,
     );

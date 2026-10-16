@@ -30,10 +30,10 @@ def _strings(value: object, names: tuple[str, ...], prefix: str) -> None:
 
 @dataclass(frozen=True, slots=True)
 class ProjectionGroup:
-    # 同一 message_group_id 的连续组内序号与总数；单 item 不创建 group。
+    # 显式多成员投影组的有序位置与完整成员数；message_group_id 相同不足以成组。
     ordinal: int
     size: int
-    # 原始 carrier 的物理形态，禁止按正文或邻接推断。
+    # 原始 carrier 的物理形态；与 size/ordinal 共同定义投影，不按正文或邻接推断。
     content_form: str
 
     def __post_init__(self) -> None:

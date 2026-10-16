@@ -29,6 +29,7 @@ describe("RequestLogPanel", () => {
         error={null}
         loadedAt={null}
         sessionId="ses_requests"
+        scopeKey="gw_demo:ses_requests"
         active
         onRetryRequestLogs={() => {}}
       />,
@@ -49,6 +50,7 @@ describe("RequestLogPanel", () => {
         error="请求超时: /api/v1/sessions/ses_requests/llm-request-logs"
         loadedAt={null}
         sessionId="ses_requests"
+        scopeKey="gw_demo:ses_requests"
         active
         onRetryRequestLogs={() => {}}
       />,

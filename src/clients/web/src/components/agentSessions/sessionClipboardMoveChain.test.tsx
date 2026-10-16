@@ -31,7 +31,7 @@ describe("会话「复制 ID → 粘贴移动」真实链路", () => {
       ["gw_1", SESSION_ID, TARGET_FOLDER_ID],
     ]);
     expect(target.statuses).toEqual([
-      "已将会话 " + SESSION_ID + " 移动到 目标文件夹",
+      "会话 " + SESSION_ID + " 移入 目标文件夹 的变更已保存本地，等待提交",
     ]);
   });
 

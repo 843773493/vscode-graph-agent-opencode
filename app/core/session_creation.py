@@ -46,6 +46,7 @@ import hashlib
 import json
 import os
 import sqlite3
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -70,7 +71,7 @@ from app.core.session_catalog_store import (
 )
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore, ThreadGraphBindingRecord
-from app.core.session_lifecycle_gate import NavigationTopologyGate
+from app.core.session_lifecycle_gate import NavigationTopologyGate, SessionLifecycleGate
 from app.core.sqlite_state import validate_sqlite_path_budget
 
 __all__ = [
@@ -310,6 +311,7 @@ class SessionCreationService:
             gate if gate is not None else NavigationTopologyGate(self._sessions_root)
         )
         self._key_locks = KeyLockPool()
+        self._session_gate = SessionLifecycleGate(self._sessions_root)
 
     # ------------------------------------------------------------------
     # 公开入口
@@ -326,6 +328,7 @@ class SessionCreationService:
         graph_binding: ThreadGraphBindingRecord,
         purpose: SessionCreationPurpose = "normal",
         request_intent: dict[str, object] | None = None,
+        fork_delivery_request_id: str | None = None,
     ) -> SessionCreationRecord:
         """冻结创建 envelope 并准备物理目录，保留 Session 为不可见状态。
 
@@ -376,6 +379,7 @@ class SessionCreationService:
                     session_metadata_json=session_metadata_json,
                     preimage_hash=preimage_hash,
                     request_intent_json=request_intent_json,
+                    fork_delivery_request_id=fork_delivery_request_id,
                 )
             if record.state == "published":
                 return record
@@ -415,6 +419,7 @@ class SessionCreationService:
         record: SessionCreationRecord,
         *,
         fork_completion: ForkCompletionProof | None = None,
+        on_published: Callable[[SessionCreationRecord], None] | None = None,
     ) -> SessionCreationResult:
         """仅在准备 envelope 与 fork proof 完整时 CAS 发布 Session。"""
         if not isinstance(record, SessionCreationRecord):
@@ -426,6 +431,9 @@ class SessionCreationService:
             self._validate_fork_completion(current, fork_completion)
             if current.state == "published":
                 self._session_metadata_from_record(current)
+                if on_published is not None:
+                    async with self._gate.exclusive(), self._session_gate.exclusive(current.session_id):
+                        on_published(current)
                 return self._result_for_published(current)
             if current.state == "aborted":
                 raise RuntimeError(
@@ -444,18 +452,21 @@ class SessionCreationService:
                     f"session_id={current.session_id}, prepared={prepared}, "
                     f"target={target}"
                 )
-            try:
-                async with self._gate.exclusive():
+            async with self._gate.exclusive(), self._session_gate.exclusive(current.session_id):
+                try:
                     node = self._store.publish_creation_record(
                         current.session_creation_idempotency_key,
                         expected_purpose=current.purpose,
                     )
-            except RuntimeError as error:
-                raise RuntimeError(
-                    "session creation publish CAS 失败；preparing record 与物理树"
-                    "已保留，调用方必须先释放真实 retention，再显式 abort/quarantine: "
-                    f"key={current.session_creation_idempotency_key!r}: {error}"
-                ) from error
+                except RuntimeError as error:
+                    raise RuntimeError(
+                        "session creation publish CAS 失败；preparing record 与物理树"
+                        "已保留，调用方必须先释放真实 retention，再显式 abort/quarantine: "
+                        f"key={current.session_creation_idempotency_key!r}: {error}"
+                    ) from error
+                # catalog 已发布；回调仍持有目标 gate，失败必须保留已发布事实和原错误。
+                if on_published is not None:
+                    on_published(current)
             return SessionCreationResult(
                 session_id=current.session_id,
                 main_thread_id=current.main_thread_id,
@@ -865,6 +876,9 @@ class SessionCreationService:
             if record.purpose == "context_fork"
             else required_entries
         )
+        if (record.purpose == "context_fork" and record.request_intent_json is not None
+            and json.loads(record.request_intent_json)["goal_snapshot"] is not None):
+            allowed_entries = allowed_entries | {"goal.json"}
         if not required_entries.issubset(entries) or set(entries) - allowed_entries:
             raise RuntimeError(
                 f"{stage}: 条目集与预期不一致（外部改动或上次准备中断，"
@@ -877,6 +891,9 @@ class SessionCreationService:
         debug_root = directory / "debug"
         if debug_root.is_symlink() or (debug_root.exists() and not debug_root.is_dir()):
             raise RuntimeError(f"{stage}: debug 必须是普通目录: {debug_root}")
+        goal_path = directory / "goal.json"
+        if goal_path.is_symlink() or (goal_path.exists() and not goal_path.is_file()):
+            raise RuntimeError(f"{stage}: Goal 必须是普通文件: {goal_path}")
 
         threads_root = directory / "threads"
         if threads_root.is_symlink() or not threads_root.is_dir():

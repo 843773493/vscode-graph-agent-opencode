@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Literal
 
 from langchain_core.tools import BaseTool, tool
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.abstractions.communication import SessionCommunicationProtocol
 from app.agents.tool_invocation_context import ToolInvocationContext
@@ -13,14 +13,27 @@ from app.schemas.internal_v2.pending_request import DeliveryPolicy
 from app.services.business.communication.admission import CommunicationPayload
 
 
+class SendMessageInput(BaseModel):
+    """通信只携带正文与投递语义，不接收团队、任务或 Goal 状态。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_session_id: str = Field(description="目标 Session ID 或规范 Session URI；目标固定为权威 main thread")
+    content: str = Field(description="要发送的消息正文")
+    target_workspace_id: str | None = None
+    kind: Literal["question", "reply", "progress", "result"] = "result"
+    reply_to_communication_id: str | None = None
+    delivery_policy: DeliveryPolicy = "after_turn"
+
+
 def create_send_message_to_session_tool(
     sender_session_id: str, *, communication_service: SessionCommunicationProtocol,
     invocation_context: ToolInvocationContext,
 ) -> BaseTool:
-    @tool("send_message_to_session")
+    @tool("send_message_to_session", args_schema=SendMessageInput)
     async def send_message_to_session(
-        target_session_id: Annotated[str, Field(description="目标 Session ID 或规范 Session URI；目标固定为权威 main thread")],
-        content: Annotated[str, Field(description="要发送的消息正文")],
+        target_session_id: str,
+        content: str,
         target_workspace_id: str | None = None,
         kind: Literal["question", "reply", "progress", "result"] = "result",
         reply_to_communication_id: str | None = None,

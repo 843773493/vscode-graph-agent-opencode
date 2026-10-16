@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from app.core.phase_observer import observe_phase_sync
 from app.core.session_control_primitives import validate_claim_fields
 from app.core.session_control_store import (
     SessionControlStore,
@@ -246,6 +247,7 @@ class InitialExecutionBindingWorker:
                 f"{outcome.job_id!r})",
                 claim_kwargs,
             )
+        observe_phase_sync(key, "thread.initial.admitted_before_bound")
         bound = self._store.mark_initial_execution_bound(
             key,
             execution_binding_id=intent.execution_binding_id,

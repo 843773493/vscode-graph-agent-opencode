@@ -11,7 +11,11 @@ from fastapi import FastAPI, HTTPException
 from starlette.requests import Request
 
 from app.gateway.auth import GatewayAuthContext
-from app.gateway.auxiliary_proxy import _stream_response, proxy_auxiliary_http
+from app.gateway.auxiliary_proxy import (
+    _stream_response,
+    proxy_attach_frontend,
+    proxy_auxiliary_http,
+)
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.workspace import WorkspaceRuntime
 
@@ -37,6 +41,59 @@ def registry(tmp_path) -> GatewayWorkspaceRegistry:
         activate=False,
     )
     return result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("proxy_kind", ["auxiliary", "attach"])
+async def test_http_proxies_preserve_repeated_query_parameters(
+    registry: GatewayWorkspaceRegistry,
+    proxy_kind: str,
+) -> None:
+    """HTTPX 转发必须保留同名参数的所有值、空值与解码后的文本。"""
+
+    application = FastAPI()
+    queries: list[list[tuple[str, str]]] = []
+    request_ids: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        queries.append(request.url.params.multi_items())
+        request_ids.append(request.headers["X-Request-ID"])
+        return httpx.Response(200, content=b"upstream")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        application.state.registry = registry
+        application.state.http_client = client
+        application.state.attach_frontend_urls = {"terminal": "http://127.0.0.1:41102"}
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/health",
+                "query_string": b"item=first&item=second&empty=&label=%E4%B8%AD%E6%96%87",
+                "headers": [],
+                "app": application,
+            }
+        )
+        request._body = b""
+        request.state.request_id = "req_aux_query"
+        if proxy_kind == "auxiliary":
+            response = await proxy_auxiliary_http(
+                workspace_id="gw_aux",
+                service_path="terminal-manager",
+                path="health",
+                request=request,
+                auth=GatewayAuthContext(kind="local"),
+            )
+        else:
+            response = await proxy_attach_frontend(
+                kind="terminal", path="index.html", request=request
+            )
+
+    assert response.status_code == 200
+    assert response.body == b"upstream"
+    assert queries == [[("item", "first"), ("item", "second"), ("empty", ""), ("label", "中文")]]
+    assert request_ids == ["req_aux_query"]
+    assert registry.route_reference_counts("gw_aux") == (0, 0)
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,10 @@ from app.domain.itemized.errors import (
 from app.services.infrastructure.rollout_context.storage import (
     schema as storage_version,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    current_scope,
+    require_historical_scope,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.integrity import (
     validate_catalog_body,
     validate_projection_membership,
@@ -318,8 +322,9 @@ class RolloutSchemaIntrospectionMixin:
             "jsonl_offset_before, jsonl_offset_after, jsonl_record_count, status, "
             "commit_kind, commit_mode, outcome, metadata_json, jsonl_fsync_at "
             "FROM storage_commits ORDER BY commit_id"
-        ).fetchall()
+        )
         previous = 0
+        last_seen_commit_id: int | None = None
         commit_kinds = {value.value for value in CommitKind}
         commit_modes = {value.value for value in CommitMode}
         for commit in commits:
@@ -451,14 +456,13 @@ class RolloutSchemaIntrospectionMixin:
                     f"record_count={record_count}"
                 )
             previous = after
-        if commits and database_last_commit_id != strict_non_negative_int(
-            commits[-1][0], field="storage_commits.last_commit_id"
-        ):
+            last_seen_commit_id = commit_id
+        if last_seen_commit_id is not None and database_last_commit_id != last_seen_commit_id:
             raise RuntimeError(
                 "database_meta.last_commit_id 与 storage_commits 不一致: "
-                f"meta={database_last_commit_id}, commits={commits[-1][0]}"
+                f"meta={database_last_commit_id}, commits={last_seen_commit_id}"
             )
-        if not commits and database_last_commit_id is not None:
+        if last_seen_commit_id is None and database_last_commit_id is not None:
             raise RuntimeError(
                 "database_meta.last_commit_id 指向不存在的 storage commit: "
                 f"{database_last_commit_id}"
@@ -476,19 +480,18 @@ class RolloutSchemaIntrospectionMixin:
                 jsonl_bytes = stream.read(database_offset)
 
         item_rows = connection.execute(
-            "SELECT item_sequence, item_id, content_hash, jsonl_offset, jsonl_length, "
-            "commit_id, payload_length, source_revision FROM item_catalog ORDER BY jsonl_offset"
-        ).fetchall()
+            "SELECT item.item_sequence,item.item_id,item.content_hash,item.jsonl_offset,item.jsonl_length,"
+            "item.commit_id,item.payload_length,item.source_revision,"
+            "commit_record.jsonl_start_offset,commit_record.jsonl_end_offset,commit_record.jsonl_record_count,"
+            "execution.session_id,execution.thread_id,turn.session_id,turn.thread_id "
+            "FROM item_catalog item LEFT JOIN storage_commits commit_record ON commit_record.commit_id=item.commit_id "
+            "LEFT JOIN executions execution ON execution.execution_id=item.execution_id "
+            "LEFT JOIN turn_records turn ON turn.turn_id=item.turn_id ORDER BY item.jsonl_offset"
+        )
         expected_item_offset = 0
-        commit_ranges = {
-            strict_non_negative_int(commit[0], field="storage commit id"): (
-                strict_non_negative_int(commit[1], field="storage commit start offset"),
-                strict_non_negative_int(commit[2], field="storage commit end offset"),
-                strict_non_negative_int(commit[5], field="storage commit record count"),
-            )
-            for commit in commits
-        }
+        storage_owner = current_scope(connection)
         expected_item_sequence = 1
+        last_checked_item_owner: tuple[str, str] | None = None
         for (
             item_sequence,
             item_id,
@@ -498,6 +501,13 @@ class RolloutSchemaIntrospectionMixin:
             item_commit_id,
             logical_length,
             source_revision,
+            commit_start,
+            commit_end,
+            commit_record_count,
+            execution_session_id,
+            execution_thread_id,
+            turn_session_id,
+            turn_thread_id,
         ) in item_rows:
             item_id = strict_text(item_id, field="item_catalog.item_id")
             logical_length = strict_non_negative_int(
@@ -523,7 +533,17 @@ class RolloutSchemaIntrospectionMixin:
                 raise RuntimeError(
                     f"item_catalog.jsonl_length 必须大于 0: {item_id}"
                 )
-            if sequence != expected_item_sequence:
+            execution_scope = (execution_session_id, execution_thread_id) if execution_session_id is not None else None
+            turn_scope = (turn_session_id, turn_thread_id) if turn_session_id is not None else None
+            if execution_scope is not None and turn_scope is not None and execution_scope != turn_scope:
+                raise ValueError(f"source-mismatch: canonical item 的 Turn/execution 历史 owner 不一致: {item_id}")
+            item_owner = execution_scope or turn_scope or storage_owner
+            # 同一冻结读取中仅在 owner 变化时核 binding；逐项的 owner 一致性和序号仍独立校验。
+            if item_owner != last_checked_item_owner:
+                require_historical_scope(connection, *item_owner, current_owner=storage_owner)
+                last_checked_item_owner = item_owner
+            # 历史 prefix 可跳过未继承的原序号；当前 owner 的新事实仍逐项连续。
+            if sequence < expected_item_sequence or (sequence != expected_item_sequence and item_owner == storage_owner):
                 raise RuntimeError(
                     "v2 item catalog item_sequence 不连续或顺序非法，拒绝使用派生索引: "
                     f"item_id={item_id}, sequence={sequence}, "
@@ -552,12 +572,13 @@ class RolloutSchemaIntrospectionMixin:
             item_commit_id_value = strict_non_negative_int(
                 item_commit_id, field=f"item_catalog.commit_id: {item_id}"
             )
-            commit_range = commit_ranges.get(item_commit_id_value)
-            if commit_range is None:
+            if commit_start is None:
                 raise RuntimeError(
                     f"v2 item catalog 指向不存在的 storage commit: item_id={item_id}"
                 )
-            commit_start, commit_end, commit_record_count = commit_range
+            commit_start = strict_non_negative_int(commit_start, field="storage commit start offset")
+            commit_end = strict_non_negative_int(commit_end, field="storage commit end offset")
+            commit_record_count = strict_non_negative_int(commit_record_count, field="storage commit record count")
             if (
                 item_offset < commit_start
                 or end > commit_end
@@ -570,7 +591,7 @@ class RolloutSchemaIntrospectionMixin:
                     f"start={commit_start}, end={commit_end}"
                 )
             expected_item_offset = end
-            expected_item_sequence += 1
+            expected_item_sequence = sequence + 1
         if expected_item_offset != database_offset:
             raise RuntimeError(
                 "database_meta.committed_jsonl_offset 与 storage_commits 不一致: "

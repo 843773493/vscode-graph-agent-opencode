@@ -203,3 +203,19 @@
 #### Scenario: 已确证结论可直接执行
 - **WHEN** 某内容已由本轮实测取证确证
 - **THEN** 它可直接写成 normative 断言或可执行任务，不再列作待验证
+
+### Requirement: Fork 的 source 与 target 消费统一领域 URI
+
+会话fork寻址 SHALL 具名消费统一寻址owner requirement「Session 集合与 Thread 创建目标必须有正式领域 URI」，并消费itemized checkpoint-context-branching的范围/目标/资源合同。本capability只负责将入口规范化结果传给精确领域owner，不复述模板、追加kind或维护fork专属parser。source完整Thread URI不得降级为Session main；Session快捷入口明确解析catalog main。view/revision/anchor和目标创建意图是结构化字段，不编码进URI。
+
+本地/跨端目标 SHALL 固定最终Gateway、Workspace和Session/thread归属；source导出和target创建/导入由对应操作授权，不把read权限视为复制许可。发布后返回真实目标身份与URI；不可达、未授权或不支持明确失败，不回退当前激活工作区或同名目标。既有跨Session send/read/wait仍按其main-thread合同执行。
+
+#### Scenario: child来源与远端目标精确传递
+
+- **WHEN** fork输入为source child URI，target为远端Session容器加new_child_thread意图
+- **THEN** 统一解析保留精确来源和目标，目标端创建真实新child并返回URI，不读取source main、不把远端child挂入本地Session
+
+#### Scenario: URI位置与修订选择分离
+
+- **WHEN** 同一Thread在不同view/revision/item锚点发起fork
+- **THEN** Thread URI保持位置语义，选择与继承意图在结构化字段中固定，不使用fragment或revision编码，也不因激活工作区变化改投

@@ -13,6 +13,8 @@ import type {
   SessionFileChange,
   Session,
   SessionCompactResult,
+  SessionForkRequest,
+  SessionForkResult,
   SessionGoal,
   SessionGoalUpdateRequest,
   SessionChangesetList,
@@ -29,6 +31,7 @@ import type {
   SessionCatalogOutboxRuntime,
   SessionCatalogOutboxSnapshot,
 } from "../session/sessionCatalogOutboxRuntime";
+import type { SessionResourceRefreshResult } from "../session/useSessionResourceLoader";
 
 export interface AppContextType {
   state: AppState;
@@ -40,11 +43,6 @@ export interface AppContextType {
     attachments?: AttachmentRef[],
     deliveryPolicy?: DeliveryPolicy,
   ) => Promise<void>;
-  updatePendingRequest: (
-    messageId: string,
-    content: string,
-    attachments?: AttachmentRef[],
-  ) => Promise<void>;
   removePendingRequest: (messageId: string) => Promise<void>;
   clearPendingRequests: () => Promise<void>;
   updatePendingRequestPolicy: (
@@ -52,7 +50,7 @@ export interface AppContextType {
     deliveryPolicy: DeliveryPolicy,
     expectedSnapshotVersion?: number,
   ) => Promise<void>;
-  loadAroundTurn: (anchorTurnId: string) => Promise<void>;
+  loadAroundTurn: (anchorTurnId: string, signal?: AbortSignal) => Promise<void>;
   loadNewerMessages: () => Promise<void>;
   loadOlderMessages: () => Promise<void>;
   loadTurnDetails: (
@@ -102,7 +100,8 @@ export interface AppContextType {
     sessionId: string,
     sessionOverride?: Session,
   ) => void;
-  openWorkspaceSession: (workspaceId: string, sessionId: string) => Promise<void>;
+  openWorkspaceSession: (workspaceId: string, sessionId: string, expectedSelectionIntent?: number) => Promise<void>;
+  readSessionSelectionIntent: () => number;
   createSession: (
     title?: string,
     workspaceId?: string | null,
@@ -111,7 +110,8 @@ export interface AppContextType {
   forkSessionContext: (
     workspaceId: string,
     sourceSessionId: string,
-  ) => Promise<void>;
+    request: SessionForkRequest,
+  ) => Promise<SessionForkResult>;
   renameSession: (
     sessionId: string,
     title: string,
@@ -128,8 +128,8 @@ export interface AppContextType {
   ) => Promise<void>;
   refreshSessionResources: (
     sessionId: string,
-    options?: { silent?: boolean },
-  ) => Promise<void>;
+    options?: { silent?: boolean; force?: boolean },
+  ) => Promise<SessionResourceRefreshResult>;
   controlSessionResource: (
     kind: SessionResourceKind,
     resourceId: string,

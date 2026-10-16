@@ -146,6 +146,12 @@ def e2e_startup_mount() -> MountedWorkspace | None:
 
 
 @pytest.fixture(scope="module")
+def e2e_backend_composition() -> tuple[str, dict[str, str]]:
+    """模块显式选择测试 composition；普通 E2E 保持生产入口。"""
+    return "app.main:app", {}
+
+
+@pytest.fixture(scope="module")
 def e2e_backend_process(
     e2e_startup_mount: MountedWorkspace | None,
     e2e_workspace_root_path: str,
@@ -153,6 +159,7 @@ def e2e_backend_process(
     e2e_backend_port: int,
     is_debug: bool,
     e2e_model_stream_runtime_config_path: str | None,
+    e2e_backend_composition: tuple[str, dict[str, str]],
 ) -> Generator[subprocess.Popen[str], None, None]:
     if not Path(e2e_workspace_config_path).is_file():
         raise FileNotFoundError(f"E2E 工作区配置不存在: {e2e_workspace_config_path}")
@@ -160,8 +167,10 @@ def e2e_backend_process(
     env_overrides = (
         {"BOXTEAM_TEST_MODEL_STREAM_CONFIG": e2e_model_stream_runtime_config_path}
         if e2e_model_stream_runtime_config_path is not None
-        else None
+        else {}
     )
+    asgi_app, composition_environment = e2e_backend_composition
+    env_overrides.update(composition_environment)
     handle = start_backend_process(
         startup_mount=e2e_startup_mount,
         workspace_root=e2e_workspace_root_path,
@@ -170,6 +179,7 @@ def e2e_backend_process(
         debugpy_port=debugpy_port,
         env_overrides=env_overrides,
         env_unset=("BOXTEAM_TEST_MODEL_STREAM_CONFIG",),
+        asgi_app=asgi_app,
     )
     if debugpy_port is not None:
         print(

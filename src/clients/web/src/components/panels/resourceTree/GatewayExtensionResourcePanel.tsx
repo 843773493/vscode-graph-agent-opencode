@@ -24,7 +24,7 @@ interface GatewayExtensionResourcePanelProps {
     entry: GatewayExtensionResourceEntry,
     action: SessionResourceAction,
   ) => Promise<void>;
-  currentSession: { workspaceId: string; sessionId: string } | null;
+  currentOwner: { workspaceId: string; thread: ResourceThreadRef } | null;
   onOwnerControl: (entry: GatewayExtensionResourceEntry, action: "promote" | "attach" | "detach", thread?: ResourceThreadRef) => Promise<void>;
   onOpen: (entry: GatewayExtensionResourceEntry) => void;
   onCreateReplacement: (entry: GatewayExtensionResourceEntry) => Promise<void>;
@@ -70,7 +70,7 @@ export default function GatewayExtensionResourcePanel({
   onSelect,
   onRefresh,
   onControl,
-  currentSession,
+  currentOwner,
   onOwnerControl,
   onOpen,
   onCreateReplacement,
@@ -239,14 +239,14 @@ export default function GatewayExtensionResourcePanel({
                         onOwnerControl={(_, action, thread) => {
                           setBusyKey(entry.key);
                           setNotice(null);
-                          void onOwnerControl(entry, action, thread ?? (action === "attach" && entry.resource.retention_scope === "thread" ? entry.resource.source_thread : undefined))
+                          void onOwnerControl(entry, action, action === "attach" ? currentOwner?.thread : thread)
                             .then(() => { setNoticeIsError(false); setNotice("资源关联与保留状态已更新"); })
                             .catch((error: unknown) => { setNoticeIsError(true); setNotice(errorMessage(error)); })
                             .finally(() => setBusyKey(null));
                         }}
-                        canAttachCurrent={Boolean(currentSession && currentSession.workspaceId === entry.workspace_id
-                          && !entry.resource.thread_associations.some((ref) => ref.session_id === currentSession.sessionId)
-                          && (entry.resource.retention_scope === "workspace" || entry.resource.source_thread?.session_id === currentSession.sessionId))}
+                        canAttachCurrent={Boolean(currentOwner && currentOwner.workspaceId === entry.workspace_id
+                          && !entry.resource.thread_associations.some((ref) => ref.session_id === currentOwner.thread.session_id && ref.thread_id === currentOwner.thread.thread_id)
+                          && (entry.resource.retention_scope === "workspace" || entry.resource.source_thread?.session_id === currentOwner.thread.session_id))}
                         onCopy={(resourceId) => {
                           handleCopyResourceId(resourceId);
                         }}

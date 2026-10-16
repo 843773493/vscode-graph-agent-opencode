@@ -4,16 +4,16 @@ import type {
   SessionStreamEvent,
   TraceEvent,
 } from "../../types/backend";
-import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sse/sseClient";
+import { decodeJsonSseData, defineSseEvent } from "../../sse/sseClient";
 import { SSE_IDLE_TIMEOUT_MS } from "../../sse/sseIdleTimeout";
 import { validateTraceEvent } from "../../sse/sseRuntimeSchemas";
 import {
   HttpRequestError,
-  requestGatewayResponse,
   requestJson,
   unwrapApiData,
   workspaceHeader,
 } from "../http";
+import { consumeWorkspaceObservation } from "./workspaceObservation";
 
 const SESSION_TRACE_TIMEOUT_MS = 10_000;
 
@@ -78,40 +78,22 @@ export async function streamSessionEvents(
     signal?: AbortSignal;
   },
 ): Promise<void> {
-  // SSE 长期连接只共享统一凭据与刷新重试；生命周期内的断线重连由调用方负责。
-  let response: Response;
-  try {
-    response = await requestGatewayResponse(
-      port,
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/traces/stream`,
-      {
-        signal: options?.signal,
-        skipGatewayUserSession: true,
-        headers: {
-          accept: "text/event-stream",
-          ...workspaceHeader(options?.workspaceId),
-          ...(options?.afterCursor ? { "Last-Event-ID": options.afterCursor } : {}),
-        },
-      },
-    );
-  } catch (error) {
-    if (error instanceof HttpRequestError && error.status === 410) {
-      throw new TraceCursorGoneError(options?.afterCursor ?? "");
-    }
-    throw error;
-  }
-  if (!response.body) {
-    throw new Error(`无法连接会话事件流: ${response.status} ${response.statusText}`);
-  }
-  options?.onConnected?.(response.headers.get("X-BoxTeam-Route-Revision"));
+  let afterCursor = options?.afterCursor ?? undefined;
+  let connected = false;
   const idleTimeoutMs = options?.idleTimeoutMs ?? SSE_IDLE_TIMEOUT_MS;
   const deliveredCursors = new Set<string>();
   try {
-    await consumeSseResponse(response, {
+    await consumeWorkspaceObservation(port, workspaceHeader(options?.workspaceId), () => ({
+      kind: "session_trace", session_id: sessionId, trace_after: afterCursor, paths: [],
+    }), {
       signal: options?.signal,
       idleTimeoutMs,
       idleTimeoutError: (timeoutMs) => new SessionStreamIdleTimeoutError(timeoutMs),
       onActivity: options?.onActivity,
+      onConnected: (routeRevision) => {
+        connected = true;
+        options?.onConnected?.(routeRevision);
+      },
       events: {
         trace: defineSseEvent(
           (data, frame) => {
@@ -120,18 +102,28 @@ export async function streamSessionEvents(
               throw new Error(`SSE trace 重复 cursor: ${frame.id}`);
             }
             deliveredCursors.add(frame.id);
+            const event = validateTraceEvent(decodeJsonSseData(data, frame));
+            if (event.session_id !== sessionId) {
+              throw new Error(`SSE trace owner 不匹配: 请求 ${sessionId}，收到 ${event.session_id}`);
+            }
             return {
               cursor: frame.id,
-              event: validateTraceEvent(decodeJsonSseData(data, frame)),
+              event,
             };
           },
-          ({ cursor, event }) => options?.onEvent?.(event, cursor),
+          ({ cursor, event }) => {
+            options?.onEvent?.(event, cursor);
+            afterCursor = cursor;
+          },
         ),
       },
     });
   } catch (error) {
     if (options?.signal?.aborted) return;
-    options?.onError?.(error);
+    if (error instanceof HttpRequestError && error.status === 410) {
+      throw new TraceCursorGoneError(afterCursor ?? "");
+    }
+    if (connected) options?.onError?.(error);
     throw error;
   }
 }

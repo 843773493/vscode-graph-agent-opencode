@@ -34,6 +34,8 @@ class CommunicationOutboxRecord:
     advance_communication_outbox_state CAS 推进。latest_receipt 保存
     最近一次受认证 target receipt（JSON 文本，target_accepted 起非空）；
     abort_reason 仅 failed|cancelled 携带。
+    created_at 是 source 首次持久准入此 outbox 的 UTC 时刻，重放返回原值；
+    updated_at 是 source owner 最近一次 ledger 状态变更的 UTC 时刻。
     """
 
     send_operation_id: str
@@ -69,6 +71,8 @@ class CommunicationInboxRecord:
     payload_hash) 确定性派生（重试不变）。admission_claim_owner/
     admission_claim_generation 是可恢复领取字段（无 TTL、不自动丢弃）；
     last_error 只记录明确错误，state 保持 target_accepted 可恢复。
+    created_at 是 target 首次持久接受此 inbox 的 UTC 时刻，重放返回原值；
+    updated_at 是 target owner 最近一次领取、绑定、失败或删除结算的 UTC 时刻。
     """
 
     communication_id: str

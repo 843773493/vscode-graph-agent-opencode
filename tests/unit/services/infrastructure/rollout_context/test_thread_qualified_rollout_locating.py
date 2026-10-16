@@ -10,12 +10,10 @@ thread_id 拼路径；thread 维度缺省或非法时 fail closed。
 from __future__ import annotations
 
 import hashlib
-import inspect
 import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
@@ -45,32 +43,6 @@ CHILD_CREATED_AT = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 CHILD_THREAD_ID = thread_id_at(CHILD_CREATED_AT)
 
 
-def test_full_copy_staging_owner_accepts_thread_qualified_root_signature(
-    tmp_path: Path,
-) -> None:
-    """私有 fork staging 支持真实 main owner 并拒绝 non-main。"""
-    from app.services.infrastructure.rollout_context.fork.full_copy.staging import (
-        FullCopyStagingStorage,
-    )
-
-    target = f"ses_{create_uuid_hex()}"
-    parameters = inspect.signature(FullCopyStagingStorage.root).parameters
-    assert "thread_id" in parameters
-    assert parameters["thread_id"].kind is inspect.Parameter.KEYWORD_ONLY
-    assert parameters["thread_id"].default is None
-    probe_root = tmp_path / "staging-root-signature-probe"
-    main_thread_id = f"thr_{create_uuid_hex()}"
-    instance = object.__new__(FullCopyStagingStorage)
-    instance._path_resolver = SimpleNamespace(
-        main_thread_id=lambda _session_id: main_thread_id
-    )
-    instance._source = f"ses_{create_uuid_hex()}"
-    instance._target = target
-    instance._stage_root = probe_root
-    assert instance.root(target, "", thread_id=None) == probe_root
-    assert instance.root(target, "", thread_id=main_thread_id) == probe_root
-    with pytest.raises(ValueError, match="不接受其它 thread_id"):
-        instance.root(target, "", thread_id=CHILD_THREAD_ID)
 
 
 def _publish_child_thread(
@@ -136,6 +108,27 @@ def test_main_thread_resolves_to_session_node_rollout(
     assert storage.storage.index_path(SESSION_ID) == thread_node / "rollout" / "index.sqlite"
     assert storage.storage.jsonl_path(SESSION_ID) == thread_node / "rollout" / "rollout.jsonl"
     assert thread_node == session_node
+
+
+@pytest.mark.parametrize(("fault", "error_type", "message"), [
+    ("missing_meta", RuntimeError, "rollout database_meta 缺失"),
+    ("empty_owner", ValueError, "rollout 当前 SessionThread owner 非法"),
+    ("recovery_required", ValueError, "rollout 当前 owner 缺失或不是 active"),
+])
+def test_read_snapshot_rejects_missing_owner_and_inactive_database(
+    storage: RolloutContextStore, fault: str, error_type: type[Exception], message: str,
+) -> None:
+    thread = storage.storage.main_thread_id(SESSION_ID)
+    storage.storage.initialize(SESSION_ID, thread_id=thread)
+    with storage.storage._connect(thread, "", session_id=SESSION_ID) as connection:
+        if fault == "missing_meta":
+            connection.execute("DELETE FROM database_meta")
+        elif fault == "empty_owner":
+            connection.execute("UPDATE database_meta SET thread_id=''")
+        else:
+            connection.execute("UPDATE database_meta SET database_state='recovery_required'")
+    with pytest.raises(error_type, match=message):
+        storage.storage.open_read_snapshot(SESSION_ID, thread)
 
 
 def test_main_thread_owner_resolves_to_one_rollout_lock_and_rejects_session_alias(

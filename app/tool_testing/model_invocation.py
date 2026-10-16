@@ -4,19 +4,11 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
-from litellm.exceptions import (
-    APIConnectionError,
-    BadGatewayError,
-    InternalServerError,
-    RateLimitError,
-    ServiceUnavailableError,
-    Timeout,
-)
 
 from app.prompting import internal_message_factory
+from app.runtime.provider_errors import is_transient_provider_error
 from app.services.mapping.itemized.provider_history import visible_text
 
 MAX_MODEL_CALLS_PER_ATTEMPT = 3
@@ -111,36 +103,6 @@ async def probe_tool_call_with_transient_retries(
             await asyncio.sleep(retry_delays[retry_index])
 
     raise AssertionError("网络重试循环意外结束")
-
-
-def is_transient_provider_error(error: Exception) -> bool:
-    current: BaseException | None = error
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        if isinstance(
-            current,
-            (
-                ConnectionError,
-                TimeoutError,
-                httpx.TransportError,
-                httpx.TimeoutException,
-                APIConnectionError,
-                BadGatewayError,
-                InternalServerError,
-                RateLimitError,
-                ServiceUnavailableError,
-                Timeout,
-            ),
-        ):
-            return True
-        status_code = getattr(current, "status_code", None)
-        if isinstance(status_code, int) and (
-            status_code in {408, 429} or 500 <= status_code <= 599
-        ):
-            return True
-        current = current.__cause__ or current.__context__
-    return False
 
 
 async def probe_tool_call(

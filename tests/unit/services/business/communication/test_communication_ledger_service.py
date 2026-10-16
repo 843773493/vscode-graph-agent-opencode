@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -14,7 +15,10 @@ from app.core.session_control_store import (
     SessionControlStore,
     derive_communication_admission_identity,
 )
-from app.core.session_lifecycle_gate import SessionLifecycleGate
+from app.core.session_lifecycle_gate import (
+    SessionLifecycleGate,
+    SessionOperationLease,
+)
 from app.services.business.communication.addresses import (
     GlobalThreadAddress,
     ResolvedMainTargetBinding,
@@ -45,7 +49,17 @@ class SessionHarness:
             session_id=self.session_id,
             store=self.store,
             write_admission=self.gate.exclusive,
+            lease_settlement=self.lease_settlement,
         )
+
+    @asynccontextmanager
+    async def lease_settlement(
+        self, session_id: str, store: SessionControlStore, lease: SessionOperationLease,
+    ) -> AsyncIterator[bool]:
+        assert session_id == self.session_id and store is self.store
+        async with self.gate.exclusive(session_id):
+            store.assert_lease_current(lease)
+            yield True
 
     def address(self) -> GlobalThreadAddress:
         return GlobalThreadAddress(

@@ -22,6 +22,9 @@ from app.services.infrastructure.rollout_context.assembly.detail_identity import
     detail_ref_from_key,
     detail_ref_key,
 )
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutReadSnapshot,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_text,
@@ -122,6 +125,8 @@ class ResourceActivationLineageBodyStore(Protocol):
         *,
         detail_ref: DetailRef,
         checkpoint_ns: str,
+        storage_owner: tuple[str, str],
+        snapshot: RolloutReadSnapshot | None = None,
     ) -> Mapping[str, object]: ...
 
 

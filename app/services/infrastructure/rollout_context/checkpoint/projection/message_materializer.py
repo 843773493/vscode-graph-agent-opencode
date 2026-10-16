@@ -20,7 +20,7 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_optional_text,
     strict_text,
 )
-from app.services.mapping.itemized.carrier_dedup import superseded_stream_item_ids
+from app.services.mapping.itemized.carrier_dedup import superseded_item_ids
 
 if TYPE_CHECKING:
     from app.services.infrastructure.rollout_context.storage.primitives import (
@@ -62,13 +62,11 @@ class RolloutMessageMaterializerMixin:
                 )
         rows = connection.execute(
             "SELECT m.message_sequence, m.message_id, m.turn_id, m.created_at, "
-            "m.jsonl_offset, m.jsonl_length, f.source_session_id FROM messages AS m "
-            "LEFT JOIN fork_identity_mappings AS f ON f.target_session_id = ? "
-            "AND f.entity_type = 'message' AND f.target_local_id = m.message_id "
+            "m.jsonl_offset, m.jsonl_length FROM messages AS m "
             "WHERE m.message_sequence IN ("
             + ",".join("?" for _ in sequence_values)
             + ") ORDER BY m.message_sequence",
-            (session_id, *sequence_values),
+            sequence_values,
         ).fetchall()
         found_sequences: set[int] = set()
         with self._storage.jsonl_path(
@@ -83,7 +81,6 @@ class RolloutMessageMaterializerMixin:
                 created_at,
                 offset_value,
                 length_value,
-                fork_source_session_id,
             ) in rows:
                 sequence = strict_non_negative_int(
                     sequence_value,
@@ -119,6 +116,8 @@ class RolloutMessageMaterializerMixin:
                     read_item=self._storage._read_v2_item_at,
                 )
                 item = items[-1]
+                # checkpoint 与 fork anchor 会再次进入 canonical 提交，必须保留原 payload；
+                # target-local 附件引用只在公开历史和 Provider 请求边界投影。
                 message = self._storage._codec().project_message(items)
                 item_message_id = (item.projection_identity.projection_message_id if item.projection_identity is not None else None)
                 item_message_id = strict_optional_text(
@@ -136,10 +135,6 @@ class RolloutMessageMaterializerMixin:
                         message_id=message_id,
                         turn_id=turn_id,
                         created_at=created_at,
-                        fork_source_session_id=strict_optional_text(
-                            fork_source_session_id,
-                            field="fork_identity_mappings.source_session_id",
-                        ),
                     ))
                 )
         missing_sequences = tuple(
@@ -150,9 +145,12 @@ class RolloutMessageMaterializerMixin:
                 "SQLite messages 缺少请求的 message_sequence: "
                 + ",".join(str(sequence) for sequence in missing_sequences)
             )
+        order = {sequence: index for index, sequence in enumerate(sequence_values)}
+        by_message_id = {row[1]: order[row[0]] for row in rows}
+        values.sort(key=lambda group_value: by_message_id[group_value[1]["data"]["id"]])
         # 私有 checkpoint 恢复也复用 typed carrier 去重；已被完整 checkpoint
         # carrier 替代的 stream 影子不得再次成为 LangGraph 工具调用输入。
-        superseded = superseded_stream_item_ids(tuple(
+        superseded = superseded_item_ids(tuple(
             item for group, _value in values for item in group
         ))
         return [value for group, value in values
@@ -168,7 +166,6 @@ class RolloutMessageMaterializerMixin:
         message_id: str,
         turn_id: str | None,
         created_at: str,
-        fork_source_session_id: str | None = None,
     ) -> dict[str, object]:
         """把 SQLite 的 canonical identity 回填到 LangChain 消息。
 
@@ -176,7 +173,6 @@ class RolloutMessageMaterializerMixin:
         和持久化时间重复写入 response_metadata。SQLite 是这些字段的权威
         来源；读取 checkpoint、Replay 和 Fork 时必须把它们恢复到
         BaseMessage，否则同一条消息在 Web DTO 和 replay 定位中会失去身份。
-        fork 来源只取 target message 的唯一 fork_identity_mappings 事实。
         该回填只发生在内存中的反序列化副本，不改变 JSONL canonical 内容。
         """
         hydrated = dict(message)
@@ -186,8 +182,6 @@ class RolloutMessageMaterializerMixin:
         data = dict(raw_data)
         raw_metadata = data.get("response_metadata")
         metadata = dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
-        if fork_source_session_id is not None:
-            metadata["context_fork_source_session_id"] = fork_source_session_id
         metadata["message_id"] = message_id
         metadata["created_at"] = created_at
         metadata["updated_at"] = created_at
@@ -259,17 +253,20 @@ class RolloutMessageMaterializerMixin:
 
 
     def resolve_context_chain_ranges(
-        self, snapshot: RolloutReadSnapshot, message_sequence: int
+        self, snapshot: RolloutReadSnapshot, message_sequence: int | None = None
     ) -> tuple[tuple[str, int, int], ...]:
+        """省略序号读取 active view；显式序号读取冻结 checkpoint selection。"""
         connection = self._storage._snapshot_connection(snapshot)
         self._storage._require_v2_runtime(connection)
-        row = connection.execute(
-            "SELECT c.view_id, c.message_sequence, cv.control_sequence "
-            "FROM checkpoints AS c LEFT JOIN context_views AS cv ON cv.view_id = c.view_id "
-            "WHERE c.checkpoint_ns = ? AND c.message_sequence = ? "
-            "ORDER BY cv.control_sequence DESC LIMIT 1",
-            (snapshot.checkpoint_ns, message_sequence),
-        ).fetchone()
+        row = None
+        if message_sequence is not None:
+            row = connection.execute(
+                "SELECT c.view_id, c.message_sequence, cv.control_sequence "
+                "FROM checkpoints AS c LEFT JOIN context_views AS cv ON cv.view_id = c.view_id "
+                "WHERE c.checkpoint_ns = ? AND c.message_sequence = ? "
+                "ORDER BY cv.control_sequence DESC LIMIT 1",
+                (snapshot.checkpoint_ns, message_sequence),
+            ).fetchone()
         if row is not None:
             strict_non_negative_int(
                 row[2], field="checkpoint context_views.control_sequence"

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -29,9 +29,11 @@ from app.agents.upstream_request_trace import (
     record_upstream_request,
     record_upstream_response,
 )
+from app.runtime.provider_errors import is_provider_failure
 from app.services.orchestration.agent_stream_helpers import (
     is_tracked_chat_model_event,
 )
+from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 
 
 def _provider(api_mode: str) -> dict[str, object]:
@@ -1293,6 +1295,51 @@ def test_responses_interleaved_function_call_deltas_keep_call_identity() -> None
     assert observed_names == ["read_file", "read_file", None, None, None, None]
 
 
+@pytest.mark.asyncio
+async def test_responses_empty_function_call_arguments_remain_incomplete_after_model_finish() -> None:
+    model = BoxteamOpenAIResponsesModel(
+        model="gpt-test",
+        api_key="test-key",
+        custom_llm_provider="openai",
+    )
+    _, _, _, chunk = model._convert_response_event(
+        SimpleNamespace(
+            type="response.output_item.added",
+            output_index=1,
+            item={
+                "type": "function_call",
+                "id": "fc_empty",
+                "call_id": "call_empty",
+                "name": "read_file",
+                "arguments": "",
+            },
+        ),
+        current_index=-1,
+        current_output_index=-1,
+        current_sub_index=-1,
+        part_state=_StreamPartState(),
+        original_schema=None,
+    )
+    assert chunk is not None
+
+    writer = MagicMock()
+    writer.commit = AsyncMock()
+    runtime = MessageStreamRuntime(writer)
+    await runtime.start_model("model_empty_arguments", "gpt-test")
+    await runtime.accept_message_chunk(chunk.message)
+    await runtime.finish_model()
+
+    call_id = "model_empty_arguments:tool-call:call_empty"
+    delta = next(
+        call.args[1]
+        for call in writer.commit.await_args_list
+        if call.args[0] == "tool_call.delta"
+    )
+    assert delta["arguments"] == {}
+    assert delta["arguments_complete"] is False
+    assert runtime.pending_tool_calls() == ((call_id, "read_file", False),)
+
+
 def _fake_llm_stream(model_call_details: dict[str, object]) -> SimpleNamespace:
     """构造只带 LiteLLM 调用细节的最小流对象。"""
     return SimpleNamespace(
@@ -1366,3 +1413,25 @@ def test_responses_stream_terminal_event_records_complete_upstream_response():
 
     assert attempts[0]["api_base"] == "https://example.com/v1/responses"
     assert attempts[0]["response"] == {"id": "resp_stream", "output": []}
+
+
+@pytest.mark.parametrize("event_type", ["response.failed", "error"])
+def test_responses_failure_events_are_marked_as_provider_failures(event_type: str):
+    model = BoxteamOpenAIResponsesModel(
+        model="gpt-test",
+        api_key="test-key",
+        custom_llm_provider="openai",
+        invocation_purpose="tool_test",
+    )
+
+    with pytest.raises(RuntimeError, match="LiteLLM Responses 请求失败") as raised:
+        model._convert_response_event(
+            SimpleNamespace(type=event_type),
+            current_index=-1,
+            current_output_index=-1,
+            current_sub_index=-1,
+            part_state=_StreamPartState(),
+            original_schema=None,
+        )
+
+    assert is_provider_failure(raised.value)

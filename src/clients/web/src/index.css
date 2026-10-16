@@ -440,6 +440,32 @@ body > #root {
   box-shadow: 0 22px 48px color-mix(in srgb, var(--bt-text-primary) 28%, transparent);
 }
 
+.session-context-fork-dialog {
+  width: min(640px, 100%);
+  max-height: calc(100dvh - 40px);
+}
+
+.session-context-fork-dialog > .session-name-header,
+.session-context-fork-dialog > .session-name-actions {
+  flex-shrink: 0;
+}
+
+.session-context-fork-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.session-context-fork-body > p {
+  margin: 0;
+}
+
+.session-context-fork-body fieldset {
+  min-width: 0;
+}
+
 .session-name-header,
 .session-name-actions {
   display: flex;

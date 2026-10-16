@@ -89,6 +89,7 @@ def compile_prefix_context(
     previous: ContextAssemblySnapshot | None,
     provider_profile: str,
     turn_id: str | None,
+    initial_assembly: bool = False,
     transition: PendingPrefixEpochTransition | None = None,
     retained_source_assembly: ContextAssemblySnapshot | None = None,
     retained_source_refs: frozenset[tuple[str, str]] = frozenset(),
@@ -100,7 +101,7 @@ def compile_prefix_context(
     previous_binding = previous.seal_binding if previous is not None else None
     if previous is not None and previous_binding is None:
         raise RuntimeError("context-seal-binding-required: applied assembly 缺少 epoch binding")
-    if previous_binding is None:
+    if previous_binding is None or initial_assembly:
         state = initial_epoch_state(
             provider_profile=provider_profile, tool_compatibility_key=compatibility_key,
             turn_id=turn_id, transition=transition,
@@ -115,7 +116,7 @@ def compile_prefix_context(
     else:
         state = previous_binding.prefix.state
     rebuilding = not state.epoch_applied
-    if rebuilding and transition is None and previous_binding is not None:
+    if rebuilding and transition is None and previous_binding is not None and not initial_assembly:
         # ToolSet hard rebase 只替换执行能力；已封存的 untracked 用户来源仍属于
         # 当前 owner 的有效上下文。复用真实 selection/frame，不重新观察来源。
         retained_source_assembly = previous
@@ -131,48 +132,48 @@ def compile_prefix_context(
     root = previous_binding.root if previous_binding is not None else None
     frames: list[ProviderProfileItemFrame] = []
     if rebuilding:
-        candidates = []
+        candidates: dict[str, tuple[RootCandidateSource, str]] = {}
+        observed = {source.descriptor.source_id for source in batch.sources}
         if retained_source_assembly is not None:
             retained_binding = retained_source_assembly.seal_binding
             if retained_binding is None:
                 raise RuntimeError("checkpoint-context-state-conflict: retained source 缺少 immutable prefix")
-            for provenance in (() if retained_binding.root is None else retained_binding.root.sources):
-                matches = tuple(
-                    source for source in retained_source_assembly.contributions
-                    if source.source_binding is not None
-                    and source.source_binding.source_ref == provenance.source_identity
-                    and source.source_revision == provenance.revision
-                    and source.root_placement == "root_eligible"
-                )
-                if len(matches) != 1:
-                    raise RuntimeError("checkpoint-context-state-conflict: retained root 缺少唯一 selected source")
-                root_refs = tuple(
-                    entry.ref.ref_id for entry in retained_source_assembly.selection
-                    if entry.included and entry.ref.ref_type == "request_only"
-                    and entry.contribution_id == matches[0].contribution_id
-                )
-                if len(root_refs) != 1:
-                    raise RuntimeError("checkpoint-context-state-conflict: retained root 缺少唯一 source ref")
-                if (root_refs[0], matches[0].source_revision) not in retained_source_refs:
+            provenance = {
+                (source.source_identity, source.revision): source
+                for source in (() if retained_binding.root is None else retained_binding.root.sources)
+            }
+            for entry in retained_source_assembly.selection:
+                source = resolve_contribution_for_ref(entry.ref, retained_source_assembly.contributions)
+                if (not entry.included or source is None or source.source_binding is None
+                        or source.contribution_kind != "prompt" or source.root_placement != "root_eligible"
+                        or (entry.ref.ref_id, source.source_revision) not in retained_source_refs):
                     continue
-                contribution = by_contribution[matches[0].contribution_id]
+                identity = source.source_binding.source_ref
+                if identity in observed:
+                    continue
+                contribution = by_contribution[source.contribution_id]
                 content = (retained_source_bodies or {}).get(contribution.contribution_id)
-                if not isinstance(content, str) or contribution.source_ordinal != provenance.source_ordinal:
+                prior = provenance.get((identity, source.source_revision))
+                if (not isinstance(content, str) or contribution.source_ordinal is None
+                        or (prior is not None and contribution.source_ordinal != prior.source_ordinal)):
                     raise RuntimeError("checkpoint-context-state-conflict: retained root detail/ordinal 不一致")
-                candidates.append(RootCandidateSource(
-                    source_identity=provenance.source_identity, source_kind=provenance.source_kind,
-                    name=provenance.name, revision=provenance.revision, content=content,
+                if not content:
+                    continue
+                # 只提升已选中的完整 typed 来源；notice/delta 仍保留为 user。
+                candidates[identity] = (RootCandidateSource(
+                    source_identity=identity, source_kind=source.source_kind,
+                    name=prior.name if prior is not None else identity,
+                    revision=source.source_revision, content=content,
                     source_ordinal=contribution.source_ordinal, root_placement="root_eligible",
-                    included_reason="epoch_rebuild",
-                ))
-                selected_ids.append(root_refs[0])
+                    included_reason="initial" if state.epoch.reason == EpochReason.INITIAL else "epoch_rebuild",
+                ), entry.ref.ref_id)
         for source in batch.sources:
             if source.descriptor.root_placement != "root_eligible" or not source.content:
                 continue
             contribution = by_contribution[full_source_id(source)]
             if contribution.source_ordinal is None:
                 raise RuntimeError("root compiler 缺少 registry 分配的 source ordinal")
-            candidates.append(RootCandidateSource(
+            candidates[source.descriptor.source_id] = (RootCandidateSource(
                 source_identity=source.descriptor.source_id,
                 source_kind=source.descriptor.source_kind,
                 name=source.descriptor.name,
@@ -183,9 +184,9 @@ def compile_prefix_context(
                     "toolset_policy" if source.descriptor.policy_key is not None
                     else "initial" if state.epoch.reason == EpochReason.INITIAL else "epoch_rebuild"
                 ),
-            ))
-            selected_ids.append(contribution.contribution_id)
-        root = compile_root_item(state, candidates)
+            ), contribution.contribution_id)
+        selected_ids.extend(ref_id for _, ref_id in candidates.values())
+        root = compile_root_item(state, [candidate for candidate, _ in candidates.values()])
         if root is not None:
             frames.append(ProviderProfileItemFrame(
                 1, provider_profile, "system", "text", root.content,
@@ -220,23 +221,6 @@ def compile_prefix_context(
     )
     frames.extend(canonical_frames)
     selected_ids.extend(canonical_ids)
-    ordinal = len(state.frames) + len(frames)
-    if rebuilding and retained_source_assembly is not None:
-        # 携带 cutoff 前已封存的 snapshot/untracked 帧；不生成 CSM 恢复决策。
-        for frame in retained_source_assembly.seal_binding.prefix.state.frames:
-            if frame.item_ref.source_identity in {MCP_GUIDANCE_SOURCE_ID, *TEAM_SOURCE_IDS.values()}:
-                continue
-            if (frame.item_ref.ref_id, frame.item_ref.source_revision) not in retained_source_refs or frame.role != "user":
-                continue
-            ref_id = frame.item_ref.ref_id
-            if ref_id not in by_id:
-                raise RuntimeError("checkpoint-context-state-conflict: retained source ref 已丢失")
-            ordinal += 1
-            selected_ids.append(ref_id)
-            frames.append(replace(
-                frame, ordinal=ordinal, provider_profile=provider_profile,
-                item_ref=replace(frame.item_ref, tracking_state="not_tracked"),
-            ))
     source_by_id = {source.descriptor.source_id: source for source in batch.sources}
     tail_values = (
         [
@@ -250,6 +234,33 @@ def compile_prefix_context(
             for delta in batch.deltas
         ]
     )
+    current_tail = {(source.descriptor.source_id, source.revision): content
+                    for _, source, content in tail_values} if rebuilding else {}
+    ordinal = len(state.frames) + len(frames)
+    if rebuilding and retained_source_assembly is not None:
+        # 携带 cutoff 前已封存的 snapshot/untracked 帧；不生成 CSM 恢复决策。
+        for frame in retained_source_assembly.seal_binding.prefix.state.frames:
+            if frame.item_ref.source_identity in {MCP_GUIDANCE_SOURCE_ID, *TEAM_SOURCE_IDS.values()}:
+                continue
+            if ((frame.item_ref.ref_id, frame.item_ref.source_revision) not in retained_source_refs
+                    or frame.role != "user" or frame.item_ref.ref_id in inherited):
+                continue
+            ref_id = frame.item_ref.ref_id
+            if ref_id not in by_id:
+                raise RuntimeError("checkpoint-context-state-conflict: retained source ref 已丢失")
+            source = resolve_contribution_for_ref(by_id[ref_id], plan.contributions)
+            identity = (frame.item_ref.source_identity, frame.item_ref.source_revision)
+            if source is not None and source.contribution_kind == "prompt" and identity in current_tail:
+                if frame.content != current_tail[identity]:
+                    raise RuntimeError("source-identity-conflict: 同一 tail source revision 的完整正文不一致")
+                # fork 本地化后的旧 ref 与当前完整来源只能贡献一次，异 revision 历史仍携带。
+                continue
+            ordinal += 1
+            selected_ids.append(ref_id)
+            frames.append(replace(
+                frame, ordinal=ordinal, provider_profile=provider_profile,
+                item_ref=replace(frame.item_ref, tracking_state="not_tracked"),
+            ))
     for ref_id, source, content in tail_values:
         ordinal += 1
         selected_ids.append(ref_id)
@@ -261,6 +272,7 @@ def compile_prefix_context(
             ),
         ))
     # 持久 overlay 是独立的 post-user 来源；沿已有 typed ref 的 base/delta 顺序追加。
+    inherited = set(selected_ids)
     for ref in plan.refs:
         if ref.base_delta_role not in {"base", "delta"} or ref.ref_id in inherited:
             continue

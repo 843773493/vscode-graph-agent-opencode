@@ -76,6 +76,7 @@ class SessionExecutionEventBaseDTO(BaseModel):
 class MessageObservationDTO(BaseModel):
     message_id: str
     session_id: str
+    thread_id: str = Field(min_length=1)
     role: str
     content: str
     attachments: list[object] = Field(default_factory=list)

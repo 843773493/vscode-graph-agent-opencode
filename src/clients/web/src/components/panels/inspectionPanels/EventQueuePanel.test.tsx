@@ -5,6 +5,7 @@ import type { FrontendReceivedEvent } from "../../../types/frontend";
 import EventQueuePanel, { INITIAL_VISIBLE_EVENT_COUNT } from "./EventQueuePanel";
 
 const historyProps = {
+  scopeKey: "gw_demo:ses_events",
   historyLoading: false,
   historyLoadingOlder: false,
   historyHasMore: false,

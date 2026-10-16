@@ -1323,6 +1323,7 @@ async def test_projected_cursor_streams_later_indexed_non_projected_event(
             payload=MessageCreatedPayload(
                 message_id="msg_assistant",
                 session_id=session_id,
+                thread_id="thr_00000000400070008000000000000002",
                 role="assistant",
                 content="done",
                 created_at=now,

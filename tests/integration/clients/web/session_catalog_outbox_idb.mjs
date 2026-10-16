@@ -93,6 +93,7 @@ const partition = {
 };
 const upgradePartition = { ...partition, workspaceId: `upgrade-${randomUUID()}` };
 const collisionPartition = { ...partition, workspaceId: `collision-${randomUUID()}` };
+const receiptPartition = { ...partition, workspaceId: `receipt-${randomUUID()}` };
 const operationIds = {
   upgrade: randomUUID().replaceAll("-", ""),
   first: randomUUID().replaceAll("-", ""),
@@ -100,6 +101,7 @@ const operationIds = {
   afterPrune: randomUUID().replaceAll("-", ""),
   sequenceOriginal: randomUUID().replaceAll("-", ""),
   sequenceCollision: randomUUID().replaceAll("-", ""),
+  durableReceipt: randomUUID().replaceAll("-", ""),
 };
 
 async function insertFromPage(page, targetPartition, operationId, name) {
@@ -130,6 +132,17 @@ async function readPartition(page, targetPartition) {
     const records = await port.load(partitionKey);
     return records.map((record) => record);
   }, targetPartition);
+}
+
+async function applyReceiptsFromPage(page, targetPartition, receipts) {
+  return await page.evaluate(async ({ targetPartition: partitionValue, receipts: items }) => {
+    const { state, storage } = window.outboxModules;
+    const database = window.outboxDatabase ?? await storage.openCatalogOutboxDatabase();
+    window.outboxDatabase = database;
+    const port = window.outboxPort ?? storage.createIndexedDbCatalogOutboxPort(database);
+    window.outboxPort = port;
+    return await port.applyReceipts(state.catalogOutboxPartitionKey(partitionValue), items);
+  }, { targetPartition, receipts });
 }
 
 let outcome;
@@ -400,7 +413,7 @@ try {
       queue_seq: operation.client_sequence, kind: "create_folder",
       state: index === 0 ? "rejected" : "dependency_failed", created_node_id: null,
       committed_catalog_revision: null, error_code: "parent_creation_failed",
-      error_detail: "父目录被明确拒绝", pending_settlement: false,
+      error_detail: "父目录被明确拒绝", settlement: null,
       receipt_revision: 2, updated_at: "2026-10-08T00:00:00Z",
     })));
     const pruned = state.pruneReconciledCatalogOutbox(failed, 7, ids.slice(0, 3));
@@ -429,6 +442,87 @@ try {
   const chainAfterFailure = await readPartition(pageA, chainPartition);
   equal(chainAfterFailure.map((record) => record.operation.client_operation_id), [chainIds[3]], "失败清理后的真实 IDB 重开不能复活依赖链");
 
+  const durableSeed = await pageA.evaluate(async ({ partitionValue, operationId }) => {
+    const { state, storage } = window.outboxModules;
+    const database = window.outboxDatabase ?? await storage.openCatalogOutboxDatabase();
+    window.outboxDatabase = database;
+    window.outboxPort ??= storage.createIndexedDbCatalogOutboxPort(database);
+    const pending = state.addCatalogOutboxIntent(state.createCatalogOutbox(partitionValue),
+      operationId, { kind: "delete_session", targetNodeId: "session_deleted" },
+      { baseCatalogRevision: 7 }).operations[0];
+    return await storage.persistCatalogOutboxPendingOperation(window.outboxPort, partitionValue, pending);
+  }, { partitionValue: receiptPartition, operationId: operationIds.durableReceipt });
+  const repairReceipt = {
+    operation_id: operationIds.durableReceipt, client_sequence: durableSeed.client_sequence,
+    queue_seq: 1, kind: "delete_session", state: "committed", created_node_id: null,
+    committed_catalog_revision: 12, settlement: "repair_required", receipt_revision: 3,
+    error_code: "cleanup_failed", error_detail: "排空需要修复", updated_at: "2026-10-12T00:00:00Z",
+  };
+  const abortedReceipt = await pageA.evaluate(async ({ partitionValue, receipt }) => {
+    const { state, storage } = window.outboxModules;
+    const originalPut = IDBObjectStore.prototype.put;
+    let hit = false;
+    IDBObjectStore.prototype.put = function (value, ...args) {
+      const request = originalPut.call(this, value, ...args);
+      if (this.transaction.db.name === storage.CATALOG_OUTBOX_DATABASE_NAME
+        && this.name === storage.CATALOG_OUTBOX_STORE_NAME
+        && value.operation?.client_operation_id === receipt.operation_id) {
+        hit = true;
+        queueMicrotask(() => this.transaction.abort());
+      }
+      return request;
+    };
+    try {
+      await window.outboxPort.applyReceipts(state.catalogOutboxPartitionKey(partitionValue), [receipt]);
+      throw new Error("回执事务中止后仍返回成功");
+    } catch (error) {
+      if (!hit || !String(error).includes("持久合并会话目录回执")) throw error;
+      return { hit, error: String(error) };
+    } finally {
+      IDBObjectStore.prototype.put = originalPut;
+    }
+  }, { partitionValue: receiptPartition, receipt: repairReceipt });
+  const receiptAfterAbort = (await readPartition(pageB, receiptPartition))[0];
+  assert(abortedReceipt.hit && receiptAfterAbort.operation.receipt_revision === null,
+    "真实回执事务中止必须显式报错且不能写入半条镜像");
+  equal(receiptAfterAbort.operation, durableSeed.operation, "中止不改变初始持久命令");
+  await applyReceiptsFromPage(pageA, receiptPartition, [repairReceipt]);
+  const staleReceipt = { ...repairReceipt, state: "queued", receipt_revision: 2,
+    committed_catalog_revision: null, settlement: null, error_code: null, error_detail: null };
+  const staleWrite = await applyReceiptsFromPage(pageB, receiptPartition, [staleReceipt]);
+  equal(staleWrite[0].operation.receipt_revision, 3, "另一个页面的旧回执不能覆盖较新磁盘版本");
+  equal(staleWrite[0].operation.settlement, "repair_required", "旧 enqueue 回执不能清空 repair 事实");
+  await Promise.all([pageA, pageB].map((page) => page.evaluate(() => {
+    window.outboxDatabase.close();
+    window.outboxDatabase = null;
+    window.outboxPort = null;
+  })));
+  const coldRepair = await pageB.evaluate(async (partitionValue) => {
+    const { state, storage } = window.outboxModules;
+    window.outboxDatabase = await storage.openCatalogOutboxDatabase();
+    window.outboxPort = storage.createIndexedDbCatalogOutboxPort(window.outboxDatabase);
+    const restored = await storage.loadCatalogOutbox(window.outboxPort, partitionValue);
+    const pruned = state.pruneReconciledCatalogOutbox(restored, 12);
+    return { restored: restored.operations, retained: pruned.operations };
+  }, receiptPartition);
+  equal(coldRepair.restored, coldRepair.retained, "冷恢复的 repair_required 不得剪枝");
+  equal(coldRepair.restored[0], staleWrite[0].operation, "冷恢复完整消费最新持久回执");
+  assert(coldRepair.restored[0].client_sequence === durableSeed.client_sequence,
+    "回执持久更新不能重新分配 client_sequence");
+  await applyReceiptsFromPage(pageA, receiptPartition, [{ ...repairReceipt,
+    receipt_revision: 4, settlement: "settled", error_code: null, error_detail: null }]);
+  await pageB.evaluate(async ({ partitionValue, operationId }) => {
+    await window.outboxModules.storage.deleteCatalogOutboxOperations(
+      window.outboxPort, partitionValue, [operationId]);
+  }, { partitionValue: receiptPartition, operationId: operationIds.durableReceipt });
+  equal(await applyReceiptsFromPage(pageA, receiptPartition, [repairReceipt]), [],
+    "已剪枝条目不能因迟到回执重新插入");
+  equal(await readPartition(pageB, receiptPartition), [], "迟到回执不复活已清理磁盘行");
+  const receiptSuccessor = await insertFromPage(pageB, receiptPartition,
+    `${operationIds.durableReceipt}-successor`, "回执清理后的后继");
+  assert(receiptSuccessor.client_sequence === durableSeed.client_sequence + 1,
+    "回执更新与删除不得改变分区高水位");
+
   assert(browserErrors.length === 0, `浏览器 harness 出错: ${browserErrors.join("; ")}`);
   outcome = {
     status: "passed",
@@ -439,6 +533,8 @@ try {
     restored_operation_ids: restored.operations.map((operation) => operation.client_operation_id),
     duplicate_operation_id_rejected: duplicateIdRejected,
     conflicting_primary_key_rejected: sequenceConflictRejected,
+    durable_receipts: { aborted: abortedReceipt, restored: coldRepair.restored,
+      successor_sequence: receiptSuccessor.client_sequence, late_receipt_reinserted: false },
     pending_parent_chain: { ids: chainIds, ...chain, ...recoveredChain,
       retained_after_failure_reopen: chainAfterFailure.map((record) => record.operation.client_operation_id) },
     artifacts: [

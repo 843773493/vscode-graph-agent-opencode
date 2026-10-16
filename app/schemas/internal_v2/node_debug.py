@@ -1,22 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Literal, cast
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from app.core.session_catalog_store import validate_thread_id
-
-
-def _canonical_thread_id(value: object) -> str:
-    try:
-        validate_thread_id(value)
-    except TypeError as error:
-        raise ValueError(str(error)) from error
-    return cast(str, value)
-
-
-CanonicalThreadId = Annotated[str, BeforeValidator(_canonical_thread_id)]
+from app.schemas.canonical_params import CanonicalThreadId
 
 NodeDebugStatus = Literal[
     "idle",

@@ -17,6 +17,15 @@ import pytest
 from app.core.identifier import create_uuid_hex
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.enums import DetailProtection
+from app.domain.itemized.epoch.prefix_epoch import (
+    AppendedItemRef,
+    ProviderProfileItemFrame,
+    append_items,
+    initial_epoch_state,
+    seal_assembly,
+)
+from app.domain.itemized.epoch.seal_binding import ContextSealBinding
+from app.domain.itemized.epoch.tool_set import tool_set_manifest_compatibility_key
 from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
@@ -29,6 +38,7 @@ from app.domain.itemized.request_plan import (
     ContextRequestPlan,
     SourceBinding,
 )
+from app.domain.itemized.selection import ContextSelectionEntry
 from app.services.infrastructure.rollout_context.assembly.manifest import (
     ContextAssemblyManifestMixin,
 )
@@ -108,7 +118,10 @@ def assembly_case(
         connection.close()
 
 
-def _candidate(case: AssemblyCase, plan_id: str) -> ContextAssemblySnapshot:
+def _candidate(
+    case: AssemblyCase, plan_id: str, *, admission_root: bool = False,
+    extra_source_ids: tuple[str, ...] = (),
+) -> ContextAssemblySnapshot:
     contributions = tuple(
         ContextContribution(
             contribution_id=name,
@@ -122,26 +135,55 @@ def _candidate(case: AssemblyCase, plan_id: str) -> ContextAssemblySnapshot:
             extensions={"boxteam.test.annotation": {"extension_version": "1", "protection": "public", "value": {'owner': plan_id}}} , source_binding=SourceBinding(source_ref=name),
             source_ordinal=ordinal,
         )
-        for ordinal, name in enumerate(("included-source", "omitted-source"))
+        for ordinal, name in enumerate(
+            ("included-source", "omitted-source", *extra_source_ids)
+        )
     )
+    refs = tuple(
+        ContextRef.request_only_ref(
+            f"{item.contribution_id}-ref",
+            session_id=case.session_id,
+            thread_id=case.thread_id,
+            plan_id=plan_id,
+            source_revision=item.source_revision,
+            source_ref=item.contribution_id,
+            content_hash_value=item.content_hash,
+            content_length=item.content_length,
+        )
+        for item in contributions
+    )
+    active_view_id = None
+    omitted_ref_ids = [
+        "omitted-source-ref", "omitted-tools",
+        *(f"{source_id}-ref" for source_id in extra_source_ids),
+    ]
+    if admission_root:
+        root_id = case.connection.execute(
+            "SELECT root_input_item_id FROM turn_records "
+            "WHERE session_id = ? AND thread_id = ? AND turn_id = ?",
+            (case.session_id, case.thread_id, case.turn_id),
+        ).fetchone()[0]
+        root_item = case.saver._storage.storage.read_items(
+            case.session_id, case.thread_id, item_ids=(root_id,),
+        )[0]
+        active_view_id = case.connection.execute(
+            "SELECT branch.head_view_id FROM checkpoint_namespace_state AS namespace "
+            "JOIN branches AS branch ON branch.branch_id = namespace.active_branch_id "
+            "WHERE namespace.checkpoint_ns = ''"
+        ).fetchone()[0]
+        refs = (
+            ContextRef.canonical_item(
+                root_item, session_id=case.session_id, thread_id=case.thread_id,
+            ),
+            *refs,
+        )
+        omitted_ref_ids.append(root_id)
     plan = ContextRequestPlan(
         session_id=case.session_id,
         thread_id=case.thread_id,
         plan_id=plan_id,
         plan_creation_idempotency_key=f"create-{plan_id}",
-        refs=tuple(
-            ContextRef.request_only_ref(
-                f"{item.contribution_id}-ref",
-                session_id=case.session_id,
-                thread_id=case.thread_id,
-                plan_id=plan_id,
-                source_revision=item.source_revision,
-                source_ref=item.contribution_id,
-                content_hash_value=item.content_hash,
-                content_length=item.content_length,
-            )
-            for item in contributions
-        ),
+        refs=refs,
         contributions=contributions,
         tool_set_refs=tuple(
             ToolSetRef.from_tool_snapshot(
@@ -149,12 +191,14 @@ def _candidate(case: AssemblyCase, plan_id: str) -> ContextAssemblySnapshot:
                 thread_id=case.thread_id,
                 plan_id=plan_id,
                 snapshot_id=name,
-                source_revision=f"{plan_id}-tools",
+                source_revision=sha256_jcs(f"{plan_id}-tools"),
                 tools=({"name": name, "parameters": {"type": "object"}},),
                 tool_policy={"mode": "auto"},
             )
             for name in ("included-tools", "omitted-tools")
         ),
+        active_view_id=active_view_id,
+        selection_policy="compaction_selection" if admission_root else "active_view",
     )
     registered = case.saver.create_context_plan(case.session_id, plan)
     assembly_id = f"assembly-{plan_id}"
@@ -178,18 +222,193 @@ def _candidate(case: AssemblyCase, plan_id: str) -> ContextAssemblySnapshot:
         execution_id=case.execution_id,
         provider_version="schema4-manifest-contract",
         request_detail_refs={"included-source-ref": detail.detail_ref},
-        omitted_ref_ids=("omitted-source-ref", "omitted-tools"),
+        omitted_ref_ids=tuple(omitted_ref_ids),
+    )
+
+
+def _with_admission_root_binding(
+    snapshot: ContextAssemblySnapshot,
+) -> ContextAssemblySnapshot:
+    tool_ref = next(
+        entry.ref
+        for entry in snapshot.selection
+        if entry.included and isinstance(entry.ref, ToolSetRef)
+    )
+    compatibility_key = tool_set_manifest_compatibility_key(tool_ref)
+    state = initial_epoch_state(
+        provider_profile=snapshot.provider_version,
+        tool_compatibility_key=compatibility_key,
+        turn_id=snapshot.turn_id,
+    )
+    source_entry = next(
+        entry
+        for entry in snapshot.selection
+        if entry.included and entry.ref.ref_type == "request_only"
+    )
+    contribution = next(
+        item for item in snapshot.contributions
+        if item.contribution_id == source_entry.contribution_id
+    )
+    source_binding = contribution.source_binding
+    assert source_binding is not None and source_binding.source_ref is not None
+    frame = ProviderProfileItemFrame(
+        ordinal=1,
+        provider_profile=state.provider_profile,
+        role="user",
+        payload_kind="structured_content",
+        content=contribution.body,
+        item_ref=AppendedItemRef(
+            "source_item",
+            source_entry.ref.ref_id,
+            source_binding.source_ref,
+            source_entry.ref.source_revision,
+            "tracked",
+        ),
+    )
+    state = append_items(
+        state,
+        (frame,),
+        desired_provider_profile=state.provider_profile,
+        desired_tool_compatibility_key=state.tool_compatibility_key,
+    )
+    prefix = seal_assembly(
+        state,
+        assembly_id=snapshot.assembly_id,
+    )
+    return replace(
+        snapshot,
+        seal_binding=ContextSealBinding(
+            prefix=prefix,
+            root=None,
+            tool_set_snapshot_id=tool_ref.ref_id,
+            applied_toolset_revision=tool_ref.source_revision,
+            selection_revision=sha256_jcs({"plan_id": snapshot.plan_id}),
+            previous_assembly_id=None,
+        ),
     )
 
 
 def _seal(case: AssemblyCase, plan_id: str) -> ContextAssemblySnapshot:
     snapshot = _candidate(case, plan_id)
+    _seal_snapshot(case, snapshot)
+    return snapshot
+
+
+def _seal_snapshot(case: AssemblyCase, snapshot: ContextAssemblySnapshot) -> None:
     case.saver._storage.assemblies.seal_context_assembly(
         case.session_id, case.thread_id, snapshot,
-        seal_idempotency_key=f"seal-{plan_id}",
+        seal_idempotency_key=f"seal-{snapshot.plan_id}",
         seal_input_hash=sha256_jcs("storage-seal-test-input"),
     )
-    return snapshot
+
+
+def test_admission_root_uses_visible_canonical_membership_outside_selection(assembly_case):
+    case = assembly_case
+    snapshot = _with_admission_root_binding(
+        _candidate(case, "admission-root-visible", admission_root=True)
+    )
+    root_id = case.connection.execute(
+        "SELECT root_input_item_id FROM turn_records WHERE turn_id = ?",
+        (case.turn_id,),
+    ).fetchone()[0]
+    root_membership = case.connection.execute(
+        "SELECT visible, source_kind FROM context_view_items "
+        "WHERE view_id = ? AND item_id = ?",
+        (snapshot.active_view_id, root_id),
+    ).fetchone()
+    root_selection = next(
+        entry for entry in snapshot.selection if entry.ref.ref_id == root_id
+    )
+    assert root_membership == (1, "canonical")
+    assert root_selection.ref.ref_type == "canonical_item" and not root_selection.included
+
+    _seal_snapshot(case, snapshot)
+    assert case.connection.execute(
+        "SELECT source_cut_position_kind, source_cut_item_id "
+        "FROM context_assembly_selections WHERE assembly_id = ? "
+        "AND ref_id = 'included-source-ref'",
+        (snapshot.assembly_id,),
+    ).fetchone() == ("start", None)
+    _validate(case, snapshot)
+
+
+def test_seal_rejects_unknown_snapshot_turn_without_writes(assembly_case):
+    case = assembly_case
+    snapshot = _with_admission_root_binding(
+        _candidate(case, "unknown-snapshot-turn", admission_root=True)
+    )
+    foreign_turn_snapshot = replace(snapshot, turn_id="foreign-turn")
+
+    before = _state(case)
+    with pytest.raises(KeyError, match="assembly Turn 不存在: foreign-turn"):
+        _seal_snapshot(case, foreign_turn_snapshot)
+    assert _state(case) == before
+    assert case.connection.execute(
+        "SELECT count(*) FROM context_assemblies WHERE assembly_id = ?",
+        (snapshot.assembly_id,),
+    ).fetchone() == (0,)
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    ["missing_root", "wrong_turn_owner", "wrong_root_owner", "invisible", "noncanonical"],
+)
+def test_seal_rejects_missing_foreign_or_noncanonical_admission_root(
+    assembly_case, corruption,
+):
+    case = assembly_case
+    snapshot = _with_admission_root_binding(
+        _candidate(case, f"invalid-admission-root-{corruption}", admission_root=True)
+    )
+    root_id = case.connection.execute(
+        "SELECT root_input_item_id FROM turn_records WHERE turn_id = ?",
+        (case.turn_id,),
+    ).fetchone()[0]
+    with case.connection:
+        if corruption == "missing_root":
+            case.connection.execute(
+                "UPDATE turn_records SET root_input_item_id = ? WHERE turn_id = ?",
+                ("missing-admission-root", case.turn_id),
+            )
+        elif corruption == "wrong_turn_owner":
+            case.connection.execute(
+                "UPDATE turn_records SET session_id = 'foreign-session' WHERE turn_id = ?",
+                (case.turn_id,),
+            )
+        elif corruption == "wrong_root_owner":
+            case.connection.execute(
+                "UPDATE item_catalog SET turn_id = 'foreign-turn' WHERE item_id = ?",
+                (root_id,),
+            )
+        elif corruption == "invisible":
+            case.connection.execute(
+                "UPDATE context_view_items SET visible = 0 "
+                "WHERE view_id = ? AND item_id = ?",
+                (snapshot.active_view_id, root_id),
+            )
+        else:
+            case.connection.execute(
+                "UPDATE context_view_items SET source_kind = 'derived' "
+                "WHERE view_id = ? AND item_id = ?",
+                (snapshot.active_view_id, root_id),
+            )
+
+    before = _state(case)
+    expected_message = (
+        "source-mismatch: canonical item 的 Turn/execution 历史 owner 不一致"
+        if corruption == "wrong_turn_owner"
+        else "source-cut-frontier-conflict|assembly Turn 不存在"
+    )
+    with pytest.raises(
+        (KeyError, RuntimeError, ValueError),
+        match=expected_message,
+    ):
+        _seal_snapshot(case, snapshot)
+    assert _state(case) == before
+    assert case.connection.execute(
+        "SELECT count(*) FROM context_assemblies WHERE assembly_id = ?",
+        (snapshot.assembly_id,),
+    ).fetchone() == (0,)
 
 
 def _state(case: AssemblyCase) -> tuple[bytes, tuple[str, ...]]:
@@ -217,6 +436,50 @@ def _assert_recovery_rejected(
         restarted.get_context_assembly(
             case.session_id, case.thread_id, assembly_id=snapshot.assembly_id
         )
+    assert _state(case) == before
+
+
+def test_cold_manifest_matches_refs_with_linear_selection_work(
+    assembly_case, monkeypatch: pytest.MonkeyPatch,
+):
+    case = assembly_case
+    snapshot = _candidate(
+        case, "linear-manifest",
+        extra_source_ids=tuple(f"extra-source-{ordinal}" for ordinal in range(62)),
+    )
+    _seal_snapshot(case, snapshot)
+    before = _state(case)
+    original_validate = ContextAssemblyManifestMixin._validate_context_assembly_manifest
+    original_getattribute = ContextSelectionEntry.__getattribute__
+    ref_reads: list[int] = []
+
+    def counted_manifest(owner, connection, persisted_snapshot, **kwargs):
+        selected_ids = {id(entry) for entry in persisted_snapshot.selection}
+        reads = 0
+
+        def counted_ref(entry, name):
+            nonlocal reads
+            if name == "ref" and id(entry) in selected_ids:
+                reads += 1
+            return original_getattribute(entry, name)
+
+        with monkeypatch.context() as guard:
+            guard.setattr(ContextSelectionEntry, "__getattribute__", counted_ref)
+            original_validate(owner, connection, persisted_snapshot, **kwargs)
+        ref_reads.append(reads)
+
+    monkeypatch.setattr(
+        ContextAssemblyManifestMixin, "_validate_context_assembly_manifest",
+        counted_manifest,
+    )
+    restored = RolloutCheckpointSaver(case.sessions).get_context_assembly(
+        case.session_id, case.thread_id, assembly_id=snapshot.assembly_id,
+    )
+
+    # 经真实注册、封存和冷恢复检查工作量，避免把逐 ref 扫描藏在 helper 内。
+    assert len(ref_reads) == 1
+    assert 0 < ref_reads[0] <= 12 * len(snapshot.selection)
+    assert restored.to_dict() == snapshot.to_dict()
     assert _state(case) == before
 
 

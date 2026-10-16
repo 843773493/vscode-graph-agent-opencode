@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import process from "node:process";
 import { chromium } from "playwright";
@@ -22,7 +23,8 @@ const page = await context.newPage();
 const parentRow = page.locator(`[data-testid$="-${fixture.parentSessionId}"]`);
 const childRow = page.locator(`[data-testid$="-${fixture.childSessionId}"]`);
 const folderRow = page.locator(`[data-testid$="-${fixture.folderId}"]`);
-let forkSessionId = null;
+let forkThreadId = null;
+let forkThreadUri = null;
 let nestedWorkspaceFolders = false;
 let childWorkspaceMoved = false;
 let workspaceFolderReturnedToRoot = false;
@@ -32,6 +34,8 @@ let workspaceRootUsesContextMenu = false;
 let workspaceFolderRecursiveDelete = false;
 let warmDialogBackground = "";
 let workspaceMenuCreatedSessionFolder = false;
+let sessionMainActionOpenedCatalogSession = false;
+let folderMainActionToggledExpansion = false;
 
 async function expandRow(row) {
   const chevron = row.locator(".session-resource-chevron");
@@ -267,15 +271,56 @@ try {
   await childWorkspaceRow.waitFor({ state: "visible" });
   workspaceFolderRecursiveDelete = true;
 
-  const sessionRowActionCount = await childRow.locator(".session-resource-actions").count();
-  const folderRowActionCount = await folderRow.locator(".session-resource-actions").count();
-
   await parentRow.click({ button: "right" });
   const bloodlineTextPresent = await page.getByText(/血缘/).count() > 0;
   await page.getByRole("menuitem", { name: "新建子文件夹", exact: true }).waitFor({ state: "visible" });
+  await page.keyboard.press("Escape");
+
+  const parentMainAction = parentRow.locator("button.session-resource-main-action");
+  const childMainAction = childRow.locator("button.session-resource-main-action");
+  assert.equal(await parentMainAction.count(), 1);
+  assert.equal(await parentMainAction.isVisible(), true);
+  assert.equal(await parentMainAction.isEnabled(), true);
+  assert.equal(await parentMainAction.getAttribute("data-session-id"), fixture.parentSessionId);
+  assert.equal(await childMainAction.count(), 1);
+  assert.equal(await childMainAction.isVisible(), true);
+  assert.equal(await childMainAction.isEnabled(), true);
+  assert.equal(await childMainAction.getAttribute("data-session-id"), fixture.childSessionId);
+  await parentMainAction.click();
+  await page.locator(
+    `[data-testid$="-${fixture.parentSessionId}"][aria-current="true"]`,
+  ).waitFor({ state: "visible", timeout: 10_000 });
+  assert.equal(await childRow.getAttribute("aria-current"), null);
+  await childMainAction.click();
+  await page.locator(
+    `[data-testid$="-${fixture.childSessionId}"][aria-current="true"]`,
+  ).waitFor({ state: "visible", timeout: 10_000 });
+  assert.equal(await parentRow.getAttribute("aria-current"), null);
+  sessionMainActionOpenedCatalogSession = true;
+
+  const folderMainAction = folderRow.locator("button.session-resource-main-action");
+  const folderTreeItem = folderRow.locator("xpath=..");
+  assert.equal(await folderMainAction.count(), 1);
+  assert.equal(await folderMainAction.isVisible(), true);
+  assert.equal(await folderMainAction.isEnabled(), true);
+  assert.equal(await folderMainAction.getAttribute("data-session-id"), null);
+  assert.equal(await folderTreeItem.getAttribute("aria-expanded"), "false");
+  const folderTreeItemHandle = await folderTreeItem.elementHandle();
+  assert.ok(folderTreeItemHandle);
+  await folderMainAction.click();
+  await page.waitForFunction(
+    (treeItem) => treeItem.getAttribute("aria-expanded") === "true",
+    folderTreeItemHandle,
+  );
+  await folderMainAction.click();
+  await page.waitForFunction(
+    (treeItem) => treeItem.getAttribute("aria-expanded") === "false",
+    folderTreeItemHandle,
+  );
+  folderMainActionToggledExpansion = true;
+
   const bindIntent = { kind: "move_node", target_node_id: fixture.childSessionId, parent_node_id: fixture.parentSessionId };
   const bindResponsePromise = waitForCatalogAcceptance(bindIntent);
-  await page.keyboard.press("Escape");
   await childRow.dragTo(parentRow);
   const bindResponse = await bindResponsePromise;
   await requireCatalogCommit(bindResponse, bindIntent);
@@ -338,19 +383,69 @@ try {
   await requireCatalogCommit(moveFolderToRoot, moveFolderToRootIntent);
 
   await parentRow.waitFor({ state: "visible", timeout: 15_000 });
+  await parentRow.click();
+  await page.locator(`[data-testid$="-${fixture.parentSessionId}"][aria-current="true"]`).waitFor({ state: "visible" });
   await parentRow.click({ button: "right" });
-  const forkResponsePromise = page.waitForResponse(
-    (response) => response.request().method() === "POST"
-      && response.url().includes(`/sessions/${fixture.parentSessionId}/fork-context`),
+  const pointResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === "GET"
+      && new URL(response.url()).pathname === `/api/v1/sessions/${fixture.parentSessionId}/fork-source-point`,
   );
   await page.getByRole("menuitem", { name: "从上下文创建子会话", exact: true }).click();
+  const pointResponse = await pointResponsePromise;
+  assert.equal(pointResponse.status(), 200, await pointResponse.text());
+  const point = (await pointResponse.json()).data;
+  const forkDialog = page.getByRole("dialog", { name: "创建上下文分支", exact: true });
+  await forkDialog.waitFor({ state: "visible" });
+  assert.equal(await forkDialog.getByLabel("创建位置", { exact: true }).inputValue(), "new_child_thread");
+  assert.equal(await forkDialog.getByLabel("目标容器", { exact: true }).inputValue(), point.child_container_uri);
+  const fullPointPromise = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "GET"
+      && url.pathname === `/api/v1/sessions/${fixture.parentSessionId}/fork-source-point`
+      && url.searchParams.get("mode") === "full_rollout_copy";
+  });
+  await forkDialog.getByLabel("复制范围", { exact: true }).selectOption("full_rollout_copy");
+  const fullPointResponse = await fullPointPromise;
+  assert.equal(fullPointResponse.status(), 200, await fullPointResponse.text());
+  const fullPoint = (await fullPointResponse.json()).data;
+  assert.equal(fullPoint.anchor_item_id, null);
+  assert.deepEqual([fullPoint.source_uri, fullPoint.source_view_id, fullPoint.source_view_revision],
+    [point.source_uri, point.source_view_id, point.source_view_revision]);
+  const prefixPointPromise = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "GET"
+      && url.pathname === `/api/v1/sessions/${fixture.parentSessionId}/fork-source-point`
+      && url.searchParams.get("mode") === "view_prefix_fork";
+  });
+  await forkDialog.getByLabel("复制范围", { exact: true }).selectOption("view_prefix_fork");
+  const prefixPointResponse = await prefixPointPromise;
+  assert.equal(prefixPointResponse.status(), 200, await prefixPointResponse.text());
+  const prefixPoint = (await prefixPointResponse.json()).data;
+  assert.deepEqual([prefixPoint.source_uri, prefixPoint.source_view_id, prefixPoint.source_view_revision, prefixPoint.anchor_item_id],
+    [point.source_uri, point.source_view_id, point.source_view_revision, point.anchor_item_id]);
+  await forkDialog.getByLabel("目标名称", { exact: true }).fill("目录入口的上下文分支");
+  const forkResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === "POST"
+      && new URL(response.url()).pathname === `/api/v1/sessions/${fixture.parentSessionId}/fork-context`,
+  );
+  await forkDialog.getByRole("button", { name: "创建分支", exact: true }).click();
   const forkResponse = await forkResponsePromise;
   if (!forkResponse.ok()) throw new Error(`创建上下文子会话失败: ${await forkResponse.text()}`);
-  forkSessionId = (await forkResponse.json()).data.session_id;
-  const forkRow = page.locator(`[data-testid$="-${forkSessionId}"]`);
+  const forkRequest = forkResponse.request().postDataJSON();
+  assert.deepEqual([forkRequest.source_uri, forkRequest.source_view_id, forkRequest.source_view_revision, forkRequest.anchor_item_id],
+    [point.source_uri, point.source_view_id, point.source_view_revision, point.anchor_item_id]);
+  assert.deepEqual([forkRequest.creation_kind, forkRequest.target_container_uri, forkRequest.resources],
+    ["new_child_thread", point.child_container_uri, []]);
+  const fork = (await forkResponse.json()).data;
+  assert.equal(fork.session.session_id, fixture.parentSessionId);
+  assert.equal(fork.creation_kind, "new_child_thread");
+  assert.notEqual(fork.thread_id, fork.session.thread_id);
+  assert.notEqual(fork.thread_uri, point.child_container_uri);
+  forkThreadId = fork.thread_id;
+  forkThreadUri = fork.thread_uri;
+  await page.locator(`.child-thread-conversation[data-thread-id="${forkThreadId}"]`).waitFor({ state: "visible", timeout: 10_000 });
   await parentRow.waitFor({ state: "visible", timeout: 15_000 });
-  await expandRow(parentRow);
-  await forkRow.waitFor({ state: "visible", timeout: 10_000 });
+  assert.equal(await parentRow.getAttribute("aria-current"), "true");
 
   await parentRow.click({ button: "right" });
   const deleteIntent = { kind: "delete_session", target_node_id: fixture.parentSessionId };
@@ -363,9 +458,10 @@ try {
 
   await writeFile(resultPath, `${JSON.stringify({
     bloodlineTextPresent,
-    sessionRowActionCount,
-    folderRowActionCount,
-    forkSessionId,
+    sessionMainActionOpenedCatalogSession,
+    folderMainActionToggledExpansion,
+    forkThreadId,
+    forkThreadUri,
     nestedWorkspaceFolders,
     childWorkspaceMoved,
     workspaceFolderReturnedToRoot,

@@ -58,6 +58,7 @@ const messageConversation = {
     {
       message_id: "msg_assistant_usage",
       session_id: "ses_usage",
+      thread_id: "thr_usage",
       role: "assistant",
       content: "完成",
       attachments: [],

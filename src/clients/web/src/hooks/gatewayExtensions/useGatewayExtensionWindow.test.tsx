@@ -13,7 +13,7 @@ const originalFetch = globalThis.fetch;
 // createSessionConnection 的真实实现会经 http.ts 的认证屏障发起网络请求；这里改用
 // fetch 桩记录实际转发的工作区、会话与资源类型。不要再用 mock.module：bun 的模块
 // 注册表是进程级的，mock.restore() 无法跨文件撤销，会污染随后加载同一模块的测试。
-const createSessionConnectionCalls: Array<[number, string, string, string]> = [];
+const createSessionConnectionCalls: Array<[number, string, string, string, string]> = [];
 let createdConnectionResourceId = "created-browser-1";
 
 function installCreateSessionConnectionStub(port: number): void {
@@ -23,12 +23,15 @@ function installCreateSessionConnectionStub(port: number): void {
       if (url.includes("/api/gateway/auth/local-credential")) {
         return Response.json({ code: 0, message: "ok", request_id: "req_token", data: { token: "test-token" } });
       }
+      if (url.includes("/api/gateway/users/current")) {
+        return Response.json({ code: 0, message: "ok", request_id: "req_current_user", data: { kind: "guest", user_id: null } });
+      }
       const match = /\/api\/v1\/resources\/(browsers|terminals)/.exec(url);
       if (match) {
         const workspaceId = new Headers(init?.headers).get("X-BoxTeam-Workspace-ID")!;
         const kind = match[1] === "browsers" ? "browser" : "terminal";
-        const payload = JSON.parse(String(init?.body)) as { session_id: string };
-        createSessionConnectionCalls.push([port, workspaceId, payload.session_id, kind]);
+        const payload = JSON.parse(String(init?.body)) as { session_id: string; thread_id: string };
+        createSessionConnectionCalls.push([port, workspaceId, payload.session_id, payload.thread_id, kind]);
         return Response.json({
           code: 0,
           message: "ok",
@@ -120,6 +123,7 @@ interface MountOptions {
   sessionResources?: SessionResource[];
   entries?: GatewayExtensionResourceEntry[];
   selectedEntry?: GatewayExtensionResourceEntry | null;
+  activeMainThread?: { session_id: string; thread_id: string } | null;
   openResult?: unknown;
 }
 
@@ -176,6 +180,7 @@ async function mountHook(options: MountOptions = {}) {
       apiPort: 49_507,
       activeSessionWorkspaceId: "w1",
       activeSessionId: "s1",
+      activeMainThread: options.activeMainThread ?? { session_id: "s1", thread_id: "thr_main" },
       setStatus: (text) => {
         statuses.push(text);
       },
@@ -557,7 +562,7 @@ describe("useGatewayExtensionWindow 扩展资源动作", () => {
     });
 
     expect(createSessionConnectionCalls).toEqual([
-      [49_507, target.workspace_id, target.session_id, "browser"],
+      [49_507, target.workspace_id, "s1", "thr_main", "browser"],
     ]);
     expect(mounted.refreshes).toBe(1);
     expect(mounted.statuses).toEqual(["已新建浏览器：created-browser-42"]);

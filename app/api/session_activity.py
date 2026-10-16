@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 import json
+from contextlib import aclosing
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.api.canonical_params import CanonicalSessionId
 from app.api.deps import (
     get_request_id,
     get_workspace_activity_service,
     verify_local_token,
 )
 from app.api.sse_heartbeat import SSE_NO_CACHE_HEADERS
+from app.schemas.canonical_params import CanonicalSessionId
 from app.schemas.internal_v2.common import APIResponse, CursorPage
 from app.services.infrastructure.workspace_state_store import (
     WorkspaceActivityCursorGoneError,
@@ -74,9 +75,17 @@ async def stream_session_activity(
     _: str = Depends(verify_local_token),
     service: WorkspaceActivityService = Depends(get_workspace_activity_service),
 ):
-    async def generate():
+    return StreamingResponse(
+        _stream_session_activity_sse(service, after=after),
+        media_type="text/event-stream",
+        headers=SSE_NO_CACHE_HEADERS,
+    )
+
+
+async def _stream_session_activity_sse(service: WorkspaceActivityService, *, after: int):
+    async with aclosing(service.stream(after=after)) as stream:
         try:
-            async for record in service.stream(after=after):
+            async for record in stream:
                 if record is None:
                     yield ": ping\n\n"
                     continue
@@ -84,9 +93,3 @@ async def stream_session_activity(
                 yield f"id: {record.event_seq}\nevent: session_activity\ndata: {payload}\n\n"
         except WorkspaceActivityCursorGoneError as error:
             yield f"event: cursor_gone\ndata: {json.dumps({'message': str(error)}, ensure_ascii=False)}\n\n"
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers=SSE_NO_CACHE_HEADERS,
-    )

@@ -284,6 +284,8 @@ async def register_remote_gateway(
         health_poll_interval_seconds=health_poll_interval_seconds,
         source_owner="manual",
     )
+    previous_commit = registry._last_committed_snapshot
+    previous_revision = registry.registry_revision
     try:
         gateway_url = runtime.service_urls["workspace_api"]
         return _synchronize_projected_workspaces(
@@ -296,8 +298,19 @@ async def register_remote_gateway(
             preserve_custom_names=False,
             runtime=runtime,
         )
-    except Exception:
-        runtime.close()
+    except BaseException:
+        if not (
+            registry._last_committed_snapshot is not previous_commit
+            and (
+                registry._state_store is None
+                or registry.registry_revision > previous_revision
+            )
+            and registry._remote_gateway_runtimes.get(connection.connection_id)
+            is runtime
+            and registry.remote_gateway_url(connection.connection_id)
+            == runtime.service_urls["workspace_api"]
+        ):
+            runtime.close()
         raise
 
 
@@ -325,6 +338,8 @@ async def reconcile_configured_remote_gateways(
     staged_projections: dict[str, tuple[WorkspaceTarget, ...]] = {}
     activate_connection_ids: list[str] = []
     registry_batch_handle: GatewayRegistryBatchHandle | None = None
+    registry_batch_commit_before: object | None = None
+    registry_batch_revision_before: int | None = None
     generation = f"gateway-remote-projection:{uuid4().hex}"
 
     async def prepare_remote_projection() -> None:
@@ -389,8 +404,26 @@ async def reconcile_configured_remote_gateways(
             assert_staged_runtime_healthy(runtime)
 
     def rollback_remote_projection() -> None:
-        for runtime in staged_runtimes.values():
-            runtime.close()
+        if registry_batch_handle is None and not registry_batch_is_published():
+            for runtime in staged_runtimes.values():
+                runtime.close()
+
+    def registry_batch_is_published() -> bool:
+        if registry_batch_commit_before is None or registry_batch_revision_before is None:
+            return False
+        if registry._last_committed_snapshot is registry_batch_commit_before:
+            return False
+        if (
+            registry._state_store is not None
+            and registry.registry_revision <= registry_batch_revision_before
+        ):
+            return False
+        return all(
+            registry._remote_gateway_runtimes.get(connection_id) is runtime
+            and registry.remote_gateway_url(connection_id)
+            == runtime.service_urls["workspace_api"]
+            for connection_id, runtime in staged_runtimes.items()
+        )
 
     def prepare_registry_batch() -> None:
         if len(staged_connections) != len(staged_runtimes):
@@ -401,7 +434,10 @@ async def reconcile_configured_remote_gateways(
             raise RuntimeError("Gateway remote projection staged projection 集合不完整")
 
     def apply_registry_batch() -> None:
-        nonlocal registry_batch_handle
+        nonlocal registry_batch_commit_before, registry_batch_handle
+        nonlocal registry_batch_revision_before
+        registry_batch_commit_before = registry._last_committed_snapshot
+        registry_batch_revision_before = registry.registry_revision
         registry_batch_handle = registry.apply_remote_projection_batch(
             connections=tuple(staged_connections),
             runtimes=staged_runtimes,
@@ -502,6 +538,8 @@ async def reconnect_remote_gateway(
         if int(manifest["protocol_version"]) != connection.protocol_version:
             raise RuntimeError("远程 Gateway 持久化协议版本与当前响应不一致")
         connection = _connection_with_manifest_state(connection, manifest)
+        previous_commit = registry._last_committed_snapshot
+        previous_revision = registry.registry_revision
         return _synchronize_projected_workspaces(
             registry=registry,
             connection=connection,
@@ -512,8 +550,18 @@ async def reconnect_remote_gateway(
             preserve_custom_names=True,
             runtime=runtime,
         )
-    except Exception:
-        runtime.close()
+    except BaseException:
+        if "previous_commit" not in locals() or not (
+            registry._last_committed_snapshot is not previous_commit
+            and (
+                registry._state_store is None
+                or registry.registry_revision > previous_revision
+            )
+            and registry._remote_gateway_runtimes.get(connection_id) is runtime
+            and registry.remote_gateway_url(connection_id)
+            == runtime.service_urls["workspace_api"]
+        ):
+            runtime.close()
         raise
 
 

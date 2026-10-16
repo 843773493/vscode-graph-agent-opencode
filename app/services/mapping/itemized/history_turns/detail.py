@@ -31,6 +31,7 @@ from app.services.mapping.itemized.history_turns.content import (
 )
 from app.services.mapping.itemized.history_turns.tools import (
     bounded_tool_summary,
+    history_tool_call_id,
     tool_event,
     tool_items,
 )
@@ -42,7 +43,10 @@ def build_detail(
     messages: list[BaseMessage],
     *,
     turn_id: str,
+    job_id: str,
     root_logical_item_ordinal: int,
+    source_view_id: str,
+    source_view_revision: int,
     message_sequences: list[int] | None = None,
     projection: Mapping[str, object] | None = None,
     response_parts: list[TurnResponsePartDTO] | None = None,
@@ -123,6 +127,7 @@ def build_detail(
         session_id,
         turn_id,
         messages,
+        job_id=job_id,
         fallback_timestamp=created_at,
         tool_call_ids=tool_call_ids,
     )
@@ -130,32 +135,6 @@ def build_detail(
     projected_tool_items: list[TraceEventDTO] = []
     raw_tool_items = projection.get("tool_items") if projection is not None else None
     if isinstance(raw_tool_items, list):
-        projected_call_ids: dict[str, list[str]] = {}
-        projected_call_ids_all: list[str] = []
-        for raw_item in raw_tool_items:
-            if (
-                not isinstance(raw_item, Mapping)
-                or raw_item.get("item_kind") != "tool_call"
-            ):
-                continue
-            tool_name = raw_item.get("tool_name")
-            tool_call_id = raw_item.get("tool_call_id")
-            identity = ItemProjectionIdentity.from_dict(
-                {"model_call_id": raw_item.get("model_call_id")}
-            )
-            if tool_call_ids is not None and (
-                not isinstance(tool_call_id, str)
-                or not any(matches_tool_call_id(identity, tool_call_id, selected_id) for selected_id in tool_call_ids)
-            ):
-                continue
-            if (
-                isinstance(tool_name, str)
-                and isinstance(tool_call_id, str)
-                and tool_name
-                and tool_call_id
-            ):
-                projected_call_ids.setdefault(tool_name, []).append(tool_call_id)
-                projected_call_ids_all.append(tool_call_id)
         for index, raw_item in enumerate(raw_tool_items):
             if not isinstance(raw_item, Mapping):
                 continue
@@ -166,38 +145,23 @@ def build_detail(
             if not isinstance(status, str) or not status:
                 status = "unknown"
             tool_call_id = raw_item.get("tool_call_id")
-            tool_call_id = (
-                tool_call_id
-                if isinstance(tool_call_id, str) and tool_call_id
-                else (
-                    projected_call_ids.get(tool_name, []).pop(0)
-                    if raw_item.get("item_kind") == "tool_result"
-                    and projected_call_ids.get(tool_name)
-                    else (
-                        projected_call_ids_all.pop(0)
-                        if raw_item.get("item_kind") == "tool_result"
-                        and projected_call_ids_all
-                        else f"{turn_id}:tool:{index}"
-                    )
-                )
-            )
             identity = ItemProjectionIdentity.from_dict(
                 {"model_call_id": raw_item.get("model_call_id")}
             )
-            if tool_call_ids is not None and (
-                not isinstance(tool_call_id, str)
-                or not any(matches_tool_call_id(identity, tool_call_id, selected_id) for selected_id in tool_call_ids)
+            if not isinstance(tool_call_id, str) or not tool_call_id:
+                if tool_call_ids is not None:
+                    continue
+                raise ValueError("历史索引工具项缺少非空 tool_call_id")
+            if tool_call_ids is not None and not any(
+                matches_tool_call_id(identity, tool_call_id, selected_id)
+                for selected_id in tool_call_ids
             ):
                 continue
-            if raw_item.get("item_kind") == "tool_result":
-                projected_call_ids_all = [
-                    value for value in projected_call_ids_all if value != tool_call_id
-                ]
             projected_tool_summary.append(
                 TurnToolSummaryDTO(
                     tool_name=tool_name,
                     status=status,
-                    tool_call_id=tool_call_id,
+                    tool_call_id=history_tool_call_id(identity, tool_call_id),
                 )
             )
             item_kind = raw_item.get("item_kind")
@@ -207,11 +171,11 @@ def build_detail(
             projected_tool_items.append(
                 tool_event(
                     event_id=f"{turn_id}:tool_summary:{index}",
-                    turn_id=turn_id,
+                    job_id=job_id,
                     event_type=event_type,
                     title=f"{'调用工具' if event_type == 'tool_call_start' else '工具结果'} {tool_name}",
                     tool_name=tool_name,
-                    part_id=tool_call_id,
+                    part_id=history_tool_call_id(identity, tool_call_id),
                     timestamp=created_at,
                     raw={},
                     session_id=session_id,
@@ -228,12 +192,13 @@ def build_detail(
     activity_stats = TurnActivityStatsDTO()
     raw_activity_stats = projection.get("activity_stats") if projection else None
     if isinstance(raw_activity_stats, Mapping):
-        duration_ms = duration_milliseconds(
+        # 历史统计沿这份 Turn 消息投影的起止时间，不改用 acceptance/终态控制时间。
+        projection_duration_ms = duration_milliseconds(
             projection.get("created_at") if projection else None,
             projection.get("updated_at") if projection else None,
         )
         activity_stats = TurnActivityStatsDTO(
-            duration_ms=duration_ms,
+            duration_ms=projection_duration_ms,
             item_count=nonnegative_int(raw_activity_stats.get("item_count")),
             first_item_sequence=(
                 nonnegative_int(raw_activity_stats.get("first_item_sequence"))
@@ -257,10 +222,12 @@ def build_detail(
     )
     detail = TurnDetailDTO(
         turn_id=turn_id,
-        job_id=turn_id,
+        job_id=job_id,
         session_id=session_id,
         ordinal=ordinal,
         root_logical_item_ordinal=root_logical_item_ordinal,
+        source_view_id=source_view_id,
+        source_view_revision=source_view_revision,
         revision=1,
         status=JobStatus(
             str(projection.get("status", JobStatus.completed.value))

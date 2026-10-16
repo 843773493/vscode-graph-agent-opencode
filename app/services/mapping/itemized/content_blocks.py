@@ -9,7 +9,24 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
+
+from app.services.mapping.agent_content_mapper import extract_reasoning_summary
+
+
+@dataclass(frozen=True, slots=True)
+class ReasoningContentRow:
+    """单个 canonical reasoning 来源，保留原文与 block/inner item 坐标。"""
+
+    content_block_index: int
+    item_index: int
+    carrier_type: str
+    item_id: str | None = None
+    reasoning_text: str | None = None
+    summary_text: str | None = None
+    encrypted: str | None = None
+    signature_present: bool = False
 
 
 def direct_content_blocks(content: Any) -> list[dict[str, Any]]:
@@ -39,11 +56,11 @@ def direct_content_blocks(content: Any) -> list[dict[str, Any]]:
     return blocks
 
 
-def reasoning_content_text(block: Mapping[str, Any]) -> str:
-    """从 provider reasoning block 提取正文，兼容直接 reasoning 字段与内容块。"""
+def _reasoning_content_text(block: Mapping[str, object]) -> str:
+    """读取 reasoning 正文原文，不清理空白或合并不同来源。"""
     direct = block.get("reasoning")
     if isinstance(direct, str):
-        return direct.strip()
+        return direct
     content = block.get("content")
     if isinstance(content, list):
         return "".join(
@@ -52,8 +69,63 @@ def reasoning_content_text(block: Mapping[str, Any]) -> str:
             if isinstance(item, Mapping)
             and item.get("type") in {"reasoning_text", "text"}
             and isinstance(item.get("text"), str)
-        ).strip()
+        )
     return ""
 
 
-__all__ = ["direct_content_blocks", "reasoning_content_text"]
+def reasoning_content_text(block: Mapping[str, Any]) -> str:
+    """读取 provider 投影正文，沿用去除首尾空白的既有契约。"""
+    return _reasoning_content_text(block).strip()
+
+
+def reasoning_content_rows(content: object) -> list[ReasoningContentRow]:
+    """逐 block 与 inner item 无损拆解；不按正文或 provider item 身份折叠。"""
+    rows: list[ReasoningContentRow] = []
+
+    def append_item(
+        block_index: int, item_index: int, carrier_type: str,
+        item: Mapping[str, object],
+    ) -> None:
+        item_id = item.get("id")
+        encrypted = item.get("encrypted_content")
+        rows.append(ReasoningContentRow(
+            content_block_index=block_index, item_index=item_index,
+            carrier_type=carrier_type,
+            item_id=item_id if isinstance(item_id, str) else None,
+            reasoning_text=_reasoning_content_text(item),
+            summary_text=extract_reasoning_summary(item.get("summary")),
+            encrypted=encrypted if isinstance(encrypted, str) else None,
+        ))
+
+    for block_index, block in enumerate(direct_content_blocks(content)):
+        block_type = block.get("type")
+        if block_type == "reasoning_items":
+            items = block.get("reasoning_items")
+            if isinstance(items, list):
+                for item_index, item in enumerate(items):
+                    if isinstance(item, Mapping):
+                        append_item(block_index, item_index, block_type, item)
+        elif block_type == "reasoning":
+            append_item(block_index, 0, block_type, block)
+        elif block_type in {"reasoning_content", "thinking", "redacted_thinking"}:
+            value = None
+            if block_type == "thinking":
+                value = block.get("thinking") or block.get("text")
+            elif block_type == "reasoning_content":
+                value = block.get("reasoning_content")
+            encrypted = block.get("data") if block_type == "redacted_thinking" else None
+            rows.append(ReasoningContentRow(
+                content_block_index=block_index, item_index=0,
+                carrier_type=block_type,
+                reasoning_text=value if isinstance(value, str) else None,
+                encrypted=encrypted if isinstance(encrypted, str) else None,
+                signature_present=(
+                    block_type == "thinking"
+                    and isinstance(block.get("signature"), str)
+                    and bool(block.get("signature"))
+                ),
+            ))
+    return rows
+
+
+__all__ = ["ReasoningContentRow", "direct_content_blocks", "reasoning_content_rows", "reasoning_content_text"]

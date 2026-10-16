@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, jest, test } from "bun:test";
-import { getLLMRequestLogs, listMessages } from "./sessionMessages";
+import { getLLMRequestLogs, listMessages, replayMessageTurn, sendUserMessage } from "./sessionMessages";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 import {
   installSessionCatalogFetchMock,
@@ -97,4 +97,51 @@ describe("请求日志读取必须带上限，不能无限等待", () => {
     // 超时必须是真实的中止，而不是把请求晾在一边继续等。
     expect((requestSignal as AbortSignal | null)?.aborted).toBe(true);
   });
+});
+
+describe("发送与重放统一消费真实准入身份", () => {
+  const accepted = {
+    message_id: "message-accepted",
+    job_id: "job-accepted",
+    turn_id: "turn-accepted",
+    thread_id: "thread-accepted",
+    status: "queued",
+    dispatch: {
+      session_id: "session-accepted",
+      thread_id: "thread-accepted",
+      job_id: "job-accepted",
+      job_status: "queued",
+      queued_jobs_ahead: 0,
+      queued_job_count: 1,
+      pending_job_count: 1,
+    },
+    session_id: "session-accepted",
+    action: "regenerate",
+    replaced_message_id: "message-original",
+    removed_message_count: 1,
+    workspace_changes_reverted: false,
+    notice: "已准入重放",
+  } as const;
+  const actions = [
+    { name: "发送消息", run: () => sendUserMessage(48_311, "session-accepted", "实际用户输入") },
+    { name: "重放消息", run: () => replayMessageTurn(48_311, "session-accepted", "message-original", { action: "regenerate" }) },
+  ];
+  for (const action of actions) {
+    test(`${action.name}保留后端独立的 message/Job/Turn/thread`, async () => {
+      installFetchMock(() => Response.json({ data: accepted, request_id: "req-admission-valid" }));
+      await expect(action.run()).resolves.toEqual(accepted);
+    });
+    for (const field of ["message_id", "job_id", "turn_id", "thread_id"] as const) {
+      test(`${action.name}拒绝缺失 ${field}`, async () => {
+        const data: Record<string, unknown> = { ...accepted };
+        delete data[field];
+        installFetchMock(() => Response.json({ data, request_id: "req-admission-missing" }));
+        await expect(action.run()).rejects.toThrow(`${action.name}响应缺少${field === "turn_id" ? "独立的 turn_id" : ` ${field}`}`);
+      });
+    }
+    test(`${action.name}拒绝以 Job 代替 Turn`, async () => {
+      installFetchMock(() => Response.json({ data: { ...accepted, turn_id: accepted.job_id }, request_id: "req-admission-alias" }));
+      await expect(action.run()).rejects.toThrow(`${action.name}响应缺少独立的 turn_id`);
+    });
+  }
 });

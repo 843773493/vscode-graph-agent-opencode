@@ -11,6 +11,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.messages.ai import InputTokenDetails, UsageMetadata
 
+from app.runtime.provider_errors import mark_provider_failure
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
 from app.services.mapping.itemized.provider_request import tool_media_placeholder_text
 
@@ -76,6 +77,10 @@ class ResponsesToolHistoryError(ValueError):
 
 class ResponsesStreamOpenTimeoutError(TimeoutError):
     """Responses provider 在有限时间内没有建立可读取的事件流。"""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        mark_provider_failure(self)
 
 
 class ResponsesPayloadBuildTimeoutError(TimeoutError):

@@ -130,9 +130,6 @@ export function chatTranscriptItems(
     ...historyTurns,
     ...internalDisplayItems(executions),
   ];
-  if (orderedHistory.length === historyTurns.length) {
-    return [...historyTurns, ...otherTurns];
-  }
   orderedHistory.sort((left, right) => {
     const leftOrdinal = left.kind === "turn"
       ? logicalItemOrdinal(

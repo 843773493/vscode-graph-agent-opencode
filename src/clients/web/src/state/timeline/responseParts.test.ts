@@ -8,6 +8,7 @@ import {
 } from "../messageStream/index";
 import { responsePartsToTimelineItems } from "./responseParts";
 import { formatToolCardContent, toolCollapsedText } from "../display/toolDisplay";
+import type { TurnResponsePart } from "../../types/backend";
 
 function streamEvent(
   eventSeq: number,
@@ -26,9 +27,95 @@ function streamEvent(
 }
 
 describe("responsePartsToTimelineItems", () => {
+  it.each(["canonical", "call_id"])("跨思考的 %s 工具结果保留自身顺序和调用失败事实", (carrier) => {
+    const parts: TurnResponsePart[] = [
+      {
+        part_id: "call-before-reasoning",
+        kind: "tool_call",
+        projection: "detail",
+        status: "failed",
+        source: { message_sequence: 1, assistant_message_sequence: 1, call_index: 0 },
+        tool_call_id: "call-1",
+        tool_name: "inspect_fixture",
+        arguments: '{"path":"fixture.json"}',
+      },
+      {
+        part_id: "reasoning-between",
+        kind: "reasoning",
+        projection: "detail",
+        source: { message_sequence: 2, content_block_index: 0 },
+        text: "等待工具结果",
+      },
+      {
+        part_id: "result-after-reasoning",
+        kind: "tool_result",
+        projection: "detail",
+        status: "completed",
+        source: carrier === "canonical"
+          ? { message_sequence: 3, assistant_message_sequence: 1, call_index: 0, result_message_sequence: 3 }
+          : { message_sequence: 3, call_index: 0 },
+        tool_call_id: "call-1",
+        result: "工具正文",
+      },
+      {
+        part_id: "final-after-result",
+        kind: "final_text",
+        projection: "detail",
+        source: { message_sequence: 4 },
+        text: "最终响应",
+      },
+    ];
+    const items = responsePartsToTimelineItems(parts);
+
+    expect(items.map((item) => item.id)).toEqual(parts.map((part) => part.part_id));
+    expect(items.flatMap((item) => item.responseSources ?? [])).toEqual(
+      parts.map(({ part_id, kind, source }) => ({ part_id, kind, source })),
+    );
+    expect(items[0]).toMatchObject({
+      kind: "aggregated_tool", active: false, failed: true, resultText: "",
+    });
+    expect(items[2]).toMatchObject({
+      kind: "aggregated_tool", toolName: "inspect_fixture", resultText: "工具正文", failed: true,
+    });
+  });
+
+  it("并行工具调用的结果按权威位置展示并保留失败和取消终态", () => {
+    const parts: TurnResponsePart[] = [
+      {
+        part_id: "parallel-call-0", kind: "tool_call", projection: "detail", status: "running",
+        source: { message_sequence: 1, assistant_message_sequence: 1, call_index: 0 },
+        tool_call_id: "parallel-0", tool_name: "first", arguments: "{}",
+      },
+      {
+        part_id: "parallel-call-1", kind: "tool_call", projection: "detail", status: "running",
+        source: { message_sequence: 1, assistant_message_sequence: 1, call_index: 1 },
+        tool_call_id: "parallel-1", tool_name: "second", arguments: "{}",
+      },
+      {
+        part_id: "parallel-result-0", kind: "tool_result", projection: "detail", status: "failed",
+        source: { message_sequence: 2, assistant_message_sequence: 1, call_index: 0, result_message_sequence: 2 },
+        tool_call_id: "parallel-0", result: "失败详情",
+      },
+      {
+        part_id: "parallel-result-1", kind: "tool_result", projection: "detail", status: "cancelled",
+        source: { message_sequence: 3, call_index: 1 },
+        tool_call_id: "parallel-1", result: "调用取消", outcome_unknown: true,
+      },
+    ];
+    const items = responsePartsToTimelineItems(parts, { terminalFailure: true });
+
+    expect(items.flatMap((item) => item.responseSources ?? [])).toEqual(
+      parts.map(({ part_id, kind, source }) => ({ part_id, kind, source })),
+    );
+    expect(items[0]).toMatchObject({ active: false, failed: true, incomplete: false });
+    expect(items[1]).toMatchObject({ active: false, failed: false, incomplete: true, outcomeUnknown: true });
+    expect(items[2]).toMatchObject({ toolName: "first", resultText: "失败详情", failed: true });
+    expect(items[3]).toMatchObject({ toolName: "second", resultText: "调用取消", incomplete: true, outcomeUnknown: true });
+  });
+
   it("live SSE 的 exec_command 参数和结果贯通到终端展示", () => {
     let state = applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "stream_1"),
+      createMessageStreamState("ses_1", "turn_1", "stream_1", "test-workspace::ses_1"),
       streamEvent(1, "tool_call", {
         tool_call_id: "call-exec",
         tool_name: "exec_command",

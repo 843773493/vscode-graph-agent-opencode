@@ -23,8 +23,10 @@ DeliveryBoundary = Literal[
 PendingRequestStatus = Literal["queued"]
 
 
-class PendingRequestDTO(BaseModel):
-    """会话 FIFO 队列中的单条用户消息。"""
+class PendingRequestControl(BaseModel):
+    """FIFO 只持久化调度信息与已接受输入引用。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     job_id: str
     execution_binding: ExecutionBinding
@@ -33,8 +35,6 @@ class PendingRequestDTO(BaseModel):
     thread_id: str
     # 用户执行关联真实 turn_id；内部执行显式为 None。必填以区分缺失和空值。
     turn_id: str | None
-    content: str
-    attachments: list[AttachmentRef] = Field(default_factory=list)
     delivery_policy: DeliveryPolicy
     enqueue_sequence: int = Field(ge=1)
     position: int = Field(ge=0)
@@ -42,8 +42,6 @@ class PendingRequestDTO(BaseModel):
     waiting_reason: str | None = None
     last_boundary: DeliveryBoundary | None = None
     agent_id: str
-    message_created_at: str
-    message_metadata: dict[str, object] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
     snapshot_version: int = Field(ge=0)
@@ -57,22 +55,30 @@ class PendingRequestDTO(BaseModel):
     request_id: str | None
 
     @model_validator(mode="after")
-    def validate_execution_binding(self) -> PendingRequestDTO:
+    def validate_execution_binding(self) -> PendingRequestControl:
         binding = self.execution_binding
         if isinstance(binding, InternalExecutionIntent):
             if binding.message_id != self.message_id:
                 raise ValueError("internal Job execution intent 与消息 identity 不一致")
+            if self.turn_id is not None:
+                raise ValueError("internal pending 不得绑定 Turn")
         else:
             if not isinstance(binding, UserExecutionIdentity):
                 raise TypeError("pending execution_binding 必须是已知的 typed binding")
             if binding.job_id != self.job_id:
                 raise ValueError("pending Job ID 与 user execution binding 不一致")
+            if binding.turn_id != self.turn_id:
+                raise ValueError("pending Turn ID 与 user execution binding 不一致")
         return self
 
 
-class PendingRequestUpdateRequest(BaseModel):
+class PendingRequestDTO(PendingRequestControl):
+    """正文与附件只由已提交输入的展示投影提供，不是队列存储事实。"""
+
     content: str
     attachments: list[AttachmentRef] = Field(default_factory=list)
+    message_created_at: str
+    message_metadata: dict[str, object] = Field(default_factory=dict)
 
 
 class PendingRequestPolicyUpdateRequest(BaseModel):
@@ -84,6 +90,8 @@ class PendingRequestPolicyUpdateRequest(BaseModel):
 
 class PendingRequestListDTO(BaseModel):
     session_id: str
+    # None 表示整个 Session；精确读取显式返回实际 thread 身份。
+    thread_id: str | None = None
     active_job_id: str | None = None
     requests: list[PendingRequestDTO] = Field(default_factory=list)
     snapshot_version: int = Field(default=0, ge=0)
@@ -101,6 +109,7 @@ class PendingRequestSummaryDTO(BaseModel):
 
 class PendingRequestSummaryListDTO(BaseModel):
     session_id: str
+    thread_id: str | None = None
     active_job_id: str | None = None
     requests: list[PendingRequestSummaryDTO] = Field(default_factory=list)
     request_count: int = Field(ge=0)

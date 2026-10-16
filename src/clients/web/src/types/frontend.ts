@@ -82,7 +82,11 @@ export interface ConversationView {
   /** 展示历史中的权威 Turn 身份；待处理消息和旧诊断路径没有该字段。 */
   turnId?: string;
   turnRevision?: number;
+  /** 实际历史读取快照；不能用当前活动会话或时间线最新快照替代。 */
+  sourceViewId?: string;
+  sourceViewRevision?: number;
   turnOrdinal?: number;
+  /** DTO/展示形状；full 不表示 include 过滤后的活动正文已经全部加载。 */
   turnItemsView?: "summary" | "full";
   rootLogicalItemOrdinal?: number;
   /** 后端 Turn 原始状态；status 是前端为展示折叠后的状态。 */
@@ -94,6 +98,8 @@ export interface ConversationView {
     last_item_sequence?: number | null;
   };
   sessionId: string;
+  /** pending-request 提供的精确 thread 归属，不从消息 DTO 或展示坐标推导。 */
+  threadId?: string;
   userMessage: Message | null;
   /** 当历史 trace 不完整时，用持久化 Assistant 消息恢复最终正文。 */
   assistantMessages?: Message[];

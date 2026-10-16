@@ -5,6 +5,9 @@ import type {
   CursorPage,
   Session,
   SessionCompactResult,
+  SessionForkRequest,
+  SessionForkResult,
+  SessionForkSourcePoint,
   SessionInformationSnapshot,
   SessionMainThread,
   SessionUpdateRequest,
@@ -30,13 +33,15 @@ function parseChildThreadList(value: unknown): ChildThreadList {
     parent_session_id?: unknown;
     items?: unknown;
     total?: unknown;
+    teams?: unknown;
   };
   if (
     typeof record.parent_session_id !== "string"
     || !Array.isArray(record.items)
     || typeof record.total !== "number"
+    || !Array.isArray(record.teams)
   ) {
-    throw new Error("child thread 协议响应缺少 parent_session_id、items 或 total");
+    throw new Error("child thread 协议响应缺少 parent_session_id、items、total 或 teams");
   }
   const items = record.items.map((item, index): ChildThreadSummary => {
     if (!item || typeof item !== "object") {
@@ -48,10 +53,30 @@ function parseChildThreadList(value: unknown): ChildThreadList {
       status: parseChildThreadStatus(child.status),
     } as ChildThreadSummary;
   });
+  const teams = record.teams.map((value, index) => {
+    if (!value || typeof value !== "object") {
+      throw new Error(`团队协议项 ${index} 必须是对象`);
+    }
+    const board = value as Record<string, unknown>;
+    if (
+      typeof board.team_id !== "string"
+      || typeof board.name !== "string"
+      || board.session_id !== record.parent_session_id
+      || typeof board.coordinator_thread_id !== "string"
+      || !Number.isInteger(board.version)
+      || !Array.isArray(board.members)
+      || !Array.isArray(board.tasks)
+      || !Array.isArray(board.recent_events)
+    ) {
+      throw new Error(`团队协议项 ${index} 缺少权威面板字段或会话不匹配`);
+    }
+    return board as unknown as ChildThreadList["teams"][number];
+  });
   return {
     parent_session_id: record.parent_session_id,
     items,
     total: record.total,
+    teams,
   };
 }
 
@@ -71,12 +96,13 @@ export async function getSession(
   port: number,
   sessionId: string,
   workspaceId?: string | null,
+  options: { signal?: AbortSignal } = {},
 ): Promise<Session> {
   return unwrapApiData(
     await requestJson<APIResponse<Session>>(
       port,
       `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
-      workspaceId ? { headers: workspaceHeader(workspaceId) } : undefined,
+      { ...(workspaceId ? { headers: workspaceHeader(workspaceId) } : {}), signal: options.signal },
     ),
   );
 }
@@ -154,20 +180,45 @@ export async function createSession(
 export async function forkSessionContext(
   port: number,
   sessionId: string,
-  placeUnderSource: boolean,
+  payload: SessionForkRequest,
   workspaceId?: string | null,
-): Promise<Session> {
+): Promise<SessionForkResult> {
   return unwrapApiData(
-    await requestJson<APIResponse<Session>>(
+    await requestJson<APIResponse<SessionForkResult>>(
       port,
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/fork-context`,
       {
         method: "POST",
         headers: workspaceHeader(workspaceId),
-        body: JSON.stringify({ place_under_source: placeUnderSource }),
+        body: JSON.stringify(payload),
       },
     ),
   );
+}
+
+export async function getSessionForkSourcePoint(
+  port: number,
+  sessionId: string,
+  selection: {
+    threadId?: string; turnId?: string; itemId?: string;
+    sourceViewId?: string; sourceViewRevision?: number;
+    mode?: SessionForkRequest["mode"]; anchorMode?: SessionForkRequest["anchor_mode"];
+  },
+  workspaceId: string,
+): Promise<SessionForkSourcePoint> {
+  const query = new URLSearchParams();
+  if (selection.threadId) query.set("thread_id", selection.threadId);
+  if (selection.turnId) query.set("turn_id", selection.turnId);
+  if (selection.itemId) query.set("item_id", selection.itemId);
+  if (selection.sourceViewId) query.set("source_view_id", selection.sourceViewId);
+  if (selection.sourceViewRevision !== undefined) query.set("source_view_revision", String(selection.sourceViewRevision));
+  if (selection.mode) query.set("mode", selection.mode);
+  if (selection.anchorMode) query.set("anchor_mode", selection.anchorMode);
+  return unwrapApiData(await requestJson<APIResponse<SessionForkSourcePoint>>(
+    port,
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/fork-source-point?${query}`,
+    { headers: workspaceHeader(workspaceId) },
+  ));
 }
 
 export async function updateSession(

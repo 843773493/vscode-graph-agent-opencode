@@ -10,20 +10,26 @@ from uuid import UUID
 import pytest
 from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain.agents.middleware.types import ExtendedModelResponse
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langgraph.types import Command
 
 from app.agents import itemized_context_middleware
 from app.agents.itemized_context_middleware import SealedAssemblyDispatchBridge
 from app.core.identifier import uuid7_datetime_from_hex
+from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
+    LangChainMessageCodec,
+)
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
+from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 
 
 @pytest.fixture
 def bridge(registered_tool_set_producer_factory):
     return SealedAssemblyDispatchBridge(
+        context_read_admission=nullcontext,
+        context_control_admission=lambda _operation, _payload, _ref: nullcontext(),
         checkpointer=object(), session_id="session-unit", thread_id="thread-unit",
         context_source_manager=ContextSourceManager(),
         tool_set_producer=registered_tool_set_producer_factory(),
@@ -99,6 +105,175 @@ async def test_vendor_carrier_binds_emitting_call_and_its_structured_tool_result
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_request_tool_result_phase_precedes_preparation(
+    bridge, response_dispatch, monkeypatch, mode,
+):
+    model_call_id, _dispatch = response_dispatch
+    call = {"id": "call-queued", "name": "read_file", "args": {"path": "README.md"}}
+    messages = [
+        AIMessage(content="", id=f"lc_run--{model_call_id}", tool_calls=[call]),
+        ToolMessage(content="真实 README", tool_call_id=call["id"]),
+    ]
+    request = ModelRequest(model=MagicMock(), messages=messages)
+    observed = []
+    phases = []
+    sync_projection = bridge._prepare_projection.return_value
+
+    def prepare_sync(_request):
+        phases.append("prepare")
+        return sync_projection
+
+    async def prepare_async(_request):
+        phases.append("prepare")
+        return bridge._aprepare.return_value
+
+    bridge._prepare_projection.side_effect = prepare_sync
+    bridge._aprepare.side_effect = prepare_async
+
+    def observe(operation_id, phase):
+        assert "prepare" not in phases
+        phases.append("observe")
+        observed.append((operation_id, phase))
+
+    async def observe_async(operation_id, phase):
+        observe(operation_id, phase)
+
+    monkeypatch.setattr(itemized_context_middleware, "observe_phase_sync", observe)
+    monkeypatch.setattr(itemized_context_middleware, "observe_phase", observe_async)
+    async def reconcile_result(_message, *, model_call_id):
+        assert "prepare" not in phases
+        phases.append("reconcile")
+
+    reconcile = AsyncMock(side_effect=reconcile_result)
+    monkeypatch.setattr(
+        itemized_context_middleware, "get_current_model_delta_sink",
+        lambda: SimpleNamespace(complete_tool_from_message=reconcile),
+    )
+    response = ModelResponse(result=[AIMessage(content="完成")])
+    if mode == "sync":
+        bridge.wrap_model_call(request, lambda _request: response)
+        assert phases == ["observe", "prepare"]
+        reconcile.assert_not_awaited()
+    else:
+        async def handler(_request):
+            return response
+        await bridge.awrap_model_call(request, handler)
+        reconcile.assert_awaited_once_with(messages[1], model_call_id=model_call_id)
+        assert phases == ["observe", "reconcile", "prepare"]
+    assert observed == [(f"{model_call_id}:tool-call:call-queued", "canonical.tool_result.before_commit")]
+    assert LangChainMessageCodec().tool_result_call_ids([
+        messages[0], messages[1],
+        messages[1].model_copy(update={"tool_call_id": f"{model_call_id}:tool-call:call-queued"}),
+    ]) == (f"{model_call_id}:tool-call:call-queued",)
+
+
+@pytest.mark.asyncio
+async def test_request_reconciliation_requires_explicit_emitting_model_call(
+    bridge, response_dispatch, monkeypatch,
+):
+    reconcile = AsyncMock()
+    monkeypatch.setattr(
+        itemized_context_middleware, "get_current_model_delta_sink",
+        lambda: SimpleNamespace(complete_tool_from_message=reconcile),
+    )
+    request = ModelRequest(model=MagicMock(), messages=[ToolMessage(content="结果", tool_call_id="unbound")])
+    handler = AsyncMock()
+    with pytest.raises(RuntimeError, match="emitting model-call identity"):
+        await bridge.awrap_model_call(request, handler)
+    reconcile.assert_not_awaited()
+    bridge._aprepare.assert_not_awaited()
+    handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_request_preparation_failure_preserves_reconciled_tool_completion(
+    bridge, response_dispatch, monkeypatch,
+):
+    model_call_id, _dispatch = response_dispatch
+    events = []
+    writer = MagicMock()
+
+    async def commit(event_type, payload=None, **kwargs):
+        events.append(event_type)
+        return {"type": event_type, "payload": payload, "kwargs": kwargs}
+
+    writer.commit = AsyncMock(side_effect=commit)
+    tool_result_sink = AsyncMock(
+        side_effect=lambda _completion: events.append("tool_result_sink")
+    )
+    runtime = MessageStreamRuntime(
+        writer,
+        canonical_item_sink=AsyncMock(),
+        tool_result_sink=tool_result_sink,
+    )
+    await runtime.start_model(model_call_id, "primary")
+    await runtime.accept_message_chunk(AIMessageChunk(
+        content="",
+        tool_call_chunks=[{
+            "index": 0,
+            "id": "call",
+            "name": "read_file",
+            "args": '{"path":"README.md"}',
+        }],
+    ))
+    events.clear()
+
+    async def fail_preparation(_request):
+        events.append("prepare")
+        raise RuntimeError("原 canonical preparation 失败")
+
+    bridge._aprepare.side_effect = fail_preparation
+    monkeypatch.setattr(
+        itemized_context_middleware,
+        "get_current_model_delta_sink",
+        lambda: runtime,
+    )
+    request = ModelRequest(model=MagicMock(), messages=[
+        AIMessage(content="", id=f"lc_run--{model_call_id}",
+                  tool_calls=[{
+                      "id": "call",
+                      "name": "read_file",
+                      "args": {"path": "README.md"},
+                  }]),
+        ToolMessage(content="原结果", tool_call_id="call", name="read_file"),
+    ])
+    handler = AsyncMock()
+    preparation = asyncio.create_task(bridge.awrap_model_call(request, handler))
+    await asyncio.sleep(0)
+    assert not preparation.done()
+    tool_call_id = runtime.claim_tool_call_id(model_call_id, "call")
+    assert tool_call_id == f"{model_call_id}:tool-call:call"
+    await runtime.start_tool(
+        tool_execution_id="execution_a",
+        tool_call_id=tool_call_id,
+        tool_name="read_file",
+    )
+    with pytest.raises(RuntimeError, match="原 canonical preparation 失败"):
+        await preparation
+
+    assert events == [
+        "tool_call.completed",
+        "tool.started",
+        "tool_result_sink",
+        "tool.completed",
+        "prepare",
+    ]
+    terminal = next(
+        call.args[1]
+        for call in writer.commit.await_args_list
+        if call.args[0] == "tool.completed"
+    )
+    assert terminal["tool_execution_id"] == "execution_a"
+    assert terminal["tool_attempt_id"] == "execution_a"
+    assert terminal["tool_call_id"] == tool_call_id
+    assert terminal["completion_reason"] == "tool_completed"
+    tool_result_sink.assert_awaited_once()
+    bridge._aprepare.assert_awaited_once_with(request)
+    handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
 @pytest.mark.parametrize("conflict", ["assistant", "nested", "lc_id", "tool", "unpaired"])
 async def test_response_identity_conflicts_fail_without_rebinding(
     response_dispatch, mode, conflict,
@@ -165,9 +340,9 @@ def test_prepare_projection_without_losses_skips_loss_identity(bridge, monkeypat
 @pytest.fixture
 def preparation_bridge(bridge):
     frozen = SimpleNamespace(activation_policy=SimpleNamespace(has_model_call_boundary=lambda: True))
-    bridge._request_preparation = MagicMock(return_value=SimpleNamespace(checkpoint_ns=""))
+    bridge._request_preparation = MagicMock(return_value=SimpleNamespace(checkpoint_ns="", creation_key="unit-creation", seal_key="unit-seal", admission=SimpleNamespace(session_id="unit-session", thread_id="unit-thread", execution_id="unit-execution")))
     bridge._frozen_preparation = MagicMock(return_value=(None, frozen))
-    bridge._resource_activation = SimpleNamespace(prepare_model_call=AsyncMock(return_value=frozen))
+    bridge._resource_activation = SimpleNamespace(capture_model_call=AsyncMock(return_value=frozen), commit_model_call=AsyncMock(return_value=frozen))
     bridge._complete_preparation = MagicMock(side_effect=lambda *_args: _args[-1])
     return bridge
 
@@ -183,5 +358,6 @@ def test_actual_preparation_allocates_uuid7_for_frozen_call_and_callback(prepara
     assert str(identity) == callback
     assert abs((uuid7_datetime_from_hex(identity.hex) - started).total_seconds()) < 1
     assert uuid7_datetime_from_hex(identity.hex) <= ended
-    bridge._resource_activation.prepare_model_call.assert_awaited_once()
-    assert bridge._resource_activation.prepare_model_call.await_args.kwargs["model_call_id"] == callback
+    bridge._resource_activation.capture_model_call.assert_awaited_once()
+    bridge._resource_activation.commit_model_call.assert_awaited_once_with(bridge._resource_activation.capture_model_call.return_value)
+    assert bridge._resource_activation.capture_model_call.await_args.kwargs["model_call_id"] == callback

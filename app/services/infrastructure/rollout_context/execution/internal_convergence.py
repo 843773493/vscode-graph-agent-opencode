@@ -28,14 +28,61 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 
 
 class RolloutInternalConvergenceMixin:
-    """Turn-less internal execution 与 assembly 的原子终态收敛。"""
+    """Turn-less execution 与共享 ModelCall/assembly 的原子终态收敛。"""
 
-    def _converge_execution_assemblies(
+    def _terminal_model_call_id(
+        self, connection, *, session_id: str, thread_id: str,
+        execution_id: str, outcome: str,
+    ) -> str | None:
+        """校验最新调用；执行成功不能覆盖调用失败，执行中止可晚于调用完成。"""
+        model_call = connection.execute(
+            "SELECT model_call_id, outcome FROM model_calls "
+            "WHERE session_id=? AND thread_id=? AND execution_id=? "
+            "ORDER BY attempt DESC LIMIT 1",
+            (session_id, thread_id, execution_id),
+        ).fetchone()
+        if model_call is None:
+            return None
+        model_call_id = strict_text(model_call[0], field="model_calls.model_call_id")
+        model_outcome = strict_text(model_call[1], field="model_calls.outcome")
+        if model_outcome not in {value.value for value in ControlOutcome}:
+            raise ValueError(f"model_call outcome 非法: {model_call_id}")
+        if outcome in {
+            ControlOutcome.COMPLETED.value, ControlOutcome.COMPLETED_EMPTY.value,
+        } and model_outcome not in {ControlOutcome.UNKNOWN.value, outcome}:
+            raise ValueError(
+                "terminal convergence 与最新 model_call outcome 冲突: "
+                f"model_call={model_call_id}, existing={model_outcome}, requested={outcome}"
+            )
+        return model_call_id
+
+    def _converge_execution_calls_and_assemblies(
         self, connection, *, session_id: str, thread_id: str,
         execution_id: str, latest_model_call_id: str | None,
         outcome: str, timestamp: str, control_correction: bool,
     ) -> None:
-        """与 execution 同事务闭合所有 assembly，保留旧 attempt 的真实终态。"""
+        """同事务闭合待定调用与 assembly，保留每次 Provider 调用的既有结果。
+
+        assembly 的 outcome 沿其已登记 ModelCall；尚无调用或调用结果未知时，
+        记录 execution 如何结束该封存请求。调用完成可以早于工具及执行完成。
+        """
+        if latest_model_call_id is not None:
+            model_outcome = (
+                ControlOutcome.UNKNOWN.value
+                if outcome == ControlOutcome.EXECUTION_LOST.value else outcome
+            )
+            updated = connection.execute(
+                "UPDATE model_calls SET outcome=CASE WHEN outcome='unknown' THEN ? "
+                "ELSE outcome END, dispatch_state=CASE WHEN outcome!='unknown' "
+                "THEN dispatch_state WHEN ? IN ('completed','completed_empty') "
+                "THEN 'completed' WHEN ? IN ('failed','cancelled','interrupted') "
+                "THEN 'failed' ELSE 'unknown' END "
+                "WHERE session_id=? AND thread_id=? AND execution_id=? AND model_call_id=?",
+                (model_outcome, model_outcome, model_outcome, session_id,
+                 thread_id, execution_id, latest_model_call_id),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("terminal convergence latest model-call outcome 更新失败")
         assemblies = connection.execute(
             "SELECT a.assembly_id, a.model_call_id, m.outcome "
             "FROM context_assemblies a LEFT JOIN model_calls m "
@@ -47,12 +94,10 @@ class RolloutInternalConvergenceMixin:
             (session_id, thread_id, execution_id, control_correction),
         ).fetchall()
         for assembly_id, model_call_id, model_outcome in assemblies:
-            # Provider fallback 可以继续复用同一封存 assembly；只有 execution
-            # 最终收敛时才关闭它。独立重试的旧 assembly 保留对应调用的 outcome。
-            # 请求已发送但尚未收到响应时，封存 UUID 还没有 model-call 提交行；
-            # 该 assembly 随 execution 收口，不补造 Provider 响应事实。
+            # Provider fallback 可以复用同一封存 assembly；最终收敛时按其
+            # 实际调用闭合。未登记响应事实的封存请求随 execution 收口。
             terminal_outcome = (
-                outcome if model_call_id in {None, latest_model_call_id} or model_outcome is None
+                outcome if model_outcome in {None, ControlOutcome.UNKNOWN.value}
                 else strict_text(model_outcome, field=f"assembly model_call outcome: {assembly_id}")
             )
             if terminal_outcome not in {value.value for value in ControlOutcome}:
@@ -195,39 +240,10 @@ class RolloutInternalConvergenceMixin:
             ):
                 raise ValueError("internal terminal convergence assembly 关联冲突")
 
-        model_call = connection.execute(
-            "SELECT model_call_id, outcome FROM model_calls "
-            "WHERE session_id = ? AND thread_id = ? AND execution_id = ? "
-            "ORDER BY attempt DESC LIMIT 1",
-            (session_id, thread_id, execution_id),
-        ).fetchone()
-        model_call_id = None
-        if model_call is not None:
-            model_call_id = strict_text(
-                model_call[0], field="model_calls.model_call_id"
-            )
-            model_call_outcome = strict_text(
-                model_call[1], field="model_calls.outcome"
-            )
-            accepted_model_call_outcomes = {
-                ControlOutcome.UNKNOWN.value,
-                outcome,
-            }
-            if control_correction:
-                accepted_model_call_outcomes.add(ControlOutcome.EXECUTION_LOST.value)
-            if outcome == ControlOutcome.EXECUTION_LOST.value:
-                accepted_model_call_outcomes.update(
-                    {
-                        ControlOutcome.FAILED.value,
-                        ControlOutcome.CANCELLED.value,
-                        ControlOutcome.INTERRUPTED.value,
-                    }
-                )
-            if model_call_outcome not in accepted_model_call_outcomes:
-                raise ValueError(
-                    "internal terminal convergence 与 latest model_call outcome 冲突: "
-                    f"model_call={model_call_id}, existing={model_call_outcome}, requested={outcome}"
-                )
+        model_call_id = self._terminal_model_call_id(
+            connection, session_id=session_id, thread_id=thread_id,
+            execution_id=execution_id, outcome=outcome,
+        )
 
         last_item_row = connection.execute(
             "SELECT last_item_sequence FROM database_meta WHERE singleton_id = 1"
@@ -322,33 +338,7 @@ class RolloutInternalConvergenceMixin:
         )
         if execution_update.rowcount != 1:
             raise RuntimeError("internal terminal execution outcome 更新失败")
-        if model_call_id is not None:
-            model_call_outcome = (
-                ControlOutcome.UNKNOWN.value
-                if outcome == ControlOutcome.EXECUTION_LOST.value
-                else outcome
-            )
-            model_call_update = connection.execute(
-                "UPDATE model_calls SET outcome = ?, dispatch_state = CASE "
-                "WHEN ? IN ('completed','completed_empty') THEN 'completed' "
-                "WHEN ? IN ('failed', 'cancelled', 'interrupted') THEN 'failed' "
-                "ELSE 'unknown' END WHERE session_id = ? AND thread_id = ? "
-                "AND model_call_id = ? AND execution_id = ?",
-                (
-                    model_call_outcome,
-                    model_call_outcome,
-                    model_call_outcome,
-                    session_id,
-                    thread_id,
-                    model_call_id,
-                    execution_id,
-                ),
-            )
-            if model_call_update.rowcount != 1:
-                raise RuntimeError(
-                    "internal terminal latest model-call outcome 更新失败"
-                )
-        self._converge_execution_assemblies(
+        self._converge_execution_calls_and_assemblies(
             connection, session_id=session_id, thread_id=thread_id,
             execution_id=execution_id, latest_model_call_id=model_call_id,
             outcome=outcome, timestamp=timestamp, control_correction=control_correction,

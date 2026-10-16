@@ -63,9 +63,11 @@ from app.gateway.federation.grants import (
     MAX_TRANSIT_GATEWAYS,
     ContextGrantTarget,
     FederationGrant,
+    ForkGrantTarget,
     GrantTarget,
     OperationKind,
     sign_grant,
+    validate_grant_operation,
     verify_grant,
 )
 from app.gateway.federation.messages import (
@@ -340,6 +342,7 @@ class FederationRpcService:
                     workspace_id=workspace_id,
                     gateway_id=gateway_id,
                     origin=self.gateway_id,
+                    origin_channel=None,
                     path=visited,
                     remaining=remaining,
                     deadline_at=deadline_at,
@@ -402,7 +405,7 @@ class FederationRpcService:
     async def relay_operation(
         self,
         *,
-        target: GrantTarget | ContextGrantTarget,
+        target: GrantTarget | ContextGrantTarget | ForkGrantTarget,
         operation: OperationKind,
         body: dict[str, object],
         deadline_at: float | None = None,
@@ -413,8 +416,7 @@ class FederationRpcService:
         hub，由 hub 从 channel 绑定确认 origin 后转发。仅允许一次 transit。
         """
 
-        if isinstance(target, ContextGrantTarget) and operation != "read":
-            raise FederationError(FEDERATION_GRANT_KIND_MISMATCH, "资源目标只接受 read capability")
+        validate_grant_operation(target, operation)
         if deadline_at is None:
             deadline_at = time.time() + FEDERATION_DEADLINE_SECONDS
         remaining = remaining_deadline(deadline_at)
@@ -439,7 +441,7 @@ class FederationRpcService:
                 operation=operation,
                 request_preimage=forwarded,
             )
-            channel = self.channel_to(target.gateway_id, qualified=isinstance(target, ContextGrantTarget))
+            channel = self.channel_to(target.gateway_id, qualified=isinstance(target, (ContextGrantTarget, ForkGrantTarget)))
             result = await channel.request(
                 method=METHOD_RELAY,
                 request={**forwarded, "grant": grant.encode()},
@@ -452,7 +454,7 @@ class FederationRpcService:
         hub_channel = self._hub_channel
         if hub_channel is None or hub_channel.closed:
             raise FederationError(
-                FEDERATION_CHANNEL_CLOSED if isinstance(target, ContextGrantTarget) else FEDERATION_TARGET_NOT_RESOLVABLE,
+                FEDERATION_CHANNEL_CLOSED if isinstance(target, (ContextGrantTarget, ForkGrantTarget)) else FEDERATION_TARGET_NOT_RESOLVABLE,
                 "本地没有可用 hub channel，无法 transit 到目标 Gateway",
             )
         self._check_channel(hub_channel)
@@ -505,6 +507,9 @@ class FederationRpcService:
             gateway_id = require_str(request, "gateway_id")
         if workspace_id is not None:
             workspace_id = require_str(request, "workspace_id")
+        # 直接查询 hub 本地候选不经过中转；继续向 spoke 查询才需要 transit。
+        if gateway_id != self.gateway_id:
+            self._authorize(capability="transit", origin=origin, session=session)
         matches = await self._local_matches(session_id, workspace_id=workspace_id) if gateway_id in {None, self.gateway_id} else []
         if gateway_id != self.gateway_id:
             matches.extend(
@@ -513,12 +518,15 @@ class FederationRpcService:
                     workspace_id=workspace_id,
                     gateway_id=gateway_id,
                     origin=origin,
+                    origin_channel=session,
                     path=path,
                     remaining=remaining,
                     deadline_at=deadline_at,
                 )
             )
         self._authorize(capability="discovery", origin=origin, session=session)
+        if gateway_id != self.gateway_id:
+            self._authorize(capability="transit", origin=origin, session=session)
         return discovery_response(self.gateway_id, matches)
 
     async def _serve_relay_as_hub(
@@ -536,8 +544,7 @@ class FederationRpcService:
         )
         operation = require_operation(request)
         target = require_target(request)
-        if isinstance(target, ContextGrantTarget) and operation != "read":
-            raise FederationError(FEDERATION_GRANT_KIND_MISMATCH, "资源目标只接受 read capability")
+        validate_grant_operation(target, operation)
         visited, _max_transit, _max_hops = require_discovery_scope(
             request, local_gateway_id=self.gateway_id
         )
@@ -572,7 +579,7 @@ class FederationRpcService:
             operation=operation,
             request_preimage=forwarded,
         )
-        channel = self.channel_to(target.gateway_id, qualified=isinstance(target, ContextGrantTarget))
+        channel = self.channel_to(target.gateway_id, qualified=isinstance(target, (ContextGrantTarget, ForkGrantTarget)))
         inner = await channel.request(
             method=METHOD_RELAY,
             request={**forwarded, "grant": grant.encode()},
@@ -598,6 +605,7 @@ class FederationRpcService:
         workspace_id: str | None,
         gateway_id: str | None,
         origin: str,
+        origin_channel: FederationChannelSession | None,
         path: tuple[str, ...],
         remaining: float,
         deadline_at: float | None,
@@ -615,6 +623,9 @@ class FederationRpcService:
                 if gateway_id is not None:
                     raise FederationError(FEDERATION_TRANSIT_LIMIT_EXCEEDED, "discovery authority 指向已访问 Gateway")
                 continue
+            self._authorize(capability="discovery", origin=origin, session=origin_channel)
+            if origin != self.gateway_id:
+                self._authorize(capability="transit", origin=origin, session=origin_channel)
             remaining = remaining_deadline(deadline_at)
             channel = self.channel_to(spoke.gateway_id, qualified=gateway_id is not None)
             target_path = (*path, spoke.gateway_id)
@@ -641,6 +652,9 @@ class FederationRpcService:
                 deadline_at=deadline_at,
             )
             self._check_channel(channel)
+            self._authorize(capability="discovery", origin=origin, session=origin_channel)
+            if origin != self.gateway_id:
+                self._authorize(capability="transit", origin=origin, session=origin_channel)
             raw_matches = result.get("matches")
             if not isinstance(raw_matches, list):
                 raise FederationError(
@@ -715,8 +729,7 @@ class FederationRpcService:
             capability=capability,
         )
         target = require_target(request)
-        if isinstance(target, ContextGrantTarget) and operation != "read":
-            raise FederationError(FEDERATION_GRANT_KIND_MISMATCH, "资源目标只接受 read capability")
+        validate_grant_operation(target, operation)
         if grant.target is None or grant.target != target:
             raise FederationError(
                 FEDERATION_GRANT_KIND_MISMATCH,
@@ -750,13 +763,23 @@ class FederationRpcService:
         self._authorize(capability=capability, origin=grant.origin_gateway_id, session=session)
         return result
 
-    async def _execute_local(self, *, target: GrantTarget | ContextGrantTarget, operation: OperationKind, body: dict[str, object], origin: str, remaining: float) -> dict[str, object]:
+    async def _execute_local(self, *, target: GrantTarget | ContextGrantTarget | ForkGrantTarget, operation: OperationKind, body: dict[str, object], origin: str, remaining: float) -> dict[str, object]:
         if target.gateway_id != self.gateway_id:
             raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "target audience 不是本 Gateway")
         self._authorize(capability=operation, origin=origin, session=None)
         if not isinstance(body, dict):
             raise FederationError(FEDERATION_MALFORMED_FRAME, "relay 必须包含完整业务 envelope")
-        if isinstance(target, ContextGrantTarget):
+        validate_grant_operation(target, operation)
+        if isinstance(target, ForkGrantTarget):
+            from app.schemas.internal_v2.session_fork_transfer import (
+                SessionForkTransferRequest,
+            )
+
+            transfer = SessionForkTransferRequest.model_validate(body)
+            if transfer.fork_target != target or transfer.source_gateway_id != origin:
+                raise FederationError(FEDERATION_MALFORMED_FRAME, "fork operation 的 URI/role/origin 与独立 grant 不一致")
+            frozen_target = target.to_payload()
+        elif isinstance(target, ContextGrantTarget):
             from app.schemas.internal_v2.communication import ContextQueryRequest
             if operation != "read":
                 raise FederationError(FEDERATION_GRANT_KIND_MISMATCH, "资源目标只接受 read capability")
@@ -931,7 +954,7 @@ class FederationRpcService:
         principal_ref: str,
         lifetime: float,
         request_preimage: dict[str, object],
-        target: GrantTarget | ContextGrantTarget | None = None,
+        target: GrantTarget | ContextGrantTarget | ForkGrantTarget | None = None,
         operation: OperationKind | None = None,
     ) -> FederationGrant:
         if lifetime <= 0:

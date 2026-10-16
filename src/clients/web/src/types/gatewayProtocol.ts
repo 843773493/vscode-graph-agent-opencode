@@ -104,7 +104,14 @@ export type GatewayUserAccessDTO = OptionalFields<GatewayProtocol.GatewayUserAcc
 export type GatewayUserDTO = OptionalFields<GatewayProtocol.GatewayUserDTO>;
 export type GatewayUserLeaseDTO = OptionalFields<GatewayProtocol.GatewayUserLeaseDTO>;
 export type GatewayUserListDTO = OptionalFields<GatewayProtocol.GatewayUserListDTO>;
-export type GatewayUserViewStateDTO = OptionalFields<GatewayProtocol.GatewayUserViewStateDTO>;
+/** Gateway 视图状态 JSON DTO；turn_anchor 为空表示无具体锚点，Web 恢复到会话最新尾部。 */
+export type GatewayUserViewStateDTO = Omit<
+  OptionalFields<GatewayProtocol.GatewayUserViewStateDTO>,
+  "turn_anchor"
+> & {
+  turn_anchor?: string | null;
+};
+/** PUT 完整替换视图状态；省略字段使用服务端默认值，null 锚点用于清除具体锚点。 */
 export type GatewayUserViewStateUpdateRequest = Omit<OptionalFields<GatewayProtocol.GatewayUserViewStateUpdateRequest>, "turn_anchor"> & {
   turn_anchor?: string | null;
 };

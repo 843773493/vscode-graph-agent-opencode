@@ -1,16 +1,18 @@
-"""carrier_dedup 的 tool_result shadow 判定 fail-loud 合同。
+"""carrier_dedup 的 tool_result shadow 与真实 terminal 保留合同。
 
-背景（D1-investigation.md §2.4/§6.2）：``superseded_stream_tool_group_item_ids``
+背景（D1-investigation.md §2.4/§6.2）：``superseded_tool_group_item_ids``
 把 live tool_result 判为 shadow 时，注释假定 checkpoint 的完整 result carrier
 会被保留；若 selection 里根本没有该 carrier（D1 缺陷：request 侧 carrier 被
 等价复用吞掉），旧实现会静默产出缺失尾部 ToolMessage 的投影。修复后的合同：
 
-1. 过滤将删除唯一 tool_result 且无替代 carrier → 显式 ``ValueError``；
+1. 无替代 result carrier 时保留唯一真实 tool_result，不补造结果；
 2. 存在带投影身份的替代 carrier → 照常过滤 live shadow，carrier 保留；
 3. 无 checkpoint 组（确认 carrier 未进入 view）→ 不触发任何过滤。
 """
 
 from __future__ import annotations
+
+from dataclasses import replace
 
 import pytest
 
@@ -29,8 +31,8 @@ from app.domain.itemized.identity.item_projection import (
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.mapping.itemized.canonical_langchain import project_canonical_items
 from app.services.mapping.itemized.carrier_dedup import (
-    superseded_stream_item_ids,
-    superseded_stream_tool_group_item_ids,
+    superseded_item_ids,
+    superseded_tool_group_item_ids,
 )
 
 TURN = "job_parent_turn2"
@@ -207,32 +209,43 @@ def _request_tool_result(sequence: int = 6) -> CanonicalItemRecord:
     )
 
 
-def test_unique_tool_result_deletion_raises():
-    """确认 carrier 已进 view 但无替代 result carrier → 显式报错。"""
+def _with_outcome(item: CanonicalItemRecord, outcome: str) -> CanonicalItemRecord:
+    payload = {**item.payload, "tool_outcome": outcome, "execution_confirmed": outcome != "unknown"}
+    return replace(item, payload=payload, content_hash=content_hash(item.payload_kind, payload))
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure", "unknown"])
+def test_unique_tool_result_kept_without_replacement(outcome: str):
+    """checkpoint call 已提交、结果未入 channel 时保留真实 live terminal。"""
+    live = _with_outcome(_live_tool_result(), outcome)
     items = (
         _stream_reasoning(),
         _stream_tool_call(),
-        _live_tool_result(),
+        live,
         _confirmed_reasoning(),
         _confirmed_tool_call(),
     )
-    with pytest.raises(ValueError, match="唯一的 tool_result carrier"):
-        superseded_stream_tool_group_item_ids(items)
-    with pytest.raises(ValueError, match="唯一的 tool_result carrier"):
-        superseded_stream_item_ids(items)
+    assert live.item_id not in superseded_tool_group_item_ids(items)
+    assert live.item_id not in superseded_item_ids(items)
+    assistant, result = project_canonical_items(items, preserve_order=True)
+    assert [call["id"] for call in assistant.tool_calls] == [result.tool_call_id] == [TOOL_CALL_ID]
+    assert result.content == RESULT_CONTENT
+    assert result.status == ("success" if outcome == "success" else "error")
+    assert result.response_metadata["tool_outcome"] == outcome
 
 
-def test_live_result_filtered_only_with_replacement_carrier():
+@pytest.mark.parametrize("outcome", ["success", "failure", "unknown"])
+def test_live_result_filtered_only_with_replacement_carrier(outcome: str):
     """存在带投影身份的替代 carrier 时照常过滤 live shadow。"""
     items = (
         _stream_reasoning(),
         _stream_tool_call(),
-        _live_tool_result(),
+        _with_outcome(_live_tool_result(), outcome),
         _confirmed_reasoning(),
         _confirmed_tool_call(),
-        _request_tool_result(),
+        _with_outcome(_request_tool_result(), outcome),
     )
-    superseded = superseded_stream_item_ids(items)
+    superseded = superseded_item_ids(items)
     live = _live_tool_result()
     carrier = _request_tool_result()
     # stream assistant 组与 live result 被 shadow，替代 carrier 保留。
@@ -245,10 +258,18 @@ def test_live_result_filtered_only_with_replacement_carrier():
     assert any(type(message).__name__ == "ToolMessage" for message in messages)
 
 
+def test_other_turn_result_cannot_replace_original_terminal():
+    """相同 model-call 的错误跨 Turn carrier 不得遮蔽原始真实结果。"""
+    live = _with_outcome(_live_tool_result(), "unknown")
+    foreign = replace(_request_tool_result(), turn_id="other-turn")
+    items = (_stream_tool_call(), _confirmed_tool_call(), live, foreign)
+    assert live.item_id not in superseded_item_ids(items)
+
+
 def test_no_checkpoint_group_keeps_live_result():
     """确认 carrier 未进入 view（正常形态）→ 不触发过滤。"""
     items = (_stream_reasoning(), _stream_tool_call(), _live_tool_result())
-    assert superseded_stream_item_ids(items) == set()
+    assert superseded_item_ids(items) == set()
     messages = project_canonical_items(items, preserve_order=True)
     assert any(type(message).__name__ == "ToolMessage" for message in messages)
 

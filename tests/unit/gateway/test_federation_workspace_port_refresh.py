@@ -9,6 +9,9 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
+import httpx
+import pytest
+
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation.identity import load_or_create_signing_key
 from app.gateway.federation.policy import FederationPolicyStore
@@ -26,7 +29,13 @@ from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.runtime_proof import _refresh_federation_workspace_ports
 
 
-def _service(tmp_path: Path) -> FederationRpcService:
+@pytest.fixture
+async def http_client():
+    async with httpx.AsyncClient(trust_env=False) as client:
+        yield client
+
+
+def _service(tmp_path: Path, http_client: httpx.AsyncClient) -> FederationRpcService:
     root = tmp_path / "gateway"
     root.mkdir(parents=True, exist_ok=True)
     return FederationRpcService(
@@ -37,7 +46,7 @@ def _service(tmp_path: Path) -> FederationRpcService:
         ),
         signing_key=load_or_create_signing_key(root),
         catalog=WorkspaceCatalogPort(),
-        session_main=WorkspaceSessionMainPort(),
+        session_main=WorkspaceSessionMainPort(http_client=http_client),
         credential_store=FederationCredentialStore(
             storage_path=root / "credentials/federation.json"
         ),
@@ -75,11 +84,11 @@ def _session_main_ids(service: FederationRpcService) -> dict[str, str]:
     return dict(port._backend_urls)
 
 
-def test_commit_observer_tracks_added_and_removed_workspaces(tmp_path: Path) -> None:
+def test_commit_observer_tracks_added_and_removed_workspaces(tmp_path: Path, http_client: httpx.AsyncClient) -> None:
     """registry 单点 commit 后，联邦端口立即同步新增与移除。"""
 
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
-    service = _service(tmp_path)
+    service = _service(tmp_path, http_client)
     registry.add_commit_observer(
         lambda: _refresh_federation_workspace_ports(service, registry)
     )
@@ -112,11 +121,11 @@ def test_commit_observer_tracks_added_and_removed_workspaces(tmp_path: Path) -> 
     }
 
 
-def test_remote_projection_workspaces_are_not_projected(tmp_path: Path) -> None:
+def test_remote_projection_workspaces_are_not_projected(tmp_path: Path, http_client: httpx.AsyncClient) -> None:
     """远端子工作区不参与本地联邦只读端口。"""
 
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
-    service = _service(tmp_path)
+    service = _service(tmp_path, http_client)
     registry.add_commit_observer(
         lambda: _refresh_federation_workspace_ports(service, registry)
     )

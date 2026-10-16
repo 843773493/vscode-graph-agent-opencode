@@ -366,7 +366,7 @@ def test_store_initializes_wal_and_pragmas(store: SessionCatalogStore) -> None:
     )
     assert int(store.connection.execute("PRAGMA foreign_keys").fetchone()[0]) == 1
     assert int(store.connection.execute("PRAGMA busy_timeout").fetchone()[0]) == 5000
-    assert int(store.connection.execute("PRAGMA user_version").fetchone()[0]) == 8
+    assert int(store.connection.execute("PRAGMA user_version").fetchone()[0]) == 10
 
 
 def test_store_does_not_create_sessions_root(
@@ -403,7 +403,7 @@ def test_store_reopens_existing_database(
     second = SessionCatalogStore(database_path, sessions_root)
     try:
         assert second.get_node(folder_id).display_name == "持久文件夹"
-        assert int(second.connection.execute("PRAGMA user_version").fetchone()[0]) == 8
+        assert int(second.connection.execute("PRAGMA user_version").fetchone()[0]) == 10
     finally:
         second.close()
 
@@ -1976,14 +1976,14 @@ def test_store_rejects_v5_schema_version_without_modifying_it(
         connection.close()
 
 
-def test_schema_v0_fresh_creates_v8(tmp_path: Path, sessions_root: Path) -> None:
+def test_schema_v0_fresh_creates_current_schema(tmp_path: Path, sessions_root: Path) -> None:
     store = SessionCatalogStore(
         tmp_path / "navigation" / "session-catalog.sqlite", sessions_root
     )
     try:
         assert (
             int(store.connection.execute("PRAGMA user_version").fetchone()[0])
-            == 8
+            == SessionCatalogStore.SCHEMA_VERSION
         )
         tables = {
             str(row[0])
@@ -2049,6 +2049,7 @@ def test_navigation_revision_tracks_only_real_node_changes(
     [
         "nodes",
         "session_creation_records",
+        "fork_source_captures",
         "subtree_delete_records",
         "fork_retention_claims",
         "catalog_metadata",
@@ -2060,7 +2061,7 @@ def test_store_rejects_lost_authoritative_table_on_reopen(
 ) -> None:
     """已登记的权威表被外部删掉时重开必须响亮失败，不得静默重建空表。
 
-    ``nodes`` 与其写入依赖表承载权威目录和可恢复记录。已登记 v4 缺少其中
+    ``nodes`` 与其写入依赖表承载权威目录和可恢复记录。当前 schema 缺少其中
     任一张表时必须 fail closed，不能由 ``CREATE TABLE IF NOT EXISTS`` 静默补空表。
     """
     database_path = tmp_path / "navigation" / "session-catalog.sqlite"

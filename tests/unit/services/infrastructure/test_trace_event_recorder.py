@@ -18,6 +18,7 @@ from app.schemas.event import (
 )
 from app.services.infrastructure.trace_event_recorder import TraceEventRecorder
 from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.orchestration.execution_step.stream_bindings import StepEventPublisher
 
 
 def _job_created(job_id: str, session_id: str) -> JobCreatedEvent:
@@ -45,6 +46,28 @@ def _job_failed(job_id: str, session_id: str) -> JobFailedEvent:
         job_id=job_id,
         timestamp=datetime.now(UTC),
         payload=JobFailedPayload(error="boom", session_id=session_id),
+    )
+
+
+@pytest.fixture
+def step_event_flow() -> tuple[tuple[str, dict[str, object]], ...]:
+    # 首次启动与 retry 使用同一 publisher；模型、工具、文本及错误也不带 session_id。
+    return (
+        (EventType.AGENT_START, {"message": "start", "agent_id": "default"}),
+        (EventType.AGENT_START, {"message": "retry extension", "agent_id": "default"}),
+        (EventType.AGENT_START, {"message": "retry delegation", "agent_id": "default"}),
+        (EventType.AGENT_START, {"message": "retry communication", "agent_id": "default"}),
+        (EventType.AGENT_START, {"message": "retry reasoning", "agent_id": "default"}),
+        (EventType.AGENT_STEP, {"phase": "model"}),
+        (EventType.LLM_REQUEST, {"model": "recovery-contract", "timestamp": 1000}),
+        (EventType.MODEL_FAILED, {"provider_id": "contract", "model": "recovery-contract", "error_type": "ValueError", "error": "failed candidate"}),
+        (EventType.TOOL_CALL_START, {"part_id": "tool-1", "execution_id": "execution-1", "tool_name": "read_context", "args": {}}),
+        (EventType.TOOL_CALL_END, {"part_id": "tool-1", "execution_id": "execution-1", "tool_call_id": "call-1", "tool_name": "read_context", "result": "frozen"}),
+        (EventType.TEXT_START, {"part_id": "text-1", "kind": "markdown"}),
+        (EventType.TEXT_DELTA, {"part_id": "text-1", "kind": "markdown", "text": "recovered"}),
+        (EventType.TEXT_END, {"part_id": "text-1", "kind": "markdown", "text": "recovered"}),
+        (EventType.ERROR, {"error": "visible failure", "phase": "agent_execution"}),
+        (EventType.AGENT_END, {"final_text": "recovered", "agent_id": "default"}),
     )
 
 
@@ -90,6 +113,7 @@ async def test_recorder_persists_job_events(tmp_path: Path, session_bundle_facto
 async def test_recorder_resolves_lifecycle_event_without_job_created_mapping(
     tmp_path: Path,
     session_bundle_factory,
+    step_event_flow: tuple[tuple[str, dict[str, object]], ...],
 ):
     session_bundle_factory(tmp_path, "ses_019b9b92ef127e83870baac3f15d7bc4")
     bus = JobEventBus()
@@ -104,6 +128,9 @@ async def test_recorder_resolves_lifecycle_event_without_job_created_mapping(
             payload={"session_id": "ses_019b9b92ef127e83870baac3f15d7bc4", "thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_019b9b92ef127e83870baac3f15d7bc4")},
             agent_id="job_service",
         )
+        publisher = StepEventPublisher(bus, job_id="job_direct", agent_id="default")
+        for event_type, payload in step_event_flow:
+            await publisher.publish(event_type, payload)
         await bus.publish(
             job_id="job_direct",
             event_type=EventType.JOB_FAILED,
@@ -116,7 +143,11 @@ async def test_recorder_resolves_lifecycle_event_without_job_created_mapping(
         )
 
         events = store.read_events("ses_019b9b92ef127e83870baac3f15d7bc4")
-        assert [event.type for event in events] == ["job_started", "job_failed"]
+        assert [event.type for event in events] == [
+            "job_started", *[event_type for event_type, _ in step_event_flow], "job_failed",
+        ]
+        assert all(event.job_id == "job_direct" for event in events)
+        assert recorder._job_sessions == {}
     finally:
         await recorder.stop()
 
@@ -159,10 +190,11 @@ async def test_recorder_does_not_treat_session_shaped_job_id_as_session_id(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_failed_job_created_write_does_not_commit_job_session_mapping():
+@pytest.mark.parametrize("event_type", [EventType.JOB_CREATED, EventType.JOB_STARTED])
+async def test_failed_lifecycle_write_does_not_commit_job_session_mapping(event_type: str):
     class FailingSink:
         async def append(self, session_id, event):
-            if event.type == EventType.JOB_CREATED:
+            if event.type in {EventType.JOB_CREATED, EventType.JOB_STARTED}:
                 raise OSError(f"cannot write {session_id}")
 
     bus = JobEventBus()
@@ -173,8 +205,8 @@ async def test_failed_job_created_write_does_not_commit_job_session_mapping():
         with pytest.raises(OSError, match="cannot write ses_failed"):
             await bus.publish(
                 job_id="job_failed_mapping",
-                event_type=EventType.JOB_CREATED,
-                payload={"session_id": "ses_failed", "message": "hi", "agent_id": "default"},
+                event_type=event_type,
+                payload={"session_id": "ses_failed", "thread_id": "thr_failed", "message": "hi", "agent_id": "default"},
                 agent_id="test",
             )
         with pytest.raises(RuntimeError, match="缺少 session_id"):

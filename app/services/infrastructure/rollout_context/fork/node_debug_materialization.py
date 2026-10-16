@@ -7,10 +7,10 @@ import json
 import os
 import shutil
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from app.domain.itemized.hashing import canonical_json_bytes
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
     NodeDebugSessionManifestDTO,
@@ -20,22 +20,11 @@ from app.services.infrastructure.node_debug.session.fork import (
     NodeDebugWorkspaceForkConfig,
     validate_target_prepublication,
 )
-from app.services.infrastructure.node_debug.session.thread_owner import (
-    NodeDebugThreadOwner,
-)
 
 if TYPE_CHECKING:
     from app.services.infrastructure.rollout_context.store import (
         RolloutContextStore,
     )
-
-
-@dataclass(frozen=True, slots=True)
-class PreparedNodeDebugFork:
-    staging_root: Path
-    target_node: Path
-    target_thread_id: str
-    target_manifest_sha256: str
 
 
 def target_configuration_id(fork_id: str, source_configuration_id: str) -> str:
@@ -150,160 +139,100 @@ def _target_manifest_sha256(
     ).hexdigest()
 
 
-def prepare_node_debug_fork(
-    storage: RolloutContextStore,
-    snapshot: NodeDebugSourceCopySnapshot | None,
+def materialize_node_debug_fork(
+    storage: RolloutContextStore, snapshot: NodeDebugSourceCopySnapshot | None,
     workspace_config_provider: Callable[[], NodeDebugWorkspaceForkConfig] | None,
-    *,
-    materialization_id: str,
-    fork_id: str,
-    target_session_id: str,
-    checkpoint_ns: str,
-) -> PreparedNodeDebugFork | None:
-    if snapshot is None or not snapshot.configuration_artifacts:
-        return None
-    if workspace_config_provider is None:
-        raise RuntimeError("缺少 Workspace debug 配置 provider")
-    workspace_config = workspace_config_provider()
-    prepublication = validate_target_prepublication(
-        snapshot,
-        target_workspace_root=workspace_config.workspace_root,
-        target_workspace_config_revision=workspace_config.revision,
-        target_workspace_config_hash=workspace_config.content_hash,
-        target_workspace_id=workspace_config.workspace_id,
-        launch_profiles=workspace_config.launch_profiles,
-        configuration_id_mapper=lambda source_id: target_configuration_id(
-            fork_id, source_id
-        ),
-    )
-    target_thread_id = storage.storage.main_thread_id(target_session_id)
-    target_owner = NodeDebugThreadOwner(
-        session_id=target_session_id,
-        thread_id=target_thread_id,
-        thread_node=storage.storage._resolve_thread_node(target_session_id, target_thread_id),
-    )
-    publish_target_node = target_owner.thread_node
-    staging_root = target_staging_root(
-        storage.storage.root(
-            target_owner.session_id,
-            checkpoint_ns,
-            thread_id=target_owner.thread_id,
-        ),
-        materialization_id,
-    )
-    configuration_map = prepublication.configuration_id_map
-    manifest_sha256 = _target_manifest_sha256(
-        snapshot,
-        target_session_id=target_owner.session_id,
-        target_thread_id=target_owner.thread_id,
-        configuration_id_map=configuration_map,
-    )
-    storage.forks.prepare_fork_debug_snapshot(
-        materialization_id,
-        fork_id,
-        snapshot,
-        prepublication,
-        target_session_id=target_session_id,
-        target_thread_id=target_owner.thread_id,
-        staging_relative_path=(
-            Path("rollout") / ".fork-debug-staging" / materialization_id / "node"
-        ),
-        target_manifest_sha256=manifest_sha256,
-        checkpoint_ns=checkpoint_ns,
-    )
-    staged_map, staged_manifest_sha256 = _stage_target_snapshot(
-        snapshot,
-        fork_id=fork_id,
-        target_session_id=target_owner.session_id,
-        target_thread_id=target_owner.thread_id,
-        staging_root=staging_root,
-        expected_manifest_sha256=manifest_sha256,
-    )
-    if staged_map != configuration_map or staged_manifest_sha256 != manifest_sha256:
-        raise RuntimeError("fork debug staging 的 ID 映射与预发布校验不一致")
-    return PreparedNodeDebugFork(
-        staging_root=staging_root,
-        target_node=publish_target_node,
-        target_thread_id=target_owner.thread_id,
-        target_manifest_sha256=manifest_sha256,
-    )
-
-
-def publish_node_debug_fork(
-    storage: RolloutContextStore,
-    snapshot: NodeDebugSourceCopySnapshot,
-    prepared: PreparedNodeDebugFork,
-    workspace_config_provider: Callable[[], NodeDebugWorkspaceForkConfig] | None,
-    *,
-    materialization_id: str,
-    target_session_id: str,
-    checkpoint_ns: str,
+    *, materialization_id: str, fork_id: str, target_session_id: str,
+    target_thread_id: str, checkpoint_ns: str,
 ) -> None:
-    ready_node_debug_fork(
-        storage,
-        snapshot,
-        prepared,
-        workspace_config_provider,
-        materialization_id=materialization_id,
-        target_session_id=target_session_id,
-        checkpoint_ns=checkpoint_ns,
+    """显式资源与重试共用 prepared→ready→published；恢复不读取 live source。"""
+    if snapshot is None:
+        return
+    if not snapshot.configuration_artifacts:
+        raise RuntimeError("显式 debug snapshot 缺少所选方案")
+    target_node = storage.storage._resolve_thread_node(target_session_id, target_thread_id)
+    staging_root = target_staging_root(storage.storage.root(
+        target_session_id, checkpoint_ns, thread_id=target_thread_id,
+    ), materialization_id)
+    existing = storage.forks.read_fork_debug_snapshot(
+        materialization_id, target_session_id=target_session_id,
+        target_thread_id=target_thread_id, checkpoint_ns=checkpoint_ns,
     )
-    publish_ready_node_debug_fork(
-        storage,
-        prepared,
-        materialization_id=materialization_id,
-        target_session_id=target_session_id,
-        checkpoint_ns=checkpoint_ns,
+    if existing is None:
+        if workspace_config_provider is None:
+            raise RuntimeError("缺少 Workspace debug 配置 provider")
+        config = workspace_config_provider()
+        prepublication = validate_target_prepublication(
+            snapshot, target_workspace_root=config.workspace_root,
+            target_workspace_config_revision=config.revision,
+            target_workspace_config_hash=config.content_hash,
+            target_workspace_id=config.workspace_id, launch_profiles=config.launch_profiles,
+            configuration_id_mapper=lambda source_id: target_configuration_id(fork_id, source_id),
+        )
+        manifest_sha256 = _target_manifest_sha256(snapshot,
+            target_session_id=target_session_id, target_thread_id=target_thread_id,
+            configuration_id_map=prepublication.configuration_id_map,
+        )
+        storage.forks.prepare_fork_debug_snapshot(
+            materialization_id, fork_id, snapshot, prepublication,
+            target_session_id=target_session_id, target_thread_id=target_thread_id,
+            target_manifest_sha256=manifest_sha256, checkpoint_ns=checkpoint_ns,
+        )
+        existing = storage.forks.read_fork_debug_snapshot(
+            materialization_id, target_session_id=target_session_id,
+            target_thread_id=target_thread_id, checkpoint_ns=checkpoint_ns,
+        )
+    if existing is None:
+        raise RuntimeError("fork debug prepared journal 未持久化")
+    state, proof = existing
+    if proof["fork_id"] != fork_id or canonical_json_bytes(proof["snapshot"]) != canonical_json_bytes(snapshot.to_payload()):
+        raise RuntimeError("fork debug 重试与冻结方案 proof 不一致")
+    manifest_sha256 = proof["target_manifest_sha256"]
+    if state == "prepared":
+        if workspace_config_provider is None:
+            raise RuntimeError("缺少 Workspace debug 配置 provider")
+        config = workspace_config_provider()
+        if (config.revision, config.content_hash) != (
+            proof["target_workspace_config_revision"], proof["target_workspace_config_hash"],
+        ):
+            raise RuntimeError("target Workspace debug 配置在预发布期间漂移")
+        validate_target_prepublication(
+            snapshot, target_workspace_root=config.workspace_root,
+            target_workspace_config_revision=config.revision,
+            target_workspace_config_hash=config.content_hash,
+            target_workspace_id=config.workspace_id, launch_profiles=config.launch_profiles,
+        )
+        if staging_root.is_symlink():
+            raise RuntimeError("fork debug staging 是符号链接")
+        if staging_root.exists():
+            shutil.rmtree(staging_root)
+        _stage_target_snapshot(snapshot, fork_id=fork_id, target_session_id=target_session_id,
+            target_thread_id=target_thread_id, staging_root=staging_root,
+            expected_manifest_sha256=manifest_sha256,
+        )
+        storage.forks.advance_fork_debug_snapshot(
+            materialization_id, target_session_id=target_session_id,
+            target_thread_id=target_thread_id, checkpoint_ns=checkpoint_ns, state="ready",
+        )
+        state = "ready"
+    target_root = target_node / "debug" / "node"
+    if state == "ready":
+        if target_root.exists():
+            if staging_root.exists():
+                raise RuntimeError("fork debug 同时存在 staging 和已发布正文")
+        else:
+            publish_target_snapshot(staging_root, target_node)
+    elif state != "published":
+        raise RuntimeError(f"fork debug journal 状态非法: {state}")
+    verify_published_target_snapshot(
+        target_node, target_session_id=target_session_id, target_thread_id=target_thread_id,
+        manifest_sha256=manifest_sha256,
+        source_configurations_json=json.dumps(proof["snapshot"]["configuration_artifacts"]),
+        configuration_id_map_json=json.dumps(proof["target_configuration_id_map"]),
     )
-
-
-def ready_node_debug_fork(
-    storage: RolloutContextStore,
-    snapshot: NodeDebugSourceCopySnapshot,
-    prepared: PreparedNodeDebugFork,
-    workspace_config_provider: Callable[[], NodeDebugWorkspaceForkConfig] | None,
-    *,
-    materialization_id: str,
-    target_session_id: str,
-    checkpoint_ns: str,
-) -> None:
-    """发布前复核 Workspace 配置并把冻结 target proof 标为 ready。"""
-    if workspace_config_provider is None:
-        raise RuntimeError("缺少 Workspace debug 配置 provider")
-    current = workspace_config_provider()
-    validate_target_prepublication(
-        snapshot,
-        target_workspace_root=current.workspace_root,
-        target_workspace_config_revision=current.revision,
-        target_workspace_config_hash=current.content_hash,
-        target_workspace_id=current.workspace_id,
-        launch_profiles=current.launch_profiles,
-    )
-    storage.forks.mark_fork_debug_snapshot_ready(
-        materialization_id,
-        target_session_id=target_session_id,
-        target_thread_id=prepared.target_thread_id,
-        checkpoint_ns=checkpoint_ns,
-        target_manifest_sha256=prepared.target_manifest_sha256,
-    )
-
-
-def publish_ready_node_debug_fork(
-    storage: RolloutContextStore,
-    prepared: PreparedNodeDebugFork,
-    *,
-    materialization_id: str,
-    target_session_id: str,
-    checkpoint_ns: str,
-) -> None:
-    """只消费已冻结 ready proof 发布 target，不再读取 source。"""
-    publish_target_snapshot(prepared.staging_root, prepared.target_node)
-    storage.forks.mark_fork_debug_snapshot_published(
-        materialization_id,
-        target_session_id=target_session_id,
-        target_thread_id=prepared.target_thread_id,
-        checkpoint_ns=checkpoint_ns,
-        target_manifest_sha256=prepared.target_manifest_sha256,
+    storage.forks.advance_fork_debug_snapshot(
+        materialization_id, target_session_id=target_session_id,
+        target_thread_id=target_thread_id, checkpoint_ns=checkpoint_ns, state="published",
     )
 
 
@@ -314,33 +243,22 @@ def publish_target_snapshot(staging_root: Path, target_node: Path) -> Path:
     if not staging_root.resolve().is_relative_to(expected_parent.resolve()):
         raise RuntimeError("Node debug staging 不属于受检 target")
     debug_root = target_node / "debug"
-    if debug_root.exists() or debug_root.is_symlink():
-        raise RuntimeError(f"target 已存在 debug 目录，拒绝覆盖: {debug_root}")
-    debug_root.mkdir()
+    if debug_root.is_symlink() or (debug_root.exists() and not debug_root.is_dir()):
+        raise RuntimeError(f"target debug 父目录不是普通目录: {debug_root}")
+    if debug_root.exists() and any(debug_root.iterdir()):
+        raise RuntimeError(f"target 已存在 debug 正文，拒绝覆盖: {debug_root}")
+    # ready proof 重放允许补完 mkdir 与 rename 之间留下的精确空父目录。
+    debug_root.mkdir(exist_ok=True)
     target_root = debug_root / "node"
     staging_root.rename(target_root)
+    _fsync_directory(debug_root)
+    _fsync_directory(target_node)
     materialization_root = staging_root.parent
     if materialization_root.exists() and not any(materialization_root.iterdir()):
         materialization_root.rmdir()
     if expected_parent.exists() and not any(expected_parent.iterdir()):
         expected_parent.rmdir()
     return target_root
-
-
-def remove_target_snapshot(
-    staging_root: Path, target_node: Path, *, remove_published: bool
-) -> None:
-    expected_parent = target_node / "rollout" / ".fork-debug-staging"
-    if not staging_root.resolve().is_relative_to(expected_parent.resolve()):
-        raise RuntimeError("Node debug staging 不属于受检 target")
-    if staging_root.exists() or staging_root.is_symlink():
-        shutil.rmtree(staging_root)
-    published_root = target_node / "debug" / "node"
-    if remove_published and (published_root.exists() or published_root.is_symlink()):
-        shutil.rmtree(published_root)
-        debug_root = published_root.parent
-        if debug_root.exists() and not any(debug_root.iterdir()):
-            debug_root.rmdir()
 
 
 def verify_published_target_snapshot(
@@ -419,12 +337,4 @@ def verify_published_target_snapshot(
         raise RuntimeError("fork target manifest configuration_ids 与 journal 映射不一致")
 
 
-__all__ = [
-    "PreparedNodeDebugFork",
-    "prepare_node_debug_fork",
-    "publish_node_debug_fork",
-    "publish_ready_node_debug_fork",
-    "ready_node_debug_fork",
-    "remove_target_snapshot",
-    "verify_published_target_snapshot",
-]
+__all__ = ["materialize_node_debug_fork", "verify_published_target_snapshot"]

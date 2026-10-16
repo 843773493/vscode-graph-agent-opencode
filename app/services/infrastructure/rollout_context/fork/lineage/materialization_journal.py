@@ -9,9 +9,6 @@ from __future__ import annotations
 from uuid import uuid4
 
 from app.core.sqlite_state import utc_now_text as _now
-from app.services.infrastructure.rollout_context.fork.assembly_copy import (
-    prepare_selected_detail_mappings,
-)
 from app.services.infrastructure.rollout_context.fork.validation import (
     non_negative_int,
     one_of_text,
@@ -20,6 +17,9 @@ from app.services.infrastructure.rollout_context.fork.validation import (
     required_sha256,
     required_text,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    current_scope,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import strict_text
 
 
@@ -27,171 +27,121 @@ class ForkMaterializationJournalMixin:
     """fork journal 的 prepare、abort、completion 与 committed proof。"""
 
     def begin_fork_materialization(
-        self,
-        *,
-        target_session_id: str,
-        source_session_id: str,
-        source_checkpoint_id: str | None,
-        source_view_id: str | None,
-        fork_mode: str,
-        relationship: str,
-        checkpoint_ns: str,
-        source_thread_id: str,
-        target_thread_id: str,
-        source_snapshot_sha256: str,
-        fork_id: str | None = None,
-        materialization_id: str | None = None,
+        self, *, target_session_id: str, source_session_id: str,
+        source_checkpoint_id: str | None, source_view_id: str | None,
+        fork_mode: str, relationship: str, checkpoint_ns: str,
+        source_thread_id: str, target_thread_id: str, source_snapshot_sha256: str,
+        fork_id: str | None = None, materialization_id: str | None = None,
     ) -> tuple[str, str]:
-        """为目标 rollout 建立一次可恢复的 fork 物化 journal。"""
+        """目标 journal 只协调本次 intent，继承的历史 journal 不参与恢复。
+
+        ``created_at`` 是 prepared journal 写入时的记账时间，不表示目标内容提交或最终完成时间。
+        """
         target_session_id = required_text(target_session_id, field="target_session_id")
         source_session_id = required_text(source_session_id, field="source_session_id")
-        if target_session_id == source_session_id:
-            raise ValueError("fork target_session_id 不能与 source_session_id 相同")
-        source_checkpoint_id = optional_text(
-            source_checkpoint_id, field="source_checkpoint_id"
-        )
-        source_view_id = optional_text(source_view_id, field="source_view_id")
-        fork_mode = one_of_text(
-            fork_mode,
-            {"context_fork", "history_prefix_fork", "full_rollout_copy"},
-            field="fork_mode",
-        )
-        relationship = one_of_text(
-            relationship, {"detached", "pinned"}, field="relationship"
-        )
-        if not isinstance(checkpoint_ns, str):
-            raise TypeError("fork checkpoint_ns 必须是字符串")
         source_thread_id = required_text(source_thread_id, field="source_thread_id")
         target_thread_id = required_text(target_thread_id, field="target_thread_id")
-        source_snapshot_sha256 = required_sha256(
-            source_snapshot_sha256, field="source_snapshot_sha256"
+        if (target_session_id, target_thread_id) == (source_session_id, source_thread_id):
+            raise ValueError("fork 不能覆盖来源 Thread")
+        source_checkpoint_id = optional_text(source_checkpoint_id, field="source_checkpoint_id")
+        source_view_id = optional_text(source_view_id, field="source_view_id")
+        fork_mode = one_of_text(
+            fork_mode, {"context_fork", "view_prefix_fork", "full_rollout_copy"},
+            field="fork_mode",
         )
-        self._storage._resolve_thread_node(source_session_id, source_thread_id)
-        if self._storage.main_thread_id(target_session_id) != target_thread_id:
-            raise RuntimeError("fork journal target thread 与 target main owner 不匹配")
-        self._storage.initialize(
-            target_session_id,
-            checkpoint_ns,
-            thread_id=target_thread_id,
-        )
-        materialization_id = optional_identity(
-            materialization_id, field="materialization_id"
-        ) or uuid4().hex
+        relationship = one_of_text(relationship, {"detached", "pinned"}, field="relationship")
+        checkpoint_ns = strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
+        source_snapshot_sha256 = required_sha256(source_snapshot_sha256, field="source_snapshot_sha256")
+        materialization_id = optional_identity(materialization_id, field="materialization_id") or uuid4().hex
         fork_id = optional_identity(fork_id, field="fork_id") or uuid4().hex
-        with (
-            self._storage._lock(
-                target_thread_id, checkpoint_ns, session_id=target_session_id
-            ),
-            self._storage._connect(
-                target_thread_id, checkpoint_ns, session_id=target_session_id
-            ) as connection,
-        ):
-            self._storage._require_v2_runtime(connection)
-            active = connection.execute(
-                "SELECT materialization_id FROM fork_materializations WHERE status IN ('prepared', 'target_committed') LIMIT 1"
-            ).fetchone()
-            if active is not None:
-                active_id = required_text(
-                    active[0], field="fork_materializations.materialization_id"
+        owner = (target_session_id, target_thread_id, checkpoint_ns)
+        expected = (
+            fork_id, target_session_id, source_session_id, source_checkpoint_id,
+            source_view_id, fork_mode, relationship, source_thread_id,
+            target_thread_id, checkpoint_ns, source_snapshot_sha256,
+        )
+        self._storage._active_fork_materializations.add(owner)
+        try:
+            self._storage.initialize(target_session_id, checkpoint_ns, thread_id=target_thread_id)
+            with (
+                self._storage._lock(target_thread_id, checkpoint_ns, session_id=target_session_id),
+                self._storage._connect(target_thread_id, checkpoint_ns, session_id=target_session_id) as connection,
+            ):
+                self._storage._require_v2_runtime(connection)
+                if current_scope(connection) != (target_session_id, target_thread_id):
+                    raise RuntimeError("fork journal 当前存储 owner 不一致")
+                existing = connection.execute(
+                    "SELECT fork_id,target_session_id,source_session_id,source_checkpoint_id,"
+                    "source_view_id,fork_mode,relationship,source_thread_id,target_thread_id,"
+                    "checkpoint_ns,source_snapshot_sha256,status FROM fork_materializations "
+                    "WHERE materialization_id = ?", (materialization_id,),
+                ).fetchone()
+                if existing is not None:
+                    if existing[:-1] != expected or existing[-1] not in {"prepared", "target_committed", "committed"}:
+                        raise RuntimeError("fork journal 与冻结 operation 合同不一致")
+                    return materialization_id, fork_id
+                active = connection.execute(
+                    "SELECT materialization_id FROM fork_materializations "
+                    "WHERE target_session_id=? AND target_thread_id=? AND checkpoint_ns=? "
+                    "AND status IN ('prepared','target_committed') LIMIT 1", owner,
+                ).fetchone()
+                if active is not None:
+                    raise RuntimeError(f"目标 Thread 已存在未完成的 fork 物化: {active[0]}")
+                if connection.execute("SELECT 1 FROM item_catalog LIMIT 1").fetchone() is not None or (
+                    connection.execute("SELECT 1 FROM checkpoints LIMIT 1").fetchone() is not None
+                ):
+                    raise ValueError("fork target Thread 必须是本次创建的空目标")
+                meta = connection.execute(
+                    "SELECT committed_jsonl_offset FROM database_meta WHERE singleton_id=1",
+                ).fetchone()
+                if meta is None:
+                    raise RuntimeError("database_meta singleton 缺失，不能建立 fork journal")
+                rollback_offset = non_negative_int(meta[0], field="database_meta.committed_jsonl_offset")
+                result = connection.execute(
+                    "INSERT INTO fork_materializations(materialization_id,fork_id,target_session_id,"
+                    "source_session_id,source_checkpoint_id,source_view_id,fork_mode,relationship,status,"
+                    "rollback_jsonl_offset,created_at,source_thread_id,target_thread_id,checkpoint_ns,"
+                    "source_snapshot_sha256) VALUES (?,?,?,?,?,?,?,?,'prepared',?,?,?,?,?,?)",
+                    (materialization_id, *expected[:7], rollback_offset, _now(), *expected[7:]),
                 )
-                raise RuntimeError(
-                    f"目标 rollout 已存在未完成的 fork 物化: {active_id}"
-                )
-            meta = connection.execute(
-                "SELECT committed_jsonl_offset FROM database_meta WHERE singleton_id = 1"
-            ).fetchone()
-            if meta is None:
-                raise RuntimeError(
-                    "database_meta singleton 缺失，不能建立 fork journal"
-                )
-            rollback_offset = non_negative_int(
-                meta[0], field="database_meta.committed_jsonl_offset"
-            )
-            result = connection.execute(
-                "INSERT INTO fork_materializations(materialization_id, fork_id, target_session_id, source_session_id, source_checkpoint_id, source_view_id, fork_mode, relationship, status, rollback_jsonl_offset, created_at, source_thread_id, target_thread_id, checkpoint_ns, source_snapshot_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?, ?, ?, ?)",
-                (
-                    materialization_id,
-                    fork_id,
-                    target_session_id,
-                    source_session_id,
-                    source_checkpoint_id,
-                    source_view_id,
-                    fork_mode,
-                    relationship,
-                    rollback_offset,
-                    _now(),
-                    source_thread_id,
-                    target_thread_id,
-                    checkpoint_ns,
-                    source_snapshot_sha256,
-                ),
-            )
-            if result.rowcount != 1:
-                raise RuntimeError("fork materialization journal 未写入")
-            if fork_mode != "full_rollout_copy":
-                prepare_selected_detail_mappings(
-                    self, connection, source_session_id=source_session_id,
-                    source_thread_id=source_thread_id, target_session_id=target_session_id,
-                    target_thread_id=target_thread_id, source_checkpoint_id=source_checkpoint_id,
-                    fork_id=fork_id, checkpoint_ns=checkpoint_ns, timestamp=_now(),
-                )
-            self._storage._active_fork_materializations.add(
-                (target_session_id, target_thread_id, checkpoint_ns)
-            )
-        return materialization_id, fork_id
-
+                if result.rowcount != 1:
+                    raise RuntimeError("fork materialization journal 未写入")
+            return materialization_id, fork_id
+        except BaseException:
+            self._storage._active_fork_materializations.discard(owner)
+            raise
 
     def abort_fork_materialization(
-        self,
-        materialization_id: str,
-        *,
-        target_session_id: str,
-        checkpoint_ns: str = "",
+        self, materialization_id: str, *, target_session_id: str,
+        target_thread_id: str, checkpoint_ns: str = "",
     ) -> None:
-        """显式回滚尚未提交的 fork；崩溃时由 initialize 执行同一恢复路径。"""
-        materialization_id = required_text(
-            materialization_id, field="materialization_id"
-        )
+        """只终结精确目标的 prepared operation，物理清理由创建 owner 执行。"""
+        materialization_id = required_text(materialization_id, field="materialization_id")
         target_session_id = required_text(target_session_id, field="target_session_id")
-        if not isinstance(checkpoint_ns, str):
-            raise TypeError("fork checkpoint_ns 必须是字符串")
-        target_thread_id = self._storage.main_thread_id(target_session_id)
+        target_thread_id = required_text(target_thread_id, field="target_thread_id")
+        checkpoint_ns = strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
+        owner = (target_session_id, target_thread_id, checkpoint_ns)
         with (
-            self._storage._lock(
-                target_thread_id, checkpoint_ns, session_id=target_session_id
-            ),
-            self._storage._connect(
-                target_thread_id, checkpoint_ns, session_id=target_session_id
-            ) as connection,
+            self._storage._lock(target_thread_id, checkpoint_ns, session_id=target_session_id),
+            self._storage._connect(target_thread_id, checkpoint_ns, session_id=target_session_id) as connection,
         ):
-            self._storage._require_v2_runtime(connection)
+            if current_scope(connection) != (target_session_id, target_thread_id):
+                raise RuntimeError("fork abort 当前存储 owner 不一致")
             row = connection.execute(
-                "SELECT status FROM fork_materializations WHERE materialization_id = ? AND target_session_id = ?",
-                (materialization_id, target_session_id),
+                "SELECT status FROM fork_materializations WHERE materialization_id=? "
+                "AND target_session_id=? AND target_thread_id=? AND checkpoint_ns=?",
+                (materialization_id, *owner),
             ).fetchone()
-            if row is None:
-                return
-            status = one_of_text(
-                row[0],
-                {"prepared", "target_committed", "committed", "aborted"},
-                field="fork_materializations.status",
-            )
-            if status in {"committed", "aborted"}:
-                return
-            self._recover_fork_materialization(
-                target_session_id,
-                target_thread_id,
-                checkpoint_ns,
-                connection,
-                self._storage.jsonl_path(
-                    target_session_id,
-                    checkpoint_ns,
-                    thread_id=target_thread_id,
-                ),
-            )
-        self._storage._active_fork_materializations.discard(
-            (target_session_id, target_thread_id, checkpoint_ns)
-        )
+            if row is not None:
+                if row[0] not in {"prepared", "aborted"}:
+                    raise RuntimeError("已提交 fork 必须由创建 owner 终结，不能回滚历史事实")
+                connection.execute(
+                    "UPDATE fork_materializations SET status='aborted',error_message=? "
+                    "WHERE materialization_id=? AND target_session_id=? AND target_thread_id=? "
+                    "AND checkpoint_ns=? AND status='prepared'",
+                    ("fork 创建已终止", materialization_id, *owner),
+                )
+        self._storage._active_fork_materializations.discard(owner)
 
 
     def complete_fork_materialization(
@@ -215,8 +165,8 @@ class ForkMaterializationJournalMixin:
         source_session_id = required_text(row[1], field="fork_materializations.source_session_id")
         if self._storage._fork_source_snapshot_for_session(source_session_id) is not None:
             raise RuntimeError("fork retention 必须在 source snapshot scope 释放后完成")
-        source_checkpoint_id = optional_text(row[2], field="fork_materializations.source_checkpoint_id")
-        source_view_id = optional_text(row[3], field="fork_materializations.source_view_id")
+        optional_text(row[2], field="fork_materializations.source_checkpoint_id")
+        optional_text(row[3], field="fork_materializations.source_view_id")
         relationship = one_of_text(row[4], {"pinned", "detached"}, field="fork_materializations.relationship")
         status = one_of_text(row[5], {"target_committed", "committed"}, field="fork_materializations.status")
         required_sha256(row[9], field="fork_materializations.source_snapshot_sha256")
@@ -224,14 +174,11 @@ class ForkMaterializationJournalMixin:
             self._storage._active_fork_materializations.discard((target_session_id, target_thread_id, checkpoint_ns))
             return fork_id
         if relationship == "pinned":
-            self._retain_fork_source(
-                source_session_id=source_session_id,
-                source_checkpoint_id=source_checkpoint_id,
-                source_view_id=source_view_id,
-                fork_id=fork_id,
-                owner_session_id=target_session_id,
-                checkpoint_ns=checkpoint_ns,
-            )
+            claim = self._catalog_store().get_fork_retention_claim(fork_id)
+            if (claim.source_session_id, claim.target_session_id, claim.state) != (
+                source_session_id, target_session_id, "active",
+            ):
+                raise RuntimeError("pinned fork completion 必须先由异步 owner 激活原 source claim")
         with (
             self._storage._lock(
                 target_thread_id, checkpoint_ns, session_id=target_session_id
@@ -240,6 +187,7 @@ class ForkMaterializationJournalMixin:
                 target_thread_id, checkpoint_ns, session_id=target_session_id
             ) as connection,
         ):
+            self._assert_fork_debug_snapshot_published(connection, materialization_id)
             result = connection.execute(
                 "UPDATE fork_materializations SET status = 'committed', committed_at = ?, error_message = NULL WHERE materialization_id = ? AND status = 'target_committed'",
                 (_now(), materialization_id),
@@ -288,8 +236,6 @@ class ForkMaterializationJournalMixin:
         )
         if not isinstance(checkpoint_ns, str):
             raise TypeError("checkpoint_ns 必须是字符串")
-        if self._storage.main_thread_id(target_session_id) != target_thread_id:
-            raise RuntimeError("fork proof target thread 与 target owner 不一致")
         with self._storage.read_connection(
             target_session_id, target_thread_id, checkpoint_ns,
         ) as connection:
@@ -299,8 +245,9 @@ class ForkMaterializationJournalMixin:
                 "relationship, status, source_thread_id, target_thread_id, "
                 "checkpoint_ns, source_snapshot_sha256 "
                 "FROM fork_materializations WHERE target_session_id = ? "
-                "AND status = 'committed' ORDER BY created_at, materialization_id",
-                (target_session_id,),
+                "AND target_thread_id=? AND checkpoint_ns=? AND materialization_id=? "
+                "AND status='committed' LIMIT 2",
+                (target_session_id, target_thread_id, checkpoint_ns, materialization_id),
             ).fetchall()
             if len(rows) != 1:
                 raise RuntimeError(
@@ -308,6 +255,7 @@ class ForkMaterializationJournalMixin:
                     f"target_session_id={target_session_id}, count={len(rows)}"
                 )
             row = rows[0]
+            self._assert_fork_debug_snapshot_published(connection, materialization_id)
             actual = (
                 required_text(row[0], field="fork_materializations.materialization_id"),
                 required_text(row[1], field="fork_materializations.fork_id"),
@@ -317,7 +265,7 @@ class ForkMaterializationJournalMixin:
                 optional_text(row[5], field="fork_materializations.source_view_id"),
                 one_of_text(
                     row[6],
-                    {"context_fork", "history_prefix_fork", "full_rollout_copy"},
+                    {"context_fork", "view_prefix_fork", "full_rollout_copy"},
                     field="fork_materializations.fork_mode",
                 ),
                 one_of_text(

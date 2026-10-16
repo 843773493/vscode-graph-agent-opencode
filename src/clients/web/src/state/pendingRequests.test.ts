@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ConversationView } from "../types/frontend";
+import type { PendingRequestList } from "../types/backend";
 
 import {
   pendingSnapshotToConversations,
@@ -10,8 +11,9 @@ import {
 
 describe("待处理消息状态", () => {
   test("以后端 enqueue_sequence 排序，并始终放在历史轮次之后", () => {
-    const pending = pendingSnapshotToConversations({
+    const snapshot: PendingRequestList = {
       session_id: "ses_pending",
+      thread_id: "thr_018f0000000070008000000000000001",
       requests: [
         {
           job_id: "job_queued",
@@ -27,8 +29,9 @@ describe("待处理消息状态", () => {
           status: "queued",
           agent_id: "default",
           message_created_at: "2026-07-17T00:00:01Z",
-          created_at: "2026-07-17T00:00:01Z",
-          updated_at: "2026-07-17T00:00:01Z",
+          message_metadata: { updated_at: "2026-07-17T00:05:01Z" },
+          created_at: "2026-07-17T01:00:01Z",
+          updated_at: "2026-07-17T02:00:01Z",
           snapshot_version: 2,
         },
         {
@@ -45,13 +48,21 @@ describe("待处理消息状态", () => {
           status: "queued",
           agent_id: "default",
           message_created_at: "2026-07-17T00:00:02Z",
+          message_metadata: { updated_at: "2026-07-17T00:05:02Z" },
           created_at: "2026-07-17T00:00:02Z",
           updated_at: "2026-07-17T00:00:02Z",
           snapshot_version: 2,
         },
       ],
       snapshot_version: 2,
-    });
+    };
+    const pending = pendingSnapshotToConversations(snapshot);
+    expect(() => pendingSnapshotToConversations({ ...snapshot, thread_id: "thr_other" }))
+      .toThrow("范围之外的消息");
+    expect(() => pendingSnapshotToConversations({
+      ...snapshot,
+      requests: snapshot.requests?.map((request) => ({ ...request, message_metadata: {} })),
+    })).toThrow("缺少 canonical updated_at");
     const history = {
       ...pending[0],
       conversationId: "msg_history",
@@ -67,9 +78,18 @@ describe("待处理消息状态", () => {
         (conversation) => conversation.conversationId,
       ),
     ).toEqual(["msg_history", "msg_interrupt", "msg_queued"]);
+    // Job 控制时间、冻结消息创建时间和 canonical 更新各不相同。
+    expect(pending[1].userMessage?.created_at).toBe("2026-07-17T00:00:01Z");
+    expect(pending[1].userMessage?.updated_at).toBe("2026-07-17T00:05:01Z");
   });
 
-  test("待处理快照独立保留 active job，刷新后仍可停止或继续发送", () => {
+  test("主视图拒绝未声明精确 thread 的 Session 聚合快照", () => {
+    expect(() => writePendingSnapshot(new Map(), new Map(), {
+      session_id: "ses_pending", thread_id: null, requests: [], snapshot_version: 1,
+    })).toThrow("缺少精确 thread 范围");
+  });
+
+  test("待处理快照保留活动 Job 控制状态，但没有 Turn 时不生成聊天回合", () => {
     const pending = new Map();
     const active = new Map<string, string>();
 
@@ -78,6 +98,7 @@ describe("待处理消息状态", () => {
       active,
       {
         session_id: "ses_active",
+        thread_id: "thr_018f0000000070008000000000000001",
         active_job_id: "job_active",
         requests: [],
         snapshot_version: 1,
@@ -86,13 +107,7 @@ describe("待处理消息状态", () => {
     );
 
     expect(active.get("workspace::ses_active")).toBe("job_active");
-    expect(pending.get("workspace::ses_active")).toEqual([
-      expect.objectContaining({
-        jobId: "job_active",
-        activeJobOverlay: true,
-        status: "running",
-      }),
-    ]);
+    expect(pending.has("workspace::ses_active")).toBe(false);
   });
 
   test("后端空快照移除终态任务时仍保留实时失败回合，直到 canonical 历史回填", () => {
@@ -104,6 +119,7 @@ describe("待处理消息状态", () => {
         userMessage: {
           message_id: "msg_failed",
           session_id: "ses_failed",
+          thread_id: "thr_018f0000000070008000000000000001",
           role: "user" as const,
           content: "压缩后继续",
           attachments: [],
@@ -135,6 +151,7 @@ describe("待处理消息状态", () => {
       {
         session_id: "ses_failed",
         active_job_id: null,
+        thread_id: "thr_018f0000000070008000000000000001",
         requests: [],
         snapshot_version: 2,
       },
@@ -165,6 +182,7 @@ describe("待处理消息状态", () => {
       userMessage: {
         message_id: "msg_replay_new",
         session_id: sessionId,
+        thread_id: "thr_018f0000000070008000000000000001",
         role: "user",
         content: "重放上一条回复",
         attachments: [],
@@ -190,6 +208,7 @@ describe("待处理消息状态", () => {
       {
         session_id: sessionId,
         active_job_id: null,
+        thread_id: "thr_018f0000000070008000000000000001",
         requests: [],
         snapshot_version: 1,
       },

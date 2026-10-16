@@ -37,7 +37,7 @@ async def test_freeze_serde_retry_resume_keep_null_parent_and_all_members(member
     policy = _policy()
     admission = _admission("same-user-turn")
     execution = await coordinator.freeze_execution(admission=admission, policy=policy)
-    frozen = await coordinator.prepare_model_call(parent=execution, model_call_id="first-call", policy=policy)
+    frozen = await coordinator.commit_model_call(await coordinator.capture_model_call(parent=execution, model_call_id="first-call", policy=policy))
     parent = frozen.bindings[-1]
     published = members_registry.snapshot("mcp:catalog")
     assert parent.display_uri is None
@@ -52,7 +52,7 @@ async def test_freeze_serde_retry_resume_keep_null_parent_and_all_members(member
         published, generation=published.generation + 1,
         members=(replace(published.members[0], schema_hash="sha256:" + "d" * 64), *published.members[1:]),
     ))
-    retry = await coordinator.prepare_model_call(parent=execution, model_call_id="first-call", policy=policy)
+    retry = await coordinator.commit_model_call(await coordinator.capture_model_call(parent=execution, model_call_id="first-call", policy=policy))
     assert retry.to_dict() == frozen.to_dict()
     resumed = await coordinator.freeze_execution(
         admission=_admission("same-user-turn", execution_id="resumed-execution"), policy=policy,
@@ -64,6 +64,6 @@ async def test_freeze_serde_retry_resume_keep_null_parent_and_all_members(member
         "execution_id":resumed.execution_id,
         "activation_snapshot_id":resumed.activation_snapshot_id,
     }
-    future = await coordinator.prepare_model_call(parent=resumed, model_call_id="second-call", policy=policy)
+    future = await coordinator.commit_model_call(await coordinator.capture_model_call(parent=resumed, model_call_id="second-call", policy=policy))
     assert future.bindings[-1].members != parent.members
     assert future.bindings[:-1] == execution.bindings

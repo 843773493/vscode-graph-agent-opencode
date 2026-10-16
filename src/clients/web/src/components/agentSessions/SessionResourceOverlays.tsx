@@ -10,7 +10,8 @@ import type { SessionResourceExplorerController } from "../../hooks/session/useS
 
 export interface SessionFolderContextMenu {
   workspaceId: string;
-  folderId: string;
+  nodeId: string;
+  folderId: string | null;
   parentNodeId: string | null;
   name: string;
   x: number;
@@ -94,6 +95,9 @@ export default function SessionResourceOverlays({
   setActionError,
   handleError,
 }: SessionResourceOverlaysProps): ReactNode {
+  const canonicalFolderMenu = folderMenu?.folderId
+    ? { ...folderMenu, folderId: folderMenu.folderId }
+    : null;
   return (
     <>
     {workspaceFolderMenu ? (
@@ -199,8 +203,8 @@ export default function SessionResourceOverlays({
           role="menu"
           onPointerDown={(event) => event.stopPropagation()}
         >
-          <button type="button" role="menuitem" onClick={() => {
-            const target = folderMenu;
+          {canonicalFolderMenu ? <button type="button" role="menuitem" onClick={() => {
+            const target = canonicalFolderMenu;
             setFolderMenu(null);
             void onCreateSessionInFolder(target.workspaceId, target.folderId)
               .then(() => explorer.loadBranch(target.workspaceId, target.folderId))
@@ -209,14 +213,14 @@ export default function SessionResourceOverlays({
           }}>
             <span className="codicon codicon-comment-add agent-sessions-menu-item-icon" aria-hidden="true" />
             <span className="agent-sessions-menu-item-label">新建会话</span>
-          </button>
+          </button> : null}
           <button type="button" role="menuitem" onClick={() => {
             const target = folderMenu;
             setFolderMenu(null);
             setResourceDialog({
               kind: "create_session_folder",
               workspaceId: target.workspaceId,
-              folderId: target.folderId,
+              folderId: target.nodeId,
               parentNodeId: target.parentNodeId,
               name: target.name,
             });
@@ -224,8 +228,8 @@ export default function SessionResourceOverlays({
             <span className="codicon codicon-new-folder agent-sessions-menu-item-icon" aria-hidden="true" />
             <span className="agent-sessions-menu-item-label">新建子文件夹</span>
           </button>
-          <button type="button" role="menuitem" onClick={() => {
-            const target = folderMenu;
+          {canonicalFolderMenu ? <button type="button" role="menuitem" onClick={() => {
+            const target = canonicalFolderMenu;
             setFolderMenu(null);
             void copyTextToClipboard(target.folderId)
               .then(() => onStatusChange(`已复制会话文件夹 ID: ${target.folderId}`))
@@ -233,7 +237,7 @@ export default function SessionResourceOverlays({
           }}>
             <span className="codicon codicon-copy agent-sessions-menu-item-icon" aria-hidden="true" />
             <span className="agent-sessions-menu-item-label">复制文件夹 ID</span>
-          </button>
+          </button> : null}
           <button type="button" role="menuitem" title="先复制会话 ID 或会话信息，再在目标文件夹执行此操作" onClick={() => {
             const target = folderMenu;
             setFolderMenu(null);
@@ -242,16 +246,17 @@ export default function SessionResourceOverlays({
               .then((sessionId) => explorer.assignSessionFolder(
                 target.workspaceId,
                 sessionId,
-                target.folderId,
+                target.nodeId,
               ).then(() => sessionId))
-              .then((sessionId) => onStatusChange(`已将会话 ${sessionId} 移动到 ${target.name}`))
+              .then((sessionId) => onStatusChange(`会话 ${sessionId} 移入 ${target.name} 的变更已保存本地，等待提交`))
               .catch((error) => handleError("移动剪贴板会话失败", error));
           }}>
             <span className="codicon codicon-move agent-sessions-menu-item-icon" aria-hidden="true" />
             <span className="agent-sessions-menu-item-label">将剪贴板会话移动到此处</span>
           </button>
+          {canonicalFolderMenu ? <>
           <button type="button" role="menuitem" title="先复制目标文件夹 ID，再在当前文件夹执行此操作" onClick={() => {
-            const target = folderMenu;
+            const target = canonicalFolderMenu;
             setFolderMenu(null);
             void readTextFromClipboard()
               .then(extractFolderIdFromClipboardText)
@@ -261,15 +266,15 @@ export default function SessionResourceOverlays({
                 targetFolderId,
                 target.parentNodeId,
               ))
-              .then(() => onStatusChange(`已移动文件夹 ${target.name}`))
+              .then(() => onStatusChange(`文件夹 ${target.name} 的移动变更已保存本地，等待提交`))
               .catch((error) => handleError("移动文件夹失败", error));
           }}>
             <span className="codicon codicon-folder-opened agent-sessions-menu-item-icon" aria-hidden="true" />
             <span className="agent-sessions-menu-item-label">移动到剪贴板文件夹</span>
           </button>
-          {folderMenu.parentNodeId ? (
+          {canonicalFolderMenu.parentNodeId ? (
             <button type="button" role="menuitem" onClick={() => {
-              const target = folderMenu;
+              const target = canonicalFolderMenu;
               setFolderMenu(null);
               void explorer.moveSessionFolder(
                 target.workspaceId,
@@ -277,7 +282,7 @@ export default function SessionResourceOverlays({
                 null,
                 target.parentNodeId,
               )
-                .then(() => onStatusChange(`已将 ${target.name} 移动到工作区根目录`))
+                .then(() => onStatusChange(`文件夹 ${target.name} 移至工作区根目录的变更已保存本地，等待提交`))
                 .catch((error) => handleError("移动文件夹失败", error));
             }}>
               <span className="codicon codicon-root-folder agent-sessions-menu-item-icon" aria-hidden="true" />
@@ -285,7 +290,7 @@ export default function SessionResourceOverlays({
             </button>
           ) : null}
           <button type="button" role="menuitem" onClick={() => {
-            const target = folderMenu;
+            const target = canonicalFolderMenu;
             setFolderMenu(null);
             setResourceDialog({
               kind: "rename_session_folder",
@@ -299,7 +304,7 @@ export default function SessionResourceOverlays({
             <span className="agent-sessions-menu-item-label">重命名</span>
           </button>
           <button type="button" role="menuitem" className="danger agent-sessions-menu-item-separated" onClick={() => {
-            const target = folderMenu;
+            const target = canonicalFolderMenu;
             setFolderMenu(null);
             setResourceDialog({
               kind: "delete_session_folder",
@@ -312,6 +317,7 @@ export default function SessionResourceOverlays({
             <span className="codicon codicon-trash agent-sessions-menu-item-icon" aria-hidden="true" />
             <span className="agent-sessions-menu-item-label">删除文件夹及内容</span>
           </button>
+          </> : <div role="status">文件夹尚在同步，可创建子文件夹或移入已有会话</div>}
         </div>
       </AnchoredOverlay>
     ) : null}
@@ -352,13 +358,12 @@ export default function SessionResourceOverlays({
           return;
         }
         if (resourceDialog.kind === "create_session_folder") {
-          const outcome = await explorer.createSessionFolder(
+          await explorer.createSessionFolder(
             resourceDialog.workspaceId,
             value,
             resourceDialog.folderId,
           );
-          onStatusChange(outcome === "unknown"
-            ? `文件夹 ${value} 状态待确认` : `新建文件夹 ${value} 已受理，等待提交`);
+          onStatusChange(`文件夹 ${value} 已保存本地待同步变更，等待提交`);
           return;
         }
         if (resourceDialog.kind === "rename_session_folder") {
@@ -368,16 +373,20 @@ export default function SessionResourceOverlays({
             value,
             resourceDialog.parentNodeId,
           );
-          onStatusChange(`已重命名文件夹为 ${value}`);
+          onStatusChange(`文件夹重命名为 ${value} 已保存本地待同步变更，等待提交`);
           return;
         }
-        const deletedCurrentSession = await explorer.deleteSessionFolder(
+        const { operationId, completion } = await explorer.deleteSessionFolder(
           resourceDialog.workspaceId,
           resourceDialog.folderId,
           resourceDialog.parentNodeId,
         );
-        await onSessionFolderDeleted(resourceDialog.workspaceId, deletedCurrentSession);
-        onStatusChange(`已递归删除文件夹 ${resourceDialog.name}`);
+        const { workspaceId, name } = resourceDialog;
+        onStatusChange(`文件夹 ${name} 的删除操作 ${operationId} 已保存本地，等待提交和排空`);
+        void completion.then(async (deletedCurrentSession) => {
+          await onSessionFolderDeleted(workspaceId, deletedCurrentSession);
+          onStatusChange(`已递归删除文件夹 ${name}`);
+        }).catch((error: unknown) => handleError("递归删除未完成", error));
       }}
     />
     </>

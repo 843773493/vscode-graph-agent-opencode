@@ -30,30 +30,14 @@ const DEFAULT_GROUP_OPEN: Record<ResourceAttentionGroup, boolean> = {
   history: false,
 };
 
-export default function ResourcePanel({
-  resources,
-  loading,
-  error,
-  loadedAt,
-  sessionId,
-  workspaceId,
-  extensionWindow = false,
-  activePreviewPath,
-  onRefresh,
-  onControl,
-  onOwnerControl,
-  onOpenTerminalPreview,
-  onOpenTerminalExtension,
-  onOpenBrowserPreview,
-  onCloseResourcePreview,
-  onCreateConnection,
-}: {
+type ResourcePanelProps = {
   resources: SessionResource[];
   loading: boolean;
   error: string | null;
   loadedAt: string | null;
   sessionId: string;
   workspaceId: string | null;
+  mainThread: ResourceThreadRef | null;
   extensionWindow?: boolean;
   activePreviewPath: string | null;
   onRefresh: () => void;
@@ -70,64 +54,138 @@ export default function ResourcePanel({
     kind: Extract<SessionResourceKind, "terminal" | "browser">,
     resourceId: string,
   ) => Promise<void>;
-  onCreateConnection: (kind: CreatableSessionConnectionKind) => Promise<void>;
-}) {
-  const [busyResourceId, setBusyResourceId] = useState<string | null>(null);
+  onCreateConnection: (
+    kind: CreatableSessionConnectionKind,
+    thread: ResourceThreadRef,
+  ) => Promise<void>;
+};
+
+type PendingResourceOperation = {
+  requestId: number;
+  resourceId: string;
+};
+
+type PendingCreateOperation = {
+  requestId: number;
+  kind: CreatableSessionConnectionKind;
+};
+
+type OpenedResource = {
+  requestId: number;
+  resourceId: string;
+};
+
+export default function ResourcePanel(props: ResourcePanelProps) {
+  return (
+    <ResourcePanelForOwner
+      key={JSON.stringify([props.workspaceId, props.sessionId])}
+      {...props}
+    />
+  );
+}
+
+function ResourcePanelForOwner({
+  resources,
+  loading,
+  error,
+  loadedAt,
+  sessionId,
+  workspaceId,
+  mainThread,
+  extensionWindow = false,
+  activePreviewPath,
+  onRefresh,
+  onControl,
+  onOwnerControl,
+  onOpenTerminalPreview,
+  onOpenTerminalExtension,
+  onOpenBrowserPreview,
+  onCloseResourcePreview,
+  onCreateConnection,
+}: ResourcePanelProps) {
+  const [busyOperation, setBusyOperation] = useState<PendingResourceOperation | null>(null);
   const [notice, setNotice] = useState("");
   const [noticeTechnicalDetails, setNoticeTechnicalDetails] = useState("");
-  const [openedTerminalId, setOpenedTerminalId] = useState<string | null>(null);
-  const [openedBrowserId, setOpenedBrowserId] = useState<string | null>(null);
+  const [openedTerminal, setOpenedTerminal] = useState<OpenedResource | null>(null);
+  const [openedBrowser, setOpenedBrowser] = useState<OpenedResource | null>(null);
   const [openGroups, setOpenGroups] = useState(DEFAULT_GROUP_OPEN);
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
-  const [creatingKind, setCreatingKind] = useState<CreatableSessionConnectionKind | null>(null);
+  const [creatingOperation, setCreatingOperation] = useState<PendingCreateOperation | null>(null);
+  const mountedRef = useRef(false);
+  const requestSequenceRef = useRef(0);
+  const currentRequestRef = useRef(0);
   const createMenuAnchorRef = useRef<HTMLDivElement | null>(null);
   const confirm = useWarmConfirm();
+  const busyResourceId = busyOperation?.resourceId ?? null;
+  const creatingKind = creatingOperation?.kind ?? null;
 
   useEffect(() => {
-    setOpenGroups(DEFAULT_GROUP_OPEN);
-  }, [sessionId]);
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const beginRequest = () => {
+    const requestId = ++requestSequenceRef.current;
+    currentRequestRef.current = requestId;
+    return requestId;
+  };
+  const isCurrentRequest = (requestId: number) =>
+    mountedRef.current && currentRequestRef.current === requestId;
+  const presentNotice = (
+    requestId: number,
+    message: string,
+    technicalDetails = "",
+  ) => {
+    if (!isCurrentRequest(requestId)) return;
+    setNotice(message);
+    setNoticeTechnicalDetails(technicalDetails);
+  };
 
   useEffect(() => {
-    if (!openedTerminalId) {
+    if (!openedTerminal || !isCurrentRequest(openedTerminal.requestId)) {
       return;
     }
     const terminal = resources.find(
       (resource) =>
-        resource.kind === "terminal" && resource.resource_id === openedTerminalId,
+        resource.kind === "terminal" && resource.resource_id === openedTerminal.resourceId,
     );
     if (!terminal || terminal.status === "running") {
       return;
     }
-    setNoticeTechnicalDetails("");
-    setNotice(
-      `终端 ${openedTerminalId} ${statusLabel(terminal.status)}，当前不可连接；历史信息仍可在展开详情中查看。`,
+    presentNotice(
+      openedTerminal.requestId,
+      `终端 ${openedTerminal.resourceId} ${statusLabel(terminal.status)}，当前不可连接；历史信息仍可在展开详情中查看。`,
     );
-    setOpenedTerminalId(null);
-  }, [openedTerminalId, resources]);
+    setOpenedTerminal((current) => current?.requestId === openedTerminal.requestId ? null : current);
+  }, [openedTerminal, resources]);
 
   useEffect(() => {
-    if (!openedBrowserId) {
+    if (!openedBrowser || !isCurrentRequest(openedBrowser.requestId)) {
       return;
     }
     const browser = resources.find(
       (resource) =>
-        resource.kind === "browser" && resource.resource_id === openedBrowserId,
+        resource.kind === "browser" && resource.resource_id === openedBrowser.resourceId,
     );
     if (!browser || browser.status === "running") {
       return;
     }
-    setNoticeTechnicalDetails("");
-    setNotice(
-      `浏览器 ${openedBrowserId} ${statusLabel(browser.status)}，当前不可连接；历史信息仍可在展开详情中查看。`,
+    presentNotice(
+      openedBrowser.requestId,
+      `浏览器 ${openedBrowser.resourceId} ${statusLabel(browser.status)}，当前不可连接；历史信息仍可在展开详情中查看。`,
     );
-    setOpenedBrowserId(null);
-  }, [openedBrowserId, resources]);
+    setOpenedBrowser((current) => current?.requestId === openedBrowser.requestId ? null : current);
+  }, [openedBrowser, resources]);
 
   const handleControl = async (
     kind: SessionResourceKind,
     resourceId: string,
     action: SessionResourceAction,
   ) => {
+    if (!mountedRef.current) return;
+    const requestId = beginRequest();
     if (action === "delete") {
       const targetLabel = kind === "terminal"
         ? "终端"
@@ -144,113 +202,136 @@ export default function ResourcePanel({
         confirmText: "删除",
         danger: true,
       });
-      if (!confirmed) {
+      if (!confirmed || !isCurrentRequest(requestId)) {
         return;
       }
     }
-    setBusyResourceId(resourceId);
+    setBusyOperation({ requestId, resourceId });
     setNotice("");
     setNoticeTechnicalDetails("");
-    setOpenedTerminalId(null);
-    setOpenedBrowserId(null);
-    void onControl(kind, resourceId, action)
-      .then(async () => {
-        if (action === "delete" && (kind === "terminal" || kind === "browser")) {
-          await onCloseResourcePreview(kind, resourceId);
-        }
-        if (action === "resume" && kind === "browser") {
-          handleOpenBrowser(resourceId);
-        }
-        setNoticeTechnicalDetails("");
-        setNotice(`已${actionLabelForKind(kind, action)}${kindLabel(kind)}：${resourceId}`);
-      })
-      .catch((controlError: unknown) => {
-        const technicalDetails = errorMessage(controlError);
-        setNoticeTechnicalDetails(technicalDetails);
-        setNotice(
-          kind === "browser" && action === "resume"
-            ? "重新打开失败：恢复检查点不可用或浏览器服务未就绪。你可以重试，或新建替代浏览器；原记录仍保留。"
-            : `未能${actionLabelForKind(kind, action)}。请重试；问题持续时可查看技术详情。`,
-        );
-      })
-      .finally(() => {
-        setBusyResourceId(null);
-      });
+    setOpenedTerminal(null);
+    setOpenedBrowser(null);
+    try {
+      await onControl(kind, resourceId, action);
+      if (!isCurrentRequest(requestId)) return;
+      if (action === "delete" && (kind === "terminal" || kind === "browser")) {
+        await onCloseResourcePreview(kind, resourceId);
+        if (!isCurrentRequest(requestId)) return;
+      }
+      if (action === "resume" && kind === "browser" && isCurrentRequest(requestId)) {
+        handleOpenBrowser(resourceId, requestId);
+      }
+      presentNotice(requestId, `已${actionLabelForKind(kind, action)}${kindLabel(kind)}：${resourceId}`);
+    } catch (controlError: unknown) {
+      const technicalDetails = errorMessage(controlError);
+      presentNotice(
+        requestId,
+        kind === "browser" && action === "resume"
+          ? "重新打开失败：恢复检查点不可用或浏览器服务未就绪。你可以重试，或新建替代浏览器；原记录仍保留。"
+          : `未能${actionLabelForKind(kind, action)}。请重试；问题持续时可查看技术详情。`,
+        technicalDetails,
+      );
+    } finally {
+      if (mountedRef.current) {
+        setBusyOperation((current) => current?.requestId === requestId ? null : current);
+      }
+    }
   };
 
   const handleCopy = (resourceId: string) => {
+    if (!mountedRef.current) return;
+    const requestId = beginRequest();
     // 复制统一走 utils/clipboard 的唯一实现：Clipboard API 被拒绝、非安全上下文
     // 下兼容复制也失败时，必须在同一处给出可见原因，不能把失败静默吞掉。
     void copyTextToClipboard(resourceId)
       .then(() => {
-        setNoticeTechnicalDetails("");
-        setNotice(`已复制 UUID: ${resourceId}`);
+        presentNotice(requestId, `已复制 UUID: ${resourceId}`);
       })
       .catch((copyError: unknown) => {
-        setNoticeTechnicalDetails(errorMessage(copyError));
-        setNotice("复制失败：可展开技术详情查看原因，或选中 ID 手动复制。");
+        presentNotice(requestId, "复制失败：可展开技术详情查看原因，或选中 ID 手动复制。", errorMessage(copyError));
       });
   };
 
   const handleOwnerControl = async (resourceId: string, action: "promote" | "detach" | "attach", thread?: ResourceThreadRef) => {
-    if (!onOwnerControl) return;
-    setBusyResourceId(resourceId);
+    if (!mountedRef.current || !onOwnerControl) return;
+    const requestId = beginRequest();
+    setBusyOperation({ requestId, resourceId });
     setNotice("");
     setNoticeTechnicalDetails("");
     try {
       await onOwnerControl(resourceId, action, thread);
-      setNotice(action === "promote" ? "资源已保留到当前工作区" : "已更新资源与线程的关联");
+      presentNotice(requestId, action === "promote" ? "资源已保留到当前工作区" : "已更新资源与线程的关联");
     } catch (cause) {
-      setNotice("资源管理失败，请查看错误详情后重试。");
-      setNoticeTechnicalDetails(errorMessage(cause));
+      presentNotice(requestId, "资源管理失败，请查看错误详情后重试。", errorMessage(cause));
     } finally {
-      setBusyResourceId(null);
+      if (mountedRef.current) {
+        setBusyOperation((current) => current?.requestId === requestId ? null : current);
+      }
     }
   };
 
   const handleOpenTerminal = (resourceId: string) => {
+    if (!mountedRef.current) return;
+    const requestId = beginRequest();
     if (!workspaceId) {
-      setNotice("打开终端失败：当前会话缺少 Gateway workspace_id");
+      presentNotice(requestId, "打开终端失败：当前会话缺少 Gateway workspace_id");
       return;
     }
-    setOpenedTerminalId(resourceId);
+    setOpenedTerminal({ requestId, resourceId });
     onOpenTerminalPreview(resourceId);
-    setNoticeTechnicalDetails("");
-    setNotice("已在主窗口底部面板打开终端；连接管理请在运行与连接中查看");
+    presentNotice(requestId, "已在主窗口底部面板打开终端；连接管理请在运行与连接中查看");
   };
-  const handleOpenBrowser = (resourceId: string) => {
+  const handleOpenBrowser = (resourceId: string, existingRequestId?: number) => {
+    if (!mountedRef.current) return;
+    const requestId = existingRequestId ?? beginRequest();
     if (!workspaceId) {
-      setNotice("打开浏览器失败：当前会话缺少 Gateway workspace_id");
+      presentNotice(requestId, "打开浏览器失败：当前会话缺少 Gateway workspace_id");
       return;
     }
-    setOpenedBrowserId(resourceId);
+    setOpenedBrowser({ requestId, resourceId });
     onOpenBrowserPreview(resourceId);
-    setNoticeTechnicalDetails("");
-    setNotice("已在扩展窗口打开浏览器预览；连接状态请在当前运行与连接界面查看");
+    presentNotice(requestId, "已在扩展窗口打开浏览器预览；连接状态请在当前运行与连接界面查看");
   };
+  const createThread = mainThread?.session_id === sessionId && mainThread.thread_id
+    ? mainThread
+    : null;
   const handleCreateConnection = (kind: CreatableSessionConnectionKind) => {
+    if (!mountedRef.current) return;
+    const requestId = beginRequest();
     setCreateMenuOpen(false);
-    setCreatingKind(kind);
+    if (!createThread) {
+      presentNotice(requestId, "新建连接失败：当前会话主线程尚未解析");
+      return;
+    }
+    setCreatingOperation({ requestId, kind });
     setNotice("");
     setNoticeTechnicalDetails("");
-    void onCreateConnection(kind)
+    void onCreateConnection(kind, createThread)
       .then(() => {
         const option = CREATABLE_SESSION_CONNECTIONS.find(
           (candidate) => candidate.kind === kind,
         );
-        setNotice(
+        presentNotice(
+          requestId,
           kind === "terminal"
             ? "终端创建成功，已在主窗口底部面板打开"
             : `${option?.label ?? "新建连接"}成功；连接管理请在运行与连接中查看`,
         );
       })
       .catch((createError: unknown) => {
-        setNotice("新建连接失败。请确认当前工作区仍在线后重试。");
-        setNoticeTechnicalDetails(
-          errorMessage(createError),
-        );
+        const details = errorMessage(createError);
+        presentNotice(requestId, details);
       })
-      .finally(() => setCreatingKind(null));
+      .finally(() => {
+        if (mountedRef.current) {
+          setCreatingOperation((current) => current?.requestId === requestId ? null : current);
+        }
+      });
+  };
+  const handleRefresh = () => {
+    if (!mountedRef.current) return;
+    beginRequest();
+    onRefresh();
   };
   const connectionResources = resources.filter(
     (resource) => resource.kind === "browser" || resource.kind === "terminal",
@@ -284,7 +365,7 @@ export default function ResourcePanel({
         <button
           type="button"
           className="resource-icon-button"
-          onClick={onRefresh}
+          onClick={handleRefresh}
           disabled={loading || !sessionId}
           title="刷新后台连接"
           aria-label="刷新后台连接"
@@ -296,7 +377,8 @@ export default function ResourcePanel({
             type="button"
             className="resource-refresh-button resource-create-button"
             onClick={() => setCreateMenuOpen((open) => !open)}
-            disabled={creatingKind !== null}
+            disabled={creatingKind !== null || !createThread}
+            title={!createThread ? "等待解析当前会话主线程" : undefined}
             aria-haspopup="menu"
             aria-expanded={createMenuOpen}
           >
@@ -315,6 +397,7 @@ export default function ResourcePanel({
                   key={option.kind}
                   type="button"
                   role="menuitem"
+                  disabled={!createThread}
                   onClick={() => handleCreateConnection(option.kind)}
                 >
                   <span className={`codicon ${option.icon}`} aria-hidden="true" />

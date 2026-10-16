@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 
 from app.core.identifier import create_uuid_hex
+from app.domain.itemized import hashing
+from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
     contribution_content_hash,
@@ -20,6 +22,9 @@ from app.domain.itemized.request_plan import (
     ContextContribution,
     ContextRequestPlan,
     SourceBinding,
+)
+from app.services.infrastructure.rollout_context.assembly.plans import (
+    registry as plan_registry,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
     create_registration,
@@ -124,28 +129,18 @@ def _create(connection, draft):
         return create_registration(connection, draft)
 
 
-@pytest.mark.parametrize("field", ["source_provenance_json", "source_manifest_json"])
-def test_runtime_registration_rejects_import_evidence(registry_db, draft, field):
-    _saver, session, connection, _accepted = registry_db
-    _create(connection, draft)
-    with (
-        pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"),
-        connection,
-    ):
-        connection.execute(f"UPDATE context_plans SET {field} = '{{}}'")
-    connection.execute("PRAGMA ignore_check_constraints = ON")
-    with connection:
-        connection.execute(f"UPDATE context_plans SET {field} = '{{}}'")
-    with pytest.raises(ValueError, match="runtime draft 不得冒充导入记录"):
-        read_registration(connection, session, draft.thread_id, draft.plan_id)
 
 
-def test_registry_roundtrip_has_no_early_binding_or_body(registry_db, draft):
+def test_registry_roundtrip_has_no_early_binding_or_body(registry_db, draft, monkeypatch):
     saver, session, connection, _accepted = registry_db
     before = (saver._storage.storage.root(session) / "rollout.jsonl").read_bytes()
     committed_offset = connection.execute(
         "SELECT committed_jsonl_offset FROM database_meta"
     ).fetchone()
+    def refuse_readback(*args, **kwargs):
+        raise AssertionError("新注册应返回本次写入值，不冷读刚写入的 registry")
+
+    monkeypatch.setattr(plan_registry, "read_registration", refuse_readback)
     registered = _create(connection, draft)
     assert registered.revision == 0
     assert registered.plan_state == "unsealed"
@@ -154,6 +149,9 @@ def test_registry_roundtrip_has_no_early_binding_or_body(registry_db, draft):
     assert registered.draft.contributions[0].body is None
     assert registered.draft.contributions[0].contribution_ordinal is None
     assert registered.draft.tool_set_refs[0].assembly_id is None
+    assert registered.draft_json == connection.execute(
+        "SELECT draft_json FROM context_plans"
+    ).fetchone()[0]
     assert connection.execute(
         "SELECT assembly_id FROM tool_set_snapshots"
     ).fetchall() == [(None,)]
@@ -281,6 +279,71 @@ def test_draft_revision_is_cas_and_keeps_initial_creation_identity(registry_db, 
     assert read_registration(connection, session, draft.thread_id, draft.plan_id) == revised
 
 
+def test_registry_each_operation_encodes_each_draft_read_or_write_once(
+    registry_db, draft, monkeypatch
+):
+    _saver, session, connection, _accepted = registry_db
+    encoded_revisions = []
+    encode = hashing.canonical_json_bytes
+
+    def observe(value):
+        if isinstance(value, dict) and "plan_creation_idempotency_key" in value:
+            encoded_revisions.append(value["history_view_revision"])
+        return encode(value)
+
+    monkeypatch.setattr(hashing, "canonical_json_bytes", observe)
+    created = _create(connection, draft)
+    # 新写入直接返回本次不可变值；下一次独立冷读仍完整核验。
+    assert encoded_revisions == [0]
+    encoded_revisions.clear()
+    assert read_registration(connection, session, draft.thread_id, draft.plan_id) == created
+    assert encoded_revisions == [0]
+    encoded_revisions.clear()
+    changed = replace(draft, history_view_revision=7)
+    with connection:
+        connection.execute("BEGIN IMMEDIATE")
+        revised = revise_registration(connection, changed, expected_revision=0)
+    # 修订前读取当前版本，CAS 后直接返回本次写入值。
+    assert encoded_revisions == [0, 7]
+    assert revised.revision == 1
+    assert revised.creation_hash == created.creation_hash
+    encoded_revisions.clear()
+    assert read_registration(connection, session, draft.thread_id, draft.plan_id) == revised
+    assert encoded_revisions == [7, 0]
+    raw, digest = connection.execute(
+        "SELECT draft_json, draft_hash FROM context_plans"
+    ).fetchone()
+    assert raw == encode(revised.draft.to_dict()).decode("utf-8")
+    assert digest == sha256_jcs(json.loads(raw))
+
+
+@pytest.mark.parametrize("failure", ["noncanonical", "digest", "typed"])
+def test_registry_cold_read_keeps_manifest_error_before_typed_parser(
+    registry_db, draft, failure
+):
+    _saver, session, connection, _accepted = registry_db
+    _create(connection, draft)
+    original = connection.execute("SELECT draft_json FROM context_plans").fetchone()[0]
+    value = json.loads(original)
+    value["selection_policy"] = None
+    encoded = canonical_json_bytes(value).decode("utf-8")
+    raw = " " + encoded if failure == "noncanonical" else encoded
+    digest = sha256_jcs(value) if failure == "typed" else sha256_jcs("wrong")
+    with connection:
+        connection.execute(
+            "UPDATE context_plans SET draft_json = ?, draft_hash = ?", (raw, digest)
+        )
+    before = connection.execute("SELECT * FROM context_plans").fetchall()
+    if failure == "typed":
+        with pytest.raises(ItemSchemaError, match="selection_policy"):
+            read_registration(connection, session, draft.thread_id, draft.plan_id)
+    else:
+        with pytest.raises(ValueError, match="plan draft manifest hash 不一致") as error:
+            read_registration(connection, session, draft.thread_id, draft.plan_id)
+        assert type(error.value) is ValueError
+    assert connection.execute("SELECT * FROM context_plans").fetchall() == before
+
+
 @pytest.mark.parametrize("tamper", ["creation_hash", "creation_json"])
 def test_revised_plan_still_authenticates_initial_creation_preimage(
     registry_db, draft, tamper
@@ -378,36 +441,25 @@ def test_seal_requires_current_draft_and_atomic_snapshot(registry_db):
         execution_id=str(accepted["initial_execution_id"]),
         provider_version="fixture",
     )
-    preflight_seal(
-        connection,
-        snapshot,
-        seal_idempotency_key="seal-key",
-        detail_key=None,
-        seal_input_hash=sha256_jcs("storage-seal-test-input"),
-    )
+    seal_options = {
+        "seal_idempotency_key": "seal-key",
+        "detail_key": None,
+        "seal_input_hash": sha256_jcs("storage-seal-test-input"),
+    }
+    preflight_seal(connection, snapshot, **seal_options)
     with pytest.raises(ValueError, match="同事务 assembly"), connection:
         connection.execute("BEGIN IMMEDIATE")
-        bind_sealed_registration(
-            connection,
-            snapshot,
-            seal_idempotency_key="seal-key",
-            detail_key=None,
-            seal_input_hash=sha256_jcs("storage-seal-test-input"),
-        )
+        registered = preflight_seal(connection, snapshot, **seal_options)
+        bind_sealed_registration(connection, registered)
     assert (
         read_registration(connection, session, draft.thread_id, draft.plan_id).plan_state
         == "unsealed"
     )
     with pytest.raises(RuntimeError, match="injected crash"), connection:
         connection.execute("BEGIN IMMEDIATE")
+        registered = preflight_seal(connection, snapshot, **seal_options)
         _insert_snapshot(connection, snapshot)
-        bind_sealed_registration(
-            connection,
-            snapshot,
-            seal_idempotency_key="seal-key",
-            detail_key=None,
-            seal_input_hash=sha256_jcs("storage-seal-test-input"),
-        )
+        bind_sealed_registration(connection, registered)
         assert (
             read_registration(connection, session, draft.thread_id, draft.plan_id).plan_state
             == "sealed"
@@ -422,23 +474,13 @@ def test_seal_requires_current_draft_and_atomic_snapshot(registry_db):
     )
     with connection:
         connection.execute("BEGIN IMMEDIATE")
+        registered = preflight_seal(connection, snapshot, **seal_options)
         _insert_snapshot(connection, snapshot)
-        bind_sealed_registration(
-            connection,
-            snapshot,
-            seal_idempotency_key="seal-key",
-            detail_key=None,
-            seal_input_hash=sha256_jcs("storage-seal-test-input"),
-        )
+        bind_sealed_registration(connection, registered)
     with connection:
         connection.execute("BEGIN IMMEDIATE")
-        bind_sealed_registration(
-            connection,
-            snapshot,
-            seal_idempotency_key="seal-key",
-            detail_key=None,
-            seal_input_hash=sha256_jcs("storage-seal-test-input"),
-        )
+        registered = preflight_seal(connection, snapshot, **seal_options)
+        bind_sealed_registration(connection, registered)
     with pytest.raises(ValueError, match="assembly-idempotency-conflict"):
         preflight_seal(
             connection,
@@ -698,16 +740,16 @@ def test_tool_registry_binding_is_atomic_and_plan_cannot_get_second_assembly(
         execution_id=str(accepted["initial_execution_id"]),
         provider_version="fixture",
     )
+    seal_options = {
+        "seal_idempotency_key": "seal-tools",
+        "detail_key": None,
+        "seal_input_hash": sha256_jcs("storage-seal-test-input"),
+    }
     with connection:
         connection.execute("BEGIN IMMEDIATE")
+        registered = preflight_seal(connection, snapshot, **seal_options)
         _insert_snapshot(connection, snapshot)
-        bind_sealed_registration(
-            connection,
-            snapshot,
-            seal_idempotency_key="seal-tools",
-            detail_key=None,
-            seal_input_hash=sha256_jcs("storage-seal-test-input"),
-        )
+        bind_sealed_registration(connection, registered)
     assert connection.execute(
         "SELECT assembly_id FROM tool_set_snapshots"
     ).fetchall() == [("tools-assembly",)]

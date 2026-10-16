@@ -8,6 +8,7 @@ import type { ConversationView } from "../../types/frontend";
 import { dedupeTraceEvents, isJobTerminalTraceType } from "../traceEvents";
 import { conversationsMatch, TERMINAL_TURN_STATUSES } from "./conversationMerge";
 import { writePendingList } from "./pendingMap";
+import type { TurnRecord } from "../session/turnTimeline";
 import {
   compactPendingConversationEvents,
   conversationMatchesTraceEvent,
@@ -58,59 +59,59 @@ export function writeDispatchActiveJob(
 export function pendingSnapshotToConversations(
   snapshot: PendingRequestList,
 ): ConversationView[] {
-  return [...(snapshot.requests ?? [])]
+  if (!snapshot.thread_id) {
+    throw new Error("主视图待处理快照缺少精确 thread 范围");
+  }
+  const requests = snapshot.requests ?? [];
+  if (requests.some((request) =>
+    request.session_id !== snapshot.session_id || request.thread_id !== snapshot.thread_id
+  )) {
+    throw new Error("主视图待处理快照包含范围之外的消息");
+  }
+  return [...requests]
     .sort((left, right) => left.enqueue_sequence - right.enqueue_sequence)
-    .map((request) => ({
-    conversationId: request.message_id,
-    displayMode: "live" as const,
-    sessionId: request.session_id,
-    userMessage: {
-      message_id: request.message_id,
-      session_id: request.session_id,
-      role: "user",
-      content: request.content,
-      attachments: request.attachments ?? [],
-      metadata: {
-        ...request.message_metadata,
+    // 内部准入的 turn_id 明确为空；其展示只来自 standalone history envelope。
+    .filter((request) => request.turn_id !== null)
+    .map((request) => {
+      const messageUpdatedAt = request.message_metadata?.updated_at;
+      if (typeof messageUpdatedAt !== "string" || !messageUpdatedAt) {
+        throw new Error(`待处理消息缺少 canonical updated_at: message_id=${request.message_id}`);
+      }
+      return {
+        conversationId: request.message_id,
+        displayMode: "live" as const,
+        sessionId: request.session_id,
+        threadId: request.thread_id,
+        userMessage: {
+          message_id: request.message_id,
+          session_id: request.session_id,
+          thread_id: request.thread_id,
+          role: "user",
+          content: request.content,
+          attachments: request.attachments ?? [],
+          metadata: {
+            ...request.message_metadata,
+            source: "pending",
+            job_id: request.job_id,
+            delivery_policy: request.delivery_policy,
+          },
+          created_at: request.message_created_at,
+          updated_at: messageUpdatedAt,
+        },
+        assistantMessages: [],
+        events: [],
+        status: "queued",
+        jobId: request.job_id,
+        turnId: request.turn_id ?? undefined,
+        pending: true,
+        deliveryPolicy: request.delivery_policy,
+        enqueueSequence: request.enqueue_sequence,
+        waitingReason: request.waiting_reason,
+        queueSnapshotVersion: snapshot.snapshot_version,
+        pendingPosition: request.position,
         source: "pending",
-        job_id: request.job_id,
-        delivery_policy: request.delivery_policy,
-      },
-      created_at: request.created_at,
-      updated_at: request.updated_at,
-    },
-    assistantMessages: [],
-    events: [],
-    status: "queued",
-    jobId: request.job_id,
-    pending: true,
-    deliveryPolicy: request.delivery_policy,
-    enqueueSequence: request.enqueue_sequence,
-    waitingReason: request.waiting_reason,
-    queueSnapshotVersion: snapshot.snapshot_version,
-    pendingPosition: request.position,
-    source: "pending",
-    }));
-}
-
-function createActiveJobOverlay(
-  sessionId: string,
-  jobId: string,
-): ConversationView {
-  return {
-    conversationId: `active-job:${jobId}`,
-    displayMode: "live",
-    sessionId,
-    userMessage: null,
-    assistantMessages: [],
-    events: [],
-    status: "running",
-    jobId,
-    pending: true,
-    pendingPosition: 0,
-    activeJobOverlay: true,
-    source: "pending",
-  };
+      };
+    });
 }
 
 export function writePendingSnapshot(
@@ -119,7 +120,14 @@ export function writePendingSnapshot(
   snapshot: PendingRequestList,
   mapKey: string = snapshot.session_id,
 ) {
+  const incomingConversations = pendingSnapshotToConversations(snapshot);
   const existingPending = pendingMap.get(mapKey) ?? [];
+  if (existingPending.some((conversation) =>
+    conversation.sessionId !== snapshot.session_id
+    || (conversation.threadId && conversation.threadId !== snapshot.thread_id)
+  )) {
+    throw new Error("待处理快照与既有 live 对话的 Session/thread 范围不一致");
+  }
   const existingSnapshotVersion = Math.max(
     0,
     ...existingPending.map(
@@ -129,29 +137,48 @@ export function writePendingSnapshot(
   if ((snapshot.snapshot_version ?? 0) < existingSnapshotVersion) {
     return;
   }
+  const snapshotConversations: ConversationView[] = incomingConversations.map((conversation) => {
+    const live = existingPending.find((candidate) =>
+      candidate.jobId && candidate.jobId === conversation.jobId,
+    );
+    if (!live) return conversation;
+    if (live.turnId && conversation.turnId && live.turnId !== conversation.turnId) {
+      throw new Error("待处理快照与既有 live 对话的 Job/Turn 归属不一致");
+    }
+    const terminal = hasJobTerminalTraceEvent(live.events)
+      || TERMINAL_TURN_STATUSES.has(live.turnStatus ?? "");
+    // 快照完整替换队列事实；同一 owner 已收到的 live 内容和事件独立续存。
+    // root/revision/view 坐标只由当前 timeline 投影。
+    return {
+      ...live,
+      ...conversation,
+      assistantMessages: live.assistantMessages,
+      events: live.events,
+      status: terminal ? live.status
+        : conversation.jobId === snapshot.active_job_id ? "running" : conversation.status,
+      pending: !terminal,
+      activeJobOverlay: !terminal && conversation.jobId === snapshot.active_job_id,
+    };
+  });
   const existingActiveConversation = snapshot.active_job_id
     ? existingPending.find(
         (conversation) => conversation.jobId === snapshot.active_job_id,
       )
     : undefined;
-  const snapshotConversations = pendingSnapshotToConversations(snapshot);
   if (
     snapshot.active_job_id
+    && existingActiveConversation
     && !snapshotConversations.some(
       (conversation) => conversation.jobId === snapshot.active_job_id,
     )
   ) {
-    snapshotConversations.push(
-      existingActiveConversation
-        ? {
-            ...existingActiveConversation,
-            pending: true,
-            pendingPosition: undefined,
-            deliveryPolicy: undefined,
-            activeJobOverlay: true,
-          }
-        : createActiveJobOverlay(snapshot.session_id, snapshot.active_job_id),
-    );
+    snapshotConversations.push({
+      ...existingActiveConversation,
+      pending: true,
+      pendingPosition: undefined,
+      deliveryPolicy: undefined,
+      activeJobOverlay: true,
+    });
   }
   // replay 的新 Job 可能尚未进入 bootstrap/pending-requests 快照，但后端已经
   // 移除了旧上下文。保留乐观 replay，避免上下文切换期间出现空聊天区。
@@ -198,15 +225,24 @@ export function syncActiveJobConversation(
   map: Map<string, ConversationView[]>,
   sessionId: string,
   activeJobId: string | null,
-  mapKey: string = sessionId,
+  mapKey: string,
+  activeTurn: TurnRecord | null,
 ): void {
+  if (activeJobId && activeTurn
+    && (activeTurn.job_id !== activeJobId || activeTurn.session_id !== sessionId)) {
+    throw new Error("活动 Job 与权威 Turn owner 不一致");
+  }
   const existing = map.get(mapKey) ?? [];
+  if (existing.some((conversation) => conversation.sessionId !== sessionId)) {
+    throw new Error("活动 Job 与既有 live 对话的 Session 范围不一致");
+  }
   const retained = existing.filter(
     (conversation) =>
       !conversation.activeJobOverlay || conversation.jobId === activeJobId,
   ).map((conversation) => conversation.jobId === activeJobId
     ? {
         ...conversation,
+        turnId: activeTurn?.turn_id ?? conversation.turnId,
         pending: true,
         pendingPosition: undefined,
         deliveryPolicy: undefined,
@@ -215,9 +251,23 @@ export function syncActiveJobConversation(
     : conversation);
   if (
     activeJobId
+    && activeTurn
     && !retained.some((conversation) => conversation.jobId === activeJobId)
   ) {
-    retained.push(createActiveJobOverlay(sessionId, activeJobId));
+    retained.push({
+      conversationId: activeTurn.turn_id,
+      sessionId,
+      turnId: activeTurn.turn_id,
+      userMessage: null,
+      assistantMessages: [],
+      events: [],
+      status: "running",
+      jobId: activeJobId,
+      displayMode: "live",
+      pending: true,
+      activeJobOverlay: true,
+      source: "pending",
+    });
   }
   writePendingList(map, sessionId, retained, mapKey);
 }

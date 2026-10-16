@@ -68,10 +68,12 @@ def execution_service() -> tuple[JobExecutionService, _StepExecutor]:
         ),
     ],
 )
+@pytest.mark.parametrize("resume_checkpoint_id", [None, "original-checkpoint"])
 @pytest.mark.asyncio
 async def test_run_forwards_full_execution_binding_and_message_identity(
     execution_service: tuple[JobExecutionService, _StepExecutor],
     execution_binding: ExecutionBinding,
+    resume_checkpoint_id: str | None,
 ) -> None:
     service, step_executor = execution_service
     job = JobRuntimeState(
@@ -84,6 +86,7 @@ async def test_run_forwards_full_execution_binding_and_message_identity(
         message_created_at="2026-10-04T00:00:00+00:00",
         execution_binding=execution_binding,
         message_metadata={"source": "ingress"},
+        resume_checkpoint_id=resume_checkpoint_id,
     )
 
     result = await service.run(job)
@@ -99,6 +102,7 @@ async def test_run_forwards_full_execution_binding_and_message_identity(
             "job_id": "job_runtime",
             "message_id": "msg_runtime",
             "execution_binding": execution_binding,
+            "resume_checkpoint_id": resume_checkpoint_id,
             "attachments": [],
             "message_created_at": "2026-10-04T00:00:00+00:00",
             "message_metadata": {"source": "ingress"},

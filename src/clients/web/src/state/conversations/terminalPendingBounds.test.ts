@@ -31,6 +31,7 @@ function liveConversation(index: number): ConversationView {
     userMessage: {
       message_id: `msg_${index}`,
       session_id: SESSION,
+      thread_id: "thr_terminal_pending",
       role: "user",
       content: `第 ${index} 轮`,
       attachments: [],
@@ -63,6 +64,7 @@ function runTurns(turns: number): ConversationView[] {
     );
     writePendingSnapshot(pendingMap, activeJobMap, {
       session_id: SESSION,
+      thread_id: "thr_018f0000000070008000000000000001",
       active_job_id: null,
       requests: [],
       snapshot_version: index + 1,

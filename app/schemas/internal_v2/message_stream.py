@@ -68,6 +68,9 @@ class MessageStreamBlockSnapshotDTO(_MessageStreamDTO):
 
 
 class MessageStreamToolExecutionSnapshotDTO(_MessageStreamDTO):
+    # tool_execution_id 标识一次工具执行；tool_call_id 是对应模型调用作用域内
+    # 的规范工具调用身份。当前工具执行事件将 tool_attempt_id 写成同一个执行 ID；
+    # 它是执行关联标识，不是模型调用序号，也不表示工具重试次数。
     tool_execution_id: str = Field(min_length=1)
     tool_call_id: str = Field(min_length=1)
     tool_name: str = Field(min_length=1)
@@ -83,10 +86,12 @@ class MessageStreamToolExecutionSnapshotDTO(_MessageStreamDTO):
     updated_at: str | None = None
     completed_at: str | None = None
     tool_invocation_id: str | None = None
+    # 当前与 tool_execution_id 相同，用于关联这次执行；不是模型调用序号或重试计数。
     tool_attempt_id: str | None = None
 
 
 class MessageStreamToolCallDTO(_MessageStreamDTO):
+    # tool_call_id 是对应模型调用作用域内的规范工具调用身份。
     tool_call_id: str = Field(min_length=1)
     tool_name: str = Field(min_length=1)
     arguments: MessageStreamJsonObject | None = None
@@ -100,11 +105,14 @@ class MessageStreamToolCallDTO(_MessageStreamDTO):
     updated_at: str | None = None
     completed_at: str | None = None
     tool_invocation_id: str | None = None
+    # 若投影提供此关联标识，表示对应工具执行；当前执行事件将它写成执行 ID，
+    # 不用它表示模型调用序号或工具重试次数。
     tool_attempt_id: str | None = None
 
 
 class MessageStreamModelCallSnapshotDTO(_MessageStreamDTO):
     model_call_id: str = Field(min_length=1)
+    # 模型调用在本轮消息流中的递增序号；由每次 model.started 推进，区别于工具执行 ID。
     attempt: int | None = Field(default=None, ge=0)
     status: str | None = None
     outcome: str | None = None
@@ -195,6 +203,7 @@ class MessageStreamSnapshotDTO(_MessageStreamDTO):
     stream_status: StreamStatus
     agent_loop_status: str = Field(min_length=1)
     current_model_call_id: str | None = None
+    # 当前模型调用的轮内序号；每次 model.started 递增，不是工具执行 attempt。
     current_attempt: int = Field(ge=0)
     blocks: list[MessageStreamBlockSnapshotDTO] = Field(default_factory=list)
     tool_executions: list[MessageStreamToolExecutionSnapshotDTO] = Field(

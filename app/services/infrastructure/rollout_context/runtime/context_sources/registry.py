@@ -7,8 +7,6 @@ from dataclasses import replace
 
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
         ContextSourceControlState,
-        ContextSourceControlStatePort,
-        ContextSourceOwnerKey,
         ContextSourceTrackingStatus,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
@@ -22,16 +20,17 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.state i
 
 
 class SourceRegistryMixin:
-        def _restore_control_states(
-            self,
-            owner: ContextSourceOwnerKey,
-            port: ContextSourceControlStatePort,
-        ) -> None:
-            """进程重启/agent 重建时从 owner 恢复 tracked 与 untrack 状态。
+        def refresh_control_states(self) -> None:
+            """初始化及新 activation 边界从唯一 owner 对齐已提交控制状态。
 
-            只恢复 identity、catalog 绑定 revision 和 revision 事实；pending
-            delta 与正文由下一次 observation/reconciliation 重新产生。
+            不读取来源正文；相同 revision 的内存正文和未提交 pending 保留。
+            名称索引仍由 effective catalog 决定，重水合不改绑原 tracked 来源。
             """
+            owner, port = self._owner, self._control_state_port
+            if owner is None or port is None:
+                return
+            refreshed: dict[str, SourceState] = {}
+            seen: set[str] = set()
             for stored in port.load_context_source_control_states(owner):
                 if stored.owner != owner:
                     raise RuntimeError(
@@ -39,30 +38,51 @@ class SourceRegistryMixin:
                         f"expected=({owner.session_id},{owner.thread_id}) "
                         f"actual=({stored.owner.session_id},{stored.owner.thread_id})"
                     )
-                if stored.source_id in self._sources:
+                if stored.source_id in seen:
                     raise RuntimeError(
                         "ContextSourceManager 持久化控制状态存在重复 source_id: "
                         f"source_id={stored.source_id}"
                     )
-                self._sources[stored.source_id] = SourceState.from_control_state(stored)
-                normalized_name = _normalize_skill_name(stored.name)
-                if stored.tracking_status == "tracked":
-                    duplicates = sorted(
-                        other.source_id
-                        for other in self._sources.values()
-                        if other.source_id != stored.source_id
-                        and other.tracked
-                        and _normalize_skill_name(other.name) == normalized_name
-                    )
-                    if duplicates:
+                seen.add(stored.source_id)
+                old = self._sources.get(stored.source_id)
+                if old is not None and stored.state_revision <= old.persisted_state_revision:
+                    if stored.state_revision != old.persisted_state_revision or stored.durable_fields() != old.persisted_fields:
+                        raise RuntimeError("context-source-control-state-conflict: 持久控制版本回退或同版本事实变化")
+                    continue
+                state = SourceState.from_control_state(stored)
+                if old is not None:
+                    if old.descriptor is not None:
+                        state.bind_descriptor(old.descriptor)
+                    if old.latest_revision == state.latest_revision:
+                        state.latest_content = old.latest_content
+                        state.observed_revisions = list(old.observed_revisions)
+                    if old.latest_visible_committed_revision == state.latest_visible_committed_revision:
+                        state.latest_visible_committed_content = old.latest_visible_committed_content
+                    pending = self._pending.get(stored.source_id)
+                    if pending is not None and pending.revision == state.latest_revision and state.latest_revision != state.latest_visible_committed_revision:
+                        state.pending_kind = old.pending_kind
+                refreshed[stored.source_id] = state
+
+            tracked_by_name: dict[str, str] = {}
+            for state in (self._sources | refreshed).values():
+                if state.tracked:
+                    normalized = _normalize_skill_name(state.name)
+                    previous = tracked_by_name.get(normalized)
+                    if previous is not None:
                         raise ContextSourceTrackingStateConflict(
                             "tracking-state-conflict: 持久化控制状态存在同 normalized "
-                            f"name 的多个 active registration: name={normalized_name} "
-                            f"source_ids={duplicates + [stored.source_id]}"
+                            f"name 的多个 active registration: name={normalized} "
+                            f"source_ids={sorted((previous, state.source_id))}"
                         )
-                # 同名 registration 按恢复（created_at）顺序让最新者持有名称索引；
-                # active tracked registration 的定位不依赖该索引（untrack 走扫描）。
-                self._source_ids_by_name[normalized_name] = stored.source_id
+                    tracked_by_name[normalized] = state.source_id
+            for source_id, state in refreshed.items():
+                if source_id not in self._sources:
+                    self._source_ids_by_name[_normalize_skill_name(state.name)] = source_id
+                self._sources[source_id] = state
+                if state.pending_kind is None:
+                    self._pending.pop(source_id, None)
+                if not state.tracked:
+                    self._pending_observations.pop(source_id, None)
 
         def register(
             self,
@@ -77,9 +97,9 @@ class SourceRegistryMixin:
             使其首帧与后续 delta 都能走事件驱动的 pending 路径；已存在的
             registration 重新绑定时保持原 tracking 状态，不因重复注册降级。
 
-            TODO: catalog/来源绑定 revision 目前没有生产 producer（SkillCatalog
-            revision 发布属于 OpenSpec 3.3/4.1-A）。落地后必须由 source owner
-            传入 ``binding_revision``，不得用内容 revision 冒充目录绑定 revision。
+            Skill source owner 从冻结 activation snapshot 的 Skill catalog facet
+            revision 提供 ``binding_revision``，表示目录/来源绑定版本；它不同于
+            observation 产生的来源内容 ``latest_revision``，不得将两者互相冒充。
             """
             if binding_revision is not None and (
                 not isinstance(binding_revision, str) or not binding_revision
@@ -236,6 +256,16 @@ class SourceRegistryMixin:
                 state = self._sources.get(stored.source_id)
                 if state is None:
                     continue
+                if (
+                    stored.owner != owner
+                    or stored.source_kind != state.source_kind
+                    or stored.name != state.name
+                    or stored.binding_revision != state.binding_revision
+                    or stored.tracking_status != state.tracking_status
+                ):
+                    raise RuntimeError(
+                        "context-source-control-state-conflict: seal 确认不得吸收其它 writer 的来源绑定或 tracking 变化"
+                    )
                 state.persisted_state_revision = stored.state_revision
                 state.persisted_fields = stored.durable_fields()
 

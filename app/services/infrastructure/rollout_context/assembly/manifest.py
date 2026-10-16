@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.serialization import ordered_selection
@@ -19,9 +19,11 @@ from app.services.infrastructure.rollout_context.assembly.plans.types import (
 )
 from app.services.infrastructure.rollout_context.assembly.validation import (
     exact_row,
-    json_text,
     optional_text,
     required_text,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    current_scope,
 )
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
@@ -44,9 +46,9 @@ def _persisted_manifest_rows(
 def _frozen_source_refs(
     snapshot: ContextAssemblySnapshot,
 ) -> tuple[dict[str, tuple[str, str]], frozenset[str]]:
-    """从真实 prefix/root selection 取得精确来源 ref/revision，忽略 wire 位置。"""
+    """只冻结实时来源 cut；候选正文由独立的 canonical provenance 审计。"""
     binding = snapshot.seal_binding
-    if binding is None:
+    if binding is None or snapshot.selection_policy == "summary_candidate":
         return {}, frozenset()
     contributions = {source.contribution_id: source for source in snapshot.contributions}
     selected = {
@@ -130,12 +132,23 @@ class ContextAssemblyManifestMixin:
         ]
         if snapshot.turn_id is not None:
             admission_root = connection.execute(
-                "SELECT root_input_item_id FROM turn_records "
-                "WHERE session_id = ? AND thread_id = ? AND turn_id = ?",
+                "SELECT turn.root_input_item_id, item.turn_id, item.semantic_kind, item.turn_scope "
+                "FROM turn_records AS turn LEFT JOIN item_catalog AS item "
+                "ON item.item_id = turn.root_input_item_id "
+                "WHERE turn.session_id = ? AND turn.thread_id = ? AND turn.turn_id = ?",
                 (snapshot.session_id, snapshot.thread_id, snapshot.turn_id),
             ).fetchone()
-            if admission_root is None or admission_root[0] not in canonical:
-                raise RuntimeError("source-cut-frontier-conflict: 来源 freeze 缺少真实 admission root input")
+            if (
+                admission_root is None
+                or not isinstance(admission_root[0], str)
+                or not admission_root[0]
+                or admission_root[1:] != (snapshot.turn_id, "user_input", "turn_root")
+                or not any(
+                    item_id == admission_root[0] and source_kind == "canonical"
+                    for item_id, source_kind in view_rows
+                )
+            ):
+                raise RuntimeError("source-cut-frontier-conflict: 来源 freeze 缺少当前 Turn 的可见 canonical admission root")
         new_frontier = ("after_canonical", canonical[-1]) if canonical else ("start", None)
         binding = snapshot.seal_binding
         predecessor_id = binding.previous_assembly_id
@@ -156,17 +169,9 @@ class ContextAssemblyManifestMixin:
         previous_sources: dict[str, tuple[str, str]] = {}
         previous_frontiers: dict[str, tuple[str, str | None]] = {}
         if predecessor_id is not None:
-            row = connection.execute(
-                "SELECT snapshot_json FROM context_assemblies WHERE assembly_id = ? "
-                "AND session_id = ? AND thread_id = ? AND status IN ('sealed','terminal')",
-                (predecessor_id, snapshot.session_id, snapshot.thread_id),
-            ).fetchone()
-            if row is None:
-                raise RuntimeError("source-cut-frontier-conflict: 缺少真实 predecessor assembly")
-            value = json_text(row[0], field="source-cut.snapshot_json")
-            if not isinstance(value, Mapping):
-                raise TypeError("source-cut-frontier-conflict: predecessor snapshot 必须是 object")
-            predecessor = ContextAssemblySnapshot.from_dict(value)
+            predecessor = self._read_context_assembly_header(
+                connection, *current_scope(connection), assembly_id=predecessor_id,
+            )[0]
             previous_sources, _ = _frozen_source_refs(predecessor)
             rows = connection.execute(
                 "SELECT ref_id, source_revision, source_cut_position_kind, source_cut_item_id "
@@ -182,10 +187,8 @@ class ContextAssemblyManifestMixin:
                 item_id = optional_text(item_id, field="source-cut.source_cut_item_id")
                 if (kind == "start") != (item_id is None):
                     raise RuntimeError("source-cut-frontier-conflict: predecessor 来源位置字段不一致")
-                if item_id is not None and connection.execute(
-                    "SELECT 1 FROM item_catalog WHERE item_id = ?", (item_id,),
-                ).fetchone() is None:
-                    raise RuntimeError("source-cut-frontier-conflict: predecessor canonical frontier 不存在")
+                # 已封存的来源位置是审计事实，不是本次请求的正文依赖。
+                # 精确前任的 owner/hash/revision 和 kind/id 形状仍由上述校验固定。
                 previous_frontiers[ref_id] = (kind, item_id)
             if set(previous_frontiers) != set(previous_sources):
                 raise RuntimeError("source-cut-frontier-conflict: predecessor 精确来源位置不完整")
@@ -337,6 +340,9 @@ class ContextAssemblyManifestMixin:
             'SELECT ref_ordinal, ref_type, ref_id, semantic_kind, payload_kind, status, content_hash, source_revision, content_length, detail_ref, contribution_id, visibility, protection, availability FROM assembly_item_refs WHERE assembly_id = ? ORDER BY ref_ordinal',
             (snapshot.assembly_id,),
         ).fetchall()
+        selection_by_identity = {}
+        for entry in snapshot.selection:
+            selection_by_identity.setdefault((entry.ref.ref_type, entry.ref.ref_id), entry)
         expected_refs = [
             (
                 ordinal,
@@ -356,15 +362,7 @@ class ContextAssemblyManifestMixin:
             )
             for ordinal, ref in enumerate(snapshot.refs)
             for entry in [
-                next(
-                    (
-                        candidate
-                        for candidate in snapshot.selection
-                        if (candidate.ref.ref_type, candidate.ref.ref_id)
-                        == (ref.ref_type, ref.ref_id)
-                    ),
-                    None,
-                )
+                selection_by_identity.get((ref.ref_type, ref.ref_id))
             ]
         ]
         exact_row(

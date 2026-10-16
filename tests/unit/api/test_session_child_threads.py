@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -17,13 +18,16 @@ from fastapi.testclient import TestClient
 from app.api.deps import (
     get_rollout_checkpoint_saver,
     get_session_service,
+    get_team_service,
     get_thread_residency_tracker,
 )
 from app.api.sessions import list_session_child_threads, router
 from app.core.session_control_store import SessionControlStore
 from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.session import SessionCreateRequest
+from app.schemas.internal_v2.team import TeamListDTO
 from app.services.business.session_service import SessionService
+from app.services.business.team.service import TeamCoordinationService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -46,13 +50,14 @@ def workspace(tmp_path: Path):
 
 
 @pytest.fixture()
-def service(workspace) -> SessionService:
+def service(workspace, saver: RolloutCheckpointSaver) -> SessionService:
     return SessionService(
         config_service=ConfigService(),
         trace_event_store=TraceEventStore(sessions_dir=workspace.sessions_root),
         workspace_id=WORKSPACE_ID,
         path_resolver=workspace.resolver,
         creation_service=workspace.creation_service,
+        initialize_thread_storage=saver.initialize_thread_storage,
     )
 
 
@@ -64,6 +69,13 @@ def residency_tracker() -> ThreadResidencyTracker:
 @pytest.fixture
 def saver(workspace) -> RolloutCheckpointSaver:
     return RolloutCheckpointSaver(workspace.sessions_root)
+
+
+@pytest.fixture
+def team_service() -> AsyncMock:
+    service = AsyncMock(spec=TeamCoordinationService)
+    service.list_teams.return_value = TeamListDTO(items=[])
+    return service
 
 
 def _seed_child_thread(
@@ -125,6 +137,7 @@ async def test_child_threads_api_returns_thread_payload(
     service: SessionService,
     residency_tracker: ThreadResidencyTracker,
     saver: RolloutCheckpointSaver,
+    team_service: AsyncMock,
 ) -> None:
     parent_session_id, thread_id = await _seed_parent_with_child_thread(service)
 
@@ -135,6 +148,7 @@ async def test_child_threads_api_returns_thread_payload(
         session_service=service,
         residency_tracker=residency_tracker,
         saver=saver,
+        team_service=team_service,
     )
 
     assert response.data is not None
@@ -142,6 +156,11 @@ async def test_child_threads_api_returns_thread_payload(
     data = response.data
     assert data.parent_session_id == parent_session_id
     assert data.total == 1
+    assert data.teams == []
+    team_service.list_teams.assert_awaited_once_with(
+        requester_session_id=parent_session_id,
+        requester_thread_id=await service.resolve_main_thread(parent_session_id),
+    )
     assert len(data.items) == 1
     item = data.items[0]
     assert item.thread_id == thread_id
@@ -159,6 +178,7 @@ async def test_child_threads_api_maps_missing_parent_to_404(
     service: SessionService,
     residency_tracker: ThreadResidencyTracker,
     saver: RolloutCheckpointSaver,
+    team_service: AsyncMock,
 ) -> None:
     with pytest.raises(HTTPException) as raised:
         await list_session_child_threads(
@@ -168,6 +188,7 @@ async def test_child_threads_api_maps_missing_parent_to_404(
             session_service=service,
             residency_tracker=residency_tracker,
             saver=saver,
+            team_service=team_service,
         )
 
     assert raised.value.status_code == 404
@@ -178,6 +199,7 @@ def test_child_threads_api_http_envelope_and_auth(
     service: SessionService,
     residency_tracker: ThreadResidencyTracker,
     saver: RolloutCheckpointSaver,
+    team_service: AsyncMock,
 ) -> None:
     parent_session_id, thread_id = asyncio.run(
         _seed_parent_with_child_thread(service)
@@ -188,6 +210,7 @@ def test_child_threads_api_http_envelope_and_auth(
     app.dependency_overrides[get_session_service] = lambda: service
     app.dependency_overrides[get_thread_residency_tracker] = lambda: residency_tracker
     app.dependency_overrides[get_rollout_checkpoint_saver] = lambda: saver
+    app.dependency_overrides[get_team_service] = lambda: team_service
     try:
         with TestClient(app) as client:
             unauthorized = client.get(
@@ -210,6 +233,7 @@ def test_child_threads_api_http_envelope_and_auth(
     data = body["data"]
     assert data["parent_session_id"] == parent_session_id
     assert data["total"] == 1
+    assert data["teams"] == []
     assert data["items"][0]["thread_id"] == thread_id
     assert data["items"][0]["collaboration_state"] == "published"
     assert data["items"][0]["status"] == "pending"

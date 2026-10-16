@@ -1215,8 +1215,16 @@ class TestTypedBindingRegistryBoundary:
 
 
 class TestContributionRevisionCAS:
-    def test_late_revision_is_rejected_before_registry_and_runtime_change(self, saver):
+    def test_late_revision_is_rejected_before_registry_and_runtime_change(
+        self, saver, empty_tool_set,
+    ):
         thread_id = saver._storage.storage.main_thread_id(MAIN_SESSION_ID)
+        accepted = saver.accept_turn(
+            MAIN_SESSION_ID, thread_id=thread_id,
+            accepted_ingress_id="cas-slot-ingress", acceptance_idempotency_key="cas-slot-accept",
+            job_id="cas-slot-job", admission_idempotency_key="cas-slot-admission",
+            payload="验证 request-only 正文 CAS",
+        )
         original = _contribution("cas-slot", replacement_policy="replaceable", body="revision a")
         ordinal = _register(saver, MAIN_SESSION_ID, original)
         second = replace(
@@ -1227,6 +1235,7 @@ class TestContributionRevisionCAS:
             MAIN_SESSION_ID, thread_id, second,
             expected_source_revision=original.source_revision, request_content="revision b",
         )
+        request_only_content_before_conflict = saver._request_only_content.copy()
         stale = replace(
             original, body="late revision", source_revision="opaque-late", content_length=None,
             content_hash=contribution_content_hash("prompt", "late revision"),
@@ -1237,9 +1246,33 @@ class TestContributionRevisionCAS:
                 expected_source_revision=original.source_revision, request_content="late revision",
             )
         (row,) = _rows(saver, MAIN_SESSION_ID)
-        assert row["source_revision"] == "rev-b" and row["source_ordinal"] == ordinal
+        assert row["source_revision"] == "rev-b"
+        assert row["source_ordinal"] == ordinal
+        assert row["content_hash"] == second.content_hash
+        assert saver._request_only_content == request_only_content_before_conflict
         current = saver._composer_for(MAIN_SESSION_ID, thread_id).ledger.contributions["cas-slot"]
-        assert current.source_revision == "rev-b" and current.body == "revision b"
+        assert current.source_revision == "rev-b" and current.body is None
+
+        draft = saver.compose_committed_context_plan(
+            MAIN_SESSION_ID, thread_id, plan_id="plan-late-revision-cas", tool_set=empty_tool_set,
+        )
+        registered = saver.create_context_plan(
+            MAIN_SESSION_ID,
+            replace(draft, plan_creation_idempotency_key="late-revision-cas:create"),
+        )
+        snapshot = saver.seal_context_plan(
+            MAIN_SESSION_ID, thread_id, registered.draft,
+            wire_profile=None, wire_params=None, turn_id=accepted["turn_id"],
+            execution_id=accepted["initial_execution_id"], provider_version="late-revision-cas",
+            seal_idempotency_key="late-revision-cas:seal",
+        )
+        assert snapshot.sealed
+        request_bodies = saver._request_content_for_plan(
+            MAIN_SESSION_ID, thread_id, "", snapshot.as_sealed_plan(), None,
+        )
+        assert request_bodies["cas-slot"] == "revision b"
+        assert contribution_content_hash("prompt", request_bodies["cas-slot"]) == row["content_hash"]
+        assert "late revision" not in request_bodies.values()
 
     def test_replacement_requires_expected_revision(self, saver):
         original = _contribution("cas-required", replacement_policy="replaceable")
@@ -1295,6 +1328,11 @@ def test_observation_unknown_extension_survives_owner_commit_and_restart(saver, 
     )
     decision = build_source_lifecycle_decision(observation, decision_kind="base")
     saver.consume_mutation_intent(decision)
+    (source_state,) = saver.load_context_source_control_states(
+        ContextSourceOwnerKey(MAIN_SESSION_ID, thread_id),
+    )
+    assert source_state.latest_revision == "extension-rev-1"
+    assert source_state.latest_visible_committed_revision is None
     restored = _restarted(sessions_root)._storage.storage.read_items(
         MAIN_SESSION_ID, thread_id, item_ids=(decision.item_id,),
     )[0]

@@ -237,13 +237,15 @@ class LegacyImportBuilder:
             runtime_notices = tuple(
                 member for member in target_members if member not in terminal_members
             )
-            self.storage.executions.converge_execution(
+            self.storage.executions.materialize_legacy_turn(
                 target_session_id,
                 thread_id=target_thread_id,
                 turn_id=target_turn,
                 execution_id=accepted["initial_execution_id"],
-                outcome=migrated_status,
+                source_session_id=source_session_id,
+                source_thread_id=source_thread_id,
                 turn_status=migrated_status,
+                finalization_evidence=final_reason,
                 items=terminal_members,
                 final_item_id=final_item_id,
                 checkpoint_ns=checkpoint_ns,

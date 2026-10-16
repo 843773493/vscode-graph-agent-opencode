@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any, NotRequired
 
@@ -21,11 +23,16 @@ from app.agents.instruction_producers import (
     register_instruction_producer,
 )
 from app.agents.middleware_prompts import SKILLS_SYSTEM_PROMPT
-from app.agents.skill_frontmatter import parse_skill_frontmatter
+from app.agents.skill_frontmatter import (
+    ParsedSkillFrontmatter,
+    SkillFrontmatterError,
+    parse_skill_frontmatter,
+)
 from app.core.distribution_identity import load_distribution_id
 from app.core.env import get_project_root
+from app.core.lifecycle import LifetimeScope
 from app.core.path_utils import get_boxteam_home, get_workspace_root
-from app.core.trace_middleware import require_current_gateway_id
+from app.core.trace_middleware import get_current_gateway_id
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.hashing import sha256_jcs
 from app.services.infrastructure.resource_platform.derivation.types import (
@@ -33,22 +40,17 @@ from app.services.infrastructure.resource_platform.derivation.types import (
 )
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
     ContextSourceReactor,
-    SourceObservation,
+    PublishedSourceObservationRef,
 )
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
+    WorkspaceFileResourceSnapshot,
 )
 from app.services.infrastructure.resource_platform.virtual_resources import (
-    ResolutionContext,
-    parse_resource_uri,
-    skill_display_uri,
     workspace_agent_spec_display_uri,
-)
-from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
-    require_scope_binding,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceDescriptor,
@@ -132,9 +134,9 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
         if skill_descriptors:
             catalog = self._context_source_manager.frozen_skill_catalog()
             for descriptor in skill_descriptors:
-                binding = catalog.entries.get(descriptor.name)
-                if binding is None or binding.display_uri != descriptor.resource_uri:
-                    raise RuntimeError("skill-catalog-snapshot-conflict: tracked source 不在冻结 catalog")
+                binding = catalog.sources.get(descriptor.resource_uri)
+                if binding is None:
+                    raise RuntimeError("tracked-source-unavailable: 原来源不在冻结 Skill facets: " + descriptor.source_id)
                 frozen.append(PublishedContextSourceRevision(descriptor.source_id, binding.activation_revision, binding.body))
         return tuple(frozen)
 
@@ -329,7 +331,7 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
         if reactor is None or manager is None:
             return
         for observation in reactor.drain():
-            typed_observation: SourceObservation = observation
+            typed_observation: PublishedSourceObservationRef = observation
             raw_content = reactor.content_for(typed_observation)
             manager.observe(
                 typed_observation.source_id,
@@ -375,15 +377,16 @@ def install_frozen_skill_catalog(
 ) -> None:
     """只消费本次 Saver 已冻结的 exact facets；tracked 更新不读取 live Registry。"""
     manager.install_skill_activation_snapshot(snapshot)
+    for binding in snapshot.sources.values():
+        manager.register_skill_binding(binding, catalog_revision=snapshot.catalog_revision)
     metadata = []
     for binding in snapshot.entries.values():
         manager.register_skill_binding(binding, catalog_revision=snapshot.catalog_revision)
-        descriptor = manager.descriptor_for_skill(binding.name)
-        tracking, _revision = manager.source_observation_state(descriptor.source_id)
-        if tracking == "tracked":
-            manager.observe(descriptor.source_id, binding.body, revision=binding.activation_revision)
         metadata.append({"name": binding.name, "description": binding.description})
-    if not include_instructions or not metadata:
+    manager.observe_frozen_tracked_skills()
+    if not include_instructions or (not metadata and not any(
+        descriptor.source_id == "instruction:skill-catalog" for descriptor in manager.descriptors()
+    )):
         return
     lines = "\n".join(
         f'- **{entry["name"]}**: {entry["description"]}\n  -> 匹配后调用 `skill_load(name="...")` 激活正文'
@@ -447,6 +450,16 @@ class SkillCatalogEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class SkillCatalogSource:
+    """当前 accepted 候选；保留被高层遮蔽的来源及其冻结身份。"""
+
+    layer: str
+    name: str
+    path: Path
+    display_uri: str
+
+
+@dataclass(frozen=True, slots=True)
 class PublishedSkillCatalog:
     """ResourceRegistry 发布的 immutable SkillCatalog revision 快照。
 
@@ -458,6 +471,8 @@ class PublishedSkillCatalog:
     entries: tuple[SkillCatalogEntry, ...]
     source_paths: Mapping[str, Path]
     activation_bodies: Mapping[str, str]
+    sources: tuple[SkillCatalogSource, ...]
+    directory_ids: Mapping[str, str]
 
     @property
     def catalog_revision(self) -> str:
@@ -467,37 +482,29 @@ class PublishedSkillCatalog:
         return self.source_paths.get(name)
 
 
-def _scan_layer_skill_files(
-    *,
-    layer: str,
-    root: Path,
-) -> dict[str, tuple[Path, str, object]]:
-    """枚举固定 skills/<entry>/SKILL.md 一层边界,拒绝越界 symlink。"""
-    layer_files: dict[str, tuple[Path, str, object]] = {}
-    if not root.is_dir():
-        return layer_files
-    for entry_dir in sorted(root.iterdir()):
-        if not entry_dir.is_dir():
-            continue
-        if entry_dir.is_symlink():
-            raise RuntimeError(f"Skill entry 不允许 symlink: {entry_dir}")
-        skill_file = entry_dir / "SKILL.md"
-        if not skill_file.is_file():
-            continue
-        if skill_file.is_symlink():
-            raise RuntimeError(f"SKILL.md 不允许 symlink: {skill_file}")
-        content = skill_file.read_text(encoding="utf-8")
-        parsed = parse_skill_frontmatter(content)
-        if parsed.name != entry_dir.name:
-            raise RuntimeError(
-                f"Skill name 必须与 entry 目录名一致: name={parsed.name!r} "
-                f"entry={entry_dir.name!r} layer={layer}"
-            )
-        raw_revision = "sha256:" + hashlib.sha256(
-            skill_file.read_bytes()
-        ).hexdigest()
-        layer_files[parsed.name] = (skill_file, raw_revision, parsed)
-    return layer_files
+class _SkillSourceError(RuntimeError):
+    """已登记 Skill 来源尚不能派生新的语义快照。"""
+
+
+def _parse_skill_source(
+    source: SkillCatalogSource, snapshot: WorkspaceFileResourceSnapshot,
+) -> tuple[Path, str, ParsedSkillFrontmatter, str, str]:
+    if not snapshot.available:
+        raise _SkillSourceError(
+            f"Skill 文件来源不可用: layer={source.layer} path={source.path} "
+            f"error={snapshot.error}"
+        )
+    if snapshot.revision is None:
+        raise _SkillSourceError(
+            f"Skill 文件来源缺少 revision: layer={source.layer} path={source.path}"
+        )
+    parsed = parse_skill_frontmatter(snapshot.content)
+    if parsed.name != source.name:
+        raise _SkillSourceError(
+            f"Skill name 必须与 entry 目录名一致: name={parsed.name!r} "
+            f"entry={source.name!r} layer={source.layer}"
+        )
+    return source.path, snapshot.revision, parsed, snapshot.content, source.display_uri
 
 
 def _publish_skill_facet(
@@ -525,64 +532,14 @@ def _publish_skill_facet(
     return registry.publish(snapshot)
 
 
-def _layer_scope_identity(
-    layer: str,
-    *,
-    workspace_id: str,
-) -> tuple[str, ResolutionContext | None]:
-    """按真实身份推导 layer（= URI scope）的 scope_id 与可校验的 principal。
-
-    ``workspace``/``inline``/``gateway`` 的稳定身份都由真实来源推导，返回可用于
-    ``require_scope_binding`` 的 ResolutionContext：
-
-    - ``workspace`` → 真实 workspace_id；
-    - ``inline`` → manifest 推导的真实 distribution_id；
-    - ``gateway`` → 请求级注入的真实 gateway_id（``X-BoxTeam-Gateway-Id``）。
-
-    ``gateway`` 缺失或非法时一律 fail-closed 显式拒绝，MUST NOT 回退 ``local``
-    或任何虚假默认值。
-    """
-    if layer == "workspace":
-        return workspace_id, ResolutionContext(workspace_id=workspace_id)
-    if layer == "inline":
-        distribution_id = load_distribution_id()
-        return distribution_id, ResolutionContext(
-            workspace_id=workspace_id, distribution_id=distribution_id
-        )
-    if layer == "gateway":
-        gateway_id = require_current_gateway_id("gateway scope 的 scope_id")
-        return gateway_id, ResolutionContext(
-            workspace_id=workspace_id, gateway_id=gateway_id
-        )
-    raise RuntimeError(f"未知 Skill scope/layer: {layer!r}")
-
-
-def _layer_skill_display_uri(
-    *,
-    scope: str,
-    scope_id: str,
-    skill_name: str,
-    context: ResolutionContext | None,
-) -> str:
-    """构造 display URI 并走真实 parse_resource_uri（拒绝裸拼接）。
-
-    仅当该 scope 的 principal 真实可用时，才进一步做 scope 绑定校验；principal
-    不可用时必须由调用方显式跳过，MUST NOT 伪造绑定值通过校验。
-    """
-    parsed = parse_resource_uri(
-        skill_display_uri(scope=scope, scope_id=scope_id, skill_name=skill_name)
-    )
-    if context is not None:
-        require_scope_binding(parsed.scope, parsed.scope_id, context)
-    return parsed.display_uri
-
-
 def build_workspace_skill_catalog(
     workspace_root: Path | None = None,
     *,
     registry: ResourceRegistry,
+    file_registry: WorkspaceFileResourceRegistry,
     bundled_skill_groups: Sequence[str] | None = None,
     project_root: Path | None = None,
+    gateway_id: str | None = None,
 ) -> PublishedSkillCatalog:
     """构建三层权威 SkillCatalog 并向 ResourceRegistry 发布 immutable revision。
 
@@ -592,124 +549,104 @@ def build_workspace_skill_catalog(
     resolved_workspace_root = workspace_root or get_workspace_root()
     resolved_groups = resolve_bundled_skill_groups(bundled_skill_groups)
     workspace_id = load_or_create_workspace_id(resolved_workspace_root)
-    layer_order: tuple[str, ...] = ("inline", "gateway", "workspace")
-    display_uri_by_layer: dict[str, dict[str, str]] = {}
-    scanned: dict[str, dict[str, tuple[Path, str, object]]] = {}
-    for layer in layer_order:
-        if layer == "inline":
-            if not resolved_groups:
-                scanned[layer] = {}
-                continue
-            inline_root = (project_root or get_project_root()) / "resources" / "skills"
-            if not inline_root.is_dir():
-                raise FileNotFoundError(f"发行包内置 Skill 根目录不存在: {inline_root}")
-            for group in resolved_groups:
-                skill_root = inline_root / group
-                if not skill_root.is_dir():
-                    raise FileNotFoundError(f"发行包内置 Skill 组目录不存在: {skill_root}")
-                if not (skill_root / "SKILL.md").is_file():
-                    raise FileNotFoundError(f"发行包内置 Skill 组缺少 SKILL.md: {skill_root}")
-            layer_files = _scan_layer_skill_files(layer=layer, root=inline_root)
-            # inline 层只发布 manifest(resolved groups)声明的 entry;组外
-            # 目录不是发行包已发布资源。
-            layer_files = {
-                name: item for name, item in layer_files.items()
-                if name in set(resolved_groups)
-            }
-        elif layer == "gateway":
-            gateway_root = get_boxteam_home() / "skills"
-            if gateway_root.exists() and not gateway_root.is_dir():
-                raise RuntimeError(f"Gateway skill 路径不是目录: {gateway_root}")
-            layer_files = _scan_layer_skill_files(layer=layer, root=gateway_root)
-        else:
-            workspace_skills_root = resolved_workspace_root / ".boxteam" / "skills"
-            if workspace_skills_root.exists() and not workspace_skills_root.is_dir():
-                raise RuntimeError(f"工作区 skill 路径不是目录: {workspace_skills_root}")
-            layer_files = _scan_layer_skill_files(layer=layer, root=workspace_skills_root)
-        scanned[layer] = layer_files
-        # gateway 层条目必须绑定真实 gateway_id（请求级注入）才能推导 scope_id；
-        # 存在条目却无身份即 fail-closed，MUST NOT 回退字面量 ``local``。空层不需要
-        # 身份，也不物化任何 URI。
-        if layer == "gateway" and not layer_files:
-            continue
-        # layer 名与 URI scope 名自此逐字一致（inline/gateway/workspace）；
-        # 恒等映射直接使用 layer 名，不再保留改名 shim。
-        scope_id, context = _layer_scope_identity(
-            layer, workspace_id=workspace_id
+    roots: dict[str, tuple[Path, str | None, tuple[str, ...] | None]] = {
+        "gateway": (
+            get_boxteam_home() / "skills",
+            gateway_id if gateway_id is not None else get_current_gateway_id(), None,
+        ),
+        "workspace": (resolved_workspace_root / ".boxteam" / "skills", workspace_id, None),
+    }
+    if resolved_groups:
+        roots["inline"] = (
+            (project_root or get_project_root()) / "resources" / "skills",
+            load_distribution_id(), tuple(resolved_groups),
         )
-        display_uri_by_layer[layer] = {
-            name: _layer_skill_display_uri(
-                scope=layer,
-                scope_id=scope_id,
-                skill_name=name,
-                context=context,
-            )
-            for name in layer_files
-        }
+    directory_ids = {
+        layer: file_registry.register_skill_directory(
+            root=root, scope=layer, scope_id=scope_id, declared_entries=names,
+        ).directory_id
+        for layer, (root, scope_id, names) in roots.items()
+    }
+    return _publish_workspace_skill_catalog(
+        _accepted_skill_sources(directory_ids, file_registry=file_registry),
+        registry=registry, directory_ids=directory_ids,
+    )
 
-    effective: dict[str, tuple[str, Path, str, object]] = {}
-    for layer in layer_order:
-        for name, (skill_file, raw_revision, parsed) in scanned[layer].items():
-            effective[name] = (layer, skill_file, raw_revision, parsed)
+
+def _accepted_skill_sources(
+    directory_ids: Mapping[str, str], *, file_registry: WorkspaceFileResourceRegistry,
+) -> dict[str, dict[str, tuple[Path, str, ParsedSkillFrontmatter, str, str]]]:
+    """消费共享来源 owner 已接受的一层目录和文件事实；本函数零 I/O。"""
+    scanned: dict[str, dict[str, tuple[Path, str, ParsedSkillFrontmatter, str, str]]] = {
+        "inline": {}, "gateway": {}, "workspace": {},
+    }
+    for layer, directory_id in directory_ids.items():
+        directory = file_registry.skill_directory_snapshot(directory_id)
+        if not directory.available:
+            raise _SkillSourceError(f"Skill 固定目录不可用: layer={layer} error={directory.error}")
+        for entry in directory.entries:
+            source = SkillCatalogSource(layer, entry.name, entry.path, entry.uri)
+            scanned[layer][entry.name] = _parse_skill_source(source, file_registry.snapshot(entry.uri))
+    return scanned
+
+
+def _publish_workspace_skill_catalog(
+    scanned: Mapping[str, Mapping[str, tuple[Path, str, ParsedSkillFrontmatter, str, str]]],
+    *,
+    registry: ResourceRegistry,
+    directory_ids: Mapping[str, str],
+    previous_sources: tuple[SkillCatalogSource, ...] = (),
+) -> PublishedSkillCatalog:
+    """从同一批 accepted 来源派生全部 facets；发布段没有 await 或文件读取。"""
+    effective: dict[str, tuple[SkillCatalogEntry, Path, str]] = {}
+    sources: list[SkillCatalogSource] = []
+    for layer in ("inline", "gateway", "workspace"):
+        for name, (skill_file, raw_revision, parsed, content, display_uri) in scanned[layer].items():
+            entry_identity = f"skill-entry:{layer}:{name}"
+            metadata_snapshot = _publish_skill_facet(
+                registry, layer=layer, name=name, display_uri=display_uri,
+                facet="metadata", source_revision=raw_revision,
+                payload={
+                    "name": name, "description": parsed.description,
+                    "display_uri": display_uri, "entry_identity": entry_identity,
+                },
+            )
+            body = content[parsed.body_offset:]
+            activation_snapshot = _publish_skill_facet(
+                registry, layer=layer, name=name, display_uri=display_uri,
+                facet="activation", payload={"body": body}, source_revision=raw_revision,
+            )
+            effective[name] = (SkillCatalogEntry(
+                name=name, description=parsed.description, layer=layer,
+                entry_identity=entry_identity, display_uri=display_uri,
+                metadata_resource_id=metadata_snapshot.resource_id,
+                activation_resource_id=activation_snapshot.resource_id,
+                metadata_revision=metadata_snapshot.revision,
+                activation_revision=activation_snapshot.revision,
+            ), skill_file, body)
+            sources.append(SkillCatalogSource(layer, name, skill_file, display_uri))
+
+    source_uris = {source.display_uri for source in sources}
+    for source in previous_sources:
+        if source.display_uri not in source_uris:
+            for facet in ("metadata", "activation"):
+                registry.withdraw(f"skill-entry:{source.layer}:{source.name}:{facet}")
 
     entries: list[SkillCatalogEntry] = []
     source_paths: dict[str, Path] = {}
     activation_bodies: dict[str, str] = {}
     catalog_payload_entries: list[dict[str, str]] = []
     for name in sorted(effective):
-        layer, skill_file, raw_revision, parsed = effective[name]
-        del parsed
-        display_uri = display_uri_by_layer[layer][name]
-        entry_identity = f"skill-entry:{layer}:{name}"
-        metadata_payload = {
-            "name": name,
-            "description": scanned[layer][name][2].description,
-            "display_uri": display_uri,
-            "entry_identity": entry_identity,
-        }
-        metadata_snapshot = _publish_skill_facet(
-            registry,
-            layer=layer,
-            name=name,
-            display_uri=display_uri,
-            facet="metadata",
-            payload=metadata_payload,
-            source_revision=raw_revision,
-        )
-        activation_payload = {
-            "body": skill_file.read_text(encoding="utf-8")[
-                scanned[layer][name][2].body_offset :
-            ]
-        }
-        activation_bodies[name] = activation_payload["body"]
-        activation_snapshot = _publish_skill_facet(
-            registry,
-            layer=layer,
-            name=name,
-            display_uri=display_uri,
-            facet="activation",
-            payload=activation_payload,
-            source_revision=raw_revision,
-        )
-        entry = SkillCatalogEntry(
-            name=name,
-            description=metadata_payload["description"],
-            layer=layer,
-            entry_identity=entry_identity,
-            display_uri=display_uri,
-            metadata_resource_id=metadata_snapshot.resource_id,
-            activation_resource_id=activation_snapshot.resource_id,
-            metadata_revision=metadata_snapshot.revision,
-            activation_revision=activation_snapshot.revision,
-        )
+        entry, skill_file, body = effective[name]
+        activation_bodies[name] = body
         entries.append(entry)
         source_paths[name] = skill_file
         catalog_payload_entries.append(
             {
                 "name": name,
-                "layer": layer,
-                "entry_identity": entry_identity,
-                "display_uri": display_uri,
+                "layer": entry.layer,
+                "entry_identity": entry.entry_identity,
+                "display_uri": entry.display_uri,
                 "metadata_resource_id": entry.metadata_resource_id,
                 "activation_resource_id": entry.activation_resource_id,
                 "metadata_revision": entry.metadata_revision,
@@ -734,7 +671,89 @@ def build_workspace_skill_catalog(
         entries=tuple(entries),
         source_paths=source_paths,
         activation_bodies=activation_bodies,
+        sources=tuple(sources),
+        directory_ids=directory_ids,
     )
+
+
+def start_workspace_skill_catalog_publication(
+    catalog: PublishedSkillCatalog,
+    *,
+    registry: ResourceRegistry,
+    file_registry: WorkspaceFileResourceRegistry,
+    lifetime_scope: LifetimeScope,
+) -> None:
+    """在应用 loop 消费既有来源通知，生命周期严格归当前 generation。"""
+    loop = asyncio.get_running_loop()
+    subscription = file_registry.subscribe_observation(label=f"Skill catalog:{lifetime_scope.name}")
+    directory_ids = frozenset(catalog.directory_ids.values())
+    task: asyncio.Task[None] | None = None
+    closed = False
+
+    def publish_current() -> None:
+        nonlocal catalog
+        if closed or lifetime_scope.state != "open":
+            return
+        try:
+            scanned = _accepted_skill_sources(catalog.directory_ids, file_registry=file_registry)
+        except (_SkillSourceError, SkillFrontmatterError) as error:
+            # required 来源失败必须阻止后续 capture；旧正文仅保留为审计 revision。
+            registry.publish(replace(
+                catalog.catalog_snapshot, payload=None, available=False,
+                error=str(error), error_code="source-unavailable",
+                retained_revision=catalog.catalog_revision,
+            ))
+            logging.getLogger(__name__).error("Skill catalog 刷新失败: %s", error)
+            return
+        catalog = _publish_workspace_skill_catalog(
+            scanned, registry=registry, directory_ids=catalog.directory_ids,
+            previous_sources=catalog.sources,
+        )
+
+    async def consume() -> None:
+        while not closed and lifetime_scope.state == "open":
+            observation = await subscription.next()
+            if observation.gap or observation.directory_id in directory_ids or any(
+                observation.uri == source.display_uri for source in catalog.sources
+            ):
+                publish_current()
+
+    def report_failure(finished: asyncio.Task[None]) -> None:
+        if finished.cancelled():
+            return
+        error = finished.exception()
+        if error is not None:
+            if not closed and lifetime_scope.state == "open":
+                registry.publish(replace(
+                    catalog.catalog_snapshot, payload=None, available=False,
+                    error=str(error), error_code="loader-error",
+                    retained_revision=catalog.catalog_revision,
+                ))
+            loop.call_exception_handler({
+                "message": "Skill catalog publication 任务失败", "exception": error, "task": finished,
+            })
+
+    async def close() -> None:
+        nonlocal closed
+        closed = True
+        file_registry.unsubscribe_observation(subscription)
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    try:
+        lifetime_scope.register(close, label="Skill catalog publication")
+    except BaseException:
+        file_registry.unsubscribe_observation(subscription)
+        raise
+    # 先订阅再读取内存 accepted 快照，补齐 worker 编译到首次 capture 之间的窗口。
+    publish_current()
+    task = asyncio.create_task(consume(), name=f"boxteam-skill-catalog:{lifetime_scope.name}")
+    task.add_done_callback(report_failure)
 
 
 def append_skill_middlewares(

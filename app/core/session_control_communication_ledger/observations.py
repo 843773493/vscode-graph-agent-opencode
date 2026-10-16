@@ -14,7 +14,7 @@ from app.core.session_control_operation_lease.operation_lease import (
 
 OBSERVATION_ERROR_CODES = frozenset({
     "read-snapshot-invalid", "read-snapshot-mismatch", "read-snapshot-expired",
-    "operation-retry-expired", "target-deleted",
+    "operation-retry-expired", "target-deleted", "selector_not_found",
 })
 
 

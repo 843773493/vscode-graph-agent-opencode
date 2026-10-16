@@ -1,26 +1,15 @@
 """Saver-owned source overlay runtime owner。
 
 source overlay 的持久化由 storage owner 完成；本 mixin 只负责把提交后的
-overlay 正文接入当前 runtime 的 request-only namespace，以及 fork 时复制
-已经存在于当前进程的正文能力。reconciliation ledger 保留在单独的 runtime
+overlay 正文接入当前 runtime 的 request-only namespace，；fork 直接复制持久化来源正文。
+reconciliation ledger 保留在单独的 runtime
 owner 中，避免 source registration 和 history revision 共用一份生命周期代码。
 """
 
 from __future__ import annotations
 
-import json
-from collections.abc import Mapping
-
 from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
 from app.domain.itemized.request_plan import ContextContribution, SourceBinding
-from app.services.infrastructure.rollout_context.fork.source_snapshot import (
-    ForkRequestOnlyContent,
-    freeze_request_only_content,
-)
-from app.services.infrastructure.rollout_context.storage.transaction import (
-    strict_optional_text,
-    strict_text,
-)
 
 
 class ContextSourceOverlayMixin:
@@ -178,149 +167,6 @@ class ContextSourceOverlayMixin:
             source_revision=source_revision,
             materialize_overlay=materializes_overlay_id is not None,
         )
-
-    def _capture_request_only_content_for_fork(
-        self,
-        *,
-        source_session_id: str,
-        source_thread_id: str,
-        checkpoint_ns: str,
-    ) -> tuple[ForkRequestOnlyContent, ...]:
-        """脱离 Saver 的可变 cache 引用，冻结当前 source owner 的 request 内容。"""
-        with self._lock:
-            source_values = {
-                ref: value
-                for (session_id, thread_id, namespace, ref), value
-                in self._request_only_content.items()
-                if (session_id, thread_id, namespace)
-                == (source_session_id, source_thread_id, checkpoint_ns)
-            }
-        return freeze_request_only_content(source_values)
-
-    def _copy_request_only_context_for_fork(
-        self,
-        *,
-        source_session_id: str,
-        source_thread_id: str,
-        target_session_id: str,
-        target_thread_id: str,
-        fork_id: str,
-        checkpoint_ns: str,
-        source_content_snapshot: tuple[ForkRequestOnlyContent, ...],
-    ) -> None:
-        """只用 capture 前冻结的 request-only bytes 绑定 target-local ref。"""
-        frozen_content = {item.ref: item.value_bytes for item in source_content_snapshot}
-        mappings = self._storage.forks.list_fork_identity_mappings(
-            target_session_id,
-            fork_id=fork_id,
-            entity_type="source_overlay",
-            checkpoint_ns=checkpoint_ns,
-        )
-        source_contributions = self._storage.assemblies.list_context_contributions(
-            source_session_id,
-            source_thread_id,
-            checkpoint_ns=checkpoint_ns,
-        )
-        target_contribution_ids = {
-            strict_text(
-                row["contribution_id"],
-                field="context_contributions.contribution_id",
-            )
-            for row in self._storage.assemblies.list_context_contributions(
-                target_session_id,
-                target_thread_id,
-                checkpoint_ns=checkpoint_ns,
-            )
-        }
-        with self._lock:
-            for row in source_contributions:
-                contribution_id = strict_text(
-                    row["contribution_id"],
-                    field="context_contributions.contribution_id",
-                )
-                if contribution_id not in target_contribution_ids:
-                    continue
-                value_bytes = frozen_content.get(contribution_id)
-                if value_bytes is None:
-                    continue
-                target_key = (
-                    target_session_id,
-                    target_thread_id,
-                    checkpoint_ns,
-                    contribution_id,
-                )
-                self._request_only_content[target_key] = json.loads(value_bytes)
-            for mapping in mappings:
-                lineage_json = strict_text(
-                    mapping.get("lineage_json"),
-                    field="fork_identity_mappings.lineage_json",
-                )
-                try:
-                    lineage = json.loads(lineage_json)
-                except json.JSONDecodeError as error:
-                    raise RuntimeError(
-                        "fork source overlay lineage JSON 非法: "
-                        f"{mapping['source_local_id']}"
-                    ) from error
-                if not isinstance(lineage, Mapping):
-                    raise TypeError("fork source overlay lineage 必须是 object")
-                source = lineage.get("source")
-                target = lineage.get("target")
-                if not isinstance(source, Mapping) or not isinstance(target, Mapping):
-                    raise TypeError("fork source overlay lineage 缺少 source/target")
-                for field_name in ("base_ref", "delta_ref"):
-                    source_ref = source.get(field_name)
-                    target_ref = target.get(field_name)
-                    source_ref = strict_optional_text(
-                        source_ref,
-                        field=f"fork overlay lineage.source.{field_name}",
-                    )
-                    target_ref = strict_optional_text(
-                        target_ref,
-                        field=f"fork overlay lineage.target.{field_name}",
-                    )
-                    if (
-                        source_ref is not None
-                        and target_ref is not None
-                        and source_ref in frozen_content
-                    ):
-                        self._request_only_content[
-                            (
-                                target_session_id,
-                                target_thread_id,
-                                checkpoint_ns,
-                                target_ref,
-                            )
-                        ] = json.loads(frozen_content[source_ref])
-                # full_rollout_copy 使用 preserved local overlay mapping，老
-                # 版本 lineage 将 ref 放在顶层；读取它可保持同进程副本可用。
-                for source_key, target_key in (
-                    ("source_base_ref", "target_base_ref"),
-                    ("source_delta_ref", "target_delta_ref"),
-                ):
-                    source_ref = lineage.get(source_key)
-                    target_ref = lineage.get(target_key)
-                    source_ref = strict_optional_text(
-                        source_ref,
-                        field=f"fork overlay lineage.{source_key}",
-                    )
-                    target_ref = strict_optional_text(
-                        target_ref,
-                        field=f"fork overlay lineage.{target_key}",
-                    )
-                    if (
-                        source_ref is not None
-                        and target_ref is not None
-                        and source_ref in frozen_content
-                    ):
-                        self._request_only_content[
-                            (
-                                target_session_id,
-                                target_thread_id,
-                                checkpoint_ns,
-                                target_ref,
-                            )
-                        ] = json.loads(frozen_content[source_ref])
 
     def list_source_overlays(
         self,

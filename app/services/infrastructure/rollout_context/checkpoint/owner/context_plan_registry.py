@@ -6,9 +6,6 @@ from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
     ContextPlanRegistration,
 )
-from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (
-    runtime_draft,
-)
 
 
 class ContextPlanRegistryOwnerMixin:
@@ -21,14 +18,13 @@ class ContextPlanRegistryOwnerMixin:
     ) -> ContextPlanRegistration:
         """提交无正文草稿；重复 creation key 返回同一份实际持久 identity。"""
         self._require_context_plan_owner(session_id, plan.thread_id, plan)
-        checkpoint_ns = self._context_owner_namespace(checkpoint_ns)
+        checkpoint_ns = self.context_owner_namespace(checkpoint_ns)
         self._find_runtime_context_plan(
             session_id, plan.thread_id, plan.plan_id, checkpoint_ns
         )
         registered = self._storage.assemblies.create_context_plan(
             plan, checkpoint_ns=checkpoint_ns
         )
-        runtime_draft(registered)
         self._cache_draft_bodies(session_id, plan.thread_id, checkpoint_ns, plan, registered)
         return registered
 
@@ -42,21 +38,12 @@ class ContextPlanRegistryOwnerMixin:
     ) -> ContextPlanRegistration:
         """仅以显式 revision 修订尚未 sealed 的 registry，不覆盖创建幂等 preimage。"""
         self._require_context_plan_owner(session_id, plan.thread_id, plan)
-        checkpoint_ns = self._context_owner_namespace(checkpoint_ns)
-        runtime_draft(
-            self.get_context_plan_registration(
-                session_id,
-                thread_id=plan.thread_id,
-                plan_id=plan.plan_id,
-                checkpoint_ns=checkpoint_ns,
-            )
-        )
+        checkpoint_ns = self.context_owner_namespace(checkpoint_ns)
         registered = self._storage.assemblies.revise_context_plan(
             plan,
             expected_revision=expected_revision,
             checkpoint_ns=checkpoint_ns,
         )
-        runtime_draft(registered)
         self._cache_draft_bodies(session_id, plan.thread_id, checkpoint_ns, plan, registered)
         return registered
 
@@ -72,7 +59,7 @@ class ContextPlanRegistryOwnerMixin:
             session_id,
             thread_id=thread_id,
             plan_id=plan_id,
-            checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
+            checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
         )
 
     def _cache_draft_bodies(
@@ -84,7 +71,7 @@ class ContextPlanRegistryOwnerMixin:
         registered: ContextPlanRegistration,
     ) -> None:
         # 重试 create 可能返回已修订的 draft；不能把原请求的旧正文塞入当前来源缓存。
-        draft = runtime_draft(registered)
+        draft = registered.draft
         if registered.plan_state != "unsealed":
             return
         supplied_by_id = {item.contribution_id: item for item in supplied.contributions}
@@ -114,7 +101,7 @@ class ContextPlanRegistryOwnerMixin:
     def _find_runtime_context_plan(
         self, session_id: str, thread_id: str, plan_id: str, checkpoint_ns: str
     ) -> ContextPlanRegistration | None:
-        """只把不存在视为可显式创建；import/corruption 必须保留原错误。"""
+        """只把不存在视为可显式创建，历史读取与损坏校验仍由 storage owner 完成。"""
         try:
             registered = self.get_context_plan_registration(
                 session_id,
@@ -124,5 +111,4 @@ class ContextPlanRegistryOwnerMixin:
             )
         except KeyError:
             return None
-        runtime_draft(registered)
         return registered

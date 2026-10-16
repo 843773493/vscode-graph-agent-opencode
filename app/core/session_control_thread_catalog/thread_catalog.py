@@ -28,7 +28,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
 
-from app.core.session_catalog_store import (
+from app.core.session_catalog_store.validators import (
     uuid7_embedded_utc_date,
     validate_thread_id,
 )

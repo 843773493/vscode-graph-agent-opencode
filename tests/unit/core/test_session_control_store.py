@@ -80,7 +80,7 @@ def test_initialize_creates_tables_and_sets_user_version(tmp_path: Path) -> None
     try:
         version = int(created.connection.execute("PRAGMA user_version").fetchone()[0])
         # fresh schema 11 不再维护 SessionControl 的第二套 ToolSet 镜像。
-        assert version == SessionControlStore.SCHEMA_VERSION == 13
+        assert version == SessionControlStore.SCHEMA_VERSION == 15
         tables = {
             str(row[0])
             for row in created.connection.execute(
@@ -97,6 +97,7 @@ def test_initialize_creates_tables_and_sets_user_version(tmp_path: Path) -> None
         } <= tables
         # D5：communication outbox/inbox ledger 表幂等落库
         assert {"communication_outbox", "communication_inbox"} <= tables
+        assert "fork_retention_releases" in tables
     finally:
         created.close()
 
@@ -176,7 +177,7 @@ def test_initialize_is_idempotent_on_reopen(tmp_path: Path) -> None:
         assert str(row["kind"]) == "main"
         version = int(second.connection.execute("PRAGMA user_version").fetchone()[0])
         # 当前 schema 重开保持完整 GraphBinding，不升级旧生成数据。
-        assert version == 13
+        assert version == 15
     finally:
         second.close()
 
@@ -194,7 +195,7 @@ def _assert_unsupported_schema_unchanged(target: Path, version: int) -> None:
     """拒绝旧库时不改数据库字节，也不产生 journal/WAL/shm 副作用。"""
     paths = tuple(target.with_name(target.name + suffix) for suffix in ("", "-journal", "-wal", "-shm"))
     before = {path.name: path.read_bytes() for path in paths if path.exists()}
-    with pytest.raises(RuntimeError, match=rf"schema 版本不受支持.*user_version={version}, supported=13"):
+    with pytest.raises(RuntimeError, match=rf"schema 版本不受支持.*user_version={version}, supported=15"):
         SessionControlStore(target)
     after = {path.name: path.read_bytes() for path in paths if path.exists()}
     assert after == before
@@ -206,11 +207,11 @@ def test_unknown_user_version_fails_closed(tmp_path: Path) -> None:
     created.close()
     outside = sqlite3.connect(target)
     try:
-        outside.execute("PRAGMA user_version = 14")
+        outside.execute("PRAGMA user_version = 16")
         outside.commit()
     finally:
         outside.close()
-    _assert_unsupported_schema_unchanged(target, 14)
+    _assert_unsupported_schema_unchanged(target, 16)
 
 
 def test_v6_database_is_rejected_without_creating_missing_tables(tmp_path: Path) -> None:
@@ -752,9 +753,9 @@ def test_v1_database_repeated_rejection_is_byte_preserving(tmp_path: Path) -> No
     _assert_unsupported_schema_unchanged(target, 1)
 
 
-@pytest.mark.parametrize("version", range(1, 13))
+@pytest.mark.parametrize("version", range(1, 15))
 def test_old_generated_schema_versions_reject_before_wal_and_keep_bytes(tmp_path: Path, version: int) -> None:
-    """所有旧生成版本 1–12 都在初始化与 journal/WAL 设置前拒绝。"""
+    """所有旧生成版本都在初始化与 journal/WAL 设置前拒绝。"""
     target = tmp_path / "session-control.sqlite"
     build_v1_database(target, make_thread_id())
     outside = sqlite3.connect(target)
@@ -776,7 +777,7 @@ def test_current_schema_with_missing_graph_binding_columns_fails_closed(tmp_path
     build_v1_database(target, make_thread_id())
     outside = sqlite3.connect(target)
     try:
-        outside.execute("PRAGMA user_version = 13")
+        outside.execute("PRAGMA user_version = 15")
         outside.commit()
     finally:
         outside.close()
@@ -3962,7 +3963,7 @@ def test_owner_binding_rejects_retired_toolset_update_parameters(
 
 
 def test_empty_existing_v0_database_initializes_current_schema(tmp_path: Path) -> None:
-    """原有空 SQLite 文件与不存在的 fresh 文件都可初始化 schema 13。"""
+    """原有空 SQLite 文件与不存在的 fresh 文件都可初始化当前 schema。"""
     target = tmp_path / "session-control.sqlite"
     empty = sqlite3.connect(target)
     try:
@@ -3972,7 +3973,7 @@ def test_empty_existing_v0_database_initializes_current_schema(tmp_path: Path) -
         empty.close()
     created = SessionControlStore(target)
     try:
-        assert created.connection.execute("PRAGMA user_version").fetchone()[0] == 13
+        assert created.connection.execute("PRAGMA user_version").fetchone()[0] == 15
         assert created.connection.execute("SELECT name FROM sqlite_schema WHERE name = 'thread_catalog'").fetchone() is not None
     finally:
         created.close()

@@ -1,7 +1,6 @@
 // 该脚本生成 SSE JSON schema 与无运行时依赖的校验器。
 // SSE 的 Python Pydantic 模型仍用于后端运行时校验，但不再生成公开 TypeScript DTO。
-import { access, readFile, writeFile } from "node:fs/promises";
-import { constants } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -98,8 +97,5 @@ async function generateValidators() {
   );
 }
 
-await access(schemaPath, constants.F_OK).catch(async (error) => {
-  if (error.code !== "ENOENT") throw error;
-  await run(pythonExecutable, ["-m", "scripts.export_sse_runtime_schemas"]);
-});
+await run(pythonExecutable, ["-m", "scripts.export_sse_runtime_schemas"]);
 await generateValidators();

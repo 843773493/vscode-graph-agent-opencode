@@ -247,6 +247,27 @@ class IndexedRecordQueryMixin:
                     _indexed_row(tuple(row), field=f"indexed_records.{kind}")
                     for row in tool_rows
                 )
+        if view_id is not None and result:
+            # backing 只供恢复与归属校验；历史正文必须整组属于实际展示 view。
+            visible_rows = connection.execute(
+                "SELECT m.message_sequence FROM messages AS m "
+                "JOIN item_catalog AS anchor ON anchor.jsonl_offset = m.jsonl_offset "
+                "AND anchor.jsonl_length = m.jsonl_length "
+                "JOIN context_view_items AS membership ON membership.item_id = anchor.item_id "
+                "AND membership.view_id = ? AND membership.visible = 1 "
+                "AND membership.source_kind = 'canonical' "
+                "WHERE m.message_sequence IN ("
+                + ",".join("?" for _ in result)
+                + ") AND NOT EXISTS (SELECT 1 FROM item_catalog AS member "
+                "LEFT JOIN context_view_items AS selected ON selected.item_id = member.item_id "
+                "AND selected.view_id = membership.view_id "
+                "WHERE member.message_group_id = anchor.message_group_id "
+                "AND (selected.item_id IS NULL OR selected.visible != 1 "
+                "OR selected.source_kind != 'canonical'))",
+                (view_id, *(row[0] for row in result)),
+            ).fetchall()
+            visible_sequences = {row[0] for row in visible_rows}
+            result = {row for row in result if row[0] in visible_sequences}
         return sorted(result)
 
     def read_indexed_records(
@@ -471,7 +492,7 @@ class IndexedRecordQueryMixin:
                     length=length,
                     read_item=self._storage._read_v2_item_at,
                 )
-                message = self._storage._codec().project_message(items)
+                message = self._storage.project_message_attachments(session_id, thread_id, self._storage._codec().project_message(items))
                 message_identity = messages_by_sequence.get(sequence)
                 if message_identity is None:
                     raise RuntimeError(

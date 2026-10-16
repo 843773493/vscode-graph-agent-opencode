@@ -12,7 +12,7 @@ from app.domain.itemized.enums import (
     SemanticKind,
 )
 from app.domain.itemized.errors import FormatDispatchError, ItemSchemaError
-from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.hashing import canonical_json_bytes, content_hash
 from app.domain.itemized.identity.item_projection import ToolResultEvidence
 from app.domain.itemized.records import (
     CanonicalItemRecord,
@@ -85,6 +85,46 @@ def test_runtime_notice_display_payload_round_trips_with_one_content_hash() -> N
     assert restored.content_hash == item.content_hash
     assert restored.turn_id is None
     assert restored.turn_scope == "pending_next_turn"
+
+
+def test_runtime_notice_cannot_masquerade_as_user_turn_root() -> None:
+    payload = RuntimeNoticePayload(
+        prompt=(
+            "<system_reminder>内部控制正文\n<generated_session_result>分支结果"
+            "</generated_session_result></system_reminder>"
+        ),
+        display_part=InternalDisplayPart(
+            kind="generated_session_result",
+            text="生成分支已结束，主会话正在处理返回结果。",
+            provenance=InternalDisplayProvenance(
+                source_session_id="session-source",
+            ),
+        ),
+    ).to_dict()
+    item = CanonicalItemRecord.create(
+        item_sequence=1,
+        item_id="item-runtime-notice-turn-root-negative",
+        semantic_kind=SemanticKind.RUNTIME_NOTICE,
+        payload_kind=PayloadKind.STRUCTURED_CONTENT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "runtime",
+            "producer_id": "message-runtime-notice-turn-root-negative",
+            "invocation_id": "execution-runtime-notice-turn-root-negative",
+        },
+        payload=payload,
+        extensions={},
+        turn_scope="pending_next_turn",
+        wire_role="user",
+    )
+
+    assert item.content_hash == content_hash(PayloadKind.STRUCTURED_CONTENT, payload)
+    assert item.producer_ref["producer_kind"] == "runtime"
+    with pytest.raises(
+        ItemSchemaError,
+        match="turn_root 必须是带 turn_id 的 user_input",
+    ):
+        replace(item, turn_id="turn-runtime-notice", turn_scope="turn_root")
 
 
 @pytest.mark.parametrize(

@@ -96,6 +96,7 @@ def _merge_activity_items(
         _content,
         _content_truncated,
         _tool_call_id,
+        _logical_item_ordinal,
     ) in activity_rows:
         if semantic_kind != "tool_call":
             continue
@@ -152,6 +153,7 @@ def _merge_activity_items(
         content,
         content_truncated,
         indexed_tool_call_id,
+        logical_item_ordinal,
     ) in activity_rows:
         turn_id = strict_text(turn_id, field="item_catalog.turn_id")
         manifest = parse_item_projection_manifest(_json_object(projection_manifest_json, field=f"item_catalog.projection_manifest_json:{item_id}"))
@@ -349,6 +351,9 @@ def _merge_activity_items(
                 "item_sequence": strict_non_negative_int(
                     item_sequence, field=f"item_catalog.item_sequence:{item_id}"
                 ),
+                "logical_item_ordinal": strict_non_negative_int(
+                    logical_item_ordinal, field=f"context_view_items.logical_item_ordinal:{item_id}"
+                ),
                 "part_ordinal": 0,
                 "kind": kind,
                 "status": strict_text(item_status, field="item_catalog.status"),
@@ -455,6 +460,7 @@ def _merge_final_reasoning(
         item_sequence,
         item_created_at,
         final_item_projection_manifest_json,
+        logical_item_ordinal,
     ) in final_reasoning_rows:
         turn_id = strict_text(turn_id, field="turns.turn_id")
         content_block_index = strict_non_negative_int(
@@ -507,6 +513,9 @@ def _merge_final_reasoning(
                 "item_sequence": strict_non_negative_int(
                     item_sequence, field="item_catalog.item_sequence"
                 ),
+                "logical_item_ordinal": strict_non_negative_int(
+                    logical_item_ordinal, field=f"context_view_items.logical_item_ordinal:{item_id}"
+                ),
                 "part_ordinal": content_block_index * 1_000_000 + item_index,
                 "kind": kind,
                 "status": "completed",
@@ -547,7 +556,7 @@ def _finalize_projections(
         activity_items.sort(
             key=lambda item: (
                 strict_non_negative_int(
-                    item.get("item_sequence"), field="activity_item.item_sequence"
+                    item.get("logical_item_ordinal"), field="activity_item.logical_item_ordinal"
                 ),
                 strict_non_negative_int(
                     item.get("part_ordinal", 0), field="activity_item.part_ordinal"

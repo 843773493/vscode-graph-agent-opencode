@@ -4,7 +4,7 @@
 
 # 可修改内容
 
-- 可以维护 `operation_lease.py` 中 `OperationLeaseMixin` 的方法族（`create_or_get_lease`、`mark_lease_settling`、`settle_lease`、`takeover_lease`、`get_lease`、`find_lease_by_operation`、`list_non_terminal_leases`、`verify_lease_token` 与内部取行 `_lease_row_or_raise`）。
+- 可以维护 `operation_lease.py` 中 `OperationLeaseMixin` 的方法族（`create_or_get_lease`、`mark_lease_settling`、`settle_lease`、`takeover_lease`、`get_lease`、`find_lease_by_operation`、`list_non_terminal_leases`、`verify_lease_token`、`assert_lease_current` 与内部取行 `_lease_row_or_raise`）。
 - 可以维护本模块自有的 `session_operation_leases` DDL、非终态部分索引常量与 `_lease_from_row` 投影。
 - 可以维护对应的单元测试；测试仍放在 `tests/unit/core/test_session_lifecycle_gate.py`。
 

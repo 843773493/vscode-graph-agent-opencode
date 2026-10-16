@@ -7,6 +7,32 @@ import type { AppState } from "../../types/frontend";
 import { SESSION_STREAM_MAX_RECONNECT_ATTEMPTS } from "./sessionEventStreamPolicy";
 import { useSessionEventStream } from "./useSessionEventStream";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
+import { flushSessionStreamEventBatch } from "./batchUpdates";
+import { INITIAL_APP_STATE } from "../app/appStateSeed";
+import type { Session, SessionStreamEvent } from "../../types/backend";
+import { useSessionLifecycleActions } from "../session/useSessionLifecycleActions";
+import { buildSessionHookState } from "../session/sessionHookTestFixtures";
+
+test("真实 SSE 批次按完整 owner 写附件摘要并排除其它会话的 payload", () => {
+  const sessionId = "ses_same_attachments";
+  const scope = `gateway_a::${sessionId}`;
+  const otherScope = `gateway_b::${sessionId}`;
+  let current: AppState = { ...INITIAL_APP_STATE, currentSession: { session_id: sessionId } as AppState["currentSession"],
+    currentSessionWorkspaceId: "gateway_a", eventQueuesBySession: new Map(), pendingConversations: new Map(),
+    sessionAttachmentSummaries: new Map([[otherScope, { count: 1, names: ["B.txt"], latestAt: null }]]), traceEvents: [] };
+  const event = (payloadSession: string, name: string): SessionStreamEvent => ({
+    event_id: `event_${payloadSession}`, session_id: sessionId, job_id: "job_attachment", type: "message_created",
+    phase: "message", title: "创建消息", content: "", timestamp: "2026-10-14T00:00:00Z",
+    raw: { payload: { session_id: payloadSession, attachments: [{ file_id: name, name }] } },
+  });
+  flushSessionStreamEventBatch([event("ses_foreign", "foreign.txt"), event(sessionId, "A.txt")], {
+    apiPort: 49_900, sessionId, workspaceId: "gateway_a", sessionCacheKey: scope,
+    setState: (update) => { current = typeof update === "function" ? update(current) : update; },
+  });
+  expect(current.sessionAttachmentSummaries.get(scope)?.names).toEqual(["A.txt"]);
+  expect(current.sessionAttachmentSummaries.get(otherScope)?.names).toEqual(["B.txt"]);
+  expect(current.sessionAttachmentSummaries.has(sessionId)).toBe(false);
+});
 
 const originalFetch = globalThis.fetch;
 
@@ -70,7 +96,7 @@ async function mountSessionStream(
       timelineReady: true,
       initialEventCursor: null,
       refreshTurnHistory: () => undefined,
-      loadTerminalTurn: async () => undefined,
+      loadTerminalJobTurn: async () => undefined,
       setState: (update) => {
         state.value = typeof update === "function"
           ? update(state.value)
@@ -88,6 +114,112 @@ async function mountSessionStream(
 
 function initialAppState(): AppState {
   return { status: "准备就绪" } as unknown as AppState;
+}
+
+for (const entry of ["session", "workspace"] as const) {
+  test(`${entry} 选择经真实 React 合并 A→B→A 后保留 A 订阅，提交 B 后清理并连接 B`, async () => {
+    installWindow();
+    const sessionA = { session_id: "ses_selection_a", title: "会话 A" } as Session;
+    const sessionB = { session_id: "ses_selection_b", title: "会话 B" } as Session;
+    const workspaceA = "gw_selection_a";
+    const workspaceB = entry === "workspace" ? "gw_selection_b" : workspaceA;
+    const targets = [workspaceRequestTarget(workspaceA), workspaceRequestTarget(workspaceB)];
+    const initial = buildSessionHookState({
+      workspaceId: workspaceA, current: sessionA, sessions: [sessionA, sessionB],
+      gatewayWorkspaces: targets.map((target) => ({
+        workspace_id: target.workspace_id, root_path: "/selection", name: target.workspace_id,
+      })),
+    });
+    initial.sessionsByWorkspace.set(workspaceB, workspaceB === workspaceA ? [sessionA, sessionB] : [sessionB]);
+    const subscriptions: Array<{
+      sessionId: string;
+      workspaceId: string | null | undefined;
+      signal: AbortSignal;
+      onEvent: NonNullable<NonNullable<Parameters<typeof traceStream.streamSessionEvents>[2]>["onEvent"]>;
+    }> = [];
+    const streamSpy = spyOn(traceStream, "streamSessionEvents").mockImplementation(
+      async (_port, sessionId, options) => {
+        if (!options?.signal || !options.onEvent) throw new Error("真实订阅缺少 signal 或事件消费者");
+        subscriptions.push({ sessionId, workspaceId: options.workspaceId,
+          signal: options.signal, onEvent: options.onEvent });
+        await new Promise<void>((resolve) => options.signal!.addEventListener("abort", () => resolve(), { once: true }));
+      },
+    );
+    let latest = initial;
+    let actions: ReturnType<typeof useSessionLifecycleActions> | null = null;
+    let invalidations = 0;
+    const invalidateAgentState = () => { invalidations += 1; };
+    const refreshTurnHistory = () => undefined;
+    const loadTerminalJobTurn = async () => undefined;
+    function Harness(): React.ReactNode {
+      const [current, setState] = React.useState(initial);
+      const currentRef = React.useRef(current);
+      currentRef.current = current;
+      latest = current;
+      const readState = React.useCallback(() => currentRef.current, []);
+      const selectionIntentRef = React.useRef(0);
+      const workspaceId = current.currentSessionWorkspaceId ?? current.activeGatewayWorkspaceId;
+      const { abortCurrentStream } = useSessionEventStream({
+        apiPort: 49_908, sessionId: current.currentSession?.session_id ?? null,
+        workspaceId, workspaceRequestTarget: targets.find((target) => target.workspace_id === workspaceId) ?? null,
+        sessionCacheKey: `${workspaceId}::${current.currentSession?.session_id}`,
+        activeJobId: null, timelineReady: true, initialEventCursor: null,
+        refreshTurnHistory, loadTerminalJobTurn, setState,
+      });
+      actions = useSessionLifecycleActions({
+        apiPort: 49_908, currentSession: current.currentSession,
+        activeGatewayWorkspaceId: current.activeGatewayWorkspaceId,
+        currentSessionGatewayWorkspaceId: workspaceId,
+        defaultGatewayWorkspaceId: workspaceA, workspaceRequestTargets: targets,
+        readState, setState, abortCurrentStream, invalidateAgentState, selectionIntentRef,
+      });
+      return null;
+    }
+    let renderer: ReactTestRenderer | undefined;
+    const select = (workspaceId: string, sessionId: string) => {
+      if (!actions) throw new Error("生命周期动作尚未挂载");
+      if (entry === "session") actions.selectSession(sessionId);
+      else actions.selectWorkspaceSession(workspaceId, sessionId);
+    };
+    try {
+      act(() => { renderer = create(<Harness />); });
+      await flush();
+      expect(subscriptions).toHaveLength(1);
+      const original = subscriptions[0];
+      act(() => {
+        select(workspaceB, sessionB.session_id);
+        select(workspaceA, sessionA.session_id);
+      });
+      await flush();
+      expect(latest.currentSession?.session_id).toBe(sessionA.session_id);
+      expect(latest.currentSessionWorkspaceId).toBe(workspaceA);
+      expect(original.signal.aborted).toBe(false);
+      expect(subscriptions).toHaveLength(1);
+      expect(invalidations).toBe(0);
+      act(() => original.onEvent({
+        event_id: "evt_selection_a", session_id: sessionA.session_id, job_id: "job_selection_a",
+        type: "model_text_delta", phase: "model", title: "模型增量", content: "A 仍接收事件",
+        timestamp: "2026-10-14T00:00:00Z", raw: {},
+      }, "cursor_selection_a"));
+      await flush();
+      expect(latest.eventQueuesBySession.get(`${workspaceA}::${sessionA.session_id}`)?.some(
+        (event) => event.kind === "trace" && event.event.event_id === "evt_selection_a",
+      )).toBe(true);
+      act(() => select(workspaceB, sessionB.session_id));
+      await flush();
+      expect(original.signal.aborted).toBe(true);
+      expect(subscriptions).toHaveLength(2);
+      expect(subscriptions[1].sessionId).toBe(sessionB.session_id);
+      expect(subscriptions[1].workspaceId).toBe(workspaceB);
+      expect(invalidations).toBe(1);
+      act(() => renderer!.unmount());
+      renderer = undefined;
+      expect(subscriptions[1].signal.aborted).toBe(true);
+    } finally {
+      if (renderer) act(() => renderer!.unmount());
+      streamSpy.mockRestore();
+    }
+  });
 }
 
 describe("useSessionEventStream readiness", () => {
@@ -109,7 +241,7 @@ describe("useSessionEventStream readiness", () => {
         timelineReady: false,
         initialEventCursor: null,
         refreshTurnHistory: () => undefined,
-        loadTerminalTurn: async () => undefined,
+        loadTerminalJobTurn: async () => undefined,
         setState: (update) => {
           void update;
         },
@@ -199,7 +331,7 @@ describe("useSessionEventStream 有界游标失效恢复", () => {
         timelineReady,
         initialEventCursor: "stale-cursor",
         refreshTurnHistory,
-        loadTerminalTurn: async () => undefined,
+        loadTerminalJobTurn: async () => undefined,
         setState: (update) => {
           state.value = typeof update === "function"
             ? update(state.value)
@@ -255,7 +387,7 @@ describe("useSessionEventStream 有界游标失效恢复", () => {
         timelineReady,
         initialEventCursor: "stale-cursor",
         refreshTurnHistory,
-        loadTerminalTurn: async () => undefined,
+        loadTerminalJobTurn: async () => undefined,
         setState: (update) => {
           state.value = typeof update === "function"
             ? update(state.value)

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { HttpRequestError } from "../http";
 import {
   forkSessionContext,
+  getSessionForkSourcePoint,
   getSessionMainThread,
   listChildThreads,
   listSessions,
@@ -80,6 +81,7 @@ describe("child thread 列表 API", () => {
             },
           ],
           total: 1,
+          teams: [],
         },
         request_id: "req-child-threads",
       });
@@ -108,6 +110,7 @@ describe("child thread 列表 API", () => {
           status: "stalled",
         }],
         total: 1,
+        teams: [],
       },
       request_id: "req-child-threads-invalid-status",
     }));
@@ -150,7 +153,35 @@ describe("child thread 列表 API", () => {
 });
 
 describe("会话上下文 Fork API", () => {
-  test("将调用方明确选择的来源目录归属发送给后端", async () => {
+  test("首次来源冻结保留展示 owner 和零 revision 的实际 query", async () => {
+    let requestInit: RequestInit | undefined;
+    let requestUrl = "";
+    installFetchMock((init, url) => {
+      requestInit = init;
+      requestUrl = url;
+      return Response.json({ data: {
+        source_view_id: "view/display", source_view_revision: 0, anchor_item_id: "item/display",
+      }, request_id: "req-fork-display-source" });
+    });
+
+    const point = await getSessionForkSourcePoint(48_309, "ses/display", {
+      threadId: "thread/display", itemId: "item/display",
+      sourceViewId: "view/display", sourceViewRevision: 0,
+    }, "workspace-display");
+
+    const url = new URL(requestUrl);
+    expect(url.pathname).toBe("/api/v1/sessions/ses%2Fdisplay/fork-source-point");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      thread_id: "thread/display", item_id: "item/display",
+      source_view_id: "view/display", source_view_revision: "0",
+    });
+    expect(new Headers(requestInit?.headers).get("X-BoxTeam-Workspace-Id"))
+      .toBe("workspace-display");
+    expect([point.source_view_id, point.source_view_revision, point.anchor_item_id])
+      .toEqual(["view/display", 0, "item/display"]);
+  });
+
+  test("将冻结来源 item 与目标容器完整发送给后端", async () => {
     let requestInit: RequestInit | undefined;
     let requestUrl = "";
     installFetchMock((init, url) => {
@@ -159,13 +190,19 @@ describe("会话上下文 Fork API", () => {
       return Response.json({ data: {}, request_id: "req-session-fork" });
     });
 
-    await forkSessionContext(48_308, "ses parent", true, "workspace-1");
+    const payload = {
+      idempotency_key: "fork-request-1",
+      source_uri: "boxteam://workspace/ws_source/resources/session/ses_parent/thread/tid_source",
+      source_view_id: "view-selected", source_view_revision: 4, anchor_item_id: "item-selected",
+      mode: "view_prefix_fork" as const, anchor_mode: "inclusive" as const,
+      target_container_uri: "boxteam://workspace/ws_source/resources/session/ses_parent",
+      creation_kind: "new_child_thread" as const, relationship: "detached" as const, resources: [],
+    };
+    await forkSessionContext(48_308, "ses parent", payload, "workspace-1");
 
     expect(requestUrl).toContain("/api/v1/sessions/ses%20parent/fork-context");
     expect(requestInit?.method).toBe("POST");
-    expect(JSON.parse(String(requestInit?.body))).toEqual({
-      place_under_source: true,
-    });
+    expect(JSON.parse(String(requestInit?.body))).toEqual(payload);
     expect(new Headers(requestInit?.headers).get("X-BoxTeam-Workspace-Id"))
       .toBe("workspace-1");
   });

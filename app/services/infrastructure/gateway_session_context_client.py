@@ -20,6 +20,10 @@ from app.schemas.internal_v2.session_context import (
     SessionContextSearchRequest,
     SessionContextSearchResultDTO,
 )
+from app.schemas.internal_v2.session_fork_transfer import (
+    SessionForkTransferRequest,
+    SessionForkTransferResultDTO,
+)
 from app.services.business.session_context_resource import parse_session_context_ref
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.gateway_client_common import (
@@ -47,6 +51,10 @@ class GatewaySessionContextClient:
             config_service=config_service,
         )
         self._local_token_supplier = local_token_supplier
+        self._http_client = httpx.AsyncClient()
+
+    async def aclose(self) -> None:
+        await self._http_client.aclose()
 
     async def list_gateway_workspaces(self) -> GatewayWorkspaceListDTO:
         return await self._request(
@@ -115,6 +123,17 @@ class GatewaySessionContextClient:
             json_body={"operation":"read", "resource_target":target.to_payload(), "body":query.model_dump(mode="json")},
         )
 
+    async def fork_transfer(self, request: SessionForkTransferRequest) -> SessionForkTransferResultDTO:
+        """只传一个有界 artifact 分块；正文冻结及目标发布归两端 owner。"""
+        if request.source_gateway_id != require_current_gateway_id("fork relay"):
+            raise ValueError("fork transport origin 与当前 Gateway 不一致")
+        reply = await self._request(
+            "POST", "/api/gateway/federation/relay", response_type=SessionForkTransferResultDTO,
+            json_body={"operation": "fork_" + request.fork_target.fork_role,
+                       "fork_target": request.fork_target.to_payload(), "body": request.model_dump(mode="json")},
+        )
+        return reply.validate_for_request(request)
+
     async def _request(
         self,
         method: str,
@@ -135,19 +154,18 @@ class GatewaySessionContextClient:
             headers["X-Request-ID"] = request_id
         if workspace_id is not None:
             headers["X-BoxTeam-Workspace-Id"] = workspace_id.strip()
-        async with httpx.AsyncClient(
-            base_url=self._connection.resolve_gateway_url(),
-            timeout=self._connection.resolve_timeout_seconds(),
-            headers=headers,
-        ) as client:
-            try:
-                response = await client.request(method, path, json=json_body)
-            except httpx.RequestError as error:
-                raise WorkspaceSessionContextAccessError(
-                    "无法连接 Workspace Gateway: "
-                    f"workspace_id={workspace_id}, method={method}, path={path}, "
-                    f"error_type={type(error).__name__}, error={error}"
-                ) from error
+        try:
+            response = await self._http_client.request(
+                method, self._connection.resolve_gateway_url() + path,
+                json=json_body, headers=headers,
+                timeout=self._connection.resolve_timeout_seconds(),
+            )
+        except httpx.RequestError as error:
+            raise WorkspaceSessionContextAccessError(
+                "无法连接 Workspace Gateway: "
+                f"workspace_id={workspace_id}, method={method}, path={path}, "
+                f"error_type={type(error).__name__}, error={error}"
+            ) from error
         if not response.is_success:
             message = (
                 "Gateway 上下文查询失败: "

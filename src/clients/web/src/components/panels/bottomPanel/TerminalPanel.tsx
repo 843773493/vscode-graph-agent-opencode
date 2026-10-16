@@ -13,6 +13,7 @@ type TerminalFrameStatus = "loading" | "ready" | "stalled";
 interface TerminalPanelProps {
   controller: WorkspaceTerminalController;
   currentThread: ResourceThreadRef | null;
+  threadTargetUnavailable: boolean;
   workspaceId: string | null;
   workspaceName: string;
   selectedTerminalId: string | null;
@@ -27,6 +28,7 @@ interface TerminalPanelProps {
 export default function TerminalPanel({
   controller,
   currentThread,
+  threadTargetUnavailable,
   workspaceId,
   workspaceName,
   selectedTerminalId,
@@ -54,15 +56,24 @@ export default function TerminalPanel({
   const isCurrentAssociated = selectedEntry?.thread_associations.some((ref) => ref.session_id === currentThread?.session_id && ref.thread_id === currentThread?.thread_id);
   const canAttachCurrent = currentThread && !isCurrentAssociated && (selectedEntry?.retention_scope === "workspace"
     || (selectedEntry?.source_thread?.session_id === currentThread.session_id && selectedEntry?.source_thread?.thread_id === currentThread.thread_id));
-  const canControl = (action: ResourceAction) => !acting && selectedEntry?.available_actions.includes(action);
+  const canControl = (action: ResourceAction) => !acting && !threadTargetUnavailable && selectedEntry?.available_actions.includes(action);
   // 终端服务未就绪时 iframe 只会长时间空白，不会触发 onError；因此必须自行计时，
   // 把「一直转圈」变成明确的「超时 + 重试」。URL 构造失败同样不得在 render 阶段抛出。
   const attach = useMemo((): { url: string } | { error: string } | null => {
     if (!selectedEntry) return null;
+    if (threadTargetUnavailable) return { error: "当前子线程目标尚未解析或属于其他工作区，终端操作已停用。" };
     if (selectedEntry.reconciliation_status !== "verified") return { error: "终端运行状态尚待核实，请先查看资源错误并刷新。" };
     if (selectedEntry.status !== "running") return { error: "终端进程已停止，资源记录与最终输出仍然保留。" };
     if (selectedEntry.retention_scope === "thread" && selectedEntry.thread_associations.length === 0) {
       return { error: "临时终端当前没有线程关联；请关联来源线程或保留到工作区后再连接。" };
+    }
+    if (selectedEntry.retention_scope === "thread" && !currentThread) {
+      return { error: "当前没有已解析的会话线程，暂时无法连接临时终端。" };
+    }
+    if (selectedEntry.retention_scope === "thread" && !selectedEntry.thread_associations.some(
+      (ref) => ref.session_id === currentThread?.session_id && ref.thread_id === currentThread.thread_id,
+    )) {
+      return { error: "临时终端尚未关联当前会话线程，请先关联或切回已关联的线程。" };
     }
     try {
       return {
@@ -71,13 +82,13 @@ export default function TerminalPanel({
           workspaceId ?? "",
           selectedEntry.resource_id,
           true,
-          selectedEntry.retention_scope === "thread" ? selectedEntry.thread_associations[0] : undefined,
+          selectedEntry.retention_scope === "thread" ? currentThread ?? undefined : undefined,
         ),
       };
     } catch (error) {
       return { error: errorMessage(error) };
     }
-  }, [selectedEntry?.resource_id, selectedEntry?.owner_revision, selectedEntry?.status, selectedEntry?.reconciliation_status, selectedEntry?.retention_scope, selectedEntry?.thread_associations[0]?.session_id, selectedEntry?.thread_associations[0]?.thread_id, workspaceId]);
+  }, [currentThread?.session_id, currentThread?.thread_id, selectedEntry?.resource_id, selectedEntry?.owner_revision, selectedEntry?.status, selectedEntry?.reconciliation_status, selectedEntry?.retention_scope, selectedEntry?.thread_associations, threadTargetUnavailable, workspaceId]);
 
   useEffect(() => {
     if (!attach || "error" in attach) {
@@ -92,12 +103,12 @@ export default function TerminalPanel({
   }, [attach, frameReloadToken]);
 
   const control = async (action: ResourceAction, thread?: ResourceThreadRef) => {
-    if (!selectedEntry) return;
+    if (!selectedEntry || threadTargetUnavailable) return;
     try { await controller.control(selectedEntry, action, thread); }
     catch { /* controller 已显示 owner 原始错误并重取完整资源。 */ }
   };
   const create = async () => {
-    if (!currentThread) return;
+    if (!currentThread || threadTargetUnavailable) return;
     try { onSelectTerminal((await controller.create(currentThread, scope)).resource_id); }
     catch { /* controller 已显示创建错误并重新读取工作区清单。 */ }
   };
@@ -198,7 +209,7 @@ export default function TerminalPanel({
         <select aria-label="终端保留范围" value={scope} onChange={(event) => setScope(event.target.value as "thread" | "workspace")}>
           <option value="thread">临时终端</option><option value="workspace">工作区保留</option>
         </select>
-        <button type="button" disabled={acting || !currentThread} onClick={() => void create()}>新建终端</button>
+        <button type="button" disabled={acting || !currentThread || threadTargetUnavailable} onClick={() => void create()}>新建终端</button>
         {selectedEntry ? <>
           <span>{selectedEntry.retention_scope === "workspace" ? "工作区保留" : "随来源线程释放"} · {statusLabel(selectedEntry.status)}</span>
           {selectedEntry.retention_scope === "thread" ? <button type="button" disabled={!canControl("promote")} onClick={() => void control("promote")}>保留到工作区</button> : null}

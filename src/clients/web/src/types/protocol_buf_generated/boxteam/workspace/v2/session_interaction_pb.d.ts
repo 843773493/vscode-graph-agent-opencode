@@ -81,6 +81,11 @@ export declare type MessageObservation = Message<"boxteam.workspace.v2.MessageOb
    * @generated from field: google.protobuf.Timestamp created_at = 7;
    */
   createdAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: string thread_id = 8;
+   */
+  threadId: string;
 };
 
 /**

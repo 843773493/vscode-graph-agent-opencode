@@ -27,6 +27,7 @@ from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
+    ItemProvenanceRelation,
 )
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
@@ -48,7 +49,7 @@ class TerminalCase:
     sessions: Path
     session_id: str
     thread_id: str
-    turn_id: str
+    turn_id: str | None
     execution_id: str
     root: Path
     saver: RolloutCheckpointSaver
@@ -106,6 +107,48 @@ def terminal_case(
         yield case
 
 
+@pytest.fixture(params=("user_turn", "internal"))
+def terminal_execution_case(
+    request: pytest.FixtureRequest,
+    terminal_case: TerminalCase,
+) -> Iterator[TerminalCase]:
+    case = terminal_case
+    if request.param == "user_turn":
+        yield case
+        return
+    execution_id = f"internal-{case.session_id}"
+    message_id = f"message-{execution_id}"
+    prepared = internal_message_factory.build(
+        kind="generated_session_result",
+        control="独立执行用于终态验收。",
+        sections=(
+            PromptSection("control_context", {"source": "terminal-test"}),
+            PromptSection("generated_session_result", "独立执行用于终态验收。"),
+        ),
+        display_content="独立执行用于终态验收。",
+    )
+    case.saver.admit_internal_execution(
+        case.session_id, thread_id=case.thread_id, job_id=f"job-{execution_id}",
+        intent=InternalExecutionIntent(
+            message_id=message_id, execution_id=execution_id,
+            admission_idempotency_key=f"admission-{execution_id}",
+        ),
+        message=HumanMessage(
+            content=prepared.content, id=message_id,
+            response_metadata={
+                "message_id": message_id,
+                "created_at": "2026-10-04T12:00:00+00:00",
+                "message_metadata": prepared.metadata,
+            },
+        ),
+    )
+    admission = case.saver.execution_admission(
+        case.session_id, thread_id=case.thread_id, execution_id=execution_id,
+    )
+    with execution_admission_scope(admission, langgraph_thread_id=case.thread_id):
+        yield replace(case, turn_id=None, execution_id=execution_id)
+
+
 def _assistant_item(case: TerminalCase, item_id: str, payload: str) -> CanonicalItemRecord:
     return CanonicalItemRecord.create(
         item_sequence=999,
@@ -121,7 +164,7 @@ def _assistant_item(case: TerminalCase, item_id: str, payload: str) -> Canonical
         payload=payload,
         projection_identity=ItemProjectionIdentity(projection_message_id=item_id.removeprefix("item-")),
         turn_id=case.turn_id,
-        turn_scope=TurnScope.TURN_MEMBER,
+        turn_scope=TurnScope.TURN_MEMBER if case.turn_id is not None else None,
         message_group_id=f"group-{case.execution_id}",
         wire_role="assistant",
     )
@@ -158,6 +201,18 @@ def _assemble_and_register_model_call(frozen_provider_activation, frozen_provide
     return assembly_id
 
 
+@pytest.fixture
+def terminal_active_case(
+    terminal_case: TerminalCase,
+    frozen_provider_activation,
+    frozen_provider_wire,
+) -> TerminalCase:
+    _assemble_and_register_model_call(
+        frozen_provider_activation, frozen_provider_wire, terminal_case,
+    )
+    return terminal_case
+
+
 def _terminal_rows(
     connection: sqlite3.Connection, case: TerminalCase
 ) -> list[tuple[object, ...]]:
@@ -168,6 +223,39 @@ def _terminal_rows(
         "AND subject_id = ? ORDER BY commit_id",
         (case.turn_id,),
     ).fetchall()
+
+
+def test_legacy_terminal_materialization_cannot_bypass_runtime_transition(
+    terminal_case: TerminalCase,
+) -> None:
+    case = terminal_case
+    final = _assistant_item(case, f"item-unstarted-final-{case.execution_id}", "尚未派发的回答")
+    before = case.jsonl.read_bytes()
+    with pytest.raises(ValueError, match="非法 Turn.status 转移: open->completed"):
+        case.saver.converge_execution(
+            case.session_id, thread_id=case.thread_id, turn_id=case.turn_id,
+            execution_id=case.execution_id, outcome="completed", turn_status="completed",
+            items=(final,), final_item_id=final.item_id,
+        )
+    with pytest.raises(TypeError, match="历史终态物化只允许 importer 私有 staging"):
+        case.saver._storage.executions.materialize_legacy_turn(
+            case.session_id, thread_id=case.thread_id, turn_id=case.turn_id,
+            execution_id=case.execution_id, source_session_id="legacy-source-session",
+            source_thread_id="legacy-source-thread", turn_status="completed",
+            finalization_evidence="explicit_legacy_final_marker", items=(final,),
+            final_item_id=final.item_id, checkpoint_ns="",
+        )
+    assert case.jsonl.read_bytes() == before
+    with sqlite3.connect(case.index.as_uri() + "?mode=ro", uri=True) as connection:
+        assert connection.execute("SELECT status,final_item_id FROM turn_records").fetchall() == [
+            ("open", None)
+        ]
+        assert connection.execute("SELECT outcome FROM executions").fetchall() == [("unknown",)]
+        assert connection.execute("SELECT COUNT(*) FROM model_calls").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM context_assemblies").fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM storage_commits WHERE commit_kind='terminal_convergence'",
+        ).fetchone()[0] == 0
 
 
 def test_acceptance_root_binding_and_turnless_internal_terminal_are_atomic(
@@ -216,6 +304,13 @@ def test_acceptance_root_binding_and_turnless_internal_terminal_are_atomic(
                 "message_metadata": prepared_notice.metadata,
             },
         ),
+    )
+    pending = case.saver.cold_execution_observations(
+        case.session_id, thread_id, job_ids=[internal_job_id],
+    )
+    assert len(pending) == 1
+    assert (pending[0]["job_id"], pending[0]["execution_id"], pending[0]["state"]) == (
+        internal_job_id, internal_execution_id, "pending",
     )
     output = CanonicalItemRecord.create(
         item_sequence=999,
@@ -279,6 +374,58 @@ def test_acceptance_root_binding_and_turnless_internal_terminal_are_atomic(
     assert internal_message == (None, internal_execution_id, "assistant")
     assert internal_execution == (None, "internal", "completed")
     assert terminal_commits == (1,)
+    completed = case.saver.cold_execution_observations(
+        case.session_id, thread_id, job_ids=[internal_job_id],
+    )
+    assert len(completed) == 1
+    assert (completed[0]["execution_id"], completed[0]["state"]) == (
+        internal_execution_id, "completed",
+    )
+
+
+def test_cold_wait_uses_direct_typed_legacy_notice_origin(
+    terminal_case: TerminalCase,
+) -> None:
+    case = terminal_case
+    legacy_item_id = f"item-legacy-notice-{case.session_id}"
+    live_item_id = f"item-live-notice-{case.session_id}"
+    fake_annotations = {
+        "boxteam.legacy.import": {"extension_version": "1", "protection": "public", "value": {}},
+        "boxteam.legacy.annotations": {
+            "extension_version": "1", "protection": "public",
+            "value": {"legacy_provenance": "legacy/unknown_source"},
+        },
+    }
+    for label, item_id, relations, extensions in (
+        ("legacy", legacy_item_id, (ItemProvenanceRelation("derived_from", "legacy_message", "legacy-notice"),), {}),
+        ("live", live_item_id, (ItemProvenanceRelation(
+            "derived_from", "canonical_item", legacy_item_id,
+            target_session_id=case.session_id, target_thread_id=case.thread_id,
+        ),), fake_annotations),
+    ):
+        item = CanonicalItemRecord.create(
+            item_sequence=1, item_id=item_id, semantic_kind="runtime_notice", payload_kind="text",
+            status="completed", producer_ref={"producer_kind": "runtime", "producer_id": label},
+            payload=f"{label} notice", turn_scope="pending_next_turn", wire_role="user",
+            provenance_relations=relations, extensions=extensions,
+        )
+        case.saver._storage.executions.admit_internal_execution(
+            case.session_id, thread_id=case.thread_id,
+            execution_id=f"execution-{label}-{case.session_id}", job_id=f"job-{label}-{case.session_id}",
+            admission_idempotency_key=f"admission-{label}-{case.session_id}", runtime_notice_item=item,
+            request_input={"kind": "runtime_notice", "payload": item.payload},
+        )
+    cold = RolloutCheckpointSaver(case.sessions)
+    assert cold.cold_execution_observations(
+        case.session_id, case.thread_id, job_ids=[f"job-legacy-{case.session_id}"],
+    ) == []
+    live = cold.cold_execution_observations(
+        case.session_id, case.thread_id, job_ids=[f"job-live-{case.session_id}"],
+    )
+    assert len(live) == 1
+    assert (live[0]["job_id"], live[0]["execution_id"], live[0]["state"]) == (
+        f"job-live-{case.session_id}", f"execution-live-{case.session_id}", "pending",
+    )
 
 
 def test_pre_model_failure_keeps_accepted_user_turn_visible(
@@ -448,10 +595,127 @@ def test_metadata_only_terminal_does_not_move_offset_and_replays_idempotently(fr
     assert control == (turn_status, None, outcome, "terminal", outcome)
 
 
-def test_terminal_idempotency_conflict_preserves_committed_prefix(
-    terminal_case: TerminalCase,
+@pytest.mark.parametrize(
+    ("provider_outcome", "execution_outcome"),
+    [
+        ("completed", "cancelled"),
+        ("completed", "interrupted"),
+        ("completed", "failed"),
+        ("completed", "execution_lost"),
+        ("failed", "execution_lost"),
+    ],
+)
+def test_provider_result_survives_later_execution_abort_and_restart(
+    terminal_execution_case: TerminalCase,
+    frozen_provider_activation,
+    frozen_provider_wire,
+    provider_outcome: str,
+    execution_outcome: str,
 ) -> None:
-    case = terminal_case
+    case = terminal_execution_case
+    assembly_id = _assemble_and_register_model_call(
+        frozen_provider_activation, frozen_provider_wire, case,
+    )
+    model_call_id = case.saver.get_context_assembly(
+        case.session_id, case.thread_id, assembly_id=assembly_id,
+    ).model_call_id
+    dispatch_state = "completed" if provider_outcome == "completed" else "failed"
+    case.saver.update_model_call_outcome(
+        case.session_id, thread_id=case.thread_id, model_call_id=model_call_id,
+        outcome=provider_outcome, dispatch_state=dispatch_state,
+    )
+    # Provider 已返回，工具或下一请求仍未完成；此时不能把调用结果当执行结果。
+    turn_status = (
+        ("unknown" if execution_outcome == "execution_lost" else execution_outcome)
+        if case.turn_id is not None else None
+    )
+    loss_reason = (
+        "terminal-test-execution-lost"
+        if execution_outcome == "execution_lost" and case.turn_id is not None else None
+    )
+    before = case.jsonl.read_bytes()
+    first = case.saver.converge_execution(
+        case.session_id, thread_id=case.thread_id, turn_id=case.turn_id,
+        execution_id=case.execution_id, outcome=execution_outcome,
+        turn_status=turn_status, assembly_id=assembly_id, loss_reason=loss_reason,
+    )
+    restarted = RolloutCheckpointSaver(case.sessions)
+    second = restarted.converge_execution(
+        case.session_id, thread_id=case.thread_id, turn_id=case.turn_id,
+        execution_id=case.execution_id, outcome=execution_outcome,
+        turn_status=turn_status, assembly_id=assembly_id, loss_reason=loss_reason,
+    )
+    assert first == second
+    assert case.jsonl.read_bytes() == before
+    with sqlite3.connect(case.index.as_uri() + "?mode=ro", uri=True) as connection:
+        assert connection.execute(
+            "SELECT outcome FROM executions WHERE execution_id=?", (case.execution_id,),
+        ).fetchone() == (execution_outcome,)
+        assert connection.execute(
+            "SELECT outcome,dispatch_state FROM model_calls WHERE model_call_id=?",
+            (model_call_id,),
+        ).fetchone() == (provider_outcome, dispatch_state)
+        assert connection.execute(
+            "SELECT status,outcome FROM context_assemblies WHERE assembly_id=?",
+            (assembly_id,),
+        ).fetchone() == ("terminal", provider_outcome)
+        assert connection.execute(
+            "SELECT COUNT(*),MIN(commit_id),MAX(commit_id) FROM storage_commits "
+            "WHERE commit_kind='terminal_convergence' AND subject_id=?",
+            (case.turn_id or case.execution_id,),
+        ).fetchone() == (1, first, first)
+        if case.turn_id is not None:
+            assert connection.execute(
+                "SELECT status,final_item_id FROM turn_records WHERE turn_id=?",
+                (case.turn_id,),
+            ).fetchone() == (turn_status, None)
+
+
+def test_failed_provider_call_cannot_be_promoted_by_execution_success(
+    terminal_execution_case: TerminalCase,
+    frozen_provider_activation,
+    frozen_provider_wire,
+) -> None:
+    case = terminal_execution_case
+    assembly_id = _assemble_and_register_model_call(
+        frozen_provider_activation, frozen_provider_wire, case,
+    )
+    model_call_id = case.saver.get_context_assembly(
+        case.session_id, case.thread_id, assembly_id=assembly_id,
+    ).model_call_id
+    case.saver.update_model_call_outcome(
+        case.session_id, thread_id=case.thread_id, model_call_id=model_call_id,
+        outcome="failed", dispatch_state="failed",
+    )
+    output = _assistant_item(case, f"item-invalid-success-{case.execution_id}", "不能提升失败调用")
+    before = case.jsonl.read_bytes()
+    with pytest.raises(ValueError, match="与最新 model_call outcome 冲突"):
+        case.saver.converge_execution(
+            case.session_id, thread_id=case.thread_id, turn_id=case.turn_id,
+            execution_id=case.execution_id, outcome="completed",
+            turn_status="completed" if case.turn_id is not None else None,
+            items=(output,), final_item_id=output.item_id if case.turn_id is not None else None,
+            assembly_id=assembly_id,
+        )
+    assert case.jsonl.read_bytes() == before
+    with sqlite3.connect(case.index.as_uri() + "?mode=ro", uri=True) as connection:
+        assert connection.execute(
+            "SELECT outcome FROM executions WHERE execution_id=?", (case.execution_id,),
+        ).fetchone() == ("unknown",)
+        assert connection.execute(
+            "SELECT outcome,dispatch_state FROM model_calls WHERE model_call_id=?",
+            (model_call_id,),
+        ).fetchone() == ("failed", "failed")
+        assert connection.execute(
+            "SELECT COUNT(*) FROM storage_commits WHERE commit_kind='terminal_convergence' "
+            "AND subject_id=?", (case.turn_id or case.execution_id,),
+        ).fetchone() == (0,)
+
+
+def test_terminal_idempotency_conflict_preserves_committed_prefix(
+    terminal_active_case: TerminalCase,
+) -> None:
+    case = terminal_active_case
     output = _assistant_item(case, f"item-output-{case.execution_id}", "首个终态正文")
     case.saver.converge_execution(
         case.session_id,
@@ -489,9 +753,9 @@ def test_terminal_idempotency_conflict_preserves_committed_prefix(
 
 
 def test_completed_terminal_cannot_split_precommitted_final_item(
-    terminal_case: TerminalCase,
+    terminal_active_case: TerminalCase,
 ) -> None:
-    case = terminal_case
+    case = terminal_active_case
     output = _assistant_item(case, f"item-precommitted-{case.execution_id}", "不能拆分")
     case.saver.append_items(case.session_id, (output,), thread_id=case.thread_id)
     before = case.jsonl.read_bytes()
@@ -516,9 +780,9 @@ def test_completed_terminal_cannot_split_precommitted_final_item(
 
 
 def test_terminal_projection_failure_rolls_back_jsonl_and_all_control_state(
-    terminal_case: TerminalCase,
+    terminal_active_case: TerminalCase,
 ) -> None:
-    case = terminal_case
+    case = terminal_active_case
     before = case.jsonl.read_bytes()
     output = _assistant_item(case, f"item-invalid-{case.execution_id}", "不会提交")
     invalid = replace(output, wire_role="user")
@@ -550,9 +814,9 @@ def test_terminal_projection_failure_rolls_back_jsonl_and_all_control_state(
 
 
 def test_real_process_exit_after_jsonl_barrier_is_reclaimed_and_retried(
-    terminal_case: TerminalCase,
+    terminal_active_case: TerminalCase,
 ) -> None:
-    case = terminal_case
+    case = terminal_active_case
     output = _assistant_item(case, f"item-crash-{case.execution_id}", "崩溃后重试正文")
     before = case.jsonl.read_bytes()
     child = """

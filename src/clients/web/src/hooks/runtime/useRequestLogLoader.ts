@@ -36,6 +36,7 @@ export function useRequestLogLoader({
           if (
             requestId !== requestIdRef.current ||
             prev.currentSession?.session_id !== sessionId ||
+            (prev.currentSessionWorkspaceId ?? prev.activeGatewayWorkspaceId) !== workspaceId ||
             prev.contentView !== "requests"
           ) {
             return prev;
@@ -56,6 +57,7 @@ export function useRequestLogLoader({
           if (
             requestId !== requestIdRef.current ||
             prev.currentSession?.session_id !== sessionId ||
+            (prev.currentSessionWorkspaceId ?? prev.activeGatewayWorkspaceId) !== workspaceId ||
             prev.contentView !== "requests"
           ) {
             return prev;

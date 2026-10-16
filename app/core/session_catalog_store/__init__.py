@@ -33,6 +33,7 @@ from app.core.session_catalog_store._schema import (
     _CATALOG_METADATA_TABLE_DDL,
     _CREATION_RECORDS_TABLE_DDL,
     _FORK_RETENTION_CLAIMS_TABLE_DDL,
+    _FORK_SOURCE_CAPTURES_TABLE_DDL,
     _IDX_CREATION_RECORDS_STATE_DDL,
     _IDX_FORK_RETENTION_SOURCE_DDL,
     _IDX_NODES_PARENT_DDL,
@@ -42,7 +43,7 @@ from app.core.session_catalog_store._schema import (
     _NAVIGATION_REVISION_TRIGGER_DDLS,
     _NODES_TABLE_DDL,
     _REQUIRED_NAVIGATION_REVISION_TRIGGERS,
-    _REQUIRED_TABLES_BY_VERSION,
+    _REQUIRED_TABLES,
     _SUBTREE_DELETE_RECORDS_TABLE_DDL,
 )
 from app.core.session_catalog_store.backup import CatalogBackupMixin
@@ -119,7 +120,7 @@ class SessionCatalogStore(
     创建和删除 journal 与 nodes 同库，由事务保证目录可见性和恢复进度的一致性。
     """
 
-    SCHEMA_VERSION = 8
+    SCHEMA_VERSION = 10
 
     def __init__(self, database_path: Path, sessions_root: Path) -> None:
         self.database_path = database_path.expanduser().resolve()
@@ -207,7 +208,7 @@ class SessionCatalogStore(
         return connection
 
     def _initialize(self) -> None:
-        """只初始化全新 v8 catalog；其它版本必须经显式维护处理。"""
+        """只初始化全新当前 catalog；其它版本必须经显式维护处理。"""
         current = int(
             self._connection.execute("PRAGMA user_version").fetchone()[0]
         )
@@ -246,6 +247,7 @@ class SessionCatalogStore(
             self._connection.execute(_IDX_NODES_WORKSPACE_DDL)
             self._connection.execute(_IDX_NODES_SESSION_LIST_DDL)
             self._connection.execute(_CREATION_RECORDS_TABLE_DDL)
+            self._connection.execute(_FORK_SOURCE_CAPTURES_TABLE_DDL)
             self._connection.execute(_IDX_CREATION_RECORDS_STATE_DDL)
             self._connection.execute(_SUBTREE_DELETE_RECORDS_TABLE_DDL)
             self._connection.execute(_IDX_SUBTREE_DELETE_STATE_DDL)
@@ -282,7 +284,7 @@ class SessionCatalogStore(
             )
 
     def _require_tables_present(self, current: int) -> None:
-        """校验已登记的版本对应表确实存在；缺表说明库被外部改写。
+        """校验当前 schema 的必需表确实存在；缺表说明库被外部改写。
 
         绝不允许用 ``CREATE TABLE IF NOT EXISTS`` 把权威表当空表重建：
         ``nodes`` 一空，所有会话位置与父子关系即静默丢失。缺表一律响亮
@@ -296,7 +298,7 @@ class SessionCatalogStore(
         }
         missing = [
             table
-            for table in _REQUIRED_TABLES_BY_VERSION.get(current, ())
+            for table in _REQUIRED_TABLES
             if table not in present
         ]
         if missing:

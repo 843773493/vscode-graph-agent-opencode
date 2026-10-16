@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import sqlite3
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -13,13 +14,19 @@ from app.core.background_message_bus import BackgroundMessageBus
 from app.core.exceptions import NotFoundError
 from app.core.job_event_bus import JobEventBus
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
-from app.schemas.internal_v2.common import JobStatus
+from app.schemas.internal_v2.common import JobStatus, MessageRole
+from app.schemas.internal_v2.message import MessageDTO
 from app.services.business.job.service import JobService, JobState
+from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.background_work_store import BackgroundWorkStore
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.harness.python.run_context import TestRunContext
+from tests.support.message_service import build_message_service
 from tests.unit.core.catalog_workspace_helper import (
     CatalogWorkspaceContext,
     build_catalog_workspace,
@@ -29,9 +36,15 @@ from tests.unit.core.catalog_workspace_helper import (
 class _InstantJobExecutor:
     def __init__(self) -> None:
         self.session_ids: list[str] = []
+        self.hold = False
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
 
     async def run(self, job: JobState) -> str:
         self.session_ids.append(job.session_id)
+        if self.hold:
+            self.started.set()
+            await self.release.wait()
         return "done"
 
 
@@ -42,6 +55,8 @@ class _AdmissionHarness:
     job_service: JobService
     message_bus: BackgroundMessageBus
     executor: _InstantJobExecutor
+    input_owner: MessageService
+    saver: RolloutCheckpointSaver
     guard_calls: list[str]
 
 
@@ -51,15 +66,21 @@ async def admission_harness() -> AsyncIterator[_AdmissionHarness]:
     if run_context.workspace_root.exists():
         shutil.rmtree(run_context.workspace_root)
     workspace = build_catalog_workspace(run_context.output_root)
+    saver = RolloutCheckpointSaver(workspace.sessions_root)
     session_service = SessionService(
         config_service=ConfigService(),
         trace_event_store=TraceEventStore(sessions_dir=workspace.sessions_root),
         workspace_id=workspace.workspace_id,
         path_resolver=workspace.resolver,
         creation_service=workspace.creation_service,
+        initialize_thread_storage=saver.initialize_thread_storage,
     )
     message_bus = BackgroundMessageBus(store=BackgroundWorkStore(sessions_dir=workspace.sessions_root))
     executor = _InstantJobExecutor()
+    input_owner = build_message_service(
+        workspace.sessions_root, checkpointer=saver,
+        workspace_root=run_context.workspace_root,
+    )
     guard_calls: list[str] = []
 
     def session_lifecycle_guard(session_id: str) -> None:
@@ -70,6 +91,8 @@ async def admission_harness() -> AsyncIterator[_AdmissionHarness]:
         job_event_bus=JobEventBus(),
         job_executor=executor,
         session_lifecycle_guard=session_lifecycle_guard,
+        input_owner=input_owner,
+        terminal_status_writer=saver,
     )
     try:
         yield _AdmissionHarness(
@@ -78,6 +101,8 @@ async def admission_harness() -> AsyncIterator[_AdmissionHarness]:
             job_service=job_service,
             message_bus=message_bus,
             executor=executor,
+            input_owner=input_owner,
+            saver=saver,
             guard_calls=guard_calls,
         )
     finally:
@@ -91,6 +116,91 @@ async def admission_harness() -> AsyncIterator[_AdmissionHarness]:
         if pending_tasks:
             await asyncio.gather(*pending_tasks, return_exceptions=True)
         workspace.close()
+
+
+@pytest.mark.asyncio
+async def test_catalog_delete_settles_active_and_queued_jobs_before_isolation(
+    admission_harness: _AdmissionHarness,
+) -> None:
+    workspace = admission_harness.workspace
+    service = admission_harness.job_service
+    session_id = await workspace.create_session(
+        "活跃任务删除排空", current_provider_id="test-provider",
+    )
+    thread_id = workspace.resolver.main_thread_id(session_id)
+    admission_harness.executor.hold = True
+
+    async def accept(content: str, message_id: str):
+        identity = service.reserve_user_execution_identity()
+        now = datetime.now(UTC)
+        admission_harness.input_owner.accept_user_message(
+            MessageDTO(
+                message_id=message_id, session_id=session_id, thread_id=thread_id,
+                role=MessageRole.user, content=content, created_at=now, updated_at=now,
+            ),
+            execution_identity=identity,
+        )
+        return await service.start_job(
+            session_id, content, thread_id=thread_id, execution_binding=identity,
+            message_id=message_id, message_created_at=now.isoformat(),
+        )
+
+    active = await accept("旧 active 输入", "msg-active-delete")
+    await asyncio.wait_for(admission_harness.executor.started.wait(), timeout=3)
+    queued = await accept("已接受的 queued 输入", "msg-queued-delete")
+    assert service._jobs[queued.job_id].status == JobStatus.queued
+    database = admission_harness.saver._storage.storage.index_path(
+        session_id, thread_id=thread_id,
+    )
+    drain_started = asyncio.Event()
+    release_drain = asyncio.Event()
+    terminal_rows: dict[str, str] = {}
+
+    async def cleanup(current_session_id: str) -> None:
+        assert current_session_id == session_id
+        assert workspace.node(session_id).state == "deleting"
+        drain_started.set()
+        await release_drain.wait()
+        await service.delete_session_jobs(session_id)
+        assert database.is_file(), "canonical 终态必须先于物理隔离"
+        with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
+            terminal_rows.update(connection.execute(
+                "SELECT job_id,outcome FROM executions WHERE job_id IN (?,?)",
+                (active.job_id, queued.job_id),
+            ).fetchall())
+            assert connection.execute("SELECT COUNT(*) FROM turn_records").fetchone() == (2,)
+
+    workspace.delete_service.set_session_drain_callback(cleanup)
+    deletion = asyncio.create_task(service.run_sessions_delete_operation(
+        [session_id],
+        lambda: workspace.resolver.delete_subtree(
+            idempotency_key="delete-active-and-queued", root_node_id=session_id,
+        ),
+    ))
+    try:
+        await asyncio.wait_for(drain_started.wait(), timeout=3)
+        assert not deletion.done()
+        assert workspace.node(session_id).state == "deleting"
+        with pytest.raises(SessionDeletionPendingError, match="session_deletion_pending"):
+            await service.start_job(
+                session_id, "迟到输入", thread_id=thread_id,
+                execution_binding=service.reserve_user_execution_identity(),
+                message_id="msg-late-delete", message_created_at=datetime.now(UTC).isoformat(),
+            )
+        release_drain.set()
+        result = await asyncio.wait_for(deletion, timeout=3)
+        assert result.record_state == "completed"
+        assert terminal_rows == {active.job_id: "cancelled", queued.job_id: "cancelled"}
+        assert admission_harness.executor.session_ids == [session_id], "queued 输入不能在删除收尾中启动"
+        assert service._pending_queue.ids(session_id) == ()
+        assert all(job.session_id != session_id for job in service._jobs.values())
+        with pytest.raises(KeyError):
+            workspace.store.get_node(session_id)
+    finally:
+        release_drain.set()
+        if not deletion.done():
+            deletion.cancel()
+        await asyncio.gather(deletion, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -210,13 +320,23 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
         await job_service.run_session_preparation(active_session_id, prepare_active)
         == "active-prepared"
     )
+    active_identity = job_service.reserve_user_execution_identity()
+    active_created_at = datetime.now(UTC)
+    admission_harness.input_owner.accept_user_message(
+        MessageDTO(
+            message_id="msg-active-session", session_id=active_session_id,
+            thread_id=active_thread_id, role=MessageRole.user, content="active message",
+            created_at=active_created_at, updated_at=active_created_at,
+        ),
+        execution_identity=active_identity,
+    )
     active_dispatch = await job_service.start_job(
         active_session_id,
         "active message",
         thread_id=active_thread_id,
-        execution_binding=job_service.reserve_user_execution_identity(),
+        execution_binding=active_identity,
         message_id="msg-active-session",
-        message_created_at=datetime.now(UTC).isoformat(),
+        message_created_at=active_created_at.isoformat(),
     )
     active_job = job_service._jobs[active_dispatch.job_id]
     assert active_job.session_id == active_session_id

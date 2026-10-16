@@ -52,7 +52,17 @@ function installStreamBackend(
         return localCredentialResponse(port);
       }
       streamRequestHeaders.push(new Headers(init?.headers));
-      return responseFactory();
+      const response = responseFactory();
+      const subscriptionId = (JSON.parse(String(init?.body)) as { subscriptions: [{ subscription_id: string }] }).subscriptions[0].subscription_id;
+      const encoder = new TextEncoder();
+      const envelope = (state: string, frame?: string) => encoder.encode(`event: observation\ndata: ${JSON.stringify({
+        subscription_id: subscriptionId, state, ...(frame === undefined ? {} : { frame }),
+      })}\n\n`);
+      const body = response.body!.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+        start(controller) { controller.enqueue(envelope("connected")); },
+        transform(chunk, controller) { controller.enqueue(envelope("frame", new TextDecoder().decode(chunk))); },
+      }));
+      return new Response(body, { headers: response.headers });
     },
     { preconnect: originalFetch.preconnect },
   );
@@ -132,7 +142,7 @@ describe("会话 SSE 客户端", () => {
     expect(streamCancelled).toBe(true);
   });
 
-  test("重连请求携带 Last-Event-ID 且只交付服务端返回的新事件", async () => {
+  test("重连请求携带独立trace_after且只交付服务端返回的新事件", async () => {
     const port = 49_003;
     const newEvent = traceEvent("evt_new");
     const requestHeaders = installStreamBackend(
@@ -152,7 +162,7 @@ describe("会话 SSE 客户端", () => {
     });
 
     expect(requestHeaders).toHaveLength(1);
-    expect(requestHeaders[0].get("Last-Event-ID")).toBe("evt_previous");
+    expect(requestHeaders[0].get("Last-Event-ID")).toBeNull();
     expect(received.map((event) => event.event_id)).toEqual(["evt_new"]);
     expect(receivedCursors).toEqual(["tc1.evt_new"]);
   });
@@ -171,6 +181,18 @@ describe("会话 SSE 客户端", () => {
     await expect(
       streamSessionEvents(port, "ses_stream_test", { idleTimeoutMs: 50 }),
     ).rejects.toThrow("SSE trace 重复 cursor: tc1.duplicate");
+  });
+
+  test("真实 observation 请求拒绝其它会话的 trace，且不交付事件", async () => {
+    const port = 49_008;
+    installStreamBackend(port, () => streamResponse([traceBlock({
+      ...traceEvent("evt_foreign"), session_id: "ses_foreign",
+    })]));
+    const received: SessionStreamEvent[] = [];
+    await expect(streamSessionEvents(port, "ses_stream_test", {
+      idleTimeoutMs: 50, onEvent: (event) => { received.push(event); },
+    })).rejects.toThrow("SSE trace owner 不匹配: 请求 ses_stream_test，收到 ses_foreign");
+    expect(received).toEqual([]);
   });
 
   test("连接建立时暴露 Gateway 工作区路由代次", async () => {

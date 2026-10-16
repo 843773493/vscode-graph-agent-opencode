@@ -29,9 +29,12 @@ def test_runtime_layer_passes_graph_binding_store_through() -> None:
     dependency_provider = MagicMock()
     dependency_provider.get_checkpointer.return_value = MagicMock()
     store = MagicMock(spec=GraphBindingStorePort)
+    resource_registry = ResourceRegistry()
+    resource_activation = MagicMock()
+    skill_catalog = MagicMock()
 
     with patch(
-        "app.runtime.agent_runtime.create_runtime_deep_agent_for_session"
+        "app.agents.agent_factory.create_runtime_deep_agent_for_session"
     ) as create_runtime:
         build_session_agent_runtime(
             session_id="session_test",
@@ -45,12 +48,16 @@ def test_runtime_layer_passes_graph_binding_store_through() -> None:
             job_event_bus=MagicMock(),
             dependency_provider=dependency_provider,
             mcp_tools=[],
-            resource_registry=ResourceRegistry(),
-            resource_activation=MagicMock(),
+            resource_registry=resource_registry,
+            resource_activation=resource_activation,
+            skill_catalog=skill_catalog,
             graph_binding_store=store,
         )
 
     assert create_runtime.call_args.kwargs["graph_binding_store"] is store
+    assert create_runtime.call_args.kwargs["resource_registry"] is resource_registry
+    assert create_runtime.call_args.kwargs["resource_activation"] is resource_activation
+    assert create_runtime.call_args.kwargs["skill_catalog"] is skill_catalog
 
 
 def test_runtime_layer_passes_explicit_store_and_synthetic_owner_policy() -> None:
@@ -58,9 +65,12 @@ def test_runtime_layer_passes_explicit_store_and_synthetic_owner_policy() -> Non
     config_service.resolve_agent_id.return_value = "default"
     dependency_provider = MagicMock()
     dependency_provider.get_checkpointer.return_value = MagicMock()
+    resource_registry = ResourceRegistry()
+    resource_activation = MagicMock()
+    skill_catalog = MagicMock()
 
     with patch(
-        "app.runtime.agent_runtime.create_runtime_deep_agent_for_session"
+        "app.agents.agent_factory.create_runtime_deep_agent_for_session"
     ) as create_runtime:
         build_session_agent_runtime(
             session_id="session_test",
@@ -74,19 +84,26 @@ def test_runtime_layer_passes_explicit_store_and_synthetic_owner_policy() -> Non
             job_event_bus=MagicMock(),
             dependency_provider=dependency_provider,
             mcp_tools=[],
-            resource_registry=ResourceRegistry(),
-            resource_activation=MagicMock(),
+            resource_registry=resource_registry,
+            resource_activation=resource_activation,
+            skill_catalog=skill_catalog,
             graph_binding_store=MagicMock(spec=GraphBindingStorePort),
             owns_thread=False,
         )
 
     assert create_runtime.call_args.kwargs["owns_thread"] is False
+    assert create_runtime.call_args.kwargs["resource_registry"] is resource_registry
+    assert create_runtime.call_args.kwargs["resource_activation"] is resource_activation
+    assert create_runtime.call_args.kwargs["skill_catalog"] is skill_catalog
 
 
 def test_execution_service_passes_store_to_runtime() -> None:
     from app.services.orchestration.agent_execution_service import AgentExecutionService
 
     store = MagicMock(spec=GraphBindingStorePort)
+    resource_registry = ResourceRegistry()
+    resource_activation = MagicMock()
+    skill_catalog = MagicMock()
     service = AgentExecutionService(
         config_service=MagicMock(),
         background_task_registry=MagicMock(),
@@ -117,12 +134,16 @@ def test_execution_service_passes_store_to_runtime() -> None:
             preferred_provider_id=None,
             include_team_tools=False,
             mcp_tools=[],
-            resource_registry=ResourceRegistry(),
-            resource_activation=MagicMock(),
+            resource_registry=resource_registry,
+            resource_activation=resource_activation,
+            skill_catalog=skill_catalog,
         )
 
     assert build_runtime.call_args.kwargs["graph_binding_store"] is store
     assert build_runtime.call_args.kwargs["thread_id"] == "thread_test"
+    assert build_runtime.call_args.kwargs["resource_registry"] is resource_registry
+    assert build_runtime.call_args.kwargs["resource_activation"] is resource_activation
+    assert build_runtime.call_args.kwargs["skill_catalog"] is skill_catalog
 
 
 def _owner() -> GraphBindingOwnerKey:

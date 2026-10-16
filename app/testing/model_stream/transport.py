@@ -7,17 +7,16 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from pathlib import Path
 
 import httpx
-import litellm
-import litellm.llms.custom_httpx.llm_http_handler as litellm_http_handler
+
+from app.core.phase_observer import observe_phase
 
 from .assets import (
     ModelStreamCassette,
     StreamFrame,
     StreamScenario,
     build_cassette,
-    load_scenario,
 )
-from .config import ModelStreamConfig, load_model_stream_config_from_environment
+from .context import current_model_call_identity
 from .errors import ModelStreamAssetError, ModelStreamError
 from .matcher import redact_url_for_asset, safe_request_match_fields
 from .protocols import StreamProtocolCodec, get_protocol_codec
@@ -220,7 +219,7 @@ class ModelStreamHTTPTransport(httpx.AsyncBaseTransport):
             raise ModelStreamError(
                 f"不支持的 model stream matching policy: {matching_policy!r}"
             )
-        if replay_policy not in {"request_reusable", "session_sequence"}:
+        if replay_policy not in {"request_reusable", "call_identity"}:
             raise ModelStreamError(f"不支持的 replay policy: {replay_policy!r}")
         protocol = scenario.cassette.metadata.get("protocol")
         if not isinstance(protocol, str):
@@ -247,6 +246,7 @@ class ModelStreamHTTPTransport(httpx.AsyncBaseTransport):
         self._call_count = 0
         self._request_urls: list[str] = []
         self._incomplete_artifacts: list[Path] = []
+        self._replay_policy = replay_policy
 
     @property
     def call_count(self) -> int:
@@ -269,6 +269,14 @@ class ModelStreamHTTPTransport(httpx.AsyncBaseTransport):
         self._request_urls.append(str(request.url))
         if self._mode == "replay":
             interaction = self._coordinator.select(request)
+            if self._replay_policy == "call_identity":
+                identity = current_model_call_identity()
+                _write_json_atomically(self._artifact_root / f"{identity.model_call_id}.json", {
+                    "identity": identity.to_dict(), "interaction_index": interaction.index,
+                    "scenario_id": self._scenario.scenario_id,
+                    "request": _request_body(request),
+                })
+                await observe_phase(identity.model_call_id, "model.response_ready")
             codec = get_protocol_codec(interaction.protocol)
             codec.require_runtime()
             return httpx.Response(
@@ -327,94 +335,3 @@ class ModelStreamHTTPTransport(httpx.AsyncBaseTransport):
     async def aclose(self) -> None:
         if self._live_transport is not None:
             await self._live_transport.aclose()
-
-
-class ModelStreamTransportController:
-    def __init__(
-        self,
-        *,
-        config: ModelStreamConfig,
-        scenario: StreamScenario,
-        client: httpx.AsyncClient,
-        transport: ModelStreamHTTPTransport,
-        previous_session: httpx.AsyncClient | None,
-        previous_async_client_factory: object,
-    ) -> None:
-        self.config = config
-        self.scenario = scenario
-        self.client = client
-        self.transport = transport
-        self._previous_session = previous_session
-        self._previous_async_client_factory = previous_async_client_factory
-        self._closed = False
-
-    @classmethod
-    def install(cls, config: ModelStreamConfig) -> ModelStreamTransportController | None:
-        if config.transport.mode == "off":
-            return None
-        if config.transport.scenario_id is None:
-            raise ModelStreamError("启用 model stream transport 时缺少 scenario_id")
-        scenario = load_scenario(
-            config.transport.fixture_root,
-            config.transport.scenario_id,
-        )
-        previous_session = litellm.aclient_session
-        if previous_session is not None:
-            raise ModelStreamError(
-                "无法安装 model stream transport：LiteLLM async client 已经存在，"
-                "必须在第一次模型请求前安装"
-            )
-        transport = ModelStreamHTTPTransport(
-            scenario=scenario,
-            mode=config.transport.mode,
-            matching_policy=config.transport.matching_policy,
-            replay_policy=config.transport.replay_policy,
-            artifact_root=config.transport.artifact_root,
-        )
-        client = httpx.AsyncClient(
-            transport=transport,
-            follow_redirects=True,
-        )
-        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
-        injected_handler = AsyncHTTPHandler.__new__(AsyncHTTPHandler)
-        injected_handler.timeout = None
-        injected_handler.event_hooks = None
-        injected_handler.client_alias = "boxteam-model-stream"
-        injected_handler.client = client
-        previous_async_client_factory = litellm_http_handler.get_async_httpx_client
-
-        # TODO: LiteLLM 尚未给 Responses API 暴露稳定的 AsyncClient 注入参数；
-        # 待上游提供正式扩展点后，删除这个进程内 factory hook。
-        def get_injected_async_client(*_args: object, **_kwargs: object) -> AsyncHTTPHandler:
-            return injected_handler
-
-        litellm_http_handler.get_async_httpx_client = get_injected_async_client
-        litellm.aclient_session = client
-        return cls(
-            config=config,
-            scenario=scenario,
-            client=client,
-            transport=transport,
-            previous_session=previous_session,
-            previous_async_client_factory=previous_async_client_factory,
-        )
-
-    async def aclose(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        litellm_http_handler.get_async_httpx_client = self._previous_async_client_factory
-        if litellm.aclient_session is self.client:
-            litellm.aclient_session = self._previous_session
-        await self.client.aclose()
-
-
-def install_model_stream_from_environment(
-    *,
-    project_root: Path | str | None = None,
-) -> ModelStreamTransportController | None:
-    config = load_model_stream_config_from_environment(project_root=project_root)
-    if config is None:
-        return None
-    return ModelStreamTransportController.install(config)

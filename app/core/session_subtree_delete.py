@@ -66,6 +66,7 @@ import os
 import shutil
 import sqlite3
 from collections.abc import Awaitable, Callable
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -74,6 +75,7 @@ from app.core.atomic_fs import (
     fsync_directory as _fsync_directory,
 )
 from app.core.key_lock_pool import KeyLockPool
+from app.core.phase_observer import observe_phase
 from app.core.session_catalog_store import (
     SessionCatalogStore,
     SubtreeDeleteRecord,
@@ -87,11 +89,13 @@ from app.core.session_control_communication_ledger.observations import (
     RemoteObservationError,
 )
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
-from app.core.session_control_store import SessionControlStore
+from app.core.session_control_store import SessionControlStore, ThreadCreationRecord
 from app.core.session_lifecycle_gate import (
     NavigationTopologyGate,
+    OperationHolderGate,
     SessionLifecycleGate,
 )
+from app.core.thread_creation import settle_thread_creations_for_deletion
 
 __all__ = ["SessionSubtreeDeleteService", "SubtreeDeleteResult"]
 
@@ -104,7 +108,10 @@ _FENCE_INITIAL_GENERATION = 1
 
 @dataclass(frozen=True, slots=True)
 class SubtreeDeleteResult:
-    """一次子树删除流的最终结果（record 已 completed 的幂等投影）。"""
+    """一次子树删除流的最终结果（record 已 completed 的幂等投影）。
+
+    frozen_node_ids 仅返回节点 ID 元组；journal 同名字段保存 ID/revision 记录。
+    """
 
     root_node_id: str
     frozen_node_ids: tuple[str, ...]
@@ -177,11 +184,31 @@ class SessionSubtreeDeleteService:
                 f"{session_drain_callback!r}"
             )
         self._session_drain_callback = session_drain_callback
+        self._session_drain_holders: tuple[OperationHolderGate, ...] = ()
+        self._fork_retention_release_callback: Callable[[str], Awaitable[None]] | None = None
+        self._fork_child_abort_callback: Callable[[str, ThreadCreationRecord], Awaitable[bool]] | None = None
         self._key_locks = KeyLockPool()
+
+    def set_fork_retention_release_callback(
+        self, callback: Callable[[str], Awaitable[None]],
+    ) -> None:
+        """跨 Session 释放在本地 drain gate 外完成，成功后才允许 fence/rename。"""
+        if not callable(callback):
+            raise TypeError("fork retention release callback 必须可调用")
+        if self._fork_retention_release_callback is not None:
+            raise RuntimeError("fork retention release callback 已绑定")
+        self._fork_retention_release_callback = callback
+
+    def set_fork_child_abort_callback(self, callback: Callable[[str, ThreadCreationRecord], Awaitable[bool]]) -> None:
+        """未发布 child 的正文/附件仍由 fork owner 在单 gate saga 内释放。"""
+        if self._fork_child_abort_callback is not None:
+            raise RuntimeError("fork child abort callback 已绑定")
+        self._fork_child_abort_callback = callback
 
     def set_session_drain_callback(
         self,
         callback: Callable[[str], Awaitable[None]],
+        *, holders: tuple[OperationHolderGate, ...] = (),
     ) -> None:
         """绑定删除前的 Session 运行时与资源复合排空回调。
 
@@ -197,6 +224,7 @@ class SessionSubtreeDeleteService:
         if self._session_drain_callback is not None:
             raise RuntimeError("Session 删除排空回调已绑定")
         self._session_drain_callback = callback
+        self._session_drain_holders = holders
 
 
     def resolve_operation_replay_node(self, session_id: str, *, now: datetime) -> Path:
@@ -234,7 +262,7 @@ class SessionSubtreeDeleteService:
                     self._verify_isolated_target(source, target, session_id, stage="operation replay GC")
                     control = SessionControlStore(target / CONTROL_DATABASE_NAME, read_only=True)
                     try:
-                        if control.list_non_terminal_leases():
+                        if control.list_non_terminal_leases() or control.list_pending_thread_creations():
                             raise RuntimeError("删除恢复 GC 仍有非终态 operation lease")
                         retained_until = journal_deadline
                         for row in control.list_remote_observations():
@@ -314,6 +342,7 @@ class SessionSubtreeDeleteService:
                 )
             # 步骤 2：drain（gate 外，逐 session 按冻结顺序；每 session
             # 在 Session gate exclusive 内完成 lease 收敛 → fence CAS → 隔离）。
+            await observe_phase(idempotency_key, "deletion.catalog_deleting")
             await self._drain(record, idempotency_key)
             # 步骤 3：gate exclusive 内 finish（全树 tombstone）。
             async with self._gate.exclusive():
@@ -393,7 +422,7 @@ class SessionSubtreeDeleteService:
                 # 发生。此时源目录已消失，重新回调只会对已隔离的 session
                 # 再次 resolve 而 fail closed，从而阻断崩溃恢复。跳回
                 # 调，交由 _drain_session 校验目标一致性并补记进度。
-                self._drain_session(
+                await self._drain_session(
                     idempotency_key=idempotency_key,
                     session_id=session_id,
                     storage_relative_locator=record.frozen_session_locators[
@@ -402,13 +431,40 @@ class SessionSubtreeDeleteService:
                 )
                 self._store.record_drain_progress(idempotency_key, session_id)
                 continue
-            async with self._session_gate.exclusive(session_id):
+            # 首次排空等待包含 retention/creation 的 holder 与 gate；
+            # 观察点必须先于这些等待，且此时尚未持有任何排空锁。
+            await observe_phase(idempotency_key, "deletion.drain_waiting/" + session_id)
+            # retention saga 自己按 target→source→target 取单个 gate；此处
+            # 不能先持 target gate，否则 source 阶段会形成双 Session gate。
+            if self._fork_retention_release_callback is not None:
+                await self._fork_retention_release_callback(session_id)
+            source = self._date_bucket_dir(record.frozen_session_locators[session_id])
+            if not (source / CONTROL_DATABASE_NAME).is_file():
+                raise RuntimeError(f"删除排空缺少原控制库: session_id={session_id}, path={source}")
+            control = SessionControlStore(source / CONTROL_DATABASE_NAME)
+            try:
+                await settle_thread_creations_for_deletion(
+                    control=control,
+                    session_id=session_id,
+                    session_dir=source,
+                    sessions_root=self._sessions_root,
+                    session_gate=self._session_gate,
+                    fork_abort=self._fork_child_abort_callback,
+                )
+            finally:
+                control.close()
+            async with AsyncExitStack() as drain_scope:
+                # 长操作先退出原 holder，旧 lease 才能短时取得 Session gate
+                # 结算；删除等待期间绝不持有它需要的 publish/write gate。
+                for holder in self._session_drain_holders:
+                    await drain_scope.enter_async_context(holder.lock_for(session_id))
+                await drain_scope.enter_async_context(self._session_gate.exclusive(session_id))
                 # 复合资源回调必须先于 fence CAS 与物理 rename。回调失败时
                 # 保留源目录与 catalog deleting 状态，供同一 record 定点
                 # 重试；不得制造"目录已删但进程/claim 未收敛"的伪成功。
                 if self._session_drain_callback is not None:
                     await self._session_drain_callback(session_id)
-                self._drain_session(
+                await self._drain_session(
                     idempotency_key=idempotency_key,
                     session_id=session_id,
                     storage_relative_locator=record.frozen_session_locators[
@@ -417,7 +473,7 @@ class SessionSubtreeDeleteService:
                 )
             self._store.record_drain_progress(idempotency_key, session_id)
 
-    def _drain_session(
+    async def _drain_session(
         self,
         *,
         idempotency_key: str,
@@ -446,6 +502,7 @@ class SessionSubtreeDeleteService:
                 f"source={source}, target={target}"
             )
         self._cas_session_fence(source, session_id, stage=stage)
+        await observe_phase(idempotency_key, "deletion.fence_closed/" + session_id)
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
             os.rename(source, target)
@@ -459,6 +516,7 @@ class SessionSubtreeDeleteService:
         _fsync_directory(target.parent)
         _fsync_directory(target.parent.parent)
         _fsync_directory(source.parent)
+        await observe_phase(idempotency_key, "deletion.renamed/" + session_id)
 
     def _cas_session_fence(
         self,

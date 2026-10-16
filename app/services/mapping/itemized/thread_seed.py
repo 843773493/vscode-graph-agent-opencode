@@ -10,6 +10,8 @@ from app.core.session_control_store import ThreadCreationRecord
 from app.domain.itemized.hashing import sha256_jcs
 from app.prompting import PromptSection, internal_message_factory
 
+THREAD_SEED_DISPLAY_CONTENT = "已收到委派任务。"
+
 
 @dataclass(frozen=True, slots=True)
 class FrozenThreadSeed:
@@ -44,6 +46,6 @@ def frozen_thread_seed(record: ThreadCreationRecord) -> FrozenThreadSeed:
             kind="delegated_task",
             control="在当前 child thread 中独立完成已冻结的委派任务；结果由后端按持久 parent thread 地址自动回报。",
             sections=tuple(sections),
-            display_content="已收到委派任务。",
+            display_content=THREAD_SEED_DISPLAY_CONTENT,
         ),
     )

@@ -120,12 +120,13 @@ class _Saver:
     ):
         assert (session_id, thread_id) == (TARGET_SESSION, TARGET_THREAD)
         self.calls += 1
-        return [
+        rows = [
             dict(row)
             for row in self.rows
             if (job_ids is None or row["job_id"] in job_ids)
             and (turn_id is None or row["turn_id"] == turn_id)
         ]
+        return rows[:1] if turn_id is not None else rows
 
 
 class _Query:
@@ -454,8 +455,35 @@ async def test_idle_wait_does_not_subscribe_future_job(harness: _Harness) -> Non
 async def test_missing_explicit_selector_never_returns_idle(
     harness: _Harness, selector: WaitSelector
 ) -> None:
-    with pytest.raises((ValueError, KeyError)):
-        await harness.wait(selector=selector)
+    call_id = "cop_missing_explicit_selector"
+    with pytest.raises(RemoteObservationError) as first:
+        await harness.wait(call_id=call_id, selector=selector)
+    assert first.value.code == "selector_not_found"
+
+    request = harness.transport.requests[-1]
+    expected = {
+        "error": {
+            "code": "selector_not_found",
+            "message": "selector_not_found",
+            "detail": {},
+        }
+    }
+    with closing(harness.store(TARGET_SESSION)) as store:
+        assert store.get_remote_observation(
+            request.observation_id, side="target"
+        ).result == expected
+        assert store.get_remote_page(
+            request.observation_id,
+            side="target",
+            page_identity=request.page_identity,
+        ).result == expected
+
+    with pytest.raises(RemoteObservationError) as replay:
+        await harness.wait(call_id=call_id, selector=selector)
+    assert replay.value.code == "selector_not_found"
+    assert len(harness.transport.requests) == 2
+    assert harness.transport.requests[-1].terminal_replay is True
+    assert harness.transport.requests[-1].page_identity == request.page_identity
 
 
 async def test_wait_freezes_jobs_and_ignores_later_admission(harness: _Harness) -> None:
@@ -531,13 +559,24 @@ async def test_pending_communication_observes_binding_notification(
     )
 
 
-async def test_turn_selector_observes_all_existing_jobs(harness: _Harness) -> None:
+async def test_turn_selector_observes_latest_attempt(harness: _Harness) -> None:
     harness.saver.rows = [
-        _row(state="completed"),
         _row(job="job_second", state="cancelled", execution="execution_second"),
+        _row(state="completed"),
     ]
     result = await harness.wait(selector=WaitSelector("turn", "turn_original"))
-    assert result["status"] == "cancelled" and len(result["observed"]) == 2
+    assert result["status"] == "cancelled" and len(result["observed"]) == 1
+    assert result["observed"] == [{
+        "selector_kind": "turn", "selector_id": "turn_original",
+        "state": "cancelled", "revision": "job_second:cancelled",
+    }]
+    request = harness.transport.requests[-1]
+    with closing(harness.store(TARGET_SESSION)) as store:
+        observation = store.get_remote_observation(request.observation_id, side="target")
+        assert observation.snapshot["identities"] == [{
+            "kind": "turn", "id": "turn_original",
+            "job_id": "job_second", "execution_id": "execution_second",
+        }]
 
 
 @pytest.mark.parametrize("rollback", [False, True])
@@ -741,7 +780,9 @@ async def test_commit_interruption_replays_result_before_settling(
     result = await harness.read("cop_commit_interrupt", read_request)
     assert result.items[0].text == "第一页"
     assert harness.query.calls == harness.transport.resolves == 1
-    assert harness.transport.requests[-1] == request
+    assert harness.transport.requests[-1] == request.model_copy(update={
+        "terminal_replay": boundary.startswith("source-"),
+    })
     for session_id in (SOURCE_SESSION, TARGET_SESSION):
         with closing(harness.store(session_id)) as store:
             assert store.list_non_terminal_leases() == ()

@@ -175,6 +175,20 @@ def test_notification_value_and_field_shape_are_validated() -> None:
         available=True,
     )
     assert_notification_is_lightweight(observation)
+    directory = ResourceObservation(
+        uri=None, directory_id="skill-directory:" + "a" * 64,
+        revision=_revision("directory"), available=True,
+    )
+    assert_notification_is_lightweight(directory)
+    channel = ResourceObservationChannel()
+    subscription = channel.subscribe(label="目录轻量通知")
+    channel.notify(directory)
+    assert subscription.pending() == (directory,)
+    with pytest.raises(ValueError, match="一个"):
+        ResourceObservation(
+            uri=AGENTS_URI, directory_id=directory.directory_id,
+            revision=_revision("r1"), available=True,
+        )
 
     # 值形状：uri 必须是 boxteam:// 虚拟 identity，revision 必须是 sha256 摘要。
     with pytest.raises(RuntimeError, match="boxteam://"):

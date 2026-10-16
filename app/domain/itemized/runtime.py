@@ -67,6 +67,12 @@ class TurnRecord:
 
 @dataclass(frozen=True, slots=True)
 class ExecutionRecord:
+    """一次 execution 的结果；unknown 只表示该 execution 的 outcome 尚未确定。
+
+    unknown 不能用来判断 Provider 请求是否已发送；发送状态由 ModelCall 的独立
+    dispatch_state 表示。execution 可在多次模型调用及工具之后结束，不能从某次调用终态推导结果。
+    """
+
     session_id: str
     thread_id: str
     execution_id: str
@@ -92,6 +98,12 @@ class ExecutionRecord:
 
 @dataclass(frozen=True, slots=True)
 class ModelCallRecord:
+    """一次 Provider 模型调用的结果；unknown 只表示该调用的 outcome 尚未确定。
+
+    unknown 不能用来判断 Provider 请求是否已发送；dispatch_state 独立记录请求发送状态。
+    调用完成可先于工具和 execution 完成，不能由 execution 终态改写调用事实。
+    """
+
     session_id: str
     thread_id: str
     model_call_id: str

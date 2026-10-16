@@ -18,6 +18,7 @@ function queuedConversation(
     userMessage: {
       message_id: conversationId,
       session_id: "ses_queue",
+      thread_id: "thr_queue",
       role: "user",
       content,
       attachments: [],
@@ -55,7 +56,6 @@ describe("PendingQueueBar", () => {
           onClear={async () => {
             cleared += 1;
           }}
-          onUpdate={async () => undefined}
           onRemove={async () => undefined}
           onChangePolicy={async () => undefined}
         />,
@@ -75,6 +75,7 @@ describe("PendingQueueBar", () => {
     expect(hasText("已经发送")).toHaveLength(0);
     expect(hasText("等待第一条完成")).toHaveLength(1);
     expect(hasText("等待中断边界")).toHaveLength(1);
+    expect(activeRenderer.root.findAllByType("textarea")).toHaveLength(0);
 
     expect(activeRenderer.root.findAllByProps({
       className: "chat-pending-direction-button",

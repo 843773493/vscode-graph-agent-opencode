@@ -5,7 +5,7 @@
 本目录只做请求解析、参数校验、依赖注入与响应封装，不承载业务规则：
 
 - `deps.py`：所有路由共享的 FastAPI 依赖提供者（从 `request.app.state.container` 取服务实例）与 `verify_local_token`；`get_request_id` 从 `app.core.trace_middleware` 重导出。
-- `canonical_params.py`：`Annotated` 形式的 canonical `session_id` / `thread_id` 校验类型，复用 `app.core.session_catalog_store` 的唯一校验器。
+- canonical `session_id` / `thread_id` 的 `Annotated` 校验类型由 `app.schemas.canonical_params` 唯一定义，并复用 `app.core.session_catalog_store` 的唯一校验器。
 - `sse_heartbeat.py`：把异步事件源包装成带空闲心跳的 SSE 流的统一实现。
 - 其余 `*.py`：按业务域（`sessions`、`messages`、`workspace`、`jobs`、`tools`、`mcp`、`node_debug`、`runtime` 等）拆分的路由实现。同层不再有前端 TS 文件；浏览器前端的 gateway API 客户端位于 `src/clients/web/src/gatewayApi.ts`，pending request 客户端位于 `src/clients/web/src/pendingRequestsApi.ts`，二者不属于本目录。
 - `messages.py` 与 `session_turns.py` 分别适配 `sessions/{session_id}/threads/{thread_id}/messages` 和同 thread 的 `/history`，复用消息准入和唯一历史 reader；Session-only 入口仍由业务 owner 解析 main thread。
@@ -19,7 +19,7 @@
 # 不可修改内容
 
 - 不在本目录实现业务规则、会话状态计算或流程编排；这些属于 `app/services`，本目录只转发调用。
-- 不重复实现 canonical ID 校验：路径/查询/请求体中的 `session_id`、`thread_id` 只能复用 `canonical_params.py` 指向的唯一验证器，不得另写清洗、截断或旧 ID 别名逻辑。
+- 不重复实现 canonical ID 校验：路径/查询/请求体中的 `session_id`、`thread_id` 只能复用 `app.schemas.canonical_params` 指向的唯一验证器，不得另写清洗、截断或旧 ID 别名逻辑。
 - 不得自行生成或补造 `request_id`：必须通过 `Depends(get_request_id)` 读取 TraceMiddleware 注入的权威值，禁止在响应里写入第二个请求 ID。
 - 不绕过服务层直接读写 `${workspace_abs_path}/.boxteam/` 业务数据，也不在此实现 Gateway 的工作区路由与代理（属于 `app/gateway/`）。
 

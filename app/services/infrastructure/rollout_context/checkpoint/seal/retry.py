@@ -10,23 +10,12 @@ from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
     draft_manifest,
 )
-from app.services.infrastructure.rollout_context.assembly.plans.registry import (
-    ContextPlanRegistration,
-)
 
 
 def require_key(value: str, *, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"assembly-idempotency-conflict: {field} 必须非空")
     return value
-
-
-def runtime_draft(registered: ContextPlanRegistration) -> ContextRequestPlan:
-    if registered.registration_origin != "runtime" or registered.draft is None:
-        raise ValueError(
-            "plan-order-integrity: imported registration 不允许 runtime create/revise/seal"
-        )
-    return registered.draft
 
 
 def seal_input_hash(
@@ -73,7 +62,7 @@ def require_registered_draft(
         plan_id=plan.plan_id,
         checkpoint_ns=checkpoint_ns,
     )
-    if draft_manifest(plan) != draft_manifest(runtime_draft(registered)):
+    if draft_manifest(plan) != draft_manifest(registered.draft):
         raise ValueError(
             "assembly-idempotency-conflict: seal 输入与当前注册 draft 不一致"
         )
@@ -92,7 +81,7 @@ def committed_retry(
     assembly_options: Mapping[str, object],
     request_only_content: Mapping[str, object] | None,
 ) -> ContextAssemblySnapshot | None:
-    draft = runtime_draft(registered)
+    draft = registered.draft
     if registered.plan_state == "unsealed":
         return None
     if (

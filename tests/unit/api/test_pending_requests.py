@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from app.api.messages import create_message_and_run, update_pending_request_policy
+from app.api.messages import (
+    create_message_and_run,
+    list_main_thread_pending_requests,
+    list_pending_requests,
+    update_pending_request_policy,
+)
+from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.message import MessageRunRequest
 from app.schemas.internal_v2.pending_request import (
@@ -49,6 +57,88 @@ class _SessionOrchestrator:
         del session_id
         self.payload = payload
         return {"status": JobStatus.queued.value}
+
+
+@pytest.fixture
+def scoped_pending_readers(request: pytest.FixtureRequest):
+    calls = []
+    main_thread = "thr_018f0000000070008000000000000001"
+    error = getattr(request, "param", None)
+
+    class SessionReader:
+        @asynccontextmanager
+        async def session_read_admission(self, session_id):
+            calls.append(("enter", session_id))
+            if error is not None:
+                raise error
+            yield
+            calls.append(("exit", session_id))
+
+        async def resolve_main_thread(self, session_id):
+            calls.append(("resolve", session_id))
+            return main_thread
+
+    class PendingReader:
+        async def list_pending(self, session_id, *, thread_id=None):
+            calls.append(("pending", session_id, thread_id))
+            if error is not None:
+                raise error
+            return PendingRequestListDTO(session_id=session_id, thread_id=thread_id)
+
+    return PendingReader(), SessionReader(), calls, main_thread
+
+
+@pytest.mark.asyncio
+async def test_main_pending_route_resolves_canonical_scope_while_session_route_aggregates(
+    scoped_pending_readers,
+) -> None:
+    job_service, session_service, calls, main_thread = scoped_pending_readers
+    session_id = "ses_018f0000000070008000000000000001"
+    main = await list_main_thread_pending_requests(
+        session_id, _="local", request_id="request_scope",
+        job_service=job_service, session_service=session_service,
+    )
+    aggregate = await list_pending_requests(
+        session_id, _="local", request_id="request_scope", job_service=job_service,
+    )
+    assert main.data.thread_id == main_thread and aggregate.data.thread_id is None
+    assert calls == [
+        ("enter", session_id), ("resolve", session_id),
+        ("pending", session_id, main_thread), ("exit", session_id),
+        ("pending", session_id, None),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("main_scope", [False, True])
+@pytest.mark.parametrize("scoped_pending_readers", [
+    SessionDeletionPendingError("session_deletion_pending: 原 catalog 正在删除"),
+    RuntimeError("原 pending owner 完整性故障"),
+], indirect=True)
+async def test_pending_read_maps_deleting_and_preserves_real_owner_failure(
+    scoped_pending_readers, main_scope: bool,
+) -> None:
+    job_service, session_service, calls, _main_thread = scoped_pending_readers
+    session_id = "ses_018f0000000070008000000000000001"
+    try:
+        if main_scope:
+            await list_main_thread_pending_requests(
+                session_id, _="local", request_id="request_deleting",
+                job_service=job_service, session_service=session_service,
+            )
+        else:
+            await list_pending_requests(
+                session_id, _="local", request_id="request_deleting", job_service=job_service,
+            )
+    except HTTPException as error:
+        assert error.status_code == 409
+        assert error.detail == "session_deletion_pending: 原 catalog 正在删除"
+    except RuntimeError as error:
+        assert type(error) is RuntimeError
+        assert str(error) == "原 pending owner 完整性故障"
+    else:
+        pytest.fail("失败的 pending owner 不能返回虚假的队列")
+    assert calls == ([("enter", session_id)] if main_scope else [("pending", session_id, None)])
 
 
 @pytest.mark.asyncio

@@ -45,7 +45,6 @@ class _Jobs:
         self.job = None
         self.items = []
         self.pending = []
-        self.pending_updates = []
 
     async def list(self, session_id=None):
         return list(self.items)
@@ -54,10 +53,6 @@ class _Jobs:
         return self.job
 
     async def list_pending(self, session_id):
-        return SimpleNamespace(requests=list(self.pending))
-
-    async def update_pending(self, session_id, message_id, *, content, attachments):
-        self.pending_updates.append((session_id, message_id, content, attachments))
         return SimpleNamespace(requests=list(self.pending))
 
 

@@ -151,9 +151,13 @@ class SkillLoadReceipt:
 
     ``display_uri`` 是模型可见的 boxteam:// 虚拟资源 URI，属于
     ResourceProvenance 而非 Skill metadata；未绑定 descriptor 的恢复
-    registration 返回 None，不得伪造 URI。``revision`` 是 source/semantic
-    revision（当前为内容寻址 sha256，catalog revision producer 落地后两者
-    分离）；``content_hash`` 是精确正文的 hash 标识，永远不含正文本身。
+    registration 返回 None，不得伪造 URI。``revision`` 在 snapshot/tracked
+    模式下是冻结 activation facet 的 JCS revision；在 untrack 模式下是被定位
+    registration 的 latest revision，没有 active tracked registration 时取当前
+    解析 registration 的 latest revision。``content_hash`` 是 activation facet
+    正文（frontmatter 之后）精确 UTF-8 字节的 SHA-256；完整 ``SKILL.md``
+    原始字节的 ``raw_revision``（保留 frontmatter）记录于
+    ``ResourceSnapshot.source_lineage``，与此 ``content_hash`` 不同。
     """
 
     name: str
@@ -218,6 +222,8 @@ class SkillCatalogActivationSnapshot:
 
     catalog_revision: str
     entries: Mapping[str, SkillCatalogBinding]
+    # effective entries 决定新 load；全部仍存在的原来源供既有 tracked registration 冻结。
+    sources: Mapping[str, SkillCatalogBinding] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.catalog_revision, str) or not self.catalog_revision:
@@ -236,6 +242,15 @@ class SkillCatalogActivationSnapshot:
                     "SkillCatalogActivationSnapshot entry 名与 binding.name 不一致: "
                     f"{name!r} != {binding.name!r}"
                 )
+        sources = dict(self.sources)
+        for binding in self.entries.values():
+            existing = sources.get(binding.display_uri)
+            if existing is not None and existing != binding:
+                raise ValueError("SkillCatalogActivationSnapshot 同一来源 binding 不一致")
+            sources[binding.display_uri] = binding
+        if any(uri != binding.display_uri for uri, binding in sources.items()):
+            raise ValueError("SkillCatalogActivationSnapshot 来源 URI 与 binding 不一致")
+        object.__setattr__(self, "sources", sources)
 @dataclass(frozen=True, slots=True)
 class ContextSourceSnapshot:
     """模型调用边界冻结的完整正文；确认时不能读取更新后的 desired。"""

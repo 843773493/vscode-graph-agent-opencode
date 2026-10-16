@@ -129,16 +129,16 @@ def test_toolsets_jsonl_sqlite_and_saver_restart(
             assert entry.omission_reason and entry.loss
             assert "tools" not in entry.to_dict()["ref"]
             assert "tool_policy" not in entry.to_dict()["ref"]
+    seal_options = {
+        "seal_idempotency_key": "tool-seal",
+        "detail_key": None,
+        "seal_input_hash": sha256_jcs("storage-seal-test-input"),
+    }
     with connection:
         connection.execute("BEGIN IMMEDIATE")
+        preflight = preflight_seal(connection, restored, **seal_options)
         _insert_snapshot(connection, restored)
-        bind_sealed_registration(
-            connection,
-            restored,
-            seal_idempotency_key="tool-seal",
-            detail_key=None,
-            seal_input_hash=sha256_jcs("storage-seal-test-input"),
-        )
+        bind_sealed_registration(connection, preflight)
     restarted = RolloutCheckpointSaver(
         run_context.workspace_root / ".boxteam" / "sessions"
     )
@@ -152,13 +152,8 @@ def test_toolsets_jsonl_sqlite_and_saver_restart(
     for retry in (snapshot, restored):
         with connection:
             connection.execute("BEGIN IMMEDIATE")
-            bind_sealed_registration(
-                connection,
-                retry,
-                seal_idempotency_key="tool-seal",
-                detail_key=None,
-                seal_input_hash=sha256_jcs("storage-seal-test-input"),
-            )
+            preflight = preflight_seal(connection, retry, **seal_options)
+            bind_sealed_registration(connection, preflight)
     assert connection.execute("SELECT count(*) FROM context_assemblies").fetchone() == (
         1,
     )
@@ -331,14 +326,12 @@ def test_sealed_selection_semantics_cannot_change_after_restart(
     )
     with connection:
         connection.execute("BEGIN IMMEDIATE")
-        _insert_snapshot(connection, original)
-        bind_sealed_registration(
-            connection,
-            original,
-            seal_idempotency_key="tool-seal",
-            detail_key=None,
+        preflight = preflight_seal(
+            connection, original, seal_idempotency_key="tool-seal", detail_key=None,
             seal_input_hash=sha256_jcs("storage-seal-test-input"),
         )
+        _insert_snapshot(connection, original)
+        bind_sealed_registration(connection, preflight)
     restarted = RolloutCheckpointSaver(
         run_context.workspace_root / ".boxteam" / "sessions"
     )
@@ -381,14 +374,12 @@ def test_recovery_rejects_tampered_tool_registry_rows(
     snapshot = _snapshot(tool_draft, accepted, ("z",))
     with connection:
         connection.execute("BEGIN IMMEDIATE")
-        _insert_snapshot(connection, snapshot)
-        bind_sealed_registration(
-            connection,
-            snapshot,
-            seal_idempotency_key="tool-seal",
-            detail_key=None,
+        preflight = preflight_seal(
+            connection, snapshot, seal_idempotency_key="tool-seal", detail_key=None,
             seal_input_hash=sha256_jcs("storage-seal-test-input"),
         )
+        _insert_snapshot(connection, snapshot)
+        bind_sealed_registration(connection, preflight)
     with connection:
         connection.execute(
             f"UPDATE tool_set_snapshots SET {column} = ? WHERE tool_set_snapshot_id = 'z'",
@@ -427,14 +418,12 @@ def test_same_raw_id_keeps_request_and_tool_selection_separate(registry_db, tool
     ]
     with connection:
         connection.execute("BEGIN IMMEDIATE")
-        _insert_snapshot(connection, restored)
-        bind_sealed_registration(
-            connection,
-            restored,
-            seal_idempotency_key="tool-seal",
-            detail_key=None,
+        preflight = preflight_seal(
+            connection, restored, seal_idempotency_key="tool-seal", detail_key=None,
             seal_input_hash=sha256_jcs("storage-seal-test-input"),
         )
+        _insert_snapshot(connection, restored)
+        bind_sealed_registration(connection, preflight)
     assert (
         saver.get_context_plan_registration(session, thread_id=draft.thread_id, plan_id=draft.plan_id).plan_state
         == "sealed"

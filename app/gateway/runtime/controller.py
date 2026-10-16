@@ -430,13 +430,47 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
                 or target.remote_gateway_connection_id is None
             ):
                 raise ValueError("只有远程 Gateway 工作区可以重新连接 SSH 隧道")
-            await reconnect_remote_gateway(
-                registry=self._registry,
-                connection_id=target.remote_gateway_connection_id,
-                log_dir=self._log_dir,
-                health_request_timeout_seconds=self._health_request_timeout_seconds,
-                health_poll_interval_seconds=self._health_poll_interval_seconds,
+            connection_id = target.remote_gateway_connection_id
+            previous_commit = self._registry._last_committed_snapshot
+            previous_revision = self._registry.registry_revision
+            previous_runtime = self._registry._remote_gateway_runtimes.get(
+                connection_id
             )
+            try:
+                await reconnect_remote_gateway(
+                    registry=self._registry,
+                    connection_id=connection_id,
+                    log_dir=self._log_dir,
+                    health_request_timeout_seconds=self._health_request_timeout_seconds,
+                    health_poll_interval_seconds=self._health_poll_interval_seconds,
+                )
+            except BaseException as error:
+                current_runtime = self._registry._remote_gateway_runtimes.get(
+                    connection_id
+                )
+                published = (
+                    self._registry._last_committed_snapshot is not previous_commit
+                    and (
+                        self._registry._state_store is None
+                        or self._registry.registry_revision > previous_revision
+                    )
+                    and current_runtime is not None
+                    and current_runtime is not previous_runtime
+                    and self._registry.remote_gateway_url(connection_id)
+                    == current_runtime.service_urls["workspace_api"]
+                )
+                if not published:
+                    raise
+                try:
+                    await self._reconcile_registry_dependents()
+                # 异步对账普通失败附加原错；取消必须传播给请求调用方。
+                except Exception as secondary_error:  # noqa: BLE001
+                    note = (
+                        "远程 Gateway 新 URL 已提交，但依赖资源对账失败: "
+                        f"{secondary_error}"
+                    )
+                    error.add_note(note)
+                raise
             await self._reconcile_registry_dependents()
 
     async def probe_external_backend(self, workspace_id: str) -> None:

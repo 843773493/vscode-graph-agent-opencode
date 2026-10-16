@@ -4,24 +4,186 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AnyMessage,
+    BaseMessage,
+    HumanMessage,
+    ToolMessage,
+    message_to_dict,
+)
 
 from app.domain.itemized.enums import SemanticKind
+from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.domain.itemized.records import CanonicalItemRecord
+from app.prompting.validation import internal_prompt_metadata, validate_internal_message
 from app.services.mapping.itemized.carrier_dedup import (
     projection_message_group_id as _projection_message_group_id,
 )
 from app.services.mapping.itemized.carrier_dedup import (
-    superseded_stream_item_ids as _superseded_stream_item_ids,
+    superseded_item_ids as _superseded_item_ids,
 )
 from app.services.mapping.itemized.provider_request import (
     project_runtime_notice_content,
 )
 
+_TOOL_PAYLOAD_RETRY_MAX_CHARS = 4096
+_TOOL_PAYLOAD_RETRY_TOTAL_CHARS = 8192
+_MEDIA_BLOCK_MARKERS = {
+    "document": "[document]", "file": "[document]", "image": "[image]",
+    "image_url": "[image]", "input_file": "[document]", "input_image": "[image]",
+}
+
 REASONING_CARRIER_TYPES = frozenset({
     "reasoning", "reasoning_content", "reasoning_items", "thinking", "redacted_thinking",
 })
+
+
+def _strip_media_content(content: object) -> tuple[object, bool]:
+    if not isinstance(content, list):
+        return content, False
+    stripped: list[object] = []
+    changed = False
+    for block in content:
+        if isinstance(block, dict) and isinstance(block.get("type"), str) and block["type"] in _MEDIA_BLOCK_MARKERS:
+            stripped.append({"type": "text", "text": _MEDIA_BLOCK_MARKERS[block["type"]]})
+            changed = True
+        elif isinstance(block, dict) and block.get("type") == "tool_result" and "content" in block:
+            nested, nested_changed = _strip_media_content(block["content"])
+            stripped.append({**block, "content": nested} if nested_changed else block)
+            changed |= nested_changed
+        else:
+            stripped.append(block)
+    return stripped, changed
+
+
+def strip_media_from_summary_messages(messages: list[AnyMessage]) -> tuple[list[AnyMessage], bool]:
+    """只变换摘要重试副本，canonical 媒体正文保持不变。"""
+    result = []
+    changed = False
+    for message in messages:
+        content, item_changed = _strip_media_content(message.content)
+        result.append(message.model_copy(update={"content": content}) if item_changed else message)
+        changed |= item_changed
+    return result, changed
+
+
+def _content_character_count(value: object) -> int:
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, Mapping):
+        return sum(_content_character_count(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return sum(_content_character_count(item) for item in value)
+    return len(str(value))
+
+
+def compact_large_tool_payloads_for_summary(messages: list[AnyMessage]) -> tuple[list[AnyMessage], bool]:
+    """按单项和总载荷预算省略重试副本，工具身份及配对保持不变。"""
+    payloads: list[tuple[str, int, int, int]] = []
+    for message_index, message in enumerate(messages):
+        if isinstance(message, AIMessage):
+            payloads.extend(("args", message_index, index, _content_character_count(call["args"]))
+                            for index, call in enumerate(message.tool_calls))
+        elif isinstance(message, ToolMessage):
+            payloads.append(("result", message_index, -1, _content_character_count(message.content)))
+    marked = {(kind, index, call) for kind, index, call, size in payloads if size > _TOOL_PAYLOAD_RETRY_MAX_CHARS}
+    remaining = sum(size for kind, index, call, size in payloads if (kind, index, call) not in marked)
+    for kind, index, call, size in payloads:
+        if remaining <= _TOOL_PAYLOAD_RETRY_TOTAL_CHARS:
+            break
+        if (kind, index, call) not in marked:
+            marked.add((kind, index, call))
+            remaining -= size
+    result = []
+    for index, message in enumerate(messages):
+        if isinstance(message, ToolMessage) and ("result", index, -1) in marked:
+            result.append(message.model_copy(update={"content": "[large tool result omitted for compaction retry]"}))
+        elif isinstance(message, AIMessage) and message.tool_calls:
+            calls = [{**call, "args": {"_omitted": "large tool arguments"}}
+                     if ("args", index, call_index) in marked else call
+                     for call_index, call in enumerate(message.tool_calls)]
+            result.append(message.model_copy(update={"tool_calls": calls}))
+        else:
+            result.append(message)
+    return result, bool(marked)
+
+
+def summary_source_groups(items: Sequence[CanonicalItemRecord]) -> dict[str, tuple[CanonicalItemRecord, ...]]:
+    """同一物理消息的伴随 item 共用最后一个 anchor 的消息身份。"""
+    groups: dict[str, list[CanonicalItemRecord]] = {}
+    for item in items:
+        groups.setdefault(item.message_group_id or item.item_id, []).append(item)
+    return {_message_id(group[-1]): tuple(group) for group in groups.values()}
+
+
+def project_summary_source(group: Sequence[CanonicalItemRecord]) -> BaseMessage:
+    """恢复真实 checkpoint 消息正文，保留工具组原有 str/list 形状。"""
+    originals = project_canonical_items(group, include_runtime_notices=True, include_summaries=True, preserve_order=True)
+    if len(originals) != 1:
+        raise ValueError("summary-source-mismatch: canonical 来源不是完整的唯一消息")
+    expected = originals[0]
+    anchor = group[-1]
+    if anchor.projection_group is not None:
+        content: list[object] = []
+        for item in group:
+            if item.semantic_kind == SemanticKind.TOOL_CALL:
+                continue
+            if item.semantic_kind == SemanticKind.REASONING:
+                carrier = project_reasoning_carrier(item)
+                if carrier is None:
+                    raise ValueError("summary-source-mismatch: reasoning carrier 不可投影")
+                content.append(carrier)
+            elif isinstance(item.payload, str):
+                content.append(item.payload)
+            else:
+                content.extend(item.payload)
+        expected = expected.model_copy(update={
+            "id": _message_id(anchor),
+            "content": content if anchor.projection_group.content_form == "list" else content[0] if content else "",
+        })
+    elif isinstance(expected, AIMessage) and isinstance(anchor.payload, Mapping) and "invalid_tool_calls" in anchor.payload:
+        expected = expected.model_copy(update={"content": anchor.payload["content"], "invalid_tool_calls": anchor.payload["invalid_tool_calls"]})
+    return expected
+
+
+def summary_retry_variants(messages: Sequence[BaseMessage]) -> dict[str, tuple[BaseMessage, ...]]:
+    """重试与冷校验使用相同中段及同一载荷预算，后缀裁剪不改变省略资格。"""
+    stripped, _ = strip_media_from_summary_messages(list(messages))
+    compacted, _ = compact_large_tool_payloads_for_summary(stripped)
+    return {message.id: (stripped[index], compacted[index]) for index, message in enumerate(messages)}
+
+
+def validate_summary_source(
+    message: BaseMessage, group: Sequence[CanonicalItemRecord], *,
+    retry_variants: Sequence[BaseMessage] = (),
+) -> None:
+    """准备与冷读取共同验证摘要副本，不能只相信冻结的来源 ID。"""
+    if not group:
+        metadata = internal_prompt_metadata(message.response_metadata)
+        kind = metadata.get("structured_prompt_kind") if metadata is not None else None
+        expected_kind = {"summarization_request": "compaction_summary_instruction", "summarization_retry": "compaction_retry_marker"}.get(message.response_metadata.get("lc_source"))
+        if not isinstance(message, HumanMessage) or expected_kind is None or kind != expected_kind:
+            raise ValueError(f"summary-source-mismatch: 候选消息没有 canonical 来源: {message.id!r}")
+        validate_internal_message(message.content, message.response_metadata)
+        return
+    expected = project_summary_source(group)
+    if expected.type != message.type or expected.id != message.id:
+        raise ValueError("summary-source-mismatch: 候选角色或 canonical 消息身份不一致")
+    # Chat 会在 typed calls 为空时读取 raw calls，并始终读取 function_call。
+    # 这两类旁路不能通过同正文/同 ID 冒充 canonical 来源。
+    sidecar_keys = ("function_call",) if isinstance(message, AIMessage) and message.tool_calls else ("tool_calls", "function_call")
+    for key in sidecar_keys:
+        if canonical_json_bytes(message.additional_kwargs.get(key)) != canonical_json_bytes(expected.additional_kwargs.get(key)):
+            raise ValueError(f"summary-source-mismatch: 候选包含非 canonical wire sidecar: {key}")
+    actual_data = message_to_dict(message)["data"]
+    for candidate in (expected, *retry_variants):
+        expected_data = message_to_dict(candidate)["data"]
+        if all(canonical_json_bytes(actual_data.get(key)) == canonical_json_bytes(expected_data.get(key))
+               for key in ("content", "tool_calls", "invalid_tool_calls", "tool_call_id", "name")):
+            return
+    raise ValueError(f"summary-source-mismatch: 候选正文不属于 canonical 投影或重试变体: {message.id}")
 
 
 def _message_id(item: CanonicalItemRecord) -> str:
@@ -121,7 +283,10 @@ def project_tool_result(item: CanonicalItemRecord) -> ToolMessage:
     return ToolMessage(
         content=_message_content(payload.get("content", item.payload)),
         id=_message_id(item),
-        tool_call_id=evidence.tool_call_id if evidence is not None else payload["tool_call_id"],
+        tool_call_id=provider_tool_call_id(
+            item.projection_identity,
+            evidence.tool_call_id if evidence is not None else payload["tool_call_id"],
+        ),
         name=str(payload.get("name") or "tool"),
         status="error" if outcome in {"failure", "cancelled", "unknown"} else "success",
         response_metadata={
@@ -147,7 +312,7 @@ def project_canonical_items(
     ordered = (
         items if preserve_order else sorted(items, key=lambda item: item.item_sequence)
     )
-    superseded_ids = _superseded_stream_item_ids(ordered)
+    superseded_ids = _superseded_item_ids(ordered)
     for item in ordered:
         if item.item_id in superseded_ids:
             continue
@@ -159,10 +324,7 @@ def project_canonical_items(
             )
             continue
         if item.semantic_kind == SemanticKind.TOOL_RESULT:
-            message = project_tool_result(item)
-            messages.append(message.model_copy(update={
-                "tool_call_id": provider_tool_call_id(item.projection_identity, message.tool_call_id),
-            }))
+            messages.append(project_tool_result(item))
             continue
         if item.semantic_kind == SemanticKind.RUNTIME_NOTICE:
             if not include_runtime_notices:
@@ -194,7 +356,7 @@ def project_canonical_items(
                 continue
             messages.append(
                 HumanMessage(
-                    content=_message_content(item.payload),
+                    content=item.payload["summary"],
                     id=_message_id(item),
                     response_metadata={"internal": True, "compaction_summary": True},
                 )

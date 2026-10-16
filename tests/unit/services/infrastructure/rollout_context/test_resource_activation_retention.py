@@ -6,7 +6,7 @@
 - rewind/compaction 的 control payload 精确保留 source activation ref；
 - restore 只读 sealed activation，缺失/schema 未接入时 fail closed，绝不解析
   当前 URI 或 Registry；
-- full_rollout_copy 重造 target-local activation identity 并保留 source lineage。
+- full_rollout_copy 原样保留 activation identity、原 scope 与 source lineage。
 """
 
 from __future__ import annotations
@@ -38,6 +38,9 @@ from app.domain.itemized.resource_activation import (
     ResourceMemberBinding,
     ResourceProvenanceRef,
     SourceLineageRef,
+)
+from app.services.infrastructure.rollout_context.activation.body import (
+    ResourceActivationBodyStore,
 )
 from app.services.infrastructure.rollout_context.activation.store import (
     ResourceActivationStoreError,
@@ -91,19 +94,20 @@ def _activation_snapshot(
 ) -> ResourceActivationSnapshotRef:
     """写入逐资源正文 detail 并返回引用它的 turn snapshot。"""
     snapshot_id = f"execution:{binding.session_id}:{binding.thread_id}:{execution_id}"
-    body_record = saver._detail_store.write(
-        session_id=binding.session_id,
-        thread_id=binding.thread_id,
-        assembly_id=snapshot_id,
-        detail_kind="resource_body",
-        retention_class="resource_body",
-        visibility="internal",
-        detail={"payload": "resource-body"},
-        required=True,
-        sensitive=True,
+    body_ref = ResourceActivationBodyStore(saver._storage, saver._detail_store).write_resource_body(
+        owner_session_id=binding.session_id,
+        owner_thread_id=binding.thread_id,
+        activation_snapshot_id=snapshot_id,
+        resource_id="skill:demo",
+        activation_ordinal=0,
+        payload={"payload": "resource-body"},
         checkpoint_ns="",
     )
-    saver._storage.assemblies.register_context_plan_detail(body_record)
+    body_record = detail_record_from_mapping(
+        saver._storage.assemblies.get_context_plan_detail(
+            binding.session_id, binding.thread_id, detail_ref=body_ref,
+        ),
+    )
     lineage = SourceLineageRef(
         lineage_id="lineage:skill:demo",
         derivation_version="resource-derivation:v1",
@@ -130,14 +134,14 @@ def _activation_snapshot(
                 facet="activation",
                 revision="rev-1",
                 availability="available",
-                content_length=len(json.dumps({"payload": "resource-body"})),
-                content_hash=sha256_jcs({"payload": "resource-body"}),
+                content_length=body_record.length,
+                content_hash=body_record.source_revision,
                 source_lineage_ref=lineage,
                 source_lineage_digest=lineage.digest,
                 activation_ordinal=0,
                 effective_boundary="turn",
                 captured_registry_generation=3,
-                detail_ref=body_record.detail_ref,
+                detail_ref=body_ref,
                 members=(ResourceMemberBinding(
                     member_id="custom:demo", member_kind="custom",
                     schema_hash="sha256:" + "a" * 64, server_id=None,

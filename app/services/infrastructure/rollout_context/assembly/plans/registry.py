@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.hashing import canonical_json_bytes_and_hash
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.serde.plan import unsealed_context_plan_from_dict
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
-    creation_hash,
+    _creation_hash_manifest,
     draft_manifest,
     runtime_seal_hash,
     validate_sealed_plan,
@@ -23,6 +24,9 @@ from app.services.infrastructure.rollout_context.assembly.plans.rows import (
 )
 from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextPlanRegistration,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    require_historical_scope,
 )
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as json_text,
@@ -52,30 +56,23 @@ def read_registration(
     thread_id: str,
     plan_id: str,
 ) -> ContextPlanRegistration:
-    require_owner(connection, session_id, thread_id)
+    require_historical_scope(connection, session_id, thread_id)
     row = connection.execute(
         "SELECT draft_json, draft_hash, creation_hash, revision, plan_state, assembly_id, "
         "seal_idempotency_key, seal_hash, plan_creation_idempotency_key, creation_json, "
-        "registration_origin, source_provenance_json, seal_input_hash, source_manifest_json "
+        "seal_input_hash "
         "FROM context_plans WHERE session_id = ? AND thread_id = ? AND plan_id = ?",
         (session_id, thread_id, plan_id),
     ).fetchone()
     if row is None:
         raise KeyError(f"context plan 不存在: {plan_id}")
-    if row[10] != "runtime":
-        from app.services.infrastructure.rollout_context.assembly.plans.imported import (
-            read_imported_registration,
-        )
-
-        return read_imported_registration(connection, session_id, thread_id, plan_id)
-    if row[11] is not None or row[13] is not None:
-        raise ValueError("source-mismatch: runtime draft 不得冒充导入记录")
-    if (row[4] == "unsealed" and row[12] is not None) or (
-        row[4] == "sealed" and (not isinstance(row[12], str) or not row[12].strip())
+    if (row[4] == "unsealed" and row[10] is not None) or (
+        row[4] == "sealed" and (not isinstance(row[10], str) or not row[10].strip())
     ):
         raise ValueError("source-mismatch: plan seal input binding 不一致")
     value = json.loads(row[0])
-    if row[0] != json_text(value) or row[1] != sha256_jcs(value):
+    manifest_bytes, manifest_hash = canonical_json_bytes_and_hash(value)
+    if row[0] != manifest_bytes.decode("utf-8") or row[1] != manifest_hash:
         raise ValueError("source-mismatch: plan draft manifest hash 不一致")
     plan = unsealed_context_plan_from_dict(value)
     if any(item.body is not None for item in plan.contributions):
@@ -97,20 +94,27 @@ def read_registration(
         and any(not isinstance(item, str) or not item for item in binding)
     ):
         raise ValueError("source-mismatch: plan seal binding 不一致")
-    initial_value = json.loads(row[9])
-    if row[9] != json_text(initial_value):
-        raise ValueError("source-mismatch: 初始 creation manifest 不是规范 JSON")
-    initial = unsealed_context_plan_from_dict(initial_value)
-    if any(item.body is not None for item in initial.contributions):
-        raise ValueError("source-mismatch: creation registry 不得包含 inline body")
+    same_json = row[0] == row[9]
+    if same_json:
+        # 同一 SQL 行的相同文本已完整冷校验；只在本次读取中复用 typed 值和投影。
+        initial = plan
+        initial_manifest = plan.to_dict()
+    else:
+        initial_value = json.loads(row[9])
+        if row[9] != json_text(initial_value):
+            raise ValueError("source-mismatch: 初始 creation manifest 不是规范 JSON")
+        initial = unsealed_context_plan_from_dict(initial_value)
+        if any(item.body is not None for item in initial.contributions):
+            raise ValueError("source-mismatch: creation registry 不得包含 inline body")
+        initial_manifest = initial.to_dict()
     if (initial.session_id, initial.thread_id, initial.plan_id, initial.plan_creation_idempotency_key) != (
         session_id,
         thread_id,
         plan_id,
         row[8],
-    ) or row[2] != creation_hash(initial):
+    ) or row[2] != _creation_hash_manifest(initial_manifest):
         raise ValueError("source-mismatch: plan creation preimage 不一致")
-    if row[3] == 0 and draft_manifest(initial) != draft_manifest(plan):
+    if row[3] == 0 and not same_json and initial_manifest != plan.to_dict():
         raise ValueError(
             "source-mismatch: 未修订 draft 与初始 creation manifest 不一致"
         )
@@ -126,19 +130,20 @@ def read_registration(
             raise ValueError("source-mismatch: sealed plan 缺少同一 assembly")
         snapshot = ContextAssemblySnapshot.from_dict(json.loads(assembly[0]))
         validate_sealed_plan(plan, snapshot)
-        if row[7] != runtime_seal_hash(snapshot, assembly[1], row[12]):
+        if row[7] != runtime_seal_hash(snapshot, assembly[1], row[10]):
             raise ValueError("source-mismatch: sealed plan preimage 与 assembly 不一致")
     return ContextPlanRegistration(
         session_id=session_id,
         thread_id=thread_id,
         draft=plan,
         creation_hash=row[2],
+        draft_hash=row[1], draft_json=row[0],
         revision=row[3],
         plan_state=row[4],
         assembly_id=row[5],
         seal_idempotency_key=row[6],
         seal_hash=row[7],
-        seal_input_hash=row[12],
+        seal_input_hash=row[10],
         sealed_snapshot=snapshot,
     )
 
@@ -149,7 +154,7 @@ def create_registration(
     require_transaction(connection)
     require_owner(connection, plan.session_id, plan.thread_id)
     manifest = draft_manifest(plan)
-    input_hash = creation_hash(plan)
+    input_hash = _creation_hash_manifest(manifest)
     existing = connection.execute(
         "SELECT plan_id FROM context_plans WHERE session_id = ? AND thread_id = ? AND plan_creation_idempotency_key = ?",
         (plan.session_id, plan.thread_id, plan.plan_creation_idempotency_key),
@@ -167,6 +172,8 @@ def create_registration(
     ).fetchone():
         raise ValueError("plan-idempotency-conflict: plan_id 已被另一创建键占用")
     timestamp = datetime.now(UTC).isoformat()
+    manifest_bytes, manifest_hash = canonical_json_bytes_and_hash(manifest)
+    manifest_json = manifest_bytes.decode("utf-8")
     connection.execute(
         "INSERT INTO context_plans(session_id, thread_id, plan_id, plan_creation_idempotency_key, "
         "creation_hash, creation_json, draft_json, draft_hash, revision, plan_state, created_at, updated_at) "
@@ -177,15 +184,23 @@ def create_registration(
             plan.plan_id,
             plan.plan_creation_idempotency_key,
             input_hash,
-            json_text(manifest),
-            json_text(manifest),
-            sha256_jcs(manifest),
+            manifest_json,
+            manifest_json,
+            manifest_hash,
             timestamp,
             timestamp,
         ),
     )
-    write_registry(connection, plan, timestamp)
-    return read_registration(connection, plan.session_id, plan.thread_id, plan.plan_id)
+    draft = replace(plan, contributions=tuple(
+        replace(item, body=None) for item in plan.contributions
+    ), tool_snapshot=())
+    write_registry(connection, draft, timestamp)
+    return ContextPlanRegistration(
+        session_id=plan.session_id, thread_id=plan.thread_id, draft=draft,
+        creation_hash=input_hash, draft_hash=manifest_hash, draft_json=manifest_json,
+        revision=0, plan_state="unsealed",
+        assembly_id=None, seal_idempotency_key=None, seal_hash=None,
+    )
 
 
 def revise_registration(
@@ -195,6 +210,7 @@ def revise_registration(
     expected_revision: int,
 ) -> ContextPlanRegistration:
     require_transaction(connection)
+    require_owner(connection, plan.session_id, plan.thread_id)
     if type(expected_revision) is not int or expected_revision < 0:
         raise ValueError("plan-revision-conflict: expected_revision 必须是非负整数")
     manifest = draft_manifest(plan)
@@ -203,8 +219,6 @@ def revise_registration(
     )
     if existing.plan_state != "unsealed":
         raise ValueError("assembly-idempotency-conflict: sealed plan 不可修订")
-    if existing.draft is None or existing.registration_origin != "runtime":
-        raise ValueError("plan-idempotency-conflict: 导入记录没有可修订草稿")
     if (
         existing.draft.plan_creation_idempotency_key
         != plan.plan_creation_idempotency_key
@@ -212,24 +226,33 @@ def revise_registration(
         raise ValueError("plan-idempotency-conflict: 修订不能改变 creation key")
     if existing.revision != expected_revision:
         raise ValueError("plan-revision-conflict: draft 已被其它写入修订")
-    if draft_manifest(existing.draft) == manifest:
+    if existing.draft.to_dict() == manifest:
         return existing
     timestamp = datetime.now(UTC).isoformat()
     delete_unsealed_registry(connection, existing.draft)
-    write_registry(connection, plan, timestamp)
+    draft = replace(plan, contributions=tuple(
+        replace(item, body=None) for item in plan.contributions
+    ), tool_snapshot=())
+    write_registry(connection, draft, timestamp)
+    manifest_bytes, manifest_hash = canonical_json_bytes_and_hash(manifest)
     cursor = connection.execute(
         "UPDATE context_plans SET draft_json = ?, draft_hash = ?, revision = revision + 1, updated_at = ? "
-        "WHERE session_id = ? AND thread_id = ? AND plan_id = ? AND revision = ? AND plan_state = 'unsealed'",
+        "WHERE session_id = ? AND thread_id = ? AND plan_id = ? AND revision = ? AND plan_state = 'unsealed' "
+        "AND draft_hash = ? AND draft_json = ?",
         (
-            json_text(manifest),
-            sha256_jcs(manifest),
+            manifest_bytes.decode("utf-8"),
+            manifest_hash,
             timestamp,
             plan.session_id,
             plan.thread_id,
             plan.plan_id,
             expected_revision,
+            existing.draft_hash, existing.draft_json,
         ),
     )
     if cursor.rowcount != 1:
         raise RuntimeError("plan-revision-conflict: draft CAS 写入失败")
-    return read_registration(connection, plan.session_id, plan.thread_id, plan.plan_id)
+    return replace(
+        existing, draft=draft, draft_hash=manifest_hash,
+        draft_json=manifest_bytes.decode("utf-8"), revision=expected_revision + 1,
+    )

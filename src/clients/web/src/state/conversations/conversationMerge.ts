@@ -98,6 +98,25 @@ export function mergeConversation(
       source: "turn",
     };
   }
+  if (persisted.source === "turn" && pending.displayMode === "live") {
+    if (persisted.sessionId !== pending.sessionId
+      || persisted.jobId !== pending.jobId
+      || (pending.turnId && persisted.turnId !== pending.turnId)) {
+      throw new Error("当前 Turn 投影与 live 对话的 Session/Job/Turn 归属不一致");
+    }
+    // 展示坐标只消费当前 scope 的 Turn；历史正文和事件不进入 live 视图。
+    return {
+      ...pending,
+      userMessage,
+      turnId: persisted.turnId,
+      turnRevision: persisted.turnRevision,
+      turnOrdinal: persisted.turnOrdinal,
+      turnItemsView: persisted.turnItemsView,
+      rootLogicalItemOrdinal: persisted.rootLogicalItemOrdinal,
+      turnStatus: TERMINAL_TURN_STATUSES.has(pending.turnStatus ?? "")
+        ? pending.turnStatus : persisted.turnStatus,
+    };
+  }
   const assistantMessages = [
     ...(persisted.assistantMessages ?? []),
     ...(pending.assistantMessages ?? []),

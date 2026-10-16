@@ -19,6 +19,7 @@ class PendingRequestStoreProtocol(Protocol):
         session_id: str,
         *,
         limit: int,
+        thread_id: str | None = None,
     ) -> PendingRequestSummaryListDTO: ...
 
     async def save(

@@ -21,6 +21,9 @@ from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_service import SessionService
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.support.session_navigation_queue import (
     create_catalog_intent,
@@ -78,6 +81,7 @@ def catalog_service(
         workspace_id=WORKSPACE_ID,
         path_resolver=workspace.resolver,
         creation_service=workspace.creation_service,
+        initialize_thread_storage=RolloutCheckpointSaver(sessions_dir).initialize_thread_storage,
     )
     try:
         yield service, workspace
@@ -108,6 +112,7 @@ def factory_resolver(
         workspace_id=workspace_id,
         path_resolver=resolver,
         creation_service=get_session_creation_service(sessions_root),
+        initialize_thread_storage=RolloutCheckpointSaver(sessions_root).initialize_thread_storage,
     )
     try:
         yield service, resolver, workspace_id

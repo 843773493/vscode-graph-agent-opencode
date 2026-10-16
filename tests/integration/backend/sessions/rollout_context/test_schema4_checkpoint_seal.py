@@ -213,11 +213,19 @@ def test_overlay_source_binding_matches_before_real_plan_seal_writes(
     assert saver._storage.storage.jsonl_path(session).read_bytes() == before[0]
 
 
-@pytest.mark.parametrize("omitted", [(), ("tools",), ("request-ref", "tools")])
+@pytest.mark.parametrize("omitted, tool_ids", [
+    ((), ("tools",)),
+    (("tools",), ("tools",)),
+    (("request-ref", "tools"), ("tools",)),
+    (("tools",), ("z-tools", "tools", "a-tools")),
+])
 def test_seal_restart_and_retry_reuse_committed_identity(
-    registry_db, draft, monkeypatch, omitted
+    registry_db, draft, monkeypatch, omitted, tool_ids
 ):
     saver, session, connection, accepted = registry_db
+    draft = replace(draft, tool_set_refs=tuple(
+        replace(draft.tool_set_refs[0], ref_id=ref_id) for ref_id in tool_ids
+    ))
     registered = saver.create_context_plan(session, draft)
     snapshot = _seal(
         saver, session, registered.draft, accepted, omitted_ref_ids=omitted
@@ -226,7 +234,6 @@ def test_seal_restart_and_retry_reuse_committed_identity(
         session, plan_id=draft.plan_id, thread_id=saver._storage.storage.main_thread_id(session)
     )
     assert sealed.plan_state == "sealed" and sealed.seal_input_hash
-    assert sealed.registration_origin == "runtime"
     assert snapshot.plan_id == draft.plan_id
     before = _state(saver, session, connection)
     with RolloutCheckpointSaver(saver._detail_store.sessions_dir) as restarted:
@@ -245,6 +252,7 @@ def test_seal_restart_and_retry_reuse_committed_identity(
             restarted, session, restored.draft, accepted, omitted_ref_ids=omitted
         )
         assert retry.to_dict() == snapshot.to_dict()
+        assert retry == snapshot
     assert _state(saver, session, connection) == before
 
 
@@ -668,7 +676,6 @@ async def test_real_middleware_registers_current_schema_before_native_http(
         plan_id=snapshot.plan_id,
         thread_id=saver._storage.storage.main_thread_id(session),
     )
-    assert registration.registration_origin == "runtime"
     assert registration.draft.plan_creation_idempotency_key.startswith(
         "provider-create:"
     )

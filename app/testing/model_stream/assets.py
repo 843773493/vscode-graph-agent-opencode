@@ -10,6 +10,7 @@ from typing import Literal, cast
 
 import commentjson
 
+from .context import ModelCallIdentity
 from .errors import ModelStreamAssetError
 
 FrameKind = Literal["data", "done"]
@@ -77,6 +78,7 @@ class Interaction:
     protocol: ProtocolId
     replay: ReplaySpec | None
     index: int
+    identity: ModelCallIdentity | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +198,10 @@ def _interaction(
             )
         replay = ReplaySpec(sequence_id=sequence_id, step=step)
 
+    identity = None
+    if "identity" in raw:
+        fields = _object(raw["identity"], label=f"{label}.identity")
+        identity = ModelCallIdentity(**fields)
     raw_protocol = raw.get("protocol", default_protocol)
     if not isinstance(raw_protocol, str) or not raw_protocol:
         raise ModelStreamAssetError(
@@ -210,6 +216,7 @@ def _interaction(
         protocol=protocol,
         replay=replay,
         index=index,
+        identity=identity,
     )
 
 
@@ -285,7 +292,13 @@ def _validate_sequence_steps(
     path: Path,
 ) -> None:
     grouped: dict[str, list[int]] = {}
+    identities: set[ModelCallIdentity] = set()
     for interaction in interactions:
+        if interaction.identity is not None:
+            if interaction.identity in identities:
+                raise ModelStreamAssetError(f"asset 重复 model-call identity: {interaction.identity!r}")
+            identities.add(interaction.identity)
+            continue
         if interaction.replay is None:
             continue
         grouped.setdefault(interaction.replay.sequence_id, []).append(
@@ -395,6 +408,7 @@ def build_cassette(
     headers: Mapping[str, str] | None = None,
     match: Mapping[str, object] | None = None,
     replay: ReplaySpec | None = None,
+    identity: ModelCallIdentity | None = None,
 ) -> ModelStreamCassette:
     if not _SCENARIO_ID.fullmatch(asset_id):
         raise ModelStreamAssetError(f"asset_id 不是 kebab-case: {asset_id!r}")
@@ -431,6 +445,8 @@ def build_cassette(
             "sequence_id": replay.sequence_id,
             "step": replay.step,
         }
+    if identity is not None:
+        interaction_raw["identity"] = identity.to_dict()
     raw: dict[str, object] = {
         "schema_version": 1,
         "kind": "model_stream_cassette",

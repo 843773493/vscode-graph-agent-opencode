@@ -61,7 +61,12 @@ from app.core.model_delta_context import (
     get_current_model_delta_sink,
     resolve_model_run_id,
 )
-from app.core.turn_execution_scope import get_current_turn_execution_scope
+from app.core.turn_execution_scope import (
+    ScopeCancelledError,
+    get_current_turn_execution_scope,
+)
+from app.runtime.model_stream import ensure_model_stream_installed
+from app.runtime.provider_errors import mark_provider_failure
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
 from app.services.mapping.itemized.provider_request import (
     project_ai_message_content,
@@ -368,7 +373,9 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             )
             return current_index, current_output_index, current_sub_index, chunk
         if event_type in {"response.failed", "error"}:
-            raise RuntimeError(f"LiteLLM Responses 请求失败: {event!r}")
+            error = RuntimeError(f"LiteLLM Responses 请求失败: {event!r}")
+            mark_provider_failure(error)
+            raise error
 
         if (
             event_type == "response.output_item.added"
@@ -556,13 +563,36 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             profile=responses_wire_profile(self),
             wire_request=wire_request_params(self, payload),
         )
-        stream = litellm.responses(**payload)
+        ensure_model_stream_installed()
+        try:
+            stream = litellm.responses(**payload)
+        except ScopeCancelledError:
+            raise
+        except Exception as error:
+            mark_provider_failure(error)
+            raise
         apply_upstream_call_details(stream)
         current_index = current_output_index = current_sub_index = -1
         part_state = _StreamPartState()
         original_schema = kwargs.get("response_format")
         delta_sink = get_current_model_delta_sink()
-        for event in stream:
+        try:
+            iterator = iter(stream)
+        except ScopeCancelledError:
+            raise
+        except Exception as error:
+            mark_provider_failure(error)
+            raise
+        while True:
+            try:
+                event = next(iterator)
+            except StopIteration:
+                break
+            except ScopeCancelledError:
+                raise
+            except Exception as error:
+                mark_provider_failure(error)
+                raise
             (
                 current_index,
                 current_output_index,
@@ -650,12 +680,15 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             profile=responses_wire_profile(self),
             wire_request=wire_request_params(self, raw_payload),
         )
+        ensure_model_stream_installed()
+        open_timeout = asyncio.timeout(DEFAULT_RESPONSES_STREAM_OPEN_TIMEOUT_SECONDS)
         try:
-            stream = await asyncio.wait_for(
-                litellm.aresponses(**raw_payload),
-                timeout=DEFAULT_RESPONSES_STREAM_OPEN_TIMEOUT_SECONDS,
-            )
+            async with open_timeout:
+                stream = await litellm.aresponses(**raw_payload)
         except TimeoutError as error:
+            if not open_timeout.expired():
+                mark_provider_failure(error)
+                raise
             logger.warning(
                 "Responses provider stream open timeout: provider=%s model=%s "
                 "timeout_seconds=%s",
@@ -668,6 +701,11 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                 f"provider={provider_id} model={self.model} "
                 f"timeout_seconds={DEFAULT_RESPONSES_STREAM_OPEN_TIMEOUT_SECONDS:g}"
             ) from error
+        except ScopeCancelledError:
+            raise
+        except Exception as error:
+            mark_provider_failure(error)
+            raise
         apply_upstream_call_details(stream)
         logger.info(
             "Responses provider stream open complete: provider=%s model=%s",
@@ -688,12 +726,29 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             if response is not None and response is not stream:
                 await close_async_stream(response)
 
-        async with CancelableStream(
-            stream,
-            signal,
-            close_upstream_stream=close_response_stream,
-        ) as cancelable_stream:
-            async for event in cancelable_stream:
+        try:
+            cancelable_stream = CancelableStream(
+                stream,
+                signal,
+                close_upstream_stream=close_response_stream,
+            )
+        except ScopeCancelledError:
+            raise
+        except Exception as error:
+            mark_provider_failure(error)
+            raise
+        async with cancelable_stream:
+            iterator = aiter(cancelable_stream)
+            while True:
+                try:
+                    event = await anext(iterator)
+                except StopAsyncIteration:
+                    break
+                except ScopeCancelledError:
+                    raise
+                except Exception as error:
+                    mark_provider_failure(error)
+                    raise
                 if scope is not None:
                     scope.raise_if_cancelled()
                 (

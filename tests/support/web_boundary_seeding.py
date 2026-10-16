@@ -24,6 +24,11 @@ from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from tests.support.frozen_provider import (
+    create_frozen_provider_activation,
+    create_frozen_provider_prepare,
+    frozen_provider_wire,
+)
 
 
 def boundary_item(
@@ -104,6 +109,9 @@ def seed_boundary_turn(
     final_item_id: str | None = None,
 ) -> None:
     saver = RolloutCheckpointSaver(sessions_dir)
+    prepare_execution = create_frozen_provider_prepare(
+        frozen_provider_wire, create_frozen_provider_activation(),
+    )
     owner = saver.forks.source.resolve_main_thread_owner(session_id)
     accepted = saver.accept_turn(
         session_id,
@@ -140,6 +148,7 @@ def seed_boundary_turn(
         session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id),
         execution_admission_scope(admission, langgraph_thread_id=owner.thread_id),
     ):
+        snapshot = prepare_execution(saver, key=f"boundary-create:{turn_id}")
         saver.put(
             build_checkpoint_config(owner.thread_id),
             checkpoint,
@@ -155,6 +164,7 @@ def seed_boundary_turn(
         turn_status=turn_status,
         items=items,
         final_item_id=final_item_id,
+        assembly_id=snapshot.assembly_id,
     )
 
 

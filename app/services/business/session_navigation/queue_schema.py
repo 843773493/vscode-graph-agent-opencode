@@ -6,7 +6,7 @@
   ``(workspace_id, event_seq)`` 唯一且单调。
 
 这两张表是纯加法式旁挂：不注册进 ``SessionCatalogStore`` 的
-``_REQUIRED_TABLES_BY_VERSION``、不改 ``user_version``、不触碰 ``nodes`` /
+``_REQUIRED_TABLES``、不改 ``user_version``、不触碰 ``nodes`` /
 creation / subtree 权威表，因此与 8.1-F 的启动校验不冲突。本模块只承载物理
 schema 与一次幂等建表，不含任何队列语义。
 """

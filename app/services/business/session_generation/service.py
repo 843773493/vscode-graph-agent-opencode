@@ -463,14 +463,14 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
             session = await self._find_generated_session(payload, ledger_path)
             if session is None:
                 parent_node_id = await self._resolve_placement_folder(payload)
-                session = await self._session_context_fork_service.fork(
-                    target.session_id,
+                request = await self._session_context_fork_service.prepare_generation_request(
+                    source_session_id=target.session_id,
                     source_thread_id=target.thread_id,
-                    generation_origin=origin,
+                    origin=origin,
                     title=payload.title,
                     parent_node_id=parent_node_id,
-                    place_under_source=False,
                 )
+                session = (await self._session_context_fork_service.fork(request, generation_origin=origin)).session
             message_id, job_id = await self._dispatch_generation_message(
                 payload,
                 session.session_id,
@@ -498,14 +498,14 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
                 source_session_id = payload.context_source.session_id
                 if source_session_id is None:
                     raise ValueError("live_session context source 缺少 session_id")
-                session = await self._session_context_fork_service.fork(
-                    source_session_id,
+                request = await self._session_context_fork_service.prepare_generation_request(
+                    source_session_id=source_session_id,
                     source_thread_id=payload.context_source.thread_id,
-                    generation_origin=origin,
+                    origin=origin,
                     title=payload.title,
                     parent_node_id=parent_node_id,
-                    place_under_source=False,
                 )
+                session = (await self._session_context_fork_service.fork(request, generation_origin=origin)).session
             else:
                 session = await self._session_service.create_generated(
                     title=payload.title,

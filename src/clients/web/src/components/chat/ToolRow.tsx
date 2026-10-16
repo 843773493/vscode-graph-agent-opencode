@@ -105,7 +105,7 @@ function ToolRow({
     : null;
 
   return (
-    <section className={`chat-tool-row ${status.className}`}>
+    <section className={`chat-tool-row ${status.className}`} data-response-sources={item.responseSources ? JSON.stringify(item.responseSources) : undefined}>
       <button
         type="button"
         className="chat-tool-summary"

@@ -20,14 +20,12 @@ pytest_plugins = (
 )
 
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
-from app.domain.itemized.assembly_snapshot import (
-    ContextAssemblySnapshot,
-    context_request_hash,
-)
+from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.prefix_epoch import (
     ParentAssemblyRef,
     verify_stable_prefix,
 )
+from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.serialization import normalize_wire_request
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,

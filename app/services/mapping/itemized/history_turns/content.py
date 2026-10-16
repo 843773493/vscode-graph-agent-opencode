@@ -29,6 +29,7 @@ def nonnegative_int(value: object) -> int:
 
 
 def duration_milliseconds(start: object, end: object) -> int | None:
+    """投影起止字符串之差：整数毫秒；缺失/非法为 None，无时区按 UTC，负差为 0。"""
     if not isinstance(start, str) or not isinstance(end, str):
         return None
     try:

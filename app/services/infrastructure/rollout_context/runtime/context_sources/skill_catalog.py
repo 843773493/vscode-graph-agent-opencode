@@ -44,6 +44,39 @@ def skill_catalog_from_activation(
     payload = read_payload(activation, catalogs[0])
     if not isinstance(payload, Mapping) or set(payload) != {"entries"} or not isinstance(payload["entries"], list):
         raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: Skill catalog 正文非法")
+    sources = {}
+    activation_by_uri = {}
+    for ref in by_id.values():
+        if ref.facet == "activation":
+            if ref.display_uri in activation_by_uri:
+                raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: 同来源 activation 重复")
+            activation_by_uri[ref.display_uri] = ref
+    for metadata_ref in by_id.values():
+        if metadata_ref.facet != "metadata":
+            continue
+        metadata = read_payload(activation, metadata_ref)
+        activation_ref = activation_by_uri.get(metadata_ref.display_uri)
+        if activation_ref is None or not isinstance(metadata, Mapping) or set(metadata) != {
+            "name", "description", "display_uri", "entry_identity",
+        } or not all(isinstance(metadata[key], str) and metadata[key] for key in ("name", "display_uri", "entry_identity")) or (
+            metadata["display_uri"] != metadata_ref.display_uri
+            or not isinstance(metadata["description"], str)
+        ):
+            raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: Skill metadata 正文非法")
+        body = read_payload(activation, activation_ref)
+        if not isinstance(body, Mapping) or set(body) != {"body"} or not isinstance(body["body"], str):
+            raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: Skill activation 正文非法")
+        uri = metadata["display_uri"]
+        if uri in sources:
+            raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: 同来源 metadata 重复")
+        sources[uri] = SkillCatalogBinding(
+            name=metadata["name"], resource_id=activation_ref.resource_id,
+            entry_identity=metadata["entry_identity"], display_uri=uri,
+            activation_revision=activation_ref.revision, body=body["body"],
+            description=metadata["description"],
+        )
+    if set(sources) != set(activation_by_uri):
+        raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: Skill activation 缺少 metadata")
     entries = {}
     for entry in payload["entries"]:
         if not isinstance(entry, Mapping) or set(entry) != {
@@ -61,23 +94,14 @@ def skill_catalog_from_activation(
             or activation_ref.display_uri != entry["display_uri"]
         ):
             raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: catalog 与冻结 Skill facets 不一致")
-        metadata = read_payload(activation, metadata_ref)
-        body = read_payload(activation, activation_ref)
-        if not isinstance(metadata, Mapping) or set(metadata) != {"name", "description", "display_uri", "entry_identity"} or (
-            metadata["name"] != entry["name"] or metadata["display_uri"] != entry["display_uri"]
-            or metadata["entry_identity"] != entry["entry_identity"]
-            or not isinstance(metadata["description"], str)
-        ) or not isinstance(body, Mapping) or set(body) != {"body"} or not isinstance(body["body"], str):
-            raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: Skill metadata/activation 正文非法")
+        binding = sources.get(entry["display_uri"])
+        if binding is None or binding.name != entry["name"] or binding.entry_identity != entry["entry_identity"]:
+            raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: catalog 与来源 identity 不一致")
         name = entry["name"]
         if name in entries:
             raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: Skill name 重复")
-        entries[name] = SkillCatalogBinding(
-            name=name, resource_id=activation_ref.resource_id, entry_identity=entry["entry_identity"],
-            display_uri=entry["display_uri"], activation_revision=activation_ref.revision,
-            body=body["body"], description=metadata["description"],
-        )
-    return SkillCatalogActivationSnapshot(catalog_revision=catalogs[0].revision, entries=entries)
+        entries[name] = binding
+    return SkillCatalogActivationSnapshot(catalog_revision=catalogs[0].revision, entries=entries, sources=sources)
 
 
 class SkillCatalogMixin:
@@ -110,6 +134,21 @@ class SkillCatalogMixin:
                     "install_skill_activation_snapshot 需要 SkillCatalogActivationSnapshot"
                 )
             self._skill_activation_snapshot = snapshot
+
+        def observe_frozen_tracked_skills(self) -> None:
+            """按原来源 identity 对账 tracked；同名覆盖不改绑，删除明确拒绝。"""
+            snapshot = self.frozen_skill_catalog()
+            observations = []
+            for state in self._sources.values():
+                if state.source_kind != "skill" or not state.tracked:
+                    continue
+                descriptor = state.descriptor
+                binding = snapshot.sources.get(descriptor.resource_uri) if descriptor is not None else None
+                if binding is None or state.source_id != f"skill:{binding.entry_identity}":
+                    raise RuntimeError("tracked-source-unavailable: 冻结 Skill 来源不存在: " + state.source_id)
+                observations.append((state.source_id, binding))
+            for source_id, binding in observations:
+                self.observe(source_id, binding.body, revision=binding.activation_revision)
 
         def _resolve_activation_binding(self, name: str, snapshot: SkillCatalogActivationSnapshot | None = None) -> SkillCatalogBinding:
             """从冻结 snapshot 解析 exact binding；缺失/不一致 fail closed。"""

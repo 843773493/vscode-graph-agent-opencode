@@ -107,8 +107,10 @@ def relay_body() -> dict[str, object]:
 class _Catalog:
     def __init__(self, mapping: dict[str, tuple[str, ...]]) -> None:
         self.mapping = mapping
+        self.queries: list[str] = []
 
     async def local_session_workspaces(self, session_id: str) -> tuple[str, ...]:
+        self.queries.append(session_id)
         return self.mapping.get(session_id, ())
 
 
@@ -379,6 +381,81 @@ async def test_hub_discovery_matches_only_the_owning_spoke(tmp_path: Path) -> No
         )
         assert resolved["gateway_id"] == "gateway_c"
         assert hub.service.gateway_id == "gateway_hub"
+
+
+@pytest.mark.asyncio
+async def test_discovery_transit_denial_blocks_spoke_queries_and_reallow_keeps_channels(tmp_path: Path) -> None:
+    """discovery 可用不等于允许 hub 中转；恢复权限沿原 channel 使用新授权。"""
+    async with _federation(tmp_path, c_catalog={TARGET_SESSION: (WORKSPACE_ID,)}) as (hub, source, target):
+        source_channel = hub.service.channel_to(source.gateway_id)
+        target_channel = hub.service.channel_to(target.gateway_id)
+        hub.service.policy_store.publish({"rules": [
+            {"capability": "discovery", "effect": "allow"},
+            {"capability": "transit", "effect": "deny"},
+        ]})
+        with pytest.raises(FederationError) as failure:
+            await source.service.resolve_session_target(session_id=TARGET_SESSION)
+        assert failure.value.code == FEDERATION_AUTHORIZATION_REVOKED
+        assert target.service.catalog.queries == []
+        assert target.service.session_main.operations == []
+        hub.service.policy_store.publish({"rules": []})
+        resolved = await source.service.resolve_session_target(session_id=TARGET_SESSION)
+        assert resolved["gateway_id"] == target.gateway_id
+        assert target.service.catalog.queries == [TARGET_SESSION]
+        assert hub.service.channel_to(source.gateway_id) is source_channel
+        assert hub.service.channel_to(target.gateway_id) is target_channel
+
+
+@pytest.mark.asyncio
+async def test_hub_origin_discovery_does_not_require_transit(tmp_path: Path) -> None:
+    """hub 自己发起的一跳 discovery 没有中间 Gateway，不扩大 transit 要求。"""
+    async with _federation(tmp_path, c_catalog={TARGET_SESSION: (WORKSPACE_ID,)}) as (hub, _source, target):
+        hub.service.policy_store.publish({"rules": [{"capability": "transit", "effect": "deny"}]})
+        resolved = await hub.service.resolve_session_target(session_id=TARGET_SESSION, gateway_id=target.gateway_id)
+        assert resolved["gateway_id"] == target.gateway_id
+        assert target.service.catalog.queries == [TARGET_SESSION]
+        assert target.service.session_main.operations == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["before_dispatch", "before_disclosure"])
+async def test_discovery_rechecks_hub_transit_during_fanout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str,
+) -> None:
+    """在真实 channel 的 catalog 等待边界撤权，下一派发或回程不得披露候选。"""
+    async with _federation(tmp_path, c_catalog={TARGET_SESSION: (WORKSPACE_ID,)}) as (hub, source, target):
+        catalog = hub.service.catalog if phase == "before_dispatch" else target.service.catalog
+        original = catalog.local_session_workspaces
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def paused_query(session_id: str) -> tuple[str, ...]:
+            result = await original(session_id)
+            entered.set()
+            await release.wait()
+            return result
+
+        monkeypatch.setattr(catalog, "local_session_workspaces", paused_query)
+        task = asyncio.create_task(source.service.resolve_session_target(session_id=TARGET_SESSION, deadline_at=time.time() + 10))
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=3)
+            hub.service.policy_store.publish({"rules": [{"capability": "transit", "effect": "deny"}]})
+            release.set()
+            with pytest.raises(FederationError) as failure:
+                await task
+            assert failure.value.code == FEDERATION_AUTHORIZATION_REVOKED
+            expected_queries = [] if phase == "before_dispatch" else [TARGET_SESSION]
+            assert target.service.catalog.queries == expected_queries
+            assert target.service.session_main.operations == []
+            hub.service.policy_store.publish({"rules": []})
+            resolved = await source.service.resolve_session_target(session_id=TARGET_SESSION)
+            assert resolved["gateway_id"] == target.gateway_id
+            assert target.service.catalog.queries == [*expected_queries, TARGET_SESSION]
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio

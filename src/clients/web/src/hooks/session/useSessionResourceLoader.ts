@@ -18,6 +18,8 @@ import {
 import type { RefreshOptions, SetAppState } from "../contentViewLoaderTypes";
 import { errorMessage } from "../../utils/errorMessage";
 
+export type SessionResourceRefreshResult = "loaded" | "failed" | "stale";
+
 function isExpiredGatewayUserAccess(error: unknown): error is HttpRequestError {
   return (
     error instanceof HttpRequestError
@@ -41,7 +43,7 @@ export function useSessionResourceLoader({
   const ownerRef = useRef({ apiPort, workspaceId, sessionId: currentSession?.session_id });
   const inFlightRefreshRef = useRef<{
     key: string;
-    promise: Promise<void>;
+    promise: Promise<SessionResourceRefreshResult>;
   } | null>(null);
   const userAccessRecoveryRef = useRef<Promise<Awaited<ReturnType<typeof ensureGatewayUserAccess>> | null> | null>(null);
 
@@ -64,19 +66,18 @@ export function useSessionResourceLoader({
   const readSessionResources = useCallback(
     async (sessionId: string, options: RefreshOptions, failureStatus: string | null) => {
       const owner = ownerRef.current;
-      if (owner.sessionId !== sessionId || owner.apiPort !== apiPort || owner.workspaceId !== workspaceId) return;
+      if (owner.sessionId !== sessionId || owner.apiPort !== apiPort || owner.workspaceId !== workspaceId) return "stale" as const;
       const requestKey = `${workspaceId ?? ""}:${sessionId}`;
       const existing = inFlightRefreshRef.current;
       // 控制失败必须新读 owner，不能复用动作之前已经在途的旧结果。
-      if (failureStatus === null && existing?.key === requestKey) {
-        await existing.promise;
-        return;
+      if (failureStatus === null && !options.force && existing?.key === requestKey) {
+        return existing.promise;
       }
       const silent = options.silent === true;
       const requestId = requestIdRef.current + 1;
       requestIdRef.current = requestId;
 
-      const request = (async () => {
+      const request = (async (): Promise<SessionResourceRefreshResult> => {
         setState((prev) => {
           if (ownerRef.current !== owner || prev.currentSession?.session_id !== sessionId) return prev;
           return {
@@ -108,7 +109,8 @@ export function useSessionResourceLoader({
             }
           };
           const resources = await loadResources();
-          if (resources === null) return;
+          if (resources === null) return "stale";
+          if (ownerRef.current !== owner || requestId !== requestIdRef.current) return "stale";
           setState((prev) => {
             if (
               ownerRef.current !== owner ||
@@ -134,8 +136,10 @@ export function useSessionResourceLoader({
               status: failureStatus ?? status,
             };
           });
+          return "loaded";
         } catch (error) {
           const message = errorMessage(error);
+          if (ownerRef.current !== owner || requestId !== requestIdRef.current) return "stale";
           setState((prev) => {
             if (
               ownerRef.current !== owner ||
@@ -151,11 +155,12 @@ export function useSessionResourceLoader({
               status: failureStatus ?? (silent ? prev.status : `后台连接加载失败: ${message}`),
             };
           });
+          return "failed";
         }
       })();
       inFlightRefreshRef.current = { key: requestKey, promise: request };
       try {
-        await request;
+        return await request;
       } finally {
         if (inFlightRefreshRef.current?.promise === request) {
           inFlightRefreshRef.current = null;

@@ -473,6 +473,7 @@ def start_local_backend_process(
     log_dir: Path,
     extra_env: dict[str, str] | None = None,
     debug_port: int | None = None,
+    asgi_app: str = "app.main:app",
     connection_drain_timeout_seconds: float = (
         WORKSPACE_BACKEND_CONNECTION_DRAIN_TIMEOUT_SECONDS
     ),
@@ -504,7 +505,7 @@ def start_local_backend_process(
         [
             "-m",
             "uvicorn",
-            "app.main:app",
+            asgi_app,
             "--host",
             "127.0.0.1",
             "--port",

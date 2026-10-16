@@ -10,6 +10,9 @@ from app.core.sqlite_state import utc_now_text
 from app.domain.itemized.mutation_intents import ApplySourceLifecycleDecision
 from app.domain.itemized.records import CanonicalItemRecord, InternalDisplayProvenance
 from app.domain.itemized.runtime_wakeup import RuntimeExecutionWakeup
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    require_historical_scope,
+)
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
 )
@@ -95,13 +98,64 @@ class RuntimeWakeupStorageMixin:
             with self._storage.read_connection(session_id, thread_id, "") as connection:
                 rows = connection.execute(
                     f"SELECT {','.join(_COLUMNS)} FROM runtime_execution_wakeups "
-                    "WHERE state = 'pending' OR execution_id IN "
-                    "(SELECT execution_id FROM executions WHERE outcome = 'unknown') "
-                    "ORDER BY message_created_at, admission_idempotency_key",
+                    "WHERE session_id=? AND thread_id=? AND (state = 'pending' OR execution_id IN "
+                    "(SELECT execution_id FROM executions WHERE outcome = 'unknown'))",
+                    (session_id, thread_id),
                 ).fetchall()
+                ordered = []
+                for row in rows:
+                    wakeup = RuntimeExecutionWakeup(**dict(zip(_COLUMNS, row, strict=True)))
+                    admission = self.execution_admission(
+                        session_id, thread_id=thread_id, execution_id=wakeup.execution_id,
+                        writer_connection=connection,
+                    )
+                    if (admission.job_id != wakeup.job_id
+                            or admission.admission_idempotency_key != wakeup.admission_idempotency_key):
+                        raise RuntimeError("runtime wakeup 与 canonical admission identity 不一致")
+                    cursor = self.execution_admission_cursor(admission, connection=connection)
+                    ordered.append((cursor.commit_id, wakeup))
         except RolloutNotMaterializedError:
             return ()
-        return tuple(RuntimeExecutionWakeup(**dict(zip(_COLUMNS, row, strict=True))) for row in rows)
+        return tuple(wakeup for _commit_id, wakeup in sorted(ordered, key=lambda entry: entry[0]))
+
+    def runtime_wakeup_before_provider(
+        self, session_id: str, thread_id: str, *, execution_id: str,
+        job_id: str, admission_idempotency_key: str,
+    ) -> RuntimeExecutionWakeup | None:
+        """仅恢复尚无 Provider assembly 的原准入，不能据延迟的模型事件判断未派发。"""
+        try:
+            with self._storage.read_connection(session_id, thread_id, "") as connection:
+                row = connection.execute(
+                    f"SELECT {','.join(_COLUMNS)} FROM runtime_execution_wakeups "
+                    "WHERE session_id=? AND thread_id=? AND admission_idempotency_key=?",
+                    (session_id, thread_id, admission_idempotency_key),
+                ).fetchone()
+                if row is None:
+                    return None
+                wakeup = RuntimeExecutionWakeup(**dict(zip(_COLUMNS, row, strict=True)))
+                admission = self.execution_admission(
+                    session_id, thread_id=thread_id, execution_id=execution_id,
+                    writer_connection=connection,
+                )
+                if (
+                    (wakeup.execution_id, wakeup.job_id) != (execution_id, job_id)
+                    or admission.execution_origin != "internal"
+                    or (admission.job_id, admission.admission_idempotency_key)
+                    != (job_id, admission_idempotency_key)
+                ):
+                    raise RuntimeError("未派发 runtime wakeup 与原 Job/admission identity 不一致")
+                self.execution_admission_cursor(admission, connection=connection)
+                state = connection.execute(
+                    "SELECT outcome,first_model_call_id,last_model_call_id,"
+                    "EXISTS(SELECT 1 FROM model_calls WHERE execution_id=?),"
+                    "EXISTS(SELECT 1 FROM context_assemblies WHERE execution_id=?) "
+                    "FROM executions WHERE execution_id=?",
+                    (execution_id, execution_id, execution_id),
+                ).fetchone()
+                # assembly 在真实 handler 前封存；model-start 的消费可晚于网络请求。
+                return wakeup if state == ("unknown", None, None, 0, 0) else None
+        except RolloutNotMaterializedError:
+            return None
 
     def runtime_wakeup_input(self, wakeup: RuntimeExecutionWakeup) -> CanonicalItemRecord:
         with self._storage.read_connection(wakeup.session_id, wakeup.thread_id, "") as connection:
@@ -114,16 +168,17 @@ class RuntimeWakeupStorageMixin:
     def internal_execution_request_input(self, session_id: str, thread_id: str, execution_id: str) -> dict[str, object]:
         with self._storage.read_connection(session_id, thread_id, "") as connection:
             row = connection.execute(
-                "SELECT job_id,admission_idempotency_key,admission_payload_hash FROM executions "
-                "WHERE session_id=? AND thread_id=? AND execution_id=? "
+                "SELECT session_id,thread_id,job_id,admission_idempotency_key,admission_payload_hash FROM executions "
+                "WHERE execution_id=? "
                 "AND execution_origin='internal' AND turn_id IS NULL",
-                (session_id, thread_id, execution_id),
+                (execution_id,),
             ).fetchone()
             if row is None:
                 raise KeyError(f"internal execution 不存在: {execution_id}")
-            preimage = self._context.forks._validate_fork_internal_admission(
-                connection, session_id=session_id, thread_id=thread_id, checkpoint_ns="",
-                execution_id=execution_id, job_id=row[0], admission_key=row[1], admission_hash=row[2],
+            require_historical_scope(connection, row[0], row[1], current_owner=(session_id, thread_id))
+            preimage = self.internal_execution_admission_preimage(
+                connection, session_id=row[0], thread_id=row[1], checkpoint_ns="",
+                execution_id=execution_id, job_id=row[2], admission_key=row[3], admission_hash=row[4],
             )
             return dict(preimage["input"])
 
@@ -153,24 +208,47 @@ class RuntimeWakeupStorageMixin:
         )
 
     def cold_execution_observations(self, session_id: str, thread_id: str, *, job_ids: list[str] | None = None, turn_id: str | None = None) -> list[dict[str, str]]:
-        """只读 execution owner；不 initialize、不物化 Agent，不列举 JobService。"""
+        """只读当前 owner 的可观察执行；显式导入的合成历史不伪装成待运行 Job。"""
         root = self._storage.root(session_id, thread_id=thread_id)
         if not (root / "index.sqlite").is_file():
             return []
-        clauses = ["session_id=?", "thread_id=?"]
+        clauses = [
+            "execution.session_id=?", "execution.thread_id=?",
+            (
+                "NOT EXISTS(SELECT 1 FROM turn_acceptances acceptance "
+                "JOIN turn_records turn ON turn.session_id=acceptance.session_id "
+                "AND turn.thread_id=acceptance.thread_id AND turn.turn_id=acceptance.turn_id "
+                "WHERE acceptance.session_id=execution.session_id "
+                "AND acceptance.thread_id=execution.thread_id "
+                "AND acceptance.identity_origin='legacy_synthetic' "
+                "AND turn.initial_execution_id=execution.execution_id)"
+            ),
+            (
+                "NOT EXISTS(SELECT 1 FROM item_catalog notice "
+                "JOIN json_each(notice.projection_manifest_json,'$.provenance_relations') source "
+                "WHERE execution.execution_origin='internal' "
+                "AND notice.execution_id=execution.execution_id AND notice.semantic_kind='runtime_notice' "
+                "AND json_extract(source.value,'$.relation')='derived_from' "
+                "AND json_extract(source.value,'$.target_kind')='legacy_message')"
+            ),
+        ]
         params: list[object] = [session_id, thread_id]
         if job_ids is not None:
             if not job_ids:
                 return []
-            clauses.append("job_id IN (" + ",".join("?" for _ in job_ids) + ")")
+            clauses.append("execution.job_id IN (" + ",".join("?" for _ in job_ids) + ")")
             params.extend(job_ids)
         if turn_id is not None:
-            clauses.append("turn_id=?")
+            clauses.append("execution.turn_id=?")
             params.append(turn_id)
         with self._storage._connect(thread_id, "", session_id=session_id, read_only=True) as connection:
             self._storage._require_v2_runtime(connection)
             rows = connection.execute(
-                "SELECT job_id,execution_id,outcome,updated_at,last_model_call_id FROM executions WHERE " + " AND ".join(clauses) + " ORDER BY execution_ordinal DESC,attempt DESC,created_at DESC,execution_id", params,
+                "SELECT execution.job_id,execution.execution_id,execution.outcome,"
+                "execution.updated_at,execution.last_model_call_id FROM executions execution WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY execution.execution_ordinal DESC,execution.attempt DESC,"
+                "execution.created_at DESC,execution.execution_id", params,
             ).fetchall()
         if turn_id is not None:
             rows = rows[:1]

@@ -199,6 +199,7 @@ class EventFactorySpec:
             job_id=job_id,
             step_id=step_id,
             agent_id=agent_id,
+            # 在取得发布锁前冻结构造时刻；不代表持久化或广播完成时间。
             timestamp=datetime.now(UTC),
             type=self.event_type,
             payload=self.payload_class(**event_payload),

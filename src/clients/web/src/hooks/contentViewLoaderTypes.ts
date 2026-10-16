@@ -2,7 +2,11 @@ import type { Dispatch, SetStateAction } from "react";
 import type { AppState } from "../types/frontend";
 
 export type SetAppState = Dispatch<SetStateAction<AppState>>;
-export type RefreshOptions = { silent?: boolean };
+export type RunGatewayWorkspaceListTask = <Result>(
+  task: () => Promise<Result>,
+  consume?: (result: Result) => void,
+) => Promise<Result>;
+export type RefreshOptions = { silent?: boolean; force?: boolean };
 // 唯一来源，与 hooks.tsx 中 finishWorkspaceRefresh 的实现签名逐字一致。
 // 返回值是本次刷新真正落到 state 的活动工作区 id：刷新被作废时返回 null。
 // 调用方不能把它当布尔用——正式激活必须比对它是否等于自己请求的 workspaceId。
@@ -14,5 +18,6 @@ export type FinishWorkspaceRefresh = (
   options?: {
     checkGatewayWorkspaceHealth?: boolean;
     reuseCurrentUiSettings?: boolean;
+    selectionIntent?: number;
   },
 ) => Promise<string | null>;

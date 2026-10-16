@@ -19,7 +19,7 @@ _SCOPE_KEYWORDS: Final = frozenset({"workspace", "user", "gateway", "inline"})
 # 语法 kind 闭集（parse_resource_uri 侧）；与 values.py 的描述符闭集 _DESCRIPTOR_KINDS 是两个
 # 独立闭集，不可混用。「config」承载配置来源文件本身，「session」承载会话上下文资源
 # （会话定位，规范形态 .../resources/session/{...canonical path segments}）。
-_RESOURCE_KINDS: Final = frozenset({"agent-spec", "skills", "config", "session"})
+_RESOURCE_KINDS: Final = frozenset({"agent-spec", "skills", "config", "session", "workspace", "folder"})
 _NAME_CHARSET: Final = frozenset(string.ascii_letters + string.digits + "_-")
 
 _GRAMMAR_REASON_CODES: Final = frozenset(
@@ -190,6 +190,10 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
     scope = _parse_scope(segments[0])
     body = segments[1:]
 
+    if scope == "workspace" and len(body) == 1:
+        _validate_dynamic_segment(body[0], field="workspace id")
+        return _parsed(scope, body[0], "workspace", (), body[0], uri, authority)
+
     if len(body) < 3:
         raise ResourceUriGrammarError(
             "malformed_path",
@@ -199,6 +203,14 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
     _expect_fixed_segment(body[1], "resources")
     kind = _parse_kind(body[2])
     tails = body[3:]
+
+    if kind == "workspace":
+        raise ResourceUriGrammarError("malformed_path", "Workspace 容器必须使用 boxteam://workspace/{id}")
+    if kind == "folder":
+        if scope != "workspace" or len(tails) != 1:
+            raise ResourceUriGrammarError("malformed_path", "Folder 容器必须使用 Workspace 内的单个稳定 Folder ID")
+        _validate_dynamic_segment(tails[0], field="folder id")
+        return _parsed(scope, body[0], kind, tails, tails[0], uri, authority)
 
     if kind == "skills":
         if len(tails) != 2:
@@ -235,6 +247,30 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
     return _parsed(scope, body[0], kind, tails, "/".join(tails), uri, authority)
 
 
+def parse_session_thread_uri(
+    uri: str, *, local_gateway_id: str | None = None,
+) -> tuple[ParsedResourceUri, str, str | None]:
+    """统一 Session/Thread 模板；Session 的 main 身份仍由 catalog 显式解析。"""
+    parsed = parse_resource_uri(uri, local_gateway_id=local_gateway_id)
+    if parsed.scope != "workspace" or parsed.kind != "session":
+        raise ResourceUriGrammarError("malformed_path", "Session/Thread URI 必须属于 Workspace Session 资源")
+    tails = parsed.tail_segments
+    if len(tails) == 1 and tails[0] != "inventory":
+        return parsed, tails[0], None
+    if len(tails) == 3 and tails[1] == "threads":
+        return parsed, tails[0], tails[2]
+    raise ResourceUriGrammarError("malformed_path", "Session/Thread URI 必须精确指向 session_id 或 session_id/threads/thread_id")
+
+
+def thread_resource_uri(
+    workspace_id: str, session_id: str, thread_id: str, *, gateway_authority: str | None = None,
+) -> str:
+    return resource_display_uri(
+        scope="workspace", scope_id=workspace_id, kind="session",
+        tail_segments=(session_id, "threads", thread_id), gateway_authority=gateway_authority,
+    )
+
+
 def resource_display_uri(
     *, scope: str, scope_id: str, kind: str, tail_segments: Sequence[str],
     gateway_authority: str | None = None,
@@ -255,7 +291,12 @@ def resource_display_uri(
     # charset 内，故不在此逐段校验；尾段的固定/动态约束与拒绝码统一由 parse_resource_uri
     # 判定（kind 专属的动态段校验由各 kind 包装函数负责）。
     prefix = () if gateway_authority is None else (gateway_authority,)
-    uri = _SCHEME + "/".join((*prefix, scope, scope_id, "resources", kind, *tail_segments))
+    if kind == "workspace":
+        if scope != "workspace" or tail_segments:
+            raise ResourceUriGrammarError("malformed_path", "Workspace 容器不接受尾段")
+        uri = _SCHEME + "/".join((*prefix, scope, scope_id))
+    else:
+        uri = _SCHEME + "/".join((*prefix, scope, scope_id, "resources", kind, *tail_segments))
     return parse_resource_uri(uri).display_uri
 
 

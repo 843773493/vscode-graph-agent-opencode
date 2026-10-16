@@ -12,7 +12,7 @@ from app.core.history_loading import (
     HistoryLoadingConfig,
     default_history_loading_config,
 )
-from app.domain.itemized.enums import ControlOutcome, SemanticKind
+from app.domain.itemized.enums import ControlOutcome, PayloadKind, SemanticKind
 from app.domain.itemized.records import RuntimeNoticePayload
 from app.schemas.internal_v2.turn import (
     InternalDisplayProvenanceDTO,
@@ -32,6 +32,7 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     InternalExecutionHistoryEntry,
     RolloutReadSnapshot,
 )
+from app.services.infrastructure.rollout_context.storage.transaction import strict_text
 from app.services.infrastructure.rollout_history.paging import (
     HistoryPageReadMixin,
 )
@@ -53,6 +54,7 @@ from app.services.mapping.itemized.history_turns.projection import (
     summary,
 )
 from app.services.mapping.turn_response_parts import (
+    response_part_order,
     response_parts_from_internal_item,
     response_parts_from_records,
 )
@@ -62,19 +64,13 @@ from app.services.mapping.turn_response_parts import (
 class _InternalExecutionHistoryProjection:
     execution_id: str
     job_id: str
+    session_id: str
+    thread_id: str
     outcome: str
     created_at: str
     updated_at: str
     display_parts: list[InternalExecutionDisplayPartDTO] = field(default_factory=list)
     response_parts: list[TurnResponsePartDTO] = field(default_factory=list)
-
-
-def _internal_response_part_order(part: TurnResponsePartDTO) -> tuple[int, int]:
-    logical_item_ordinal = part.source.logical_item_ordinal
-    part_ordinal = part.source.part_ordinal
-    if logical_item_ordinal is None or part_ordinal is None:
-        raise RuntimeError("internal response part 缺少 membership ordinal 或 part ordinal")
-    return logical_item_ordinal, part_ordinal
 
 
 class RolloutHistoryReader(HistoryPageReadMixin):
@@ -209,6 +205,11 @@ class RolloutHistoryReader(HistoryPageReadMixin):
         include: tuple[str, ...] | None = None,
         tool_call_ids: frozenset[str] | None = None,
     ) -> TurnDetailDTO:
+        if projection is None:
+            raise RuntimeError(f"历史 Turn 缺少 canonical projection: {span.turn_id}")
+        job_id = strict_text(
+            projection.get("job_id"), field=f"turn_projection.job_id:{span.turn_id}"
+        )
         selected_records = records
         messages: list[BaseMessage] = []
         message_sequences: list[int] = []
@@ -267,7 +268,10 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             span.ordinal,
             messages,
             turn_id=span.turn_id,
+            job_id=job_id,
             root_logical_item_ordinal=span.root_logical_item_ordinal,
+            source_view_id=self._context_reader.context_view_id(chain),
+            source_view_revision=snapshot.manifest.history_view_revision,
             message_sequences=message_sequences,
             projection=projection,
             response_parts=response_parts,
@@ -356,6 +360,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
         selected_tool_call_ids = frozenset(tool_call_ids) or None
         projections = self._context_reader.read_turn_projections(
             snapshot,
+            chain,
             [span.turn_id for span in spans],
         )
         record_roles = {"user"} if set(include) & {"user", "internal"} else set()
@@ -425,10 +430,10 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             items.append(project_detail(detail, include, budget))
         return TurnHistoryPageDTO(
             items=items,
+            source_view_id=self._context_reader.context_view_id(chain),
+            source_view_revision=snapshot.manifest.history_view_revision,
             summaries=summaries,
             internal_executions=self._project_internal_entries(
-                session_id,
-                snapshot.thread_id,
                 internal_entries,
                 include=include,
             ),
@@ -443,8 +448,6 @@ class RolloutHistoryReader(HistoryPageReadMixin):
 
     @staticmethod
     def _project_internal_entries(
-        session_id: str,
-        thread_id: str,
         entries: tuple[InternalExecutionHistoryEntry, ...],
         *,
         include: tuple[str, ...],
@@ -458,6 +461,8 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                 projection = _InternalExecutionHistoryProjection(
                     execution_id=entry.execution_id,
                     job_id=entry.job_id,
+                    session_id=entry.session_id,
+                    thread_id=entry.thread_id,
                     outcome=outcome.value,
                     created_at=entry.created_at,
                     updated_at=entry.updated_at,
@@ -465,6 +470,8 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                 projections[entry.execution_id] = projection
             elif (
                 projection.job_id != entry.job_id
+                or projection.session_id != entry.session_id
+                or projection.thread_id != entry.thread_id
                 or projection.outcome != outcome.value
                 or projection.created_at != entry.created_at
                 or projection.updated_at != entry.updated_at
@@ -476,6 +483,12 @@ class RolloutHistoryReader(HistoryPageReadMixin):
 
             item = entry.item
             if "internal" in fields and item.semantic_kind == SemanticKind.RUNTIME_NOTICE:
+                if (
+                    item.payload_kind != PayloadKind.STRUCTURED_CONTENT
+                    or not isinstance(item.payload, Mapping)
+                    or set(item.payload) != {"prompt", "display_part"}
+                ):
+                    continue
                 notice = RuntimeNoticePayload.from_dict(item.payload)
                 display_part = notice.display_part
                 if display_part.kind == "generated_session_result":
@@ -497,6 +510,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                     item,
                     include=fields,
                     logical_item_ordinal=entry.logical_item_ordinal,
+                    elapsed_ms=entry.elapsed_ms,
                 )
             )
 
@@ -504,8 +518,8 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             InternalExecutionHistoryDTO(
                 execution_id=projection.execution_id,
                 job_id=projection.job_id,
-                session_id=session_id,
-                thread_id=thread_id,
+                session_id=projection.session_id,
+                thread_id=projection.thread_id,
                 status=projection.outcome,
                 created_at=projection.created_at,
                 updated_at=projection.updated_at,
@@ -515,7 +529,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                 ),
                 response_parts=sorted(
                     projection.response_parts,
-                    key=_internal_response_part_order,
+                    key=response_part_order,
                 ),
             )
             for projection in projections.values()

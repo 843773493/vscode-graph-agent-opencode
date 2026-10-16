@@ -62,7 +62,21 @@ class RecordingTurnStatusWriter:
         return True
 
 
-def build_runtime(
+@pytest.fixture
+def pending_checkpoint_inspector():
+    async def inspect(_job: JobState) -> None:
+        return None
+    return inspect
+
+
+@pytest.fixture
+def before_provider_inspector():
+    async def inspect(_job: JobState) -> bool:
+        return False
+    return inspect
+
+
+def build_runtime(pending_checkpoint_inspector, before_provider_inspector,
     tmp_path: Path,
     terminal_status_writer: RecordingTurnStatusWriter | None = None,
     *,
@@ -79,6 +93,8 @@ def build_runtime(
         workspace_id="00000000-0000-4000-8000-000000000001",
         workspace_root=tmp_path,
         job_service=jobs,
+        pending_tool_checkpoint_id=pending_checkpoint_inspector,
+        can_restart_before_provider=before_provider_inspector,
         background_task_registry=build_background_registry(sessions_dir),
         trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
         message_stream_store=MessageStreamStore(
@@ -94,12 +110,14 @@ def build_runtime(
 
 
 @pytest.mark.asyncio
-async def test_status_reports_the_injected_workspace_uuid_and_root(
+async def test_status_reports_the_injected_workspace_uuid_and_root(pending_checkpoint_inspector, before_provider_inspector,
     tmp_path: Path,
     session_lifecycle_guard,
 ) -> None:
     runtime, _ = build_runtime(
-        tmp_path, session_lifecycle_guard=session_lifecycle_guard
+        pending_checkpoint_inspector=pending_checkpoint_inspector,
+        before_provider_inspector=before_provider_inspector,
+        tmp_path=tmp_path, session_lifecycle_guard=session_lifecycle_guard
     )
 
     status = await runtime.status()
@@ -110,12 +128,14 @@ async def test_status_reports_the_injected_workspace_uuid_and_root(
 
 
 @pytest.mark.asyncio
-async def test_drain_closes_admission_and_cancel_reopens_it(
+async def test_drain_closes_admission_and_cancel_reopens_it(pending_checkpoint_inspector, before_provider_inspector,
     tmp_path: Path,
     session_lifecycle_guard,
 ) -> None:
     runtime, jobs = build_runtime(
-        tmp_path, session_lifecycle_guard=session_lifecycle_guard
+        pending_checkpoint_inspector=pending_checkpoint_inspector,
+        before_provider_inspector=before_provider_inspector,
+        tmp_path=tmp_path, session_lifecycle_guard=session_lifecycle_guard
     )
 
     draining = await runtime.begin_drain()
@@ -133,12 +153,14 @@ async def test_drain_closes_admission_and_cancel_reopens_it(
 
 
 @pytest.mark.asyncio
-async def test_force_interrupt_persists_event_and_cancels_job(
+async def test_force_interrupt_persists_event_and_cancels_job(pending_checkpoint_inspector, before_provider_inspector,
     tmp_path: Path,
     session_lifecycle_guard,
 ) -> None:
     runtime, jobs = build_runtime(
-        tmp_path, session_lifecycle_guard=session_lifecycle_guard
+        pending_checkpoint_inspector=pending_checkpoint_inspector,
+        before_provider_inspector=before_provider_inspector,
+        tmp_path=tmp_path, session_lifecycle_guard=session_lifecycle_guard
     )
     task = asyncio.create_task(asyncio.sleep(60))
     job = JobState(
@@ -169,7 +191,7 @@ async def test_force_interrupt_persists_event_and_cancels_job(
 
 
 @pytest.mark.asyncio
-async def test_startup_reconciles_job_without_terminal_event(
+async def test_startup_reconciles_job_without_terminal_event(pending_checkpoint_inspector, before_provider_inspector,
     tmp_path: Path,
     session_bundle_factory,
     session_lifecycle_guard,
@@ -178,7 +200,9 @@ async def test_startup_reconciles_job_without_terminal_event(
         tmp_path / ".boxteam" / "sessions", "ses_019c70f868da751480de63aa344e28c9"
     )
     runtime, _ = build_runtime(
-        tmp_path, session_lifecycle_guard=session_lifecycle_guard
+        pending_checkpoint_inspector=pending_checkpoint_inspector,
+        before_provider_inspector=before_provider_inspector,
+        tmp_path=tmp_path, session_lifecycle_guard=session_lifecycle_guard
     )
     store = runtime._trace_event_store
     now = datetime.now(UTC)
@@ -201,7 +225,7 @@ async def test_startup_reconciles_job_without_terminal_event(
 
 
 @pytest.mark.asyncio
-async def test_startup_rejects_invalid_trace(
+async def test_startup_rejects_invalid_trace(pending_checkpoint_inspector, before_provider_inspector,
     tmp_path: Path,
     session_bundle_factory,
     session_lifecycle_guard,
@@ -227,7 +251,9 @@ async def test_startup_rejects_invalid_trace(
         encoding="utf-8",
     )
     runtime, _ = build_runtime(
-        tmp_path, session_lifecycle_guard=session_lifecycle_guard
+        pending_checkpoint_inspector=pending_checkpoint_inspector,
+        before_provider_inspector=before_provider_inspector,
+        tmp_path=tmp_path, session_lifecycle_guard=session_lifecycle_guard
     )
 
     with pytest.raises(RuntimeError, match="Trace 事件协议无效"):
@@ -235,7 +261,7 @@ async def test_startup_rejects_invalid_trace(
 
 
 @pytest.mark.asyncio
-async def test_startup_reconciles_persisted_turn_as_failed(
+async def test_startup_reconciles_persisted_turn_as_failed(pending_checkpoint_inspector, before_provider_inspector,
     tmp_path: Path,
     session_bundle_factory,
     session_lifecycle_guard,
@@ -245,8 +271,10 @@ async def test_startup_reconciles_persisted_turn_as_failed(
     )
     writer = RecordingTurnStatusWriter()
     runtime, _ = build_runtime(
-        tmp_path,
-        writer,
+        pending_checkpoint_inspector=pending_checkpoint_inspector,
+        before_provider_inspector=before_provider_inspector,
+        tmp_path=tmp_path,
+        terminal_status_writer=writer,
         session_lifecycle_guard=session_lifecycle_guard,
     )
     await runtime._trace_event_store.append(
@@ -277,7 +305,7 @@ async def test_startup_reconciles_persisted_turn_as_failed(
 
 
 @pytest.mark.asyncio
-async def test_startup_repairs_existing_process_exit_turn_status(
+async def test_startup_repairs_existing_process_exit_turn_status(pending_checkpoint_inspector, before_provider_inspector,
     tmp_path: Path,
     session_bundle_factory,
     session_lifecycle_guard,
@@ -287,8 +315,10 @@ async def test_startup_repairs_existing_process_exit_turn_status(
     )
     writer = RecordingTurnStatusWriter()
     runtime, _ = build_runtime(
-        tmp_path,
-        writer,
+        pending_checkpoint_inspector=pending_checkpoint_inspector,
+        before_provider_inspector=before_provider_inspector,
+        tmp_path=tmp_path,
+        terminal_status_writer=writer,
         session_lifecycle_guard=session_lifecycle_guard,
     )
     now = datetime.now(UTC)
@@ -338,7 +368,7 @@ async def test_startup_repairs_existing_process_exit_turn_status(
 
 
 @pytest.mark.asyncio
-async def test_startup_preserves_timeout_status_from_failed_event(
+async def test_startup_preserves_timeout_status_from_failed_event(pending_checkpoint_inspector, before_provider_inspector,
     tmp_path: Path,
     session_bundle_factory,
     session_lifecycle_guard,
@@ -348,8 +378,10 @@ async def test_startup_preserves_timeout_status_from_failed_event(
     )
     writer = RecordingTurnStatusWriter()
     runtime, _ = build_runtime(
-        tmp_path,
-        writer,
+        pending_checkpoint_inspector=pending_checkpoint_inspector,
+        before_provider_inspector=before_provider_inspector,
+        tmp_path=tmp_path,
+        terminal_status_writer=writer,
         session_lifecycle_guard=session_lifecycle_guard,
     )
     await runtime._trace_event_store.append(
@@ -389,7 +421,7 @@ async def test_startup_preserves_timeout_status_from_failed_event(
 
 
 @pytest.mark.asyncio
-async def test_startup_requires_structured_timeout_code(
+async def test_startup_requires_structured_timeout_code(pending_checkpoint_inspector, before_provider_inspector,
     tmp_path: Path,
     session_bundle_factory,
     session_lifecycle_guard,
@@ -399,8 +431,10 @@ async def test_startup_requires_structured_timeout_code(
     )
     writer = RecordingTurnStatusWriter()
     runtime, _ = build_runtime(
-        tmp_path,
-        writer,
+        pending_checkpoint_inspector=pending_checkpoint_inspector,
+        before_provider_inspector=before_provider_inspector,
+        tmp_path=tmp_path,
+        terminal_status_writer=writer,
         session_lifecycle_guard=session_lifecycle_guard,
     )
     await runtime._trace_event_store.append(

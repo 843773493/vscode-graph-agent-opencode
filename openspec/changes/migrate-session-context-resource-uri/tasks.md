@@ -77,3 +77,8 @@
 9.1/9.2 联合验收：现有生产入口共用 `SessionCommunicationService.resolve_main` 并冻结稳定目标；`uri-send-wait-read-joint-004` 实际退出码0（116.57s，1 passed、1 deselected），覆盖send/wait各自bare/full URI、read_context两种来源的结构化引用、full URI wait、切换/重连后目标保持、selector及拒绝语义。冷观察通过main API和权威resolver核对真实Session节点，六owner表零runtime物化；此前002查错节点的证据已撤回。原始收据及日志位于 `out/tests/temp/2026/10/04/024121-team-execution/sol_vertical_implementer/artifacts/final-original-scope-source-bulk-core-and-boundaries/uri-send-wait-read-joint-004/`，raw SHA已由主核验。2026-10-09只读对表报告位于 `out/tests/temp/2026/10/09/a06-final-review/luna_acceptance_map/artifacts/report.json`。本验收不代替itemized8.10通信恢复或真实Provider E2E，也不代替WC-001独立历史读取的最终修订验收。
 
 A04完整证据入口：`out/tests/temp/2026/10/04/024121-team-execution/coordinator/artifacts/sol-efficiency-trial/addressing-existing-source-bulk-dispatch/ROOT-full-final-candidate/`；105源码＋11主文档tree8215be15严格重建、两独审findings=[]并串行集成。作者manifest引用39具名attempt，028/029授权/loopback、032真实三节点受控Provider、031/037真实信息页/生命周期、035直接68项、038合同16项及039 Web build actual0。033/034原失败由具名fixture修订闭合，其余未变绿灯按依赖复用，不相加重叠pass；全局strict41/0。外部Provider quota与补充C1端口仍UNMET，原100条Ruff诊断无新增，SSE生成后续阶段未认证失败原子性。5.2已按明确数据政策修订，不代表原历史取证通过；9.1/9.2依据上方A06独立具名联合收据完成，不能由A04 read/search通过自动推断。
+
+## 10. Fork精确来源与目标寻址（2026-10-13，待实施）
+
+- [ ] 10.1 消费统一owner的集合/Session/Thread模板，将fork source、target容器和创建意图规范化为稳定归属；迁齐公开schema/API/工具/DTO/proto及消费者，source child不回退main，view/revision/anchor不进URI。
+- [ ] 10.2 验证本地/跨端main和child目标、Gateway别名规范化、切换工作区期间目标不变、不存在/越权/不可达显式失败；业务grant不从read授权推导，既有send/read/wait合同及selector保持。

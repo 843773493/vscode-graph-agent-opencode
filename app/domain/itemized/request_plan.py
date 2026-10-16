@@ -18,6 +18,7 @@ from app.domain.itemized.hash.plan_hash import context_plan_hash
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
     contribution_content_hash,
+    copy_json_value,
     validate_hash_token,
 )
 from app.domain.itemized.identity.refs import (
@@ -78,16 +79,6 @@ class SourceBinding:
         ) if (value := getattr(self, name)) is not None}
 
 
-def _copy_contribution_value(value: object) -> object:
-    if isinstance(value, Mapping):
-        return {key: _copy_contribution_value(child) for key, child in value.items()}
-    if isinstance(value, list):
-        return [_copy_contribution_value(child) for child in value]
-    if isinstance(value, tuple):
-        return tuple(_copy_contribution_value(child) for child in value)
-    return value
-
-
 @dataclass(frozen=True, slots=True)
 class ContextContribution:
     contribution_id: str
@@ -138,7 +129,7 @@ class ContextContribution:
             except AttributeError:
                 carrier = None
             if carrier is not None:
-                return _copy_contribution_value(carrier)
+                return copy_json_value(carrier)
         return object.__getattribute__(self, name)
 
     def __post_init__(self) -> None:
@@ -149,6 +140,7 @@ class ContextContribution:
             "overlay_base",
             "overlay_delta",
             "notice",
+            "model_message",
         }:
             raise ItemSchemaError(
                 f"contribution-kind-unsupported: 不支持的 ContextContribution.contribution_kind: {self.contribution_kind}"
@@ -198,6 +190,18 @@ class ContextContribution:
         elif role != BaseDeltaRole.NONE:
             raise ItemSchemaError("非 overlay contribution 不得绑定 overlay SourceBinding")
         if self.body is not None:
+            if self.contribution_kind == "model_message":
+                if not isinstance(self.body, Mapping) or set(self.body) != {"message", "item_ids", "retry_source_item_ids"}:
+                    raise ItemSchemaError("model_message 必须绑定精确 message 与 canonical item IDs")
+                message, ids = self.body["message"], self.body["item_ids"]
+                retry_ids = self.body["retry_source_item_ids"]
+                if (not isinstance(message, Mapping) or set(message) != {"type", "data"}
+                    or message["type"] not in {"human", "ai", "tool"} or not isinstance(message["data"], Mapping)
+                    or not isinstance(ids, list) or not all(isinstance(value, str) and value for value in ids)
+                    or len(ids) != len(set(ids))
+                    or not isinstance(retry_ids, list) or not all(isinstance(value, str) and value for value in retry_ids)
+                    or len(retry_ids) != len(set(retry_ids))):
+                    raise ItemSchemaError("model_message 的角色、消息数据或 canonical refs 非法")
             expected_hash = contribution_content_hash(self.contribution_kind, self.body)
             if self.content_hash != expected_hash:
                 raise ItemSchemaError("ContextContribution.content_hash 与 body 不一致")
@@ -245,9 +249,9 @@ class ContextContribution:
         object.__setattr__(
             self,
             "_body_snapshot",
-            _copy_contribution_value(body) if body is not None else None,
+            copy_json_value(body) if body is not None else None,
         )
-        object.__setattr__(self, "_extensions_snapshot", _copy_contribution_value(extensions))
+        object.__setattr__(self, "_extensions_snapshot", copy_json_value(extensions))
         object.__setattr__(self, "body", None)
         object.__setattr__(self, "extensions", {})
 
@@ -403,7 +407,17 @@ class ContextRequestPlan:
     selection: tuple[ContextSelectionEntry, ...] = ()
     plan_creation_idempotency_key: str | None = None
 
+    def __getattribute__(self, name: str) -> object:
+        value = object.__getattribute__(self, name)
+        return copy_json_value(value) if name == "tool_snapshot" else value
+
     def __post_init__(self) -> None:
+        for name in ("refs", "contributions", "tool_set_refs", "selection"):
+            object.__setattr__(self, name, tuple(getattr(self, name)))
+        tools = object.__getattribute__(self, "tool_snapshot")
+        if any(not isinstance(tool, Mapping) for tool in tools):
+            raise ItemSchemaError("ContextRequestPlan.tool_snapshot 元素必须是 object")
+        object.__setattr__(self, "tool_snapshot", copy_json_value(tuple(tools)))
         _non_empty_string(self.session_id, "ContextRequestPlan.session_id")
         _non_empty_string(self.thread_id, "ContextRequestPlan.thread_id")
         _non_empty_string(self.plan_id, "plan_id")
@@ -459,7 +473,7 @@ class ContextRequestPlan:
                 raise ItemSchemaError("source-mismatch: ToolSetRef 不属于当前 session/thread/plan")
         # registry 查找统一按 thread-qualified identity，禁止退回
         # (ref_type, ref_id) 二元组，否则 sibling thread 的同名 ref 会互相覆盖。
-        ref_ids = {selection_ref_identity(ref) for ref in self.refs}
+        ref_registry = {selection_ref_identity(ref): ref for ref in self.refs}
         for contribution in self.contributions:
             if not isinstance(contribution, ContextContribution):
                 raise ItemSchemaError("ContextRequestPlan.contributions 元素非法")
@@ -502,7 +516,7 @@ class ContextRequestPlan:
                 raise ItemSchemaError(
                     "sealed plan contribution_ordinal 必须从 0 连续递增"
                 )
-        tool_ids: set[str] = set()
+        tool_registry: dict[str, ToolSetRef] = {}
         for ref in self.tool_set_refs:
             if not isinstance(ref, ToolSetRef):
                 raise ItemSchemaError("ContextRequestPlan.tool_set_refs 元素非法")
@@ -514,15 +528,17 @@ class ContextRequestPlan:
                 raise ItemSchemaError("unsealed plan 的 ToolSetRef 不得绑定 assembly")
             if self.plan_state == "sealed" and ref.assembly_id != self.assembly_id:
                 raise ItemSchemaError("sealed plan 的 ToolSetRef 必须绑定当前 assembly")
-            if ref.ref_id in tool_ids:
+            if ref.ref_id in tool_registry:
                 raise ItemSchemaError(f"ContextRequestPlan 重复 ToolSetRef: {ref.ref_id}")
-            tool_ids.add(ref.ref_id)
+            tool_registry[ref.ref_id] = ref
             if not any(
                 not entry.included and entry.ref == ref.identity_ref()
                 for entry in self.selection
             ):
                 ref.validate_manifest()
-        contribution_ids = set(contribution_ids_list)
+        contribution_registry = {
+            item.contribution_id: item for item in self.contributions
+        }
         ordered_selection(self.selection)
         if any(entry.assembly_id != self.assembly_id for entry in self.selection):
             raise ItemSchemaError("selection entry 必须绑定当前 plan assembly")
@@ -538,14 +554,7 @@ class ContextRequestPlan:
                 raise ItemSchemaError(f"selection 重复 ref: {identity}")
             selected_keys.add(identity)
             if isinstance(ref, ToolSetIdentityRef):
-                registered_tool_ref = next(
-                    (
-                        candidate
-                        for candidate in self.tool_set_refs
-                        if candidate.ref_id == ref.ref_id
-                    ),
-                    None,
-                )
+                registered_tool_ref = tool_registry.get(ref.ref_id)
                 if ref.thread_id != self.thread_id or ref.plan_id != self.plan_id or ref.assembly_id != self.assembly_id:
                     raise ItemSchemaError("selection ToolSetRef scope 不一致")
                 if registered_tool_ref is None and entry.included:
@@ -561,24 +570,16 @@ class ContextRequestPlan:
                         "plan-order-integrity: tool_set selection 不得绑定 contribution/detail"
                     )
                 continue
-            if identity not in ref_ids:
+            if identity not in ref_registry:
                 raise ItemSchemaError("selection ContextRef 不在 plan registry")
-            registered_ref = next(
-                (
-                    candidate
-                    for candidate in self.refs
-                    if selection_ref_identity(candidate) == identity
-                ),
-                None,
-            )
-            if registered_ref != ref:
+            if ref_registry[identity] != ref:
                 raise ItemSchemaError(
                     "plan-order-integrity: selection ContextRef manifest 不一致"
                 )
             resolved_contribution = resolve_contribution_for_ref(
                 ref,
                 self.contributions,
-            ) if entry.included or entry.contribution_id in contribution_ids else None
+            ) if entry.included or entry.contribution_id in contribution_registry else None
             if resolved_contribution is not None:
                 if entry.contribution_id != resolved_contribution.contribution_id:
                     if entry.included:
@@ -607,20 +608,16 @@ class ContextRequestPlan:
             } and entry.contribution_id is not None:
                 if (
                     entry.included or entry.contribution_ordinal is not None
-                ) and entry.contribution_id not in contribution_ids:
+                ) and entry.contribution_id not in contribution_registry:
                     raise ItemSchemaError(
                         "plan-order-integrity: selection contribution_id 不在 manifest"
                     )
-                if entry.contribution_id not in contribution_ids:
+                if entry.contribution_id not in contribution_registry:
                     # optional omitted entry 可以携带已经存在的 registry
                     # identity stub；它不分配 assembly contribution，也不读
                     # 正文。storage restore 会再用 session registry 校验该 ID。
                     continue
-                contribution = next(
-                    item
-                    for item in self.contributions
-                    if item.contribution_id == entry.contribution_id
-                )
+                contribution = contribution_registry[entry.contribution_id]
                 if contribution.source_revision != ref.source_revision:
                     raise ItemSchemaError("contribution/ref source_revision 不一致")
                 if contribution.content_length != ref.content_length:

@@ -34,6 +34,7 @@ class JobRuntimeState:
     # 请求级注入的权威 request_id（``X-Request-ID``）：job 是独立执行根，
     # MUST 显式携带创建请求的 request_id，MUST NOT 在 job 内部补造第二个。
     request_id: str | None = None
+    resume_checkpoint_id: str | None = None
     status: JobStatus = JobStatus.queued
     progress: int = 0
     current_step: str | None = None

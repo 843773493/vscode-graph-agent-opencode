@@ -15,6 +15,7 @@ from dataclasses import replace
 
 import pytest
 
+from app.domain.itemized import request_plan
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.identity.refs import (
@@ -119,6 +120,42 @@ def test_ordered_selection_accepts_sibling_thread_refs_once(
 
     with pytest.raises(ItemSchemaError, match="不得重复引用同一个 ref"):
         ordered_selection((_selection(main_ref, 0), _selection(main_ref, 1)))
+
+
+def test_sealing_matches_thread_qualified_registry_with_linear_identity_work(
+    sibling_refs: tuple[ContextRef, ContextRef], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refs = tuple(
+        replace(sibling_refs[0], thread_id=f"thread-{ordinal}")
+        for ordinal in range(128)
+    )
+    draft = ContextRequestPlan(
+        session_id="session-1", thread_id="thread-main", plan_id="plan-linear",
+        refs=refs,
+    )
+    selection = tuple(
+        _selection(ref, ordinal) for ordinal, ref in enumerate(reversed(refs))
+    )
+    identity_calls = 0
+
+    def counted_identity(ref: object) -> tuple[str, ...]:
+        nonlocal identity_calls
+        identity_calls += 1
+        return selection_ref_identity(ref)
+
+    with monkeypatch.context() as guard:
+        guard.setattr(request_plan, "selection_ref_identity", counted_identity)
+        sealed = draft.seal_for_assembly("assembly-sibling", selection=selection)
+
+    # 约束真实封存入口的身份工作量；逐条扫描 registry 的旧实现会超过此界。
+    assert 0 < identity_calls <= 4 * len(refs)
+    assert sealed.refs == refs
+    assert sealed.selection == selection
+    changed_ref = replace(refs[-1], visibility="private")
+    with pytest.raises(ItemSchemaError, match="selection ContextRef manifest 不一致"):
+        draft.seal_for_assembly(
+            "assembly-sibling", selection=(_selection(changed_ref, 0),),
+        )
 
 
 def test_sibling_thread_registry_is_rejected_only_on_true_duplicate(

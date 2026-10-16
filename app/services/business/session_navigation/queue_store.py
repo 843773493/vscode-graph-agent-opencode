@@ -372,6 +372,7 @@ class NavigationMutationQueueStore(
         """将已 committed 的递归删除 receipt 从 pending settlement 推进为 settled。"""
         cursor = connection.execute(
             "UPDATE navigation_mutation_records SET pending_settlement = 0, "
+            "error_code = NULL, error_detail = NULL, "
             "receipt_revision = receipt_revision + 1, updated_at = ? "
             "WHERE gateway_id = ? AND workspace_id = ? AND actor = ? "
             "AND operation_id = ? AND state = 'committed' "
@@ -402,6 +403,36 @@ class NavigationMutationQueueStore(
             f"operation_id={record.operation_id}, state={current.state}, "
             f"pending_settlement={current.pending_settlement}"
         )
+
+    def mark_delete_repair_required_in(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        record: NavigationMutationRecord,
+        detail: str,
+        now: str,
+    ) -> NavigationMutationRecord:
+        """逻辑提交后的排空失败写回原 receipt，保留原 journal 与冻结集合。"""
+        if not detail:
+            raise ValueError("删除排空失败必须提供具体原因")
+        connection.execute(
+            "UPDATE navigation_mutation_records "
+            "SET error_code = 'delete_settlement_repair_required', error_detail = ?, "
+            "receipt_revision = receipt_revision + 1, updated_at = ? "
+            "WHERE gateway_id = ? AND workspace_id = ? AND actor = ? "
+            "AND operation_id = ? AND state = 'committed' AND pending_settlement = 1 "
+            "AND (error_code IS NOT 'delete_settlement_repair_required' OR error_detail IS NOT ?)",
+            (detail, now, record.gateway_id, record.workspace_id, record.actor, record.operation_id, detail),
+        )
+        current = self.fetch_record_in(
+            connection, gateway_id=record.gateway_id, workspace_id=record.workspace_id,
+            actor=record.actor, operation_id=record.operation_id,
+        )
+        if current is None:
+            raise KeyError(f"会话目录 operation 不存在: {record.operation_id}")
+        if current.state != "committed":
+            raise RuntimeError(f"删除排空失败不能改写非 committed 回执: {record.operation_id}, {current.state}")
+        return current
 
     def list_records(
         self,

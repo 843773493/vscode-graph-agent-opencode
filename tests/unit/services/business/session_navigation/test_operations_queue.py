@@ -41,6 +41,9 @@ from app.services.business.session_navigation.queue_store import (
     NavigationQueueOwnerError,
 )
 from app.services.business.session_service import SessionService
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.harness.python.run_context import TestRunContext
 from tests.support.canonical_id_at import uuid7_hex_from_name
@@ -74,6 +77,7 @@ class _SessionService(SessionService):
             trace_event_store=TraceEventStore(sessions_dir=sessions_root),
             workspace_id=resolver.workspace_id, path_resolver=resolver,
             creation_service=get_session_creation_service(sessions_root),
+            initialize_thread_storage=RolloutCheckpointSaver(sessions_root).initialize_thread_storage,
         )
         self.get_calls: list[str] = []
 
@@ -976,9 +980,9 @@ async def test_recursive_delete_reports_logical_commit_with_pending_settlement(
     """递归删除：导航逻辑 committed 与物理排空分开上报（8.1-G 删除链路契约）。
 
     删除流自身的 mark 事务就是导航逻辑的 committed 点；物理排空是另一条链路，
-    因此 terminal 只能标 ``pending_settlement``，绝不假报「全部完成」。本用例钉死
+    因此 receipt 必须区分 pending、repair_required 与 settled，绝不假报「全部完成」。本用例钉死
     这一区分：若有人把删除接进普通 node mutation 的单事务路径，或直接丢掉
-    ``pending_settlement``，这里立刻变红。
+    settlement，这里立刻变红。
     """
     stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
     created = stack.create_folder_intent(seed="del_root", sequence=1, name="待删目录")
@@ -1004,9 +1008,8 @@ async def test_recursive_delete_reports_logical_commit_with_pending_settlement(
     )
 
     assert record.state == "committed"
-    # 纯 Folder 子树没有需要物理排空的 Session，但仍必须显式携带该字段（默认
-    # False），而不是靠 None 或缺省糊过去。
-    assert record.pending_settlement is False
+    # 纯 Folder 子树也必须显式确认排空完成。
+    assert record.settlement == "settled"
     # 删除链路复用的是共享子树删除流：其 mark 事务关闭逻辑可见性、最终 tombstone
     # 事务移除节点行。因此删除 committed 后，该节点对正常读者不再存在。
     with pytest.raises(KeyError):
@@ -1238,21 +1241,41 @@ async def test_delete_mark_commits_before_physical_drain_and_recovers_settlement
     )
     delete_service = stack.resolver._delete_service
     original_drain = delete_service._drain
+    drain_started = asyncio.Event()
+    release_drain = asyncio.Event()
 
     async def fail_after_mark(
         record: SubtreeDeleteRecord,
         idempotency_key: str,
     ) -> None:
+        drain_started.set()
+        await release_drain.wait()
         raise RuntimeError(f"测试注入：mark 后 drain 失败: {idempotency_key}")
 
     delete_service._drain = fail_after_mark
     try:
         await stack.enqueue(NavigationMutationEnqueueRequest(intents=[delete]), stack.scope)
+        await asyncio.wait_for(drain_started.wait(), timeout=5)
+        pending = stack.service.status([delete.client_operation_id], stack.scope).items[0]
+        assert pending.state == "committed"
+        assert pending.settlement == "pending"
+        release_drain.set()
         receipt = await stack.service.await_terminal(
             delete.client_operation_id, stack.scope
         )
         assert receipt.state == "committed"
-        assert receipt.pending_settlement is True
+        assert receipt.settlement in {"pending", "repair_required"}
+        deadline = asyncio.get_running_loop().time() + 5
+        while stack.service.record(delete.client_operation_id, stack.scope).settlement != "repair_required":
+            if asyncio.get_running_loop().time() >= deadline:
+                raise AssertionError("排空失败未写回原删除 receipt")
+            await asyncio.sleep(0.01)
+        failed = stack.service.status([delete.client_operation_id], stack.scope).items[0]
+        assert failed.state == "committed"
+        assert failed.settlement == "repair_required"
+        assert failed.error_code == "delete_settlement_repair_required"
+        assert "mark 后 drain 失败" in failed.error_detail
+        assert "pending_settlement" not in failed.model_dump()
         assert stack.store.get_subtree_delete_record(delete.client_operation_id).state == "deleting"
         with stack.store.read_transaction() as connection:
             node = connection.execute(
@@ -1262,6 +1285,13 @@ async def test_delete_mark_commits_before_physical_drain_and_recovers_settlement
         event = stack.service.events(after=0).items[-1]
         assert event.operation_id == delete.client_operation_id
         assert event.result_state == "committed"
+
+        await stack.service.stop()
+        await stack.service.start()
+        repeated = stack.service.status([delete.client_operation_id], stack.scope).items[0]
+        assert repeated.settlement == "repair_required"
+        assert repeated.receipt_revision == failed.receipt_revision
+        assert repeated.operation_id == failed.operation_id
 
         delete_service._drain = original_drain
         await stack.service.stop()
@@ -1273,10 +1303,16 @@ async def test_delete_mark_commits_before_physical_drain_and_recovers_settlement
             await asyncio.sleep(0.02)
         settled = stack.service.record(delete.client_operation_id, stack.scope)
         assert settled.state == "committed"
-        assert settled.pending_settlement is False
+        assert settled.settlement == "settled"
+        assert settled.receipt_revision > failed.receipt_revision
+        settled_receipt = stack.service.status([delete.client_operation_id], stack.scope).items[0]
+        assert settled_receipt.settlement == "settled"
+        assert settled_receipt.error_code is None
+        assert settled_receipt.error_detail is None
         assert stack.store.get_subtree_delete_record(delete.client_operation_id).state == "completed"
     finally:
         delete_service._drain = original_drain
+        release_drain.set()
         await stack.service.stop()
 
 def test_queue_enqueue_changes_backup_generation_not_navigation_revision(

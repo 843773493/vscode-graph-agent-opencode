@@ -1,6 +1,7 @@
 import { isTransientNetworkError } from "../../api/http";
-import { listPendingRequests } from "../../pendingRequestsApi";
+import { listMainThreadPendingRequests } from "../../pendingRequestsApi";
 import { cloneMaps } from "../../state/appStateMaps";
+import { hasSessionOwner } from "../../state/session/sessions";
 import { updateAttachmentSummariesFromTraces } from "../../state/attachments";
 import {
   appendTraceEventsToPendingConversations,
@@ -30,6 +31,7 @@ export interface SessionStreamBatchContext {
   workspaceId: string | null;
   sessionCacheKey: string;
   setState: SetAppState;
+  signal?: AbortSignal;
 }
 
 function updateCurrentSessionFromEvents(
@@ -56,6 +58,7 @@ function updateCurrentSessionFromEvents(
     updateAttachmentSummariesFromTraces(
       next.sessionAttachmentSummaries,
       context.sessionId,
+      context.sessionCacheKey,
       traceEvents,
     );
     appendReceivedEvents(
@@ -92,14 +95,14 @@ function updateCurrentSessionFromEvents(
 }
 
 function setRefreshError(
-  setState: SetAppState,
+  context: SessionStreamBatchContext,
   prefix: string,
   error: unknown,
 ): void {
   const message = isTransientNetworkError(error)
     ? "本地服务连接暂时变化，已保留当前状态并自动重试"
     : errorMessage(error);
-  setState((latest) => ({
+  context.setState((latest) => context.signal?.aborted || !hasSessionOwner(latest, context.sessionId, context.workspaceId) ? latest : ({
     ...latest,
     status: `${prefix}: ${message}`,
   }));
@@ -126,8 +129,10 @@ export function flushSessionStreamEventBatch(
       context.workspaceId,
       context.sessionCacheKey,
       context.setState,
+      true,
+      context.signal,
     ).catch((error: unknown) => {
-      setRefreshError(context.setState, "刷新会话标题失败", error);
+      setRefreshError(context, "刷新会话标题失败", error);
     });
   }
   const pendingQueueChanged = events.some(
@@ -138,12 +143,14 @@ export function flushSessionStreamEventBatch(
       ),
   );
   if (pendingQueueChanged) {
-    void listPendingRequests(
+    void listMainThreadPendingRequests(
       context.apiPort,
       context.sessionId,
       context.workspaceId,
+      context.signal,
     ).then((snapshot) => {
       context.setState((latest) => {
+        if (context.signal?.aborted || !hasSessionOwner(latest, context.sessionId, context.workspaceId)) return latest;
         const next = cloneMaps(latest);
         writePendingSnapshot(
           next.pendingConversations,
@@ -154,7 +161,7 @@ export function flushSessionStreamEventBatch(
         return next;
       });
     }).catch((error: unknown) => {
-      setRefreshError(context.setState, "刷新待处理消息失败", error);
+      setRefreshError(context, "刷新待处理消息失败", error);
     });
   }
 }

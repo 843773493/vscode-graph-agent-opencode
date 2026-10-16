@@ -3,15 +3,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.services.infrastructure.rollout_context.fork.completion import (
-    ForkCompletionMixin,
-)
-from app.services.infrastructure.rollout_context.fork.copy_items import (
-    ForkItemCopyMixin,
-)
-from app.services.infrastructure.rollout_context.fork.identity_mapping import (
-    ForkIdentityMappingMixin,
-)
 from app.services.infrastructure.rollout_context.fork.lineage.deletion import (
     RolloutForkDeletionMixin,
 )
@@ -30,28 +21,26 @@ from app.services.infrastructure.rollout_context.fork.materialization import (
 from app.services.infrastructure.rollout_context.fork.node_debug_journal import (
     NodeDebugForkJournalMixin,
 )
-from app.services.infrastructure.rollout_context.fork.overlay_copy import (
-    ForkOverlayCopyMixin,
+from app.services.infrastructure.rollout_context.fork.retention_release import (
+    release_fork_retentions,
 )
-from app.services.infrastructure.rollout_context.fork.remap import ForkRemapMixin
 
 if TYPE_CHECKING:
     from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
 
 class RolloutForkStore(
-    ForkIdentityMappingMixin,
     ForkMetadataMixin,
-    ForkRemapMixin,
     ForkMaterializationMixin,
     ForkMaterializationJournalMixin,
     NodeDebugForkJournalMixin,
-    ForkOverlayCopyMixin,
-    ForkCompletionMixin,
-    ForkItemCopyMixin,
     RolloutForkRecoveryMixin,
     RolloutForkDeletionMixin,
 ):
     def __init__(self, context: RolloutContextStore) -> None:
         self._context = context
         self._storage = context.storage
+
+    async def release_fork_retentions(self, target_session_id: str, *, target_thread_id: str | None = None, copy_operation_id: str | None = None) -> None:
+        await release_fork_retentions(self._storage, self._catalog_store(), target_session_id,
+                                      target_thread_id=target_thread_id, copy_operation_id=copy_operation_id)

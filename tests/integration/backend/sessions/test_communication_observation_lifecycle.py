@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import shutil
 import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import closing
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -19,6 +20,8 @@ from app.core.resource_uri import parse_resource_uri
 from app.core.session_control_communication_ledger.observations import (
     RemoteObservationError,
 )
+from app.core.session_control_store import SessionControlStore
+from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.core.trace_middleware import (
     reset_current_gateway_id,
     reset_current_request_id,
@@ -26,13 +29,17 @@ from app.core.trace_middleware import (
     set_current_request_id,
 )
 from app.gateway.federation.errors import FEDERATION_TARGET_OWNER_REJECTED
-from app.schemas.internal_v2.communication import CommunicationObservationRequest
+from app.schemas.internal_v2.communication import (
+    CommunicationAcceptanceRequest,
+    CommunicationObservationRequest,
+)
 from app.schemas.internal_v2.session_context import SessionContextReadRequest
 from app.services.business.communication.addresses import (
     GlobalThreadAddress,
     ResolvedMainTargetBinding,
 )
-from app.services.business.communication.wait import WaitSelector
+from app.services.business.communication.admission import CommunicationPayload
+from app.services.business.communication.wait import WaitSelector, freeze_wait_deadline
 from app.services.business.session_context_query_service import (
     SessionContextQueryService,
 )
@@ -45,7 +52,14 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.gateway_communication_client import (
     GatewayCommunicationClient,
 )
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.orchestration.communication.inbox_admission_worker import (
+    InboxAdmissionTarget,
+    InboxExecutionBinding,
+)
 from app.services.orchestration.communication.observation_service import _page_identity
 from app.services.orchestration.communication.service import SessionCommunicationService
 from tests.harness.python.run_context import TestRunContext
@@ -100,6 +114,7 @@ class _Transport:
     def __init__(self, sessions: SessionService) -> None:
         self.sessions = sessions
         self.owner = None
+        self.acceptor: SessionCommunicationService | None = None
         self.requests: list[CommunicationObservationRequest] = []
         self.lose_next_response = False
         self.denied = False
@@ -120,6 +135,10 @@ class _Transport:
     async def operation(self, *, operation: str, target: GlobalThreadAddress, body: dict[str, object], timeout=None):
         if self.denied:
             raise PermissionError("authorization_revoked")
+        if operation in {"send", "reply"}:
+            assert self.acceptor is not None
+            accepted = await self.acceptor.accept(CommunicationAcceptanceRequest.model_validate(body))
+            return accepted.model_dump(mode="json")
         request = CommunicationObservationRequest.model_validate(body)
         self.requests.append(request)
         result = await self.owner.observe(request)
@@ -149,6 +168,7 @@ class _Case:
         self.service = SessionCommunicationService(sessions=self.sessions, saver=self.projection, dispatcher=self.projection, transport=self.transport, query_service=query)
         self.service.observations._clock = self.clock
         self.transport.owner = self.service.observations
+        self.transport.acceptor = self.service
 
     def read_request(self, **changes) -> SessionContextReadRequest:
         return SessionContextReadRequest(resource_identity=session_resource_identity(self.workspace.workspace_id, self.target), uri=session_resource_uri(self.workspace.workspace_id, self.target), scope="workspace", view="messages", limit=1, **changes)
@@ -159,6 +179,13 @@ class _Case:
     async def delete_target(self) -> None:
         await self.workspace.resolver.delete_subtree(idempotency_key="observation-target-delete", root_node_id=self.target)
 
+    async def send(self, operation_id: str, *, target: str | None = None):
+        return await self.service.send(
+            session_id=self.source, thread_id=self.source_thread,
+            send_operation_id=operation_id, target_session_id=target or self.target,
+            target_workspace_id=None, payload=CommunicationPayload(content="原通信冻结输入"),
+        )
+
 
 @pytest.fixture
 async def lifecycle_case() -> AsyncIterator[_Case]:
@@ -166,7 +193,8 @@ async def lifecycle_case() -> AsyncIterator[_Case]:
     if context.workspace_root.exists():
         shutil.rmtree(context.workspace_root)
     workspace = build_catalog_workspace(context.output_root)
-    sessions = SessionService(config_service=ConfigService(), trace_event_store=TraceEventStore(sessions_dir=workspace.sessions_root), workspace_id=workspace.workspace_id, path_resolver=workspace.resolver, creation_service=workspace.creation_service)
+    sessions = SessionService(config_service=ConfigService(), trace_event_store=TraceEventStore(sessions_dir=workspace.sessions_root), workspace_id=workspace.workspace_id, path_resolver=workspace.resolver, creation_service=workspace.creation_service,
+                              initialize_thread_storage=RolloutCheckpointSaver(workspace.sessions_root).initialize_thread_storage)
     source = await workspace.create_session("观察源")
     target = await workspace.create_session("观察目标")
     projection = _ColdProjection()
@@ -177,7 +205,7 @@ async def lifecycle_case() -> AsyncIterator[_Case]:
     async def drain(session_id: str) -> None:
         await case.service.observations.drain_session(session_id)
 
-    workspace.resolver.bind_session_drain_callback(drain)
+    workspace.resolver.bind_session_drain_callback(drain, holders=(case.service.deletion_holder,))
     token = set_current_gateway_id(GATEWAY)
     try:
         yield case
@@ -188,6 +216,241 @@ async def lifecycle_case() -> AsyncIterator[_Case]:
         await asyncio.gather(*case.tasks, return_exceptions=True)
         reset_current_gateway_id(token)
         workspace.close()
+
+
+@dataclass
+class _AdmissionProbe:
+    """typed binder 输入桩；catalog、Session 准入、worker 和删除均使用真实 owner。"""
+
+    sessions: SessionService
+    barriers: dict[str, tuple[asyncio.Event, asyncio.Event]] = field(default_factory=dict)
+    bindings: dict[str, InboxExecutionBinding] = field(default_factory=dict)
+    fail_next: bool = False
+
+    def arm(self, phase: str) -> tuple[asyncio.Event, asyncio.Event]:
+        barrier = asyncio.Event(), asyncio.Event()
+        self.barriers[phase] = barrier
+        return barrier
+
+    async def observe(self, operation_id: str, phase: str, **details: object) -> None:
+        if phase in self.barriers:
+            entered, release = self.barriers[phase]
+            entered.set()
+            await release.wait()
+
+    async def __call__(self, target: InboxAdmissionTarget) -> InboxExecutionBinding:
+        if self.fail_next:
+            self.fail_next = False
+            raise RuntimeError("原 binder 故障")
+        inbox = target.inbox
+        async with self.sessions.session_write_admission(inbox.session_id):
+            if inbox.communication_id not in self.bindings:
+                suffix = inbox.communication_id.removeprefix("comm_")
+                self.bindings[inbox.communication_id] = InboxExecutionBinding(
+                    job_id="job_" + suffix, execution_id="rexec_" + suffix, turn_id="turn_" + suffix,
+                )
+            return self.bindings[inbox.communication_id]
+
+
+@pytest.fixture
+async def admission_case(
+    lifecycle_case: _Case, monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[tuple[_Case, _AdmissionProbe]]:
+    case = lifecycle_case
+    probe = _AdmissionProbe(case.sessions)
+    monkeypatch.setattr(case.service, "_bind", probe)
+    monkeypatch.setattr("app.services.orchestration.communication.service.observe_phase", probe.observe)
+    monkeypatch.setattr("app.services.orchestration.communication.inbox_admission_worker.observe_phase", probe.observe)
+    await case.service.start()
+    request_token = set_current_request_id("req_communication_lifecycle")
+    try:
+        yield case, probe
+    finally:
+        if case.service._started:
+            await case.service.stop()
+        reset_current_request_id(request_token)
+
+
+async def _wait_deleting(case: _Case, session_id: str) -> None:
+    async with asyncio.timeout(5):
+        while case.workspace.resolver.get_node(session_id).state != "deleting":
+            await asyncio.sleep(0)
+
+
+@pytest.mark.parametrize("phase", ["target.accepted", "inbox.claimed", "inbox.job_created"])
+async def test_accepted_inbox_delete_settles_original_and_next_session_can_send(
+    admission_case: tuple[_Case, _AdmissionProbe], phase: str,
+) -> None:
+    case, probe = admission_case
+    entered, release = probe.arm("communication." + phase)
+    operation_id = "cop_delete_" + phase
+    communication_id = "comm_" + hashlib.sha256(("communication\0" + operation_id).encode()).hexdigest()[:32]
+    send = asyncio.create_task(case.send(operation_id))
+    case.tasks.append(send)
+    await asyncio.wait_for(entered.wait(), 5)
+    with closing(case.service._store(case.target)) as store:
+        original = store.get_communication_inbox(communication_id)
+        original_lease = store.find_lease_by_operation("communication-target|" + communication_id)
+    deleting = asyncio.create_task(case.delete_target())
+    case.tasks.append(deleting)
+    await _wait_deleting(case, case.target)
+    assert not deleting.done()
+    assert case.workspace.resolver.resolve_session_node(case.target).is_dir()
+    with pytest.raises(SessionDeletionPendingError):
+        async with case.sessions.session_write_admission(case.target):
+            pytest.fail("deleting 不得准入新业务")
+    release.set()
+    receipt = await asyncio.wait_for(send, 5)
+    await asyncio.wait_for(deleting, 5)
+    isolated = case.workspace.resolver.resolve_operation_replay_node(case.target, now=case.clock.now)
+    with closing(SessionControlStore(isolated / "session-control.sqlite", read_only=True)) as store:
+        final = store.get_communication_inbox(communication_id)
+        lease = store.get_lease(original_lease.lease_id)
+        assert (final.communication_id, final.admission_id, final.payload_hash, final.wakeup_key, final.target_thread_id) == (
+            original.communication_id, original.admission_id, original.payload_hash, original.wakeup_key, original.target_thread_id,
+        )
+        assert final.state == ("terminal" if phase == "inbox.job_created" else "cancelled")
+        assert lease.fencing_token == original_lease.fencing_token and lease.state in {"completed", "cancelled"}
+        assert store.list_non_terminal_leases() == ()
+        assert (final.job_id is not None) == (phase == "inbox.job_created")
+    with closing(case.service._store(case.source)) as store:
+        outbox = store.get_communication_outbox(operation_id)
+        assert outbox.state == "target_accepted" and outbox.latest_receipt == receipt.model_dump_json()
+        assert store.find_lease_by_operation("communication-source|" + operation_id).state == "completed"
+    assert case.service._failure is None
+    probe.barriers.clear()
+    next_target = await case.workspace.create_session("后继通信目标")
+    next_receipt = await case.send("cop_successor", target=next_target)
+    async with asyncio.timeout(5):
+        while True:
+            with closing(case.service._store(next_target)) as store:
+                if store.get_communication_inbox(next_receipt.communication_id).state == "execution_bound":
+                    break
+            await asyncio.sleep(0)
+    assert len(probe.bindings) == (2 if phase == "inbox.job_created" else 1)
+    assert case.service._failure is None
+
+
+@pytest.mark.parametrize("loopback", [False, True])
+async def test_source_receipt_and_target_delete_do_not_block_each_other(
+    admission_case: tuple[_Case, _AdmissionProbe], loopback: bool,
+) -> None:
+    case, probe = admission_case
+    inbox_entered, inbox_release = probe.arm("communication.inbox.claimed")
+    receipt_entered, receipt_release = probe.arm("communication.source.receipt_received")
+    target = case.source if loopback else case.target
+    operation_id = "cop_simultaneous_delete"
+    sending = asyncio.create_task(case.send(operation_id, target=target))
+    case.tasks.append(sending)
+    await asyncio.wait_for(inbox_entered.wait(), 5)
+    await asyncio.wait_for(receipt_entered.wait(), 5)
+    deletions = [asyncio.create_task(case.workspace.resolver.delete_subtree(
+        idempotency_key="simultaneous-" + session_id, root_node_id=session_id,
+    )) for session_id in sorted({case.source, target})]
+    case.tasks.extend(deletions)
+    for session_id in {case.source, target}:
+        await _wait_deleting(case, session_id)
+        with pytest.raises(SessionDeletionPendingError):
+            async with case.sessions.session_write_admission(session_id):
+                pytest.fail("不能在 deleting 后创建 fresh Job")
+    inbox_release.set()
+    receipt_release.set()
+    receipt = await asyncio.wait_for(sending, 5)
+    await asyncio.wait_for(asyncio.gather(*deletions), 5)
+    for session_id in {case.source, target}:
+        isolated = case.workspace.resolver.resolve_operation_replay_node(session_id, now=case.clock.now)
+        with closing(SessionControlStore(isolated / "session-control.sqlite", read_only=True)) as store:
+            assert store.list_non_terminal_leases() == ()
+            if session_id == case.source:
+                outbox = store.get_communication_outbox(operation_id)
+                assert outbox.state == "cancelled" and outbox.abort_reason == "source-deleted"
+                assert outbox.latest_receipt == receipt.model_dump_json()
+            if session_id == target:
+                assert store.get_communication_inbox(receipt.communication_id).state == "cancelled"
+    assert probe.bindings == {} and case.service._failure is None
+
+
+async def test_shutdown_preserves_claim_for_same_inbox_startup_recovery(
+    admission_case: tuple[_Case, _AdmissionProbe], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case, probe = admission_case
+    entered, _release = probe.arm("communication.inbox.claimed")
+    receipt = await case.send("cop_shutdown_recovery")
+    await asyncio.wait_for(entered.wait(), 5)
+    await case.service.stop()
+    with closing(case.service._store(case.target)) as store:
+        original = store.get_communication_inbox(receipt.communication_id)
+        original_lease = store.find_lease_by_operation("communication-target|" + receipt.communication_id)
+        assert original.state == "target_accepted" and "待恢复" in original.last_error
+        assert original_lease.state == "settling"
+    async with case.service.deletion_holder.lock_for(case.target, wait=False) as holder:
+        assert holder.acquired
+    probe.barriers.clear()
+    case.restore()
+    recovered_probe = _AdmissionProbe(case.sessions)
+    monkeypatch.setattr(case.service, "_bind", recovered_probe)
+    await case.service.start()
+    with closing(case.service._store(case.target)) as store:
+        recovered = store.get_communication_inbox(receipt.communication_id)
+        assert (recovered.admission_id, recovered.payload_hash, recovered.wakeup_key) == (
+            original.admission_id, original.payload_hash, original.wakeup_key,
+        )
+        assert recovered.state == "execution_bound" and recovered.admission_claim_generation > original.admission_claim_generation
+        assert store.get_lease(original_lease.lease_id).state == "completed"
+    assert len(recovered_probe.bindings) == 1 and case.service._failure is None
+
+
+async def test_binder_failure_is_durable_and_restart_uses_original_admission(
+    admission_case: tuple[_Case, _AdmissionProbe], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case, probe = admission_case
+    probe.fail_next = True
+    receipt = await case.send("cop_failed_recovery")
+    async with asyncio.timeout(5):
+        while case.service._failure is None:
+            await asyncio.sleep(0)
+    with closing(case.service._store(case.target)) as store:
+        original = store.get_communication_inbox(receipt.communication_id)
+        assert original.state == "target_accepted" and "原 binder 故障" in original.last_error
+    with pytest.raises(RuntimeError, match="原 binder 故障"):
+        await case.service.stop()
+    case.restore()
+    recovered_probe = _AdmissionProbe(case.sessions)
+    monkeypatch.setattr(case.service, "_bind", recovered_probe)
+    await case.service.start()
+    with closing(case.service._store(case.target)) as store:
+        recovered = store.get_communication_inbox(receipt.communication_id)
+        assert (recovered.admission_id, recovered.payload_hash, recovered.wakeup_key) == (
+            original.admission_id, original.payload_hash, original.wakeup_key,
+        )
+        assert recovered.state == "execution_bound" and recovered.last_error is None
+    assert len(recovered_probe.bindings) == 1
+
+
+async def test_original_settlement_rejects_stale_fencing_token_and_hash(
+    admission_case: tuple[_Case, _AdmissionProbe],
+) -> None:
+    case, _probe = admission_case
+    source = GlobalThreadAddress(GATEWAY, case.workspace.workspace_id, case.source, case.source_thread)
+    target = GlobalThreadAddress(GATEWAY, case.workspace.workspace_id, case.target, case.target_thread)
+    with closing(case.service._store(case.target)) as store:
+        inbox = await case.service._ledger(case.target, store).accept_incoming_send(
+            communication_id="comm_" + "f" * 32, source=source, target=target,
+            payload=CommunicationPayload(content="原 fencing 输入"), request_id="req_fencing",
+        )
+        lease = store.find_lease_by_operation("communication-target|" + inbox.communication_id)
+        with pytest.raises(RuntimeError, match="结算证明已失效"):
+            async with case.sessions.session_lease_settlement(case.target, store, replace(lease, preimage_hash="0" * 64)):
+                pytest.fail("hash 漂移不得进入结算")
+        async with case.service.deletion_holder.lock_for(case.target, wait=False) as holder:
+            assert holder.acquired
+            async with case.sessions.session_lease_settlement(case.target, store, lease):
+                recovered = store.takeover_lease(lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token)
+        with pytest.raises(RuntimeError, match="结算证明已失效"):
+            async with case.sessions.session_lease_settlement(case.target, store, lease):
+                pytest.fail("旧 fencing token 不得进入结算")
+        assert recovered.fencing_token > lease.fencing_token
+        assert store.get_communication_inbox(inbox.communication_id) == inbox
 
 
 async def test_real_catalog_response_loss_restores_same_page_and_ordinal(lifecycle_case: _Case) -> None:
@@ -324,6 +587,80 @@ async def test_real_http_cursor_errors_gateway_source_and_deleted_page(
             await source_client.operation(operation="read", target=target, body=bad.model_dump(mode="json"))
     finally:
         reset_current_request_id(token)
+    missing_call_id = "cop_http_missing_selector"
+    missing_selector = CommunicationObservationRequest(
+        observation_id="obs_http_missing_selector",
+        source_call_id=missing_call_id,
+        page_identity=_page_identity(source, missing_call_id),
+        page_ordinal=0,
+        expires_at=datetime.now(UTC) + timedelta(days=1),
+        source=source,
+        target=target,
+        operation="wait",
+        query={
+            "selector": asdict(WaitSelector("job", "job_missing_http")),
+            "until": "terminal",
+            "timeout_seconds": 1,
+            "deadline": asdict(
+                freeze_wait_deadline(
+                    clock=_Clock(datetime.now(UTC)), timeout_seconds=1
+                )
+            ),
+        },
+    )
+    direct_call_id = "cop_http_missing_selector_direct"
+    missing_direct_request = missing_selector.model_copy(update={
+        "observation_id": "obs_http_missing_selector_direct",
+        "source_call_id": direct_call_id,
+        "page_identity": _page_identity(source, direct_call_id),
+    })
+    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{case.backend.port}", headers={**LOCAL_TOKEN_HEADERS, "X-BoxTeam-Gateway-Id": case.gateway_id, "X-BoxTeam-Workspace-Id": case.backend.workspace_id, "X-BoxTeam-Communication-Origin": case.gateway_id}) as backend:
+        missing_direct = await backend.post(
+            f"/api/v1/sessions/{target_id}/communication-observations",
+            json=missing_direct_request.model_dump(mode="json"),
+        )
+    assert missing_direct.status_code == 409, missing_direct.text
+    assert missing_direct.json()["detail"] == {
+        "code": "selector_not_found",
+        "message": "selector_not_found",
+        "detail": {},
+    }
+    assert missing_direct.headers["X-Request-ID"] == missing_direct.json()["request_id"]
+    missing_relay = {
+        "operation": "wait",
+        "target": missing_selector.model_dump(mode="json")["target"],
+        "body": missing_selector.model_dump(mode="json"),
+    }
+    missing_gateway = await case.client.post(
+        "/api/gateway/federation/relay", json=missing_relay
+    )
+    assert missing_gateway.status_code == 409, missing_gateway.text
+    assert missing_gateway.json()["detail"]["code"] == FEDERATION_TARGET_OWNER_REJECTED
+    assert missing_gateway.json()["detail"]["detail"] == {
+        "owner": "communication_observation",
+        "code": "selector_not_found",
+    }
+    assert missing_gateway.headers["X-Request-ID"] == missing_gateway.json()["request_id"]
+    target_node = await case.session_node(target_id)
+    expected_missing = {"error": {"code": "selector_not_found", "message": "selector_not_found", "detail": {}}}
+    with closing(SessionControlStore(target_node / "session-control.sqlite", read_only=True)) as store:
+        assert store.get_remote_observation(missing_selector.observation_id, side="target").result == expected_missing
+        assert store.get_remote_page(
+            missing_selector.observation_id, side="target", page_identity=missing_selector.page_identity,
+        ).result == expected_missing
+        for lease_identity in (
+            "target-observation|" + missing_selector.observation_id,
+            "target-page|" + missing_selector.page_identity,
+        ):
+            lease = store.find_lease_by_operation(lease_identity)
+            assert lease is not None and lease.state == "failed"
+    missing_replay = await case.client.post(
+        "/api/gateway/federation/relay", json=missing_relay
+    )
+    assert missing_replay.status_code == 409, missing_replay.text
+    assert missing_replay.json()["detail"]["code"] == FEDERATION_TARGET_OWNER_REJECTED
+    assert missing_replay.json()["detail"]["detail"] == missing_gateway.json()["detail"]["detail"]
+    assert missing_replay.headers["X-Request-ID"] == missing_replay.json()["request_id"]
     mismatch = request.model_copy(update={"target": GlobalThreadAddress(target.gateway_id, target.workspace_id, target.session_id, source_thread)})
     mismatched = await case.client.post("/api/gateway/federation/relay", json={"operation": "read", "target": mismatch.model_dump(mode="json")["target"], "body": mismatch.model_dump(mode="json")})
     assert mismatched.status_code == 409
@@ -352,7 +689,7 @@ async def test_real_http_cursor_errors_gateway_source_and_deleted_page(
         "owner": "communication_observation",
         "code": "target-deleted",
     }
-    case.record("observation-http-errors", {"direct": direct.json(), "gateway": relayed.json(), "mismatch": mismatched.json(), "expired": expired_response.json(), "deleted": rejected.json()})
+    case.record("observation-http-errors", {"direct": direct.json(), "gateway": relayed.json(), "missing_selector_direct": missing_direct.json(), "missing_selector_gateway": missing_gateway.json(), "missing_selector_replay": missing_replay.json(), "mismatch": mismatched.json(), "expired": expired_response.json(), "deleted": rejected.json()})
 
 
 async def test_isolated_gc_respects_communication_window_and_original_binding(
@@ -544,9 +881,63 @@ async def test_real_startup_recovers_expired_wait_with_original_deadline(
         await case.service.stop()
 
 
-@pytest.mark.parametrize("replayed", [False, True])
+async def test_source_tombstone_terminal_retry_authorizes_without_target_admission(
+    lifecycle_case: _Case, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """source 已准入、target 未准入就丢失传输；删除后仅新授权重放取消。"""
+    case = lifecycle_case
+    original_operation = case.transport.operation
+
+    async def lose_before_dispatch(**_kwargs):
+        raise ConnectionError("target 尚未准入")
+
+    monkeypatch.setattr(case.transport, "operation", lose_before_dispatch)
+    with pytest.raises(ConnectionError, match="尚未准入"):
+        await case.read("source-before-target")
+    with closing(case.service._store(case.target)) as control:
+        assert control.list_remote_observations() == ()
+    await case.workspace.resolver.delete_subtree(
+        idempotency_key="source-before-target-delete", root_node_id=case.source,
+    )
+    monkeypatch.setattr(case.transport, "operation", original_operation)
+    case.transport.denied = True
+    with pytest.raises(PermissionError, match="authorization_revoked"):
+        await case.read("source-before-target")
+    case.transport.denied = False
+    with pytest.raises(RemoteObservationError, match="^target-deleted$"):
+        await case.read("source-before-target")
+    assert case.transport.requests[-1].terminal_replay is True
+    with closing(case.service._store(case.target)) as control:
+        assert control.list_remote_observations() == ()
+        assert control.list_non_terminal_leases() == ()
+    isolated = case.workspace.resolver.resolve_operation_replay_node(case.source, now=case.clock.now)
+    from app.core.session_control_store import SessionControlStore
+    with closing(SessionControlStore(isolated / "session-control.sqlite", read_only=True)) as control:
+        observations = control.list_remote_observations()
+        assert len(observations) == 1
+        assert observations[0].request["envelope"]["terminal_replay"] is False
+        assert control.list_non_terminal_leases() == ()
+
+    async def expired_error_reply(**kwargs):
+        try:
+            return await original_operation(**kwargs)
+        finally:
+            # target 的新授权/查页发生在窗口内，回程跨过同一冻结期限。
+            case.clock.now = case.call_times["source-before-target"] + timedelta(days=1)
+
+    monkeypatch.setattr(case.transport, "operation", expired_error_reply)
+    with pytest.raises(RemoteObservationError, match="^operation-retry-expired$"):
+        await case.read("source-before-target")
+
+
+@pytest.mark.parametrize(
+    ("replayed", "expired_during_reply"),
+    [(False, False), (True, False), (True, True)],
+    ids=["live", "replayed", "reply-expiry"],
+)
 async def test_real_source_delete_during_reply_closes_live_and_replayed_callback(
     lifecycle_case: _Case, monkeypatch: pytest.MonkeyPatch, replayed: bool,
+    expired_during_reply: bool,
 ) -> None:
     case = lifecycle_case
     first = await case.read("source_delete") if replayed else None
@@ -558,6 +949,9 @@ async def test_real_source_delete_during_reply_closes_live_and_replayed_callback
         result = await original_operation(**kwargs)
         reply.set()
         await release.wait()
+        if expired_during_reply:
+            # source 已删，原请求回程跨期；进入 _DELETED catch 前不得重冻期限。
+            case.clock.now = case.call_times["source_delete"] + timedelta(days=1)
         return result
 
     monkeypatch.setattr(case.transport, "operation", delayed_reply)
@@ -565,10 +959,17 @@ async def test_real_source_delete_during_reply_closes_live_and_replayed_callback
     case.tasks.append(pending)
     try:
         await asyncio.wait_for(reply.wait(), 3)
+        with closing(case.service._store(case.target)) as store:
+            target_before = store.list_remote_observations()
+            assert len(target_before) == 1
+            target_identity = (target_before[0].observation_id, target_before[0].expires_at)
         async with asyncio.timeout(3):
             await case.workspace.resolver.delete_subtree(idempotency_key="observation-source-delete", root_node_id=case.source)
         release.set()
-        if replayed:
+        if expired_during_reply:
+            with pytest.raises(RemoteObservationError, match="^operation-retry-expired$"):
+                await asyncio.wait_for(pending, 3)
+        elif replayed:
             assert await asyncio.wait_for(pending, 3) == first
         else:
             with pytest.raises(RemoteObservationError, match="^target-deleted$"):
@@ -577,6 +978,23 @@ async def test_real_source_delete_during_reply_closes_live_and_replayed_callback
         isolated = case.workspace.resolver.resolve_operation_replay_node(case.source, now=case.clock.now)
         with closing(SessionControlStore(isolated / "session-control.sqlite", read_only=True)) as store:
             assert store.list_non_terminal_leases() == ()
+
+        with closing(case.service._store(case.target)) as store:
+            target_after = store.list_remote_observations()
+            assert len(target_after) == 1
+            assert (target_after[0].observation_id, target_after[0].expires_at) == target_identity
+
+        if expired_during_reply:
+            return
+
+        async def expired_reply(**kwargs):
+            result = await original_operation(**kwargs)
+            case.clock.now = case.call_times["source_delete"] + timedelta(days=1)
+            return result
+
+        monkeypatch.setattr(case.transport, "operation", expired_reply)
+        with pytest.raises(RemoteObservationError, match="^operation-retry-expired$"):
+            await case.read("source_delete")
     finally:
         release.set()
         if not pending.done():

@@ -17,6 +17,7 @@ from app.domain.itemized.enums import (
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
+    copy_json_value,
     payload_content_length,
     sha256_jcs,
     validate_hash_token,
@@ -544,6 +545,10 @@ class ToolSetRef(ToolSetIdentityRef):
     tool_policy: Mapping[str, object] = field(default_factory=dict)
     tools: tuple[Mapping[str, object], ...] = ()
 
+    def __getattribute__(self, name: str) -> object:
+        value = object.__getattribute__(self, name)
+        return copy_json_value(value) if name in {"tool_policy", "tools"} else value
+
     @classmethod
     def from_tool_snapshot(
         cls,
@@ -617,6 +622,8 @@ class ToolSetRef(ToolSetIdentityRef):
         )
 
     def __post_init__(self) -> None:
+        for name in ("tool_policy", "tools"):
+            object.__setattr__(self, name, copy_json_value(object.__getattribute__(self, name)))
         ToolSetIdentityRef.__post_init__(self)
         if not isinstance(self.tool_policy, Mapping):
             raise ItemSchemaError("ToolSetRef.tool_policy 必须是 object")

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   addCatalogOutboxIntent,
+  applyCatalogOutboxOperationReceipt,
   createCatalogOutbox,
   type CatalogOutboxOperation,
 } from "./sessionCatalogOutbox";
@@ -57,6 +58,22 @@ function memoryPort(): CatalogOutboxPersistencePort {
       records.set(partitionKey, bucket);
       nextSequence.set(partitionKey, sequence + 1);
       return stored;
+    },
+    async applyReceipts(partitionKey, receipts) {
+      const bucket = records.get(partitionKey);
+      const updated: CatalogOutboxStoredOperation[] = [];
+      for (const receipt of receipts) {
+        const existing = [...(bucket?.values() ?? [])].find((record) =>
+          record.operation.client_operation_id === receipt.operation_id);
+        if (!existing) continue;
+        const operation = applyCatalogOutboxOperationReceipt(existing.operation, receipt);
+        const record = {
+          ...existing, operation: { ...operation, client_sequence: existing.client_sequence },
+        };
+        bucket?.set(record.client_sequence, record);
+        updated.push(record);
+      }
+      return updated;
     },
     async delete(partitionKey, clientOperationIds) {
       const bucket = records.get(partitionKey);
@@ -160,6 +177,7 @@ describe("会话目录 outbox 持久层端口", () => {
         operation: { ...operation, client_sequence: 1 },
       }],
       insert: async () => { throw new Error("unexpected insert"); },
+      applyReceipts: async () => { throw new Error("unexpected receipt"); },
       delete: async () => undefined,
     };
     await expect(loadCatalogOutbox(wrongPartition, PARTITION))
@@ -172,6 +190,7 @@ describe("会话目录 outbox 持久层端口", () => {
         operation: { ...operation, client_sequence: 1 },
       }],
       insert: async () => { throw new Error("unexpected insert"); },
+      applyReceipts: async () => { throw new Error("unexpected receipt"); },
       delete: async () => undefined,
     };
     await expect(loadCatalogOutbox(wrongSequence, PARTITION))
@@ -184,6 +203,7 @@ describe("会话目录 outbox 持久层端口", () => {
       insert: async () => {
         throw new Error("QuotaExceededError: 本地存储已满");
       },
+      applyReceipts: async () => { throw new Error("unexpected receipt"); },
       delete: async () => undefined,
     };
     await expect(persistCatalogOutboxPendingOperation(

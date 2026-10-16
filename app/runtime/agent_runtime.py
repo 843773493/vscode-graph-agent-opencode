@@ -4,9 +4,6 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
-from langchain_core.tools import BaseTool
-from langgraph.checkpoint.base import BaseCheckpointSaver
-
 from app.abstractions.communication import SessionCommunicationProtocol
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
@@ -19,13 +16,6 @@ from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.session_target import SessionTargetResolverProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.abstractions.tool_selection import ToolSelectionReader
-from app.agents.agent_factory import (
-    create_runtime_deep_agent_for_session,
-    resolve_agent_id,
-)
-from app.agents.graph_binding import GraphBindingStorePort
-from app.agents.graph_tool_adapter import extract_agent_tools_by_name
-from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.policy import (
     ToolMetadata,
     catalog_group_for_tool,
@@ -47,6 +37,11 @@ from app.services.infrastructure.resource_platform.sources.workspace_file_resour
 )
 
 if TYPE_CHECKING:
+    from langchain_core.tools import BaseTool
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+
+    from app.agents.graph_binding import GraphBindingStorePort
+    from app.agents.skill_runtime import PublishedSkillCatalog
     from app.services.business.message_service import MessageService
     from app.services.business.session_goal_service import SessionGoalService
     from app.services.business.session_service import SessionService
@@ -119,11 +114,17 @@ def build_session_agent_runtime(
     tool_timeout_seconds: float | None = None,
     workspace_file_resource_registry: WorkspaceFileResourceRegistry | None = None,
     reactor_lifetime_scope: LifetimeScope | None = None,
+    skill_catalog: PublishedSkillCatalog | None = None,
     graph_binding_store: GraphBindingStorePort,
     workspace_root: Path,
     include_team_tools: bool = False,
     owns_thread: bool = True,
 ) -> Any:
+    from app.agents.agent_factory import (
+        create_runtime_deep_agent_for_session,
+        resolve_agent_id,
+    )
+
     resolved_agent_id = resolve_agent_id(agent_id, config_service)
     checkpointer = dependency_provider.get_checkpointer()
     if checkpointer is None:
@@ -177,6 +178,7 @@ def build_session_agent_runtime(
         tool_timeout_seconds=tool_timeout_seconds,
         workspace_file_resource_registry=workspace_file_resource_registry,
         reactor_lifetime_scope=reactor_lifetime_scope,
+        skill_catalog=skill_catalog,
         graph_binding_store=graph_binding_store,
         include_team_tools=include_team_tools,
         owns_thread=owns_thread,
@@ -248,6 +250,9 @@ def build_agent_tool_definitions(
     *,
     extension_tools: Sequence[BaseTool] = (),
 ) -> list[dict[str, Any]]:
+    from app.agents.graph_tool_adapter import extract_agent_tools_by_name
+    from app.agents.model_tool_schema import export_model_tool_json_schema
+
     """返回 Agent 当前可用工具定义，隐藏 DeepAgents 图结构细节。"""
     tool_map = extract_agent_tools_by_name(agent)
     if not tool_map:

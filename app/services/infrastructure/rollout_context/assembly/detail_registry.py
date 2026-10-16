@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.selection import ContextSelectionEntry
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    check_resource_target,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.values import (
+    ResourceTargetAction,
+    ResourceTargetContext,
+    ResourceTargetFacts,
+)
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
     detail_ref_key,
@@ -20,6 +31,12 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
     DetailRecord,
     detail_record_from_mapping,
     detail_relative_path,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    require_historical_scope,
+)
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutReadSnapshot,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import strict_text
 
@@ -101,6 +118,36 @@ def validate_assembly_details(
 
 
 class DetailRegistryMixin(DetailRetentionMixin):
+    @staticmethod
+    def check_fork_target_resources(
+        connection: sqlite3.Connection, source: ResourceTargetFacts, target: ResourceTargetContext,
+        *, choices: Mapping[str, ResourceTargetAction], selected_only: bool, captured_node: Path,
+    ) -> None:
+        """只处理冻结 manifest 的 backing 正文，不把历史 DetailRef 改绑到目标。"""
+        selection = " JOIN fork_selected_details selected ON selected.detail_ref=detail.detail_ref" if selected_only else ""
+        for key, session_id, thread_id, assembly_id, relative_path, revision, digest, length, availability, required in connection.execute(
+            "SELECT detail.detail_ref,detail.session_id,detail.thread_id,detail.assembly_id,detail.relative_path,"
+            "detail.source_revision,detail.content_hash,detail.content_length,detail.availability,detail.required "
+            "FROM context_plan_details detail" + selection,
+        ):
+            ref = detail_ref_from_key(key)
+            ref.require_owner(session_id, thread_id, assembly_id)
+            require_historical_scope(connection, session_id, thread_id)
+            if relative_path != str(detail_relative_path(ref)):
+                raise ValueError("source-mismatch: 冻结 detail locator 不属于精确历史 owner")
+            available = availability == "available"
+            decision = check_resource_target(
+                replace(source, available=available, required_for_context=available or bool(required),
+                        revision=revision, content_hash=digest, content_length=length),
+                target, choice=choices.get(source.resource_uri),
+            )
+            if decision.available and decision.action != "copy_snapshot":
+                raise ValueError("detail owner 只支持冻结快照导入")
+            if decision.available:
+                path = captured_node / detail_relative_path(ref)
+                if path.is_symlink() or not path.is_file():
+                    raise FileNotFoundError(f"context_required_resource_unavailable: 冻结 detail 正文缺失: {ref}")
+
     def register_context_plan_detail(self, detail: DetailRecord) -> None:
         """独立 detail 写入端口；seal 使用显式的同 connection 端口。"""
         if not isinstance(detail, DetailRecord):
@@ -177,18 +224,31 @@ class DetailRegistryMixin(DetailRetentionMixin):
         *,
         detail_ref: DetailRef,
         checkpoint_ns: str = "",
+        snapshot: RolloutReadSnapshot | None = None,
     ) -> dict[str, object]:
+        """读取并核验 SQLite detail manifest，不读取正文文件。
+
+        返回映射已将 ``detail_ref`` 解码为 typed ``DetailRef``，并把数据库列
+        ``content_length`` 映射为 ``length``；``required`` 与 ``sensitive``
+        保持 SQLite 的 0/1 值，经过 ``detail_record_from_mapping`` 后才成为
+        typed record 中的 bool。
+        """
         session_id = strict_text(session_id, field="get_context_plan_detail.session_id")
         thread_id = strict_text(thread_id, field="get_context_plan_detail.thread_id")
         checkpoint_ns = strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
         key = detail_ref_key(detail_ref)
-        detail_ref.require_owner(session_id, thread_id)
-        with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
+        with self._storage.read_connection(
+            session_id, thread_id, checkpoint_ns, snapshot=snapshot,
+        ) as connection:
             self._storage._require_v2_runtime(connection)
+            require_historical_scope(
+                connection, detail_ref.session_id, detail_ref.thread_id,
+                current_owner=(session_id, thread_id),
+            )
             row = connection.execute(
                 f"SELECT {','.join(_COLUMNS)} FROM context_plan_details "
                 "WHERE detail_ref = ? AND session_id = ? AND thread_id = ? AND checkpoint_ns = ?",
-                (key, session_id, thread_id, checkpoint_ns),
+                (key, detail_ref.session_id, detail_ref.thread_id, checkpoint_ns),
             ).fetchone()
         if row is None:
             raise KeyError(f"detail-unavailable: context detail 不存在: {detail_ref}")

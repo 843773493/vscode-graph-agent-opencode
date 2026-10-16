@@ -35,10 +35,16 @@ from app.core.session_control_store.collaboration import (
     _COLLABORATION_MEMBERS_TABLE_DDL,
 )
 from app.core.session_control_store.collaboration_fanout import COLLABORATION_STATE_DDL
+from app.core.session_control_store.copy_attachment_settlement import (
+    COPY_ATTACHMENT_SETTLEMENT_DDL,
+)
 from app.core.session_control_store.execution_intent import (
     _IDX_THREAD_EXECUTION_INTENT_STATE_DDL,
     _IDX_THREAD_EXECUTION_INTENT_THREAD_DDL,
     _THREAD_EXECUTION_INTENTS_TABLE_DDL,
+)
+from app.core.session_control_store.fork_retention_release import (
+    FORK_RETENTION_RELEASE_DDL,
 )
 from app.core.session_control_store.thread_creation_record import (
     _IDX_THREAD_CREATION_DELEGATION_DDL,
@@ -95,6 +101,8 @@ class SchemaInitMixin:
             self._connection.execute(BACKGROUND_MAILBOX_DDL)
             self._connection.execute(BACKGROUND_MAILBOX_OWNER_DDL)
             self._connection.execute(BACKGROUND_CONSUMPTIONS_DDL)
+            self._connection.execute(COPY_ATTACHMENT_SETTLEMENT_DDL)
+            self._connection.execute(FORK_RETENTION_RELEASE_DDL)
             if current != self.SCHEMA_VERSION:
                 self._connection.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
         except BaseException:

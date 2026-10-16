@@ -1,4 +1,6 @@
+import type { SessionCatalogOperationReceipt } from "../../api/session/sessionCatalogOperations";
 import {
+  applyCatalogOutboxOperationReceipt,
   catalogOutboxPartitionKey,
   createCatalogOutbox,
   normalizeRestoredCatalogOutbox,
@@ -23,6 +25,10 @@ export interface CatalogOutboxPersistencePort {
     partitionKey: string,
     operation: CatalogOutboxOperation,
   ): Promise<CatalogOutboxStoredOperation>;
+  applyReceipts(
+    partitionKey: string,
+    receipts: readonly SessionCatalogOperationReceipt[],
+  ): Promise<CatalogOutboxStoredOperation[]>;
   delete(partitionKey: string, clientOperationIds: readonly string[]): Promise<void>;
 }
 
@@ -200,6 +206,53 @@ export function createIndexedDbCatalogOutboxPort(
       if (!stored) throw new Error("IndexedDB 事务完成但没有写入 operation");
       return stored;
     },
+    async applyReceipts(partitionKey, receipts) {
+      if (receipts.length === 0) return [];
+      const byOperation = new Map<string, SessionCatalogOperationReceipt[]>();
+      for (const receipt of receipts) {
+        const versions = byOperation.get(receipt.operation_id) ?? [];
+        versions.push(receipt);
+        byOperation.set(receipt.operation_id, versions);
+      }
+      const transaction = database.transaction(CATALOG_OUTBOX_STORE_NAME, "readwrite");
+      const done = transactionDone(transaction, "持久合并会话目录回执");
+      const store = transaction.objectStore(CATALOG_OUTBOX_STORE_NAME);
+      const operationIds = store.index(OPERATION_ID_INDEX);
+      const records: CatalogOutboxStoredOperation[] = [];
+      let conflict: Error | null = null;
+      for (const [operationId, versions] of byOperation) {
+        const request = operationIds.get([partitionKey, operationId]) as IDBRequest<
+          CatalogOutboxStoredOperation | undefined
+        >;
+        request.onsuccess = () => {
+          const existing = request.result;
+          // 其它 tab 已完成清理的命令不得由迟到回执重新插入或重新分配序号。
+          if (!existing) return;
+          try {
+            let operation: CatalogOutboxOperation = existing.operation;
+            for (const receipt of versions) {
+              operation = applyCatalogOutboxOperationReceipt(operation, receipt);
+            }
+            const updated: CatalogOutboxStoredOperation = {
+              ...existing,
+              operation: { ...operation, client_sequence: existing.client_sequence },
+            };
+            if (operation !== existing.operation) store.put(updated);
+            records.push(updated);
+          } catch (error: unknown) {
+            conflict = error instanceof Error ? error : new Error(String(error));
+            transaction.abort();
+          }
+        };
+      }
+      try {
+        await done;
+      } catch (error: unknown) {
+        if (conflict) throw conflict;
+        throw error;
+      }
+      return records.sort((left, right) => left.client_sequence - right.client_sequence);
+    },
     async delete(partitionKey, clientOperationIds) {
       if (clientOperationIds.length === 0) return;
       const transaction = database.transaction(CATALOG_OUTBOX_STORE_NAME, "readwrite");
@@ -232,6 +285,24 @@ export async function loadCatalogOutbox(
 ): Promise<CatalogOutbox> {
   const partitionKey = catalogOutboxPartitionKey(partition);
   const records = await port.load(partitionKey);
+  return catalogOutboxFromRecords(partition, records);
+}
+
+/** 回执事务从磁盘当前版本推进；提交后才把镜像交给 driver 发布。 */
+export async function persistCatalogOutboxReceipts(
+  port: CatalogOutboxPersistencePort,
+  partition: CatalogOutboxPartition,
+  receipts: readonly SessionCatalogOperationReceipt[],
+): Promise<CatalogOutbox> {
+  const records = await port.applyReceipts(catalogOutboxPartitionKey(partition), receipts);
+  return catalogOutboxFromRecords(partition, records);
+}
+
+function catalogOutboxFromRecords(
+  partition: CatalogOutboxPartition,
+  records: readonly CatalogOutboxStoredOperation[],
+): CatalogOutbox {
+  const partitionKey = catalogOutboxPartitionKey(partition);
   let outbox = createCatalogOutbox(partition);
   const operationIds = new Set<string>();
   const sequences = new Set<number>();

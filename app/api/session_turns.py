@@ -4,15 +4,20 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.api.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.api.deps import (
     get_request_id,
     get_session_turn_history_service,
     verify_local_token,
 )
-from app.api.errors import client_error_message, not_found_http_error
+from app.api.errors import (
+    client_error_message,
+    not_found_http_error,
+    state_conflict_http_error,
+)
 from app.core.exceptions import NotFoundError
 from app.core.history_loading import parse_history_loading_header
+from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.turn import (
     SessionTurnBootstrapDTO,
@@ -34,6 +39,8 @@ def _turn_history_http_error(
     session_id: CanonicalSessionId,
     error: Exception,
 ) -> HTTPException:
+    if isinstance(error, SessionDeletionPendingError):
+        return state_conflict_http_error(error)
     if isinstance(error, StaleTurnCursorError):
         return HTTPException(
             status_code=409, detail=error.detail.model_dump(mode="json")

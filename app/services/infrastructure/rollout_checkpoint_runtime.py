@@ -8,6 +8,9 @@ from pathlib import Path
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from app.core.path_utils import get_session_path_resolver
+from app.services.infrastructure.attachment_blob_catalog.store import (
+    AttachmentBlobStore,
+)
 from app.services.infrastructure.node_debug.session.fork import (
     NodeDebugWorkspaceForkConfig,
 )
@@ -51,6 +54,7 @@ class RolloutCheckpointRuntime:
         serde: JsonPlusSerializer | None = None,
         node_debug_workspace_config: Callable[[], NodeDebugWorkspaceForkConfig]
         | None = None,
+        attachment_store: AttachmentBlobStore | None = None,
     ) -> None:
         self.sessions_dir = Path(sessions_dir).resolve()
         self.serde = serde or JsonPlusSerializer()
@@ -58,6 +62,7 @@ class RolloutCheckpointRuntime:
             self.sessions_dir,
             serde=self.serde,
             message_codec=LangChainMessageCodec(),
+            attachment_ref_projector=attachment_store.project_attachment if attachment_store is not None else None,
         )
         self.append_writer = RolloutAppendWriter(
             self.sessions_dir,
@@ -81,6 +86,7 @@ class RolloutCheckpointRuntime:
                 get_session_path_resolver(self.sessions_dir)
             ),
             node_debug_workspace_config=node_debug_workspace_config,
+            attachment_store=attachment_store,
         )
 
 

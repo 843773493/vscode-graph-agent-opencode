@@ -1,4 +1,5 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, type MutableRefObject } from "react";
+import { getGatewayHealth } from "../../gatewayApi";
 import {
   createSession as apiCreateSession,
   DEFAULT_SESSION_TITLE,
@@ -13,22 +14,25 @@ import {
   updateSessionAgent as apiUpdateSessionAgent,
   updateSessionProvider as apiUpdateSessionProvider,
 } from "../../api";
-import type { Session } from "../../types/backend";
+import type { Session, SessionForkRequest } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
 import { cloneMaps } from "../../state/appStateMaps";
 import {
   clearLastSessionId,
   writeLastSessionId,
 } from "../../state/storage";
-import { replaceSessionMetadata } from "../../state/session/sessions";
+import { applySessionListConvergence, replaceSessionMetadata } from "../../state/session/sessions";
 import { appendFrontendEvent } from "../../state/traceEvents";
 import { resetAgentStateFields } from "../runtime/useAgentStateSnapshot";
 import { resetSessionScopedFields } from "./sessionScopedState";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import { errorMessage } from "../../utils/errorMessage";
+import { HttpRequestError } from "../../api/http";
 import {
   requireGatewayWorkspaceRequestTarget,
+  requireForkTargetWorkspace,
+  type GatewayWorkspaceForkRoute,
   type GatewayWorkspaceRequestTarget,
 } from "../../api/workspaceIdentity";
 import type { GatewayUserAccess } from "../../types/backend";
@@ -38,6 +42,7 @@ import {
   type CatalogOutboxOperation,
 } from "../../state/session/sessionCatalogOutbox";
 import type { SessionCatalogOutboxRuntime } from "./sessionCatalogOutboxRuntime";
+import { invalidateWorkspaceSessionListSnapshot } from "../workspace/workspaceSessionListRefresh";
 
 function normalizeSessionTitle(title: string): string {
   const trimmed = title.trim();
@@ -47,20 +52,16 @@ function normalizeSessionTitle(title: string): string {
   return trimmed;
 }
 
-/** 从会话镜像收敛时，移除已消失会话的全部会话级附属缓存。 */
-function purgeSessionScopedCaches(
-  state: AppState,
-  sessionId: string,
-  cacheKey: string,
-): void {
-  state.sessionAttachmentSummaries.delete(sessionId);
-  state.eventQueuesBySession.delete(cacheKey);
-  state.sessionTraceHistoryBySession.delete(cacheKey);
-  state.pendingConversations.delete(cacheKey);
-  state.activeJobIdsBySession.delete(cacheKey);
-  state.unreadSessionKeys.delete(cacheKey);
-  state.sessionGatewayWorkspaceById.delete(cacheKey);
-  state.turnTimelinesBySession.delete(cacheKey);
+function isCurrentSessionOwner(
+  state: Pick<
+    AppState,
+    "currentSession" | "currentSessionWorkspaceId" | "activeGatewayWorkspaceId"
+  >,
+  owner: { sessionId: string | null; workspaceId: string | null },
+): boolean {
+  return (state.currentSession?.session_id ?? null) === owner.sessionId
+    && (state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId)
+      === owner.workspaceId;
 }
 
 /** 把一条会话登记为当前会话后的共同落点：复位会话级显示缓存、写入历史加载
@@ -101,44 +102,10 @@ function applySessionSelected(
 
 /** 把一条会话标记为已读的唯一出口。原本 selectSession 与 selectWorkspaceSession
  * 各写一份逐字相同的 setState 块，未读判定与写回必须只有一处。 */
-function clearUnreadSessionKey(setState: SetAppState, cacheKey: string): void {
-  setState((prev) => {
-    if (!prev.unreadSessionKeys.has(cacheKey)) {
-      return prev;
-    }
-    const next = cloneMaps(prev);
-    next.unreadSessionKeys.delete(cacheKey);
-    return next;
-  });
-}
-
-/** 用权威会话列表整表替换本地镜像，并清掉已消失会话的附属缓存。 */
-function applySessionListConvergence(
-  state: AppState,
-  workspaceId: string,
-  remainingSessions: Session[],
-): AppState {
+function clearUnreadSessionKey(state: AppState, cacheKey: string): AppState {
+  if (!state.unreadSessionKeys.has(cacheKey)) return state;
   const next = cloneMaps(state);
-  const previousSessions =
-    state.sessionsByWorkspace.get(workspaceId) ?? state.sessions;
-  // 全局 sessions 镜像只描述当前活动工作区（selectWorkspaceSession /
-  // forkSessionContext 都先切 activeGatewayWorkspaceId 再写它）。收敛一个非
-  // 活动工作区的会话列表时若整表覆盖全局镜像，会把该工作区的会话灌进来。
-  if (state.activeGatewayWorkspaceId === workspaceId) {
-    next.sessions = remainingSessions;
-  }
-  next.sessionsByWorkspace.set(workspaceId, remainingSessions);
-  const remainingIds = new Set(
-    remainingSessions.map((session) => session.session_id),
-  );
-  for (const removed of previousSessions) {
-    if (remainingIds.has(removed.session_id)) continue;
-    purgeSessionScopedCaches(
-      next,
-      removed.session_id,
-      sessionScopeKey(workspaceId, removed.session_id),
-    );
-  }
+  next.unreadSessionKeys.delete(cacheKey);
   return next;
 }
 
@@ -171,7 +138,7 @@ function localSessionDeletionClosure(
 
 /**
  * 会话已消失后的统一收敛：按权威剩余列表收敛工作区镜像，并在当前会话确实已从
- * 剩余列表中消失（含被删父会话级联带走的后代）时把它切到剩余首个会话。
+ * 剩余列表中消失（含被删父会话级联带走的后代）时清空或切到剩余首个会话。
  *
  * 删除成功路径与「请求报错但补偿重取成功」的失败路径必须共用这一份：失败路径若
  * 只收敛 sessions 镜像而不校正 currentSession，就会出现 currentSession 悬空指向
@@ -184,7 +151,7 @@ function convergeAfterSessionRemoval(
   prev: AppState,
   workspaceId: string,
   remainingSessions: Session[],
-  options: { reloadHistoryAfterSwitch: boolean },
+  options: { reloadHistoryAfterSwitch: boolean; selectNextSession: boolean },
 ): AppState {
   const next = applySessionListConvergence(prev, workspaceId, remainingSessions);
   const remainingIds = new Set(
@@ -192,12 +159,13 @@ function convergeAfterSessionRemoval(
   );
   const currentWasDeleted = Boolean(
     prev.currentSession
+    && (prev.currentSessionWorkspaceId ?? prev.activeGatewayWorkspaceId) === workspaceId
     && !remainingIds.has(prev.currentSession.session_id),
   );
   if (!currentWasDeleted) {
     return next;
   }
-  const nextSession = remainingSessions[0] ?? null;
+  const nextSession = options.selectNextSession ? remainingSessions[0] ?? null : null;
   next.currentSession = nextSession;
   next.currentSessionWorkspaceId = nextSession ? workspaceId : null;
   if (options.reloadHistoryAfterSwitch) {
@@ -214,33 +182,84 @@ function convergeAfterSessionRemoval(
   return next;
 }
 
+/** 目录版本失效时只核对已打开 owner；deleting 的 DTO 仍可读取，404 才收敛删除。 */
+export async function refreshCurrentSessionCatalogOwner(
+  apiPort: number,
+  workspaceTarget: GatewayWorkspaceRequestTarget,
+  readState: () => AppState,
+  setState: SetAppState,
+  signal: AbortSignal,
+): Promise<void> {
+  const before = readState();
+  const sessionId = before.currentSession?.session_id;
+  const workspaceId = workspaceTarget.workspace_id;
+  if (!sessionId || (before.currentSessionWorkspaceId ?? before.activeGatewayWorkspaceId) !== workspaceId) {
+    return;
+  }
+  const stillCurrent = (state: AppState) => !signal.aborted
+    && state.currentSession?.session_id === sessionId
+    && (state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId) === workspaceId
+    && state.apiPort === before.apiPort
+    && state.gatewayUserAccess?.kind === before.gatewayUserAccess?.kind
+    && state.gatewayUserAccess?.user_id === before.gatewayUserAccess?.user_id;
+  let updatedSession: Session | null = null;
+  try {
+    updatedSession = await apiGetSession(apiPort, sessionId, workspaceId, { signal });
+    if (updatedSession.session_id !== sessionId
+      || updatedSession.workspace_id !== workspaceTarget.backend_workspace_id) {
+      throw new Error(`当前会话目录对账返回了其它 owner: ${workspaceId}/${sessionId}`);
+    }
+  } catch (error: unknown) {
+    if (!(error instanceof HttpRequestError) || error.status !== 404) throw error;
+  }
+  setState((previous) => {
+    if (!stillCurrent(previous)) return previous;
+    if (updatedSession) return replaceSessionMetadata(previous, updatedSession, workspaceId);
+    const sessions = previous.sessionsByWorkspace.get(workspaceId)
+      ?? (previous.activeGatewayWorkspaceId === workspaceId ? previous.sessions : []);
+    const next = convergeAfterSessionRemoval(previous, workspaceId,
+      sessions.filter((session) => session.session_id !== sessionId),
+      { reloadHistoryAfterSwitch: true, selectNextSession: false });
+    next.status = `当前会话已删除: ${sessionId}`;
+    return next;
+  });
+}
+
 export function useSessionLifecycleActions({
   apiPort,
   currentSession,
   activeGatewayWorkspaceId,
   currentSessionGatewayWorkspaceId,
-  currentSessionCacheKey,
   defaultGatewayWorkspaceId,
+  readState,
   setState,
   abortCurrentStream,
   invalidateAgentState,
   sessionCatalogOutboxRuntime,
   gatewayUserAccess,
   workspaceRequestTargets,
+  selectionIntentRef,
 }: {
   apiPort: number;
   currentSession: Session | null;
   activeGatewayWorkspaceId: string | null;
   currentSessionGatewayWorkspaceId: string | null;
-  currentSessionCacheKey: string | null;
   defaultGatewayWorkspaceId: string | null;
+  readState: () => AppState;
   setState: SetAppState;
   abortCurrentStream: () => void;
   invalidateAgentState: () => void;
   sessionCatalogOutboxRuntime?: SessionCatalogOutboxRuntime;
   gatewayUserAccess?: GatewayUserAccess | null;
-  workspaceRequestTargets: readonly GatewayWorkspaceRequestTarget[];
+  workspaceRequestTargets: readonly GatewayWorkspaceForkRoute[];
+  selectionIntentRef: MutableRefObject<number>;
 }) {
+  // 仅在已提交的 owner 离开时作废旧请求；React 合并 A→B→A 时保留 A 的订阅。
+  useEffect(() => () => invalidateAgentState(), [
+    currentSession?.session_id,
+    currentSessionGatewayWorkspaceId,
+    invalidateAgentState,
+  ]);
   const workspaceRequestTarget = useCallback(
     (workspaceId: string) => requireGatewayWorkspaceRequestTarget(workspaceRequestTargets, workspaceId),
     [workspaceRequestTargets],
@@ -255,7 +274,7 @@ export function useSessionLifecycleActions({
     if (!sessionCatalogOutboxRuntime || !gatewayUserAccess) {
       throw new Error("Gateway 认证状态尚未就绪，不能修改会话目录");
     }
-    const { handle, operationId, dispatchOutcome } = await sessionCatalogOutboxRuntime.submit(
+    const { handle, operationId } = await sessionCatalogOutboxRuntime.submit(
       workspaceRequestTarget(workspaceId),
       gatewayUserAccess,
       intent,
@@ -264,11 +283,7 @@ export function useSessionLifecycleActions({
         ...(expectedRevision === undefined ? {} : { expectedRevision }),
       },
     );
-    if (dispatchOutcome === "accepted") {
-      setState((prev) => ({ ...prev, status: "会话目录操作已持久受理，等待提交" }));
-    } else if (dispatchOutcome === "unknown") {
-      setState((prev) => ({ ...prev, status: "会话目录操作状态待确认，保留本地待同步变更" }));
-    }
+    setState((prev) => ({ ...prev, status: "会话目录操作已保存本地待同步变更，等待提交" }));
     return { handle, operationId };
   }, [gatewayUserAccess, sessionCatalogOutboxRuntime, setState, workspaceRequestTarget]);
 
@@ -296,19 +311,21 @@ export function useSessionLifecycleActions({
 
   const selectSession = useCallback(
     (sessionId: string) => {
-      if (
-        currentSession?.session_id === sessionId
-        && currentSessionGatewayWorkspaceId === activeGatewayWorkspaceId
-      ) {
-        const cacheKey = currentSessionGatewayWorkspaceId
-          ? sessionScopeKey(currentSessionGatewayWorkspaceId, sessionId)
-          : sessionId;
-        clearUnreadSessionKey(setState, cacheKey);
-        return;
+      selectionIntentRef.current += 1;
+      const snapshot = readState();
+      // 合法选择由订阅的 owner effect 清理旧连接；未知选择保留原中断合同。
+      if (snapshot.currentSession?.session_id !== sessionId
+        && !snapshot.sessions.some((session) => session.session_id === sessionId)) {
+        abortCurrentStream();
+        invalidateAgentState();
       }
-      abortCurrentStream();
-      invalidateAgentState();
       setState((prev) => {
+        const workspaceId = prev.activeGatewayWorkspaceId;
+        const cacheKey = sessionScopeKey(workspaceId, sessionId);
+        if (prev.currentSession?.session_id === sessionId
+          && (prev.currentSessionWorkspaceId ?? workspaceId) === workspaceId) {
+          return clearUnreadSessionKey(prev, cacheKey);
+        }
         const selected =
           prev.sessions.find((session) => session.session_id === sessionId);
         if (!selected) {
@@ -321,11 +338,7 @@ export function useSessionLifecycleActions({
         }
         const next = cloneMaps(prev);
         next.currentSession = selected;
-        const workspaceId = prev.activeGatewayWorkspaceId;
         next.currentSessionWorkspaceId = workspaceId;
-        const cacheKey = workspaceId
-          ? sessionScopeKey(workspaceId, selected.session_id)
-          : selected.session_id;
         if (workspaceId) {
           next.sessionGatewayWorkspaceById.set(
             cacheKey,
@@ -341,11 +354,10 @@ export function useSessionLifecycleActions({
     },
     [
       abortCurrentStream,
-      activeGatewayWorkspaceId,
-      currentSession?.session_id,
-      currentSessionGatewayWorkspaceId,
       invalidateAgentState,
+      readState,
       setState,
+      selectionIntentRef,
     ],
   );
 
@@ -355,18 +367,25 @@ export function useSessionLifecycleActions({
       sessionId: string,
       sessionOverride?: Session,
     ) => {
-      if (
-        currentSession?.session_id === sessionId
-        && currentSessionGatewayWorkspaceId === workspaceId
-        && activeGatewayWorkspaceId === workspaceId
-      ) {
-        const cacheKey = sessionScopeKey(workspaceId, sessionId);
-        clearUnreadSessionKey(setState, cacheKey);
-        return;
+      selectionIntentRef.current += 1;
+      const snapshot = readState();
+      const alreadyCurrent = isCurrentSessionOwner(snapshot, { sessionId, workspaceId })
+        && snapshot.activeGatewayWorkspaceId === workspaceId;
+      const selected = sessionOverride ?? snapshot.sessionsByWorkspace.get(workspaceId)?.find(
+        (session) => session.session_id === sessionId,
+      );
+      const workspaceKnown = workspaceId === snapshot.activeGatewayWorkspaceId
+        || snapshot.gatewayWorkspaces.some((workspace) => workspace.workspace_id === workspaceId);
+      if (!alreadyCurrent && (!selected || !workspaceKnown)) {
+        abortCurrentStream();
+        invalidateAgentState();
       }
-      abortCurrentStream();
-      invalidateAgentState();
       setState((prev) => {
+        if (prev.currentSession?.session_id === sessionId
+          && (prev.currentSessionWorkspaceId ?? prev.activeGatewayWorkspaceId) === workspaceId
+          && prev.activeGatewayWorkspaceId === workspaceId) {
+          return clearUnreadSessionKey(prev, sessionScopeKey(workspaceId, sessionId));
+        }
         const workspaceSessions = prev.sessionsByWorkspace.get(workspaceId) ?? [];
         const selected = sessionOverride ?? workspaceSessions.find(
           (session) => session.session_id === sessionId,
@@ -422,11 +441,10 @@ export function useSessionLifecycleActions({
     },
     [
       abortCurrentStream,
-      activeGatewayWorkspaceId,
-      currentSession?.session_id,
-      currentSessionGatewayWorkspaceId,
       invalidateAgentState,
+      readState,
       setState,
+      selectionIntentRef,
     ],
   );
 
@@ -436,6 +454,7 @@ export function useSessionLifecycleActions({
       workspaceId?: string | null,
       folderId?: string | null,
     ) => {
+      const selectionIntent = ++selectionIntentRef.current;
       invalidateAgentState();
       const targetWorkspaceId =
         workspaceId ?? activeGatewayWorkspaceId ?? defaultGatewayWorkspaceId;
@@ -456,33 +475,37 @@ export function useSessionLifecycleActions({
           const workspace = prev.gatewayWorkspaces.find(
             (item) => item.workspace_id === resolvedWorkspaceId,
           );
-          next.activeGatewayWorkspaceId = resolvedWorkspaceId;
-          next.currentSessionWorkspaceId = resolvedWorkspaceId ?? null;
-          next.workspaceRoot = workspace?.root_path ?? prev.workspaceRoot;
-          next.workspaceName = workspace?.name ?? prev.workspaceName;
           const previousWorkspaceSessions = resolvedWorkspaceId
             ? prev.sessionsByWorkspace.get(resolvedWorkspaceId) ?? []
             : prev.sessions;
-          next.sessions = [
+          const workspaceSessions = [
             session,
             ...previousWorkspaceSessions.filter(
               (item) => item.session_id !== session.session_id,
             ),
           ];
           if (resolvedWorkspaceId) {
-            next.sessionsByWorkspace.set(resolvedWorkspaceId, next.sessions);
+            next.sessionsByWorkspace.set(resolvedWorkspaceId, workspaceSessions);
             next.sessionGatewayWorkspaceById.set(
               sessionScopeKey(resolvedWorkspaceId, session.session_id),
               resolvedWorkspaceId,
             );
           }
-          next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
-          next.currentSession = session;
-          writeLastSessionId(session.session_id);
-          Object.assign(next, resetSessionScopedFields(next));
-          next.status = "已创建会话";
-          next.contentView = "default";
-          Object.assign(next, resetAgentStateFields(next));
+          if (prev.activeGatewayWorkspaceId === resolvedWorkspaceId) next.sessions = workspaceSessions;
+          if (selectionIntent === selectionIntentRef.current) {
+            next.activeGatewayWorkspaceId = resolvedWorkspaceId;
+            next.currentSessionWorkspaceId = resolvedWorkspaceId ?? null;
+            next.workspaceRoot = workspace?.root_path ?? prev.workspaceRoot;
+            next.workspaceName = workspace?.name ?? prev.workspaceName;
+            next.sessions = workspaceSessions;
+            next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
+            next.currentSession = session;
+            writeLastSessionId(session.session_id);
+            Object.assign(next, resetSessionScopedFields(next));
+            next.status = "已创建会话";
+            next.contentView = "default";
+            Object.assign(next, resetAgentStateFields(next));
+          }
           appendFrontendEvent(
             next.eventQueuesBySession,
             session.session_id,
@@ -502,7 +525,8 @@ export function useSessionLifecycleActions({
         return session;
       } catch (error) {
         const message = errorMessage(error);
-        setState((prev) => ({ ...prev, status: `创建会话失败: ${message}` }));
+        setState((prev) => selectionIntent === selectionIntentRef.current
+          ? { ...prev, status: `创建会话失败: ${message}` } : prev);
         throw error;
       }
     },
@@ -516,66 +540,39 @@ export function useSessionLifecycleActions({
   );
 
   const forkSessionContext = useCallback(
-    async (workspaceId: string, sourceSessionId: string) => {
+    async (workspaceId: string, sourceSessionId: string, request: SessionForkRequest) => {
+      const selectionIntent = ++selectionIntentRef.current;
       setState((prev) => ({
         ...prev,
-        status: "正在复制 Agent 上下文并创建子会话",
+        status: "正在创建上下文分支",
       }));
 
       try {
-        const childSession = await apiForkSessionContext(
+        const health = await getGatewayHealth(apiPort);
+        const result = await apiForkSessionContext(
           apiPort,
           sourceSessionId,
-          true,
+          request,
           workspaceId,
         );
-        abortCurrentStream();
-        invalidateAgentState();
+        const targetWorkspaceId = requireForkTargetWorkspace(
+          workspaceRequestTargets, health.gateway_id, result,
+        ).workspace_id;
         setState((prev) => {
           const next = cloneMaps(prev);
-          const workspace = prev.gatewayWorkspaces.find(
-            (item) => item.workspace_id === workspaceId,
-          );
-          const workspaceSessions = [
-            childSession,
-            ...(prev.sessionsByWorkspace.get(workspaceId) ?? []).filter(
-              (item) => item.session_id !== childSession.session_id,
-            ),
-          ];
-          const cacheKey = sessionScopeKey(
-            workspaceId,
-            childSession.session_id,
-          );
-
-          next.activeGatewayWorkspaceId = workspaceId;
-          next.currentSessionWorkspaceId = workspaceId;
-          next.workspaceRoot = workspace?.root_path ?? prev.workspaceRoot;
-          next.workspaceName = workspace?.name ?? prev.workspaceName;
-          next.sessions = workspaceSessions;
-          next.sessionsByWorkspace.set(workspaceId, workspaceSessions);
-          next.sessionGatewayWorkspaceById.set(cacheKey, workspaceId);
-          next.currentSession = childSession;
-          next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
-          Object.assign(next, resetSessionScopedFields(next));
-          next.pendingConversations.delete(cacheKey);
-          next.contentView = "default";
-          next.status = `已从上下文创建子会话: ${childSession.title}`;
-          Object.assign(next, resetAgentStateFields(next));
-          writeLastSessionId(childSession.session_id);
-          appendFrontendEvent(
-            next.eventQueuesBySession,
-            childSession.session_id,
-            "session_context_forked",
-            "从上下文创建子会话",
-            {
-              session_id: childSession.session_id,
-              parent_session_id: sourceSessionId,
-            },
-            childSession.title,
-            cacheKey,
-          );
+          const sessions = prev.sessionsByWorkspace.get(targetWorkspaceId) ?? [];
+          const targetSessions = [result.session, ...sessions.filter((session) =>
+            session.session_id !== result.session.session_id,
+          )];
+          next.sessionsByWorkspace.set(targetWorkspaceId, targetSessions);
+          if (prev.activeGatewayWorkspaceId === targetWorkspaceId) next.sessions = targetSessions;
+          if (isCurrentSessionOwner(prev, { sessionId: result.session.session_id, workspaceId: targetWorkspaceId })) {
+            next.currentSession = result.session;
+          }
+          if (selectionIntent === selectionIntentRef.current) next.status = `已创建上下文分支: ${result.thread_id}`;
           return next;
         });
+        return result;
       } catch (error) {
         const message = errorMessage(error);
         // 补偿重取失败不得覆盖原始错误：列表服务不可用时抛出的是 503，
@@ -588,26 +585,30 @@ export function useSessionLifecycleActions({
             if (prev.activeGatewayWorkspaceId === workspaceId) {
               next.sessions = refreshed.items;
             }
-            next.status = `从上下文创建子会话失败: ${message}`;
+            if (selectionIntent === selectionIntentRef.current) next.status = `创建上下文分支失败: ${message}`;
             return next;
           });
         } catch (reconciliationError) {
           const reconciliationMessage = errorMessage(reconciliationError);
-          setState((prev) => ({
+          setState((prev) => selectionIntent === selectionIntentRef.current ? ({
             ...prev,
-            status: `从上下文创建子会话失败: ${message}；重新读取会话列表也失败: ${reconciliationMessage}`,
-          }));
+            status: `创建上下文分支失败: ${message}；重新读取会话列表也失败: ${reconciliationMessage}`,
+          }) : prev);
         }
         throw error;
       }
     },
-    [abortCurrentStream, apiPort, invalidateAgentState, setState],
+    [apiPort, setState, selectionIntentRef, workspaceRequestTargets],
   );
 
   const renameSession = useCallback(
     async (sessionId: string, title: string, workspaceId?: string | null) => {
       const workspaceIdForRequest =
         workspaceId ?? currentSessionGatewayWorkspaceId;
+      const statusOwner = {
+        sessionId: currentSession?.session_id ?? null,
+        workspaceId: currentSessionGatewayWorkspaceId ?? activeGatewayWorkspaceId,
+      };
       try {
         const normalizedTitle = normalizeSessionTitle(title);
         if (!workspaceIdForRequest) {
@@ -639,17 +640,13 @@ export function useSessionLifecycleActions({
             updatedSession,
             workspaceIdForRequest,
           );
-          next.currentSessionWorkspaceId =
-            workspaceIdForRequest ?? next.currentSessionWorkspaceId;
-          next.status = `已命名会话: ${updatedSession.title}`;
-          const cacheKey =
-            currentSessionCacheKey ??
-            (workspaceIdForRequest
-              ? sessionScopeKey(
-                  workspaceIdForRequest,
-                  updatedSession.session_id,
-                )
-              : updatedSession.session_id);
+          if (isCurrentSessionOwner(prev, statusOwner)) {
+            next.status = `已命名会话: ${updatedSession.title}`;
+          }
+          const cacheKey = sessionScopeKey(
+            workspaceIdForRequest,
+            updatedSession.session_id,
+          );
           appendFrontendEvent(
             next.eventQueuesBySession,
             updatedSession.session_id,
@@ -666,14 +663,17 @@ export function useSessionLifecycleActions({
         });
       } catch (error) {
         const message = errorMessage(error);
-        setState((prev) => ({ ...prev, status: `会话命名失败: ${message}` }));
+        setState((prev) => isCurrentSessionOwner(prev, statusOwner)
+          ? { ...prev, status: `会话命名失败: ${message}` }
+          : prev);
         throw error;
       }
     },
     [
+      activeGatewayWorkspaceId,
       apiPort,
       commitCatalogMutation,
-      currentSessionCacheKey,
+      currentSession,
       currentSessionGatewayWorkspaceId,
       setState,
       workspaceRequestTarget,
@@ -732,7 +732,7 @@ export function useSessionLifecycleActions({
     async (sessionId: string, workspaceId?: string | null) => {
       const workspaceIdForRequest =
         workspaceId ?? currentSessionGatewayWorkspaceId ?? activeGatewayWorkspaceId;
-      let catalogRefreshFailure: string | null = null;
+      let catalogRefreshFailure: unknown = null;
       try {
         if (!workspaceIdForRequest) {
           throw new Error("删除会话缺少 Gateway workspace route ID");
@@ -802,10 +802,13 @@ export function useSessionLifecycleActions({
             [operation.client_operation_id],
           );
         } catch (error) {
-          catalogRefreshFailure = errorMessage(error);
+          catalogRefreshFailure = error;
+          const status = operation.settlement === "repair_required"
+            ? `删除已提交但排空失败，需修复: ${operation.error_detail ?? operation.error_code}；目录分支刷新失败`
+            : "已到终态但目录分支刷新失败";
           sessionCatalogOutboxRuntime?.reportError(
-            `会话目录操作 ${operation.client_operation_id} 已到终态但目录分支刷新失败: `
-            + catalogRefreshFailure,
+            `会话目录操作 ${operation.client_operation_id} ${status}: `
+            + errorMessage(error),
           );
         }
         if (operation.state !== "committed") {
@@ -814,25 +817,33 @@ export function useSessionLifecycleActions({
             + `${operation.error_code ?? "unknown"} ${operation.error_detail ?? ""}`.trim(),
           );
         }
-        if (terminalError && !catalogRefreshFailure) {
+        if (operation.settlement !== "settled") {
+          throw terminalError ?? new Error(
+            `会话删除已提交但排空未完成 (${operation.settlement ?? "缺少结算回执"}): ${operationId}`,
+          );
+        }
+        if (terminalError && catalogRefreshFailure === null) {
           sessionCatalogOutboxRuntime.reportError(
             `会话目录操作 ${operationId} 已提交且分支已刷新，但终态确认异常: `
             + errorMessage(terminalError),
           );
         }
       } catch (error) {
-        const message = errorMessage(error);
-        const refreshDetail = catalogRefreshFailure
-          ? `；目录分支刷新失败: ${catalogRefreshFailure}`
-          : "";
+        const failure = catalogRefreshFailure === null
+          ? error
+          : new AggregateError(
+            [error, catalogRefreshFailure],
+            `${errorMessage(error)}；目录分支刷新失败: ${errorMessage(catalogRefreshFailure)}`,
+          );
         setState((prev) => ({
           ...prev,
-          status: `删除会话失败: ${message}${refreshDetail}`,
+          status: `删除会话失败: ${errorMessage(failure)}`,
         }));
-        throw error;
+        throw failure;
       }
 
       const resolvedWorkspaceId = workspaceIdForRequest;
+      invalidateWorkspaceSessionListSnapshot(apiPort, resolvedWorkspaceId);
       setState((prev) => {
         const previousSessions = prev.sessionsByWorkspace.get(resolvedWorkspaceId)
           ?? prev.sessions;
@@ -844,11 +855,11 @@ export function useSessionLifecycleActions({
           prev,
           resolvedWorkspaceId,
           remainingSessions,
-          { reloadHistoryAfterSwitch: true },
+          { reloadHistoryAfterSwitch: true, selectNextSession: true },
         );
 
-        next.status = catalogRefreshFailure
-          ? `已删除会话: ${sessionId}；会话目录分支刷新失败: ${catalogRefreshFailure}`
+        next.status = catalogRefreshFailure !== null
+          ? `已删除会话: ${sessionId}；会话目录分支刷新失败: ${errorMessage(catalogRefreshFailure)}`
           : `已删除会话: ${sessionId}`;
         return next;
       });
@@ -876,6 +887,11 @@ export function useSessionLifecycleActions({
         return;
       }
 
+      const statusOwner = {
+        sessionId: session.session_id,
+        workspaceId: currentSessionGatewayWorkspaceId ?? activeGatewayWorkspaceId,
+      };
+
       setState((prev) => ({ ...prev, status: `正在切换 Agent: ${agentId}` }));
 
       try {
@@ -894,7 +910,9 @@ export function useSessionLifecycleActions({
             prev.activeGatewayWorkspaceId ??
             updatedSession.workspace_id;
           const next = replaceSessionMetadata(prev, updatedSession, workspaceId);
-          next.status = `已切换 Agent: ${updatedSession.current_agent_id}`;
+          if (isCurrentSessionOwner(prev, statusOwner)) {
+            next.status = `已切换 Agent: ${updatedSession.current_agent_id}`;
+          }
           const cacheKey = sessionScopeKey(workspaceId, updatedSession.session_id);
           appendFrontendEvent(
             next.eventQueuesBySession,
@@ -926,18 +944,28 @@ export function useSessionLifecycleActions({
               refreshed,
               currentSessionGatewayWorkspaceId,
             );
-            next.status = `Agent 切换失败: ${message}`;
+            if (isCurrentSessionOwner(prev, statusOwner)) {
+              next.status = `Agent 切换失败: ${message}`;
+            }
             return next;
           });
         } catch (reconciliationError) {
           const reconciliationMessage = errorMessage(reconciliationError);
           message = `${message}；重新读取会话也失败: ${reconciliationMessage}`;
-          setState((prev) => ({ ...prev, status: `Agent 切换失败: ${message}` }));
+          setState((prev) => isCurrentSessionOwner(prev, statusOwner)
+            ? { ...prev, status: `Agent 切换失败: ${message}` }
+            : prev);
         }
         throw error;
       }
     },
-    [apiPort, currentSession, currentSessionGatewayWorkspaceId, setState],
+    [
+      activeGatewayWorkspaceId,
+      apiPort,
+      currentSession,
+      currentSessionGatewayWorkspaceId,
+      setState,
+    ],
   );
 
   const switchModel = useCallback(
@@ -950,6 +978,14 @@ export function useSessionLifecycleActions({
         }));
         return;
       }
+
+      const statusOwner = {
+        sessionId: session.session_id,
+        workspaceId:
+          currentSessionGatewayWorkspaceId
+          ?? activeGatewayWorkspaceId
+          ?? defaultGatewayWorkspaceId,
+      };
 
       setState((prev) => ({
         ...prev,
@@ -972,7 +1008,9 @@ export function useSessionLifecycleActions({
               ?? activeGatewayWorkspaceId
               ?? defaultGatewayWorkspaceId,
           );
-          next.status = `已切换模型 provider: ${updatedSession.current_provider_id}`;
+          if (isCurrentSessionOwner(prev, statusOwner)) {
+            next.status = `已切换模型 provider: ${updatedSession.current_provider_id}`;
+          }
           const workspaceId =
             currentSessionGatewayWorkspaceId
             ?? activeGatewayWorkspaceId
@@ -1012,13 +1050,17 @@ export function useSessionLifecycleActions({
                 ?? activeGatewayWorkspaceId
                 ?? defaultGatewayWorkspaceId,
             );
-            next.status = `模型切换失败: ${message}`;
+            if (isCurrentSessionOwner(prev, statusOwner)) {
+              next.status = `模型切换失败: ${message}`;
+            }
             return next;
           });
         } catch (reconciliationError) {
           const reconciliationMessage = errorMessage(reconciliationError);
           message = `${message}；重新读取会话也失败: ${reconciliationMessage}`;
-          setState((prev) => ({ ...prev, status: `模型切换失败: ${message}` }));
+          setState((prev) => isCurrentSessionOwner(prev, statusOwner)
+            ? { ...prev, status: `模型切换失败: ${message}` }
+            : prev);
         }
         throw error;
       }

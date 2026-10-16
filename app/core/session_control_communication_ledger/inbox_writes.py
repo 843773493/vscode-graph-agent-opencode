@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.core.session_catalog_store import validate_session_id, validate_thread_id
+from app.core.session_catalog_store.validators import (
+    validate_session_id,
+    validate_thread_id,
+)
 from app.core.session_control_primitives import (
     SHA256_HEX_PATTERN,
     validate_claim_fields,
@@ -431,13 +434,15 @@ class InboxWritesMixin:
             return _communication_inbox_from_row(updated)
 
 
-    def drain_communication_inboxes(self) -> None:
+    def drain_communication_inboxes(self, *, communication_id: str | None = None) -> None:
         """删除终结仍保留原 binding；未绑定取消，已绑定以 terminal 保存原 execution。"""
+        selector = "" if communication_id is None else " AND communication_id=?"
+        parameters = (datetime.now(UTC).isoformat(),) + (() if communication_id is None else (communication_id,))
         with self._write_transaction() as connection:
             connection.execute(
                 "UPDATE communication_inbox SET "
                 "state=CASE WHEN job_id IS NULL THEN 'cancelled' ELSE 'terminal' END,"
                 "last_error='target-deleted',terminal_outcome='target-deleted',updated_at=? "
-                "WHERE state NOT IN ('terminal','failed','cancelled')",
-                (datetime.now(UTC).isoformat(),),
+                "WHERE state NOT IN ('terminal','failed','cancelled')" + selector,
+                parameters,
             )

@@ -490,7 +490,11 @@ with fixture_catalog_scope():
     assert artifact_manifest(storage.storage.root(SOURCE_SESSION_ID)) == source_before
     assert (
         len(
-            fresh.storage.read_items(TARGET_SESSION_ID, fresh.storage.main_thread_id(TARGET_SESSION_ID))
+            fresh.storage.read_items(
+                TARGET_SESSION_ID,
+                fresh.storage.main_thread_id(TARGET_SESSION_ID),
+                checkpoint_ns=namespace,
+            )
         )
         == 2
     )

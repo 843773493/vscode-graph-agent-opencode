@@ -11,6 +11,7 @@ from langchain.agents.middleware import (
     SummarizationMiddleware,
 )
 from langchain.agents.middleware.types import ExtendedModelResponse
+from langchain.agents.structured_output import ToolStrategy
 from langchain_core.exceptions import ContextOverflowError
 from langchain_core.messages import (
     AIMessage,
@@ -32,13 +33,13 @@ from app.agents.summarization.projection import (
     replacement_effective_cutoff_to_state_cutoff,
 )
 from app.agents.summarization.retry import (
-    strip_media_from_summary_messages,
     validate_summary_text,
 )
 from app.agents.summarization.state import (
     CACHE_PRESERVING_STRATEGY,
     CACHE_REPLACEMENT_STRATEGY,
     CachePreservingPartition,
+    SummaryTextError,
 )
 from app.agents.summarization.tool_middleware import (
     CachePreservingSummarizationToolMiddleware,
@@ -54,6 +55,9 @@ from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_
 )
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     ToolProtocolBoundaryConflict,
+)
+from app.services.mapping.itemized.canonical_langchain import (
+    strip_media_from_summary_messages,
 )
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 
@@ -141,7 +145,8 @@ def preflight_runtime() -> Iterator[SimpleNamespace]:
     ):
         yield SimpleNamespace(
             execution_info=SimpleNamespace(
-                thread_id=_PREFLIGHT_OWNER.thread_id, checkpoint_ns=""
+                thread_id=_PREFLIGHT_OWNER.thread_id, checkpoint_ns="",
+                checkpoint_id="checkpoint-preflight", task_id="model-preflight", node_attempt=1,
             )
         )
 
@@ -178,7 +183,7 @@ def _make_preflight_middleware(
     middleware._backend = object()  # type: ignore[attr-defined]
     middleware._offload_to_backend = (  # type: ignore[attr-defined]
         lambda backend, messages: offloaded.append(messages)
-        or "/session-artifacts/ses_preflight/context/history.md"
+        or "/session-artifacts/ses_preflight/context/thr_preflight/history.md"
     )
     return middleware
 
@@ -414,7 +419,8 @@ def test_summary_tool_call_is_rejected_and_retried_without_tools() -> None:
     assert observed[1].tool_choice is None
 
 
-def test_reasoning_only_summary_is_retried_with_minimal_request() -> None:
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_reasoning_only_summary_is_retried_with_minimal_request(asynchronous: bool) -> None:
     messages = _conversation(7)
     partition = build_cache_preserving_partition(
         _SummarizationBoundaryStub(),  # type: ignore[arg-type]
@@ -424,11 +430,15 @@ def test_reasoning_only_summary_is_retried_with_minimal_request() -> None:
     )
     assert partition is not None
     middleware = object.__new__(CachePreservingSummarizationMiddleware)
+    response_format = ToolStrategy({
+        "title": "Answer", "type": "object", "properties": {"answer": {"type": "string"}},
+    })
     request = ModelRequest(
         model=None,
         messages=[],
         system_message=SystemMessage(content="完整工作区系统提示"),
         tools=[{"type": "function", "function": {"name": "read_file"}}],
+        response_format=response_format,
     )
     observed: list[ModelRequest] = []
 
@@ -449,10 +459,12 @@ def test_reasoning_only_summary_is_retried_with_minimal_request() -> None:
             )
         return ModelResponse(result=[AIMessage(content="最小请求生成的摘要")])
 
-    summary = middleware._create_cache_preserving_summary(
-        request,
-        handler,
-        partition,
+    async def ahandler(next_request: ModelRequest) -> ModelResponse:
+        return handler(next_request)
+
+    summary = (
+        await middleware._acreate_cache_preserving_summary(request, ahandler, partition)
+        if asynchronous else middleware._create_cache_preserving_summary(request, handler, partition)
     )
 
     assert summary == "最小请求生成的摘要"
@@ -460,9 +472,9 @@ def test_reasoning_only_summary_is_retried_with_minimal_request() -> None:
     assert observed[0].tools == request.tools
     assert observed[1].tools == []
     assert observed[1].tool_choice is None
-    assert observed[1].system_message == SystemMessage(
-        content="Summarize the supplied conversation."
-    )
+    assert observed[1].system_message is None
+    assert all(candidate.response_format is None for candidate in observed)
+    assert request.response_format is response_format
 
 
 def test_tool_call_fallback_overflow_continues_with_media_retry() -> None:
@@ -575,9 +587,7 @@ def test_overflow_final_fallback_drops_prefix_and_uses_minimal_request() -> None
 
     assert summary == "最终降级摘要"
     final_request = observed[-1]
-    assert final_request.system_message == SystemMessage(
-        content="Summarize the supplied conversation."
-    )
+    assert final_request.system_message is None
     assert final_request.tools == []
     assert final_request.messages[: len(prefix)] != prefix
     assert all(message not in final_request.messages for message in prefix)
@@ -1158,7 +1168,7 @@ def test_untriggered_path_calls_handler_without_parent_argument_truncation() -> 
     )
 
 
-def test_compaction_exposes_history_as_workspace_relative_path() -> None:
+def test_compaction_exposes_history_as_workspace_relative_path(preflight_runtime: SimpleNamespace) -> None:
     before = [HumanMessage(content="待压缩消息")]
     partition = CachePreservingPartition(
         prefix_messages=[],
@@ -1169,6 +1179,8 @@ def test_compaction_exposes_history_as_workspace_relative_path() -> None:
     observed_paths: list[str] = []
 
     class _CompactionStub:
+        _freeze_summary_message = staticmethod(CachePreservingSummarizationMiddleware._freeze_summary_message)
+
         @staticmethod
         def _prepare_cache_compaction(_: ModelRequest):
             return before, partition
@@ -1179,7 +1191,7 @@ def test_compaction_exposes_history_as_workspace_relative_path() -> None:
 
         @staticmethod
         def _offload_to_backend(*_):
-            return "/session-artifacts/ses_relative/context/history.md"
+            return "/session-artifacts/ses_relative/context/thr_relative/history.md"
 
         @staticmethod
         def _create_cache_preserving_summary(*_):
@@ -1196,14 +1208,14 @@ def test_compaction_exposes_history_as_workspace_relative_path() -> None:
 
     response = CachePreservingSummarizationMiddleware.wrap_model_call(
         _CompactionStub(),  # type: ignore[arg-type]
-        ModelRequest(model=None, messages=before),
+        ModelRequest(model=None, messages=before, runtime=preflight_runtime),
         lambda _: ModelResponse(result=[AIMessage(content="继续")]),
     )
 
     assert isinstance(response, ExtendedModelResponse)
-    assert observed_paths == ["session-artifacts/ses_relative/context/history.md"]
+    assert observed_paths == ["session-artifacts/ses_relative/context/thr_relative/history.md"]
     assert response.command.update["_summarization_event"]["file_path"] == (
-        "session-artifacts/ses_relative/context/history.md"
+        "session-artifacts/ses_relative/context/thr_relative/history.md"
     )
 
 
@@ -1265,11 +1277,11 @@ def test_forced_compaction_summary_failure_falls_back_to_original_context() -> N
 
         @staticmethod
         def _offload_to_backend(*_) -> str:
-            return "session-artifacts/test/context/history.md"
+            return "session-artifacts/test/context/thr_test/history.md"
 
         @staticmethod
         def _create_cache_preserving_summary(*_) -> str:
-            raise ValueError("摘要模型只返回 reasoning")
+            raise SummaryTextError("摘要模型只返回 reasoning")
 
         @staticmethod
         def _handle_unavailable_forced_compaction(
@@ -1323,11 +1335,11 @@ async def test_forced_compaction_async_summary_failure_falls_back_to_original_co
 
         @staticmethod
         async def _aoffload_to_backend(*_) -> str:
-            return "session-artifacts/test/context/history.md"
+            return "session-artifacts/test/context/thr_test/history.md"
 
         @staticmethod
         async def _acreate_cache_preserving_summary(*_) -> str:
-            raise ValueError("摘要模型只返回 reasoning")
+            raise SummaryTextError("摘要模型只返回 reasoning")
 
         @staticmethod
         async def _ahandle_unavailable_forced_compaction(
@@ -1415,7 +1427,7 @@ def test_prepare_preserves_complete_api_round_without_new_human_boundary(
 
 
 @pytest.mark.asyncio
-async def test_async_compaction_uses_context_activity_handler() -> None:
+async def test_async_compaction_uses_context_activity_handler(preflight_runtime: SimpleNamespace) -> None:
     messages = _conversation(3)
     partition = CachePreservingPartition(
         prefix_messages=[],
@@ -1425,6 +1437,8 @@ async def test_async_compaction_uses_context_activity_handler() -> None:
     )
 
     class _CompactionStub:
+        _freeze_summary_message = staticmethod(CachePreservingSummarizationMiddleware._freeze_summary_message)
+
         @staticmethod
         def _prepare_cache_compaction(
             _: ModelRequest,
@@ -1441,15 +1455,15 @@ async def test_async_compaction_uses_context_activity_handler() -> None:
 
         @staticmethod
         async def _aoffload_to_backend(*_: object) -> str:
-            return "session-artifacts/test/context/history.md"
+            return "session-artifacts/test/context/thr_test/history.md"
 
         @staticmethod
         async def _acreate_cache_preserving_summary(*_: object) -> str:
             return "历史摘要"
 
         @staticmethod
-        def _build_new_messages_with_path(*_: object) -> list[AIMessage]:
-            return [AIMessage(content="历史摘要")]
+        def _build_new_messages_with_path(*_: object) -> list[HumanMessage]:
+            return [HumanMessage(content="历史摘要")]
 
         @staticmethod
         def _ensure_compaction_reduces_tokens(*_: object) -> None:
@@ -1468,7 +1482,7 @@ async def test_async_compaction_uses_context_activity_handler() -> None:
     try:
         response = await CachePreservingSummarizationMiddleware.awrap_model_call(
             _CompactionStub(),  # type: ignore[arg-type]
-            ModelRequest(model=None, messages=messages),
+            ModelRequest(model=None, messages=messages, runtime=preflight_runtime),
             handler,
         )
     finally:
@@ -1805,4 +1819,9 @@ def test_preflight_closed_boundary_runs_summary_offload_and_transition(
         == (_PREFLIGHT_OWNER.session_id, _PREFLIGHT_OWNER.thread_id)
         for call in port.calls
     )
-    assert len(handler_calls) >= 2
+    assert len(handler_calls) == 1
+    assert result.model_response.result == []
+    assert result.command.update["_compaction_continuation"] is True
+    assert middleware.after_model(result.command.update, preflight_runtime) == {
+        "_compaction_continuation": False, "jump_to": "model",
+    }

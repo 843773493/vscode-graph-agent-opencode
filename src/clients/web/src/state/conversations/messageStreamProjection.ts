@@ -20,6 +20,8 @@ function messageStreamActivityStats(
   parts: TurnResponsePart[],
   turnStartedAt?: string,
 ): NonNullable<ConversationView["activityStats"]> {
+  // live 展示计时从 turnStartedAt 到已收到 block/tool execution 的最晚时间，
+  // 单位为毫秒，负差为 0、任一端缺失/非法为 null；历史 DTO 使用后端投影的起止时间。
   const timestamps = [
     ...stream.blocks.flatMap((block) => [
       block.started_at,
@@ -66,11 +68,13 @@ function terminalActivityStatsError(
 export function applyMessageStreamProjection(
   conversations: ConversationView[],
   streams: Map<string, MessageStreamState>,
+  sessionCacheKey: string,
 ): ConversationView[] {
   return conversations.map((conversation) => {
     const streamCandidates = [...streams.values()].filter((candidate) =>
-      candidate.sessionId === conversation.sessionId
-      && candidate.turnId === (conversation.turnId ?? conversation.jobId),
+      candidate.sessionCacheKey === sessionCacheKey
+      && candidate.sessionId === conversation.sessionId
+      && candidate.turnId === conversation.turnId,
     );
     const stream = streamCandidates.sort((left, right) =>
       Number(isTerminalStatus(right.streamStatus))
@@ -80,12 +84,6 @@ export function applyMessageStreamProjection(
         - Number(left.connectionStatus === "terminal"),
     )[0];
     if (!stream) return conversation;
-    if (
-      conversation.turnId !== stream.turnId
-      && conversation.jobId !== stream.turnId
-    ) {
-      return conversation;
-    }
     const terminalTurn = conversation.turnStatus
       && TERMINAL_TURN_STATUSES.has(conversation.turnStatus);
     const liveResponseParts = messageStreamToResponseParts(stream);
@@ -169,17 +167,24 @@ export function messageStreamTurnIdForSession(
   sessionCacheKey: string = sessionId,
 ): string | null {
   const activeJobId = state.activeJobIdsBySession.get(sessionCacheKey);
-  if (activeJobId) return activeJobId;
+  const pending = state.pendingConversations.get(sessionCacheKey) ?? [];
+  const timeline = state.turnTimelinesBySession?.get(sessionCacheKey);
+  if (activeJobId) {
+    const activePending = pending.find((conversation) => conversation.jobId === activeJobId);
+    if (activePending?.turnId) return activePending.turnId;
+    const activeTurn = Object.values(timeline?.turnsById ?? {}).find((turn) => turn.job_id === activeJobId);
+    return activeTurn?.turn_id ?? null;
+  }
 
-  const pendingJobIds = new Set(
-    (state.pendingConversations.get(sessionCacheKey) ?? [])
-      .map((conversation) => conversation.jobId)
-      .filter((jobId): jobId is string => Boolean(jobId)),
+  const pendingTurnIds = new Set(
+    pending.map((conversation) => conversation.turnId)
+      .filter((turnId): turnId is string => Boolean(turnId)),
   );
   const candidate = [...(state.messageStreamsByTurnStream ?? new Map()).values()]
     .filter((stream) =>
-      stream.sessionId === sessionId
-      && pendingJobIds.has(stream.turnId)
+      stream.sessionCacheKey === sessionCacheKey
+      && stream.sessionId === sessionId
+      && pendingTurnIds.has(stream.turnId)
       && !["completed", "interrupted", "failed"].includes(stream.streamStatus),
     )
     .sort((left, right) => right.lastEventSeq - left.lastEventSeq)[0];

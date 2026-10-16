@@ -3,3 +3,4 @@ export const validateTraceEventDTO: { (value: unknown): boolean; errors?: Array<
 export const validateSessionExecutionSseDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
 export const validateWorkspaceFileChangeBatchDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
 export const validateSseErrorDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
+export const validateWorkspaceObservationFrameDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };

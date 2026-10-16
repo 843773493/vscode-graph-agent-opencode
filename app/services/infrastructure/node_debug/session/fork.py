@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 from app.core.hashing import sha256_hex as _raw_sha256
+from app.core.resource_uri import parse_session_thread_uri
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
@@ -30,13 +31,6 @@ from app.services.infrastructure.node_debug.session.session_store import (
 from app.services.infrastructure.node_debug.session.thread_owner import (
     resolve_node_debug_owner,
 )
-
-NodeDebugForkCaptureMode = Literal[
-    "context_fork",
-    "history_prefix_fork",
-    "full_rollout_copy",
-]
-
 
 class NodeDebugSourceCaptureError(RuntimeError):
     """source 调试方案不能形成一致、可验证快照。"""
@@ -161,7 +155,6 @@ class NodeDebugSourceCopySnapshot:
     source_snapshot_id: str
     source_session_id: str
     source_thread_id: str
-    capture_mode: NodeDebugForkCaptureMode
     manifest_bytes: bytes
     manifest_size_bytes: int
     manifest_sha256: str
@@ -209,6 +202,42 @@ class NodeDebugSourceCopySnapshot:
         """source snapshot 永不携带可执行 active pointer。"""
         return None
 
+    def to_payload(self) -> dict[str, object]:
+        """冻结 marker 与目标专属 journal 共用同一静态资源 wire 合同。"""
+        return {
+            "source_snapshot_id": self.source_snapshot_id,
+            "source_session_id": self.source_session_id,
+            "source_thread_id": self.source_thread_id,
+            "manifest_bytes": self.manifest_bytes.hex(),
+            "manifest_size_bytes": self.manifest_size_bytes,
+            "manifest_sha256": self.manifest_sha256,
+            "manifest_revision": self.manifest_revision,
+            "configuration_artifacts": [
+                {"configuration_id": artifact.configuration_id, "revision": artifact.revision,
+                 "payload_bytes": artifact.payload_bytes.hex(), "size_bytes": artifact.size_bytes,
+                 "sha256": artifact.sha256, "source_lineage": artifact.source_lineage}
+                for artifact in self.configuration_artifacts
+            ],
+            "source_lineage": self.source_lineage,
+            "workspace_config_revision": self.workspace_config_revision,
+            "workspace_config_hash": self.workspace_config_hash,
+            "workspace_id": self.workspace_id,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> NodeDebugSourceCopySnapshot:
+        values = dict(payload)
+        values["manifest_bytes"] = bytes.fromhex(values["manifest_bytes"])
+        values["source_lineage"] = tuple(tuple(item) for item in values["source_lineage"])
+        artifacts = []
+        for raw in values["configuration_artifacts"]:
+            artifact = dict(raw)
+            artifact["payload_bytes"] = bytes.fromhex(artifact["payload_bytes"])
+            artifact["source_lineage"] = tuple(tuple(item) for item in artifact["source_lineage"])
+            artifacts.append(NodeDebugConfigurationCopyArtifact(**artifact))
+        values["configuration_artifacts"] = tuple(artifacts)
+        return cls(**values)
+
 
 @dataclass(frozen=True, slots=True)
 class NodeDebugTargetPrepublication:
@@ -233,7 +262,6 @@ def _snapshot_id(
     *,
     source_session_id: str,
     source_thread_id: str,
-    capture_mode: NodeDebugForkCaptureMode,
     manifest_sha256: str,
     configuration_artifacts: tuple[NodeDebugConfigurationCopyArtifact, ...],
 ) -> str:
@@ -242,8 +270,6 @@ def _snapshot_id(
     digest.update(b"\0")
     digest.update(source_thread_id.encode("utf-8"))
     digest.update(b"\0")
-    digest.update(capture_mode.encode("ascii"))
-    digest.update(b"\0")
     digest.update(manifest_sha256.encode("ascii"))
     for artifact in configuration_artifacts:
         digest.update(artifact.configuration_id.encode("ascii"))
@@ -251,26 +277,13 @@ def _snapshot_id(
     return f"node-debug-source-snapshot_{digest.hexdigest()}"
 
 
-def _selected_configuration_ids(
-    capture_mode: NodeDebugForkCaptureMode,
-    *,
-    active_configuration_id: str | None,
-    configuration_ids: tuple[str, ...],
-) -> tuple[str, ...]:
-    if capture_mode == "history_prefix_fork":
-        return ()
-    if capture_mode == "context_fork":
-        if active_configuration_id is None:
-            return ()
-        if active_configuration_id not in configuration_ids:
-            raise NodeDebugSourceCaptureError(
-                "active 调试方案未被 source manifest 登记: "
-                f"configuration_id={active_configuration_id}"
-            )
-        return (active_configuration_id,)
-    if capture_mode == "full_rollout_copy":
-        return configuration_ids
-    raise ValueError(f"未知 Node debug fork capture mode: {capture_mode}")
+def debug_configuration_resource_uri(thread_uri: str, configuration_id: str) -> str:
+    """方案地址由已解析的精确 Thread 与 owner 登记 ID 组成。"""
+    if parse_session_thread_uri(thread_uri)[2] is None:
+        raise ValueError("调试方案地址必须绑定精确 Thread")
+    if re.fullmatch(r"dbgcfg_[0-9a-f]{32}", configuration_id) is None:
+        raise ValueError(f"非法调试方案 ID: {configuration_id}")
+    return f"{thread_uri}/debug/node/configurations/{configuration_id}"
 
 
 def capture_source_copy_snapshot(
@@ -278,7 +291,7 @@ def capture_source_copy_snapshot(
     *,
     session_id: str,
     thread_id: str,
-    capture_mode: NodeDebugForkCaptureMode,
+    configuration_ids: tuple[str, ...],
     workspace_config_revision: str | None = None,
     workspace_config_hash: str | None = None,
     workspace_id: str | None = None,
@@ -304,14 +317,14 @@ def capture_source_copy_snapshot(
             "source debug manifest 不存在，不能形成可审计 snapshot: "
             f"session_id={canonical_session_id}, thread_id={canonical_thread_id}"
         )
-    configuration_ids = tuple(manifest_before.configuration_ids)
-    if len(configuration_ids) != len(set(configuration_ids)):
+    registered_ids = tuple(manifest_before.configuration_ids)
+    if len(registered_ids) != len(set(registered_ids)):
         raise NodeDebugSourceCaptureError("source manifest 登记了重复调试方案 ID")
-    selected_ids = _selected_configuration_ids(
-        capture_mode,
-        active_configuration_id=manifest_before.active_configuration_id,
-        configuration_ids=configuration_ids,
-    )
+    if not configuration_ids or len(configuration_ids) != len(set(configuration_ids)):
+        raise ValueError("debug capture 必须显式选择非空、无重复方案清单")
+    if missing := set(configuration_ids) - set(registered_ids):
+        raise NodeDebugSourceCaptureError(f"source manifest 未登记所选调试方案: {sorted(missing)}")
+    selected_ids = configuration_ids
     before = store.read_registered_configuration_payloads(
         canonical_session_id,
         canonical_thread_id,
@@ -352,13 +365,11 @@ def capture_source_copy_snapshot(
         source_snapshot_id=_snapshot_id(
             source_session_id=canonical_session_id,
             source_thread_id=canonical_thread_id,
-            capture_mode=capture_mode,
             manifest_sha256=manifest_sha256,
             configuration_artifacts=artifacts,
         ),
         source_session_id=canonical_session_id,
         source_thread_id=canonical_thread_id,
-        capture_mode=capture_mode,
         manifest_bytes=manifest_before_bytes,
         manifest_size_bytes=len(manifest_before_bytes),
         manifest_sha256=manifest_sha256,
@@ -404,13 +415,12 @@ def validate_target_prepublication(
 ) -> NodeDebugTargetPrepublication:
     """在 target 不可见 staging 中重验配置；失败时整个操作 fail-closed。"""
 
-    if snapshot.workspace_id is not None and snapshot.workspace_id != target_workspace_id:
-        raise NodeDebugTargetValidationError("公开 fork 不支持跨 Workspace 调试方案复制")
-    if snapshot.workspace_config_revision is not None and (
+    same_workspace = snapshot.workspace_id is not None and snapshot.workspace_id == target_workspace_id
+    if same_workspace and snapshot.workspace_config_revision is not None and (
         target_workspace_config_revision != snapshot.workspace_config_revision
     ):
         raise NodeDebugTargetValidationError("target Workspace debug 配置 revision 已漂移")
-    if snapshot.workspace_config_hash is not None and (
+    if same_workspace and snapshot.workspace_config_hash is not None and (
         target_workspace_config_hash != snapshot.workspace_config_hash
     ):
         raise NodeDebugTargetValidationError("target Workspace debug 配置 hash 已漂移")
@@ -485,7 +495,6 @@ def validate_target_prepublication(
 
 __all__ = [
     "NodeDebugConfigurationCopyArtifact",
-    "NodeDebugForkCaptureMode",
     "NodeDebugSourceCaptureError",
     "NodeDebugSourceCopySnapshot",
     "NodeDebugSourceDriftError",
@@ -494,5 +503,6 @@ __all__ = [
     "NodeDebugWorkspaceForkConfig",
     "build_workspace_fork_config",
     "capture_source_copy_snapshot",
+    "debug_configuration_resource_uri",
     "validate_target_prepublication",
 ]

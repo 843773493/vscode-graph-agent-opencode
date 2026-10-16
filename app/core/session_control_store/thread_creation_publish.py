@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-from app.core.session_catalog_store import validate_thread_id
+from app.core.session_catalog_store.validators import validate_thread_id
 from app.core.session_control_primitives import (
     SHA256_HEX_PATTERN,
     validate_thread_creation_key,
@@ -308,6 +308,12 @@ class ThreadCreationPublishMixin:
             graph_binding = ThreadGraphBindingRecord.from_creation_json(
                 str(row["graph_binding"])
             )
+            if row["purpose"] == "fork":
+                if row["fork_completion_json"] is None or row["admission_intent"] is not None:
+                    raise RuntimeError("fork child 发布必须有完成证明且不得有初始 execution intent")
+                proof = json.loads(row["fork_completion_json"])
+                if (proof["target_session_id"], proof["target_thread_id"]) != (session_id, child_thread_id):
+                    raise RuntimeError("fork child 完成证明与精确发布 owner 不一致")
             connection.execute(
                 "INSERT INTO thread_catalog (thread_id, kind, created_at, "
                 "graph_id, graph_revision, graph_schema_hash, "
@@ -348,11 +354,12 @@ class ThreadCreationPublishMixin:
                         str(row["delegation_id"]),
                     ),
                 )
-            self._create_or_get_initial_execution_intent_transaction(
-                connection, admission_idempotency_key=idempotency_key,
-                session_id=session_id, thread_id=child_thread_id,
-                initial_state=str(row["initial_state"]), creation_idempotency_key=idempotency_key,
-            )
+            if row["purpose"] == "task":
+                self._create_or_get_initial_execution_intent_transaction(
+                    connection, admission_idempotency_key=idempotency_key,
+                    session_id=session_id, thread_id=child_thread_id,
+                    initial_state=str(row["initial_state"]), creation_idempotency_key=idempotency_key,
+                )
             if row["collaboration_precondition_revision"] is not None:
                 self._freeze_collaboration_member_change_transaction(
                     connection, str(row["delegation_id"]), "member.published",

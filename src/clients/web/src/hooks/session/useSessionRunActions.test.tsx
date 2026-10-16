@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { Session } from "../../types/backend";
+import type { AttachmentRef, Session } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
 import {
   apiResponse,
@@ -26,6 +26,7 @@ afterEach(restoreSessionHookGlobals);
 function session(): Session {
   return {
     session_id: SESSION_ID,
+    thread_id: "thr_run_actions",
     workspace_id: "workspace_send_regression",
     resource_identity: `fixture-${SESSION_ID}`,
     uri: `boxteam://workspace/workspace_send_regression/resources/session/${SESSION_ID}`,
@@ -51,6 +52,8 @@ function state(currentSession: Session | null): AppState {
     sessionsByWorkspace: new Map(),
     sessionGatewayWorkspaceById: new Map(),
     currentSession,
+    currentSessionWorkspaceId: "gw_send_regression",
+    activeGatewayWorkspaceId: "gw_send_regression",
     sessionHistoryReloadNonce: 0,
     status: "",
     contentView: "default",
@@ -109,6 +112,7 @@ function pendingRequestsResponse(overrides: {
 }): Response {
   return apiResponse({
     session_id: SESSION_ID,
+    thread_id: "thr_run_actions",
     snapshot_version: 1,
     active_job_id: null,
     queue: [],
@@ -122,6 +126,8 @@ function replayResponse(): Response {
   return apiResponse({
     message_id: "msg_replay_new",
     job_id: "job_replay_new",
+          turn_id: "turn_replay_new",
+          thread_id: "thr_run_actions",
     session_id: SESSION_ID,
     action: "regenerate",
     status: "running",
@@ -132,13 +138,79 @@ function replayResponse(): Response {
   });
 }
 
-const PENDING_PATH = `/api/v1/sessions/${SESSION_ID}/pending-requests`;
+const PENDING_PATH = `/api/v1/sessions/${SESSION_ID}/main-thread/pending-requests`;
 const MESSAGES_PATH = `/api/v1/sessions/${SESSION_ID}/messages`;
 const INTERRUPT_PATH = `/api/v1/sessions/${SESSION_ID}/interrupt`;
 const REPLAY_PATH = `/api/v1/sessions/${SESSION_ID}/messages/msg_original/replay`;
 const COMPACT_PATH = `/api/v1/sessions/${SESSION_ID}/compact`;
 
 describe("发送消息状态更新", () => {
+  test("发送入口使用 catalog owner 乐观写入，再消费 accepted owner 且隔离附件摘要", async () => {
+    let resolveSend!: (response: Response) => void;
+    const sent = new Promise<Response>((resolve) => { resolveSend = resolve; });
+    const attachment: AttachmentRef = { file_id: "attachment_same_id", name: "当前附件.txt" };
+    const initial = state(session());
+    const otherScope = "gw_other::ses_send_regression";
+    initial.sessionAttachmentSummaries.set(otherScope, { count: 1, names: ["其它工作区.txt"], latestAt: null });
+    installGatewayFetch(({ path, method }) => path === MESSAGES_PATH && method === "POST" ? sent : undefined);
+    const mounted = runActions(session(), initial);
+    const sending = mounted.actions.sendMessage("带附件输入", [attachment]);
+    expect(mounted.state().pendingConversations.get(CACHE_KEY)?.[0]?.userMessage?.thread_id).toBe("thr_run_actions");
+    expect(mounted.state().sessionAttachmentSummaries.get(CACHE_KEY)?.names).toEqual([attachment.name!]);
+    expect(mounted.state().sessionAttachmentSummaries.get(otherScope)?.names).toEqual(["其它工作区.txt"]);
+    resolveSend(apiResponse({ session_id: SESSION_ID, message_id: "msg_owner_accepted", job_id: "job_owner_accepted",
+      turn_id: "turn_owner_accepted", thread_id: "thr_owner_accepted", status: "running",
+      dispatch: dispatchFacts({ job_id: "job_owner_accepted", active_job_id: "job_owner_accepted" }) }));
+    await sending;
+    const accepted = mounted.state().pendingConversations.get(CACHE_KEY)?.[0];
+    expect(accepted?.threadId).toBe("thr_owner_accepted");
+    expect(accepted?.userMessage?.thread_id).toBe("thr_owner_accepted");
+    expect(mounted.state().sessionAttachmentSummaries.has(SESSION_ID)).toBe(false);
+  });
+
+  test("缺少 catalog 主线程时发送入口在所有消息副作用前拒绝", async () => {
+    const currentSession = session();
+    delete currentSession.thread_id;
+    let requests = 0;
+    installGatewayFetch(() => { requests += 1; throw new Error("不应发送请求"); });
+    const mounted = runActions(currentSession);
+    await expect(mounted.actions.sendMessage("不能猜主线程")).rejects.toThrow("缺少 catalog 主线程身份");
+    expect(requests).toBe(0);
+    expect(mounted.state().pendingConversations.size).toBe(0);
+    expect(mounted.state().sessionAttachmentSummaries.size).toBe(0);
+  });
+
+  test("自动创建发送在途时较新选择保持，发送仍使用已冻结来源与新会话缓存", async () => {
+    let resolveCreate!: (response: Response) => void;
+    const creating = new Promise<Response>((resolve) => { resolveCreate = resolve; });
+    const selected = { ...session(), session_id: "ses_selected_later" };
+    const initial = state(null);
+    initial.sessions = [selected];
+    initial.sessionsByWorkspace.set("gw_send_regression", [selected]);
+    const sentSessions: string[] = [];
+    installGatewayFetch(({ path, method }) => {
+      if (path === "/api/v1/sessions" && method === "POST") return creating;
+      if (path === "/api/v1/sessions/ses_created_late/messages") {
+        sentSessions.push("ses_created_late");
+        return apiResponse({ session_id: "ses_created_late", thread_id: "thr_created_late",
+          message_id: "msg_created_late", job_id: "job_created_late", turn_id: "turn_created_late", status: "running",
+          dispatch: dispatchFacts({ session_id: "ses_created_late", job_id: "job_created_late", active_job_id: "job_created_late" }) });
+      }
+      return undefined;
+    });
+    const mounted = runActions(null, initial);
+    const sending = mounted.actions.sendMessage("自动创建后发送");
+    mounted.actions.selectSession(selected.session_id);
+    const selectedStatus = mounted.state().status;
+    resolveCreate(apiResponse({ ...session(), session_id: "ses_created_late", thread_id: "thr_created_late" }));
+    await sending;
+    expect(mounted.state().currentSession?.session_id).toBe(selected.session_id);
+    expect(mounted.state().status).toBe(selectedStatus);
+    expect(sentSessions).toEqual(["ses_created_late"]);
+    expect(mounted.state().pendingConversations.get("gw_send_regression::ses_created_late")?.[0]?.threadId).toBe("thr_created_late");
+    expect(mounted.state().pendingConversations.has(CACHE_KEY)).toBe(false);
+  });
+
   test("同一毫秒并发两次发送时，一次失败的回滚不得抹掉仍在途的另一条", async () => {
     const currentSession = session();
     const nowSpy = spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
@@ -208,6 +280,8 @@ describe("发送消息状态更新", () => {
         return apiResponse({
           message_id: "msg_send_regression",
           job_id: "job_send_regression",
+          turn_id: "turn_send_regression",
+          thread_id: "thr_run_actions",
           status: "running",
           dispatch: dispatchFacts({
             job_id: "job_send_regression",
@@ -252,6 +326,49 @@ describe("发送消息状态更新", () => {
     expect(mounted.state().activeJobIdsBySession.has(CACHE_KEY)).toBe(false);
     expect(mounted.state().sessionHistoryReloadNonce).toBe(1);
     expect(mounted.state().status).toBe("运行任务已结束，正在同步会话历史");
+  });
+
+  test("中断返回 cancelling 时显示已请求收尾而不是已停止", async () => {
+    const currentSession = session();
+    installGatewayFetch(({ path }) => {
+      if (path === INTERRUPT_PATH) {
+        return apiResponse({
+          session_id: SESSION_ID,
+          job_id: "job_interrupt_cancelling",
+          status: "cancelling",
+          interrupt_request_id: "intr_cancelling",
+          phase: "text",
+        });
+      }
+      return undefined;
+    }, { token: "test-interrupt-cancelling-token" });
+
+    const mounted = runActions(currentSession);
+    await mounted.actions.interruptSession();
+
+    expect(mounted.state().status).toBe("已请求中断，正在收尾");
+  });
+
+  test("producer 不会输出的终态值保留为未确认状态", async () => {
+    for (const status of ["succeeded", "cancelled", "timed_out"]) {
+      installGatewayFetch(({ path }) => {
+        if (path === INTERRUPT_PATH) {
+          return apiResponse({
+            session_id: SESSION_ID,
+            job_id: `job_interrupt_${status}`,
+            status,
+            interrupt_request_id: `intr_${status}`,
+            phase: "text",
+          });
+        }
+        return undefined;
+      }, { token: `test-interrupt-${status}-token` });
+
+      const mounted = runActions(session());
+      await mounted.actions.interruptSession();
+
+      expect(mounted.state().status).toBe(`中断状态未确认: ${status}`);
+    }
   });
 
   test("中断遇到非 404 失败会恢复后端运行态并写入可见失败", async () => {
@@ -318,6 +435,8 @@ describe("发送消息状态更新", () => {
         return apiResponse({
           message_id: "msg_w10_projection",
           job_id: "job_w10_projection",
+          turn_id: "turn_w10_projection",
+          thread_id: "thr_run_actions",
           status: "queued",
           dispatch: dispatchFacts({
             job_id: "job_w10_projection",
@@ -357,6 +476,8 @@ describe("发送消息状态更新", () => {
         return apiResponse({
           message_id: "msg_w10_null",
           job_id: "job_w10_null",
+          turn_id: "turn_w10_null",
+          thread_id: "thr_run_actions",
           status: "running",
           dispatch: dispatchFacts({
             job_id: "job_w10_null",
@@ -492,6 +613,7 @@ describe("发送消息状态更新", () => {
         createCalls += 1;
         return apiResponse({
           session_id: "ses_created_on_send",
+          thread_id: "thr_run_actions",
           workspace_id: "workspace_send_regression",
           title: "新会话",
           current_agent_id: "default",
@@ -504,6 +626,8 @@ describe("发送消息状态更新", () => {
         return apiResponse({
           message_id: "msg_created_on_send",
           job_id: "job_created_on_send",
+          turn_id: "turn_created_on_send",
+          thread_id: "thr_run_actions",
           status: "running",
           dispatch: dispatchFacts({
             session_id: "ses_created_on_send",
@@ -541,6 +665,23 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
     return { ...session(), session_id: OTHER_SESSION_ID, title: "切走后的会话" };
   }
 
+  function sameSessionInOtherWorkspace(current: Session): Session {
+    const workspaceId = "workspace_send_other";
+    return {
+      ...current,
+      workspace_id: workspaceId,
+      uri: `boxteam://workspace/${workspaceId}/resources/session/${current.session_id}`,
+    };
+  }
+
+  function mountWithSameSessionInOtherWorkspace(startedSession: Session) {
+    return mountWithSessionSwitch({
+      startedSession,
+      switchedSession: sameSessionInOtherWorkspace(startedSession),
+      switchedWorkspaceId: "gw_send_other_workspace",
+    });
+  }
+
   /**
    * 静态渲染一次，再在动作归还后把 AppState.currentSession 替换成目标会话，
    * 用来模拟「请求在途期间用户已切走会话」这一并发窗口。
@@ -548,13 +689,17 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
   function mountWithSessionSwitch(options: {
     startedSession: Session;
     switchedSession: Session;
+    switchedWorkspaceId?: string;
+    initialState?: AppState;
   }): {
     mirror: { current: () => AppState };
     actions: ReturnType<typeof useSessionRunActions>;
     switchAway: () => void;
   } {
+    const startedWorkspaceId = "gw_send_regression";
+    const switchedWorkspaceId = options.switchedWorkspaceId ?? startedWorkspaceId;
     const mirror = createStateMirror({
-      ...state(options.startedSession),
+      ...(options.initialState ?? state(options.startedSession)),
       sessions: [options.startedSession, options.switchedSession],
     });
     let actions: ReturnType<typeof useSessionRunActions> | null = null;
@@ -562,16 +707,17 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
       actions = useSessionRunActions({
         apiPort: 8014,
         currentSession: options.startedSession,
-        activeGatewayWorkspaceId: "gw_send_regression",
-        currentSessionGatewayWorkspaceId: "gw_send_regression",
+        activeGatewayWorkspaceId: startedWorkspaceId,
+        currentSessionGatewayWorkspaceId: startedWorkspaceId,
         currentSessionCacheKey: sessionScopeKey(
-          "gw_send_regression",
+          startedWorkspaceId,
           options.startedSession.session_id,
         ),
-        defaultGatewayWorkspaceId: "gw_send_regression",
+        defaultGatewayWorkspaceId: startedWorkspaceId,
         contentView: "default",
         setState: mirror.setState,
         refreshAgentStateSnapshot: async () => undefined,
+        createSession: async () => { throw new Error("已有会话用例不应创建新会话"); },
       });
       return null;
     }
@@ -584,6 +730,11 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
         mirror.setState((prev) => ({
           ...prev,
           currentSession: options.switchedSession,
+          currentSessionWorkspaceId: switchedWorkspaceId,
+          activeGatewayWorkspaceId: switchedWorkspaceId,
+          ...(switchedWorkspaceId !== startedWorkspaceId
+            ? { status: "新 owner 状态" }
+            : {}),
         }));
       },
     };
@@ -617,6 +768,77 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
     // 旧会话的发送失败属于旧会话事实，不得写进新会话状态栏。
     expect(mirror.current().status).not.toContain("模型网关拒绝");
     expect(mirror.current().status).not.toContain("发送失败");
+  });
+
+  test("同 Session ID 切到另一工作区后，发送失败仍校准来源队列但不改新 owner 状态", async () => {
+    const started = session();
+    const { promise: sendResponse, release: releaseSend } =
+      hangUntilReleased<Response>();
+    installGatewayFetch(({ path, method }) => {
+      if (path === MESSAGES_PATH && method === "POST") return sendResponse;
+      if (path === PENDING_PATH) {
+        return pendingRequestsResponse({ active_job_id: "job_send_source_owner" });
+      }
+      return undefined;
+    }, { token: "test-run-actions-same-id-send-failure" });
+
+    const { mirror, actions, switchAway } = mountWithSameSessionInOtherWorkspace(started);
+    const sending = actions.sendMessage("跨工作区在途发送").catch(() => undefined);
+    switchAway();
+    expect(mirror.current().currentSession?.session_id).toBe(started.session_id);
+    expect(mirror.current().currentSessionWorkspaceId).toBe("gw_send_other_workspace");
+
+    releaseSend(errorResponse(502, "来源工作区的模型网关拒绝"));
+    await sending;
+
+    expect(mirror.current().status).toBe("新 owner 状态");
+    expect(mirror.current().activeJobIdsBySession.get(CACHE_KEY)).toBe(
+      "job_send_source_owner",
+    );
+    expect(mirror.current().activeJobIdsBySession.has(
+      sessionScopeKey("gw_send_other_workspace", started.session_id),
+    )).toBe(false);
+  });
+
+  test("同 Session ID 切到另一工作区后，发送成功保留来源运行态但不改新 owner 状态", async () => {
+    const started = session();
+    const { promise: sendResponse, release: releaseSend } =
+      hangUntilReleased<Response>();
+    installGatewayFetch(({ path, method }) => {
+      if (path === MESSAGES_PATH && method === "POST") return sendResponse;
+      return undefined;
+    }, { token: "test-run-actions-same-id-send-success" });
+
+    const { mirror, actions, switchAway } = mountWithSameSessionInOtherWorkspace(started);
+    const sending = actions.sendMessage("跨工作区在途发送");
+    switchAway();
+    expect(mirror.current().currentSession?.session_id).toBe(started.session_id);
+    expect(mirror.current().currentSessionWorkspaceId).toBe("gw_send_other_workspace");
+
+    releaseSend(apiResponse({
+      message_id: "msg_send_source_owner",
+      job_id: "job_send_source_owner",
+      turn_id: "turn_send_source_owner",
+      thread_id: "thr_run_actions",
+      session_id: started.session_id,
+      status: "running",
+      dispatch: dispatchFacts({
+        job_id: "job_send_source_owner",
+        active_job_id: "job_send_source_owner",
+      }),
+    }));
+    await sending;
+
+    expect(mirror.current().status).toBe("新 owner 状态");
+    expect(
+      mirror.current().pendingConversations.get(CACHE_KEY)?.[0]?.conversationId,
+    ).toBe("msg_send_source_owner");
+    expect(mirror.current().activeJobIdsBySession.get(CACHE_KEY)).toBe(
+      "job_send_source_owner",
+    );
+    expect(mirror.current().activeJobIdsBySession.has(
+      sessionScopeKey("gw_send_other_workspace", started.session_id),
+    )).toBe(false);
   });
 
   test("压缩在途切走后，迟到的结果仍须复位全局 compactLoading", async () => {
@@ -676,11 +898,15 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
     switchAway();
     expect(mirror.current().currentSession?.session_id).toBe(OTHER_SESSION_ID);
 
-    releaseInterrupt(apiResponse({ phase: "interrupted" }));
+    releaseInterrupt(apiResponse({
+      status: "cancelling",
+      phase: "text",
+      interrupt_request_id: "intr_switched_away",
+    }));
     await interrupting;
 
     // 旧会话的中断结果属于旧会话事实，不得写进新会话状态栏。
-    expect(mirror.current().status).not.toContain("已中断");
+    expect(mirror.current().status).toBe("正在中断生成...");
   });
 
   test("轮次回放失败发生在切走之后时，不得把失败原因写进新会话状态栏", async () => {
@@ -709,5 +935,210 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
     // 旧会话的回放失败属于旧会话事实，不得写进新会话状态栏。
     expect(mirror.current().status).not.toContain("上下文窗口已失效");
     expect(mirror.current().status).not.toContain("轮次操作失败");
+  });
+
+  test("同 Session ID 切到另一工作区后，中断成功结果不得覆盖新 owner 状态", async () => {
+    const started = session();
+    const { promise: interruptResponse, release: releaseInterrupt } =
+      hangUntilReleased<Response>();
+    installGatewayFetch(({ path }) => {
+      if (path === INTERRUPT_PATH) return interruptResponse;
+      return undefined;
+    }, { token: "test-run-actions-same-id-interrupt-success" });
+
+    const { mirror, actions, switchAway } = mountWithSameSessionInOtherWorkspace(started);
+    const interrupting = actions.interruptSession();
+    switchAway();
+    expect(mirror.current().currentSession?.session_id).toBe(started.session_id);
+    expect(mirror.current().currentSessionWorkspaceId).toBe("gw_send_other_workspace");
+
+    releaseInterrupt(apiResponse({
+      session_id: started.session_id,
+      job_id: "job_interrupt_other_owner",
+      status: "cancelling",
+      interrupt_request_id: "intr_other_owner",
+      phase: "text",
+    }));
+    await interrupting;
+
+    expect(mirror.current().status).toBe("新 owner 状态");
+  });
+
+  test("同 Session ID 切到另一工作区后，中断失败仍校准旧 owner 队列但不改新状态", async () => {
+    const started = session();
+    const { promise: interruptResponse, release: releaseInterrupt } =
+      hangUntilReleased<Response>();
+    installGatewayFetch(({ path }) => {
+      if (path === INTERRUPT_PATH) return interruptResponse;
+      if (path === PENDING_PATH) {
+        return pendingRequestsResponse({ active_job_id: "job_backend_running" });
+      }
+      return undefined;
+    }, { token: "test-run-actions-same-id-interrupt-failure" });
+
+    const { mirror, actions, switchAway } = mountWithSameSessionInOtherWorkspace(started);
+    const interrupting = actions.interruptSession().catch(() => undefined);
+    switchAway();
+    releaseInterrupt(errorResponse(500, "中断执行器崩溃"));
+    await interrupting;
+
+    expect(mirror.current().status).toBe("新 owner 状态");
+    expect(mirror.current().activeJobIdsBySession.get(CACHE_KEY)).toBe("job_backend_running");
+    expect(mirror.current().activeJobIdsBySession.has(
+      sessionScopeKey("gw_send_other_workspace", started.session_id),
+    )).toBe(false);
+  });
+
+  test("同 Session ID 切到另一工作区后，中断和运行态重取都失败时不改新状态", async () => {
+    const started = session();
+    const { promise: interruptResponse, release: releaseInterrupt } =
+      hangUntilReleased<Response>();
+    installGatewayFetch(({ path }) => {
+      if (path === INTERRUPT_PATH) return interruptResponse;
+      if (path === PENDING_PATH) return errorResponse(503, "队列服务不可用");
+      return undefined;
+    }, { token: "test-run-actions-same-id-interrupt-recovery-failure" });
+
+    const { mirror, actions, switchAway } = mountWithSameSessionInOtherWorkspace(started);
+    const interrupting = actions.interruptSession().catch(() => undefined);
+    switchAway();
+    releaseInterrupt(errorResponse(500, "中断执行器崩溃"));
+    await interrupting;
+
+    expect(mirror.current().status).toBe("新 owner 状态");
+  });
+
+  test("同 Session ID 切到另一工作区后，404仍清理来源运行态但不改新状态", async () => {
+    const started = session();
+    const initialState = state(started);
+    initialState.activeJobIdsBySession.set(CACHE_KEY, "job_old_owner");
+    initialState.pendingConversations.set(CACHE_KEY, [{
+      conversationId: "msg_old_owner",
+      displayMode: "live",
+      sessionId: started.session_id,
+      userMessage: null,
+      assistantMessages: [],
+      events: [],
+      status: "running",
+      jobId: "job_old_owner",
+      pending: true,
+      activeJobOverlay: true,
+      source: "pending",
+    }]);
+    const { promise: interruptResponse, release: releaseInterrupt } =
+      hangUntilReleased<Response>();
+    installGatewayFetch(({ path }) => {
+      if (path === INTERRUPT_PATH) return interruptResponse;
+      return undefined;
+    }, { token: "test-run-actions-same-id-interrupt-404" });
+
+    const { mirror, actions, switchAway } = mountWithSessionSwitch({
+      startedSession: started,
+      switchedSession: sameSessionInOtherWorkspace(started),
+      switchedWorkspaceId: "gw_send_other_workspace",
+      initialState,
+    });
+    const interrupting = actions.interruptSession();
+    switchAway();
+    releaseInterrupt(errorResponse(404, `Session ${started.session_id} 当前没有正在运行的任务`));
+    await interrupting;
+
+    expect(mirror.current().status).toBe("新 owner 状态");
+    expect(mirror.current().activeJobIdsBySession.has(CACHE_KEY)).toBe(false);
+    expect(mirror.current().pendingConversations.has(CACHE_KEY)).toBe(false);
+    expect(mirror.current().sessionHistoryReloadNonce).toBe(1);
+  });
+
+  test("同 Session ID 切到另一工作区后，压缩成功保留来源事件但不改新状态", async () => {
+    const started = session();
+    const { promise: compactResponse, release: releaseCompact } =
+      hangUntilReleased<Response>();
+    installGatewayFetch(({ path }) => {
+      if (path === COMPACT_PATH) return compactResponse;
+      return undefined;
+    }, { token: "test-run-actions-same-id-compact-success" });
+
+    const { mirror, actions, switchAway } = mountWithSameSessionInOtherWorkspace(started);
+    const compacting = actions.compactSession();
+    switchAway();
+    releaseCompact(apiResponse({
+      session_id: started.session_id,
+      status: "compacted",
+      message: "ok",
+      summarized_message_count: 3,
+      before_message_count: 10,
+      effective_message_count_before: 10,
+      effective_message_count_after: 4,
+      retained_message_count: 7,
+      history_file_path: null,
+    }));
+    await compacting;
+
+    expect(mirror.current().status).toBe("新 owner 状态");
+    expect(mirror.current().compactLoading).toBe(false);
+    expect(mirror.current().eventQueuesBySession.has(CACHE_KEY)).toBe(true);
+  });
+
+  test("同 Session ID 切到另一工作区后，压缩失败不得覆盖新 owner 状态", async () => {
+    const started = session();
+    const { promise: compactResponse, release: releaseCompact } =
+      hangUntilReleased<Response>();
+    installGatewayFetch(({ path }) => {
+      if (path === COMPACT_PATH) return compactResponse;
+      return undefined;
+    }, { token: "test-run-actions-same-id-compact-failure" });
+
+    const { mirror, actions, switchAway } = mountWithSameSessionInOtherWorkspace(started);
+    const compacting = actions.compactSession().catch(() => undefined);
+    switchAway();
+    releaseCompact(errorResponse(500, "压缩执行器崩溃"));
+    await compacting;
+
+    expect(mirror.current().status).toBe("新 owner 状态");
+    expect(mirror.current().compactLoading).toBe(false);
+  });
+
+  test("同 Session ID 切到另一工作区后，回放成功保留来源队列但不改新状态", async () => {
+    const started = session();
+    const { promise: replayResponsePromise, release: releaseReplay } =
+      hangUntilReleased<Response>();
+    installGatewayFetch(({ path }) => {
+      if (path === REPLAY_PATH) return replayResponsePromise;
+      return undefined;
+    }, { token: "test-run-actions-same-id-replay-success" });
+
+    const { mirror, actions, switchAway } = mountWithSameSessionInOtherWorkspace(started);
+    const replaying = actions.replayTurn("msg_original", "regenerate", "原始回复");
+    switchAway();
+    releaseReplay(replayResponse());
+    await replaying;
+
+    expect(mirror.current().status).toBe("新 owner 状态");
+    expect(mirror.current().pendingConversations.get(CACHE_KEY)?.[0]?.conversationId)
+      .toBe("msg_replay_new");
+    expect(mirror.current().activeJobIdsBySession.get(CACHE_KEY)).toBe("job_replay_new");
+    expect(mirror.current().activeJobIdsBySession.has(
+      sessionScopeKey("gw_send_other_workspace", started.session_id),
+    )).toBe(false);
+  });
+
+  test("同 Session ID 切到另一工作区后，回放失败仍刷新历史但不改新状态", async () => {
+    const started = session();
+    const { promise: replayResponsePromise, release: releaseReplay } =
+      hangUntilReleased<Response>();
+    installGatewayFetch(({ path }) => {
+      if (path === REPLAY_PATH) return replayResponsePromise;
+      return undefined;
+    }, { token: "test-run-actions-same-id-replay-failure" });
+
+    const { mirror, actions, switchAway } = mountWithSameSessionInOtherWorkspace(started);
+    const replaying = actions.replayTurn("msg_original", "regenerate", "原始回复")
+      .catch(() => undefined);
+    switchAway();
+    releaseReplay(errorResponse(409, "上下文窗口已失效"));
+    await replaying;
+
+    expect(mirror.current().status).toBe("新 owner 状态");
+    expect(mirror.current().sessionHistoryReloadNonce).toBe(1);
   });
 });

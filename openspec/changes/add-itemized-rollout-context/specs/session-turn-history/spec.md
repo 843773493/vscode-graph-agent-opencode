@@ -24,15 +24,24 @@
 - **WHEN** 一个隐藏的 `system_reminder` 在下一条普通用户输入之前存在，且它在 LangChain/provider projection 中暂时使用 user role
 - **THEN** 历史服务仍以普通用户 input 的 `root_input_item_id` 开始新 Turn；runtime notice 只按其 semantic kind、scope 和 relation 展示或隐藏
 
+### Requirement: Turn 身份分组与正文可见性分离
+
+Turn 的真实 root identity 与正文可见性 SHALL 分离。有效前缀只保留某 Turn 的摘要、回答或其它可见 canonical 成员，而其真实 root 仅作 hidden backing 时，唯一普通 Turn history reader 仍须按原 Turn 分组返回这些可见成员；root membership、原 logical 坐标和 TurnRecord 继续校验，但 hidden root 不进入 `user_messages`、response parts 或 Provider selection。只有 hidden backing 的 Turn 不单独列为历史行；不得升 root 为可见、伪造用户输入、改成 internal execution 或新增并行 fragment reader。tail/bootstrap、显式 Turn 选择、窗口和续页必须使用同一分组准入规则。
+
+#### Scenario: 压缩后保留回答但不显示旧提问
+
+- **WHEN** fork 的有效前缀保留摘要和一个普通 Turn 的 final，而该 Turn 的 root 不在有效 selection 中且只作 hidden backing
+- **THEN** 目标默认历史和显式详情返回同一真实 Turn 下的选中摘要/回答，`user_messages` 可为空；旧 root 不显示、不成为模型输入，不因 hidden root 静默遗漏 final，后继新聊天仍按目标 owner 执行
+
 ### Requirement: 历史摘要不 materialize 完整消息
 
-历史投影 SHALL 识别统一的 `Turn.status` 闭合集合 `open | active | completed | completed_empty | interrupted | cancelled | failed | unknown`；`completed_empty` 是唯一的无 canonical output 正常终态名称。`completed` 才能通过 `final_item_id` 返回正常 final response，`completed_empty`、`interrupted`、`cancelled`、`failed` 和 `unknown` 不得伪装成成功响应；普通 `cancelled` 与 `full_rollout_copy` 的 `cancelled` historical 均不可对原 Turn 执行 `resume_turn` 或 `dispatch_replay`，请求必须返回 `turn_not_resumable`；`history_replay` 只能在同一 owner namespace 的 history view 中复用 source Turn/root 且不创建 execution；若需要重新执行，只能由独立的 `replay_as_new_turn` 创建新的 Turn/root/acceptance/initial execution，在 active view 登记新的 `logical_turn_ordinal`，并记录 `replay_of_turn_id`；source history 可以作为上下文前缀，但 source Turn/root 不是新 Turn 的 root；新输入也创建新的 Turn。
+历史投影 SHALL 识别统一的 `Turn.status` 闭合集合 `open | active | completed | completed_empty | interrupted | cancelled | failed | unknown`；`completed_empty` 是唯一的无 canonical output 正常终态名称。`completed` 才能通过 `final_item_id` 返回正常 final response，`completed_empty`、`interrupted`、`cancelled`、`failed` 和 `unknown` 不得伪装成成功响应；普通 `cancelled` 及 fork 导入的全部历史 Turn（无论原 status）均不可对原 Turn 执行 `resume_turn` 或 `dispatch_replay`，请求必须返回 `turn_not_resumable`。导入历史保留原 status，不为此取消 source 执行。`history_replay` 只能在同一存储 owner 的 history view 中复用 source Turn/root 且不创建 execution；已导入历史经目标本地索引和冻结 namespace binding 核验原 scope，不回读 source。若需要重新执行，只能由独立的 `replay_as_new_turn` 创建新的 Turn/root/acceptance/initial execution，在 active view 登记新的 `logical_turn_ordinal`，并记录 `replay_of_turn_id`；source history 可以作为上下文前缀，但 source Turn/root 不是新 Turn 的 root；新输入也创建新的 Turn。
 
 #### Scenario: history_replay 与 replay_as_new_turn 分离
 
 - **WHEN** 历史服务从某个 Turn/view/anchor 执行 `history_replay`，或调用方明确选择 `replay_as_new_turn`
-- **THEN** `history_replay` 只在同一 owner namespace 的不可变 history view 中登记并复用 source `turn_id`、`root_input_item_id` 和历史 ordinal，不创建 execution；它返回 `history_view_id` 并按 checkpoint-context-branching 的只读 selector 合同读取，不替换 execution active branch/head，也不改变已有 pending transition；`replay_as_new_turn` 则在 active view 登记新的 target-local Turn、`user_input` root、acceptance、initial execution 和新的 `logical_turn_ordinal`
-- **AND** `replay_as_new_turn` 可以复制或引用 source history 作为上下文前缀，但 source Turn/root 只能作为前缀或 lineage，不能成为新 Turn 的 root；对普通或 full-rollout-copy 的 cancelled Turn，原 Turn 的 `dispatch_replay` 仍返回 `turn_not_resumable`，不能由该错误响应隐式创建新 Turn
+- **THEN** `history_replay` 只在同一存储 owner 的不可变 history view 中登记并复用 source `turn_id`、`root_input_item_id` 和历史 ordinal，不创建 execution；它返回 `history_view_id` 并按 checkpoint-context-branching 的只读 selector 合同读取，不替换 execution active branch/head，也不改变已有 pending transition；`replay_as_new_turn` 则在 active view 登记新的 target-local Turn、`user_input` root、acceptance、initial execution 和新的 `logical_turn_ordinal`
+- **AND** `replay_as_new_turn` 可以复制或引用 source history 作为上下文前缀，但 source Turn/root 只能作为前缀或 lineage，不能成为新 Turn 的 root；对普通 cancelled 或 fork 导入的任意历史 Turn，原 Turn 的 `dispatch_replay` 仍返回 `turn_not_resumable`，不能由该错误响应隐式创建新 Turn
 
 `tool_summary`、`thinking`、final pointer 和受界限的最终 `visible_text` SHALL 从 SQLite item/index projection 读取。中间完整 `assistant_output` item、tool_call 参数和 tool_result 只在显式 include 时按 item offset 读取目标 `rollout.jsonl` 记录；普通分页不得扫描整个 rollout 文件、恢复完整 canonical item 集合或 materialize 完整 LangChain checkpoint，也不得把 request-only system context、缓存保持型 source delta 或 pending runtime notice 当作历史 Turn message；这些上下文只能通过 assembly/provenance reference 在授权详情视图中展开。`visible_text`、`reasoning` 和 `summary` 均不得包含 encrypted reasoning 或未授权工具 payload。
 
@@ -68,6 +77,44 @@ Turn acceptance identity、`turn_ordinal`、root item、history view 和 `final_
 
 - **WHEN** delegated child thread 产生 tool result 或最终报告
 - **THEN** 主 thread 的默认历史不包含 child 的原始 Turn/item；若系统需要向主 thread 发送汇报，则该汇报保留 child `session_id/thread_id` 和 source item/execution identity，且不是新的真实 user Turn root
+
+### Requirement: Web 正式入口支持按稳定 Turn 身份重复跳转
+
+Web 主窗口的主聊天区域 SHALL 提供用户可操作的“跳到指定轮次”入口，允许输入当前聊天线程的稳定 `turn_id`，并可选择已加载的轮次。跳转目标 MUST 固定到当前 workspace、Session 和 thread；展示序号和虚拟列表索引不得作为目标身份。主动跳转与保存浏览位置恢复 MUST 共用既有 history reader 和虚拟列表定位链路；目标未加载时使用 `anchor_turn_id` 的有界 around 查询，已加载时允许直接定位，不逐页滚动或扫描完整历史，不新增测试专用业务入口。右侧侧边栏独立 child 对话的跳转控件不属于本期验收范围。
+
+每次提交 SHALL 能重新定位同一 Turn；目标加载、挂载和尺寸变化期间按稳定 ID 重算位置，禁止使用请求开始时的旧索引。主动跳转 MUST 暂停自动跟随最新消息，用户仍可明确跳回最新。切换 workspace、Session、thread 或发起后继跳转时，旧请求的响应、成功提示和错误不得更新新目标。目标不存在或加载失败 MUST 在页面明确显示，不以回到最新冒充跳转成功。本期只保证 Turn 定位，不保证展开并精确定位内部消息、工具结果或 internal execution。
+
+持久化浏览位置 SHALL 以 `(user_id, workspace_id, session_id)` 为唯一 scope，只适用于 Session 的 main thread；`thread_id` 不属于持久化位置的分区键，child thread 不得读取或写入该 Session 的 main-thread 浏览位置。新建 Session（包括 fork）MUST 不继承来源 Session 的浏览位置。保存时若没有稳定 `turn_anchor`，writer MUST 将当前 `scrollTop` 写入 `scroll_offset`；恢复时若 `turn_anchor` 为空，MUST 定位到最新尾部并忽略已保存的 `scroll_offset`。
+
+#### Scenario: 跳到尚未挂载的 Turn
+
+- **WHEN** 用户输入当前线程中未加载的有效 `turn_id` 并提交
+- **THEN** 页面通过同一 around 历史入口取得目标附近内容，虚拟列表挂载并显示该 Turn；实际 DOM 的稳定 Turn 身份与目标一致，加载量保持原分页边界
+
+#### Scenario: 同一目标可反复定位且不会被新消息抢走
+
+- **WHEN** 用户跳到某个 Turn 后浏览其它位置，再次提交相同 ID，期间当前线程出现新消息
+- **THEN** 页面再次定位所选 Turn，新消息不强制滚至尾部；用户点击跳到最新后恢复原最新消息浏览行为
+
+#### Scenario: 切换 owner 丢弃旧跳转响应
+
+- **WHEN** 跳转请求尚未结束，用户切换到另一个 workspace、Session 或 child thread
+- **THEN** 旧响应和旧错误不改变新聊天的历史、位置或跳转状态，不把另一线程的同名 ID 当作原目标
+
+#### Scenario: 无效目标明确失败且正式测试复用用户入口
+
+- **WHEN** 用户输入不存在的 Turn，或正式 Web E2E 需要定位历史 Turn
+- **THEN** 不存在目标在页面明确报告；E2E 使用相同可访问控件及稳定身份核验，专门验收滚动行为的场景仍执行真实滚动
+
+#### Scenario: fork 创建的新 Session 不继承来源位置
+
+- **WHEN** 用户从一个已有保存浏览位置的 Session 创建 fork 并打开新 Session
+- **THEN** 新 Session 使用自己的 `(user_id, workspace_id, session_id)` 位置 scope，不读取来源 Session 的锚点或偏移
+
+#### Scenario: 无 Turn 锚点时恢复到最新尾部
+
+- **WHEN** writer 在没有可见 Turn 锚点时保存视图位置，随后主线程加载该视图状态
+- **THEN** writer 记录当时的 `scrollTop`，恢复流程定位到最新尾部并忽略该 `scroll_offset`
 
 ### Requirement: 历史详情为 provenance 和扩展视图保留稳定引用
 
@@ -116,6 +163,13 @@ Turn acceptance identity、`turn_ordinal`、root item、history view 和 `final_
 打开child thread列表、状态或历史 MUST 使用持久metadata/history projection，不得唤醒cold Agent runtime。用户从右侧侧边栏向child发送消息时，客户端 MUST 携带精确`session_id + thread_id`，响应和SSE/history cursor也必须返回并校验同一thread；不得退回裸Session默认main-thread路由。
 
 公开 HTTP 合同 SHALL 提供 `POST /api/v1/sessions/{session_id}/threads/{thread_id}/messages` 与同一路径下的 `POST .../history`，复用既有消息请求/准入响应和历史请求/分页响应。child 列表 SHALL 返回只读 `runtime` 及 `report_execution_id/report_status`；`completed` 是执行展示状态，不替代 residency 或删除状态。每个 child 的草稿与异步响应 MUST 按精确 thread 隔离；打开报告 MUST 从其来源 thread 的既有 history owner 读取，不能创建新的 Turn 或将来源历史合并到 main。
+
+main-thread history bootstrap、pending 队列和 active Job 展示 SHALL 消费同一 canonical main thread 范围。`GET /api/v1/sessions/{session_id}/main-thread/pending-requests` SHALL 在 Session 读准入内由后端权威 resolver 取得 main thread，并复用现有 pending owner 的精确 thread 读取；返回快照及摘要的 `thread_id` 表示读取范围，Session 聚合快照该值为空。全部主线程展示写入 MUST 校验快照范围及每个请求的 thread 归属；不得从 Session 的首个 active slot 或全 thread 队列推断 main。既有 Session pending 查询、撤回、清空和 policy 操作继续使用 Session 聚合范围；客户端 mutation 后 SHALL 重新读取 main 完整快照更新主展示，不将聚合 mutation 响应写成主线程镜像。热、冷摘要 SHALL 在同一 pending owner 按 thread 计算 count/limit；cold 只读既有控制引用，不唤醒 runtime、不读取 canonical 正文或另建队列事实。
+
+#### Scenario: main 与 child 同时排队时展示归属准确
+
+- **WHEN** 同一 Session 的 main 与 child 各自存在 active Job 或 pending 请求，用户启动主线程历史、刷新页面或完成一次 Session pending mutation
+- **THEN** 主展示只接收 canonical main thread 的 active Job 和 pending 请求；child 原始 Turn 不进入主历史，同一持久队列版本的热与冷 pending 计数及分页上限一致，Session 聚合查询及 mutation 的原范围保持不变
 
 #### Scenario: 在右侧侧边栏查看 cold child 历史
 
@@ -207,10 +261,10 @@ Turn acceptance identity、`turn_ordinal`、root item、history view 和 `final_
 - **WHEN**同一pytest模块用barrier分别让本地`full_rollout_copy`停在source capture前/中间，在冻结revision后追加source Turn/view变化，并与source Session删除跑双顺序
 - **THEN**target history只包含`SourceCopySnapshot`冻结的SQLite revision、JSONL committed offsets和detail manifest；删除先行时无可见target，shared guard先行时删除只等capture durable，释放后source可删除而copy不回读隔离节点。partial capture定点abort，captured marker到operation CAS崩溃继续同一snapshot，trace证明没有双gate、扫盘补齐或换revision
 
-#### Scenario: Web E2E 验证 pinned retention 与 federated fork 拒绝
+#### Scenario: Web E2E 验证 pinned retention 与跨端 fork 授权
 
-- **WHEN**同一pytest模块创建本地detached/pinned fork并让pinned claim与source删除竞争，随后在target committed前后重启、删除pinned target；另以federated Session link请求fork
-- **THEN**pinned claim先于capture且唯一：删除先行使fork零可见副作用失败，claim先行使删除在整树catalog deleting前显示具体blocker，target恢复只激活原claim。target删除通过durable release saga释放source且任一崩溃点不同时持两端gate；federated fork明确拒绝且远端catalog/retention/context零副作用，send/read/wait仍按原合同成功
+- **WHEN** 同一产品E2E创建独立detached/pinned target并验证删除双顺序，再以URI选择远端新Session main和现有Session的新child
+- **THEN** 本地claim先于capture且恢复/释放唯一；跨端有fork导出/创建授权时成功并在目标端发布，只有send/read/wait grant时明确拒绝且零目标副作用，既有通信行为保持
 
 #### Scenario: Web E2E 验证 copy attachment claim 与 GC
 
@@ -240,7 +294,7 @@ Turn acceptance identity、`turn_ordinal`、root item、history view 和 `final_
 
 ### Requirement: Turn acceptance identity 在历史层保持 thread-local 唯一
 
-历史服务和 Turn resolver SHALL 将 `accepted_ingress_id` 与 `acceptance_idempotency_key` 视为两个不同的 thread-local identity，并分别约束 `(session_id, thread_id, accepted_ingress_id)` 与 `(session_id, thread_id, acceptance_idempotency_key)` 唯一；每个 identity 只能一对一指向一个 accepted Turn。相同 ingress、相同 acceptance key、相同 payload hash 和相同 origin branch 的重复 acceptance 只能返回既有 `turn_id`、root 和 initial execution，不创建第二个历史 Turn；同 ingress 被不同 key 重用、同 key 搭配不同 ingress/payload/branch，或跨 thread 直接复用裸 identity 时，必须返回明确 acceptance idempotency conflict，且不修改原 Turn 或历史顺序。跨 session fork 的 copied acceptance identity 必须先映射为 target-local 值，source identity 只在 lineage/audit 中可见。
+历史服务和 Turn resolver SHALL 将 `accepted_ingress_id` 与 `acceptance_idempotency_key` 视为两个不同的 thread-local identity，并分别约束 `(session_id, thread_id, accepted_ingress_id)` 与 `(session_id, thread_id, acceptance_idempotency_key)` 唯一；每个 identity 只能一对一指向一个 accepted Turn。相同 ingress、相同 acceptance key、相同 payload hash 和相同 origin branch 的重复 acceptance 只能返回既有 `turn_id`、root 和 initial execution，不创建第二个历史 Turn；同 ingress 被不同 key 重用、同 key 搭配不同 ingress/payload/branch，或跨 thread 直接复用裸 identity 时，必须返回明确 acceptance idempotency conflict，且不修改原 Turn 或历史顺序。跨 owner fork 保留历史 acceptance local ID和原事实，以目标当前归属和冻结历史binding核验；新目标准入不得复用历史key，具体合同消费 checkpoint-context-branching。
 
 #### Scenario: 重复 acceptance 不产生第二个历史 Turn
 
@@ -254,9 +308,9 @@ Turn acceptance identity、`turn_ordinal`、root item、history view 和 `final_
 
 ### Requirement: Internal execution history 使用独立 envelope 和 typed display coordinate
 
-顶层 history envelope MUST 仅在有效 include 包含 `internal` 时填充 `internal_executions: InternalExecutionHistoryDTO[]`；有效 include 与默认 Web 集合以「内部 execution history 由持久 admission 独立加载」为准。每个 `InternalExecutionHistoryDTO` 的字段固定为 `execution_id`、`job_id`、`session_id`、`thread_id`、`status`、`created_at`、`updated_at`、`display_parts` 和 `response_parts`；不得套用 `TurnDetailDTO`，也不得增加 `turn_id`、root/final Turn 字段或把内部 execution 映射成 synthetic Turn。`status` 与时间来自目标 thread 的 durable execution/admission owner；`response_parts` 只表示该 `execution_id` 下本页命中的内部输出 history，跨页完整性由同一 history cursor 保证，不声明单页已包含该 execution 的全部输出。
+顶层 history envelope MUST 仅在有效 include 包含 `internal` 时填充 `internal_executions: InternalExecutionHistoryDTO[]`；有效 include 与默认 Web 集合以「内部 execution history 由持久 admission 独立加载」为准。每个 `InternalExecutionHistoryDTO` 的字段固定为 `execution_id`、`job_id`、`session_id`、`thread_id`、`status`、`created_at`、`updated_at`、`display_parts` 和 `response_parts`；不得套用 `TurnDetailDTO`，也不得增加 `turn_id`、root/final Turn 字段或把内部 execution 映射成 synthetic Turn。DTO 的 `session_id/thread_id` 表示该条 durable execution/admission 的真实历史 scope，`execution_id/job_id`、状态和时间也沿该历史事实投影；fork 不将这些字段重写为目标身份。请求路径、顶层 `page.thread_id` 和 cursor 绑定本次读取的目标容器；reader MUST 先验证目标 snapshot 与数据库当前 owner 一致，再以目标本地冻结 namespace binding 校验每条历史 scope，禁止重定向读取来源。再次 fork 可保留更早来源的精确历史 scope，不把所有继承记录强制归到直接来源。`response_parts` 只表示该 `execution_id` 下本页命中的内部输出 history，跨页完整性由同一 history cursor 保证，不声明单页已包含该 execution 的全部输出。
 
-`TurnHistoryLoadRequest` SHALL 接受可选 `execution_id`（1–256 字符）以读取同一 owner 的单个 internal execution。请求 MUST 只使用 `tail` 或 `before`，不得同时提供 `turn_ids`、`tool_call_ids`、`anchor_turn_id`、`turns`、`before_turns` 或 `after_turns`；显式 `include` MUST 包含 `internal`。唯一 history reader MUST 在 SQL/索引边界联合约束 Session、thread、选定 view/checkpoint 和 execution，保持原分页硬上限与独立 envelope。`TurnCursorDTO.query_mode=execution` MUST 冻结精确 `execution_id` 及原 owner/view/checkpoint；续读选择器或归属冲突必须明确拒绝，不切换目标，不启动 runtime。
+`TurnHistoryLoadRequest` SHALL 接受可选 `execution_id`（1–256 字符）以读取同一目标容器中、属于选定 view 的单个 internal execution；继承 execution 仍须通过上述历史 binding 校验。请求 MUST 只使用 `tail` 或 `before`，不得同时提供 `turn_ids`、`tool_call_ids`、`anchor_turn_id`、`turns`、`before_turns` 或 `after_turns`；显式 `include` MUST 包含 `internal`。唯一 history reader MUST 在 SQL/索引边界联合约束目标 Session、thread、选定 view/checkpoint 和 execution，保持原分页硬上限与独立 envelope。`TurnCursorDTO.query_mode=execution` MUST 冻结精确 `execution_id` 及首次请求的目标 owner/view/checkpoint；续读选择器或归属冲突必须明确拒绝，不切换目标，不启动 runtime。调用方不得用 DTO 的历史 scope 替换请求目标或 cursor owner。
 
 #### Scenario: 精确报告读取和有界续页
 
@@ -270,9 +324,13 @@ Turn acceptance identity、`turn_ordinal`、root item、history view 和 `final_
 
 每个 `display_parts` 元素 MUST 使用 `InternalExecutionDisplayPartDTO={kind,text,item_id,item_sequence,logical_item_ordinal,created_at,provenance}`。`item_id` 和 `item_sequence` 必须指向当前 canonical display carrier item 的稳定 identity 与物理坐标；`kind` 为 `generated_session_result`。`provenance` 是 typed source identity object，仅允许有值时出现的 `source_session_id`、`source_thread_id`、`delegation_id`、`source_execution_id`、`source_item_id`，不得携带 run/generator/control ID 或分支正文。普通 Turn history、SSE 与 Web 默认展示不得把这些 provenance ID 当可见文本；Web 对生成回报只展示安全 `text` 和“会话生成”标签，不展示私有 prompt、source branch 正文或可由其推导的内容。
 
-Turn summary/detail MUST 投影必填非负 `root_logical_item_ordinal`，从选定 view 的 `context_view_turns.root_input_item_id` 对应可见 canonical root membership 读取；每个 internal display part 的必填非负 `logical_item_ordinal` 从同一 view 的可见 display-only membership 读取。两个字段只是既有 `context_view_items.logical_item_ordinal` 的只读投影，不产生第二排序账本。Web MUST 以该共同 view 坐标合并完整 Turn 的 root anchor 和 standalone notice；Turn 自身成员仍按显式 logical membership 展示，不因 notice 插入而拆散或改归属。缺少对应 membership/ordinal 必须明确报 projection 错误，不用活动首尾、物理邻接、墙钟或默认值补顺序。Turn ordinal 与 internal item sequence 仍分别服务于各自分页，不直接互比。
+Turn summary/detail MUST 投影必填非负 `root_logical_item_ordinal`，从选定 view 的 `context_view_turns.root_input_item_id` 对应真实 canonical root membership 读取；有可见 canonical 成员的 Turn 可以使用其 hidden backing root 的原坐标，坐标本身不授权显示 root 正文。每个 internal display part 的必填非负 `logical_item_ordinal` 从同一 view 的可见 display-only membership 读取。两个字段只是既有 `context_view_items.logical_item_ordinal` 的只读投影，不产生第二排序账本。Web MUST 以该共同 view 坐标合并完整 Turn 的 root anchor 和 standalone notice；Turn 自身成员仍按显式 logical membership 展示，不因 notice 插入而拆散或改归属。缺少对应 membership/ordinal 必须明确报 projection 错误，不用活动首尾、物理邻接、墙钟或默认值补顺序。Turn ordinal 与 internal item sequence 仍分别服务于各自分页，不直接互比。
 
-共同坐标的唯一 owner MUST 是现有 view membership writer：`context_view_items` 以 `(view_id,item_id)` 标识成员，并在同一 view 内为 canonical 与 display-only 成员统一分配非负、唯一的 `logical_item_ordinal`；不得为展示另建计数器。新成员由该 owner 在同一权威事务中追加，已存在成员幂等重入不得重编号。固定 `view_id/history_view_revision` 的读快照中序号与可见性 MUST 稳定；成员变化必须推进 history revision，使旧游标 stale。派生 view 与 rewind MUST 只继承显式选中的源成员、保持其相对逻辑顺序，可在新 view 中重新分配局部序号，不能按物理 sequence 重排已选源成员；fork MUST 重映射目标 view/item/thread identity 并保持所选成员的相对顺序，禁止拿源 view 序号定位目标成员。
+每个 Turn summary/detail MUST 携带本次真实读取快照的 `source_view_id` 和 `source_view_revision`；分页、detail 和客户端镜像合并保留各行自己的 binding，不用页面当前 head 覆写旧行。消息操作首次请求原样携带该 binding 和点击 item，来源已漂移时明确拒绝，不按 item 猜祖先或悄悄选择最新 view。
+
+`source_view_revision` MUST 表示该精确 Session/thread 的 rollout `database_meta.history_view_revision`，不是单个 view 的局部版本，也不是 Turn `revision` 或 `projection_epoch`。同一 owner 的正常写入可以在保持 projection epoch 时将 pinned view 写时复制为 successor；客户端判断迟到快照时 MUST 使用该 owner 的历史版本，不能因 view ID 不同就丢失新旧顺序。不同 owner 的版本不得比较；接受较新快照也不得替旧行伪造新的 binding。相同 binding 的正文丰富度合并与较新 binding 的完整替换仍遵守原合同，旧响应不能回写正文、internal execution 或分页游标。
+
+共同坐标的唯一 owner MUST 是现有 view membership writer：`context_view_items` 以 `(view_id,item_id)` 标识成员，并在同一 view 内为 canonical 与 display-only 成员统一分配非负、唯一的 `logical_item_ordinal`；不得为展示另建计数器。新成员由该 owner 在同一权威事务中追加，已存在成员幂等重入不得重编号。固定 `view_id/history_view_revision` 的读快照中序号与可见性 MUST 稳定；成员变化必须推进 history revision，使旧游标 stale。派生 view 与 rewind MUST 只继承显式选中的源成员、保持其相对逻辑顺序，可在新 view 中重新分配局部序号，不能按物理 sequence 重排已选源成员；fork MUST 保留所选历史item local ID和相对逻辑顺序，并以目标归属/冻结view binding定位目标本地成员；新目标view由owner创建，不能用源物理sequence猜选中范围。
 
 同一选定 view 中，按 `context_view_turns.logical_turn_ordinal` 排列的可见 Turn，其 root membership ordinal MUST 严格递增；membership owner 在建立或变更 view 时维持此不变量。重复 ordinal、缺少 root 成员或两种 Turn 顺序冲突 MUST 明确报 projection integrity 错误，不由客户端 tie-break、重新排序或默认值掩盖。相同 display identity 的分页重影只做幂等去重，若带回不同坐标必须报错。新增 DTO 坐标只投影现有成员顺序，不改变 Provider selection、plan ordering 或执行准入的权威规则。
 
@@ -289,10 +347,26 @@ Turn summary/detail MUST 投影必填非负 `root_logical_item_ordinal`，从选
 #### Scenario: internal history 保持 execution-scoped 且不伪造 Turn
 
 - **WHEN** 客户端显式请求 include `internal` 并读取一次 internal execution
-- **THEN** history envelope 返回具备目标 session/thread、execution/job、状态和时间的 `InternalExecutionHistoryDTO`，其中 `display_parts` 坐标指向真实 runtime notice carrier，`response_parts` 只属于同一 execution
+- **THEN** history envelope 的 `thread_id` 标识请求目标，`InternalExecutionHistoryDTO` 保留经目标本地 binding 校验的真实历史 session/thread、execution/job、状态和时间；其中 `display_parts` 坐标指向目标本地的真实 runtime notice carrier，`response_parts` 只属于同一 execution
 - **AND** 响应不含 `turn_id`，不构造 `TurnDetailDTO`、用户 root 或 final response，不改变任何 completed Turn
 
 #### Scenario: Web 只呈现安全的生成回报
 
 - **WHEN** Web 渲染 `generated_session_result` display part
 - **THEN** 可见内容仅为安全固定文案和“会话生成”标签；DOM 不包含来源 ID、run/control ID、模型 prompt 或 source branch 正文
+
+### Requirement: 历史字段在类型定义处明确业务时间语义
+
+历史DTO及其内部复制、存储、mapping参数 SHALL 在类型定义或声明处区分实体与事件。`TurnBaseDTO.created_at` SHALL 明确说明所投影的权威来源及事件；不得仅因字段同名就等同于TurnRecord创建时间、首条/root输入消息时间、execution启动时间或复制操作时间。`updated_at`、`completed_at`及活动时长起止同样 SHALL 说明真实投影、回退来源与所属owner；字段名不得暗示不存在的独立终态事件，非终态可有值时须明确说明。时间字段 SHALL 说明序列化格式、时区处理或数值单位，以及复制时保留源事实还是产生目标操作事实。字段名已能明确语义时不要求冗长重复注释。
+
+内部存在歧义的`timestamp`等参数 SHALL 改成明确的主体/事件组合名并全量迁移调用方，或在拥有该字段的类型处补齐含义；DTO字段名保持时 SHALL 提供可被接口消费者读取的语义描述。整理 MUST 保持既有历史时长取值及其真实起止投影、逻辑顺序和复制事实合同，不把存储投影时间差统一称为acceptance到terminal的独立计时，不新增旧名兼容层、别名双写或第二套权威时间。
+
+#### Scenario: 复制保留历史时间并区分新操作时间
+
+- **WHEN** 跨Session复制已有Turn/root及其history，源业务时间与目标复制时间不同
+- **THEN** 类型和参数名称或注释明确区分两类时间，目标历史继续按原复制合同保留源业务事实，mapping/journal等新目标操作记录使用自身owner时间，历史时长与顺序保持原合同
+
+#### Scenario: DTO通用时间字段有明确来源
+
+- **WHEN** 调用方仅从Turn summary/detail或internal execution DTO的字段声明及接口描述读取时间语义
+- **THEN** 可以明确辨认每个时间属于哪个主体和事件、其权威来源及单位/时区，不需要根据字段名或当前值相等推测，也不把Turn与internal execution的时间混用

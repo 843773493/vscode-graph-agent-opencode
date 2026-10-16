@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessageChunk, HumanMessage
+from langchain_litellm import ChatLiteLLM
 
 from app.agents.agent_factory import build_model_from_provider
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
@@ -18,6 +19,7 @@ from app.core.turn_execution_scope import (
     reset_current_turn_execution_scope,
     set_current_turn_execution_scope,
 )
+from app.runtime.provider_errors import is_provider_failure
 
 
 def _chat_api_mode() -> dict[str, object]:
@@ -645,7 +647,7 @@ async def test_incomplete_stream_is_not_retried_after_semantic_delta(
     )
 
     published_chunks = []
-    with pytest.raises(RuntimeError, match="不会静默重试"):
+    with pytest.raises(RuntimeError, match="不会静默重试") as raised:
         async for chunk in model._astream([HumanMessage(content="hi")]):
             published_chunks.append(chunk)
     text = "".join(
@@ -657,6 +659,154 @@ async def test_incomplete_stream_is_not_retried_after_semantic_delta(
 
     assert request_count == 1
     assert text == "半截文本"
+    assert is_provider_failure(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_chat_provider_call_marks_and_preserves_original_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UpstreamError(RuntimeError):
+        status_code = 503
+
+    cause = ValueError("transport detail")
+    error = UpstreamError("upstream unavailable")
+    error.__cause__ = cause
+
+    async def fail_upstream(self, **_kwargs):
+        del self
+        raise error
+
+    monkeypatch.setattr(ChatLiteLLM, "acompletion_with_retry", fail_upstream)
+    model = BoxteamLiteLLMChatModel(
+        model="test-model",
+        api_key="test-key",
+        custom_llm_provider="openai",
+        invocation_purpose="tool_test",
+    )
+
+    with pytest.raises(UpstreamError) as raised:
+        await model.acompletion_with_retry(messages=[])
+
+    assert raised.value is error
+    assert raised.value.status_code == 503
+    assert raised.value.__cause__ is cause
+    assert is_provider_failure(error)
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_iteration_marks_original_upstream_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UpstreamError(RuntimeError):
+        status_code = 429
+
+    error = UpstreamError("stream disconnected")
+
+    class FailingStream:
+        received_finish_reason = None
+        intermittent_finish_reason = None
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise error
+
+    async def fake_acompletion_with_retry(self, **_kwargs):
+        return FailingStream()
+
+    monkeypatch.setattr(
+        BoxteamLiteLLMChatModel,
+        "acompletion_with_retry",
+        fake_acompletion_with_retry,
+    )
+    model = BoxteamLiteLLMChatModel(
+        model="test-model",
+        api_key="test-key",
+        custom_llm_provider="openai",
+        invocation_purpose="tool_test",
+    )
+
+    with pytest.raises(UpstreamError) as raised:
+        async for _chunk in model._astream([HumanMessage(content="hi")]):
+            pass
+
+    assert raised.value is error
+    assert is_provider_failure(error)
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_iterator_acquisition_marks_original_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = RuntimeError("upstream stream is not iterable")
+
+    class InvalidStream:
+        received_finish_reason = None
+        intermittent_finish_reason = None
+
+        def __aiter__(self):
+            raise error
+
+    async def fake_acompletion_with_retry(self, **_kwargs):
+        return InvalidStream()
+
+    monkeypatch.setattr(
+        BoxteamLiteLLMChatModel,
+        "acompletion_with_retry",
+        fake_acompletion_with_retry,
+    )
+    model = BoxteamLiteLLMChatModel(
+        model="test-model",
+        api_key="test-key",
+        custom_llm_provider="openai",
+        invocation_purpose="tool_test",
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        async for _chunk in model._astream([HumanMessage(content="hi")]):
+            pass
+
+    assert raised.value is error
+    assert is_provider_failure(error)
+
+
+def test_sync_chat_stream_iterator_acquisition_marks_original_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = RuntimeError("upstream stream is not iterable")
+
+    class InvalidStream:
+        received_finish_reason = None
+        intermittent_finish_reason = None
+
+        def __iter__(self):
+            raise error
+
+        def close(self) -> None:
+            return None
+
+    def fake_completion_with_retry(self, **_kwargs):
+        return InvalidStream()
+
+    monkeypatch.setattr(
+        BoxteamLiteLLMChatModel,
+        "completion_with_retry",
+        fake_completion_with_retry,
+    )
+    model = BoxteamLiteLLMChatModel(
+        model="test-model",
+        api_key="test-key",
+        custom_llm_provider="openai",
+        invocation_purpose="tool_test",
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        next(model._stream([HumanMessage(content="hi")]))
+
+    assert raised.value is error
+    assert is_provider_failure(error)
 
 
 @pytest.mark.asyncio

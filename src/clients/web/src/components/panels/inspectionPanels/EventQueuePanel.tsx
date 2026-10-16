@@ -255,6 +255,7 @@ export default function EventQueuePanel({
   items,
   limit,
   sessionId,
+  scopeKey,
   active,
   historyLoading,
   historyLoadingOlder,
@@ -266,6 +267,7 @@ export default function EventQueuePanel({
   items: FrontendReceivedEvent[];
   limit: number;
   sessionId: string;
+  scopeKey: string;
   active: boolean;
   historyLoading: boolean;
   historyLoadingOlder: boolean;
@@ -285,7 +287,7 @@ export default function EventQueuePanel({
     revealOlderEvents,
   } = useEventQueuePagination({
     active,
-    sessionId,
+    scopeKey,
     displayItemCount: displayItems.length,
     historyLoading,
     historyLoadingOlder,

@@ -496,30 +496,43 @@ def test_same_plan_and_source_ids_stay_with_their_session_owner(
         saver.register_context_contribution(session_id, saver._storage.storage.main_thread_id(session_id), ContextContribution(contribution_id='same-source-id', source_kind='workspace_policy', source_revision='same-revision', body=body, content_hash=contribution_content_hash('prompt', body)), request_content=body)
     # 在两个 registry 都登记后才生成计划，避免“先读再覆盖”的测试假隔离。
     for session_id in (first_session, second_session):
-        plan = saver.compose_committed_context_plan(session_id, saver._storage.storage.main_thread_id(session_id), plan_id='same-plan-id', tool_set=EMPTY_TOOL_SET)
-        plans.append(plan)
-        assert plan.session_id == plan.to_dict()["session_id"] == session_id
-        assert {ref.session_id for ref in plan.refs} == {session_id}
-        request_refs = [ref for ref in plan.refs if ref.ref_type == "request_only"]
-        assert len(request_refs) == 1
-        assert request_refs[0].plan_id == "same-plan-id"
-        assert all(
-            ref.plan_id is None for ref in plan.refs if ref.ref_type == "canonical_item"
+        thread_id = saver._storage.storage.main_thread_id(session_id)
+        execution_id = saver.execution_for_turn(
+            session_id, thread_id=thread_id, turn_id=turns[session_id],
         )
-        assert [item.content_hash for item in plan.contributions] == [
-            contribution_content_hash("prompt", f"当前策略仅属于 {session_id}")
-        ]
-        # draft 仅保留 source manifest；真实正文隔离要从封存详情重启恢复后验证。
-        registered = saver.create_context_plan(
-            session_id,
-            replace(plan, plan_creation_idempotency_key="same-plan-create"),
+        admission = saver.execution_admission(
+            session_id, thread_id=thread_id, execution_id=execution_id,
         )
-        snapshot = saver.seal_context_plan(session_id, saver._storage.storage.main_thread_id(session_id), registered.draft, wire_profile=None, wire_params=None, turn_id=turns[session_id], seal_idempotency_key='same-plan-seal', execution_id=saver.execution_for_turn(session_id, turn_id=turns[session_id]), provider_version='owner-isolation-contract')
-        restored = RolloutCheckpointSaver(sessions).project_context_plan_to_native(session_id, RolloutCheckpointSaver(sessions)._storage.storage.main_thread_id(session_id), snapshot.as_sealed_plan())
-        wire = json.dumps(restored, ensure_ascii=False)
-        assert session_id in wire
-        other_session = second_session if session_id == first_session else first_session
-        assert other_session not in wire
+        with (
+            session_thread_owner_scope(
+                MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id,
+            ),
+            execution_admission_scope(admission, langgraph_thread_id=thread_id),
+        ):
+            plan = saver.compose_committed_context_plan(session_id, thread_id, plan_id='same-plan-id', tool_set=EMPTY_TOOL_SET)
+            plans.append(plan)
+            assert plan.session_id == plan.to_dict()["session_id"] == session_id
+            assert {ref.session_id for ref in plan.refs} == {session_id}
+            request_refs = [ref for ref in plan.refs if ref.ref_type == "request_only"]
+            assert len(request_refs) == 1
+            assert request_refs[0].plan_id == "same-plan-id"
+            assert all(
+                ref.plan_id is None for ref in plan.refs if ref.ref_type == "canonical_item"
+            )
+            assert [item.content_hash for item in plan.contributions] == [
+                contribution_content_hash("prompt", f"当前策略仅属于 {session_id}")
+            ]
+            # draft 仅保留 source manifest；真实正文隔离要从封存详情重启恢复后验证。
+            registered = saver.create_context_plan(
+                session_id,
+                replace(plan, plan_creation_idempotency_key="same-plan-create"),
+            )
+            snapshot = saver.seal_context_plan(session_id, thread_id, registered.draft, wire_profile=None, wire_params=None, turn_id=turns[session_id], seal_idempotency_key='same-plan-seal', execution_id=execution_id, provider_version='owner-isolation-contract')
+            restored = RolloutCheckpointSaver(sessions).project_context_plan_to_native(session_id, thread_id, snapshot.as_sealed_plan())
+            wire = json.dumps(restored, ensure_ascii=False)
+            assert session_id in wire
+            other_session = second_session if session_id == first_session else first_session
+            assert other_session not in wire
     assert plans[0].refs != plans[1].refs
     assert plans[0].plan_hash() != plans[1].plan_hash()
 

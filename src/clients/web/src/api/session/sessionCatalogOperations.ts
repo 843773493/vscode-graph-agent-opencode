@@ -77,6 +77,8 @@ export interface SessionCatalogOperationIntent {
   depends_on?: readonly string[];
 }
 
+export type NavigationDeleteSettlement = "pending" | "repair_required" | "settled";
+
 export interface SessionCatalogOperationReceipt {
   operation_id: string;
   client_sequence: number;
@@ -87,7 +89,7 @@ export interface SessionCatalogOperationReceipt {
   committed_catalog_revision: number | null;
   error_code: string | null;
   error_detail: string | null;
-  pending_settlement: boolean;
+  settlement: NavigationDeleteSettlement | null;
   receipt_revision: number;
   updated_at: string;
 }
@@ -209,7 +211,7 @@ export async function fetchSessionCatalogSnapshot(
 export async function listSessionCatalogNavigationEvents(
   port: number,
   workspaceTarget: GatewayWorkspaceRequestTarget,
-  options: { after: number; cursor?: string | null },
+  options: { after: number; cursor?: string | null; signal?: AbortSignal },
 ): Promise<SessionCatalogNavigationEventsPage> {
   if (!Number.isInteger(options.after) || options.after < 0) {
     throw new Error(`navigation 事件 cursor 必须是非负整数: ${options.after}`);
@@ -219,6 +221,6 @@ export async function listSessionCatalogNavigationEvents(
   return unwrapApiData(await requestJson<APIResponse<SessionCatalogNavigationEventsPage>>(
     port,
     `${NAVIGATION_EVENTS_PATH}?${query.toString()}`,
-    { headers: gatewayWorkspaceRequestHeaders(workspaceTarget) },
+    { headers: gatewayWorkspaceRequestHeaders(workspaceTarget), signal: options.signal },
   ));
 }

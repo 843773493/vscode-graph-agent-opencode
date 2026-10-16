@@ -10,6 +10,9 @@ from app.domain.itemized.hashing import (
     contribution_content_hash,
     sha256_jcs,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    require_historical_scope,
+)
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
 )
@@ -478,13 +481,17 @@ class ContextOverlayStorageMixin:
                 session_id, thread_id, checkpoint_ns, snapshot=snapshot,
             ) as connection:
                 self._storage._require_v2_runtime(connection)
-                query = 'SELECT overlay_id, session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, delta_source_revision, delta_content_length, delta_content_hash, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at FROM source_overlays WHERE session_id = ? AND thread_id = ? AND checkpoint_ns = ?'
-                params: list[object] = [session_id, thread_id, checkpoint_ns]
+                query = 'SELECT overlay_id, session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, delta_source_revision, delta_content_length, delta_content_hash, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at FROM source_overlays WHERE checkpoint_ns = ?'
+                params: list[object] = [checkpoint_ns]
                 if source_overlay_epoch is not None:
                     query += " AND source_overlay_epoch = ?"
                     params.append(source_overlay_epoch)
                 query += " ORDER BY source_overlay_epoch, created_at, overlay_id"
                 rows = connection.execute(query, params).fetchall()
+                for row in rows:
+                    require_historical_scope(
+                        connection, row[1], row[2], current_owner=(session_id, thread_id),
+                    )
         except RolloutNotMaterializedError:
             return ()
         keys = (
@@ -516,8 +523,8 @@ class ContextOverlayStorageMixin:
         for row in result:
             _validate_source_overlay_row(
                 row,
-                session_id=session_id,
-                thread_id=thread_id,
+                session_id=_required_text(row, "session_id"),
+                thread_id=_required_text(row, "thread_id"),
                 checkpoint_ns=checkpoint_ns,
             )
         return result

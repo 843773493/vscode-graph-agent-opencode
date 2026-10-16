@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { SessionChangesSummary } from "../../types/backend";
 import type { ConversationContentView } from "../../types/frontend";
+import EventQueuePanel from "../panels/inspectionPanels/EventQueuePanel";
+import RequestLogPanel from "../panels/inspectionPanels/RequestLogPanel";
 import ContentViewSlots from "./ContentViewSlots";
 
 /** 主窗口会话区四个内容视图槽的编排契约：错误/骨架分支、槽位显隐与变更摘要优先级。 */
@@ -13,7 +16,7 @@ function summary(files: number): SessionChangesSummary {
 
 type SlotOverrides = Partial<Parameters<typeof ContentViewSlots>[0]>;
 
-function slot(overrides: SlotOverrides = {}) {
+function slotProps(overrides: SlotOverrides = {}): Parameters<typeof ContentViewSlots>[0] {
   const props: Parameters<typeof ContentViewSlots>[0] = {
     error: null,
     isBootstrapping: false,
@@ -53,13 +56,16 @@ function slot(overrides: SlotOverrides = {}) {
     onLoadAgentStateMessageRawContent: async () => "",
     onRetryHistory: () => {},
     onReplayTurn: async () => {},
-    onUpdatePending: async () => {},
     onRemovePending: async () => {},
     onChangePendingPolicy: async () => {},
     onViewStateChange: () => {},
     onViewStateRestoreStatus: () => {},
   };
-  return renderToStaticMarkup(<ContentViewSlots {...props} {...overrides} />);
+  return { ...props, ...overrides };
+}
+
+function slot(overrides: SlotOverrides = {}) {
+  return renderToStaticMarkup(<ContentViewSlots {...slotProps(overrides)} />);
 }
 
 /** 数出某个槽位外壳及其 hidden 状态，避免断言被相邻槽位串味。 */
@@ -125,6 +131,31 @@ describe("ContentViewSlots 内容视图编排契约", () => {
     expect(slotMarkup(html, 0)).toContain("hidden=\"\"");
     expect(slotMarkup(html, 1)).toContain("hidden=\"\"");
     expect(slotMarkup(html, 3)).toContain("hidden=\"\"");
+  });
+
+  test("诊断面板按工作区会话缓存键隔离，同时保留会话业务 ID", () => {
+    let renderer: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <ContentViewSlots
+          {...slotProps({
+            contentView: "events",
+            workspaceId: "workspace-b",
+            sessionId: "session-shared",
+            activeSessionCacheKey: "workspace-b:session-shared",
+          })}
+        />,
+      );
+    });
+
+    const eventProps = renderer!.root.findByType(EventQueuePanel).props;
+    const requestProps = renderer!.root.findByType(RequestLogPanel).props;
+    expect(eventProps.scopeKey).toBe("workspace-b:session-shared");
+    expect(eventProps.sessionId).toBe("session-shared");
+    expect(requestProps.scopeKey).toBe("workspace-b:session-shared");
+    expect(requestProps.sessionId).toBe("session-shared");
+
+    act(() => renderer!.unmount());
   });
 
   test("三个检视视图隐藏会话记录槽，变更视图仍保留会话记录槽", () => {

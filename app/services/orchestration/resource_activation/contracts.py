@@ -111,6 +111,8 @@ class ResourceActivationSnapshotSaver(Protocol):
     伪造成功。seal 路径另外通过 Saver 的 assembly 事务原子绑定。
     """
 
+    def context_owner_namespace(self, checkpoint_ns: str) -> str: ...
+
     def frozen_resource_activation_for_admission(
         self, admission: ExecutionAdmission, *, checkpoint_ns: str = ""
     ) -> ResourceActivationSnapshotRef | None: ...
@@ -125,7 +127,7 @@ class ResourceActivationSnapshotSaver(Protocol):
     ) -> ResourceActivationSnapshotRef | None: ...
 
     async def save_resource_activation_snapshot(
-        self, snapshot: ResourceActivationSnapshotRef
+        self, snapshot: ResourceActivationSnapshotRef, *, checkpoint_ns: str = ""
     ) -> None: ...
 
 

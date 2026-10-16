@@ -1,12 +1,12 @@
 # 目录用途
 
-`app/services/infrastructure/attachment_blob_catalog/` 承载 workspace 级附件正文 content-addressed blob store 这条垂直链路的唯一实现：`blob_identity.py` 定义 `blb_[0-9a-f]{64}` 身份与日期分桶 locator 原语；`locator.py` 是受检 relative locator（blob 与 staging 两类）的唯一生产者/解析者；`store.py` 编排 pin 与 workspace ingest 的跨库 saga、读取、定点恢复与引用感知 GC。
+`app/services/infrastructure/attachment_blob_catalog/` 承载 workspace 级附件正文 content-addressed blob store 这条垂直链路的唯一实现：`blob_identity.py` 定义 `blb_[0-9a-f]{64}` 身份与日期分桶 locator 原语；`locator.py` 是受检 relative locator（blob 与 staging 两类）的唯一生产者/解析者；`store.py` 编排 pin 与 workspace ingest 的跨库 saga、统一正文完整性校验、读取、定点恢复与引用感知 GC。`fork_store.py` 提供宿主唯一使用的 fork 方法族，消费统一资源目标决策并区分消费 Thread 与实际正文保活 owner；`fork_claims.py` 负责冻结 alias、精确 operation claim、引用预留和终结，不复制附件字节。
 
 catalog 侧原先的单文件 `catalog.py` 已按垂直链路拆入本包，facade 落在本包 `__init__.py`：只保留 `AttachmentBlobCatalog` 的类声明（组合 `IngestMixin`/`BlobsMixin`/`QueriesMixin` 三个 mixin）、`SCHEMA_VERSION` 与连接生命周期方法（`__init__`/`connection`/`close`/`_connected`/`_connect`/`_initialize`/`write_transaction`），并按原名再导出模块级公开符号。表 DDL/索引/必需表清单与两个形态工具收敛在 `schema.py`；不可变行投影与 `derive_attachment_id` 在 `records.py`；ingest record + digest claim 链在 `ingest.py`；blob availability + owner reference 链在 `blobs.py`；引用感知 tombstone/GC 链在 `queries.py`。
 
 # 可修改内容
 
-- 可以维护 `blob_identity.py` 的身份原语、`locator.py` 的 locator 形态与预算校验、`schema.py` 的表 DDL/索引/必需表清单与形态工具、`records.py` 的行投影与身份派生、`ingest.py`/`blobs.py`/`queries.py` 三个 mixin 的方法体、facade `__init__.py` 的类声明与生命周期，以及 `store.py` 的写入 saga、读取、`recover_session`、`release_session_references` 与 `collect_garbage`。
+- 可以维护 `blob_identity.py` 的身份原语、`locator.py` 的 locator 形态与预算校验、`schema.py` 的表 DDL/索引/必需表清单与形态工具、`records.py` 的行投影与身份派生、`ingest.py`/`blobs.py`/`queries.py` 的方法体、facade `__init__.py` 的类声明与生命周期，以及 `store.py` 的写入 saga、统一正文校验、读取、`recover_session`、引用释放和 `collect_garbage`；fork 捕获、目标保活与发布方法仅维护在 `fork_store.py`，SQLite alias/claim 事务仅维护在 `fork_claims.py`。
 - 可以维护随本包落地的四段式 `AGENTS.md`。
 - 可以维护对应的单元测试（放在 `tests/unit/services/infrastructure/`）。
 
@@ -28,7 +28,8 @@ catalog 侧原先的单文件 `catalog.py` 已按垂直链路拆入本包，faca
 - 严格照 saga 顺序：取 gate + fresh 校验 + create-or-get `AttachmentOperationPin` → create-or-get `AttachmentIngestRecord(preparing)` → 写 staging 并 durable → 推进 `hashed` 并竞争唯一 `BlobCommitClaim` → 原子 rename 到 claim 冻结 locator 并复验 → 再次取同一 gate 复验 pin/fence/thread 后发布 availability/attachment/owner ref → 主体 durable 后才把 pin 推进终态。
 - 统一锁序：一个 `SessionLifecycleGate` → 至多一个 catalog/SQLite 写事务。
 - ingest record 的 digest/blob_id/length + 状态 UPDATE 是单点：`ingest._update_ingest_record_identity`，`mark_ingest_hashed`（走 `hashed`）与 `publish_blob_and_owner_ref`（走 `published`）都调用它，不得在两处各写一条同型语句。
-- 各 mixin 只依赖宿主提供的 `database_path`、`_closed`、`_connection`、`_connected()`、`write_transaction()`；表 DDL 与列清单常量的唯一定义点是 `schema.py`，不复制 DDL。
+- catalog mixin 依赖宿主提供的 `database_path`、`_closed`、`_connection`、`_connected()`、`write_transaction()` 和同一 catalog 的既有查询；`ForkAttachmentStoreMixin` 显式消费宿主的 catalog、locator、Session gate、控制库及正文验证端口，不建立第二套 store。表 DDL 与列清单常量的唯一定义点是 `schema.py`，不复制 DDL。
+- 无 claim 的复用必须冻结真实已发布 owner 引用；保活范围和消费 Thread 不混同。必要 claim 在 source guard 释放前建立，reserved 引用在 finalizer 提交前不可读取；失败、删除与 GC 只处理本 operation 的精确引用，无 claim 的操作不建立 settlement record。
 - 错误分类沿用 `session_catalog_store`：`TypeError` 类型错、`ValueError` 形态非法、`KeyError` 目标行缺失、`RuntimeError`（含 `BlobIdentityConflictError`）语义冲突；库被外部改动一律 fail-closed。
 - GC 必须先原子提交 tombstone/availability，再删物理正文；失败可幂等重试。
 - 修改本目录后运行 `uv run ruff check`、`uv run python -m compileall` 与带进程外保护地跑 `uv run pytest tests/unit/services/infrastructure`。

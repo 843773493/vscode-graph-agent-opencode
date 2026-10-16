@@ -51,7 +51,7 @@ describe("会话目录批量入队协议", () => {
             committed_catalog_revision: null,
             error_code: null,
             error_detail: null,
-            pending_settlement: false,
+            settlement: null,
             receipt_revision: 3,
             updated_at: "2026-09-24T00:00:00Z",
           }],

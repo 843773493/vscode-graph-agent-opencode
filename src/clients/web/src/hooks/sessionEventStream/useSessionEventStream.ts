@@ -46,7 +46,7 @@ export function useSessionEventStream({
   timelineReady,
   initialEventCursor,
   refreshTurnHistory,
-  loadTerminalTurn,
+  loadTerminalJobTurn,
   setState,
 }: {
   apiPort: number | null;
@@ -58,7 +58,7 @@ export function useSessionEventStream({
   timelineReady: boolean;
   initialEventCursor: string | null;
   refreshTurnHistory: () => void;
-  loadTerminalTurn: (turnId: string) => Promise<void>;
+  loadTerminalJobTurn: (jobId: string) => Promise<void>;
   setState: SetAppState;
 }) {
   const observationState = useWorkspaceObservationState(workspaceId);
@@ -163,6 +163,7 @@ export function useSessionEventStream({
         workspaceId: targetWorkspaceId,
         sessionCacheKey: targetSessionCacheKey,
         setState,
+        signal: controller.signal,
       });
     };
 
@@ -173,7 +174,7 @@ export function useSessionEventStream({
       pendingStreamEvents.push(event);
       if (isJobTerminalTraceType(event.type)) {
         flushStreamEvents();
-        void loadTerminalTurn(event.job_id).catch((error: unknown) => {
+        void loadTerminalJobTurn(event.job_id).catch((error: unknown) => {
           if (controller.signal.aborted) return;
           const message = errorMessage(error);
           setState((latest) => ({
@@ -304,7 +305,7 @@ export function useSessionEventStream({
     abortCurrentStream,
     apiPort,
     initialEventCursor,
-    loadTerminalTurn,
+    loadTerminalJobTurn,
     refreshTurnHistory,
     sessionCacheKey,
     sessionId,

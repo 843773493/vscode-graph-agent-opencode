@@ -5,7 +5,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
 ToolTestStatus = Literal["queued", "running", "completed", "failed"]
 
 
@@ -16,6 +15,7 @@ class ToolTestStartRequest(BaseModel):
 
 
 class ToolTestAttemptDTO(BaseModel):
+    # 标识一轮 case/provider/model 工具测试样本，包含其内部重试；不是单次工具执行或重试 ID。
     attempt_id: str
     case_id: str
     provider_id: str

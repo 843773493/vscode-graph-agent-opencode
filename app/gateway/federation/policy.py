@@ -17,7 +17,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-Capability = Literal["discovery", "send", "read", "wait", "reply", "transit"]
+Capability = Literal["discovery", "send", "read", "wait", "reply", "transit", "fork_source", "fork_target"]
 Effect = Literal["allow", "deny"]
 
 CORE_CAPABILITIES: tuple[Capability, ...] = (
@@ -27,6 +27,8 @@ CORE_CAPABILITIES: tuple[Capability, ...] = (
     "wait",
     "reply",
     "transit",
+    "fork_source",
+    "fork_target",
 )
 
 

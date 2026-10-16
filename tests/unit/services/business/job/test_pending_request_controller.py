@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import pytest
 
 from app.core.job_event_bus import JobEventBus
@@ -6,7 +8,24 @@ from app.domain.itemized.execution_admission import (
     UserExecutionIdentity,
 )
 from app.prompting import PromptSection, internal_message_factory
+from app.schemas.internal_v2.common import MessageRole
+from app.schemas.internal_v2.message import MessageDTO
+from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.job.service import JobService
+from app.services.infrastructure.rollout_context.checkpoint.reader import (
+    RolloutContextReader,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+from tests.support.message_service import build_message_service
+from tests.unit.services.business.job.test_pending_persistence import (
+    pending_input_owner as pending_input_owner,  # noqa: PLC0414
+)
+from tests.unit.services.business.job.test_pending_persistence import (
+    store_factory as store_factory,  # noqa: PLC0414
+)
 
 
 class _DummyJobExecutor:
@@ -37,77 +56,124 @@ def _service(monkeypatch: pytest.MonkeyPatch, session_lifecycle_guard) -> JobSer
 
 
 @pytest.mark.asyncio
-async def test_pending_controls_edit_policy_remove_without_reordering(
-    monkeypatch, session_lifecycle_guard
-):
-    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard)
-    session_id = "session_pending_controls"
-    await service.start_job(
-        session_id,
-        "active",
-        thread_id=f"thr_{session_id}",
-        message_id="msg_active",
-        message_created_at="2026-07-17T00:00:00+00:00",
-    )
-    queued = await service.start_job(
-        session_id,
-        "queued",
-        thread_id=f"thr_{session_id}",
-        message_id="msg_queued",
-        message_created_at="2026-07-17T00:00:01+00:00",
-        delivery_policy="after_turn",
-    )
-    tail = await service.start_job(
-        session_id,
-        "tail",
-        thread_id=f"thr_{session_id}",
-        message_id="msg_tail",
-        message_created_at="2026-07-17T00:00:02+00:00",
-        delivery_policy="after_interrupt",
-    )
+async def test_thread_pending_reads_keep_exact_active_slot_and_session_controls(
+    monkeypatch: pytest.MonkeyPatch, session_lifecycle_guard,
+) -> None:
+    service = _service(monkeypatch, session_lifecycle_guard)
+    session_id = "session_scoped_pending"
+    main_thread = "thr_main_pending"
+    child_thread = "thr_child_pending"
+    jobs = {}
+    # child 先入槽；Session 首 slot 不能被 main 读取误用。
+    for thread_id, label in [(child_thread, "child"), (main_thread, "main")]:
+        for suffix in ["active", "queued"]:
+            message_id = f"msg_{label}_{suffix}"
+            jobs[message_id] = await service.start_job(
+                session_id, message_id, thread_id=thread_id, message_id=message_id,
+                message_created_at="2026-07-17T00:00:00+00:00",
+            )
 
-    snapshot = await service.list_pending(session_id)
-    assert queued.enqueue_sequence is not None
-    assert tail.enqueue_sequence is not None
-    assert [item.message_id for item in snapshot.requests] == [
-        "msg_queued",
-        "msg_tail",
+    aggregate = await service.list_pending(session_id)
+    assert aggregate.thread_id is None
+    assert aggregate.active_job_id == jobs["msg_child_active"].job_id
+    assert [item.message_id for item in aggregate.requests] == ["msg_child_queued", "msg_main_queued"]
+
+    main = await service.list_pending(session_id, thread_id=main_thread)
+    assert main.thread_id == main_thread
+    assert main.active_job_id == jobs["msg_main_active"].job_id
+    assert [(item.message_id, item.position) for item in main.requests] == [("msg_main_queued", 0)]
+    summaries = await service.list_pending_summaries(session_id, thread_id=main_thread, limit=1)
+    assert summaries.thread_id == main_thread
+    assert summaries.active_job_id == main.active_job_id
+    assert summaries.request_count == 1 and summaries.truncated is False
+    assert [(item.message_id, item.thread_id) for item in summaries.requests] == [("msg_main_queued", main_thread)]
+
+    # Session 变更仍控制全体 thread，返回聚合快照。
+    changed = await service.update_pending_policy(
+        session_id, "msg_child_queued", delivery_policy="after_tool_result",
+        expected_snapshot_version=main.snapshot_version,
+    )
+    assert changed.thread_id is None
+    assert [(item.message_id, item.delivery_policy) for item in changed.requests] == [
+        ("msg_child_queued", "after_tool_result"), ("msg_main_queued", "after_turn"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_pending_controls_policy_remove_without_reordering(
+    monkeypatch, session_lifecycle_guard, tmp_path, session_bundle_factory,
+    pending_input_owner, store_factory,
+):
+    sessions_dir = tmp_path / "sessions"
+    session_id = "ses_019b990a9cce734bbccc60ec5321f320"
+    session_bundle_factory(sessions_dir, session_id)
+    saver = pending_input_owner._checkpointer
+    thread_id = pending_input_owner._resolve_main_thread_id(session_id)
+    store = store_factory(sessions_dir)
+    service = JobService(
+        job_event_bus=JobEventBus(), job_executor=_DummyJobExecutor(),
+        session_lifecycle_guard=session_lifecycle_guard, pending_request_store=store,
+        input_owner=pending_input_owner, terminal_status_writer=saver,
+    )
+    monkeypatch.setattr(service, "_start_job_task", lambda job: setattr(job, "task", _DummyTask()))
+
+    async def accepted(content, message_id, delivery_policy="after_turn"):
+        binding = service.reserve_user_execution_identity()
+        now = datetime.now(UTC)
+        pending_input_owner.accept_user_message(MessageDTO(
+            message_id=message_id, session_id=session_id, thread_id=thread_id, role=MessageRole.user,
+            content=content, created_at=now, updated_at=now,
+        ), execution_identity=binding)
+        return await service.start_job(
+            session_id, content, thread_id=thread_id, message_id=message_id,
+            message_created_at=now.isoformat(), execution_binding=binding, delivery_policy=delivery_policy,
+        )
+
+    active = await accepted("active", "msg_active")
+    queued = await accepted("queued", "msg_queued")
+    tail = await accepted("tail", "msg_tail", "after_interrupt")
+    snapshot = await service.list_pending(session_id)
+    assert [item.message_id for item in snapshot.requests] == ["msg_queued", "msg_tail"]
     assert [item.enqueue_sequence for item in snapshot.requests] == [2, 3]
     assert all(item.status == "queued" for item in snapshot.requests)
-
-    updated = await service.update_pending(
-        session_id,
-        "msg_tail",
-        content="tail edited",
-        attachments=[],
-    )
-    assert next(
-        item for item in updated.requests if item.message_id == "msg_tail"
-    ).content == ("tail edited")
-
     changed = await service.update_pending_policy(
-        session_id,
-        "msg_tail",
-        delivery_policy="after_tool_result",
-        expected_snapshot_version=updated.snapshot_version,
+        session_id, "msg_tail", delivery_policy="after_tool_result",
+        expected_snapshot_version=snapshot.snapshot_version,
     )
-    changed_tail = next(
-        item for item in changed.requests if item.message_id == "msg_tail"
-    )
-    assert changed_tail.delivery_policy == "after_tool_result"
-    assert [item.message_id for item in changed.requests] == [
-        "msg_queued",
-        "msg_tail",
+    assert [(item.message_id, item.content, item.delivery_policy) for item in changed.requests] == [
+        ("msg_queued", "queued", "after_turn"), ("msg_tail", "tail", "after_tool_result"),
     ]
-
     with pytest.raises(ValueError, match="不支持重排"):
         await service.reject_pending_reorder(session_id)
-
-    after_remove = await service.remove_pending(session_id, "msg_queued")
-    assert [item.message_id for item in after_remove.requests] == [
-        "msg_tail",
-    ]
+    with saver._storage.storage.read_connection(session_id, thread_id, "") as connection:
+        original = connection.execute("SELECT turn_id,turn_ordinal,root_input_item_id FROM turn_records ORDER BY turn_ordinal").fetchall()
+    removed = await service.remove_pending(session_id, "msg_queued")
+    assert [item.message_id for item in removed.requests] == ["msg_tail"]
+    assert [item.message_id for item in await store.load(session_id)] == ["msg_tail"]
+    extra = await accepted("also queued", "msg_extra")
+    assert len((await service.list_pending(session_id)).requests) == 2
+    cleared = await service.clear_pending(session_id)
+    assert cleared.requests == [] and cleared.active_job_id == active.job_id
+    assert await store.load(session_id) == []
+    cancelled_jobs = {queued.job_id, tail.job_id, extra.job_id}
+    with saver._storage.storage.read_connection(session_id, thread_id, "") as connection:
+        assert connection.execute("SELECT turn_id,turn_ordinal,root_input_item_id FROM turn_records ORDER BY turn_ordinal").fetchall()[:3] == original
+        assert {row[0] for row in connection.execute("SELECT job_id FROM executions WHERE outcome='cancelled'")} == cancelled_jobs
+        assert connection.execute("SELECT COUNT(*) FROM model_calls").fetchone() == (0,)
+    # 冷 owner 读取同一 cancelled 历史，重启队列不会再次派发已撤回输入。
+    with RolloutCheckpointSaver(sessions_dir=sessions_dir) as restarted:
+        owner = build_message_service(sessions_dir, checkpointer=restarted, workspace_root=tmp_path)
+        restored = JobService(
+            job_event_bus=JobEventBus(), job_executor=_DummyJobExecutor(),
+            session_lifecycle_guard=session_lifecycle_guard, pending_request_store=store,
+            input_owner=owner, terminal_status_writer=restarted,
+        )
+        assert (await restored.list_pending(session_id)).requests == [] and restored._jobs == {}
+        history = RolloutHistoryReader(RolloutContextReader(restarted._storage)).load(
+            session_id, thread_id, TurnHistoryLoadRequest(direction="tail", turns=4),
+        )
+        cancelled = [turn for turn in history.items if turn.status == "cancelled"]
+        assert [turn.user_messages[0].content for turn in cancelled] == ["queued", "tail", "also queued"]
 
 
 @pytest.mark.asyncio

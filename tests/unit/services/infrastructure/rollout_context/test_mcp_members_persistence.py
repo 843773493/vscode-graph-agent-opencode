@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from contextlib import closing
@@ -14,7 +13,6 @@ from langchain_core.tools import StructuredTool
 from app.core.lifecycle import LifetimeScope
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.identity.detail_ref import DetailRef
-from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.mcp import McpCatalogOwner, McpCatalogResourcePublisher
 from app.services.infrastructure.mcp.catalog_activation import (
@@ -29,8 +27,8 @@ from app.services.infrastructure.rollout_context.activation.store import (
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_context.fork.full_copy.operation import (
-    full_rollout_copy,
+from tests.integration.backend.sessions.itemized_projection_helpers import (
+    copy_rollout_snapshot,
 )
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     registry_db as registry_db,  # noqa: PLC0414 - 正式 SQLite fixture 按当前测试路径隔离
@@ -77,30 +75,6 @@ async def catalog_runtime(catalog_workspace):
         await owner.shutdown()
 
 
-def _mapped_snapshot(
-    source: ResourceActivationSnapshotRef,
-    *, target_thread: str,
-    mappings: dict[tuple[str, str], str],
-) -> dict[str, object]:
-    """仅平移原 owner 已登记的 operational refs，其余完整字段必须精确保留。"""
-    expected = source.to_dict()
-    expected.update({
-        "owner_session_id":TARGET_SESSION_ID,
-        "owner_thread_id":target_thread,
-        "activation_snapshot_id":mappings["activation_snapshot", source.activation_snapshot_id],
-        "execution_id":mappings["execution", source.execution_id],
-        "turn_id":None if source.turn_id is None else mappings["turn", source.turn_id],
-        "model_call_id":None if source.model_call_id is None else mappings["model_call", source.model_call_id],
-        "parent_execution_snapshot_id":None if source.parent is None else mappings[
-            "activation_snapshot", source.parent.activation_snapshot_id
-        ],
-    })
-    for binding in expected["bindings"]:
-        for field in ("snapshot_ref", "detail_ref"):
-            if binding[field] is not None:
-                source_key = canonical_json_bytes(binding[field]).decode("utf-8")
-                binding[field] = json.loads(mappings["detail", source_key])
-    return expected
 
 
 @pytest.mark.asyncio
@@ -132,7 +106,9 @@ async def test_complete_mixed_members_survive_five_real_persistence_paths(
         member.to_dict() for member in published.members
     ]
     assert parent_row.source_lineage_ref.sources == tuple(sorted(published.source_lineage))
-    assert saver.read_resource_activation_payload(frozen, parent_row) == published.payload
+    assert saver.read_resource_activation_payload(
+        frozen, parent_row, storage_owner=(session, thread),
+    ) == published.payload
     assembly = saver.get_context_assembly(session, thread, assembly_id=result["assembly_id"])
     sealed = saver.load_sealed_resource_activation(
         session, thread_id=thread, assembly_id=assembly.assembly_id,
@@ -163,35 +139,20 @@ async def test_complete_mixed_members_survive_five_real_persistence_paths(
         assert restored.to_dict() == frozen.to_dict()
         assert restored.parent.to_dict() == frozen.parent.to_dict()
         session_bundle_factory(restarted._storage.storage.sessions_dir, TARGET_SESSION_ID)
-        _view, fork_id = full_rollout_copy(
-            restarted._storage, source_session_id=session, target_session_id=TARGET_SESSION_ID,
-            source_checkpoint_id=None, relationship="detached", checkpoint_ns="",
-            detail_capability=restarted._detail_store.fork_detail_capability(),
-            source_snapshot_sha256=hashlib.sha256(canonical_json_bytes(frozen.to_dict())).hexdigest(),
-        )
+        await copy_rollout_snapshot(restarted, session, TARGET_SESSION_ID)
         target_thread = restarted._storage.storage.main_thread_id(TARGET_SESSION_ID)
         target_path = restarted._storage.storage.index_path(TARGET_SESSION_ID, "", thread_id=target_thread)
         with closing(sqlite3.connect(target_path)) as connection:
-            mappings = {
-                (kind, source):target
-                for kind, source, target in connection.execute(
-                    "SELECT entity_type,source_local_id,target_local_id FROM fork_identity_mappings WHERE fork_id=?",
-                    (fork_id,),
-                )
-            }
             target_assembly = connection.execute(
                 "SELECT assembly_id,plan_hash,request_hash FROM context_assemblies WHERE assembly_id=?",
-                (mappings["assembly", assembly.assembly_id],),
+                (assembly.assembly_id,),
             ).fetchone()
         forked = restarted.load_sealed_resource_activation(
             TARGET_SESSION_ID, thread_id=target_thread, assembly_id=target_assembly[0],
             plan_hash=target_assembly[1], request_hash=target_assembly[2],
         )
-        expected = _mapped_snapshot(frozen, target_thread=target_thread, mappings=mappings)
-        assert forked.to_dict() == expected
-        assert forked.parent.to_dict() == _mapped_snapshot(
-            frozen.parent, target_thread=target_thread, mappings=mappings,
-        )
+        assert forked.to_dict() == frozen.to_dict()
+        assert forked.parent.to_dict() == frozen.parent.to_dict()
         assert forked.bindings_hash == frozen.bindings_hash
         assert forked.activation_provenance_hash == frozen.activation_provenance_hash
         assert lineage_manifest(forked) == lineage_manifest(frozen)
@@ -199,8 +160,12 @@ async def test_complete_mixed_members_survive_five_real_persistence_paths(
             assert target_binding.members == source_binding.members
             assert target_binding.source_lineage_ref == source_binding.source_lineage_ref
             assert target_binding.source_lineage_digest == source_binding.source_lineage_digest
-            assert restarted.read_resource_activation_payload(forked, target_binding) == (
-                saver.read_resource_activation_payload(frozen, source_binding)
+            assert restarted.read_resource_activation_payload(
+                forked, target_binding, storage_owner=(TARGET_SESSION_ID, target_thread),
+            ) == (
+                saver.read_resource_activation_payload(
+                    frozen, source_binding, storage_owner=(session, thread),
+                )
             )
 
         with closing(sqlite3.connect(target_path)) as connection:
@@ -235,7 +200,7 @@ async def test_complete_mixed_members_survive_five_real_persistence_paths(
             TARGET_SESSION_ID, thread_id=target_thread, assembly_id=target_assembly[0],
             plan_hash=target_assembly[1], request_hash=target_assembly[2],
         )
-        assert retained.to_dict() == expected
+        assert retained.to_dict() == forked.to_dict()
         assert retained.parent.to_dict() == forked.parent.to_dict()
         assert restarted.load_sealed_resource_activation(
             session, thread_id=thread, assembly_id=assembly.assembly_id,

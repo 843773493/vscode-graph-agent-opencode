@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { GatewayExtensionResourceEntry } from "../../../hooks/gatewayExtensions/useGatewayExtensionResources";
+import type { ResourceThreadRef } from "../../../api/workspaceResources";
 import GatewayExtensionResourcePanel from "./GatewayExtensionResourcePanel";
 import WarmConfirmProvider from "../../shell/WarmConfirmProvider";
 import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
@@ -71,7 +72,20 @@ function entry(): GatewayExtensionResourceEntry {
   };
 }
 
-function panelProps() {
+const MAIN_THREAD: ResourceThreadRef = {
+  session_id: "ses_gateway_extension",
+  thread_id: "thr_main",
+};
+
+function panelProps(overrides: {
+  entries?: GatewayExtensionResourceEntry[];
+  currentOwner?: { workspaceId: string; thread: ResourceThreadRef } | null;
+  onOwnerControl?: (
+    entry: GatewayExtensionResourceEntry,
+    action: "promote" | "attach" | "detach",
+    thread?: ResourceThreadRef,
+  ) => Promise<void>;
+} = {}) {
   return {
     entries: [entry()],
     errors: [],
@@ -83,17 +97,18 @@ function panelProps() {
     onControl: async () => {},
     onOpen: () => {},
     onCreateReplacement: async () => {},
-    currentSession: null,
+    currentOwner: null,
     onOwnerControl: async () => {},
+    ...overrides,
   };
 }
 
-function renderPanel(): ReactTestRenderer {
+function renderPanel(props = panelProps()): ReactTestRenderer {
   let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(
       <WarmConfirmProvider>
-        <GatewayExtensionResourcePanel {...panelProps()} />
+        <GatewayExtensionResourcePanel {...props} />
       </WarmConfirmProvider>,
     );
   });
@@ -160,6 +175,74 @@ describe("扩展窗口资源面板复制反馈", () => {
     expect(text).toContain("权限被拒绝");
     // 失败提示必须以 error 类呈现，而不是伪装成成功状态。
     expect(text).toContain("is-error");
+    renderer.unmount();
+  });
+});
+
+describe("扩展窗口资源关联 owner", () => {
+  test("关联时传递完整的当前主线程 pair", async () => {
+    const calls: Array<[GatewayExtensionResourceEntry, string, ResourceThreadRef | undefined]> = [];
+    const props = panelProps({
+      currentOwner: { workspaceId: "workspace_test", thread: MAIN_THREAD },
+      onOwnerControl: async (resourceEntry, action, thread) => {
+        calls.push([resourceEntry, action, thread]);
+      },
+    });
+    const renderer = renderPanel(props);
+    const chevron = renderer.root.findAll(
+      (node) => typeof node.props.className === "string"
+        && node.props.className.split(" ").includes("resource-tree-chevron"),
+    )[0]!;
+    act(() => chevron.props.onClick());
+    const attach = renderer.root.findByProps({ children: "关联当前会话" });
+    await act(async () => {
+      attach.props.onClick();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.[1]).toBe("attach");
+    expect(calls[0]?.[2]).toEqual(MAIN_THREAD);
+    renderer.unmount();
+  });
+
+  test("相同 thread_id 的其它 session 关联不吞掉完整 pair 的关联入口", () => {
+    const resourceEntry = entry();
+    resourceEntry.resource.thread_associations = [{
+      session_id: "ses_other",
+      thread_id: MAIN_THREAD.thread_id,
+    }];
+    const renderer = renderPanel(panelProps({
+      entries: [resourceEntry],
+      currentOwner: { workspaceId: "workspace_test", thread: MAIN_THREAD },
+    }));
+    const chevron = renderer.root.findAll(
+      (node) => typeof node.props.className === "string"
+        && node.props.className.split(" ").includes("resource-tree-chevron"),
+    )[0]!;
+    act(() => chevron.props.onClick());
+    expect(renderer.root.findAllByProps({ children: "关联当前会话" })).toHaveLength(1);
+    renderer.unmount();
+  });
+
+  test("同一 session 的 child 已关联时，main thread 精确 pair 仍可关联", () => {
+    const resourceEntry = entry();
+    resourceEntry.resource.retention_scope = "thread";
+    resourceEntry.resource.source_thread = MAIN_THREAD;
+    resourceEntry.resource.thread_associations = [{
+      session_id: MAIN_THREAD.session_id,
+      thread_id: "thr_existing_child",
+    }];
+    const renderer = renderPanel(panelProps({
+      entries: [resourceEntry],
+      currentOwner: { workspaceId: "workspace_test", thread: MAIN_THREAD },
+    }));
+    const chevron = renderer.root.findAll(
+      (node) => typeof node.props.className === "string"
+        && node.props.className.split(" ").includes("resource-tree-chevron"),
+    )[0]!;
+    act(() => chevron.props.onClick());
+    expect(renderer.root.findAllByProps({ children: "关联当前会话" })).toHaveLength(1);
     renderer.unmount();
   });
 });

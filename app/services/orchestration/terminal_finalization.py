@@ -209,6 +209,12 @@ class StreamTerminalStateMixin:
         for tool_call_id in tuple(self._tool_call_ids_by_index.values()):
             if tool_call_id in self._completed_tool_call_ids:
                 continue
+            if tool_call_id not in self._tool_call_model_call_ids:
+                raise RuntimeError(
+                    "待中断 tool call 缺少 emitting model-call 归属: "
+                    f"tool_call_id={tool_call_id}"
+                )
+            model_call_id = self._tool_call_model_call_ids[tool_call_id]
             tool_invocation_id = self._tool_invocation_id_for(tool_call_id)
             arguments_complete = self._tool_call_arguments_complete.get(
                 tool_call_id,
@@ -225,7 +231,7 @@ class StreamTerminalStateMixin:
                         "completion_reason": "user_interrupt",
                         "arguments_complete": arguments_complete,
                     },
-                    model_call_id=self.current_model_call_id,
+                    model_call_id=model_call_id,
                     tool_call_id=tool_call_id,
                     tool_invocation_id=tool_invocation_id,
                 )

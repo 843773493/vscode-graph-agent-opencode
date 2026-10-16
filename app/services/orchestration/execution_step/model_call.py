@@ -12,6 +12,7 @@ from langchain_core.messages import AIMessage
 from app.core.execution_admission_context import require_current_execution_admission
 from app.domain.itemized.enums import CanonicalItemStatus, SemanticKind
 from app.domain.itemized.execution_admission import ExecutionAdmission
+from app.domain.itemized.runtime import ModelCallRecord
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -134,6 +135,14 @@ class StepModelCallAdapter:
         )
         self._previous_model_call_id = model_call_id
         return execution_id
+
+    def restore_pending_model_call(self, model_call: ModelCallRecord, assembly_id: str) -> None:
+        """恢复原登记镜像，后续模型调用仍经唯一 register/outcome owner。"""
+        if (model_call.session_id, model_call.thread_id) != (self._session_id, self._thread_id):
+            raise RuntimeError("恢复 ModelCall owner 与当前 Step 不一致")
+        self._previous_model_call_id = model_call.model_call_id
+        self._last_assembly_id = assembly_id
+        self._last_execution_id = model_call.execution_id
 
     def converge_final_message(self, message: AIMessage) -> None:
         """在最终 checkpoint message 落盘前提交同一份 terminal item。"""

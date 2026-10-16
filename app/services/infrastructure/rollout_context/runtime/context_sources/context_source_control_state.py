@@ -41,9 +41,14 @@ class ContextSourceOwnerKey:
 class ContextSourceControlState:
     """一个 tracked registration 的持久化控制状态。
 
-    ``state_revision`` 是该 registration 在 owner 侧的单调持久化版本：每次
-    真正改变控制字段的写入都会 +1，用于乐观冲突检测，并为将来的
-    checkpoint-versioned 恢复保留稳定的状态锚点。
+    ``binding_revision`` 表示目录/来源绑定版本；``latest_revision`` 是来源
+    owner 最近观察到的候选内容版本，不保证已经对上下文可见。
+    ``latest_visible_committed_revision`` 是成功 seal 事务推进、由 receipt
+    确认的上下文可见版本；晚到的 desired 版本仍可处于 pending。内容 revision
+    允许 source owner 显式给出非空字符串，不承诺递增数字或固定 hash。
+
+    ``state_revision`` 是持久控制行的 CAS 版本：每次真正改变控制字段的
+    写入都会 +1，用于乐观冲突检测，与绑定版本和内容版本分开。
     """
 
     owner: ContextSourceOwnerKey

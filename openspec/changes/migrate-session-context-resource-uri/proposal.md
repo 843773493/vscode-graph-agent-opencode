@@ -19,6 +19,8 @@
 
 - **入口收口补充**：send/read/wait消费同一target-main解析结果；send/wait支持的裸Session ID与完整会话URI固定同一目标，read_context保留ResourceIdentity、URI、scope的结构化输入，并验证规范资源引用指向同一目标。保留Job/Turn/通信ID selector；不新增裸字符串read入口，领域对象不转成文件目录。分段编码只引用统一寻址owner；会话产物文件迁移归独立文件工具change。
 
+- **Fork入口补充（2026-10-13）**：消费统一owner登记的集合/Session/Thread模板，来源、目标容器URI和创建意图分开，view/revision/item结构化传递；支持本地/跨端新Session main或新child的精确寻址。fork业务、资源复用和两端导出/创建授权归itemized及各资源owner，不改变既有send/read/wait的main-thread合同。
+
 ## Capabilities
 
 ### New Capabilities

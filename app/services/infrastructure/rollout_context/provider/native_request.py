@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 from app.domain.itemized.epoch.seal_binding import ContextSealBinding
 from app.domain.itemized.hashing import canonical_json_bytes
@@ -13,7 +13,7 @@ from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.infrastructure.rollout_context.provider.toolset_request_bridge import (
     project_tool_set_ref,
 )
-from app.services.mapping.itemized.carrier_dedup import superseded_stream_item_ids
+from app.services.mapping.itemized.carrier_dedup import superseded_item_ids
 from app.services.mapping.itemized.prefix_frames import project_sealed_prefix
 from app.services.mapping.itemized.provider_request import (
     project_runtime_notice_content,
@@ -34,6 +34,42 @@ _NON_TEXT_BLOCK_TYPES = frozenset(
         "redacted_thinking",
     }
 )
+
+
+def _summary_message_inputs(body: object) -> list[dict[str, object]]:
+    """候选正文来自同一封存 frame；直接按其声明角色编码 Responses。"""
+    if not isinstance(body, Mapping) or set(body) != {"message", "item_ids", "retry_source_item_ids"}:
+        raise ValueError("source-mismatch: 摘要候选缺少精确 message manifest")
+    message = body["message"]
+    if not isinstance(message, Mapping) or not isinstance(message.get("data"), Mapping):
+        raise TypeError("source-mismatch: 摘要候选 message 非法")
+    data = message["data"]
+    role = {"human": "user", "ai": "assistant", "tool": "tool"}.get(message.get("type"))
+    if role is None:
+        raise ValueError("source-mismatch: 摘要候选 message role 非法")
+    if role == "tool":
+        call_id = data.get("tool_call_id")
+        if not isinstance(call_id, str) or not call_id:
+            raise ValueError("source-mismatch: 摘要候选 tool result 缺少 call_id")
+        output = data.get("content")
+        return [{"type": "function_call_output", "call_id": call_id,
+                 "output": output if isinstance(output, str) else canonical_json_bytes(output).decode("utf-8")}]
+    if role == "user":
+        projection = project_user_message_content(data.get("content"), target_format="responses", image_input=True)
+        if projection["diagnostics"]:
+            raise ValueError("source-mismatch: 摘要候选 user content 无法编码")
+        content = projection["content"]
+        content = _text_blocks(content, role=role) if isinstance(content, str) else content
+    else:
+        content = _text_blocks(data.get("content"), role=role)
+    inputs = [{"role": role, "content": content}] if content else []
+    if role == "assistant":
+        for call in data.get("tool_calls", []):
+            if not isinstance(call, Mapping) or not call.get("id") or not call.get("name"):
+                raise ValueError("source-mismatch: 摘要候选 tool call identity 非法")
+            inputs.append({"type": "function_call", "call_id": call["id"], "name": call["name"],
+                           "arguments": canonical_json_bytes(call["args"]).decode("utf-8")})
+    return inputs
 
 
 def _text_blocks(body: object, *, role: str) -> list[dict[str, object]]:
@@ -77,6 +113,7 @@ def project_native_request(
     items: Sequence[CanonicalItemRecord],
     request_only_content: Mapping[str, object],
     *, seal_binding: ContextSealBinding | None = None,
+    attachment_projector: Callable[[object], object] | None = None,
 ) -> dict[str, object]:
     """selection 顺序和来源留在诊断中，request 只携带原生协议字段。"""
     if plan.plan_state != "sealed" or plan.assembly_id is None:
@@ -89,7 +126,7 @@ def project_native_request(
     # stream sink 与 checkpoint sink 都保存了同一次模型调用的 canonical 事实，
     # 但 provider wire 只能发送一个 carrier；否则历史会出现两份工具调用/输出。
     # 同一规则必须和 LangChain/history 投影保持一致。
-    superseded_ids = superseded_stream_item_ids(items)
+    superseded_ids = superseded_item_ids(items)
     inputs: list[dict[str, object]] = []
     tools: list[dict[str, object]] = []
     losses: list[str] = []
@@ -128,8 +165,22 @@ def project_native_request(
         start = len(inputs)
         if ref.ref_type == "request_only":
             body = resolve_selected_request_body(plan, entry, request_only_content)
-            role = "user" if seal_binding is not None else "system"
-            inputs.append({"role": role, "content": _text_blocks(body, role=role)})
+            source = (
+                next(
+                    source
+                    for source in plan.contributions
+                    if source.contribution_id == entry.contribution_id
+                )
+                if entry.contribution_id is not None
+                else None
+            )
+            if source is not None and source.contribution_kind == "model_message":
+                if plan.selection_policy != "summary_candidate":
+                    raise ValueError("source-mismatch: model_message 只能属于摘要候选")
+                inputs.extend(_summary_message_inputs(body))
+            else:
+                role = "user" if seal_binding is not None else "system"
+                inputs.append({"role": role, "content": _text_blocks(body, role=role)})
         else:
             item = resolve_selected_item(entry, by_id)
             if item.item_id in superseded_ids:
@@ -139,7 +190,7 @@ def project_native_request(
                 role = "user" if kind == "user_input" else "assistant"
                 if role == "user":
                     projection = project_user_message_content(
-                        item.payload,
+                        attachment_projector(item.payload) if attachment_projector is not None else item.payload,
                         target_format="responses",
                         image_input=True,
                     )
@@ -200,6 +251,8 @@ def project_native_request(
                         else canonical_json_bytes(output).decode("utf-8"),
                     }
                 )
+            elif kind == "compaction_summary":
+                inputs.append({"role": "user", "content": _text_blocks(item.payload["summary"], role="user")})
             elif kind == "runtime_notice":
                 if item.wire_role != "user":
                     raise ValueError(

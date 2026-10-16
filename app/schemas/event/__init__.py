@@ -12,6 +12,7 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
 
+from app.domain.itemized.execution_admission import ExecutionBinding
 from app.schemas.internal_v2.pending_request import DeliveryBoundary, DeliveryPolicy
 
 # assistant 文本流的载体闭集：``markdown`` 为可见正文，``reasoning`` 为思考内容。
@@ -26,7 +27,7 @@ class BaseEvent(BaseModel):
     job_id: str
     step_id: str | None = None
     agent_id: str | None = None
-    timestamp: datetime
+    timestamp: datetime = Field(description="事件的带时区时间，接口按 ISO8601 表达；默认 EventFactory 在取得发布锁前构造事件时取当前 UTC，显式传入的合法偏移保留，非持久化或广播完成时刻。")
 
     @model_validator(mode="after")
     def validate_part_identity(self) -> Self:
@@ -50,6 +51,7 @@ class MessageCreatedPayload(BaseModel):
     """MESSAGE_CREATED 事件的 payload"""
     message_id: str
     session_id: str
+    thread_id: str = Field(min_length=1)
     role: str
     content: str
     attachments: list[Any] = Field(default_factory=list)
@@ -66,6 +68,9 @@ class JobCreatedPayload(BaseModel):
     attachments: list[Any] = Field(default_factory=list)
     message_created_at: datetime | None = None
     message_metadata: dict[str, Any] = Field(default_factory=dict)
+    execution_binding: ExecutionBinding | None = None
+    gateway_id: str | None = None
+    request_id: str | None = None
     delivery_policy: DeliveryPolicy | None = None
     enqueue_sequence: int | None = Field(default=None, ge=1)
     queue_snapshot_version: int = Field(default=0, ge=0)

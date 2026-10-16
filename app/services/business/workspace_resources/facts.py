@@ -9,11 +9,33 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from app.abstractions.workspace_resources import ResourceKind, ResourceSnapshot
+from app.schemas.internal_v2.workspace_resource import WorkspaceResourceDTO
 from app.services.business.workspace_resources.records import OwnedResourceRecord
+from app.services.infrastructure.resource_platform.virtual_resources.values import (
+    ResourceTargetFacts,
+    RuntimeResourceTargetFacts,
+)
 
 ORPHAN_GRACE_SECONDS = 30 * 60
 STOPPED_STATUSES = frozenset({"completed", "exited", "terminated", "closed", "deleted"})
 _REAL_PATH = re.compile(r"""(?:^|[\s'"=(])(?:/[^\s'"]+|[A-Za-z]:[\\/][^\s'"]+)""")
+
+
+def resource_target_facts(snapshot: ResourceSnapshot) -> ResourceTargetFacts:
+    """统一目标检查只消费原 owner 已发布的完整投影。"""
+    resource = WorkspaceResourceDTO.from_owner(snapshot)
+    return ResourceTargetFacts(
+        resource_uri=None, storage_domain_id=resource.workspace_id, lifecycle="runtime",
+        available=resource.reconciliation_status == "verified" and "attach" in resource.available_actions,
+        runtime=RuntimeResourceTargetFacts(
+            kind=resource.kind, resource_id=resource.resource_id, workspace_id=resource.workspace_id,
+            retention_scope=resource.retention_scope,
+            source_thread=(resource.source_thread.session_id, resource.source_thread.thread_id),
+            thread_associations=tuple((ref.session_id, ref.thread_id) for ref in resource.thread_associations),
+            owner_revision=resource.owner_revision, status=resource.status,
+            reconciliation_status=resource.reconciliation_status, available_actions=tuple(resource.available_actions),
+        ),
+    )
 
 
 def validate_runtime(runtime: ResourceSnapshot, workspace_id: str) -> None:
@@ -85,7 +107,9 @@ def resource_projection(
     if record.reconciliation_status == "verified" and record.status not in {
         "deleted", "deleting", "stopping", "creating",
     }:
-        actions = ["attach", "detach", "stop", "delete"]
+        actions = ["attach", "detach", "stop"]
+        if not record.thread_associations:
+            actions.append("delete")
         if record.retention_scope == "thread":
             actions.insert(0, "promote")
     reclaim_at = (

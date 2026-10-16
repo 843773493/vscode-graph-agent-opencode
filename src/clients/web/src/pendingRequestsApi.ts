@@ -3,11 +3,10 @@ import type {
   APIResponse,
   PendingRequestList,
   PendingRequestPolicyUpdateRequest,
-  PendingRequestUpdateRequest,
 } from "./types/backend";
 
 
-export async function listPendingRequests(
+export async function listMainThreadPendingRequests(
   port: number,
   sessionId: string,
   workspaceId?: string | null,
@@ -16,28 +15,8 @@ export async function listPendingRequests(
   return unwrapApiData(
     await requestJson<APIResponse<PendingRequestList>>(
       port,
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/pending-requests`,
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/main-thread/pending-requests`,
       { headers: workspaceHeader(workspaceId), signal },
-    ),
-  );
-}
-
-export async function updatePendingRequest(
-  port: number,
-  sessionId: string,
-  messageId: string,
-  payload: PendingRequestUpdateRequest,
-  workspaceId?: string | null,
-): Promise<PendingRequestList> {
-  return unwrapApiData(
-    await requestJson<APIResponse<PendingRequestList>>(
-      port,
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/pending-requests/${encodeURIComponent(messageId)}`,
-      {
-        method: "PATCH",
-        headers: workspaceHeader(workspaceId),
-        body: JSON.stringify(payload),
-      },
     ),
   );
 }

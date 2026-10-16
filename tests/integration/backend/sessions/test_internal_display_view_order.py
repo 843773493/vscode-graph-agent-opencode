@@ -364,7 +364,7 @@ def _seed_rollout(
                     session_id,
                     thread_id,
                     spec.turn_id,
-                    spec.turn_id,
+                    f"history-job:{spec.turn_id}",
                     f"idempotency-{spec.turn_id}",
                     "sha256:jcs:v1:" + "a" * 64,
                     f"ingress-{spec.turn_id}",
@@ -392,8 +392,8 @@ def _seed_rollout(
                 "INSERT INTO turn_records "
                 "(turn_id, session_id, thread_id, turn_ordinal, source_branch_id, "
                 "root_input_item_id, root_input_item_sequence, accepted_ingress_id, "
-                "acceptance_idempotency_key, initial_execution_id, status, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?)",
+                "acceptance_idempotency_key, initial_execution_id, last_execution_id, status, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?)",
                 (
                     spec.turn_id,
                     session_id,
@@ -404,6 +404,7 @@ def _seed_rollout(
                     spec.item_sequence,
                     f"ingress-{spec.turn_id}",
                     f"acceptance-{spec.turn_id}",
+                    execution_id,
                     execution_id,
                     _CREATED_AT,
                     _UPDATED_AT,
@@ -455,9 +456,9 @@ def _seed_rollout(
         ]
         connection.executemany(
             "INSERT INTO context_view_items "
-            "(view_id, item_id, logical_item_ordinal, visible, source_kind) "
-            "VALUES (?, ?, ?, 1, ?)",
-            memberships,
+            "(view_id, item_id, logical_item_ordinal, visible, source_kind, context_selected, context_ordinal) "
+            "VALUES (?, ?, ?, 1, ?, 1, ?)",
+            [(*row, row[2]) for row in memberships],
         )
         connection.commit()
 
@@ -468,10 +469,11 @@ def _initialize_rollout_fixture(
     session_id: str,
     thread_id: str,
 ) -> None:
-    """只通过正式 rollout DDL 建立最小 v2 root view 与 owner meta。"""
+    """通过正式写锁与 rollout DDL 建立最小 v2 root view 与 owner meta。"""
     root = storage.storage.root(session_id, thread_id=thread_id)
-    root.mkdir(parents=True)
-    storage.storage.jsonl_path(session_id, thread_id=thread_id).touch()
+    with storage.storage._lock(thread_id, "", session_id=session_id):
+        root.mkdir(parents=True)
+        storage.storage.jsonl_path(session_id, thread_id=thread_id).touch()
     connection = sqlite3.connect(storage.storage.index_path(session_id, thread_id=thread_id))
     try:
         initialize_rollout_schema(connection, initialize_activation=create_resource_activation_schema)
@@ -549,11 +551,15 @@ def _load_history(
     request: TurnHistoryLoadRequest,
 ) -> TurnHistoryPageDTO:
     """走 RolloutHistoryReader 的 session/thread 显式 owner 读取入口。"""
-    return environment.history_reader.load(
+    page = environment.history_reader.load(
         environment.session_id,
         environment.thread_id,
         request,
     )
+    for turn in page.items:
+        assert turn.job_id == f"history-job:{turn.turn_id}"
+        assert turn.job_id != turn.turn_id
+    return page
 
 
 def _internal_display_identities(page: TurnHistoryPageDTO) -> list[tuple[int, int]]:
@@ -570,10 +576,7 @@ def test_internal_history_page_enforces_256_item_limit_with_real_jsonl_reads(
 ) -> None:
     environment = history_environment(turns=(), displays=_display_specs(257))
     with environment.open_snapshot() as snapshot:
-        chain = environment.context_reader.resolve_chain(
-            snapshot,
-            snapshot.manifest.committed_sequence,
-        )
+        chain = environment.context_reader.resolve_chain(snapshot)
         bounds = environment.context_reader.read_history_snapshot_bounds(
             snapshot, chain
         )
@@ -584,6 +587,7 @@ def test_internal_history_page_enforces_256_item_limit_with_real_jsonl_reads(
             anchor_logical_item_ordinal=None,
             lower_logical_item_ordinal=None,
             upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
+            snapshot_upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
             limit=256,
         )
         assert len(page.entries) == 256
@@ -598,6 +602,7 @@ def test_internal_history_page_enforces_256_item_limit_with_real_jsonl_reads(
                 anchor_logical_item_ordinal=None,
                 lower_logical_item_ordinal=None,
                 upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
+                snapshot_upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
                 limit=257,
             )
 
@@ -607,10 +612,7 @@ def test_internal_history_page_at_256_item_boundary_has_no_more(
 ) -> None:
     environment = history_environment(turns=(), displays=_display_specs(256))
     with environment.open_snapshot() as snapshot:
-        chain = environment.context_reader.resolve_chain(
-            snapshot,
-            snapshot.manifest.committed_sequence,
-        )
+        chain = environment.context_reader.resolve_chain(snapshot)
         bounds = environment.context_reader.read_history_snapshot_bounds(snapshot, chain)
         page = environment.context_reader.read_internal_execution_history_page(
             snapshot,
@@ -619,6 +621,7 @@ def test_internal_history_page_at_256_item_boundary_has_no_more(
             anchor_logical_item_ordinal=None,
             lower_logical_item_ordinal=None,
             upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
+            snapshot_upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
             limit=256,
         )
 
@@ -857,10 +860,7 @@ def test_around_without_internal_entries_keeps_full_view_item_fence(
         displays=(),
     )
     with environment.open_snapshot() as snapshot:
-        chain = environment.context_reader.resolve_chain(
-            snapshot,
-            snapshot.manifest.committed_sequence,
-        )
+        chain = environment.context_reader.resolve_chain(snapshot)
         bounds = environment.context_reader.read_history_snapshot_bounds(snapshot, chain)
 
     page = _load_history(
@@ -951,10 +951,7 @@ def test_head_and_tail_read_the_same_view_turn_and_internal_boundaries(
 ) -> None:
     environment = history_environment()
     with environment.open_snapshot() as snapshot:
-        chain = environment.context_reader.resolve_chain(
-            snapshot,
-            snapshot.manifest.committed_sequence,
-        )
+        chain = environment.context_reader.resolve_chain(snapshot)
         bounds = environment.context_reader.read_history_snapshot_bounds(
             snapshot, chain
         )
@@ -981,6 +978,7 @@ def test_head_and_tail_read_the_same_view_turn_and_internal_boundaries(
             anchor_logical_item_ordinal=None,
             lower_logical_item_ordinal=None,
             upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
+            snapshot_upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
             limit=1,
         )
         tail_internal = environment.context_reader.read_internal_execution_history_page(
@@ -990,6 +988,7 @@ def test_head_and_tail_read_the_same_view_turn_and_internal_boundaries(
             anchor_logical_item_ordinal=None,
             lower_logical_item_ordinal=None,
             upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
+            snapshot_upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
             limit=1,
         )
 
@@ -1077,10 +1076,7 @@ def test_internal_history_rejects_snapshot_from_another_owner(
 ) -> None:
     environment = history_environment()
     with environment.open_snapshot() as snapshot:
-        chain = environment.context_reader.resolve_chain(
-            snapshot,
-            snapshot.manifest.committed_sequence,
-        )
+        chain = environment.context_reader.resolve_chain(snapshot)
         wrong_owner = replace(
             snapshot,
             **{
@@ -1101,6 +1097,7 @@ def test_internal_history_rejects_snapshot_from_another_owner(
                 anchor_logical_item_ordinal=None,
                 lower_logical_item_ordinal=None,
                 upper_logical_item_ordinal=upper_logical_item_ordinal,
+                snapshot_upper_logical_item_ordinal=upper_logical_item_ordinal,
                 limit=1,
             )
 
@@ -1159,7 +1156,7 @@ def test_context_view_order_integrity_rejects_corrupt_coordinates(
             )
         else:
             rows = connection.execute(
-                "SELECT view_id, item_id, logical_item_ordinal, visible, source_kind "
+                "SELECT view_id, item_id, logical_item_ordinal, visible, source_kind, context_selected, context_ordinal "
                 "FROM context_view_items"
             ).fetchall()
             connection.execute(
@@ -1169,10 +1166,11 @@ def test_context_view_order_integrity_rejects_corrupt_coordinates(
                 "CREATE TABLE context_view_items "
                 "(view_id TEXT NOT NULL, item_id TEXT NOT NULL, "
                 "logical_item_ordinal INTEGER NOT NULL, visible INTEGER NOT NULL, "
-                "source_kind TEXT NOT NULL, PRIMARY KEY(view_id, item_id))"
+                "source_kind TEXT NOT NULL, context_selected INTEGER NOT NULL, context_ordinal INTEGER, "
+                "PRIMARY KEY(view_id, item_id))"
             )
             connection.executemany(
-                "INSERT INTO context_view_items VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO context_view_items VALUES (?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
             connection.execute("DROP TABLE context_view_items_unique")
@@ -1184,10 +1182,7 @@ def test_context_view_order_integrity_rejects_corrupt_coordinates(
         connection.commit()
 
     with environment.open_snapshot() as snapshot:
-        chain = environment.context_reader.resolve_chain(
-            snapshot,
-            snapshot.manifest.committed_sequence,
-        )
+        chain = environment.context_reader.resolve_chain(snapshot)
         with pytest.raises(
             RuntimeError, match="projection integrity|logical_item_ordinal 重复"
         ):

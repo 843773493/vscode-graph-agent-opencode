@@ -84,6 +84,7 @@ async def run_agent_with_retries(
     requires_session_question_reply: bool,
     question_source: GlobalThreadAddress | None,
     question_communication_id: str | None,
+    resume_from_checkpoint: bool = False,
 ) -> StepAgentRetryResult:
 
     def retry_input(*, message_id: str, kind: str, reminder: str, metadata: dict[str, object]) -> object:
@@ -115,7 +116,7 @@ async def run_agent_with_retries(
     while True:
         stream_result = await process_agent_event_stream(
             agent=agent,
-            input_payload={"messages": next_input_messages},
+            input_payload=None if resume_from_checkpoint else {"messages": next_input_messages},
             config=config,
             session_id=session_id,
             job_id=job_id,
@@ -133,6 +134,8 @@ async def run_agent_with_retries(
             model_timeout_seconds=model_timeout_seconds,
             progress_reporter=progress_reporter,
         )
+        resume_from_checkpoint = False
+        config["configurable"].pop("checkpoint_id", None)
         turn_token_usage_parts.append(stream_result.token_usage)
         final_text = stream_result.final_text
         successful_tool_calls.extend(stream_result.successful_tool_calls)

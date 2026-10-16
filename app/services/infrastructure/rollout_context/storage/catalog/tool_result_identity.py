@@ -1,7 +1,4 @@
-"""tool_result canonical identity 归一与等价比较（由 item catalog 写入复用）。
-
-函数逐字平移，仅为让 items.py 只保留 canonical item 的写入与定位读取。
-"""
+"""tool_result 的调用身份与 request/attempt 载体正文比较。"""
 
 from __future__ import annotations
 
@@ -9,6 +6,7 @@ import json
 import sqlite3
 from collections.abc import Mapping
 
+from app.abstractions.turn_terminal_status import tool_result_content_text
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.domain.itemized.records import (
@@ -46,23 +44,29 @@ def _comparable_tool_result_payload(
         for key, item in value.items()
         if key not in {"result_id", "tool_invocation_id", "tool_attempt_id"}
     }
-    # 固定信封和信封内部目标工具可能各自产生一个 checkpoint shadow。
-    # 两者共享一次 provider tool call，信封层 name 与内部目标 name 不同，
-    # 但只要正文相同就必须复用同一个 canonical tool_result，不能制造重复
-    # item；非信封工具仍保留 name 参与正文一致性校验。
-    names = {
-        str(name)
-        for name in (value.get("name"), comparable.get("name"))
-        if isinstance(name, str) and name
-    }
-    if "invoke_extension_tool" in names:
-        comparable.pop("name", None)
     tool_call_id = comparable.get("tool_call_id")
     if isinstance(tool_call_id, str) and tool_call_id:
         comparable["tool_call_id"] = provider_tool_call_id(
             item.projection_identity, tool_call_id
         )
     return comparable
+
+
+def _same_tool_result_payload(first: CanonicalItemRecord, second: CanonicalItemRecord) -> bool:
+    left, right = _comparable_tool_result_payload(first), _comparable_tool_result_payload(second)
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        return left == right
+    # 信封与实际目标工具保留各自名称；只在同一调用的两个载体间比较正文。
+    if "invoke_extension_tool" in {left.get("name"), right.get("name")}:
+        left.pop("name", None)
+        right.pop("name", None)
+    first_request = first.projection_identity is not None and first.projection_identity.projection_message_id is not None
+    second_request = second.projection_identity is not None and second.projection_identity.projection_message_id is not None
+    if first_request != second_request:
+        # attempt 的既有合同是文本，request 的原始结构化块不改写。
+        left["content"] = tool_result_content_text(left.get("content"))
+        right["content"] = tool_result_content_text(right.get("content"))
+    return left == right
 
 
 def _tool_result_identity(
@@ -126,13 +130,18 @@ def _select_existing_tool_result(
             continue
         if incoming_scope is not None and _tool_result_scope(identity) == incoming_scope:
             scoped_candidates.append(row)
-    preferred_candidates = scoped_candidates
-    for preferred in (preferred_candidates,):
-        if len(preferred) == 1:
-            return preferred[0]
-        if len(preferred) > 1:
-            raise RuntimeError(
-                "tool_result canonical identity 歧义，拒绝猜测复用: "
-                f"turn_id={item.turn_id}, tool_call_id={raw_tool_call_id}"
-            )
+    incoming_request = item.projection_identity.projection_message_id is not None
+    same_carrier = [
+        row for row in scoped_candidates
+        if (parse_item_projection_manifest(json.loads(row[5]))["projection_identity"].get("projection_message_id") is not None) == incoming_request
+    ]
+    # P 与 A 是同一结果的不同投影；复用时优先同类，不能把已有合法双载体当歧义。
+    preferred = same_carrier or scoped_candidates
+    if len(preferred) == 1:
+        return preferred[0]
+    if len(preferred) > 1:
+        raise RuntimeError(
+            "tool_result canonical identity 歧义，拒绝猜测复用: "
+            f"turn_id={item.turn_id}, tool_call_id={raw_tool_call_id}"
+        )
     return None

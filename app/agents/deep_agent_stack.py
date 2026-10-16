@@ -6,7 +6,6 @@ from typing import Any
 
 from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware.filesystem import FilesystemMiddleware
-from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from deepagents.middleware.permissions import FilesystemPermission
 from langchain.agents.middleware import (
     HumanInTheLoopMiddleware,
@@ -192,6 +191,15 @@ def build_deep_agent_middleware(
     if filesystem_middleware.tools:
         deepagent_middleware.append(filesystem_middleware)
 
+    # after_model 按注册顺序逆序执行；压缩 continuation 必须先跳到下一
+    # model task，避免审批 hook 再次处理历史中已经执行完毕的工具调用。
+    if custom_tool_confirmation_names:
+        deepagent_middleware.append(
+            CustomToolConfirmationMiddleware(custom_tool_confirmation_names)
+        )
+    if interrupt_on:
+        deepagent_middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
+
     deepagent_middleware.extend(
         [
             *_build_summarization_middleware(
@@ -201,7 +209,6 @@ def build_deep_agent_middleware(
                 not in resolved_tool_denylist,
                 compaction_preflight=compaction_preflight,
             ),
-            PatchToolCallsMiddleware(),
             StructuredToolCallMiddleware(),
         ]
     )
@@ -215,13 +222,6 @@ def build_deep_agent_middleware(
 
     for middleware_item in deepagent_middleware:
         _filter_middleware_tools(middleware_item, resolved_tool_denylist)
-
-    if custom_tool_confirmation_names:
-        deepagent_middleware.append(
-            CustomToolConfirmationMiddleware(custom_tool_confirmation_names)
-        )
-    if interrupt_on:
-        deepagent_middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
 
     if context_source_manager is not None:
         for producer_id, source_name, content, policy_key, present in (

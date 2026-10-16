@@ -175,7 +175,11 @@ class SourceLifecycleMixin:
                 if frozen is None and (supplier is None or descriptor.resource_uri is None):
                     if descriptor.source_kind == "skill":
                         snapshot = self._skill_activation_snapshot
-                        binding = snapshot.entries.get(state.name) if snapshot is not None else None
+                        binding = (
+                            snapshot.sources.get(descriptor.resource_uri)
+                            if snapshot is not None and descriptor.resource_uri is not None
+                            else snapshot.entries.get(state.name) if snapshot is not None else None
+                        )
                         if binding is not None and (
                             descriptor.resource_uri is None or descriptor.resource_uri == binding.display_uri
                         ):

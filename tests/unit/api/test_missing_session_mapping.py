@@ -80,7 +80,9 @@ class _FakeCompactionService:
 class _FakeSessionResourceService:
     """control 在会话缺失时先由 SessionService.get 抛 NotFoundError。"""
 
-    async def control(self, *, session_id: str, kind: str, resource_id: str, action: str):
+    async def control(
+        self, *, session_id: str, kind: str, resource_id: str, action: str, operation_id: str,
+    ):
         raise NotFoundError(f"Session {session_id} not found")
 
 

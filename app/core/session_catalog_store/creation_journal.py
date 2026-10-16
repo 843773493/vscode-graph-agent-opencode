@@ -10,8 +10,10 @@ preimage 冲突）、冻结父 revision、CAS 发布（唯一可见性提交点�
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
+from dataclasses import asdict, fields
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -20,11 +22,13 @@ if TYPE_CHECKING:
 
 from app.core.identifier import (
     create_prefixed_id,
+    create_uuid_hex,
     to_epoch_ms,
     uuid7_datetime_from_hex,
 )
 from app.core.session_catalog_store._schema import _CREATION_RECORD_COLUMNS
 from app.core.session_catalog_store.contracts import (
+    ForkSourceCaptureRecord,
     SessionCatalogNode,
     SessionCreationPurpose,
     SessionCreationRecord,
@@ -34,10 +38,247 @@ from app.core.session_catalog_store.validators import (
     validate_storage_relative_locator,
     validate_thread_id,
 )
+from app.core.session_control_primitives import CONTROL_DATABASE_NAME
+from app.core.session_control_store import SessionControlStore
 
 
 class CreationJournalMixin:
     """creation record journal 方法族（唯一实现点）。"""
+
+    @staticmethod
+    def _fork_capture_from_row(row: sqlite3.Row) -> ForkSourceCaptureRecord:
+        """只投影冻结 capture；目标本地释放状态不进入来源前像。"""
+        return ForkSourceCaptureRecord(**{field.name: row[field.name] for field in fields(ForkSourceCaptureRecord)})
+
+    def reserve_fork_source_capture(
+        self, *, copy_operation_id: str, creation_key: str | None,
+        source_session_id: str, source_thread_id: str,
+        target_session_id: str, target_thread_id: str,
+        request: dict[str, object], fork_id: str | None = None,
+        materialization_id: str | None = None,
+        snapshot_id: str | None = None, source_external: bool = False, target_external: bool = False,
+    ) -> ForkSourceCaptureRecord:
+        """capture 前一次性冻结 operation、snapshot locator 和物化 identity。"""
+        validate_session_id(source_session_id)
+        validate_session_id(target_session_id)
+        validate_thread_id(source_thread_id)
+        validate_thread_id(target_thread_id)
+        self._validate_idempotency_key(copy_operation_id)
+        if source_external and target_external:
+            raise ValueError("fork capture 必须由实际 source 或 target owner 登记")
+        if snapshot_id is not None:
+            if not isinstance(snapshot_id, str):
+                raise TypeError("fork snapshot_id 必须是字符串")
+            if len(snapshot_id) != 32 or any(char not in "0123456789abcdef" for char in snapshot_id):
+                raise ValueError(f"fork snapshot_id 必须是 32 位小写 hex artifact ID: {snapshot_id!r}")
+        request_json = json.dumps(request, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        preimage_hash = hashlib.sha256(request_json.encode()).hexdigest()
+        with self.write_transaction() as connection:
+            existing = connection.execute(
+                "SELECT * FROM fork_source_captures WHERE copy_operation_id = ?",
+                (copy_operation_id,),
+            ).fetchone()
+            expected = (creation_key, source_session_id, source_thread_id,
+                        target_session_id, target_thread_id, request_json, preimage_hash)
+            if existing is not None:
+                if tuple(existing[key] for key in (
+                    "creation_key", "source_session_id", "source_thread_id", "target_session_id",
+                    "target_thread_id", "request_json", "preimage_hash",
+                )) != expected or (fork_id is not None and existing["fork_id"] != fork_id) or (
+                    materialization_id is not None and existing["materialization_id"] != materialization_id
+                ) or (
+                    snapshot_id is not None and existing["snapshot_id"] != snapshot_id
+                ):
+                    raise RuntimeError("fork source capture 同 operation 不同 preimage，拒绝改绑")
+                return self._fork_capture_from_row(existing)
+            source_node = None if source_external else self._require_node(connection, source_session_id)
+            if source_node is not None and source_node["kind"] != "session":
+                raise RuntimeError("fork capture source 必须是 Session")
+            if source_node is not None and source_node["state"] != "active":
+                # lifecycle gate 依赖 catalog 的 ID 校验；在运行期拒绝分支取错误类型。
+                from app.core.session_lifecycle_gate import SessionDeletionPendingError
+
+                raise SessionDeletionPendingError(
+                    "session_deletion_pending: source 正在删除，拒绝新 fork capture: "
+                    f"session_id={source_session_id}, state={source_node['state']}"
+                )
+            if creation_key is not None and not target_external:
+                if request["creation_kind"] == "new_child_thread":
+                    target = self._require_node(connection, target_session_id)
+                    if target["kind"] != "session" or target["state"] != "active" or not request["creation_preimage_hash"]:
+                        raise RuntimeError("fork capture 与 preparing child 的 owner Session 不一致")
+                else:
+                    creation = self._fetch_creation_record(connection, creation_key)
+                    if creation is None or (creation["session_id"], creation["main_thread_id"], creation["state"]) != (
+                        target_session_id, target_thread_id, "preparing",
+                    ):
+                        raise RuntimeError("fork capture 与冻结 prepared creation 不一致")
+            snapshot_id = snapshot_id or create_uuid_hex(namespace="fork/source_snapshot")
+            connection.execute(
+                "INSERT INTO fork_source_captures (copy_operation_id, creation_key, source_session_id, "
+                "source_thread_id, target_session_id, target_thread_id, snapshot_id, "
+                "snapshot_relative_locator, fork_id, materialization_id, request_json, preimage_hash, state, export_release_state) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', ?)",
+                (copy_operation_id, *expected[:5], snapshot_id,
+                 f"fork-source-captures/{snapshot_id}",
+                 fork_id or create_uuid_hex(namespace="fork/identity"),
+                 materialization_id or create_uuid_hex(namespace="fork/materialization"),
+                  request_json, preimage_hash, "pending" if source_external else None),
+            )
+            return self._fork_capture_from_row(connection.execute(
+                "SELECT * FROM fork_source_captures WHERE copy_operation_id = ?", (copy_operation_id,),
+            ).fetchone())
+
+    def get_fork_source_capture(
+        self, *, copy_operation_id: str | None = None, creation_key: str | None = None,
+        fork_id: str | None = None,
+    ) -> ForkSourceCaptureRecord | None:
+        """只按已知 operation/creation/fork key 定点读取，不扫描物理目录。"""
+        selectors = {"copy_operation_id": copy_operation_id, "creation_key": creation_key, "fork_id": fork_id}
+        selected = [(field, value) for field, value in selectors.items() if value is not None]
+        if len(selected) != 1:
+            raise ValueError("fork capture 必须且只能给定一个稳定 key")
+        field, value = selected[0]
+        with self.read_transaction() as connection:
+            row = connection.execute(f"SELECT * FROM fork_source_captures WHERE {field} = ?", (value,)).fetchone()
+        return None if row is None else self._fork_capture_from_row(row)
+
+    def get_fork_export_release(self, copy_operation_id: str) -> tuple[str | None, str | None]:
+        """读取目标清理 owner 的本地 delivery 事实，不读取来源。"""
+        with self.read_transaction() as connection:
+            row = connection.execute(
+                "SELECT export_release_state, export_release_error FROM fork_source_captures WHERE copy_operation_id = ?",
+                (copy_operation_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(copy_operation_id)
+        return row[0], row[1]
+
+    def list_pending_fork_export_captures(self) -> list[ForkSourceCaptureRecord]:
+        """只枚举本地已终结且尚无真实释放回执的远端 capture。"""
+        with self.read_transaction() as connection:
+            rows = connection.execute(
+                "SELECT * FROM fork_source_captures WHERE export_release_state = 'pending' "
+                "AND state IN ('materialized', 'aborted') ORDER BY copy_operation_id",
+            ).fetchall()
+        return [self._fork_capture_from_row(row) for row in rows]
+
+    def record_fork_export_release(
+        self, record: ForkSourceCaptureRecord, *, receipt: ForkSourceCaptureRecord | None = None,
+        error: str | None = None,
+    ) -> None:
+        """仅真实终结回执可确认；未知结果保存原错误并继续 pending。"""
+        if (receipt is None) == (error is None):
+            raise ValueError("fork export release 必须给定真实回执或原错误")
+        receipt_json = None
+        if receipt is not None:
+            expected = asdict(record)
+            actual = asdict(receipt)
+            # partial import 中止时 target 未承诺 hash；来源回执保留自身已冻结 hash。
+            hashes = {"snapshot_sha256", "marker_sha256"}
+            if any(actual[key] != value for key, value in expected.items() if key not in {"state", "abort_reason", *hashes}) or any(
+                expected[key] is not None and actual[key] != expected[key] for key in hashes
+            ):
+                raise RuntimeError("fork export release 回执冻结 identity 不一致")
+            if record.state not in {"materialized", "aborted"} or receipt.state != record.state:
+                raise RuntimeError("fork export release 回执与目标终态不一致")
+            if record.state == "materialized" and any(expected[key] is None for key in hashes):
+                raise RuntimeError("fork export release materialized 目标缺少冻结 hash")
+            receipt_json = json.dumps(actual, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        with self.write_transaction() as connection:
+            row = connection.execute(
+                "SELECT preimage_hash, state, export_release_state, export_release_receipt_json "
+                "FROM fork_source_captures WHERE copy_operation_id = ?", (record.copy_operation_id,),
+            ).fetchone()
+            if row is None or row["preimage_hash"] != record.preimage_hash or row["state"] != record.state:
+                raise RuntimeError("fork export release 目标 journal identity/终态冲突")
+            if row["export_release_state"] is None:
+                raise RuntimeError("fork export release 只能由远端 capture 的目标 owner 登记")
+            if row["export_release_state"] == "confirmed":
+                if receipt_json is not None and receipt_json != row["export_release_receipt_json"]:
+                    raise RuntimeError("fork export release 已确认回执冲突")
+                return
+            connection.execute(
+                "UPDATE fork_source_captures SET export_release_state = ?, export_release_error = ?, "
+                "export_release_receipt_json = ? WHERE copy_operation_id = ? AND export_release_state = 'pending'",
+                ("confirmed" if receipt is not None else "pending", error, receipt_json, record.copy_operation_id),
+            )
+
+    def mark_fork_source_captured(
+        self, record: ForkSourceCaptureRecord, *, snapshot_sha256: str, marker_sha256: str,
+    ) -> ForkSourceCaptureRecord:
+        """marker durability 完成且 source guard 释放后 CAS；不得换 source revision。"""
+        with self.write_transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM fork_source_captures WHERE copy_operation_id = ?", (record.copy_operation_id,),
+            ).fetchone()
+            if row is None or row["preimage_hash"] != record.preimage_hash:
+                raise RuntimeError("fork source capture CAS preimage 不一致")
+            if row["state"] in {"source_captured", "materialized"}:
+                if (row["snapshot_sha256"], row["marker_sha256"]) != (snapshot_sha256, marker_sha256):
+                    raise RuntimeError("fork source captured hash 冲突")
+            elif row["state"] == "preparing":
+                connection.execute(
+                    "UPDATE fork_source_captures SET state = 'source_captured', snapshot_sha256 = ?, "
+                    "marker_sha256 = ? WHERE copy_operation_id = ? AND state = 'preparing'",
+                    (snapshot_sha256, marker_sha256, record.copy_operation_id),
+                )
+            else:
+                raise RuntimeError("fork source capture 已终结，拒绝恢复")
+            return self._fork_capture_from_row(connection.execute(
+                "SELECT * FROM fork_source_captures WHERE copy_operation_id = ?", (record.copy_operation_id,),
+            ).fetchone())
+
+    def finish_fork_source_capture(self, copy_operation_id: str, *, state: str, reason: str | None = None) -> None:
+        """物化完成或定点回滚终结 capture；终态不得被迟到 callback 复活。"""
+        if state not in {"materialized", "aborted"}:
+            raise ValueError("fork source capture 终态非法")
+        with self.write_transaction() as connection:
+            row = connection.execute("SELECT state FROM fork_source_captures WHERE copy_operation_id = ?", (copy_operation_id,)).fetchone()
+            if row is None:
+                raise KeyError(copy_operation_id)
+            if row[0] == state:
+                return
+            if row[0] in {"materialized", "aborted"} or (state == "materialized" and row[0] != "source_captured"):
+                raise RuntimeError("fork source capture 终态 CAS 冲突")
+            connection.execute("UPDATE fork_source_captures SET state = ?, abort_reason = ? WHERE copy_operation_id = ?", (state, reason, copy_operation_id))
+
+    def abort_unpublished_fork_capture(self, copy_operation_id: str, *, reason: str, child_creation_preimage_hash: str | None = None) -> None:
+        """调用方持有目标 gate；先关闭 child 控制库，再提交 workspace 事务。"""
+        capture = self.get_fork_source_capture(copy_operation_id=copy_operation_id)
+        if capture is None or capture.creation_key is None:
+            raise RuntimeError("fork abort 缺少 prepared creation capability")
+        request = json.loads(capture.request_json)
+        child_owner = None
+        if request["creation_kind"] == "new_child_thread":
+            if not child_creation_preimage_hash or request["creation_preimage_hash"] != child_creation_preimage_hash:
+                raise RuntimeError("fork child abort 缺少原 creation preimage")
+            child_owner = self.get_node(capture.target_session_id)
+            if child_owner.kind != "session" or child_owner.state not in {"active", "deleting"}:
+                raise RuntimeError("fork child abort 的 owner Session 已隔离或丢失")
+            control = SessionControlStore(self.resolve_session_locator(child_owner.storage_relative_locator) / CONTROL_DATABASE_NAME, read_only=True)
+            try:
+                creation = control.get_thread_creation_record(capture.creation_key)
+                if (creation.purpose, creation.state, creation.child_thread_id, creation.preimage_hash) != (
+                    "fork", "preparing", capture.target_thread_id, child_creation_preimage_hash,
+                ):
+                    raise RuntimeError("fork child target 已发布/终结或创建 owner 冲突，禁止 capture abort")
+            finally:
+                control.close()
+        with self.write_transaction() as connection:
+            row = connection.execute("SELECT creation_key,request_json,target_session_id FROM fork_source_captures WHERE copy_operation_id = ?", (copy_operation_id,)).fetchone()
+            if row is None or tuple(row) != (capture.creation_key, capture.request_json, capture.target_session_id):
+                raise RuntimeError("fork abort 的冻结 capture 已变化")
+            if child_owner is not None:
+                target = self._require_node(connection, row[2])
+                if (target["kind"] != "session" or target["state"] not in {"active", "deleting"}
+                    or target["storage_relative_locator"] != child_owner.storage_relative_locator):
+                    raise RuntimeError("fork child abort 的 owner Session 已隔离或丢失")
+            else:
+                creation = self._fetch_creation_record(connection, row[0])
+                if creation is None or creation["state"] != "preparing":
+                    raise RuntimeError("fork target 已发布/终结，禁止 capture abort")
+            connection.execute("UPDATE fork_source_captures SET state = 'aborted', abort_reason = ? WHERE copy_operation_id = ?", (reason, copy_operation_id))
 
     @staticmethod
     def _fetch_creation_record(
@@ -91,6 +332,7 @@ class CreationJournalMixin:
             ),
             record_created_at=str(row["record_created_at"]),
             record_updated_at=str(row["record_updated_at"]),
+            fork_delivery_request_id=row["fork_delivery_request_id"],
         )
 
     @staticmethod
@@ -115,6 +357,7 @@ class CreationJournalMixin:
         session_metadata_json: str,
         preimage_hash: str,
         request_intent_json: str | None = None,
+        fork_delivery_request_id: str | None = None,
         created_at: datetime | None = None,
         session_id: str | None = None,
         main_thread_id: str | None = None,
@@ -147,6 +390,11 @@ class CreationJournalMixin:
             raise ValueError(f"title_source 非法: {title_source!r}")
         if purpose not in ("normal", "context_fork"):
             raise ValueError(f"session creation purpose 非法: {purpose!r}")
+        if fork_delivery_request_id is not None:
+            if not isinstance(fork_delivery_request_id, str):
+                raise TypeError("fork delivery request_id 必须是字符串")
+            if purpose != "context_fork" or not fork_delivery_request_id.strip():
+                raise ValueError("只有 context fork 可以冻结非空 delivery request_id")
         if not isinstance(session_metadata_json, str) or not session_metadata_json:
             raise ValueError("session_metadata_json 不能为空")
         try:
@@ -316,9 +564,9 @@ class CreationJournalMixin:
                 "graph_id, graph_revision, graph_schema_hash, capability_profile_hash, "
                 "session_metadata_json, request_intent_json, created_at, storage_relative_locator, "
                 "preimage_hash, parent_revision, state, abort_reason, "
-                "record_created_at, record_updated_at) "
+                "record_created_at, record_updated_at, fork_delivery_request_id) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', "
-                "NULL, ?, ?)",
+                "NULL, ?, ?, ?)",
                 (
                     idempotency_key,
                     allocated_session_id,
@@ -337,6 +585,7 @@ class CreationJournalMixin:
                     parent_revision,
                     record_created_at,
                     record_created_at,
+                    fork_delivery_request_id,
                 ),
             )
             row = self._fetch_creation_record(connection, idempotency_key)
@@ -378,6 +627,17 @@ class CreationJournalMixin:
                 (workspace_id, purpose),
             ).fetchall()
             return [self._creation_record_from_row(row) for row in rows]
+
+    def list_published_fork_creation_records(self) -> list[SessionCreationRecord]:
+        """只由权威 catalog 枚举公开 active fork；删除中的 target 归删除 owner。"""
+        with self.read_transaction() as connection:
+            rows = connection.execute(
+                "SELECT c.* FROM session_creation_records c JOIN nodes n ON n.node_id = c.session_id "
+                "JOIN fork_source_captures f ON f.creation_key = c.session_creation_idempotency_key "
+                "WHERE c.purpose = 'context_fork' AND c.state = 'published' AND n.state = 'active' "
+                "AND f.state = 'materialized' ORDER BY c.session_creation_idempotency_key"
+            ).fetchall()
+        return [self._creation_record_from_row(row) for row in rows]
 
     def publish_creation_record(
         self,

@@ -7,10 +7,31 @@ replaces 关系，不解释 extensions，也不从消息 ID、正文或相邻记
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import Protocol
 
 from app.domain.itemized.enums import SemanticKind
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ItemProvenanceRelation,
+)
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.domain.itemized.records import CanonicalItemRecord
+
+
+class ContentCarrier(Protocol):
+    """内容择一所需的无正文事实；canonical item 与 catalog 镜像共用。"""
+
+    @property
+    def item_id(self) -> str: ...
+
+    @property
+    def semantic_kind(self) -> str: ...
+
+    @property
+    def projection_identity(self) -> ItemProjectionIdentity | None: ...
+
+    @property
+    def provenance_relations(self) -> tuple[ItemProvenanceRelation, ...]: ...
 
 
 def projection_message_group_id(item: CanonicalItemRecord) -> str:
@@ -34,9 +55,12 @@ def normalized_tool_call_ids(item: CanonicalItemRecord) -> set[str]:
     }
 
 
-def _scope(item: CanonicalItemRecord) -> str | None:
+_ToolCarrierScope = tuple[str | None, str]
+
+
+def _scope(item: CanonicalItemRecord) -> _ToolCarrierScope | None:
     identity = item.projection_identity
-    return identity.model_call_id if identity is not None else None
+    return (item.turn_id, identity.model_call_id) if identity is not None and identity.model_call_id is not None else None
 
 
 def _checkpoint_carrier(item: CanonicalItemRecord) -> bool:
@@ -50,21 +74,16 @@ def _result_call_id(item: CanonicalItemRecord) -> str:
     return provider_tool_call_id(item.projection_identity, raw_id)
 
 
-def _confirmed_result(item: CanonicalItemRecord) -> bool:
-    evidence = item.tool_result_evidence
-    return evidence.execution_confirmed if evidence is not None else item.payload["execution_confirmed"]
-
-
-def superseded_stream_tool_group_item_ids(
+def superseded_tool_group_item_ids(
     items: Sequence[CanonicalItemRecord],
 ) -> set[str]:
-    """同一真实 model-call 的完整 checkpoint 工具组替代 stream 工具组。"""
-    groups: dict[tuple[str | None, str], list[CanonicalItemRecord]] = {}
+    """同 Turn/model-call 的工具组整体择一，保留声明先于真实 terminal 的顺序。"""
+    groups: dict[tuple[_ToolCarrierScope | None, str], list[CanonicalItemRecord]] = {}
     for item in items:
         if item.semantic_kind in {SemanticKind.REASONING, SemanticKind.TOOL_CALL}:
             groups.setdefault((_scope(item), item.message_group_id or item.item_id), []).append(item)
-    checkpoint: dict[tuple[str, frozenset[str]], list[CanonicalItemRecord]] = {}
-    stream: dict[tuple[str, frozenset[str]], list[CanonicalItemRecord]] = {}
+    checkpoint: dict[tuple[_ToolCarrierScope, frozenset[str]], list[CanonicalItemRecord]] = {}
+    stream: dict[tuple[_ToolCarrierScope, frozenset[str]], list[CanonicalItemRecord]] = {}
     for group in groups.values():
         call_ids = frozenset(
             call_id
@@ -86,35 +105,38 @@ def superseded_stream_tool_group_item_ids(
             raise ValueError(f"provider 工具 carrier 身份不唯一: {key}")
         registry[key] = group
 
+    positions = {item.item_id: index for index, item in enumerate(items)}
+    results = [item for item in items if item.semantic_kind == SemanticKind.TOOL_RESULT and item.status == "completed"]
+    checkpoint_results = {(_scope(item), _result_call_id(item)): positions[item.item_id]
+                          for item in results if _checkpoint_carrier(item)}
+    stream_results = {(_scope(item), _result_call_id(item))
+                      for item in results if not _checkpoint_carrier(item)}
     superseded: set[str] = set()
-    replaced_calls: set[tuple[str, str]] = set()
+    prefer_checkpoint: set[tuple[_ToolCarrierScope, str]] = set()
+    prefer_stream: set[tuple[_ToolCarrierScope, str]] = set()
     for key in checkpoint.keys() & stream.keys():
-        superseded.update(item.item_id for item in stream[key])
-        replaced_calls.update((key[0], call_id) for call_id in key[1])
-    confirmed_results = {
-        (_scope(item), _result_call_id(item))
-        for item in items
-        if item.semantic_kind == SemanticKind.TOOL_RESULT
-        and _checkpoint_carrier(item) and _confirmed_result(item)
-    }
-    for item in items:
-        if item.semantic_kind != SemanticKind.TOOL_RESULT or _checkpoint_carrier(item):
-            continue
-        scope = _scope(item)
-        call = (scope, _result_call_id(item))
-        if scope is None or call not in replaced_calls:
-            continue
-        if call not in confirmed_results:
-            raise ValueError(
-                "provider projection 过滤将删除唯一的 tool_result carrier: "
-                f"model_call_id={scope}, item_id={item.item_id}"
-            )
-        superseded.add(item.item_id)
+        calls = {(key[0], call_id) for call_id in key[1]}
+        last_call = max(positions[item.item_id] for item in checkpoint[key])
+        if all(checkpoint_results.get(call, -1) > last_call for call in calls):
+            superseded.update(item.item_id for item in stream[key])
+            prefer_checkpoint.update(calls)
+        else:
+            # 尚未闭合的 checkpoint shadow 不替代原声明；不能把较晚的
+            # call 挪到结果之前，也不能为配对补造工具结果。
+            superseded.update(item.item_id for item in checkpoint[key])
+            prefer_stream.update(calls)
+    for item in results:
+        call = (_scope(item), _result_call_id(item))
+        if (
+            not _checkpoint_carrier(item) and call in prefer_checkpoint
+            or _checkpoint_carrier(item) and call in prefer_stream and call in stream_results
+        ):
+            superseded.add(item.item_id)
     return superseded
 
 
 def superseded_stream_content_item_ids(
-    items: Sequence[CanonicalItemRecord],
+    items: Sequence[ContentCarrier],
 ) -> set[str]:
     """只按显式 part 三元坐标与替代目标排除旧 assistant carrier。"""
     parts: set[tuple[str, str, int]] = set()
@@ -151,6 +173,6 @@ def superseded_stream_content_item_ids(
     }
 
 
-def superseded_stream_item_ids(items: Sequence[CanonicalItemRecord]) -> set[str]:
+def superseded_item_ids(items: Sequence[CanonicalItemRecord]) -> set[str]:
     """返回同一 selection 中必须排除的全部 shadow。"""
-    return superseded_stream_tool_group_item_ids(items) | superseded_stream_content_item_ids(items)
+    return superseded_tool_group_item_ids(items) | superseded_stream_content_item_ids(items)

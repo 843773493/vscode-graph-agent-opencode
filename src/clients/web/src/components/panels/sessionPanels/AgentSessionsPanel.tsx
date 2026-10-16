@@ -7,6 +7,7 @@ import type {
   WebUiSessionSidebarSettings,
 } from '../../../types/backend';
 import type { SessionAttachmentSummary } from '../../../types/frontend';
+import { sessionScopeKey } from '../../../state/session/sessionScope';
 import type { AgentSessionsPreferences } from '../../../state/uiSettings/preferences';
 import {
   stableUiSettingIds,
@@ -229,7 +230,7 @@ export default function AgentSessionsPanel({
       }
       if (
         filterMode === 'attachments' &&
-        !sessionAttachmentSummaries.get(session.session_id)?.count
+        !sessionAttachmentSummaries.get(sessionScopeKey(activeGatewayWorkspaceId, session.session_id))?.count
       ) {
         return false;
       }
@@ -261,6 +262,7 @@ export default function AgentSessionsPanel({
     }
     return matchingSessions;
   }, [
+    activeGatewayWorkspaceId,
     activeSession?.current_agent_id,
     currentSessionId,
     filterMode,
@@ -683,7 +685,7 @@ export default function AgentSessionsPanel({
               sessionFolderDialog.parentNodeId,
               name,
             );
-            onStatusChange(`已创建会话文件夹 ${name}`);
+            onStatusChange(`文件夹 ${name} 已保存本地待同步变更，等待提交`);
           }}
         />
       </div>

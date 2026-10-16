@@ -9,13 +9,15 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.path_utils import get_boxteam_home
-from app.core.resource_uri import parse_resource_uri
+from app.core.resource_uri import parse_resource_uri, skill_display_uri
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservation,
     ResourceObservationChannel,
@@ -29,6 +31,8 @@ from app.services.infrastructure.resource_platform.sources.observed_source impor
     SourceReconciler,
 )
 from app.services.infrastructure.workspace_file_watch_service import (
+    FILE_WATCH_QUEUE_SIZE,
+    WorkspaceFileChange,
     WorkspaceFileChangeBatch,
     WorkspaceFileWatchService,
 )
@@ -48,6 +52,30 @@ class WorkspaceFileResourceSnapshot:
     available: bool
     error: str | None = None
     exists: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceSkillDirectoryEntry:
+    name: str
+    path: Path
+    uri: str
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceSkillDirectorySnapshot:
+    directory_id: str
+    revision: str
+    entries: tuple[WorkspaceSkillDirectoryEntry, ...]
+    available: bool
+    error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _SkillDirectoryHandle:
+    root: Path
+    scope: str
+    scope_id: str | None
+    declared_entries: tuple[str, ...] | None
 
 
 class WorkspaceFileResourceRegistry:
@@ -70,36 +98,51 @@ class WorkspaceFileResourceRegistry:
         self._project_root = (project_root or Path.cwd()).resolve()
         self._watch_service = watch_service
         self._observation_channel = observation_channel or ResourceObservationChannel()
+        self._gateway_skills_root = (get_boxteam_home() / "skills").absolute()
+        self._gateway_home = self._gateway_skills_root.parent
         bundled_root = self._project_root / "resources" / "skills"
-        gateway_root = get_boxteam_home() / "skills"
-        roots = sorted(
+        self._bundled_skills_root = bundled_root.absolute()
+        # 工作区/SKILL 发行资源保持递归监听；Gateway 全局根使用后续的分层浅监听。
+        roots = tuple(sorted(
             {
-                root for root in (self._workspace_root, bundled_root, gateway_root)
+                root for root in (self._workspace_root, self._bundled_skills_root)
                 if root.is_dir()
             },
             key=lambda path: (len(path.parts), str(path)),
-        )
+        ))
         self._watch_roots = tuple(
-            root
-            for root in roots
-            if not any(
-                root.is_relative_to(parent)
-                for parent in roots
-                if parent != root
-            )
+            root for root in roots
+            if not any(root != parent and root.is_relative_to(parent) for parent in roots)
         )
         self._reconciler = SourceReconciler()
         self._paths_by_uri: dict[str, Path] = {}
         self._snapshots: dict[str, WorkspaceFileResourceSnapshot] = {}
+        self._skill_directories: dict[str, _SkillDirectoryHandle] = {}
+        self._skill_directory_snapshots: dict[str, WorkspaceSkillDirectorySnapshot] = {}
+        self._skill_entry_watch_roots: dict[str, tuple[Path, ...]] = {}
         self._task: asyncio.Task[None] | None = None
         self._ready = asyncio.Event()
+        self._watch_filter = self._is_relevant_change
+        self._watch_subscriptions: dict[tuple[Path, bool, int | None], asyncio.Task[None]] = {}
+        self._watch_events: asyncio.Queue[WorkspaceFileChangeBatch] | None = None
+        self._watch_config_changed = asyncio.Event()
 
     def register_file(self, *, uri: str, path: Path, optional: bool = False) -> WorkspaceFileResourceSnapshot:
         parse_resource_uri(uri)
+        existing_path = self._paths_by_uri.get(uri)
+        if existing_path is not None and (
+            path == existing_path or path.absolute() == existing_path
+        ):
+            snapshot = self._snapshots.get(uri)
+            if snapshot is not None and snapshot.revision is not None:
+                handle = self._reconciler._handles[uri]
+                if handle.allow_missing != optional:
+                    raise ValueError(f"来源 handle 绑定冲突: source_id={uri}")
+                return snapshot
+
         resolved_path = path.resolve()
         if not resolved_path.is_file() and resolved_path.exists():
             raise RuntimeError(f"工作区资源路径不是文件: {resolved_path}")
-        existing_path = self._paths_by_uri.get(uri)
         if existing_path is not None and existing_path != resolved_path:
             raise ValueError(f"资源 URI 绑定冲突: uri={uri}")
         allowed_root = self._allowed_root_for(resolved_path)
@@ -156,6 +199,110 @@ class WorkspaceFileResourceRegistry:
         except KeyError as error:
             raise KeyError(f"工作区资源尚未注册: uri={uri}") from error
 
+    def register_skill_directory(
+        self, *, root: Path, scope: str, scope_id: str | None,
+        declared_entries: tuple[str, ...] | None = None,
+    ) -> WorkspaceSkillDirectorySnapshot:
+        """登记固定一层边界；后续发现仅由共享 watcher 的 dirty 事件触发。"""
+        expected_roots = {
+            "workspace": self._workspace_root / ".boxteam" / "skills",
+            "gateway": self._gateway_skills_root,
+            "inline": self._project_root / "resources" / "skills",
+        }
+        if scope not in expected_roots or root.absolute() != expected_roots[scope].absolute():
+            raise ValueError(f"Skill 目录必须是已知固定根: scope={scope} root={root}")
+        identity = json.dumps(
+            [scope, scope_id, declared_entries], ensure_ascii=False, separators=(",", ":"),
+        )
+        directory_id = "skill-directory:" + hashlib.sha256(identity.encode()).hexdigest()
+        handle = _SkillDirectoryHandle(root.absolute(), scope, scope_id, declared_entries)
+        existing = self._skill_directories.get(directory_id)
+        if existing is not None:
+            if existing != handle:
+                raise ValueError(f"Skill 目录绑定冲突: directory_id={directory_id}")
+            return self.skill_directory_snapshot(directory_id)
+        snapshot = self._reconcile_skill_directory(directory_id, handle)
+        # 初次稳定读取完成后才让应用 loop 看见登记边界，避免 worker 编译窗口的半成品。
+        self._skill_directories[directory_id] = handle
+        if self._task is not None:
+            self._watch_config_changed.set()
+        return snapshot
+
+    def skill_directory_snapshot(self, directory_id: str) -> WorkspaceSkillDirectorySnapshot:
+        """只读取已接受的目录事实，不触碰文件系统。"""
+        return self._skill_directory_snapshots[directory_id]
+
+    def _reconcile_skill_directory(
+        self, directory_id: str, handle: _SkillDirectoryHandle,
+    ) -> WorkspaceSkillDirectorySnapshot:
+        previous = self._skill_directory_snapshots.get(directory_id)
+        entries: list[WorkspaceSkillDirectoryEntry] = []
+        entry_watch_roots: list[Path] = []
+        error = None
+        try:
+            root = handle.root
+            if root.is_symlink():
+                raise RuntimeError(f"Skill 根目录不允许 symlink: {root}")
+            # 枚举前复用文件 owner 的域边界；中间段的内部链接可用，越界链接禁止跟随。
+            allowed_root = self._allowed_root_for(root)
+            if not root.resolve().is_relative_to(allowed_root):
+                raise ValueError(f"Skill 固定根越出已知允许根: {root}")
+            if root.exists() and not root.is_dir():
+                raise RuntimeError(f"Skill 根路径不是目录: {root}")
+            if handle.declared_entries is not None:
+                if not root.is_dir():
+                    raise FileNotFoundError(f"发行包内置 Skill 根目录不存在: {root}")
+                candidates = tuple(root / name for name in handle.declared_entries)
+            else:
+                candidates = tuple(sorted(root.iterdir())) if root.is_dir() else ()
+            for entry_dir in candidates:
+                if entry_dir.is_symlink():
+                    raise RuntimeError(f"Skill entry 不允许 symlink: {entry_dir}")
+                if not entry_dir.is_dir():
+                    if handle.declared_entries is not None:
+                        raise FileNotFoundError(f"发行包内置 Skill 组目录不存在: {entry_dir}")
+                    continue
+                entry_watch_roots.append(entry_dir.absolute())
+                path = entry_dir / "SKILL.md"
+                if path.is_symlink():
+                    raise RuntimeError(f"SKILL.md 不允许 symlink: {path}")
+                if not path.is_file():
+                    if handle.declared_entries is not None:
+                        raise FileNotFoundError(f"发行包内置 Skill 组缺少 SKILL.md: {entry_dir}")
+                    continue
+                if handle.scope_id is None:
+                    raise RuntimeError("gateway scope 的 scope_id 需要真实的 gateway_id，当前来源 owner 尚未绑定")
+                uri = skill_display_uri(
+                    scope=handle.scope, scope_id=handle.scope_id, skill_name=entry_dir.name,
+                )
+                if uri in self._paths_by_uri:
+                    self.refresh(uri)
+                else:
+                    self.register_file(uri=uri, path=path)
+                entries.append(WorkspaceSkillDirectoryEntry(entry_dir.name, path, uri))
+        except (OSError, RuntimeError, ValueError) as failure:
+            error = str(failure)
+            logger.error("Skill 固定目录对账失败: directory_id=%s error=%s", directory_id, error)
+        self._skill_entry_watch_roots[directory_id] = tuple(entry_watch_roots)
+        if error is None and previous is not None:
+            current_uris = {entry.uri for entry in entries}
+            for entry in previous.entries:
+                if entry.uri not in current_uris:
+                    self.refresh(entry.uri)
+        revision = "sha256:" + hashlib.sha256(json.dumps(
+            [(entry.name, entry.uri) for entry in entries], ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()).hexdigest()
+        snapshot = WorkspaceSkillDirectorySnapshot(
+            directory_id, revision, tuple(entries), error is None, error,
+        )
+        self._skill_directory_snapshots[directory_id] = snapshot
+        if snapshot != previous:
+            self._observation_channel.notify(ResourceObservation(
+                uri=None, directory_id=directory_id, revision=revision, available=snapshot.available,
+            ))
+        return snapshot
+
 
     def refresh(self, uri: str) -> WorkspaceFileResourceSnapshot:
         if uri not in self._paths_by_uri:
@@ -181,7 +328,7 @@ class WorkspaceFileResourceRegistry:
     def _allowed_root_candidates(self) -> tuple[Path, ...]:
         """当前配置域的允许根候选;按路径深度降序, deepest-match 优先。"""
         bundled_root = (self._project_root / "resources" / "skills").resolve()
-        gateway_root = (get_boxteam_home() / "skills").resolve()
+        gateway_root = self._gateway_skills_root.resolve()
         return tuple(
             sorted(
                 {self._workspace_root, bundled_root, gateway_root},
@@ -253,40 +400,155 @@ class WorkspaceFileResourceRegistry:
             pass
 
     async def _watch_loop(self) -> None:
-        iterator: AsyncIterator[WorkspaceFileChangeBatch] = (
-            self._watch_service.subscribe_roots(
-                self._watch_roots,
-                include_internal_paths=True,
+        self._watch_events = asyncio.Queue(maxsize=FILE_WATCH_QUEUE_SIZE)
+        try:
+            await self._sync_watch_subscriptions()
+            for directory_id, handle in tuple(self._skill_directories.items()):
+                self._reconcile_skill_directory(directory_id, handle)
+            await self._sync_watch_subscriptions()
+            self._ready.set()
+            while True:
+                batch = await self._next_watch_event()
+                if batch is not None:
+                    if batch.error is not None:
+                        logger.error("工作区文件来源监听失败: %s", batch.error)
+                    else:
+                        changed_paths = {Path(change.path) for change in batch.changes}
+                        dirty_directories = tuple(
+                            directory_id for directory_id, handle in tuple(self._skill_directories.items())
+                            if batch.overflow or any(
+                                handle.root.is_relative_to(path)
+                                or (path.is_relative_to(handle.root) and (
+                                    len(path.relative_to(handle.root).parts) <= 1
+                                    or (len(path.relative_to(handle.root).parts) == 2 and path.name == "SKILL.md")
+                                ))
+                                for path in changed_paths
+                            )
+                        )
+                        skill_uris = {
+                            entry.uri for directory_id in dirty_directories
+                            for entry in self.skill_directory_snapshot(directory_id).entries
+                        }
+                        if batch.overflow:
+                            # 只对已登记文件和固定 Skill 一层边界对账。
+                            paths = tuple(self._paths_by_uri.values())
+                        else:
+                            paths = tuple(
+                                path
+                                for path in self._paths_by_uri.values()
+                                if any(path.is_relative_to(changed) for changed in changed_paths)
+                            )
+                        for uri, path in tuple(self._paths_by_uri.items()):
+                            if path in paths and uri not in skill_uris:
+                                self.refresh(uri)
+                        for directory_id in dirty_directories:
+                            self._reconcile_skill_directory(directory_id, self._skill_directories[directory_id])
+                await self._sync_watch_subscriptions()
+        finally:
+            subscriptions = tuple(self._watch_subscriptions.values())
+            self._watch_subscriptions.clear()
+            for task in subscriptions:
+                if not task.done():
+                    task.cancel()
+            if subscriptions:
+                await asyncio.gather(*subscriptions, return_exceptions=True)
+            self._watch_events = None
+
+    async def _next_watch_event(self) -> WorkspaceFileChangeBatch | None:
+        events = self._watch_events
+        if events is None:
+            raise RuntimeError("工作区文件来源 watcher 尚未初始化事件队列")
+        batch_task = asyncio.create_task(events.get())
+        config_task = asyncio.create_task(self._watch_config_changed.wait())
+        try:
+            done, _pending = await asyncio.wait(
+                (batch_task, config_task), return_when=asyncio.FIRST_COMPLETED,
             )
+            if config_task in done:
+                self._watch_config_changed.clear()
+                return batch_task.result() if batch_task in done else None
+            return batch_task.result()
+        finally:
+            pending = tuple(task for task in (batch_task, config_task) if not task.done())
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+
+    async def _sync_watch_subscriptions(self) -> None:
+        """按当前安全边界增删监听；新增目录 ready 后立即重新对账。"""
+        while True:
+            desired = self._desired_watch_roots()
+            desired_keys = {
+                self._subscription_key(root, recursive)
+                for root, recursive in desired
+            }
+            added: list[Path] = []
+            for root, recursive in sorted(
+                desired, key=lambda item: (len(item[0].parts), str(item[0]), item[1]),
+            ):
+                key = self._subscription_key(root, recursive)
+                task = self._watch_subscriptions.get(key)
+                if task is not None and not task.done():
+                    continue
+                if task is not None:
+                    task.result()
+                task = asyncio.create_task(
+                    self._pump_watch_root(root, recursive),
+                    name=f"boxteam-resource-watch:{root}",
+                )
+                self._watch_subscriptions[key] = task
+                await self._watch_service.wait_until_ready(
+                    (root,), recursive=recursive, change_filter=self._watch_filter,
+                )
+                if task.done():
+                    task.result()
+                added.append(root)
+
+            stale_keys = set(self._watch_subscriptions) - desired_keys
+            stale_tasks = [self._watch_subscriptions.pop(key) for key in stale_keys]
+            for task in stale_tasks:
+                if not task.done():
+                    task.cancel()
+            if stale_tasks:
+                await asyncio.gather(*stale_tasks, return_exceptions=True)
+
+            if not added:
+                return
+            affected = tuple(
+                (directory_id, handle)
+                for directory_id, handle in self._skill_directories.items()
+                if any(
+                    root == handle.root
+                    or root.is_relative_to(handle.root)
+                    or handle.root.is_relative_to(root)
+                    for root in added
+                )
+            )
+            for directory_id, handle in affected:
+                self._reconcile_skill_directory(directory_id, handle)
+
+    async def _pump_watch_root(self, root: Path, recursive: bool) -> None:
+        events = self._watch_events
+        if events is None:
+            raise RuntimeError("工作区文件来源 watcher 尚未初始化事件队列")
+        iterator: AsyncIterator[WorkspaceFileChangeBatch] = self._watch_service.subscribe_roots(
+            (root,),
+            include_internal_paths=True,
+            recursive=recursive,
+            change_filter=self._watch_filter,
         )
         next_batch = asyncio.create_task(anext(iterator))
         try:
-            await self._watch_service.wait_until_ready(self._watch_roots)
-            self._ready.set()
+            await self._watch_service.wait_until_ready(
+                (root,), recursive=recursive, change_filter=self._watch_filter,
+            )
             while True:
                 try:
                     batch = await next_batch
                 except StopAsyncIteration:
                     return
-                if batch.error is not None:
-                    logger.error("工作区文件来源监听失败: %s", batch.error)
-                else:
-                    if batch.overflow:
-                        # overflow 只表示监视事件丢失。已登记来源逐个定点刷新，
-                        # 不扫描未登记文件，也不吸收未知目录结构。
-                        paths = tuple(self._paths_by_uri.values())
-                    else:
-                        changed_paths = {
-                            Path(change.path).resolve() for change in batch.changes
-                        }
-                        paths = tuple(
-                            path
-                            for path in self._paths_by_uri.values()
-                            if path in changed_paths
-                        )
-                    for uri, path in tuple(self._paths_by_uri.items()):
-                        if path in paths:
-                            self.refresh(uri)
+                await events.put(batch)
                 next_batch = asyncio.create_task(anext(iterator))
         finally:
             if not next_batch.done():
@@ -296,6 +558,48 @@ class WorkspaceFileResourceRegistry:
                 except asyncio.CancelledError:
                     pass
             await iterator.aclose()
+
+    def _desired_watch_roots(self) -> set[tuple[Path, bool]]:
+        roots = {(root, True) for root in self._watch_roots if root.is_dir()}
+        gateway_directories = tuple(
+            (directory_id, handle)
+            for directory_id, handle in self._skill_directories.items()
+            if handle.scope == "gateway"
+        )
+        if gateway_directories and self._gateway_home.is_dir():
+            roots.add((self._gateway_home, False))
+        for directory_id, handle in gateway_directories:
+            root = handle.root
+            if root.is_dir() and not root.is_symlink():
+                roots.add((root, False))
+                roots.update(
+                    (entry_root, False)
+                    for entry_root in self._skill_entry_watch_roots.get(directory_id, ())
+                    if entry_root.is_dir() and not entry_root.is_symlink()
+                )
+        return roots
+
+    def _subscription_key(self, root: Path, recursive: bool) -> tuple[Path, bool, int | None]:
+        return root.resolve(), recursive, id(self._watch_filter)
+
+    def _is_relevant_change(self, change: WorkspaceFileChange) -> bool:
+        """在 watcher 入队/溢出判断前屏蔽与已登记来源无关的文件事件。"""
+        changed = Path(change.path)
+        if any(
+            path == changed or path.is_relative_to(changed)
+            for path in self._paths_by_uri.values()
+        ):
+            return True
+        for handle in self._skill_directories.values():
+            root = handle.root
+            if root == changed or root.is_relative_to(changed):
+                return True
+            if not changed.is_relative_to(root):
+                continue
+            depth = len(changed.relative_to(root).parts)
+            if depth == 1 or (depth == 2 and changed.name == "SKILL.md"):
+                return True
+        return False
 
 
 __all__ = [

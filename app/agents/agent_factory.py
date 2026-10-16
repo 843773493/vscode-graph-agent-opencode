@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -63,7 +64,6 @@ from app.agents.skill_runtime import (
     PublishedSkillCatalog,
     append_skill_middlewares,
     build_workspace_skill_catalog,
-    resolve_bundled_skill_groups,
 )
 from app.agents.summarization.preflight import NoDurableOwnerCompactionPreflight
 from app.agents.tool_identity import tool_definition_name
@@ -83,9 +83,13 @@ from app.agents.workspace_backend import build_workspace_backend
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.lifecycle import LifetimeScope
+from app.core.phase_observer import observe_phase_sync
 from app.domain.itemized.hashing import sha256_jcs
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
+from app.services.infrastructure.attachment_blob_catalog.store import (
+    StoredAttachmentContent,
+)
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.events.channel_events import (
     ContextSourceEvent,
@@ -128,6 +132,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
     SkillCatalogSnapshotConflict,
+    SkillLoadMode,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.skill_catalog import (
     skill_catalog_from_activation,
@@ -470,21 +475,33 @@ def create_my_deep_agent(
 
     workspace_root = workspace_root.resolve()
 
-    resolved_bundled_skill_groups = resolve_bundled_skill_groups()
-    # SkillCatalog 的语义 revision 由 ResourceRegistry 唯一发布;catalog 是
-    # 不可变快照,重入装配时允许调用方复用已发布实例。
+    # 正式 runtime 复用 compiler 已发布的快照；合成工具面仍走唯一 catalog builder。
     resolved_skills = (
         build_workspace_skill_catalog(
             workspace_root,
             registry=resource_registry,
-            bundled_skill_groups=resolved_bundled_skill_groups,
+            file_registry=workspace_file_resource_registry,
         )
-        if skill_catalog is None
+        if skill_catalog is None and workspace_file_resource_registry is not None
         else skill_catalog
     )
-    backend = build_workspace_backend(
-        workspace_root,
-    )
+    if resolved_skills is None:
+        raise RuntimeError(
+            "构建 Workspace Skill catalog 需要 WorkspaceFileResourceRegistry"
+        )
+    attachment_reader: Callable[[str, str], StoredAttachmentContent] | None = None
+    if owns_thread and isinstance(checkpointer, RolloutCheckpointSaver):
+        def read_attachment(uri_session_id: str, file_id: str) -> StoredAttachmentContent:
+            binding = tool_invocation_context.thread_binding
+            if binding is None or uri_session_id != binding.session_id:
+                raise PermissionError("附件 URI 不属于当前 Agent SessionThread")
+            return checkpointer.read_tool_call_attachment(
+                binding.session_id, thread_id=binding.thread_id, file_id=file_id,
+                tool_call_id=tool_invocation_context.require_tool_call_id(),
+                model_call_id=tool_invocation_context.require_model_call_id(),
+            )
+        attachment_reader = read_attachment
+    backend = build_workspace_backend(workspace_root, attachment_reader=attachment_reader)
     # CSM 的控制状态必须经唯一 RolloutCheckpointSaver/ContextStore owner 持久化。
     # 生产 checkpointer 就是该 owner；其它（测试替身）checkpointer 没有
     # ContextStore，只能退化为纯内存 CSM。合成 session（例如工具清单检查用的
@@ -513,7 +530,7 @@ def create_my_deep_agent(
     # channel 服务（ResourcePlatformBootstrap 落地后应由 bootstrap 持有并注入）。
     # 来源确认事件只在真实 Saver seal 成功后发布。
     context_source_event_sink: Callable[[ContextSourceEvent], None] | None = None
-    if workspace_file_resource_registry is not None:
+    if owns_thread and workspace_file_resource_registry is not None:
         context_source_event_sink = ContextSourceEventPublisher(
             event_service=(
                 workspace_file_resource_registry.observation_channel.event_service
@@ -532,7 +549,7 @@ def create_my_deep_agent(
     # 订阅必须随 agent 生命周期释放；调用方没有提供 scope 时在代码内留 TODO，
     # 不允许在这里新建第二套 dispose 抽象。
     context_source_reactor: ContextSourceReactor | None = None
-    if workspace_file_resource_registry is not None:
+    if owns_thread and workspace_file_resource_registry is not None:
         if reactor_lifetime_scope is None:
             raise RuntimeError(
                 "启用事件驱动 context source reaction 时必须提供 "
@@ -697,10 +714,11 @@ def create_my_deep_agent(
         def enabled_extension(target: BaseTool) -> bool:
             metadata = target.metadata or {}
             origin = "mcp" if metadata.get("mcp_server_id") else "custom"
+            selection = tool_selection_reader.snapshot(agent_id)
             return target.name not in resolved_tool_denylist and _resolve_tool_policy(
                 policy_resolver, target, origin=origin,
-                execution_overrides=resolved_execution_overrides,
-                model_visibility_overrides=resolved_model_visibility_overrides,
+                execution_overrides=selection.execution_overrides,
+                model_visibility_overrides=selection.model_visibility_overrides,
             ).execution_enabled
 
         publisher = McpCatalogResourcePublisher(
@@ -721,7 +739,11 @@ def create_my_deep_agent(
                     tool_call_id=tool_invocation_context.require_tool_call_id(),
                     model_call_id=tool_invocation_context.require_model_call_id(),
                 )
-                frozen_catalog = skill_catalog_from_activation(snapshot, checkpointer.read_resource_activation_payload)
+                frozen_catalog = skill_catalog_from_activation(
+                    snapshot, lambda frozen, binding: checkpointer.read_resource_activation_payload(
+                        frozen, binding, storage_owner=(session_id, thread_id),
+                    ),
+                )
             except (ExtensionCatalogBindingError, ResourceActivationStoreError) as error:
                 raise SkillCatalogSnapshotConflict(
                     "skill-catalog-snapshot-conflict: 原 tool-call 的冻结 Skill 正文无法恢复"
@@ -772,8 +794,19 @@ def create_my_deep_agent(
         and (tools is not None or "skill_load" not in resolved_tool_denylist)
         and not any(getattr(tool, "name", None) == "skill_load" for tool in resolved_tools)
     ):
+        def skill_control_admission(name: str, mode: SkillLoadMode) -> AbstractAsyncContextManager[None]:
+            return session_service.session_context_control_admission(
+                session_id, thread_id,
+                operation_id=tool_invocation_context.require_operation_id("skill_load"),
+                payload={"kind": "skill_load", "name": name, "mode": mode},
+                recovery_ref=tool_invocation_context.require_tool_call_id(),
+            )
+
         _absorb_builtin_tool(
-            create_skill_load_tool(context_source_manager, activation_snapshot_resolver=skill_snapshot_resolver)
+            create_skill_load_tool(
+                context_source_manager, activation_snapshot_resolver=skill_snapshot_resolver,
+                control_admission=skill_control_admission,
+            )
         )
     if enabled_tool_names is not None:
         resolved_tools = [tool for tool in resolved_tools if getattr(tool, "name", "") in enabled_tool_names]
@@ -831,7 +864,9 @@ def create_my_deep_agent(
         execution_owned_skill_catalog=resource_activation is not None,
         compaction_preflight=compaction_preflight,
         context_source_manager=context_source_manager,
-        source_registry=workspace_file_resource_registry,
+        source_registry=(
+            workspace_file_resource_registry if owns_thread else None
+        ),
         context_source_reactor=context_source_reactor,
         resolved_tool_denylist=resolved_tool_denylist,
         interrupt_on=resolved_interrupt_on,
@@ -866,6 +901,11 @@ def create_my_deep_agent(
         context_source_manager=context_source_manager,
         tool_set_producer=tool_set_producer,
         resource_activation=resource_activation,
+        context_read_admission=lambda: session_service.session_read_admission(session_id),
+        context_control_admission=lambda operation_id, payload, recovery_ref: session_service.session_context_control_admission(
+            session_id, thread_id, operation_id=operation_id,
+            payload=payload, recovery_ref=recovery_ref,
+        ),
     )
     deepagent_middleware.append(sealed_dispatch_bridge)
 
@@ -885,7 +925,7 @@ def create_my_deep_agent(
     sealed_dispatch_bridge.bind_graph(agent)
 
     if hasattr(agent, "with_config"):
-        return agent.with_config(
+        runtime_agent = agent.with_config(
             {
                 "recursion_limit": AGENT_GRAPH_RECURSION_LIMIT,
                 "metadata": {
@@ -895,8 +935,18 @@ def create_my_deep_agent(
                 },
             }
         )
+    else:
+        runtime_agent = agent
 
-    return agent
+    # 仅记录真实构建对象的进程内身份；compiled graph 不进入业务库或 trace。
+    observe_phase_sync(thread_id, "agent.graph.compiled", details={
+        "session_id": session_id, "thread_id": thread_id, "owns_thread": owns_thread,
+        "compiled_graph_object_id": id(agent),
+        "compiled_graph_type": f"{type(agent).__module__}.{type(agent).__qualname__}",
+        "agent_object_id": id(runtime_agent),
+        "scope_object_id": id(reactor_lifetime_scope) if reactor_lifetime_scope is not None else None,
+    })
+    return runtime_agent
 
 
 # OpenSpec 8.4：代码内闭集注册 deep-agent graph family（不提供运行时可配置的
@@ -948,6 +998,7 @@ def create_runtime_deep_agent_for_session(
     tool_timeout_seconds: float | None = None,
     workspace_file_resource_registry: WorkspaceFileResourceRegistry | None = None,
     reactor_lifetime_scope: LifetimeScope | None = None,
+    skill_catalog: PublishedSkillCatalog | None = None,
     resource_registry: ResourceRegistry,
     resource_activation: ResourceActivationCoordinator | None,
     workspace_root: Path,
@@ -1041,6 +1092,7 @@ def create_runtime_deep_agent_for_session(
         tool_timeout_seconds=tool_timeout_seconds,
         workspace_file_resource_registry=workspace_file_resource_registry,
         reactor_lifetime_scope=reactor_lifetime_scope,
+        skill_catalog=skill_catalog,
         resource_registry=resource_registry,
         resource_activation=resource_activation,
         include_team_tools=include_team_tools,

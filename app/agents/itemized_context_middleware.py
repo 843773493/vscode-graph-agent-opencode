@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, replace
 from inspect import getclosurevars
 from typing import Any
@@ -31,12 +32,18 @@ from app.agents.tool_set_producer import RegisteredToolSetProducer
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.identifier import create_uuid_hex
 from app.core.model_delta_context import get_current_model_delta_sink
+from app.core.model_request_context import current_summary_candidate
+from app.core.phase_observer import observe_phase, observe_phase_sync
+from app.core.shielded_cleanup import run_cleanup_shielded
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.identity.tool_call_identity import matches_tool_call_id
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
+from app.services.infrastructure.rollout_context.assembly.plans.types import (
+    ContextPlanRegistration,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -108,6 +115,9 @@ def _request_idempotency_keys(
             "task_id": task_id,
             "node_attempt": attempt,
             "provider_profile": provider_profile,
+            "summary_candidate": (
+                scope.identity() if (scope := current_summary_candidate()) is not None else None
+            ),
         }
     )
     return f"provider-create:{identity}", f"provider-seal:{identity}"
@@ -185,6 +195,8 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         context_source_manager: ContextSourceManager,
         tool_set_producer: RegisteredToolSetProducer,
         resource_activation: ResourceActivationCoordinator | None,
+        context_read_admission: Callable[[], AbstractAsyncContextManager[None]],
+        context_control_admission: Callable[[str, Mapping[str, object], str], AbstractAsyncContextManager[None]],
     ) -> None:
         if not session_id or not thread_id:
             raise ValueError("itemized context middleware 需要显式 SessionThread owner")
@@ -194,6 +206,8 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         self._context_source_manager = context_source_manager
         self._tool_set_producer = tool_set_producer
         self._resource_activation = resource_activation
+        self._context_read_admission = context_read_admission
+        self._context_control_admission = context_control_admission
         self._graph_model_binding: Callable[[ModelRequest[Any]], tuple[object, object]] | None = None
 
     def bind_graph(self, graph: CompiledStateGraph) -> None:
@@ -298,7 +312,7 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
 
     def _frozen_preparation(
         self, context: _ProviderPreparation,
-    ) -> tuple[ContextAssemblySnapshot | None, ResourceActivationSnapshotRef]:
+    ) -> tuple[ContextPlanRegistration | None, ResourceActivationSnapshotRef]:
         if self._resource_activation is None:
             raise RuntimeError("resource-activation-unavailable: inspection graph 不得执行模型调用")
         admission = context.admission
@@ -308,50 +322,76 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
             checkpoint_ns=context.checkpoint_ns,
         )
         if sealed is not None:
+            snapshot = sealed.sealed_snapshot
+            if snapshot is None:
+                raise ValueError("source-mismatch: sealed provider registration 缺少 snapshot")
             frozen = self._checkpointer.load_sealed_resource_activation(
                 admission.session_id, thread_id=admission.thread_id,
-                assembly_id=sealed.assembly_id,
-                plan_hash=sealed.plan_hash, request_hash=sealed.request_hash,
+                assembly_id=snapshot.assembly_id,
+                plan_hash=snapshot.plan_hash, request_hash=snapshot.request_hash,
                 checkpoint_ns=context.checkpoint_ns,
             )
             return sealed, frozen
         return None, require_current_execution_resource_activation(admission)
 
     def _prepare(self, request: ModelRequest[Any]) -> dict[str, object]:
-        context = self._request_preparation(request)
-        sealed, frozen = self._frozen_preparation(context)
-        callback_id = str(UUID(create_uuid_hex()))
-        if sealed is None and frozen.activation_policy.has_model_call_boundary():
-            # 同步接口只允许在无运行事件循环时等待；sealed 重入始终仅只读恢复。
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                frozen = asyncio.run(self._resource_activation.prepare_model_call(
-                    parent=frozen, model_call_id=callback_id, checkpoint_ns=context.checkpoint_ns,
-                ))
-            else:
-                raise RuntimeError("同步 model-call preparation 不能阻塞运行中的事件循环")
-        return self._complete_preparation(request, context, sealed, frozen, callback_id)
+        # 同步调用复用唯一异步准入链；不能在运行中的事件循环里等待 gate。
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self._aprepare(request))
+        raise RuntimeError("同步 model-call preparation 不能阻塞运行中的事件循环")
 
     async def _aprepare(self, request: ModelRequest[Any]) -> dict[str, object]:
         context = self._request_preparation(request)
-        sealed, frozen = self._frozen_preparation(context)
-        callback_id = str(UUID(create_uuid_hex()))
-        if sealed is None:
-            frozen = await self._resource_activation.prepare_model_call(
-                parent=frozen, model_call_id=callback_id, checkpoint_ns=context.checkpoint_ns,
-            )
-        return self._complete_preparation(request, context, sealed, frozen, callback_id)
+        callback_id = str(UUID(create_uuid_hex(namespace=f"model_call/{context.admission.session_id}/{context.admission.thread_id}")))
+        async with self._context_read_admission():
+            read_worker = asyncio.create_task(asyncio.to_thread(self._frozen_preparation, context))
+
+            async def settle_read() -> None:
+                await read_worker
+
+            try:
+                sealed, frozen = await asyncio.shield(read_worker)
+            finally:
+                # to_thread 继承本次 ContextVar owner；取消后仍须等真实读取
+                # 结束再退出 read gate，不能让删除提前隔离 worker 的目录。
+                await run_cleanup_shielded(settle_read)
+        pending = None if sealed is not None else await self._resource_activation.capture_model_call(
+            parent=frozen, model_call_id=callback_id, checkpoint_ns=context.checkpoint_ns,
+        )
+        async with self._context_control_admission(
+            context.creation_key,
+            {"kind": "tool_set", "execution_id": context.admission.execution_id,
+             "checkpoint_ns": context.checkpoint_ns, "seal_key": context.seal_key},
+            context.seal_key,
+        ):
+            if sealed is None:
+                frozen = await self._resource_activation.commit_model_call(pending)
+            prepare_worker = asyncio.create_task(asyncio.to_thread(
+                self._complete_preparation, request, context, sealed, frozen, callback_id,
+            ))
+
+            async def settle_preparation() -> None:
+                await prepare_worker
+
+            try:
+                return await asyncio.shield(prepare_worker)
+            finally:
+                # 持原 context-control gate/lease 直到提交线程结算；重复
+                # cancel 不能让后继准入抢先进入仍在落盘的请求准备。
+                await run_cleanup_shielded(settle_preparation)
 
     def _complete_preparation(
         self, request: ModelRequest[Any], context: _ProviderPreparation,
-        sealed: ContextAssemblySnapshot | None, activation: ResourceActivationSnapshotRef,
+        sealed: ContextPlanRegistration | None, activation: ResourceActivationSnapshotRef,
         callback_id: str,
     ) -> dict[str, object]:
         admission = context.admission
         session_id, thread_id, turn_id = admission.session_id, admission.thread_id, admission.turn_id
         checkpoint_ns = context.checkpoint_ns
         include_structured_output = context.include_structured_output
+        candidate = current_summary_candidate()
         prepared = self._checkpointer.prepare_context_for_provider(
             session_id, thread_id,
             turn_id=turn_id, execution_id=admission.execution_id,
@@ -359,12 +399,17 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
             seal_idempotency_key=context.seal_key,
             request_messages=request.messages,
             context_source_manager=self._context_source_manager,
-            tool_set_supplier=lambda: self._tool_set_producer.snapshot(include_structured_output),
+            tool_set_supplier=lambda: self._tool_set_producer.snapshot(
+                include_structured_output,
+                tools_enabled=candidate is None or candidate.tools_enabled,
+            ),
             provider_version=context.provider_version,
             wire_profile=context.wire_profile, wire_params=context.wire_params,
             target_format=context.target_format, checkpoint_ns=checkpoint_ns,
-            model_call_id=callback_id if sealed is None else sealed.model_call_id,
+            model_call_id=callback_id if sealed is None else sealed.sealed_snapshot.model_call_id,
             activation_snapshot=activation,
+            summary_candidate=candidate,
+            sealed_context=sealed,
         )
         prepared["callback_model_call_id"] = callback_id
         prepared["activation_snapshot"] = activation
@@ -450,6 +495,8 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         request: ModelRequest[Any],
         handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
     ) -> ModelResponse[Any] | ExtendedModelResponse[Any]:
+        for call_id in LangChainMessageCodec().tool_result_call_ids(request.messages):
+            observe_phase_sync(call_id, "canonical.tool_result.before_commit")
         prepared, messages, tools = self._prepare_projection(request)
         # LangChain 的 provider handler 返回时，外层 astream_events 可能尚未
         # 消费 on_chat_model_start。prepared handle 必须保留到该事件由
@@ -475,11 +522,25 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         request: ModelRequest[Any],
         handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
     ) -> ModelResponse[Any] | ExtendedModelResponse[Any]:
+        # ToolMessage 可能先于外层 on_tool_end 抵达请求边界；在任何同步
+        # preparation/rollout 锁之前观察同一真实结果，不能阻塞 backend loop。
+        for call_id in LangChainMessageCodec().tool_result_call_ids(request.messages):
+            await observe_phase(call_id, "canonical.tool_result.before_commit")
         delta_sink = get_current_model_delta_sink()
         reconcile = getattr(delta_sink, "complete_tool_from_message", None)
+        tool_results: list[tuple[ToolMessage, str]] = []
         if callable(reconcile):
-            for message in request.messages:
-                await reconcile(message)
+            codec = LangChainMessageCodec()
+            for index, message in enumerate(request.messages):
+                if not isinstance(message, ToolMessage):
+                    continue
+                emitting_model_call_id = codec.tool_message_model_call_id(message, request.messages[:index])
+                if emitting_model_call_id is None:
+                    raise RuntimeError("source-mismatch: ToolMessage reconciliation 缺少 emitting model-call identity")
+                tool_results.append((message, emitting_model_call_id))
+        # 真实 attempt 先提交唯一终态；随后 request carrier 只保留其独立投影身份。
+        for message, emitting_model_call_id in tool_results:
+            await reconcile(message, model_call_id=emitting_model_call_id)
         prepared, messages, tools = self._project_prepared(request, await self._aprepare(request))
         # 同步包装器的相同生命周期约束：真实 model-start event 消费前不
         # 得删除 Saver-owned prepared handle。

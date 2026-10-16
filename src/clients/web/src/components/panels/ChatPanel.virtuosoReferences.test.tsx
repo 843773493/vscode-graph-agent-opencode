@@ -51,14 +51,27 @@ function createVirtuosoHostNode(): unknown {
 
 function installVirtuosoEnvironment(): void {
   originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+  originalRequestFrameDescriptor = Object.getOwnPropertyDescriptor(globalThis, "requestAnimationFrame");
+  originalCancelFrameDescriptor = Object.getOwnPropertyDescriptor(globalThis, "cancelAnimationFrame");
+  const requestFrame = (handler: FrameRequestCallback) => {
+    const timer = globalThis.setTimeout(() => { frameTimers.delete(timer); handler(0); }, 0);
+    frameTimers.add(timer);
+    return timer;
+  };
+  const cancelFrame = (id: ReturnType<typeof globalThis.setTimeout>) => {
+    frameTimers.delete(id);
+    globalThis.clearTimeout(id);
+  };
+  Object.defineProperty(globalThis, "requestAnimationFrame", { configurable: true, value: requestFrame });
+  Object.defineProperty(globalThis, "cancelAnimationFrame", { configurable: true, value: cancelFrame });
   Object.defineProperty(globalThis, "window", {
     configurable: true,
     value: {
       addEventListener: () => {},
       removeEventListener: () => {},
       getComputedStyle: () => ({ getPropertyValue: () => "" }),
-      requestAnimationFrame: (handler: () => void) => globalThis.setTimeout(handler, 0),
-      cancelAnimationFrame: (id: number) => globalThis.clearTimeout(id),
+      requestAnimationFrame: requestFrame,
+      cancelAnimationFrame: cancelFrame,
       setTimeout: globalThis.setTimeout.bind(globalThis),
       clearTimeout: globalThis.clearTimeout.bind(globalThis),
     },
@@ -66,12 +79,21 @@ function installVirtuosoEnvironment(): void {
 }
 
 let originalWindowDescriptor: PropertyDescriptor | undefined;
+let originalRequestFrameDescriptor: PropertyDescriptor | undefined;
+let originalCancelFrameDescriptor: PropertyDescriptor | undefined;
+const frameTimers = new Set<ReturnType<typeof globalThis.setTimeout>>();
 
 afterEach(() => {
   // 真实 react-virtuoso 需要 window 才能走通尺寸测量；用完必须还原，
   // 否则这个桩会泄漏给同一进程后续所有测试文件（它们会误以为运行在浏览器里）。
+  for (const timer of frameTimers) globalThis.clearTimeout(timer);
+  frameTimers.clear();
   restoreGlobalDescriptor("window", originalWindowDescriptor);
+  restoreGlobalDescriptor("requestAnimationFrame", originalRequestFrameDescriptor);
+  restoreGlobalDescriptor("cancelAnimationFrame", originalCancelFrameDescriptor);
   originalWindowDescriptor = undefined;
+  originalRequestFrameDescriptor = undefined;
+  originalCancelFrameDescriptor = undefined;
 });
 
 function withVirtuosoMock(children: React.ReactElement): React.ReactElement {
@@ -91,6 +113,8 @@ function panelProps(
   return {
     apiPort: 8014,
     workspaceId: "workspace-test",
+    sessionId: "session-1",
+    threadId: "thread-main",
     conversations,
     expandDetails: false,
     hasActiveSession: true,
@@ -108,7 +132,6 @@ function panelProps(
     onLoadAgentStateMessageRawContent: async () => "",
     onRetryHistory: () => {},
     onReplayTurn: async () => {},
-    onUpdatePending: async () => {},
     onRemovePending: async () => {},
     onChangePendingPolicy: async () => {},
     ...overrides,
@@ -136,6 +159,66 @@ function virtuosoProps(renderer: ReactTestRenderer): Record<string, unknown> {
 }
 
 describe("ChatPanel Virtuoso 渲染引用", () => {
+  test("轮次候选展示序号和用户正文摘要，仅接纳已提交历史 Turn", () => {
+    installVirtuosoEnvironment();
+    const history: ConversationView = {
+      ...conversation(""), conversationId: "turn-history", turnId: "turn-history", displayMode: "history", status: "done",
+      turnOrdinal: 9, rootLogicalItemOrdinal: 10, turnItemsView: "summary",
+      userMessage: { message_id: "message-history", session_id: "session-1", thread_id: "thread-main", role: "user",
+        content: "  真实  用户\n摘要  ", attachments: [], metadata: {}, created_at: "2026-10-15T00:00:00Z", updated_at: "2026-10-15T00:00:00Z" },
+    };
+    const live = { ...conversation(""), conversationId: "turn-live" };
+    const pending = { ...conversation(""), conversationId: "pending", turnId: "pending", pending: true };
+    const pendingActiveJobOverlay = {
+      ...conversation(""),
+      conversationId: "pending-overlay",
+      pending: true,
+      activeJobOverlay: true,
+    };
+    let renderer: ReactTestRenderer;
+    act(() => { renderer = create(withVirtuosoMock(<ChatPanel {...panelProps([
+      history,
+      live,
+      pending,
+      pendingActiveJobOverlay,
+    ])} />), {
+      createNodeMock: createVirtuosoHostNode,
+    }); });
+    const options = renderer!.root.findAllByType("option");
+    expect(options).toHaveLength(1);
+    expect(options[0].props.value).toBe("turn-history");
+    expect(options[0].children.join("")).toBe("第 9 轮 · 真实 用户 摘要");
+    const virtuoso = virtuosoProps(renderer!);
+    const items = virtuoso.data as Array<{ key: string; conversation: ConversationView }>;
+    const computeItemKey = virtuoso.computeItemKey as (
+      index: number,
+      item: { key: string; conversation: ConversationView },
+      context: unknown,
+    ) => string;
+    expect(items.map((item, index) => computeItemKey(index, item, virtuoso.context))).toEqual([
+      "turn-history",
+      "turn-live",
+      "pending-overlay",
+    ]);
+    const activeOverlay = items.find((item) => item.conversation.conversationId === "pending-overlay");
+    expect(activeOverlay?.conversation.pending).toBe(true);
+    expect(activeOverlay?.conversation.activeJobOverlay).toBe(true);
+    expect(activeOverlay?.conversation.turnId).toBeUndefined();
+    const renderItem = virtuoso.itemContent as (
+      index: number,
+      item: { key: string; conversation: ConversationView },
+      context: unknown,
+    ) => React.ReactNode;
+    const renderedMarkers = items.map((item, index) => {
+      const rendered = renderItem(index, item, virtuoso.context);
+      return React.isValidElement(rendered)
+        ? rendered.props["data-turn-id"]
+        : undefined;
+    });
+    expect(renderedMarkers).toEqual(["turn-history", undefined, undefined]);
+    act(() => renderer!.unmount());
+  });
+
   test("流式更新和取消后重试保持回调引用，同时读取最新历史状态", () => {
     installVirtuosoEnvironment();
     const first = panelProps([conversation("第一段")]);
@@ -196,6 +279,6 @@ describe("ChatPanel Virtuoso 渲染引用", () => {
     retryButton.props.onClick();
     expect(retryCount).toBe(1);
 
-    renderer!.unmount();
+    act(() => renderer!.unmount());
   });
 });

@@ -10,6 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from tests.support.api_waiters import wait_for_job_done
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
@@ -18,6 +19,7 @@ from tests.support.gateway_processes import (
 )
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.session_navigation_http import submit_navigation_operation
+from tests.support.workspaces import prepare_default_test_workspace
 
 
 @pytest.mark.asyncio
@@ -57,7 +59,7 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
     port = e2e_port_block_for_file(Path(request.node.fspath)).port(20)
     gateway = start_gateway_process(
         workspace_root=workspace_root,
-        default_backend_url="managed-by-gateway",
+        default_backend_url=None,
         port=port,
         extra_env={"BOXTEAM_WEB_ASSETS": str(project_root / "src" / "clients" / "web" / "dist")},
     )
@@ -77,8 +79,16 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
                 item["workspace_id"] == parent_workspace_id
                 for item in workspaces_response.json()["data"]["items"]
             )
-            secondary_workspace = workspace_root / "secondary-workspace"
-            secondary_workspace.mkdir(parents=True, exist_ok=True)
+            secondary_workspace = prepare_default_test_workspace(
+                workspace_root=workspace_root / "secondary-workspace",
+                template_root=(
+                    project_root
+                    / "tests"
+                    / "fixtures"
+                    / "workspaces"
+                    / "default_test_workspace"
+                ),
+            )
             add_workspace_response = await client.post(
                 "/api/gateway/workspaces/local",
                 json={
@@ -117,6 +127,15 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
                 "parentWorkspaceId": parent_workspace_id,
                 "childWorkspaceId": child_workspace_id,
             }
+            seed_response = await client.post(
+                f"/api/v1/sessions/{fixture['parentSessionId']}/messages",
+                json={
+                    "message": {"content": "请记住目录测试标记 TREE-FORK，只回复这个标记。"},
+                    "run": {"mode": "single_agent", "agent_id": "default"},
+                },
+            )
+            assert seed_response.status_code == 200, seed_response.text
+            await wait_for_job_done(client, seed_response.json()["data"]["job_id"])
 
         environment = os.environ.copy()
         environment.update(
@@ -130,7 +149,7 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
         )
         result = await asyncio.to_thread(
             subprocess.run,
-            ["node", "tests/e2e/clients/web/session_physical_tree.mjs"],
+            ["bun", "tests/e2e/clients/web/session_physical_tree.mjs"],
             cwd=project_root,
             env=environment,
             capture_output=True,
@@ -144,8 +163,8 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
         )
         browser_result = json.loads(result_path.read_text(encoding="utf-8"))
         assert browser_result["bloodlineTextPresent"] is False
-        assert browser_result["sessionRowActionCount"] == 0
-        assert browser_result["folderRowActionCount"] == 0
+        assert browser_result["sessionMainActionOpenedCatalogSession"] is True
+        assert browser_result["folderMainActionToggledExpansion"] is True
         assert browser_result["nestedWorkspaceFolders"] is True
         assert browser_result["childWorkspaceMoved"] is True
         assert browser_result["workspaceFolderReturnedToRoot"] is True
@@ -172,7 +191,11 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
                 for item in sessions_response.json()["data"]["items"]
             }
             assert fixture["parentSessionId"] not in remaining
-            assert browser_result["forkSessionId"] not in remaining
+            deleted_thread_response = await client.post(
+                f"/api/v1/sessions/{fixture['parentSessionId']}/threads/{browser_result['forkThreadId']}/history",
+                json={},
+            )
+            assert deleted_thread_response.status_code == 404, deleted_thread_response.text
             assert fixture["childSessionId"] in remaining
             assert remaining[fixture["childSessionId"]]["parent_session_id"] is None
             breadcrumb_response = await client.get(

@@ -7,13 +7,11 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
 from typing import Any
 
-from app.services.mapping.agent_content_mapper import extract_reasoning_summary
 from app.services.mapping.itemized.content_blocks import (
     direct_content_blocks,
-    reasoning_content_text,
+    reasoning_content_rows,
 )
 
 
@@ -31,10 +29,6 @@ def visible_text(content: Any) -> str:
             if isinstance(refusal, str):
                 parts.append(f"[拒绝]{refusal}")
     return "".join(parts)
-
-
-def _summary_text(value: Any) -> str:
-    return extract_reasoning_summary(value).strip()
 
 
 def reasoning_projection_rows(content: Any) -> list[dict[str, object]]:
@@ -83,72 +77,17 @@ def reasoning_projection_rows(content: Any) -> list[dict[str, object]]:
             ).hexdigest()
         rows.append(row)
 
-    for block_index, block in enumerate(direct_content_blocks(content)):
-        block_type = block.get("type")
-        if block_type == "reasoning_content":
-            value = block.get("reasoning_content")
-            append_row(
-                block_index=block_index,
-                item_index=0,
-                carrier_type="reasoning_content",
-                reasoning_text=value if isinstance(value, str) else None,
-            )
-        elif block_type == "reasoning_items":
-            items = block.get("reasoning_items")
-            if isinstance(items, list):
-                for item_index, item in enumerate(items):
-                    if isinstance(item, Mapping):
-                        append_row(
-                            block_index=block_index,
-                            item_index=item_index,
-                            carrier_type="reasoning_items",
-                            item_id=(
-                                item.get("id")
-                                if isinstance(item.get("id"), str)
-                                else None
-                            ),
-                            reasoning_text=reasoning_content_text(item),
-                            summary_text=_summary_text(item.get("summary")),
-                            encrypted=(
-                                item.get("encrypted_content")
-                                if isinstance(item.get("encrypted_content"), str)
-                                else None
-                            ),
-                        )
-        elif block_type == "reasoning":
-            append_row(
-                block_index=block_index,
-                item_index=0,
-                carrier_type="reasoning_items",
-                item_id=block.get("id") if isinstance(block.get("id"), str) else None,
-                reasoning_text=reasoning_content_text(block),
-                summary_text=_summary_text(block.get("summary")),
-                encrypted=(
-                    block.get("encrypted_content")
-                    if isinstance(block.get("encrypted_content"), str)
-                    else None
-                ),
-            )
-        elif block_type == "thinking":
-            value = block.get("thinking") or block.get("text")
-            append_row(
-                block_index=block_index,
-                item_index=0,
-                carrier_type="thinking",
-                reasoning_text=value if isinstance(value, str) else None,
-                signature_present=(
-                    isinstance(block.get("signature"), str)
-                    and bool(block.get("signature"))
-                ),
-            )
-        elif block_type == "redacted_thinking":
-            encrypted = block.get("data")
-            append_row(
-                block_index=block_index,
-                item_index=0,
-                carrier_type="redacted_thinking",
-                encrypted=encrypted if isinstance(encrypted, str) else None,
-            )
+    for row in reasoning_content_rows(content):
+        append_row(
+            block_index=row.content_block_index,
+            item_index=row.item_index,
+            carrier_type="reasoning_items" if row.carrier_type == "reasoning" else row.carrier_type,
+            item_id=row.item_id,
+            reasoning_text=row.reasoning_text,
+            summary_text=row.summary_text,
+            encrypted=row.encrypted,
+            signature_present=row.signature_present,
+        )
 
     identified_keys = {
         row["item_id"]

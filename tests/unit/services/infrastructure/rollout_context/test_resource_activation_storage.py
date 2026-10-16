@@ -568,6 +568,7 @@ def test_complete_members_live_only_in_protected_manifest_and_survive_restart(
     assert lineage_manifest_digest(replace(snapshot, activation_snapshot_id="other-operation")) == lineage_manifest_digest(snapshot)
     protected = activation_store._lineage_body.read_lineage_manifest(
         detail_ref=body_ref, checkpoint_ns="",
+        storage_owner=(SESSION_ID, storage.storage.main_thread_id(SESSION_ID)),
     )
     assert protected == lineage_manifest(snapshot)
 

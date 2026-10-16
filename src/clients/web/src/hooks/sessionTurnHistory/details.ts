@@ -140,6 +140,7 @@ export function useTurnDetailLoader({
       }
       startTransition(() => {
         setState((previous) => {
+          if (requestSignal.aborted || generationRef.current !== targetGeneration) return previous;
           const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
           if (timeline.generation !== targetGeneration) return previous;
           const epochDecision = decideTurnProjectionEpoch(
@@ -267,6 +268,8 @@ export function useTurnDetailLoader({
             });
             try {
               await request;
+              // 旧 scope 的完成不能抵扣新 scope 中同一 Turn 的刷新版本。
+              if (requestSignal.aborted) return;
               fulfilledInvalidationByTurnId.current.set(
                 turnId,
                 desiredVersion,

@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.api.canonical_params import CanonicalSessionId, CanonicalThreadId
+from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 
 
 class ResourceThreadRef(BaseModel):
@@ -19,13 +19,20 @@ class WorkspaceResourceDTO(BaseModel):
     workspace_id: str
     kind: Literal["terminal", "browser"]
     retention_scope: Literal["thread", "workspace"]
+    # 资源创建时记录的来源 Thread，是起源事实，不随显式关联的增删而改变。
     source_thread: ResourceThreadRef
+    # 当前显式关联列表，可变且可空；Thread 级资源为空时，查询仍可按 source_thread 筛选。
+    # 该列表只记录关联，不代表操作租约持有者或完整准入结果。
     thread_associations: list[ResourceThreadRef]
-    owner_revision: int
+    # owner 持久化的传输授权版本，用于版本校验，并与外部 transport_owner_revision 对账。
+    owner_revision: int = Field(description="owner 持久化的传输授权版本，用于版本校验，并与外部 transport_owner_revision 对账。")
+    # 生命周期状态；观察时来自外部运行快照，创建、停止或删除期间也可处于过渡状态。
     status: str
+    # 外部状态及前次操作结果的核实状态，与生命周期状态分开。
     reconciliation_status: str
     unattached_since: str | None
     reclaim_at: str | None
+    # 候选管理动作只过滤已核实状态和持久 Thread 关联阻断，不保证 lease 或版本校验通过。
     available_actions: list[str]
     metadata: dict[str, object]
     created_at: str

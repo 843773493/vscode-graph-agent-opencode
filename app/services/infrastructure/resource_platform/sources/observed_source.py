@@ -286,11 +286,7 @@ class SourceReconciler:
     """已知来源的有界 reconcile:发布不可变 ObservedSourceRevision。
 
     - reconcile/reconcile_all 只处理已登记 handle,不扫描目录;
-    - 文件失败时保留上一份 valid revision 并标记 unavailable;
-    - mark_committed 由消费方在 revision 进入已提交上下文后回执,
-      revision_states 区分 observed/pending/committed;diff 基准是
-      已提交(可见)revision。rewind 感知的 latest-visible-committed
-      收敛属于 CSM/owner 层(OpenSpec 3.4/3.6/3.7),不在本模块。
+    - 文件失败时保留上一份 valid revision 并标记 unavailable。
     """
 
     def __init__(
@@ -302,7 +298,6 @@ class SourceReconciler:
         self._reader = StableSourceReader()
         self._handles: dict[str, ObservedSourceHandle] = dict(handles or {})
         self._revisions: dict[str, ObservedSourceRevision] = {}
-        self._committed: dict[str, str] = {}
         self._notify = notify
 
     def bind_handle(self, handle: ObservedSourceHandle) -> None:
@@ -333,41 +328,6 @@ class SourceReconciler:
         if revision is None:
             raise KeyError(f"来源尚未完成首次 reconcile: source_id={source_id}")
         return revision
-
-    def mark_committed(self, source_id: str, revision: str) -> None:
-        """消费方回执:该 revision 已进入已提交(可见)上下文。"""
-        if not isinstance(revision, str) or not revision:
-            raise ValueError("mark_committed.revision 必须是非空字符串")
-        observed = self._revisions.get(source_id)
-        if observed is None:
-            raise KeyError(f"来源尚未完成首次 reconcile: source_id={source_id}")
-        if revision not in {observed.revision, observed.retained_revision}:
-            raise ValueError(
-            f"回执 revision 不是该来源已观察事实: source_id={source_id} revision={revision}"
-        )
-        self._committed[source_id] = revision
-
-    def revision_states(self, source_id: str) -> tuple[str, str | None, str | None]:
-        """返回 (observed, pending, committed)。
-
-        observed 是最近一次成功稳定读取的 revision;unavailable 时与
-        retained_revision 同值。pending 仅在 observed != committed 时非空;
-        多次未提交变化在这里自然合并为 committed→observed 一个待消费事实。
-        """
-        observed = self.observed_revision(source_id)
-        committed = self._committed.get(source_id)
-        if observed.available and observed.revision != committed:
-            pending: str | None = observed.revision
-        elif (
-            not observed.available
-            and observed.retained_revision is not None
-            and observed.retained_revision != committed
-        ):
-            # 失败保留的旧 valid revision 仍是最新已知事实。
-            pending = observed.retained_revision
-        else:
-            pending = None
-        return observed.revision, pending, committed
 
     def _retain_previous(
         self,

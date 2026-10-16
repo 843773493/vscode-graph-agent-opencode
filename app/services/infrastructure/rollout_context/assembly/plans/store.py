@@ -96,4 +96,18 @@ class ContextPlanRegistryStorageMixin:
     ) -> ContextPlanRegistration:
         with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
             self._storage._require_v2_runtime(connection)
-            return read_registration(connection, session_id, thread_id, plan_id)
+            current = connection.execute(
+                "SELECT session_id,thread_id FROM context_plans WHERE plan_id=? "
+                "AND session_id=? AND thread_id=?", (plan_id, session_id, thread_id),
+            ).fetchone()
+            if current is None:
+                matches = connection.execute(
+                    "SELECT session_id,thread_id FROM context_plans WHERE plan_id=? LIMIT 2",
+                    (plan_id,),
+                ).fetchall()
+                if not matches:
+                    raise KeyError(f"context plan 不存在: {plan_id}")
+                if len(matches) != 1:
+                    raise ValueError("source-mismatch: 历史 plan 必须携带唯一精确 scope")
+                current = matches[0]
+            return read_registration(connection, *current, plan_id)

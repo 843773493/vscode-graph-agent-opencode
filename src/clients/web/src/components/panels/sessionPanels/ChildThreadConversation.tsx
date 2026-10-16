@@ -1,8 +1,15 @@
-import type { ChildThreadSummary, InternalExecutionHistory } from "../../../types/backend";
+import type { ChildThreadSummary, InternalExecutionHistory, TurnDetail } from "../../../types/backend";
 import type { useChildThreadConversation } from "../../../hooks/sessionTurnHistory/useChildThreadConversation";
+import type { ChatTurnHandlers } from "../../chat/turn/types";
+import { conversationFromTurn } from "../../../state/conversations/turnProjection";
+import { buildRenderGroups, responseItemsForConversation } from "../../../state/timeline/chatResponseGroups";
 import MarkdownContent from "../../chat/MarkdownContent";
+import { TurnActivitySummary } from "../../chat/turn/TurnActivitySummary";
 
 type Conversation = ReturnType<typeof useChildThreadConversation>;
+type ChatTurnForkPoint = Parameters<NonNullable<ChatTurnHandlers["onForkConversation"]>>[0];
+export type ChildThreadForkPoint = Partial<Pick<ChatTurnForkPoint,
+  "sourceViewId" | "sourceViewRevision" | "turnId" | "itemId">>;
 
 function Report({ execution }: { execution: InternalExecutionHistory }) {
   return (
@@ -15,8 +22,29 @@ function Report({ execution }: { execution: InternalExecutionHistory }) {
   );
 }
 
+type ForkPoint = (point: ChildThreadForkPoint) => void;
+
+function ChildTurn({ turn, threadId, onFork }: { turn: TurnDetail; threadId: string; onFork?: ForkPoint }) {
+  const conversation = conversationFromTurn(turn, threadId);
+  const groups = buildRenderGroups(responseItemsForConversation(conversation));
+  const sourceSnapshot = { sourceViewId: turn.source_view_id, sourceViewRevision: turn.source_view_revision };
+  return (
+    <article className="child-thread-turn chat-turn" data-turn-id={turn.turn_id} data-conversation-id={turn.turn_id} data-root-logical-item-ordinal={turn.root_logical_item_ordinal}>
+      <small>对话 · {turn.status}</small>
+      {(turn.user_messages ?? []).map((message) => <div key={message.message_id} className="child-thread-user chat-user-text"><strong>你</strong><MarkdownContent value={message.content} />
+        {onFork ? <button type="button" onClick={() => onFork({ ...sourceSnapshot, turnId: turn.turn_id })}>从此消息创建分支</button> : null}
+      </div>)}
+      <div className="child-thread-assistant chat-assistant-content">
+        <TurnActivitySummary conversation={conversation} groups={groups} showRawDetails={false}
+          onForkItem={onFork ? (itemId) => onFork({ ...sourceSnapshot, itemId }) : undefined} />
+      </div>
+      {turn.detail_truncated ? <p>当前记录达到历史读取预算；可在调试视图查看执行详情。</p> : null}
+    </article>
+  );
+}
+
 /** 主窗口右侧侧边栏中的精确子线程对话；不修改主线程聊天选择。 */
-export default function ChildThreadConversation({ thread, conversation }: { thread: ChildThreadSummary; conversation: Conversation }) {
+export default function ChildThreadConversation({ thread, conversation, onFork }: { thread: ChildThreadSummary; conversation: Conversation; onFork?: ForkPoint }) {
   const { snapshot } = conversation;
   const page = snapshot[snapshot.view];
   return (
@@ -28,21 +56,17 @@ export default function ChildThreadConversation({ thread, conversation }: { thre
       <div className="child-thread-conversation-actions">
         <button type="button" onClick={() => void conversation.refresh()} disabled={snapshot.loading}>最新对话</button>
         <button type="button" onClick={() => void conversation.openReport()} disabled={snapshot.loading || !thread.report_execution_id || !thread.report_status || thread.report_status === "unknown"}>查看报告</button>
+        {onFork ? <button type="button" onClick={() => onFork({})}>从此线程创建分支</button> : null}
         {page?.has_before ? <button type="button" onClick={() => void conversation.loadEarlier()} disabled={snapshot.loading}>更早记录</button> : null}
       </div>
       {snapshot.error ? <p className="child-thread-error" role="alert">{snapshot.error}</p> : null}
       {snapshot.loading ? <p role="status">正在读取子线程{snapshot.view === "report" ? "报告" : "历史"}…</p> : null}
       {snapshot.accepted ? <p role="status">消息已接收，任务 {snapshot.accepted.job_id}</p> : null}
       <div className="child-thread-conversation-history">
-        {(page?.internal_executions ?? []).map((execution) => <Report key={execution.execution_id} execution={execution} />)}
-        {(page?.items ?? []).map((turn) => (
-          <article key={turn.turn_id} className="child-thread-turn" data-turn-id={turn.turn_id}>
-            <small>对话 · {turn.status}</small>
-            {(turn.user_messages ?? []).map((message) => <div key={message.message_id} className="child-thread-user"><strong>你</strong><MarkdownContent value={message.content} /></div>)}
-            <div className="child-thread-assistant"><strong>Agent</strong><MarkdownContent value={turn.final_response || (turn.assistant_text ?? []).join("\n\n") || turn.response_preview || "等待回复…"} /></div>
-            {turn.detail_truncated ? <p>当前记录达到历史读取预算；可在调试视图查看执行详情。</p> : null}
-          </article>
-        ))}
+        {[
+          ...(page?.internal_executions ?? []).map((execution) => ({ ordinal: Math.min(...execution.display_parts.map((part) => part.logical_item_ordinal), ...execution.response_parts.map((part) => part.source.logical_item_ordinal ?? Infinity)), key: execution.execution_id, node: <Report execution={execution} /> })),
+          ...(page?.items ?? []).map((turn) => ({ ordinal: turn.root_logical_item_ordinal, key: turn.turn_id, node: <ChildTurn turn={turn} threadId={thread.thread_id} onFork={onFork} /> })),
+        ].sort((left, right) => left.ordinal - right.ordinal).map((entry) => <div key={entry.key}>{entry.node}</div>)}
         {page && page.items.length === 0 && (page.internal_executions ?? []).length === 0 && !snapshot.loading ? <p>该子线程还没有已提交的对话记录。</p> : null}
       </div>
       <form onSubmit={(event) => { event.preventDefault(); void conversation.send(); }}>

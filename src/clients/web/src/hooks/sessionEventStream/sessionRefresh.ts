@@ -1,7 +1,6 @@
 import { getSession } from "../../api/session/sessions";
-import { cloneMaps } from "../../state/appStateMaps";
 import { sessionScopeKey } from "../../state/session/sessionScope";
-import { replaceSessionMetadata } from "../../state/session/sessions";
+import { applySessionListConvergence, hasSessionOwner, replaceSessionMetadata } from "../../state/session/sessions";
 import type { AppState } from "../../types/frontend";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import {
@@ -29,9 +28,11 @@ export async function refreshSessionMetadata(
   sessionCacheKey: string,
   setState: SetAppState,
   announceAutoTitle: boolean = true,
+  signal?: AbortSignal,
 ): Promise<void> {
-  const updatedSession = await getSession(apiPort, sessionId, workspaceId);
+  const updatedSession = await getSession(apiPort, sessionId, workspaceId, { signal });
   setState((previous) => {
+    if (signal?.aborted || !hasSessionOwner(previous, sessionId, workspaceId)) return previous;
     if (workspaceId && previous.currentSessionWorkspaceId !== workspaceId) {
       return previous;
     }
@@ -89,8 +90,7 @@ export async function refreshWorkspaceSessionList(
     ) {
       return previous;
     }
-    const next = cloneMaps(previous);
-    next.sessionsByWorkspace.set(workspaceId, snapshot.sessions);
+    const next = applySessionListConvergence(previous, workspaceId, snapshot.sessions);
     for (const session of snapshot.sessions) {
       next.sessionGatewayWorkspaceById.set(
         sessionScopeKey(workspaceId, session.session_id),

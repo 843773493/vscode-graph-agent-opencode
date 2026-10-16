@@ -1,15 +1,17 @@
-import type { AttachmentRef } from "../../types/backend";
+import type { AttachmentRef, TurnAttachment } from "../../types/backend";
+
+export type MessageAttachment = AttachmentRef & Pick<TurnAttachment, "availability">;
 
 export type MessageMediaKind = "image" | "audio" | "video" | "file";
 
 export interface MessageMediaItem {
   id: string;
-  attachment: AttachmentRef;
+  attachment: MessageAttachment;
   kind: MessageMediaKind;
   name: string;
 }
 
-export function messageMediaKind(attachment: AttachmentRef): MessageMediaKind {
+export function messageMediaKind(attachment: MessageAttachment): MessageMediaKind {
   const contentType = attachment.content_type
     ?? attachment.data_url?.slice(5).split(/[;,]/, 1)[0]
     ?? "";
@@ -26,7 +28,7 @@ export function messageMediaKind(attachment: AttachmentRef): MessageMediaKind {
 }
 
 export function buildMessageMediaItems(
-  attachments: AttachmentRef[],
+  attachments: MessageAttachment[],
 ): MessageMediaItem[] {
   return attachments.map((attachment, index) => ({
     id: `${attachment.file_id}:${index}`,

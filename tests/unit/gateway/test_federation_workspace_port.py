@@ -61,14 +61,7 @@ class _HTTPContext:
 
 
 @pytest.fixture
-def http_context(monkeypatch: pytest.MonkeyPatch):
-    port, catalog = WorkspaceSessionMainPort(), WorkspaceCatalogPort()
-    for owner in (port, catalog):
-        owner.project_workspaces(
-            (("gateway-route", "http://workspace.test", WORKSPACE_ID),)
-        )
-    context = _HTTPContext(port, catalog)
-
+async def http_context(monkeypatch: pytest.MonkeyPatch):
     def response(request: httpx.Request) -> httpx.Response:
         context.requests.append(request)
         headers = {"X-Request-ID": context.header_request_id}
@@ -78,19 +71,29 @@ def http_context(monkeypatch: pytest.MonkeyPatch):
 
     original = httpx.AsyncClient
     transport = httpx.MockTransport(response)
+    client = original(transport=transport, trust_env=False)
     monkeypatch.setattr(
         "app.gateway.federation.workspace_port.httpx.AsyncClient",
         lambda **kwargs: original(transport=transport, **kwargs),
     )
+    port, catalog = WorkspaceSessionMainPort(http_client=client), WorkspaceCatalogPort()
+    for owner in (port, catalog):
+        owner.project_workspaces(
+            (("gateway-route", "http://workspace.test", WORKSPACE_ID),)
+        )
+    context = _HTTPContext(port, catalog)
     monkeypatch.setattr(
         "app.gateway.federation.workspace_port.load_proxy_gateway_id",
         lambda: "gateway_local",
     )
     token = set_current_request_id(REQUEST_ID)
     gateway_token = set_current_gateway_id("gateway_local")
-    yield context
-    reset_current_gateway_id(gateway_token)
-    reset_current_request_id(token)
+    try:
+        yield context
+    finally:
+        reset_current_gateway_id(gateway_token)
+        reset_current_request_id(token)
+        await client.aclose()
 
 
 @pytest.fixture
@@ -139,6 +142,9 @@ async def test_main_http_uses_backend_uuid_and_preserves_request_identity(
     assert request.headers["X-BoxTeam-Workspace-Id"] == WORKSPACE_ID
     assert request.headers["X-BoxTeam-Gateway-Id"] == "gateway_local"
     assert request.headers["X-Request-ID"] == REQUEST_ID
+    assert request.extensions["timeout"] == {
+        "connect": 5, "read": 5, "write": 5, "pool": 5,
+    }
     assert http_context.port.canonical_workspace_id("gateway-route") == WORKSPACE_ID
 
 
@@ -203,6 +209,68 @@ async def test_business_relay_keeps_source_and_body(
     import json
 
     assert json.loads(request.content) == read_body
+
+
+@pytest.mark.asyncio
+async def test_main_http_pool_keeps_concurrent_identity_and_current_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[httpx.Request] = []
+    both_entered = asyncio.Event()
+
+    async def response(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 2:
+            both_entered.set()
+        await both_entered.wait()
+        request_id = request.headers["X-Request-ID"]
+        return httpx.Response(
+            200, headers={"X-Request-ID": request_id},
+            json={"request_id": request_id, "data": {
+                "session_id": TARGET_SESSION, "thread_id": TARGET_THREAD,
+            }},
+        )
+
+    monkeypatch.setattr(
+        "app.gateway.federation.workspace_port.load_proxy_gateway_id",
+        lambda: "gateway_local",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(response), trust_env=False) as client:
+        port = WorkspaceSessionMainPort(http_client=client, request_timeout=3)
+        port.project_workspaces((
+            ("route-one", "http://workspace-one.test", "workspace_one"),
+            ("route-two", "http://workspace-two.test", "workspace_two"),
+        ))
+
+        async def resolve(workspace_id: str, request_id: str, origin: str) -> str:
+            token = set_current_request_id(request_id)
+            try:
+                return await port.resolve_main_thread(
+                    gateway_id=origin, workspace_id=workspace_id, session_id=TARGET_SESSION,
+                )
+            finally:
+                reset_current_request_id(token)
+
+        results = await asyncio.gather(
+            resolve("workspace_one", "req_pool_one", "gateway_one"),
+            resolve("workspace_two", "req_pool_two", "gateway_two"),
+        )
+        assert results == [TARGET_THREAD, TARGET_THREAD]
+        assert not client.is_closed
+        assert [(request.url.host, request.headers["X-BoxTeam-Workspace-Id"],
+                 request.headers["X-Request-ID"], request.headers["X-BoxTeam-Communication-Origin"])
+                for request in requests] == [
+            ("workspace-one.test", "workspace_one", "req_pool_one", "gateway_one"),
+            ("workspace-two.test", "workspace_two", "req_pool_two", "gateway_two"),
+        ]
+        assert all(request.extensions["timeout"] == {
+            "connect": 3, "read": 3, "write": 3, "pool": 3,
+        } for request in requests)
+        port.project_workspaces((("route-one", "http://workspace-new.test", "workspace_one"),))
+        assert await resolve("workspace_one", "req_pool_new", "gateway_new") == TARGET_THREAD
+        assert requests[-1].url.host == "workspace-new.test"
+        assert requests[-1].headers["X-Request-ID"] == "req_pool_new"
+        assert requests[-1].headers["X-BoxTeam-Communication-Origin"] == "gateway_new"
 
 
 @pytest.mark.parametrize("change", ["origin", "target", "operation"])

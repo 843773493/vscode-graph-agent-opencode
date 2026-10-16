@@ -5,9 +5,6 @@ from __future__ import annotations
 import sqlite3
 
 from app.domain.itemized.request_plan import ContextRequestPlan
-from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
-    draft_manifest,
-)
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as json_text,
 )
@@ -38,7 +35,7 @@ def tool_rows(
 def write_registry(
     connection: sqlite3.Connection, plan: ContextRequestPlan, timestamp: str
 ) -> None:
-    """调用方持有事务；既有 draft 修订必须先显式移除旧索引。"""
+    """调用方已完整验证 draft 并持有事务；修订必须先显式移除旧索引。"""
     connection.executemany(
         "INSERT INTO context_plan_refs(session_id, thread_id, plan_id, ref_thread_id, ref_type, ref_id, ref_json) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -55,7 +52,6 @@ def write_registry(
             for ref in plan.refs
         ],
     )
-    contribution_manifests = draft_manifest(plan)["contributions"]
     connection.executemany(
         "INSERT INTO context_plan_contributions(session_id, thread_id, plan_id, contribution_id, manifest_json) "
         "VALUES (?, ?, ?, ?, ?)",
@@ -65,11 +61,9 @@ def write_registry(
                 plan.thread_id,
                 plan.plan_id,
                 contribution.contribution_id,
-                json_text(manifest),
+                json_text({**contribution.to_dict(), "body": None}),
             )
-            for contribution, manifest in zip(
-                plan.contributions, contribution_manifests, strict=True
-            )
+            for contribution in plan.contributions
         ],
     )
     connection.executemany(
@@ -86,6 +80,7 @@ def validate_registry(
     plan: ContextRequestPlan,
     assembly_id: str | None,
 ) -> None:
+    """比对本次已完整解析的 draft 索引，不为贡献字段重建整份 plan。"""
     identity = (plan.session_id, plan.thread_id, plan.plan_id)
     refs = connection.execute(
         "SELECT ref_thread_id, ref_type, ref_id, ref_json FROM context_plan_refs WHERE session_id = ? AND thread_id = ? AND plan_id = ?",
@@ -102,12 +97,8 @@ def validate_registry(
         identity,
     ).fetchall()
     if set(contributions) != {
-        (contribution.contribution_id, json_text(manifest))
-        for contribution, manifest in zip(
-            plan.contributions,
-            draft_manifest(plan)["contributions"],
-            strict=True,
-        )
+        (contribution.contribution_id, json_text({**contribution.to_dict(), "body": None}))
+        for contribution in plan.contributions
     }:
         raise ValueError("source-mismatch: plan contribution registry 不一致")
     tools = connection.execute(

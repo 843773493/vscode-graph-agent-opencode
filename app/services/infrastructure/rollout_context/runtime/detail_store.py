@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import secrets
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_store import SessionCreationRecord
@@ -31,12 +30,9 @@ from app.services.infrastructure.rollout_context.runtime.detail_payload import (
 from app.services.infrastructure.rollout_context.runtime.detail_removal import (
     DetailRemoval,
 )
-
-if TYPE_CHECKING:
-    from app.services.infrastructure.rollout_context.runtime.detail_fork import (
-        ForkDetailCapability,
-        ForkDetailSourceSnapshot,
-    )
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutReadSnapshot,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,23 +51,6 @@ class ContextPlanDetailStore:
         self._resolver = get_session_path_resolver(self.sessions_dir)
         self._files = DetailFiles(self._resolver)
         self._removal = DetailRemoval(self._files)
-
-    def fork_detail_capability(
-        self,
-        *,
-        source_snapshots: tuple[ForkDetailSourceSnapshot, ...] | None = None,
-    ) -> ForkDetailCapability:
-        """显式跨 owner 复制能力；认证正文后分配 target-local typed identity。"""
-        from app.services.infrastructure.rollout_context.runtime.detail_fork import (
-            ForkDetailCapability,
-        )
-
-        return ForkDetailCapability(
-            self,
-            source_snapshots=source_snapshots,
-        )
-
-
 
     def prepare(
         self,
@@ -194,21 +173,28 @@ class ContextPlanDetailStore:
         thread_id: str,
         record: DetailRecord,
         include_sensitive: bool = False,
+        snapshot: RolloutReadSnapshot | None = None,
     ) -> dict[str, object]:
-        record.detail_ref.require_owner(session_id, thread_id)
-        return self._read_detail(record, include_sensitive=include_sensitive)
+        if snapshot is not None and snapshot.checkpoint_ns != record.checkpoint_ns:
+            raise ValueError("read snapshot 与 detail namespace 不一致")
+        return self._read_detail(
+            record, include_sensitive=include_sensitive,
+            read_raw=lambda: self._files.read(
+                record.detail_ref, session_id=session_id, thread_id=thread_id,
+                snapshot=snapshot,
+            ),
+        )
 
     def read_prepared(
         self, prepared: PreparedDetail, *, include_sensitive: bool = False
     ) -> dict[str, object]:
         """投影只读取显式准备值；校验算法与已提交 detail 完全相同。"""
         return self._read_detail(
-            prepared.record, include_sensitive=include_sensitive, prepared=prepared,
+            prepared.record, include_sensitive=include_sensitive, read_raw=lambda: prepared.raw,
         )
 
     def _read_detail(
-        self, record: DetailRecord, *, include_sensitive: bool,
-        prepared: PreparedDetail | None = None,
+        self, record: DetailRecord, *, include_sensitive: bool, read_raw: Callable[[], bytes],
     ) -> dict[str, object]:
         _manifest_bool(include_sensitive, field="include_sensitive")
         if record.status != "available" or record.availability != "available":
@@ -219,8 +205,7 @@ class ContextPlanDetailStore:
         if record.sensitive and not include_sensitive:
             raise PermissionError(f"detail 受保护，未授权读取: {record.detail_ref}")
         value, manifest_record = parse_detail_payload(
-            prepared.raw if prepared is not None else self._files.read(record.detail_ref),
-            detail_ref=record.detail_ref,
+            read_raw(), detail_ref=record.detail_ref,
         )
         if manifest_record != record:
             raise DetailUnavailableError(

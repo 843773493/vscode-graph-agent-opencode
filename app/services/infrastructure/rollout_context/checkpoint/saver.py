@@ -14,6 +14,7 @@ from langgraph.checkpoint.base import (
 )
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
+from app.abstractions.turn_terminal_status import ToolResultCompletion
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.history_loading import HistoryLoadingConfig
 from app.core.path_utils import get_session_path_resolver
@@ -23,16 +24,21 @@ from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
 )
 from app.domain.itemized.identity.item_projection import ItemProvenanceRelation
+from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.mutation_intents import (
     MutationIntentOwner,
 )
 from app.domain.itemized.parts import ContentPart, ContentPartAnchor
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.runtime import ProvenanceEdge
+from app.domain.itemized.runtime import ModelCallRecord, ProvenanceEdge
 from app.schemas.internal_v2.turn import (
     TurnHistoryLoadRequest,
     TurnHistoryPageDTO,
     TurnSummaryDTO,
+)
+from app.services.infrastructure.attachment_blob_catalog.store import (
+    AttachmentBlobStore,
+    StoredAttachmentContent,
 )
 from app.services.infrastructure.node_debug.session.fork import (
     NodeDebugWorkspaceForkConfig,
@@ -154,13 +160,16 @@ class RolloutCheckpointSaver(
         node_debug_store: NodeDebugSessionStore | None = None,
         node_debug_workspace_config: Callable[[], NodeDebugWorkspaceForkConfig]
         | None = None,
+        attachment_store: AttachmentBlobStore | None = None,
     ) -> None:
         super().__init__(serde=serde)
         self._serde = serde or JsonPlusSerializer()
+        self._attachment_store = attachment_store
         self._storage = storage or RolloutContextStore(
             sessions_dir,
             serde=self._serde,
             message_codec=LangChainMessageCodec(),
+            attachment_ref_projector=attachment_store.project_attachment if attachment_store is not None else None,
         )
         self._writer = writer or RolloutAppendWriter(
             sessions_dir,
@@ -217,17 +226,15 @@ class RolloutCheckpointSaver(
         self._lock = threading.RLock()
         fork_source = CheckpointForkSource(
             checkpoint=self, storage=self._storage, context_reader=self._context_reader,
-            detail_store=self._detail_store, node_debug_store=self._node_debug_store,
+            attachment_store=attachment_store,
+            node_debug_store=self._node_debug_store,
             node_debug_workspace_config=node_debug_workspace_config,
-            capture_request_only_content=self._capture_request_only_content_for_fork,
         )
         self.forks = CheckpointForkOwner(
             storage=self._storage, source=fork_source,
             copy=CheckpointForkCopy(
                 checkpoint=self, source=fork_source, storage=self._storage,
-                context_reader=self._context_reader, detail_store=self._detail_store,
-                node_debug_workspace_config=node_debug_workspace_config,
-                copy_request_only_content=self._copy_request_only_context_for_fork,
+                context_reader=self._context_reader,
             ),
             recovery=CheckpointForkRecovery(storage=self._storage, source=fork_source),
         )
@@ -241,6 +248,10 @@ class RolloutCheckpointSaver(
 
 
 
+
+    def initialize_thread_storage(self, session_id: str, thread_id: str) -> None:
+        """由 Thread 创建 owner 建立真实空 rollout，不创建执行或 checkpoint。"""
+        self._storage.storage.initialize(session_id, thread_id=thread_id)
 
     def ensure_request_items(
         self, session_id: str, thread_id: str, *, turn_id: str | None,
@@ -275,9 +286,10 @@ class RolloutCheckpointSaver(
                     else codec.model_call_id(message) if role == "assistant" else None
                 )
                 group = tuple(codec.items_for_message(
-                    message, item_sequence=1, message_id=message_id,
+                    message, item_sequence=stored.items[0].item_sequence if stored.items else 1, message_id=message_id,
                     turn_id=stored.turn_id, execution_id=stored.execution_id,
                     timestamp=utc_now_text(), model_call_id=model_call_id,
+                    canonical_items=stored.items,
                 ))
                 if stored.items:
                     if (
@@ -409,6 +421,21 @@ class RolloutCheckpointSaver(
             raise RuntimeError("append intent 批未被 owner 端口提交")
         return batch.commit_ids
 
+    def commit_tool_result(
+        self, *, session_id: str, thread_id: str, job_id: str,
+        completion: ToolResultCompletion, recovery: bool = False,
+        checkpoint_ns: str = "",
+    ) -> CanonicalItemRecord:
+        """工具终态始终解析原 Job 的 durable admission，不借用后继请求上下文。"""
+        if checkpoint_ns:
+            raise ValueError(f"canonical 工具终态不接受非空 checkpoint_ns: {checkpoint_ns!r}")
+        admission = self.execution_admission_for_job(
+            session_id, thread_id=thread_id, job_id=job_id, checkpoint_ns=checkpoint_ns,
+        )
+        return self._storage.executions.commit_tool_result(
+            admission, completion, recovery=recovery, checkpoint_ns=checkpoint_ns,
+        )
+
     def execution_for_turn(
         self,
         session_id: str,
@@ -439,6 +466,9 @@ class RolloutCheckpointSaver(
             checkpoint_ns=checkpoint_ns,
         )
 
+    def read_resumable_model_call(self, admission: ExecutionAdmission, model_call_id: str, *, carrier_items: tuple[CanonicalItemRecord, ...]) -> tuple[ModelCallRecord, str] | None:
+        return self._storage.executions.read_resumable_model_call(admission, model_call_id, carrier_items=carrier_items)
+
     def execution_admission(
         self,
         session_id: str,
@@ -463,11 +493,15 @@ class RolloutCheckpointSaver(
         state_messages: Sequence[object],
         cutoff_indexes: Sequence[int],
     ) -> frozenset[int]:
-        """compaction preflight 只读端口；唯一实现由 storage owner 提供。"""
+        """把 model 任务命名空间交给同一持久 context owner 做只读 preflight。"""
         return self._storage.checkpoints.safe_compaction_prefix_cutoffs(
             session_id,
             thread_id,
-            checkpoint_ns=checkpoint_ns,
+            checkpoint_ns=(
+                self.context_owner_namespace(checkpoint_ns)
+                if isinstance(checkpoint_ns, str)
+                else checkpoint_ns
+            ),
             state_messages=state_messages,
             cutoff_indexes=cutoff_indexes,
         )
@@ -549,8 +583,41 @@ class RolloutCheckpointSaver(
             session_id,
             thread_id,
             assembly_id=assembly_id,
-            checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
+            checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
         )
+
+    def read_tool_call_attachment(
+        self, session_id: str, *, thread_id: str, tool_call_id: str,
+        model_call_id: str, file_id: str, checkpoint_ns: str = "",
+    ) -> StoredAttachmentContent:
+        """附件 capability 只来自 emitting model-call 的已封存 selection。"""
+        from app.services.mapping.itemized.selection import resolve_selected_item
+
+        if self._attachment_store is None:
+            raise RuntimeError("附件工具未装配唯一 AttachmentBlobStore")
+        assembly = self.load_tool_call_context_assembly(
+            session_id, thread_id=thread_id, tool_call_id=tool_call_id,
+            model_call_id=model_call_id, checkpoint_ns=checkpoint_ns,
+        )
+        entries = tuple(
+            entry for entry in assembly.selection
+            if entry.included and isinstance(entry.ref, ContextRef)
+            and entry.ref.ref_type == "canonical_item"
+        )
+        items = self._storage.storage.read_items(
+            session_id, thread_id, checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
+            item_ids=tuple(entry.ref.ref_id for entry in entries),
+        )
+        by_id = {item.item_id: item for item in items}
+        for entry in entries:
+            item = resolve_selected_item(entry, by_id)
+            payload = self._storage.storage.project_attachment_payload(session_id, thread_id, item.payload)
+            if not isinstance(payload, Mapping):
+                continue
+            attachments = payload.get("attachments", ())
+            if any(isinstance(ref, Mapping) and ref.get("file_id") == file_id for ref in attachments):
+                return self._attachment_store.read(session_id, file_id, owner_thread_id=thread_id)
+        raise PermissionError("附件未属于当前工具原始 assembly 的 item/view membership")
 
     def list_context_assemblies(
         self,

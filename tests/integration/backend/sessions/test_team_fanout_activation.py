@@ -90,10 +90,11 @@ workspace=Path(workspace)
 root=workspace/".boxteam/sessions"
 with fixture_catalog_scope(),workspace_context(load_or_create_workspace_id(workspace),workspace):
     resolver=get_session_path_resolver(root)
-    sessions=SessionService(config_service=SessionServiceConfigStub(),trace_event_store=TraceEventStore(sessions_dir=root),
-        workspace_id=resolver.workspace_id,path_resolver=resolver,creation_service=get_session_creation_service(root))
-    factory=OwnerThreadCreationFactory(sessions_root=root,workspace_id=resolver.workspace_id,path_resolver=resolver)
     saver=RolloutCheckpointSaver(root)
+    sessions=SessionService(config_service=SessionServiceConfigStub(),trace_event_store=TraceEventStore(sessions_dir=root),
+        workspace_id=resolver.workspace_id,path_resolver=resolver,creation_service=get_session_creation_service(root),
+        initialize_thread_storage=saver.initialize_thread_storage)
+    factory=OwnerThreadCreationFactory(sessions_root=root,workspace_id=resolver.workspace_id,path_resolver=resolver)
     fanout=TeamFanoutService(factory=factory,sessions=sessions,saver=saver,dispatcher=None,publication_lock=RLock())
     control=factory.for_owner_session(session).control_store
     record=control.list_collaboration_fanouts(pending_only=True)[-1]
@@ -127,10 +128,11 @@ async def team_case(request):
     bundle = seed_catalog_session_bundle(sessions_root, SESSION)
     with workspace_context(workspace_id, workspace):
         resolver = get_session_path_resolver(sessions_root)
-        sessions = SessionService(config_service=SessionServiceConfigStub(), trace_event_store=TraceEventStore(sessions_dir=sessions_root),
-                                  workspace_id=workspace_id, path_resolver=resolver, creation_service=get_session_creation_service(sessions_root))
-        factory = OwnerThreadCreationFactory(sessions_root=sessions_root, workspace_id=workspace_id, path_resolver=resolver)
         saver = RolloutCheckpointSaver(sessions_root)
+        sessions = SessionService(config_service=SessionServiceConfigStub(), trace_event_store=TraceEventStore(sessions_dir=sessions_root),
+                                  workspace_id=workspace_id, path_resolver=resolver, creation_service=get_session_creation_service(sessions_root),
+                                  initialize_thread_storage=saver.initialize_thread_storage)
+        factory = OwnerThreadCreationFactory(sessions_root=sessions_root, workspace_id=workspace_id, path_resolver=resolver)
         lock = RLock()
         fanout = TeamFanoutService(factory=factory, sessions=sessions, saver=saver, dispatcher=RejectDispatcher(), publication_lock=lock)
         store = TeamStore(factory=factory, write_admission=sessions.session_write_admission)
@@ -204,7 +206,8 @@ async def test_member_abort_after_fence_close_settles_without_new_fanout(team_ca
     assert case.control.get_collaboration_ledger_revision() == revision + 1
     assert case.control.list_collaboration_fanouts() == original_fanouts
     assert case.control.connection.execute("SELECT COUNT(*) FROM session_operation_leases").fetchone()[0] == original_lease_count
-    await case.fanout.drain_session(SESSION)
+    async with case.fanout.deletion_holder.lock_for(SESSION), case.sessions._session_lifecycle_gate.exclusive(SESSION):
+        await case.fanout.drain_session(SESSION)
     assert all(fanout.state == "cancelled" for fanout in case.control.list_collaboration_fanouts())
     assert case.control.abort_thread_creation_record("closed-member", "其他原因") == aborted
 
@@ -293,7 +296,7 @@ async def test_real_activation_freezes_latest_active_boundary_and_never_reads_le
     registry, scope = subscribe(case)
     parent = await coordinator(case, registry).freeze_execution(admission=admission(case, 1),
         policy=ResourceActivationPolicySnapshot(default_boundary="turn", boundaries={"team_state": boundary}))
-    first = await coordinator(case, registry).prepare_model_call(parent=parent, model_call_id=str(uuid4()))
+    first = await coordinator(case, registry).commit_model_call(await coordinator(case, registry).capture_model_call(parent=parent, model_call_id=str(uuid4())))
     await commit_board(case, name="后续变化")
     await case.fanout.reconcile(SESSION)
     await case.fanout.stop()
@@ -306,7 +309,7 @@ async def test_real_activation_freezes_latest_active_boundary_and_never_reads_le
         raise AssertionError("activation request 禁止读取 collaboration ledger")
 
     monkeypatch.setattr(case.factory, "for_owner_session", no_ledger)
-    second = await coordinator(case, registry).prepare_model_call(parent=parent, model_call_id=str(uuid4()))
+    second = await coordinator(case, registry).commit_model_call(await coordinator(case, registry).capture_model_call(parent=parent, model_call_id=str(uuid4())))
     assert second.bindings == first.bindings if boundary == "turn" else second.bindings != first.bindings
     assert registry.snapshots() == snapshots
     await scope.close()
@@ -352,11 +355,23 @@ async def test_fence_closed_and_recipient_deleted_finish_without_late_source_app
 @pytest.mark.asyncio
 async def test_delete_drain_never_waits_live_holder_with_session_gate_held(team_case):
     case = team_case
-    async with case.fanout._holder.lock_for(SESSION), case.sessions.session_write_admission(SESSION):
-        with pytest.raises(RuntimeError, match="holder 仍在"):
-            await asyncio.wait_for(case.fanout.drain_session(SESSION), 0.2)
-    async with case.sessions.session_write_admission(SESSION):
-        await case.fanout.drain_session(SESSION)
+    resolver = case.sessions.path_resolver
+    resolver.bind_session_drain_callback(case.fanout.drain_session, holders=(case.fanout.deletion_holder,))
+    async with case.fanout.deletion_holder.lock_for(SESSION):
+        deleting = asyncio.create_task(resolver.delete_subtree(idempotency_key="live-team-delete", root_node_id=SESSION))
+        try:
+            async with asyncio.timeout(2):
+                while resolver.catalog_store.get_node(SESSION).state != "deleting":
+                    await asyncio.sleep(0)
+            async with asyncio.timeout(2), case.sessions._session_lifecycle_gate.exclusive(SESSION):
+                assert not deleting.done()
+                assert case.control.get_fence() == ("active", 1)
+                assert case.control.list_non_terminal_leases()
+        except BaseException:
+            deleting.cancel()
+            await asyncio.gather(deleting, return_exceptions=True)
+            raise
+    assert (await asyncio.wait_for(deleting, 2)).record_state == "completed"
     assert case.control.list_collaboration_fanouts()[0].state == "cancelled"
     assert case.control.list_non_terminal_leases() == ()
 
@@ -401,7 +416,7 @@ async def test_tail_guidance_seal_and_restart_keep_old_item_bytes_and_independen
     parent = await coordinator(case, registry).freeze_execution(admission=active,
         policy=ResourceActivationPolicySnapshot(default_boundary="turn", boundaries={"team_state": boundary}))
     call_one = str(uuid4())
-    frozen = await coordinator(case, registry).prepare_model_call(parent=parent, model_call_id=call_one)
+    frozen = await coordinator(case, registry).commit_model_call(await coordinator(case, registry).capture_model_call(parent=parent, model_call_id=call_one))
     first = prepare(case, active, frozen, call_one, frozen_provider_wire)
     first_assembly = case.saver.get_context_assembly(SESSION, case.main, assembly_id=first["assembly_id"])
     index = case.saver._storage.storage.index_path(SESSION, "", thread_id=case.main)
@@ -413,7 +428,7 @@ async def test_tail_guidance_seal_and_restart_keep_old_item_bytes_and_independen
     await commit_board(case, name="只激活最新变化")
     await case.fanout.reconcile(SESSION)
     second_key = str(uuid4())
-    second_frozen = await coordinator(case, registry).prepare_model_call(parent=parent, model_call_id=second_key)
+    second_frozen = await coordinator(case, registry).commit_model_call(await coordinator(case, registry).capture_model_call(parent=parent, model_call_id=second_key))
     second = prepare(case, active, second_frozen, second_key, frozen_provider_wire)
     with sqlite3.connect(index) as connection:
         after = connection.execute("SELECT * FROM item_catalog ORDER BY item_sequence").fetchall()
@@ -446,7 +461,9 @@ async def test_queue_acceptance_does_not_freeze_team_before_active_slot(team_cas
         policy=ResourceActivationPolicySnapshot(default_boundary="turn", boundaries={}))
     assert frozen.registry_generation == latest
     task_binding = next(binding for binding in frozen.bindings if binding.resource_id == TEAM_RESOURCE_IDS["tasks"])
-    assert "排队后激活前变化" in case.saver.read_resource_activation_payload(frozen, task_binding)["content"]
+    assert "排队后激活前变化" in case.saver.read_resource_activation_payload(
+        frozen, task_binding, storage_owner=(SESSION, case.main),
+    )["content"]
 
 
 @pytest.mark.asyncio

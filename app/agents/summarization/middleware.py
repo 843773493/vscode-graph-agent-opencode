@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import (
     Awaitable,
     Callable,
+    Mapping,
 )
 from dataclasses import replace
 from typing import (
@@ -21,12 +22,12 @@ from langchain.agents.middleware import (
     ModelRequest,
     ModelResponse,
 )
-from langchain.agents.middleware.types import ExtendedModelResponse
+from langchain.agents.middleware.types import ExtendedModelResponse, hook_config
 from langchain_core.exceptions import ContextOverflowError
 from langchain_core.messages import (
     AnyMessage,
-    SystemMessage,
 )
+from langgraph.config import get_config
 from langgraph.types import Command
 
 from app.agents.itemized_context_middleware import _runtime_checkpoint_ns
@@ -44,7 +45,6 @@ from app.agents.summarization.retry import (
     _forked_summary_messages,
     _overflow_retry_middle_messages,
     _summary_instruction,
-    strip_media_from_summary_messages,
 )
 from app.agents.summarization.state import (
     _MAX_SUMMARY_OVERFLOW_RETRIES,
@@ -52,16 +52,27 @@ from app.agents.summarization.state import (
     CACHE_REPLACEMENT_STRATEGY,
     CachePreservingPartition,
     CachePreservingSummarizationState,
+    CompactionReductionError,
+    SummaryGenerationError,
+    SummaryTextError,
     SummaryToolCallError,
 )
 from app.agents.workspace_tool_paths import backend_virtual_to_workspace_relative
 from app.core.identifier import create_uuid_hex
+from app.core.model_request_context import (
+    SummaryCandidateScope,
+    summary_candidate_scope,
+)
 from app.core.session_thread_context import require_current_session_thread_owner
+from app.domain.itemized.hashing import sha256_jcs
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
     CompactionPreflightPort,
 )
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     ToolProtocolBoundaryConflict,
+)
+from app.services.mapping.itemized.canonical_langchain import (
+    strip_media_from_summary_messages,
 )
 from app.services.orchestration.activity_runtime import (
     ActivityRuntime,
@@ -91,9 +102,12 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         return "SummarizationMiddleware"
 
     def _get_history_path(self) -> str:
-        """将压缩历史归档到当前会话目录，而不是工作区共享目录。"""
-        thread_id = self._get_thread_id()
-        return f"/session-artifacts/{thread_id}/context/history.md"
+        """通过显式 SessionThread owner 隔离每个 thread 的压缩历史。"""
+        thread_id = get_config().get("configurable", {}).get("thread_id")
+        if not isinstance(thread_id, str) or not thread_id:
+            raise RuntimeError("压缩历史归档缺少 LangGraph thread_id")
+        owner = require_current_session_thread_owner(langgraph_thread_id=thread_id)
+        return f"/session-artifacts/{owner.session_id}/context/{owner.thread_id}/history.md"
 
     @staticmethod
     def _apply_event_to_messages(
@@ -127,19 +141,30 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         if not force_compaction and not self._should_summarize(effective, total_tokens):
             return None
         state_messages = list(request.messages)
+        event = request.state.get("_summarization_event")
         summarize_end = self._determine_cutoff_index(effective)
-        prefix_candidates = _prefix_cutoff_candidates(effective, summarize_end)
+        # 已保留的稳定前缀由旧 event 冻结；不得将它内部的 effective
+        # index 当成一次新的 raw cutoff。replacement 的候选只映射一次。
+        prefix_candidates = (
+            [] if isinstance(event, Mapping) and event.get("strategy") == CACHE_PRESERVING_STRATEGY
+            else _prefix_cutoff_candidates(effective, summarize_end)
+        )
+        state_prefix_candidates = {
+            index: effective_cutoff_to_state_cutoff(event, index)
+            for index in prefix_candidates
+        }
         safe_prefix = self._preflight_safe_cutoffs(
             request,
             state_messages,
-            prefix_candidates,
+            list(state_prefix_candidates.values()),
         )
         partition = build_safe_compaction_partition(
             self,
             effective,
-            request.state.get("_summarization_event"),
+            event,
             prefix_cutoff_candidates=[
-                index for index in prefix_candidates if index in safe_prefix
+                index for index, state_index in state_prefix_candidates.items()
+                if state_index in safe_prefix
             ],
         )
         if partition is None:
@@ -193,8 +218,10 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
             id(message): index for index, message in enumerate(state_messages)
         }
         mandatory: list[int] = []
-        if partition.prefix_messages:
-            mandatory.append(len(partition.prefix_messages))
+        event = request.state.get("_summarization_event")
+        frozen_prefix = isinstance(event, Mapping) and event.get("strategy") == CACHE_PRESERVING_STRATEGY
+        if partition.prefix_messages and not frozen_prefix:
+            mandatory.append(effective_cutoff_to_state_cutoff(event, len(partition.prefix_messages)))
         mandatory.append(partition.state_cutoff)
         retry_candidates: dict[int, int] = {}
         middle = partition.messages_to_summarize
@@ -262,13 +289,36 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
                 messages=messages,
                 tools=[],
                 tool_choice=None,
-                system_message=(
-                    SystemMessage(content="Summarize the supplied conversation.")
-                    if minimal_system
-                    else request.system_message
-                ),
+                system_message=None,
+                response_format=None,
             )
-        return request.override(messages=messages)
+        return request.override(messages=messages, response_format=None)
+
+    @staticmethod
+    def _freeze_summary_message(request: ModelRequest, message: AnyMessage) -> AnyMessage:
+        info = request.runtime.execution_info if request.runtime is not None else None
+        identity = {
+            "checkpoint_id": getattr(info, "checkpoint_id", None),
+            "task_id": getattr(info, "task_id", None),
+            "node_attempt": getattr(info, "node_attempt", None),
+        }
+        if not all(isinstance(identity[key], str) and identity[key] for key in ("checkpoint_id", "task_id")):
+            raise RuntimeError("compaction summary 缺少持久 checkpoint/task 身份")
+        if type(identity["node_attempt"]) is not int or identity["node_attempt"] < 1:
+            raise RuntimeError("compaction summary 缺少合法 node_attempt")
+        return message.model_copy(update={"id": f"summary-{sha256_jcs(identity)}"})
+
+    @hook_config(can_jump_to=["model"])
+    def after_model(self, state: CachePreservingSummarizationState, runtime: object) -> dict[str, object] | None:
+        if state.get("_compaction_continuation") is True:
+            return {"_compaction_continuation": False, "jump_to": "model"}
+        return None
+
+    @hook_config(can_jump_to=["model"])
+    async def aafter_model(self, state: CachePreservingSummarizationState, runtime: object) -> dict[str, object] | None:
+        if state.get("_compaction_continuation") is True:
+            return {"_compaction_continuation": False, "jump_to": "model"}
+        return None
 
     @staticmethod
     def _summary_retry_candidates(
@@ -305,6 +355,8 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         messages: list[AnyMessage],
         *,
         minimal_system: bool,
+        candidate_ordinal: int,
+        retry_source_message_ids: tuple[str, ...],
     ) -> str:
         summary_request = self._summary_request(
             request,
@@ -312,30 +364,33 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
             remove_tools=minimal_system,
             minimal_system=minimal_system,
         )
-        response = handler(summary_request)
+        with summary_candidate_scope(SummaryCandidateScope(candidate_ordinal, "initial", not minimal_system, minimal_system, retry_source_message_ids)):
+            response = handler(summary_request)
         try:
             return _summary_response_text(response)
         except SummaryToolCallError:
-            response = handler(
-                self._summary_request(
-                    request,
-                    messages,
-                    remove_tools=True,
-                    minimal_system=minimal_system,
+            with summary_candidate_scope(SummaryCandidateScope(candidate_ordinal, "tool_free", False, minimal_system, retry_source_message_ids)):
+                response = handler(
+                    self._summary_request(
+                        request,
+                        messages,
+                        remove_tools=True,
+                        minimal_system=minimal_system,
+                    )
                 )
-            )
             return _summary_response_text(response)
-        except ValueError:
+        except SummaryTextError:
             # reasoning 模型可能在带完整工具和系统提示的摘要请求中只返回思考块。
             # 摘要正文不能暴露思考内容，改用无工具的最小请求重新生成可见摘要。
-            response = handler(
-                self._summary_request(
-                    request,
-                    messages,
-                    remove_tools=True,
-                    minimal_system=True,
+            with summary_candidate_scope(SummaryCandidateScope(candidate_ordinal, "visible_text", False, True, retry_source_message_ids)):
+                response = handler(
+                    self._summary_request(
+                        request,
+                        messages,
+                        remove_tools=True,
+                        minimal_system=True,
+                    )
                 )
-            )
             return _summary_response_text(response)
 
     async def _ainvoke_summary_candidate(
@@ -345,6 +400,8 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         messages: list[AnyMessage],
         *,
         minimal_system: bool,
+        candidate_ordinal: int,
+        retry_source_message_ids: tuple[str, ...],
     ) -> str:
         summary_request = self._summary_request(
             request,
@@ -352,30 +409,33 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
             remove_tools=minimal_system,
             minimal_system=minimal_system,
         )
-        response = await handler(summary_request)
+        with summary_candidate_scope(SummaryCandidateScope(candidate_ordinal, "initial", not minimal_system, minimal_system, retry_source_message_ids)):
+            response = await handler(summary_request)
         try:
             return _summary_response_text(response)
         except SummaryToolCallError:
-            response = await handler(
-                self._summary_request(
-                    request,
-                    messages,
-                    remove_tools=True,
-                    minimal_system=minimal_system,
+            with summary_candidate_scope(SummaryCandidateScope(candidate_ordinal, "tool_free", False, minimal_system, retry_source_message_ids)):
+                response = await handler(
+                    self._summary_request(
+                        request,
+                        messages,
+                        remove_tools=True,
+                        minimal_system=minimal_system,
+                    )
                 )
-            )
             return _summary_response_text(response)
-        except ValueError:
+        except SummaryTextError:
             # reasoning 模型可能在带完整工具和系统提示的摘要请求中只返回思考块。
             # 摘要正文不能暴露思考内容，改用无工具的最小请求重新生成可见摘要。
-            response = await handler(
-                self._summary_request(
-                    request,
-                    messages,
-                    remove_tools=True,
-                    minimal_system=True,
+            with summary_candidate_scope(SummaryCandidateScope(candidate_ordinal, "visible_text", False, True, retry_source_message_ids)):
+                response = await handler(
+                    self._summary_request(
+                        request,
+                        messages,
+                        remove_tools=True,
+                        minimal_system=True,
+                    )
                 )
-            )
             return _summary_response_text(response)
 
     def _create_cache_preserving_summary(
@@ -389,13 +449,15 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
             *self._summary_retry_candidates(partition),
         ]
         last_error: ContextOverflowError | None = None
-        for messages, minimal_system in candidates:
+        for candidate_ordinal, (messages, minimal_system) in enumerate(candidates):
             try:
                 return self._invoke_summary_candidate(
                     request,
                     handler,
                     messages,
                     minimal_system=minimal_system,
+                    candidate_ordinal=candidate_ordinal,
+                    retry_source_message_ids=tuple(message.id for message in partition.messages_to_summarize if message.id),
                 )
             except ContextOverflowError as error:
                 last_error = error
@@ -414,13 +476,15 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
             *self._summary_retry_candidates(partition),
         ]
         last_error: ContextOverflowError | None = None
-        for messages, minimal_system in candidates:
+        for candidate_ordinal, (messages, minimal_system) in enumerate(candidates):
             try:
                 return await self._ainvoke_summary_candidate(
                     request,
                     handler,
                     messages,
                     minimal_system=minimal_system,
+                    candidate_ordinal=candidate_ordinal,
+                    retry_source_message_ids=tuple(message.id for message in partition.messages_to_summarize if message.id),
                 )
             except ContextOverflowError as error:
                 last_error = error
@@ -437,7 +501,7 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         before_tokens = self._count_request_tokens(request, before)
         after_tokens = self._count_request_tokens(request, after)
         if after_tokens >= before_tokens:
-            raise RuntimeError(
+            raise CompactionReductionError(
                 "缓存优先压缩没有缩短模型上下文: "
                 f"before_tokens={before_tokens}, after_tokens={after_tokens}"
             )
@@ -478,7 +542,7 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
                 handler,
                 partition,
             )
-        except (ContextOverflowError, SummaryToolCallError, ValueError, RuntimeError):
+        except (ContextOverflowError, SummaryToolCallError, SummaryTextError, SummaryGenerationError):
             if request.state.get("_force_cache_compaction") is True:
                 return self._handle_unavailable_forced_compaction(
                     request,
@@ -490,6 +554,7 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         summary_message = self._build_new_messages_with_path(summary, model_file_path)[
             0
         ]
+        summary_message = self._freeze_summary_message(request, summary_message)
         event = build_cache_preserving_event(
             partition,
             summary_message=summary_message,
@@ -507,7 +572,7 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         ]
         try:
             self._ensure_compaction_reduces_tokens(request, before, modified)
-        except RuntimeError:
+        except CompactionReductionError:
             if request.state.get("_force_cache_compaction") is True:
                 return self._handle_unavailable_forced_compaction(
                     request,
@@ -515,13 +580,13 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
                     before,
                 )
             raise
-        response = handler(request.override(messages=modified))
         return ExtendedModelResponse(
-            model_response=response,
+            model_response=ModelResponse(result=[]),
             command=Command(
                 update={
                     "_summarization_event": event,
                     "_force_cache_compaction": False,
+                    "_compaction_continuation": True,
                 }
             ),
         )
@@ -620,7 +685,7 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
                 handler,
                 partition,
             )
-        except (ContextOverflowError, SummaryToolCallError, ValueError, RuntimeError):
+        except (ContextOverflowError, SummaryToolCallError, SummaryTextError, SummaryGenerationError):
             if request.state.get("_force_cache_compaction") is True:
                 return await self._ahandle_unavailable_forced_compaction(
                     request,
@@ -632,6 +697,7 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         summary_message = self._build_new_messages_with_path(summary, model_file_path)[
             0
         ]
+        summary_message = self._freeze_summary_message(request, summary_message)
         event = build_cache_preserving_event(
             partition,
             summary_message=summary_message,
@@ -649,7 +715,7 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         ]
         try:
             self._ensure_compaction_reduces_tokens(request, before, modified)
-        except RuntimeError:
+        except CompactionReductionError:
             if request.state.get("_force_cache_compaction") is True:
                 return await self._ahandle_unavailable_forced_compaction(
                     request,
@@ -657,13 +723,13 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
                     before,
                 )
             raise
-        response = await handler(request.override(messages=modified))
         return ExtendedModelResponse(
-            model_response=response,
+            model_response=ModelResponse(result=[]),
             command=Command(
                 update={
                     "_summarization_event": event,
                     "_force_cache_compaction": False,
+                    "_compaction_continuation": True,
                 }
             ),
         )

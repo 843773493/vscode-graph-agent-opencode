@@ -146,6 +146,34 @@ def head_selection_case(tmp_path: Path, session_bundle_factory) -> Iterator[Head
         tmp_path, session_bundle_factory, session_ids=(SESSION_ID, OTHER_SESSION_ID),
     )
     with saver:
+        notice = internal_message_factory.build(
+            kind="generated_session_result", control="汇报内部任务。",
+            sections=(
+                PromptSection("control_context", {}),
+                PromptSection("generated_session_result", "内部任务结果"),
+            ),
+            display_content="内部任务已完成。",
+        )
+
+        def admit_internal(scope: str) -> ExecutionAdmission:
+            return saver.admit_internal_execution(
+                SESSION_ID, thread_id=thread_id, job_id=f"{scope}-job",
+                intent=InternalExecutionIntent(
+                    message_id=f"{scope}-notice", execution_id=f"{scope}-execution",
+                    admission_idempotency_key=f"{scope}-admission",
+                ),
+                message=HumanMessage(
+                    content=notice.content, id=f"{scope}-notice",
+                    response_metadata={
+                        "message_id": f"{scope}-notice",
+                        "created_at": "2026-10-04T12:00:00+00:00",
+                        "message_metadata": notice.metadata,
+                    },
+                ),
+            )
+
+        # 内部执行也按持久准入游标隔离未来输入；turn_id=None 不代表空历史。
+        internal = admit_internal("internal-scope")
         current, _message = _user_admission(saver, thread_id)
         fixed = _put_with_admission(
             saver, session_id=SESSION_ID, thread_id=thread_id, admission=current,
@@ -160,29 +188,7 @@ def head_selection_case(tmp_path: Path, session_bundle_factory) -> Iterator[Head
         future_admission = saver.execution_admission(
             SESSION_ID, thread_id=thread_id, execution_id=future["initial_execution_id"],
         )
-        notice = internal_message_factory.build(
-            kind="generated_session_result", control="汇报内部任务。",
-            sections=(
-                PromptSection("control_context", {}),
-                PromptSection("generated_session_result", "内部任务结果"),
-            ),
-            display_content="内部任务已完成。",
-        )
-        internal = saver.admit_internal_execution(
-            SESSION_ID, thread_id=thread_id, job_id="internal-scope-job",
-            intent=InternalExecutionIntent(
-                message_id="internal-scope-notice", execution_id="internal-scope-execution",
-                admission_idempotency_key="internal-scope-admission",
-            ),
-            message=HumanMessage(
-                content=notice.content, id="internal-scope-notice",
-                response_metadata={
-                    "message_id": "internal-scope-notice",
-                    "created_at": "2026-10-04T12:00:00+00:00",
-                    "message_metadata": notice.metadata,
-                },
-            ),
-        )
+        internal_late = admit_internal("internal-late-scope")
         saver.accept_turn(
             OTHER_SESSION_ID, thread_id=storage.storage.main_thread_id(OTHER_SESSION_ID),
             accepted_ingress_id="other-scope-ingress", acceptance_idempotency_key="other-scope-acceptance",
@@ -191,6 +197,7 @@ def head_selection_case(tmp_path: Path, session_bundle_factory) -> Iterator[Head
         )
         yield HeadSelectionCase(saver, thread_id, fixed, {
             "current": current, "future": future_admission, "internal": internal,
+            "internal_late": internal_late,
         })
 
 
@@ -199,6 +206,7 @@ def head_selection_case(tmp_path: Path, session_bundle_factory) -> Iterator[Head
     ("current", ["accepted question"]),
     ("future", ["accepted question", "future question"]),
     ("internal", []),
+    ("internal_late", ["accepted question", "future question"]),
 ])
 def test_latest_messages_keep_accepted_input_with_execution_cutoff(
     head_selection_case: HeadSelectionCase, scope: str, expected: list[str],
@@ -294,9 +302,15 @@ def test_new_user_turn_append_uses_acceptance_and_prefix_replay_needs_no_admissi
 def test_internal_notice_and_tool_outputs_remain_turnless_and_do_not_reopen_final_turn(
     tmp_path: Path,
     session_bundle_factory,
+    frozen_provider_prepare,
 ) -> None:
     storage, saver, thread_id = _make_saver(tmp_path, session_bundle_factory)
     user_admission, user_message = _user_admission(saver, thread_id)
+    with (
+        session_thread_owner_scope(_owner(SESSION_ID, thread_id), langgraph_thread_id=thread_id),
+        execution_admission_scope(user_admission, langgraph_thread_id=thread_id),
+    ):
+        frozen_provider_prepare(saver, key="attribution-user-create")
     final_message = AIMessage(content="completed answer", id="completed-final")
     user_config = _put_with_admission(
         saver,
@@ -509,8 +523,21 @@ def test_checkpoint_append_rolls_back_jsonl_and_attribution_on_projection_failur
     assert original_attribution == [
         ("item-rollback-admission-notice", "execution-rollback-attribution"),
     ]
+    assert _query(
+        storage, SESSION_ID, thread_id, "SELECT message_id FROM messages"
+    ) == [("rollback-admission-notice",)]
+    original_messages = _query(
+        storage, SESSION_ID, thread_id,
+        "SELECT * FROM messages ORDER BY message_sequence",
+    )
+    original_projections = _query(
+        storage, SESSION_ID, thread_id,
+        "SELECT * FROM message_projections ORDER BY message_sequence",
+    )
 
-    def fail_projection(connection, sequence, value, timestamp) -> None:
+    def fail_projection(
+        connection, sequence, value, timestamp, *, canonical_items: tuple[object, ...],
+    ) -> None:
         raise RuntimeError("message projection failure")
 
     monkeypatch.setattr(storage.checkpoints, "_insert_message_projection", fail_projection)
@@ -535,8 +562,12 @@ def test_checkpoint_append_rolls_back_jsonl_and_attribution_on_projection_failur
         storage,
         SESSION_ID,
         thread_id,
-        "SELECT message_id FROM messages",
-    ) == []
+        "SELECT * FROM messages ORDER BY message_sequence",
+    ) == original_messages
+    assert _query(
+        storage, SESSION_ID, thread_id,
+        "SELECT * FROM message_projections ORDER BY message_sequence",
+    ) == original_projections
     assert _query(
         storage,
         SESSION_ID,

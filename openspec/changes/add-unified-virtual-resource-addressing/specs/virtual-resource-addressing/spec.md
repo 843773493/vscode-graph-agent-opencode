@@ -615,3 +615,51 @@ config `layer` MUST 只表示逻辑配置来源，其闭集与 `precedence` 唯�
 
 - **WHEN** 实施改名时检索 `builtin`
 - **THEN** 只改真实依赖 URI scope 的位置（`grammar.py:18` 的 scope 闭集 `_SCOPE_KEYWORDS` 与 `resolver.py` 的 scope 构造校验；`grammar.py` 已无 `builtin` 字面量、`_SKILL_SCOPES` 已不存在），工具 origin、主题来源与 `builtin_tool_registry` 等无关同名保持不变
+
+### Requirement: Session 集合与 Thread 创建目标必须有正式领域 URI
+
+统一寻址 owner SHALL 在既有 `session` kind 登记 Workspace Session 集合根 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/session`、单 Session `.../resources/session/{session_id}` 和精确 Thread `.../resources/session/{session_id}/threads/{thread_id}`。集合根、Session和Thread均为domain_object，尾段仅按登记的领域模板校验，不允许猜测其私有文件树。集合根只表示工作区会话容器，不以虚构Session ID占位；导航父节点或parent thread以并列结构化引用传递。
+
+URI的位置、revision/view/anchor的并列字段及ResourceIdentity职责 MUST 保持原合同。集合、Session和Thread分别从权威workspace/catalog/thread owner取得身份和允许操作；Thread ID必须属于URI中的Session。目标创建使用容器URI与 `new_session_main|new_child_thread` 意图，创建完成返回真实新Thread URI；不能将未创建对象的猜测地址作为已存在资源。
+
+已有 send/read/wait 的 Session-main 产品入口不因Thread URI登记而自动扩展到child或获得fork能力；具体操作授权仍归对应owner。所有模板构造、解析及跨端路由 MUST 迁齐后删除fork专属URI拼接/解析，不提供旧字符串alias。
+
+#### Scenario: 容器和已存在 Thread 定位不同
+
+- **WHEN** 用户选择工作区新Session main、已有Session的新child或一个已存在的source child
+- **THEN** 分别使用集合根、Session容器及完整Thread URI；集合根不制造Session ID，Thread必须由catalog核归属，创建后返回真实目标URI
+
+#### Scenario: Thread URI 不开启文件导航或通信权限
+
+- **WHEN** 对Thread URI追加猜测的SQLite路径，或拿已有通信grant请求fork
+- **THEN** owner按模板/操作授权拒绝，不打开私有存储、不把地址可解析视为执行授权
+
+### Requirement: 资源目标处理必须复用 owner 事实并单点决策
+
+资源引用进入新的Session/Thread/Workspace时，系统 SHALL 通过同一个资源目标检查入口解析source/target并请求实际领域owner的权威事实，按继承意图、目标可用性、固定修订、生命周期和实际操作能力选择 `reuse_reference|retain_reference|copy_snapshot|omit|unsupported`。fork、侧边会话和相关资源消费者只消费该决定；附件、工具输出、detail、技能来源、调试方案及工作区资源不得各自按fork模式维护另一复制矩阵。
+
+判断 MUST 优先复用已有ResourceIdentity/业务ID、URI解析范围、workspace_id、owner/来源及thread关联、retention_scope、revision/hash/length、availability/status和owner已公布operations。URI的workspace scope只表示寻址范围，不能推出workspace保留或共享权限；相同hash不能证明目标可访问；同一后端经不同Gateway挂载时，是否同一权威存储域由实际owner核实，不按authority字符串、端口或真实路径猜测。固定修订需要明确核验，不能用目标当前最新文件替代历史版本。
+
+同存储域可读且生命周期独立的共享资源 MUST 复用已有身份和正文，不额外复制或重造内容身份。正文共享但仍依赖source owner保活时，只建立必要目标引用/retention；生命周期事实继续由原owner持久维护。目标已拥有相同已校验内容/修订时复用它，否则只有显式选择且owner支持导出/导入时才copy snapshot。未选择额外资源时不传输跨域正文，并明确omit/unavailable原因。终端、浏览器等运行实例不进行磁盘复制或自动恢复；显式关联仍遵守其owner的scope/lease限制。
+
+缺少的能力 SHALL 在资源owner的既有operation/capability合同中集中声明，例如目标引用保留、冻结导出和快照导入；现有字段能推导的scope、不可变性和生命周期不重复落库，不扩充ResourceIdentity、不在每个实例增加fork_copy/shareable布尔字段。检查结果可以保存本次操作所需revision/preimage/回执，但不形成第二个资源状态或生命周期registry；声明支持不能代替owner实际完成操作和校验。
+
+#### Scenario: 共享附件跳过字节复制
+
+- **WHEN** 同工作区新thread引用已有不可变blob，owner确认目标可访问并具有独立生命周期或可建立保活
+- **THEN** 决定为reuse_reference或retain_reference，正文和内容身份复用；只有需要时登记目标保活，不重复hash整个blob、不生成多余snapshot或copy claim
+
+#### Scenario: 可变资源不能用最新版冒充冻结历史
+
+- **WHEN** fork请求某固定revision，但同工作区文件或技能已变化
+- **THEN** owner复用所需固定snapshot或按能力处理，所需revision不可用时明确失败，不以最新版补旧正文、不因同工作区跳过修订检查
+
+#### Scenario: 跨域资源复用目标已有内容
+
+- **WHEN** 用户显式继承资源，目标owner已拥有匹配内容及修订并核验可访问
+- **THEN** 直接绑定目标已有资源，仅处理必要引用；没有匹配且支持export/import时流式导入，不支持或未选择时明确返回原因
+
+#### Scenario: 保留范围与操作能力来自 owner
+
+- **WHEN** thread范围资源或未知状态资源被请求复用到另一个thread
+- **THEN** 通用入口不能自动提升scope、伪造可用状态或绕过lease；实际owner拒绝或按已授权的操作完成后返回权威结果

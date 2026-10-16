@@ -33,6 +33,9 @@ from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
     BlobIdentityConflictError,
 )
 from app.services.infrastructure.attachment_blob_catalog.blobs import BlobsMixin
+from app.services.infrastructure.attachment_blob_catalog.fork_claims import (
+    ForkAttachmentClaimsMixin,
+)
 from app.services.infrastructure.attachment_blob_catalog.ingest import IngestMixin
 from app.services.infrastructure.attachment_blob_catalog.queries import QueriesMixin
 from app.services.infrastructure.attachment_blob_catalog.records import (
@@ -45,6 +48,10 @@ from app.services.infrastructure.attachment_blob_catalog.records import (
 from app.services.infrastructure.attachment_blob_catalog.schema import (
     _BLOBS_TABLE_DDL,
     _CLAIMS_TABLE_DDL,
+    _FORK_CLAIMS_INDEX_DDL,
+    _FORK_CLAIMS_TABLE_DDL,
+    _FORK_MAPPINGS_INDEX_DDL,
+    _FORK_MAPPINGS_TABLE_DDL,
     _IDX_INGEST_SESSION_DDL,
     _IDX_INGEST_STATE_DDL,
     _IDX_OWNER_REFS_BLOB_DDL,
@@ -52,6 +59,7 @@ from app.services.infrastructure.attachment_blob_catalog.schema import (
     _INGEST_RECORDS_TABLE_DDL,
     _OWNER_REFS_TABLE_DDL,
     _REQUIRED_TABLES,
+    _REVISION_DDL,
     _SCHEMA_VERSION,
     CATALOG_DATABASE_NAME,
     INGEST_RECORD_TERMINAL_STATES,
@@ -69,7 +77,7 @@ __all__ = [
     "derive_attachment_id",
 ]
 
-class AttachmentBlobCatalog(IngestMixin, BlobsMixin, QueriesMixin):
+class AttachmentBlobCatalog(IngestMixin, BlobsMixin, QueriesMixin, ForkAttachmentClaimsMixin):
     """附件 blob catalog 的 SQLite owner（唯一权威，绝不扫盘）。"""
 
     SCHEMA_VERSION = _SCHEMA_VERSION
@@ -159,7 +167,7 @@ class AttachmentBlobCatalog(IngestMixin, BlobsMixin, QueriesMixin):
     def _initialize(self, connection: sqlite3.Connection) -> None:
         """幂等建表并写 user_version；未知版本 fail-closed。"""
         current = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if current > self.SCHEMA_VERSION:
+        if current not in (0, self.SCHEMA_VERSION):
             raise RuntimeError(
                 "附件 blob catalog schema 版本未知，fail-closed 拒绝打开: "
                 f"path={self.database_path}, user_version={current}, "
@@ -186,6 +194,12 @@ class AttachmentBlobCatalog(IngestMixin, BlobsMixin, QueriesMixin):
             connection.execute(_IDX_INGEST_SESSION_DDL)
             connection.execute(_CLAIMS_TABLE_DDL)
             connection.execute(_OWNER_REFS_TABLE_DDL)
+            connection.execute(_FORK_CLAIMS_TABLE_DDL)
+            connection.execute(_FORK_CLAIMS_INDEX_DDL)
+            connection.execute(_FORK_MAPPINGS_TABLE_DDL)
+            connection.execute(_FORK_MAPPINGS_INDEX_DDL)
+            for statement in _REVISION_DDL:
+                connection.execute(statement)
             connection.execute(_IDX_OWNER_REFS_BLOB_DDL)
             connection.execute(_IDX_OWNER_REFS_SESSION_DDL)
             if current != self.SCHEMA_VERSION:

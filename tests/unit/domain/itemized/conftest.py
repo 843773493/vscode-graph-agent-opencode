@@ -6,16 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from app.domain.itemized.assembly_snapshot import (
-    ContextAssemblySnapshot,
-    context_request_hash,
-)
+from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
     PayloadKind,
     SelectionKind,
     SemanticKind,
 )
+from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.identity.item_projection import (
     ItemSourceManifest,
 )

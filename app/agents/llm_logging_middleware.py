@@ -48,7 +48,7 @@ class _ToolLog(RootModel[dict[str, JsonValue]]):
 
 
 class _LLMRequestLog(BaseModel):
-    timestamp: int
+    timestamp: int = Field(description="同一次 handler 结束或失败后的日志组装 UTC epoch 毫秒，与完整日志共用 logged_at_ms；不是请求发出时刻。")
     session_id: str
     job_id: str | None = None
     model_name: str | None = None
@@ -64,7 +64,7 @@ class _LLMResponseLog(BaseModel):
 
 
 class _LLMFullLog(BaseModel):
-    timestamp: int
+    timestamp: int = Field(description="同一次 handler 结束或失败后的日志组装 UTC epoch 毫秒，与请求记录共用 logged_at_ms；不是请求发出时刻。")
     session_id: str
     job_id: str | None = None
     request: _LLMRequestLog
@@ -161,14 +161,15 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         if request.runtime is None:
             raise RuntimeError("模型请求缺少 runtime，无法关联 LLM 日志")
 
-        timestamp = int(time.time() * 1000)
+        # handler 结束或失败后组装日志的 epoch 毫秒时刻。
+        logged_at_ms = int(time.time() * 1000)
         serialized_tools = (
             [_serialize_tool(tool) for tool in request.tools]
             if request.tools
             else []
         )
         request_log = _LLMRequestLog(
-            timestamp=timestamp,
+            timestamp=logged_at_ms,
             session_id=session_id,
             job_id=self._execution_admission(request.runtime).job_id,
             model_name=(
@@ -192,7 +193,7 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             error=str(error) if error is not None else None,
         )
         full_log = _LLMFullLog(
-            timestamp=timestamp,
+            timestamp=logged_at_ms,
             session_id=session_id,
             job_id=request_log.job_id,
             request=request_log,
@@ -200,7 +201,8 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             upstream={"attempts": _json_value(upstream_attempts)},
         )
 
-        log_file = self._session_log_dir(session_id) / f"{time.time_ns()}.json"
+        file_created_at_ns = time.time_ns()
+        log_file = self._session_log_dir(session_id) / f"{file_created_at_ns}.json"
         payload = full_log.model_dump(mode="json")
         bounded_payload = {
             "timestamp": payload["timestamp"],

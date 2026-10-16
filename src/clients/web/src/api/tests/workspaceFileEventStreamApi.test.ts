@@ -5,13 +5,17 @@ import type { WorkspaceFileChangeBatchDTO } from "../../protocol/jsonTypes";
 
 const originalFetch = globalThis.fetch;
 
-function streamResponse(chunks: string[]): Response {
+function streamResponse(chunks: string[], init: RequestInit | undefined): Response {
   const encoder = new TextEncoder();
+  const subscription = (JSON.parse(String(init?.body)) as { subscriptions: [{ subscription_id: string; files_after?: number }] }).subscriptions[0];
+  const envelope = (state: string, frame?: string) => encoder.encode(`event: observation\ndata: ${JSON.stringify({
+    subscription_id: subscription.subscription_id, state,
+    ...(frame === undefined ? { cursor: String(subscription.files_after ?? 0) } : { frame }),
+  })}\n\n`);
   return new Response(new ReadableStream<Uint8Array>({
     start(controller) {
-      for (const chunk of chunks) {
-        controller.enqueue(encoder.encode(chunk));
-      }
+      controller.enqueue(envelope("connected"));
+      for (const chunk of chunks) controller.enqueue(envelope("frame", chunk));
       controller.close();
     },
   }), {
@@ -38,7 +42,7 @@ describe("工作区文件监听 SSE 客户端", () => {
       return streamResponse([
         ": heartbeat\n\n",
         "event: changes\ndata: {\"overflow\":false,\"directories\":[],\"event_id\":7,\"invalidated_roots\":[],\"snapshots\":[],\"changes\":[{\"kind\":\"edit\",\"path\":\"/workspace/a.ts\"}]}\n\n",
-      ]);
+      ], args[1]);
     }, { preconnect: originalFetch.preconnect });
     const batches: WorkspaceFileChangeBatchDTO[] = [];
     let connected = false;
@@ -51,9 +55,9 @@ describe("工作区文件监听 SSE 客户端", () => {
       },
     });
 
-    expect(JSON.parse(String(streamRequest?.body))).toEqual({
-      paths: ["/workspace/shortcut"],
-    });
+    expect(JSON.parse(String(streamRequest?.body)).subscriptions).toEqual([{
+      subscription_id: expect.any(String), kind: "workspace_files", paths: ["/workspace/shortcut"],
+    }]);
     expect(new Headers(streamRequest?.headers).get("X-BoxTeam-Workspace-Id"))
       .toBe("gw_watch");
     expect(connected).toBe(true);
@@ -66,14 +70,14 @@ describe("工作区文件监听 SSE 客户端", () => {
   test("服务端监听错误会直接暴露", async () => {
     const port = 48_102;
     let requestCount = 0;
-    globalThis.fetch = Object.assign(async () => {
+    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
       requestCount += 1;
       if (requestCount === 1) {
         return Response.json({ data: { token: "watch-token" } });
       }
       return streamResponse([
         "event: error\ndata: {\"message\":\"watch failed\"}\n\n",
-      ]);
+      ], args[1]);
     }, { preconnect: originalFetch.preconnect });
 
     await expect(streamWorkspaceFileEvents(port, [])).rejects.toThrow("watch failed");
@@ -91,13 +95,15 @@ describe("工作区文件监听 SSE 客户端", () => {
       requests += 1;
       if (requests === 1) return Response.json({ data: { token: "paired-watch-token" } });
       init = args[1];
-      return streamResponse([`event: changes\ndata: ${JSON.stringify(batch)}\n\n`]);
+      return streamResponse([`event: changes\ndata: ${JSON.stringify(batch)}\n\n`], args[1]);
     }, { preconnect: originalFetch.preconnect });
     const batches: WorkspaceFileChangeBatchDTO[] = [];
     await streamWorkspaceFileEvents(48_103, ["/workspace/src"], {
       workspaceId: "gw-paired", afterEventId: 30, onBatch: (value) => batches.push(value),
     });
-    expect(JSON.parse(String(init?.body))).toEqual({ paths: ["/workspace/src"], after_event_id: 30 });
+    expect(JSON.parse(String(init?.body)).subscriptions).toEqual([{
+      subscription_id: expect.any(String), kind: "workspace_files", paths: ["/workspace/src"], files_after: 30,
+    }]);
     expect(batches).toEqual([batch]);
   });
 });

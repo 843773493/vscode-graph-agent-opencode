@@ -11,6 +11,7 @@ from app.domain.itemized.identity.item_projection import (
     ProjectionGroup,
     ReasoningCarrier,
 )
+from app.domain.itemized.identity.tool_call_identity import matches_tool_call_id
 from app.domain.itemized.records import (
     CanonicalItemRecord,
     parse_item_projection_manifest,
@@ -271,6 +272,8 @@ def restore_group_manifests(
         manifest = parse_item_projection_manifest(
             {key: value for key, value in entry.items() if key not in {"item_id", TOOL_BINDING_FIELD}}
         )
+        identity = manifest["projection_identity"]
+        identity = ItemProjectionIdentity.from_dict(identity) if identity is not None else None
         values = {**item.to_dict(), **manifest}
         if TOOL_BINDING_FIELD in entry:
             binding = entry[TOOL_BINDING_FIELD]
@@ -288,7 +291,8 @@ def restore_group_manifests(
                 or "tool_call_id" not in binding
                 or set(binding) - set(binding_keys)
                 or any(not isinstance(value, str) or not value for value in binding.values())
-                or message_call_id != binding["tool_call_id"]
+                or not isinstance(message_call_id, str)
+                or not matches_tool_call_id(identity, message_call_id, binding["tool_call_id"])
             ):
                 raise ValueError(f"checkpoint {item.semantic_kind.replace('_', '-')} binding 与消息调用身份不一致")
             # 生命周期镜像只保存 ID；正文仍完全取自消息中的真实 name/args/content。
@@ -307,9 +311,9 @@ def restore_group_manifests(
                 raise ValueError(
                     "checkpoint text tool_result evidence 与消息角色不一致"
                 )
-            if item.payload["tool_call_id"] != evidence[
-                "tool_call_id"
-            ] or not isinstance(item.payload["content"], str):
+            if not matches_tool_call_id(
+                identity, item.payload["tool_call_id"], evidence["tool_call_id"],
+            ) or not isinstance(item.payload["content"], str):
                 raise ValueError(
                     "checkpoint text tool_result evidence 与消息调用/正文不一致"
                 )

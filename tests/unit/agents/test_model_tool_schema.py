@@ -11,8 +11,8 @@ from pydantic.errors import PydanticInvalidForJsonSchema
 
 from app.agents.model_tool_schema import (
     export_model_tool_json_schema,
+    filter_tool_event_injected_arguments,
     get_model_tool_schema,
-    normalize_model_tool_arguments,
     validate_model_tool_arguments,
 )
 
@@ -39,7 +39,7 @@ def test_model_tool_schema_excludes_runtime_from_all_public_operations() -> None
     assert parameters["required"] == ["value", "count"]
     assert validated == {"value": "ready", "count": 2}
 
-    normalized = normalize_model_tool_arguments(
+    event_arguments = filter_tool_event_injected_arguments(
         runtime_aware,
         {
             "value": "ready",
@@ -48,7 +48,7 @@ def test_model_tool_schema_excludes_runtime_from_all_public_operations() -> None
         },
     )
 
-    assert normalized == {"value": "ready", "count": 2}
+    assert event_arguments == {"value": "ready", "count": 2}
 
 
 def test_model_tool_argument_validation_uses_public_schema() -> None:
@@ -59,6 +59,9 @@ def test_model_tool_argument_validation_uses_public_schema() -> None:
 
     with pytest.raises(ValidationError):
         validate_model_tool_arguments(count_items, {"count": "invalid"})
+
+    arguments = {"count": "invalid", "foreign_state": {"status": "completed"}}
+    assert filter_tool_event_injected_arguments(count_items, arguments) == arguments
 
     with pytest.raises(TypeError, match="actual_type=list"):
         validate_model_tool_arguments(count_items, [])  # type: ignore[arg-type]

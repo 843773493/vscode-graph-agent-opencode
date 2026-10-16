@@ -207,12 +207,15 @@ class NavigationMutationEnqueueRequest(BaseModel):
         return self
 
 
+NavigationDeleteSettlement = Literal["pending", "repair_required", "settled"]
+
+
 class NavigationMutationReceiptDTO(BaseModel):
     """单个 operation 的 durable receipt（202 返回体与状态查询共用）。
 
     ``created_node_id`` 只在 create_folder 时给出后端分配的 canonical Folder
-    ID；``pending_settlement`` 只对已 committed 的删除类 operation 为真，表示
-    逻辑已提交但物理排空尚未完成。
+    ID；``settlement`` 只对已 committed 的删除类 operation 给出，逻辑提交、
+    排空待恢复、需修复与排空完成不得混同。
     """
 
     operation_id: str
@@ -224,7 +227,7 @@ class NavigationMutationReceiptDTO(BaseModel):
     committed_catalog_revision: int | None = None
     error_code: str | None = None
     error_detail: str | None = None
-    pending_settlement: bool = False
+    settlement: NavigationDeleteSettlement | None = None
     receipt_revision: int = Field(ge=0)
     updated_at: datetime
 

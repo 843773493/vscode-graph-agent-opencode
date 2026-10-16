@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Generic, Literal, Protocol, TypeAlias, TypeVar, cast
 
 from app.core.lifecycle import LifetimeScope
+from app.core.phase_observer import observe_phase_sync
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.core.thread_residency_contracts import ResidencyBlocker, ResidencyBlockerSource
 from app.domain.itemized.execution_admission import ExecutionAdmission
@@ -455,6 +456,11 @@ class ThreadResidencyTracker:
             if runtime is not None and state.runtime is runtime:
                 state.runtime = None
                 state.unloaded_generation = runtime.generation
+                observe_phase_sync(runtime.thread_id, "thread.runtime.closed", details={
+                    "session_id": runtime.session_id, "thread_id": runtime.thread_id,
+                    "generation": runtime.generation, "runtime_object_id": id(runtime.value),
+                    "scope_object_id": id(scope), "scope_state": scope.state,
+                })
         except BaseException:
             if runtime is not None:
                 runtime.closing = False
@@ -485,11 +491,18 @@ class ThreadResidencyTracker:
         ):
             del self._states[(state.session_id, state.thread_id)]
 
-    async def close(self) -> None:
-        """关闭进程内所有 generation；真实构建、lease 和 scope 未排空前不返回。"""
-        self._closing = True
+    async def close(self, *, session_id: str | None = None) -> None:
+        """关闭指定 Session 或进程内全部 generation，等待真实 build/lease/scope。
+
+        Session 删除只关闭该 Session；全进程关闭才停止 tracker 的新准入。
+        删除调用者须先排空领域资源，且在成功返回前保留原控制库与 locator。
+        """
+        if session_id is None:
+            self._closing = True
         errors: list[Exception] = []
         for state in tuple(self._states.values()):
+            if session_id is not None and state.session_id != session_id:
+                continue
             build = state.runtime_build
             if build is not None:
                 try:
@@ -499,7 +512,17 @@ class ThreadResidencyTracker:
             try:
                 runtime = state.runtime
                 if runtime is not None or state.runtime_build_scope is not None:
-                    await asyncio.shield(self._start_runtime_unload(state, runtime, require_unblocked=False))
+                    await asyncio.shield(self._start_runtime_unload(
+                        state, runtime, require_unblocked=session_id is not None,
+                    ))
+                self._drop_cold_state(state)
+                if session_id is not None and self._states.get((state.session_id, state.thread_id)) is state:
+                    raise RuntimeError(
+                        "Session ThreadRuntime 排空仍有未终结状态: "
+                        f"session_id={state.session_id}, thread_id={state.thread_id}, "
+                        f"pending_runtime_leases={state.pending_runtime_leases}, "
+                        f"blockers={state.blockers}"
+                    )
             except Exception as error:  # noqa: BLE001 - 排空其它 owner 后汇总显式抛出。
                 errors.append(error)
         if errors:

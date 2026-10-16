@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { getJob } from "../../api";
-import { listPendingRequests } from "../../pendingRequestsApi";
+import { listMainThreadPendingRequests } from "../../pendingRequestsApi";
 import { cloneMaps } from "../../state/appStateMaps";
 import { writePendingSnapshot } from "../../state/conversations";
 import { parseSessionScopeKey } from "../../state/session/sessionScope";
@@ -58,7 +58,7 @@ export function useBackgroundSessionActivity({
           if (!TERMINAL_JOB_STATUSES.has(job.status)) {
             return;
           }
-          const pendingSnapshot = await listPendingRequests(
+          const pendingSnapshot = await listMainThreadPendingRequests(
             apiPort,
             sessionId,
             workspaceId,

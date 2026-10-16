@@ -8,8 +8,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import nullcontext
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, message_to_dict, messages_from_dict
 
 from app.agents.providers.wire_finalize import WIRE_PROJECTOR_ID, WIRE_PROJECTOR_VERSION
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
@@ -33,6 +34,9 @@ from app.services.infrastructure.rollout_context.checkpoint.owner.resource_activ
 )
 from app.services.infrastructure.rollout_context.provider.toolset_request_bridge import (
     project_tool_set_ref,
+)
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutReadSnapshot,
 )
 from app.services.mapping.itemized.history import project_history_plan
 from app.services.mapping.itemized.langchain import project_context_plan
@@ -137,7 +141,6 @@ class ContextOwnerMixin(
         request_only_content: Mapping[str, object] | None = None,
     ) -> tuple[list[BaseMessage], list[dict[str, object]], tuple[str, ...]]:
         """以同一 sealed selection 同时生成消息与独立 provider tools。"""
-        self._require_context_plan_owner(session_id, thread_id, plan)
         return self._project_committed_context_plan(
             session_id,
             thread_id,
@@ -166,7 +169,7 @@ class ContextOwnerMixin(
             session_id,
             thread_id,
             plan,
-            checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
+            checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
             include_runtime_notices=include_runtime_notices,
             include_summaries=include_summaries,
             request_only_content=request_only_content,
@@ -177,7 +180,7 @@ class ContextOwnerMixin(
                 session_id,
                 thread_id,
                 plan,
-                checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
+                checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
             ).as_sealed_plan(),
             projection="langchain",
             losses=losses,
@@ -195,7 +198,7 @@ class ContextOwnerMixin(
         include_summaries: bool = False,
     ) -> tuple[list[BaseMessage], ProjectionEvidence]:
         """返回 Web/history message 与同一 Saver selection 的完整证据。"""
-        normalized_ns = self._context_owner_namespace(checkpoint_ns)
+        normalized_ns = self.context_owner_namespace(checkpoint_ns)
         messages, _, losses = self._project_committed_context_plan(
             session_id,
             thread_id,
@@ -238,7 +241,7 @@ class ContextOwnerMixin(
                 session_id,
                 thread_id,
                 plan,
-                checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
+                checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
             ).as_sealed_plan(),
             projection="native",
             losses=native.get("losses", ()),
@@ -277,7 +280,7 @@ class ContextOwnerMixin(
                 session_id,
                 thread_id,
                 plan,
-                checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
+                checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
             ).as_sealed_plan(),
             projection="provider",
             losses=losses,
@@ -305,37 +308,46 @@ class ContextOwnerMixin(
         canonical item 读取、request-only source 恢复以及 ToolSetRef 投影，
         让不同调用方不能各自重新选择 history 或工具。
         """
-        committed_snapshot = self._committed_context_snapshot(
-            session_id,
-            thread_id,
-            plan,
-            checkpoint_ns=checkpoint_ns,
-        )
-        committed_plan = committed_snapshot.as_sealed_plan()
-        item_ids = [
-            entry.ref.ref_id
-            for entry in committed_plan.selection
-            if entry.included
-            and isinstance(entry.ref, ContextRef)
-            and entry.ref.ref_type == "canonical_item"
-        ]
-        resolved_request_content = (
-            self._request_content_for_plan(
+        if plan.plan_state != "sealed" or plan.assembly_id is None:
+            self._require_context_plan_owner(session_id, thread_id, plan)
+            raise ValueError("context plan 未 sealed，不能进入 projector")
+        with self._storage.storage.open_read_snapshot(
+            session_id, thread_id, checkpoint_ns,
+        ) as read_snapshot:
+            committed_snapshot = self._committed_context_snapshot(
                 session_id,
                 thread_id,
-                checkpoint_ns,
-                committed_plan,
-                request_only_content,
+                plan,
+                checkpoint_ns=checkpoint_ns,
+                snapshot=read_snapshot,
             )
-            if include_request_only
-            else {}
-        )
-        items = self._storage.storage.read_items(
-            session_id,
-            thread_id,
-            checkpoint_ns=checkpoint_ns,
-            item_ids=item_ids,
-        )
+            committed_plan = committed_snapshot.as_sealed_plan()
+            item_ids = [
+                entry.ref.ref_id
+                for entry in committed_plan.selection
+                if (entry.included or committed_plan.selection_policy == "summary_candidate")
+                and isinstance(entry.ref, ContextRef)
+                and entry.ref.ref_type == "canonical_item"
+            ]
+            resolved_request_content = (
+                self._request_content_for_plan(
+                    session_id,
+                    thread_id,
+                    checkpoint_ns,
+                    committed_plan,
+                    request_only_content,
+                    snapshot=read_snapshot,
+                )
+                if include_request_only
+                else {}
+            )
+            items = self._storage.storage.read_items(
+                session_id,
+                thread_id,
+                checkpoint_ns=checkpoint_ns,
+                item_ids=item_ids,
+                snapshot=read_snapshot,
+            )
         losses: list[str] = []
         if include_request_only:
             messages = project_context_plan(
@@ -356,6 +368,7 @@ class ContextOwnerMixin(
                 include_summaries=include_summaries,
                 capability_losses=losses if collect_capability_losses else None,
             )
+        messages = self.project_message_attachment_refs(session_id, thread_id, messages)
         tools: list[dict[str, object]] = []
         if target_format is not None:
             for entry in committed_plan.selection:
@@ -364,6 +377,13 @@ class ContextOwnerMixin(
                         project_tool_set_ref(entry.ref, target_format=target_format)
                     )
         return messages, tools, tuple(losses)
+
+    def project_message_attachment_refs(self, session_id: str, thread_id: str, messages: list[BaseMessage]) -> list[BaseMessage]:
+        """所有派生请求/历史复用 storage 的 target-local mapping，canonical 不改写。"""
+        return messages_from_dict([
+            self._storage.storage.project_message_attachments(session_id, thread_id, message_to_dict(message))
+            for message in messages
+        ])
 
     def supports_itemized_context(
         self,
@@ -376,7 +396,7 @@ class ContextOwnerMixin(
         return self._storage.storage.supports_itemized_context(
             session_id,
             thread_id,
-            checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
+            checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
         )
 
     def _committed_context_snapshot(
@@ -386,6 +406,7 @@ class ContextOwnerMixin(
         plan: ContextRequestPlan,
         *,
         checkpoint_ns: str,
+        snapshot: RolloutReadSnapshot | None = None,
     ) -> ContextAssemblySnapshot:
         """只允许投影 Saver 已提交的 assembly plan。
 
@@ -394,36 +415,44 @@ class ContextOwnerMixin(
         必须从 storage 读回并比较 plan identity/hash/selection，不能让业务层
         以自造的 plan 旁路 SQLite manifest 或 context reader。
         """
-        self._require_context_plan_owner(session_id, thread_id, plan)
         if plan.plan_state != "sealed" or plan.assembly_id is None:
+            self._require_context_plan_owner(session_id, thread_id, plan)
             raise ValueError("context plan 未 sealed，不能进入 projector")
-        persisted = self._storage.assemblies.get_context_assembly(
-            session_id,
-            thread_id,
-            assembly_id=plan.assembly_id,
-            checkpoint_ns=checkpoint_ns,
-        )
-        persisted_plan = persisted.as_sealed_plan()
-        if (
-            persisted.plan_id != plan.plan_id
-            or persisted_plan.plan_hash() != plan.plan_hash()
-            or persisted.selection != plan.selection
-        ):
-            raise ValueError(
-                "plan-order-integrity: projector plan 与已提交 assembly 不一致"
+        with (
+            self._storage.storage.open_read_snapshot(session_id, thread_id, checkpoint_ns)
+            if snapshot is None else nullcontext(snapshot)
+        ) as read_snapshot:
+            self._require_context_plan_read_owner(
+                session_id, thread_id, plan, checkpoint_ns, snapshot=read_snapshot,
             )
-        # 正式 wire v2 投影必须复用 sealed activation；纯 plan v1 保持自身合同。
-        if (persisted.projector_id, persisted.projector_version) == (
-            WIRE_PROJECTOR_ID, WIRE_PROJECTOR_VERSION,
-        ):
-            self.load_sealed_resource_activation(
-                session_id,
-                thread_id=thread_id,
-                assembly_id=persisted.assembly_id,
-                plan_hash=persisted.plan_hash,
-                request_hash=persisted.request_hash,
-                checkpoint_ns=checkpoint_ns,
-            )
+            with self._storage.storage.read_connection(
+                session_id, thread_id, checkpoint_ns, snapshot=read_snapshot,
+            ) as connection:
+                persisted, _ = self._storage.assemblies._read_context_assembly_connection(
+                    connection, session_id, thread_id,
+                    assembly_id=plan.assembly_id, checkpoint_ns=checkpoint_ns,
+                )
+            if (
+                persisted.plan_id != plan.plan_id
+                or persisted.plan_hash != plan.plan_hash()
+                or persisted.selection != plan.selection
+            ):
+                raise ValueError(
+                    "plan-order-integrity: projector plan 与已提交 assembly 不一致"
+                )
+            # 正式 wire v2 投影必须复用 sealed activation；纯 plan v1 保持自身合同。
+            if (persisted.projector_id, persisted.projector_version) == (
+                WIRE_PROJECTOR_ID, WIRE_PROJECTOR_VERSION,
+            ):
+                self.load_sealed_resource_activation(
+                    session_id,
+                    thread_id=thread_id,
+                    assembly_id=persisted.assembly_id,
+                    plan_hash=persisted.plan_hash,
+                    request_hash=persisted.request_hash,
+                    checkpoint_ns=checkpoint_ns,
+                    snapshot=read_snapshot,
+                )
         return persisted
 
     def get_canonical_item(
@@ -438,7 +467,7 @@ class ContextOwnerMixin(
         items = self._storage.storage.read_items(
             session_id,
             thread_id,
-            checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
+            checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
             item_ids=(item_id,),
         )
         return items[0] if items else None
@@ -454,12 +483,12 @@ class ContextOwnerMixin(
             self._storage.storage.read_items(
                 session_id,
                 self._storage.storage.main_thread_id(session_id),
-                checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
+                checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
             )
         )
 
     @staticmethod
-    def _context_owner_namespace(checkpoint_ns: str) -> str:
+    def context_owner_namespace(checkpoint_ns: str) -> str:
         """把 LangGraph model 子 namespace 归一到 rollout context owner。"""
         if checkpoint_ns.startswith("model:"):
             return ""

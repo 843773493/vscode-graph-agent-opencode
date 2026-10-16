@@ -1,4 +1,4 @@
-当前实施范围（2026-10-09）：A05 挂载生命周期/DTO 完整消费闭包由 `aef566ae` 集成并接受，证据取协作收据 `accepted_A05`。§1–§3 中13项按固定源码、原测试与009只读投影经主核后勾选；主核收据为 `out/tests/temp/2026/10/09/a06-final-review/coordinator/artifacts/a05-task-projection009-verified/receipt.json`。3.5已在README补齐对外迁移边界；1.7全仓命中清单已保留，逐调用方语义分类仍待收口，010只补文档证据；9.2/9.3原勾选保持。其余原任务按完整要求映射验收，源码接受不等于整change完成，不按历史单根装配或旧未接线清单重复派实施。
+当前实施范围（2026-10-15）：A05 挂载生命周期/DTO 完整消费闭包由 `aef566ae` 集成并接受，证据取协作收据 `accepted_A05`。§1–§3 中原13项按固定源码、原测试与009只读投影经主核后勾选；主核收据为 `out/tests/temp/2026/10/09/a06-final-review/coordinator/artifacts/a05-task-projection009-verified/receipt.json`。3.5已在README补齐对外迁移边界；1.7已完成原清单逐路径分类及当前新增命中差集核验，见该项具名证据；9.2/9.3原勾选保持。其余原任务按完整要求映射验收，源码接受不等于整change完成，不按历史单根装配或旧未接线清单重复派实施。
 
 ## 1. 已挂载工作区注册表与身份层
 
@@ -8,7 +8,8 @@
 - [x] 1.4 确认 workspace_id 只有**一个**命名空间：寻址层统一使用后端身份 UUID；`app/gateway/workspace_ids.py` 的 `gw_` ID 若保留，MUST 只作 Gateway 控制面内部标识，不进入工作区寻址。且 MUST 与 URI `workspace` scope 必填 `scope_id` 取值同源（同一个稳定 workspace_id）。
 - [x] 1.5 落实 `scope_id` 推导原则（权威表 R2）：`scope_id` MUST 推导自该 scope 的稳定身份、MUST NOT 硬编码；`workspace` scope 取真实 workspace_id，`gateway` scope 取真实 gateway_id，`inline`（原 `builtin`）scope 取真实 distribution_id（来源与编码已由「统一资源寻址」change 定稿为 manifest 的 `distribution` + `version`，此处只引用）。
 - [x] 1.6 登记两处既存硬编码违反点并定界：`gateway` 与 `inline`（原 `builtin`）的 scope_id 硬编码违反点**均已修复**：`inline` 由 `298ef599`+`f3bd8213` 装配、`gateway` 由 `64ba30c8`/`53befbfc`/`9881a3b2` 装配，原 `skill_runtime.py` 的 `else "local"` 分支已物理删除；`distribution_id` 来源为发行包 runtime manifest（`packages/launcher/runtime-manifest.schema.json`）的 `distribution` + `version`（编码规则与缺失 fail-closed 见「统一资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」），装配提交 `298ef599`+`f3bd8213`。**2026-10-01 第八轮复核更正**。
-- [ ] 1.7 全仓 `rg` 复核「当前激活工作区 / active workspace / WORKSPACE_ROOT / 进程级单根」全部调用方，形成平移清单，确认无遗留悬空调用。
+- [x] 1.7 全仓 `rg` 复核「当前激活工作区 / active workspace / WORKSPACE_ROOT / 进程级单根」全部调用方，形成平移清单，确认无遗留悬空调用。
+  - 2026-10-15 静态闭包：`out/tests/temp/2026/10/13/fork-contract-implementation/luna_context_owner_cleanup/artifacts/r1891-a05-caller-coverage-closure.json` 对原146路径精确分区为后端/配置/工具33、测试71、前端42，missing/extra/duplicates均为空；归类区分合法Gateway激活选路与Backend显式身份，不把关键字命中等同隐式回退。`r1893-a05-current-caller-delta.json` 沿原rg表达式及排除项核当前集合仍为146路径，新增3、移出3；新增均为Gateway控制面或显式身份测试，无Backend隐式身份，移出的旧fork测试已删除。非src旧路径沿用具名静态分类，本轮不声称其当前源码全部重新语义复核；R1898独审核此边界可支撑清单子项。此项只完成调用方清单与语义复核，复用已接受隔离动态证据，不表示4.3真实路径合同、其它任务或整个change完成。
 
 ## 2. 服务图按 workspace_id 分区
 
@@ -44,6 +45,7 @@
 - [ ] 6.2 「必须重写」层：重写断言单一工作区/直接读 `WORKSPACE_ROOT`/跨工作区复用解析器实例的用例。
 - [ ] 6.3 「不受影响」层：确认纯算法/值对象/语法单测无需改动，避免无谓改动。
 - [ ] 6.4 新增接口契约层负向断言：`gateway`/`inline` 的 `scope_id` MUST NOT 为硬编码字面量，`workspace` scope 的 `scope_id` 与 HTTP 显式寻址的 workspace_id 同源。
+  - 2026-10-15 workspace 子项：`test_mounted_workspace_lifespan.py::test_real_double_mount_requests_compilation_and_reverse_cleanup` 经正式显式路径读取两个真实工作区的消息，核对 DTO 身份回显及正文隔离；把 B 的完整引用提交给 A 的路径明确返回 `400/scope_mismatch`，不返回 B 的数据或资源身份。R2231 单节点通过，原件在 `out/tests/temp/2026/10/13/fork-contract-implementation/luna_remaining_acceptance_focus/artifacts/runs/r2231-mounted-messages-runtime-01/`，主核收据为 `coordinator/artifacts/mounted-and-skill-original-verification-1797.json`。本证据不单独完成 gateway/inline 子项，不勾整个 6.4。
 
 ## 7. 收口手续（具名、对称）与命名一致性
 

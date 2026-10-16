@@ -31,6 +31,7 @@ import {
   deleteCatalogOutboxOperations,
   loadCatalogOutbox,
   persistCatalogOutboxPendingOperation,
+  persistCatalogOutboxReceipts,
   type CatalogOutboxPersistencePort,
 } from "../../state/session/sessionCatalogOutboxStore";
 import { errorMessage } from "../../utils/errorMessage";
@@ -84,8 +85,6 @@ export type CatalogOutboxDispatchOutcome =
   | "unknown"
   /** 已被后端明确拒绝：失败 operation 及传递依赖已移除。 */
   | "rejected"
-  /** 本地持久化失败：intent 及传递依赖已撤销。 */
-  | "persistence_failed"
   /** 本轮无可入队命令。 */
   | "idle";
 
@@ -125,12 +124,12 @@ export interface CatalogOutboxDriver {
   /** 来自其它 tab 的通知：从持久层重读，保持一致投影。 */
   reload(): Promise<CatalogOutbox>;
   current(): CatalogOutbox;
-  /** 用户操作的唯一入口：同步 pending → 有序持久化 → 后台有序批量入队。 */
+  /** 本地持久化后交还交互；派发 Promise 由 runtime 接管，绝不等待 HTTP 回执。 */
   applyIntent(
     clientOperationId: string,
     intent: CatalogOutboxIntent,
     options: CatalogOutboxOptions,
-  ): Promise<CatalogOutboxDispatchOutcome>;
+  ): Promise<{ dispatch: Promise<CatalogOutboxDispatchOutcome> }>;
   /** 对未终态命令按精确 ID 查询服务端状态并对账。 */
   reconcile(): Promise<CatalogOutbox>;
   /** 身份切换时 fence 当前请求并禁止后续请求。 */
@@ -147,6 +146,12 @@ const DEFAULT_MAX_BATCH_SIZE = 50;
 interface CatalogOutboxFlushResult {
   outcome: CatalogOutboxDispatchOutcome;
   operationOutcomes: ReadonlyMap<string, CatalogOutboxDispatchOutcome>;
+}
+
+interface CatalogOutboxReconciliationResult {
+  outbox: CatalogOutbox;
+  /** 只记录明确失败及其依赖闭包，成功剪枝不构成 rejection。 */
+  removed_operation_ids: readonly string[];
 }
 
 function isDefinitiveRejection(error: unknown): boolean {
@@ -177,7 +182,7 @@ export function createSessionCatalogOutboxDriver(
   const retryableOperationIds = new Set<string>();
   // 同一分区同一时刻只允许一个 flush：并发 flush 会把同一批命令重复入队。
   let flushInFlight: Promise<CatalogOutboxFlushResult> | null = null;
-  let reconciliationInFlight: Promise<CatalogOutbox> | null = null;
+  let reconciliationInFlight: Promise<CatalogOutboxReconciliationResult> | null = null;
   // 本轮权威回执只活到 confirmed 对账成功；失败时阻止后续派发，不建立第二份 confirmed。
   let receiptsAwaitingReconciliation: {
     receipts: readonly SessionCatalogOperationReceipt[];
@@ -222,6 +227,33 @@ export function createSessionCatalogOutboxDriver(
       throw new Error("会话目录 outbox 尚未恢复，必须先调用 restore() 再操作");
     }
     return outbox;
+  };
+
+  const mergeReceiptMirrors = (current: CatalogOutbox, reported: CatalogOutbox): CatalogOutbox => {
+    const byId = new Map(reported.operations.map((operation) =>
+      [operation.client_operation_id, operation]));
+    return {
+      ...current,
+      operations: current.operations.map((operation) => {
+        const stored = byId.get(operation.client_operation_id);
+        return stored && (stored.receipt_revision ?? 0) > (operation.receipt_revision ?? 0)
+          ? stored : operation;
+      }),
+    };
+  };
+
+  const persistReceipts = async (
+    receipts: readonly SessionCatalogOperationReceipt[],
+  ): Promise<CatalogOutbox> => {
+    // 先验证回执归属；事务从磁盘版本推进，不能用陈旧 tab 的整条内存记录覆盖它。
+    applyCatalogOutboxReceipts(requireOutbox(), receipts);
+    const stored = await persistCatalogOutboxReceipts(input.persistence, input.partition, receipts);
+    assertActive();
+    const current = requireOutbox();
+    const currentIds = new Set(current.operations.map((operation) => operation.client_operation_id));
+    const reported = applyCatalogOutboxReceipts(current,
+      receipts.filter((receipt) => currentIds.has(receipt.operation_id)));
+    return mergeReceiptMirrors(reported, stored);
   };
 
   /** 后台有序批量入队：一次一批，直到无可入队命令或遇到未知/拒绝结果。 */
@@ -287,17 +319,12 @@ export function createSessionCatalogOutboxDriver(
       for (const operationId of batchIds) retryableOperationIds.delete(operationId);
       // 入队可能返回原 operation 的 terminal tombstone，同样必须走权威对账后才交付结果。
       if (reconciliationInFlight) await reconciliationInFlight;
-      const reported = applyCatalogOutboxReceipts(requireOutbox(), result.receipts);
-      const failed = resolveCatalogOutboxFailures(reported);
-      if (failed.removed_operation_ids.length > 0) {
-        receiptsAwaitingReconciliation = { receipts: result.receipts, catalogRevision: 0 };
-        await reconcileInternal();
-      } else publish(reported, true);
+      const reconciled = await reconcileInternal({ receipts: result.receipts, catalogRevision: 0 });
       for (const operationId of batchIds) {
         operationOutcomes.set(operationId,
-          failed.removed_operation_ids.includes(operationId) ? "rejected" : "accepted");
+          reconciled.removed_operation_ids.includes(operationId) ? "rejected" : "accepted");
       }
-      outcome = failed.removed_operation_ids.length > 0 ? "rejected" : "accepted";
+      outcome = reconciled.removed_operation_ids.length > 0 ? "rejected" : "accepted";
     }
   };
 
@@ -314,11 +341,13 @@ export function createSessionCatalogOutboxDriver(
   const reconcileReceipts = async (
     receipts: readonly SessionCatalogOperationReceipt[],
     catalogRevision: number,
-  ): Promise<CatalogOutbox> => {
-    const reported = applyCatalogOutboxReceipts(requireOutbox(), receipts);
+  ): Promise<CatalogOutboxReconciliationResult> => {
+    const reported = await persistReceipts(receipts);
     const resolution = resolveCatalogOutboxFailures(reported);
     if (resolution.removed_operation_ids.length === 0 && !receiptsAwaitingReconciliation) {
-      return publish(reported, true);
+      // 持久化回执期间可能并发加入新 pending；只把回执镜像合并回当前状态。
+      const current = mergeReceiptMirrors(requireOutbox(), reported);
+      return { outbox: publish(current, true), removed_operation_ids: [] };
     }
     receiptsAwaitingReconciliation = { receipts, catalogRevision };
     const failures = reported.operations.filter((operation) =>
@@ -329,6 +358,7 @@ export function createSessionCatalogOutboxDriver(
     if (!reconcileFailure) {
       throw new Error("会话目录失败对账缺少 confirmed 分支刷新 owner，保留 pending 等待恢复: " + failures);
     }
+    const removedOperationIds = new Set(resolution.removed_operation_ids);
     try {
       await withRequestSignal((signal) => reconcileFailure(
       reported,
@@ -336,7 +366,7 @@ export function createSessionCatalogOutboxDriver(
       async () => {
         assertActive();
         // 回执只合并一次；terminal 原记录保留到持久清理完成，失败可由同一 driver 重试。
-        publish(applyCatalogOutboxReceipts(requireOutbox(), receipts), false);
+        publish(mergeReceiptMirrors(requireOutbox(), reported), false);
         receiptsAwaitingReconciliation = { receipts: [], catalogRevision };
         const deletedOperationIds = new Set<string>();
         for (;;) {
@@ -351,7 +381,10 @@ export function createSessionCatalogOutboxDriver(
           }
           await deleteCatalogOutboxOperations(input.persistence, input.partition, idsToDelete);
           assertActive();
-          for (const id of idsToDelete) deletedOperationIds.add(id);
+          for (const id of idsToDelete) {
+            deletedOperationIds.add(id);
+            removedOperationIds.add(id);
+          }
           // delete 等待期间新增的依赖也走同一闸门；始终从当前 outbox 保留独立 intent。
         }
       },
@@ -362,11 +395,11 @@ export function createSessionCatalogOutboxDriver(
       throw new Error(`会话目录失败 (${failures})，confirmed 对账未完成: ${errorMessage(error)}`);
     }
     receiptsAwaitingReconciliation = null;
-    return requireOutbox();
+    return { outbox: requireOutbox(), removed_operation_ids: [...removedOperationIds] };
   };
 
   /** 未终态命令按精确 ID 查询；unknown 不回退，失败先完成 confirmed 对账。 */
-  const reconcileOnce = async (): Promise<CatalogOutbox> => {
+  const reconcileOnce = async (): Promise<CatalogOutboxReconciliationResult> => {
     assertActive();
     if (receiptsAwaitingReconciliation) {
       return await reconcileReceipts(
@@ -386,9 +419,17 @@ export function createSessionCatalogOutboxDriver(
     return await reconcileReceipts(page.items, page.catalog_revision);
   };
 
-  const reconcileInternal = async (): Promise<CatalogOutbox> => {
-    if (reconciliationInFlight) return await reconciliationInFlight;
-    const request = reconcileOnce().finally(() => {
+  const reconcileInternal = async (reported?: {
+    receipts: readonly SessionCatalogOperationReceipt[];
+    catalogRevision: number;
+  }): Promise<CatalogOutboxReconciliationResult> => {
+    if (reconciliationInFlight) {
+      const reconciled = await reconciliationInFlight;
+      if (!reported) return reconciled;
+    }
+    const request = (reported
+      ? reconcileReceipts(reported.receipts, reported.catalogRevision)
+      : reconcileOnce()).finally(() => {
       if (reconciliationInFlight === request) reconciliationInFlight = null;
     });
     reconciliationInFlight = request;
@@ -451,20 +492,28 @@ export function createSessionCatalogOutboxDriver(
       const currentIds = new Set(current.operations.map((operation) => operation.client_operation_id));
       const restoredIds = new Set(restored.operations.map((operation) => operation.client_operation_id));
       const mergedById = new Map(restored.operations.map((operation) => [operation.client_operation_id, operation]));
-      // 读取期间本地已清理的条目不能复活；已收到的 receipt 也不能被磁盘 pending 覆盖。
+      // 读取期间本地已清理的条目不能复活；同 ID 按回执版本消费较新的磁盘事实。
       for (const operation of beforeLoad.operations) {
         if (!currentIds.has(operation.client_operation_id)) mergedById.delete(operation.client_operation_id);
       }
-      for (const operation of current.operations) mergedById.set(operation.client_operation_id, operation);
+      for (const operation of current.operations) {
+        const stored = mergedById.get(operation.client_operation_id);
+        if (!stored || (stored.receipt_revision ?? 0) <= (operation.receipt_revision ?? 0)) {
+          mergedById.set(operation.client_operation_id, operation);
+        }
+      }
       publish({ ...restored, operations: orderedCatalogOutboxOperations({
         ...restored, operations: [...mergedById.values()],
       }) }, false);
-      const removedExternally = beforeLoad.operations.some((operation) =>
+      const removedExternally = unsettledCatalogOutboxOperations(beforeLoad).some((operation) =>
         currentIds.has(operation.client_operation_id)
-        && operation.state !== "pending_local" && operation.state !== "committed"
+        && operation.state !== "pending_local"
         && !restoredIds.has(operation.client_operation_id));
       // 另一个 tab 删除磁盘行不代表当前 confirmed 已刷新；先保留原 ID 查询 terminal。
-      if (removedExternally || receiptsAwaitingReconciliation) await reconcileInternal();
+      if (removedExternally || receiptsAwaitingReconciliation
+        || resolveCatalogOutboxFailures(requireOutbox()).removed_operation_ids.length > 0) {
+        await reconcileInternal();
+      }
       return requireOutbox();
     },
     current: requireOutbox,
@@ -542,12 +591,9 @@ export function createSessionCatalogOutboxDriver(
           + errorMessage(error),
         );
       }
-      // 3. 持久化成功后才允许后台有序批量入队。
-      // 返回值必须如实反映本条命令是否已入队：`flush` 可能因依赖未满足（前序
-      // 命令仍 unknown/persisted）或批量上限而在本轮**一条都没入队**，此时命令
-      // 的本地状态仍是 `persisted`，把它坍缩成 `accepted` 会与后端 durable
-      // acceptance 脱钩（F2）。直接透传 flush 的 outcome 区分这两种情形。
-      return await flushOperation(clientOperationId);
+      // 3. 派发仍按同一有序队列推进；本地写入完成就交还交互，HTTP 结果由
+      // runtime 独立接管。此处不能把 persisted 冒充 accepted，也不能等回执关对话框。
+      return { dispatch: flushOperation(clientOperationId) };
     },
     async reconcile() {
       assertActive();

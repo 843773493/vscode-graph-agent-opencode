@@ -14,7 +14,7 @@ from app.domain.itemized.serialization import (
 )
 
 
-def context_request_hash(
+def context_request_hash_preimage(
     plan: ContextRequestPlan,
     provider: str,
     *,
@@ -22,8 +22,29 @@ def context_request_hash(
     projector_version: str = "v1",
     target_format: str = "unknown",
     wire_request: object | None = None,
-) -> str:
-    """为已构造的 plan 计算 provider/projector 相关 request fingerprint。"""
+) -> dict[str, object]:
+    """构造 request fingerprint 的唯一规范输入，独立计算其中的 plan 摘要。"""
+    return _context_request_hash_preimage(
+        plan,
+        provider,
+        projector_id=projector_id,
+        projector_version=projector_version,
+        target_format=target_format,
+        wire_request=wire_request,
+    )
+
+
+def _context_request_hash_preimage(
+    plan: ContextRequestPlan,
+    provider: str,
+    *,
+    projector_id: str,
+    projector_version: str,
+    target_format: str,
+    wire_request: object | None,
+    recomputed_plan_hash: str | None = None,
+) -> dict[str, object]:
+    """只允许复用同次校验对当前 plan 刚重算的摘要；公开入口自行重算。"""
     for name, value in (
         ("provider", provider),
         ("projector_id", projector_id),
@@ -95,75 +116,95 @@ def context_request_hash(
         }
         for entry in plan.selection
     ]
-    return sha256_jcs(
-        {
-            "plan_hash": plan.plan_hash(),
-            "provider": provider,
-            "projector_id": projector_id,
-            "projector_version": projector_version,
-            "target_format": target_format,
-            "refs": [
-                {
-                    "ref_id": ref.ref_id,
-                    "ref_type": ref.ref_type,
-                    "session_id": ref.session_id,
-                    "thread_id": ref.thread_id,
-                    "semantic_kind": ref.semantic_kind,
-                    "payload_kind": ref.payload_kind,
-                    "status": ref.status,
-                    "source_revision": ref.source_revision,
-                    "content_length": ref.content_length,
-                    "content_hash": ref.content_hash,
-                    "overlay_from_revision": ref.overlay_from_revision,
-                    "overlay_to_revision": ref.overlay_to_revision,
-                    "overlay_diff_hash": ref.overlay_diff_hash,
-                    "base_delta_role": ref.base_delta_role,
-                    "source_overlay_epoch": ref.source_overlay_epoch,
-                }
-                for ref in sorted(
-                    refs_for_hash,
-                    key=selection_ref_identity,
-                )
-            ],
-            "contributions": [
-                {
-                    "contribution_id": contribution.contribution_id,
-                    "source_revision": contribution.source_revision,
-                    "content_length": contribution.content_length,
-                    "content_hash": contribution.content_hash,
-                    "contribution_ordinal": contribution.contribution_ordinal,
-                }
-                for contribution in sorted(
-                    contributions_for_hash,
-                    key=_contribution_order_key,
-                )
-            ],
-            "tool_set_refs": [
-                {
-                    "tool_set_snapshot_id": ref.ref_id,
-                    "source_revision": ref.source_revision,
-                    "content_length": ref.content_length,
-                    "content_hash": ref.content_hash,
-                    "tool_set_schema": ref.tool_set_schema,
-                    "tool_set_schema_version": ref.tool_set_schema_version,
-                    "tool_policy_version": ref.tool_policy_version,
-                    "tool_policy": _hash_safe_value(ref.tool_policy),
-                }
-                for ref in sorted(
-                    tool_set_refs_for_hash,
-                    key=lambda value: value.ref_id,
-                )
-            ],
-            "selection": normalized_selection,
-            "tool_snapshot": (
-                # ToolSet 与真实 wire 使用同一 exact JSON 语义，不改写正文。
-                project_declared_tools(list(plan.tool_snapshot))
-                if plan.plan_state != "sealed"
-                else []
-            ),
-            "wire_request": normalize_wire_request(normalized_wire_request),
-        }
-    )
+    return {
+        "plan_hash": (
+            plan.plan_hash() if recomputed_plan_hash is None else recomputed_plan_hash
+        ),
+        "provider": provider,
+        "projector_id": projector_id,
+        "projector_version": projector_version,
+        "target_format": target_format,
+        "refs": [
+            {
+                "ref_id": ref.ref_id,
+                "ref_type": ref.ref_type,
+                "session_id": ref.session_id,
+                "thread_id": ref.thread_id,
+                "semantic_kind": ref.semantic_kind,
+                "payload_kind": ref.payload_kind,
+                "status": ref.status,
+                "source_revision": ref.source_revision,
+                "content_length": ref.content_length,
+                "content_hash": ref.content_hash,
+                "overlay_from_revision": ref.overlay_from_revision,
+                "overlay_to_revision": ref.overlay_to_revision,
+                "overlay_diff_hash": ref.overlay_diff_hash,
+                "base_delta_role": ref.base_delta_role,
+                "source_overlay_epoch": ref.source_overlay_epoch,
+            }
+            for ref in sorted(
+                refs_for_hash,
+                key=selection_ref_identity,
+            )
+        ],
+        "contributions": [
+            {
+                "contribution_id": contribution.contribution_id,
+                "source_revision": contribution.source_revision,
+                "content_length": contribution.content_length,
+                "content_hash": contribution.content_hash,
+                "contribution_ordinal": contribution.contribution_ordinal,
+            }
+            for contribution in sorted(
+                contributions_for_hash,
+                key=_contribution_order_key,
+            )
+        ],
+        "tool_set_refs": [
+            {
+                "tool_set_snapshot_id": ref.ref_id,
+                "source_revision": ref.source_revision,
+                "content_length": ref.content_length,
+                "content_hash": ref.content_hash,
+                "tool_set_schema": ref.tool_set_schema,
+                "tool_set_schema_version": ref.tool_set_schema_version,
+                "tool_policy_version": ref.tool_policy_version,
+                "tool_policy": _hash_safe_value(ref.tool_policy),
+            }
+            for ref in sorted(
+                tool_set_refs_for_hash,
+                key=lambda value: value.ref_id,
+            )
+        ],
+        "selection": normalized_selection,
+        "tool_snapshot": (
+            # ToolSet 与真实 wire 使用同一 exact JSON 语义，不改写正文。
+            project_declared_tools(list(plan.tool_snapshot))
+            if plan.plan_state != "sealed"
+            else []
+        ),
+        "wire_request": normalize_wire_request(normalized_wire_request),
+    }
 
 
-__all__ = ["context_request_hash"]
+def context_request_hash(
+    plan: ContextRequestPlan,
+    provider: str,
+    *,
+    projector_id: str = "itemized-context-provider",
+    projector_version: str = "v1",
+    target_format: str = "unknown",
+    wire_request: object | None = None,
+) -> str:
+    """从唯一规范输入计算 provider/projector 相关 request fingerprint。"""
+    return sha256_jcs(context_request_hash_preimage(
+        plan,
+        provider,
+        projector_id=projector_id,
+        projector_version=projector_version,
+        target_format=target_format,
+        wire_request=wire_request,
+    ))
+
+
+__all__ = ["context_request_hash", "context_request_hash_preimage"]

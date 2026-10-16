@@ -12,15 +12,20 @@ from langgraph.checkpoint.base import (
     Checkpoint,
     CheckpointMetadata,
     CheckpointTuple,
+    DeltaChannelHistory,
     get_checkpoint_id,
     get_checkpoint_metadata,
 )
 
+from app.core.phase_observer import observe_phase_sync
 from app.core.session_thread_context import (
     require_current_session_thread_owner,
     session_thread_owner_scope,
 )
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
+    LangChainMessageCodec,
+)
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
     RolloutPruningPlan,
@@ -56,6 +61,28 @@ class RolloutLangGraphCheckpointMixin:
             config,
         )
 
+    def get_delta_channel_history(
+        self, *, config: RunnableConfig, channels: Sequence[str],
+    ) -> dict[str, DeltaChannelHistory]:
+        if not channels:
+            return {}
+        thread_id, checkpoint_ns = _checkpoint_identity(config)
+        owner = require_current_session_thread_owner(langgraph_thread_id=thread_id)
+        try:
+            snapshot = self._context_reader.open_snapshot(owner.session_id, thread_id, checkpoint_ns)
+        except RolloutNotMaterializedError:
+            if "history_view_id" in config["configurable"]:
+                raise ValueError("history-projection-unavailable: 尚未物化的 owner 没有历史 view") from None
+            return {channel: {"writes": []} for channel in channels}
+        with snapshot:
+            if "history_view_id" in config["configurable"]:
+                self._storage.checkpoints.require_history_view(
+                    snapshot, config["configurable"]["history_view_id"],
+                )
+            return self._storage.checkpoints.delta_channel_history(
+                snapshot, get_checkpoint_id(config), channels=channels,
+            )
+
     def _get_tuple_for_owner(
         self,
         session_id: str,
@@ -72,27 +99,15 @@ class RolloutLangGraphCheckpointMixin:
         with snapshot:
             history_view_id = config["configurable"].get("history_view_id")
             if "history_view_id" in config["configurable"]:
-                if not isinstance(history_view_id, str) or not history_view_id:
-                    raise ValueError("history-projection-unavailable: history_view_id 必须是非空 selector")
-                connection = self._storage.storage._snapshot_connection(snapshot)
-                history = connection.execute(
-                    "SELECT v.view_kind, e.control_kind, e.view_id, e.branch_id, v.branch_id, c.checkpoint_ns "
-                    "FROM context_views AS v JOIN control_events AS e ON e.control_sequence=v.control_sequence "
-                    "JOIN checkpoints AS c ON c.checkpoint_id=e.checkpoint_id WHERE v.view_id=?",
-                    (history_view_id,),
-                ).fetchone()
-                if history is None or history[:3] != ("history_replay", "history_replay", history_view_id) or (
-                    history[3] != history[4] or history[5] != checkpoint_ns
-                ):
-                    raise ValueError("history-projection-unavailable: selector 不属于同一 owner/namespace 的历史 view")
+                history_view_id = self._storage.checkpoints.require_history_view(snapshot, history_view_id)
             checkpoint_index = self._context_reader.latest_checkpoint(
                 snapshot,
                 get_checkpoint_id(config),
             )
             if checkpoint_index is None:
                 return None
-            # 固定 checkpoint 只读冻结 messages；最新执行状态还需包含权威
-            # acceptance 已提交的新用户根输入，不能混入其它 stream 结果。
+            # 固定 checkpoint 只读冻结 messages；新执行还恢复已接受根输入
+            # 与前序终态工具组，当前执行的未 checkpoint 输出仍保持隔离。
             checkpoint = self._storage.checkpoints.load_checkpoint(
                 session_id,
                 thread_id,
@@ -100,7 +115,7 @@ class RolloutLangGraphCheckpointMixin:
                 checkpoint_index,
                 snapshot=snapshot,
                 context_view_id_override=history_view_id,
-                include_accepted_inputs=get_checkpoint_id(config) is None and history_view_id is None,
+                include_execution_context=get_checkpoint_id(config) is None and history_view_id is None,
             )
             return CheckpointTuple(
                 config={
@@ -266,6 +281,10 @@ class RolloutLangGraphCheckpointMixin:
                     merged_channel_versions[channel_name] = version
         checkpoint["channel_versions"] = merged_channel_versions
         effective_metadata = get_checkpoint_metadata(config, metadata)
+        # checkpoint worker 也会先于 stream sink 收到真实 ToolMessage。
+        # 屏障必须在 storage 锁前，允许同 Thread 的 queued root 正常接受。
+        for call_id in LangChainMessageCodec().tool_result_call_ids(current_messages):
+            observe_phase_sync(call_id, "canonical.tool_result.before_commit")
         self._writer.append_checkpoint(
             thread_id=thread_id,
             checkpoint_ns=checkpoint_ns,
@@ -322,120 +341,9 @@ class RolloutLangGraphCheckpointMixin:
             task_path=task_path,
         )
 
-    def delete_thread(self, thread_id: str) -> None:
-        owner = require_current_session_thread_owner(langgraph_thread_id=thread_id)
-        self._storage.forks.delete_thread(owner.session_id, thread_id=owner.thread_id)
 
-    def clone_rollout(
-        self,
-        *,
-        source_session_id: str,
-        source_thread_id: str,
-        target_session_id: str,
-        target_thread_id: str,
-        checkpoint_ns: str = "",
-        source_checkpoint_id: str | None,
-    ) -> str | None:
-        return self._storage.forks.clone_rollout(
-            source_session_id=source_session_id,
-            source_thread_id=source_thread_id,
-            target_session_id=target_session_id,
-            target_thread_id=target_thread_id,
-            checkpoint_ns=checkpoint_ns,
-            source_checkpoint_id=source_checkpoint_id,
-        )
-
-    def copy_turn_finalizations(
-        self,
-        *,
-        source_session_id: str,
-        source_thread_id: str,
-        source_checkpoint_id: str | None,
-        target_session_id: str,
-        target_thread_id: str,
-        checkpoint_ns: str = "",
-    ) -> int:
-        """复制 fork 源 checkpoint 中已完成 Turn 的最终消息指针。"""
-        return self._writer.copy_turn_finalizations(
-            source_session_id=source_session_id,
-            source_thread_id=source_thread_id,
-            source_checkpoint_id=source_checkpoint_id,
-            target_session_id=target_session_id,
-            target_thread_id=target_thread_id,
-            checkpoint_ns=checkpoint_ns,
-        )
-
-    def cancel_unfinished_turns(
-        self,
-        *,
-        session_id: str,
-        checkpoint_ns: str = "",
-    ) -> int:
-        """取消 fork 目标中不会由子会话继续执行的未完成 Turn。"""
-        return self._writer.cancel_unfinished_turns(
-            session_id=session_id,
-            checkpoint_ns=checkpoint_ns,
-        )
-
-    def record_fork_origin(
-        self,
-        *,
-        target_session_id: str,
-        source_session_id: str,
-        source_checkpoint_id: str | None,
-        source_view_id: str | None,
-        fork_mode: str,
-        relationship: str = "detached",
-        checkpoint_ns: str = "",
-    ) -> str:
-        return self._storage.forks.record_fork_origin(
-            target_session_id=target_session_id,
-            source_session_id=source_session_id,
-            source_checkpoint_id=source_checkpoint_id,
-            source_view_id=source_view_id,
-            fork_mode=fork_mode,
-            relationship=relationship,
-            checkpoint_ns=checkpoint_ns,
-        )
-
-    def list_fork_identity_mappings(
-        self,
-        target_session_id: str,
-        *,
-        fork_id: str | None = None,
-        entity_type: str | None = None,
-        checkpoint_ns: str = "",
-    ) -> list[dict[str, object]]:
-        return self._storage.forks.list_fork_identity_mappings(
-            target_session_id,
-            fork_id=fork_id,
-            entity_type=entity_type,
-            checkpoint_ns=checkpoint_ns,
-        )
-
-    def copy_pending_writes(
-        self,
-        *,
-        source_session_id: str,
-        source_thread_id: str,
-        source_checkpoint_id: str,
-        target_session_id: str,
-        target_thread_id: str,
-        target_checkpoint_id: str,
-        checkpoint_ns: str = "",
-    ) -> None:
-        self._storage.checkpoints.copy_pending_writes(
-            source_session_id=source_session_id,
-            source_thread_id=source_thread_id,
-            source_checkpoint_id=source_checkpoint_id,
-            target_session_id=target_session_id,
-            target_thread_id=target_thread_id,
-            target_checkpoint_id=target_checkpoint_id,
-            checkpoint_ns=checkpoint_ns,
-        )
-
-    def release_fork_retentions(self, child_session_id: str) -> None:
-        self._storage.forks.release_fork_retentions(child_session_id)
+    async def release_fork_retentions(self, child_session_id: str) -> None:
+        await self._storage.forks.release_fork_retentions(child_session_id)
 
     def rollout_id(self, session_id: str, checkpoint_ns: str = "") -> str:
         owner = self.forks.source.resolve_main_thread_owner(session_id)

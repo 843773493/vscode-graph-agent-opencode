@@ -49,8 +49,8 @@ class LLMRequestLogService:
             raise TypeError(f"LLM 请求日志不是 JSON object: {log_file}")
 
         timestamp = raw.get("timestamp")
-        if not isinstance(timestamp, int):
-            timestamp = self._timestamp_from_file(log_file)
+        if not isinstance(timestamp, int) or isinstance(timestamp, bool):
+            raise TypeError(f"LLM 请求日志 timestamp 必须是 epoch 毫秒整数: {log_file}")
 
         request = self._record_field(raw, "request", log_file)
         response = self._record_field(raw, "response", log_file)
@@ -85,10 +85,11 @@ class LLMRequestLogService:
         return value
 
     def _log_sort_key(self, log_file: Path) -> tuple[int, str]:
-        return (self._timestamp_from_file(log_file), log_file.name)
+        return (self._file_created_at_ns(log_file), log_file.name)
 
-    def _timestamp_from_file(self, log_file: Path) -> int:
+    def _file_created_at_ns(self, log_file: Path) -> int:
+        """文件名中的 epoch 纳秒只用于排序，不回填正文的毫秒时间。"""
         try:
             return int(log_file.stem)
         except ValueError as exc:
-            raise ValueError(f"LLM 请求日志文件名不是毫秒时间戳: {log_file}") from exc
+            raise ValueError(f"LLM 请求日志文件名不是 epoch 纳秒整数: {log_file}") from exc

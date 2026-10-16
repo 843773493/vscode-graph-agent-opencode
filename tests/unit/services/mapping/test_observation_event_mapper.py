@@ -5,10 +5,38 @@ from datetime import UTC, datetime
 from app.schemas.event import (
     LLMRequestEvent,
     LLMRequestPayload,
+    MessageCreatedEvent,
+    MessageCreatedPayload,
     StatusChangeEvent,
     StatusChangePayload,
 )
 from app.services.mapping.observation_event_mapper import map_event_to_observation_sse
+
+
+def test_child_message_observation_preserves_owner_and_message_time():
+    created_at = datetime(2026, 10, 14, 11, 59, tzinfo=UTC)
+    published_at = datetime(2026, 10, 14, 12, tzinfo=UTC)
+    event = MessageCreatedEvent(
+        event_id="evt_child_message",
+        job_id="job_child_message",
+        timestamp=published_at,
+        payload=MessageCreatedPayload(
+            message_id="msg_child",
+            session_id="ses_child_owner",
+            thread_id="thr_child",
+            role="user",
+            content="child input",
+            created_at=created_at,
+        ),
+    )
+
+    mapped = map_event_to_observation_sse(event)
+
+    assert mapped.event.type == "message.updated"
+    assert mapped.event.payload.thread_id == "thr_child"
+    assert mapped.event.payload.created_at == created_at
+    assert mapped.event.time == published_at
+    assert mapped.event.time != mapped.event.payload.created_at
 
 
 def test_status_change_maps_payload_to_typed_transport_dto():

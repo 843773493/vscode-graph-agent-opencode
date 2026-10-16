@@ -27,6 +27,7 @@ const SESSION_ID = "ses_reconciliation";
 const WORKSPACE_ID = "gw_reconciliation";
 const SESSION_CACHE_KEY = `${WORKSPACE_ID}::${SESSION_ID}`;
 const ACTIVE_JOB_ID = "job_reconciliation";
+const ACTIVE_TURN_ID = "turn_reconciliation";
 
 function session(): Session {
   return {
@@ -48,6 +49,7 @@ function assistantMessage(content: string = "恢复后的回复"): Message {
   return {
     message_id: "msg_assistant_recovered",
     session_id: SESSION_ID,
+    thread_id: "thr_018f0000000070008000000000000001",
     role: "assistant",
     content,
     attachments: [],
@@ -66,6 +68,7 @@ function pendingConversation(): ConversationView {
     events: [],
     status: "running",
     jobId: ACTIVE_JOB_ID,
+    turnId: ACTIVE_TURN_ID,
     pending: true,
     source: "pending",
   };
@@ -108,15 +111,18 @@ function appState(): AppState {
   const turnTimeline = upsertTurn(
     {
       ...createSessionTurnTimeline(SESSION_CACHE_KEY, 1),
+      threadId: "thr_018f0000000070008000000000000001",
       phase: "ready",
       projectionEpoch: 1,
     },
     {
-      turn_id: ACTIVE_JOB_ID,
+      turn_id: ACTIVE_TURN_ID,
       job_id: ACTIVE_JOB_ID,
       session_id: SESSION_ID,
       ordinal: 1,
       root_logical_item_ordinal: 0,
+      source_view_id: "view_history_fixture",
+      source_view_revision: 1,
       revision: 1,
       status: "running",
       created_at: "2026-07-24T00:00:00Z",
@@ -244,6 +250,7 @@ function installMockBackend({
   activeJob,
   pendingSnapshot = {
     session_id: SESSION_ID,
+    thread_id: "thr_018f0000000070008000000000000001",
     active_job_id: null,
     requests: [],
   },
@@ -278,7 +285,7 @@ function installMockBackend({
       }
       if (
         url.pathname ===
-        `/api/v1/sessions/${SESSION_ID}/pending-requests`
+        `/api/v1/sessions/${SESSION_ID}/main-thread/pending-requests`
       ) {
         return apiResponse(pendingSnapshot);
       }
@@ -294,9 +301,10 @@ function installMockBackend({
       }
       if (url.pathname === `/api/v1/sessions/${SESSION_ID}/history`) {
         return apiResponse({
+          thread_id: "thr_018f0000000070008000000000000001",
           projection_epoch: turnProjectionEpoch,
           items: [{
-            turn_id: ACTIVE_JOB_ID,
+            turn_id: ACTIVE_TURN_ID,
             job_id: ACTIVE_JOB_ID,
             session_id: SESSION_ID,
             ordinal: 1,
@@ -397,7 +405,7 @@ describe("运行中 Job 对账", () => {
       false,
     );
     const turn = harness.current().turnTimelinesBySession
-      .get(SESSION_CACHE_KEY)?.turnsById[ACTIVE_JOB_ID];
+      .get(SESSION_CACHE_KEY)?.turnsById[ACTIVE_TURN_ID];
     expect(turn?.revision).toBe(1);
     expect(turn && "final_response" in turn).toBe(false);
     expect(harness.current().status).toBe("任务已完成");
@@ -431,7 +439,7 @@ describe("运行中 Job 对账", () => {
     expect(harness.current().status).toBe("任务已完成");
     expect(requests).toEqual([
       `/api/v1/jobs/${ACTIVE_JOB_ID}`,
-      `/api/v1/sessions/${SESSION_ID}/pending-requests`,
+      `/api/v1/sessions/${SESSION_ID}/main-thread/pending-requests`,
       `/api/v1/sessions/${SESSION_ID}`,
     ]);
   });
@@ -517,7 +525,7 @@ describe("运行中 Job 对账", () => {
     );
 
     const turn = harness.current().turnTimelinesBySession
-      .get(SESSION_CACHE_KEY)?.turnsById[ACTIVE_JOB_ID];
+      .get(SESSION_CACHE_KEY)?.turnsById[ACTIVE_TURN_ID];
     expect(turn?.revision).toBe(1);
     expect(turn && "final_response" in turn).toBe(false);
     expect(harness.current().sessionHistoryReloadNonce).toBe(0);
@@ -668,6 +676,7 @@ describe("运行中 Job 对账", () => {
       activeJob: job("completed"),
       pendingSnapshot: {
         session_id: SESSION_ID,
+        thread_id: "thr_018f0000000070008000000000000001",
         active_job_id: ACTIVE_JOB_ID,
         requests: [],
       },

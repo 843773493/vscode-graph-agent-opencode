@@ -1,10 +1,10 @@
 # 目录用途
 
-跨 session legacy 坐标与 acceptance lineage。
+fork 协调 journal、来源保留和目标删除的持久化 owner。
 
 # 可修改内容
 
-- 仅修改 fork 提交过程中的目标本地化与一致性检查。
+- 可以修改冻结快照的物化提交、恢复、精确来源 claim 和目标删除清理。
 
 # 不可修改内容
 
@@ -12,5 +12,6 @@
 
 # 规范
 
-- source 坐标仅作审计；运行时引用必须指向 target namespace。
+- 当前物理 owner 与历史执行 scope 分开；历史 ID、状态和 bytes 保持原样。
+- prepared 由原冻结 operation 重放，target_committed 只收敛当前目标 journal。
 - 失败明确报错，保留 fork journal 的恢复边界。

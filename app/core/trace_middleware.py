@@ -1,12 +1,11 @@
 import logging
 import time
 import uuid
-from collections.abc import Awaitable, Callable
 from contextvars import ContextVar, Token
 
-from fastapi import Request, Response
+from fastapi import Request
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +16,7 @@ GATEWAY_ID_HEADER = "X-BoxTeam-Gateway-Id"
 NAVIGATION_ACTOR_HEADER = "X-BoxTeam-Navigation-Actor"
 
 # 当前请求绑定的 gateway_id；请求未携带时保持 None，由消费方 fail-closed。
-# 与 request_id 一样，生命周期完全由 TraceMiddleware.dispatch 承担（请求作用域内）。
+# 与 request_id 一样，生命周期由 TraceMiddleware 在请求作用域内承担。
 _CURRENT_GATEWAY_ID: ContextVar[str | None] = ContextVar(
     "boxteam_current_gateway_id",
     default=None,
@@ -134,7 +133,7 @@ def require_current_navigation_actor(consumer: str) -> str:
     return actor
 
 
-class TraceMiddleware(BaseHTTPMiddleware):
+class TraceMiddleware:
     """
     Middleware for request tracing and performance logging.
     
@@ -145,11 +144,15 @@ class TraceMiddleware(BaseHTTPMiddleware):
     - Trace headers propagation
     """
     
-    async def dispatch(
-        self, 
-        request: Request, 
-        call_next: Callable[[Request], Awaitable[Response]]
-    ) -> Response:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope, receive=receive)
         incoming_request_id = request.headers.get("X-Request-ID", "").strip()
         request_id = incoming_request_id or str(uuid.uuid4())
         start_time = time.perf_counter()
@@ -170,10 +173,31 @@ class TraceMiddleware(BaseHTTPMiddleware):
         # 显式随 job 携带，避免下游补造第二个 request ID。
         request_id_token = set_current_request_id(request_id)
 
-        # Add request ID to response headers
+        response_started = False
+        response_status = 500
+
+        async def traced_send(message: Message) -> None:
+            nonlocal response_started, response_status
+            if message["type"] == "http.response.start":
+                response_started = True
+                response_status = int(message["status"])
+                headers = [
+                    (name, value)
+                    for name, value in message.get("headers", [])
+                    if name.lower() != b"x-request-id"
+                ]
+                headers.append((b"x-request-id", request_id.encode("latin-1")))
+                message = {**message, "headers": headers}
+            await send(message)
+
         try:
-            response: Response = await call_next(request)
+            # 直接调用 ASGI 入口，保留取消、已开始响应后的错误和流式响应原有语义。
+            await self.app(scope, receive, traced_send)
+            if not response_started:
+                raise RuntimeError("No response returned.")
         except Exception as error:
+            if response_started:
+                raise
             duration = time.perf_counter() - start_time
             logger.exception(
                 "[TRACE] method=%s path=%s status=500 duration=%.4fs request_id=%s",
@@ -182,34 +206,31 @@ class TraceMiddleware(BaseHTTPMiddleware):
                 duration,
                 request_id,
             )
-            return JSONResponse(
+            message = f"{type(error).__name__}: {error}"
+            for note in getattr(error, "__notes__", ()):
+                message = f"{message}\n{note}"
+            response = JSONResponse(
                 status_code=500,
                 headers={"X-Request-ID": request_id},
                 content={
                     "code": 500,
-                    "message": f"{type(error).__name__}: {error}",
+                    "message": message,
                     "data": None,
                     "request_id": request_id,
                 },
             )
+            await response(scope, receive, traced_send)
+            return
         finally:
             reset_current_request_id(request_id_token)
             reset_current_navigation_actor(navigation_actor_token)
             reset_current_gateway_id(gateway_id_token)
-        response.headers["X-Request-ID"] = request_id
-        
-        # Calculate execution time
-        duration = time.perf_counter() - start_time
-        
-        # Log request with trace info
-        # 成功请求数量远大于故障请求；放在 DEBUG，避免冷启动/SSE 轮询把服务日志无限放大。
+
         logger.debug(
             "[TRACE] method=%s path=%s status=%s duration=%.4fs request_id=%s",
             request.method,
             request.url.path,
-            response.status_code,
-            duration,
+            response_status,
+            time.perf_counter() - start_time,
             request_id,
         )
-        
-        return response

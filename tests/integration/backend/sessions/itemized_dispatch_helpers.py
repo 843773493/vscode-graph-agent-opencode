@@ -6,7 +6,7 @@ import asyncio
 import json
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import copy_context
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -497,6 +497,8 @@ async def invoke_provider_dispatch(
         model,
         middleware=[
             SealedAssemblyDispatchBridge(
+                context_read_admission=nullcontext,
+                context_control_admission=lambda _operation, _payload, _ref: nullcontext(),
                 checkpointer=saver,
                 session_id=session_id,
                 thread_id=thread,

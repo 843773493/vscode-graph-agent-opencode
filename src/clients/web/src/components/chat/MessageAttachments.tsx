@@ -6,6 +6,7 @@ import {
   buildMessageMediaItems,
   type MessageMediaItem,
   type MessageMediaKind,
+  type MessageAttachment,
 } from "../../utils/media/messageMedia";
 
 function fallbackLabel(kind: MessageMediaKind): string {
@@ -147,7 +148,7 @@ export default function MessageAttachments({
   workspaceId,
   onOpenAttachment,
 }: {
-  attachments: AttachmentRef[];
+  attachments: MessageAttachment[];
   apiPort: number;
   sessionId: string;
   workspaceId?: string | null;
@@ -155,7 +156,7 @@ export default function MessageAttachments({
 }): React.ReactNode {
   const items = React.useMemo(() => buildMessageMediaItems(attachments), [attachments]);
   const imageItems = React.useMemo(
-    () => items.filter((item) => item.kind === "image"),
+    () => items.filter((item) => item.kind === "image" && item.attachment.availability !== "unavailable"),
     [items],
   );
   const { sources, errors, reload } = useMessageMediaSources(
@@ -175,9 +176,10 @@ export default function MessageAttachments({
       {items.map((item) => {
         const source = sources.get(item.id);
         const error = errors.get(item.id);
+        const unavailable = item.attachment.availability === "unavailable";
         const imageIndex = imageItems.findIndex((image) => image.id === item.id);
         return (
-          <article key={item.id} className={`message-attachment is-${item.kind}`}>
+          <article key={item.id} className={`message-attachment is-${item.kind}`} data-availability={item.attachment.availability ?? undefined}>
             {item.kind === "image" && source ? (
               <button
                 type="button"
@@ -201,7 +203,7 @@ export default function MessageAttachments({
                 type="button"
                 className="message-attachment-open-button"
                 onClick={() => onOpenAttachment?.(item.attachment)}
-                disabled={!onOpenAttachment}
+                disabled={unavailable || !onOpenAttachment}
                 aria-label={`在右侧打开附件：${item.name}`}
               >
                 {/* TODO: 在媒体查看器中接入音频波形与视频播放器后，替换对应类型的占位卡片。 */}
@@ -214,12 +216,13 @@ export default function MessageAttachments({
               type="button"
               className="message-attachment-name-button"
               onClick={() => onOpenAttachment?.(item.attachment)}
-              disabled={!onOpenAttachment}
+              disabled={unavailable || !onOpenAttachment}
               title={item.name}
             >
               <span className="message-attachment-name">{item.name}</span>
             </button>
-            {error ? (
+            {unavailable ? <span role="status">附件不可用</span> : null}
+            {error && !unavailable ? (
               <button
                 type="button"
                 className="message-attachment-error"

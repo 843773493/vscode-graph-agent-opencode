@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import nullcontext
+
+import pytest
 
 from app.agents.tools.skill_loading import create_skill_load_tool
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
@@ -15,6 +18,12 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from tests.unit.services.infrastructure.rollout_context.conftest import (
     source_seal_case as source_seal_case,  # noqa: PLC0414 - 当前测试文件独立正式产物
 )
+
+
+@pytest.fixture
+def skill_control_admission():
+    """CSM 消费者测试显式隔离 Session 生命周期准入。"""
+    return lambda _name, _mode: nullcontext()
 
 
 def _revision(content: str) -> str:
@@ -56,11 +65,12 @@ def _manager_with_binding(
     return manager, binding
 
 
-def test_snapshot_mode_appends_frozen_revision_and_safe_receipt():
+@pytest.mark.asyncio
+async def test_snapshot_mode_appends_frozen_revision_and_safe_receipt(skill_control_admission):
     manager, binding = _manager_with_binding()
-    skill_load = create_skill_load_tool(manager)
+    skill_load = create_skill_load_tool(manager, control_admission=skill_control_admission)
 
-    first = json.loads(skill_load.invoke({"name": "shared"}))
+    first = json.loads(await skill_load.ainvoke({"name": "shared"}))
 
     assert first["status"] == "loaded"
     assert first["append_status"] == "appended"
@@ -74,16 +84,17 @@ def test_snapshot_mode_appends_frozen_revision_and_safe_receipt():
     assert "/.boxteam" not in serialized
 
 
-def test_frozen_call_is_unaffected_by_same_name_new_revision():
+@pytest.mark.asyncio
+async def test_frozen_call_is_unaffected_by_same_name_new_revision(skill_control_admission):
     manager, binding = _manager_with_binding()
-    skill_load = create_skill_load_tool(manager)
+    skill_load = create_skill_load_tool(manager, control_admission=skill_control_admission)
 
-    frozen = json.loads(skill_load.invoke({"name": "shared"}))
+    frozen = json.loads(await skill_load.ainvoke({"name": "shared"}))
 
     # 模拟同名 catalog 发布新 revision:live state 被手工推进到新正文。
     manager.activate_skill_content("shared", "workspace v2 body\n")
 
-    second = json.loads(skill_load.invoke({"name": "shared"}))
+    second = json.loads(await skill_load.ainvoke({"name": "shared"}))
 
     assert second["status"] == "error"
     assert second["error"]["code"] == "skill-catalog-snapshot-conflict"
@@ -91,7 +102,8 @@ def test_frozen_call_is_unaffected_by_same_name_new_revision():
     assert frozen["revision"] == binding.activation_revision
 
 
-def test_binding_mismatch_with_registration_fails_closed():
+@pytest.mark.asyncio
+async def test_binding_mismatch_with_registration_fails_closed(skill_control_admission):
     manager = ContextSourceManager()
     manager.register(
         ContextSourceDescriptor(
@@ -118,15 +130,16 @@ def test_binding_mismatch_with_registration_fails_closed():
             },
         )
     )
-    skill_load = create_skill_load_tool(manager)
+    skill_load = create_skill_load_tool(manager, control_admission=skill_control_admission)
 
-    result = json.loads(skill_load.invoke({"name": "shared"}))
+    result = json.loads(await skill_load.ainvoke({"name": "shared"}))
 
     assert result["status"] == "error"
     assert result["error"]["code"] == "skill-catalog-snapshot-conflict"
 
 
-def test_missing_snapshot_fails_closed_without_catalog_fallback():
+@pytest.mark.asyncio
+async def test_missing_snapshot_fails_closed_without_catalog_fallback(skill_control_admission):
     manager = ContextSourceManager()
     manager.register(
         ContextSourceDescriptor(
@@ -137,28 +150,30 @@ def test_missing_snapshot_fails_closed_without_catalog_fallback():
             internal_locator="/.boxteam/skills/shared/SKILL.md",
         )
     )
-    skill_load = create_skill_load_tool(manager)
+    skill_load = create_skill_load_tool(manager, control_admission=skill_control_admission)
 
     for mode in ("snapshot", "tracked"):
-        result = json.loads(skill_load.invoke({"name": "shared", "mode": mode}))
+        result = json.loads(await skill_load.ainvoke({"name": "shared", "mode": mode}))
         assert result["status"] == "error"
         assert result["error"]["code"] == "skill-catalog-snapshot-conflict"
 
 
-def test_unknown_name_returns_skill_not_found():
+@pytest.mark.asyncio
+async def test_unknown_name_returns_skill_not_found(skill_control_admission):
     manager, _binding = _manager_with_binding()
-    skill_load = create_skill_load_tool(manager)
+    skill_load = create_skill_load_tool(manager, control_admission=skill_control_admission)
 
-    result = json.loads(skill_load.invoke({"name": "missing"}))
+    result = json.loads(await skill_load.ainvoke({"name": "missing"}))
 
     assert result["status"] == "error"
     assert result["error"]["code"] == "skill-not-found"
 
 
-def test_untrack_freezes_original_registration_not_current_catalog(source_seal_case):
+@pytest.mark.asyncio
+async def test_untrack_freezes_original_registration_not_current_catalog(source_seal_case, skill_control_admission):
     manager, binding = _manager_with_binding(source_seal_case)
-    skill_load = create_skill_load_tool(manager)
-    assert json.loads(skill_load.invoke({"name": "shared", "mode": "tracked"}))[
+    skill_load = create_skill_load_tool(manager, control_admission=skill_control_admission)
+    assert json.loads(await skill_load.ainvoke({"name": "shared", "mode": "tracked"}))[
         "tracked"
     ] is True
     tracked_batch = manager.prepare_pending()
@@ -181,7 +196,7 @@ def test_untrack_freezes_original_registration_not_current_catalog(source_seal_c
         )
     )
 
-    result = json.loads(skill_load.invoke({"name": "shared", "mode": "untrack"}))
+    result = json.loads(await skill_load.ainvoke({"name": "shared", "mode": "untrack"}))
 
     assert result["status"] == "loaded"
     assert result["tracked"] is False
@@ -192,17 +207,18 @@ def test_untrack_freezes_original_registration_not_current_catalog(source_seal_c
     assert binding.display_uri in json.dumps(result)
 
 
-def test_tracked_rebind_requires_explicit_tracked_load():
+@pytest.mark.asyncio
+async def test_tracked_rebind_requires_explicit_tracked_load(skill_control_admission):
     manager, _binding = _manager_with_binding()
-    skill_load = create_skill_load_tool(manager)
-    assert json.loads(skill_load.invoke({"name": "shared", "mode": "tracked"}))[
+    skill_load = create_skill_load_tool(manager, control_admission=skill_control_admission)
+    assert json.loads(await skill_load.ainvoke({"name": "shared", "mode": "tracked"}))[
         "tracked"
     ] is True
     manager.activate_skill_content("shared", "workspace v2\n")
 
     # 冻结 binding 与 live state 不一致时,旧 tracked 调用 fail closed,
     # 不会静默改绑新 entry。
-    result = json.loads(skill_load.invoke({"name": "shared"}))
+    result = json.loads(await skill_load.ainvoke({"name": "shared"}))
 
     assert result["status"] == "error"
     assert result["error"]["code"] == "skill-catalog-snapshot-conflict"

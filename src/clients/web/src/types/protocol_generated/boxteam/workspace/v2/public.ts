@@ -112,6 +112,7 @@ export interface ChildThreadListDTO {
   parent_session_id: string;
   items: ChildThreadSummaryDTO[];
   total: number;
+  teams: TeamBoardDTO[];
 }
 
 export interface ChildThreadSummaryDTO {
@@ -122,7 +123,10 @@ export interface ChildThreadSummaryDTO {
   subagent_type?: string | undefined;
   title?: string | undefined;
   collaboration_state?: string | undefined;
-  admission_state?: string | undefined;
+  admission_state?:
+    | string
+    | undefined;
+  /** 子线程合成展示状态；bound 仅表示初始 admission 已绑定，不保证 Job 已开始。 */
   status: string;
   runtime?: ChildThreadRuntimeDTO | undefined;
   report_execution_id?: string | undefined;
@@ -266,7 +270,10 @@ export interface JobUpdatedExecutionEventDTO {
 
 export interface LLMRequestLogRecordDTO {
   session_id: string;
-  job_id?: string | undefined;
+  job_id?:
+    | string
+    | undefined;
+  /** handler 结束或失败后组装日志的 epoch 毫秒时刻；文件名的 epoch 纳秒只用于排序。 */
   timestamp: number;
   file_name: string;
   file_path: string;
@@ -303,6 +310,7 @@ export interface MessageCreateRequest {
 }
 
 export interface MessageDTO {
+  /** 消息创建和更新时刻；事件发布时刻由事件 header.time 独立表示。 */
   created_at: string | undefined;
   updated_at: string | undefined;
   message_id: string;
@@ -311,16 +319,7 @@ export interface MessageDTO {
   content: string;
   attachments: AttachmentRef[];
   metadata?: { [key: string]: any } | undefined;
-}
-
-export interface MessageObservationDTO {
-  message_id: string;
-  session_id: string;
-  role: string;
-  content: string;
-  attachments: { [key: string]: any }[];
-  metadata?: { [key: string]: any } | undefined;
-  created_at: string | undefined;
+  thread_id: string;
 }
 
 export interface MessageReplayAccepted {
@@ -334,6 +333,8 @@ export interface MessageReplayAccepted {
   removed_message_count: number;
   workspace_changes_reverted?: boolean | undefined;
   notice: string;
+  thread_id: string;
+  turn_id?: string | undefined;
 }
 
 export interface MessageReplayRequest {
@@ -348,20 +349,12 @@ export interface MessageRunAccepted {
   status: string;
   dispatch: JobDispatchSnapshotDTO | undefined;
   thread_id: string;
+  turn_id?: string | undefined;
 }
 
 export interface MessageRunRequest {
   message: MessageCreateRequest | undefined;
   run: RunOptions | undefined;
-}
-
-export interface MessageUpdatedExecutionEventDTO {
-  event_id: string;
-  session_id: string;
-  job_id?: string | undefined;
-  time: string | undefined;
-  type: string;
-  payload: MessageObservationDTO | undefined;
 }
 
 export interface ExtensionCatalogBindingAuditDTO {
@@ -672,7 +665,11 @@ export interface PendingRequestListDTO {
   session_id: string;
   active_job_id?: string | undefined;
   requests: PendingRequestDTO[];
-  snapshot_version?: number | undefined;
+  snapshot_version?:
+    | number
+    | undefined;
+  /** 精确 thread 读取的范围；Session 聚合快照不设置。 */
+  thread_id?: string | undefined;
 }
 
 export interface PendingRequestPolicyUpdateRequest {
@@ -687,6 +684,7 @@ export interface PendingRequestSummaryDTO {
   delivery_policy: string;
   status: string;
   updated_at: string | undefined;
+  thread_id: string;
 }
 
 export interface PendingRequestSummaryListDTO {
@@ -696,11 +694,7 @@ export interface PendingRequestSummaryListDTO {
   request_count: number;
   snapshot_version?: number | undefined;
   truncated?: boolean | undefined;
-}
-
-export interface PendingRequestUpdateRequest {
-  content: string;
-  attachments: AttachmentRef[];
+  thread_id?: string | undefined;
 }
 
 export interface PermissionRequestDTO {
@@ -892,7 +886,10 @@ export interface SessionContextReadRequest {
   include: string[];
   recent_rounds?: number | undefined;
   include_initial_goal?: boolean | undefined;
-  cursor?: string | undefined;
+  cursor?:
+    | string
+    | undefined;
+  /** 投影 items 的单页条数上限；messages 中用户与助手消息分别计条，max_chars 可进一步截短。不是 recent_rounds、Turn 数或完整 snapshot，续页由 has_more/next_cursor 判定。 */
   limit?: number | undefined;
   max_chars?: number | undefined;
   revision?: string | undefined;
@@ -980,15 +977,25 @@ export interface SessionCreateRequest {
 }
 
 export interface SessionDTO {
-  created_at: string | undefined;
+  /** Session 创建 intent 冻结并由 catalog 投影的 UTC 创建时刻；导航改名和移动不重写。 */
+  created_at:
+    | string
+    | undefined;
+  /** catalog 记录的 Session 配置最近一次更新 UTC 时刻；初建等于 created_at，导航改名和移动不推进。 */
   updated_at: string | undefined;
   session_id: string;
   workspace_id: string;
   title: string;
   title_source?: string | undefined;
   current_agent_id: string;
-  current_provider_id?: string | undefined;
-  parent_session_id?: string | undefined;
+  current_provider_id?:
+    | string
+    | undefined;
+  /** catalog 导航父链中最近祖先 Session 的稳定 ID；随导航移动派生，不表示物理父目录。 */
+  parent_session_id?:
+    | string
+    | undefined;
+  /** 创建 metadata 冻结的 fork 来源 Session 稳定 ID；独立于导航祖先，普通 Session 可为空。 */
   context_source_session_id?: string | undefined;
   kind?: string | undefined;
   generation_origin?: SessionGenerationOriginDTO | undefined;
@@ -1074,11 +1081,119 @@ export interface SessionFileTreeSettingsDTO {
 }
 
 export interface SessionForkRequest {
-  mode?: string | undefined;
-  turn_id?: string | undefined;
-  anchor_mode?: string | undefined;
-  pinned?: boolean | undefined;
-  place_under_source?: boolean | undefined;
+  mode?:
+    | string
+    | undefined;
+  /** inclusive 包含点击 item；before 不包含点击 item。 */
+  anchor_mode?:
+    | string
+    | undefined;
+  /** 精确来源 Thread；Session 兼容入口由 service 按 catalog main 归一。 */
+  source_uri: string;
+  idempotency_key: string;
+  /** 来源 Thread 中所选历史 view 的冻结身份。 */
+  source_view_id: string;
+  /** 冻结所选来源 view 的 revision，不追随 latest。 */
+  source_view_revision: number;
+  /** 冻结来源 view 中点击的稳定 item 身份。 */
+  anchor_item_id?:
+    | string
+    | undefined;
+  /** 创建容器；结果 thread_uri/thread_id 才是实际新目标 Thread。 */
+  target_container_uri: string;
+  creation_kind?: string | undefined;
+  title?: string | undefined;
+  relationship?: string | undefined;
+  resources: SessionForkResourceChoice[];
+  goal?: SessionForkGoalSelection | undefined;
+}
+
+export interface SessionForkGoalSelection {
+  token_budget?: number | undefined;
+}
+
+export interface SessionForkResourceChoice {
+  resource_uri?: string | undefined;
+  action: string;
+  owner_reference?: SessionForkOwnerReference | undefined;
+}
+
+export interface SessionForkOwnerReference {
+  kind: string;
+  resource_id: string;
+  workspace_id: string;
+  /** attach 的 CAS 预期版本，必须为正数并与当前 owner revision 匹配。 */
+  expected_revision: number;
+}
+
+export interface SessionForkResourceResult {
+  resource_uri?: string | undefined;
+  action: string;
+  availability: string;
+  target_uri?: string | undefined;
+  reason?: string | undefined;
+  owner_reference?: SessionForkOwnerReference | undefined;
+  owner_resource?:
+    | WorkspaceResourceDTO
+    | undefined;
+  /** 本次 attach 的历史提交事实；当前可用性仍由 owner_resource 核实。 */
+  operation_state?:
+    | string
+    | undefined;
+  /** 本次 attach 的历史提交 revision；尚未提交时省略，当前 owner 版本见 owner_resource.owner_revision。 */
+  committed_revision?: number | undefined;
+}
+
+export interface SessionForkExportReleaseDTO {
+  /** 目标本地清理事实；只有核实来源终结回执才为 confirmed。 */
+  state: string;
+  error?: string | undefined;
+}
+
+export interface SessionForkResultDTO {
+  /** 实际目标 Thread 所属 Session，不表示应切换主会话。 */
+  session: SessionDTO | undefined;
+  thread_id: string;
+  thread_uri: string;
+  creation_kind: string;
+  source_uri: string;
+  source_view_id: string;
+  source_view_revision: number;
+  anchor_item_id?: string | undefined;
+  mode: string;
+  resources: SessionForkResourceResult[];
+  goal_id?: string | undefined;
+  export_release?: SessionForkExportReleaseDTO | undefined;
+}
+
+export interface SessionForkResourceSourceDTO {
+  resource_uri: string;
+  /** 附件 owner 的 file_name / mime_type 展示投影。 */
+  name?: string | undefined;
+  content_type?:
+    | string
+    | undefined;
+  /** 来源可用性与本次选择的正文依赖，不表示目标授权。 */
+  availability: string;
+  required_for_context: boolean;
+}
+
+export interface SessionForkSourcePointDTO {
+  source_uri: string;
+  source_view_id: string;
+  source_view_revision: number;
+  anchor_item_id?: string | undefined;
+  child_container_uri: string;
+  main_container_uri: string;
+  /** 新目标名称的可编辑预填值。 */
+  title: string;
+  /** 来源是否有可选 Goal，不表示目标已继承。 */
+  goal_available: boolean;
+  resources: SessionForkResourceSourceDTO[];
+  resource_mode: string;
+  resource_anchor_mode: string;
+  /** 当前工作区领域 owner 的实时投影，不属于冻结历史快照。 */
+  live_resources: WorkspaceResourceDTO[];
 }
 
 export interface SessionGenerationOriginDTO {
@@ -1099,11 +1214,26 @@ export interface SessionGoalDTO {
   session_id: string;
   objective: string;
   status: string;
-  token_budget?: number | undefined;
-  tokens_used?: number | undefined;
+  token_budget?:
+    | number
+    | undefined;
+  /** 当前 Goal 的累计 Token；fork 创建独立 Goal 时从 0 开始。 */
+  tokens_used?:
+    | number
+    | undefined;
+  /** 当前 Goal 的累计用时；fork 创建独立 Goal 时从 0 开始。 */
   time_used_seconds?: number | undefined;
-  revision?: number | undefined;
-  created_at: string | undefined;
+  revision?:
+    | number
+    | undefined;
+  /** fork 的新 Goal 使用目标 Session 冻结创建时刻，不继承来源 Goal 的时间。 */
+  created_at:
+    | string
+    | undefined;
+  /**
+   * 当前 Goal 记录最近一次写入时刻，含设置、用量记账和续跑标记写入或失败回滚；fork 初值取目标 Session 冻结创建时刻。
+   * 与 revision 不同：revision 仅随普通设置更新递增。
+   */
   updated_at: string | undefined;
   last_accounted_job_id?: string | undefined;
   last_continued_job_id?: string | undefined;
@@ -1122,6 +1252,7 @@ export interface SessionInformationErrorDTO {
   job_id: string;
   type: string;
   message: string;
+  /** 所选错误 Trace 的来源事件时间；保留其时刻与显式时区偏移，不在收集诊断信息时重新取时。 */
   timestamp: string | undefined;
   message_truncated?: boolean | undefined;
 }
@@ -1149,11 +1280,21 @@ export interface SessionInformationSessionDTO {
   workspace_id: string;
   title: string;
   current_agent_id: string;
-  current_provider_id?: string | undefined;
-  parent_session_id?: string | undefined;
+  current_provider_id?:
+    | string
+    | undefined;
+  /** catalog 导航父链中最近祖先 Session 的稳定 ID；随导航移动派生，不表示物理父目录。 */
+  parent_session_id?:
+    | string
+    | undefined;
+  /** 创建 metadata 冻结的 fork 来源 Session 稳定 ID；独立于导航祖先，普通 Session 可为空。 */
   context_source_session_id?: string | undefined;
   kind: string;
-  created_at: string | undefined;
+  /** Session 创建 intent 冻结并由 catalog 投影的 UTC 创建时刻；导航改名和移动不重写。 */
+  created_at:
+    | string
+    | undefined;
+  /** catalog 记录的 Session 配置最近一次更新 UTC 时刻；初建等于 created_at，导航改名和移动不推进。 */
   updated_at: string | undefined;
   title_truncated?: boolean | undefined;
 }
@@ -1176,7 +1317,10 @@ export interface SessionInformationRelationsDTO {
 
 export interface SessionInformationSnapshotDTO {
   kind?: string | undefined;
-  schema_version?: number | undefined;
+  schema_version?:
+    | number
+    | undefined;
+  /** 诊断读取完成后构造快照时取得的当前 UTC 时刻，接口按 ISO8601 表达；不等同于所含事件时间，也不代表跨 owner 的事务快照。 */
   generated_at: string | undefined;
   session: SessionInformationSessionDTO | undefined;
   workspace: SessionInformationWorkspaceDTO | undefined;
@@ -1190,7 +1334,10 @@ export interface SessionInformationSnapshotDTO {
 export interface SessionInformationTraceDTO {
   observed_event_count?: number | undefined;
   last_event_id?: string | undefined;
-  last_event_type?: string | undefined;
+  last_event_type?:
+    | string
+    | undefined;
+  /** 本次已读取 Trace 中最后一项的来源事件时间；保留显式时区偏移，无 Trace 时为空，不是诊断快照生成时刻。 */
   last_event_at?: string | undefined;
   truncated?: boolean | undefined;
 }
@@ -1253,6 +1400,7 @@ export interface CommunicationReceipt {
   payload_hash: string;
   admission_id: string;
   state: string;
+  /** target 首次持久接受此通信的 UTC 时刻，与 inbox.created_at 同源；重放保留原值，不表示 execution 或 Job 开始。 */
   accepted_at: string;
 }
 
@@ -1265,7 +1413,9 @@ export interface CommunicationObservationRequest {
   operation: string;
   query: { [key: string]: any } | undefined;
   page_ordinal: number;
+  /** 从 tool call 起算的一天恢复窗口；query.deadline 独立冻结真正的 wait 预算。 */
   expires_at: string;
+  terminal_replay: boolean;
 }
 
 /** read 授权绑定真实资源引用；清单不制造 Session 或 main thread。 */
@@ -1287,11 +1437,67 @@ export interface ContextQueryRequest {
 
 export interface CommunicationGatewayRequest {
   operation: string;
-  destination: { $case: "target"; target: GlobalThreadAddress } | {
-    $case: "resource_target";
-    resource_target: ContextGrantTarget;
-  } | undefined;
+  destination:
+    | { $case: "target"; target: GlobalThreadAddress }
+    | { $case: "resource_target"; resource_target: ContextGrantTarget }
+    | { $case: "fork_target"; fork_target: ForkGrantTarget }
+    | undefined;
   body: { [key: string]: any } | undefined;
+}
+
+export interface ForkGrantTarget {
+  gateway_id: string;
+  uri: string;
+  fork_role: string;
+}
+
+export interface ForkSourceCaptureDTO {
+  copy_operation_id: string;
+  creation_key?: string | undefined;
+  source_session_id: string;
+  source_thread_id: string;
+  target_session_id: string;
+  target_thread_id: string;
+  snapshot_id: string;
+  snapshot_relative_locator: string;
+  fork_id: string;
+  materialization_id: string;
+  request_json: string;
+  preimage_hash: string;
+  state: string;
+  snapshot_sha256?: string | undefined;
+  marker_sha256?: string | undefined;
+  abort_reason?: string | undefined;
+}
+
+export interface SessionForkTransferRequest {
+  source_gateway_id: string;
+  fork_target: ForkGrantTarget | undefined;
+  action: string;
+  request: SessionForkRequest | undefined;
+  capture?: ForkSourceCaptureDTO | undefined;
+  cursor?: number | undefined;
+  file_name?: string | undefined;
+  offset?: number | undefined;
+  generation_origin?: SessionGenerationOriginDTO | undefined;
+  release_state?: string | undefined;
+  blob_id?: string | undefined;
+}
+
+export interface ForkTransferFileDTO {
+  name: string;
+  size_bytes: number;
+}
+
+export interface SessionForkTransferResultDTO {
+  capture?: ForkSourceCaptureDTO | undefined;
+  intent?: { [key: string]: any } | undefined;
+  files: ForkTransferFileDTO[];
+  next_cursor?: number | undefined;
+  chunk_base64?: string | undefined;
+  chunk_sha256?: string | undefined;
+  offset?: number | undefined;
+  result?: SessionForkResultDTO | undefined;
 }
 
 export interface SessionNetworkWaitDTO {
@@ -1356,6 +1562,7 @@ export interface WorkspaceResourceDTO {
   retention_scope: string;
   source_thread: ResourceThreadRef | undefined;
   thread_associations: ResourceThreadRef[];
+  /** owner 持久化的传输授权版本，用于版本校验，并与外部 transport_owner_revision 对账。 */
   owner_revision: number;
   status: string;
   reconciliation_status: string;
@@ -1442,6 +1649,7 @@ export interface SessionTurnBootstrapDTO {
   older_cursor?: string | undefined;
   event_cursor?: string | undefined;
   projection_epoch: number;
+  thread_id: string;
 }
 
 export interface SessionUpdateRequest {
@@ -1512,9 +1720,15 @@ export interface TeamMemberDTO {
   role: string;
   source: string;
   work_mode: string;
-  instructions?: string | undefined;
+  instructions?:
+    | string
+    | undefined;
+  /** 团队成员资格与初始准入的合成状态，不表示 execution outcome 或运行状态。 */
   status?: string | undefined;
-  joined_at: string | undefined;
+  joined_at:
+    | string
+    | undefined;
+  /** 协调者取 TeamBoard 创建时刻；委派成员取 child 初始 execution intent 最近更新时间，不是 collaboration member 行更新时间。 */
   updated_at: string | undefined;
 }
 
@@ -1522,7 +1736,10 @@ export interface TeamMemberOperationDTO {
   board: TeamBoardDTO | undefined;
   member: TeamMemberDTO | undefined;
   child_thread_id?: string | undefined;
-  child_delegation_id?: string | undefined;
+  child_delegation_id?:
+    | string
+    | undefined;
+  /** 子线程初始 execution intent 状态；bound 表示 identity 已绑定，不代表 Job 已启动。 */
   child_admission_state?: string | undefined;
 }
 
@@ -1636,6 +1853,7 @@ export interface ToolTestStartRequest {
 
 export interface TraceEventDTO {
   event_id: string;
+  /** 来源路径提供的部件引用；历史工具路径在已知 emitting ModelCall 时使用其限定的聚合引用，通用 Trace 不承诺所有 part_id 都遵循该格式。 */
   part_id?: string | undefined;
   session_id: string;
   job_id: string;
@@ -1646,7 +1864,10 @@ export interface TraceEventDTO {
   status?: string | undefined;
   tool_name?: string | undefined;
   skill_names: string[];
-  step_id?: string | undefined;
+  step_id?:
+    | string
+    | undefined;
+  /** 来源事件的带时区时间，Trace 映射保留其时刻与显式时区偏移，不在投影时重新取时；历史工具事件沿对应 canonical 消息/item 时间。 */
   timestamp: string | undefined;
   raw?: { [key: string]: any } | undefined;
 }
@@ -1665,16 +1886,27 @@ export interface TraceObservedPayloadDTO {
 }
 
 export interface TurnActivityStatsDTO {
+  /** 历史值取 Turn projection.created_at 到 updated_at 的整数毫秒差；缺失或非法时为空，无时区按 UTC，负差钳为零。 */
   duration_ms?: number | undefined;
-  item_count?: number | undefined;
-  first_item_sequence?: number | undefined;
+  item_count?:
+    | number
+    | undefined;
+  /** 所属 rollout 中已选 activity 成员的物理 item_sequence 最小值；空 activity 为空，不表示连续成员区间或跨副本稳定身份。 */
+  first_item_sequence?:
+    | number
+    | undefined;
+  /** 所属 rollout 中已选 activity 成员的物理 item_sequence 最大值；空 activity 为空，不表示连续成员区间或跨副本稳定身份。 */
   last_item_sequence?: number | undefined;
 }
 
 export interface TurnAttachmentDTO {
   file_id: string;
   name?: string | undefined;
-  content_type?: string | undefined;
+  content_type?:
+    | string
+    | undefined;
+  /** 来自附件 owner 的冻结可用性；不凭预览读取结果推断。 */
+  availability?: string | undefined;
 }
 
 export interface TurnBaseDTO {
@@ -1683,10 +1915,23 @@ export interface TurnBaseDTO {
   session_id: string;
   ordinal: number;
   revision: number;
+  /** Turn 历史展示状态映射：open→accepted、active→running、completed_empty→completed、interrupted→timed_out、unknown→failed；不是 Job 状态事实。 */
   status: string;
-  created_at: string | undefined;
-  updated_at: string | undefined;
-  completed_at?: string | undefined;
+  /** 带时区 ISO8601 展示时刻：非空 Turn projection 的 created_at 会先校验为有效且带时区，即使消息自身有时间也不能省略。随后取本次实际加载的首个非 internal HumanMessage 的 response_metadata.created_at，否则取首个已加载消息；候选消息或其时间缺失时，回退已校验的 turns.created_at，两者均无可用时间则报错。非空但非法的消息日期字符串直接报错，不触发回退。消息时间保留显式时区偏移，无时区按 UTC 解释；展示值受 include 加载范围影响。 */
+  created_at:
+    | string
+    | undefined;
+  /** 带时区 ISO8601 展示时刻：取本次所选 canonical Turn projection 的 turns.updated_at；缺少 projection、时刻非法或无时区时历史读取失败，不回退到消息时间；保留显式时区偏移。fork 历史沿用来源投影的原始时刻。 */
+  updated_at:
+    | string
+    | undefined;
+  /** 直接映射 updated_at 的同一时刻，不是独立完成事件，非终态 Turn 也可能有值；fork 历史沿用来源投影的原始时刻。 */
+  completed_at?:
+    | string
+    | undefined;
+  /** 本次真实历史读取的快照身份；消息操作必须原样携带，不能重新猜测 active view。 */
+  source_view_id: string;
+  source_view_revision: number;
 }
 
 export interface TurnCursorDTO {
@@ -1726,9 +1971,17 @@ export interface TurnDetailDTO {
   session_id: string;
   ordinal: number;
   revision: number;
+  /** Turn 历史展示状态映射：open→accepted、active→running、completed_empty→completed、interrupted→timed_out、unknown→failed；不是 Job 状态事实。 */
   status: string;
-  created_at: string | undefined;
-  updated_at: string | undefined;
+  /** 带时区 ISO8601 展示时刻：非空 Turn projection 的 created_at 会先校验为有效且带时区，即使消息自身有时间也不能省略。随后取本次实际加载的首个非 internal HumanMessage 的 response_metadata.created_at，否则取首个已加载消息；候选消息或其时间缺失时，回退已校验的 turns.created_at，两者均无可用时间则报错。非空但非法的消息日期字符串直接报错，不触发回退。消息时间保留显式时区偏移，无时区按 UTC 解释；展示值受 include 加载范围影响。 */
+  created_at:
+    | string
+    | undefined;
+  /** 带时区 ISO8601 展示时刻：取本次所选 canonical Turn projection 的 turns.updated_at；缺少 projection、时刻非法或无时区时历史读取失败，不回退到消息时间；保留显式时区偏移。fork 历史沿用来源投影的原始时刻。 */
+  updated_at:
+    | string
+    | undefined;
+  /** 直接映射 updated_at 的同一时刻，不是独立完成事件，非终态 Turn 也可能有值；fork 历史沿用来源投影的原始时刻。 */
   completed_at?: string | undefined;
   items_view?: string | undefined;
   source_message_ids: string[];
@@ -1746,6 +1999,8 @@ export interface TurnDetailDTO {
   detail_next_cursor?: string | undefined;
   activity_stats?: TurnActivityStatsDTO | undefined;
   root_logical_item_ordinal: number;
+  source_view_id: string;
+  source_view_revision: number;
 }
 
 export interface TurnHistoryLoadRequest {
@@ -1773,17 +2028,24 @@ export interface TurnHistoryPageDTO {
   summaries: TurnSummaryDTO[];
   internal_executions: InternalExecutionHistoryDTO[];
   thread_id?: string | undefined;
+  source_view_id?: string | undefined;
+  source_view_revision?: number | undefined;
 }
 
 export interface InternalExecutionHistoryDTO {
   execution_id: string;
   job_id: string;
+  /** 对应 executions.outcome 的独立 internal execution 历史结果，不是 Job 或 Turn 状态。 */
   status: string;
+  /** 对应 executions 持久记录不可变的 UTC 创建时刻，接口按 ISO8601 表达，复制保留源值。 */
   created_at: string | undefined;
   display_parts: InternalExecutionDisplayPartDTO[];
   response_parts: TurnResponsePartDTO[];
+  /** 持久 execution/admission 的历史 Session scope；fork 保留原值，可不同于请求目标，仅由目标本地冻结 namespace binding 校验，不用于重新寻址来源。 */
   session_id: string;
+  /** 持久 execution/admission 的历史 thread scope；fork 保留原值，可不同于本页请求 thread，仅由目标本地冻结 namespace binding 校验，不用于重新寻址来源。 */
   thread_id: string;
+  /** 对应 executions 持久记录的 UTC ISO8601 更新时刻；fork 保留已终态来源值，未终态目标取消使用目标收敛时刻。 */
   updated_at: string | undefined;
 }
 
@@ -1826,19 +2088,27 @@ export interface TurnProjectionCorruptedErrorDTO {
 }
 
 export interface TurnResponsePartDTO {
+  /** 历史部件由 canonical item_id 与 part_ordinal 生成唯一引用；streaming 为临时部件 ID，不代表 canonical item 身份。 */
   part_id: string;
   kind: string;
   projection: string;
+  /** 响应部件的归一化状态；历史值由 canonical/消息投影映射，streaming 值随部件更新。completed 仅表示该部件完成，可与工具拒绝、Job 或 Execution 失败并存，不证明工具执行成功。 */
   status?: string | undefined;
   source: TurnResponseSourceDTO | undefined;
   text?: string | undefined;
-  carrier_type?: string | undefined;
+  carrier_type?:
+    | string
+    | undefined;
+  /** 保留 canonical payload 中合法的工具调用 ID 表示，可为 Provider 原始 ID 或已有 ModelCall 限定 ID；不等同于历史工具 Trace/摘要的聚合引用，也不等同于 part_id。 */
   tool_call_id?: string | undefined;
   tool_name?: string | undefined;
   arguments?: string | undefined;
   result?: string | undefined;
   truncated?: boolean | undefined;
-  final?: boolean | undefined;
+  final?:
+    | boolean
+    | undefined;
+  /** 历史 terminal Turn 的本次 mapper 输入缺少同一 ModelCall 与 Provider call ID 的匹配结果；不证明底层工具未执行或执行失败。 */
   outcome_unknown?: boolean | undefined;
   completion_reason?: string | undefined;
   partial?: boolean | undefined;
@@ -1853,8 +2123,14 @@ export interface TurnResponseSourceDTO {
   result_message_sequence?: number | undefined;
   item_id?: string | undefined;
   item_sequence?: number | undefined;
-  part_ordinal?: number | undefined;
-  created_at?: string | undefined;
+  part_ordinal?:
+    | number
+    | undefined;
+  /** 历史 activity 沿 canonical item 创建时刻；final 沿 final_item_created_at；standalone internal 沿原 item 创建时刻。streaming 可缺省。 */
+  created_at?:
+    | string
+    | undefined;
+  /** 历史 activity 首项从 Turn projection.created_at 起算，后续按逻辑 activity 顺序计算相邻 item 的整数毫秒差；final 固定为零；standalone internal 首项从 execution.created_at 起算，后续沿同 view、同 execution 的前一 visible/display_only 逻辑成员计算。负差钳为零；streaming 可缺省。 */
   elapsed_ms?: number | undefined;
   logical_item_ordinal?: number | undefined;
 }
@@ -1865,9 +2141,17 @@ export interface TurnSummaryDTO {
   session_id: string;
   ordinal: number;
   revision: number;
+  /** Turn 历史展示状态映射：open→accepted、active→running、completed_empty→completed、interrupted→timed_out、unknown→failed；不是 Job 状态事实。 */
   status: string;
-  created_at: string | undefined;
-  updated_at: string | undefined;
+  /** 带时区 ISO8601 展示时刻：非空 Turn projection 的 created_at 会先校验为有效且带时区，即使消息自身有时间也不能省略。随后取本次实际加载的首个非 internal HumanMessage 的 response_metadata.created_at，否则取首个已加载消息；候选消息或其时间缺失时，回退已校验的 turns.created_at，两者均无可用时间则报错。非空但非法的消息日期字符串直接报错，不触发回退。消息时间保留显式时区偏移，无时区按 UTC 解释；展示值受 include 加载范围影响。 */
+  created_at:
+    | string
+    | undefined;
+  /** 带时区 ISO8601 展示时刻：取本次所选 canonical Turn projection 的 turns.updated_at；缺少 projection、时刻非法或无时区时历史读取失败，不回退到消息时间；保留显式时区偏移。fork 历史沿用来源投影的原始时刻。 */
+  updated_at:
+    | string
+    | undefined;
+  /** 直接映射 updated_at 的同一时刻，不是独立完成事件，非终态 Turn 也可能有值；fork 历史沿用来源投影的原始时刻。 */
   completed_at?: string | undefined;
   items_view?: string | undefined;
   source_message_ids: string[];
@@ -1886,6 +2170,8 @@ export interface TurnSummaryDTO {
   response_parts: TurnResponsePartDTO[];
   activity_stats?: TurnActivityStatsDTO | undefined;
   root_logical_item_ordinal: number;
+  source_view_id: string;
+  source_view_revision: number;
 }
 
 export interface TurnThinkingBlockDTO {
@@ -1896,6 +2182,7 @@ export interface TurnThinkingBlockDTO {
 export interface TurnToolSummaryDTO {
   tool_name: string;
   status: string;
+  /** 历史工具聚合引用：已知 emitting ModelCall 时由其 ID 与 Provider 原始 call ID 限定，未知时保留原 call ID；不同 ModelCall 重用同一原始 ID 仍分别展示。 */
   tool_call_id?: string | undefined;
 }
 
@@ -1904,7 +2191,10 @@ export interface TurnUserMessageDTO {
   content: string;
   content_truncated?: boolean | undefined;
   attachments: TurnAttachmentDTO[];
-  metadata?: { [key: string]: any } | undefined;
+  metadata?:
+    | { [key: string]: any }
+    | undefined;
+  /** canonical 用户消息的不可变创建时刻，接口为带时区 ISO8601；沿消息 response_metadata.created_at，保留显式时区偏移，无时区时按 UTC 解释，缺失时报错。复制保留源消息时间事实。 */
   created_at: string | undefined;
 }
 
@@ -1912,7 +2202,10 @@ export interface TurnUserMessageSummaryDTO {
   message_id: string;
   preview?: string | undefined;
   content_truncated?: boolean | undefined;
-  attachment_count?: number | undefined;
+  attachment_count?:
+    | number
+    | undefined;
+  /** 对应用户消息详情的 created_at，接口为带时区 ISO8601；摘要直接复用详情时间，保留显式时区偏移，详情对无时区值按 UTC 解释，复制保留源消息时间事实。 */
   created_at: string | undefined;
 }
 
@@ -2076,6 +2369,37 @@ export interface WorkspaceFileUpdateRequest {
 export interface WorkspaceFileWatchRequest {
   paths: string[];
   after_event_id?: number | undefined;
+}
+
+/** 每个逻辑观察者保留独立的 source、恢复游标和生命周期。 */
+export interface WorkspaceObservationSubscription {
+  subscription_id: string;
+  kind: string;
+  session_id?: string | undefined;
+  activity_after?: number | undefined;
+  trace_after?: string | undefined;
+  paths: string[];
+  files_after?: number | undefined;
+}
+
+export interface WorkspaceObservationRequest {
+  subscriptions: WorkspaceObservationSubscription[];
+}
+
+/** frame 携带领域 owner 的完整原 SSE 帧；物理聚合不重编码领域事件。 */
+export interface WorkspaceObservationFrameDTO {
+  subscription_id: string;
+  state: string;
+  frame?: string | undefined;
+  status?: number | undefined;
+  detail_json?:
+    | string
+    | undefined;
+  /**
+   * connected 时逻辑 reader 的续读水位；files 是事件序号的十进制字符串，
+   * Trace/activity 当前不设置。它不是历史分页 cursor 或路由 revision。
+   */
+  cursor?: string | undefined;
 }
 
 export interface WorkspaceIndexRebuildDTO {
@@ -2707,7 +3031,7 @@ export const ConfigUpdateRequest: MessageFns<ConfigUpdateRequest> = {
 };
 
 function createBaseChildThreadListDTO(): ChildThreadListDTO {
-  return { parent_session_id: "", items: [], total: 0 };
+  return { parent_session_id: "", items: [], total: 0, teams: [] };
 }
 
 export const ChildThreadListDTO: MessageFns<ChildThreadListDTO> = {
@@ -2718,6 +3042,9 @@ export const ChildThreadListDTO: MessageFns<ChildThreadListDTO> = {
         ? object.items.map((e: any) => ChildThreadSummaryDTO.fromJSON(e))
         : [],
       total: isSet(object.total) ? globalThis.Number(object.total) : 0,
+      teams: globalThis.Array.isArray(object?.teams)
+        ? object.teams.map((e: any) => TeamBoardDTO.fromJSON(e))
+        : [],
     };
   },
 
@@ -2732,6 +3059,9 @@ export const ChildThreadListDTO: MessageFns<ChildThreadListDTO> = {
     if (message.total !== 0) {
       obj.total = Math.round(message.total);
     }
+    if (message.teams?.length) {
+      obj.teams = message.teams.map((e) => TeamBoardDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -2743,6 +3073,7 @@ export const ChildThreadListDTO: MessageFns<ChildThreadListDTO> = {
     message.parent_session_id = object.parent_session_id ?? "";
     message.items = object.items?.map((e) => ChildThreadSummaryDTO.fromPartial(e)) || [];
     message.total = object.total ?? 0;
+    message.teams = object.teams?.map((e) => TeamBoardDTO.fromPartial(e)) || [];
     return message;
   },
 };
@@ -3992,6 +4323,7 @@ function createBaseMessageDTO(): MessageDTO {
     content: "",
     attachments: [],
     metadata: undefined,
+    thread_id: "",
   };
 }
 
@@ -4008,6 +4340,7 @@ export const MessageDTO: MessageFns<MessageDTO> = {
         ? object.attachments.map((e: any) => AttachmentRef.fromJSON(e))
         : [],
       metadata: isObject(object.metadata) ? object.metadata : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -4037,6 +4370,9 @@ export const MessageDTO: MessageFns<MessageDTO> = {
     if (message.metadata !== undefined) {
       obj.metadata = message.metadata;
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -4053,73 +4389,7 @@ export const MessageDTO: MessageFns<MessageDTO> = {
     message.content = object.content ?? "";
     message.attachments = object.attachments?.map((e) => AttachmentRef.fromPartial(e)) || [];
     message.metadata = object.metadata ?? undefined;
-    return message;
-  },
-};
-
-function createBaseMessageObservationDTO(): MessageObservationDTO {
-  return {
-    message_id: "",
-    session_id: "",
-    role: "",
-    content: "",
-    attachments: [],
-    metadata: undefined,
-    created_at: undefined,
-  };
-}
-
-export const MessageObservationDTO: MessageFns<MessageObservationDTO> = {
-  fromJSON(object: any): MessageObservationDTO {
-    return {
-      message_id: isSet(object.message_id) ? globalThis.String(object.message_id) : "",
-      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
-      role: isSet(object.role) ? globalThis.String(object.role) : "",
-      content: isSet(object.content) ? globalThis.String(object.content) : "",
-      attachments: globalThis.Array.isArray(object?.attachments) ? [...object.attachments] : [],
-      metadata: isObject(object.metadata) ? object.metadata : undefined,
-      created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
-    };
-  },
-
-  toJSON(message: MessageObservationDTO): unknown {
-    const obj: any = {};
-    if (message.message_id !== "") {
-      obj.message_id = message.message_id;
-    }
-    if (message.session_id !== "") {
-      obj.session_id = message.session_id;
-    }
-    if (message.role !== "") {
-      obj.role = message.role;
-    }
-    if (message.content !== "") {
-      obj.content = message.content;
-    }
-    if (message.attachments?.length) {
-      obj.attachments = message.attachments;
-    }
-    if (message.metadata !== undefined) {
-      obj.metadata = message.metadata;
-    }
-    if (message.created_at !== undefined) {
-      obj.created_at = message.created_at;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<MessageObservationDTO>, I>>(base?: I): MessageObservationDTO {
-    return MessageObservationDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<MessageObservationDTO>, I>>(object: I): MessageObservationDTO {
-    const message = createBaseMessageObservationDTO();
-    message.message_id = object.message_id ?? "";
-    message.session_id = object.session_id ?? "";
-    message.role = object.role ?? "";
-    message.content = object.content ?? "";
-    message.attachments = object.attachments?.map((e) => e) || [];
-    message.metadata = object.metadata ?? undefined;
-    message.created_at = object.created_at ?? undefined;
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };
@@ -4136,6 +4406,8 @@ function createBaseMessageReplayAccepted(): MessageReplayAccepted {
     removed_message_count: 0,
     workspace_changes_reverted: undefined,
     notice: "",
+    thread_id: "",
+    turn_id: undefined,
   };
 }
 
@@ -4154,6 +4426,8 @@ export const MessageReplayAccepted: MessageFns<MessageReplayAccepted> = {
         ? globalThis.Boolean(object.workspace_changes_reverted)
         : undefined,
       notice: isSet(object.notice) ? globalThis.String(object.notice) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      turn_id: isSet(object.turn_id) ? globalThis.String(object.turn_id) : undefined,
     };
   },
 
@@ -4189,6 +4463,12 @@ export const MessageReplayAccepted: MessageFns<MessageReplayAccepted> = {
     if (message.notice !== "") {
       obj.notice = message.notice;
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.turn_id !== undefined) {
+      obj.turn_id = message.turn_id;
+    }
     return obj;
   },
 
@@ -4209,6 +4489,8 @@ export const MessageReplayAccepted: MessageFns<MessageReplayAccepted> = {
     message.removed_message_count = object.removed_message_count ?? 0;
     message.workspace_changes_reverted = object.workspace_changes_reverted ?? undefined;
     message.notice = object.notice ?? "";
+    message.thread_id = object.thread_id ?? "";
+    message.turn_id = object.turn_id ?? undefined;
     return message;
   },
 };
@@ -4255,7 +4537,7 @@ export const MessageReplayRequest: MessageFns<MessageReplayRequest> = {
 };
 
 function createBaseMessageRunAccepted(): MessageRunAccepted {
-  return { message_id: "", job_id: "", status: "", dispatch: undefined, thread_id: "" };
+  return { message_id: "", job_id: "", status: "", dispatch: undefined, thread_id: "", turn_id: undefined };
 }
 
 export const MessageRunAccepted: MessageFns<MessageRunAccepted> = {
@@ -4266,6 +4548,7 @@ export const MessageRunAccepted: MessageFns<MessageRunAccepted> = {
       status: isSet(object.status) ? globalThis.String(object.status) : "",
       dispatch: isSet(object.dispatch) ? JobDispatchSnapshotDTO.fromJSON(object.dispatch) : undefined,
       thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      turn_id: isSet(object.turn_id) ? globalThis.String(object.turn_id) : undefined,
     };
   },
 
@@ -4286,6 +4569,9 @@ export const MessageRunAccepted: MessageFns<MessageRunAccepted> = {
     if (message.thread_id !== "") {
       obj.thread_id = message.thread_id;
     }
+    if (message.turn_id !== undefined) {
+      obj.turn_id = message.turn_id;
+    }
     return obj;
   },
 
@@ -4301,6 +4587,7 @@ export const MessageRunAccepted: MessageFns<MessageRunAccepted> = {
       ? JobDispatchSnapshotDTO.fromPartial(object.dispatch)
       : undefined;
     message.thread_id = object.thread_id ?? "";
+    message.turn_id = object.turn_id ?? undefined;
     return message;
   },
 };
@@ -4337,64 +4624,6 @@ export const MessageRunRequest: MessageFns<MessageRunRequest> = {
       ? MessageCreateRequest.fromPartial(object.message)
       : undefined;
     message.run = (object.run !== undefined && object.run !== null) ? RunOptions.fromPartial(object.run) : undefined;
-    return message;
-  },
-};
-
-function createBaseMessageUpdatedExecutionEventDTO(): MessageUpdatedExecutionEventDTO {
-  return { event_id: "", session_id: "", job_id: undefined, time: undefined, type: "", payload: undefined };
-}
-
-export const MessageUpdatedExecutionEventDTO: MessageFns<MessageUpdatedExecutionEventDTO> = {
-  fromJSON(object: any): MessageUpdatedExecutionEventDTO {
-    return {
-      event_id: isSet(object.event_id) ? globalThis.String(object.event_id) : "",
-      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
-      job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : undefined,
-      time: isSet(object.time) ? globalThis.String(object.time) : undefined,
-      type: isSet(object.type) ? globalThis.String(object.type) : "",
-      payload: isSet(object.payload) ? MessageObservationDTO.fromJSON(object.payload) : undefined,
-    };
-  },
-
-  toJSON(message: MessageUpdatedExecutionEventDTO): unknown {
-    const obj: any = {};
-    if (message.event_id !== "") {
-      obj.event_id = message.event_id;
-    }
-    if (message.session_id !== "") {
-      obj.session_id = message.session_id;
-    }
-    if (message.job_id !== undefined) {
-      obj.job_id = message.job_id;
-    }
-    if (message.time !== undefined) {
-      obj.time = message.time;
-    }
-    if (message.type !== "") {
-      obj.type = message.type;
-    }
-    if (message.payload !== undefined) {
-      obj.payload = MessageObservationDTO.toJSON(message.payload);
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<MessageUpdatedExecutionEventDTO>, I>>(base?: I): MessageUpdatedExecutionEventDTO {
-    return MessageUpdatedExecutionEventDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<MessageUpdatedExecutionEventDTO>, I>>(
-    object: I,
-  ): MessageUpdatedExecutionEventDTO {
-    const message = createBaseMessageUpdatedExecutionEventDTO();
-    message.event_id = object.event_id ?? "";
-    message.session_id = object.session_id ?? "";
-    message.job_id = object.job_id ?? undefined;
-    message.time = object.time ?? undefined;
-    message.type = object.type ?? "";
-    message.payload = (object.payload !== undefined && object.payload !== null)
-      ? MessageObservationDTO.fromPartial(object.payload)
-      : undefined;
     return message;
   },
 };
@@ -6542,7 +6771,7 @@ export const PendingRequestDTO: MessageFns<PendingRequestDTO> = {
 };
 
 function createBasePendingRequestListDTO(): PendingRequestListDTO {
-  return { session_id: "", active_job_id: undefined, requests: [], snapshot_version: undefined };
+  return { session_id: "", active_job_id: undefined, requests: [], snapshot_version: undefined, thread_id: undefined };
 }
 
 export const PendingRequestListDTO: MessageFns<PendingRequestListDTO> = {
@@ -6554,6 +6783,7 @@ export const PendingRequestListDTO: MessageFns<PendingRequestListDTO> = {
         ? object.requests.map((e: any) => PendingRequestDTO.fromJSON(e))
         : [],
       snapshot_version: isSet(object.snapshot_version) ? globalThis.Number(object.snapshot_version) : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : undefined,
     };
   },
 
@@ -6571,6 +6801,9 @@ export const PendingRequestListDTO: MessageFns<PendingRequestListDTO> = {
     if (message.snapshot_version !== undefined) {
       obj.snapshot_version = Math.round(message.snapshot_version);
     }
+    if (message.thread_id !== undefined) {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -6583,6 +6816,7 @@ export const PendingRequestListDTO: MessageFns<PendingRequestListDTO> = {
     message.active_job_id = object.active_job_id ?? undefined;
     message.requests = object.requests?.map((e) => PendingRequestDTO.fromPartial(e)) || [];
     message.snapshot_version = object.snapshot_version ?? undefined;
+    message.thread_id = object.thread_id ?? undefined;
     return message;
   },
 };
@@ -6628,7 +6862,15 @@ export const PendingRequestPolicyUpdateRequest: MessageFns<PendingRequestPolicyU
 };
 
 function createBasePendingRequestSummaryDTO(): PendingRequestSummaryDTO {
-  return { job_id: "", message_id: "", enqueue_sequence: 0, delivery_policy: "", status: "", updated_at: undefined };
+  return {
+    job_id: "",
+    message_id: "",
+    enqueue_sequence: 0,
+    delivery_policy: "",
+    status: "",
+    updated_at: undefined,
+    thread_id: "",
+  };
 }
 
 export const PendingRequestSummaryDTO: MessageFns<PendingRequestSummaryDTO> = {
@@ -6640,6 +6882,7 @@ export const PendingRequestSummaryDTO: MessageFns<PendingRequestSummaryDTO> = {
       delivery_policy: isSet(object.delivery_policy) ? globalThis.String(object.delivery_policy) : "",
       status: isSet(object.status) ? globalThis.String(object.status) : "",
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -6663,6 +6906,9 @@ export const PendingRequestSummaryDTO: MessageFns<PendingRequestSummaryDTO> = {
     if (message.updated_at !== undefined) {
       obj.updated_at = message.updated_at;
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -6677,6 +6923,7 @@ export const PendingRequestSummaryDTO: MessageFns<PendingRequestSummaryDTO> = {
     message.delivery_policy = object.delivery_policy ?? "";
     message.status = object.status ?? "";
     message.updated_at = object.updated_at ?? undefined;
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };
@@ -6689,6 +6936,7 @@ function createBasePendingRequestSummaryListDTO(): PendingRequestSummaryListDTO 
     request_count: 0,
     snapshot_version: undefined,
     truncated: undefined,
+    thread_id: undefined,
   };
 }
 
@@ -6703,6 +6951,7 @@ export const PendingRequestSummaryListDTO: MessageFns<PendingRequestSummaryListD
       request_count: isSet(object.request_count) ? globalThis.Number(object.request_count) : 0,
       snapshot_version: isSet(object.snapshot_version) ? globalThis.Number(object.snapshot_version) : undefined,
       truncated: isSet(object.truncated) ? globalThis.Boolean(object.truncated) : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : undefined,
     };
   },
 
@@ -6726,6 +6975,9 @@ export const PendingRequestSummaryListDTO: MessageFns<PendingRequestSummaryListD
     if (message.truncated !== undefined) {
       obj.truncated = message.truncated;
     }
+    if (message.thread_id !== undefined) {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -6740,42 +6992,7 @@ export const PendingRequestSummaryListDTO: MessageFns<PendingRequestSummaryListD
     message.request_count = object.request_count ?? 0;
     message.snapshot_version = object.snapshot_version ?? undefined;
     message.truncated = object.truncated ?? undefined;
-    return message;
-  },
-};
-
-function createBasePendingRequestUpdateRequest(): PendingRequestUpdateRequest {
-  return { content: "", attachments: [] };
-}
-
-export const PendingRequestUpdateRequest: MessageFns<PendingRequestUpdateRequest> = {
-  fromJSON(object: any): PendingRequestUpdateRequest {
-    return {
-      content: isSet(object.content) ? globalThis.String(object.content) : "",
-      attachments: globalThis.Array.isArray(object?.attachments)
-        ? object.attachments.map((e: any) => AttachmentRef.fromJSON(e))
-        : [],
-    };
-  },
-
-  toJSON(message: PendingRequestUpdateRequest): unknown {
-    const obj: any = {};
-    if (message.content !== "") {
-      obj.content = message.content;
-    }
-    if (message.attachments?.length) {
-      obj.attachments = message.attachments.map((e) => AttachmentRef.toJSON(e));
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<PendingRequestUpdateRequest>, I>>(base?: I): PendingRequestUpdateRequest {
-    return PendingRequestUpdateRequest.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<PendingRequestUpdateRequest>, I>>(object: I): PendingRequestUpdateRequest {
-    const message = createBasePendingRequestUpdateRequest();
-    message.content = object.content ?? "";
-    message.attachments = object.attachments?.map((e) => AttachmentRef.fromPartial(e)) || [];
+    message.thread_id = object.thread_id ?? undefined;
     return message;
   },
 };
@@ -9266,10 +9483,18 @@ export const SessionFileTreeSettingsDTO: MessageFns<SessionFileTreeSettingsDTO> 
 function createBaseSessionForkRequest(): SessionForkRequest {
   return {
     mode: undefined,
-    turn_id: undefined,
     anchor_mode: undefined,
-    pinned: undefined,
-    place_under_source: undefined,
+    source_uri: "",
+    idempotency_key: "",
+    source_view_id: "",
+    source_view_revision: 0,
+    anchor_item_id: undefined,
+    target_container_uri: "",
+    creation_kind: undefined,
+    title: undefined,
+    relationship: undefined,
+    resources: [],
+    goal: undefined,
   };
 }
 
@@ -9277,10 +9502,20 @@ export const SessionForkRequest: MessageFns<SessionForkRequest> = {
   fromJSON(object: any): SessionForkRequest {
     return {
       mode: isSet(object.mode) ? globalThis.String(object.mode) : undefined,
-      turn_id: isSet(object.turn_id) ? globalThis.String(object.turn_id) : undefined,
       anchor_mode: isSet(object.anchor_mode) ? globalThis.String(object.anchor_mode) : undefined,
-      pinned: isSet(object.pinned) ? globalThis.Boolean(object.pinned) : undefined,
-      place_under_source: isSet(object.place_under_source) ? globalThis.Boolean(object.place_under_source) : undefined,
+      source_uri: isSet(object.source_uri) ? globalThis.String(object.source_uri) : "",
+      idempotency_key: isSet(object.idempotency_key) ? globalThis.String(object.idempotency_key) : "",
+      source_view_id: isSet(object.source_view_id) ? globalThis.String(object.source_view_id) : "",
+      source_view_revision: isSet(object.source_view_revision) ? globalThis.Number(object.source_view_revision) : 0,
+      anchor_item_id: isSet(object.anchor_item_id) ? globalThis.String(object.anchor_item_id) : undefined,
+      target_container_uri: isSet(object.target_container_uri) ? globalThis.String(object.target_container_uri) : "",
+      creation_kind: isSet(object.creation_kind) ? globalThis.String(object.creation_kind) : undefined,
+      title: isSet(object.title) ? globalThis.String(object.title) : undefined,
+      relationship: isSet(object.relationship) ? globalThis.String(object.relationship) : undefined,
+      resources: globalThis.Array.isArray(object?.resources)
+        ? object.resources.map((e: any) => SessionForkResourceChoice.fromJSON(e))
+        : [],
+      goal: isSet(object.goal) ? SessionForkGoalSelection.fromJSON(object.goal) : undefined,
     };
   },
 
@@ -9289,17 +9524,41 @@ export const SessionForkRequest: MessageFns<SessionForkRequest> = {
     if (message.mode !== undefined) {
       obj.mode = message.mode;
     }
-    if (message.turn_id !== undefined) {
-      obj.turn_id = message.turn_id;
-    }
     if (message.anchor_mode !== undefined) {
       obj.anchor_mode = message.anchor_mode;
     }
-    if (message.pinned !== undefined) {
-      obj.pinned = message.pinned;
+    if (message.source_uri !== "") {
+      obj.source_uri = message.source_uri;
     }
-    if (message.place_under_source !== undefined) {
-      obj.place_under_source = message.place_under_source;
+    if (message.idempotency_key !== "") {
+      obj.idempotency_key = message.idempotency_key;
+    }
+    if (message.source_view_id !== "") {
+      obj.source_view_id = message.source_view_id;
+    }
+    if (message.source_view_revision !== 0) {
+      obj.source_view_revision = Math.round(message.source_view_revision);
+    }
+    if (message.anchor_item_id !== undefined) {
+      obj.anchor_item_id = message.anchor_item_id;
+    }
+    if (message.target_container_uri !== "") {
+      obj.target_container_uri = message.target_container_uri;
+    }
+    if (message.creation_kind !== undefined) {
+      obj.creation_kind = message.creation_kind;
+    }
+    if (message.title !== undefined) {
+      obj.title = message.title;
+    }
+    if (message.relationship !== undefined) {
+      obj.relationship = message.relationship;
+    }
+    if (message.resources?.length) {
+      obj.resources = message.resources.map((e) => SessionForkResourceChoice.toJSON(e));
+    }
+    if (message.goal !== undefined) {
+      obj.goal = SessionForkGoalSelection.toJSON(message.goal);
     }
     return obj;
   },
@@ -9310,10 +9569,510 @@ export const SessionForkRequest: MessageFns<SessionForkRequest> = {
   fromPartial<I extends Exact<DeepPartial<SessionForkRequest>, I>>(object: I): SessionForkRequest {
     const message = createBaseSessionForkRequest();
     message.mode = object.mode ?? undefined;
-    message.turn_id = object.turn_id ?? undefined;
     message.anchor_mode = object.anchor_mode ?? undefined;
-    message.pinned = object.pinned ?? undefined;
-    message.place_under_source = object.place_under_source ?? undefined;
+    message.source_uri = object.source_uri ?? "";
+    message.idempotency_key = object.idempotency_key ?? "";
+    message.source_view_id = object.source_view_id ?? "";
+    message.source_view_revision = object.source_view_revision ?? 0;
+    message.anchor_item_id = object.anchor_item_id ?? undefined;
+    message.target_container_uri = object.target_container_uri ?? "";
+    message.creation_kind = object.creation_kind ?? undefined;
+    message.title = object.title ?? undefined;
+    message.relationship = object.relationship ?? undefined;
+    message.resources = object.resources?.map((e) => SessionForkResourceChoice.fromPartial(e)) || [];
+    message.goal = (object.goal !== undefined && object.goal !== null)
+      ? SessionForkGoalSelection.fromPartial(object.goal)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseSessionForkGoalSelection(): SessionForkGoalSelection {
+  return { token_budget: undefined };
+}
+
+export const SessionForkGoalSelection: MessageFns<SessionForkGoalSelection> = {
+  fromJSON(object: any): SessionForkGoalSelection {
+    return { token_budget: isSet(object.token_budget) ? globalThis.Number(object.token_budget) : undefined };
+  },
+
+  toJSON(message: SessionForkGoalSelection): unknown {
+    const obj: any = {};
+    if (message.token_budget !== undefined) {
+      obj.token_budget = Math.round(message.token_budget);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionForkGoalSelection>, I>>(base?: I): SessionForkGoalSelection {
+    return SessionForkGoalSelection.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionForkGoalSelection>, I>>(object: I): SessionForkGoalSelection {
+    const message = createBaseSessionForkGoalSelection();
+    message.token_budget = object.token_budget ?? undefined;
+    return message;
+  },
+};
+
+function createBaseSessionForkResourceChoice(): SessionForkResourceChoice {
+  return { resource_uri: undefined, action: "", owner_reference: undefined };
+}
+
+export const SessionForkResourceChoice: MessageFns<SessionForkResourceChoice> = {
+  fromJSON(object: any): SessionForkResourceChoice {
+    return {
+      resource_uri: isSet(object.resource_uri) ? globalThis.String(object.resource_uri) : undefined,
+      action: isSet(object.action) ? globalThis.String(object.action) : "",
+      owner_reference: isSet(object.owner_reference)
+        ? SessionForkOwnerReference.fromJSON(object.owner_reference)
+        : undefined,
+    };
+  },
+
+  toJSON(message: SessionForkResourceChoice): unknown {
+    const obj: any = {};
+    if (message.resource_uri !== undefined) {
+      obj.resource_uri = message.resource_uri;
+    }
+    if (message.action !== "") {
+      obj.action = message.action;
+    }
+    if (message.owner_reference !== undefined) {
+      obj.owner_reference = SessionForkOwnerReference.toJSON(message.owner_reference);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionForkResourceChoice>, I>>(base?: I): SessionForkResourceChoice {
+    return SessionForkResourceChoice.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionForkResourceChoice>, I>>(object: I): SessionForkResourceChoice {
+    const message = createBaseSessionForkResourceChoice();
+    message.resource_uri = object.resource_uri ?? undefined;
+    message.action = object.action ?? "";
+    message.owner_reference = (object.owner_reference !== undefined && object.owner_reference !== null)
+      ? SessionForkOwnerReference.fromPartial(object.owner_reference)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseSessionForkOwnerReference(): SessionForkOwnerReference {
+  return { kind: "", resource_id: "", workspace_id: "", expected_revision: 0 };
+}
+
+export const SessionForkOwnerReference: MessageFns<SessionForkOwnerReference> = {
+  fromJSON(object: any): SessionForkOwnerReference {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      resource_id: isSet(object.resource_id) ? globalThis.String(object.resource_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      expected_revision: isSet(object.expected_revision) ? globalThis.Number(object.expected_revision) : 0,
+    };
+  },
+
+  toJSON(message: SessionForkOwnerReference): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.resource_id !== "") {
+      obj.resource_id = message.resource_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.expected_revision !== 0) {
+      obj.expected_revision = Math.round(message.expected_revision);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionForkOwnerReference>, I>>(base?: I): SessionForkOwnerReference {
+    return SessionForkOwnerReference.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionForkOwnerReference>, I>>(object: I): SessionForkOwnerReference {
+    const message = createBaseSessionForkOwnerReference();
+    message.kind = object.kind ?? "";
+    message.resource_id = object.resource_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.expected_revision = object.expected_revision ?? 0;
+    return message;
+  },
+};
+
+function createBaseSessionForkResourceResult(): SessionForkResourceResult {
+  return {
+    resource_uri: undefined,
+    action: "",
+    availability: "",
+    target_uri: undefined,
+    reason: undefined,
+    owner_reference: undefined,
+    owner_resource: undefined,
+    operation_state: undefined,
+    committed_revision: undefined,
+  };
+}
+
+export const SessionForkResourceResult: MessageFns<SessionForkResourceResult> = {
+  fromJSON(object: any): SessionForkResourceResult {
+    return {
+      resource_uri: isSet(object.resource_uri) ? globalThis.String(object.resource_uri) : undefined,
+      action: isSet(object.action) ? globalThis.String(object.action) : "",
+      availability: isSet(object.availability) ? globalThis.String(object.availability) : "",
+      target_uri: isSet(object.target_uri) ? globalThis.String(object.target_uri) : undefined,
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : undefined,
+      owner_reference: isSet(object.owner_reference)
+        ? SessionForkOwnerReference.fromJSON(object.owner_reference)
+        : undefined,
+      owner_resource: isSet(object.owner_resource) ? WorkspaceResourceDTO.fromJSON(object.owner_resource) : undefined,
+      operation_state: isSet(object.operation_state) ? globalThis.String(object.operation_state) : undefined,
+      committed_revision: isSet(object.committed_revision) ? globalThis.Number(object.committed_revision) : undefined,
+    };
+  },
+
+  toJSON(message: SessionForkResourceResult): unknown {
+    const obj: any = {};
+    if (message.resource_uri !== undefined) {
+      obj.resource_uri = message.resource_uri;
+    }
+    if (message.action !== "") {
+      obj.action = message.action;
+    }
+    if (message.availability !== "") {
+      obj.availability = message.availability;
+    }
+    if (message.target_uri !== undefined) {
+      obj.target_uri = message.target_uri;
+    }
+    if (message.reason !== undefined) {
+      obj.reason = message.reason;
+    }
+    if (message.owner_reference !== undefined) {
+      obj.owner_reference = SessionForkOwnerReference.toJSON(message.owner_reference);
+    }
+    if (message.owner_resource !== undefined) {
+      obj.owner_resource = WorkspaceResourceDTO.toJSON(message.owner_resource);
+    }
+    if (message.operation_state !== undefined) {
+      obj.operation_state = message.operation_state;
+    }
+    if (message.committed_revision !== undefined) {
+      obj.committed_revision = Math.round(message.committed_revision);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionForkResourceResult>, I>>(base?: I): SessionForkResourceResult {
+    return SessionForkResourceResult.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionForkResourceResult>, I>>(object: I): SessionForkResourceResult {
+    const message = createBaseSessionForkResourceResult();
+    message.resource_uri = object.resource_uri ?? undefined;
+    message.action = object.action ?? "";
+    message.availability = object.availability ?? "";
+    message.target_uri = object.target_uri ?? undefined;
+    message.reason = object.reason ?? undefined;
+    message.owner_reference = (object.owner_reference !== undefined && object.owner_reference !== null)
+      ? SessionForkOwnerReference.fromPartial(object.owner_reference)
+      : undefined;
+    message.owner_resource = (object.owner_resource !== undefined && object.owner_resource !== null)
+      ? WorkspaceResourceDTO.fromPartial(object.owner_resource)
+      : undefined;
+    message.operation_state = object.operation_state ?? undefined;
+    message.committed_revision = object.committed_revision ?? undefined;
+    return message;
+  },
+};
+
+function createBaseSessionForkExportReleaseDTO(): SessionForkExportReleaseDTO {
+  return { state: "", error: undefined };
+}
+
+export const SessionForkExportReleaseDTO: MessageFns<SessionForkExportReleaseDTO> = {
+  fromJSON(object: any): SessionForkExportReleaseDTO {
+    return {
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+    };
+  },
+
+  toJSON(message: SessionForkExportReleaseDTO): unknown {
+    const obj: any = {};
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionForkExportReleaseDTO>, I>>(base?: I): SessionForkExportReleaseDTO {
+    return SessionForkExportReleaseDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionForkExportReleaseDTO>, I>>(object: I): SessionForkExportReleaseDTO {
+    const message = createBaseSessionForkExportReleaseDTO();
+    message.state = object.state ?? "";
+    message.error = object.error ?? undefined;
+    return message;
+  },
+};
+
+function createBaseSessionForkResultDTO(): SessionForkResultDTO {
+  return {
+    session: undefined,
+    thread_id: "",
+    thread_uri: "",
+    creation_kind: "",
+    source_uri: "",
+    source_view_id: "",
+    source_view_revision: 0,
+    anchor_item_id: undefined,
+    mode: "",
+    resources: [],
+    goal_id: undefined,
+    export_release: undefined,
+  };
+}
+
+export const SessionForkResultDTO: MessageFns<SessionForkResultDTO> = {
+  fromJSON(object: any): SessionForkResultDTO {
+    return {
+      session: isSet(object.session) ? SessionDTO.fromJSON(object.session) : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      thread_uri: isSet(object.thread_uri) ? globalThis.String(object.thread_uri) : "",
+      creation_kind: isSet(object.creation_kind) ? globalThis.String(object.creation_kind) : "",
+      source_uri: isSet(object.source_uri) ? globalThis.String(object.source_uri) : "",
+      source_view_id: isSet(object.source_view_id) ? globalThis.String(object.source_view_id) : "",
+      source_view_revision: isSet(object.source_view_revision) ? globalThis.Number(object.source_view_revision) : 0,
+      anchor_item_id: isSet(object.anchor_item_id) ? globalThis.String(object.anchor_item_id) : undefined,
+      mode: isSet(object.mode) ? globalThis.String(object.mode) : "",
+      resources: globalThis.Array.isArray(object?.resources)
+        ? object.resources.map((e: any) => SessionForkResourceResult.fromJSON(e))
+        : [],
+      goal_id: isSet(object.goal_id) ? globalThis.String(object.goal_id) : undefined,
+      export_release: isSet(object.export_release)
+        ? SessionForkExportReleaseDTO.fromJSON(object.export_release)
+        : undefined,
+    };
+  },
+
+  toJSON(message: SessionForkResultDTO): unknown {
+    const obj: any = {};
+    if (message.session !== undefined) {
+      obj.session = SessionDTO.toJSON(message.session);
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.thread_uri !== "") {
+      obj.thread_uri = message.thread_uri;
+    }
+    if (message.creation_kind !== "") {
+      obj.creation_kind = message.creation_kind;
+    }
+    if (message.source_uri !== "") {
+      obj.source_uri = message.source_uri;
+    }
+    if (message.source_view_id !== "") {
+      obj.source_view_id = message.source_view_id;
+    }
+    if (message.source_view_revision !== 0) {
+      obj.source_view_revision = Math.round(message.source_view_revision);
+    }
+    if (message.anchor_item_id !== undefined) {
+      obj.anchor_item_id = message.anchor_item_id;
+    }
+    if (message.mode !== "") {
+      obj.mode = message.mode;
+    }
+    if (message.resources?.length) {
+      obj.resources = message.resources.map((e) => SessionForkResourceResult.toJSON(e));
+    }
+    if (message.goal_id !== undefined) {
+      obj.goal_id = message.goal_id;
+    }
+    if (message.export_release !== undefined) {
+      obj.export_release = SessionForkExportReleaseDTO.toJSON(message.export_release);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionForkResultDTO>, I>>(base?: I): SessionForkResultDTO {
+    return SessionForkResultDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionForkResultDTO>, I>>(object: I): SessionForkResultDTO {
+    const message = createBaseSessionForkResultDTO();
+    message.session = (object.session !== undefined && object.session !== null)
+      ? SessionDTO.fromPartial(object.session)
+      : undefined;
+    message.thread_id = object.thread_id ?? "";
+    message.thread_uri = object.thread_uri ?? "";
+    message.creation_kind = object.creation_kind ?? "";
+    message.source_uri = object.source_uri ?? "";
+    message.source_view_id = object.source_view_id ?? "";
+    message.source_view_revision = object.source_view_revision ?? 0;
+    message.anchor_item_id = object.anchor_item_id ?? undefined;
+    message.mode = object.mode ?? "";
+    message.resources = object.resources?.map((e) => SessionForkResourceResult.fromPartial(e)) || [];
+    message.goal_id = object.goal_id ?? undefined;
+    message.export_release = (object.export_release !== undefined && object.export_release !== null)
+      ? SessionForkExportReleaseDTO.fromPartial(object.export_release)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseSessionForkResourceSourceDTO(): SessionForkResourceSourceDTO {
+  return { resource_uri: "", name: undefined, content_type: undefined, availability: "", required_for_context: false };
+}
+
+export const SessionForkResourceSourceDTO: MessageFns<SessionForkResourceSourceDTO> = {
+  fromJSON(object: any): SessionForkResourceSourceDTO {
+    return {
+      resource_uri: isSet(object.resource_uri) ? globalThis.String(object.resource_uri) : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+      content_type: isSet(object.content_type) ? globalThis.String(object.content_type) : undefined,
+      availability: isSet(object.availability) ? globalThis.String(object.availability) : "",
+      required_for_context: isSet(object.required_for_context)
+        ? globalThis.Boolean(object.required_for_context)
+        : false,
+    };
+  },
+
+  toJSON(message: SessionForkResourceSourceDTO): unknown {
+    const obj: any = {};
+    if (message.resource_uri !== "") {
+      obj.resource_uri = message.resource_uri;
+    }
+    if (message.name !== undefined) {
+      obj.name = message.name;
+    }
+    if (message.content_type !== undefined) {
+      obj.content_type = message.content_type;
+    }
+    if (message.availability !== "") {
+      obj.availability = message.availability;
+    }
+    if (message.required_for_context !== false) {
+      obj.required_for_context = message.required_for_context;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionForkResourceSourceDTO>, I>>(base?: I): SessionForkResourceSourceDTO {
+    return SessionForkResourceSourceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionForkResourceSourceDTO>, I>>(object: I): SessionForkResourceSourceDTO {
+    const message = createBaseSessionForkResourceSourceDTO();
+    message.resource_uri = object.resource_uri ?? "";
+    message.name = object.name ?? undefined;
+    message.content_type = object.content_type ?? undefined;
+    message.availability = object.availability ?? "";
+    message.required_for_context = object.required_for_context ?? false;
+    return message;
+  },
+};
+
+function createBaseSessionForkSourcePointDTO(): SessionForkSourcePointDTO {
+  return {
+    source_uri: "",
+    source_view_id: "",
+    source_view_revision: 0,
+    anchor_item_id: undefined,
+    child_container_uri: "",
+    main_container_uri: "",
+    title: "",
+    goal_available: false,
+    resources: [],
+    resource_mode: "",
+    resource_anchor_mode: "",
+    live_resources: [],
+  };
+}
+
+export const SessionForkSourcePointDTO: MessageFns<SessionForkSourcePointDTO> = {
+  fromJSON(object: any): SessionForkSourcePointDTO {
+    return {
+      source_uri: isSet(object.source_uri) ? globalThis.String(object.source_uri) : "",
+      source_view_id: isSet(object.source_view_id) ? globalThis.String(object.source_view_id) : "",
+      source_view_revision: isSet(object.source_view_revision) ? globalThis.Number(object.source_view_revision) : 0,
+      anchor_item_id: isSet(object.anchor_item_id) ? globalThis.String(object.anchor_item_id) : undefined,
+      child_container_uri: isSet(object.child_container_uri) ? globalThis.String(object.child_container_uri) : "",
+      main_container_uri: isSet(object.main_container_uri) ? globalThis.String(object.main_container_uri) : "",
+      title: isSet(object.title) ? globalThis.String(object.title) : "",
+      goal_available: isSet(object.goal_available) ? globalThis.Boolean(object.goal_available) : false,
+      resources: globalThis.Array.isArray(object?.resources)
+        ? object.resources.map((e: any) => SessionForkResourceSourceDTO.fromJSON(e))
+        : [],
+      resource_mode: isSet(object.resource_mode) ? globalThis.String(object.resource_mode) : "",
+      resource_anchor_mode: isSet(object.resource_anchor_mode) ? globalThis.String(object.resource_anchor_mode) : "",
+      live_resources: globalThis.Array.isArray(object?.live_resources)
+        ? object.live_resources.map((e: any) => WorkspaceResourceDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: SessionForkSourcePointDTO): unknown {
+    const obj: any = {};
+    if (message.source_uri !== "") {
+      obj.source_uri = message.source_uri;
+    }
+    if (message.source_view_id !== "") {
+      obj.source_view_id = message.source_view_id;
+    }
+    if (message.source_view_revision !== 0) {
+      obj.source_view_revision = Math.round(message.source_view_revision);
+    }
+    if (message.anchor_item_id !== undefined) {
+      obj.anchor_item_id = message.anchor_item_id;
+    }
+    if (message.child_container_uri !== "") {
+      obj.child_container_uri = message.child_container_uri;
+    }
+    if (message.main_container_uri !== "") {
+      obj.main_container_uri = message.main_container_uri;
+    }
+    if (message.title !== "") {
+      obj.title = message.title;
+    }
+    if (message.goal_available !== false) {
+      obj.goal_available = message.goal_available;
+    }
+    if (message.resources?.length) {
+      obj.resources = message.resources.map((e) => SessionForkResourceSourceDTO.toJSON(e));
+    }
+    if (message.resource_mode !== "") {
+      obj.resource_mode = message.resource_mode;
+    }
+    if (message.resource_anchor_mode !== "") {
+      obj.resource_anchor_mode = message.resource_anchor_mode;
+    }
+    if (message.live_resources?.length) {
+      obj.live_resources = message.live_resources.map((e) => WorkspaceResourceDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionForkSourcePointDTO>, I>>(base?: I): SessionForkSourcePointDTO {
+    return SessionForkSourcePointDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionForkSourcePointDTO>, I>>(object: I): SessionForkSourcePointDTO {
+    const message = createBaseSessionForkSourcePointDTO();
+    message.source_uri = object.source_uri ?? "";
+    message.source_view_id = object.source_view_id ?? "";
+    message.source_view_revision = object.source_view_revision ?? 0;
+    message.anchor_item_id = object.anchor_item_id ?? undefined;
+    message.child_container_uri = object.child_container_uri ?? "";
+    message.main_container_uri = object.main_container_uri ?? "";
+    message.title = object.title ?? "";
+    message.goal_available = object.goal_available ?? false;
+    message.resources = object.resources?.map((e) => SessionForkResourceSourceDTO.fromPartial(e)) || [];
+    message.resource_mode = object.resource_mode ?? "";
+    message.resource_anchor_mode = object.resource_anchor_mode ?? "";
+    message.live_resources = object.live_resources?.map((e) => WorkspaceResourceDTO.fromPartial(e)) || [];
     return message;
   },
 };
@@ -10532,6 +11291,7 @@ function createBaseCommunicationObservationRequest(): CommunicationObservationRe
     query: undefined,
     page_ordinal: 0,
     expires_at: "",
+    terminal_replay: false,
   };
 }
 
@@ -10547,6 +11307,7 @@ export const CommunicationObservationRequest: MessageFns<CommunicationObservatio
       query: isObject(object.query) ? object.query : undefined,
       page_ordinal: isSet(object.page_ordinal) ? globalThis.Number(object.page_ordinal) : 0,
       expires_at: isSet(object.expires_at) ? globalThis.String(object.expires_at) : "",
+      terminal_replay: isSet(object.terminal_replay) ? globalThis.Boolean(object.terminal_replay) : false,
     };
   },
 
@@ -10579,6 +11340,9 @@ export const CommunicationObservationRequest: MessageFns<CommunicationObservatio
     if (message.expires_at !== "") {
       obj.expires_at = message.expires_at;
     }
+    if (message.terminal_replay !== false) {
+      obj.terminal_replay = message.terminal_replay;
+    }
     return obj;
   },
 
@@ -10602,6 +11366,7 @@ export const CommunicationObservationRequest: MessageFns<CommunicationObservatio
     message.query = object.query ?? undefined;
     message.page_ordinal = object.page_ordinal ?? 0;
     message.expires_at = object.expires_at ?? "";
+    message.terminal_replay = object.terminal_replay ?? false;
     return message;
   },
 };
@@ -10722,6 +11487,8 @@ export const CommunicationGatewayRequest: MessageFns<CommunicationGatewayRequest
         ? { $case: "target", target: GlobalThreadAddress.fromJSON(object.target) }
         : isSet(object.resource_target)
         ? { $case: "resource_target", resource_target: ContextGrantTarget.fromJSON(object.resource_target) }
+        : isSet(object.fork_target)
+        ? { $case: "fork_target", fork_target: ForkGrantTarget.fromJSON(object.fork_target) }
         : undefined,
       body: isObject(object.body) ? object.body : undefined,
     };
@@ -10736,6 +11503,8 @@ export const CommunicationGatewayRequest: MessageFns<CommunicationGatewayRequest
       obj.target = GlobalThreadAddress.toJSON(message.destination.target);
     } else if (message.destination?.$case === "resource_target") {
       obj.resource_target = ContextGrantTarget.toJSON(message.destination.resource_target);
+    } else if (message.destination?.$case === "fork_target") {
+      obj.fork_target = ForkGrantTarget.toJSON(message.destination.fork_target);
     }
     if (message.body !== undefined) {
       obj.body = message.body;
@@ -10765,8 +11534,393 @@ export const CommunicationGatewayRequest: MessageFns<CommunicationGatewayRequest
         }
         break;
       }
+      case "fork_target": {
+        if (object.destination?.fork_target !== undefined && object.destination?.fork_target !== null) {
+          message.destination = {
+            $case: "fork_target",
+            fork_target: ForkGrantTarget.fromPartial(object.destination.fork_target),
+          };
+        }
+        break;
+      }
     }
     message.body = object.body ?? undefined;
+    return message;
+  },
+};
+
+function createBaseForkGrantTarget(): ForkGrantTarget {
+  return { gateway_id: "", uri: "", fork_role: "" };
+}
+
+export const ForkGrantTarget: MessageFns<ForkGrantTarget> = {
+  fromJSON(object: any): ForkGrantTarget {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
+      fork_role: isSet(object.fork_role) ? globalThis.String(object.fork_role) : "",
+    };
+  },
+
+  toJSON(message: ForkGrantTarget): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.uri !== "") {
+      obj.uri = message.uri;
+    }
+    if (message.fork_role !== "") {
+      obj.fork_role = message.fork_role;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ForkGrantTarget>, I>>(base?: I): ForkGrantTarget {
+    return ForkGrantTarget.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ForkGrantTarget>, I>>(object: I): ForkGrantTarget {
+    const message = createBaseForkGrantTarget();
+    message.gateway_id = object.gateway_id ?? "";
+    message.uri = object.uri ?? "";
+    message.fork_role = object.fork_role ?? "";
+    return message;
+  },
+};
+
+function createBaseForkSourceCaptureDTO(): ForkSourceCaptureDTO {
+  return {
+    copy_operation_id: "",
+    creation_key: undefined,
+    source_session_id: "",
+    source_thread_id: "",
+    target_session_id: "",
+    target_thread_id: "",
+    snapshot_id: "",
+    snapshot_relative_locator: "",
+    fork_id: "",
+    materialization_id: "",
+    request_json: "",
+    preimage_hash: "",
+    state: "",
+    snapshot_sha256: undefined,
+    marker_sha256: undefined,
+    abort_reason: undefined,
+  };
+}
+
+export const ForkSourceCaptureDTO: MessageFns<ForkSourceCaptureDTO> = {
+  fromJSON(object: any): ForkSourceCaptureDTO {
+    return {
+      copy_operation_id: isSet(object.copy_operation_id) ? globalThis.String(object.copy_operation_id) : "",
+      creation_key: isSet(object.creation_key) ? globalThis.String(object.creation_key) : undefined,
+      source_session_id: isSet(object.source_session_id) ? globalThis.String(object.source_session_id) : "",
+      source_thread_id: isSet(object.source_thread_id) ? globalThis.String(object.source_thread_id) : "",
+      target_session_id: isSet(object.target_session_id) ? globalThis.String(object.target_session_id) : "",
+      target_thread_id: isSet(object.target_thread_id) ? globalThis.String(object.target_thread_id) : "",
+      snapshot_id: isSet(object.snapshot_id) ? globalThis.String(object.snapshot_id) : "",
+      snapshot_relative_locator: isSet(object.snapshot_relative_locator)
+        ? globalThis.String(object.snapshot_relative_locator)
+        : "",
+      fork_id: isSet(object.fork_id) ? globalThis.String(object.fork_id) : "",
+      materialization_id: isSet(object.materialization_id) ? globalThis.String(object.materialization_id) : "",
+      request_json: isSet(object.request_json) ? globalThis.String(object.request_json) : "",
+      preimage_hash: isSet(object.preimage_hash) ? globalThis.String(object.preimage_hash) : "",
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+      snapshot_sha256: isSet(object.snapshot_sha256) ? globalThis.String(object.snapshot_sha256) : undefined,
+      marker_sha256: isSet(object.marker_sha256) ? globalThis.String(object.marker_sha256) : undefined,
+      abort_reason: isSet(object.abort_reason) ? globalThis.String(object.abort_reason) : undefined,
+    };
+  },
+
+  toJSON(message: ForkSourceCaptureDTO): unknown {
+    const obj: any = {};
+    if (message.copy_operation_id !== "") {
+      obj.copy_operation_id = message.copy_operation_id;
+    }
+    if (message.creation_key !== undefined) {
+      obj.creation_key = message.creation_key;
+    }
+    if (message.source_session_id !== "") {
+      obj.source_session_id = message.source_session_id;
+    }
+    if (message.source_thread_id !== "") {
+      obj.source_thread_id = message.source_thread_id;
+    }
+    if (message.target_session_id !== "") {
+      obj.target_session_id = message.target_session_id;
+    }
+    if (message.target_thread_id !== "") {
+      obj.target_thread_id = message.target_thread_id;
+    }
+    if (message.snapshot_id !== "") {
+      obj.snapshot_id = message.snapshot_id;
+    }
+    if (message.snapshot_relative_locator !== "") {
+      obj.snapshot_relative_locator = message.snapshot_relative_locator;
+    }
+    if (message.fork_id !== "") {
+      obj.fork_id = message.fork_id;
+    }
+    if (message.materialization_id !== "") {
+      obj.materialization_id = message.materialization_id;
+    }
+    if (message.request_json !== "") {
+      obj.request_json = message.request_json;
+    }
+    if (message.preimage_hash !== "") {
+      obj.preimage_hash = message.preimage_hash;
+    }
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    if (message.snapshot_sha256 !== undefined) {
+      obj.snapshot_sha256 = message.snapshot_sha256;
+    }
+    if (message.marker_sha256 !== undefined) {
+      obj.marker_sha256 = message.marker_sha256;
+    }
+    if (message.abort_reason !== undefined) {
+      obj.abort_reason = message.abort_reason;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ForkSourceCaptureDTO>, I>>(base?: I): ForkSourceCaptureDTO {
+    return ForkSourceCaptureDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ForkSourceCaptureDTO>, I>>(object: I): ForkSourceCaptureDTO {
+    const message = createBaseForkSourceCaptureDTO();
+    message.copy_operation_id = object.copy_operation_id ?? "";
+    message.creation_key = object.creation_key ?? undefined;
+    message.source_session_id = object.source_session_id ?? "";
+    message.source_thread_id = object.source_thread_id ?? "";
+    message.target_session_id = object.target_session_id ?? "";
+    message.target_thread_id = object.target_thread_id ?? "";
+    message.snapshot_id = object.snapshot_id ?? "";
+    message.snapshot_relative_locator = object.snapshot_relative_locator ?? "";
+    message.fork_id = object.fork_id ?? "";
+    message.materialization_id = object.materialization_id ?? "";
+    message.request_json = object.request_json ?? "";
+    message.preimage_hash = object.preimage_hash ?? "";
+    message.state = object.state ?? "";
+    message.snapshot_sha256 = object.snapshot_sha256 ?? undefined;
+    message.marker_sha256 = object.marker_sha256 ?? undefined;
+    message.abort_reason = object.abort_reason ?? undefined;
+    return message;
+  },
+};
+
+function createBaseSessionForkTransferRequest(): SessionForkTransferRequest {
+  return {
+    source_gateway_id: "",
+    fork_target: undefined,
+    action: "",
+    request: undefined,
+    capture: undefined,
+    cursor: undefined,
+    file_name: undefined,
+    offset: undefined,
+    generation_origin: undefined,
+    release_state: undefined,
+    blob_id: undefined,
+  };
+}
+
+export const SessionForkTransferRequest: MessageFns<SessionForkTransferRequest> = {
+  fromJSON(object: any): SessionForkTransferRequest {
+    return {
+      source_gateway_id: isSet(object.source_gateway_id) ? globalThis.String(object.source_gateway_id) : "",
+      fork_target: isSet(object.fork_target) ? ForkGrantTarget.fromJSON(object.fork_target) : undefined,
+      action: isSet(object.action) ? globalThis.String(object.action) : "",
+      request: isSet(object.request) ? SessionForkRequest.fromJSON(object.request) : undefined,
+      capture: isSet(object.capture) ? ForkSourceCaptureDTO.fromJSON(object.capture) : undefined,
+      cursor: isSet(object.cursor) ? globalThis.Number(object.cursor) : undefined,
+      file_name: isSet(object.file_name) ? globalThis.String(object.file_name) : undefined,
+      offset: isSet(object.offset) ? globalThis.Number(object.offset) : undefined,
+      generation_origin: isSet(object.generation_origin)
+        ? SessionGenerationOriginDTO.fromJSON(object.generation_origin)
+        : undefined,
+      release_state: isSet(object.release_state) ? globalThis.String(object.release_state) : undefined,
+      blob_id: isSet(object.blob_id) ? globalThis.String(object.blob_id) : undefined,
+    };
+  },
+
+  toJSON(message: SessionForkTransferRequest): unknown {
+    const obj: any = {};
+    if (message.source_gateway_id !== "") {
+      obj.source_gateway_id = message.source_gateway_id;
+    }
+    if (message.fork_target !== undefined) {
+      obj.fork_target = ForkGrantTarget.toJSON(message.fork_target);
+    }
+    if (message.action !== "") {
+      obj.action = message.action;
+    }
+    if (message.request !== undefined) {
+      obj.request = SessionForkRequest.toJSON(message.request);
+    }
+    if (message.capture !== undefined) {
+      obj.capture = ForkSourceCaptureDTO.toJSON(message.capture);
+    }
+    if (message.cursor !== undefined) {
+      obj.cursor = Math.round(message.cursor);
+    }
+    if (message.file_name !== undefined) {
+      obj.file_name = message.file_name;
+    }
+    if (message.offset !== undefined) {
+      obj.offset = Math.round(message.offset);
+    }
+    if (message.generation_origin !== undefined) {
+      obj.generation_origin = SessionGenerationOriginDTO.toJSON(message.generation_origin);
+    }
+    if (message.release_state !== undefined) {
+      obj.release_state = message.release_state;
+    }
+    if (message.blob_id !== undefined) {
+      obj.blob_id = message.blob_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionForkTransferRequest>, I>>(base?: I): SessionForkTransferRequest {
+    return SessionForkTransferRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionForkTransferRequest>, I>>(object: I): SessionForkTransferRequest {
+    const message = createBaseSessionForkTransferRequest();
+    message.source_gateway_id = object.source_gateway_id ?? "";
+    message.fork_target = (object.fork_target !== undefined && object.fork_target !== null)
+      ? ForkGrantTarget.fromPartial(object.fork_target)
+      : undefined;
+    message.action = object.action ?? "";
+    message.request = (object.request !== undefined && object.request !== null)
+      ? SessionForkRequest.fromPartial(object.request)
+      : undefined;
+    message.capture = (object.capture !== undefined && object.capture !== null)
+      ? ForkSourceCaptureDTO.fromPartial(object.capture)
+      : undefined;
+    message.cursor = object.cursor ?? undefined;
+    message.file_name = object.file_name ?? undefined;
+    message.offset = object.offset ?? undefined;
+    message.generation_origin = (object.generation_origin !== undefined && object.generation_origin !== null)
+      ? SessionGenerationOriginDTO.fromPartial(object.generation_origin)
+      : undefined;
+    message.release_state = object.release_state ?? undefined;
+    message.blob_id = object.blob_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseForkTransferFileDTO(): ForkTransferFileDTO {
+  return { name: "", size_bytes: 0 };
+}
+
+export const ForkTransferFileDTO: MessageFns<ForkTransferFileDTO> = {
+  fromJSON(object: any): ForkTransferFileDTO {
+    return {
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      size_bytes: isSet(object.size_bytes) ? globalThis.Number(object.size_bytes) : 0,
+    };
+  },
+
+  toJSON(message: ForkTransferFileDTO): unknown {
+    const obj: any = {};
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.size_bytes !== 0) {
+      obj.size_bytes = Math.round(message.size_bytes);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ForkTransferFileDTO>, I>>(base?: I): ForkTransferFileDTO {
+    return ForkTransferFileDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ForkTransferFileDTO>, I>>(object: I): ForkTransferFileDTO {
+    const message = createBaseForkTransferFileDTO();
+    message.name = object.name ?? "";
+    message.size_bytes = object.size_bytes ?? 0;
+    return message;
+  },
+};
+
+function createBaseSessionForkTransferResultDTO(): SessionForkTransferResultDTO {
+  return {
+    capture: undefined,
+    intent: undefined,
+    files: [],
+    next_cursor: undefined,
+    chunk_base64: undefined,
+    chunk_sha256: undefined,
+    offset: undefined,
+    result: undefined,
+  };
+}
+
+export const SessionForkTransferResultDTO: MessageFns<SessionForkTransferResultDTO> = {
+  fromJSON(object: any): SessionForkTransferResultDTO {
+    return {
+      capture: isSet(object.capture) ? ForkSourceCaptureDTO.fromJSON(object.capture) : undefined,
+      intent: isObject(object.intent) ? object.intent : undefined,
+      files: globalThis.Array.isArray(object?.files)
+        ? object.files.map((e: any) => ForkTransferFileDTO.fromJSON(e))
+        : [],
+      next_cursor: isSet(object.next_cursor) ? globalThis.Number(object.next_cursor) : undefined,
+      chunk_base64: isSet(object.chunk_base64) ? globalThis.String(object.chunk_base64) : undefined,
+      chunk_sha256: isSet(object.chunk_sha256) ? globalThis.String(object.chunk_sha256) : undefined,
+      offset: isSet(object.offset) ? globalThis.Number(object.offset) : undefined,
+      result: isSet(object.result) ? SessionForkResultDTO.fromJSON(object.result) : undefined,
+    };
+  },
+
+  toJSON(message: SessionForkTransferResultDTO): unknown {
+    const obj: any = {};
+    if (message.capture !== undefined) {
+      obj.capture = ForkSourceCaptureDTO.toJSON(message.capture);
+    }
+    if (message.intent !== undefined) {
+      obj.intent = message.intent;
+    }
+    if (message.files?.length) {
+      obj.files = message.files.map((e) => ForkTransferFileDTO.toJSON(e));
+    }
+    if (message.next_cursor !== undefined) {
+      obj.next_cursor = Math.round(message.next_cursor);
+    }
+    if (message.chunk_base64 !== undefined) {
+      obj.chunk_base64 = message.chunk_base64;
+    }
+    if (message.chunk_sha256 !== undefined) {
+      obj.chunk_sha256 = message.chunk_sha256;
+    }
+    if (message.offset !== undefined) {
+      obj.offset = Math.round(message.offset);
+    }
+    if (message.result !== undefined) {
+      obj.result = SessionForkResultDTO.toJSON(message.result);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionForkTransferResultDTO>, I>>(base?: I): SessionForkTransferResultDTO {
+    return SessionForkTransferResultDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionForkTransferResultDTO>, I>>(object: I): SessionForkTransferResultDTO {
+    const message = createBaseSessionForkTransferResultDTO();
+    message.capture = (object.capture !== undefined && object.capture !== null)
+      ? ForkSourceCaptureDTO.fromPartial(object.capture)
+      : undefined;
+    message.intent = object.intent ?? undefined;
+    message.files = object.files?.map((e) => ForkTransferFileDTO.fromPartial(e)) || [];
+    message.next_cursor = object.next_cursor ?? undefined;
+    message.chunk_base64 = object.chunk_base64 ?? undefined;
+    message.chunk_sha256 = object.chunk_sha256 ?? undefined;
+    message.offset = object.offset ?? undefined;
+    message.result = (object.result !== undefined && object.result !== null)
+      ? SessionForkResultDTO.fromPartial(object.result)
+      : undefined;
     return message;
   },
 };
@@ -11689,6 +12843,7 @@ function createBaseSessionTurnBootstrapDTO(): SessionTurnBootstrapDTO {
     older_cursor: undefined,
     event_cursor: undefined,
     projection_epoch: 0,
+    thread_id: "",
   };
 }
 
@@ -11709,6 +12864,7 @@ export const SessionTurnBootstrapDTO: MessageFns<SessionTurnBootstrapDTO> = {
       older_cursor: isSet(object.older_cursor) ? globalThis.String(object.older_cursor) : undefined,
       event_cursor: isSet(object.event_cursor) ? globalThis.String(object.event_cursor) : undefined,
       projection_epoch: isSet(object.projection_epoch) ? globalThis.Number(object.projection_epoch) : 0,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -11744,6 +12900,9 @@ export const SessionTurnBootstrapDTO: MessageFns<SessionTurnBootstrapDTO> = {
     if (message.projection_epoch !== 0) {
       obj.projection_epoch = Math.round(message.projection_epoch);
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -11766,6 +12925,7 @@ export const SessionTurnBootstrapDTO: MessageFns<SessionTurnBootstrapDTO> = {
     message.older_cursor = object.older_cursor ?? undefined;
     message.event_cursor = object.event_cursor ?? undefined;
     message.projection_epoch = object.projection_epoch ?? 0;
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };
@@ -13294,7 +14454,7 @@ export const TurnActivityStatsDTO: MessageFns<TurnActivityStatsDTO> = {
 };
 
 function createBaseTurnAttachmentDTO(): TurnAttachmentDTO {
-  return { file_id: "", name: undefined, content_type: undefined };
+  return { file_id: "", name: undefined, content_type: undefined, availability: undefined };
 }
 
 export const TurnAttachmentDTO: MessageFns<TurnAttachmentDTO> = {
@@ -13303,6 +14463,7 @@ export const TurnAttachmentDTO: MessageFns<TurnAttachmentDTO> = {
       file_id: isSet(object.file_id) ? globalThis.String(object.file_id) : "",
       name: isSet(object.name) ? globalThis.String(object.name) : undefined,
       content_type: isSet(object.content_type) ? globalThis.String(object.content_type) : undefined,
+      availability: isSet(object.availability) ? globalThis.String(object.availability) : undefined,
     };
   },
 
@@ -13317,6 +14478,9 @@ export const TurnAttachmentDTO: MessageFns<TurnAttachmentDTO> = {
     if (message.content_type !== undefined) {
       obj.content_type = message.content_type;
     }
+    if (message.availability !== undefined) {
+      obj.availability = message.availability;
+    }
     return obj;
   },
 
@@ -13328,6 +14492,7 @@ export const TurnAttachmentDTO: MessageFns<TurnAttachmentDTO> = {
     message.file_id = object.file_id ?? "";
     message.name = object.name ?? undefined;
     message.content_type = object.content_type ?? undefined;
+    message.availability = object.availability ?? undefined;
     return message;
   },
 };
@@ -13343,6 +14508,8 @@ function createBaseTurnBaseDTO(): TurnBaseDTO {
     created_at: undefined,
     updated_at: undefined,
     completed_at: undefined,
+    source_view_id: "",
+    source_view_revision: 0,
   };
 }
 
@@ -13358,6 +14525,8 @@ export const TurnBaseDTO: MessageFns<TurnBaseDTO> = {
       created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
       completed_at: isSet(object.completed_at) ? globalThis.String(object.completed_at) : undefined,
+      source_view_id: isSet(object.source_view_id) ? globalThis.String(object.source_view_id) : "",
+      source_view_revision: isSet(object.source_view_revision) ? globalThis.Number(object.source_view_revision) : 0,
     };
   },
 
@@ -13390,6 +14559,12 @@ export const TurnBaseDTO: MessageFns<TurnBaseDTO> = {
     if (message.completed_at !== undefined) {
       obj.completed_at = message.completed_at;
     }
+    if (message.source_view_id !== "") {
+      obj.source_view_id = message.source_view_id;
+    }
+    if (message.source_view_revision !== 0) {
+      obj.source_view_revision = Math.round(message.source_view_revision);
+    }
     return obj;
   },
 
@@ -13407,6 +14582,8 @@ export const TurnBaseDTO: MessageFns<TurnBaseDTO> = {
     message.created_at = object.created_at ?? undefined;
     message.updated_at = object.updated_at ?? undefined;
     message.completed_at = object.completed_at ?? undefined;
+    message.source_view_id = object.source_view_id ?? "";
+    message.source_view_revision = object.source_view_revision ?? 0;
     return message;
   },
 };
@@ -13639,6 +14816,8 @@ function createBaseTurnDetailDTO(): TurnDetailDTO {
     detail_next_cursor: undefined,
     activity_stats: undefined,
     root_logical_item_ordinal: 0,
+    source_view_id: "",
+    source_view_revision: 0,
   };
 }
 
@@ -13688,6 +14867,8 @@ export const TurnDetailDTO: MessageFns<TurnDetailDTO> = {
       root_logical_item_ordinal: isSet(object.root_logical_item_ordinal)
         ? globalThis.Number(object.root_logical_item_ordinal)
         : 0,
+      source_view_id: isSet(object.source_view_id) ? globalThis.String(object.source_view_id) : "",
+      source_view_revision: isSet(object.source_view_revision) ? globalThis.Number(object.source_view_revision) : 0,
     };
   },
 
@@ -13768,6 +14949,12 @@ export const TurnDetailDTO: MessageFns<TurnDetailDTO> = {
     if (message.root_logical_item_ordinal !== 0) {
       obj.root_logical_item_ordinal = Math.round(message.root_logical_item_ordinal);
     }
+    if (message.source_view_id !== "") {
+      obj.source_view_id = message.source_view_id;
+    }
+    if (message.source_view_revision !== 0) {
+      obj.source_view_revision = Math.round(message.source_view_revision);
+    }
     return obj;
   },
 
@@ -13803,6 +14990,8 @@ export const TurnDetailDTO: MessageFns<TurnDetailDTO> = {
       ? TurnActivityStatsDTO.fromPartial(object.activity_stats)
       : undefined;
     message.root_logical_item_ordinal = object.root_logical_item_ordinal ?? 0;
+    message.source_view_id = object.source_view_id ?? "";
+    message.source_view_revision = object.source_view_revision ?? 0;
     return message;
   },
 };
@@ -13909,6 +15098,8 @@ function createBaseTurnHistoryPageDTO(): TurnHistoryPageDTO {
     summaries: [],
     internal_executions: [],
     thread_id: undefined,
+    source_view_id: undefined,
+    source_view_revision: undefined,
   };
 }
 
@@ -13930,6 +15121,10 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
         ? object.internal_executions.map((e: any) => InternalExecutionHistoryDTO.fromJSON(e))
         : [],
       thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : undefined,
+      source_view_id: isSet(object.source_view_id) ? globalThis.String(object.source_view_id) : undefined,
+      source_view_revision: isSet(object.source_view_revision)
+        ? globalThis.Number(object.source_view_revision)
+        : undefined,
     };
   },
 
@@ -13968,6 +15163,12 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
     if (message.thread_id !== undefined) {
       obj.thread_id = message.thread_id;
     }
+    if (message.source_view_id !== undefined) {
+      obj.source_view_id = message.source_view_id;
+    }
+    if (message.source_view_revision !== undefined) {
+      obj.source_view_revision = Math.round(message.source_view_revision);
+    }
     return obj;
   },
 
@@ -13988,6 +15189,8 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
     message.internal_executions = object.internal_executions?.map((e) => InternalExecutionHistoryDTO.fromPartial(e)) ||
       [];
     message.thread_id = object.thread_id ?? undefined;
+    message.source_view_id = object.source_view_id ?? undefined;
+    message.source_view_revision = object.source_view_revision ?? undefined;
     return message;
   },
 };
@@ -14588,6 +15791,8 @@ function createBaseTurnSummaryDTO(): TurnSummaryDTO {
     response_parts: [],
     activity_stats: undefined,
     root_logical_item_ordinal: 0,
+    source_view_id: "",
+    source_view_revision: 0,
   };
 }
 
@@ -14638,6 +15843,8 @@ export const TurnSummaryDTO: MessageFns<TurnSummaryDTO> = {
       root_logical_item_ordinal: isSet(object.root_logical_item_ordinal)
         ? globalThis.Number(object.root_logical_item_ordinal)
         : 0,
+      source_view_id: isSet(object.source_view_id) ? globalThis.String(object.source_view_id) : "",
+      source_view_revision: isSet(object.source_view_revision) ? globalThis.Number(object.source_view_revision) : 0,
     };
   },
 
@@ -14721,6 +15928,12 @@ export const TurnSummaryDTO: MessageFns<TurnSummaryDTO> = {
     if (message.root_logical_item_ordinal !== 0) {
       obj.root_logical_item_ordinal = Math.round(message.root_logical_item_ordinal);
     }
+    if (message.source_view_id !== "") {
+      obj.source_view_id = message.source_view_id;
+    }
+    if (message.source_view_revision !== 0) {
+      obj.source_view_revision = Math.round(message.source_view_revision);
+    }
     return obj;
   },
 
@@ -14757,6 +15970,8 @@ export const TurnSummaryDTO: MessageFns<TurnSummaryDTO> = {
       ? TurnActivityStatsDTO.fromPartial(object.activity_stats)
       : undefined;
     message.root_logical_item_ordinal = object.root_logical_item_ordinal ?? 0;
+    message.source_view_id = object.source_view_id ?? "";
+    message.source_view_revision = object.source_view_revision ?? 0;
     return message;
   },
 };
@@ -16064,6 +17279,171 @@ export const WorkspaceFileWatchRequest: MessageFns<WorkspaceFileWatchRequest> = 
     const message = createBaseWorkspaceFileWatchRequest();
     message.paths = object.paths?.map((e) => e) || [];
     message.after_event_id = object.after_event_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseWorkspaceObservationSubscription(): WorkspaceObservationSubscription {
+  return {
+    subscription_id: "",
+    kind: "",
+    session_id: undefined,
+    activity_after: undefined,
+    trace_after: undefined,
+    paths: [],
+    files_after: undefined,
+  };
+}
+
+export const WorkspaceObservationSubscription: MessageFns<WorkspaceObservationSubscription> = {
+  fromJSON(object: any): WorkspaceObservationSubscription {
+    return {
+      subscription_id: isSet(object.subscription_id) ? globalThis.String(object.subscription_id) : "",
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : undefined,
+      activity_after: isSet(object.activity_after) ? globalThis.Number(object.activity_after) : undefined,
+      trace_after: isSet(object.trace_after) ? globalThis.String(object.trace_after) : undefined,
+      paths: globalThis.Array.isArray(object?.paths)
+        ? object.paths.map((e: any) => globalThis.String(e))
+        : [],
+      files_after: isSet(object.files_after) ? globalThis.Number(object.files_after) : undefined,
+    };
+  },
+
+  toJSON(message: WorkspaceObservationSubscription): unknown {
+    const obj: any = {};
+    if (message.subscription_id !== "") {
+      obj.subscription_id = message.subscription_id;
+    }
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.session_id !== undefined) {
+      obj.session_id = message.session_id;
+    }
+    if (message.activity_after !== undefined) {
+      obj.activity_after = Math.round(message.activity_after);
+    }
+    if (message.trace_after !== undefined) {
+      obj.trace_after = message.trace_after;
+    }
+    if (message.paths?.length) {
+      obj.paths = message.paths;
+    }
+    if (message.files_after !== undefined) {
+      obj.files_after = Math.round(message.files_after);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceObservationSubscription>, I>>(
+    base?: I,
+  ): WorkspaceObservationSubscription {
+    return WorkspaceObservationSubscription.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceObservationSubscription>, I>>(
+    object: I,
+  ): WorkspaceObservationSubscription {
+    const message = createBaseWorkspaceObservationSubscription();
+    message.subscription_id = object.subscription_id ?? "";
+    message.kind = object.kind ?? "";
+    message.session_id = object.session_id ?? undefined;
+    message.activity_after = object.activity_after ?? undefined;
+    message.trace_after = object.trace_after ?? undefined;
+    message.paths = object.paths?.map((e) => e) || [];
+    message.files_after = object.files_after ?? undefined;
+    return message;
+  },
+};
+
+function createBaseWorkspaceObservationRequest(): WorkspaceObservationRequest {
+  return { subscriptions: [] };
+}
+
+export const WorkspaceObservationRequest: MessageFns<WorkspaceObservationRequest> = {
+  fromJSON(object: any): WorkspaceObservationRequest {
+    return {
+      subscriptions: globalThis.Array.isArray(object?.subscriptions)
+        ? object.subscriptions.map((e: any) => WorkspaceObservationSubscription.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: WorkspaceObservationRequest): unknown {
+    const obj: any = {};
+    if (message.subscriptions?.length) {
+      obj.subscriptions = message.subscriptions.map((e) => WorkspaceObservationSubscription.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceObservationRequest>, I>>(base?: I): WorkspaceObservationRequest {
+    return WorkspaceObservationRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceObservationRequest>, I>>(object: I): WorkspaceObservationRequest {
+    const message = createBaseWorkspaceObservationRequest();
+    message.subscriptions = object.subscriptions?.map((e) => WorkspaceObservationSubscription.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseWorkspaceObservationFrameDTO(): WorkspaceObservationFrameDTO {
+  return {
+    subscription_id: "",
+    state: "",
+    frame: undefined,
+    status: undefined,
+    detail_json: undefined,
+    cursor: undefined,
+  };
+}
+
+export const WorkspaceObservationFrameDTO: MessageFns<WorkspaceObservationFrameDTO> = {
+  fromJSON(object: any): WorkspaceObservationFrameDTO {
+    return {
+      subscription_id: isSet(object.subscription_id) ? globalThis.String(object.subscription_id) : "",
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+      frame: isSet(object.frame) ? globalThis.String(object.frame) : undefined,
+      status: isSet(object.status) ? globalThis.Number(object.status) : undefined,
+      detail_json: isSet(object.detail_json) ? globalThis.String(object.detail_json) : undefined,
+      cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
+    };
+  },
+
+  toJSON(message: WorkspaceObservationFrameDTO): unknown {
+    const obj: any = {};
+    if (message.subscription_id !== "") {
+      obj.subscription_id = message.subscription_id;
+    }
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    if (message.frame !== undefined) {
+      obj.frame = message.frame;
+    }
+    if (message.status !== undefined) {
+      obj.status = Math.round(message.status);
+    }
+    if (message.detail_json !== undefined) {
+      obj.detail_json = message.detail_json;
+    }
+    if (message.cursor !== undefined) {
+      obj.cursor = message.cursor;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceObservationFrameDTO>, I>>(base?: I): WorkspaceObservationFrameDTO {
+    return WorkspaceObservationFrameDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceObservationFrameDTO>, I>>(object: I): WorkspaceObservationFrameDTO {
+    const message = createBaseWorkspaceObservationFrameDTO();
+    message.subscription_id = object.subscription_id ?? "";
+    message.state = object.state ?? "";
+    message.frame = object.frame ?? undefined;
+    message.status = object.status ?? undefined;
+    message.detail_json = object.detail_json ?? undefined;
+    message.cursor = object.cursor ?? undefined;
     return message;
   },
 };

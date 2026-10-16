@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Final, NewType
+from typing import Final, Literal, NewType
 from uuid import UUID, uuid5
 
 from app.core.resource_uri import (
@@ -33,6 +33,69 @@ _RESOURCE_IDENTITY_NAMESPACE: Final = UUID("75e37b63-cb5f-5b6f-8c0d-c5d61d280ed3
 SESSION_RESOURCE_IDENTITY_NAMESPACE: Final = "session-resource-v1"
 CONTEXT_ASSEMBLY_IDENTITY_NAMESPACE: Final = "context-assembly-v1"
 ResourceIdentity = NewType("ResourceIdentity", str)
+
+ResourceTargetAction = Literal[
+    "reuse_reference", "retain_reference", "copy_snapshot", "omit", "unsupported"
+]
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeResourceTargetFacts:
+    """原运行资源 owner 的业务身份与准入事实；不是资源 URI 或第二份登记。"""
+
+    kind: Literal["terminal", "browser"]
+    resource_id: str
+    workspace_id: str
+    retention_scope: Literal["thread", "workspace"]
+    source_thread: tuple[str, str]
+    thread_associations: tuple[tuple[str, str], ...]
+    owner_revision: int
+    status: str
+    reconciliation_status: str
+    available_actions: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceTargetFacts:
+    """领域 owner 提供的冻结事实；不登记第二套资源正文或生命周期。"""
+
+    resource_uri: str | None
+    storage_domain_id: str
+    lifecycle: Literal["workspace", "owner", "snapshot", "runtime"]
+    available: bool
+    required_for_context: bool = False
+    snapshot_import_supported: bool = False
+    owner_session_id: str | None = None
+    owner_thread_id: str | None = None
+    # owner 声明的保活范围，不等于 URI scope，也不授予正文读取权限。
+    retention_scope: Literal["workspace", "session", "thread"] | None = None
+    # 内容修订标识（附件为 blob_id），不是 catalog 的全局变更计数。
+    revision: str | None = None
+    # 带算法前缀的内容摘要，例如 sha256:<hex>。
+    content_hash: str | None = None
+    # 正文长度，单位 bytes；与内容修订/摘要共同证明目标相同内容。
+    content_length: int | None = None
+    runtime: RuntimeResourceTargetFacts | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceTargetContext:
+    storage_domain_id: str
+    snapshot_import_supported: bool = True
+    owner_session_id: str | None = None
+    owner_thread_id: str | None = None
+    existing_reference: ResourceTargetFacts | None = None
+    workspace_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceTargetDecision:
+    resource_uri: str | None
+    action: ResourceTargetAction
+    available: bool
+    reason: str | None = None
+    target_uri: str | None = None
+    runtime: RuntimeResourceTargetFacts | None = None
 
 
 def _require_identity(field_name: str, value: str) -> None:
@@ -82,7 +145,12 @@ def _require_opaque_ref(field_name: str, value: str) -> None:
 
 @dataclass(frozen=True, slots=True)
 class SemanticResourceDescriptor:
-    """语义 Registry 内稳定的资源描述。
+    """virtual_resources 的 URI 解析 catalog 描述，由 resolver 消费注入值。
+
+    CatalogBinding 将它交给 ResolvedResourceHandle 与 ResourceProvenance；
+    与 derivation.types 中的派生与登记描述不可互换。kind 必须与 URI.kind 匹配。
+    semantic_revision/semantic_hash 来自注入的 catalog 描述，本类型仅验证二者非空，
+    不自行计算，也不要求二者相等。
 
     resource_id 跨 rename/locator 变化保持不变；display_uri 只是当前
     逻辑地址，不得被当作 identity。字段集刻意不含 provider locator。

@@ -5,6 +5,9 @@ from __future__ import annotations
 import sqlite3
 
 from app.domain.itemized.enums import TurnStatus
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    require_resumable_turn,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import strict_text
 
 
@@ -32,6 +35,7 @@ class RolloutExecutionDispatchMixin:
         turn_id = strict_text(turn_id, field="turn_id")
         with self._storage.read_connection(session_id, owner_thread_id, checkpoint_ns, connection=writer_connection) as connection:
             self._storage._require_v2_runtime(connection)
+            require_resumable_turn(connection, session_id, owner_thread_id, turn_id)
             row = connection.execute(
                 """
                 SELECT tr.status, e.execution_id

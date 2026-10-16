@@ -4,6 +4,11 @@ import type { WorkspaceResourceDTO } from "./protocol_generated/boxteam/workspac
 import type { ConfigSourceDTO, ConfigSourcesDTO, Session, SessionResource } from "./protocol";
 
 export type {
+  WorkspaceObservationFrameDTO,
+  WorkspaceObservationSubscription,
+} from "./protocol_generated/boxteam/workspace/v2/public";
+
+export type {
   Agent,
   AgentStateMessages,
   ConfigSourceDTO,
@@ -31,12 +36,19 @@ export type {
   PendingRequest,
   PendingRequestList,
   PendingRequestPolicyUpdateRequest,
-  PendingRequestUpdateRequest,
   RunMode,
   RunOptions,
   Session,
   SessionMainThread,
   SessionCompactResult,
+  SessionForkRequest,
+  SessionForkResult,
+  SessionForkSourcePoint,
+  SessionForkMode,
+  SessionForkCreationKind,
+  SessionForkResourceAction,
+  SessionForkResourceChoice,
+  SessionForkOwnerReference,
   SessionInformationSnapshot,
   InterruptSessionResult,
   InternalDisplayProvenance,
@@ -131,6 +143,7 @@ export interface SessionGoal {
   tokens_used: number;
   time_used_seconds: number;
   created_at: string;
+  /** 当前 Goal 记录最近一次写入时刻，含设置、用量记账和续跑标记写入或失败回滚；fork 初值取目标 Session 冻结创建时刻。revision 仅随普通设置更新递增。 */
   updated_at: string;
 }
 

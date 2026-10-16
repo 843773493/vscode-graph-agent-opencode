@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from contextlib import nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, create_autospec
@@ -104,6 +105,9 @@ def _workspace_inventory_search_request(**kwargs: object) -> SessionContextSearc
 
 
 class _FakeSessionLookup:
+    def session_read_admission(self, session_id: str):
+        return nullcontext()
+
     def __init__(self) -> None:
         timestamp = datetime(2026, 1, 1, tzinfo=UTC)
         self.sessions = [

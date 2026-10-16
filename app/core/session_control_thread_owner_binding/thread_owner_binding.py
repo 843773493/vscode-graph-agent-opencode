@@ -43,7 +43,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from app.core.session_catalog_store import validate_thread_id
+from app.core.session_catalog_store.validators import validate_thread_id
 from app.core.session_control_primitives import SHA256_HEX_PATTERN
 from app.core.session_control_thread_catalog.thread_catalog import (
     validate_thread_relative_locator,

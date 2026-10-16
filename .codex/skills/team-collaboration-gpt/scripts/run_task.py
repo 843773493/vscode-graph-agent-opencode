@@ -75,20 +75,15 @@ def pytest_node_id_rules(profile: dict[str, object], workdir: Path) -> dict[Path
     return rules
 
 
-def enforce_pytest_node_selection(
-    command: list[str], profile: dict[str, object], workdir: Path, result_dir: Path,
-) -> str | None:
+def pytest_selectors(command: list[str]) -> list[str]:
+    """只识别本入口已有的 pytest 前缀和显式文件参数，不解析完整 CLI。"""
     if command[:3] == ["uv", "run", "pytest"]:
         selector_arguments = command[3:]
     elif command[:4] == ["uv", "run", "--no-sync", "pytest"]:
         selector_arguments = command[4:]
     else:
-        return None
-    rules = pytest_node_id_rules(profile, workdir)
-    if not rules:
-        return None
-    selected: list[dict[str, object]] = []
-    failures: list[str] = []
+        return []
+    selectors = []
     skip_option_value = False
     for raw_selector in selector_arguments:
         if skip_option_value:
@@ -99,6 +94,22 @@ def enforce_pytest_node_selection(
             continue
         if raw_selector.startswith("-"):
             continue
+        selectors.append(raw_selector)
+    return selectors
+
+
+def enforce_pytest_node_selection(
+    command: list[str], profile: dict[str, object], workdir: Path, result_dir: Path,
+) -> str | None:
+    selectors = pytest_selectors(command)
+    if not selectors:
+        return None
+    rules = pytest_node_id_rules(profile, workdir)
+    if not rules:
+        return None
+    selected: list[dict[str, object]] = []
+    failures: list[str] = []
+    for raw_selector in selectors:
         raw_path, separator, node_id = raw_selector.partition("::")
         file_path = Path(raw_path)
         if not file_path.is_absolute():
@@ -197,13 +208,20 @@ def main() -> int:
     paths = profile.get("source_paths", [])
     if "source_manifest" in profile:
         paths = sorted(set(paths) | set(json.loads(Path(profile["source_manifest"]).read_text())["files"]))
+    # 新增具名回归不依赖人工把实际测试文件抄入 profile；fixture/callee 仍由 owner 登记。
+    for selector in pytest_selectors(command):
+        target = (workdir / selector.partition("::")[0]).resolve()
+        if target.suffix == ".py" and target.is_file():
+            paths = sorted(set(paths) | {target.relative_to(workdir).as_posix()})
     baseline_path = None
     baseline = None
     if "source_baseline" in profile:
         baseline_path = Path(profile["source_baseline"]).resolve(strict=True)
         baseline = json.loads(baseline_path.read_text())
         paths = sorted(set(paths) | set(baseline["files"]))
+    source_before_started = time.monotonic()
     fingerprints = source_fingerprints(workdir, paths)
+    source_before_seconds = time.monotonic() - source_before_started
     # mkdir 不允许复用 attempt；失败原件不会被下一次同名运行覆盖。
     attempts = artifact_root / "runs"
     attempts.mkdir(exist_ok=True)
@@ -276,6 +294,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, interrupt_run)
     signal.signal(signal.SIGINT, interrupt_run)
     with (result_dir / "stdout.raw").open("xb") as stdout, (result_dir / "stderr.raw").open("xb") as stderr:
+        command_started = time.monotonic()
         child = subprocess.Popen(argv, cwd=workdir, env=environment,
                                  stdout=stdout, stderr=stderr, start_new_session=True)
         try:
@@ -290,23 +309,44 @@ def main() -> int:
             if interrupted_signal is not None:
                 interrupt_run(interrupted_signal, None)
             actual = child.wait()
+            command_seconds = time.monotonic() - command_started
+            # 命令终态先落盘，后续清理和指纹采集不能伪装成仍在执行。
+            write_json(result_dir / "command-exit.json", {
+                "stage": "command_exited", "ended_utc": utc_now(),
+                "pid": child.pid, "pgid": child.pid, "exit_code": actual,
+                "command_seconds": command_seconds,
+            })
         finally:
+            cleanup_started = time.monotonic()
             remaining = group_members(child.pid)
             if remaining:
                 os.killpg(child.pid, signal.SIGKILL)
             child.wait()
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
             signal.signal(signal.SIGINT, signal.SIG_IGN)
+            cleanup_seconds = time.monotonic() - cleanup_started
+    log_hash_started = time.monotonic()
     logs = {}
     for name in ("stdout", "stderr"):
         path = result_dir / f"{name}.raw"
         with path.open("rb") as stream:
             digest = hashlib.file_digest(stream, "sha256").hexdigest()
         logs[name] = {"path": str(path), "sha256": digest, "bytes": path.stat().st_size}
+    log_hash_seconds = time.monotonic() - log_hash_started
+    source_after_started = time.monotonic()
     write_json(result_dir / "source-after.json", source_fingerprints(workdir, paths))
+    source_after_seconds = time.monotonic() - source_after_started
+    final_group_check_started = time.monotonic()
+    final_group_members = group_members(child.pid)
+    final_group_check_seconds = time.monotonic() - final_group_check_started
     result = {**start, "ended_utc": utc_now(), "duration_seconds": time.monotonic() - started,
               "exit_code": actual, "interrupted_signal": interrupted_signal, "logs": logs,
-              "cleanup_killed_members": remaining, "remaining_group_members": group_members(child.pid)}
+              "cleanup_killed_members": remaining, "remaining_group_members": final_group_members,
+              "phase_seconds": {
+                  "source_before": source_before_seconds, "command": command_seconds,
+                  "cleanup": cleanup_seconds, "log_hash": log_hash_seconds,
+                  "source_after": source_after_seconds, "final_group_check": final_group_check_seconds,
+              }}
     write_json(result_dir / "result.json", result)
     print(json.dumps({"result": str(result_dir / "result.json"), "exit_code": actual}), flush=True)
     return actual if actual >= 0 else 128 - actual

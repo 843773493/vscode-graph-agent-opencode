@@ -239,7 +239,7 @@ def test_projection_reads_use_snapshot_session_thread_pair(
                 record["message_id"] for record in batch_records[turn_id]
             ] == expected_message_ids
 
-            with pytest.raises(ValueError, match="snapshot owner"):
+            with pytest.raises(ValueError, match="read snapshot 与目标 rollout 不一致"):
                 storage.checkpoints.read_indexed_records(
                     f"ses_{create_uuid_hex()}",
                     thread_id,
@@ -248,7 +248,7 @@ def test_projection_reads_use_snapshot_session_thread_pair(
                     turn_id=turn_id,
                     snapshot=snapshot,
                 )
-            with pytest.raises(ValueError, match="snapshot owner"):
+            with pytest.raises(ValueError, match="read snapshot 与目标 rollout 不一致"):
                 storage.checkpoints.read_indexed_records(
                     session_id,
                     thread_id,

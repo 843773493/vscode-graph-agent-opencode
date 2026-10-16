@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 import secrets
+import sqlite3
 import stat
+from contextlib import closing, nullcontext
 from pathlib import Path
 
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
@@ -13,6 +15,12 @@ from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailUnavailableError,
     detail_relative_path,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    require_historical_scope,
+)
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutReadSnapshot,
 )
 
 
@@ -33,12 +41,16 @@ class DetailFiles:
     def path(
         self, ref: DetailRef, *, create: bool = False,
         creation_record: SessionCreationRecord | None = None,
+        storage_owner: tuple[str, str] | None = None,
     ) -> Path | None:
         relative = detail_relative_path(ref)
+        owner_session, owner_thread = storage_owner or (ref.session_id, ref.thread_id)
+        if create or creation_record is not None:
+            ref.require_owner(owner_session, owner_thread)
         if creation_record is not None and creation_record.session_id != ref.session_id:
             raise ValueError("source-mismatch: detail 与 prepared Session creation owner 不一致")
         root = (
-            self._resolver.resolve_thread_node(ref.session_id, ref.thread_id)
+            self._resolver.resolve_thread_node(owner_session, owner_thread)
             if creation_record is None else self._resolver.resolve_prepared_thread_node(
                 creation_record, ref.thread_id,
             )
@@ -72,8 +84,30 @@ class DetailFiles:
             raise DetailUnavailableError("detail 路径越出 session node") from error
         return target
 
-    def read(self, ref: DetailRef) -> bytes:
-        target = self.path(ref)
+    def read(
+        self, ref: DetailRef, *, session_id: str, thread_id: str,
+        snapshot: RolloutReadSnapshot | None = None,
+    ) -> bytes:
+        """历史 ref 保留原值；只从已授权的当前物理节点读取冻结正文。"""
+        owner = (session_id, thread_id)
+        if snapshot is not None:
+            if snapshot.closed:
+                raise RuntimeError("rollout read snapshot 已关闭")
+            if (snapshot.session_id, snapshot.thread_id) != owner:
+                raise ValueError("read snapshot 与 detail 目标 owner 不一致")
+        if (ref.session_id, ref.thread_id) != owner:
+            with (
+                nullcontext(snapshot.connection) if snapshot is not None else closing(
+                    sqlite3.connect(
+                        (self._resolver.resolve_thread_node(*owner) / "rollout" / "index.sqlite").as_uri() + "?mode=ro",
+                        uri=True,
+                    )
+                )
+            ) as connection:
+                require_historical_scope(
+                    connection, ref.session_id, ref.thread_id, current_owner=owner,
+                )
+        target = self.path(ref, storage_owner=owner)
         if target is None:
             raise DetailUnavailableError(f"assembly detail 正文缺失: {ref.detail_id}")
         descriptor = -1

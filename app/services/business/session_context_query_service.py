@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 
 from app.abstractions.session_context import (
@@ -11,6 +12,7 @@ from app.abstractions.session_context import (
     SessionInformationSourceProtocol,
     SessionLookupProtocol,
 )
+from app.core.phase_observer import observe_phase
 from app.core.trace_middleware import get_current_gateway_id
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_context import (
@@ -131,48 +133,52 @@ class SessionContextQueryService:
         )
         self._require_workspace_resource(resource)
 
-        if request.view == "assembly":
-            session = await self._load_session(resource)
-            return await self._assembly_query.freeze_assembly(
-                resource,
-                request,
-                session,
-            )
-        if request.view == "assemblies":
-            session = await self._load_session(resource)
-            return await self._assembly_query.freeze_assemblies(
-                resource,
-                request,
-                session,
-            )
+        async with AsyncExitStack() as admission:
+            if resource.session_id is not None:
+                await admission.enter_async_context(self._session_lookup.session_read_admission(resource.session_id))
+                await observe_phase(resource.session_id, "context.read.guarded", details={"kind": "freeze_read_context"})
+            if request.view == "assembly":
+                session = await self._load_session(resource)
+                return await self._assembly_query.freeze_assembly(
+                    resource,
+                    request,
+                    session,
+                )
+            if request.view == "assemblies":
+                session = await self._load_session(resource)
+                return await self._assembly_query.freeze_assemblies(
+                    resource,
+                    request,
+                    session,
+                )
 
-        if resource.kind == "workspace_sessions":
-            return await self._freeze_inventory(resource)
+            if resource.kind == "workspace_sessions":
+                return await self._freeze_inventory(resource)
 
-        snapshot = await self._load_snapshot(resource)
-        if request.record_index is not None:
-            items = self._selected_record_items(snapshot, resource, request)
-        elif request.view == "information":
-            items = [await self._information_item(snapshot)]
-        elif request.view == "overview":
-            items = await self._overview_items(snapshot, request)
-        else:
-            items = project_record_items(
-                resource_identity=resource.resource_identity,
-                uri=resource.uri,
-                scope=resource.scope,
-                records=snapshot.records,
-                include=set(request.include),
-                messages_only=request.view == "messages",
+            snapshot = await self._load_snapshot(resource)
+            if request.record_index is not None:
+                items = self._selected_record_items(snapshot, resource, request)
+            elif request.view == "information":
+                items = [await self._information_item(snapshot)]
+            elif request.view == "overview":
+                items = await self._overview_items(snapshot, request)
+            else:
+                items = project_record_items(
+                    resource_identity=resource.resource_identity,
+                    uri=resource.uri,
+                    scope=resource.scope,
+                    records=snapshot.records,
+                    include=set(request.include),
+                    messages_only=request.view == "messages",
+                )
+            return SessionContextReadSnapshot(
+                revision=snapshot.revision,
+                items=items,
+                compacted=snapshot.compacted,
+                compaction_cutoff=snapshot.compaction_cutoff,
+                raw_message_count=snapshot.raw_message_count,
+                effective_record_count=len(snapshot.records),
             )
-        return SessionContextReadSnapshot(
-            revision=snapshot.revision,
-            items=items,
-            compacted=snapshot.compacted,
-            compaction_cutoff=snapshot.compaction_cutoff,
-            raw_message_count=snapshot.raw_message_count,
-            effective_record_count=len(snapshot.records),
-        )
 
     def _selected_record_items(
         self,
@@ -207,97 +213,102 @@ class SessionContextQueryService:
             scope=request.scope,
         )
         self._require_workspace_resource(resource)
-        candidates, revision = await self._search_candidates(resource, request.sources)
-        require_session_context_revision(request.revision, revision)
-        query_hash = hashlib.sha256(
-            json.dumps(
-                {
-                    "query": request.query,
-                    "sources": request.sources,
-                    "match_mode": request.match_mode,
-                    "case_sensitive": request.case_sensitive,
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-            ).encode("utf-8")
-        ).hexdigest()
-        offset, char_offset = SessionContextCursorCodec.decode(
-            request.cursor,
-            resource_identity=resource.resource_identity,
-            uri=resource.uri,
-            scope=resource.scope,
-            revision=revision,
-            operation=f"search:{query_hash}",
-        )
-        if char_offset != 0:
-            raise ValueError("search cursor 不支持 item 内字符偏移")
-        expression = self._compile_search_expression(request)
-        found: list[tuple[_SearchCandidate, re.Match[str]]] = []
-        for candidate in candidates:
-            match = expression.search(candidate.text)
-            if match is not None:
-                found.append((candidate, match))
-
-        require_cursor_offset_in_range(offset, len(found), uri=resource.uri)
-        selected = found[offset : offset + request.max_results]
-        matches: list[SessionContextSearchMatchDTO] = []
-        budget_truncated = False
-        for candidate, match in selected:
-            preview_start = max(0, match.start() - 180)
-            preview_end = min(len(candidate.text), match.end() + 180)
-            preview = candidate.text[preview_start:preview_end]
-            dto = SessionContextSearchMatchDTO(
-                resource_identity=candidate.resource_identity,
-                uri=candidate.uri,
-                scope=candidate.scope,
-                preview=preview,
-                source=candidate.source,
-                revision=candidate.revision,
-                record_index=candidate.record_index,
-                match_start=match.start(),
-                match_end=match.end(),
+        async with AsyncExitStack() as admission:
+            if resource.session_id is not None:
+                await admission.enter_async_context(self._session_lookup.session_read_admission(resource.session_id))
+                await observe_phase(resource.session_id, "context.read.guarded", details={"kind": "search_context"})
+            candidates, revision = await self._search_candidates(resource, request.sources)
+            require_session_context_revision(request.revision, revision)
+            query_hash = hashlib.sha256(
+                json.dumps(
+                    {
+                        "query": request.query,
+                        "sources": request.sources,
+                        "match_mode": request.match_mode,
+                        "case_sensitive": request.case_sensitive,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+            offset, char_offset = SessionContextCursorCodec.decode(
+                request.cursor,
+                resource_identity=resource.resource_identity,
+                uri=resource.uri,
+                scope=resource.scope,
+                revision=revision,
+                operation=f"search:{query_hash}",
             )
-            candidate_result = self._build_search_result(
+            if char_offset != 0:
+                raise ValueError("search cursor 不支持 item 内字符偏移")
+            expression = self._compile_search_expression(request)
+            found: list[tuple[_SearchCandidate, re.Match[str]]] = []
+            for candidate in candidates:
+                match = expression.search(candidate.text)
+                if match is not None:
+                    found.append((candidate, match))
+
+            require_cursor_offset_in_range(offset, len(found), uri=resource.uri)
+            selected = found[offset : offset + request.max_results]
+            matches: list[SessionContextSearchMatchDTO] = []
+            budget_truncated = False
+            for candidate, match in selected:
+                preview_start = max(0, match.start() - 180)
+                preview_end = min(len(candidate.text), match.end() + 180)
+                preview = candidate.text[preview_start:preview_end]
+                dto = SessionContextSearchMatchDTO(
+                    resource_identity=candidate.resource_identity,
+                    uri=candidate.uri,
+                    scope=candidate.scope,
+                    preview=preview,
+                    source=candidate.source,
+                    revision=candidate.revision,
+                    record_index=candidate.record_index,
+                    match_start=match.start(),
+                    match_end=match.end(),
+                )
+                candidate_result = self._build_search_result(
+                    request=request,
+                    revision=revision,
+                    query_hash=query_hash,
+                    matches=[*matches, dto],
+                    offset=offset,
+                    total_matches=len(found),
+                    budget_truncated=budget_truncated,
+                )
+                if candidate_result.returned_chars <= request.max_chars:
+                    matches.append(dto)
+                    continue
+                if matches:
+                    budget_truncated = True
+                    break
+                clipped = self._largest_fitting_search_match(
+                    request=request,
+                    revision=revision,
+                    query_hash=query_hash,
+                    match=dto,
+                    offset=offset,
+                    total_matches=len(found),
+                )
+                if clipped is None:
+                    raise ValueError("max_chars 太小，无法返回包含资源身份的最小搜索结果")
+                matches.append(clipped)
+                budget_truncated = True
+            result = self._build_search_result(
                 request=request,
                 revision=revision,
                 query_hash=query_hash,
-                matches=[*matches, dto],
+                matches=matches,
                 offset=offset,
                 total_matches=len(found),
                 budget_truncated=budget_truncated,
             )
-            if candidate_result.returned_chars <= request.max_chars:
-                matches.append(dto)
-                continue
-            if matches:
-                budget_truncated = True
-                break
-            clipped = self._largest_fitting_search_match(
-                request=request,
-                revision=revision,
-                query_hash=query_hash,
-                match=dto,
-                offset=offset,
-                total_matches=len(found),
-            )
-            if clipped is None:
-                raise ValueError("max_chars 太小，无法返回包含资源身份的最小搜索结果")
-            matches.append(clipped)
-            budget_truncated = True
-        result = self._build_search_result(
-            request=request,
-            revision=revision,
-            query_hash=query_hash,
-            matches=matches,
-            offset=offset,
-            total_matches=len(found),
-            budget_truncated=budget_truncated,
-        )
-        if result.returned_chars > request.max_chars:
-            raise RuntimeError("上下文搜索器生成了超过 max_chars 的响应")
-        return result
+            if result.returned_chars > request.max_chars:
+                raise RuntimeError("上下文搜索器生成了超过 max_chars 的响应")
+            return result
 
     @classmethod
+
     def _largest_fitting_search_match(
         cls,
         *,

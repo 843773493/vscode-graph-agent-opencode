@@ -2,7 +2,6 @@ import { useCallback, useRef } from "react";
 import { HttpRequestError } from "../../api/http";
 import {
   compactSessionContext as apiCompactSessionContext,
-  createSession as apiCreateSession,
   DEFAULT_SESSION_TITLE,
   interruptSession as apiInterruptSession,
   replayMessageTurn as apiReplayMessageTurn,
@@ -17,9 +16,9 @@ import type {
   Session,
   SessionCompactResult,
 } from "../../types/backend";
-import type { ConversationContentView, ConversationView } from "../../types/frontend";
+import type { AppState, ConversationContentView, ConversationView } from "../../types/frontend";
 import { cloneMaps } from "../../state/appStateMaps";
-import { listPendingRequests as apiListPendingRequests } from "../../pendingRequestsApi";
+import { listMainThreadPendingRequests as apiListMainThreadPendingRequests } from "../../pendingRequestsApi";
 import { updateSessionAttachmentSummary } from "../../state/attachments";
 import {
   dispatchToConversationProjection,
@@ -28,12 +27,26 @@ import {
   writePendingSnapshot,
 } from "../../state/conversations";
 import { appendFrontendEvent } from "../../state/traceEvents";
-import { writeLastSessionId } from "../../state/storage";
 import { errorMessage } from "../../utils/errorMessage";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { sessionScopeKey } from "../../state/session/sessionScope";
-import { resetSessionScopedFields } from "./sessionScopedState";
+import type { useSessionLifecycleActions } from "./useSessionLifecycleActions";
 import { usePendingRequestActions } from "../runtime/usePendingRequestActions";
+
+function isCurrentSessionOwner(
+  state: Pick<
+    AppState,
+    "currentSession" | "currentSessionWorkspaceId" | "activeGatewayWorkspaceId"
+  >,
+  sessionId: string,
+  workspaceId: string | null,
+): boolean {
+  return state.currentSession !== null
+    && sessionScopeKey(
+      state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId,
+      state.currentSession.session_id,
+    ) === sessionScopeKey(workspaceId, sessionId);
+}
 
 export function useSessionRunActions({
   apiPort,
@@ -45,6 +58,7 @@ export function useSessionRunActions({
   contentView,
   setState,
   refreshAgentStateSnapshot,
+  createSession,
 }: {
   apiPort: number;
   currentSession: Session | null;
@@ -55,6 +69,7 @@ export function useSessionRunActions({
   contentView: ConversationContentView;
   setState: SetAppState;
   refreshAgentStateSnapshot: (sessionId: string) => Promise<void>;
+  createSession: ReturnType<typeof useSessionLifecycleActions>["createSession"];
 }) {
   // 乐观提交标识必须单调递增：用时间戳时同一毫秒的两次发送会拿到同一个 id，
   // 第一条失败回滚（或成功替换）会把仍在途的第二条乐观回合一起顶掉。
@@ -72,84 +87,19 @@ export function useSessionRunActions({
       attachments: AttachmentRef[] = [],
       deliveryPolicy: DeliveryPolicy = "after_turn",
     ) => {
-      let session = currentSession;
-      if (!session) {
-        const targetWorkspaceId = activeGatewayWorkspaceId ?? defaultGatewayWorkspaceId;
-        setState((prev) => ({ ...prev, status: "正在创建会话" }));
-        try {
-          session = await apiCreateSession(
-            apiPort,
-            DEFAULT_SESSION_TITLE,
-            targetWorkspaceId,
-          );
-        } catch (error) {
-          const message = errorMessage(error);
-          setState((prev) => ({ ...prev, status: `创建会话失败: ${message}` }));
-          throw error;
-        }
-        const createdSession = session;
-        setState((prev) => {
-          const next = cloneMaps(prev);
-          const resolvedWorkspaceId =
-            targetWorkspaceId ?? prev.activeGatewayWorkspaceId;
-          const workspace = prev.gatewayWorkspaces.find(
-            (item) => item.workspace_id === resolvedWorkspaceId,
-          );
-          const previousWorkspaceSessions = resolvedWorkspaceId
-            ? prev.sessionsByWorkspace.get(resolvedWorkspaceId) ?? []
-            : prev.sessions;
-          if (resolvedWorkspaceId && workspace) {
-            next.activeGatewayWorkspaceId = resolvedWorkspaceId;
-            next.currentSessionWorkspaceId = resolvedWorkspaceId;
-            next.workspaceRoot = workspace.root_path;
-            next.workspaceName = workspace.name;
-          }
-          next.sessions = [
-            createdSession,
-            ...previousWorkspaceSessions.filter(
-              (item) => item.session_id !== createdSession.session_id,
-            ),
-          ];
-          if (resolvedWorkspaceId) {
-            next.sessionsByWorkspace.set(resolvedWorkspaceId, next.sessions);
-            next.sessionGatewayWorkspaceById.set(
-              sessionScopeKey(resolvedWorkspaceId, createdSession.session_id),
-              resolvedWorkspaceId,
-            );
-          }
-          next.currentSession = createdSession;
-          next.currentSessionWorkspaceId = resolvedWorkspaceId ?? null;
-          writeLastSessionId(createdSession.session_id);
-          Object.assign(next, resetSessionScopedFields(next));
-          next.contentView = "default";
-          appendFrontendEvent(
-            next.eventQueuesBySession,
-            createdSession.session_id,
-            "session_created",
-            "创建会话",
-            {
-              session_id: createdSession.session_id,
-              title: createdSession.title,
-            },
-            createdSession.title,
-            resolvedWorkspaceId
-              ? sessionScopeKey(resolvedWorkspaceId, createdSession.session_id)
-              : createdSession.session_id,
-          );
-          return next;
-        });
-      }
-
-      const activeSession = session;
+      const activeSession = currentSession ?? await createSession(
+        DEFAULT_SESSION_TITLE, activeGatewayWorkspaceId ?? defaultGatewayWorkspaceId,
+      );
+      const mainThreadId = activeSession.thread_id;
+      if (!mainThreadId) throw new Error(`发送消息缺少 catalog 主线程身份: ${activeSession.session_id}`);
       const activeSessionGatewayWorkspaceId =
         currentSessionGatewayWorkspaceId ??
         activeGatewayWorkspaceId ??
         defaultGatewayWorkspaceId;
       const activeSessionCacheKey =
-        currentSessionCacheKey ??
-        (activeSessionGatewayWorkspaceId
-          ? sessionScopeKey(activeSessionGatewayWorkspaceId, activeSession.session_id)
-          : activeSession.session_id);
+        currentSession && currentSessionCacheKey
+          ? currentSessionCacheKey
+          : sessionScopeKey(activeSessionGatewayWorkspaceId, activeSession.session_id);
       pendingSubmissionSeqRef.current += 1;
       const pendingSubmissionId = `pending_submission_${pendingSubmissionSeqRef.current}`;
       const submittedAt = new Date().toISOString();
@@ -159,9 +109,11 @@ export function useSessionRunActions({
           conversationId: pendingSubmissionId,
           displayMode: "live",
           sessionId: activeSession.session_id,
+          threadId: mainThreadId,
           userMessage: {
             message_id: pendingSubmissionId,
             session_id: activeSession.session_id,
+            thread_id: mainThreadId,
             role: "user",
             content,
             metadata: {
@@ -184,7 +136,7 @@ export function useSessionRunActions({
         };
         updateSessionAttachmentSummary(
           next.sessionAttachmentSummaries,
-          activeSession.session_id,
+          activeSessionCacheKey,
           attachments,
           submittedAt,
         );
@@ -194,8 +146,10 @@ export function useSessionRunActions({
           ...pendingList,
           conversation,
         ]);
-        next.status = "正在发送消息";
-        next.contentView = prev.contentView === "agent" ? "default" : prev.contentView;
+        if (isCurrentSessionOwner(prev, activeSession.session_id, activeSessionGatewayWorkspaceId)) {
+          next.status = "正在发送消息";
+          next.contentView = prev.contentView === "agent" ? "default" : prev.contentView;
+        }
         return next;
       });
 
@@ -218,7 +172,7 @@ export function useSessionRunActions({
         let snapshot: PendingRequestList | null = null;
         let reconciliationFailure: string | null = null;
         try {
-          snapshot = await apiListPendingRequests(
+          snapshot = await apiListMainThreadPendingRequests(
             apiPort,
             activeSession.session_id,
             activeSessionGatewayWorkspaceId,
@@ -251,8 +205,15 @@ export function useSessionRunActions({
             );
           }
           // 待处理队列按会话作用域写回，切走后仍须校准发起会话自己的队列；
-          // 但失败文案是全局状态栏字段，会话已切走时不得写进新会话。
-          if (prev.currentSession?.session_id === activeSession.session_id) {
+          // 但失败文案是全局状态栏字段，当前 Gateway workspace + Session owner
+          // 已切走时不得覆盖。
+          if (
+            isCurrentSessionOwner(
+              prev,
+              activeSession.session_id,
+              activeSessionGatewayWorkspaceId,
+            )
+          ) {
             next.status = `发送失败: ${message}`;
           }
           return next;
@@ -268,9 +229,11 @@ export function useSessionRunActions({
           conversationId: messageId,
           displayMode: "live",
           sessionId: activeSession.session_id,
+          threadId: accepted.thread_id,
           userMessage: {
             message_id: messageId,
             session_id: activeSession.session_id,
+            thread_id: accepted.thread_id,
             role: "user",
             content,
             metadata: {
@@ -286,6 +249,7 @@ export function useSessionRunActions({
           events: [],
           status: accepted.status === "queued" ? "queued" : "running",
           jobId,
+          turnId: accepted.turn_id ?? undefined,
           pending: true,
           activeJobOverlay: accepted.status !== "queued",
           pendingSubmissionId,
@@ -304,15 +268,23 @@ export function useSessionRunActions({
           accepted.dispatch,
           activeSessionCacheKey,
         );
-        // 会话已切走时，旧会话的接受结果不得改写新会话状态栏；乐观回合本身
-        // 仍按 activeSessionCacheKey 落在发起会话自己的队列里。
-        if (prev.currentSession?.session_id === activeSession.session_id) {
+        // 当前 Gateway workspace + Session owner 已切走时，旧会话的接受结果不得改写新状态栏；
+        // 乐观回合本身仍按 activeSessionCacheKey 落在发起会话自己的队列里。
+        if (
+          isCurrentSessionOwner(
+            prev,
+            activeSession.session_id,
+            activeSessionGatewayWorkspaceId,
+          )
+        ) {
           next.status =
             accepted.status === "queued" ? "已排队，等待当前任务结束" : "已发送，等待生成";
         }
         // 普通发送只是向当前历史追加一个回合，不改变 context view。
         // 保留已有时间线，由 pending 镜像、SSE 和目标 Turn 详情增量补齐。
-        next.contentView = prev.contentView === "agent" ? "default" : prev.contentView;
+        if (isCurrentSessionOwner(prev, activeSession.session_id, activeSessionGatewayWorkspaceId)) {
+          next.contentView = prev.contentView === "agent" ? "default" : prev.contentView;
+        }
         return next;
       });
     },
@@ -322,6 +294,7 @@ export function useSessionRunActions({
       currentSession,
       currentSessionCacheKey,
       currentSessionGatewayWorkspaceId,
+      createSession,
       defaultGatewayWorkspaceId,
       setState,
     ],
@@ -351,7 +324,7 @@ export function useSessionRunActions({
         next.lastCompactResult = result;
         // compactLoading/lastCompactResult 是全局单值，无论会话是否切走都要复位；
         // 但状态栏文案属于当前会话事实，会话已切走时不得写进新会话。
-        if (prev.currentSession?.session_id === session.session_id) {
+        if (isCurrentSessionOwner(prev, session.session_id, currentSessionGatewayWorkspaceId)) {
           next.status = result.status === "scheduled"
             ? "已安排上下文压缩，将在下一条消息发送前执行"
             : result.status === "compacted"
@@ -391,7 +364,7 @@ export function useSessionRunActions({
       const message = errorMessage(error);
       setState((prev) => {
         // compactLoading 必须复位；失败文案同样只在仍停留在发起会话时才写。
-        if (prev.currentSession?.session_id !== session.session_id) {
+        if (!isCurrentSessionOwner(prev, session.session_id, currentSessionGatewayWorkspaceId)) {
           return { ...prev, compactLoading: false };
         }
         return {
@@ -426,10 +399,20 @@ export function useSessionRunActions({
       );
       setState((prev) => {
         // 会话已切走时，旧会话的中断结果不得改写新会话状态栏。
-        if (prev.currentSession?.session_id !== session.session_id) {
+        if (!isCurrentSessionOwner(prev, session.session_id, currentSessionGatewayWorkspaceId)) {
           return prev;
         }
-        return { ...prev, status: `已中断: ${result.phase}` };
+        const terminalStatuses = [
+          "completed",
+          "failed",
+          "interrupted",
+        ];
+        const status = result.status === "cancelling"
+          ? "已请求中断，正在收尾"
+          : terminalStatuses.includes(result.status)
+            ? `已停止: ${result.status}`
+            : `中断状态未确认: ${result.status}`;
+        return { ...prev, status };
       });
     } catch (error) {
       const sessionCacheKey = currentSessionGatewayWorkspaceId
@@ -441,7 +424,7 @@ export function useSessionRunActions({
         const message = errorMessage(error);
         let notice = `中断生成失败: ${message}`;
         try {
-          const snapshot = await apiListPendingRequests(
+          const snapshot = await apiListMainThreadPendingRequests(
             apiPort,
             session.session_id,
             currentSessionGatewayWorkspaceId,
@@ -455,7 +438,7 @@ export function useSessionRunActions({
               sessionCacheKey,
             );
             // 队列快照按会话作用域写回；失败文案只在仍停留在发起会话时才写。
-            if (prev.currentSession?.session_id === session.session_id) {
+            if (isCurrentSessionOwner(prev, session.session_id, currentSessionGatewayWorkspaceId)) {
               next.status = notice;
             }
             return next;
@@ -464,7 +447,7 @@ export function useSessionRunActions({
           const recoveryMessage = errorMessage(recoveryError);
           notice = `${notice}；重新读取运行状态也失败: ${recoveryMessage}`;
           setState((prev) => {
-            if (prev.currentSession?.session_id !== session.session_id) {
+            if (!isCurrentSessionOwner(prev, session.session_id, currentSessionGatewayWorkspaceId)) {
               return prev;
             }
             return { ...prev, status: notice };
@@ -479,7 +462,7 @@ export function useSessionRunActions({
         next.activeJobIdsBySession.delete(sessionCacheKey);
         next.pendingConversations.delete(sessionCacheKey);
         next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
-        if (prev.currentSession?.session_id === session.session_id) {
+        if (isCurrentSessionOwner(prev, session.session_id, currentSessionGatewayWorkspaceId)) {
           next.status = "运行任务已结束，正在同步会话历史";
         }
         return next;
@@ -531,9 +514,11 @@ export function useSessionRunActions({
           conversationId: accepted.message_id,
           displayMode: "live",
           sessionId: session.session_id,
+          threadId: accepted.thread_id,
           userMessage: {
             message_id: accepted.message_id,
             session_id: session.session_id,
+            thread_id: accepted.thread_id,
             role: "user",
             content: replacementContent,
             attachments,
@@ -550,6 +535,7 @@ export function useSessionRunActions({
           events: [],
           status: "running",
           jobId: accepted.job_id,
+          turnId: accepted.turn_id ?? undefined,
           pending: true,
           // replay 已经被后端接受并创建 Job；历史投影刷新期间也必须留在 transcript。
           activeJobOverlay: true,
@@ -568,7 +554,7 @@ export function useSessionRunActions({
         next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
         // 会话已切走时，旧会话的回放结果不得改写新会话状态栏；历史重载与乐观
         // 回合本身仍按会话作用域落回发起会话。
-        if (prev.currentSession?.session_id === session.session_id) {
+        if (isCurrentSessionOwner(prev, session.session_id, workspaceId)) {
           next.status = `${accepted.notice} 正在生成新回复。`;
         }
         return next;
@@ -592,7 +578,7 @@ export function useSessionRunActions({
         sessionHistoryReloadNonce: prev.sessionHistoryReloadNonce + 1,
         // 历史 bootstrap 属于会话作用域，必须触发；失败文案属于当前会话事实，
         // 会话已切走时不得写进新会话状态栏。
-        ...(prev.currentSession?.session_id === session.session_id
+        ...(isCurrentSessionOwner(prev, session.session_id, workspaceId)
           ? { status: `轮次操作失败: ${message}` }
           : {}),
       }));

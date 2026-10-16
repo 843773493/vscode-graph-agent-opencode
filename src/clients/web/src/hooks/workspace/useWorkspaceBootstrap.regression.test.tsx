@@ -7,8 +7,13 @@ import * as userAccessApi from "../../api/gateway/userAccess";
 import * as userViewStateApi from "../../api/gateway/userViewState";
 import * as workspaceSessionListRefresh from "./workspaceSessionListRefresh";
 import type { AppState } from "../../types/frontend";
+import type { GatewayWorkspaceList } from "../../types/backend";
 import { useWorkspaceBootstrap } from "./useWorkspaceBootstrap";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
+import { createSerialTaskQueue } from "../runtime/serialTaskQueue";
+import { useGatewayWorkspaceHierarchy } from "../gatewayWorkspace/useGatewayWorkspaceHierarchy";
+import { useGatewayWorkspaceActivation } from "../gatewayWorkspace/useGatewayWorkspaceActivation";
+import { useWorkspaceRefreshOrchestration } from "./useWorkspaceRefreshOrchestration";
 
 const API_PORT = 49_713;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -34,7 +39,7 @@ function defaultUiSettings() {
   };
 }
 
-function gatewayWorkspaceList(items: Array<{ workspace_id: string; name: string; status: string }>) {
+function gatewayWorkspaceList(items: Array<{ workspace_id: string; name: string; status: string }>): GatewayWorkspaceList {
   return {
     active_workspace_id: items[0]?.workspace_id ?? null,
     items: items.map((item, index) => ({
@@ -44,7 +49,7 @@ function gatewayWorkspaceList(items: Array<{ workspace_id: string; name: string;
       root_path: `/tmp/${item.workspace_id}`,
       system_default: false,
     })),
-  } as never;
+  } as GatewayWorkspaceList;
 }
 
 function appState(overrides: Partial<AppState> = {}): AppState {
@@ -74,26 +79,37 @@ function appState(overrides: Partial<AppState> = {}): AppState {
 
 interface Mounted {
   refreshSessions: ReturnType<typeof useWorkspaceBootstrap>["refreshSessions"];
+  refreshStatuses: ReturnType<typeof useWorkspaceBootstrap>["refreshGatewayWorkspaceStatuses"];
+  setParent: ReturnType<typeof useGatewayWorkspaceHierarchy>;
+  selectionIntentRef: MutableRefObject<number>;
+  setLatest: (state: AppState) => void;
   state: () => AppState;
 }
 
 const mountedRenderers: ReactTestRenderer[] = [];
 const restoreSpies: Array<() => void> = [];
 
-async function mountBootstrap(initialState: AppState): Promise<Mounted> {
+async function mountBootstrap(initialState: AppState, flushStartup = true): Promise<Mounted> {
   let current = initialState;
   let hook: ReturnType<typeof useWorkspaceBootstrap> | undefined;
+  const selectionIntentRef = { current: 0 };
+  const gatewayListRequestRef = { current: 0 };
+  const queue = createSerialTaskQueue();
+  let setParent!: ReturnType<typeof useGatewayWorkspaceHierarchy>;
+  const setState = (update: Parameters<import("../contentViewLoaderTypes").SetAppState>[0]) => {
+    current = typeof update === "function" ? update(current) : update;
+  };
 
   function Probe(): React.ReactNode {
     hook = useWorkspaceBootstrap({
       apiPort: API_PORT,
+      selectionIntentRef,
+      gatewayListRequestRef,
+      runGatewayWorkspaceListTask: queue.enqueue,
       uiSettings: current.uiSettings,
-      setState: (update) => {
-        current = typeof update === "function"
-          ? (update as (previous: AppState) => AppState)(current)
-          : update;
-      },
+      setState,
     });
+    setParent = useGatewayWorkspaceHierarchy(API_PORT, setState, gatewayListRequestRef, queue.enqueue, selectionIntentRef);
     return null;
   }
 
@@ -105,10 +121,11 @@ async function mountBootstrap(initialState: AppState): Promise<Mounted> {
   // 挂载 effect 会排一个 0ms 的初始 bootstrap。下面的用例都要自己驱动 refreshSessions，
   // 必须在这里用 act + 0ms 定时器确定性地把它跑完：否则它会在用例的刷新途中才触发，
   // 按 refreshGeneration 作废掉用例的刷新，断言就会读到上一轮的 gatewayWorkspacesStale=true。
-  await act(async () => {
+  if (flushStartup) await act(async () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
   });
-  return { refreshSessions: hook!.refreshSessions, state: () => current };
+  return { refreshSessions: hook!.refreshSessions, refreshStatuses: hook!.refreshGatewayWorkspaceStatuses,
+    setParent, selectionIntentRef, setLatest: (next) => { current = next; }, state: () => current };
 }
 
 function spy<Name extends keyof typeof gatewayApi>(name: Name) {
@@ -174,6 +191,201 @@ function stubCommonBootstrap(): void {
 }
 
 describe("useWorkspaceBootstrap 失效标记", () => {
+  test("真实 React 激活组合在成功后立即读取状态时保留已排入 bootstrap 的选择与会话镜像", async () => {
+    installWindow(); stubCommonBootstrap(); installDocumentStub();
+    let list = gatewayWorkspaceList([
+      { workspace_id: "ws-old", name: "旧工作区", status: "ready" },
+      { workspace_id: "ws-1", name: "目标工作区", status: "ready" },
+    ]);
+    spy("getGatewayUiSettings").mockResolvedValue(defaultUiSettings() as never);
+    const lists = spy("listGatewayWorkspaces").mockImplementation(async () => list);
+    const activation = spy("activateGatewayWorkspace").mockImplementation(async (_port, workspaceId) => {
+      list = { ...list, active_workspace_id: workspaceId };
+      return workspaceId;
+    });
+    const snapshots = spyOn(workspaceSessionListRefresh, "fetchWorkspaceSessionListSnapshot")
+      .mockImplementation(async (_port, target) => ({ apiPort: API_PORT, workspaceId: target.workspace_id,
+        generation: 1, sessions: [] }));
+    const isCurrent = spyOn(workspaceSessionListRefresh, "isCurrentWorkspaceSessionListSnapshot").mockReturnValue(true);
+    restoreSpies.push(() => snapshots.mockRestore(), () => isCurrent.mockRestore());
+    let current = appState();
+    let activate!: ReturnType<typeof useGatewayWorkspaceActivation>["activateGatewayWorkspace"];
+    function Harness(): React.ReactNode {
+      const [state, setState] = React.useState(current);
+      current = state;
+      const latestStateRef = React.useRef(state); latestStateRef.current = state;
+      const selectionIntentRef = React.useRef(0);
+      const gatewayListRequestRef = React.useRef(0);
+      const queue = React.useRef(createSerialTaskQueue()).current;
+      const bootstrap = useWorkspaceBootstrap({ apiPort: API_PORT, uiSettings: state.uiSettings,
+        setState, selectionIntentRef, gatewayListRequestRef, runGatewayWorkspaceListTask: queue.enqueue });
+      const refresh = useWorkspaceRefreshOrchestration({ apiPort: API_PORT, gatewayWorkspaces: state.gatewayWorkspaces,
+        setState, refreshSessions: bootstrap.refreshSessions, abortCurrentStream: () => {}, selectionIntentRef });
+      activate = useGatewayWorkspaceActivation({ apiPort: API_PORT, currentSessionId: null, latestStateRef,
+        setState, invalidateWorkspaceRefreshes: bootstrap.invalidateWorkspaceRefreshes,
+        refreshGatewayWorkspaceStatuses: bootstrap.refreshGatewayWorkspaceStatuses,
+        resetWorkspaceScopedState: refresh.resetWorkspaceScopedState, finishWorkspaceRefresh: refresh.finishWorkspaceRefresh,
+        selectionIntentRef, gatewayListRequestRef, runGatewayWorkspaceListTask: queue.enqueue }).activateGatewayWorkspace;
+      return null;
+    }
+    await act(async () => { const renderer = create(<Harness />); mountedRenderers.push(renderer); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(current.activeGatewayWorkspaceId).toBe("ws-old");
+    expect(current.sessionsByWorkspace.has("ws-1")).toBe(false);
+    activation.mockClear(); lists.mockClear(); snapshots.mockClear();
+    await act(async () => { await activate("ws-1"); });
+    expect(activation).toHaveBeenCalledTimes(1);
+    expect(activation).toHaveBeenCalledWith(API_PORT, "ws-1");
+    expect(lists).toHaveBeenCalledTimes(2);
+    expect(snapshots).toHaveBeenCalledWith(API_PORT, expect.objectContaining({ workspace_id: "ws-1" }));
+    expect(current.activeGatewayWorkspaceId).toBe("ws-1");
+    expect(current.workspaceName).toBe("工作区");
+    expect(current.sessionsByWorkspace.get("ws-1")).toEqual([]);
+    expect(current.workspaceSwitching).toBe(false);
+    expect(current.error).toBeNull();
+  });
+
+  test("同一活动工作区的旧状态读不能覆盖后发父子关系修改", async () => {
+    installWindow(); stubCommonBootstrap();
+    spy("getGatewayUiSettings").mockResolvedValue(defaultUiSettings() as never);
+    const before = gatewayWorkspaceList([{ workspace_id: "ws-1", name: "旧列表", status: "ready" }]);
+    const after = gatewayWorkspaceList([{ workspace_id: "ws-1", name: "修改后列表", status: "ready" }]);
+    const list = spy("listGatewayWorkspaces").mockResolvedValue(before);
+    const mounted = await mountBootstrap(appState());
+    let releaseRead!: (value: typeof before) => void;
+    list.mockImplementation(() => new Promise((resolve) => { releaseRead = resolve; }));
+    const write = spy("updateGatewayWorkspace").mockResolvedValue(after);
+    const readOperation = mounted.refreshStatuses("ws-1");
+    await act(async () => { await Promise.resolve(); });
+    const writeOperation = mounted.setParent("ws-1", "ws-parent");
+    expect(write).not.toHaveBeenCalled();
+    await act(async () => { releaseRead(before); await readOperation; await writeOperation; });
+    expect(mounted.state().gatewayWorkspaces).toBe(after.items);
+    expect(mounted.state().activeGatewayWorkspaceId).toBe("ws-1");
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  test("修改在途时后发状态 GET 必须等真实写入结束并读取新列表", async () => {
+    installWindow(); stubCommonBootstrap();
+    spy("getGatewayUiSettings").mockResolvedValue(defaultUiSettings() as never);
+    let authority = gatewayWorkspaceList([{ workspace_id: "ws-1", name: "旧列表", status: "ready" }]);
+    const after = gatewayWorkspaceList([{ workspace_id: "ws-1", name: "修改后列表", status: "ready" }]);
+    const list = spy("listGatewayWorkspaces").mockImplementation(async () => authority);
+    const mounted = await mountBootstrap(appState());
+    list.mockClear();
+    let releaseWrite!: () => void;
+    const write = spy("updateGatewayWorkspace").mockImplementation(async () => {
+      await new Promise<void>((resolve) => { releaseWrite = resolve; });
+      authority = after;
+      return after;
+    });
+    const writeOperation = mounted.setParent("ws-1", "ws-parent");
+    await act(async () => { await Promise.resolve(); });
+    const readOperation = mounted.refreshStatuses("ws-1");
+    expect(list).not.toHaveBeenCalled();
+    await act(async () => { releaseWrite(); await writeOperation; await readOperation; });
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(mounted.state().gatewayWorkspaces).toBe(after.items);
+  });
+
+  test("两次修改均执行，后一次失败及对账失败仍保留前一次成功镜像", async () => {
+    installWindow(); stubCommonBootstrap();
+    spy("getGatewayUiSettings").mockResolvedValue(defaultUiSettings() as never);
+    const before = gatewayWorkspaceList([{ workspace_id: "ws-1", name: "旧列表", status: "ready" }]);
+    const after = gatewayWorkspaceList([{ workspace_id: "ws-1", name: "第一次修改成功", status: "ready" }]);
+    const list = spy("listGatewayWorkspaces").mockResolvedValue(before);
+    const mounted = await mountBootstrap(appState());
+    list.mockRejectedValue(new Error("对账读取失败"));
+    let releaseWrite!: (value: typeof after) => void;
+    const write = spy("updateGatewayWorkspace").mockImplementationOnce(() => new Promise((resolve) => { releaseWrite = resolve; }))
+      .mockRejectedValue(new Error("第二次修改失败"));
+    const first = mounted.setParent("ws-1", "ws-parent-1");
+    const second = mounted.setParent("ws-1", "ws-parent-2").catch((error: unknown) => error);
+    await act(async () => { await Promise.resolve(); releaseWrite(after); await first; await second; });
+    expect(write.mock.calls.map((call) => call[2])).toEqual([
+      { parent_workspace_id: "ws-parent-1" }, { parent_workspace_id: "ws-parent-2" },
+    ]);
+    expect(mounted.state().gatewayWorkspaces).toBe(after.items);
+    expect(mounted.state().gatewayError).toContain("第二次修改失败");
+  });
+
+  test("用户在初始定时器前选择后，旧启动恢复不发出激活副作用", async () => {
+    installWindow(); stubCommonBootstrap();
+    const list = spy("listGatewayWorkspaces").mockResolvedValue(gatewayWorkspaceList([
+      { workspace_id: "ws-1", name: "旧工作区", status: "ready" },
+    ]));
+    const activate = spy("activateGatewayWorkspace");
+    const mounted = await mountBootstrap(appState(), false);
+    mounted.selectionIntentRef.current += 1;
+    mounted.setLatest({ ...mounted.state(), activeGatewayWorkspaceId: "ws-selected", status: "用户最新选择" });
+    await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 0)); });
+    expect(activate).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
+    expect(mounted.state().activeGatewayWorkspaceId).toBe("ws-selected");
+    expect(mounted.state().status).toBe("用户最新选择");
+  });
+
+  test("旧状态 GET 失败不覆盖同 workspace 的较新会话选择状态", async () => {
+    installWindow(); stubCommonBootstrap();
+    spy("getGatewayUiSettings").mockResolvedValue(defaultUiSettings() as never);
+    const list = spy("listGatewayWorkspaces").mockResolvedValue(gatewayWorkspaceList([
+      { workspace_id: "ws-1", name: "工作区", status: "ready" },
+    ]));
+    const mounted = await mountBootstrap(appState());
+    let rejectRead!: (error: Error) => void;
+    list.mockImplementation(() => new Promise((_resolve, reject) => { rejectRead = reject; }));
+    const operation = mounted.refreshStatuses("ws-1");
+    await act(async () => { await Promise.resolve(); });
+    mounted.selectionIntentRef.current += 1;
+    mounted.setLatest({ ...mounted.state(), status: "用户较新选择", gatewayError: null });
+    await act(async () => { rejectRead(new Error("旧读失败")); await operation; });
+    expect(mounted.state().status).toBe("用户较新选择");
+    expect(mounted.state().gatewayError).toBeNull();
+  });
+  for (const actualStatus of ["ready", "offline"] as const) {
+    test(`缓存 offline 在改变激活目标前核最新健康，实际 ${actualStatus} 沿权威状态选择`, async () => {
+      installWindow();
+      stubCommonBootstrap();
+      spy("getGatewayUiSettings").mockResolvedValue(defaultUiSettings() as never);
+      let activating = false;
+      let active = "ws-1";
+      const checks: boolean[] = [];
+      const list = spy("listGatewayWorkspaces").mockImplementation(async (_port, options) => {
+        const checkHealth = options?.checkHealth ?? false;
+        if (activating) checks.push(checkHealth);
+        const result: Awaited<ReturnType<typeof gatewayApi.listGatewayWorkspaces>> = gatewayWorkspaceList([
+          { workspace_id: "ws-1", name: "原工作区", status: !activating || checkHealth ? actualStatus : "offline" },
+          { workspace_id: "ws-2", name: "另一工作区", status: "ready" },
+        ]);
+        return { ...result, active_workspace_id: active };
+      });
+      const activate = spy("activateGatewayWorkspace").mockImplementation(async (_port, workspaceId) => {
+        active = workspaceId;
+        return {} as never;
+      });
+      const snapshot = spyOn(workspaceSessionListRefresh, "fetchWorkspaceSessionListSnapshot")
+        .mockResolvedValue({ apiPort: API_PORT, workspaceId: "ws-1", generation: 0, sessions: [] } as never);
+      restoreSpies.push(() => snapshot.mockRestore());
+      const isCurrent = spyOn(workspaceSessionListRefresh, "isCurrentWorkspaceSessionListSnapshot")
+        .mockReturnValue(true);
+      restoreSpies.push(() => isCurrent.mockRestore());
+      const mounted = await mountBootstrap(appState());
+      list.mockClear(); activate.mockClear(); active = "ws-1"; activating = true;
+      const selected: Array<string | null> = [];
+      await act(async () => {
+        selected.push(await mounted.refreshSessions(undefined, {
+          checkGatewayWorkspaceHealth: false, reuseCurrentUiSettings: true,
+        }));
+      });
+      expect(checks.slice(0, 2)).toEqual([false, true]);
+      expect(selected).toEqual([actualStatus === "ready" ? "ws-1" : "ws-2"]);
+      expect(mounted.state().activeGatewayWorkspaceId).toBe(selected[0]);
+      expect(activate.mock.calls.map((call) => call[1])).toEqual(actualStatus === "ready" ? [] : ["ws-2"]);
+      expect(mounted.state().gatewayWorkspaces.find((workspace) => workspace.workspace_id === "ws-1")?.status).toBe(actualStatus);
+    });
+  }
+
   test("Gateway 整体不可达时标记 gatewayWorkspacesStale 而不是静默沿用旧值", async () => {
     installWindow();
     stubCommonBootstrap();

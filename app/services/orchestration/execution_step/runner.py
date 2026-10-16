@@ -9,6 +9,11 @@ from datetime import UTC, datetime
 from langchain_core.messages import HumanMessage
 
 from app.agents.agent_factory import AGENT_GRAPH_RECURSION_LIMIT, resolve_agent_id
+from app.agents.checkpoint_recovery import (
+    CheckpointRecoveryRejectedError,
+    pending_tool_checkpoint,
+)
+from app.agents.graph_binding import GraphBindingUnavailableError
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import (
     reset_current_execution_admission,
@@ -31,6 +36,7 @@ from app.core.model_delta_context import (
     reset_current_model_delta_sink,
     set_current_model_delta_sink,
 )
+from app.core.phase_observer import observe_phase
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.shielded_cleanup import run_cleanup_shielded
@@ -60,13 +66,9 @@ from app.services.business.reasoning_checkpoint_service import (
     persist_standard_assistant_checkpoint,
     persist_user_message_checkpoint,
 )
-from app.services.business.user_content_builder import UserContentBuilder
 from app.services.infrastructure.message_stream_store import (
     MessageStreamTerminalError,
     MessageStreamWriter,
-)
-from app.services.orchestration.agent_stream_helpers import (
-    build_human_response_metadata,
 )
 from app.services.orchestration.event_stream.model_events import (
     last_model_token_usage,
@@ -122,6 +124,7 @@ class StepRunner:
         execution_binding: ExecutionBinding,
         progress_reporter: Callable[[str], None] | None = None,
         protected_operations_settled: asyncio.Event | None = None,
+        resume_checkpoint_id: str | None = None,
     ) -> str:
         config_snapshot = self.ports.config_service.get_snapshot()
         with self.ports.config_service.use_snapshot(config_snapshot):
@@ -138,6 +141,7 @@ class StepRunner:
                 execution_binding=execution_binding,
                 progress_reporter=progress_reporter,
                 protected_operations_settled=protected_operations_settled,
+                resume_checkpoint_id=resume_checkpoint_id,
             )
 
     async def _run_step_with_snapshot(
@@ -155,6 +159,7 @@ class StepRunner:
         execution_binding: ExecutionBinding,
         progress_reporter: Callable[[str], None] | None = None,
         protected_operations_settled: asyncio.Event | None = None,
+        resume_checkpoint_id: str | None = None,
     ) -> str:
         # _run_step_with_snapshot 也作为显式测试/内部边界公开调用，不能假定
         # run_step 一定是其父调用；这里必须绑定 scope 并在异常退出时复原。
@@ -175,6 +180,7 @@ class StepRunner:
                 execution_binding=execution_binding,
                 progress_reporter=progress_reporter,
                 protected_operations_settled=protected_operations_settled,
+                resume_checkpoint_id=resume_checkpoint_id,
             )
 
     async def _run_step_bound_owner(
@@ -192,6 +198,7 @@ class StepRunner:
         execution_binding: ExecutionBinding,
         progress_reporter: Callable[[str], None] | None = None,
         protected_operations_settled: asyncio.Event | None = None,
+        resume_checkpoint_id: str | None = None,
     ) -> str:
         if self.ports.config_service is None:
             raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
@@ -275,7 +282,7 @@ class StepRunner:
         # 中间件通过 runtime.configurable 取不到这些键时，会回退到 contextvars
         # （见 LLMLoggingMiddleware._get_job_id 的优先级链）。
         config = {
-            **build_checkpoint_config(thread_id),
+            **build_checkpoint_config(thread_id, checkpoint_id=resume_checkpoint_id),
             "recursion_limit": AGENT_GRAPH_RECURSION_LIMIT,
         }
         rollout_checkpoint_ns = str(config["configurable"].get("checkpoint_ns", ""))
@@ -302,7 +309,6 @@ class StepRunner:
         if not callable(getattr(checkpointer, "mark_execution_lost", None)):
             raise TypeError("v2 checkpoint saver 缺少可调用端口: mark_execution_lost")
 
-        resolved_attachments = list(attachments or [])
         resolved_message_metadata = dict(message_metadata or {})
         preferred_provider_id_value = resolved_message_metadata.get(
             "boxteam_session_provider_id"
@@ -316,45 +322,14 @@ class StepRunner:
         ):
             raise TypeError("会话模型 provider id 必须是字符串")
         preferred_provider_id = preferred_provider_id_value
-        human_content_result = UserContentBuilder(
-            workspace_root=self.ports.workspace_root,
-        ).build(message, resolved_attachments)
-        human_response_metadata = build_human_response_metadata(
-            message_id=message_id,
-            display_content=None,
-            attachments=resolved_attachments,
-            message_created_at=message_created_at,
-            message_metadata=resolved_message_metadata,
-            attachment_diagnostics=human_content_result.diagnostics,
+        read_input_message = getattr(
+            checkpointer,
+            "accepted_user_message" if isinstance(execution_binding, UserExecutionIdentity) else "accepted_internal_message",
+            None,
         )
-        if isinstance(execution_binding, InternalExecutionIntent) and "canonical_item_manifests" in resolved_message_metadata:
-            human_response_metadata = dict(resolved_message_metadata)
-        raw_message_metadata = human_response_metadata.get("message_metadata")
-        if raw_message_metadata is not None and not isinstance(
-            raw_message_metadata,
-            dict,
-        ):
-            raise TypeError("HumanMessage message_metadata 必须是对象")
-        if isinstance(execution_binding, InternalExecutionIntent):
-            conflicting_turn_fields = {
-                key
-                for key in ("turn_id", "job_id")
-                if key in (raw_message_metadata or {})
-            }
-            if conflicting_turn_fields:
-                raise ValueError(
-                    "Turn-less internal message 不得携带 Turn/job attribution: "
-                    + ",".join(sorted(conflicting_turn_fields))
-                )
-            human_response_metadata["message_metadata"] = dict(
-                raw_message_metadata or {}
-            )
-        else:
-            human_response_metadata["message_metadata"] = {
-                **(raw_message_metadata or {}),
-                "turn_id": turn_id,
-                "job_id": job_id,
-            }
+        if not callable(read_input_message):
+            raise TypeError("v2 checkpoint saver 缺少已接受输入 reader")
+        next_input_messages: list[HumanMessage] = []
         message_source = resolved_message_metadata.get("source")
         message_kind = resolved_message_metadata.get("kind")
         requires_delegated_report = (
@@ -391,13 +366,6 @@ class StepRunner:
                 f"session_id={session_id} job_id={job_id}"
             )
 
-        next_input_messages = [
-            HumanMessage(
-                id=message_id,
-                content=human_content_result.content,
-                response_metadata=human_response_metadata,
-            )
-        ]
         read_admission = getattr(checkpointer, "execution_admission_for_job", None)
         if not callable(read_admission):
             raise TypeError("v2 checkpoint saver 缺少 execution_admission_for_job 端口")
@@ -412,6 +380,7 @@ class StepRunner:
         message_stream_runtime: MessageStreamRuntime | None = None
         admission_write_task: asyncio.Task[bool] | None = None
         admission_read_task: asyncio.Task[ExecutionAdmission] | None = None
+        input_read_task: asyncio.Task[HumanMessage] | None = None
         stream_open_task: asyncio.Task[MessageStreamWriter] | None = None
         assistant_write_task: asyncio.Task[bool] | None = None
         runtime_acquire_task: (
@@ -454,6 +423,7 @@ class StepRunner:
                 for task in (
                     admission_write_task,
                     admission_read_task,
+                    input_read_task,
                     stream_open_task,
                     assistant_write_task,
                     runtime_acquire_task,
@@ -475,7 +445,7 @@ class StepRunner:
                 and runtime_acquire_task.exception() is None
             ):
                 runtime_lease = runtime_acquire_task.result()
-            if admission is None and admission_write_task is not None:
+            if admission is None and (admission_write_task is not None or input_read_task is not None):
                 try:
                     admission = await asyncio.to_thread(
                         read_admission, session_id, thread_id=thread_id,
@@ -493,23 +463,33 @@ class StepRunner:
 
         settled.clear()
         try:
-            admission_write_task = asyncio.create_task(asyncio.to_thread(
-                persist_user_message_checkpoint,
-                checkpointer=checkpointer,
-                session_id=session_id,
-                thread_id=thread_id,
-                job_id=job_id,
-                admission_idempotency_key=admission_idempotency_key,
-                message=(None if isinstance(execution_binding, InternalExecutionIntent)
-                         and execution_binding.input_reference_json is not None else next_input_messages[0]),
-                execution_intent=(
-                    execution_binding
-                    if isinstance(execution_binding, InternalExecutionIntent)
-                    else None
-                ),
-                checkpoint_ns=rollout_checkpoint_ns,
+            # 用户、notice 和 seed/reference 的冻结读取都归 active Job 的取消排空。
+            input_options = ({"intent": execution_binding}
+                             if isinstance(execution_binding, InternalExecutionIntent) else {})
+            input_read_task = asyncio.create_task(asyncio.to_thread(
+                read_input_message,
+                session_id, thread_id=thread_id, job_id=job_id, message_id=message_id,
+                checkpoint_ns=rollout_checkpoint_ns, **input_options,
             ))
-            await asyncio.shield(admission_write_task)
+            next_input_messages = [await asyncio.shield(input_read_task)]
+            if resume_checkpoint_id is None:
+                admission_write_task = asyncio.create_task(asyncio.to_thread(
+                    persist_user_message_checkpoint,
+                    checkpointer=checkpointer,
+                    session_id=session_id,
+                    thread_id=thread_id,
+                    job_id=job_id,
+                    admission_idempotency_key=admission_idempotency_key,
+                    message=(None if isinstance(execution_binding, InternalExecutionIntent)
+                             and execution_binding.input_reference_json is not None else next_input_messages[0]),
+                    execution_intent=(
+                        execution_binding
+                        if isinstance(execution_binding, InternalExecutionIntent)
+                        else None
+                    ),
+                    checkpoint_ns=rollout_checkpoint_ns,
+                ))
+                await asyncio.shield(admission_write_task)
             admission_read_task = asyncio.create_task(asyncio.to_thread(
                 read_admission, session_id, thread_id=thread_id,
                 job_id=job_id, checkpoint_ns=rollout_checkpoint_ns,
@@ -543,6 +523,7 @@ class StepRunner:
                 message_stream_writer,
                 normalized_block_observer=message_stream_trace_observer.observe,
                 canonical_item_sink=canonical_sink.append,
+                tool_result_sink=canonical_sink.complete_tool_result,
                 canonical_turn_id=turn_id,
                 model_call_registrar=model_call_adapter.register,
                 model_call_outcome_sink=model_call_adapter.update_outcome,
@@ -629,7 +610,20 @@ class StepRunner:
                     include_team_tools=include_team_tools,
                 )
             )
-            runtime_lease = await asyncio.shield(runtime_acquire_task)
+            try:
+                runtime_lease = await asyncio.shield(runtime_acquire_task)
+            except GraphBindingUnavailableError as error:
+                if resume_checkpoint_id is None:
+                    raise
+                raise CheckpointRecoveryRejectedError(f"原 GraphBinding 无法精确重建: {error}") from error
+            await observe_phase(admission.execution_id, "thread.runtime.acquired", details={
+                "session_id": runtime_lease.session_id, "thread_id": runtime_lease.thread_id,
+                "generation": runtime_lease.generation,
+                "runtime_object_id": id(runtime_lease.runtime),
+                "agent_object_id": id(runtime_lease.runtime.agent),
+                "execution_id": admission.execution_id, "job_id": admission.job_id,
+                "turn_id": admission.turn_id, "execution_origin": admission.execution_origin,
+            })
             # root 冻结属于实际 active slot；取消时与已启动准入/建图一起排空。
             activation_freeze_task = asyncio.create_task(
                 runtime_lease.runtime.resource_activation.freeze_execution(
@@ -643,6 +637,16 @@ class StepRunner:
                 frozen_activation, admission=admission,
             )
             settled.set()
+
+            if resume_checkpoint_id is not None:
+                pending = await pending_tool_checkpoint(runtime_lease.runtime.agent, checkpointer, admission, checkpoint_id=resume_checkpoint_id)
+                if pending is None or pending.checkpoint_id != resume_checkpoint_id:
+                    raise CheckpointRecoveryRejectedError("恢复 Job 缺少原 pending tools scheduler 证明，拒绝重新执行输入")
+                try:
+                    await message_stream_runtime.restore_pending_model(pending.assistant, pending.model_call)
+                except RuntimeError as error:
+                    raise CheckpointRecoveryRejectedError(f"原 TurnStream 无法证明相同工具调用: {error}") from error
+                model_call_adapter.restore_pending_model_call(pending.model_call, pending.assembly_id)
 
             if isinstance(execution_binding, InternalExecutionIntent) and execution_binding.input_reference_json is not None:
                 next_input_messages = []
@@ -671,6 +675,7 @@ class StepRunner:
                 requires_session_question_reply=requires_session_question_reply,
                 question_source=question_source,
                 question_communication_id=question_communication_id,
+                resume_from_checkpoint=resume_checkpoint_id is not None,
             )
             final_text = retry_result.final_text
             latest_model_content_blocks = retry_result.latest_model_content_blocks

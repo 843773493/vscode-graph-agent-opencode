@@ -127,6 +127,7 @@
 }
 
 /* 状态配色与 resource-status-* 一致：pending=警告、running=成功、failed=危险。 */
+.child-thread-status-idle,
 .child-thread-status-pending {
   color: var(--bt-status-warning);
   background: color-mix(in srgb, var(--bt-status-warning) 18%, transparent);

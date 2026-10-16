@@ -375,6 +375,26 @@ class OperationLeaseMixin:
             row["fencing_token"]
         ) == fencing_token
 
+    def assert_lease_current(self, lease: SessionOperationLease) -> SessionOperationLease:
+        """原操作结算证明；completed 只供同一主体幂等确认，不准入新业务。"""
+        current = self.get_lease(lease.lease_id)
+        if (
+            (current.operation_kind, current.operation_identity, current.preimage_hash,
+             current.captured_lifecycle_generation, current.holder_generation,
+             current.fencing_token, current.recovery_ref, current.created_at)
+            != (lease.operation_kind, lease.operation_identity, lease.preimage_hash,
+                lease.captured_lifecycle_generation, lease.holder_generation,
+                lease.fencing_token, lease.recovery_ref, lease.created_at)
+            or current.state not in {"settling", "completed"}
+        ):
+            raise RuntimeError(
+                "原 operation lease 结算证明已失效: "
+                f"lease_id={lease.lease_id}, operation_identity={lease.operation_identity!r}, "
+                f"expected_token={lease.fencing_token}, current_token={current.fencing_token}, "
+                f"current_state={current.state}"
+            )
+        return current
+
     def _lease_row_or_raise(
         self, connection: sqlite3.Connection, lease_id: str
     ) -> sqlite3.Row:

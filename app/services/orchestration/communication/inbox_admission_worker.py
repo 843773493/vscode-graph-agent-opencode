@@ -21,17 +21,22 @@ inbox，按 admission_id/wakeup key 幂等 admit。本 worker：
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from contextlib import AbstractAsyncContextManager
+import asyncio
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from app.core.phase_observer import observe_phase
 from app.core.session_control_primitives import validate_claim_fields
 from app.core.session_control_store import (
     CommunicationInboxRecord,
     SessionControlStore,
 )
-from app.services.business.communication.ledger import CommunicationLedgerService
+from app.core.session_lifecycle_gate import (
+    SessionDeletionPendingError,
+    SessionOperationLease,
+)
+from app.services.business.communication.ledger import SessionLeaseSettlement
 
 __all__ = [
     "InboxAdmissionAttempt",
@@ -78,7 +83,8 @@ class InboxAdmissionAttempt:
 
     outcome 闭集：bound（本轮完成绑定）、skipped_claim_held（claim 被其他
     worker 持有——并发契约的正常输家）、skipped_already_bound（列出后已被
-    其他 worker 绑定）。error 仅在 binder 失败路径非空。
+    其他 worker 绑定）、cancelled（删除收敛原 inbox）、error（失败记录并由上层
+    显式抛出异常）。error 字段仅在失败路径非空。
     """
 
     communication_id: str
@@ -113,7 +119,7 @@ class InboxAdmissionWorker:
         *,
         store: SessionControlStore,
         session_id: str,
-        write_admission: Callable[[str], AbstractAsyncContextManager[None]],
+        lease_settlement: SessionLeaseSettlement,
         claim_owner: str,
         binder: InboxAdmissionBinder,
         claim_generation: int = 1,
@@ -125,7 +131,7 @@ class InboxAdmissionWorker:
             raise TypeError("InboxAdmissionWorker 必须注入可调用的 binder")
         self._store = store
         self._session_id = session_id
-        self._write_admission = write_admission
+        self._lease_settlement = lease_settlement
         self._claim_owner = claim_owner
         self._claim_generation = claim_generation
         self._binder = binder
@@ -170,16 +176,18 @@ class InboxAdmissionWorker:
     ) -> InboxAdmissionAttempt:
         """消费单条 inbox；claim 冲突按并发契约分类，binder 失败记录。"""
         communication_id = inbox.communication_id
+        lease = self._store.find_lease_by_operation("communication-target|" + communication_id)
+        if lease is None or lease.operation_kind != "communication_target" or lease.preimage_hash != inbox.payload_hash:
+            raise RuntimeError("通信 inbox 缺少同 identity/hash 的原 lifecycle lease")
         try:
-            async with self._write_admission(self._session_id):
+            async with self._lease_settlement(self._session_id, self._store, lease) as active:
+                if not active:
+                    return self._cancel_inbox(inbox, lease)
                 self._store.claim_communication_inbox_admission(
                     communication_id,
                     claim_owner=self._claim_owner,
                     claim_generation=self._claim_generation,
                 )
-                lease = self._store.find_lease_by_operation("communication-target|" + communication_id)
-                if lease is None or lease.state not in {"settling", "completed"}:
-                    raise RuntimeError("通信 inbox 缺少可恢复的原 lifecycle lease")
         except RuntimeError:
             current = self._store.get_communication_inbox(communication_id)
             if current.state == "execution_bound":
@@ -198,21 +206,12 @@ class InboxAdmissionWorker:
                 )
             raise
         try:
+            await observe_phase(communication_id, "communication.inbox.claimed")
             binding = await binder(InboxAdmissionTarget(inbox=inbox))
-        except Exception as error:  # noqa: BLE001 —— 记录后显式暴露
-            return await self._record_failure(
-                communication_id, f"{type(error).__name__}: {error}"
-            )
-        if not isinstance(binding, InboxExecutionBinding):
-            return await self._record_failure(
-                communication_id,
-                f"binder 返回类型非法: {type(binding).__name__}",
-            )
-        try:
-            async with self._write_admission(self._session_id):
-                current_lease = self._store.get_lease(lease.lease_id)
-                if current_lease.fencing_token != lease.fencing_token or current_lease.state not in {"settling", "completed"}:
-                    raise RuntimeError("通信 binding callback 的原 lifecycle lease 已失效")
+            if not isinstance(binding, InboxExecutionBinding):
+                raise TypeError(f"binder 返回类型非法: {type(binding).__name__}")
+            await observe_phase(communication_id, "communication.inbox.job_created")
+            async with self._lease_settlement(self._session_id, self._store, lease):
                 bound = self._store.mark_communication_inbox_execution_bound(
                     communication_id,
                     job_id=binding.job_id,
@@ -221,23 +220,46 @@ class InboxAdmissionWorker:
                     claim_owner=self._claim_owner,
                     claim_generation=self._claim_generation,
                 )
-                CommunicationLedgerService(session_id=self._session_id, store=self._store, write_admission=self._write_admission).complete_lease(lease)
-        except (ValueError, RuntimeError, KeyError) as error:
-            return await self._record_failure(communication_id, f"{error}")
+                current_lease = self._store.assert_lease_current(lease)
+                if current_lease.state == "settling":
+                    self._store.settle_lease(lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token, outcome="completed")
+        except SessionDeletionPendingError:
+            # fresh binder 的 active 门拒绝迟到 Job；原 inbox 必须在原 gate
+            # 明确落下取消事实，再把 holder 交给删除 owner。
+            async with self._lease_settlement(self._session_id, self._store, lease) as active:
+                if active:
+                    raise
+                return self._cancel_inbox(inbox, lease)
+        except asyncio.CancelledError:
+            await self._record_failure(communication_id, lease, "inbox worker 已停止，原 admission 保留待恢复")
+            raise
+        except Exception as error:  # noqa: BLE001 —— 记录后显式暴露
+            return await self._record_failure(communication_id, lease, f"{type(error).__name__}: {error}")
         return InboxAdmissionAttempt(
             communication_id=communication_id,
             outcome="bound",
             bound_inbox=bound,
         )
 
+    def _cancel_inbox(
+        self, inbox: CommunicationInboxRecord, lease: SessionOperationLease,
+    ) -> InboxAdmissionAttempt:
+        """调用方持原 lease 结算 gate；只取消这一条原通信，不建立新 binding。"""
+        self._store.drain_communication_inboxes(communication_id=inbox.communication_id)
+        current = self._store.assert_lease_current(lease)
+        if current.state == "settling":
+            self._store.settle_lease(lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token, outcome="cancelled")
+        return InboxAdmissionAttempt(communication_id=inbox.communication_id, outcome="cancelled", bound_inbox=self._store.get_communication_inbox(inbox.communication_id))
+
     async def _record_failure(
         self,
         communication_id: str,
+        lease: SessionOperationLease,
         message: str,
     ) -> InboxAdmissionAttempt:
         """记录 last_error 并保持 target_accepted 可恢复；返回失败 attempt。"""
         try:
-            async with self._write_admission(self._session_id):
+            async with self._lease_settlement(self._session_id, self._store, lease):
                 self._store.record_communication_inbox_admission_failure(
                     communication_id,
                     claim_owner=self._claim_owner,

@@ -7,7 +7,7 @@ ports；它们不承担 LangChain/provider projection，也不读取 v1 数据�
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 from app.core.sqlite_state import utc_now_text as _now
@@ -49,8 +49,6 @@ _V2_TO_HISTORY_STATUS = {
 class RolloutExecutionsMixin:
     """Execution attempt、resume/lost 与 terminal convergence owner。"""
 
-
-
     def converge_execution(
         self,
         session_id: str,
@@ -67,6 +65,73 @@ class RolloutExecutionsMixin:
         loss_reason: str | None = None,
     ) -> int:
         """原子收敛 execution/model/assembly/Turn 与可选 output item。"""
+        return self._converge_execution(
+            session_id, thread_id=thread_id, turn_id=turn_id, execution_id=execution_id,
+            outcome=outcome, turn_status=turn_status, items=items, final_item_id=final_item_id,
+            assembly_id=assembly_id, checkpoint_ns=checkpoint_ns, loss_reason=loss_reason,
+        )
+
+    def materialize_legacy_turn(
+        self,
+        session_id: str,
+        *,
+        thread_id: str,
+        turn_id: str,
+        execution_id: str,
+        source_session_id: str,
+        source_thread_id: str,
+        turn_status: str,
+        finalization_evidence: str,
+        items: Sequence[CanonicalItemRecord],
+        final_item_id: str | None,
+        checkpoint_ns: str,
+    ) -> int:
+        """仅在显式 importer 的私有 staging 安装已校验的历史终态事实。"""
+        from app.services.infrastructure.rollout_context.migration.staging import (
+            ImportStagingStorage,
+        )
+
+        if not isinstance(self._storage, ImportStagingStorage):
+            raise TypeError("历史终态物化只允许 importer 私有 staging")
+        source_session_id = strict_text(source_session_id, field="legacy.source_session_id")
+        source_thread_id = strict_text(source_thread_id, field="legacy.source_thread_id")
+        if finalization_evidence == "explicit_legacy_final_marker":
+            valid = turn_status == "completed" and final_item_id is not None
+        elif finalization_evidence == "explicit_legacy_control_marker":
+            valid = turn_status in {"failed", "interrupted", "cancelled"} and final_item_id is None
+        else:
+            valid = finalization_evidence in {
+                "ambiguous_legacy_finalization", "legacy_finalization_unavailable",
+                "legacy_final_marker_not_completed_assistant",
+            } and turn_status == "unknown" and final_item_id is None
+        if not valid:
+            raise ValueError("legacy 历史终态与已校验 source evidence 不一致")
+        # 源 final 只能证明历史回答完成，不能伪造本地 Provider 成功。
+        outcome = turn_status if finalization_evidence == "explicit_legacy_control_marker" else "unknown"
+        return self._converge_execution(
+            session_id, thread_id=thread_id, turn_id=turn_id, execution_id=execution_id,
+            outcome=outcome, turn_status=turn_status, items=items, final_item_id=final_item_id,
+            checkpoint_ns=checkpoint_ns,
+            historical_source=(source_session_id, source_thread_id, finalization_evidence),
+        )
+
+    def _converge_execution(
+        self,
+        session_id: str,
+        *,
+        thread_id: str | None = None,
+        turn_id: str | None,
+        execution_id: str,
+        outcome: str,
+        turn_status: str | None,
+        items: Sequence[CanonicalItemRecord] = (),
+        final_item_id: str | None = None,
+        assembly_id: str | None = None,
+        checkpoint_ns: str = "",
+        loss_reason: str | None = None,
+        historical_source: tuple[str, str, str] | None = None,
+    ) -> int:
+        """运行终态与显式历史安装共用唯一 items/commit/projection 事务。"""
         session_id = strict_text(session_id, field="session_id")
         owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
         turn_id = strict_optional_text(turn_id, field="turn_id")
@@ -89,6 +154,13 @@ class RolloutExecutionsMixin:
             {"execution_id": execution_id, "reason": loss_reason}
             if loss_reason is not None else {}
         )
+        if historical_source is not None:
+            terminal_key = f"legacy-terminal:{turn_id}:{execution_id}"
+            terminal_metadata = {
+                "legacy_source_session_id": historical_source[0],
+                "legacy_source_thread_id": historical_source[1],
+                "finalization_evidence": historical_source[2],
+            }
         if outcome not in {value.value for value in ControlOutcome}:
             raise ValueError(f"未知 execution outcome: {outcome}")
         if turn_id is None:
@@ -129,7 +201,7 @@ class RolloutExecutionsMixin:
                     ControlOutcome.EXECUTION_LOST.value,
                 },
             }
-            if outcome not in allowed_outcomes.get(turn_status, set()):
+            if historical_source is None and outcome not in allowed_outcomes.get(turn_status, set()):
                 raise ValueError(
                     "Turn.status 与 terminal outcome 不匹配: "
                     f"status={turn_status}, outcome={outcome}"
@@ -197,6 +269,45 @@ class RolloutExecutionsMixin:
                 current_status = strict_text(
                     turn[0], field="turn_records.status"
                 )
+                if historical_source is not None:
+                    historical = connection.execute(
+                        "SELECT acceptance.identity_origin,turn.initial_execution_id,turn.last_execution_id,"
+                        "execution.first_model_call_id,execution.last_model_call_id,turn.root_input_item_id "
+                        "FROM turn_records turn JOIN turn_acceptances acceptance ON "
+                        "acceptance.session_id=turn.session_id AND acceptance.thread_id=turn.thread_id "
+                        "AND acceptance.turn_id=turn.turn_id JOIN executions execution ON "
+                        "execution.session_id=turn.session_id AND execution.thread_id=turn.thread_id "
+                        "AND execution.execution_id=turn.initial_execution_id "
+                        "WHERE turn.session_id=? AND turn.thread_id=? AND turn.turn_id=?",
+                        (session_id, owner_thread_id, turn_id),
+                    ).fetchone()
+                    if historical is None or historical[:5] != (
+                        "legacy_synthetic", execution_id, execution_id, None, None,
+                    ):
+                        raise ValueError("历史终态物化缺少 source-derived synthetic acceptance/execution")
+                    root = self._storage._read_canonical_item_from_catalog(
+                        connection, session_id=session_id, thread_id=owner_thread_id,
+                        checkpoint_ns=checkpoint_ns, item_id=historical[5],
+                    )
+                    annotations = root.extensions.get("boxteam.acceptance.annotations")
+                    if not isinstance(annotations, Mapping):
+                        raise ValueError("历史终态物化缺少 acceptance source annotations")
+                    lineage = annotations.get("value")
+                    if not isinstance(lineage, Mapping) or (
+                        lineage.get("legacy_source_session_id"),
+                        lineage.get("legacy_source_thread_id"),
+                    ) != historical_source[:2]:
+                        raise ValueError("历史终态物化的 acceptance source lineage 不一致")
+                    provider_fact = connection.execute(
+                        "SELECT EXISTS(SELECT 1 FROM model_calls WHERE session_id=? "
+                        "AND thread_id=? AND execution_id=?) OR EXISTS(SELECT 1 "
+                        "FROM context_assemblies WHERE session_id=? AND thread_id=? "
+                        "AND execution_id=?)",
+                        (session_id, owner_thread_id, execution_id,
+                         session_id, owner_thread_id, execution_id),
+                    ).fetchone()[0]
+                    if provider_fact:
+                        raise ValueError("历史终态物化不得包含 Provider ModelCall/assembly 事实")
                 existing_final_item_id = strict_optional_text(
                     turn[1], field="turn_records.final_item_id"
                 )
@@ -252,10 +363,13 @@ class RolloutExecutionsMixin:
                             )
                         return committed.commit_id
                     raise ValueError(f"Turn 已终态，禁止再次收敛: {turn_id}")
-                try:
-                    validate_turn_transition(current_status, turn_status)
-                except ItemSchemaError as error:
-                    raise ValueError(str(error)) from error
+                if historical_source is None:
+                    try:
+                        validate_turn_transition(current_status, turn_status)
+                    except ItemSchemaError as error:
+                        raise ValueError(str(error)) from error
+                elif current_status != TurnStatus.OPEN.value:
+                    raise ValueError("历史终态物化只允许未发布的 synthetic open Turn")
                 if turn_status == "completed" and final_item_id:
                     known = connection.execute(
                         "SELECT status, semantic_kind, turn_id, execution_id "
@@ -351,36 +465,10 @@ class RolloutExecutionsMixin:
                             "terminal convergence item 必须是当前 Turn 的 turn_member: "
                             f"item={item.item_id}"
                         )
-                model_call_outcomes = connection.execute(
-                    "SELECT model_call_id, outcome FROM model_calls "
-                    "WHERE session_id = ? AND thread_id = ? AND execution_id = ? "
-                    "ORDER BY attempt ASC",
-                    (session_id, owner_thread_id, execution_id),
-                ).fetchall()
-                latest_model_call_id: str | None = None
-                latest_model_call_outcome: str | None = None
-                if model_call_outcomes:
-                    latest_model_call_id = strict_text(
-                        model_call_outcomes[-1][0], field="model_calls.model_call_id"
-                    )
-                    latest_model_call_outcome = strict_text(
-                        model_call_outcomes[-1][1], field="model_calls.outcome"
-                    )
-                    accepted_model_outcomes = {ControlOutcome.UNKNOWN.value, outcome}
-                    if loss_reason is not None:
-                        accepted_model_outcomes.update({
-                            ControlOutcome.FAILED.value, ControlOutcome.CANCELLED.value,
-                            ControlOutcome.INTERRUPTED.value,
-                        })
-                    if latest_model_call_outcome not in accepted_model_outcomes and not (
-                        control_correction
-                        and latest_model_call_outcome == ControlOutcome.EXECUTION_LOST.value
-                    ):
-                        raise ValueError(
-                            "terminal convergence 与最新 model_call outcome 冲突: "
-                            f"model_call={latest_model_call_id}, "
-                            f"existing={latest_model_call_outcome}, requested={outcome}"
-                        )
+                latest_model_call_id = self._terminal_model_call_id(
+                    connection, session_id=session_id, thread_id=owner_thread_id,
+                    execution_id=execution_id, outcome=outcome,
+                )
                 last_item_row = connection.execute(
                     "SELECT last_item_sequence FROM database_meta WHERE singleton_id = 1"
                 ).fetchone()
@@ -554,33 +642,6 @@ class RolloutExecutionsMixin:
                     raise RuntimeError(
                         "terminal convergence execution outcome 更新失败"
                     )
-                if latest_model_call_id is not None:
-                    # 同一 execution 的旧 retry attempt 是独立的已收敛事实；
-                    # terminal convergence 只闭合最新 attempt，不能把此前
-                    # validation_failed/provider error 重写成最终成功。
-                    model_outcome = (
-                        ControlOutcome.UNKNOWN.value if loss_reason is not None else outcome
-                    )
-                    model_call_update = connection.execute(
-                        "UPDATE model_calls SET outcome = ?, dispatch_state = CASE "
-                        "WHEN ? IN ('completed','completed_empty') THEN 'completed' "
-                        "WHEN ? IN ('failed', 'cancelled', 'interrupted') THEN 'failed' "
-                        "ELSE 'unknown' END WHERE session_id = ? AND thread_id = ? "
-                        "AND model_call_id = ? AND execution_id = ?",
-                        (
-                            model_outcome,
-                            model_outcome,
-                            model_outcome,
-                            session_id,
-                            owner_thread_id,
-                            latest_model_call_id,
-                            execution_id,
-                        ),
-                    )
-                    if model_call_update.rowcount != 1:
-                        raise RuntimeError(
-                            "terminal convergence latest model-call outcome 更新失败"
-                        )
                 turn_update = connection.execute(
                     "UPDATE turn_records SET status = ?, final_item_id = ?, "
                     "last_execution_id = ?, updated_at = ? "
@@ -681,7 +742,7 @@ class RolloutExecutionsMixin:
                         "UPDATE turns SET status = ?, updated_at = ? WHERE turn_id = ?",
                         (history_status, timestamp, turn_id),
                     )
-                self._converge_execution_assemblies(
+                self._converge_execution_calls_and_assemblies(
                     connection, session_id=session_id, thread_id=owner_thread_id,
                     execution_id=execution_id, latest_model_call_id=latest_model_call_id,
                     outcome=outcome, timestamp=timestamp, control_correction=control_correction,

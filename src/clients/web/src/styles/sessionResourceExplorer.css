@@ -14,7 +14,6 @@
 }
 
 .session-resource-toolbar button,
-.session-resource-actions button,
 .session-resource-load-more,
 .session-generator-manager button {
   border: 0;
@@ -25,7 +24,6 @@
 }
 
 .session-resource-toolbar button:hover,
-.session-resource-actions button:hover,
 .session-resource-load-more:hover,
 .session-generator-manager button:hover:not(:disabled) {
   background: var(--bt-hover-background);
@@ -245,22 +243,6 @@
   background: var(--bt-input-background);
   color: var(--bt-input-foreground);
   font: inherit;
-}
-
-.session-resource-actions {
-  display: none;
-  flex: 0 0 auto;
-  align-items: center;
-}
-
-.session-resource-row:hover .session-resource-actions,
-.session-resource-row:focus-within .session-resource-actions {
-  display: flex;
-}
-
-.session-resource-actions button {
-  min-width: 22px;
-  min-height: 22px;
 }
 
 .session-resource-state,

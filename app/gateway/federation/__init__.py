@@ -11,6 +11,7 @@ from typing import Literal
 
 import httpx
 
+from app.core.identifier import create_prefixed_id
 from app.gateway.credentials import FederationCredential
 from app.gateway.federation.errors import (
     FEDERATION_DEADLINE_EXCEEDED,
@@ -208,16 +209,16 @@ async def discover_remote_gateway(
 ) -> tuple[dict[str, object], list[dict[str, object]]]:
     headers = {
         "X-BoxTeam-Federation-Token": credential.token,
-        "X-Request-ID": f"federation-discovery-{credential.connection_id}",
     }
     async with httpx.AsyncClient(timeout=10) as client:
         manifest_response, workspaces_response = await asyncio.gather(
             client.get(
-                f"{gateway_url}/api/gateway/federation/manifest", headers=headers
+                f"{gateway_url}/api/gateway/federation/manifest",
+                headers={**headers, "X-Request-ID": create_prefixed_id("req")},
             ),
             client.get(
                 f"{gateway_url}/api/gateway/federation/workspaces",
-                headers=headers,
+                headers={**headers, "X-Request-ID": create_prefixed_id("req")},
             ),
         )
     manifest_response.raise_for_status()

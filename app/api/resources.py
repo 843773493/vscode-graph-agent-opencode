@@ -10,7 +10,6 @@ from urllib.error import URLError
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.abstractions.browser_resources import BrowserRequestError
-from app.api.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.api.deps import (
     get_browser_resource_owner,
     get_request_id,
@@ -18,6 +17,7 @@ from app.api.deps import (
     get_workspace_resource_owner,
     verify_local_token,
 )
+from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.workspace_resource import (
     BrowserResourceCreateRequest,

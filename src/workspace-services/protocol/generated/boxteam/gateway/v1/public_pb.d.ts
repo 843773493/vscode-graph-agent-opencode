@@ -1093,6 +1093,8 @@ export declare type GatewayResourceDTO = Message<"boxteam.gateway.v1.GatewayReso
   gatewayName: string;
 
   /**
+   * Gateway 注册表中的路由工作区 ID；resource.workspace_id 是后端 owner UUID。
+   *
    * @generated from field: string workspace_id = 3;
    */
   workspaceId: string;
@@ -1810,6 +1812,9 @@ export declare type GatewayUserListDTO = Message<"boxteam.gateway.v1.GatewayUser
 export declare const GatewayUserListDTOSchema: GenMessage<GatewayUserListDTO>;
 
 /**
+ * 视图状态键为 (user_id, workspace_id, session_id)，仅用于 Session 主聊天 main thread；child thread 使用独立视图，新 Session（含 fork）不继承来源状态。
+ * 无锚点时 writer 记录当前 scrollTop，恢复忽略该像素偏移并回到最新尾部。
+ *
  * @generated from message boxteam.gateway.v1.GatewayUserViewStateDTO
  */
 export declare type GatewayUserViewStateDTO = Message<"boxteam.gateway.v1.GatewayUserViewStateDTO"> & {
@@ -1829,16 +1834,22 @@ export declare type GatewayUserViewStateDTO = Message<"boxteam.gateway.v1.Gatewa
   sessionId: string;
 
   /**
+   * 当前 session_id 范围内的锚点 Turn ID；未设置或空字符串表示没有具体锚点。
+   *
    * @generated from field: optional string turn_anchor = 4;
    */
   turnAnchor?: string | undefined;
 
   /**
+   * 锚点 Turn 顶部被视口上沿裁切的非负距离，单位为 CSS 像素；仅在锚点非空且不跟随最新时用于恢复。
+   *
    * @generated from field: double scroll_offset = 5;
    */
   scrollOffset: number;
 
   /**
+   * 为 true 时恢复到会话最新尾部；否则锚点非空时按锚点和偏移恢复，锚点为空仍回到最新尾部。
+   *
    * @generated from field: optional bool follow_latest = 6;
    */
   followLatest?: boolean | undefined;
@@ -1866,20 +1877,28 @@ export declare type GatewayUserViewStateDTO = Message<"boxteam.gateway.v1.Gatewa
 export declare const GatewayUserViewStateDTOSchema: GenMessage<GatewayUserViewStateDTO>;
 
 /**
+ * PUT 请求完整替换当前用户、工作区和会话范围的视图状态；未提供字段采用服务端默认值。
+ *
  * @generated from message boxteam.gateway.v1.GatewayUserViewStateUpdateRequest
  */
 export declare type GatewayUserViewStateUpdateRequest = Message<"boxteam.gateway.v1.GatewayUserViewStateUpdateRequest"> & {
   /**
+   * 当前 session_id 范围内的锚点 Turn ID；未设置或空字符串表示没有具体锚点。
+   *
    * @generated from field: optional string turn_anchor = 1;
    */
   turnAnchor?: string | undefined;
 
   /**
+   * 锚点 Turn 顶部被视口上沿裁切的非负距离，单位为 CSS 像素；仅在锚点非空且不跟随最新时用于恢复。
+   *
    * @generated from field: optional double scroll_offset = 2;
    */
   scrollOffset?: number | undefined;
 
   /**
+   * 为 true 时恢复到会话最新尾部；否则锚点非空时按锚点和偏移恢复，锚点为空仍回到最新尾部。
+   *
    * @generated from field: optional bool follow_latest = 3;
    */
   followLatest?: boolean | undefined;

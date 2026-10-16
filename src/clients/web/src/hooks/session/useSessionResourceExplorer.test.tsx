@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create } from "react-test-renderer";
-import type { WorkspaceNavigationTree } from "../../types/backend";
+import type { SessionCatalogNode, WorkspaceNavigationTree } from "../../types/backend";
 import {
   apiResponse,
   catalogChildrenResponse,
@@ -18,6 +18,15 @@ import {
 } from "./sessionHookTestFixtures";
 
 afterEach(restoreSessionHookGlobals);
+
+const moveNodes: SessionCatalogNode[] = [
+  { node_id: "ses_move", kind: "session", name: "待移动会话", parent_node_id: "fld_old",
+    session_id: "ses_move", has_children: false, node_revision: 7, state: "active" },
+  ...["fld_old", "fld_new"].map((nodeId): SessionCatalogNode => ({
+    node_id: nodeId, folder_id: nodeId, kind: "folder", name: nodeId, parent_node_id: null,
+    has_children: nodeId === "fld_old", node_revision: 1, state: "active",
+  })),
+];
 
 function waitForReportedCatalogError(
   runtime: ReturnType<typeof createTestSessionCatalogOutboxRuntime>,
@@ -60,6 +69,65 @@ function waitForCatalogPrune(
 }
 
 describe("useSessionResourceExplorer 自动同步", () => {
+  for (const mode of ["展开", "定位续页"] as const) {
+    test(`${mode}只发布一致的移动节点，并保留已定位的父分支分页`, async () => {
+      let catalogRevision = 3;
+      const nodes = (): SessionCatalogNode[] => {
+        const moved: SessionCatalogNode = {
+          node_id: "folder-a", folder_id: "folder-a", kind: "folder", name: "移动节点",
+          parent_node_id: catalogRevision === 3 ? null : "folder-b",
+          has_children: false, node_revision: catalogRevision === 3 ? 1 : 2, state: "active",
+        };
+        const destination: SessionCatalogNode = {
+          node_id: "folder-b", folder_id: "folder-b", kind: "folder", name: "目标目录",
+          parent_node_id: null, has_children: mode === "定位续页" || catalogRevision > 3,
+          node_revision: 1, state: "active",
+        };
+        const sibling: SessionCatalogNode = {
+          node_id: "folder-c", folder_id: "folder-c", kind: "folder", name: "第一页节点",
+          parent_node_id: "folder-b", has_children: false, node_revision: 1, state: "active",
+        };
+        return [destination, ...(mode === "定位续页" ? [sibling] : []), moved];
+      };
+      installGatewayFetch(withCatalogDefaults(({ path, url }) => {
+        if (path === "/api/v1/session-catalog/export") {
+          return apiResponse({ revision: `catalog-${catalogRevision}`, catalog_revision: catalogRevision, items: nodes() });
+        }
+        if (path === "/api/v1/session-catalog/children") {
+          const query = new URL(url).searchParams;
+          const parent = query.get("parent_node_id");
+          const children = nodes().filter((node) => node.parent_node_id === parent);
+          if (mode === "定位续页" && parent === "folder-b" && catalogRevision === 4) {
+            return apiResponse({
+              revision: "catalog-4", catalog_revision: 4, parent_node_id: parent,
+              items: query.get("cursor") ? children.slice(1) : children.slice(0, 1),
+              cursor: query.get("cursor") ? null : "second-page", total: children.length,
+            });
+          }
+          return catalogChildrenResponse(`catalog-${catalogRevision}`, children, parent, catalogRevision);
+        }
+        return undefined;
+      }));
+      const { explorer, unmount } = await mountResourceExplorer({});
+      await act(async () => {
+        await explorer().loadBranch("ws-test", "folder-b");
+        catalogRevision = 4;
+        if (mode === "展开") await explorer().loadBranch("ws-test", "folder-b");
+        else await explorer().revealSearchResult("ws-test", ["folder-b", "folder-a"], "folder");
+        await flushEffects();
+      });
+      expect(explorer().branches.get("ws-test:root")?.items.map((node) => node.node_id)).toEqual(["folder-b"]);
+      expect(explorer().branches.get("ws-test:folder-b")?.items.map((node) => node.node_id))
+        .toEqual(mode === "展开" ? ["folder-a"] : ["folder-c", "folder-a"]);
+      const moved = [...explorer().branches.values()].flatMap((branch) => branch.items)
+        .filter((node) => node.node_id === "folder-a");
+      expect(moved).toHaveLength(1);
+      expect(moved[0].node_revision).toBe(2);
+      expect(moved[0].parent_node_id).toBe("folder-b");
+      unmount();
+    });
+  }
+
   test("恢复的已提交操作在分支刷新失败后保留 outbox 并显示错误", async () => {
     const runtime = createTestSessionCatalogOutboxRuntime();
     await runtime.runtime.submit(
@@ -174,6 +242,13 @@ describe("useSessionResourceExplorer 自动同步", () => {
   test("当前会话定位复用已加载的根分支，不重复读取目录", async () => {
     const catalogRequests: string[] = [];
     installGatewayFetch(withCatalogDefaults(({ path, url }) => {
+      if (path === "/api/v1/session-catalog/export") return apiResponse({
+        revision: "catalog", catalog_revision: 3,
+        items: [
+          { node_id: "folder-a", kind: "folder", name: "Folder A", has_children: true },
+          { node_id: "session-a", kind: "session", name: "Session A", session_id: "session-a", parent_node_id: "folder-a" },
+        ],
+      });
       const parentNodeId = new URL(url).searchParams.get("parent_node_id");
       if (path.includes("/api/v1/session-catalog/breadcrumb/")) {
         return apiResponse({
@@ -245,30 +320,27 @@ describe("useSessionResourceExplorer 自动同步", () => {
     unmount();
   });
 
-  test("目录移动失败时只重读旧父/新父分支并保留树状态", async () => {
+  test("目录移动失败时对账旧父/新父分支并保留树状态", async () => {
     const catalogRequests: string[] = [];
     const runtime = createTestSessionCatalogOutboxRuntime({
       result: () => ({ state: "rejected", errorDetail: "目录移动被拒绝" }),
     });
     installGatewayFetch(withCatalogDefaults(({ path, url }) => {
+      if (path === "/api/v1/session-catalog/snapshot") return apiResponse({
+        workspace_id: TEST_WORKSPACE_REQUEST_TARGET.backend_workspace_id,
+        catalog_revision: 4, event_seq_watermark: 0, generation: 1,
+      });
+      if (path === "/api/v1/session-catalog/export") return apiResponse({
+        revision: "catalog", catalog_revision: 4, items: moveNodes,
+      });
       if (path.includes("/api/v1/session-catalog/children")) {
         const query = new URL(url).searchParams;
         catalogRequests.push(query.toString());
         return catalogChildrenResponse(
           "catalog",
-          query.has("parent_node_id")
-            ? []
-            : [{
-                node_id: "ses_move",
-                kind: "session",
-                name: "待移动会话",
-                parent_node_id: null,
-                session_id: "ses_move",
-                has_children: false,
-                node_revision: 7,
-                state: "active",
-              }],
+          moveNodes.filter((node) => node.parent_node_id === query.get("parent_node_id")),
           query.get("parent_node_id"),
+          4,
         );
       }
       return undefined;
@@ -284,6 +356,8 @@ describe("useSessionResourceExplorer 自动同步", () => {
     });
 
     await act(async () => {
+      await explorer().loadBranch("ws-test", "fld_old");
+      catalogRequests.length = 0;
       await explorer().moveCatalogNode("ws-test", "ses_move", "fld_new", "fld_old");
       await waitForReportedCatalogError(runtime);
       await flushEffects();
@@ -430,21 +504,19 @@ describe("useSessionResourceExplorer 自动同步", () => {
     const runtime = createTestSessionCatalogOutboxRuntime({
       result: () => ({ state: "rejected", errorDetail: "目录移动被拒绝" }),
     });
+    let failRead = false;
     installGatewayFetch(withCatalogDefaults(({ path, url }) => {
+      if (path === "/api/v1/session-catalog/snapshot") return apiResponse({
+        workspace_id: TEST_WORKSPACE_REQUEST_TARGET.backend_workspace_id,
+        catalog_revision: 4, event_seq_watermark: 0, generation: 1,
+      });
+      if (path === "/api/v1/session-catalog/export") return apiResponse({
+        revision: "catalog", catalog_revision: 4, items: moveNodes,
+      });
       if (path.includes("/api/v1/session-catalog/children")) {
-        if (!new URL(url).searchParams.has("parent_node_id")) {
-          return catalogChildrenResponse("catalog", [{
-            node_id: "ses_move",
-            kind: "session",
-            name: "待移动会话",
-            parent_node_id: null,
-            session_id: "ses_move",
-            has_children: false,
-            node_revision: 7,
-            state: "active",
-          }], null);
-        }
-        return errorResponse(503, "目录重读崩了");
+        const parent = new URL(url).searchParams.get("parent_node_id");
+        if (failRead && parent !== null) return errorResponse(503, "目录重读崩了");
+        return catalogChildrenResponse("catalog", moveNodes.filter((node) => node.parent_node_id === parent), parent, 4);
       }
       return undefined;
     }));
@@ -460,6 +532,8 @@ describe("useSessionResourceExplorer 自动同步", () => {
     });
 
     await act(async () => {
+      await explorer().loadBranch("ws-test", "fld_old");
+      failRead = true;
       await explorer().moveCatalogNode("ws-test", "ses_move", "fld_new", "fld_old");
       await waitForReportedCatalogError(runtime);
       await flushEffects();

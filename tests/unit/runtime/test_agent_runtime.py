@@ -17,9 +17,12 @@ def test_build_session_agent_runtime_injects_job_service() -> None:
     mcp_tools = [MagicMock()]
     visibility_overrides = {"write_file": False}
     dependency_provider.get_mcp_tools.return_value = mcp_tools
+    resource_registry = MagicMock()
+    resource_activation = MagicMock()
+    skill_catalog = MagicMock()
 
     with patch(
-        "app.runtime.agent_runtime.create_runtime_deep_agent_for_session"
+        "app.agents.agent_factory.create_runtime_deep_agent_for_session"
     ) as create_runtime:
         build_session_agent_runtime(
             session_id="session_test",
@@ -35,10 +38,16 @@ def test_build_session_agent_runtime_injects_job_service() -> None:
             mcp_tools=mcp_tools,
             graph_binding_store=MagicMock(),
             model_visibility_overrides=visibility_overrides,
+            resource_registry=resource_registry,
+            resource_activation=resource_activation,
+            skill_catalog=skill_catalog,
         )
 
     assert create_runtime.call_args.kwargs["job_service"] is job_service
     assert create_runtime.call_args.kwargs["mcp_tools"] is mcp_tools
+    assert create_runtime.call_args.kwargs["resource_registry"] is resource_registry
+    assert create_runtime.call_args.kwargs["resource_activation"] is resource_activation
+    assert create_runtime.call_args.kwargs["skill_catalog"] is skill_catalog
     dependency_provider.get_mcp_tools.assert_not_called()
     assert (
         create_runtime.call_args.kwargs["model_visibility_overrides"]

@@ -21,6 +21,9 @@ from app.services.infrastructure.resource_platform.derivation.types import (
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_owner import (
+    ContextOwnerMixin,
+)
 from app.services.orchestration.resource_activation import (
     ResourceActivationCoordinator,
     ResourceActivationError,
@@ -36,6 +39,8 @@ SESSION_ID = "ses_019c5facabc37e5c89a5c9584ed39862"
 
 
 class _FakeSaver:
+    context_owner_namespace = staticmethod(ContextOwnerMixin.context_owner_namespace)
+
     def __init__(self) -> None:
         self.snapshots: list[ResourceActivationSnapshotRef] = []
 
@@ -61,7 +66,7 @@ class _FakeSaver:
         ), None)
 
     async def save_resource_activation_snapshot(
-        self, snapshot: ResourceActivationSnapshotRef
+        self, snapshot: ResourceActivationSnapshotRef, *, checkpoint_ns: str = ""
     ) -> None:
         self.snapshots.append(snapshot)
 
@@ -199,9 +204,9 @@ async def test_freeze_execution_and_model_call_reuses_parent_bytes() -> None:
     assert turn.activation_policy_hash == policy.hash
     assert len(saver.snapshots) == 1
 
-    first_call = await coordinator.prepare_model_call(
+    first_call = await coordinator.commit_model_call(await coordinator.capture_model_call(
         parent=turn, model_call_id="call-1", policy=policy
-    )
+    ))
     assert isinstance(first_call, ResourceActivationSnapshotRef)
     assert first_call.snapshot_kind == "model_call"
     assert first_call.bindings[: len(turn.bindings)] == turn.bindings
@@ -222,9 +227,9 @@ async def test_freeze_execution_and_model_call_reuses_parent_bytes() -> None:
             generation=4,
         )
     )
-    second_call = await coordinator.prepare_model_call(
+    second_call = await coordinator.commit_model_call(await coordinator.capture_model_call(
         parent=turn, model_call_id="call-2", policy=policy
-    )
+    ))
     assert isinstance(second_call, ResourceActivationSnapshotRef)
     assert second_call.bindings[: len(turn.bindings)] == turn.bindings
     assert second_call.bindings[-1].revision == "rev-mcp:catalog:2"
@@ -247,9 +252,9 @@ async def test_no_model_call_kind_reuses_turn_snapshot_without_saving() -> None:
         admission=_admission("turn-1"),
         policy=policy,
     )
-    prepared = await coordinator.prepare_model_call(
+    prepared = await coordinator.commit_model_call(await coordinator.capture_model_call(
         parent=turn, model_call_id="call-1", policy=policy
-    )
+    ))
     assert prepared is turn
 
 
@@ -286,7 +291,7 @@ async def test_model_call_policy_without_required_published_snapshot_fails_close
     assert [binding.resource_kind for binding in turn.bindings] == ["skills"]
 
     with pytest.raises(ResourceActivationError) as error:
-        await coordinator.prepare_model_call(parent=turn, model_call_id="call-1", policy=policy)
+        await coordinator.commit_model_call(await coordinator.capture_model_call(parent=turn, model_call_id="call-1", policy=policy))
     assert error.value.code == "resource-unavailable"
     assert len(saver.snapshots) == 1
 
@@ -300,9 +305,9 @@ async def test_turn_policy_drift_is_rejected() -> None:
     )
     drifted = _policy(default="model_call", overrides={})
     with pytest.raises(ResourceActivationError) as error:
-        await coordinator.prepare_model_call(
+        await coordinator.commit_model_call(await coordinator.capture_model_call(
             parent=turn, model_call_id="call-1", policy=drifted
-        )
+        ))
     assert error.value.code == "resource-activation-policy-drift"
 
 
@@ -425,9 +430,9 @@ async def test_seal_path_creates_no_source_io() -> None:
         admission=_admission("turn-1"),
         policy=policy,
     )
-    await coordinator.prepare_model_call(
+    await coordinator.commit_model_call(await coordinator.capture_model_call(
         parent=turn, model_call_id="call-1", policy=policy
-    )
+    ))
     # 每个新 binding 恰有一次正文写入，顺序与 activation_ordinal 一致。
     assert body_store.written == [("skill:demo", 0), ("mcp:catalog", 1)]
     assert all(binding.detail_ref is not None for binding in turn.bindings)
@@ -455,7 +460,7 @@ async def test_same_turn_retry_reuses_complete_policy_and_binding_bytes() -> Non
     assert retried.bindings == first.bindings
     assert retried.bindings_hash == first.bindings_hash
     assert retried.activation_provenance_hash == first.activation_provenance_hash
-    call = await coordinator.prepare_model_call(parent=retried, model_call_id="retry-call")
+    call = await coordinator.commit_model_call(await coordinator.capture_model_call(parent=retried, model_call_id="retry-call"))
     assert call.parent_execution_snapshot_id == retried.activation_snapshot_id
     assert call.execution_id == retried.execution_id
 
@@ -468,7 +473,7 @@ async def test_turnless_internal_uses_own_execution_and_complete_default_model_c
     )
     assert root.turn_id is None and root.execution_id == "execution-internal"
     assert root.snapshot_kind == "execution" and root.bindings == ()
-    call = await coordinator.prepare_model_call(parent=root, model_call_id="internal-call")
+    call = await coordinator.commit_model_call(await coordinator.capture_model_call(parent=root, model_call_id="internal-call"))
     assert call.turn_id is None and call.execution_id == root.execution_id
     assert call.parent_execution_snapshot_id == root.activation_snapshot_id
     assert len(call.bindings) == 2
@@ -489,9 +494,9 @@ async def test_task_local_scope_passes_only_matching_frozen_root_and_resets() ->
             require_current_execution_resource_activation(
                 _admission("turn-other", execution_id="execution-other"),
             )
-        call = await _coordinator(_registry(), _FakeSaver()).prepare_model_call(
+        call = await _coordinator(_registry(), _FakeSaver()).commit_model_call(await _coordinator(_registry(), _FakeSaver()).capture_model_call(
             parent=root, model_call_id="scope-model-call",
-        )
+        ))
         with pytest.raises(ValueError, match="admission 不一致"):
             set_current_execution_resource_activation(call, admission=admission)
     finally:

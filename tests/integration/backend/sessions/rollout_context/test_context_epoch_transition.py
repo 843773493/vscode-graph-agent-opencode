@@ -7,7 +7,7 @@ import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from copy import deepcopy
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -29,7 +29,6 @@ from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.epoch.prefix_epoch import (
     EpochReason,
     ProviderProfileChangeRequiresRebuildError,
-    seal_assembly,
 )
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import (
@@ -55,9 +54,6 @@ from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protoc
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_context.fork.remap_state import (
-    localize_full_copy_seal_bindings,
-)
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
 )
@@ -68,6 +64,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     SkillCatalogBinding,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.integration.backend.sessions.itemized_projection_helpers import (
+    copy_rollout_snapshot,
+)
 
 AGENTS_URI = "boxteam://workspace/agent-spec/epoch-test"
 SKILL_URI = "boxteam://workspace/test/resources/skills/debugging/SKILL.md"
@@ -152,7 +151,9 @@ class EpochCase:
         checkpoint["channel_values"] = {"messages": [self.user] if messages is None else messages}
         if compaction:
             checkpoint["channel_values"]["_summarization_event"] = {
-                "id": key, "cutoff_message_id": self.user.id,
+                "cutoff_index": len(checkpoint["channel_values"]["messages"]),
+                "cutoff_message_id": checkpoint["channel_values"]["messages"][-1].id,
+                "summary_message": HumanMessage(content="已完成的对话摘要", id=f"summary-{key}"),
             }
         checkpoint["channel_versions"] = {name: key for name in checkpoint["channel_values"]}
         checkpoint["updated_channels"] = list(checkpoint["channel_values"])
@@ -1277,7 +1278,7 @@ def test_desired_provider_profile_switch_requires_actual_rebuild(epoch_case):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source_phase", ["pending", "consumed", "continued"])
-async def test_full_copy_localizes_versions_transition_and_prefix_before_target_seal(
+async def test_full_copy_preserves_original_versions_transition_and_prefix(
     epoch_case, session_bundle_factory, monkeypatch, source_phase,
 ):
     case = epoch_case
@@ -1291,10 +1292,11 @@ async def test_full_copy_localizes_versions_transition_and_prefix_before_target_
     original_bytes = tuple(canonical_json_bytes(value.to_dict()) for value in originals)
     source_states, source_pending = case.source_rows(), case.pending_rows()
     source_versions = case.checkpoint_versions()
+    source_checkpoint_ids = {row[0] for row in source_versions[0]}
     source_control_payloads = case.connection.execute(
         "SELECT * FROM context_source_control_states ORDER BY source_id"
     ).fetchall()
-    # fixture 的原 Turn 尚未 final；full copy 只保留其取消后的历史，不能续 dispatch。
+    # fixture 的原 Turn 尚未 final；full copy 保留原历史状态，目标不能续 dispatch。
     assert case.connection.execute(
         "SELECT final_item_id FROM turn_records WHERE turn_id=?", (case.accepted["turn_id"],),
     ).fetchone() == (None,)
@@ -1305,205 +1307,37 @@ async def test_full_copy_localizes_versions_transition_and_prefix_before_target_
     original_jsonl = source_jsonl.read_bytes()
     target_session = f"ses_{create_uuid_hex()}"
     session_bundle_factory(case.saver._storage.storage.sessions_dir, target_session)
-    await case.saver.forks.afork(
-        source_session_id=case.owner.session_id, target_session_id=target_session,
-        mode="full_rollout_copy",
-    )
-    saver = case.stack.enter_context(RolloutCheckpointSaver(
-        case.saver._storage.storage.sessions_dir,
-    ))
-    target_thread = saver._storage.storage.main_thread_id(target_session)
-    connection = case.stack.enter_context(saver._storage.storage._connect(
-        target_thread, "", session_id=target_session,
-    ))
-    assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
-    mappings = {
-        (kind, source): target
-        for kind, source, target in connection.execute(
-            "SELECT entity_type, source_local_id, target_local_id FROM fork_identity_mappings"
-        ).fetchall()
-    }
-    owner = ContextSourceOwnerKey(target_session, target_thread)
-    for table in (
-        "context_source_control_states", "checkpoint_context_source_snapshots",
-        "checkpoint_context_source_states",
-    ):
-        assert connection.execute(
-            f"SELECT DISTINCT session_id, thread_id FROM {table}"
-        ).fetchall() == [(owner.session_id, owner.thread_id)]
-    assert connection.execute(
-        "SELECT source_id FROM context_source_control_states ORDER BY source_id"
-    ).fetchall() == [("agents:workspace",), ("skill:debugging",)]
-    assert connection.execute(
-        "SELECT * FROM context_source_control_states ORDER BY source_id"
-    ).fetchall() == [(owner.session_id, owner.thread_id, *row[2:]) for row in source_control_payloads]
-    target_versions = tuple(connection.execute(query).fetchall() for query in (
-        "SELECT * FROM checkpoint_context_source_snapshots ORDER BY checkpoint_id",
-        "SELECT * FROM checkpoint_context_source_states ORDER BY checkpoint_id, source_id",
-    ))
-    assert target_versions[0] == sorted((
-        mappings["checkpoint", row[0]], row[1], owner.session_id, owner.thread_id, row[4],
-        None if row[5] is None else mappings["assembly", row[5]], row[6],
-    ) for row in source_versions[0])
-    assert target_versions[1] == sorted((
-        mappings["checkpoint", row[0]], owner.session_id, owner.thread_id, *row[3:],
-    ) for row in source_versions[1])
-    for checkpoint, assembly in connection.execute(
-        "SELECT checkpoint_id, source_assembly_id FROM checkpoint_context_source_snapshots"
-    ).fetchall():
-        assert checkpoint in {target for (kind, _source), target in mappings.items() if kind == "checkpoint"}
-        assert assembly in {target for (kind, _source), target in mappings.items() if kind == "assembly"}
-    (transition,) = connection.execute(
-        "SELECT transition_id, source_checkpoint_id, target_view_id, status, consumed_assembly_id "
-        "FROM context_epoch_transitions"
-    ).fetchall()
-    assert transition[0] == mappings["epoch_transition", source_pending[0][0]]
-    assert transition[1] == mappings["checkpoint", "checkpoint-first"]
-    assert transition[2] == mappings["view", source_pending[0][1]]
-    assert transition[3] == source_pending[0][3]
-    assert transition[4] == (
-        None if source_phase == "pending" else mappings["assembly", prepared[2]["assembly_id"]]
-    )
-    copies = {}
-    for original in originals:
-        copied = saver.get_context_assembly(
-            target_session, target_thread,
-            assembly_id=mappings["assembly", original.assembly_id],
-        )
-        copied.validate_hashes()
-        assert copied.turn_id == mappings["turn", original.turn_id]
-        assert connection.execute(
-            "SELECT status FROM turn_records WHERE turn_id=?", (copied.turn_id,),
-        ).fetchone() == ("cancelled",)
-        binding = copied.seal_binding
-        assert binding.tool_set_snapshot_id == mappings["tool_set", original.seal_binding.tool_set_snapshot_id]
-        assert binding.previous_assembly_id == (
-            None if original.seal_binding.previous_assembly_id is None
-            else mappings["assembly", original.seal_binding.previous_assembly_id]
-        )
-        assert binding.prefix.state.parent.assembly_id == copied.assembly_id
-        assert binding.prefix.prefix_hash != original.seal_binding.prefix.prefix_hash
-        assert tuple(source.source_identity for source in binding.root.sources) == ("agents:workspace",)
-        for frame in binding.prefix.state.frames:
-            if frame.item_ref.ref_type == "canonical_item":
-                assert all(item_id in {target for (kind, _source), target in mappings.items() if kind == "item"}
-                           for item_id in frame.content["item_ids"])
-        if binding.prefix.parent is not None:
-            assert binding.prefix.parent == copies[original.seal_binding.previous_assembly_id].seal_binding.prefix.state.parent
-        if binding.prefix.consumed_transition is not None:
-            assert binding.prefix.consumed_transition.transition_id == transition[0]
-            assert binding.prefix.consumed_transition.consumed
-        copies[original.assembly_id] = copied
-    accepted = saver.accept_turn(
-        target_session, thread_id=target_thread, accepted_ingress_id="target-epoch-ingress",
-        acceptance_idempotency_key="target-epoch-acceptance", job_id="target-epoch-job",
-        admission_idempotency_key="target-epoch-admission", payload="目标工作区的真实下一轮",
-        payload_kind="text", root_item_id="item-target-epoch-ingress",
-    )
-    target = EpochCase(
-        saver, owner, connection, accepted, case.wire, case.activation,
-        PublishedResourceOwner(snapshots=dict(case.publisher.snapshots)), case.descriptors, case.stack,
-    )
-    target.bind_manager()
-    next_prepared = target.prepare("target-first")
-    next_snapshot = target.snapshot(next_prepared)
-    assert next_snapshot.turn_id == accepted["turn_id"]
-    assert all(next_snapshot.turn_id != copied.turn_id for copied in copies.values())
-    assert next_snapshot.seal_binding.previous_assembly_id == copies[originals[-1].assembly_id].assembly_id
-    assert next_snapshot.seal_binding.prefix.state.epoch.ordinal == 2
-    if source_phase == "pending":
-        assert next_snapshot.seal_binding.prefix.consumed_transition.transition_id == transition[0]
-        assert target.pending_rows()[0][3:] == ("consumed", next_snapshot.assembly_id)
-        assert target.publisher.reads == [AGENTS_URI, SKILL_URI]
-    else:
-        assert next_snapshot.seal_binding.prefix.consumed_transition is None
-        assert next_snapshot.seal_binding.prefix.parent == copies[originals[-1].assembly_id].seal_binding.prefix.state.parent
-        assert target.publisher.reads == []
-    assert all(row[2] == row[3] for row in target.source_rows())
-    next_bytes = canonical_json_bytes(next_snapshot.to_dict())
-    target.restart()
-
-    def refuse_live_inputs(*_args):
-        pytest.fail("目标已 sealed 的同 attempt 重开重试不得重冻 published source/desired ToolSet")
-
-    monkeypatch.setattr(target.publisher, "snapshot", refuse_live_inputs)
-    retried = target.prepare("target-first", supplier=refuse_live_inputs)
-    assert retried["assembly_id"] == next_prepared["assembly_id"]
-    assert canonical_json_bytes(target.snapshot(retried).to_dict()) == next_bytes
+    await copy_rollout_snapshot(case.saver, case.owner.session_id, target_session)
+    with RolloutCheckpointSaver(case.saver._storage.storage.sessions_dir) as saver:
+        target_thread = saver._storage.storage.main_thread_id(target_session)
+        with saver._storage.storage.read_connection(target_session, target_thread, "") as connection:
+            assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+            assert connection.execute("SELECT * FROM context_source_control_states ORDER BY source_id").fetchall() == source_control_payloads
+            versions = tuple(connection.execute(query).fetchall() for query in (
+                "SELECT * FROM checkpoint_context_source_snapshots ORDER BY checkpoint_id",
+                "SELECT * FROM checkpoint_context_source_states ORDER BY checkpoint_id,source_id",
+            ))
+            assert [row for row in versions[0] if row[0] in source_checkpoint_ids] == list(source_versions[0])
+            assert [row for row in versions[1] if row[0] in source_checkpoint_ids] == list(source_versions[1])
+            (target_head,) = connection.execute(
+                "SELECT branch.head_checkpoint_id FROM checkpoint_namespace_state AS namespace "
+                "JOIN branches AS branch ON branch.branch_id=namespace.active_branch_id "
+                "WHERE namespace.checkpoint_ns=''"
+            ).fetchone()
+            assert target_head not in source_checkpoint_ids
+            target_head_headers = tuple(row for row in versions[0] if row[0] == target_head)
+            assert len(target_head_headers) == 1
+            assert target_head_headers[0][1:6] == ("", target_session, target_thread, 0, None)
+            assert all(row[0] != target_head for row in versions[1])
+            assert len(versions[0]) == len(source_checkpoint_ids) + 1
+            assert connection.execute("SELECT transition_id,target_view_id,source_checkpoint_id,status,consumed_assembly_id FROM context_epoch_transitions").fetchall() == case.connection.execute("SELECT transition_id,target_view_id,source_checkpoint_id,status,consumed_assembly_id FROM context_epoch_transitions").fetchall()
+        for original in originals:
+            restored = saver.get_context_assembly(target_session, target_thread, assembly_id=original.assembly_id)
+            assert canonical_json_bytes(restored.to_dict()) == canonical_json_bytes(original.to_dict())
+        with pytest.raises(ValueError, match="turn_not_resumable"):
+            saver.dispatch_replay(target_session, thread_id=target_thread, turn_id=case.accepted["turn_id"])
     assert source_jsonl.read_bytes() == original_jsonl
     assert tuple(canonical_json_bytes(case.snapshot(value).to_dict()) for value in prepared) == original_bytes
     assert case.source_rows() == source_states and case.pending_rows() == source_pending
     assert case.checkpoint_versions() == source_versions
     assert tuple(case.publisher.reads) == source_reads
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("broken", ["missing_parent", "missing_predecessor", "wrong_parent"])
-async def test_full_copy_rejects_broken_prefix_dependency_without_installing_target(
-    epoch_case, session_bundle_factory, monkeypatch, broken,
-):
-    """真实 afork 的 localizer 拒绝与持久回滚；不替代 source ingress 校验。"""
-    case = epoch_case
-    case.checkpoint("negative-parent-tail", messages=[
-        case.user, AIMessage(content="同 epoch 新增的真实 assistant", id="negative-parent-assistant"),
-    ])
-    continued = case.prepare("same-epoch-negative")
-    latest = case.snapshot(continued)
-    assert latest.seal_binding.prefix.parent is not None
-    source_index = case.saver._storage.storage.index_path(
-        case.owner.session_id, "", thread_id=case.owner.thread_id,
-    )
-    source_jsonl = case.saver._storage.storage.jsonl_path(
-        case.owner.session_id, "", thread_id=case.owner.thread_id,
-    )
-    before_database, before_jsonl = source_index.read_bytes(), source_jsonl.read_bytes()
-    before_rows = tuple(case.connection.execute(query).fetchall() for query in (
-        "SELECT * FROM control_events ORDER BY control_sequence",
-        "SELECT * FROM context_assemblies ORDER BY assembly_id",
-        "SELECT * FROM context_source_control_states ORDER BY source_id",
-        "SELECT * FROM context_epoch_transitions ORDER BY transition_id",
-    ))
-    target_session = f"ses_{create_uuid_hex()}"
-    session_bundle_factory(case.saver._storage.storage.sessions_dir, target_session)
-    target_thread = case.saver._storage.storage.main_thread_id(target_session)
-    target_rollout = case.saver._storage.storage.root(target_session, "", thread_id=target_thread)
-    assert not target_rollout.exists()
-    seen = []
-
-    def inject_broken_binding(state, sources):
-        seen.append(state.target_session_id)
-        source = sources[latest.assembly_id]
-        changed = dict(sources)
-        if broken == "missing_predecessor":
-            del changed[source.previous_assembly_id]
-        elif broken == "wrong_parent":
-            previous = sources[source.previous_assembly_id]
-            changed[source.previous_assembly_id] = replace(
-                previous, prefix=seal_assembly(
-                    replace(previous.prefix.state, frames=source.prefix.state.frames, parent=None),
-                    assembly_id=source.previous_assembly_id,
-                ),
-            )
-        else:
-            changed[latest.assembly_id] = replace(source, prefix=replace(source.prefix, parent=None))
-        return localize_full_copy_seal_bindings(state, changed)
-
-    monkeypatch.setattr(
-        "app.services.infrastructure.rollout_context.fork.sql.catalog.localize_full_copy_seal_bindings",
-        inject_broken_binding,
-    )
-    with pytest.raises(RuntimeError, match="source-mismatch"):
-        await case.saver.forks.afork(
-            source_session_id=case.owner.session_id, target_session_id=target_session,
-            mode="full_rollout_copy",
-        )
-    assert seen == [target_session]
-    assert not target_rollout.exists()
-    assert source_index.read_bytes() == before_database
-    assert source_jsonl.read_bytes() == before_jsonl
-    assert tuple(case.connection.execute(query).fetchall() for query in (
-        "SELECT * FROM control_events ORDER BY control_sequence",
-        "SELECT * FROM context_assemblies ORDER BY assembly_id",
-        "SELECT * FROM context_source_control_states ORDER BY source_id",
-        "SELECT * FROM context_epoch_transitions ORDER BY transition_id",
-    )) == before_rows

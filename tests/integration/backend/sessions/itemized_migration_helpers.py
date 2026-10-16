@@ -59,6 +59,7 @@ def _write_v1_source(
         / "rollout"
     )
     rollout_root.mkdir(parents=True, exist_ok=True)
+    (rollout_root.parent / ".rollout.write.lock").touch()
     source_lines = [
         (
             json.dumps(

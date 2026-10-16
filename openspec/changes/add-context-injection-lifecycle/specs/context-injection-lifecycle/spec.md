@@ -850,7 +850,7 @@ target workspace MUST 使用单一`InboxAdmissionWorker`在acceptance提交事�
 
 旧开发期跨Session team/member/task/coordinator与delegated Session数据按用户授权直接清理；系统 SHALL只接受同Session child-thread协作和当前格式，不新增旧board迁移、物化或freeze/detach兼容入口。新格式创建、同事务发布、同版本重启和删除恢复仍须完整验证。
 
-公开`context_fork|history_prefix_fork|full_rollout_copy`的SourceCopySnapshot、source capture、target publication、pinned retention和attachment claim/settlement协议，以`add-itemized-rollout-context/specs/checkpoint-context-branching/spec.md`的现行要求为唯一owner；仅同Workspace，保持target-local身份、固定revision及source/target不重叠的锁阶段，完整保留各崩溃点、删除双顺序与GC验证。
+公开fork的范围、历史身份/快照归属、URI目标、本地/跨端capture与publication、pinned及资源claim/settlement，以`add-itemized-rollout-context/specs/checkpoint-context-branching/spec.md`现行requirements为唯一owner；资源属性检查引用统一寻址owner，保固定revision、原历史事实、删除/GC恢复和两端不重叠gate，不复述逐项remap或同Workspace限制。
 
 #### Scenario: copy attachment claim 跨 source 删除保持正文
 
@@ -862,7 +862,7 @@ target workspace MUST 使用单一`InboxAdmissionWorker`在acceptance提交事�
 - **WHEN**target已经发布但claim仍为owner_reserved，target Session删除与finalizer竞争同一gate
 - **THEN**finalizer先行时完成全部claim commit并把copy record推进成功终态`committed`后才释放gate；删除先行时排空流程释放reserved claim/ref，或验证committed claim归属后持久释放其target owner ref，再把copy record推进终态`target_deleted`，后续copy recovery不得重建或保留owner ref、恢复active或把已删除target报告为可用
 
-`pinned` fork MUST在capture前建立source-local durable retention claim。target creation/fork journal先预分配operation/preimage，随后在不持target gate/事务时先取得workspace topology shared gate、再取得source exclusive gate，于source `session-control.sqlite` create-or-get绑定fork、两侧GlobalThreadAddress、target operation/preimage、source generation与view/detail范围的`ForkRetentionClaim(state=preparing)`和retention占位。source删除先提交catalog deleting则claim不得建立；claim先提交则删除 MUST在整树catalog deleting前返回`source_retention_operation_pending|source_retained_by_fork`。target提交后另取source gate只激活同一claim，不能首次补写。abort/target删除先持久化target release intent并释放target gate，再单独取得source gate释放claim，最后确认target terminal；preparing claim无墙钟过期，record缺失/冲突fail closed。copy/fork仅限同一workspace，federated grant不得执行远端fork、打开远端业务库或修改retention。
+pinned、source capture、resource claim/settlement及目标删除的现行合同 MUST 具名消费 itemized checkpoint-context-branching 的 fork requirements；本 capability 只接入对应 lease/fence 与恢复通知，不复述本地或跨端复制协议，不将 send/read/wait grant 升级为 fork 授权。
 
 `ForkRetentionClaim`自身 MUST按`operation_kind=fork_retention`承担完整Session operation lease并与retention占位原子提交，不得另建平行lease。
 

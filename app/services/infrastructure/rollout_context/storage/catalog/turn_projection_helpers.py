@@ -14,25 +14,19 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 
 
 def _finalize_activity_projection(projection: dict[str, object]) -> None:
-    """从后端已解析的逻辑 activity item 生成统计与兼容投影。"""
+    """按逻辑 activity 列表计算相邻时间差，首项从 Turn projection.created_at 起算。"""
     activity = projection.get("activity_items")
     if not isinstance(activity, list):
         raise TypeError("Turn activity projection 缺少 activity_items")
-    previous_at = _required_datetime(
-        projection.get("created_at"), field="turn_projection.created_at"
-    )
+    previous_at = projection.get("created_at")
+    _required_datetime(previous_at, field="turn_projection.created_at")
     thinking_blocks: list[dict[str, object]] = []
     tool_items: list[dict[str, object]] = []
     for item in activity:
         if not isinstance(item, dict):
             raise TypeError("activity item projection 必须是对象")
-        created_at = _required_datetime(
-            item.get("created_at"), field="activity_item.created_at"
-        )
-        item["elapsed_ms"] = max(
-            0,
-            int((created_at - previous_at).total_seconds() * 1000),
-        )
+        created_at = item.get("created_at")
+        item["elapsed_ms"] = _item_elapsed_ms(created_at, previous_at)
         previous_at = created_at
         if item.get("kind") in {
             "reasoning",
@@ -85,12 +79,17 @@ def _finalize_activity_projection(projection: dict[str, object]) -> None:
     if not isinstance(activity_stats, dict):
         raise TypeError("Turn activity stats projection 字段不完整")
     activity_stats["item_count"] = len(activity)
-    activity_stats["first_item_sequence"] = (
-        activity[0]["item_sequence"] if activity else None
-    )
-    activity_stats["last_item_sequence"] = (
-        activity[-1]["item_sequence"] if activity else None
-    )
+    # 只从显式活动成员取得本地物理上下界，不用物理坐标推导逻辑顺序或成员。
+    item_sequences = [item["item_sequence"] for item in activity]
+    activity_stats["first_item_sequence"] = min(item_sequences, default=None)
+    activity_stats["last_item_sequence"] = max(item_sequences, default=None)
+
+
+def _item_elapsed_ms(created_at: object, previous_at: object) -> int:
+    """当前与前一创建时刻之差取整数毫秒，负差为 0；两者必须带时区。"""
+    current = _required_datetime(created_at, field="activity_item.created_at")
+    previous = _required_datetime(previous_at, field="activity_item.previous_created_at")
+    return max(0, int((current - previous).total_seconds() * 1000))
 
 
 def _required_datetime(value: object, *, field: str) -> datetime:

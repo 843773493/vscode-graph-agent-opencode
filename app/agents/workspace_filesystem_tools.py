@@ -1,12 +1,19 @@
 import ast
 import asyncio
+import base64
 import json
 import subprocess
 from collections.abc import Awaitable, Callable
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal, cast
 
-from deepagents.backends.utils import format_grep_matches
+from deepagents.backends import CompositeBackend
+from deepagents.backends.protocol import FileData, ReadResult
+from deepagents.backends.utils import (
+    format_content_with_line_numbers,
+    format_grep_matches,
+    slice_read_response,
+)
 from deepagents.middleware.filesystem import FilesystemMiddleware, FilesystemState
 from langchain.tools import ToolRuntime
 from langchain_core.messages import ToolMessage
@@ -14,7 +21,7 @@ from langchain_core.tools import InjectedToolArg, StructuredTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.middleware_prompts import FILESYSTEM_TOOL_DESCRIPTIONS
-from app.agents.workspace_backend import SessionArtifactBackend
+from app.agents.workspace_backend import SESSION_ARTIFACT_ROUTE, SessionArtifactBackend
 from app.agents.workspace_tool_paths import (
     WorkspaceToolPathResolver,
     backend_virtual_to_workspace_relative,
@@ -144,7 +151,7 @@ def _tool_implementations(
 def _path_error(
     tool_name: str,
     runtime: ToolRuntime[None, FilesystemState],
-    error: ValueError,
+    error: OSError | RuntimeError | ValueError,
 ) -> ToolMessage:
     return ToolMessage(
         content=f"Error: {error}",
@@ -207,32 +214,39 @@ def _runtime_path_error(tool_name: str, relative_path: str) -> ValueError:
     )
 
 
-def _is_session_attachment_path(relative_path: str) -> bool:
-    """判断路径是否为会话附件目录下的一级文件。
-
-    用户附件的 canonical content 会向模型注入 ``path`` 属性，该属性指向
-    ``.boxteam/sessions/<folder>/<session>/attachments/<file>``。附件是模型
-    合法输入，因此 ``read_file`` 必须允许读取这一精确位置；其余 ``.boxteam``
-    运行时数据（logs、rollout、message stream 等）仍然禁止访问。
-    """
-    parts = PurePosixPath(relative_path).parts
-    if len(parts) < 5 or parts[0] != ".boxteam" or parts[1] != "sessions":
-        return False
-    return parts[-2] == "attachments" and parts[-1] not in {"", ".", ".."}
-
-
 def _validate_model_path(
     tool_name: str,
     relative_path: str,
-    *,
-    allow_attachment_paths: bool = False,
 ) -> str:
     parts = PurePosixPath(relative_path).parts
+    if len(parts) >= 3 and parts[0] == "session-artifacts" and parts[2] == "attachments" and tool_name != "read_file":
+        raise ValueError(f"{tool_name} 不提供附件写入或枚举 capability")
     if not parts or parts[0] != ".boxteam":
         return relative_path
-    if allow_attachment_paths and _is_session_attachment_path(relative_path):
-        return relative_path
     raise _runtime_path_error(tool_name, relative_path)
+
+
+def _read_attachment_message(
+    backend: SessionArtifactBackend, relative_path: str,
+    runtime: ToolRuntime[None, FilesystemState], line_offset: int, max_lines: int,
+) -> ToolMessage:
+    """逻辑附件按 catalog MIME 投影；文本分页复用 DeepAgents 文件格式化。"""
+    try:
+        content = backend.read_attachment(relative_path.removeprefix("session-artifacts/"))
+        mime_type = content.content_type
+        if mime_type.startswith("text/") or mime_type in {"application/json", "application/xml", "application/javascript"}:
+            sliced = slice_read_response(FileData(content=content.data.decode("utf-8"), encoding="utf-8"), line_offset - 1, max_lines)
+            if isinstance(sliced, ReadResult):
+                return _path_error("read_file", runtime, ValueError(sliced.error))
+            return ToolMessage(content=format_content_with_line_numbers(sliced, start_line=line_offset), name="read_file", tool_call_id=runtime.tool_call_id, status="success")
+        media_type = mime_type.split("/", 1)[0]
+        return ToolMessage(
+            content_blocks=[{"type": media_type if media_type in {"image", "audio", "video"} else "file", "base64": base64.b64encode(content.data).decode("ascii"), "mime_type": mime_type}],
+            name="read_file", tool_call_id=runtime.tool_call_id, status="success",
+            additional_kwargs={"read_file_path": relative_path, "read_file_media_type": mime_type},
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        return _path_error("read_file", runtime, error)
 
 
 def _validate_glob_pattern(pattern: str) -> None:
@@ -448,7 +462,13 @@ def configure_workspace_filesystem_tools(
     """将 DeepAgents 文件工具适配为模型可见的标准相对路径协议。"""
 
     resolver = WorkspaceToolPathResolver(workspace_root)
-    session_artifact_backend = SessionArtifactBackend(workspace_root)
+    session_artifact_backend = (
+        middleware.backend.routes[SESSION_ARTIFACT_ROUTE]
+        if isinstance(middleware.backend, CompositeBackend)
+        else SessionArtifactBackend(workspace_root)
+    )
+    if not isinstance(session_artifact_backend, SessionArtifactBackend):
+        raise TypeError("Session artifacts route 必须由唯一 SessionArtifactBackend 装配")
     implementations = {
         name: _tool_implementations(middleware, name)
         for name in ("ls", "read_file", "write_file", "edit_file", "glob")
@@ -457,8 +477,6 @@ def configure_workspace_filesystem_tools(
     def resolve_paths(
         tool_name: str,
         path: str,
-        *,
-        allow_attachment_paths: bool = False,
     ) -> tuple[str, str]:
         """统一模型相对路径与后端虚拟路径的规范化。
 
@@ -467,11 +485,7 @@ def configure_workspace_filesystem_tools(
         与各工具原有实现逐字一致。
         """
         relative_path = resolver.normalize_relative_path(path)
-        _validate_model_path(
-            tool_name,
-            relative_path,
-            allow_attachment_paths=allow_attachment_paths,
-        )
+        _validate_model_path(tool_name, relative_path)
         return relative_path, resolver.backend_virtual_path(path)
 
     def sync_ls(
@@ -508,10 +522,12 @@ def configure_workspace_filesystem_tools(
             relative_path, backend_path = resolve_paths(
                 "read_file",
                 path,
-                allow_attachment_paths=True,
             )
         except ValueError as error:
             return _path_error("read_file", runtime, error)
+        parts = PurePosixPath(relative_path).parts
+        if len(parts) >= 3 and parts[0] == "session-artifacts" and parts[2] == "attachments":
+            return _read_attachment_message(session_artifact_backend, relative_path, runtime, line_offset, max_lines or DEFAULT_MAX_LINES)
         result = implementations["read_file"][0](
             file_path=backend_path,
             runtime=runtime,
@@ -534,10 +550,12 @@ def configure_workspace_filesystem_tools(
             relative_path, backend_path = resolve_paths(
                 "read_file",
                 path,
-                allow_attachment_paths=True,
             )
         except ValueError as error:
             return _path_error("read_file", runtime, error)
+        parts = PurePosixPath(relative_path).parts
+        if len(parts) >= 3 and parts[0] == "session-artifacts" and parts[2] == "attachments":
+            return await asyncio.to_thread(_read_attachment_message, session_artifact_backend, relative_path, runtime, line_offset, max_lines or DEFAULT_MAX_LINES)
         result = await implementations["read_file"][1](
             file_path=backend_path,
             runtime=runtime,

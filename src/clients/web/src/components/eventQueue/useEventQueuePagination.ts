@@ -1,13 +1,13 @@
 import React from "react";
 
-import { useScrollWindow } from "./useScrollWindow";
+import { useScrollWindow, type ScrollWindowLoadTicket } from "./useScrollWindow";
 
 const INITIAL_VISIBLE_EVENT_COUNT = 30;
 const OLDER_EVENT_BATCH_SIZE = 30;
 
 export function useEventQueuePagination({
   active,
-  sessionId,
+  scopeKey,
   displayItemCount,
   historyLoading,
   historyLoadingOlder,
@@ -15,7 +15,7 @@ export function useEventQueuePagination({
   onLoadOlderHistory,
 }: {
   active: boolean;
-  sessionId: string;
+  scopeKey: string;
   displayItemCount: number;
   historyLoading: boolean;
   historyLoadingOlder: boolean;
@@ -33,33 +33,40 @@ export function useEventQueuePagination({
     revealOlderItems,
   } = useScrollWindow({
     active,
-    sessionId,
+    scopeKey,
     itemCount: displayItemCount,
     initialVisibleCount: INITIAL_VISIBLE_EVENT_COUNT,
     olderBatchSize: OLDER_EVENT_BATCH_SIZE,
     onExhaustedOlderItems: () => void loadOlderHistory(),
   });
-  const serverLoadInFlightRef = React.useRef(false);
+  const serverLoadInFlightRef = React.useRef<ScrollWindowLoadTicket | null>(null);
 
   const loadOlderHistory = React.useCallback(async () => {
     const list = listRef.current;
     if (
       !list
-      || serverLoadInFlightRef.current
       || historyLoading
       || historyLoadingOlder
       || !historyHasMore
     ) return;
-    serverLoadInFlightRef.current = true;
-    // 归属凭证在发起请求时确定：会话切换或窗口重置后返回的旧页必须被丢弃。
+    // 归属凭证在发起请求时确定：诊断作用域切换或窗口重置后返回的旧页必须被丢弃。
     const ticket = beginOlderLoad();
+    const currentTicket = serverLoadInFlightRef.current;
+    if (
+      currentTicket
+      && currentTicket.scopeKey === ticket.scopeKey
+      && currentTicket.generation === ticket.generation
+    ) return;
+    serverLoadInFlightRef.current = ticket;
     captureScrollAnchor();
     try {
       const added = await onLoadOlderHistory();
       if (added > 0) appendVisibleCount(added, ticket);
       else discardScrollAnchor(ticket);
     } finally {
-      serverLoadInFlightRef.current = false;
+      if (serverLoadInFlightRef.current === ticket) {
+        serverLoadInFlightRef.current = null;
+      }
     }
   }, [
     beginOlderLoad,

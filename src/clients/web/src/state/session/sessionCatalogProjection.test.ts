@@ -4,6 +4,7 @@ import {
   addCatalogOutboxIntent,
   assignCatalogOutboxOperationSequence,
   applyCatalogOutboxReceipts,
+  catalogOutboxParentCreation,
   createCatalogOutbox,
   markCatalogOutboxOperationPersisted,
   type CatalogOutbox,
@@ -13,6 +14,7 @@ import {
   projectCatalogBranch,
   projectCatalogBreadcrumb,
   projectCatalogSearch,
+  projectPendingCatalogChildren,
 } from "./sessionCatalogProjection";
 import type { SessionCatalogOperationReceipt } from "../../api/session/sessionCatalogOperations";
 
@@ -68,7 +70,7 @@ function receipt(
     committed_catalog_revision: null,
     error_code: null,
     error_detail: null,
-    pending_settlement: false,
+    settlement: null,
     receipt_revision: 1,
     updated_at: "2026-09-24T00:00:00Z",
     ...overrides,
@@ -197,7 +199,7 @@ describe("会话目录 pending 投影：新建 Folder 的 client_ref", () => {
     expect(projection.items[0].pending_state).toBe("pending_local");
   });
 
-  test("拿到 canonical ID 后 client_ref 清空，投影只保留一个 node", () => {
+  test("预留 canonical ID 保留创建引用和子项，直到 confirmed DTO 接管", () => {
     let outbox = outboxWith((base) => addCatalogOutboxIntent(
       base,
       opId("f"),
@@ -217,7 +219,39 @@ describe("会话目录 pending 投影：新建 Folder 的 client_ref", () => {
       outbox,
     });
     expect(projection.items.map((item) => item.node_id)).toEqual(["cnode_new"]);
-    expect(projection.items[0].client_ref).toBeNull();
+    expect(projection.items[0].client_ref).toBe(opId("f"));
+    expect(projection.items[0].folder_id).toBeNull();
+    expect(projection.items[0].pending_state).toBe("accepted");
+    const parent = { parentNodeId: null, createdBy: opId("f") };
+    expect(catalogOutboxParentCreation(outbox, opId("f"))).toEqual(parent);
+    expect(catalogOutboxParentCreation(outbox, "cnode_new")).toEqual(parent);
+    outbox = addCatalogOutboxIntent(outbox, opId("child"), {
+      kind: "create_folder", name: "子文件夹", parentCreatedByOperationId: parent.createdBy,
+    }, { baseCatalogRevision: 0 });
+    expect(projectPendingCatalogChildren("cnode_new", { confirmedNodes: [], outbox }).items
+      .map((item) => [item.name, item.parent_node_id])).toEqual([["子文件夹", "cnode_new"]]);
+
+    outbox = applyCatalogOutboxReceipts(outbox, [receipt(opId("f"), {
+      kind: "create_folder", state: "committed", created_node_id: "cnode_new",
+      committed_catalog_revision: 4, receipt_revision: 2,
+    })]);
+    const beforeConfirmed = projectCatalogBranch(confirmed, { confirmedNodes: [], outbox });
+    expect(beforeConfirmed.items[0].client_ref).toBe(opId("f"));
+    expect(beforeConfirmed.items[0].folder_id).toBeNull();
+    expect(beforeConfirmed.items[0].pending_state).toBe("committed");
+    expect(projectPendingCatalogChildren("cnode_new", { confirmedNodes: [], outbox }).items)
+      .toHaveLength(1);
+    expect(catalogOutboxParentCreation(outbox, opId("f")))
+      .toEqual({ parentNodeId: "cnode_new", createdBy: null });
+    const committed = page([node({
+      node_id: "cnode_new", folder_id: "cnode_new", name: "新文件夹",
+    })], "cnode_root");
+    const afterConfirmed = projectCatalogBranch(committed, { confirmedNodes: committed.items, outbox });
+    expect(afterConfirmed.items.map((item) => item.node_id)).toEqual(["cnode_new"]);
+    expect(afterConfirmed.items[0].client_ref).toBeNull();
+    expect(afterConfirmed.items[0].folder_id).toBe("cnode_new");
+    expect(() => projectPendingCatalogChildren("cnode_new", { confirmedNodes: committed.items, outbox }))
+      .toThrow("本地父 Folder 不存在或已经提交");
   });
 
   test("新建 Folder 已被后端提交进 confirmed 时不重复投影", () => {

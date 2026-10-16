@@ -26,23 +26,97 @@ test("Node Protobuf 生成结果保留跨文件 import 与 oneof", () => {
 });
 
 
-test("公开诊断字段没有真实定位，通信目标只保留一个 destination", async () => {
+test("公开诊断字段没有真实定位，通信目标的三种 destination 均可往返", async () => {
+  const [workspaceBinding, webBinding] = await Promise.all([
+    import("../../src/workspace-services/protocol/generated/boxteam/workspace/v2/public_pb.js"),
+    import("../../src/clients/web/src/types/protocol_buf_generated/boxteam/workspace/v2/public_pb.js"),
+  ]);
   const {
-    CommunicationGatewayRequestSchema,
     SessionInformationSnapshotDTOSchema,
     SessionInformationWorkspaceDTOSchema,
-  } = await import("../../src/workspace-services/protocol/generated/boxteam/workspace/v2/public_pb.js");
+  } = workspaceBinding;
   expect(SessionInformationSnapshotDTOSchema.fields.map((field) => field.name)).not.toContain("storage_path");
   expect(SessionInformationWorkspaceDTOSchema.fields.map((field) => field.name)).not.toContain("root_path");
-  const target = create(CommunicationGatewayRequestSchema, {
-    operation: "read", destination: {
-      case: "resourceTarget",
-      value: { gatewayId: "gateway-c", resourceIdentity: "resource", uri: "resource-uri", scope: "workspace" },
+
+  for (const binding of [workspaceBinding, webBinding]) {
+    const schema = binding.CommunicationGatewayRequestSchema;
+    expect(schema.fields.find((field) => field.name === "fork_target")?.number).toBe(5);
+    const threadTarget = create(schema, {
+      operation: "send",
+      destination: {
+        case: "target",
+        value: {
+          gatewayId: "gateway-thread", workspaceId: "workspace-thread",
+          sessionId: "session-thread", threadId: "thread-target",
+        },
+      },
+    });
+    const decodedThread = fromBinary(schema, toBinary(schema, threadTarget));
+    expect(decodedThread.destination.case).toBe("target");
+    expect(decodedThread.destination.value.gatewayId).toBe("gateway-thread");
+    expect(decodedThread.destination.value.threadId).toBe("thread-target");
+
+    const resourceTarget = create(schema, {
+      operation: "read",
+      destination: {
+        case: "resourceTarget",
+        value: { gatewayId: "gateway-c", resourceIdentity: "resource", uri: "resource-uri", scope: "workspace" },
+      },
+    });
+    const decodedResource = fromBinary(schema, toBinary(schema, resourceTarget));
+    expect(decodedResource.destination.case).toBe("resourceTarget");
+    expect(decodedResource.destination.value.gatewayId).toBe("gateway-c");
+    expect(decodedResource.destination.value.resourceIdentity).toBe("resource");
+    expect(decodedResource.destination.value.uri).toBe("resource-uri");
+    expect(decodedResource.destination.value.scope).toBe("workspace");
+
+    const forkTarget = create(schema, {
+      operation: "fork.transfer",
+      destination: {
+        case: "forkTarget",
+        value: { gatewayId: "gateway-fork", uri: "boxteam://forks/fork_123/source", forkRole: "source" },
+      },
+    });
+    const decodedFork = fromBinary(schema, toBinary(schema, forkTarget));
+    expect(decodedFork.destination.case).toBe("forkTarget");
+    expect(decodedFork.destination.value.gatewayId).toBe("gateway-fork");
+    expect(decodedFork.destination.value.uri).toBe("boxteam://forks/fork_123/source");
+    expect(decodedFork.destination.value.forkRole).toBe("source");
+  }
+
+  const workspaceSchema = workspaceBinding.CommunicationGatewayRequestSchema;
+  const webSchema = webBinding.CommunicationGatewayRequestSchema;
+  const workspaceFork = create(workspaceSchema, {
+    operation: "fork.transfer",
+    destination: {
+      case: "forkTarget",
+      value: { gatewayId: "gateway-workspace", uri: "boxteam://forks/workspace/source", forkRole: "source" },
     },
   });
-  const decoded = fromBinary(CommunicationGatewayRequestSchema, toBinary(CommunicationGatewayRequestSchema, target));
-  expect(decoded.destination.case).toBe("resourceTarget");
-  expect(decoded.destination.value.gatewayId).toBe("gateway-c");
+  const decodedWorkspaceForkByWeb = fromBinary(
+    webSchema,
+    toBinary(workspaceSchema, workspaceFork),
+  );
+  expect(decodedWorkspaceForkByWeb.destination.case).toBe("forkTarget");
+  expect(decodedWorkspaceForkByWeb.destination.value.gatewayId).toBe("gateway-workspace");
+  expect(decodedWorkspaceForkByWeb.destination.value.uri).toBe("boxteam://forks/workspace/source");
+  expect(decodedWorkspaceForkByWeb.destination.value.forkRole).toBe("source");
+
+  const webFork = create(webSchema, {
+    operation: "fork.transfer",
+    destination: {
+      case: "forkTarget",
+      value: { gatewayId: "gateway-web", uri: "boxteam://forks/web/target", forkRole: "target" },
+    },
+  });
+  const decodedWebForkByWorkspace = fromBinary(
+    workspaceSchema,
+    toBinary(webSchema, webFork),
+  );
+  expect(decodedWebForkByWorkspace.destination.case).toBe("forkTarget");
+  expect(decodedWebForkByWorkspace.destination.value.gatewayId).toBe("gateway-web");
+  expect(decodedWebForkByWorkspace.destination.value.uri).toBe("boxteam://forks/web/target");
+  expect(decodedWebForkByWorkspace.destination.value.forkRole).toBe("target");
 });
 
 

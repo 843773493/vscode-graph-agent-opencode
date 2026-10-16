@@ -83,6 +83,7 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
     remote_gateway_pid: str | None = None
     docker_target: GatewaySshTarget | None = None
     gateway_scope_token = None
+    context_transport: GatewaySessionContextClient | None = None
 
     try:
         docker_target = ensure_gateway_ssh_container(
@@ -313,12 +314,11 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             assert restored_ssh["connection_error"] is None
             assert restored_list["active_workspace_id"] == remote_workspace_id
 
-        context_service = GatewayContextQueryService(
-            transport=GatewaySessionContextClient(
-                gateway_url=f"http://127.0.0.1:{gateway.port}",
-                local_token_supplier=gateway_local_token_supplier,
-            )
+        context_transport = GatewaySessionContextClient(
+            gateway_url=f"http://127.0.0.1:{gateway.port}",
+            local_token_supplier=gateway_local_token_supplier,
         )
+        context_service = GatewayContextQueryService(transport=context_transport)
         gateway_inventory = await context_service.read_gateway_context(
             SessionContextReadRequest(
                 resource_identity=gateway_session_inventory_identity(gateway_id),
@@ -350,6 +350,8 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             for error in offline_search.partial_errors
         )
     finally:
+        if context_transport is not None:
+            await context_transport.aclose()
         if gateway_scope_token is not None:
             reset_current_gateway_id(gateway_scope_token)
         if gateway is not None:

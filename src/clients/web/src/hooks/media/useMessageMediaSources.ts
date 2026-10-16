@@ -50,7 +50,7 @@ export function useMessageMediaSources(
     setErrors(new Map());
 
     void Promise.all(items.map(async (item) => {
-      if (item.kind !== "image") {
+      if (item.kind !== "image" || item.attachment.availability === "unavailable") {
         return;
       }
       if (item.attachment.data_url?.startsWith("data:image/")) {

@@ -5,21 +5,15 @@ import {
   DELIVERY_POLICY_LABELS,
 } from "../deliveryPolicyPresentation";
 
-import type { AttachmentRef, DeliveryPolicy } from "../../types/backend";
+import type { DeliveryPolicy } from "../../types/backend";
 import type { ConversationView } from "../../types/frontend";
 
 function PendingQueueItem({
   conversation,
-  onUpdate,
   onRemove,
   onChangePolicy,
 }: {
   conversation: ConversationView;
-  onUpdate: (
-    messageId: string,
-    content: string,
-    attachments?: AttachmentRef[],
-  ) => Promise<void>;
   onRemove: (messageId: string) => Promise<void>;
   onChangePolicy: (
     messageId: string,
@@ -28,15 +22,11 @@ function PendingQueueItem({
   ) => Promise<void>;
 }): React.ReactNode {
   const userMessage = conversation.userMessage;
-  const [editing, setEditing] = React.useState(false);
   const [directionOpen, setDirectionOpen] = React.useState(false);
-  const [draft, setDraft] = React.useState(userMessage?.content ?? "");
   const [actionRunning, setActionRunning] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    setDraft(userMessage?.content ?? "");
-    setEditing(false);
     setDirectionOpen(false);
     setError(null);
   }, [userMessage?.content, userMessage?.message_id]);
@@ -58,18 +48,6 @@ function PendingQueueItem({
     }
   };
 
-  const saveEdit = async () => {
-    const content = draft.trim();
-    if (!content && (userMessage.attachments?.length ?? 0) === 0) {
-      setError("排队消息不能为空");
-      return;
-    }
-    await runAction(async () => {
-      await onUpdate(userMessage.message_id, content, userMessage.attachments ?? []);
-      setEditing(false);
-    });
-  };
-
   return (
     <div
       className="chat-pending-composer-item"
@@ -81,27 +59,9 @@ function PendingQueueItem({
         <span className="chat-pending-composer-item-icon" aria-hidden="true">
           <span className="codicon codicon-arrow-right" />
         </span>
-        {editing ? (
-          <textarea
-            className="chat-pending-composer-editor"
-            aria-label="编辑排队消息"
-            value={draft}
-            autoFocus
-            disabled={actionRunning}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") setEditing(false);
-              if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-                event.preventDefault();
-                void saveEdit();
-              }
-            }}
-          />
-        ) : (
-          <span className="chat-pending-composer-item-content">
-            {userMessage.content || "（附件消息）"}
-          </span>
-        )}
+        <span className="chat-pending-composer-item-content">
+          {userMessage.content || "（附件消息）"}
+        </span>
         <div className="chat-pending-composer-item-actions">
           <button
             type="button"
@@ -123,17 +83,6 @@ function PendingQueueItem({
             onClick={() => void runAction(() => onRemove(userMessage.message_id))}
           >
             <span className="codicon codicon-trash" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="chat-pending-icon-button"
-            disabled={actionRunning}
-            title={editing ? "收起编辑" : "编辑排队消息"}
-            aria-label={editing ? "收起编辑" : "编辑排队消息"}
-            aria-expanded={editing}
-            onClick={() => setEditing((open) => !open)}
-          >
-            <span className="codicon codicon-ellipsis" aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -161,25 +110,6 @@ function PendingQueueItem({
           ))}
         </div>
       ) : null}
-      {editing ? (
-        <div className="chat-pending-composer-edit-actions">
-          <button
-            type="button"
-            disabled={actionRunning}
-            onClick={() => setEditing(false)}
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            className="primary"
-            disabled={actionRunning}
-            onClick={() => void saveEdit()}
-          >
-            {actionRunning ? "保存中…" : "保存"}
-          </button>
-        </div>
-      ) : null}
       {error ? <div className="chat-pending-composer-error" role="alert">{error}</div> : null}
     </div>
   );
@@ -188,17 +118,11 @@ function PendingQueueItem({
 export default function PendingQueueBar({
   conversations,
   onClear,
-  onUpdate,
   onRemove,
   onChangePolicy,
 }: {
   conversations: ConversationView[];
   onClear: () => Promise<void>;
-  onUpdate: (
-    messageId: string,
-    content: string,
-    attachments?: AttachmentRef[],
-  ) => Promise<void>;
   onRemove: (messageId: string) => Promise<void>;
   onChangePolicy: (
     messageId: string,
@@ -248,7 +172,6 @@ export default function PendingQueueBar({
           <PendingQueueItem
             key={conversation.conversationId}
             conversation={conversation}
-            onUpdate={onUpdate}
             onRemove={onRemove}
             onChangePolicy={onChangePolicy}
           />

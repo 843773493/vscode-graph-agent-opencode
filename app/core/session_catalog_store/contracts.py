@@ -44,7 +44,12 @@ class SessionGenerationOriginDTO(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class SessionCatalogNode:
-    """nodes 表行的不可变投影。"""
+    """nodes 表行的不可变投影。
+
+    ``revision`` 是本节点的整数版本，重命名、移动等节点写入递增，并用于
+    ``expected_revision`` CAS；API 对应 ``node_revision``。它不是目录读 DTO
+    的字符串 SHA256 内容摘要 ``revision``，也不是整体 ``catalog_revision``。
+    """
 
     node_id: str
     kind: str
@@ -64,6 +69,30 @@ class SessionCatalogNode:
     context_source_session_id: str | None
     generation_origin_json: str | None
     updated_at: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ForkSourceCaptureRecord:
+    """创建 journal 预分配的 source capture；locator 不由恢复方推导。"""
+
+    copy_operation_id: str
+    creation_key: str | None
+    source_session_id: str
+    source_thread_id: str
+    target_session_id: str
+    target_thread_id: str
+    # 创建 journal 冻结的 fork capture 内部快照身份；跨端由目标分配、来源 export 原样复用，不是 Session/Thread ID。
+    snapshot_id: str
+    # fork-source-captures/{snapshot_id} 内部 locator，普通会话 resolver 不可见。
+    snapshot_relative_locator: str
+    fork_id: str
+    materialization_id: str
+    request_json: str
+    preimage_hash: str
+    state: str
+    snapshot_sha256: str | None
+    marker_sha256: str | None
+    abort_reason: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +128,9 @@ class SessionCreationRecord:
     record_created_at: str
     record_updated_at: str
 
+    # 与创建意图同事务冻结的传输 Trace，不属于创建或 capture 的业务 preimage。
+    fork_delivery_request_id: str | None = None
+
     @property
     def graph_binding(self) -> ThreadGraphBindingRecord:
         """从创建记录冻结的四字段取得 selector，不读取当前图注册表。"""
@@ -127,7 +159,8 @@ class SubtreeDeleteRecord:
     """subtree_delete_records 表行的不可变投影（8.1-B 子树删除流 journal）。
 
     ``state`` 闭集为 ``preparing/deleting/draining/completed/aborted``；
-    ``frozen_node_ids`` 是递归 CTE 冻结的 (node_id, revision) 集合（含
+    ``frozen_node_ids`` 字段保存 SubtreeFrozenNode 元组，不是纯 ID 列表；
+    它是递归 CTE 冻结的 (node_id, revision) 集合（含
     root，按 node_id 排序）；``frozen_session_locators`` 是
     session_id → 不可变 storage locator 映射（恢复时按此定点继续，不重查
     当前树）；``drained_session_ids`` 是已物理隔离 session 的追加序数组。

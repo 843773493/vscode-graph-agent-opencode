@@ -440,6 +440,8 @@ def test_gateway_history_loading_defaults_use_five_initial_and_three_sided_turns
     assert result.history_loading.initial_turns == 5
     assert result.history_loading.anchor_before_turns == 3
     assert result.history_loading.anchor_after_turns == 3
+    assert "internal" in result.history_loading.initial_include
+    assert "internal" in result.history_loading.anchor_include
 
 
 def test_load_gateway_config_merges_local_override_and_records_sources(

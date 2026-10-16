@@ -21,6 +21,8 @@ export declare type TraceEvent = Message<"boxteam.workspace.v2.TraceEvent"> & {
   eventId: string;
 
   /**
+   * 来源路径提供的部件引用；历史工具路径在已知 emitting ModelCall 时使用其限定的聚合引用，通用 Trace 不承诺所有 part_id 都遵循该格式。
+   *
    * @generated from field: optional string part_id = 2;
    */
   partId?: string | undefined;
@@ -76,6 +78,8 @@ export declare type TraceEvent = Message<"boxteam.workspace.v2.TraceEvent"> & {
   stepId?: string | undefined;
 
   /**
+   * 来源事件的带时区时间，Trace 映射保留其时刻与显式时区偏移，不在投影时重新取时；历史工具事件沿对应 canonical 消息/item 时间。
+   *
    * @generated from field: google.protobuf.Timestamp timestamp = 13;
    */
   timestamp?: Timestamp | undefined;

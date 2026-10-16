@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Self
 
 from app.core.key_lock_pool import KEY_LOCK_SHARDS
-from app.core.session_catalog_store import validate_session_id
+from app.core.session_catalog_store.validators import validate_session_id
 
 
 class SessionDeletionPendingError(RuntimeError):
@@ -103,7 +103,12 @@ class SessionOperationLease:
 
     captured_lifecycle_generation 是准入时捕获的 fence generation；
     holder_generation / fencing_token 是每行单调递增的领取/CAS 令牌
-    （恢复接管时 +1，旧 token callback 一律失败）；state 闭集为
+    （仅恢复接管时 +1，旧 token callback 一律失败）；revision 是此
+    lease 行的变更序号，成功状态转换与恢复接管均 +1。created_at 是
+    lease owner 首次写入的 UTC 时刻；updated_at 初建时等于 created_at，
+    此后记录最近一次成功状态转换或接管的 UTC 时刻。操作源创建时刻
+    和过期期限由各自 owner 定义。
+    state 闭集为
     active|settling|completed|cancelled|failed；lease 没有墙钟自动到期，
     recovery_ref 是可选的稳定恢复引用（不含物理路径或凭据）。
     """
@@ -250,8 +255,9 @@ class OperationHolderGate:
     """长操作 holder 的独立 OS 锁；不持有 Session gate 或业务状态。
 
     固定分片仅限制锁 inode 数量，SQLite lease token 仍是唯一 durable fencing。
-    恢复方非阻塞取得同一分片后才可证明旧 holder 已停止；source/target 等嵌套
-    运行面须使用不同 namespace。锁文件只创建，不删除或重建。
+    恢复方非阻塞取得同一分片 exclusive 后才可证明旧 holder 已停止；嵌套
+    exclusive 运行面须使用不同 namespace。shared 只保护原操作的持有期，
+    删除用同一分片 exclusive 等待全部持有者退出。锁文件只创建，不删除或重建。
     """
 
     def __init__(self, sessions_root: Path, *, namespace: str) -> None:
@@ -260,12 +266,14 @@ class OperationHolderGate:
         self._root = _navigation_root(sessions_root) / "operation-holder-gates"
         self._namespace = namespace
 
-    def lock_for(self, key: str, *, wait: bool = True) -> _CrossProcessFileLock:
+    def lock_for(
+        self, key: str, *, wait: bool = True, exclusive: bool = True,
+    ) -> _CrossProcessFileLock:
         if not isinstance(key, str) or not key:
             raise ValueError(f"holder key 必须是非空字符串: {key!r}")
         shard = zlib.crc32(key.encode("utf-8")) % KEY_LOCK_SHARDS
         path = self._root / f"{self._namespace}-{shard:02d}.lock"
-        return _CrossProcessFileLock(path, exclusive=True, wait=wait)
+        return _CrossProcessFileLock(path, exclusive=exclusive, wait=wait)
 
 
 class SessionLifecycleGate:

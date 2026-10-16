@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Protocol, TypedDict
+
+from app.schemas.internal_v2.session_fork_transfer import (
+    SessionForkTransferRequest,
+    SessionForkTransferResultDTO,
+)
 
 if TYPE_CHECKING:
     from langchain_core.messages import BaseMessage
@@ -20,6 +26,10 @@ from app.schemas.internal_v2.session_context import (
     SessionContextSearchRequest,
     SessionContextSearchResultDTO,
 )
+
+
+class SessionForkTransportProtocol(Protocol):
+    async def fork_transfer(self, request: SessionForkTransferRequest) -> SessionForkTransferResultDTO: ...
 
 
 class WorkspaceSessionContextAccessError(RuntimeError):
@@ -86,6 +96,8 @@ class SessionContextAssemblySourceProtocol(Protocol):
 
 
 class SessionLookupProtocol(Protocol):
+    def session_read_admission(self, session_id: str) -> AbstractAsyncContextManager[None]: ...
+
     async def get(self, session_id: str) -> SessionDTO: ...
 
     async def list(

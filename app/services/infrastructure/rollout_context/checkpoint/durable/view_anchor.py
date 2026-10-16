@@ -215,10 +215,23 @@ class RolloutViewAnchorMixin:
         ):
             raise ValueError(f"运行中的 Turn 不支持 fork: turn_id={turn_id}")
         checkpoint_sequence_limit = None
+        checkpoint_commit_limit = None
         if require_completed:
             checkpoint_sequence_limit = (
                 final_sequence if anchor_mode == "inclusive" else user_sequence - 1
             )
+            boundary_item = "final_item_id" if anchor_mode == "inclusive" else "root_input_item_id"
+            boundary = connection.execute(
+                f"SELECT i.commit_id FROM turn_records AS t JOIN item_catalog AS i ON i.item_id = t.{boundary_item} WHERE t.turn_id = ?",
+                (turn_id,),
+            ).fetchone()
+            if boundary is None:
+                raise RuntimeError(f"source-mismatch: 完成 Turn 缺少 canonical 边界: {turn_id}")
+            # 后继 admission 的 input checkpoint 可能尚未追加消息；消息序号相同
+            # 不能证明非消息状态仍属于该 Turn，header 必须留在同一提交边界。
+            checkpoint_commit_limit = strict_non_negative_int(
+                boundary[0], field="turn_anchor.boundary_commit_id"
+            ) - (1 if anchor_mode == "before" else 0)
 
         candidates = {
             strict_text(row[0], field="context_views.view_id"): {
@@ -257,6 +270,7 @@ class RolloutViewAnchorMixin:
                     current_view_id,
                     checkpoint_ns=checkpoint_ns,
                     max_message_sequence=checkpoint_sequence_limit,
+                    max_commit_id=checkpoint_commit_limit,
                 )
                 if checkpoint_id is not None:
                     state_header_checkpoint_id = checkpoint_id
@@ -310,6 +324,7 @@ class RolloutViewAnchorMixin:
         *,
         checkpoint_ns: str,
         max_message_sequence: int | None = None,
+        max_commit_id: int | None = None,
     ) -> str | None:
         view_id = strict_text(view_id, field="context_views.view_id")
         checkpoint_ns = strict_text(
@@ -322,21 +337,26 @@ class RolloutViewAnchorMixin:
             if max_message_sequence is not None
             else None
         )
+        max_commit_id = (
+            strict_non_negative_int(max_commit_id, field="max_commit_id")
+            if max_commit_id is not None
+            else None
+        )
         row = connection.execute(
-            "SELECT checkpoint_id FROM checkpoints WHERE checkpoint_ns = ? AND view_id = ? AND status = 'active' AND (? IS NULL OR message_sequence <= ?) ORDER BY commit_id DESC LIMIT 1",
-            (checkpoint_ns, view_id, max_message_sequence, max_message_sequence),
+            "SELECT checkpoint_id FROM checkpoints WHERE checkpoint_ns = ? AND view_id = ? AND status = 'active' AND (? IS NULL OR message_sequence <= ?) AND (? IS NULL OR commit_id <= ?) ORDER BY commit_id DESC LIMIT 1",
+            (checkpoint_ns, view_id, max_message_sequence, max_message_sequence, max_commit_id, max_commit_id),
         ).fetchone()
         if row is not None:
             return strict_text(row[0], field="checkpoints.checkpoint_id")
         row = connection.execute(
-            "SELECT b.head_checkpoint_id FROM branches b JOIN checkpoints c ON c.checkpoint_id = b.head_checkpoint_id WHERE c.checkpoint_ns = ? AND b.head_view_id = ? AND b.head_checkpoint_id IS NOT NULL AND c.status = 'active' AND (? IS NULL OR c.message_sequence <= ?) ORDER BY b.updated_at DESC LIMIT 1",
-            (checkpoint_ns, view_id, max_message_sequence, max_message_sequence),
+            "SELECT b.head_checkpoint_id FROM branches b JOIN checkpoints c ON c.checkpoint_id = b.head_checkpoint_id WHERE c.checkpoint_ns = ? AND b.head_view_id = ? AND b.head_checkpoint_id IS NOT NULL AND c.status = 'active' AND (? IS NULL OR c.message_sequence <= ?) AND (? IS NULL OR c.commit_id <= ?) ORDER BY b.updated_at DESC LIMIT 1",
+            (checkpoint_ns, view_id, max_message_sequence, max_message_sequence, max_commit_id, max_commit_id),
         ).fetchone()
         if row is not None:
             return strict_text(row[0], field="checkpoints.checkpoint_id")
         row = connection.execute(
-            "SELECT ce.checkpoint_id FROM control_events ce JOIN checkpoints c ON c.checkpoint_id = ce.checkpoint_id WHERE c.checkpoint_ns = ? AND ce.view_id = ? AND ce.checkpoint_id IS NOT NULL AND c.status = 'active' AND (? IS NULL OR c.message_sequence <= ?) ORDER BY ce.control_sequence DESC LIMIT 1",
-            (checkpoint_ns, view_id, max_message_sequence, max_message_sequence),
+            "SELECT ce.checkpoint_id FROM control_events ce JOIN checkpoints c ON c.checkpoint_id = ce.checkpoint_id WHERE c.checkpoint_ns = ? AND ce.view_id = ? AND ce.checkpoint_id IS NOT NULL AND c.status = 'active' AND (? IS NULL OR c.message_sequence <= ?) AND (? IS NULL OR c.commit_id <= ?) ORDER BY ce.control_sequence DESC LIMIT 1",
+            (checkpoint_ns, view_id, max_message_sequence, max_message_sequence, max_commit_id, max_commit_id),
         ).fetchone()
         return (
             strict_text(row[0], field="control_events.checkpoint_id")

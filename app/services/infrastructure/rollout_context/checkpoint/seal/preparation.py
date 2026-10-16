@@ -16,9 +16,11 @@ from app.agents.providers.wire_finalize import (
 )
 from app.agents.skill_runtime import install_frozen_skill_catalog
 from app.core.execution_admission_context import require_current_execution_admission
+from app.core.model_request_context import SummaryCandidateScope
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.request_plan import resolve_contribution_for_ref
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.domain.itemized.serialization import normalize_wire_request
@@ -27,12 +29,17 @@ from app.services.infrastructure.mcp.catalog_activation import (
     MCP_TOOL_CATALOG_RESOURCE_ID,
     mcp_guidance_content,
 )
+from app.services.infrastructure.rollout_context.assembly.manifest import (
+    _frozen_source_refs,
+)
+from app.services.infrastructure.rollout_context.assembly.plans.types import (
+    ContextPlanRegistration,
+)
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     validate_tool_protocol_closure,
 )
 from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (
     require_key,
-    runtime_draft,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
@@ -52,6 +59,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.skill_c
 from app.services.infrastructure.rollout_context.runtime.prefix_compiler import (
     compile_prefix_context,
     source_contributions,
+)
+from app.services.infrastructure.rollout_context.runtime.summary_compiler import (
+    compile_summary_candidate,
 )
 from app.services.infrastructure.team.activation import (
     TEAM_FACETS,
@@ -83,6 +93,7 @@ def _activation_guidance_batch(
             continue
         content = read_content(owner.read_resource_activation_payload(
             activation, parents[0], checkpoint_ns=checkpoint_ns,
+            storage_owner=(activation.owner_session_id, activation.owner_thread_id),
         )) if parents else ""
         revision = parents[0].revision if parents else sha256_jcs({"content": ""})
         sources.append(ContextSourceSnapshot(
@@ -119,6 +130,8 @@ def prepare_registered_context(
     target_format: str, checkpoint_ns: str,
     model_call_id: str,
     activation_snapshot: ResourceActivationSnapshotRef,
+    summary_candidate: SummaryCandidateScope | None = None,
+    sealed_context: ContextPlanRegistration | None = None,
 ) -> dict[str, object]:
     require_key(plan_creation_idempotency_key, field="plan_creation_idempotency_key")
     require_key(seal_idempotency_key, field="seal_idempotency_key")
@@ -153,16 +166,25 @@ def prepare_registered_context(
         "wire_params": normalize_wire_request(wire_params),
         "projector_id": WIRE_PROJECTOR_ID,
         "projector_version": WIRE_PROJECTOR_VERSION,
+        "summary_candidate": summary_candidate.identity() if summary_candidate is not None else None,
     })
     plan_id = prepared_context_plan_id(plan_creation_idempotency_key)
     with owner._lock:
-        registered = owner._find_runtime_context_plan(session_id, thread_id, plan_id, checkpoint_ns)
-        if registered is not None and registered.plan_state == "sealed":
+        registered = sealed_context if sealed_context is not None else owner.find_sealed_context_for_provider_creation(
+            session_id, thread_id, plan_creation_idempotency_key=plan_creation_idempotency_key,
+            checkpoint_ns=checkpoint_ns,
+        )
+        if registered is not None:
+            if (registered.session_id, registered.thread_id, registered.draft.plan_id,
+                registered.draft.plan_creation_idempotency_key, registered.plan_state) != (
+                session_id, thread_id, plan_id, plan_creation_idempotency_key, "sealed",
+            ):
+                raise ValueError("source-mismatch: sealed provider registration owner/key 不一致")
             if registered.seal_idempotency_key != seal_idempotency_key:
                 raise ValueError("assembly-idempotency-conflict: 已绑定另一个 seal key")
-            snapshot = owner._storage.assemblies.get_context_assembly(
-                session_id, thread_id, assembly_id=registered.assembly_id, checkpoint_ns=checkpoint_ns,
-            )
+            snapshot = registered.sealed_snapshot
+            if snapshot is None:
+                raise ValueError("source-mismatch: sealed provider registration 缺少 snapshot")
             # prepare 输入身份由 seal 提交记录（snapshot.request_input_hash）承载；
             # request_hash 只绑定真实 wire，不再往 preimage 里塞 prepare 包装。
             if snapshot.request_input_hash != input_hash or (
@@ -188,17 +210,21 @@ def prepare_registered_context(
                 owner._storage.checkpoints.ensure_active_view_contains_turn_root(
                     session_id, thread_id, turn_id=turn_id, checkpoint_ns=checkpoint_ns,
                 )
-            owner.ensure_request_items(
-                session_id, thread_id, turn_id=turn_id, execution_id=execution_id,
-                messages=request_messages, checkpoint_ns=checkpoint_ns,
-            )
+            if summary_candidate is None:
+                owner.ensure_request_items(
+                    session_id, thread_id, turn_id=turn_id, execution_id=execution_id,
+                    messages=request_messages, checkpoint_ns=checkpoint_ns,
+                )
             # 先收敛真实 call/result group；未闭合时不得冻结或登记恢复 source。
             with owner._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns) as read_snapshot:
                 sequences = owner.selected_context_message_sequences(read_snapshot)
                 validate_tool_protocol_closure(read_snapshot.connection, sequences, len(sequences))
+            # context-control gate 内先接受权威 tracking/CAS，再消费本次冻结来源。
+            context_source_manager.refresh_control_states()
             frozen_skills = skill_catalog_from_activation(
                 activation_snapshot, lambda frozen, binding: owner.read_resource_activation_payload(
                     frozen, binding, checkpoint_ns=checkpoint_ns,
+                    storage_owner=(session_id, thread_id),
                 ),
             )
             if frozen_skills is not None:
@@ -206,7 +232,7 @@ def prepare_registered_context(
                     context_source_manager, frozen_skills,
                     include_instructions="read_file" in tool_set.tool_names,
                 )
-            rebuild = owner.load_context_source_rebuild_state(
+            rebuild = None if summary_candidate is not None else owner.load_context_source_rebuild_state(
                 ContextSourceOwnerKey(session_id, thread_id), checkpoint_ns=checkpoint_ns,
             )
             frozen = (
@@ -231,6 +257,21 @@ def prepare_registered_context(
             batch = _activation_guidance_batch(
                 owner, activation_snapshot, previous, batch, checkpoint_ns=checkpoint_ns,
             )
+            if summary_candidate is not None and summary_candidate.minimal_system:
+                # 最小摘要只携带本次 owner 产生的受信摘要规则；不沿用常规
+                # Agent 指引、overlay 或尚未 applied 的来源通知。
+                batch = PendingContextSourceBatch(deltas=(), sources=(ContextSourceSnapshot(
+                    descriptor=ContextSourceDescriptor(
+                        source_id="compaction-summary-rules", source_kind="summarization",
+                        name="摘要规则", description="摘要候选最小系统提示",
+                        internal_locator="runtime:compaction-summary-rules", root_placement="root_eligible",
+                    ), revision="1", content="Summarize the provided conversation. Return only a concise factual plain-text summary. Do not call tools.",
+                    applied_revision=None, tracked=False,
+                ),))
+            elif summary_candidate is not None:
+                batch = PendingContextSourceBatch(deltas=(), sources=tuple(
+                    source for source in batch.sources if source.descriptor.root_placement == "root_eligible"
+                ))
             bodies = {}
             for contribution in source_contributions(batch):
                 owner.register_context_contribution(
@@ -240,12 +281,17 @@ def prepare_registered_context(
                 bodies[contribution.contribution_id] = contribution.body
             with owner._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns) as read_snapshot:
                 previous = owner._storage.assemblies.latest_context_assembly(read_snapshot)
-                full_plan = owner.compose_committed_context_plan(
-                    session_id, thread_id, plan_id=plan_id, tool_set=tool_set,
-                    checkpoint_ns=checkpoint_ns, read_snapshot=read_snapshot,
-                )
+                initial_assembly = previous is not None and (
+                    previous.session_id, previous.thread_id
+                ) != (session_id, thread_id)
                 items = owner._storage.checkpoints.committed_context_items(read_snapshot)
-                sequences = owner.selected_context_message_sequences(read_snapshot)
+                full_plan = owner._compose_committed_context_plan(
+                    read_snapshot, plan_id=plan_id, tool_set=tool_set, committed_items=items,
+                    predecessor=previous,
+                )
+                sequences = owner._storage.checkpoints.selected_context_message_sequences(
+                    read_snapshot, items=items,
+                )
                 validate_tool_protocol_closure(read_snapshot.connection, sequences, len(sequences))
             overlay_bodies = {}
             for ref in full_plan.refs:
@@ -257,33 +303,71 @@ def prepare_registered_context(
                 contribution = resolve_contribution_for_ref(ref, full_plan.contributions)
                 overlay_bodies[ref.ref_id] = body
                 bodies[contribution.contribution_id] = body
-            retained = rebuild.source_assembly if rebuild is not None else None
-            retained_refs = rebuild.retained_source_refs if rebuild is not None else frozenset()
-            retained_bodies = {}
-            if retained is not None and retained_refs:
+            # 导入 assembly 是目标本地历史，不是目标已 applied 的请求前缀。
+            # 首次请求只携带实际复制并封存的来源，不回读源会话或未复制正文。
+            retained = rebuild.source_assembly if rebuild is not None else previous if initial_assembly else None
+            retained_refs = rebuild.retained_source_refs if rebuild is not None else frozenset(
+                (ref_id, identity[1]) for ref_id, identity in _frozen_source_refs(retained)[0].items()
+            ) if retained is not None else frozenset()
+            previous_bodies = {} if previous is None else owner._request_content_for_plan(
+                session_id, thread_id, checkpoint_ns, previous.as_sealed_plan(), None,
+            )
+            bodies.update(previous_bodies)
+            retained_bodies = previous_bodies
+            if retained is not None and retained_refs and retained is not previous:
                 retained_bodies = owner._request_content_for_plan(
                     session_id, thread_id, checkpoint_ns, retained.as_sealed_plan(), None,
                 )
                 bodies.update(retained_bodies)
+            compile_plan = full_plan
+            if summary_candidate is not None:
+                compile_plan = replace(full_plan, refs=tuple(
+                    ref for ref in full_plan.refs if ref.ref_type != "canonical_item"
+                    and ref.base_delta_role not in {"base", "delta"}
+                ))
             plan, preparation = compile_prefix_context(
-                full_plan, items, batch, tool_set, overlay_bodies=overlay_bodies,
-                previous=previous,
+                compile_plan, () if summary_candidate is not None else items, batch, tool_set, overlay_bodies=overlay_bodies,
+                previous=None if summary_candidate is not None else previous,
+                initial_assembly=initial_assembly if summary_candidate is None else False,
                 transition=rebuild.transition if rebuild is not None else None,
-                retained_source_assembly=retained,
-                retained_source_refs=retained_refs,
+                retained_source_assembly=None if summary_candidate is not None else retained,
+                retained_source_refs=frozenset() if summary_candidate is not None else retained_refs,
                 retained_source_bodies=retained_bodies,
                 provider_profile=f"{target_format}:{provider_version}", turn_id=turn_id,
             )
-            if previous is not None:
-                bodies.update(owner._request_content_for_plan(
-                    session_id, thread_id, checkpoint_ns, previous.as_sealed_plan(), None,
-                ))
+            omitted = ()
+            if summary_candidate is not None:
+                candidate_refs, candidate_sources, preparation, candidate_bodies = compile_summary_candidate(
+                    plan, preparation, request_messages, items, summary_candidate,
+                )
+                # 候选只有当前 plan 的显式 refs；registry 分配稳定顺序，
+                # backing_only 阻止后继常规模型请求自动选入摘要副本。
+                registered_sources = []
+                for source in candidate_sources:
+                    if source.source_kind == "summary_candidate":
+                        source_ordinal = owner._storage.assemblies.register_context_contribution(
+                            session_id, thread_id, source, checkpoint_ns=checkpoint_ns,
+                        )
+                        source = replace(source, source_ordinal=source_ordinal)
+                    registered_sources.append(source)
+                bodies.update(candidate_bodies)
+                candidate_ids = {
+                    item_id for body in candidate_bodies.values()
+                    for item_id in (*body["item_ids"], *body["retry_source_item_ids"])
+                }
+                backing = tuple(ContextRef.canonical_item(
+                    item, session_id=session_id, thread_id=thread_id,
+                ) for item in items if item.item_id in candidate_ids)
+                plan = replace(plan, refs=(*candidate_refs, *backing),
+                               contributions=tuple(registered_sources),
+                               selection_policy="summary_candidate")
+                omitted = tuple(ref.ref_id for ref in backing)
             registered = owner.create_context_plan(
                 session_id, replace(plan, plan_creation_idempotency_key=plan_creation_idempotency_key),
                 checkpoint_ns=checkpoint_ns,
             )
             snapshot = owner.seal_context_plan(
-                session_id, thread_id, runtime_draft(registered),
+                session_id, thread_id, registered.draft,
                 seal_idempotency_key=seal_idempotency_key, turn_id=turn_id,
                 execution_id=execution_id, provider_version=provider_version,
                 wire_profile=wire_profile, wire_params=wire_params,
@@ -291,8 +375,10 @@ def prepare_registered_context(
                 request_only_content=bodies, context_preparation=preparation,
                 model_call_id=model_call_id, activation_snapshot=activation_snapshot,
                 checkpoint_ns=checkpoint_ns,
+                omitted_ref_ids=omitted,
             )
-            context_source_manager.acknowledge_sealed_pending(csm_batch, snapshot.seal_binding)
+            if summary_candidate is None:
+                context_source_manager.acknowledge_sealed_pending(csm_batch, snapshot.seal_binding)
         plan = snapshot.as_sealed_plan()
         messages, tools, losses = owner.project_context_plan_to_provider(
             session_id, thread_id, plan, target_format=target_format,

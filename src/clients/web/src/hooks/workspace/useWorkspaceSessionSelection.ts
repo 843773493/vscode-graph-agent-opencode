@@ -16,6 +16,7 @@ export function useWorkspaceSessionSelection({
   loadSessionViewState,
   activateGatewayWorkspaceInBackground,
   setStatus,
+  selectionIntentRef,
 }: {
   apiPort: number | null;
   latestStateRef: MutableRefObject<AppState>;
@@ -28,9 +29,9 @@ export function useWorkspaceSessionSelection({
   loadSessionViewState: SessionViewStateController["loadSessionViewState"];
   activateGatewayWorkspaceInBackground: (workspaceId: string) => void;
   setStatus: (message: string) => void;
+  selectionIntentRef: MutableRefObject<number>;
 }) {
   const selectionQueueRef = useRef(createLatestSerialTaskQueue());
-  const selectionIntentRef = useRef(0);
 
   const selectSessionWithViewState = useCallback((sessionId: string) => {
     selectSession(sessionId);
@@ -50,11 +51,11 @@ export function useWorkspaceSessionSelection({
     void loadSessionViewState(workspaceId, sessionId);
   }, [loadSessionViewState, selectWorkspaceSession]);
 
-  const openWorkspaceSession = useCallback((workspaceId: string, sessionId: string) => {
-    const intent = ++selectionIntentRef.current;
+  const openWorkspaceSession = useCallback((workspaceId: string, sessionId: string, expectedSelectionIntent?: number) => {
+    const intent = expectedSelectionIntent ?? ++selectionIntentRef.current;
+    if (intent !== selectionIntentRef.current) return Promise.resolve();
     return selectionQueueRef.current.enqueue(async () => {
-      // 被顶替的任务由 createLatestSerialTaskQueue 在回调入口按 sequence 直接短路
-      // （见 serialTaskQueue.ts），回调体根本不会执行，无需在此重复判定意图。
+      if (intent !== selectionIntentRef.current) return;
       const latestState = latestStateRef.current;
       const cachedSession = latestState.sessionsByWorkspace
         .get(workspaceId)

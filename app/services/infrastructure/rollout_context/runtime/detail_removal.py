@@ -67,7 +67,10 @@ class DetailRemoval:
             manifest = self._files.path(ref)
             if manifest is not None and manifest in paths:
                 _payload, record = parse_detail_payload(
-                    self._files.read(ref), detail_ref=ref
+                    self._files.read(
+                        ref, session_id=session_id, thread_id=thread_id
+                    ),
+                    detail_ref=ref,
                 )
                 expires = expiry_time(record.expires_at)
                 if expires is None or expires > expired_before:

@@ -280,7 +280,7 @@ def test_invalid_cassette_is_rejected(mutate) -> None:
         load_cassette_from_object(raw)
 
 
-def test_builder_supports_session_sequence_metadata() -> None:
+def test_builder_supports_sequence_annotations() -> None:
     cassette = build_cassette(
         asset_id="sequence-builder",
         url="https://provider.example/v1/chat/completions",

@@ -45,6 +45,7 @@ interface ChatPanelRenderState extends ChatTurnHandlers {
   historyError: string | null;
   onRetryHistory: () => void;
   pendingActionError: string | null;
+  locatedTurnId: string | null;
 }
 
 interface ChatPanelVirtuosoContext {
@@ -122,7 +123,8 @@ const renderChatPanelItem: ItemContent<
   return (
     <div
       className="chat-virtual-item"
-      data-turn-id={item.key}
+      data-turn-id={item.conversation.turnId}
+      aria-current={state.locatedTurnId === item.conversation.turnId ? "location" : undefined}
     >
       <div>
         <ChatTurnErrorBoundary
@@ -139,10 +141,10 @@ const renderChatPanelItem: ItemContent<
             onLoadTurnDetails={state.onLoadTurnDetails}
             onLoadToolDetails={state.onLoadToolDetails}
             onReplayTurn={state.onReplayTurn}
-            onUpdatePending={state.onUpdatePending}
             onRemovePending={state.onRemovePending}
             onChangePendingPolicy={state.onChangePendingPolicy}
             onOpenAttachment={state.onOpenAttachment}
+            onForkConversation={state.onForkConversation}
           />
         </ChatTurnErrorBoundary>
       </div>
@@ -158,20 +160,41 @@ export function transcriptConversationsForDisplay(
   );
 }
 
-export function chatPanelSessionScopeId(
-  transcriptConversations: readonly ConversationView[],
-  conversations: readonly ConversationView[],
-  internalExecutions: readonly InternalExecutionHistory[],
-): string {
-  return transcriptConversations[0]?.sessionId
-    ?? conversations[0]?.sessionId
-    ?? internalExecutions[0]?.session_id
-    ?? "empty";
+function TurnNavigationControls({ conversations, disabled, navigation, onNavigate }: {
+  conversations: readonly ConversationView[];
+  disabled: boolean;
+  navigation: ReturnType<typeof useTurnVirtualScroller>["navigation"];
+  onNavigate: (turnId: string) => void;
+}): React.ReactNode {
+  const [turnId, setTurnId] = React.useState("");
+  const listId = React.useId();
+  return (
+    <form className="chat-turn-navigation" aria-label="跳到指定轮次" onSubmit={(event) => {
+      event.preventDefault();
+      onNavigate(turnId);
+    }}>
+      <label htmlFor={listId + "-input"}>轮次 ID</label>
+      <input id={listId + "-input"} aria-label="轮次 ID" list={listId} value={turnId}
+        placeholder="输入轮次 ID，或选择已加载轮次" disabled={disabled}
+        onChange={(event) => setTurnId(event.target.value)} />
+      <datalist id={listId}>
+        {conversations.filter((turn) => turn.displayMode === "history" && !turn.pending && turn.turnId).map((turn) => (
+          <option key={turn.turnId} value={turn.turnId}>
+            {"第 " + turn.turnOrdinal + " 轮 · " + (turn.userMessage?.content.trim().replace(/\s+/g, " ").slice(0, 60) || "对话记录")}
+          </option>
+        ))}
+      </datalist>
+      <button type="submit" disabled={disabled || !turnId.trim()}>跳到指定轮次</button>
+      {navigation ? <span role={navigation.phase === "error" ? "alert" : "status"}>{navigation.message}</span> : null}
+    </form>
+  );
 }
 
 export default function ChatPanel({
   apiPort,
   workspaceId,
+  sessionId,
+  threadId,
   conversations,
   internalExecutions = [],
   expandDetails,
@@ -194,16 +217,18 @@ export default function ChatPanel({
   sessionChangesLoading,
   onOpenChanges,
   onReplayTurn,
-  onUpdatePending,
   onRemovePending,
   onChangePendingPolicy,
   onOpenAttachment,
+  onForkConversation,
   viewState,
   onViewStateChange,
   onViewStateRestoreStatus,
 }: {
   apiPort: number;
   workspaceId?: string | null;
+  sessionId: string | null;
+  threadId: string | null;
   conversations: ConversationView[];
   internalExecutions?: InternalExecutionHistory[];
   expandDetails: boolean;
@@ -215,7 +240,7 @@ export default function ChatPanel({
   historyLoading: boolean;
   projectionState: TurnProjectionState;
   historyError: string | null;
-  onLoadAroundTurn: (anchorTurnId: string) => Promise<void>;
+  onLoadAroundTurn: (anchorTurnId: string, signal?: AbortSignal) => Promise<void>;
   onLoadNewerMessages: () => Promise<void>;
   onLoadOlderMessages: () => Promise<void>;
   onLoadTurnDetails: LoadTurnDetails;
@@ -248,11 +273,7 @@ export default function ChatPanel({
     [transcriptConversations, internalExecutions],
   );
   const lastTurnKey = [...transcriptItems].reverse().find((item) => item.kind === "turn")?.key ?? null;
-  const sessionId = chatPanelSessionScopeId(
-    transcriptConversations,
-    conversations,
-    internalExecutions,
-  );
+  const scopeKey = JSON.stringify([workspaceId ?? null, sessionId, threadId]);
   const {
     bindScroller,
     firstItemIndex,
@@ -260,12 +281,15 @@ export default function ChatPanel({
     handleAtBottomChange,
     handleEndReached,
     handleStartReached,
+    navigateToTurn,
+    navigation,
+    scheduleAnchorAlignment,
     scrollToLatest,
     showJumpToLatest,
     streamRef,
   } = useTurnVirtualScroller({
     items: transcriptItems,
-    sessionId,
+    scopeKey,
     onLoadNewerMessages,
     onLoadOlderMessages,
     onLoadAroundTurn,
@@ -273,6 +297,7 @@ export default function ChatPanel({
     hasOlderMessages,
     loadingNewerMessages,
     loadingOlderMessages,
+    historyLoading,
     viewState,
     onViewStateChange,
     onViewStateRestoreStatus,
@@ -323,13 +348,6 @@ export default function ChatPanel({
     await onChangePendingPolicy(messageId, policy, request?.snapshotVersion);
   }, [onChangePendingPolicy, pendingRequests]);
 
-  const updatePending = React.useCallback((
-    messageId: string,
-    content: string,
-    attachments?: AttachmentRef[],
-  ) => runPendingAction(
-    () => onUpdatePending(messageId, content, attachments),
-  ), [onUpdatePending, runPendingAction]);
   const removePending = React.useCallback((messageId: string) => runPendingAction(
     () => onRemovePending(messageId),
   ), [onRemovePending, runPendingAction]);
@@ -355,6 +373,7 @@ export default function ChatPanel({
       loadingOlderMessages,
       historyError,
       pendingActionError,
+      navigation,
     ],
   );
   renderStateRef.current = {
@@ -367,24 +386,30 @@ export default function ChatPanel({
     onLoadTurnDetails,
     onLoadToolDetails,
     onReplayTurn,
-    onUpdatePending: updatePending,
     onRemovePending: removePending,
     onChangePendingPolicy: updatePendingPolicy,
     onOpenAttachment,
+    onForkConversation,
     projectionState,
     hasOlderMessages,
     loadingOlderMessages,
     historyError,
     onRetryHistory: retryHistory,
     pendingActionError,
+    locatedTurnId: navigation?.phase === "located" ? navigation.turnId : null,
   };
 
   return (
     <section className="chat-stream-shell">
+      {hasActiveSession ? <TurnNavigationControls key={scopeKey} conversations={transcriptConversations}
+        disabled={!sessionId || !threadId || historyLoading} navigation={navigation} onNavigate={navigateToTurn} /> : null}
       <section
         data-expand-details={String(expandDetails)}
-      data-turn-count={transcriptConversations.length}
-      data-transcript-item-count={transcriptItems.length}
+        data-owner-session-id={sessionId ?? ""}
+        data-owner-thread-id={threadId ?? ""}
+        data-first-item-index={firstItemIndex}
+        data-turn-count={transcriptConversations.length}
+        data-transcript-item-count={transcriptItems.length}
         data-first-turn-id={transcriptConversations[0] ? conversationTurnKey(transcriptConversations[0]) : ""}
         className="chat-stream-virtual-shell"
       >
@@ -404,7 +429,7 @@ export default function ChatPanel({
         )
       ) : (
       <Virtuoso
-        key={sessionId}
+        key={scopeKey}
         ref={streamRef}
         scrollerRef={bindScroller}
         className="chat-stream chat-transcript chat-virtual-list"
@@ -417,6 +442,8 @@ export default function ChatPanel({
         endReached={handleEndReached}
         followOutput={followOutput}
         atBottomStateChange={handleAtBottomChange}
+        itemsRendered={scheduleAnchorAlignment}
+        totalListHeightChanged={scheduleAnchorAlignment}
         components={CHAT_PANEL_VIRTUOSO_COMPONENTS}
         itemContent={renderChatPanelItem}
       />

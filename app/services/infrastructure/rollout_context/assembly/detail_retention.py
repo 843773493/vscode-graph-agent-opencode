@@ -170,7 +170,7 @@ class DetailRetentionMixin:
                 )
                 if protected:
                     raise RuntimeError(
-                        "detail-retention-protected: sealed assembly 仍引用 detail: "
+                        "detail-retention-protected: committed context source 仍引用 detail: "
                         + ",".join(protected)
                     )
                 placeholders = ",".join("?" for _ in refs)

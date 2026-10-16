@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.abstractions.state_conflict import ClientStateConflictError
-from app.api.canonical_params import CanonicalSessionId
 from app.api.deps import (
     get_log_service,
     get_request_id,
@@ -14,6 +13,7 @@ from app.api.deps import (
     verify_local_token,
 )
 from app.api.errors import state_conflict_error
+from app.schemas.canonical_params import CanonicalSessionId
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.runtime import (
     RuntimeDrainResultDTO,

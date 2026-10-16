@@ -50,7 +50,11 @@ export function useNodeDebugWorkbench({
   setAuxiliaryTab,
   persistLayoutSettings,
 }: UseNodeDebugWorkbenchOptions): NodeDebugWorkbenchBinding {
-  const [resolvedMainThreadId, setResolvedMainThreadId] = useState<string | null>(null);
+  const [resolvedMainThread, setResolvedMainThread] = useState<{
+    workspaceId: string;
+    sessionId: string;
+    threadId: string;
+  } | null>(null);
   const onStatusChangeRef = useRef(onStatusChange);
   onStatusChangeRef.current = onStatusChange;
   const selectedWorkspace = workspaces.find((workspace) => workspace.workspace_id === workspaceId);
@@ -63,23 +67,27 @@ export function useNodeDebugWorkbench({
   ), [workspaceId, backendWorkspaceId, connectionKind]);
   useEffect(() => {
     if (!sessionId || !workspaceId) {
-      setResolvedMainThreadId(null);
+      setResolvedMainThread(null);
       return;
     }
     let current = true;
-    setResolvedMainThreadId(null);
+    setResolvedMainThread(null);
     void Promise.resolve().then(() => getSessionMainThread(
       apiPort, sessionId,
       requireGatewayWorkspaceRequestTarget(requestTarget ? [requestTarget] : [], workspaceId),
     ))
       .then((owner) => {
-        if (current) setResolvedMainThreadId(owner.thread_id);
+        if (current) setResolvedMainThread({ workspaceId, sessionId, threadId: owner.thread_id });
       })
       .catch((cause: unknown) => {
         if (current) onStatusChangeRef.current(`解析调试主线程失败: ${errorMessage(cause)}`);
       });
     return () => { current = false; };
   }, [apiPort, sessionId, workspaceId, requestTarget]);
+
+  const resolvedMainThreadId = resolvedMainThread?.workspaceId === workspaceId
+    && resolvedMainThread.sessionId === sessionId
+    ? resolvedMainThread.threadId : null;
 
   const {
     threadId,

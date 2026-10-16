@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 from collections.abc import Callable
 
 import pytest
 
 from app.domain.itemized.errors import FormatDispatchError
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.infrastructure.rollout_context.migration.artifacts import (
     artifact_manifest,
 )
@@ -21,6 +23,9 @@ from tests.integration.backend.sessions.itemized_migration_helpers import (
     _write_v1_source,
     migration_audits,
     prepare_migration_workspace,
+)
+from tests.integration.backend.sessions.itemized_projection_helpers import (
+    copy_rollout_snapshot,
 )
 
 SOURCE_SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
@@ -46,53 +51,25 @@ def fork_source(request: pytest.FixtureRequest, session_bundle_factory) -> Calla
     return create
 
 
-def _complete_copy(storage, source: str, target: str) -> str:
-    view = storage.forks.clone_rollout(
-        source_thread_id=storage.storage.main_thread_id(source),
-        target_thread_id=storage.storage.main_thread_id(target),
-        source_checkpoint_id=None,
-        source_session_id=source,
-        target_session_id=target,
-    )
-    fields = {
-        "target_session_id": target,
-        "source_session_id": source,
-        "source_checkpoint_id": None,
-        "source_view_id": view,
-        "fork_mode": "full_rollout_copy",
-        "relationship": "detached",
-        "checkpoint_ns": "",
-        "source_thread_id": storage.storage.main_thread_id(source),
-        "target_thread_id": storage.storage.main_thread_id(target),
-        "source_snapshot_sha256": hashlib.sha256(
-            f"synthetic-source-snapshot:{source}:{target}".encode()
-        ).hexdigest(),
-    }
-    materialization, fork_id = storage.forks.begin_fork_materialization(**fields)
-    assert storage.forks.commit_fork_materialization(materialization, **fields) == fork_id
-    return fork_id
-
-
-def test_full_copy_rejects_v1_without_migration_side_effects(
+@pytest.mark.asyncio
+async def test_full_copy_rejects_v1_without_migration_side_effects(
     fork_source: Callable,
 ) -> None:
     records = _accepted_records()
     storage = fork_source(records)
     before = artifact_manifest(storage.storage.root(SOURCE_SESSION_ID))
-    with pytest.raises(FormatDispatchError, match="unsupported_legacy_rollout"):
-        storage.forks.clone_rollout(
-            source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
-            target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
-            source_checkpoint_id=None,
-            source_session_id=SOURCE_SESSION_ID,
-            target_session_id=TARGET_SESSION_ID,
-        )
+    with (
+        pytest.raises(FormatDispatchError, match="v1_migration_required"),
+        RolloutCheckpointSaver(storage.storage.sessions_dir, storage=storage) as saver,
+    ):
+        await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID)
     assert not storage.storage.root(TARGET_SESSION_ID).exists()
     assert artifact_manifest(storage.storage.root(SOURCE_SESSION_ID)) == before
     assert migration_audits(storage) == []
 
 
-def test_explicit_v1_import_then_v2_full_copy_keeps_tool_lineage_local(
+@pytest.mark.asyncio
+async def test_explicit_v1_import_then_v2_full_copy_keeps_tool_lineage_local(
     fork_source: Callable,
 ) -> None:
     records = _accepted_records()
@@ -150,36 +127,25 @@ def test_explicit_v1_import_then_v2_full_copy_keeps_tool_lineage_local(
     assert len(items) == 5
     call = next(item for item in items if item.semantic_kind == "tool_call")
     target_before = artifact_manifest(storage.storage.root(TARGET_SESSION_ID))
-    fork_id = _complete_copy(storage, TARGET_SESSION_ID, GRANDCHILD_SESSION_ID)
+    with RolloutCheckpointSaver(storage.storage.sessions_dir, storage=storage) as saver:
+        await copy_rollout_snapshot(saver, TARGET_SESSION_ID, GRANDCHILD_SESSION_ID)
     assert artifact_manifest(storage.storage.root(SOURCE_SESSION_ID)) == source_before
     assert artifact_manifest(storage.storage.root(TARGET_SESSION_ID)) == target_before
     child_items = storage.storage.read_items(
         GRANDCHILD_SESSION_ID, storage.storage.main_thread_id(GRANDCHILD_SESSION_ID)
     )
-    with storage.storage._connect(
-        storage.storage.main_thread_id(GRANDCHILD_SESSION_ID),
-        "",
-        read_only=True,
-        session_id=GRANDCHILD_SESSION_ID,
-    ) as connection:
-        rows = connection.execute(
-            "SELECT source_local_id, target_local_id FROM fork_identity_mappings WHERE fork_id=? AND entity_type='item'",
-            (fork_id,),
-        ).fetchall()
-    assert len(rows) == len(items) == len(child_items)
-    assert {row[0] for row in rows} == {item.item_id for item in items}
-    assert {row[1] for row in rows} == {item.item_id for item in child_items}
-    assert all(not row[0].startswith("legacy:v1:") for row in rows)
+    assert [item.to_dict() for item in child_items] == [item.to_dict() for item in items]
+    assert all(not item.item_id.startswith("legacy:v1:") for item in child_items)
     child_call = next(item for item in child_items if item.semantic_kind == "tool_call")
     child_result = next(
         item for item in child_items if item.semantic_kind == "tool_result"
     )
-    assert child_call.item_id not in {item.item_id for item in items}
+    assert child_call.item_id == call.item_id
     for field in ("tool_call_id", "tool_invocation_id", "tool_attempt_id"):
         assert (
             child_call.payload[field]
             == child_result.payload[field]
-            != call.payload[field]
+            == call.payload[field]
         )
     assert child_call.payload["args"] == {"body": "literal source-call"}
     assert child_result.payload["content"] == "unmodified result body"

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   getSessionCatalogBreadcrumb,
+  getSessionCatalogExport,
   listSessionCatalogChildren,
   refreshSessionCatalog,
 } from "../../api";
@@ -50,7 +51,7 @@ import {
 } from "../../api/workspaceIdentity";
 
 export interface CatalogBranchState extends Omit<SessionCatalogPage, "catalog_revision"> {
-  /** 请求尚未取得后端 snapshot 时为空；已加载页总是由 DTO 提供数值 generation。 */
+  /** SQLite catalog 全局版本计数，区别于 lifecycle/runtime generation 与页 revision 摘要；未加载 snapshot 时为空。 */
   catalog_revision?: number;
   loading: boolean;
   error: string | null;
@@ -72,6 +73,8 @@ const emptySearch: GatewaySessionSearchResults = {
 };
 
 const CATALOG_RETRY_LIMIT = 3;
+
+class CatalogReadSupersededError extends Error {}
 
 /**
  * 目录分支读取是否可重试的唯一判据：只认「明确的错误类型 + 状态码」，不再对错误
@@ -101,6 +104,24 @@ function catalogRetryDelay(attempt: number): Promise<void> {
 
 function branchKey(workspaceId: string, parentNodeId?: string | null): string {
   return `${workspaceId}:${parentNodeId ?? "root"}`;
+}
+
+/** 预留 ID 接替本地创建引用时，展开态只迁移到同一节点的新键。 */
+function migrateCatalogExpandedIds(
+  expandedIds: Set<string>,
+  workspaceId: string,
+  outbox: CatalogOutbox,
+): Set<string> {
+  let migrated = expandedIds;
+  for (const operation of outbox.operations) {
+    if (operation.kind !== "create_folder" || operation.created_node_id === null) continue;
+    const localKey = `catalog:${workspaceId}:${operation.client_operation_id}`;
+    if (!migrated.has(localKey)) continue;
+    if (migrated === expandedIds) migrated = new Set(expandedIds);
+    migrated.delete(localKey);
+    migrated.add(`catalog:${workspaceId}:${operation.created_node_id}`);
+  }
+  return migrated;
 }
 
 function updateParentNodeChildFlag(
@@ -168,6 +189,8 @@ function projectConfirmedNode(node: SessionCatalogNode): CatalogProjectedNode {
     pending_state: null,
     pending_operation_id: null,
     client_ref: null,
+    settlement: null,
+    settlement_error: null,
   };
 }
 
@@ -225,6 +248,7 @@ export function useSessionResourceExplorer({
   const [searchResults, setSearchResults] = useState(emptySearch);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [catalogViewVersion, setCatalogViewVersion] = useState(0);
   const {
     generators,
     generationRuns,
@@ -353,11 +377,11 @@ export function useSessionResourceExplorer({
     }
   }, [apiPort, publishNavigation]);
 
-  const loadBranch = useCallback(async (
+  const readCatalogBranch = useCallback(async (
     workspaceId: string,
     parentNodeId?: string | null,
     append = false,
-    confirmedRead: { deferPublication?: boolean; minimumCatalogRevision?: number; signal?: AbortSignal } = {},
+    confirmedRead: { minimumCatalogRevision?: number; signal?: AbortSignal; refreshRoot?: boolean } = {},
   ): Promise<SessionCatalogPage | undefined> => {
     if (sessionCatalogOutboxRuntime && gatewayUserAccess) {
       void openCatalogOutbox(workspaceId).catch((error: unknown) => {
@@ -366,14 +390,20 @@ export function useSessionResourceExplorer({
         );
       });
     }
+    const outbox = gatewayUserAccess
+      ? sessionCatalogOutboxRuntime?.getSnapshot().get(
+          sessionCatalogOutboxScopeKey(workspaceId, gatewayUserAccess),
+        )?.outbox
+      : null;
+    const parent = outbox ? catalogOutboxParentCreation(outbox, parentNodeId ?? null) : null;
+    // acceptance 只预留 ID；提交前的子项全部由本地依赖投影，不请求尚不存在的节点。
+    if (parent?.createdBy) return undefined;
+    parentNodeId = parent?.parentNodeId ?? parentNodeId;
     const key = branchKey(workspaceId, parentNodeId);
-    const parent = readCatalogOutbox(workspaceId)?.operations.find(
-      (operation) => operation.kind === "create_folder" && operation.client_ref === parentNodeId,
-    );
-    // 未确认 Folder 没有后端 node；其子项由 outbox 纯投影展示，不能拿 client_ref 请求 API。
-    if (parent && !parent.created_node_id) return undefined;
+    const refreshRoot = confirmedRead.refreshRoot && parentNodeId == null;
     const requestKey = `${key}:${append ? "append" : "replace"}`
-      + (confirmedRead.deferPublication ? `:confirmed:${confirmedRead.minimumCatalogRevision ?? 0}` : "");
+      + `:confirmed:${confirmedRead.minimumCatalogRevision ?? 0}`
+      + (refreshRoot ? ":refresh" : "");
     const inFlight = branchInFlightRequestsRef.current.get(requestKey);
     if (inFlight) {
       return inFlight;
@@ -401,56 +431,59 @@ export function useSessionResourceExplorer({
     const request = (async () => {
       try {
         let page: SessionCatalogPage;
-        for (let attempt = 0; ; attempt += 1) {
-          try {
-            page = await listSessionCatalogChildren(
-              apiPort,
-              workspaceRequestTarget(workspaceId),
-              parentNodeId,
-              append ? current?.cursor : null,
-              { signal: confirmedRead.signal },
-            );
-            break;
-          } catch (error) {
-            if (confirmedRead.signal?.aborted
-              || attempt >= CATALOG_RETRY_LIMIT - 1 || !isRetryableCatalogError(error)) {
-              throw error;
+        const items = append ? [...(current?.items ?? [])] : [];
+        const visitedCursors = new Set<string>();
+        let cursor = append ? current?.cursor ?? null : null;
+        let revision = append ? current?.catalog_revision : undefined;
+        while (true) {
+          for (let attempt = 0; ; attempt += 1) {
+            try {
+              page = refreshRoot && cursor === null ? await refreshSessionCatalog(
+                apiPort,
+                workspaceRequestTarget(workspaceId),
+                { signal: confirmedRead.signal },
+              ) : await listSessionCatalogChildren(
+                apiPort,
+                workspaceRequestTarget(workspaceId),
+                parentNodeId,
+                cursor,
+                { signal: confirmedRead.signal },
+              );
+              break;
+            } catch (error) {
+              if (confirmedRead.signal?.aborted
+                || attempt >= CATALOG_RETRY_LIMIT - 1 || !isRetryableCatalogError(error)) {
+                throw error;
+              }
+              await catalogRetryDelay(attempt);
             }
-            await catalogRetryDelay(attempt);
           }
-        }
-        if (confirmedRead.signal?.aborted) throw new Error("会话目录权威分支刷新已取消");
-        if (branchRequestRefs.current.get(key) !== requestId) return page;
-        const minimumRevision = Math.max(
-          confirmedRead.minimumCatalogRevision ?? 0,
-          branchesRef.current.get(key)?.catalog_revision ?? 0,
-        );
-        if (!Number.isSafeInteger(page.catalog_revision) || page.catalog_revision < minimumRevision) {
-          throw new Error(`会话目录权威分支 revision 落后: ${workspaceId}/${parentNodeId ?? "root"}, actual=${page.catalog_revision}, minimum=${minimumRevision}`);
-        }
-        if (confirmedRead.deferPublication) return page;
-        updateBranches((previous) => {
-          const next = new Map(previous);
-          const previousItems = append ? next.get(key)?.items ?? [] : [];
-          const items = [...previousItems, ...page.items];
-          next.set(key, {
-            ...page,
-            items,
-            loading: false,
-            error: null,
-          });
-          updateParentNodeChildFlag(
-            next,
-            workspaceId,
-            parentNodeId,
-            page.total > 0,
+          if (confirmedRead.signal?.aborted) throw new Error("会话目录权威分支刷新已取消");
+          if (branchRequestRefs.current.get(key) !== requestId) return undefined;
+          const minimumRevision = Math.max(
+            confirmedRead.minimumCatalogRevision ?? 0,
+            branchesRef.current.get(key)?.catalog_revision ?? 0,
           );
-          return next;
-        });
-        return page;
+          if (!Number.isSafeInteger(page.catalog_revision) || page.catalog_revision < minimumRevision) {
+            throw new Error(`会话目录权威分支 revision 落后: ${workspaceId}/${parentNodeId ?? "root"}, actual=${page.catalog_revision}, minimum=${minimumRevision}`);
+          }
+          if (revision !== undefined && revision !== page.catalog_revision) {
+            throw new Error(`目录续页的 catalog revision 不一致: ${workspaceId}/${parentNodeId ?? "root"}`);
+          }
+          revision = page.catalog_revision;
+          items.push(...page.items);
+          // 整批对账保留已加载的分页深度，展开下一层不能丢掉父分支刚定位的节点。
+          if (append || !page.cursor || items.length >= (current?.items.length ?? 0)) break;
+          if (visitedCursors.has(page.cursor)) {
+            throw new Error(`目录分页 cursor 循环: workspace=${workspaceId}, cursor=${page.cursor}`);
+          }
+          visitedCursors.add(page.cursor);
+          cursor = page.cursor;
+        }
+        return { ...page, items };
       } catch (error) {
         if (branchRequestRefs.current.get(key) !== requestId) {
-          return undefined;
+          throw new CatalogReadSupersededError(`会话目录分支刷新已被更新请求取代: ${workspaceId}/${parentNodeId ?? "root"}`);
         }
         const message = errorMessage(error);
         updateBranches((previous) => {
@@ -463,24 +496,7 @@ export function useSessionResourceExplorer({
     })();
     trackInFlightRequest(branchInFlightRequestsRef.current, requestKey, request);
     return request;
-  }, [apiPort, gatewayUserAccess, openCatalogOutbox, readCatalogOutbox, sessionCatalogOutboxRuntime, updateBranches, workspaceRequestTarget]);
-
-  const loadCatalogBranch = useCallback(async (
-    workspaceId: string,
-    parentNodeId: string | null,
-    confirmedRead: { minimumCatalogRevision?: number; signal?: AbortSignal },
-  ): Promise<SessionCatalogPage> => {
-    const key = branchKey(workspaceId, parentNodeId);
-    const request = loadBranch(workspaceId, parentNodeId, false, { ...confirmedRead, deferPublication: true });
-    const requestId = branchRequestRefs.current.get(key);
-    const page = await request;
-    if (!page || branchRequestRefs.current.get(key) !== requestId) {
-      throw new Error(
-        `会话目录分支刷新已被更新请求取代: ${workspaceId}/${parentNodeId ?? "root"}`,
-      );
-    }
-    return page;
-  }, [loadBranch]);
+  }, [apiPort, gatewayUserAccess, openCatalogOutbox, sessionCatalogOutboxRuntime, updateBranches, workspaceRequestTarget]);
 
   const pruneOutboxAfterBranchRefresh = useCallback(async (
     workspaceId: string,
@@ -508,6 +524,9 @@ export function useSessionResourceExplorer({
         && operation.committed_catalog_revision <= minimumRevision)
       .map((operation) => operation.client_operation_id);
     if (pruneableOperationIds.length > 0) {
+      // 成功对账可以先于 React 提交清理回执；清理前冻结映射，不能等消失的下一份 snapshot。
+      const outbox = handle.driver.current();
+      setExpandedIds((previous) => migrateCatalogExpandedIds(previous, workspaceId, outbox));
       await handle.driver.prune(maximumRevision, pruneableOperationIds);
     }
   }, [gatewayUserAccess, openCatalogOutbox, sessionCatalogOutboxRuntime]);
@@ -516,26 +535,75 @@ export function useSessionResourceExplorer({
     workspaceId: string,
     parentNodeIds: Array<string | null>,
     operationIds?: readonly string[],
-    confirmedRead: { minimumCatalogRevision?: number; signal?: AbortSignal } = {},
+    confirmedRead: {
+      minimumCatalogRevision?: number;
+      signal?: AbortSignal;
+      visibleParentIds?: ReadonlySet<string>;
+      refreshRoot?: boolean;
+      appendParentNodeId?: string | null;
+      additionalParentNodeIds?: readonly (string | null)[];
+      reuseConfirmedBranches?: boolean;
+    } = {},
   ) => {
-    const results = await Promise.all([...new Set(parentNodeIds)].map(async (parentNodeId) => {
+    const removed = new Map<string, number>();
+    const readableParents = [...new Set(parentNodeIds)].filter((parentNodeId) => {
+      if (parentNodeId === null || !confirmedRead.visibleParentIds
+        || confirmedRead.visibleParentIds.has(parentNodeId)) return true;
       const key = branchKey(workspaceId, parentNodeId);
-      const request = loadCatalogBranch(workspaceId, parentNodeId, confirmedRead);
+      const requestId = (branchRequestRefs.current.get(key) ?? 0) + 1;
+      // 权威节点集已撤销该可见分支；旧在途页不得把缓存重新写回来。
+      branchRequestRefs.current.set(key, requestId);
+      removed.set(key, requestId);
+      return false;
+    });
+    const results = await Promise.all(readableParents.map(async (parentNodeId) => {
+      const key = branchKey(workspaceId, parentNodeId);
+      const cached = branchesRef.current.get(key);
+      if (confirmedRead.reuseConfirmedBranches
+        && !confirmedRead.additionalParentNodeIds?.includes(parentNodeId)
+        && confirmedRead.minimumCatalogRevision !== undefined
+        && cached !== undefined
+        && cached.catalog_revision === confirmedRead.minimumCatalogRevision
+        && !cached.loading && cached.error === null) {
+        return {
+          key, requestId: branchRequestRefs.current.get(key), parentNodeId,
+          page: { ...cached, catalog_revision: confirmedRead.minimumCatalogRevision }, error: null,
+        };
+      }
+      const request = readCatalogBranch(
+        workspaceId, parentNodeId,
+        confirmedRead.appendParentNodeId !== undefined && confirmedRead.appendParentNodeId === parentNodeId,
+        confirmedRead,
+      );
       const requestId = branchRequestRefs.current.get(key);
       try {
-        return { key, requestId, parentNodeId, page: await request, error: null };
+        const page = await request;
+        if (!page) throw new CatalogReadSupersededError(`会话目录分支刷新已被更新请求取代: ${workspaceId}/${parentNodeId ?? "root"}`);
+        return { key, requestId, parentNodeId, page, error: null };
       } catch (error) {
-        return { key, requestId, parentNodeId, page: null, error: errorMessage(error) };
+        return { key, requestId, parentNodeId, page: null, error };
       }
     }));
-    const errors = results.flatMap((result) => result.error === null ? [] : [`${result.parentNodeId ?? "root"}: ${result.error}`]);
+    const errors = results.flatMap((result) => result.error === null ? [] : [`${result.parentNodeId ?? "root"}: ${errorMessage(result.error)}`]);
+    let superseded = results.some((result) => result.error instanceof CatalogReadSupersededError);
     if (confirmedRead.signal?.aborted) errors.push("权威分支刷新已取消");
     for (const result of results) {
       if (branchRequestRefs.current.get(result.key) !== result.requestId) {
         errors.push(`${result.parentNodeId ?? "root"}: 分支刷新已被更新请求取代`);
+        superseded = true;
+      }
+    }
+    for (const [key, requestId] of removed) {
+      if (branchRequestRefs.current.get(key) !== requestId) {
+        errors.push(`${key}: 分支撤销已被更新请求取代`);
+        superseded = true;
       }
     }
     const pages = results.flatMap((result) => result.page === null ? [] : [result.page]);
+    if (pages.some((page) => !Number.isSafeInteger(page.catalog_revision)
+      || page.catalog_revision < (confirmedRead.minimumCatalogRevision ?? 0))) {
+      errors.push("权威分支的 catalog revision 落后，保留原 confirmed 等待重新对账");
+    }
     if (new Set(pages.map((page) => page.catalog_revision)).size > 1) {
       errors.push("权威分支的 catalog revision 不一致，保留原 confirmed 等待重新对账");
     }
@@ -549,11 +617,12 @@ export function useSessionResourceExplorer({
         }
         return next;
       });
-      throw new Error(message);
+      throw superseded ? new CatalogReadSupersededError(message) : new Error(message);
     }
     // 同一批权威页一次进入现有 confirmed，避免外部移动被投影为两处不同 revision 的节点。
     updateBranches((previous) => {
       const next = new Map(previous);
+      for (const key of removed.keys()) next.delete(key);
       for (const result of results) {
         if (result.page) next.set(result.key, { ...result.page, loading: false, error: null });
       }
@@ -564,7 +633,7 @@ export function useSessionResourceExplorer({
     });
     await pruneOutboxAfterBranchRefresh(workspaceId, pages, operationIds);
     return pages;
-  }, [loadCatalogBranch, pruneOutboxAfterBranchRefresh, updateBranches]);
+  }, [readCatalogBranch, pruneOutboxAfterBranchRefresh, updateBranches]);
 
   const refreshCatalogWorkspace = useCallback(async (
     workspaceId: string,
@@ -575,6 +644,9 @@ export function useSessionResourceExplorer({
       outbox?: CatalogOutbox;
       minimumCatalogRevision?: number;
       signal?: AbortSignal;
+      refreshRoot?: boolean;
+      appendParentNodeId?: string | null;
+      reuseConfirmedBranches?: boolean;
     } = {},
   ) => {
     const parentNodeIds = new Set<string | null>();
@@ -622,12 +694,52 @@ export function useSessionResourceExplorer({
       || workspaceId === activeWorkspaceId || parentNodeIds.size > 0) {
       parentNodeIds.add(null);
     }
+    // 失败创建及其子项没有后端父分支；原创建引用只在 committed 后转成 canonical 键。
+    if (currentOutbox) {
+      for (const parentNodeId of [...parentNodeIds]) {
+        const parent = catalogOutboxParentCreation(currentOutbox, parentNodeId);
+        if (!parent) continue;
+        parentNodeIds.delete(parentNodeId);
+        if (parent.createdBy === null) parentNodeIds.add(parent.parentNodeId);
+      }
+    }
     const refreshKey = `${workspaceId}\u0000${options.forceRoot ? "root" : ""}\u0000`
       + [...operationIds].sort().join("\u0001")
-      + `\u0000${options.minimumCatalogRevision ?? "current"}`;
+      + `\u0000${options.minimumCatalogRevision ?? "current"}\u0000${options.refreshRoot ? "refresh" : ""}`
+      + `\u0000${[...parentNodeIds].map((id) => id ?? "root").sort().join("\u0001")}`
+      + `\u0000${options.appendParentNodeId === undefined ? "replace" : `append:${options.appendParentNodeId ?? "root"}`}`
+      + `\u0000${options.reuseConfirmedBranches ? [...(options.additionalParentNodeIds ?? [])].map((id) => id ?? "root").sort().join("\u0001") : "all"}`;
     const inFlight = catalogRefreshInFlightRef.current.get(refreshKey);
     if (inFlight) return await inFlight;
-    const request = reconcileCatalogBranches(workspaceId, [...parentNodeIds], operationIds, options);
+    const rootKey = branchKey(workspaceId, null);
+    const rootRequestId = branchRequestRefs.current.get(rootKey);
+    const request = (async () => {
+      let minimumCatalogRevision = options.minimumCatalogRevision ?? 0;
+      let visibleParentIds: ReadonlySet<string> | undefined;
+      if ([...parentNodeIds].some((parentNodeId) => parentNodeId !== null)) {
+        const catalog = await getSessionCatalogExport(apiPort, workspaceRequestTarget(workspaceId), { signal: options.signal });
+        const floor = Math.max(minimumCatalogRevision, ...[...branchesRef.current.entries()]
+          .filter(([key]) => key.startsWith(`${workspaceId}:`))
+          .map(([, branch]) => branch.catalog_revision ?? 0));
+        if (!Number.isSafeInteger(catalog.catalog_revision) || catalog.catalog_revision < floor) {
+          throw new Error(`会话目录完整节点集 revision 落后: actual=${catalog.catalog_revision}, minimum=${floor}`);
+        }
+        minimumCatalogRevision = catalog.catalog_revision;
+        visibleParentIds = new Set(catalog.items.map((node) => node.node_id));
+      }
+      return await reconcileCatalogBranches(workspaceId, [...parentNodeIds], operationIds, {
+        ...options, minimumCatalogRevision, visibleParentIds,
+      });
+    })().catch((error: unknown) => {
+      if (branchRequestRefs.current.get(rootKey) === rootRequestId) {
+        updateBranches((previous) => {
+          const next = new Map(previous);
+          next.set(rootKey, branchFailureState(next.get(rootKey), null, errorMessage(error)));
+          return next;
+        });
+      }
+      throw error;
+    });
     catalogRefreshInFlightRef.current.set(refreshKey, request);
     try {
       return await request;
@@ -638,10 +750,35 @@ export function useSessionResourceExplorer({
     }
   }, [
     activeWorkspaceId,
+    apiPort,
     gatewayUserAccess,
     reconcileCatalogBranches,
     sessionCatalogOutboxRuntime,
+    updateBranches,
+    workspaceRequestTarget,
   ]);
+
+  const loadBranch = useCallback(async (
+    workspaceId: string,
+    parentNodeId?: string | null,
+    append = false,
+  ): Promise<SessionCatalogPage | undefined> => {
+    const outbox = readCatalogOutbox(workspaceId);
+    const parent = outbox ? catalogOutboxParentCreation(outbox, parentNodeId ?? null) : null;
+    if (parent?.createdBy) return undefined;
+    const resolvedParent = parent?.parentNodeId ?? parentNodeId ?? null;
+    try {
+      const pages = await refreshCatalogWorkspace(workspaceId, {
+        additionalParentNodeIds: [resolvedParent], reuseConfirmedBranches: true,
+        ...(append ? { appendParentNodeId: resolvedParent } : {}),
+      });
+      return pages.find((page) => page.parent_node_id === resolvedParent);
+    } catch (error) {
+      // 旧的展开/定位请求已失去发布权，不把它的失败覆盖到更新的 confirmed。
+      if (error instanceof CatalogReadSupersededError) return undefined;
+      throw error;
+    }
+  }, [readCatalogOutbox, refreshCatalogWorkspace]);
 
   failureRefreshRef.current = async (workspaceTarget, outbox, minimumCatalogRevision, signal) => {
     const workspaceId = workspaceTarget.workspace_id;
@@ -658,6 +795,11 @@ export function useSessionResourceExplorer({
       outbox, operationIds: [], forceRoot: true,
       minimumCatalogRevision: catalog.catalog_revision, signal,
     });
+    if (signal.aborted) throw new Error("会话目录 confirmed 刷新已取消");
+    // 目录事件也使原 breadcrumb 和搜索视图失效，业务结果仍由原 API 提供。
+    currentSessionRevealKeyRef.current = null;
+    currentSessionRevealRequestRef.current += 1;
+    setCatalogViewVersion((previous) => previous + 1);
   };
 
   useEffect(() => {
@@ -722,53 +864,7 @@ export function useSessionResourceExplorer({
     }
     const navigationPromise = refreshNavigation();
     const catalogPromise = activeWorkspaceId
-      ? (async () => {
-          const rootKey = branchKey(activeWorkspaceId, null);
-          const requestId = (branchRequestRefs.current.get(rootKey) ?? 0) + 1;
-          branchRequestRefs.current.set(rootKey, requestId);
-          let rootPage: SessionCatalogPage;
-          try {
-            rootPage = await refreshSessionCatalog(
-              apiPort,
-              workspaceRequestTarget(activeWorkspaceId),
-            );
-          } catch (error) {
-            // 上面已经顶掉在途的根分支读取，它的结果不会再写回；刷新自身失败时
-            // 必须由这里写入失败终态，否则根分支会永远停在 loadBranch 留下的
-            // loading 占位上，界面永久显示「正在加载…」。
-            if (branchRequestRefs.current.get(rootKey) === requestId) {
-              const message = errorMessage(error);
-              updateBranches((previous) => {
-                const next = new Map(previous);
-                next.set(rootKey, branchFailureState(next.get(rootKey), null, message));
-                return next;
-              });
-            }
-            throw error;
-          }
-          if (branchRequestRefs.current.get(rootKey) === requestId) {
-            updateBranches((previous) => {
-              const next = new Map(previous);
-              next.set(rootKey, {
-                ...rootPage,
-                loading: false,
-                error: null,
-              });
-              return next;
-            });
-          }
-          const nestedParentIds = [...branchesRef.current.entries()]
-            .filter(([key, branch]) =>
-              key.startsWith(`${activeWorkspaceId}:`)
-              && branch.parent_node_id,
-            )
-            .map(([_key, branch]) => branch.parent_node_id as string);
-          await Promise.all(
-            nestedParentIds.map((parentNodeId) =>
-              loadBranch(activeWorkspaceId, parentNodeId),
-            ),
-          );
-        })()
+      ? refreshCatalogWorkspace(activeWorkspaceId, { forceRoot: true, refreshRoot: true })
       : Promise.resolve();
     const [nextNavigation] = await Promise.all([
       navigationPromise,
@@ -777,13 +873,11 @@ export function useSessionResourceExplorer({
     return nextNavigation;
   }, [
     activeWorkspaceId,
-    apiPort,
     gatewayUserAccess,
-    loadBranch,
     openCatalogOutbox,
+    refreshCatalogWorkspace,
     refreshNavigation,
     sessionCatalogOutboxRuntime,
-    workspaceRequestTarget,
   ]);
 
   const loadBranchUntilNode = useCallback(async (
@@ -823,97 +917,19 @@ export function useSessionResourceExplorer({
         `目录分支已加载但未找到定位节点: workspace=${workspaceId}, node=${targetNodeId}`,
       );
     }
-    const requestId = (branchRequestRefs.current.get(key) ?? 0) + 1;
-    branchRequestRefs.current.set(key, requestId);
-    updateBranches((previous) => {
-      const next = new Map(previous);
-      next.set(key, {
-        revision: effectiveLoaded?.revision ?? "",
-        ...(effectiveLoaded?.catalog_revision === undefined
-          ? {}
-          : { catalog_revision: effectiveLoaded.catalog_revision }),
-        parent_node_id: parentNodeId,
-        items: effectiveLoaded?.items ?? [],
-        cursor: effectiveLoaded?.cursor ?? null,
-        total: effectiveLoaded?.total ?? 0,
-        loading: true,
-        error: null,
-      });
-      return next;
-    });
-    const items: SessionCatalogPage["items"] = [
-      ...(effectiveLoaded?.items ?? []),
-    ];
     const visitedCursors = new Set<string>();
-    let cursor: string | null = effectiveLoaded?.cursor ?? null;
-    try {
-      while (true) {
-        const page = await listSessionCatalogChildren(
-          apiPort,
-          workspaceRequestTarget(workspaceId),
-          parentNodeId,
-          cursor,
-        );
-        if (branchRequestRefs.current.get(key) !== requestId) {
-          return;
-        }
-        items.push(...page.items);
-        const found = items.some((item) => item.node_id === targetNodeId);
-        updateBranches((previous) => {
-          const next = new Map(previous);
-          next.set(key, {
-            ...page,
-            items: [...items],
-            loading: !found && page.cursor !== null,
-            error: null,
-          });
-          return next;
-        });
-        if (found) {
-          return;
-        }
-        if (!page.cursor) {
-          throw new Error(
-            `目录分页结束但未找到定位节点: workspace=${workspaceId}, node=${targetNodeId}`,
-          );
-        }
-        if (visitedCursors.has(page.cursor)) {
-          throw new Error(
-            `目录分页 cursor 循环: workspace=${workspaceId}, cursor=${page.cursor}`,
-          );
-        }
-        visitedCursors.add(page.cursor);
-        cursor = page.cursor;
+    let page = effectiveLoaded ?? await loadBranch(workspaceId, parentNodeId);
+    while (page && !page.items.some((item) => item.node_id === targetNodeId)) {
+      if (!page.cursor) {
+        throw new Error(`目录分页结束但未找到定位节点: workspace=${workspaceId}, node=${targetNodeId}`);
       }
-    } catch (error) {
-      // 请求身份守卫：本次分页已被更新的一次 loadBranch（或刷新）顶掉时，它的
-      // 失败终态不得覆盖那份已成功写入的新结果。与 loadBranch 成功/失败分支
-      // （同文件使用 `branchRequestRefs.current.get(key) !== requestId` 同一手
-      // 法）保持一致，不再新造第二套 generation 机制。
-      if (branchRequestRefs.current.get(key) !== requestId) {
-        throw error;
+      if (visitedCursors.has(page.cursor)) {
+        throw new Error(`目录分页 cursor 循环: workspace=${workspaceId}, cursor=${page.cursor}`);
       }
-      const message = errorMessage(error);
-      updateBranches((previous) => {
-        const next = new Map(previous);
-        const branch = next.get(key);
-        next.set(key, {
-          revision: branch?.revision ?? "",
-          ...(branch?.catalog_revision === undefined
-            ? {}
-            : { catalog_revision: branch.catalog_revision }),
-          parent_node_id: parentNodeId,
-          items: branch?.items ?? items,
-          cursor: branch?.cursor ?? null,
-          total: branch?.total ?? items.length,
-          loading: false,
-          error: message,
-        });
-        return next;
-      });
-      throw error;
+      visitedCursors.add(page.cursor);
+      page = await loadBranch(workspaceId, parentNodeId, true);
     }
-  }, [apiPort, loadBranch, workspaceRequestTarget]);
+  }, [loadBranch]);
 
   const toggleExpanded = useCallback((
     id: string,
@@ -1063,9 +1079,7 @@ export function useSessionResourceExplorer({
     if ("handle" in result) {
       trackCatalogIntent(workspaceId, result.handle, result.operationId, [parent?.createdBy ? null : parentFolderId ?? null]);
     }
-    if (!parent?.createdBy) await loadBranch(workspaceId, parent ? parent.parentNodeId : parentFolderId);
-    return result.dispatchOutcome;
-  }, [loadBranch, openCatalogOutbox, submitCatalogIntent, trackCatalogIntent]);
+  }, [openCatalogOutbox, submitCatalogIntent, trackCatalogIntent]);
 
   const renameWorkspaceFolder = useCallback(async (nodeId: string, name: string) => {
     const requestId = navigationRequestRef.current + 1;
@@ -1184,6 +1198,7 @@ export function useSessionResourceExplorer({
     }, { expectedRevision: node.node_revision });
     const trackedKey = `${handle.partitionKey}\u0000${result.operationId}`;
     trackedOutboxOperationKeysRef.current.add(trackedKey);
+    const completion = (async () => {
     try {
       let terminalError: unknown = null;
       try {
@@ -1206,9 +1221,11 @@ export function useSessionResourceExplorer({
       }
       if (terminalError || refreshError) {
         const status = committed
-          ? refreshError
-            ? "已提交但目录分支刷新失败"
-            : "已提交但终态确认过程失败"
+          ? currentOperation.settlement === "repair_required"
+            ? `删除已提交但排空失败，需修复${refreshError ? "，且目录分支刷新失败" : ""}`
+            : refreshError
+              ? "已提交但目录分支刷新失败"
+              : "已提交但终态确认过程失败"
           : refreshError
             ? "未提交或终态未确认，且目录分支刷新失败"
             : "未提交或终态未确认";
@@ -1228,6 +1245,8 @@ export function useSessionResourceExplorer({
       trackedOutboxOperationKeysRef.current.delete(trackedKey);
     }
     return deletedCurrentSession;
+    })();
+    return { operationId: result.operationId, completion };
   }, [
     activeWorkspaceId,
     apiPort,
@@ -1340,9 +1359,11 @@ export function useSessionResourceExplorer({
       const outbox = readCatalogOutbox(workspaceId);
       if (!outbox) continue;
       for (const operation of outbox.operations) {
-        if (operation.kind !== "create_folder" || !operation.client_ref || operation.created_node_id) continue;
-        projected.set(branchKey(workspaceId, operation.client_ref), {
-          ...projectPendingCatalogChildren(operation.client_ref, {
+        if (operation.kind !== "create_folder") continue;
+        const nodeId = operation.created_node_id ?? operation.client_operation_id;
+        if (confirmedNodes.has(nodeId)) continue;
+        projected.set(branchKey(workspaceId, nodeId), {
+          ...projectPendingCatalogChildren(nodeId, {
             confirmedNodes: [...confirmedNodes.values()], outbox,
           }),
           revision: "", total: null, cursor: null, consistency_warning: null,
@@ -1354,9 +1375,19 @@ export function useSessionResourceExplorer({
   }, [branches, readCatalogOutbox]);
 
   useLayoutEffect(() => {
+    if (sessionCatalogOutboxSnapshot && gatewayUserAccess) {
+      setExpandedIds((previous) => {
+        let migrated = previous;
+        for (const [scopeKey, entry] of sessionCatalogOutboxSnapshot) {
+          if (scopeKey !== sessionCatalogOutboxScopeKey(entry.gatewayWorkspaceId, gatewayUserAccess)) continue;
+          migrated = migrateCatalogExpandedIds(migrated, entry.gatewayWorkspaceId, entry.outbox);
+        }
+        return migrated;
+      });
+    }
     projectionCommitRef.current = { branches, snapshot: sessionCatalogOutboxSnapshot };
     for (const check of [...projectionWaitersRef.current]) check();
-  }, [branches, projectedBranches, sessionCatalogOutboxSnapshot]);
+  }, [branches, expandedIds, gatewayUserAccess, projectedBranches, sessionCatalogOutboxSnapshot]);
 
   useEffect(() => {
     void refreshNavigation().catch(() => {
@@ -1410,14 +1441,21 @@ export function useSessionResourceExplorer({
           (operation) => operation.client_operation_id,
         ).sort();
         const signature = terminalOperations.map((operation) =>
-          `${operation.client_operation_id}:${operation.state}:${operation.committed_catalog_revision ?? "null"}`,
+          `${operation.client_operation_id}:${operation.state}:${operation.committed_catalog_revision ?? "null"}:${operation.receipt_revision ?? "null"}:${operation.settlement ?? "none"}`,
         ).sort().join("\u0001");
         nextSyncKeys.set(scopeKey, signature);
         if (terminalOutboxSyncKeysRef.current.get(scopeKey) === signature) continue;
         void refreshCatalogWorkspace(entry.gatewayWorkspaceId, { operationIds })
           .catch((error: unknown) => {
+            const repairDetails = terminalOperations
+              .filter((operation) => operation.settlement === "repair_required")
+              .map((operation) =>
+                `会话目录操作 ${operation.client_operation_id} 删除已提交但排空失败，需修复: `
+                + `${operation.error_detail ?? operation.error_code}`,
+              );
             sessionCatalogOutboxRuntime?.reportError(
-              `会话目录终态分支刷新失败 (${entry.gatewayWorkspaceId}, `
+              `${repairDetails.length > 0 ? `${repairDetails.join("；")}；` : ""}`
+              + `会话目录终态分支刷新失败 (${entry.gatewayWorkspaceId}, `
               + `${operationIds.join(", ")}): ${errorMessage(error)}`,
             );
           });
@@ -1512,7 +1550,7 @@ export function useSessionResourceExplorer({
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [apiPort, searchOpen, searchQuery]);
+  }, [apiPort, catalogViewVersion, searchOpen, searchQuery]);
 
   useEffect(() => {
     if (!activeWorkspaceId || !currentSessionId || !navigation) {
@@ -1521,7 +1559,7 @@ export function useSessionResourceExplorer({
       setRevealError(null);
       return;
     }
-    const revealKey = `${activeWorkspaceId}:${currentSessionId}`;
+    const revealKey = `${activeWorkspaceId}:${currentSessionId}:${catalogViewVersion}`;
     if (currentSessionRevealKeyRef.current === revealKey) {
       return;
     }
@@ -1530,7 +1568,7 @@ export function useSessionResourceExplorer({
       key.startsWith(`${activeWorkspaceId}:`)
       && branch.items.some((item) => item.session_id === currentSessionId),
     );
-    if (currentSessionIsVisible) {
+    if (currentSessionIsVisible && catalogViewVersion === 0) {
       currentSessionRevealKeyRef.current = revealKey;
       return;
     }
@@ -1561,6 +1599,7 @@ export function useSessionResourceExplorer({
   }, [
     activeWorkspaceId,
     apiPort,
+    catalogViewVersion,
     currentSessionId,
     navigation,
     revealSearchResult,

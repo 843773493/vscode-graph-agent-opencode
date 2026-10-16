@@ -41,6 +41,7 @@ from app.core.session_lifecycle_gate import (
     SessionDeletionPendingError,
     SessionLifecycleGate,
 )
+from app.core.session_subtree_delete import SessionSubtreeDeleteService
 from app.core.thread_creation import (
     ThreadCreationResult,
     ThreadCreationService,
@@ -283,6 +284,7 @@ def prepare_manual_record(
     metadata: dict[str, object] | None = None,
     artifacts: dict[str, object] | None = None,
     created_at: datetime | None = None,
+    freeze_manifest: bool = True,
 ) -> ThreadCreationRecord:
     """测试辅助：绕过服务直接建 preparing record 并冻结清单（恢复用）。
 
@@ -335,12 +337,13 @@ def prepare_manual_record(
             else None
         ),
     )
-    inventory = child_node_inventory(record, owner, effective_artifacts)
-    owner.control.freeze_thread_creation_artifact_manifest(
-        key,
-        artifact_manifest=canonical_json_text(inventory),
-        artifact_manifest_hash=compute_artifact_manifest_hash(inventory),
-    )
+    if freeze_manifest:
+        inventory = child_node_inventory(record, owner, effective_artifacts)
+        owner.control.freeze_thread_creation_artifact_manifest(
+            key,
+            artifact_manifest=canonical_json_text(inventory),
+            artifact_manifest_hash=compute_artifact_manifest_hash(inventory),
+        )
     return owner.control.get_thread_creation_record(key)
 
 
@@ -1170,8 +1173,10 @@ async def test_crash_after_record_before_staging_recovers(
     owner: OwnerSession,
 ) -> None:
     """崩溃点 1：record 提交后/staging 前——重入完成全流程。"""
-    record = prepare_manual_record(owner)
+    record = prepare_manual_record(owner, freeze_manifest=False)
     assert record.state == "preparing"
+    assert record.artifact_manifest is None
+    assert record.artifact_manifest_hash is None
     result = await do_create(service, owner)
     assert result.child_thread_id == record.child_thread_id
     assert result.record_state == "published"
@@ -1336,21 +1341,92 @@ async def test_staging_and_final_coexist_fail_closed(
     assert (owner.session_dir / record.staging_locator).is_dir()
 
 
-async def test_incomplete_staging_fail_closed_preserves_scene(
+@pytest.mark.parametrize("interruption", ["missing_file", "atomic_temp"])
+async def test_incomplete_staging_recovers_same_record(
     service: ThreadCreationService,
     owner: OwnerSession,
+    interruption: str,
 ) -> None:
-    """准备中断窗口：不完整 staging 重入 fail closed，现场保留供人工核账。"""
+    """合法 staging 准备中断按同 record 重准备，不能换 child 身份。"""
     record = prepare_manual_record(owner)
     staging_dir = owner.session_dir / record.staging_locator
     materialize_node(staging_dir, record, owner, make_artifacts())
     # 模拟准备中断：删除一个文件
     (staging_dir / "thread.json").unlink()
-    with pytest.raises(RuntimeError, match="文件集与预期不一致"):
-        await do_create(service, owner)
-    # 现场保留（不自动删除重建——无法与外部篡改区分）
-    assert staging_dir.is_dir()
-    assert not (staging_dir / "thread.json").exists()
+    if interruption == "atomic_temp":
+        (staging_dir / ".thread.json.a0_b1c2d").write_bytes(b'{"thread_id":')
+    result = await do_create(service, owner)
+    assert result.child_thread_id == record.child_thread_id
+    assert result.record_state == "published"
+    assert not staging_dir.exists()
+    assert count_rows(owner.control, "thread_creation_records") == 1
+
+
+async def test_delete_waits_live_creation_holder_without_holding_publish_gate(
+    service: ThreadCreationService, store: SessionCatalogStore, owner: OwnerSession,
+    sessions_root: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """旧创建可取短时 Session gate 取消；删除不得持 gate 等 holder。"""
+    prepared, release = asyncio.Event(), asyncio.Event()
+
+    async def pause_prepared(_key: str, phase: str, **_kwargs) -> None:
+        if phase == "thread.creation.prepared":
+            prepared.set()
+            await release.wait()
+
+    monkeypatch.setattr("app.core.thread_creation.observe_phase", pause_prepared)
+    creation = asyncio.create_task(do_create(service, owner))
+    await asyncio.wait_for(prepared.wait(), 2)
+    deletion = SessionSubtreeDeleteService(store=store, sessions_root=sessions_root, workspace_id=WORKSPACE_ID)
+    deleting = asyncio.create_task(deletion.delete(idempotency_key="delete-live-creation", root_node_id=owner.session_id))
+    try:
+        async with asyncio.timeout(2):
+            while store.get_node(owner.session_id).state != "deleting":
+                await asyncio.sleep(0)
+            async with SessionLifecycleGate(sessions_root).exclusive(owner.session_id):
+                assert not deleting.done()
+                assert owner.control.get_thread_creation_record("key-1").state == "preparing"
+        release.set()
+        with pytest.raises(SessionDeletionPendingError):
+            await asyncio.wait_for(creation, 2)
+        assert (await asyncio.wait_for(deleting, 2)).record_state == "completed"
+        assert owner.control.get_thread_creation_record("key-1").state == "aborted"
+    finally:
+        release.set()
+        for task in (creation, deleting):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(creation, deleting, return_exceptions=True)
+
+
+@pytest.mark.parametrize("interruption", ["record_only", "prepared", "partial", "atomic_temp", "renamed"])
+async def test_delete_cancels_original_abandoned_creation(
+    store: SessionCatalogStore, owner: OwnerSession, sessions_root: Path,
+    interruption: str,
+) -> None:
+    """删除恢复复用原创建记录，完整 final 与合法部分 staging 都能定点取消。"""
+    record = prepare_manual_record(owner, freeze_manifest=interruption != "record_only")
+    staging = owner.session_dir / record.staging_locator
+    if interruption == "renamed":
+        materialize_node(owner.session_dir / record.final_relative_locator, record, owner, make_artifacts())
+    elif interruption not in {"record_only", "prepared"}:
+        materialize_node(staging, record, owner, make_artifacts())
+        (staging / "thread.json").unlink()
+        if interruption == "atomic_temp":
+            (staging / ".thread.json.a0_b1c2d").write_bytes(b'{"thread_id":')
+    deletion = SessionSubtreeDeleteService(store=store, sessions_root=sessions_root, workspace_id=WORKSPACE_ID)
+    result = await deletion.delete(idempotency_key="delete-original-creation", root_node_id=owner.session_id)
+    assert result.record_state == "completed"
+    assert owner.control.list_pending_thread_creations() == ()
+    terminal = owner.control.get_thread_creation_record("key-1")
+    assert terminal.state == "aborted"
+    assert terminal.child_thread_id == record.child_thread_id
+    assert terminal.preimage_hash == record.preimage_hash
+    assert terminal.owner_session_lifecycle_generation == record.owner_session_lifecycle_generation
+    assert count_rows(owner.control, "thread_catalog") == 1
+    isolated = sessions_root / ".deleting" / "delete-original-creation" / owner.session_id
+    assert not (isolated / record.staging_locator).exists()
+    assert not (isolated / record.final_relative_locator).exists()
 
 
 async def test_tampered_staging_content_fail_closed(
@@ -1375,7 +1451,7 @@ async def test_foreign_staging_directory_not_absorbed(
     foreign = owner.session_dir / ".staging" / "key-1"
     foreign.mkdir(parents=True)
     (foreign / "junk.txt").write_text("外来内容", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="目录集与预期不一致"):
+    with pytest.raises(RuntimeError, match="staging 复验: 文件集与预期不一致"):
         await do_create(service, owner)
     # 外来目录原样保留（不吸收、不删除）
     assert (foreign / "junk.txt").read_text(encoding="utf-8") == "外来内容"
@@ -1738,6 +1814,48 @@ async def test_rename_fsyncs_parent_chain(
 # ----------------------------------------------------------------------
 
 
+def test_fork_delivery_trace_is_frozen_outside_child_business_preimage(owner: OwnerSession) -> None:
+    intent = {"request": {"idempotency_key": "child-fork-trace"}, "source_remote": True}
+    metadata = make_metadata(task_seed=None)
+    preimage = compute_thread_creation_preimage_hash(
+        workspace_id=WORKSPACE_ID,
+        session_id=owner.session_id,
+        thread_id=None,
+        delegation_id=None,
+        initial_state="idle",
+        session_metadata=metadata,
+        artifact_manifest={},
+        purpose="fork",
+        request_intent=intent,
+    )
+    values = {
+        "idempotency_key": "child-fork-trace",
+        "initial_state": "idle",
+        "preimage_hash": preimage,
+        "graph_binding": canonical_json_text(metadata["graph_binding"]),
+        "capability_profile": canonical_json_text(metadata["capability_profile"]),
+        "purpose": "fork",
+        "request_intent_json": canonical_json_text(intent),
+    }
+    first = owner.control.create_or_get_thread_creation_record(
+        **values, fork_delivery_request_id="req-first-child-fork",
+    )
+    repeated = owner.control.create_or_get_thread_creation_record(
+        **values, fork_delivery_request_id="req-retried-child-fork",
+    )
+    assert repeated == first
+    assert first.state == "preparing"
+    assert first.fork_delivery_request_id == "req-first-child-fork"
+    assert first.preimage_hash == preimage
+    assert json.loads(first.request_intent_json) == intent
+    assert owner.control.get_thread_creation_record("child-fork-trace") == first
+    with pytest.raises(RuntimeError, match="请求意图冲突"):
+        owner.control.create_or_get_thread_creation_record(
+            **{**values, "request_intent_json": canonical_json_text({**intent, "source_remote": False})},
+            fork_delivery_request_id="req-third-child-fork",
+        )
+
+
 def test_preimage_covers_contract_inputs() -> None:
     base = compute_thread_creation_preimage_hash(
         workspace_id=WORKSPACE_ID,
@@ -1816,6 +1934,42 @@ def test_thread_node_files_deterministic() -> None:
     # store 侧 publish 校验覆盖；此处仅断言纯函数稳定性。
 
 
+@pytest.mark.parametrize("published", [False, True])
+@pytest.mark.parametrize("fault", [None, "sibling_directory", "sibling_file", "node_symlink", "debug_symlink"])
+def test_materialized_node_debug_keeps_directory_boundary(
+    service: ThreadCreationService,
+    owner: OwnerSession,
+    published: bool,
+    fault: str | None,
+) -> None:
+    """真实 debug/node 归领域 owner；未知兄弟、文件和符号链接仍拒绝。"""
+    record = prepare_manual_record(owner)
+    node_dir = owner.session_dir / record.staging_locator
+    artifacts = make_artifacts()
+    materialize_node(node_dir, record, owner, artifacts)
+    debug_dir = node_dir / "debug"
+    runtime_dir = debug_dir / "node"
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / "manifest.json").write_text("{}", encoding="utf-8")
+    if fault == "sibling_directory":
+        (debug_dir / "unknown").mkdir()
+    elif fault == "sibling_file":
+        (debug_dir / "unknown.json").write_text("{}", encoding="utf-8")
+    elif fault in {"node_symlink", "debug_symlink"}:
+        linked_dir = runtime_dir if fault == "node_symlink" else debug_dir
+        shutil.rmtree(linked_dir)
+        external = owner.session_dir / "external-debug"
+        external.mkdir()
+        linked_dir.symlink_to(external, target_is_directory=True)
+    options = {"published": published, "materialized_rollout": not published}
+    inventory = child_node_inventory(record, owner, artifacts)
+    if fault is None:
+        assert verify_node_directory(node_dir, inventory, stage="debug owner 复验", **options)
+    else:
+        with pytest.raises(RuntimeError, match="symlink|目录集|文件集"):
+            verify_node_directory(node_dir, inventory, stage="debug owner 负向", **options)
+
+
 @pytest.mark.parametrize("symlink_kind", ["directory", "file"])
 def test_node_directory_rejects_symlink(
     service: ThreadCreationService,
@@ -1842,7 +1996,6 @@ def test_node_directory_rejects_symlink(
     with pytest.raises(RuntimeError, match="symlink"):
         verify_node_directory(
             staging_dir,
-            child_node_files(record, owner, make_artifacts()),
             child_node_inventory(record, owner, make_artifacts()),
             stage=f"symlink {symlink_kind} 负向",
         )

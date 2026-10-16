@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, ConfigDict, Field
@@ -64,14 +65,16 @@ def _error_result(name: str, mode: str, code: str, message: str) -> str:
 
 def create_skill_load_tool(
     manager: ContextSourceManager, *,
+    control_admission: Callable[[str, SkillLoadMode], AbstractAsyncContextManager[None]],
     activation_snapshot_resolver: Callable[[], SkillCatalogActivationSnapshot] | None = None,
 ) -> BaseTool:
     @tool("skill_load", args_schema=SkillLoadInput)
-    def skill_load(name: str, mode: SkillLoadMode = "snapshot") -> str:
+    async def skill_load(name: str, mode: SkillLoadMode = "snapshot") -> str:
         """按冻结 activation snapshot 解析 Skill binding；正文不经文件工具读取。"""
         try:
-            frozen = None if mode == "untrack" or activation_snapshot_resolver is None else activation_snapshot_resolver()
-            receipt = manager.load_skill(name, mode, activation_snapshot=frozen)
+            async with control_admission(name, mode):
+                frozen = None if mode == "untrack" or activation_snapshot_resolver is None else activation_snapshot_resolver()
+                receipt = manager.load_skill(name, mode, activation_snapshot=frozen)
         except KeyError as error:
             return _error_result(name, mode, "skill-not-found", str(error))
         except SkillCatalogSnapshotConflict as error:

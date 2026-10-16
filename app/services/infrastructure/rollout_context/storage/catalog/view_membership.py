@@ -224,10 +224,14 @@ class RolloutViewMembershipMixin:
             field="context_view_items.logical_item_ordinal",
         )
         for item_id in pending:
+            context_ordinal = connection.execute(
+                "SELECT COALESCE(MAX(context_ordinal), -1) + 1 FROM context_view_items WHERE view_id=?",
+                (view_id,),
+            ).fetchone()[0]
             cursor = connection.execute(
-                "INSERT INTO context_view_items(view_id, item_id, logical_item_ordinal, visible, source_kind) "
-                "VALUES (?, ?, ?, 1, ?)",
-                (view_id, item_id, next_ordinal, source_kind),
+                "INSERT INTO context_view_items(view_id, item_id, logical_item_ordinal, visible, source_kind, context_selected, context_ordinal) "
+                "VALUES (?, ?, ?, 1, ?, 1, ?)",
+                (view_id, item_id, next_ordinal, source_kind, context_ordinal),
             )
             if cursor.rowcount != 1:
                 raise RuntimeError(f"active view item membership 插入失败: {view_id}/{item_id}")
@@ -243,6 +247,7 @@ class RolloutViewMembershipMixin:
         timestamp: str,
         *,
         view_kind: str = "checkpoint",
+        ordered_context_item_ids: Sequence[str] | None = None,
     ) -> str:
         branch_id = strict_text(branch_id, field="context_views.branch_id")
         parent_view_id = strict_optional_text(
@@ -274,8 +279,8 @@ class RolloutViewMembershipMixin:
             if header.rowcount != 1:
                 raise RuntimeError(f"active successor parent view 不存在: {parent_view_id}")
             connection.execute(
-                "INSERT INTO context_view_items(view_id, item_id, logical_item_ordinal, visible, source_kind) "
-                "SELECT ?, item_id, logical_item_ordinal, visible, source_kind "
+                "INSERT INTO context_view_items(view_id, item_id, logical_item_ordinal, visible, source_kind, context_selected, context_ordinal) "
+                "SELECT ?, item_id, logical_item_ordinal, visible, source_kind, context_selected, context_ordinal "
                 "FROM context_view_items WHERE view_id = ?",
                 (view_id, parent_view_id),
             )
@@ -321,7 +326,7 @@ class RolloutViewMembershipMixin:
                 level += 1
             return view_id
         materialized_sequences = sequence_values
-        if parent_view_id and view_kind in {"checkpoint", "checkpoint_messages"}:
+        if parent_view_id and view_kind in {"checkpoint", "checkpoint_messages", "compaction"}:
             # 新 checkpoint 的 visible_sequences 可能只是本次 delta；Turn
             # 索引也必须基于完整的父链，否则最新 view 会只有 ToolMessage，
             # 历史分页会暂时看不到这条正在执行的 Turn。
@@ -462,7 +467,7 @@ class RolloutViewMembershipMixin:
             else:
                 ranges[-1] = (ranges[-1][0], sequence)
         range_index = 0
-        if parent_view_id and view_kind in {"checkpoint", "checkpoint_messages"}:
+        if parent_view_id and view_kind in {"checkpoint", "checkpoint_messages", "compaction"}:
             # 普通 checkpoint 可能只携带本次 LangGraph delta（例如单独的
             # ToolMessage），而不是完整 messages 快照。parent_view_id 仅用于
             # 跳转索引并不能参与消息物化；显式保留父 view，才能让对应的
@@ -552,7 +557,7 @@ class RolloutViewMembershipMixin:
                 )
         item_rows = (
             connection.execute(
-                "SELECT m.message_sequence, m.message_id FROM messages AS m WHERE m.message_sequence IN ("
+                "SELECT m.message_sequence, m.message_id, m.jsonl_offset, m.jsonl_length FROM messages AS m WHERE m.message_sequence IN ("
                 + ",".join("?" for _ in materialized_sequences)
                 + ") ORDER BY m.message_sequence",
                 materialized_sequences,
@@ -561,16 +566,17 @@ class RolloutViewMembershipMixin:
             else []
         )
         candidate_item_ids: set[str] = set()
-        for message_sequence, message_id in item_rows:
+        if ordered_context_item_ids is not None:
+            candidate_item_ids.update(ordered_context_item_ids)
+        for message_sequence, message_id, jsonl_offset, jsonl_length in item_rows:
             strict_non_negative_int(
                 message_sequence, field="messages.message_sequence"
             )
             message_id = strict_text(message_id, field="messages.message_id")
             item_rows_for_message = connection.execute(
-                "SELECT item_id FROM item_catalog WHERE item_id = ? "
-                "OR json_extract(projection_manifest_json, '$.projection_identity.projection_message_id') = ? "
+                "SELECT item_id FROM item_catalog WHERE jsonl_offset = ? AND jsonl_length = ? "
                 "ORDER BY item_sequence",
-                (f"item-{message_id}", message_id),
+                (jsonl_offset, jsonl_length),
             ).fetchall()
             if not item_rows_for_message:
                 raise RuntimeError(
@@ -602,15 +608,23 @@ class RolloutViewMembershipMixin:
                 for (item_id,) in block_items
             )
         display_only_item_ids: set[str] = set()
-        if parent_view_id is not None and view_kind in {"checkpoint", "checkpoint_messages"}:
-            display_rows = connection.execute(
-                "SELECT item_id FROM context_view_items "
-                "WHERE view_id = ? AND visible = 1 AND source_kind = 'display_only'",
+        parent_item_order: list[str] = []
+        parent_context_order: list[str] = []
+        if parent_view_id is not None and view_kind in {"checkpoint", "checkpoint_messages", "compaction"}:
+            parent_members = connection.execute(
+                "SELECT item_id, source_kind, context_selected, context_ordinal FROM context_view_items "
+                "WHERE view_id = ? AND visible = 1 ORDER BY logical_item_ordinal",
                 (parent_view_id,),
             ).fetchall()
+            parent_item_order = [row[0] for row in parent_members]
+            parent_context_order = [row[0] for row in sorted(
+                (row for row in parent_members if row[2] == 1),
+                key=lambda row: strict_non_negative_int(row[3], field="context_view_items.context_ordinal"),
+            )]
+            candidate_item_ids.update(parent_item_order)
             display_only_item_ids = {
                 strict_text(row[0], field="context_view_items.item_id")
-                for row in display_rows
+                for row in parent_members if row[1] == "display_only"
             }
             candidate_item_ids.update(display_only_item_ids)
         if candidate_item_ids:
@@ -620,6 +634,22 @@ class RolloutViewMembershipMixin:
                 f"FROM item_catalog WHERE item_id IN ({placeholders}) ORDER BY item_sequence, item_id",
                 tuple(candidate_item_ids),
             ).fetchall()
+            # 派生 view 继承父 view 已确定的逻辑相对顺序；新成员才按本次
+            # canonical 物理坐标追加，不能用 item_sequence 重排既有成员。
+            item_rows_by_id = {row[0]: row for row in ordered_item_rows}
+            inherited_ids = [item_id for item_id in parent_item_order if item_id in item_rows_by_id]
+            inherited_set = set(inherited_ids)
+            ordered_item_rows = [item_rows_by_id[item_id] for item_id in inherited_ids] + [
+                row for row in ordered_item_rows if row[0] not in inherited_set
+            ]
+            context_order = (
+                list(ordered_context_item_ids) if ordered_context_item_ids is not None
+                else [item_id for item_id in parent_context_order if item_id in item_rows_by_id]
+                + [row[0] for row in ordered_item_rows if row[0] not in set(parent_item_order)]
+            )
+            if len(context_order) != len(set(context_order)) or set(context_order) - set(item_rows_by_id):
+                raise ValueError("context selection 含重复或不属于该历史 view 的 item")
+            context_ordinals = {item_id: ordinal for ordinal, item_id in enumerate(context_order)}
             logical_item_ordinal = 0
             for item_id, semantic_kind, turn_id, turn_scope, execution_id in ordered_item_rows:
                 item_id = strict_text(item_id, field="item_catalog.item_id")
@@ -638,7 +668,7 @@ class RolloutViewMembershipMixin:
                 source_kind = (
                     "display_only"
                     if item_id in display_only_item_ids or (
-                        view_kind == "checkpoint_messages" and turn_id is None
+                        turn_id is None
                         and execution_id is not None and turn_scope not in {"turn_root", "turn_member"}
                     )
                     else "canonical"
@@ -665,8 +695,8 @@ class RolloutViewMembershipMixin:
                     # LangGraph messages channel 而变成 canonical history。
                     continue
                 item_cursor = connection.execute(
-                    "INSERT INTO context_view_items(view_id, item_id, logical_item_ordinal, visible, source_kind) VALUES (?, ?, ?, 1, ?)",
-                    (view_id, item_id, logical_item_ordinal, source_kind),
+                    "INSERT INTO context_view_items(view_id, item_id, logical_item_ordinal, visible, source_kind, context_selected, context_ordinal) VALUES (?, ?, ?, 1, ?, ?, ?)",
+                    (view_id, item_id, logical_item_ordinal, source_kind, int(item_id in context_ordinals), context_ordinals.get(item_id)),
                 )
                 if item_cursor.rowcount != 1:
                     raise RuntimeError(

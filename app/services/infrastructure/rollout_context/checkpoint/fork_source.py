@@ -4,42 +4,63 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+import json
+import sqlite3
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
-from uuid import uuid4
 
-from langchain_core.messages import BaseMessage, HumanMessage
-from langgraph.checkpoint.base import Checkpoint, CheckpointTuple
-
-from app.core.checkpoint_config import build_checkpoint_config
+from app.core.phase_observer import observe_phase
 from app.core.session_catalog_store import SessionCreationRecord
+from app.core.session_catalog_store.contracts import ForkSourceCaptureRecord
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
-from app.core.session_lifecycle_gate import SessionLifecycleGate
-from app.core.session_thread_context import session_thread_owner_scope
-from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.services.infrastructure.node_debug.session.fork import (
-    NodeDebugSourceCopySnapshot,
-    capture_source_copy_snapshot,
+from app.core.session_lifecycle_gate import (
+    NavigationTopologyGate,
+    SessionDeletionPendingError,
+    SessionLifecycleGate,
 )
-from app.services.infrastructure.rollout_context.fork.full_copy.preflight import (
-    read_source_format,
+from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.schemas.internal_v2.session import SessionForkResourceSourceDTO
+from app.services.infrastructure.attachment_blob_catalog.store import (
+    AttachmentBlobStore,
+)
+from app.services.infrastructure.node_debug.session.fork import (
+    NodeDebugWorkspaceForkConfig,
+    capture_source_copy_snapshot,
+    debug_configuration_resource_uri,
+)
+from app.services.infrastructure.node_debug.session.session_store import (
+    NodeDebugSessionStore,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    check_resource_target,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.values import (
+    ResourceTargetContext,
+    ResourceTargetFacts,
+)
+from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
+    validate_tool_protocol_closure,
+)
+from app.services.infrastructure.rollout_context.fork.copy_items import (
+    EFFECTIVE_PREFIX_SQL,
+    select_view_prefix,
+)
+from app.services.infrastructure.rollout_context.fork.source_capture import (
+    publish_captured_snapshot,
 )
 from app.services.infrastructure.rollout_context.fork.source_snapshot import (
     ForkSourceSnapshot,
     capture_fork_rollout_snapshot,
 )
-from app.services.infrastructure.rollout_context.storage.primitives import (
-    RolloutInternalForkAnchor,
-    RolloutNotMaterializedError,
-    RolloutTurnAnchor,
-    _RolloutFileLock,
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    require_historical_scope,
 )
-from app.services.infrastructure.rollout_context.storage.transaction import (
-    strict_optional_text,
-    strict_text,
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    _RolloutFileLock,
 )
 
 if TYPE_CHECKING:
@@ -53,26 +74,45 @@ class RolloutForkResult:
 
     source_checkpoint_id: str | None
     source_view_id: str | None
+    source_view_revision: int | None = None
+    anchor_item_id: str | None = None
     fork_id: str | None = None
     materialization_id: str | None = None
     journal_state: str | None = None
     source_snapshot_sha256: str | None = None
-    source_anchor: RolloutTurnAnchor | RolloutInternalForkAnchor | None = None
 
 
 class CheckpointForkSource:
     def __init__(
         self, *, checkpoint: RolloutCheckpointSaver, storage, context_reader,
-        detail_store, node_debug_store, node_debug_workspace_config,
-        capture_request_only_content,
+        attachment_store: AttachmentBlobStore | None,
+        node_debug_store: NodeDebugSessionStore,
+        node_debug_workspace_config: Callable[[], NodeDebugWorkspaceForkConfig] | None,
     ) -> None:
         self._checkpoint = checkpoint
         self._storage = storage
         self._context_reader = context_reader
-        self._detail_store = detail_store
-        self._node_debug_store = node_debug_store
-        self._node_debug_workspace_config = node_debug_workspace_config
-        self._capture_request_only_content_for_fork = capture_request_only_content
+        self.attachment_store = attachment_store
+        self.node_debug_store = node_debug_store
+        self.node_debug_workspace_config = node_debug_workspace_config
+
+    @asynccontextmanager
+    async def _source_read_admission(self, session_id: str) -> AsyncIterator[None]:
+        """完整冷读先取得拓扑与 source 共享锁，再核权威可见性。"""
+        sessions_root = self._storage.storage.sessions_dir
+        async with (
+            NavigationTopologyGate(sessions_root).shared(),
+            SessionLifecycleGate(sessions_root).shared(session_id),
+        ):
+            node = self._storage.storage._path_resolver.catalog_store.get_node(session_id)
+            if node.kind != "session":
+                raise RuntimeError(f"fork source 不是 Session: {session_id}")
+            if node.state != "active":
+                raise SessionDeletionPendingError(
+                    "session_deletion_pending: fork source 正在删除，拒绝新 capture: "
+                    f"session_id={session_id}, state={node.state}"
+                )
+            yield
 
     def resolve_thread_owner(self, session_id: str, thread_id: str) -> MutationIntentOwner:
         """从两个权威 catalog 解析精确 Session/thread owner。"""
@@ -127,371 +167,474 @@ class CheckpointForkSource:
         return self.resolve_thread_owner(session_id, owner.thread_id)
 
 
-    def _capture_fork_debug_snapshot(
-        self, source_session_id: str, source_thread_id: str, mode: str
-    ) -> NodeDebugSourceCopySnapshot | None:
-        if mode == "history_prefix_fork":
-            return None
-        _payload, manifest = self._node_debug_store.read_manifest_payload(
-            source_session_id, source_thread_id
-        )
-        if manifest is None:
-            return None
-        if self._node_debug_workspace_config is None:
-            raise RuntimeError(
-                "source 存在调试方案，但 RolloutCheckpointSaver 未注入 Workspace debug 配置"
-            )
-        workspace_config = self._node_debug_workspace_config()
-        return capture_source_copy_snapshot(
-            self._node_debug_store,
-            session_id=source_session_id,
-            thread_id=source_thread_id,
-            capture_mode=mode,
-            workspace_config_revision=workspace_config.revision,
-            workspace_config_hash=workspace_config.content_hash,
-            workspace_id=workspace_config.workspace_id,
-        )
-
-
     async def _capture_fork_source_snapshot(
-        self,
-        *,
-        source_session_id: str,
-        source_owner: MutationIntentOwner,
-        mode: str,
-        checkpoint_ns: str,
-        snapshot_root: Path,
+        self, *, source_session_id: str, source_owner: MutationIntentOwner,
+        mode: str, checkpoint_ns: str, snapshot_root: Path,
+        capture_record: ForkSourceCaptureRecord,
     ) -> ForkSourceSnapshot:
-        """在 source lifecycle guard 与 rollout shared lock 内冻结全部 source facts。"""
-        gate = SessionLifecycleGate(self._storage.storage.sessions_dir)
-        async with gate.shared(source_session_id):
+        """持有 source 生命周期和共享写锁，只捕获原文件及附件 ref metadata。"""
+        async with self._source_read_admission(source_session_id):
             source_rollout = self._storage.storage.root(
-                source_session_id,
-                checkpoint_ns,
-                thread_id=source_owner.thread_id,
+                source_session_id, checkpoint_ns, thread_id=source_owner.thread_id,
             )
             rollout_lock = _RolloutFileLock(
-                source_rollout.parent / ".rollout.write.lock",
-                exclusive=False,
+                source_rollout.parent / ".rollout.write.lock", exclusive=False,
             )
             rollout_lock.acquire()
             try:
-                debug_snapshot = self._capture_fork_debug_snapshot(
-                    source_session_id, source_owner.thread_id, mode
-                )
-                request_only_content = self._capture_request_only_content_for_fork(
-                    source_session_id=source_session_id,
-                    source_thread_id=source_owner.thread_id,
-                    checkpoint_ns=checkpoint_ns,
-                )
                 rollout_snapshot = await asyncio.to_thread(
-                    capture_fork_rollout_snapshot,
-                    self._storage,
-                    source_session_id=source_session_id,
-                    source_thread_id=source_owner.thread_id,
+                    capture_fork_rollout_snapshot, self._storage,
+                    source_session_id=source_session_id, source_thread_id=source_owner.thread_id,
                     snapshot_session_node=snapshot_root / source_session_id,
-                    snapshot_id=uuid4().hex,
-                    detail_capability=self._detail_store.fork_detail_capability(),
-                    rollout_lock_held=True,
+                    snapshot_id=capture_record.snapshot_id, rollout_lock_held=True,
                 )
+                await observe_phase(capture_record.copy_operation_id, "copy.source.partial")
+                request = json.loads(capture_record.request_json)
+                with self._storage.storage.fork_source_snapshot_scope(
+                    session_id=source_session_id, thread_id=source_owner.thread_id,
+                    session_node=rollout_snapshot.session_node,
+                ):
+                    point = self._resolve_fork_source(
+                        source_session_id=source_session_id, source_thread_id=source_owner.thread_id,
+                        mode=mode, source_view_id=request["source_view_id"],
+                        source_view_revision=request["source_view_revision"],
+                        anchor_item_id=request["anchor_item_id"], anchor_mode=request["anchor_mode"],
+                        checkpoint_ns=checkpoint_ns,
+                    )
+                    if point.source_view_id is None:
+                        raise RuntimeError("source-mismatch: captured resource selection 缺少 view")
+                    stage = rollout_snapshot.session_node / "rollout"
+                    with closing(sqlite3.connect(
+                        (stage / "index.sqlite").as_uri() + "?mode=ro&immutable=1", uri=True,
+                    )) as connection:
+                        if mode != "full_rollout_copy":
+                            select_view_prefix(
+                                self._storage.storage, connection, stage=stage,
+                                source_view_id=point.source_view_id,
+                                source_checkpoint_id=point.source_checkpoint_id,
+                                anchor_item_id=point.anchor_item_id, anchor_mode=request["anchor_mode"],
+                                source_view_revision=point.source_view_revision,
+                            )
+                            cursor = connection.execute(
+                                "SELECT DISTINCT ref.resource_uri,1 FROM item_resource_references ref "
+                                "JOIN fork_selected_items selected ON selected.item_id=ref.item_id "
+                                "WHERE ref.resource_kind='attachment' ORDER BY ref.resource_uri",
+                            )
+                        else:
+                            cursor = connection.execute(
+                                "SELECT ref.resource_uri,MAX(CASE WHEN member.item_id IS NULL THEN 0 ELSE 1 END) "
+                                "FROM item_resource_references ref LEFT JOIN context_view_items member "
+                                "ON member.item_id=ref.item_id AND member.view_id=? AND member.visible=1 AND member.context_selected=1 "
+                                "WHERE ref.resource_kind='attachment' GROUP BY ref.resource_uri ORDER BY ref.resource_uri",
+                                (point.source_view_id,),
+                            )
+                        references = []
+                        while rows := cursor.fetchmany(256):
+                            references.extend((uri, bool(required)) for uri, required in rows
+                                              if uri.startswith("boxteam-session://"))
+                        source = ResourceTargetFacts(
+                            resource_uri=request["source_uri"], storage_domain_id=request["source_storage_domain_id"],
+                            lifecycle="snapshot", available=True, required_for_context=True, snapshot_import_supported=True,
+                            owner_session_id=source_session_id, owner_thread_id=source_owner.thread_id,
+                        )
+                        target = ResourceTargetContext(
+                            storage_domain_id=request["target_storage_domain_id"],
+                            owner_session_id=capture_record.target_session_id, owner_thread_id=capture_record.target_thread_id,
+                        )
+                        choices = {choice["resource_uri"]: choice["action"] for choice in request["resources"]}
+                        selected_only = mode != "full_rollout_copy"
+                        self._storage.storage.check_fork_target_resources(
+                            connection, source, target, choices=choices, selected_only=selected_only,
+                        )
+                        self._storage.assemblies.check_fork_target_resources(
+                            connection, source, target, choices=choices, selected_only=selected_only,
+                            captured_node=rollout_snapshot.session_node,
+                        )
+                        self._checkpoint._activation_store().check_fork_target_resources(
+                            connection, source, target, choices=choices, selected_only=selected_only,
+                            captured_node=rollout_snapshot.session_node,
+                        )
+                if references and self.attachment_store is None:
+                    raise RuntimeError("fork source 含附件，但 Saver 未注入唯一 AttachmentBlobStore")
+                attachments = self.attachment_store.capture_fork_attachments(
+                    capture_record, references=references,
+                ) if references else ()
+                debug_prefix = request["source_uri"] + "/debug/node/configurations/"
+                debug_choices = {uri: action for uri, action in choices.items() if uri.startswith(debug_prefix)}
+                selected_debug = []
+                if debug_choices:
+                    manifest = self.node_debug_store.read_manifest(source_session_id, source_owner.thread_id)
+                    registered = {
+                        debug_configuration_resource_uri(request["source_uri"], configuration_id): configuration_id
+                        for configuration_id in manifest.configuration_ids
+                    } if manifest is not None else {}
+                    for uri, action in debug_choices.items():
+                        if uri not in registered:
+                            raise ValueError(f"unknown_fork_resource: 来源 owner 未登记调试方案: {uri}")
+                        decision = check_resource_target(
+                            ResourceTargetFacts(
+                                resource_uri=uri, storage_domain_id=request["source_storage_domain_id"],
+                                lifecycle="snapshot", available=True, snapshot_import_supported=True,
+                                owner_session_id=source_session_id, owner_thread_id=source_owner.thread_id,
+                            ), target, choice=action,
+                        )
+                        if decision.action == "copy_snapshot":
+                            selected_debug.append(registered[uri])
+                debug_snapshot = None
+                if selected_debug:
+                    if self.node_debug_workspace_config is None:
+                        raise RuntimeError("显式调试方案复制缺少 Workspace debug 配置 provider")
+                    config = self.node_debug_workspace_config()
+                    debug_snapshot = capture_source_copy_snapshot(
+                        self.node_debug_store, session_id=source_session_id, thread_id=source_owner.thread_id,
+                        configuration_ids=tuple(selected_debug), workspace_config_revision=config.revision,
+                        workspace_config_hash=config.content_hash, workspace_id=config.workspace_id,
+                    )
+                known = {request["source_uri"], *debug_choices}
+                for attachment in attachments:
+                    known.update((attachment.source_file_id, *attachment.source_file_aliases))
+                with closing(sqlite3.connect((stage / "index.sqlite").as_uri() + "?mode=ro&immutable=1", uri=True)) as connection:
+                    known.update(uri for (uri,) in connection.execute(
+                        "SELECT DISTINCT display_uri FROM resource_activation_bindings WHERE display_uri IS NOT NULL",
+                    ))
+                if unknown := choices.keys() - known:
+                    raise ValueError(f"unknown_fork_resource: 来源冻结选择未登记资源: {sorted(unknown)}")
+                snapshot = ForkSourceSnapshot(rollout=rollout_snapshot, attachments=attachments, node_debug=debug_snapshot)
+                await observe_phase(capture_record.copy_operation_id, "copy.attachments.preparing")
+                publish_captured_snapshot(capture_record, snapshot)
+                await observe_phase(capture_record.copy_operation_id, "copy.source.marker_published")
             finally:
                 rollout_lock.release()
-        return ForkSourceSnapshot(
-            rollout=rollout_snapshot,
-            request_only_content=request_only_content,
-            node_debug_snapshot=debug_snapshot,
-        )
-
+        return snapshot
 
     async def preflight_fork(
-        self,
-        *,
-        source_session_id: str,
-        source_owner: MutationIntentOwner | None = None,
-        mode: str = "context_fork",
-        turn_id: str | None = None,
-        anchor_mode: str = "inclusive",
-        checkpoint_id: str | None = None,
-        anchor: str | None = None,
-        checkpoint_ns: str = "",
+        self, *, source_session_id: str, source_owner: MutationIntentOwner | None = None,
+        mode: str = "context_fork", source_view_id: str | None = None,
+        source_view_revision: int | None = None, anchor_item_id: str | None = None,
+        anchor_mode: str = "inclusive", checkpoint_ns: str = "",
     ) -> RolloutForkResult:
-        """在创建 target session 前验证 fork source。
-
-        ``context_fork`` 和 ``history_prefix_fork`` 的拒绝必须发生在
-        session catalog/物理节点创建之前；该入口只读取 source，不建立
-        target journal，也不产生 target-local identity。
-        """
-        source_owner = self._require_thread_owner(source_session_id, source_owner)
-        with session_thread_owner_scope(
-            source_owner,
-            langgraph_thread_id=source_owner.thread_id,
-        ):
-            (
-                source_checkpoint,
-                source_checkpoint_id,
-                source_view_id,
-                turn_anchor,
-            ) = await self._resolve_fork_source(
-                source_session_id=source_session_id,
-                source_thread_id=source_owner.thread_id,
-                mode=mode,
-                turn_id=turn_id,
-                anchor_mode=anchor_mode,
-                checkpoint_id=checkpoint_id,
-                anchor=anchor,
-                checkpoint_ns=checkpoint_ns,
-            )
-        if mode != "full_rollout_copy" and (
-            source_checkpoint is None or source_checkpoint_id is None
-        ):
-            raise KeyError("fork source checkpoint 不存在")
-        if mode in {"context_fork", "history_prefix_fork"}:
-            self._validate_fork_boundary(
-                source_session_id=source_session_id,
-                source_thread_id=source_owner.thread_id,
-                turn_anchor=turn_anchor,
-                source_checkpoint=source_checkpoint,
-                checkpoint_ns=checkpoint_ns,
+        """在创建目标之前固定真实 view/revision/item，不反序列化全 checkpoint。"""
+        async with self._source_read_admission(source_session_id):
+            source_owner = self._require_thread_owner(source_session_id, source_owner)
+            return self._resolve_fork_source(
+                source_session_id=source_session_id, source_thread_id=source_owner.thread_id,
+                mode=mode, source_view_id=source_view_id, source_view_revision=source_view_revision,
+                anchor_item_id=anchor_item_id, anchor_mode=anchor_mode, checkpoint_ns=checkpoint_ns,
             )
 
-        if source_view_id is None:
-            source_view_id = self._storage.forks._fork_source_view_id(
-                source_session_id,
-                source_checkpoint_id,
-                checkpoint_ns,
-                source_thread_id=source_owner.thread_id,
+    async def project_display_resources(
+        self, *, source_session_id: str, source_owner: MutationIntentOwner,
+        source_view_id: str, source_view_revision: int, anchor_item_id: str | None,
+        mode: str, anchor_mode: str,
+        source_uri: str,
+    ) -> tuple[SessionForkResourceSourceDTO, ...]:
+        """只读已登记 typed 引用及 producer 关系；完整正文闭包仍由 capture 核验。"""
+        async with self._source_read_admission(source_session_id):
+            source_owner = self._require_thread_owner(source_session_id, source_owner)
+            point = self._resolve_fork_source(
+                source_session_id=source_session_id, source_thread_id=source_owner.thread_id,
+                mode=mode, source_view_id=source_view_id, source_view_revision=source_view_revision,
+                anchor_item_id=anchor_item_id if mode == "view_prefix_fork" else None,
+                anchor_mode=anchor_mode, checkpoint_ns="",
+            )
+            with self._storage.storage.read_connection(source_session_id, source_owner.thread_id, "") as connection:
+                revision = connection.execute(
+                    "SELECT history_view_revision FROM database_meta WHERE singleton_id=1",
+                ).fetchone()[0]
+                if revision != source_view_revision:
+                    raise ValueError("source-mismatch: 附件候选的冻结历史 revision 已变化")
+                if mode == "full_rollout_copy":
+                    references = connection.execute(
+                        "SELECT ref.resource_uri,MAX(CASE WHEN member.item_id IS NULL THEN 0 ELSE 1 END) "
+                        "FROM item_resource_references ref LEFT JOIN context_view_items member "
+                        "ON member.item_id=ref.item_id AND member.view_id=? AND member.visible=1 AND member.context_selected=1 "
+                        "WHERE ref.resource_kind='attachment' GROUP BY ref.resource_uri ORDER BY ref.resource_uri",
+                        (source_view_id,),
+                    ).fetchall()
+                else:
+                    # 只展开可见正文的精确 producer；审计前任与 backing producer 不展开。
+                    references = connection.execute(
+                        "WITH RECURSIVE visible(item_id) AS ("
+                        f"SELECT item_id FROM ({EFFECTIVE_PREFIX_SQL})), "
+                        "selected(item_id) AS (SELECT item_id FROM visible UNION "
+                        "SELECT selection.ref_id FROM visible JOIN item_catalog item USING(item_id) "
+                        "JOIN model_calls call ON call.model_call_id=COALESCE("
+                        "json_extract(item.producer_ref_json,'$.model_call_id'),"
+                        "json_extract(item.projection_manifest_json,'$.projection_identity.model_call_id')) "
+                        "JOIN context_assembly_selections selection ON selection.assembly_id=call.assembly_id "
+                        "WHERE selection.included=1 AND selection.ref_type='canonical_item' UNION "
+                        "SELECT peer.item_id FROM selected JOIN item_catalog item USING(item_id) "
+                        "JOIN item_catalog peer ON peer.message_group_id=item.message_group_id UNION "
+                        "SELECT turn.root_input_item_id FROM selected JOIN item_catalog item USING(item_id) "
+                        "JOIN turn_records turn ON turn.turn_id=item.turn_id UNION "
+                        "SELECT turn.final_item_id FROM selected JOIN item_catalog item USING(item_id) "
+                        "JOIN turn_records turn ON turn.turn_id=item.turn_id WHERE turn.final_item_id IS NOT NULL) "
+                        "SELECT DISTINCT ref.resource_uri,1 FROM selected JOIN item_resource_references ref USING(item_id) "
+                        "WHERE ref.resource_kind='attachment' ORDER BY ref.resource_uri",
+                        (point.anchor_item_id, source_view_id, 1 if anchor_mode == "before" else 0),
+                    ).fetchall()
+            native = tuple((uri, bool(required)) for uri, required in references if uri.startswith("boxteam-session://"))
+            if native and self.attachment_store is None:
+                raise RuntimeError("fork source 含附件，但 Saver 未注入唯一 AttachmentBlobStore")
+            attachments = self.attachment_store.project_fork_attachment_sources(
+                source_session_id=source_session_id, source_thread_id=source_owner.thread_id, references=native,
+            ) if native else ()
+            manifest = self.node_debug_store.read_manifest(source_session_id, source_owner.thread_id)
+            configurations = self.node_debug_store.read_registered_configuration_payloads(
+                source_session_id, source_owner.thread_id, tuple(manifest.configuration_ids),
+            ) if manifest is not None else {}
+            return (*attachments, *(SessionForkResourceSourceDTO(
+                resource_uri=debug_configuration_resource_uri(source_uri, configuration_id),
+                name=configuration.name, content_type="application/json", availability="available",
+                required_for_context=False,
+            ) for configuration_id, (configuration, _) in configurations.items()))
+
+    async def freeze_display_point(
+        self, *, source_session_id: str, source_owner: MutationIntentOwner,
+        turn_id: str | None = None, item_id: str | None = None,
+        source_view_id: str | None = None, source_view_revision: int | None = None,
+        mode: str = "view_prefix_fork", anchor_mode: str = "inclusive", checkpoint_ns: str = "",
+    ) -> RolloutForkResult:
+        """点击用户消息取真实 root item；响应直接使用 projection 的稳定 item。"""
+        if turn_id is not None and item_id is not None:
+            raise ValueError("fork source point 不能同时选择 Turn root 和响应 item")
+        if (source_view_id is None) != (source_view_revision is None):
+            raise ValueError("fork source point 必须同时携带 source view/revision")
+        if mode == "view_prefix_fork" and (turn_id is not None or item_id is not None) and source_view_id is None:
+            raise ValueError("source-mismatch: 消息点击必须携带实际历史读取的 source view/revision")
+        async with self._source_read_admission(source_session_id):
+            source_owner = self._require_thread_owner(source_session_id, source_owner)
+            if mode != "view_prefix_fork":
+                return self._resolve_fork_source(
+                    source_session_id=source_session_id, source_thread_id=source_owner.thread_id,
+                    mode=mode, source_view_id=source_view_id, source_view_revision=source_view_revision,
+                    anchor_item_id=None, anchor_mode=anchor_mode, checkpoint_ns=checkpoint_ns,
+                )
+            with self._storage.storage.read_connection(
+                source_session_id, source_owner.thread_id, checkpoint_ns,
+            ) as connection:
+                head = connection.execute(
+                    "SELECT b.head_view_id,m.history_view_revision,b.head_checkpoint_id "
+                    "FROM checkpoint_namespace_state n JOIN branches b ON b.branch_id=n.active_branch_id "
+                    "JOIN database_meta m ON m.singleton_id=1 WHERE n.checkpoint_ns=?", (checkpoint_ns,),
+                ).fetchone()
+                if head is None or head[0] is None:
+                    raise ValueError("source-mismatch: source rollout 缺少真实 active view")
+                display_view = source_view_id if source_view_id is not None else head[0]
+                display_revision = source_view_revision if source_view_revision is not None else head[1]
+                if display_revision != head[1]:
+                    raise ValueError("source-mismatch: 展示快照 revision 已变化")
+                if turn_id is not None:
+                    root = connection.execute(
+                        "SELECT turn.root_input_item_id FROM context_view_turns turn "
+                        "JOIN context_view_items member ON member.view_id=turn.view_id "
+                        "AND member.item_id=turn.root_input_item_id AND member.visible=1 "
+                        "WHERE turn.view_id=? AND turn.turn_id=?", (display_view, turn_id),
+                    ).fetchone()
+                    if root is None or root[0] is None:
+                        raise ValueError("source-mismatch: 点击用户消息不属于展示快照 view")
+                    item_id = root[0]
+                elif item_id is None:
+                    completed = self._completed_fork_anchor(connection, display_view)
+                    if completed is None:
+                        # 展示真实来源，但没有合法默认锚点时不能提交前缀复制。
+                        return RolloutForkResult(
+                            source_checkpoint_id=head[2], source_view_id=display_view, source_view_revision=display_revision,
+                        )
+                    item_id = completed[0]
+            return self._resolve_fork_source(
+                source_session_id=source_session_id, source_thread_id=source_owner.thread_id,
+                mode="view_prefix_fork", source_view_id=display_view, source_view_revision=display_revision,
+                anchor_item_id=item_id, anchor_mode=anchor_mode, checkpoint_ns=checkpoint_ns,
             )
 
-        return RolloutForkResult(
-            source_checkpoint_id=source_checkpoint_id,
-            source_view_id=source_view_id,
-            source_anchor=turn_anchor,
-        )
+    @staticmethod
+    def _completed_fork_anchor(connection: sqlite3.Connection, view_id: str) -> tuple[str, str, str] | None:
+        completed = connection.execute(
+            "SELECT final.item_id,turn.session_id,turn.thread_id "
+            "FROM context_view_turns member JOIN turn_records turn ON turn.turn_id=member.turn_id "
+            "JOIN context_view_items final ON final.view_id=member.view_id "
+            "AND final.item_id=turn.final_item_id AND final.visible=1 AND final.context_selected=1 "
+            "WHERE member.view_id=? AND turn.status='completed' "
+            "ORDER BY final.context_ordinal DESC LIMIT 1", (view_id,),
+        ).fetchone()
+        if completed is None and connection.execute(
+            "SELECT 1 FROM context_view_turns WHERE view_id=? LIMIT 1", (view_id,),
+        ).fetchone() is None:
+            completed = connection.execute(
+                "SELECT member.item_id,execution.session_id,execution.thread_id "
+                "FROM context_view_items member JOIN item_catalog item ON item.item_id=member.item_id "
+                "JOIN executions execution ON execution.execution_id=item.execution_id "
+                "WHERE member.view_id=? AND member.visible=1 AND member.context_selected=1 AND execution.execution_origin='internal' "
+                "AND execution.outcome IN ('completed','completed_empty') "
+                "ORDER BY member.context_ordinal DESC LIMIT 1", (view_id,),
+            ).fetchone()
+        return completed
 
+    @staticmethod
+    def _empty_fork_checkpoint_source(
+        connection: sqlite3.Connection, *, session_id: str, thread_id: str,
+        checkpoint_ns: str, source_view_id: str, source_checkpoint_id: str | None,
+    ) -> tuple[str, str | None]:
+        """沿本地冻结 bootstrap 关系定位空上下文，不恢复历史执行。"""
+        checkpoint_id = source_checkpoint_id
+        visited: set[str] = set()
+        while checkpoint_id is not None:
+            if checkpoint_id in visited:
+                raise ValueError("source-mismatch: fork checkpoint 冻结关系存在循环")
+            visited.add(checkpoint_id)
+            checkpoint = connection.execute(
+                "SELECT view_id,metadata_json FROM checkpoints "
+                "WHERE checkpoint_id=? AND checkpoint_ns=? AND status='active'",
+                (checkpoint_id, checkpoint_ns),
+            ).fetchone()
+            if checkpoint is None:
+                raise ValueError("source-mismatch: fork checkpoint 冻结关系缺少本地 checkpoint")
+            metadata = json.loads(checkpoint[1])
+            materialization_id = metadata.get("fork_materialization_id")
+            if materialization_id is None:
+                return (checkpoint[0], checkpoint_id) if len(visited) > 1 else (source_view_id, None)
+            journal = connection.execute(
+                "SELECT target_session_id,target_thread_id,source_session_id,source_thread_id,source_checkpoint_id "
+                "FROM fork_materializations WHERE materialization_id=? AND checkpoint_ns=? "
+                "AND status IN ('prepared','target_committed','committed')",
+                (materialization_id, checkpoint_ns),
+            ).fetchone()
+            if (journal is None or metadata.get("source") != "fork"
+                    or metadata.get("boxteam_execution_binding") is not None
+                    or metadata.get("fork_context_checkpoint_id") != journal[4]):
+                raise ValueError("source-mismatch: fork checkpoint 与冻结物化 journal 不一致")
+            for historical_owner in (journal[:2], journal[2:4]):
+                require_historical_scope(
+                    connection, *historical_owner, current_owner=(session_id, thread_id),
+                )
+            checkpoint_id = journal[4]
+        return source_view_id, None
 
-    def _validate_fork_boundary(
-        self,
-        *,
-        source_session_id: str,
-        source_thread_id: str,
-        turn_anchor: RolloutTurnAnchor | RolloutInternalForkAnchor | None,
-        source_checkpoint: CheckpointTuple | None,
-        checkpoint_ns: str,
-    ) -> None:
-        """target staging/durable mutation 前验证 source view 闭合。"""
-        if source_checkpoint is None:
-            return
-        if isinstance(turn_anchor, RolloutTurnAnchor):
-            self._storage.checkpoints.validate_fork_source_closure(
-                source_session_id,
-                thread_id=source_thread_id,
-                checkpoint_ns=checkpoint_ns,
-                source_checkpoint_id=turn_anchor.checkpoint_id,
-                cutoff_message_sequence=turn_anchor.cutoff_message_sequence,
-            )
-            return
-        source_checkpoint_id = strict_text(
-            source_checkpoint.checkpoint.get("id"),
-            field="fork.source_checkpoint.id",
-        )
-        self._storage.checkpoints.validate_fork_source_closure(
-            source_session_id,
-            thread_id=source_thread_id,
-            checkpoint_ns=checkpoint_ns,
-            source_checkpoint_id=source_checkpoint_id,
-            cutoff_message_sequence=None,
-        )
-
-
-    async def _resolve_fork_source(
-        self,
-        *,
-        source_session_id: str,
-        source_thread_id: str,
-        mode: str,
-        turn_id: str | None,
-        anchor_mode: str,
-        checkpoint_id: str | None,
-        anchor: str | None,
-        checkpoint_ns: str,
-    ) -> tuple[CheckpointTuple | None, str | None, str | None, RolloutTurnAnchor | RolloutInternalForkAnchor | None]:
-        source_session_id = strict_text(
-            source_session_id,
-            field="fork.source_session_id",
-        )
-        mode = strict_text(mode, field="fork.mode")
-        if mode not in {"context_fork", "history_prefix_fork", "full_rollout_copy"}:
+    def _resolve_fork_source(
+        self, *, source_session_id: str, source_thread_id: str, mode: str,
+        source_view_id: str | None, source_view_revision: int | None,
+        anchor_item_id: str | None, anchor_mode: str, checkpoint_ns: str,
+    ) -> RolloutForkResult:
+        """三种公开 mode 共用同一冻结索引解析入口。"""
+        if mode not in {"context_fork", "view_prefix_fork", "full_rollout_copy"}:
             raise ValueError(f"不支持的 fork mode: {mode}")
-        turn_id = strict_optional_text(turn_id, field="fork.turn_id")
-        checkpoint_id = strict_optional_text(
-            checkpoint_id,
-            field="fork.checkpoint_id",
-        )
-        anchor = strict_optional_text(anchor, field="fork.anchor")
-        checkpoint_ns = strict_text(
-            checkpoint_ns,
-            field="fork.checkpoint_ns",
-            allow_empty=True,
-        )
-        anchor_mode = strict_text(anchor_mode, field="fork.anchor_mode")
         if anchor_mode not in {"inclusive", "before"}:
             raise ValueError("fork anchor_mode 必须是 inclusive 或 before")
-        if turn_id is not None and (checkpoint_id is not None or anchor is not None):
-            raise ValueError("fork 只能传 turn_id，不能同时传 checkpoint_id 或 anchor")
-
-        if mode == "full_rollout_copy":
-            if read_source_format(self._storage, source_session_id, checkpoint_ns) != 2:
-                raise ValueError("full_rollout_copy 只接受真实 v2 source，不提供旧格式 runtime")
-            if turn_id is None and checkpoint_id is None and anchor is None:
-                return None, None, None, None
-
-        turn_anchor = None
-        implicit_latest_turn = (
-            turn_id is None and checkpoint_id is None and anchor is None
-        )
-        if implicit_latest_turn:
-            turn_anchor = await self._checkpoint.aresolve_latest_completed_turn_anchor(
-                build_checkpoint_config(source_thread_id, checkpoint_ns=checkpoint_ns),
-                anchor_mode=anchor_mode,
-            )
-            if turn_anchor is None and mode in {"context_fork", "history_prefix_fork"}:
-                if mode != "context_fork" or anchor_mode != "inclusive":
-                    raise ValueError("fork_source_not_completed: source 没有可复制的已完成 Turn")
-                try:
-                    with self._context_reader.open_snapshot(source_session_id, source_thread_id, checkpoint_ns) as snapshot:
-                        turn_anchor = self._storage.forks.resolve_completed_internal_fork_anchor(snapshot)
-                except RolloutNotMaterializedError as error:
-                    raise ValueError(
-                        "fork_source_not_completed: source 没有可复制的已完成 Turn 或内部 execution"
-                    ) from error
-            if isinstance(turn_anchor, RolloutTurnAnchor):
-                turn_id = turn_anchor.turn_id
-        if turn_anchor is None and turn_id is not None:
-            turn_anchor = await self._checkpoint.aresolve_turn_anchor(
-                build_checkpoint_config(source_thread_id, checkpoint_ns=checkpoint_ns),
-                turn_id=turn_id,
-                anchor_mode=anchor_mode,
-                require_completed=True,
-            )
-        if turn_anchor is not None:
-            source_checkpoint = await self._checkpoint.aget_tuple(
-                build_checkpoint_config(
-                    source_thread_id,
-                    checkpoint_ns=checkpoint_ns,
-                    checkpoint_id=turn_anchor.checkpoint_id,
-                )
-            )
-        else:
-            source_checkpoint = await self._resolve_fork_checkpoint(
-                source_session_id,
-                source_thread_id=source_thread_id,
-                checkpoint_id=checkpoint_id,
-                anchor=anchor,
-                checkpoint_ns=checkpoint_ns,
-            )
-        if source_checkpoint is not None:
-            source_checkpoint_id = strict_text(
-                source_checkpoint.checkpoint.get("id"),
-                field="fork.source_checkpoint.id",
-            )
-        else:
-            source_checkpoint_id = checkpoint_id
-        source_view_id = turn_anchor.view_id if turn_anchor is not None else None
-        return source_checkpoint, source_checkpoint_id, source_view_id, turn_anchor
-
-
-    async def _resolve_fork_checkpoint(
-        self,
-        source_session_id: str,
-        *,
-        source_thread_id: str,
-        checkpoint_id: str | None,
-        anchor: str | None,
-        checkpoint_ns: str = "",
-    ) -> CheckpointTuple | None:
-        thread_id = source_thread_id
-        owner = MutationIntentOwner(
-            session_id=source_session_id,
-            thread_id=source_thread_id,
-        )
-        if checkpoint_id is not None or anchor is None:
-            with session_thread_owner_scope(owner, langgraph_thread_id=thread_id):
-                return await self._checkpoint.aget_tuple(
-                    build_checkpoint_config(
-                        thread_id,
-                        checkpoint_ns=checkpoint_ns,
-                        checkpoint_id=checkpoint_id,
-                    )
-                )
-
-        with session_thread_owner_scope(owner, langgraph_thread_id=thread_id):
-            checkpoints = [
-                item
-                async for item in self._checkpoint.alist(
-                    build_checkpoint_config(thread_id, checkpoint_ns=checkpoint_ns)
-                )
-            ]
-        candidate: CheckpointTuple | None = None
-        for item in reversed(checkpoints):
-            messages = self._checkpoint_messages(item.checkpoint)
-            anchor_index = next(
-                (
-                    index
-                    for index, message in enumerate(messages)
-                    if self._message_matches_anchor(message, anchor)
-                ),
-                None,
-            )
-            if anchor_index is None:
-                continue
-            if any(
-                isinstance(message, HumanMessage)
-                and not self._message_is_internal(message)
-                for message in messages[anchor_index + 1 :]
+        with self._storage.storage.read_connection(
+            source_session_id, source_thread_id, checkpoint_ns,
+        ) as connection:
+            head = connection.execute(
+                "SELECT b.head_view_id,b.head_checkpoint_id,m.history_view_revision "
+                "FROM checkpoint_namespace_state n JOIN branches b ON b.branch_id=n.active_branch_id "
+                "JOIN database_meta m ON m.singleton_id=1 WHERE n.checkpoint_ns=?", (checkpoint_ns,),
+            ).fetchone()
+            if head is None or head[0] is None:
+                raise ValueError("source-mismatch: source rollout 缺少真实 active view")
+            active_view, source_checkpoint_id, revision = head
+            if source_view_revision is not None and (
+                type(source_view_revision) is not int or source_view_revision != revision
             ):
-                if candidate is not None:
-                    return candidate
-                continue
-            candidate = item
-        if candidate is None:
-            raise KeyError(f"源 rollout 不存在 anchor: {anchor}")
-        return candidate
-
-
-    @staticmethod
-    def _checkpoint_messages(checkpoint: Checkpoint) -> list[object]:
-        channel_values = checkpoint.get("channel_values")
-        if not isinstance(channel_values, dict):
-            raise TypeError("源会话 checkpoint.channel_values 必须是 dict")
-        messages = channel_values.get("messages", [])
-        if not isinstance(messages, list):
-            raise TypeError("源会话 checkpoint messages 必须是 list")
-        return messages
-
-
-    @staticmethod
-    def _message_matches_anchor(message: object, anchor: str) -> bool:
-        if not isinstance(message, BaseMessage):
-            return False
-        if message.id == anchor:
-            return True
-        response_metadata = message.response_metadata or {}
-        if response_metadata.get("message_id") == anchor:
-            return True
-        message_metadata = response_metadata.get("message_metadata")
-        return (
-            isinstance(message_metadata, Mapping)
-            and message_metadata.get("turn_id") == anchor
-        )
-
-
-    @staticmethod
-    def _message_is_internal(message: BaseMessage) -> bool:
-        response_metadata = message.response_metadata or {}
-        if response_metadata.get("internal") is True:
-            return True
-        message_metadata = response_metadata.get("message_metadata")
-        return (
-            isinstance(message_metadata, Mapping)
-            and message_metadata.get("internal") is True
-        )
+                raise ValueError("source-mismatch: source view revision 已变化")
+            if mode == "view_prefix_fork":
+                if source_view_id is None or source_view_revision is None or anchor_item_id is None:
+                    raise ValueError("view_prefix_fork 必须固定 source view/revision/item")
+            else:
+                if source_view_id is not None and source_view_id != active_view:
+                    raise ValueError("source-mismatch: source point 已不是 active view")
+                source_view_id = active_view
+            if mode == "full_rollout_copy":
+                if anchor_item_id is not None or anchor_mode != "inclusive":
+                    raise ValueError("full_rollout_copy 不能携带截断锚点")
+            elif mode == "context_fork":
+                completed = self._completed_fork_anchor(connection, source_view_id)
+                if completed is None:
+                    if connection.execute(
+                        "SELECT 1 FROM context_view_items WHERE view_id=? AND visible=1 LIMIT 1", (source_view_id,),
+                    ).fetchone() is not None or connection.execute(
+                        "SELECT 1 FROM context_view_turns WHERE view_id=? LIMIT 1", (source_view_id,),
+                    ).fetchone() is not None:
+                        raise ValueError("fork_source_not_completed: active view 没有已完成的安全截止点")
+                    empty_source_view, frozen_empty_checkpoint = self._empty_fork_checkpoint_source(
+                        connection, session_id=source_session_id, thread_id=source_thread_id,
+                        checkpoint_ns=checkpoint_ns, source_view_id=source_view_id,
+                        source_checkpoint_id=source_checkpoint_id,
+                    )
+                    empty_checkpoint = connection.execute(
+                        "WITH RECURSIVE lineage(view_id) AS (SELECT ? UNION SELECT view.parent_view_id "
+                        "FROM context_views view JOIN lineage ON lineage.view_id=view.view_id WHERE view.parent_view_id IS NOT NULL) "
+                        "SELECT cp.checkpoint_id,execution.session_id,execution.thread_id,execution.execution_id,"
+                        "execution.job_id,execution.admission_idempotency_key,execution.admission_payload_hash,cp.metadata_json "
+                        "FROM checkpoints cp JOIN lineage ON lineage.view_id=cp.view_id "
+                        "JOIN executions execution ON execution.execution_id=json_extract(cp.metadata_json,'$.boxteam_execution_binding.execution_id') "
+                        "WHERE cp.checkpoint_ns=? AND cp.status='active' "
+                        "AND (? IS NULL OR cp.checkpoint_id=?) AND execution.execution_origin='internal' "
+                        "AND execution.turn_id IS NULL AND execution.outcome IN ('completed','completed_empty') "
+                        "AND NOT EXISTS(SELECT 1 FROM context_view_items member WHERE member.view_id=cp.view_id AND member.visible=1) "
+                        "AND NOT EXISTS(SELECT 1 FROM checkpoint_channels channel JOIN context_view_items member "
+                        "ON member.view_id=channel.context_view_id WHERE channel.checkpoint_id=cp.checkpoint_id AND member.visible=1) "
+                        "ORDER BY cp.commit_id DESC LIMIT 1",
+                        (empty_source_view, checkpoint_ns, frozen_empty_checkpoint, frozen_empty_checkpoint),
+                    ).fetchone()
+                    if empty_checkpoint is None:
+                        if connection.execute("SELECT 1 FROM executions LIMIT 1").fetchone() is not None:
+                            raise ValueError("fork_source_not_completed: 空 view 缺少精确完成的 internal checkpoint/admission")
+                        source_checkpoint_id = None
+                    else:
+                        source_checkpoint_id, historical_session, historical_thread, execution_id, job_id, admission_key, admission_hash, metadata = empty_checkpoint
+                        if json.loads(metadata).get("boxteam_execution_binding") != {
+                            "execution_id": execution_id, "job_id": job_id,
+                            "admission_idempotency_key": admission_key, "admission_payload_hash": admission_hash,
+                        }:
+                            raise ValueError("source-mismatch: 空 internal checkpoint 与冻结 admission identity 不一致")
+                        admission = self._storage.executions._read_execution_admission_connection(
+                            connection, session_id=historical_session, thread_id=historical_thread,
+                            execution_id=execution_id, checkpoint_ns=checkpoint_ns,
+                        )
+                        self._storage.executions.execution_admission_cursor(admission, connection=connection, checkpoint_ns=checkpoint_ns)
+                else:
+                    require_historical_scope(connection, completed[1], completed[2])
+                expected_anchor = completed[0] if completed is not None else None
+                if anchor_item_id is not None and anchor_item_id != expected_anchor:
+                    raise ValueError("source-mismatch: context_fork 自动截止点与冻结 source point 不一致")
+                anchor_item_id = expected_anchor
+            if anchor_item_id is not None and connection.execute(
+                "SELECT 1 FROM context_view_items WHERE view_id=? AND item_id=? AND visible=1 AND context_selected=1",
+                (source_view_id, anchor_item_id),
+            ).fetchone() is None:
+                raise ValueError("source-mismatch: 点击 item 不属于冻结 source view 的有效上下文")
+            if mode != "full_rollout_copy" and anchor_item_id is not None:
+                visible_sequences = [row[0] for row in connection.execute(
+                    f"WITH prefix AS ({EFFECTIVE_PREFIX_SQL}) "
+                    "SELECT DISTINCT message.message_sequence FROM prefix member "
+                    "JOIN item_catalog item ON item.item_id=member.item_id "
+                    "JOIN messages message ON message.jsonl_offset=item.jsonl_offset "
+                    "AND message.jsonl_length=item.jsonl_length "
+                    "ORDER BY member.context_ordinal",
+                    (anchor_item_id, source_view_id, 1 if anchor_mode == "before" else 0),
+                )]
+                validate_tool_protocol_closure(connection, visible_sequences, len(visible_sequences))
+                selected_checkpoint = connection.execute(
+                    "WITH RECURSIVE lineage(view_id) AS (SELECT ? UNION "
+                    "SELECT view.parent_view_id FROM context_views view JOIN lineage "
+                    "ON view.view_id=lineage.view_id WHERE view.parent_view_id IS NOT NULL), "
+                    f"prefix AS ({EFFECTIVE_PREFIX_SQL}) "
+                    "SELECT cp.checkpoint_id FROM checkpoints cp JOIN lineage ON lineage.view_id=cp.view_id "
+                    "WHERE cp.checkpoint_ns=? AND cp.status='active' AND NOT EXISTS "
+                    "(SELECT 1 FROM context_view_items member WHERE member.view_id=cp.view_id "
+                    "AND member.visible=1 AND member.context_selected=1 "
+                    "AND NOT EXISTS (SELECT 1 FROM prefix WHERE prefix.item_id=member.item_id)) "
+                    "AND (json_type(cp.metadata_json,'$.boxteam_execution_binding') IS NULL OR EXISTS "
+                    "(SELECT 1 FROM prefix JOIN item_catalog item ON item.item_id=prefix.item_id "
+                    "WHERE item.execution_id=json_extract(cp.metadata_json,'$.boxteam_execution_binding.execution_id'))) "
+                    "ORDER BY cp.commit_id DESC LIMIT 1",
+                    (source_view_id, anchor_item_id, source_view_id,
+                     1 if anchor_mode == "before" else 0, checkpoint_ns),
+                ).fetchone()
+                source_checkpoint_id = selected_checkpoint[0] if selected_checkpoint is not None else None
+                if mode == "context_fork" and source_checkpoint_id is None:
+                    raise ValueError("source-mismatch: 完成截止点缺少同 lineage、成员和执行绑定的 checkpoint")
+            return RolloutForkResult(
+                source_checkpoint_id=source_checkpoint_id, source_view_id=source_view_id,
+                source_view_revision=revision, anchor_item_id=anchor_item_id,
+            )

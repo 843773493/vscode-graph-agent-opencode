@@ -6,21 +6,28 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
+from app.abstractions.turn_terminal_status import (
+    ToolResultCompletion,
+    tool_result_content_text,
+)
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import (
     CommitKind,
     SemanticKind,
 )
 from app.domain.itemized.errors import ItemSchemaError
+from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.hashing import (
     sha256_jcs,
 )
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.domain.itemized.records import (
     CanonicalItemRecord,
     parse_item_projection_manifest,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.tool_result_identity import (
-    _comparable_tool_result_payload,
+    _same_tool_result_payload,
     _select_existing_tool_result,
     _strict_db_optional_text,
     _strict_db_text,
@@ -36,6 +43,141 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 
 
 class CanonicalItemCommitMixin:
+    def commit_tool_result(
+        self, admission: ExecutionAdmission, completion: ToolResultCompletion,
+        *, recovery: bool = False, checkpoint_ns: str = "",
+    ) -> CanonicalItemRecord:
+        """实时与冷恢复共用原 admission/attempt 的唯一 canonical 工具终态写入。"""
+        session_id, thread_id = admission.session_id, admission.thread_id
+        if self.execution_admission(session_id, thread_id=thread_id, execution_id=admission.execution_id, checkpoint_ns=checkpoint_ns) != admission:
+            raise RuntimeError("工具终态的原 execution admission 已漂移")
+        if recovery and completion.tool_outcome != "unknown":
+            raise ValueError("冷恢复只允许提交明确未知的工具终态通知")
+        identity = ItemProjectionIdentity(model_call_id=completion.model_call_id)
+        provider_id = provider_tool_call_id(identity, completion.tool_call_id)
+        with self._storage._lock(thread_id, checkpoint_ns, session_id=session_id):
+            # 已持独占文件锁，读取必须借用当前连接，不能再次申请共享快照锁。
+            with self._storage._connect(thread_id, checkpoint_ns, session_id=session_id, read_only=True) as connection:
+                model_owner = connection.execute(
+                    "SELECT execution_id FROM model_calls WHERE session_id=? AND thread_id=? AND model_call_id=?",
+                    (session_id, thread_id, completion.model_call_id),
+                ).fetchone()
+                if model_owner != (admission.execution_id,):
+                    raise RuntimeError("工具终态的 ModelCall 不属于原 execution")
+                declarations = connection.execute(
+                    "SELECT item_id,execution_id,turn_id FROM item_catalog WHERE semantic_kind='tool_call' "
+                    "AND json_extract(projection_manifest_json,'$.projection_identity.model_call_id')=? ORDER BY item_sequence",
+                    (completion.model_call_id,),
+                ).fetchall()
+                declaration_items = self._storage.read_items(
+                    session_id, thread_id, checkpoint_ns=checkpoint_ns,
+                    item_ids=tuple(row[0] for row in declarations), connection=connection,
+                ) if declarations else ()
+                names: set[str] = set()
+                for row, item in zip(declarations, declaration_items, strict=True):
+                    calls = item.payload.get("tool_calls")
+                    calls = calls if isinstance(calls, list) else [{"id": item.payload.get("tool_call_id"), "name": item.payload.get("name")}]
+                    for call in calls:
+                        if not isinstance(call, Mapping) or not isinstance(call.get("id"), str):
+                            raise TypeError("原工具声明缺少真实 call identity")
+                        if provider_tool_call_id(item.projection_identity, call["id"]) != provider_id:
+                            continue
+                        if row[1:] != (admission.execution_id, admission.turn_id) or item.status != "completed":
+                            raise RuntimeError("工具终态与原声明的 execution/Turn/status 不一致")
+                        names.add(strict_text(call.get("name"), field="tool_call.name"))
+                if len(names) != 1:
+                    raise RuntimeError("工具终态缺少唯一原 ModelCall 的完整工具声明")
+                tool_name = names.pop()
+                previous = connection.execute(
+                    "SELECT item_id,execution_id FROM item_catalog WHERE item_id=? OR "
+                    "(semantic_kind='tool_result' AND tool_call_id IN (?,?) "
+                    "AND json_extract(projection_manifest_json,'$.projection_identity.model_call_id')=?) "
+                    "ORDER BY item_sequence",
+                    (completion.item_id, provider_id, f"{completion.model_call_id}:tool-call:{provider_id}", completion.model_call_id),
+                ).fetchall()
+                previous_items = self._storage.read_items(
+                    session_id, thread_id, checkpoint_ns=checkpoint_ns,
+                    item_ids=tuple(row[0] for row in previous), connection=connection,
+                ) if previous else ()
+                existing = None
+                request_carriers = []
+                for row, item in zip(previous, previous_items, strict=True):
+                    if row[1] != admission.execution_id or item.turn_id != admission.turn_id:
+                        raise RuntimeError("工具结果 carrier 与原 execution/Turn 不一致")
+                    if item.item_id != completion.item_id:
+                        projection = item.projection_identity
+                        message_id = projection.projection_message_id if projection is not None else None
+                        if (
+                            item.semantic_kind == "tool_result" and item.status == "completed"
+                            and message_id is not None and projection.model_call_id == completion.model_call_id
+                            and item.item_id == f"item-{message_id}"
+                            and item.message_group_id == f"message-{message_id}"
+                            and item.producer_ref == {"producer_kind": "provider", "producer_id": message_id, "invocation_id": admission.execution_id}
+                            and isinstance(item.payload, Mapping)
+                            and item.payload.get("result_id") == message_id
+                            and "tool_attempt_id" not in item.payload and "tool_invocation_id" not in item.payload
+                        ):
+                            request_carriers.append(item)
+                            continue
+                        # projection 消息不是 attempt；真实 attempt carrier 必须精确同 A。
+                        raise RuntimeError(
+                            "同一 tool_call_id 已绑定其他工具终态 attempt: "
+                            f"tool_call_id={completion.tool_call_id}, attempt={completion.tool_attempt_id}"
+                        )
+                    existing = item
+                    expected_identity = {
+                        "tool_call_id": completion.tool_call_id,
+                        "tool_invocation_id": completion.tool_invocation_id,
+                        "tool_attempt_id": completion.tool_attempt_id,
+                        "result_id": completion.tool_attempt_id,
+                        "name": tool_name,
+                    }
+                    if (existing.semantic_kind != "tool_result" or existing.status != "completed"
+                            or existing.turn_id != admission.turn_id or existing.projection_identity != identity
+                            or existing.producer_ref != {"producer_kind": "tool", "producer_id": completion.tool_attempt_id, "invocation_id": completion.model_call_id}
+                            or not isinstance(existing.payload, Mapping)
+                            or any(existing.payload.get(key) != value for key, value in expected_identity.items())):
+                        raise RuntimeError("已提交工具终态与原 attempt 身份冲突")
+                if len(request_carriers) > 1:
+                    raise RuntimeError("同一工具调用存在多个 request result carrier，拒绝猜测恢复")
+                carrier = request_carriers[0] if request_carriers else None
+                if recovery and existing is not None:
+                    if carrier is not None and not _same_tool_result_payload(existing, carrier):
+                        raise ItemSchemaError("同一 tool_call_id 的 tool_result 正文发生变化")
+                    # canonical 已提交而消息流未镜像时，保留真实四态，不改写成未知。
+                    return existing
+                if recovery and carrier is not None:
+                    payload = carrier.payload
+                    outcome = payload.get("tool_outcome")
+                    if outcome not in {"success", "failure", "cancelled", "unknown"} or payload.get("execution_confirmed") is not (outcome != "unknown"):
+                        raise RuntimeError("request result carrier 缺少明确工具结局/执行确认")
+                    completion = replace(completion, content=tool_result_content_text(payload["content"]), tool_outcome=outcome)
+                result_item = CanonicalItemRecord.create(
+                    item_sequence=1, item_id=completion.item_id,
+                    semantic_kind="tool_result", payload_kind="tool_result", status="completed",
+                    producer_ref={"producer_kind": "tool", "producer_id": completion.tool_attempt_id, "invocation_id": completion.model_call_id},
+                    payload={
+                        "tool_call_id": completion.tool_call_id,
+                        "tool_invocation_id": completion.tool_invocation_id,
+                        "tool_attempt_id": completion.tool_attempt_id,
+                        "result_id": completion.tool_attempt_id, "name": tool_name,
+                        "content": completion.content, "tool_outcome": completion.tool_outcome,
+                        "execution_confirmed": completion.tool_outcome != "unknown",
+                    },
+                    projection_identity=identity, turn_id=admission.turn_id,
+                    turn_scope="turn_member" if admission.turn_id is not None else None,
+                    message_group_id=f"message-{completion.tool_attempt_id}", wire_role="tool",
+                    created_at=existing.created_at if existing is not None else None,
+                )
+                if carrier is not None and not _same_tool_result_payload(result_item, carrier):
+                    raise ItemSchemaError("同一 tool_call_id 的 tool_result 正文发生变化")
+            self.append_items(session_id, thread_id, (result_item,), execution_id=admission.execution_id, checkpoint_ns=checkpoint_ns)
+            with self._storage._connect(thread_id, checkpoint_ns, session_id=session_id, read_only=True) as connection:
+                return self._storage.read_items(
+                    session_id, thread_id, checkpoint_ns=checkpoint_ns,
+                    item_ids=(completion.item_id,), connection=connection,
+                )[0]
+
     def append_item(
         self,
         session_id: str,
@@ -201,28 +343,14 @@ class CanonicalItemCommitMixin:
                                     raise RuntimeError(
                                         f"既有 tool_result 派生 call identity 与 JSONL 不一致: {result_item_id}"
                                     )
-                                comparable_existing = _comparable_tool_result_payload(
-                                    existing_item
-                                )
-                                comparable_new = _comparable_tool_result_payload(item)
-                                if comparable_existing != comparable_new:
+                                if not _same_tool_result_payload(existing_item, item):
                                     identity = _tool_result_identity(item)
                                     raise ItemSchemaError(
                                         "同一 tool_call_id 的 tool_result 正文发生变化: "
                                         f"{identity[0] if identity is not None else 'unknown'}"
                                     )
-                                # request 侧 tool_result carrier 不得被工具执行侧
-                                # live item 等价复用。委派（task 工具）后的下一次
-                                # 模型请求装配存在竞态：确认 carrier 可能先于 plan
-                                # 创建落入 active view；若把带 projection_message_id
-                                # 的 request 侧 carrier“等价复用”成无该身份的 live
-                                # item，则不会产生新 commit，投影层的 carrier_dedup
-                                # 会把 live tool_result 连同 stream 组一起判为
-                                # shadow，且没有任何替代 carrier，最终 provider wire
-                                # 缺失尾部 ToolMessage。因此正文等价通过后，incoming
-                                # 是 request 侧 carrier 而既有 item 不是时，必须照常
-                                # 持久化新 carrier；投影层靠 projection_message_id
-                                # 保留它并过滤 live shadow。
+                                # request 的投影 P 与实际 attempt A 必须分别持久化；
+                                # 两种到达顺序都不能让正文复用吞掉另一类身份。
                                 incoming_is_request_carrier = isinstance(
                                     (
                                         item.projection_identity.projection_message_id
@@ -239,10 +367,7 @@ class CanonicalItemCommitMixin:
                                     ),
                                     str,
                                 )
-                                if (
-                                    incoming_is_request_carrier
-                                    and not existing_is_request_carrier
-                                ):
+                                if incoming_is_request_carrier != existing_is_request_carrier:
                                     pending.append(item)
                                     continue
                                 existing_commit_ids.append(result_commit_id)

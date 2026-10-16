@@ -70,7 +70,7 @@ function session(sessionId: string): Session {
   const next = applyGatewayWorkspaceListAfterRemoval(previous, "removed", {
     active_workspace_id: "kept",
     items: [workspace("kept", true)],
-  });
+  }, true);
 
   if (next.gatewayWorkspaces.map((item) => item.workspace_id).join(",") !== "kept") {
     throw new Error("删除后未采用后端返回的完整工作区列表");

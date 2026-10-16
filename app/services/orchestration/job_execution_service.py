@@ -85,6 +85,7 @@ class JobExecutionService:
                 job_id=job.job_id,
                 message_id=job.message_id,
                 execution_binding=job.execution_binding,
+                resume_checkpoint_id=job.resume_checkpoint_id,
                 attachments=job.attachments,
                 message_created_at=job.message_created_at,
                 message_metadata=job.message_metadata,

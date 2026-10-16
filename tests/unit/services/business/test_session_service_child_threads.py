@@ -16,6 +16,9 @@ from app.core.session_control_store import (
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 
@@ -41,6 +44,7 @@ def service(workspace) -> SessionService:
         workspace_id=WORKSPACE_ID,
         path_resolver=workspace.resolver,
         creation_service=workspace.creation_service,
+        initialize_thread_storage=RolloutCheckpointSaver(workspace.sessions_root).initialize_thread_storage,
     )
 
 

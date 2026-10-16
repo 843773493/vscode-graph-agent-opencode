@@ -66,14 +66,80 @@ export type ControlAction =
   | "append_instruction"
   | "retry";
 
-export type ChildThreadStatus = "pending" | "running" | "completed" | "failed";
+export type ChildThreadStatus = "idle" | "pending" | "running" | "completed" | "failed";
 
 export function parseChildThreadStatus(value: unknown): ChildThreadStatus {
-  if (value === "pending" || value === "running" || value === "completed" || value === "failed") {
+  if (value === "idle" || value === "pending" || value === "running" || value === "completed" || value === "failed") {
     return value;
   }
   throw new Error(`child thread status 协议值无效: ${String(value)}`);
 }
+
+export type SessionForkMode = "view_prefix_fork" | "context_fork" | "full_rollout_copy";
+export type SessionForkCreationKind = "new_session_main" | "new_child_thread";
+export type SessionForkResourceAction = "reuse_reference" | "retain_reference" | "copy_snapshot" | "omit" | "unsupported";
+export type SessionForkOwnerReference = Omit<WorkspaceProtocol.SessionForkOwnerReference, "kind"> & {
+  kind: "terminal" | "browser";
+};
+type SessionForkLiveResource = Omit<WorkspaceProtocol.WorkspaceResourceDTO, "source_thread" | "unattached_since" | "reclaim_at" | "error"> & {
+  source_thread: NonNullable<WorkspaceProtocol.WorkspaceResourceDTO["source_thread"]>;
+  unattached_since?: string | null;
+  reclaim_at?: string | null;
+  error?: string | null;
+};
+export type SessionForkResourceChoice = {
+  resource_uri: string;
+  owner_reference?: null;
+  action: SessionForkResourceAction;
+} | {
+  resource_uri?: null;
+  owner_reference: SessionForkOwnerReference;
+  action: "reuse_reference" | "omit";
+};
+export type SessionForkRequest = Omit<WorkspaceProtocol.SessionForkRequest,
+  "mode" | "anchor_mode" | "creation_kind" | "relationship" | "resources" | "goal" | "anchor_item_id" | "title"
+> & {
+  mode: SessionForkMode;
+  anchor_mode: "inclusive" | "before";
+  creation_kind: SessionForkCreationKind;
+  relationship: "detached" | "pinned";
+  resources: SessionForkResourceChoice[];
+  goal?: WorkspaceProtocol.SessionForkGoalSelection | null;
+  anchor_item_id: string | null;
+  title?: string | null;
+};
+export type SessionForkSourcePoint = Omit<WorkspaceProtocol.SessionForkSourcePointDTO,
+  "resource_mode" | "resource_anchor_mode" | "anchor_item_id" | "live_resources"
+> & {
+  anchor_item_id: string | null;
+  resource_mode: SessionForkMode;
+  resource_anchor_mode: "inclusive" | "before";
+  live_resources: SessionForkLiveResource[];
+};
+/** 顶层 thread_id/thread_uri 是本次 fork 的目标 Thread；session 是其所属 Session，session.thread_id 标识该 Session 的 main Thread。 */
+export type SessionForkResult = Omit<WorkspaceProtocol.SessionForkResultDTO,
+  "session" | "creation_kind" | "mode" | "resources" | "anchor_item_id" | "goal_id"
+> & {
+  session: Session;
+  creation_kind: SessionForkCreationKind;
+  mode: SessionForkMode;
+  anchor_item_id: string | null;
+  goal_id: string | null;
+  resources: Array<Omit<WorkspaceProtocol.SessionForkResourceResult,
+    "resource_uri" | "action" | "availability" | "target_uri" | "reason" | "owner_reference" | "owner_resource" | "operation_state" | "committed_revision"
+  > & {
+    resource_uri?: string | null;
+    action: SessionForkResourceAction;
+    availability: "available" | "unavailable";
+    target_uri: string | null;
+    reason: string | null;
+    owner_reference?: SessionForkOwnerReference | null;
+    owner_resource?: SessionForkLiveResource | null;
+    operation_state?: "not_dispatched" | "dispatching" | "committed" | "rejected" | null;
+    /** 本次 attach 的历史提交 revision；尚未提交时省略，当前 owner 版本见 owner_resource.owner_revision。 */
+    committed_revision?: number | null;
+  }>;
+};
 
 export type ChildThreadSummary = Omit<
   WorkspaceProtocol.ChildThreadSummaryDTO,
@@ -384,18 +450,20 @@ export type MessageRunRequest = Omit<WorkspaceProtocol.MessageRunRequest, "messa
   message: MessageCreateRequest;
   run: RunOptions;
 };
-export type MessageRunAccepted = Omit<WorkspaceProtocol.MessageRunAccepted, "status" | "dispatch"> & {
+export type MessageRunAccepted = Omit<WorkspaceProtocol.MessageRunAccepted, "status" | "dispatch" | "turn_id"> & {
   status: JobDispatchStatus;
   dispatch: JobDispatchSnapshot;
+  turn_id: string | null;
 };
 export type MessageReplayRequest = Omit<WorkspaceProtocol.MessageReplayRequest, "action" | "content"> & {
   action: "retry_failed" | "regenerate" | "edit_and_continue";
   content?: string | null;
 };
-export type MessageReplayAccepted = Omit<WorkspaceProtocol.MessageReplayAccepted, "status" | "dispatch" | "action"> & {
+export type MessageReplayAccepted = Omit<WorkspaceProtocol.MessageReplayAccepted, "status" | "dispatch" | "action" | "turn_id"> & {
   status: JobDispatchStatus;
   dispatch: JobDispatchSnapshot;
   action: "retry_failed" | "regenerate" | "edit_and_continue";
+  turn_id: string | null;
 };
 export type AgentStateMessages = WorkspaceProtocol.AgentStateMessagesDTO;
 export type PendingRequest = Omit<
@@ -413,14 +481,12 @@ export type PendingRequest = Omit<
   created_at: string;
   updated_at: string;
 };
-export type PendingRequestList = Omit<WorkspaceProtocol.PendingRequestListDTO, "active_job_id" | "requests"> & {
+export type PendingRequestList = Omit<WorkspaceProtocol.PendingRequestListDTO, "active_job_id" | "requests" | "thread_id"> & {
   active_job_id?: string | null;
+  thread_id?: string | null;
   requests?: PendingRequest[];
 };
 export type PendingRequestPolicyUpdateRequest = WorkspaceProtocol.PendingRequestPolicyUpdateRequest;
-export type PendingRequestUpdateRequest = Omit<WorkspaceProtocol.PendingRequestUpdateRequest, "attachments"> & {
-  attachments?: AttachmentRef[];
-};
 
 export type Session = Omit<WorkspaceProtocol.SessionDTO, "created_at" | "updated_at" | "title_source" | "current_provider_id" | "parent_session_id" | "context_source_session_id" | "kind" | "generation_origin"> & {
   created_at: string;
@@ -504,9 +570,10 @@ export type SessionChangesetListItemDTO = WorkspaceProtocol.SessionChangesetList
 export type SessionFileChangeDTO = WorkspaceProtocol.SessionFileChangeDTO;
 export type SessionFileReviewResultDTO = WorkspaceProtocol.SessionFileReviewResultDTO;
 
-export type TurnAttachment = Omit<WorkspaceProtocol.TurnAttachmentDTO, "name" | "content_type"> & {
+export type TurnAttachment = Omit<WorkspaceProtocol.TurnAttachmentDTO, "name" | "content_type" | "availability"> & {
   name?: string | null;
   content_type?: string | null;
+  availability?: "available" | "unavailable" | null;
 };
 export type TurnActivityStats = WorkspaceProtocol.TurnActivityStatsDTO;
 export type TurnDetailBatch = Omit<WorkspaceProtocol.TurnDetailBatchDTO, "items" | "next_cursor"> & {
@@ -565,6 +632,7 @@ export type InternalExecutionStatus =
   | "cancelled"
   | "execution_lost"
   | "unknown";
+/** execution 的 session_id/thread_id 保留历史 scope，可不同于所在 history page 的请求容器；它们仅用于目标本地 binding 校验，不用于重新寻址来源。 */
 export type InternalExecutionHistory = Omit<
   WorkspaceProtocol.InternalExecutionHistoryDTO,
   | "created_at"
@@ -602,7 +670,7 @@ export type TurnSummary = Omit<
 };
 export type TurnResponseSource = WorkspaceProtocol.TurnResponseSourceDTO;
 export type TurnResponsePart = Omit<WorkspaceProtocol.TurnResponsePartDTO, "kind" | "projection" | "status" | "source" | "carrier_type" | "tool_call_id" | "tool_name" | "arguments" | "result"> & {
-  kind: "text" | "reasoning" | "reasoning_summary" | "reasoning_encrypted" | "tool_call" | "tool_result" | "final_text";
+  kind: "text" | "reasoning" | "reasoning_summary" | "reasoning_encrypted" | "compaction_summary" | "tool_call" | "tool_result" | "final_text";
   projection: "summary" | "detail" | "streaming";
   status?: "pending" | "running" | "completed" | "failed" | "cancelled";
   source: TurnResponseSource;

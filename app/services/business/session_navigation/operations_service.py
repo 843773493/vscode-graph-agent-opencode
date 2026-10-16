@@ -26,6 +26,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 
+from app.core.phase_observer import observe_phase
 from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_subtree_delete import SubtreeDeleteResult
 from app.core.sqlite_state import utc_now_text
@@ -308,6 +309,11 @@ class SessionCatalogOperationsService:
             for record in records
             if record.reserved_node_id is not None
         }
+        for record in records:
+            await observe_phase(record.operation_id, "navigation.enqueued", details={
+                "workspace_id": self._workspace_id, "kind": record.kind,
+                "name": record.params.get("name"), "target_node_id": record.target_node_id,
+            })
         # 202 已是 durable acceptance；已由 lifespan 启动的 owner 异步排空，不在
         # 此等待执行结果，也不把执行结果当成功展示。
         return NavigationMutationEnqueueResultDTO(
@@ -466,6 +472,7 @@ class SessionCatalogOperationsService:
         )
         has_more = len(records) > resolved_limit
         page = records[:resolved_limit]
+        cursor_gone = after > watermark or bool(page and page[0].event_seq > after + 1)
         return NavigationEventsPageDTO(
             workspace_id=self._workspace_id,
             event_seq_watermark=watermark,
@@ -476,6 +483,7 @@ class SessionCatalogOperationsService:
                 else None
             ),
             has_more=has_more,
+            cursor_gone=cursor_gone,
         )
 
     def decode_events_cursor(self, cursor: str) -> tuple[int, int]:
@@ -575,7 +583,7 @@ class SessionCatalogOperationsService:
             committed_catalog_revision=record.committed_catalog_revision,
             error_code=record.error_code,
             error_detail=record.error_detail,
-            pending_settlement=record.pending_settlement,
+            settlement=record.settlement,
             receipt_revision=record.receipt_revision,
             updated_at=datetime.fromisoformat(record.updated_at),
         )

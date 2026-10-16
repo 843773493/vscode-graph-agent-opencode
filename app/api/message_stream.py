@@ -10,7 +10,6 @@ from fastapi.responses import StreamingResponse
 from google.protobuf import json_format
 from pydantic import ValidationError
 
-from app.api.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.api.deps import (
     get_message_stream_store,
     get_request_id,
@@ -27,6 +26,7 @@ from app.protocol.codecs.message_stream import (
     message_stream_to_json,
     message_stream_to_proto,
 )
+from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.message_stream import MessageStreamSnapshotDTO
 from app.services.infrastructure.message_stream_store import (

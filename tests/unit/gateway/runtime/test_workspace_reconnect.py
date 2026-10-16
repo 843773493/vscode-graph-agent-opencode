@@ -8,8 +8,9 @@ from pathlib import Path
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
+import app.gateway.runtime.controller as runtime_controller_module
 from app.core.mounted_workspaces import (
     MountedWorkspace,
     mounted_workspace_manifest_digest,
@@ -17,6 +18,8 @@ from app.core.mounted_workspaces import (
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import verify_federation_token, verify_gateway_token
 from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.federation import RemoteGatewayConnection
+from app.gateway.main import gateway_http_exception_handler
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.routes import (
     _shared,
@@ -245,6 +248,224 @@ async def test_reconnect_managed_local_workspace_keeps_stable_id(tmp_path: Path,
     assert registry.managed_runtime(target.workspace_id).backend_owner is singleton.owner
     assert len(process_boundary.starts) == 1
     registry.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("controller_registry_store", [True], indirect=True)
+@pytest.mark.parametrize(
+    "cancel_reconcile",
+    [False, True],
+    ids=["secondary-error", "reconcile-cancelled"],
+)
+async def test_reconnect_http_keeps_published_projection_and_reports_both_errors(
+    controller_case,
+    deletion_http_application,
+    monkeypatch: pytest.MonkeyPatch,
+    cancel_reconcile: bool,
+) -> None:
+    registry, _, controller, _, _, _ = controller_case
+
+    class _TrackingRuntime(WorkspaceRuntime):
+        def __init__(self, url: str) -> None:
+            super().__init__(service_urls={"workspace_api": url})
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    connection = RemoteGatewayConnection(
+        connection_id="rgw_reconnect_http",
+        name="Reconnect HTTP",
+        host="reconnect.example.com",
+        port=22,
+        username="developer",
+        private_key_path=None,
+        ssh_config_host="reconnect",
+        remote_gateway_port=8014,
+        remote_gateway_id="reconnect-gateway",
+        protocol_version=1,
+        source_owner="manual",
+    )
+    workspace_id = "reconnect-http-workspace"
+    old_runtime = _TrackingRuntime("http://127.0.0.1:41001")
+    new_runtime = _TrackingRuntime("http://127.0.0.1:42001")
+    old_target = WorkspaceTarget(
+        workspace_id=workspace_id,
+        name="Reconnect HTTP workspace",
+        root_path="/remote/reconnect-http",
+        backend_url=old_runtime.service_urls["workspace_api"],
+        connection_kind="remote_gateway",
+        backend_workspace_id=UUID_B,
+        owner="remote_projection",
+        connection_id=connection.connection_id,
+        remote_gateway_connection_id=connection.connection_id,
+        remote_workspace_id="remote-workspace",
+        remote_service_names=("workspace_api",),
+    )
+    registry.apply_remote_projection_snapshot(
+        connection=connection,
+        projections=(old_target,),
+        runtime=old_runtime,
+    )
+    previous_revision = registry.registry_revision
+    state = registry._state_store
+    assert state is not None
+    primary_error = RuntimeError("observer failed after remote projection commit")
+
+    async def reconnect_remote_gateway(**_: object) -> None:
+        registry.apply_remote_projection_snapshot(
+            connection=connection,
+            projections=(
+                replace(
+                    old_target,
+                    backend_url=new_runtime.service_urls["workspace_api"],
+                ),
+            ),
+            runtime=new_runtime,
+        )
+
+    def fail_commit_observer() -> None:
+        raise primary_error
+
+    reconcile_calls = 0
+
+    async def fail_dependent_reconcile() -> None:
+        nonlocal reconcile_calls
+        reconcile_calls += 1
+        if cancel_reconcile:
+            raise asyncio.CancelledError("dependent reconcile cancelled")
+        raise OSError("port-forward reconcile failed after commit")
+
+    monkeypatch.setattr(
+        runtime_controller_module,
+        "reconnect_remote_gateway",
+        reconnect_remote_gateway,
+    )
+    monkeypatch.setattr(controller, "_on_registry_reconciled", fail_dependent_reconcile)
+    registry.add_commit_observer(fail_commit_observer)
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=deletion_http_application),
+            base_url="http://gateway",
+        ) as client:
+            if cancel_reconcile:
+                with pytest.raises(
+                    asyncio.CancelledError,
+                    match="dependent reconcile cancelled",
+                ) as cancelled:
+                    await client.post(
+                        f"/api/gateway/workspaces/{workspace_id}/reconnect",
+                        headers={"X-Request-ID": "reconnect-postcommit-01"},
+                    )
+                assert cancelled.value.__context__ is primary_error
+            else:
+                response = await client.post(
+                    f"/api/gateway/workspaces/{workspace_id}/reconnect",
+                    headers={"X-Request-ID": "reconnect-postcommit-01"},
+                )
+                assert response.status_code == 502, response.text
+                assert response.headers["X-Request-ID"] == "reconnect-postcommit-01"
+                assert response.json() == {
+                    "detail": (
+                        "observer failed after remote projection commit\n"
+                        "远程 Gateway 新 URL 已提交，但依赖资源对账失败: "
+                        "port-forward reconcile failed after commit"
+                    ),
+                    "request_id": "reconnect-postcommit-01",
+                }
+
+        assert primary_error.args == (
+            "observer failed after remote projection commit",
+        )
+        assert reconcile_calls == 1
+        assert registry.resolve(workspace_id).backend_url == "http://127.0.0.1:42001"
+        assert registry.resolve(workspace_id).connection_error is None
+        assert registry.remote_gateway_url(connection.connection_id) == "http://127.0.0.1:42001"
+        assert registry._remote_gateway_runtimes[connection.connection_id] is new_runtime
+        assert registry.registry_revision == previous_revision + 1
+        assert state.get_registry_revision() == registry.registry_revision
+        saved = state.load_workspace_registry()
+        assert saved is not None
+        assert any(
+            target["workspace_id"] == workspace_id
+            and target["backend_url"] == "http://127.0.0.1:42001"
+            for target in saved["targets"]
+        )
+        assert new_runtime.closed is False
+        assert old_runtime.closed is True
+        assert registry.remote_gateway_connection(connection.connection_id) == connection
+    finally:
+        registry.remove_commit_observer(fail_commit_observer)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("controller_registry_store", [True], indirect=True)
+async def test_reconnect_http_preserves_primary_error_when_connection_error_recording_fails(
+    controller_case,
+    deletion_http_application,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry, _, controller, _, _, _ = controller_case
+    target = WorkspaceTarget(
+        workspace_id="external-reconnect-error",
+        name="External workspace",
+        root_path="/external/reconnect-error",
+        backend_url="http://127.0.0.1:43001",
+        connection_kind="local",
+        backend_workspace_id=UUID_B,
+        managed=False,
+    )
+    registry.upsert(
+        target,
+        runtime=WorkspaceRuntime(
+            service_urls={"workspace_api": target.backend_url},
+            backend_workspace_id=UUID_B,
+        ),
+        activate=False,
+    )
+    primary_error = OSError("reconnect failed before registry commit")
+    secondary_error = RuntimeError("connection_error persistence failed")
+    calls = 0
+
+    async def fail_reconnect(_workspace_id: str) -> None:
+        raise primary_error
+
+    def fail_mark_connection_error(_workspace_id: str, _error: str) -> None:
+        nonlocal calls
+        calls += 1
+        raise secondary_error
+
+    monkeypatch.setattr(controller, "reconnect_ssh", fail_reconnect)
+    monkeypatch.setattr(registry, "mark_connection_error", fail_mark_connection_error)
+    previous_revision = registry.registry_revision
+    previous_commit = registry._last_committed_snapshot
+    state = registry._state_store
+    assert state is not None
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=deletion_http_application),
+        base_url="http://gateway",
+    ) as client:
+        response = await client.post(
+            f"/api/gateway/workspaces/{target.workspace_id}/reconnect",
+            headers={"X-Request-ID": "reconnect-mark-error-secondary-01"},
+        )
+
+    assert response.status_code == 502, response.text
+    assert response.headers["X-Request-ID"] == "reconnect-mark-error-secondary-01"
+    assert response.json() == {
+        "detail": (
+            "reconnect failed before registry commit\n"
+            "记录 connection_error 失败: connection_error persistence failed"
+        ),
+        "request_id": "reconnect-mark-error-secondary-01",
+    }
+    assert primary_error.args == ("reconnect failed before registry commit",)
+    assert calls == 1
+    assert registry.registry_revision == previous_revision
+    assert registry._last_committed_snapshot is previous_commit
+    assert state.get_registry_revision() == previous_revision
+    assert registry.resolve(target.workspace_id).connection_error is None
 
 
 @pytest.mark.asyncio
@@ -927,6 +1148,7 @@ def deletion_http_application(controller_case, tmp_path, monkeypatch):
     registry, _, controller, _, _, _ = controller_case
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
+    app.add_exception_handler(HTTPException, gateway_http_exception_handler)
     app.state.registry = registry
     app.state.workspace_runtime_controller = controller
     app.state.port_forward_manager = SshPortForwardManager(

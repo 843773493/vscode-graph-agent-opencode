@@ -107,6 +107,48 @@ def _accept(
     )
 
 
+def _register_provider_model_call(
+    saver,
+    accepted,
+    execution_scope,
+    frozen_provider_activation,
+    frozen_provider_wire,
+    *,
+    key: str,
+) -> str:
+    """经真实 provider prepare 与 ModelCall 登记把已接受 Turn 推进 active。"""
+    execution_id = str(accepted["initial_execution_id"])
+    with execution_scope(saver, accepted) as (thread, manager):
+        activation = frozen_provider_activation(
+            saver,
+            plan_creation_idempotency_key=f"{key}:create",
+        )
+        prepared = saver.prepare_context_for_provider(
+            SESSION_ID,
+            thread,
+            turn_id=str(accepted["turn_id"]),
+            execution_id=execution_id,
+            plan_creation_idempotency_key=f"{key}:create",
+            seal_idempotency_key=f"{key}:seal",
+            context_source_manager=manager,
+            tool_set_supplier=lambda: EMPTY_TOOL_SET,
+            **frozen_provider_wire("test-provider-v1", "chat_completions"),
+            **activation,
+        )
+
+    model_call_id = str(activation["model_call_id"])
+    saver.register_model_call(
+        SESSION_ID,
+        thread_id=thread,
+        execution_id=execution_id,
+        model_call_id=model_call_id,
+        attempt=1,
+        provider="test-provider",
+        assembly_id=str(prepared["assembly_id"]),
+    )
+    return model_call_id
+
+
 def _rollout_db(sessions_dir: Path, session_id: str) -> Path:
     resolver = get_session_path_resolver(sessions_dir)
     thread_id = resolver.main_thread_id(session_id)
@@ -476,7 +518,9 @@ def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
         saver.append_items(SESSION_ID, (checkpoint_shadow, result), thread_id=thread)
 
     with saver._storage.storage.open_read_snapshot(SESSION_ID, thread) as snapshot:
-        projection = saver._storage.storage.read_turn_projections(snapshot, ("turn-user-1",))[
+        view_id = saver._storage.storage._active_context_view_id(snapshot.connection, snapshot.checkpoint_ns)
+        assert view_id is not None
+        projection = saver._storage.storage.read_turn_projections(snapshot, view_id, ("turn-user-1",))[
             "turn-user-1"
         ]
 
@@ -588,8 +632,10 @@ def test_canonical_tool_call_recovers_coordinates_from_scoped_block_id(
         saver.append_items(SESSION_ID, (live_call,), thread_id=thread)
 
     with saver._storage.storage.open_read_snapshot(SESSION_ID, thread) as snapshot:
+        view_id = saver._storage.storage._active_context_view_id(snapshot.connection, snapshot.checkpoint_ns)
+        assert view_id is not None
         projection = saver._storage.storage.read_turn_projections(
-            snapshot, ("turn-tool-call",)
+            snapshot, view_id, ("turn-tool-call",)
         )["turn-tool-call"]
 
     tool_calls = [
@@ -632,8 +678,8 @@ def test_item_catalog_reads_fail_closed_on_missing_item_and_view_reference(
         )
         connection.execute(
             "INSERT INTO context_view_items(view_id, item_id, logical_item_ordinal, "
-            "visible, source_kind) VALUES (?, ?, ?, 1, 'canonical')",
-            (view_id, "item-does-not-exist", next_ordinal),
+            "visible, source_kind, context_selected, context_ordinal) VALUES (?, ?, ?, 1, 'canonical', 1, ?)",
+            (view_id, "item-does-not-exist", next_ordinal, next_ordinal),
         )
         connection.commit()
 
@@ -904,6 +950,7 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(frozen_pro
     runtime = MessageStreamRuntime(
         writer,
         canonical_item_sink=item_sink.append,
+        tool_result_sink=item_sink.complete_tool_result,
         canonical_turn_id="turn-user-1",
         model_call_registrar=model_calls.register,
         model_call_outcome_sink=model_calls.update_outcome,
@@ -1273,7 +1320,7 @@ def test_checkpoint_root_projection_preserves_acceptance_turn_ordinal(
         "turn-checkpoint-first",
         1,
         "item-checkpoint-first-user",
-        "active",
+        "open",
     )
     assert root == (
         "item-checkpoint-first-user",
@@ -1499,11 +1546,22 @@ def test_source_overlay_restore_rejects_corrupted_registry_rows(
 def test_item_bearing_terminal_convergence_materializes_output_and_restart(
     tmp_path: Path,
     session_bundle_factory,
+    execution_scope,
+    frozen_provider_activation,
+    frozen_provider_wire,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     accepted = _accept(saver, SESSION_ID)
+    model_call_id = _register_provider_model_call(
+        saver,
+        accepted,
+        execution_scope,
+        frozen_provider_activation,
+        frozen_provider_wire,
+        key="terminal-item-bearing",
+    )
     execution_id = str(accepted["initial_execution_id"])
     output = CanonicalItemRecord.create(
         item_sequence=99,
@@ -1513,7 +1571,7 @@ def test_item_bearing_terminal_convergence_materializes_output_and_restart(
         status=CanonicalItemStatus.COMPLETED,
         producer_ref={
             "producer_kind": "provider",
-            "producer_id": "model-call-1",
+            "producer_id": model_call_id,
             "invocation_id": execution_id,
         },
         payload="没有对应 message projection",
@@ -1614,7 +1672,7 @@ def test_item_bearing_terminal_convergence_materializes_output_and_restart(
         status=CanonicalItemStatus.COMPLETED,
         producer_ref={
             "producer_kind": "provider",
-            "producer_id": "model-call-1",
+            "producer_id": model_call_id,
             "invocation_id": execution_id,
         },
         payload="另一个终态正文",
@@ -1641,11 +1699,22 @@ def test_item_bearing_terminal_convergence_materializes_output_and_restart(
 def test_item_bearing_terminal_projection_failure_rolls_back_jsonl_and_sqlite(
     tmp_path: Path,
     session_bundle_factory,
+    execution_scope,
+    frozen_provider_activation,
+    frozen_provider_wire,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     accepted = _accept(saver, SESSION_ID)
+    model_call_id = _register_provider_model_call(
+        saver,
+        accepted,
+        execution_scope,
+        frozen_provider_activation,
+        frozen_provider_wire,
+        key="terminal-projection-rollback",
+    )
     execution_id = str(accepted["initial_execution_id"])
     output = CanonicalItemRecord.create(
         item_sequence=99,
@@ -1655,7 +1724,7 @@ def test_item_bearing_terminal_projection_failure_rolls_back_jsonl_and_sqlite(
         status=CanonicalItemStatus.COMPLETED,
         producer_ref={
             "producer_kind": "provider",
-            "producer_id": "model-call-1",
+            "producer_id": model_call_id,
             "invocation_id": execution_id,
         },
         payload="projection should fail",
@@ -1767,7 +1836,7 @@ def test_cancelled_turn_rejects_original_dispatch_and_replays_as_new_turn(
     assert turns[1][0] == replayed["turn_id"]
     assert turns[1][1] > turns[0][1]
     assert turns[1][2] != turns[0][2]
-    assert turns[1][3] == "active"
+    assert turns[1][3] == "open"
     assert turns[1][4] == "turn-user-1"
     assert len(roots) == 2
     assert roots[0][0] != roots[1][0]
@@ -1784,6 +1853,9 @@ def test_cancelled_turn_rejects_original_dispatch_and_replays_as_new_turn(
 def test_terminal_turn_rejects_resume_and_original_dispatch_without_mutation(
     tmp_path: Path,
     session_bundle_factory,
+    execution_scope,
+    frozen_provider_activation,
+    frozen_provider_wire,
     turn_status: str,
     outcome: str,
 ) -> None:
@@ -1792,6 +1864,15 @@ def test_terminal_turn_rejects_resume_and_original_dispatch_without_mutation(
     saver = RolloutCheckpointSaver(sessions_dir)
     thread_id = saver._storage.storage.main_thread_id(SESSION_ID)
     accepted = _accept(saver, SESSION_ID)
+    if outcome == "completed_empty":
+        _register_provider_model_call(
+            saver,
+            accepted,
+            execution_scope,
+            frozen_provider_activation,
+            frozen_provider_wire,
+            key="terminal-empty",
+        )
     saver.converge_execution(
         SESSION_ID,
         thread_id=thread_id,
@@ -2013,7 +2094,7 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
         )
         connection.execute(
             "INSERT INTO context_view_items(view_id, item_id, logical_item_ordinal, "
-            "visible, source_kind) VALUES (?, ?, 1, 1, 'canonical')",
+            "visible, source_kind, context_selected, context_ordinal) VALUES (?, ?, 1, 1, 'canonical', 1, 0)",
             (inactive_view_id, accepted["root_input_item_id"]),
         )
         connection.commit()
@@ -2548,6 +2629,7 @@ async def test_post_commit_tool_observer_failure_keeps_result_and_converges_exec
     runtime = MessageStreamRuntime(
         writer,
         canonical_item_sink=canonical_sink.append,
+        tool_result_sink=canonical_sink.complete_tool_result,
         canonical_turn_id="turn-user-1",
         model_call_registrar=model_calls.register,
         model_call_outcome_sink=model_calls.update_outcome,
@@ -2591,7 +2673,7 @@ async def test_post_commit_tool_observer_failure_keeps_result_and_converges_exec
             )
         )
         await runtime.prepare_tool_execution(model_call_id)
-        tool_call_id = runtime.claim_tool_call_id("read_fixture", {"path": "test.md"})
+        tool_call_id = runtime.claim_tool_call_id(model_call_id, "provider-call-post-commit")
         assert tool_call_id is not None
         await runtime.start_tool(
             tool_execution_id=tool_execution_id,
@@ -2674,8 +2756,21 @@ async def test_post_commit_tool_observer_failure_keeps_result_and_converges_exec
         "canonical_results": [
             {
                 "item_id": item.item_id,
+                "status": item.status,
+                "turn_id": item.turn_id,
+                "turn_scope": item.turn_scope,
+                "model_call_id": item.projection_identity.model_call_id,
+                "producer_kind": item.producer_ref["producer_kind"],
+                "producer_id": item.producer_ref["producer_id"],
+                "producer_invocation_id": item.producer_ref["invocation_id"],
                 "content": item.payload["content"],
+                "tool_call_id": item.payload["tool_call_id"],
+                "tool_invocation_id": item.payload["tool_invocation_id"],
+                "tool_attempt_id": item.payload["tool_attempt_id"],
+                "result_id": item.payload["result_id"],
+                "name": item.payload["name"],
                 "outcome": item.payload["tool_outcome"],
+                "execution_confirmed": item.payload["execution_confirmed"],
                 "content_hash": item.content_hash,
             }
             for item in result_items
@@ -2719,8 +2814,21 @@ async def test_post_commit_tool_observer_failure_keeps_result_and_converges_exec
         "canonical_results": [
             {
                 "item_id": expected_item_id,
+                "status": "completed",
+                "turn_id": "turn-user-1",
+                "turn_scope": "turn_member",
+                "model_call_id": model_call_id,
+                "producer_kind": "tool",
+                "producer_id": tool_execution_id,
+                "producer_invocation_id": model_call_id,
                 "content": result_text,
+                "tool_call_id": tool_call_id,
+                "tool_invocation_id": f"tool-invocation:{model_call_id}:provider-call-post-commit",
+                "tool_attempt_id": tool_execution_id,
+                "result_id": tool_execution_id,
+                "name": "read_fixture",
                 "outcome": "success",
+                "execution_confirmed": True,
                 "content_hash": result_items[0].content_hash if result_items else None,
             }
         ],

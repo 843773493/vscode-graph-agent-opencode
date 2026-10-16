@@ -535,9 +535,8 @@ class LegacyRolloutAdapter:
                     turn_id=item_turn_id,
                     turn_scope=scope,
                     message_group_id=f"legacy-message:{message_id}",
-                    # v1 function 是旧 tool result 的等价 role；v2
-                    # projection 只接受规范化的 tool wire role。
-                    wire_role="tool" if role == "function" else role,
+                    # 一次性导入在这里统一 v2 wire role；原来源仍由审计引用保留。
+                    wire_role={"function": "tool", "system_reminder": "user"}.get(role, role),
                 )
             )
             sequence += 1

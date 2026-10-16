@@ -21,9 +21,11 @@
 
 ### Requirement: Turn 是默认分页边界
 
-历史加载必须使用统一的 `Turn.status` 闭合集合 `open | active | completed | completed_empty | interrupted | cancelled | failed | unknown`；其中 `completed_empty` 是唯一的无 canonical output 正常终态名称。普通 `cancelled` 与 `full_rollout_copy` 产生的 `cancelled` historical 只能作为不可运行历史读取，不能由历史加载触发 `resume_turn` 或 `dispatch_replay`；对原 Turn 的这两种请求必须由业务层显式返回 `turn_not_resumable`。若需要重新执行，只能由独立的 `replay_as_new_turn` 创建新的 Turn/root/acceptance/initial execution，在 active view 登记新的 view-local `logical_turn_ordinal`，source history 可以作为上下文前缀但 source Turn/root 不能成为新 Turn 的 root，并记录 `replay_of_turn_id`，不能把新 Turn 创建操作混入原 Turn 的错误响应。
+历史加载必须使用统一的 `Turn.status` 闭合集合 `open | active | completed | completed_empty | interrupted | cancelled | failed | unknown`；其中 `completed_empty` 是唯一的无 canonical output 正常终态名称。普通 `cancelled` 及 fork 导入的全部历史 Turn（无论原 status）只能作为不可运行历史读取，不能由历史加载触发 `resume_turn` 或 `dispatch_replay`；对原 Turn 的这两种请求必须由业务层显式返回 `turn_not_resumable`。导入保留原 status、final item 和业务 hash，以目标本地冻结 namespace binding 核验历史归属，不把原历史批量改成 cancelled，不为此取消 source 执行。若需要重新执行，只能由独立的 `replay_as_new_turn` 创建新的 Turn/root/acceptance/initial execution，在 active view 登记新的 view-local `logical_turn_ordinal`，source history 可以作为上下文前缀但 source Turn/root 不能成为新 Turn 的 root，并记录 `replay_of_turn_id`，不能把新 Turn 创建操作混入原 Turn 的错误响应。
 
 系统 SHALL 以完整 Turn 作为默认加载和分页单位。Turn 必须由 `TurnRecord.root_input_item_id` 表示其真实用户输入起点；用户输入、合并 steering Job、工具活动和最终状态 MUST 保持在同一个 Turn 中。历史顺序使用当前 context view 的 `logical_turn_ordinal`，不使用会跨 branch/view 保持不变的全局 `turn_ordinal` 重排；root lookup 必须沿 view fork lineage 解析到同一个 TurnRecord。`pending_next_turn` runtime notice、request-only prompt、缓存保持型 source delta 和其它内部消息不得创建 Turn、占用 root 或把一个 Turn 拆成独立分页项；overlay 只通过 assembly/provenance 详情视图可见。
+
+完整 Turn 分页指保留真实 Turn 分组边界，不要求重新展示选定 view 已隐藏的成员。某 Turn 仍有可见 canonical 成员时，root 可仅保留为 hidden backing identity/排序坐标，summary/detail 只返回选中可见正文；不得因 root hidden 遗漏保留的回答，也不得为了分页把 root 加回可见历史或模型输入。普通完整 view 的原读取行为保持不变；具体分组和坐标规则复用 `session-turn-history`，不增加第二条 reader。
 
 #### Scenario: 合并 steering 消息
 
@@ -66,12 +68,12 @@
 
 #### Scenario: 加载工具摘要和模型最终响应
 
-- **WHEN** 调用方选择用户消息、tool_summary 和模型最终响应
+- **WHEN** 选定 view 中 root 可见，且调用方选择用户消息、tool_summary 和模型最终响应
 - **THEN** 每个完整 Turn 返回 root user input、工具名称与状态摘要和 `TurnRecord.final_item_id` 对应的最终 assistant projection，不返回工具参数或完整结果
 
 #### Scenario: 加载工具调用、结果和模型最终响应
 
-- **WHEN** 调用方选择用户消息、tool_call、tool_result 和模型最终响应
+- **WHEN** 选定 view 中 root 可见，且调用方选择用户消息、tool_call、tool_result 和模型最终响应
 - **THEN** 每个完整 Turn 返回用户 root、工具调用、对应工具结果和最终 assistant projection，并遵守详情大小限制
 
 ### Requirement: 历史与 live 使用同一 Turn response part 模型
@@ -276,7 +278,7 @@ loader MUST 校验 resource ref 的 owner session/thread、assembly、activation
 
 `internal_executions[]` MUST 按 execution owner 身份返回 standalone history envelope；每项不得要求 `TurnDetailDTO`、`turn_id`、root 或 final pointer。`RuntimeNoticePayload` 的 history projection 只读取 `display_part`，Provider/checkpoint 消费的 `prompt` 不得出现在 Web history。内部输出仍按该 `execution_id` 的 committed item identity/order 投影，不挂到 source Turn；普通 Turn 的分页、`item_count`、elapsed 和 `final_response` 不因内部 execution 改变。
 
-internal admission MUST 在同一权威事务冻结真实 `source_branch_id` 与 `source_view_id`；幂等重入复用原绑定，不能改绑当前分支。其 notice 和同 execution 的 response items MUST 在既有 `context_view_items` 中明确登记为 `source_kind=display_only`；该 membership 是当前视图中可展示成员的唯一事实。checkpoint 后继、rewind 和 fork 必须按选定源成员显式继承或裁切，fork 同步重映射 target-local view/branch/execution/item identity；不得只凭 admission 的源 view、物理 sequence 范围或时间猜测当前成员，也不得新增第二 context tree。Provider 的 canonical history selection 只消费 `source_kind=canonical`，不从全局 catalog 补入 pending notice；当前 internal execution 的私有 prompt 及其自身已提交输出仍通过 admission 绑定的执行请求恢复路径消费，工具调用与结果保持协议闭合，不因展示成员隔离而丢失。
+internal admission MUST 在同一权威事务冻结真实 `source_branch_id` 与 `source_view_id`；幂等重入复用原绑定，不能改绑当前分支。其 notice 和同 execution 的 response items MUST 在既有 `context_view_items` 中明确登记为 `source_kind=display_only`；该 membership 是当前视图中可展示成员的唯一事实。checkpoint 后继、rewind 和 fork 必须按选定源成员显式继承或裁切，fork 保留历史local ID并核目标本地snapshot归属binding；不得只凭 admission 的源 view、物理 sequence 范围或时间猜测当前成员，也不得新增第二 context tree。Provider 的 canonical history selection 只消费 `source_kind=canonical`，不从全局 catalog 补入 pending notice；当前 internal execution 的私有 prompt 及其自身已提交输出仍通过 admission 绑定的执行请求恢复路径消费，工具调用与结果保持协议闭合，不因展示成员隔离而丢失。
 
 #### Scenario: 明确排除内部 execution
 

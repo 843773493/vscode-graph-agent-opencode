@@ -452,6 +452,11 @@ export declare type ChildThreadListDTO = Message<"boxteam.workspace.v2.ChildThre
    * @generated from field: int64 total = 3;
    */
   total: bigint;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.TeamBoardDTO teams = 4;
+   */
+  teams: TeamBoardDTO[];
 };
 
 /**
@@ -505,6 +510,8 @@ export declare type ChildThreadSummaryDTO = Message<"boxteam.workspace.v2.ChildT
   admissionState?: string | undefined;
 
   /**
+   * 子线程合成展示状态；bound 仅表示初始 admission 已绑定，不保证 Job 已开始。
+   *
    * @generated from field: string status = 9;
    */
   status: string;
@@ -1153,6 +1160,8 @@ export declare type LLMRequestLogRecordDTO = Message<"boxteam.workspace.v2.LLMRe
   jobId?: string | undefined;
 
   /**
+   * handler 结束或失败后组装日志的 epoch 毫秒时刻；文件名的 epoch 纳秒只用于排序。
+   *
    * @generated from field: int64 timestamp = 3;
    */
   timestamp: bigint;
@@ -1313,6 +1322,8 @@ export declare const MessageCreateRequestSchema: GenMessage<MessageCreateRequest
  */
 export declare type MessageDTO = Message<"boxteam.workspace.v2.MessageDTO"> & {
   /**
+   * 消息创建和更新时刻；事件发布时刻由事件 header.time 独立表示。
+   *
    * @generated from field: google.protobuf.Timestamp created_at = 1;
    */
   createdAt?: Timestamp | undefined;
@@ -1351,6 +1362,11 @@ export declare type MessageDTO = Message<"boxteam.workspace.v2.MessageDTO"> & {
    * @generated from field: optional google.protobuf.Struct metadata = 8;
    */
   metadata?: JsonObject | undefined;
+
+  /**
+   * @generated from field: string thread_id = 9;
+   */
+  threadId: string;
 };
 
 /**
@@ -1358,52 +1374,6 @@ export declare type MessageDTO = Message<"boxteam.workspace.v2.MessageDTO"> & {
  * Use `create(MessageDTOSchema)` to create a new message.
  */
 export declare const MessageDTOSchema: GenMessage<MessageDTO>;
-
-/**
- * @generated from message boxteam.workspace.v2.MessageObservationDTO
- */
-export declare type MessageObservationDTO = Message<"boxteam.workspace.v2.MessageObservationDTO"> & {
-  /**
-   * @generated from field: string message_id = 1;
-   */
-  messageId: string;
-
-  /**
-   * @generated from field: string session_id = 2;
-   */
-  sessionId: string;
-
-  /**
-   * @generated from field: string role = 3;
-   */
-  role: string;
-
-  /**
-   * @generated from field: string content = 4;
-   */
-  content: string;
-
-  /**
-   * @generated from field: repeated google.protobuf.Struct attachments = 5;
-   */
-  attachments: JsonObject[];
-
-  /**
-   * @generated from field: optional google.protobuf.Struct metadata = 6;
-   */
-  metadata?: JsonObject | undefined;
-
-  /**
-   * @generated from field: google.protobuf.Timestamp created_at = 7;
-   */
-  createdAt?: Timestamp | undefined;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.MessageObservationDTO.
- * Use `create(MessageObservationDTOSchema)` to create a new message.
- */
-export declare const MessageObservationDTOSchema: GenMessage<MessageObservationDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.MessageReplayAccepted
@@ -1458,6 +1428,16 @@ export declare type MessageReplayAccepted = Message<"boxteam.workspace.v2.Messag
    * @generated from field: string notice = 10;
    */
   notice: string;
+
+  /**
+   * @generated from field: string thread_id = 11;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: optional string turn_id = 12;
+   */
+  turnId?: string | undefined;
 };
 
 /**
@@ -1520,6 +1500,11 @@ export declare type MessageRunAccepted = Message<"boxteam.workspace.v2.MessageRu
    * @generated from field: string thread_id = 5;
    */
   threadId: string;
+
+  /**
+   * @generated from field: optional string turn_id = 6;
+   */
+  turnId?: string | undefined;
 };
 
 /**
@@ -1548,47 +1533,6 @@ export declare type MessageRunRequest = Message<"boxteam.workspace.v2.MessageRun
  * Use `create(MessageRunRequestSchema)` to create a new message.
  */
 export declare const MessageRunRequestSchema: GenMessage<MessageRunRequest>;
-
-/**
- * @generated from message boxteam.workspace.v2.MessageUpdatedExecutionEventDTO
- */
-export declare type MessageUpdatedExecutionEventDTO = Message<"boxteam.workspace.v2.MessageUpdatedExecutionEventDTO"> & {
-  /**
-   * @generated from field: string event_id = 1;
-   */
-  eventId: string;
-
-  /**
-   * @generated from field: string session_id = 2;
-   */
-  sessionId: string;
-
-  /**
-   * @generated from field: optional string job_id = 3;
-   */
-  jobId?: string | undefined;
-
-  /**
-   * @generated from field: google.protobuf.Timestamp time = 4;
-   */
-  time?: Timestamp | undefined;
-
-  /**
-   * @generated from field: string type = 5;
-   */
-  type: string;
-
-  /**
-   * @generated from field: boxteam.workspace.v2.MessageObservationDTO payload = 6;
-   */
-  payload?: MessageObservationDTO | undefined;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.MessageUpdatedExecutionEventDTO.
- * Use `create(MessageUpdatedExecutionEventDTOSchema)` to create a new message.
- */
-export declare const MessageUpdatedExecutionEventDTOSchema: GenMessage<MessageUpdatedExecutionEventDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.ExtensionCatalogBindingAuditDTO
@@ -3031,6 +2975,13 @@ export declare type PendingRequestListDTO = Message<"boxteam.workspace.v2.Pendin
    * @generated from field: optional int64 snapshot_version = 4;
    */
   snapshotVersion?: bigint | undefined;
+
+  /**
+   * 精确 thread 读取的范围；Session 聚合快照不设置。
+   *
+   * @generated from field: optional string thread_id = 5;
+   */
+  threadId?: string | undefined;
 };
 
 /**
@@ -3093,6 +3044,11 @@ export declare type PendingRequestSummaryDTO = Message<"boxteam.workspace.v2.Pen
    * @generated from field: google.protobuf.Timestamp updated_at = 6;
    */
   updatedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: string thread_id = 7;
+   */
+  threadId: string;
 };
 
 /**
@@ -3134,6 +3090,11 @@ export declare type PendingRequestSummaryListDTO = Message<"boxteam.workspace.v2
    * @generated from field: optional bool truncated = 6;
    */
   truncated?: boolean | undefined;
+
+  /**
+   * @generated from field: optional string thread_id = 7;
+   */
+  threadId?: string | undefined;
 };
 
 /**
@@ -3141,27 +3102,6 @@ export declare type PendingRequestSummaryListDTO = Message<"boxteam.workspace.v2
  * Use `create(PendingRequestSummaryListDTOSchema)` to create a new message.
  */
 export declare const PendingRequestSummaryListDTOSchema: GenMessage<PendingRequestSummaryListDTO>;
-
-/**
- * @generated from message boxteam.workspace.v2.PendingRequestUpdateRequest
- */
-export declare type PendingRequestUpdateRequest = Message<"boxteam.workspace.v2.PendingRequestUpdateRequest"> & {
-  /**
-   * @generated from field: string content = 1;
-   */
-  content: string;
-
-  /**
-   * @generated from field: repeated boxteam.workspace.v2.AttachmentRef attachments = 2;
-   */
-  attachments: AttachmentRef[];
-};
-
-/**
- * Describes the message boxteam.workspace.v2.PendingRequestUpdateRequest.
- * Use `create(PendingRequestUpdateRequestSchema)` to create a new message.
- */
-export declare const PendingRequestUpdateRequestSchema: GenMessage<PendingRequestUpdateRequest>;
 
 /**
  * @generated from message boxteam.workspace.v2.PermissionRequestDTO
@@ -4033,6 +3973,8 @@ export declare type SessionContextReadRequest = Message<"boxteam.workspace.v2.Se
   cursor?: string | undefined;
 
   /**
+   * 投影 items 的单页条数上限；messages 中用户与助手消息分别计条，max_chars 可进一步截短。不是 recent_rounds、Turn 数或完整 snapshot，续页由 has_more/next_cursor 判定。
+   *
    * @generated from field: optional int64 limit = 7;
    */
   limit?: bigint | undefined;
@@ -4440,11 +4382,15 @@ export declare const SessionCreateRequestSchema: GenMessage<SessionCreateRequest
  */
 export declare type SessionDTO = Message<"boxteam.workspace.v2.SessionDTO"> & {
   /**
+   * Session 创建 intent 冻结并由 catalog 投影的 UTC 创建时刻；导航改名和移动不重写。
+   *
    * @generated from field: google.protobuf.Timestamp created_at = 1;
    */
   createdAt?: Timestamp | undefined;
 
   /**
+   * catalog 记录的 Session 配置最近一次更新 UTC 时刻；初建等于 created_at，导航改名和移动不推进。
+   *
    * @generated from field: google.protobuf.Timestamp updated_at = 2;
    */
   updatedAt?: Timestamp | undefined;
@@ -4480,11 +4426,15 @@ export declare type SessionDTO = Message<"boxteam.workspace.v2.SessionDTO"> & {
   currentProviderId?: string | undefined;
 
   /**
+   * catalog 导航父链中最近祖先 Session 的稳定 ID；随导航移动派生，不表示物理父目录。
+   *
    * @generated from field: optional string parent_session_id = 9;
    */
   parentSessionId?: string | undefined;
 
   /**
+   * 创建 metadata 冻结的 fork 来源 Session 稳定 ID；独立于导航祖先，普通 Session 可为空。
+   *
    * @generated from field: optional string context_source_session_id = 10;
    */
   contextSourceSessionId?: string | undefined;
@@ -4875,24 +4825,76 @@ export declare type SessionForkRequest = Message<"boxteam.workspace.v2.SessionFo
   mode?: string | undefined;
 
   /**
-   * @generated from field: optional string turn_id = 2;
-   */
-  turnId?: string | undefined;
-
-  /**
+   * inclusive 包含点击 item；before 不包含点击 item。
+   *
    * @generated from field: optional string anchor_mode = 3;
    */
   anchorMode?: string | undefined;
 
   /**
-   * @generated from field: optional bool pinned = 4;
+   * 精确来源 Thread；Session 兼容入口由 service 按 catalog main 归一。
+   *
+   * @generated from field: string source_uri = 6;
    */
-  pinned?: boolean | undefined;
+  sourceUri: string;
 
   /**
-   * @generated from field: optional bool place_under_source = 5;
+   * @generated from field: string idempotency_key = 7;
    */
-  placeUnderSource?: boolean | undefined;
+  idempotencyKey: string;
+
+  /**
+   * 来源 Thread 中所选历史 view 的冻结身份。
+   *
+   * @generated from field: string source_view_id = 8;
+   */
+  sourceViewId: string;
+
+  /**
+   * 冻结所选来源 view 的 revision，不追随 latest。
+   *
+   * @generated from field: int64 source_view_revision = 9;
+   */
+  sourceViewRevision: bigint;
+
+  /**
+   * 冻结来源 view 中点击的稳定 item 身份。
+   *
+   * @generated from field: optional string anchor_item_id = 10;
+   */
+  anchorItemId?: string | undefined;
+
+  /**
+   * 创建容器；结果 thread_uri/thread_id 才是实际新目标 Thread。
+   *
+   * @generated from field: string target_container_uri = 11;
+   */
+  targetContainerUri: string;
+
+  /**
+   * @generated from field: optional string creation_kind = 12;
+   */
+  creationKind?: string | undefined;
+
+  /**
+   * @generated from field: optional string title = 13;
+   */
+  title?: string | undefined;
+
+  /**
+   * @generated from field: optional string relationship = 14;
+   */
+  relationship?: string | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.SessionForkResourceChoice resources = 15;
+   */
+  resources: SessionForkResourceChoice[];
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.SessionForkGoalSelection goal = 16;
+   */
+  goal?: SessionForkGoalSelection | undefined;
 };
 
 /**
@@ -4900,6 +4902,354 @@ export declare type SessionForkRequest = Message<"boxteam.workspace.v2.SessionFo
  * Use `create(SessionForkRequestSchema)` to create a new message.
  */
 export declare const SessionForkRequestSchema: GenMessage<SessionForkRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionForkGoalSelection
+ */
+export declare type SessionForkGoalSelection = Message<"boxteam.workspace.v2.SessionForkGoalSelection"> & {
+  /**
+   * @generated from field: optional int64 token_budget = 1;
+   */
+  tokenBudget?: bigint | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionForkGoalSelection.
+ * Use `create(SessionForkGoalSelectionSchema)` to create a new message.
+ */
+export declare const SessionForkGoalSelectionSchema: GenMessage<SessionForkGoalSelection>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionForkResourceChoice
+ */
+export declare type SessionForkResourceChoice = Message<"boxteam.workspace.v2.SessionForkResourceChoice"> & {
+  /**
+   * @generated from field: optional string resource_uri = 1;
+   */
+  resourceUri?: string | undefined;
+
+  /**
+   * @generated from field: string action = 2;
+   */
+  action: string;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.SessionForkOwnerReference owner_reference = 3;
+   */
+  ownerReference?: SessionForkOwnerReference | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionForkResourceChoice.
+ * Use `create(SessionForkResourceChoiceSchema)` to create a new message.
+ */
+export declare const SessionForkResourceChoiceSchema: GenMessage<SessionForkResourceChoice>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionForkOwnerReference
+ */
+export declare type SessionForkOwnerReference = Message<"boxteam.workspace.v2.SessionForkOwnerReference"> & {
+  /**
+   * @generated from field: string kind = 1;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: string resource_id = 2;
+   */
+  resourceId: string;
+
+  /**
+   * @generated from field: string workspace_id = 3;
+   */
+  workspaceId: string;
+
+  /**
+   * attach 的 CAS 预期版本，必须为正数并与当前 owner revision 匹配。
+   *
+   * @generated from field: int64 expected_revision = 4;
+   */
+  expectedRevision: bigint;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionForkOwnerReference.
+ * Use `create(SessionForkOwnerReferenceSchema)` to create a new message.
+ */
+export declare const SessionForkOwnerReferenceSchema: GenMessage<SessionForkOwnerReference>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionForkResourceResult
+ */
+export declare type SessionForkResourceResult = Message<"boxteam.workspace.v2.SessionForkResourceResult"> & {
+  /**
+   * @generated from field: optional string resource_uri = 1;
+   */
+  resourceUri?: string | undefined;
+
+  /**
+   * @generated from field: string action = 2;
+   */
+  action: string;
+
+  /**
+   * @generated from field: string availability = 3;
+   */
+  availability: string;
+
+  /**
+   * @generated from field: optional string target_uri = 4;
+   */
+  targetUri?: string | undefined;
+
+  /**
+   * @generated from field: optional string reason = 5;
+   */
+  reason?: string | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.SessionForkOwnerReference owner_reference = 6;
+   */
+  ownerReference?: SessionForkOwnerReference | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.WorkspaceResourceDTO owner_resource = 7;
+   */
+  ownerResource?: WorkspaceResourceDTO | undefined;
+
+  /**
+   * 本次 attach 的历史提交事实；当前可用性仍由 owner_resource 核实。
+   *
+   * @generated from field: optional string operation_state = 8;
+   */
+  operationState?: string | undefined;
+
+  /**
+   * 本次 attach 的历史提交 revision；尚未提交时省略，当前 owner 版本见 owner_resource.owner_revision。
+   *
+   * @generated from field: optional int64 committed_revision = 9;
+   */
+  committedRevision?: bigint | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionForkResourceResult.
+ * Use `create(SessionForkResourceResultSchema)` to create a new message.
+ */
+export declare const SessionForkResourceResultSchema: GenMessage<SessionForkResourceResult>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionForkExportReleaseDTO
+ */
+export declare type SessionForkExportReleaseDTO = Message<"boxteam.workspace.v2.SessionForkExportReleaseDTO"> & {
+  /**
+   * 目标本地清理事实；只有核实来源终结回执才为 confirmed。
+   *
+   * @generated from field: string state = 1;
+   */
+  state: string;
+
+  /**
+   * @generated from field: optional string error = 2;
+   */
+  error?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionForkExportReleaseDTO.
+ * Use `create(SessionForkExportReleaseDTOSchema)` to create a new message.
+ */
+export declare const SessionForkExportReleaseDTOSchema: GenMessage<SessionForkExportReleaseDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionForkResultDTO
+ */
+export declare type SessionForkResultDTO = Message<"boxteam.workspace.v2.SessionForkResultDTO"> & {
+  /**
+   * 实际目标 Thread 所属 Session，不表示应切换主会话。
+   *
+   * @generated from field: boxteam.workspace.v2.SessionDTO session = 1;
+   */
+  session?: SessionDTO | undefined;
+
+  /**
+   * @generated from field: string thread_id = 2;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: string thread_uri = 3;
+   */
+  threadUri: string;
+
+  /**
+   * @generated from field: string creation_kind = 4;
+   */
+  creationKind: string;
+
+  /**
+   * @generated from field: string source_uri = 5;
+   */
+  sourceUri: string;
+
+  /**
+   * @generated from field: string source_view_id = 6;
+   */
+  sourceViewId: string;
+
+  /**
+   * @generated from field: int64 source_view_revision = 7;
+   */
+  sourceViewRevision: bigint;
+
+  /**
+   * @generated from field: optional string anchor_item_id = 8;
+   */
+  anchorItemId?: string | undefined;
+
+  /**
+   * @generated from field: string mode = 9;
+   */
+  mode: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.SessionForkResourceResult resources = 10;
+   */
+  resources: SessionForkResourceResult[];
+
+  /**
+   * @generated from field: optional string goal_id = 11;
+   */
+  goalId?: string | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.SessionForkExportReleaseDTO export_release = 12;
+   */
+  exportRelease?: SessionForkExportReleaseDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionForkResultDTO.
+ * Use `create(SessionForkResultDTOSchema)` to create a new message.
+ */
+export declare const SessionForkResultDTOSchema: GenMessage<SessionForkResultDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionForkResourceSourceDTO
+ */
+export declare type SessionForkResourceSourceDTO = Message<"boxteam.workspace.v2.SessionForkResourceSourceDTO"> & {
+  /**
+   * @generated from field: string resource_uri = 1;
+   */
+  resourceUri: string;
+
+  /**
+   * 附件 owner 的 file_name / mime_type 展示投影。
+   *
+   * @generated from field: optional string name = 2;
+   */
+  name?: string | undefined;
+
+  /**
+   * @generated from field: optional string content_type = 3;
+   */
+  contentType?: string | undefined;
+
+  /**
+   * 来源可用性与本次选择的正文依赖，不表示目标授权。
+   *
+   * @generated from field: string availability = 4;
+   */
+  availability: string;
+
+  /**
+   * @generated from field: bool required_for_context = 5;
+   */
+  requiredForContext: boolean;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionForkResourceSourceDTO.
+ * Use `create(SessionForkResourceSourceDTOSchema)` to create a new message.
+ */
+export declare const SessionForkResourceSourceDTOSchema: GenMessage<SessionForkResourceSourceDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionForkSourcePointDTO
+ */
+export declare type SessionForkSourcePointDTO = Message<"boxteam.workspace.v2.SessionForkSourcePointDTO"> & {
+  /**
+   * @generated from field: string source_uri = 1;
+   */
+  sourceUri: string;
+
+  /**
+   * @generated from field: string source_view_id = 2;
+   */
+  sourceViewId: string;
+
+  /**
+   * @generated from field: int64 source_view_revision = 3;
+   */
+  sourceViewRevision: bigint;
+
+  /**
+   * @generated from field: optional string anchor_item_id = 4;
+   */
+  anchorItemId?: string | undefined;
+
+  /**
+   * @generated from field: string child_container_uri = 5;
+   */
+  childContainerUri: string;
+
+  /**
+   * @generated from field: string main_container_uri = 6;
+   */
+  mainContainerUri: string;
+
+  /**
+   * 新目标名称的可编辑预填值。
+   *
+   * @generated from field: string title = 7;
+   */
+  title: string;
+
+  /**
+   * 来源是否有可选 Goal，不表示目标已继承。
+   *
+   * @generated from field: bool goal_available = 8;
+   */
+  goalAvailable: boolean;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.SessionForkResourceSourceDTO resources = 9;
+   */
+  resources: SessionForkResourceSourceDTO[];
+
+  /**
+   * @generated from field: string resource_mode = 10;
+   */
+  resourceMode: string;
+
+  /**
+   * @generated from field: string resource_anchor_mode = 11;
+   */
+  resourceAnchorMode: string;
+
+  /**
+   * 当前工作区领域 owner 的实时投影，不属于冻结历史快照。
+   *
+   * @generated from field: repeated boxteam.workspace.v2.WorkspaceResourceDTO live_resources = 12;
+   */
+  liveResources: WorkspaceResourceDTO[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionForkSourcePointDTO.
+ * Use `create(SessionForkSourcePointDTOSchema)` to create a new message.
+ */
+export declare const SessionForkSourcePointDTOSchema: GenMessage<SessionForkSourcePointDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.SessionGenerationOriginDTO
@@ -4988,11 +5338,15 @@ export declare type SessionGoalDTO = Message<"boxteam.workspace.v2.SessionGoalDT
   tokenBudget?: bigint | undefined;
 
   /**
+   * 当前 Goal 的累计 Token；fork 创建独立 Goal 时从 0 开始。
+   *
    * @generated from field: optional int64 tokens_used = 6;
    */
   tokensUsed?: bigint | undefined;
 
   /**
+   * 当前 Goal 的累计用时；fork 创建独立 Goal 时从 0 开始。
+   *
    * @generated from field: optional int64 time_used_seconds = 7;
    */
   timeUsedSeconds?: bigint | undefined;
@@ -5003,11 +5357,16 @@ export declare type SessionGoalDTO = Message<"boxteam.workspace.v2.SessionGoalDT
   revision?: bigint | undefined;
 
   /**
+   * fork 的新 Goal 使用目标 Session 冻结创建时刻，不继承来源 Goal 的时间。
+   *
    * @generated from field: google.protobuf.Timestamp created_at = 9;
    */
   createdAt?: Timestamp | undefined;
 
   /**
+   * 当前 Goal 记录最近一次写入时刻，含设置、用量记账和续跑标记写入或失败回滚；fork 初值取目标 Session 冻结创建时刻。
+   * 与 revision 不同：revision 仅随普通设置更新递增。
+   *
    * @generated from field: google.protobuf.Timestamp updated_at = 10;
    */
   updatedAt?: Timestamp | undefined;
@@ -5090,6 +5449,8 @@ export declare type SessionInformationErrorDTO = Message<"boxteam.workspace.v2.S
   message: string;
 
   /**
+   * 所选错误 Trace 的来源事件时间；保留其时刻与显式时区偏移，不在收集诊断信息时重新取时。
+   *
    * @generated from field: google.protobuf.Timestamp timestamp = 5;
    */
   timestamp?: Timestamp | undefined;
@@ -5218,11 +5579,15 @@ export declare type SessionInformationSessionDTO = Message<"boxteam.workspace.v2
   currentProviderId?: string | undefined;
 
   /**
+   * catalog 导航父链中最近祖先 Session 的稳定 ID；随导航移动派生，不表示物理父目录。
+   *
    * @generated from field: optional string parent_session_id = 6;
    */
   parentSessionId?: string | undefined;
 
   /**
+   * 创建 metadata 冻结的 fork 来源 Session 稳定 ID；独立于导航祖先，普通 Session 可为空。
+   *
    * @generated from field: optional string context_source_session_id = 7;
    */
   contextSourceSessionId?: string | undefined;
@@ -5233,11 +5598,15 @@ export declare type SessionInformationSessionDTO = Message<"boxteam.workspace.v2
   kind: string;
 
   /**
+   * Session 创建 intent 冻结并由 catalog 投影的 UTC 创建时刻；导航改名和移动不重写。
+   *
    * @generated from field: google.protobuf.Timestamp created_at = 9;
    */
   createdAt?: Timestamp | undefined;
 
   /**
+   * catalog 记录的 Session 配置最近一次更新 UTC 时刻；初建等于 created_at，导航改名和移动不推进。
+   *
    * @generated from field: google.protobuf.Timestamp updated_at = 10;
    */
   updatedAt?: Timestamp | undefined;
@@ -5341,6 +5710,8 @@ export declare type SessionInformationSnapshotDTO = Message<"boxteam.workspace.v
   schemaVersion?: bigint | undefined;
 
   /**
+   * 诊断读取完成后构造快照时取得的当前 UTC 时刻，接口按 ISO8601 表达；不等同于所含事件时间，也不代表跨 owner 的事务快照。
+   *
    * @generated from field: google.protobuf.Timestamp generated_at = 3;
    */
   generatedAt?: Timestamp | undefined;
@@ -5407,6 +5778,8 @@ export declare type SessionInformationTraceDTO = Message<"boxteam.workspace.v2.S
   lastEventType?: string | undefined;
 
   /**
+   * 本次已读取 Trace 中最后一项的来源事件时间；保留显式时区偏移，无 Trace 时为空，不是诊断快照生成时刻。
+   *
    * @generated from field: optional google.protobuf.Timestamp last_event_at = 4;
    */
   lastEventAt?: Timestamp | undefined;
@@ -5682,6 +6055,8 @@ export declare type CommunicationReceipt = Message<"boxteam.workspace.v2.Communi
   state: string;
 
   /**
+   * target 首次持久接受此通信的 UTC 时刻，与 inbox.created_at 同源；重放保留原值，不表示 execution 或 Job 开始。
+   *
    * @generated from field: string accepted_at = 7;
    */
   acceptedAt: string;
@@ -5738,9 +6113,16 @@ export declare type CommunicationObservationRequest = Message<"boxteam.workspace
   pageOrdinal: number;
 
   /**
+   * 从 tool call 起算的一天恢复窗口；query.deadline 独立冻结真正的 wait 预算。
+   *
    * @generated from field: string expires_at = 9;
    */
   expiresAt: string;
+
+  /**
+   * @generated from field: bool terminal_replay = 10;
+   */
+  terminalReplay: boolean;
 };
 
 /**
@@ -5844,6 +6226,12 @@ export declare type CommunicationGatewayRequest = Message<"boxteam.workspace.v2.
      */
     value: ContextGrantTarget;
     case: "resourceTarget";
+  } | {
+    /**
+     * @generated from field: boxteam.workspace.v2.ForkGrantTarget fork_target = 5;
+     */
+    value: ForkGrantTarget;
+    case: "forkTarget";
   } | { case: undefined; value?: undefined };
 
   /**
@@ -5857,6 +6245,261 @@ export declare type CommunicationGatewayRequest = Message<"boxteam.workspace.v2.
  * Use `create(CommunicationGatewayRequestSchema)` to create a new message.
  */
 export declare const CommunicationGatewayRequestSchema: GenMessage<CommunicationGatewayRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ForkGrantTarget
+ */
+export declare type ForkGrantTarget = Message<"boxteam.workspace.v2.ForkGrantTarget"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string uri = 2;
+   */
+  uri: string;
+
+  /**
+   * @generated from field: string fork_role = 3;
+   */
+  forkRole: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ForkGrantTarget.
+ * Use `create(ForkGrantTargetSchema)` to create a new message.
+ */
+export declare const ForkGrantTargetSchema: GenMessage<ForkGrantTarget>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ForkSourceCaptureDTO
+ */
+export declare type ForkSourceCaptureDTO = Message<"boxteam.workspace.v2.ForkSourceCaptureDTO"> & {
+  /**
+   * @generated from field: string copy_operation_id = 1;
+   */
+  copyOperationId: string;
+
+  /**
+   * @generated from field: optional string creation_key = 2;
+   */
+  creationKey?: string | undefined;
+
+  /**
+   * @generated from field: string source_session_id = 3;
+   */
+  sourceSessionId: string;
+
+  /**
+   * @generated from field: string source_thread_id = 4;
+   */
+  sourceThreadId: string;
+
+  /**
+   * @generated from field: string target_session_id = 5;
+   */
+  targetSessionId: string;
+
+  /**
+   * @generated from field: string target_thread_id = 6;
+   */
+  targetThreadId: string;
+
+  /**
+   * @generated from field: string snapshot_id = 7;
+   */
+  snapshotId: string;
+
+  /**
+   * @generated from field: string snapshot_relative_locator = 8;
+   */
+  snapshotRelativeLocator: string;
+
+  /**
+   * @generated from field: string fork_id = 9;
+   */
+  forkId: string;
+
+  /**
+   * @generated from field: string materialization_id = 10;
+   */
+  materializationId: string;
+
+  /**
+   * @generated from field: string request_json = 11;
+   */
+  requestJson: string;
+
+  /**
+   * @generated from field: string preimage_hash = 12;
+   */
+  preimageHash: string;
+
+  /**
+   * @generated from field: string state = 13;
+   */
+  state: string;
+
+  /**
+   * @generated from field: optional string snapshot_sha256 = 14;
+   */
+  snapshotSha256?: string | undefined;
+
+  /**
+   * @generated from field: optional string marker_sha256 = 15;
+   */
+  markerSha256?: string | undefined;
+
+  /**
+   * @generated from field: optional string abort_reason = 16;
+   */
+  abortReason?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ForkSourceCaptureDTO.
+ * Use `create(ForkSourceCaptureDTOSchema)` to create a new message.
+ */
+export declare const ForkSourceCaptureDTOSchema: GenMessage<ForkSourceCaptureDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionForkTransferRequest
+ */
+export declare type SessionForkTransferRequest = Message<"boxteam.workspace.v2.SessionForkTransferRequest"> & {
+  /**
+   * @generated from field: string source_gateway_id = 1;
+   */
+  sourceGatewayId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.ForkGrantTarget fork_target = 2;
+   */
+  forkTarget?: ForkGrantTarget | undefined;
+
+  /**
+   * @generated from field: string action = 3;
+   */
+  action: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.SessionForkRequest request = 4;
+   */
+  request?: SessionForkRequest | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ForkSourceCaptureDTO capture = 5;
+   */
+  capture?: ForkSourceCaptureDTO | undefined;
+
+  /**
+   * @generated from field: optional int64 cursor = 6;
+   */
+  cursor?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string file_name = 7;
+   */
+  fileName?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 offset = 8;
+   */
+  offset?: bigint | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.SessionGenerationOriginDTO generation_origin = 9;
+   */
+  generationOrigin?: SessionGenerationOriginDTO | undefined;
+
+  /**
+   * @generated from field: optional string release_state = 10;
+   */
+  releaseState?: string | undefined;
+
+  /**
+   * @generated from field: optional string blob_id = 11;
+   */
+  blobId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionForkTransferRequest.
+ * Use `create(SessionForkTransferRequestSchema)` to create a new message.
+ */
+export declare const SessionForkTransferRequestSchema: GenMessage<SessionForkTransferRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ForkTransferFileDTO
+ */
+export declare type ForkTransferFileDTO = Message<"boxteam.workspace.v2.ForkTransferFileDTO"> & {
+  /**
+   * @generated from field: string name = 1;
+   */
+  name: string;
+
+  /**
+   * @generated from field: int64 size_bytes = 2;
+   */
+  sizeBytes: bigint;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ForkTransferFileDTO.
+ * Use `create(ForkTransferFileDTOSchema)` to create a new message.
+ */
+export declare const ForkTransferFileDTOSchema: GenMessage<ForkTransferFileDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionForkTransferResultDTO
+ */
+export declare type SessionForkTransferResultDTO = Message<"boxteam.workspace.v2.SessionForkTransferResultDTO"> & {
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ForkSourceCaptureDTO capture = 1;
+   */
+  capture?: ForkSourceCaptureDTO | undefined;
+
+  /**
+   * @generated from field: optional google.protobuf.Struct intent = 2;
+   */
+  intent?: JsonObject | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.ForkTransferFileDTO files = 3;
+   */
+  files: ForkTransferFileDTO[];
+
+  /**
+   * @generated from field: optional int64 next_cursor = 4;
+   */
+  nextCursor?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string chunk_base64 = 5;
+   */
+  chunkBase64?: string | undefined;
+
+  /**
+   * @generated from field: optional string chunk_sha256 = 6;
+   */
+  chunkSha256?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 offset = 7;
+   */
+  offset?: bigint | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.SessionForkResultDTO result = 8;
+   */
+  result?: SessionForkResultDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionForkTransferResultDTO.
+ * Use `create(SessionForkTransferResultDTOSchema)` to create a new message.
+ */
+export declare const SessionForkTransferResultDTOSchema: GenMessage<SessionForkTransferResultDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.SessionNetworkWaitDTO
@@ -6137,6 +6780,8 @@ export declare type WorkspaceResourceDTO = Message<"boxteam.workspace.v2.Workspa
   threadAssociations: ResourceThreadRef[];
 
   /**
+   * owner 持久化的传输授权版本，用于版本校验，并与外部 transport_owner_revision 对账。
+   *
    * @generated from field: uint64 owner_revision = 7;
    */
   ownerRevision: bigint;
@@ -6529,6 +7174,11 @@ export declare type SessionTurnBootstrapDTO = Message<"boxteam.workspace.v2.Sess
    * @generated from field: int64 projection_epoch = 10;
    */
   projectionEpoch: bigint;
+
+  /**
+   * @generated from field: string thread_id = 11;
+   */
+  threadId: string;
 };
 
 /**
@@ -6854,6 +7504,8 @@ export declare type TeamMemberDTO = Message<"boxteam.workspace.v2.TeamMemberDTO"
   instructions?: string | undefined;
 
   /**
+   * 团队成员资格与初始准入的合成状态，不表示 execution outcome 或运行状态。
+   *
    * @generated from field: optional string status = 6;
    */
   status?: string | undefined;
@@ -6864,6 +7516,8 @@ export declare type TeamMemberDTO = Message<"boxteam.workspace.v2.TeamMemberDTO"
   joinedAt?: Timestamp | undefined;
 
   /**
+   * 协调者取 TeamBoard 创建时刻；委派成员取 child 初始 execution intent 最近更新时间，不是 collaboration member 行更新时间。
+   *
    * @generated from field: google.protobuf.Timestamp updated_at = 10;
    */
   updatedAt?: Timestamp | undefined;
@@ -6900,6 +7554,8 @@ export declare type TeamMemberOperationDTO = Message<"boxteam.workspace.v2.TeamM
   childDelegationId?: string | undefined;
 
   /**
+   * 子线程初始 execution intent 状态；bound 表示 identity 已绑定，不代表 Job 已启动。
+   *
    * @generated from field: optional string child_admission_state = 8;
    */
   childAdmissionState?: string | undefined;
@@ -7417,6 +8073,8 @@ export declare type TraceEventDTO = Message<"boxteam.workspace.v2.TraceEventDTO"
   eventId: string;
 
   /**
+   * 来源路径提供的部件引用；历史工具路径在已知 emitting ModelCall 时使用其限定的聚合引用，通用 Trace 不承诺所有 part_id 都遵循该格式。
+   *
    * @generated from field: optional string part_id = 2;
    */
   partId?: string | undefined;
@@ -7472,6 +8130,8 @@ export declare type TraceEventDTO = Message<"boxteam.workspace.v2.TraceEventDTO"
   stepId?: string | undefined;
 
   /**
+   * 来源事件的带时区时间，Trace 映射保留其时刻与显式时区偏移，不在投影时重新取时；历史工具事件沿对应 canonical 消息/item 时间。
+   *
    * @generated from field: google.protobuf.Timestamp timestamp = 13;
    */
   timestamp?: Timestamp | undefined;
@@ -7550,6 +8210,8 @@ export declare const TraceObservedPayloadDTOSchema: GenMessage<TraceObservedPayl
  */
 export declare type TurnActivityStatsDTO = Message<"boxteam.workspace.v2.TurnActivityStatsDTO"> & {
   /**
+   * 历史值取 Turn projection.created_at 到 updated_at 的整数毫秒差；缺失或非法时为空，无时区按 UTC，负差钳为零。
+   *
    * @generated from field: optional int64 duration_ms = 1;
    */
   durationMs?: bigint | undefined;
@@ -7560,11 +8222,15 @@ export declare type TurnActivityStatsDTO = Message<"boxteam.workspace.v2.TurnAct
   itemCount?: bigint | undefined;
 
   /**
+   * 所属 rollout 中已选 activity 成员的物理 item_sequence 最小值；空 activity 为空，不表示连续成员区间或跨副本稳定身份。
+   *
    * @generated from field: optional int64 first_item_sequence = 3;
    */
   firstItemSequence?: bigint | undefined;
 
   /**
+   * 所属 rollout 中已选 activity 成员的物理 item_sequence 最大值；空 activity 为空，不表示连续成员区间或跨副本稳定身份。
+   *
    * @generated from field: optional int64 last_item_sequence = 4;
    */
   lastItemSequence?: bigint | undefined;
@@ -7594,6 +8260,13 @@ export declare type TurnAttachmentDTO = Message<"boxteam.workspace.v2.TurnAttach
    * @generated from field: optional string content_type = 3;
    */
   contentType?: string | undefined;
+
+  /**
+   * 来自附件 owner 的冻结可用性；不凭预览读取结果推断。
+   *
+   * @generated from field: optional string availability = 4;
+   */
+  availability?: string | undefined;
 };
 
 /**
@@ -7632,24 +8305,44 @@ export declare type TurnBaseDTO = Message<"boxteam.workspace.v2.TurnBaseDTO"> & 
   revision: bigint;
 
   /**
+   * Turn 历史展示状态映射：open→accepted、active→running、completed_empty→completed、interrupted→timed_out、unknown→failed；不是 Job 状态事实。
+   *
    * @generated from field: string status = 6;
    */
   status: string;
 
   /**
+   * 带时区 ISO8601 展示时刻：非空 Turn projection 的 created_at 会先校验为有效且带时区，即使消息自身有时间也不能省略。随后取本次实际加载的首个非 internal HumanMessage 的 response_metadata.created_at，否则取首个已加载消息；候选消息或其时间缺失时，回退已校验的 turns.created_at，两者均无可用时间则报错。非空但非法的消息日期字符串直接报错，不触发回退。消息时间保留显式时区偏移，无时区按 UTC 解释；展示值受 include 加载范围影响。
+   *
    * @generated from field: google.protobuf.Timestamp created_at = 7;
    */
   createdAt?: Timestamp | undefined;
 
   /**
+   * 带时区 ISO8601 展示时刻：取本次所选 canonical Turn projection 的 turns.updated_at；缺少 projection、时刻非法或无时区时历史读取失败，不回退到消息时间；保留显式时区偏移。fork 历史沿用来源投影的原始时刻。
+   *
    * @generated from field: google.protobuf.Timestamp updated_at = 8;
    */
   updatedAt?: Timestamp | undefined;
 
   /**
+   * 直接映射 updated_at 的同一时刻，不是独立完成事件，非终态 Turn 也可能有值；fork 历史沿用来源投影的原始时刻。
+   *
    * @generated from field: optional google.protobuf.Timestamp completed_at = 9;
    */
   completedAt?: Timestamp | undefined;
+
+  /**
+   * 本次真实历史读取的快照身份；消息操作必须原样携带，不能重新猜测 active view。
+   *
+   * @generated from field: string source_view_id = 10;
+   */
+  sourceViewId: string;
+
+  /**
+   * @generated from field: int64 source_view_revision = 11;
+   */
+  sourceViewRevision: bigint;
 };
 
 /**
@@ -7827,21 +8520,29 @@ export declare type TurnDetailDTO = Message<"boxteam.workspace.v2.TurnDetailDTO"
   revision: bigint;
 
   /**
+   * Turn 历史展示状态映射：open→accepted、active→running、completed_empty→completed、interrupted→timed_out、unknown→failed；不是 Job 状态事实。
+   *
    * @generated from field: string status = 6;
    */
   status: string;
 
   /**
+   * 带时区 ISO8601 展示时刻：非空 Turn projection 的 created_at 会先校验为有效且带时区，即使消息自身有时间也不能省略。随后取本次实际加载的首个非 internal HumanMessage 的 response_metadata.created_at，否则取首个已加载消息；候选消息或其时间缺失时，回退已校验的 turns.created_at，两者均无可用时间则报错。非空但非法的消息日期字符串直接报错，不触发回退。消息时间保留显式时区偏移，无时区按 UTC 解释；展示值受 include 加载范围影响。
+   *
    * @generated from field: google.protobuf.Timestamp created_at = 7;
    */
   createdAt?: Timestamp | undefined;
 
   /**
+   * 带时区 ISO8601 展示时刻：取本次所选 canonical Turn projection 的 turns.updated_at；缺少 projection、时刻非法或无时区时历史读取失败，不回退到消息时间；保留显式时区偏移。fork 历史沿用来源投影的原始时刻。
+   *
    * @generated from field: google.protobuf.Timestamp updated_at = 8;
    */
   updatedAt?: Timestamp | undefined;
 
   /**
+   * 直接映射 updated_at 的同一时刻，不是独立完成事件，非终态 Turn 也可能有值；fork 历史沿用来源投影的原始时刻。
+   *
    * @generated from field: optional google.protobuf.Timestamp completed_at = 9;
    */
   completedAt?: Timestamp | undefined;
@@ -7925,6 +8626,16 @@ export declare type TurnDetailDTO = Message<"boxteam.workspace.v2.TurnDetailDTO"
    * @generated from field: int64 root_logical_item_ordinal = 25;
    */
   rootLogicalItemOrdinal: bigint;
+
+  /**
+   * @generated from field: string source_view_id = 26;
+   */
+  sourceViewId: string;
+
+  /**
+   * @generated from field: int64 source_view_revision = 27;
+   */
+  sourceViewRevision: bigint;
 };
 
 /**
@@ -8052,6 +8763,16 @@ export declare type TurnHistoryPageDTO = Message<"boxteam.workspace.v2.TurnHisto
    * @generated from field: optional string thread_id = 11;
    */
   threadId?: string | undefined;
+
+  /**
+   * @generated from field: optional string source_view_id = 12;
+   */
+  sourceViewId?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 source_view_revision = 13;
+   */
+  sourceViewRevision?: bigint | undefined;
 };
 
 /**
@@ -8075,11 +8796,15 @@ export declare type InternalExecutionHistoryDTO = Message<"boxteam.workspace.v2.
   jobId: string;
 
   /**
+   * 对应 executions.outcome 的独立 internal execution 历史结果，不是 Job 或 Turn 状态。
+   *
    * @generated from field: string status = 3;
    */
   status: string;
 
   /**
+   * 对应 executions 持久记录不可变的 UTC 创建时刻，接口按 ISO8601 表达，复制保留源值。
+   *
    * @generated from field: google.protobuf.Timestamp created_at = 4;
    */
   createdAt?: Timestamp | undefined;
@@ -8095,16 +8820,22 @@ export declare type InternalExecutionHistoryDTO = Message<"boxteam.workspace.v2.
   responseParts: TurnResponsePartDTO[];
 
   /**
+   * 持久 execution/admission 的历史 Session scope；fork 保留原值，可不同于请求目标，仅由目标本地冻结 namespace binding 校验，不用于重新寻址来源。
+   *
    * @generated from field: string session_id = 7;
    */
   sessionId: string;
 
   /**
+   * 持久 execution/admission 的历史 thread scope；fork 保留原值，可不同于本页请求 thread，仅由目标本地冻结 namespace binding 校验，不用于重新寻址来源。
+   *
    * @generated from field: string thread_id = 8;
    */
   threadId: string;
 
   /**
+   * 对应 executions 持久记录的 UTC ISO8601 更新时刻；fork 保留已终态来源值，未终态目标取消使用目标收敛时刻。
+   *
    * @generated from field: google.protobuf.Timestamp updated_at = 9;
    */
   updatedAt?: Timestamp | undefined;
@@ -8291,6 +9022,8 @@ export declare const TurnProjectionCorruptedErrorDTOSchema: GenMessage<TurnProje
  */
 export declare type TurnResponsePartDTO = Message<"boxteam.workspace.v2.TurnResponsePartDTO"> & {
   /**
+   * 历史部件由 canonical item_id 与 part_ordinal 生成唯一引用；streaming 为临时部件 ID，不代表 canonical item 身份。
+   *
    * @generated from field: string part_id = 1;
    */
   partId: string;
@@ -8306,6 +9039,8 @@ export declare type TurnResponsePartDTO = Message<"boxteam.workspace.v2.TurnResp
   projection: string;
 
   /**
+   * 响应部件的归一化状态；历史值由 canonical/消息投影映射，streaming 值随部件更新。completed 仅表示该部件完成，可与工具拒绝、Job 或 Execution 失败并存，不证明工具执行成功。
+   *
    * @generated from field: optional string status = 4;
    */
   status?: string | undefined;
@@ -8326,6 +9061,8 @@ export declare type TurnResponsePartDTO = Message<"boxteam.workspace.v2.TurnResp
   carrierType?: string | undefined;
 
   /**
+   * 保留 canonical payload 中合法的工具调用 ID 表示，可为 Provider 原始 ID 或已有 ModelCall 限定 ID；不等同于历史工具 Trace/摘要的聚合引用，也不等同于 part_id。
+   *
    * @generated from field: optional string tool_call_id = 8;
    */
   toolCallId?: string | undefined;
@@ -8356,6 +9093,8 @@ export declare type TurnResponsePartDTO = Message<"boxteam.workspace.v2.TurnResp
   final?: boolean | undefined;
 
   /**
+   * 历史 terminal Turn 的本次 mapper 输入缺少同一 ModelCall 与 Provider call ID 的匹配结果；不证明底层工具未执行或执行失败。
+   *
    * @generated from field: optional bool outcome_unknown = 14;
    */
   outcomeUnknown?: boolean | undefined;
@@ -8427,11 +9166,15 @@ export declare type TurnResponseSourceDTO = Message<"boxteam.workspace.v2.TurnRe
   partOrdinal?: bigint | undefined;
 
   /**
+   * 历史 activity 沿 canonical item 创建时刻；final 沿 final_item_created_at；standalone internal 沿原 item 创建时刻。streaming 可缺省。
+   *
    * @generated from field: optional google.protobuf.Timestamp created_at = 10;
    */
   createdAt?: Timestamp | undefined;
 
   /**
+   * 历史 activity 首项从 Turn projection.created_at 起算，后续按逻辑 activity 顺序计算相邻 item 的整数毫秒差；final 固定为零；standalone internal 首项从 execution.created_at 起算，后续沿同 view、同 execution 的前一 visible/display_only 逻辑成员计算。负差钳为零；streaming 可缺省。
+   *
    * @generated from field: optional int64 elapsed_ms = 11;
    */
   elapsedMs?: bigint | undefined;
@@ -8478,21 +9221,29 @@ export declare type TurnSummaryDTO = Message<"boxteam.workspace.v2.TurnSummaryDT
   revision: bigint;
 
   /**
+   * Turn 历史展示状态映射：open→accepted、active→running、completed_empty→completed、interrupted→timed_out、unknown→failed；不是 Job 状态事实。
+   *
    * @generated from field: string status = 6;
    */
   status: string;
 
   /**
+   * 带时区 ISO8601 展示时刻：非空 Turn projection 的 created_at 会先校验为有效且带时区，即使消息自身有时间也不能省略。随后取本次实际加载的首个非 internal HumanMessage 的 response_metadata.created_at，否则取首个已加载消息；候选消息或其时间缺失时，回退已校验的 turns.created_at，两者均无可用时间则报错。非空但非法的消息日期字符串直接报错，不触发回退。消息时间保留显式时区偏移，无时区按 UTC 解释；展示值受 include 加载范围影响。
+   *
    * @generated from field: google.protobuf.Timestamp created_at = 7;
    */
   createdAt?: Timestamp | undefined;
 
   /**
+   * 带时区 ISO8601 展示时刻：取本次所选 canonical Turn projection 的 turns.updated_at；缺少 projection、时刻非法或无时区时历史读取失败，不回退到消息时间；保留显式时区偏移。fork 历史沿用来源投影的原始时刻。
+   *
    * @generated from field: google.protobuf.Timestamp updated_at = 8;
    */
   updatedAt?: Timestamp | undefined;
 
   /**
+   * 直接映射 updated_at 的同一时刻，不是独立完成事件，非终态 Turn 也可能有值；fork 历史沿用来源投影的原始时刻。
+   *
    * @generated from field: optional google.protobuf.Timestamp completed_at = 9;
    */
   completedAt?: Timestamp | undefined;
@@ -8581,6 +9332,16 @@ export declare type TurnSummaryDTO = Message<"boxteam.workspace.v2.TurnSummaryDT
    * @generated from field: int64 root_logical_item_ordinal = 26;
    */
   rootLogicalItemOrdinal: bigint;
+
+  /**
+   * @generated from field: string source_view_id = 27;
+   */
+  sourceViewId: string;
+
+  /**
+   * @generated from field: int64 source_view_revision = 28;
+   */
+  sourceViewRevision: bigint;
 };
 
 /**
@@ -8625,6 +9386,8 @@ export declare type TurnToolSummaryDTO = Message<"boxteam.workspace.v2.TurnToolS
   status: string;
 
   /**
+   * 历史工具聚合引用：已知 emitting ModelCall 时由其 ID 与 Provider 原始 call ID 限定，未知时保留原 call ID；不同 ModelCall 重用同一原始 ID 仍分别展示。
+   *
    * @generated from field: optional string tool_call_id = 3;
    */
   toolCallId?: string | undefined;
@@ -8666,6 +9429,8 @@ export declare type TurnUserMessageDTO = Message<"boxteam.workspace.v2.TurnUserM
   metadata?: JsonObject | undefined;
 
   /**
+   * canonical 用户消息的不可变创建时刻，接口为带时区 ISO8601；沿消息 response_metadata.created_at，保留显式时区偏移，无时区时按 UTC 解释，缺失时报错。复制保留源消息时间事实。
+   *
    * @generated from field: google.protobuf.Timestamp created_at = 6;
    */
   createdAt?: Timestamp | undefined;
@@ -8702,6 +9467,8 @@ export declare type TurnUserMessageSummaryDTO = Message<"boxteam.workspace.v2.Tu
   attachmentCount?: bigint | undefined;
 
   /**
+   * 对应用户消息详情的 created_at，接口为带时区 ISO8601；摘要直接复用详情时间，保留显式时区偏移，详情对无时区值按 UTC 解释，复制保留源消息时间事实。
+   *
    * @generated from field: google.protobuf.Timestamp created_at = 5;
    */
   createdAt?: Timestamp | undefined;
@@ -9434,6 +10201,116 @@ export declare type WorkspaceFileWatchRequest = Message<"boxteam.workspace.v2.Wo
  * Use `create(WorkspaceFileWatchRequestSchema)` to create a new message.
  */
 export declare const WorkspaceFileWatchRequestSchema: GenMessage<WorkspaceFileWatchRequest>;
+
+/**
+ * 每个逻辑观察者保留独立的 source、恢复游标和生命周期。
+ *
+ * @generated from message boxteam.workspace.v2.WorkspaceObservationSubscription
+ */
+export declare type WorkspaceObservationSubscription = Message<"boxteam.workspace.v2.WorkspaceObservationSubscription"> & {
+  /**
+   * @generated from field: string subscription_id = 1;
+   */
+  subscriptionId: string;
+
+  /**
+   * @generated from field: string kind = 2;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: optional string session_id = 3;
+   */
+  sessionId?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 activity_after = 4;
+   */
+  activityAfter?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string trace_after = 5;
+   */
+  traceAfter?: string | undefined;
+
+  /**
+   * @generated from field: repeated string paths = 6;
+   */
+  paths: string[];
+
+  /**
+   * @generated from field: optional int64 files_after = 7;
+   */
+  filesAfter?: bigint | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceObservationSubscription.
+ * Use `create(WorkspaceObservationSubscriptionSchema)` to create a new message.
+ */
+export declare const WorkspaceObservationSubscriptionSchema: GenMessage<WorkspaceObservationSubscription>;
+
+/**
+ * @generated from message boxteam.workspace.v2.WorkspaceObservationRequest
+ */
+export declare type WorkspaceObservationRequest = Message<"boxteam.workspace.v2.WorkspaceObservationRequest"> & {
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.WorkspaceObservationSubscription subscriptions = 1;
+   */
+  subscriptions: WorkspaceObservationSubscription[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceObservationRequest.
+ * Use `create(WorkspaceObservationRequestSchema)` to create a new message.
+ */
+export declare const WorkspaceObservationRequestSchema: GenMessage<WorkspaceObservationRequest>;
+
+/**
+ * frame 携带领域 owner 的完整原 SSE 帧；物理聚合不重编码领域事件。
+ *
+ * @generated from message boxteam.workspace.v2.WorkspaceObservationFrameDTO
+ */
+export declare type WorkspaceObservationFrameDTO = Message<"boxteam.workspace.v2.WorkspaceObservationFrameDTO"> & {
+  /**
+   * @generated from field: string subscription_id = 1;
+   */
+  subscriptionId: string;
+
+  /**
+   * @generated from field: string state = 2;
+   */
+  state: string;
+
+  /**
+   * @generated from field: optional string frame = 3;
+   */
+  frame?: string | undefined;
+
+  /**
+   * @generated from field: optional int32 status = 4;
+   */
+  status?: number | undefined;
+
+  /**
+   * @generated from field: optional string detail_json = 5;
+   */
+  detailJson?: string | undefined;
+
+  /**
+   * connected 时逻辑 reader 的续读水位；files 是事件序号的十进制字符串，
+   * Trace/activity 当前不设置。它不是历史分页 cursor 或路由 revision。
+   *
+   * @generated from field: optional string cursor = 6;
+   */
+  cursor?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceObservationFrameDTO.
+ * Use `create(WorkspaceObservationFrameDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceObservationFrameDTOSchema: GenMessage<WorkspaceObservationFrameDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.WorkspaceIndexRebuildDTO

@@ -7,6 +7,7 @@ import subprocess
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO
 from urllib.error import HTTPError, URLError
@@ -138,8 +139,11 @@ def wait_for_backend_ready(
     process: subprocess.Popen[str],
     workspace_id: str,
 ) -> None:
-    deadline = time.monotonic() + TEST_READY_TIMEOUT_SECONDS
+    started = time.monotonic()
+    deadline = started + TEST_READY_TIMEOUT_SECONDS
     url = f"http://127.0.0.1:{port}/api/v1/health"
+    last_status: int | None = None
+    last_error: str | None = None
 
     while time.monotonic() < deadline:
         if process.poll() is not None:
@@ -153,6 +157,8 @@ def wait_for_backend_ready(
                 headers={"X-BoxTeam-Workspace-Id": workspace_id},
             )
             with urlopen(request, timeout=1) as response:
+                last_status = response.status
+                last_error = None
                 if response.status == 200:
                     payload = json.loads(response.read())
                     if not isinstance(payload, dict):
@@ -170,10 +176,15 @@ def wait_for_backend_ready(
                 "Workspace 健康探针被拒绝: "
                 f"status={error.code}, workspace_id={workspace_id}, body={detail[:300]}"
             ) from error
-        except (URLError, OSError):
+        except (URLError, OSError) as error:
+            last_error = f"{type(error).__name__}: {error}"
             time.sleep(1)
 
-    raise TimeoutError(f"后端在 {TEST_READY_TIMEOUT_SECONDS} 秒内未就绪，端口: {port}")
+    raise TimeoutError(
+        f"后端在 {TEST_READY_TIMEOUT_SECONDS} 秒内未就绪，端口: {port}; "
+        f"pid={process.pid}, returncode={process.poll()}, elapsed={time.monotonic() - started:.3f}s, "
+        f"health={url}, last_status={last_status}, last_error={last_error}"
+    )
 
 
 def wait_for_http_ok(url: str, process: subprocess.Popen[str]) -> None:
@@ -205,6 +216,7 @@ def start_backend_process(
     startup_mount: MountedWorkspace | None = None,
     backend_generation: str | None = None,
     env_unset: Sequence[str] = (),
+    refresh_user_configuration: bool = True,
 ) -> BackendProcess:
     ensure_local_port_available(port, service_name="Workspace 后端")
     if debugpy_port is not None:
@@ -217,7 +229,7 @@ def start_backend_process(
         config_root=boxteam_home / "config",
         profile="default",
         project_root=project_root,
-        force=True,
+        force=refresh_user_configuration,
     )
     workspace_config_path = Path(workspace_root) / ".boxteam" / "workspace.jsonc"
     if not workspace_config_path.is_file():
@@ -282,6 +294,8 @@ def start_backend_process(
         log_dir / f"{log_name}.stderr.log", "a", encoding="utf-8"
     )
 
+    popen_at = datetime.now(UTC).isoformat()
+    popen_started = time.monotonic()
     process = subprocess.Popen(
         cmd,
         cwd=project_root,
@@ -300,6 +314,11 @@ def start_backend_process(
     try:
         wait_for_backend_ready(port, process, backend_workspace_id)
     except BaseException as startup_error:
+        startup_error.add_note(
+            f"Workspace 测试后端启动诊断: pid={process.pid}, Popen_utc={popen_at}, "
+            f"elapsed={time.monotonic() - popen_started:.3f}s, workspace={workspace_root}, "
+            f"stdout={log_dir / f'{log_name}.stdout.log'}, stderr={log_dir / f'{log_name}.stderr.log'}"
+        )
         try:
             close_backend_process(handle)
         except BaseException as cleanup_error:  # noqa: BLE001 - 启动和清理错误一并保留

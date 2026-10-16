@@ -31,6 +31,7 @@ interface UseGatewayExtensionWindowOptions {
   apiPort: number;
   activeSessionWorkspaceId: string | null;
   activeSessionId: string | null;
+  activeMainThread: ResourceThreadRef | null;
   setStatus: (text: string) => void;
 }
 
@@ -50,6 +51,7 @@ export function useGatewayExtensionWindow({
   apiPort,
   activeSessionWorkspaceId,
   activeSessionId,
+  activeMainThread,
   setStatus,
 }: UseGatewayExtensionWindowOptions) {
   const openExtensionWindow = (kind: ExtensionResourceKind, resourceId?: string) => {
@@ -101,11 +103,14 @@ export function useGatewayExtensionWindow({
     );
   };
   const createExtensionReplacement = async (entry: GatewayExtensionResourceEntry) => {
-    if (!activeSessionId || activeSessionWorkspaceId !== entry.workspace_id) throw new Error("新建浏览器需要先选择同工作区的有效会话");
+    if (
+      !activeSessionId || activeSessionWorkspaceId !== entry.workspace_id
+      || activeMainThread?.session_id !== activeSessionId
+    ) throw new Error("新建浏览器需要先解析同工作区当前会话的主线程");
     const created = await createSessionConnection(
       apiPort,
       entry.workspace_id,
-      activeSessionId,
+      activeMainThread,
       "browser",
     );
     await extensionResources.refresh();

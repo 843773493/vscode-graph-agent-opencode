@@ -36,8 +36,14 @@ from app.agents.tool_invocation_context import (
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
+from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
+    WorkspaceFileResourceRegistry,
+)
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
+)
+from app.services.infrastructure.workspace_file_watch_service import (
+    WorkspaceFileWatchService,
 )
 
 
@@ -52,6 +58,11 @@ def _build_skill_catalog(tmp_path: Path) -> Any:
     return build_workspace_skill_catalog(
         tmp_path,
         registry=ResourceRegistry(),
+        file_registry=WorkspaceFileResourceRegistry(
+            workspace_root=tmp_path,
+            watch_service=WorkspaceFileWatchService(workspace_root=tmp_path),
+            project_root=tmp_path,
+        ),
         project_root=tmp_path,
     )
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -32,6 +33,9 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.mcp import McpCatalogOwner
+from app.services.infrastructure.resource_platform.bootstrap import (
+    bootstrap_resource_platform,
+)
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
@@ -57,6 +61,12 @@ from tests.integration.backend.sessions.rollout_context.test_context_plan_regist
 
 
 @pytest.fixture
+def skill_control_admission():
+    """CSM 消费者测试显式隔离 Session 生命周期准入。"""
+    return lambda _name, _mode: nullcontext()
+
+
+@pytest.fixture
 def factory_context(registry_db, request, monkeypatch):
     saver, session, connection, accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
@@ -64,16 +74,26 @@ def factory_context(registry_db, request, monkeypatch):
     skill_file = workspace / ".boxteam" / "skills" / "example" / "SKILL.md"
     skill_file.parent.mkdir(parents=True, exist_ok=True)
     skill_file.write_text("---\nname: example\ndescription: 集成测试 Skill\n---\nSkill 正文\n")
+    event_service = EventChannelService()
     owner = McpCatalogOwner(
         raw_config={"servers": {}}, workspace_root=workspace,
-        event_service=EventChannelService(),
+        event_service=event_service,
     )
     asyncio.run(owner.start())
+    platform = bootstrap_resource_platform(
+        workspace_root=workspace,
+        event_service=event_service,
+    )
     scope = LifetimeScope("production-context-fixture")
     registry = ResourceRegistry(
         publication_lock=owner.publication_lock, capture_validator=owner.validate_resource_capture,
     )
-    catalog = build_workspace_skill_catalog(workspace, registry=registry, bundled_skill_groups=())
+    catalog = build_workspace_skill_catalog(
+        workspace,
+        registry=registry,
+        file_registry=platform.file_registry,
+        bundled_skill_groups=(),
+    )
     coordinator = ResourceActivationCoordinator(
         registry=registry, saver=saver,
         body_store=ResourceActivationBodyStore(saver._storage, saver._detail_store),
@@ -100,6 +120,8 @@ def factory_context(registry_db, request, monkeypatch):
     tools = [StructuredTool.from_function(
         lambda value: value, name=name, description="受信注册工具",
     ) for name in ("create_team", "send_session_message")]
+    sessions = MagicMock()
+    sessions.session_context_control_admission.side_effect = lambda *_args, **_kwargs: nullcontext()
     graph = agent_factory.create_my_deep_agent(
         model=model, instruction_producers=runtime_instruction_producers(
             agent_id="default", content="配置基础说明", config_revision="config:production:1",
@@ -108,7 +130,7 @@ def factory_context(registry_db, request, monkeypatch):
         session_id=session, thread_id=thread, agent_id="default", tools=tools,
         background_task_registry=MagicMock(), background_message_bus=MagicMock(),
         job_event_bus=MagicMock(), job_service=MagicMock(), message_service=MagicMock(),
-        session_service=MagicMock(), session_orchestrator=MagicMock(),
+        session_service=sessions, session_orchestrator=MagicMock(),
         session_subagent_service=MagicMock(), session_context_query_service=MagicMock(),
         workspace_session_context_client=MagicMock(), config_service=config,
         workspace_root=workspace, skill_catalog=catalog, middleware=[],
@@ -167,14 +189,18 @@ def factory_context(registry_db, request, monkeypatch):
         return outbound[0]
 
     try:
-        yield saver, session, thread, connection, selection, manager, captured, registered, dispatch
+        yield (
+            saver, session, thread, connection, selection, manager, captured,
+            registered, dispatch, platform.file_registry,
+        )
     finally:
         asyncio.run(scope.close())
+        asyncio.run(platform.close())
         asyncio.run(owner.shutdown())
 
 
 def test_real_factory_bridge_registers_all_seven_sources_and_uses_sealed_request(factory_context):
-    saver, session, thread, connection, _selection, manager, captured, registered, dispatch = factory_context
+    saver, session, thread, connection, _selection, manager, captured, registered, dispatch, _file_registry = factory_context
     assert captured["system_prompt"] is None
     before = manager.prepare_pending()
     assert before is not None
@@ -199,7 +225,7 @@ def test_real_factory_bridge_registers_all_seven_sources_and_uses_sealed_request
 
 
 def test_runtime_selection_hard_rebase_preserves_retry_and_graph_registration(factory_context, monkeypatch):
-    saver, session, thread, _connection, selection, manager, captured, registered, dispatch = factory_context
+    saver, session, thread, _connection, selection, manager, captured, registered, dispatch, _file_registry = factory_context
     first = dispatch("first")
     original = saver._storage.assemblies.list_context_assemblies(session, thread)[-1]
     selection.apply_changes(agent_id="default", changes={"write_todos": (False, False)})
@@ -223,7 +249,7 @@ def test_runtime_selection_hard_rebase_preserves_retry_and_graph_registration(fa
 
 
 def test_unregistered_system_prompt_is_rejected_before_seal(factory_context):
-    _saver, _session, _thread, connection, _selection, manager, _captured, _registered, dispatch = factory_context
+    _saver, _session, _thread, connection, _selection, manager, _captured, _registered, dispatch, _file_registry = factory_context
     before = manager.prepare_pending()
     with pytest.raises(RuntimeError, match="instruction-producer-unregistered"):
         dispatch("unregistered", system_message=SystemMessage(content="未登记说明"))
@@ -232,24 +258,36 @@ def test_unregistered_system_prompt_is_rejected_before_seal(factory_context):
 
 
 def test_frozen_skill_tool_uses_durable_body_after_live_catalog_changes(
-    factory_context, request,
+    factory_context, request, skill_control_admission,
 ):
-    saver, session, thread, _connection, _selection, manager, captured, _registered, dispatch = factory_context
+    saver, session, thread, _connection, _selection, manager, captured, _registered, dispatch, file_registry = factory_context
     dispatch("skill-catalog-initial")
     sealed = saver._storage.assemblies.list_context_assemblies(session, thread)[-1]
     activation = saver.load_sealed_resource_activation(
         session, thread_id=thread, assembly_id=sealed.assembly_id,
         plan_hash=sealed.plan_hash, request_hash=sealed.request_hash,
     )
-    frozen = skill_catalog_from_activation(activation, saver.read_resource_activation_payload)
+    frozen = skill_catalog_from_activation(
+        activation, lambda snapshot, binding: saver.read_resource_activation_payload(
+            snapshot, binding, storage_owner=(session, thread),
+        ),
+    )
     assert frozen is not None
     original_body = frozen.entries["example"].body
     workspace = TestRunContext.from_test_file(Path(request.node.path)).workspace_root
     source = workspace / ".boxteam" / "skills" / "example" / "SKILL.md"
     source.write_text("---\nname: example\ndescription: 当前已更新目录\n---\n新的 live 正文\n")
     bridge = captured["middleware"][-1]
+    activation_descriptor = bridge._resource_activation._registry.descriptor(
+        "skill-entry:workspace:example:activation"
+    )
+    assert activation_descriptor.display_uri is not None
+    file_registry.refresh(activation_descriptor.display_uri)
     live = build_workspace_skill_catalog(
-        workspace, registry=bridge._resource_activation._registry, bundled_skill_groups=(),
+        workspace,
+        registry=bridge._resource_activation._registry,
+        file_registry=file_registry,
+        bundled_skill_groups=(),
     )
     assert live.activation_bodies["example"] != original_body
 
@@ -261,9 +299,13 @@ def test_frozen_skill_tool_uses_durable_body_after_live_catalog_changes(
             session, thread_id=thread, assembly_id=sealed.assembly_id,
             plan_hash=sealed.plan_hash, request_hash=sealed.request_hash,
         )
-        return skill_catalog_from_activation(restored, saver.read_resource_activation_payload)
+        return skill_catalog_from_activation(
+            restored, lambda snapshot, binding: saver.read_resource_activation_payload(
+                snapshot, binding, storage_owner=(session, thread),
+            ),
+        )
 
-    tool = create_skill_load_tool(manager, activation_snapshot_resolver=sealed_catalog)
+    tool = create_skill_load_tool(manager, activation_snapshot_resolver=sealed_catalog, control_admission=skill_control_admission)
     admission = saver.execution_admission(
         session, thread_id=thread, execution_id=sealed.execution_id,
     )
@@ -271,7 +313,7 @@ def test_frozen_skill_tool_uses_durable_body_after_live_catalog_changes(
         session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),
         execution_admission_scope(admission, langgraph_thread_id=thread),
     ):
-        receipt = json.loads(tool.invoke({"name": "example", "mode": "tracked"}))
+        receipt = json.loads(asyncio.run(tool.ainvoke({"name": "example", "mode": "tracked"})))
         assert receipt["status"] == "loaded" and receipt["tracked"]
         assert original_body not in json.dumps(receipt, ensure_ascii=False)
         outbound = dispatch("skill-body-selected")
@@ -279,7 +321,7 @@ def test_frozen_skill_tool_uses_durable_body_after_live_catalog_changes(
         assert any(original_body in text for text in texts)
         assert all("新的 live 正文" not in text for text in texts)
         before_reads = tuple(reads)
-        result = json.loads(tool.invoke({"name": "example", "mode": "untrack"}))
+        result = json.loads(asyncio.run(tool.ainvoke({"name": "example", "mode": "untrack"})))
         assert result["status"] == "loaded" and not result["tracked"]
         assert tuple(reads) == before_reads
 
@@ -288,5 +330,9 @@ def test_frozen_skill_tool_uses_durable_body_after_live_catalog_changes(
             session, thread_id=thread, assembly_id=sealed.assembly_id,
             plan_hash=sealed.plan_hash, request_hash=sealed.request_hash,
         )
-        catalog = skill_catalog_from_activation(restored, restarted.read_resource_activation_payload)
+        catalog = skill_catalog_from_activation(
+            restored, lambda snapshot, binding: restarted.read_resource_activation_payload(
+                snapshot, binding, storage_owner=(session, thread),
+            ),
+        )
         assert catalog == frozen

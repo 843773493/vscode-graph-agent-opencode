@@ -144,9 +144,22 @@ async def _put_checkpoint(
                 **checkpoint["channel_values"],
                 "messages": messages[:next_input],
             },
+            "channel_versions": dict(checkpoint["channel_versions"]),
+            "updated_channels": list(checkpoint["updated_channels"]),
         }
+        partial_versions = dict(versions)
+        if "_summarization_event" in partial["channel_values"]:
+            # 各真实 Human root 的中间投影不应提前消费只属于完整冻结消息快照的压缩事件。
+            partial["channel_values"].pop("_summarization_event")
+            partial["channel_versions"].pop("_summarization_event", None)
+            partial_versions.pop("_summarization_event", None)
+            partial["updated_channels"] = [
+                channel
+                for channel in partial["updated_channels"]
+                if channel != "_summarization_event"
+            ]
         with execution_admission_scope(admission, langgraph_thread_id=thread_id):
-            await saver.aput(config, partial, metadata, versions)
+            await saver.aput(config, partial, metadata, partial_versions)
     assert admission is not None, "checkpoint fixture 必须含真实输入根"
     with execution_admission_scope(admission, langgraph_thread_id=thread_id):
         return await saver.aput(config, checkpoint, metadata, versions)
@@ -657,15 +670,16 @@ async def test_agent_context_state_applies_summarization_event(
     checkpoint = {
         "channel_values": {
             "messages": [
-                HumanMessage(content="旧问题"),
-                AIMessage(content="旧回答"),
-                HumanMessage(content="保留问题"),
-                AIMessage(content="保留回答"),
+                HumanMessage(content="旧问题", id="summary-old-user"),
+                AIMessage(content="旧回答", id="summary-old-answer"),
+                HumanMessage(content="保留问题", id="summary-kept-user"),
+                AIMessage(content="保留回答", id="summary-kept-answer"),
             ],
             "_summarization_event": {
                 "cutoff_index": 2,
                 "summary_message": HumanMessage(
                     content="旧上下文摘要",
+                    id="summary-old-context",
                     additional_kwargs={"lc_source": "summarization"},
                 ),
                 "file_path": "/conversation_history/ses_019bab7eeedc7a5f83bddb61e54d8a28.md",
@@ -727,12 +741,15 @@ async def test_agent_context_state_applies_cache_preserving_event(
         "ses_019bd626995878aa855827ea5ee075e3"
     )
     config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
-    prefix = [HumanMessage(content="稳定问题"), AIMessage(content="稳定回答")]
+    prefix = [
+        HumanMessage(content="稳定问题", id="cache-prefix-user"),
+        AIMessage(content="稳定回答", id="cache-prefix-answer"),
+    ]
     messages = [
         *prefix,
-        HumanMessage(content="被压缩问题"),
-        AIMessage(content="被压缩回答"),
-        HumanMessage(content="近期问题"),
+        HumanMessage(content="被压缩问题", id="cache-summarized-user"),
+        AIMessage(content="被压缩回答", id="cache-summarized-answer"),
+        HumanMessage(content="近期问题", id="cache-recent-user"),
     ]
     checkpoint = {
         "channel_values": {
@@ -743,6 +760,7 @@ async def test_agent_context_state_applies_cache_preserving_event(
                 "cache_prefix_messages": prefix,
                 "summary_message": HumanMessage(
                     content="中段上下文摘要",
+                    id="summary-cache-preserving-context",
                     additional_kwargs={"lc_source": "summarization"},
                 ),
                 "file_path": "/conversation_history/ses_019bd626995878aa855827ea5ee075e3.md",

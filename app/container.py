@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from threading import RLock
 from types import TracebackType
@@ -33,12 +34,14 @@ from app.core.path_utils import (
     get_user_config_root,
     workspace_context,
 )
+from app.core.phase_observer import observe_phase
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.gateway.auth import get_gateway_local_token
 from app.runtime.agent_runtime import AgentRuntimeDependencyProvider
+from app.runtime.runtime_ports import DEFAULT_RUNTIME_CLOCK_PORTS, RuntimeClockPorts
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.services.business.agent_service import AgentService
 from app.services.business.browser_resources.owner import BrowserResourceOwner
@@ -336,6 +339,7 @@ class AppContainer:
     session_changes_service: SessionChangesService
     session_information_service: SessionInformationService
     session_context_query_service: SessionContextQueryService
+    workspace_session_context_transport: GatewaySessionContextClient
     session_resource_service: SessionResourceService
     terminal_resource_owner: TerminalResourceOwner
     browser_resource_owner: BrowserResourceOwner
@@ -385,9 +389,11 @@ class WorkspaceContainerRegistry:
         *,
         mounted_workspaces: MountedWorkspaceRegistry,
         project_root: str | Path | None = None,
+        clock_ports: RuntimeClockPorts = DEFAULT_RUNTIME_CLOCK_PORTS,
     ) -> None:
         self._mounted_workspaces = mounted_workspaces
         self._project_root = project_root
+        self._clock_ports = clock_ports
         self._containers: dict[str, AppContainer] = {}
         self._catalog_components: dict[str, SessionCatalogComponents] = {}
         self._closed = False
@@ -436,6 +442,7 @@ class WorkspaceContainerRegistry:
                             project_root=self._project_root,
                             workspace_root=mount.workspace_root,
                             startup_mount=mount,
+                            clock_ports=self._clock_ports,
                         )
                     components = self.get_catalog_components(
                         mount.workspace_root / ".boxteam" / "sessions", mount.workspace_id
@@ -508,6 +515,7 @@ def _build_app_container(
     project_root: str | Path | None = None,
     workspace_root: str | Path | None = None,
     startup_mount: MountedWorkspace | None = None,
+    clock_ports: RuntimeClockPorts = DEFAULT_RUNTIME_CLOCK_PORTS,
 ) -> AppContainer:
     resolved_project_root = get_project_root(project_root)
     if workspace_root is None:
@@ -529,7 +537,9 @@ def _build_app_container(
     session_creation_service = session_catalog.creation_service
     session_path_resolver.initialize()
     job_event_bus = JobEventBus()
-    thread_residency_tracker = ThreadResidencyTracker()
+    thread_residency_tracker = ThreadResidencyTracker(
+        clock=clock_ports.residency, wall_clock=clock_ports.wall,
+    )
     background_work_store = BackgroundWorkStore(sessions_dir=resolved_sessions_root)
     background_task_registry = BackgroundTaskRegistry(
         store=background_work_store, residency_tracker=thread_residency_tracker,
@@ -585,8 +595,10 @@ def _build_app_container(
         config_service=config_service,
     )
 
+    attachment_blob_store = AttachmentBlobStore(resolved_workspace_root, path_resolver=session_path_resolver)
     rollout_checkpoint_runtime = RolloutCheckpointRuntime(
         sessions_dir=resolved_sessions_root,
+        attachment_store=attachment_blob_store,
         node_debug_workspace_config=lambda: build_workspace_fork_config(
             resolved_workspace_root,
             config_service.get_debug_runtime_config(),
@@ -602,12 +614,12 @@ def _build_app_container(
         workspace_root=resolved_workspace_root,
         event_service=job_event_bus.event_channel_service,
     )
-    attachment_blob_store = AttachmentBlobStore(resolved_workspace_root)
     message_service = MessageService(
         main_thread_resolver=session_path_resolver.main_thread_id,
         checkpointer=checkpointer,
         attachment_store=attachment_blob_store,
         canonical_item_reader=checkpointer.read_canonical_items,
+        workspace_root=resolved_workspace_root,
     )
     session_service = SessionService(
         config_service=config_service,
@@ -615,6 +627,7 @@ def _build_app_container(
         workspace_id=workspace_service.workspace_id,
         path_resolver=session_path_resolver,
         creation_service=session_creation_service,
+        initialize_thread_storage=checkpointer.initialize_thread_storage,
     )
     file_tree_settings_service = FileTreeSettingsService(
         workspace_root=resolved_workspace_root,
@@ -638,9 +651,12 @@ def _build_app_container(
         session_service=session_service,
         workspace_session_context_client=workspace_session_context_client,
     )
-    session_context_fork_service = SessionContextForkService(
-        session_service=session_service,
-        checkpointer=checkpointer,
+    thread_creation_factory = OwnerThreadCreationFactory(
+        sessions_root=resolved_sessions_root,
+        workspace_id=workspace_id,
+        path_resolver=session_path_resolver
+        if isinstance(session_path_resolver, SessionCatalogPathResolver)
+        else None,
     )
     session_changes_store = SessionChangesStore(workspace_root=resolved_workspace_root)
     session_changes_service = SessionChangesService(
@@ -666,6 +682,15 @@ def _build_app_container(
         sessions=session_service, threads=session_path_resolver,
         transport=browser_manager_client, leases=external_resource_leases,
         thread_release_fence=thread_residency_tracker.is_unloading_generation,
+    )
+    session_context_fork_service = SessionContextForkService(
+        session_service=session_service,
+        checkpointer=checkpointer,
+        thread_creation_factory=thread_creation_factory,
+        goal_service=goal_service,
+        terminal_resource_owner=terminal_resource_owner,
+        browser_resource_owner=browser_resource_owner,
+        transport=workspace_session_context_transport,
     )
     dependency_provider = _AgentRuntimeDependencyProvider(
         message_service=message_service,
@@ -749,7 +774,10 @@ def _build_app_container(
         job_event_bus=job_event_bus,
         session_title_service=session_title_service,
     )
-    pending_request_store = PendingRequestStore(sessions_dir=resolved_sessions_root)
+    pending_request_store = PendingRequestStore(
+        sessions_dir=resolved_sessions_root,
+        input_reader=lambda reference: message_service.accepted_job_message(reference, display=False),
+    )
     job_service = JobService(
         job_event_bus=job_event_bus,
         job_executor=job_executor,
@@ -758,6 +786,7 @@ def _build_app_container(
         job_timeout_seconds=config_service.get_agent_run_timeout_seconds(),
         job_timeout_seconds_provider=config_service.get_agent_run_timeout_seconds,
         terminal_status_writer=checkpointer,
+        input_owner=message_service,
     )
     session_service.bind_job_service(job_service)
     session_catalog_service.bind_job_service(job_service)
@@ -786,6 +815,7 @@ def _build_app_container(
     session_communication_service = SessionCommunicationService(
         sessions=session_service, saver=checkpointer, dispatcher=runtime_source_dispatcher,
         transport=communication_transport, query_service=session_context_query_service,
+        wait_clock=clock_ports.wait, deadline_timer=clock_ports.deadline_timer,
     )
     dependency_provider.set_session_communication_service(session_communication_service)
     terminal_steering_service = TerminalSteeringService(
@@ -802,13 +832,6 @@ def _build_app_container(
         message_service=message_service,
         trace_event_store=trace_event_store,
         providers=[AgentPromptGenerationProvider()],
-    )
-    thread_creation_factory = OwnerThreadCreationFactory(
-        sessions_root=resolved_sessions_root,
-        workspace_id=workspace_id,
-        path_resolver=session_path_resolver
-        if isinstance(session_path_resolver, SessionCatalogPathResolver)
-        else None,
     )
     thread_initial_execution_service = ThreadInitialExecutionService(
         factory=thread_creation_factory, sessions=session_service, saver=checkpointer,
@@ -853,6 +876,8 @@ def _build_app_container(
         trace_event_store=trace_event_store,
         message_stream_store=message_stream_store,
         terminal_status_writer=checkpointer,
+        pending_tool_checkpoint_id=agent_execution_service.pending_tool_checkpoint_id,
+        can_restart_before_provider=runtime_source_dispatcher.can_restart_before_provider,
     )
     goal_runtime_service = GoalRuntimeService(
         goal_service=goal_service,
@@ -898,19 +923,28 @@ def _build_app_container(
         # session 的生命周期 gate 内执行，并且先于 fence、物理隔离和
         # drain 进度记录，保证部分失败可按 record 定点重试。
         async def drain_session_resources(session_id: str) -> None:
-            checkpointer.release_fork_retentions(session_id)
+            session_service.settle_abandoned_context_controls(session_id)
             await node_debug_service.drain_session(session_id)
             await session_resource_service.cleanup_session(session_id)
             await session_communication_service.observations.drain_session(session_id)
             await team_fanout_service.drain_session(session_id)
+            # 所有领域资源排空后关闭本 Session 的真实 graph scope；旧
+            # residency 记账不能越过 fence/rename 后再查询已删除控制库。
+            await thread_residency_tracker.close(session_id=session_id)
             background_message_bus.close_session(session_id)
             # 附件引用释放与 ingest/claim 定点收敛必须先于 fence CAS 与物理
             # 隔离：删除 owner 按 pin 阻断 canonical 使用、释放 reference 后
             # 才隔离 Session 节点，且不留下指向已删除 owner 的 reference。
             attachment_blob_store.release_session_references(session_id)
+            collected = attachment_blob_store.collect_garbage(retention=timedelta(0))
+            await observe_phase(session_id, "attachments.gc.completed", details={
+                "collected_blob_ids": list(collected),
+            })
 
+        session_path_resolver.bind_fork_retention_release_callback(checkpointer.release_fork_retentions)
+        session_path_resolver.bind_fork_child_abort_callback(checkpointer.forks.abort_prepared_child_fork)
         session_path_resolver.bind_session_drain_callback(
-            drain_session_resources
+            drain_session_resources, holders=(session_communication_service.deletion_holder, team_fanout_service.deletion_holder),
         )
     session_information_service = SessionInformationService(
         session_service=session_service,
@@ -982,6 +1016,7 @@ def _build_app_container(
         session_changes_service=session_changes_service,
         session_information_service=session_information_service,
         session_context_query_service=session_context_query_service,
+        workspace_session_context_transport=workspace_session_context_transport,
         session_resource_service=session_resource_service,
         context_compaction_service=context_compaction_service,
         terminal_resource_owner=terminal_resource_owner,
@@ -1029,6 +1064,7 @@ def build_app_container(
     project_root: str | Path | None = None,
     workspace_root: str | Path,
     startup_mount: MountedWorkspace | None = None,
+    clock_ports: RuntimeClockPorts = DEFAULT_RUNTIME_CLOCK_PORTS,
 ) -> AppContainer:
     """在显式工作区上下文中装配唯一完整服务图。"""
 
@@ -1039,4 +1075,5 @@ def build_app_container(
             project_root=project_root,
             workspace_root=resolved_root,
             startup_mount=startup_mount,
+            clock_ports=clock_ports,
         )

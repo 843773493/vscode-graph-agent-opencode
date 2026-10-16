@@ -77,3 +77,10 @@
 - [ ] 8.3 接入 files/root 唯一工作区文件树根，明确固定 workspace_id/Gateway/root，不依赖激活态；普通 ls/search/read 不注册每个文件的长期身份、revision或快照，只有显式来源追踪由原owner登记。
 - [ ] 8.4 在本 owner 登记 Session 产物单文件模板：`session/{session_id}/attachments/{attachment_id}`、`session/{session_id}/tool-results/{result_id}`；保留业务 ID 的既有 profile，原owner决定读取/授权/保留，不允许目录猜测或通用修改。消费迁移归 add-unified-resource-file-tools。
 - [ ] 8.5 为本地/远端目录结果、Skill读取无activation、轻量搜索无注册、固定目标、文件能力拒绝和路径编码逐项留生产验收；文件执行错误归其独立owner合同，寻址错误仍只在本登记处。先固定本公共合同，再交独立文件工具消费change，不以规范修订勾实现。
+
+## 9. Fork容器寻址与统一资源目标检查（2026-10-13，待实施）
+
+- [ ] 9.1 同批实现session集合根、Session和Thread正式模板、ResourceIdentity归属与允许操作；迁齐构造/解析/Gateway路由/DTO/API和测试，集合根不伪造Session ID，Thread不存在/跨归属明确失败，send/read/wait原main合同保持。
+- [ ] 9.2 在现有资源解析/owner路由接入唯一目标检查入口，复用现有字段得到reuse_reference/retain_reference/copy_snapshot/omit/unsupported；只增加确实缺少的owner retain/export/import能力，不扩充身份或逐资源fork布尔字段，不建立第二registry。
+- [ ] 9.3 验证同存储域共享blob零字节复制/内容身份复用/必要保活、不同Gateway挂载同owner的域核实、固定revision与可变源、目标已有内容去重、显式跨域导入及不支持/未授权失败；URI解析成功不代替目标能力完成。
+- [ ] 9.4 与itemized第12节、会话URI及工作区资源change同批核消费合同；删除平行fork资源矩阵和专属URI解析，保留现有导航、轻量访问、授权与scope不变量。

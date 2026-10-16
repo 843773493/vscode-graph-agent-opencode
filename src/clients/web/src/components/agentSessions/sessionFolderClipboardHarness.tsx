@@ -128,7 +128,7 @@ export async function renderFolderMenu(folderMenu: {
         workspaceFolderMenu={null}
         setWorkspaceFolderMenu={() => undefined}
         setWorkspaceFolderEditor={() => undefined}
-        folderMenu={{ ...folderMenu, x: 10, y: 10 }}
+        folderMenu={{ ...folderMenu, nodeId: folderMenu.folderId, x: 10, y: 10 }}
         setFolderMenu={() => undefined}
         resourceDialog={null}
         setResourceDialog={() => undefined}

@@ -9,13 +9,11 @@ import {
 export default function PendingRequestActions({
   deliveryPolicy,
   disabled,
-  onEdit,
   onRemove,
   onChangePolicy,
 }: {
   deliveryPolicy: DeliveryPolicy;
   disabled: boolean;
-  onEdit: () => void;
   onRemove: () => void;
   onChangePolicy: (policy: DeliveryPolicy) => void;
 }): React.ReactNode {
@@ -39,15 +37,6 @@ export default function PendingRequestActions({
           {policy === deliveryPolicy ? "✓" : "·"}
         </button>
       ))}
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={onEdit}
-        title="编辑待处理消息"
-        aria-label="编辑待处理消息"
-      >
-        <span className="codicon codicon-edit" aria-hidden="true" />
-      </button>
       <button
         type="button"
         disabled={disabled}

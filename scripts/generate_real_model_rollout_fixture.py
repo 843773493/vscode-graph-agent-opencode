@@ -362,7 +362,7 @@ def generate(
                     )
                 ),
                 response_metadata={
-                    "message_metadata": {"turn_id": turn_id, "job_id": turn_id},
+                    "message_metadata": {"turn_id": turn_id},
                     "model_provider": requested_provider_id,
                 },
             )
@@ -435,7 +435,7 @@ def generate(
                             name=str(call.get("name") or "inspect_fixture"),
                             tool_call_id=str(call["id"]),
                             response_metadata={
-                                "message_metadata": {"turn_id": turn_id, "job_id": turn_id},
+                                "message_metadata": {"turn_id": turn_id},
                                 "model_provider": provider_id,
                             },
                         )

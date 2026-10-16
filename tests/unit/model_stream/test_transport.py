@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from app.testing.model_stream import (
+    ModelCallIdentity,
     ModelStreamAssetError,
     ModelStreamHTTPTransport,
     ModelStreamMatchError,
@@ -16,7 +17,7 @@ from app.testing.model_stream import (
     load_cassette,
     load_cassette_from_object,
     load_scenario,
-    replay_session,
+    replay_model_call,
 )
 from app.testing.model_stream.matcher import request_summary, safe_request_match_fields
 
@@ -106,6 +107,14 @@ def test_request_summary_keeps_chat_message_roles_without_message_content() -> N
     ]
 
 
+def _call_identity(owner: int, call: int) -> ModelCallIdentity:
+    return ModelCallIdentity(
+        f"ses_000000004000700080000000000000{owner:02x}",
+        f"thr_000000004000700080000000000001{owner:02x}",
+        f"00000000-4000-7000-8000-000000000{owner:01x}{call:02x}",
+    )
+
+
 def _sequence_cassette():
     response_frames = lambda text: [
         {
@@ -132,8 +141,7 @@ def _sequence_cassette():
         },
         {"kind": "done", "encoding": "text", "payload": "[DONE]"},
     ]
-    return load_cassette_from_object(
-        {
+    raw = {
             "schema_version": 1,
             "kind": "model_stream_cassette",
             "metadata": {
@@ -148,7 +156,7 @@ def _sequence_cassette():
                         "url": "https://provider.example/v1/chat/completions",
                         "match": {"model": "test-model", "stream": True},
                     },
-                    "replay": {"sequence_id": "tool-loop", "step": 0},
+                    "identity": _call_identity(1, 0).to_dict(),
                     "response": {
                         "status": 200,
                         "headers": {"content-type": "text/event-stream"},
@@ -161,7 +169,7 @@ def _sequence_cassette():
                         "url": "https://provider.example/v1/chat/completions",
                         "match": {"model": "test-model", "stream": True},
                     },
-                    "replay": {"sequence_id": "tool-loop", "step": 1},
+                    "identity": _call_identity(1, 1).to_dict(),
                     "response": {
                         "status": 200,
                         "headers": {"content-type": "text/event-stream"},
@@ -170,7 +178,11 @@ def _sequence_cassette():
                 },
             ],
         }
-    )
+    second_owner = json.loads(json.dumps(raw["interactions"]))
+    for call, entry in enumerate(second_owner):
+        entry["identity"] = _call_identity(2, call).to_dict()
+    raw["interactions"].extend(second_owner)
+    return load_cassette_from_object(raw)
 
 
 @pytest.mark.asyncio
@@ -250,65 +262,44 @@ async def test_unmatched_request_does_not_leak_sensitive_data(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_session_sequence_has_a_cursor_per_explicit_session(tmp_path: Path) -> None:
+async def test_call_identity_isolated_and_repeated_call_replays_same_frame(tmp_path: Path) -> None:
     cassette = _sequence_cassette()
-    scenario = StreamScenario(
-        scenario_id="sequence-test",
-        asset_path=Path("<memory>"),
-        cassette=cassette,
-        business_assertion=None,
-        raw={},
-    )
+    scenario = StreamScenario("sequence-test", Path("<memory>"), cassette, None, {})
     transport = ModelStreamHTTPTransport(
-        scenario=scenario,
-        mode="replay",
-        replay_policy="session_sequence",
-        artifact_root=tmp_path,
+        scenario=scenario, mode="replay", replay_policy="call_identity", artifact_root=tmp_path,
     )
     async with httpx.AsyncClient(transport=transport) as client:
-        with replay_session("session-a"):
-            first_a = await client.post(
-                "https://provider.example/v1/chat/completions",
-                json={"model": "test-model", "stream": True},
-            )
-            second_a = await client.post(
-                "https://provider.example/v1/chat/completions",
-                json={"model": "test-model", "stream": True},
-            )
-        with replay_session("session-b"):
-            first_b = await client.post(
-                "https://provider.example/v1/chat/completions",
-                json={"model": "test-model", "stream": True},
-            )
-
+        async def invoke(owner: int, call: int):
+            with replay_model_call(_call_identity(owner, call)):
+                return await client.post("https://provider.example/v1/chat/completions",
+                                         json={"model": "test-model", "stream": True})
+        first_a, first_b = await asyncio.gather(invoke(1, 0), invoke(2, 0))
+        second_a, repeated_a = await asyncio.gather(invoke(1, 1), invoke(1, 0))
+        with replay_model_call(_call_identity(2, 3)), pytest.raises(ModelStreamMatchError, match="未唯一匹配"):
+            await client.post("https://provider.example/v1/chat/completions",
+                              json={"model": "test-model", "stream": True})
     assert "第一步".encode() in await first_a.aread()
-    assert "第二步".encode() in await second_a.aread()
     assert "第一步".encode() in await first_b.aread()
-    assert transport.hit_counts == {0: 2, 1: 1}
+    assert "第二步".encode() in await second_a.aread()
+    assert await repeated_a.aread() == await first_a.aread()
+    assert transport.hit_counts == {0: 2, 1: 1, 2: 1}
 
 
 @pytest.mark.asyncio
-async def test_session_sequence_requires_explicit_session(tmp_path: Path) -> None:
-    cassette = _sequence_cassette()
-    scenario = StreamScenario(
-        scenario_id="sequence-test",
-        asset_path=Path("<memory>"),
-        cassette=cassette,
-        business_assertion=None,
-        raw={},
-    )
+async def test_call_identity_requires_explicit_session_thread_and_model_call(tmp_path: Path) -> None:
+    scenario = StreamScenario("sequence-test", Path("<memory>"), _sequence_cassette(), None, {})
     transport = ModelStreamHTTPTransport(
-        scenario=scenario,
-        mode="replay",
-        replay_policy="session_sequence",
-        artifact_root=tmp_path,
+        scenario=scenario, mode="replay", replay_policy="call_identity", artifact_root=tmp_path,
     )
     async with httpx.AsyncClient(transport=transport) as client:
-        with pytest.raises(ModelStreamMatchError, match="replay_session_id"):
-            await client.post(
-                "https://provider.example/v1/chat/completions",
-                json={"model": "test-model", "stream": True},
-            )
+        with pytest.raises(ModelStreamMatchError, match="显式 SessionThread/model-call"):
+            await client.post("https://provider.example/v1/chat/completions",
+                              json={"model": "test-model", "stream": True})
+    positive = _call_identity(1, 0).to_dict()
+    for missing in ("thread_id", "model_call_id"):
+        damaged = {key: value for key, value in positive.items() if key != missing}
+        with pytest.raises(TypeError):
+            ModelCallIdentity(**damaged)
 
 
 @pytest.mark.asyncio

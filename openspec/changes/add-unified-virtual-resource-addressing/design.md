@@ -189,6 +189,14 @@ MCP/Skill catalog 聚合是 Registry/activation 内部语义资源，当前没�
 
 普通列目录/搜索/读取只需要可解析URI和内容，不要求子文件都持久注册ResourceIdentity/快照；显式追踪与历史恢复仍走来源owner。文件hash按需要计算，分页不依赖逐文件快照。本owner登记session/{session_id}/attachments/{attachment_id}和session/{session_id}/tool-results/{result_id}单文件模板；该处各段均是业务身份，不用文件编码放宽。attachments现有二进制接口仍归原owner。跨端普通文件读取/patch在目标端执行，联邦寻址不扩权，执行错误/部分或未知效果归文件操作合同。
 
+### Fork容器模板与资源目标检查
+
+统一owner登记session集合根/Session/Thread三种domain_object模板；使用既有session kind，不新增thread或workspace URI kind，不将领域对象转成文件树。source Thread精确归属，target用容器URI和创建意图；view/revision/anchor仍是兄弟字段。登记后必须同批迁构造器、parser、scope路由和消费者，当前只支持非空Session尾段的实现不构成对新模板已交付的证据。
+
+统一入口复用解析和domain owner路由，得到目标相关的操作决定，而非新建通用资源管理层。ResourceIdentity保持不透明；现有retention_scope、关联、revision/hash/length、availability和owner operations用于判断。需要retain/export/import能力时在对应owner合同登记，不把read/activate/observe自动升级为复制授权。kind固定的不可变性质由owner提供，缺少真实能力必须明确失败，不通过自由metadata键或新增fork布尔字段决策。
+
+同工作区附件正文已经去重共享，优化重点是避免多余identity remap/复制清单及保留正确目标生命周期。源/目标实际存储域由owner核实，URI authority不同不必然代表存储不同；hash相同也不证明可访问。目标决定和回执复用现有fork journal，通用入口不保存第二份权威resource状态。
+
 ## Risks / Trade-offs
 
 - **[契约 v1 曾下发且与真实 grammar 不一致]** → 本 change 全部产物已切到 v2 并按权威表定稿，proposal/design 显式记录变更与理由。

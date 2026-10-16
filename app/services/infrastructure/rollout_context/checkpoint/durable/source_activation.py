@@ -14,7 +14,6 @@ from app.services.infrastructure.mcp.catalog_activation import (
     MCP_GUIDANCE_SOURCE_ID,
     MCP_TOOL_CATALOG_RESOURCE_ID,
 )
-from app.services.infrastructure.rollout_context.assembly.validation import json_text
 from app.services.infrastructure.rollout_context.checkpoint.durable.context_source_control import (
     _SELECT_COLUMNS,
     _TABLE_NAME,
@@ -139,6 +138,8 @@ class ContextSourceActivationMixin:
         self,
         connection: sqlite3.Connection,
         snapshot: ContextAssemblySnapshot,
+        *,
+        previous: ContextAssemblySnapshot | None,
     ) -> None:
         """由唯一 assembly_sealed 事务确认 source-applied 与 prefix predecessor。
 
@@ -149,18 +150,6 @@ class ContextSourceActivationMixin:
         binding = snapshot.seal_binding
         if binding is None:
             return
-        previous_row = connection.execute(
-            "SELECT snapshot_json FROM context_assemblies "
-            "WHERE session_id = ? AND thread_id = ? "
-            "AND status IN ('sealed','terminal') AND assembly_id <> ? "
-            "ORDER BY rowid DESC LIMIT 1",
-            (snapshot.session_id, snapshot.thread_id, snapshot.assembly_id),
-        ).fetchone()
-        previous = None
-        if previous_row is not None:
-            previous = ContextAssemblySnapshot.from_dict(
-                json_text(previous_row[0], field="snapshot_json")
-            )
         previous_id = previous.assembly_id if previous is not None else None
         if binding.previous_assembly_id != previous_id:
             raise RuntimeError(
@@ -170,7 +159,11 @@ class ContextSourceActivationMixin:
             raise ItemSchemaError(
                 "context-seal-binding-required: 既有 assembly 缺少 applied epoch binding"
             )
-        if previous is not None:
+        # imported predecessor 仍参与同一事务的历史 frontier CAS，但不冒充
+        # 目标已 applied 的 epoch；目标首次请求必须独立从 ordinal 1 开始。
+        if previous is not None and (previous.session_id, previous.thread_id) == (
+            snapshot.session_id, snapshot.thread_id,
+        ):
             previous_binding = previous.seal_binding
             previous_epoch = previous_binding.prefix.state.epoch
             current_epoch = binding.prefix.state.epoch
@@ -185,7 +178,7 @@ class ContextSourceActivationMixin:
                     raise ItemSchemaError("context-seal-epoch-conflict: 同 epoch applied binding 被重写")
             elif current_epoch.ordinal != previous_epoch.ordinal + 1:
                 raise ItemSchemaError("context-seal-epoch-conflict: rebuild ordinal 必须连续")
-        elif binding.prefix.state.epoch.ordinal != 1:
+        elif binding.prefix.state.epoch.ordinal != 1 or binding.prefix.parent is not None:
             raise ItemSchemaError("context-seal-epoch-conflict: 首个 assembly 必须是 initial epoch")
         _validate_activation_guidance(connection, snapshot, previous)
         for facet in TEAM_FACETS:

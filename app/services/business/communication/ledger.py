@@ -34,6 +34,10 @@ from app.services.business.communication.admission import (
 
 __all__ = ["CommunicationLedgerService", "bare_sha256"]
 
+SessionLeaseSettlement = Callable[
+    [str, SessionControlStore, SessionOperationLease], AbstractAsyncContextManager[bool]
+]
+
 
 def bare_sha256(preimage: str) -> str:
     """typed 合同的 sha256: 前缀形式转为数据库内的裸 hex 形态。"""
@@ -51,10 +55,12 @@ class CommunicationLedgerService:
         session_id: str,
         store: SessionControlStore,
         write_admission: Callable[[str], AbstractAsyncContextManager[None]],
+        lease_settlement: SessionLeaseSettlement,
     ) -> None:
         self._session_id = session_id
         self._store = store
         self._write_admission = write_admission
+        self._lease_settlement = lease_settlement
 
     async def admit_outgoing_send(
         self,
@@ -69,7 +75,9 @@ class CommunicationLedgerService:
         communication_id 不同 payload/target 在 store 层 fail closed。
         """
         preimage = resolve_request_preimage(request)
-        async with self._write_admission(self._session_id):
+        prior_lease = self._store.find_lease_by_operation(f"communication-source|{request.send_operation_id}")
+        scope = self._write_admission(self._session_id) if prior_lease is None else self.settlement(prior_lease)
+        async with scope:
             lease = self._store.create_or_get_lease(
                 operation_kind="communication_source",
                 operation_identity=(
@@ -164,16 +172,13 @@ class CommunicationLedgerService:
         elif lease.state not in {"settling", "completed"}:
             raise RuntimeError("通信 lifecycle lease 已失效")
 
-    def assert_lease_current(self, lease: SessionOperationLease) -> SessionOperationLease:
-        """提交主体前校验原 token，拒绝已被删除或恢复接管的 callback。"""
-        current = self._store.get_lease(lease.lease_id)
-        if current.fencing_token != lease.fencing_token or current.state not in {"settling", "completed"}:
-            raise RuntimeError("通信 callback 的原 lifecycle lease 已失效")
-        return current
+    def settlement(self, lease: SessionOperationLease) -> AbstractAsyncContextManager[bool]:
+        """后续短写只结算原租约；不重新准入 communication 或 Job。"""
+        return self._lease_settlement(self._session_id, self._store, lease)
 
     def complete_lease(self, lease: SessionOperationLease) -> None:
         """主体已提交后以原 token 终结；调用方仍持有本端短 gate。"""
-        current = self.assert_lease_current(lease)
+        current = self._store.assert_lease_current(lease)
         if current.state == "completed":
             return
         self._store.settle_lease(lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token, outcome="completed")

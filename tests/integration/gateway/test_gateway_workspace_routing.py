@@ -162,12 +162,13 @@ async def _write_session_context_checkpoint(
     owner = saver.forks.source.resolve_main_thread_owner(session_id)
     config = build_checkpoint_config(owner.thread_id)
     turn_id = f"context-turn:{checkpoint_id}"
+    job_id = f"context-job:{checkpoint_id}"
     execution_id = f"context-execution:{checkpoint_id}"
     model_call_id = f"context-model-call:{checkpoint_id}"
     user = HumanMessage(
         id=f"context-user:{checkpoint_id}",
         content=f"请记住 {marker}",
-        response_metadata={"message_metadata": {"turn_id": turn_id, "job_id": turn_id}},
+        response_metadata={"message_metadata": {"turn_id": turn_id, "job_id": job_id}},
     )
     messages = [
         user,
@@ -211,7 +212,7 @@ async def _write_session_context_checkpoint(
             thread_id=owner.thread_id,
             accepted_ingress_id=user.id,
             acceptance_idempotency_key=f"context-acceptance:{checkpoint_id}",
-            job_id=turn_id,
+            job_id=job_id,
             admission_idempotency_key=f"context-admission:{checkpoint_id}",
             turn_id=turn_id,
             root_item_id=f"item-{user.id}",
@@ -289,6 +290,7 @@ def local_context_session_service(
         workspace_id=workspace_id,
         path_resolver=catalog.resolver,
         creation_service=catalog.creation_service,
+        initialize_thread_storage=RolloutCheckpointSaver(sessions_root).initialize_thread_storage,
     )
 
 
@@ -572,6 +574,7 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
     )
 
     gateway_scope_token = None
+    context_transport: GatewaySessionContextClient | None = None
     try:
         async with httpx.AsyncClient(
             base_url=gateway_url,
@@ -616,12 +619,11 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
             marker=marker,
         )
 
-        context_client = GatewayContextQueryService(
-            transport=GatewaySessionContextClient(
-                gateway_url=gateway_url,
-                local_token_supplier=gateway_local_token_supplier,
-            )
+        context_transport = GatewaySessionContextClient(
+            gateway_url=gateway_url,
+            local_token_supplier=gateway_local_token_supplier,
         )
+        context_client = GatewayContextQueryService(transport=context_transport)
         context = SimpleNamespace(
             session_context_query_service=_UnexpectedLocalQueryService(
                 local_context_session_service.workspace_id
@@ -790,6 +792,8 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
         )
         assert partial_gateway_search["partial_errors"]
     finally:
+        if context_transport is not None:
+            await context_transport.aclose()
         if gateway_scope_token is not None:
             reset_current_gateway_id(gateway_scope_token)
         close_gateway_process(gateway)

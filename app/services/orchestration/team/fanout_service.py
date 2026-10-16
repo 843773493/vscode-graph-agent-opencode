@@ -12,6 +12,7 @@ from app.abstractions.internal_message import PreparedInternalMessage
 from app.core.exceptions import NotFoundError
 from app.core.key_lock_pool import KeyLockPool
 from app.core.lifecycle import LifetimeScope
+from app.core.phase_observer import observe_phase, observe_phase_sync
 from app.core.session_control_store.collaboration_fanout import (
     CollaborationFanoutRecord,
 )
@@ -81,6 +82,10 @@ class TeamFanoutService:
                 self._publish(pair, snapshots)
         if self._loop is not None:
             self._loop.call_soon_threadsafe(self._changed.set)
+        observe_phase_sync(record.lease_id, "team.mutation.committed", details={
+            "session_id": record.session_id, "ledger_revision": record.ledger_revision,
+            "event_hash": record.event_hash,
+        })
 
     def _publish(self, pair: tuple[str, str], snapshots: tuple[ResourceSnapshot, ...]) -> None:
         self._published[pair] = snapshots
@@ -136,6 +141,11 @@ class TeamFanoutService:
             for recipient in record.recipients:
                 if recipient.state != "pending":
                     continue
+                await observe_phase(record.lease_id, "team.fanout.before_recipient/" + recipient.thread_id, details={
+                    "session_id": session_id, "thread_id": recipient.thread_id,
+                    "ledger_revision": record.ledger_revision,
+                    "captured_lifecycle_generation": lease.captured_lifecycle_generation,
+                })
                 try:
                     async with self._sessions.session_write_admission(session_id):
                         if control.get_fence() != ("active", lease.captured_lifecycle_generation):
@@ -264,25 +274,27 @@ class TeamFanoutService:
             if record.wakeup_json is not None:
                 await self.dispatch(session_id, record.ledger_revision)
 
+    @property
+    def deletion_holder(self) -> OperationHolderGate:
+        """同一原 holder 交给删除 owner，在取得 Session gate 前等待并持有。"""
+        return self._holder
+
     async def drain_session(self, session_id: str) -> None:
-        """调用方已持删除 gate；只终结冻结目标，不向 ContextStore 晚到 append。"""
-        async with self._holder.lock_for(session_id, wait=False) as holder:
-            if not holder.acquired:
-                raise RuntimeError("collaboration holder 仍在完成原操作，删除须等待其明确 settle 后重入")
-            control = self._factory.for_owner_session(session_id).control_store
-            for record in control.list_collaboration_fanouts(pending_only=True):
-                lease = control.get_lease(record.lease_id)
-                lease = control.takeover_lease(lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token)
-                for item in record.recipients:
-                    if item.state == "pending":
-                        control.finish_collaboration_delivery(record.ledger_revision, item.thread_id,
-                                                              fencing_token=lease.fencing_token, outcome="fence_closed")
-                control.finish_collaboration_fanout(record.ledger_revision, fencing_token=lease.fencing_token, cancelled=True)
-            with self._publication_lock:
-                for pair in tuple(self._desired):
-                    if pair[0] == session_id:
-                        self._desired.pop(pair)
-                        self._published.pop(pair, None)
+        """调用方已按 holder→Session gate 顺序持锁，只终结原冻结目标。"""
+        control = self._factory.for_owner_session(session_id).control_store
+        for record in control.list_collaboration_fanouts(pending_only=True):
+            lease = control.get_lease(record.lease_id)
+            lease = control.takeover_lease(lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token)
+            for item in record.recipients:
+                if item.state == "pending":
+                    control.finish_collaboration_delivery(record.ledger_revision, item.thread_id,
+                                                          fencing_token=lease.fencing_token, outcome="fence_closed")
+            control.finish_collaboration_fanout(record.ledger_revision, fencing_token=lease.fencing_token, cancelled=True)
+        with self._publication_lock:
+            for pair in tuple(self._desired):
+                if pair[0] == session_id:
+                    self._desired.pop(pair)
+                    self._published.pop(pair, None)
 
     async def stop(self) -> None:
         worker, self._worker = self._worker, None

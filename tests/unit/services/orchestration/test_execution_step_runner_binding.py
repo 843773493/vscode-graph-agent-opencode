@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from langchain_core.messages import AIMessageChunk
 
+from app.abstractions.turn_terminal_status import ToolResultCompletion
 from app.core.job_event_bus import EventType
 from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
@@ -47,18 +48,21 @@ def writerless_runtime() -> tuple[
     AsyncMock,
     AsyncMock,
     AsyncMock,
+    AsyncMock,
 ]:
     canonical_sink = AsyncMock()
+    tool_result_sink = AsyncMock()
     registrar = AsyncMock(return_value="execution_internal")
     outcome_sink = AsyncMock()
     runtime = MessageStreamRuntime(
         None,
         canonical_item_sink=canonical_sink,
+        tool_result_sink=tool_result_sink,
         canonical_turn_id=None,
         model_call_registrar=registrar,
         model_call_outcome_sink=outcome_sink,
     )
-    return runtime, canonical_sink, registrar, outcome_sink
+    return runtime, canonical_sink, tool_result_sink, registrar, outcome_sink
 
 
 @pytest.mark.asyncio
@@ -120,9 +124,10 @@ async def test_writerless_internal_failure_converges_canonical_model_and_executi
         AsyncMock,
         AsyncMock,
         AsyncMock,
+        AsyncMock,
     ],
 ) -> None:
-    runtime, canonical_sink, _registrar, outcome_sink = writerless_runtime
+    runtime, canonical_sink, _tool_result_sink, _registrar, outcome_sink = writerless_runtime
     await runtime.start_model("model_internal_failure", "provider")
     await runtime.accept_message_chunk(
         AIMessageChunk(content="partial internal output")
@@ -185,9 +190,10 @@ async def test_writerless_internal_user_cancel_converges_tool_result_and_executi
         AsyncMock,
         AsyncMock,
         AsyncMock,
+        AsyncMock,
     ],
 ) -> None:
-    runtime, canonical_sink, _registrar, outcome_sink = writerless_runtime
+    runtime, canonical_sink, tool_result_sink, _registrar, outcome_sink = writerless_runtime
     await runtime.start_model("model_internal_cancel", "provider")
     await runtime.accept_message_chunk(
         AIMessageChunk(
@@ -202,7 +208,7 @@ async def test_writerless_internal_user_cancel_converges_tool_result_and_executi
             ],
         )
     )
-    tool_call_id = runtime.claim_tool_call_id("read_file", {})
+    tool_call_id = runtime.claim_tool_call_id("model_internal_cancel", "provider_call")
     assert tool_call_id is not None
     await runtime.start_tool(
         tool_execution_id="tool_run_internal",
@@ -238,15 +244,17 @@ async def test_writerless_internal_user_cancel_converges_tool_result_and_executi
     tool_call_items = [
         item for item in persisted_items if item.semantic_kind == "tool_call"
     ]
-    tool_result_items = [
-        item for item in persisted_items if item.semantic_kind == "tool_result"
-    ]
     assert len(tool_call_items) == 1
-    assert len(tool_result_items) == 1
     assert tool_call_items[0].turn_id is None
-    assert tool_result_items[0].turn_id is None
-    assert tool_result_items[0].payload["tool_attempt_id"] == "tool_run_internal"
-    assert tool_result_items[0].payload["tool_outcome"] == "unknown"
+    assert runtime._canonical_turn_id is None
+    tool_result_sink.assert_awaited_once()
+    completion: ToolResultCompletion = tool_result_sink.await_args.args[0]
+    assert completion.model_call_id == "model_internal_cancel"
+    assert completion.tool_call_id == tool_call_id
+    assert completion.tool_invocation_id == "tool-invocation:model_internal_cancel:provider_call"
+    assert completion.tool_attempt_id == "tool_run_internal"
+    assert completion.tool_name == "read_file"
+    assert completion.tool_outcome == "unknown"
     outcome_sink.assert_awaited_with("model_internal_cancel", "cancelled")
     checkpointer.mark_execution_lost.assert_called_once_with(
         "session",

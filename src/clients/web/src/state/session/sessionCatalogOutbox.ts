@@ -2,6 +2,7 @@ import {
   NAVIGATION_MUTATION_TERMINAL_STATES,
   type NavigationMutationKind,
   type NavigationMutationState,
+  type NavigationDeleteSettlement,
   type SessionCatalogOperationIntent,
   type SessionCatalogOperationReceipt,
 } from "../../api/session/sessionCatalogOperations";
@@ -80,6 +81,8 @@ export interface CatalogOutboxOperation {
   committed_catalog_revision: number | null;
   queue_seq: number | null;
   receipt_revision: number | null;
+  /** 逻辑 committed 不代表删除排空完成；此回执镜像必须保留到后端确认结算。 */
+  settlement: NavigationDeleteSettlement | null;
   error_code: string | null;
   error_detail: string | null;
 }
@@ -118,11 +121,11 @@ export function createCatalogOutbox(partition: CatalogOutboxPartition): CatalogO
   return { partition, operations: [] };
 }
 
-/** 根据同一 outbox 的父创建记录保留依赖；失败父项也不得变成根目录。 */
+/** 原创建引用与预留 ID 都解析到同一父 operation；只有 committed 才能直接用父 ID。 */
 export function catalogOutboxParentCreation(outbox: CatalogOutbox, parentNodeId: string | null) {
   if (!parentNodeId) return null;
   const operation = outbox.operations.find((item) => item.kind === "create_folder"
-    && (item.client_ref === parentNodeId || item.created_node_id === parentNodeId));
+    && (item.client_operation_id === parentNodeId || item.created_node_id === parentNodeId));
   if (!operation) return null;
   if (operation.state === "committed") {
     if (!operation.created_node_id) throw new Error("已提交父文件夹缺少 canonical ID");
@@ -156,7 +159,8 @@ export function unsettledCatalogOutboxOperations(
   outbox: CatalogOutbox,
 ): CatalogOutboxOperation[] {
   return orderedCatalogOutboxOperations(outbox).filter(
-    (operation) => !catalogOutboxOperationIsTerminal(operation),
+    (operation) => !catalogOutboxOperationIsTerminal(operation)
+      || operation.settlement === "pending" || operation.settlement === "repair_required",
   );
 }
 
@@ -258,6 +262,7 @@ export function addCatalogOutboxIntent(
     committed_catalog_revision: null,
     queue_seq: null,
     receipt_revision: null,
+    settlement: null,
     error_code: null,
     error_detail: null,
   };
@@ -349,6 +354,8 @@ export function normalizeRestoredCatalogOutbox(outbox: CatalogOutbox): CatalogOu
     operations: outbox.operations.map((operation) => ({
       ...operation,
       committed_catalog_revision: operation.committed_catalog_revision ?? null,
+      // 首次 intent 落盘不含后端结算事实；恢复后按原 ID 查询 receipt。
+      settlement: operation.settlement ?? null,
       ...(operation.state === "pending_local" && operation.client_sequence !== null
         ? { state: "persisted" as const }
         : {}),
@@ -475,9 +482,8 @@ export function catalogOutboxBatchToIntents(
     } else if (operation.parent_node_id !== null) {
       intent.parent_node_id = operation.parent_node_id;
     }
-    if (operation.kind === "move_node" && operation.parent_node_id === null
-      && operation.created_by_operation_id === null) {
-      // 移到根必须显式给出 parent_node_id=null，后端据此区分「省略」与「移到根」。
+    if (operation.kind === "move_node" && operation.parent_node_id === null) {
+      // move 必须显式携带父字段；非空创建引用由后端解析，不把省略父字段当作依赖。
       intent.parent_node_id = null;
     }
     if (operation.name !== null) intent.name = operation.name;
@@ -496,8 +502,8 @@ export function catalogOutboxBatchToIntents(
  *   `queued|running` 就说明它确实已 durable 接受，`unknown` 由此得到确认；
  * - 其余非终态 receipt 只刷新 `server_state` 等事实，**绝不回退**本地已推进的状态。
  *
- * `created_node_id` 是 client_ref 解析成 canonical ID 的唯一依据，收到后必须清空
- * client_ref，避免投影里同时出现临时节点与真实节点。
+ * `created_node_id` 固定唯一节点键，但预留 ID 不表示 committed；创建依赖仍由原
+ * operation 身份解析，是否已有权威节点由 confirmed 镜像决定。
  */
 export function applyCatalogOutboxReceipts(
   outbox: CatalogOutbox,
@@ -512,23 +518,38 @@ export function applyCatalogOutboxReceipts(
       throw new Error(`收到未登记 operation 的 receipt: ${receipt.operation_id}`);
     }
     const existing = next.operations[index];
-    if (catalogOutboxOperationIsTerminal(existing)) continue;
+    const merged = applyCatalogOutboxOperationReceipt(existing, receipt);
+    if (merged === existing) continue;
     const operations = [...next.operations];
-    operations[index] = {
-      ...existing,
-      state: nextCatalogOutboxState(existing.state, receipt.state),
-      server_state: receipt.state,
-      queue_seq: receipt.queue_seq,
-      receipt_revision: receipt.receipt_revision,
-      created_node_id: receipt.created_node_id ?? existing.created_node_id,
-      client_ref: receipt.created_node_id ? null : existing.client_ref,
-      committed_catalog_revision: receipt.committed_catalog_revision,
-      error_code: receipt.error_code,
-      error_detail: receipt.error_detail,
-    };
+    operations[index] = merged;
     next = { ...next, operations };
   }
   return next;
+}
+
+/** 内存与 IndexedDB 事务共用同一回执推进规则，迟到版本不能覆盖较新事实。 */
+export function applyCatalogOutboxOperationReceipt(
+  existing: CatalogOutboxOperation,
+  receipt: SessionCatalogOperationReceipt,
+): CatalogOutboxOperation {
+  if (existing.receipt_revision !== null
+    && receipt.receipt_revision <= existing.receipt_revision) return existing;
+  if (catalogOutboxOperationIsTerminal(existing) && existing.state !== receipt.state) {
+    throw new Error(`会话目录终态回执冲突: ${receipt.operation_id}, ${existing.state} -> ${receipt.state}`);
+  }
+  return {
+    ...existing,
+    state: nextCatalogOutboxState(existing.state, receipt.state),
+    server_state: receipt.state,
+    queue_seq: receipt.queue_seq,
+    receipt_revision: receipt.receipt_revision,
+    settlement: receipt.settlement,
+    created_node_id: receipt.created_node_id ?? existing.created_node_id,
+    client_ref: receipt.created_node_id ? null : existing.client_ref,
+    committed_catalog_revision: receipt.committed_catalog_revision,
+    error_code: receipt.error_code,
+    error_detail: receipt.error_detail,
+  };
 }
 
 /** 单步状态推进：终态优先，其次把已确认接受的本地状态升级为 accepted。 */
@@ -620,6 +641,7 @@ export function pruneReconciledCatalogOutbox(
         return true;
       }
       if (!catalogOutboxOperationIsTerminal(operation)) return true;
+      if (operation.settlement === "pending" || operation.settlement === "repair_required") return true;
       // committed Folder 是后继跨批依赖的 durable 前置；即使 catalog revision 已追上，
       // 也要保留到所有引用者进入终态，否则 prune 会删掉 planner 唯一可见的 acceptance。
       const hasUnsettledDependent = outbox.operations.some((dependent) =>

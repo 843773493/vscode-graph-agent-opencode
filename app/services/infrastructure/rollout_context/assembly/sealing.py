@@ -79,15 +79,6 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
             raise TypeError("assembly.checkpoint_ns 必须是字符串")
         if not snapshot.sealed:
             raise ValueError("ContextAssemblySnapshot 必须先 seal 再持久化")
-        # hash 校验必须发生在 assembly_sealed commit 之前。只依赖恢复时
-        # 再校验会让一个伪造的 plan/request hash 短暂成为可 dispatch 的
-        # snapshot，并且把错误推迟到重启路径。
-        try:
-            snapshot.validate_hashes()
-        except ItemSchemaError as error:
-            raise ValueError(
-                f"context assembly hash 校验失败，拒绝 seal: {snapshot.assembly_id}: {error}"
-            ) from error
         with self._storage._lock(thread_id, checkpoint_ns, session_id=session_id):
             self._storage.initialize(
                 session_id, checkpoint_ns, thread_id=thread_id
@@ -99,13 +90,18 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                 # 同一个写事务覆盖注册核验、快照/selection 和最终 plan 绑定。
                 # 未注册的快照不能绕过 draft 生命周期进入 dispatch。
                 connection.execute("BEGIN IMMEDIATE")
-                registration = preflight_seal(
-                    connection,
-                    snapshot,
-                    seal_idempotency_key=seal_idempotency_key,
-                    seal_input_hash=seal_input_hash,
-                    detail_key=detail_key,
-                )
+                # 哈希准入、当前 draft 和 CAS 版本在唯一写事务内核验一次。
+                try:
+                    seal = preflight_seal(
+                        connection, snapshot,
+                        seal_idempotency_key=seal_idempotency_key,
+                        seal_input_hash=seal_input_hash, detail_key=detail_key,
+                    )
+                except ItemSchemaError as error:
+                    raise ValueError(
+                        f"context assembly hash 校验失败，拒绝 seal: {snapshot.assembly_id}: {error}"
+                    ) from error
+                registration = seal.registered
                 existing = connection.execute(
                     "SELECT plan_hash, request_hash, status, detail_ref, snapshot_json FROM context_assemblies WHERE session_id = ? AND thread_id = ? AND assembly_id = ?",
                     (session_id, thread_id, snapshot.assembly_id),
@@ -116,7 +112,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                     # 损坏快照必须暴露解析错误，不能伪装成普通幂等键冲突。
                     existing_snapshot_matches = canonical_json_bytes(
                         json_text(existing[4], field="snapshot_json")
-                    ) == canonical_json_bytes(snapshot.to_dict())
+                    ) == seal.snapshot_json.encode("utf-8")
                     existing_plan_hash = strict_text(
                         existing[0], field="context_assemblies.plan_hash"
                     )
@@ -236,7 +232,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                         snapshot.request_hash,
                         snapshot.history_view_revision,
                         snapshot.source_overlay_epoch,
-                        self._assembly_json(snapshot),
+                        seal.snapshot_json,
                         snapshot.model_call_id,
                         detail_key,
                         timestamp,
@@ -247,20 +243,21 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                 self._write_context_assembly_manifest(
                     connection, snapshot, checkpoint_ns=checkpoint_ns,
                 )
-                registration = bind_sealed_registration(
-                    connection,
-                    snapshot,
-                    seal_idempotency_key=seal_idempotency_key,
-                    seal_input_hash=seal_input_hash,
-                    detail_key=detail_key,
-                )
+                registration = bind_sealed_registration(connection, seal)
                 if activation_binding is not None:
                     # activation 行与 assembly 行必须原子提交：任何一侧失败都在
                     # 同一回滚边界内，绝不留下「assembly 已 dispatch 但无
                     # provenance」或反之的半发布状态。
                     activation_binding(connection)
-                self._context.checkpoints._apply_sealed_context_sources(connection, snapshot)
-                self._context.checkpoints._consume_context_epoch_transition(connection, snapshot, checkpoint_ns)
+                if snapshot.selection_policy != "summary_candidate":
+                    self._context.checkpoints._apply_sealed_context_sources(
+                        connection, snapshot,
+                        previous=self._latest_context_assembly_connection(
+                            connection, session_id, thread_id, checkpoint_ns=checkpoint_ns,
+                            excluding_assembly_id=snapshot.assembly_id,
+                        ),
+                    )
+                    self._context.checkpoints._consume_context_epoch_transition(connection, snapshot, checkpoint_ns)
                 self._validate_context_assembly_manifest(
                     connection, snapshot, registration=registration,
                     header_detail_ref=detail_key, checkpoint_ns=checkpoint_ns,

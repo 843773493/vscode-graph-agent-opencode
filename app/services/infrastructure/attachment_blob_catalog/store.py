@@ -40,6 +40,10 @@ from PIL import Image, ImageOps
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_control_store import SessionControlStore
+from app.core.session_control_store.copy_attachment_settlement import (
+    read_copy_attachment_settlements,
+    transition_copy_attachment_settlement,
+)
 from app.core.session_lifecycle_gate import (
     SessionDeletionPendingError,
     SessionLifecycleGate,
@@ -55,6 +59,9 @@ from app.services.infrastructure.attachment_blob_catalog.catalog import (
     AttachmentBlobCatalog,
     AttachmentOwnerRef,
     derive_attachment_id,
+)
+from app.services.infrastructure.attachment_blob_catalog.fork_store import (
+    ForkAttachmentStoreMixin,
 )
 from app.services.infrastructure.attachment_blob_catalog.locator import (
     ingest_staging_relative_locator,
@@ -109,8 +116,10 @@ def parse_logical_file_id(session_id: str, file_id: str) -> str:
     return attachment_id
 
 
-class AttachmentBlobStore:
+class AttachmentBlobStore(ForkAttachmentStoreMixin):
     """workspace 级内容寻址附件 store（唯一权威是 catalog.sqlite）。"""
+
+    _parse_logical_file_id = staticmethod(parse_logical_file_id)
 
     def __init__(
         self,
@@ -119,6 +128,7 @@ class AttachmentBlobStore:
         path_resolver: SessionCatalogPathResolver | None = None,
     ) -> None:
         self._workspace_root = workspace_root.expanduser().resolve()
+        self._verified_blob_signatures: dict[tuple[str, str, str, int], tuple[int, int, int, int, int]] = {}
         self._sessions_root = self._workspace_root / ".boxteam" / "sessions"
         self._attachments_root = (
             self._workspace_root / ".boxteam" / ATTACHMENT_ROOT_DIRECTORY_NAME
@@ -143,11 +153,12 @@ class AttachmentBlobStore:
         self,
         session_id: str,
         attachments: Sequence[AttachmentRef],
+        *,
+        thread_id: str,
     ) -> list[AttachmentRef]:
         """持久化带 `data_url` 的内联附件，返回逻辑引用。
 
-        owner thread 取 catalog 冻结的 main thread（Session 聊天即 main
-        thread）；这不是把 session_id 冒充 thread，而是按权威 catalog 解析。
+        调用方传入本次消息所属的权威 thread；ingest、pin、发布和逻辑引用共用它。
         """
         if not attachments:
             return []
@@ -156,11 +167,11 @@ class AttachmentBlobStore:
             if not attachment.data_url:
                 persisted.append(attachment)
                 continue
-            persisted.append(await self._persist_one(session_id, attachment))
+            persisted.append(await self._persist_one(session_id, thread_id, attachment))
         return persisted
 
     async def _persist_one(
-        self, session_id: str, attachment: AttachmentRef
+        self, session_id: str, thread_id: str, attachment: AttachmentRef
     ) -> AttachmentRef:
         content_type, data = _parse_data_url(attachment.data_url or "")
         declared_type = attachment.content_type or content_type
@@ -174,7 +185,6 @@ class AttachmentBlobStore:
                 f"附件超过 {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MiB 限制"
             )
         identity = compute_blob_identity(data)
-        thread_id = self._path_resolver.main_thread_id(session_id)
         idempotency_key = "attkey_" + _sha256_hex(
             f"{session_id}|{thread_id}|{identity.digest}"
         )[:32]
@@ -207,7 +217,7 @@ class AttachmentBlobStore:
             )
             if record.state == "published":
                 return self._attachment_ref_for_record(
-                    session_id, record.blob_id, attachment, content_type
+                    session_id, thread_id, record.blob_id, attachment, content_type
                 )
             if record.state == "aborted":
                 raise RuntimeError(
@@ -254,7 +264,7 @@ class AttachmentBlobStore:
                 self._settle_pin_quietly(control, pin, outcome="failed")
                 raise
             return self._attachment_ref_for_record(
-                session_id, identity.blob_id, attachment, content_type
+                session_id, thread_id, identity.blob_id, attachment, content_type
             )
         finally:
             control.close()
@@ -340,9 +350,9 @@ class AttachmentBlobStore:
     # 读取
     # ------------------------------------------------------------------
 
-    def read(self, session_id: str, file_id: str) -> StoredAttachmentContent:
+    def read(self, session_id: str, file_id: str, *, owner_thread_id: str | None = None) -> StoredAttachmentContent:
         """按逻辑引用读取正文；逐字节复验 digest/length。"""
-        ref, blob = self._resolve_published(session_id, file_id)
+        ref, blob = self._resolve_published(session_id, file_id, owner_thread_id=owner_thread_id)
         path = self._verified_blob_path(blob.blob_id, blob.relative_locator)
         data = path.read_bytes()
         _verify_content(data, blob.digest, blob.length, blob.blob_id)
@@ -395,17 +405,32 @@ class AttachmentBlobStore:
         self._resolve_published(session_id, file_id)
         return file_id
 
-    def _resolve_published(self, session_id: str, file_id: str):
+    def _resolve_published(self, session_id: str, file_id: str, *, owner_thread_id: str | None = None):
         """按逻辑引用解析 owner reference 与 blob；越权/已 tombstone 一律失败。"""
+        if owner_thread_id is not None:
+            snapshot = self._catalog.fork_attachment_snapshot_for_alias(
+                target_session_id=session_id, target_thread_id=owner_thread_id, source_file_id=file_id,
+            )
+            if snapshot is not None:
+                self._assert_session_active(session_id, owner_thread_id)
+                projected = self.project_attachment(session_id, owner_thread_id, file_id)
+                if projected["availability"] != "available":
+                    raise FileNotFoundError(f"当前 Thread 的冻结附件引用不可用: {file_id}")
+                file_id, owner_thread_id = projected["file_id"], snapshot.target_owner_thread_id
         attachment_id = parse_logical_file_id(session_id, file_id)
         ref = self._catalog.get_owner_ref(attachment_id)
         if ref is None:
             raise FileNotFoundError(f"会话附件不存在: {file_id}")
         if ref.owner_session_id != session_id:
             raise ValueError("附件逻辑定位符不属于指定会话")
+        if owner_thread_id is not None and ref.owner_thread_id != owner_thread_id:
+            raise PermissionError("附件逻辑定位符不属于当前 SessionThread")
         if ref.state != "active":
             # 已释放（owner session/thread 删除）的 reference 只表示附件不再可用。
             raise FileNotFoundError(f"会话附件已释放: {file_id}")
+        if self._catalog.get_reusable_attachment_owner(attachment_id) is None:
+            raise FileNotFoundError(f"附件引用尚未完成发布: {file_id}")
+        self._assert_session_active(session_id, ref.owner_thread_id)
         blob = self._catalog.get_blob(ref.blob_id)
         if blob is None or blob.availability != "available":
             raise FileNotFoundError(f"附件正文不可用: {file_id}")
@@ -423,6 +448,19 @@ class AttachmentBlobStore:
     # ------------------------------------------------------------------
     # 恢复与 GC
     # ------------------------------------------------------------------
+
+    def _verify_blob_content(self, path: Path, digest: str, length: int, blob_id: str) -> None:
+        """冷读按固定缓冲核正文；仅复用同一文件未变化的完整校验结果。"""
+        metadata = path.stat()
+        signature = (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
+        key = (str(path), blob_id, digest, length)
+        if self._verified_blob_signatures.get(key) == signature:
+            return
+        _verify_content(path, digest, length, blob_id)
+        checked = path.stat()
+        if (checked.st_dev, checked.st_ino, checked.st_size, checked.st_mtime_ns, checked.st_ctime_ns) != signature:
+            raise RuntimeError(f"附件正文在完整性校验期间发生变化: blob_id={blob_id}, path={path}")
+        self._verified_blob_signatures[key] = signature
 
     def recover_session(self, session_id: str) -> tuple[str, ...]:
         """按持久 record 定点收敛某 session 的非终态 ingest 与 claim（不扫盘）。"""
@@ -450,11 +488,36 @@ class AttachmentBlobStore:
 
     def release_session_references(self, session_id: str) -> tuple[str, ...]:
         """删除 drain：释放该 session 的 owner reference 并收敛其 ingest（定点）。"""
+        self._release_copy_attachment_claims(session_id)
         released = self._catalog.release_owner_refs_for_session(
             owner_session_id=session_id, reason="owner session 删除"
         )
         actions = self.recover_session(session_id)
         return tuple(ref.attachment_id for ref in released) + actions
+
+    def release_thread_references(self, session_id: str, thread_id: str) -> None:
+        """Thread 删除持有目标 Session gate 时释放精确引用，不释放复用的 main 引用。"""
+        self._release_copy_attachment_claims(session_id, thread_id=thread_id)
+        self._catalog.release_owner_refs_for_session(
+            owner_session_id=session_id, owner_thread_id=thread_id, reason="owner thread 删除",
+        )
+
+    def _release_copy_attachment_claims(self, session_id: str, *, thread_id: str | None = None) -> None:
+        control = self._open_control_store(session_id)
+        try:
+            records = tuple(record for record in read_copy_attachment_settlements(control)
+                            if thread_id is None or record.target_thread_id == thread_id)
+            operations = {record.copy_operation_id: record.claim_ids for record in records if record.state != "aborted"}
+            for operation in self._catalog.fork_attachment_operations_for_target(session_id, target_thread_id=thread_id):
+                operations.setdefault(operation, self._catalog.fork_attachment_claim_ids(operation))
+            for operation, claim_ids in operations.items():
+                if claim_ids:
+                    self._catalog.settle_fork_attachment_claims(copy_operation_id=operation, claim_ids=claim_ids, state="target_deleted")
+            for record in records:
+                if record.state not in {"aborted", "target_deleted"}:
+                    transition_copy_attachment_settlement(control, record, state="target_deleted")
+        finally:
+            control.close()
 
     def collect_garbage(self, *, retention: timedelta) -> tuple[str, ...]:
         """引用感知 GC：零引用 + retention 后先提交 tombstone 再删物理 blob。"""
@@ -516,6 +579,7 @@ class AttachmentBlobStore:
     def _attachment_ref_for_record(
         self,
         session_id: str,
+        thread_id: str,
         blob_id: str | None,
         attachment: AttachmentRef,
         content_type: str,
@@ -525,7 +589,6 @@ class AttachmentBlobStore:
                 "ingest record 缺少 blob_id，无法构造逻辑引用: "
                 f"session_id={session_id}"
             )
-        thread_id = self._path_resolver.main_thread_id(session_id)
         attachment_id = derive_attachment_id(
             blob_id=blob_id,
             owner_session_id=session_id,
@@ -554,17 +617,15 @@ class AttachmentBlobStore:
     ) -> None:
         """原子 rename 到最终 locator 并复验正文（已存在则复验后清理 staging）。"""
         final_path.parent.mkdir(parents=True, exist_ok=True)
+        if final_path.is_symlink():
+            raise RuntimeError(f"attachment blob 不得是符号链接: {final_path}")
         if final_path.is_file():
-            existing = final_path.read_bytes()
-            _verify_content(
-                existing, identity.digest, identity.length, identity.blob_id
-            )
+            self._verify_blob_content(final_path, identity.digest, identity.length, identity.blob_id)
             _remove_file(staging_path)
             return
         os.replace(staging_path, final_path)
         _fsync_directory(final_path.parent)
-        data = final_path.read_bytes()
-        _verify_content(data, identity.digest, identity.length, identity.blob_id)
+        self._verify_blob_content(final_path, identity.digest, identity.length, identity.blob_id)
 
     def _settle_pin_quietly(self, control, pin, *, outcome: str) -> None:
         try:
@@ -583,14 +644,24 @@ class AttachmentBlobStore:
             return
 
 
-def _verify_content(data: bytes, digest: str, length: int, blob_id: str) -> None:
+def _verify_content(data: bytes | Path, digest: str, length: int, blob_id: str) -> None:
     """逐字节复验正文与 catalog 冻结的 hash/length 一致（fail closed）。"""
-    actual_digest = "sha256:" + hashlib.sha256(data).hexdigest()
-    if actual_digest != digest or len(data) != length:
+    if isinstance(data, Path):
+        hasher = hashlib.sha256()
+        actual_length = 0
+        with data.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                hasher.update(chunk)
+                actual_length += len(chunk)
+        actual_digest = "sha256:" + hasher.hexdigest()
+    else:
+        actual_digest = "sha256:" + hashlib.sha256(data).hexdigest()
+        actual_length = len(data)
+    if actual_digest != digest or actual_length != length:
         raise RuntimeError(
             "附件正文与 catalog 冻结的 hash/length 不一致（拒绝以损坏正文冒充成功）: "
             f"blob_id={blob_id}, expected={digest}/{length}, "
-            f"actual={actual_digest}/{len(data)}"
+            f"actual={actual_digest}/{actual_length}"
         )
 
 

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
 from langchain_core.messages import HumanMessage
 
 from app.core.path_utils import get_session_path_resolver
+from app.core.session_control_store import SessionControlStore
 from app.domain.itemized.enums import PayloadKind
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
@@ -16,6 +18,7 @@ from app.domain.itemized.execution_admission import (
     internal_execution_request_preimage,
 )
 from app.domain.itemized.hashing import content_hash, sha256_jcs
+from app.domain.itemized.runtime_wakeup import RuntimeExecutionWakeup
 from app.prompting.factory import PromptSection, internal_message_factory
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -49,6 +52,52 @@ def _internal_notice(message_id: str, *, control: str = "任务已完成") -> Hu
             "message_metadata": prepared.metadata,
         },
     )
+
+
+@pytest.mark.parametrize("timestamps", [
+    ("2026-10-04T12:00:02+00:00", "2026-10-04T12:00:01+00:00"),
+    ("2026-10-04T12:00:01+00:00", "2026-10-04T12:00:01+00:00"),
+])
+def test_pending_runtime_wakeups_keep_admission_order_after_restart(
+    saver: RolloutCheckpointSaver, timestamps: tuple[str, str],
+) -> None:
+    resolver = saver._storage.storage._path_resolver
+    thread_id = resolver.main_thread_id(SESSION_ID)
+    accepted = []
+    with saver, closing(SessionControlStore(resolver.resolve_session_node(SESSION_ID) / "session-control.sqlite")) as control:
+        for suffix, created_at in zip(("z-first", "a-second"), timestamps, strict=True):
+            intent = InternalExecutionIntent(
+                message_id=f"msg-{suffix}", execution_id=f"execution-{suffix}",
+                admission_idempotency_key=f"admission-{suffix}",
+            )
+            lease = control.create_or_get_lease(
+                operation_kind="context_control", operation_identity=intent.admission_idempotency_key,
+                preimage_hash=sha256_jcs({"identity": suffix}).rsplit(":", 1)[1],
+                recovery_ref=intent.execution_id,
+            )
+            lease = control.mark_lease_settling(lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token)
+            wakeup = RuntimeExecutionWakeup(
+                session_id=SESSION_ID, thread_id=thread_id, source_id=f"source-{suffix}",
+                source_item_id=intent.notice_item_id, execution_id=intent.execution_id, job_id=f"job-{suffix}",
+                admission_idempotency_key=intent.admission_idempotency_key, agent_id="default",
+                message_created_at=created_at, gateway_id=None, request_id=None, lease_id=lease.lease_id,
+                lifecycle_generation=lease.captured_lifecycle_generation, lease_fencing_token=lease.fencing_token,
+            )
+            message = _internal_notice(intent.message_id)
+            message.response_metadata["created_at"] = created_at
+            accepted.append(saver.commit_runtime_source_wakeup(
+                wakeup, source_kind="generated_session_result", intent=intent, message=message,
+            ))
+            control.settle_lease(lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token, outcome="completed")
+    sessions_dir = saver._storage.storage.sessions_dir
+    with RolloutCheckpointSaver(sessions_dir=sessions_dir) as restarted:
+        assert restarted.pending_runtime_wakeups(SESSION_ID, thread_id) == tuple(accepted)
+        with restarted._storage.storage.read_connection(SESSION_ID, thread_id, "") as connection:
+            cursors = [restarted._storage.executions.execution_admission_cursor(
+                restarted.execution_admission(SESSION_ID, thread_id=thread_id, execution_id=wakeup.execution_id),
+                connection=connection,
+            ).commit_id for wakeup in accepted]
+            assert cursors[0] < cursors[1]
 
 
 def test_internal_admission_creates_turnless_execution_and_reuses_exact_identity(
@@ -149,9 +198,25 @@ def test_internal_admission_creates_turnless_execution_and_reuses_exact_identity
             "WHERE item_id = ?",
             (intent.notice_item_id,),
         ).fetchone()
+        notice_projection = db.execute(
+            "SELECT message.message_id, message.turn_id, message.execution_id, "
+            "message.visibility, message.message_sequence, commit_record.first_message_sequence, "
+            "commit_record.last_message_sequence, meta.last_message_sequence "
+            "FROM item_catalog AS item JOIN messages AS message "
+            "ON message.jsonl_offset = item.jsonl_offset AND message.jsonl_length = item.jsonl_length "
+            "JOIN storage_commits AS commit_record "
+            "ON commit_record.commit_id = item.commit_id AND message.commit_id = commit_record.commit_id "
+            "CROSS JOIN database_meta AS meta WHERE item.item_id = ?",
+            (intent.notice_item_id,),
+        ).fetchall()
     assert item_row == (None, "pending_next_turn", expected.execution_id)
     assert membership is not None and membership[0] >= 0
     assert membership[1:] == (1, "display_only")
+    assert len(notice_projection) == 1
+    projection = notice_projection[0]
+    assert projection[:4] == (intent.message_id, None, expected.execution_id, "internal")
+    assert projection[4] > 0
+    assert projection[4:] == (projection[4],) * 4
 
 
 def test_internal_admission_rejects_key_replay_with_changed_preimage(

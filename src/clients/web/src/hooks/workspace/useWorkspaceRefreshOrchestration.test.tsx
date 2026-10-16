@@ -33,10 +33,12 @@ async function mountHook(options: {
   let hook: ReturnType<typeof useWorkspaceRefreshOrchestration> | undefined;
   let current = options.initialState ?? appState();
   let aborts = 0;
+  const selectionIntentRef = { current: 0 };
 
   function Probe(): React.ReactNode {
     hook = useWorkspaceRefreshOrchestration({
       apiPort: API_PORT,
+      selectionIntentRef,
       gatewayWorkspaces: [{
         workspace_id: "workspace-c",
         backend_workspace_id: "00000000-0000-0000-0000-000000000001",

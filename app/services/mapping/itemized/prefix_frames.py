@@ -21,7 +21,13 @@ from app.domain.itemized.epoch.seal_binding import ContextSealBinding
 from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextRequestPlan
-from app.services.mapping.itemized.canonical_langchain import project_canonical_items
+from app.services.mapping.itemized.canonical_langchain import (
+    project_canonical_items,
+    project_summary_source,
+    summary_retry_variants,
+    summary_source_groups,
+    validate_summary_source,
+)
 from app.services.mapping.itemized.selection import (
     resolve_selected_item,
     resolve_selected_request_body,
@@ -80,6 +86,7 @@ def project_sealed_prefix(
     }
     contributions = {source.contribution_id: source for source in plan.contributions}
     by_id = {item.item_id: item for item in items}
+    canonical_entries = {entry.ref.ref_id: entry for entry in plan.selection if entry.ref.ref_type == "canonical_item"}
     used: set[str] = set()
     root = binding.root
     if root is not None:
@@ -115,7 +122,7 @@ def project_sealed_prefix(
             continue
         if ref.ref_type == "source_item":
             entry = entries.get(ref.ref_id)
-            if entry is None or entry.ref.ref_type != "request_only" or frame.role != "user":
+            if entry is None or entry.ref.ref_type != "request_only":
                 raise ValueError("source-mismatch: source frame 缺少独立 user selection")
             source = contributions.get(entry.contribution_id)
             if source is None or source.source_binding is None or (
@@ -126,6 +133,39 @@ def project_sealed_prefix(
             body = resolve_selected_request_body(plan, entry, bodies)
             if canonical_json_bytes(body) != canonical_json_bytes(frame.content):
                 raise ValueError("source-mismatch: source wire frame 与 sealed 正文不一致")
+            if source.contribution_kind == "model_message":
+                if plan.selection_policy != "summary_candidate" or not isinstance(body, Mapping):
+                    raise ValueError("source-mismatch: model_message 只能属于摘要候选")
+                projected = messages_from_dict([body["message"]])[0]
+                if {"human": "user", "ai": "assistant", "tool": "tool"}.get(projected.type) != frame.role:
+                    raise ValueError("source-mismatch: 摘要候选消息角色不一致")
+                group = []
+                for item_id in body["item_ids"]:
+                    if item_id not in by_id:
+                        raise ValueError("source-mismatch: 摘要候选 canonical 来源已丢失")
+                    selected = canonical_entries.get(item_id)
+                    if selected is None:
+                        raise ValueError("source-mismatch: 摘要候选 canonical 来源没有封存")
+                    group.append(resolve_selected_item(selected, by_id))
+                ordinal, separator, phase = source.source_revision.partition(":")
+                if not separator or not ordinal.isdecimal() or phase not in {"initial", "tool_free", "visible_text"}:
+                    raise ValueError("source-mismatch: 摘要候选重试身份非法")
+                retry_items = []
+                for item_id in body["retry_source_item_ids"]:
+                    selected = canonical_entries.get(item_id)
+                    if selected is None:
+                        raise ValueError("source-mismatch: 摘要重试中段没有封存 canonical 来源")
+                    retry_items.append(resolve_selected_item(selected, by_id))
+                if retry_items and int(ordinal) == 0:
+                    raise ValueError("source-mismatch: 初始候选不能声明重试变换来源")
+                retry_messages = [project_summary_source(value) for value in summary_source_groups(retry_items).values()]
+                variants = summary_retry_variants(retry_messages) if retry_items else {}
+                validate_summary_source(projected, group, retry_variants=variants.get(projected.id, ()))
+                messages.append(projected)
+                used.add(ref.ref_id)
+                continue
+            if frame.role != "user":
+                raise ValueError("source-mismatch: 普通 source frame 必须为 user")
             content = body if isinstance(body, (str, list)) else [body]
             if frame.provider_profile.startswith("chat_completions:") and isinstance(content, list):
                 for index, block in enumerate(content):

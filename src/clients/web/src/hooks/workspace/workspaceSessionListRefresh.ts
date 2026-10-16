@@ -11,6 +11,13 @@ function workspaceSessionScopeKey(apiPort: number, workspaceId: string): string 
   return `${apiPort}:${workspaceId}`;
 }
 
+/** 已提交删除使在途旧列表失效；后续读取必须建立新快照，不能复用删除前请求。 */
+export function invalidateWorkspaceSessionListSnapshot(apiPort: number, workspaceId: string): void {
+  const scopeKey = workspaceSessionScopeKey(apiPort, workspaceId);
+  generations.set(scopeKey, (generations.get(scopeKey) ?? 0) + 1);
+  inFlightRequests.delete(scopeKey);
+}
+
 export interface WorkspaceSessionListSnapshot {
   apiPort: number;
   workspaceId: string;

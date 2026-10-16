@@ -7,15 +7,11 @@ CREATE TABLE context_plans (
     session_id TEXT NOT NULL,
     thread_id TEXT NOT NULL,
     plan_id TEXT NOT NULL,
-    registration_origin TEXT NOT NULL DEFAULT 'runtime'
-        CHECK(registration_origin IN ('runtime', 'fork_import')),
-    source_provenance_json TEXT,
-    source_manifest_json TEXT,
-    plan_creation_idempotency_key TEXT,
-    creation_hash TEXT,
-    creation_json TEXT,
-    draft_json TEXT,
-    draft_hash TEXT,
+    plan_creation_idempotency_key TEXT NOT NULL CHECK(length(plan_creation_idempotency_key) > 0),
+    creation_hash TEXT NOT NULL CHECK(length(creation_hash) > 0),
+    creation_json TEXT NOT NULL,
+    draft_json TEXT NOT NULL,
+    draft_hash TEXT NOT NULL,
     revision INTEGER NOT NULL CHECK(revision >= 0),
     plan_state TEXT NOT NULL CHECK(plan_state IN ('unsealed', 'sealed')),
     assembly_id TEXT,
@@ -29,19 +25,8 @@ CREATE TABLE context_plans (
     UNIQUE(session_id, thread_id, assembly_id),
     CHECK(length(plan_id) > 0),
     CHECK(
-        (registration_origin = 'runtime' AND source_provenance_json IS NULL
-            AND source_manifest_json IS NULL
-            AND plan_creation_idempotency_key IS NOT NULL AND length(plan_creation_idempotency_key) > 0
-            AND creation_hash IS NOT NULL AND length(creation_hash) > 0
-            AND creation_json IS NOT NULL AND draft_json IS NOT NULL AND draft_hash IS NOT NULL
-            AND ((plan_state='unsealed' AND seal_input_hash IS NULL)
-                OR (plan_state='sealed' AND seal_input_hash IS NOT NULL AND length(seal_input_hash) > 0)))
-        OR (registration_origin = 'fork_import'
-            AND source_provenance_json IS NOT NULL AND length(source_provenance_json) > 0
-            AND source_manifest_json IS NOT NULL AND length(source_manifest_json) > 0
-            AND plan_state = 'sealed' AND revision = 0
-            AND plan_creation_idempotency_key IS NULL AND creation_hash IS NULL
-            AND creation_json IS NULL AND draft_json IS NULL AND draft_hash IS NULL AND seal_input_hash IS NULL)
+        (plan_state='unsealed' AND seal_input_hash IS NULL)
+        OR (plan_state='sealed' AND seal_input_hash IS NOT NULL AND length(seal_input_hash) > 0)
     ),
     CHECK(
         (plan_state = 'unsealed' AND assembly_id IS NULL

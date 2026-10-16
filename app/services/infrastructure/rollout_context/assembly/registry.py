@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
@@ -64,8 +65,38 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
         *,
         checkpoint_ns: str = "",
         expected_source_revision: str | None = None,
-    ) -> None:
+    ) -> int:
         """保存 request-only source 的 compact provenance，不保存其正文。"""
+        contribution_id, expected = self._context_contribution_values(
+            session_id, thread_id, contribution, checkpoint_ns=checkpoint_ns,
+        )
+        with self._storage._lock(thread_id, checkpoint_ns, session_id=session_id):
+            self._storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._storage._connect(thread_id, checkpoint_ns, session_id=session_id) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                source_ordinal = self._write_context_contribution(
+                    connection, contribution_id, expected,
+                    expected_source_revision=expected_source_revision,
+                )
+                connection.commit()
+                return source_ordinal
+
+    def _register_context_contribution(
+        self, connection: sqlite3.Connection, *, session_id: str, thread_id: str,
+        contribution: ContextContribution, checkpoint_ns: str,
+    ) -> None:
+        """fork 复用同一 registry writer；不另开连接、不提交调用方事务。"""
+        if connection.execute("SELECT session_id,thread_id FROM database_meta WHERE singleton_id=1").fetchone() != (session_id, thread_id):
+            raise ValueError("source-mismatch: contribution registry 与 fork target owner 不一致")
+        contribution_id, expected = self._context_contribution_values(
+            session_id, thread_id, contribution, checkpoint_ns=checkpoint_ns,
+        )
+        self._write_context_contribution(connection, contribution_id, expected, expected_source_revision=None)
+
+    def _context_contribution_values(
+        self, session_id: str, thread_id: str, contribution: ContextContribution,
+        *, checkpoint_ns: str,
+    ) -> tuple[str, tuple[object, ...]]:
         session_id = strict_text(session_id, field="context_contribution.session_id")
         thread_id = strict_text(thread_id, field="context_contribution.thread_id")
         if not isinstance(checkpoint_ns, str):
@@ -115,6 +146,7 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
             "overlay_base",
             "overlay_delta",
             "notice",
+            "model_message",
         }:
             raise ValueError(
                 f"不支持的 context contribution kind: {values['contribution_kind']}"
@@ -168,123 +200,128 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
         )
         validate_extensions(values["extensions"], field="ContextContribution.extensions")
         binding_manifest_json = _json(contribution.binding_manifest())
-        with self._storage._lock(thread_id, checkpoint_ns, session_id=session_id):
-            self._storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-            with self._storage._connect(
-                thread_id, checkpoint_ns, session_id=session_id
-            ) as connection:
-                self._storage._require_v2_runtime(connection)
-                connection.execute("BEGIN IMMEDIATE")
-                existing = connection.execute(
-                    'SELECT source_kind, source_revision, content_hash, content_length, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, binding_manifest_json FROM context_contributions WHERE contribution_id = ?',
-                    (contribution_id,),
-                ).fetchone()
-                expected = (
-                    source_kind,
-                    source_revision,
-                    content_hash,
-                    content_length,
-                    int(values["request_only"]),
-                    contribution_kind,
-                    visibility,
-                    protection,
-                    selection_role,
-                    replacement_policy,
-                    binding_manifest_json,
-                )
-                if existing is not None:
-                    if len(existing) != 11:
-                        raise RuntimeError("context contribution 行字段数非法")
-                    stored = (
-                        strict_text(
-                            existing[0], field="context_contributions.source_kind"
-                        ),
-                        strict_text(
-                            existing[1], field="context_contributions.source_revision"
-                        ),
-                        strict_optional_text(
-                            existing[2], field="context_contributions.content_hash"
-                        ),
-                        strict_non_negative_int(
-                            existing[3], field="context_contributions.content_length"
-                        ),
-                        int(
-                            _strict_bool(
-                                existing[4], field="context_contributions.request_only"
-                            )
-                        ),
-                        strict_text(
-                            existing[5], field="context_contributions.contribution_kind"
-                        ),
-                        strict_text(
-                            existing[6], field="context_contributions.visibility"
-                        ),
-                        strict_text(
-                            existing[7], field="context_contributions.protection"
-                        ),
-                        strict_text(
-                            existing[8],
-                            field="context_contributions.selection_role",
-                        ),
-                        strict_text(
-                            existing[9],
-                            field="context_contributions.replacement_policy",
-                        ),
-                        _canonical_json_object(
-                            existing[10], field="context_contributions.binding_manifest_json"
-                        ),
+        expected = (
+            source_kind,
+            source_revision,
+            content_hash,
+            content_length,
+            int(values["request_only"]),
+            contribution_kind,
+            visibility,
+            protection,
+            selection_role,
+            replacement_policy,
+            binding_manifest_json,
+        )
+        return contribution_id, expected
+
+    def _write_context_contribution(
+        self, connection: sqlite3.Connection, contribution_id: str, expected: tuple[object, ...],
+        *, expected_source_revision: str | None,
+    ) -> int:
+        """唯一 contribution manifest writer；调用方持有活动事务。"""
+        if not connection.in_transaction:
+            raise RuntimeError("contribution registry 写入需要调用方活动事务")
+        self._storage._require_v2_runtime(connection)
+        source_revision, replacement_policy = expected[1], expected[9]
+        existing = connection.execute(
+            'SELECT source_kind, source_revision, content_hash, content_length, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, binding_manifest_json, source_ordinal FROM context_contributions WHERE contribution_id = ?',
+            (contribution_id,),
+        ).fetchone()
+        if existing is not None:
+            if len(existing) != 12:
+                raise RuntimeError("context contribution 行字段数非法")
+            source_ordinal = strict_non_negative_int(
+                existing[11], field="context_contributions.source_ordinal",
+            )
+            stored = (
+                strict_text(
+                    existing[0], field="context_contributions.source_kind"
+                ),
+                strict_text(
+                    existing[1], field="context_contributions.source_revision"
+                ),
+                strict_optional_text(
+                    existing[2], field="context_contributions.content_hash"
+                ),
+                strict_non_negative_int(
+                    existing[3], field="context_contributions.content_length"
+                ),
+                int(
+                    _strict_bool(
+                        existing[4], field="context_contributions.request_only"
                     )
-                    if expected_source_revision is not None and expected_source_revision != stored[1]:
-                        raise ValueError("context contribution revision CAS 冲突")
-                    if stored == expected:
-                        connection.commit()
-                        return
-                    if stored[9] != "replaceable" or replacement_policy != "replaceable":
-                        raise ValueError("context contribution immutable identity/hash 冲突")
-                    if expected_source_revision is None or expected_source_revision != stored[1]:
-                        raise ValueError("context contribution replacement 缺少匹配的 expected source revision CAS")
-                    if source_revision == stored[1]:
-                        raise ValueError("context contribution 同 revision 正文/核心字段冲突")
-                    sealed = connection.execute(
-                        "SELECT 1 FROM context_assembly_contributions WHERE contribution_id = ? AND source_revision = ? LIMIT 1",
-                        (contribution_id, stored[1]),
-                    ).fetchone()
-                    if sealed is not None:
-                        raise ValueError("context contribution 已封存，禁止更新原 registry slot")
-                    cursor = connection.execute(
-                        "UPDATE context_contributions SET source_kind = ?, source_revision = ?, content_hash = ?, content_length = ?, request_only = ?, contribution_kind = ?, visibility = ?, protection = ?, selection_role = ?, replacement_policy = ?, binding_manifest_json = ? WHERE contribution_id = ? AND source_revision = ? AND replacement_policy = 'replaceable' AND assembly_id IS NULL",
-                        (*expected, contribution_id, expected_source_revision),
-                    )
-                    if cursor.rowcount != 1:
-                        raise ValueError("context contribution revision CAS 冲突或 registry 已封存")
-                    connection.commit()
-                    return
-                if expected_source_revision is not None:
-                    raise ValueError("context contribution revision CAS 冲突：slot 不存在")
-                source_ordinal_row = connection.execute(
-                    "SELECT COALESCE(MAX(source_ordinal), -1) + 1 FROM context_contributions"
-                ).fetchone()
-                if source_ordinal_row is None:
-                    raise RuntimeError("context contribution source_ordinal 查询失败")
-                source_ordinal = strict_non_negative_int(
-                    source_ordinal_row[0],
-                    field="context_contributions.source_ordinal",
-                )
-                cursor = connection.execute(
-                    'INSERT INTO context_contributions(contribution_id, source_kind, source_revision, content_hash, content_length, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, assembly_id, contribution_ordinal, source_ordinal, binding_manifest_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)',
-                    (
-                        contribution_id,
-                        *expected[:-1],
-                        source_ordinal,
-                        expected[-1],
-                        _now(),
-                    ),
-                )
-                if cursor.rowcount != 1:
-                    raise RuntimeError(
-                        f"context contribution 未写入: {contribution_id}"
-                    )
-                connection.commit()
+                ),
+                strict_text(
+                    existing[5], field="context_contributions.contribution_kind"
+                ),
+                strict_text(
+                    existing[6], field="context_contributions.visibility"
+                ),
+                strict_text(
+                    existing[7], field="context_contributions.protection"
+                ),
+                strict_text(
+                    existing[8],
+                    field="context_contributions.selection_role",
+                ),
+                strict_text(
+                    existing[9],
+                    field="context_contributions.replacement_policy",
+                ),
+                _canonical_json_object(
+                    existing[10], field="context_contributions.binding_manifest_json"
+                ),
+            )
+            if expected_source_revision is not None and expected_source_revision != stored[1]:
+                raise ValueError("context contribution revision CAS 冲突")
+            if stored == expected:
+                return source_ordinal
+            if stored[9] != "replaceable" or replacement_policy != "replaceable":
+                raise ValueError("context contribution immutable identity/hash 冲突")
+            if expected_source_revision is None or expected_source_revision != stored[1]:
+                raise ValueError("context contribution replacement 缺少匹配的 expected source revision CAS")
+            if source_revision == stored[1]:
+                raise ValueError("context contribution 同 revision 正文/核心字段冲突")
+            sealed = connection.execute(
+                "SELECT 1 FROM context_assembly_contributions WHERE contribution_id = ? AND source_revision = ? LIMIT 1",
+                (contribution_id, stored[1]),
+            ).fetchone()
+            if sealed is not None:
+                raise ValueError("context contribution 已封存，禁止更新原 registry slot")
+            cursor = connection.execute(
+                "UPDATE context_contributions SET source_kind = ?, source_revision = ?, content_hash = ?, content_length = ?, request_only = ?, contribution_kind = ?, visibility = ?, protection = ?, selection_role = ?, replacement_policy = ?, binding_manifest_json = ? WHERE contribution_id = ? AND source_revision = ? AND replacement_policy = 'replaceable' AND assembly_id IS NULL",
+                (*expected, contribution_id, expected_source_revision),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("context contribution revision CAS 冲突或 registry 已封存")
+            return source_ordinal
+        if expected_source_revision is not None:
+            raise ValueError("context contribution revision CAS 冲突：slot 不存在")
+        source_ordinal_row = connection.execute(
+            "SELECT COALESCE(MAX(source_ordinal), -1) + 1 FROM context_contributions"
+        ).fetchone()
+        if source_ordinal_row is None:
+            raise RuntimeError("context contribution source_ordinal 查询失败")
+        source_ordinal = strict_non_negative_int(
+            source_ordinal_row[0],
+            field="context_contributions.source_ordinal",
+        )
+        cursor = connection.execute(
+            'INSERT INTO context_contributions(contribution_id, source_kind, source_revision, content_hash, content_length, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, assembly_id, contribution_ordinal, source_ordinal, binding_manifest_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)',
+            (
+                contribution_id,
+                *expected[:-1],
+                source_ordinal,
+                expected[-1],
+                _now(),
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError(
+                f"context contribution 未写入: {contribution_id}"
+            )
+        return source_ordinal
 
     def list_context_contributions(
         self,

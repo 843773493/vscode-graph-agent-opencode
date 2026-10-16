@@ -112,6 +112,21 @@ export async function getLLMRequestLogs(
   return unwrapApiData(data);
 }
 
+function validateAcceptedMessage(accepted: MessageRunAccepted, action: string): void {
+  if (typeof accepted.message_id !== "string" || !accepted.message_id) {
+    throw new Error(`${action}响应缺少 message_id`);
+  }
+  if (typeof accepted.job_id !== "string" || !accepted.job_id) {
+    throw new Error(`${action}响应缺少 job_id`);
+  }
+  if (typeof accepted.turn_id !== "string" || !accepted.turn_id || accepted.turn_id === accepted.job_id) {
+    throw new Error(`${action}响应缺少独立的 turn_id`);
+  }
+  if (typeof accepted.thread_id !== "string" || !accepted.thread_id) {
+    throw new Error(`${action}响应缺少 thread_id`);
+  }
+}
+
 export async function sendMessage(
   port: number,
   sessionId: string,
@@ -133,12 +148,7 @@ export async function sendMessage(
       },
     ),
   );
-  if (typeof accepted.message_id !== "string" || !accepted.message_id) {
-    throw new Error("发送消息响应缺少 message_id");
-  }
-  if (typeof accepted.job_id !== "string" || !accepted.job_id) {
-    throw new Error("发送消息响应缺少 job_id");
-  }
+  validateAcceptedMessage(accepted, "发送消息");
   return accepted;
 }
 
@@ -178,7 +188,7 @@ export async function replayMessageTurn(
   payload: MessageReplayRequest,
   workspaceId?: string | null,
 ): Promise<MessageReplayAccepted> {
-  return unwrapApiData(
+  const accepted = unwrapApiData(
     await requestJson<APIResponse<MessageReplayAccepted>>(
       port,
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/replay`,
@@ -189,6 +199,8 @@ export async function replayMessageTurn(
       },
     ),
   );
+  validateAcceptedMessage(accepted, "重放消息");
+  return accepted;
 }
 
 export async function interruptSession(

@@ -129,31 +129,3 @@ class RolloutAppendWriter:
             session_id=session_id, thread_id=thread_id,
             job_id=job_id, status=status, checkpoint_ns=checkpoint_ns,
         )
-
-    def copy_turn_finalizations(
-        self,
-        *,
-        source_session_id: str,
-        source_checkpoint_id: str | None,
-        target_session_id: str,
-        checkpoint_ns: str = "",
-    ) -> int:
-        """复制 fork 源 checkpoint 中已完成 Turn 的最终消息指针。"""
-        return self._storage.checkpoints.copy_turn_finalizations(
-            source_thread_id=source_session_id,
-            source_checkpoint_id=source_checkpoint_id,
-            target_thread_id=target_session_id,
-            checkpoint_ns=checkpoint_ns,
-        )
-
-    def cancel_unfinished_turns(
-        self,
-        *,
-        session_id: str,
-        checkpoint_ns: str = "",
-    ) -> int:
-        """取消 fork 目标中不会由子会话继续执行的未完成 Turn。"""
-        return self._storage.executions.cancel_unfinished_turns(
-            thread_id=session_id,
-            checkpoint_ns=checkpoint_ns,
-        )

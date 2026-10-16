@@ -43,9 +43,8 @@
 - rename 后/publish 前：最终 locator 已存在且内容一致 → 直接 publish；
 - publish 后/terminal 响应前：record published → 复验最终目录与
   thread_catalog child row 后幂等返回（含 admission intent 补写）；
-- staging 准备**中途**崩溃留下不完整 staging 时重入 fail closed（见
-  「准备中断窗口」，对齐 R13 模式——无法与外部篡改区分，保留现场供
-  人工核账）；
+- staging 准备中断时，只接受冻结清单内的文件/目录子集与原子写临时文件；
+  持原 holder 定点清理后按同 record 重准备，额外项或内容冲突 fail closed；
 - 无 record 的目录不吸收：staging/final 只按预存 record 校验/清理，
   外来目录内容与预期清单不一致一律 fail closed，不扫描、不猜测、不
   吸收（对齐 app/core/AGENTS.md「不得扫描磁盘并静默吸收改动」）。
@@ -75,8 +74,9 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import shutil
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -88,6 +88,7 @@ from app.core.atomic_fs import (
 )
 from app.core.identifier import uuid7_datetime_from_hex
 from app.core.key_lock_pool import KeyLockPool
+from app.core.phase_observer import observe_phase
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
@@ -105,6 +106,7 @@ from app.core.session_control_store import (
 )
 from app.core.session_lifecycle_gate import (
     NavigationTopologyGate,
+    OperationHolderGate,
     SessionDeletionPendingError,
     SessionLifecycleGate,
 )
@@ -324,6 +326,8 @@ def compute_thread_creation_preimage_hash(
     initial_state: str,
     session_metadata: dict[str, object],
     artifact_manifest: dict[str, object],
+    purpose: str = "task",
+    request_intent: dict[str, object] | None = None,
 ) -> str:
     """preimage_hash = sha256(canonical JSON of 创建请求六元组)。
 
@@ -339,6 +343,8 @@ def compute_thread_creation_preimage_hash(
         "initial_state": initial_state,
         "session_metadata": session_metadata,
         "artifact_manifest": artifact_manifest,
+        "purpose": purpose,
+        "request_intent": request_intent,
     }
     return hashlib.sha256(canonical_json_text(payload).encode("utf-8")).hexdigest()
 
@@ -399,7 +405,7 @@ def compute_artifact_manifest_hash(inventory: dict[str, str]) -> str:
 
 
 def expected_node_directory_names(
-    files: dict[str, bytes],
+    files: dict[str, str],
 ) -> set[str]:
     """child node 的预期目录集（相对路径，posix 分隔）。
 
@@ -420,12 +426,13 @@ def expected_node_directory_names(
 
 def verify_node_directory(
     directory: Path,
-    expected_files: dict[str, bytes],
     inventory: dict[str, str],
     *,
     stage: str,
     published: bool = False,
-) -> None:
+    partial: bool = False,
+    materialized_rollout: bool = False,
+) -> bool:
     """逐文件校验 staging/final 目录与预期一致；不一致 fail closed。
 
     校验面：目录集、文件集（含 symlink 拒绝）、每个文件 sha256、
@@ -436,25 +443,31 @@ def verify_node_directory(
         raise RuntimeError(
             f"{stage}: 目录缺失或不是目录（外部改动，fail closed）: {directory}"
         )
+    expected_file_set = set(inventory) | {_ARTIFACT_MANIFEST_NAME}
+    expected_dir_set = expected_node_directory_names(inventory)
+    runtime_paths = {"rollout", "debug/node"} if published or materialized_rollout else set()
+    if published:
+        runtime_paths.add("runs")
+    atomic_temporary_present = False
     actual_files: dict[str, bytes] = {}
     actual_dirs: set[str] = set()
     for root, dir_names, file_names in os.walk(directory, followlinks=False):
         root_path = Path(root)
-        # 发布前清单严格闭集；发布后 rollout 由 execution owner 独立维护。
-        if published and root_path == directory:
-            for runtime_dir in ("rollout", "runs", "node-debug"):
-                entry = root_path / runtime_dir
-                if entry.is_symlink():
-                    raise RuntimeError(f"{stage}: runtime 目录不能是 symlink: {entry}")
-                if runtime_dir in dir_names:
-                    dir_names.remove(runtime_dir)
-        for dir_name in dir_names:
+        # 只让已发布或已确认物化的领域 owner 管理精确 runtime 子树。
+        # debug/node 的共享父目录仍在闭集内，不能吸收未知兄弟或文件。
+        for dir_name in tuple(dir_names):
             dir_entry = root_path / dir_name
             if dir_entry.is_symlink():
                 raise RuntimeError(
                     f"{stage}: 发现 symlink 目录（外部改动，fail closed）: {dir_entry}"
                 )
-            actual_dirs.add(dir_entry.relative_to(directory).as_posix())
+            relative = dir_entry.relative_to(directory).as_posix()
+            if relative in runtime_paths:
+                dir_names.remove(dir_name)
+                if relative == "debug/node":
+                    expected_dir_set.add("debug")
+                continue
+            actual_dirs.add(relative)
         for file_name in file_names:
             file_entry = root_path / file_name
             if file_entry.is_symlink():
@@ -462,35 +475,98 @@ def verify_node_directory(
                     f"{stage}: 发现 symlink 文件（外部改动，fail closed）: {file_entry}"
                 )
             relative = file_entry.relative_to(directory).as_posix()
+            if (published or materialized_rollout) and relative == ".rollout.write.lock":
+                if not file_entry.is_file():
+                    raise RuntimeError(f"{stage}: rollout 写锁必须是普通文件: {file_entry}")
+                continue
+            if partial:
+                # atomic_write_bytes 的 replace 前崩溃只会留下同目录的
+                # .<冻结目标名>.<八位 tempfile suffix>；不把未知文件归入本操作。
+                parent, _, leaf = relative.rpartition("/")
+                if any(
+                    expected.rpartition("/")[0] == parent
+                    and re.fullmatch(re.escape("." + expected.rpartition("/")[2] + ".") + r"[a-z0-9_]{8}", leaf)
+                    for expected in expected_file_set
+                ):
+                    if not file_entry.is_file():
+                        raise RuntimeError(f"{stage}: 原子写临时项不是普通文件: {file_entry}")
+                    atomic_temporary_present = True
+                    continue
             actual_files[relative] = file_entry.read_bytes()
-    expected_dir_set = expected_node_directory_names(expected_files)
-    if actual_dirs != expected_dir_set:
+    if not (actual_dirs <= expected_dir_set if partial else actual_dirs == expected_dir_set):
         raise RuntimeError(
             f"{stage}: 目录集与预期不一致（外部改动或上次准备中断，fail "
             f"closed）: path={directory}, "
             f"expected={sorted(expected_dir_set)}, "
             f"actual={sorted(actual_dirs)}"
         )
-    expected_file_set = set(expected_files) | {_ARTIFACT_MANIFEST_NAME}
-    if set(actual_files) != expected_file_set:
+    if not (set(actual_files) <= expected_file_set if partial else set(actual_files) == expected_file_set):
         raise RuntimeError(
             f"{stage}: 文件集与预期不一致（外部改动或上次准备中断，fail "
             f"closed）: path={directory}, "
             f"expected={sorted(expected_file_set)}, "
             f"actual={sorted(actual_files)}"
         )
-    for rel_path, payload in sorted(expected_files.items()):
+    for rel_path in sorted(inventory):
+        if partial and rel_path not in actual_files:
+            continue
         if hashlib.sha256(actual_files[rel_path]).hexdigest() != inventory[rel_path]:
             raise RuntimeError(
                 f"{stage}: {rel_path} sha256 与预期不一致（外部改动，fail "
                 f"closed）: path={directory / rel_path}"
             )
+    if partial and _ARTIFACT_MANIFEST_NAME not in actual_files:
+        return False
     actual_manifest_bytes = actual_files[_ARTIFACT_MANIFEST_NAME]
     if actual_manifest_bytes != serialize_artifact_manifest_bytes(inventory):
         raise RuntimeError(
             f"{stage}: artifact-manifest.json 字节与预期不一致（外部改动，"
             f"fail closed）: path={directory / _ARTIFACT_MANIFEST_NAME}"
         )
+    return actual_dirs == expected_dir_set and set(actual_files) == expected_file_set and not atomic_temporary_present
+
+
+async def settle_thread_creations_for_deletion(
+    *,
+    control: SessionControlStore,
+    session_id: str,
+    session_dir: Path,
+    sessions_root: Path,
+    session_gate: SessionLifecycleGate,
+    fork_abort: Callable[[str, ThreadCreationRecord], Awaitable[bool]] | None = None,
+) -> None:
+    """在删除 gate 外等待原 holder，再按同记录取消无执行者的创建。
+
+    catalog 已整体 deleting，禁止新准入；旧执行者仍可短时取得原 gate
+    完成 publish 拒绝与定点取消。进程退出释放 holder 后，本入口按冻结
+    locator/清单接管取消，不扫盘、不重建或更换创建 identity。
+    """
+    holders = OperationHolderGate(sessions_root, namespace="thread_creation")
+    for pending in control.list_pending_thread_creations():
+        key = pending.thread_creation_idempotency_key
+        async with holders.lock_for(f"{session_id}/{key}"):
+            async with session_gate.exclusive(session_id):
+                record = control.get_thread_creation_record(key)
+                if record.state != "preparing":
+                    continue
+                inventory = json.loads(record.artifact_manifest) if record.artifact_manifest is not None else None
+                if inventory is not None and compute_artifact_manifest_hash(inventory) != record.artifact_manifest_hash:
+                    raise RuntimeError(f"创建取消的冻结清单 hash 冲突: key={key!r}")
+
+            async def abort_fork(current: ThreadCreationRecord) -> bool:
+                if fork_abort is None:
+                    raise RuntimeError("删除 fork child 缺少原资源 owner 清理回调")
+                return await fork_abort(session_id, current)
+
+            await ThreadCreationService._cleanup_after_failed_publish(
+                record, session_id=session_id, session_dir=session_dir, inventory=inventory,
+                before_abort=abort_fork if record.purpose == "fork" else None,
+            )
+            async with session_gate.exclusive(session_id):
+                if control.get_thread_creation_record(key) != record:
+                    raise RuntimeError("删除取消的创建 record 在 holder 内变化")
+                control.abort_thread_creation_record(key, "session_deletion_pending")
+            await observe_phase(key, "thread.creation.cancelled")
 
 
 @dataclass(frozen=True, slots=True)
@@ -500,10 +576,10 @@ class ThreadCreationResult:
     child_thread_id: str
     final_relative_locator: str
     record_state: str
-    admission_intent: dict[str, object]
-    admission_state: str
-    execution_binding_id: str
-    frozen_job_id: str
+    admission_intent: dict[str, object] | None
+    admission_state: str | None
+    execution_binding_id: str | None
+    frozen_job_id: str | None
 
 
 class ThreadCreationService:
@@ -581,6 +657,7 @@ class ThreadCreationService:
             else SessionLifecycleGate(self._sessions_root)
         )
         self._key_locks = KeyLockPool()
+        self._holders = OperationHolderGate(self._sessions_root, namespace="thread_creation")
 
     @property
     def control_store(self) -> SessionControlStore:
@@ -602,6 +679,12 @@ class ThreadCreationService:
         session_metadata: dict[str, object],
         artifact_manifest: dict[str, object],
         collaboration_member: dict[str, object] | None = None,
+        purpose: str = "task",
+        request_intent: dict[str, object] | None = None,
+        fork_delivery_request_id: str | None = None,
+        before_publish: Callable[[ThreadCreationRecord], Awaitable[None]] | None = None,
+        before_abort: Callable[[ThreadCreationRecord], Awaitable[bool]] | None = None,
+        on_published: Callable[[ThreadCreationRecord], None] | None = None,
     ) -> ThreadCreationResult:
         """执行（或幂等恢复）一次 child thread 创建（协议见类 docstring）。
 
@@ -609,6 +692,13 @@ class ThreadCreationService:
         时其 UUIDv7 时间戳作为固定 ID 的创建时刻。``delegation_id`` 提供即
         为 delegated child（纳入 preimage 与部分唯一约束）。
         """
+        if purpose not in {"task", "fork"}:
+            raise ValueError(f"thread creation purpose 非法: {purpose}")
+        if purpose == "fork" and (request_intent is None or before_publish is None or before_abort is None or initial_state != "idle"
+                                  or delegation_id is not None or collaboration_member is not None):
+            raise ValueError("fork child 必须冻结请求、先完成物化、保持 idle 且没有 delegation/member")
+        if purpose == "task" and any(value is not None for value in (request_intent, fork_delivery_request_id, before_publish, before_abort, on_published)):
+            raise ValueError("task child 不接受 fork 物化合同")
         self._validate_create_inputs(
             idempotency_key=idempotency_key,
             session_id=session_id,
@@ -627,9 +717,14 @@ class ThreadCreationService:
             initial_state=initial_state,
             session_metadata=session_metadata,
             artifact_manifest=artifact_manifest,
+            purpose=purpose,
+            request_intent=request_intent,
         )
         # 进程内同 key 串行：并发同 key create 收敛到同一结果。
-        async with self._key_lock(idempotency_key):
+        await observe_phase(idempotency_key, "thread.creation.before_admission", details={
+            "session_id": session_id, "thread_id": thread_id,
+        })
+        async with self._key_lock(idempotency_key), self._holders.lock_for(f"{session_id}/{idempotency_key}"):
             # 步骤 1：准入 = topology shared → Session gate exclusive（2.3-A
             # 固定锁序），fresh 验证后冻结 record（等价 operation lease）。
             async with self._gate.shared(), self._session_gate.exclusive(session_id):
@@ -685,6 +780,9 @@ class ThreadCreationService:
                     thread_id=thread_id,
                     delegation_id=delegation_id,
                     collaboration_precondition_revision=collaboration_revision,
+                    purpose=purpose,
+                    request_intent_json=canonical_json_text(request_intent) if request_intent is not None else None,
+                    fork_delivery_request_id=fork_delivery_request_id,
                     task_seed=(
                         canonical_json_text(session_metadata["task_seed"])
                         if session_metadata["task_seed"] is not None
@@ -702,6 +800,7 @@ class ThreadCreationService:
                         session_id=session_id,
                         artifact_manifest=artifact_manifest,
                     )
+            await observe_phase(idempotency_key, "thread.creation.prepared")
             if record.state == "aborted":
                 raise RuntimeError(
                     "thread creation record 已中止，调用方须换新 "
@@ -731,12 +830,19 @@ class ThreadCreationService:
                 )
             if final_dir.exists() or final_dir.is_symlink():
                 # rename 后、publish 前崩溃的恢复窗口：目标内容一致才继续。
-                self._verify_node_directory(
+                if record.purpose == "fork" and record.state == "preparing":
+                    if before_publish is None:
+                        raise RuntimeError("fork child 缺少物化 owner")
+                    record = await self._materialize_prepared_fork(
+                        record, session_id=session_id, session_dir=session_dir, inventory=inventory,
+                        before_publish=before_publish, before_abort=before_abort,
+                    )
+                verify_node_directory(
                     final_dir,
-                    expected_files,
                     inventory,
                     stage="恢复(最终 locator 已存在)",
                     published=record.state == "published",
+                    materialized_rollout=self._has_fork_completion(record, session_id),
                 )
                 if staging_dir.exists() or staging_dir.is_symlink():
                     raise RuntimeError(
@@ -749,26 +855,53 @@ class ThreadCreationService:
                     session_id=session_id,
                     session_dir=session_dir,
                     final_dir=final_dir,
-                    expected_files=expected_files,
                     inventory=inventory,
+                    before_abort=before_abort,
+                    on_published=on_published,
                 )
             self._prepare_staging(staging_dir, session_dir, expected_files, inventory)
             self._rename_staging_to_final(
                 staging_dir,
                 final_dir,
                 session_dir,
-                expected_files,
                 inventory,
             )
+            if record.purpose == "fork":
+                if before_publish is None:
+                    raise RuntimeError("fork child 缺少物化 owner")
+                record = await self._materialize_prepared_fork(
+                    record, session_id=session_id, session_dir=session_dir, inventory=inventory,
+                    before_publish=before_publish, before_abort=before_abort,
+                )
             # 步骤 4/5：gate exclusive 内 CAS publish + admission intent。
             return await self._publish_and_finalize(
                 record,
                 session_id=session_id,
                 session_dir=session_dir,
                 final_dir=final_dir,
-                expected_files=expected_files,
                 inventory=inventory,
+                before_abort=before_abort,
+                on_published=on_published,
             )
+
+    async def _materialize_prepared_fork(
+        self, record: ThreadCreationRecord, *, session_id: str, session_dir: Path,
+        inventory: dict[str, str], before_publish: Callable[[ThreadCreationRecord], Awaitable[None]],
+        before_abort: Callable[[ThreadCreationRecord], Awaitable[bool]] | None,
+    ) -> ThreadCreationRecord:
+        key = record.thread_creation_idempotency_key
+        try:
+            await before_publish(record)
+        except Exception as error:
+            current = self._control_store.get_thread_creation_record(key)
+            if current.state == "preparing":
+                await self._cleanup_after_failed_publish(
+                    current, session_id=session_id, session_dir=session_dir, inventory=inventory,
+                    before_abort=before_abort,
+                )
+                self._control_store.abort_thread_creation_record(key, str(error))
+            raise
+        return self._control_store.get_thread_creation_record(key)
 
     # ------------------------------------------------------------------
     # 输入校验与并发原语
@@ -964,16 +1097,16 @@ class ThreadCreationService:
     ) -> None:
         """staging 已存在 → 逐文件校验复用；不存在 → 完整准备 + barrier。"""
         if staging_dir.exists() or staging_dir.is_symlink():
-            self._verify_node_directory(
+            if verify_node_directory(
                 staging_dir,
-                expected_files,
                 inventory,
                 stage="staging 复验",
-            )
-            return
-        # 准备中断（任一步骤抛错）：不删除现场（无法与外部篡改区分），
-        # 保留不完整 staging 供人工核账，重入 fail closed（「准备中断
-        # 窗口」——人工清理 staging 后同 key 重试即可完整重准备）。
+                partial=True,
+            ):
+                return
+            # 原 holder 已取得；合法准备中断只按本 record 的 staging 重建。
+            shutil.rmtree(staging_dir)
+            _fsync_directory(staging_dir.parent)
         staging_dir.mkdir(parents=True, exist_ok=False)
         for dir_name in _EXPECTED_NODE_DIRS:
             (staging_dir / dir_name).mkdir(exist_ok=False)
@@ -992,29 +1125,10 @@ class ThreadCreationService:
         _fsync_directory(session_dir)
         # 落盘后对账：实际内容清单必须与 record 冻结值一致（fail loud
         # 捕获文件系统异常，不留静默漂移）。
-        self._verify_node_directory(
+        verify_node_directory(
             staging_dir,
-            expected_files,
             inventory,
             stage="staging 落盘对账",
-        )
-
-    def _verify_node_directory(
-        self,
-        directory: Path,
-        expected_files: dict[str, bytes],
-        inventory: dict[str, str],
-        *,
-        stage: str,
-        published: bool = False,
-    ) -> None:
-        """逐文件校验（委托模块级纯函数 ``verify_node_directory``）。"""
-        verify_node_directory(
-            directory,
-            expected_files,
-            inventory,
-            stage=stage,
-            published=published,
         )
 
     # ------------------------------------------------------------------
@@ -1026,7 +1140,6 @@ class ThreadCreationService:
         staging_dir: Path,
         final_dir: Path,
         session_dir: Path,
-        expected_files: dict[str, bytes],
         inventory: dict[str, str],
     ) -> None:
         """staging 原子 rename 到冻结最终 locator（父目录链 mkdir + fsync）。"""
@@ -1037,9 +1150,7 @@ class ThreadCreationService:
             # 校验与 rename 之间目标被外部放置：内容一致 → 视为 rename
             # 已完成（清理已校验一致的冗余 staging 副本后继续 publish）；
             # 不一致 → fail closed。
-            self._verify_node_directory(
-                final_dir, expected_files, inventory, stage=stage
-            )
+            verify_node_directory(final_dir, inventory, stage=stage)
             shutil.rmtree(staging_dir)
             _fsync_directory(staging_dir.parent)
             _fsync_directory(session_dir)
@@ -1070,8 +1181,9 @@ class ThreadCreationService:
         session_id: str,
         session_dir: Path,
         final_dir: Path,
-        expected_files: dict[str, bytes],
         inventory: dict[str, str],
+        before_abort: Callable[[ThreadCreationRecord], Awaitable[bool]] | None = None,
+        on_published: Callable[[ThreadCreationRecord], None] | None = None,
     ) -> ThreadCreationResult:
         """（必要时）gate exclusive 内 CAS publish → admission intent → 复验。
 
@@ -1085,16 +1197,22 @@ class ThreadCreationService:
                 record,
                 session_id=session_id,
                 session_dir=session_dir,
-                expected_files=expected_files,
                 inventory=inventory,
+                before_abort=before_abort,
+                on_published=on_published,
             )
+        elif on_published is not None:
+            async with self._gate.shared(), self._session_gate.exclusive(session_id):
+                on_published(published)
         # 步骤 5：初始 execution admission intent（publish 后幂等写入；
         # 本轮不绑定真实 Job——state 恒 pending，8.5 幂等 worker 消费）。
-        intent = self._control_store.get_initial_execution_intent(
-            published.thread_creation_idempotency_key
-        )
-        if intent.session_id != session_id or intent.thread_id != published.child_thread_id:
-            raise RuntimeError("publication 的初始 execution intent owner 不一致")
+        intent = None
+        if published.purpose == "task":
+            intent = self._control_store.get_initial_execution_intent(
+                published.thread_creation_idempotency_key
+            )
+            if intent.session_id != session_id or intent.thread_id != published.child_thread_id:
+                raise RuntimeError("publication 的初始 execution intent owner 不一致")
         # publish 后 staging 残留 = 外部改动（本流不变量：rename 后 staging
         # 必已不在，见 create 主流程）→ fail closed。
         staging_dir = session_dir / published.staging_locator
@@ -1106,9 +1224,8 @@ class ThreadCreationService:
             )
         # 复验最终目录与唯一可见性提交点产物（published 幂等返回的统一
         # 收敛出口）。
-        self._verify_node_directory(
+        verify_node_directory(
             final_dir,
-            expected_files,
             inventory,
             stage="published 复验",
             published=True,
@@ -1120,10 +1237,10 @@ class ThreadCreationService:
             child_thread_id=published.child_thread_id,
             final_relative_locator=published.final_relative_locator,
             record_state=published.state,
-            admission_intent=json.loads(published.admission_intent),
-            admission_state=intent.state,
-            execution_binding_id=intent.execution_binding_id,
-            frozen_job_id=intent.job_id,
+            admission_intent=json.loads(published.admission_intent) if published.admission_intent is not None else None,
+            admission_state=intent.state if intent is not None else None,
+            execution_binding_id=intent.execution_binding_id if intent is not None else None,
+            frozen_job_id=intent.job_id if intent is not None else None,
         )
 
     async def _publish_in_gate(
@@ -1132,8 +1249,9 @@ class ThreadCreationService:
         *,
         session_id: str,
         session_dir: Path,
-        expected_files: dict[str, bytes],
         inventory: dict[str, str],
+        before_abort: Callable[[ThreadCreationRecord], Awaitable[bool]] | None = None,
+        on_published: Callable[[ThreadCreationRecord], None] | None = None,
     ) -> ThreadCreationRecord:
         """topology shared → Session gate exclusive 内 CAS publish；
         失败定点清理 + abort。
@@ -1167,16 +1285,20 @@ class ThreadCreationService:
                 published = self._control_store.publish_thread_creation_record(
                     idempotency_key, session_id=session_id
                 )
+                if on_published is not None:
+                    on_published(published)
+                await observe_phase(idempotency_key, "thread.creation.published")
         except SessionDeletionPendingError as error:
             # 2.3-D：删除先行的收敛 = 定点清理 + abort（取消原 operation），
             # 错误类型原样传播（调用方据此终止，不换 key 重放）。
             current = self._control_store.get_thread_creation_record(idempotency_key)
             if current.state == "preparing":
-                self._cleanup_after_failed_publish(
-                    record,
+                await self._cleanup_after_failed_publish(
+                    current,
+                    session_id=session_id,
                     session_dir=session_dir,
-                    expected_files=expected_files,
                     inventory=inventory,
+                    before_abort=before_abort,
                 )
                 self._control_store.abort_thread_creation_record(
                     idempotency_key, str(error)
@@ -1222,11 +1344,12 @@ class ThreadCreationService:
             # CAS 失败：不发布、不重基——按 record 定点清理 staging/final
             # 目录（清理失败保持 record preparing 并直接抛错，人工核账），
             # 再 abort record（8.5-A：调用方以新 operation 重试）。
-            self._cleanup_after_failed_publish(
-                record,
+            await self._cleanup_after_failed_publish(
+                current,
+                session_id=session_id,
                 session_dir=session_dir,
-                expected_files=expected_files,
                 inventory=inventory,
+                before_abort=before_abort,
             )
             self._control_store.abort_thread_creation_record(
                 idempotency_key, str(error)
@@ -1238,13 +1361,29 @@ class ThreadCreationService:
             ) from error
         return published
 
-    def _cleanup_after_failed_publish(
-        self,
+    @staticmethod
+    def _has_fork_completion(record: ThreadCreationRecord, session_id: str) -> bool:
+        if record.purpose != "fork" or record.fork_completion_json is None:
+            return False
+        proof = json.loads(record.fork_completion_json)
+        if (
+            set(proof) != {"fork_id", "materialization_id", "source_snapshot_sha256", "target_session_id", "target_thread_id"}
+            or proof["target_session_id"] != session_id
+            or proof["target_thread_id"] != record.child_thread_id
+            or not all(isinstance(value, str) and value for value in proof.values())
+            or re.fullmatch(r"[0-9a-f]{64}", proof["source_snapshot_sha256"]) is None
+        ):
+            raise RuntimeError("fork child completion 与本 operation 的 owner/快照不一致")
+        return True
+
+    @staticmethod
+    async def _cleanup_after_failed_publish(
         record: ThreadCreationRecord,
         *,
+        session_id: str,
         session_dir: Path,
-        expected_files: dict[str, bytes],
-        inventory: dict[str, str],
+        inventory: dict[str, str] | None,
+        before_abort: Callable[[ThreadCreationRecord], Awaitable[bool]] | None = None,
     ) -> None:
         """CAS 失败后的定点清理：只触碰 record 冻结的 staging/final 目录。
 
@@ -1256,14 +1395,25 @@ class ThreadCreationService:
             (session_dir / record.final_relative_locator, "final"),
             (session_dir / record.staging_locator, "staging"),
         )
+        materialized_rollout = False
+        if record.purpose == "fork":
+            if before_abort is None:
+                raise RuntimeError("fork child 清理缺少资源 owner 回调")
+            materialized_rollout = await before_abort(record)
         for directory, label in targets:
             if not (directory.exists() or directory.is_symlink()):
                 continue
-            self._verify_node_directory(
+            if inventory is None:
+                raise RuntimeError(f"未冻结清单的创建已有目录: key={record.thread_creation_idempotency_key!r}, path={directory}")
+            verify_node_directory(
                 directory,
-                expected_files,
                 inventory,
                 stage=f"{stage}({label})",
+                partial=label == "staging",
+                materialized_rollout=label == "final" and materialized_rollout,
             )
+        for directory, _label in targets:
+            if not (directory.exists() or directory.is_symlink()):
+                continue
             shutil.rmtree(directory)
             _fsync_directory(directory.parent)

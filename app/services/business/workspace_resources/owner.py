@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from app.abstractions.workspace_resources import (
     RetentionScope,
 )
 from app.core.identifier import create_uuid_hex
+from app.core.phase_observer import observe_phase
 from app.services.business.workspace_resources.facts import (
     ORPHAN_GRACE_SECONDS,
     STOPPED_STATUSES,
@@ -27,14 +29,22 @@ from app.services.business.workspace_resources.facts import (
     observe_resource,
     public_error,
     resource_projection,
+    resource_target_facts,
 )
 from app.services.business.workspace_resources.records import (
+    ForkAttachReceipt,
     OwnedResourceRecord,
     ResourceRecordStore,
     ThreadRef,
 )
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    check_resource_target,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.values import (
+    ResourceTargetContext,
 )
 
 logger = logging.getLogger(__name__)
@@ -109,6 +119,7 @@ class WorkspaceResourceOwner:
             # 每个领域只对账自身 lease，不修改另一 owner 的运行事实。
             self._leases.reconcile(statuses, kind=self.lease_kind)
             for record in self._store.records.values():
+                self._release_committed_fork_leases(record)
                 self._reconcile_stopped_record(record, observed.get(record.resource_id))
                 if self._leases.leases_for_resource(record.resource_id):
                     record.reconciliation_status = "reconcile_required"
@@ -256,6 +267,79 @@ class WorkspaceResourceOwner:
             resource_id, action, expected_revision, thread, holder_id, operation_id
         )
 
+    def fork_attach_receipt(
+        self, resource_id: str, *, creation_key: str, thread: ThreadRef, expected_revision: int,
+    ) -> ForkAttachReceipt | None:
+        """只读原 operation 历史，不将当前关联误认为本次提交证明。"""
+        record = self._store.records.get(resource_id)
+        receipt = None if record is None else record.fork_attachments.get(creation_key)
+        if receipt is not None and (receipt.target_thread, receipt.expected_revision) != (thread, expected_revision):
+            raise ResourceConflict("fork attach operation 的冻结目标或 expected_revision 冲突")
+        return None if receipt is None else replace(receipt)
+
+    def _fork_attach_operation_id(self, resource_id: str, creation_key: str) -> str:
+        return f"fork-attach:{creation_key}:{self.kind}:{resource_id}"
+
+    def _release_committed_fork_leases(self, record: OwnedResourceRecord) -> None:
+        for receipt in record.fork_attachments.values():
+            if receipt.state != "committed":
+                continue
+            if receipt.lease_id is None:
+                raise RuntimeError("已提交 fork attach 回执缺少精确 operation lease 身份")
+            lease = self._leases.get_lease(receipt.lease_id)
+            if lease is None:
+                raise RuntimeError("已提交 fork attach 回执缺少原 operation lease")
+            if (lease.resource_id, lease.turn_stream_id, lease.operation_id, lease.holder_session_id, lease.holder_thread_id) != (
+                record.resource_id, f"fork:{receipt.creation_key}",
+                self._fork_attach_operation_id(record.resource_id, receipt.creation_key),
+                receipt.target_thread.session_id, receipt.target_thread.thread_id,
+            ):
+                raise RuntimeError("fork attach 回执与原 operation lease 身份冲突")
+            if lease.status in {"active", "reconcile_required"}:
+                # 只完成这一条已提交的操作；资源本身仍存活，不使用资源终态 settle。
+                self._leases.release(lease.lease_id, reason="fork_attach_committed")
+
+    async def attach_for_fork(
+        self, resource_id: str, *, creation_key: str, expected_revision: int, thread: ThreadRef,
+    ) -> tuple[ResourceSnapshot, ForkAttachReceipt]:
+        """仅为 fork 的发布后恢复保留最小回执，实际 attach 共用原命令写入方。"""
+        await self.recover()
+        async with self._lock:
+            existing = self.fork_attach_receipt(
+                resource_id, creation_key=creation_key, thread=thread, expected_revision=expected_revision,
+            )
+        if existing is not None:
+            return await self.get_resource(resource_id), existing
+        async with self.admit_thread(thread.session_id, thread.thread_id), self._lock:
+            record = self._require(resource_id)
+            existing = self.fork_attach_receipt(
+                resource_id, creation_key=creation_key, thread=thread, expected_revision=expected_revision,
+            )
+            if existing is not None:
+                return resource_projection(record, None, self.kind), existing
+            receipt = ForkAttachReceipt(creation_key, thread, expected_revision, "rejected")
+            try:
+                decision = check_resource_target(
+                    resource_target_facts(resource_projection(record, None, self.kind)),
+                    ResourceTargetContext(storage_domain_id=self.workspace_id, workspace_id=self.workspace_id,
+                                          owner_session_id=thread.session_id, owner_thread_id=thread.thread_id),
+                    choice="reuse_reference",
+                )
+                if not decision.available:
+                    raise ResourceConflict(decision.reason)
+                snapshot = await self._command_record(
+                    record, "attach", expected_revision, thread, f"fork:{creation_key}",
+                    self._fork_attach_operation_id(resource_id, creation_key), fork_attachment=receipt,
+                )
+            except Exception as error:
+                # 已派发的失败保持 dispatching/unknown；绝不因存活快照自动重发。
+                receipt.error = public_error(error)
+                record.fork_attachments[creation_key] = receipt
+                self._store.persist()
+                logger.exception("fork attach 未完成: resource_id=%s creation_key=%s", resource_id, creation_key)
+                snapshot = resource_projection(record, None, self.kind)
+            return snapshot, replace(receipt)
+
     async def _command(
         self,
         resource_id: str,
@@ -281,6 +365,7 @@ class WorkspaceResourceOwner:
         operation_id: str,
         lease_id: str | None = None,
         stop_reason: str | None = None,
+        fork_attachment: ForkAttachReceipt | None = None,
     ) -> ResourceSnapshot:
         resource_id = record.resource_id
         if record.status == "deleted" and record.reconciliation_status == "verified":
@@ -326,8 +411,17 @@ class WorkspaceResourceOwner:
             )
         if action not in {"promote", "attach", "detach", "stop", "delete"}:
             raise ValueError(f"外部资源 不支持操作: {action}")
-        with self._management_lease(record, thread, holder_id, operation_id, lease_id):
+        with self._management_lease(record, thread, holder_id, operation_id, lease_id) as acquired_lease_id:
+            associations_before = list(record.thread_associations)
+            if fork_attachment is not None:
+                fork_attachment.state = "dispatching"
+                fork_attachment.lease_id = acquired_lease_id
+                record.fork_attachments[fork_attachment.creation_key] = fork_attachment
+                self._store.persist()
+            committed = False
             try:
+                if fork_attachment is not None:
+                    await observe_phase(fork_attachment.creation_key, f"fork.live.dispatched.{self.kind}")
                 if action in {"stop", "delete"}:
                     return await self._stop_or_delete(record, delete=action == "delete", reason=stop_reason)
                 await self._advance_revision(record)
@@ -351,10 +445,22 @@ class WorkspaceResourceOwner:
                     ):
                         record.unattached_since = record.unattached_since or self._now()
                 record.updated_at = self._now()
+                if fork_attachment is not None:
+                    fork_attachment.state = "committed"
+                    fork_attachment.committed_revision = record.owner_revision
                 self._store.persist()
+                committed = True
+                if fork_attachment is not None:
+                    await observe_phase(fork_attachment.creation_key, f"fork.live.committed.{self.kind}")
                 self._sync_ledger(record)
                 return resource_projection(record, runtime, self.kind)
             except BaseException as error:
+                if fork_attachment is not None:
+                    if committed:
+                        raise
+                    record.thread_associations = associations_before
+                    fork_attachment.state = "dispatching"
+                    fork_attachment.committed_revision = None
                 self._unknown(record, error)
                 raise
 
@@ -668,7 +774,7 @@ class WorkspaceResourceOwner:
         holder_id: str,
         operation_id: str,
         lease_id: str | None = None,
-    ) -> Iterator[None]:
+    ) -> Iterator[str]:
         if lease_id is not None:
             lease = self._leases.get_lease(lease_id)
             if (
@@ -680,7 +786,7 @@ class WorkspaceResourceOwner:
                 raise ResourceConflict("外部资源 操作引用不是当前有效 lease")
         acquired = lease_id or self._acquire(record, ref, holder_id, operation_id)
         try:
-            yield
+            yield acquired
         finally:
             if lease_id is None:
                 self._leases.release(acquired)

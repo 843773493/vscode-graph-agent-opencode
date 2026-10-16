@@ -12,6 +12,8 @@
 - **BREAKING** 修改 `turn-message-stream` 的 `[Runtime] Persistent resources have independent lifecycle and operation leases` 合同：移除通用 `ResourceManager`、`cleanup_policy` 和进程内 stopper 对外部资源停止状态的决定权，统一由领域 owner 按保留范围、关联与有效 lease 执行并核实。
 - 复用 `add-context-injection-lifecycle` 定义的 `LifetimeScope` 和持久 operation lease；Thread residency、idle unload 资格与阈值由 `add-itemized-rollout-context` 唯一规定。本 change 不另造 Thread residency 或 dispose 机制。Thread graph 的懒加载和驻留复用也由该 change 维护。
 
+- **Fork资源处理（2026-10-13）**：消费统一资源目标检查合同并复用已有retention_scope、thread关联、修订/状态及操作能力；默认不继承活资源，显式选择可复用同工作区workspace资源并按owner关联，不复制实例或自动提升thread范围。跨端可移植快照能力由对应owner提供，不建立另一复制矩阵或生命周期registry。
+
 ## Capabilities
 
 ### New Capabilities

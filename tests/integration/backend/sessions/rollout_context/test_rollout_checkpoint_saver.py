@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
@@ -24,10 +25,12 @@ from app.core.execution_admission_context import execution_admission_scope
 from app.core.job_context import reset_current_job_id, set_current_job_id
 from app.core.path_utils import catalog_provider_scope, get_session_path_resolver
 from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
     InternalExecutionIntent,
 )
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.system_reminder_checkpoint_service import (
@@ -44,6 +47,12 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.services.infrastructure.rollout_context.checkpoint.writer import (
     RolloutAppendWriter,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
 )
 from app.services.infrastructure.rollout_context.storage import (
     schema as storage_version,
@@ -124,6 +133,37 @@ def _execution_scope(admission: ExecutionAdmission) -> Iterator[None]:
             yield
     finally:
         reset_current_job_id(token)
+
+
+@pytest.fixture
+def start_model_call(frozen_provider_wire, frozen_provider_activation):
+    """用正式封存和 ModelCall 登记启动已接受的 Turn，不跳过 open→active。"""
+    def start(saver: RolloutCheckpointSaver, admission: ExecutionAdmission, user: HumanMessage) -> None:
+        creation_key = f"model-start:{admission.execution_id}"
+        prepared = saver.prepare_context_for_provider(
+            admission.session_id, admission.thread_id,
+            turn_id=admission.turn_id, execution_id=admission.execution_id,
+            plan_creation_idempotency_key=creation_key,
+            seal_idempotency_key=f"model-start-seal:{admission.execution_id}",
+            request_messages=(user,),
+            context_source_manager=ContextSourceManager(
+                owner=ContextSourceOwnerKey(admission.session_id, admission.thread_id),
+                control_state_port=saver,
+            ),
+            tool_set_supplier=lambda: ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=()),
+            **frozen_provider_wire("checkpoint-lifecycle-model", "chat_completions"),
+            **frozen_provider_activation(saver, plan_creation_idempotency_key=creation_key),
+        )
+        snapshot = prepared["snapshot"]
+        assert snapshot.seal_binding is not None and snapshot.model_call_id is not None
+        saver.register_model_call(
+            admission.session_id, thread_id=admission.thread_id,
+            execution_id=admission.execution_id, model_call_id=snapshot.model_call_id,
+            assembly_id=snapshot.assembly_id, attempt=1,
+            provider="checkpoint-lifecycle-model", dispatch_state="dispatched",
+        )
+
+    return start
 
 
 def _storage(sessions_dir: Path) -> RolloutContextStore:
@@ -429,6 +469,62 @@ def test_put_treats_unpersisted_initial_parent_as_root(
             )
 
 
+def test_put_tool_result_phase_allows_queued_turn_before_storage_lock(
+    tmp_path: Path,
+    session_bundle_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.infrastructure.rollout_context.checkpoint.runtime import (
+        langgraph_api,
+    )
+
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, SESSION_ID)
+    saver = RolloutCheckpointSaver(sessions_dir)
+    thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
+    model_call_id = "00000000-0000-4000-8000-000000000031"
+    messages = _turn("turn-phase-first", "phase-first")
+    messages[1] = messages[1].model_copy(update={"response_metadata": {"model_call_id": model_call_id}})
+    admission = _accept_user_execution(saver, SESSION_ID, thread_id, messages[0], turn_id="turn-phase-first")
+    phase_seen = threading.Event()
+    release = threading.Event()
+    observed = []
+
+    def observe(operation_id, phase):
+        observed.append((operation_id, phase))
+        phase_seen.set()
+        if not release.wait(3):
+            raise TimeoutError("checkpoint 真实结果屏障未释放")
+
+    monkeypatch.setattr(langgraph_api, "observe_phase_sync", observe)
+
+    def put_first():
+        with _execution_scope(admission):
+            saver.put(
+                build_checkpoint_config(thread_id), _checkpoint("cp-phase-first", messages),
+                {"source": "phase-first"}, {"messages": "1"},
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(put_first)
+        try:
+            assert phase_seen.wait(1)
+            queued = HumanMessage(content="queued root", id="user-phase-queued")
+            acceptance = executor.submit(
+                _accept_user_execution, saver, SESSION_ID, thread_id, queued,
+                turn_id="turn-phase-queued",
+            )
+            assert acceptance.result(timeout=1).turn_id == "turn-phase-queued"
+        finally:
+            release.set()
+        first.result(timeout=3)
+    assert observed == [(f"{model_call_id}:tool-call:call-phase-first", "canonical.tool_result.before_commit")]
+    history = saver._history_reader.load(
+        SESSION_ID, thread_id=thread_id, request=TurnHistoryLoadRequest(),
+    )
+    assert [turn.turn_id for turn in history.items] == ["turn-phase-first", "turn-phase-queued"]
+
+
 def test_put_repairs_empty_message_channel_version(
     tmp_path: Path,
     session_bundle_factory,
@@ -646,7 +742,8 @@ def test_checkpoint_read_does_not_reinitialize_existing_rollout(
         assert restored.checkpoint["id"] == "cp-existing"
 
 
-def test_delete_legacy_rollout_does_not_initialize_removed_layout(
+@pytest.mark.asyncio
+async def test_delete_legacy_rollout_does_not_initialize_removed_layout(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
@@ -665,8 +762,7 @@ def test_delete_legacy_rollout_does_not_initialize_removed_layout(
     thread_id = storage.storage.main_thread_id(LEGACY_SESSION_ID)
 
     assert storage.forks.pinned_fork_children(LEGACY_SESSION_ID) == ()
-    storage.forks.release_fork_retentions(LEGACY_SESSION_ID)
-    storage.forks.delete_thread(LEGACY_SESSION_ID, thread_id=thread_id)
+    await storage.forks.delete_thread(LEGACY_SESSION_ID, thread_id=thread_id, attachment_store=None)
 
     assert not rollout_root.exists()
 
@@ -743,6 +839,86 @@ def test_history_page_uses_one_snapshot_and_sqlite_keyset_window(
     assert page.has_more is True
 
 
+def test_history_reads_accepted_turn_from_active_successor_before_next_checkpoint(
+    tmp_path: Path,
+    session_bundle_factory,
+    start_model_call,
+) -> None:
+    """已接受的新 Turn 属于 active history，不修改前一冻结 checkpoint。"""
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, SESSION_ID)
+    saver = RolloutCheckpointSaver(sessions_dir)
+    thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
+    first = _turn("turn-1", "001")
+    first_admission = _accept_user_execution(
+        saver, SESSION_ID, thread_id, first[0], turn_id="turn-1"
+    )
+    with _execution_scope(first_admission):
+        start_model_call(saver, first_admission, first[0])
+        checkpoint_config = saver.put(
+            build_checkpoint_config(thread_id),
+            _checkpoint("cp-1", first),
+            {"source": "active-history-test"},
+            {"messages": "1"},
+        )
+        saver.finalize_turn(
+            session_id=SESSION_ID,
+            thread_id=thread_id,
+            turn_id="turn-1",
+            final_message_id="final-001",
+        )
+    context_reader = RolloutContextReader(_storage(sessions_dir))
+    reader = RolloutHistoryReader(context_reader)
+    initial = reader.load(
+        SESSION_ID, thread_id, TurnHistoryLoadRequest(direction="tail", turns=1)
+    )
+    assert [item.turn_id for item in initial.items] == ["turn-1"]
+
+    second = _turn("turn-2", "002")
+    _accept_user_execution(
+        saver, SESSION_ID, thread_id, second[0], turn_id="turn-2"
+    )
+    with context_reader.open_snapshot(SESSION_ID, thread_id) as snapshot:
+        checkpoint = context_reader.latest_checkpoint(snapshot)
+        assert checkpoint is not None and checkpoint.checkpoint_id == "cp-1"
+        active_view_id = snapshot.connection.execute(
+            "SELECT head_view_id FROM branches WHERE branch_id = ?",
+            (snapshot.manifest.active_branch_id,),
+        ).fetchone()[0]
+        assert active_view_id != checkpoint.view_id
+        assert snapshot.connection.execute(
+            "SELECT COUNT(*) FROM context_view_turns WHERE view_id = ? AND turn_id = ?",
+            (active_view_id, "turn-2"),
+        ).fetchone()[0] == 1
+        assert snapshot.connection.execute(
+            "SELECT COUNT(*) FROM context_view_turns WHERE view_id = ? AND turn_id = ?",
+            (checkpoint.view_id, "turn-2"),
+        ).fetchone()[0] == 0
+        frozen_chain = context_reader.resolve_chain(snapshot, checkpoint.message_sequence)
+        assert context_reader.context_view_id(frozen_chain) == checkpoint.view_id
+        assert context_reader.context_turn_count(snapshot, frozen_chain) == 1
+
+    for history_reader in (reader, RolloutHistoryReader(context_reader)):
+        detail = history_reader.load(
+            SESSION_ID,
+            thread_id,
+            TurnHistoryLoadRequest(turn_ids=["turn-2"], include=["user"]),
+        )
+        assert [item.turn_id for item in detail.items] == ["turn-2"]
+        assert detail.items[0].ordinal == 2
+        assert detail.items[0].user_messages[0].content == second[0].content
+        latest = history_reader.load(
+            SESSION_ID, thread_id, TurnHistoryLoadRequest(direction="tail", turns=1)
+        )
+        assert [item.turn_id for item in latest.items] == ["turn-2"]
+    with _execution_scope(first_admission):
+        restored = saver.get_tuple(checkpoint_config)
+    assert restored is not None
+    assert [message.id for message in restored.checkpoint["channel_values"]["messages"]] == [
+        message.id for message in first
+    ]
+
+
 def test_history_index_failure_closes_read_snapshot(
     tmp_path: Path,
     session_bundle_factory,
@@ -779,6 +955,7 @@ def test_history_index_failure_closes_read_snapshot(
 def test_checkpoint_envelope_and_channels_are_authoritative_sqlite(
     tmp_path: Path,
     session_bundle_factory,
+    start_model_call,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
@@ -789,6 +966,7 @@ def test_checkpoint_envelope_and_channels_are_authoritative_sqlite(
         saver, SESSION_ID, thread_id, messages[0], turn_id="turn-1"
     )
     with _execution_scope(admission):
+        start_model_call(saver, admission, messages[0])
         checkpoint_config = saver.put(
             build_checkpoint_config(thread_id),
             _checkpoint("cp-1", messages, counter=3, task_state=None),
@@ -1007,6 +1185,7 @@ def test_terminal_turn_status_convergence_is_idempotent_after_termination(
 def test_hidden_system_reminder_does_not_create_empty_chat_turn(
     tmp_path: Path,
     session_bundle_factory,
+    start_model_call,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
@@ -1021,6 +1200,7 @@ def test_hidden_system_reminder_does_not_create_empty_chat_turn(
         saver, SESSION_ID, thread_id, user, turn_id="job-1"
     )
     with _execution_scope(admission):
+        start_model_call(saver, admission, user)
         saver.put(
             build_checkpoint_config(thread_id),
             _checkpoint("cp-1", [user]),
@@ -1278,6 +1458,7 @@ def test_legacy_hidden_reminder_turn_is_excluded_from_history(
 def test_rewind_replay_uses_new_canonical_suffix_without_replacement_event(
     tmp_path: Path,
     session_bundle_factory,
+    start_model_call,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
@@ -1288,6 +1469,7 @@ def test_rewind_replay_uses_new_canonical_suffix_without_replacement_event(
         saver, SESSION_ID, thread_id, first[0], turn_id="turn-1"
     )
     with _execution_scope(first_admission):
+        start_model_call(saver, first_admission, first[0])
         first_config = saver.put(
             build_checkpoint_config(thread_id),
             _checkpoint("cp-1", first),
@@ -1506,6 +1688,150 @@ def test_pending_writes_and_all_checkpoint_channels_round_trip(
         assert restored.checkpoint["channel_values"]["counter"] == 0
         assert restored.checkpoint["channel_values"]["optional"] is None
         assert restored.pending_writes == [("task-1", "counter", 1)]
+
+
+@pytest.fixture
+def delta_history_case(
+    tmp_path: Path, session_bundle_factory,
+) -> tuple[RolloutCheckpointSaver, ExecutionAdmission, RunnableConfig, Path]:
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, SESSION_ID)
+    saver = RolloutCheckpointSaver(sessions_dir)
+    thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
+    user = HumanMessage(content="恢复增量通道", id="delta-user")
+    admission = _accept_user_execution(
+        saver, SESSION_ID, thread_id, user, turn_id="turn-delta"
+    )
+
+    def put(parent: RunnableConfig, checkpoint_id: str, **values: object) -> RunnableConfig:
+        checkpoint = _checkpoint(checkpoint_id, [user], **values)
+        # absent 保留版本，不能因此误当作已经持久化的通道 seed。
+        checkpoint["channel_versions"].update({
+            channel: checkpoint_id
+            for channel in ("files", "optional", "zero", "false", "mapping", "late", "never")
+        })
+        return saver.put(parent, checkpoint, {"source": "unit"}, checkpoint["channel_versions"])
+
+    with _execution_scope(admission):
+        root = put(
+            build_checkpoint_config(thread_id), "delta-root",
+            files=[], optional="旧值", zero=0, false=False, mapping={},
+        )
+        saver.put_writes(root, [("files", "root-a"), ("files", "root-b"), ("never", "root-never")], "root-task", "a")
+        saver.put_writes(root, [("optional", "旧seed后的写入")], "root-optional", "b")
+        middle = put(root, "delta-middle", optional=None, late=[])
+        saver.put_writes(middle, [("files", "middle-a"), ("files", "middle-b"), ("optional", "middle-null"), ("late", "middle-late"), ("never", "middle-never")], "middle-task", "a")
+        # 旁支处于两个祖先之间的提交时间，恢复只能沿 target 的真实父链。
+        side = put(root, "delta-side", files=["旁支seed"], optional="旁支值")
+        saver.put_writes(side, [("files", "旁支写入")], "side-task", "a")
+        target = put(middle, "delta-target", files=["目标seed不属于父链"])
+        saver.put_writes(target, [("files", "目标写入"), ("never", "目标never")], "target-task", "a")
+
+    # 另一个 namespace 的较晚提交也不能加入主 namespace 的历史。
+    other_user = HumanMessage(content="独立命名空间", id="delta-other-user")
+    other = _accept_user_execution(
+        saver, SESSION_ID, thread_id, other_user,
+        turn_id="turn-delta-other", checkpoint_ns="other",
+    )
+    with _execution_scope(other):
+        other_checkpoint = _checkpoint("delta-other", [other_user], files=["其它命名空间"])
+        saver.put(
+            build_checkpoint_config(thread_id, checkpoint_ns="other"), other_checkpoint,
+            {"source": "unit"}, other_checkpoint["channel_versions"],
+        )
+    index_path = saver._storage.storage.root(SESSION_ID, thread_id=thread_id) / "index.sqlite"
+    return saver, admission, target, index_path
+
+
+@pytest.mark.asyncio
+async def test_delta_channel_history_restores_cold_parent_path_without_materializing_messages(
+    delta_history_case, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    saver, admission, target, _index_path = delta_history_case
+    cold = RolloutCheckpointSaver(saver._storage.storage.sessions_dir)
+    channels = ["files", "optional", "zero", "false", "mapping", "late", "never"]
+    expected = {
+        "files": {"seed": [], "writes": [("root-task", "files", "root-a"), ("root-task", "files", "root-b"), ("middle-task", "files", "middle-a"), ("middle-task", "files", "middle-b")]},
+        "optional": {"seed": None, "writes": [("middle-task", "optional", "middle-null")]},
+        "zero": {"seed": 0, "writes": []},
+        "false": {"seed": False, "writes": []},
+        "mapping": {"seed": {}, "writes": []},
+        "late": {"seed": [], "writes": [("middle-task", "late", "middle-late")]},
+        "never": {"writes": [("root-task", "never", "root-never"), ("middle-task", "never", "middle-never")]},
+    }
+    snapshots = []
+    original_open = cold._storage.storage.open_read_snapshot
+
+    def open_once(*args, **kwargs):
+        snapshot = original_open(*args, **kwargs)
+        snapshots.append(snapshot)
+        return snapshot
+
+    def forbid_messages(*args, **kwargs):
+        raise AssertionError("Delta恢复不得物化未请求的messages")
+
+    monkeypatch.setattr(cold._storage.storage, "open_read_snapshot", open_once)
+    monkeypatch.setattr(cold._storage.checkpoints, "_messages_for_view", forbid_messages)
+    with _execution_scope(admission):
+        assert cold.get_delta_channel_history(config=target, channels=channels) == expected
+        assert await cold.aget_delta_channel_history(config=target, channels=channels) == expected
+        assert len(snapshots) == 2
+        assert cold.get_delta_channel_history(
+            config=build_checkpoint_config(admission.thread_id), channels=channels,
+        ) == expected
+        assert cold.get_delta_channel_history(
+            config=build_checkpoint_config(admission.thread_id, checkpoint_id="delta-root"), channels=channels,
+        ) == {channel: {"writes": []} for channel in channels}
+        assert await cold.aget_delta_channel_history(
+            config=build_checkpoint_config(admission.thread_id, checkpoint_id="missing"), channels=channels,
+        ) == {channel: {"writes": []} for channel in channels}
+        assert cold.get_delta_channel_history(config={}, channels=[]) == {}
+        assert await cold.aget_delta_channel_history(config={}, channels=[]) == {}
+        with pytest.raises(ValueError, match="history-projection-unavailable"):
+            cold.get_delta_channel_history(
+                config={"configurable": {**target["configurable"], "history_view_id": "missing-view"}},
+                channels=channels,
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("corruption", "message"), [
+    ("pending_length", "pending_writes.value_length"),
+    ("channel_hash", "checkpoint channel BLOB"),
+    ("channel_length", "checkpoint channel BLOB"),
+    ("absent_storage_kind", "checkpoint absent channel 存储状态非法"),
+    ("absent_payload", "checkpoint absent channel 存储状态非法"),
+    ("missing_parent", "parent lineage 缺少"),
+    ("cycle", "parent lineage 存在循环"),
+    ("messages_pointer", "checkpoint messages selection"),
+])
+async def test_delta_channel_history_rejects_corrupt_requested_history_without_writes(
+    delta_history_case, corruption: str, message: str,
+) -> None:
+    saver, admission, target, index_path = delta_history_case
+    statements = {
+        "pending_length": "UPDATE pending_writes SET value_length=value_length+1 WHERE checkpoint_id='delta-middle' AND channel='files'",
+        "channel_hash": "UPDATE checkpoint_channels SET value_hash='damaged' WHERE checkpoint_id='delta-root' AND channel_name='files'",
+        "channel_length": "UPDATE checkpoint_channels SET value_length=value_length+1 WHERE checkpoint_id='delta-root' AND channel_name='files'",
+        "absent_storage_kind": "UPDATE checkpoint_channels SET storage_kind='rollout_view' WHERE checkpoint_id='delta-middle' AND channel_name='files'",
+        "absent_payload": "UPDATE checkpoint_channels SET value_blob=x'00' WHERE checkpoint_id='delta-middle' AND channel_name='files'",
+        "missing_parent": "UPDATE checkpoints SET parent_checkpoint_id='missing-parent' WHERE checkpoint_id='delta-middle'",
+        "cycle": "UPDATE checkpoints SET parent_checkpoint_id='delta-target' WHERE checkpoint_id='delta-middle'",
+        "messages_pointer": "UPDATE checkpoint_channels SET context_view_id=(SELECT view_id FROM checkpoints WHERE checkpoint_id='delta-root') WHERE checkpoint_id='delta-middle' AND channel_name='messages'",
+    }
+    with sqlite3.connect(index_path) as connection:
+        connection.execute(statements[corruption])
+        connection.commit()
+    before_database = index_path.read_bytes()
+    jsonl_path = index_path.with_name("rollout.jsonl")
+    before_jsonl = jsonl_path.read_bytes()
+    with _execution_scope(admission):
+        with pytest.raises(RuntimeError, match=message):
+            saver.get_delta_channel_history(config=target, channels=["files"])
+        with pytest.raises(RuntimeError, match=message):
+            await saver.aget_delta_channel_history(config=target, channels=["files"])
+    assert index_path.read_bytes() == before_database
+    assert jsonl_path.read_bytes() == before_jsonl
 
 
 def test_pending_write_corruption_is_rejected_instead_of_decoded(

@@ -3,17 +3,15 @@ import { errorMessage } from "../../utils/errorMessage";
 
 import {
   clearPendingRequests as apiClearPendingRequests,
-  listPendingRequests as apiListPendingRequests,
+  listMainThreadPendingRequests as apiListMainThreadPendingRequests,
   removePendingRequest as apiRemovePendingRequest,
   updatePendingRequestPolicy as apiUpdatePendingRequestPolicy,
-  updatePendingRequest as apiUpdatePendingRequest,
 } from "../../pendingRequestsApi";
 import { cloneMaps } from "../../state/appStateMaps";
 import {
   writePendingSnapshot,
 } from "../../state/conversations";
 import type {
-  AttachmentRef,
   DeliveryPolicy,
   PendingRequestList,
   Session,
@@ -54,6 +52,9 @@ export function usePendingRequestActions({
     sessionCacheKey: string,
     snapshot: PendingRequestList,
   ) => {
+    if (snapshot.session_id !== sessionId) {
+      throw new Error("待处理快照与请求的 Session 归属不一致");
+    }
     setState((previous) => {
       const next = cloneMaps(previous);
       writePendingSnapshot(
@@ -66,7 +67,7 @@ export function usePendingRequestActions({
     });
   }, [setState]);
 
-  const recoverSnapshot = useCallback(async (
+  const refreshSnapshot = useCallback(async (
     sessionId: string,
     workspaceId: string | null,
     cacheKey: string,
@@ -74,7 +75,7 @@ export function usePendingRequestActions({
     replaceSnapshot(
       sessionId,
       cacheKey,
-      await apiListPendingRequests(apiPort, sessionId, workspaceId),
+      await apiListMainThreadPendingRequests(apiPort, sessionId, workspaceId),
     );
   }, [apiPort, replaceSnapshot]);
 
@@ -87,12 +88,14 @@ export function usePendingRequestActions({
     request: () => Promise<PendingRequestList>,
   ) => {
     try {
-      replaceSnapshot(target.sessionId, target.cacheKey, await request());
+      await request();
+      // 变更返回整个 Session 的控制快照；主窗口随后读取 main thread 权威快照。
+      await refreshSnapshot(target.sessionId, target.workspaceId, target.cacheKey);
     } catch (error) {
       // 补偿重取失败不得覆盖原始错误：变更请求返回的 409/422 才是用户真正
       // 需要看到的失败原因，对账用的待处理队列重取失败只是次生信息。
       try {
-        await recoverSnapshot(
+        await refreshSnapshot(
           target.sessionId,
           target.workspaceId,
           target.cacheKey,
@@ -107,24 +110,7 @@ export function usePendingRequestActions({
       }
       throw error;
     }
-  }, [recoverSnapshot, replaceSnapshot]);
-
-  const updatePendingRequest = useCallback(async (
-    messageId: string,
-    content: string,
-    attachments: AttachmentRef[] = [],
-  ) => {
-    const target = requireTarget();
-    await applyServerMutation(target, () =>
-      apiUpdatePendingRequest(
-        apiPort,
-        target.sessionId,
-        messageId,
-        { content, attachments },
-        target.workspaceId,
-      ),
-    );
-  }, [apiPort, applyServerMutation, requireTarget]);
+  }, [refreshSnapshot]);
 
   const removePendingRequest = useCallback(async (messageId: string) => {
     const target = requireTarget();
@@ -170,7 +156,6 @@ export function usePendingRequestActions({
   }, [apiPort, applyServerMutation, requireTarget]);
 
   return {
-    updatePendingRequest,
     removePendingRequest,
     clearPendingRequests,
     updatePendingRequestPolicy,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Literal, Protocol
 
 IdentifierPrefix = Literal[
     "adm",
@@ -74,7 +74,29 @@ def _resolve_uuid7() -> Callable[[], object]:
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _ONE_MILLISECOND = timedelta(milliseconds=1)
 
-def create_uuid_hex() -> str:
+
+class IdentifierFactory(Protocol):
+    """装配侧唯一 ID 生成边界；测试 factory 不读写业务存储。"""
+
+    def create(self, *, namespace: str, epoch_ms: int | None) -> str: ...
+
+
+class RandomIdentifierFactory:
+    def create(self, *, namespace: str, epoch_ms: int | None) -> str:
+        del namespace
+        return (_resolve_uuid7()() if epoch_ms is None else _uuid7_at_ms(epoch_ms)).hex
+
+
+_identifier_factory: IdentifierFactory = RandomIdentifierFactory()
+
+
+def bind_identifier_factory(factory: IdentifierFactory) -> None:
+    """由显式进程 composition 绑定；生产使用模块内随机 factory。"""
+    global _identifier_factory
+    _identifier_factory = factory
+
+
+def create_uuid_hex(*, namespace: str = "uuid") -> str:
     """生成 canonical 身份的 32 位小写 hex payload（UUIDv7）。
 
     由显式直接依赖 uuid_utils 的 ``uuid7()`` 提供；生成路径 MUST NOT 传显式
@@ -83,13 +105,12 @@ def create_uuid_hex() -> str:
     序无序）。uuid_utils 默认路径使用进程内单调计数器，同进程同毫秒非递减且
     唯一，并在系统时钟回拨时钳制内嵌时间不后退；跨进程只共享 48 bit 毫秒分辨率。
     """
-    value = _resolve_uuid7()()
-    return value.hex
+    return _identifier_factory.create(namespace=namespace, epoch_ms=None)
 
 
 def create_prefixed_id(prefix: IdentifierPrefix) -> str:
     """生成带领域前缀的完整 UUID。"""
-    return f"{prefix}_{create_uuid_hex()}"
+    return f"{prefix}_{create_uuid_hex(namespace=prefix)}"
 
 
 def to_epoch_ms(moment: datetime) -> int:
@@ -118,15 +139,20 @@ def create_uuid_hex_at(epoch_ms: int) -> str:
     使用；实时创建路径 MUST NOT 调用本函数（破坏同毫秒单调，见
     :func:`create_uuid_hex`）。
     """
+    return _create_uuid_hex_at(namespace="uuid", epoch_ms=epoch_ms)
+
+
+def _create_uuid_hex_at(*, namespace: str, epoch_ms: int) -> str:
     if not isinstance(epoch_ms, int) or isinstance(epoch_ms, bool) or epoch_ms < 0:
         raise ValueError(f"epoch_ms 必须是非负整数: {epoch_ms!r}")
-    value = _uuid7_at_ms(epoch_ms)
-    if int(value.timestamp) != epoch_ms:
+    payload = _identifier_factory.create(namespace=namespace, epoch_ms=epoch_ms)
+    embedded_ms = int(payload[:12], 16)
+    if embedded_ms != epoch_ms:
         raise RuntimeError(
             "create_uuid_hex_at 生成的内嵌时间戳与请求不一致: "
-            f"requested_ms={epoch_ms}, embedded_ms={int(value.timestamp)}"
+            f"requested_ms={epoch_ms}, embedded_ms={embedded_ms}"
         )
-    return value.hex
+    return payload
 
 
 def create_prefixed_id_at(prefix: IdentifierPrefix, epoch_ms: int) -> str:
@@ -136,7 +162,8 @@ def create_prefixed_id_at(prefix: IdentifierPrefix, epoch_ms: int) -> str:
     :func:`create_uuid_hex_at`；用于创建时刻已冻结（如按 ``created_at`` 分配
     身份的创建流）、需与既有日期桶严格一致的场景。
     """
-    return f"{prefix}_{create_uuid_hex_at(epoch_ms)}"
+    payload = _create_uuid_hex_at(namespace=prefix, epoch_ms=epoch_ms)
+    return f"{prefix}_{payload}"
 
 
 def _uuid7_at_ms(epoch_ms: int) -> object:

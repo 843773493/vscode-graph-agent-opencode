@@ -1,15 +1,212 @@
 import asyncio
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.messages import AIMessageChunk, ToolMessage
 
+from app.abstractions.turn_terminal_status import ToolResultCompletion
 from app.core.job_event_bus import EventType
 from app.services.orchestration.message_stream_runtime import (
     MessageStreamRuntime,
 )
 from app.services.orchestration.trace_observer import MessageStreamTraceObserver
+
+
+@pytest.fixture
+def tool_failure_runtime_case():
+    writer = MagicMock()
+    writer.commit = AsyncMock()
+    sink = AsyncMock()
+    tool_result_sink = AsyncMock()
+    runtime = MessageStreamRuntime(
+        writer,
+        canonical_item_sink=sink,
+        tool_result_sink=tool_result_sink,
+    )
+    return SimpleNamespace(
+        writer=writer,
+        sink=sink,
+        tool_result_sink=tool_result_sink,
+        runtime=runtime,
+    )
+
+
+async def register_failure_calls(case):
+    await case.runtime.start_model("original-model", "primary")
+    await case.runtime.accept_message_chunk(AIMessageChunk(content="", tool_call_chunks=[
+        {"index": 0, "id": "target", "name": "read_context", "args": "{}"},
+        {"index": 1, "id": "sibling", "name": "wait_for_session", "args": "{}"},
+    ]))
+    await case.runtime.finish_model()
+    case.sink.reset_mock()
+    case.tool_result_sink.reset_mock()
+    case.writer.commit.reset_mock()
+
+
+@pytest.mark.asyncio
+async def test_failure_commits_exact_active_attempt_once_before_return(tool_failure_runtime_case):
+    case = tool_failure_runtime_case
+    await register_failure_calls(case)
+    commit_started = asyncio.Event()
+    release_commit = asyncio.Event()
+
+    async def commit(_completion: ToolResultCompletion):
+        commit_started.set()
+        await release_commit.wait()
+
+    case.tool_result_sink.side_effect = commit
+    sibling = case.runtime.claim_tool_call_id("original-model", "sibling")
+    await case.runtime.start_tool(tool_execution_id="native-sibling", tool_call_id=sibling, tool_name="wait_for_session")
+    target = case.runtime.claim_tool_call_id("original-model", "target")
+    await case.runtime.start_tool(tool_execution_id="native-target", tool_call_id=target, tool_name="read_context")
+    task = asyncio.create_task(case.runtime.fail_tool_invocation(
+        "original-model", "target", error="target-deleted",
+    ))
+    await asyncio.wait_for(commit_started.wait(), 1)
+    assert not task.done()
+    assert not [call for call in case.writer.commit.await_args_list if call.args[0] == "tool.completed"]
+    release_commit.set()
+    await task
+    await case.runtime.fail_tool_invocation("original-model", "target", error="target-deleted")
+    case.tool_result_sink.assert_awaited_once()
+    completion: ToolResultCompletion = case.tool_result_sink.await_args.args[0]
+    assert completion.model_call_id == "original-model"
+    assert completion.tool_call_id == target
+    assert completion.tool_invocation_id == "tool-invocation:original-model:target"
+    assert completion.tool_attempt_id == "native-target"
+    assert completion.tool_name == "read_context"
+    assert completion.content == "target-deleted"
+    # handler 抛错时 canonical 结果保留未知，运行镜像用 execution_error 说明失败归属。
+    assert completion.tool_outcome == "unknown"
+    target_events = [
+        call
+        for call in case.writer.commit.await_args_list
+        if call.args[0] == "tool.completed"
+        and call.args[1]["tool_call_id"] == target
+    ]
+    assert len(target_events) == 1
+    target_event = target_events[0]
+    assert target_event.args[1]["tool_execution_id"] == "native-target"
+    assert target_event.args[1]["status"] == "failed"
+    assert target_event.args[1]["outcome"] == "outcome_unknown"
+    assert target_event.args[1]["completion_reason"] == "execution_error"
+    assert target_event.args[1]["error"] == "target-deleted"
+    assert target_event.kwargs["model_call_id"] == "original-model"
+    assert target_event.kwargs["tool_invocation_id"] == (
+        "tool-invocation:original-model:target"
+    )
+    await case.runtime.complete_tool(
+        tool_execution_id="native-sibling", tool_call_id=sibling, tool_name="wait_for_session",
+        status="succeeded", result="原 sibling 完成",
+    )
+    assert case.tool_result_sink.await_count == 2
+    sibling_completion: ToolResultCompletion = (
+        case.tool_result_sink.await_args_list[1].args[0]
+    )
+    assert sibling_completion.model_call_id == "original-model"
+    assert sibling_completion.tool_call_id == sibling
+    assert sibling_completion.tool_invocation_id == (
+        "tool-invocation:original-model:sibling"
+    )
+    assert sibling_completion.tool_attempt_id == "native-sibling"
+    assert sibling_completion.tool_name == "wait_for_session"
+    assert sibling_completion.content == "原 sibling 完成"
+    assert sibling_completion.tool_outcome == "success"
+    completed_events = [
+        call
+        for call in case.writer.commit.await_args_list
+        if call.args[0] == "tool.completed"
+    ]
+    assert len(completed_events) == 2
+    sibling_event = next(
+        call
+        for call in completed_events
+        if call.args[1]["tool_call_id"] == sibling
+    )
+    assert sibling_event.args[1]["tool_execution_id"] == "native-sibling"
+    assert sibling_event.args[1]["status"] == "completed"
+    assert sibling_event.args[1]["outcome"] == "success"
+    assert sibling_event.kwargs["model_call_id"] == "original-model"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_id", ["target", "missing"])
+async def test_failure_without_active_attempt_does_not_wait_or_create_result(
+    tool_failure_runtime_case, provider_id: str,
+):
+    case = tool_failure_runtime_case
+    await register_failure_calls(case)
+    sibling = case.runtime.claim_tool_call_id("original-model", "sibling")
+    await case.runtime.start_tool(
+        tool_execution_id="native-sibling", tool_call_id=sibling, tool_name="wait_for_session",
+    )
+    case.writer.commit.reset_mock()
+
+    await asyncio.wait_for(case.runtime.fail_tool_invocation(
+        "original-model", provider_id, error="工具开始回调拒绝",
+    ), timeout=1)
+
+    assert case.runtime._pending_tool_starts == {}
+    assert case.runtime._active_tool_executions == {
+        "native-sibling": (sibling, "wait_for_session"),
+    }
+    case.tool_result_sink.assert_not_awaited()
+    case.sink.assert_not_awaited()
+    case.writer.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failure_rejects_multiple_active_attempts(tool_failure_runtime_case):
+    case = tool_failure_runtime_case
+    await register_failure_calls(case)
+    target = case.runtime.claim_tool_call_id("original-model", "target")
+    for execution_id in ("first-attempt", "second-attempt"):
+        await case.runtime.start_tool(
+            tool_execution_id=execution_id, tool_call_id=target, tool_name="read_context",
+        )
+    case.writer.commit.reset_mock()
+
+    with pytest.raises(RuntimeError, match="多个 active attempt"):
+        await case.runtime.fail_tool_invocation(
+            "original-model", "target", error="工具执行失败",
+        )
+
+    assert case.runtime._pending_tool_starts == {}
+    case.tool_result_sink.assert_not_awaited()
+    case.writer.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["succeeded", "failed"])
+async def test_canonical_commit_failure_leaves_completion_unpublished(tool_failure_runtime_case, status):
+    case = tool_failure_runtime_case
+    await register_failure_calls(case)
+    call_id = case.runtime.claim_tool_call_id("original-model", "target")
+    await case.runtime.start_tool(tool_execution_id="native-target", tool_call_id=call_id, tool_name="read_context")
+    case.tool_result_sink.side_effect = RuntimeError("原 canonical 提交失败")
+    values = {"tool_execution_id": "native-target", "tool_call_id": call_id,
+              "tool_name": "read_context", "status": status, "result": "原结果"}
+    with pytest.raises(RuntimeError, match="原 canonical 提交失败"):
+        await case.runtime.complete_tool(**values)
+    assert not [call for call in case.writer.commit.await_args_list if call.args[0] == "tool.completed"]
+    case.tool_result_sink.side_effect = None
+    await case.runtime.complete_tool(**values)
+    await case.runtime.complete_tool(**values)
+    assert len([call for call in case.writer.commit.await_args_list if call.args[0] == "tool.completed"]) == 1
+    completions = [call.args[0] for call in case.tool_result_sink.await_args_list]
+    assert all(isinstance(completion, ToolResultCompletion) for completion in completions)
+    assert [completion.item_id for completion in completions] == [
+        f"item-native-target-result-{call_id}", f"item-native-target-result-{call_id}",
+    ]
+    assert all(completion.model_call_id == "original-model" for completion in completions)
+    assert all(completion.tool_call_id == call_id for completion in completions)
+    assert all(completion.tool_invocation_id == "tool-invocation:original-model:target" for completion in completions)
+    assert all(completion.tool_attempt_id == "native-target" for completion in completions)
+    assert all(completion.tool_name == "read_context" for completion in completions)
+    assert all(completion.content == "原结果" for completion in completions)
+    assert all(completion.tool_outcome == ("success" if status == "succeeded" else "failure") for completion in completions)
 
 
 @pytest.mark.asyncio
@@ -118,6 +315,7 @@ async def test_provider_fallback_marks_previous_model_attempt_failed() -> None:
 @pytest.mark.asyncio
 async def test_internal_provider_stream_persists_turnless_items_without_writer() -> None:
     canonical_sink = AsyncMock()
+    tool_result_sink = AsyncMock()
     registrar = AsyncMock(return_value="execution-internal-stream")
     outcome_sink = AsyncMock()
     observer = AsyncMock()
@@ -125,6 +323,7 @@ async def test_internal_provider_stream_persists_turnless_items_without_writer()
         None,
         normalized_block_observer=observer,
         canonical_item_sink=canonical_sink,
+        tool_result_sink=tool_result_sink,
         canonical_turn_id=None,
         model_call_registrar=registrar,
         model_call_outcome_sink=outcome_sink,
@@ -146,7 +345,7 @@ async def test_internal_provider_stream_persists_turnless_items_without_writer()
         )
     )
     await runtime.finish_model()
-    tool_call_id = runtime.claim_tool_call_id("read_file", {})
+    tool_call_id = runtime.claim_tool_call_id("model_internal", "call_internal")
     assert tool_call_id == "model_internal:tool-call:call_internal"
     await runtime.start_tool(
         tool_execution_id="run_internal",
@@ -164,7 +363,7 @@ async def test_internal_provider_stream_persists_turnless_items_without_writer()
 
     registrar.assert_awaited_once_with("model_internal", 1, "provider")
     outcome_sink.assert_awaited_once_with("model_internal", "completed")
-    assert canonical_sink.await_count == 2
+    canonical_sink.assert_awaited_once()
     (model_items,) = canonical_sink.await_args_list[0].args
     assert {item.semantic_kind for item in model_items} == {
         "assistant_output",
@@ -183,12 +382,15 @@ async def test_internal_provider_stream_persists_turnless_items_without_writer()
     assert assistant_item.payload == "internal output"
     assert tool_call_item.payload["tool_call_id"] == tool_call_id
     assert tool_call_item.payload["name"] == "read_file"
-    (tool_result,) = canonical_sink.await_args_list[1].args[0]
-    assert tool_result.semantic_kind == "tool_result"
-    assert tool_result.turn_id is None
-    assert tool_result.turn_scope is None
-    assert tool_result.payload["tool_call_id"] == tool_call_item.payload["tool_call_id"]
-    assert tool_result.payload["content"] == "internal file contents"
+    tool_result_sink.assert_awaited_once()
+    completion: ToolResultCompletion = tool_result_sink.await_args.args[0]
+    assert completion.model_call_id == "model_internal"
+    assert completion.tool_call_id == tool_call_item.payload["tool_call_id"]
+    assert completion.tool_invocation_id == tool_call_item.payload["tool_invocation_id"]
+    assert completion.tool_attempt_id == "run_internal"
+    assert completion.tool_name == "read_file"
+    assert completion.content == "internal file contents"
+    assert completion.tool_outcome == "success"
     assert runtime.writer is None
     assert runtime.activities is None
     observer.assert_awaited()
@@ -229,15 +431,79 @@ async def test_tool_call_delta_keeps_identity_and_can_be_claimed_by_tool_executi
     assert second_payload["tool_call_id"] == "model_1:tool-call:call_1"
     assert second_payload["tool_name"] == "invoke_extension_tool"
     assert second_payload["arguments"] == {"tool_name": "unknown_tool"}
+    assert second_payload["arguments_complete"] is True
     second_event = writer.commit.await_args_list[2]
     assert second_event.kwargs["tool_call_id"] == "model_1:tool-call:call_1"
     assert second_event.kwargs["tool_invocation_id"] == (
         "tool-invocation:model_1:call_1"
     )
-    assert runtime.claim_tool_call_id("invoke_extension_tool") == (
+    assert runtime.claim_tool_call_id("model_1", "call_1") == (
         "model_1:tool-call:call_1"
     )
-    assert runtime.claim_tool_call_id("invoke_extension_tool") is None
+    with pytest.raises(RuntimeError, match="工具调用已经认领"):
+        runtime.claim_tool_call_id("model_1", "call_1")
+    with pytest.raises(RuntimeError, match="缺少原 emitting ModelCall/ToolCall"):
+        runtime.claim_tool_call_id("missing-model", "call_1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_args", "include_args", "expected_arguments", "expected_complete"),
+    [
+        pytest.param("{}", True, {}, True, id="empty-object-json"),
+        pytest.param({}, True, {}, True, id="empty-object-mapping"),
+        pytest.param(
+            '{"raw":"value"}', True, {"raw": "value"}, True, id="raw-field-json"
+        ),
+        pytest.param(
+            {"raw": "value"}, True, {"raw": "value"}, True, id="raw-field-mapping"
+        ),
+        pytest.param(None, False, {}, False, id="missing-arguments"),
+        pytest.param("", True, {}, False, id="empty-string"),
+        pytest.param(
+            '{"path":', True, {"raw": '{"path":'}, False, id="unclosed-json"
+        ),
+        pytest.param(
+            '[]', True, {"raw": "[]"}, False, id="non-object-json"
+        ),
+    ],
+)
+async def test_tool_call_argument_completeness_requires_a_received_object(
+    raw_args: object,
+    include_args: bool,
+    expected_arguments: dict[str, object],
+    expected_complete: bool,
+) -> None:
+    writer = MagicMock()
+    writer.commit = AsyncMock()
+    runtime = MessageStreamRuntime(writer)
+    await runtime.start_model("model_arguments", "primary")
+
+    tool_call_chunk: dict[str, object] = {
+        "index": 0,
+        "id": "call_arguments",
+        "name": "read_file",
+    }
+    if include_args:
+        tool_call_chunk["args"] = raw_args
+    await runtime.accept_message_chunk(
+        SimpleNamespace(content="", tool_call_chunks=[tool_call_chunk])
+    )
+
+    call_id = "model_arguments:tool-call:call_arguments"
+    delta = next(
+        call.args[1]
+        for call in writer.commit.await_args_list
+        if call.args[0] == "tool_call.delta"
+    )
+    assert delta["arguments"] == expected_arguments
+    assert delta["arguments_complete"] is expected_complete
+    assert runtime.pending_tool_calls() == (
+        (call_id, "read_file", expected_complete),
+    )
+    if expected_complete:
+        assert runtime.claim_tool_call_id("model_arguments", "call_arguments") == call_id
+        assert runtime.pending_tool_calls() == ()
 
 
 @pytest.mark.asyncio
@@ -293,13 +559,13 @@ async def test_parallel_tool_calls_with_reused_provider_index_get_distinct_ident
 
 
 @pytest.mark.asyncio
-async def test_same_name_tool_calls_are_claimed_by_arguments_first() -> None:
+async def test_same_name_and_argument_tool_calls_are_claimed_by_exact_provider_id() -> None:
     writer = MagicMock()
     writer.commit = AsyncMock()
     runtime = MessageStreamRuntime(writer)
 
     await runtime.start_model("model_1", "primary")
-    for index, path in enumerate(("a.txt", "b.txt")):
+    for index, path in enumerate(("a.txt", "a.txt")):
         await runtime.accept_message_chunk(
             AIMessageChunk(
                 content="",
@@ -314,10 +580,10 @@ async def test_same_name_tool_calls_are_claimed_by_arguments_first() -> None:
             )
         )
 
-    assert runtime.claim_tool_call_id("read_file", {"path": "b.txt"}) == (
+    assert runtime.claim_tool_call_id("model_1", "call_1") == (
         "model_1:tool-call:call_1"
     )
-    assert runtime.claim_tool_call_id("read_file", {"path": "a.txt"}) == (
+    assert runtime.claim_tool_call_id("model_1", "call_0") == (
         "model_1:tool-call:call_0"
     )
 
@@ -346,8 +612,7 @@ async def test_next_model_start_preserves_late_tool_start_correlation() -> None:
     await runtime.start_model("model_2", "primary")
 
     assert runtime.claim_tool_call_id(
-        "read_file",
-        {"path": "README.md"},
+        "model_1", "call_from_model_1",
     ) == "model_1:tool-call:call_from_model_1"
     await runtime.start_tool(
         tool_execution_id="tool_execution_1",
@@ -355,6 +620,152 @@ async def test_next_model_start_preserves_late_tool_start_correlation() -> None:
         tool_name="read_file",
     )
     assert runtime.pending_tool_calls() == ()
+    tool_events = [
+        call
+        for call in writer.commit.await_args_list
+        if call.args[0] in {"tool_call.completed", "tool.started"}
+    ]
+    assert [call.kwargs["model_call_id"] for call in tool_events] == [
+        "model_1",
+        "model_1",
+    ]
+    assert [call.kwargs["tool_call_id"] for call in tool_events] == [
+        "model_1:tool-call:call_from_model_1",
+        "model_1:tool-call:call_from_model_1",
+    ]
+    assert [call.kwargs["tool_invocation_id"] for call in tool_events] == [
+        "tool-invocation:model_1:call_from_model_1",
+        "tool-invocation:model_1:call_from_model_1",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pending_failure_keeps_emitting_owner_after_next_model() -> None:
+    writer = MagicMock()
+    writer.commit = AsyncMock()
+    runtime = MessageStreamRuntime(writer)
+
+    await runtime.start_model("model_1", "primary")
+    await runtime.accept_message_chunk(AIMessageChunk(
+        content="",
+        tool_call_chunks=[{
+            "index": 0,
+            "id": "call_pending",
+            "name": "read_file",
+            "args": '{"path":"README.md"}',
+        }],
+    ))
+    await runtime.finish_model()
+    await runtime.start_model("model_2", "primary")
+
+    await runtime.fail_pending_tool_calls(
+        completion_reason="tool_dispatch_timeout",
+        error="分派超时",
+    )
+
+    completion = next(
+        call for call in writer.commit.await_args_list
+        if call.args[0] == "tool_call.completed"
+    )
+    assert completion.kwargs["model_call_id"] == "model_1"
+    assert completion.kwargs["tool_call_id"] == "model_1:tool-call:call_pending"
+    assert completion.kwargs["tool_invocation_id"] == (
+        "tool-invocation:model_1:call_pending"
+    )
+    assert completion.args[1]["completion_reason"] == "tool_dispatch_timeout"
+
+
+@pytest.mark.asyncio
+async def test_registered_missing_tool_owner_is_not_replaced_by_current_model() -> None:
+    writer = MagicMock()
+    writer.commit = AsyncMock()
+    runtime = MessageStreamRuntime(writer)
+
+    await runtime.accept_message_chunk(AIMessageChunk(
+        content="",
+        tool_call_chunks=[{
+            "index": 0,
+            "name": "read_file",
+            "args": '{"path":"README.md"}',
+        }],
+    ))
+    tool_call_id = runtime._tool_call_order[0]
+    assert runtime._tool_call_model_call_ids[tool_call_id] is None
+
+    await runtime.start_model("current-model", "primary")
+    await runtime.start_tool(
+        tool_execution_id="unbound_execution",
+        tool_call_id=tool_call_id,
+        tool_name="read_file",
+    )
+    await runtime.complete_tool(
+        tool_execution_id="unbound_execution",
+        tool_call_id=tool_call_id,
+        tool_name="read_file",
+        status="succeeded",
+        result="README 内容",
+    )
+
+    tool_events = [
+        call
+        for call in writer.commit.await_args_list
+        if call.args[0] in {"tool_call.completed", "tool.started", "tool.completed"}
+    ]
+    assert [call.kwargs["model_call_id"] for call in tool_events] == [
+        None,
+        None,
+        None,
+    ]
+    assert all(call.kwargs["tool_call_id"] == tool_call_id for call in tool_events)
+    assert all(
+        call.kwargs["tool_invocation_id"].startswith(
+            "tool-invocation:unknown-model-call:"
+        )
+        for call in tool_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_interrupt_closes_calls_under_emitting_model_owner() -> None:
+    writer = MagicMock()
+    writer.commit = AsyncMock()
+    runtime = MessageStreamRuntime(writer)
+
+    for model_call_id, provider_call_id in (
+        ("model_1", "call_first"),
+        ("model_2", "call_current"),
+    ):
+        await runtime.start_model(model_call_id, "primary")
+        await runtime.accept_message_chunk(AIMessageChunk(
+            content="",
+            tool_call_chunks=[{
+                "index": 0,
+                "id": provider_call_id,
+                "name": "read_file",
+                "args": '{"path":"README.md"}',
+            }],
+        ))
+        await runtime.finish_model()
+    await runtime.start_model("model_3", "primary")
+
+    await runtime.finalize_interruption_facts()
+
+    closures = {
+        call.kwargs["tool_call_id"]: call
+        for call in writer.commit.await_args_list
+        if call.args[0] == "tool_call.completed"
+        and call.args[1].get("completion_reason") == "user_interrupt"
+    }
+    first = closures["model_1:tool-call:call_first"]
+    current = closures["model_2:tool-call:call_current"]
+    assert first.kwargs["model_call_id"] == "model_1"
+    assert first.kwargs["tool_invocation_id"] == (
+        "tool-invocation:model_1:call_first"
+    )
+    assert current.kwargs["model_call_id"] == "model_2"
+    assert current.kwargs["tool_invocation_id"] == (
+        "tool-invocation:model_2:call_current"
+    )
 
 
 @pytest.mark.asyncio
@@ -390,19 +801,80 @@ async def test_reused_provider_tool_call_id_is_scoped_per_model_call() -> None:
     assert runtime._tool_invocation_id_for(
         "model_2:tool-call:call_reused"
     ) == "tool-invocation:model_2:call_reused"
-    assert runtime.claim_tool_call_id("read_file") == (
+    assert runtime.claim_tool_call_id("model_2", "call_reused") == (
         "model_2:tool-call:call_reused"
     )
-    assert runtime.claim_tool_call_id("read_file") == (
+    assert runtime.claim_tool_call_id("model_1", "call_reused") == (
         "model_1:tool-call:call_reused"
     )
 
 
 @pytest.mark.asyncio
-async def test_late_tool_execution_writes_persisted_terminal_event_after_reconciliation() -> None:
+@pytest.mark.parametrize("first_completed", [False, True])
+async def test_historical_tool_message_does_not_complete_reused_call_in_next_model(
+    first_completed: bool,
+) -> None:
     writer = MagicMock()
     writer.commit = AsyncMock()
     runtime = MessageStreamRuntime(writer)
+    for ordinal in (1, 2):
+        model_call_id = f"model_{ordinal}"
+        await runtime.start_model(model_call_id, "primary")
+        await runtime.accept_message_chunk(AIMessageChunk(
+            content="",
+            tool_call_chunks=[{
+                "index": 0, "id": "call_reused", "name": "read_file",
+                "args": '{"path":"README.md"}',
+            }],
+        ))
+        await runtime.finish_model()
+        await runtime.start_tool(
+            tool_execution_id=f"execution_{ordinal}",
+            tool_call_id=f"{model_call_id}:tool-call:call_reused",
+            tool_name="read_file",
+        )
+        if ordinal == 1 and first_completed:
+            await runtime.complete_tool(
+                tool_execution_id="execution_1", tool_call_id="model_1:tool-call:call_reused",
+                tool_name="read_file", status="succeeded", result="旧调用结果",
+            )
+    old = ToolMessage(
+        content="旧调用结果", tool_call_id="call_reused", name="read_file",
+        response_metadata={"model_call_id": "model_1"},
+    )
+    await runtime.complete_tool_from_message(old, model_call_id="model_1")
+    assert runtime._active_tool_executions == {
+        "execution_2": ("model_2:tool-call:call_reused", "read_file"),
+    }
+    completed = [call.args[1] for call in writer.commit.await_args_list if call.args[0] == "tool.completed"]
+    assert [(event["tool_call_id"], event["result"]) for event in completed] == [
+        ("model_1:tool-call:call_reused", "旧调用结果"),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message_status", "expected_status", "outcome", "completion_reason"),
+    [
+        ("success", "completed", "success", "tool_completed"),
+        ("error", "failed", "failure", "provider_failed"),
+    ],
+)
+async def test_tool_message_waits_for_real_start_before_persisting_terminal_event(
+    message_status: str,
+    expected_status: str,
+    outcome: str,
+    completion_reason: str,
+) -> None:
+    writer = MagicMock()
+    writer.commit = AsyncMock()
+    canonical_item_sink = AsyncMock()
+    tool_result_sink = AsyncMock()
+    runtime = MessageStreamRuntime(
+        writer,
+        canonical_item_sink=canonical_item_sink,
+        tool_result_sink=tool_result_sink,
+    )
 
     await runtime.start_model("model_1", "primary")
     await runtime.accept_message_chunk(
@@ -419,56 +891,249 @@ async def test_late_tool_execution_writes_persisted_terminal_event_after_reconci
         )
     )
 
-    # ToolMessage 已在下一次模型请求组装前到达，先确认唯一结果事实。
-    await runtime.complete_tool_from_message(
-        ToolMessage(
-            content="README 内容",
-            tool_call_id="call_late",
-            name="read_file",
+    reconcile = asyncio.create_task(
+        runtime.complete_tool_from_message(
+            ToolMessage(
+                content="README 内容",
+                tool_call_id="call_late",
+                name="read_file",
+                status=message_status,
+            ),
+            model_call_id="model_1",
         )
     )
+    await asyncio.sleep(0)
+    assert not reconcile.done()
 
-    # LangGraph 的生命周期事件随后才到达；它必须补齐持久化 execution
-    # 状态，但不能再次写 canonical 工具结果。
     normalized_call_id = "model_1:tool-call:call_late"
     assert runtime.claim_tool_call_id(
-        "read_file",
-        {"path": "README.md"},
+        "model_1", "call_late",
     ) == normalized_call_id
     await runtime.start_tool(
-        tool_execution_id="late_execution",
+        tool_execution_id="execution_a",
         tool_call_id=normalized_call_id,
         tool_name="read_file",
     )
+    await reconcile
+
+    # LangGraph 的 on_tool_end 之后到达时只会重放同一真实 attempt。
     await runtime.complete_tool(
-        tool_execution_id="late_execution",
+        tool_execution_id="execution_a",
         tool_call_id=normalized_call_id,
         tool_name="read_file",
-        status="succeeded",
+        status="succeeded" if message_status == "success" else "failed",
         result="README 内容",
+        error="README 内容" if message_status == "error" else None,
+        outcome=outcome,
     )
 
     assert runtime._active_tool_executions == {}
+    assert normalized_call_id in runtime._completed_tool_call_ids
+    canonical_item_sink.assert_not_awaited()
+    tool_result_sink.assert_awaited_once()
+    result_completion: ToolResultCompletion = tool_result_sink.await_args.args[0]
+    assert result_completion.model_call_id == "model_1"
+    assert result_completion.tool_call_id == normalized_call_id
+    assert result_completion.tool_invocation_id == (
+        "tool-invocation:model_1:call_late"
+    )
+    assert result_completion.tool_attempt_id == "execution_a"
+    assert result_completion.content == "README 内容"
+    assert result_completion.tool_outcome == outcome
+    tool_call_completions = [
+        call.args[1]
+        for call in writer.commit.await_args_list
+        if call.args[0] == "tool_call.completed"
+    ]
+    assert len(tool_call_completions) == 1
+    assert tool_call_completions[0]["status"] == "completed"
+    assert tool_call_completions[0]["completion_reason"] == "tool_started"
+    assert tool_call_completions[0]["arguments_complete"] is True
     completion_events = [
         call.args[1]
         for call in writer.commit.await_args_list
         if call.args[0] == "tool.completed"
     ]
-    assert len(completion_events) == 2
-    assert completion_events[-1]["tool_execution_id"] == "late_execution"
-    assert completion_events[-1]["completion_reason"] == "reconciled_tool_message"
+    assert len(completion_events) == 1
+    assert completion_events[0]["tool_execution_id"] == "execution_a"
+    assert completion_events[0]["tool_attempt_id"] == "execution_a"
+    assert completion_events[0]["status"] == expected_status
+    assert completion_events[0]["outcome"] == outcome
+    assert completion_events[0]["result"] == "README 内容"
+    assert completion_events[0]["completion_reason"] == completion_reason
+    if message_status == "error":
+        assert completion_events[0]["error"] == "README 内容"
+    assert [
+        call.args[0]
+        for call in writer.commit.await_args_list
+        if call.args[0] in {"tool_call.completed", "tool.started", "tool.completed"}
+    ] == ["tool_call.completed", "tool.started", "tool.completed"]
 
 
 @pytest.mark.asyncio
-async def test_late_tool_start_claims_own_reconciled_call_not_newer_pending() -> None:
+async def test_cancelled_tool_message_waiter_preserves_shared_start_for_remaining_waiter() -> None:
+    writer = MagicMock()
+    writer.commit = AsyncMock()
+    canonical_item_sink = AsyncMock()
+    tool_result_sink = AsyncMock()
+    runtime = MessageStreamRuntime(
+        writer,
+        canonical_item_sink=canonical_item_sink,
+        tool_result_sink=tool_result_sink,
+    )
+
+    await runtime.start_model("model_shared_waiter", "primary")
+    await runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "index": 0,
+                    "id": "call_shared_waiter",
+                    "name": "read_file",
+                    "args": '{"path":"README.md"}',
+                }
+            ],
+        )
+    )
+    message = ToolMessage(
+        content="共享结果",
+        tool_call_id="call_shared_waiter",
+        name="read_file",
+    )
+    first_waiter = asyncio.create_task(
+        runtime.complete_tool_from_message(
+            message,
+            model_call_id="model_shared_waiter",
+        )
+    )
+    remaining_waiter = asyncio.create_task(
+        runtime.complete_tool_from_message(
+            message,
+            model_call_id="model_shared_waiter",
+        )
+    )
+    await asyncio.sleep(0)
+
+    call_id = "model_shared_waiter:tool-call:call_shared_waiter"
+    pending_start = runtime._pending_tool_starts.get(call_id)
+    assert pending_start is not None
+    assert not first_waiter.done()
+    assert not remaining_waiter.done()
+
+    first_waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_waiter
+
+    try:
+        assert runtime._pending_tool_starts.get(call_id) is pending_start
+        assert not pending_start.done()
+        assert not remaining_waiter.done()
+        tool_result_sink.assert_not_awaited()
+
+        claimed_call_id = runtime.claim_tool_call_id(
+            "model_shared_waiter", "call_shared_waiter",
+        )
+        assert claimed_call_id == call_id
+        await runtime.start_tool(
+            tool_execution_id="execution_a",
+            tool_call_id=claimed_call_id,
+            tool_name="read_file",
+        )
+        assert call_id not in runtime._pending_tool_starts
+        await asyncio.wait_for(remaining_waiter, timeout=1)
+    finally:
+        if not remaining_waiter.done():
+            remaining_waiter.cancel()
+        await asyncio.gather(remaining_waiter, return_exceptions=True)
+
+    canonical_item_sink.assert_not_awaited()
+    tool_result_sink.assert_awaited_once()
+    completion: ToolResultCompletion = tool_result_sink.await_args.args[0]
+    assert completion.model_call_id == "model_shared_waiter"
+    assert completion.tool_call_id == call_id
+    assert completion.tool_invocation_id == (
+        "tool-invocation:model_shared_waiter:call_shared_waiter"
+    )
+    assert completion.tool_attempt_id == "execution_a"
+    assert completion.content == "共享结果"
+    assert completion.tool_outcome == "success"
+    assert [
+        call.args[0]
+        for call in writer.commit.await_args_list
+        if call.args[0] in {"tool_call.completed", "tool.started", "tool.completed"}
+    ] == ["tool_call.completed", "tool.started", "tool.completed"]
+
+
+@pytest.mark.asyncio
+async def test_tool_message_closes_call_without_inventing_complete_arguments() -> None:
     writer = MagicMock()
     writer.commit = AsyncMock()
     runtime = MessageStreamRuntime(writer)
 
-    # 两次同名同参调用：第一次的 ToolMessage 已在请求边界 reconcile，
-    # 第二次仍是 pending。迟到的第一次 on_tool_start 必须认领自己的
-    # reconciled 调用，不能按"最新优先"绑到第二次调用上——否则同一
-    # tool_call_id 会在 tool 侧与 provider 侧提交两个不同正文。
+    await runtime.start_model("model_incomplete_call", "primary")
+    await runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "index": 0,
+                    "id": "call_incomplete",
+                    "name": "read_file",
+                    "args": '{"path":',
+                }
+            ],
+        )
+    )
+    call_id = "model_incomplete_call:tool-call:call_incomplete"
+    reconcile = asyncio.create_task(
+        runtime.complete_tool_from_message(
+            ToolMessage(
+                content="README 内容",
+                tool_call_id="call_incomplete",
+                name="read_file",
+            ),
+            model_call_id="model_incomplete_call",
+        )
+    )
+    await asyncio.sleep(0)
+    assert not reconcile.done()
+    assert runtime.claim_tool_call_id("model_incomplete_call", "call_incomplete") == call_id
+    await runtime.start_tool(
+        tool_execution_id="execution_incomplete",
+        tool_call_id=call_id,
+        tool_name="read_file",
+    )
+    await reconcile
+
+    await runtime.finalize_interruption_facts()
+
+    closures = [
+        call.args[1]
+        for call in writer.commit.await_args_list
+        if call.args[0] == "tool_call.completed"
+    ]
+    assert len(closures) == 1
+    assert closures[0]["status"] == "completed"
+    assert closures[0]["arguments_complete"] is False
+    assert closures[0]["completion_reason"] == "tool_started"
+    assert call_id in runtime._completed_tool_call_ids
+
+
+@pytest.mark.asyncio
+async def test_tool_message_waits_for_its_start_before_claiming_same_argument_calls() -> None:
+    writer = MagicMock()
+    writer.commit = AsyncMock()
+    canonical_item_sink = AsyncMock()
+    tool_result_sink = AsyncMock()
+    runtime = MessageStreamRuntime(
+        writer,
+        canonical_item_sink=canonical_item_sink,
+        tool_result_sink=tool_result_sink,
+    )
+
+    # 两次同名同参调用：第一次 ToolMessage 先进入请求边界，必须等到
+    # 第一次真实 start，再允许后续调用按原顺序被认领。
     await runtime.start_model("model_1", "primary")
     await runtime.accept_message_chunk(
         AIMessageChunk(
@@ -498,18 +1163,99 @@ async def test_late_tool_start_claims_own_reconciled_call_not_newer_pending() ->
         )
     )
 
-    await runtime.complete_tool_from_message(
-        ToolMessage(
-            content="第一次结果",
-            tool_call_id="call_first",
-            name="read_file",
-        )
+    canonical_calls_before_reconcile = tuple(canonical_item_sink.await_args_list)
+    assert len(canonical_calls_before_reconcile) == 1
+    (canonical_tool_call,) = canonical_calls_before_reconcile[0].args[0]
+    assert canonical_tool_call.semantic_kind == "tool_call"
+    assert canonical_tool_call.projection_identity.model_call_id == "model_1"
+    assert canonical_tool_call.payload["tool_call_id"] == (
+        "model_1:tool-call:call_first"
     )
 
-    first_claim = runtime.claim_tool_call_id("read_file", {"path": "a.txt"})
+    reconcile = asyncio.create_task(
+        runtime.complete_tool_from_message(
+            ToolMessage(
+                content="第一次结果",
+                tool_call_id="call_first",
+                name="read_file",
+            ),
+            model_call_id="model_1",
+        )
+    )
+    await asyncio.sleep(0)
+    assert not reconcile.done()
+
+    first_claim = runtime.claim_tool_call_id("model_1", "call_first")
     assert first_claim == "model_1:tool-call:call_first"
-    second_claim = runtime.claim_tool_call_id("read_file", {"path": "a.txt"})
-    assert second_claim == "model_2:tool-call:call_second"
+    await runtime.start_tool(
+        tool_execution_id="execution_first",
+        tool_call_id=first_claim,
+        tool_name="read_file",
+    )
+    await reconcile
+    assert canonical_item_sink.await_count == len(canonical_calls_before_reconcile)
+    assert tuple(canonical_item_sink.await_args_list) == canonical_calls_before_reconcile
+    assert all(
+        item.semantic_kind != "tool_result"
+        for sink_call in canonical_item_sink.await_args_list
+        for item in sink_call.args[0]
+    )
+
+    second_call_id = "model_2:tool-call:call_second"
+    assert runtime.pending_tool_calls() == (
+        (second_call_id, "read_file", True),
+    )
+    second_claim = runtime.claim_tool_call_id("model_2", "call_second")
+    assert second_claim == second_call_id
+    assert runtime.pending_tool_calls() == ()
+    starts = [
+        call.args[1]
+        for call in writer.commit.await_args_list
+        if call.args[0] == "tool.started"
+    ]
+    assert [(event["tool_execution_id"], event["tool_call_id"]) for event in starts] == [
+        ("execution_first", first_claim),
+    ]
+    tool_result_sink.assert_awaited_once()
+    completion: ToolResultCompletion = tool_result_sink.await_args.args[0]
+    assert completion.model_call_id == "model_1"
+    assert completion.tool_call_id == first_claim
+    assert completion.tool_invocation_id == "tool-invocation:model_1:call_first"
+    assert completion.tool_attempt_id == "execution_first"
+    assert completion.content == "第一次结果"
+    assert completion.tool_outcome == "success"
+    assert runtime._completed_tool_result_call_ids == {first_claim}
+    assert runtime._completed_tool_result_execution_by_call_id == {
+        first_claim: "execution_first",
+    }
+    tool_call_completions = [
+        call
+        for call in writer.commit.await_args_list
+        if call.args[0] == "tool_call.completed"
+    ]
+    assert len(tool_call_completions) == 1
+    assert tool_call_completions[0].kwargs["model_call_id"] == "model_1"
+    assert tool_call_completions[0].kwargs["tool_call_id"] == first_claim
+    assert tool_call_completions[0].args[1]["completion_reason"] == "tool_started"
+    completed = [
+        call
+        for call in writer.commit.await_args_list
+        if call.args[0] == "tool.completed"
+    ]
+    assert len(completed) == 1
+    assert completed[0].kwargs["model_call_id"] == "model_1"
+    assert completed[0].kwargs["tool_call_id"] == first_claim
+    assert completed[0].kwargs["tool_invocation_id"] == (
+        "tool-invocation:model_1:call_first"
+    )
+    assert completed[0].kwargs["tool_attempt_id"] == "execution_first"
+    assert completed[0].args[1]["tool_execution_id"] == "execution_first"
+    assert completed[0].args[1]["result"] == "第一次结果"
+    assert [
+        call.args[0]
+        for call in writer.commit.await_args_list
+        if call.args[0] in {"tool_call.completed", "tool.started", "tool.completed"}
+    ] == ["tool_call.completed", "tool.started", "tool.completed"]
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,8 @@
-import type { AttachmentRef, Message } from "../../types/backend";
+import type { AttachmentRef, Message, TurnResponsePart } from "../../types/backend";
 
-export type TimelineItem =
+export type TimelineItem = {
+  responseSources?: Array<{ part_id: string; kind: string; source: TurnResponsePart["source"] }>;
+} & (
   | {
       kind: "message";
       id: string;
@@ -28,7 +30,7 @@ export type TimelineItem =
       kind: "aggregated_text";
       id: string;
       text: string;
-      partKind: "markdown" | "reasoning";
+      partKind: "markdown" | "reasoning" | "compaction";
       /**
        * reasoning 的稳定语义类别；不暴露 Provider carrier，但保留
        * detail、summary 和 encrypted/redacted 的边界供展示与诊断使用。
@@ -74,4 +76,4 @@ export type TimelineItem =
       id: string;
       label: string;
       jobId: string | null;
-    };
+    });

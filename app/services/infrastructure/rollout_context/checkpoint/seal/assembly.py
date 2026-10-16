@@ -9,8 +9,8 @@ from app.agents.providers.wire_finalize import WIRE_PROJECTOR_ID, WIRE_PROJECTOR
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
-from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
-    validate_sealed_plan,
+from app.services.infrastructure.rollout_context.assembly.plans.types import (
+    ContextPlanRegistration,
 )
 from app.services.infrastructure.rollout_context.assembly.seal_preflight import (
     canonical_tool_pairings,
@@ -21,7 +21,6 @@ from app.services.infrastructure.rollout_context.checkpoint.seal.cleanup import 
 )
 from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (
     require_key,
-    runtime_draft,
 )
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     DetailUnavailableError,
@@ -112,6 +111,7 @@ def seal_snapshot(
     thread_id: str,
     snapshot: ContextAssemblySnapshot,
     *,
+    registered: ContextPlanRegistration,
     seal_idempotency_key: str,
     seal_input_hash: str,
     detail: Mapping[str, object] | None,
@@ -139,13 +139,10 @@ def seal_snapshot(
         snapshot,
         tool_pairings=_seal_tool_pairings(owner, snapshot, checkpoint_ns),
     )
-    registered = owner.get_context_plan_registration(
-        session_id,
-        thread_id=snapshot.thread_id,
-        plan_id=snapshot.plan_id,
-        checkpoint_ns=checkpoint_ns,
-    )
-    draft = runtime_draft(registered)
+    if (registered.session_id, registered.thread_id, registered.draft.plan_id) != (
+        snapshot.session_id, snapshot.thread_id, snapshot.plan_id,
+    ):
+        raise ValueError("source-mismatch: snapshot 与已注册 draft owner 不一致")
     if registered.plan_state == "sealed":
         if prepared_details:
             raise ValueError("assembly-idempotency-conflict: sealed retry 不能准备新 detail")
@@ -216,7 +213,6 @@ def seal_snapshot(
             checkpoint_ns=checkpoint_ns,
         )
     try:
-        validate_sealed_plan(draft, snapshot)
         owner._validate_snapshot_sources(
             snapshot, checkpoint_ns, prepared_details=prepared_details,
         )

@@ -19,6 +19,7 @@ class JobStepExecutor(Protocol):
         job_id: str,
         message_id: str,
         execution_binding: ExecutionBinding,
+        resume_checkpoint_id: str | None = None,
         attachments: list[AttachmentRef] | None = None,
         message_created_at: str,
         message_metadata: dict[str, object] | None = None,

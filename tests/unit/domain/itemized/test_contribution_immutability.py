@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import asdict, replace
 from types import MappingProxyType
 
+from app.domain.itemized.epoch.prefix_epoch import (
+    AppendedItemRef,
+    ProviderProfileItemFrame,
+    initial_epoch_state,
+)
 from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
-from app.domain.itemized.request_plan import ContextContribution
+from app.domain.itemized.identity.refs import ToolSetRef
+from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.domain.itemized.serde.registry import parse_contribution
 
 
@@ -157,3 +163,51 @@ def test_replace_binding_manifest_and_serde_preserve_nested_json() -> None:
     assert restored.extensions == extensions
     assert "_body_snapshot" not in serialized
     assert "_extensions_snapshot" not in serialized
+
+
+def test_toolset_and_plan_isolate_nested_inputs_reads_and_manifests() -> None:
+    parameters = {"type": "object", "required": ["path"]}
+    tools = ({"name": "read_file", "parameters": parameters},)
+    policy = {"allowed": ["read_file"]}
+    ref = ToolSetRef.from_tool_snapshot(
+        snapshot_id="tools", session_id="session", thread_id="thread",
+        plan_id="plan", source_revision="revision", tools=tools, tool_policy=policy,
+    )
+    plan = ContextRequestPlan(
+        session_id="session", thread_id="thread", plan_id="plan", refs=(),
+        tool_set_refs=(ref,), tool_snapshot=tools,
+    )
+    expected = ref.to_dict()
+    parameters["required"].append("input")
+    policy["allowed"].append("input")
+    ref.tools[0]["parameters"]["required"].append("getter")
+    ref.tool_policy["allowed"].append("getter")
+    ref.to_dict()["tools"][0]["parameters"]["required"].append("manifest")
+    ref.manifest_preimage()["tool_policy"]["allowed"].append("manifest")
+    plan.tool_snapshot[0]["parameters"]["required"].append("getter")
+    assert ref.to_dict() == expected
+    assert plan.tool_snapshot[0]["parameters"]["required"] == ["path"]
+    ref.validate_manifest()
+
+
+def test_prefix_frames_isolate_content_and_container_inputs() -> None:
+    body = {"parts": [{"text": "原始正文"}]}
+    frame = ProviderProfileItemFrame(
+        1, "provider", "user", "structured_content", body,
+        AppendedItemRef("canonical_item", "item"),
+    )
+    frames = [frame]
+    refs = [frame.item_ref]
+    state = replace(initial_epoch_state(
+        provider_profile="provider", tool_compatibility_key="sha256:jcs:v1:" + "0" * 64,
+    ), frames=frames, appended_refs=refs)
+    before = frame.frame_bytes()
+    body["parts"][0]["text"] = "输入别名"
+    frame.content["parts"][0]["text"] = "getter 别名"
+    frame.frame_manifest()["content"]["parts"][0]["text"] = "manifest 别名"
+    asdict(state)["frames"][0]["content"]["parts"][0]["text"] = "asdict 别名"
+    frames.clear()
+    refs.clear()
+    assert frame.frame_bytes() == before
+    assert state.frames == (frame,)
+    assert state.appended_refs == (frame.item_ref,)

@@ -38,7 +38,6 @@ export interface ChatTurnActions {
     action: MessageReplayRequest["action"],
     content?: string,
   ) => Promise<void>;
-  executePendingEdit: () => Promise<void>;
   executePendingAction: (action: () => Promise<void>) => Promise<void>;
   reportActionError: (error: unknown) => void;
 }
@@ -47,8 +46,7 @@ export function useChatTurnActions({
   conversation,
   sessionBusy,
   onReplayTurn,
-  onUpdatePending,
-}: Pick<ChatTurnHandlers, "onReplayTurn" | "onUpdatePending"> & {
+}: Pick<ChatTurnHandlers, "onReplayTurn"> & {
   conversation: ConversationView;
   sessionBusy: boolean;
 }): ChatTurnActions {
@@ -69,7 +67,8 @@ export function useChatTurnActions({
       !userMessage
       || summaryOnly
       || isInternalDisplayMessage
-      || (sessionBusy && !conversation.pending)
+      || sessionBusy
+      || conversation.pending
     ) return;
     setEditContent(userMessage.content);
     setEditAttachments(userAttachments);
@@ -114,31 +113,6 @@ export function useChatTurnActions({
     }
   }, [actionRunning, onReplayTurn, sessionBusy, summaryOnly, userAttachments, userMessage]);
 
-  const executePendingEdit = React.useCallback(async () => {
-    if (!userMessage || actionRunning || !conversation.pending) return;
-    setActionRunning(true);
-    setActionError(null);
-    try {
-      await onUpdatePending(
-        userMessage.message_id,
-        editContent.trim(),
-        editAttachments,
-      );
-      setEditing(false);
-    } catch (error) {
-      setActionError(errorMessage(error));
-    } finally {
-      setActionRunning(false);
-    }
-  }, [
-    actionRunning,
-    conversation.pending,
-    editAttachments,
-    editContent,
-    onUpdatePending,
-    userMessage,
-  ]);
-
   const executePendingAction = React.useCallback(async (
     action: () => Promise<void>,
   ) => {
@@ -172,7 +146,6 @@ export function useChatTurnActions({
     setEditAttachments,
     setConfirmAction,
     executeReplay,
-    executePendingEdit,
     executePendingAction,
     reportActionError: React.useCallback((error: unknown) => {
       setActionError(errorMessage(error));

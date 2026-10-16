@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, type MutableRefObject } from "react";
 import { DEFAULT_BACKEND_PORT } from "../../api";
 import type {
   FinishWorkspaceRefresh,
@@ -23,12 +23,14 @@ export function useWorkspaceRefreshOrchestration({
   setState,
   refreshSessions,
   abortCurrentStream,
+  selectionIntentRef,
 }: {
   apiPort: number | null;
   gatewayWorkspaces: readonly GatewayWorkspaceRequestTarget[];
   setState: SetAppState;
   refreshSessions: FinishWorkspaceRefresh;
   abortCurrentStream: () => void;
+  selectionIntentRef: MutableRefObject<number>;
 }) {
   // 切换态的进入与退出必须是同一条链路的成对操作：每个「置为切换中」的入口
   // （resetWorkspaceScopedState）与每个刷新收口（finishWorkspaceRefresh）都会
@@ -66,8 +68,11 @@ export function useWorkspaceRefreshOrchestration({
     // null。调用方必须比对它是否等于自己请求的 workspaceId，不能只看真值——
     // 自动健康回退可能把活动工作区切到别的 id，那不算请求的那个工作区生效。
     const switchStep = ++latestSwitchStepRef.current;
+    const selectionIntent = options.selectionIntent ?? selectionIntentRef.current;
+    if (selectionIntent !== selectionIntentRef.current) return null;
     try {
-      const appliedWorkspaceId = await refreshSessions(preferredSessionId, options);
+      const appliedWorkspaceId = await refreshSessions(preferredSessionId, { ...options, selectionIntent });
+      if (selectionIntent !== selectionIntentRef.current) return null;
       if (switchStep !== latestSwitchStepRef.current) {
         // 已有更新的切换步骤接手收敛职责：本次不得写回，避免把新链路正在
         // 收敛的切换态反向清掉，但仍要把真实生效的工作区 id 回传给调用方。
@@ -80,7 +85,7 @@ export function useWorkspaceRefreshOrchestration({
       );
       return appliedWorkspaceId;
     } catch (error: unknown) {
-      if (switchStep === latestSwitchStepRef.current) {
+      if (switchStep === latestSwitchStepRef.current && selectionIntent === selectionIntentRef.current) {
         settleWorkspaceSwitching(errorMessage(error));
       }
       throw error;

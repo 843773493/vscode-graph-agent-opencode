@@ -42,6 +42,9 @@ from app.services.infrastructure.rollout_context.activation.store import (
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_owner import (
+    ContextOwnerMixin,
+)
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     detail_record_from_mapping,
 )
@@ -170,7 +173,9 @@ def test_payload_is_required_protected_and_uses_canonical_hash_and_length(
     )
     snapshot, binding = _snapshot_with_detail(record.detail_ref, payload, thread_id)
     assert manifest == record
-    assert body_store.read_payload(snapshot=snapshot, binding=binding) == payload
+    assert body_store.read_payload(
+        snapshot=snapshot, binding=binding, storage_owner=(SESSION_ID, thread_id),
+    ) == payload
 
 
 def test_payload_read_rejects_resource_ordinal_and_hash_conflicts(
@@ -199,7 +204,9 @@ def test_payload_read_rejects_resource_ordinal_and_hash_conflicts(
         replace(binding, content_length=binding.content_length + 1),
     ):
         with pytest.raises(ResourceActivationStoreError) as error:
-            body_store.read_payload(snapshot=snapshot, binding=changed)
+            body_store.read_payload(
+                snapshot=snapshot, binding=changed, storage_owner=(SESSION_ID, thread_id),
+            )
         assert error.value.code == HASH_MISMATCH_CODE
 
 
@@ -235,7 +242,10 @@ def test_payload_read_rejects_wrong_owner_and_retention_tombstone(
         replace(snapshot, bindings=(wrong_owner_binding,))
     assert owner_error.value.code == "resource-activation-schema-invalid"
     with pytest.raises(ResourceActivationStoreError) as binding_error:
-        body_store.read_payload(snapshot=snapshot, binding=wrong_owner_binding)
+        body_store.read_payload(
+            snapshot=snapshot, binding=wrong_owner_binding,
+            storage_owner=(SESSION_ID, thread_id),
+        )
     assert binding_error.value.code == HASH_MISMATCH_CODE
 
     storage.assemblies.mark_context_plan_details_unavailable(
@@ -244,7 +254,9 @@ def test_payload_read_rejects_wrong_owner_and_retention_tombstone(
         detail_refs=(record.detail_ref,),
     )
     with pytest.raises(ResourceActivationStoreError) as error:
-        body_store.read_payload(snapshot=snapshot, binding=binding)
+        body_store.read_payload(
+            snapshot=snapshot, binding=binding, storage_owner=(SESSION_ID, thread_id),
+        )
     assert error.value.code == BODY_UNAVAILABLE_CODE
 
 
@@ -265,7 +277,10 @@ def test_exact_sensitive_payload_persists_without_key_dependencies(body_workspac
     ))
     snapshot, binding = _snapshot_with_detail(record.detail_ref, payload, bundle.main_thread_id)
     restarted = ResourceActivationBodyStore(storage, ContextPlanDetailStore(sessions_root))
-    assert restarted.read_payload(snapshot=snapshot, binding=binding) == payload
+    assert restarted.read_payload(
+        snapshot=snapshot, binding=binding,
+        storage_owner=(SESSION_ID, bundle.main_thread_id),
+    ) == payload
 
 
 @pytest.mark.asyncio
@@ -290,6 +305,8 @@ async def test_coordinator_freezes_through_protected_body_port(
     saved: list[ResourceActivationSnapshotRef] = []
 
     class SnapshotSaver:
+        context_owner_namespace = staticmethod(ContextOwnerMixin.context_owner_namespace)
+
         def frozen_resource_activation_for_admission(self, admission, *, checkpoint_ns=""):
             return None
 
@@ -299,7 +316,7 @@ async def test_coordinator_freezes_through_protected_body_port(
             return None
 
         async def save_resource_activation_snapshot(
-            self, snapshot: ResourceActivationSnapshotRef
+            self, snapshot: ResourceActivationSnapshotRef, *, checkpoint_ns: str = ""
         ) -> None:
             saved.append(snapshot)
 
@@ -327,7 +344,9 @@ async def test_coordinator_freezes_through_protected_body_port(
     assert saved == [frozen]
     assert frozen.bindings[0].content_hash == sha256_jcs(payload)
     assert (
-        body_store.read_payload(snapshot=frozen, binding=frozen.bindings[0]) == payload
+        body_store.read_payload(
+            snapshot=frozen, binding=frozen.bindings[0], storage_owner=(SESSION_ID, thread_id),
+        ) == payload
     )
 
 
@@ -375,7 +394,9 @@ def test_same_turn_resume_payload_reuse_verifies_complete_protected_members(
     )
     store.save_snapshot(retry)
     assert retry.bindings == first.bindings
-    assert body_store.read_payload(snapshot=retry, binding=binding) == payload
+    assert body_store.read_payload(
+        snapshot=retry, binding=binding, storage_owner=(SESSION_ID, thread_id),
+    ) == payload
 
     for changed in (
         replace(member, revision="catalog-revision-2"),
@@ -386,7 +407,9 @@ def test_same_turn_resume_payload_reuse_verifies_complete_protected_members(
         assert altered.bindings_hash == retry.bindings_hash
         assert altered.activation_provenance_hash == retry.activation_provenance_hash
         with pytest.raises(ResourceActivationStoreError) as mismatch:
-            body_store.read_payload(snapshot=altered, binding=altered_binding)
+            body_store.read_payload(
+                snapshot=altered, binding=altered_binding, storage_owner=(SESSION_ID, thread_id),
+            )
         assert mismatch.value.code == HASH_MISMATCH_CODE
     assert store.read_snapshot(
         SESSION_ID, thread_id=thread_id, activation_snapshot_id=retry.activation_snapshot_id,

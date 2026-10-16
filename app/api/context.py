@@ -8,6 +8,7 @@ from app.abstractions.session_context import SessionContextRevisionChangedError
 from app.api.deps import get_request_id, get_session_context_query_service
 from app.api.errors import not_found_http_error, state_conflict_http_error
 from app.core.exceptions import NotFoundError
+from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
@@ -65,6 +66,8 @@ async def read_context(
         ) from error
     except (TypeError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     except RuntimeError as error:
         if not any(
             code in str(error)
@@ -104,4 +107,6 @@ async def search_context(
         ) from error
     except (TypeError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)

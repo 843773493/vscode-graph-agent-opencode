@@ -14,10 +14,19 @@ from app.abstractions.job_step_executor import JobStepExecutor
 from app.abstractions.session_changes import SessionChangesRecorderProtocol
 from app.abstractions.tool_selection import ToolSelectionReader
 from app.agents.agent_factory import resolve_agent_id
+from app.agents.checkpoint_recovery import (
+    CheckpointRecoveryRejectedError,
+    persisted_pending_tool_candidate,
+)
 from app.agents.graph_binding import (
     GraphBindingOwnerKey,
     GraphBindingStorePort,
     resolve_graph_binding,
+)
+from app.agents.skill_runtime import (
+    PublishedSkillCatalog,
+    build_workspace_skill_catalog,
+    start_workspace_skill_catalog_publication,
 )
 from app.agents.tools.custom_invocation import (
     seal_extension_catalog_binding_from_tools,
@@ -30,13 +39,20 @@ from app.core.path_utils import (
     get_session_path_resolver,
     workspace_context,
 )
+from app.core.phase_observer import observe_phase
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.shielded_cleanup import run_cleanup_shielded
+from app.core.trace_middleware import get_current_gateway_id
 from app.core.turn_execution_scope import (
     TurnExecutionScopeRegistry,
 )
 from app.core.workspace_identity import validate_workspace_id
-from app.domain.itemized.execution_admission import ExecutionAdmission, ExecutionBinding
+from app.domain.itemized.execution_admission import (
+    ExecutionAdmission,
+    ExecutionBinding,
+    InternalExecutionIntent,
+    UserExecutionIdentity,
+)
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.runtime.agent_runtime import (
     AgentRuntimeDependencyProvider,
@@ -44,6 +60,7 @@ from app.runtime.agent_runtime import (
     build_session_agent_runtime,
 )
 from app.schemas.internal_v2.message import AttachmentRef
+from app.services.business.job.service import JobState
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
@@ -183,6 +200,7 @@ class AgentExecutionService(JobStepExecutor):
         resource_activation: ResourceActivationCoordinator | None,
         owns_thread: bool = True,
         lifetime_scope: LifetimeScope | None = None,
+        skill_catalog: PublishedSkillCatalog | None = None,
     ) -> AgentEventSource:
         """一个 thread generation 的编译边界。
 
@@ -212,10 +230,9 @@ class AgentExecutionService(JobStepExecutor):
             model_visibility_overrides=model_visibility_overrides,
             preferred_provider_id=preferred_provider_id,
             tool_timeout_seconds=self._tool_timeout_seconds,
-            workspace_file_resource_registry=(
-                self._workspace_file_resource_registry if owns_thread else None
-            ),
+            workspace_file_resource_registry=self._workspace_file_resource_registry,
             reactor_lifetime_scope=lifetime_scope if owns_thread else None,
+            skill_catalog=skill_catalog,
             graph_binding_store=self._graph_binding_store,
             workspace_root=self._workspace_root,
             include_team_tools=include_team_tools,
@@ -240,27 +257,36 @@ class AgentExecutionService(JobStepExecutor):
             owner=GraphBindingOwnerKey(pair.session_id, pair.thread_id),
         )
         snapshot = self._config_service.get_snapshot()
+        # 默认选择与同一显式选择属于同一个已冻结 Provider，不应更换 thread generation。
+        with self._config_service.use_snapshot(snapshot):
+            provider_id = self._config_service.resolve_agent_provider_id(
+                agent_id, preferred_provider_id
+            )
         mcp_owner = self._dependency_provider.get_mcp_catalog_owner()
         publication = mcp_owner.publication_snapshot()
         mcp_tools = tuple(publication.tools.values())
-        mcp = publication.binding_ref
+        # Job 执行根已经绑定真实 Gateway；空 Context builder 与后台发布显式用此身份。
+        gateway_id = get_current_gateway_id()
         generation_key = (
             binding.selector_fields(),
             snapshot.revision,
             agent_id,
-            tuple(sorted(execution_overrides.items())),
-            tuple(sorted(model_visibility_overrides.items())),
-            preferred_provider_id,
+            # MCP target 的开关由 dispatch 读取，固定信封不因此重新编译。
+            tuple(sorted((name, enabled) for name, enabled in execution_overrides.items() if not name.startswith("mcp__"))),
+            tuple(sorted((name, visible) for name, visible in model_visibility_overrides.items() if not name.startswith("mcp__"))),
+            provider_id,
             include_team_tools,
-            mcp.catalog_revision,
-            mcp.generation,
+            gateway_id,
         )
 
         async def build(
             session_id: str, thread_id: str, scope: LifetimeScope
         ) -> StepAgentRuntime:
+            file_registry = self._workspace_file_resource_registry
+            if file_registry is None:
+                raise RuntimeError("正式 runtime 需要 WorkspaceFileResourceRegistry")
 
-            def compile_agent() -> StepAgentRuntime:
+            def compile_agent() -> tuple[StepAgentRuntime, PublishedSkillCatalog, ResourceRegistry]:
                 # builder task 使用空 Context；显式恢复工作区、代配置及 thread owner。
                 with (
                     workspace_context(
@@ -280,23 +306,45 @@ class AgentExecutionService(JobStepExecutor):
                     )
                     self._team_resource_subscriber(session_id, thread_id, resource_registry, scope)
                     resource_activation = self._resource_activation_factory(resource_registry)
+                    skill_catalog = build_workspace_skill_catalog(
+                        self._workspace_root, registry=resource_registry,
+                        file_registry=file_registry,
+                        gateway_id=gateway_id,
+                    )
                     agent = self._build_agent(
                         session_id=session_id,
                         thread_id=thread_id,
                         agent_id=agent_id,
                         execution_overrides=execution_overrides,
                         model_visibility_overrides=model_visibility_overrides,
-                        preferred_provider_id=preferred_provider_id,
+                        preferred_provider_id=provider_id,
                         include_team_tools=include_team_tools,
                         mcp_tools=mcp_tools,
                         mcp_catalog_owner=mcp_owner,
                         resource_registry=resource_registry,
                         resource_activation=resource_activation,
                         lifetime_scope=scope,
+                        skill_catalog=skill_catalog,
                     )
-                    return StepAgentRuntime(agent, resource_activation)
+                    return StepAgentRuntime(agent, resource_activation), skill_catalog, resource_registry
 
-            return await asyncio.to_thread(compile_agent)
+            runtime, skill_catalog, resource_registry = await asyncio.to_thread(compile_agent)
+            start_workspace_skill_catalog_publication(
+                skill_catalog, registry=resource_registry,
+                file_registry=file_registry,
+                lifetime_scope=scope,
+            )
+            await observe_phase(thread_id, "thread.runtime.built", details={
+                "session_id": session_id, "thread_id": thread_id,
+                "runtime_object_id": id(runtime), "agent_object_id": id(runtime.agent),
+                "scope_object_id": id(scope),
+                "graph_binding": {
+                    "graph_id": binding.graph_id, "graph_revision": binding.graph_revision,
+                    "graph_schema_hash": binding.graph_schema_hash,
+                    "capability_profile_hash": binding.capability_profile_hash,
+                },
+            })
+            return runtime
 
         return await self._residency_tracker.acquire(
             pair, admission, generation_key, build
@@ -361,6 +409,7 @@ class AgentExecutionService(JobStepExecutor):
         job_id: str,
         message_id: str,
         execution_binding: ExecutionBinding,
+        resume_checkpoint_id: str | None = None,
         attachments: list[AttachmentRef] | None = None,
         message_created_at: str,
         message_metadata: dict[str, object] | None = None,
@@ -388,6 +437,7 @@ class AgentExecutionService(JobStepExecutor):
                     job_id=job_id,
                     message_id=message_id,
                     execution_binding=execution_binding,
+                    resume_checkpoint_id=resume_checkpoint_id,
                     attachments=attachments,
                     message_created_at=message_created_at,
                     message_metadata=message_metadata,
@@ -398,6 +448,35 @@ class AgentExecutionService(JobStepExecutor):
             # Runner 已释放本轮 lease 和 invocation scope，才通知 Job 可终态/释放槽。
             if protected_operations_settled is not None:
                 protected_operations_settled.set()
+
+    async def pending_tool_checkpoint_id(self, job: JobState) -> str | None:
+        """只读原 durable admission 与完整 carrier；建图和 scheduler 校验交执行 owner。"""
+        checkpointer = self._dependency_provider.get_checkpointer()
+        try:
+            admission = await asyncio.to_thread(
+                checkpointer.execution_admission_for_job,
+                job.session_id, thread_id=job.thread_id, job_id=job.job_id,
+            )
+        except KeyError:
+            return None
+        binding = job.execution_binding
+        if isinstance(binding, UserExecutionIdentity):
+            consistent = (binding.job_id, binding.turn_id, binding.admission_idempotency_key) == (
+                admission.job_id, admission.turn_id, admission.admission_idempotency_key,
+            ) and admission.execution_origin == "user_turn"
+        elif isinstance(binding, InternalExecutionIntent):
+            consistent = (binding.execution_id, binding.admission_idempotency_key, binding.message_id) == (
+                admission.execution_id, admission.admission_idempotency_key, job.message_id,
+            ) and admission.execution_origin == "internal"
+        else:
+            raise TypeError("恢复 Job 缺少完整 execution binding")
+        if not consistent:
+            raise CheckpointRecoveryRejectedError(f"恢复 Job 请求与权威 execution admission 冲突: {job.job_id}")
+        with session_thread_owner_scope(
+            MutationIntentOwner(job.session_id, job.thread_id), langgraph_thread_id=job.thread_id,
+        ):
+            candidate = await persisted_pending_tool_candidate(checkpointer, admission)
+        return candidate.checkpoint_id if candidate is not None else None
 
     def _tool_face_definitions(self, agent_id: str) -> list[dict[str, Any]]:
         """Provider 工具面定义（不含 Session/Thread 的 blueprint 投影）。

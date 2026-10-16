@@ -2,27 +2,31 @@ import React from "react";
 import { conversationModelUsage, conversationTokenUsage } from "../../../state/tokenUsage";
 import { buildPendingStatusItem, isLiveConversationView } from "../../../state/trace/traceAggregation";
 import type { TimelineItem } from "../../../state/timeline/timelineTypes";
-import { buildRenderGroups, persistedWorkItems, responseItemsForConversation } from "../../../state/timeline/chatResponseGroups";
-import type { RenderGroup } from "../../../state/timeline/chatResponseGroups";
+import { buildRenderGroups, responseItemsForConversation } from "../../../state/timeline/chatResponseGroups";
 import type { ConversationView } from "../../../types/frontend";
 import ResponseActionToolbar from "../ResponseActionToolbar";
 import type { ChatTurnActions } from "./useChatTurnActions";
 import type { LoadToolDetails, LoadTurnDetails } from "./types";
 import { RewindStatusPart, MessageStreamStatusPart, HistoricalBoundaryStatusPart, ExecutionLostRecoveryPart, ResponsePart } from "./responseStatusParts";
-import { ConversationWorkSummary, TurnActivitySummary } from "./TurnActivitySummary";
+import { ConversationWorkSummary, ForkItemButtons, TurnActivitySummary } from "./TurnActivitySummary";
+import type { ChatTurnHandlers } from "./types";
 
 export default function ChatTurnResponseBody({
   conversation,
+  workspaceId,
   showRawDetails,
   actions,
   onLoadTurnDetails,
   onLoadToolDetails,
+  onForkConversation,
 }: {
   conversation: ConversationView;
+  workspaceId?: string | null;
   showRawDetails: boolean;
   actions: ChatTurnActions;
   onLoadTurnDetails?: LoadTurnDetails;
   onLoadToolDetails?: LoadToolDetails;
+  onForkConversation?: ChatTurnHandlers["onForkConversation"];
 }): React.ReactNode {
   const running = isLiveConversationView(conversation)
     && (conversation.status === "running" || conversation.status === "queued");
@@ -47,16 +51,18 @@ export default function ChatTurnResponseBody({
       && !(hasSessionInterrupted && item.eventType === "job_cancelled")),
   );
   const renderGroups = buildRenderGroups(visibleParts);
-  const persistedWork = persistedWorkItems(conversation);
+  const activityItems = renderGroups.flatMap((group) => group.kind === "work" ? group.items : []);
   const historyTurn = conversation.displayMode === "history" && Boolean(conversation.turnId);
-  const activityItems = historyTurn
-    ? persistedWork
-    : [
-      ...persistedWork,
-      ...renderGroups
-        .filter((group): group is Extract<RenderGroup, { kind: "work" }> => group.kind === "work")
-        .flatMap((group) => group.items),
-    ];
+  const onForkItem = conversation.displayMode === "history" && onForkConversation
+    ? (itemId: string) => {
+      if (!workspaceId || !conversation.threadId || !conversation.sourceViewId || conversation.sourceViewRevision === undefined) {
+        throw new Error("历史消息缺少实际读取的来源快照");
+      }
+      onForkConversation({
+        workspaceId, sessionId: conversation.sessionId, threadId: conversation.threadId,
+        sourceViewId: conversation.sourceViewId, sourceViewRevision: conversation.sourceViewRevision, itemId,
+      });
+    } : undefined;
   const showConversationWorkSummary = !historyTurn
     && (activityItems.length > 0 || (!running && Boolean(conversation.activityStats)));
   const responseTextPart = [...visibleParts].reverse().find(
@@ -85,10 +91,11 @@ export default function ChatTurnResponseBody({
       {historyTurn ? (
         <TurnActivitySummary
           conversation={conversation}
-          items={activityItems}
+          groups={renderGroups}
           showRawDetails={showRawDetails}
           onLoadTurnDetails={onLoadTurnDetails}
           onLoadToolDetails={onLoadToolDetails}
+          onForkItem={onForkItem}
         />
       ) : null}
       {showConversationWorkSummary ? (
@@ -98,14 +105,12 @@ export default function ChatTurnResponseBody({
           running={running}
         />
       ) : null}
-      {renderGroups
-        .filter((group): group is Extract<RenderGroup, { kind: "response" }> => group.kind === "response")
-        .map((group) => (
-          <ResponsePart
-            key={group.id}
-            item={group.item}
-          />
-        ))}
+      {!historyTurn ? renderGroups.map((group) => group.kind === "response" ? (
+        <div key={group.id}>
+          <ResponsePart item={group.item} />
+          <ForkItemButtons item={group.item} onForkItem={onForkItem} />
+        </div>
+      ) : null) : null}
       {summaryOnly && !historyTurn ? (
         <div className="chat-turn-detail-loading" role="status">
           <span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />

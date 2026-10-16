@@ -22,6 +22,7 @@ from app.core.workspace_identity import (
     load_or_create_workspace_id,
     workspace_identity_path,
 )
+from app.gateway.runtime.process import ManagedProcess
 from tests.e2e.system.gateway.gateway_target import GatewaySshTarget, wait_for_ssh_ready
 from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
     start_terminal_backend,
@@ -39,9 +40,10 @@ from tests.support.gateway_processes import (
     reset_gateway_persistent_state,
     start_gateway_process,
 )
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import E2EPortBlock, integration_port_block_for_file
 from tests.support.process_scope import register_test_process, unregister_test_process
 from tests.support.processes import (
+    BackendProcess,
     close_backend_process,
     ensure_local_port_available,
     resolve_workspace_python_executable,
@@ -50,12 +52,34 @@ from tests.support.processes import (
 )
 
 
-@dataclass(frozen=True)
+@dataclass
 class CommunicationNode:
     workspace: Path
     client: httpx.AsyncClient
     gateway_id: str
     workspace_id: str
+    backend: BackendProcess
+    backend_start: Callable[[], BackendProcess]
+
+    def restart_backend(self, operation: str = "restart") -> dict[str, object]:
+        """pytest 只终止本 node 持有的 Popen；重启复用原 mount/composition 与端口。"""
+        if operation not in {"restart", "kill", "start"}:
+            raise ValueError(f"未知 owned backend 操作: {operation}")
+        previous = self.backend
+        if operation in {"restart", "kill"}:
+            if previous.process.poll() is not None:
+                raise RuntimeError("owned backend 已停止，拒绝重复 kill")
+            previous.process.kill()
+            previous.process.wait(timeout=10)
+            close_backend_process(previous)
+        if operation in {"restart", "start"}:
+            if previous.process.poll() is None:
+                raise RuntimeError("owned backend 仍运行，拒绝重复 start")
+            self.backend = self.backend_start()
+        return {"before_pid": previous.process.pid, "after_pid": self.backend.process.pid if operation != "kill" else None, "port": self.backend.port}
+
+    def close_backend(self) -> None:
+        close_backend_process(self.backend)
 
     @property
     def gateway_root(self) -> Path:
@@ -73,9 +97,9 @@ class CommunicationNode:
         return self.workspace / ".boxteam/sessions" / node["storage_relative_path"]
 
 
-def _close_ssh(process: subprocess.Popen[str]) -> None:
-    terminate_process(process)
-    unregister_test_process(process)
+def _close_ssh(owner: ManagedProcess) -> None:
+    owner.close(timeout_seconds=10)
+    unregister_test_process(owner)
 
 
 @asynccontextmanager
@@ -85,8 +109,12 @@ async def open_communication_triad(
     *,
     resource_service_nodes: tuple[str, ...] = (),
     shared_session_ids: tuple[str, ...] = (),
+    ports: E2EPortBlock | None = None,
+    backend_asgi_app: str = "app.main:app",
+    backend_environment: dict[str, str] | None = None,
+    gateway_environment: dict[str, str] | None = None,
 ) -> AsyncIterator[dict[str, CommunicationNode]]:
-    ports = integration_port_block_for_file(context.test_file)
+    ports = ports or integration_port_block_for_file(context.test_file)
     root = context.project_root
     sshd = shutil.which("sshd")
     if sshd is None:
@@ -110,14 +138,17 @@ async def open_communication_triad(
     ensure_local_port_available(ports.port(60), service_name="C3 隔离 sshd")
     async with AsyncExitStack() as resources:
         log = resources.enter_context((ssh_root / "sshd.log").open("w"))
-        process = await asyncio.to_thread(subprocess.Popen, [sshd, "-D", "-e", "-f", str(config)], stdout=log, stderr=log, text=True)
-        register_test_process(process, lambda: _close_ssh(process))
-        resources.push_async_callback(asyncio.to_thread, _close_ssh, process)
+        process = await asyncio.to_thread(subprocess.Popen, [sshd, "-D", "-e", "-f", str(config)], stdout=log, stderr=log, text=True, start_new_session=True)
+        ssh_owner = ManagedProcess(process=process, log_file=log)
+        register_test_process(ssh_owner, lambda: _close_ssh(ssh_owner))
+        resources.push_async_callback(asyncio.to_thread, _close_ssh, ssh_owner)
         username = getpass.getuser()
         target = GatewaySshTarget("communication-localhost", "linux", "127.0.0.1", ports.port(60), username, private_key, known_hosts, str(root), str(root / ".venv"))
         await asyncio.to_thread(wait_for_ssh_ready, target)
         workspaces = {}
         backends = {}
+        backend_starters = {}
+        nodes = {}
         for name, offset in (("a", 0), ("b", 20), ("c", 40)):
             node_context = replace(context, workspace_root=context.workspace_root / name / "workspace")
             workspace = prepare_workspace(node_context, ports.port(10), ports.port(offset + 1))
@@ -127,7 +158,7 @@ async def open_communication_triad(
                 seed_catalog_session_bundle(workspace / ".boxteam/sessions", session_id,
                     title="显式歧义测试资源")
             reset_gateway_persistent_state(workspace_root=workspace)
-            environment = {"BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{ports.port(offset + 1)}"}
+            environment = (backend_environment or {}) | {"BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{ports.port(offset + 1)}"}
             terminal_url = None
             browser_url = None
             if name in resource_service_nodes:
@@ -153,17 +184,27 @@ async def open_communication_triad(
                 resources.push_async_callback(asyncio.to_thread, close_browser_manager_processes, browser)
                 terminal_url = f"http://127.0.0.1:{terminal_port}"
                 browser_url = f"http://127.0.0.1:{browser_port}"
-            backend = await asyncio.to_thread(
-                start_backend_process, workspace_root=str(workspace), port=ports.port(offset),
-                log_name="c3-backend", env_overrides=environment,
-                startup_mount=MountedWorkspace(
+            mount = MountedWorkspace(
                     load_or_create_workspace_id(workspace), workspace.resolve(),
                     terminal_backend_url=terminal_url, browser_backend_url=browser_url,
-                ),
             )
-            resources.push_async_callback(asyncio.to_thread, close_backend_process, backend)
+            def start_owned_backend(workspace=workspace, offset=offset, environment=environment, mount=mount, name=name):
+                try:
+                    return start_backend_process(
+                        workspace_root=str(workspace), port=ports.port(offset),
+                        log_name="c3-backend", env_overrides=environment,
+                        startup_mount=mount, asgi_app=backend_asgi_app,
+                        refresh_user_configuration=False,
+                    )
+                except BaseException as startup_error:
+                    startup_error.add_note(f"owned backend 节点: {name}")
+                    raise
+            backend = await asyncio.to_thread(start_owned_backend)
             workspaces[name], backends[name] = workspace, backend
-        nodes = {}
+            backend_starters[name] = start_owned_backend
+            def close_owned_backend(name=name):
+                close_backend_process(nodes[name].backend if name in nodes else backends[name])
+            resources.push_async_callback(asyncio.to_thread, close_owned_backend)
         for name, offset in (("b", 20), ("c", 40), ("a", 0)):
             workspace = workspaces[name]
             if name == "a":
@@ -181,14 +222,14 @@ async def open_communication_triad(
                 start_gateway_process, workspace_root=workspace, port=ports.port(offset + 1),
                 default_backend_url=f"http://127.0.0.1:{backends[name].port}",
                 ssh_tunnel_port_range=(ports.port(70), ports.port(79)) if name == "a" else None,
-                extra_env={"BOXTEAM_GATEWAY_SSH_KNOWN_HOSTS_FILE": str(known_hosts)},
+                extra_env=(gateway_environment or {}) | {"BOXTEAM_GATEWAY_SSH_KNOWN_HOSTS_FILE": str(known_hosts)},
             )
             resources.push_async_callback(asyncio.to_thread, close_gateway_process, gateway)
             client = await resources.enter_async_context(httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=90))
             await acquire_gateway_guest(client)
             health = await client.get("/api/gateway/health")
             assert health.status_code == 200, health.text
-            nodes[name] = CommunicationNode(workspace, client, health.json()["data"]["gateway_id"], backends[name].workspace_id)
+            nodes[name] = CommunicationNode(workspace, client, health.json()["data"]["gateway_id"], backends[name].workspace_id, backends[name], backend_starters[name])
         async with asyncio.timeout(20):
             while len(nodes["a"].channels()) != 2 or len(nodes["b"].channels()) != 1 or len(nodes["c"].channels()) != 1:
                 await asyncio.sleep(0.05)

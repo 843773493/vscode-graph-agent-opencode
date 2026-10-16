@@ -4,6 +4,42 @@ import { parseSessionExecutionSse } from "./sessionSse";
 import { SessionExecutionSseSchema } from "../types/protocol_buf_generated/boxteam/workspace/v2/session_stream_pb";
 
 describe("Web Session SSE Protobuf adapter", () => {
+  test("消息事件保留 child owner 与消息创建时间，独立于事件发布时间", () => {
+    const value = {
+      event: {
+        event_id: "child-message-event",
+        session_id: "session-owner",
+        type: "message.updated",
+        time: "2026-10-14T12:00:00Z",
+        payload: {
+          message_id: "child-message",
+          session_id: "session-owner",
+          thread_id: "thread-child",
+          role: "user",
+          content: "child 输入",
+          created_at: "2026-10-14T11:59:00Z",
+        },
+      },
+      raw_type: "message_created",
+    };
+    const message = parseSessionExecutionSse(value);
+    expect(message.event?.payload.case).toBe("messageUpdated");
+    if (message.event?.payload.case !== "messageUpdated") throw new Error("消息事件缺少 typed payload");
+    expect(message.event.payload.value.threadId).toBe("thread-child");
+    expect(toJson(SessionExecutionSseSchema, message)).toMatchObject({
+      event: {
+        header: { time: "2026-10-14T12:00:00Z" },
+        messageUpdated: { threadId: "thread-child", createdAt: "2026-10-14T11:59:00Z" },
+      },
+    });
+    for (const thread_id of [undefined, null, ""]) {
+      expect(() => parseSessionExecutionSse({
+        ...value,
+        event: { ...value.event, payload: { ...value.event.payload, thread_id } },
+      })).toThrow("thread_id 必须是非空字符串");
+    }
+  });
+
   test("把 job.updated JSON 映射到 typed oneof", () => {
     const message = parseSessionExecutionSse({
       event: {

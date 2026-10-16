@@ -149,6 +149,7 @@ export function useGatewayExtensionResources({
   const ownerControl = useCallback(async (
     entry: GatewayExtensionResourceEntry, action: ResourceAction, thread?: ResourceThreadRef,
   ) => {
+    if (action === "attach" && !thread) throw new Error("关联 Gateway 资源必须提供明确的 session_id 与 thread_id");
     // 写入先作废在途列表，完整回执不能被较早的轮询覆盖。
     ++requestSequence.current;
     try {

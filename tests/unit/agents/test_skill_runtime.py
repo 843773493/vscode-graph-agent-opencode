@@ -101,6 +101,28 @@ def _write_runtime_manifest(root: Path) -> Path:
 FAKE_GATEWAY_ID = "gateway_0123456789abcdef0123456789abcdef"
 
 
+def _build_catalog(
+    workspace: Path,
+    *,
+    registry: ResourceRegistry,
+    file_registry: WorkspaceFileResourceRegistry | None = None,
+    bundled_skill_groups=None,
+    project_root: Path | None = None,
+):
+    source_owner = file_registry or WorkspaceFileResourceRegistry(
+        workspace_root=workspace,
+        watch_service=WorkspaceFileWatchService(workspace_root=workspace),
+        project_root=project_root,
+    )
+    return build_workspace_skill_catalog(
+        workspace,
+        registry=registry,
+        file_registry=source_owner,
+        bundled_skill_groups=bundled_skill_groups,
+        project_root=project_root,
+    )
+
+
 @pytest.fixture()
 def gateway_identity():
     """在测试作用域内绑定真实 gateway_id，模拟 Gateway 按请求注入。"""
@@ -120,7 +142,7 @@ def test_build_workspace_skill_catalog_empty_layers_publishes_empty_revision(
     monkeypatch.delenv("BOXTEAM_DEFAULT_SKILL_GROUPS", raising=False)
 
     registry = ResourceRegistry()
-    catalog = build_workspace_skill_catalog(tmp_path, registry=registry)
+    catalog = _build_catalog(tmp_path, registry=registry)
 
     assert catalog.entries == ()
     assert catalog.catalog_snapshot.available
@@ -141,7 +163,7 @@ def test_build_workspace_skill_catalog_resolves_gateway_layer(
     )
     monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
 
-    catalog = build_workspace_skill_catalog(tmp_path, registry=ResourceRegistry())
+    catalog = _build_catalog(tmp_path, registry=ResourceRegistry())
 
     assert len(catalog.entries) == 1
     entry = catalog.entries[0]
@@ -172,7 +194,7 @@ def test_gateway_scope_uri_passes_binding_with_injected_identity(
 ):
     """带 X-BoxTeam-Gateway-Id 的请求在 gateway scope 解析出真实 gateway_id 并通过绑定校验。
 
-    硬门槛：注入存在时，`_layer_scope_identity` 推出的 scope_id 必须等于注入值
+    硬门槛：注入存在时，固定目录 owner 的 scope_id 必须等于注入值
     （而非 `local`），且 `ResolutionContext(gateway_id=...)` 能通过真实的
     ``require_scope_binding``。注入缺失时同一 URI 必然 scope_mismatch。
     """
@@ -185,7 +207,7 @@ def test_gateway_scope_uri_passes_binding_with_injected_identity(
     )
     monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
 
-    catalog = build_workspace_skill_catalog(tmp_path, registry=ResourceRegistry())
+    catalog = _build_catalog(tmp_path, registry=ResourceRegistry())
     entry = catalog.entries[0]
     parsed = parse_resource_uri(entry.display_uri)
     assert parsed.scope == "gateway"
@@ -225,7 +247,7 @@ def test_build_workspace_skill_catalog_fails_closed_without_gateway_identity(
 
     assert get_current_gateway_id() is None
     with pytest.raises(RuntimeError, match="gateway scope 的 scope_id 需要真实的 gateway_id"):
-        build_workspace_skill_catalog(tmp_path, registry=ResourceRegistry())
+        _build_catalog(tmp_path, registry=ResourceRegistry())
 
 
 def test_gateway_identity_flows_from_request_header_into_catalog(
@@ -254,9 +276,7 @@ def test_gateway_identity_flows_from_request_header_into_catalog(
     def _build() -> dict[str, object]:
         bound = get_current_gateway_id()
         try:
-            catalog = build_workspace_skill_catalog(
-                tmp_path, registry=ResourceRegistry()
-            )
+            catalog = _build_catalog(tmp_path, registry=ResourceRegistry())
         except RuntimeError as error:
             return {"bound": bound, "error": str(error)}
         parsed = parse_resource_uri(catalog.entries[0].display_uri)
@@ -297,7 +317,7 @@ def test_build_workspace_skill_catalog_prefers_workspace_over_gateway(
         )
     monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
 
-    catalog = build_workspace_skill_catalog(tmp_path, registry=ResourceRegistry())
+    catalog = _build_catalog(tmp_path, registry=ResourceRegistry())
 
     assert len(catalog.entries) == 1
     entry = catalog.entries[0]
@@ -352,7 +372,7 @@ def test_gateway_layer_build_writes_nothing_into_workspace_storage(
         }
 
     before_sqlite = session_storage_snapshot()
-    catalog = build_workspace_skill_catalog(tmp_path, registry=ResourceRegistry())
+    catalog = _build_catalog(tmp_path, registry=ResourceRegistry())
     assert len(catalog.entries) == 1
     assert catalog.entries[0].layer == "gateway"
 
@@ -374,7 +394,7 @@ def test_build_workspace_skill_catalog_uses_inline_manifest(tmp_path, monkeypatc
     )
 
     assert resolve_bundled_skill_groups() == ("gateway-context",)
-    catalog = build_workspace_skill_catalog(
+    catalog = _build_catalog(
         tmp_path,
         registry=ResourceRegistry(),
         project_root=Path.cwd(),
@@ -399,7 +419,7 @@ def test_build_workspace_skill_catalog_fails_closed_without_manifest(
     monkeypatch.delenv("BOXTEAM_RUNTIME_MANIFEST", raising=False)
 
     with pytest.raises(RuntimeError, match="BOXTEAM_RUNTIME_MANIFEST"):
-        build_workspace_skill_catalog(
+        _build_catalog(
             tmp_path,
             registry=ResourceRegistry(),
             project_root=Path.cwd(),
@@ -416,7 +436,7 @@ def test_build_workspace_skill_catalog_rejects_symlink_entry(tmp_path, monkeypat
     monkeypatch.delenv("BOXTEAM_DEFAULT_SKILL_GROUPS", raising=False)
 
     with pytest.raises(RuntimeError, match="symlink"):
-        build_workspace_skill_catalog(tmp_path, registry=ResourceRegistry())
+        _build_catalog(tmp_path, registry=ResourceRegistry())
 
 
 def test_build_workspace_skill_catalog_rejects_name_dir_mismatch(
@@ -433,7 +453,7 @@ def test_build_workspace_skill_catalog_rejects_name_dir_mismatch(
     monkeypatch.delenv("BOXTEAM_DEFAULT_SKILL_GROUPS", raising=False)
 
     with pytest.raises(RuntimeError, match="目录名一致"):
-        build_workspace_skill_catalog(tmp_path, registry=ResourceRegistry())
+        _build_catalog(tmp_path, registry=ResourceRegistry())
 
 
 def test_build_workspace_skill_catalog_revision_is_immutable_hash(
@@ -450,8 +470,16 @@ def test_build_workspace_skill_catalog_revision_is_immutable_hash(
     )
 
     registry = ResourceRegistry()
-    first = build_workspace_skill_catalog(tmp_path, registry=registry)
-    unchanged = build_workspace_skill_catalog(tmp_path, registry=registry)
+    file_registry = WorkspaceFileResourceRegistry(
+        workspace_root=tmp_path,
+        watch_service=WorkspaceFileWatchService(workspace_root=tmp_path),
+    )
+    first = _build_catalog(
+        tmp_path, registry=registry, file_registry=file_registry,
+    )
+    unchanged = _build_catalog(
+        tmp_path, registry=registry, file_registry=file_registry,
+    )
     assert unchanged.catalog_revision == first.catalog_revision
     assert unchanged.entries[0].metadata_revision == first.entries[0].metadata_revision
 
@@ -461,7 +489,11 @@ def test_build_workspace_skill_catalog_revision_is_immutable_hash(
         "---\nname: demo\ndescription: v1\nignored: 其它备注\n---\n# body\n",
         encoding="utf-8",
     )
-    ignored_only = build_workspace_skill_catalog(tmp_path, registry=registry)
+    source_uri = first.entries[0].display_uri
+    file_registry.refresh(source_uri)
+    ignored_only = _build_catalog(
+        tmp_path, registry=registry, file_registry=file_registry,
+    )
     assert ignored_only.entries[0].metadata_revision == first.entries[0].metadata_revision
     assert ignored_only.catalog_revision == first.catalog_revision
 
@@ -469,7 +501,10 @@ def test_build_workspace_skill_catalog_revision_is_immutable_hash(
         "---\nname: demo\ndescription: v2\n---\n# body\n",
         encoding="utf-8",
     )
-    changed = build_workspace_skill_catalog(tmp_path, registry=registry)
+    file_registry.refresh(source_uri)
+    changed = _build_catalog(
+        tmp_path, registry=registry, file_registry=file_registry,
+    )
     assert changed.entries[0].metadata_revision != first.entries[0].metadata_revision
     assert changed.catalog_revision != first.catalog_revision
 
@@ -532,7 +567,7 @@ def test_workspace_skills_prompt_keeps_custom_tools_out_of_skill_list(
         "调用 `test_tool_2`。\n",
         encoding="utf-8",
     )
-    catalog = build_workspace_skill_catalog(tmp_path, registry=ResourceRegistry())
+    catalog = _build_catalog(tmp_path, registry=ResourceRegistry())
     middleware = WorkspaceSkillsMiddleware(catalog=catalog)
 
     skill_list = middleware._format_skills_list(
@@ -755,7 +790,11 @@ def _workspace_agents_stack(tmp_path, monkeypatch, source_seal_case):
         lifetime_scope=lifetime_scope,
         reactor_id="d3b-test",
     )
-    catalog = build_workspace_skill_catalog(tmp_path, registry=ResourceRegistry())
+    catalog = build_workspace_skill_catalog(
+        tmp_path,
+        registry=ResourceRegistry(),
+        file_registry=registry,
+    )
     middleware = WorkspaceSkillsMiddleware(
         catalog=catalog,
         context_source_manager=manager,

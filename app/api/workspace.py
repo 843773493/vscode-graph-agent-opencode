@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from contextlib import aclosing
+from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
@@ -109,6 +110,18 @@ async def stream_workspace_file_events(
     *,
     workspace_service: Annotated[WorkspaceService, Depends(get_workspace_service)],
 ):
+    return StreamingResponse(
+        open_workspace_file_sse(payload, watch_service, workspace_service),
+        media_type="text/event-stream",
+        headers=SSE_NO_CACHE_HEADERS,
+    )
+
+
+def open_workspace_file_sse(
+    payload: WorkspaceFileWatchRequest,
+    watch_service: WorkspaceFileWatchService,
+    workspace_service: WorkspaceService,
+) -> AsyncIterator[str]:
     try:
         roots = watch_service.resolve_watch_roots(payload.paths)
     except FileNotFoundError as error:
@@ -159,11 +172,7 @@ async def stream_workspace_file_events(
                 )
                 yield f"event: changes\ndata: {data}\n\n"
 
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers=SSE_NO_CACHE_HEADERS,
-    )
+    return generate()
 
 
 @router.get("", response_model=APIResponse[WorkspaceDTO], summary="获取当前工作区信息")

@@ -255,6 +255,7 @@ export interface GatewayRemoteConnectionSummaryDTO {
 export interface GatewayResourceDTO {
   gateway_connection_id?: string | undefined;
   gateway_name: string;
+  /** Gateway 注册表中的路由工作区 ID；resource.workspace_id 是后端 owner UUID。 */
   workspace_id: string;
   workspace_name: string;
   connection_kind: string;
@@ -415,21 +416,38 @@ export interface GatewayUserListDTO {
   items: GatewayUserDTO[];
 }
 
+/**
+ * 视图状态键为 (user_id, workspace_id, session_id)，仅用于 Session 主聊天 main thread；child thread 使用独立视图，新 Session（含 fork）不继承来源状态。
+ * 无锚点时 writer 记录当前 scrollTop，恢复忽略该像素偏移并回到最新尾部。
+ */
 export interface GatewayUserViewStateDTO {
   user_id: string;
   workspace_id: string;
   session_id: string;
-  turn_anchor?: string | undefined;
+  /** 当前 session_id 范围内的锚点 Turn ID；未设置或空字符串表示没有具体锚点。 */
+  turn_anchor?:
+    | string
+    | undefined;
+  /** 锚点 Turn 顶部被视口上沿裁切的非负距离，单位为 CSS 像素；仅在锚点非空且不跟随最新时用于恢复。 */
   scroll_offset: number;
+  /** 为 true 时恢复到会话最新尾部；否则锚点非空时按锚点和偏移恢复，锚点为空仍回到最新尾部。 */
   follow_latest?: boolean | undefined;
   projection_version: number;
   tool_details_expanded?: boolean | undefined;
   updated_at: string;
 }
 
+/** PUT 请求完整替换当前用户、工作区和会话范围的视图状态；未提供字段采用服务端默认值。 */
 export interface GatewayUserViewStateUpdateRequest {
-  turn_anchor?: string | undefined;
-  scroll_offset?: number | undefined;
+  /** 当前 session_id 范围内的锚点 Turn ID；未设置或空字符串表示没有具体锚点。 */
+  turn_anchor?:
+    | string
+    | undefined;
+  /** 锚点 Turn 顶部被视口上沿裁切的非负距离，单位为 CSS 像素；仅在锚点非空且不跟随最新时用于恢复。 */
+  scroll_offset?:
+    | number
+    | undefined;
+  /** 为 true 时恢复到会话最新尾部；否则锚点非空时按锚点和偏移恢复，锚点为空仍回到最新尾部。 */
   follow_latest?: boolean | undefined;
   projection_version?: number | undefined;
   tool_details_expanded?: boolean | undefined;

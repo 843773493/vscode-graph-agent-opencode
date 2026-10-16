@@ -88,7 +88,7 @@ if os.environ.get("BOXTEAM_TEST_COMMUNICATION_BARRIER_DIR"):
     else:
         raise ValueError(f"未知通信崩溃屏障: {stage}")
 
-_dedup = carrier_dedup.superseded_stream_tool_group_item_ids
+_dedup = carrier_dedup.superseded_tool_group_item_ids
 
 
 def _trace_dedup(items):
@@ -107,6 +107,6 @@ def _trace_dedup(items):
 
 
 if os.environ.get("BOXTEAM_TEST_COMMUNICATION_TRACE_DIR"):
-    carrier_dedup.superseded_stream_tool_group_item_ids = _trace_dedup
+    carrier_dedup.superseded_tool_group_item_ids = _trace_dedup
 
 __all__ = ["app"]

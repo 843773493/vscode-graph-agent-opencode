@@ -50,6 +50,15 @@ def test_current_job_and_pending_request_owner_fields_keep_distinct_wire_tags() 
     assert decoded.HasField("turn_id") and decoded.turn_id == "turn_fixture"
 
 
+def test_message_owner_survives_public_binding_round_trip() -> None:
+    for message_type, tag in ((public_pb2.MessageDTO, 9), (session_interaction_pb2.MessageObservation, 8)):
+        assert message_type.DESCRIPTOR.fields_by_name["thread_id"].number == tag
+        value = message_type(session_id="ses_owner", thread_id="thr_child")
+        decoded = message_type.FromString(value.SerializeToString())
+        assert decoded.session_id == "ses_owner"
+        assert decoded.thread_id == "thr_child"
+
+
 def test_information_wire_reserves_removed_physical_location_fields() -> None:
     for message_type, field_name, number in (
         (public_pb2.SessionInformationSnapshotDTO, "storage_path", 7),
@@ -63,21 +72,49 @@ def test_information_wire_reserves_removed_physical_location_fields() -> None:
         assert any(span.start <= number < span.end for span in shape.reserved_range)
 
 
-def test_communication_wire_uses_one_destination_for_existing_and_resource_targets() -> None:
+def test_communication_wire_uses_one_destination_for_existing_resource_and_fork_targets() -> None:
     descriptor = public_pb2.CommunicationGatewayRequest.DESCRIPTOR
     assert descriptor.fields_by_name["target"].number == 2
     assert descriptor.fields_by_name["resource_target"].number == 4
+    assert descriptor.fields_by_name["fork_target"].number == 5
     assert {field.name for field in descriptor.oneofs_by_name["destination"].fields} == {
-        "target", "resource_target",
+        "target", "resource_target", "fork_target",
     }
     value = public_pb2.CommunicationGatewayRequest(operation="read")
     value.target.gateway_id = "gateway-existing"
+    value.target.thread_id = "thread-existing"
     assert value.WhichOneof("destination") == "target"
+    decoded_target = public_pb2.CommunicationGatewayRequest.FromString(value.SerializeToString())
+    assert decoded_target.WhichOneof("destination") == "target"
+    assert decoded_target.target.gateway_id == "gateway-existing"
+    assert decoded_target.target.thread_id == "thread-existing"
+
     value.resource_target.gateway_id = "gateway-resource"
     value.resource_target.resource_identity = "resource"
+    value.resource_target.uri = "boxteam://resources/resource"
+    value.resource_target.scope = "workspace"
+    assert value.WhichOneof("destination") == "resource_target"
+    assert not value.HasField("target")
+    decoded_resource = public_pb2.CommunicationGatewayRequest.FromString(value.SerializeToString())
+    assert decoded_resource.WhichOneof("destination") == "resource_target"
+    assert decoded_resource.resource_target.gateway_id == "gateway-resource"
+    assert decoded_resource.resource_target.resource_identity == "resource"
+    assert decoded_resource.resource_target.uri == "boxteam://resources/resource"
+    assert decoded_resource.resource_target.scope == "workspace"
+
+    value.fork_target.gateway_id = "gateway-fork"
+    value.fork_target.uri = "boxteam://forks/fork_123/source"
+    value.fork_target.fork_role = "source"
+    assert value.WhichOneof("destination") == "fork_target"
+    assert not value.HasField("target")
+    assert not value.HasField("resource_target")
     decoded = public_pb2.CommunicationGatewayRequest.FromString(value.SerializeToString())
-    assert decoded.WhichOneof("destination") == "resource_target"
+    assert decoded.WhichOneof("destination") == "fork_target"
+    assert decoded.fork_target.gateway_id == "gateway-fork"
+    assert decoded.fork_target.uri == "boxteam://forks/fork_123/source"
+    assert decoded.fork_target.fork_role == "source"
     assert not decoded.HasField("target")
+    assert not decoded.HasField("resource_target")
 
 
 @pytest.fixture

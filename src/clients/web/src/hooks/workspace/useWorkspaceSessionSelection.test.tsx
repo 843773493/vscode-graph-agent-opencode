@@ -53,16 +53,20 @@ const restoreSpies: Array<() => void> = [];
 async function mountHook(initialState: AppState): Promise<MountedHook> {
   let hook: ReturnType<typeof useWorkspaceSessionSelection> | undefined;
   const latestStateRef: MutableRefObject<AppState> = { current: initialState };
+  const selectionIntentRef = { current: 0 };
   const calls: MountedHook["calls"] = [];
 
   function Probe(): React.ReactNode {
     hook = useWorkspaceSessionSelection({
       apiPort: API_PORT,
       latestStateRef,
+      selectionIntentRef,
       selectSession: (sessionId) => {
+        selectionIntentRef.current += 1;
         calls.push({ kind: "selectSession", args: [sessionId] });
       },
       selectWorkspaceSession: (workspaceId, sessionId, sessionOverride) => {
+        selectionIntentRef.current += 1;
         calls.push({ kind: "selectWorkspaceSession", args: [workspaceId, sessionId, sessionOverride] });
       },
       loadSessionViewState: async (workspaceId, sessionId) => {
@@ -127,6 +131,23 @@ describe("useWorkspaceSessionSelection 顺序语义", () => {
 });
 
 describe("useWorkspaceSessionSelection latest-only 队列", () => {
+  test("在途 open 回包不能越过同步选择 A→B→A 的新意图", async () => {
+    const request = deferred<Session>();
+    const getSession = spyOn(api, "getSession").mockImplementation(async () => await request.promise);
+    restoreSpies.push(() => getSession.mockRestore());
+    const { hook, calls } = await mountHook(appState());
+    const opened = hook.openWorkspaceSession("ws-1", "session-a");
+    await flush();
+    hook.selectWorkspaceSession("ws-2", "session-b", session("session-b"));
+    hook.selectWorkspaceSession("ws-1", "session-a", session("session-a"));
+    request.resolve(session("session-a"));
+    await opened;
+    expect(calls.filter((call) => call.kind === "selectWorkspaceSession").map((call) => call.args.slice(0, 2))).toEqual([
+      ["ws-2", "session-b"], ["ws-1", "session-a"],
+    ]);
+    expect(calls.filter((call) => call.kind === "activateGatewayWorkspaceInBackground")).toEqual([]);
+  });
+
   test("连续打开不同会话时只有最后一次生效", async () => {
     const firstRequest = deferred<Session>();
     const getSession = spyOn(api, "getSession").mockImplementation(

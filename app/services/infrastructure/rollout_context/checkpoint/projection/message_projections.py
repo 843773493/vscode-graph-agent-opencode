@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from app.core.hashing import sha256_hex as _hash_bytes
 from app.domain.itemized.enums import SemanticKind
@@ -50,7 +50,13 @@ class RolloutMessageProjectionMixin:
         message_sequence: int,
         timestamp: str,
     ) -> tuple[int, str, str] | None:
-        """把可映射的 canonical item 镜像成同一事务内的 message projection。"""
+        """把可映射的 canonical item 镜像成同一事务内的 message projection。
+
+        ``timestamp`` 是调用方提供的消息投影时间：普通 writer 传本次
+        ``_now``/timestamp，fork 的 ``copy_items`` 沿用源 ``source_messages``
+        行的 ``row[5]``，保留原消息投影时间，不代表 canonical item 创建时间
+        或复制提交时刻。
+        """
         message_sequence = strict_non_negative_int(
             message_sequence, field=f"messages.message_sequence: {item.item_id}"
         )
@@ -65,6 +71,7 @@ class RolloutMessageProjectionMixin:
             return None
         if item.semantic_kind not in {
             SemanticKind.USER_INPUT.value,
+            SemanticKind.RUNTIME_NOTICE.value,
             SemanticKind.ASSISTANT_OUTPUT.value,
             SemanticKind.TOOL_CALL.value,
             SemanticKind.TOOL_RESULT.value,
@@ -126,6 +133,7 @@ class RolloutMessageProjectionMixin:
         )
         expected_role = {
             SemanticKind.USER_INPUT.value: "user",
+            SemanticKind.RUNTIME_NOTICE.value: "user",
             SemanticKind.ASSISTANT_OUTPUT.value: "assistant",
             SemanticKind.TOOL_CALL.value: "assistant",
             SemanticKind.TOOL_RESULT.value: "tool",
@@ -192,7 +200,7 @@ class RolloutMessageProjectionMixin:
             "INSERT INTO messages(message_sequence, message_id, turn_id, execution_id, "
             "role, jsonl_offset, jsonl_length, content_length, content_hash, "
             "visibility, commit_id, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'visible', ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 message_sequence,
                 message_id,
@@ -203,11 +211,14 @@ class RolloutMessageProjectionMixin:
                 catalog_length,
                 len(content_bytes),
                 _hash_bytes(content_bytes),
+                "internal" if item.semantic_kind == SemanticKind.RUNTIME_NOTICE else "visible",
                 commit_id,
                 timestamp,
             ),
         )
-        self._insert_message_projection(connection, message_sequence, message, timestamp)
+        self._insert_message_projection(
+            connection, message_sequence, message, timestamp, canonical_items=items,
+        )
         return message_sequence, message_id, expected_role
 
     def _insert_message_projection(
@@ -216,11 +227,24 @@ class RolloutMessageProjectionMixin:
         sequence: int,
         value: Mapping[str, object],
         timestamp: str,
+        *,
+        canonical_items: Sequence[CanonicalItemRecord],
     ) -> None:
+        """写入消息派生视图，``timestamp`` 用于该投影的 ``updated_at``。
+
+        时间沿用上游消息投影：普通 writer 传本次 ``_now``/timestamp，fork
+        的 ``copy_items`` 传源 ``source_messages`` 行的 ``row[5]``，保留原
+        消息投影时间，不重新取复制提交时刻。
+        """
         codec = self._storage._codec()
         visible = codec.visible_text(value)
         data = value.get("data")
-        calls = codec.tool_calls(value)
+        # SQL 配对保存 canonical 调用身份；临时 LangChain wire 的 raw ID
+        # 不能覆盖 stream scope，两个 sink 的配对仍各自绑定真实 carrier。
+        calls = [
+            call for item in canonical_items if item.semantic_kind == SemanticKind.TOOL_CALL
+            for call in item.payload.get("tool_calls", [item.payload])
+        ]
         reasoning = codec.reasoning_rows(value)
         response_metadata = (
             data.get("response_metadata") if isinstance(data, Mapping) else None
@@ -307,7 +331,7 @@ class RolloutMessageProjectionMixin:
                 ),
             )
         for call_index, call in enumerate(calls):
-            call_id = call.get("id")
+            call_id = call.get("id") or call.get("tool_call_id")
             name = call.get("name")
             if (
                 not isinstance(call_id, str)

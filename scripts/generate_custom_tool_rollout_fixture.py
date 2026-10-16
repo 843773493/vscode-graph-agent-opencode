@@ -24,6 +24,7 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
 from app.core.path_utils import catalog_provider_scope, get_session_path_resolver
+from app.core.resource_uri import thread_resource_uri
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.workspace_identity import load_or_create_workspace_id
@@ -32,6 +33,15 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
+from tests.support.custom_tool_test_workspace import (
+    FixtureStageObserver,
+    timed_fixture_stage,
+)
+from tests.support.frozen_provider import (
+    create_frozen_provider_activation,
+    create_frozen_provider_prepare,
+    frozen_provider_wire,
+)
 
 FIXTURE_VERSION: Final = 3
 STATIC_LONG_SESSION_ID: Final = "ses_019c642bc2ec78718d0a296b3319d6df"
@@ -116,7 +126,7 @@ def _metadata(
     result: dict[str, object] = {
         "created_at": stamp,
         "updated_at": stamp,
-        "message_metadata": {"turn_id": turn_id, "job_id": turn_id},
+        "message_metadata": {"turn_id": turn_id},
     }
     if phase is not None:
         result["phase"] = phase
@@ -239,6 +249,7 @@ def _turn_messages(
     include_tool_calls: bool = True,
     include_large_payload: bool = False,
 ) -> list[BaseMessage]:
+    # job-* 是 fixture 的稳定 Turn ID；真实 Job 身份由 accept_turn 单独提交。
     turn_id = f"job-{turn_index:04d}"
     stamp = _stamp(turn_index)
     topic = TOPICS[(turn_index - 1) % len(TOPICS)]
@@ -269,7 +280,6 @@ def _turn_messages(
                     "internal": True,
                     "message_metadata": {
                         "turn_id": turn_id,
-                        "job_id": turn_id,
                         "internal": True,
                     },
                 },
@@ -437,32 +447,86 @@ def _create_session(
     large_tool_payloads: bool = False,
     checkpoint_prefix: str = "checkpoint",
     final_compaction_cutoff: int | None = None,
+    observer: FixtureStageObserver | None = None,
 ) -> None:
-    bundle = seed_catalog_session_bundle(
-        sessions_dir, session_id, title=title,
-        current_agent_id="default", current_provider_id="primary",
-        session_kind="context_fork" if fork_source else "normal",
-        context_source_session_id=fork_source[0] if fork_source else None,
-        updated_at=datetime.fromisoformat(_stamp(0)),
-    )
-    _catalog_resolver(sessions_dir).catalog_store.update_session_configuration(
-        session_id, current_agent_id="default", current_provider_id="primary",
-        updated_at=datetime.fromisoformat(_stamp(0)),
-    )
+    fixture_kind = "fork" if fork_source is not None else "normal"
+    with timed_fixture_stage(
+        observer,
+        "generator.session_bootstrap",
+        session_id=session_id,
+        fixture_kind=fixture_kind,
+        turn_count=turn_count,
+    ):
+        bundle = seed_catalog_session_bundle(
+            sessions_dir, session_id, title=title,
+            current_agent_id="default", current_provider_id="primary",
+            session_kind="context_fork" if fork_source else "normal",
+            context_source_session_id=fork_source[0] if fork_source else None,
+            updated_at=datetime.fromisoformat(_stamp(0)),
+        )
+        _catalog_resolver(sessions_dir).catalog_store.update_session_configuration(
+            session_id, current_agent_id="default", current_provider_id="primary",
+            updated_at=datetime.fromisoformat(_stamp(0)),
+        )
     thread_id = bundle.main_thread_id
     owner = MutationIntentOwner(session_id, thread_id)
     with session_thread_owner_scope(owner, langgraph_thread_id=thread_id):
         saver = RolloutCheckpointSaver(sessions_dir)
+        prepare_execution = create_frozen_provider_prepare(
+            frozen_provider_wire,
+            create_frozen_provider_activation(observer=observer),
+            observer=observer,
+        )
         if fork_source is not None:
             source_session_id, source_checkpoint_id = fork_source
-            saver.record_fork_origin(
-                target_session_id=session_id,
-                source_session_id=source_session_id,
-                source_checkpoint_id=source_checkpoint_id,
-                source_view_id=None,
-                fork_mode="context_fork",
-                relationship="detached",
-            )
+            source_thread_id = saver._storage.storage.main_thread_id(source_session_id)
+            source_owner = MutationIntentOwner(source_session_id, source_thread_id)
+            with saver._storage.storage.read_connection(source_session_id, source_thread_id, "") as connection:
+                source_view_id = connection.execute(
+                    "SELECT view_id FROM checkpoints WHERE checkpoint_id=?", (source_checkpoint_id,),
+                ).fetchone()[0]
+                source_revision = connection.execute(
+                    "SELECT history_view_revision FROM database_meta WHERE singleton_id=1",
+                ).fetchone()[0]
+                anchor_item_id = connection.execute(
+                    "SELECT final_item_id FROM turn_records WHERE turn_id=?", (f"job-{turn_count:04d}",),
+                ).fetchone()[0]
+            with timed_fixture_stage(
+                observer,
+                "generator.fork_total",
+                session_id=session_id,
+                fixture_kind="fork",
+                turn_count=turn_count,
+            ):
+                with timed_fixture_stage(
+                    observer,
+                    "generator.fork_preflight",
+                    session_id=session_id,
+                    fixture_kind="fork",
+                    turn_count=turn_count,
+                ):
+                    point = asyncio.run(saver.forks.source.preflight_fork(
+                        source_session_id=source_session_id, source_owner=source_owner,
+                        mode="view_prefix_fork", source_view_id=source_view_id,
+                        source_view_revision=source_revision, anchor_item_id=anchor_item_id,
+                    ))
+                # 分支示例必须经过同一冻结复制入口，不能用伪造 origin 冒充历史复制。
+                with timed_fixture_stage(
+                    observer,
+                    "generator.fork_copy",
+                    session_id=session_id,
+                    fixture_kind="fork",
+                    turn_count=turn_count,
+                ):
+                    asyncio.run(saver.forks.afork(
+                        source_session_id=source_session_id, target_session_id=session_id,
+                        source_uri=thread_resource_uri(_catalog_resolver(sessions_dir).catalog_store.get_node(source_session_id).workspace_id,
+                                                       source_session_id, source_thread_id),
+                        source_owner=source_owner, target_owner=owner, mode="view_prefix_fork",
+                        source_preflight=point, source_view_id=point.source_view_id,
+                        source_view_revision=point.source_view_revision, anchor_item_id=point.anchor_item_id,
+                    ))
+            return
         config = build_checkpoint_config(thread_id)
         messages: list[BaseMessage] = []
         start = 1
@@ -476,95 +540,146 @@ def _create_session(
             raise ValueError(f"fixture checkpoint 边界非法: {sorted(checkpoint_ends)}")
         compaction_boundaries = set(compaction_points) | {turn_count}
         for turn_index in range(1, turn_count + 1):
-            provider_id = (
-                "handwritten_chat" if turn_index % 2 else "handwritten_responses"
-            ) if real_provider_fixture else None
-            latest_turn_messages = _turn_messages(
-                turn_index,
-                long_fixture=long_fixture,
-                provider_id=provider_id,
-                include_tool_calls=not sparse_tool_fixture or turn_index % 8 == 0,
-                include_large_payload=large_tool_payloads,
-            )
-            messages.extend(latest_turn_messages)
-            turn_id = f"job-{turn_index:04d}"
-            accepted = saver.accept_turn(
-                session_id,
-                thread_id=thread_id,
-                accepted_ingress_id=f"ingress-{turn_index:04d}",
-                acceptance_idempotency_key=f"acceptance-{turn_index:04d}",
-                job_id=f"fixture-job-{turn_index:04d}",
-                admission_idempotency_key=f"admission-{turn_index:04d}",
-                payload=latest_turn_messages[0].content,
-                turn_id=turn_id,
-                root_item_id=f"item-user-{turn_index:04d}",
-                initial_execution_id=f"execution-{turn_index:04d}",
-            )
-            admission = saver.execution_admission(
-                session_id, thread_id=thread_id,
-                execution_id=str(accepted["initial_execution_id"]),
-            )
-            boundary = turn_index in checkpoint_ends
-            event = None
-            if boundary and start > 1 and turn_index in compaction_boundaries:
-                event = {
-                    "event_id": f"compaction-{start:04d}",
-                    "strategy": "cache_preserving",
-                    "cutoff_index": (
-                        final_compaction_cutoff
-                        if turn_index == turn_count and final_compaction_cutoff is not None
-                        else cutoff_index
-                    ),
-                    "cache_prefix_messages": [],
-                    "summary_message": HumanMessage(
-                        id=f"summary-{start:04d}",
-                        content=f"第 {start} 轮前完成上下文压缩，保留主题和工具结论。",
-                        additional_kwargs={"lc_source": "summarization"},
-                    ),
-                    "file_path": f".boxteam/context-history/compaction-{start:04d}.json",
-                }
-            # 每轮消息必须归属本轮真实 admission；原有压缩 checkpoint 边界保持原 ID。
-            checkpoint_id = (
-                f"{checkpoint_prefix}-{turn_index:04d}" if boundary
-                else f"{checkpoint_prefix}-ingress-{turn_index:04d}"
-            )
-            with execution_admission_scope(admission, langgraph_thread_id=thread_id):
-                config = saver.put(
-                    config,
-                    _checkpoint(
-                        checkpoint_id,
-                        messages if boundary and (
-                            not checkpoint_each_turn or turn_index == turn_count
-                        ) else latest_turn_messages,
-                        channel_version=turn_index,
-                        event=event,
-                    ),
-                    {
-                        "source": "custom-tool-rollout-fixture",
-                        "checkpoint_end_turn": turn_index,
-                        "semantic_boundary": "compaction" if event else "initial",
-                        "contains_internal_messages": any(
-                            index % 17 == 0 for index in range(start, turn_index + 1)
-                        ),
-                        "contains_large_tool_payload": large_tool_payloads and any(
-                            index % 11 == 0 for index in range(start, turn_index + 1)
-                        ),
-                        **({"provider_id": provider_id} if real_provider_fixture else {}),
-                    },
-                    {"messages": str(turn_index)},
-                )
-            saver.finalize_turn(
+            with timed_fixture_stage(
+                observer,
+                "generator.normal_turn",
                 session_id=session_id,
-                thread_id=thread_id,
-                turn_id=turn_id,
-                final_message_id=f"assistant-final-{turn_index:04d}",
-            )
-            if boundary:
-                start = turn_index + 1
-                cutoff_index = len(messages)
+                fixture_kind="normal",
+                turn_index=turn_index,
+                turn_count=turn_count,
+            ):
+                provider_id = (
+                    "handwritten_chat" if turn_index % 2 else "handwritten_responses"
+                ) if real_provider_fixture else None
+                latest_turn_messages = _turn_messages(
+                    turn_index,
+                    long_fixture=long_fixture,
+                    provider_id=provider_id,
+                    include_tool_calls=not sparse_tool_fixture or turn_index % 8 == 0,
+                    include_large_payload=large_tool_payloads,
+                )
+                messages.extend(latest_turn_messages)
+                turn_id = f"job-{turn_index:04d}"
+                with timed_fixture_stage(
+                    observer,
+                    "generator.accept_turn",
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    turn_index=turn_index,
+                ):
+                    accepted = saver.accept_turn(
+                        session_id,
+                        thread_id=thread_id,
+                        accepted_ingress_id=f"ingress-{turn_index:04d}",
+                        acceptance_idempotency_key=f"acceptance-{turn_index:04d}",
+                        job_id=f"fixture-job-{turn_index:04d}",
+                        admission_idempotency_key=f"admission-{turn_index:04d}",
+                        payload=latest_turn_messages[0].content,
+                        turn_id=turn_id,
+                        root_item_id=f"item-user-{turn_index:04d}",
+                        initial_execution_id=f"execution-{turn_index:04d}",
+                    )
+                with timed_fixture_stage(
+                    observer,
+                    "generator.execution_admission",
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    turn_index=turn_index,
+                ):
+                    admission = saver.execution_admission(
+                        session_id,
+                        thread_id=thread_id,
+                        execution_id=str(accepted["initial_execution_id"]),
+                    )
+                boundary = turn_index in checkpoint_ends
+                event = None
+                if boundary and start > 1 and turn_index in compaction_boundaries:
+                    event = {
+                        "event_id": f"compaction-{start:04d}",
+                        "strategy": "cache_preserving",
+                        "cutoff_index": (
+                            final_compaction_cutoff
+                            if turn_index == turn_count and final_compaction_cutoff is not None
+                            else cutoff_index
+                        ),
+                        "cache_prefix_messages": [],
+                        "summary_message": HumanMessage(
+                            id=f"summary-{start:04d}",
+                            content=f"第 {start} 轮前完成上下文压缩，保留主题和工具结论。",
+                            additional_kwargs={"lc_source": "summarization"},
+                        ),
+                        "file_path": f".boxteam/context-history/compaction-{start:04d}.json",
+                    }
+                checkpoint_id = (
+                    f"{checkpoint_prefix}-{turn_index:04d}" if boundary
+                    else f"{checkpoint_prefix}-ingress-{turn_index:04d}"
+                )
+                with execution_admission_scope(admission, langgraph_thread_id=thread_id):
+                    with timed_fixture_stage(
+                        observer,
+                        "generator.prepare_execution",
+                        session_id=session_id,
+                        turn_id=turn_id,
+                        turn_index=turn_index,
+                        execution_id=admission.execution_id,
+                        plan_key=f"fixture-create:{turn_id}",
+                    ):
+                        prepare_execution(saver, key=f"fixture-create:{turn_id}")
+                    with timed_fixture_stage(
+                        observer,
+                        "generator.saver_put",
+                        session_id=session_id,
+                        turn_id=turn_id,
+                        turn_index=turn_index,
+                    ):
+                        config = saver.put(
+                            config,
+                            _checkpoint(
+                                checkpoint_id,
+                                messages if boundary and (
+                                    not checkpoint_each_turn or turn_index == turn_count
+                                ) else latest_turn_messages,
+                                channel_version=turn_index,
+                                event=event,
+                            ),
+                            {
+                                "source": "custom-tool-rollout-fixture",
+                                "checkpoint_end_turn": turn_index,
+                                "semantic_boundary": "compaction" if event else "initial",
+                                "contains_internal_messages": any(
+                                    index % 17 == 0 for index in range(start, turn_index + 1)
+                                ),
+                                "contains_large_tool_payload": large_tool_payloads and any(
+                                    index % 11 == 0 for index in range(start, turn_index + 1)
+                                ),
+                                **({"provider_id": provider_id} if real_provider_fixture else {}),
+                            },
+                            {"messages": str(turn_index)},
+                        )
+                    with timed_fixture_stage(
+                        observer,
+                        "generator.finalize_turn",
+                        session_id=session_id,
+                        turn_id=turn_id,
+                        turn_index=turn_index,
+                    ):
+                        saver.finalize_turn(
+                            session_id=session_id,
+                            thread_id=thread_id,
+                            turn_id=turn_id,
+                            final_message_id=f"assistant-final-{turn_index:04d}",
+                        )
+                if turn_index in checkpoint_ends:
+                    start = turn_index + 1
+                    cutoff_index = len(messages)
 
 
-def _write_fixture(workspace_root: Path, *, clean: bool) -> None:
+def _write_fixture(
+    workspace_root: Path,
+    *,
+    clean: bool,
+    observer: FixtureStageObserver | None = None,
+) -> None:
     if clean:
         for relative_path in (
             ".boxteam/checkpoints",
@@ -611,6 +726,7 @@ def _write_fixture(workspace_root: Path, *, clean: bool) -> None:
         long_fixture=True,
         compaction_points=(64,),
         sparse_tool_fixture=True,
+        observer=observer,
     )
     _create_session(
         sessions_dir=sessions_dir,
@@ -624,6 +740,7 @@ def _write_fixture(workspace_root: Path, *, clean: bool) -> None:
         sparse_tool_fixture=True,
         large_tool_payloads=True,
         checkpoint_prefix="real-checkpoint",
+        observer=observer,
     )
     _create_session(
         sessions_dir=sessions_dir,
@@ -632,6 +749,7 @@ def _write_fixture(workspace_root: Path, *, clean: bool) -> None:
         turn_count=128,
         long_fixture=True,
         sparse_tool_fixture=True,
+        observer=observer,
     )
     _create_session(
         sessions_dir=sessions_dir,
@@ -640,6 +758,7 @@ def _write_fixture(workspace_root: Path, *, clean: bool) -> None:
         turn_count=24,
         compaction_points=(8, 16),
         final_compaction_cutoff=64,
+        observer=observer,
     )
     _create_session(
         sessions_dir=sessions_dir,
@@ -647,6 +766,7 @@ def _write_fixture(workspace_root: Path, *, clean: bool) -> None:
         title="多工具调用和大输出示例",
         turn_count=12,
         compaction_points=(6,),
+        observer=observer,
     )
     _create_session(
         sessions_dir=sessions_dir,
@@ -654,6 +774,7 @@ def _write_fixture(workspace_root: Path, *, clean: bool) -> None:
         title="独立历史分支示例",
         turn_count=7,
         fork_source=(STATIC_LONG_SESSION_ID, "checkpoint-0064"),
+        observer=observer,
     )
     migrations_dir = workspace_root / ".boxteam" / "migrations"
     if migrations_dir.exists():
@@ -750,7 +871,11 @@ def _write_static_long_session(workspace_root: Path) -> None:
     )
 
 
-def generate_custom_tool_rollout_fixture(workspace_root: Path) -> None:
+def generate_custom_tool_rollout_fixture(
+    workspace_root: Path,
+    *,
+    observer: FixtureStageObserver | None = None,
+) -> None:
     """在明确传入的工作区中重建 canonical 静态 Session 与 rollout。"""
 
     registry = WorkspaceContainerRegistry(
@@ -759,8 +884,18 @@ def generate_custom_tool_rollout_fixture(workspace_root: Path) -> None:
         ]),
         project_root=Path.cwd(),
     )
-    with registry, catalog_provider_scope(registry):
-        _write_fixture(workspace_root, clean=True)
+    with (
+        registry,
+        catalog_provider_scope(registry),
+        timed_fixture_stage(
+            observer,
+            "generator.total",
+            total_turns=427,
+            normal_turns=420,
+            fork_turns=7,
+        ),
+    ):
+        _write_fixture(workspace_root, clean=True, observer=observer)
 
 
 def main() -> None:

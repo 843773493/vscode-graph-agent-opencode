@@ -5,7 +5,7 @@
 # 可修改内容
 
 - 权威会话索引的目录投影、revision、分页、搜索以及受控移动服务。
-- session manifest、folder manifest 与稳定 ID 的路径解析规则。
+- Session 稳定 ID、冻结 locator 的路径解析，以及 SQLite-only Folder 的导航投影规则。
 - 异步 mutation 队列持久层：`queue_store.py` 门面保留队列语义方法与 `NavigationMutationQueueStore` 类名，`queue_schema.py` 承载两张旁挂表的物理 schema 与幂等建表，`queue_records.py` 承载行投影与跨进程幂等 preimage，`queue_events.py` 承载事件 outbox 链，`queue_dependencies.py` 承载依赖解析与失败传播。
 
 # 不可修改内容
@@ -18,10 +18,9 @@
 
 # 规范
 
-- 权威索引保存稳定 ID、显示名和父子关系；folder/session manifest 与 ID 命名目录是受索引校验的物理存储。
-- `parent_session_id` 表达同一工作区中的父会话，必须与权威索引中最近的祖先会话一致；上下文来源使用独立字段表达。
-- 会话只允许通过保留的 `children/` 边界包含子会话和组织文件夹；生成器挂载到会话时以该边界作为输出路径基准。
+- 权威 SQLite catalog 保存稳定 ID、显示名、导航父链和 Session 冻结 locator；Folder 无物理目录或 manifest，`session.json` 只保存不可变创建 metadata。
+- `parent_session_id` 只从 catalog 最近祖先 Session 派生，不回写 manifest；fork、delegation、上下文来源和生成器 lineage 与导航父链分离。
+- Session 的物理 locator 为创建 intent 冻结的 UTC 日期桶 `sessions/YYYY/MM/DD/{session_id}`；导航子节点只由 catalog 父链组织，不创建物理 `children/` 树。生成器使用同一创建 owner 建立节点并指定逻辑父节点。
 - 损坏、重复或循环关系必须抛出详细错误。
-- 移动、重命名和删除必须经统一解析器同步更新权威索引与真实目录；手工目录漂移必须向 API/UI 暴露错误。
+- 移动、重命名只更新 catalog，不搬目录或改变 locator；创建、删除由对应 owner 协调 catalog 与物理存储。所有路径读取经统一解析器，手工目录漂移必须向 API/UI 暴露错误。
 - `from app.services.business.session_navigation.queue_store import X` 的外部导入路径与导出名保持稳定，拆分产物不得反向依赖门面。
-

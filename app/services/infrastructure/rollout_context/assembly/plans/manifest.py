@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import fields, replace
+from typing import cast
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
@@ -16,7 +17,6 @@ from app.domain.itemized.request_plan import (
     ContextRequestPlan,
     resolve_contribution_for_ref,
 )
-from app.domain.itemized.serde.plan import unsealed_context_plan_from_dict
 
 
 def draft_manifest(plan: ContextRequestPlan) -> dict[str, object]:
@@ -25,31 +25,32 @@ def draft_manifest(plan: ContextRequestPlan) -> dict[str, object]:
         raise ValueError("plan-order-integrity: plan registry 只接收 unsealed draft")
     if not plan.plan_creation_idempotency_key:
         raise ValueError("plan-idempotency-conflict: 创建 draft 必须有显式幂等键")
-    # frozen dataclass 不能阻止调用方修改嵌套 JSON；去正文前重新验证原始 body。
-    for contribution in plan.contributions:
-        replace(contribution)
-    manifest = replace(
-        plan,
-        contributions=tuple(
-            replace(contribution, body=None) for contribution in plan.contributions
-        ),
-    ).to_dict()
-    # 即便调用方绕过构造器或修改嵌套对象，写入前也必须经过完整 domain parser。
-    unsealed_context_plan_from_dict(manifest)
+    # 领域载体已隔离嵌套 JSON；本次投影不再序列化后反解析同一份 draft。
+    manifest = plan.to_dict()
+    for contribution in cast(list[dict[str, object]], manifest["contributions"]):
+        contribution["body"] = None
     return manifest
 
 
 def creation_hash(plan: ContextRequestPlan) -> str:
-    """创建输入不包含新分配的 plan owner；source/ref identity 与顺序仍被绑定。"""
-    manifest = draft_manifest(plan)
-    manifest.pop("plan_id")
-    manifest.pop("plan_hash")
-    for field, refs in (("refs", plan.refs), ("tool_set_refs", plan.tool_set_refs)):
-        normalized_refs = [ref.to_dict() for ref in refs]
-        for ref in normalized_refs:
-            ref.pop("plan_id", None)
-        manifest[field] = normalized_refs
-    return sha256_jcs({"schema": "context-plan-creation:v1", "input": manifest})
+    """创建摘要排除顶层 plan_id/plan_hash 与 refs/tool_set_refs 中的 plan_id。
+
+    session_id/thread_id、source/ref identity 与顺序仍参与绑定。
+    """
+    return _creation_hash_manifest(draft_manifest(plan))
+
+
+def _creation_hash_manifest(manifest: dict[str, object]) -> str:
+    """只消费同次完整 domain 校验后的 manifest，不重建 plan 或保存缓存。"""
+    projection = {
+        key: value for key, value in manifest.items() if key not in {"plan_id", "plan_hash"}
+    }
+    for field in ("refs", "tool_set_refs"):
+        projection[field] = [
+            {key: value for key, value in ref.items() if key != "plan_id"}
+            for ref in cast(list[dict[str, object]], manifest[field])
+        ]
+    return sha256_jcs({"schema": "context-plan-creation:v1", "input": projection})
 
 
 def validate_sealed_plan(

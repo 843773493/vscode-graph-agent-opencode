@@ -18,6 +18,7 @@
 - [x] 3.1 在工作区后端提供 `/api/v1/resources` 列表/详情及 type、scope、当前关联和来源 Thread 过滤，并支持查询无 Thread 关联的 Workspace 资源与宽限期内临时孤儿。
 - [x] 3.2 提供 owner-routed promote、attach、detach、stop、delete 操作；成功返回完整 owner 投影，失败返回稳定错误/阻断事实，不产生部分状态。
 - [x] 3.3 更新 `SessionResourceProviderRegistry` 为只聚合和路由的 projection；验证 Gateway 只透明代理且不读写工作区 `.boxteam/`。
+- [x] 3.4 收口 `available_actions` 为按已核实状态和持久关联筛选的候选用户动作：关联非空时不列 delete，实际命令仍校验 lease/关联/revision；验证 Terminal/Browser 关联期间的投影与直接 delete 拒绝零副作用、detach 后完整投影及删除成功。2026-10-15：R1884 两份真实 API 测试共 12 passed/5.44s、Ruff 通过；主核原件 `out/tests/temp/2026/10/13/fork-contract-implementation/coordinator/artifacts/resource-delete-api-original-verification-1505.json`，R1886 独审无 finding。首轮 fixture Context 失败保留，修为异步依赖后复验；本项不代表 §7 Fork 资源接入完成。
 
 ## 4. 前端工作区资源管理
 
@@ -57,3 +58,8 @@
 - 当前固定 `c58b6cab` 复核：三个生产文件分别为2586/1860/963行，测试`browserSessionOperations.test.js`为1014行；53路径/46JS完整清单、import graph、owner映射与职责拆分方向见 `out/tests/temp/2026/10/04/024121-team-execution/coordinator/artifacts/sol-efficiency-trial/persistent-browser-architecture-review/attempt-1/report.md`、`inventory.json`。主核这五个目标文件至ROOT973098无差异。BrowserManager/BrowserSession继续拥有唯一生命周期；后续独立结构切片按session操作族、backend HTTP/WS、client view/connection拆分并全迁caller，纯workspace校验解除client/server对BrowserManager的反向依赖。只读审查证据完成，不表示结构实现已完成，不插当前R生产切片。
 
 - 上述登记只补录越限事实与归口，**本 change 不拆这些文件**；拆分与相应架构审查证据属后续独立实施。
+
+## 7. Fork目标资源关联（2026-10-13，待实施）
+
+- [ ] 7.1 向统一目标检查提供现有owner scope/关联/revision/状态和真实操作能力；显式复用只调用owner，默认fork不附加Terminal/Browser，不保存第二资源状态或实例fork布尔字段。
+- [ ] 7.2 验证workspace资源身份/实例复用和source删除后目标关联、thread范围不自动promote、lease/revision冲突、不可移植跨端资源明确失败，操作结果和恢复仍由owner核实。

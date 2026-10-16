@@ -14,7 +14,7 @@ from .errors import ModelStreamConfigError
 
 ModelStreamMode = Literal["off", "record", "replay"]
 MatchingPolicy = Literal["strict"]
-ReplayPolicy = Literal["request_reusable", "session_sequence"]
+ReplayPolicy = Literal["request_reusable", "call_identity"]
 TimingMode = Literal["none"]
 
 MODEL_STREAM_CONFIG_ENV = "BOXTEAM_TEST_MODEL_STREAM_CONFIG"

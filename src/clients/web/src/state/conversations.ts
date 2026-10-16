@@ -48,6 +48,7 @@ export function getConversationsForSession(
     return applyMessageStreamProjection(
       turnConversations,
       state.messageStreamsByTurnStream ?? new Map(),
+      sessionCacheKey,
     );
   }
 
@@ -57,7 +58,15 @@ export function getConversationsForSession(
       conversationsMatch(conversation, pending),
     );
     if (matchedIndex === -1) {
-      merged.push({ ...pending, source: "pending" });
+      merged.push({
+        ...pending,
+        // 当前 context view 没有该 Turn 时，不沿用旧视图的展示坐标。
+        turnRevision: undefined,
+        turnOrdinal: undefined,
+        turnItemsView: undefined,
+        rootLogicalItemOrdinal: undefined,
+        source: "pending",
+      });
       continue;
     }
 
@@ -67,5 +76,6 @@ export function getConversationsForSession(
   return applyMessageStreamProjection(
     sortConversationViews(dedupeConversationViews(merged)),
     state.messageStreamsByTurnStream ?? new Map(),
+    sessionCacheKey,
   );
 }

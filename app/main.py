@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from contextlib import AsyncExitStack, asynccontextmanager
+import time
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
+from datetime import timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
@@ -30,6 +32,7 @@ from app.api.session_turns import router as session_turns_router
 from app.api.sessions import router as sessions_router
 from app.api.tools import router as tools_router
 from app.api.workspace import router as workspace_router
+from app.api.workspace_observation import router as workspace_observation_router
 from app.container import AppContainer, WorkspaceContainerRegistry
 from app.core.env import load_boxteam_env
 from app.core.exceptions import BaseAPIException
@@ -41,6 +44,8 @@ from app.core.path_utils import (
     workspace_context,
 )
 from app.core.trace_middleware import TraceMiddleware, get_request_id
+from app.runtime.model_stream import configure_model_stream_from_environment
+from app.runtime.runtime_ports import DEFAULT_RUNTIME_CLOCK_PORTS
 from app.schemas.internal_v2.sse import install_sse_openapi_components
 from app.services.infrastructure.config import (
     ConfigRestartRequiredError,
@@ -48,16 +53,25 @@ from app.services.infrastructure.config import (
 )
 from app.services.infrastructure.config.policy import workspace_config_policy
 from app.services.infrastructure.config.state import changed_json_paths
-from app.testing.model_stream import install_model_stream_from_environment
 
 load_boxteam_env()
 
-# 测试 transport 必须在 LiteLLM 第一次创建 async client 前安装；未显式配置时保持生产路径。
-_model_stream_controller = install_model_stream_from_environment(
+# 导入期只冻结显式配置；SDK hook 在实际 Provider 请求前安装。
+_model_stream_controller = configure_model_stream_from_environment(
     project_root=Path.cwd(),
 )
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _workspace_startup_stage(container: AppContainer, stage: str):
+    started = time.monotonic()
+    logger.info("Workspace 启动阶段 begin: workspace_id=%s root=%s stage=%s",
+                container.workspace_id, container.workspace_root, stage)
+    yield
+    logger.info("Workspace 启动阶段 end: workspace_id=%s root=%s stage=%s elapsed=%.3fs",
+                container.workspace_id, container.workspace_root, stage, time.monotonic() - started)
 
 
 async def _prune_workspace_activity_periodically(container: AppContainer) -> None:
@@ -83,6 +97,17 @@ async def _sweep_browser_orphans_periodically(container: AppContainer) -> None:
         await asyncio.sleep(1)
 
 
+async def _retry_pending_fork_exports_periodically(container: AppContainer) -> None:
+    while True:
+        try:
+            await container.session_context_fork_service.retry_pending_remote_exports()
+        except Exception:
+            # 来源传输异常由 owner 记录为 durable pending；逃逸到这里的是非法状态，必须暴露。
+            logger.exception("fork export cleanup 遇到未处理错误，停止周期恢复")
+            raise
+        await asyncio.sleep(1)
+
+
 async def _drain_workspace_jobs(container: AppContainer) -> None:
     await container.goal_runtime_service.close_admission()
     container.job_service.close_admission()
@@ -99,8 +124,10 @@ async def _workspace_lifespan(container: AppContainer):
     ):
         async with AsyncExitStack() as resources:
             # 先登记持有资源的关闭动作，部分启动失败也沿同一顺序排空。
+            resources.callback(container.attachment_blob_store.close)
             resources.callback(container.workspace_source_owner.close)
             resources.callback(container.workspace_service.close)
+            resources.push_async_callback(container.workspace_session_context_transport.aclose)
             resources.push_async_callback(container.workspace_service.stop)
             resources.push_async_callback(container.mcp_catalog_owner.shutdown)
             resources.callback(container.workspace_activity_service.close)
@@ -158,9 +185,12 @@ async def _workspace_lifespan(container: AppContainer):
             resources.push_async_callback(operations.stop)
 
             container.config_service.validate_workspace_config()
-            await container.workspace_service.start()
-            await container.mcp_catalog_owner.start()
-            await container.workspace_file_resource_registry.start()
+            with _workspace_startup_stage(container, "workspace_service.start"):
+                await container.workspace_service.start()
+            with _workspace_startup_stage(container, "mcp_catalog_owner.start"):
+                await container.mcp_catalog_owner.start()
+            with _workspace_startup_stage(container, "workspace_file_resource_registry.start"):
+                await container.workspace_file_resource_registry.start()
             removed = container.workspace_activity_service.prune()
             if removed:
                 logger.info("启动时清理 Workspace 会话活动事件: removed=%s", removed)
@@ -193,40 +223,63 @@ async def _workspace_lifespan(container: AppContainer):
                     mcp_tool_names=container.mcp_catalog_owner.get_tool_ids(),
                 )
 
-            await container.config_service.start_watching(
-                candidate_applier=apply_config_candidate,
-            )
-            await container.trace_event_recorder.start()
-            await container.job_event_bus.register_durable_listener(
-                container.goal_runtime_service.on_event
-            )
-            await container.job_event_bus.register_durable_listener(container.thread_initial_execution_service.on_event)
-            await container.job_event_bus.register_durable_listener(
-                record_session_activity
-            )
-            reconciled = await container.runtime_service.reconcile_stale_executions()
+            with _workspace_startup_stage(container, "config_service.start_watching"):
+                await container.config_service.start_watching(candidate_applier=apply_config_candidate)
+            with _workspace_startup_stage(container, "trace_event_recorder.start"):
+                await container.trace_event_recorder.start()
+            with _workspace_startup_stage(container, "job_event_bus.register_durable_listeners"):
+                await container.job_event_bus.register_durable_listener(container.goal_runtime_service.on_event)
+                await container.job_event_bus.register_durable_listener(container.thread_initial_execution_service.on_event)
+                await container.job_event_bus.register_durable_listener(record_session_activity)
+            with _workspace_startup_stage(container, "runtime_service.reconcile_stale_executions"):
+                reconciled = await container.runtime_service.reconcile_stale_executions()
             if reconciled:
-                logger.warning("已将 %s 个遗留 Job 持久化为中断状态", reconciled)
-            recovered = await container.session_context_fork_service.recover_prepared_forks()
+                logger.warning("已收敛 %s 项遗留 Job 与消息流执行状态", reconciled)
+            with _workspace_startup_stage(container, "session_service.recover_context_controls"):
+                controls = await container.session_service.recover_context_controls()
+            if controls:
+                logger.warning("已明确终结 %s 个崩溃遗留 Skill/ToolSet 控制 lease", controls)
+            with _workspace_startup_stage(container, "session_context_fork_service.recover_prepared_forks"):
+                recovered = await container.session_context_fork_service.recover_prepared_forks()
             if recovered:
                 logger.info("已恢复 %s 个未发布 context fork", recovered)
-            await container.agent_execution_service.start()
-            await container.team_fanout_service.start()
-            await container.background_message_bus.reconcile(container.checkpointer)
-            await container.background_task_registry.start()
-            await container.thread_initial_execution_service.start()
-            await container.job_event_bus.register_durable_listener(container.session_communication_service.observations.on_event)
-            await container.session_communication_service.start()
-            await container.runtime_source_dispatcher.start()
-            await container.session_generation_service.start()
-            await container.terminal_steering_service.start()
-            await container.goal_runtime_service.resume_active_goals()
-            await operations.start()
+            with _workspace_startup_stage(container, "attachment_blob_store.collect_garbage"):
+                collected = container.attachment_blob_store.collect_garbage(retention=timedelta(0))
+            if collected:
+                logger.info("已按附件 catalog 回收 %s 个零引用 blob", len(collected))
+            with _workspace_startup_stage(container, "agent_execution_service.start"):
+                await container.agent_execution_service.start()
+            with _workspace_startup_stage(container, "team_fanout_service.start"):
+                await container.team_fanout_service.start()
+            with _workspace_startup_stage(container, "background_message_bus.reconcile"):
+                await container.background_message_bus.reconcile(container.checkpointer)
+            with _workspace_startup_stage(container, "background_task_registry.start"):
+                await container.background_task_registry.start()
+            with _workspace_startup_stage(container, "thread_initial_execution_service.start"):
+                await container.thread_initial_execution_service.start()
+            with _workspace_startup_stage(container, "job_event_bus.register_observation_listener"):
+                await container.job_event_bus.register_durable_listener(container.session_communication_service.observations.on_event)
+            with _workspace_startup_stage(container, "session_communication_service.start"):
+                await container.session_communication_service.start()
+            with _workspace_startup_stage(container, "runtime_source_dispatcher.start"):
+                await container.runtime_source_dispatcher.start()
+            with _workspace_startup_stage(container, "session_generation_service.start"):
+                await container.session_generation_service.start()
+            with _workspace_startup_stage(container, "terminal_steering_service.start"):
+                await container.terminal_steering_service.start()
+            with _workspace_startup_stage(container, "goal_runtime_service.resume_active_goals"):
+                await container.goal_runtime_service.resume_active_goals()
+            with _workspace_startup_stage(container, "navigation_operations.start"):
+                await operations.start()
             logger.info(
                 "导航 queue worker 已取得 owner 并完成恢复: workspace_id=%s state=%s",
                 container.workspace_id,
                 operations.worker_state,
             )
+            with _workspace_startup_stage(container, "job_service.start_restored_executions"):
+                resumed = await container.job_service.start_restored_executions()
+            if resumed:
+                logger.info("已从原 pending tools checkpoint 续接 %s 个 Job", resumed)
             task = asyncio.create_task(
                 _prune_workspace_activity_periodically(container),
                 name=f"workspace-activity-prune:{container.workspace_id}",
@@ -237,31 +290,45 @@ async def _workspace_lifespan(container: AppContainer):
                 name=f"browser-orphan-reclaim:{container.workspace_id}",
             )
             resources.push_async_callback(_stop_activity_pruning, browser_sweep)
+            fork_export_cleanup = asyncio.create_task(
+                _retry_pending_fork_exports_periodically(container),
+                name=f"fork-export-cleanup:{container.workspace_id}",
+            )
+            resources.push_async_callback(_stop_activity_pruning, fork_export_cleanup)
             yield
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     configure_application_logging()
-    mounted = MountedWorkspaceRegistry.from_environment()
-    registry = WorkspaceContainerRegistry(
-        mounted_workspaces=mounted,
-        project_root=Path.cwd(),
-    )
-    application.state.workspace_container_registry = registry
+    startup_started = time.monotonic()
+    logger.info("Backend 启动阶段 begin: stage=workspace_registry root=%s", Path.cwd())
     try:
         async with AsyncExitStack() as workspaces:
-            workspaces.push(registry)
             if _model_stream_controller is not None:
                 workspaces.push_async_callback(_model_stream_controller.aclose)
+            mounted = MountedWorkspaceRegistry.from_environment()
+            registry = WorkspaceContainerRegistry(
+                mounted_workspaces=mounted,
+                project_root=Path.cwd(),
+                clock_ports=application.state.clock_ports,
+            )
+            workspaces.push(registry)
+            application.state.workspace_container_registry = registry
+            logger.info("Backend 启动阶段 end: stage=workspace_registry workspace_ids=%s elapsed=%.3fs",
+                        registry.workspace_ids, time.monotonic() - startup_started)
             logger_config: tuple[str, bool] | None = None
             for workspace_id in registry.workspace_ids:
                 mount = mounted.resolve(workspace_id)
+                mount_started = time.monotonic()
+                logger.info("Workspace 挂载 begin: workspace_id=%s root=%s", workspace_id, mount.workspace_root)
                 with catalog_provider_scope(registry):
                     initialize_directories(mount.workspace_id, mount.workspace_root)
                     container = registry.get(workspace_id)
                 # 先登记已构造容器，再检查配置；校验失败不能遗留资源。
                 await workspaces.enter_async_context(_workspace_lifespan(container))
+                logger.info("Workspace 挂载 ready: workspace_id=%s root=%s elapsed=%.3fs",
+                            workspace_id, mount.workspace_root, time.monotonic() - mount_started)
                 candidate = (
                     container.config_service.get_logger_level(),
                     container.config_service.get_logger_pretty(),
@@ -276,7 +343,8 @@ async def lifespan(application: FastAPI):
             configure_application_logging(
                 level=logger_config[0], pretty=logger_config[1]
             )
-            logger.info("已启动全部挂载工作区: workspace_ids=%s", registry.workspace_ids)
+            logger.info("已启动全部挂载工作区: workspace_ids=%s elapsed=%.3fs",
+                        registry.workspace_ids, time.monotonic() - startup_started)
             yield
     finally:
         application.state.workspace_container_registry = None
@@ -290,6 +358,7 @@ app = FastAPI(
     redoc_url="/api/v1/redoc",
     lifespan=lifespan,
 )
+app.state.clock_ports = DEFAULT_RUNTIME_CLOCK_PORTS
 
 # Add trace middleware
 app.add_middleware(TraceMiddleware)
@@ -402,6 +471,7 @@ async def health(request: Request):
 for router in (
     workspace_router,
     session_activity_router,
+    workspace_observation_router,
     runtime_router,
     resources_router,
     sessions_router,

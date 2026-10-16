@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
 
 import pytest
 
@@ -14,6 +15,19 @@ from app.services.orchestration.thread_residency import (
     THREAD_IDLE_UNLOAD_SECONDS,
     ThreadResidencyTracker,
 )
+
+
+@pytest.fixture
+def observed_closures(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+    observations: list[dict[str, object]] = []
+
+    def observe(operation_id: str, phase: str, *, details: Mapping[str, object] | None = None) -> None:
+        assert phase == "thread.runtime.closed"
+        assert details is not None
+        observations.append({"operation_id": operation_id, **details})
+
+    monkeypatch.setattr("app.services.orchestration.thread_residency.observe_phase_sync", observe)
+    return observations
 
 
 class _FakeClock:
@@ -131,7 +145,9 @@ async def test_runtime_slots_are_isolated_by_session_and_thread_pair() -> None:
 
 
 @pytest.mark.asyncio
-async def test_active_lease_blocks_unload_then_starts_idle_on_release() -> None:
+async def test_active_lease_blocks_unload_then_starts_idle_on_release(
+    observed_closures: list[dict[str, object]],
+) -> None:
     clock = _FakeClock()
     tracker = _tracker(clock)
     released: list[str] = []
@@ -149,6 +165,7 @@ async def test_active_lease_blocks_unload_then_starts_idle_on_release() -> None:
         build,
     )
     async with lease:
+        runtime_object_id = id(lease.runtime)
         scope = scopes[0]
         clock.advance(THREAD_IDLE_UNLOAD_SECONDS * 2)
         active = tracker.snapshot("ses-a", "thread-a")
@@ -156,6 +173,7 @@ async def test_active_lease_blocks_unload_then_starts_idle_on_release() -> None:
         assert active.cold_eligible is False
         assert await tracker.sweep() == ()
         assert released == []
+        assert observed_closures == []
 
         lease.release()
         assert tracker.snapshot("ses-a", "thread-a").idle_seconds == 0
@@ -167,6 +185,11 @@ async def test_active_lease_blocks_unload_then_starts_idle_on_release() -> None:
 
         assert released == ["closed"]
         assert scope.state == "closed"
+        assert observed_closures == [{
+            "operation_id": "thread-a", "session_id": "ses-a", "thread_id": "thread-a",
+            "generation": lease.generation, "runtime_object_id": runtime_object_id,
+            "scope_object_id": id(scope), "scope_state": "closed",
+        }]
         assert tracker.snapshot("ses-a", "thread-a").residency == "cold"
         assert tracker.is_current_generation("ses-a", "thread-a", lease.generation) is False
         lease.release()
@@ -175,7 +198,9 @@ async def test_active_lease_blocks_unload_then_starts_idle_on_release() -> None:
 
 
 @pytest.mark.asyncio
-async def test_scope_close_failure_fences_old_runtime_and_retries_before_rebuild() -> (
+async def test_scope_close_failure_fences_old_runtime_and_retries_before_rebuild(
+    observed_closures: list[dict[str, object]],
+) -> (
     None
 ):
     clock = _FakeClock()
@@ -213,12 +238,16 @@ async def test_scope_close_failure_fences_old_runtime_and_retries_before_rebuild
             await tracker.sweep()
         assert tracker.is_current_generation("ses-a", "thread-a", generation) is False
         assert scopes[0].state == "close_failed"
+        assert observed_closures == [], "失败的 close 不能虚报实例已释放"
         close_failed = tracker.snapshot("ses-a", "thread-a")
         assert close_failed.residency == "unloading"
         assert close_failed.cold_eligible is True
 
         await tracker.sweep()
         assert scopes[0].state == "closed"
+        assert len(observed_closures) == 1
+        assert observed_closures[0]["generation"] == generation
+        assert observed_closures[0]["scope_state"] == "closed"
         cold = tracker.snapshot("ses-a", "thread-a")
         assert cold.residency == "cold"
 

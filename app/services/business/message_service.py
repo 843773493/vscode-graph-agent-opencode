@@ -5,31 +5,53 @@ import asyncio
 import json
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 
 from langchain_core.messages import (
     BaseMessage,
+    HumanMessage,
 )
 from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 
+from app.abstractions.job_executor import JobRuntimeStateProtocol
 from app.abstractions.session_context import AgentContextState
 from app.agents.summarization.projection import apply_summarization_event
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.identifier import create_prefixed_id
 from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.execution_admission import (
+    InternalExecutionIntent,
+    UserExecutionIdentity,
+)
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.domain.itemized.records import CanonicalItemRecord, InternalDisplayProvenance
+from app.domain.itemized.records import (
+    CanonicalItemRecord,
+    InternalDisplayProvenance,
+    user_input_payload,
+)
 from app.schemas.internal_v2.common import CursorPage, MessageRole
 from app.schemas.internal_v2.message import (
     AgentStateMessagesDTO,
     MessageCreateRequest,
     MessageDTO,
 )
+from app.schemas.internal_v2.pending_request import PendingRequestControl
 from app.services.business.session_turn_history.visible_page import visible_message_page
 from app.services.business.system_reminder_checkpoint_service import (
     submit_checkpoint_reminder,
 )
+from app.services.business.user_content_builder import (
+    UserContentBuilder,
+    build_human_response_metadata,
+)
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
+)
+from app.services.infrastructure.attachment_content_service import (
+    AttachmentContentService,
+)
+from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
+    message_annotations,
 )
 from app.services.mapping.itemized.message_reasoning_merge import (
     merge_canonical_reasoning,
@@ -46,6 +68,7 @@ class MessageService(MessageContentProjectionMixin):
         attachment_store: AttachmentBlobStore | None = None,
         canonical_item_reader: Callable[[str], Sequence[CanonicalItemRecord]]
         | None = None,
+        workspace_root: Path | None = None,
     ) -> None:
         # 普通 Session 的消息、历史与新建 DTO 只归属权威 main thread；
         # 身份一律由 catalog 冻结指针解析，禁止用 session_id 冒充。
@@ -53,6 +76,7 @@ class MessageService(MessageContentProjectionMixin):
         self._checkpointer = checkpointer
         self._attachment_store = attachment_store
         self._canonical_item_reader = canonical_item_reader
+        self._workspace_root = workspace_root
 
     def _resolve_main_thread_id(self, session_id: str) -> str:
         """解析会话的权威 main thread id；缺指针时保持 KeyError 语义。"""
@@ -102,8 +126,7 @@ class MessageService(MessageContentProjectionMixin):
     async def create(self, session_id: str, message_create: MessageCreateRequest, *, thread_id: str | None = None) -> MessageDTO:
         """创建一条用户消息 DTO。
 
-        注意：实际的持久化由 LangGraph checkpoint 负责；此方法只生成 message_id
-        并返回 DTO，供 API 响应和事件发布使用。
+        正文由 accept_user_message 在派发前持久化；此处只生成稳定身份并保存附件。
         """
         if message_create.role != MessageRole.user:
             raise ValueError(
@@ -114,7 +137,7 @@ class MessageService(MessageContentProjectionMixin):
         attachments = message_create.attachments
         if self._attachment_store is not None:
             attachments = await self._attachment_store.persist_inline(
-                session_id, attachments
+                session_id, attachments, thread_id=thread_id,
             )
         now = datetime.now(UTC)
         return MessageDTO(
@@ -127,6 +150,126 @@ class MessageService(MessageContentProjectionMixin):
             metadata=message_create.metadata,
             created_at=now,
             updated_at=now,
+        )
+
+    def accept_user_message(
+        self, message: MessageDTO, *, execution_identity: UserExecutionIdentity,
+    ) -> None:
+        """在 Job 入队前冻结用户输入，并原子建立 acceptance、Turn/root 和 initial execution。"""
+        if message.role != MessageRole.user or message.thread_id is None:
+            raise ValueError("接受用户输入必须提供真实 user 消息和 thread_id")
+        accept = getattr(self._checkpointer, "accept_turn", None)
+        if not callable(accept):
+            raise TypeError("MessageService 缺少 v2 Turn acceptance owner")
+        metadata = dict(message.metadata)
+        metadata.pop("display_content", None)
+        metadata.pop("boxteam_session_provider_id", None)
+        built = UserContentBuilder(attachment_service=AttachmentContentService(
+            workspace_root=self._workspace_root, attachment_store=self._attachment_store,
+        )).build(
+            message.content, list(message.attachments),
+        )
+        response = build_human_response_metadata(
+            message_id=message.message_id,
+            display_content=None,
+            attachments=built.attachments,
+            message_created_at=message.created_at.isoformat(),
+            message_metadata=metadata,
+            attachment_diagnostics=built.diagnostics,
+        )
+        payload = user_input_payload(built.content, response.get("attachments"))
+        accept(
+            message.session_id, thread_id=message.thread_id,
+            accepted_ingress_id=message.message_id,
+            acceptance_idempotency_key=f"message:{message.message_id}",
+            job_id=execution_identity.job_id,
+            admission_idempotency_key=execution_identity.admission_idempotency_key,
+            payload=payload,
+            payload_kind="text" if isinstance(payload, str) else "structured_content",
+            turn_id=execution_identity.turn_id,
+            root_item_id=f"item-{message.message_id}",
+            extensions=message_annotations(response),
+        )
+
+    def accept_job_input(self, job: JobRuntimeStateProtocol) -> None:
+        """真实 Job 入队前完成唯一次准入；已有输入只按完整 identity 核验。"""
+        saver = self._checkpointer
+        if saver is None:
+            raise RuntimeError("MessageService 缺少 Job input owner")
+        binding = job.execution_binding
+        if isinstance(binding, UserExecutionIdentity):
+            admission = saver.execution_admission_for_job(
+                job.session_id, thread_id=job.thread_id, job_id=job.job_id,
+            )
+            frozen = saver.accepted_user_message(
+                job.session_id, thread_id=job.thread_id,
+                job_id=job.job_id, message_id=job.message_id,
+            )
+            dto = self._message_to_dto(job.session_id, job.thread_id, 0, frozen)
+            if (admission.turn_id != binding.turn_id
+                    or admission.admission_idempotency_key != binding.admission_idempotency_key
+                    or dto.content != job.message or dto.attachments != job.attachments):
+                raise ValueError("Job 入队请求与已接受用户输入不一致")
+            return
+        if not isinstance(binding, InternalExecutionIntent):
+            raise TypeError("Job input owner 只接受 typed execution binding")
+        built = UserContentBuilder(attachment_service=AttachmentContentService(
+            workspace_root=self._workspace_root, attachment_store=self._attachment_store,
+        )).build(job.message, job.attachments)
+        response = build_human_response_metadata(
+            message_id=job.message_id, display_content=None,
+            attachments=built.attachments, message_created_at=job.message_created_at,
+            message_metadata=dict(job.message_metadata), attachment_diagnostics=built.diagnostics,
+        )
+        if "canonical_item_manifests" in job.message_metadata:
+            response = dict(job.message_metadata)
+        saver.admit_internal_execution(
+            job.session_id, thread_id=job.thread_id, job_id=job.job_id,
+            intent=binding,
+            message=(None if binding.input_reference_json is not None else HumanMessage(
+                id=job.message_id, content=built.content, response_metadata=response,
+            )),
+        )
+
+    def accepted_job_message(
+        self, reference: PendingRequestControl, *, display: bool,
+    ) -> MessageDTO:
+        """FIFO 恢复和展示共用 canonical 输入投影；队列引用不提供正文。"""
+        saver = self._checkpointer
+        if saver is None:
+            raise RuntimeError("MessageService 缺少 canonical input reader")
+        binding = reference.execution_binding
+        admission = saver.execution_admission_for_job(
+            reference.session_id, thread_id=reference.thread_id, job_id=reference.job_id,
+        )
+        if (admission.admission_idempotency_key != binding.admission_idempotency_key
+                or admission.turn_id != reference.turn_id):
+            raise ValueError("待处理队列引用与权威 admission 不一致")
+        if isinstance(binding, UserExecutionIdentity):
+            human = saver.accepted_user_message(
+                reference.session_id, thread_id=reference.thread_id,
+                job_id=reference.job_id, message_id=reference.message_id,
+            )
+        else:
+            human = saver.accepted_internal_message(
+                reference.session_id, thread_id=reference.thread_id,
+                job_id=reference.job_id, message_id=reference.message_id, intent=binding,
+            )
+        dto = self._message_to_dto(reference.session_id, reference.thread_id, 0, human)
+        if display or isinstance(binding, UserExecutionIdentity):
+            return dto
+        if not isinstance(human.content, str):
+            raise TypeError("冻结内部输入必须投影为文本")
+        return dto.model_copy(update={"content": human.content, "metadata": dict(human.response_metadata)})
+
+    def accepted_job_outcome(self, reference: PendingRequestControl) -> str:
+        """恢复只消费 canonical execution 终态，队列文件不维护第二套撤回状态。"""
+        self.accepted_job_message(reference, display=False)
+        admission = self._checkpointer.execution_admission_for_job(
+            reference.session_id, thread_id=reference.thread_id, job_id=reference.job_id,
+        )
+        return self._checkpointer.runtime_execution_outcome(
+            reference.session_id, reference.thread_id, admission.execution_id,
         )
 
     async def list_agent_state_records(

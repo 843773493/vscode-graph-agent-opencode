@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,7 +16,10 @@ from app.core.session_control_store import (
     CommunicationInboxRecord,
     SessionControlStore,
 )
-from app.core.session_lifecycle_gate import SessionLifecycleGate
+from app.core.session_lifecycle_gate import (
+    SessionLifecycleGate,
+    SessionOperationLease,
+)
 from app.services.orchestration.communication.inbox_admission_worker import (
     InboxAdmissionTarget,
     InboxAdmissionWorker,
@@ -52,6 +57,15 @@ class StoreHarness:
     store: SessionControlStore
     session_id: str
     gate: SessionLifecycleGate
+
+    @asynccontextmanager
+    async def lease_settlement(
+        self, session_id: str, store: SessionControlStore, lease: SessionOperationLease,
+    ) -> AsyncIterator[bool]:
+        assert session_id == self.session_id and store is self.store
+        async with self.gate.exclusive(session_id):
+            store.assert_lease_current(lease)
+            yield True
 
 
 @pytest.fixture
@@ -113,12 +127,12 @@ def seed_inbox_with_hash(
 
 def test_constructor_requires_binder(harness: StoreHarness) -> None:
     with pytest.raises(TypeError, match="binder"):
-        InboxAdmissionWorker(session_id=harness.session_id, write_admission=harness.gate.exclusive, store=harness.store, claim_owner="worker-a", binder=None)
+        InboxAdmissionWorker(session_id=harness.session_id, lease_settlement=harness.lease_settlement, store=harness.store, claim_owner="worker-a", binder=None)
 
 
 async def test_startup_recovery_binds_pending_inbox(harness: StoreHarness) -> None:
     inbox = seed_inbox(harness)
-    worker = InboxAdmissionWorker(session_id=harness.session_id, write_admission=harness.gate.exclusive,
+    worker = InboxAdmissionWorker(session_id=harness.session_id, lease_settlement=harness.lease_settlement,
         store=harness.store,
         claim_owner="worker-a",
         binder=FakeBinder(job_id=make_job_id()),
@@ -139,7 +153,7 @@ async def test_recovery_after_restart_binds_remaining_inboxes(
     first = seed_inbox(harness)
     second = seed_inbox(harness)
     binder = FakeBinder()
-    worker = InboxAdmissionWorker(session_id=harness.session_id, write_admission=harness.gate.exclusive,
+    worker = InboxAdmissionWorker(session_id=harness.session_id, lease_settlement=harness.lease_settlement,
         store=harness.store, claim_owner="worker-a", binder=binder
     )
     worker.start()
@@ -173,7 +187,7 @@ async def test_duplicate_claim_by_same_owner_is_idempotent(
     inbox = seed_inbox(harness)
     # binder 失败：claim 已持有但 state 保持 target_accepted（可恢复）。
     binder = FakeBinder(fail_message="job service 暂不可用")
-    worker = InboxAdmissionWorker(session_id=harness.session_id, write_admission=harness.gate.exclusive,
+    worker = InboxAdmissionWorker(session_id=harness.session_id, lease_settlement=harness.lease_settlement,
         store=harness.store, claim_owner="worker-a", binder=binder
     )
     worker.start()
@@ -190,7 +204,7 @@ async def test_duplicate_claim_by_same_owner_is_idempotent(
 async def test_two_workers_claim_conflict_classified(harness: StoreHarness) -> None:
     seed_inbox(harness)
     # worker-a 先 claim（binder 失败保持 target_accepted 可恢复）。
-    failing = InboxAdmissionWorker(session_id=harness.session_id, write_admission=harness.gate.exclusive,
+    failing = InboxAdmissionWorker(session_id=harness.session_id, lease_settlement=harness.lease_settlement,
         store=harness.store,
         claim_owner="worker-a",
         binder=FakeBinder(fail_message="job service 暂不可用"),
@@ -199,7 +213,7 @@ async def test_two_workers_claim_conflict_classified(harness: StoreHarness) -> N
     with pytest.raises(RuntimeError, match="显式失败"):
         (await failing.admit_pending_once())
     # worker-b 不同 owner：claim 冲突按并发契约分类，不覆盖不重基。
-    succeeding = InboxAdmissionWorker(session_id=harness.session_id, write_admission=harness.gate.exclusive,
+    succeeding = InboxAdmissionWorker(session_id=harness.session_id, lease_settlement=harness.lease_settlement,
         store=harness.store, claim_owner="worker-b", binder=FakeBinder()
     )
     succeeding.start()
@@ -209,7 +223,7 @@ async def test_two_workers_claim_conflict_classified(harness: StoreHarness) -> N
 
 async def test_stale_generation_is_rejected(harness: StoreHarness) -> None:
     inbox = seed_inbox(harness)
-    newer = InboxAdmissionWorker(session_id=harness.session_id, write_admission=harness.gate.exclusive,
+    newer = InboxAdmissionWorker(session_id=harness.session_id, lease_settlement=harness.lease_settlement,
         store=harness.store,
         claim_owner="worker-a",
         claim_generation=2,
@@ -228,7 +242,7 @@ async def test_stale_generation_is_rejected(harness: StoreHarness) -> None:
     harness.store.claim_communication_inbox_admission(
         fresh.communication_id, claim_owner="worker-a", claim_generation=3
     )
-    stale = InboxAdmissionWorker(session_id=harness.session_id, write_admission=harness.gate.exclusive,
+    stale = InboxAdmissionWorker(session_id=harness.session_id, lease_settlement=harness.lease_settlement,
         store=harness.store,
         claim_owner="worker-a",
         claim_generation=1,
@@ -243,7 +257,7 @@ async def test_binder_failure_keeps_recoverable_then_retries(
     harness: StoreHarness,
 ) -> None:
     inbox = seed_inbox(harness)
-    failing = InboxAdmissionWorker(session_id=harness.session_id, write_admission=harness.gate.exclusive,
+    failing = InboxAdmissionWorker(session_id=harness.session_id, lease_settlement=harness.lease_settlement,
         store=harness.store,
         claim_owner="worker-a",
         binder=FakeBinder(fail_message="job service 暂不可用"),
@@ -256,7 +270,7 @@ async def test_binder_failure_keeps_recoverable_then_retries(
     assert current.last_error is not None
     assert "job service 暂不可用" in current.last_error
     # 失败后重试：同 owner 同 generation claim 幂等重入，绑定成功。
-    recovered = InboxAdmissionWorker(session_id=harness.session_id, write_admission=harness.gate.exclusive,
+    recovered = InboxAdmissionWorker(session_id=harness.session_id, lease_settlement=harness.lease_settlement,
         store=harness.store,
         claim_owner="worker-a",
         binder=FakeBinder(job_id=make_job_id()),
@@ -273,7 +287,7 @@ async def test_binder_receives_frozen_wakeup_key(harness: StoreHarness) -> None:
     inbox = seed_inbox(harness)
     seen: list[str] = []
     binder = FakeBinder(seen_wakeup_keys=seen)
-    worker = InboxAdmissionWorker(session_id=harness.session_id, write_admission=harness.gate.exclusive,
+    worker = InboxAdmissionWorker(session_id=harness.session_id, lease_settlement=harness.lease_settlement,
         store=harness.store, claim_owner="worker-a", binder=binder
     )
     worker.start()

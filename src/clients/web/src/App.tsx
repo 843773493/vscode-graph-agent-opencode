@@ -1,6 +1,11 @@
-import { requireGatewayWorkspaceRequestTarget } from "./api/workspaceIdentity";
+import { requireForkTargetWorkspace, requireGatewayWorkspaceRequestTarget } from "./api/workspaceIdentity";
+import { getGatewayHealth } from "./gatewayApi";
 import { useManagedBackendConfirmation } from "./hooks/gatewayWorkspace/useManagedBackendConfirmation";
 import { useWorkspaceTerminalResources } from "./hooks/workspace/useWorkspaceTerminalResources";
+import {
+  closeChildConversationAndClearForkSelection,
+  createTerminalFromResourcePanel,
+} from "./hooks/workspace/createTerminalFromResourcePanel";
 import { controlWorkspaceResource, getWorkspaceResource } from "./api/workspaceResources";
 import { getSessionMainThread } from "./api/session/sessions";
 import WorkbenchStatusBar from "./components/WorkbenchStatusBar";
@@ -11,6 +16,7 @@ import ResourcePanel from "./components/panels/resourceTree/ResourcePanel";
 import ChildThreadPanel from "./components/panels/sessionPanels/ChildThreadPanel";
 import GatewayExtensionResourcePanel from "./components/panels/resourceTree/GatewayExtensionResourcePanel";
 import SessionNameDialog from "./components/overlays/SessionNameDialog";
+import SessionContextForkDialog from "./components/overlays/SessionContextForkDialog";
 import { useWarmConfirm } from "./components/shell/WarmConfirmProvider";
 import Toolbar, { type WorkbenchView } from "./components/shell/Toolbar";
 import ContentViewSlots from "./components/shell/ContentViewSlots";
@@ -40,7 +46,7 @@ import { useMainAreaResize } from "./hooks/panel/useMainAreaResize";
 import { useBottomPanelResize } from "./hooks/panel/useBottomPanelResize";
 import { useNodeDebugWorkbench } from "./hooks/nodeDebug/useNodeDebugWorkbench";
 import { useChildThreadLoader } from "./hooks/session/useChildThreadLoader";
-import { useChildThreadConversation } from "./hooks/sessionTurnHistory/useChildThreadConversation";
+import { resolveTerminalResourceTarget, useChildThreadConversation } from "./hooks/sessionTurnHistory/useChildThreadConversation";
 import { useGatewayExtensionResources } from "./hooks/gatewayExtensions/useGatewayExtensionResources";
 import { useGatewayExtensionWindow } from "./hooks/gatewayExtensions/useGatewayExtensionWindow";
 import { useWorkbenchPanelRouting } from "./hooks/panel/useWorkbenchPanelRouting";
@@ -62,6 +68,7 @@ import {
 import type {
   AttachmentRef,
 } from "./types/backend";
+import type { ResourceThreadRef } from "./api/workspaceResources";
 
 export default function AppShell() {
   const confirm = useWarmConfirm();
@@ -73,6 +80,7 @@ export default function AppShell() {
     selectSession,
     openWorkspaceSession,
     forkSessionContext,
+    readSessionSelectionIntent,
     renameSession,
     setSessionParent,
     deleteSession,
@@ -104,7 +112,6 @@ export default function AppShell() {
     sessionCatalogOutboxRuntime,
     sessionCatalogOutboxSnapshot,
     replayTurn,
-    updatePendingRequest,
     removePendingRequest,
     clearPendingRequests,
     updatePendingRequestPolicy,
@@ -328,6 +335,8 @@ export default function AppShell() {
     setAuxiliaryTab,
     persistLayoutSettings,
   });
+  const activeMainResourceThread: ResourceThreadRef | null = activeSession && nodeDebugMainThreadId
+    ? { session_id: activeSession.session_id, thread_id: nodeDebugMainThreadId } : null;
   const extensionResourceKey = extensionWindowRequest?.workspaceId &&
     extensionWindowRequest.sessionId &&
     extensionWindowRequest.kind &&
@@ -392,18 +401,56 @@ export default function AppShell() {
 
   // 右侧侧边栏「运行与连接」标签中的子会话线程面板：会话层级资源。
   const childThreadPanelActive = resourcePanelActive;
+  const [forkChildOwner, setForkChildOwner] = useState<{
+    workspaceId: string; sessionId: string; mainThreadId: string | null; initialThreadSelection: string | null;
+  } | null>(null);
+  useEffect(() => { setForkChildOwner(null); }, [activeSession?.session_id, activeSessionWorkspaceId]);
+  const childOwnerWorkspaceId = forkChildOwner?.workspaceId ?? activeSessionWorkspaceId;
+  const childOwnerSessionId = forkChildOwner?.sessionId ?? activeSession?.session_id ?? null;
+  const childOwnerWorkspace = state.gatewayWorkspaces.find((workspace) => workspace.workspace_id === childOwnerWorkspaceId);
+  const childOwnerSession = childOwnerWorkspaceId
+    ? state.sessionsByWorkspace.get(childOwnerWorkspaceId)?.find((session) => session.session_id === childOwnerSessionId)
+    : null;
+  const childOwnerLabel = childOwnerSessionId
+    ? `${childOwnerWorkspace?.connection_kind === "local" ? "本机 Gateway" : childOwnerWorkspace?.remote?.gateway_id ?? "未登记 Gateway"} · ${childOwnerWorkspace?.name ?? childOwnerWorkspaceId} · ${childOwnerSession?.title ?? childOwnerSessionId}`
+    : "尚未选择会话";
   const childThreads = useChildThreadLoader({
     apiPort: resolvedApiPort,
-    workspaceId: activeSessionWorkspaceId,
-    sessionId: activeSession?.session_id ?? null,
+    workspaceId: childOwnerWorkspaceId,
+    sessionId: childOwnerSessionId,
     enabled: childThreadPanelActive,
   });
   const childConversation = useChildThreadConversation({
     apiPort: resolvedApiPort,
-    workspaceId: activeSessionWorkspaceId,
-    sessionId: activeSession?.session_id ?? null,
+    workspaceId: childOwnerWorkspaceId,
+    sessionId: childOwnerSessionId,
     threads: childThreads.threads,
     enabled: childThreadPanelActive,
+  });
+  useEffect(() => {
+    if (!forkChildOwner?.initialThreadSelection) return;
+    void childThreads.refresh();
+    childConversation.selectThreadForOwner(forkChildOwner, forkChildOwner.initialThreadSelection);
+    setForkChildOwner((current) => current === forkChildOwner
+      ? { ...current, initialThreadSelection: null }
+      : current);
+  }, [forkChildOwner, childThreads.refresh, childConversation.selectThreadForOwner]);
+  const childSelectionIntent = childConversation.selectionIntent ?? (
+    forkChildOwner?.initialThreadSelection && childOwnerWorkspaceId && childOwnerSessionId
+      ? {
+          workspaceId: childOwnerWorkspaceId,
+          sessionId: childOwnerSessionId,
+          threadId: forkChildOwner.initialThreadSelection,
+          view: "history" as const,
+        }
+      : null
+  );
+  const terminalResourceTarget = resolveTerminalResourceTarget({
+    childPanelVisible: childThreadPanelActive && !extensionWindowRequested,
+    selectionIntent: childSelectionIntent,
+    selectedThread: childConversation.selectedThread,
+    bottomPanelWorkspaceId,
+    mainThread: activeSessionWorkspaceId === bottomPanelWorkspaceId ? activeMainResourceThread : null,
   });
 
   const sharedPreviewTab = auxiliaryTab === "files" || auxiliaryTab === "changes" || (
@@ -465,7 +512,10 @@ export default function AppShell() {
       }
       pollInFlight = true;
       try {
-        await refreshSessionResources(resourceSessionId, { silent });
+        const result = await refreshSessionResources(resourceSessionId, { silent });
+        if (result === "failed" && !silent) {
+          setStatus("后台连接刷新失败，请查看运行与连接中的错误详情");
+        }
       } finally {
         pollInFlight = false;
       }
@@ -538,6 +588,7 @@ export default function AppShell() {
     apiPort: resolvedApiPort,
     activeSessionWorkspaceId,
     activeSessionId: activeSession?.session_id ?? null,
+    activeMainThread: activeMainResourceThread,
     setStatus,
   });
   const {
@@ -577,6 +628,10 @@ export default function AppShell() {
   });
   const {
     nameDialog,
+    forkDialog,
+    updateForkDialogSelection,
+    closeForkDialog,
+    submitForkDialog,
     nameDialogSubmitting,
     nameDialogError,
     sessionCatalogRefreshVersions,
@@ -611,6 +666,24 @@ export default function AppShell() {
     deleteSession,
     renameSession,
     forkSessionContext,
+    readSessionSelectionIntent,
+    onForkCreated: async (_sourceWorkspaceId, result, selectionIntent) => {
+      const health = await getGatewayHealth(resolvedApiPort);
+      const targetWorkspaceId = requireForkTargetWorkspace(
+        state.gatewayWorkspaces, health.gateway_id, result,
+      ).workspace_id;
+      invalidateSessionCatalog(targetWorkspaceId);
+      if (selectionIntent !== readSessionSelectionIntent()) return;
+      if (result.creation_kind === "new_session_main") {
+        await openWorkspaceSession(targetWorkspaceId, result.session.session_id, selectionIntent);
+      } else {
+        setForkChildOwner({
+          workspaceId: targetWorkspaceId, sessionId: result.session.session_id,
+          mainThreadId: result.session.thread_id ?? null, initialThreadSelection: result.thread_id,
+        });
+        openAuxiliaryTab("resources");
+      }
+    },
     setSessionParent,
   });
   return (
@@ -820,10 +893,12 @@ export default function AppShell() {
                       onRetryHistory={refreshTurnHistory}
                       onOpenChanges={handleOpenChangesView}
                       onReplayTurn={replayTurn}
-                      onUpdatePending={updatePendingRequest}
                       onRemovePending={removePendingRequest}
                       onChangePendingPolicy={updatePendingRequestPolicy}
                       onOpenAttachment={handleOpenAttachment}
+                      onForkConversation={(point) => {
+                        void handleForkSessionContext(point.workspaceId, point.sessionId, point);
+                      }}
                       onViewStateChange={saveSessionViewState}
                       onViewStateRestoreStatus={setStatus}
                     />
@@ -834,7 +909,6 @@ export default function AppShell() {
                     <PendingQueueBar
                       conversations={conversations}
                       onClear={clearPendingRequests}
-                      onUpdate={updatePendingRequest}
                       onRemove={removePendingRequest}
                       onChangePolicy={updatePendingRequestPolicy}
                     />
@@ -994,12 +1068,20 @@ export default function AppShell() {
                           onSelect={extensionResources.select}
                           onRefresh={() => void extensionResources.refresh()}
                           onControl={extensionResources.control}
-                          currentSession={activeSession && activeSessionWorkspaceId ? { workspaceId: activeSessionWorkspaceId, sessionId: activeSession.session_id } : null}
+                          currentOwner={activeSessionWorkspaceId && activeMainResourceThread
+                            ? { workspaceId: activeSessionWorkspaceId, thread: activeMainResourceThread } : null}
                           onOwnerControl={async (entry, action, thread) => {
-                            if (action === "attach" && !thread) {
-                              if (!activeSession || activeSessionWorkspaceId !== entry.workspace_id) throw new Error("请选择同工作区的目标会话");
-                              const main = await getSessionMainThread(resolvedApiPort, activeSession.session_id, requireGatewayWorkspaceRequestTarget(state.gatewayWorkspaces, entry.workspace_id));
-                              thread = { session_id: main.session_id, thread_id: main.thread_id };
+                            if (action === "attach") {
+                              if (!activeSession || activeSessionWorkspaceId !== entry.workspace_id
+                                || !activeMainResourceThread
+                                || activeMainResourceThread.session_id !== activeSession.session_id) {
+                                throw new Error("关联资源需要已解析的同工作区主线程");
+                              }
+                              thread ??= activeMainResourceThread;
+                              if (entry.resource.retention_scope === "thread"
+                                && entry.resource.source_thread?.session_id !== thread.session_id) {
+                                throw new Error("临时资源只能关联来源会话中的线程");
+                              }
                             }
                             await extensionResources.ownerControl(entry, action, thread);
                           }}
@@ -1015,23 +1097,39 @@ export default function AppShell() {
                             loadedAt={state.sessionResourcesLoadedAt}
                             sessionId={activeSession?.session_id ?? ""}
                             workspaceId={activeSessionWorkspaceId}
+                            mainThread={activeMainResourceThread}
                             extensionWindow={extensionWindowVisible}
                             activePreviewPath={activeRuntimePreview?.path ?? null}
                             onRefresh={() => {
                               if (activeSession) {
-                                void refreshSessionResources(activeSession.session_id);
+                                void refreshSessionResources(activeSession.session_id).then((result) => {
+                                  if (result === "failed") setStatus("后台连接刷新失败，请查看运行与连接中的错误详情");
+                                });
                               }
                             }}
                             onControl={controlSessionResource}
                             onOwnerControl={async (resourceId, action, thread) => {
                               if (!activeSession || !activeSessionWorkspaceId) throw new Error("资源管理需要当前会话和工作区");
+                              let operationFailed = false;
+                              let operationError: unknown;
                               try {
                                 const ownerResource = await getWorkspaceResource(resolvedApiPort, activeSessionWorkspaceId, resourceId);
-                                await controlWorkspaceResource(resolvedApiPort, activeSessionWorkspaceId, ownerResource, action, thread);
+                                const targetThread = action === "attach" ? thread ?? activeMainResourceThread ?? undefined : thread;
+                                if (action === "attach" && !targetThread) throw new Error("关联资源需要已解析的当前会话主线程");
+                                await controlWorkspaceResource(resolvedApiPort, activeSessionWorkspaceId, ownerResource, action, targetThread);
                                 if (ownerResource.kind === "terminal") await workspaceTerminals.refresh();
-                              } finally {
-                                await refreshSessionResources(activeSession.session_id);
+                              } catch (cause) {
+                                operationFailed = true;
+                                operationError = cause;
                               }
+                              const refresh = await refreshSessionResources(activeSession.session_id);
+                              if (operationFailed) {
+                                if (refresh === "failed") {
+                                  setStatus("资源管理操作失败，且会话资源重读失败；查看运行与连接中的错误详情");
+                                }
+                                throw operationError;
+                              }
+                              if (refresh !== "loaded") throw new Error("资源管理操作已完成，但会话资源未能刷新");
                             }}
                             onOpenTerminalPreview={(terminalId) => {
                               openTerminalPanel(terminalId);
@@ -1045,37 +1143,66 @@ export default function AppShell() {
                             onCloseResourcePreview={(kind, resourceId) =>
                               workspacePreview.closeWorkspaceFilePreview(`${kind}://${resourceId}`)
                             }
-                            onCreateConnection={async (kind) => {
+                            onCreateConnection={async (kind, thread) => {
                               if (!activeSession || !activeSessionWorkspaceId) {
                                 throw new Error("新建连接需要当前会话和 Gateway workspace_id");
+                              }
+                              if (thread.session_id !== activeSession.session_id) {
+                                throw new Error("新建连接目标不属于当前主会话");
+                              }
+                              if (kind === "terminal") {
+                                if (bottomPanelWorkspaceId !== activeSessionWorkspaceId) {
+                                  throw new Error("终端归属工作区与当前底部面板不一致，无法在这里打开");
+                                }
+                                await createTerminalFromResourcePanel({
+                                  sessionId: activeSession.session_id,
+                                  thread,
+                                  createTerminal: workspaceTerminals.create,
+                                  refreshSessionResources,
+                                  closeChildConversation: () => {
+                                    closeChildConversationAndClearForkSelection(
+                                      childConversation.close,
+                                      () => setForkChildOwner((current) => current
+                                        ? { ...current, initialThreadSelection: null }
+                                        : current),
+                                    );
+                                  },
+                                  openTerminalPanel,
+                                });
+                                return;
                               }
                               const created = await createSessionConnection(
                                 resolvedApiPort,
                                 activeSessionWorkspaceId,
-                                activeSession.session_id,
+                                thread,
                                 kind,
                               );
-                              await refreshSessionResources(activeSession.session_id);
-                              if (created.kind === "terminal") {
-                                openTerminalPanel(created.resourceId);
-                              } else {
-                                openExtensionWindow("browser", created.resourceId);
+                              const refresh = await refreshSessionResources(activeSession.session_id);
+                              if (refresh !== "loaded") {
+                                throw new Error(`浏览器 ${created.resourceId} 已创建，但会话连接列表未能刷新`);
                               }
+                              openExtensionWindow("browser", created.resourceId);
                             }}
                           />
                           <ChildThreadPanel
                             threads={childThreads.threads}
+                            teams={childThreads.teams}
                             total={childThreads.total}
                             loading={childThreads.loading}
                             error={childThreads.error}
                             loadedAt={childThreads.loadedAt}
-                            sessionId={activeSession?.session_id ?? ""}
-                            mainThreadId={nodeDebugMainThreadId}
-                            activeThreadId={nodeDebugThreadId}
+                            sessionId={childOwnerSessionId ?? ""}
+                            ownerLabel={childOwnerLabel}
+                            mainThreadId={forkChildOwner ? forkChildOwner.mainThreadId : nodeDebugMainThreadId}
+                            activeThreadId={childOwnerWorkspaceId === activeSessionWorkspaceId && childOwnerSessionId === activeSession?.session_id ? nodeDebugThreadId : null}
                             onRefresh={() => {
                               void childThreads.refresh();
                             }}
-                            onSelectThread={selectDebugThread}
+                            onSelectThread={childOwnerWorkspaceId === activeSessionWorkspaceId && childOwnerSessionId === activeSession?.session_id ? selectDebugThread : undefined}
+                            onForkFromThread={(threadId, point) => {
+                              if (!childOwnerSessionId || !childOwnerWorkspaceId) return;
+                              void handleForkSessionContext(childOwnerWorkspaceId, childOwnerSessionId, { ...point, threadId });
+                            }}
                             conversation={childConversation}
                           />
                         </>
@@ -1143,8 +1270,8 @@ export default function AppShell() {
         workspaceName={state.workspaceName ?? ""}
         currentSessionId={activeSession?.session_id ?? ""}
         terminalController={workspaceTerminals}
-        terminalThread={activeSession && activeSession.thread_id && activeSessionWorkspaceId === bottomPanelWorkspaceId
-          ? { session_id: activeSession.session_id, thread_id: activeSession.thread_id } : null}
+        terminalThread={terminalResourceTarget.thread}
+        terminalThreadTargetUnavailable={terminalResourceTarget.unavailable}
         generatorResources={generatorResources}
         workspaces={state.gatewayWorkspaces}
         onUpdateState={updateBottomPanelState}
@@ -1174,6 +1301,7 @@ export default function AppShell() {
         onCancel={closeNameDialog}
         onSubmit={submitNameDialog}
       />
+      <SessionContextForkDialog state={forkDialog} onCancel={closeForkDialog} onSubmit={submitForkDialog} onSelectionChange={updateForkDialogSelection} />
       </div>
     </WorkspaceFileReferenceProvider>
   );

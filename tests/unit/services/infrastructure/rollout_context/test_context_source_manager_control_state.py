@@ -218,6 +218,51 @@ def test_restart_recovery_keeps_untrack_state(
     assert rebuilt.prepare_pending() is None
 
 
+def test_activation_refresh_accepts_external_untrack_without_losing_pending_or_visible(
+    manager: ContextSourceManager,
+    control_state_port: RolloutCheckpointSaver,
+    owner: ContextSourceOwnerKey,
+    seal_sources,
+) -> None:
+    _track_skill(manager, seal_sources)
+    assert manager.observe("skill:debugging", "v2\n") is True
+    pending = manager.prepare_pending()
+    assert pending is not None
+    frozen = manager.prepare_sources()
+    external = ContextSourceManager(owner=owner, control_state_port=control_state_port)
+    assert external.load_skill("debugging", mode="untrack").tracked is False
+    committed = control_state_port.load_context_source_control_states(owner)
+
+    manager.refresh_control_states()
+    refreshed = manager.prepare_sources()
+    assert refreshed.deltas == frozen.deltas
+    assert [(item.content, item.revision, item.applied_revision) for item in refreshed.sources] == [
+        (item.content, item.revision, item.applied_revision) for item in frozen.sources
+    ]
+    assert all(item.tracked is False for item in refreshed.sources)
+    assert manager.observe("skill:debugging", "v3\n") is False
+    manager.refresh_control_states()
+    assert manager.prepare_sources() == refreshed
+    assert control_state_port.load_context_source_control_states(owner) == committed
+
+
+def test_seal_cas_sync_rejects_external_tracking_change(
+    manager: ContextSourceManager,
+    control_state_port: RolloutCheckpointSaver,
+    owner: ContextSourceOwnerKey,
+    seal_sources,
+) -> None:
+    _track_skill(manager, seal_sources)
+    external = ContextSourceManager(owner=owner, control_state_port=control_state_port)
+    external.load_skill("debugging", mode="untrack")
+    committed = control_state_port.load_context_source_control_states(owner)
+    with pytest.raises(RuntimeError, match="seal 确认不得吸收"):
+        manager._sync_persisted_control_states({"skill:debugging"})
+    assert control_state_port.load_context_source_control_states(owner) == committed
+    manager.refresh_control_states()
+    assert manager.observe("skill:debugging", "v2\n") is False
+
+
 def test_restart_recovery_rebuilds_diff_baseline_from_latest_visible_committed_revision(
     manager: ContextSourceManager,
     control_state_port: RolloutCheckpointSaver,

@@ -10,8 +10,8 @@ const useClientLayoutEffect = typeof window === "undefined"
 export interface ScrollWindowOptions {
   /** 面板是否可见；不可见时不改动滚动位置。 */
   active: boolean;
-  /** 切换会话时重置可见窗口并回到最新。 */
-  sessionId: string;
+  /** 工作区与会话组成的诊断作用域；切换时重置可见窗口并回到最新。 */
+  scopeKey: string;
   /** 当前可渲染的条目总数。 */
   itemCount: number;
   /** 首次进入时展示的条目数。 */
@@ -44,14 +44,14 @@ export interface ScrollWindow {
 /**
  * 一次服务端旧页请求的归属凭证。
  *
- * 展示态累加只属于「发起请求时的那次窗口」：会话切换或窗口重置后，旧会话的
- * 旧页条数绝不能算进新会话的可见窗口（上层 useSessionTraceHistory 虽有 epoch
+ * 展示态累加只属于「发起请求时的那次窗口」：诊断作用域切换或窗口重置后，旧作用域的
+ * 旧页条数绝不能算进新窗口的可见条数（上层 useSessionTraceHistory 虽有 epoch
  * 丢弃，但那只管它自己写回的历史缓存，管不到这里的展示态）。
  */
 export interface ScrollWindowLoadTicket {
   /** 发起请求时的会话作用域。 */
   scopeKey: string;
-  /** 发起请求时的窗口代次；会话切换或窗口重置都会使其失效。 */
+  /** 发起请求时的窗口代次；作用域切换或窗口重置都会使其失效。 */
   generation: number;
 }
 
@@ -62,7 +62,7 @@ export interface ScrollWindowLoadTicket {
  */
 export function useScrollWindow({
   active,
-  sessionId,
+  scopeKey,
   itemCount,
   initialVisibleCount,
   olderBatchSize,
@@ -72,21 +72,21 @@ export function useScrollWindow({
   const restoreScrollRef = React.useRef<{ height: number; top: number } | null>(null);
   const shouldScrollToLatestRef = React.useRef(true);
   const stickToLatestRef = React.useRef(true);
-  const scopeKeyRef = React.useRef(sessionId);
+  const scopeKeyRef = React.useRef(scopeKey);
   const generationRef = React.useRef(0);
   const [visibleCount, setVisibleCount] = React.useState(initialVisibleCount);
   const firstVisibleIndex = Math.max(itemCount - visibleCount, 0);
 
   useClientLayoutEffect(() => {
     if (!active) return;
-    // 会话切换或窗口重置：旧窗口的滚动锚点与在途旧页结果全部作废。
-    scopeKeyRef.current = sessionId;
+    // 诊断作用域切换或窗口重置：旧窗口的滚动锚点与在途旧页结果全部作废。
+    scopeKeyRef.current = scopeKey;
     generationRef.current += 1;
     restoreScrollRef.current = null;
     setVisibleCount(initialVisibleCount);
     shouldScrollToLatestRef.current = true;
     stickToLatestRef.current = true;
-  }, [active, sessionId, initialVisibleCount]);
+  }, [active, scopeKey, initialVisibleCount]);
 
   useClientLayoutEffect(() => {
     if (!active) return;
@@ -102,7 +102,7 @@ export function useScrollWindow({
       list.scrollTop = list.scrollHeight;
       shouldScrollToLatestRef.current = false;
     }
-  }, [active, itemCount, sessionId, visibleCount]);
+  }, [active, itemCount, scopeKey, visibleCount]);
 
   const captureScrollAnchor = React.useCallback(() => {
     const list = listRef.current;

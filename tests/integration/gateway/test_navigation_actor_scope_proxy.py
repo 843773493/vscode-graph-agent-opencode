@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
@@ -12,10 +12,16 @@ from typing import IO
 import httpx
 import pytest
 
-from app.core.path_utils import get_session_path_resolver
+from app.core.identifier import create_prefixed_id
+from app.core.path_utils import build_session_catalog_components
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.gateway.control.user_access import USER_ACCESS_COOKIE_NAME
 from app.gateway.credentials import FederationCredential, FederationCredentialStore
 from app.gateway.proxy_upstream import load_proxy_gateway_id
+from app.services.business.session_context_resource import (
+    workspace_session_inventory_identity,
+    workspace_session_inventory_uri,
+)
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
@@ -32,8 +38,8 @@ from tests.support.processes import (
     wait_for_http_ok,
 )
 
-_OPERATION_ID = "op_" + "a" * 32
-_ALICE_PRIVATE_OPERATION_ID = "op_" + "b" * 32
+_OPERATION_ID = create_prefixed_id("op")
+_ALICE_PRIVATE_OPERATION_ID = create_prefixed_id("op")
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,10 +152,14 @@ def navigation_scope_proxy_runtime(
     monkeypatch.delenv("BOXTEAM_GATEWAY_ROOT", raising=False)
     reset_gateway_persistent_state(workspace_root=workspace_root)
 
-    resolver = get_session_path_resolver(workspace_root / ".boxteam" / "sessions")
-    resolver.initialize()
-    workspace_id = resolver.workspace_id
-    resolver.catalog_store.close()
+    workspace_id = load_or_create_workspace_id(workspace_root)
+    catalog = build_session_catalog_components(
+        workspace_root / ".boxteam" / "sessions", workspace_id
+    )
+    try:
+        catalog.resolver.initialize()
+    finally:
+        catalog.close()
 
     gateway_root = boxteam_home / "state" / "gateway"
     peer_credential = FederationCredentialStore(
@@ -296,7 +306,7 @@ async def test_gateway_proxy_binds_navigation_queue_to_verified_identity(
             *,
             request_id: str,
             cookie: str,
-            operation_id: str = _OPERATION_ID,
+            operation_ids: Sequence[str] = (_OPERATION_ID,),
         ) -> httpx.Response:
             return await gateway_client.get(
                 "/api/v1/session-catalog/operations",
@@ -308,7 +318,7 @@ async def test_gateway_proxy_binds_navigation_queue_to_verified_identity(
                     "X-BoxTeam-Navigation-Actor": "user:forged-status-value",
                     "Cookie": f"{USER_ACCESS_COOKIE_NAME}={cookie}",
                 },
-                params={"operation_id": operation_id},
+                params=[("operation_id", operation_id) for operation_id in operation_ids],
             )
 
         alice_first = await enqueue_as(
@@ -388,12 +398,12 @@ async def test_gateway_proxy_binds_navigation_queue_to_verified_identity(
         alice_private_status = await status_as(
             request_id="req-alice-private-status",
             cookie=alice_cookie,
-            operation_id=_ALICE_PRIVATE_OPERATION_ID,
+            operation_ids=(_ALICE_PRIVATE_OPERATION_ID,),
         )
         guest_private_status = await status_as(
             request_id="req-guest-private-status",
             cookie=guest_cookie_one,
-            operation_id=_ALICE_PRIVATE_OPERATION_ID,
+            operation_ids=(_ALICE_PRIVATE_OPERATION_ID,),
         )
         assert alice_status.status_code == guest_status.status_code == 200
         assert alice_status.json()["data"]["items"][0]["operation_id"] == _OPERATION_ID
@@ -409,14 +419,48 @@ async def test_gateway_proxy_binds_navigation_queue_to_verified_identity(
             _ALICE_PRIVATE_OPERATION_ID
         ]
 
+        # 重复 query key 经真实 Gateway 保留全部 ID，认证 scope 仍隔离私有回执。
+        alice_batch = await status_as(
+            request_id="req-alice-batch-status",
+            cookie=alice_cookie,
+            operation_ids=(_OPERATION_ID, _ALICE_PRIVATE_OPERATION_ID),
+        )
+        guest_batch = await status_as(
+            request_id="req-guest-batch-status",
+            cookie=guest_cookie_one,
+            operation_ids=(_OPERATION_ID, _ALICE_PRIVATE_OPERATION_ID),
+        )
+        assert alice_batch.status_code == guest_batch.status_code == 200
+        alice_batch_data = alice_batch.json()["data"]
+        guest_batch_data = guest_batch.json()["data"]
+        assert {item["operation_id"] for item in alice_batch_data["items"]} == {
+            _OPERATION_ID,
+            _ALICE_PRIVATE_OPERATION_ID,
+        }
+        assert alice_batch_data["unknown_operation_ids"] == []
+        assert [item["operation_id"] for item in guest_batch_data["items"]] == [_OPERATION_ID]
+        assert guest_batch_data["unknown_operation_ids"] == [_ALICE_PRIVATE_OPERATION_ID]
+        for response, request_id in (
+            (alice_batch, "req-alice-batch-status"),
+            (guest_batch, "req-guest-batch-status"),
+        ):
+            assert response.headers["X-Request-ID"] == request_id
+            assert response.json()["request_id"] == request_id
+
+        context_payload = {
+            "resource_identity": str(workspace_session_inventory_identity(runtime.workspace_id)),
+            "uri": workspace_session_inventory_uri(runtime.workspace_id),
+            "scope": "workspace",
+        }
         public_read = await gateway_client.post(
             "/api/v1/context/read",
             headers={
                 "X-BoxTeam-Workspace-Id": gateway_workspace_id,
                 "X-BoxTeam-Gateway-Id": "gateway:forged-public-value",
                 "X-BoxTeam-Navigation-Actor": "user:forged-public-value",
+                "Cookie": f"{USER_ACCESS_COOKIE_NAME}={guest_cookie_one}",
             },
-            json={},
+            json=context_payload,
         )
         public_search = await gateway_client.post(
             "/api/v1/context/search",
@@ -424,8 +468,9 @@ async def test_gateway_proxy_binds_navigation_queue_to_verified_identity(
                 "X-BoxTeam-Workspace-Id": gateway_workspace_id,
                 "X-BoxTeam-Gateway-Id": "gateway:forged-public-value",
                 "X-BoxTeam-Navigation-Actor": "user:forged-public-value",
+                "Cookie": f"{USER_ACCESS_COOKIE_NAME}={guest_cookie_one}",
             },
-            json={},
+            json={**context_payload, "query": "operation"},
         )
         assert public_read.status_code == public_search.status_code == 200
         assert public_read.json()["actor"] is None
@@ -451,6 +496,8 @@ async def test_gateway_proxy_binds_navigation_queue_to_verified_identity(
             "guest",
             "user:guest",
             "federation:gateway_peer_verified",
+            "user:alice",
+            "guest",
             "user:alice",
             "guest",
             "user:alice",

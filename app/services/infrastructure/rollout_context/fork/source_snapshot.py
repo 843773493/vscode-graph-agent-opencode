@@ -7,37 +7,34 @@ import json
 import os
 import shutil
 import sqlite3
-from dataclasses import dataclass
+from contextlib import closing
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
-from app.services.infrastructure.rollout_context.assembly.detail_registry import (
-    _COLUMNS as _DETAIL_COLUMNS,
+from app.services.infrastructure.attachment_blob_catalog.records import (
+    ForkAttachmentSnapshot,
 )
-from app.services.infrastructure.rollout_context.assembly.detail_registry import (
-    _detail_mapping,
+from app.services.infrastructure.node_debug.session.fork import (
+    NodeDebugSourceCopySnapshot,
+)
+from app.services.infrastructure.rollout_context.assembly.detail_identity import (
+    detail_ref_from_key,
 )
 from app.services.infrastructure.rollout_context.fork.full_copy.sqlite_snapshot import (
     SQLITE_COPY_FILES,
     copy_live_sqlite_snapshot,
 )
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
-    detail_record_from_mapping,
+    detail_relative_path,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    require_historical_scope,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
     _RolloutFileLock,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
-
-if TYPE_CHECKING:
-    from app.services.infrastructure.node_debug.session.fork import (
-        NodeDebugSourceCopySnapshot,
-    )
-    from app.services.infrastructure.rollout_context.runtime.detail_fork import (
-        ForkDetailCapability,
-        ForkDetailSourceSnapshot,
-    )
 
 _PRIVATE_SOURCE_FILES = frozenset(
     {
@@ -57,53 +54,22 @@ class ForkSnapshotFile:
 class ForkRolloutSourceSnapshot:
     source_session_id: str
     source_thread_id: str
+    # 本次 fork 的私有捕获副本节点，不指向 live 源会话；source scope 仅保留来源历史 owner 事实，不能据此反推物理路径。
     session_node: Path
     files: tuple[ForkSnapshotFile, ...]
     manifest_bytes: bytes
     manifest_sha256: str
     control_sha256: str
     source_lifecycle_generation: int
-    detail_snapshots: tuple[ForkDetailSourceSnapshot, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class ForkRequestOnlyContent:
-    """不落盘的 request-only 正文快照；只含稳定 ref 与 canonical JSON bytes。"""
-
-    ref: str
-    value_bytes: bytes
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.ref, str) or not self.ref:
-            raise ValueError("fork request-only snapshot ref 必须是非空字符串")
-        if type(self.value_bytes) is not bytes:
-            raise TypeError("fork request-only snapshot 正文必须是 bytes")
-        json.loads(self.value_bytes)
-        from app.domain.itemized.hashing import canonical_json_bytes
-
-        if canonical_json_bytes(json.loads(self.value_bytes)) != self.value_bytes:
-            raise ValueError("fork request-only snapshot 正文必须是 canonical JSON")
 
 
 @dataclass(frozen=True, slots=True)
 class ForkSourceSnapshot:
-    """一次 fork 的全部 source-only 临时事实，不是持久化 owner。"""
+    """原文件与资源 ref 的冻结合同；正文仅留在既有持久化 owner 中。"""
 
     rollout: ForkRolloutSourceSnapshot
-    request_only_content: tuple[ForkRequestOnlyContent, ...] = ()
-    node_debug_snapshot: NodeDebugSourceCopySnapshot | None = None
-
-    def __post_init__(self) -> None:
-        identities = [item.ref for item in self.request_only_content]
-        if len(identities) != len(set(identities)):
-            raise ValueError("fork request-only snapshot 含重复 ref")
-        if self.node_debug_snapshot is not None and (
-            self.node_debug_snapshot.source_session_id
-            != self.rollout.source_session_id
-            or self.node_debug_snapshot.source_thread_id
-            != self.rollout.source_thread_id
-        ):
-            raise ValueError("fork node-debug snapshot source owner 不一致")
+    attachments: tuple[ForkAttachmentSnapshot, ...] = ()
+    node_debug: NodeDebugSourceCopySnapshot | None = None
 
     @property
     def source_session_id(self) -> str:
@@ -119,69 +85,17 @@ class ForkSourceSnapshot:
 
     @property
     def snapshot_sha256(self) -> str:
-        """覆盖本次 capture 的 rollout、request-only 与 NodeDebug typed facts。"""
-        payload: dict[str, object] = {
-            "schema": "fork-source-snapshot:v1",
+        payload = {
+            "schema": "fork-source-snapshot:v2",
             "rollout_manifest_sha256": self.rollout.manifest_sha256,
             "session_control_sha256": self.rollout.control_sha256,
-            "detail_content": [
-                {
-                    "detail_ref": item.source_record.detail_ref.to_dict(),
-                    "state": "available" if item.value_bytes is not None else "unavailable",
-                    "sha256": (
-                        hashlib.sha256(item.value_bytes).hexdigest()
-                        if item.value_bytes is not None
-                        else None
-                    ),
-                }
-                for item in self.rollout.detail_snapshots
-            ],
-            "request_only_content": [
-                {
-                    "ref": item.ref,
-                    "sha256": hashlib.sha256(item.value_bytes).hexdigest(),
-                }
-                for item in self.request_only_content
-            ],
-            "node_debug": None,
+            "attachments": [asdict(item) for item in self.attachments],
+            "node_debug": self.node_debug.to_payload() if self.node_debug is not None else None,
         }
-        if self.node_debug_snapshot is not None:
-            payload["node_debug"] = {
-                "manifest_sha256": self.node_debug_snapshot.manifest_sha256,
-                "capture_mode": self.node_debug_snapshot.capture_mode,
-                "workspace_id": self.node_debug_snapshot.workspace_id,
-                "workspace_config_revision": self.node_debug_snapshot.workspace_config_revision,
-                "workspace_config_hash": self.node_debug_snapshot.workspace_config_hash,
-                "source_lineage": [list(item) for item in self.node_debug_snapshot.source_lineage],
-                "configurations": [
-                    {
-                        "configuration_id": item.configuration_id,
-                        "revision": item.revision,
-                        "sha256": item.sha256,
-                        "source_lineage": [list(lineage) for lineage in item.source_lineage],
-                    }
-                    for item in self.node_debug_snapshot.configuration_artifacts
-                ],
-            }
         encoded = json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
+            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
         ).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
-
-
-def freeze_request_only_content(
-    values: dict[str, object],
-) -> tuple[ForkRequestOnlyContent, ...]:
-    """复制 Saver 的当前 request-only view，脱离可变 Python 对象引用。"""
-    from app.domain.itemized.hashing import canonical_json_bytes
-
-    return tuple(
-        ForkRequestOnlyContent(ref, canonical_json_bytes(value))
-        for ref, value in sorted(values.items())
-    )
 
 
 def capture_fork_rollout_snapshot(
@@ -191,7 +105,6 @@ def capture_fork_rollout_snapshot(
     source_thread_id: str,
     snapshot_session_node: Path,
     snapshot_id: str,
-    detail_capability: ForkDetailCapability | None = None,
     rollout_lock_held: bool = False,
 ) -> ForkRolloutSourceSnapshot:
     """复制 source rollout 与已登记普通 detail，不触碰 live SQLite reader。"""
@@ -223,10 +136,35 @@ def capture_fork_rollout_snapshot(
         # 显式冻结副本携带既有锁，后续共享读取不得自行创建文件。
         shutil.copy2(source_lock_path, snapshot_session_node / ".rollout.write.lock")
         source_files = _tree_manifest(
-            source_rollout, excluded_root_files=frozenset(SQLITE_COPY_FILES),
+            source_rollout,
+            excluded_root_entries=frozenset((*SQLITE_COPY_FILES, "context-plan-details")),
         )
         shutil.copytree(source_rollout, snapshot_rollout, ignore=_copy_ignore)
-        sqlite_files = copy_live_sqlite_snapshot(source_rollout, snapshot_rollout)
+        sqlite_files = copy_live_sqlite_snapshot(
+            source_rollout, snapshot_rollout, rollout_lock_held=True,
+        )
+        index_path = snapshot_rollout / "index.sqlite"
+        committed_offset = None
+        if index_path.is_file():
+            with closing(sqlite3.connect(index_path.as_uri() + "?mode=ro&immutable=1", uri=True)) as connection:
+                row = connection.execute("SELECT committed_jsonl_offset FROM database_meta WHERE singleton_id = 1").fetchone()
+                source_files = (*source_files, *_copy_declared_details(
+                    connection, source_rollout=source_rollout, snapshot_rollout=snapshot_rollout,
+                ))
+            if row is None or type(row[0]) is not int or row[0] < 0:
+                raise RuntimeError("source-mismatch: fork snapshot committed JSONL offset 非法")
+            committed_offset = row[0]
+            jsonl = snapshot_rollout / "rollout.jsonl"
+            if not jsonl.is_file() or jsonl.stat().st_size < committed_offset:
+                raise RuntimeError("source-mismatch: fork snapshot JSONL 短于 committed offset")
+            with jsonl.open("r+b") as stream:
+                stream.truncate(committed_offset)
+                stream.flush()
+                os.fsync(stream.fileno())
+            source_files = tuple(
+                ForkSnapshotFile("rollout.jsonl", committed_offset, _file_sha256(jsonl))
+                if file.relative_path == "rollout.jsonl" else file for file in source_files
+            )
         # live SQLite 的源 hash 由同一个隔离复制 owner 提供；父进程只读取私有副本。
         source_files = tuple(sorted(
             (*source_files, *(ForkSnapshotFile(name, size, digest) for name, size, digest in sqlite_files)),
@@ -251,9 +189,11 @@ def capture_fork_rollout_snapshot(
             path = snapshot_session_node / name
             if path.exists():
                 control_digest.update(name.encode())
-                control_digest.update(path.read_bytes())
+                with path.open("rb") as stream:
+                    while chunk := stream.read(1024 * 1024):
+                        control_digest.update(chunk)
         control_sha256 = control_digest.hexdigest()
-        with sqlite3.connect(control_path.as_uri() + "?mode=ro", uri=True) as connection:
+        with closing(sqlite3.connect(control_path.as_uri() + "?mode=ro&immutable=1", uri=True)) as connection:
             owner = connection.execute(
                 "SELECT kind FROM thread_catalog WHERE thread_id = ?", (source_thread_id,),
             ).fetchone()
@@ -273,16 +213,6 @@ def capture_fork_rollout_snapshot(
         source_lifecycle_generation = fence[1]
         if type(source_lifecycle_generation) is not int or source_lifecycle_generation < 1:
             raise RuntimeError("source-mismatch: 冻结 lifecycle generation 非法")
-        detail_snapshots = (
-            _capture_detail_snapshots(
-                snapshot_rollout,
-                source_session_id=source_session_id,
-                source_thread_id=source_thread_id,
-                capability=detail_capability,
-            )
-            if detail_capability is not None
-            else ()
-        )
     except BaseException:
         shutil.rmtree(snapshot_session_node, ignore_errors=True)
         raise
@@ -296,6 +226,7 @@ def capture_fork_rollout_snapshot(
         "source_session_id": source_session_id,
         "source_thread_id": source_thread_id,
         "session_control_sha256": control_sha256,
+        "committed_jsonl_offset": committed_offset,
         "files": [
             {
                 "relative_path": file.relative_path,
@@ -303,18 +234,6 @@ def capture_fork_rollout_snapshot(
                 "sha256": file.sha256,
             }
             for file in source_files
-        ],
-        "detail_snapshots": [
-            {
-                "detail_ref": snapshot.source_record.detail_ref.to_dict(),
-                "state": "available" if snapshot.value_bytes is not None else "unavailable",
-                "content_sha256": (
-                    hashlib.sha256(snapshot.value_bytes).hexdigest()
-                    if snapshot.value_bytes is not None
-                    else None
-                ),
-            }
-            for snapshot in detail_snapshots
         ],
     }
     manifest_bytes = (
@@ -344,56 +263,64 @@ def capture_fork_rollout_snapshot(
         files=source_files,
         manifest_bytes=manifest_bytes,
         manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
-        detail_snapshots=detail_snapshots,
         control_sha256=control_sha256,
         source_lifecycle_generation=source_lifecycle_generation,
     )
 
 
-def _capture_detail_snapshots(
-    snapshot_rollout: Path,
-    *,
-    source_session_id: str,
-    source_thread_id: str,
-    capability: ForkDetailCapability,
-) -> tuple[ForkDetailSourceSnapshot, ...]:
-    index_path = snapshot_rollout / "index.sqlite"
-    if index_path.is_symlink():
-        raise RuntimeError("source-mismatch: fork snapshot index.sqlite 是符号链接")
-    if not index_path.exists():
-        return ()
-    if not index_path.is_file():
-        raise RuntimeError("source-mismatch: fork snapshot index.sqlite 不是普通文件")
-    uri = index_path.as_uri() + "?mode=ro"
-    with sqlite3.connect(uri, uri=True) as connection:
-        table = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='context_plan_details'"
-        ).fetchone()
-        if table is None:
-            return ()
-        rows = connection.execute(
-            f"SELECT {','.join(_DETAIL_COLUMNS)} FROM context_plan_details "
-            "WHERE session_id = ? AND thread_id = ? ORDER BY detail_ref",
-            (source_session_id, source_thread_id),
-        ).fetchall()
-    snapshots = []
-    for row in rows:
-        detail = _detail_mapping(tuple(row))
-        record = detail_record_from_mapping(detail)
-        snapshots.append(capability.capture_source_detail(source_record=record))
-    return tuple(snapshots)
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _copy_declared_details(
+    connection: sqlite3.Connection, *, source_rollout: Path, snapshot_rollout: Path,
+) -> tuple[ForkSnapshotFile, ...]:
+    """只用本次冻结 SQLite 的 typed locator 复制正文，不解析历史业务 JSON。"""
+    files: list[ForkSnapshotFile] = []
+    cursor = connection.execute(
+        "SELECT detail_ref,session_id,thread_id,assembly_id,relative_path "
+        "FROM context_plan_details ORDER BY detail_ref",
+    )
+    while rows := cursor.fetchmany(256):
+        for key, session_id, thread_id, assembly_id, locator in rows:
+            ref = detail_ref_from_key(key)
+            ref.require_owner(session_id, thread_id, assembly_id)
+            require_historical_scope(connection, session_id, thread_id)
+            relative = detail_relative_path(ref).relative_to("rollout")
+            if locator != str(detail_relative_path(ref)):
+                raise ValueError("source-mismatch: 冻结 detail locator 不属于精确历史 owner")
+            source = source_rollout / relative
+            for directory in (source_rollout / "context-plan-details", source.parent):
+                if directory.exists() and (directory.is_symlink() or not directory.is_dir()):
+                    raise RuntimeError(f"source-mismatch: 冻结 detail 目录不是普通目录: {directory}")
+            if source.is_symlink() or (source.exists() and not source.is_file()):
+                raise RuntimeError(f"source-mismatch: 冻结 detail 不是普通文件: {relative}")
+            if not source.is_file():
+                # 是否必需由同一冻结 manifest 的资源 owner 在发布前裁定。
+                continue
+            destination = snapshot_rollout / relative
+            destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            shutil.copy2(source, destination)
+            files.append(ForkSnapshotFile(
+                relative.as_posix(), source.stat().st_size, _file_sha256(source),
+            ))
+    return tuple(files)
 
 
 def _copy_ignore(directory: str, names: list[str]) -> set[str]:
     root = Path(directory)
     ignored = {name for name in names if name == "index.sqlite-shm"}
     if root.name == "rollout":
-        ignored.update(name for name in names if name in SQLITE_COPY_FILES)
+        ignored.update(name for name in names if name in (*SQLITE_COPY_FILES, "context-plan-details"))
     return ignored
 
 
 def _tree_manifest(
-    root: Path, *, excluded_root_files: frozenset[str] = frozenset(),
+    root: Path, *, excluded_root_entries: frozenset[str] = frozenset(),
 ) -> tuple[ForkSnapshotFile, ...]:
     files: list[ForkSnapshotFile] = []
     for current, directory_names, file_names in os.walk(root, followlinks=False):
@@ -411,10 +338,10 @@ def _tree_manifest(
         directory_names[:] = [
             name
             for name in directory_names
-            if not (current_path == root and name in _PRIVATE_SOURCE_FILES)
+            if not (current_path == root and name in (_PRIVATE_SOURCE_FILES | excluded_root_entries))
         ]
         for name in file_names:
-            if current_path == root and name in (_PRIVATE_SOURCE_FILES | excluded_root_files):
+            if current_path == root and name in (_PRIVATE_SOURCE_FILES | excluded_root_entries):
                 continue
             path = current_path / name
             relative_path = path.relative_to(root).as_posix()
@@ -441,10 +368,8 @@ def _fsync_directory(path: Path) -> None:
 
 
 __all__ = [
-    "ForkRequestOnlyContent",
     "ForkRolloutSourceSnapshot",
     "ForkSnapshotFile",
     "ForkSourceSnapshot",
     "capture_fork_rollout_snapshot",
-    "freeze_request_only_content",
 ]

@@ -26,7 +26,9 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from app.core.session_catalog_store import validate_thread_id as validate_thread_id
+from app.core.session_catalog_store.validators import (
+    validate_thread_id as validate_thread_id,
+)
 from app.core.session_control_communication_ledger.communication_ledger import (
     CommunicationInboxRecord,
     CommunicationLedgerMixin,
@@ -122,11 +124,11 @@ class SessionControlStore(
     lease（2.3-E）/ 跨 Session 通信 outbox+inbox ledger（D5）。
 
     构造时创建 database_path 父目录并幂等建表；``user_version`` 只接受
-    全新库0与当前版本13。旧生成数据在任何 journal/WAL 设置前显式拒绝，
+    全新库0与当前版本16。旧生成数据在任何 journal/WAL 设置前显式拒绝，
     不迁移、不回填；当前 GraphBinding 仍由 thread_catalog 唯一持有。
     """
 
-    SCHEMA_VERSION = 13
+    SCHEMA_VERSION = 16
 
     def __init__(self, database_path: Path, *, read_only: bool = False) -> None:
         if not isinstance(database_path, Path):

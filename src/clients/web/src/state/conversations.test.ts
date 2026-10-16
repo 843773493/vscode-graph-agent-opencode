@@ -11,7 +11,7 @@ import {
   syncActiveJobConversation,
   writePendingSnapshot,
 } from "./conversations";
-import { createSessionTurnTimeline } from "./session/turnTimeline";
+import { createSessionTurnTimeline, upsertTurn } from "./session/turnTimeline";
 import {
   buildPendingStatusItem,
   isLiveConversationView,
@@ -21,7 +21,56 @@ import {
   type MessageStreamState,
 } from "./messageStream/index";
 import type { AppState, ConversationView } from "../types/frontend";
-import type { TraceEvent } from "../types/backend";
+import type { AttachmentRef, PendingRequestList, TraceEvent } from "../types/backend";
+import { updateSessionAttachmentSummary, updateAttachmentSummariesFromTraces } from "./attachments";
+
+test("附件摘要保留同 ID 跨工作区归属并拒绝其它会话的 Trace", () => {
+  const summaries: AppState["sessionAttachmentSummaries"] = new Map();
+  const attachment = (fileId: string, name: string): AttachmentRef => ({ file_id: fileId, name });
+  updateSessionAttachmentSummary(summaries, "gateway_a::ses_same", [attachment("file_a", "A.txt")], "2026-10-14T00:00:00Z");
+  updateSessionAttachmentSummary(summaries, "gateway_b::ses_same", [attachment("file_b", "B.txt")], "2026-10-14T00:00:01Z");
+  expect(summaries.get("gateway_a::ses_same")?.names).toEqual(["A.txt"]);
+  expect(summaries.get("gateway_b::ses_same")?.names).toEqual(["B.txt"]);
+  const event = (sessionId: string, name: string): TraceEvent => ({
+    event_id: `evt_${sessionId}`, session_id: sessionId, job_id: "job_attachments",
+    type: "message_created", phase: "message", title: "创建消息", content: "",
+    timestamp: "2026-10-14T00:00:02Z",
+    payload: { session_id: sessionId, attachments: [attachment(sessionId, name)] },
+  });
+  updateAttachmentSummariesFromTraces(summaries, "ses_same", "gateway_a::ses_same", [
+    event("ses_foreign", "foreign.txt"), event("ses_same", "own.txt"),
+  ]);
+  expect(summaries.get("gateway_a::ses_same")?.names).toEqual(["A.txt", "own.txt"]);
+  expect(summaries.get("gateway_b::ses_same")?.names).toEqual(["B.txt"]);
+  expect(summaries.has("ses_same")).toBe(false);
+});
+
+test("同 session/turn ID 的消息流投影和尾帧订阅按 Gateway 会话隔离", () => {
+  const sessionId = "ses_same";
+  const turnId = "turn_same";
+  const leftKey = "gateway_a::ses_same";
+  const rightKey = "gateway_b::ses_same";
+  const pending: ConversationView = {
+    conversationId: turnId, displayMode: "live", sessionId, turnId,
+    userMessage: null, events: [], status: "running", jobId: null, pending: true, source: "pending",
+  };
+  const foreignStream = {
+    ...createMessageStreamState(sessionId, turnId, "stream_same", rightKey),
+    lastEventSeq: 100,
+    failure: { code: "foreign", message: "其它工作区的失败", afterInterruptRequested: false, resumable: false },
+    streamStatus: "failed" as const,
+  };
+  const state = {
+    activeJobIdsBySession: new Map(), turnTimelinesBySession: new Map(),
+    pendingConversations: new Map([[leftKey, [pending]], [rightKey, [pending]]]),
+    messageStreamsByTurnStream: new Map([["right", foreignStream]]),
+  } as unknown as AppState;
+  expect(getConversationsForSession(sessionId, state, leftKey)[0]?.messageStream).toBeUndefined();
+  expect(getConversationsForSession(sessionId, state, rightKey)[0]?.messageStream?.failure?.message).toBe("其它工作区的失败");
+  state.messageStreamsByTurnStream!.set("right", { ...foreignStream, streamStatus: "open" });
+  expect(messageStreamTurnIdForSession(sessionId, state, leftKey)).toBeNull();
+  expect(messageStreamTurnIdForSession(sessionId, state, rightKey)).toBe(turnId);
+});
 
 test("历史 Turn 不显示实时事件流等待状态", () => {
   const historyConversation: ConversationView = {
@@ -52,13 +101,14 @@ test("Job/Trace 先结束时仍保留未完成的消息流订阅目标", () => {
       events: [],
       status: "done" as const,
       jobId: "job_message_stream_tail",
+      turnId: "turn_message_stream_tail",
       pending: false,
       source: "pending" as const,
     }]]]),
     messageStreamsByTurnStream: new Map([[
       "stream_message_stream_tail",
       {
-        ...createMessageStreamState(sessionId, "job_message_stream_tail", "stream_message_stream_tail"),
+        ...createMessageStreamState(sessionId, "turn_message_stream_tail", "stream_message_stream_tail", sessionCacheKey),
         lastEventSeq: 9,
         streamStatus: "open" as const,
       },
@@ -66,7 +116,7 @@ test("Job/Trace 先结束时仍保留未完成的消息流订阅目标", () => {
   } as unknown as AppState;
 
   expect(messageStreamTurnIdForSession(sessionId, state, sessionCacheKey)).toBe(
-    "job_message_stream_tail",
+    "turn_message_stream_tail",
   );
 });
 
@@ -193,7 +243,7 @@ test("历史提交期间的终态 live Turn 不会被空 pending 快照删除", 
   writePendingSnapshot(
     pendingMap,
     new Map(),
-    { session_id: sessionId, active_job_id: null, requests: [], snapshot_version: 1 },
+    { session_id: sessionId, thread_id: "thr_018f0000000070008000000000000001", active_job_id: null, requests: [], snapshot_version: 1 },
   );
 
   expect(pendingMap.get(sessionId)).toEqual([terminalConversation]);
@@ -209,6 +259,7 @@ test("历史 stale_turn_reference 期间保留超时回合及可见错误", () =
     userMessage: {
       message_id: "msg_timeout_fallback",
       session_id: sessionId,
+      thread_id: "thr_conversation",
       role: "user",
       content: "长任务",
       attachments: [],
@@ -286,9 +337,10 @@ test("内部 Goal continuation 不构造用户可见会话", () => {
   expect(getConversationsForSession("ses_goal", state)).toEqual([]);
 });
 
-test("排队中的内部展示消息保留安全正文和展示类型", () => {
+test("排队中的内部准入不会伪造用户聊天回合", () => {
   const conversations = pendingSnapshotToConversations({
     session_id: "ses_report",
+    thread_id: "thr_018f0000000070008000000000000001",
     active_job_id: "job_active",
     requests: [{
       job_id: "job_report",
@@ -315,17 +367,13 @@ test("排队中的内部展示消息保留安全正文和展示类型", () => {
     snapshot_version: 1,
   });
 
-  expect(conversations[0]?.userMessage?.content).not.toContain(
-    "generated_session_result",
-  );
-  expect(
-    conversations[0]?.userMessage?.metadata?.internal_display_kind,
-  ).toBe("generated_session_result");
+  expect(conversations).toEqual([]);
 });
 
 test("Turn detail 恢复内部展示消息时保留展示类型", () => {
   const timeline = {
     ...createSessionTurnTimeline("ses_child"),
+    threadId: "thr_conversation",
     phase: "ready" as const,
     orderedTurnIds: ["turn_child"],
     turnsById: {
@@ -334,6 +382,8 @@ test("Turn detail 恢复内部展示消息时保留展示类型", () => {
         job_id: "job_child",
         session_id: "ses_child",
         ordinal: 1,
+        source_view_id: "view_history_fixture",
+        source_view_revision: 1,
         revision: 1,
         status: "completed" as const,
         created_at: "2026-07-28T00:00:00Z",
@@ -377,6 +427,10 @@ test("Turn detail 恢复内部展示消息时保留展示类型", () => {
 
   const conversations = getConversationsForSession("ses_child", state);
   expect(conversations).toHaveLength(1);
+  expect([conversations[0]?.sessionId, conversations[0]?.threadId,
+    conversations[0]?.sourceViewId, conversations[0]?.sourceViewRevision]).toEqual([
+    "ses_child", "thr_conversation", "view_history_fixture", 1,
+  ]);
   expect(conversations[0]?.userMessage?.content).toBe("检查认证模块");
   expect(
     conversations[0]?.userMessage?.metadata?.internal_display_kind,
@@ -393,6 +447,7 @@ test("Turn 摘要中的空内部消息保留可展开的用户气泡", () => {
       sessionId,
       {
         ...createSessionTurnTimeline(sessionId),
+        threadId: "thr_conversation",
         phase: "ready" as const,
         orderedTurnIds: [turnId],
         turnsById: {
@@ -401,6 +456,8 @@ test("Turn 摘要中的空内部消息保留可展开的用户气泡", () => {
             job_id: turnId,
             session_id: sessionId,
             ordinal: 1,
+            source_view_id: "view_history_fixture",
+            source_view_revision: 1,
             revision: 1,
             status: "completed" as const,
             created_at: "2026-07-30T07:56:41Z",
@@ -434,16 +491,21 @@ test("Turn 摘要中的空内部消息保留可展开的用户气泡", () => {
 test("切入已有 active Job 后立即把流式文本和工具事件合入 Turn", () => {
   const sessionId = "ses_active_history";
   const jobId = "job_active_history";
+  const turnId = "turn_active_history";
   const timeline = {
     ...createSessionTurnTimeline(sessionId),
+    threadId: "thr_conversation",
     phase: "ready" as const,
-    orderedTurnIds: [jobId],
+    orderedTurnIds: [turnId],
     turnsById: {
-      [jobId]: {
-        turn_id: jobId,
+      [turnId]: {
+        turn_id: turnId,
         job_id: jobId,
         session_id: sessionId,
         ordinal: 1,
+        root_logical_item_ordinal: 0,
+        source_view_id: "view_history_fixture",
+        source_view_revision: 1,
         revision: 1,
         status: "running" as const,
         created_at: "2026-07-29T00:00:00Z",
@@ -464,6 +526,8 @@ test("切入已有 active Job 后立即把流式文本和工具事件合入 Turn
     state.pendingConversations,
     sessionId,
     jobId,
+    sessionId,
+    timeline.turnsById[turnId],
   );
   appendTraceEventsToPendingConversations(
     state.pendingConversations,
@@ -499,6 +563,7 @@ test("切入已有 active Job 后立即把流式文本和工具事件合入 Turn
 
   const conversations = getConversationsForSession(sessionId, state);
   expect(conversations).toHaveLength(1);
+  expect(conversations[0]?.turnId).toBe(turnId);
   expect(conversations[0]?.events.map((event) => event.type)).toEqual([
     "text_delta",
     "tool_call_start",
@@ -507,8 +572,146 @@ test("切入已有 active Job 后立即把流式文本和工具事件合入 Turn
   expect(conversations[0]?.activeJobOverlay).toBe(true);
   expect(isLiveConversationView(conversations[0]!)).toBe(true);
 
-  syncActiveJobConversation(state.pendingConversations, sessionId, null);
+  syncActiveJobConversation(state.pendingConversations, sessionId, null, sessionId, null);
   expect(state.pendingConversations.has(sessionId)).toBe(false);
+});
+
+test("活动内部 Job 没有权威 Turn 时不创建聊天 overlay", () => {
+  const pending = new Map<string, ConversationView[]>();
+  syncActiveJobConversation(pending, "ses_internal", "job_internal", "workspace::ses_internal", null);
+  expect(pending.size).toBe(0);
+});
+
+test("活动 Turn 的正反和重复快照顺序只消费当前视图坐标并保留 live 内容", () => {
+  const sessionId = "ses_active_identity";
+  const jobId = "job_active_identity";
+  const turnId = "turn_active_identity";
+  const mapKey = "workspace::ses_active_identity";
+  const activeTurn = {
+    turn_id: turnId,
+    job_id: jobId,
+    session_id: sessionId,
+    ordinal: 2,
+    root_logical_item_ordinal: 16,
+    source_view_id: "view_history_fixture",
+    source_view_revision: 1,
+    revision: 3,
+    status: "running" as const,
+    created_at: "2026-10-09T00:00:00Z",
+    updated_at: "2026-10-09T00:00:01Z",
+    items_view: "summary" as const,
+    source_message_ids: ["msg_active_identity"],
+    merged_job_ids: [],
+    user_messages: [],
+    response_preview: "历史摘要不覆盖正在生成的正文",
+  };
+  const live: ConversationView = {
+    conversationId: "msg_active_identity",
+    displayMode: "live",
+    sessionId,
+    turnId,
+    userMessage: null,
+    assistantMessages: [{
+      message_id: "msg_live_assistant",
+      session_id: sessionId,
+      thread_id: "thr_conversation",
+      role: "assistant",
+      content: "已收到的实时正文",
+      attachments: [],
+      metadata: {},
+      created_at: "2026-10-09T00:00:01Z",
+      updated_at: "2026-10-09T00:00:01Z",
+    }],
+    thinkingBlocks: [{ kind: "reasoning", text: "已收到的实时思考" }],
+    responseParts: [],
+    events: [{
+      event_id: "evt_active_identity", session_id: sessionId, job_id: jobId,
+      type: "text_delta", phase: "text", title: "文本增量", content: "实时事件正文",
+      timestamp: "2026-10-09T00:00:02Z",
+    }],
+    status: "running",
+    jobId,
+    pending: true,
+    source: "pending",
+  };
+  const threadId = "thr_018f0000000070008000000000000001";
+  const snapshot: PendingRequestList = {
+    session_id: sessionId, thread_id: threadId, active_job_id: jobId, snapshot_version: 2,
+    requests: [{
+      session_id: sessionId, thread_id: threadId, job_id: jobId, turn_id: turnId,
+      message_id: "msg_active_identity", content: "权威用户消息", attachments: [],
+      execution_binding: { job_id: jobId, turn_id: turnId, admission_idempotency_key: "admission_active_identity" },
+      delivery_policy: "after_turn", enqueue_sequence: 2, position: 0, status: "queued",
+      agent_id: "default", message_created_at: "2026-10-09T00:00:00Z",
+      message_metadata: { updated_at: "2026-10-09T00:00:01Z" },
+      created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:01Z", snapshot_version: 2,
+    }],
+  };
+  const expected = {
+    turnId,
+    turnRevision: 3,
+    turnOrdinal: 2,
+    rootLogicalItemOrdinal: 16,
+    turnItemsView: "summary",
+    turnStatus: "running",
+    jobId,
+    sessionId,
+    displayMode: "live",
+    activeJobOverlay: true,
+  };
+  for (const order of ["turn_first", "snapshot_first"] as const) {
+    const state = {
+      pendingConversations: new Map([[mapKey, [live]]]),
+      activeJobIdsBySession: new Map<string, string>(),
+      turnTimelinesBySession: new Map([[mapKey, createSessionTurnTimeline(mapKey)]]),
+    } as unknown as AppState;
+    const projectTurn = () => {
+      state.turnTimelinesBySession.set(mapKey, upsertTurn({ ...createSessionTurnTimeline(mapKey), threadId: "thr_conversation" }, activeTurn));
+      syncActiveJobConversation(state.pendingConversations, sessionId, jobId, mapKey, activeTurn);
+    };
+    if (order === "turn_first") projectTurn();
+    writePendingSnapshot(state.pendingConversations, state.activeJobIdsBySession, snapshot, mapKey);
+    if (order === "snapshot_first") projectTurn();
+    for (const version of [2, 3, 1]) {
+      writePendingSnapshot(state.pendingConversations, state.activeJobIdsBySession,
+        { ...snapshot, snapshot_version: version }, mapKey);
+      const projected = getConversationsForSession(sessionId, state, mapKey)[0]!;
+      expect(projected).toMatchObject(expected);
+      expect(projected.assistantMessages).toBe(live.assistantMessages);
+      expect(projected.events).toBe(live.events);
+      expect(projected.thinkingBlocks).toBe(live.thinkingBlocks);
+      expect(projected.responseParts).toBe(live.responseParts);
+      expect(state.pendingConversations.get(mapKey)?.[0]?.rootLogicalItemOrdinal).toBeUndefined();
+    }
+    state.turnTimelinesBySession.set(mapKey, upsertTurn({ ...createSessionTurnTimeline(mapKey), threadId: "thr_conversation" },
+      { ...activeTurn, root_logical_item_ordinal: 4, revision: 4 }));
+    expect(getConversationsForSession(sessionId, state, mapKey)[0]?.rootLogicalItemOrdinal).toBe(4);
+    state.turnTimelinesBySession.set(mapKey, createSessionTurnTimeline(mapKey));
+    expect(getConversationsForSession(sessionId, state, mapKey)[0]?.rootLogicalItemOrdinal).toBeUndefined();
+    const before = state.pendingConversations.get(mapKey);
+    expect(() => writePendingSnapshot(state.pendingConversations, state.activeJobIdsBySession,
+      { ...snapshot, thread_id: "thr_other" }, mapKey)).toThrow("范围之外的消息");
+    expect(state.pendingConversations.get(mapKey)).toBe(before);
+  }
+  const freshState = {
+    pendingConversations: new Map<string, ConversationView[]>(),
+    turnTimelinesBySession: new Map([[mapKey, upsertTurn({ ...createSessionTurnTimeline(mapKey), threadId: "thr_conversation" }, activeTurn)]]),
+  } as unknown as AppState;
+  syncActiveJobConversation(freshState.pendingConversations, sessionId, jobId, mapKey, activeTurn);
+  expect(getConversationsForSession(sessionId, freshState, mapKey)[0]).toMatchObject(expected);
+  expect(getConversationsForSession(sessionId, freshState, mapKey)[0]?.assistantMessages).toEqual([]);
+  const existing = new Map([[mapKey, [live]]]);
+  const fresh = freshState.pendingConversations;
+  for (const owner of [{ session_id: "ses_other", job_id: jobId },
+    { session_id: sessionId, job_id: "job_other" }]) {
+    for (const map of [existing, fresh]) {
+      const before = map.get(mapKey);
+      expect(() => syncActiveJobConversation(map, sessionId, jobId, mapKey, {
+        ...activeTurn, ...owner,
+      })).toThrow("活动 Job 与权威 Turn owner 不一致");
+      expect(map.get(mapKey)).toBe(before);
+    }
+  }
 });
 
 test("历史摘要与 replay live Turn 合并时保留回退元数据", () => {
@@ -516,6 +719,7 @@ test("历史摘要与 replay live Turn 合并时保留回退元数据", () => {
   const jobId = "job_replay_metadata_merge";
   const timeline = {
     ...createSessionTurnTimeline(sessionId),
+    threadId: "thr_conversation",
     phase: "ready" as const,
     orderedTurnIds: [jobId],
     turnsById: {
@@ -524,6 +728,8 @@ test("历史摘要与 replay live Turn 合并时保留回退元数据", () => {
         job_id: jobId,
         session_id: sessionId,
         ordinal: 1,
+        source_view_id: "view_history_fixture",
+        source_view_revision: 1,
         revision: 1,
         status: "running" as const,
         created_at: "2026-07-29T00:00:00Z",
@@ -548,6 +754,7 @@ test("历史摘要与 replay live Turn 合并时保留回退元数据", () => {
     userMessage: {
       message_id: "msg_replay_metadata_merge",
       session_id: sessionId,
+      thread_id: "thr_conversation",
       role: "user",
       content: "重新生成",
       attachments: [],
@@ -586,6 +793,7 @@ test("terminal 历史投影替换 live 镜像并保留权威 Item 统计", () =>
   const messageId = "msg_terminal_history_merge";
   const timeline = {
     ...createSessionTurnTimeline(sessionId),
+    threadId: "thr_conversation",
     phase: "ready" as const,
     orderedTurnIds: [jobId],
     turnsById: {
@@ -594,6 +802,8 @@ test("terminal 历史投影替换 live 镜像并保留权威 Item 统计", () =>
         job_id: jobId,
         session_id: sessionId,
         ordinal: 1,
+        source_view_id: "view_history_fixture",
+        source_view_revision: 1,
         revision: 2,
         status: "completed" as const,
         created_at: "2026-09-08T00:00:00Z",
@@ -629,6 +839,7 @@ test("terminal 历史投影替换 live 镜像并保留权威 Item 统计", () =>
     userMessage: {
       message_id: messageId,
       session_id: sessionId,
+      thread_id: "thr_conversation",
       role: "user",
       content: "执行工具",
       attachments: [],
@@ -670,6 +881,7 @@ test("terminal live 与 history Item 数不一致时显式报告协议错误", (
   const turnId = "job_item_count_mismatch";
   const timeline = {
     ...createSessionTurnTimeline(sessionId),
+    threadId: "thr_conversation",
     phase: "ready" as const,
     orderedTurnIds: [turnId],
     turnsById: {
@@ -678,6 +890,8 @@ test("terminal live 与 history Item 数不一致时显式报告协议错误", (
         job_id: turnId,
         session_id: sessionId,
         ordinal: 1,
+        source_view_id: "view_history_fixture",
+        source_view_revision: 1,
         revision: 1,
         status: "completed" as const,
         created_at: "2026-09-08T00:00:00Z",
@@ -688,7 +902,7 @@ test("terminal live 与 history Item 数不一致时显式报告协议错误", (
     },
   };
   const stream: MessageStreamState = {
-    ...createMessageStreamState(sessionId, turnId, "stream_item_count_mismatch"),
+    ...createMessageStreamState(sessionId, turnId, "stream_item_count_mismatch", sessionId),
     streamStatus: "completed",
     connectionStatus: "terminal",
     blocks: [{
@@ -722,6 +936,7 @@ test("同一 terminal Turn 保留历史正文并选择最高序号消息流作�
   const turnId = "job_duplicate_message_stream";
   const timeline = {
     ...createSessionTurnTimeline(sessionId),
+    threadId: "thr_conversation",
     phase: "ready" as const,
     orderedTurnIds: [turnId],
     turnsById: {
@@ -730,6 +945,8 @@ test("同一 terminal Turn 保留历史正文并选择最高序号消息流作�
         job_id: turnId,
         session_id: sessionId,
         ordinal: 1,
+        source_view_id: "view_history_fixture",
+        source_view_revision: 1,
         revision: 1,
         status: "completed" as const,
         created_at: "2026-08-24T00:00:00Z",
@@ -750,12 +967,12 @@ test("同一 terminal Turn 保留历史正文并选择最高序号消息流作�
     },
   };
   const stale: MessageStreamState = {
-    ...createMessageStreamState(sessionId, turnId, "strm_stale"),
+    ...createMessageStreamState(sessionId, turnId, "strm_stale", sessionId),
     lastEventSeq: 12,
     connectionStatus: "gap" as const,
   };
   const terminal: MessageStreamState = {
-    ...createMessageStreamState(sessionId, turnId, "strm_terminal"),
+    ...createMessageStreamState(sessionId, turnId, "strm_terminal", sessionId),
     lastEventSeq: 12,
     streamStatus: "completed" as const,
     connectionStatus: "terminal" as const,
@@ -811,6 +1028,7 @@ test("Job failed 镜像优先于迟到的 open message stream", () => {
     userMessage: {
       message_id: "msg_failed_job_mirror",
       session_id: sessionId,
+      thread_id: "thr_conversation",
       role: "user",
       content: "请执行只读检查",
       attachments: [],
@@ -822,12 +1040,13 @@ test("Job failed 镜像优先于迟到的 open message stream", () => {
     status: "error",
     turnStatus: "failed",
     jobId,
+    turnId: "turn_failed_job_mirror",
     pending: false,
     activeJobOverlay: false,
     source: "pending",
   };
   const staleStream = {
-    ...createMessageStreamState(sessionId, jobId, "strm_stale_open"),
+    ...createMessageStreamState(sessionId, "turn_failed_job_mirror", "strm_stale_open", sessionId),
     lastEventSeq: 99,
     streamStatus: "open" as const,
     connectionStatus: "connected" as const,

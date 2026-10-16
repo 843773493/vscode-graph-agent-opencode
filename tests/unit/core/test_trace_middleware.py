@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from starlette.types import Message, Receive, Scope, Send
 
 from app.api.deps import get_request_id
 from app.core.trace_middleware import (
     GATEWAY_ID_HEADER,
     TraceMiddleware,
     get_current_gateway_id,
+    get_current_navigation_actor,
     get_current_request_id,
     require_current_gateway_id,
     require_current_request_id,
@@ -33,6 +36,10 @@ def _build_client(*, raise_server_exceptions: bool = True) -> TestClient:
     @app.get("/failure")
     async def failure_endpoint() -> None:
         raise RuntimeError("测试请求失败")
+
+    @app.get("/http-exception")
+    async def http_exception_endpoint() -> None:
+        raise HTTPException(status_code=409, detail="业务冲突")
 
     @app.get("/current-request-id")
     async def current_request_id_endpoint() -> APIResponse[dict[str, str]]:
@@ -62,6 +69,17 @@ def test_incoming_request_id_is_used_as_the_single_authority() -> None:
     assert response.status_code == 200
     assert response.headers["X-Request-ID"] == "req_from_client"
     assert response.json()["request_id"] == "req_from_client"
+
+
+def test_http_exception_keeps_its_status_and_request_id() -> None:
+    response = _build_client().get(
+        "/http-exception",
+        headers={"X-Request-ID": "req_http_exception"},
+    )
+
+    assert response.status_code == 409
+    assert response.headers["X-Request-ID"] == "req_http_exception"
+    assert response.json() == {"detail": "业务冲突"}
 
 
 def test_request_id_is_bound_to_request_scope_contextvar() -> None:
@@ -217,3 +235,125 @@ def test_gateway_id_does_not_leak_across_requests() -> None:
 
     second = client.get("/gateway-id")
     assert second.json()["data"]["gateway_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_cancelled_request_resets_trace_contextvars() -> None:
+    scope: Scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/cancel",
+        "raw_path": b"/cancel",
+        "query_string": b"",
+        "headers": [
+            (b"x-request-id", b"req_cancel"),
+            (GATEWAY_ID_HEADER.lower().encode(), b"gateway_cancel"),
+            (b"x-boxteam-navigation-actor", b"actor_cancel"),
+        ],
+        "client": ("127.0.0.1", 1234),
+        "server": ("127.0.0.1", 80),
+    }
+
+    async def app(_: Scope, __: Receive, ___: Send) -> None:
+        assert get_current_request_id() == "req_cancel"
+        assert get_current_gateway_id() == "gateway_cancel"
+        assert get_current_navigation_actor() == "actor_cancel"
+        raise asyncio.CancelledError("请求取消")
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(_: Message) -> None:
+        raise AssertionError("取消的请求不应发送响应")
+
+    with pytest.raises(asyncio.CancelledError, match="请求取消"):
+        await TraceMiddleware(app)(scope, receive, send)
+
+    assert get_current_request_id() is None
+    assert get_current_gateway_id() is None
+    assert get_current_navigation_actor() is None
+
+
+@pytest.mark.asyncio
+async def test_stream_chunk_is_forwarded_and_started_response_error_propagates() -> None:
+    scope: Scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/events",
+        "raw_path": b"/events",
+        "query_string": b"",
+        "headers": [(b"x-request-id", b"req_stream")],
+        "client": ("127.0.0.1", 1234),
+        "server": ("127.0.0.1", 80),
+    }
+    first_chunk_sent = asyncio.Event()
+    release_app = asyncio.Event()
+    messages: list[Message] = []
+
+    async def app(_: Scope, __: Receive, send: Send) -> None:
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/event-stream")],
+            }
+        )
+        await send(
+            {"type": "http.response.body", "body": b"data: first\n\n", "more_body": True}
+        )
+        first_chunk_sent.set()
+        await release_app.wait()
+        raise RuntimeError("流式响应开始后失败")
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: Message) -> None:
+        messages.append(message)
+
+    task = asyncio.create_task(TraceMiddleware(app)(scope, receive, send))
+    try:
+        await asyncio.wait_for(first_chunk_sent.wait(), timeout=1)
+        assert [message["type"] for message in messages] == [
+            "http.response.start",
+            "http.response.body",
+        ]
+        assert dict(messages[0]["headers"])[b"x-request-id"] == b"req_stream"
+        assert messages[1]["body"] == b"data: first\n\n"
+        release_app.set()
+        with pytest.raises(RuntimeError, match="流式响应开始后失败"):
+            await task
+    finally:
+        release_app.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_non_http_scope_is_passed_through() -> None:
+    scope: Scope = {"type": "lifespan", "asgi": {"version": "3.0"}}
+    downstream_scopes: list[Scope] = []
+    messages: list[Message] = []
+
+    async def app(scope: Scope, _: Receive, send: Send) -> None:
+        downstream_scopes.append(scope)
+        await send({"type": "lifespan.startup.complete"})
+
+    async def receive() -> Message:
+        return {"type": "lifespan.startup"}
+
+    async def send(message: Message) -> None:
+        messages.append(message)
+
+    await TraceMiddleware(app)(scope, receive, send)
+
+    assert len(downstream_scopes) == 1
+    assert downstream_scopes[0] is scope
+    assert messages == [{"type": "lifespan.startup.complete"}]

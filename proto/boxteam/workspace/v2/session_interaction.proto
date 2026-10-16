@@ -21,6 +21,7 @@ message MessageObservation {
   repeated google.protobuf.Value attachments = 5;
   google.protobuf.Struct metadata = 6;
   google.protobuf.Timestamp created_at = 7;
+  string thread_id = 8;
 }
 
 message JobStepProgress {

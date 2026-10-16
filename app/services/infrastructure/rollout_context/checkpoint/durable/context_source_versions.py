@@ -12,6 +12,9 @@ from app.services.infrastructure.rollout_context.assembly.manifest import (
     _frozen_source_refs,
 )
 from app.services.infrastructure.rollout_context.assembly.validation import json_text
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    require_historical_scope,
+)
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
 )
@@ -69,11 +72,16 @@ class ContextSourceVersionsStorageMixin:
             "WHERE checkpoint_id=? AND checkpoint_ns=?",
             (intent.source_checkpoint_id, intent.checkpoint_ns),
         ).fetchone()
+        if header is not None:
+            require_historical_scope(
+                connection, *header,
+                current_owner=(intent.owner.session_id, intent.owner.thread_id),
+            )
         if (
             view is None or view[:3] != (intent.epoch_reason, namespace[0] if namespace else None, intent.control_revision)
             or active != (intent.target_view_id,)
             or checkpoint != (intent.checkpoint_ns,)
-            or header != (intent.owner.session_id, intent.owner.thread_id)
+            or header is None
         ):
             raise RuntimeError(
                 "epoch-rebuild-boundary-conflict: owner/namespace/checkpoint/active view 与 intent 不一致: "
@@ -118,6 +126,7 @@ class ContextSourceVersionsStorageMixin:
         session_id: str,
         thread_id: str,
         timestamp: str,
+        source_view_id: str | None = None,
     ) -> None:
         count = connection.execute(
             "SELECT count(*) FROM context_source_control_states "
@@ -129,14 +138,28 @@ class ContextSourceVersionsStorageMixin:
             "JOIN checkpoint_context_source_snapshots AS checkpoint "
             "ON checkpoint.checkpoint_id = transition.source_checkpoint_id "
             "AND checkpoint.checkpoint_ns = transition.checkpoint_ns "
+            "JOIN context_views view ON view.view_id=transition.target_view_id "
+            "JOIN checkpoint_namespace_state namespace ON namespace.checkpoint_ns=transition.checkpoint_ns "
+            "AND namespace.active_branch_id=view.branch_id "
             "WHERE transition.checkpoint_ns = ? AND transition.status = 'pending'",
             (checkpoint_ns,),
         ).fetchone()
-        assembly = pending_assembly if pending_assembly is not None else connection.execute(
-            "SELECT assembly_id FROM context_assemblies WHERE session_id = ? AND thread_id = ? "
-            "AND status IN ('sealed','terminal') ORDER BY rowid DESC LIMIT 1",
-            (session_id, thread_id),
-        ).fetchone()
+        if source_view_id is not None:
+            assembly = connection.execute(
+                "SELECT call.assembly_id FROM context_view_items member "
+                "JOIN item_catalog item ON item.item_id=member.item_id "
+                "JOIN model_calls call ON call.model_call_id=json_extract(item.producer_ref_json,'$.model_call_id') "
+                "WHERE member.view_id=? AND member.visible=1 AND call.assembly_id IS NOT NULL "
+                "ORDER BY member.logical_item_ordinal DESC LIMIT 1", (source_view_id,),
+            ).fetchone()
+        else:
+            assembly = pending_assembly if pending_assembly is not None else connection.execute(
+                "SELECT assembly_id FROM context_assemblies WHERE session_id = ? AND thread_id = ? "
+                "AND status IN ('sealed','terminal') "
+                "AND json_extract(snapshot_json,'$.selection_policy') <> 'summary_candidate' "
+                "ORDER BY rowid DESC LIMIT 1",
+                (session_id, thread_id),
+            ).fetchone()
         connection.execute(
             "INSERT INTO checkpoint_context_source_snapshots "
             "(checkpoint_id, checkpoint_ns, session_id, thread_id, source_count, source_assembly_id, created_at) "
@@ -167,14 +190,15 @@ class ContextSourceVersionsStorageMixin:
             "WHERE checkpoint_id = ? AND checkpoint_ns = ?",
             (checkpoint_id, checkpoint_ns),
         ).fetchone()
-        if header is None or header[:2] != (session_id, thread_id):
+        if header is None:
             raise RuntimeError(
                 "checkpoint-context-state-unavailable: 缺少目标 checkpoint 的精确 owner 控制状态版本"
             )
+        require_historical_scope(connection, *header[:2], current_owner=(session_id, thread_id))
         states = connection.execute(
             f"SELECT {_SOURCE_COLUMNS} FROM checkpoint_context_source_states "
             "WHERE checkpoint_id = ? AND session_id = ? AND thread_id = ?",
-            (checkpoint_id, session_id, thread_id),
+            (checkpoint_id, *header[:2]),
         ).fetchall()
         if len(states) != strict_non_negative_int(header[2], field="checkpoint.source_count"):
             raise RuntimeError("checkpoint-context-state-conflict: 目标控制状态版本不完整")
@@ -199,7 +223,8 @@ class ContextSourceVersionsStorageMixin:
             if (ref_id, revision) in retained
         }
         restored = [
-            (*row[:7], visible.get(row[2]) if row[6] == "untracked" else row[7], *row[8:])
+            (session_id, thread_id, *row[2:7],
+             visible.get(row[2]) if row[6] == "untracked" else row[7], *row[8:])
             for row in states
         ]
         # 目标 checkpoint 之后建立的 registration 冻结为不跟踪，保留单调 CAS，
@@ -253,8 +278,10 @@ class ContextSourceVersionsStorageMixin:
         transition_id = f"epoch-rebuild:{target_view_id}:{control_sequence}"
         connection.execute(
             "UPDATE context_epoch_transitions SET status = 'superseded' "
-            "WHERE checkpoint_ns = ? AND status = 'pending'",
-            (checkpoint_ns,),
+            "WHERE checkpoint_ns = ? AND status = 'pending' AND target_view_id IN "
+            "(SELECT view.view_id FROM context_views view JOIN checkpoint_namespace_state namespace "
+            "ON namespace.active_branch_id=view.branch_id WHERE namespace.checkpoint_ns=?)",
+            (checkpoint_ns, checkpoint_ns),
         )
         connection.execute(
             "INSERT INTO context_epoch_transitions "
@@ -271,12 +298,19 @@ class ContextSourceVersionsStorageMixin:
         connection: sqlite3.Connection,
         checkpoint_ns: str,
     ) -> tuple[object, ...] | None:
-        return connection.execute(
-            "SELECT transition_id, reason, target_view_id, source_checkpoint_id, control_sequence, "
-            "canonical_cut_kind, canonical_cut_item_id "
-            "FROM context_epoch_transitions WHERE checkpoint_ns = ? AND status = 'pending'",
+        rows = connection.execute(
+            "SELECT transition.transition_id,transition.reason,transition.target_view_id,"
+            "transition.source_checkpoint_id,transition.control_sequence,"
+            "transition.canonical_cut_kind,transition.canonical_cut_item_id "
+            "FROM context_epoch_transitions transition JOIN context_views view "
+            "ON view.view_id=transition.target_view_id JOIN checkpoint_namespace_state namespace "
+            "ON namespace.active_branch_id=view.branch_id AND namespace.checkpoint_ns=transition.checkpoint_ns "
+            "WHERE transition.checkpoint_ns=? AND transition.status='pending' LIMIT 2",
             (checkpoint_ns,),
-        ).fetchone()
+        ).fetchall()
+        if len(rows) > 1:
+            raise RuntimeError("当前 branch 存在多个 pending context epoch")
+        return rows[0] if rows else None
 
     def read_context_source_rebuild_rows(
         self,
@@ -307,8 +341,9 @@ class ContextSourceVersionsStorageMixin:
                     "FROM checkpoint_context_source_snapshots WHERE checkpoint_id = ? AND checkpoint_ns = ?",
                     (pending[3], checkpoint_ns),
                 ).fetchone()
-                if header is None or header[:2] != (session_id, thread_id):
+                if header is None:
                     raise RuntimeError("checkpoint-context-state-conflict: rebuild 缺少目标 checkpoint source selection")
+                require_historical_scope(connection, *header[:2], current_owner=(session_id, thread_id))
                 assembly_id = strict_optional_text(header[2], field="checkpoint.source_assembly_id")
                 source_assembly = None
                 if assembly_id is not None:
@@ -385,6 +420,8 @@ class ContextSourceVersionsStorageMixin:
             raise RuntimeError("source-cut-frontier-conflict: canonical cut kind 非法")
         anchor_item = strict_text(pending[6], field="source-cut.canonical_cut_item_id")
         source_view = strict_text(payload.get("source_view_id"), field="source-cut.source_view_id")
+        # cut 锚点属于冻结历史前缀；压缩后未被 Provider 选择的旧 item
+        # 仍可成为合法锚点。来源是否保留由其真实注入前沿决定。
         ordinals = {
             strict_text(item_id, field="source-cut.item_id"): strict_non_negative_int(
                 ordinal, field="context_view_items.logical_item_ordinal",
@@ -421,6 +458,7 @@ class ContextSourceVersionsStorageMixin:
         """在真实 boundary 事务内冻结 cut，避免后来 admission 改写 target membership。"""
         if reason == "compaction":
             return "complete", None
+        # 这里比较历史 membership，不能用 context_selected 拒绝旧历史锚点。
         source_view = strict_text(payload.get("source_view_id"), field="source-cut.source_view_id")
         anchor = strict_optional_text(payload.get("source_anchor"), field="source-cut.source_anchor")
         source_turn = strict_optional_text(payload.get("source_turn_id"), field="source-cut.source_turn_id")

@@ -17,11 +17,14 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutTurnAnchor,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
+from app.services.mapping.itemized.carrier_dedup import (
+    superseded_stream_content_item_ids,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class ContextChain:
-    """一个 checkpoint 对应的逻辑 context boundary 链。"""
+    """同一 snapshot 中 active view 或冻结 checkpoint 的逻辑 boundary 链。"""
 
     message_sequence: int
     ranges: tuple[tuple[str, int, int], ...]
@@ -66,16 +69,27 @@ class RolloutContextReader:
             snapshot=snapshot,
         )
 
+    def active_view_id(self, snapshot: RolloutReadSnapshot) -> str | None:
+        return self._storage.checkpoints.active_view_id(snapshot)
+
     def resolve_chain(
         self,
         snapshot: RolloutReadSnapshot,
-        message_sequence: int,
+        message_sequence: int | None = None,
     ) -> ContextChain:
+        """无序号时读取 active view，指定序号时读取冻结 checkpoint view。"""
         ranges = self._storage.checkpoints.resolve_context_chain_ranges(
             snapshot,
             message_sequence,
         )
-        return ContextChain(message_sequence=message_sequence, ranges=ranges)
+        return ContextChain(
+            message_sequence=(
+                snapshot.manifest.committed_sequence
+                if message_sequence is None
+                else message_sequence
+            ),
+            ranges=ranges,
+        )
 
     def read_full_messages(
         self,
@@ -184,12 +198,20 @@ class RolloutContextReader:
             snapshot=snapshot,
         )
 
+    def read_existing_turn_ids(
+        self, snapshot: RolloutReadSnapshot, turn_ids: Iterable[str]
+    ) -> set[str]:
+        return self._storage.storage.read_existing_turn_ids(snapshot, turn_ids)
+
     def read_turn_projections(
         self,
         snapshot: RolloutReadSnapshot,
+        chain: ContextChain,
         turn_ids: Iterable[str],
     ) -> dict[str, dict[str, object]]:
-        return self._storage.storage.read_turn_projections(snapshot, turn_ids)
+        return self._storage.storage.read_turn_projections(
+            snapshot, self.context_view_id(chain), turn_ids
+        )
 
     def read_projection_records_batch(
         self,
@@ -256,7 +278,7 @@ class RolloutContextReader:
         anchor_ordinal: int | None,
         upper_ordinal: int | None,
         limit: int,
-    ) -> tuple[list[tuple[str, int, int, int]], bool]:
+    ) -> tuple[list[tuple[str, int, int, int, int]], bool]:
         return self._storage.storage.read_context_turn_page(
             snapshot,
             self.context_view_id(chain),
@@ -274,7 +296,7 @@ class RolloutContextReader:
         anchor_ordinal: int,
         before: int,
         after: int,
-    ) -> list[tuple[str, int, int, int]]:
+    ) -> list[tuple[str, int, int, int, int]]:
         return self._storage.storage.read_context_turn_window(
             snapshot,
             self.context_view_id(chain),
@@ -288,7 +310,7 @@ class RolloutContextReader:
         snapshot: RolloutReadSnapshot,
         chain: ContextChain,
         turn_ids: Iterable[str],
-    ) -> list[tuple[str, int, int, int]]:
+    ) -> list[tuple[str, int, int, int, int]]:
         return self._storage.storage.read_context_turn_ids(
             snapshot,
             self.context_view_id(chain),
@@ -320,18 +342,27 @@ class RolloutContextReader:
         anchor_logical_item_ordinal: int | None,
         lower_logical_item_ordinal: int | None,
         upper_logical_item_ordinal: int | None,
+        snapshot_upper_logical_item_ordinal: int | None,
         limit: int,
         execution_id: str | None = None,
     ) -> InternalExecutionHistoryPage:
-        """复用已解析的 view 与 snapshot 读取一页 internal execution history。"""
+        """同一 view/snapshot 先按 typed 内容身份择一，再读取有界正文页。"""
+        view_id = self.context_view_id(chain)
+        carriers = self._storage.storage.read_internal_content_carriers(
+            snapshot, view_id,
+            upper_logical_item_ordinal=snapshot_upper_logical_item_ordinal,
+            execution_id=execution_id,
+        )
+        superseded = superseded_stream_content_item_ids(carriers)
         return self._storage.storage.read_internal_execution_history_page(
             snapshot,
-            self.context_view_id(chain),
+            view_id,
             direction=direction,
             anchor_logical_item_ordinal=anchor_logical_item_ordinal,
             lower_logical_item_ordinal=lower_logical_item_ordinal,
             upper_logical_item_ordinal=upper_logical_item_ordinal,
             limit=limit,
+            selected_item_ids=frozenset(item.item_id for item in carriers if item.item_id not in superseded),
             execution_id=execution_id,
         )
 

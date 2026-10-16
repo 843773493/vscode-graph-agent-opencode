@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -17,8 +19,15 @@ from app.services.infrastructure.resource_platform.derivation.types import (
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
+from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
+    WorkspaceFileResourceRegistry,
+    WorkspaceFileResourceSnapshot,
+)
 from app.services.infrastructure.resource_platform.virtual_resources import (
     parse_resource_uri,
+)
+from app.services.infrastructure.workspace_file_watch_service import (
+    WorkspaceFileWatchService,
 )
 
 
@@ -84,13 +93,32 @@ def layered_workspace(
     return tmp_path
 
 
-def _build(tmp_path: Path, registry: ResourceRegistry):
-    return build_workspace_skill_catalog(tmp_path, registry=registry)
+@pytest.fixture
+def file_registry(layered_workspace: Path) -> WorkspaceFileResourceRegistry:
+    return WorkspaceFileResourceRegistry(
+        workspace_root=layered_workspace,
+        watch_service=WorkspaceFileWatchService(workspace_root=layered_workspace),
+        project_root=Path.cwd(),
+    )
 
 
-def test_catalog_publishes_unique_entry_with_fixed_priority(layered_workspace):
+def _build(
+    tmp_path: Path,
+    registry: ResourceRegistry,
+    file_registry: WorkspaceFileResourceRegistry,
+):
+    return build_workspace_skill_catalog(
+        tmp_path,
+        registry=registry,
+        file_registry=file_registry,
+    )
+
+
+def test_catalog_publishes_unique_entry_with_fixed_priority(
+    layered_workspace, file_registry,
+):
     registry = ResourceRegistry()
-    catalog = _build(layered_workspace, registry)
+    catalog = _build(layered_workspace, registry, file_registry)
 
     by_name = {entry.name: entry for entry in catalog.entries}
     assert set(by_name) == {"shared", "gateway-only", "local-only"}
@@ -102,11 +130,11 @@ def test_catalog_publishes_unique_entry_with_fixed_priority(layered_workspace):
 
 
 def test_catalog_revision_is_immutable_and_registry_cas_is_idempotent(
-    layered_workspace,
+    layered_workspace, file_registry,
 ):
     registry = ResourceRegistry()
-    first = _build(layered_workspace, registry)
-    second = _build(layered_workspace, registry)
+    first = _build(layered_workspace, registry, file_registry)
+    second = _build(layered_workspace, registry, file_registry)
 
     assert first.catalog_revision == second.catalog_revision
     assert first.catalog_snapshot is second.catalog_snapshot
@@ -118,9 +146,11 @@ def test_catalog_revision_is_immutable_and_registry_cas_is_idempotent(
         assert registry.publish(metadata) is metadata
 
 
-def test_catalog_binding_payload_contains_registry_owned_refs(layered_workspace):
+def test_catalog_binding_payload_contains_registry_owned_refs(
+    layered_workspace, file_registry,
+):
     registry = ResourceRegistry()
-    catalog = _build(layered_workspace, registry)
+    catalog = _build(layered_workspace, registry, file_registry)
     assert catalog.catalog_snapshot.display_uri is None
     payload = catalog.catalog_snapshot.payload
     assert isinstance(payload, dict)
@@ -137,22 +167,45 @@ def test_catalog_binding_payload_contains_registry_owned_refs(layered_workspace)
         assert item["entry_identity"].startswith(f"skill-entry:{item['layer']}:")
 
 
-def test_activation_facet_uses_exact_bytes_after_frontmatter(layered_workspace):
+def test_activation_facet_uses_exact_bytes_after_frontmatter(
+    layered_workspace, file_registry,
+):
+    workspace_skill = (
+        layered_workspace / ".boxteam" / "skills" / "shared" / "SKILL.md"
+    )
+    content = (
+        "---\r\nname: shared\r\ndescription: Workspace 版本\r\n---\r\n"
+        "workspace body  \r\nline é\r\n"
+    )
+    workspace_skill.write_bytes(content.encode("utf-8"))
     registry = ResourceRegistry()
-    catalog = _build(layered_workspace, registry)
+    catalog = _build(layered_workspace, registry, file_registry)
     by_name = {entry.name: entry for entry in catalog.entries}
 
     activation = registry.snapshot(by_name["shared"].activation_resource_id)
     assert activation.available
-    # workspace 覆盖后 activation 正文精确保留 frontmatter 之后的 bytes,
-    # 不做任何 BOM/换行/空白规范化。
-    assert activation.payload == {"body": "workspace body\n"}
+    # CRLF、尾部空格与 Unicode 正文均来自解析 metadata 时使用的同一快照。
+    expected_body = "workspace body  \r\nline é\r\n"
+    assert activation.payload == {"body": expected_body}
     assert by_name["shared"].activation_revision == activation.revision
+    expected_raw_revision = "sha256:" + hashlib.sha256(
+        workspace_skill.read_bytes()
+    ).hexdigest()
+    accepted_snapshot = file_registry.snapshot(by_name["shared"].display_uri)
+    assert accepted_snapshot.revision == expected_raw_revision
+    assert accepted_snapshot.content == content
+    metadata = registry.snapshot(by_name["shared"].metadata_resource_id)
+    assert metadata.payload["description"] == "Workspace 版本"
+    assert metadata.source_lineage == (
+        ("skill-source:workspace:shared", expected_raw_revision),
+    )
+    assert activation.source_lineage == metadata.source_lineage
 
-    # 被同名高优先级覆盖的 entry 不是有效 catalog entry,不发布语义快照;
-    # 曾生效过的旧快照由 registry 保留,供 tracked binding 继续消费。
-    with pytest.raises(KeyError):
-        registry.snapshot("skill-entry:gateway:shared:activation")
+    # 覆盖只改变 effective catalog；原 Gateway 来源仍发布 exact facets 供 tracked 冻结。
+    shadowed = registry.snapshot("skill-entry:gateway:shared:activation")
+    assert shadowed.available and shadowed.payload == {"body": "gateway body   \n"}
+    assert shadowed.display_uri != by_name["shared"].display_uri
+    assert by_name["shared"].layer == "workspace"
     gateway_only = registry.snapshot(
         by_name["gateway-only"].activation_resource_id
     )
@@ -160,9 +213,41 @@ def test_activation_facet_uses_exact_bytes_after_frontmatter(layered_workspace):
     assert gateway_only.payload == {"body": "# gateway-only\n"}
 
 
-def test_metadata_facet_payload_hides_locator_and_ignored_fields(layered_workspace):
+def test_required_unavailable_skill_snapshot_never_uses_retained_content(
+    layered_workspace,
+    file_registry,
+    monkeypatch,
+):
+    stale_snapshot = WorkspaceFileResourceSnapshot(
+        uri="boxteam://gateway/gateway_0123456789abcdef0123456789abcdef/resources/skills/shared/SKILL.md",
+        revision="sha256:" + "a" * 64,
+        content=(
+            "---\nname: shared\ndescription: stale retained metadata\n---\n"
+            "stale retained body\n"
+        ),
+        available=False,
+        error="source changed during read",
+    )
+    monkeypatch.setattr(
+        file_registry,
+        "_read_via_reconciler",
+        lambda uri: replace(stale_snapshot, uri=uri),
+    )
+
+    with pytest.raises(RuntimeError, match="Skill 文件来源不可用"):
+        build_workspace_skill_catalog(
+            layered_workspace,
+            registry=ResourceRegistry(),
+            file_registry=file_registry,
+            bundled_skill_groups=(),
+        )
+
+
+def test_metadata_facet_payload_hides_locator_and_ignored_fields(
+    layered_workspace, file_registry,
+):
     registry = ResourceRegistry()
-    catalog = _build(layered_workspace, registry)
+    catalog = _build(layered_workspace, registry, file_registry)
     entry = next(item for item in catalog.entries if item.name == "shared")
 
     metadata = registry.snapshot(entry.metadata_resource_id)
@@ -175,14 +260,16 @@ def test_metadata_facet_payload_hides_locator_and_ignored_fields(layered_workspa
     assert metadata.source_lineage[0][0] == "skill-source:workspace:shared"
 
 
-def test_published_snapshot_does_not_reresolve_current_file(layered_workspace):
+def test_published_snapshot_does_not_reresolve_current_file(
+    layered_workspace, file_registry,
+):
     """已发布快照是冻结事实：当前 URI 指向的文件变化不得影响旧 snapshot。
 
     OpenSpec add-context-injection-lifecycle 6.6：历史 snapshot 不按当前
     URI 重新解析正文；URI 是 locator/provenance，不是内容来源。
     """
     registry = ResourceRegistry()
-    catalog = _build(layered_workspace, registry)
+    catalog = _build(layered_workspace, registry, file_registry)
     entry = next(item for item in catalog.entries if item.name == "shared")
     frozen = registry.snapshot(entry.activation_resource_id)
     frozen_revision = frozen.revision
@@ -194,6 +281,7 @@ def test_published_snapshot_does_not_reresolve_current_file(layered_workspace):
         "---\nname: shared\ndescription: 改写版本\n---\nrewritten body\n",
         encoding="utf-8",
     )
+    file_registry.refresh(entry.display_uri)
 
     # 不重新 build/发布时，registry 只返回已发布快照；
     # 不得按当前 URI 重新读取正文（对象同一性 + revision + payload 全部不变）。
@@ -203,7 +291,7 @@ def test_published_snapshot_does_not_reresolve_current_file(layered_workspace):
     assert reread.payload == frozen_payload
 
     # 只有显式 rebuild 才发布新 revision；先前持有的 snapshot 对象保持冻结。
-    rebuilt = _build(layered_workspace, registry)
+    rebuilt = _build(layered_workspace, registry, file_registry)
     rebuilt_entry = next(item for item in rebuilt.entries if item.name == "shared")
     assert rebuilt_entry.activation_revision != frozen_revision
     assert frozen.revision == frozen_revision

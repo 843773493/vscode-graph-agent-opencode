@@ -11,12 +11,23 @@ runtime 只打开当前 activation schema，否则 fail closed。
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping
+from dataclasses import replace
+from pathlib import Path
 
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    check_resource_target,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.values import (
+    ResourceTargetAction,
+    ResourceTargetContext,
+    ResourceTargetFacts,
 )
 from app.services.infrastructure.rollout_context.activation.common import (
     ASSEMBLY_BINDING_COLUMNS,
@@ -35,8 +46,12 @@ from app.services.infrastructure.rollout_context.activation.common import (
     lineage_manifest,
     lineage_manifest_digest,
 )
+from app.services.infrastructure.rollout_context.activation.lineage import (
+    read_captured_lineage_manifest,
+)
 from app.services.infrastructure.rollout_context.activation.reads import (
     ResourceActivationReadMixin,
+    binding_assembly_id,
 )
 from app.services.infrastructure.rollout_context.activation.schema import (
     require_resource_activation_schema,
@@ -48,6 +63,62 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 
 class ResourceActivationStore(ResourceActivationReadMixin):
     """activation snapshot catalog / resource binding manifest / assembly binding。"""
+
+    def check_fork_target_resources(
+        self, connection: sqlite3.Connection, source: ResourceTargetFacts, target: ResourceTargetContext,
+        *, choices: Mapping[str, ResourceTargetAction], selected_only: bool, captured_node: Path,
+    ) -> None:
+        """技能等资源只导入历史 activation backing，不激活当前 registry 的新修订。"""
+        selection = (
+            " JOIN fork_selected_activations selected ON selected.session_id=snapshot.session_id "
+            "AND selected.thread_id=snapshot.thread_id AND selected.activation_snapshot_id=snapshot.activation_snapshot_id"
+            if selected_only else ""
+        )
+        storage_owner = connection.execute(
+            "SELECT session_id,thread_id FROM database_meta WHERE singleton_id=1",
+        ).fetchone()
+        if storage_owner != (source.owner_session_id, source.owner_thread_id):
+            raise ValueError("source-mismatch: captured activation catalog 不属于 source 存储 owner")
+        require_resource_activation_schema(connection)
+
+        def read_lineage(ref: DetailRef) -> Mapping[str, object]:
+            return read_captured_lineage_manifest(connection, ref, captured_node=captured_node)
+
+        for session_id, thread_id, snapshot_id in connection.execute(
+            "SELECT snapshot.session_id,snapshot.thread_id,snapshot.activation_snapshot_id "
+            "FROM resource_activation_snapshots snapshot" + selection,
+        ):
+            snapshot = self._build_snapshot(
+                self._read_raw_snapshot(
+                    connection, session_id=session_id, thread_id=thread_id,
+                    activation_snapshot_id=snapshot_id,
+                ), read_lineage_manifest=read_lineage,
+            )
+            for binding in snapshot.bindings:
+                available = binding.availability == "available"
+                if available:
+                    if binding.detail_ref is None:
+                        raise ValueError("resource-activation-unavailable: 冻结资源正文缺少 typed detail")
+                    assembly_id = binding_assembly_id(
+                        connection, snapshot, binding, storage_owner=storage_owner,
+                        read_lineage_manifest=read_lineage,
+                    )
+                    binding.detail_ref.require_owner(session_id, thread_id, assembly_id)
+                    body = connection.execute(
+                        "SELECT source_revision,content_length,availability,required FROM context_plan_details WHERE detail_ref=?",
+                        (_detail_ref_key(binding.detail_ref, field="detail_ref"),),
+                    ).fetchone()
+                    if body != (binding.content_hash, binding.content_length, "available", 1):
+                        raise ValueError("source-mismatch: activation 正文与冻结 detail manifest 不一致")
+                resource_uri = source.resource_uri if binding.display_uri is None else binding.display_uri
+                decision = check_resource_target(
+                    replace(source, resource_uri=resource_uri, available=available, required_for_context=available,
+                            revision=binding.revision, content_hash=binding.content_hash,
+                            content_length=binding.content_length),
+                    target, choice=choices.get(resource_uri),
+                )
+                if decision.available and decision.action != "copy_snapshot":
+                    raise ValueError("activation owner 只支持冻结快照导入")
 
     def __init__(
         self, storage, lineage_body: ResourceActivationLineageBodyStore

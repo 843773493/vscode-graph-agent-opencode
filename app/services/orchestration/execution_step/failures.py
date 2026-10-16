@@ -7,6 +7,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from app.agents.checkpoint_recovery import CheckpointRecoveryRejectedError
 from app.core.job_event_bus import EventType
 from app.core.turn_execution_scope import ScopeCancelledError
 from app.services.business.system_reminder_checkpoint_service import (
@@ -228,7 +229,7 @@ async def handle_step_failure(
         if isinstance(error, ScopeCancelledError)
         and error.reason in STRUCTURED_CANCELLATION_REASONS
         else "execution_lost"
-        if isinstance(error, ScopeCancelledError)
+        if isinstance(error, (ScopeCancelledError, CheckpointRecoveryRejectedError))
         else "execution_error"
     )
     failure_message = str(error)
@@ -295,6 +296,7 @@ async def handle_step_failure(
     logger.exception(
         "[agent_execution_service] ERROR published: turn_id=%s",
         turn_id,
+        exc_info=(type(error), error, error.__traceback__),
     )
 
 

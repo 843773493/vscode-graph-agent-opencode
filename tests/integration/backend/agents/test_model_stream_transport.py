@@ -1,18 +1,55 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import contextmanager
+from copy import deepcopy
 from pathlib import Path
+from uuid import UUID, uuid4
 
 import httpx
 import litellm
 import pytest
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langgraph.checkpoint.base import empty_checkpoint
 
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
+from app.agents.providers.wire_finalize import (
+    chat_wire_params,
+    chat_wire_profile,
+    responses_wire_params,
+    responses_wire_profile,
+)
+from app.agents.sealed_assembly_dispatch import sealed_assembly_dispatch_scope
+from app.core.checkpoint_config import build_checkpoint_config
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.identifier import create_uuid_hex
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.runtime.model_stream import ModelStreamTransportController
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceDescriptor,
+    ContextSourceManager,
+)
 from app.testing.model_stream import (
+    ModelCallIdentity,
     ModelStreamHTTPTransport,
-    ModelStreamTransportController,
     StreamScenario,
     build_cassette,
     data_frame,
@@ -20,8 +57,9 @@ from app.testing.model_stream import (
     load_cassette_from_object,
     load_model_stream_config,
     load_scenario,
-    replay_session,
+    replay_model_call,
 )
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 CONFIG_PATH = Path.cwd() / "configs" / "tests" / "model_stream" / "model_stream.jsonc"
 CHAT_BASIC_CONFIG_PATH = Path.cwd() / "configs" / "tests" / "model_stream" / "model_stream_chat_basic.jsonc"
@@ -34,6 +72,130 @@ RESPONSES_PARALLEL_TOOL_CONFIG_PATH = (
     / "model_stream_responses_parallel_tool.jsonc"
 )
 FIXTURE_ROOT = Path.cwd() / "tests" / "fixtures" / "model_stream"
+
+
+class SealedTransportOwner:
+    """每个协议调用使用真实 ingress、canonical checkpoint 与 Saver 封存。"""
+
+    def __init__(self, model, saver: RolloutCheckpointSaver, owner: MutationIntentOwner,
+                 activation: Callable[..., dict[str, object]]) -> None:
+        self.model = model
+        self.saver = saver
+        self.owner = owner
+        self.activation = activation
+        self.accepted: dict[str, object] | None = None
+        self.root_content: object = None
+        self.root_message_id = uuid4().hex
+        self.call_number = 0
+        self.manager = ContextSourceManager(
+            owner=ContextSourceOwnerKey(owner.session_id, owner.thread_id),
+            control_state_port=saver,
+        )
+        self.manager.register(ContextSourceDescriptor(
+            source_id="instruction:transport", source_kind="agent_instructions",
+            name="协议测试说明", description="真实协议测试的系统说明",
+            internal_locator="instruction-producer://transport", root_placement="root_eligible",
+        ), tracking_status="tracked")
+
+    @contextmanager
+    def call_scope(
+        self, messages: str | list[BaseMessage], *, identity: ModelCallIdentity | None = None,
+    ) -> Iterator[list[BaseMessage]]:
+        original = [HumanMessage(content=messages)] if isinstance(messages, str) else deepcopy(messages)
+        users = [message for message in original if isinstance(message, HumanMessage)]
+        if len(users) != 1:
+            raise ValueError("transport fixture 必须持有一个明确的真实 ingress")
+        self.call_number += 1
+        if self.accepted is None or self.root_content != users[0].content:
+            self.root_message_id = uuid4().hex
+            self.root_content = deepcopy(users[0].content)
+            self.accepted = self.saver.accept_turn(
+                self.owner.session_id, thread_id=self.owner.thread_id,
+                accepted_ingress_id=self.root_message_id, payload=users[0].content,
+                root_item_id="item-" + self.root_message_id,
+                acceptance_idempotency_key=f"transport:accept:{self.call_number}",
+                job_id=f"transport-job-{self.call_number}",
+                admission_idempotency_key=f"transport:admission:{self.call_number}",
+            )
+        users[0].id = self.root_message_id
+        users[0].response_metadata["turn_id"] = str(self.accepted["turn_id"])
+        canonical = [message for message in original if not isinstance(message, SystemMessage)]
+        call_id = identity.model_call_id if identity is not None else str(UUID(create_uuid_hex()))
+        if identity is not None and (identity.session_id, identity.thread_id) != (
+            self.owner.session_id, self.owner.thread_id,
+        ):
+            raise ValueError("transport replay identity 与真实 SessionThread owner 不一致")
+        instruction = [message.content for message in original if isinstance(message, SystemMessage)]
+        if any(not isinstance(text, str) for text in instruction):
+            raise TypeError("transport fixture 的系统说明必须是文本")
+        self.manager.observe("instruction:transport", "\n".join(instruction), revision="transport:instruction")
+        admission = self.saver.execution_admission(
+            self.owner.session_id, thread_id=self.owner.thread_id,
+            execution_id=str(self.accepted["initial_execution_id"]),
+        )
+        with (session_thread_owner_scope(self.owner, langgraph_thread_id=self.owner.thread_id),
+              execution_admission_scope(admission, langgraph_thread_id=self.owner.thread_id)):
+            checkpoint = empty_checkpoint()
+            checkpoint["channel_values"] = {"messages": canonical}
+            checkpoint["channel_versions"] = {"messages": str(self.call_number)}
+            self.saver.put(
+                build_checkpoint_config(self.owner.thread_id), checkpoint,
+                {"source": "loop", "step": self.call_number, "parents": {}},
+                {"messages": str(self.call_number)},
+            )
+            responses = isinstance(self.model, BoxteamOpenAIResponsesModel)
+            profile = responses_wire_profile(self.model) if responses else chat_wire_profile(self.model)
+            params = responses_wire_params(self.model, kwargs={}) if responses else chat_wire_params(
+                self.model, stop=None, kwargs={}, stream=True,
+            )
+            creation_key = f"transport:call:{self.call_number}"
+            prepared = self.saver.prepare_context_for_provider(
+                self.owner.session_id, self.owner.thread_id,
+                turn_id=str(self.accepted["turn_id"]), execution_id=admission.execution_id,
+                plan_creation_idempotency_key=creation_key,
+                seal_idempotency_key=creation_key + ":seal", request_messages=canonical,
+                context_source_manager=self.manager,
+                tool_set_supplier=lambda: ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=()),
+                provider_version=profile.identity(), wire_profile=profile, wire_params=params,
+                target_format="responses" if responses else "chat_completions",
+                **self.activation(self.saver, plan_creation_idempotency_key=creation_key, model_call_id=call_id),
+            )
+            snapshot = prepared["snapshot"]
+            assert self.saver.get_context_assembly(
+                self.owner.session_id, self.owner.thread_id, assembly_id=snapshot.assembly_id,
+            ) == snapshot
+            native = self.saver.project_context_plan_to_native(
+                self.owner.session_id, self.owner.thread_id, prepared["plan"],
+            ) if responses else None
+            with sealed_assembly_dispatch_scope(
+                snapshot, callback_model_call_id=call_id, native_projection=native,
+            ):
+                yield prepared["messages"]
+
+    async def astream(
+        self, messages: str | list[BaseMessage], *, identity: ModelCallIdentity | None = None,
+    ) -> AsyncIterator[AIMessageChunk]:
+        with self.call_scope(messages, identity=identity) as projected:
+            async for chunk in self.model.astream(projected):
+                yield chunk
+
+    async def ainvoke(self, messages: list[BaseMessage]) -> AIMessage:
+        with self.call_scope(messages) as projected:
+            return await self.model.ainvoke(projected)
+
+
+@pytest.fixture
+def transport_dispatch(tmp_path: Path, frozen_provider_activation):
+    """多个并发 owner 共用 fixture catalog；每个 owner 独立 admission 与封存。"""
+    def create(model, *, identity: ModelCallIdentity | None = None) -> SealedTransportOwner:
+        session_id = identity.session_id if identity is not None else "ses_" + create_uuid_hex()
+        thread_id = identity.thread_id if identity is not None else "thr_" + create_uuid_hex()
+        sessions = tmp_path / ".boxteam/sessions"
+        seed_catalog_session_bundle(sessions, session_id, main_thread_id=thread_id)
+        saver = RolloutCheckpointSaver(sessions)
+        return SealedTransportOwner(model, saver, MutationIntentOwner(session_id, thread_id), frozen_provider_activation)
+
+    return create
 
 
 def _model() -> BoxteamLiteLLMChatModel:
@@ -67,9 +229,9 @@ def _sequence_model() -> BoxteamLiteLLMChatModel:
     )
 
 
-async def _visible_text(model: BoxteamLiteLLMChatModel, prompt: str) -> str:
+async def _visible_text(model: SealedTransportOwner, prompt: str, *, identity: ModelCallIdentity | None = None) -> str:
     chunks = []
-    async for chunk in model.astream(prompt):
+    async for chunk in model.astream(prompt, identity=identity):
         content = chunk.content
         if isinstance(content, str):
             chunks.append(content)
@@ -83,7 +245,7 @@ async def _visible_text(model: BoxteamLiteLLMChatModel, prompt: str) -> str:
 
 
 async def _responses_reasoning_and_tool(
-    model: BoxteamOpenAIResponsesModel,
+    model: SealedTransportOwner,
 ) -> tuple[str, str]:
     reasoning: list[str] = []
     tool_names: list[str] = []
@@ -118,7 +280,7 @@ async def _responses_reasoning_and_tool(
 
 
 async def _responses_parallel_tool_calls(
-    model: BoxteamOpenAIResponsesModel,
+    model: SealedTransportOwner,
 ) -> dict[str, tuple[str, str]]:
     tool_calls: dict[str, dict[str, str]] = {}
     async for chunk in model.astream(
@@ -163,6 +325,14 @@ def _responses_model() -> BoxteamOpenAIResponsesModel:
     )
 
 
+def _call_identity(owner: int, call: int) -> ModelCallIdentity:
+    return ModelCallIdentity(
+        f"ses_000000004000700080000000000000{owner:02x}",
+        f"thr_000000004000700080000000000001{owner:02x}",
+        f"00000000-4000-7000-8000-000000000{owner:01x}{call:02x}",
+    )
+
+
 def _sequence_scenario() -> StreamScenario:
     interactions: list[object] = []
     for step, text in enumerate(("第一轮", "第二轮")):
@@ -195,8 +365,11 @@ def _sequence_scenario() -> StreamScenario:
             ),
         )
         interaction = dict(cassette.raw["interactions"][0])
-        interaction["replay"] = {"sequence_id": "tool-loop", "step": step}
+        interaction["identity"] = _call_identity(1, step).to_dict()
         interactions.append(interaction)
+    second_owner = [dict(entry, identity=_call_identity(2, call).to_dict())
+                    for call, entry in enumerate(interactions)]
+    interactions.extend(second_owner)
     raw = {
         "schema_version": 1,
         "kind": "model_stream_cassette",
@@ -217,13 +390,13 @@ def _sequence_scenario() -> StreamScenario:
 
 
 @pytest.mark.asyncio
-async def test_litellm_replay_preserves_provider_url_and_parser_chain() -> None:
+async def test_litellm_replay_preserves_provider_url_and_parser_chain(transport_dispatch) -> None:
     config = load_model_stream_config(CHAT_BASIC_CONFIG_PATH)
-    controller = ModelStreamTransportController.install(config)
+    controller = ModelStreamTransportController.configure(config)
     if controller is None:
         raise RuntimeError("model stream replay controller 未安装")
     try:
-        text = await _visible_text(_model(), "测试 LiteLLM replay")
+        text = await _visible_text(transport_dispatch(_model()), "测试 LiteLLM replay")
 
         assert text == "基础回放"
         assert controller.transport.request_urls == (
@@ -235,14 +408,14 @@ async def test_litellm_replay_preserves_provider_url_and_parser_chain() -> None:
 
 
 @pytest.mark.asyncio
-async def test_litellm_replay_is_safe_for_high_concurrency() -> None:
+async def test_litellm_replay_is_safe_for_high_concurrency(transport_dispatch) -> None:
     config = load_model_stream_config(CHAT_BASIC_CONFIG_PATH)
-    controller = ModelStreamTransportController.install(config)
+    controller = ModelStreamTransportController.configure(config)
     if controller is None:
         raise RuntimeError("model stream replay controller 未安装")
     try:
         results = await asyncio.gather(
-            *(_visible_text(_model(), f"并发请求 {index}") for index in range(32))
+            *(_visible_text(transport_dispatch(_model()), f"并发请求 {index}") for index in range(32))
         )
 
         assert results == ["基础回放"] * 32
@@ -255,9 +428,10 @@ async def test_litellm_replay_is_safe_for_high_concurrency() -> None:
 @pytest.mark.asyncio
 async def test_litellm_chat_replay_parses_reasoning_and_tool_loop(
     tmp_path: Path,
+    transport_dispatch,
 ) -> None:
     config = load_model_stream_config(CONFIG_PATH)
-    controller = ModelStreamTransportController.install(config)
+    controller = ModelStreamTransportController.configure(config)
     if controller is None:
         raise RuntimeError("Chat tool model stream replay controller 未安装")
     try:
@@ -265,7 +439,8 @@ async def test_litellm_chat_replay_parses_reasoning_and_tool_loop(
             SystemMessage(content="测试系统消息"),
             HumanMessage(content="请读取 README.md"),
         ]
-        first = await _chat_tool_model().ainvoke(initial_messages)
+        model = transport_dispatch(_chat_tool_model())
+        first = await model.ainvoke(initial_messages)
         assert first.tool_calls[0]["name"] == "read_file"
         assert first.tool_calls[0]["args"] == {"path": "README.md"}
         assert first.content[0]["type"] == "reasoning_content"
@@ -274,7 +449,7 @@ async def test_litellm_chat_replay_parses_reasoning_and_tool_loop(
             "确认内容和当前问题一致后，再发起一次明确的 Chat Completions 工具调用。"
         )
 
-        second = await _chat_tool_model().ainvoke(
+        second = await model.ainvoke(
             [
                 *initial_messages,
                 first,
@@ -298,15 +473,15 @@ async def test_litellm_chat_replay_parses_reasoning_and_tool_loop(
 
 
 @pytest.mark.asyncio
-async def test_litellm_responses_replay_uses_real_aresponses_parser() -> None:
+async def test_litellm_responses_replay_uses_real_aresponses_parser(transport_dispatch) -> None:
     config = load_model_stream_config(RESPONSES_CONFIG_PATH)
-    controller = ModelStreamTransportController.install(config)
+    controller = ModelStreamTransportController.configure(config)
     if controller is None:
         raise RuntimeError("Responses model stream replay controller 未安装")
     try:
         results = await asyncio.gather(
             *(
-                _responses_reasoning_and_tool(_responses_model())
+                _responses_reasoning_and_tool(transport_dispatch(_responses_model()))
                 for _ in range(12)
             )
         )
@@ -329,15 +504,15 @@ async def test_litellm_responses_replay_uses_real_aresponses_parser() -> None:
 
 
 @pytest.mark.asyncio
-async def test_litellm_responses_replay_preserves_interleaved_parallel_tools() -> None:
+async def test_litellm_responses_replay_preserves_interleaved_parallel_tools(transport_dispatch) -> None:
     config = load_model_stream_config(RESPONSES_PARALLEL_TOOL_CONFIG_PATH)
-    controller = ModelStreamTransportController.install(config)
+    controller = ModelStreamTransportController.configure(config)
     if controller is None:
         raise RuntimeError("Responses parallel tool replay controller 未安装")
     try:
         results = await asyncio.gather(
             *(
-                _responses_parallel_tool_calls(_responses_model())
+                _responses_parallel_tool_calls(transport_dispatch(_responses_model()))
                 for _ in range(8)
             )
         )
@@ -392,22 +567,36 @@ async def test_different_cassettes_match_concurrently(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_transport_controller_restores_litellm_async_session() -> None:
+    import litellm.llms.custom_httpx.llm_http_handler as litellm_http_handler
+
+    previous_factory = litellm_http_handler.get_async_httpx_client
     previous_session = litellm.aclient_session
     if previous_session is not None:
         raise RuntimeError("测试开始前 LiteLLM async session 已存在")
     config = load_model_stream_config(CONFIG_PATH)
-    controller = ModelStreamTransportController.install(config)
+    controller = ModelStreamTransportController.configure(config)
     if controller is None:
         raise RuntimeError("model stream replay controller 未安装")
 
-    assert litellm.aclient_session is controller.client
-    await controller.aclose()
+    assert controller.client is None
     assert litellm.aclient_session is previous_session
+    controller.ensure_installed()
+    installed_client = controller.client
+    assert installed_client is not None
+    assert litellm.aclient_session is installed_client
+    controller.ensure_installed()
+    assert controller.client is installed_client
+    await controller.aclose()
+    await controller.aclose()
+    assert installed_client.is_closed
+    assert litellm.aclient_session is previous_session
+    assert litellm_http_handler.get_async_httpx_client is previous_factory
 
 
 @pytest.mark.asyncio
-async def test_litellm_session_sequence_isolated_for_concurrent_tool_loops(
+async def test_litellm_exact_call_identity_isolated_for_concurrent_tool_loops(
     tmp_path: Path,
+    transport_dispatch,
 ) -> None:
     previous_session = litellm.aclient_session
     if previous_session is not None:
@@ -415,28 +604,28 @@ async def test_litellm_session_sequence_isolated_for_concurrent_tool_loops(
     transport = ModelStreamHTTPTransport(
         scenario=_sequence_scenario(),
         mode="replay",
-        replay_policy="session_sequence",
+        replay_policy="call_identity",
         artifact_root=tmp_path,
     )
     client = httpx.AsyncClient(transport=transport)
     litellm.aclient_session = client
 
-    async def run_session(session_id: str) -> tuple[str, str]:
-        with replay_session(session_id):
-            model = _sequence_model()
-            return (
-                await _visible_text(model, "执行第一轮"),
-                await _visible_text(model, "执行第二轮"),
-            )
+    async def run_session(owner: int) -> tuple[str, str]:
+        model = transport_dispatch(_sequence_model(), identity=_call_identity(owner, 0))
+        with replay_model_call(_call_identity(owner, 0)):
+            first = await _visible_text(model, "执行第一轮", identity=_call_identity(owner, 0))
+        with replay_model_call(_call_identity(owner, 1)):
+            second = await _visible_text(model, "执行第二轮", identity=_call_identity(owner, 1))
+        return first, second
 
     try:
         results = await asyncio.gather(
-            run_session("session-a"),
-            run_session("session-b"),
+            run_session(1),
+            run_session(2),
         )
     finally:
         litellm.aclient_session = previous_session
         await client.aclose()
 
     assert results == [("第一轮", "第二轮"), ("第一轮", "第二轮")]
-    assert transport.hit_counts == {0: 2, 1: 2}
+    assert transport.hit_counts == {0: 1, 1: 1, 2: 1, 3: 1}

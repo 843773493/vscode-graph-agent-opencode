@@ -64,12 +64,14 @@ class RegisteredToolSetProducer:
             for schema in json.loads(self._structured_tools_json)
         )
 
-    def snapshot(self, include_structured_output: bool = False) -> ToolSetSnapshot:
+    def snapshot(self, include_structured_output: bool = False, *, tools_enabled: bool = True) -> ToolSetSnapshot:
         if self._structured_tools_json is None:
             raise RuntimeError("ToolSet producer 尚未绑定图结构化输出注册表")
         selection = self._selection_reader.snapshot(self._agent_id)
         if not isinstance(selection, ToolSelectionSnapshot) or selection.agent_id != self._agent_id:
             raise TypeError("ToolSelectionReader 返回了不匹配的原子选择快照")
+        if not tools_enabled:
+            return ToolSetSnapshot(selection_revision=selection.revision, tools=(), policy_keys=())
         execution = selection.execution_overrides
         visibility = selection.model_visibility_overrides
         visible = []

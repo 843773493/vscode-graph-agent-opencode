@@ -419,6 +419,7 @@ export default function RequestLogPanel({
   error,
   loadedAt,
   sessionId,
+  scopeKey,
   active,
   onRetryRequestLogs,
 }: {
@@ -427,6 +428,7 @@ export default function RequestLogPanel({
   error: string | null;
   loadedAt: string | null;
   sessionId: string;
+  scopeKey: string;
   active: boolean;
   onRetryRequestLogs: () => void;
 }) {
@@ -436,7 +438,7 @@ export default function RequestLogPanel({
   );
   const { firstVisibleIndex, handleListScroll, listRef } = useScrollWindow({
     active,
-    sessionId,
+    scopeKey,
     itemCount: displayLogs.length,
     initialVisibleCount: INITIAL_VISIBLE_REQUEST_LOG_COUNT,
     olderBatchSize: OLDER_REQUEST_LOG_BATCH_SIZE,

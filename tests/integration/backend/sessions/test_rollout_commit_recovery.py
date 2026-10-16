@@ -9,10 +9,20 @@ from pathlib import Path
 
 import pytest
 
+from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex
+from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.enums import PayloadKind
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.hashing import sha256_jcs
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
 )
 from tests.harness.python.run_context import TestRunContext
 
@@ -37,14 +47,18 @@ class CommittedRollout:
 def committed_rollout(
     request: pytest.FixtureRequest,
     session_bundle_factory: Callable[[Path, str], Path],
+    frozen_provider_wire,
+    frozen_provider_activation,
 ) -> CommittedRollout:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
     session_id = f"ses_{create_uuid_hex()}"
-    session_node = session_bundle_factory(sessions, session_id)
+    session_bundle_factory(sessions, session_id)
     saver = RolloutCheckpointSaver(sessions)
+    owner = saver.forks.source.resolve_main_thread_owner(session_id)
     accepted = saver.accept_turn(
         session_id,
+        thread_id=owner.thread_id,
         accepted_ingress_id="ingress-1",
         acceptance_idempotency_key="acceptance-1",
         job_id="job-1",
@@ -52,14 +66,39 @@ def committed_rollout(
         payload="已提交的用户输入不能在损坏恢复时丢失",
         payload_kind=PayloadKind.TEXT,
     )
+    admission = saver.execution_admission(
+        session_id, thread_id=owner.thread_id, execution_id=str(accepted["initial_execution_id"]),
+    )
+    with (session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id),
+          execution_admission_scope(admission, langgraph_thread_id=owner.thread_id)):
+        prepared = saver.prepare_context_for_provider(
+            session_id, owner.thread_id, turn_id=admission.turn_id, execution_id=admission.execution_id,
+            plan_creation_idempotency_key="commit-recovery-create", seal_idempotency_key="commit-recovery-seal",
+            context_source_manager=ContextSourceManager(
+                owner=ContextSourceOwnerKey(session_id, owner.thread_id), control_state_port=saver,
+            ),
+            tool_set_supplier=lambda: ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=()),
+            **frozen_provider_wire("commit-recovery", "chat_completions"),
+            **frozen_provider_activation(saver, plan_creation_idempotency_key="commit-recovery-create"),
+        )
+        saver.register_model_call(
+            session_id, thread_id=owner.thread_id, execution_id=admission.execution_id,
+            model_call_id=prepared["snapshot"].model_call_id, attempt=1,
+            provider="commit-recovery", assembly_id=prepared["assembly_id"],
+        )
+        saver.update_model_call_outcome(
+            session_id, thread_id=owner.thread_id, model_call_id=prepared["snapshot"].model_call_id,
+            outcome="completed_empty", dispatch_state="completed",
+        )
     saver.converge_execution(
         session_id,
+        thread_id=owner.thread_id,
         turn_id=accepted["turn_id"],
         execution_id=accepted["initial_execution_id"],
         outcome="completed_empty",
         turn_status="completed_empty",
     )
-    root = session_node / "rollout"
+    root = saver._storage.storage.root(session_id, thread_id=owner.thread_id)
     return CommittedRollout(
         sessions, session_id, root, (root / "rollout.jsonl").read_bytes()
     )
@@ -148,6 +187,7 @@ def test_valid_commit_chain_reclaims_only_uncommitted_tail(
         ).fetchall()
     assert commits == [
         ("acceptance", "item_bearing", 0, len(rollout.committed), 1),
+        ("assembly_sealed", "metadata_only", len(rollout.committed), len(rollout.committed), 0),
         (
             "terminal_convergence",
             "metadata_only",

@@ -20,9 +20,10 @@ export function ChatTurnUserSection({
   onRemovePending,
   onChangePendingPolicy,
   onOpenAttachment,
+  onForkConversation,
 }: Pick<
   ChatTurnHandlers,
-  "onRemovePending" | "onChangePendingPolicy"
+  "onRemovePending" | "onChangePendingPolicy" | "onForkConversation"
 > & {
   apiPort: number;
   workspaceId?: string | null;
@@ -65,7 +66,7 @@ export function ChatTurnUserSection({
   const canShowActionMenu = Boolean(
     userMessage
     && !actions.editing
-    && (canEditUserMessage || canInspectRawMessage),
+    && (canEditUserMessage || canInspectRawMessage || (conversation.displayMode === "history" && conversation.turnId && onForkConversation)),
   );
   const rawMessageAriaLabel = userMessage?.content.trim()
     ? "内部用户消息，右键展开原始消息"
@@ -147,6 +148,23 @@ export function ChatTurnUserSection({
               onClose={() => setActionMenuOpen(false)}
             >
               <div className="chat-user-action-menu" role="menu" aria-label="用户消息操作">
+                {conversation.displayMode === "history" && conversation.turnId && onForkConversation ? (
+                  <button type="button" role="menuitem" className="chat-user-action-menu-item"
+                    title="从此消息创建分支" aria-label="从此消息创建分支"
+                    onClick={() => {
+                      if (!workspaceId || !conversation.threadId || !conversation.sourceViewId || conversation.sourceViewRevision === undefined) {
+                        throw new Error("历史消息缺少实际读取的来源快照");
+                      }
+                      setActionMenuOpen(false);
+                      onForkConversation({
+                        workspaceId, sessionId: conversation.sessionId, threadId: conversation.threadId,
+                        sourceViewId: conversation.sourceViewId, sourceViewRevision: conversation.sourceViewRevision,
+                        turnId: conversation.turnId,
+                      });
+                    }}>
+                    <span className="codicon codicon-git-pull-request" aria-hidden="true" />
+                  </button>
+                ) : null}
                 {canEditUserMessage ? (
                   <button
                     type="button"
@@ -181,8 +199,7 @@ export function ChatTurnUserSection({
             className="chat-request-edit-form"
             onSubmit={(event) => {
               event.preventDefault();
-              if (conversation.pending) void actions.executePendingEdit();
-              else void actions.executeReplay("edit_and_continue", actions.editContent.trim());
+              void actions.executeReplay("edit_and_continue", actions.editContent.trim());
             }}
           >
             <textarea
@@ -271,9 +288,7 @@ export function ChatTurnUserSection({
               >
                 {actions.actionRunning
                   ? "正在保存..."
-                  : conversation.pending
-                    ? "保存"
-                    : "编辑并从此处继续"}
+                  : "编辑并从此处继续"}
               </button>
             </div>
           </form>
@@ -319,7 +334,6 @@ export function ChatTurnUserSection({
           <PendingRequestActions
             deliveryPolicy={conversation.deliveryPolicy}
             disabled={actions.actionRunning}
-            onEdit={actions.startEditing}
             onRemove={() => {
               void actions.executePendingAction(
                 () => onRemovePending(userMessage.message_id),

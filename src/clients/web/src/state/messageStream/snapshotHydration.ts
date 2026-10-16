@@ -80,7 +80,7 @@ export function applySnapshotState(
   snapshot: MessageStreamSnapshot,
   identity: MessageStreamSnapshotIdentity,
 ): MessageStreamState {
-  const next = createMessageStreamState(current.sessionId, current.turnId, identity.turn_stream_id);
+  const next = createMessageStreamState(current.sessionId, current.turnId, identity.turn_stream_id, current.sessionCacheKey);
   next.threadId = identity.thread_id;
   next.workspaceId = snapshot.workspace_id ?? identity.workspace_id ?? current.workspaceId;
   next.lastEventSeq = snapshot.snapshot_seq;

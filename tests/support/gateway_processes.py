@@ -192,6 +192,8 @@ def start_gateway_process(
             "127.0.0.1",
             "--port",
             str(port),
+            "--timeout-graceful-shutdown",
+            "2",
             "--log-level",
             "warning",
         ],

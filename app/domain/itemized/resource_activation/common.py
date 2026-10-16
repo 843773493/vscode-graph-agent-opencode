@@ -508,7 +508,12 @@ class SourceLineageRef:
 
 @dataclass(frozen=True, slots=True)
 class ResourceActivationPolicySnapshot:
-    """不可变的完整冻结 policy；未选 kind 的 override 也必须可精确恢复。"""
+    """不可变的完整冻结 policy；未选 kind 的 override 也必须可精确恢复。
+
+    hash 是 to_dict 完整内容的 sha256_jcs；revision 是领域/版本前缀
+    resource-activation-policy:v1: 与同一摘要组成的内容身份，可比较
+    policy 是否相同。两者均随冻结内容确定，不是递增序号或时间戳。
+    """
 
     default_boundary: ResourceActivationBoundary
     boundaries: Mapping[str, ResourceActivationBoundary]

@@ -36,7 +36,7 @@ from app.gateway.federation.errors import (
 from app.gateway.federation.identity import FederationPeerIdentity
 
 GrantKind = Literal["discovery", "operation"]
-OperationKind = Literal["send", "read", "wait", "reply"]
+OperationKind = Literal["send", "read", "wait", "reply", "fork_source", "fork_target"]
 
 # clock skew 与传输重放余量：wait grant 的剩余寿命必须覆盖它加 effective timeout。
 GRANT_CLOCK_SKEW_SECONDS = 5.0
@@ -129,18 +129,62 @@ class ContextGrantTarget:
         }
 
 
-def decode_grant_target(raw: object) -> GrantTarget | ContextGrantTarget:
+@dataclass(frozen=True, slots=True)
+class ForkGrantTarget:
+    """fork capability 的精确领域 URI；来源导出和目标创建分别授权。"""
+
+    gateway_id: str
+    uri: str
+    fork_role: Literal["source", "target"]
+
+    def __post_init__(self) -> None:
+        from app.core.resource_uri import parse_resource_uri, parse_session_thread_uri
+
+        if self.fork_role not in {"source", "target"}:
+            raise ValueError("fork grant role 必须是 source 或 target")
+        resource = parse_resource_uri(self.uri, local_gateway_id=self.gateway_id)
+        if resource.gateway_authority is not None or resource.scope != "workspace":
+            raise ValueError("fork grant URI 不属于固定 audience Workspace")
+        if self.fork_role == "source":
+            parse_session_thread_uri(self.uri, local_gateway_id=self.gateway_id)
+        elif resource.kind not in {"workspace", "session", "folder"}:
+            raise ValueError("fork target grant 必须指向 Workspace/Session 容器")
+
+    def to_payload(self) -> dict[str, object]:
+        return {"gateway_id": self.gateway_id, "uri": self.uri, "fork_role": self.fork_role}
+
+
+def decode_grant_target(raw: object) -> GrantTarget | ContextGrantTarget | ForkGrantTarget:
     """grant 和实际 RPC 请求共用同一闭集 decoder，不猜测或补齐目标字段。"""
     if not isinstance(raw, dict):
         raise FederationError(FEDERATION_MALFORMED_FRAME, "grant target 必须是对象")
     if set(raw) == {"gateway_id", "workspace_id", "session_id"}:
         return GrantTarget(**{key: _require_str(raw, key) for key in raw})
+    if set(raw) == {"gateway_id", "uri", "fork_role"}:
+        try:
+            return ForkGrantTarget(**{key: _require_str(raw, key) for key in raw})
+        except (TypeError, ValueError) as error:
+            raise FederationError(FEDERATION_MALFORMED_FRAME, str(error)) from error
     if set(raw) == {"gateway_id", "resource_identity", "uri", "scope"}:
         try:
             return ContextGrantTarget(**{key: _require_str(raw, key) for key in raw})
         except (TypeError, ValueError) as error:
             raise FederationError(FEDERATION_MALFORMED_FRAME, str(error)) from error
     raise FederationError(FEDERATION_MALFORMED_FRAME, "grant target 字段闭集不一致")
+
+
+def validate_grant_operation(
+    target: GrantTarget | ContextGrantTarget | ForkGrantTarget, operation: OperationKind,
+) -> None:
+    """operation 与 typed target 在所有签发及 relay 入口共用一个闭集。"""
+    if isinstance(target, ForkGrantTarget):
+        valid = operation == "fork_" + target.fork_role
+    elif isinstance(target, ContextGrantTarget):
+        valid = operation == "read"
+    else:
+        valid = operation in {"send", "read", "wait", "reply"}
+    if not valid:
+        raise FederationError(FEDERATION_GRANT_KIND_MISMATCH, "grant operation 与 typed target capability 不一致")
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,7 +202,7 @@ class FederationGrant:
     issued_at: datetime
     principal_ref: str
     request_hash: str
-    target: GrantTarget | ContextGrantTarget | None = None
+    target: GrantTarget | ContextGrantTarget | ForkGrantTarget | None = None
     operation: OperationKind | None = None
     source_gateway_id: str | None = None
     operation_invocation_id: str | None = None
@@ -208,12 +252,14 @@ class FederationGrant:
                 "read",
                 "wait",
                 "reply",
+                "fork_source",
+                "fork_target",
             ):
                 raise FederationError(
                     FEDERATION_GRANT_KIND_MISMATCH, f"未知 operation: {operation!r}"
                 )
             raw_target = raw.get("target")
-            target: GrantTarget | ContextGrantTarget | None = None
+            target: GrantTarget | ContextGrantTarget | ForkGrantTarget | None = None
             if raw_target is not None:
                 target = decode_grant_target(raw_target)
             raw_path = raw.get("transit_path")
@@ -297,7 +343,7 @@ def sign_grant(
     principal_ref: str,
     request_preimage: dict[str, object],
     lifetime_seconds: float,
-    target: GrantTarget | ContextGrantTarget | None = None,
+    target: GrantTarget | ContextGrantTarget | ForkGrantTarget | None = None,
     operation: OperationKind | None = None,
     source_gateway_id: str | None = None,
     operation_invocation_id: str | None = None,
@@ -307,6 +353,8 @@ def sign_grant(
 
     if grant_kind == "operation" and (target is None or operation is None):
         raise ValueError("operation grant 必须同时提供 target 与 operation")
+    if target is not None and operation is not None:
+        validate_grant_operation(target, operation)
     if grant_kind == "discovery" and (target is not None or operation is not None):
         raise ValueError("discovery grant 不得绑定 operation 或 target")
     if lifetime_seconds <= 0:
@@ -435,6 +483,7 @@ __all__ = [
     "MAX_GATEWAY_HOPS",
     "MAX_TRANSIT_GATEWAYS",
     "ContextGrantTarget",
+    "ForkGrantTarget",
     "FederationGrant",
     "GrantKind",
     "GrantTarget",

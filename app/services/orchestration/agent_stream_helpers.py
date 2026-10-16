@@ -4,7 +4,6 @@ import json
 from typing import Any
 
 from app.agents.tool_result_text import serialize_tool_value
-from app.schemas.internal_v2.message import AttachmentRef
 
 CHAT_MODEL_EVENT_NAMES = {
     "ChatOpenAI",
@@ -57,32 +56,3 @@ def unwrap_json_string_tool_result(final_text: str, last_tool_result_text: str) 
 
 def is_tracked_chat_model_event(name: str) -> bool:
     return name in CHAT_MODEL_EVENT_NAMES
-
-
-def build_human_response_metadata(
-    *,
-    message_id: str,
-    display_content: str | None,
-    attachments: list[AttachmentRef],
-    message_created_at: str,
-    message_metadata: dict[str, object],
-    attachment_diagnostics: list[dict[str, object]] | None = None,
-) -> dict[str, object]:
-    metadata: dict[str, object] = {
-        "message_id": message_id,
-        "created_at": message_created_at,
-        "updated_at": message_created_at,
-        "message_metadata": dict(message_metadata),
-    }
-    if display_content is not None:
-        metadata["display_content"] = display_content
-    if attachments:
-        metadata["attachments"] = [
-            attachment.model_dump(mode="json", exclude={"data_url"})
-            for attachment in attachments
-        ]
-    if attachment_diagnostics:
-        metadata["attachment_diagnostics"] = [
-            dict(diagnostic) for diagnostic in attachment_diagnostics
-        ]
-    return metadata

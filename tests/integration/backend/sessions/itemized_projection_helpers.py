@@ -16,6 +16,7 @@ from langgraph.checkpoint.base import empty_checkpoint
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex
+from app.core.resource_uri import thread_resource_uri
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import contribution_content_hash, sha256_jcs
@@ -30,6 +31,37 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from tests.harness.python.run_context import TestRunContext
+
+
+async def copy_rollout_snapshot(
+    saver: RolloutCheckpointSaver, source_session_id: str, target_session_id: str, *,
+    mode: str = "full_rollout_copy", anchor_item_id: str | None = None,
+    relationship: str = "detached", target_thread_id: str | None = None,
+):
+    """存储专项经真实 preflight/capture/install 复制到 fixture 已创建的空 Thread。"""
+    storage = saver._storage.storage
+    source_thread_id = storage.main_thread_id(source_session_id)
+    target_thread_id = target_thread_id or storage.main_thread_id(target_session_id)
+    with storage.read_connection(source_session_id, source_thread_id, "") as connection:
+        view, revision = connection.execute(
+            "SELECT branch.head_view_id,meta.history_view_revision FROM checkpoint_namespace_state namespace "
+            "JOIN branches branch ON branch.branch_id=namespace.active_branch_id "
+            "JOIN database_meta meta ON meta.singleton_id=1 WHERE namespace.checkpoint_ns=''",
+        ).fetchone()
+    source_owner = MutationIntentOwner(source_session_id, source_thread_id)
+    point = await saver.forks.source.preflight_fork(
+        source_session_id=source_session_id, source_owner=source_owner, mode=mode,
+        source_view_id=view, source_view_revision=revision, anchor_item_id=anchor_item_id,
+    )
+    return await saver.forks.afork(
+        source_session_id=source_session_id, target_session_id=target_session_id,
+        source_uri=thread_resource_uri(storage._path_resolver.catalog_store.get_node(source_session_id).workspace_id,
+                                       source_session_id, source_thread_id),
+        source_owner=source_owner, target_owner=MutationIntentOwner(target_session_id, target_thread_id),
+        mode=mode, relationship=relationship, source_preflight=point,
+        source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
+        anchor_item_id=point.anchor_item_id,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -166,7 +198,6 @@ def register_projection_draft(
     draft = replace(draft, plan_creation_idempotency_key=f"create:{draft.plan_id}")
     registered = saver.create_context_plan(session_id, draft)
     assert registered.plan_state == "unsealed"
-    assert registered.registration_origin == "runtime"
     return draft
 
 

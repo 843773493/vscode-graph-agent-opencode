@@ -35,7 +35,7 @@
               "additionalProperties": false,
               "properties": {
                 "policy": {
-                  "enum": ["request_reusable", "session_sequence"]
+                  "enum": ["request_reusable", "call_identity"]
                 }
               }
             },

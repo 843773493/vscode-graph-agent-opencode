@@ -9,6 +9,7 @@ session/thread/name 复用生产 CSM 的同一 load_skill(mode="untrack") mutati
 from __future__ import annotations
 
 from app.core.exceptions import NotFoundError
+from app.core.identifier import create_uuid_hex
 from app.schemas.internal_v2.session import (
     SessionSkillUntrackErrorDTO,
     SessionSkillUntrackResultDTO,
@@ -45,69 +46,74 @@ class SessionSkillTrackingService:
         thread_id: str,
         name: str,
     ) -> SessionSkillUntrackResultDTO:
-        main_thread_id = self._session_service.path_resolver.main_thread_id(session_id)
-        owner = ContextSourceOwnerKey(session_id=session_id, thread_id=thread_id)
-        if thread_id == session_id:
-            # 裸 session_id 不是合法 thread 身份，提前拒绝保证零状态变化。
-            raise ValueError(
-                "SessionThread 必须使用 catalog 冻结的真实 thread_id，"
-                f"不能把裸 session_id 当作 thread_id: {session_id}"
+        operation_id = "skill-untrack:" + create_uuid_hex(namespace="context_control/untrack")
+        async with self._session_service.session_context_control_admission(
+            session_id, thread_id, operation_id=operation_id,
+            payload={"kind": "skill_untrack", "name": name}, recovery_ref=operation_id,
+        ):
+            main_thread_id = self._session_service.path_resolver.main_thread_id(session_id)
+            owner = ContextSourceOwnerKey(session_id=session_id, thread_id=thread_id)
+            if thread_id == session_id:
+                # 裸 session_id 不是合法 thread 身份，提前拒绝保证零状态变化。
+                raise ValueError(
+                    "SessionThread 必须使用 catalog 冻结的真实 thread_id，"
+                    f"不能把裸 session_id 当作 thread_id: {session_id}"
+                )
+            # 错误 thread 零状态变化：会话不存在（404）或 thread 未在权威
+            # thread_catalog 登记（404）都在触碰 rollout owner 之前失败。
+            child_threads = await self._session_service.list_child_threads(session_id)
+            if thread_id != main_thread_id and thread_id not in {
+                item.thread_id for item in child_threads.items
+            }:
+                raise NotFoundError(
+                    f"SessionThread 不存在: session_id={session_id}, "
+                    f"thread_id={thread_id}"
+                )
+            if not self._checkpointer.context_source_control_owner_available(owner):
+                # 合成 SessionThread 没有 durable ContextStore owner，不允许为它
+                # 伪造持久化 untrack。
+                raise NotFoundError(
+                    "SessionThread 没有可用的 ContextStore owner: "
+                    f"session_id={session_id}, thread_id={thread_id}"
+                )
+            try:
+                # 与生产 agent 装配同一条 rehydration 链：owner + 唯一
+                # ContextSourceControlStatePort 恢复控制状态，再调用同一 mutation。
+                manager = ContextSourceManager(
+                    owner=owner,
+                    control_state_port=self._checkpointer,
+                )
+                receipt = manager.load_skill(name, mode="untrack")
+            except ContextSourceTrackingStateConflict as error:
+                return self._error_result(
+                    session_id,
+                    thread_id,
+                    name,
+                    error.code,
+                    str(error),
+                )
+            except KeyError as error:
+                return self._error_result(
+                    session_id,
+                    thread_id,
+                    name,
+                    "skill-not-found",
+                    str(error),
+                )
+            return SessionSkillUntrackResultDTO(
+                session_id=session_id,
+                thread_id=thread_id,
+                name=receipt.name,
+                mode="untrack",
+                status=receipt.status,
+                display_uri=receipt.display_uri,
+                revision=receipt.revision,
+                content_hash=receipt.content_hash,
+                append_status=receipt.append_status,
+                tracked=receipt.tracked,
+                queued=receipt.queued,
+                error=None,
             )
-        # 错误 thread 零状态变化：会话不存在（404）或 thread 未在权威
-        # thread_catalog 登记（404）都在触碰 rollout owner 之前失败。
-        child_threads = await self._session_service.list_child_threads(session_id)
-        if thread_id != main_thread_id and thread_id not in {
-            item.thread_id for item in child_threads.items
-        }:
-            raise NotFoundError(
-                f"SessionThread 不存在: session_id={session_id}, "
-                f"thread_id={thread_id}"
-            )
-        if not self._checkpointer.context_source_control_owner_available(owner):
-            # 合成 SessionThread 没有 durable ContextStore owner，不允许为它
-            # 伪造持久化 untrack。
-            raise NotFoundError(
-                "SessionThread 没有可用的 ContextStore owner: "
-                f"session_id={session_id}, thread_id={thread_id}"
-            )
-        try:
-            # 与生产 agent 装配同一条 rehydration 链：owner + 唯一
-            # ContextSourceControlStatePort 恢复控制状态，再调用同一 mutation。
-            manager = ContextSourceManager(
-                owner=owner,
-                control_state_port=self._checkpointer,
-            )
-            receipt = manager.load_skill(name, mode="untrack")
-        except ContextSourceTrackingStateConflict as error:
-            return self._error_result(
-                session_id,
-                thread_id,
-                name,
-                error.code,
-                str(error),
-            )
-        except KeyError as error:
-            return self._error_result(
-                session_id,
-                thread_id,
-                name,
-                "skill-not-found",
-                str(error),
-            )
-        return SessionSkillUntrackResultDTO(
-            session_id=session_id,
-            thread_id=thread_id,
-            name=receipt.name,
-            mode="untrack",
-            status=receipt.status,
-            display_uri=receipt.display_uri,
-            revision=receipt.revision,
-            content_hash=receipt.content_hash,
-            append_status=receipt.append_status,
-            tracked=receipt.tracked,
-            queued=receipt.queued,
-            error=None,
-        )
 
     @staticmethod
     def _error_result(

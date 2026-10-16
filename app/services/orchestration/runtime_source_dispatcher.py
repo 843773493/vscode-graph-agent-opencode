@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from contextlib import closing
 from typing import cast
@@ -28,6 +29,7 @@ from app.prompting.validation import validate_internal_message
 from app.schemas.internal_v2.job import JobDispatchSnapshotDTO, JobDispatchStatus
 from app.schemas.internal_v2.message import MessageRunAccepted
 from app.schemas.internal_v2.pending_request import DeliveryPolicy
+from app.services.business.job.service import JobState
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -43,6 +45,22 @@ class RuntimeSourceDispatcher:
         self._sessions = session_service
         self._jobs = job_service
         self._dispatch_locks = KeyLockPool()
+
+    async def can_restart_before_provider(self, job: JobState) -> bool:
+        """未准备 Provider 的原 runtime 准入留给既有 wakeup 恢复，不重放已封存调用。"""
+        binding = job.execution_binding
+        if not isinstance(binding, InternalExecutionIntent):
+            return False
+        wakeup = await asyncio.to_thread(
+            self._saver.runtime_wakeup_before_provider,
+            job.session_id, job.thread_id, execution_id=binding.execution_id,
+            job_id=job.job_id, admission_idempotency_key=binding.admission_idempotency_key,
+        )
+        if wakeup is None:
+            return False
+        if binding.message_id != job.message_id or wakeup.source_item_id != binding.notice_item_id:
+            raise RuntimeError("未派发 runtime Job 与冻结 wakeup 消息 identity 不一致")
+        return True
 
     async def submit(
         self, session_id: str, thread_id: str, message: PreparedInternalMessage,
@@ -168,7 +186,7 @@ class RuntimeSourceDispatcher:
                     message_metadata=dict(message.response_metadata),
                     delivery_policy=cast(DeliveryPolicy, wakeup.delivery_policy),
                 )
-            accepted = MessageRunAccepted(message_id=message_id, job_id=wakeup.job_id,
+            accepted = MessageRunAccepted(message_id=message_id, job_id=wakeup.job_id, turn_id=None,
                                           status=dispatch.job_status, dispatch=dispatch, thread_id=wakeup.thread_id)
             self._saver.finish_runtime_wakeup(wakeup, dispatch_generation=generation,
                                             receipt=accepted.model_dump(mode="json"))

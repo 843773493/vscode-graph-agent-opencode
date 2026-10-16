@@ -36,7 +36,7 @@ function ProjectionItem({ item }: { item: ContextItem }) {
 
 export default function AssemblyContextInspector(owner: InspectionOwner) {
   const state = useContextInspection(owner);
-  return <section className="context-inspector" aria-label="冻结请求上下文" data-session-id={owner.session?.session_id ?? ""}>
+  return <section className="context-inspector" aria-label="冻结请求上下文" data-owner-session-id={owner.session?.session_id ?? ""}>
     <p>只读检查指定请求的冻结 selection 与 history 投影；不会改变当前对话历史。不加载 request-only 正文或工具定义。</p>
     <div className="context-inspector-controls">
       <label>冻结请求 <select aria-label="选择冻结 assembly" value={state.assemblyRef}

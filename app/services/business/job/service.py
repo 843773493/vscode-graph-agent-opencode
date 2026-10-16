@@ -4,12 +4,12 @@ import asyncio
 import contextvars
 import logging
 from collections.abc import Awaitable, Callable, Coroutine
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import TypeVar
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
-from app.abstractions.job_executor import JobExecutorProtocol
+from app.abstractions.job_executor import JobExecutorProtocol, JobInputOwnerProtocol
 from app.abstractions.pending_request_store import PendingRequestStoreProtocol
 from app.abstractions.turn_terminal_status import TurnTerminalStatusWriter
 from app.core.identifier import create_prefixed_id
@@ -38,6 +38,7 @@ from app.schemas.internal_v2.message import AttachmentRef
 from app.schemas.internal_v2.pending_request import (
     DeliveryBoundary,
     DeliveryPolicy,
+    PendingRequestControl,
     PendingRequestListDTO,
     PendingRequestSummaryListDTO,
 )
@@ -52,6 +53,7 @@ from app.services.business.job.pending_queue import (
     JobPendingQueue,
     QueueEntry,
 )
+from app.services.business.job.pending_request_controller import PendingJob
 from app.services.business.job.pending_request_service import (
     JobPendingRequestService,
 )
@@ -101,6 +103,7 @@ class JobState:
     # 请求级注入的权威 request_id（X-Request-ID）；job 是独立执行根，
     # MUST 显式携带创建请求的 request_id，MUST NOT 在 job 内部补造第二个。
     request_id: str | None = None
+    resume_checkpoint_id: str | None = None
     progress: int = 0
     current_step: str | None = None
     error_message: str | None = None
@@ -130,6 +133,7 @@ class JobService:
         job_finalization_grace_seconds: float | None = None,
         execution_cancel_timeout_seconds: float = 5.0,
         terminal_status_writer: TurnTerminalStatusWriter | None = None,
+        input_owner: JobInputOwnerProtocol | None = None,
     ):
         if isinstance(job_timeout_seconds, bool) or job_timeout_seconds <= 0:
             raise ValueError("job_timeout_seconds 必须大于 0")
@@ -178,12 +182,15 @@ class JobService:
             else min(60.0, max(0.1, job_timeout_seconds * 0.1))
         )
         self._terminal_status_writer = terminal_status_writer
+        self._input_owner = input_owner
         self._pending_requests = JobPendingRequestService(
             queue=self._pending_queue,
             lock=self._dispatch_lock,
             store=pending_request_store,
             get_jobs=lambda: self._jobs,
             get_current_jobs=lambda: self._thread_current_job,
+            persist_terminal_status=self._persist_terminal_execution_status,
+            input_owner=input_owner,
         )
         self._control_service = JobControlService(
             get_jobs=lambda: self._jobs,
@@ -193,6 +200,7 @@ class JobService:
             dispatch_lock=self._dispatch_lock,
             start_job_task=lambda job: self._start_job_task(job),
             schedule_after_cancel=self._finalize_cancelled_without_task_body,
+            persist_terminal_status=self._persist_terminal_execution_status,
         )
 
     def _resolve_job_timeout_seconds(self) -> float:
@@ -525,7 +533,7 @@ class JobService:
         session_ids: list[str],
         operation: Callable[[], Awaitable[T]],
     ) -> T:
-        """关闭一组会话 admission，并在同一窗口内清理资源和物理目录。"""
+        """关闭新 admission；既有 Job 由删除流的 cleanup owner 结算。"""
         normalized_session_ids = sorted(set(session_ids))
         if not normalized_session_ids:
             return await operation()
@@ -539,12 +547,6 @@ class JobService:
                         "会话正在准备持久化消息，不能删除: "
                         f"session_id={session_id}, "
                         f"preparation_count={preparation_count}"
-                    )
-                active_job_id = next((value for key, value in self._thread_current_job.items() if key[0] == session_id), None)
-                if active_job_id is not None:
-                    raise RuntimeError(
-                        "会话存在运行中或正在收尾的任务，不能删除: "
-                        f"session_id={session_id}, active_job_id={active_job_id}"
                     )
             self._deleting_sessions.update(normalized_session_ids)
         try:
@@ -571,10 +573,12 @@ class JobService:
 
         return await self._control_service.control(job_id, control_request)
 
-    async def list_pending(self, session_id: str) -> PendingRequestListDTO:
+    async def list_pending(
+        self, session_id: str, *, thread_id: str | None = None,
+    ) -> PendingRequestListDTO:
         async def restore_and_list() -> PendingRequestListDTO:
             await self._ensure_pending_loaded(session_id)
-            return await self._pending_requests.list(session_id)
+            return await self._pending_requests.list(session_id, thread_id=thread_id)
 
         return await self.run_session_preparation(session_id, restore_and_list)
 
@@ -583,35 +587,16 @@ class JobService:
         session_id: str,
         *,
         limit: int,
+        thread_id: str | None = None,
     ) -> PendingRequestSummaryListDTO:
         async def list_prepared() -> PendingRequestSummaryListDTO:
             return await self._pending_requests.list_summaries(
                 session_id,
                 limit=limit,
+                thread_id=thread_id,
             )
 
         return await self.run_session_preparation(session_id, list_prepared)
-
-    async def update_pending(
-        self,
-        session_id: str,
-        message_id: str,
-        *,
-        content: str,
-        attachments: list[AttachmentRef],
-    ) -> PendingRequestListDTO:
-        async def update_prepared() -> PendingRequestListDTO:
-            await self._ensure_pending_loaded(session_id)
-            snapshot = await self._pending_requests.update(
-                session_id,
-                message_id,
-                content=content,
-                attachments=attachments,
-            )
-            await self._publish_pending(snapshot, "pending_request_updated")
-            return snapshot
-
-        return await self.run_session_preparation(session_id, update_prepared)
 
     async def update_pending_policy(
         self,
@@ -681,6 +666,7 @@ class JobService:
             now = datetime.now()  # noqa: DTZ005
             for job in jobs:
                 if not self._is_terminal_status(job.status):
+                    job.cancellation_reason = "会话删除时清理任务"
                     transition_job_status(
                         job,
                         JobStatus.cancelled,
@@ -695,6 +681,12 @@ class JobService:
                     await job.task
                 except asyncio.CancelledError:
                     pass
+
+        # queued/paused 或任务体尚未启动的取消不会经过 AgentLoop 终态写入。
+        # 同一幂等 writer 在物理隔离前确认这些已接受 Job，已落盘的取消不重复写事实。
+        for job in jobs:
+            if job.status == JobStatus.cancelled:
+                await self._persist_terminal_execution_status(job, "cancelled")
 
         async with self._dispatch_lock:
             for job in jobs:
@@ -846,6 +838,8 @@ class JobService:
             request_id=get_current_request_id(),
         )
 
+        if self._input_owner is not None:
+            self._input_owner.accept_job_input(job)
         self._jobs[resolved_job_id] = job
 
         if self._bus is None:
@@ -878,6 +872,9 @@ class JobService:
                 "message_id": message_id,
                 "message_created_at": message_created_at,
                 "message_metadata": dict(message_metadata or {}),
+                "execution_binding": asdict(job.execution_binding),
+                "gateway_id": job.gateway_id,
+                "request_id": job.request_id,
                 "attachments": [
                     attachment.model_dump(mode="json", exclude={"data_url"})
                     for attachment in job.attachments
@@ -955,7 +952,7 @@ class JobService:
 
     async def _persist_terminal_execution_status(
         self,
-        job: JobState,
+        job: PendingJob,
         status: str,
     ) -> bool:
         writer = self._terminal_status_writer
@@ -970,6 +967,8 @@ class JobService:
                 session_id=job.session_id, thread_id=job.thread_id,
                 job_id=job.job_id, status=status,
             )
+            if not persisted:
+                raise RuntimeError(f"已接受 Job 缺少 canonical terminal owner: job_id={job.job_id}")
 
         await run_cleanup_shielded(converge)
         return persisted
@@ -1011,6 +1010,29 @@ class JobService:
             context=contextvars.Context(),
         )
         job.task.add_done_callback(_task_done_callback)
+
+    async def restore_active_job(self, job: JobState) -> None:
+        """先保留原 thread 槽，再恢复 FIFO；启动阶段不提前执行工具。"""
+        if job.resume_checkpoint_id is None:
+            raise ValueError("恢复 active Job 必须持有已验证的 pending tools checkpoint")
+        async with self._dispatch_lock:
+            self._session_lifecycle_guard(job.session_id)
+            key = (job.session_id, job.thread_id)
+            if job.job_id in self._jobs or key in self._thread_current_job:
+                raise RuntimeError(f"恢复 active Job 发生 owner 冲突: {key!r}/{job.job_id}")
+            self._jobs[job.job_id] = job
+            self._thread_current_job[key] = job.job_id
+
+    async def start_restored_executions(self) -> int:
+        """全部工作区 owner 就绪后从原 checkpoint 续接，不经过新消息准入。"""
+        restored = [job for job in self._jobs.values() if job.resume_checkpoint_id is not None and job.task is None]
+        for job in restored:
+            await self._ensure_pending_loaded(job.session_id)
+            async with self._dispatch_lock:
+                if self._thread_current_job.get((job.session_id, job.thread_id)) != job.job_id:
+                    raise RuntimeError(f"恢复 Job 丢失原 thread active 槽: {job.job_id}")
+                self._start_job_task(job)
+        return len(restored)
 
     def _converge_cancel_without_task_body(
         self,
@@ -1273,6 +1295,7 @@ class JobService:
                 message_metadata=dict(job.message_metadata),
                 gateway_id=job.gateway_id,
                 request_id=job.request_id,
+                resume_checkpoint_id=job.resume_checkpoint_id,
                 status=job.status,
                 progress=job.progress,
                 current_step=job.current_step,
@@ -1607,6 +1630,19 @@ class JobService:
             records = await self._pending_requests.load_once(session_id)
             if not records:
                 return
+            if self._input_owner is not None:
+                live_records = []
+                for record in records:
+                    reference = PendingRequestControl.model_validate(record.model_dump(exclude={
+                        "content", "attachments", "message_created_at", "message_metadata",
+                    }))
+                    outcome = await asyncio.to_thread(self._input_owner.accepted_job_outcome, reference)
+                    if outcome == "unknown":
+                        live_records.append(record)
+                    elif outcome not in {"completed", "completed_empty", "failed", "interrupted", "cancelled", "execution_lost"}:
+                        raise RuntimeError(f"待处理引用的 canonical execution outcome 无效: {record.job_id} {outcome}")
+                # canonical 终态可能先于队列文件更新持久化；恢复时先消除残留引用。
+                records = live_records
             async with self._dispatch_lock:
                 if session_id in self._deleting_sessions:
                     raise RuntimeError(
@@ -1650,6 +1686,7 @@ class JobService:
                     )
                 self._pending_queue.restore(session_id, restored)
                 should_resume = bool(restored)
+            await self._pending_requests.persist_current(session_id)
             if should_resume:
                 for restored_thread_id in dict.fromkeys(record.thread_id for record in records):
                     await self._start_next_pending(session_id, thread_id=restored_thread_id, boundary="idle")

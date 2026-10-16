@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { chromium } from "playwright";
+import { testControl } from "../../../support/e2e-test-control.mjs";
 
 const phase = process.argv[2];
 assert.ok(["before-unload", "after-unload"].includes(phase));
@@ -167,7 +168,8 @@ async function deleteSession(sessionId) {
     const receipt = operations.items.find((item) => item.operation_id === operationId);
     assert.ok(receipt);
     assert.ok(!["rejected", "cancelled", "dependency_failed"].includes(receipt.state), JSON.stringify(receipt));
-    return receipt.state === "committed" && !receipt.pending_settlement;
+    assert.notEqual(receipt.settlement, "repair_required", `删除排空需修复: ${receipt.error_detail}`);
+    return receipt.state === "committed" && receipt.settlement === "settled";
   });
 }
 try {
@@ -182,6 +184,13 @@ try {
   await api("/api/v1/workspace");
   if (phase === "before-unload") {
     const source = await createSession("持久资源真实卸载验收");
+    await testControl({ action: "plan_model", session_id: source.session_id, thread_id: source.thread_id, interactions: [{
+      request: { method: "POST", url: "https://opencode.ai/zen/v1/chat/completions", match: { model: "big-pickle", stream: true } },
+      response: { status: 200, headers: { "content-type": "text/event-stream" }, frames: [
+        { kind: "data", encoding: "json", payload: { id: "resource-ready", object: "chat.completion.chunk", model: "big-pickle", choices: [{ index: 0, delta: { role: "assistant", content: "就绪" }, finish_reason: "stop" }] } },
+        { kind: "done", encoding: "text", payload: "[DONE]" },
+      ] },
+    }] });
     await selectSession(source.session_id);
     const sentPromise = page.waitForResponse((reply) => reply.request().method() === "POST"
       && new URL(reply.url()).pathname === `/api/v1/sessions/${source.session_id}/messages`);

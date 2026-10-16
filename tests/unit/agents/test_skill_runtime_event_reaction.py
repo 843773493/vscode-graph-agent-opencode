@@ -80,6 +80,7 @@ def _build_middleware(tmp_path: Path, source_seal_case):
     catalog = build_workspace_skill_catalog(
         workspace,
         registry=ResourceRegistry(),
+        file_registry=registry,
         project_root=tmp_path,
     )
     middleware = WorkspaceSkillsMiddleware(
@@ -99,13 +100,14 @@ async def test_before_model_consumes_event_driven_observation_only(
     middleware, registry, manager, reactor, lifetime_scope, watch_service, skill_uri = (
         _build_middleware(tmp_path, source_seal_case)
     )
+    initialization_reads = registry.snapshot_reads
     try:
-        # before_agent 用真实 workspace backend 解析 metadata、注册来源并
+        # before_agent 消费已发布 metadata、注册来源并
         # 标记首次观察；该阶段是会话初始化边界，不属于请求路径轮询。
         assert middleware.before_agent({}, None, {}) is not None
         assert manager.pending_observation_count() == 2
-        # Skill 与 optional AGENTS absence 都发布首帧观察；注册各读取一次。
-        assert registry.snapshot_reads == 2
+        # Skill 与 optional AGENTS absence 都排首帧 reconcile；接线不读取快照。
+        assert registry.snapshot_reads == initialization_reads
 
         # 模型调用 skill_load：从冻结 SkillCatalog binding 激活正文并进入
         # tracked 模式；工具路径零 registry/磁盘读取。
@@ -123,7 +125,7 @@ async def test_before_model_consumes_event_driven_observation_only(
         assert absent_agents.content == "" and absent_agents.revision
         # 每个来源各读两次内存快照：解析 observation revision 与取正文；
         # skill_load 本身零读取（正文来自冻结 binding）。
-        assert reads_after_load == 2
+        assert reads_after_load == initialization_reads
         assert registry.snapshot_reads == reads_after_load + 4
         receipt, binding = source_seal_case.seal(manager)
         assert receipt.deltas == first.deltas

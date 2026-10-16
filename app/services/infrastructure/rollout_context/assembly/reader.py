@@ -8,14 +8,21 @@ from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
+    optional_detail_ref_key,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
     read_registration,
+)
+from app.services.infrastructure.rollout_context.assembly.plans.types import (
+    ContextPlanRegistration,
 )
 from app.services.infrastructure.rollout_context.assembly.validation import (
     non_negative_int,
     optional_text,
     required_text,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    require_historical_scope,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutReadSnapshot,
@@ -70,46 +77,108 @@ class ContextAssemblyReaderMixin:
         self, snapshot: RolloutReadSnapshot,
     ) -> ContextAssemblySnapshot | None:
         """在 caller 的同一 SQLite snapshot 中读取并验证唯一 applied predecessor。"""
-        row = snapshot.connection.execute(
-            "SELECT assembly_id FROM context_assemblies "
-            "WHERE session_id = ? AND thread_id = ? AND status IN ('sealed','terminal') "
-            "ORDER BY rowid DESC LIMIT 1",
-            (snapshot.session_id, snapshot.thread_id),
+        return self._latest_context_assembly_connection(
+            snapshot.connection, snapshot.session_id, snapshot.thread_id,
+            checkpoint_ns=snapshot.checkpoint_ns,
+        )
+
+    def _latest_context_assembly_connection(
+        self,
+        connection: sqlite3.Connection,
+        session_id: str,
+        thread_id: str,
+        *,
+        checkpoint_ns: str,
+        excluding_assembly_id: str | None = None,
+    ) -> ContextAssemblySnapshot | None:
+        """同一读或 seal 事务共用精确可见的历史 predecessor。"""
+        # 导入请求只有真实输出在当前 view 可见时才能继承，正文 backing 不扩大前缀。
+        row = connection.execute(
+            "SELECT assembly.assembly_id FROM context_assemblies assembly "
+            "WHERE assembly.status IN ('sealed','terminal') "
+            "AND json_extract(assembly.snapshot_json,'$.selection_policy') <> 'summary_candidate' "
+            "AND (? IS NULL OR assembly.assembly_id<>?) "
+            "AND ((assembly.session_id=? AND assembly.thread_id=?) OR EXISTS ("
+            "SELECT 1 FROM context_view_items member JOIN item_catalog item ON item.item_id=member.item_id "
+            "JOIN branches branch ON branch.head_view_id=member.view_id "
+            "JOIN checkpoint_namespace_state namespace ON namespace.active_branch_id=branch.branch_id "
+            "WHERE namespace.checkpoint_ns=? AND member.visible=1 "
+            "AND COALESCE(json_extract(item.producer_ref_json,'$.model_call_id'),"
+            "json_extract(item.projection_manifest_json,'$.projection_identity.model_call_id'))=assembly.model_call_id)) "
+            "ORDER BY assembly.rowid DESC LIMIT 1",
+            (excluding_assembly_id, excluding_assembly_id, session_id, thread_id, checkpoint_ns),
         ).fetchone()
         if row is None:
             return None
         return self._read_context_assembly_connection(
-            snapshot.connection, snapshot.session_id, snapshot.thread_id,
+            connection, session_id, thread_id,
             assembly_id=required_text(row[0], field="assembly_id"),
-            checkpoint_ns=snapshot.checkpoint_ns,
+            checkpoint_ns=checkpoint_ns,
         )[0]
 
     def _read_context_assembly_connection(
         self, connection: sqlite3.Connection, session_id: str, thread_id: str,
         *, assembly_id: str, checkpoint_ns: str,
+        registration: ContextPlanRegistration | None = None,
     ) -> tuple[ContextAssemblySnapshot, DetailRef | None]:
+        snapshot, header_ref, registration = self._read_context_assembly_header(
+            connection, session_id, thread_id, assembly_id=assembly_id,
+            registration=registration,
+        )
+        self._validate_context_assembly_manifest(
+            connection,
+            snapshot,
+            registration=registration,
+            header_detail_ref=optional_detail_ref_key(header_ref),
+            checkpoint_ns=checkpoint_ns,
+        )
+        return snapshot, header_ref
+
+    def _read_context_assembly_header(
+        self, connection: sqlite3.Connection, session_id: str, thread_id: str,
+        *, assembly_id: str,
+        registration: ContextPlanRegistration | None = None,
+    ) -> tuple[ContextAssemblySnapshot, DetailRef | None, ContextPlanRegistration]:
+        """精确校验封存前驱的身份和 registry hash，不递归展开历史前驱链。
+
+        session_id/thread_id 是当前目标物理存储 owner，historical_owner 是
+        snapshot 保留的原执行 scope；binding 仅核准历史 scope，不定位源库。
+        """
         self._storage._require_v2_runtime(connection)
         row = connection.execute(
-            "SELECT snapshot_json, status, plan_id, plan_hash, request_hash, turn_id, execution_id, history_view_revision, source_overlay_epoch, detail_ref FROM context_assemblies WHERE assembly_id = ? AND session_id = ? AND thread_id = ?",
-            (assembly_id, session_id, thread_id),
+            "SELECT snapshot_json, status, plan_id, plan_hash, request_hash, turn_id, execution_id, history_view_revision, source_overlay_epoch, detail_ref, session_id, thread_id FROM context_assemblies WHERE assembly_id = ?",
+            (assembly_id,),
         ).fetchone()
         if row is None:
             raise KeyError(f"context assembly 不存在: {assembly_id}")
+        historical_owner = (
+            required_text(row[10], field="context_assemblies.session_id"),
+            required_text(row[11], field="context_assemblies.thread_id"),
+        )
+        require_historical_scope(
+            connection, *historical_owner, current_owner=(session_id, thread_id),
+        )
         status = required_text(row[1], field="status")
         if status not in {"sealed", "terminal"}:
             raise RuntimeError(
                 f"context assembly manifest status 非法或未封存: {assembly_id}"
             )
-        registration = read_registration(
-            connection, session_id, thread_id, required_text(row[2], field="plan_id"),
-        )
+        # 只允许同一 SQLite 读快照的 caller 传入刚完成冷校验的 registry；
+        # header/detail/selection 的完整 reader 校验仍在本次连接内完成。
+        if registration is None:
+            registration = read_registration(
+                connection, *historical_owner, required_text(row[2], field="plan_id"),
+            )
+        if (registration.session_id, registration.thread_id, registration.draft.plan_id) != (
+            *historical_owner, row[2],
+        ):
+            raise RuntimeError(f"source-mismatch: context assembly registry owner 不一致: {assembly_id}")
         snapshot = registration.sealed_snapshot
         if snapshot is None:
             raise RuntimeError(f"source-mismatch: context assembly 的 plan 尚未 sealed: {assembly_id}")
         if (snapshot.assembly_id, snapshot.session_id, snapshot.thread_id) != (
             assembly_id,
-            session_id,
-            thread_id,
+            *historical_owner,
         ):
             raise RuntimeError(f"context assembly identity 不一致: {assembly_id}")
         persisted_identity = (
@@ -133,18 +202,11 @@ class ContextAssemblyReaderMixin:
             raise RuntimeError(
                 f"context assembly header 与 snapshot 不一致: {assembly_id}"
             )
-        self._validate_context_assembly_manifest(
-            connection,
-            snapshot,
-            registration=registration,
-            header_detail_ref=optional_text(row[9], field="detail_ref"),
-            checkpoint_ns=checkpoint_ns,
-        )
         header_key = optional_text(row[9], field="detail_ref")
         header_ref = detail_ref_from_key(header_key) if header_key is not None else None
         if header_ref is not None:
-            header_ref.require_owner(session_id, thread_id, assembly_id)
-        return snapshot, header_ref
+            header_ref.require_owner(*historical_owner, assembly_id)
+        return snapshot, header_ref, registration
 
 
     def list_context_assemblies(
@@ -159,9 +221,9 @@ class ContextAssemblyReaderMixin:
         with self._storage.open_read_snapshot(session_id, thread_id, checkpoint_ns) as snapshot:
             query = (
                 "SELECT assembly_id FROM context_assemblies "
-                "WHERE session_id = ? AND thread_id = ? AND status IN ('sealed','terminal')"
+                "WHERE status IN ('sealed','terminal')"
             )
-            params: list[object] = [session_id, thread_id]
+            params: list[object] = []
             if turn_id is not None:
                 query += " AND turn_id = ?"
                 params.append(turn_id)

@@ -98,6 +98,7 @@ class GatewayResourceScopeErrorDTO(BaseModel):
 class GatewayResourceDTO(BaseModel):
     gateway_connection_id: str | None = None
     gateway_name: str
+    # Gateway 注册表中的路由工作区 ID；内层 resource.workspace_id 是后端 owner UUID。
     workspace_id: str
     workspace_name: str
     connection_kind: GatewayConnectionKind

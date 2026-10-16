@@ -21,9 +21,6 @@ from app.services.infrastructure.resource_platform.observation.resource_observat
     ResourceObservation,
     ResourceObservationSubscription,
 )
-from app.services.infrastructure.resource_platform.sources.observed_source import (
-    SourceReconciler,
-)
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceDescriptor,
     ContextSourceManager,
@@ -69,8 +66,13 @@ class ResourceObservationSourcePort(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class SourceObservation:
-    """一次待消费的来源观察：只有 identity、URI 与 revision，没有正文。"""
+class PublishedSourceObservationRef:
+    """reactor 在 drain 时读取的 owner 已发布快照引用。
+
+    只携带 source_id、resource_uri 和当时的 revision，不携带或冻结正文，
+    也不代表 CSM 已 applied 或 durable committed；content_for 后续另取
+    owner 的内存正文，不能把该引用当作正文与 revision 的冻结绑定。
+    """
 
     source_id: str
     resource_uri: str
@@ -87,19 +89,15 @@ class ContextSourceReactor:
         context_sources: ContextSourceManager,
         lifetime_scope: LifetimeScope,
         reactor_id: str,
-        reconciler: SourceReconciler | None = None,
     ) -> None:
         if not isinstance(reactor_id, str) or not reactor_id.strip():
             raise ValueError("ContextSourceReactor.reactor_id 必须是非空字符串")
         self._sources = sources
         self._context_sources = context_sources
-        # OpenSpec 3.3:消费方可经 reactor 向 Reconciler 回执 committed
-        # revision,registry 侧据此区分 observed/pending/committed。
-        self._reconciler = reconciler
         self._reactor_id = reactor_id
         self._subscription: ResourceObservationSubscription | None = None
         self._source_ids_by_uri: dict[str, str] = {}
-        self._observed_tokens: dict[str, tuple[str, str | None]] = {}
+        self._tracking_statuses: dict[str, str] = {}
         self._released = False
         # 构建失败或尚未订阅也必须由同一 scope fence 掉整个 reactor。
         lifetime_scope.register(
@@ -153,7 +151,7 @@ class ContextSourceReactor:
             marked += self._handle_event(observation)
         return marked
 
-    def drain(self) -> Iterator[SourceObservation]:
+    def drain(self) -> Iterator[PublishedSourceObservationRef]:
         """把已排队的轻量通知转换为待观察来源，不读取任何来源内容。
 
         已释放的 reactor 返回空迭代器：订阅已经解除，事件不再到达 CSM；
@@ -195,7 +193,7 @@ class ContextSourceReactor:
                     pending.revision,
                     revision,
                 )
-            yield SourceObservation(
+            yield PublishedSourceObservationRef(
                 source_id=pending.source_id,
                 resource_uri=resource_uri,
                 revision=revision,
@@ -220,7 +218,7 @@ class ContextSourceReactor:
             ))
         return tuple(frozen)
 
-    def content_for(self, observation: SourceObservation) -> str:
+    def content_for(self, observation: PublishedSourceObservationRef) -> str:
         """从来源 owner 的权威内存快照读取正文；不触发任何磁盘 I/O。"""
         snapshot = self._sources.snapshot(observation.resource_uri)
         if not snapshot.available:
@@ -230,31 +228,6 @@ class ContextSourceReactor:
                 f"revision={observation.revision}"
             )
         return snapshot.content
-
-    def mark_source_committed(self, source_id: str, revision: str) -> None:
-        """把「该 revision 已进入已提交上下文」回执给 Reconciler。
-
-        多个未提交变化由 registry 侧合并为 committed→observed 一个待消费
-        事实;rewind 感知的 latest-visible-committed 收敛属于 CSM owner 层。
-        """
-        if self._reconciler is None:
-            raise RuntimeError(
-                "reactor 未接入 SourceReconciler,无法回执 committed revision: "
-                f"reactor_id={self._reactor_id}",
-            )
-        self._require_active()
-        self._reconciler.mark_committed(source_id, revision)
-
-    def source_revision_states(
-        self, source_id: str
-    ) -> tuple[str, str | None, str | None]:
-        """透传 Reconciler 的 (observed, pending, committed) 诊断状态。"""
-        if self._reconciler is None:
-            raise RuntimeError(
-                "reactor 未接入 SourceReconciler,无法查询 revision 状态: "
-                f"reactor_id={self._reactor_id}",
-            )
-        return self._reconciler.revision_states(source_id)
 
     async def close(self) -> None:
         """释放订阅；释放后事件不再到达 CSM。"""
@@ -286,46 +259,39 @@ class ContextSourceReactor:
     def _seed_if_needed(self, descriptor: ContextSourceDescriptor) -> None:
         """首次观察或 tracking 状态变化时，标记来源需要一次权威快照读取。
 
-        已 tracked 且已知最新 revision 的来源不需要再次读取快照：skill_load
-        的显式 ``observe`` 或上一次 observation 已经把同一 revision 送进 CSM。
+        恢复的 revision 不代表当前 owner 已观察来源；首绑必须对账，以补齐
+        冷启动正文并接收订阅建立前发布的变化。正文与 revision 只在 drain 消费。
         """
-        resource_uri = descriptor.resource_uri
-        if resource_uri is None:
-            return
-        tracking_status, latest_revision = (
+        tracking_status, _latest_revision = (
             self._context_sources.source_observation_state(descriptor.source_id)
         )
-        token = (tracking_status, latest_revision)
-        if self._observed_tokens.get(descriptor.source_id) == token:
+        if self._tracking_statuses.get(descriptor.source_id) == tracking_status:
             return
-        if latest_revision is None:
-            snapshot = self._sources.snapshot(resource_uri)
-            if snapshot.revision is None:
-                self._observed_tokens[descriptor.source_id] = token
-                return
-            self._context_sources.mark_pending_observation(
-                descriptor.source_id,
-                snapshot.revision,
-            )
-        self._observed_tokens[descriptor.source_id] = (
-            self._context_sources.source_observation_state(descriptor.source_id)
+        self._context_sources.mark_pending_observation(
+            descriptor.source_id, None, reconcile=True,
         )
+        self._tracking_statuses[descriptor.source_id] = tracking_status
 
     def _handle_event(self, observation: ResourceObservation) -> int:
         """事件回调路径：只查表并标记 pending，不做 I/O；返回标记的来源数量。"""
-        source_id = self._source_ids_by_uri.get(observation.uri)
+        marked = 0
+        if observation.gap:
+            # 丢失的通知可能属于任一绑定文件，即使本次投递的是目录通知。
+            marked = len(self.mark_all_sources())
+        source_id = (
+            self._source_ids_by_uri.get(observation.uri)
+            if observation.uri is not None else None
+        )
         if source_id is None:
             logger.debug(
                 "忽略未绑定资源的观察通知: reactor=%s uri=%s",
                 self._reactor_id,
                 observation.uri,
             )
-            return 0
-        marked = 0
+            return marked
         if observation.gap:
             # gap 表示至少一条通知丢失且无法归属到单一来源：必须对全部已绑定
             # 来源重新对账，否则未收到通知的来源会永久静默陈旧。
-            marked = len(self.mark_all_sources())
             logger.warning(
                 "资源观察通知出现 gap，已标记全部绑定来源待观察: "
                 "reactor=%s uri=%s marked=%s",
@@ -370,7 +336,7 @@ class ContextSourceReactor:
         self._released = True
         subscription = self._subscription
         self._source_ids_by_uri.clear()
-        self._observed_tokens.clear()
+        self._tracking_statuses.clear()
         if subscription is not None:
             self._sources.unsubscribe_observation(subscription)
             self._subscription = None
@@ -385,7 +351,7 @@ class ContextSourceReactor:
 
 __all__ = [
     "ContextSourceReactor",
+    "PublishedSourceObservationRef",
     "ResourceObservationSourcePort",
     "ResourceSnapshotLike",
-    "SourceObservation",
 ]

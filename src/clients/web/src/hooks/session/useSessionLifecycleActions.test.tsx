@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import type { Session } from "../../types/backend";
+import type { Session, SessionForkRequest, SessionStreamEvent } from "../../types/backend";
 import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 import type { SessionCatalogOutboxRuntime } from "./sessionCatalogOutboxRuntime";
 import { sessionScopeKey } from "../../state/session/sessionScope";
+import { createMessageStreamState } from "../../state/messageStream/index";
+import { flushSessionStreamEventBatch } from "../sessionEventStream/batchUpdates";
+import { refreshWorkspaceSessionList } from "../sessionEventStream/sessionRefresh";
 import {
   apiResponse,
   buildSessionHookState,
@@ -37,6 +40,15 @@ function session(
     parent_session_id: null,
     created_at: "2026-07-24T00:00:00Z",
     updated_at: "2026-07-24T00:00:00Z",
+  };
+}
+
+function forkRequest(value: Session): SessionForkRequest {
+  return {
+    idempotency_key: `fork-${value.session_id}`, source_uri: `${value.uri}/thread/tid_source`,
+    source_view_id: "view-selected", source_view_revision: 1, anchor_item_id: "item-selected",
+    mode: "view_prefix_fork", anchor_mode: "inclusive", target_container_uri: value.uri,
+    creation_kind: "new_child_thread", relationship: "detached", resources: [],
   };
 }
 
@@ -174,6 +186,88 @@ function mountLifecycle(
   });
 }
 describe("会话生命周期写动作的竞态与失败补偿", () => {
+  test("创建会话回包保留镜像但不抢 A→B→A 后的用户选择", async () => {
+    const sesA = raceSession("ses_create_a");
+    const sesB = raceSession("ses_create_b");
+    const created = raceSession("ses_created");
+    let release!: (response: Response) => void;
+    let started = false;
+    installGatewayFetch(({ path, method }) => path === "/api/v1/sessions" && method === "POST"
+      ? new Promise<Response>((resolve) => { started = true; release = resolve; }) : undefined);
+    const { state: readState, actions } = mountRace(sesA, [sesA, sesB]);
+    const operation = actions.createSession("新会话");
+    for (let i = 0; i < 100 && !started; i += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+    expect(started).toBe(true);
+    actions.selectSession(sesB.session_id);
+    actions.selectSession(sesA.session_id);
+    const selectedStatus = readState().status;
+    release(apiResponse(created));
+    expect(await operation).toEqual(created);
+    expect(readState().currentSession?.session_id).toBe(sesA.session_id);
+    expect(readState().status).toBe(selectedStatus);
+    expect(readState().sessionsByWorkspace.get(RACE_WORKSPACE)?.find((item) => item.session_id === created.session_id)).toEqual(created);
+  });
+
+  test("fork 只更新 URI 指定目标 scope，迟到成功不抢 A→B→A 状态", async () => {
+    const source = raceSession("ses_same");
+    const other = raceSession("ses_other");
+    const target = { ...source, workspace_id: "ws_target", title: "目标 owner" };
+    const targetRoute = "gateway_target";
+    let release!: (response: Response) => void;
+    let started = false;
+    installGatewayFetch(({ path }) => {
+      if (path === "/api/gateway/health") return apiResponse({ gateway_id: "gateway_test" });
+      if (path.endsWith("/fork-context")) return new Promise<Response>((resolve) => { started = true; release = resolve; });
+      return undefined;
+    });
+    const initial = raceState(source, [source, other]);
+    initial.sessionsByWorkspace.set(targetRoute, [target]);
+    const mounted = mountLifecycle(source, initial, undefined, [
+      { workspace_id: RACE_WORKSPACE, backend_workspace_id: "ws_local", connection_kind: "local" },
+      { workspace_id: targetRoute, backend_workspace_id: "ws_target", connection_kind: "local" },
+    ]);
+    const operation = mounted.actions.forkSessionContext(RACE_WORKSPACE, source.session_id, forkRequest(source));
+    for (let i = 0; i < 100 && !started; i += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+    expect(started).toBe(true);
+    mounted.actions.selectSession(other.session_id);
+    mounted.actions.selectSession(source.session_id);
+    const selectedStatus = mounted.state().status;
+    release(apiResponse({
+      session: target, thread_id: "thr_target_child",
+      thread_uri: `boxteam://gateway_test/workspace/ws_target/resources/session/${target.session_id}/threads/thr_target_child`,
+      creation_kind: "new_child_thread", source_uri: source.uri,
+      source_view_id: "view-selected", source_view_revision: 1, anchor_item_id: "item-selected",
+      mode: "view_prefix_fork", resources: [], goal_id: null,
+    }));
+    expect((await operation).session).toEqual(target);
+    expect(mounted.state().currentSession).toEqual(source);
+    expect(mounted.state().sessionsByWorkspace.get(RACE_WORKSPACE)?.find((item) => item.session_id === source.session_id)).toEqual(source);
+    expect(mounted.state().sessionsByWorkspace.get(targetRoute)?.[0]).toEqual(target);
+    expect(mounted.state().status).toBe(selectedStatus);
+  });
+
+  test("默认 child fork 成功保留主会话与主 stream，返回实际新 Thread", async () => {
+    const current = session();
+    let abortCount = 0;
+    installGatewayFetch(({ path }) => path.endsWith("/fork-context") ? apiResponse({
+      session: current, thread_id: "tid_fork_child", thread_uri: `boxteam://gateway_test/workspace/ws_local/resources/session/${current.session_id}/threads/tid_fork_child`,
+      creation_kind: "new_child_thread", source_uri: `${current.uri}/thread/tid_source`,
+      source_view_id: "view-selected", source_view_revision: 1, anchor_item_id: "item-selected",
+      mode: "view_prefix_fork", resources: [], goal_id: null,
+    }) : path === "/api/gateway/health" ? apiResponse({ gateway_id: "gateway_test" }) : undefined);
+    const mounted = mountSessionLifecycleActions({
+      apiPort: 8014, currentSession: current, workspaceId: WORKSPACE_ID, state: state(current),
+      workspaceRequestTargets: [{ workspace_id: WORKSPACE_ID, backend_workspace_id: "ws_local", connection_kind: "local" }],
+      abortCurrentStream: () => { abortCount += 1; },
+    });
+    const initialNonce = mounted.state().sessionHistoryReloadNonce;
+    const result = await mounted.actions.forkSessionContext(WORKSPACE_ID, current.session_id, forkRequest(current));
+    expect(result.thread_id).toBe("tid_fork_child");
+    expect(mounted.state().currentSession?.session_id).toBe(current.session_id);
+    expect(mounted.state().sessionHistoryReloadNonce).toBe(initialNonce);
+    expect(abortCount).toBe(0);
+  });
+
   test("W4 切换 Agent 回包不覆盖用户请求在途期间切换到的会话", async () => {
     const sesA = raceSession("ses_a");
     const sesB = raceSession("ses_b");
@@ -217,6 +311,7 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
   test("W5 fork 失败时补偿重取失败不覆盖原始错误", async () => {
     const sesA = raceSession("ses_a");
     installGatewayFetch(({ path }) => {
+      if (path === "/api/gateway/health") return apiResponse({ gateway_id: "gateway_test" });
       if (path.endsWith("/fork-context")) {
         return apiResponse({ message: "上下文快照损坏" }, 422);
       }
@@ -228,7 +323,7 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
 
     const { state: readState, actions } = mountRace(sesA, [sesA]);
     await expect(
-      actions.forkSessionContext(RACE_WORKSPACE, sesA.session_id),
+      actions.forkSessionContext(RACE_WORKSPACE, sesA.session_id, forkRequest(sesA)),
     ).rejects.toThrow("上下文快照损坏");
     // 二次失败必须保留在提示里，且不得成为调用方看到的主错误。
     expect(readState().status).toContain("上下文快照损坏");
@@ -342,6 +437,94 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
     ]);
   });
 
+  test("需修复删除保留已打开聊天与原回执，不显示已删除成功", async () => {
+    const current = raceSession("ses_repair");
+    const outbox = createTestSessionCatalogOutboxRuntime({ result: () => ({
+      settlement: "repair_required", errorCode: "delete_settlement_repair_required",
+      errorDetail: "日期目录隔离失败",
+    }) });
+    installGatewayFetch(({ path }) => {
+      if (path.endsWith(`/breadcrumb/${current.session_id}`)) return apiResponse({
+        revision: "catalog-revision-3", catalog_revision: 3, items: [{
+          node_id: current.session_id, kind: "session", name: current.title,
+          parent_node_id: null, session_id: current.session_id, has_children: false,
+          node_revision: 2, state: "active", session: current,
+        }],
+      });
+      if (path === "/api/v1/session-catalog/children") return apiResponse({
+        parent_node_id: null, catalog_revision: 4, revision: "catalog-revision-4",
+        items: [], cursor: null, total: 0, consistency_warning: null,
+      });
+      return undefined;
+    });
+    const { state: readState, actions } = mountRace(current, [current], undefined, outbox.runtime);
+    await expect(actions.deleteSession(current.session_id, RACE_WORKSPACE)).rejects.toThrow("日期目录隔离失败");
+    expect(readState().currentSession?.session_id).toBe(current.session_id);
+    expect(readState().sessions).toHaveLength(1);
+    expect(readState().status).toContain("排空未完成");
+    expect([...outbox.runtime.getSnapshot().values()][0]?.outbox.operations).toMatchObject([
+      { state: "committed", settlement: "repair_required" },
+    ]);
+  });
+
+  for (const refreshFails of [false, true]) {
+    test(`Session repair 的${refreshFails ? "双失败保留两个原错误" : "单失败保留原错误对象"}`, async () => {
+      const current = raceSession("ses_repair_errors");
+      const operationId = "test_catalog_operation_1";
+      const detail = "日期目录隔离失败";
+      const terminalError = new Error(`会话目录操作 ${operationId} 删除已提交但排空失败，需修复: ${detail}`);
+      const refreshError = new Error("父分支读取失败");
+      const outbox = createTestSessionCatalogOutboxRuntime({ result: () => ({
+        settlement: "repair_required", errorCode: "delete_settlement_repair_required", errorDetail: detail,
+      }) });
+      const runtime: SessionCatalogOutboxRuntime = {
+        ...outbox.runtime,
+        waitForTerminal: async () => { throw terminalError; },
+      };
+      installGatewayFetch(({ path }) => {
+        if (path.endsWith(`/breadcrumb/${current.session_id}`)) return apiResponse({
+          revision: "catalog-revision-3", catalog_revision: 3, items: [{
+            node_id: current.session_id, kind: "session", name: current.title,
+            parent_node_id: null, session_id: current.session_id, has_children: false,
+            node_revision: 2, state: "active", session: current,
+          }],
+        });
+        if (path === "/api/v1/session-catalog/children") {
+          if (refreshFails) throw refreshError;
+          return catalogChildrenResponse("catalog-revision-4", [], null, 4);
+        }
+        return undefined;
+      });
+      const mounted = mountRace(current, [current], undefined, runtime);
+      const failure = await mounted.actions.deleteSession(current.session_id, RACE_WORKSPACE)
+        .then(() => null, (error: unknown) => error);
+      if (refreshFails) {
+        expect(failure).toBeInstanceOf(AggregateError);
+        if (!(failure instanceof AggregateError)) throw new Error("双失败没有保留复合错误");
+        expect(failure.errors).toHaveLength(2);
+        expect(failure.errors[0]).toBe(terminalError);
+        expect(failure.errors[1]).toBe(refreshError);
+        expect(failure.message).toContain(terminalError.message);
+        expect(failure.message).toContain(refreshError.message);
+        const report = outbox.errors[outbox.errors.length - 1];
+        expect(report).toContain(operationId);
+        expect(report).toContain("删除已提交但排空失败，需修复");
+        expect(report).toContain(detail);
+        expect(report).toContain(refreshError.message);
+      } else {
+        expect(failure).toBe(terminalError);
+      }
+      expect(mounted.state().status).toContain(terminalError.message);
+      if (refreshFails) expect(mounted.state().status).toContain(refreshError.message);
+      expect(mounted.state().status).not.toContain("已删除会话");
+      expect(mounted.state().currentSession).toBe(current);
+      expect(mounted.state().sessions).toEqual([current]);
+      expect([...runtime.getSnapshot().values()][0]?.outbox.operations).toMatchObject([
+        { client_operation_id: operationId, state: "committed", settlement: "repair_required" },
+      ]);
+    });
+  }
+
   test("§10.3 删除成功后零次全量列表请求，且级联删除的子会话一并从镜像消失", async () => {
     const parent = raceSession("ses_parent");
     const child = { ...raceSession("ses_child"), parent_session_id: "ses_parent" };
@@ -377,12 +560,72 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
     initial.turnTimelinesBySession = new Map([
       [deletedKey, { session_id: sesA.session_id, turns: [], details: new Map() } as never],
     ]);
+    const otherKey = sessionScopeKey("gw_other", sesA.session_id);
+    initial.sessionAttachmentSummaries.set(deletedKey, { count: 1, names: ["删除.txt"], latestAt: null });
+    initial.sessionAttachmentSummaries.set(otherKey, { count: 1, names: ["保留.txt"], latestAt: null });
+    initial.messageStreamsByTurnStream = new Map([
+      [`${deletedKey}::strm_same`, createMessageStreamState(sesA.session_id, "turn_same", "strm_same", deletedKey)],
+      [`${otherKey}::strm_same`, createMessageStreamState(sesA.session_id, "turn_same", "strm_same", otherKey)],
+    ]);
     const { state: readState, actions } = mountLifecycle(sesB, initial);
     await actions.deleteSession(sesA.session_id);
 
     // 被删会话的所有会话级缓存都必须随之一并消失，绝不能留成幽灵条目。
     expect(readState().eventQueuesBySession.has(deletedKey)).toBe(false);
     expect(readState().turnTimelinesBySession.has(deletedKey)).toBe(false);
+    expect(readState().sessionAttachmentSummaries.has(deletedKey)).toBe(false);
+    expect(readState().sessionAttachmentSummaries.get(otherKey)?.names).toEqual(["保留.txt"]);
+    expect(readState().messageStreamsByTurnStream?.has(`${deletedKey}::strm_same`)).toBe(false);
+    expect(readState().messageStreamsByTurnStream?.get(`${otherKey}::strm_same`)?.sessionCacheKey).toBe(otherKey);
+  });
+
+  test("真实删除提交后，迟到的列表、标题及 pending 补读不能复活已删除 owner", async () => {
+    const deleted = raceSession("ses_late_deleted");
+    const surviving = raceSession("ses_late_surviving");
+    const initial = raceState(surviving, [deleted, surviving]);
+    const deletedKey = sessionScopeKey(RACE_WORKSPACE, deleted.session_id);
+    initial.pendingConversations.set(deletedKey, []);
+    initial.activeJobIdsBySession.set(deletedKey, "job_before_delete");
+    const releases = new Map<string, (response: Response) => void>();
+    let readsStarted!: () => void;
+    const allReadsStarted = new Promise<void>((resolve) => { readsStarted = resolve; });
+    installGatewayFetch(({ path, method, init }) => {
+      if (method !== "GET" || ![
+        "/api/v1/sessions", `/api/v1/sessions/${deleted.session_id}`,
+        `/api/v1/sessions/${deleted.session_id}/main-thread/pending-requests`,
+      ].includes(path)) return undefined;
+      expect(new Headers(init?.headers).get("X-BoxTeam-Workspace-Id")).toBe(RACE_WORKSPACE);
+      return new Promise<Response>((resolve) => {
+        releases.set(path, resolve);
+        if (releases.size === 3) readsStarted();
+      });
+    });
+    const mounted = mountLifecycle(surviving, initial);
+    const target: GatewayWorkspaceRequestTarget = { workspace_id: RACE_WORKSPACE,
+      backend_workspace_id: "00000000-0000-0000-0000-000000000001", connection_kind: "local" };
+    const oldList = refreshWorkspaceSessionList(8014, target, mounted.setState);
+    const events = ["session_auto_title_updated", "pending_request_added"].map((reason): SessionStreamEvent => ({
+      event_id: `evt_${reason}`, session_id: deleted.session_id, job_id: "job_before_delete",
+      timestamp: "2026-10-14T00:00:00Z", type: "status_change", phase: "status", title: reason, content: "",
+      raw: { payload: { reason } },
+    }));
+    flushSessionStreamEventBatch(events, { apiPort: 8014, sessionId: deleted.session_id,
+      workspaceId: RACE_WORKSPACE, sessionCacheKey: deletedKey, setState: mounted.setState });
+    await allReadsStarted;
+    await mounted.actions.deleteSession(deleted.session_id, RACE_WORKSPACE);
+    releases.get("/api/v1/sessions")!(sessionsListResponse([deleted, surviving]));
+    releases.get(`/api/v1/sessions/${deleted.session_id}`)!(apiResponse({ ...deleted, title: "迟到标题" }));
+    releases.get(`/api/v1/sessions/${deleted.session_id}/main-thread/pending-requests`)!(apiResponse({
+      session_id: deleted.session_id, thread_id: "thr_main", active_job_id: "job_zombie", requests: [],
+    }));
+    await oldList;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mounted.state().sessions.map((value) => value.session_id)).toEqual([surviving.session_id]);
+    expect(mounted.state().sessionsByWorkspace.get(RACE_WORKSPACE)?.map((value) => value.session_id)).toEqual([surviving.session_id]);
+    expect(mounted.state().pendingConversations.has(deletedKey)).toBe(false);
+    expect(mounted.state().activeJobIdsBySession.has(deletedKey)).toBe(false);
+    expect(mounted.state().sessionGatewayWorkspaceById.has(deletedKey)).toBe(false);
+    expect(mounted.state().currentSession?.session_id).toBe(surviving.session_id);
   });
 
   test("删除当前会话的抢占分支同样清空它的事件队列与未读标记", async () => {
@@ -601,7 +844,234 @@ function crossWorkspaceState(current: Session) {
   });
 }
 
+function mountDuplicateSessionOwners(
+  active: Session,
+  other: Session,
+  sessionCatalogOutboxRuntime?: ReturnType<typeof createTestSessionCatalogOutboxRuntime>["runtime"],
+) {
+  const initial = crossWorkspaceState(active);
+  const activeKey = sessionScopeKey(RACE_WORKSPACE, active.session_id);
+  const otherKey = sessionScopeKey(OTHER_WORKSPACE, other.session_id);
+  initial.sessionsByWorkspace.set(RACE_WORKSPACE, [active]);
+  initial.sessionsByWorkspace.set(OTHER_WORKSPACE, [other]);
+  initial.eventQueuesBySession.set(activeKey, []);
+  initial.eventQueuesBySession.set(otherKey, []);
+  return {
+    ...mountLifecycle(active, initial, sessionCatalogOutboxRuntime, [
+      { workspace_id: RACE_WORKSPACE, backend_workspace_id: "00000000-0000-0000-0000-000000000001", connection_kind: "local" },
+      { workspace_id: OTHER_WORKSPACE, backend_workspace_id: "00000000-0000-0000-0000-000000000002", connection_kind: "local" },
+    ]),
+    activeKey,
+    otherKey,
+  };
+}
+
 describe("会话列表收敛的活动工作区边界", () => {
+  for (const selectWhilePending of [false, true]) {
+    test(`跨工作区重命名只更新目标镜像及事件队列，迟到切换=${selectWhilePending}`, async () => {
+      const active = raceSession("ses_active");
+      const target = raceSession("ses_other");
+      const selected = raceSession("ses_selected");
+      const updated = { ...target, title: "后端完整标题", updated_at: "2026-10-11T00:00:00Z" };
+      const targetKey = sessionScopeKey(OTHER_WORKSPACE, target.session_id);
+      const activeKey = sessionScopeKey(RACE_WORKSPACE, active.session_id);
+      let started = false;
+      let releaseGet: (() => void) | undefined;
+      const requests: string[] = [];
+      installGatewayFetch(({ path, method, init }) => {
+        if (path === `/api/v1/sessions/${target.session_id}` && method === "GET") {
+          started = true;
+          requests.push(new Headers(init?.headers).get("X-BoxTeam-Workspace-Id") ?? "");
+          return new Promise<Response>((resolve) => {
+            releaseGet = () => resolve(apiResponse(updated));
+          });
+        }
+        return undefined;
+      });
+      const initial = crossWorkspaceState(active);
+      initial.sessions = [active, selected];
+      initial.sessionsByWorkspace.set(RACE_WORKSPACE, [active, selected]);
+      initial.sessionsByWorkspace.set(OTHER_WORKSPACE, [target]);
+      initial.eventQueuesBySession.set(activeKey, []);
+      const runtime = createTestSessionCatalogOutboxRuntime();
+      const mounted = mountLifecycle(active, initial, runtime.runtime, [
+        { workspace_id: RACE_WORKSPACE, backend_workspace_id: "00000000-0000-0000-0000-000000000001", connection_kind: "local" },
+        { workspace_id: OTHER_WORKSPACE, backend_workspace_id: "00000000-0000-0000-0000-000000000002", connection_kind: "local" },
+      ]);
+      const pending = mounted.actions.renameSession(target.session_id, "新标题", OTHER_WORKSPACE);
+      for (let index = 0; index < 100 && !started; index += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(started).toBe(true);
+      if (selectWhilePending) mounted.actions.selectWorkspaceSession(RACE_WORKSPACE, selected.session_id, selected);
+      const sessionsAfterSelection = [...mounted.state().sessions];
+      if (!releaseGet) throw new Error("重命名未到达目标会话权威读取");
+      releaseGet();
+      await pending;
+      const next = mounted.state();
+      expect(requests).toEqual([OTHER_WORKSPACE]);
+      expect(runtime.submitted[0]?.workspaceId).toBe(OTHER_WORKSPACE);
+      expect(next.currentSession).toEqual(selectWhilePending ? selected : active);
+      expect(next.currentSessionWorkspaceId).toBe(RACE_WORKSPACE);
+      expect(next.sessions).toEqual(sessionsAfterSelection);
+      expect(next.sessionsByWorkspace.get(OTHER_WORKSPACE)).toEqual([updated]);
+      expect(next.eventQueuesBySession.get(activeKey)).toEqual([]);
+      expect(next.eventQueuesBySession.get(targetKey)?.map((event) => event.sessionId)).toEqual([target.session_id]);
+      expect(next.eventQueuesBySession.get(targetKey)?.[0]?.kind).toBe("frontend");
+    });
+  }
+
+  test("重命名回包不覆盖另一工作区同 ID 会话的状态栏与缓存归属", async () => {
+    const before = { ...raceSession("ses_shared"), title: "工作区 A 标题" };
+    const selected = { ...raceSession("ses_shared"), title: "工作区 B 标题" };
+    const updated = { ...before, title: "工作区 A 新标题" };
+    let started = false;
+    let releaseGet: (() => void) | undefined;
+    const requests: string[] = [];
+    installGatewayFetch(({ path, method, init }) => {
+      if (path === `/api/v1/sessions/${before.session_id}` && method === "GET") {
+        started = true;
+        requests.push(new Headers(init?.headers).get("X-BoxTeam-Workspace-Id") ?? "");
+        return new Promise<Response>((resolve) => {
+          releaseGet = () => resolve(apiResponse(updated));
+        });
+      }
+      return undefined;
+    });
+
+    const runtime = createTestSessionCatalogOutboxRuntime();
+    const mounted = mountDuplicateSessionOwners(before, selected, runtime.runtime);
+    const pending = mounted.actions.renameSession(
+      before.session_id,
+      "工作区 A 新标题",
+      RACE_WORKSPACE,
+    );
+    for (let index = 0; index < 100 && !started; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(started).toBe(true);
+    mounted.actions.selectWorkspaceSession(
+      OTHER_WORKSPACE,
+      selected.session_id,
+      selected,
+    );
+    const statusAfterSelection = mounted.state().status;
+    const selectedQueue = mounted.state().eventQueuesBySession.get(mounted.otherKey);
+    if (!releaseGet) throw new Error("重命名未到达目标会话权威读取");
+    releaseGet();
+    await pending;
+
+    const next = mounted.state();
+    expect(requests).toEqual([RACE_WORKSPACE]);
+    expect(runtime.submitted[0]?.workspaceId).toBe(RACE_WORKSPACE);
+    expect(next.status).toBe(statusAfterSelection);
+    expect(next.currentSession).toEqual(selected);
+    expect(next.sessions).toEqual([selected]);
+    expect(next.sessionsByWorkspace.get(RACE_WORKSPACE)).toEqual([updated]);
+    expect(next.sessionsByWorkspace.get(OTHER_WORKSPACE)).toEqual([selected]);
+    expect(next.eventQueuesBySession.get(mounted.activeKey)?.map((event) => event.kind))
+      .toEqual(["frontend"]);
+    expect(next.eventQueuesBySession.get(mounted.otherKey)).toBe(selectedQueue);
+  });
+
+  test("Agent 切换回包不覆盖另一工作区同 ID 会话的状态栏与缓存归属", async () => {
+    const before = raceSession("ses_shared");
+    const selected = { ...raceSession("ses_shared", "agent_other"), title: "工作区 B 会话" };
+    const updated = { ...before, current_agent_id: "agent_new" };
+    let started = false;
+    let releasePatch: (() => void) | undefined;
+    const requests: string[] = [];
+    installGatewayFetch(({ path, method, init }) => {
+      if (path === `/api/v1/sessions/${before.session_id}` && method === "PATCH") {
+        started = true;
+        requests.push(new Headers(init?.headers).get("X-BoxTeam-Workspace-Id") ?? "");
+        return new Promise<Response>((resolve) => {
+          releasePatch = () => resolve(apiResponse(updated));
+        });
+      }
+      return undefined;
+    });
+
+    const mounted = mountDuplicateSessionOwners(before, selected);
+    const pending = mounted.actions.switchAgent("agent_new");
+    for (let index = 0; index < 100 && !started; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(started).toBe(true);
+    mounted.actions.selectWorkspaceSession(
+      OTHER_WORKSPACE,
+      selected.session_id,
+      selected,
+    );
+    const statusAfterSelection = mounted.state().status;
+    if (!releasePatch) throw new Error("Agent 切换未发出会话更新请求");
+    const selectedQueue = mounted.state().eventQueuesBySession.get(mounted.otherKey);
+    releasePatch();
+    await pending;
+
+    const next = mounted.state();
+    expect(requests).toEqual([RACE_WORKSPACE]);
+    expect(next.status).toBe(statusAfterSelection);
+    expect(next.currentSession).toEqual(selected);
+    expect(next.sessions).toEqual([selected]);
+    expect(next.sessionsByWorkspace.get(RACE_WORKSPACE)).toEqual([updated]);
+    expect(next.sessionsByWorkspace.get(OTHER_WORKSPACE)).toEqual([selected]);
+    expect(next.eventQueuesBySession.get(mounted.activeKey)?.map((event) => event.kind))
+      .toEqual(["frontend"]);
+    expect(next.eventQueuesBySession.get(mounted.otherKey)).toBe(selectedQueue);
+  });
+
+  test("模型切换回包不覆盖另一工作区同 ID 会话的状态栏与缓存归属", async () => {
+    const before = { ...raceSession("ses_shared"), current_provider_id: "provider_a" };
+    const selected = {
+      ...raceSession("ses_shared"),
+      title: "工作区 B 会话",
+      current_provider_id: "provider_b",
+    };
+    const updated = { ...before, current_provider_id: "provider_new" };
+    let started = false;
+    let releasePatch: (() => void) | undefined;
+    const requests: string[] = [];
+    installGatewayFetch(({ path, method, init }) => {
+      if (path === `/api/v1/sessions/${before.session_id}` && method === "PATCH") {
+        started = true;
+        requests.push(new Headers(init?.headers).get("X-BoxTeam-Workspace-Id") ?? "");
+        return new Promise<Response>((resolve) => {
+          releasePatch = () => resolve(apiResponse(updated));
+        });
+      }
+      return undefined;
+    });
+
+    const mounted = mountDuplicateSessionOwners(before, selected);
+    const pending = mounted.actions.switchModel("provider_new");
+    for (let index = 0; index < 100 && !started; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(started).toBe(true);
+    mounted.actions.selectWorkspaceSession(
+      OTHER_WORKSPACE,
+      selected.session_id,
+      selected,
+    );
+    const statusAfterSelection = mounted.state().status;
+    if (!releasePatch) throw new Error("模型切换未发出会话更新请求");
+    const selectedQueue = mounted.state().eventQueuesBySession.get(mounted.otherKey);
+    releasePatch();
+    await pending;
+
+    const next = mounted.state();
+    expect(requests).toEqual([RACE_WORKSPACE]);
+    expect(next.status).toBe(statusAfterSelection);
+    expect(next.currentSession).toEqual(selected);
+    expect(next.sessions).toEqual([selected]);
+    expect(next.sessionsByWorkspace.get(RACE_WORKSPACE)).toEqual([updated]);
+    expect(next.sessionsByWorkspace.get(OTHER_WORKSPACE)).toEqual([selected]);
+    expect(next.eventQueuesBySession.get(mounted.activeKey)?.map((event) => event.kind))
+      .toEqual(["frontend"]);
+    expect(next.eventQueuesBySession.get(mounted.otherKey)).toBe(selectedQueue);
+  });
+
   test("P2-3 删除非活动工作区会话时收敛该工作区镜像且不改动全局 sessions", async () => {
     const active = raceSession("ses_active");
     const otherInOther = raceSession("ses_other");

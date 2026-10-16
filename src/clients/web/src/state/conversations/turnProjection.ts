@@ -21,7 +21,7 @@ function turnConversationStatus(
   return "running";
 }
 
-function conversationFromTurn(turn: TurnRecord): ConversationView {
+export function conversationFromTurn(turn: TurnRecord, threadId: string): ConversationView {
   const userMessages = turn.user_messages ?? [];
   const firstUserMessage = userMessages[0];
   const userContent = userMessages.map((message) =>
@@ -36,6 +36,7 @@ function conversationFromTurn(turn: TurnRecord): ConversationView {
     ? {
         message_id: firstUserMessage.message_id,
         session_id: turn.session_id,
+        thread_id: threadId,
         role: "user",
         content: userContent,
         attachments,
@@ -60,6 +61,7 @@ function conversationFromTurn(turn: TurnRecord): ConversationView {
     ? [{
         message_id: `${turn.turn_id}:assistant`,
         session_id: turn.session_id,
+        thread_id: threadId,
         role: "assistant",
         content: assistantContent,
         attachments: [],
@@ -82,9 +84,12 @@ function conversationFromTurn(turn: TurnRecord): ConversationView {
 
   return {
     conversationId: turn.turn_id,
+    threadId,
     displayMode: "history",
     turnId: turn.turn_id,
     turnRevision: turn.revision,
+    sourceViewId: turn.source_view_id,
+    sourceViewRevision: turn.source_view_revision,
     turnOrdinal: turn.ordinal,
     turnItemsView: isTurnDetail(turn) ? "full" : "summary",
     rootLogicalItemOrdinal: turn.root_logical_item_ordinal,
@@ -132,16 +137,20 @@ export function turnTimelineConversations(
   if (!timeline) {
     return [];
   }
+  if (timeline.scopeKey !== sessionCacheKey) {
+    throw new Error("Turn timeline 与当前会话视图的范围不一致");
+  }
   return timeline.orderedTurnIds.flatMap((turnId) => {
     const turn = timeline.turnsById[turnId];
     if (turn?.session_id !== sessionId) {
       return [];
     }
+    if (!timeline.threadId) throw new Error("Turn 消息投影缺少已读取的 thread owner");
     const cached = turnConversationCache.get(turn);
-    if (cached) {
+    if (cached?.threadId === timeline.threadId) {
       return [cached];
     }
-    const conversation = conversationFromTurn(turn);
+    const conversation = conversationFromTurn(turn, timeline.threadId);
     turnConversationCache.set(turn, conversation);
     return [conversation];
   });

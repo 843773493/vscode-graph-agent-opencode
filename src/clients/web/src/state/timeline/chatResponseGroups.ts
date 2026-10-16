@@ -10,11 +10,11 @@ export type HistoricalBoundaryStatus = { kind: "user-interrupted" | "cancelled" 
 export function uniqueToolNames(items: ToolTimelineItem[]): string[] { return items.map((item) => item.toolName).filter((toolName, index, names) => names.indexOf(toolName) === index); }
 
 export function historicalBoundaryStatus(conversation: ConversationView): HistoricalBoundaryStatus | null {
-  if (conversation.displayMode !== "history" || conversation.messageStream) return null;
+  if (conversation.displayMode !== "history") return null;
   const responseParts = conversation.responseParts ?? [];
   const userInterrupted = responseParts.some((part) => part.partial === true && part.completion_reason === "user_interrupt");
   const terminalCancellation = conversation.turnStatus === "cancelled";
-  const toolItems = responsePartsToTimelineItems(responseParts.filter((part) => part.kind === "tool_call"), { terminalFailure: conversation.turnStatus === "failed" || conversation.turnStatus === "timed_out", terminalCancellation }).filter((item): item is ToolTimelineItem => item.kind === "aggregated_tool");
+  const toolItems = responsePartsToTimelineItems(responseParts, { terminalFailure: conversation.turnStatus === "failed" || conversation.turnStatus === "timed_out", terminalCancellation }).filter((item): item is ToolTimelineItem => item.kind === "aggregated_tool");
   if (userInterrupted) return { kind: "user-interrupted", role: "status", className: "chat-inline-cancelled", icon: "codicon-debug-stop", title: "已由用户中断", detail: "已保留本轮已经生成的内容" };
   if (terminalCancellation) return { kind: "cancelled", role: "status", className: "chat-inline-cancelled", icon: "codicon-debug-stop", title: "任务已取消", detail: "已保留本轮已经生成的内容" };
   const incompleteToolNames = uniqueToolNames(toolItems.filter((item) => item.incomplete));
@@ -30,7 +30,7 @@ export function historicalBoundaryStatus(conversation: ConversationView): Histor
 
 export function responseItemsForConversation(conversation: ConversationView): TimelineItem[] {
   const terminalCancellation = conversation.turnStatus === "cancelled" || conversation.messageStream?.streamStatus === "interrupted";
-  const items = responsePartsToTimelineItems((conversation.responseParts ?? []).filter((part) => part.kind !== "final_text"), { terminalFailure: !terminalCancellation && (conversation.turnStatus === "failed" || conversation.turnStatus === "timed_out" || (!conversation.turnStatus && conversation.status === "error")), terminalCancellation });
+  const items = responsePartsToTimelineItems(conversation.responseParts ?? [], { terminalFailure: !terminalCancellation && (conversation.turnStatus === "failed" || conversation.turnStatus === "timed_out" || (!conversation.turnStatus && conversation.status === "error")), terminalCancellation });
   const assistantMessages = conversation.assistantMessages ?? [];
   const finalAssistantMessage = assistantMessages.reduce<NonNullable<ConversationView["assistantMessages"]>[number] | undefined>((longest, candidate) => !longest || candidate.content.length > longest.content.length ? candidate : longest, undefined);
   const finalText = finalAssistantMessage?.content?.trim() ?? "";
@@ -40,7 +40,6 @@ export function responseItemsForConversation(conversation: ConversationView): Ti
   return [...items, { kind: "aggregated_text", id: conversation.conversationId + ":assistant-final", text: finalAssistantMessage?.content ?? "", partKind: "markdown", active: false, timestamp: finalAssistantMessage?.created_at ?? null, eventCount: 1, rawEvents: [] }];
 }
 
-export function persistedWorkItems(conversation: ConversationView): WorkItem[] { return responseItemsForConversation(conversation).filter((item): item is WorkItem => item.kind === "aggregated_tool" || (item.kind === "aggregated_text" && item.partKind === "reasoning")); }
 export function buildRenderGroups(items: TimelineItem[]): RenderGroup[] {
   const groups: RenderGroup[] = [];
   for (const item of items) {

@@ -1,209 +1,281 @@
-# 当前协作状态（北京时间 2026-10-11）
+# 当前协作状态（北京时间 2026-10-16；沿用 2026/10/13 的 F12 run）
 
-原 goal **active、未完成**。恢复只读本页当前租约和收据；技能入口见[SKILL.md](../../../../SKILL.md)，流程只按变化查[共同流程](team-collaboration-workflow.md)，事故按关键词查[失败细则](delivery-failure-rules.md)。主持续调度并处理当前真实瓶颈，不另建统计任务。
+## 恢复首读：当前 hash 边界收尾，提交后切换协作技能准备
 
-## 坐标与租约
+- **最终末审/提交门**：R2462协调者核candidate1937三文件SHA与Sol manifest一致，新增差异独审无剩余finding；主1938从完整固定树严格重建成功，1939核原件通过。1940提交前diff-check检出8处EOF空行，尚未创建commit；仅移除这些空行，1942逐文件核与1937除末尾换行外字节一致且AST相同。相关Ruff仍报原test_rollout_fork_plan_registry.py的2处fixture同名导出和1处nested-with，均位于未变正文，不扩修。所有业务作者继续STOP；重固定后正常提交push，不force，不动共享暂存或6个deferred路径。
+- **用户最新收口（2026-10-16）**：完成当前请求前hash优化及必要验证后停止扩大业务任务，统一提交并push已有授权改动，再创建新的分层GPT协作技能。新结构为主→最多3名Luna协调child→1名核心Sol及辅助Luna grandchildren；协调层消化原始报告，主仅接收里程碑、需裁决问题和阻塞，平时等待。新技能先不启动后继实施。原goal未闭事项（notice重放、产品终验、128/427、七change余项）保留，不借本轮提交宣称完成；不再续派这些修复。主1929已核R2456来源证据actual0，主1930只读Git交付观察完成，下一主1931。
+- **收尾验证**：hash-subtraction-final-boundaries-20261016-01的158项、真实HTTP/fork16项、epoch/root及直返快照28项通过，29文件及最后单文件静态0。candidate1934完整固定并严格重建，增量双审仅确认raw tool_snapshot冷恢复一致性P2；首个关于seal直返绕过ack后fresh read的疑点沿完整caller核查后撤回，不恢复冗余回读。R2462已补sealed构造一致性校验及真实SQLite损坏冷读拒绝，3文件STOP；85项定向、最终5负例和Ruff通过，初始5红证明旧缺口。当前Provider从ToolSetRef投影，未发现raw字段改变wire。原件入口为sol_vertical_implementer/artifacts/r2462-tool-snapshot-{fix-manifest,receipt}-20261016-01.json；协调Luna核原件并安排仅新增差异独审。最终固定后提交push，不重跑无关旧绿，不扩大旧notice/正式全产品/规模门。
+- **最新固定/产品终态**：candidate1908=`6ea4d020405aeb671a188ece9e2dc3d67c985ef4`，previous1890=`b3b37e7e986f3471f49bc0ad266767b75f076f08`，baseline仍e2bed124；增量26路径。主1908固定0/1909严格重建0/1910产品profile准备0，1911核三原；R2428完整增量独审无新增finding。R2429唯一正式产品actual1/pytest283.25秒，Web build0，initial_admission_recovery已完成；generated_internal_history回写Job失败，forks未到。主1912核准确原run actual1、2600源码同/组空，收据=`coordinator/artifacts/r2429-product-original-verification-1912.json`。原owner直接执行seal_web_product退出0（无独立run_task attempt，仅工具转录，未补造），产品封存result SHA9b684f9f5de1188351ead6caf83158b2f86729f90cf3f86a90373d9b0453ae0c。profile/原attempt保留不变，不无差异重跑。
+- **当前租约/写门**：全部业务作者STOP，无后继业务写权。主仅负责最后固定、必要独审核对、提交push；随后创建分层协作技能，不启动团队继续实施。唯一活跃收尾协调者为/root/luna_history_identity_delivery，唯一核心作者为已STOP的/root/sol_vertical_recovery；不唤醒旧implementer或撤权成员。hash优化保wire字段/算法、真正不可信冷读取和ack后fresh权威projection，不做mutable跨次cache；未量化完整性能倍率。R2449首用户wire的generated privateResult、H4原node、七change及128/427仍未闭。
+- **本批新证据/合同**：主1898核R2398最终Ruff与10参数原actual均0，10 passed46.86秒，profile v2补独立worker的直接owner依赖；保之前红原件，不重跑。R2405 AGENTS unchanged/changed/absent真实backend冷重启三参数3 passed167.74秒，主1896核0/组空。R2407/2409/2411共同裁决保持Internal DTO历史execution session/thread/job，page/cursor为请求目标，binding仍由目标本地校验；fork及再次fork不重写历史scope。主已消歧session-turn-history spec、design报告读取和8.12测试说明，主1900 strict validate0，不改API行为。R2402的错误等式由R2416逐execution冻结来源精确预期替换，不能白名单放宽、从target反推或在线源补授权；正式三focus仍待新固定后验证。
+- **效率观察**：R2398的前移审查未挡住空tools形态、子worker owner、delta sink签名三类接线错误；修复后10参数绿只证明该闭包，不宣称总体提速。R2412又出现禁Git与索引误判，已按既有规则换空历史同模型作者，保现源码；后继效果按实际原件核验，不追加同义禁令。
+- **本批交付/验证**：主1902核R2417两生成actual0、预期仅三协议物/两OpenAPI变化；主1903核最终Ruff/真实tsc/strict全0，R2422独审说明无finding，Web build由R2429 fixture覆盖。R2416最后03解析/helper由1905核0；R2421前移审发现DTO parts不能完整代表可见internal成员，R2423改冻SQL member→execution/origin/turn关系，full/prefix按真实选集，target新增批量核internal/null；最终解析/helper主1907核0，R2427独审实际reader/selection无finding，正式产品在途。R2418两生产/三行为测试及六处隐式import caller同批迁叶模块，主1906核Ruff/core/import-collect原actual[0,1,0]：171绿47.25秒，另core两红；86 collect只证导入。R2430确认carrier正例缺匹配completed result，应补closed正例并保unclosed live负例；core-plan旧golden须独立按规范排除selection.detail_ref及两处ref.plan_id，core-request同步排除两处detail_ref并更新依赖摘要，不能倒抄生产输出。新计数只证明每次validate一次plan_hash/跨次重算/嵌套损坏拒绝，不证明性能倍率或128/427通过。
+- **性能证据/下一切片**：R2308唯一真实诊断 actual124/60.025秒，35轮完成、第36轮prepare截断，组空；6,669条JSONL保留。Ruff03 actual0，主1858核两原run及1857。prepare前5均0.441秒→31–35均2.332秒；assembly.read.connection后期每轮5次合计约767ms，seal约1245ms，persist约629ms（互相嵌套，不相加）。纯wire投影约13ms、closure两次约3ms，不据旧方案先优化这些。R2312窄审确认实际v2 profile/driver SHA匹配、无确定阻塞；144次KeyError是owner捕获的注册未命中，不当业务错误。等真实callee确认重复读取/校验边界后让唯一Sol实施，不加预算或盲重128/427。
+- **本轮接续点（UTC 2026-10-16 00:06）**：R2345/R2364完成，exact MC/provider→callback run handoff、恢复原A和processor确定close；reader/processor保主异常及取消、清理次错note，4参数负例独审无finding。主1876核Ruff03、126 unit、selector误写01、回归02原actual[0,0,4,1]；02先12业务绿后在Provider fixture缺sealed binding到claim前失败，不能把整run称绿。主1877核reader后真实4核心4 passed48.21秒/1101依赖同/组空。R2370由Luna窄修同owner真实sealed前置，不改Provider生产guard；另6个stage/2 TCP/2 crash worker入口同缺binding列后继，不扩当前node。R2369仅两测试fixture/local变量名及ToolMessage.id注释，Ruff+7+6绿主1878核三原0；product独审无断言/数据放宽。R2351最终CIL node绿主1872核/独审无finding，仍不足勾CIL1.6。SKILL仅补R2333副作用早于start/真实producer屏障经验，主1879格式0、R2381限定范围独审无finding，不称正式产品或总体提速。真实cold graph非新增门，原产品restart/report保留。主无handle，下一主1880；R2370 STOP后一次固定，旧三focus红和128/427不盲重。
 
-- ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`，旧`/data/hyf/20260629_agent/vscode-graph-agent-opencode`为软链接。
-- 当前已接受HEAD=`86ce4fb606ab241a935afdc68b8fcb371f5b2add`，tree=`1810707c2971cff6845d8ed34fcd3da9d3ff614e`（三团队文档），receipt=`COORD/artifacts/docs238-scene-closure/revision2/receipt.json`；strict/diffcheck/quick_validate/guard全0，249独审增量无finding，共享index字节同，未收050源码。上一222文档HEAD=`86924c1a49de3e210a0eb256fa2d2bef2938e336`，业务接受166 HEAD=`c6bb5c7f7a8b5cb74a52bc2e74495b5694091aca`；历史坐标仍按原件。
-- RV=`ROOT/out/tests/temp/2026/10/09/a06-final-review`；ART050=`RV/sol_vertical_implementer/artifacts/section8-product050-full-closure`。
-- T116=`ROOT/out/tests/temp/2026/10/10/efficiency116`；COORD=`T116/coordinator`。
-- NWT=`ROOT/out/worktrees/2026/10/09/a06-final-review/navigation-fixture-receipt`，唯一活跃代码worktree，禁止新建源码副本。
-- T=`ROOT/out/tests/temp/2026/10/04/024121-team-execution`；A=`T/coordinator/artifacts/sol-efficiency-trial`；E=`T/sol_vertical_implementer/artifacts/final-original-scope-source-bulk-core-and-boundaries`。
+- **当前范围**：Turn跳转6.10完成，R1980正式build/browser通过、主1594核原件，普通Turn E2E使用正式入口；不重做。精确内部message/tool与独立child跳转不属此批。原交接、七change、fork及128/427未全部验收，goal active。
+- **接续点（主1928后）**：无主在途handle，下一主1929。主1928核R2449/独立R2455封存原actual[1,0]、2602源码同/组空，8件小原件位于原attempt/product-artifacts。R2449 build0、report130工具及两次aput完成，原10秒锁超时未复现；最长shared等待4.002733秒内27次exclusive append_writes占3.927466秒，每次≤0.191347秒，不能归于namespace或一次长持锁。实际新失败MJS6078：首用户messages[0]control system_reminder含head privateResult三次，未见head prompt；其它历史/安全DOM断言已越过，仍不能称整个generated通过。R2445单node首次prepare/selection对抗1passed10.33秒、主1927核0/源码同/组空，source ordinal精确延续及原快照字节不变/tamper负例保留；两Ruff主1926核0。R2446/2450已盘1.5全部typed声明/中文owner及七consumer，未见新缺口，1.6最新冷target补证已绿；待完整候选固定再判整项。R2447 H4 header已STOP/Ruff0，原H4未重验，不能借R2445绿背书。R2441生成/真实tsc/build及独审已核，不重跑。技能本轮不新增未经实证同义规则。
 
-| Agent | 实际模型 | 当前权限和任务 |
+- **接续更新（UTC 2026-10-16 00:10）**：R2370首轮claim失败已定位hex UUID与callback dashed UUID字符串键不同；仅该node统一`str(UUID(hex=create_uuid_hex()))`贯穿真实prepare/activation/start/dispatch/claim，修后两参数绿。原stdout为2 passed/8.28秒、runner12.90秒；Responses一条Pydantic usage序列化warning待只读归因，不扩大修复。主收据`coordinator/artifacts/r2370-sealed-interrupt-original-verification-1880.json`。R2380新增拒绝启动后middleware失败收口可能等待永不启动attempt，尚未动态复现，不称已确定生产挂起；R2383结构Luna核完整可达性/cleanup并交Sol。R2384产品Luna前移核三focus真实前置，R2385 remaining核本node断流证明力及相邻缺binding清单。先收此明确finding，不盲重旧红；若无需修则一次固定，若证实须修则整批闭合后固定。下一主1881，无主handle；旧00:06接续点保历史。
+
+- **接续更新（UTC 2026-10-16 00:17）**：R2383静态完整核撤回正常路径必挂结论：合法gate先active再工具体；异常claim拒绝可造成无producer start Future，processor外层close会取消waiter，非已证永久挂。Sol获同链评估/最小修复与真实负例窗；R2389 remaining核所有fail_tool_invocation caller/测试前置，R2390 structure核负例真实触达。R2385确认R2370是两Provider完整流后模拟工具scope中断，非真实工具体或cassette request-match证明；Responses warning是第三方usage日志序列化，不扩修；相邻缺sealed仍3函数10参数例留后继。R2388减法已核fresh writer/显式v1 importer/fork typed记录都要求真实ID，不动Provider合法配对。1881完整固定/重建已成，R2387增审进行中；后继修改完成再固定增量，不在live修改中跑旧profile。下一主1886，无主handle；旧接续编号保历史。
+
+- **验证窗口（UTC 2026-10-16 00:25）**：Sol R2383已整批写完，仅registry/两测试；Ruff＋约10定向unit＋真实callback拒绝fault injection＋既有start[failed]集中验证GO，全后端源码STOP。R2389提前找到唯一旧unit先fail再start前置并直接交Sol，已同批迁齐；不改变wait_tool_start合法竞态。StructuredToolCallMiddleware已拦自然重复raw ID，structure关于“无guard”的过宽结论已撤，故新RuntimeCase通过合法pre-claim故障注入，不能冒称自然产品事故。R2391三文件STOP/Ruff0主1886核；新纯mapper unit获独立无核心依赖精准profile运行，2个history集成node等Sol终态短窗。R2393产品Luna独审mapper，R2394结构Luna审Sol新增差异；旧implementer意外恢复已interrupt/提醒旧租约结束，不能并双核心。下一主1887，无主handle。
+
+- **接续更新（UTC 2026-10-16 00:29）**：主1888核R2383三原均0/882依赖同/组空；unit11 passed2.12秒，真实2 passed18.79秒（第三方DuckDuckGo包DeprecationWarning不扩修）。真实新node通过pre-claim故障注入，原错误同一对象callback→middleware→processor，body零执行/start/result零、新pending零且producer/callback结束；不冒称自然生产重复ID可达。R2391首unit实际1（6绿1夹具构造错）主1887核，不是机械拒绝；R2393独审还发现在selector之前拒缺ID会影响无关损坏条目过滤，已交原作者整批迁齐，非核心Sol补救。Sol验证期间维持mapper STOP，现已释放其修复/集中检查窗。R2395 remaining准备后继10例sealed前提精确合同，不写源码/跑测试，不成为正式产品新门。下一主1889，无主handle。
+
+- **接续更新（2026-10-16；主1889后）**：R2393最终14 passed16.51秒，command20.66秒；首轮8绿1红是新增detail fixture ordinal=0违反ge=1，改1后全绿且Ruff0，不是产品缺陷。主1889核最终静态、首红、最终14项和R2382冷读四原actual[0,1,0,0]、源码同/组空。R2382唯一冷reader592.434ms含profiler，registration560.623ms；JCS435次516.561ms占reader87.2%，SQLite3.690ms占0.62%，嵌套时间不相加。主库/WAL/journal同，两处SHM协调变化单列，不称零写；只定位候选热点，未证明可删任一校验。R2400只准备方案，不成为正式产品新门。R2395精确三函数10参数/child独立owner与seal合同已交，R2398只准备ART补丁。Turn跳转既有6.10/R1980产品绿复用，不重做。下一主1890，无主handle。
+
+### 既有阶段证据（下列 STOP、候选与下一编号均为当时状态；当前租约以上文及租约表为准）
+
+- **核心Sol最终STOP**：R2197–2217共14生产＋3自有测试，无在途。middleware先真实A终态再prepare P；runtime登记call无start时等原Future，waiter取消不删共享映射，唯start resolve；不合成attempt。P/A分别持久、P保projection/order，真另一attempt/owner/MC/Turn/正文冲突仍拒；已有四态不降unknown。当前后台checkpoint可先写P，严格P-only恢复必要，不新锁/表/等待，不改carrier_dedup。reader删旧不可达timeout成功重查。
+- **核心原验收**：sol-r2217-core-request-regression-01全61绿，pytest48.31秒/command53.892秒；包含正式frozen envelope后的冷恢复全部10参数、共fixture真实A一项、整份carrier48项、graph2项。R2205最终17文件Ruff0、R2217最后3测试Ruff0。主1789已机械核最终两run及先前fixture静态/单node原actual=[0,0,0,1]，本批生产终态有效；早期格式/fixture红保原件。R2183独立213绿和R2195七fixture绿按依赖复用，不再移给Sol。
+- **Luna五消费者STOP/已绿**：R2216一次178项177绿1红，pytest38.93秒/command43.2847秒；唯一同参call node连续因先claim仍断言pending、漏canonical sink、setup已有flush却assert_not_awaited返工。R2223核完整setup/model1 call batch→reconcile→唯一tool_result_sink/精确attempt与mirror，保原batch且不新增generic canonical写；R2227仅该node复验1 passed/0.50秒，command4.35秒、runner5.42秒，主1795机械核0。177独立绿按依赖复用，双waiter取消隔离在其内，不重整五文件。该后继只证明本次接线修正有效，不证明整体分工倍率。
+- **Luna mounted已绿**：R2231既有双mount真实HTTP测试1 passed/24.82秒，1916依赖源码同、组空，主1797核0。正向messages+visible_text消费真实DTO，核四键回显、非空正文与本workspace身份、排除另一owner；完整DTO B/path A反向400 scope_mismatch、无data/items/对方Session引用；原真实编译和逆序清理保留。R2224旧information读触未启动Terminal而500，不是生产身份缺陷；R2226改messages及请求include不参与响应四键等式，static02通过；原红保留，不启动额外服务。
+- **独审边界**：initial driver真正arm thread.initial.admitted_before_bound，不是canonical barrier；same-attempt终态链仍有效，不冒称checkpoint pre-reconcile时序证明。timeout负例只证明无真实start不合成attempt、deadline诚实失败，不证真实middleware自动取消；reader finally会cancel/await迭代task并close，runtime每execution新建，structure已撤回map Future等于确定生产泄漏的过宽finding。
+- **当前候选与产品首错**：candidate1810=`958aef2941d51457293a0589a8254e7f1233cfb9`，baseline仍e2bed124；相对1801仅MJS和STATE，主1810固定/1811严格重建/1812产品profile均0，1814核原件，六deferred保留。R2240把业务source幂等键直接当admission查库，R2245仅initial函数迁齐radm/rexec/rjob完整SHA256前像及消费者，parser0，R2247独审无finding。R2249唯一initial正式重验实际1（command140.84秒/runner142.04秒），Web build0；封存0，2596源码同/组空，主1815核原[1,0]。新首错为initial场景Job状态API对`job_01a1415a1b4c7d41bc13160bf1bb2e88`返回404，request_id=`ebbdb35c-fec8-412b-8837-578302be0c5f`；栈不能直接确定哪个helper，R2254沿封存事件、实际caller及生产恢复归因，不重跑或按404猜改。原raw保留，未集成本候选。
+- **本批审查与说明**：R2235确认initial仍复用原A，R2228保raw1/history sourceA及Provider声明顺序。R2241完整40路径增量静态独审无确定阻断/结构finding，1810新MJS键与dispatcher一致；报告在structure/artifacts/R2241-candidate1801-incremental-review.md。R2247 report-key及R2248 runPublicForks完整后继消费者均未见确定接线缺口，不代产品绿或新增carrier门。R2242六消费者、R2243五测试/时间说明窄审复用；display-only node的未注入sink空断言留后继小清理，不扩产品语义。R2236时间注释/3生成物/真实tsc0、主1806预期文件核验、主1808四生产Ruff0复用。R2250技能独审后主将“必须经过新writer”改为沿真实writer/reader确认新增、复用或投影，避免违背本轮A复用证据；格式待本次集中核验，不宣称效率倍率。
+- **R2249归因与窄修**：404确为initial函数末尾5602显式GET旧父`sent.jobId`，不是child/report（两者已200 completed）、UI或wait helper。Job GET只读进程内`_jobs`；unsafe task重启只持久收敛Turn unknown/execution_lost及原tool/stream，不重建旧Job DTO，规范无旧Job GET恢复合同。R2259仅该函数以精确owner/Turn/execution/job JOIN持久终态取代错误内存GET，保ModelCall/tool/Provider身份，返回parentTerminal；parser0/STOP，R2257独审无finding，主1820核parser原件0，不改生产。其它safe续接/re-admitted Job查询保留，不扩语义。
+- **R2255小修已闭**：Luna独立清理display-only测试中的未注入sink空断言，改名`test_sinkless_display_tool_completion`，本地MagicMock writer/AsyncMock commit，保tool.completed/name/result/outcome。Ruff0、单node1 passed/0.29秒，主1818核两原run及1816技能格式actual全0；该小修未转Sol、未重177项。源码仅test_stream_terminal_items.py；R2258该成员前移核128完整setup，禁写/运行。R2253已确认R1980真实tail缺目标→around3/3→定位；historyLiveProofs空键的误报已撤回，不新增验收。
+- **128独立验收仍未闭**：R2260从旧real fixture模块唯一迁出确定性128测试及其专用fixture/helper/import；生产与seed算法未改，128/16正文、截断、读取上限4/3/3/128、8次64窗口和median<200ms全部保留。Ruff0、主1820核原0。R2264使用`luna_remaining_acceptance_focus/artifacts/run-profile-r2260-independent-128-history.json`（1921依赖），attempt `r2264-independent-128-runtime01`，原600秒/4GiB，actual124/command600.041秒/runner601.122秒，setup无pytest终态/业务断言，owned组空；主1822核原[124,0]。60秒栈在accept_turn→initialize→commit-offset校验，原件无迭代号，不据采样判总慢因或盲重。R2262独审迁移闭包无遗漏，目录职责finding已由R2268将测试及唯一helper完整迁入既有`tests/integration/backend/sessions/rollout_context/`，仅改import，Ruff0/collection1项2.51秒，作者STOP；新路径正式产物镜像该测试。未证明独立128通过或427提速。
+- **后继/效率**：产品无在途，源码全部STOP，主1823起固定新候选。R2263确认initial→generated_internal_history→forks无已知clock/ID/page/restart跨场冲突；待新固定profile授权唯一组合产品，原1500/1200预算不延。R2269只对照现有driver覆盖的原任务子项，section8键不等整项完成。R2266确认普通Turn导航消费者已迁齐正式表单，剩余滚轮是internal遍历/完整历史或专项follow验收，不改。R2265盘CIL1.5/1.6、itemized1.7原证据；R2271按真实重订阅机制与原条款收紧“缺reconnect名/要求额外组合”的推断，不加门。R2267确认当前目标owner入口一致，仅turn_projection_reads局部owner可称historical_owner，留后继；R2270只读核初始化重复校验，未授优化/重跑。R2251 Goal updated_at注释候选留后续生成批；SessionResource时间差异不擅改wire。6.4仅workspace部分证据，不造inline HTTP。Sol继续STOP。下一主1823，无主handle；STATE历史原件在coordinator/artifacts/state-before-compact-1784.md，撤权成员不恢复，429仅“继续”。
+
+## 最新验收证据（原actual与业务范围分开）
+
+R2280四轮诊断及最终Ruff由主1833核原件全0；真实四轮finalize后在第五次accept前停止，seed2.153秒、prepare1.607秒、initialize32次0.578秒、validator131次0.132秒。R2289完整seed增长60秒诊断由主1845核actual124/组空，35轮完成、第36轮未完；最后79items/141commits/59628字节，不代128/427验收。R2302纯JSONL汇总Ruff/summary由主1846核0；prepare增长1914.499ms，registration六次合计只增91.957ms；重叠阶段不可相加。R2304共用无损reasoning拆解及旧Provider聚合精确回归41绿，主1847核原0；1852技能格式0仅证明格式。SKILL简记有损聚合helper误用的证据/修正及局部效果，不宣称产品或效率倍率。
+R2288改名/RuntimeNotice负例已入1841。R2303/2311核alias：id/name仅annotation，kind另有saver准入，revision需provider final typed迁移；wakeup由canonical item直接读取，不能冒充request group locator。先保此跨链边界，不在当前产品窗口写。R2299旧item跨admission虽底层手工可造，上游当前ModelCall registrar/accumulator已限定新item，尚无产品可达反例，不派防御性修复。
+
+所有收据在FORKCOORD，准确run在FORKART/runs；主verify_run核前后源码同/profile/raw/真实退出一致及owned组空。mechanical0不代业务0。
+
+| 原attempt | 实际结果及适用范围 | 主收据 |
 |---|---|---|
-| `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **260续050/ROOT唯一核心作者、重测试owner**；原turn`01a128c0-ed95-7820-aa55-f9b40ffd1341`权威failed429后续同会话，现turn`01a129bc-601c-7b02-8f77-c317299a06a5`inProgress；没有因观察超时另开作者。types038/fixture018已主核0；Q037 actual-9未过，先核原现场和owned组，不盲重长产品。L182原Web/分层缺口和fork目标首次执行语义交同Sol同批；I/J/P/Q→K/M/O及全原剩余范围保持。050仍live，未整体STOP/固定/接受 |
-| `/root/navigation_remaining114` | `gpt-6-luna/max` | **163 STOP/会话closed不可复用**；当前FIFO后续断言与辅助服务lease无新确定缺口，原023后段未执行；不新增取消gate、不重复已知定位；无写/Git/测试/服务 |
-| `/root/a06_architecture_final` | `gpt-6-luna/max` | **只读常驻，撤产物写入与全部作者/运行权**；121报告再次写到NWT/out，已核原件并补到ROOT精确路径；123 STOP仅消息源码结论，无身份/filter确定错配；未读真实原件不当缺证，核心不等它；不再派该会话查路径 |
-| `/root/caller_inventory013` | `gpt-6-luna/max` | **101 STOP/撤作者运行及全部Git权**，复犯裸Git；两文件无独有源码，只保固定原件只读 |
-| `/root/a06_navigation_independent` | `gpt-6-luna/max` | **083 STOP/撤作者运行权**，复犯禁Git；独有源码已转交 |
-| `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **162 STOP/撤作者与运行权**；两fixture已机械固定/静态0，违规Git diff --check后turn429、作者report缺失保留；禁继续源码/Git/运行，独审转164 |
-| `/root/federation166_close` | `gpt-6-luna/max` | **166 STOP/隔离小修已固定**；NWT四文件、static003 actual0、strict/diffcheck0，主独立窄审168无finding；ROOT已核四preimage并同步固定blob/shared index同，profile追加四路径，`federation166-fixed/root-sync.json`；原两完整unit由Sol集中001跑完无失败，主核四固定SHA及必要callee，窄接受见166-skill-batch receipt；Luna禁Git/pytest/服务 |
-| `/root/startup165_readonly` | `gpt-6-luna/max` | **shutdown/不可复用**；197原入口/phase只读消息交Sol，已有read/wait恢复及deadline复用；195无确定启动根因。没有写入/Git/测试/服务，后继只读改用201/202 |
-| `/root/fixture164_independent` | `gpt-6-luna/max` | **164 STOP/只读常驻**；_facts已由Sol修且原取消40pass；屏障初报撤回、主过早采信保事实，不增门 |
-| `/root/stream168_production_readonly` | `gpt-6-luna/max` | **shutdown/不可复用**；196创建record排空、partial staging、source tombstone重开三finding已主核并交Sol同批，不重做旧调查；静态不代运行，后继只读改用201/202 |
-| `/root/stream169_assertion_readonly` | `gpt-6-luna/max` | **shutdown/191复犯禁Git，不再续派**；本轮明确禁Git仍执行`git status --short && git rev-parse --show-toplevel && rg ...`，包装未保actual；附件仅重复189/O外层未核，无新增finding。主补核O两阶段catalog/drain路径后直发Sol，不设等待。当前shared index相对旧166收据字节变，无191前快照不能单归此actor、不回滚用户暂存；无源码/测试/服务/报告写入实证 |
+| AGENTS1661/1663、Skill1545、主1437/1438 | 原[1,0,0,0,0]；AGENTS三状态分属旧组合及后继单项，当前依赖已变；Skill仅旧快照单Turn人工refresh；SQL只读不代业务验收 | cold-source-existing-evidence-original-verification-1439.json |
+| Sol1697、Context runtime03、主1436 | 原[1,1,0]；双压缩仍超业务期限但取得区间/次数证据，fullcopy三绿/fork范围预期三红，均组空 | runtime-profile-and-fixture-repair-original-verification-1437.json |
+| Context runtime02、Sol1697窄静态、主1435 | 原[1,0,0]；49绿/7失败保留，计时fixture静态0；前次Gateway8绿/静态0已核，不代原双压缩 | context-regression-and-profile-preflight-original-verification-1436.json |
+| Gateway static05/runtime03、主1434 | 原[0,0,0]；8绿含真实低层seal与完整零副作用，R3独审无确定缺口 | admission-root-seal-original-verification-1435.json |
+| UI R1774三检查、Gateway static04/runtime01/02、Sol1696 | 原[0,0,0,0,1,1,0]；hook17绿/真tsc/build、两轮setup失败原码保留、计时fixture Ruff0；不代双压缩业务门 | luna-delivery-and-core-profile-original-verification-1434.json |
+| UI R1763 runtime、Gateway static01/02/03、Sol1693、主1428–1430 | 原[0,1,0,0,0,0,0,0]；事件流36绿、import排序首错保留、三文件Ruff0；第二压缩原链未运行，静态/机械绿不代业务 | current-repair-original-verification-1431.json |
+| 1523/1524 | 真tsc0；四hook1，89pass/3fail，后继已修 | web-types-and-four-hook-result-verification-1232.json |
+| 1525–1528 | 语法0、两hook55绿、API stream单文件9绿、真tsc0；未复现1522旧API簇，不能据此认跨文件污染 | selection-terminal-and-api-stream-result-verification-1233.json |
+| 1529/1530 | 七Bun文件同进程73绿/8.75s；后端11文件Ruff1仅trace mapper旧UP017与刻意naive DTZ001，不能删负例；C五文件无诊断 | shared-stream-and-backend-static-result-verification-1234.json |
+| 1531 | pytest1，3failed/92passed/30.03s；三恢复fixture thread前置错误，后继1537修；其它工具事件/replay/Message按依赖复用 | prepared-tool-and-message-contract-result-verification-1235.json |
+| 1532–1535 | 原[2,0,0,0]；新增fixture类型错后真tsc0，真实React+SSE三文件72绿/520ms | committed-selection-lifecycle-result-verification-1236.json |
+| 1536–1540及主1237 | 原[0,0,1,1,0]与技能0；1537 main/new_per_run与child/continue_existing×complete/legacy/missing六组合6绿/3.07s；1538授权breaking非零；1539 Skill缺owner失败，1540仅封存 | recovery-protocol-weekly-and-skill-result-verification-1238.json |
+| 1541/1542 | 原[0,0]；factory闭包静态、4个production context24.38s周边绿，不是真实resolver | factory-owner-core-result-verification-1239.json |
+| 1543–1546 | 原[1,0,0,0]；1543产品失败；1544封存；1545真实Runner Skill/restart1绿；1546持久有界诊断 | weekly-protocol-frozen-skill-original-verification-1240.json |
+| 1547–1549 | 原[1,1,0]；缺catalog lifecycle owner、str.get探针错误均diagnostic非零，未业务重试；1549精确选择诊断绿 | weekly-carrier-selection-diagnostic-verification-1241.json |
+| 1550–1554及主1242 | 原[1,0,0,0,0,0]；静态import排序失败保留、修后0；34/36边界与cold carrier绿；1242台账归档0 | tool-boundary-and-state-original-verification-1243.json |
+| 1555/1556 | 原[1,0]；产品导航driver缺intent失败，主已沿driver确认weekly/read恢复所需末尾断言完成；expiry未达、封存不代绿 | weekly-navigation-driver-original-verification-1244.json |
+| 1557–1559 | 原[0,0,0]；封存阶段读取、场景断言证据诊断与MJS语法；不代新的产品验收 | navigation-intent-static-original-verification-1245.json |
+| 1560–1562 | 原[1,0,0]；导航折叠祖先导致driver点击超时、封存及诊断；主保1555→1560唯一MJS+26B差异 | navigation-selection-and-reuse-verification-1246.json |
+| 1563–1565 | 原[0,1,0]；breadcrumb语法通过、nav-only越过nested选择后止于旧SSE故障注入接线、封存 | navigation-ancestor-original-verification-1247.json |
+| 1566–1570 | 原[0,0,1,0,0]；真实observation接线诊断/语法0，nav-only越过event/cursor和正常删除后止于repair文案提前读，封存/诊断0 | navigation-observation-and-repair-original-verification-1248.json |
+| 1571–1574 | 原[0,1,0,0]；repair scoped wait语法0，nav-only止于CDP失效拦截ID（未到repair），封存/诊断0 | navigation-repair-and-interception-original-verification-1249.json |
+| 1575–1577 | 原[0,0,0]；CDP初始化生命周期语法0、导航完整真实产品1passed203.62s、封存0；repair状态覆盖仍待生产修 | navigation-complete-product-original-verification-1250.json |
+| 1578 | 原0；封存导航全段、无transportErrors、repair pending rev3→required rev4→重启settled rev5、原journal completed，非新业务验收 | navigation-final-repair-diagnostic-original-verification-1251.json |
+| 1579/1580 | 原[0,1]；真实tsc通过，四Bun文件73pass3fail；新测试状态接线和初始reconcile竞态待闭，不能称repair批绿 | repair-types-and-runtime-original-verification-1252.json |
+| 1581–1583 | 原[0,0,0]；真实tsc、四Bun文件76绿、Web build通过 | repair-complete-static-and-tests-original-verification-1253.json |
+| 1585/1586 | 原[0,0]；导航/read恢复/expiry同轮完整真实产品1绿/360.46s、封存0 | navigation-read-and-expiry-product-original-verification-1254.json |
+| 1587/主1255 | 原[0,0]；产品有界诊断、三Luna隔离profile建立；不代新增业务验收 | product-diagnostic-and-luna-profiles-original-verification-1256.json |
+| C R1480-01/02/03、A R1481-01/02、N R1479-01-static | 六原run全0；C 49绿/真实tsc/Web build，A 8绿/Ruff，N Ruff | luna-isolated-repair-original-verification-1258.json |
+| 主1259、Sol1588、N R1486-01-static | 原[0,0,0]；后继profile建立、MJS语法、三注释Ruff，不代新产品验收 | luna-control-and-fork-driver-original-verification-1260.json |
+| C R1485-01-static/02-pytest、A R1484-01/02、主1261 | 五原run全0；C 77绿，A 20绿，各Ruff通过；技能格式通过不代业务 | watcher-synthetic-and-skill-original-verification-1262.json |
+| Sol1589/1590、N R1490-01-static | 原[1,0,0]；empty child UI成功后driver来源URI误比，封存/说明Ruff | fork-product-and-lineage-comment-original-verification-1263.json |
+| A R1497-01/02/03、主1264–1269 | 原[0,0,0,0,1,0,1,0,2]；Web正规验证绿、越权现场/逐字逆改及保留前置错误，不改原actual | lease-recovery-and-web-check-original-verification-1270.json |
+| Sol1593/1594/1595 | 原[1,0,0]；fork_child_ui完整通过，forks幂等冻结冲突仍未闭；封存/诊断不代产品绿 | fork-ui-and-idempotency-original-verification-1272.json |
+| Sol1596/1597/1598 | 原[0,1,0]；原preimage/路由/schema定位，1597列猜测非零保留；第二请求只重建不冒充wire | fork-preimage-diagnostic-original-verification-1275.json |
+| Sol1599、Asset R1509三检查、主1273/1274 | 六原run全0；MJS纯语法、5hook测试/真实tsc/build与隔离profile建立 | luna-hierarchy-and-fork-driver-original-verification-1276.json |
+| A R1508六run、Sol1600 | 原[1,1,0,1,0,0,0]；parser/fixture首错保留，malformed/fallback后继通过、最后Ruff0；删源successor语法0 | luna-zero-args-and-deleted-source-original-verification-1277.json |
+| Sol1601/1602 | 原[1,0]；独立操作key互异，三mode跨端创建/后继已越过，C→A资源检查失败；删源后继未达 | fork-distinct-request-and-detail-original-verification-1278.json |
+| Sol1603 | 原[0]；封存失败wire/catalog/阶段核读，不代新业务验收 | fork-detail-original-diagnostic-verification-1279.json |
+| Sol1604/1605、A R1520 static-v1、主1280/1281 | 原全0；activation checker继承owner真实复现、三文件静态及小修profile准备 | inherited-owner-and-luna-preparation-verification-1282.json |
+| Sol1628/1629/1630、M R1554最终三检查 | 原[1,0,1,0,0,0]；capture静态修正、真实lifespan5绿2child身份红；delete48绿/真实tsc/build，A新增差异独审待回 | capture-short-gate-and-luna-delete-original-verification-1307.json |
+| Sol1631/1632/1633、主1308/1309 | 原[0,0,1,0,0]；child main归属12绿，损坏proof/生产者29绿、remote回执/retry旧终态5红；Luna Web隔离profile准备 | capture-recovery-and-luna-window-original-verification-1310.json |
+| Sol1634/1635、主1311 | 原[0,0,0]；remote release/不可逆ModelCall与assembly20绿，接受HEAD未变 | remote-release-terminal-owner-original-verification-1312.json |
+| Sol1636、A R1573三检查、主1313 | 原全0；受影响local/producer21绿、managed创建36绿/真实tsc/build，physical runtime归属修正 | fork-dependent-recovery-and-managed-create-original-verification-1314.json |
+| A R1520 static-v2、M R1522 | 原[0,0]；RuntimeNotice四文件Ruff、两文件纯注释Ruff，未冒称行为验收 | notice-static-and-naming-original-verification-1283.json |
+
+- 1535真实React两选择入口：同批A→B→A保A signal并继续消费事件；commit B后abort A/connect B；卸载关闭B；unknown W7 abort1/no-op0保留。同步mirror先前绿没有证明该条件；已按实际失败/后继动态窄修SKILL一段，1237 quick_validate0仅技能格式，不泛化其它效率建议。
+- 1522原26文件timeout124、command165.030s/runner166.219s、无Bun摘要；旧根因仍未知，保原件，不宣称已确认污染。
+- 1538协议lint/build完成，breaking actual1/Buf100，八项均为授权删除：MessageRole、孤立Message、MessageObservationDTO、MessageUpdatedExecutionEventDTO、PendingRequestUpdateRequest、fork turn_id/pinned/place_under_source。不恢复alias，不据同基线重复跑。
+- 1539漏迁：factory把需storage_owner的read_resource_activation_payload裸二参callback给skill_catalog_from_activation。当前闭包绑定真正当前(session_id,thread_id)，不能绑定historical snapshot owner。1545 `test_thread_runtime_runner.py::test_real_runner_skill_tool_consumes_frozen_provenance_after_live_refresh_and_restart` **1passed/24.88s**、call11.25s，已证正式Runner/factory/skill_load/live-refresh/Saver重开，不能代普通AGENTS冷恢复或live builder稳定来源。
+- 1543 pytest1failed/155.77s（runner159.694s），setup88.22/call58.52/teardown6.09s，原product SHA=`cd98cfb6cb85f4d4b547b5d4516884222b888411fb8aab8aca615e88dc500603`；后三focus未达。1240收据SHA=`bcc7cb7e6546468b3234ec0b771d55b481fba0501c505b76f7834cb7c44cc104`。
+- 1531生产owner正确、旧fixture new_per_run返回thr_catalog_main而prepared message=thr_restart_prepared；Sol分main/child各自冻结合法target，不放宽生产fence。C R1402 late-model五文件小修在1531实际相关节点已绿：None不回退current、interrupt归emitting owner、late start/completed/reconcile；不重复派旧finding泛审。
+
+## 坐标、输入与租约
+
+- ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧 `/data/hyf/20260629_agent/vscode-graph-agent-opencode` 为软链接。
+- FORKRUN=`ROOT/out/tests/temp/2026/10/13/fork-contract-implementation`；FORKART=`FORKRUN/sol_vertical_implementer/artifacts`；FORKCOORD=`FORKRUN/coordinator/artifacts`。已15日仍沿用该授权run，不搬目录。
+- 历史完整组合profile039=`FORKART/run-profile-fork-transfer-owner-closure-039.json`，SHA=`92e59d4db9780fe824e4a15472bd607e95f9a24b4db24880851c92f3a5deb49c`，2568路径；task_input v7=`FORKART/task-input-fork-contract-v7.json`，8588B、SHA=`8bfa0a2fb46fdad4ad09325d63e745ea2922349c3802071e93ac0b55f1d6c284`。1386原件确认已采用。仅放开有界纯读取不逐次run_task，业务rules/范围/验收与v6完全相同；测试/生成/构建/执行性诊断仍固定入口，Git/写入/派生权限未扩。
+- 仅真实协议breaking验收使用043=`FORKART/run-profile-fork-protocol-baseline-043.json`，SHA=`630d900a48acd586c8ff0423bcb82ceecf6928d8929a8112f7744178f36c4375`，2569显式路径；继承039/v7，只加主生成的baseline image依赖，不替代在途profile或扩大作者Git权限。image=`FORKCOORD/protocol-baseline-e2bed124-1159.bin`，317238B、SHA=`2c35d1602ec4f6486756a2a4bbb7a369e788c42fb7f5807c199d183e3f70e01d`。主1159从接受commit/tree的buf.yaml及proto固定对象直接Buf build actual0，临时tar已删除，无源码工作区副本；receipt=`FORKCOORD/protocol-baseline-1159.json`。1160核1158技能验证、1159原件均actual0，1161创建043 actual0；作者沿现有generate_protocol.mjs --check --breaking-against消费；1408终态及归因见下，不预报通过。
+- 旧038/v6原件保留：profile SHA=`cc40a446aead72e665d062bb4deb053aaf13b5b0fb2277b8f81882af2a857af4`、2567路径；v6 SHA=`e22988106508d947c914287d8601a645360cd38a27420158b9f43800234b938c`、8232B。1383终态后才切换，未改在途或历史输入。
+- 历史backend专用042=`FORKART/run-profile-fork-backend-effective-freeze-042.json`，SHA=`908d058270d19fd57defbc7eb988d1f06a9198e37e53f18299989e07f86f00c1`，1942最终路径/v7。主1154已将041 source_paths与source_manifest.files并集展开后筛掉全部Web源码，去除source_manifest回添；actual0。旧041虽筛626路径，manifest又带回39个Web路径，1394授权App写入因此遭机械拒绝，041仅保历史、不再用于后继并行验收。triad不消费Web源码，后继042运行期间Python/DTO/schema/fixture/配置/脚本冻结，唯一作者可继续Web源码，重测试串行。Web生成/静态/tsc/build/产品继续完整039，新增源码登记后扩新profile；042不得用于Web产品/前端验收，限制是派单范围，不是命令沙箱。
+- 040已撤销但保原件：空pytest_node_ids列表不被runner支持，作者1391报告启动前ValueError、无业务子进程；无result.json不能伪作机械核验。主纠正为041，删除该无效配置；主借041执行`FORKART/runs/1148-coordinator-backend-profile-preflight`print探针，实际0，仅证明配置可启动，不代测试。采用/交付效果待作者新回执。
+- 主源码读取profile=`FORKCOORD/run-profile-fork-transfer-reading-closure-998.json`，SHA=`8aafb552e8a1c2e3416f2cac370c5ff0ffabc997674db992a20e6b37f1dcd702`，2569路径/max60s；主文档/helper=`FORKCOORD/run-profile-fork-python-reader-872.json`，40路径/max60s。SKILL/state不在作者038指纹清单。
+- 接受基线HEAD=`e2bed124cade6cd8ce29888ec9df9344ef209a8a`，tree=`2c3c3846546db2bb10c14d6ee2490124eec70189`，主1396恢复后实核仍同值。其私有 `FORKRUN/coordinator/git/live-observation-1085.index` 仅live观察；`FORKCOORD/source-observation-1085.json` 当时573 tracked差异/39 untracked，含未接受050与F12，不能当F12独有补丁。
+- RV=`ROOT/out/tests/temp/2026/10/09/a06-final-review`；ART050=`RV/sol_vertical_implementer/artifacts/section8-product050-full-closure`；COORD=`ROOT/out/tests/temp/2026/10/10/efficiency116/coordinator`；DOCART=`COORD/artifacts/docs138-contract-efficiency`。
+- E=`ROOT/out/tests/temp/2026/10/04/024121-team-execution/sol_vertical_implementer/artifacts/final-original-scope-source-bulk-core-and-boundaries`；NWT=`ROOT/out/worktrees/2026/10/09/a06-final-review/navigation-fixture-receipt` 是唯一既有代码worktree，不新增或使用历史临时源码工作区。
+
+| Agent | 当前租约/任务 | 下一项可执行任务 |
+|---|---|---|
+| /root/sol_vertical_recovery | gpt-6.1-sol/max；R2449/封存终态主1928核；当前优先请求前hash减法完整核心写窗，首用户privateResult失败归因先保原件。 | 唯一owner/版本/deep immutable闭合prepare→registry→seal→dispatch，集中静态/核心验证；原128/427不盲重。 |
+| /root/sol_vertical_implementer | 旧gpt-6.1-sol/max执行租约结束。 | 不恢复写入，不能并成双核心。 |
+| /root/communication_lifecycle_message_review_r2 | gpt-6-luna/max；全部工具撤权。R1427仅消息审weekly carrier规则反例已交：scope未知/真实carrier未选与因果顺序仍须拒，不代源码验收。429仅“继续”。 | 下一完整稳定差异/实际失败归属消息审，不代完整候选独审。 |
+| /root/naming_message_contract_review_r2 | gpt-6-luna/max；R1486/R1490注释已STOP/Ruff0；R1494越权写hook/test、裸测试/Git，全部工具撤权，仅消息。 | 不恢复写/验证；A正规验证、Asset独审已有候选。 |
+| /root/read_owner_interface_audit | gpt-6-luna/max；R1537禁Git准备仍执行四次status/diff，当前全部工具撤权，仅消息。未写源码。429仅“继续”。 | rename最小建议保后继，不再核Git/状态/diff/源码，不恢复工具。 |
+| /root/original_scope_acceptance_inventory | gpt-6-luna/max；全部工具撤权。R1460仅消息审1568/70与1248；阶段边界明确，导航未整体通过。429仅“继续”。 | 新原验收证据消息审，不读源码/命令/网络，不增加门。 |
+| /root/mounted_workspace_caller_inventory | gpt-6-luna/max；R1554四文件STOP，48绿/tsc/build0/独审无finding；R1569/R1577确定结论已交。R1578已有禁Git仍diff/--stat/-U，已停止租约并撤全部工具权，仅消息。429仅“继续”。 | 不恢复读/写/运行/Git；API Session源跨端debug候选保后继由另名Luna独立自验，先协调Sol service独占。 |
+| /root/current_closure_architecture_audit | gpt-6-luna/max；R1485已绿；R1491越权写Gateway三路径/只读Git，已interrupt、全部工具撤权。未启动R1497检查。 | 仅消息给准确逆补丁；主须逐字匹配1589旧SHA才恢复，不重建胶水。 |
+| /root/activation_owner_caller_audit | gpt-6-luna/max；R1643越权Git、无写/测试，全部工具权撤销，仅消息。 | 不恢复工具，postcommit小修已交新Luna。 |
+| /root/luna_gateway_postcommit_fix | gpt-6-luna/max；R1950三文件STOP、10绿/Ruff交付待主原件核；禁Git仍diff/check，全部工具权撤销，仅消息。 | 不再调用工具；保独有实现，原件/独审由主收，不把验证转Sol。 |
+| /root/original_asset_hotspot_audit | gpt-6-luna/max；R1693违禁Git状态盘点后interrupt，全部工具权撤销、仅消息。 | 不执行额外命令，仅交已执行命令/既有变更；保独有源码，R1699接写，不恢复工具。 |
+| /root/luna_resource_thread_target_fix | gpt-6-luna/max、fork_turns=none；R1794有效前移finding已闭；R1796已读结论收，重复越权后全部工具撤权。 | 仅消息，不读/命令/Git/写入/测试/网络，不恢复工具。 |
+| /root/fork_candidate_review_r3 | gpt-6-luna/max；R1978禁Git仍status，全部工具权撤销，仅消息；独有MJS已交付/主核/新Luna独审。 | 不恢复工具，不再核状态或写源码；产品已转新Luna。 |
+| /root/luna_context_owner_cleanup | gpt-6-luna/max，fork_turns=none；R1942禁Git仍执行status/diff/check/stat，Ruff未走固定入口，全部工具撤权、仅消息。四文件已STOP，无已知进程。 | 不恢复工具；既有计时实现保留转R1944，不把转录0当原件验证。 |
+| /root/luna_fixture_timing_delivery | gpt-6-luna/max；R2193/2195三测试Ruff0/七绿交付保留；禁Git仍diff，已STOP/撤全部工具权，无在途进程。 | 仅消息交既有argv/env，不恢复工具；新独审交structure，不交Sol补救。 |
+| /root/luna_fork_product_final | gpt-6-luna/max；R2402正式产品/封存actual[1,0]主1894核；R2412又禁Git仍status、误用共享索引判物理删除，已interrupt并撤全部工具权。 | 只消息交既有argv/env/改动/进程，不恢复工具；独有MJS保留交新R2416作者。 |
+| /root/luna_internal_history_delivery | 空历史显式gpt-6-luna/max；R2429产品已终态并封存/STOP。seal误直调未走固定入口，原argv/env已交，不补造attempt。 | 已完成者不计活跃；后继新派单前重新给明确范围，禁Git/派生；不重封存/覆盖原件。 |
+| /root/luna_fallback_fixture_delivery | gpt-6-luna/max、fork_turns=none；R2093正式32绿/Ruff0；R2099只读报告保留；R2101再次裸Git，已STOP且撤全部工具权，无在途命令。 | 不恢复工具；单测试后继验证交新成员。 |
+| /root/luna_fallback_final_validation | gpt-6-luna/max、fork_turns=none；R2151/59日志证据保留；R2160再次禁Git仍diff，已STOP并撤全部工具权，无在途命令。 | 仅消息，不恢复工具；八测试独有迁移保留转R2168新成员，不交Sol补救。 |
+| /root/luna_typed_completion_tests | gpt-6-luna/max、fork_turns=none；R2168八测试迁齐/Ruff0、R2175原件保留；R2177禁Git仍status，已全STOP/撤全部工具权，无写/在途进程。 | 仅消息，不恢复工具；独有测试保留交新成员，不交Sol补救。 |
+| /root/luna_completion_regression_delivery | gpt-6-luna/max、fork_turns=none；R2183集中220项213绿7红/observer已过保留；后继又违禁status，未写源码/无进程，已STOP/撤全部工具权。 | 仅消息，不恢复工具，三文件小修交TIM，不交Sol补救。 |
+| /root/luna_terminal_contract_structure_review | gpt-6-luna/max；R2456只读盘真实请求前重复hash及唯一owner/版本替代边界；R2447 header STOP。 | 精确重复callee直接Sol，保不可信载入/wire/协议边界，不写/运行/Git/派生。 |
+| /root/luna_remaining_acceptance_focus | gpt-6-luna/max；R2457只读核plan/contribution/assembly/prefix嵌套不可变与版本/CAS权威。 | 指出mutable共享引用与必要测试消费者，不以frozen=True推断安全；不写/运行/Git/派生。 |
+| /root/luna_request_boundary_test_delivery | gpt-6-luna/max；R2388明确禁Git仍裸status，已STOP/interrupt/撤全部工具权，仅消息。 | 只凭记忆交argv/已写文件/已启进程，不恢复工具；旧R2369/R2386独有交付保留。 |
+| /root/luna_history_identity_delivery | 显式gpt-6-luna/max、fork_turns=none；R2445单node绿已主1927核；R2458只读盘hash减法的真实准备/冷读/后继消费者前提。 | 可行动缺口直接Sol；H4原node等核心STOP集中验证，不写/运行/Git/派生。 |
+| /root/luna_scrollbar_content_fix | gpt-6-luna/max；R2074两Web正式交付保留；R2085裸测试/裸Git后STOP，全部工具撤权。 | 不恢复工具；同测试已转新fallback成员。 |
+| /root/luna_revision_closure_review | gpt-6-luna/max、fork_turns=none；R2057交付保留；后续再次裸Git后STOP且全部工具撤权。 | 不恢复工具；菜单小修已由新成员交付。 |
+| /root/luna_fixed_candidate_architecture | gpt-6-luna/max、fork_turns=none；R1914违禁执行Git status，已撤全部工具权，仅消息；R1914报告未创建。 | 不恢复读/写/运行/Git；完整argv/env不可恢复，不据只读status声称index未变。原427辅助已转Context，新Skill独审由新成员承担。 |
+| /root/luna_skill_publication_review | R2010禁Git仍diff，全部工具权撤销；固定独有说明及原件保留。 | 不恢复工具，独审由revision/product新成员承担。 |
+| /root/luna_turn_product_delivery | R2011禁Git仍status，全部工具权撤销；R1980已验收原件保留。 | 不恢复工具，正式产品已转新product成员。 |
+| /root/luna_csm_visible_commit_fix | gpt-6-luna/max，fork_turns=none；R1722 fixture39绿保留并独审，违规Git已撤全部工具权，仅消息。 | 不恢复工具，不再读取/实施/验证；只凭已有记忆交违规命令详情，不把旧103称当前全验。 |
+
+队伍保持至少3个具体活跃、最多15个subagent；完成者不计活跃。P/O保持全部工具撤权，仅消息证据审。Sol贯穿核心；Luna精确隔离小修连同定向验证交付，其余按当前完整链路前移/独审，不以人数造重复审查。主维护规范、技能、运行入口、固定、独审、串行集成，不手写业务源码/作者测试补救。429终态直接对原成员“继续”，不核状态/进程/改动或重发长派单；其它恢复与写权转交仍按共同流程。
 
-| `/root/terminal_replay201_readonly` | `gpt-6-luna/max`（创建显式参数） | **shutdown/不可复用**；原team锁序/装配审查无新确定finding，未运行不代验收 |
-| `/root/creation_recovery202_readonly` | `gpt-6-luna/max`（创建显式参数） | **shutdown/不可复用**；P原正常入口交Sol，新resolver/视图审查无确定finding |
-| `/root/product030_failure209_readonly` | `gpt-6-luna/max`（创建显式参数） | **243 STOP/撤作者、运行与扩查权，不再续派**；241全禁Git仍执行约十条裸Git，并误读diff方向称aef566ae无rename赋值，主固定对象反证后已撤回。共享index与240字节同，未覆盖源码/恢复暂存。236两文件固定证据仍有效，240已同步ROOT，待批末构建；原25hook不重跑 |
-| `/root/expiry210_assertion_readonly` | `gpt-6-luna/max`（创建显式参数） | **255 STOP/只读常驻**；L182 Web原场景、MCP EMPTY_TOOL_SET耦合验收、fork首次实际Provider placement验收缺口已主核交Sol，未冒称生产实红。251Q新增driver无确定finding、245I结果复用。无Git/写入/运行 |
-| `/root/a05_web_caller244_readonly` | `gpt-6-luna/max`（创建显式参数） | **256 STOP/只读常驻**；普通ToolSet manifest/key及initial/compaction/rewind编译闭包无新确定缺口，fork copied root绕compiler代码事实交Sol核target首次可执行assembly，不当业务故障已证。252Q生产端无finding；244Web28/249文档结果复用。无Git/写入/测试/服务 |
+工具与运行状态只以顶部当前快照为准；不从下方历史报告或旧派单恢复租约。原产品及128/427/七change仍未完；撤权成员不恢复工具，429仅“继续”，不据局部绿结束goal。
 
-至少3常驻、最多15活动；当前Sol＋210＋244，209撤权，201/202等shutdown不可复用；等待者不必运行，不为人数制造任务。主唯一调度、禁自行派生。全禁Git作者与审查者不分配索引；主负责规范/技能、固定和串行集成，不手写业务源码。Luna只做隔离小修和只读核查，37mixin与平行状态表没有实证故障，不派大型改动。
+## 后继队列（核心与隔离小修分别推进）
 
-## 当前050与下一步
+### CIL与来源owner
 
-**050未整体STOP、固定、独审或接受；goal仍active。** 原需求=`ART050/context079/original-tasks-section8.txt`，唯一产品owner=`tests/e2e/clients/web/test_basic_chat_tool_loop.py`。Sol独占ROOT/重测试；主不手写业务源码和作者测试。CLI仍60/89、剩29，不以嵌套计数或局部绿勾整项。
+- R1688同resident Skill闭包已由071固定1536：共享file subscription驱动应用loop在同Registry重裁layer/发布，generation LifetimeScope退订/关闭后不发布；1914/1938真实Runner同generation新正文及旧frozen来源已有证据，不再当未实现派修。后继R3只修新增HOME广域watch及相关回归；AGENTS冷恢复仍按自身依赖重验，不能以Skill替代。
 
-本轮新增主核：`lifecycle253-metadata-openapi037-verification.json`记录metadata consumers016原4文件26pass、actual0/21.144s；OpenAPI037 actual0/58.301s，仅两正式生成输出变化。`lifecycle254-build038-fixture-verification.json`记录build038 actual124/235.045s（到rendering chunks，未通过）、fixture-static017 actual0/158.885s；513源码前后同、raw核、owned0。`lifecycle258-types038-verification.json`记录消费新OpenAPI的types038 actual0/318.475s、513源同/raw0B/owned0；不代build或产品。251/252提前审查无新确定缺口，Q/I真实产品仍待，不勾业务。
+- 普通AGENTS冷恢复已有首绑reconcile：middleware register_file→tracked descriptor→sync，reactor首次本地tracking标pending并drain当前accepted snapshot，最终Saver prepare/seal应用，不推进旧seal。真实`test_runtime_source_pipeline.py::test_cold_agents_restart_reconciles_before_second_provider`三参数已有1661 changed/absent通过、1663 unchanged通过；1661首失败原件保留，不能称同批三绿。当前durable/context_source_control.py、context_source_versions.py与runtime/context_sources/registry.py较1663已变，按受影响回归收齐，不重新实现旧finding。旧seal逐字节不变、Provider wire与source receipt/owner是原node验收，typed SourceObservation声明本身不能替代。
+- R1414/1416旧live builder直接读文件的问题已在071迁到唯一WorkspaceFileResourceRegistry accepted快照；factory正式runtime复用compiler已发布catalog，合成工具面走同一builder，不再按旧行号派实现。只取固定一层候选，required缺失不发布假新代；旧tracked来源不跟随同名高层重绑，见1938实际链。
+- 不可用register_file不抛、available=false；prior有效时保旧content/revision/retained，不能将其发布为新代。required Skill与optional AGENTS file_absence不同；现test_workspace_file_resources覆盖required初始missing、invalid UTF8保旧、Skill v1→v2、optional missing/empty/delete，builder现stub多仅语义ResourceRegistry、缺真实source owner拒不可用接线。原read_text universal-newline→LF、stable decode保CRLF，activation/body/hash契约须同批核，不能据LF测试等价。
+- R1421：tools-inspection synthetic blueprint owns_thread=false、resource_activation=None令file_registry=None，但同走完整builder eager读Skill正文；build_agent_tool_definitions仅取schema、不执行skill_load，ToolService也不滤条目。现factory workspace_file_resource_registry参数又组装reactor、无lifetime会拒绝，不能为合成tools建立订阅/第二watcher；迁live读取须盘齐这合法caller。
+- Frozen skill_load/tool-call恢复只从Saver原冻结activation读取，不读当前live URI；1545旧快照一Turn内手工refresh与两个skill_load通过，不能代当前同generation两真实Turn的Live Skill验收。测试/skill_runtime/reactor指纹已变，旧证据按实际依赖复用；AGENTS冷恢复与Live Skill机制分别核，不能混称完成。
+- 原真实Runner Skill节点不证AGENTS冷；test_context_source_reactor.py::test_optional_agents_reactor_and_rebuild_consume_only_published_revisions覆盖optional变化/禁消费时源I/O但新manager；CSM control-state main重开只direct observe，child独立已测。runtime_source_pipeline真实hard restart与layered model_tool_test_workspace fixture互补，未有三者合并场景，不自动新加门。
+- R1433旧候选由R1804按当前app/tests/proto复核：ContextSourceControlStateExtension今天已无定义/导出/消费，无可删项，不再派重复实现或补验证；ContextSourceControlStatePort仍有CSM/factory/registry真实消费必须保留。SourceObservation有instruction_producers/builder/测试及OpenSpec1.5保留合同，不因未接线机械删除；真实live注册仍CSM register/observe。
+- R1438旧writer候选经R1953按当前生产caller复核不成立：base/delta/rebuild保stored visible，direct Apply唯一生产路径为observe_pending，seal selected frame/CAS才推进，rewind仅回放精确历史。无可达双写缺陷，不再派修；原 observation_id/state CAS 也不能冒称decision ledger。报告 `NEWART/r1953-source-visibility-writer-audit.json`。
+- R1423后经Asset R1574核：bootstrap只构造registry/watch对象和async close callbacks，无外部资源副作用；实际registry.start/subscription才起task，正常main先登记platform.close再start。因此目前不支持将builder晚失败判为活跃资源泄漏，不启动async builder或移bootstrap重构。真实builder晚失败的catalog清理尚未被现fixture覆盖；只在有具体资源事实或相关改动时补该证据。
 
-06:12 UTC主机快照：load114.88，memory PSI full avg10约26%、IO full avg10约75%、available约5.9GB；同类Ruff从几秒变159秒，环境等待与实现返工分列，未知控制/其它项目进程未停止。主已核正式build Popen无独立group且terminate_process只关单PID，将确定清理缺口交唯一Sol沿原owner修；Sol已确认并选择原pytest产品fixture承担下一构建前置，省去standalone build后立即重复fixture build。未放宽业务期限，清理与产品效果待原实际运行。主自身`read_thread(turnLimit=1)`误展开长活动turn产生海量截断输出；改用compact snapshot，必要详情工具内先筛末尾项，不归Sol失败。
+### RuntimeNotice与命名
 
-255即时finding已主核并交Sol：唯一driver的`runSection8Product`场景表目前没有L182 ToolSet/MCP语义场景，`runRealCompaction`只PATCH compact_conversation，invoke_extension_tool只用于read_context；分层覆盖不能代原要求的Web级目录变更/空信封/无通知刷新/旧inflight/撤权重连/坏candidate与turn/model_call、新root边界。同作者在原L182已授权范围整批补必要fixture/消费者/断言，不另建产品入口；255余下限时核具体分层遗漏，作者不等待。
+- Asset R1564核generated_internal_history真实API/RuntimeNotice/Provider/安全DOM现有driver可复用；它只reload页面，无backend restart，邻initial_admission_recovery是seed_reference而非generated notice，不合并称已验恢复。后继核typed notice原admission/payload hash/CAS恢复。exact replay fixture只允许None/replay，off/record业务前拒绝；旧403不作当前阻塞，deterministic transport不称外部live Provider。
+- M R1554最终48绿/真实tsc/build0，A R1562新增两finding修后独审无确定剩余错；首轮caller作用域/deferred接线与两独审缺口原件保留。A R1573继续独立managed创建对账小修，不交Sol补测试；验证仍为真实hook/mock API，未冒称Gateway网络验收。
+- R1476/1480首次submit：原1580自然2ms失败保留；C曾误报fixture人工延迟及‘无真实UI路径’，均撤回。真实empty async port无需gate：persistReceipts读旧reported→public submit同步加pending→reconcileReceipts await续体publish旧快照→insert续体报操作丢失。Session lifecycle delete经helper直接runtime.submit，首次open可达；现C小修只在publish边界merge当前，保失败依赖删除。不得让UI等待初始化或用前提await消失掩盖。
 
-255/256收尾：`test_catalog_activation.py::guidance_prepare`使用EMPTY_TOOL_SET，schema变epoch不变断言没有经过真实Provider固定信封；`test_rollout_fork_modes.py`只验物化/checkpoint，未验target首次Provider placement。两项是原验收证据缺口，已交Sol。fork/assembly_copy约419创建新state时直接重标原root/frames，full remap同样保原frames；后补真实callee证明target prepare把imported binding当previous且source manifest已校验placement，256撤“明确候选缺口”，不定生产finding。主按spec913/1382交Sol核目标首次可执行新root，消费target有效view的冻结/本地化typed事实，保复制历史/source sealed，不读live source、不据函数名重写历史。普通ToolSet/typed placement路径静态核无新finding。`lifecycle259-fixture018-verification.json`：fixture018 actual0/220.055s、514源同/raw/owned0，仅证清理装配静态。两只读成员STOP，常驻不制造任务。
+- R1418旧候选已由R1686对当前writer/admission/prepare/history/canonical校验完整核闭：普通text中的字面display_part不误分类，typed通知用严格Mapping/exact envelope守卫，当前合法writer无新finding；不重派修复、不称新增动态绿。
+- 正常generated source由_internal_execution_input/commit_runtime_source_wakeup同事务pending进入；direct lifecycle writer也可造typed notice但ambient不进pending，不能改普通text reminder。现integration rollout_context/test_rollout_checkpoint_saver.py真实Saver+Reader fixture可复用，验证安全display/私密prompt隔离及含字面display_part的纯text合法，原generated_internal_history正式focus保留。
+- R1422仅原命名11注释：SkillLoadReceipt snapshot/tracked revision=activation facet语义JCS，untrack=定位registration.latest_revision；content_hash=activation body精确UTF8 SHA、不含frontmatter。完整SKILL raw lineage另SHA；aggregate catalog_revision=JCS(entries)且SourceState.binding_revision取catalog，registry旧“无生产producer”TODO过时。无schema/wire新字段。
+- R1417复核history created_at/completed_at已有充分中文定义，不重新当缺陷/改wire；UI“耗时”标签只是候选，无新产品门。R1430发现resource_observation_channel.py:37/210将boxteam URI称“虚拟identity”，只改为“资源URI”属于已授权术语收口；活跃统一寻址spec术语已清，不机械改历史路径/capability。
+- R1440 DTO/proto tool_call_id未明示ModelCall-scoped canonical、tool_execution_id/attempt_id同值关系需中文说明，保wire。R1442确认真实只有ModelCall retry、checkpoint同attempt恢复、跨sink幂等；tool级多call retry_of/resumes生产writer和tool result replay_input未找到（现edge是Turn），原spec1469/1496仍是实现缺口，不能用命名注释或同attempt恢复冒充满足，也不误报现恢复本身错误。
+- R1458/R1467主核命名11窄后继：fork_source_snapshot_scope接受精确source child却错误称‘冻结main thread’，参数session_node为私有snapshot路径；fork_materializations.created_at=prepared journal记账，target_committed_at=目标内容提交，committed_at=最终收敛（恢复可写）；ContextAssemblySnapshot owner/history_view_revision/source_overlay_epoch为原seal历史坐标，fork不改写，不等target当前owner/view或contribution.source_revision。补中文类型/方法说明，保wire/列/hash，不另造命名层。
+- R1439/R1444及R1471/72旧synthetic finding已闭：M R1529与主对当前真实分支确认complete_tool_from_message先持久tool_call.completed、更新完成集合，再tool.completed且persist_canonical=False；terminal跳过已completed，迟到execution只补生命周期，不重写canonical。runtime测试success/error参数化及store成功事件顺序/interruption/reopen已有；失败持久reopen未单独覆盖。本轮只读核，不新增动态绿、不重复派修。
 
-原Q产品037终态主核=`lifecycle261-productq037-termination.json`：actual-9/1536.636s、514源同/raw0B/runner group0，业务未过。正式phase为06:26:38 build_begin→06:27:03 build_end0（约25秒）→fixture_begin→06:29:02 fixture_yield→browser_driver_begin→browser_launch_end；browser.log/model-stream是10/10旧件，不归本次。构建由原fixture一次承担并跨过前置，不能由阶段成功宣称Q通过；同期资源full下降，速度不归单因。原Sol随后429权威终止，260续同会话；不换模型，不计作实现返工。
+### Live资源、Gateway与架构减法
 
-262 owned清理=`lifecycle262-owned-q037-ssh-cleanup.json`：主以threadID/session_meta核两ssh，以正式sshd.pid/config与uid/startticks/PGID/SID核sshd，PIDFD SIGTERM三根1760942/1761207/1749859均观测退出；未按端口杀未知backend。runner group0不能代fixture独立组全清，其余原owner继续核。263主核同browser subprocess仍capture_output，browser.log仅finally有CompletedProcess时写；timeout只关直接Bun，MJS newContext/newPage又在外try前，已交Sol沿同fixture的owned group/scope和实时raw盘齐启动、超时和清理，不新增入口/框架或放宽预算。源码缺口不等于037唯一原因已定位。
+- 原persistent tasks7.1/7.2的live Terminal/Browser picker/关联已由Sol072/073落地，正在集中验证，尚未整项验收/勾选。SessionForkResultDTO.resources展示不能单独证明live thread_associations；同域判backend workspace UUID，不以Gateway route判同workspace。保既有业务resource_id，不造URI kind/实例fork flag/第二资源状态。
+- R1854/主核确认：远端fork已发布后release RPC失败会持久pending，但retry仅startup一次；来源恢复且目标不重启/请求不重放则snapshot/claim滞留。R1860交Luna沿现有lifespan周期重试，自验同backend最终confirmed/来源清理；不让启动等来源、不改published、不新队列。R1852其余架构风险仅待核；R1863中立schema owner小修独立实施，不扩大核心层级重构。
+- R1426：resources GET/list返回thread_associations/owner_revision/reconciliation_status/actions。verified且精确target已关联复用快照；verified未关联一次expected_revision attach。unknown时GET/list/recover都不能清verified，普通command拒，没有现成attach-receipt/reconcile action；明确失败，不猜成功/盲重attach。workspace retention source Thread/Session清理保其它refs；thread-scoped禁止自动promote；删整个Session清全部该Session refs。Terminal/Browser既有跨Session保活测试可复用。
+- Gateway R1434/37完成：_save DB提交并更新last_committed后observer抛，projection snapshot/batch却restore旧authority。修复需保新authority、完成route/runtime收尾再传播原异常。真实reconnect except会close新runtime；batch仅正常返回才赋handle，observer抛时transaction rollback仍close staged runtimes，必须同批迁caller。现成fixture为test_federation重连/cursor、test_registry batch handoff/lease/CAS及runtime/test_workspace_reconnect observer错误节点；projection/nested-save失败尚缺断言。COMMIT自身异常仅指针无法判落库，不猜未提交。frontend三失败caller无readback另保后继，不靠GET掩盖后端旧authority。
+- R1445 frontend完整闭包：managed创建/SSH注册/reconnect/排序/正式activate reject无full-list回读且不stale；后台activate与safe/force/start/stop已有finishWorkspaceRefresh读取。删除/rename/hierarchy已有读回但GET再失败旧镜像未stale。唯一AppState.gatewayWorkspaces/API list→withFreshGatewayWorkspaceList整体替换；serialTaskQueue不fetch。拒绝后仅读authority、不重发mutation，保原错误对象，二次失败复合诊断+stale；现成hookfixture可检only1mutation/full replacement。managed成功首GET失败而finish已收敛仍抛旧同步错误须核，不把session catalog MJS绿当本链证据。
+- R1425/1429仅live架构预审：storage无langchain_core/mapping直接import，facade/组合owner明确，源码子目录AGENTS四部分齐/直接计数≤20；schema.py826纯DDL、saver.py849组合面、request_plan.py801值对象不凭数字要求拆。一项P2：storage/service.py附件payload/XML目标引用语义投影违反storage职责。
+- 附件减法精确闭包：runtime→RolloutContextStore→storage注入attachment_ref_projector，Saver无storage构造是第二注入。真实映射AttachmentBlobStore.project_attachment→catalog.project_fork_attachment核target alias/ref/claim，不改canonical源URI/hash。checkpoint IndexedRecordQueryMixin/read_full_messages、ContextOwner.project_message_attachment_refs、Responses native/context_projection、seal lifecycle及Saver.read_tool_call_attachment全消费，搬到现有checkpoint projection owner须全部迁齐并移除storage接口。现强hash/target URI/冷后继测试集中Chat，同workspace共享blob、child/main保活、跨域copy都有原门；Responses附件实际专测未找到，不能凭callback存在称已验证。
 
-当前先完成 **I/J/P/Q必要生产及真实消费者→原K/M/O与I/J/P/Q产品门→B/R/S/L182与8.14**，随后收齐CIL typed/notice、checkpoint/admission durable→intent CAS/hash。创建排空/partial staging、J重放/回程expiry、NULL manifest原fixture、Q事件runtime/team holder闭包已落；原八具名核心13pass、Q两个原Web consumer文件14pass、协议/OpenAPI生成与生成后Web build实际0。最终types须用生成后的组合，已有绿按实际依赖复用；这些都不代完整产品。
+### 原资产128/427
 
-219已核033终态：static010 actual0/1.914825s，产品actual1/166.130906s，485源前后同/raw核/owned0。原phase证明build0在fixture_begin之前，217显式构建前置和209即时build原raw已实际生效；随后A backend19000/PID1052999 ready60.043s connection refused，未到Gateway/业务。220已核55s真实container导入栈和随后测试LiteLLM远端价格表超时，全部ready失败原因未定；不盲034或扩期限。原件=`COORD/artifacts/lifecycle219-build-prerequisite-product033-verification.json`，主已核作者保存在033 attempt的A backend原raw/phase字节与SHA，032 Gateway原stderr也已单次保存并核SHA，无工作区复制。032真实B stderr缺dist/index.html，收据217保留；030 build等待和031端口租约冲突不同因，不能由033 build成功倒推030。215仅回验失败1项且原5pass复用。218 Q确定遗漏已交同Sol；221/220已消息STOP，常驻等待下一相关差异，核心不等全审，原全部范围仍保留。
+- 原434准确 `ART050/runs/core-original-full-canonical-427-turn-asset-regression-434/`，actual124/600.048848s（runner601.216s）、setup未完/断言未达。argv=`uv run --no-sync pytest -vv --durations=15 -x tests/integration/backend/sessions/test_real_rollout_fixture.py --deselect=tests/integration/backend/sessions/test_real_rollout_fixture.py::test_deterministic_v2_128_turn_history_is_bounded_and_preserves_tool_body -o faulthandler_timeout=60`，600秒/4GiB保留，不拿矩阵默认90min/8GiB替代。
+- 原module fixture→tests/support/custom_tool_test_workspace.py→scripts.generate_custom_tool_rollout_fixture.generate_custom_tool_rollout_fixture重建六Session，128+128+128+24+12+7=427，fork7复制后提前return；实际非forkprepare420次，fixture-create:{turn_id}逐次cache miss，不是427单Session。R1432漏support→script结论已纠正，R1435补读完成；每轮按committed active-view prefix准备，不证明每次读全物理正文。frozen_provider_prepare每miss新CSM/恢复同owner全行SELECT是可计时候选，实际行数/收益未知，不据此盲缓存/重跑434。
+- R1443限定fixture源码：clean移除自有Session、每次默认空ResourceRegistry/ToolSet，无CSM source注册，Skill/MCP/team无bindings，故恢复应0行且不读正文。成功prepare构造restore1+seal ack2共3次all-row读路径，无跨实例memoization，成本未知；代表阶段计时可核同owner调用数/返回行数/耗时及view materialize→prefix编译的selected/ref数，不称3空读为总慢因、不缓存深层可变输入。
+- R1894只读补充：当前prepare还在prepare_registered_context与prepare_sources→refresh_context_rebuild_state两处进入rebuild-state reader；需和上述control-state读分别计数，旧三次不是已证总数。方案产物为ARCHART/r1894-original-asset-stage-plan.json，建议原test_custom_tool_fixture_asset_contract保持六Session/427Turn/420prepare作分阶段计时，不含额外deterministic128 fixture；五段及计数仅计划，未实跑，不据静态调用数判热点或盲重原600秒门。
+- 单栈JCS stringify→canonical_json→_assembly_json→seal/prepare只能证明采样点，不能说明600秒总慢因。旧/当前generator行漂移，旧before/after仅证当次稳定。原单128/tail/定点工具/64Turn窗口读取预算/并发仍有效，固定2GiB门不恢复。
+- R1419唯一同次重复：validate_hashes先plan.plan_hash，再request preimage再次plan.plan_hash；深层Mapping/list仍mutable，优化须捕获同次preimage再复用digest，不跨调用缓存。request/plan/envelope/runtime/seal_input各preimage与不同阶段CAS/readback/wire重投影不可合并；未实测提速，不盲重434/加预算。
+- 原资产最终验收按实际优化后继；测试真实Saver admission/put/finalize及catalog owner/UUID完整前提保留，不将生产错误全归fixture。
 
-旧027第二child fill30秒失败仍待原产品闭合；179确认的UI accepted后发送锁窗口已修，原hook7pass/types过，局部结果不能代027或M生命周期。历史原raw/主核收据见下表。原六focus及1500s/browser1200s保护不放宽；8.1-G/H、8.3-E、8.13 A–S、ToolSet/root placement完整产品合取全部保留，I/J/P/Q不是全部goal。通过项按真实共享clock/状态和源码依赖复用，复用唯一driver具名focus，不合成新超长场景或重复入口。
+## 有效F12合同与当前实施
 
-当前生产闭包：
+权威为 `openspec/changes/add-itemized-rollout-context/{tasks.md第12节,design.md,specs/checkpoint-context-branching/spec.md}`；关联统一寻址第9节、Session URI第10节、persistent resources第7节及CIL fork条款，完整路径在v6。主1121/1123 status/apply actual0，repo-local ready，101项55已勾/46未勾，F12未勾。
 
-- **排队输入**：同原admission owner在Job入队/回执前提交user acceptance或internal frozen input，queue JSONL仅存调度引用。typed acceptance/execution_admission commit cursor由唯一canonical selection owner供checkpoint/closure/assembly，旧execution排未来root/seed/notice，保本execution晚到tool/final与独立ambient；不用物理顺序/时间猜因果。queued正文/附件编辑已物理下线，保policy/remove/clear和cancelled历史。
-- **工具结果**：正常ToolMessage reconciliation `persist_canonical=False`，真正canonical carrier经`ensure_request_items`/唯一storage；phase保`canonical.tool_result.before_commit`且在rollout锁前，不以stream completed等同canonical committed。Bridge传Codec emitting `model_call_id`，registry按`(model_call_id, provider_id)`归属，三direct消费者已迁齐；不留旧签名/第二writer。
-- **异步准备**：原read/control gate内同步Saver段已to_thread；ContextVar owner继承，shield＋既有`run_cleanup_shielded`等worker结算后退gate。别因末端aput在线程内就漏上游同步I/O。
-- **恢复与共享资源**：runtime122有效Provider解析/generation key、user/internal AttachmentBlobStore DI/唯一lifespan关闭、non-FULL/FULL seed/admission映射、projection_part身份类别与逻辑creation_key alias均已有具名结果；不重写关闭链。历史cold不初始化/repair，Turn路径只经catalog/resolver。
+- 唯一modes：view_prefix_fork/context_fork/full_rollout_copy，旧history_prefix alias/逐实体remap下线。context_fork消费同prefix内核的安全默认截止点；点击item inclusive，冻结精确view/revision，不扩后续。
+- 默认同Session新idle child，成功在主窗口右侧侧边栏打开，保主会话选择和stream，不自动执行/回报。侧边新建共用入口，打开已有child不fork。也支持新Session main。
+- Source Thread URI；target容器URI＋new_session_main/new_child_thread，返回真实Thread URI；本地/跨workspace/跨Gateway固定完整目标，不覆盖、合并、回退激活工作区。来源读取与目标创建分别授权，read/send/wait grant不授权fork。
+- 原历史local ID、正文/request bytes、hash/time/status/pending保事实。目标存储owner与历史scope分离，以目标本地冻结binding解析；A→B新聊→C同时保A binding及B直接scope。历史不能resume/dispatch，turn_not_resumable，不恢复Job/锁/连接/claim/执行准入；后继新输入/replay用目标新身份。
+- Typed正文闭包有界、去重防环；backing不增加visible/模型输入。不凭普通URI或任意JSON猜typed ref，不沿provenance重展开已压缩历史。selected view限制正文读取；canonical final/status仍保历史事实。
+- 资源统一decision：reuse_reference/retain_reference/copy_snapshot/omit/unsupported，复用owner/identity/scope/retention/revision/availability，不新registry/per-instance fork bool。同域附件不复制bytes，必要精确target ref保活；跨域未继承明确unavailable，不在线回读来源。
+- Goal默认不继承，显式仅新Session main，child不覆盖父Goal；继承后暂停。磁盘快照原字节分块复制、固定buffer/有限batch、staging发布/失败清理，首次冷读/发送按需。不设置固定2 GiB或专门峰值内存门，原非fork128/427预算门保持。
 
-最新具名结果（主直接核原raw/result/源码前后，不复制运行树）：
+当前完成的源码批：原字节snapshot、历史scope binding及冷plan/detail定位、checkpoint/preparation、typed引用索引、唯一SessionForkRequest/Result、main/child创建callbacks、资源处理与跨端transfer/endpoint/RPC派发。各项仍待最终固定验收，不能据源码落地勾整个F12。
 
-| 闭包 | 可复用证据与限制 |
-|---|---|
-| queued真实HTTP四行为 | `queued141-http-verification.json`：actual0/58.567s，接受即history可读、无提前准入、旧请求排正文、后继冻结消费/物理交错/唯一acceptance过；不代Web |
-| 取消/reasoning | `queued166-cancellation-green-verification.json`：两完整文件40pass/61.933s、446源同/owned0；原12红已闭，未变不重跑。164屏障初报已撤回，不新增查询取消gate |
-| H5 source/refork | `queued165-h5-verification.json`＋`queued167-empty-{context,full}-verification.json`：有输出context/FULL及empty两mode四参数闭。003→005只两fixture变，无生产变化；不盲重整组 |
-| durable controls/回报 | `queued153-controls-verification.json`五节点过；`queued154-h1-verification.json`真实HTTP parent内部回报/来源/hash/关闭过。152三合法fork mode原结果保留 |
-| Store worker取消 | `store171-cancellation-verification.json`：原生产两参probe红仅证worker未结束而调用已done；owner窄修后002 actual0/4.973s，重复cancel、持Turn锁结算、后继seq、去重/fanout和显式cold open_existing恢复过。三文件001其余未变73项复用；仍属050 live，不微收片段 |
-| ToolMessage scope/carrier | `tool-result172-{probe,consumer}-verification.json`：原registry两参数实红→required model_call_id修后两参过；四consumer文件001 actual1/81.267s，101pass，四旧Saver状态fixture红随后已闭。455源同/raw核/owned0 |
-| async准备/旧fixture | `async174-probe-verification.json`只证原真实Saver入口在loop线程（actual1/58.522s，未到Provider）。`async175-consumer-verification.json`：四worker参数及四Saver红过；001 actual1/47.565s（34pass1旧sync fixture红），三sync caller迁齐后002 actual0/34.852s/3pass。两个attempt间仅dispatch测试变、生产同，未变34项复用，不重跑registry/runtime/terminal/Store |
-| 最新产品026 | `core176-product026-verification.json`：actual1/380.046s，455源同/raw核/五formal独有原件/owned0。首FIFO phase、第二queued accepted正文/共同坐标/live/refresh过；首红driver把active lease要求为resource blocker。原snapshot以execution_state active＋cold_eligible false阻卸载，Sol仅迁两断言，保后续fakeclock及终态隔离门；027 actual1/764.556s在更早第二发送fill30s红（本轮未接受第二条）；原件主核`core181-product027-verification.json`。旧请求隔离/后继消费及余五focus尚未执行成功 |
+恢复合同及已收证据：preimage绑定整个request_intent，Trace不塞入该JSON。main/child creation record在同一reservation事务冻结独立 `fork_delivery_request_id` 元数据列，不进入request/preimage/capture身份；capture重复Trace列/参数已删除。1394两main、1405两child覆盖prepared→capture前退出及release回执丢失，qualified结果、源离线冷读和后继输入均过。已published目标不能伪报未创建/回滚，清理未知/错误必须留归属；最终仍核固定组合与依赖复用。
 
-上述短名receipt均在`COORD/artifacts/`，运行原件在`ART050/runs/`。历史020–025原红与024逃逸SSH owned清理保在相应`core*-verification.json`及失败细则；024 raw空不反推025/026同因，未知19002不碰。026 formal原件=`ART050/runs/core-web-026/formal-failure/`；原保护预算不延长求绿。
+UI已落地：精确来源/截止消息、附件候选/继承选择、qualified Gateway/workspace/session/thread导航、默认child/保主选择、侧边共用入口及Goal暂停文案。原1128仅按workspace匹配已迁齐；1402前端37项、1419默认child真实产品分别有证据，原请求重试保冻结key/request。这些不证明所有显式目标/资源的产品场景；其余正式完整验收继续，类型说明最终随固定候选核。
 
-下一批前移审查已收：184确认M单映射完整消费冻结availability、history只查元数据无逐blob/第二owner；原178确认K/M/O唯一Web owner只有基础copy/pinned-L门，未消费production真实capture/attachment/finalizer-delete phase，不能拿pinned context_fork或删source后读copy充当K/M/O。177核原spec218：nonrequired unavailable历史ref应明确不可用，`TurnAttachmentDTO`/历史卡片丢availability。Sol确认`fork_attachment_mappings.snapshot_json`已冻结状态，但唯一`project_file_id`回调只返ID；027终态后Sol正在同批将原映射迁为一次返ID/availability，贯通DTO/proto/types/Web及原Web场景，不逐blob读取或新增状态owner。177/178静态缺口不记运行失败/已测提速；179/180新child核查已STOP，179窗口finding交Sol且原hook红→7pass/types过；180不认定本次fill根因，核心不等全审。
+## 其它已证完整场景及复用界限
 
-186提前核M合法负向输入：生产仅Session删除drain释放ref/GC，正常GC拒有active ref的tombstone，未找到active source的公开optional-unavailable序列；真实文件缺失因所有非空claim无条件verify也整体失败。主核原branching/spec.md:74与history/spec.md:218已有required失败/optional unavailable合同，交Sol同批在原capture owner核实际可复制性再冻结mapping/claim，hash/source冲突仍明确失败，不加release API/harness写库。Sol已在原capture只catch真实FileNotFoundError：required失败、optional冻结unavailable/no claim，hash/symlink继续失败；原附件整文件unit001 actual0/40pass，主核`attachments188-capture-verification.json`。随后删正常blob二次完整读取/hash与verify_bytes callback，全caller只原store，static003实际0；此新SHA批末整文件回验，不能用001替代。optional产品输入以原replay使旧附件不required，再按权威blob locator定点unlink，不写catalog/harness事实。187下一J核无确定生产finding并STOP，300秒wait/真实Web恢复仍待原验收，不等待全审。
+- 1461旧正式basic focus=fork_child_ui actual0、1passed/140.80s，同次Web build0/18.73s，fresh empty main→full idle child/resources=[]、原prefix/附件冷读/后继Provider。主1190=`empty-source-real-product-verification-1190.json`；它早于当前React选择改动，不能代最终focus=forks。
+- 1460普通create/on_published初始化empty view/零execution及B本地A历史binding/错owner拒绝12绿，1191普通create/publish167绿；不在SourcePoint read里物化，published callback失败保已发布事实。
+- 1438/1440四H5 empty/nonempty、两次冷fork及publication/finish硬退出/幂等恢复已齐；主1182。
+- 1492 prepared-before-capture/source-release-reply-lost×main/child **4passed/467.69s**，新附件/来源离线/冷读/冻结重试/后继聊天，主1211。
+- 1498六取消窗口main/child×source_marker/materialized/before_publish **6passed/32.49s**，原key恢复/冻结identity/preparing不release/一次物化/禁live重捕，主1216；非完整HTTP取消。
+- 1501多数113绿、child abort重复locator失败及reactor旧schema7 setup拒绝；Sol统一resolve_session_locator，1503受保护重建完整fixture开发数据、1504五受影响节点5绿/10.34s，主1221；不新增兼容。
+- 1505真实B child附件source-point因MessageService ingest丢thread默认main失败，guard正确；Solthread必填全迁，1507 **52passed/25.67s**真实MessageService短入口；1509两目标HTTP **2passed/222.74s**，child独有/main-only排除、64KiB+1、qualified完整结果/claims、source离线/C重启冷history/附件、同key幂等及恰一次Provider。主1223/1224，仅实际依赖复用不代Web。
+- 1494 Gateway pool startup/close **3passed/0.88s**，早期RPC/channel start失败与正常drain后唯一close；WorkspaceSessionMainPort必填借Gateway lifespan http_client，port不close借用池、所有请求仍动态身份/timeout/token/request ID。受保护close_cleanup只构造注入及fixture例外；主1213/1214。
+- 1441原catalog/owner/current四文件 **369passed/67.94s**、1300 root/闭合tool_result冷bootstrap **2passed/11.36s**；保canonical final/status而不展示截点外final，不借backing扩大visible。确切指纹依赖变更后重验，不以旧full/旧remap测试代新F12。
+- 1403真实跨Gateway full→source离线/C重启→冷history/原key完整qualified结果→首次新输入已绿114.11s；1509更新child附件证据更窄但新。两者均不代另两mode/Web全部资源。
+- 1538授权协议breaking非绿、1530刻意naive静态非绿等保原件，报告范围，不为把全仓刷绿削弱负例。旧已绿证据详细断言/路径沿state1242快照及具名run，不重跑补统计。
 
-189附件工具闭包：正常生成的`AttachmentBlobStore.relative_path`仍产`boxteam-session://`，经`workspace_tool_paths`归一到`session-artifacts/<session>/attachments/<id>`，原`SessionArtifactBackend`还按Session物理目录resolve，正文已迁BlobStore；read未走原state/hash检查，write/edit仍可写旧附件目录。两真实装配caller为`agent_factory.py`与`container.py`（history无当前Thread），需由唯一Sol同批贯通既有canonical/context有效view/issued ref到原BlobStore/capability，不映射可写blob真实路径、不新增store/权限体系，也不扩仅规划的新文件工具change。Luna189静态finding已收，190已STOP并补cold fork list manifest路径未投影：metadata target-local不代表模型实际issued URI target-local，原projection owner须同步生成的block metadata/path与manifest，保canonical bytes/hash。191已STOP无新增finding，主已补核O；未运行复现或通过产品。K/M/O两静态原件已主核actual0、459源同/raw hash同/owned0，源码可继续；详见`ART050/runs/core-copy-lifecycle-{static,mjs-static}-001/`。
+## 原goal范围与后继
 
-本轮规范一致性纠正：`rollout-checkpoint-storage/spec.md`主体已禁止本地key/第二密文，但旧thread-node Scenario仍要求redaction key/protected目录；按用户既有授权改为单份typed detail路径，原change strict validate actual0/issues空，不改源码、不据此勾任务。技能窄改已quick_validate actual0，整体效率效果待原产品。
+原七change：migrate-identifiers-to-uuidv7、add-workspace-persistent-resource-management、add-itemized-rollout-context、migrate-session-context-resource-uri、add-context-injection-lifecycle、add-multi-workspace-backend-mounting、add-unified-virtual-resource-addressing。新files/Skill目录根/文件工具只属后续规划，不扩当前goal源码。
 
-191实际审查无新增finding且越禁Git边界，停止续派；既有禁Git规则不堆同义禁令。主补核O：finalizer只持target Session gate，真实delete先经topology短事务mark catalog deleting，再_drain取得Session gate释放owner/fence/隔离；MJS原1197–1199要求finalizer持gate时catalog必active/无deleting event并非原8.13-O合同。静态调用链已核至SessionCatalogService→JobService→resolver→shared delete，无外层shared topology持锁；已直接交Sol本批按原owner-release/settlement终态验双顺序，不因错误观察新增生产锁。尚未运行复现/原产品通过。
+唯一正式Web产品owner=`tests/e2e/clients/web/test_basic_chat_tool_loop.py`，原Section8合同=`ART050/context079/original-tasks-section8.txt`。保8.1-G/H、8.3-E、8.13-A–S、8.14、ToolSet/root placement及原产品/规模/并发门。原剩余=`E/navigation-index-only-10-3/remaining-original-goal.json`、`E/a06-final-task-evidence-ledger.json`；CIL1.5/1.6、itemized1.7 RuntimeNoticePayload、checkpoint/admission durable、intent CAS/hash仍待。旧STOP/Provider403/35000阻断不覆盖当前。
 
-192/193前移核查：192已STOP，新capability及sealed/native/cold/fork消费未发现确证缺口，静态结论不代运行；193已STOP，主独立核K原spec314/330–335和driver945–1024，确认缺copy持source guard时删除在关闭fence前等待capture的原场景。已交Sol在原driver补正常成功顺序，保partial/CAS崩溃原门，不要求catalog active、不加生产锁；M URI edit额外矩阵及O pending recovery仅覆盖强度意见，不追加门。主直接核附件unit001 actual1/81.638320s/120pass2fixture红，unit002 actual1/37.173778s仅observer误计setup source-side调用，unit003 actual0/24.233930s/2pass；474源前后同/raw SHA+bytes同/owned0。001→003只新测试文件变化，生产及其余120项复用；static004/005、MJS002、compile001全0。真实fixture与target观察窗口已闭，K前移发现尚未实跑，不据局部证据宣称产品或整体提速。
+已接受COMMIT回滚、正文冻结、WebSocket异常分类=`7d7178ef`；AES/key/thread HMAC已删，不重派。A04/A05=`c6c7b7af`/`aef566ae`、A06=`e11c8c6b`、外围=`a26ea5f5`、Sol10.3=`faad271c`、distribution/联邦/单正文=`1e9eea6c`/`82f518e8`/`375600b2`；10.4/10.4c/10.7=`d64fb573`，10.8仍含8.1-H。导航111-002/115完整接受，证据=`ROOT/out/tests/temp/2026/10/10/navigation115-independent/artifacts/coordinator-verification115-final.json`及caller-closure115.json。原C1 411已绿/尚未整批接受，不再当阻断。其它历史通过/原失败selectors及复用范围见state1139快照“验收复用与原范围”，旧fork/remap合同通过不作F12证据。
 
-最新批末前置已主核：MJS003 actual0/29.497864s、compile001 actual0/5.029896s、OpenAPI001 actual0/56.802893s（唯一官方生成器更新两快照，除此无source变化）、Web build001 actual0/61.720719s，raw SHA/bytes同且owned0。protocol002 actual1/25.999799s、474源同，只报告旧PendingRequestUpdateRequest删除；主核API只保policy更新、手写源码零旧DTO引用，此具名有意破坏性变更按用户去旧链授权纳入最终固定审查，原red与独立accepted209基线保留，不恢复死DTO。core-web-028原forks node已终态actual1/221.160189s，474源同/raw SHA+bytes同/owned0；setup B19020后端60秒未ready，K/M/O未进。B对应c3-backend.stdout/stderr两原日志0B、mtime匹配原Popen，不能猜业务/配置/Provider根因。Sol获准在唯一test ASGI composition入口加55s一次性import watchdog、import完成cancel，原60s及1500/browser1200不改；观察不足覆盖更早uvicorn阶段须明示。195只读正常链，无核心等待门。
+下一步：
+1. 已收齐main及1405两child prepared恢复/release回执丢失、1419默认child正式产品；唯一Sol继续成组旧消费者迁移，已绿完整场景不为补统计重跑。
+2. 同批清理全部旧fork/remap/alias直接及间接调用方，迁齐显式debug资源owner发布/恢复并完成受影响回归；1400/1402/1404/1419按真实依赖复用，不重做未变full或旧资源批，不等消息审查。
+3. 整批STOP后一次固定完整Git树、导补丁严格重建、独审/正式产品终验、串行集成，再勾已验任务；原050及F12全部新/删/改caller都在候选，不裁hunk或漏新增。
+4. F12后续原weekly→initial_admission_recovery→generated_internal_history，命名11及七change剩余/128和427门。官方dev仍停止；局部绿、文档或技能绿不能结束原goal。
 
-029最新原件已主核：`COORD/artifacts/core198-product029-verification.json`直接引用原runs，actual1/295.547179s、474源前后同、stdout6552B SHA与result同、stderr0B/owned0。首红A19000/PID4092386 ready60.653s connection refused；所属两日志各0B，phase仅本次fixture_begin，无watchdog帧，K/M/O未执行。bootstrap-static001 actual0/70.151219s/raw与474源同。源码/profile冻结解除，不盲重030；195无确定根因已STOP。 主已核现有start_backend_process.env_overrides；批末若仍需更早import观察，仅在原section8 fixture backend_environment显式传PYTHONPROFILEIMPORTTIME=1，复用ROOT Python/uvicorn入口，不新增launcher/helper/服务或改用户/生产配置，原60s保留，当前不启动新重测试。一次宿主工具转录观察load约53、I/O与memory等待显著、可用内存约6GB；1364706/1592479各约40/24GB RSS，环境无线程ID且fd各指多会话，仅证聚合宿主进程，归属不可缩到本goal、不杀。不把资源压力直接定为A/B未ready因果，不改原60s或环境。
+## 命名11及效率维护
 
-196/197按下一完整场景提前只读：196核生产record/删除/恢复，197核原I/J/P/Q合法入口/phase/fixture；消息即时交唯一Sol，限时10分钟STOP、不另建报告或等待门。196确定`ThreadCreationRecord`虽冻结generation且称等价lease，但gate外staging/rename期间原删除callback与GC不枚举它；主对create、callback/fence/rename、GC独立核后交Sol同批补。Sol拟复用既有OperationHolderGate执行锁，在Session gate外等待/定点取消原record后再隔离，GC查preparing；不新增第二创建账本或持Session gate等待需此gate的发布者。静态遗漏尚未运行复现；效果待原竞争门。
+命名11.1–11.3已规划、未整批勾。内部用具体事件/主体组合名；公开字段在类型中文注释/API description及真实生成类型说明来源、单位/时区、特殊值和复制保留，不造全局字典/镜像注释测试/alias。
 
-主独立规范核账：9.8/9.9两成员测试在已接受c6bb5c7f树确实存在，已清除tasks.md“当前文件不存在”的过期派单描述，保原五链与epoch/hash门、未勾整项；change strict validate actual0/issues空。主一次符号检索误带生成OpenAPI单行JSON造成输出截断，已改为rg路径级定位与限定源码扩展名，现有大JSON限量规则已足够，不追加同义禁令或归责作者；工具转录不补造raw或精确开销。
+- history.created_at取本次加载首个非internal HumanMessage，否则首消息，缺消息/time再回合法turns.created_at；受include影响，不等TurnRecord/acceptance/复制创建时刻。非空projection先校验、消息非法日期不得缺值回退。updated_at优先projection，否则final时间/created_at；completed_at=updated_at并非独立终结事件/非终态可有值。
+- 消息缺tz按UTC、projection缺tz拒；保offset/微秒/source原时间字符串及原排序。duration_ms是turns.created_at→updated_at投影跨度，实时值是展示估算；elapsed_ms按实际projection前项，physical bounds不代逻辑成员。
+- 已实落copy_recorded_at、commit_recorded_at、filter_tool_event_injected_arguments、navigation_parent_session_id、target_accepted_at；prepared_target_recovered_at仅当前恢复操作UTC记账，非来源时间。Tool/ModelCall/raw/canonical/ordinal身份、Job/execution/tool outcome、node CAS/catalog计数/page摘要分别说明，不能混同。
+- Session parent_session_id来自catalog最近祖先，context_source_session_id来自fork lineage；移动不改来源/物理路径。Session catalog时间与history不同。LLM日志时间epoch毫秒、叶名纳秒，旧回填兼容已删。
+- ForkAttachmentSnapshot source是正文backing owner，target是消费scope，target_owner_thread是保活owner可main；digest带sha256前缀/length bytes。SourcePoint title是目标预填名称、goal_available仅来源Goal存在，非已冻结/继承。
+- 原命名回归/生成/静态取state1242快照，最终固定候选核声明/writer/reader/generated完整一致；R1417本轮history定义已充分，不再当新增问题，R1422/R1430窄注释后继交Sol，不新建业务门。
+- 用户建议仅台账试行，实践证据支持才固化SKILL；无同起点A/B不报模型倍率或某分工最优。1535支持React窄规则，1545支持现成真实Runner快速取得resolver证明，但不证明所有场景都能短门替代完整门。
+- 当前前移审查已补tool carrier scope反例，1554 36绿且1555越过原weekly误拒；仍止于导航driver接线，不能称整批已提速或四focus绿。M全caller补齐postcommit runtime清理、A界定live与alternate writer，尚无后继修复动态效果；用户建议仍不盲写SKILL。原资产callee漏读R1432、主路径猜测/JSON参数错误保既有原件，纠正读取、不新增同义禁令。
+- 台账107KB恢复负担已实见；1242保原件后压缩到当前队列/证据入口，不重复append旧流水。后续只更新会改变下一步的事实，不拿字节减少宣称业务性能收益。
 
-旧23 history门精确原件=`ART050/runs/history-consumer-boundary-003/`，完整`tests/integration/backend/sessions/test_internal_display_view_order.py`。test SHA与Codec依赖已漂移，Sol在R/S批末重验该原文件，不扩矩阵；active-successor六caller门本轮已实际再过。
+## 执行保护与交付
 
-## 已过且可按依赖复用的边界
+所有新测试/诊断经固定入口：
+`ROOT/.venv/bin/python ROOT/.codex/skills/team-collaboration-gpt/scripts/run_task.py --profile <绝对profile> --attempt <唯一名> --seconds <预算> -- <argv>`。
+进程外timeout/ulimit-d4194304，重测试仅Sol串行；原件为ART/runs/<attempt>/{started,result,command-exit}.json及stdout.raw/stderr.raw，不覆盖。主verify_run.py核准确run，0只表示机械一致，不能改原业务非零。已有原件按准确绝对路径有界展示，不执行内容/另采集，不搬整workspace。新路径/隐式依赖升级下一profile，不改在途或历史指纹。
 
-| 范围 | 原件、结果及限制 |
-|---|---|
-| 050身份/历史/控制 | identity-boundary001 41pass、identity-web-boundary002 33pass；旧history23已漂移，按上文重验；graph三具名例、017未变46pass及control-attachment177项只按实际依赖复用，不代A–S。旧非法UUID反例修后untrack-valid-unknown-regression001 actual0/74.619s |
-| matcher117 | 两Responses旧红＋3新unit actual0/60.93511042s、5pass/248源码同；SDK真实type可省略、image detail Required，畸形detail防TypeError已增审关闭。两blob已接受20925037，主核=`COORD/artifacts/matcher117-runtime-verification.json` |
-| history117 | 精确node=`tests/integration/backend/sessions/rollout_context/test_rollout_checkpoint_saver.py::test_history_reads_accepted_turn_from_active_successor_before_next_checkpoint`；red002真实StaleTurnReferenceError actual1/6.178917s，green002 actual0/25.156121s，warm/cold见新Turn且显式cp-1仍冻第一轮；六history caller同批迁，四文件独审无finding。主核=`COORD/artifacts/history117-green-verification.json`；报告=`T116/history-review/artifacts/report.json` |
-| DOM118 | core018 actual1/258.943596s；旧title定位count0静默skip后下游超时。同Sol迁openOwner/assertTeamDom为真实role=tab/name并去skip，019已越过此入口；只读UI报告=`T116/ui-consumer-readonly/artifacts/report.json`，不代产品全绿 |
-| L source_uri119 | 唯一fork endpoint/service新增source_uri（proto field6），统一URI owner核gateway/workspace/path Session ID，在journal/capture/claim前拒合法远端跨Workspace；短5pass/33.849244s/390源同。generation0/14.461985s预期六bindings变化；format/breaking/types/build/driverstatic0且390源同，真实原件名全部以fork-source-uri开头。主核=`COORD/artifacts/fork119-verification.json`及`protocol119-core019-verification.json`；产品L待原core |
+禁/tmp、新venv、整仓复制、新源码副本、新worktree、历史临时工作区及ROOT业务workspace/.boxteam。正式fixture/输出沿out/tests/<同名测试路径>/；临时控制/产物仅本授权FORKRUN。ROOT/.boxteam/terminal-manager不存在。短alias ROOT/out/.section8-050-tmp仅指正式runtime/test-control/tmp，owned0后撤。开发中间数据可删，先结束owned写入，保普通源码、独有改动、凭据和必要raw。
 
-Buf真实accepted209基线=`COORD/artifacts/proto119-baseline/accepted-20925037.binpb`，SHA=`2c35d1602ec4f6486756a2a4bbb7a369e788c42fb7f5807c199d183e3f70e01d`。仅36文件archive生成，source/runtime可复现副本已删，不再使用旧receipt source_root。保image/raw/receipt/cleanup，不给作者Git索引。
+七保护路径：app/domain/itemized/request_plan.py；app/gateway/federation/{channel,transport,rpc}.py；tests/unit/gateway/{test_federation_channel_engine.py,test_federation_transport.py,federation/test_rpc_close_cleanup.py}。032及ContextRequestPlan.__post_init__局部查找索引例外沿既有输入/归档，不扩其它片段；turn.py已交Sol。六deferred：examples/demos/Itemized_context_storage/runtime/demo/{request-plan.json,transcript.json}、src/boxteam.egg-info/PKG-INFO、tools/ssh/{a4500_known_hosts,id_ed25519_kunlun,windows_vm_known_hosts}。
 
-## 已接受工具与效率维护
+F12 RPC窄例外：唯一Sol可修改FederationRpcService.relay_operation/_execute_local/_serve_relay_as_hub/_serve_relay_as_spoke中fork_source/fork_target、固定URI/role/operation、qualified target及派发；保原grant/origin/path/replay/read，不扩channel/transport/close_cleanup。ForkGrantTarget必需imports/纯类型联合注解含_sign_grant.target已授权，不逐注解申请；其它符号的实际行为变化才精确协调。来源/目标双端各自授权，传输回执绑定operation/preimage，不改投本地。
 
-121三工具真实accepted baseline防错已接受b4dc，收据=`COORD/artifacts/protocol121-skill-batch/receipt.json`，固定/独审/root-sync原件在`protocol121-fixed/`。128固定runner＋规划/协作文档接受，收据=`runner128-doc-skill-batch/receipt.json`；source_baseline错配启动前拒绝112已实测，不重验。138规范/技能与150资源身份文档分别见`docs138-contract-efficiency/receipt.json`、`resource145-contract-fixed/receipt.json`，未收050源。原accepted209 Buf image=`COORD/artifacts/proto119-baseline/accepted-20925037.binpb`，不能拿当前proto自比。
+每个主Git subprocess显式绝对GIT_INDEX_FILE和GIT_OPTIONAL_LOCKS=0，保共享暂存，不add作者live/裁hunk/改共享历史。STOP后候选完整树、严格重建与真实产品终验均须完成。主用少量依赖SHA不能代固定全树，禁止未经固定就标接受。
 
-原件先区分初始化、业务与测试接线错误；同链返工让两个只读者提前核真实生产消费者/原断言，确定finding直接交唯一作者，限时STOP。已过按实际依赖复用，短门漂移且重验更便宜就重验原门；不要为统计、报告或审查加等待门。只更新已有`A/efficiency-comparison.json`的ongoing_efficiency_action，局部修通不报整体提速/模型倍率。旧105检索754GB无用I/O及owned回收已在失败细则，未知find不杀，不以宿主压力单独定业务根因。
-
-## 原goal其它已接受与剩余
-
-- 三实证缺陷=`7d7178ef`（提交失败回滚、正文冻结、WebSocket异常分类），不重派。A01–A03/R01/R03及UUIDv7/persistent/SessionURI（49/49、23/23、37/37及send/read/wait联合门）按原收据复用；本地AES/key/thread HMAC已删除。
-- A04/A05=`c6c7b7af`/`aef566ae`；A06核心=`e11c8c6b`，CIL旧facade删/TC001收口；外围019–021=`a26ea5f5`；Sol10.3=`faad271c`；distribution/联邦/单正文=`1e9eea6c`、`82f518e8`、`375600b2`；N04–N16窄合同，不推全生命周期。
-- 导航原量化111-002完整通过，五路径接受=`15ee9cfef86feda631501bec38e49a137d56b5e9`。原200目录/120sources、300file/40Gateway/20并发、8000布局、DOM双rAF、FS650ms/30s保持；10.4b分类不增通用≤1s门。115原短门63pass＋Chromium full＋build/types全过，合计173.455s；完整caller/结构核后10.4/10.4c/10.7已收口d64fb573，itemized **60/89，剩29**。10.8仍有8.1-H产品，不重跑长量化。收据=`ROOT/out/tests/temp/2026/10/10/navigation115-independent/artifacts/coordinator-verification115-final.json`及caller-closure115.json。
-- 原core清单=`E/navigation-index-only-10-3/remaining-original-goal.json`；原ledger=`E/a06-final-task-evidence-ledger.json`。1.5–1.7 typed/notice Web/checkpoint/admission durable→intent CAS/hash复合门仍由Sol在050后收齐；049/053及056–065局部审计不代完整验收，不泛查旧A02。
-- Gateway性能条件已有create_folder/move_workspace p95=94.910/75.451ms，HTTP1/FS8，无独立开工证据；不新增worker。新文件工具、files/Skill目录根与child编码仅规划，不扩本goal源码。外部UNMET仍Provider403 quota、A04 C1未知35000 listener；不换profile求绿、不杀未知服务。原七change仍未整体完成。
-
-## 执行防线与历史入口
-
-官方dev停止；ROOT venv实际Python3.12。测试用固定run_task/profile、进程外timeout＋ulimit-d4194304，唯一attempt raw/result/source before-after，不覆盖历史；重测试串行归Sol。禁/tmp、新venv、整仓复制、历史工作区及源码根业务工作区，正式输出仍镜像out/tests。050短alias ROOT/out/.section8-050-tmp只指正式runtime/test-control/tmp，owned0后才撤，其它历史alias不恢复。
-
-七保护路径：app/domain/itemized/request_plan.py；app/gateway/federation/{channel,transport,rpc}.py；tests/unit/gateway/{test_federation_channel_engine.py,test_federation_transport.py,federation/test_rpc_close_cleanup.py}。032窄例外不扩；app/schemas/internal_v2/turn.py已交Sol。六deferred：examples/demos/Itemized_context_storage/runtime/demo/{request-plan.json,transcript.json}、src/boxteam.egg-info/PKG-INFO、tools/ssh/{a4500_known_hosts,id_ed25519_kunlun,windows_vm_known_hosts}。开发中间数据可删；保源码/独有修改/凭据/必要raw；ROOT/.boxteam/terminal-manager不存在。
-
-主每个Git subprocess显式绝对私有GIT_INDEX_FILE与GIT_OPTIONAL_LOCKS=0；fresh HEAD→精确固定blob→完整标准patch/strict重建→guard record/commit/verify，保共享暂存，不裁hunk或用陈旧index。本轮恢复曾裸rev-parse读取HEAD一次，未写索引；后续已纠正为统一subprocess环境，同步前后共享index SHA相同，不因此复原旧index。101索引事件、105owned search、导航历史具名路径在失败细则与各原件。压缩前本页精确blob/hash/bytes保`COORD/artifacts/protocol121-fixed/state-preimage.json`，旧快照入口=`RV/coordinator/artifacts/efficiency090-continuation/team-collaboration-state.md`；不复制全部报告、不按天新增memory副本。
-
-
-最新接受166七路径：commit=`c6bb5c7f7a8b5cb74a52bc2e74495b5694091aca`、tree=`23932c23f0c7e902b144efc7d23b9c6f9071743f`，receipt=`COORD/artifacts/federation166-skill-batch/receipt.json`，strict/diffcheck/guard0、shared index字节同，无050源。phase保原canonical before_commit语义，不能用stream completed等同carrier已提交；canonical仍归ensure_request_items/唯一storage，无新账本/产品门。当前在途状态以本页050恢复与201/202提前核查为准，独审不阻核心。
-
-本轮技能入口只窄补可恢复record被删除/恢复/GC实际消费与结算锁序，未重复已有场景闭包规则；quick_validate actual0。原OpenSpec apply/status actual0，itemized仍60/89、剩29（CLI正式任务粒度，文本含嵌套项的计数不能替代它）。核心Sol最新已在原三生产文件补child记录排空，validator统一冻结inventory，唯一原测试caller同迁；profile只并入三必要路径，SHA=`224b8b7b6b4699bc8e22d68363b35128b014ad113a729aeb42d9cc342b9f3236`。该static001已终态actual1/39.815212s、仅SIM117；后恢复static002 actual1/2.487105s、仅测试import排序，作者继续同一driver独立I/J/P/Q focus，不启动030或新产品入口。
-
-196收尾已STOP：新增partial staging误拒与J tombstone source再派发两确定静态缺口，主已核实际函数/spec后交同Sol，不设独审等待门。主还核atomic_fs正常crash可留随机命名的原子写temp；取消必须盘准备/恢复/abort/delete消费者，而不是仅允许完整清单文件子集。J原spec390/history186仍要求新授权与同terminal envelope；不能直接本地return绕过授权，也不能为授权在活target首次建立观察后丢弃结果。static001 actual1/39.815212s、476源同/raw658B/stderr0/owned0主核，仅SIM117，作者已改combined context；lint修正不写新失败规则。修复及原竞争运行效果待核。
-
-2026-10-11恢复核验：原主只读cell994与session5761已权威missing；它们不是业务runner，不据此重跑产品。当前HEAD/tree仍c6bb5c7f/23932c23（主每个Git subprocess显式私有goal203-readonly.idx/GIT_OPTIONAL_LOCKS=0）。原Sol turn request timed out，已续接同模型/会话；新源码已落、暂无业务验收。最新profile SHA=`47bfeec790387e0fa6d9d2f811e793512d35081fa66d04fefc0dcdabcb7cb0ba`，无新业务run；原static002 actual1/2.487105s、478源前后同、stdout2427B与result SHA同、stderr0/owned0，只有测试import排序，不新增失败规则。201发现source tombstone成功/target-deleted回程return无envelope expiry再核，主对当前348–405与原spec390核后交Sol连末尾_DELETED消费者同批处理。保持旧事实/新授权/原期限，不增加新baseline或验收矩阵；静态不冒称复现。
-
-204当前核验：原static003 actual0/0.9793792902491987s，478源前后同，stdout19B/stderr0、原raw/hash/bytes与result吻合，profile47bfeec7与runner c4d3446e未变、owned0；主收据=`COORD/artifacts/lifecycle204-static003-verification.json`。Sol已给source tombstone成功/target-deleted及末尾_DELETED返回核冻结expiry；原恢复测试以freeze_manifest=False覆盖record-only，删除取消加入record_only参数。202只读核查限时STOP、未发现相应生产缺口；这些是live源码/静态事实，行为未验、050未接受。技能仅窄补恢复fixture停在真实事务边界，不能由helper先提交崩溃点后的步骤。201续接Q，仅前移原事件与outbox消费者，不重复旧J调查。Q发现listSessionCatalogNavigationEvents仅定义、event_seq/cursor_gone无真实UI消费，主核原spec123/155和8.13-Q后直交唯一作者；按既有事件owner收口，不以REST形态增加SSE端点门。提前发现有实证，交付提速仍待原相关场景。
-
-204收尾：201 Q静态核查STOP，现有SessionActivity SSE仅标未读/刷新摘要，不带navigation operation ID或桥接cursor；仍保有原exact-ID恢复/周期对账。技能quick_validate工具实际0（转录），未将静态检查记成业务验收；原itemized strict校验见本轮工具结果。050继续同Sol，本批所有产品门仍未整体完成。
-
-204文档接受：六路径固定tree/补丁严格重建、diffcheck及guard record/verify全0；共享index字节同，未包含050源码。commit/tree/patch/blob/hash原件见`COORD/artifacts/docs204-contract-efficiency/{manifest,receipt}.json`。Q事件已沿REST页接原outbox runtime，team holder删除锁序同批在迁；均live未运行。201仅核team新差异、202仅核P原消费者，各7分钟消息收尾，不添加作者等待门。此前未初始化私有索引的diff误报六文件删除，read-tree HEAD后确认真实六文档差异；未写共享index或业务源码，不将误报当数据丢失，不加同义规则。
-
-204提前审查收尾：202 P无新确定finding，正常identifier_date/API创建、只读catalog/restart与删除phase入口直交Sol；201 team新差异无新确定finding，锁序为holder在Session gate外等待，container绑定同fanout owner/原drain，启动恢复沿原resolver。两会话STOP常驻，未启动测试/服务或写文件；局部静态结论不能代产品。主提醒原profile两Web必要consumer不在旧manifest，应在下一集中运行前并入source_paths；另两team路径已在旧manifest，提示不是实际运行漏指纹事故。
-
-205/206当前前置与核心：static004 actual0/2.4967957069166005s与Web types001 actual0/28.707226959988475s，同483源指纹/raw核/owned0；四提示caller实际均在运行指纹，profile SHA=`b6b46fa1700ca9c10236ebcb10fcfce6b22d01495451dc803a3e125e7a0811f8`，主收据=`COORD/artifacts/lifecycle205-preflight-verification.json`。core001原八具名节点含参数共13pass，actual0/47.8617405211553s，stdout811B/stderr0、483源前后同/owned0，主收据=`COORD/artifacts/lifecycle206-core-verification.json`。NULL manifest record-only创建重入、删除原记录取消与partial/atomic temp等参数已有核心运行证据，fixture事务窗口窄规则本轮执行；J三返回期限、Q真实Web事件消费以及I/J/P/Q/K/M/O完整产品仍不能由13pass替代。原§8全部合取与七change后续范围保留，050仍live。
-
-207正式生成/构建：协议生成001 actual0/10.750930s，仅6个官方generated bindings变化；Web build001 actual0/24.038065s、483源前后同，已经消费新bindings；OpenAPI生成001 actual0/25.670267s，仅`src/clients/web/openapi.json`与`src/clients/web/src/types/openapi/index.json`变化。主核三原raw/hash/bytes/owned0，收据=`COORD/artifacts/lifecycle207-generators-build-verification.json`。types001先于协议生成，最终组合须在新bindings上集中类型检查，不因此微重全部核心测试。主前一次只读收据构造误猜OpenAPI输出路径断言失败，已按机器两真实输出纠正，无源码写入或生成器重跑；协调错误不计Sol失败。Sol已在原section8 fixture加入测试专用import-time观察，原ready/进程保护不延，I/J/P/Q唯一driver仍继续，原所有产品与后续门未完成。
-
-208原fixture静态005 actual0/2.471813s，protocol-check001 actual0/2.044582s，483源前后同/raw/owned0已核，收据=`COORD/artifacts/lifecycle208-fixture-protocol-verification.json`。`check:protocol`仅证生成一致，不清除旧compatibility对授权下线DTO的原红。
-
-209产品030实际124/1528.071959s、483源同、stdout/stderr各0B/owned0，收据=`COORD/artifacts/core209-product030-verification.json`。本次phase同PID805782：02:50:34 fixture_begin→02:52:50.822 fixture_yield→02:52:50.885 build_begin，直到03:15:45超时无build_end；本次已过fixture，不沿用028/029 setup失败诊断。真实build argv=`bun run build`、cwd=`ROOT/src/clients/web`，`to_thread(subprocess.run(capture_output=True))`使输出等退出才交回，当前缺child原raw，根因未定。原formal primary/b/c日志按时间可归本次fixture，watchfiles不是卡住因果；021旧截图不归030。不盲031/扩保护，原入口及时落盘建议交同Sol；独立I/J/P/Q继续，不等调查全审。
-
-210主核原生产返回分支、原测试和spec后保留有限缺口；Luna已撤回tombstone-success未覆盖判断，并即时通知Sol。原`replayed=True`已覆盖source tombstone成功重放跨期；未覆盖先删除source再回传时`_DELETED` catch跨期，缺原target observation唯一及冻结expires_at不变断言。只在原文件复用clock/transport补对应断言，不另建harness/矩阵、不将一天恢复窗误作30min规范缺陷。静态finding不计已运行事故或提速。
-
-211主核原静态006 actual0/3.173705s、007 actual0/1.313426s及Q两个原Web consumer文件14pass/10.532908s；各483源前后同/raw核/owned0，收据=`COORD/artifacts/lifecycle211-preflight-consumer-verification.json`。Sol在原正式入口实时保存build stdout/stderr、child PID/退出/阶段；原expiry测试新增reply-expiry参数与target observation冻结唯一断言，均静态0；随后214原新增expiry参数已过，完整产品尚待。不重跑未变13核心/Q14项求报告。
-
-211/212前移审查STOP：211最初仅凭两个分层test认为R/S未贯通，核当前唯一MJS后撤回；`generated_internal_history`与`initial_admission_recovery`已是原真实admission→history API→SQLite/DTO坐标→safe live/reload及admission后CAS前重启入口，无新确定finding、不重写driver。212确定`rpc._serve_discovery_as_hub/_fan_out_discovery`只有discovery、漏transit policy；主沿原spec364/372、policy与relay实际鉴权核后交唯一Sol同批补B准入/每spoke派发/回程，不新增policy owner或矩阵。此为静态生产遗漏，尚未运行复现；B reallow/new-grant/原operation属原未验门，不另列生产事故。两会话只读常驻，核心不等待全审。
-
-214新原件已主核：031实际1/24.717319s，483源同/raw/owned0；setup端口租约19060已占用，尚未到build，不能归030同因。当前只读ss无该LISTEN或TCP行，未杀任何未知进程；后续按实际owner和新就绪证据运行，不靠端口强杀。boundary001实际1/27.541904s、485源同/raw/owned0，rpc/test已并指纹；5pass（含原reply-expiry及hub-origin、fanout双阶段）/1旧接线错：spoke用channel_to(hub)访问hub-only映射，原deny/reallow断言尚未执行。主窄核真实fixture与channel owner后交同Sol只修测试取原连接并回验失败项，不改生产默认求绿、不盲重5通过。static008实际0/1.670487s，收据=`COORD/artifacts/lifecycle214-new-boundary-product031-verification.json`。212提前finding已落生产并有部分真实边界通过，不代完整B或整体提速。
-
-主观察状态补核：轻量read_thread得到原Sol turn `01a128c0-ed95-7820-aa55-f9b40ffd1341`仍inProgress，末操作是I/Q消费者与thread creation源码核查，未重启或另派核心作者。主误把返回JSON字符串当对象列keys造成过量工具输出，已先JSON.parse并仅输出所需字段；无源码、运行或数据影响，协调错误不记Sol成本。该只读观察已完成，无待收cell；不再为状态重复取整turn。
-
-215原static009实际0/1.790496s、boundary002实际0/21.923532s/1pass；485源同/raw/owned0，001→002仅原gateway测试文件变化，生产不变、前5通过复用，收据=`COORD/artifacts/lifecycle215-boundary-recovery-verification.json`。前移transit finding由同作者一次迁准入/每spoke派发/回程，拒绝零target查询、热撤权/恢复与hub本地不扩transit合同均有对应窄边界证据；完整B产品未过、050仍live，不推总体提速。032当时已核live PID/startticks，现已217终态，见上方当前归因；原profileSHA=`4d7936f40a57168aef0fafd350eef9be6884b18cd270007d4cc9ba471e1a9bf4`。216下一L182已只读STOP，218继续I/Q前移核查，不制造人数任务。
-
-217初始化缺口已前移交同Sol：真实B Gateway日志末栈为main→install_static_web_ui→FileNotFoundError缺index，三backend先于B Gateway已启动，C/A Gateway尚未启动。本次未到build、不能验证030的即时build日志改进；修原fixture依赖后沿唯一原profile有界回验，不新建入口/复制工作区。216 L182无确定生产finding，已有分层闭包可按依赖复用；ToolSet/root-placement/fork目标首次dispatch仍属原未验门，交同Sol后续补真实断言。218当前I/Q限时提前只读，不等全审。
-
-219构建前置已由033原phase实际验证：build_begin/process_begin/end0均即时可读，随后fixture_begin；新A backend ready60首红不归032 Gateway缺dist。本次两个前置规则执行有效，不代完整产品或总体提速。主直接核作者保存的033三原件，未再复制；220只读导入消费者最多6分钟、确定finding直交同Sol；218继续I/Q消息收尾。技能quick_validate actual0，不是业务验收。
-
-218/220已消息STOP：218核查当时，Q后端mark hook为committed+pending_settlement，finish才settle；Web outbox未存字段、terminal receipt直接跳过、prune与runtime cache只看committed/revision，Overlay报递归删除完成，confirmed deleting未显示。主核原spec121/157交同Sol贯通；到222独审时，当前050源码已有settlement三态/receipt_revision、正常与恢复producer、outbox保存/晚到对账/保留未结算项及Explorer状态展示。以上源码仍live、未接受，原Q完整产品行为尚未验，不把218旧快照当当前缺口。220主核033 55s真实container导入栈及后继测试LiteLLM远端价格表超时，顶层重依赖违规有据、全部ready根因未定；本地价格表仅原测试child环境建议、不改用户配置/生产，未宣称优化效果。
-
-221只读收尾无确定I生产finding：target inbox binding沿原Job prep/delete guard与Job/observation drain收敛，独立skill_load/ToolSet control沿原context-control gate及shield worker结算，既有abandoned settle已接入；专门I产品断言仍未验，不重构已闭生产。221主补核Q上游时，receipt只有bool、mark后失败只日志返旧committed，无repair原因投影，已交同Sol沿唯一owner同批修订；222时已见三态、原因与版本投影，不能再记为当前未实现。223 S沿真实API/reader/SQL/DTO/Web未确认生产缺口，单execution超页续读/256上限/去重/共同坐标已有driver；首次上界冻结、mixed双lane、around dense gap续读及首尾notice是原未验断言，已交Sol后续补。224只读追踪Q新语义差异，确定遗漏直交同作者，不增加等待门或验收门；静态发现不代真实产品验收/整体提速。
-
-222 revision2已接受，仅三团队文档；历史Q发现/当前源码/产品验收时态已纠正，独审增量无finding，未占核心停写。225主核static011 actual0/2.046733s，源码前后同/raw核/owned0，Q后端静态通过不代完整产品。224提前只读仅追新语义差异，Sol继续原050完整范围。
-
-227–229新原件已直接核：static012实际0/11.628809s、505源同；runtime重依赖懒导入与原test child本地价格表开关已落，启动效果待原产品。types034实际2/37.324925s、505源同，原hook两fixture参数与confirmed projection缺settlement字段；consumers013实际1/15.387724s、506源同、135pass/1原pending父Folder fixture红。原raw/hash/bytes/owned0保留，同Sol继续闭合，只回验失败/受影响项，不将局部135pass当Q产品通过。224未确认新生产finding；overlay待settled才报成功，勿重复修旧问题。原176Q真实DOM/outbox断言保留，226只推进已接受A05根路径caller语义，不占核心。
-
-230主核原static013 actual0/6.167842s与settlement014 actual0/68.440361s（原operations_queue文件31pass），506源前后同/raw核/owned0；Q后端三态/恢复/回执版本的原边界有通过证据，仍不代真实Web乐观协议。consumers013唯一红是旧“持久受理”文案断言，作者按真实“已保存本地待同步”修fixture，135未变项按依赖复用。
-
-226已STOP：主库存522命中/161文件，27 live不同accepted HEAD，命中不代缺陷。Luna已核Skill/apply_patch/Python/LLM日志/WorkspaceService/附件生产caller显式root或ContextVar；logs/artifacts/cache无生产caller，Gateway环境root仅启动payload，无新确定finding。原库存与消息结论=`COORD/artifacts/a05-identity-inventory226/{inventory,readonly-caller-conclusions}.json`；activation全量语义及live差异仍待固定批收口，不勾1.7，不重复重构已闭生产，不加核心等待门。
-
-
-233/234库存补核：首次226后缀白名单漏JS/shell，233补6文件12命中；234核manager由每mount固定root/id、attach frontend沿URL workspaceId和Gateway auxiliary route固定目标，跨平台两脚本只为单次test action设置root，没有确认缺绑定生产caller。结论修正原统计范围，不能再称生产WORKSPACE_ROOT仅writer/无reader；A05 1.7未勾。
-
-236/237/238本轮按完整场景推进：236已派209在唯一旧NWT隔离activation两文件；232核查时后台失败只写错误、无authority active重取；236派出时尚未复现/修毕，当前原件和固定候选见239。Sol真实原turn仍inProgress，已声明不改这两文件；050新Q driver已覆盖真实DOM/outbox连续创建移动、丢回执刷新/Backend重启与递归删除pending→settled，尚未真实运行，末尾repair UI/乱序cursor-gone/分页门仍TODO。237提前只读核本批运行阻点，不重复224旧审或制造全审等待。238合并技能同链闭合/场景进展的重复说明；局部效果和整体提速待新产品证据，不改变050原全部范围或任务checkbox。
-
-
-239已核236原件：repro实际1/61.381058s，旧实现未重取authority；修后原hook整文件实际0/38.789687s、25pass，622源前后同/raw SHA与bytes核/owned0。候选`65b985c74e7f285809d5955ace9893bfba15c56b`仅两个activation文件，严格重建/diffcheck0/shared index字节同；manifest=`COORD/artifacts/background-activation236-fixed/manifest.json`。210独审核真实finishWorkspaceRefresh世代，不以test stub代真实owner安全；未build/ROOT同步/接受。237只读无确定首红finding，静态不代原Q全部验收。
-
-239资源实测：05:04 UTC load181.63/170.39/103.26，可用内存6234MB/128811MB、无swap；05:05快照20核、IO full avg60=67.99、memory full avg60=25.98。两大codex RSS约42GB/26GB无可核任务ID，不终止未知/控制进程。035 OpenAPI实际124/167.019514s、508源前后同/raw均0B/owned0，不能由空raw认定唯一导入原因；Sol已收资源前提，源码可继续，长跑不盲重/不延业务期限。原件=`COORD/artifacts/docs238-scene-closure/resource-pressure239.json`，实现耗时与环境压力分列，不宣称所有历史慢同因。
-
-
-240短同步已完成：Sol明确无活动runner且不读取两activation文件；主核两ROOT preimage后只写239已独审固定blob，SHA/共享index字节同，立即释放。ROOT两文件静态解析实际0，源码前后同/raw核/owned0。同步receipt=`COORD/artifacts/background-activation236-fixed/root-sync240.json`；两路径此前不在050 profile effective508 union，已交Sol加入下一同批build/types。25hook复用，未Web build/完整050接受/任务勾选。238技能窄改quick_validate0，当前文档待集中接受，不为台账时点微提交。
-
-
-241–243推进：上一goal turn为progress（236固定独审/240ROOT同步与技能窄改），原七change CLI仍60/89、23/23、13/46、20/59、29/44、37/37、49/49，不缩scope。Sol原turn真实inProgress，I新增只读phase正在接唯一Web操作；209限时补A05 Web28语义、210提前核I新装配，核心不等待。241已核036原raw/actual124/163.010884s、508源同/owned0；55s栈停importlib get_data读取Pydantic，不混LiteLLM远端价格表或未启动，receipt=`COORD/artifacts/lifecycle241-openapi036-verification.json`。观察私有index未read-tree误报process.py删除，main立即按已知流程纠正：真实文件在，仅新增asgi_app启动参数，未写共享index/源码，不归Sol事故、不叠新规则。
-
-241 Web核查先交新可行动live finding：rename非当前/另workspace Session后caller无条件覆盖currentSessionWorkspaceId；主核真实菜单→rename API固定目标→metadata owner保current→caller覆盖→当前request target同链，同收尾cacheKey优先当前session亦交唯一Sol核事件归属。243主核aef566ae相同赋值与cacheKey，确认继承问题，不归050新返工；此前209声称接受版没有赋值的结论已反证撤回。发现时尚未运行复现，不派Luna触050核心。243补launch/configs/proto库存=`COORD/artifacts/a05-identity-inventory226/supplement243-launch-and-proto.json`，默认启动工作区选择不自动判业务缺身份回退，1.7仍未勾。
-
-244–246本轮继续按完整场景推进：撤209权限并新建只读244接A05，210的242无finding已STOP，245只核I当前driver接线；不改变核心分工或增加等待门。Sol将rename归属与事件队列同批迁到原metadata owner；主核static016实际0/19.706143s、consumers014实际1/40.242108s（46pass1新测试误写列表顺序）、015实际0/44.001305s（47pass），512源前后同/raw SHA与bytes核/owned0。014→015仅测试变化，生产同；receipt=`COORD/artifacts/lifecycle246-navigation-consumer-verification.json`。240两activation文件已纳入本批指纹；仍待同批Web build/最终types及050完整产品验收，不勾任务。技能只替换既有同链条款，明确首次核心验相互影响，实测仅证明rename消费者闭合，不能宣布整体提速；后续仍I/J/P/Q→K/M/O→其余原全部范围。
-
-244/245收尾：244 Web28分类沿普通workspace header、local catalog双身份header和Gateway控制路径核至实际API及回包，没有新确定finding；库存消息结论由主保在`a05-identity-inventory226/readonly-caller-conclusions244.json`，主捕获SHA不冒充固定候选证明。245核完整I含child/control/team/inbox/cold读/重启phase，未确认新接线缺口，两会话STOP常驻；静态无finding不能代I产品。247主核最终组合types037实际0/250.874284s，512源前后同/raw核/owned0，两activation固定SHA纳入；receipt=`COORD/artifacts/lifecycle247-types037-verification.json`。Sol继续本批Web build和唯一原具名产品门；资源等待与源码返工分列，不用本次types耗时声称提速。本轮文档集中固定为`docs238-scene-closure/revision2/`，接受后最新HEAD/tree以该目录receipt为准，050核心仍未接受。
+读取JSON用read_json.py准确pointer；Python用read_python.py唯一--symbol或--symbols定位，预算参数--max-output-bytes。未知路径先在已知owner目录rg --files定位；部分匹配但actual非零不作完整盘点。主1117/1126及作者1241路径猜测失败保原件，不重复猜。未提供callee/DTO保持未知，不据消息审查扩大核心。压缩只是降低恢复读取量，不宣称业务提速倍率。

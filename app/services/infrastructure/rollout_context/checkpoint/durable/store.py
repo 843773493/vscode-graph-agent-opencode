@@ -6,9 +6,6 @@ from typing import TYPE_CHECKING
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
     RolloutCompactionPreflightOwnerMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.boundary.fork_boundary import (
-    RolloutForkBoundaryOwnerMixin,
-)
 from app.services.infrastructure.rollout_context.checkpoint.durable.active_view import (
     RolloutActiveViewMixin,
 )
@@ -60,7 +57,6 @@ class RolloutCheckpointStore(
     RolloutViewAnchorMixin,
     RolloutCheckpointOperationsMixin,
     RolloutCompactionPreflightOwnerMixin,
-    RolloutForkBoundaryOwnerMixin,
     RolloutCheckpointQueriesMixin,
     RolloutMessageViewMixin,
     RolloutMessageMaterializerMixin,

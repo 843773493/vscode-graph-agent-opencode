@@ -213,9 +213,9 @@ class RolloutProjectionMixin:
         self,
         connection: sqlite3.Connection,
         item: CanonicalItemRecord,
-        timestamp: str,
+        commit_recorded_at: str,
     ) -> None:
-        """写入 bounded item projection；完整 payload 仍只在 JSONL。"""
+        """写入 bounded projection；updated_at 取本次提交记录时刻。"""
         content = _canonical_projection_content(item)
         truncated = len(content) > _VISIBLE_TEXT_LIMIT
         phase = {
@@ -249,7 +249,7 @@ class RolloutProjectionMixin:
                 item.content_hash,
                 1,
                 item.created_at,
-                timestamp,
+                commit_recorded_at,
             ),
         )
         if result.rowcount != 1:

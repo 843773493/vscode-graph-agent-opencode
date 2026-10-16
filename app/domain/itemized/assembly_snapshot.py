@@ -8,9 +8,12 @@ from dataclasses import dataclass
 from app.domain.itemized.epoch.seal_binding import ContextSealBinding
 from app.domain.itemized.epoch.tool_set import tool_set_manifest_compatibility_key
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.hash.request_hash import context_request_hash
+from app.domain.itemized.hash.request_hash import _context_request_hash_preimage
 from app.domain.itemized.hashing import (
     _ensure_json_value,
+    canonical_json_bytes,
+    copy_json_value,
+    sha256_jcs,
     validate_hash_token,
 )
 from app.domain.itemized.identity.refs import (
@@ -36,6 +39,13 @@ from app.domain.itemized.validation import _non_empty_string
 
 @dataclass(frozen=True, slots=True)
 class ContextAssemblySnapshot:
+    """sealed 组装快照保留原 seal 的 owner 与历史坐标。
+
+    ``session_id``/``thread_id`` 与 ``history_view_revision``/``source_overlay_epoch`` 都描述来源 seal；
+    fork 后这些坐标不会改写为 target 坐标，也不代表目标 storage owner/view。
+    ``source_overlay_epoch`` 不是内容项的 ``source_revision``，也不等于任一 ``contribution.source_revision``。
+    """
+
     assembly_id: str
     session_id: str
     thread_id: str
@@ -68,7 +78,16 @@ class ContextAssemblySnapshot:
     request_input_hash: str | None = None
     seal_binding: ContextSealBinding | None = None
 
+    def __getattribute__(self, name: str) -> object:
+        value = object.__getattribute__(self, name)
+        return copy_json_value(value) if name in {"tool_snapshot", "request_hash_preimage"} else value
+
     def __post_init__(self) -> None:
+        tools = object.__getattribute__(self, "tool_snapshot")
+        object.__setattr__(self, "tool_snapshot", copy_json_value(tools))
+        object.__setattr__(self, "request_hash_preimage", copy_json_value(
+            object.__getattribute__(self, "request_hash_preimage")
+        ))
         for name in (
             "assembly_id",
             "session_id",
@@ -312,6 +331,13 @@ class ContextAssemblySnapshot:
 
         self._validate_seal_binding()
         validate_included_overlay_chain(self.selection, self.contributions)
+        expected_tool_snapshot = tuple(
+            tool for ref in self._selected_tool_refs() for tool in ref.tools
+        )
+        if canonical_json_bytes(self.tool_snapshot) != canonical_json_bytes(expected_tool_snapshot):
+            raise ItemSchemaError(
+                "ContextAssemblySnapshot.tool_snapshot 与已选 ToolSet manifest 不一致"
+            )
 
     def _validate_seal_binding(self) -> None:
         """联校同一次 seal 的 epoch 与真正被选择的 ToolSet manifest。"""
@@ -411,29 +437,28 @@ class ContextAssemblySnapshot:
             raise ItemSchemaError(
                 "context assembly plan_hash 与 sealed selection/manifest 不一致"
             )
-        expected_request_hash = context_request_hash(
+        expected_request_hash = sha256_jcs(_context_request_hash_preimage(
             plan,
             self.provider_version,
             projector_id=self.projector_id,
             projector_version=self.projector_version,
             target_format=self.target_format,
             wire_request=self.request_hash_preimage,
-        )
+            recomputed_plan_hash=expected_plan_hash,
+        ))
         if self.request_hash != expected_request_hash:
             raise ItemSchemaError(
                 "context assembly request_hash 与 sealed selection/manifest 不一致"
             )
 
-    def to_dict(self) -> dict[str, object]:
-        """以规范 envelope 序列化，避免 dataclasses.asdict 泄漏旧别名。"""
-        # ToolSetRef 是工具定义的唯一 sealed manifest；tool_snapshot 从已选
-        # manifest 完整派生。访问分类只影响对外检查投影，不删改内部封存正文。
+    def _selected_tool_refs(self) -> tuple[ToolSetRef, ...]:
+        """构造校验与序列化共用已选 manifest 的稳定顺序。"""
         selected_tool_ref_ids = {
             entry.ref.ref_id
             for entry in self.selection
             if entry.included and isinstance(entry.ref, ToolSetRef)
         }
-        persisted_tool_refs = tuple(
+        return tuple(
             sorted(
                 (
                     tool_ref
@@ -443,6 +468,12 @@ class ContextAssemblySnapshot:
                 key=lambda ref: ref.ref_id,
             )
         )
+
+    def to_dict(self) -> dict[str, object]:
+        """以规范 envelope 序列化，避免 dataclasses.asdict 泄漏旧别名。"""
+        # ToolSetRef 是工具定义的唯一 sealed manifest；tool_snapshot 从已选
+        # manifest 完整派生。访问分类只影响对外检查投影，不删改内部封存正文。
+        persisted_tool_refs = self._selected_tool_refs()
         persisted_tool_snapshot = [
             dict(tool)
             for tool_ref in persisted_tool_refs

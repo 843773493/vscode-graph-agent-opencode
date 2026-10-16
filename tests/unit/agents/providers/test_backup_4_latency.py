@@ -17,6 +17,7 @@ from app.core.model_delta_context import (
     reset_current_model_delta_sink,
     set_current_model_delta_sink,
 )
+from app.runtime.provider_errors import is_provider_failure
 
 
 @pytest.mark.asyncio
@@ -61,8 +62,108 @@ async def test_responses_stream_open_has_a_bounded_provider_timeout(monkeypatch)
         anext(model._astream([HumanMessage(content="只回复 OK")]))
     )
     await asyncio.wait_for(upstream_entered.wait(), timeout=0.5)
-    with pytest.raises(ResponsesStreamOpenTimeoutError, match="未建立事件流"):
+    with pytest.raises(
+        ResponsesStreamOpenTimeoutError, match="未建立事件流"
+    ) as raised:
         await asyncio.wait_for(first_chunk, timeout=0.5)
+    assert is_provider_failure(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_responses_provider_open_preserves_and_marks_original_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UpstreamError(RuntimeError):
+        status_code = 503
+
+    error = UpstreamError("Responses upstream failed")
+
+    async def fail_aresponses(**_payload):
+        raise error
+
+    monkeypatch.setattr(
+        "app.agents.providers.openai_responses.litellm.aresponses",
+        fail_aresponses,
+    )
+    model = BoxteamOpenAIResponsesModel(
+        model="gpt-5.6-luna",
+        api_base="https://example.com/v1",
+        api_key="test-key",
+        custom_llm_provider="openai",
+        provider_id="primary",
+        invocation_purpose="tool_test",
+    )
+
+    with pytest.raises(UpstreamError) as raised:
+        async for _chunk in model._astream([HumanMessage(content="hi")]):
+            pass
+
+    assert raised.value is error
+    assert raised.value.status_code == 503
+    assert is_provider_failure(error)
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_iterator_acquisition_marks_original_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = RuntimeError("upstream Responses stream is not async iterable")
+
+    class InvalidStream:
+        def __aiter__(self):
+            raise error
+
+    async def fake_aresponses(**_payload):
+        return InvalidStream()
+
+    monkeypatch.setattr(
+        "app.agents.providers.openai_responses.litellm.aresponses",
+        fake_aresponses,
+    )
+    model = BoxteamOpenAIResponsesModel(
+        model="gpt-5.6-luna",
+        api_base="https://example.com/v1",
+        api_key="test-key",
+        custom_llm_provider="openai",
+        provider_id="primary",
+        invocation_purpose="tool_test",
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        async for _chunk in model._astream([HumanMessage(content="hi")]):
+            pass
+
+    assert raised.value is error
+    assert is_provider_failure(error)
+
+
+def test_sync_responses_iterator_acquisition_marks_original_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = RuntimeError("upstream Responses stream is not iterable")
+
+    class InvalidStream:
+        def __iter__(self):
+            raise error
+
+    monkeypatch.setattr(
+        "app.agents.providers.openai_responses.litellm.responses",
+        lambda **_payload: InvalidStream(),
+    )
+    model = BoxteamOpenAIResponsesModel(
+        model="gpt-5.6-luna",
+        api_base="https://example.com/v1",
+        api_key="test-key",
+        custom_llm_provider="openai",
+        provider_id="primary",
+        invocation_purpose="tool_test",
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        next(model._stream([HumanMessage(content="hi")]))
+
+    assert raised.value is error
+    assert is_provider_failure(error)
 
 
 @pytest.mark.asyncio
@@ -154,8 +255,11 @@ async def test_responses_payload_timeout_is_reported_before_provider_call(
         anext(model._astream([HumanMessage(content="只回复 OK")]))
     )
     await asyncio.wait_for(asyncio.to_thread(entered.wait, 0.5), timeout=0.6)
-    with pytest.raises(ResponsesPayloadBuildTimeoutError, match="历史 payload"):
+    with pytest.raises(
+        ResponsesPayloadBuildTimeoutError, match="历史 payload"
+    ) as raised:
         await asyncio.wait_for(stream_task, timeout=0.5)
+    assert not is_provider_failure(raised.value)
 
 
 @pytest.mark.asyncio

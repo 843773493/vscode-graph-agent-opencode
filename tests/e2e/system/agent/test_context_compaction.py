@@ -314,11 +314,13 @@ async def test_session_context_compact_writes_summarization_event(
         "执行已安排的压缩，只回复 COMPACTED_OK，不要调用工具。",
     )
 
-    session_dir = get_session_path_resolver(
+    resolver = get_session_path_resolver(
         Path(e2e_workspace_root_path) / ".boxteam" / "sessions"
-    ).resolve_session_node(session_id)
+    )
+    session_dir = resolver.resolve_session_node(session_id)
+    thread_id = resolver.main_thread_id(session_id)
     history_file = (
-        session_dir / "context" / "history.md"
+        session_dir / "context" / thread_id / "history.md"
     )
     assert history_file.exists()
     history_content = history_file.read_text(encoding="utf-8")
@@ -335,7 +337,7 @@ async def test_session_context_compact_writes_summarization_event(
     assert len(compact_event["cache_prefix_messages"]) >= 2
     assert compact_event["cutoff_index"] > len(compact_event["cache_prefix_messages"])
     assert compact_event["file_path"] == (
-        f"session-artifacts/{session_id}/context/history.md"
+        f"session-artifacts/{session_id}/context/{thread_id}/history.md"
     )
     assert compact_event["summary_message"].additional_kwargs.get("lc_source") == "summarization"
     assert channel_values["_force_cache_compaction"] is False

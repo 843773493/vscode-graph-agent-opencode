@@ -8,8 +8,42 @@ from app.protocol.codecs.session_sse import session_sse_to_json, session_sse_to_
 from app.schemas.internal_v2.session_interaction import (
     JobProgressDTO,
     JobUpdatedExecutionEventDTO,
+    MessageObservationDTO,
+    MessageUpdatedExecutionEventDTO,
     SessionExecutionSseDTO,
 )
+
+
+def test_child_message_sse_round_trip_preserves_owner_and_lifecycle_time() -> None:
+    created_at = datetime(2026, 10, 14, 11, 59, tzinfo=UTC)
+    published_at = datetime(2026, 10, 14, 12, tzinfo=UTC)
+    value = SessionExecutionSseDTO(
+        event=MessageUpdatedExecutionEventDTO(
+            event_id="evt_child_message",
+            session_id="ses_child_owner",
+            job_id="job_child_message",
+            time=published_at,
+            type="message.updated",
+            payload=MessageObservationDTO(
+                message_id="msg_child",
+                session_id="ses_child_owner",
+                thread_id="thr_child",
+                role="user",
+                content="child input",
+                created_at=created_at,
+            ),
+        ),
+        raw_type="message_created",
+        raw_payload={"thread_id": "thr_child"},
+    )
+
+    encoded = session_sse_to_proto(value)
+    assert encoded.event.WhichOneof("payload") == "message_updated"
+    assert encoded.event.message_updated.thread_id == "thr_child"
+    decoded = session_sse_to_json(encoded)
+    assert decoded["event"]["payload"]["thread_id"] == "thr_child"
+    assert decoded["event"]["payload"]["created_at"] == "2026-10-14T11:59:00Z"
+    assert decoded["event"]["time"] == "2026-10-14T12:00:00Z"
 
 
 def test_session_sse_codec_preserves_oneof_and_dynamic_payload() -> None:

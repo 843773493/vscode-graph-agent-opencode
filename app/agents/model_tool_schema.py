@@ -50,11 +50,11 @@ def validate_model_tool_arguments(
     return parsed.model_dump()
 
 
-def normalize_model_tool_arguments(
+def filter_tool_event_injected_arguments(
     tool: BaseTool,
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
-    """把工具事件参数投影为模型可见且可序列化的参数对象。"""
+    """移除工具事件的后端注入值，保留 Provider 原参数及其校验错误。"""
     if not isinstance(arguments, dict):
         raise TypeError(
             "工具事件参数必须是 object: "
@@ -62,16 +62,6 @@ def normalize_model_tool_arguments(
         )
 
     tool_call_schema = getattr(tool, "tool_call_schema", None)
-    if isinstance(tool_call_schema, type) and issubclass(
-        tool_call_schema,
-        BaseModel,
-    ):
-        parsed = tool_call_schema.model_validate(arguments)
-        return parsed.model_dump(
-            mode="json",
-            exclude_unset=True,
-        )
-
     if isinstance(tool_call_schema, dict):
         properties = tool_call_schema.get("properties")
         if not isinstance(properties, dict):
@@ -79,16 +69,18 @@ def normalize_model_tool_arguments(
                 "工具事件参数无法从字典 JSON Schema 提取公开字段: "
                 f"tool_name={tool.name}"
             )
-        return {
-            field_name: arguments[field_name]
-            for field_name in properties
-            if field_name in arguments
-        }
-
-    raise TypeError(
-        "工具缺少模型可见的 JSON Schema: "
-        f"tool_name={tool.name} tool_type={type(tool).__name__}"
-    )
+    elif not (
+        isinstance(tool_call_schema, type)
+        and issubclass(tool_call_schema, BaseModel)
+    ):
+        raise TypeError(
+            "工具缺少模型可见的 JSON Schema: "
+            f"tool_name={tool.name} tool_type={type(tool).__name__}"
+        )
+    # 与 LangChain callback 使用同一注入参数过滤规则。观察链不能再次校验、
+    # 转换或丢弃原参数，否则 schema 错误调用会失去 canonical claim 身份。
+    # 真正的参数校验仍由 BaseTool 执行 owner 完成。
+    return tool._filter_injected_args(arguments)
 
 
 def export_model_tool_json_schema(tool: BaseTool) -> dict[str, Any]:

@@ -9,7 +9,6 @@ import ChatTurn, {
 } from "./ChatTurn";
 
 const pendingActionProps = {
-  onUpdatePending: async () => {},
   onRemovePending: async () => {},
   onChangePendingPolicy: async () => {},
 };
@@ -30,6 +29,7 @@ function conversation(
     userMessage: {
       message_id: "msg_user",
       session_id: "ses_web_replay",
+      thread_id: "thr_web_replay",
       role: "user",
       content: "原始问题",
       attachments: [],
@@ -40,6 +40,7 @@ function conversation(
     assistantMessages: [{
       message_id: "msg_assistant",
       session_id: "ses_web_replay",
+      thread_id: "thr_web_replay",
       role: "assistant",
       content: "原始回答",
       attachments: [],
@@ -91,6 +92,47 @@ function chatTurnProps(value: ConversationView): ChatTurnProps {
 
 
 describe("ChatTurn 轮次动作", () => {
+  test("历史回答点击携带展示 owner 与快照，同 Turn revision 更新绑定后不复用旧回调", () => {
+    const value = conversation("done");
+    value.turnId = "turn-visible-final";
+    value.turnRevision = 1;
+    value.threadId = "thread-display";
+    value.sourceViewId = "view-display";
+    value.sourceViewRevision = 8;
+    value.userMessage = null;
+    value.responseParts![0].source = {
+      message_sequence: 2,
+      item_id: "item-visible-final",
+      logical_item_ordinal: 12,
+    };
+    const clicks: Parameters<NonNullable<ChatTurnProps["onForkConversation"]>>[0][] = [];
+    const onForkConversation: NonNullable<ChatTurnProps["onForkConversation"]> = (selection) => {
+      clicks.push(selection);
+    };
+    let renderer: ReactTestRenderer;
+    act(() => {
+      renderer = create(<ChatTurn {...chatTurnProps(value)} onForkConversation={onForkConversation} />);
+    });
+    expect(renderer!.root.findAllByProps({ className: "chat-user-row" })).toHaveLength(0);
+    act(() => {
+      renderer!.root.findByProps({ "data-fork-item-id": "item-visible-final" }).props.onClick();
+    });
+    const next = { ...value, sourceViewId: "view-next", sourceViewRevision: 9 };
+    act(() => {
+      renderer!.update(<ChatTurn {...chatTurnProps(next)} onForkConversation={onForkConversation} />);
+    });
+    act(() => {
+      renderer!.root.findByProps({ "data-fork-item-id": "item-visible-final" }).props.onClick();
+    });
+    expect(clicks).toEqual([
+      { workspaceId: "gw_test", sessionId: "ses_web_replay", threadId: "thread-display",
+        sourceViewId: "view-display", sourceViewRevision: 8, itemId: "item-visible-final" },
+      { workspaceId: "gw_test", sessionId: "ses_web_replay", threadId: "thread-display",
+        sourceViewId: "view-next", sourceViewRevision: 9, itemId: "item-visible-final" },
+    ]);
+    act(() => renderer!.unmount());
+  });
+
   test("其他 Turn revision 更新时已完成 Turn 不重新渲染", () => {
     let renderCount = 0;
     const MemoProbe = React.memo(
@@ -869,9 +911,19 @@ describe("ChatTurn 轮次动作", () => {
     expect(html).not.toContain("后端未返回结果，无法确认是否成功");
   });
 
-  test("历史已知工具失败显示失败状态而不是未知结果", () => {
-    const value = conversation("error");
-    value.turnStatus = "failed";
+  test("终态历史保留消息流诊断时仍展示已知工具失败", async () => {
+    const value = conversation("done");
+    value.turnId = "turn-tool-failed";
+    value.turnStatus = "completed";
+    value.turnItemsView = "full";
+    value.activityStats = { duration_ms: 100, item_count: 2 };
+    value.messageStream = {
+      connectionStatus: "terminal",
+      streamStatus: "completed",
+      lastEventSeq: 21,
+      failure: null,
+      resumable: false,
+    };
     value.responseParts = [{
       part_id: "failed-tool",
       kind: "tool_call",
@@ -887,6 +939,21 @@ describe("ChatTurn 轮次动作", () => {
       text: "Permission denied",
       outcome_unknown: false,
       final: false,
+    }, {
+      part_id: "failed-tool-result",
+      kind: "tool_result",
+      projection: "detail",
+      status: "completed",
+      source: {
+        message_sequence: 3,
+        assistant_message_sequence: 2,
+        call_index: 0,
+      },
+      tool_call_id: "call-failed-tool",
+      tool_name: "read_file",
+      result: "Permission denied",
+      outcome_unknown: false,
+      final: true,
     }];
 
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
@@ -895,6 +962,18 @@ describe("ChatTurn 轮次动作", () => {
     expect(html).toContain("工具执行失败");
     expect(html).toContain("read_file：工具返回了失败结果");
     expect(html).not.toContain("工具执行结果未知");
+
+    let renderer: ReactTestRenderer;
+    act(() => {
+      renderer = create(<ChatTurn {...chatTurnProps(value)} />);
+    });
+    const activity = renderer!.root.findByProps({ "data-status-kind": "tool-failed" });
+    const toggle = activity.findByProps({ "aria-expanded": false });
+    await act(async () => {
+      await toggle.props.onClick();
+    });
+    expect(renderer!.root.findByProps({ className: "chat-tool-row is-failed" })).toBeTruthy();
+    act(() => renderer!.unmount());
   });
 
   test("历史失败但没有工具细节时仍显示通用失败状态", () => {
@@ -1217,6 +1296,7 @@ describe("ChatTurn 轮次动作", () => {
     value.turnId = "job_1";
     value.turnRevision = 1;
     value.turnItemsView = "full";
+    value.assistantMessages![0].content = "最终响应";
     value.responseParts = [
       {
         part_id: "tool-call-1",
@@ -1276,6 +1356,95 @@ describe("ChatTurn 轮次动作", () => {
     expect(renderer!.root.findAllByProps({ className: "chat-tool-row is-complete" })).toHaveLength(1);
     expect(renderer!.root.findAllByProps({ className: "chat-markdown" })).toHaveLength(1);
     renderer!.unmount();
+  });
+
+  test.each(["completed", "failed", "cancelled", "unknown"])("历史跨思考工具结果的 DOM 顺序与 %s 终态一致", async (outcome) => {
+    const value = conversation("done");
+    value.turnId = "job_1";
+    value.turnRevision = 1;
+    value.turnItemsView = "full";
+    value.assistantMessages![0].content = "最终响应";
+    value.responseParts = [
+      {
+        part_id: "ordered-call", kind: "tool_call", projection: "detail", status: "running",
+        source: { message_sequence: 1, assistant_message_sequence: 1, call_index: 0 },
+        tool_call_id: "ordered-tool", tool_name: "inspect_fixture", arguments: "{}",
+      },
+      {
+        part_id: "ordered-reasoning", kind: "reasoning", projection: "detail", status: "completed",
+        source: { message_sequence: 2, content_block_index: 0 }, text: "等待工具结果",
+      },
+      {
+        part_id: "ordered-result", kind: "tool_result", projection: "detail",
+        status: outcome === "failed" ? "failed" : outcome === "cancelled" ? "cancelled" : "completed",
+        source: { message_sequence: 3, assistant_message_sequence: 1, call_index: 0, result_message_sequence: 3 },
+        tool_call_id: "ordered-tool", result: "工具正文", outcome_unknown: outcome === "unknown",
+      },
+      {
+        part_id: "ordered-final", kind: "final_text", projection: "detail", status: "completed",
+        source: { message_sequence: 4 }, text: "最终响应", final: true,
+      },
+    ];
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ChatTurn {...chatTurnProps(value)} onLoadTurnDetails={async () => {}} />);
+    });
+    await act(async () => {
+      await renderer!.root.findByProps({ className: "chat-thinking-toggle" }).props.onClick();
+    });
+
+    const sources = renderer!.root.findAll((node) =>
+      typeof node.type === "string" && typeof node.props["data-response-sources"] === "string",
+    ).flatMap((node) => JSON.parse(node.props["data-response-sources"]));
+    expect(sources).toEqual(value.responseParts.map(({ part_id, kind, source }) => ({ part_id, kind, source })));
+    const toolStatus = outcome === "cancelled" ? "is-incomplete"
+      : outcome === "unknown" ? "is-unknown" : outcome === "failed" ? "is-failed" : "is-complete";
+    expect(renderer!.root.findAllByProps({ className: `chat-tool-row ${toolStatus}` })).toHaveLength(2);
+    // 展开区中的思考与最终响应各有一个正文载体。
+    expect(renderer!.root.findAllByProps({ className: "chat-markdown" })).toHaveLength(2);
+    if (outcome !== "completed") {
+      const markup = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
+      expect(markup).toContain(outcome === "cancelled" ? "工具调用未完成"
+        : outcome === "unknown" ? "工具执行结果未知" : "工具执行失败");
+      expect(markup).toContain("inspect_fixture");
+    }
+    renderer!.unmount();
+  });
+
+  test("历史展开与收起保持压缩前后正文的 canonical DOM 顺序", async () => {
+    const value = conversation("done");
+    value.turnId = "turn_compaction_order";
+    value.turnItemsView = "full";
+    value.activityStats = { duration_ms: 100, item_count: 4 };
+    value.assistantMessages![0].content = "最终响应";
+    value.responseParts = [
+      { part_id: "before", kind: "reasoning", projection: "detail", status: "completed",
+        source: { message_sequence: 1, item_id: "item_before", logical_item_ordinal: 1 }, text: "压缩前思考" },
+      { part_id: "summary", kind: "compaction_summary", projection: "detail", status: "completed",
+        source: { message_sequence: 2, item_id: "item_summary", logical_item_ordinal: 2 }, text: "压缩摘要" },
+      { part_id: "after", kind: "reasoning", projection: "detail", status: "completed",
+        source: { message_sequence: 3, item_id: "item_after", logical_item_ordinal: 3 }, text: "压缩后思考" },
+      { part_id: "final", kind: "final_text", projection: "detail", status: "completed", final: true,
+        source: { message_sequence: 4, item_id: "item_final", logical_item_ordinal: 4 }, text: "最终响应" },
+    ];
+    let loads = 0;
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ChatTurn {...chatTurnProps(value)} onLoadTurnDetails={async () => { loads += 1; }} />);
+    });
+    const sources = () => renderer!.root.findAll((node) =>
+      typeof node.type === "string" && typeof node.props["data-response-sources"] === "string",
+    ).flatMap((node) => JSON.parse(node.props["data-response-sources"]));
+    const expected = value.responseParts.map(({ part_id, kind, source }) => ({ part_id, kind, source }));
+    expect(sources()).toEqual([expected[1], expected[3]]);
+    const toggle = renderer!.root.findByProps({ className: "chat-thinking-toggle" });
+    await act(async () => { await toggle.props.onClick(); });
+    expect(loads).toBe(1);
+    expect(sources()).toEqual(expected);
+    await act(async () => { await toggle.props.onClick(); });
+    expect(sources()).toEqual([expected[1], expected[3]]);
+    expect(renderer!.root.findAllByProps({ className: "chat-thinking-toggle" })).toHaveLength(1);
+    act(() => renderer!.unmount());
   });
 
   test("默认主线同一模型消息只展示普通文本，不展开 tool_call 正文", () => {
@@ -1452,7 +1621,7 @@ describe("ChatTurn 轮次动作", () => {
     );
 
     expect(html).toContain("中断边界后投递");
-    expect(html).toContain('title="编辑待处理消息"');
+    expect(html).not.toContain('title="编辑待处理消息"');
     expect(html).toContain('title="从 FIFO 队列撤回"');
   });
 

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
+from app.core.atomic_fs import atomic_write_bytes
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
+from app.core.session_catalog_store import SessionCreationRecord
 from app.schemas.internal_v2.goal import SessionGoalDTO
 
 
@@ -17,28 +18,30 @@ class SessionGoalStore:
     def __init__(self, path_resolver: SessionCatalogPathResolver) -> None:
         self._path_resolver = path_resolver
 
-    def _path(self, session_id: str) -> Path:
+    def _path(self, session_id: str, creation: SessionCreationRecord | None = None) -> Path:
+        if creation is not None:
+            if creation.session_id != session_id or creation.purpose != "context_fork" or creation.state != "preparing":
+                raise RuntimeError("fork Goal 缺少精确 preparing main creation capability")
+            return self._path_resolver.resolve_prepared_session_node(creation) / self.FILE_NAME
         return self._path_resolver.resolve_session_node(session_id) / self.FILE_NAME
 
-    def read(self, session_id: str) -> SessionGoalDTO | None:
-        path = self._path(session_id)
+    def read(self, session_id: str, *, creation: SessionCreationRecord | None = None) -> SessionGoalDTO | None:
+        path = self._path(session_id, creation)
         if not path.exists():
             return None
         raw = json.loads(path.read_text(encoding="utf-8"))
         return SessionGoalDTO.model_validate(raw)
 
-    def write(self, goal: SessionGoalDTO) -> None:
-        path = self._path(goal.session_id)
-        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-        temporary.write_text(
+    def write(self, goal: SessionGoalDTO, *, creation: SessionCreationRecord | None = None) -> None:
+        path = self._path(goal.session_id, creation)
+        atomic_write_bytes(
+            path,
             json.dumps(
                 goal.model_dump(mode="json", exclude=set(self._DERIVED_KEYS)),
                 ensure_ascii=False,
                 indent=2,
-            ),
-            encoding="utf-8",
+            ).encode("utf-8"),
         )
-        os.replace(temporary, path)
 
     def clear(self, session_id: str) -> bool:
         path = self._path(session_id)

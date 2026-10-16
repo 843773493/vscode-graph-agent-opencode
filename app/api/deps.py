@@ -32,6 +32,7 @@ from app.services.business.session_skill_tracking_service import (
 )
 from app.services.business.session_turn_history import SessionTurnHistoryService
 from app.services.business.session_turn_replay_service import SessionTurnReplayService
+from app.services.business.team.service import TeamCoordinationService
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.business.workspace_resources.owner import WorkspaceResourceOwner
 from app.services.event_service import EventService
@@ -103,6 +104,7 @@ class _AppContainerProtocol(Protocol):
     session_catalog_service: SessionCatalogService
     session_generation_service: SessionGenerationService
     session_communication_service: SessionCommunicationService
+    team_service: TeamCoordinationService
     mcp_catalog_owner: McpCatalogOwner
     workspace_activity_service: WorkspaceActivityService
     message_stream_store: MessageStreamStore
@@ -346,6 +348,10 @@ def get_file_tree_settings_service(request: Request) -> FileTreeSettingsService:
 
 def get_session_communication_service(request: Request) -> SessionCommunicationService:
     return _require_service(request, "session_communication_service", SessionCommunicationService, "SessionCommunicationService 尚未在应用启动阶段初始化")
+
+
+def get_team_service(request: Request) -> TeamCoordinationService:
+    return _require_service(request, "team_service", TeamCoordinationService, "TeamCoordinationService 尚未初始化")
 
 
 def get_session_orchestrator(request: Request) -> SessionOrchestrator:

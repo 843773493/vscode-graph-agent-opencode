@@ -24,7 +24,10 @@ from app.gateway.auth import (
     verify_gateway_access,
     verify_gateway_token,
 )
-from app.gateway.federation import request_remote_gateway_management
+from app.gateway.federation import (
+    build_remote_gateway_connection_id,
+    request_remote_gateway_management,
+)
 from app.gateway.managed_workspaces import create_direct_managed_workspace
 from app.gateway.registry import (
     GatewayWorkspaceRegistry,
@@ -252,25 +255,60 @@ async def add_remote_gateway(
         raise HTTPException(status_code=400, detail=str(error)) from error
     try:
         gateway_config = request.app.state.gateway_config
-        await register_remote_gateway(
-            registry=registry,
-            log_dir=_gateway_root() / "logs",
-            name=payload.name,
+        connection_id = build_remote_gateway_connection_id(
             host=connection.host,
             port=connection.port,
             username=connection.username,
-            private_key_path=connection.private_key_path,
-            ssh_config_host=connection.ssh_config_host,
             remote_gateway_port=connection.remote_gateway_port,
-            remote_pair_command=connection.remote_pair_command,
-            activate=False,
-            health_request_timeout_seconds=(
-                gateway_config.gateway_process_health_request_timeout_seconds
-            ),
-            health_poll_interval_seconds=(
-                gateway_config.gateway_process_health_poll_interval_seconds
-            ),
         )
+        previous_commit = registry._last_committed_snapshot
+        previous_revision = registry.registry_revision
+        previous_runtime = registry._remote_gateway_runtimes.get(connection_id)
+        try:
+            await register_remote_gateway(
+                registry=registry,
+                log_dir=_gateway_root() / "logs",
+                name=payload.name,
+                host=connection.host,
+                port=connection.port,
+                username=connection.username,
+                private_key_path=connection.private_key_path,
+                ssh_config_host=connection.ssh_config_host,
+                remote_gateway_port=connection.remote_gateway_port,
+                remote_pair_command=connection.remote_pair_command,
+                activate=False,
+                health_request_timeout_seconds=(
+                    gateway_config.gateway_process_health_request_timeout_seconds
+                ),
+                health_poll_interval_seconds=(
+                    gateway_config.gateway_process_health_poll_interval_seconds
+                ),
+            )
+        except BaseException as error:
+            current_runtime = registry._remote_gateway_runtimes.get(connection_id)
+            published = (
+                registry._last_committed_snapshot is not previous_commit
+                and (
+                    registry._state_store is None
+                    or registry.registry_revision > previous_revision
+                )
+                and current_runtime is not None
+                and current_runtime is not previous_runtime
+                and registry.remote_gateway_url(connection_id)
+                == current_runtime.service_urls["workspace_api"]
+            )
+            if not published:
+                raise
+            try:
+                await port_forward_manager.reconcile_workspaces()
+            # 异步对账普通失败附加原错；取消必须传播给请求调用方。
+            except Exception as secondary_error:  # noqa: BLE001
+                note = (
+                    "远程 Gateway 投影已提交，但 SSH 端口转发对账失败: "
+                    f"{secondary_error}"
+                )
+                error.add_note(note)
+            raise
         await port_forward_manager.reconcile_workspaces()
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -330,6 +368,15 @@ async def reconnect_workspace(
         get_workspace_runtime_controller
     ),
 ):
+    target_before = registry.resolve(workspace_id)
+    connection_id = target_before.remote_gateway_connection_id
+    previous_commit = registry._last_committed_snapshot
+    previous_revision = registry.registry_revision
+    previous_runtime = (
+        registry._remote_gateway_runtimes.get(connection_id)
+        if connection_id is not None
+        else None
+    )
     try:
         await controller.reconnect_ssh(workspace_id)
     except LookupError as error:
@@ -338,9 +385,40 @@ async def reconnect_workspace(
         raise HTTPException(status_code=409, detail=str(error)) from error
     except (FileNotFoundError, OSError, RuntimeError, httpx.HTTPError) as error:
         target = registry.resolve(workspace_id)
-        if target.connection_kind != "local" or not target.managed:
-            registry.mark_connection_error(workspace_id, str(error))
-        raise HTTPException(status_code=502, detail=str(error)) from error
+        current_runtime = (
+            registry._remote_gateway_runtimes.get(connection_id)
+            if connection_id is not None
+            else None
+        )
+        published = (
+            connection_id is not None
+            and target.remote_gateway_connection_id == connection_id
+            and registry._last_committed_snapshot is not previous_commit
+            and (
+                registry._state_store is None
+                or registry.registry_revision > previous_revision
+            )
+            and current_runtime is not None
+            and current_runtime is not previous_runtime
+            and registry.remote_gateway_url(connection_id)
+            == current_runtime.service_urls["workspace_api"]
+            and target.backend_url
+            == current_runtime.service_urls["workspace_api"]
+        )
+        if (
+            not published
+            and (target.connection_kind != "local" or not target.managed)
+        ):
+            try:
+                registry.mark_connection_error(workspace_id, str(error))
+            # 同步 registry 写入普通失败附加原错，进程级异常继续直传。
+            except Exception as secondary_error:  # noqa: BLE001
+                note = f"记录 connection_error 失败: {secondary_error}"
+                error.add_note(note)
+        detail = str(error)
+        for note in getattr(error, "__notes__", ()):
+            detail = f"{detail}\n{note}"
+        raise HTTPException(status_code=502, detail=detail) from error
     return APIResponse(
         data=GatewayWorkspaceListDTO(
             active_workspace_id=registry.active_workspace_id,

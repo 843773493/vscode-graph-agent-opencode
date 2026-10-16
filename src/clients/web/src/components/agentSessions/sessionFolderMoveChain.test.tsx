@@ -37,6 +37,6 @@ describe("会话文件夹「复制文件夹 ID → 移动到剪贴板文件夹�
     expect(target.moveSessionFolderCalls).toEqual([
       ["gw_1", TARGET_FOLDER_ID, FOLDER_ID, null],
     ]);
-    expect(target.statuses).toEqual(["已移动文件夹 目标文件夹"]);
+    expect(target.statuses).toEqual(["文件夹 目标文件夹 的移动变更已保存本地，等待提交"]);
   });
 });

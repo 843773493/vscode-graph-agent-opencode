@@ -20,6 +20,9 @@ from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.validation import (
     validate_turn_transition,
 )
+from app.services.infrastructure.rollout_context.execution.internal_convergence import (
+    RolloutInternalConvergenceMixin,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_text,
@@ -72,7 +75,7 @@ class RolloutTurnLifecycleMixin:
             ) as connection:
                 self._storage._require_v2_runtime(connection)
                 row = connection.execute(
-                    "SELECT message_id FROM messages WHERE message_sequence = ?",
+                    "SELECT message_id, jsonl_offset, jsonl_length FROM messages WHERE message_sequence = ?",
                     (final_message_sequence,),
                 ).fetchone()
                 if row is None or strict_text(row[0], field="messages.message_id") != final_message_id:
@@ -81,8 +84,8 @@ class RolloutTurnLifecycleMixin:
                     )
                 item_row = connection.execute(
                     "SELECT item_id, status, semantic_kind, turn_id "
-                    "FROM item_catalog WHERE item_id = ?",
-                    (f"item-{final_message_id}",),
+                    "FROM item_catalog WHERE jsonl_offset = ? AND jsonl_length = ?",
+                    row[1:3],
                 ).fetchone()
                 if item_row is None:
                     raise RuntimeError(
@@ -132,6 +135,10 @@ class RolloutTurnLifecycleMixin:
                 latest_execution_id = strict_text(
                     latest_execution[0], field="executions.execution_id"
                 )
+                latest_model_call_id = RolloutInternalConvergenceMixin._terminal_model_call_id(
+                    self, connection, session_id=session_id, thread_id=owner_thread_id,
+                    execution_id=latest_execution_id, outcome=ControlOutcome.COMPLETED.value,
+                )
                 timestamp = _now()
                 connection.execute("BEGIN IMMEDIATE")
                 commit_id, _commit_offset = self._storage._append_v2_records_transaction(
@@ -159,16 +166,10 @@ class RolloutTurnLifecycleMixin:
                     "WHERE turn_id = ? AND execution_id = ?",
                     (timestamp, turn_id, latest_execution_id),
                 )
-                connection.execute(
-                    "UPDATE model_calls SET outcome = 'completed', "
-                    "dispatch_state = 'completed' WHERE execution_id = ?",
-                    (latest_execution_id,),
-                )
-                connection.execute(
-                    "UPDATE context_assemblies SET status = 'terminal', "
-                    "outcome = 'completed', terminal_at = ? "
-                    "WHERE turn_id = ? AND execution_id = ? AND status = 'sealed'",
-                    (timestamp, turn_id, latest_execution_id),
+                RolloutInternalConvergenceMixin._converge_execution_calls_and_assemblies(
+                    self, connection, session_id=session_id, thread_id=owner_thread_id,
+                    execution_id=latest_execution_id, latest_model_call_id=latest_model_call_id,
+                    outcome=ControlOutcome.COMPLETED.value, timestamp=timestamp, control_correction=False,
                 )
                 connection.execute(
                     "UPDATE item_projections SET phase = 'final_answer', updated_at = ? "
@@ -209,162 +210,6 @@ class RolloutTurnLifecycleMixin:
                 )
                 self._storage._commit_connection(connection)
 
-    def cancel_unfinished_turns(
-        self,
-        *,
-        session_id: str,
-        thread_id: str | None = None,
-        checkpoint_ns: str = "",
-    ) -> int:
-        """取消 fork 后不会由子会话继续执行的未完成 Turn。
-
-        fork 只复制 checkpoint 内容，不复制源会话的运行时 Job。若目标 rollout
-        仍保留 running/streaming 等状态，前端会在没有任何活动 Job 的情况下永久
-        显示“正在处理”。没有最终消息指针的 Turn 在子会话中只能明确标记为取消，
-        等用户需要时再通过重试创建新的 Job。
-        """
-        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
-        with self._storage._lock(
-            owner_thread_id, checkpoint_ns, session_id=session_id
-        ):
-            self._storage.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
-            with self._storage._connect(
-                owner_thread_id, checkpoint_ns, session_id=session_id
-            ) as connection:
-                self._storage._require_v2_runtime(connection)
-                rows = connection.execute(
-                    "SELECT turn_id, status, last_execution_id "
-                    "FROM turn_records "
-                    "WHERE status IN (?, ?) AND final_item_id IS NULL "
-                    "ORDER BY turn_ordinal",
-                    (TurnStatus.OPEN.value, TurnStatus.ACTIVE.value),
-                ).fetchall()
-                if not rows:
-                    return 0
-                timestamp = _now()
-                execution_ids: list[str] = []
-                for turn_id_value, _status, last_execution_id in rows:
-                    turn_id = strict_text(turn_id_value, field="turn_records.turn_id")
-                    execution_id = last_execution_id
-                    if execution_id is None:
-                        execution_row = connection.execute(
-                            "SELECT execution_id FROM executions WHERE turn_id = ? "
-                            "ORDER BY attempt DESC, execution_ordinal DESC LIMIT 1",
-                            (turn_id,),
-                        ).fetchone()
-                        execution_id = execution_row[0] if execution_row else None
-                    if execution_id is None:
-                        raise RuntimeError(
-                            f"取消 Turn 缺少 execution，拒绝静默收敛: {turn_id}"
-                        )
-                    execution_ids.append(
-                        strict_text(execution_id, field="executions.execution_id")
-                    )
-                connection.execute("BEGIN IMMEDIATE")
-                commit_id, _commit_offset = self._storage._append_v2_records_transaction(
-                    connection,
-                    owner_thread_id,
-                    checkpoint_ns,
-                    (),
-                    session_id=session_id,
-                    commit_kind=CommitKind.TERMINAL_CONVERGENCE.value,
-                    commit_mode=CommitMode.METADATA_ONLY.value,
-                    outcome=ControlOutcome.CANCELLED.value,
-                    subject_id=thread_id,
-                    idempotency_key=(
-                        "cancel-unfinished:"
-                        + thread_id
-                        + ":"
-                        + ",".join(
-                            strict_text(row[0], field="turn_records.turn_id")
-                            for row in rows
-                        )
-                    ),
-                    begin_transaction=False,
-                )
-                transaction_id = f"cancel-control:{commit_id}"
-                for row, execution_id in zip(rows, execution_ids, strict=True):
-                    turn_id = strict_text(row[0], field="turn_records.turn_id")
-                    validate_turn_transition(
-                        strict_text(row[1], field="turn_records.status"),
-                        TurnStatus.CANCELLED.value,
-                    )
-                    connection.execute(
-                        "UPDATE turn_records SET status = ?, last_execution_id = ?, "
-                        "updated_at = ? WHERE turn_id = ?",
-                        (
-                            TurnStatus.CANCELLED.value,
-                            execution_id,
-                            timestamp,
-                            turn_id,
-                        ),
-                    )
-                    connection.execute(
-                        "UPDATE executions SET outcome = ?, updated_at = ? WHERE execution_id = ?",
-                        (ControlOutcome.CANCELLED.value, timestamp, execution_id),
-                    )
-                    connection.execute(
-                        "UPDATE model_calls SET outcome = ?, dispatch_state = 'unknown' "
-                        "WHERE execution_id = ? AND outcome IS NULL",
-                        (ControlOutcome.CANCELLED.value, execution_id),
-                    )
-                    connection.execute(
-                        "UPDATE context_assemblies SET status = 'terminal', outcome = ?, "
-                        "terminal_at = ? WHERE turn_id = ? AND execution_id = ? "
-                        "AND status = 'sealed'",
-                        (
-                            ControlOutcome.CANCELLED.value,
-                            timestamp,
-                            turn_id,
-                            execution_id,
-                        ),
-                    )
-                    # 旧 message 坐标仅是派生 UI 索引；v2 TurnRecord 已经是唯一
-                    # lifecycle authority，两个索引在同一事务内同步以避免瞬时矛盾。
-                    connection.execute(
-                        "UPDATE turns SET status = 'cancelled', updated_at = ? "
-                        "WHERE turn_id = ? AND final_message_sequence IS NULL",
-                        (timestamp, turn_id),
-                    )
-                    self._storage._insert_control(
-                        connection,
-                        "turn_status",
-                        "turn",
-                        turn_id,
-                        None,
-                        None,
-                        None,
-                        {
-                            "status": TurnStatus.CANCELLED.value,
-                            "outcome": ControlOutcome.CANCELLED.value,
-                            "reason": "fork_runtime_not_copied",
-                            "execution_id": execution_id,
-                        },
-                        transaction_id,
-                        timestamp,
-                    )
-                last_control = connection.execute(
-                    "SELECT control_sequence FROM control_events WHERE transaction_id = ? "
-                    "ORDER BY control_sequence DESC LIMIT 1",
-                    (transaction_id,),
-                ).fetchone()
-                if last_control is None:
-                    raise RuntimeError(
-                        "cancel unfinished turns 未生成 control event"
-                    )
-                connection.execute(
-                    "UPDATE database_meta SET last_control_sequence = ?, updated_at = ? "
-                    "WHERE singleton_id = 1",
-                    (
-                        strict_non_negative_int(
-                            last_control[0],
-                            field="control_events.control_sequence",
-                        ),
-                        timestamp,
-                    ),
-                )
-                self._storage._commit_connection(connection)
-                return len(rows)
 
     def mark_job_terminal_status(
         self,

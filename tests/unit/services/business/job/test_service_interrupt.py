@@ -2,19 +2,32 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import sqlite3
+from datetime import UTC, datetime
 
 import pytest
 from langchain_core.runnables import RunnableLambda
 
 from app.core.job_event_bus import JobEventBus
-from app.schemas.internal_v2.common import ControlAction, JobStatus
+from app.core.path_utils import get_session_path_resolver
+from app.schemas.internal_v2.common import ControlAction, JobStatus, MessageRole
 from app.schemas.internal_v2.job import JobControlRequest
+from app.schemas.internal_v2.message import MessageDTO
+from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.job.lifecycle import transition_job_status
 from app.services.business.job.service import JobDrainBlocker, JobService, JobState
+from app.services.infrastructure.rollout_context.checkpoint.reader import (
+    RolloutContextReader,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 from tests.support.job_thread_fixture import (
     job_fixture_execution_binding,
     job_fixture_thread_id,
 )
+from tests.support.message_service import build_message_service
 
 
 class _DummyJobExecutor:
@@ -516,27 +529,34 @@ async def test_force_interrupt_skips_job_finished_after_blocker_snapshot(
 
 @pytest.mark.asyncio
 async def test_job_control_cancel_queued_job_removes_it_from_queue(
-    monkeypatch, session_lifecycle_guard
+    monkeypatch, session_lifecycle_guard, tmp_path, session_bundle_factory,
 ):
-    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard)
+    sessions_dir = tmp_path / "sessions"
+    session_id = "ses_019b990a9cce734bbccc60ec5321f320"
+    session_bundle_factory(sessions_dir, session_id)
+    thread_id = get_session_path_resolver(sessions_dir).main_thread_id(session_id)
+    saver = RolloutCheckpointSaver(sessions_dir=sessions_dir)
+    owner = build_message_service(sessions_dir, checkpointer=saver, workspace_root=tmp_path)
+    service = JobService(job_event_bus=JobEventBus(), job_executor=_DummyJobExecutor(),
+                         session_lifecycle_guard=session_lifecycle_guard, input_owner=owner, terminal_status_writer=saver)
 
     def fake_start_job_task(job):
         job.task = DummyTask()
 
     monkeypatch.setattr(service, "_start_job_task", fake_start_job_task)
-    session_id = "session_cancel_queued"
-    await service.start_job(
-        session_id,
-        "active", thread_id=job_fixture_thread_id(session_id),
-        message_id="msg_active",
-        message_created_at="2026-08-09T00:00:00+00:00",
-    )
-    queued = await service.start_job(
-        session_id,
-        "queued", thread_id=job_fixture_thread_id(session_id),
-        message_id="msg_queued",
-        message_created_at="2026-08-09T00:00:01+00:00",
-    )
+    async def accepted(content, message_id):
+        binding = service.reserve_user_execution_identity()
+        now = datetime.now(UTC)
+        owner.accept_user_message(MessageDTO(message_id=message_id, session_id=session_id, thread_id=thread_id,
+                                            role=MessageRole.user, content=content, created_at=now, updated_at=now), execution_identity=binding)
+        return await service.start_job(session_id, content, thread_id=thread_id, message_id=message_id,
+                                       message_created_at=now.isoformat(), execution_binding=binding)
+    await accepted("active", "msg_active")
+    queued = await accepted("queued", "msg_queued")
+    turn_id = service._jobs[queued.job_id].execution_binding.turn_id
+    database = saver._storage.storage.index_path(session_id, thread_id=thread_id)
+    with sqlite3.connect(database) as connection:
+        original = connection.execute("SELECT turn_id, turn_ordinal, root_input_item_id FROM turn_records WHERE turn_id=?", (turn_id,)).fetchone()
 
     result = await service.control(
         queued.job_id,
@@ -546,6 +566,15 @@ async def test_job_control_cancel_queued_job_removes_it_from_queue(
     assert result.status == JobStatus.cancelled
     assert service._jobs[queued.job_id].status == JobStatus.cancelled
     assert service._pending_queue.ids(session_id) == ()
+    successor = await accepted("successor", "msg_successor")
+    assert service._pending_queue.ids(session_id) == (successor.job_id,)
+    assert saver.accepted_user_message(session_id, thread_id=thread_id, job_id=queued.job_id, message_id="msg_queued").content == "queued"
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT turn_id,turn_ordinal,root_input_item_id FROM turn_records WHERE turn_id=?", (turn_id,)).fetchone() == original
+        assert connection.execute("SELECT outcome FROM executions WHERE job_id=?", (queued.job_id,)).fetchone() == ("cancelled",)
+    history = RolloutHistoryReader(RolloutContextReader(saver._storage)).load(session_id, thread_id, TurnHistoryLoadRequest(direction="tail", turns=3))
+    cancelled = next(turn for turn in history.items if turn.turn_id == turn_id)
+    assert cancelled.status == "cancelled" and cancelled.user_messages[0].content == "queued"
 
 
 @pytest.mark.asyncio

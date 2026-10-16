@@ -16,6 +16,11 @@ from app.core.session_catalog_store import (
     SessionCatalogStore,
     SourceRetentionOperationPendingError,
 )
+from app.core.session_control_store import SessionControlStore
+from app.core.session_control_store.fork_retention_release import (
+    read_fork_retention_releases,
+)
+from app.core.session_lifecycle_gate import SessionLifecycleGate
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
@@ -69,7 +74,8 @@ def test_begin_pinned_claim_creates_preparing_on_catalog(
         catalog.close()
 
 
-def test_activate_then_release_claim_by_target(
+@pytest.mark.asyncio
+async def test_activate_then_release_claim_by_target(
     storage: RolloutContextStore, sessions_root: Path
 ) -> None:
     storage.forks.begin_pinned_fork_retention_claim(
@@ -78,16 +84,56 @@ def test_activate_then_release_claim_by_target(
         target_session_id=TARGET_SESSION_ID,
         source_lifecycle_generation=1,
     )
-    activated = storage.forks.activate_pinned_fork_retention_claim(
-        CLAIM_ID, expected_generation=1
+    source_thread_id = storage.storage.main_thread_id(SOURCE_SESSION_ID)
+    target_thread_id = storage.storage.main_thread_id(TARGET_SESSION_ID)
+    storage.storage.initialize(SOURCE_SESSION_ID, thread_id=source_thread_id)
+    catalog = storage.forks._catalog_store()
+    capture = catalog.reserve_fork_source_capture(
+        copy_operation_id="claim-operation", creation_key=None,
+        source_session_id=SOURCE_SESSION_ID, source_thread_id=source_thread_id,
+        target_session_id=TARGET_SESSION_ID, target_thread_id=target_thread_id,
+        fork_id=CLAIM_ID, request={"relationship": "pinned", "checkpoint_ns": ""},
     )
-    assert activated is not None and activated.state == "active"
+    control = SessionControlStore(storage.storage._resolve_session_node(SOURCE_SESSION_ID) / "session-control.sqlite")
+    try:
+        lease = control.create_or_get_lease(
+            operation_kind="fork_retention", operation_identity="fork-retention:" + CLAIM_ID,
+            preimage_hash=capture.preimage_hash, expected_generation=1,
+            recovery_ref=capture.copy_operation_id,
+        )
+    finally:
+        control.close()
+    with storage.storage._connect(source_thread_id, session_id=SOURCE_SESSION_ID, read_only=True) as connection:
+        view_id = connection.execute(
+            "SELECT head_view_id FROM branches WHERE branch_id = "
+            "(SELECT active_branch_id FROM checkpoint_namespace_state WHERE checkpoint_ns = '')"
+        ).fetchone()[0]
+    async with SessionLifecycleGate(sessions_root).exclusive(SOURCE_SESSION_ID):
+        storage.forks._retain_fork_source(
+            source_session_id=SOURCE_SESSION_ID, source_thread_id=source_thread_id,
+            source_checkpoint_id=None, source_view_id=view_id,
+            fork_id=CLAIM_ID, owner_session_id=TARGET_SESSION_ID, checkpoint_ns="",
+        )
     catalog = _catalog(sessions_root)
     try:
         # target 删除 → 释放精确 claim。
-        storage.forks.release_fork_retentions(TARGET_SESSION_ID)
+        await storage.forks.release_fork_retentions(TARGET_SESSION_ID)
         assert catalog.get_fork_retention_claim(CLAIM_ID).state == "released"
         assert catalog.list_pinned_claims_for_source(SOURCE_SESSION_ID) == []
+        control = SessionControlStore(storage.storage._resolve_session_node(SOURCE_SESSION_ID) / "session-control.sqlite", read_only=True)
+        try:
+            assert control.get_lease(lease.lease_id).state == "completed"
+            assert not control.verify_lease_token(lease_id=lease.lease_id, fencing_token=lease.fencing_token)
+        finally:
+            control.close()
+        control = SessionControlStore(storage.storage._resolve_session_node(TARGET_SESSION_ID) / "session-control.sqlite", read_only=True)
+        try:
+            record, = read_fork_retention_releases(control)
+            assert record.state == "committed"
+            assert record.fork_retention_claim_id == CLAIM_ID
+            assert record.source_thread_id == source_thread_id
+        finally:
+            control.close()
     finally:
         catalog.close()
 

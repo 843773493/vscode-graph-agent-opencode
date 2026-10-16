@@ -37,6 +37,15 @@ def test_sse_endpoints_publish_event_contracts() -> None:
     }
     assert set(trace_response["content"]) == {"text/event-stream"}
 
+    observation_response = paths["/api/v1/workspaces/{workspace_id}/workspace/observations/stream"]["post"]["responses"]["200"]
+    assert observation_response["x-sse-events"] == {
+        "observation": {
+            "$ref": "#/components/schemas/WorkspaceObservationFrameDTO",
+            "x-protobuf-message": "boxteam.workspace.v2.WorkspaceObservationFrameDTO",
+        },
+    }
+    assert set(observation_response["content"]) == {"text/event-stream"}
+
     job_response = paths["/api/v1/workspaces/{workspace_id}/jobs/{job_id}/events/stream"]["get"]["responses"][
         "200"
     ]
@@ -72,7 +81,7 @@ def test_every_sse_event_model_is_resolvable_and_generated() -> None:
                 assert model_name in components
                 declared_models.add(model_name)
 
-    assert stream_operation_count == 3
+    assert stream_operation_count == 4
     assert declared_models == set(SSE_EVENT_MODELS)
 
     runtime_schema_path = (

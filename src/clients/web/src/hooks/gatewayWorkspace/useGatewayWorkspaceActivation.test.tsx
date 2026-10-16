@@ -8,6 +8,7 @@ import type { Agent } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
 import type { FinishWorkspaceRefresh } from "../contentViewLoaderTypes";
 import { useGatewayWorkspaceActivation } from "./useGatewayWorkspaceActivation";
+import { createSerialTaskQueue } from "../runtime/serialTaskQueue";
 
 const API_PORT = 49_621;
 const PREFERRED_SESSION_ID = "session-preferred";
@@ -58,6 +59,8 @@ interface MountOptions {
   currentSessionId?: string | null;
   initialState?: AppState;
   finishWorkspaceRefresh?: FinishWorkspaceRefresh;
+  /** 延迟函数式 state updater，模拟 React 在新 selection 已开始后才提交旧队列项。 */
+  deferStateUpdaters?: boolean;
   /** 刷新后落到 state 的活动工作区 id；null 表示刷新被作废。缺省为 null。 */
   appliedWorkspaceId?: string | null;
   refreshGatewayWorkspaceStatuses?: (
@@ -74,6 +77,9 @@ interface MountedHook {
   setLatest: (next: AppState) => void;
   /** 只改 ref、不动状态闭包，用于验证回调读取的是最新 ref 值。 */
   latestStateRef: MutableRefObject<AppState>;
+  pendingStateUpdaters: Array<(previous: AppState) => AppState>;
+  flushStateUpdaters: () => void;
+  advanceSelectionIntent: () => void;
   calls: {
     invalidate: number;
     reset: number;
@@ -89,6 +95,10 @@ async function mountHook(options: MountOptions = {}): Promise<MountedHook> {
   let current = options.initialState ?? appState();
   let hook: ReturnType<typeof useGatewayWorkspaceActivation> | undefined;
   const latestStateRef: MutableRefObject<AppState> = { current };
+  const selectionIntentRef = { current: 0 };
+  const gatewayListRequestRef = { current: 0 };
+  const queue = createSerialTaskQueue();
+  const pendingStateUpdaters: Array<(previous: AppState) => AppState> = [];
   const setLatest = (next: AppState) => {
     current = next;
     latestStateRef.current = next;
@@ -102,10 +112,17 @@ async function mountHook(options: MountOptions = {}): Promise<MountedHook> {
 
   function Probe(): React.ReactNode {
     hook = useGatewayWorkspaceActivation({
+      selectionIntentRef,
+      gatewayListRequestRef,
+      runGatewayWorkspaceListTask: queue.enqueue,
       apiPort: options.apiPort === undefined ? API_PORT : options.apiPort,
       currentSessionId: options.currentSessionId ?? null,
       latestStateRef,
       setState: (update) => {
+        if (options.deferStateUpdaters && typeof update === "function") {
+          pendingStateUpdaters.push(update);
+          return;
+        }
         current = typeof update === "function" ? update(current) : update;
         latestStateRef.current = current;
       },
@@ -138,7 +155,23 @@ async function mountHook(options: MountOptions = {}): Promise<MountedHook> {
     renderer = create(<Probe />);
   });
   mountedRenderers.push(renderer!);
-  return { hook: hook!, state: () => current, setLatest, latestStateRef, calls };
+  return {
+    hook: hook!,
+    state: () => current,
+    setLatest,
+    latestStateRef,
+    pendingStateUpdaters,
+    flushStateUpdaters: () => {
+      while (pendingStateUpdaters.length > 0) {
+        current = pendingStateUpdaters.shift()!(current);
+        latestStateRef.current = current;
+      }
+    },
+    advanceSelectionIntent: () => {
+      selectionIntentRef.current += 1;
+    },
+    calls,
+  };
 }
 
 /** 冲刷微任务与宏任务，让串行队列内部的 promise 链推进到下一个等待点。 */
@@ -239,7 +272,7 @@ describe("useGatewayWorkspaceActivation 串行队列", () => {
     expect(calls.finish).toEqual([
       {
         preferredSessionId: undefined,
-        options: { checkGatewayWorkspaceHealth: false, reuseCurrentUiSettings: true },
+        options: { checkGatewayWorkspaceHealth: false, reuseCurrentUiSettings: true, selectionIntent: 1 },
       },
     ]);
     // 正式激活完成后写入权威状态，后台迟到结果不得覆盖它。
@@ -386,7 +419,7 @@ describe("useGatewayWorkspaceActivation 串行队列", () => {
         }),
     );
     spyOnApi("listAgents").mockResolvedValue([]);
-    const { hook, state } = await mountHook({
+    const { hook, state, calls } = await mountHook({
       // 忠实还原 resetWorkspaceScopedState 的置位，才能观察旧任务是否反向清掉它。
       resetWorkspaceScopedState: (previous) => ({
         ...previous,
@@ -412,6 +445,9 @@ describe("useGatewayWorkspaceActivation 串行队列", () => {
     });
     await flush();
 
+    // A 的 API 拒绝发生时已被 B 顶替；只能让 B 做正常刷新，A 不得启动权威回读。
+    expect(calls.finish).toEqual([]);
+
     // B 正在收敛的切换态与错误位必须保持原样，不能被旧任务 A 污染。
     expect(state().workspaceSwitching).toBe(true);
     expect(state().gatewayError).toBeNull();
@@ -424,6 +460,12 @@ describe("useGatewayWorkspaceActivation 串行队列", () => {
     await act(async () => {
       await formalActivationB;
     });
+    expect(calls.finish).toEqual([
+      {
+        preferredSessionId: undefined,
+        options: { checkGatewayWorkspaceHealth: false, reuseCurrentUiSettings: true, selectionIntent: 2 },
+      },
+    ]);
   });
 
   test("正式激活已开始执行后被后台激活顶替且自身失败时仍显式失败", async () => {
@@ -516,6 +558,130 @@ describe("useGatewayWorkspaceActivation 后台激活", () => {
     expect(next.status).toBe("后台切换工作区失败: 激活被拒绝");
   });
 
+  test("后台激活失败后重读权威工作区并收敛本地活动镜像", async () => {
+    const failure = new Error("ws-b 激活被拒绝");
+    spyOnGatewayApi("activateGatewayWorkspace").mockRejectedValue(failure);
+    spyOnApi("listAgents").mockResolvedValue([]);
+    let readState: () => AppState = () => appState();
+    let applyState: (next: AppState) => void = () => undefined;
+    const mounted = await mountHook({
+      currentSessionId: "session-b",
+      initialState: appState({
+        activeGatewayWorkspaceId: "ws-b",
+        currentSessionWorkspaceId: "ws-b",
+        workspaceRoot: "/workspaces/b",
+        workspaceName: "B",
+      }),
+      finishWorkspaceRefresh: async () => {
+        applyState({
+          ...readState(),
+          activeGatewayWorkspaceId: "ws-a",
+          currentSessionWorkspaceId: "ws-a",
+          workspaceRoot: "/workspaces/a",
+          workspaceName: "A",
+        });
+        return "ws-a";
+      },
+    });
+    readState = mounted.state;
+    applyState = mounted.setLatest;
+    mounted.setLatest({
+      ...mounted.state(),
+      currentSessionWorkspaceId: "ws-b",
+      activeGatewayWorkspaceId: "ws-b",
+    });
+
+    mounted.hook.activateGatewayWorkspaceInBackground("ws-b");
+    await flush();
+
+    expect(mounted.calls.finish).toEqual([
+      { preferredSessionId: "session-b", options: { selectionIntent: 0 } },
+    ]);
+    expect(mounted.state().activeGatewayWorkspaceId).toBe("ws-a");
+    expect(mounted.state().currentSessionWorkspaceId).toBe("ws-a");
+    expect(mounted.state().workspaceRoot).toBe("/workspaces/a");
+    expect(mounted.state().workspaceName).toBe("A");
+    expect(mounted.state().gatewayError).toBe("ws-b 激活被拒绝");
+    expect(mounted.state().status).toBe("后台切换工作区失败: ws-b 激活被拒绝");
+  });
+
+  test("正式激活顶替失败后的权威重读时迟到收尾不覆盖新激活状态", async () => {
+    spyOnGatewayApi("activateGatewayWorkspace").mockImplementation(
+      async (_port, workspaceId) => {
+        if (workspaceId === "ws-b") throw new Error("ws-b 激活被拒绝");
+        return workspaceId;
+      },
+    );
+    spyOnApi("listAgents").mockResolvedValue([]);
+    const lateRecovery = deferred<string | null>();
+    const recoveryStarted = deferred<void>();
+    const { hook, state, setLatest } = await mountHook({
+      initialState: appState({
+        activeGatewayWorkspaceId: "ws-b",
+        currentSessionWorkspaceId: "ws-b",
+        workspaceRoot: "/workspaces/b",
+        workspaceName: "B",
+      }),
+      finishWorkspaceRefresh: async (_preferredSessionId, options) => {
+        if (options?.checkGatewayWorkspaceHealth === false) {
+          setLatest({
+            ...state(),
+            activeGatewayWorkspaceId: "ws-c",
+            currentSessionWorkspaceId: "ws-c",
+            workspaceRoot: "/workspaces/c",
+            workspaceName: "C",
+            gatewayError: null,
+            status: "正式激活完成",
+          });
+          return "ws-c";
+        }
+        recoveryStarted.resolve();
+        return await lateRecovery.promise;
+      },
+    });
+    setLatest({
+      ...state(),
+      activeGatewayWorkspaceId: "ws-b",
+      currentSessionWorkspaceId: "ws-b",
+    });
+
+    hook.activateGatewayWorkspaceInBackground("ws-b");
+    await flush();
+    await recoveryStarted.promise;
+
+    await hook.activateGatewayWorkspace("ws-c");
+    lateRecovery.resolve("ws-a");
+    await flush();
+
+    expect(state().activeGatewayWorkspaceId).toBe("ws-c");
+    expect(state().currentSessionWorkspaceId).toBe("ws-c");
+    expect(state().workspaceRoot).toBe("/workspaces/c");
+    expect(state().workspaceName).toBe("C");
+    expect(state().gatewayError).toBeNull();
+    expect(state().status).toBe("正式激活完成");
+  });
+
+  test("权威重读失败仍保留后台激活的原始错误", async () => {
+    spyOnGatewayApi("activateGatewayWorkspace").mockRejectedValue(
+      new Error("激活接口拒绝 ws-b"),
+    );
+    spyOnApi("listAgents").mockResolvedValue([]);
+    const { hook, state, setLatest } = await mountHook({
+      finishWorkspaceRefresh: async () => {
+        throw new Error("Gateway 列表暂不可用");
+      },
+    });
+    setLatest(appState({ currentSessionWorkspaceId: "ws-b" }));
+
+    hook.activateGatewayWorkspaceInBackground("ws-b");
+    await flush();
+
+    expect(state().gatewayError).toBe("激活接口拒绝 ws-b");
+    expect(state().status).toBe(
+      "后台切换工作区失败: 激活接口拒绝 ws-b；重新读取 Gateway 活动工作区也失败: Gateway 列表暂不可用",
+    );
+  });
+
   test("Agent 列表失败时写入后台加载 Agent 失败文案且不抛出", async () => {
     spyOnGatewayApi("activateGatewayWorkspace").mockResolvedValue("ws-background");
     spyOnApi("listAgents").mockRejectedValue(new Error("Agent 接口不可用"));
@@ -529,6 +695,110 @@ describe("useGatewayWorkspaceActivation 后台激活", () => {
     const next = state();
     expect(next.gatewayError).toBe(message);
     expect(next.status).toBe(message);
+  });
+
+  test("Agent 成功结果的迟到 updater 不覆盖新 selection", async () => {
+    const pendingAgents = deferred<Agent[]>();
+    spyOnGatewayApi("activateGatewayWorkspace").mockResolvedValue("ws-background");
+    spyOnApi("listAgents").mockImplementation(async () => await pendingAgents.promise);
+    const mounted = await mountHook({ deferStateUpdaters: true });
+    mounted.setLatest(appState({ currentSessionWorkspaceId: "ws-background" }));
+
+    mounted.hook.activateGatewayWorkspaceInBackground("ws-background");
+    await flush();
+    pendingAgents.resolve([agent("agent-stale")]);
+    await flush();
+
+    expect(mounted.pendingStateUpdaters).toHaveLength(1);
+    const nextSelection = appState({
+      currentSessionWorkspaceId: "ws-new",
+      agents: [agent("agent-new")],
+      status: "新选择",
+    });
+    mounted.advanceSelectionIntent();
+    mounted.setLatest(nextSelection);
+    act(() => mounted.flushStateUpdaters());
+
+    expect(mounted.state()).toBe(nextSelection);
+  });
+
+  test("Agent 失败结果的迟到 updater 不覆盖新 selection", async () => {
+    const pendingAgents = deferred<Agent[]>();
+    spyOnGatewayApi("activateGatewayWorkspace").mockResolvedValue("ws-background");
+    spyOnApi("listAgents").mockImplementation(async () => await pendingAgents.promise);
+    const mounted = await mountHook({ deferStateUpdaters: true });
+    mounted.setLatest(appState({ currentSessionWorkspaceId: "ws-background" }));
+
+    mounted.hook.activateGatewayWorkspaceInBackground("ws-background");
+    await flush();
+    pendingAgents.reject(new Error("Agent 列表失败"));
+    await flush();
+
+    expect(mounted.pendingStateUpdaters).toHaveLength(1);
+    const nextSelection = appState({
+      currentSessionWorkspaceId: "ws-new",
+      gatewayError: "新选择错误",
+      status: "新选择",
+    });
+    mounted.advanceSelectionIntent();
+    mounted.setLatest(nextSelection);
+    act(() => mounted.flushStateUpdaters());
+
+    expect(mounted.state()).toBe(nextSelection);
+  });
+
+  test("后台激活失败后的成功权威回读 updater 不覆盖新 selection", async () => {
+    spyOnGatewayApi("activateGatewayWorkspace").mockRejectedValue(new Error("激活失败"));
+    spyOnApi("listAgents").mockResolvedValue([]);
+    const mounted = await mountHook({
+      deferStateUpdaters: true,
+      finishWorkspaceRefresh: async () => "ws-authority",
+    });
+    mounted.setLatest(appState({ currentSessionWorkspaceId: "ws-background" }));
+
+    mounted.hook.activateGatewayWorkspaceInBackground("ws-background");
+    await flush();
+
+    expect(mounted.calls.finish).toHaveLength(1);
+    expect(mounted.pendingStateUpdaters).toHaveLength(1);
+    const nextSelection = appState({
+      currentSessionWorkspaceId: "ws-new",
+      gatewayError: null,
+      status: "新选择",
+    });
+    mounted.advanceSelectionIntent();
+    mounted.setLatest(nextSelection);
+    act(() => mounted.flushStateUpdaters());
+
+    expect(mounted.state()).toBe(nextSelection);
+  });
+
+  test("后台激活失败后的权威回读错误 updater 不覆盖新 selection", async () => {
+    spyOnGatewayApi("activateGatewayWorkspace").mockRejectedValue(new Error("激活失败"));
+    spyOnApi("listAgents").mockResolvedValue([]);
+    const mounted = await mountHook({
+      deferStateUpdaters: true,
+      finishWorkspaceRefresh: async () => {
+        throw new Error("回读失败");
+      },
+    });
+    mounted.setLatest(appState({ currentSessionWorkspaceId: "ws-background" }));
+
+    mounted.hook.activateGatewayWorkspaceInBackground("ws-background");
+    await flush();
+
+    expect(mounted.calls.finish).toHaveLength(1);
+    expect(mounted.pendingStateUpdaters).toHaveLength(1);
+    const nextSelection = appState({
+      currentSessionWorkspaceId: "ws-new",
+      gatewayError: "新选择错误",
+      status: "新选择",
+    });
+    mounted.advanceSelectionIntent();
+    mounted.setLatest(nextSelection);
+    act(() => mounted.flushStateUpdaters());
+
+    expect(mounted.state()).toBe(nextSelection);
   });
 
   test("读的是最新的 latestStateRef，触发后再更新 ref 也能写回结果", async () => {
@@ -586,7 +856,7 @@ describe("useGatewayWorkspaceActivation 正式激活", () => {
     expect(calls.finish).toEqual([
       {
         preferredSessionId: PREFERRED_SESSION_ID,
-        options: { checkGatewayWorkspaceHealth: false, reuseCurrentUiSettings: true },
+        options: { checkGatewayWorkspaceHealth: false, reuseCurrentUiSettings: true, selectionIntent: 1 },
       },
     ]);
     expect(calls.refreshStatuses).toEqual(["ws-formal"]);
@@ -641,20 +911,87 @@ describe("useGatewayWorkspaceActivation 正式激活", () => {
     expect(next.isBootstrapping).toBe(false);
   });
 
-  test("激活失败时写入五个失败字段并原样抛出", async () => {
+  test("激活 API 拒绝后回读完整权威状态并原样抛出", async () => {
     const failure = new Error("激活接口不可用");
-    spyOnGatewayApi("activateGatewayWorkspace").mockRejectedValue(failure);
-    // 初始必须为真，失败分支把两者压回 false 才是可观测的收敛，否则断言恒真。
-    const { hook, state } = await mountHook({
-      initialState: appState({ isBootstrapping: true, workspaceSwitching: true }),
+    const activate = spyOnGatewayApi("activateGatewayWorkspace").mockRejectedValue(failure);
+    const listAgents = spyOnApi("listAgents").mockResolvedValue([]);
+    const authoritativeAgent = agent("agent-authority");
+    const authorityState = appState({
+      activeGatewayWorkspaceId: "ws-authority",
+      currentSessionWorkspaceId: "ws-authority",
+      workspaceRoot: "/authority/workspace",
+      agents: [authoritativeAgent],
+      gatewayError: null,
+      error: null,
+      status: "Gateway 权威状态",
     });
+    let applyAuthorityState: (state: AppState) => void = () => undefined;
+    // 初始必须为真，失败分支把两者压回 false 才是可观测的收敛，否则断言恒真。
+    const mounted = await mountHook({
+      currentSessionId: PREFERRED_SESSION_ID,
+      initialState: appState({
+        activeGatewayWorkspaceId: "ws-formal",
+        currentSessionWorkspaceId: "ws-formal",
+        workspaceRoot: "/stale/workspace",
+        workspaceName: "stale selection only",
+        isBootstrapping: true,
+        workspaceSwitching: true,
+      }),
+      finishWorkspaceRefresh: async (preferredSessionId, options) => {
+        expect(preferredSessionId).toBe(PREFERRED_SESSION_ID);
+        expect(options).toEqual({ selectionIntent: 1 });
+        applyAuthorityState(authorityState);
+        return "ws-authority";
+      },
+    });
+    applyAuthorityState = mounted.setLatest;
 
-    await expect(hook.activateGatewayWorkspace("ws-formal")).rejects.toBe(failure);
+    await expect(mounted.hook.activateGatewayWorkspace("ws-formal", PREFERRED_SESSION_ID))
+      .rejects.toBe(failure);
 
-    const next = state();
+    expect(activate).toHaveBeenCalledTimes(1);
+    expect(listAgents).not.toHaveBeenCalled();
+    expect(mounted.calls.finish).toEqual([
+      { preferredSessionId: PREFERRED_SESSION_ID, options: { selectionIntent: 1 } },
+    ]);
+    expect(mounted.calls.refreshStatuses).toEqual([]);
+    const next = mounted.state();
+    expect(next.activeGatewayWorkspaceId).toBe("ws-authority");
+    expect(next.currentSessionWorkspaceId).toBe("ws-authority");
+    expect(next.workspaceRoot).toBe("/authority/workspace");
+    expect(next.workspaceName).toBeUndefined();
+    expect(next.agents).toEqual([authoritativeAgent]);
     expect(next.gatewayError).toBe("激活接口不可用");
     expect(next.error).toBe("激活接口不可用");
     expect(next.status).toBe("工作区切换失败");
+    expect(next.workspaceSwitching).toBe(false);
+    expect(next.isBootstrapping).toBe(false);
+  });
+
+  test("激活 API 与权威回读双失败时诊断回读错误并原样抛出 API Error", async () => {
+    const activationFailure = new Error("激活接口拒绝");
+    const refreshFailure = new Error("Gateway authority 暂不可用");
+    const activate = spyOnGatewayApi("activateGatewayWorkspace").mockRejectedValue(activationFailure);
+    const { hook, state, calls } = await mountHook({
+      initialState: appState({ isBootstrapping: true, workspaceSwitching: true }),
+      finishWorkspaceRefresh: async () => {
+        throw refreshFailure;
+      },
+    });
+
+    await expect(hook.activateGatewayWorkspace("ws-formal")).rejects.toBe(activationFailure);
+
+    expect(activate).toHaveBeenCalledTimes(1);
+    expect(calls.finish).toEqual([
+      { preferredSessionId: undefined, options: { selectionIntent: 1 } },
+    ]);
+    expect(calls.refreshStatuses).toEqual([]);
+    const next = state();
+    expect(next.gatewayError).toBe("激活接口拒绝");
+    expect(next.error).toBe("激活接口拒绝");
+    expect(next.status).toBe(
+      "工作区切换失败：激活接口拒绝；重新读取 Gateway 活动工作区也失败: Gateway authority 暂不可用",
+    );
     expect(next.workspaceSwitching).toBe(false);
     expect(next.isBootstrapping).toBe(false);
   });
@@ -672,6 +1009,7 @@ describe("useGatewayWorkspaceActivation 正式激活", () => {
 
     await expect(hook.activateGatewayWorkspace("ws-formal")).rejects.toThrow("刷新失败");
 
+    expect(calls.finish).toHaveLength(1);
     expect(calls.refreshStatuses).toEqual([]);
     const next = state();
     expect(next.gatewayError).toBe("刷新失败");
@@ -680,16 +1018,44 @@ describe("useGatewayWorkspaceActivation 正式激活", () => {
     expect(next.workspaceSwitching).toBe(false);
     expect(next.isBootstrapping).toBe(false);
   });
+
+  test("正式失败 updater 执行前被新 selection 取代时不复位新切换态", async () => {
+    const failure = new Error("旧激活拒绝");
+    spyOnGatewayApi("activateGatewayWorkspace").mockImplementation(async (_port, workspaceId) => {
+      if (workspaceId === "ws-old") throw failure;
+      return workspaceId;
+    });
+    const mounted = await mountHook({
+      deferStateUpdaters: true,
+      initialState: appState({ workspaceSwitching: true }),
+      finishWorkspaceRefresh: async (_preferredSessionId, options) => (
+        options?.checkGatewayWorkspaceHealth === false ? "ws-new" : "ws-old"
+      ),
+    });
+
+    await expect(mounted.hook.activateGatewayWorkspace("ws-old")).rejects.toBe(failure);
+    expect(mounted.pendingStateUpdaters).toHaveLength(1);
+    await mounted.hook.activateGatewayWorkspace("ws-new");
+    const nextSelection = appState({
+      currentSessionWorkspaceId: "ws-new",
+      workspaceSwitching: true,
+      status: "新选择正在收敛",
+    });
+    mounted.setLatest(nextSelection);
+    act(() => mounted.flushStateUpdaters());
+
+    expect(mounted.state()).toBe(nextSelection);
+  });
 });
 
 describe("useGatewayWorkspaceActivation 刷新 Gateway 状态", () => {
-  test("成功时以当前会话 ID 调用工作区刷新并只传一个参数", async () => {
+  test("成功时以当前会话 ID 和冻结选择代次调用工作区刷新", async () => {
     const { hook, state, calls } = await mountHook({ currentSessionId: PREFERRED_SESSION_ID });
 
     await hook.refreshGatewayState();
 
     expect(calls.finish).toEqual([
-      { preferredSessionId: PREFERRED_SESSION_ID, options: undefined },
+      { preferredSessionId: PREFERRED_SESSION_ID, options: { selectionIntent: 0 } },
     ]);
     const next = state();
     expect(next.gatewayError).toBeNull();

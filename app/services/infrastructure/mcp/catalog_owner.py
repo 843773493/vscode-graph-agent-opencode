@@ -341,7 +341,7 @@ class McpCatalogOwner:
                 )
                 with self._publication_lock:
                     self._runtimes[server.server_id] = runtime
-                await self._apply_relist(runtime, source="startup")
+                await self._apply_relist((runtime,), source="startup")
             if self._snapshot is None:
                 # 目录为空（零 server / 全 disabled）也发布固定 envelope/revision。
                 async with self._catalog_lock:
@@ -498,8 +498,10 @@ class McpCatalogOwner:
     async def relist_servers_without_notifications(self) -> None:
         """显式目录刷新边界 relist 无通知 server；model-call preparation 不调用。"""
         self._require_started()
-        for server_id in self.servers_without_change_notifications():
-            await self._apply_relist(self._runtimes[server_id], source="activation")
+        await self._apply_relist(
+            tuple(self._runtimes[server_id] for server_id in self.servers_without_change_notifications()),
+            source="activation",
+        )
 
     # ------------------------------------------------------------------
     # 通知与 relist
@@ -531,86 +533,105 @@ class McpCatalogOwner:
             relist_sequence = runtime.relist_sequence
             self._mark_dirty(server_id)
         task = asyncio.create_task(
-            self._apply_relist(runtime, source="notification", relist_sequence=relist_sequence)
+            self._apply_relist((runtime,), source="notification", relist_sequence=relist_sequence)
         )
         self._pending_relist_tasks.add(task)
         task.add_done_callback(self._pending_relist_tasks.discard)
 
     async def _apply_relist(
-        self, runtime: _ServerRuntime, *, source: str, relist_sequence: int | None = None,
+        self, runtimes: tuple[_ServerRuntime, ...], *, source: str,
+        relist_sequence: int | None = None,
     ) -> None:
-        "完整 relist 并原子发布；失败同时保留旧 valid 与显式 unavailable。"
+        "同一次刷新只发布一个完整 candidate；失败保留整个旧 valid。"
 
-        server_id = runtime.server.server_id
-        generation_at_start = runtime.generation
-        with self._publication_lock:
-            if relist_sequence is None:
-                runtime.relist_sequence += 1
-                relist_sequence = runtime.relist_sequence
-            if self._started:
-                self._mark_dirty(server_id)
-        try:
-            remote_tools = await runtime.session.list_tools()
-            async with self._catalog_lock:
+        if not runtimes:
+            return
+        server_ids = tuple(runtime.server.server_id for runtime in runtimes)
+        # 显式刷新共享原目录锁，重叠请求不能把已过期结果当作成功回执。
+        async with self._catalog_lock:
+            with self._publication_lock:
+                if source != "startup":
+                    self._require_started()
+                leases: dict[str, tuple[int, int]] = {}
+                for runtime in runtimes:
+                    if relist_sequence is None:
+                        runtime.relist_sequence += 1
+                    leases[runtime.server.server_id] = (
+                        runtime.generation,
+                        runtime.relist_sequence if relist_sequence is None else relist_sequence,
+                    )
+                if self._started:
+                    self._dirty_servers.update(server_ids)
+                    self._publish_readiness_locked("dirty", f"MCP 目录正在完整刷新: servers={server_ids}")
+
+            def current() -> bool:
+                return all(
+                    self._runtimes.get(runtime.server.server_id) is runtime
+                    and (runtime.generation, runtime.relist_sequence) == leases[runtime.server.server_id]
+                    for runtime in runtimes
+                )
+
+            failed_server_id = server_ids[0]
+            try:
+                remote_by_server: dict[str, list[BaseTool]] = {}
+                for runtime in runtimes:
+                    failed_server_id = runtime.server.server_id
+                    remote_by_server[failed_server_id] = await runtime.session.list_tools()
                 with self._publication_lock:
-                    if (
-                        runtime.generation != generation_at_start
-                        or runtime.relist_sequence != relist_sequence
-                        or self._runtimes.get(server_id) is not runtime
-                    ):
-                        logger.info("MCP relist 过期结果已丢弃: server_id=%s", server_id)
-                        return
-                    own_ids = {
+                    if not current():
+                        raise McpCatalogRelistError(f"MCP relist 结果已过期: servers={server_ids}")
+                    replaced_ids = {
                         descriptor.tool_id
+                        for server_id in server_ids
                         for descriptor in self._descriptors_by_server.get(server_id, ())
                     }
-                    server_tools, descriptors = _adapt_server_tools(
-                        server_id, remote_tools,
-                        foreign_tool_ids=set(self._tools_by_id) - own_ids,
-                    )
                     candidate_tools = {
                         tool_id: tool
                         for tool_id, tool in self._tools_by_id.items()
-                        if tool_id not in own_ids
+                        if tool_id not in replaced_ids
                     }
-                    candidate_tools.update(server_tools)
-                    candidate_descriptors = {
-                        **self._descriptors_by_server, server_id: descriptors,
-                    }
-                    self._dirty_servers.discard(server_id)
+                    candidate_descriptors = dict(self._descriptors_by_server)
+                    for server_id in server_ids:
+                        failed_server_id = server_id
+                        server_tools, descriptors = _adapt_server_tools(
+                            server_id, remote_by_server[server_id],
+                            foreign_tool_ids=set(candidate_tools),
+                        )
+                        candidate_tools.update(server_tools)
+                        candidate_descriptors[server_id] = descriptors
+                    self._dirty_servers.difference_update(server_ids)
                     self._publish_snapshot_locked(
-                        server_id=server_id, candidate_tools=candidate_tools,
+                        server_id=server_ids[0] if len(server_ids) == 1 else None,
+                        candidate_tools=candidate_tools,
                         candidate_descriptors=candidate_descriptors,
                     )
-                    runtime.last_relist_error = None
-        except Exception as error:
-            with self._publication_lock:
-                if (
-                    runtime.generation != generation_at_start
-                    or runtime.relist_sequence != relist_sequence
-                    or self._runtimes.get(server_id) is not runtime
-                ):
+                    for runtime in runtimes:
+                        runtime.last_relist_error = None
+            except Exception as error:
+                with self._publication_lock:
+                    if not current():
+                        if source == "notification":
+                            logger.info("MCP relist 过期结果已丢弃: servers=%s", server_ids)
+                            return
+                        raise McpCatalogRelistError(
+                            f"MCP relist 连接或请求代际已过期: servers={server_ids}"
+                        ) from error
+                    error_text = _bounded_error_text(error)
+                    self._runtimes[failed_server_id].last_relist_error = error_text
+                    self._dirty_servers.update(server_ids)
+                    if self._publication is not None:
+                        try:
+                            self._publish_readiness_locked("unavailable", error_text)
+                        except ExceptionGroup as invalidation_error:
+                            raise ExceptionGroup(
+                                "MCP relist 与失效广播失败", [error, invalidation_error]
+                            ) from error
+                if source == "notification":
+                    logger.exception("MCP relist 失败，Registry 已标记不可用: servers=%s", server_ids)
                     return
-                runtime.last_relist_error = _bounded_error_text(error)
-                self._dirty_servers.add(server_id)
-                invalidation_errors: list[Exception] = []
-                if self._publication is not None:
-                    try:
-                        self._publish_readiness_locked("unavailable", runtime.last_relist_error)
-                    except ExceptionGroup as invalidation_error:
-                        invalidation_errors.append(invalidation_error)
-                if invalidation_errors:
-                    raise ExceptionGroup(
-                        "MCP relist 与失效广播失败", [error, *invalidation_errors]
-                    )
-            if source == "notification":
-                logger.exception(
-                    "MCP relist 失败，Registry 已标记不可用: server_id=%s", server_id
-                )
-                return
-            raise McpCatalogRelistError(
-                f"MCP 工具目录 relist 失败: server_id={server_id}: {error}"
-            ) from error
+                raise McpCatalogRelistError(
+                    f"MCP 工具目录 relist 失败: server_id={failed_server_id}: {error}"
+                ) from error
 
     def _mark_dirty(self, server_id: str) -> None:
         with self._publication_lock:

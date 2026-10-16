@@ -10,6 +10,7 @@ export const protobufPackage = "boxteam.workspace.v2";
 
 export interface TraceEvent {
   event_id: string;
+  /** 来源路径提供的部件引用；历史工具路径在已知 emitting ModelCall 时使用其限定的聚合引用，通用 Trace 不承诺所有 part_id 都遵循该格式。 */
   part_id?: string | undefined;
   session_id: string;
   job_id: string;
@@ -20,7 +21,10 @@ export interface TraceEvent {
   status?: string | undefined;
   tool_name?: string | undefined;
   skill_names: string[];
-  step_id?: string | undefined;
+  step_id?:
+    | string
+    | undefined;
+  /** 来源事件的带时区时间，Trace 映射保留其时刻与显式时区偏移，不在投影时重新取时；历史工具事件沿对应 canonical 消息/item 时间。 */
   timestamp: string | undefined;
   raw: { [key: string]: any } | undefined;
 }

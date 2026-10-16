@@ -1,13 +1,13 @@
 # 目录用途
 
 `boundary/` 是 checkpoint 侧的边界闭合 owner：tool protocol 唯一公共 validator，以及
-compaction、fork/history-prefix 与 rewind 操作的 typed adapter。它只做边界判定与委托，
+compaction 与 rewind 操作的 typed adapter。fork 的冻结范围 owner 直接调用同一 validator。它只做边界判定与委托，
 不实现 checkpoint 持久化本身。
 
 # 可修改内容
 
 - 可以维护 tool protocol 闭合判定（安全 cutoff/anchor 与冲突码）的唯一实现。
-- 可以维护 compaction/fork/operations 边界的 typed port 与 owner mixin 委托。
+- 可以维护 compaction/operations 边界的 typed port 与 owner mixin 委托。
 
 # 不可修改内容
 

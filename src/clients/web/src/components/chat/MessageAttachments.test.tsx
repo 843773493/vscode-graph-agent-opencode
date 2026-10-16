@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create } from "react-test-renderer";
 import MessageAttachments from "./MessageAttachments";
-import type { AttachmentRef } from "../../types/backend";
+import type { AttachmentRef, TurnAttachment } from "../../types/backend";
 
 const image: AttachmentRef = {
   file_id: "boxteam-session://ses_test/attachments/image.png",
@@ -12,6 +12,16 @@ const image: AttachmentRef = {
 };
 
 describe("MessageAttachments", () => {
+  test("历史 owner 标记不可用的附件直接显示状态并禁用打开", () => {
+    const attachment: TurnAttachment = { file_id: image.file_id, name: image.name, content_type: image.content_type, availability: "unavailable" };
+    let renderer!: ReturnType<typeof create>;
+    act(() => { renderer = create(<MessageAttachments attachments={[attachment]} apiPort={8014} sessionId="ses_test" onOpenAttachment={() => { throw new Error("不可用附件不得打开"); }} />); });
+    expect(renderer.root.findByProps({ role: "status" }).children).toEqual(["附件不可用"]);
+    expect(renderer.root.findByProps({ "data-availability": "unavailable" }).type).toBe("article");
+    expect(renderer.root.findAllByType("button").every((button) => button.props.disabled)).toBe(true);
+    act(() => renderer.unmount());
+  });
+
   test("点击图片时把稳定附件引用交给右侧资源入口，不打开正文 modal", () => {
     const opened: AttachmentRef[] = [];
     let renderer!: ReturnType<typeof create>;

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 import subprocess
@@ -13,6 +12,9 @@ import pytest
 from app.domain.itemized.errors import FormatDispatchError
 from app.services.infrastructure.rollout_context.checkpoint.projection.message_projections import (
     RolloutMessageProjectionMixin,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.migration import (
     importer as migration_importer,
@@ -31,6 +33,9 @@ from tests.integration.backend.sessions.itemized_migration_helpers import (
     _write_v1_source,
     migration_audits,
     prepare_migration_workspace,
+)
+from tests.integration.backend.sessions.itemized_projection_helpers import (
+    copy_rollout_snapshot,
 )
 
 SOURCE_SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
@@ -309,7 +314,8 @@ def test_legacy_migration_rejects_same_source_and_target_session(
         )
 
 
-def test_full_copy_v1_source_requires_explicit_import_without_side_effects(
+@pytest.mark.asyncio
+async def test_full_copy_v1_source_requires_explicit_import_without_side_effects(
     migration_workspace: Path,
     session_bundle_factory,
 ) -> None:
@@ -324,14 +330,11 @@ def test_full_copy_v1_source_requires_explicit_import_without_side_effects(
     storage = _storage(sessions_root)
     source_index = storage.storage.index_path(SOURCE_SESSION_ID).read_bytes()
 
-    with pytest.raises(FormatDispatchError, match="unsupported_legacy_rollout"):
-        storage.forks.clone_rollout(
-            source_thread_id=storage.storage.main_thread_id(SOURCE_SESSION_ID),
-            target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
-            source_checkpoint_id=None,
-            source_session_id=SOURCE_SESSION_ID,
-            target_session_id=TARGET_SESSION_ID,
-        )
+    with (
+        pytest.raises(FormatDispatchError, match="v1_migration_required"),
+        RolloutCheckpointSaver(sessions_root, storage=storage) as saver,
+    ):
+        await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID)
     assert not storage.storage.root(TARGET_SESSION_ID).exists()
     assert migration_audits(storage) == []
     assert (
@@ -341,7 +344,8 @@ def test_full_copy_v1_source_requires_explicit_import_without_side_effects(
     assert storage.storage.index_path(SOURCE_SESSION_ID).read_bytes() == source_index
 
 
-def test_explicit_v1_import_then_full_copy_records_v2_source_lineage(
+@pytest.mark.asyncio
+async def test_explicit_v1_import_then_full_copy_records_v2_source_lineage(
     migration_workspace: Path,
     session_bundle_factory,
 ) -> None:
@@ -368,71 +372,15 @@ def test_explicit_v1_import_then_full_copy_records_v2_source_lineage(
     source_items = storage.storage.read_items(
         TARGET_SESSION_ID, storage.storage.main_thread_id(TARGET_SESSION_ID)
     )
-    source_view_id = storage.forks.clone_rollout(
-        source_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
-        target_thread_id=storage.storage.main_thread_id(FORK_SESSION_ID),
-        source_checkpoint_id=None,
-        source_session_id=TARGET_SESSION_ID,
-        target_session_id=FORK_SESSION_ID,
-    )
-    materialization_id, fork_id = storage.forks.begin_fork_materialization(
-        target_session_id=FORK_SESSION_ID,
-        source_session_id=TARGET_SESSION_ID,
-        source_checkpoint_id=None,
-        source_view_id=source_view_id,
-        fork_mode="full_rollout_copy",
-        relationship="detached",
-        checkpoint_ns="",
-        source_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
-        target_thread_id=storage.storage.main_thread_id(FORK_SESSION_ID),
-        source_snapshot_sha256=hashlib.sha256(
-            f"synthetic-source-snapshot:{TARGET_SESSION_ID}:{FORK_SESSION_ID}".encode()
-        ).hexdigest(),
-    )
-    assert (
-        storage.forks.commit_fork_materialization(
-            materialization_id,
-            target_session_id=FORK_SESSION_ID,
-            source_session_id=TARGET_SESSION_ID,
-            source_checkpoint_id=None,
-            source_view_id=source_view_id,
-            fork_mode="full_rollout_copy",
-            relationship="detached",
-            checkpoint_ns="",
-            source_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
-            target_thread_id=storage.storage.main_thread_id(FORK_SESSION_ID),
-            source_snapshot_sha256=hashlib.sha256(
-                f"synthetic-source-snapshot:{TARGET_SESSION_ID}:{FORK_SESSION_ID}".encode()
-            ).hexdigest(),
+    with RolloutCheckpointSaver(sessions_root, storage=storage) as saver:
+        copied = await copy_rollout_snapshot(saver, TARGET_SESSION_ID, FORK_SESSION_ID)
+    fork_items = storage.storage.read_items(FORK_SESSION_ID, storage.storage.main_thread_id(FORK_SESSION_ID))
+    assert [item.to_dict() for item in fork_items] == [item.to_dict() for item in source_items]
+    assert all(not item.item_id.startswith("legacy:v1:") for item in fork_items)
+    with storage.storage.read_connection(FORK_SESSION_ID, storage.storage.main_thread_id(FORK_SESSION_ID), "") as connection:
+        assert connection.execute("SELECT source_session_id,source_view_id,fork_mode FROM fork_origins WHERE fork_id=?", (copied.fork_id,)).fetchone() == (
+            TARGET_SESSION_ID, copied.source_view_id, "full_rollout_copy",
         )
-        == fork_id
-    )
-
-    with storage.storage._connect(
-        storage.storage.main_thread_id(FORK_SESSION_ID),
-        "",
-        read_only=True,
-        session_id=FORK_SESSION_ID,
-    ) as connection:
-        mappings = connection.execute(
-            "SELECT source_local_id, target_local_id "
-            "FROM fork_identity_mappings WHERE fork_id = ? AND entity_type = 'item' "
-            "ORDER BY source_local_id",
-            (fork_id,),
-        ).fetchall()
-        origin = connection.execute(
-            "SELECT source_session_id, source_view_id, fork_mode "
-            "FROM fork_origins WHERE fork_id = ?",
-            (fork_id,),
-        ).fetchone()
-    fork_items = storage.storage.read_items(
-        FORK_SESSION_ID, storage.storage.main_thread_id(FORK_SESSION_ID)
-    )
-    assert len(mappings) == len(source_items) == len(fork_items)
-    assert {row[0] for row in mappings} == {item.item_id for item in source_items}
-    assert {row[1] for row in mappings} == {item.item_id for item in fork_items}
-    assert all(not row[0].startswith("legacy:v1:") for row in mappings)
-    assert origin == (TARGET_SESSION_ID, source_view_id, "full_rollout_copy")
 
 
 @pytest.mark.parametrize("failure_point", ["projection", "validation", "installation"])
@@ -614,14 +562,14 @@ def test_unknown_or_mixed_envelope_format_is_not_coerced(
 
 
 @pytest.mark.parametrize(
-    "metadata,expected",
+    "metadata,expected,expected_outcome,expected_evidence",
     [
-        ({}, "unknown"),
-        ({"final": True}, "completed"),
-        ({"status": "failed"}, "failed"),
-        ({"status": "interrupted"}, "interrupted"),
-        ({"status": "cancelled"}, "cancelled"),
-        ({"final": True, "status": "failed"}, "unknown"),
+        ({}, "unknown", "unknown", "legacy_finalization_unavailable"),
+        ({"final": True}, "completed", "unknown", "explicit_legacy_final_marker"),
+        ({"status": "failed"}, "failed", "failed", "explicit_legacy_control_marker"),
+        ({"status": "interrupted"}, "interrupted", "interrupted", "explicit_legacy_control_marker"),
+        ({"status": "cancelled"}, "cancelled", "cancelled", "explicit_legacy_control_marker"),
+        ({"final": True, "status": "failed"}, "unknown", "unknown", "ambiguous_legacy_finalization"),
     ],
 )
 def test_finalization_requires_unambiguous_legacy_evidence(
@@ -629,6 +577,8 @@ def test_finalization_requires_unambiguous_legacy_evidence(
     session_bundle_factory,
     metadata: dict[str, object],
     expected: str,
+    expected_outcome: str,
+    expected_evidence: str,
 ) -> None:
     sessions = migration_workspace / ".boxteam" / "sessions"
     records = _accepted_records()
@@ -648,15 +598,109 @@ def test_finalization_requires_unambiguous_legacy_evidence(
         target_thread_id=storage.storage.main_thread_id(TARGET_SESSION_ID),
         checkpoint_ns="",
     )
-    assert result["migrated"][0]["status"] == expected
+    migrated = result["migrated"][0]
+    assert migrated["status"] == expected
+    assert migrated["finalization_evidence"] == expected_evidence
     with storage.storage._connect(
         storage.storage.main_thread_id(TARGET_SESSION_ID),
         read_only=True,
         session_id=TARGET_SESSION_ID,
     ) as connection:
-        turn, final = connection.execute(
-            "SELECT status, final_item_id FROM turn_records"
+        turn_id, turn, final, initial_execution_id = connection.execute(
+            "SELECT turn_id, status, final_item_id, initial_execution_id FROM turn_records"
         ).fetchone()
-        execution = connection.execute("SELECT outcome FROM executions").fetchone()[0]
-    assert (turn, execution) == (expected, expected)
+        execution_id, execution, first_call, last_call, job_id = connection.execute(
+            "SELECT execution_id, outcome, first_model_call_id, last_model_call_id, job_id FROM executions"
+        ).fetchone()
+        assert connection.execute("SELECT identity_origin FROM turn_acceptances").fetchall() == [
+            ("legacy_synthetic",)
+        ]
+        assert connection.execute("SELECT COUNT(*) FROM model_calls").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM context_assemblies").fetchone()[0] == 0
+        commit_id, commit_outcome, commit_metadata = connection.execute(
+            "SELECT commit_id, outcome, metadata_json FROM storage_commits "
+            "WHERE commit_kind='terminal_convergence' AND subject_id=?",
+            (turn_id,),
+        ).fetchone()
+        assert commit_outcome == expected_outcome
+        assert json.loads(commit_metadata) == {
+            "legacy_source_session_id": SOURCE_SESSION_ID,
+            "legacy_source_thread_id": storage.storage.main_thread_id(SOURCE_SESSION_ID),
+            "finalization_evidence": expected_evidence,
+        }
+        if final is not None:
+            assert connection.execute(
+                "SELECT turn_id, execution_id, commit_id, semantic_kind, status "
+                "FROM item_catalog WHERE item_id=?", (final,),
+            ).fetchone() == (
+                turn_id, execution_id, commit_id, "assistant_output", "completed",
+            )
+    assert turn == expected
+    assert execution == expected_outcome
+    assert initial_execution_id == execution_id == migrated["target_initial_execution_id"]
+    assert first_call is last_call is None
     assert (final is not None) is (expected == "completed")
+    target_thread_id = storage.storage.main_thread_id(TARGET_SESSION_ID)
+    assert storage.executions.cold_execution_observations(TARGET_SESSION_ID, target_thread_id) == []
+    assert storage.executions.cold_execution_observations(
+        TARGET_SESSION_ID, target_thread_id, turn_id=turn_id,
+    ) == []
+    assert storage.executions.cold_execution_observations(
+        TARGET_SESSION_ID, target_thread_id, job_ids=[job_id],
+    ) == []
+    if expected == "interrupted":
+        resumed = storage.executions.resume_turn(
+            TARGET_SESSION_ID, thread_id=target_thread_id, turn_id=turn_id,
+            job_id="live-import-resume-job",
+        )
+        assert resumed["attempt"] == 2
+        fresh = _storage(sessions)
+        resumed_rows = fresh.executions.cold_execution_observations(
+            TARGET_SESSION_ID, target_thread_id, turn_id=turn_id,
+        )
+        assert len(resumed_rows) == 1
+        assert (resumed_rows[0]["job_id"], resumed_rows[0]["execution_id"], resumed_rows[0]["state"]) == (
+            resumed["job_id"], resumed["execution_id"], "pending",
+        )
+        assert fresh.executions.cold_execution_observations(
+            TARGET_SESSION_ID, target_thread_id, job_ids=[job_id],
+        ) == []
+        fresh.executions.converge_execution(
+            TARGET_SESSION_ID, thread_id=target_thread_id, turn_id=turn_id,
+            execution_id=resumed["execution_id"], outcome="interrupted", turn_status="interrupted",
+        )
+        latest = fresh.executions.resume_turn(
+            TARGET_SESSION_ID, thread_id=target_thread_id, turn_id=turn_id,
+            job_id="live-import-second-resume-job",
+        )
+        assert latest["attempt"] == 3
+        fresh = _storage(sessions)
+        latest_rows = fresh.executions.cold_execution_observations(
+            TARGET_SESSION_ID, target_thread_id, turn_id=turn_id,
+        )
+        assert len(latest_rows) == 1
+        assert (latest_rows[0]["job_id"], latest_rows[0]["execution_id"], latest_rows[0]["state"]) == (
+            latest["job_id"], latest["execution_id"], "pending",
+        )
+        job_rows = fresh.executions.cold_execution_observations(
+            TARGET_SESSION_ID, target_thread_id, job_ids=[resumed["job_id"], latest["job_id"], job_id],
+        )
+        assert [(row["job_id"], row["execution_id"], row["state"]) for row in job_rows] == [
+            (latest["job_id"], latest["execution_id"], "pending"),
+            (resumed["job_id"], resumed["execution_id"], "cancelled"),
+        ]
+        assert fresh.executions.cold_execution_observations(TARGET_SESSION_ID, target_thread_id) == job_rows
+        return
+    accepted = storage.executions.accept_turn(
+        TARGET_SESSION_ID, thread_id=target_thread_id,
+        accepted_ingress_id="live-import-successor-ingress",
+        acceptance_idempotency_key="live-import-successor-acceptance",
+        job_id="live-import-successor-job",
+        admission_idempotency_key="live-import-successor-admission",
+        payload="导入后新接受的真实请求",
+    )
+    pending = storage.executions.cold_execution_observations(TARGET_SESSION_ID, target_thread_id)
+    assert len(pending) == 1
+    assert (pending[0]["job_id"], pending[0]["execution_id"], pending[0]["state"]) == (
+        "live-import-successor-job", accepted["initial_execution_id"], "pending",
+    )

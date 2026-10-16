@@ -11,7 +11,7 @@ interface FakeList {
 
 interface WindowOptions {
   active: boolean;
-  sessionId: string;
+  scopeKey: string;
   itemCount: number;
   initialVisibleCount: number;
   olderBatchSize: number;
@@ -61,7 +61,7 @@ describe("共享滚动窗口", () => {
   test("向前展开受条目总数约束，新增条目后仍保留未展示的尾部", () => {
     const windowed = mountWindow({
       active: true,
-      sessionId: "ses_window",
+      scopeKey: "gw_demo:ses_window",
       itemCount: 50,
       initialVisibleCount: 10,
       olderBatchSize: 30,
@@ -89,7 +89,7 @@ describe("共享滚动窗口", () => {
   test("滚动锚点按高度差恢复，丢弃锚点后回到贴底", () => {
     const windowed = mountWindow({
       active: true,
-      sessionId: "ses_window",
+      scopeKey: "gw_demo:ses_window",
       itemCount: 60,
       initialVisibleCount: 10,
       olderBatchSize: 10,
@@ -119,7 +119,7 @@ describe("共享滚动窗口", () => {
     let exhausted = 0;
     const windowed = mountWindow({
       active: true,
-      sessionId: "ses_window",
+      scopeKey: "gw_demo:ses_window",
       itemCount: 5,
       initialVisibleCount: 10,
       olderBatchSize: 10,
@@ -141,10 +141,10 @@ describe("共享滚动窗口", () => {
     windowed.unmount();
   });
 
-  test("会话切换后迟到的旧页结果不累加到新会话窗口", () => {
+  test("诊断作用域切换后迟到的旧页结果不累加到新窗口", () => {
     const windowed = mountWindow({
       active: true,
-      sessionId: "ses_old",
+      scopeKey: "gw_old:ses_shared",
       itemCount: 100,
       initialVisibleCount: 10,
       olderBatchSize: 10,
@@ -153,7 +153,7 @@ describe("共享滚动窗口", () => {
 
     // 旧会话发起一次旧页请求并拿到凭证，请求在途时切到新会话。
     const staleTicket = windowed.hook().beginOlderLoad();
-    windowed.update({ sessionId: "ses_new", itemCount: 20 });
+    windowed.update({ scopeKey: "gw_new:ses_shared", itemCount: 20 });
 
     // 新会话窗口按 initialVisibleCount 重置：20 - 10 = 10。
     expect(windowed.hook().firstVisibleIndex).toBe(10);

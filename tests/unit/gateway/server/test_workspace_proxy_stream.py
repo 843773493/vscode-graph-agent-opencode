@@ -12,6 +12,7 @@ from starlette.requests import Request
 from starlette.responses import Response, StreamingResponse
 
 from app.gateway.auth import GatewayAuthContext
+from app.gateway.control.user_access import UserAccessContext
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.workspace_proxy import (
@@ -115,6 +116,131 @@ def test_backend_route_change_invalidates_existing_lease(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path", "expected_actor"),
+    [
+        ("POST", "session-catalog/operations:enqueue", "guest"),
+        ("GET", "session-catalog/operations", "guest"),
+        ("GET", "session-catalog/snapshot", None),
+        ("POST", "context/read", None),
+        ("POST", "context/search", None),
+    ],
+)
+async def test_navigation_actor_only_reaches_operation_routes(
+    registry: GatewayWorkspaceRegistry,
+    method: str,
+    path: str,
+    expected_actor: str | None,
+) -> None:
+    """真实 HTTPX header 构造不能把已认证身份变成非导航请求的幂等 scope。"""
+
+    application = FastAPI()
+    forwarded_headers: list[httpx.Headers] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        forwarded_headers.append(request.headers)
+        return httpx.Response(200, content=b"upstream")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        application.state.registry = registry
+        application.state.http_client = client
+        request = Request(
+            {
+                "type": "http",
+                "method": method,
+                "path": f"/api/v1/{path}",
+                "query_string": b"",
+                "headers": [
+                    (b"x-boxteam-workspace-id", b"gw_stream"),
+                    (b"x-boxteam-navigation-actor", b"user:forged"),
+                ],
+                "app": application,
+            }
+        )
+        request.state.request_id = "req_navigation_scope"
+        response = await _proxy_workspace_request(
+            path,
+            request,
+            auth=GatewayAuthContext(kind="local"),
+            user_access=UserAccessContext(
+                kind="guest",
+                user_id=None,
+                access_session_id="guest_scope",
+                lease_generation=1,
+                invalidated=asyncio.Event(),
+            ),
+            include_credentials=True,
+            request_body=b"",
+        )
+        assert isinstance(response, StreamingResponse)
+        assert [chunk async for chunk in response.body_iterator] == [b"upstream"]
+
+    assert response.status_code == 200
+    assert len(forwarded_headers) == 1
+    assert forwarded_headers[0].get("X-BoxTeam-Navigation-Actor") == expected_actor
+    assert forwarded_headers[0]["X-Request-ID"] == "req_navigation_scope"
+    assert registry.route_reference_counts("gw_stream") == (0, 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rewritten_body",
+    [
+        pytest.param(b"", id="empty"),
+        pytest.param('{"query":"中文长文本","scope":"workspace"}'.encode(), id="utf8"),
+    ],
+)
+async def test_rewritten_body_uses_actual_content_length(
+    registry: GatewayWorkspaceRegistry,
+    rewritten_body: bytes,
+) -> None:
+    """typed owner 重写正文后，不能把原正文的长度继续交给 HTTPX。"""
+
+    application = FastAPI()
+    bodies: list[bytes] = []
+    content_lengths: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(await request.aread())
+        content_lengths.append(request.headers["Content-Length"])
+        return httpx.Response(200, content=b"upstream")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        application.state.registry = registry
+        application.state.http_client = client
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/v1/context/read",
+                "query_string": b"",
+                "headers": [
+                    (b"x-boxteam-workspace-id", b"gw_stream"),
+                    (b"content-length", b"2"),
+                ],
+                "app": application,
+            }
+        )
+        request._body = b"{}"
+        request.state.request_id = "req_rewritten_body"
+        response = await _proxy_workspace_request(
+            "context/read",
+            request,
+            auth=None,
+            user_access=None,
+            include_credentials=False,
+            request_body=rewritten_body,
+        )
+        assert isinstance(response, StreamingResponse)
+        assert [chunk async for chunk in response.body_iterator] == [b"upstream"]
+
+    assert response.status_code == 200
+    assert bodies == [rewritten_body]
+    assert content_lengths == [str(len(rewritten_body))]
+    assert registry.route_reference_counts("gw_stream") == (0, 0)
+
+
+@pytest.mark.asyncio
 async def test_sse_proxy_ends_immediately_when_route_is_invalidated(
     registry: GatewayWorkspaceRegistry,
 ) -> None:
@@ -156,6 +282,7 @@ async def test_binary_proxy_forwards_chunks_and_closes_upstream() -> None:
         ("sessions/ses_1/traces/stream", True),
         ("session-catalog/events/stream", True),
         ("workspace/files/events", True),
+        ("workspace/observations/stream", True),
         ("sessions/ses_1/turns/job_1/message-stream", True),
         ("sessions/ses_1/bootstrap", False),
         ("sessions/ses_1/history", False),
@@ -245,7 +372,7 @@ async def test_message_stream_availability_retries_after_upstream_connection_cha
             "type": "http",
             "method": "GET",
             "path": "/api/v1/sessions/ses_1/message-streams/availability",
-            "query_string": b"turn_ids=job_1",
+            "query_string": b"turn_ids=job_1&turn_ids=job_2",
             "headers": [(b"x-boxteam-workspace-id", b"gw_stream")],
             "app": application,
         }
@@ -269,8 +396,8 @@ async def test_message_stream_availability_retries_after_upstream_connection_cha
         b'{"request_id":"req_availability","data":{"job_1":"strm_1"}}'
     )
     assert calls == [
-        "http://127.0.0.1:41001/api/v1/sessions/ses_1/message-streams/availability?turn_ids=job_1",
-        "http://127.0.0.1:41002/api/v1/sessions/ses_1/message-streams/availability?turn_ids=job_1",
+        "http://127.0.0.1:41001/api/v1/sessions/ses_1/message-streams/availability?turn_ids=job_1&turn_ids=job_2",
+        "http://127.0.0.1:41002/api/v1/sessions/ses_1/message-streams/availability?turn_ids=job_1&turn_ids=job_2",
     ]
 
 

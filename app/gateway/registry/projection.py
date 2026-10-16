@@ -51,6 +51,7 @@ class RegistryProjectionMixin:
         )
         previous_snapshot = self._capture_registry_state()
         previous_signatures = dict(self._route_signatures)
+        previous_commit = self._last_committed_snapshot
         previous_runtime = self._remote_gateway_runtimes.get(
             connection.connection_id
         )
@@ -147,15 +148,18 @@ class RegistryProjectionMixin:
         elif self._active_workspace_id not in self._targets:
             self._active_workspace_id = self._default_workspace_id()
         self._validate_parent_graph()
+        post_commit_error: BaseException | None = None
         try:
             self._save(
                 owner="remote_projection",
                 remote_gateway_connection_ids=(connection.connection_id,),
             )
-        except Exception:
-            self._restore_registry_state(previous_snapshot)
-            self._route_signatures = previous_signatures
-            raise
+        except BaseException as error:
+            if self._last_committed_snapshot is previous_commit:
+                self._restore_registry_state(previous_snapshot)
+                self._route_signatures = previous_signatures
+                raise
+            post_commit_error = error
 
         new_signatures = {
             workspace_id: self._route_signature(target)
@@ -185,6 +189,8 @@ class RegistryProjectionMixin:
                             connection.connection_id,
                             [],
                         ).append(previous_runtime)
+        if post_commit_error is not None:
+            raise post_commit_error.with_traceback(post_commit_error.__traceback__)
     def apply_remote_projection_batch(
         self,
         *,
@@ -219,6 +225,7 @@ class RegistryProjectionMixin:
 
         previous_snapshot = self._capture_registry_state()
         previous_signatures = dict(self._route_signatures)
+        previous_commit = self._last_committed_snapshot
         previous_remote_runtimes = dict(self._remote_gateway_runtimes)
         previous_retired_remote_runtimes = {
             connection_id: list(runtimes)
@@ -327,12 +334,15 @@ class RegistryProjectionMixin:
             activate_connection_ids=activate_connection_ids,
         )
         self._validate_parent_graph()
+        post_commit_error: BaseException | None = None
         try:
             self._save(owner="config_batch")
-        except Exception:
-            self._restore_registry_state(previous_snapshot)
-            self._route_signatures = previous_signatures
-            raise
+        except BaseException as error:
+            if self._last_committed_snapshot is previous_commit:
+                self._restore_registry_state(previous_snapshot)
+                self._route_signatures = previous_signatures
+                raise
+            post_commit_error = error
 
         new_signatures = {
             workspace_id: self._route_signature(target)
@@ -403,7 +413,7 @@ class RegistryProjectionMixin:
                 )
             )
         )
-        return GatewayRegistryBatchHandle(
+        handle = GatewayRegistryBatchHandle(
             registry=self,
             previous_snapshot=previous_snapshot,
             previous_signatures=previous_signatures,
@@ -414,6 +424,20 @@ class RegistryProjectionMixin:
             committed_revision=self._registry_revision,
             deferred_retirement=defer_retiring_runtimes,
         )
+        if post_commit_error is not None:
+            try:
+                handle.promote()
+            # 仅附加同步旧 runtime 的普通收尾错误，进程级异常继续直传。
+            except Exception as retirement_error:  # noqa: BLE001
+                note = (
+                    "Gateway registry batch 已提交，但旧 remote runtime retirement "
+                    f"未完成: {retirement_error}"
+                )
+                post_commit_error.add_note(note)
+            raise post_commit_error.with_traceback(
+                post_commit_error.__traceback__
+            )
+        return handle
     def _rollback_registry_batch(self, handle: GatewayRegistryBatchHandle) -> None:
         """补偿已提交 batch；CAS 失败时保留 recovery_required 所需证据。"""
 

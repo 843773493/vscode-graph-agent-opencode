@@ -15,7 +15,7 @@ from app.domain.itemized.enums import BaseDeltaRole, SemanticKind
 from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.domain.itemized.records import CanonicalItemRecord
-from app.services.mapping.itemized.carrier_dedup import superseded_stream_item_ids
+from app.services.mapping.itemized.carrier_dedup import superseded_item_ids
 
 _ERROR_CODES = {
     "seal-dispatch-plan-ordinal-conflict",
@@ -74,7 +74,7 @@ def canonical_tool_pairings(
     try:
         for item in item_tuple:
             item.validate()
-        superseded_ids = superseded_stream_item_ids(item_tuple)
+        superseded_ids = superseded_item_ids(item_tuple)
     except ValueError as error:
         raise ContextAssemblySealPreflightError(
             "seal-dispatch-tool-pairing-conflict",

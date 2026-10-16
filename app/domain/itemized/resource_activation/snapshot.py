@@ -63,7 +63,11 @@ def resource_activation_provenance_hash(
 
 @dataclass(frozen=True, slots=True)
 class ResourceActivationSnapshotRef:
-    """一个真实 execution 或一次 model call 冻结的资源激活结果。"""
+    """一个真实 execution 或一次 model call 冻结的资源激活结果。
+
+    ``activation_policy_revision``/``activation_policy_hash`` 分别引用下方完整冻结策略的内容身份；
+    ``revision`` 表示策略内容身份，不是递增计数或时间戳。
+    """
 
     activation_snapshot_id: str
     snapshot_kind: str

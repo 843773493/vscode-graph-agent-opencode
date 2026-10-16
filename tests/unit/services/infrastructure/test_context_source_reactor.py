@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -13,6 +15,7 @@ from app.domain.itemized.epoch.prefix_epoch import (
     PendingPrefixEpochTransition,
 )
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
+    ResourceObservation,
     ResourceObservationChannel,
 )
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
@@ -20,6 +23,7 @@ from app.services.infrastructure.resource_platform.registry.context_source_react
 )
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
+    WorkspaceFileResourceSnapshot,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
@@ -37,6 +41,12 @@ from app.services.infrastructure.workspace_file_watch_service import (
 )
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     registry_db as registry_db,  # noqa: PLC0414 - 正式 SQLite fixture 按当前测试路径隔离
+)
+from tests.unit.services.infrastructure.rollout_context.conftest import (
+    SourceSealCase,
+)
+from tests.unit.services.infrastructure.rollout_context.conftest import (
+    source_seal_case as source_seal_case,  # noqa: PLC0414 - 复用真实 Saver seal fixture
 )
 
 SKILL_URI = "boxteam://workspace/test/resources/skills/demo/SKILL.md"
@@ -131,9 +141,13 @@ async def test_reactor_marks_pending_observation_from_registry_event(
         assert manager.load_skill("demo", mode="snapshot").tracked is False
         assert manager.load_skill("demo", mode="tracked").tracked is True
 
-        # 首次接线建立订阅；已观察 revision 不产生多余 pending。
+        # 首次接线必须对账；消费后没有通知时不再重复排观察。
         assert reactor.sync_sources() == (SKILL_URI,)
         assert reactor.subscribed_uri_count == 1
+        assert manager.pending_observation_count() == 1
+        initial = tuple(reactor.drain())
+        assert len(initial) == 1 and initial[0].revision == registration.revision
+        assert reactor.content_for(initial[0]) == registration.content
         assert manager.pending_observation_count() == 0
 
         # 来源变化：watcher 侧定点刷新发布轻量 change 通知，reactor 只登记
@@ -171,6 +185,8 @@ async def test_reactor_release_stops_delivery_after_scope_close(tmp_path: Path) 
         manager.load_skill("demo", mode="tracked")
         reactor.sync_sources()
         assert registry.observation_channel.subscriber_ids
+        assert len(tuple(reactor.drain())) == 1
+        assert manager.pending_observation_count() == 0
 
         await lifetime_scope.close()
         assert reactor.released is True
@@ -329,7 +345,8 @@ def _overflow_fixture(
 
 
 @pytest.mark.asyncio
-async def test_channel_gap_marks_all_sources_and_recovers(tmp_path: Path) -> None:
+@pytest.mark.parametrize("directory_gap", [False, True])
+async def test_channel_gap_marks_all_sources_and_recovers(tmp_path: Path, directory_gap: bool) -> None:
     """M1 回归：一次溢出不得让 thread 上下文永久静默陈旧。
 
     审查复现场景：某个来源的连续通知塞满订阅者队列后，旧实现把 gap 标记置位
@@ -347,6 +364,8 @@ async def test_channel_gap_marks_all_sources_and_recovers(tmp_path: Path) -> Non
         assert len(reactor.sync_sources()) == skill_count
         subscription = reactor._subscription
         assert subscription is not None
+        assert len(tuple(reactor.drain())) == skill_count
+        assert manager.pending_observation_count() == 0
 
         for index in range(skill_count):
             skill_path = (
@@ -354,6 +373,12 @@ async def test_channel_gap_marks_all_sources_and_recovers(tmp_path: Path) -> Non
             )
             skill_path.write_text(f"changed-{index}\n", encoding="utf-8")
             registry.refresh(uris[index])
+            if directory_gap and index == 0:
+                # gap 即使由目录通知承载，也不能漏掉普通文件的已登记消费者。
+                registry.observation_channel.notify(ResourceObservation(
+                    uri=None, directory_id="skill-directory:" + "0" * 64,
+                    revision=None, available=True,
+                ))
 
         # ①溢出：reactor 消费 gap 后必须标记全部已绑定来源（可能还叠加一条
         # 正常通知的定点标记），而不是只标记 gap 事件自带的单一来源。
@@ -469,3 +494,163 @@ async def test_optional_agents_reactor_and_rebuild_consume_only_published_revisi
     finally:
         await scope.close()
         await watch.shutdown()
+
+
+@dataclass(frozen=True)
+class ColdAgentsSourceCase:
+    manager: ContextSourceManager
+    registry: WorkspaceFileResourceRegistry
+    reactor: ContextSourceReactor
+    published: WorkspaceFileResourceSnapshot
+    baseline_revision: str
+    seal_case: SourceSealCase
+
+
+@pytest.fixture
+async def cold_agents_source_case(
+    request: pytest.FixtureRequest, tmp_path: Path, source_seal_case: SourceSealCase,
+) -> AsyncIterator[ColdAgentsSourceCase]:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    path = workspace / "AGENTS.md"
+    path.write_text("冷启动前的 AGENTS 正文\n", encoding="utf-8")
+    descriptor = ContextSourceDescriptor(
+        source_id="agents:workspace", source_kind="workspace_agents", name="AGENTS.md",
+        description="冷启动指引", internal_locator="AGENTS.md",
+        resource_uri="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
+        root_placement="root_eligible",
+    )
+    watch = WorkspaceFileWatchService(workspace_root=workspace)
+    registry = WorkspaceFileResourceRegistry(
+        workspace_root=workspace, watch_service=watch, project_root=tmp_path,
+    )
+    baseline = registry.register_file(uri=descriptor.resource_uri, path=path, optional=True)
+    assert baseline.available and baseline.revision
+    manager = source_seal_case.manager()
+    manager.register(descriptor, tracking_status="tracked")
+    scope = LifetimeScope("agents-before-restart")
+    reactor = ContextSourceReactor(
+        sources=registry, context_sources=manager, lifetime_scope=scope, reactor_id="agents-before",
+    )
+    try:
+        reactor.sync_sources()
+        for observation in reactor.drain():
+            assert manager.observe(
+                observation.source_id, reactor.content_for(observation), revision=observation.revision,
+            )
+        _receipt, binding = source_seal_case.seal(manager)
+        assert [(item.source_id, item.previous_revision, item.revision) for item in binding.source_revisions] == [
+            (descriptor.source_id, None, baseline.revision),
+        ]
+    finally:
+        await scope.close()
+        await watch.shutdown()
+
+    variant = request.param
+    if variant == "changed":
+        path.write_text("冷启动后的 AGENTS 新正文\n", encoding="utf-8")
+    elif variant in {"absent", "required_unavailable"}:
+        path.unlink()
+    watch = WorkspaceFileWatchService(workspace_root=workspace)
+    registry = WorkspaceFileResourceRegistry(
+        workspace_root=workspace, watch_service=watch, project_root=tmp_path,
+    )
+    # 注册发布发生在新订阅之前，不能靠通知重放取得这次停机变化。
+    published = registry.register_file(
+        uri=descriptor.resource_uri, path=path, optional=variant != "required_unavailable",
+    )
+    manager = source_seal_case.manager()
+    manager.register(descriptor, tracking_status="tracked")
+    assert manager.source_observation_state(descriptor.source_id) == ("tracked", baseline.revision)
+    assert manager.prepare_sources().sources == ()
+    scope = LifetimeScope("agents-after-restart")
+    reactor = ContextSourceReactor(
+        sources=registry, context_sources=manager, lifetime_scope=scope, reactor_id="agents-after",
+    )
+    try:
+        yield ColdAgentsSourceCase(manager, registry, reactor, published, baseline.revision, source_seal_case)
+    finally:
+        await scope.close()
+        await watch.shutdown()
+
+
+@pytest.mark.parametrize("cold_agents_source_case", ["unchanged", "changed", "absent"], indirect=True)
+@pytest.mark.asyncio
+async def test_cold_agents_first_binding_reconciles_published_snapshot(
+    cold_agents_source_case: ColdAgentsSourceCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = cold_agents_source_case
+    source_id = "agents:workspace"
+    published = case.published
+    assert published.available and published.revision
+    before = case.seal_case.saver.load_context_source_control_states(case.seal_case.owner)
+
+    def forbid_source_io(*_args, **_kwargs):
+        raise AssertionError("首绑只排 reconcile；消费与 prepare 只能使用已发布内存 snapshot")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(case.registry, "snapshot", forbid_source_io)
+        assert case.reactor.sync_sources() == (published.uri,)
+        assert case.reactor.sync_sources() == ()
+        assert case.manager.pending_observation_count() == 1
+    with monkeypatch.context() as patch:
+        patch.setattr(case.registry._reconciler._reader, "read", forbid_source_io)
+        patch.setattr(case.registry._reconciler, "reconcile", forbid_source_io)
+        patch.setattr(case.registry, "refresh", forbid_source_io)
+        observed = tuple(case.reactor.drain())
+        assert len(observed) == 1 and observed[0].revision == published.revision
+        changed = case.manager.observe(
+            source_id, case.reactor.content_for(observed[0]), revision=observed[0].revision,
+        )
+        batch = case.manager.prepare_sources()
+        assert [(source.revision, source.content, source.applied_revision) for source in batch.sources] == [
+            (published.revision, published.content, case.baseline_revision),
+        ]
+        pending_control = case.seal_case.saver.load_context_source_control_states(case.seal_case.owner)
+        assert pending_control[0].latest_visible_committed_revision == case.baseline_revision
+        assert pending_control[0].latest_revision == published.revision
+        if published.revision == case.baseline_revision:
+            assert not changed and batch.deltas == ()
+            assert case.manager.prepare_pending() is None
+            assert pending_control == before
+        else:
+            assert changed and len(batch.deltas) == 1
+            delta = batch.deltas[0]
+            assert (delta.kind, delta.previous_revision, delta.revision, delta.content) == (
+                "delta", case.baseline_revision, published.revision, published.content,
+            )
+            receipt, binding = case.seal_case.seal(case.manager)
+            assert receipt.deltas == batch.deltas
+            assert [(item.previous_revision, item.revision) for item in binding.source_revisions] == [
+                (case.baseline_revision, published.revision),
+            ]
+            committed = case.seal_case.saver.load_context_source_control_states(case.seal_case.owner)
+            assert committed[0].latest_visible_committed_revision == committed[0].latest_revision == published.revision
+            assert case.manager.prepare_pending() is None
+        case.reactor.sync_sources()
+        assert case.manager.pending_observation_count() == 0
+        assert tuple(case.reactor.drain()) == ()
+
+
+@pytest.mark.parametrize("cold_agents_source_case", ["required_unavailable", "missing_revision"], indirect=True)
+@pytest.mark.asyncio
+async def test_first_binding_rejects_unusable_published_snapshot(
+    cold_agents_source_case: ColdAgentsSourceCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = cold_agents_source_case
+    before = case.seal_case.saver.load_context_source_control_states(case.seal_case.owner)
+    if case.published.available:
+        snapshot = replace(case.published, revision=None)
+        monkeypatch.setattr(case.registry, "snapshot", lambda _uri: snapshot)
+        expected_error = "来源快照缺少 revision"
+    else:
+        assert case.published.revision is None
+        expected_error = "来源快照不可用"
+    assert case.reactor.sync_sources() == (case.published.uri,)
+    assert case.manager.pending_observation_count() == 1
+    with pytest.raises(RuntimeError, match=expected_error) as failure:
+        tuple(case.reactor.drain())
+    assert "source_id=agents:workspace" in str(failure.value)
+    assert case.published.uri in str(failure.value)
+    assert case.manager.prepare_pending() is None
+    assert case.seal_case.saver.load_context_source_control_states(case.seal_case.owner) == before

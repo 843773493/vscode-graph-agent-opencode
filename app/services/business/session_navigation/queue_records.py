@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from app.schemas.internal_v2.session_navigation.operations import (
     NAVIGATION_MUTATION_TERMINAL_STATES,
     AutoSessionTitleCommand,
+    NavigationDeleteSettlement,
     NavigationQueueCommand,
 )
 
@@ -101,6 +102,15 @@ class NavigationMutationRecord:
     receipt_revision: int
     created_at: str
     updated_at: str
+
+    @property
+    def settlement(self) -> NavigationDeleteSettlement | None:
+        """既有 receipt 行的唯一结算投影，不创建第二份删除状态。"""
+        if self.kind not in ("delete_folder", "delete_session") or self.state != "committed":
+            return None
+        if not self.pending_settlement:
+            return "settled"
+        return "repair_required" if self.error_code == "delete_settlement_repair_required" else "pending"
 
     @property
     def is_terminal(self) -> bool:

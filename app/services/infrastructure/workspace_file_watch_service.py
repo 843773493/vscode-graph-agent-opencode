@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Iterable, Mapping
+import os
+import time
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +51,10 @@ class WorkspaceFileChangeBatch:
     snapshots: tuple[WorkspaceFileListDTO, ...] = ()
 
 
+WorkspaceFileChangeFilter = Callable[[WorkspaceFileChange], bool]
+_WatcherKey = tuple[Path, bool, int | None]
+
+
 @dataclass(slots=True)
 class _SharedWatcher:
     task: asyncio.Task[None]
@@ -57,11 +63,11 @@ class _SharedWatcher:
 
 
 class WorkspaceFileWatchService:
-    """按路径复用底层 watcher，并把变更批量分发给 SSE 订阅者。"""
+    """按路径和监听选项复用底层 watcher，并分发筛选后的变更批次。"""
 
     def __init__(self, *, workspace_root: Path) -> None:
         self._workspace_root = workspace_root.resolve()
-        self._watchers: dict[Path, _SharedWatcher] = {}
+        self._watchers: dict[_WatcherKey, _SharedWatcher] = {}
         self._lock = asyncio.Lock()
 
     def resolve_watch_roots(self, extra_paths: Iterable[str]) -> tuple[Path, ...]:
@@ -90,10 +96,14 @@ class WorkspaceFileWatchService:
         extra_paths: Iterable[str],
         *,
         include_internal_paths: bool = False,
+        recursive: bool = True,
+        change_filter: WorkspaceFileChangeFilter | None = None,
     ) -> AsyncIterator[WorkspaceFileChangeBatch]:
         async for batch in self.subscribe_roots(
             self.resolve_watch_roots(extra_paths),
             include_internal_paths=include_internal_paths,
+            recursive=recursive,
+            change_filter=change_filter,
         ):
             yield batch
 
@@ -102,6 +112,8 @@ class WorkspaceFileWatchService:
         roots: tuple[Path, ...],
         *,
         include_internal_paths: bool = False,
+        recursive: bool = True,
+        change_filter: WorkspaceFileChangeFilter | None = None,
     ) -> AsyncIterator[WorkspaceFileChangeBatch]:
         queue: asyncio.Queue[WorkspaceFileChangeBatch] = asyncio.Queue(
             maxsize=FILE_WATCH_QUEUE_SIZE,
@@ -110,6 +122,8 @@ class WorkspaceFileWatchService:
             roots,
             queue,
             include_internal_paths=include_internal_paths,
+            recursive=recursive,
+            change_filter=change_filter,
         )
         try:
             while True:
@@ -119,16 +133,25 @@ class WorkspaceFileWatchService:
             # 会被二次取消。释放必须屏蔽取消跑完，否则 watchfiles 任务与订阅队列
             # 永久泄漏。
             await run_cleanup_shielded(
-                lambda: self._release(roots, queue)
+                lambda: self._release(
+                    roots, queue, recursive=recursive, change_filter=change_filter,
+                )
             )
 
-    async def wait_until_ready(self, roots: tuple[Path, ...]) -> None:
+    async def wait_until_ready(
+        self,
+        roots: tuple[Path, ...],
+        *,
+        recursive: bool = True,
+        change_filter: WorkspaceFileChangeFilter | None = None,
+    ) -> None:
         """等待指定共享 watcher 已完成首次底层监听初始化。"""
         resolved_roots = tuple(path.resolve() for path in roots)
         for root in resolved_roots:
+            key = self._watcher_key(root, recursive, change_filter)
             while True:
                 async with self._lock:
-                    watcher = self._watchers.get(root)
+                    watcher = self._watchers.get(key)
                 if watcher is None:
                     await asyncio.sleep(0)
                     continue
@@ -157,26 +180,33 @@ class WorkspaceFileWatchService:
         queue: asyncio.Queue[WorkspaceFileChangeBatch],
         *,
         include_internal_paths: bool,
+        recursive: bool = True,
+        change_filter: WorkspaceFileChangeFilter | None = None,
     ) -> None:
         watchers_to_ready: list[_SharedWatcher] = []
         async with self._lock:
             for root in roots:
-                watcher = self._watchers.get(root)
+                resolved_root = root.resolve()
+                key = self._watcher_key(resolved_root, recursive, change_filter)
+                watcher = self._watchers.get(key)
                 if watcher is None or watcher.task.done():
                     if watcher is not None:
                         watcher.task.result()
                     subscribers = {queue: include_internal_paths}
                     ready = asyncio.Event()
                     task = asyncio.create_task(
-                        self._watch_root(root, subscribers, ready),
-                        name=f"boxteam-file-watch:{root}",
+                        self._watch_root(
+                            resolved_root, subscribers, ready,
+                            recursive=recursive, change_filter=change_filter,
+                        ),
+                        name=f"boxteam-file-watch:{resolved_root}",
                     )
                     watcher = _SharedWatcher(
                         task=task,
                         subscribers=subscribers,
                         ready=ready,
                     )
-                    self._watchers[root] = watcher
+                    self._watchers[key] = watcher
                 else:
                     watcher.subscribers[queue] = include_internal_paths
                 watchers_to_ready.append(watcher)
@@ -189,18 +219,22 @@ class WorkspaceFileWatchService:
         self,
         roots: tuple[Path, ...],
         queue: asyncio.Queue[WorkspaceFileChangeBatch],
+        *,
+        recursive: bool = True,
+        change_filter: WorkspaceFileChangeFilter | None = None,
     ) -> None:
         tasks_to_stop: list[asyncio.Task[None]] = []
         async with self._lock:
             for root in roots:
-                watcher = self._watchers.get(root)
+                key = self._watcher_key(root.resolve(), recursive, change_filter)
+                watcher = self._watchers.get(key)
                 if watcher is None:
                     continue
                 watcher.subscribers.pop(queue, None)
                 if watcher.subscribers:
                     continue
-                if self._watchers.get(root) is watcher:
-                    del self._watchers[root]
+                if self._watchers.get(key) is watcher:
+                    del self._watchers[key]
                 if not watcher.task.done():
                     watcher.task.cancel()
                 tasks_to_stop.append(watcher.task)
@@ -213,12 +247,17 @@ class WorkspaceFileWatchService:
         root: Path,
         subscribers: dict[asyncio.Queue[WorkspaceFileChangeBatch], bool],
         ready: asyncio.Event,
+        *,
+        recursive: bool,
+        change_filter: WorkspaceFileChangeFilter | None,
     ) -> None:
+        started = time.monotonic()
         logger.info("开始共享文件监听: root=%s", root)
         try:
             first_iteration = True
             async for raw_changes in awatch(
                 root,
+                recursive=recursive,
                 # 先接收内部资源，再按订阅者过滤；否则 ResourceRegistry
                 # 永远收不到 `.boxteam/skills` 的变化。
                 watch_filter=_RESOURCE_FILE_WATCH_FILTER,
@@ -230,14 +269,24 @@ class WorkspaceFileWatchService:
                 if first_iteration:
                     ready.set()
                     first_iteration = False
+                    logger.info(
+                        "共享文件监听首次 yield ready: workspace_root=%s root=%s elapsed=%.3fs",
+                        self._workspace_root,
+                        root,
+                        time.monotonic() - started,
+                    )
                 changes = tuple(
                     WorkspaceFileChange(
                         kind=self._change_kind(change),
-                        path=str(Path(path).resolve()),
+                        path=os.path.abspath(path),
                     )
                     for change, path in sorted(raw_changes, key=lambda item: item[1])
                 )
                 if changes:
+                    if change_filter is not None:
+                        changes = tuple(change for change in changes if change_filter(change))
+                        if not changes:
+                            continue
                     self._publish(
                         subscribers,
                         WorkspaceFileChangeBatch(changes=changes),
@@ -254,6 +303,14 @@ class WorkspaceFileWatchService:
         finally:
             ready.set()
             logger.info("停止共享文件监听: root=%s", root)
+
+    @staticmethod
+    def _watcher_key(
+        root: Path,
+        recursive: bool,
+        change_filter: WorkspaceFileChangeFilter | None,
+    ) -> _WatcherKey:
+        return (root, recursive, id(change_filter) if change_filter is not None else None)
 
     @staticmethod
     def _publish(
@@ -311,7 +368,7 @@ class WorkspaceFileWatchService:
 
 def _is_path_under(path: str, root: Path) -> bool:
     try:
-        Path(path).resolve().relative_to(root.resolve())
+        Path(os.path.abspath(path)).relative_to(Path(os.path.abspath(root)))
     except ValueError:
         return False
     return True

@@ -24,7 +24,7 @@ from app.core.identifier import (
     to_epoch_ms,
     uuid7_datetime_from_hex,
 )
-from app.core.session_catalog_store import validate_thread_id
+from app.core.session_catalog_store.validators import validate_thread_id
 from app.core.session_control_primitives import validate_thread_creation_key
 from app.core.session_control_store.contracts import ThreadGraphBindingRecord
 from app.core.session_control_store.sql import (
@@ -67,11 +67,15 @@ CREATE TABLE IF NOT EXISTS thread_creation_records (
     catalog_precondition_revision INTEGER NOT NULL,
     collaboration_precondition_revision INTEGER,
     initial_state TEXT NOT NULL CHECK (initial_state IN ('running', 'idle')),
-    admission_intent TEXT NOT NULL,
+    admission_intent TEXT,
     abort_reason TEXT,
     child_created_at TEXT NOT NULL,
     record_created_at TEXT NOT NULL,
-    record_updated_at TEXT NOT NULL
+    record_updated_at TEXT NOT NULL,
+    purpose TEXT NOT NULL CHECK(purpose IN ('task','fork')),
+    request_intent_json TEXT,
+    fork_delivery_request_id TEXT CHECK(fork_delivery_request_id IS NULL OR (purpose='fork' AND length(fork_delivery_request_id)>0)),
+    fork_completion_json TEXT
 )
 """
 
@@ -91,7 +95,8 @@ _THREAD_CREATION_RECORD_COLUMNS = (
     "capability_profile, task_seed, task_reference, "
     "owner_session_lifecycle_generation, catalog_precondition_revision, "
     "collaboration_precondition_revision, initial_state, admission_intent, "
-    "abort_reason, child_created_at, record_created_at, record_updated_at"
+    "abort_reason, child_created_at, record_created_at, record_updated_at, "
+    "purpose, request_intent_json, fork_delivery_request_id, fork_completion_json"
 )
 
 
@@ -130,15 +135,41 @@ class ThreadCreationRecord:
     catalog_precondition_revision: int
     collaboration_precondition_revision: int | None
     initial_state: str
-    admission_intent: str
+    admission_intent: str | None
     abort_reason: str | None
     child_created_at: str
     record_created_at: str
     record_updated_at: str
+    purpose: str = "task"
+    request_intent_json: str | None = None
+    fork_completion_json: str | None = None
+    # 与创建 lease 同事务冻结；传输恢复复用原 Trace，不参与业务 preimage。
+    fork_delivery_request_id: str | None = None
 
 
 class ThreadCreationRecordMixin:
     """thread creation record 的 create-or-get 与行投影方法族。"""
+
+    def list_fork_thread_creations(self, *, state: str | None = None) -> tuple[ThreadCreationRecord, ...]:
+        self._ensure_open()
+        if state not in {None, "preparing", "published", "aborted"}:
+            raise ValueError(f"thread creation state 非法: {state}")
+        rows = self._connection.execute(
+            f"SELECT {_THREAD_CREATION_RECORD_COLUMNS} FROM thread_creation_records "
+            "WHERE purpose='fork'" + (" AND state=?" if state is not None else "")
+            + " ORDER BY thread_creation_idempotency_key",
+            (state,) if state is not None else (),
+        ).fetchall()
+        return tuple(self._thread_creation_record_from_row(row) for row in rows)
+
+    def list_pending_thread_creations(self) -> tuple[ThreadCreationRecord, ...]:
+        """删除排空按原创建记录枚举未终态操作，不生成另一份 lease。"""
+        self._ensure_open()
+        rows = self._connection.execute(
+            f"SELECT {_THREAD_CREATION_RECORD_COLUMNS} FROM thread_creation_records "
+            "WHERE state = 'preparing' ORDER BY thread_creation_idempotency_key"
+        ).fetchall()
+        return tuple(self._thread_creation_record_from_row(row) for row in rows)
 
     # ------------------------------------------------------------------
     # ThreadCreationRecord（8.5-A，R20：child thread 创建流 operation lease）
@@ -229,13 +260,17 @@ class ThreadCreationRecordMixin:
                 else None
             ),
             initial_state=str(row["initial_state"]),
-            admission_intent=str(row["admission_intent"]),
+            admission_intent=str(row["admission_intent"]) if row["admission_intent"] is not None else None,
             abort_reason=(
                 str(row["abort_reason"]) if row["abort_reason"] is not None else None
             ),
             child_created_at=str(row["child_created_at"]),
             record_created_at=str(row["record_created_at"]),
             record_updated_at=str(row["record_updated_at"]),
+            purpose=str(row["purpose"]),
+            request_intent_json=row["request_intent_json"],
+            fork_completion_json=row["fork_completion_json"],
+            fork_delivery_request_id=row["fork_delivery_request_id"],
         )
 
     def create_or_get_thread_creation_record(
@@ -252,6 +287,9 @@ class ThreadCreationRecordMixin:
         task_seed: str | None = None,
         task_reference: str | None = None,
         collaboration_precondition_revision: int | None = None,
+        purpose: str = "task",
+        request_intent_json: str | None = None,
+        fork_delivery_request_id: str | None = None,
     ) -> ThreadCreationRecord:
         """create-or-get ThreadCreationRecord（gate 内短事务，8.5-A）。
 
@@ -283,6 +321,19 @@ class ThreadCreationRecordMixin:
         self._validate_frozen_json_text(capability_profile, "capability_profile")
         self._validate_optional_frozen_json_text(task_seed, "task_seed")
         self._validate_optional_frozen_json_text(task_reference, "task_reference")
+        self._validate_optional_frozen_json_text(request_intent_json, "request_intent_json")
+        if purpose not in {"task", "fork"}:
+            raise ValueError(f"thread creation purpose 非法: {purpose}")
+        if fork_delivery_request_id is not None:
+            if not isinstance(fork_delivery_request_id, str):
+                raise TypeError("fork delivery request_id 必须是字符串")
+            if purpose != "fork" or not fork_delivery_request_id.strip():
+                raise ValueError("只有 fork child 可以冻结非空 delivery request_id")
+        if purpose == "fork" and (initial_state != "idle" or delegation_id is not None
+                                  or task_seed is not None or request_intent_json is None):
+            raise ValueError("fork child 必须 idle、没有 delegation/seed，并冻结完整请求")
+        if purpose == "task" and request_intent_json is not None:
+            raise ValueError("task child 不接受 fork 请求")
         if created_at is not None and not isinstance(created_at, datetime):
             raise TypeError(f"created_at 必须是 datetime: {created_at!r}")
         if thread_id is not None:
@@ -314,8 +365,7 @@ class ThreadCreationRecordMixin:
                 "collaboration_precondition_revision 必须是整数或 None: "
                 f"{collaboration_precondition_revision!r}"
             )
-        self._begin_immediate()
-        try:
+        with self._write_transaction():
             existing = self._fetch_thread_creation_record(
                 self._connection, idempotency_key
             )
@@ -340,6 +390,8 @@ class ThreadCreationRecordMixin:
                         f"requested_thread_id={thread_id!r}"
                     )
                 record = self._thread_creation_record_from_row(existing)
+                if (record.purpose, record.request_intent_json) != (purpose, request_intent_json):
+                    raise RuntimeError("thread creation 同 key 的 purpose/请求意图冲突")
             else:
                 record = self._insert_thread_creation_record(
                     idempotency_key=idempotency_key,
@@ -355,11 +407,10 @@ class ThreadCreationRecordMixin:
                     collaboration_precondition_revision=(
                         collaboration_precondition_revision
                     ),
+                    purpose=purpose,
+                    request_intent_json=request_intent_json,
+                    fork_delivery_request_id=fork_delivery_request_id,
                 )
-        except BaseException:
-            self._connection.execute("ROLLBACK")
-            raise
-        self._connection.execute("COMMIT")
         return record
 
     def _insert_thread_creation_record(
@@ -376,6 +427,9 @@ class ThreadCreationRecordMixin:
         task_seed: str | None,
         task_reference: str | None,
         collaboration_precondition_revision: int | None,
+        purpose: str,
+        request_intent_json: str | None,
+        fork_delivery_request_id: str | None,
     ) -> ThreadCreationRecord:
         """插入路径（事务内先验证后写入；调用方已开写事务）。"""
         # owner fence 必须存在且 active：deleting 的 session 禁止新建
@@ -466,7 +520,7 @@ class ThreadCreationRecordMixin:
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
-        )
+        ) if purpose == "task" else None
         record_created_at = datetime.now(UTC).isoformat()
         # 命名参数逐列对应（避免位置占位符错位）：artifact_manifest/
         # artifact_manifest_hash/abort_reason 三列此处为 NULL，由
@@ -480,7 +534,7 @@ class ThreadCreationRecordMixin:
             ":capability_profile, :task_seed, :task_reference, "
             ":owner_generation, :catalog_revision, :collaboration_revision, "
             ":initial_state, :admission_intent, NULL, :child_created_at, "
-            ":record_created_at, :record_updated_at)",
+            ":record_created_at, :record_updated_at, :purpose, :request_intent_json, :fork_delivery_request_id, NULL)",
             {
                 "idempotency_key": idempotency_key,
                 "preimage_hash": preimage_hash,
@@ -500,6 +554,9 @@ class ThreadCreationRecordMixin:
                 "child_created_at": child_created_at.isoformat(),
                 "record_created_at": record_created_at,
                 "record_updated_at": record_created_at,
+                "purpose": purpose,
+                "request_intent_json": request_intent_json,
+                "fork_delivery_request_id": fork_delivery_request_id,
             },
         )
         row = self._fetch_thread_creation_record(self._connection, idempotency_key)
@@ -510,3 +567,25 @@ class ThreadCreationRecordMixin:
                 f"key={idempotency_key!r}"
             )
         return self._thread_creation_record_from_row(row)
+
+    def freeze_thread_fork_completion(
+        self, idempotency_key: str, *, fork_id: str, materialization_id: str,
+        source_snapshot_sha256: str, target_session_id: str, target_thread_id: str,
+    ) -> None:
+        """fork owner 读回 committed journal 后冻结证明，child 发布只消费该证明。"""
+        proof = json.dumps({"fork_id": fork_id, "materialization_id": materialization_id,
+                            "source_snapshot_sha256": source_snapshot_sha256,
+                            "target_session_id": target_session_id, "target_thread_id": target_thread_id},
+                           ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        with self._write_transaction() as connection:
+            row = self._fetch_thread_creation_record(connection, idempotency_key)
+            if row is None or row["purpose"] != "fork" or row["state"] not in {"preparing", "published"}:
+                raise RuntimeError("fork child completion 缺少有效 creation intent")
+            if row["child_thread_id"] != target_thread_id or not all((fork_id, materialization_id, source_snapshot_sha256, target_session_id)):
+                raise RuntimeError("fork child completion owner/identity 不一致")
+            if row["fork_completion_json"] is not None and row["fork_completion_json"] != proof:
+                raise RuntimeError("fork child completion 冻结证明冲突")
+            connection.execute(
+                "UPDATE thread_creation_records SET fork_completion_json=? WHERE thread_creation_idempotency_key=?",
+                (proof, idempotency_key),
+            )

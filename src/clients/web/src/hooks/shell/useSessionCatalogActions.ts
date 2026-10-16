@@ -1,14 +1,15 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { catalogOutboxParentCreation } from "../../state/session/sessionCatalogOutbox";
 import {
   DEFAULT_SESSION_TITLE,
 } from "../../api";
 import { fetchSessionCatalogSnapshot } from "../../api/session/sessionCatalogOperations";
+import { getSessionForkSourcePoint } from "../../api/session/sessions";
 import { buildSessionCatalogSyncKeys } from "../sessionResourceExplorer/resourceTreeSync";
 import { errorMessage } from "../../utils/errorMessage";
 import { listGatewayWorkspaces } from "../../gatewayApi";
 import { HttpRequestError } from "../../api/http";
-import type { GatewayRuntimeGroupRequest, GatewayUserAccess, GatewayWorkspace, Session } from "../../types/backend";
+import type { GatewayRuntimeGroupRequest, GatewayUserAccess, GatewayWorkspace, Session, SessionForkMode, SessionForkRequest, SessionForkResult, SessionForkSourcePoint } from "../../types/backend";
 import type { SessionCatalogOutboxRuntime } from "../session/sessionCatalogOutboxRuntime";
 import { requireGatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 
@@ -17,6 +18,25 @@ export interface SessionNameDialogState {
   workspaceId: string;
   initialTitle: string;
 }
+
+export interface SessionForkDialogState {
+  sourceWorkspaceId: string;
+  sourceSessionId: string;
+  sourceTitle: string | null;
+  sourceThreadId: string | undefined;
+  sourceAnchorItemId: string | null;
+  mode: SessionForkMode;
+  anchorMode: "inclusive" | "before";
+  targetContainerUri: string;
+  idempotencyKey: string;
+  point: SessionForkSourcePoint | null;
+  request: SessionForkRequest | null;
+  loading: boolean;
+  submitting: boolean;
+  error: string | null;
+}
+
+export type SessionForkDialogSelection = Pick<SessionForkDialogState, "mode" | "anchorMode" | "targetContainerUri">;
 
 interface SessionCatalogActionsInput {
   apiPort: number;
@@ -53,7 +73,10 @@ interface SessionCatalogActionsInput {
   forkSessionContext: (
     workspaceId: string,
     sourceSessionId: string,
-  ) => Promise<void>;
+    request: SessionForkRequest,
+  ) => Promise<SessionForkResult>;
+  readSessionSelectionIntent: () => number;
+  onForkCreated?: (workspaceId: string, result: SessionForkResult, selectionIntent: number) => Promise<void>;
   setSessionParent: (
     workspaceId: string,
     sessionId: string,
@@ -82,11 +105,15 @@ export function useSessionCatalogActions({
   deleteSession,
   renameSession,
   forkSessionContext,
+  onForkCreated,
+  readSessionSelectionIntent,
   setSessionParent,
 }: SessionCatalogActionsInput) {
   const [nameDialog, setNameDialog] = useState<SessionNameDialogState | null>(null);
   const [nameDialogSubmitting, setNameDialogSubmitting] = useState(false);
   const [nameDialogError, setNameDialogError] = useState<string | null>(null);
+  const [forkDialog, setForkDialog] = useState<SessionForkDialogState | null>(null);
+  const forkDialogRead = useRef(0);
   const [sessionCatalogRefreshVersions, setSessionCatalogRefreshVersions] =
     useState<ReadonlyMap<string, number>>(new Map());
 
@@ -161,11 +188,7 @@ export function useSessionCatalogActions({
         parentCreatedByOperationId: parent?.createdBy },
       { baseCatalogRevision: catalog.catalog_revision },
     );
-    if (submitted.dispatchOutcome === "accepted") {
-      setStatus("会话文件夹已持久受理，等待提交");
-    } else if (submitted.dispatchOutcome === "unknown") {
-      setStatus("会话文件夹状态待确认，保留本地待同步变更");
-    }
+    setStatus("会话文件夹已保存本地待同步变更，等待提交");
     invalidateSessionCatalog(workspaceId);
     void runtime.waitForTerminal(handle, submitted.operationId)
       .then(() => invalidateSessionCatalog(workspaceId))
@@ -192,6 +215,7 @@ export function useSessionCatalogActions({
     await openWorkspaceSession(workspaceId, sessionId);
   };
   const removeWorkspace = (workspaceId: string, workspaceName: string) => {
+    let delegatedRemovalError: unknown;
     void (async () => {
       let groupRequest: GatewayRuntimeGroupRequest | undefined;
       let impact = "";
@@ -202,7 +226,10 @@ export function useSessionCatalogActions({
         if (!target?.managed) throw new Error("工作区已变化，请刷新后重新删除");
         if (target.backend_generation) {
           const members = target.affected_workspace_ids;
-          if (!members.length || !members.includes(workspaceId)) throw new Error("Backend 完整成员合同缺失");
+          if (!members.length || !members.includes(workspaceId)
+            || new Set(members).size !== members.length) {
+            throw new Error("Backend 完整成员合同缺失");
+          }
           groupRequest = {
             expected_backend_generation: target.backend_generation,
             expected_workspace_ids: members,
@@ -226,17 +253,27 @@ export function useSessionCatalogActions({
       });
       if (!confirmed) return;
       try {
-        await removeGatewayWorkspace(workspaceId, groupRequest);
+        try {
+          await removeGatewayWorkspace(workspaceId, groupRequest);
+        } catch (error) {
+          delegatedRemovalError = error;
+          throw error;
+        }
       } catch (error) {
         if (!(error instanceof HttpRequestError) || error.status !== 409 || !groupRequest
           || typeof error.detail !== "object" || error.detail === null
           || !("status" in error.detail) || error.detail.status !== "blocked"
           || !("blockers" in error.detail) || !Array.isArray(error.detail.blockers)) throw error;
+        const affectedWorkspaceIds = "affected_workspace_ids" in error.detail
+          && Array.isArray(error.detail.affected_workspace_ids)
+          ? error.detail.affected_workspace_ids
+          : null;
         if (!("workspace_id" in error.detail) || error.detail.workspace_id !== workspaceId
           || !("backend_generation" in error.detail) || error.detail.backend_generation !== groupRequest.expected_backend_generation
-          || !("affected_workspace_ids" in error.detail) || !Array.isArray(error.detail.affected_workspace_ids)
-          || error.detail.affected_workspace_ids.length !== groupRequest.expected_workspace_ids.length
-          || error.detail.affected_workspace_ids.some((id: unknown) => typeof id !== "string" || !groupRequest.expected_workspace_ids.includes(id))) {
+          || !affectedWorkspaceIds
+          || affectedWorkspaceIds.length !== groupRequest.expected_workspace_ids.length
+          || new Set(affectedWorkspaceIds).size !== groupRequest.expected_workspace_ids.length
+          || groupRequest.expected_workspace_ids.some((id) => !affectedWorkspaceIds.includes(id))) {
           throw new Error("删除阻塞回执与已确认的 Backend 完整合同不匹配");
         }
         const blockers = error.detail.blockers.map((blocker: unknown) => {
@@ -252,10 +289,19 @@ export function useSessionCatalogActions({
           confirmText: "中断任务并删除",
           danger: true,
         });
-        if (forceConfirmed) await removeGatewayWorkspace(workspaceId, groupRequest, true);
+        if (forceConfirmed) {
+          try {
+            await removeGatewayWorkspace(workspaceId, groupRequest, true);
+          } catch (forceError) {
+            delegatedRemovalError = forceError;
+            throw forceError;
+          }
+        }
       }
     })().catch((error: unknown) => {
-      setStatus(`删除工作区失败: ${errorMessage(error)}`);
+      if (error !== delegatedRemovalError) {
+        setStatus(`删除工作区失败: ${errorMessage(error)}`);
+      }
     });
   };
   const openRenameDialog = (
@@ -300,9 +346,100 @@ export function useSessionCatalogActions({
     await setSessionParent(workspaceId, sessionId, parentSessionId);
     invalidateSessionCatalog(workspaceId);
   };
-  const forkSession = async (workspaceId: string, sourceSessionId: string) => {
-    await forkSessionContext(workspaceId, sourceSessionId);
-    invalidateSessionCatalog(workspaceId);
+  const forkSession = async (
+    workspaceId: string, sourceSessionId: string,
+    selection: {
+      threadId?: string; turnId?: string; itemId?: string;
+      sourceViewId?: string; sourceViewRevision?: number;
+    } = {},
+  ) => {
+    const read = ++forkDialogRead.current;
+    setForkDialog({
+      sourceWorkspaceId: workspaceId, sourceSessionId,
+      sourceTitle: sessionsByWorkspace.get(workspaceId)?.find((session) => session.session_id === sourceSessionId)?.title ?? null,
+      sourceThreadId: selection.threadId, sourceAnchorItemId: selection.itemId ?? null,
+      mode: "view_prefix_fork", anchorMode: "inclusive", targetContainerUri: "",
+      idempotencyKey: crypto.randomUUID(), point: null,
+      request: null, loading: true, submitting: false, error: null,
+    });
+    try {
+      const point = await getSessionForkSourcePoint(apiPort, sourceSessionId, selection, workspaceId);
+      if (forkDialogRead.current !== read) return;
+      if (selection.sourceViewId !== undefined && (
+        point.source_view_id !== selection.sourceViewId
+        || point.source_view_revision !== selection.sourceViewRevision
+        || selection.itemId !== undefined && point.anchor_item_id !== selection.itemId
+      )) throw new Error("来源回执与实际展示快照不一致");
+      setForkDialog((prior) => prior ? {
+        ...prior, point, sourceAnchorItemId: point.anchor_item_id ?? null,
+        targetContainerUri: point.child_container_uri, loading: false,
+      } : null);
+    } catch (error) {
+      if (forkDialogRead.current !== read) return;
+      setForkDialog((prior) => prior ? { ...prior, loading: false, error: errorMessage(error) } : null);
+    }
+  };
+  const updateForkDialogSelection = async (change: Partial<SessionForkDialogSelection>) => {
+    if (!forkDialog?.point || forkDialog.submitting || forkDialog.request) return;
+    const sourcePoint = forkDialog.point;
+    const prior = forkDialog;
+    const next = { ...prior, ...change, loading: true, error: null };
+    const read = ++forkDialogRead.current;
+    setForkDialog(next);
+    try {
+      const point = await getSessionForkSourcePoint(apiPort, prior.sourceSessionId, {
+        threadId: prior.sourceThreadId,
+        itemId: next.mode === "view_prefix_fork" ? prior.sourceAnchorItemId ?? undefined : undefined,
+        sourceViewId: sourcePoint.source_view_id, sourceViewRevision: sourcePoint.source_view_revision,
+        mode: next.mode, anchorMode: next.anchorMode,
+      }, prior.sourceWorkspaceId);
+      if (forkDialogRead.current !== read) return;
+      if (point.source_uri !== sourcePoint.source_uri
+        || point.source_view_id !== sourcePoint.source_view_id
+        || point.source_view_revision !== sourcePoint.source_view_revision
+        || next.mode === "view_prefix_fork" && (point.anchor_item_id ?? null) !== prior.sourceAnchorItemId
+        || next.mode === "full_rollout_copy" && point.anchor_item_id != null
+        || point.resource_mode !== next.mode || point.resource_anchor_mode !== next.anchorMode) {
+        throw new Error("附件候选回执与冻结的来源或当前复制范围不一致");
+      }
+      setForkDialog({ ...next, point, loading: false });
+    } catch (error) {
+      if (forkDialogRead.current !== read) return;
+      setForkDialog({ ...next, loading: false, error: errorMessage(error) });
+    }
+  };
+  const closeForkDialog = () => {
+    if (forkDialog?.submitting) return;
+    forkDialogRead.current += 1;
+    setForkDialog(null);
+  };
+  const submitForkDialog = async (request: SessionForkRequest) => {
+    if (!forkDialog?.point || forkDialog.submitting || forkDialog.loading
+      || (!forkDialog.request && (forkDialog.error
+        || forkDialog.mode === "view_prefix_fork" && !forkDialog.point.anchor_item_id
+        || forkDialog.point.resource_mode !== forkDialog.mode
+        || forkDialog.point.resource_anchor_mode !== forkDialog.anchorMode))) return;
+    const dialog = forkDialog;
+    const frozen = dialog.request ?? request;
+    setForkDialog({ ...dialog, request: frozen, submitting: true, error: null });
+    try {
+      const operation = forkSessionContext(dialog.sourceWorkspaceId, dialog.sourceSessionId, frozen);
+      const selectionIntent = readSessionSelectionIntent();
+      const result = await operation;
+      invalidateSessionCatalog(dialog.sourceWorkspaceId);
+      await onForkCreated?.(dialog.sourceWorkspaceId, result, selectionIntent);
+      const failures = result.resources.filter((resource) => resource.owner_reference
+        && resource.action !== "omit" && resource.availability === "unavailable");
+      if (failures.length > 0) {
+        setForkDialog({ ...dialog, request: frozen, submitting: false,
+          error: `目标已创建（${result.thread_id}），运行资源关联失败或待核实：${failures.map((resource) =>
+            `${resource.owner_reference!.resource_id}：${resource.reason ?? "原 owner 尚未核实"}`).join("；")}` });
+      } else {
+        setForkDialog(null);
+      }
+    } catch (error) {
+      setForkDialog({ ...dialog, request: frozen, submitting: false, error: errorMessage(error) });
+    }
   };
   const closeNameDialog = () => {
     if (nameDialogSubmitting) {
@@ -334,6 +471,10 @@ export function useSessionCatalogActions({
   };
 
   return {
+    forkDialog,
+    updateForkDialogSelection,
+    closeForkDialog,
+    submitForkDialog,
     nameDialog,
     nameDialogSubmitting,
     nameDialogError,

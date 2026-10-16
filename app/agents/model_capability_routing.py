@@ -19,7 +19,9 @@ from app.agents.provider_capabilities import (
     detect_required_capabilities_from_messages,
     parse_provider_capabilities,
 )
+from app.core.model_request_context import current_summary_candidate
 from app.core.turn_execution_scope import ScopeCancelledError
+from app.runtime.provider_errors import is_provider_failure
 
 logger = logging.getLogger(__name__)
 
@@ -60,16 +62,11 @@ def _response_has_visible_output(
     return False
 
 
-def _validate_visible_response(
-    candidate: ProviderModelCandidate,
-    response: ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any],
-) -> ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any]:
-    if not _response_has_visible_output(response):
-        raise RuntimeError(
-            "模型只返回内部推理，没有用户可见正文或工具调用。"
-            f" provider_id={candidate.provider_id} model={candidate.model_id}"
-        )
-    return response
+def _visible_output_error(candidate: ProviderModelCandidate) -> RuntimeError:
+    return RuntimeError(
+        "模型只返回内部推理，没有用户可见正文或工具调用。"
+        f" provider_id={candidate.provider_id} model={candidate.model_id}"
+    )
 
 
 def _failure_payload(
@@ -126,17 +123,14 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
         for index, candidate in enumerate(candidates):
             try:
                 response = handler(request.override(model=candidate.model))
-                # 最后候选的正常响应交执行循环完成空回复限次校验，
-                # 不把业务重试误归为 Provider 请求故障。
-                if index == len(candidates) - 1:
-                    return response
-                return _validate_visible_response(candidate, response)
             except ScopeCancelledError:
                 # 父 turn 的用户中断、Job 总超时和内部执行取消都已经是
                 # 明确的执行边界，不能被 fallback 当成 provider 失败再次发起请求。
-                # 候选模型自己的可重试失败仍通过普通 Exception 走 fallback。
+                # 只有适配器标记的上游请求/流迭代异常才能触发 fallback。
                 raise
             except Exception as error:
+                if not is_provider_failure(error):
+                    raise
                 last_error = error
                 logger.exception(
                     "模型候选调用失败，准备尝试 fallback: provider_id=%s model=%s",
@@ -147,6 +141,22 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
                     MODEL_FAILED_CUSTOM_EVENT,
                     _failure_payload(candidate, error),
                 )
+                continue
+
+            # 摘要响应由摘要 owner 决定无工具/最小系统重试，避免路由先吞掉空正文。
+            if current_summary_candidate() is not None or index == len(candidates) - 1 or _response_has_visible_output(response):
+                return response
+            error = _visible_output_error(candidate)
+            last_error = error
+            logger.warning(
+                "模型候选只返回内部推理，准备尝试 fallback: provider_id=%s model=%s",
+                candidate.provider_id,
+                candidate.model_id,
+            )
+            dispatch_custom_event(
+                MODEL_FAILED_CUSTOM_EVENT,
+                _failure_payload(candidate, error),
+            )
         if last_error is None:
             raise RuntimeError("模型能力路由没有产生可执行候选")
         raise last_error
@@ -161,16 +171,13 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
         for index, candidate in enumerate(candidates):
             try:
                 response = await handler(request.override(model=candidate.model))
-                # 有后续候选时仍保留内部推理无正文的 fallback 规则。
-                # 最后候选由执行循环在原 execution 内决定重试或失败。
-                if index == len(candidates) - 1:
-                    return response
-                return _validate_visible_response(candidate, response)
             except ScopeCancelledError:
                 # 取消不是 provider 能力降级；保留原始 reason 交给 Job/stream
                 # 状态机分类，避免 backup_4 覆盖用户选择或把 Job 继续拖成 running。
                 raise
             except Exception as error:
+                if not is_provider_failure(error):
+                    raise
                 last_error = error
                 logger.exception(
                     "模型候选调用失败，准备尝试 fallback: provider_id=%s model=%s",
@@ -181,6 +188,22 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
                     MODEL_FAILED_CUSTOM_EVENT,
                     _failure_payload(candidate, error),
                 )
+                continue
+
+            # 摘要响应由摘要 owner 决定无工具/最小系统重试，避免路由先吞掉空正文。
+            if current_summary_candidate() is not None or index == len(candidates) - 1 or _response_has_visible_output(response):
+                return response
+            error = _visible_output_error(candidate)
+            last_error = error
+            logger.warning(
+                "模型候选只返回内部推理，准备尝试 fallback: provider_id=%s model=%s",
+                candidate.provider_id,
+                candidate.model_id,
+            )
+            await adispatch_custom_event(
+                MODEL_FAILED_CUSTOM_EVENT,
+                _failure_payload(candidate, error),
+            )
         if last_error is None:
             raise RuntimeError("模型能力路由没有产生可执行候选")
         raise last_error

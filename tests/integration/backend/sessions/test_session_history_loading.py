@@ -64,7 +64,7 @@ def _turn_messages(
             "message_id": f"user-{turn_index:04d}",
             "created_at": stamp,
             "updated_at": stamp,
-            "message_metadata": {"turn_id": turn_id, "job_id": turn_id},
+            "message_metadata": {"turn_id": turn_id, "job_id": f"history-job:{turn_id}"},
         },
     )
     call = AIMessage(
@@ -152,21 +152,25 @@ def _turn_messages(
 
 @contextmanager
 def _history_user_execution(
+    prepare_execution,
     saver: RolloutCheckpointSaver,
     session_id: str,
     user: HumanMessage,
     turn_id: str,
+    *,
+    execution_id: str | None = None,
 ) -> Iterator[None]:
     """经真实用户准入绑定历史 fixture 的 checkpoint writer。"""
     owner = saver.forks.source.resolve_main_thread_owner(session_id)
     payload = user_input_payload(user.content, user.response_metadata.get("attachments"))
-    execution_id = f"history-execution:{turn_id}"
+    if execution_id is None:
+        execution_id = f"history-execution:{turn_id}"
     saver.accept_turn(
         session_id,
         thread_id=owner.thread_id,
         accepted_ingress_id=user.id,
         acceptance_idempotency_key=f"history-acceptance:{user.id}",
-        job_id=turn_id,
+        job_id=f"history-job:{turn_id}",
         admission_idempotency_key=f"history-admission:{turn_id}",
         turn_id=turn_id,
         root_item_id=f"item-{user.id}",
@@ -182,10 +186,12 @@ def _history_user_execution(
         session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id),
         execution_admission_scope(admission, langgraph_thread_id=owner.thread_id),
     ):
+        prepare_execution(saver, key=f"history-create:{execution_id}")
         yield
 
 
 def _seed_rollout(
+    prepare_execution,
     workspace_root: Path,
     session_id: str,
     *,
@@ -200,57 +206,29 @@ def _seed_rollout(
     all_messages: list[object] = []
     for turn_index in range(1, count + 1):
         messages = _turn_messages(
-            turn_index,
-            tool_result_size=tool_result_size,
-            tool_count=tool_count,
+            turn_index, tool_result_size=tool_result_size, tool_count=tool_count,
         )
-        user = messages[0]
-        execution_id = f"execution-{turn_index:04d}"
         turn_id = f"job-{turn_index:04d}"
-        saver.accept_turn(
-            session_id,
-            thread_id=thread_id,
-            accepted_ingress_id=user.id,
-            acceptance_idempotency_key=f"acceptance:{user.id}",
-            job_id=turn_id,
-            admission_idempotency_key=f"admission:{turn_id}",
-            turn_id=turn_id,
-            root_item_id=f"item-{user.id}",
-            payload=user.content,
-            initial_execution_id=execution_id,
-            extensions=message_annotations(user.response_metadata),
-        )
         all_messages.extend(messages)
-        admission = saver.execution_admission(
-            session_id, thread_id=thread_id, execution_id=execution_id
-        )
-        with (
-            session_thread_owner_scope(
-                MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id
-            ),
-            execution_admission_scope(admission, langgraph_thread_id=thread_id),
+        with _history_user_execution(
+            prepare_execution, saver, session_id, messages[0], turn_id,
+            execution_id=f"execution-{turn_index:04d}",
         ):
             config = saver.put(
                 config,
                 checkpoint_fixture(
-                    f"checkpoint-{turn_index:04d}",
-                    all_messages,
+                    f"checkpoint-{turn_index:04d}", all_messages,
                     channel_version=turn_index,
                 ),
                 {"source": "deterministic-rollout-stub", "turn": turn_index},
                 {"messages": str(turn_index)},
             )
             saver.finalize_turn(
-                session_id=session_id,
-                thread_id=thread_id,
-                turn_id=turn_id,
+                session_id=session_id, thread_id=thread_id, turn_id=turn_id,
                 final_message_id=f"assistant-final-{turn_index:04d}",
             )
-    session_dir = get_session_path_resolver(sessions_dir).resolve_session_node(
-        session_id
-    )
+    session_dir = get_session_path_resolver(sessions_dir).resolve_session_node(session_id)
     return session_dir / "rollout"
-
 
 async def _load_history(
     client: httpx.AsyncClient,
@@ -271,9 +249,10 @@ async def _load_history(
 async def test_history_loads_rollout_summary_and_tool_details(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
+    frozen_provider_prepare,
 ) -> None:
     session_id = await create_session(integration_client, "rollout 历史投影")
-    rollout_root = _seed_rollout(
+    rollout_root = _seed_rollout(frozen_provider_prepare,
         Path(integration_workspace_root_path),
         session_id,
         count=24,
@@ -288,6 +267,8 @@ async def test_history_loads_rollout_summary_and_tool_details(
     assert bootstrap_response.status_code == 200, bootstrap_response.text
     bootstrap = bootstrap_response.json()["data"]
     assert bootstrap["latest_turn"]["ordinal"] == 24
+    assert bootstrap["latest_turn"]["turn_id"] == "job-0024"
+    assert bootstrap["latest_turn"]["job_id"] == "history-job:job-0024"
     assert bootstrap["older_cursor"]
 
     summary = await _load_history(
@@ -306,6 +287,8 @@ async def test_history_loads_rollout_summary_and_tool_details(
         if part["kind"] in {"tool_call", "tool_result"}
     )
     latest = summary["items"][0]
+    assert latest["job_id"] == "history-job:job-0024"
+    assert authoritative_summary["job_id"] == latest["job_id"]
     assert latest["user_messages"][0]["content"] == "用户问题 24"
     assert latest["user_messages"][0]["metadata"] == {}
     assert latest["final_response"] == "模型最终响应 24"
@@ -326,6 +309,7 @@ async def test_history_loads_rollout_summary_and_tool_details(
         part["source"]["item_id"] for part in latest["response_parts"]
     )
     assert len(latest["items"]) == 2
+    assert all(item["job_id"] == latest["job_id"] for item in latest["items"])
     assert all(item["raw"] == {} for item in latest["items"])
     assert "encrypted-0024" not in json.dumps(latest, ensure_ascii=False)
 
@@ -424,6 +408,7 @@ async def test_history_loads_rollout_summary_and_tool_details(
 async def test_history_user_projection_keeps_canonical_preview_out_of_display_content(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
+    frozen_provider_prepare,
 ) -> None:
     session_id = await create_session(integration_client, "用户附件 canonical 投影")
     timestamp = "2026-01-01T00:01:00+00:00"
@@ -434,13 +419,13 @@ async def test_history_user_projection_keeps_canonical_preview_out_of_display_co
             {"type": "text", "text": "请检查图片"},
             {
                 "type": "text",
-                "text": f"<attachment path='.boxteam/sessions/{session_id}/attachments/preview.png'>",
+                "text": f'<attachment id="{file_id}" path="{file_id}">',
                 "metadata": {
                     "origin": "generated",
                     "kind": "attachment_manifest",
                     "schema_version": 1,
                     "file_id": file_id,
-                    "path": f".boxteam/sessions/{session_id}/attachments/preview.png",
+                    "path": file_id,
                 },
             },
             {
@@ -453,6 +438,7 @@ async def test_history_user_projection_keeps_canonical_preview_out_of_display_co
                     "kind": "attachment_preview",
                     "schema_version": 1,
                     "file_id": file_id,
+                    "path": file_id,
                 },
             },
         ],
@@ -462,7 +448,7 @@ async def test_history_user_projection_keeps_canonical_preview_out_of_display_co
             "updated_at": timestamp,
             "message_metadata": {
                 "turn_id": "job-attachment-projection",
-                "job_id": "job-attachment-projection",
+                "job_id": "history-job:job-attachment-projection",
             },
             "attachments": [
                 {
@@ -486,7 +472,7 @@ async def test_history_user_projection_keeps_canonical_preview_out_of_display_co
     sessions_dir = Path(integration_workspace_root_path) / ".boxteam" / "sessions"
     saver = RolloutCheckpointSaver(sessions_dir)
     owner = saver.forks.source.resolve_main_thread_owner(session_id)
-    with _history_user_execution(saver, session_id, user, "job-attachment-projection"):
+    with _history_user_execution(frozen_provider_prepare, saver, session_id, user, "job-attachment-projection"):
         saver.put(
             build_checkpoint_config(owner.thread_id),
             checkpoint_fixture(
@@ -497,7 +483,7 @@ async def test_history_user_projection_keeps_canonical_preview_out_of_display_co
             {"source": "attachment-projection-test"},
             {"messages": "1"},
         )
-    with _history_user_execution(saver, session_id, user, "job-attachment-projection"):
+    with _history_user_execution(frozen_provider_prepare, saver, session_id, user, "job-attachment-projection"):
         saver.finalize_turn(
             session_id=session_id,
             thread_id=owner.thread_id,
@@ -518,6 +504,7 @@ async def test_history_user_projection_keeps_canonical_preview_out_of_display_co
             "file_id": file_id,
             "name": "preview.png",
             "content_type": "image/png",
+            "availability": None,
         }
     ]
     assert "attachments" not in user_payload["metadata"]
@@ -543,9 +530,10 @@ async def test_history_tool_selector_only_materializes_requested_tool(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
     monkeypatch: pytest.MonkeyPatch,
+    frozen_provider_prepare,
 ) -> None:
     session_id = await create_session(integration_client, "定点工具详情")
-    _seed_rollout(
+    _seed_rollout(frozen_provider_prepare,
         Path(integration_workspace_root_path),
         session_id,
         count=1,
@@ -605,8 +593,11 @@ async def test_history_tool_selector_only_materializes_requested_tool(
     } == {"call-0001-1"}
     assert len(detail["items"]) == 2
     assert all(
-        item["part_id"] == "call-0001-1" for item in detail["items"]
+        item["part_id"] == "model-call-0001:tool-call:call-0001-1"
+        for item in detail["items"]
     )
+    assert detail["items"][0]["raw"]["payload"]["id"] == "call-0001-1"
+    assert detail["items"][1]["raw"]["payload"]["tool_call_id"] == "call-0001-1"
     assert detail["items"][0]["raw"]["payload"]["args"]["path"] == (
         "fixture/0001-1.json"
     )
@@ -618,6 +609,7 @@ async def test_history_tool_selector_only_materializes_requested_tool(
 async def test_history_tool_selector_accepts_model_call_scoped_tool_call_id(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
+    frozen_provider_prepare,
 ) -> None:
     """定点详情携带 model-call scoped ID 时也必须命中 SQLite 原始 call 行。
 
@@ -626,7 +618,7 @@ async def test_history_tool_selector_accepts_model_call_scoped_tool_call_id(
     定点请求会查不到任何记录，工具参数/结果在历史上静默为空。
     """
     session_id = await create_session(integration_client, "scoped 工具详情")
-    _seed_rollout(
+    _seed_rollout(frozen_provider_prepare,
         Path(integration_workspace_root_path), session_id, count=1, tool_count=2
     )
 
@@ -664,6 +656,7 @@ async def test_history_deduplicates_final_checkpoint_reasoning_by_part_ref(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
     history_catalog_copy: sqlite3.Connection,
+    frozen_provider_prepare,
 ) -> None:
     session_id = await create_session(
         integration_client,
@@ -691,7 +684,7 @@ async def test_history_deduplicates_final_checkpoint_reasoning_by_part_ref(
                 "message_id": "user-shared-reasoning",
                 "created_at": stamp,
                 "updated_at": stamp,
-                "message_metadata": {"turn_id": turn_id, "job_id": turn_id},
+                "message_metadata": {"turn_id": turn_id, "job_id": f"history-job:{turn_id}"},
             },
         ),
         AIMessage(
@@ -745,7 +738,7 @@ async def test_history_deduplicates_final_checkpoint_reasoning_by_part_ref(
     )
     saver = RolloutCheckpointSaver(sessions_dir)
     thread_id = saver.forks.source.resolve_main_thread_owner(session_id).thread_id
-    with _history_user_execution(saver, session_id, messages[0], turn_id):
+    with _history_user_execution(frozen_provider_prepare, saver, session_id, messages[0], turn_id):
         config = saver.put(
             build_checkpoint_config(thread_id),
             checkpoint_fixture("checkpoint-shared-reasoning", messages, channel_version=1),
@@ -753,7 +746,7 @@ async def test_history_deduplicates_final_checkpoint_reasoning_by_part_ref(
             {"messages": "1"},
         )
     assert config["configurable"]["checkpoint_id"] == "checkpoint-shared-reasoning"
-    with _history_user_execution(saver, session_id, messages[0], turn_id):
+    with _history_user_execution(frozen_provider_prepare, saver, session_id, messages[0], turn_id):
         saver.finalize_turn(
             session_id=session_id,
             thread_id=thread_id,
@@ -798,7 +791,9 @@ async def test_history_deduplicates_final_checkpoint_reasoning_by_part_ref(
             ("同一条持久 reasoning", reasoning_sequence),
         )
         copied = replace(snapshot, connection=history_catalog_copy)
-        projection = storage.storage.read_turn_projections(copied, [turn_id])[turn_id]
+        view_id = storage.storage._active_context_view_id(copied.connection, copied.checkpoint_ns)
+        assert view_id is not None
+        projection = storage.storage.read_turn_projections(copied, view_id, [turn_id])[turn_id]
 
     assert [item["kind"] for item in projection["activity_items"]] == [
         "reasoning",
@@ -817,9 +812,10 @@ async def test_history_deduplicates_final_checkpoint_reasoning_by_part_ref(
 async def test_rollout_history_cursor_windows_are_complete_and_unique(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
+    frozen_provider_prepare,
 ) -> None:
     session_id = await create_session(integration_client, "rollout 游标")
-    _seed_rollout(Path(integration_workspace_root_path), session_id, count=24)
+    _seed_rollout(frozen_provider_prepare, Path(integration_workspace_root_path), session_id, count=24)
 
     tail = await _load_history(
         integration_client,
@@ -908,9 +904,10 @@ async def test_rollout_history_cursor_windows_are_complete_and_unique(
 async def test_rollout_history_around_anchor_returns_bidirectional_cursors(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
+    frozen_provider_prepare,
 ) -> None:
     session_id = await create_session(integration_client, "around 锚点双向窗口")
-    _seed_rollout(Path(integration_workspace_root_path), session_id, count=32)
+    _seed_rollout(frozen_provider_prepare, Path(integration_workspace_root_path), session_id, count=32)
 
     around = await _load_history(
         integration_client,
@@ -974,9 +971,10 @@ async def test_rollout_history_around_anchor_returns_bidirectional_cursors(
 async def test_default_history_window_loads_five_turns_and_three_turn_anchor_sides(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
+    frozen_provider_prepare,
 ) -> None:
     session_id = await create_session(integration_client, "默认历史窗口")
-    _seed_rollout(Path(integration_workspace_root_path), session_id, count=24)
+    _seed_rollout(frozen_provider_prepare, Path(integration_workspace_root_path), session_id, count=24)
 
     tail = await _load_history(
         integration_client,
@@ -1037,6 +1035,7 @@ async def test_history_does_not_fallback_to_old_trace_projection(
 async def test_turn_finalize_pointer_wins_over_heuristic_final_response(
     integration_workspace_root_path: str,
     integration_client: httpx.AsyncClient,
+    frozen_provider_prepare,
 ) -> None:
     session_id = await create_session(integration_client, "finalization 指针优先")
     sessions_dir = Path(integration_workspace_root_path) / ".boxteam" / "sessions"
@@ -1049,7 +1048,7 @@ async def test_turn_finalize_pointer_wins_over_heuristic_final_response(
         response_metadata={
             "message_metadata": {
                 "turn_id": "job-finalization",
-                "job_id": "job-finalization",
+                "job_id": "history-job:job-finalization",
             }
         },
     )
@@ -1057,7 +1056,7 @@ async def test_turn_finalize_pointer_wins_over_heuristic_final_response(
     later_unmarked = AIMessage(
         id="assistant-later-unmarked", content="后写的未标记消息"
     )
-    with _history_user_execution(saver, session_id, user, "job-finalization"):
+    with _history_user_execution(frozen_provider_prepare, saver, session_id, user, "job-finalization"):
         saver.put(
             config,
             checkpoint_fixture(
@@ -1068,7 +1067,7 @@ async def test_turn_finalize_pointer_wins_over_heuristic_final_response(
             {"source": "deterministic-finalization-stub"},
             {"messages": "1"},
         )
-    with _history_user_execution(saver, session_id, user, "job-finalization"):
+    with _history_user_execution(frozen_provider_prepare, saver, session_id, user, "job-finalization"):
         saver.finalize_turn(
             session_id=session_id,
             thread_id=thread_id,
@@ -1091,6 +1090,7 @@ async def test_turn_finalize_pointer_wins_over_heuristic_final_response(
 async def test_finalization_window_keeps_unfinalized_history_readable(
     integration_workspace_root_path: str,
     integration_client: httpx.AsyncClient,
+    frozen_provider_prepare,
 ) -> None:
     session_id = await create_session(integration_client, "finalization 崩溃窗口")
     sessions_dir = Path(integration_workspace_root_path) / ".boxteam" / "sessions"
@@ -1101,10 +1101,10 @@ async def test_finalization_window_keeps_unfinalized_history_readable(
     user = HumanMessage(
         id="user-finalization-window",
         content="模拟 finalization 提交前崩溃",
-        response_metadata={"message_metadata": {"turn_id": turn_id, "job_id": turn_id}},
+        response_metadata={"message_metadata": {"turn_id": turn_id, "job_id": f"history-job:{turn_id}"}},
     )
     final = AIMessage(id="assistant-finalization-window", content="仍可恢复的最终响应")
-    with _history_user_execution(saver, session_id, user, turn_id):
+    with _history_user_execution(frozen_provider_prepare, saver, session_id, user, turn_id):
         saver.put(
             config,
             checkpoint_fixture(
@@ -1137,7 +1137,7 @@ async def test_finalization_window_keeps_unfinalized_history_readable(
     )
     assert restored_final.content == "仍可恢复的最终响应"
 
-    with _history_user_execution(saver, session_id, user, turn_id):
+    with _history_user_execution(frozen_provider_prepare, saver, session_id, user, turn_id):
         saver.finalize_turn(
             session_id=session_id,
             thread_id=owner.thread_id,
@@ -1155,13 +1155,14 @@ async def test_bounded_history_uses_sqlite_turn_spans_without_materializing_all_
     integration_workspace_root_path: str,
     integration_client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
+    frozen_provider_prepare,
 ) -> None:
     """普通 append-only rollout 的有界加载不能重放完整消息列表。"""
     session_id = await create_session(
         integration_client,
         "索引历史性能回归",
     )
-    _seed_rollout(Path(integration_workspace_root_path), session_id, count=128)
+    _seed_rollout(frozen_provider_prepare, Path(integration_workspace_root_path), session_id, count=128)
 
     storage = RolloutContextStore(
         Path(integration_workspace_root_path) / ".boxteam" / "sessions",
@@ -1215,6 +1216,7 @@ async def test_bounded_history_uses_sqlite_turn_spans_without_materializing_all_
 async def test_internal_leading_messages_do_not_create_empty_indexed_turn(
     integration_workspace_root_path: str,
     integration_client: httpx.AsyncClient,
+    frozen_provider_prepare,
 ) -> None:
     session_id = await create_session(
         integration_client,
@@ -1276,7 +1278,7 @@ async def test_internal_leading_messages_do_not_create_empty_indexed_turn(
         )
     user_messages = _turn_messages(1)
     messages = [notice, internal, *user_messages]
-    with _history_user_execution(saver, session_id, user_messages[0], "job-0001"):
+    with _history_user_execution(frozen_provider_prepare, saver, session_id, user_messages[0], "job-0001"):
         saver.put(
             config,
             checkpoint_fixture(
@@ -1309,9 +1311,10 @@ async def test_internal_leading_messages_do_not_create_empty_indexed_turn(
 async def test_history_detail_enforces_per_item_budget(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
+    frozen_provider_prepare,
 ) -> None:
     session_id = await create_session(integration_client, "详情预算")
-    _seed_rollout(
+    _seed_rollout(frozen_provider_prepare,
         Path(integration_workspace_root_path),
         session_id,
         count=1,
@@ -1348,9 +1351,10 @@ async def test_history_detail_enforces_per_item_budget(
 async def test_history_tool_summary_truncates_long_turn_without_response_400(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
+    frozen_provider_prepare,
 ) -> None:
     session_id = await create_session(integration_client, "长工具摘要")
-    _seed_rollout(
+    _seed_rollout(frozen_provider_prepare,
         Path(integration_workspace_root_path),
         session_id,
         count=1,
@@ -1386,6 +1390,7 @@ async def test_history_final_summary_never_reads_final_jsonl_body(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
     monkeypatch: pytest.MonkeyPatch,
+    frozen_provider_prepare,
 ) -> None:
     session_id = await create_session(integration_client, "final 有界读取")
     sessions_dir = Path(integration_workspace_root_path) / ".boxteam" / "sessions"
@@ -1394,14 +1399,14 @@ async def test_history_final_summary_never_reads_final_jsonl_body(
     final_text = "最终正文" * 30_000
     messages[-1] = messages[-1].model_copy(update={"content": final_text})
     owner = saver.forks.source.resolve_main_thread_owner(session_id)
-    with _history_user_execution(saver, session_id, messages[0], "job-0001"):
+    with _history_user_execution(frozen_provider_prepare, saver, session_id, messages[0], "job-0001"):
         saver.put(
             build_checkpoint_config(owner.thread_id),
             checkpoint_fixture("bounded-final", messages, channel_version=1),
             {"source": "bounded-final-test"},
             {"messages": "1"},
         )
-    with _history_user_execution(saver, session_id, messages[0], "job-0001"):
+    with _history_user_execution(frozen_provider_prepare, saver, session_id, messages[0], "job-0001"):
         saver.finalize_turn(
             session_id=session_id,
             thread_id=owner.thread_id,
@@ -1467,9 +1472,10 @@ async def test_history_turn_visibility_uses_canonical_root_membership(
     history_catalog_copy,
     mutation: str,
     expected: int,
+    frozen_provider_prepare,
 ) -> None:
     session_id = await create_session(integration_client, "canonical root 可见性")
-    _seed_rollout(Path(integration_workspace_root_path), session_id, count=1)
+    _seed_rollout(frozen_provider_prepare, Path(integration_workspace_root_path), session_id, count=1)
     storage = RolloutContextStore(
         Path(integration_workspace_root_path) / ".boxteam" / "sessions",
         message_codec=LangChainMessageCodec(),
@@ -1499,13 +1505,16 @@ async def test_history_turn_visibility_uses_canonical_root_membership(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("defect", ["pointer", "membership"])
 async def test_history_bounded_final_rejects_mismatched_canonical_pointer(
     integration_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
     history_catalog_copy,
+    defect: str,
+    frozen_provider_prepare,
 ) -> None:
     session_id = await create_session(integration_client, "final pointer 必须一致")
-    _seed_rollout(Path(integration_workspace_root_path), session_id, count=1)
+    _seed_rollout(frozen_provider_prepare, Path(integration_workspace_root_path), session_id, count=1)
     storage = RolloutContextStore(
         Path(integration_workspace_root_path) / ".boxteam" / "sessions",
         message_codec=LangChainMessageCodec(),
@@ -1514,13 +1523,62 @@ async def test_history_bounded_final_rejects_mismatched_canonical_pointer(
     jsonl_bytes = storage.storage.jsonl_path(session_id, thread_id=thread_id).read_bytes()
     with storage.storage.open_read_snapshot(session_id, thread_id) as snapshot:
         snapshot.connection.backup(history_catalog_copy)
-        history_catalog_copy.execute(
-            "UPDATE turns SET final_message_sequence = 2, final_message_id = 'assistant-tool-0001'"
-        )
         copied = replace(snapshot, connection=history_catalog_copy)
-        with pytest.raises(RuntimeError, match="final projection 与 canonical Turn/item 指针不一致"):
-            storage.storage.read_turn_projections(copied, ["job-0001"])
+        view_id = storage.storage._active_context_view_id(copied.connection, copied.checkpoint_ns)
+        assert view_id is not None
+        if defect == "pointer":
+            history_catalog_copy.execute(
+                "UPDATE turns SET final_message_sequence = 2, final_message_id = 'assistant-tool-0001'"
+            )
+            error = "final projection 与 canonical Turn/item 指针不一致"
+        else:
+            history_catalog_copy.execute(
+                "DELETE FROM context_view_items WHERE view_id=? AND item_id IN (SELECT final_item_id FROM turn_records)",
+                (view_id,),
+            )
+            error = "canonical final item 缺少可见 view membership"
+        with pytest.raises(RuntimeError, match=error):
+            storage.storage.read_turn_projections(copied, view_id, ["job-0001"])
     assert (
         storage.storage.jsonl_path(session_id, thread_id=thread_id).read_bytes()
         == jsonl_bytes
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation,error", [
+    ("UPDATE turn_records SET last_execution_id='missing-execution'", "Turn 与 last execution owner/identity 不一致"),
+    ("UPDATE turn_records SET session_id='foreign-session'", "Turn 与 last execution owner/identity 不一致"),
+    ("UPDATE turn_records SET thread_id='foreign-thread'", "Turn 与 last execution owner/identity 不一致"),
+    ("UPDATE executions SET session_id='foreign-session'", "Turn 与 last execution owner/identity 不一致"),
+    ("UPDATE executions SET thread_id='foreign-thread'", "Turn 与 last execution owner/identity 不一致"),
+    ("UPDATE executions SET turn_id='foreign-turn'", "Turn 与 last execution owner/identity 不一致"),
+    ("UPDATE executions SET job_id=turn_id", "Turn 与 last execution Job 身份不得别名"),
+])
+async def test_history_job_identity_requires_canonical_last_execution(
+    integration_client: httpx.AsyncClient,
+    integration_workspace_root_path: str,
+    history_catalog_copy,
+    mutation: str,
+    error: str,
+    frozen_provider_prepare,
+) -> None:
+    session_id = await create_session(integration_client, "真实 Job 归属必须一致")
+    _seed_rollout(frozen_provider_prepare, Path(integration_workspace_root_path), session_id, count=1)
+    storage = RolloutContextStore(
+        Path(integration_workspace_root_path) / ".boxteam" / "sessions",
+        message_codec=LangChainMessageCodec(),
+    )
+    thread_id = storage.storage.main_thread_id(session_id)
+    jsonl_path = storage.storage.jsonl_path(session_id, thread_id=thread_id)
+    jsonl_bytes = jsonl_path.read_bytes()
+    with storage.storage.open_read_snapshot(session_id, thread_id) as snapshot:
+        snapshot.connection.backup(history_catalog_copy)
+        copied = replace(snapshot, connection=history_catalog_copy)
+        view_id = storage.storage._active_context_view_id(copied.connection, copied.checkpoint_ns)
+        assert view_id is not None
+        assert storage.storage.read_turn_projections(copied, view_id, ["job-0001"])["job-0001"]["job_id"] == "history-job:job-0001"
+        history_catalog_copy.execute(mutation)
+        with pytest.raises(RuntimeError, match=error):
+            storage.storage.read_turn_projections(copied, view_id, ["job-0001"])
+    assert jsonl_path.read_bytes() == jsonl_bytes

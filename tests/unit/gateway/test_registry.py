@@ -1228,3 +1228,48 @@ async def test_old_dto_probe_cannot_mark_newly_published_owner_failed(
     assert graph.owner.contract is candidate
     assert graph.owner.error is None
     assert all(registry.resolve(member_id).connection_error is None for member_id in candidate.workspace_ids)
+
+
+@pytest.mark.asyncio
+async def test_dto_active_state_uses_snapshot_from_list_entry_during_health_probe(
+    backend_dto_case, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry, graph = backend_dto_case
+    entry_active_workspace_id = registry.active_workspace_id
+    activated_workspace_id = next(
+        workspace_id
+        for workspace_id in graph.owner.contract.workspace_ids
+        if workspace_id != entry_active_workspace_id
+    )
+    entered, release = asyncio.Event(), asyncio.Event()
+    client_type = httpx.AsyncClient
+
+    async def response(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/api/v1/health":
+            return httpx.Response(200, json={"data": {"healthy": True}})
+        entered.set()
+        await release.wait()
+        return httpx.Response(200, json={
+            "status": "ok",
+            "workspace_id": request.headers["X-BoxTeam-Workspace-Id"],
+            "backend_generation": graph.owner.contract.generation,
+            "mount_manifest_digest": graph.owner.contract.manifest_digest,
+        })
+
+    monkeypatch.setattr("app.gateway.registry.httpx.AsyncClient", lambda **options: client_type(
+        **options, transport=httpx.MockTransport(response), trust_env=False,
+    ))
+    pending = asyncio.create_task(registry.list_dtos())
+    await asyncio.wait_for(entered.wait(), 2)
+    registry.activate(activated_workspace_id)
+    release.set()
+
+    items = await asyncio.wait_for(pending, 2)
+    assert {
+        item.workspace_id for item in items if item.active
+    } == {entry_active_workspace_id}
+
+    later_items = await asyncio.wait_for(registry.list_dtos(), 2)
+    assert {
+        item.workspace_id for item in later_items if item.active
+    } == {activated_workspace_id}

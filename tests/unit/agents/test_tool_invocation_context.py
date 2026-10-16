@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from langchain.agents import create_agent
@@ -15,6 +17,10 @@ from app.agents.tool_invocation_context import (
     ThreadRuntimeBinding,
     ToolInvocationContext,
     ToolInvocationContextMiddleware,
+)
+from app.core.model_delta_context import (
+    reset_current_model_delta_sink,
+    set_current_model_delta_sink,
 )
 from app.core.turn_execution_scope import ScopeCancelledError, TurnExecutionScope
 from app.services.infrastructure.external_resource_leases import (
@@ -38,6 +44,69 @@ def _request(
         AIMessage(content="", id=f"lc_run--{model_call_id}", tool_calls=[call]),
     ]
     return ToolCallRequest(tool_call=call, tool=None, state={"messages": messages}, runtime=None)
+
+
+@pytest.fixture
+def invocation_failure_case():
+    commit_started = asyncio.Event()
+    release_commit = asyncio.Event()
+
+    async def fail(*_args, **_kwargs):
+        commit_started.set()
+        await release_commit.wait()
+
+    sink = SimpleNamespace(
+        prepare_tool_execution=AsyncMock(), fail_tool_invocation=AsyncMock(side_effect=fail),
+    )
+    return SimpleNamespace(sink=sink, commit_started=commit_started, release_commit=release_commit)
+
+
+@pytest.mark.asyncio
+async def test_tool_error_waits_for_original_result_commit_before_scheduler_failure(invocation_failure_case):
+    case = invocation_failure_case
+    context = ToolInvocationContext()
+    middleware = ToolInvocationContextMiddleware(context)
+    failure = RuntimeError("target-deleted")
+
+    async def handler(_request_value):
+        raise failure
+
+    token = set_current_model_delta_sink(case.sink)
+    try:
+        task = asyncio.create_task(middleware.awrap_tool_call(
+            _request("original-call", model_call_id="original-model"), handler,
+        ))
+        await asyncio.wait_for(case.commit_started.wait(), 1)
+        assert not task.done()
+        case.release_commit.set()
+        with pytest.raises(RuntimeError, match="target-deleted") as raised:
+            await task
+        assert raised.value is failure
+        case.sink.fail_tool_invocation.assert_awaited_once_with(
+            "original-model", "original-call", error="target-deleted",
+        )
+        with pytest.raises(RuntimeError, match="缺少 tool_call_id"):
+            context.require_tool_call_id()
+    finally:
+        case.release_commit.set()
+        reset_current_model_delta_sink(token)
+
+
+@pytest.mark.asyncio
+async def test_model_preparation_failure_never_claims_a_tool_result(invocation_failure_case):
+    case = invocation_failure_case
+    case.sink.prepare_tool_execution.side_effect = RuntimeError("原 ModelCall 登记失败")
+    handler = AsyncMock()
+    token = set_current_model_delta_sink(case.sink)
+    try:
+        with pytest.raises(RuntimeError, match="原 ModelCall 登记失败"):
+            await ToolInvocationContextMiddleware(ToolInvocationContext()).awrap_tool_call(
+                _request("original-call", model_call_id="original-model"), handler,
+            )
+        handler.assert_not_awaited()
+        case.sink.fail_tool_invocation.assert_not_awaited()
+    finally:
+        reset_current_model_delta_sink(token)
 
 
 @pytest.mark.asyncio

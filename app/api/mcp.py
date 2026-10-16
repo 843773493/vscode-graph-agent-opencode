@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.deps import get_mcp_catalog_owner, get_request_id, verify_local_token
 from app.schemas.internal_v2.common import APIResponse
@@ -8,7 +10,7 @@ from app.schemas.internal_v2.mcp import (
     McpServerDTO,
     McpToolDTO,
 )
-from app.services.infrastructure.mcp import McpCatalogOwner
+from app.services.infrastructure.mcp import McpCatalogOwner, McpCatalogRelistError
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 
@@ -19,10 +21,14 @@ router = APIRouter(prefix="/mcp", tags=["mcp"])
     summary="获取 MCP Server 与工具目录",
 )
 async def list_mcp_servers(
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    owner: McpCatalogOwner = Depends(get_mcp_catalog_owner),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    owner: Annotated[McpCatalogOwner, Depends(get_mcp_catalog_owner)],
 ):
+    try:
+        await owner.relist_servers_without_notifications()
+    except McpCatalogRelistError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     servers = [
         McpServerDTO(
             server_id=server.server_id,

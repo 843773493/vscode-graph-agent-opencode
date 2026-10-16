@@ -1,5 +1,5 @@
 import { getJob, getSession } from "../../api";
-import { listPendingRequests } from "../../pendingRequestsApi";
+import { listMainThreadPendingRequests } from "../../pendingRequestsApi";
 import {
   preservePendingTerminalConversation,
   writePendingSnapshot,
@@ -8,8 +8,7 @@ import {
   terminalStatusTextForEvent,
 } from "../../state/traceEvents";
 import { cloneMaps } from "../../state/appStateMaps";
-import { replaceSessionMetadata } from "../../state/session/sessions";
-import { writeTurnTimelineCache } from "../../state/session/turnTimeline";
+import { hasSessionOwner, replaceSessionMetadata } from "../../state/session/sessions";
 import type {
   Job,
   JobStatus,
@@ -118,7 +117,7 @@ function turnStatusForEvent(
   throw new Error(`不是 Job 终态事件: ${event.type}`);
 }
 
-function preserveTerminalTurnFallback(
+function preserveTerminalJobView(
   state: AppState,
   sessionId: string,
   sessionCacheKey: string,
@@ -135,9 +134,9 @@ function preserveTerminalTurnFallback(
   );
   // Job API 已确认终态后，实时镜像不再代表可运行任务，但要保留它作为
   // 当前视图的已完成回合；下一次 bootstrap 会用 canonical 历史替换它。
-  next.activeJobIdsBySession.delete(sessionCacheKey);
-  const timeline = next.turnTimelinesBySession.get(sessionCacheKey);
-  const turn = timeline?.turnsById[terminalEvent.job_id];
+  if (next.activeJobIdsBySession.get(sessionCacheKey) === terminalEvent.job_id) {
+    next.activeJobIdsBySession.delete(sessionCacheKey);
+  }
   if (latestSessionMatches(next, sessionId)) {
     next.status = turnStatus === "completed"
       ? "任务已完成"
@@ -151,24 +150,6 @@ function preserveTerminalTurnFallback(
           ? `任务失败: ${terminalEvent.content}`
           : "任务失败";
   }
-  if (!timeline || !turn) return next;
-  next.turnTimelinesBySession = writeTurnTimelineCache(
-    next.turnTimelinesBySession,
-    sessionCacheKey,
-    {
-      ...timeline,
-      turnsById: {
-        ...timeline.turnsById,
-        [terminalEvent.job_id]: {
-          ...turn,
-          status: turnStatus,
-          ...(turnStatus === "completed" && !turn.completed_at
-            ? { completed_at: turn.updated_at }
-            : {}),
-        },
-      },
-    },
-  );
   return next;
 }
 
@@ -186,7 +167,7 @@ async function refreshTerminalSessionInternal(
   knownPendingSnapshot?: PendingRequestList,
   knownTerminalJob?: Job,
 ) {
-  const terminalTurnId = terminalTraceEvent?.job_id ?? knownTerminalJob?.job_id;
+  const terminalJobId = terminalTraceEvent?.job_id ?? knownTerminalJob?.job_id;
   const effectiveTerminalEvent = terminalTraceEvent
     ?? (knownTerminalJob ? terminalEventForJob(knownTerminalJob) : null);
   const terminalTurnStatus = effectiveTerminalEvent
@@ -196,11 +177,12 @@ async function refreshTerminalSessionInternal(
   // 终态先把 live 镜像标记为完成，避免继续显示“正在生成”。
   // 当前视图保留这个回合，下一次 bootstrap 再用 canonical 历史替换它。
   setState((latest) => {
+    if (!hasSessionOwner(latest, sessionId, workspaceId)) return latest;
     if (workspaceId && latest.currentSessionWorkspaceId !== workspaceId) {
       return latest;
     }
     if (!effectiveTerminalEvent || !terminalTurnStatus) return latest;
-    return preserveTerminalTurnFallback(
+    return preserveTerminalJobView(
       latest,
       sessionId,
       sessionCacheKey,
@@ -213,12 +195,13 @@ async function refreshTerminalSessionInternal(
     getSession(apiPort, sessionId, workspaceId),
     knownPendingSnapshot
       ? Promise.resolve(knownPendingSnapshot)
-      : listPendingRequests(apiPort, sessionId, workspaceId),
+      : listMainThreadPendingRequests(apiPort, sessionId, workspaceId),
   ]);
-  const pendingSnapshot = fetchedPendingSnapshot.active_job_id === terminalTurnId
+  const pendingSnapshot = fetchedPendingSnapshot.active_job_id === terminalJobId
     ? { ...fetchedPendingSnapshot, active_job_id: null }
     : fetchedPendingSnapshot;
   setState((latest) => {
+    if (!hasSessionOwner(latest, sessionId, workspaceId)) return latest;
     if (workspaceId && latest.currentSessionWorkspaceId !== workspaceId) {
       return latest;
     }
@@ -226,7 +209,7 @@ async function refreshTerminalSessionInternal(
     latestNext.currentSessionWorkspaceId =
       workspaceId ?? latestNext.currentSessionWorkspaceId;
     if (effectiveTerminalEvent && terminalTurnStatus) {
-      latestNext = preserveTerminalTurnFallback(
+      latestNext = preserveTerminalJobView(
         latestNext,
         sessionId,
         sessionCacheKey,
@@ -273,8 +256,8 @@ export function refreshTerminalSession(
   knownPendingSnapshot?: PendingRequestList,
   knownTerminalJob?: Job,
 ): Promise<void> {
-  const terminalTurnId = terminalTraceEvent?.job_id ?? knownTerminalJob?.job_id;
-  if (!terminalTurnId) {
+  const terminalJobId = terminalTraceEvent?.job_id ?? knownTerminalJob?.job_id;
+  if (!terminalJobId) {
     return refreshTerminalSessionInternal(
       apiPort,
       sessionId,
@@ -291,7 +274,7 @@ export function refreshTerminalSession(
     apiPort,
     sessionId,
     workspaceId,
-    terminalTurnId,
+    terminalJobId,
   );
   const existing = terminalSessionRefreshes.get(key);
   if (existing) {
@@ -336,7 +319,7 @@ export async function reconcileActiveJob(
     };
   }
 
-  const pendingSnapshot = await listPendingRequests(apiPort, sessionId, workspaceId);
+  const pendingSnapshot = await listMainThreadPendingRequests(apiPort, sessionId, workspaceId);
   // Job API 是终态的权威来源。Gateway/旧 SSE 可能在 Job 已失败后仍暂时
   // 保留 active_job_id；此时必须修复 pending 镜像，而不是把已知终态重新
   // 当成对账失败，否则 Composer 会永久保持“正在生成”。

@@ -33,6 +33,8 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
 
 
 class CanonicalItemWriter(Protocol):
+    """写入不可变源 item；commit_recorded_at 是本次提交记录时刻。"""
+
     def __call__(
         self,
         connection: sqlite3.Connection,
@@ -41,7 +43,7 @@ class CanonicalItemWriter(Protocol):
         commit_id: int,
         jsonl_offset: int,
         jsonl_length: int,
-        created_at: str,
+        commit_recorded_at: str,
     ) -> None: ...
 
 
@@ -546,7 +548,7 @@ class V2ItemCommitCoordinator:
                     commit_id=commit_id,
                     jsonl_offset=item_offset,
                     jsonl_length=len(raw),
-                    created_at=timestamp,
+                    commit_recorded_at=timestamp,
                 )
             committed_cursor = connection.execute(
                 "UPDATE storage_commits SET status = 'committed', committed_at = ? "

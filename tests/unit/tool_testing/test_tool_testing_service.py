@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 import json
-from pathlib import Path
 import re
-from typing import Annotated, Any, Callable
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Annotated, Any
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import InjectedToolArg, tool
 from langgraph.prebuilt.tool_node import ToolRuntime
 from pydantic.errors import PydanticInvalidForJsonSchema
-import pytest
 
 from app.agents.tools.apply_patch import create_apply_patch_tool
+from app.runtime.provider_errors import (
+    is_transient_provider_error,
+    mark_provider_failure,
+)
 from app.schemas.internal_v2.tool_test import ToolTestStartRequest
 from app.tool_testing.cases.apply_patch_case import create_apply_patch_cases
 from app.tool_testing.definitions import (
@@ -25,7 +30,6 @@ from app.tool_testing.model_invocation import (
     MAX_MODEL_CALLS_PER_ATTEMPT,
     MAX_TRANSIENT_RETRIES,
     ToolCallProbeInvocationError,
-    is_transient_provider_error,
     probe_tool_call,
     probe_tool_call_with_transient_retries,
 )
@@ -62,9 +66,54 @@ def test_transient_provider_error_classification_uses_http_status() -> None:
             super().__init__(f"HTTP {status_code}")
             self.status_code = status_code
 
-    assert is_transient_provider_error(_ProviderHttpError(503)) is True
-    assert is_transient_provider_error(_ProviderHttpError(429)) is True
-    assert is_transient_provider_error(_ProviderHttpError(400)) is False
+    assert is_transient_provider_error(
+        mark_provider_failure(_ProviderHttpError(503))
+    ) is True
+    assert is_transient_provider_error(
+        mark_provider_failure(_ProviderHttpError(429))
+    ) is True
+    assert is_transient_provider_error(
+        mark_provider_failure(_ProviderHttpError(400))
+    ) is False
+    assert is_transient_provider_error(TimeoutError("本地 payload 超时")) is False
+    assert is_transient_provider_error(ConnectionError("来源未标记")) is False
+
+
+def test_transient_provider_error_ignores_unmarked_outer_timeout() -> None:
+    class _ProviderHttpError(RuntimeError):
+        def __init__(self, status_code: int) -> None:
+            super().__init__(f"HTTP {status_code}")
+            self.status_code = status_code
+
+    provider_error = mark_provider_failure(_ProviderHttpError(400))
+    local_timeout = TimeoutError("本地 on_llm_error 回调超时")
+    local_timeout.__cause__ = provider_error
+
+    assert is_transient_provider_error(local_timeout) is False
+
+    class _LocalStatusError(RuntimeError):
+        status_code = 503
+
+    local_status_error = _LocalStatusError("本地回调失败")
+    local_status_error.__cause__ = provider_error
+    assert is_transient_provider_error(local_status_error) is False
+
+
+def test_transient_provider_error_follows_explicit_provider_cause() -> None:
+    class _ProviderHttpError(RuntimeError):
+        def __init__(self, status_code: int) -> None:
+            super().__init__(f"HTTP {status_code}")
+            self.status_code = status_code
+
+    provider_error = mark_provider_failure(_ProviderHttpError(503))
+    try:
+        raise provider_error
+    except _ProviderHttpError as caught:
+        try:
+            raise RuntimeError("显式包装的 Provider 错误") from caught
+        except RuntimeError as wrapped_error:
+            assert wrapped_error.__cause__ is provider_error
+            assert is_transient_provider_error(wrapped_error) is True
 
 
 class _BoundModel:
@@ -512,7 +561,7 @@ async def test_probe_tool_call_retries_transient_provider_error_three_times(
         async def ainvoke(self, messages: list[object]) -> AIMessage:
             self.calls += 1
             if self.calls <= MAX_TRANSIENT_RETRIES:
-                raise ConnectionError("上游连接中断")
+                raise mark_provider_failure(ConnectionError("上游连接中断"))
             return _tool_call_message()
 
     bound_model = _FlakyBoundModel()
@@ -554,6 +603,76 @@ async def test_probe_tool_call_does_not_retry_non_transient_provider_error(
     assert captured.value.model_calls == 1
     assert captured.value.transient_retries == 0
     assert bound_model.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_probe_tool_call_does_not_retry_local_timeout_error(
+    tmp_path: Path,
+) -> None:
+    class _LocalTimeoutBoundModel(_ScriptedBoundModel):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.calls = 0
+
+        async def ainvoke(self, messages: list[object]) -> AIMessage:
+            self.calls += 1
+            raise TimeoutError("Responses payload 在本地构造超时")
+
+    bound_model = _LocalTimeoutBoundModel()
+    with pytest.raises(ToolCallProbeInvocationError) as captured:
+        await probe_tool_call_with_transient_retries(
+            model=_ScriptedModel(bound_model),
+            tool=create_apply_patch_tool(workspace_root=tmp_path),
+            messages=[SystemMessage("测试"), HumanMessage("请修改文件")],
+            retry_delays=(0, 0, 0),
+        )
+
+    assert captured.value.model_calls == 1
+    assert captured.value.transient_retries == 0
+    assert bound_model.calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_status", [400, 503])
+async def test_probe_tool_call_does_not_retry_local_error_with_provider_context(
+    tmp_path: Path,
+    provider_status: int,
+) -> None:
+    class _ProviderHttpError(RuntimeError):
+        def __init__(self, status_code: int) -> None:
+            super().__init__(f"HTTP {status_code}")
+            self.status_code = status_code
+
+    provider_error = mark_provider_failure(_ProviderHttpError(provider_status))
+
+    class _LocalCallbackErrorBoundModel(_ScriptedBoundModel):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.local_error: TimeoutError | None = None
+
+        async def ainvoke(self, messages: list[object]) -> AIMessage:
+            self.received_messages.append(list(messages))
+            self.calls += 1
+            try:
+                raise provider_error
+            except _ProviderHttpError:
+                self.local_error = TimeoutError("本地 on_llm_error 回调超时")
+                raise self.local_error
+
+    bound_model = _LocalCallbackErrorBoundModel()
+    with pytest.raises(ToolCallProbeInvocationError) as captured:
+        await probe_tool_call_with_transient_retries(
+            model=_ScriptedModel(bound_model),
+            tool=create_apply_patch_tool(workspace_root=tmp_path),
+            messages=[SystemMessage("测试"), HumanMessage("请修改文件")],
+            retry_delays=(0, 0, 0),
+        )
+
+    assert bound_model.calls == 1
+    assert captured.value.model_calls == 1
+    assert captured.value.transient_retries == 0
+    assert captured.value.cause is bound_model.local_error
+    assert captured.value.cause.__context__ is provider_error
 
 
 def test_tool_test_store_lists_readable_run_files(tmp_path: Path) -> None:

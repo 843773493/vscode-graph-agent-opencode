@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 import pytest
@@ -40,7 +40,7 @@ class _FakeContextReader:
     turn_pages: dict[str, list[tuple[list[tuple[str, int, int, int, int]], bool]]]
     internal_pages: dict[str, list[InternalExecutionHistoryPage]]
     turn_queries: list[tuple[str, int | None, int | None, int]]
-    internal_queries: list[tuple[str, int | None, int | None, int | None, int]]
+    internal_queries: list[tuple[str, int | None, int | None, int | None, int, int | None]]
     around_rows: list[tuple[str, int, int, int, int]]
     resolved_item_window: tuple[int, int] | None
 
@@ -72,6 +72,7 @@ class _FakeContextReader:
         anchor_logical_item_ordinal: int | None,
         lower_logical_item_ordinal: int | None,
         upper_logical_item_ordinal: int | None,
+        snapshot_upper_logical_item_ordinal: int | None,
         limit: int,
         execution_id: str | None = None,
     ) -> InternalExecutionHistoryPage:
@@ -82,6 +83,7 @@ class _FakeContextReader:
                 lower_logical_item_ordinal,
                 upper_logical_item_ordinal,
                 limit,
+                snapshot_upper_logical_item_ordinal,
             )
         )
         pages = self.internal_pages.get(direction, [])
@@ -95,12 +97,12 @@ class _FakeContextReader:
     ) -> list[tuple[str, int, int, int, int]]:
         return self.around_rows
 
-    def read_turn_projections(
+    def read_existing_turn_ids(
         self,
         _snapshot: object,
         _turn_ids: list[str],
-    ) -> dict[str, object]:
-        return {}
+    ) -> set[str]:
+        return set()
 
     def resolve_context_turn_item_window(
         self,
@@ -201,10 +203,13 @@ def _entry(
     return InternalExecutionHistoryEntry(
         execution_id=execution_id,
         job_id="job-1",
+        session_id="session-1",
+        thread_id="thread-1",
         outcome="completed",
         created_at="2026-10-04T00:00:00Z",
         updated_at="2026-10-04T00:00:01Z",
         logical_item_ordinal=logical_item_ordinal,
+        elapsed_ms=0,
         item=item,
     )
 
@@ -275,8 +280,6 @@ def test_internal_only_tail_returns_safe_typed_display_and_composite_cursor(
     assert cursor.turn_ordinal is None
     assert cursor.logical_item_ordinal == 20
     projected = RolloutHistoryReader._project_internal_entries(
-        "session-1",
-        "thread-1",
         (entry,),
         include=DEFAULT_INITIAL_INCLUDE,
     )
@@ -284,6 +287,35 @@ def test_internal_only_tail_returns_safe_typed_display_and_composite_cursor(
     assert projected[0].display_parts[0].logical_item_ordinal == 20
     assert projected[0].display_parts[0].text == "子会话已生成并返回结果。"
     assert "prompt" not in str(projected[0].model_dump(mode="json"))
+
+
+def test_internal_projection_keeps_original_historical_owner() -> None:
+    entry = replace(
+        _entry(80, logical_item_ordinal=20),
+        session_id="source-session",
+        thread_id="source-thread",
+    )
+    projected = RolloutHistoryReader._project_internal_entries(
+        (entry,), include=DEFAULT_INITIAL_INCLUDE,
+    )
+    serialized = projected[0].model_dump(mode="json")
+    assert (serialized["session_id"], serialized["thread_id"]) == (
+        "source-session", "source-thread",
+    )
+    assert (serialized["execution_id"], serialized["job_id"]) == (
+        entry.execution_id, entry.job_id,
+    )
+
+
+def test_internal_projection_rejects_conflicting_execution_owners() -> None:
+    entry = _entry(80, logical_item_ordinal=20)
+    conflicting = replace(
+        _entry(81, logical_item_ordinal=21), thread_id="another-thread",
+    )
+    with pytest.raises(RuntimeError, match="durable metadata 不一致"):
+        RolloutHistoryReader._project_internal_entries(
+            (entry, conflicting), include=DEFAULT_INITIAL_INCLUDE,
+        )
 
 
 @pytest.mark.parametrize(
@@ -342,7 +374,7 @@ def test_default_anchor_include_reads_internal_history(
     )
 
     assert reader._context_reader.internal_queries == [
-        ("before", None, None, 100, 256)
+        ("before", None, None, 100, 256, 100)
     ]
     assert page["internal_entries"] == (entry,)
 
@@ -426,14 +458,17 @@ def test_around_uses_nearest_turn_pages_across_ordinal_gaps(
 
     assert [span.ordinal for span in page["spans"]] == [3, 6, 9, 12]
     assert reader._context_reader.resolved_item_window == (3, 12)
+    assert reader._context_reader.internal_queries[0][3:] == (60, 256, 100)
     assert page["has_before"] is True
     assert page["before_cursor"] is not None
     assert page["has_after"] is False
     assert page["after_cursor"] is None
 
 
+@pytest.mark.parametrize("current_view_id", ["view-1", "view-after-append"])
 def test_cursor_rejects_changed_include_and_stale_history_revision(
     history_setup: tuple[_HistoryHarness, IndexedHistory, SimpleNamespace],
+    current_view_id: str,
 ) -> None:
     reader, indexed, snapshot = history_setup
     cursor = _cursor(
@@ -468,7 +503,7 @@ def test_cursor_rejects_changed_include_and_stale_history_revision(
     )
     snapshot.manifest.history_view_revision = 8
     reader._context_reader.bounds = HistorySnapshotBounds(
-        view_id="view-1",
+        view_id=current_view_id,
         history_view_revision=8,
         upper_turn_ordinal=5,
         upper_logical_item_ordinal=100,
@@ -477,13 +512,48 @@ def test_cursor_rejects_changed_include_and_stale_history_revision(
         reader._load_indexed_history(
             "session-1",
             TurnHistoryLoadRequest(direction="before", cursor=stale),
-            indexed,
+            replace(indexed, view_id=current_view_id),
             policy=None,
         )
 
     assert error.value.detail.reason == "history_view_revision"
     assert error.value.detail.cursor_history_view_revision == 6
     assert error.value.detail.current_history_view_revision == 8
+
+
+@pytest.mark.parametrize("drift", ["projection_epoch", "history_view_revision"])
+@pytest.mark.parametrize("cursor_direction,request_direction", [("before", "after"), ("after", "before")])
+def test_cursor_direction_mismatch_remains_invalid_after_snapshot_drift(
+    history_setup: tuple[_HistoryHarness, IndexedHistory, SimpleNamespace],
+    drift: str,
+    cursor_direction: str,
+    request_direction: str,
+) -> None:
+    reader, indexed, snapshot = history_setup
+    cursor = _cursor(
+        reader, snapshot, direction=cursor_direction,
+        turn_ordinal=4, logical_item_ordinal=80,
+    )
+    if drift == "projection_epoch":
+        indexed = replace(indexed, projection_epoch=4)
+    else:
+        snapshot.manifest.history_view_revision = 8
+        reader._context_reader.bounds = replace(
+            reader._context_reader.bounds, history_view_revision=8,
+        )
+    with pytest.raises(InvalidTurnCursorError, match="direction 与请求不一致"):
+        reader._load_indexed_history(
+            "session-1", TurnHistoryLoadRequest(direction=request_direction, cursor=cursor),
+            indexed, policy=None,
+        )
+    with pytest.raises(StaleTurnCursorError) as error:
+        reader._load_indexed_history(
+            "session-1", TurnHistoryLoadRequest(direction=cursor_direction, cursor=cursor),
+            indexed, policy=None,
+        )
+    assert error.value.detail.reason == drift
+    assert reader._context_reader.turn_queries == []
+    assert reader._context_reader.internal_queries == []
 
 
 def test_stale_projection_epoch_error_keeps_original_contract() -> None:

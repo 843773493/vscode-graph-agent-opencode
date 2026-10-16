@@ -2,15 +2,24 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 from app.abstractions.state_conflict import ClientStateConflictError
 from app.abstractions.turn_terminal_status import TurnTerminalStatusWriter
+from app.agents.checkpoint_recovery import CheckpointRecoveryRejectedError
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.identifier import create_prefixed_id
 from app.core.workspace_identity import validate_workspace_id
-from app.schemas.event import Event, SessionInterruptedEvent, SessionInterruptedPayload
+from app.schemas.event import (
+    Event,
+    JobCreatedPayload,
+    SessionInterruptedEvent,
+    SessionInterruptedPayload,
+)
+from app.schemas.internal_v2.common import JobStatus
+from app.schemas.internal_v2.message import AttachmentRef
 from app.schemas.internal_v2.runtime import (
     RuntimeDrainBlockerDTO,
     RuntimeDrainResultDTO,
@@ -18,7 +27,7 @@ from app.schemas.internal_v2.runtime import (
     RuntimeLifecycleState,
     RuntimeStorageDTO,
 )
-from app.services.business.job.service import JobService
+from app.services.business.job.service import JobService, JobState
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.trace_event_store import TraceEventStore
 
@@ -39,6 +48,8 @@ class RuntimeService:
         trace_event_store: TraceEventStore,
         message_stream_store: MessageStreamStore,
         terminal_status_writer: TurnTerminalStatusWriter | None = None,
+        pending_tool_checkpoint_id: Callable[[JobState], Awaitable[str | None]],
+        can_restart_before_provider: Callable[[JobState], Awaitable[bool]],
     ) -> None:
         self._workspace_id = validate_workspace_id(workspace_id)
         self._workspace_root = workspace_root.expanduser().resolve()
@@ -47,6 +58,8 @@ class RuntimeService:
         self._trace_event_store = trace_event_store
         self._message_stream_store = message_stream_store
         self._terminal_status_writer = terminal_status_writer
+        self._pending_tool_checkpoint_id = pending_tool_checkpoint_id
+        self._can_restart_before_provider = can_restart_before_provider
         self._lifecycle_state: RuntimeLifecycleState = "ready"
         self._start_time: float | None = None
         self._startup_reconciliation_errors: list[dict[str, str]] = []
@@ -115,9 +128,10 @@ class RuntimeService:
         return result
 
     async def reconcile_stale_executions(self) -> int:
-        """把上次进程未写终态的已启动 Job 标为进程中断。"""
+        """保留首个 Provider 前的原 runtime 准入，恢复安全 checkpoint，其余执行标为丢失。"""
         self._startup_reconciliation_errors = []
-        reconciled = await self._message_stream_store.reconcile_unfinished_streams()
+        reconciled = 0
+        resumed_job_ids: set[str] = set()
         terminal_types = {
             "job_completed",
             "job_cancelled",
@@ -128,7 +142,10 @@ class RuntimeService:
         for session_id in self._trace_event_store.list_session_ids():
             events = self._trace_event_store.read_events(session_id)
             lifecycle_by_job: dict[str, Event] = {}
+            requests_by_job: dict[str, JobCreatedPayload] = {}
             for event in events:
+                if event.type == "job_created":
+                    requests_by_job[event.job_id] = event.payload
                 if event.type == "job_started":
                     owner = (event.payload.session_id, event.payload.thread_id)
                     if owner[0] != session_id:
@@ -165,10 +182,43 @@ class RuntimeService:
                         continue
                     status = "execution_lost"
                 elif event_type == "job_started":
+                    request = requests_by_job.get(job_id)
+                    if request is not None and request.execution_binding is not None:
+                        if not request.message_id or request.message_created_at is None:
+                            raise RuntimeError(f"已持久准入 Job 缺少原始消息身份: {job_id}")
+                        job = JobState(
+                            job_id=job_id, session_id=owner[0], thread_id=owner[1],
+                            message=request.message, message_id=request.message_id,
+                            message_created_at=request.message_created_at.isoformat(),
+                            execution_binding=request.execution_binding, agent_id=request.agent_id,
+                            status=JobStatus.running, message_metadata=dict(request.message_metadata),
+                            attachments=[AttachmentRef.model_validate(value) for value in request.attachments],
+                            gateway_id=request.gateway_id, request_id=request.request_id,
+                            created_at=event.timestamp, updated_at=event.timestamp,
+                            delivery_policy=request.delivery_policy,
+                        )
+                        if await self._can_restart_before_provider(job):
+                            resumed_job_ids.add(job_id)
+                            continue
+                        try:
+                            checkpoint_id = await self._pending_tool_checkpoint_id(job)
+                        except CheckpointRecoveryRejectedError as error:
+                            self._startup_reconciliation_errors.append(f"Job {job_id} 原 checkpoint 恢复证据被拒绝: {error}")
+                            checkpoint_id = None
+                        if checkpoint_id is not None:
+                            job.resume_checkpoint_id = checkpoint_id
+                            await self._job_service.restore_active_job(job)
+                            resumed_job_ids.add(job_id)
+                            continue
                     status = "execution_lost"
                 else:
                     continue
                 if self._terminal_status_writer is not None:
+                    if status == "execution_lost":
+                        await self._message_stream_store.reconcile_job_tools(
+                            session_id=owner[0], thread_id=owner[1], job_id=job_id,
+                            terminal_status_writer=self._terminal_status_writer,
+                        )
                     self._terminal_status_writer.mark_job_terminal_status(
                         session_id=owner[0], thread_id=owner[1],
                         job_id=job_id, status=status,
@@ -194,6 +244,9 @@ class RuntimeService:
                     ),
                 )
                 reconciled += 1
+        reconciled += await self._message_stream_store.reconcile_unfinished_streams(
+            resumed_job_ids=resumed_job_ids,
+        )
         return reconciled
 
     async def _blockers(self) -> list[RuntimeDrainBlockerDTO]:

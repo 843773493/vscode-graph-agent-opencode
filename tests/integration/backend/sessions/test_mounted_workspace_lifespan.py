@@ -26,6 +26,7 @@ from app.core.path_utils import (
 )
 from app.core.session_thread_context import current_session_thread_owner
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.runtime.model_stream import ModelStreamTransportController
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.goal import GoalStatus
 from app.services.business.job.service import JobState
@@ -34,6 +35,7 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.message_stream_store import MessageStreamNotFoundError
 from app.services.infrastructure.resource_platform.bootstrap import ResourcePlatform
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
+from app.testing.model_stream import load_model_stream_config
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.test_runner_cancellation import (
     RunnerCase,
@@ -196,6 +198,74 @@ async def test_real_double_mount_requests_compilation_and_reverse_cleanup(mounte
                 return session_id, thread_id
         pairs = await asyncio.gather(*(run(container) for container in containers))
         assert {(identity, root, *pair) for (identity, root), pair in zip(case.roots.items(), pairs, strict=True)} == set(case.compiled)
+        mounted_sessions = [
+            await container.session_service.get(pair[0])
+            for container, pair in zip(containers, pairs, strict=True)
+        ]
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=main.app),
+            base_url="http://workspace.test",
+        ) as client:
+            for container, session in zip(containers, mounted_sessions, strict=True):
+                assert session.workspace_id == container.workspace_id
+                resource = {
+                    "resource_identity": str(session.resource_identity),
+                    "uri": session.uri,
+                    "scope": session.scope,
+                    "view": "messages",
+                    "include": ["visible_text"],
+                }
+                response = await client.post(
+                    f"/api/v1/workspaces/{container.workspace_id}/context/read",
+                    json=resource,
+                )
+                assert response.status_code == 200, response.text
+                result = response.json()["data"]
+                echoed_fields = ("resource_identity", "uri", "scope", "view")
+                assert {key: result[key] for key in echoed_fields} == {
+                    key: resource[key] for key in echoed_fields
+                }
+                assert result["items"]
+                assert all(item["kind"] == "message" for item in result["items"])
+                assert all(
+                    (item["resource_identity"], item["uri"], item["scope"])
+                    == (resource["resource_identity"], resource["uri"], resource["scope"])
+                    for item in result["items"]
+                )
+                other_container = next(
+                    other for other in containers
+                    if other.workspace_id != container.workspace_id
+                )
+                message_text = "\n".join(
+                    item["text"] or "" for item in result["items"]
+                )
+                assert f"工作区 {container.workspace_id} 的真实编译图" in message_text
+                assert f"工作区 {other_container.workspace_id} 的真实编译图" not in message_text
+
+            for container, other_session in zip(
+                containers, reversed(mounted_sessions), strict=True
+            ):
+                assert other_session.workspace_id != container.workspace_id
+                resource = {
+                    "resource_identity": str(other_session.resource_identity),
+                    "uri": other_session.uri,
+                    "scope": other_session.scope,
+                    "view": "messages",
+                    "include": ["visible_text"],
+                }
+                response = await client.post(
+                    f"/api/v1/workspaces/{container.workspace_id}/context/read",
+                    json=resource,
+                )
+                assert response.status_code == 400, response.text
+                error = response.json()
+                assert error["detail"]["code"] == "scope_mismatch"
+                assert "data" not in error
+                assert "items" not in error
+                assert other_session.session_id not in response.text
+                assert other_session.uri not in response.text
+                assert str(other_session.resource_identity) not in response.text
+
         for container, other, pair in zip(containers, reversed(containers), pairs, strict=True):
             with workspace_context(
                 container.workspace_id,
@@ -218,6 +288,52 @@ async def test_second_mount_failure_closes_both_real_containers(mounted_case: Mo
             raise AssertionError("部分启动失败不得进入 ready")
     assert len(mounted_case.containers) == 2
     assert_closed(mounted_case)
+
+
+@pytest.fixture
+def unused_model_stream_controller(monkeypatch: pytest.MonkeyPatch):
+    controller = ModelStreamTransportController.configure(load_model_stream_config(
+        Path.cwd() / "configs/tests/model_stream/model_stream_chat_basic.jsonc",
+    ))
+    assert controller is not None
+    monkeypatch.setattr(main, "_model_stream_controller", controller)
+    return controller
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("registry_stage", ["mounted", "containers"])
+async def test_registry_failure_closes_configured_transport(
+    mounted_case: MountedCase,
+    unused_model_stream_controller: ModelStreamTransportController,
+    monkeypatch: pytest.MonkeyPatch,
+    registry_stage: str,
+):
+    controller = unused_model_stream_controller
+    closed: list[str] = []
+    original_close = controller.aclose
+
+    async def close_transport():
+        await original_close()
+        closed.append("transport")
+
+    def fail_registry(*_args, **_kwargs):
+        raise RuntimeError("registry 前置构造失败")
+
+    monkeypatch.setattr(controller, "aclose", close_transport)
+    if registry_stage == "mounted":
+        monkeypatch.setattr(main.MountedWorkspaceRegistry, "from_environment", fail_registry)
+    else:
+        monkeypatch.setattr(main, "WorkspaceContainerRegistry", fail_registry)
+    try:
+        with pytest.raises(RuntimeError, match="registry 前置构造失败"):
+            async with main.lifespan(main.app):
+                raise AssertionError("registry 构造失败不得进入 ready")
+        assert closed == ["transport"]
+        assert controller.client is None
+        assert not mounted_case.containers
+        assert main.app.state.workspace_container_registry is None
+    finally:
+        await original_close()
 
 
 @pytest.mark.asyncio

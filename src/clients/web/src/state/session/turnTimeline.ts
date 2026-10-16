@@ -8,6 +8,7 @@ import type {
   TurnSummary,
   InternalExecutionHistory,
 } from "../../types/backend";
+import { compareInternalResponseParts } from "../timeline/responseParts";
 
 export type TurnRecord = TurnSummary | TurnDetail;
 export type TurnTimelinePhase = "idle" | "bootstrapping" | "ready" | "error";
@@ -18,6 +19,8 @@ export type TurnProjectionEpochDecision = "apply" | "discard_older" | "refresh_b
 
 export interface SessionTurnTimeline {
   scopeKey: string;
+  threadId: string | null;
+  historyViewRevision: number | null;
   generation: number;
   phase: TurnTimelinePhase;
   orderedTurnIds: string[];
@@ -43,22 +46,6 @@ export interface SessionTurnTimeline {
   error: string | null;
 }
 
-function internalPartOrder(part: InternalExecutionHistory["response_parts"][number]): [number, number] {
-  const logicalItemOrdinal = part.source.logical_item_ordinal;
-  const partOrdinal = part.source.part_ordinal;
-  if (
-    typeof logicalItemOrdinal !== "number"
-    || !Number.isSafeInteger(logicalItemOrdinal)
-    || logicalItemOrdinal < 0
-    || typeof partOrdinal !== "number"
-    || !Number.isSafeInteger(partOrdinal)
-    || partOrdinal < 0
-  ) {
-    throw new Error("internal execution response part 缺少 canonical order");
-  }
-  return [logicalItemOrdinal, partOrdinal];
-}
-
 const TURN_TIMELINE_CACHE_LIMIT = 64;
 const TURN_DETAIL_CACHE_LIMIT = 8;
 const TURN_DETAIL_CACHE_MAX_UNITS = 1_000_000;
@@ -69,6 +56,8 @@ export function createSessionTurnTimeline(
 ): SessionTurnTimeline {
   return {
     scopeKey,
+    threadId: null,
+    historyViewRevision: null,
     generation,
     phase: "idle",
     orderedTurnIds: [],
@@ -287,6 +276,8 @@ function mergeResponseParts(
   incoming: unknown,
 ): unknown[] | undefined {
   if (Array.isArray(incoming)) {
+    // 同 revision 的 include 投影可能只请求 metadata，空部件不撤销已加载正文。
+    if (incoming.length === 0 && Array.isArray(current)) return [...current];
     // 历史响应已经携带 canonical item identity 和后端顺序。前端不得再按
     // message 坐标重排、按正文去重，或把旧 summary 与新 detail 拼成第三套历史。
     return Array.isArray(current) ? patchResponseParts(current, incoming) : [...incoming];
@@ -358,16 +349,25 @@ function upsertTurnRecord(
   incoming: TurnRecord,
 ): boolean {
   const current = turnsById[incoming.turn_id];
-  if (current && current.revision > incoming.revision) {
+  if (current && current.source_view_revision > incoming.source_view_revision) {
     return false;
   }
-  if (current && current.revision === incoming.revision) {
-    const merged = mergeSameRevisionTurn(current, incoming);
-    if (merged === current) {
+  if (
+    current
+    && current.source_view_id === incoming.source_view_id
+    && current.source_view_revision === incoming.source_view_revision
+  ) {
+    if (current.revision > incoming.revision) {
       return false;
     }
-    turnsById[incoming.turn_id] = merged;
-    return true;
+    if (current.revision === incoming.revision) {
+      const merged = mergeSameRevisionTurn(current, incoming);
+      if (merged === current) {
+        return false;
+      }
+      turnsById[incoming.turn_id] = merged;
+      return true;
+    }
   }
   if (current === incoming) {
     return false;
@@ -394,13 +394,30 @@ export function upsertTurns(
   if (incomingTurns.length === 0) {
     return timeline;
   }
+  const freshTurns = timeline.historyViewRevision === null
+    ? incomingTurns
+    : incomingTurns.filter((turn) =>
+        turn.source_view_revision >= timeline.historyViewRevision!
+      );
+  const historyViewRevision = timeline.threadId === null || freshTurns.length === 0
+    ? timeline.historyViewRevision
+    : Math.max(
+        timeline.historyViewRevision ?? 0,
+        ...freshTurns.map((turn) => turn.source_view_revision),
+      );
+  const historyRevisionChanged = historyViewRevision !== timeline.historyViewRevision;
+  if (freshTurns.length === 0) {
+    return historyRevisionChanged
+      ? { ...timeline, historyViewRevision }
+      : timeline;
+  }
   let turnsById = { ...timeline.turnsById };
   let summaryTurnsById = { ...timeline.summaryTurnsById };
   let detailAccessOrder = [...timeline.detailAccessOrder];
   const mergedTurnIds = new Set(timeline.mergedTurnIds);
   let changed = false;
 
-  for (const incoming of incomingTurns) {
+  for (const incoming of freshTurns) {
     if (
       mergedTurnIds.has(incoming.turn_id)
       || timeline.invalidatedTurnIds.includes(incoming.turn_id)
@@ -450,10 +467,13 @@ export function upsertTurns(
   }
 
   if (!changed) {
-    return timeline;
+    return historyRevisionChanged
+      ? { ...timeline, historyViewRevision }
+      : timeline;
   }
   return compactTurnDetails({
     ...timeline,
+    historyViewRevision,
     turnsById,
     summaryTurnsById,
     detailAccessOrder,
@@ -493,7 +513,9 @@ function compactTurnDetails(
         detail
         && summary
         && isTurnDetail(detail)
-        && summary.revision === detail.revision,
+        && summary.revision === detail.revision
+        && summary.source_view_id === detail.source_view_id
+        && summary.source_view_revision === detail.source_view_revision,
       );
     });
     if (candidateIndex === -1) break;
@@ -556,6 +578,10 @@ export function applyTurnBootstrap(
   if (timeline.generation !== generation) {
     return timeline;
   }
+  if (!bootstrap.thread_id) throw new Error("Turn bootstrap 缺少精确 thread owner");
+  if (timeline.threadId !== null && timeline.threadId !== bootstrap.thread_id) {
+    throw new Error("Turn bootstrap 的 thread owner 与已有时间线不一致");
+  }
   let next = replaceProjection(timeline, bootstrap.projection_epoch);
   const preserveCachedWindow = next === timeline && (
     timeline.orderedTurnIds.length > 0 || timeline.internalExecutions.length > 0
@@ -565,6 +591,7 @@ export function applyTurnBootstrap(
   const projectionState = bootstrap.projection_state ?? "ready";
   next = {
     ...next,
+    threadId: bootstrap.thread_id,
     phase: projectionState === "ready" ? "ready" : "bootstrapping",
     activeJobs: bootstrap.active_jobs ?? [],
     // bootstrap 只描述最新 Turn。重新进入已经加载过的会话时，不能把
@@ -636,19 +663,25 @@ export function applyTurnDetails(
   for (const turn of batch.items) {
     receivedIds.add(turn.turn_id);
   }
+  const freshItems = timeline.historyViewRevision === null
+    ? batch.items
+    : batch.items.filter((turn) =>
+        turn.source_view_revision >= timeline.historyViewRevision!
+      );
+  const freshIds = new Set(freshItems.map((turn) => turn.turn_id));
   // 成功的详情响应证明这些 Turn 仍属于当前投影；允许它们从一次旧的
-  // 404/失效标记中复活，否则工具详情会请求成功但仍被 upsertTurns 静默丢弃。
+  // 404/失效标记中复活。先按快照 revision 排除迟到响应，避免旧详情撤销失效标记。
   const revalidatedTimeline = timeline.invalidatedTurnIds.some((turnId) =>
-    receivedIds.has(turnId)
+    freshIds.has(turnId)
   )
     ? {
         ...timeline,
         invalidatedTurnIds: timeline.invalidatedTurnIds.filter(
-          (turnId) => !receivedIds.has(turnId),
+          (turnId) => !freshIds.has(turnId),
         ),
       }
     : timeline;
-  const next = upsertTurns(revalidatedTimeline, batch.items);
+  const next = upsertTurns(revalidatedTimeline, freshItems);
   return {
     ...next,
     projectionEpoch: batch.projection_epoch,
@@ -659,13 +692,63 @@ export function applyTurnDetails(
   };
 }
 
+function releaseHistoryPageLoading(
+  timeline: SessionTurnTimeline,
+  direction: "before" | "after" | "around",
+): SessionTurnTimeline {
+  const loadingBefore = direction === "after" ? timeline.loadingBefore : false;
+  const loadingAfter = direction === "before" ? timeline.loadingAfter : false;
+  if (
+    loadingBefore === timeline.loadingBefore
+    && loadingAfter === timeline.loadingAfter
+  ) {
+    return timeline;
+  }
+  return { ...timeline, loadingBefore, loadingAfter };
+}
+
 export function applyTurnHistoryPage(
   timeline: SessionTurnTimeline,
   page: TurnHistoryPage,
   direction: "before" | "after" | "around" = "before",
 ): SessionTurnTimeline {
   requireMatchingEpoch(timeline, page.projection_epoch);
-  const withSummaries = upsertTurns(timeline, page.summaries ?? []);
+  if (!page.thread_id) throw new Error("Turn history 缺少精确 thread owner");
+  if (timeline.threadId !== null && timeline.threadId !== page.thread_id) {
+    throw new Error("Turn history 的 thread owner 与已有时间线不一致");
+  }
+  const hasSourceViewId = typeof page.source_view_id === "string";
+  const hasSourceViewRevision = typeof page.source_view_revision === "number";
+  if (hasSourceViewId !== hasSourceViewRevision) {
+    throw new Error("Turn history 必须同时携带 source view/revision");
+  }
+  const hasPageBinding = hasSourceViewId && hasSourceViewRevision;
+  if (hasPageBinding && !page.source_view_id) {
+    throw new Error("Turn history source view 不能为空");
+  }
+  const hasMaterializedHistory = page.items.length > 0
+    || (page.summaries?.length ?? 0) > 0
+    || (page.internal_executions?.length ?? 0) > 0;
+  if (!hasPageBinding && hasMaterializedHistory) {
+    throw new Error("已物化 Turn history 缺少 source view/revision");
+  }
+  if (
+    timeline.historyViewRevision !== null
+    && (
+      !hasPageBinding
+      || page.source_view_revision! < timeline.historyViewRevision
+    )
+  ) {
+    return releaseHistoryPageLoading(timeline, direction);
+  }
+  const pageTimeline: SessionTurnTimeline = {
+    ...timeline,
+    threadId: page.thread_id,
+    historyViewRevision: hasPageBinding
+      ? page.source_view_revision!
+      : timeline.historyViewRevision,
+  };
+  const withSummaries = upsertTurns(pageTimeline, page.summaries ?? []);
   const next = upsertTurns(withSummaries, page.items);
   const internalExecutions = new Map(
     next.internalExecutions.map((execution) => [execution.execution_id, execution]),
@@ -731,13 +814,7 @@ export function applyTurnHistoryPage(
       responseParts.set(part.part_id, part);
     }
     const orderedResponseParts = [...responseParts.values()];
-    orderedResponseParts.sort((left, right) => {
-      const [leftSequence, leftOrdinal] = internalPartOrder(left);
-      const [rightSequence, rightOrdinal] = internalPartOrder(right);
-      return leftSequence - rightSequence
-        || leftOrdinal - rightOrdinal
-        || left.part_id.localeCompare(right.part_id);
-    });
+    orderedResponseParts.sort(compareInternalResponseParts);
     internalExecutions.set(execution.execution_id, {
       ...execution,
       display_parts: [...displayParts.values()].sort((left, right) =>

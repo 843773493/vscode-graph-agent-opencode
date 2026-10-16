@@ -19,6 +19,7 @@ interface WorkbenchBottomPanelProps {
   currentSessionId: string;
   terminalController: WorkspaceTerminalController;
   terminalThread: ResourceThreadRef | null;
+  terminalThreadTargetUnavailable: boolean;
   generatorResources: SessionGeneratorResourcesController;
   workspaces: GatewayWorkspace[];
   onUpdateState: (patch: Partial<WorkspaceBottomPanelState>) => void;
@@ -44,6 +45,7 @@ export default function WorkbenchBottomPanel({
   currentSessionId,
   terminalController,
   terminalThread,
+  terminalThreadTargetUnavailable,
   generatorResources,
   workspaces,
   onUpdateState,
@@ -77,6 +79,7 @@ export default function WorkbenchBottomPanel({
         <TerminalPanel
           controller={terminalController}
           currentThread={terminalThread}
+          threadTargetUnavailable={terminalThreadTargetUnavailable}
           workspaceId={workspaceId}
           workspaceName={workspaceName}
           selectedTerminalId={state.terminalId}

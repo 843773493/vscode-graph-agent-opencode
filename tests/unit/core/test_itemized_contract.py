@@ -7,15 +7,13 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from app.domain.itemized.assembly_snapshot import (
-    context_request_hash,
-)
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
     PayloadKind,
     SelectionKind,
     SemanticKind,
 )
+from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
     content_hash,
@@ -101,7 +99,7 @@ def _assistant_tool_item(
     return reasoning_item, tool_item
 
 
-def test_provider_projection_prefers_complete_checkpoint_tool_carrier() -> None:
+def test_provider_projection_prefers_closed_checkpoint_tool_carrier() -> None:
     live = _assistant_tool_item(
         item_sequence=1,
         item_id="live",
@@ -118,6 +116,72 @@ def test_provider_projection_prefers_complete_checkpoint_tool_carrier() -> None:
         checkpoint=True,
         reasoning="checkpoint 中完整的思考正文",
     )
+    checkpoint_result = CanonicalItemRecord.create(
+        item_sequence=5,
+        item_id="checkpoint-result",
+        semantic_kind=SemanticKind.TOOL_RESULT,
+        payload_kind=PayloadKind.TOOL_RESULT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "tool",
+            "producer_id": "checkpoint-result",
+            "invocation_id": "turn-tool",
+        },
+        payload={
+            "content": "checkpoint tool result",
+            "name": "ls",
+            "result_id": "checkpoint-result",
+            "tool_call_id": "call-shared",
+            "tool_outcome": "unknown",
+            "execution_confirmed": False,
+        },
+        projection_identity=ItemProjectionIdentity(
+            model_call_id="model-call-1",
+            projection_message_id="checkpoint-result",
+        ),
+        turn_id="turn-tool",
+        turn_scope="turn_member",
+        message_group_id="message-checkpoint",
+        wire_role="tool",
+    )
+
+    messages = project_canonical_items((*live, *checkpoint, checkpoint_result))
+
+    assert len(messages) == 2
+    assert isinstance(messages[0], AIMessage)
+    assert messages[0].content == [
+        {
+            "type": "reasoning",
+            "text": "checkpoint 中完整的思考正文",
+            "item_id": "checkpoint-reasoning",
+        }
+    ]
+    assert [call["id"] for call in messages[0].tool_calls] == ["call-shared"]
+    assert isinstance(messages[1], ToolMessage)
+    assert messages[1].tool_call_id == "call-shared"
+    assert messages[1].content == "checkpoint tool result"
+    assert messages[1].status == "error"
+    assert messages[1].response_metadata["tool_outcome"] == "unknown"
+    assert messages[1].response_metadata["execution_confirmed"] is False
+
+
+def test_provider_projection_keeps_live_tool_carrier_without_checkpoint_result() -> None:
+    live = _assistant_tool_item(
+        item_sequence=1,
+        item_id="live",
+        group_id="message-live",
+        tool_call_id="call-shared",
+        checkpoint=False,
+        reasoning="最后一个增量片段",
+    )
+    checkpoint = _assistant_tool_item(
+        item_sequence=3,
+        item_id="checkpoint",
+        group_id="message-checkpoint",
+        tool_call_id="call-shared",
+        checkpoint=True,
+        reasoning="尚未闭合的 checkpoint 思考正文",
+    )
 
     messages = project_canonical_items((*live, *checkpoint))
 
@@ -126,8 +190,8 @@ def test_provider_projection_prefers_complete_checkpoint_tool_carrier() -> None:
     assert messages[0].content == [
         {
             "type": "reasoning",
-            "text": "checkpoint 中完整的思考正文",
-            "item_id": "checkpoint-reasoning",
+            "text": "最后一个增量片段",
+            "item_id": "live-reasoning",
         }
     ]
     assert [call["id"] for call in messages[0].tool_calls] == ["call-shared"]

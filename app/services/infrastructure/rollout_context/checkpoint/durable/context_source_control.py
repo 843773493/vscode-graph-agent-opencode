@@ -353,7 +353,7 @@ class ContextSourceControlStorageMixin:
 
         ``ApplySourceLifecycleDecision`` 是唯一 source mutation 入口：正文已经
         在 typed intent 中封存，storage 不从文件或当前资源快照补读。``item``
-        为 ``None`` 只允许 track/untrack 这类没有 source item 的控制决策；
+        必须与 frozen content/item_id 配对；无 source item 的控制决策不得携带 item；
         ``observe_pending`` 只提交 pending ambient item，不推进 applied revision。
         """
         if not isinstance(decision, ApplySourceLifecycleDecision):
@@ -364,6 +364,33 @@ class ContextSourceControlStorageMixin:
             raise TypeError(
                 "apply_source_lifecycle_decision.item 必须是 CanonicalItemRecord 或 None"
             )
+        if decision.content is None:
+            if decision.item_id is not None or item is not None:
+                raise ValueError(
+                    "apply_source_lifecycle_decision 无 content 时不得携带 item_id 或 CanonicalItemRecord"
+                )
+        else:
+            if decision.item_id is None:
+                raise ValueError(
+                    "apply_source_lifecycle_decision 有 content 时必须携带 item_id"
+                )
+            if item is None:
+                raise ValueError(
+                    "apply_source_lifecycle_decision 有 content/item_id 时必须携带对应 CanonicalItemRecord"
+                )
+            if item.item_id != decision.item_id:
+                raise ValueError(
+                    "apply_source_lifecycle_decision.item_id 与 CanonicalItemRecord.item_id 不一致"
+                )
+            expected_payload = (
+                dict(decision.runtime_notice_payload)
+                if decision.runtime_notice_payload is not None
+                else decision.content
+            )
+            if item.payload != expected_payload:
+                raise ValueError(
+                    "apply_source_lifecycle_decision.content 与 CanonicalItemRecord.payload 不一致"
+                )
         owner = decision.owner
         thread_id = self._context_source_rollout_owner(
             owner.session_id,
@@ -503,14 +530,11 @@ class ContextSourceControlStorageMixin:
                 if decision.revision is not None
                 else (stored.latest_revision if stored is not None else None)
             )
+            # 普通 lifecycle intent 只记录最新观察版本；可见版本由真实 assembly seal 推进。
             latest_visible = (
-                decision.revision
-                if decision.content is not None and not decision.pending_only
-                else (
-                    stored.latest_visible_committed_revision
-                    if stored is not None
-                    else None
-                )
+                stored.latest_visible_committed_revision
+                if stored is not None
+                else None
             )
             state = ContextSourceControlState(
                 owner=ContextSourceOwnerKey(

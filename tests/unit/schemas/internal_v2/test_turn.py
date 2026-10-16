@@ -21,11 +21,13 @@ from app.schemas.internal_v2.turn import (
 def _turn_fields() -> dict[str, object]:
     now = datetime.now(UTC)
     return {
-        "turn_id": "job_1",
+        "turn_id": "turn_1",
         "job_id": "job_1",
         "session_id": "session_1",
         "ordinal": 1,
         "root_logical_item_ordinal": 0,
+        "source_view_id": "view_1",
+        "source_view_revision": 1,
         "revision": 1,
         "status": JobStatus.completed,
         "source_message_ids": ["message_1"],
@@ -38,15 +40,24 @@ def _turn_fields() -> dict[str, object]:
 def test_turn_summary_has_stable_job_identity() -> None:
     summary = TurnSummaryDTO.model_validate(_turn_fields())
 
-    assert summary.turn_id == summary.job_id
+    assert summary.turn_id == "turn_1"
+    assert summary.job_id == "job_1"
     assert summary.items_view == "summary"
 
 
-def test_turn_rejects_different_turn_and_job_identity() -> None:
+def test_turn_rejects_aliased_turn_and_job_identity() -> None:
     values = _turn_fields()
-    values["turn_id"] = "turn_other"
+    values["turn_id"] = values["job_id"]
 
-    with pytest.raises(ValidationError, match="Turn ID 必须等于实际执行 Job ID"):
+    with pytest.raises(ValidationError, match="Turn ID 与实际执行 Job ID 必须独立"):
+        TurnBaseDTO.model_validate(values)
+
+
+@pytest.mark.parametrize("field", ["turn_id", "job_id"])
+@pytest.mark.parametrize("value", ["", " "])
+def test_turn_rejects_empty_identity(field: str, value: str) -> None:
+    values = {**_turn_fields(), field: value}
+    with pytest.raises(ValidationError):
         TurnBaseDTO.model_validate(values)
 
 

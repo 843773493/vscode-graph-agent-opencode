@@ -94,6 +94,7 @@ function snapshot(
   return {
     session_id: SESSION_ID,
     active_job_id: `job_${messageId}`,
+    thread_id: "thr_018f0000000070008000000000000001",
     snapshot_version: version,
     requests: [{
       job_id: `job_${messageId}`,
@@ -110,6 +111,7 @@ function snapshot(
       agent_id: "default",
       gateway_id: "gateway_test",
       message_created_at: "2026-09-22T00:00:00Z",
+      message_metadata: { updated_at: "2026-09-22T00:00:00Z" },
       created_at: "2026-09-22T00:00:00Z",
       updated_at: "2026-09-22T00:00:00Z",
       snapshot_version: version,
@@ -158,13 +160,13 @@ describe("待处理请求动作的失败补偿", () => {
       if (method === "PATCH") {
         return Response.json({ detail: "队列快照已过期" }, { status: 409 });
       }
-      if (path === `/api/v1/sessions/${SESSION_ID}/pending-requests`) {
+      if (path === `/api/v1/sessions/${SESSION_ID}/main-thread/pending-requests`) {
         return apiResponse(snapshot("msg_a", "服务端真值", 3));
       }
       throw new Error(`未预期请求: ${method} ${path}`);
     };
 
-    const error = await actions.updatePendingRequest("msg_a", "本地修改")
+    const error = await actions.updatePendingRequestPolicy("msg_a", "after_interrupt", 1)
       .then(() => null, (thrown: unknown) => thrown);
 
     expect(error).toBeInstanceOf(HttpRequestError);
@@ -173,8 +175,8 @@ describe("待处理请求动作的失败补偿", () => {
     expect((error as Error).message).not.toContain("也失败");
     // 补偿成功时必须用后端真值整表替换本地快照。
     expect(calls).toEqual([
-      `PATCH /api/v1/sessions/${SESSION_ID}/pending-requests/msg_a`,
-      `GET /api/v1/sessions/${SESSION_ID}/pending-requests`,
+      `PATCH /api/v1/sessions/${SESSION_ID}/pending-requests/msg_a/policy`,
+      `GET /api/v1/sessions/${SESSION_ID}/main-thread/pending-requests`,
     ]);
     expect(currentState.pendingConversations.get(CACHE_KEY)?.[0].conversationId)
       .toBe("msg_a");
@@ -187,7 +189,7 @@ describe("待处理请求动作的失败补偿", () => {
       if (method === "PATCH") {
         return Response.json({ detail: "队列快照已过期" }, { status: 409 });
       }
-      if (path === `/api/v1/sessions/${SESSION_ID}/pending-requests`) {
+      if (path === `/api/v1/sessions/${SESSION_ID}/main-thread/pending-requests`) {
         return Response.json(
           { detail: "待处理队列服务不可用" },
           { status: 500 },
@@ -196,7 +198,7 @@ describe("待处理请求动作的失败补偿", () => {
       throw new Error(`未预期请求: ${method} ${path}`);
     };
 
-    const error = await actions.updatePendingRequest("msg_b", "本地修改")
+    const error = await actions.updatePendingRequestPolicy("msg_b", "after_interrupt", 1)
       .then(() => null, (thrown: unknown) => thrown);
 
     // 必须仍是原始 HttpRequestError 对象：上层按 status 判断语义，不能被包装。
@@ -208,19 +210,27 @@ describe("待处理请求动作的失败补偿", () => {
       .toContain("重新读取待处理队列也失败: 请求失败 500");
   });
 
-  test("变更成功后用后端返回的完整对象整表替换快照", async () => {
+  test("变更成功后读取 main 快照，Session 返回中的 child 不进入主视图", async () => {
     await mount();
-    route = (_path, method) => {
+    route = (path, method) => {
       if (method === "PATCH") {
+        const child = snapshot("msg_child", "child 内容", 5);
+        return apiResponse({
+          ...child, thread_id: null,
+          requests: child.requests?.map((request) => ({ ...request, thread_id: "thr_child" })),
+        });
+      }
+      if (path === `/api/v1/sessions/${SESSION_ID}/main-thread/pending-requests`) {
         return apiResponse(snapshot("msg_c", "服务端返回内容", 5));
       }
       throw new Error(`未预期请求: ${method}`);
     };
 
-    await actions.updatePendingRequest("msg_c", "本地修改");
+    await actions.updatePendingRequestPolicy("msg_c", "after_interrupt", 1);
 
     expect(calls).toEqual([
-      `PATCH /api/v1/sessions/${SESSION_ID}/pending-requests/msg_c`,
+      `PATCH /api/v1/sessions/${SESSION_ID}/pending-requests/msg_c/policy`,
+      `GET /api/v1/sessions/${SESSION_ID}/main-thread/pending-requests`,
     ]);
     const conversations = currentState.pendingConversations.get(CACHE_KEY);
     expect(conversations).toHaveLength(1);

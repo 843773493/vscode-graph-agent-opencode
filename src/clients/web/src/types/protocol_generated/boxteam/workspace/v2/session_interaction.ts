@@ -24,6 +24,7 @@ export interface MessageObservation {
   attachments: any[];
   metadata: { [key: string]: any } | undefined;
   created_at: string | undefined;
+  thread_id: string;
 }
 
 export interface JobStepProgress {
@@ -119,6 +120,7 @@ function createBaseMessageObservation(): MessageObservation {
     attachments: [],
     metadata: undefined,
     created_at: undefined,
+    thread_id: "",
   };
 }
 
@@ -132,6 +134,7 @@ export const MessageObservation: MessageFns<MessageObservation> = {
       attachments: globalThis.Array.isArray(object?.attachments) ? [...object.attachments] : [],
       metadata: isObject(object.metadata) ? object.metadata : undefined,
       created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -158,6 +161,9 @@ export const MessageObservation: MessageFns<MessageObservation> = {
     if (message.created_at !== undefined) {
       obj.created_at = message.created_at;
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -173,6 +179,7 @@ export const MessageObservation: MessageFns<MessageObservation> = {
     message.attachments = object.attachments?.map((e) => e) || [];
     message.metadata = object.metadata ?? undefined;
     message.created_at = object.created_at ?? undefined;
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };

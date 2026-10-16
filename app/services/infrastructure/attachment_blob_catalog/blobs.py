@@ -6,6 +6,7 @@ blob/owner_ref 的读取与 session 级释放。宿主为 AttachmentBlobCatalog�
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime
 
 from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
@@ -29,6 +30,46 @@ from app.services.infrastructure.attachment_blob_catalog.schema import (
     _date_from_locator,
     _validate_non_empty,
 )
+
+
+def _publish_blob_metadata(
+    connection: sqlite3.Connection, *, identity: BlobIdentity, relative_locator: str,
+    mime_type: str | None, protection: str, now_text: str, restore_available: bool = False,
+) -> None:
+    """正文 catalog 的唯一写入点；导入由实际校验过的正文和精确 fork claim 保活。"""
+    validate_digest(identity.digest)
+    validate_blob_id(identity.blob_id)
+    validate_blob_relative_locator(relative_locator)
+    if relative_locator != date_bucket_relative_locator(identity.blob_id, _date_from_locator(relative_locator)):
+        raise ValueError(f"relative locator 与 blob-id 不一致: locator={relative_locator!r}, blob_id={identity.blob_id!r}")
+    row = connection.execute("SELECT * FROM attachment_blobs WHERE blob_id = ?", (identity.blob_id,)).fetchone()
+    if row is None:
+        conflict = connection.execute("SELECT blob_id, length FROM attachment_blobs WHERE digest = ?", (identity.digest,)).fetchone()
+        if conflict is not None:
+            raise BlobIdentityConflictError(
+                "同一 digest 已绑定不同 blob-id（blob-identity-conflict）: "
+                f"digest={identity.digest!r}, existing_blob_id={conflict['blob_id']!r}, actual_blob_id={identity.blob_id!r}"
+            )
+        connection.execute(
+            "INSERT INTO attachment_blobs (blob_id, digest, relative_locator, length, mime_type, protection, availability, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'available', ?, ?)",
+            (identity.blob_id, identity.digest, relative_locator, identity.length, mime_type, protection, now_text, now_text),
+        )
+        return
+    blob = _blob_from_row(row)
+    if blob.digest != identity.digest or blob.length != identity.length:
+        raise BlobIdentityConflictError(
+            "同一 blob-id 对应不同 digest/length（blob-identity-conflict）: "
+            f"blob_id={identity.blob_id!r}, existing_digest={blob.digest!r}, actual_digest={identity.digest!r}, "
+            f"existing_length={blob.length}, actual_length={identity.length}"
+        )
+    if blob.relative_locator != relative_locator:
+        raise BlobIdentityConflictError(
+            "blob 已发布的 relative locator 与本次不一致（不得按新日期复制 blob，复用首次 locator）: "
+            f"blob_id={identity.blob_id!r}, existing={blob.relative_locator!r}, actual={relative_locator!r}"
+        )
+    if restore_available and blob.availability != "available":
+        connection.execute("UPDATE attachment_blobs SET availability='available', updated_at=? WHERE blob_id=?", (now_text, identity.blob_id))
 
 
 class BlobsMixin:
@@ -81,6 +122,11 @@ class BlobsMixin:
         validate_digest(identity.digest)
         validate_blob_id(identity.blob_id)
         validate_blob_relative_locator(relative_locator)
+        if retention_until is not None:
+            deadline = datetime.fromisoformat(retention_until)
+            if deadline.tzinfo is None:
+                raise ValueError("attachment retention_until 必须带时区")
+            retention_until = deadline.astimezone(UTC).isoformat()
         if relative_locator != date_bucket_relative_locator(
             identity.blob_id,
             _date_from_locator(relative_locator),
@@ -91,57 +137,8 @@ class BlobsMixin:
             )
         now_text = datetime.now(UTC).isoformat()
         with self.write_transaction() as connection:
-            blob_row = connection.execute(
-                "SELECT * FROM attachment_blobs WHERE blob_id = ?",
-                (identity.blob_id,),
-            ).fetchone()
-            if blob_row is None:
-                conflict = connection.execute(
-                    "SELECT blob_id, length FROM attachment_blobs WHERE digest = ?",
-                    (identity.digest,),
-                ).fetchone()
-                if conflict is not None:
-                    raise BlobIdentityConflictError(
-                        "同一 digest 已绑定不同 blob-id（blob-identity-conflict）: "
-                        f"digest={identity.digest!r}, "
-                        f"existing_blob_id={conflict['blob_id']!r}, "
-                        f"actual_blob_id={identity.blob_id!r}"
-                    )
-                connection.execute(
-                    "INSERT INTO attachment_blobs (blob_id, digest, "
-                    "relative_locator, length, mime_type, protection, "
-                    "availability, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, 'available', ?, ?)",
-                    (
-                        identity.blob_id,
-                        identity.digest,
-                        relative_locator,
-                        identity.length,
-                        mime_type,
-                        protection,
-                        now_text,
-                        now_text,
-                    ),
-                )
-            else:
-                blob = _blob_from_row(blob_row)
-                if blob.digest != identity.digest or blob.length != identity.length:
-                    raise BlobIdentityConflictError(
-                        "同一 blob-id 对应不同 digest/length（blob-identity-conflict）: "
-                        f"blob_id={identity.blob_id!r}, "
-                        f"existing_digest={blob.digest!r}, "
-                        f"actual_digest={identity.digest!r}, "
-                        f"existing_length={blob.length}, "
-                        f"actual_length={identity.length}"
-                    )
-                if blob.relative_locator != relative_locator:
-                    raise BlobIdentityConflictError(
-                        "blob 已发布的 relative locator 与本次不一致"
-                        "（不得按新日期复制 blob，复用首次 locator）: "
-                        f"blob_id={identity.blob_id!r}, "
-                        f"existing={blob.relative_locator!r}, "
-                        f"actual={relative_locator!r}"
-                    )
+            _publish_blob_metadata(connection, identity=identity, relative_locator=relative_locator,
+                                   mime_type=mime_type, protection=protection, now_text=now_text)
 
             record = self._require_ingest_row(connection, ingest_idempotency_key)
             if record.blob_id is not None and record.blob_id != identity.blob_id:
@@ -167,6 +164,7 @@ class BlobsMixin:
                     ref.blob_id != identity.blob_id
                     or ref.owner_session_id != owner_session_id
                     or ref.owner_thread_id != owner_thread_id
+                    or ref.retention_until != retention_until
                 ):
                     raise BlobIdentityConflictError(
                         "同 attachment_id 的 owner reference 与本次不一致"
@@ -233,6 +231,19 @@ class BlobsMixin:
         ).fetchone()
         return None if row is None else _owner_ref_from_row(row)
 
+    def get_reusable_attachment_owner(self, attachment_id: str) -> AttachmentOwnerRef | None:
+        """只复用已发布且仍 active 的引用；预留引用不授予第二次 fork。"""
+        _validate_non_empty("attachment_id", attachment_id)
+        row = self._connected().execute(
+            "SELECT owner.* FROM attachment_owner_refs owner "
+            "JOIN attachment_blobs blob ON blob.blob_id=owner.blob_id "
+            "WHERE owner.attachment_id=? AND owner.state='active' AND blob.availability='available' "
+            "AND NOT EXISTS (SELECT 1 FROM fork_attachment_claims claim "
+            "WHERE claim.target_owner_ref_id=owner.owner_ref_id AND claim.state IN ('preparing','owner_reserved'))",
+            (attachment_id,),
+        ).fetchone()
+        return None if row is None else _owner_ref_from_row(row)
+
     def list_active_owner_refs_for_blob(
         self, blob_id: str
     ) -> tuple[AttachmentOwnerRef, ...]:
@@ -266,17 +277,19 @@ class BlobsMixin:
         return tuple(_owner_ref_from_row(row) for row in rows)
 
     def release_owner_refs_for_session(
-        self, *, owner_session_id: str, reason: str
+        self, *, owner_session_id: str, reason: str, owner_thread_id: str | None = None,
     ) -> tuple[AttachmentOwnerRef, ...]:
         """释放该 session 的全部 active owner reference（删除 drain 定点调用）。"""
         _validate_non_empty("owner_session_id", owner_session_id)
         _validate_non_empty("reason", reason)
+        if owner_thread_id is not None:
+            _validate_non_empty("owner_thread_id", owner_thread_id)
         now_text = datetime.now(UTC).isoformat()
         with self.write_transaction() as connection:
             rows = connection.execute(
                 "SELECT owner_ref_id FROM attachment_owner_refs "
-                "WHERE owner_session_id = ? AND state = 'active'",
-                (owner_session_id,),
+                "WHERE owner_session_id = ? AND state = 'active' AND (? IS NULL OR owner_thread_id=?)",
+                (owner_session_id, owner_thread_id, owner_thread_id),
             ).fetchall()
             for row in rows:
                 connection.execute(
@@ -285,8 +298,8 @@ class BlobsMixin:
                     (reason, now_text, str(row["owner_ref_id"])),
                 )
             released = connection.execute(
-                "SELECT * FROM attachment_owner_refs WHERE owner_session_id = ? "
+                "SELECT * FROM attachment_owner_refs WHERE owner_session_id = ? AND (? IS NULL OR owner_thread_id=?) "
                 "ORDER BY created_at, rowid",
-                (owner_session_id,),
+                (owner_session_id, owner_thread_id, owner_thread_id),
             ).fetchall()
             return tuple(_owner_ref_from_row(row) for row in released)

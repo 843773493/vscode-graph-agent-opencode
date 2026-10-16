@@ -16,6 +16,17 @@ _SHA256_JCS_PATTERN = re.compile(r"^sha256:jcs:v1:[0-9a-f]{64}$")
 _UNICODE_SURROGATE_PATTERN = re.compile(r"[\ud800-\udfff]")
 
 
+def copy_json_value(value: object) -> object:
+    """隔离 JSON 容器的引用，保留 list/tuple 的既有序列化形状。"""
+    if isinstance(value, Mapping):
+        return {key: copy_json_value(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [copy_json_value(child) for child in value]
+    if isinstance(value, tuple):
+        return tuple(copy_json_value(child) for child in value)
+    return value
+
+
 def _ensure_json_value(value: object, path: str = "value") -> None:
     if isinstance(value, str):
         if _UNICODE_SURROGATE_PATTERN.search(value) is not None:
@@ -77,8 +88,14 @@ def canonical_json_bytes(value: object) -> bytes:
         raise ItemSchemaError(f"RFC 8785 JCS 无法编码 value: {error}") from error
 
 
+def canonical_json_bytes_and_hash(value: object) -> tuple[bytes, str]:
+    """同次规范化的不可变字节与摘要；不持有输入引用或跨调用缓存。"""
+    encoded = canonical_json_bytes(value)
+    return encoded, "sha256:jcs:v1:" + hashlib.sha256(encoded).hexdigest()
+
+
 def sha256_jcs(value: object) -> str:
-    return "sha256:jcs:v1:" + hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+    return canonical_json_bytes_and_hash(value)[1]
 
 
 def validate_hash_token(value: object, field_name: str) -> str:

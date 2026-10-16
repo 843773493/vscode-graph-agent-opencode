@@ -38,6 +38,7 @@ class TurnAttachmentDTO(BaseModel):
     file_id: str
     name: str | None = None
     content_type: str | None = None
+    availability: Literal["available", "unavailable"] | None = None
 
 
 class TurnUserMessageDTO(BaseModel):
@@ -48,7 +49,7 @@ class TurnUserMessageDTO(BaseModel):
     content_truncated: bool = False
     attachments: list[TurnAttachmentDTO] = Field(default_factory=list)
     metadata: dict[str, object] = Field(default_factory=dict)
-    created_at: datetime
+    created_at: datetime = Field(description="canonical 用户消息的不可变创建时刻，接口为带时区 ISO8601；沿消息 response_metadata.created_at，保留显式时区偏移，无时区时按 UTC 解释，缺失时报错。复制保留源消息时间事实。")
 
 
 class TurnUserMessageSummaryDTO(BaseModel):
@@ -56,13 +57,13 @@ class TurnUserMessageSummaryDTO(BaseModel):
     preview: str = Field(default="", max_length=500)
     content_truncated: bool = False
     attachment_count: int = Field(default=0, ge=0)
-    created_at: datetime
+    created_at: datetime = Field(description="对应用户消息详情的 created_at，接口为带时区 ISO8601；摘要直接复用详情时间，保留显式时区偏移，详情对无时区值按 UTC 解释，复制保留源消息时间事实。")
 
 
 class TurnToolSummaryDTO(BaseModel):
     tool_name: str
     status: str
-    tool_call_id: str | None = None
+    tool_call_id: str | None = Field(default=None, description="历史工具聚合引用：已知 emitting ModelCall 时由其 ID 与 Provider 原始 call ID 限定，未知时保留原 call ID；不同 ModelCall 重用同一原始 ID 仍分别展示。")
 
 
 class TurnThinkingBlockDTO(BaseModel):
@@ -78,6 +79,12 @@ class TurnResponseSourceDTO(BaseModel):
     ``assistant_message_sequence`` 只用于把 ToolMessage 结果关联回产生它的
     assistant；它不是新的全局 part 序号。``call_index`` 仍然只表示同一
     assistant 的 tool_calls 列表顺序。
+
+    历史 activity 的 ``created_at`` 沿原 item 创建时刻；``elapsed_ms`` 为逻辑
+    activity 列表相邻项的整数毫秒差，首项从 Turn projection.created_at 起算。
+    final 使用 final_item_created_at，elapsed_ms 固定为 0。standalone internal
+    则沿同 view、同 execution 的前一 visible/display_only 逻辑成员，首项从
+    execution.created_at 起算。负差钳为 0；streaming 可缺省这两个时间字段。
     """
 
     message_sequence: int = Field(ge=0)
@@ -97,23 +104,24 @@ class TurnResponseSourceDTO(BaseModel):
 class TurnResponsePartDTO(BaseModel):
     """历史和 live 共用的响应部件语义模型。"""
 
-    part_id: str = Field(min_length=1, max_length=256)
+    part_id: str = Field(min_length=1, max_length=256, description="历史部件由 canonical item_id 与 part_ordinal 生成唯一引用；streaming 为临时部件 ID，不代表 canonical item 身份。")
     kind: Literal[
         "text",
         "reasoning",
         "reasoning_summary",
         "reasoning_encrypted",
+        "compaction_summary",
         "tool_call",
         "tool_result",
         "final_text",
     ]
     projection: Literal["summary", "detail", "streaming"]
-    status: Literal["pending", "running", "completed", "failed", "cancelled"] = "completed"
-    outcome_unknown: bool = False
+    status: Literal["pending", "running", "completed", "failed", "cancelled"] = Field(default="completed", description="响应部件的归一化状态；历史值由 canonical/消息投影映射，streaming 值随部件更新。completed 仅表示该部件完成，可与工具拒绝、Job 或 Execution 失败并存，不证明工具执行成功。")
+    outcome_unknown: bool = Field(default=False, description="历史 terminal Turn 的本次 mapper 输入缺少同一 ModelCall 与 Provider call ID 的匹配结果；不证明底层工具未执行或执行失败。")
     source: TurnResponseSourceDTO
     text: str = Field(default="", max_length=65536)
     carrier_type: str | None = Field(default=None, max_length=64)
-    tool_call_id: str | None = Field(default=None, max_length=256)
+    tool_call_id: str | None = Field(default=None, max_length=256, description="保留 canonical payload 中合法的工具调用 ID 表示，可为 Provider 原始 ID 或已有 ModelCall 限定 ID；不等同于历史工具 Trace/摘要的聚合引用，也不等同于 part_id。")
     tool_name: str | None = Field(default=None, max_length=256)
     arguments: str | None = Field(default=None, max_length=65536)
     result: str | None = Field(default=None, max_length=65536)
@@ -137,12 +145,17 @@ class TurnResponsePartDTO(BaseModel):
 
 
 class TurnActivityStatsDTO(BaseModel):
-    """Turn 折叠行使用的可展开中间 item 统计，不包含 Item 正文。"""
+    """Turn 折叠行使用的可展开中间 item 统计，不包含 Item 正文。
+
+    历史 duration_ms 取 Turn projection.created_at 到 updated_at 的整数毫秒差。
+    起止字符串缺失或非法时为 None，无时区按 UTC，负差钳为 0；这些是历史
+    投影起止时刻，不能统一解释为 acceptance 到 terminal，也不同于 Web live 计时。
+    """
 
     duration_ms: int | None = Field(default=None, ge=0)
     item_count: int = Field(default=0, ge=0)
-    first_item_sequence: int | None = Field(default=None, ge=1)
-    last_item_sequence: int | None = Field(default=None, ge=1)
+    first_item_sequence: int | None = Field(default=None, ge=1, description="所属 rollout 中已选 activity 成员的物理 item_sequence 最小值；空 activity 为 null，不表示连续成员区间或跨副本稳定身份。")
+    last_item_sequence: int | None = Field(default=None, ge=1, description="所属 rollout 中已选 activity 成员的物理 item_sequence 最大值；空 activity 为 null，不表示连续成员区间或跨副本稳定身份。")
 
     @model_validator(mode="after")
     def validate_item_range(self) -> TurnActivityStatsDTO:
@@ -158,23 +171,35 @@ class TurnActivityStatsDTO(BaseModel):
 
 
 class TurnBaseDTO(BaseModel):
-    """Turn summary 与 detail 共享的稳定身份和状态。"""
+    """Turn summary 与 detail 共享的稳定身份和状态。
 
-    turn_id: str
-    job_id: str
-    session_id: str
+    TurnRecord 与 acceptance 的持久 created_at 来自接受事务，root 消息有
+    独立创建时刻；此处按 history 已加载消息投影，不把两种事件时间混同。
+    """
+
+    turn_id: str = Field(min_length=1)
+    job_id: str = Field(min_length=1)
+    session_id: str = Field(min_length=1)
     ordinal: int = Field(ge=1)
     root_logical_item_ordinal: int = Field(ge=0)
+    # revision 精确绑定 Session/thread rollout 的 database_meta.history_view_revision；不是单 view、Turn 或 projection_epoch。
+    # 同一 owner 的 COW 换 view 仍可比较，跨 owner 不可比；逐行冻结绑定，接受新页不会改写旧行。
+    source_view_id: str = Field(min_length=1, description="实际历史读取快照的 view；消息操作原样携带。")
+    source_view_revision: int = Field(ge=0, description="实际历史读取快照的 history_view_revision。")
     revision: int = Field(ge=1)
-    status: JobStatus
-    created_at: datetime
-    updated_at: datetime
-    completed_at: datetime | None = None
+    status: JobStatus = Field(
+        description="Turn 历史展示状态映射：open→accepted、active→running、completed_empty→completed、interrupted→timed_out、unknown→failed；这是 Turn 历史投影，不代表 Job 状态事实。",
+    )
+    created_at: datetime = Field(description="带时区 ISO8601 展示时刻：非空 Turn projection 的 created_at 会先校验为有效且带时区，即使消息自身有时间也不能省略。随后取本次实际加载的首个非 internal HumanMessage 的 response_metadata.created_at，否则取首个已加载消息；候选消息或其时间缺失时，回退已校验的 turns.created_at，两者均无可用时间则报错。非空但非法的消息日期字符串直接报错，不触发回退。消息时间保留显式时区偏移，无时区按 UTC 解释；展示值受 include 加载范围影响。")
+    updated_at: datetime = Field(description="带时区 ISO8601 展示时刻：取本次所选 canonical Turn projection 的 turns.updated_at；缺少 projection、时刻非法或无时区时历史读取失败，不回退到消息时间；保留显式时区偏移。fork 历史沿用来源投影的原始时刻。")
+    completed_at: datetime | None = Field(default=None, description="直接映射 updated_at 的同一时刻，不是独立完成事件，非终态 Turn 也可能有值；fork 历史沿用来源投影的原始时刻。")
 
     @model_validator(mode="after")
     def validate_turn_identity(self) -> TurnBaseDTO:
-        if self.turn_id != self.job_id:
-            raise ValueError("Turn ID 必须等于实际执行 Job ID")
+        if not self.turn_id.strip() or not self.job_id.strip():
+            raise ValueError("Turn 与实际执行 Job ID 不能为空")
+        if self.turn_id == self.job_id:
+            raise ValueError("Turn ID 与实际执行 Job ID 必须独立")
         return self
 
 
@@ -407,8 +432,16 @@ class InternalExecutionHistoryDTO(BaseModel):
 
     execution_id: str = Field(min_length=1, max_length=256)
     job_id: str = Field(min_length=1, max_length=256)
-    session_id: str = Field(min_length=1, max_length=256)
-    thread_id: str = Field(min_length=1, max_length=256)
+    session_id: str = Field(
+        min_length=1,
+        max_length=256,
+        description="该持久 execution/admission 的历史 Session scope；fork 保留原值，可不同于本页请求目标，仅由目标本地冻结 namespace binding 校验，不用于重新寻址来源。",
+    )
+    thread_id: str = Field(
+        min_length=1,
+        max_length=256,
+        description="该持久 execution/admission 的历史 thread scope；fork 保留原值，可不同于本页请求 thread，仅由目标本地冻结 namespace binding 校验，不用于重新寻址来源。",
+    )
     status: Literal[
         "completed",
         "completed_empty",
@@ -417,9 +450,9 @@ class InternalExecutionHistoryDTO(BaseModel):
         "cancelled",
         "execution_lost",
         "unknown",
-    ]
-    created_at: datetime
-    updated_at: datetime
+    ] = Field(description="对应 executions.outcome 的独立 internal execution 历史结果，不是 Job 或 Turn 状态。")
+    created_at: datetime = Field(description="对应 executions 持久记录不可变的 UTC 创建时刻，接口按 ISO8601 表达，复制保留源值。")
+    updated_at: datetime = Field(description="对应 executions 持久记录的 UTC ISO8601 更新时刻；fork 保留已终态来源值，未终态目标取消使用目标收敛时刻。")
     display_parts: list[InternalExecutionDisplayPartDTO] = Field(
         max_length=256,
     )
@@ -446,9 +479,12 @@ class TurnHistoryPageDTO(BaseModel):
         default_factory=list,
         max_length=256,
     )
-    # 本页历史实际读取的 thread 身份；由业务服务层按权威 main pointer 回填，
-    # 内部 rollout 读取器只按 session 定位，不在此处伪造 thread 身份。
+    # 本页实际读取的请求 thread owner：业务层解析显式 thread 或权威 main pointer 后回填；独立 execution DTO 可保留不同的历史 owner。
     thread_id: str | None = None
+    # revision 精确绑定 Session/thread rollout 的 database_meta.history_view_revision；不是单 view、Turn 或 projection_epoch。
+    # 同一 owner 的 COW 换 view 仍可比较，跨 owner 不可比；本页绑定冻结，接受新页不会改写既有行。
+    source_view_id: str | None = Field(default=None, min_length=1)
+    source_view_revision: int | None = Field(default=None, ge=0)
     next_cursor: str | None = None
     has_more: bool = False
     before_cursor: str | None = None
@@ -459,6 +495,8 @@ class TurnHistoryPageDTO(BaseModel):
 
     @model_validator(mode="after")
     def validate_internal_execution_identity(self) -> TurnHistoryPageDTO:
+        if (self.source_view_id is None) != (self.source_view_revision is None):
+            raise ValueError("历史页必须同时携带 source view/revision")
         execution_ids = [entry.execution_id for entry in self.internal_executions]
         if len(execution_ids) != len(set(execution_ids)):
             raise ValueError("internal_executions 中 execution_id 不能重复")

@@ -6,21 +6,34 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
+from uuid import UUID
 
 import httpx
 import litellm
 import litellm.llms.custom_httpx.llm_http_handler as litellm_http_handler
 import pytest
 from langchain_core.messages import AIMessageChunk, HumanMessage
+from langgraph.checkpoint.base import empty_checkpoint
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
+from app.agents.providers.wire_finalize import (
+    chat_wire_params,
+    chat_wire_profile,
+    responses_wire_params,
+    responses_wire_profile,
+)
+from app.agents.sealed_assembly_dispatch import sealed_assembly_dispatch_scope
+from app.core.checkpoint_config import build_checkpoint_config
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.identifier import create_uuid_hex
 from app.core.model_delta_context import (
     reset_current_model_delta_sink,
     set_current_model_delta_sink,
 )
 from app.core.path_utils import get_session_path_resolver
+from app.core.session_thread_context import session_thread_owner_scope
 from app.core.turn_execution_scope import (
     AgentControlInbox,
     AgentLoopControlCoordinator,
@@ -29,11 +42,23 @@ from app.core.turn_execution_scope import (
     reset_current_turn_execution_scope,
     set_current_turn_execution_scope,
 )
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.message_stream_store import (
     MessageStreamNotFoundError,
     MessageStreamStore,
     MessageStreamSubscription,
     MessageStreamTerminalError,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
 )
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 from app.testing.model_stream import StreamFrame, get_protocol_codec, load_scenario
@@ -350,6 +375,137 @@ def _model(provider: ProviderKind, *, api_base: str | None = None):
     )
 
 
+def _accept_provider_turn(
+    saver: RolloutCheckpointSaver,
+    *,
+    session_id: str,
+    thread_id: str,
+    job_id: str,
+    turn_id: str,
+    key: str,
+):
+    ingress_id = create_uuid_hex()
+    accepted = saver.accept_turn(
+        session_id,
+        thread_id=thread_id,
+        accepted_ingress_id=ingress_id,
+        acceptance_idempotency_key=f"{key}:accept",
+        job_id=job_id,
+        admission_idempotency_key=f"{key}:admission",
+        payload="测试中断",
+        turn_id=turn_id,
+        root_item_id=f"item-{ingress_id}",
+    )
+    admission = saver.execution_admission(
+        session_id,
+        thread_id=thread_id,
+        execution_id=str(accepted["initial_execution_id"]),
+    )
+    owner = MutationIntentOwner(session_id, thread_id)
+    ingress_message = HumanMessage(content="测试中断", id=ingress_id)
+    ingress_message.response_metadata["turn_id"] = str(accepted["turn_id"])
+    return accepted, admission, owner, ingress_message
+
+
+def _interrupt_tool_set(stage: InterruptStage) -> ToolSetSnapshot:
+    if stage != "tool_call":
+        return ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
+    return ToolSetSnapshot(
+        selection_revision=sha256_jcs({"read_file": True}),
+        tools=(
+            {
+                "name": "read_file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                },
+            },
+        ),
+    )
+
+
+async def _prepare_sealed_provider_request(
+    *,
+    saver: RolloutCheckpointSaver,
+    runtime: MessageStreamRuntime,
+    session_id: str,
+    thread_id: str,
+    accepted: Mapping[str, object],
+    admission: object,
+    owner: MutationIntentOwner,
+    ingress_message: HumanMessage,
+    provider: ProviderKind,
+    model,
+    tool_set: ToolSetSnapshot,
+    frozen_provider_activation,
+    plan_key: str,
+):
+    checkpoint = empty_checkpoint()
+    checkpoint["channel_values"] = {"messages": [ingress_message]}
+    checkpoint["channel_versions"] = {"messages": "1"}
+    is_responses = provider == "responses"
+    profile = responses_wire_profile(model) if is_responses else chat_wire_profile(model)
+    wire_params = (
+        responses_wire_params(model, kwargs={})
+        if is_responses
+        else chat_wire_params(model, stop=None, kwargs={}, stream=True)
+    )
+    model_call_id = str(UUID(hex=create_uuid_hex()))
+    turn_id = str(accepted["turn_id"])
+    with (
+        session_thread_owner_scope(owner, langgraph_thread_id=thread_id),
+        execution_admission_scope(admission, langgraph_thread_id=thread_id),
+    ):
+        saver.put(
+            build_checkpoint_config(thread_id),
+            checkpoint,
+            {"source": "loop", "step": 1, "parents": {}},
+            {"messages": "1"},
+        )
+        prepared = saver.prepare_context_for_provider(
+            session_id,
+            thread_id,
+            turn_id=turn_id,
+            execution_id=admission.execution_id,
+            plan_creation_idempotency_key=plan_key,
+            seal_idempotency_key=f"{plan_key}:seal",
+            request_messages=[ingress_message],
+            context_source_manager=ContextSourceManager(
+                owner=ContextSourceOwnerKey(session_id, thread_id),
+                control_state_port=saver,
+            ),
+            tool_set_supplier=lambda: tool_set,
+            provider_version=profile.identity(),
+            wire_profile=profile,
+            wire_params=wire_params,
+            target_format="responses" if is_responses else "chat_completions",
+            **frozen_provider_activation(
+                saver,
+                plan_creation_idempotency_key=plan_key,
+                model_call_id=model_call_id,
+            ),
+        )
+        snapshot = prepared["snapshot"]
+        assert saver.get_context_assembly(
+            session_id,
+            thread_id,
+            assembly_id=snapshot.assembly_id,
+        ) == snapshot
+        assert snapshot.model_call_id == model_call_id
+        native_projection = (
+            saver.project_context_plan_to_native(
+                session_id,
+                thread_id,
+                prepared["plan"],
+            )
+            if is_responses
+            else None
+        )
+        await runtime.start_model(model_call_id, provider)
+    return prepared, snapshot, model_call_id, native_projection
+
+
 def _protocol(provider: ProviderKind) -> Literal[
     "openai_chat_sse", "openai_responses_sse"
 ]:
@@ -478,9 +634,31 @@ def _event_payload(event: Mapping[str, object]) -> Mapping[str, object]:
     return payload
 
 
-async def _consume_model(model) -> None:
-    async for _chunk in model._astream([HumanMessage(content="测试中断")]):
-        pass
+async def _consume_model(
+    model,
+    prepared: Mapping[str, object],
+    *,
+    owner: MutationIntentOwner,
+    admission: object,
+    thread_id: str,
+    model_call_id: str,
+    snapshot: object,
+    native_projection: object | None,
+) -> None:
+    with (
+        session_thread_owner_scope(owner, langgraph_thread_id=thread_id),
+        execution_admission_scope(admission, langgraph_thread_id=thread_id),
+        sealed_assembly_dispatch_scope(
+            snapshot,
+            callback_model_call_id=model_call_id,
+            native_projection=native_projection,
+        ),
+    ):
+        async for _chunk in model.astream(
+            prepared["messages"],
+            tools=prepared["tools"] or None,
+        ):
+            pass
 
 
 @pytest.mark.asyncio
@@ -499,6 +677,7 @@ async def test_handwritten_provider_interrupt_stops_pending_sse_read(
     message_stream_context: tuple[MessageStreamStore, object, str],
     provider: ProviderKind,
     stage: InterruptStage,
+    frozen_provider_activation,
 ) -> None:
     store, resolver, session_id = message_stream_context
     frames = _scenario_frames(provider, stage)
@@ -511,10 +690,23 @@ async def test_handwritten_provider_interrupt_stops_pending_sse_read(
     client = httpx.AsyncClient(transport=transport)
     previous_session, previous_factory = _install_litellm_client(client)
 
-    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
+    sessions_root = OUTPUT_ROOT / "workspace" / ".boxteam" / "sessions"
+    saver = RolloutCheckpointSaver(sessions_root)
+    thread_id = store._path_resolver.main_thread_id(session_id)
+    job_id = f"job_provider_interrupt_{provider}_{stage}"
+    accepted, admission, owner, ingress_message = _accept_provider_turn(
+        saver,
         session_id=session_id,
-        turn_id=f"job_provider_interrupt_{provider}_{stage}",
-        job_id=f"job_provider_interrupt_{provider}_{stage}",
+        thread_id=thread_id,
+        job_id=job_id,
+        turn_id=f"turn_provider_interrupt_{provider}_{stage}",
+        key=f"provider-interrupt:{provider}:{stage}",
+    )
+    writer = await store.open(
+        thread_id=thread_id,
+        session_id=session_id,
+        turn_id=str(accepted["turn_id"]),
+        job_id=job_id,
     )
     subscription = await store.subscribe(writer.turn_stream_id)
     runtime = MessageStreamRuntime(writer)
@@ -524,8 +716,36 @@ async def test_handwritten_provider_interrupt_stops_pending_sse_read(
     model_task: asyncio.Task[None] | None = None
     observed: list[dict[str, object]] = []
     try:
-        await runtime.start_model(f"model_{provider}_{stage}", provider)
-        model_task = asyncio.create_task(_consume_model(_model(provider)))
+        model = _model(provider)
+        prepared, snapshot, model_call_id, native_projection = (
+            await _prepare_sealed_provider_request(
+                saver=saver,
+                runtime=runtime,
+                session_id=session_id,
+                thread_id=thread_id,
+                accepted=accepted,
+                admission=admission,
+                owner=owner,
+                ingress_message=ingress_message,
+                provider=provider,
+                model=model,
+                tool_set=_interrupt_tool_set(stage),
+                frozen_provider_activation=frozen_provider_activation,
+                plan_key=f"provider-interrupt:{provider}:{stage}:assembly",
+            )
+        )
+        model_task = asyncio.create_task(
+            _consume_model(
+                model,
+                prepared,
+                owner=owner,
+                admission=admission,
+                thread_id=thread_id,
+                model_call_id=model_call_id,
+                snapshot=snapshot,
+                native_projection=native_projection,
+            )
+        )
         target_event = await _read_until(
             subscription,
             observed,
@@ -658,8 +878,30 @@ async def test_handwritten_provider_interrupt_stops_pending_sse_read(
 async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_result(
     message_stream_context: tuple[MessageStreamStore, object, str],
     provider: ProviderKind,
+    frozen_provider_activation,
 ) -> None:
     store, resolver, session_id = message_stream_context
+    sessions_root = OUTPUT_ROOT / "workspace" / ".boxteam" / "sessions"
+    saver = RolloutCheckpointSaver(sessions_root)
+    thread_id = store._path_resolver.main_thread_id(session_id)
+    owner = MutationIntentOwner(session_id, thread_id)
+    ingress_id = create_uuid_hex()
+    job_id = f"job_provider_tool_interrupt_{provider}"
+    accepted = saver.accept_turn(
+        session_id,
+        thread_id=thread_id,
+        accepted_ingress_id=ingress_id,
+        acceptance_idempotency_key=f"provider-tool-interrupt:{provider}:accept",
+        job_id=job_id,
+        admission_idempotency_key=f"provider-tool-interrupt:{provider}:admission",
+        payload="测试中断",
+        root_item_id=f"item-{ingress_id}",
+    )
+    admission = saver.execution_admission(
+        session_id,
+        thread_id=thread_id,
+        execution_id=str(accepted["initial_execution_id"]),
+    )
     frames = _scenario_frames(provider, "tool_execution")
     codec = get_protocol_codec(_protocol(provider))
     upstream = _GatedSSEStream(
@@ -670,10 +912,10 @@ async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_re
     client = httpx.AsyncClient(transport=transport)
     previous_session, previous_factory = _install_litellm_client(client)
 
-    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
+    writer = await store.open(thread_id=thread_id,
         session_id=session_id,
-        turn_id=f"job_provider_tool_interrupt_{provider}",
-        job_id=f"job_provider_tool_interrupt_{provider}",
+        turn_id=str(accepted["turn_id"]),
+        job_id=job_id,
     )
     subscription = await store.subscribe(writer.turn_stream_id)
     runtime = MessageStreamRuntime(writer)
@@ -685,8 +927,113 @@ async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_re
     tool_scope: TurnExecutionScope | None = None
     tool_task: asyncio.Task[str] | None = None
     try:
-        await runtime.start_model(f"model_{provider}_tool_execution", provider)
-        model_task = asyncio.create_task(_consume_model(_model(provider)))
+        model = _model(provider)
+        ingress_message = HumanMessage(content="测试中断", id=ingress_id)
+        ingress_message.response_metadata["turn_id"] = str(accepted["turn_id"])
+        checkpoint = empty_checkpoint()
+        checkpoint["channel_values"] = {"messages": [ingress_message]}
+        checkpoint["channel_versions"] = {"messages": "1"}
+
+        selection = ToolSetSnapshot(
+            selection_revision=sha256_jcs({"read_file": True}),
+            tools=(
+                {
+                    "name": "read_file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            ),
+        )
+        is_responses = provider == "responses"
+        profile = (
+            responses_wire_profile(model)
+            if is_responses
+            else chat_wire_profile(model)
+        )
+        wire_params = (
+            responses_wire_params(model, kwargs={})
+            if is_responses
+            else chat_wire_params(model, stop=None, kwargs={}, stream=True)
+        )
+        plan_key = f"provider-tool-interrupt:{provider}:assembly"
+        model_call_id = str(UUID(hex=create_uuid_hex()))
+        with (
+            session_thread_owner_scope(owner, langgraph_thread_id=thread_id),
+            execution_admission_scope(admission, langgraph_thread_id=thread_id),
+        ):
+            saver.put(
+                build_checkpoint_config(thread_id),
+                checkpoint,
+                {"source": "loop", "step": 1, "parents": {}},
+                {"messages": "1"},
+            )
+            prepared = saver.prepare_context_for_provider(
+                session_id,
+                thread_id,
+                turn_id=str(accepted["turn_id"]),
+                execution_id=admission.execution_id,
+                plan_creation_idempotency_key=plan_key,
+                seal_idempotency_key=f"{plan_key}:seal",
+                request_messages=[ingress_message],
+                context_source_manager=ContextSourceManager(
+                    owner=ContextSourceOwnerKey(session_id, thread_id),
+                    control_state_port=saver,
+                ),
+                tool_set_supplier=lambda: selection,
+                provider_version=profile.identity(),
+                wire_profile=profile,
+                wire_params=wire_params,
+                target_format="responses" if is_responses else "chat_completions",
+                **frozen_provider_activation(
+                    saver,
+                    plan_creation_idempotency_key=plan_key,
+                    model_call_id=model_call_id,
+                ),
+            )
+            snapshot = prepared["snapshot"]
+            assert saver.get_context_assembly(
+                session_id,
+                thread_id,
+                assembly_id=snapshot.assembly_id,
+            ) == snapshot
+            assert snapshot.model_call_id == model_call_id
+            native_projection = (
+                saver.project_context_plan_to_native(
+                    session_id,
+                    thread_id,
+                    prepared["plan"],
+                )
+                if is_responses
+                else None
+            )
+            await runtime.start_model(model_call_id, provider)
+
+            async def consume_prepared_request() -> None:
+                with (
+                    session_thread_owner_scope(
+                        owner,
+                        langgraph_thread_id=thread_id,
+                    ),
+                    execution_admission_scope(
+                        admission,
+                        langgraph_thread_id=thread_id,
+                    ),
+                    sealed_assembly_dispatch_scope(
+                        snapshot,
+                        callback_model_call_id=model_call_id,
+                        native_projection=native_projection,
+                    ),
+                ):
+                    async for _chunk in model.astream(
+                        prepared["messages"],
+                        tools=prepared["tools"],
+                    ):
+                        pass
+
+            model_task = asyncio.create_task(consume_prepared_request())
         await asyncio.wait_for(model_task, timeout=2)
         await runtime.finish_model()
         await asyncio.wait_for(upstream.closed.wait(), timeout=2)
@@ -695,8 +1042,8 @@ async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_re
         assert upstream.read_cancelled is False
 
         tool_call_id = runtime.claim_tool_call_id(
-            "read_file",
-            {"path": "README.md"},
+            model_call_id,
+            "call_chat_reasoning_tool" if provider == "chat" else "call_reasoning_tool",
         )
         assert tool_call_id is not None
         tool_scope = scope.child("tool-execution")
@@ -800,6 +1147,7 @@ async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_re
 async def test_handwritten_provider_interrupt_closes_real_tcp_sse_connection(
     message_stream_context: tuple[MessageStreamStore, object, str],
     provider: ProviderKind,
+    frozen_provider_activation,
 ) -> None:
     """真实 TCP 连接在 pending read 时必须被客户端主动关闭。"""
     store, _, session_id = message_stream_context
@@ -812,10 +1160,23 @@ async def test_handwritten_provider_interrupt_closes_real_tcp_sse_connection(
     client = httpx.AsyncClient()
     previous_session, previous_factory = _install_litellm_client(client)
 
-    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
+    sessions_root = OUTPUT_ROOT / "workspace" / ".boxteam" / "sessions"
+    saver = RolloutCheckpointSaver(sessions_root)
+    thread_id = store._path_resolver.main_thread_id(session_id)
+    job_id = f"job_provider_tcp_interrupt_{provider}"
+    accepted, admission, owner, ingress_message = _accept_provider_turn(
+        saver,
         session_id=session_id,
-        turn_id=f"job_provider_tcp_interrupt_{provider}",
-        job_id=f"job_provider_tcp_interrupt_{provider}",
+        thread_id=thread_id,
+        job_id=job_id,
+        turn_id=f"turn_provider_tcp_interrupt_{provider}",
+        key=f"provider-tcp-interrupt:{provider}",
+    )
+    writer = await store.open(
+        thread_id=thread_id,
+        session_id=session_id,
+        turn_id=str(accepted["turn_id"]),
+        job_id=job_id,
     )
     subscription = await store.subscribe(writer.turn_stream_id)
     runtime = MessageStreamRuntime(writer)
@@ -824,17 +1185,50 @@ async def test_handwritten_provider_interrupt_closes_real_tcp_sse_connection(
     sink_token = set_current_model_delta_sink(runtime)
     model_task: asyncio.Task[None] | None = None
     try:
-        await runtime.start_model(f"model_tcp_{provider}", provider)
-        model_task = asyncio.create_task(
-            _consume_model(_model(provider, api_base=server.endpoint))
+        model = _model(provider, api_base=server.endpoint)
+        prepared, snapshot, model_call_id, native_projection = (
+            await _prepare_sealed_provider_request(
+                saver=saver,
+                runtime=runtime,
+                session_id=session_id,
+                thread_id=thread_id,
+                accepted=accepted,
+                admission=admission,
+                owner=owner,
+                ingress_message=ingress_message,
+                provider=provider,
+                model=model,
+                tool_set=ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=()),
+                frozen_provider_activation=frozen_provider_activation,
+                plan_key=f"provider-tcp-interrupt:{provider}:assembly",
+            )
         )
-        await _read_until(
+        model_task = asyncio.create_task(
+            _consume_model(
+                model,
+                prepared,
+                owner=owner,
+                admission=admission,
+                thread_id=thread_id,
+                model_call_id=model_call_id,
+                snapshot=snapshot,
+                native_projection=native_projection,
+            )
+        )
+        target_event = await _read_until(
             subscription,
             [],
-            lambda event: event.get("type") == "block.delta",
+            lambda event: event.get("type") == "block.delta"
+            and _event_payload(event).get("carrier_type")
+            in {"reasoning", "reasoning_content", "thinking"},
             producer_task=model_task,
         )
         await asyncio.wait_for(server.target_sent.wait(), timeout=2)
+        persisted = await store.list_events(
+            session_id=session_id,
+            turn_stream_id=writer.turn_stream_id,
+        )
+        assert any(event["event_seq"] == target_event["event_seq"] for event in persisted)
         assert server.sent_frame_count == target_index + 1
         assert server.connection_count == 1
 
@@ -1096,7 +1490,12 @@ async def test_provider_pending_read_crash_recovers_execution_lost(
             session_id=session_id,
             turn_stream_id=probe_writer.turn_stream_id,
         )
-        assert any(event["type"] == "block.delta" for event in before_crash)
+        assert any(
+            event["type"] == "block.delta"
+            and event.get("payload", {}).get("carrier_type")
+            in {"reasoning", "reasoning_content", "thinking"}
+            for event in before_crash
+        )
 
         worker.kill()
         await asyncio.wait_for(worker.wait(), timeout=12)

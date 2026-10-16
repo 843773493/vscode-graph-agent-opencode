@@ -36,7 +36,11 @@ class RequestMessageGroup:
 
 
 class MessageCodec(Protocol):
-    """checkpoint 组装层注入的消息适配端口。"""
+    """checkpoint 组装层注入的消息适配端口。
+
+    canonical_items 只接受 locator 读出的完整已存消息组，仅复用 item_id/
+    message_group_id；正文与 typed 元数据重新解析并完整比较，空序列分配新身份。
+    """
 
     def message_id(self, message: object, index: int) -> str: ...
 
@@ -68,6 +72,7 @@ class MessageCodec(Protocol):
         execution_id: str | None = None,
         timestamp: str,
         model_call_id: str | None = None,
+        canonical_items: Sequence[CanonicalItemRecord] = (),
     ) -> tuple[CanonicalItemRecord, ...]: ...
 
     def project_message(
@@ -119,21 +124,6 @@ class RolloutTurnAnchor:
     cutoff_message_sequence: int
 
 
-@dataclass(frozen=True, slots=True)
-class RolloutInternalForkAnchor:
-    """无正常 Turn 的 owner 当前已提交内部执行锚点。"""
-
-    session_id: str
-    thread_id: str
-    checkpoint_ns: str
-    checkpoint_id: str
-    branch_id: str
-    view_id: str
-    history_view_revision: int
-    execution_id: str
-    admission_idempotency_key: str
-    admission_payload_hash: str
-
 
 @dataclass(frozen=True, slots=True)
 class ContextTurnItemWindow:
@@ -165,8 +155,11 @@ class InternalExecutionHistoryEntry:
 
     execution_id: str
     job_id: str
+    session_id: str
+    thread_id: str
     outcome: str
     logical_item_ordinal: int
+    elapsed_ms: int
     created_at: str
     updated_at: str
     item: CanonicalItemRecord

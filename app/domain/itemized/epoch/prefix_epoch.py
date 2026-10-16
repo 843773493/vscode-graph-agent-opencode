@@ -29,6 +29,7 @@ from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import (
     _ensure_json_value,
     canonical_json_bytes,
+    copy_json_value,
     sha256_jcs,
     validate_hash_token,
 )
@@ -245,7 +246,12 @@ class ProviderProfileItemFrame:
     content: object
     item_ref: AppendedItemRef
 
+    def __getattribute__(self, name: str) -> object:
+        value = object.__getattribute__(self, name)
+        return copy_json_value(value) if name == "content" else value
+
     def __post_init__(self) -> None:
+        object.__setattr__(self, "content", copy_json_value(object.__getattribute__(self, "content")))
         _positive_int(self.ordinal, "ProviderProfileItemFrame.ordinal")
         _non_empty_string(self.provider_profile, "ProviderProfileItemFrame.provider_profile")
         if self.role not in _WIRE_ROLES:
@@ -299,6 +305,12 @@ class PrefixEpochState:
     parent: ParentAssemblyRef | None = None
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "frames", tuple(self.frames))
+        object.__setattr__(self, "appended_refs", tuple(self.appended_refs))
+        if any(not isinstance(frame, ProviderProfileItemFrame) for frame in self.frames):
+            raise ItemSchemaError("PrefixEpochState.frames 元素必须是 ProviderProfileItemFrame")
+        if any(not isinstance(ref, AppendedItemRef) for ref in self.appended_refs):
+            raise ItemSchemaError("PrefixEpochState.appended_refs 元素必须是 AppendedItemRef")
         if not isinstance(self.epoch, PrefixEpoch):
             raise EpochContractError("PrefixEpochState.epoch 必须是 PrefixEpoch")
         _non_empty_string(self.provider_profile, "PrefixEpochState.provider_profile")

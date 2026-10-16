@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
+from collections.abc import AsyncIterator, Callable
 from unittest.mock import Mock
 
 import httpx
@@ -8,6 +9,12 @@ import pytest
 
 from app.abstractions.session_context import WorkspaceSessionContextAccessError
 from app.core.identifier import create_uuid_hex
+from app.core.trace_middleware import (
+    reset_current_gateway_id,
+    reset_current_request_id,
+    set_current_gateway_id,
+    set_current_request_id,
+)
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
 )
@@ -50,6 +57,14 @@ def gateway_local_token_supplier() -> Callable[[], str]:
     return lambda: "gateway-context-test-token"
 
 
+@pytest.fixture
+async def gateway_clients() -> AsyncIterator[list[GatewaySessionContextClient]]:
+    clients: list[GatewaySessionContextClient] = []
+    yield clients
+    for client in clients:
+        await client.aclose()
+
+
 def _read_request(workspace_id: str):
     session_id = f"ses_{create_uuid_hex()}"
     return SessionContextReadRequest(
@@ -63,6 +78,7 @@ def _read_request(workspace_id: str):
 async def test_gateway_connection_error_includes_target_context(
     monkeypatch: pytest.MonkeyPatch,
     gateway_local_token_supplier: Callable[[], str],
+    gateway_clients: list[GatewaySessionContextClient],
 ):
     async def raise_connect_error(
         _client: httpx.AsyncClient,
@@ -70,7 +86,7 @@ async def test_gateway_connection_error_includes_target_context(
         path: str,
         **_kwargs: object,
     ) -> httpx.Response:
-        request = httpx.Request(method, f"http://127.0.0.1:65530{path}")
+        request = httpx.Request(method, path)
         raise httpx.ConnectError("All connection attempts failed", request=request)
 
     monkeypatch.setattr(httpx.AsyncClient, "request", raise_connect_error)
@@ -78,6 +94,7 @@ async def test_gateway_connection_error_includes_target_context(
         gateway_url="http://127.0.0.1:65530",
         local_token_supplier=gateway_local_token_supplier,
     )
+    gateway_clients.append(client)
 
     with pytest.raises(WorkspaceSessionContextAccessError) as captured:
         await client.read_context_in_workspace(
@@ -96,8 +113,10 @@ async def test_gateway_connection_error_includes_target_context(
 @pytest.mark.asyncio
 async def test_gateway_client_uses_default_runtime_url_with_current_local_token(
     monkeypatch: pytest.MonkeyPatch,
+    gateway_clients: list[GatewaySessionContextClient],
 ):
     captured_requests: list[httpx.Request] = []
+    captured_clients: list[httpx.AsyncClient] = []
     current_token = ["gateway-context-token-1"]
 
     async def capture_request(
@@ -108,10 +127,11 @@ async def test_gateway_client_uses_default_runtime_url_with_current_local_token(
     ) -> httpx.Response:
         captured_request = httpx.Request(
             method,
-            f"http://127.0.0.1:8014{path}",
-            headers=_client.headers,
+            path,
+            headers=kwargs["headers"],
         )
         captured_requests.append(captured_request)
+        captured_clients.append(_client)
         return httpx.Response(
             404,
             request=captured_request,
@@ -120,6 +140,7 @@ async def test_gateway_client_uses_default_runtime_url_with_current_local_token(
 
     monkeypatch.setattr(httpx.AsyncClient, "request", capture_request)
     client = GatewaySessionContextClient(local_token_supplier=lambda: current_token[0])
+    gateway_clients.append(client)
 
     with pytest.raises(WorkspaceSessionContextAccessError):
         await client.read_context_in_workspace(
@@ -141,12 +162,17 @@ async def test_gateway_client_uses_default_runtime_url_with_current_local_token(
     assert [request.headers["X-Local-Token"] for request in captured_requests] == [
         "gateway-context-token-1", "gateway-context-token-2",
     ]
+    assert captured_clients[0] is captured_clients[1]
+    assert not captured_clients[0].is_closed
+    await client.aclose()
+    assert captured_clients[0].is_closed
 
 
 @pytest.mark.asyncio
 async def test_gateway_unknown_workspace_is_model_recoverable(
     monkeypatch: pytest.MonkeyPatch,
     gateway_local_token_supplier: Callable[[], str],
+    gateway_clients: list[GatewaySessionContextClient],
 ):
     async def return_not_found(
         _client: httpx.AsyncClient,
@@ -154,7 +180,7 @@ async def test_gateway_unknown_workspace_is_model_recoverable(
         path: str,
         **_kwargs: object,
     ) -> httpx.Response:
-        request = httpx.Request(method, f"http://127.0.0.1:8014{path}")
+        request = httpx.Request(method, path)
         return httpx.Response(
             404,
             request=request,
@@ -166,6 +192,7 @@ async def test_gateway_unknown_workspace_is_model_recoverable(
         gateway_url="http://127.0.0.1:8014",
         local_token_supplier=gateway_local_token_supplier,
     )
+    gateway_clients.append(client)
 
     with pytest.raises(WorkspaceSessionContextAccessError) as captured:
         await client.read_context_in_workspace(
@@ -183,6 +210,7 @@ async def test_gateway_unknown_workspace_is_model_recoverable(
 async def test_gateway_internal_server_error_still_fails_fast(
     monkeypatch: pytest.MonkeyPatch,
     gateway_local_token_supplier: Callable[[], str],
+    gateway_clients: list[GatewaySessionContextClient],
 ):
     async def return_server_error(
         _client: httpx.AsyncClient,
@@ -190,7 +218,7 @@ async def test_gateway_internal_server_error_still_fails_fast(
         path: str,
         **_kwargs: object,
     ) -> httpx.Response:
-        request = httpx.Request(method, f"http://127.0.0.1:8014{path}")
+        request = httpx.Request(method, path)
         return httpx.Response(500, request=request, text="internal invariant broken")
 
     monkeypatch.setattr(httpx.AsyncClient, "request", return_server_error)
@@ -198,6 +226,7 @@ async def test_gateway_internal_server_error_still_fails_fast(
         gateway_url="http://127.0.0.1:8014",
         local_token_supplier=gateway_local_token_supplier,
     )
+    gateway_clients.append(client)
 
     with pytest.raises(RuntimeError, match="status=500") as captured:
         await client.read_context_in_workspace(
@@ -212,12 +241,16 @@ async def test_gateway_internal_server_error_still_fails_fast(
 async def test_gateway_url_is_resolved_from_current_config_snapshot(
     monkeypatch: pytest.MonkeyPatch,
     gateway_local_token_supplier: Callable[[], str],
+    gateway_clients: list[GatewaySessionContextClient],
 ) -> None:
     config_service = Mock(spec=ConfigService)
     current_url = ["http://gateway-a"]
     config_service.get_gateway_connection_url.side_effect = lambda: current_url[0]
-    config_service.get_gateway_connection_timeout_seconds.return_value = 30
+    current_timeout = [30]
+    config_service.get_gateway_connection_timeout_seconds.side_effect = lambda: current_timeout[0]
     captured_urls: list[str] = []
+    captured_timeouts: list[object] = []
+    captured_clients: list[httpx.AsyncClient] = []
 
     async def capture_request(
         client: httpx.AsyncClient,
@@ -225,8 +258,10 @@ async def test_gateway_url_is_resolved_from_current_config_snapshot(
         path: str,
         **kwargs: object,
     ) -> httpx.Response:
-        captured_urls.append(f"{client.base_url}{path}")
-        request = httpx.Request(method, f"{client.base_url}{path}")
+        captured_urls.append(path)
+        captured_timeouts.append(kwargs["timeout"])
+        captured_clients.append(client)
+        request = httpx.Request(method, path)
         return httpx.Response(
             200,
             request=request,
@@ -244,12 +279,14 @@ async def test_gateway_url_is_resolved_from_current_config_snapshot(
         config_service=config_service,
         local_token_supplier=gateway_local_token_supplier,
     )
+    gateway_clients.append(client)
 
     await client.read_context_in_workspace(
         "gw_target",
         _read_request("gw_target"),
     )
     current_url[0] = "http://gateway-b"
+    current_timeout[0] = 12
     await client.read_context_in_workspace(
         "gw_target",
         _read_request("gw_target"),
@@ -259,3 +296,63 @@ async def test_gateway_url_is_resolved_from_current_config_snapshot(
         "http://gateway-a/api/v1/context/read",
         "http://gateway-b/api/v1/context/read",
     ]
+    assert captured_timeouts == [30, 12]
+    assert captured_clients[0] is captured_clients[1]
+
+
+@pytest.mark.asyncio
+async def test_gateway_pool_keeps_concurrent_relay_request_identities(
+    monkeypatch: pytest.MonkeyPatch,
+    gateway_clients: list[GatewaySessionContextClient],
+) -> None:
+    requests: list[httpx.Request] = []
+    http_clients: list[httpx.AsyncClient] = []
+    both_entered = asyncio.Event()
+
+    async def capture_request(
+        http_client: httpx.AsyncClient,
+        method: str,
+        url: str,
+        *,
+        json: dict[str, object],
+        headers: dict[str, str],
+        timeout: float,
+    ) -> httpx.Response:
+        request = httpx.Request(method, url, json=json, headers=headers)
+        requests.append(request)
+        http_clients.append(http_client)
+        if len(requests) == 2:
+            both_entered.set()
+        await both_entered.wait()
+        read = json["body"]["read"]
+        return httpx.Response(
+            200, request=request, headers={"X-Request-ID": headers["X-Request-ID"]},
+            json={
+                "request_id": headers["X-Request-ID"],
+                "data": {**read, "view": "overview", "revision": "rev-1"},
+            },
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", capture_request)
+    client = GatewaySessionContextClient(local_token_supplier=lambda: "gateway-pool-token")
+    gateway_clients.append(client)
+    reads = [_read_request(f"ws_{create_uuid_hex()}") for _ in range(2)]
+
+    async def query(index: int):
+        request_token = set_current_request_id(f"req_gateway_pool_{index}")
+        gateway_token = set_current_gateway_id("gateway_local")
+        try:
+            return await client.read_resource_context(reads[index])
+        finally:
+            reset_current_gateway_id(gateway_token)
+            reset_current_request_id(request_token)
+
+    results = await asyncio.gather(query(0), query(1))
+    assert [result.resource_identity for result in results] == [read.resource_identity for read in reads]
+    assert http_clients[0] is http_clients[1]
+    assert [request.headers["X-Request-ID"] for request in requests] == [
+        "req_gateway_pool_0", "req_gateway_pool_1",
+    ]
+    assert all(request.headers["X-Local-Token"] == "gateway-pool-token" for request in requests)
+    assert all("X-BoxTeam-Workspace-Id" not in request.headers for request in requests)
+    assert not http_clients[0].is_closed

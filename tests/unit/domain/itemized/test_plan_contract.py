@@ -4,15 +4,13 @@ from dataclasses import replace
 
 import pytest
 
-from app.domain.itemized.assembly_snapshot import (
-    ContextAssemblySnapshot,
-    context_request_hash,
-)
+from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.enums import (
     PayloadKind,
     SelectionKind,
 )
 from app.domain.itemized.errors import FormatDispatchError, ItemSchemaError
+from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
     contribution_content_hash,

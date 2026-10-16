@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from app.core.hashing import sha256_hex as _hash_bytes
@@ -19,6 +20,14 @@ from app.domain.itemized.hashing import (
     payload_content_length,
 )
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    check_resource_target,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.values import (
+    ResourceTargetAction,
+    ResourceTargetContext,
+    ResourceTargetFacts,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.integrity import (
     validate_catalog_projection,
 )
@@ -54,6 +63,53 @@ if TYPE_CHECKING:
 
 class RolloutItemsMixin:
     """只负责 canonical item 的 JSONL/catalog transaction 与定位读取。"""
+
+    @staticmethod
+    def _require_canonical_model_call(
+        connection: sqlite3.Connection, *, item_id: str, model_call_id: str,
+    ) -> str:
+        """正文 producer 必须绑定同一历史 execution 的真实 ModelCall 与 assembly。"""
+        row = connection.execute(
+            "SELECT call.assembly_id,execution.session_id,execution.thread_id,execution.execution_id,"
+            "call.session_id,call.thread_id,call.execution_id,"
+            "assembly.session_id,assembly.thread_id,assembly.execution_id "
+            "FROM item_catalog item LEFT JOIN executions execution ON execution.execution_id=item.execution_id "
+            "LEFT JOIN model_calls call ON call.model_call_id=? "
+            "LEFT JOIN context_assemblies assembly ON assembly.assembly_id=call.assembly_id "
+            "WHERE item.item_id=?", (model_call_id, item_id),
+        ).fetchone()
+        if row is None or row[4] is None:
+            raise ValueError(f"source-mismatch: canonical item 的 ModelCall 缺失: {item_id}/{model_call_id}")
+        if not isinstance(row[0], str) or not row[0] or row[7] is None:
+            raise ValueError(f"source-mismatch: canonical item 的 ModelCall assembly 缺失: {item_id}/{model_call_id}")
+        if row[1] is None or row[1:4] != row[4:7] or row[4:7] != row[7:10]:
+            raise ValueError(f"source-mismatch: canonical item 的 ModelCall/assembly 历史 execution 不一致: {item_id}/{model_call_id}")
+        return row[0]
+
+    @staticmethod
+    def check_fork_target_resources(
+        connection: sqlite3.Connection, source: ResourceTargetFacts, target: ResourceTargetContext,
+        *, choices: Mapping[str, ResourceTargetAction], selected_only: bool,
+    ) -> None:
+        """canonical 和工具正文由原 catalog 提供内容身份，不解码或重算正文。"""
+        selection = " JOIN fork_selected_items selected ON selected.item_id=item.item_id" if selected_only else ""
+        for revision, digest, length, item_id, producer_call, projection_call in connection.execute(
+            "SELECT item.source_revision,item.content_hash,item.payload_length,item.item_id,"
+            "json_extract(item.producer_ref_json,'$.model_call_id'),"
+            "json_extract(item.projection_manifest_json,'$.projection_identity.model_call_id') "
+            "FROM item_catalog item" + selection,
+        ):
+            if producer_call is not None and projection_call is not None and producer_call != projection_call:
+                raise ValueError(f"source-mismatch: canonical item 的 ModelCall 身份冲突: {item_id}")
+            call_id = producer_call or projection_call
+            if call_id is not None:
+                RolloutItemsMixin._require_canonical_model_call(connection, item_id=item_id, model_call_id=call_id)
+            decision = check_resource_target(
+                replace(source, revision=revision, content_hash=digest, content_length=length),
+                target, choice=choices.get(source.resource_uri),
+            )
+            if decision.action != "copy_snapshot":
+                raise ValueError("canonical 正文 owner 只支持冻结快照导入")
 
     def has_committed_tool_result(self, session_id: str, thread_id: str, model_call_id: str, tool_call_id: str) -> bool:
         """只读 canonical SQL locator，给邮箱 ack 恢复提供真实提交证明。"""
@@ -101,7 +157,7 @@ class RolloutItemsMixin:
         commit_id: int,
         jsonl_offset: int,
         jsonl_length: int,
-        created_at: str,
+        commit_recorded_at: str,
     ) -> None:
         """写入唯一 canonical catalog，并生成对应 item projection。"""
         item.validate()
@@ -165,8 +221,22 @@ class RolloutItemsMixin:
                 item.tool_call_id,
             ),
         )
-        self._insert_item_projection(connection, item, created_at)
+        self._insert_item_projection(connection, item, commit_recorded_at)
         self._insert_canonical_relations(connection, item)
+        if item.semantic_kind == SemanticKind.USER_INPUT and isinstance(item.payload, Mapping):
+            # user_input_payload 的 typed 附件槽在首次 canonical 提交时登记。
+            # 同一附件的多次使用分别归各 item，不借用 blob owner 的单 item_ref。
+            attachments = item.payload.get("attachments", [])
+            if not isinstance(attachments, list):
+                raise TypeError("UserInput attachments 必须是 typed list")
+            for ordinal, attachment in enumerate(attachments):
+                if not isinstance(attachment, Mapping):
+                    raise TypeError("UserInput attachment 必须是 typed mapping")
+                file_id = strict_text(attachment.get("file_id"), field="UserInput.attachment.file_id")
+                connection.execute(
+                    "INSERT INTO item_resource_references VALUES (?, ?, 'attachment', ?)",
+                    (item.item_id, ordinal, file_id),
+                )
         block_id = (
             item.projection_identity.block_id
             if item.projection_identity is not None
@@ -254,12 +324,13 @@ class RolloutItemsMixin:
             with self.jsonl_path(session_id, checkpoint_ns, thread_id=thread_id).open("rb") as stream:
                 for message_id in message_ids:
                     indexed = connection.execute(
-                        "SELECT turn_id,execution_id FROM messages WHERE message_id=?", (message_id,),
+                        "SELECT turn_id,execution_id,jsonl_offset,jsonl_length FROM messages WHERE message_id=?", (message_id,),
                     ).fetchone()
                     catalog = connection.execute(
-                        "SELECT turn_id,execution_id,jsonl_offset,jsonl_length FROM item_catalog WHERE item_id=?",
-                        (f"item-{message_id}",),
-                    ).fetchone()
+                        "SELECT turn_id,execution_id,jsonl_offset,jsonl_length FROM item_catalog "
+                        "WHERE jsonl_offset=? AND jsonl_length=?",
+                        indexed[2:4],
+                    ).fetchone() if indexed is not None else None
                     if indexed is not None and catalog is None:
                         raise RuntimeError(f"message projection 缺少 canonical item: {message_id}")
                     if indexed is not None and indexed[:2] != catalog[:2]:

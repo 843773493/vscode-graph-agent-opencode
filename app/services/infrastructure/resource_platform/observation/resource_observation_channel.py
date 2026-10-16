@@ -34,11 +34,11 @@ RESOURCE_OBSERVATION_CHANNEL: Final[str] = channel_name(
 )
 RESOURCE_OBSERVATION_QUEUE_SIZE: Final[int] = 64
 
-# 事件只允许携带这些轻量字段：来源虚拟 identity、内容 revision、
+# 事件只允许携带这些轻量字段：来源资源 URI、内容 revision、
 # 可用性，以及「通知是否因溢出丢失」的 gap 标记。新增字段必须仍然满足
 # 「不携带正文/credential/宿主机路径」的红线。
 ALLOWED_NOTIFICATION_FIELDS: Final[frozenset[str]] = frozenset(
-    {"uri", "revision", "available", "gap"}
+    {"uri", "directory_id", "revision", "available", "gap"}
 )
 
 
@@ -46,14 +46,25 @@ ALLOWED_NOTIFICATION_FIELDS: Final[frozenset[str]] = frozenset(
 class ResourceObservation:
     """一次「来源有新 revision」的内存通知，不含正文。"""
 
-    uri: str
+    # 来源 owner 发布的 boxteam:// 逻辑资源 URI；消费者据此定位已登记来源，
+    # 再从 owner 的权威快照读取内容。它不是物理路径，也不携带来源正文。
+    uri: str | None
     revision: str | None
     available: bool
     gap: bool = False
+    # 固定目录是已登记的来源边界，使用不含物理路径的 opaque identity，
+    # 不伪造一个可读取的文件 URI。两种 identity 必须且只能出现一种。
+    directory_id: str | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.uri, str) or not self.uri:
+        if self.uri is None and self.directory_id is None:
             raise ValueError("ResourceObservation.uri 必须是非空字符串")
+        if self.uri is not None and (not isinstance(self.uri, str) or not self.uri):
+            raise ValueError("ResourceObservation.uri 必须是非空字符串")
+        if self.directory_id is not None and (
+            self.uri is not None or not isinstance(self.directory_id, str) or not self.directory_id
+        ):
+            raise ValueError("ResourceObservation 只能绑定一个非空来源 identity")
         if self.revision is not None and (
             not isinstance(self.revision, str) or not self.revision
         ):
@@ -207,19 +218,20 @@ def assert_notification_is_lightweight(observation: ResourceObservation) -> None
         raise RuntimeError(
             "ResourceObservation 声明了未允许的字段: " + ",".join(sorted(unexpected))
         )
-    if not isinstance(observation.uri, str) or not observation.uri.startswith(
-        "boxteam://"
-    ):
+    if observation.directory_id is not None:
+        if observation.uri is not None or not re.fullmatch(r"skill-directory:[0-9a-f]{64}", observation.directory_id):
+            raise RuntimeError("目录通知必须绑定已登记的 opaque Skill directory identity")
+    elif not isinstance(observation.uri, str) or not observation.uri.startswith("boxteam://"):
         raise RuntimeError(
-            f"资源通知 uri 必须是 boxteam:// 虚拟 identity: {observation.uri!r}"
+            f"资源通知 uri 必须是 boxteam:// 资源 URI: {observation.uri!r}"
         )
     # uri 是虚拟 URI（允许 '/'），但必须有界且不含相对路径形状：
     # 超长值只可能是把正文塞进 uri，'..' 是宿主机相对路径的特征。
-    if len(observation.uri) > 512:
+    if observation.uri is not None and len(observation.uri) > 512:
         raise RuntimeError(
             f"资源通知 uri 超过长度上限 512: 实际 {len(observation.uri)}"
         )
-    if ".." in observation.uri:
+    if observation.uri is not None and ".." in observation.uri:
         raise RuntimeError(
             f"资源通知 uri 不允许包含 '..' 相对路径形状: {observation.uri!r}"
         )

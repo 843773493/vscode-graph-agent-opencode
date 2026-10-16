@@ -65,6 +65,14 @@ const internalExecution: InternalExecutionHistory = {
 };
 
 describe("standalone internal execution display", () => {
+  test("没有 internal display 时也按 root membership 排列逆序到达的 Turn", () => {
+    const conversations = [turn("turn-after", 2, 17, 17, 20), turn("turn-before", 1, 1, 1, 4)];
+    for (const executions of [[], [{ ...internalExecution, display_parts: [] }]]) {
+      expect(chatTranscriptItems(conversations, executions).map((item) => item.key))
+        .toEqual(["turn-before", "turn-after"]);
+    }
+  });
+
   test("densely interleaves Turn roots and internal displays by shared view ordinal", () => {
     const executions: InternalExecutionHistory[] = [
       {

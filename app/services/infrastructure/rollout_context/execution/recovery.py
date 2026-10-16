@@ -14,6 +14,9 @@ from app.domain.itemized.enums import (
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.execution_admission import user_turn_admission_payload_hash
 from app.domain.itemized.validation import validate_turn_transition
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    require_resumable_turn,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     load_committed_storage_commit,
     strict_non_negative_int,
@@ -36,6 +39,7 @@ class RolloutExecutionRecoveryMixin:
             self._storage.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
             with self._storage._connect(owner_thread_id, checkpoint_ns, session_id=session_id) as connection:
                 self._storage._require_v2_runtime(connection)
+                require_resumable_turn(connection, session_id, owner_thread_id, turn_id)
                 row = connection.execute('SELECT status, accepted_ingress_id FROM turn_records WHERE session_id = ? AND thread_id = ? AND turn_id = ?', (session_id, owner_thread_id, turn_id)).fetchone()
                 if row is None:
                     raise KeyError(f'Turn 不存在: {turn_id}')
@@ -64,10 +68,6 @@ class RolloutExecutionRecoveryMixin:
                 if previous is None:
                     raise RuntimeError(f'可恢复 Turn 缺少前序 execution: {turn_id}')
                 previous_execution_id = strict_text(previous[0], field='executions.execution_id')
-                previous_job_id = strict_text(previous[1], field='executions.job_id')
-                fork_copied = connection.execute("SELECT 1 FROM turn_execution_links WHERE session_id = ? AND thread_id = ? AND turn_id = ? AND execution_role = 'fork_copied' LIMIT 1", (session_id, owner_thread_id, turn_id)).fetchone() is not None
-                if fork_copied and (job_id is None or job_id == previous_job_id):
-                    raise ValueError(f'fork-copied history resume requires a new target Job ID: turn_id={turn_id}')
                 resumed_job_id = job_id
                 accepted_ingress_id = strict_text(row[1], field='turn_records.accepted_ingress_id')
                 acceptance = connection.execute('SELECT accepted_ingress_id, payload_hash FROM turn_acceptances WHERE session_id = ? AND thread_id = ? AND turn_id = ?', (session_id, owner_thread_id, turn_id)).fetchone()

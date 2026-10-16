@@ -1,469 +1,532 @@
-"""跨 session fork 的 canonical item 复制与 identity remap owner。
-
-本模块只消费 v2 item/catalog，并在 target rollout 重新分配本地 identity；不提供
-v1 fork fallback。
-"""
+"""view 前缀与 typed 正文闭包；可见成员和冷读支撑事实分别选择。"""
 
 from __future__ import annotations
 
-import hashlib
+import json
+import os
+import sqlite3
+from pathlib import Path
+from typing import TYPE_CHECKING
 
-from app.core.sqlite_state import utc_now_text
-from app.domain.itemized.enums import CommitKind, SemanticKind, TurnScope
-from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
-from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
-from app.domain.itemized.records import CanonicalItemRecord
-from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
-    producer_response_metadata,
+from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.identity.refs import ContextRef
+from app.services.infrastructure.rollout_context.assembly.detail_identity import (
+    detail_ref_from_key,
+    detail_ref_key,
 )
-from app.services.infrastructure.rollout_context.fork.identity import (
-    remap_canonical_item,
-    remap_tool_payload,
+from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
+    detail_relative_path,
 )
-from app.services.infrastructure.rollout_context.storage.transaction import strict_text
+from app.services.infrastructure.rollout_context.runtime.detail_payload import (
+    parse_detail_payload,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    require_historical_scope,
+)
+
+if TYPE_CHECKING:
+    from app.services.infrastructure.rollout_context.storage.service import (
+        RolloutStorage,
+    )
+
+_BATCH_SIZE = 256
+_BUFFER_SIZE = 1024 * 1024
+
+# 有效前缀按模型 selection 截止；历史 logical 坐标只负责展示相对序。
+EFFECTIVE_PREFIX_SQL = (
+    "SELECT member.item_id,member.logical_item_ordinal,member.context_ordinal "
+    "FROM context_view_items member JOIN context_view_items anchor "
+    "ON anchor.view_id=member.view_id AND anchor.item_id=? "
+    "AND anchor.visible=1 AND anchor.context_selected=1 "
+    "WHERE member.view_id=? AND member.visible=1 AND member.context_selected=1 "
+    "AND member.context_ordinal<=anchor.context_ordinal-?"
+)
 
 
-class ForkItemCopyMixin:
-    def copy_v2_items_for_fork(
-        self,
-        *,
-        source_session_id: str,
-        source_thread_id: str,
-        target_session_id: str,
-        target_thread_id: str,
-        checkpoint_ns: str = "",
-        fork_id: str,
-        materialization_id: str,
-        source_message_ids: tuple[str, ...],
-    ) -> tuple[str, ...]:
-        """由 prepared journal 从冻结 source 物化 canonical 与真实执行 lineage。
+def _include_detail(connection: sqlite3.Connection, ref: DetailRef) -> None:
+    """只消费领域 owner 已解析的 DetailRef，不解释普通 JSON 正文。"""
+    require_historical_scope(connection, ref.session_id, ref.thread_id)
+    key = detail_ref_key(ref)
+    row = connection.execute(
+        "SELECT session_id,thread_id,assembly_id FROM context_plan_details WHERE detail_ref=?", (key,),
+    ).fetchone()
+    if row != (ref.session_id, ref.thread_id, ref.assembly_id):
+        raise ValueError("detail-unavailable: typed 正文依赖缺少精确冻结 manifest")
+    connection.execute(
+        "INSERT OR IGNORE INTO fork_selected_details(detail_ref) VALUES (?)", (key,),
+    )
+    connection.execute(
+        "INSERT OR IGNORE INTO fork_selected_assemblies(assembly_id) "
+        "SELECT assembly_id FROM context_assemblies WHERE assembly_id=?", (ref.assembly_id,),
+    )
 
-        不经过普通 admission/append_items。canonical、Turn、execution 和 mapping
-        在同一目标事务中准备，checkpoint 随后只引用已物化 item。
-        """
-        source_thread_id = strict_text(
-            source_thread_id,
-            field="fork.source_thread_id",
+
+def _include_context_ref(connection: sqlite3.Connection, ref: ContextRef) -> None:
+    require_historical_scope(connection, ref.session_id, ref.thread_id)
+    if ref.ref_type == "canonical_item":
+        row = connection.execute(
+            "SELECT content_hash,payload_length,source_revision,item_sequence "
+            "FROM item_catalog WHERE item_id=?", (ref.ref_id,),
+        ).fetchone()
+        if row != (ref.content_hash, ref.content_length, ref.source_revision, ref.item_sequence):
+            raise ValueError("source-mismatch: typed canonical 正文依赖缺失或 manifest 不一致")
+        connection.execute(
+            "INSERT OR IGNORE INTO fork_selected_items(item_id) VALUES (?)", (ref.ref_id,),
         )
-        target_thread_id = strict_text(
-            target_thread_id,
-            field="fork.target_thread_id",
+    elif isinstance(ref.source_ref, DetailRef):
+        _include_detail(connection, ref.source_ref)
+
+
+def select_view_prefix(
+    storage: RolloutStorage, connection: sqlite3.Connection, *, stage: Path,
+    source_view_id: str, anchor_item_id: str | None, anchor_mode: str,
+    source_view_revision: int | None, source_checkpoint_id: str | None,
+) -> None:
+    """SQLite 去重、防环；只有可见根展开 canonical 正文，封存详情留作 backing。"""
+    revision = connection.execute(
+        "SELECT history_view_revision FROM database_meta WHERE singleton_id=1",
+    ).fetchone()[0]
+    if source_view_revision is not None and source_view_revision != revision:
+        raise ValueError("source-mismatch: fork source view revision 已变化")
+    if anchor_mode not in {"inclusive", "before"}:
+        raise ValueError("fork anchor_mode 必须是 inclusive 或 before")
+    anchor = connection.execute(
+        "SELECT context_ordinal FROM context_view_items "
+        "WHERE view_id=? AND item_id=? AND visible=1 AND context_selected=1", (source_view_id, anchor_item_id),
+    ).fetchone()
+    if anchor_item_id is not None and (anchor is None or anchor[0] is None):
+        raise ValueError("source-mismatch: 点击 item 不属于冻结 view 的有效上下文")
+    if anchor is None:
+        empty = connection.execute(
+            "SELECT 1 FROM context_view_items WHERE view_id=? AND visible=1 LIMIT 1", (source_view_id,),
+        ).fetchone()
+        if empty is not None:
+            raise ValueError("fork_source_not_completed: source view 没有可复制的安全锚点")
+    connection.execute(
+        "CREATE TEMP TABLE fork_selected_items(item_id TEXT PRIMARY KEY,"
+        "visited INTEGER NOT NULL DEFAULT 0,visible_ordinal INTEGER)",
+    )
+    connection.execute(
+        "CREATE TEMP TABLE fork_selected_assemblies(assembly_id TEXT PRIMARY KEY,"
+        "visited INTEGER NOT NULL DEFAULT 0,expand_body INTEGER NOT NULL DEFAULT -1)",
+    )
+    connection.execute(
+        "CREATE TEMP TABLE fork_selected_details(detail_ref TEXT PRIMARY KEY,"
+        "visited INTEGER NOT NULL DEFAULT 0)",
+    )
+    connection.execute(
+        "CREATE TEMP TABLE fork_selected_model_calls(model_call_id TEXT PRIMARY KEY)",
+    )
+    connection.execute(
+        "CREATE TEMP TABLE fork_selected_source_checkpoints(checkpoint_id TEXT PRIMARY KEY)",
+    )
+    connection.execute(
+        "CREATE TEMP TABLE fork_selected_activations(session_id TEXT,thread_id TEXT,"
+        "activation_snapshot_id TEXT,visited INTEGER NOT NULL DEFAULT 0,"
+        "PRIMARY KEY(session_id,thread_id,activation_snapshot_id))",
+    )
+    connection.execute(
+        "INSERT INTO fork_selected_items(item_id,visible_ordinal) "
+        f"SELECT item_id,logical_item_ordinal FROM ({EFFECTIVE_PREFIX_SQL})",
+        (anchor_item_id, source_view_id, int(anchor_mode == "before")),
+    )
+    if anchor_item_id is None and source_checkpoint_id is not None:
+        binding = connection.execute(
+            "SELECT json_extract(metadata_json,'$.boxteam_execution_binding') "
+            "FROM checkpoints WHERE checkpoint_id=?", (source_checkpoint_id,),
+        ).fetchone()
+        if binding is None or binding[0] is None:
+            raise ValueError("source-mismatch: 空上下文缺少精确 internal checkpoint binding")
+        frozen = json.loads(binding[0])
+        owner = connection.execute(
+            "SELECT session_id,thread_id,job_id,admission_idempotency_key,admission_payload_hash "
+            "FROM executions WHERE execution_id=? AND execution_origin='internal' "
+            "AND turn_id IS NULL AND outcome IN ('completed','completed_empty')",
+            (frozen["execution_id"],),
+        ).fetchone()
+        if owner is None or frozen != {"execution_id": frozen["execution_id"], "job_id": owner[2],
+                                      "admission_idempotency_key": owner[3], "admission_payload_hash": owner[4]}:
+            raise ValueError("source-mismatch: 空上下文 internal admission 与 checkpoint 不一致")
+        require_historical_scope(connection, owner[0], owner[1])
+        # metadata-only seed 没有 canonical producer；只展开该冻结 execution 的真实封存正文。
+        assemblies = connection.execute(
+            "INSERT INTO fork_selected_assemblies(assembly_id,expand_body) "
+            "SELECT assembly_id,1 FROM context_assemblies WHERE session_id=? AND thread_id=? "
+            "AND execution_id=? AND status='terminal'", (*owner[:2], frozen["execution_id"]),
         )
-        if source_thread_id == target_thread_id:
-            raise ValueError("fork target_thread_id 不能与 source_thread_id 相同")
-        if not isinstance(checkpoint_ns, str):
-            raise TypeError("fork checkpoint_ns 必须是字符串")
-        fork_id = strict_text(fork_id, field="fork.fork_id")
-        materialization_id = strict_text(
-            materialization_id, field="fork.materialization_id"
-        )
-        if self._storage._fork_source_snapshot_for_session(source_session_id) is None:
-            raise RuntimeError(
-                "fork canonical materialization 必须消费冻结 source snapshot"
-            )
-        source_items = self._storage.read_items(
-            source_session_id,
-            source_thread_id,
-            checkpoint_ns=checkpoint_ns,
-        )
-        with self._storage._connect(
-            source_thread_id,
-            checkpoint_ns,
-            session_id=source_session_id,
-            read_only=True,
-        ) as source_connection:
-            source_message_rows = source_connection.execute(
-                "SELECT m.message_id, m.turn_id, m.message_sequence, i.item_sequence, i.item_id FROM messages AS m "
-                "JOIN item_catalog AS i ON i.jsonl_offset = m.jsonl_offset AND i.jsonl_length = m.jsonl_length "
-                "ORDER BY m.message_sequence"
+        if assemblies.rowcount < 1:
+            raise ValueError("source-mismatch: 空 internal checkpoint 缺少真实完成的封存 assembly")
+    with (stage / "rollout.jsonl").open("rb") as stream:
+        while True:
+            items = connection.execute(
+                "SELECT item.item_id,item.item_sequence,item.jsonl_offset,item.jsonl_length,"
+                "selected.visible_ordinal FROM fork_selected_items selected "
+                "JOIN item_catalog item ON item.item_id=selected.item_id "
+                "WHERE selected.visited=0 ORDER BY item.item_sequence LIMIT ?", (_BATCH_SIZE,),
             ).fetchall()
-            source_execution_by_item = dict(
-                source_connection.execute(
-                    "SELECT item_id, execution_id FROM item_catalog"
-                ).fetchall()
-            )
-            source_executions = source_connection.execute(
-                "SELECT execution_id, turn_id, execution_ordinal FROM executions"
+            for item_id, sequence, offset, length, visible in items:
+                item = storage._read_v2_item_at(
+                    connection, stream, sequence=sequence, offset=offset, length=length,
+                )
+                connection.execute("UPDATE fork_selected_items SET visited=1 WHERE item_id=?", (item_id,))
+                if item.message_group_id is not None:
+                    connection.execute(
+                        "INSERT OR IGNORE INTO fork_selected_items(item_id) "
+                        "SELECT item_id FROM item_catalog WHERE message_group_id=?", (item.message_group_id,),
+                    )
+                if item.turn_id is not None:
+                    connection.execute(
+                        "INSERT OR IGNORE INTO fork_selected_items(item_id) "
+                        "SELECT root_input_item_id FROM turn_records WHERE turn_id=?", (item.turn_id,),
+                    )
+                    connection.execute(
+                        "INSERT OR IGNORE INTO fork_selected_items(item_id) "
+                        "SELECT final_item_id FROM turn_records WHERE turn_id=? AND final_item_id IS NOT NULL",
+                        (item.turn_id,),
+                    )
+                producer_call = item.producer_ref.get("model_call_id")
+                projection_call = item.projection_identity.model_call_id if item.projection_identity is not None else None
+                if producer_call is not None and projection_call is not None and producer_call != projection_call:
+                    raise ValueError(f"source-mismatch: canonical item 的 ModelCall 身份冲突: {item_id}")
+                call_id = producer_call or projection_call
+                if call_id is not None:
+                    assembly_id = storage._require_canonical_model_call(
+                        connection, item_id=item_id, model_call_id=call_id,
+                    )
+                    connection.execute(
+                        "INSERT OR IGNORE INTO fork_selected_model_calls(model_call_id) VALUES (?)", (call_id,),
+                    )
+                    connection.execute(
+                        "INSERT INTO fork_selected_assemblies(assembly_id,expand_body) "
+                        "VALUES (?,?) "
+                        "ON CONFLICT(assembly_id) DO UPDATE SET expand_body=MAX(expand_body,excluded.expand_body),"
+                        "visited=CASE WHEN excluded.expand_body>expand_body THEN 0 ELSE visited END",
+                        (assembly_id, int(visible is not None)),
+                    )
+            assemblies = connection.execute(
+                "SELECT assembly_id,expand_body FROM fork_selected_assemblies WHERE visited=0 LIMIT ?", (_BATCH_SIZE,),
             ).fetchall()
-            source_model_calls = source_connection.execute(
-                "SELECT model_call_id, execution_id FROM model_calls"
+            details = connection.execute(
+                "SELECT detail_ref FROM fork_selected_details WHERE visited=0 LIMIT ?", (_BATCH_SIZE,),
             ).fetchall()
-        requested_messages = set(source_message_ids)
-        source_messages = {
-            row[0]: row for row in source_message_rows if row[0] in requested_messages
-        }
-        if set(source_messages) != requested_messages:
-            raise RuntimeError(
-                "fork checkpoint 引用了不存在的 source canonical message"
-            )
-        source_turn_ids = {
-            row[1] for row in source_messages.values() if row[1] is not None
-        }
-        source_item_by_id = {item.item_id: item for item in source_items}
-        source_group_messages = {
-            source_item_by_id[row[4]].message_group_id: row[0]
-            for row in source_messages.values()
-            if source_item_by_id[row[4]].message_group_id is not None
-        }
-        cutoff = max(
-            max((row[3] for row in source_messages.values()), default=0),
-            max(
-                (
-                    item.item_sequence
-                    for item in source_items
-                    if (
-                        item.projection_identity.projection_message_id
-                        if item.projection_identity
-                        else None
-                    )
-                    in requested_messages
-                    or (
-                        item.message_group_id is not None
-                        and source_group_messages.get(item.message_group_id)
-                        in requested_messages
-                    )
-                ),
-                default=0,
-            ),
-        )
-        source_message_map = {
-            value: self._full_copy_identity(
-                fork_id, target_session_id, "message", value
-            )
-            for value in source_message_ids
-        }
-        selected = tuple(
-            item
-            for item in source_items
-            if item.item_sequence <= cutoff
-            and (
-                (
-                    item.turn_id in source_turn_ids
-                    and (
-                        (
-                            item.projection_identity.projection_message_id
-                            if item.projection_identity
-                            else None
-                        )
-                        is None
-                        or (
-                            item.projection_identity.projection_message_id
-                            if item.projection_identity
-                            else None
-                        )
-                        in requested_messages
-                    )
-                    and (
-                        item.message_group_id is None
-                        or source_group_messages.get(item.message_group_id)
-                        in requested_messages
-                    )
-                )
-                or (
-                    item.projection_identity.projection_message_id
-                    if item.projection_identity
-                    else None
-                )
-                in requested_messages
-                or item.turn_scope == TurnScope.AMBIENT
-            )
-        )
-        if not selected:
-            return ()
-        fork_token = fork_id
-        source_turn_rows = self._fork_v2_turn_records(
-            source_session_id, checkpoint_ns, source_thread_id=source_thread_id,
-        )
-        source_by_turn = {row[2]: row for row in source_turn_rows}
-        for turn_id in source_turn_ids:
-            if turn_id not in source_by_turn:
-                raise RuntimeError(
-                    f"fork source 缺少真实 Turn/admission lineage: {turn_id}"
-                )
-        source_turn_ids = {
-            item.turn_id for item in selected if item.turn_id is not None
-        }
-        target_turn_map = {
-            source_turn_id: (
-                f"fork-turn:{target_thread_id}:"
-                f"{hashlib.sha256((fork_token + ':' + source_turn_id).encode('utf-8')).hexdigest()[:32]}"
-            )
-            for source_turn_id in sorted(source_turn_ids)
-        }
-        used_executions = {source_execution_by_item[item.item_id] for item in selected}
-        selected_ordinals = {
-            turn_id: max(
-                (
-                    ordinal
-                    for execution_id, execution_turn, ordinal in source_executions
-                    if execution_turn == turn_id and execution_id in used_executions
-                ),
-                default=1,
-            )
-            for turn_id in source_turn_ids
-        }
-        source_execution_map = {
-            execution_id: self._full_copy_identity(
-                fork_id, target_session_id, "execution", execution_id
-            )
-            for execution_id, turn_id, ordinal in source_executions
-            if (turn_id in selected_ordinals and ordinal <= selected_ordinals[turn_id])
-            or execution_id in used_executions
-        }
-        source_model_call_map = {
-            model_call_id: self._full_copy_identity(
-                fork_id, target_session_id, "model_call", model_call_id
-            )
-            for model_call_id, execution_id in source_model_calls
-            if execution_id in source_execution_map
-        }
-
-        item_id_map = {
-            item.item_id: self._full_copy_identity(
-                fork_id, target_session_id, "item", item.item_id
-            )
-            for item in selected
-        }
-        for source_message_id, row in source_messages.items():
-            anchor = source_item_by_id[row[4]]
-            group = (
-                tuple(
-                    item
-                    for item in selected
-                    if item.message_group_id == anchor.message_group_id
-                )
-                if anchor.message_group_id is not None
-                else (anchor,)
-            )
-            projection = self._storage._codec().project_message(group)
-            projection["data"]["response_metadata"] = producer_response_metadata(
-                projection["data"]["response_metadata"]
-            )
-            target_model_call_id = (
-                source_model_call_map[anchor.projection_identity.model_call_id]
-                if anchor.projection_identity is not None
-                and anchor.projection_identity.model_call_id is not None
-                else None
-            )
-            projection["data"]["id"] = source_message_map[source_message_id]
-            if target_model_call_id is not None:
-                projection["data"]["response_metadata"]["model_call_id"] = (
-                    target_model_call_id
-                )
-            projected = self._storage._codec().from_dict(projection)
-            target_group = self._storage._codec().items_for_message(
-                projected,
-                item_sequence=group[0].item_sequence,
-                message_id=source_message_map[source_message_id],
-                turn_id=target_turn_map.get(anchor.turn_id),
-                execution_id=source_execution_map[
-                    source_execution_by_item[anchor.item_id]
-                ],
-                timestamp=anchor.created_at,
-                model_call_id=target_model_call_id,
-            )
-            if len(group) != len(target_group):
-                raise RuntimeError(
-                    "fork source canonical group 与 target projection identity 数量不一致"
-                )
-            for source_item, target_item in zip(group, target_group, strict=True):
-                if source_item.semantic_kind != target_item.semantic_kind:
-                    raise RuntimeError(
-                        "fork target projection identity 改变了 canonical semantic kind"
-                    )
-                item_id_map[source_item.item_id] = target_item.item_id
-        remapped: list[CanonicalItemRecord] = []
-
-        def remap_fork_identity(entity_type: str, value: object) -> object:
-            if not isinstance(value, str) or not value:
-                return value
-            return (
-                f"fork-{entity_type}:{target_thread_id}:"
-                f"{hashlib.sha256((fork_token + ':' + value).encode('utf-8')).hexdigest()[:32]}"
-            )
-
-        for sequence, item in enumerate(selected, 1):
-            target_item_id = item_id_map[item.item_id]
-            source_message_id = (
-                item.projection_identity.projection_message_id
-                if item.projection_identity
-                else None
-            )
-            source_group_message_id = (
-                source_group_messages.get(item.message_group_id)
-                if item.message_group_id is not None
-                else source_message_id
-            )
-            target_message_group_id = (
-                f"message-{source_message_map[source_group_message_id]}"
-                if source_group_message_id in source_message_map
-                else remap_fork_identity("message-group", item.message_group_id)
-            )
-            source_execution = strict_text(
-                source_execution_by_item[item.item_id], field="source.item.execution_id"
-            )
-            if source_execution not in source_execution_map:
-                raise RuntimeError("fork canonical item 缺少真实 source execution")
-            producer = dict(item.producer_ref)
-            producer_id = producer.get("producer_id")
-            if isinstance(producer_id, str) and producer_id:
-                producer["producer_id"] = (
-                    remap_fork_identity("tool-call", producer_id)
-                    if producer.get("producer_kind") == "tool"
-                    else source_model_call_map.get(producer_id)
-                    or source_message_map.get(producer_id)
-                    or (
-                        f"fork-producer:{target_thread_id}:"
-                        f"{hashlib.sha256((fork_token + ':' + producer_id).encode('utf-8')).hexdigest()[:32]}"
-                    )
-                )
-            producer["invocation_id"] = source_execution_map[source_execution]
-
-            def mapped(
-                entity: str,
-                value: str | None,
-                *,
-                identity: ItemProjectionIdentity | None = item.projection_identity,
-            ) -> str | None:
-                if value is None:
-                    return None
-                if entity == "model_call":
-                    if value not in source_model_call_map:
-                        raise RuntimeError(
-                            "fork typed model-call 缺少真实 source lineage"
-                        )
-                    return source_model_call_map[value]
-                if entity == "message":
-                    return source_message_map.get(value, value)
-                if entity == "item":
-                    return item_id_map.get(value, value)
-                if entity == "turn":
-                    return target_turn_map.get(value, value)
-                if entity == "tool_call":
-                    raw = provider_tool_call_id(identity, value)
-                    target = remap_fork_identity("tool-call", raw)
-                    if raw != value:
-                        return f"{source_model_call_map[identity.model_call_id]}:tool-call:{target}"
-                    return target
-                if entity in {"tool_invocation", "tool_attempt"}:
-                    return remap_fork_identity(entity, value)
-                if entity == "tool_result":
-                    return source_message_map.get(value) or remap_fork_identity(
-                        "tool-result", value
-                    )
-                if entity == "content_part":
-                    return remap_fork_identity("content-part", value)
-                raise ValueError(f"fork 未知 typed identity: {entity}")
-
-            remapped_payload = (
-                remap_tool_payload(item.payload, mapped)
-                if item.semantic_kind
-                in {SemanticKind.TOOL_CALL, SemanticKind.TOOL_RESULT}
-                else item.payload
-            )
-            remapped.append(
-                remap_canonical_item(
-                    item,
-                    mapped=mapped,
-                    source_session_id=source_session_id,
-                    source_thread_id=source_thread_id,
-                    target_session_id=target_session_id,
-                    target_thread_id=target_thread_id,
-                    item_sequence=sequence,
-                    item_id=target_item_id,
-                    turn_id=target_turn_map.get(item.turn_id),
-                    message_group_id=target_message_group_id,
-                    producer_ref=producer,
-                    payload=remapped_payload,
-                )
-            )
-        with (
-            self._storage._lock(target_thread_id, checkpoint_ns, session_id=target_session_id),
-            self._storage._connect(
-                target_thread_id, checkpoint_ns, session_id=target_session_id
-            ) as connection,
-        ):
-            journal = connection.execute(
-                "SELECT fork_id, source_session_id, source_thread_id, target_thread_id, checkpoint_ns, status "
-                "FROM fork_materializations WHERE materialization_id = ? AND target_session_id = ?",
-                (materialization_id, target_session_id),
-            ).fetchone()
-            if journal != (
-                fork_id,
-                source_session_id,
-                source_thread_id,
-                target_thread_id,
-                checkpoint_ns,
-                "prepared",
-            ):
-                raise RuntimeError(
-                    "fork canonical materialization 与 prepared journal scope 不一致"
-                )
-            connection.execute("BEGIN IMMEDIATE")
-            self._storage._append_v2_records_transaction(
-                connection,
-                target_thread_id,
-                checkpoint_ns,
-                tuple(remapped),
-                session_id=target_session_id,
-                commit_kind=CommitKind.ITEM_CONVERGENCE,
-                subject_id=materialization_id,
-                idempotency_key=f"fork-items:{materialization_id}",
-                begin_transaction=False,
-            )
-            timestamp = utc_now_text()
-            self._ensure_fork_v2_turn_records(
-                connection,
-                source_session_id=source_session_id,
-                source_thread_id=source_thread_id,
-                target_session_id=target_session_id,
-                target_thread_id=target_thread_id,
-                fork_id=fork_id,
-                checkpoint_ns=checkpoint_ns,
-                source_turn_rows=source_turn_rows,
-                timestamp=timestamp,
-            )
-            for source_item, target_item in zip(selected, remapped, strict=True):
-                source_execution = strict_text(
-                    source_execution_by_item[source_item.item_id],
-                    field="fork.source.item.execution_id",
-                )
-                target_execution = connection.execute(
-                    "SELECT target_local_id FROM fork_identity_mappings "
-                    "WHERE fork_id = ? AND entity_type = 'execution' AND source_local_id = ?",
-                    (fork_id, source_execution),
+            activations = connection.execute(
+                "SELECT session_id,thread_id,activation_snapshot_id FROM fork_selected_activations "
+                "WHERE visited=0 LIMIT ?", (_BATCH_SIZE,),
+            ).fetchall()
+            if not items and not assemblies and not details and not activations:
+                break
+            for assembly_id, expand_body in assemblies:
+                row = connection.execute(
+                    "SELECT snapshot_json,detail_ref FROM context_assemblies WHERE assembly_id=?", (assembly_id,),
                 ).fetchone()
-                if target_execution is None:
-                    raise RuntimeError(
-                        f"fork canonical item 缺少真实 execution mapping: {source_execution}"
+                if row is None:
+                    raise ValueError("source-mismatch: 所需 ModelCall 的封存 assembly 缺失")
+                assembly = ContextAssemblySnapshot.from_dict(json.loads(row[0]))
+                assembly.validate_hashes()
+                require_historical_scope(connection, assembly.session_id, assembly.thread_id)
+                if assembly.model_call_id is not None:
+                    connection.execute(
+                        "INSERT OR IGNORE INTO fork_selected_model_calls(model_call_id) VALUES (?)",
+                        (assembly.model_call_id,),
                     )
-                self._storage._bind_canonical_item_execution(
-                    connection,
-                    item_id=target_item.item_id,
-                    execution_id=target_execution[0],
+                predecessor_ids = {assembly.seal_binding.previous_assembly_id} if assembly.seal_binding is not None else set()
+                transition = assembly.seal_binding.prefix.consumed_transition if assembly.seal_binding is not None else None
+                if transition is not None:
+                    inherited = connection.execute(
+                        "SELECT header.checkpoint_id,header.source_assembly_id "
+                        "FROM context_epoch_transitions transition "
+                        "JOIN checkpoint_context_source_snapshots header "
+                        "ON header.checkpoint_id=transition.source_checkpoint_id "
+                        "AND header.checkpoint_ns=transition.checkpoint_ns "
+                        "WHERE transition.transition_id=? AND header.session_id=? AND header.thread_id=?",
+                        (transition.transition_id, assembly.session_id, assembly.thread_id),
+                    ).fetchone()
+                    if inherited is None:
+                        raise ValueError("source-mismatch: 封存 rebuild 缺少精确 checkpoint source selection")
+                    connection.execute(
+                        "INSERT OR IGNORE INTO fork_selected_source_checkpoints(checkpoint_id) VALUES (?)", (inherited[0],),
+                    )
+                    predecessor_ids.add(inherited[1])
+                for predecessor_id in predecessor_ids - {None}:
+                    # 精确前任只作封存 header 证据；-1 不展开正文，真实 producer 可升级到 0/1。
+                    connection.execute(
+                        "INSERT OR IGNORE INTO fork_selected_assemblies(assembly_id,visited,expand_body) VALUES (?,1,-1)",
+                        (predecessor_id,),
+                    )
+                    connection.execute(
+                        "INSERT OR IGNORE INTO fork_selected_model_calls(model_call_id) "
+                        "SELECT model_call_id FROM model_calls WHERE assembly_id=?",
+                        (predecessor_id,),
+                    )
+                activation = connection.execute(
+                    "SELECT session_id,thread_id,activation_snapshot_id "
+                    "FROM resource_activation_assembly_bindings WHERE assembly_id=?", (assembly_id,),
+                ).fetchone()
+                if activation is not None:
+                    if activation[:2] != (assembly.session_id, assembly.thread_id):
+                        raise ValueError("source-mismatch: assembly activation 的历史 owner 不一致")
+                    connection.execute(
+                        "INSERT OR IGNORE INTO fork_selected_activations "
+                        "(session_id,thread_id,activation_snapshot_id) VALUES (?,?,?)", activation,
+                    )
+                for entry in assembly.selection:
+                    if not entry.included:
+                        continue
+                    if expand_body and isinstance(entry.ref, ContextRef):
+                        _include_context_ref(connection, entry.ref)
+                    if entry.detail_ref is not None:
+                        _include_detail(connection, entry.detail_ref)
+                if row[1] is not None:
+                    _include_detail(connection, detail_ref_from_key(row[1]))
+                connection.execute(
+                    "UPDATE fork_selected_assemblies SET visited=1 WHERE assembly_id=?", (assembly_id,),
                 )
-            for source_message, target_message in source_message_map.items():
-                self._ensure_fork_identity_mapping(
-                    connection,
-                    source_session_id=source_session_id,
-                    target_session_id=target_session_id,
-                    fork_id=fork_id,
-                    entity_type="message",
-                    source_id=source_message,
-                    target_id=target_message,
-                    lineage={
-                        "source": {
-                            "session_id": source_session_id,
-                            "thread_id": source_thread_id,
-                            "message_id": source_message,
-                        },
-                        "target": {
-                            "session_id": target_session_id,
-                            "thread_id": target_thread_id,
-                            "message_id": target_message,
-                        },
-                    },
-                    timestamp=timestamp,
+            for session_id, thread_id, snapshot_id in activations:
+                require_historical_scope(connection, session_id, thread_id)
+                activation = connection.execute(
+                    "SELECT lineage_detail_ref,parent_execution_snapshot_id FROM resource_activation_snapshots "
+                    "WHERE session_id=? AND thread_id=? AND activation_snapshot_id=?",
+                    (session_id, thread_id, snapshot_id),
+                ).fetchone()
+                if activation is None:
+                    raise ValueError("resource-activation-unavailable: 所需冻结 snapshot 缺失")
+                lineage = detail_ref_from_key(activation[0])
+                lineage.require_owner(session_id, thread_id, snapshot_id)
+                _include_detail(connection, lineage)
+                if activation[1] is not None:
+                    connection.execute(
+                        "INSERT OR IGNORE INTO fork_selected_activations "
+                        "(session_id,thread_id,activation_snapshot_id) VALUES (?,?,?)",
+                        (session_id, thread_id, activation[1]),
+                    )
+                for (key,) in connection.execute(
+                    "SELECT detail_ref FROM resource_activation_bindings "
+                    "WHERE session_id=? AND thread_id=? AND activation_snapshot_id=? AND detail_ref IS NOT NULL",
+                    (session_id, thread_id, snapshot_id),
+                ):
+                    detail = detail_ref_from_key(key)
+                    detail.require_owner(session_id, thread_id)
+                    _include_detail(connection, detail)
+                    # retry 的原正文 snapshot 是 backing；保留 lineage，不增加任何可见 item。
+                    connection.execute(
+                        "INSERT OR IGNORE INTO fork_selected_activations "
+                        "(session_id,thread_id,activation_snapshot_id) VALUES (?,?,?)",
+                        (session_id, thread_id, detail.assembly_id),
+                    )
+                connection.execute(
+                    "UPDATE fork_selected_activations SET visited=1 "
+                    "WHERE session_id=? AND thread_id=? AND activation_snapshot_id=?",
+                    (session_id, thread_id, snapshot_id),
                 )
-            self._storage._commit_connection(connection)
-        return tuple(item.item_id for item in remapped)
+            for (key,) in details:
+                ref = detail_ref_from_key(key)
+                row = connection.execute(
+                    "SELECT availability,required,content_hash FROM context_plan_details WHERE detail_ref=?", (key,),
+                ).fetchone()
+                if row is None:
+                    raise ValueError("detail-unavailable: 所需正文缺少冻结 manifest")
+                if row[0] == "available":
+                    path = stage / detail_relative_path(ref).relative_to("rollout")
+                    if path.is_symlink() or not path.is_file():
+                        raise ValueError("detail-unavailable: 所需正文缺少捕获文件")
+                    _value, record = parse_detail_payload(path.read_bytes(), detail_ref=ref)
+                    if record.content_hash != row[2]:
+                        raise ValueError("source-mismatch: captured detail 与权威 manifest hash 不一致")
+                elif row[1]:
+                    raise ValueError("detail-unavailable: required 正文依赖不可用")
+                connection.execute("UPDATE fork_selected_details SET visited=1 WHERE detail_ref=?", (key,))
+    if connection.execute(
+        "SELECT 1 FROM fork_selected_items selected LEFT JOIN item_catalog item "
+        "ON item.item_id=selected.item_id WHERE item.item_id IS NULL LIMIT 1",
+    ).fetchone():
+        raise ValueError("source-mismatch: 前缀正文闭包存在缺失 canonical item")
+    connection.execute(
+        "CREATE TEMP TABLE fork_visible_messages AS SELECT DISTINCT message.message_sequence "
+        "FROM messages message JOIN item_catalog anchor ON anchor.jsonl_offset=message.jsonl_offset "
+        "AND anchor.jsonl_length=message.jsonl_length JOIN fork_selected_items selected "
+        "ON selected.item_id=anchor.item_id WHERE selected.visible_ordinal IS NOT NULL "
+        "AND NOT EXISTS(SELECT 1 FROM item_catalog member "
+        "LEFT JOIN fork_selected_items included ON included.item_id=member.item_id "
+        "WHERE member.message_group_id=anchor.message_group_id AND included.visible_ordinal IS NULL)",
+    )
+
+
+def prune_view_prefix(
+    connection: sqlite3.Connection, *, stage: Path,
+) -> None:
+    """裁去必要集合之外的事实；selection 已由同一事务的 capture 内核固定。"""
+    _prune_prefix_facts(connection)
+    _copy_selected_jsonl(connection, stage)
+    details_root = stage / "context-plan-details"
+    if details_root.exists():
+        for directory, _subdirs, files in os.walk(details_root):
+            for name in files:
+                path = Path(directory) / name
+                key = detail_ref_key(DetailRef(
+                    storage_scope[0], storage_scope[1], path.parent.name, path.name,
+                )) if (storage_scope := _detail_file_owner(connection, path.parent.name, path.name)) else None
+                if key is None or connection.execute(
+                    "SELECT 1 FROM fork_selected_details WHERE detail_ref=?", (key,),
+                ).fetchone() is None:
+                    path.unlink()
+
+
+def _detail_file_owner(connection: sqlite3.Connection, assembly_id: str, detail_id: str) -> tuple[str, str] | None:
+    row = connection.execute(
+        "SELECT session_id,thread_id FROM context_plan_details WHERE assembly_id=? AND detail_id=?",
+        (assembly_id, detail_id),
+    ).fetchone()
+    return row
+
+
+def _prune_prefix_facts(connection: sqlite3.Connection) -> None:
+    """保留关系由各事实 owner 明确列出，不凭同名列推断业务依赖。"""
+    connection.execute(
+        "CREATE TEMP TABLE fork_selected_turns AS SELECT DISTINCT turn_id FROM item_catalog "
+        "WHERE item_id IN (SELECT item_id FROM fork_selected_items) AND turn_id IS NOT NULL",
+    )
+    connection.execute(
+        "CREATE TEMP TABLE fork_selected_executions AS SELECT execution_id FROM item_catalog "
+        "WHERE item_id IN (SELECT item_id FROM fork_selected_items) AND execution_id IS NOT NULL "
+        "UNION SELECT execution_id FROM context_assemblies "
+        "WHERE assembly_id IN (SELECT assembly_id FROM fork_selected_assemblies) "
+        "UNION SELECT snapshot.execution_id FROM resource_activation_snapshots snapshot "
+        "JOIN fork_selected_activations selected ON selected.session_id=snapshot.session_id "
+        "AND selected.thread_id=snapshot.thread_id "
+        "AND selected.activation_snapshot_id=snapshot.activation_snapshot_id "
+        "UNION SELECT initial_execution_id FROM turn_records WHERE turn_id IN "
+        "(SELECT turn_id FROM fork_selected_turns) UNION SELECT last_execution_id FROM turn_records "
+        "WHERE turn_id IN (SELECT turn_id FROM fork_selected_turns) AND last_execution_id IS NOT NULL",
+    )
+    connection.execute(
+        "CREATE TEMP TABLE fork_selected_plans AS SELECT plan_id FROM context_assemblies "
+        "WHERE assembly_id IN (SELECT assembly_id FROM fork_selected_assemblies)",
+    )
+    connection.execute(
+        "CREATE TEMP TABLE fork_selected_checkpoints AS SELECT checkpoint_id FROM checkpoints cp "
+        "WHERE NOT EXISTS (SELECT 1 FROM context_view_items member WHERE member.view_id=cp.view_id "
+        "AND NOT EXISTS(SELECT 1 FROM fork_selected_items selected WHERE selected.item_id=member.item_id)) "
+        "AND NOT EXISTS(SELECT 1 FROM checkpoint_channels channel JOIN context_view_items member "
+        "ON member.view_id=channel.context_view_id WHERE channel.checkpoint_id=cp.checkpoint_id "
+        "AND NOT EXISTS(SELECT 1 FROM fork_selected_items selected WHERE selected.item_id=member.item_id)) "
+        "AND (json_type(cp.metadata_json,'$.boxteam_execution_binding') IS NULL OR "
+        "json_extract(cp.metadata_json,'$.boxteam_execution_binding.execution_id') IN "
+        "(SELECT execution_id FROM fork_selected_executions))",
+    )
+    connection.execute(
+        "DELETE FROM messages WHERE NOT EXISTS(SELECT 1 FROM item_catalog item "
+        "JOIN fork_selected_items selected ON selected.item_id=item.item_id "
+        "WHERE item.jsonl_offset=messages.jsonl_offset AND item.jsonl_length=messages.jsonl_length)",
+    )
+    for table in ("message_projections", "reasoning_blocks"):
+        connection.execute(
+            f"DELETE FROM {table} WHERE message_sequence NOT IN (SELECT message_sequence FROM messages)",
+        )
+    connection.execute(
+        "DELETE FROM tool_calls WHERE assistant_message_sequence NOT IN (SELECT message_sequence FROM messages)",
+    )
+    for table in ("item_resource_references", "item_catalog", "item_projections", "item_parts", "operation_anchors", "context_view_items"):
+        connection.execute(
+            f"DELETE FROM {table} WHERE item_id NOT IN (SELECT item_id FROM fork_selected_items)",
+        )
+    for table in ("turns", "turn_records", "turn_acceptances", "context_view_turns"):
+        connection.execute(
+            f"DELETE FROM {table} WHERE turn_id NOT IN (SELECT turn_id FROM fork_selected_turns)",
+        )
+    for table in ("executions", "turn_execution_links"):
+        connection.execute(
+            f"DELETE FROM {table} WHERE execution_id NOT IN (SELECT execution_id FROM fork_selected_executions)",
+        )
+    connection.execute(
+        "DELETE FROM model_calls WHERE model_call_id NOT IN (SELECT model_call_id FROM fork_selected_model_calls)",
+    )
+    for table in ("context_assemblies", "assembly_item_refs", "context_assembly_contributions", "context_assembly_selections"):
+        connection.execute(
+            f"DELETE FROM {table} WHERE assembly_id NOT IN (SELECT assembly_id FROM fork_selected_assemblies)",
+        )
+    connection.execute(
+        "DELETE FROM context_plans WHERE plan_id NOT IN (SELECT plan_id FROM fork_selected_plans)",
+    )
+    connection.execute(
+        "DELETE FROM resource_activation_assembly_bindings "
+        "WHERE assembly_id NOT IN (SELECT assembly_id FROM fork_selected_assemblies)",
+    )
+    for table in ("resource_activation_bindings", "resource_activation_snapshots"):
+        connection.execute(
+            f"DELETE FROM {table} WHERE NOT EXISTS(SELECT 1 FROM fork_selected_activations selected "
+            f"WHERE selected.session_id={table}.session_id AND selected.thread_id={table}.thread_id "
+            f"AND selected.activation_snapshot_id={table}.activation_snapshot_id)",
+        )
+    for table in ("checkpoints", "checkpoint_channels", "pending_writes"):
+        connection.execute(
+            f"DELETE FROM {table} WHERE checkpoint_id NOT IN (SELECT checkpoint_id FROM fork_selected_checkpoints)",
+        )
+    for table in ("checkpoint_context_source_snapshots", "checkpoint_context_source_states"):
+        connection.execute(
+            f"DELETE FROM {table} WHERE checkpoint_id NOT IN "
+            "(SELECT checkpoint_id FROM fork_selected_checkpoints UNION "
+            "SELECT checkpoint_id FROM fork_selected_source_checkpoints)",
+        )
+    connection.execute(
+        "DELETE FROM context_plan_details WHERE detail_ref NOT IN (SELECT detail_ref FROM fork_selected_details)",
+    )
+    connection.execute(
+        "DELETE FROM storage_commits WHERE commit_mode='item_bearing' AND commit_id NOT IN "
+        "(SELECT commit_id FROM item_catalog WHERE commit_id IS NOT NULL)",
+    )
+
+
+def _copy_selected_jsonl(connection: sqlite3.Connection, stage: Path) -> None:
+    source = stage / "rollout.jsonl"
+    destination = stage / ".prefix.jsonl"
+    connection.execute(
+        "CREATE TEMP TABLE fork_item_offsets(old_offset INTEGER PRIMARY KEY,old_end INTEGER,"
+        "new_offset INTEGER,new_end INTEGER)",
+    )
+    cursor = connection.execute(
+        "SELECT jsonl_offset,jsonl_length FROM item_catalog ORDER BY item_sequence",
+    )
+    with source.open("rb") as reader, destination.open("xb") as writer:
+        while rows := cursor.fetchmany(_BATCH_SIZE):
+            for offset, length in rows:
+                new_offset = writer.tell()
+                reader.seek(offset)
+                remaining = length
+                while remaining:
+                    chunk = reader.read(min(remaining, _BUFFER_SIZE))
+                    if not chunk:
+                        raise ValueError("source-mismatch: captured canonical locator 短读")
+                    writer.write(chunk)
+                    remaining -= len(chunk)
+                connection.execute(
+                    "INSERT INTO fork_item_offsets VALUES (?,?,?,?)",
+                    (offset, offset + length, new_offset, writer.tell()),
+                )
+        size = writer.tell()
+        writer.flush()
+        os.fsync(writer.fileno())
+    for table in ("messages", "item_catalog"):
+        connection.execute(
+            f"UPDATE {table} SET jsonl_offset=(SELECT new_offset FROM fork_item_offsets "
+            f"WHERE old_offset={table}.jsonl_offset AND old_end={table}.jsonl_offset+{table}.jsonl_length)",
+        )
+    for column in ("jsonl_start_offset", "jsonl_end_offset", "jsonl_offset_before", "jsonl_offset_after"):
+        connection.execute(
+            f"UPDATE storage_commits SET {column}=COALESCE("
+            f"(SELECT MAX(new_end) FROM fork_item_offsets WHERE old_end<=storage_commits.{column}),0)",
+        )
+    connection.execute(
+        "UPDATE storage_commits SET jsonl_record_count=(SELECT COUNT(*) FROM item_catalog "
+        "WHERE item_catalog.commit_id=storage_commits.commit_id)",
+    )
+    connection.execute(
+        "UPDATE database_meta SET committed_jsonl_offset=?,"
+        "last_item_sequence=COALESCE((SELECT MAX(item_sequence) FROM item_catalog),0),"
+        "last_message_sequence=COALESCE((SELECT MAX(message_sequence) FROM messages),0),"
+        "last_commit_id=(SELECT MAX(commit_id) FROM storage_commits) WHERE singleton_id=1", (size,),
+    )
+    destination.replace(source)
+
+
+__all__ = ["EFFECTIVE_PREFIX_SQL", "prune_view_prefix", "select_view_prefix"]

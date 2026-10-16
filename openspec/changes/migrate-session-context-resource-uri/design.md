@@ -171,6 +171,10 @@ SessionContextResourceRef {
 
 send/read/wait复用同一target-main owner，冻结稳定Gateway/workspace/Session/main-thread目标。send/wait按既有入口接受裸Session ID或完整会话URI；read_context保留ResourceIdentity、URI、scope的结构化输入，联合验收使用裸ID解析所得规范资源引用和完整authority URI，验证其与send/wait指向同一目标，不新增裸字符串read入口。Job/Turn/通信ID仍是业务selector。资源URI定位与文件导航分开，Session/assembly不因此成为目录。分段编码、产物单文件模板及拒绝规则引用统一寻址owner；durable acceptance/observation引用itemized8.10，本change不建第二resolver/ledger。
 
+### Fork的精确来源和创建目标
+
+fork消费统一owner登记的领域URI，不再用Session-only source_uri校验拒绝所有远端或隐式main。source定位具体Thread，target在创建前定位Workspace Session集合或已有Session容器并带创建意图；发布后使用实际目标URI。规范化只做地址与归属，snapshot/资源迁移/目标准入由itemized及领域owner处理，不能复制一套URI parser或把定位成功当成执行授权。跨Session send/read/wait仍按原main-thread消费，不因新Thread模板悄悄扩展。
+
 ## Risks / Trade-offs
 
 - **[入口破坏性拒绝会打断调用方]** → 入口对旧式 fragment/身份段escape形态显式拒绝并在错误信息中指向结构化字段；因已确证无历史落盘实例，不存在需要保持可读的旧记录。

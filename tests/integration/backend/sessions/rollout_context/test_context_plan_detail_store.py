@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
-from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
@@ -55,6 +54,28 @@ def _thread_node(sessions_dir: Path, session_id: str) -> Path:
 
 def _session_rollout(sessions_dir: Path, session_id: str) -> Path:
     return _thread_node(sessions_dir, session_id) / "rollout"
+
+
+def _initialize_rollout_owner(sessions_dir: Path, session_id: str) -> None:
+    """经 Saver 初始化目标本地 rollout owner，供历史 scope 校验使用。"""
+    thread_id = _main_thread_id(sessions_dir, session_id)
+    with RolloutCheckpointSaver(sessions_dir) as saver:
+        storage = saver._storage.storage
+        storage.initialize(session_id, thread_id=thread_id)
+        # 建立只读 SQLite 连接产生的 WAL sidecar 属于该目标的既有运行态；
+        # 先用 Saver 正式读快照初始化它们，再比较被测拒绝路径前后的状态。
+        with storage.open_read_snapshot(session_id, thread_id):
+            pass
+
+
+def _rollout_state(root: Path) -> dict[str, tuple[str, bytes | None]]:
+    """记录目标 rollout 的目录与文件状态，验证拒绝读取没有副作用。"""
+    return {
+        path.relative_to(root).as_posix(): (
+            ("directory", None) if path.is_dir() else ("file", path.read_bytes())
+        )
+        for path in sorted(root.rglob("*"))
+    }
 
 
 def test_detail_store_round_trip_uses_session_relative_assembly_path(
@@ -441,6 +462,16 @@ def test_owner_failure_cannot_touch_either_session(
     root = _thread_node(detail_sessions, SESSION_ID)
     target = root / public_record.relative_path
     original = target.read_bytes()
+    second = _thread_node(detail_sessions, OTHER_SESSION_ID)
+    second_rollout = second / "rollout"
+    if operation == "read":
+        # 历史 ref 必须在真实目标 rollout 中做本地 binding 校验；空目录会把
+        # 未授权误报成 SQLite 打开失败，无法证明 source-mismatch 合同。
+        _initialize_rollout_owner(detail_sessions, OTHER_SESSION_ID)
+        assert (second_rollout / "index.sqlite").is_file()
+        second_rollout_before = _rollout_state(second_rollout)
+    else:
+        assert not second_rollout.exists()
     with pytest.raises(ValueError, match="source-mismatch"):
         if operation == "gc":
             detail_store.gc(
@@ -456,8 +487,10 @@ def test_owner_failure_cannot_touch_either_session(
                 record=public_record,
             )
     assert target.read_bytes() == original
-    second = _thread_node(detail_sessions, OTHER_SESSION_ID)
-    assert not (second / "rollout").exists()
+    if operation == "read":
+        assert _rollout_state(second_rollout) == second_rollout_before
+    else:
+        assert not second_rollout.exists()
 
 
 @pytest.mark.parametrize(
@@ -523,9 +556,18 @@ def test_detail_binds_typed_owner_and_manifest(
             DetailRef.from_dict({**record.detail_ref.to_dict(), field: value})
         ).as_posix()
     different = replace(record, **changes)
-    error = ItemSchemaError if field == "session_id" else DetailUnavailableError
-    match = "detail_ref 不属于请求的 session/thread/assembly" if field == "session_id" else None
-    with pytest.raises(error, match=match):
+    if field == "session_id":
+        # 历史 ref 只能通过目标 rollout 的冻结 binding 读取；此 fixture 没有
+        # 捕获该历史 scope，因此按新的 source-mismatch 合同拒绝。
+        _initialize_rollout_owner(detail_sessions, SESSION_ID)
+        expected_error = ValueError
+        expected_message = (
+            "source-mismatch: 历史 SessionThread 不属于目标本地冻结 snapshot"
+        )
+    else:
+        expected_error = DetailUnavailableError
+        expected_message = None
+    with pytest.raises(expected_error, match=expected_message):
         detail_store.read(
             session_id=SESSION_ID, thread_id=record.thread_id,
             record=different, include_sensitive=True,
@@ -731,7 +773,11 @@ def test_same_leaf_copy_cannot_replay_another_typed_owner(
         changes["thread_id"] = identity["thread_id"]
     different = replace(record, **changes)
     assert different.detail_id == record.detail_id
-    raw = detail_store._files.read(record.detail_ref)
+    raw = detail_store._files.read(
+        record.detail_ref,
+        session_id=SESSION_ID,
+        thread_id=_main_thread_id(detail_sessions, SESSION_ID),
+    )
     detail_store._files.publish(ref, raw)
     with pytest.raises(DetailUnavailableError, match="source-mismatch"):
         detail_store.read(

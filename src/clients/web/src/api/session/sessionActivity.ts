@@ -3,16 +3,16 @@ import type {
   CursorPage,
   SessionActivity,
 } from "../../types/backend";
-import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sse/sseClient";
+import { decodeJsonSseData, defineSseEvent } from "../../sse/sseClient";
 import { SSE_IDLE_TIMEOUT_MS } from "../../sse/sseIdleTimeout";
 import {
   HttpRequestError,
   gatewayWorkspaceRequestHeaders,
-  requestGatewayResponse,
   requestJson,
   unwrapApiData,
 } from "../http";
 import type { GatewayWorkspaceRequestTarget } from "../workspaceIdentity";
+import { consumeWorkspaceObservation } from "../stream/workspaceObservation";
 
 export class SessionActivityCursorGoneError extends Error {
   readonly status = 410;
@@ -58,34 +58,11 @@ export async function streamSessionActivity(
     onActivity?: () => void;
   } = {},
 ): Promise<void> {
-  // SSE 长期连接只共享统一凭据与刷新重试；生命周期内的断线重连由调用方负责。
-  let response: Response;
+  let after = options.after ?? 0;
   try {
-    response = await requestGatewayResponse(
-      port,
-      "/api/v1/session-catalog/events/stream",
-      {
-        signal: options.signal,
-        skipGatewayUserSession: true,
-        headers: {
-          accept: "text/event-stream",
-          ...gatewayWorkspaceRequestHeaders(workspaceTarget),
-          ...(options.after !== undefined
-            ? { "Last-Event-ID": String(options.after) }
-            : {}),
-        },
-      },
-    );
-  } catch (error) {
-    if (error instanceof HttpRequestError && error.status === 410) {
-      throw new SessionActivityCursorGoneError(options.after ?? 0);
-    }
-    throw error;
-  }
-  if (!response.body) {
-    throw new Error(`无法连接 Workspace 会话活动流: ${response.status} ${response.statusText}`);
-  }
-  await consumeSseResponse(response, {
+    await consumeWorkspaceObservation(port, gatewayWorkspaceRequestHeaders(workspaceTarget), () => ({
+      kind: "session_activity", activity_after: after, paths: [],
+    }), {
     signal: options.signal,
     idleTimeoutMs: SSE_IDLE_TIMEOUT_MS,
     onActivity: options.onActivity,
@@ -102,14 +79,23 @@ export async function streamSessionActivity(
             event: decodeJsonSseData(data, frame) as SessionActivity,
           };
         },
-        ({ cursor, event }) => options.onEvent?.(event, cursor),
+        ({ cursor, event }) => {
+          options.onEvent?.(event, cursor);
+          after = cursor;
+        },
       ),
       cursor_gone: defineSseEvent(
         (data, frame) => decodeJsonSseData(data, frame),
         () => {
-          throw new SessionActivityCursorGoneError(options.after ?? 0);
+          throw new SessionActivityCursorGoneError(after);
         },
       ),
     },
-  });
+    });
+  } catch (error) {
+    if (error instanceof HttpRequestError && error.status === 410) {
+      throw new SessionActivityCursorGoneError(after);
+    }
+    throw error;
+  }
 }

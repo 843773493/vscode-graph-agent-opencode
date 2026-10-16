@@ -1,6 +1,7 @@
 import type {
   APIResponse,
   SessionCatalogBreadcrumb,
+  SessionCatalogExport,
   SessionCatalogNode,
   SessionCatalogPage,
 } from "../../types/backend";
@@ -54,14 +55,30 @@ export async function listSessionCatalogChildren(
 export async function refreshSessionCatalog(
   port: number,
   workspaceTarget: GatewayWorkspaceRequestTarget,
+  options: { signal?: AbortSignal } = {},
 ): Promise<SessionCatalogPage> {
   const page = unwrapApiData(await requestJson<APIResponse<SessionCatalogPage>>(
     port,
     "/api/v1/session-catalog/refresh",
-    { method: "POST", headers: gatewayWorkspaceRequestHeaders(workspaceTarget) },
+    { method: "POST", headers: gatewayWorkspaceRequestHeaders(workspaceTarget), signal: options.signal },
   ));
   assertSessionCatalogNodes(page.items, "会话目录刷新");
   return page;
+}
+
+/** 完整的可见节点集用于确认已加载分支是否仍可读取，不从单个分页推断节点消失。 */
+export async function getSessionCatalogExport(
+  port: number,
+  workspaceTarget: GatewayWorkspaceRequestTarget,
+  options: { signal?: AbortSignal } = {},
+): Promise<SessionCatalogExport> {
+  const catalog = unwrapApiData(await requestJson<APIResponse<SessionCatalogExport>>(
+    port,
+    "/api/v1/session-catalog/export",
+    { headers: gatewayWorkspaceRequestHeaders(workspaceTarget), signal: options.signal },
+  ));
+  assertSessionCatalogNodes(catalog.items, "会话目录完整节点集");
+  return catalog;
 }
 
 export async function getSessionCatalogBreadcrumb(

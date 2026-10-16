@@ -31,13 +31,26 @@ class QueriesMixin:
             raise TypeError(f"before 必须是 datetime: {before!r}")
         if before.tzinfo is None:
             raise ValueError(f"before 必须带时区: {before!r}")
-        rows = self._connected().execute(
+        connection = self._connected()
+        invalid = connection.execute(
+            "SELECT owner_ref_id, retention_until FROM attachment_owner_refs "
+            "WHERE retention_until IS NOT NULL AND julianday(retention_until) IS NULL LIMIT 1"
+        ).fetchone()
+        if invalid is not None:
+            raise RuntimeError(
+                "attachment owner retention_until 损坏，拒绝 GC: "
+                f"owner_ref_id={invalid['owner_ref_id']}, retention_until={invalid['retention_until']!r}"
+            )
+        rows = connection.execute(
             "SELECT b.* FROM attachment_blobs AS b "
             "WHERE b.availability = 'available' AND b.created_at < ? "
             "AND NOT EXISTS (SELECT 1 FROM attachment_owner_refs AS r "
-            "  WHERE r.blob_id = b.blob_id AND r.state = 'active') "
+            "  WHERE r.blob_id = b.blob_id AND (r.state = 'active' "
+            "    OR julianday(r.retention_until) > julianday(?))) "
+            "AND NOT EXISTS (SELECT 1 FROM fork_attachment_claims AS c "
+            "  WHERE c.blob_id = b.blob_id AND c.state IN ('preparing', 'owner_reserved')) "
             "ORDER BY b.created_at, b.rowid",
-            (before.astimezone(UTC).isoformat(),),
+            (before.astimezone(UTC).isoformat(), datetime.now(UTC).isoformat()),
         ).fetchall()
         return tuple(_blob_from_row(row) for row in rows)
 
@@ -55,6 +68,15 @@ class QueriesMixin:
                 )
             blob = _blob_from_row(row)
             if blob.availability == "available":
+                retained = connection.execute(
+                    "SELECT 1 FROM attachment_owner_refs WHERE blob_id = ? AND (state = 'active' "
+                    "OR (retention_until IS NOT NULL AND (julianday(retention_until) IS NULL "
+                    "OR julianday(retention_until) > julianday(?)))) "
+                    "UNION ALL SELECT 1 FROM fork_attachment_claims WHERE blob_id = ? "
+                    "AND state IN ('preparing', 'owner_reserved') LIMIT 1", (blob_id, now_text, blob_id),
+                ).fetchone()
+                if retained is not None:
+                    raise RuntimeError("attachment blob 仍有 owner retention 或 copy claim，拒绝 GC tombstone")
                 connection.execute(
                     "UPDATE attachment_blobs SET availability = 'tombstoned', "
                     "tombstoned_at = ?, updated_at = ? WHERE blob_id = ?",

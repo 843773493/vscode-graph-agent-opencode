@@ -13,15 +13,16 @@ from app.agents.providers.wire_finalize import (
     ResponsesWireProfile,
     finalize_provider_wire,
 )
-from app.domain.itemized.assembly_snapshot import (
-    ContextAssemblySnapshot,
-    context_request_hash,
-)
+from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.seal_binding import ContextSealPreparation
+from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.domain.itemized.serialization import normalize_wire_request
+from app.services.infrastructure.rollout_context.checkpoint.seal.assembly import (
+    seal_snapshot,
+)
 from app.services.infrastructure.rollout_context.checkpoint.seal.cleanup import (
     record_failed_seal,
 )
@@ -29,7 +30,6 @@ from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (
     committed_retry,
     require_key,
     require_registered_draft,
-    runtime_draft,
     seal_input_hash,
 )
 from app.services.infrastructure.rollout_context.provider.native_request import (
@@ -91,7 +91,7 @@ def seal_registered_plan(
         registered = require_registered_draft(
             owner, session_id, thread_id, plan, checkpoint_ns
         )
-        draft = runtime_draft(registered)
+        draft = registered.draft
         # activation binding identity 进入 seal input preimage：重试必须复用同一
         # 冻结 snapshot，不得在同一 seal key 下换成另一个 activation 结果。
         activation_bindings_hash = (
@@ -153,6 +153,7 @@ def seal_registered_plan(
                 omitted_ref_ids=frozenset(assembly_options["omitted_ref_ids"]),
                 request_only_content=request_only_content,
             )
+            # detail_refs 绑定 included request_only 的真实正文；整体 assembly 审计详情是可选的，可以为空。
             snapshot = owner._composer_for(
                 session_id, thread_id, checkpoint_ns
             ).assembly(
@@ -174,7 +175,9 @@ def seal_registered_plan(
                     raise ValueError("source-mismatch: wire seal 缺少已绑定 prefix")
                 item_ids = tuple(
                     entry.ref.ref_id for entry in snapshot.selection
-                    if entry.included and entry.ref.ref_type == "canonical_item"
+                    if entry.ref.ref_type == "canonical_item" and (
+                        entry.included or snapshot.selection_policy == "summary_candidate"
+                    )
                 )
                 items = owner._storage.storage.read_items(
                     session_id, thread_id, item_ids=item_ids, checkpoint_ns=checkpoint_ns,
@@ -186,6 +189,7 @@ def seal_registered_plan(
                 if isinstance(wire_profile, ResponsesWireProfile):
                     native_request = project_native_request(
                         sealed_plan, items, bodies, seal_binding=snapshot.seal_binding,
+                        attachment_projector=lambda payload: owner._storage.storage.project_attachment_payload(session_id, thread_id, payload),
                     )["request"]
                     messages, tools = (), ()
                 else:
@@ -193,6 +197,7 @@ def seal_registered_plan(
                     messages = project_sealed_prefix(
                         sealed_plan, snapshot.seal_binding, items, bodies,
                     )
+                    messages = owner.project_message_attachment_refs(session_id, thread_id, messages)
                     tools = [
                         tool for entry in snapshot.selection
                         if entry.included and isinstance(entry.ref, ToolSetRef)
@@ -221,19 +226,19 @@ def seal_registered_plan(
                 error,
             )
             raise
-        owner.seal_context_assembly(
+        seal_snapshot(
+            owner,
             session_id,
             thread_id,
             snapshot,
+            registered=registered,
             seal_idempotency_key=seal_idempotency_key,
             seal_input_hash=input_hash,
             checkpoint_ns=checkpoint_ns,
+            detail=None, required_detail=False, sensitive_detail=False,
             activation_binding=activation_binding,
             prepared_details=prepared_details,
         )
-        return owner._storage.assemblies.get_context_assembly(
-            session_id,
-            thread_id,
-            assembly_id=assembly_id,
-            checkpoint_ns=checkpoint_ns,
-        )
+        # storage owner 已原子提交并核对同一 immutable snapshot；ack 后的
+        # 最终投影仍从新的只读快照恢复，不能跨越该边界复用本对象。
+        return snapshot

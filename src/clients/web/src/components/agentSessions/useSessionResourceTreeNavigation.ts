@@ -243,9 +243,10 @@ export function useSessionResourceTreeNavigation({
       decision.action.parentNodeId,
       source.parentNodeId,
     );
-    onStatusChange(source.kind === "session" ? "已移动会话" : "已移动会话文件夹");
-    // 目录移动已经成功；此处只是跟随刷新工作区会话列表。
-    // 若刷新失败必须如实报告，不能让用户以为整次拖放失败而重复拖一次导致二次移动。
+    onStatusChange(source.kind === "session"
+      ? "会话移动已保存本地待同步变更，等待提交"
+      : "会话文件夹移动已保存本地待同步变更，等待提交");
+    // 本地意图已持久化；这里只回读权威会话列表，实际提交由原 outbox 继续跟踪。
     try {
       await onRefreshWorkspaceSessions(source.workspaceId);
     } catch (error) {

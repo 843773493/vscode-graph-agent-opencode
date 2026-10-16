@@ -1,4 +1,4 @@
-"""CSM 的 typed SourceObservation / lifecycle decision / control state 扩展。
+"""CSM 的 typed SourceObservation / lifecycle decision。
 
 OpenSpec add-context-injection-lifecycle 1.5：producer 与 CSM 之间影响
 tracking/激活/选择/替换的核心字段必须走本模块的 typed 值对象；自由
@@ -111,55 +111,6 @@ class SourceObservation:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class ContextSourceControlStateExtension:
-    """与既有 ContextSourceControlState 配对的 typed 扩展事实。
-
-    携带旧控制状态没有覆盖的决策字段：activation boundary、base/delta
-    关系、desired/applied revision 与产生本状态的决策幂等键。它仍是纯
-    值对象；持久化列与端口扩展由 OpenSpec 2.3/B4 落地，恢复时缺失核心
-    字段必须显式失败，不得用当前文件/事件/扩展补齐。
-    """
-
-    owner: ContextSourceOwnerKey
-    source_id: str
-    activation_boundary: SourceActivationBoundary
-    base_revision: str | None
-    desired_revision: str | None
-    latest_visible_committed_revision: str | None
-    decision_idempotency_key: str
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.owner, ContextSourceOwnerKey):
-            raise TypeError(
-                "ContextSourceControlStateExtension.owner 必须是 "
-                "ContextSourceOwnerKey"
-            )
-        _require_non_empty(
-            self.source_id, "ContextSourceControlStateExtension.source_id"
-        )
-        if self.activation_boundary not in {"turn", "model_call"}:
-            raise ValueError(
-                "ContextSourceControlStateExtension.activation_boundary 非法: "
-                f"{self.activation_boundary!r}"
-            )
-        for field_name in (
-            "base_revision",
-            "desired_revision",
-            "latest_visible_committed_revision",
-        ):
-            value = getattr(self, field_name)
-            if value is not None:
-                _require_non_empty(
-                    value,
-                    f"ContextSourceControlStateExtension.{field_name}",
-                )
-        _require_non_empty(
-            self.decision_idempotency_key,
-            "ContextSourceControlStateExtension.decision_idempotency_key",
-        )
-
-
 def build_source_lifecycle_decision(
     observation: SourceObservation,
     *,
@@ -224,7 +175,6 @@ def build_source_lifecycle_decision(
 
 
 __all__ = [
-    "ContextSourceControlStateExtension",
     "SourceObservation",
     "SourceTrackingMode",
     "build_source_lifecycle_decision",

@@ -52,6 +52,7 @@ export type {
 } from "./api/workspaceFilesystem";
 export {
   getSessionCatalogBreadcrumb,
+  getSessionCatalogExport,
   listSessionCatalogChildren,
   refreshSessionCatalog,
 } from "./api/session/sessionCatalog";

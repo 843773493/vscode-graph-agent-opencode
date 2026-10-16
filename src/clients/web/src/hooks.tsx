@@ -38,10 +38,11 @@ import { useUnreadSessionTracking } from "./hooks/session/useUnreadSessionTracki
 import { useSessionTraceHistory } from "./hooks/sessionTraceHistory/useSessionTraceHistory";
 import {
   useSessionTurnTimeline,
-  useTerminalTurnLoader,
+  useSessionJobTurnLoader,
 } from "./hooks/session/useSessionTurnTimeline";
 import { errorMessage } from "./utils/errorMessage";
 import { createSessionCatalogOutboxRuntime } from "./hooks/session/sessionCatalogOutboxRuntime";
+import { refreshCurrentSessionCatalogOwner } from "./hooks/session/useSessionLifecycleActions";
 import { requireGatewayWorkspaceRequestTarget } from "./api/workspaceIdentity";
 // AppContext / ComposerContext 的契约与消费者已下沉到 hooks/app/appContext.tsx；
 // 此处保持同名再导出，调用方（main.tsx、App.tsx、各组件与测试）不需要改动导入路径。
@@ -57,10 +58,17 @@ export type {
 } from "./hooks/app/appContext";
 import { AppContext, ComposerContext } from "./hooks/app/appContext";
 import { INITIAL_APP_STATE } from "./hooks/app/appStateSeed";
+import { createSerialTaskQueue } from "./hooks/runtime/serialTaskQueue";
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>(INITIAL_APP_STATE);
   const latestStateRef = useRef(state);
+  const readState = useCallback(() => latestStateRef.current, []);
+  const selectionIntentRef = useRef(0);
+  const readSessionSelectionIntent = useCallback(() => selectionIntentRef.current, []);
+  const gatewayListRequestRef = useRef(0);
+  const gatewayListTaskQueueRef = useRef(createSerialTaskQueue());
+  const runGatewayWorkspaceListTask = gatewayListTaskQueueRef.current.enqueue;
   latestStateRef.current = state;
   const currentSessionId = state.currentSession?.session_id ?? null;
   const defaultGatewayWorkspaceId =
@@ -153,7 +161,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     reloadNonce: state.sessionHistoryReloadNonce,
     setState,
   });
-  const loadTerminalTurn = useTerminalTurnLoader(loadTurnDetails);
+  const loadTerminalJobTurn = useSessionJobTurnLoader({
+    state, loadTurnDetails, latestStateRef, sessionCacheKey: currentSessionCacheKey,
+    refreshTurnHistory, setState,
+  });
   const { abortCurrentStream } = useSessionEventStream({
     apiPort: state.apiPort,
     sessionId: currentSessionId,
@@ -166,7 +177,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       && currentTurnTimeline.projectionState === "ready",
     initialEventCursor: currentTurnTimeline?.eventCursor ?? null,
     refreshTurnHistory,
-    loadTerminalTurn,
+    loadTerminalJobTurn,
     setState,
   });
   useSessionMessageStream({
@@ -205,6 +216,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const setGatewayWorkspaceParent = useGatewayWorkspaceHierarchy(
     state.apiPort ?? DEFAULT_BACKEND_PORT,
     setState,
+    gatewayListRequestRef,
+    runGatewayWorkspaceListTask,
+    selectionIntentRef,
   );
 
   const setStatus = useCallback((text: string) => {
@@ -214,6 +228,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     () => createSessionCatalogOutboxRuntime({
       apiPort: state.apiPort ?? DEFAULT_BACKEND_PORT,
       onError: setStatus,
+      refreshSessionOwner: (workspaceTarget, signal) => refreshCurrentSessionCatalogOwner(
+        state.apiPort ?? DEFAULT_BACKEND_PORT, workspaceTarget,
+        () => latestStateRef.current, setState, signal,
+      ),
     }),
     [setStatus, state.apiPort],
   );
@@ -251,7 +269,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     interruptSession: interruptSessionCallback,
     renameSession,
     replayTurn,
-    updatePendingRequest,
     removePendingRequest,
     clearPendingRequests,
     updatePendingRequestPolicy,
@@ -272,12 +289,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     currentSessionCacheKey,
     defaultGatewayWorkspaceId,
     contentView: state.contentView,
+    readState,
     setState,
     abortCurrentStream,
     invalidateAgentState,
     refreshAgentStateSnapshot,
     sessionCatalogOutboxRuntime,
     gatewayUserAccess: state.gatewayUserAccess,
+    selectionIntentRef,
   });
 
   const { loadSessionViewState, saveSessionViewState, toggleExpandDetails } = useSessionViewState({
@@ -319,6 +338,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     apiPort: state.apiPort,
     uiSettings: state.uiSettings,
     setState,
+    selectionIntentRef,
+    gatewayListRequestRef,
+    runGatewayWorkspaceListTask,
   });
   useContentViewEffects({
     contentView: state.contentView,
@@ -337,6 +359,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState,
     refreshSessions,
     abortCurrentStream,
+    selectionIntentRef,
   });
 
   const {
@@ -352,6 +375,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     refreshGatewayWorkspaceStatuses,
     resetWorkspaceScopedState,
     finishWorkspaceRefresh,
+    selectionIntentRef,
+    gatewayListRequestRef,
+    runGatewayWorkspaceListTask,
   });
 
   const {
@@ -366,6 +392,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     loadSessionViewState,
     activateGatewayWorkspaceInBackground,
     setStatus,
+    selectionIntentRef,
   });
 
   const {
@@ -381,6 +408,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     finishWorkspaceRefresh,
     refreshGatewayState,
     setState,
+    gatewayListRequestRef,
+    runGatewayWorkspaceListTask,
+    selectionIntentRef,
   });
 
   const {
@@ -399,6 +429,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     finishWorkspaceRefresh,
     resetWorkspaceScopedState,
     updateUiSettings,
+    gatewayListRequestRef,
+    runGatewayWorkspaceListTask,
+    selectionIntentRef,
   });
 
   const value = useMemo(
@@ -409,7 +442,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setStatus,
       sendMessage,
       replayTurn,
-      updatePendingRequest,
       removePendingRequest,
       clearPendingRequests,
       updatePendingRequestPolicy,
@@ -435,6 +467,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       selectSession,
       selectWorkspaceSession,
       openWorkspaceSession,
+      readSessionSelectionIntent,
       createSession,
       forkSessionContext,
       renameSession,
@@ -475,7 +508,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setStatus,
       sendMessage,
       replayTurn,
-      updatePendingRequest,
       removePendingRequest,
       clearPendingRequests,
       updatePendingRequestPolicy,
@@ -500,6 +532,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       selectSession,
       selectWorkspaceSession,
       openWorkspaceSession,
+      readSessionSelectionIntent,
       createSession,
       forkSessionContext,
       renameSession,

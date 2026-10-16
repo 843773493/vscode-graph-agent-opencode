@@ -7,8 +7,13 @@ import {
 } from "../../api/http";
 
 export const SESSION_ID = "ses_partial_projection";
+export const THREAD_ID = "thr_018f0000000070008000000000000001";
 export const WORKSPACE_ID = "workspace_partial_projection";
 export const SCOPE_KEY = `${WORKSPACE_ID}::${SESSION_ID}`;
+export const HISTORY_SOURCE_BINDING = {
+  source_view_id: "view_history_fixture",
+  source_view_revision: 1,
+} as const;
 export const originalFetch = globalThis.fetch;
 
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(
@@ -43,6 +48,7 @@ export function latestTurn(): NonNullable<SessionTurnBootstrap["latest_turn"]> {
     session_id: SESSION_ID,
     ordinal: 3,
     root_logical_item_ordinal: 20,
+    ...HISTORY_SOURCE_BINDING,
     revision: 1,
     status: "completed",
     created_at: "2026-07-28T00:00:03Z",
@@ -70,6 +76,7 @@ export function turnDetail(epoch: number): TurnDetail {
     session_id: SESSION_ID,
     ordinal: 3,
     root_logical_item_ordinal: 20,
+    ...HISTORY_SOURCE_BINDING,
     revision: 1,
     status: "completed",
     created_at: "2026-07-28T00:00:03Z",
@@ -106,6 +113,7 @@ export function bootstrap(
 ): SessionTurnBootstrap {
   return {
     session: turnBootstrapSession(),
+    thread_id: THREAD_ID,
     latest_turn: latestTurn(),
     active_job_id: null,
     active_jobs: [],
@@ -127,6 +135,8 @@ export function emptyHistoryPageResponse(
     message: "ok",
     request_id: requestId,
     data: {
+      thread_id: THREAD_ID,
+      ...HISTORY_SOURCE_BINDING,
       items: [],
       internal_executions: [],
       projection_epoch: projectionEpoch,

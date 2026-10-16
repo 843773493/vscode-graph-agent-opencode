@@ -13,9 +13,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.abstractions.turn_terminal_status import (
+    ToolResultCompletion,
+    TurnTerminalStatusWriter,
+)
 from app.core.bounded_json import bound_json_value
 from app.core.identifier import create_prefixed_id
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
+from app.core.shielded_cleanup import run_cleanup_shielded
 from app.domain.message_stream.errors import MessageStreamError
 from app.domain.message_stream.projection import (
     apply_event,
@@ -36,6 +41,7 @@ MESSAGE_STREAM_TERMINAL_CACHE_MAX_BYTES = 16 * 1024 * 1024
 MESSAGE_STREAM_INDEX_LOCK_SHARDS = 64
 # 消息事件日志逐事件持久化；状态快照只是恢复加速索引，不需要逐 token 写入。
 MESSAGE_STREAM_SNAPSHOT_INTERVAL_EVENTS = 32
+RECOVERED_TOOL_RESULT_UNKNOWN = "工作区后端重启，工具执行结果未知；未确认执行完成，不会自动重放。"
 INTERRUPTING_ALLOWED_EVENT_TYPES = frozenset(
     {
         "block.completed",
@@ -1281,7 +1287,7 @@ class MessageStreamStore:
         path = self._stream_path(session_id, turn_stream_id)
         encoded = self._encode_event(event)
         try:
-            await asyncio.to_thread(
+            append_task = asyncio.create_task(asyncio.to_thread(
                 self._append_durable_event,
                 session_id,
                 path,
@@ -1291,9 +1297,15 @@ class MessageStreamStore:
                 # 只有调用方显式指定的 event_id 才需要跨保留窗口记忆；自动生成
                 # 的 evt_* 不会被重放，写入侧车只会让文件无界增长。
                 event if event_id is not None else None,
-            )
-        except Exception:
-            # append/fsync 失败后，磁盘可能已经包含完整记录，也可能只包含
+            ))
+            try:
+                await asyncio.shield(append_task)
+            finally:
+                # 取消不能停止线程中的 append；持有 Turn 锁直到真实 worker
+                # 结算，重复取消也不能让下一提交复用旧 checkpoint 的序号。
+                await run_cleanup_shielded(lambda: append_task)
+        except (Exception, asyncio.CancelledError):
+            # append/fsync 失败或取消后，磁盘可能已经包含完整记录，也可能只包含
             # 半条记录。重新扫描并截断未完成尾部，避免进程内继续沿用旧
             # checkpoint，下一次提交复用已经写过的 event_seq。
             self._states.pop(turn_stream_id, None)
@@ -1462,7 +1474,71 @@ class MessageStreamStore:
         self._touch_cached_state(turn_stream_id, cached)
         return copy.deepcopy(cached)
 
-    async def reconcile_unfinished_streams(self) -> int:
+    async def reconcile_job_tools(
+        self, *, session_id: str, thread_id: str, job_id: str,
+        terminal_status_writer: TurnTerminalStatusWriter,
+    ) -> int:
+        """先持久化原 attempt 的真实终态，再闭合它的消息流镜像。"""
+        reconciled = 0
+        for turn_id, stream_id in self._read_index(session_id).items():
+            state = self._load_state(session_id, stream_id)
+            if state.get("job_id") != job_id:
+                continue
+            if (state.get("session_id"), state.get("thread_id"), state.get("turn_id")) != (session_id, thread_id, turn_id):
+                raise MessageStreamError("工具恢复的持久消息流与原 Job owner 不一致")
+            if state["stream_status"] in TERMINAL_STREAM_STATUSES:
+                continue
+            for attempt in state["tool_executions"]:
+                if attempt["status"] != "running":
+                    continue
+                completion = ToolResultCompletion(
+                    model_call_id=attempt.get("model_call_id"),
+                    tool_call_id=attempt.get("tool_call_id"),
+                    tool_invocation_id=attempt.get("tool_invocation_id"),
+                    tool_attempt_id=attempt.get("tool_attempt_id"),
+                    tool_name=attempt.get("tool_name"), content=RECOVERED_TOOL_RESULT_UNKNOWN,
+                    tool_outcome="unknown",
+                )
+                if completion.tool_attempt_id != attempt.get("tool_execution_id"):
+                    raise MessageStreamError("工具恢复的 execution/attempt 身份不一致")
+                item = await asyncio.to_thread(
+                    terminal_status_writer.commit_tool_result,
+                    session_id=session_id, thread_id=thread_id, job_id=job_id,
+                    completion=completion, recovery=True,
+                )
+                payload = item.payload
+                outcome = payload["tool_outcome"]
+                stream_outcome = (
+                    "outcome_unknown" if outcome == "unknown"
+                    else "success" if outcome == "success"
+                    else "provider_error"
+                )
+                await self.commit(
+                    stream_id, "tool.completed", {
+                        "tool_execution_id": completion.tool_attempt_id,
+                        "tool_call_id": completion.tool_call_id,
+                        "tool_invocation_id": completion.tool_invocation_id,
+                        "tool_attempt_id": completion.tool_attempt_id,
+                        "tool_name": attempt["tool_name"],
+                        "status": "completed" if outcome in {"success", "unknown"} else "failed",
+                        "outcome": stream_outcome,
+                        "completion_reason": (
+                            "execution_lost" if outcome == "unknown"
+                            else "user_interrupt" if outcome == "cancelled"
+                            else "tool_completed"
+                        ),
+                        "result": payload["content"],
+                    }, model_call_id=completion.model_call_id,
+                    tool_execution_id=completion.tool_attempt_id,
+                    tool_call_id=completion.tool_call_id,
+                    tool_invocation_id=completion.tool_invocation_id,
+                    tool_attempt_id=completion.tool_attempt_id, job_id=job_id,
+                    event_id=f"tool-terminal:{item.item_id}",
+                )
+                reconciled += 1
+        return reconciled
+
+    async def reconcile_unfinished_streams(self, *, resumed_job_ids: frozenset[str] | set[str] = frozenset()) -> int:
         """在后端重启时把没有终态的消息流标记为 execution_lost。"""
         reconciled = 0
         for node in self._path_resolver.list_nodes():
@@ -1508,6 +1584,9 @@ class MessageStreamStore:
                     # 启动扫描只需要识别未完成执行；终态历史已经在磁盘上，不能
                     # 因一次全仓恢复扫描永久占用内存。
                     self._evict_stream_cache(turn_stream_id)
+                    continue
+                if state.get("job_id") in resumed_job_ids:
+                    self._touch_cached_state(turn_stream_id, state)
                     continue
                 self._touch_cached_state(turn_stream_id, state)
                 self._event_ids[turn_stream_id] = {

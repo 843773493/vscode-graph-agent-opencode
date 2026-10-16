@@ -10,17 +10,19 @@ from pathlib import Path
 from fastapi import FastAPI
 
 from app.api import session_navigation
-from app.core.path_utils import get_session_path_resolver
+from app.core.path_utils import build_session_catalog_components, catalog_provider_scope
 from app.core.trace_middleware import (
     TraceMiddleware,
     get_current_gateway_id,
     get_current_navigation_actor,
 )
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.session_navigation.operations import (
     NavigationMutationEnqueueRequest,
     NavigationMutationEnqueueResultDTO,
     NavigationMutationStatusPageDTO,
 )
+from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_navigation.executor import NavigationMutationExecutor
 from app.services.business.session_navigation.operations_service import (
     NavigationAuthScope,
@@ -29,19 +31,27 @@ from app.services.business.session_navigation.operations_service import (
 from app.services.business.session_navigation.queue_store import (
     NavigationMutationQueueStore,
 )
+from app.services.business.session_service import SessionService
+from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
+from app.services.infrastructure.trace_event_store import TraceEventStore
 
 
-class _RouteCatalogService:
+class _RouteCatalogService(SessionCatalogService):
     """把生产 enqueue/status 实现挂到独立 HTTP 服务并记录收到的认证 scope。"""
 
     def __init__(
         self,
-        operations: SessionCatalogOperationsService,
         *,
-        workspace_id: str,
+        session_service: SessionService,
+        operations: SessionCatalogOperationsService,
     ) -> None:
-        self._operations = operations
-        self.workspace_id = workspace_id
+        super().__init__(
+            session_service=session_service,
+            operations_service=operations,
+        )
         self.scopes: list[NavigationAuthScope] = []
 
     async def submit_operation_batch(
@@ -50,7 +60,7 @@ class _RouteCatalogService:
         scope: NavigationAuthScope,
     ) -> NavigationMutationEnqueueResultDTO:
         self.scopes.append(scope)
-        return await self._operations.enqueue(request, scope)
+        return await super().submit_operation_batch(request, scope)
 
     def operation_status(
         self,
@@ -58,14 +68,18 @@ class _RouteCatalogService:
         scope: NavigationAuthScope,
     ) -> NavigationMutationStatusPageDTO:
         self.scopes.append(scope)
-        return self._operations.status(operation_ids, scope)
+        return super().operation_status(operation_ids, scope)
 
 
 def create_app() -> FastAPI:
     """建立独立下游服务；所有队列数据保存在传入工作区的 SQLite catalog。"""
 
     workspace_root = Path(os.environ["WORKSPACE_ROOT"]).resolve()
-    resolver = get_session_path_resolver(workspace_root / ".boxteam" / "sessions")
+    catalog = build_session_catalog_components(
+        workspace_root / ".boxteam" / "sessions",
+        load_or_create_workspace_id(workspace_root),
+    )
+    resolver = catalog.resolver
     resolver.initialize()
     store = resolver.catalog_store
     queue = NavigationMutationQueueStore(store)
@@ -81,9 +95,17 @@ def create_app() -> FastAPI:
         queue=queue,
         executor=executor,
     )
+    with catalog_provider_scope(catalog):
+        session_service = SessionService(
+            config_service=ConfigService(workspace_root=workspace_root),
+            trace_event_store=TraceEventStore(catalog.sessions_root),
+            workspace_id=resolver.workspace_id,
+            path_resolver=resolver,
+            creation_service=catalog.creation_service,
+            initialize_thread_storage=RolloutCheckpointSaver(catalog.sessions_root).initialize_thread_storage,
+        )
     route_service = _RouteCatalogService(
-        operations,
-        workspace_id=resolver.workspace_id,
+        session_service=session_service, operations=operations
     )
 
     @asynccontextmanager
@@ -95,7 +117,7 @@ def create_app() -> FastAPI:
             try:
                 await operations.stop()
             finally:
-                store.close()
+                catalog.close()
 
     application = FastAPI(lifespan=lifespan)
     application.add_middleware(TraceMiddleware)
@@ -106,7 +128,7 @@ def create_app() -> FastAPI:
 
     @application.get("/api/v1/health")
     async def health() -> dict[str, str]:
-        return {"status": "ok"}
+        return {"status": "ok", "workspace_id": resolver.workspace_id}
 
     @application.post("/api/v1/context/read")
     async def read_public_context() -> dict[str, str | None]:

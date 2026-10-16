@@ -14,6 +14,9 @@ from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.session import SessionDTO
 from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_service import SessionService
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.support.canonical_id_at import uuid7_hex_from_name
 from tests.support.session_navigation_queue import (
@@ -55,6 +58,7 @@ class _SessionService(SessionService):
             trace_event_store=TraceEventStore(sessions_dir=sessions_root),
             workspace_id=resolver.workspace_id, path_resolver=resolver,
             creation_service=get_session_creation_service(sessions_root),
+            initialize_thread_storage=RolloutCheckpointSaver(sessions_root).initialize_thread_storage,
         )
         self.get_calls: list[str] = []
 

@@ -29,8 +29,13 @@ VISIBLE_NORMAL_TURN_PREDICATE = (
     "AND cvt.root_input_item_id = canonical_turn.root_input_item_id "
     "AND root.turn_id = canonical_turn.turn_id "
     "AND root.semantic_kind = 'user_input' AND root.turn_scope = 'turn_root' "
-    "AND root.status = 'completed' AND membership.visible = 1 "
-    "AND membership.source_kind = 'canonical')"
+    "AND root.status = 'completed' AND membership.source_kind = 'canonical' "
+    "AND EXISTS (SELECT 1 FROM context_view_items AS visible_membership "
+    "JOIN item_catalog AS visible_item ON visible_item.item_id = visible_membership.item_id "
+    "WHERE visible_membership.view_id = cvt.view_id "
+    "AND visible_membership.visible = 1 AND visible_membership.source_kind = 'canonical' "
+    "AND visible_item.turn_id = canonical_turn.turn_id "
+    "AND visible_item.turn_scope IN ('turn_root', 'turn_member')))"
 )
 
 
@@ -118,13 +123,12 @@ def require_context_view_order_integrity(connection: Connection, view_id: str) -
         "ON membership.view_id = cvt.view_id AND membership.item_id = root.item_id "
         "WHERE cvt.view_id = ? AND root.turn_id = canonical_turn.turn_id "
         "AND root.semantic_kind = 'user_input' AND root.turn_scope = 'turn_root' "
-        "AND root.status = 'completed' AND membership.visible = 1 "
-        "AND membership.source_kind != 'canonical' LIMIT 1",
+        "AND root.status = 'completed' AND membership.source_kind != 'canonical' LIMIT 1",
         (view_id,),
     ).fetchone()
     if invalid_root_membership is not None:
         raise RuntimeError(
-            "context view projection integrity error: 可见 Turn root 不是 canonical member "
+            "context view projection integrity error: Turn root 不是 canonical member "
             f"view_id={view_id}, turn_id={invalid_root_membership[0]}"
         )
 
@@ -140,7 +144,7 @@ def require_context_view_order_integrity(connection: Connection, view_id: str) -
         "WHERE cvt.view_id = ? AND cvt.root_input_item_id = canonical_turn.root_input_item_id "
         "AND root.turn_id = canonical_turn.turn_id AND root.semantic_kind = 'user_input' "
         "AND root.turn_scope = 'turn_root' AND root.status = 'completed' "
-        "AND membership.visible = 1 AND membership.source_kind = 'canonical'"
+        "AND membership.source_kind = 'canonical'"
         ") WHERE previous_root_ordinal IS NOT NULL AND root_ordinal <= previous_root_ordinal LIMIT 1",
         (view_id,),
     ).fetchone()
@@ -304,6 +308,11 @@ class TurnProjectionQueryMixin:
         branch_id: str,
         timestamp: str,
     ) -> None:
+        """按消息推进 Turn 索引投影。
+
+        ``timestamp`` 在首次创建投影时同时写入 ``created_at`` 和
+        ``updated_at``；已有投影只用它推进 ``updated_at``。
+        """
         turn_id = strict_text(turn_id, field="turns.turn_id")
         sequence = strict_non_negative_int(sequence, field="turns.message_sequence")
         if sequence == 0:

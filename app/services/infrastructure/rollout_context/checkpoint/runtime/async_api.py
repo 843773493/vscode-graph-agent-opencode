@@ -13,8 +13,10 @@ from langgraph.checkpoint.base import (
     Checkpoint,
     CheckpointMetadata,
     CheckpointTuple,
+    DeltaChannelHistory,
 )
 
+from app.core.session_thread_context import require_current_session_thread_owner
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutTurnAnchor,
 )
@@ -25,6 +27,11 @@ class RolloutLangGraphAsyncMixin:
 
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         return await asyncio.to_thread(self.get_tuple, config)
+
+    async def aget_delta_channel_history(
+        self, *, config: RunnableConfig, channels: Sequence[str],
+    ) -> dict[str, DeltaChannelHistory]:
+        return await asyncio.to_thread(self.get_delta_channel_history, config=config, channels=channels)
 
     async def alist(
         self,
@@ -58,7 +65,8 @@ class RolloutLangGraphAsyncMixin:
         await asyncio.to_thread(self.put_writes, config, writes, task_id, task_path)
 
     async def adelete_thread(self, thread_id: str) -> None:
-        await asyncio.to_thread(self.delete_thread, thread_id)
+        owner = require_current_session_thread_owner(langgraph_thread_id=thread_id)
+        await self._storage.forks.delete_thread(owner.session_id, thread_id=owner.thread_id, attachment_store=self._attachment_store)
 
     async def arewind(
         self,

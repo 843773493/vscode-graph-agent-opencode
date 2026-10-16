@@ -131,6 +131,7 @@ export interface MessageStreamActiveState {
 }
 
 export interface MessageStreamState {
+  sessionCacheKey: string;
   workspaceId: string | null;
   sessionId: string;
   threadId: string | null;

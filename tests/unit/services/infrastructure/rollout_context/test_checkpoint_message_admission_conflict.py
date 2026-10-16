@@ -61,7 +61,8 @@ def test_user_turn_admission_rejects_internal_human_message(tmp_path: Path) -> N
     with closing(sqlite3.connect(":memory:")) as connection:
         connection.executescript(
             "CREATE TABLE messages ("
-            "message_id TEXT, message_sequence INTEGER, turn_id TEXT, execution_id TEXT);"
+            "message_id TEXT, message_sequence INTEGER, turn_id TEXT, execution_id TEXT, "
+            "jsonl_offset INTEGER, jsonl_length INTEGER);"
             "CREATE TABLE item_catalog ("
             "item_id TEXT, jsonl_offset INTEGER, jsonl_length INTEGER, "
             "turn_id TEXT, execution_id TEXT);"

@@ -6,6 +6,7 @@ ports；它们不承担 LangChain/provider projection，也不读取 v1 数据�
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from app.core.sqlite_state import utc_now_text as _now
@@ -13,6 +14,9 @@ from app.domain.itemized.enums import (
     ControlOutcome,
     TurnStatus,
 )
+from app.domain.itemized.execution_admission import ExecutionAdmission
+from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.runtime import ModelCallRecord
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_text,
@@ -33,6 +37,64 @@ _V2_TO_HISTORY_STATUS = {
 
 class RolloutModelCallsMixin:
     """Provider model-call identity/outcome owner。"""
+
+    def read_resumable_model_call(
+        self, admission: ExecutionAdmission, model_call_id: str, *, carrier_items: tuple[CanonicalItemRecord, ...],
+    ) -> tuple[ModelCallRecord, str] | None:
+        """只读尚无 terminal convergence 的原调用及 committed completed carrier。"""
+        if not carrier_items:
+            return None
+        with self._storage.read_connection(admission.session_id, admission.thread_id, "") as connection:
+            self._storage._require_v2_runtime(connection)
+            row = connection.execute(
+                "SELECT e.outcome,e.last_model_call_id,m.attempt,m.provider,m.outcome,"
+                "m.assembly_id,a.status,a.execution_id,a.model_call_id,m.dispatch_state,"
+                "a.outcome,a.terminal_at,a.request_hash,tr.status,tr.last_execution_id,"
+                "e.job_id,e.turn_id,e.admission_idempotency_key,e.execution_origin,a.turn_id "
+                "FROM executions e JOIN model_calls m USING(session_id,thread_id,execution_id) "
+                "JOIN context_assemblies a USING(session_id,thread_id,assembly_id) "
+                "LEFT JOIN turn_records tr ON tr.session_id=e.session_id AND tr.thread_id=e.thread_id AND tr.turn_id=e.turn_id "
+                "WHERE e.session_id=? AND e.thread_id=? AND e.execution_id=? AND m.model_call_id=?",
+                (admission.session_id, admission.thread_id, admission.execution_id, model_call_id),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError(f"pending tool 的 ModelCall/assembly 绑定缺失: {model_call_id}")
+            if row[15:20] != (admission.job_id, admission.turn_id, admission.admission_idempotency_key, admission.execution_origin, admission.turn_id):
+                raise RuntimeError(f"pending tool 的 admission/assembly owner 漂移: {model_call_id}")
+            terminal = connection.execute(
+                "SELECT 1 FROM storage_commits WHERE commit_kind='terminal_convergence' AND status='committed' "
+                "AND subject_id IN (?,?) LIMIT 1", (admission.execution_id, admission.turn_id),
+            ).fetchone()
+            if terminal is not None or row[0] != "unknown" or row[1] != model_call_id or row[4] != "unknown":
+                return None
+            if row[6:9] != ("sealed", admission.execution_id, model_call_id):
+                raise RuntimeError(f"pending tool 的 sealed assembly owner 漂移: {model_call_id}")
+            if row[9] != "dispatched" or row[10] not in {None, "unknown"} or row[11] is not None:
+                return None
+            strict_text(row[12], field="context_assemblies.request_hash")
+            if admission.turn_id is not None and (row[13] not in {"open", "active"} or row[14] != admission.execution_id):
+                return None
+            # 固定 checkpoint 声明的消息组必须全员匹配；同 call 的 stream sink
+            # 不是该 checkpoint 的成员，不能混入比较或用传入的 ID 子集自证完整。
+            carrier = connection.execute(
+                "SELECT i.semantic_kind,i.status,i.execution_id,i.turn_id,i.item_id,c.status,i.content_hash,i.projection_manifest_json "
+                "FROM item_catalog i JOIN storage_commits c USING(commit_id) "
+                "WHERE json_extract(i.projection_manifest_json,'$.projection_identity.model_call_id')=? "
+                "AND i.message_group_id=? "
+                "AND i.semantic_kind IN ('reasoning','assistant_output','tool_call') ORDER BY i.item_sequence",
+                (model_call_id, carrier_items[-1].message_group_id),
+            ).fetchall()
+            if not carrier or any(value[1:4] != ("completed", admission.execution_id, admission.turn_id) or value[5] != "committed" for value in carrier):
+                return None
+            expected = tuple((item.semantic_kind, item.item_id, item.content_hash, item.projection_group.to_dict() if item.projection_group is not None else None) for item in carrier_items)
+            committed = tuple((value[0], value[4], value[6], json.loads(value[7]).get("projection_group")) for value in carrier)
+            if expected != committed or not any(item.semantic_kind == "tool_call" for item in carrier_items):
+                return None
+        return ModelCallRecord(
+            session_id=admission.session_id, thread_id=admission.thread_id,
+            model_call_id=model_call_id, execution_id=admission.execution_id,
+            attempt=row[2], provider=row[3], outcome=row[4],
+        ), strict_text(row[5], field="model_calls.assembly_id")
 
     def register_model_call(
         self,
@@ -324,6 +386,16 @@ class RolloutModelCallsMixin:
                 )
                 if assembly_update.rowcount != 1:
                     raise RuntimeError("assembly 的 model-call 指针更新失败")
+                if execution_origin == "user_turn":
+                    connection.execute(
+                        "UPDATE turn_records SET status='active', updated_at=? "
+                        "WHERE session_id=? AND thread_id=? AND turn_id=? AND status='open'",
+                        (timestamp, session_id, owner_thread_id, execution_turn_id),
+                    )
+                    connection.execute(
+                        "UPDATE turns SET status='running', updated_at=? WHERE turn_id=? AND status='accepted'",
+                        (timestamp, execution_turn_id),
+                    )
                 connection.commit()
 
     def update_model_call_outcome(

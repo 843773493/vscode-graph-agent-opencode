@@ -7,7 +7,7 @@ from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Self, cast
+from typing import ClassVar, Self, cast
 
 import httpx
 import pytest
@@ -50,6 +50,7 @@ def _response(data: dict[str, object]) -> httpx.Response:
 class _FederationClient:
     manifest: dict[str, object]
     workspaces: dict[str, object]
+    requests: ClassVar[list[tuple[str, dict[str, str]]]] = []
 
     def __init__(self, *, timeout: float) -> None:
         assert timeout == 10
@@ -61,6 +62,7 @@ class _FederationClient:
         return None
 
     async def get(self, url: str, *, headers: dict[str, str]) -> httpx.Response:
+        self.requests.append((url, dict(headers)))
         assert headers["X-BoxTeam-Federation-Token"] == "federation-secret"
         if url.endswith("/manifest"):
             return _response(self.manifest)
@@ -522,6 +524,339 @@ def test_remote_projection_rejects_stale_cursor_and_accepts_full_snapshot_jump(
 
 
 @pytest.mark.asyncio
+async def test_remote_gateway_registration_closes_staged_runtime_before_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _TrackingRuntime(WorkspaceRuntime):
+        def __init__(self, url: str) -> None:
+            super().__init__(service_urls={"workspace_api": url})
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    registry = GatewayWorkspaceRegistry(
+        storage_path=tmp_path / "workspaces.json",
+        state_store=state,
+    )
+    connection = RemoteGatewayConnection(
+        connection_id="rgw_precommit",
+        name="Precommit remote",
+        host="precommit.example.com",
+        port=22,
+        username="developer",
+        private_key_path=None,
+        ssh_config_host="precommit",
+        remote_gateway_port=8014,
+        remote_gateway_id="precommit-gateway",
+        protocol_version=FEDERATION_PROTOCOL_VERSION,
+        source_owner="manual",
+        remote_config_event_cursor=4,
+    )
+    old_runtime = _TrackingRuntime("http://old")
+    old_target = WorkspaceTarget(
+        workspace_id=build_projected_workspace_id(
+            connection.connection_id, "old-workspace"
+        ),
+        name="Old workspace",
+        root_path="/old",
+        backend_url="http://old",
+        connection_kind="remote_gateway",
+        backend_workspace_id="00000000-0000-4000-8000-000000000002",
+        owner="remote_projection",
+        connection_id=connection.connection_id,
+        remote_gateway_connection_id=connection.connection_id,
+        remote_workspace_id="old-workspace",
+    )
+    registry.apply_remote_projection_snapshot(
+        connection=connection,
+        projections=(old_target,),
+        runtime=old_runtime,
+    )
+    previous_revision = registry.registry_revision
+    previous_commit = registry._last_committed_snapshot
+    previous_saved_state = state.load_workspace_registry()
+    staged_runtime = _TrackingRuntime("http://staged")
+    failure = OSError("registry save failed before commit")
+
+    async def prepare_remote_gateway(**_: object):
+        return (
+            connection,
+            staged_runtime,
+            [
+                {
+                    "workspace_id": "new-workspace",
+                    "name": "New workspace",
+                    "root_path": "/new",
+                    "backend_workspace_id": "00000000-0000-4000-8000-000000000003",
+                    "services": ["workspace_api"],
+                }
+            ],
+        )
+
+    def fail_before_save(**_: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(
+        remote_gateway_module, "_prepare_remote_gateway", prepare_remote_gateway
+    )
+    monkeypatch.setattr(registry, "_save", fail_before_save)
+
+    with pytest.raises(OSError) as raised:
+        await remote_gateway_module.register_remote_gateway(
+            registry=registry,
+            log_dir=tmp_path / "logs",
+            name="Precommit remote",
+            host=connection.host,
+            port=connection.port,
+            username=connection.username,
+            private_key_path=None,
+            ssh_config_host=connection.ssh_config_host,
+            remote_gateway_port=connection.remote_gateway_port,
+            connection_id=connection.connection_id,
+        )
+
+    assert raised.value is failure
+    assert staged_runtime.closed is True
+    assert registry.registry_revision == previous_revision
+    assert registry._last_committed_snapshot is previous_commit
+    assert state.load_workspace_registry() == previous_saved_state
+    assert registry._remote_gateway_runtimes[connection.connection_id] is old_runtime
+    assert registry.resolve(old_target.workspace_id).backend_url == "http://old"
+    assert registry.remote_gateway_connection(connection.connection_id) == connection
+    assert not registry.has_target(
+        build_projected_workspace_id(connection.connection_id, "new-workspace")
+    )
+    registry.close()
+    state.close()
+
+
+@pytest.mark.asyncio
+async def test_remote_gateway_registration_keeps_published_runtime_after_observer_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _TrackingRuntime(WorkspaceRuntime):
+        def __init__(self, url: str) -> None:
+            super().__init__(service_urls={"workspace_api": url})
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    registry = GatewayWorkspaceRegistry(
+        storage_path=tmp_path / "workspaces.json",
+        state_store=state,
+    )
+    connection = RemoteGatewayConnection(
+        connection_id="rgw_postcommit",
+        name="Postcommit remote",
+        host="postcommit.example.com",
+        port=22,
+        username="developer",
+        private_key_path=None,
+        ssh_config_host="postcommit",
+        remote_gateway_port=8014,
+        remote_gateway_id="postcommit-gateway",
+        protocol_version=FEDERATION_PROTOCOL_VERSION,
+        source_owner="manual",
+        remote_config_event_cursor=4,
+    )
+    old_runtime = _TrackingRuntime("http://old")
+    old_target = WorkspaceTarget(
+        workspace_id=build_projected_workspace_id(
+            connection.connection_id, "old-workspace"
+        ),
+        name="Old workspace",
+        root_path="/old",
+        backend_url="http://old",
+        connection_kind="remote_gateway",
+        backend_workspace_id="00000000-0000-4000-8000-000000000002",
+        owner="remote_projection",
+        connection_id=connection.connection_id,
+        remote_gateway_connection_id=connection.connection_id,
+        remote_workspace_id="old-workspace",
+    )
+    registry.apply_remote_projection_snapshot(
+        connection=connection,
+        projections=(old_target,),
+        runtime=old_runtime,
+    )
+    previous_revision = registry.registry_revision
+    previous_commit = registry._last_committed_snapshot
+    staged_runtime = _TrackingRuntime("http://published")
+    failure = RuntimeError("registry observer failed after commit")
+
+    async def prepare_remote_gateway(**_: object):
+        return (
+            replace(connection, remote_config_event_cursor=5),
+            staged_runtime,
+            [
+                {
+                    "workspace_id": "new-workspace",
+                    "name": "New workspace",
+                    "root_path": "/new",
+                    "backend_workspace_id": "00000000-0000-4000-8000-000000000003",
+                    "services": ["workspace_api"],
+                }
+            ],
+        )
+
+    def fail_after_commit() -> None:
+        raise failure
+
+    monkeypatch.setattr(
+        remote_gateway_module, "_prepare_remote_gateway", prepare_remote_gateway
+    )
+    registry.add_commit_observer(fail_after_commit)
+    try:
+        with pytest.raises(RuntimeError) as raised:
+            await remote_gateway_module.register_remote_gateway(
+                registry=registry,
+                log_dir=tmp_path / "logs",
+                name="Postcommit remote",
+                host=connection.host,
+                port=connection.port,
+                username=connection.username,
+                private_key_path=None,
+                ssh_config_host=connection.ssh_config_host,
+                remote_gateway_port=connection.remote_gateway_port,
+                connection_id=connection.connection_id,
+            )
+        assert raised.value is failure
+        assert registry.registry_revision == previous_revision + 1
+        assert registry._last_committed_snapshot is not previous_commit
+        assert state.get_registry_revision() == registry.registry_revision
+        new_workspace_id = build_projected_workspace_id(
+            connection.connection_id, "new-workspace"
+        )
+        assert registry.resolve(new_workspace_id).backend_url == "http://published"
+        assert registry.remote_gateway_url(connection.connection_id) == "http://published"
+        assert registry._remote_gateway_runtimes[connection.connection_id] is staged_runtime
+        assert staged_runtime.closed is False
+        assert old_runtime.closed is True
+        assert (
+            registry.remote_gateway_connection(connection.connection_id)
+            .remote_config_event_cursor
+            == 5
+        )
+        saved = state.load_workspace_registry()
+        assert saved is not None
+        assert any(
+            target["workspace_id"] == new_workspace_id
+            and target["backend_url"] == "http://published"
+            for target in saved["targets"]
+        )
+    finally:
+        registry.remove_commit_observer(fail_after_commit)
+        registry.close()
+        state.close()
+
+
+@pytest.mark.asyncio
+async def test_configured_remote_reconcile_keeps_published_runtime_after_observer_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _TrackingRuntime(WorkspaceRuntime):
+        def __init__(self, url: str) -> None:
+            super().__init__(service_urls={"workspace_api": url})
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    registry = GatewayWorkspaceRegistry(
+        storage_path=tmp_path / "workspaces.json",
+        state_store=state,
+    )
+    previous_revision = registry.registry_revision
+    previous_commit = registry._last_committed_snapshot
+    configured = ConfiguredRemoteGateway(
+        connection_id="rgw_batch_observer",
+        host="batch.example.com",
+        username="developer",
+        private_key_path="/tmp/key",
+    )
+    runtime = _TrackingRuntime("http://batch-published")
+
+    async def prepare(
+        *, configured: ConfiguredRemoteGateway, **_: object
+    ) -> tuple[RemoteGatewayConnection, WorkspaceRuntime, list[dict[str, object]]]:
+        connection = RemoteGatewayConnection(
+            connection_id=configured.connection_id,
+            name=configured.name or configured.host,
+            host=configured.host,
+            port=configured.port,
+            username=configured.username,
+            private_key_path=None,
+            ssh_config_host=configured.ssh_config_host,
+            remote_gateway_port=configured.remote_gateway_port,
+            remote_gateway_id="batch-observer-gateway",
+            protocol_version=FEDERATION_PROTOCOL_VERSION,
+            source_owner="config",
+            remote_config_event_cursor=1,
+        )
+        return (
+            connection,
+            runtime,
+            [
+                {
+                    "workspace_id": "batch-workspace",
+                    "name": "Batch workspace",
+                    "root_path": "/batch",
+                    "managed": False,
+                    "services": ["workspace_api"],
+                    "backend_workspace_id": "00000000-0000-4000-8000-000000000002",
+                }
+            ],
+        )
+
+    failure = RuntimeError("batch registry observer failed after commit")
+
+    def fail_after_commit() -> None:
+        raise failure
+
+    monkeypatch.setattr(remote_gateway_module, "_prepare_remote_gateway", prepare)
+    registry.add_commit_observer(fail_after_commit)
+    try:
+        with pytest.raises(RuntimeError) as raised:
+            await reconcile_configured_remote_gateways(
+                registry=registry,
+                configured_workspaces=(configured,),
+                log_dir=tmp_path / "logs",
+                health_request_timeout_seconds=2,
+                health_poll_interval_seconds=0.01,
+            )
+        workspace_id = build_projected_workspace_id(
+            configured.connection_id, "batch-workspace"
+        )
+        assert raised.value is failure
+        assert registry.registry_revision == previous_revision + 1
+        assert registry._last_committed_snapshot is not previous_commit
+        assert state.get_registry_revision() == registry.registry_revision
+        assert registry.resolve(workspace_id).backend_url == "http://batch-published"
+        assert registry._remote_gateway_runtimes[configured.connection_id] is runtime
+        assert registry.remote_gateway_url(configured.connection_id) == "http://batch-published"
+        assert runtime.closed is False
+        saved = state.load_workspace_registry()
+        assert saved is not None
+        assert any(
+            target["workspace_id"] == workspace_id
+            and target["backend_url"] == "http://batch-published"
+            for target in saved["targets"]
+        )
+    finally:
+        registry.remove_commit_observer(fail_after_commit)
+        registry.close()
+        state.close()
+
+
+@pytest.mark.asyncio
 async def test_configured_remote_reconcile_keeps_old_projection_when_peer_is_offline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -907,6 +1242,7 @@ async def test_discovery_filters_nested_workspaces_and_checks_protocol(
         token="federation-secret",
         expires_at=credential.expires_at,
     )
+    _FederationClient.requests = []
     _FederationClient.manifest = {
         "protocol_version": FEDERATION_PROTOCOL_VERSION,
         "gateway_id": "gateway_remote",
@@ -947,6 +1283,14 @@ async def test_discovery_filters_nested_workspaces_and_checks_protocol(
             gateway_url="http://127.0.0.1:41000",
             credential=credential,
         )
+
+    request_ids = [
+        headers.get("X-Request-ID", "")
+        for _url, headers in _FederationClient.requests
+    ]
+    assert len(request_ids) == 4
+    assert all(request_ids)
+    assert len(set(request_ids)) == 4
 
     _FederationClient.manifest = {
         "protocol_version": FEDERATION_PROTOCOL_VERSION,

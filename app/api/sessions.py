@@ -3,12 +3,11 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from contextlib import aclosing
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from app.api.canonical_params import CanonicalSessionId
 from app.api.deps import (
     get_config_service,
     get_context_compaction_service,
@@ -25,6 +24,7 @@ from app.api.deps import (
     get_session_resource_service,
     get_session_service,
     get_session_skill_tracking_service,
+    get_team_service,
     get_thread_residency_tracker,
     verify_local_token,
 )
@@ -35,8 +35,10 @@ from app.api.sse_heartbeat import (
     stream_sse_with_heartbeat,
 )
 from app.core.exceptions import NotFoundError
+from app.core.resource_uri import parse_session_thread_uri
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.protocol.codecs.workspace_events import trace_to_json, trace_to_proto
+from app.schemas.canonical_params import CanonicalSessionId
 from app.schemas.internal_v2.common import APIResponse, CursorPage
 from app.schemas.internal_v2.goal import (
     SessionGoalClearResultDTO,
@@ -50,7 +52,10 @@ from app.schemas.internal_v2.session import (
     SessionCompactResultDTO,
     SessionCreateRequest,
     SessionDTO,
+    SessionForkMode,
     SessionForkRequest,
+    SessionForkResultDTO,
+    SessionForkSourcePointDTO,
     SessionInformationSnapshotDTO,
     SessionInterruptResultDTO,
     SessionMainThreadDTO,
@@ -63,6 +68,10 @@ from app.schemas.internal_v2.session_changes import (
     SessionChangesetListDTO,
     SessionFileReviewRequest,
     SessionFileReviewResultDTO,
+)
+from app.schemas.internal_v2.session_fork_transfer import (
+    SessionForkTransferRequest,
+    SessionForkTransferResultDTO,
 )
 from app.schemas.internal_v2.session_resource import (
     SessionResourceControlRequest,
@@ -90,6 +99,7 @@ from app.services.business.session_service import SessionService
 from app.services.business.session_skill_tracking_service import (
     SessionSkillTrackingService,
 )
+from app.services.business.team.service import TeamCoordinationService
 from app.services.business.workspace_resources.owner import ResourceConflict
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.file_tree_settings_service import (
@@ -210,6 +220,24 @@ async def clear_session_goal(
     )
 
 
+@router.post("/fork-transfer", response_model=APIResponse[SessionForkTransferResultDTO], summary="执行精确 fork 来源导出或目标创建")
+async def transfer_session_fork(
+    payload: SessionForkTransferRequest,
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    fork_service: SessionContextForkService = Depends(get_session_context_fork_service),
+):
+    try:
+        result = await fork_service.transfer(payload)
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
 @router.post("", response_model=APIResponse[SessionDTO], summary="创建会话")
 async def create_session(
     payload: SessionCreateRequest,
@@ -275,9 +303,14 @@ async def list_session_child_threads(
     session_service: Annotated[SessionService, Depends(get_session_service)],
     residency_tracker: Annotated[ThreadResidencyTracker, Depends(get_thread_residency_tracker)],
     saver: Annotated[RolloutCheckpointSaver, Depends(get_rollout_checkpoint_saver)],
+    team_service: Annotated[TeamCoordinationService, Depends(get_team_service)],
 ):
     try:
         result = await session_service.list_child_threads(session_id)
+        main_thread_id = await session_service.resolve_main_thread(session_id)
+        result.teams = (await team_service.list_teams(
+            requester_session_id=session_id, requester_thread_id=main_thread_id,
+        )).items
         for item in result.items:
             snapshot = residency_tracker.snapshot(session_id, item.thread_id)
             item.runtime = ChildThreadRuntimeDTO(
@@ -376,28 +409,58 @@ async def get_session_information(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.post(
-    "/{session_id}/fork-context",
-    response_model=APIResponse[SessionDTO],
-    summary="复制 Agent 上下文状态并创建子会话",
+@router.get(
+    "/{session_id}/fork-source-point",
+    response_model=APIResponse[SessionForkSourcePointDTO],
+    summary="从真实 Thread 历史索引冻结点击 item",
 )
-async def fork_session_context(
+async def get_fork_source_point(
     session_id: CanonicalSessionId,
-    payload: SessionForkRequest | None = None,
+    thread_id: str | None = Query(default=None, min_length=1),
+    turn_id: str | None = Query(default=None, min_length=1),
+    item_id: str | None = Query(default=None, min_length=1),
+    source_view_id: str | None = Query(default=None, min_length=1),
+    source_view_revision: int | None = Query(default=None, ge=0),
+    mode: SessionForkMode = Query(default="view_prefix_fork"),
+    anchor_mode: Literal["inclusive", "before"] = Query(default="inclusive"),
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     fork_service: SessionContextForkService = Depends(get_session_context_fork_service),
 ):
-    request = payload or SessionForkRequest()
     try:
-        result = await fork_service.fork(
-            session_id,
-            mode=request.mode,
-            turn_id=request.turn_id,
-            anchor_mode=request.anchor_mode,
-            pinned=request.pinned,
-            place_under_source=request.place_under_source,
+        result = await fork_service.source_point(
+            session_id=session_id, thread_id=thread_id, turn_id=turn_id, item_id=item_id,
+            source_view_id=source_view_id, source_view_revision=source_view_revision,
+            mode=mode, anchor_mode=anchor_mode,
         )
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post(
+    "/{session_id}/fork-context",
+    response_model=APIResponse[SessionForkResultDTO],
+    summary="按冻结来源范围创建新 Session main 或 child Thread",
+)
+async def fork_session_context(
+    session_id: CanonicalSessionId,
+    payload: SessionForkRequest,
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+    fork_service: SessionContextForkService = Depends(get_session_context_fork_service),
+):
+    try:
+        _, source_session_id, _ = parse_session_thread_uri(payload.source_uri)
+        if source_session_id != session_id:
+            raise ValueError("fork_source_mismatch: source_uri 与路径 Session 不一致")
+        result = await fork_service.fork(payload)
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
     except ValueError as error:
@@ -605,6 +668,19 @@ async def stream_session_traces(
             },
         )
     cursor = last_event_id or after_event_id
+    return StreamingResponse(
+        await open_session_trace_sse(session_id, cursor, session_service, config_service),
+        media_type="text/event-stream",
+        headers=SSE_NO_CACHE_HEADERS,
+    )
+
+
+async def open_session_trace_sse(
+    session_id: str,
+    cursor: str | None,
+    session_service: SessionService,
+    config_service: ConfigService,
+) -> AsyncIterator[str]:
     try:
         await session_service.ensure_trace_cursor(session_id, cursor)
     except TraceCursorGoneError as exc:
@@ -614,16 +690,11 @@ async def stream_session_traces(
         # 漏接会把「找不到会话」落成无上下文 500（NotFoundError 默认 status_code=500）。
         raise not_found_http_error(exc) from exc
 
-    events = session_service.stream_trace_events(session_id, cursor)
-    return StreamingResponse(
-        _stream_trace_sse(
-            events,
-            heartbeat_interval_seconds=(
-                config_service.get_trace_stream_heartbeat_interval_seconds()
-            ),
+    return _stream_trace_sse(
+        session_service.stream_trace_events(session_id, cursor),
+        heartbeat_interval_seconds=(
+            config_service.get_trace_stream_heartbeat_interval_seconds()
         ),
-        media_type="text/event-stream",
-        headers=SSE_NO_CACHE_HEADERS,
     )
 
 
@@ -640,7 +711,7 @@ async def _stream_trace_sse(
         stream_sse_with_heartbeat(
             events,
             heartbeat_interval_seconds=heartbeat_interval_seconds,
-            close_source_on_exit=False,
+            close_source_on_exit=True,
         )
     ) as stream:
         async for item in stream:

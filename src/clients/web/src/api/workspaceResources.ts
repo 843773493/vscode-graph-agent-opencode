@@ -18,26 +18,26 @@ export async function getWorkspaceResource(port: number, workspaceId: string, re
 }
 
 export async function createWorkspaceTerminal(
-  port: number, workspaceId: string, sessionId: string,
-  retentionScope: "thread" | "workspace" = "thread", threadId?: string,
+  port: number, workspaceId: string, thread: ResourceThreadRef,
+  retentionScope: "thread" | "workspace" = "thread",
 ): Promise<WorkspaceResourceDTO> {
   return unwrapApiData(await requestJson<APIResponse<WorkspaceResourceDTO>>(
     port, "/api/v1/resources/terminals", {
       method: "POST", headers: workspaceHeader(workspaceId),
-      body: JSON.stringify({ session_id: sessionId, thread_id: threadId, retention_scope: retentionScope, title: "用户终端" }),
+      body: JSON.stringify({ session_id: thread.session_id, thread_id: thread.thread_id, retention_scope: retentionScope, title: "用户终端" }),
     },
   ));
 }
 
 export async function createWorkspaceBrowser(
-  port: number, workspaceId: string, sessionId: string,
-  retentionScope: "thread" | "workspace" = "thread", threadId?: string,
+  port: number, workspaceId: string, thread: ResourceThreadRef,
+  retentionScope: "thread" | "workspace" = "thread",
 ): Promise<WorkspaceResourceDTO> {
   return unwrapApiData(await requestJson<APIResponse<WorkspaceResourceDTO>>(
     port, "/api/v1/resources/browsers", {
       method: "POST", headers: workspaceHeader(workspaceId),
       body: JSON.stringify({
-        session_id: sessionId, thread_id: threadId, retention_scope: retentionScope,
+        session_id: thread.session_id, thread_id: thread.thread_id, retention_scope: retentionScope,
         title: "用户浏览器", url: "about:blank", viewport: { width: 1280, height: 800 },
       }),
     },
@@ -48,6 +48,7 @@ export async function controlWorkspaceResource(
   port: number, workspaceId: string, resource: WorkspaceResourceDTO,
   action: ResourceAction, thread?: ResourceThreadRef,
 ): Promise<WorkspaceResourceDTO> {
+  if (action === "attach" && !thread) throw new Error("关联资源必须提供明确的 session_id 与 thread_id");
   return unwrapApiData(await requestJson<APIResponse<WorkspaceResourceDTO>>(
     port, `/api/v1/resources/${encodeURIComponent(resource.resource_id)}/${action}`, {
       method: "POST", headers: workspaceHeader(workspaceId),

@@ -13,13 +13,12 @@ from app.domain.itemized.resource_activation import (
 from app.services.infrastructure.rollout_context.activation.common import (
     HASH_MISMATCH_CODE,
     ResourceActivationStoreError,
-    _detail_ref_from_key,
-    _lineage_by_resource,
-    _member_bindings_for_resource,
-    _source_lineage_ref_for_binding,
 )
 from app.services.infrastructure.rollout_context.activation.lineage import (
     ActivationLineageBodyStore,
+)
+from app.services.infrastructure.rollout_context.activation.reads import (
+    binding_assembly_id,
 )
 from app.services.infrastructure.rollout_context.activation.schema import (
     require_resource_activation_schema,
@@ -102,13 +101,23 @@ class ResourceActivationBodyStore:
         *,
         snapshot: ResourceActivationSnapshotRef,
         binding: ResourceProvenanceRef,
+        storage_owner: tuple[str, str],
         checkpoint_ns: str = "",
     ) -> object:
         """按 catalog 恢复出的 snapshot binding 校验并读取 payload。"""
 
-        expected_assembly_id = self._binding_assembly_id(
-            snapshot, binding, checkpoint_ns=checkpoint_ns
-        )
+        lineage_body = ActivationLineageBodyStore(self._storage, self._detail_store)
+        with self._storage.storage._connect(
+            storage_owner[1], checkpoint_ns, session_id=storage_owner[0], read_only=True,
+        ) as connection:
+            self._storage.storage._require_v2_runtime(connection)
+            require_resource_activation_schema(connection)
+            expected_assembly_id = binding_assembly_id(
+                connection, snapshot, binding, storage_owner=storage_owner,
+                read_lineage_manifest=lambda ref: lineage_body.read_lineage_manifest(
+                    detail_ref=ref, checkpoint_ns=checkpoint_ns, storage_owner=storage_owner,
+                ),
+            )
         detail_ref = binding.detail_ref
         if detail_ref is None:
             raise ResourceActivationStoreError(
@@ -127,8 +136,8 @@ class ResourceActivationBodyStore:
             )
         try:
             raw = self._storage.assemblies.get_context_plan_detail(
-                snapshot.owner_session_id,
-                snapshot.owner_thread_id,
+                storage_owner[0],
+                storage_owner[1],
                 detail_ref=detail_ref,
                 checkpoint_ns=checkpoint_ns,
             )
@@ -145,8 +154,8 @@ class ResourceActivationBodyStore:
                 activation_ordinal=binding.activation_ordinal,
             )
             value = self._detail_store.read(
-                session_id=snapshot.owner_session_id,
-                thread_id=snapshot.owner_thread_id,
+                session_id=storage_owner[0],
+                thread_id=storage_owner[1],
                 record=record,
                 include_sensitive=True,
             )
@@ -167,99 +176,6 @@ class ResourceActivationBodyStore:
                 f"{binding.resource_id}#{binding.activation_ordinal}",
             )
         return payload
-
-    def _binding_assembly_id(
-        self,
-        snapshot: ResourceActivationSnapshotRef,
-        binding: ResourceProvenanceRef,
-        *,
-        checkpoint_ns: str,
-    ) -> str:
-        if not isinstance(snapshot, ResourceActivationSnapshotRef) or not isinstance(
-            binding, ResourceProvenanceRef
-        ):
-            raise TypeError("payload 读取需要 typed activation snapshot 与 binding")
-        by_resource = tuple(
-            item
-            for item in snapshot.bindings
-            if item.resource_id == binding.resource_id
-        )
-        by_ordinal = tuple(
-            item
-            for item in snapshot.bindings
-            if item.activation_ordinal == binding.activation_ordinal
-        )
-        if by_resource != (binding,) or by_ordinal != (binding,):
-            raise ResourceActivationStoreError(
-                HASH_MISMATCH_CODE,
-                "payload binding 的 resource_id/activation_ordinal 不属于 snapshot: "
-                f"{binding.resource_id}#{binding.activation_ordinal}",
-            )
-        if (
-            snapshot.snapshot_kind == "model_call"
-            and snapshot.parent is not None
-            and binding in snapshot.parent.bindings
-        ):
-            root = snapshot.parent
-        else:
-            root = snapshot
-        ref = binding.detail_ref
-        if ref is None or ref.assembly_id == root.activation_snapshot_id:
-            return root.activation_snapshot_id
-        if root.turn_id is None or root.snapshot_kind != "execution":
-            raise ResourceActivationStoreError(
-                HASH_MISMATCH_CODE, "internal/model_call binding 不得借用其它冻结 snapshot 正文"
-            )
-        # 同真实用户 Turn 的新 execution 关联可以逐字节复用原 binding/detail；
-        # 必须由唯一 catalog 验证来源 root，不能复制正文或冒充新 owner。
-        with self._storage.storage._connect(
-            root.owner_thread_id, checkpoint_ns, session_id=root.owner_session_id, read_only=True,
-        ) as connection:
-            self._storage.storage._require_v2_runtime(connection)
-            require_resource_activation_schema(connection)
-            row = connection.execute(
-                "SELECT b.resource_id, b.activation_ordinal, b.display_uri, b.resource_kind, b.owner_scope, b.facet, b.revision, b.availability, b.content_length, b.content_hash, b.effective_boundary, b.captured_registry_generation, b.source_lineage_digest, b.detail_ref, s.lineage_detail_ref, s.lineage_manifest_digest FROM resource_activation_snapshots s JOIN resource_activation_bindings b ON b.session_id = s.session_id AND b.thread_id = s.thread_id AND b.activation_snapshot_id = s.activation_snapshot_id WHERE s.session_id = ? AND s.thread_id = ? AND s.snapshot_kind = 'execution' AND s.activation_snapshot_id = ? AND s.turn_id = ? AND b.resource_id = ? AND b.activation_ordinal = ?",
-                (root.owner_session_id, root.owner_thread_id, ref.assembly_id, root.turn_id,
-                 binding.resource_id, binding.activation_ordinal),
-            ).fetchone()
-        from app.services.infrastructure.rollout_context.assembly.detail_identity import (
-            detail_ref_key,
-        )
-        expected = (
-            binding.resource_id, binding.activation_ordinal, binding.display_uri,
-            binding.resource_kind, binding.owner_scope, binding.facet, binding.revision,
-            binding.availability, binding.content_length, binding.content_hash,
-             binding.effective_boundary,
-            binding.captured_registry_generation, binding.source_lineage_digest,
-            detail_ref_key(ref),
-        )
-        if row is None or row[:-2] != expected:
-            raise ResourceActivationStoreError(
-                HASH_MISMATCH_CODE, "retry binding 的原冻结正文关系不一致"
-            )
-        lineage_ref = _detail_ref_from_key(row[-2], field="lineage_detail_ref")
-        lineage_ref.require_owner(root.owner_session_id, root.owner_thread_id, ref.assembly_id)
-        manifest = ActivationLineageBodyStore(
-            self._storage, self._detail_store,
-        ).read_lineage_manifest(detail_ref=lineage_ref, checkpoint_ns=checkpoint_ns)
-        if sha256_jcs(manifest) != row[-1]:
-            raise ResourceActivationStoreError(
-                HASH_MISMATCH_CODE, "retry 原冻结 lineage manifest digest 不一致",
-            )
-        lineages = _lineage_by_resource(manifest)
-        lineage = _source_lineage_ref_for_binding(
-            lineages, resource_id=binding.resource_id,
-            expected_ordinal=binding.activation_ordinal,
-            expected_digest=binding.source_lineage_digest,
-        )
-        if (
-            lineage != binding.source_lineage_ref
-            or _member_bindings_for_resource(lineages, resource_id=binding.resource_id) != binding.members
-        ):
-            raise ResourceActivationStoreError(
-                HASH_MISMATCH_CODE, "retry binding 的完整 protected 成员/lineage 事实不一致",
-            )
-        return ref.assembly_id
 
     @staticmethod
     def _validate_record(

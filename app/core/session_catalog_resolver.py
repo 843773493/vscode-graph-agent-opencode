@@ -44,7 +44,8 @@ from app.core.session_catalog_store.contracts import (
     SessionKind,
 )
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
-from app.core.session_control_store import SessionControlStore
+from app.core.session_control_store import SessionControlStore, ThreadCreationRecord
+from app.core.session_lifecycle_gate import OperationHolderGate
 from app.core.session_subtree_delete import (
     SessionSubtreeDeleteService,
     SubtreeDeleteResult,
@@ -191,9 +192,20 @@ class SessionCatalogPathResolver:
     def bind_session_drain_callback(
         self,
         callback: Callable[[str], Awaitable[None]],
+        *, holders: tuple[OperationHolderGate, ...] = (),
     ) -> None:
         """把单一运行时/资源复合 drain 回调绑定到共享子树删除流。"""
-        self._delete_service.set_session_drain_callback(callback)
+        self._delete_service.set_session_drain_callback(callback, holders=holders)
+
+    def bind_fork_retention_release_callback(
+        self, callback: Callable[[str], Awaitable[None]],
+    ) -> None:
+        """绑定同一删除流的 gate 外 fork retention 释放阶段。"""
+        self._delete_service.set_fork_retention_release_callback(callback)
+
+    def bind_fork_child_abort_callback(self, callback: Callable[[str, ThreadCreationRecord], Awaitable[bool]]) -> None:
+        """把未发布 fork child 的定点清理交给原 fork owner。"""
+        self._delete_service.set_fork_child_abort_callback(callback)
 
     # ------------------------------------------------------------------
     # 节点投影

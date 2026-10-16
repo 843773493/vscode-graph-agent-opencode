@@ -281,7 +281,7 @@ def persist_user_message_checkpoint(
     execution_intent: InternalExecutionIntent | None = None,
     checkpoint_ns: str = "",
 ) -> bool:
-    """在模型执行前固化真实 Turn acceptance 或 Turn-less internal admission。"""
+    """在活动执行中核验并消费已接受输入，不再提交准入。"""
     response_metadata = message.response_metadata if message is not None else {}
     message_id = (execution_intent.message_id if message is None and execution_intent is not None
                   else response_metadata.get("message_id"))
@@ -294,22 +294,19 @@ def persist_user_message_checkpoint(
     if not isinstance(admission_idempotency_key, str) or not admission_idempotency_key:
         raise ValueError("用户消息 checkpoint 缺少独立 admission_idempotency_key")
 
-    accept_turn = getattr(checkpointer, "accept_turn", None)
-    admit_internal_execution = getattr(checkpointer, "admit_internal_execution", None)
-    execution_for_turn = getattr(checkpointer, "execution_for_turn", None)
-    read_admission = getattr(checkpointer, "execution_admission", None)
+    read_admission = getattr(checkpointer, "execution_admission_for_job", None)
+    read_user_message = getattr(checkpointer, "accepted_user_message", None)
+    read_internal_message = getattr(checkpointer, "accepted_internal_message", None)
     if not all(
         callable(port)
         for port in (
-            accept_turn,
-            admit_internal_execution,
-            execution_for_turn,
             read_admission,
+            read_user_message,
+            read_internal_message,
         )
     ):
         raise TypeError("checkpoint saver 缺少 v2 execution admission owner 端口")
 
-    acceptance_changed = False
     if execution_intent is not None:
         if not isinstance(execution_intent, InternalExecutionIntent):
             raise TypeError("internal job execution_intent 类型非法")
@@ -322,14 +319,18 @@ def persist_user_message_checkpoint(
             raise ValueError(
                 "internal execution intent 与 Job admission idempotency key 不一致"
             )
-        admission = admit_internal_execution(
-            session_id,
-            thread_id=thread_id,
-            job_id=job_id,
-            intent=execution_intent,
-            message=message,
-            checkpoint_ns=checkpoint_ns,
+        admission = read_admission(
+            session_id, thread_id=thread_id, job_id=job_id, checkpoint_ns=checkpoint_ns,
         )
+        frozen = read_internal_message(
+            session_id, thread_id=thread_id, job_id=job_id, message_id=message_id,
+            intent=execution_intent, checkpoint_ns=checkpoint_ns,
+        )
+        if message is not None and (message.content != frozen.content
+                or message_annotations(response_metadata) != message_annotations(frozen.response_metadata)):
+            raise ValueError("Runtime 内部输入与已接受 notice 不一致")
+        if admission.execution_id != execution_intent.execution_id:
+            raise ValueError("Runtime 内部输入与已接受 execution 不一致")
     else:
         if message is None:
             raise TypeError("user-turn admission 必须携带真实 HumanMessage")
@@ -341,46 +342,21 @@ def persist_user_message_checkpoint(
         )
         if not isinstance(turn_id, str) or not turn_id:
             raise ValueError("user_turn checkpoint 缺少显式真实 turn_id")
-        accepted_payload = user_input_payload(
-            message.content, response_metadata.get("attachments")
-        )
-        accepted = accept_turn(
-            session_id,
-            thread_id=thread_id,
-            accepted_ingress_id=message_id,
-            acceptance_idempotency_key=f"message:{message_id}",
-            job_id=job_id,
-            admission_idempotency_key=admission_idempotency_key,
-            payload=accepted_payload,
-            payload_kind=(
-                "text" if isinstance(accepted_payload, str) else "structured_content"
-            ),
-            turn_id=turn_id,
-            root_item_id=f"item-{message_id}",
-            extensions=message_annotations(response_metadata),
-            checkpoint_ns=checkpoint_ns,
-        )
-        if not isinstance(accepted, Mapping):
-            raise TypeError("RolloutCheckpointSaver.accept_turn 返回值非法")
-        if not isinstance(accepted["idempotent"], bool):
-            raise TypeError("Turn acceptance idempotent 必须是布尔值")
-        acceptance_changed = not accepted["idempotent"]
-        execution_id = accepted.get("execution_id")
-        if not isinstance(execution_id, str) or not execution_id:
-            raise RuntimeError("Turn acceptance 未返回 initial execution identity")
         admission = read_admission(
-            session_id,
-            thread_id=thread_id,
-            execution_id=execution_id,
+            session_id, thread_id=thread_id, job_id=job_id, checkpoint_ns=checkpoint_ns,
+        )
+        frozen = read_user_message(
+            session_id, thread_id=thread_id, job_id=job_id, message_id=message_id,
             checkpoint_ns=checkpoint_ns,
         )
-        if not isinstance(admission, ExecutionAdmission):
-            raise TypeError("RolloutCheckpointSaver.execution_admission 返回值非法")
+        if (not isinstance(frozen, HumanMessage)
+                or user_input_payload(message.content, response_metadata.get("attachments"))
+                != user_input_payload(frozen.content, frozen.response_metadata.get("attachments"))
+                or message_annotations(response_metadata) != message_annotations(frozen.response_metadata)):
+            raise ValueError("执行输入与已接受的用户根输入不一致")
         if admission.turn_id != turn_id:
-            raise RuntimeError(
-                "Turn acceptance 与 initial execution admission 的 turn_id 不一致: "
-                f"accepted={turn_id!r}, admission={admission.turn_id!r}"
-            )
+            raise ValueError("执行输入的 turn_id 与已接受 admission 不一致")
+        message = frozen
     expected_origin = "internal" if execution_intent is not None else "user_turn"
     if not isinstance(admission, ExecutionAdmission):
         raise TypeError("checkpoint saver 返回了非法 execution admission")
@@ -399,10 +375,10 @@ def persist_user_message_checkpoint(
         )
 
     config = build_checkpoint_config(thread_id)
-    tup = checkpointer.get_tuple(config)
+    with execution_admission_scope(admission, langgraph_thread_id=thread_id):
+        tup = checkpointer.get_tuple(config)
     if tup is None:
-        # acceptance 已经先于 provider dispatch 固化；旧 LangGraph saver
-        # 可能尚未建立 tuple，调用方仍可继续执行并由后续 checkpoint 建立它。
+        # 首次执行尚无 LangGraph tuple，后续图执行会建立 checkpoint。
         return False
 
     checkpoint = tup.checkpoint.copy()
@@ -418,15 +394,26 @@ def persist_user_message_checkpoint(
         and existing.response_metadata.get("message_id") == message_id
         for existing in raw_messages
     )
+    input_uncheckpointed = False
+    if execution_intent is None:
+        frozen_tuple = checkpointer.get_tuple(tup.config)
+        if frozen_tuple is None:
+            raise RuntimeError("已解析的冻结 checkpoint 在执行期间消失")
+        frozen_messages = frozen_tuple.checkpoint["channel_values"]["messages"]
+        input_uncheckpointed = not any(
+            isinstance(existing, HumanMessage)
+            and existing.response_metadata.get("message_id") == message_id
+            for existing in frozen_messages
+        )
     stale_execution_state = (
         _STALE_EXECUTION_CHANNEL in channel_values
         or _STALE_EXECUTION_CHANNEL in checkpoint.get("channel_versions", {})
         or _STALE_EXECUTION_CHANNEL in checkpoint.get("updated_channels", [])
         or bool(checkpoint.get("pending_sends"))
     )
-    # acceptance 已提交的 root 会立即出现在 message view；首次提交与旧任务
-    # 清理不能因此被当成幂等早退，也不能再追加一份相同输入。
-    if not (append_user_input or acceptance_changed or stale_execution_state):
+    # 即时 root 可见性不代表 LangGraph channel 已消费它；只在活动执行中
+    # 固化 channel，且不重复追加同 ID 的输入。
+    if not (append_user_input or input_uncheckpointed or stale_execution_state):
         return False
     channel_values["messages"] = [*raw_messages, message] if append_user_input else list(raw_messages)
     # 失败/重启后的 LangGraph checkpoint 可能仍保留上一轮已经失效的

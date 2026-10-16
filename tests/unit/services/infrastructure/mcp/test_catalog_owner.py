@@ -254,6 +254,132 @@ async def test_catalog_events_stay_out_of_job_events(tmp_path: Path) -> None:
         await owner.shutdown()
 
 
+async def test_explicit_refresh_keeps_entire_old_catalog_until_all_servers_validate(
+    tmp_path: Path,
+) -> None:
+    factory = _FakeSessionFactory(initial_tools={"alpha": ["old"], "beta": ["old"]})
+    events = EventChannelService()
+    owner = _make_owner(tmp_path, factory, events, _stdio_server("alpha") | _stdio_server("beta"))
+    await owner.start()
+    try:
+        for session in factory.sessions.values():
+            session.supports_notifications = False
+            session.tool_names = ["new"]
+        previous = owner.publication_snapshot()
+        publications = []
+        unsubscribe = owner.subscribe_publication(publications.append)
+        subscription = events.channel("mcp.catalog/workspace").subscribe(label="atomic-refresh")
+        factory.sessions["beta"].relist_error = RuntimeError("beta candidate invalid")
+        with pytest.raises(McpCatalogRelistError, match="beta candidate invalid"):
+            await owner.relist_servers_without_notifications()
+        assert owner.get_tool_ids() == frozenset(previous.tools)
+        assert all(value.binding_ref == previous.binding_ref for value in publications)
+        assert owner.publication_snapshot().status == "unavailable"
+        assert subscription.pending() == ()
+
+        factory.sessions["beta"].relist_error = None
+        publications.clear()
+        await owner.relist_servers_without_notifications()
+        available = [value for value in publications if value.status == "available"]
+        assert len(available) == 1
+        assert set(available[0].tools) == {"mcp__alpha__new", "mcp__beta__new"}
+        assert available[0].binding_ref.generation == previous.binding_ref.generation + 1
+        assert all(snapshot.last_relist_error is None for snapshot in owner.list_servers())
+        event = await _next_event(subscription)
+        assert event.revision == available[0].binding_ref.catalog_revision
+        assert event.server_id is None
+        assert subscription.pending() == ()
+        unsubscribe()
+    finally:
+        await owner.shutdown()
+
+
+async def test_overlapping_explicit_refreshes_each_publish_their_complete_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory = _FakeSessionFactory(initial_tools={"mini": ["old"]})
+    owner = _make_owner(tmp_path, factory, EventChannelService())
+    await owner.start()
+    release = asyncio.Event()
+    task: asyncio.Task[None] | None = None
+    queued: asyncio.Task[None] | None = None
+    try:
+        session = factory.sessions["mini"]
+        session.supports_notifications = False
+        session.tool_names = ["first"]
+        entered = asyncio.Event()
+        original_list = session.list_tools
+        calls = 0
+
+        async def list_with_barrier():
+            nonlocal calls
+            calls += 1
+            tools = await original_list()
+            if calls == 1:
+                entered.set()
+                await release.wait()
+            return tools
+
+        monkeypatch.setattr(session, "list_tools", list_with_barrier)
+        publications = []
+        unsubscribe = owner.subscribe_publication(publications.append)
+        publications.clear()
+        task = asyncio.create_task(owner.relist_servers_without_notifications())
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        session.tool_names = ["second"]
+        queued = asyncio.create_task(owner.relist_servers_without_notifications())
+        await asyncio.sleep(0)
+        assert not queued.done()
+        release.set()
+        await asyncio.wait_for(asyncio.gather(task, queued), timeout=2)
+        assert [set(value.tools) for value in publications if value.status == "available"] == [
+            {"mcp__mini__first"}, {"mcp__mini__second"},
+        ]
+        assert owner.get_tool_ids() == frozenset({"mcp__mini__second"})
+        unsubscribe()
+    finally:
+        release.set()
+        await asyncio.gather(*(pending for pending in (task, queued) if pending), return_exceptions=True)
+        await owner.shutdown()
+
+
+async def test_explicit_refresh_reports_expired_connection_instead_of_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory = _FakeSessionFactory(initial_tools={"mini": ["old"]})
+    owner = _make_owner(tmp_path, factory, EventChannelService())
+    await owner.start()
+    release = asyncio.Event()
+    task: asyncio.Task[None] | None = None
+    try:
+        session = factory.sessions["mini"]
+        session.supports_notifications = False
+        original_list = session.list_tools
+        entered = asyncio.Event()
+
+        async def list_with_barrier():
+            tools = await original_list()
+            entered.set()
+            await release.wait()
+            return tools
+
+        monkeypatch.setattr(session, "list_tools", list_with_barrier)
+        revision = owner.catalog_revision()
+        task = asyncio.create_task(owner.relist_servers_without_notifications())
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        owner._runtimes["mini"].generation += 1
+        release.set()
+        with pytest.raises(McpCatalogRelistError, match="已过期"):
+            await asyncio.wait_for(task, timeout=2)
+        assert owner.catalog_revision() == revision
+        assert owner.get_tool_ids() == frozenset({"mcp__mini__old"})
+    finally:
+        release.set()
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+        await owner.shutdown()
+
+
 def test_mcp_catalog_event_contract_rejects_smuggled_payload() -> None:
     digest = "sha256:" + "0" * 64
     event = McpCatalogEvent(kind="published", revision=digest, server_id="mini")

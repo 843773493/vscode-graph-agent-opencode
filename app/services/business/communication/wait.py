@@ -8,6 +8,7 @@ deadline 竞态裁决。等待由可注入单调 Clock/DeadlineTimer 和目标�
 
 from __future__ import annotations
 
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal, Protocol
@@ -69,6 +70,12 @@ class WaitClock(Protocol):
     def utc_now(self) -> datetime:
         """当前 UTC 时间。"""
         ...
+
+
+class DeadlineTimer(Protocol):
+    """等待通知或原预算到期；到期抛 TimeoutError，不重新冻结 deadline。"""
+
+    async def wait(self, signal: Awaitable[object], timeout: float | None) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)

@@ -144,10 +144,11 @@ class WorkspaceSessionMainPort:
     """只调用注册工作区的权威 HTTP 端点，不读业务盘或创建 Job。"""
 
     def __init__(
-        self, *, request_timeout: float = 5.0,
+        self, *, http_client: httpx.AsyncClient, request_timeout: float = 5.0,
         inventory_provider: Callable[[], Awaitable[GatewayWorkspaceListDTO]] | None = None,
     ) -> None:
         self._request_timeout = request_timeout
+        self._http_client = http_client
         self._inventory_provider = inventory_provider
         self._context_query = GatewayContextQueryService(transport=self)
         self._backend_urls: dict[str, str] = {}
@@ -172,12 +173,11 @@ class WorkspaceSessionMainPort:
         url = self._backend_urls.get(workspace_id)
         if url is None:
             raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, f"本地 workspace 不可达: {workspace_id}")
-        async with httpx.AsyncClient(timeout=timeout if timeout is not None else self._request_timeout, trust_env=False) as client:
-            response = await client.request(method, url + path, json=body, headers={
-                "X-Local-Token": LOCAL_TOKEN, "X-BoxTeam-Workspace-Id": workspace_id,
-                "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(), "X-Request-ID": request_id,
-                "X-BoxTeam-Communication-Origin": origin,
-            })
+        response = await self._http_client.request(method, url + path, json=body, headers={
+            "X-Local-Token": LOCAL_TOKEN, "X-BoxTeam-Workspace-Id": workspace_id,
+            "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(), "X-Request-ID": request_id,
+            "X-BoxTeam-Communication-Origin": origin,
+        }, timeout=timeout if timeout is not None else self._request_timeout)
         if response.status_code >= 400:
             from app.core.session_control_communication_ledger.observations import (
                 observation_error_code,
@@ -268,6 +268,22 @@ class WorkspaceSessionMainPort:
         return thread_id
 
     async def execute(self, *, operation: str, target: dict[str, object], body: dict[str, object], origin: str, timeout: float) -> dict[str, object]:
+        if "fork_role" in target:
+            from app.core.resource_uri import parse_resource_uri
+            from app.schemas.internal_v2.session_fork_transfer import (
+                SessionForkTransferRequest,
+            )
+
+            transfer = SessionForkTransferRequest.model_validate(body)
+            if operation != "fork_" + transfer.fork_target.fork_role or transfer.fork_target.to_payload() != target or transfer.source_gateway_id != origin:
+                raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "fork envelope 与独立 capability target/origin 不一致")
+            resource = parse_resource_uri(transfer.fork_target.uri, local_gateway_id=require_current_gateway_id("fork target"))
+            if resource.gateway_authority is not None or resource.scope_id not in self._backend_urls:
+                raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "fork Workspace 未共享或不属于当前 Gateway")
+            return await self._request(
+                workspace_id=resource.scope_id, method="POST", path="/api/v1/sessions/fork-transfer",
+                origin=origin, body=transfer.model_dump(mode="json"), timeout=timeout,
+            )
         if "resource_identity" in target:
             from app.schemas.internal_v2.communication import ContextQueryRequest
             from app.services.business.session_context_resource import (

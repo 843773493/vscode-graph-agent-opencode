@@ -32,7 +32,7 @@ import { useSessionGeneratorResources } from "../sessionResourceExplorer/useSess
 import { useSessionLifecycleActions } from "./useSessionLifecycleActions";
 import { useSessionMessageStream } from "./useSessionMessageStream";
 import { useSessionResourceExplorer } from "./useSessionResourceExplorer";
-import { useSessionRunActions } from "./useSessionRunActions";
+import { useSessionActions } from "./useSessionActions";
 import { useSessionGoalController } from "./useSessionGoalController";
 import {
   useSessionViewState,
@@ -41,6 +41,7 @@ import {
 } from "./useSessionViewState";
 import { invalidateGatewayToken } from "../../api/http";
 import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
+import { errorMessage } from "../../utils/errorMessage";
 
 /**
  * 会话级 hook 测试共享夹具。
@@ -171,6 +172,7 @@ export function testGatewayUserAccess(): GatewayUserAccess {
 
 export interface TestCatalogMutationResult {
   state?: "committed" | "rejected" | "cancelled" | "dependency_failed";
+  settlement?: CatalogOutboxOperation["settlement"];
   errorCode?: string;
   errorDetail?: string;
 }
@@ -263,14 +265,15 @@ export function createTestSessionCatalogOutboxRuntime(options: {
             : null,
           error_code: result.errorCode ?? (state === "committed" ? null : "test_rejection"),
           error_detail: result.errorDetail ?? null,
-          pending_settlement: false,
+          settlement: result.settlement ?? (state === "committed"
+            && (intent.kind === "delete_folder" || intent.kind === "delete_session") ? "settled" : null),
           receipt_revision: sequence,
           updated_at: "2026-10-04T00:00:00Z",
         }]);
         const terminal = outbox.operations.find((item) => item.client_operation_id === operationId);
         if (terminal) terminalOperations.set(operationId, terminal);
         publish(handle, outbox);
-        return "accepted";
+        return { dispatch: Promise.resolve(options.dispatchOutcome ?? "accepted") };
       },
       reconcile: async () => {
         const resolution = resolveCatalogOutboxFailures(outbox);
@@ -315,11 +318,11 @@ export function createTestSessionCatalogOutboxRuntime(options: {
     const handle = await openWorkspace(workspaceTarget, access);
     const operationId = `test_catalog_operation_${nextOperationId++}`;
     submitted.push({ workspaceId: workspaceTarget.workspace_id, intent, options: intentOptions });
-    const actualOutcome = await handle.driver.applyIntent(operationId, intent, intentOptions);
+    const { dispatch } = await handle.driver.applyIntent(operationId, intent, intentOptions);
+    void dispatch.catch((error: unknown) => errors.push(String(error)));
     return {
       handle,
       operationId,
-      dispatchOutcome: options.dispatchOutcome ?? actualOutcome,
     };
   };
 
@@ -334,11 +337,14 @@ export function createTestSessionCatalogOutboxRuntime(options: {
     if (operation.state !== "committed") {
       let refreshError = "";
       try { await handle.driver.reconcile(); }
-      catch (error) { refreshError = "；" + (error instanceof Error ? error.message : String(error)); }
+      catch (error) { refreshError = "；" + errorMessage(error); }
       throw new Error(
         `会话目录操作 ${operationId} 被 ${operation.state}：`
         + `${operation.error_code ?? "unknown"} ${operation.error_detail ?? ""}`.trim() + refreshError,
       );
+    }
+    if (operation.settlement === "repair_required" || operation.settlement === "pending") {
+      throw new Error(`删除已提交但排空未完成: ${operation.error_detail ?? operation.settlement}`);
     }
     return operation;
   };
@@ -519,7 +525,8 @@ export function mountSessionLifecycleActions(options: {
   abortCurrentStream?: () => void;
   sessionCatalogOutboxRuntime?: SessionCatalogOutboxRuntime;
   workspaceRequestTargets?: readonly GatewayWorkspaceRequestTarget[];
-}): { state: () => AppState; actions: LifecycleActions } {
+  selectionIntentRef?: { current: number };
+}): { state: () => AppState; actions: LifecycleActions; setState: SetAppState } {
   const {
     apiPort,
     currentSession,
@@ -529,6 +536,7 @@ export function mountSessionLifecycleActions(options: {
   } = options;
   const mirror = createStateMirror(options.state);
   let actions: LifecycleActions | null = null;
+  const selectionIntentRef = options.selectionIntentRef ?? { current: 0 };
   function Harness(): React.ReactNode {
     actions = useSessionLifecycleActions({
       apiPort,
@@ -536,22 +544,20 @@ export function mountSessionLifecycleActions(options: {
       activeGatewayWorkspaceId: workspaceId,
       currentSessionGatewayWorkspaceId: workspaceId,
       workspaceRequestTargets: options.workspaceRequestTargets ?? testWorkspaceTargetsFor(workspaceId),
-      currentSessionCacheKey: sessionScopeKey(
-        workspaceId,
-        currentSession?.session_id ?? "",
-      ),
       defaultGatewayWorkspaceId: workspaceId,
+      readState: mirror.current,
       setState: mirror.setState,
       abortCurrentStream: abortCurrentStream ?? (() => undefined),
       invalidateAgentState: () => undefined,
       sessionCatalogOutboxRuntime,
       gatewayUserAccess: testGatewayUserAccess(),
+      selectionIntentRef,
     });
     return null;
   }
   renderToStaticMarkup(React.createElement(Harness));
   if (!actions) throw new Error("useSessionLifecycleActions Harness 未完成渲染");
-  return { state: mirror.current, actions };
+  return { state: mirror.current, actions, setState: mirror.setState };
 }
 
 /** 装配 useSessionMessageStream 的 Harness 组件。 */
@@ -565,37 +571,40 @@ export function useSessionMessageStreamHarness(
   };
 }
 
-/** useSessionRunActions 的入参：除 setState 外与生产签名逐字段一致。 */
-type RunActionsProps = Omit<
-  Parameters<typeof useSessionRunActions>[0],
-  "setState"
->;
-type RunActions = ReturnType<typeof useSessionRunActions>;
-type SessionRunActionsHandle = RunActions;
-
 /**
- * 挂载 useSessionRunActions 并把最新 state 镜像到闭包。所有用例共用同一组
- * 网关工作区标识与固定 refreshAgentStateSnapshot，只覆盖自己关心的动作句柄。
+ * 挂载 useSessionRunActions 并把最新 state 镜像到闭包。网关工作区标识从传入
+ * state 派生，refreshAgentStateSnapshot 固定为空操作。
  */
 export function mountSessionRunActions(options: {
   currentSession: Session | null;
   state: AppState;
   cacheKey: string;
-}): { state: () => AppState; actions: SessionRunActionsHandle } {
+}): { state: () => AppState; actions: ReturnType<typeof useSessionActions> } {
   const { currentSession, cacheKey } = options;
+  const gatewayWorkspaceId = options.state.currentSessionWorkspaceId
+    ?? options.state.activeGatewayWorkspaceId;
   const mirror = createStateMirror(options.state);
-  let actions: SessionRunActionsHandle | null = null;
+  let actions: ReturnType<typeof useSessionActions> | null = null;
+  const selectionIntentRef = { current: 0 };
+  const sessionCatalogOutboxRuntime = createTestSessionCatalogOutboxRuntime().runtime;
   function Harness(): React.ReactNode {
-    actions = useSessionRunActions({
+    actions = useSessionActions({
       apiPort: 8014,
       currentSession,
-      activeGatewayWorkspaceId: "gw_send_regression",
-      currentSessionGatewayWorkspaceId: "gw_send_regression",
+      activeGatewayWorkspaceId: gatewayWorkspaceId,
+      currentSessionGatewayWorkspaceId: gatewayWorkspaceId,
       currentSessionCacheKey: cacheKey,
-      defaultGatewayWorkspaceId: "gw_send_regression",
+      defaultGatewayWorkspaceId: gatewayWorkspaceId,
       contentView: "default",
+      readState: mirror.current,
       setState: mirror.setState,
       refreshAgentStateSnapshot: async () => undefined,
+      abortCurrentStream: () => undefined,
+      invalidateAgentState: () => undefined,
+      sessionCatalogOutboxRuntime,
+      gatewayUserAccess: testGatewayUserAccess(),
+      selectionIntentRef,
+      workspaceRequestTargets: testWorkspaceTargetsFor(gatewayWorkspaceId),
     });
     return null;
   }

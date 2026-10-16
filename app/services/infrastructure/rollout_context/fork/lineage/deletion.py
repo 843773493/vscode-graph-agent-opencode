@@ -9,11 +9,18 @@ from __future__ import annotations
 import shutil
 import sqlite3
 from hashlib import sha256
+from typing import TYPE_CHECKING
 
+from app.core.session_lifecycle_gate import SessionLifecycleGate
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_text,
 )
+
+if TYPE_CHECKING:
+    from app.services.infrastructure.attachment_blob_catalog.store import (
+        AttachmentBlobStore,
+    )
 
 
 def _pending_write_row(
@@ -83,16 +90,17 @@ def _assert_one_row(cursor: sqlite3.Cursor, *, context: str) -> None:
 
 
 class RolloutForkDeletionMixin:
-    def delete_thread(self, session_id: str, *, thread_id: str) -> None:
-        rollout = self._storage.root(session_id, thread_id=thread_id)
+    async def delete_thread(self, session_id: str, *, thread_id: str, attachment_store: AttachmentBlobStore | None) -> None:
+        await self.release_fork_retentions(session_id, target_thread_id=thread_id)
         self._storage._active_fork_materializations.difference_update(
             key
             for key in tuple(self._storage._active_fork_materializations)
             if key[:2] == (session_id, thread_id)
         )
-        if not rollout.exists():
-            return
-        self.release_fork_retentions(session_id)
-        with self._storage._lock(thread_id, "", session_id=session_id):
-            if rollout.exists():
-                shutil.rmtree(rollout)
+        async with SessionLifecycleGate(self._storage.sessions_dir).exclusive(session_id):
+            if attachment_store is not None:
+                attachment_store.release_thread_references(session_id, thread_id)
+            rollout = self._storage.root(session_id, thread_id=thread_id)
+            with self._storage._lock(thread_id, "", session_id=session_id):
+                if rollout.exists():
+                    shutil.rmtree(rollout)

@@ -149,10 +149,10 @@ class SessionCatalogService:
         mark_transaction_hook: CatalogTransactionHook,
         finish_transaction_hook: CatalogTransactionHook,
     ) -> SubtreeDeleteResult:
-        """以确定性 key 进入共享子树删除流，保留既有 admission/预检语义。
+        """以确定性 key 进入唯一子树删除流，关闭新 admission 后结算旧操作。
 
-        与删除前既有行为一致：先取得本次操作的 session 集合，在 JobService 删除
-        admission 下做后台任务预检，再执行共享删除流（含运行时 drain 回调）。
+        JobService 只关闭新 Job/消息写入；既有 Job 不阻断 catalog deleting，
+        由共享删除流的运行时 cleanup 与生命周期 lease owner 排空。
         """
         frozen_session_ids = self._path_resolver.descendant_session_ids(
             root_node_id,

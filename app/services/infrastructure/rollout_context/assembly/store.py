@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.services.infrastructure.rollout_context.assembly.overlays import (
     ContextOverlayStorageMixin,
 )
@@ -25,14 +24,6 @@ from app.services.infrastructure.rollout_context.assembly.registry import (
 from app.services.infrastructure.rollout_context.assembly.sealing import (
     ContextAssemblySealMixin,
 )
-from app.services.infrastructure.rollout_context.storage.serialization import (
-    canonical_json_text as _json,
-)
-
-
-def _v2_json(value: object) -> str:
-    return _json(value)
-
 
 if TYPE_CHECKING:
     from app.services.infrastructure.rollout_context.store import RolloutContextStore
@@ -48,9 +39,3 @@ class ContextAssemblyStore(
     def __init__(self, context: RolloutContextStore) -> None:
         self._context = context
         self._storage = context.storage
-
-    @staticmethod
-    def _assembly_json(snapshot: ContextAssemblySnapshot) -> str:
-        # v2 sealed assembly 是不可变便携副本，与 JSONL envelope 共用
-        # RFC 8785/JCS，避免 Python sort_keys 的跨语言浮点/Unicode 差异。
-        return _v2_json(snapshot.to_dict())

@@ -1,9 +1,8 @@
-"""OpenSpec 3.2/3.3 observed source 链路的定向合同测试。
+"""OpenSpec 3.2 observed source 链路的定向合同测试。
 
 覆盖 StableSourceReader 读取协议(允许根/no-follow/普通文件/双读/上限/
-严格 UTF-8/原始 byte hash)、失败保旧语义、observed/pending/committed
-状态合并,以及「CSM/middleware/skill_load 不得直接调用 reader」的静态
-隔离审计。
+严格 UTF-8/原始 byte hash)、失败保旧语义,以及
+「CSM/middleware/skill_load 不得直接调用 reader」的静态隔离审计。
 """
 
 from __future__ import annotations
@@ -157,40 +156,6 @@ def test_reclaimed_kinds_and_reason_codes_are_rejected() -> None:
         )
     with pytest.raises(ValueError, match="未知 StableSourceReadError reason_code"):
         StableSourceReadError("invalid_version_token", "已回收的 reason code")
-
-
-def test_revision_states_merge_uncommitted_changes(tmp_path: Path) -> None:
-    source = tmp_path / "SKILL.md"
-    source.write_text("r1\n", encoding="utf-8")
-    reconciler = SourceReconciler(handles={"src-1": _file_handle(source, tmp_path)})
-    first = reconciler.reconcile("src-1")
-    reconciler.mark_committed("src-1", first.revision)
-    assert reconciler.revision_states("src-1") == (first.revision, None, first.revision)
-
-    source.write_text("r2\n", encoding="utf-8")
-    reconciler.reconcile("src-1")
-    observed, pending, committed = reconciler.revision_states("src-1")
-    assert pending == observed != committed
-
-    # 多个未提交变化合并:committed 基准不变,pending 只指向最新 observed。
-    source.write_text("r3\n", encoding="utf-8")
-    reconciler.reconcile("src-1")
-    observed_latest, pending_latest, committed_same = reconciler.revision_states("src-1")
-    assert pending_latest == observed_latest
-    assert committed_same == committed
-    assert observed_latest == "sha256:" + hashlib.sha256(b"r3\n").hexdigest()
-
-    reconciler.mark_committed("src-1", observed_latest)
-    assert reconciler.revision_states("src-1")[1] is None
-
-
-def test_mark_committed_rejects_unobserved_revision(tmp_path: Path) -> None:
-    source = tmp_path / "SKILL.md"
-    source.write_text("r1\n", encoding="utf-8")
-    reconciler = SourceReconciler(handles={"src-1": _file_handle(source, tmp_path)})
-    reconciler.reconcile("src-1")
-    with pytest.raises(ValueError, match="已观察事实"):
-        reconciler.mark_committed("src-1", "sha256:never-observed")
 
 
 def test_reconcile_unknown_source_and_bounded_reconcile_all(tmp_path: Path) -> None:

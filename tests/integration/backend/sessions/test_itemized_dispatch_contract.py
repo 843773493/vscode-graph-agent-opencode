@@ -7,8 +7,10 @@ import json
 import sqlite3
 import subprocess
 import sys
+from contextlib import closing, nullcontext
 from dataclasses import replace
 from pathlib import Path
+from threading import Event, get_ident
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -37,11 +39,13 @@ from app.agents.tool_invocation_context import (
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import current_execution_admission
 from app.core.identifier import create_uuid_hex
-from app.domain.itemized.assembly_snapshot import context_request_hash
+from app.core.path_utils import get_session_catalog_components
+from app.core.session_control_store import SessionControlStore
 from app.domain.itemized.epoch.prefix_epoch import (
     ProviderProfileChangeRequiresRebuildError,
 )
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
     contribution_content_hash,
@@ -51,6 +55,8 @@ from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.serialization import normalize_wire_request
 from app.schemas.internal_v2.tool_test import ToolTestStartRequest
+from app.services.business.session_service import SessionService
+from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
@@ -80,6 +86,7 @@ from app.services.infrastructure.rollout_context.runtime.stream_accumulator impo
     CanonicalBlockAccumulator,
 )
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
+from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 from app.tool_testing.definitions import PreparedToolTest, ToolTestEvaluation
@@ -136,6 +143,8 @@ def dispatch_bridge(dispatch_saver, registered_tool_set_producer_factory):
         )
         producer = registered_tool_set_producer_factory(tools)
         return SealedAssemblyDispatchBridge(
+            context_read_admission=nullcontext,
+            context_control_admission=lambda _operation, _payload, _ref: nullcontext(),
             checkpointer=checkpointer,
             session_id=session_id,
             thread_id=thread,
@@ -194,7 +203,8 @@ async def test_native_dispatch_sends_sealed_selection_over_real_http(
     )
     with dispatch_execution_scope(saver, session_id, turn_id):
         if mode == "sync":
-            result = agent.invoke(
+            result = await asyncio.to_thread(
+                agent.invoke,
                 {"messages": []},
                 build_checkpoint_config(saver._storage.storage.main_thread_id(session_id)),
             )
@@ -368,7 +378,7 @@ async def test_native_http_tool_loop_replays_canonical_call_and_result(
     with dispatch_execution_scope(saver, session_id, turn_id):
         config = build_checkpoint_config(saver._storage.storage.main_thread_id(session_id))
         if mode == "sync":
-            result = agent.invoke({"messages": []}, config)
+            result = await asyncio.to_thread(agent.invoke, {"messages": []}, config)
         else:
             result = await agent.ainvoke({"messages": []}, config)
     assert "native-http-result" in json.dumps(result["messages"][-1].content)
@@ -462,7 +472,8 @@ async def test_missing_saver_owner_fails_before_provider_http(
         pytest.raises(TypeError, match="Saver prepare/supports"),
     ):
         if mode == "sync":
-            agent.invoke(
+            await asyncio.to_thread(
+                agent.invoke,
                 {"messages": []},
                 build_checkpoint_config(saver._storage.storage.main_thread_id(session_id)),
             )
@@ -1575,6 +1586,104 @@ def _select_contract_tools(case, *names):
         changes={item.name: (item.name in selected, item.name in selected) for item in case.tools},
     )
     return case.selection.snapshot("dispatch-test")
+
+
+@pytest.fixture
+def preparation_session_service(toolset_dispatch_case):
+    """沿原 dispatch owner 注入正式 Session gate 与持久 context-control lease。"""
+    case = toolset_dispatch_case
+    components = get_session_catalog_components(case.sessions)
+    service = SessionService(
+        config_service=ConfigService(),
+        trace_event_store=TraceEventStore(sessions_dir=case.sessions),
+        workspace_id=components.resolver.workspace_id,
+        path_resolver=components.resolver, creation_service=components.creation_service,
+        initialize_thread_storage=case.saver.initialize_thread_storage,
+    )
+    case.bridge._context_read_admission = lambda: service.session_read_admission(case.session)
+    case.bridge._context_control_admission = lambda operation, payload, ref: service.session_context_control_admission(
+        case.session, case.thread, operation_id=operation, payload=payload, recovery_ref=ref,
+    )
+    return service
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_format", ["chat_completions"])
+@pytest.mark.parametrize("stage", ["read", "commit"])
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_real_preparation_worker_keeps_loop_and_admission_until_settled(
+    toolset_dispatch_case, preparation_session_service, monkeypatch, stage, cancelled, target_format,
+):
+    """真实 Bridge/Saver worker 暂停时 loop 可运行；取消不能早退原 gate/lease。"""
+    del target_format
+    case, service = toolset_dispatch_case, preparation_session_service
+    loop, loop_thread = asyncio.get_running_loop(), get_ident()
+    entered, released = asyncio.Event(), Event()
+    settled, queued_ready = Event(), asyncio.Event()
+    method_name = "find_sealed_context_for_provider_creation" if stage == "read" else "prepare_context_for_provider"
+    actual = getattr(case.saver, method_name)
+    observed_admissions = []
+
+    def pause_worker(*args, **kwargs):
+        assert get_ident() != loop_thread, "同步 Saver preparation 仍在 backend loop 中执行"
+        observed_admissions.append(current_execution_admission())
+        loop.call_soon_threadsafe(entered.set)
+        assert released.wait(10), "preparation worker 未收到有限屏障释放"
+        try:
+            return actual(*args, **kwargs)
+        finally:
+            settled.set()
+
+    monkeypatch.setattr(case.saver, method_name, pause_worker)
+    running = asyncio.create_task(case.dispatch(f"worker-settlement-{stage}-{cancelled}"))
+
+    async def queue_next_turn():
+        queued_ready.set()
+        async with service.session_write_admission(case.session):
+            assert settled.is_set(), "queued admission 早于仍在提交的 preparation worker"
+            return case.saver.accept_turn(
+                case.session, thread_id=case.thread,
+                accepted_ingress_id="queued-after-worker", acceptance_idempotency_key="queued-after-worker-accept",
+                job_id="queued-after-worker-job", admission_idempotency_key="queued-after-worker-admit",
+                payload="worker 结算后接受的队列输入", turn_id="queued-after-worker-turn",
+            )
+
+    queued = None
+    control_path = service.path_resolver.resolve_session_node(case.session) / "session-control.sqlite"
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        assert observed_admissions and observed_admissions[0].thread_id == case.thread
+        queued = asyncio.create_task(queue_next_turn())
+        await asyncio.wait_for(queued_ready.wait(), 5)
+        if cancelled:
+            for _ in range(3):
+                running.cancel()
+                await asyncio.sleep(0)
+        assert not running.done()
+        assert not queued.done()
+        assert not settled.is_set()
+        with closing(SessionControlStore(control_path)) as control:
+            context_leases = [lease for lease in control.list_non_terminal_leases() if lease.operation_kind == "context_control"]
+            assert len(context_leases) == (1 if stage == "commit" else 0)
+            assert all(lease.state == "settling" for lease in context_leases)
+    finally:
+        released.set()
+        if cancelled:
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(running, 20)
+        else:
+            await asyncio.wait_for(running, 20)
+        if queued is not None:
+            await asyncio.wait_for(queued, 20)
+    assert settled.is_set()
+    assert all(admission == observed_admissions[0] for admission in observed_admissions)
+    assert len(case.state.requests) == (0 if cancelled else 1)
+    with closing(SessionControlStore(control_path)) as control:
+        assert not [lease for lease in control.list_non_terminal_leases() if lease.operation_kind == "context_control"]
+    assemblies = case.saver.list_context_assemblies(case.session, case.thread)
+    assert len(assemblies) == (0 if cancelled and stage == "read" else 1)
+    for assembly in assemblies:
+        assert "worker 结算后接受的队列输入" not in json.dumps(assembly.request_hash_preimage, ensure_ascii=False)
 
 
 def _sealed_contract_rows(case):

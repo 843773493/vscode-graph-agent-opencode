@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 
 from app.abstractions.job_service import JobServiceProtocol
-from app.api.canonical_params import CanonicalSessionId, CanonicalThreadId
+from app.abstractions.turn_history import TurnSessionLookupProtocol
 from app.api.deps import (
     get_attachment_blob_store,
     get_job_service,
@@ -14,12 +14,15 @@ from app.api.deps import (
     get_request_id,
     get_session_communication_service,
     get_session_orchestrator,
+    get_session_service,
     get_session_turn_replay_service,
     verify_local_token,
 )
 from app.api.errors import not_found_http_error, state_conflict_http_error
 from app.core.exceptions import NotFoundError
+from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.runtime.session_orchestrator import SessionOrchestrator
+from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.schemas.internal_v2.common import APIResponse, CursorPage
 from app.schemas.internal_v2.communication import (
     CommunicationAcceptanceRequest,
@@ -37,7 +40,6 @@ from app.schemas.internal_v2.message import (
 from app.schemas.internal_v2.pending_request import (
     PendingRequestListDTO,
     PendingRequestPolicyUpdateRequest,
-    PendingRequestUpdateRequest,
 )
 from app.services.business.job.service import JobAdmissionClosedError
 from app.services.business.message_service import MessageService
@@ -66,44 +68,30 @@ async def list_pending_requests(
         result = await job_service.list_pending(session_id)
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.patch(
-    "/{session_id}/pending-requests/{message_id}",
+@router.get(
+    "/{session_id}/main-thread/pending-requests",
     response_model=APIResponse[PendingRequestListDTO],
-    summary="编辑待处理消息",
+    summary="获取主 thread 待处理消息",
 )
-async def update_pending_request(
+async def list_main_thread_pending_requests(
     session_id: CanonicalSessionId,
-    message_id: str,
-    payload: PendingRequestUpdateRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     job_service: JobServiceProtocol = Depends(get_job_service),
-    attachment_store: AttachmentBlobStore = Depends(get_attachment_blob_store),
+    session_service: TurnSessionLookupProtocol = Depends(get_session_service),
 ):
-    async def update_prepared() -> PendingRequestListDTO:
-        attachments = await attachment_store.persist_inline(
-            session_id, payload.attachments
-        )
-        return await job_service.update_pending(
-            session_id,
-            message_id,
-            content=payload.content,
-            attachments=attachments,
-        )
-
     try:
-        result = await job_service.run_session_preparation(
-            session_id,
-            update_prepared,
-        )
+        async with session_service.session_read_admission(session_id):
+            thread_id = await session_service.resolve_main_thread(session_id)
+            result = await job_service.list_pending(session_id, thread_id=thread_id)
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
-    except ValueError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    except RuntimeError as error:
+    except SessionDeletionPendingError as error:
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 

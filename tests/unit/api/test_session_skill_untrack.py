@@ -56,13 +56,14 @@ def sessions_root(workspace) -> Path:
 
 
 @pytest.fixture()
-def session_service(sessions_root: Path, workspace) -> SessionService:
+def session_service(sessions_root: Path, workspace, saver: RolloutCheckpointSaver) -> SessionService:
     return SessionService(
         config_service=ConfigService(),
         trace_event_store=TraceEventStore(sessions_dir=sessions_root),
         workspace_id=WORKSPACE_ID,
         path_resolver=workspace.resolver,
         creation_service=workspace.creation_service,
+        initialize_thread_storage=saver.initialize_thread_storage,
     )
 
 
@@ -201,7 +202,7 @@ async def test_untrack_api_handler_maps_unknown_thread_to_404(
     with pytest.raises(HTTPException) as raised:
         await untrack_session_skill(
             session_id,
-            "thr_" + "9" * 32,
+            "thr_019c5facabc37e5c89a5c9584ed39862",
             SessionSkillUntrackRequest(name=SKILL_NAME),
             _="local",
             request_id="req_untrack",

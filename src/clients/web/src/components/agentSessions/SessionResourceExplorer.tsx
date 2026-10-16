@@ -373,7 +373,7 @@ export default function SessionResourceExplorer({
     const expansionId = `catalog:${workspaceId}:${node.node_id}`;
     const expanded = explorer.expandedIds.has(expansionId);
     const isFolder = node.kind === "folder";
-    const canExpand = isFolder || node.has_children;
+    const canExpand = node.state !== "deleting" && (isFolder || node.has_children);
     const isCurrent = node.session_id === currentSessionId && workspaceId === activeWorkspaceId;
     const sessionCacheKey = node.session_id
       ? sessionScopeKey(workspaceId, node.session_id)
@@ -408,7 +408,7 @@ export default function SessionResourceExplorer({
           className={`session-resource-row${isCurrent ? " current-session" : ""}${dropTargetClass(targetKey)}${dragItem?.nodeId === node.node_id ? " dragging" : ""}`}
           aria-current={isCurrent ? "true" : undefined}
           aria-grabbed={dragItem?.nodeId === node.node_id}
-          draggable
+          draggable={node.state !== "deleting" && (isFolder ? node.folder_id !== null : true)}
           style={{ paddingLeft: `${depth * 14 + 8}px` }}
           data-testid={`catalog-node-${workspaceId}-${node.node_id}`}
           onDragStart={(event) => startDrag(
@@ -440,16 +440,18 @@ export default function SessionResourceExplorer({
           onContextMenu={(event) => {
             event.preventDefault();
             setWorkspaceFolderMenu(null);
-            if (isFolder && node.folder_id) {
+            if (node.state === "deleting") return;
+            if (isFolder && (node.folder_id || node.client_ref)) {
               setFolderMenu({
                 workspaceId,
+                nodeId: node.node_id,
                 folderId: node.folder_id,
                 parentNodeId: node.parent_node_id ?? null,
                 name: node.name,
                 x: event.clientX,
                 y: event.clientY,
               });
-              if (workspace?.status === "ready") {
+              if (workspace?.status === "ready" && node.folder_id) {
                 refreshSessionCatalogBranchInBackground(workspaceId, node.node_id);
               }
               return;
@@ -507,17 +509,20 @@ export default function SessionResourceExplorer({
             data-session-id={!isFolder ? node.session_id : undefined}
             title={node.storage_relative_path || node.name}
             aria-busy={opening || undefined}
+            disabled={node.state === "deleting"}
             onClick={openNode}
           >
             <span className={`codicon ${isFolder ? "codicon-folder" : "codicon-comment-discussion"}`} aria-hidden="true" />
             <span className="session-resource-label">{node.name}</span>
-            {node.pending_state !== null ? (
+            {node.pending_state !== null || node.state === "deleting" ? (
               <span
                 className="session-resource-pending-state"
                 data-pending-state={node.pending_state}
-                title={`目录变更状态：${node.pending_state === "accepted" ? "已持久受理，等待提交" : node.pending_state}`}
+                data-catalog-state={node.state ?? undefined}
+                data-deletion-settlement={node.settlement ?? undefined}
+                title={node.settlement_error ?? `目录变更状态：${node.settlement === "pending" ? "删除已提交，正在排空" : node.pending_state === "accepted" ? "已持久受理，等待提交" : node.pending_state ?? node.state}`}
               >
-                {node.pending_state === "accepted" ? "等待提交" : "同步中"}
+                {node.settlement_error ? "删除已提交，需修复" : node.settlement === "pending" ? "删除已提交，正在排空" : node.settlement === "settled" ? "删除已完成，正在刷新目录" : node.state === "deleting" ? "删除中" : node.pending_state === "committed" ? "已提交" : node.pending_state === "accepted" ? "等待提交" : "同步中"}
               </span>
             ) : null}
             {timePresentation ? (

@@ -20,7 +20,6 @@ from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protoc
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
-    strict_text,
 )
 
 
@@ -107,10 +106,11 @@ class RolloutCompactionPreflightOwnerMixin:
         state_messages: Sequence[object],
         cutoff_indexes: Sequence[int],
     ) -> frozenset[int]:
-        """把 state 消息切点映射到 active view 前缀并逐个验证闭包。
+        """把 raw state 切点映射到冻结 messages view 并逐个验证闭包。
 
-        返回安全切点集合；映射损坏（已持久化消息脱离 active view 或
-        持久化前缀与 view 顺序不一致）直接报错，不猜测修复。
+        state/event 保留原坐标；Provider carrier selection 的去重不能改变它。
+        raw 前段可由已冻结 event 证明已压缩；其余消息仍须属于 active history。
+        全部持久化消息必须按冻结 channel 的前缀排序。
         """
         if not isinstance(session_id, str) or not session_id:
             raise TypeError("compaction preflight session_id 必须是非空字符串")
@@ -124,29 +124,66 @@ class RolloutCompactionPreflightOwnerMixin:
                 raise TypeError(
                     f"compaction preflight 切点必须是 int，实际值: {cutoff!r}"
                 )
-        with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
-            self._storage._require_v2_runtime(connection)
-            head = self._checkpoint_row(connection, checkpoint_ns, None)
+        with self._storage.open_read_snapshot(session_id, thread_id, checkpoint_ns) as snapshot:
+            connection = snapshot.connection
+            head = self.latest_checkpoint(
+                session_id, thread_id, checkpoint_ns, None, snapshot=snapshot,
+            )
             if head is None:
                 raise RuntimeError(
                     "compaction preflight 缺少 durable owner: "
                     f"session={session_id} checkpoint_ns={checkpoint_ns!r} "
                     "没有 active checkpoint"
                 )
-            view_id = strict_text(head[6], field="checkpoints.view_id")
-            view_sequences = self._storage._view_message_sequences(
-                thread_id,
-                checkpoint_ns,
-                view_id,
-                set(),
-                session_id=session_id,
-                connection=connection,
+            values = self.checkpoint_values(
+                session_id, thread_id, checkpoint_ns, head, snapshot=snapshot,
+                include_execution_context=True,
             )
+            # stream 与 checkpoint 的 typed carrier 可在结果落盘前切换；raw
+            # state 始终引用冻结 checkpoint carrier，不能拿 Provider 去重后的
+            # 消息 ID 当作 state 的坐标。复用真实冷恢复 reader，排除冻结
+            # channel 内已被最终 carrier 替代的中间 checkpoint 消息。
+            codec = self._storage._codec()
+            frozen_messages = values["messages"]
+            message_sequences = dict(connection.execute("SELECT message_id, message_sequence FROM messages"))
+            view_sequences = [message_sequences[codec.message_id(message, index)]
+                              for index, message in enumerate(frozen_messages)]
+            active_sequences = {row[0] for row in connection.execute(
+                "SELECT message.message_sequence FROM context_view_items AS member "
+                "JOIN item_catalog AS item ON item.item_id = member.item_id "
+                "JOIN messages AS message ON message.jsonl_offset = item.jsonl_offset "
+                "AND message.jsonl_length = item.jsonl_length "
+                "WHERE member.view_id = ? AND member.visible = 1",
+                (self.active_view_id(snapshot),),
+            )}
             view_positions = {
                 sequence: index for index, sequence in enumerate(view_sequences)
             }
-            codec = self._storage._codec()
+            previous_cutoff = 0
+            prefix_ids: set[str] = set()
+            event = values.get("_summarization_event")
+            if event is not None:
+                if not isinstance(event, Mapping):
+                    raise TypeError("compaction preflight 已冻结 event 必须是 mapping")
+                previous_cutoff = strict_non_negative_int(event.get("cutoff_index"), field="compaction cutoff_index")
+                if previous_cutoff > len(frozen_messages):
+                    raise RuntimeError("compaction preflight 已冻结 cutoff 超过 raw channel")
+                prefixes = event.get("cache_prefix_messages", []) if event.get("strategy") == "cache_preserving" else []
+                if not isinstance(prefixes, (list, tuple)) or len(prefixes) > previous_cutoff:
+                    raise RuntimeError("compaction preflight 已冻结 prefix 超过 raw cutoff")
+                prefix_ids = {codec.message_id(prefix, index) for index, prefix in enumerate(prefixes)}
+                if any(message_sequences.get(message_id) not in active_sequences for message_id in prefix_ids):
+                    raise RuntimeError("compaction preflight 已冻结 prefix 脱离 active history")
+                cutoff_id = event.get("cutoff_message_id")
+                if cutoff_id is not None and (previous_cutoff == 0 or
+                    codec.message_id(frozen_messages[previous_cutoff - 1], previous_cutoff - 1) != cutoff_id):
+                    raise RuntimeError("compaction preflight 已冻结 cutoff identity 与 raw channel 不一致")
+                summary_id = codec.message_id(event.get("summary_message"), 0)
+                if message_sequences.get(summary_id) not in active_sequences:
+                    raise RuntimeError("compaction preflight 已冻结摘要脱离 active history")
             state_sequences: list[int | None] = []
+            durable_cutoffs = [0]
+            has_unpersisted = False
             for index, message in enumerate(state_messages):
                 message_id = codec.message_id(message, index)
                 row = connection.execute(
@@ -156,24 +193,27 @@ class RolloutCompactionPreflightOwnerMixin:
                 if row is None:
                     # in-flight 未持久化消息只允许出现在已持久化前缀之后。
                     state_sequences.append(None)
+                    durable_cutoffs.append(durable_cutoffs[-1])
+                    has_unpersisted = True
                     continue
                 sequence = strict_non_negative_int(
                     row[0], field="messages.message_sequence"
                 )
-                if sequence not in view_positions:
+                compressed_middle = index < previous_cutoff and message_id not in prefix_ids
+                if sequence not in view_positions or (not compressed_middle and sequence not in active_sequences):
                     raise RuntimeError(
                         "compaction preflight 映射损坏: state 消息已持久化"
                         f"但不在 active view 内 index={index} "
                         f"message_id={message_id} message_sequence={sequence}"
                     )
+                if has_unpersisted:
+                    raise RuntimeError(
+                        "compaction preflight 映射损坏: state 未持久化消息后"
+                        f"再次出现已持久化消息 index={index} message_id={message_id}"
+                    )
                 state_sequences.append(sequence)
-            persisted = list(
-                dict.fromkeys(
-                    sequence
-                    for sequence in state_sequences
-                    if sequence is not None
-                )
-            )
+                durable_cutoffs.append(view_positions[sequence] + 1)
+            persisted = [sequence for sequence in state_sequences if sequence is not None]
             if persisted != view_sequences[: len(persisted)]:
                 raise RuntimeError(
                     "compaction preflight 映射损坏: state 持久化前缀与 "
@@ -189,16 +229,11 @@ class RolloutCompactionPreflightOwnerMixin:
                     )
                 if prefix_has_open_tool_group(state_messages, cutoff):
                     continue
-                durable_cutoff = sum(
-                    1
-                    for sequence in state_sequences[:cutoff]
-                    if sequence is not None
-                )
                 try:
                     validate_tool_protocol_closure(
                         connection,
                         view_sequences,
-                        durable_cutoff,
+                        durable_cutoffs[cutoff],
                     )
                 except ToolProtocolBoundaryConflict:
                     continue

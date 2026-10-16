@@ -162,6 +162,7 @@ export interface MarkdownContentProps {
   className?: string;
   streaming?: boolean;
   renderMode?: MarkdownRenderMode;
+  responseSources?: string;
 }
 
 function MarkdownContent({
@@ -169,6 +170,7 @@ function MarkdownContent({
   className = "",
   streaming = false,
   renderMode = "progressive",
+  responseSources,
 }: MarkdownContentProps): React.ReactNode {
   const renderedValue = useStreamingMarkdownValue(value, streaming);
   const [fullyRenderedValue, setFullyRenderedValue] = useState<string | null>(null);
@@ -226,6 +228,7 @@ function MarkdownContent({
   return (
     <div
       className={`chat-markdown ${className}`.trim()}
+      data-response-sources={responseSources}
       data-markdown-rendering={renderMarkdown ? "enhanced" : "lightweight"}
       aria-busy={!renderMarkdown}
     >

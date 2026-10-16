@@ -22,6 +22,7 @@ def prepare_e2e_model_stream_config(
     *,
     output_root: Path | str,
     mode: str | None = None,
+    exact_fixture_root: Path | None = None,
 ) -> Path:
     """为单个 E2E 文件生成带运行时覆盖的 model stream 配置。
 
@@ -36,6 +37,12 @@ def prepare_e2e_model_stream_config(
         model_stream.get("transport"),
         label="model_stream.transport",
     )
+    if exact_fixture_root is not None:
+        if mode not in (None, "replay"):
+            raise ValueError("精确产品 E2E 只能使用 replay，禁止触发真实 Provider")
+        transport["mode"] = "replay"
+        transport["fixture_root"] = str(exact_fixture_root)
+        transport["replay"] = {"policy": "call_identity"}
 
     if mode is not None:
         if mode not in _MODEL_STREAM_MODES:

@@ -26,6 +26,7 @@ from app.core.session_catalog_store import (
     SubtreeDeleteRecord,
 )
 from app.core.session_control_store import SessionControlStore
+from app.core.session_lifecycle_gate import SessionLifecycleGate
 from app.core.session_subtree_delete import (
     SessionSubtreeDeleteService,
     SubtreeDeleteResult,
@@ -278,6 +279,50 @@ async def test_delete_full_flow_tombstones_and_isolates(
     record = store.get_subtree_delete_record("del-key-1")
     assert record.state == "completed"
     assert record.abort_reason is None
+
+
+async def test_drain_phase_precedes_retention_wait_on_existing_session_gate(
+    service: SessionSubtreeDeleteService,
+    store: SessionCatalogStore,
+    sessions_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """旧操作持 Session gate 时，排空观察先到达，fence 与隔离仍等待。"""
+    node = create_physical_session(store, sessions_root, parent_node_id=None)
+    source = date_bucket_dir(sessions_root, node.storage_relative_locator)
+    key = "del-key-retention-wait"
+    gate = SessionLifecycleGate(sessions_root)
+    observed, retention_started = asyncio.Event(), asyncio.Event()
+
+    async def observe(operation_id: str, phase: str, **_details: object) -> None:
+        if operation_id == key and phase == f"deletion.drain_waiting/{node.node_id}":
+            observed.set()
+
+    async def release_retention(session_id: str) -> None:
+        assert session_id == node.node_id
+        retention_started.set()
+        async with gate.exclusive(session_id):
+            assert source.is_dir()
+
+    monkeypatch.setattr("app.core.session_subtree_delete.observe_phase", observe)
+    service.set_fork_retention_release_callback(release_retention)
+    async with asyncio.TaskGroup() as tasks, gate.exclusive(node.node_id):
+        deleting = tasks.create_task(service.delete(
+            idempotency_key=key, root_node_id=node.node_id,
+        ))
+        await asyncio.wait_for(observed.wait(), timeout=2)
+        await asyncio.wait_for(retention_started.wait(), timeout=2)
+        assert not deleting.done()
+        assert store.get_subtree_delete_record(key).state == "deleting"
+        assert source.is_dir()
+        control = SessionControlStore(source / "session-control.sqlite")
+        try:
+            assert control.get_fence() == ("active", 1)
+        finally:
+            control.close()
+        assert not (sessions_root / _DELETING_DIR_NAME / key / node.node_id).exists()
+    assert deleting.result().record_state == "completed"
+    assert not source.exists()
 
 
 async def test_runtime_drain_failure_blocks_physical_isolation(

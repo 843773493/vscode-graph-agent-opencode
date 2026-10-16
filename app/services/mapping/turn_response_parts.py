@@ -13,6 +13,11 @@ from app.domain.itemized.identity.tool_call_identity import (
 )
 from app.domain.itemized.records import CanonicalItemRecord
 from app.schemas.internal_v2.turn import TurnResponsePartDTO, TurnResponseSourceDTO
+from app.services.mapping.itemized.content_blocks import (
+    direct_content_blocks,
+    reasoning_content_rows,
+)
+from app.services.mapping.itemized.provider_history import visible_text
 
 #: 文本部件正文上限；canonical 投影按此截断，超限只置 truncated 供前端补拉。
 _TEXT_LIMIT = 65536
@@ -28,6 +33,7 @@ _INCLUDE_BY_KIND: dict[str, frozenset[str]] = {
         {"thinking", "reasoning_summary", "reasoning_detail"}
     ),
     "reasoning_encrypted": frozenset({"encrypted_reasoning_meta"}),
+    "compaction_summary": frozenset({"text", "thinking", "reasoning_summary", "reasoning_detail"}),
     "tool_call": frozenset({"tool_summary", "tool_call"}),
     "tool_result": frozenset({"tool_summary", "tool_result"}),
 }
@@ -117,6 +123,15 @@ def _response_status(value: object) -> str:
     raise ValueError(f"未知 canonical item status: {value!r}")
 
 
+def response_part_order(part: TurnResponsePartDTO) -> tuple[int, int]:
+    """所有 history lane 共用 membership 与部件坐标，不使用物理序号排序。"""
+    logical = part.source.logical_item_ordinal
+    ordinal = part.source.part_ordinal
+    if logical is None or ordinal is None:
+        raise RuntimeError(f"response part 缺少 membership ordinal 或 part ordinal: {part.part_id}")
+    return logical, ordinal
+
+
 def _part_projection(kind: str, *, mode: Projection, include: frozenset[str]) -> Projection:
     """部件的投影级别必须反映自身 payload 是否真的已加载。
 
@@ -139,7 +154,7 @@ def _activity_parts_from_projection(
     include: frozenset[str],
     tool_call_ids: frozenset[str] | None,
 ) -> list[TurnResponsePartDTO]:
-    """按后端 canonical identity/order 投影中间 item，不在 mapper 去重或排序。"""
+    """保留后端 canonical identity 与当前 view 的成员坐标。"""
     raw_items = projection.get("activity_items")
     if not isinstance(raw_items, list):
         raise TypeError("Turn projection 缺少 activity_items")
@@ -148,11 +163,7 @@ def _activity_parts_from_projection(
         if not isinstance(raw, Mapping):
             raise TypeError("Turn activity item 必须是对象")
         raw_kind = raw.get("kind")
-        kind = (
-            "reasoning_summary"
-            if raw_kind == "compaction_summary"
-            else raw_kind
-        )
+        kind = raw_kind
         include_fields = _INCLUDE_BY_KIND.get(kind) if isinstance(kind, str) else None
         if include_fields is None:
             raise ValueError(f"未知 Turn activity item kind: {raw_kind!r}")
@@ -160,6 +171,7 @@ def _activity_parts_from_projection(
             continue
         item_id = raw.get("item_id")
         item_sequence = raw.get("item_sequence")
+        logical_item_ordinal = raw.get("logical_item_ordinal")
         part_ordinal = raw.get("part_ordinal", 0)
         created_at = raw.get("created_at")
         if (
@@ -168,6 +180,9 @@ def _activity_parts_from_projection(
             or not isinstance(item_sequence, int)
             or isinstance(item_sequence, bool)
             or item_sequence < 1
+            or not isinstance(logical_item_ordinal, int)
+            or isinstance(logical_item_ordinal, bool)
+            or logical_item_ordinal < 0
             or not isinstance(part_ordinal, int)
             or isinstance(part_ordinal, bool)
             or part_ordinal < 0
@@ -225,6 +240,7 @@ def _activity_parts_from_projection(
                     ),
                     item_id=item_id,
                     item_sequence=item_sequence,
+                    logical_item_ordinal=logical_item_ordinal,
                     part_ordinal=part_ordinal,
                     created_at=created_at,
                     elapsed_ms=_int_or_none(raw, "elapsed_ms"),
@@ -389,12 +405,17 @@ def _final_response_part(
         return None
     final_item_id = projection.get("final_item_id")
     final_item_sequence = projection.get("final_item_sequence")
+    final_logical_item_ordinal = projection.get("final_logical_item_ordinal")
+    # final 沿 canonical final item 的创建时刻；固定 elapsed_ms=0，不计相邻 activity 差。
     final_item_created_at = projection.get("final_item_created_at")
     if (
         not isinstance(final_item_id, str)
         or not final_item_id
         or not isinstance(final_item_sequence, int)
         or isinstance(final_item_sequence, bool)
+        or not isinstance(final_logical_item_ordinal, int)
+        or isinstance(final_logical_item_ordinal, bool)
+        or final_logical_item_ordinal < 0
         or not isinstance(final_item_created_at, str)
         or not final_item_created_at
     ):
@@ -410,6 +431,7 @@ def _final_response_part(
             message_sequence=final_sequence,
             item_id=final_item_id,
             item_sequence=final_item_sequence,
+            logical_item_ordinal=final_logical_item_ordinal,
             part_ordinal=_FINAL_PART_ORDINAL,
             created_at=final_item_created_at,
             elapsed_ms=0,
@@ -454,7 +476,53 @@ def response_parts_from_records(
     )
     if final_part is not None:
         parts.append(final_part)
-    return parts[:max_parts]
+    return sorted(parts, key=response_part_order)[:max_parts]
+
+
+def _internal_content_parts(
+    item: CanonicalItemRecord,
+    *,
+    include: frozenset[str],
+    source: Mapping[str, object],
+    projection: Projection,
+) -> list[TurnResponsePartDTO]:
+    """从 canonical content 展开可见语义；密文只投影存在性。"""
+    rows: list[tuple[int, int | None, str, str, str | None]] = []
+    for block_index, block in enumerate(direct_content_blocks(item.payload)):
+        if block.get("type") in {"text", "input_text", "output_text", "refusal"}:
+            rows.append((block_index, None, "text", visible_text([block]), None))
+    for row in reasoning_content_rows(item.payload):
+        for kind, text in (("reasoning", row.reasoning_text), ("reasoning_summary", row.summary_text)):
+            if isinstance(text, str) and text:
+                rows.append((row.content_block_index, row.item_index, kind, text, row.carrier_type))
+        if row.encrypted:
+            rows.append((row.content_block_index, row.item_index, "reasoning_encrypted", "", row.carrier_type))
+    rows.sort(key=lambda row: (row[0], row[1] if row[1] is not None else 0))
+    identity = item.projection_identity
+    parts: list[TurnResponsePartDTO] = []
+    # 先分配完整 content 的 ordinal，再应用 include，补拉详情不会改变 part 身份。
+    for ordinal, (block_index, item_index, kind, value, carrier_type) in enumerate(rows):
+        if not include & _INCLUDE_BY_KIND[kind]:
+            continue
+        text, truncated = _bounded(value)
+        parts.append(TurnResponsePartDTO(
+            part_id=f"{item.item_id}:part:{ordinal}",
+            kind=kind,
+            projection=projection,
+            status=_response_status(item.status),
+            source=TurnResponseSourceDTO(**{
+                **source,
+                "content_block_index": block_index,
+                "item_index": item_index,
+                "part_ordinal": ordinal,
+            }),
+            text=text,
+            carrier_type=carrier_type,
+            truncated=truncated,
+            completion_reason=identity.completion_reason if identity else None,
+            partial=item.status in {"partial", "incomplete"},
+        ))
+    return parts
 
 
 def response_parts_from_internal_item(
@@ -462,8 +530,13 @@ def response_parts_from_internal_item(
     *,
     include: frozenset[str],
     logical_item_ordinal: int,
+    elapsed_ms: int,
 ) -> list[TurnResponsePartDTO]:
-    """把单个 standalone execution canonical item 映射为受 include 控制的响应部件。"""
+    """映射 standalone item，沿原创建时刻和 reader 提供的逻辑前项整数毫秒差。
+
+    reader 在同 view、同 execution 的 visible/display_only 成员中找前项，
+    首项从 execution.created_at 起算；这里保留该 elapsed_ms，不按正文或分页重算。
+    """
     identity = item.projection_identity
     semantic_kind = item.semantic_kind
     payload = item.payload
@@ -482,7 +555,7 @@ def response_parts_from_internal_item(
         )
         allowed_include = _INCLUDE_BY_KIND[kind]
     elif semantic_kind == "compaction_summary":
-        kind = "reasoning_summary"
+        kind = "compaction_summary"
         allowed_include = _INCLUDE_BY_KIND[kind]
     elif semantic_kind == "tool_call":
         kind = "tool_call"
@@ -490,7 +563,8 @@ def response_parts_from_internal_item(
     elif semantic_kind == "tool_result":
         kind = "tool_result"
         allowed_include = _INCLUDE_BY_KIND[kind]
-    if kind is None or not include & allowed_include:
+    structured_content = semantic_kind == "assistant_output" and item.payload_kind == "structured_content"
+    if kind is None or (not structured_content and not include & allowed_include):
         return []
 
     part_ordinal = identity.block_index if identity is not None and identity.block_index is not None else 0
@@ -503,6 +577,7 @@ def response_parts_from_internal_item(
         "item_id": item.item_id,
         "item_sequence": item.item_sequence,
         "logical_item_ordinal": logical_item_ordinal,
+        "elapsed_ms": elapsed_ms,
         "created_at": item.created_at,
     }
     projection: Projection = (
@@ -519,6 +594,8 @@ def response_parts_from_internal_item(
         }
         else "summary"
     )
+    if structured_content:
+        return _internal_content_parts(item, include=include, source=common_source, projection=projection)
     if kind == "reasoning_encrypted":
         return [
             TurnResponsePartDTO(
@@ -599,7 +676,7 @@ def response_parts_from_internal_item(
             )
         ]
 
-    if kind == "reasoning_summary" and isinstance(payload, Mapping):
+    if kind in {"reasoning_summary", "compaction_summary"} and isinstance(payload, Mapping):
         text_value = payload.get("summary", payload.get("text", ""))
     else:
         text_value = payload
@@ -616,6 +693,7 @@ def response_parts_from_internal_item(
                 part_ordinal=ordinal,
             ),
             text=text,
+            carrier_type="compaction_summary" if kind == "compaction_summary" else None,
             truncated=truncated,
             completion_reason=identity.completion_reason if identity else None,
             partial=item.status in {"partial", "incomplete"},

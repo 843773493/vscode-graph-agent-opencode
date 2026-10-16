@@ -126,6 +126,7 @@ CREATE TABLE IF NOT EXISTS session_creation_records (
     capability_profile_hash TEXT NOT NULL,
     session_metadata_json TEXT NOT NULL,
     request_intent_json TEXT,
+    fork_delivery_request_id TEXT CHECK(fork_delivery_request_id IS NULL OR (purpose='context_fork' AND length(fork_delivery_request_id)>0)),
     created_at TEXT NOT NULL,
     storage_relative_locator TEXT NOT NULL UNIQUE,
     preimage_hash TEXT NOT NULL,
@@ -134,6 +135,35 @@ CREATE TABLE IF NOT EXISTS session_creation_records (
     abort_reason TEXT,
     record_created_at TEXT NOT NULL,
     record_updated_at TEXT NOT NULL
+)
+"""
+
+_FORK_SOURCE_CAPTURES_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS fork_source_captures (
+    copy_operation_id TEXT PRIMARY KEY,
+    creation_key TEXT UNIQUE,
+    source_session_id TEXT NOT NULL,
+    source_thread_id TEXT NOT NULL,
+    target_session_id TEXT NOT NULL,
+    target_thread_id TEXT NOT NULL,
+    snapshot_id TEXT NOT NULL UNIQUE,
+    snapshot_relative_locator TEXT NOT NULL UNIQUE,
+    fork_id TEXT NOT NULL UNIQUE,
+    materialization_id TEXT NOT NULL UNIQUE,
+    request_json TEXT NOT NULL,
+    preimage_hash TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('preparing', 'source_captured', 'materialized', 'aborted')),
+    snapshot_sha256 TEXT,
+    marker_sha256 TEXT,
+    abort_reason TEXT,
+    export_release_state TEXT CHECK (export_release_state IN ('pending', 'confirmed')),
+    export_release_error TEXT,
+    export_release_receipt_json TEXT,
+    CHECK (
+        (export_release_state IS NULL AND export_release_error IS NULL AND export_release_receipt_json IS NULL)
+        OR (export_release_state = 'pending' AND export_release_receipt_json IS NULL)
+        OR (export_release_state = 'confirmed' AND export_release_error IS NULL AND export_release_receipt_json IS NOT NULL)
+    )
 )
 """
 
@@ -146,7 +176,7 @@ _CREATION_RECORD_COLUMNS = (
     "session_creation_idempotency_key, session_id, main_thread_id, workspace_id, "
     "parent_node_id, display_name, title_source, purpose, "
     "graph_id, graph_revision, graph_schema_hash, capability_profile_hash, "
-    "session_metadata_json, request_intent_json, "
+    "session_metadata_json, request_intent_json, fork_delivery_request_id, "
     "created_at, storage_relative_locator, "
     "preimage_hash, parent_revision, state, abort_reason, "
     "record_created_at, record_updated_at"
@@ -290,20 +320,19 @@ _REQUIRED_NAVIGATION_REVISION_TRIGGERS = (
     "nodes_navigation_revision_delete",
 )
 
-# 已登记为 v8 的目录缺少权威表、元数据列或 revision triggers 说明 catalog
+# 已登记为当前版本 的目录缺少权威表、元数据列或 revision triggers 说明 catalog
 # 被外部改写，必须在任何 DDL 前 fail closed。旧 schema 不作运行期迁移；只能由
 # 明确维护流程处理，不能把日期目录或旧 JSON 当作回退来源。
-_REQUIRED_TABLES_BY_VERSION = {
-    8: (
-        "nodes",
-        "session_creation_records",
-        "subtree_delete_records",
-        "fork_retention_claims",
-        "catalog_metadata",
-    ),
-}
+_REQUIRED_TABLES = (
+    "nodes",
+    "session_creation_records",
+    "fork_source_captures",
+    "subtree_delete_records",
+    "fork_retention_claims",
+    "catalog_metadata",
+)
 
-# 全新 v7 catalog 的备份 generation 与导航 revision 都从 0 起。
+# 全新 catalog 的备份 generation 与导航 revision 都从 0 起。
 _CATALOG_METADATA_SEED = (
     "INSERT INTO catalog_metadata "
     "(singleton_id, generation, navigation_revision) VALUES (1, 0, 0)"

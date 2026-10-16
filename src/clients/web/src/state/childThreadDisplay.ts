@@ -1,6 +1,8 @@
 import type { ChildThreadStatus, InternalExecutionHistory, TurnHistoryPage } from "../types/protocol";
+import { compareInternalResponseParts } from "./timeline/responseParts";
 
 const STATUS_LABELS: Record<ChildThreadStatus, string> = {
+  idle: "等待新消息",
   pending: "等待启动",
   running: "运行中",
   completed: "已完成",
@@ -13,6 +15,7 @@ export function childThreadStatusLabel(status: ChildThreadStatus): string {
 
 /** 状态徽标的配色类名；与 styles/childThreadPanel.css 中的状态变量对应。 */
 const STATUS_CLASSES: Record<ChildThreadStatus, string> = {
+  idle: "child-thread-status-idle",
   pending: "child-thread-status-pending",
   running: "child-thread-status-running",
   completed: "child-thread-status-completed",
@@ -37,7 +40,8 @@ export function mergeChildThreadHistory(previous: TurnHistoryPage | null, page: 
       ...execution,
       display_parts: [...new Map([...prior.display_parts, ...execution.display_parts].map((part) => [part.item_id, part])).values()]
         .sort((left, right) => left.logical_item_ordinal - right.logical_item_ordinal),
-      response_parts: mergeParts(prior.response_parts, execution.response_parts),
+      response_parts: mergeParts(prior.response_parts, execution.response_parts)
+        .sort(compareInternalResponseParts),
     } : execution;
     executions.set(execution.execution_id, merged);
   }

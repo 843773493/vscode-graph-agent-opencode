@@ -2,12 +2,20 @@ import { describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ChildThreadSummary } from "../../../types/backend";
+import type { ChildThreadList, ChildThreadSummary, TurnDetail } from "../../../types/backend";
+import type { useChildThreadConversation } from "../../../hooks/sessionTurnHistory/useChildThreadConversation";
+import type { ChildThreadForkPoint } from "./ChildThreadConversation";
 import {
   childThreadStatusClass,
   childThreadStatusLabel,
 } from "../../../state/childThreadDisplay";
 import ChildThreadPanel from "./ChildThreadPanel";
+
+test("跨 Gateway 的子线程面板显示目标工作区和会话归属", () => {
+  const html = renderToStaticMarkup(<ChildThreadPanel {...panelProps()} ownerLabel="gateway_remote · 目标工作区 · 目标会话" />);
+  expect(html).toContain("gateway_remote · 目标工作区 · 目标会话");
+  expect(html).toContain('data-child-owner-session="ses_parent"');
+});
 
 /** 递归提取 react-test-renderer 节点的全部文本。 */
 function textOf(node: { children: ReadonlyArray<unknown> }): string {
@@ -43,25 +51,111 @@ function panelProps(overrides: {
 } = {}) {
   return {
     threads: [] as ChildThreadSummary[],
+    teams: [] as ChildThreadList["teams"],
     total: 0,
     loading: false,
     error: null as string | null,
     loadedAt: "2026-09-15T12:30:00Z",
     sessionId: "ses_parent",
     mainThreadId: "thr_main_canonical",
+    ownerLabel: "本机 Gateway · 测试工作区 · 测试会话",
     activeThreadId: "thr_main_canonical",
     onRefresh: overrides.onRefresh ?? (() => {}),
     onSelectThread: overrides.onSelectThread ?? (() => {}),
     conversation: {
       selectedThread: null,
+      selectionIntent: null,
       snapshot: { history: null, report: null, view: "history" as const, draft: "", loading: false, sending: false, error: null, accepted: null, paged: false },
-      selectThread: () => {}, close: () => {}, setDraft: () => {},
+      selectThread: () => {}, selectThreadForOwner: () => {}, close: () => {}, setDraft: () => {},
       refresh: async () => {}, openReport: async () => {}, loadEarlier: async () => {}, send: async () => {}, isUnread: () => false,
     },
   };
 }
 
 describe("子会话线程面板", () => {
+  test("子线程对话单次展开按原序展示压缩前后正文", async () => {
+    const selected = thread(1);
+    const turn: TurnDetail = {
+      turn_id: "turn_child_order", job_id: "job_child_order", session_id: "ses_parent",
+      source_view_id: "view_child_order", source_view_revision: 3,
+      ordinal: 1, root_logical_item_ordinal: 0, revision: 1, status: "completed", items_view: "full",
+      created_at: "2026-09-15T12:00:00Z", updated_at: "2026-09-15T12:00:01Z",
+      user_messages: [{ message_id: "child_user_message", content: "子线程输入", attachments: [], created_at: "2026-09-15T12:00:00Z" }],
+      final_response: "最终响应", items: [],
+      activity_stats: { duration_ms: 100, item_count: 4 },
+      response_parts: [
+        { part_id: "child_before", kind: "reasoning", projection: "detail", status: "completed",
+          source: { message_sequence: 1, item_id: "child_item_before", logical_item_ordinal: 1 }, text: "压缩前思考" },
+        { part_id: "child_summary", kind: "compaction_summary", projection: "detail", status: "completed",
+          source: { message_sequence: 2, item_id: "child_item_summary", logical_item_ordinal: 2 }, text: "压缩摘要" },
+        { part_id: "child_after", kind: "reasoning", projection: "detail", status: "completed",
+          source: { message_sequence: 3, item_id: "child_item_after", logical_item_ordinal: 3 }, text: "压缩后思考" },
+        { part_id: "child_final", kind: "final_text", projection: "detail", status: "completed", final: true,
+          source: { message_sequence: 4, item_id: "child_item_final", logical_item_ordinal: 4 }, text: "最终响应" },
+      ],
+    };
+    const props = panelProps();
+    const conversation: ReturnType<typeof useChildThreadConversation> = {
+      ...props.conversation,
+      selectedThread: selected,
+      snapshot: { ...props.conversation.snapshot, history: {
+        thread_id: selected.thread_id, source_view_id: "view_child_order", source_view_revision: 3,
+        projection_epoch: 1, items: [turn], internal_executions: [],
+      } },
+    };
+    const clicks: { threadId: string; point: ChildThreadForkPoint }[] = [];
+    let renderer: ReactTestRenderer;
+    act(() => {
+      renderer = create(<ChildThreadPanel {...props} threads={[selected]} conversation={conversation}
+        onForkFromThread={(threadId, point) => { clicks.push({ threadId, point }); }} />);
+    });
+    const sources = () => renderer!.root.findAll((node) =>
+      typeof node.type === "string" && typeof node.props["data-response-sources"] === "string",
+    ).flatMap((node) => JSON.parse(node.props["data-response-sources"]));
+    const expected = turn.response_parts!.map(({ part_id, kind, source }) => ({ part_id, kind, source }));
+    expect(sources()).toEqual([expected[1], expected[3]]);
+    const toggle = renderer!.root.findByProps({ className: "chat-thinking-toggle" });
+    await act(async () => { await toggle.props.onClick(); });
+    expect(sources()).toEqual(expected);
+    expect(renderer!.root.findAllByProps({ className: "chat-thinking-toggle" })).toHaveLength(1);
+    act(() => { renderer!.root.findByProps({ "data-fork-item-id": "child_item_after" }).props.onClick(); });
+    expect(clicks).toEqual([{ threadId: selected.thread_id, point: {
+      sourceViewId: turn.source_view_id, sourceViewRevision: turn.source_view_revision, itemId: "child_item_after",
+    } }]);
+    await act(async () => { await toggle.props.onClick(); });
+    expect(sources()).toEqual([expected[1], expected[3]]);
+    const userFork = renderer!.root.find((node) =>
+      typeof node.props.className === "string"
+        && node.props.className.split(" ").includes("child-thread-user"),
+    ).findByType("button");
+    act(() => { userFork.props.onClick(); });
+    expect(clicks[clicks.length - 1]).toEqual({ threadId: selected.thread_id, point: {
+      sourceViewId: turn.source_view_id, sourceViewRevision: turn.source_view_revision, turnId: turn.turn_id,
+    } });
+    const threadFork = renderer!.root.findAllByType("button").find((node) => node.props.children === "从此线程创建分支");
+    expect(threadFork).toBeDefined();
+    act(() => { threadFork!.props.onClick(); });
+    expect(clicks[clicks.length - 1]).toEqual({ threadId: selected.thread_id, point: {} });
+    act(() => renderer!.unmount());
+  });
+
+  test("团队投影展示同一 Session 的协调者、成员角色和任务状态", () => {
+    const board: ChildThreadList["teams"][number] = {
+      team_id: "team_owner", session_id: "ses_parent", name: "README 审查团队", coordinator_thread_id: "thr_main_canonical", version: 4,
+      created_at: "2026-09-15T12:00:00Z", updated_at: "2026-09-15T12:30:00Z", recent_events: [],
+      members: [
+        { thread_id: "thr_main_canonical", role: "coordinator", source: "coordinator", work_mode: "write", instructions: "协调", status: "active", joined_at: "2026-09-15T12:00:00Z", updated_at: "2026-09-15T12:00:00Z" },
+        { thread_id: "thr_reviewer", role: "reviewer", source: "delegated", work_mode: "read_only", instructions: "审查", status: "active", joined_at: "2026-09-15T12:00:00Z", updated_at: "2026-09-15T12:00:00Z" },
+      ],
+      tasks: [{ task_id: "ttask_review", title: "核对 README", description: "核对文件", phase: "review", cycle: 2, assignee_thread_id: "thr_reviewer", status: "blocked", depends_on_task_ids: [], summary: "等待正文确认", updated_by_thread_id: "thr_main_canonical", created_at: "2026-09-15T12:00:00Z", updated_at: "2026-09-15T12:30:00Z" }],
+    };
+    const html = renderToStaticMarkup(<ChildThreadPanel {...panelProps()} teams={[board]} />);
+    for (const text of ["README 审查团队", "团队版本 4", "协调线程：thr_main_canonical", "coordinator", "reviewer", "核对 README", "受阻", "等待正文确认"]) expect(html).toContain(text);
+    expect(html).toContain('data-team-version="4"');
+    expect(html).toContain('data-team-task-status="blocked"');
+    expect(html).not.toContain("当前会话还没有委托子会话");
+  });
+
   test("列表渲染标题、subagent、时间与状态徽标", () => {
     const html = renderToStaticMarkup(
       <ChildThreadPanel

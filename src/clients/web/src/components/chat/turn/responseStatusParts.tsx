@@ -164,7 +164,9 @@ export function MessageStreamStatusPart({ conversation }: { conversation: Conver
     );
   }
   if (stream.streamStatus === "interrupted") {
-    return <>{activityHistory}<CancelledPart userInitiated /></>;
+    return historicalBoundaryStatus(conversation)
+      ? activityHistory
+      : <>{activityHistory}<CancelledPart userInitiated /></>;
   }
   if (stream.streamStatus === "failed" && stream.failure) {
     if (stream.failure.code === "job_timeout" || conversation.turnStatus === "timed_out") {
@@ -332,7 +334,16 @@ export function ResponsePart({
         value={item.text}
         className={item.active ? "is-streaming" : ""}
         streaming={item.active}
+        responseSources={item.responseSources ? JSON.stringify(item.responseSources) : undefined}
       />
+    );
+  }
+  if (item.kind === "aggregated_text" && item.partKind === "compaction") {
+    return (
+      <details className="chat-compaction-summary" data-response-sources={item.responseSources ? JSON.stringify(item.responseSources) : undefined}>
+        <summary>上下文压缩摘要</summary>
+        <MarkdownContent value={item.text} />
+      </details>
     );
   }
   if (

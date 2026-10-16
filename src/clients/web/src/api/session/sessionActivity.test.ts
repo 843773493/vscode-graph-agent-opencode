@@ -10,15 +10,20 @@ import {
   unwrapSessionCatalogFetch,
 } from "./sessionApiFetchMock";
 
-function streamResponse(chunks: string[], status = 200): Response {
+function streamResponse(chunks: string[], init: RequestInit | undefined): Response {
   const encoder = new TextEncoder();
+  const subscriptionId = JSON.parse(String(init?.body)).subscriptions[0].subscription_id as string;
+  const envelope = (state: string, frame?: string) => encoder.encode(`event: observation\ndata: ${JSON.stringify({
+    subscription_id: subscriptionId, state, ...(frame === undefined ? {} : { frame }),
+  })}\n\n`);
   return new Response(new ReadableStream<Uint8Array>({
     start(controller) {
-      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+      controller.enqueue(envelope("connected"));
+      for (const chunk of chunks) controller.enqueue(envelope("frame", chunk));
       controller.close();
     },
   }), {
-    status,
+    status: 200,
     headers: { "content-type": "text/event-stream" },
   });
 }
@@ -71,9 +76,13 @@ describe("Workspace 会话活动 API", () => {
   });
 
   test("SSE 活动事件解析 id 并转发游标", async () => {
-    installSessionCatalogFetchMock(() => streamResponse([
+    let request: RequestInit | undefined;
+    installSessionCatalogFetchMock(({ init }) => {
+      request = init;
+      return streamResponse([
         "id: 8\nevent: session_activity\ndata: {\"event_seq\":8,\"event_id\":\"evt-8\",\"session_id\":\"session-8\",\"status\":\"failed\",\"summary\":\"任务失败\",\"occurred_at\":\"2026-08-16T00:00:00Z\"}\n\n",
-      ]), { credentialToken: "activity-token" });
+      ], init);
+    }, { credentialToken: "activity-token" });
     const received: number[] = [];
 
     await streamSessionActivity(48_202, workspaceTarget, {
@@ -84,6 +93,7 @@ describe("Workspace 会话活动 API", () => {
       },
     });
     expect(received).toEqual([8]);
+    expect(JSON.parse(String(request?.body)).subscriptions[0].activity_after).toBe(7);
   });
 
   test("游标失效直接暴露给调用方", async () => {
@@ -104,8 +114,12 @@ describe("Workspace 会话活动流空闲超时", () => {
 
     const port = 48_204;
     let streamCancelled = false;
-    installSessionCatalogFetchMock(() => new Response(new ReadableStream<Uint8Array>({
-        start() {},
+    installSessionCatalogFetchMock(({ init }) => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(`event: observation\ndata: ${JSON.stringify({
+            subscription_id: JSON.parse(String(init?.body)).subscriptions[0].subscription_id, state: "connected",
+          })}\n\n`));
+        },
         cancel() {
           streamCancelled = true;
         },

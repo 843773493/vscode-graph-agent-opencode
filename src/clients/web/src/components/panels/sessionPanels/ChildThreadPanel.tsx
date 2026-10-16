@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { ChildThreadSummary } from "../../../types/backend";
+import type { ChildThreadList, ChildThreadSummary } from "../../../types/backend";
 import { copyTextToClipboard } from "../../../utils/clipboard";
 import { formatDateTime } from "../../../utils/format";
 import {
@@ -9,6 +9,7 @@ import {
 import { errorMessage } from "../../../utils/errorMessage";
 import type { useChildThreadConversation } from "../../../hooks/sessionTurnHistory/useChildThreadConversation";
 import ChildThreadConversation from "./ChildThreadConversation";
+import type { ChildThreadForkPoint } from "./ChildThreadConversation";
 
 /** child thread 在列表中的图标；用分支语义表达“从 owner 会话派生”。 */
 const CHILD_THREAD_ICON = "codicon-git-branch";
@@ -20,29 +21,35 @@ const CHILD_THREAD_ICON = "codicon-git-branch";
  */
 export default function ChildThreadPanel({
   threads,
+  teams,
   total,
   loading,
   error,
   loadedAt,
   sessionId,
+  ownerLabel,
   mainThreadId,
   activeThreadId,
   onRefresh,
   onSelectThread,
+  onForkFromThread,
   conversation,
 }: {
   threads: ChildThreadSummary[];
+  teams: ChildThreadList["teams"];
   total: number;
   loading: boolean;
   error: string | null;
   loadedAt: string | null;
   sessionId: string;
+  ownerLabel: string;
   /** 当前会话在权威 catalog 中解析出的 canonical main thread ID。 */
   mainThreadId: string | null;
   /** 当前调试 owner 的 thread id。 */
   activeThreadId: string | null;
   onRefresh: () => void;
-  onSelectThread: (threadId: string) => void;
+  onSelectThread?: (threadId: string) => void;
+  onForkFromThread?: (threadId: string, point: ChildThreadForkPoint) => void;
   conversation: ReturnType<typeof useChildThreadConversation>;
 }) {
   const [notice, setNotice] = useState("");
@@ -91,6 +98,10 @@ export default function ChildThreadPanel({
         </button>
       </div>
 
+      <div className="panel-header-meta" data-child-owner-session={sessionId}>
+        {ownerLabel}
+      </div>
+
       {notice ? (
         <div
           className={`child-thread-notice${noticeError ? " is-error" : ""}`}
@@ -112,7 +123,7 @@ export default function ChildThreadPanel({
       {!loading && error ? (
         <div className="empty-state">子会话线程加载失败：{error}</div>
       ) : null}
-      {!loading && !error && threads.length === 0 && sessionId ? (
+      {!loading && !error && threads.length === 0 && teams.length === 0 && sessionId ? (
         <div className="empty-state">
           当前会话还没有委托子会话；Agent 委派 subagent 后，这里会显示对应的子会话线程。
         </div>
@@ -123,6 +134,25 @@ export default function ChildThreadPanel({
 
       {!loading && !error && (threads.length > 0 || Boolean(sessionId)) ? (
         <div className="child-thread-list" role="list">
+          {teams.map((team) => (
+            <article key={team.team_id} className="child-thread-item" role="listitem" data-team-id={team.team_id} data-team-version={team.version}>
+              <div className="child-thread-copy"><strong>{team.name}</strong><small>团队版本 {team.version}</small></div>
+              <div className="child-thread-job-status">协调线程：{team.coordinator_thread_id}</div>
+              {team.members.map((member) => (
+                <div key={member.thread_id} className="child-thread-runtime" data-team-member-thread-id={member.thread_id}>
+                  {member.role} · {member.work_mode === "read_only" ? "只读" : "可写"} · {member.thread_id}
+                </div>
+              ))}
+              {team.tasks.map((task) => (
+                <div key={task.task_id} className="child-thread-runtime" data-team-task-id={task.task_id} data-team-task-status={task.status}>
+                  <strong>{task.title}</strong> · {{ queued: "等待执行", in_progress: "进行中", blocked: "受阻", completed: "已完成", failed: "失败", cancelled: "已取消" }[task.status as "queued" | "in_progress" | "blocked" | "completed" | "failed" | "cancelled"]}
+                  <div>执行线程：{task.assignee_thread_id} · {task.phase} · 第 {task.cycle} 轮</div>
+                  {task.summary ? <div>{task.summary}</div> : null}
+                  {task.error ? <div role="alert">{task.error}</div> : null}
+                </div>
+              ))}
+            </article>
+          ))}
           {sessionId ? (
             <article
               className="child-thread-item child-thread-owner-item"
@@ -134,9 +164,9 @@ export default function ChildThreadPanel({
                   type="button"
                   className="child-thread-main"
                   onClick={() => {
-                    if (mainThreadId) onSelectThread(mainThreadId);
+                    if (mainThreadId) onSelectThread?.(mainThreadId);
                   }}
-                  disabled={!mainThreadId}
+                  disabled={!mainThreadId || !onSelectThread}
                   title="切换调试 owner：主线程"
                   aria-label="切换到主线程调试"
                 >
@@ -190,9 +220,9 @@ export default function ChildThreadPanel({
                       {childThreadStatusLabel(thread.status)}
                     </span>
                   </button>
-                  <button type="button" className="child-thread-copy-id" onClick={() => onSelectThread(thread.thread_id)} aria-label={`调试子线程：${thread.thread_id}`} title={isCurrent ? "当前调试 owner" : "调试此子线程"}>
+                  {onSelectThread ? <button type="button" className="child-thread-copy-id" onClick={() => onSelectThread(thread.thread_id)} aria-label={`调试子线程：${thread.thread_id}`} title={isCurrent ? "当前调试 owner" : "调试此子线程"}>
                     <span className="codicon codicon-debug" aria-hidden="true" />
-                  </button>
+                  </button> : null}
                   <button
                     type="button"
                     className="child-thread-copy-id"
@@ -227,7 +257,8 @@ export default function ChildThreadPanel({
           })}
         </div>
       ) : null}
-      {conversation.selectedThread ? <ChildThreadConversation thread={conversation.selectedThread} conversation={conversation} /> : null}
+      {conversation.selectedThread ? <ChildThreadConversation thread={conversation.selectedThread} conversation={conversation}
+        onFork={onForkFromThread ? (point) => onForkFromThread(conversation.selectedThread!.thread_id, point) : undefined} /> : null}
     </section>
   );
 }

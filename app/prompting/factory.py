@@ -66,6 +66,21 @@ class InternalMessageFactory:
         body = "\n".join(part for part in body_parts if part)
         content = f"<system_reminder>\n{body}\n</system_reminder>"
 
+        return PreparedInternalMessage(
+            content=content,
+            metadata=self.metadata_for(
+                kind=kind, metadata=metadata, display_content=display_content,
+                display_provenance=display_provenance,
+            ),
+        )
+
+    def metadata_for(
+        self, *, kind: str, metadata: Mapping[str, object] | None = None,
+        display_content: str | None = None,
+        display_provenance: InternalDisplayProvenance | None = None,
+    ) -> dict[str, object]:
+        """新建与已冻结正文恢复共用注册表中的唯一 metadata 投影。"""
+        kind_spec = self._registry.internal_message_kind(kind)
         resolved_metadata = dict(metadata or {})
         reserved_keys = {
             "internal",
@@ -108,10 +123,7 @@ class InternalMessageFactory:
             raise ValueError(
                 f"内部结构消息 kind={kind} 使用隐藏展示策略，不能提供 display_content"
             )
-        return PreparedInternalMessage(
-            content=content,
-            metadata=resolved_metadata,
-        )
+        return resolved_metadata
 
     def render_system_prompt_section(self, section: PromptSection) -> str:
         spec = self._registry.tag(section.tag)

@@ -11,6 +11,7 @@ from app.protocol.openapi import protobuf_message_name_for_model
 from app.schemas.internal_v2.session_interaction import SessionExecutionSseDTO
 from app.schemas.internal_v2.trace import TraceEventDTO
 from app.schemas.internal_v2.workspace import WorkspaceFileChangeBatchDTO
+from app.schemas.internal_v2.workspace_observation import WorkspaceObservationFrameDTO
 
 
 class SseErrorDTO(BaseModel):
@@ -24,6 +25,7 @@ SSE_EVENT_MODELS: dict[str, type[BaseModel]] = {
         SessionExecutionSseDTO,
         WorkspaceFileChangeBatchDTO,
         SseErrorDTO,
+        WorkspaceObservationFrameDTO,
     )
 }
 

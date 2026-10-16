@@ -5,7 +5,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
 SessionChangesetKind = Literal["all", "turn"]
 SessionFileChangeKind = Literal["create", "edit", "delete"]
 
@@ -38,6 +37,7 @@ class SessionFileChangeDTO(BaseModel):
     deletions: int = 0
     reviewed: bool = False
     latest_edit_id: str
+    # 保留 ToolMessage 携带的 Provider 原始 call ID；不是 ModelCall 作用域 canonical ID，也不是执行或重试 ID。
     tool_call_ids: list[str] = Field(default_factory=list)
     execution_ids: list[str] = Field(default_factory=list)
     turn_ids: list[str] = Field(default_factory=list)

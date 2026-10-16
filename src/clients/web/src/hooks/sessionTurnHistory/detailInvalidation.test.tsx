@@ -2,7 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import {
+  HISTORY_SOURCE_BINDING,
   SESSION_ID,
+  THREAD_ID,
   SCOPE_KEY,
   WORKSPACE_ID,
   appState,
@@ -21,6 +23,61 @@ afterEach(() => {
 });
 
 describe("useSessionTurnHistory detail invalidation", () => {
+  test("同 Session 重新加载后旧强刷完成不能抵扣新 scope 的刷新", async () => {
+    const apiPort = 9116;
+    const turnId = "turn_scope_force_refresh";
+    installWindow(apiPort);
+    let currentState = appState();
+    let history!: ReturnType<typeof useSessionTurnHistory>;
+    let detailCalls = 0;
+    let releaseOld!: () => void;
+    const oldGate = new Promise<void>((resolve) => { releaseOld = resolve; });
+    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
+      const path = new URL(String(args[0]), `http://127.0.0.1:${apiPort}`).pathname;
+      if (path === "/api/gateway/auth/local-credential") return Response.json({ data: { token: "force-scope-token" } });
+      if (path.endsWith("/bootstrap")) return Response.json({ code: 0, message: "ok", request_id: "req_force_scope_bootstrap",
+        data: { ...bootstrap("ready", 1), latest_turn: null } });
+      if (path.endsWith("/history")) {
+        const parameters = JSON.parse(String(args[1]?.body));
+        if (parameters.direction === "tail") return emptyHistoryPageResponse("req_force_scope_tail");
+        const requestNumber = ++detailCalls;
+        if (requestNumber === 1) await oldGate;
+        return Response.json({ code: 0, message: "ok", request_id: `req_force_scope_${requestNumber}`, data: {
+          thread_id: THREAD_ID,
+          ...HISTORY_SOURCE_BINDING,
+          projection_epoch: 1, items: [{ ...turnDetail(1), turn_id: turnId,
+            job_id: "job_scope_force_refresh", revision: requestNumber, final_response: `scope ${requestNumber}` }],
+        } });
+      }
+      throw new Error(`测试收到未预期请求: ${path}`);
+    }, { preconnect: originalFetch.preconnect });
+    function Harness({ reloadNonce }: { reloadNonce: number }): React.ReactNode {
+      history = useSessionTurnHistory({ apiPort, sessionId: SESSION_ID,
+        workspaceId: WORKSPACE_ID, sessionCacheKey: SCOPE_KEY,
+        getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
+        reloadNonce, setState: (update) => {
+          currentState = typeof update === "function" ? update(currentState) : update;
+        } });
+      return null;
+    }
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<Harness reloadNonce={0} />); await wait(40); });
+    let oldRefresh!: Promise<void>;
+    await act(async () => {
+      oldRefresh = history.loadTurnDetails([turnId], "terminal-old-scope", true);
+      await wait(30);
+    });
+    expect(detailCalls).toBe(1);
+    await act(async () => { renderer.update(<Harness reloadNonce={1} />); await wait(40); await oldRefresh; });
+    await act(async () => { await history.loadTurnDetails([turnId], "terminal-new-scope", true); });
+    expect(detailCalls).toBe(2);
+    const refreshedTurn = currentState.turnTimelinesBySession.get(SCOPE_KEY)?.turnsById[turnId];
+    expect(refreshedTurn && "final_response" in refreshedTurn ? refreshedTurn.final_response : null).toBe("scope 2");
+    await act(async () => { releaseOld(); await wait(30); });
+    expect(currentState.turnTimelinesBySession.get(SCOPE_KEY)?.turnsById[turnId]?.revision).toBe(2);
+    act(() => renderer.unmount());
+  });
+
   test("连续失效会在每个悬挂详情请求后追取更高 revision", async () => {
     const apiPort = 9116;
     installWindow(apiPort);
@@ -59,6 +116,8 @@ describe("useSessionTurnHistory detail invalidation", () => {
             message: "ok",
             request_id: `req_details_dirty_${requestNumber}`,
             data: {
+              thread_id: THREAD_ID,
+              ...HISTORY_SOURCE_BINDING,
               projection_epoch: 1,
               items: [{
                 ...turnDetail(1),
@@ -163,7 +222,7 @@ describe("useSessionTurnHistory detail invalidation", () => {
             code: 0,
             message: "ok",
             request_id: "req_details_future",
-            data: { items: [turnDetail(2)], projection_epoch: 2 },
+            data: { thread_id: THREAD_ID, ...HISTORY_SOURCE_BINDING, items: [turnDetail(2)], projection_epoch: 2 },
           });
         }
         if (path.endsWith("/message-streams/availability")) {
@@ -407,7 +466,7 @@ describe("useSessionTurnHistory detail invalidation", () => {
             code: 0,
             message: "ok",
             request_id: "req_details_retry",
-            data: { projection_epoch: 1, items: [turnDetail(1)] },
+            data: { thread_id: THREAD_ID, ...HISTORY_SOURCE_BINDING, projection_epoch: 1, items: [turnDetail(1)] },
           });
         }
         throw new Error(`测试收到未预期请求: ${path}`);

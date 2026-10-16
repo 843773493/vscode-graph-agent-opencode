@@ -282,14 +282,18 @@ class SessionOrchestrator:
         import logging
         logger = logging.getLogger(__name__)
         session = await self._session_service.get(session_id)
-        # 普通聊天入口显式解析 main thread：执行 Turn 归属由 catalog 冻结指针
-        # 决定，并由 SessionDTO 投影回响应；不得用 session_id 冒充 thread_id。
-        thread_id = thread_id if thread_id is not None else session.thread_id
-        if thread_id is None:
-            raise RuntimeError(
-                "SessionDTO 缺少权威 main thread 身份，无法派发消息（fail closed）: "
-                f"session_id={session_id}"
+        if message.session_id != session_id:
+            raise ValueError(
+                f"消息派发 Session 与持久 owner 不一致: requested={session_id} "
+                f"message={message.session_id} message_id={message.message_id}"
             )
+        if thread_id is not None and thread_id != message.thread_id:
+            raise ValueError(
+                f"消息派发 Thread 与持久 owner 不一致: requested={thread_id} "
+                f"message={message.thread_id} message_id={message.message_id}"
+            )
+        # prepare 阶段已冻结消息 owner；恢复和生成器派发只消费该身份。
+        thread_id = message.thread_id
         self._session_service.path_resolver.resolve_thread_node(session_id, thread_id)
         if requested_agent_id is None:
             requested_agent_id = session.current_agent_id
@@ -304,6 +308,15 @@ class SessionOrchestrator:
             **message.metadata,
             "boxteam_session_provider_id": session.current_provider_id,
         }
+        if execution_binding is None:
+            if reserved_job_id is not None:
+                raise ValueError("未预留 execution binding 时不得单独预留 Job ID")
+            execution_binding = self._job_service.reserve_user_execution_identity()
+        if isinstance(execution_binding, UserExecutionIdentity):
+            self._message_service.accept_user_message(
+                message,
+                execution_identity=execution_binding,
+            )
         dispatch = await self._job_service.start_job(
             session_id,
             message.content,
@@ -345,6 +358,7 @@ class SessionOrchestrator:
         return MessageRunAccepted(
             message_id=message.message_id,
             job_id=job_id,
+            turn_id=(execution_binding.turn_id if isinstance(execution_binding, UserExecutionIdentity) else None),
             status=dispatch.job_status,
             dispatch=dispatch,
             thread_id=thread_id,

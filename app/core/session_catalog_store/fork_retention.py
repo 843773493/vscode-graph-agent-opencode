@@ -1,8 +1,8 @@
 """fork_retention_claims 一条垂直链路（pinned retention 占位）。
 
 承载 claim 行投影、create-or-get 准入（source 必须 active，删除先行则零
-副作用失败）、preparing→active 的 CAS 激活、released 终结、按 target 批量
-释放、按 source 列未释放 claim，以及整树删除前的 fail-closed 预检。
+副作用失败）、preparing→active 的 CAS 激活、released 终结、按 target
+读取精确 claim、按 source 列未释放 claim，以及整树删除前的 fail-closed 预检。
 
 错误分类沿用宿主约定：``TypeError`` 输入类型错误、``ValueError`` 输入形态
 非法、``KeyError`` 目标行不存在、``RuntimeError`` 语义冲突。
@@ -269,40 +269,20 @@ class ForkRetentionMixin:
                 raise KeyError(f"fork retention claim 不存在: {claim_id!r}")
             return self._fork_retention_claim_from_row(row)
 
-    def release_fork_retention_claims_for_target(
+    def list_fork_retention_claims_for_target(
         self,
         target_session_id: str,
-        reason: str,
-        *,
-        connection: sqlite3.Connection | None = None,
-    ) -> tuple[str, ...]:
-        """释放全部以 ``target_session_id`` 为 target 的未释放 claim。
-
-        用于 target 会话被删除时的 source 侧释放：删除 target 先去本地记录
-        ``ForkRetentionReleaseRecord``，再取 source gate 释放精确 claim（本方法
-        承担 source 侧一步）。返回被释放的 claim_id 元组（已 released 的跳过）。
-        """
+    ) -> tuple[ForkRetentionClaim, ...]:
+        """只枚举权威 target claim；释放必须由 target record 驱动精确 ID。"""
         validate_session_id(target_session_id)
-        if not isinstance(reason, str) or not reason:
-            raise ValueError("release reason 不能为空")
-        transaction = (
-            self.write_transaction()
-            if connection is None
-            else nullcontext(connection)
-        )
-        with transaction as active:
-            rows = active.execute(
+        with self.read_transaction() as connection:
+            rows = connection.execute(
                 f"SELECT {_FORK_RETENTION_CLAIM_COLUMNS} FROM fork_retention_claims "
-                "WHERE target_session_id = ? AND state IN ('preparing', 'active') "
+                "WHERE target_session_id = ? "
                 "ORDER BY fork_retention_claim_id",
                 (target_session_id,),
             ).fetchall()
-            released: list[str] = []
-            for row in rows:
-                claim_id = str(row["fork_retention_claim_id"])
-                self._mark_claim_released(active, claim_id, reason)
-                released.append(claim_id)
-            return tuple(released)
+            return tuple(self._fork_retention_claim_from_row(row) for row in rows)
 
     def list_pinned_claims_for_source(
         self,
@@ -348,4 +328,3 @@ class ForkRetentionMixin:
                 claim_id=claim.fork_retention_claim_id,
                 target_session_id=claim.target_session_id,
             )
-

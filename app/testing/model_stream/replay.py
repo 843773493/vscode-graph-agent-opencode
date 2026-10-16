@@ -5,12 +5,12 @@ from typing import Literal
 
 import httpx
 
-from .assets import Interaction, ModelStreamCassette
-from .context import current_replay_session_id
+from .assets import Interaction, ModelStreamCassette, load_cassette
+from .context import current_model_call_identity
 from .errors import ModelStreamMatchError
 from .matcher import StrictRequestMatcher, request_summary
 
-ReplayPolicyName = Literal["request_reusable", "session_sequence"]
+ReplayPolicyName = Literal["request_reusable", "call_identity"]
 
 
 @dataclass(slots=True)
@@ -20,58 +20,23 @@ class ReplayCoordinator:
     policy: ReplayPolicyName
     matcher: StrictRequestMatcher = field(default_factory=StrictRequestMatcher)
     _hit_counts: dict[int, int] = field(default_factory=dict)
-    _session_steps: dict[str, dict[str, int]] = field(default_factory=dict)
 
     def select(self, request: httpx.Request) -> Interaction:
         if self.policy == "request_reusable":
-            interaction = self.matcher.require_one(
-                self.cassette,
-                request,
-                scenario_id=self.scenario_id,
-            )
-            self._hit_counts[interaction.index] = self._hit_counts.get(interaction.index, 0) + 1
-            return interaction
-
-        session_id = current_replay_session_id()
-        if session_id is None:
-            raise ModelStreamMatchError(
-                "模型 stream session_sequence 需要 transport request context 中的 "
-                "replay_session_id"
-            )
-        candidates = self.matcher.matching_interactions(self.cassette, request)
-        if not candidates:
-            raise ModelStreamMatchError(
-                "模型 stream session_sequence 没有匹配 interaction: "
-                f"scenario={self.scenario_id!r}, asset={self.cassette.path or '<memory>'!s}, "
-                f"actual={request_summary(request)!r}"
-            )
-        session_steps = self._session_steps.setdefault(session_id, {})
-        ready = tuple(
-            interaction
-            for interaction in candidates
-            if interaction.replay is not None
-            and interaction.replay.step
-            == session_steps.get(interaction.replay.sequence_id, 0)
-        )
-        if len(ready) != 1:
-            expected = {
-                interaction.index: (
-                    interaction.replay.sequence_id,
-                    interaction.replay.step,
+            interaction = self.matcher.require_one(self.cassette, request, scenario_id=self.scenario_id)
+        else:
+            identity = current_model_call_identity()
+            cassette = load_cassette(self.cassette.path) if self.cassette.path is not None else self.cassette
+            matches = tuple(entry for entry in self.matcher.matching_interactions(cassette, request)
+                            if entry.identity == identity)
+            if len(matches) != 1:
+                raise ModelStreamMatchError(
+                    "模型 stream call_identity 未唯一匹配: "
+                    f"scenario={self.scenario_id!r}, identity={identity.to_dict()!r}, "
+                    f"asset={self.cassette.path or '<memory>'!s}, matched={[entry.index for entry in matches]!r}, "
+                    f"actual={request_summary(request)!r}"
                 )
-                for interaction in candidates
-                if interaction.replay is not None
-            }
-            raise ModelStreamMatchError(
-                "模型 stream session_sequence 无法唯一选择 interaction: "
-                f"scenario={self.scenario_id!r}, session={session_id!r}, "
-                f"expected={expected!r}"
-            )
-        interaction = ready[0]
-        replay = interaction.replay
-        if replay is None:
-            raise RuntimeError("session_sequence 选中的 interaction 缺少 replay 元数据")
-        session_steps[replay.sequence_id] = replay.step + 1
+            interaction = matches[0]
         self._hit_counts[interaction.index] = self._hit_counts.get(interaction.index, 0) + 1
         return interaction
 

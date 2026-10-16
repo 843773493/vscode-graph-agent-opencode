@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from contextlib import nullcontext
 
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.resource_activation import (
     ResourceActivationContractError,
     ResourceActivationPolicySnapshot,
@@ -28,6 +30,7 @@ from app.services.infrastructure.rollout_context.activation.common import (
     SNAPSHOT_CONFLICT_CODE,
     ResourceActivationStoreError,
     _detail_ref_from_key,
+    _detail_ref_key,
     _lineage_by_resource,
     _member_bindings_for_resource,
     _optional_detail_ref_from_key,
@@ -38,6 +41,12 @@ from app.services.infrastructure.rollout_context.activation.schema import (
 )
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailUnavailableError,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    require_historical_scope,
+)
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutReadSnapshot,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
@@ -95,6 +104,91 @@ def read_activation_refs_for_turns(
     )
 
 
+def binding_assembly_id(
+    connection: sqlite3.Connection,
+    snapshot: ResourceActivationSnapshotRef,
+    binding: ResourceProvenanceRef,
+    *,
+    storage_owner: tuple[str, str],
+    read_lineage_manifest: Callable[[DetailRef], Mapping[str, object]],
+) -> str:
+    """当前 catalog 验证历史正文归属；继承和重试不改写原 DetailRef。"""
+    if not isinstance(snapshot, ResourceActivationSnapshotRef) or not isinstance(
+        binding, ResourceProvenanceRef
+    ):
+        raise TypeError("payload 读取需要 typed activation snapshot 与 binding")
+    by_resource = tuple(item for item in snapshot.bindings if item.resource_id == binding.resource_id)
+    by_ordinal = tuple(item for item in snapshot.bindings if item.activation_ordinal == binding.activation_ordinal)
+    if by_resource != (binding,) or by_ordinal != (binding,):
+        raise ResourceActivationStoreError(
+            HASH_MISMATCH_CODE,
+            "payload binding 的 resource_id/activation_ordinal 不属于 snapshot: "
+            f"{binding.resource_id}#{binding.activation_ordinal}",
+        )
+    root = (
+        snapshot.parent
+        if snapshot.snapshot_kind == "model_call" and snapshot.parent is not None
+        and binding in snapshot.parent.bindings else snapshot
+    )
+    require_historical_scope(
+        connection, root.owner_session_id, root.owner_thread_id, current_owner=storage_owner,
+    )
+    ref = binding.detail_ref
+    if ref is not None:
+        ref.require_owner(root.owner_session_id, root.owner_thread_id)
+    if ref is None or ref.assembly_id == root.activation_snapshot_id:
+        return root.activation_snapshot_id
+    if root.turn_id is None or root.snapshot_kind != "execution":
+        raise ResourceActivationStoreError(
+            HASH_MISMATCH_CODE, "internal/model_call binding 不得借用其它冻结 snapshot 正文",
+        )
+    # 同真实用户 Turn 的新 execution 只能复用完整相同的旧 binding/lineage。
+    row = connection.execute(
+        "SELECT b.resource_id, b.activation_ordinal, b.display_uri, b.resource_kind, b.owner_scope, b.facet, "
+        "b.revision, b.availability, b.content_length, b.content_hash, b.effective_boundary, "
+        "b.captured_registry_generation, b.source_lineage_digest, b.detail_ref, "
+        "s.lineage_detail_ref, s.lineage_manifest_digest "
+        "FROM resource_activation_snapshots s JOIN resource_activation_bindings b "
+        "ON b.session_id=s.session_id AND b.thread_id=s.thread_id "
+        "AND b.activation_snapshot_id=s.activation_snapshot_id "
+        "WHERE s.session_id=? AND s.thread_id=? AND s.snapshot_kind='execution' "
+        "AND s.activation_snapshot_id=? AND s.turn_id=? AND b.resource_id=? AND b.activation_ordinal=?",
+        (root.owner_session_id, root.owner_thread_id, ref.assembly_id, root.turn_id,
+         binding.resource_id, binding.activation_ordinal),
+    ).fetchone()
+    expected = (
+        binding.resource_id, binding.activation_ordinal, binding.display_uri,
+        binding.resource_kind, binding.owner_scope, binding.facet, binding.revision,
+        binding.availability, binding.content_length, binding.content_hash,
+        binding.effective_boundary, binding.captured_registry_generation,
+        binding.source_lineage_digest, _detail_ref_key(ref, field="detail_ref"),
+    )
+    if row is None or row[:-2] != expected:
+        raise ResourceActivationStoreError(
+            HASH_MISMATCH_CODE, "retry binding 的原冻结正文关系不一致",
+        )
+    lineage_ref = _detail_ref_from_key(row[-2], field="lineage_detail_ref")
+    lineage_ref.require_owner(root.owner_session_id, root.owner_thread_id, ref.assembly_id)
+    manifest = read_lineage_manifest(lineage_ref)
+    if sha256_jcs(manifest) != row[-1]:
+        raise ResourceActivationStoreError(
+            HASH_MISMATCH_CODE, "retry 原冻结 lineage manifest digest 不一致",
+        )
+    lineages = _lineage_by_resource(manifest)
+    lineage = _source_lineage_ref_for_binding(
+        lineages, resource_id=binding.resource_id,
+        expected_ordinal=binding.activation_ordinal,
+        expected_digest=binding.source_lineage_digest,
+    )
+    if lineage != binding.source_lineage_ref or _member_bindings_for_resource(
+        lineages, resource_id=binding.resource_id,
+    ) != binding.members:
+        raise ResourceActivationStoreError(
+            HASH_MISMATCH_CODE, "retry binding 的完整 protected 成员/lineage 事实不一致",
+        )
+    return ref.assembly_id
+
+
 class ResourceActivationReadMixin:
     """按稳定 identity 只读恢复 snapshot / assembly binding；不写事实。"""
 
@@ -122,7 +216,11 @@ class ResourceActivationReadMixin:
                 thread_id=thread_id,
                 activation_snapshot_id=activation_snapshot_id,
             )
-        return self._build_snapshot(raw, checkpoint_ns=checkpoint_ns)
+        return self._build_snapshot(
+            raw, read_lineage_manifest=lambda ref: self._lineage_body.read_lineage_manifest(
+                detail_ref=ref, checkpoint_ns=checkpoint_ns, storage_owner=(session_id, thread_id),
+            ),
+        )
 
     def find_snapshot(
         self,
@@ -151,7 +249,11 @@ class ResourceActivationReadMixin:
                 connection, session_id=session_id, thread_id=thread_id,
                 activation_snapshot_id=activation_snapshot_id,
             )
-        return self._build_snapshot(raw, checkpoint_ns=checkpoint_ns)
+        return self._build_snapshot(
+            raw, read_lineage_manifest=lambda ref: self._lineage_body.read_lineage_manifest(
+                detail_ref=ref, checkpoint_ns=checkpoint_ns, storage_owner=(session_id, thread_id),
+            ),
+        )
 
     def frozen_for_admission(
         self, admission: ExecutionAdmission, *, checkpoint_ns: str = ""
@@ -203,7 +305,12 @@ class ResourceActivationReadMixin:
                 session_id=admission.session_id, thread_id=admission.thread_id,
                 activation_snapshot_id=strict_text(row[0], field="activation_snapshot_id"),
             )
-        return self._build_snapshot(raw, checkpoint_ns=checkpoint_ns)
+        return self._build_snapshot(
+            raw, read_lineage_manifest=lambda ref: self._lineage_body.read_lineage_manifest(
+                detail_ref=ref, checkpoint_ns=checkpoint_ns,
+                storage_owner=(admission.session_id, admission.thread_id),
+            ),
+        )
 
     def read_assembly_binding(
         self,
@@ -232,6 +339,7 @@ class ResourceActivationReadMixin:
         thread_id: str,
         assembly_id: str,
         checkpoint_ns: str = "",
+        snapshot: RolloutReadSnapshot | None = None,
     ) -> Mapping[str, object] | None:
         """只读查找 assembly activation 绑定；无 activation 事实时返回 None。
 
@@ -240,24 +348,34 @@ class ResourceActivationReadMixin:
         """
 
         thread_id = self._storage.storage._resolve_thread_identity(session_id, thread_id)
-        with self._storage.storage._connect(
-            thread_id, checkpoint_ns, session_id=session_id, read_only=True
+        with (
+            self._storage.storage.open_read_snapshot(session_id, thread_id, checkpoint_ns)
+            if snapshot is None else nullcontext(snapshot)
+        ) as read_snapshot, self._storage.storage.read_connection(
+            session_id, thread_id, checkpoint_ns, snapshot=read_snapshot,
         ) as connection:
             self._storage.storage._require_v2_runtime(connection)
             self.require_schema(connection)
             row = connection.execute(
                 f"SELECT {','.join(ASSEMBLY_BINDING_COLUMNS)} "
                 "FROM resource_activation_assembly_bindings "
-                "WHERE assembly_id = ? AND session_id = ? AND thread_id = ?",
-                (assembly_id, session_id, thread_id),
+                "WHERE assembly_id = ?",
+                (assembly_id,),
             ).fetchone()
             if row is None:
                 return None
             record = dict(zip(ASSEMBLY_BINDING_COLUMNS, row, strict=True))
+            historical_owner = (
+                strict_text(record["session_id"], field="session_id"),
+                strict_text(record["thread_id"], field="thread_id"),
+            )
+            require_historical_scope(
+                connection, *historical_owner, current_owner=(session_id, thread_id),
+            )
             raw = self._read_raw_snapshot(
                 connection,
-                session_id=session_id,
-                thread_id=thread_id,
+                session_id=historical_owner[0],
+                thread_id=historical_owner[1],
                 activation_snapshot_id=strict_text(
                     record["activation_snapshot_id"],
                     field="activation_snapshot_id",
@@ -268,22 +386,27 @@ class ResourceActivationReadMixin:
                 "WHERE assembly_id = ?",
                 (assembly_id,),
             ).fetchone()
-        snapshot = self._build_snapshot(raw, checkpoint_ns=checkpoint_ns)
+            activation = self._build_snapshot(
+                raw, read_lineage_manifest=lambda ref: self._lineage_body.read_lineage_manifest(
+                    detail_ref=ref, checkpoint_ns=checkpoint_ns,
+                    storage_owner=(session_id, thread_id), snapshot=read_snapshot,
+                ),
+            )
         if assembly_owner != (
-            snapshot.owner_session_id, snapshot.owner_thread_id,
-            snapshot.execution_id, snapshot.turn_id,
+            activation.owner_session_id, activation.owner_thread_id,
+            activation.execution_id, activation.turn_id,
         ):
             raise ResourceActivationStoreError(
                 SNAPSHOT_CONFLICT_CODE, f"assembly 与 activation 真实 owner 不一致: {assembly_id}"
             )
-        if record["bindings_hash"] != snapshot.bindings_hash or record[
+        if record["bindings_hash"] != activation.bindings_hash or record[
             "activation_provenance_hash"
-        ] != snapshot.activation_provenance_hash:
+        ] != activation.activation_provenance_hash:
             raise ResourceActivationStoreError(
                 HASH_MISMATCH_CODE,
                 f"assembly binding 与 snapshot hash 不一致: {assembly_id}",
             )
-        return {**record, "snapshot": snapshot}
+        return {**record, "snapshot": activation}
 
     def _read_raw_snapshot(
         self,
@@ -295,6 +418,7 @@ class ResourceActivationReadMixin:
     ) -> dict[str, object]:
         """在单个只读连接内读取 snapshot 行 + binding 行 + parent 链原始事实。"""
 
+        require_historical_scope(connection, session_id, thread_id)
         row = connection.execute(
             f"SELECT {','.join(SNAPSHOT_COLUMNS)} "
             "FROM resource_activation_snapshots WHERE session_id = ? "
@@ -346,13 +470,16 @@ class ResourceActivationReadMixin:
         }
 
     def _build_snapshot(
-        self, raw: Mapping[str, object], *, checkpoint_ns: str
+        self, raw: Mapping[str, object], *,
+        read_lineage_manifest: Callable[[DetailRef], Mapping[str, object]],
     ) -> ResourceActivationSnapshotRef:
         record = raw["record"]
         assert isinstance(record, dict)
         parent_raw = raw["parent"]
         parent = (
-            self._build_snapshot(parent_raw, checkpoint_ns=checkpoint_ns)
+            self._build_snapshot(
+                parent_raw, read_lineage_manifest=read_lineage_manifest,
+            )
             if isinstance(parent_raw, dict)
             else None
         )
@@ -366,9 +493,7 @@ class ResourceActivationReadMixin:
         thread_id = strict_text(record["thread_id"], field="thread_id")
         body_ref.require_owner(session_id, thread_id, activation_snapshot_id)
         try:
-            manifest = self._lineage_body.read_lineage_manifest(
-                detail_ref=body_ref, checkpoint_ns=checkpoint_ns
-            )
+            manifest = read_lineage_manifest(body_ref)
         except (KeyError, DetailUnavailableError) as error:
             # retention/权限/篡改导致正文不可用时必须显式 loss，绝不按同名新资源
             # 或空 manifest 重建 lineage。

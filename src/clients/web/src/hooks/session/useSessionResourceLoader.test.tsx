@@ -223,7 +223,7 @@ describe("Session 资源失败后的权威重读", () => {
     const mounted = await mountResourceLoader();
     const staleLoader = mounted.loader();
     await mounted.switchTo("workspace");
-    await staleLoader.refreshSessionResources(SESSION_ID);
+    expect(await staleLoader.refreshSessionResources(SESSION_ID)).toBe("stale");
     await expect(staleLoader.controlSessionResource("terminal", "term_resource_owner", "cancel"))
       .rejects.toThrow("请求已失效");
     expect(requests).toBe(0);
@@ -269,5 +269,39 @@ describe("Session 资源失败后的权威重读", () => {
     await control;
     expect(mounted.state().sessionResources[0]?.name).toBe("当前 owner 的资源");
     expect(mounted.state().status).toBe("当前 owner 的资源视图");
+  });
+
+  test("强制刷新绕过旧在途读取并返回真实成功终态", async () => {
+    const oldRead = hangUntilReleased<Response>();
+    const forcedRead = hangUntilReleased<Response>();
+    let reads = 0;
+    installGatewayFetch(({ path }) => {
+      if (!path.endsWith("/resources")) return undefined;
+      reads += 1;
+      return reads === 1 ? oldRead.promise : forcedRead.promise;
+    });
+    const mounted = await mountResourceLoader();
+    const oldRefresh = mounted.loader().refreshSessionResources(SESSION_ID);
+    await flushEffects();
+    const forcedRefresh = mounted.loader().refreshSessionResources(SESSION_ID, { force: true });
+    await flushEffects();
+    expect(reads).toBe(2);
+
+    const currentResource = resource("强制刷新后的 owner", 9);
+    forcedRead.release(apiResponse({ session_id: SESSION_ID, items: [currentResource] }));
+    expect(await forcedRefresh).toBe("loaded");
+    oldRead.release(apiResponse({ session_id: SESSION_ID, items: [resource("迟到旧读取", 2)] }));
+    expect(await oldRefresh).toBe("stale");
+    expect(mounted.state().sessionResources).toEqual([currentResource]);
+  });
+
+  test("刷新失败写入资源错误并返回 failed，而不是伪报 loaded", async () => {
+    installGatewayFetch(({ path }) => path.endsWith("/resources")
+      ? errorResponse(503, "会话资源重读失败")
+      : undefined);
+    const mounted = await mountResourceLoader();
+    expect(await mounted.loader().refreshSessionResources(SESSION_ID, { force: true })).toBe("failed");
+    expect(mounted.state().sessionResourcesError).toContain("会话资源重读失败");
+    expect(mounted.state().sessionResourcesLoading).toBe(false);
   });
 });

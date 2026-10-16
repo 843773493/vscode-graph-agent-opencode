@@ -2,6 +2,21 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
+from dataclasses import dataclass
+
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ItemProvenanceRelation,
+)
+from app.domain.itemized.records import parse_item_projection_manifest
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    require_historical_scope,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.turn_projection_helpers import (
+    _item_elapsed_ms,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.turn_projections import (
     VISIBLE_NORMAL_TURN_PREDICATE,
     require_context_view_order_integrity,
@@ -17,6 +32,27 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_non_negative_int,
     strict_text,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class InternalContentCarrier:
+    """同一历史快照内的 typed carrier 镜像，不加载 canonical 正文。"""
+
+    item_id: str
+    semantic_kind: str
+    projection_identity: ItemProjectionIdentity | None
+    provenance_relations: tuple[ItemProvenanceRelation, ...]
+
+
+_INTERNAL_MEMBER_PREDICATES = (
+    "membership.view_id = ?",
+    "membership.visible = 1",
+    "membership.source_kind = 'display_only'",
+    "item.execution_id = execution.execution_id",
+    "item.turn_id IS NULL",
+    "execution.execution_origin = 'internal'",
+    "execution.turn_id IS NULL",
 )
 
 
@@ -138,7 +174,7 @@ class InternalExecutionHistoryMixin:
                 "AND root.turn_scope = 'turn_root' AND root.status = 'completed' "
                 "AND EXISTS (SELECT 1 FROM context_view_items AS membership "
                 "WHERE membership.view_id = cvt.view_id "
-                "AND membership.item_id = root.item_id AND membership.visible = 1 "
+                "AND membership.item_id = root.item_id "
                 "AND membership.source_kind != 'canonical')",
                 (
                     view_id,
@@ -172,7 +208,7 @@ class InternalExecutionHistoryMixin:
             }
             if noncanonical_endpoint_ordinals:
                 raise RuntimeError(
-                    "Turn item window endpoint 缺少 canonical 可见 user root: "
+                    "Turn item window endpoint 缺少 canonical user root: "
                     f"view_id={view_id}, ordinals={noncanonical_endpoint_ordinals}"
                 )
             first_turn_exists = first_logical_turn_ordinal in endpoint_ordinals
@@ -239,6 +275,77 @@ class InternalExecutionHistoryMixin:
             upper_logical_item_ordinal=upper_logical_item_ordinal,
         )
 
+    def _internal_history_scope(
+        self, snapshot: RolloutReadSnapshot, view_id: str,
+    ) -> tuple[sqlite3.Connection, str, str]:
+        connection = self._snapshot_connection(snapshot)
+        self._require_v2_runtime(connection)
+        if connection.execute(
+            "SELECT 1 FROM context_views WHERE view_id = ?", (view_id,),
+        ).fetchone() is None:
+            raise KeyError(f"context view 不存在: {view_id}")
+        owner = connection.execute(
+            "SELECT session_id, thread_id FROM database_meta WHERE singleton_id = 1"
+        ).fetchone()
+        if owner is None:
+            raise RuntimeError("database_meta 缺少 rollout owner")
+        session_id = strict_text(owner[0], field="database_meta.session_id")
+        thread_id = strict_text(owner[1], field="database_meta.thread_id")
+        if session_id != snapshot.session_id or thread_id != snapshot.thread_id:
+            raise RuntimeError(
+                "internal history snapshot owner 不匹配: "
+                f"snapshot=({snapshot.session_id}, {snapshot.thread_id}), "
+                f"database=({session_id}, {thread_id})"
+            )
+        return connection, session_id, thread_id
+
+    def read_internal_content_carriers(
+        self,
+        snapshot: RolloutReadSnapshot,
+        view_id: str,
+        *,
+        upper_logical_item_ordinal: int | None,
+        execution_id: str | None = None,
+    ) -> tuple[InternalContentCarrier, ...]:
+        """只读冻结上界内的完整 carrier 身份，刻意不施加页锚点或窗口下界。"""
+        view_id = strict_text(view_id, field="context_views.view_id")
+        upper = strict_optional_non_negative_int(
+            upper_logical_item_ordinal, field="upper_logical_item_ordinal",
+        )
+        connection, _session_id, _thread_id = self._internal_history_scope(snapshot, view_id)
+        if upper is None:
+            return ()
+        predicates = [*_INTERNAL_MEMBER_PREDICATES, "membership.logical_item_ordinal <= ?"]
+        parameters: list[object] = [view_id, upper]
+        if execution_id is not None:
+            predicates.append("execution.execution_id = ?")
+            parameters.append(strict_text(execution_id, field="execution_id"))
+        rows = connection.execute(
+            "SELECT item.item_id, item.semantic_kind, item.projection_manifest_json "
+            "FROM context_view_items AS membership "
+            "JOIN item_catalog AS item ON item.item_id = membership.item_id "
+            "JOIN executions AS execution ON execution.execution_id = item.execution_id "
+            "WHERE " + " AND ".join(predicates), parameters,
+        ).fetchall()
+        carriers: list[InternalContentCarrier] = []
+        for item_id, semantic_kind, manifest_json in rows:
+            manifest = parse_item_projection_manifest(json.loads(strict_text(
+                manifest_json, field="item_catalog.projection_manifest_json",
+            )))
+            carriers.append(InternalContentCarrier(
+                item_id=strict_text(item_id, field="item_catalog.item_id"),
+                semantic_kind=strict_text(semantic_kind, field="item_catalog.semantic_kind"),
+                projection_identity=(
+                    ItemProjectionIdentity.from_dict(manifest["projection_identity"])
+                    if manifest["projection_identity"] is not None else None
+                ),
+                provenance_relations=tuple(
+                    ItemProvenanceRelation.from_dict(relation)
+                    for relation in manifest["provenance_relations"]
+                ),
+            ))
+        return tuple(carriers)
+
     def read_internal_execution_history_page(
         self,
         snapshot: RolloutReadSnapshot,
@@ -249,6 +356,7 @@ class InternalExecutionHistoryMixin:
         lower_logical_item_ordinal: int | None,
         upper_logical_item_ordinal: int | None,
         limit: int,
+        selected_item_ids: frozenset[str],
         execution_id: str | None = None,
     ) -> InternalExecutionHistoryPage:
         """按显式 display-only membership ordinal 做有界 keyset page。"""
@@ -270,27 +378,7 @@ class InternalExecutionHistoryMixin:
         limit = strict_non_negative_int(limit, field="internal_history.limit")
         if limit < 1 or limit > 256:
             raise ValueError("internal history limit 必须在 1 到 256 之间")
-        connection = self._snapshot_connection(snapshot)
-        self._require_v2_runtime(connection)
-        view = connection.execute(
-            "SELECT 1 FROM context_views WHERE view_id = ?",
-            (view_id,),
-        ).fetchone()
-        if view is None:
-            raise KeyError(f"context view 不存在: {view_id}")
-        owner = connection.execute(
-            "SELECT session_id, thread_id FROM database_meta WHERE singleton_id = 1"
-        ).fetchone()
-        if owner is None:
-            raise RuntimeError("database_meta 缺少 rollout owner")
-        session_id = strict_text(owner[0], field="database_meta.session_id")
-        thread_id = strict_text(owner[1], field="database_meta.thread_id")
-        if session_id != snapshot.session_id or thread_id != snapshot.thread_id:
-            raise RuntimeError(
-                "internal history snapshot owner 不匹配: "
-                f"snapshot=({snapshot.session_id}, {snapshot.thread_id}), "
-                f"database=({session_id}, {thread_id})"
-            )
+        connection, session_id, thread_id = self._internal_history_scope(snapshot, view_id)
         if (
             lower_logical_item_ordinal is not None
             and upper_logical_item_ordinal is not None
@@ -300,18 +388,8 @@ class InternalExecutionHistoryMixin:
         if upper_logical_item_ordinal is None:
             return InternalExecutionHistoryPage(entries=(), has_more=False)
 
-        predicates = [
-            "membership.view_id = ?",
-            "membership.visible = 1",
-            "membership.source_kind = 'display_only'",
-            "item.execution_id = execution.execution_id",
-            "item.turn_id IS NULL",
-            "execution.session_id = ?",
-            "execution.thread_id = ?",
-            "execution.execution_origin = 'internal'",
-            "execution.turn_id IS NULL",
-        ]
-        parameters: list[object] = [view_id, session_id, thread_id]
+        predicates = list(_INTERNAL_MEMBER_PREDICATES)
+        parameters: list[object] = [view_id]
         if execution_id is not None:
             predicates.append("execution.execution_id = ?")
             parameters.append(strict_text(execution_id, field="execution_id"))
@@ -325,19 +403,43 @@ class InternalExecutionHistoryMixin:
             predicates.append(f"membership.logical_item_ordinal {operator} ?")
             parameters.append(anchor_logical_item_ordinal)
         order = "DESC" if direction == "before" else "ASC"
+        # elapsed 沿同 view、同 execution 的前一 visible/display_only 逻辑成员，
+        # 即使前项不在本页也沿用它的原时间；没有前项才以 execution.created_at 起算。
         rows = connection.execute(
+            "WITH selected(item_id) AS MATERIALIZED (SELECT value FROM json_each(?)) "
             "SELECT item.item_sequence, item.item_id, execution.execution_id, "
             "execution.job_id, execution.outcome, execution.created_at, "
-            "execution.updated_at, membership.logical_item_ordinal "
+            "execution.updated_at, membership.logical_item_ordinal, "
+            "COALESCE((SELECT previous.created_at FROM context_view_items AS previous_member "
+            "JOIN item_catalog AS previous ON previous.item_id = previous_member.item_id "
+            "WHERE previous_member.view_id = membership.view_id "
+            "AND previous_member.visible = 1 AND previous_member.source_kind = 'display_only' "
+            "AND previous.execution_id = execution.execution_id "
+            "AND previous_member.logical_item_ordinal < membership.logical_item_ordinal "
+            "ORDER BY previous_member.logical_item_ordinal DESC LIMIT 1), execution.created_at), "
+            "execution.session_id, execution.thread_id "
             "FROM context_view_items AS membership "
             "JOIN item_catalog AS item ON item.item_id = membership.item_id "
+            "JOIN selected ON selected.item_id = item.item_id "
             "JOIN executions AS execution "
             "ON execution.execution_id = item.execution_id "
             "WHERE "
             + " AND ".join(predicates)
             + f" ORDER BY membership.logical_item_ordinal {order} LIMIT ?",
-            (*parameters, limit + 1),
+            (json.dumps(sorted(selected_item_ids)), *parameters, limit + 1),
         ).fetchall()
+        validated_owners: set[tuple[str, str]] = set()
+        for row in rows:
+            execution_owner = (
+                strict_text(row[9], field="executions.session_id"),
+                strict_text(row[10], field="executions.thread_id"),
+            )
+            if execution_owner not in validated_owners:
+                require_historical_scope(
+                    connection, *execution_owner,
+                    current_owner=(session_id, thread_id),
+                )
+                validated_owners.add(execution_owner)
         has_more = len(rows) > limit
         selected = rows[:limit]
         if direction == "before":
@@ -362,11 +464,17 @@ class InternalExecutionHistoryMixin:
                     row[2], field="executions.execution_id"
                 ),
                 job_id=strict_text(row[3], field="executions.job_id"),
+                session_id=strict_text(row[9], field="executions.session_id"),
+                thread_id=strict_text(row[10], field="executions.thread_id"),
                 outcome=strict_text(row[4], field="executions.outcome"),
                 created_at=strict_text(row[5], field="executions.created_at"),
                 updated_at=strict_text(row[6], field="executions.updated_at"),
                 logical_item_ordinal=strict_non_negative_int(
                     row[7], field="context_view_items.logical_item_ordinal"
+                ),
+                elapsed_ms=_item_elapsed_ms(
+                    items_by_id[strict_text(row[1], field="item_catalog.item_id")].created_at,
+                    row[8],
                 ),
                 item=items_by_id[
                     strict_text(row[1], field="item_catalog.item_id")

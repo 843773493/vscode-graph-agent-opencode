@@ -194,6 +194,7 @@ async def test_fake_clock_29_59_resident_and_30_00_cold_eligible_fires_unload() 
     assert generation.generation == 1
     tracker.record_activity(*_OWNER)
     clock.advance(1799)
+    assert await tracker.sweep() == ()
     snapshot = tracker.snapshot(*_OWNER)
     assert snapshot.residency == "resident"
     assert snapshot.cold_eligible is False

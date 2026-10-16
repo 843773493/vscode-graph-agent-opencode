@@ -28,8 +28,8 @@ class SessionCatalogNodeDTO(BaseModel):
 
 
 class SessionCatalogPageDTO(BaseModel):
-    revision: str
-    catalog_revision: int
+    revision: str = Field(description="可见 SessionCatalogNodeDTO 按 node_id 排序的 JSON UTF-8 字节 SHA256 摘要；Provider 默认配置投影变化可只改变本摘要，不改变 catalog_revision。分页 cursor 同时绑定两者。")
+    catalog_revision: int = Field(description="SQLite 权威 catalog 的整体版本计数，与节点 node_revision 和字符串内容摘要 revision 分别独立；分页 cursor 同时绑定整体版本和内容摘要。")
     parent_node_id: str | None = None
     items: list[SessionCatalogNodeDTO] = Field(default_factory=list)
     cursor: str | None = None
@@ -38,8 +38,8 @@ class SessionCatalogPageDTO(BaseModel):
 
 
 class SessionCatalogBreadcrumbDTO(BaseModel):
-    revision: str
-    catalog_revision: int
+    revision: str = Field(description="可见 SessionCatalogNodeDTO 按 node_id 排序的 JSON UTF-8 字节 SHA256 摘要；Provider 默认配置投影变化可只改变本摘要，不改变 catalog_revision。分页 cursor 同时绑定两者。")
+    catalog_revision: int = Field(description="SQLite 权威 catalog 的整体版本计数，与节点 node_revision 和字符串内容摘要 revision 分别独立；分页 cursor 同时绑定整体版本和内容摘要。")
     items: list[SessionCatalogNodeDTO] = Field(default_factory=list)
 
 
@@ -50,16 +50,16 @@ class SessionCatalogSearchResultDTO(BaseModel):
 
 
 class SessionCatalogSearchResultsDTO(BaseModel):
-    revision: str
-    catalog_revision: int
+    revision: str = Field(description="可见 SessionCatalogNodeDTO 按 node_id 排序的 JSON UTF-8 字节 SHA256 摘要；Provider 默认配置投影变化可只改变本摘要，不改变 catalog_revision。分页 cursor 同时绑定两者。")
+    catalog_revision: int = Field(description="SQLite 权威 catalog 的整体版本计数，与节点 node_revision 和字符串内容摘要 revision 分别独立；分页 cursor 同时绑定整体版本和内容摘要。")
     items: list[SessionCatalogSearchResultDTO] = Field(default_factory=list)
     cursor: str | None = None
     total: int = 0
 
 
 class SessionCatalogExportDTO(BaseModel):
-    revision: str
-    catalog_revision: int
+    revision: str = Field(description="可见 SessionCatalogNodeDTO 按 node_id 排序的 JSON UTF-8 字节 SHA256 摘要；Provider 默认配置投影变化可只改变本摘要，不改变 catalog_revision。分页 cursor 同时绑定两者。")
+    catalog_revision: int = Field(description="SQLite 权威 catalog 的整体版本计数，与节点 node_revision 和字符串内容摘要 revision 分别独立；分页 cursor 同时绑定整体版本和内容摘要。")
     items: list[SessionCatalogNodeDTO] = Field(default_factory=list)
 
 

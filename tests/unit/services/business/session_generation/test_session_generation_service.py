@@ -113,6 +113,7 @@ class _PreparedMessageOrchestrator:
     def __init__(self, trace_store: _RestartTraceStore) -> None:
         self.dispatched_job_ids: list[str] = []
         self.dispatched_execution_identities: list[UserExecutionIdentity] = []
+        self.dispatched_message_owners: list[tuple[str, str]] = []
         self._trace_store = trace_store
 
     async def prepare_user_message(self, *_args, **_kwargs):
@@ -129,6 +130,7 @@ class _PreparedMessageOrchestrator:
         execution_binding: UserExecutionIdentity,
     ):
         self.dispatched_execution_identities.append(execution_binding)
+        self.dispatched_message_owners.append((_message.session_id, _message.thread_id))
         self.dispatched_job_ids.append(execution_binding.job_id)
         self._trace_store.completed = True
         return SimpleNamespace(job_id=execution_binding.job_id)
@@ -525,12 +527,29 @@ async def test_start_recovers_reporting_from_persisted_trace_after_restart(
     "reservation",
     ["complete", "legacy_job_only", "missing"],
 )
+@pytest.mark.parametrize("strategy", ["new_per_run", "continue_existing"])
 @pytest.mark.asyncio
 async def test_start_recovers_executing_run_with_same_session_message_and_job_id(
     tmp_path: Path,
     reservation: str,
+    strategy: str,
 ) -> None:
     payload = _new_per_run_request()
+    phase = "new_session"
+    if strategy == "continue_existing":
+        request = payload.model_dump(mode="json")
+        request["session_strategy"] = {
+            "mode": "continue_existing",
+            "target": {
+                "workspace_id": payload.execution_workspace_id,
+                "session_id": "ses_restart_child",
+                "thread_id": "thr_restart_prepared",
+            },
+            "concurrency": "queue",
+            "report_back": "none",
+        }
+        payload = SessionGenerationExecuteRequest.model_validate(request)
+        phase = "continue_existing"
     now = datetime.now(UTC)
     session = SessionDTO(
         session_id="ses_restart_child",
@@ -563,7 +582,7 @@ async def test_start_recovers_executing_run_with_same_session_message_and_job_id
         metadata={
             "boxteam_generation_run_id": payload.run_id,
             "boxteam_generator_id": payload.generator_id,
-            "boxteam_generation_phase": "new_session",
+            "boxteam_generation_phase": phase,
         },
         created_at=now,
         updated_at=now,
@@ -571,7 +590,9 @@ async def test_start_recovers_executing_run_with_same_session_message_and_job_id
     session_service = SimpleNamespace(
         list=lambda **_kwargs: _async_result(SimpleNamespace(items=[session])),
         get=lambda _session_id: _async_result(session),
-        resolve_main_thread=lambda _session_id: _async_result(message.thread_id),
+        resolve_main_thread=lambda _session_id: _async_result(
+            "thr_catalog_main" if strategy == "continue_existing" else message.thread_id
+        ),
     )
     message_service = SimpleNamespace(
         list=lambda **_kwargs: _async_result(SimpleNamespace(items=[message]))
@@ -598,7 +619,7 @@ async def test_start_recovers_executing_run_with_same_session_message_and_job_id
         providers=[AgentPromptGenerationProvider()],
     )
     ledger_path = service._ledger_path(payload.generator_id, payload.idempotency_key)
-    service._persist_prepared_message(payload, "new_session", message)
+    service._persist_prepared_message(payload, phase, message)
     record = {
         "schema_version": 1,
         "status": "executing",
@@ -640,6 +661,7 @@ async def test_start_recovers_executing_run_with_same_session_message_and_job_id
     record = service._read_ledger(ledger_path)
     assert record["status"] == "completed"
     assert orchestrator.dispatched_job_ids == ["job_restart_reserved"]
+    assert orchestrator.dispatched_message_owners == [(session.session_id, "thr_restart_prepared")]
     assert orchestrator.dispatched_execution_identities == [
         UserExecutionIdentity(
             job_id="job_restart_reserved",

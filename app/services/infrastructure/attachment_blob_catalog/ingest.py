@@ -63,6 +63,35 @@ def _update_ingest_record_identity(
     )
 
 
+def _claim_blob_identity(
+    connection: sqlite3.Connection, *, identity: BlobIdentity,
+    winning_ingest_id: str, now: datetime,
+) -> BlobCommitClaim:
+    """正常 ingest 与授权 fork 导入共用唯一 digest claim 和首次 locator。"""
+    validate_digest(identity.digest)
+    validate_blob_id(identity.blob_id)
+    if identity.blob_id != blob_id_for_digest(identity.digest):
+        raise ValueError("blob_id 与 digest 不匹配（身份三元组必须逐字节一致）")
+    claim_date = utc_bucket_date(now)
+    row = connection.execute("SELECT * FROM attachment_blob_commit_claims WHERE digest = ?", (identity.digest,)).fetchone()
+    if row is None:
+        connection.execute(
+            "INSERT INTO attachment_blob_commit_claims (digest, blob_id, final_relative_locator, expected_length, "
+            "first_claim_utc_date, winning_ingest_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'claimed', ?, ?)",
+            (identity.digest, identity.blob_id, date_bucket_relative_locator(identity.blob_id, claim_date), identity.length,
+             claim_date.isoformat(), winning_ingest_id, now.isoformat(), now.isoformat()),
+        )
+        row = connection.execute("SELECT * FROM attachment_blob_commit_claims WHERE digest = ?", (identity.digest,)).fetchone()
+    claim = _claim_from_row(row)
+    if claim.blob_id != identity.blob_id or claim.expected_length != identity.length:
+        raise BlobIdentityConflictError(
+            "同一 digest 的 claim 与本次身份不一致（blob-identity-conflict）: "
+            f"digest={identity.digest!r}, claimed_blob_id={claim.blob_id!r}, actual_blob_id={identity.blob_id!r}, "
+            f"claimed_length={claim.expected_length}, actual_length={identity.length}"
+        )
+    return claim
+
+
 class IngestMixin:
     """ingest record 与 digest claim 方法族（唯一实现点）。"""
 
@@ -167,11 +196,8 @@ class IngestMixin:
                 "blob_id 与 digest 不匹配（身份三元组必须逐字节一致）: "
                 f"blob_id={identity.blob_id!r}, digest={identity.digest!r}"
             )
-        # 日期分桶的日期来源必须是显式时间戳（这里取 claim 时刻的显式 UTC
-        # datetime），绝不用文件 mtime 或进程本地时区。
-        claim_date = utc_bucket_date(datetime.now(UTC))
-        relative_locator = date_bucket_relative_locator(identity.blob_id, claim_date)
-        now_text = datetime.now(UTC).isoformat()
+        now = datetime.now(UTC)
+        now_text = now.isoformat()
         with self.write_transaction() as connection:
             record = self._require_ingest_row(connection, ingest_idempotency_key)
             if record.state in INGEST_RECORD_TERMINAL_STATES:
@@ -184,41 +210,7 @@ class IngestMixin:
                     "附件超过 record 冻结的大小限制: "
                     f"length={identity.length}, max_bytes={record.max_bytes}"
                 )
-            claim_row = connection.execute(
-                "SELECT * FROM attachment_blob_commit_claims WHERE digest = ?",
-                (identity.digest,),
-            ).fetchone()
-            if claim_row is None:
-                connection.execute(
-                    "INSERT INTO attachment_blob_commit_claims ("
-                    "digest, blob_id, final_relative_locator, expected_length, "
-                    "first_claim_utc_date, winning_ingest_id, state, created_at, "
-                    "updated_at) VALUES (?, ?, ?, ?, ?, ?, 'claimed', ?, ?)",
-                    (
-                        identity.digest,
-                        identity.blob_id,
-                        relative_locator,
-                        identity.length,
-                        claim_date.isoformat(),
-                        record.ingest_id,
-                        now_text,
-                        now_text,
-                    ),
-                )
-            else:
-                claim = _claim_from_row(claim_row)
-                if (
-                    claim.blob_id != identity.blob_id
-                    or claim.expected_length != identity.length
-                ):
-                    raise BlobIdentityConflictError(
-                        "同一 digest 的 claim 与本次身份不一致（blob-identity-conflict）: "
-                        f"digest={identity.digest!r}, "
-                        f"claimed_blob_id={claim.blob_id!r}, "
-                        f"actual_blob_id={identity.blob_id!r}, "
-                        f"claimed_length={claim.expected_length}, "
-                        f"actual_length={identity.length}"
-                    )
+            claim = _claim_blob_identity(connection, identity=identity, winning_ingest_id=record.ingest_id, now=now)
             _update_ingest_record_identity(
                 connection,
                 ingest_idempotency_key=ingest_idempotency_key,
@@ -227,11 +219,7 @@ class IngestMixin:
                 state="hashed",
             )
             updated = self._require_ingest_row(connection, ingest_idempotency_key)
-            claim_row = connection.execute(
-                "SELECT * FROM attachment_blob_commit_claims WHERE digest = ?",
-                (identity.digest,),
-            ).fetchone()
-            return updated, _claim_from_row(claim_row)
+            return updated, claim
 
     def abort_ingest_record(
         self, *, ingest_idempotency_key: str, reason: str

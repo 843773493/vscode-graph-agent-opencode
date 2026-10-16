@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Callable
-from contextlib import AsyncExitStack, asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Mapping
+from contextlib import AsyncExitStack, asynccontextmanager, closing
 from datetime import UTC, datetime
 from typing import ClassVar
 from uuid import uuid4
@@ -10,6 +10,7 @@ from uuid import uuid4
 from app.abstractions.job_service import JobServiceProtocol
 from app.agents.graph_binding import DEEP_AGENT_GRAPH_BINDING
 from app.core.exceptions import NotFoundError
+from app.core.phase_observer import observe_phase
 from app.core.session_catalog_resolver import (
     SessionCatalogNodeProjection,
     SessionCatalogPathResolver,
@@ -20,14 +21,17 @@ from app.core.session_catalog_store.contracts import (
     SessionGenerationOriginDTO,
     SessionKind,
 )
+from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore, ThreadGraphBindingRecord
 from app.core.session_creation import ForkCompletionProof, SessionCreationService
 from app.core.session_lifecycle_gate import (
     NavigationTopologyGate,
     SessionDeletionPendingError,
     SessionLifecycleGate,
+    SessionOperationLease,
 )
 from app.core.workspace_identity import validate_workspace_id
+from app.domain.itemized.hashing import sha256_jcs
 from app.schemas.internal_v2.common import CursorPage
 from app.schemas.internal_v2.session import (
     ChildThreadListDTO,
@@ -60,12 +64,14 @@ class SessionService:
         workspace_id: str,
         path_resolver: SessionCatalogPathResolver,
         creation_service: SessionCreationService,
+        initialize_thread_storage: Callable[[str, str], None],
     ):
         self._workspace_id = validate_workspace_id(workspace_id)
         self._config_service = config_service
         self._trace_event_store = trace_event_store
         self._path_resolver = path_resolver
         self._creation_service = creation_service
+        self._initialize_thread_storage = initialize_thread_storage
         self._navigation_topology_gate = NavigationTopologyGate(
             path_resolver.sessions_root
         )
@@ -132,8 +138,20 @@ class SessionService:
         self._assert_session_node_active(node)
 
     @asynccontextmanager
-    async def session_write_admission(self, session_id: str) -> AsyncIterator[None]:
-        """准入单会话短写，并让删除 drain 等待已准入写入完成。"""
+    async def session_read_admission(self, session_id: str) -> AsyncIterator[None]:
+        """冷读的全部 handle 持有 shared guard；删除不能提前标记或隔离。"""
+        async with (
+            self._navigation_topology_gate.shared(),
+            self._session_lifecycle_gate.shared(session_id),
+        ):
+            self.assert_session_active(session_id)
+            yield
+
+    @asynccontextmanager
+    async def _session_write_scope(
+        self, session_id: str,
+    ) -> AsyncIterator[SessionCatalogNodeProjection]:
+        """共同短锁序；active 准入和原租约结算在各自入口裁决。"""
         async with AsyncExitStack() as session_gate:
             async with self._navigation_topology_gate.shared():
                 await session_gate.enter_async_context(
@@ -147,8 +165,135 @@ class SessionService:
                     ) from error
                 if node.kind != "session":
                     raise NotFoundError(f"Session {session_id} not found")
-                self._assert_session_node_active(node)
+            yield node
+
+    @asynccontextmanager
+    async def session_write_admission(self, session_id: str) -> AsyncIterator[None]:
+        """准入单会话短写，并让删除 drain 等待已准入写入完成。"""
+        async with self._session_write_scope(session_id) as node:
+            self._assert_session_node_active(node)
             yield
+
+    @asynccontextmanager
+    async def session_lease_settlement(
+        self, session_id: str, control: SessionControlStore, lease: SessionOperationLease,
+    ) -> AsyncIterator[bool]:
+        """持有原 operation holder 时结算原租约；返回是否仍可尝试 fresh binder。
+
+        catalog deleting 允许原 claim/回执/终态落库；身份、hash、token 与本端
+        fence 必须保持。调用方不得凭此创建新 Job，后者仍走 active 准入。
+        """
+        async with self._session_write_scope(session_id) as node:
+            expected_path = self._path_resolver.resolve_session_node(session_id) / CONTROL_DATABASE_NAME
+            if control.database_path != expected_path:
+                raise RuntimeError(f"原 lease 控制库不属于 Session: session_id={session_id}, path={control.database_path}")
+            control.assert_lease_current(lease)
+            if control.get_fence() != ("active", lease.captured_lifecycle_generation):
+                raise RuntimeError(f"原 lease 的 Session fence 已失效: session_id={session_id}, lease_id={lease.lease_id}")
+            yield node.state == "active"
+
+    @asynccontextmanager
+    async def session_context_control_admission(
+        self, session_id: str, thread_id: str, *, operation_id: str,
+        payload: Mapping[str, object], recovery_ref: str,
+    ) -> AsyncIterator[None]:
+        """独立 Skill/ToolSet 控制的短写；旧 generation lease 先于业务 mutation。"""
+        details = {
+            "session_id": session_id, "thread_id": thread_id,
+            "kind": payload.get("kind"), "recovery_ref": recovery_ref,
+        }
+        await observe_phase(operation_id, "context.control.before_admission", details=details)
+        async with self.session_write_admission(session_id):
+            try:
+                self._path_resolver.resolve_thread_node(session_id, thread_id)
+            except KeyError as error:
+                raise NotFoundError(
+                    f"SessionThread 不存在: session_id={session_id}, thread_id={thread_id}"
+                ) from error
+            with closing(SessionControlStore(
+                self._path_resolver.resolve_session_node(session_id) / "session-control.sqlite",
+            )) as control:
+                lease = control.create_or_get_lease(
+                    operation_kind="context_control",
+                    operation_identity=f"context-control:{operation_id}",
+                    preimage_hash=sha256_jcs({
+                        "session_id": session_id, "thread_id": thread_id,
+                        "operation_id": operation_id, "input": dict(payload),
+                    }).rsplit(":", 1)[1],
+                    recovery_ref=recovery_ref,
+                )
+                if lease.state == "active":
+                    lease = control.mark_lease_settling(
+                        lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token,
+                    )
+                if lease.state not in {"settling", "completed"}:
+                    raise RuntimeError(
+                        "context-control-recovery-failed: 原控制操作已经终结，拒绝重放: "
+                        f"operation_id={operation_id}, state={lease.state}"
+                    )
+                try:
+                    await observe_phase(operation_id, "context.control.admitted", details={
+                        **details,
+                        "lease_id": lease.lease_id,
+                        "captured_lifecycle_generation": lease.captured_lifecycle_generation,
+                    })
+                    yield
+                except BaseException:
+                    if lease.state == "settling":
+                        control.settle_lease(
+                            lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token,
+                            outcome="failed",
+                        )
+                    raise
+                else:
+                    if lease.state == "settling":
+                        control.settle_lease(
+                            lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token,
+                            outcome="completed",
+                        )
+                    await observe_phase(operation_id, "context.control.settled", details={
+                        **details, "lease_id": lease.lease_id,
+                        "captured_lifecycle_generation": lease.captured_lifecycle_generation,
+                    })
+
+    def settle_abandoned_context_controls(self, session_id: str) -> int:
+        """调用者已持 Session exclusive；遗留短写不能有仍存活的 holder。"""
+        count = 0
+        with closing(SessionControlStore(
+            self._path_resolver.resolve_session_node(session_id) / "session-control.sqlite",
+        )) as control:
+            for lease in control.list_non_terminal_leases():
+                if lease.operation_kind != "context_control" or not lease.operation_identity.startswith("context-control:"):
+                    continue
+                lease = control.takeover_lease(
+                    lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token,
+                )
+                lease = control.mark_lease_settling(
+                    lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token,
+                )
+                # 这些短写不持网络/运行时资源。进程退出后不能盲重放 Skill
+                # 或新 assembly；保留原 input hash 与失败 lease，由原 Job
+                # 的恢复合同报告失败。删除随后只清理该 owner 的已有事实。
+                control.settle_lease(
+                    lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token,
+                    outcome="failed",
+                )
+                count += 1
+        return count
+
+    async def recover_context_controls(self) -> int:
+        """启动时按权威 catalog 定点终结崩溃遗留控制，不扫描物理目录。"""
+        _, nodes = self._path_resolver.catalog_store.read_nodes_snapshot()
+        count = 0
+        for node in nodes:
+            if node.kind != "session" or node.state != "active":
+                continue
+            async with (
+                self._navigation_topology_gate.shared(),
+                self._session_lifecycle_gate.exclusive(node.node_id),
+            ):
+                count += self.settle_abandoned_context_controls(node.node_id)
+        return count
 
     async def get(self, session_id: str) -> SessionDTO:
         # 按 ID 的单节点查询（不触发全 catalog BFS）：单会话读取的工作量
@@ -278,12 +423,17 @@ class SessionService:
                 intent.thread_id: intent
                 for intent in control.list_initial_execution_intents()
             }
+            forks = {
+                record.child_thread_id: record
+                for record in control.list_fork_thread_creations(state="published")
+            }
         finally:
             control.close()
         items: list[ChildThreadSummaryDTO] = []
         for thread in threads:
             member = members.get(thread.thread_id)
             intent = intents.get(thread.thread_id)
+            fork = forks.get(thread.thread_id)
             items.append(
                 ChildThreadSummaryDTO(
                     thread_id=thread.thread_id,
@@ -295,7 +445,11 @@ class SessionService:
                     subagent_type=(
                         member.subagent_type if member is not None else None
                     ),
-                    title=member.title if member is not None else None,
+                    title=(
+                        member.title if member is not None else
+                        json.loads(fork.request_intent_json)["display_title"]
+                        if fork is not None and fork.request_intent_json is not None else None
+                    ),
                     collaboration_state=(member.state if member is not None else None),
                     admission_state=(intent.state if intent is not None else None),
                     report_execution_id=intent.execution_binding_id if intent is not None else None,
@@ -304,7 +458,7 @@ class SessionService:
                         if intent is not None and intent.state == "bound"
                         else "failed"
                         if member is not None and member.state == "cancelled"
-                        else "pending"
+                        else "idle" if fork is not None else "pending"
                     ),
                 )
             )
@@ -334,6 +488,7 @@ class SessionService:
         generation_origin: SessionGenerationOriginDTO | None = None,
         parent_node_id: str | None = None,
         request_intent: dict[str, object] | None = None,
+        fork_delivery_request_id: str | None = None,
     ) -> tuple[SessionDTO, SessionCreationRecord]:
         record = await self._prepare_creation(
             idempotency_key=idempotency_key,
@@ -347,6 +502,7 @@ class SessionService:
             parent_node_id=parent_node_id,
             purpose="context_fork",
             request_intent=request_intent,
+            fork_delivery_request_id=fork_delivery_request_id,
         )
         session = (
             await self.get(record.session_id)
@@ -359,10 +515,12 @@ class SessionService:
         record: SessionCreationRecord,
         *,
         fork_completion: ForkCompletionProof,
+        on_published: Callable[[SessionCreationRecord], None] | None = None,
     ) -> SessionDTO:
         result = await self._creation_service.publish_prepared(
             record,
             fork_completion=fork_completion,
+            on_published=on_published,
         )
         session = await self.get(result.session_id)
         self._notify_changed("create", result.session_id)
@@ -423,9 +581,16 @@ class SessionService:
             parent_node_id=parent_node_id,
         )
         try:
-            result = await self._creation_service.publish_prepared(record)
+            result = await self._creation_service.publish_prepared(
+                record,
+                on_published=lambda published: self._initialize_thread_storage(
+                    published.session_id, published.main_thread_id
+                ),
+            )
         except RuntimeError as error:
-            await self._creation_service.abort_prepared(record, str(error))
+            current = self._path_resolver.catalog_store.get_creation_record(idempotency_key)
+            if current.state != "published":
+                await self._creation_service.abort_prepared(record, str(error))
             raise
         session = await self.get(result.session_id)
         self._notify_changed("create", result.session_id)
@@ -445,6 +610,7 @@ class SessionService:
         parent_node_id: str | None = None,
         purpose: SessionCreationPurpose = "normal",
         request_intent: dict[str, object] | None = None,
+        fork_delivery_request_id: str | None = None,
     ) -> SessionCreationRecord:
         if self._config_service is None:
             raise RuntimeError("SessionService 未绑定 ConfigService")
@@ -460,21 +626,21 @@ class SessionService:
         )
 
         resolved_parent_node_id = parent_node_id
-        physical_parent_session_id = self._path_resolver.nearest_session_ancestor(
+        navigation_parent_session_id = self._path_resolver.nearest_session_ancestor(
             parent_node_id
         )
         if parent_session_id is not None:
             if parent_node_id is None:
                 resolved_parent_node_id = parent_session_id
-                physical_parent_session_id = parent_session_id
-            elif physical_parent_session_id != parent_session_id:
+                navigation_parent_session_id = parent_session_id
+            elif navigation_parent_session_id != parent_session_id:
                 raise ValueError(
-                    "会话父节点与目标物理目录不一致: "
+                    "会话导航父节点与最近祖先会话不一致: "
                     f"parent_session_id={parent_session_id}, "
-                    f"physical_parent_session_id={physical_parent_session_id}"
+                    f"navigation_parent_session_id={navigation_parent_session_id}"
                 )
         else:
-            parent_session_id = physical_parent_session_id
+            parent_session_id = navigation_parent_session_id
 
         resolved_title = title or "新会话"
         return await self._creation_service.prepare(
@@ -487,6 +653,7 @@ class SessionService:
                 *DEEP_AGENT_GRAPH_BINDING.selector_fields()
             ),
             request_intent=request_intent,
+            fork_delivery_request_id=fork_delivery_request_id,
             session_metadata={
                 "kind": kind,
                 "delegation": None,

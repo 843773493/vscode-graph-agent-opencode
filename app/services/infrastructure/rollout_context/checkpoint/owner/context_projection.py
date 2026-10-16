@@ -24,6 +24,12 @@ from app.services.infrastructure.rollout_context.runtime.detail_store import (
     PreparedDetail,
     detail_record_from_mapping,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    require_historical_scope,
+)
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutReadSnapshot,
+)
 
 
 class ContextProjectionOwnerMixin:
@@ -41,17 +47,36 @@ class ContextProjectionOwnerMixin:
                 f"requested=({session_id},{thread_id})"
             )
 
+    def _require_context_plan_read_owner(
+        self, session_id: str, thread_id: str, plan: ContextRequestPlan,
+        checkpoint_ns: str, *, snapshot: RolloutReadSnapshot | None = None,
+    ) -> None:
+        """新计划必须属于当前 owner；封存历史只授权目标本地冻结 scope。"""
+        if (plan.session_id, plan.thread_id) == (session_id, thread_id):
+            return
+        if plan.plan_state != "sealed":
+            self._require_context_plan_owner(session_id, thread_id, plan)
+        with self._storage.storage.read_connection(
+            session_id, thread_id, checkpoint_ns, snapshot=snapshot,
+        ) as connection:
+            require_historical_scope(
+                connection, plan.session_id, plan.thread_id,
+                current_owner=(session_id, thread_id),
+            )
+
     def _validate_snapshot_sources(
         self, snapshot: ContextAssemblySnapshot, checkpoint_ns: str, *,
         prepared_details: tuple[PreparedDetail, ...] = (),
     ) -> None:
-        """在提交 assembly 前校验实际 canonical/source 正文，omitted 不解引用。"""
+        """校验已选正文；摘要候选同时核对冻结的 canonical 来源。"""
         from app.services.mapping.itemized.selection import resolve_selected_item
 
         entries = tuple(
             entry
             for entry in snapshot.selection
-            if entry.included and entry.ref.ref_type == "canonical_item"
+            if entry.ref.ref_type == "canonical_item" and (
+                entry.included or snapshot.selection_policy == "summary_candidate"
+            )
         )
         items = self._storage.storage.read_items(
             snapshot.session_id,
@@ -80,33 +105,44 @@ class ContextProjectionOwnerMixin:
         checkpoint_ns: str = "",
     ) -> dict[str, object]:
         """从同一已提交 selection 直接编码 Responses input，不经过 LangChain。"""
-        self._require_context_plan_owner(session_id, thread_id, plan)
         from app.services.infrastructure.rollout_context.provider.native_request import (
             project_native_request,
         )
 
-        checkpoint_ns = self._context_owner_namespace(checkpoint_ns)
-        committed_snapshot = self._committed_context_snapshot(
-            session_id,
-            thread_id,
-            plan,
-            checkpoint_ns=checkpoint_ns,
-        )
-        committed = committed_snapshot.as_sealed_plan()
-        item_ids = tuple(
-            entry.ref.ref_id
-            for entry in committed.selection
-            if entry.included and entry.ref.ref_type == "canonical_item"
-        )
+        if plan.plan_state != "sealed" or plan.assembly_id is None:
+            self._require_context_plan_owner(session_id, thread_id, plan)
+            raise ValueError("context plan 未 sealed，不能进入 projector")
+        checkpoint_ns = self.context_owner_namespace(checkpoint_ns)
+        with self._storage.storage.open_read_snapshot(
+            session_id, thread_id, checkpoint_ns,
+        ) as read_snapshot:
+            committed_snapshot = self._committed_context_snapshot(
+                session_id,
+                thread_id,
+                plan,
+                checkpoint_ns=checkpoint_ns,
+                snapshot=read_snapshot,
+            )
+            committed = committed_snapshot.as_sealed_plan()
+            item_ids = tuple(
+                entry.ref.ref_id
+                for entry in committed.selection
+                if entry.ref.ref_type == "canonical_item" and (
+                    entry.included or committed.selection_policy == "summary_candidate"
+                )
+            )
+            items = self._storage.storage.read_items(
+                session_id, thread_id, checkpoint_ns=checkpoint_ns, item_ids=item_ids,
+                snapshot=read_snapshot,
+            )
+            request_content = self._request_content_for_plan(
+                session_id, thread_id, checkpoint_ns, committed, None,
+                snapshot=read_snapshot,
+            )
         return project_native_request(
-            committed,
-            self._storage.storage.read_items(
-                session_id, thread_id, checkpoint_ns=checkpoint_ns, item_ids=item_ids
-            ),
-            self._request_content_for_plan(
-                session_id, thread_id, checkpoint_ns, committed, None
-            ),
+            committed, items, request_content,
             seal_binding=committed_snapshot.seal_binding,
+            attachment_projector=lambda payload: self._storage.storage.project_attachment_payload(session_id, thread_id, payload),
         )
 
     def project_context_plan_to_history_with_diagnostics(
@@ -118,8 +154,7 @@ class ContextProjectionOwnerMixin:
         checkpoint_ns: str = "",
     ) -> tuple[list[BaseMessage], tuple[str, ...]]:
         """history 保留 selection loss，同时避免读取 request-only 正文。"""
-        self._require_context_plan_owner(session_id, thread_id, plan)
-        checkpoint_ns = self._context_owner_namespace(checkpoint_ns)
+        checkpoint_ns = self.context_owner_namespace(checkpoint_ns)
         messages, _, losses = self._project_committed_context_plan(
             session_id,
             thread_id,
@@ -139,9 +174,12 @@ class ContextProjectionOwnerMixin:
         explicit_content: Mapping[str, object] | None,
         *,
         prepared_details: tuple[PreparedDetail, ...] = (),
+        snapshot: RolloutReadSnapshot | None = None,
     ) -> dict[str, object]:
         """从 assembly-bound detail 恢复正文；seal 只读显式冻结的内存值。"""
-        self._require_context_plan_owner(session_id, thread_id, plan)
+        self._require_context_plan_read_owner(
+            session_id, thread_id, plan, checkpoint_ns, snapshot=snapshot,
+        )
         if plan.plan_state != "sealed" or plan.assembly_id is None:
             raise ValueError("context plan 未 sealed，不能解析 request-only 正文")
         # sealed identity 不再读取可能属于其它 plan/revision 的实时 source cache。
@@ -191,11 +229,11 @@ class ContextProjectionOwnerMixin:
                 raise DetailUnavailableError(
                     f"detail-unavailable: sealed request-only 缺少 typed detail: {ref_id}"
                 )
-            detail_ref.require_owner(session_id, thread_id, plan.assembly_id)
+            detail_ref.require_owner(plan.session_id, plan.thread_id, plan.assembly_id)
             prepared = prepared_by_ref.get(detail_ref)
             detail_record = self._request_source_record(
                 session_id, thread_id, checkpoint_ns, detail_ref, ref,
-                prepared=prepared,
+                prepared=prepared, snapshot=snapshot,
             )
             detail_envelope = (
                 self._detail_store.read_prepared(
@@ -203,6 +241,7 @@ class ContextProjectionOwnerMixin:
                 ) if prepared is not None else self._detail_store.read(
                     session_id=session_id, thread_id=thread_id, record=detail_record,
                     include_sensitive=ref.protection != "public",
+                    snapshot=snapshot,
                 )
             )
             detail_body = detail_envelope.get("detail")
@@ -289,15 +328,18 @@ class ContextProjectionOwnerMixin:
         ref: ContextRef,
         *,
         prepared: PreparedDetail | None = None,
+        snapshot: RolloutReadSnapshot | None = None,
     ) -> DetailRecord:
         """request source 的 typed owner 与用途必须在读取正文前一致。"""
-        detail_ref.require_owner(session_id, thread_id)
+        if prepared is not None:
+            detail_ref.require_owner(session_id, thread_id)
         record = prepared.record if prepared is not None else detail_record_from_mapping(
             self._storage.assemblies.get_context_plan_detail(
                 session_id,
                 thread_id,
                 detail_ref=detail_ref,
                 checkpoint_ns=checkpoint_ns,
+                snapshot=snapshot,
             )
         )
         if (
@@ -320,75 +362,62 @@ class ContextProjectionOwnerMixin:
         return record
 
     def _recover_request_source(
-        self,
-        session_id: str,
-        thread_id: str,
-        checkpoint_ns: str,
-        ref: ContextRef,
-        contribution_id: str | None,
+        self, session_id: str, thread_id: str, checkpoint_ns: str,
+        ref: ContextRef, contribution_id: str | None,
     ) -> object:
-        """新 assembly 复用旧 sealed source 的详情，绝不读取当前源文件。"""
+        """先按 typed locator 冷读；旧封存选择仅查询匹配来源的索引事实。"""
         if isinstance(ref.source_ref, DetailRef):
-            ref.source_ref.require_owner(session_id, thread_id)
-        for snapshot in self._storage.assemblies.list_context_assemblies(
-            session_id,
-            thread_id,
-            checkpoint_ns=checkpoint_ns,
-        ):
-            for entry in snapshot.selection:
-                previous = entry.ref
-                if not entry.included or previous.ref_type != "request_only":
-                    continue
-                if isinstance(ref.source_ref, DetailRef):
-                    matches = (
-                        entry.detail_ref == ref.source_ref
-                        and entry.contribution_id == contribution_id
+            record = self._request_source_record(
+                session_id, thread_id, checkpoint_ns, ref.source_ref, ref,
+            )
+            return self._detail_store.read(
+                session_id=session_id, thread_id=thread_id, record=record,
+                include_sensitive=ref.protection != "public",
+            )["detail"]
+        with self._storage.storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
+            candidates = connection.execute(
+                "SELECT DISTINCT assembly.assembly_id FROM context_assembly_selections selected "
+                "JOIN context_assemblies assembly ON assembly.assembly_id=selected.assembly_id "
+                "WHERE selected.ref_type='request_only' AND selected.included=1 "
+                "AND ((? IS NOT NULL AND selected.contribution_id=?) "
+                "OR (? IS NULL AND selected.ref_id=?)) ORDER BY assembly.rowid DESC",
+                (contribution_id, contribution_id, contribution_id, ref.ref_id),
+            )
+            for (assembly_id,) in candidates:
+                snapshot = self._storage.assemblies._read_context_assembly_connection(
+                    connection, session_id, thread_id, assembly_id=assembly_id,
+                    checkpoint_ns=checkpoint_ns,
+                )[0]
+                for entry in snapshot.selection:
+                    previous = entry.ref
+                    if not entry.included or previous.ref_type != "request_only":
+                        continue
+                    matches = entry.contribution_id == contribution_id if contribution_id is not None else (
+                        entry.contribution_id is None and (
+                            previous.source_ref == ref.source_ref if ref.source_ref is not None
+                            else previous.ref_id == ref.ref_id and previous.plan_id == ref.plan_id
+                        )
                     )
-                elif contribution_id is not None:
-                    matches = entry.contribution_id == contribution_id
-                else:
-                    matches = entry.contribution_id is None and (
-                        previous.source_ref == ref.source_ref
-                        if ref.source_ref is not None
-                        else previous.ref_id == ref.ref_id
-                        and previous.plan_id == ref.plan_id
+                    if not matches or any(
+                        getattr(previous, field) != getattr(ref, field)
+                        for field in (
+                            "source_revision", "content_length", "content_hash", "protection",
+                            "visibility", "base_delta_role", "source_overlay_epoch",
+                            "overlay_from_revision", "overlay_to_revision", "overlay_diff_hash",
+                        )
+                    ):
+                        continue
+                    if not isinstance(entry.detail_ref, DetailRef):
+                        raise DetailUnavailableError(f"detail-unavailable: recovered source 缺少 typed detail: {ref.ref_id}")
+                    entry.detail_ref.require_owner(snapshot.session_id, snapshot.thread_id, snapshot.assembly_id)
+                    record = self._request_source_record(
+                        session_id, thread_id, checkpoint_ns, entry.detail_ref, ref,
                     )
-                if not matches or any(
-                    getattr(previous, field) != getattr(ref, field)
-                    for field in (
-                        "source_revision",
-                        "content_length",
-                        "content_hash",
-                        "protection",
-                        "visibility",
-                        "base_delta_role",
-                        "source_overlay_epoch",
-                        "overlay_from_revision",
-                        "overlay_to_revision",
-                        "overlay_diff_hash",
-                    )
-                ):
-                    continue
-                if not isinstance(entry.detail_ref, DetailRef):
-                    raise DetailUnavailableError(
-                        f"detail-unavailable: recovered source 缺少 typed detail: {ref.ref_id}"
-                    )
-                entry.detail_ref.require_owner(
-                    session_id, thread_id, snapshot.assembly_id
-                )
-                record = self._request_source_record(
-                    session_id, thread_id, checkpoint_ns, entry.detail_ref, ref
-                )
-                envelope = self._detail_store.read(
-                    session_id=session_id,
-                    thread_id=thread_id,
-                    record=record,
-                    include_sensitive=ref.protection != "public",
-                )
-                return envelope["detail"]
-        raise DetailUnavailableError(
-            f"detail-unavailable: no committed request-only source: {ref.ref_id}"
-        )
+                    return self._detail_store.read(
+                        session_id=session_id, thread_id=thread_id, record=record,
+                        include_sensitive=ref.protection != "public",
+                    )["detail"]
+        raise DetailUnavailableError(f"detail-unavailable: no committed request-only source: {ref.ref_id}")
 
     def _draft_request_body(
         self,

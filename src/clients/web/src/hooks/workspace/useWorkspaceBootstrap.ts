@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, type MutableRefObject } from "react";
 import {
   DEFAULT_BACKEND_PORT,
   getWorkspace,
@@ -18,7 +18,7 @@ import { getLatestGatewayUserViewState } from "../../api/gateway/userViewState";
 import { writeCachedUiSettings } from "../../state/storage";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import { withFreshGatewayWorkspaceList } from "../../state/gatewayWorkspaceState";
-import type { SetAppState } from "../contentViewLoaderTypes";
+import type { SetAppState, RunGatewayWorkspaceListTask } from "../contentViewLoaderTypes";
 import { loadAndApplyResolvedGatewayTheme } from "../../theme/theme";
 import {
   fetchWorkspaceSessionListSnapshot,
@@ -203,11 +203,14 @@ async function loadWorkspaceBootstrap(
     checkGatewayWorkspaceHealth: boolean;
     uiSettings?: Awaited<ReturnType<typeof getGatewayUiSettings>>;
     signal?: AbortSignal;
+    assertCurrentSelection: () => void;
   },
 ): Promise<WorkspaceBootstrapPayload> {
   const { signal } = options;
+  options.assertCurrentSelection();
   const userAccess = await ensureGatewayUserAccess(apiPort);
   signal?.throwIfAborted();
+  options.assertCurrentSelection();
   const uiSettingsPromise = options.uiSettings
     ? Promise.resolve(options.uiSettings)
     : getGatewayUiSettings(apiPort);
@@ -219,11 +222,13 @@ async function loadWorkspaceBootstrap(
     gatewayWorkspacesPromise,
   ]);
   signal?.throwIfAborted();
+  options.assertCurrentSelection();
   const userViewStatePromise = userAccess.kind === "user"
     ? getLatestGatewayUserViewState(apiPort)
     : Promise.resolve(null);
   const userViewState = await userViewStatePromise;
   signal?.throwIfAborted();
+  options.assertCurrentSelection();
   if (!uiSettings.theme.resolved_theme) {
     throw new Error("Gateway UI Settings 缺少已解析主题");
   }
@@ -234,6 +239,7 @@ async function loadWorkspaceBootstrap(
     : (await loadAndApplyResolvedGatewayTheme(uiSettings.theme.resolved_theme)).backgroundWarning;
   let gatewayWorkspaces = initialGatewayWorkspaces;
   const persistedWorkspaceId = userViewState?.workspace_id;
+  options.assertCurrentSelection();
   if (
     shouldRestorePersistedWorkspace({
       restorePersistedWorkspace: options.restorePersistedWorkspace,
@@ -247,11 +253,21 @@ async function loadWorkspaceBootstrap(
   ) {
     await activateGatewayWorkspace(apiPort, persistedWorkspaceId, signal);
     signal?.throwIfAborted();
+    options.assertCurrentSelection();
     gatewayWorkspaces = await listGatewayWorkspaces(apiPort, {
       checkHealth: options.checkGatewayWorkspaceHealth,
     });
   }
   signal?.throwIfAborted();
+  options.assertCurrentSelection();
+  // 不检查健康的列表可带重启前的 offline 快照；改变目标前必须核对真实状态。
+  if (!options.checkGatewayWorkspaceHealth
+    && (selectHealthyGatewayWorkspace(gatewayWorkspaces) === null
+      || selectHealthyGatewayWorkspace(gatewayWorkspaces) !== gatewayWorkspaces.active_workspace_id)) {
+    gatewayWorkspaces = await listGatewayWorkspaces(apiPort, { checkHealth: true });
+    signal?.throwIfAborted();
+    options.assertCurrentSelection();
+  }
   const healthyWorkspaceId = selectHealthyGatewayWorkspace(gatewayWorkspaces);
   if (healthyWorkspaceId === null) {
     throw new WorkspaceBootstrapUnavailableError(gatewayWorkspaces);
@@ -259,6 +275,7 @@ async function loadWorkspaceBootstrap(
   if (healthyWorkspaceId !== gatewayWorkspaces.active_workspace_id) {
     await activateGatewayWorkspace(apiPort, healthyWorkspaceId, signal);
     signal?.throwIfAborted();
+    options.assertCurrentSelection();
     gatewayWorkspaces = await listGatewayWorkspaces(apiPort, {
       checkHealth: options.checkGatewayWorkspaceHealth,
     });
@@ -303,6 +320,7 @@ async function loadWorkspaceBootstrapWithRetry(
   const { signal } = options;
   for (let attempt = 0; ; attempt += 1) {
     signal.throwIfAborted();
+    options.assertCurrentSelection();
     try {
       return await loadWorkspaceBootstrap(apiPort, options);
     } catch (error: unknown) {
@@ -321,10 +339,16 @@ export function useWorkspaceBootstrap({
   apiPort,
   uiSettings,
   setState,
+  selectionIntentRef,
+  gatewayListRequestRef,
+  runGatewayWorkspaceListTask,
 }: {
   apiPort: number | null;
   uiSettings: Awaited<ReturnType<typeof getGatewayUiSettings>>;
   setState: SetAppState;
+  selectionIntentRef: MutableRefObject<number>;
+  gatewayListRequestRef: MutableRefObject<number>;
+  runGatewayWorkspaceListTask: RunGatewayWorkspaceListTask;
 }) {
   const refreshGenerationRef = useRef(0);
   const workspaceStatusRefreshGenerationRef = useRef(0);
@@ -333,6 +357,7 @@ export function useWorkspaceBootstrap({
   currentUiSettingsRef.current = uiSettings;
 
   const invalidateWorkspaceRefreshes = useCallback(() => {
+    gatewayListRequestRef.current += 1;
     refreshGenerationRef.current += 1;
     workspaceStatusRefreshGenerationRef.current += 1;
     refreshAbortRef.current?.abort();
@@ -345,8 +370,12 @@ export function useWorkspaceBootstrap({
       restorePersistedWorkspace?: boolean;
       checkGatewayWorkspaceHealth?: boolean;
       reuseCurrentUiSettings?: boolean;
+      selectionIntent?: number;
     } = {},
   ): Promise<string | null> => {
+    const selectionIntent = options.selectionIntent ?? selectionIntentRef.current;
+    if (selectionIntent !== selectionIntentRef.current) return null;
+    const listRequest = ++gatewayListRequestRef.current;
     const refreshGeneration = ++refreshGenerationRef.current;
     refreshAbortRef.current?.abort();
     const controller = new AbortController();
@@ -362,14 +391,17 @@ export function useWorkspaceBootstrap({
         workspace,
         workspaceSessionResults,
         agents,
-      } = await loadWorkspaceBootstrapWithRetry(resolvedApiPort, {
+      } = await runGatewayWorkspaceListTask(() => loadWorkspaceBootstrapWithRetry(resolvedApiPort, {
         restorePersistedWorkspace: options.restorePersistedWorkspace ?? false,
         checkGatewayWorkspaceHealth: options.checkGatewayWorkspaceHealth ?? true,
         uiSettings: options.reuseCurrentUiSettings
           ? currentUiSettingsRef.current
           : undefined,
         signal: controller.signal,
-      });
+        assertCurrentSelection: () => {
+          if (selectionIntent !== selectionIntentRef.current) throw new DOMException("工作区初始化已被新的选择取代", "AbortError");
+        },
+      }));
       writeCachedUiSettings(uiSettings);
       const activeWorkspaceId = gatewayWorkspaces.active_workspace_id;
       const workspaceIds = activeWorkspaceId ? [activeWorkspaceId] : [];
@@ -402,12 +434,15 @@ export function useWorkspaceBootstrap({
       if (
         controller.signal.aborted
         || refreshGeneration !== refreshGenerationRef.current
+        || listRequest !== gatewayListRequestRef.current
+        || selectionIntent !== selectionIntentRef.current
       ) {
         // 本次刷新已被更新的请求作废：没有任何工作区因它生效，用 null 与
         // “生效了但活动工作区是另一个 id”严格区分。
         return null;
       }
       setState((prev) => {
+        if (selectionIntent !== selectionIntentRef.current) return prev;
         const sessionsByWorkspace = new Map(prev.sessionsByWorkspace);
         const userChanged =
           prev.gatewayUserAccess?.kind !== userAccess.kind
@@ -510,18 +545,20 @@ export function useWorkspaceBootstrap({
           isBootstrapping: false,
         };
       });
-      // activeWorkspaceId 是本轮 setState 唯一写进 activeGatewayWorkspaceId 的
-      // 权威值，直接回传它，避免调用方去读尚未重新 render 的 latestStateRef。
+      // 已通过 list freshness 的快照按 React updater 顺序消费；后续状态读取
+      // 不能使这一轮已排入的 bootstrap 自作废。选择变更仍由共同 epoch 隔离。
       return activeWorkspaceId;
     } catch (error: unknown) {
       if (
         controller.signal.aborted
         || refreshGeneration !== refreshGenerationRef.current
+        || listRequest !== gatewayListRequestRef.current
+        || selectionIntent !== selectionIntentRef.current
       ) {
         return null;
       }
       const message = errorMessage(error);
-      setState((prev) => ({
+      setState((prev) => listRequest === gatewayListRequestRef.current && selectionIntent === selectionIntentRef.current ? ({
         ...prev,
         ...(error instanceof WorkspaceBootstrapUnavailableError
           ? {
@@ -539,27 +576,30 @@ export function useWorkspaceBootstrap({
         error: message,
         status: "初始化失败",
         isBootstrapping: false,
-      }));
+      }) : prev);
       throw error;
     } finally {
       if (refreshAbortRef.current === controller) {
         refreshAbortRef.current = null;
       }
     }
-  }, [apiPort, setState]);
+  }, [apiPort, setState, selectionIntentRef, gatewayListRequestRef]);
 
   const refreshGatewayWorkspaceStatuses = useCallback(async (
     expectedWorkspaceId?: string | null,
   ): Promise<void> => {
     const requestGeneration = ++workspaceStatusRefreshGenerationRef.current;
+    const selectionIntent = selectionIntentRef.current;
+    const listRequest = ++gatewayListRequestRef.current;
     try {
-      const workspaceList = await listGatewayWorkspaces(
+      const workspaceList = await runGatewayWorkspaceListTask(() => listGatewayWorkspaces(
         apiPort ?? DEFAULT_BACKEND_PORT,
-      );
-      if (requestGeneration !== workspaceStatusRefreshGenerationRef.current) {
+      ));
+      if (requestGeneration !== workspaceStatusRefreshGenerationRef.current || listRequest !== gatewayListRequestRef.current || selectionIntent !== selectionIntentRef.current) {
         return;
       }
       setState((previous) => {
+        if (selectionIntent !== selectionIntentRef.current) return previous;
         if (
           expectedWorkspaceId
           && (
@@ -574,11 +614,12 @@ export function useWorkspaceBootstrap({
         };
       });
     } catch (error) {
-      if (requestGeneration !== workspaceStatusRefreshGenerationRef.current) {
+      if (requestGeneration !== workspaceStatusRefreshGenerationRef.current || listRequest !== gatewayListRequestRef.current || selectionIntent !== selectionIntentRef.current) {
         return;
       }
       const message = errorMessage(error);
       setState((previous) => {
+        if (listRequest !== gatewayListRequestRef.current || selectionIntent !== selectionIntentRef.current) return previous;
         if (
           expectedWorkspaceId
           && previous.activeGatewayWorkspaceId !== expectedWorkspaceId
@@ -609,11 +650,13 @@ export function useWorkspaceBootstrap({
   }, [apiPort, setState]);
 
   useEffect(() => {
+    const selectionIntent = selectionIntentRef.current;
     // React.StrictMode 的开发探测会先 cleanup 再重新执行 effect；延迟首个
     // bootstrap 可以让探测阶段在发出网络请求前结束，避免同一组工作区读取被
     // 启动两次。生产环境只会等待这一次短延迟。
     const timerId = window.setTimeout(() => {
       void refreshSessions(undefined, {
+        selectionIntent,
         restorePersistedWorkspace: true,
         checkGatewayWorkspaceHealth: true,
       }).catch(() => {

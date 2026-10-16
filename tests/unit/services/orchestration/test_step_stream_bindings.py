@@ -1,4 +1,4 @@
-"""验证 canonical sink 仅路由 Saver 端口并透明传播失败。"""
+"""验证 canonical sink 路由 Saver 的追加与工具终态端口。"""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from app.services.orchestration.execution_step.stream_bindings import CanonicalI
 
 @pytest.fixture
 def saver() -> MagicMock:
-    return MagicMock(spec=["append_items"])
+    return MagicMock(spec=["append_items", "commit_tool_result"])
 
 
 @pytest.fixture
@@ -38,6 +38,17 @@ def item() -> CanonicalItemRecord:
 def test_sink_requires_persistence_port() -> None:
     with pytest.raises(TypeError, match="必须绑定 Saver append_items"):
         CanonicalItemSink(object(), session_id="session_1", thread_id="thr_00000000400070008000000000000002", checkpoint_ns="")
+
+
+def test_sink_requires_tool_result_commit_port() -> None:
+    checkpointer = MagicMock(spec=["append_items"])
+    with pytest.raises(TypeError, match="必须绑定 Saver commit_tool_result"):
+        CanonicalItemSink(
+            checkpointer,
+            session_id="session_1",
+            thread_id="thr_00000000400070008000000000000002",
+            checkpoint_ns="",
+        )
 
 
 @pytest.mark.asyncio

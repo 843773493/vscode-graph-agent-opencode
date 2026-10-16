@@ -221,8 +221,8 @@ describe("二进制与流式路径共享统一凭据刷新屏障", () => {
     await streamSessionEvents(48_621, "ses_a", { workspaceId: "w" });
 
     expect(backend.businessRequests).toEqual([
-      "/api/v1/sessions/ses_a/traces/stream#stale-token",
-      "/api/v1/sessions/ses_a/traces/stream#fresh-token",
+      "/api/v1/workspace/observations/stream#stale-token",
+      "/api/v1/workspace/observations/stream#fresh-token",
     ]);
   });
 
@@ -236,8 +236,8 @@ describe("二进制与流式路径共享统一凭据刷新屏障", () => {
     }, {});
 
     expect(backend.businessRequests).toEqual([
-      "/api/v1/session-catalog/events/stream#stale-token",
-      "/api/v1/session-catalog/events/stream#fresh-token",
+      "/api/v1/workspace/observations/stream#stale-token",
+      "/api/v1/workspace/observations/stream#fresh-token",
     ]);
   });
 
@@ -247,8 +247,8 @@ describe("二进制与流式路径共享统一凭据刷新屏障", () => {
     await streamWorkspaceFileEvents(48_623, ["/tmp/a.ts"], { workspaceId: "w" });
 
     expect(backend.businessRequests).toEqual([
-      "/api/v1/workspace/files/events#stale-token",
-      "/api/v1/workspace/files/events#fresh-token",
+      "/api/v1/workspace/observations/stream#stale-token",
+      "/api/v1/workspace/observations/stream#fresh-token",
     ]);
   });
 });

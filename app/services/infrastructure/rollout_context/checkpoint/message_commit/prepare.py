@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.execution_admission_context import require_current_execution_admission
+from app.domain.itemized.enums import PayloadKind
 from app.domain.itemized.records import CanonicalItemRecord, RuntimeNoticePayload
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     read_message_group,
@@ -61,6 +62,7 @@ def _compare_group(
                 "content_hash",
                 "turn_id",
                 "turn_scope",
+                "message_group_id",
             )
             if getattr(candidate, name) != getattr(stored, name)
         ]
@@ -93,53 +95,54 @@ def prepare_messages(
     offset: int,
 ) -> MessageBatch:
     batch = MessageBatch(next_item_sequence, last_message_sequence)
-    identities = [
+    canonical_message_ids = [
         codec.message_id(message, index) for index, message in enumerate(messages)
     ]
-    if len(set(identities)) != len(identities):
+    if len(set(canonical_message_ids)) != len(canonical_message_ids):
         raise ValueError("一个 checkpoint 不能重复引用同一个 canonical message_id")
     with jsonl.open("rb") as stream:
-        for index, (message_id, message) in enumerate(
-            zip(identities, messages, strict=True)
+        for index, (canonical_message_id, message) in enumerate(
+            zip(canonical_message_ids, messages, strict=True)
         ):
-            indexed = connection.execute(
-                "SELECT message_sequence, turn_id, execution_id FROM messages "
+            message_locator = connection.execute(
+                "SELECT message_sequence, turn_id, execution_id, jsonl_offset, jsonl_length FROM messages "
                 "WHERE message_id = ?",
-                (message_id,),
+                (canonical_message_id,),
             ).fetchone()
-            catalog = connection.execute(
+            canonical_anchor = connection.execute(
                 "SELECT jsonl_offset, jsonl_length, turn_id, execution_id "
-                "FROM item_catalog WHERE item_id = ?",
-                (f"item-{message_id}",),
-            ).fetchone()
-            if indexed is not None and catalog is None:
+                "FROM item_catalog WHERE jsonl_offset = ? AND jsonl_length = ?",
+                message_locator[3:5],
+            ).fetchone() if message_locator is not None else None
+            if message_locator is not None and canonical_anchor is None:
                 raise RuntimeError(
-                    f"v2 message projection 缺少 canonical item: {message_id}"
+                    f"v2 message projection 缺少 canonical item: {canonical_message_id}"
                 )
-            stored = (
+            message_item_group = (
                 read_message_group(
                     connection,
                     stream,
-                    offset=catalog[0],
-                    length=catalog[1],
+                    offset=canonical_anchor[0],
+                    length=canonical_anchor[1],
                     read_item=read_item,
                 )
-                if catalog is not None
+                if canonical_anchor is not None
                 else ()
             )
             message_role = codec.message_role(message)
-            if indexed is not None or stored:
-                stored_turn_ids = {item.turn_id for item in stored}
+            if message_locator is not None:
+                stored_turn_ids = {item.turn_id for item in message_item_group}
                 if len(stored_turn_ids) != 1:
                     raise RuntimeError(
-                        f"canonical message group Turn identity 不一致: {message_id}"
+                        f"canonical message group Turn identity 不一致: {canonical_message_id}"
                     )
                 stored_turn_id = next(iter(stored_turn_ids))
                 stored_execution_ids: set[str] = set()
-                for item in stored:
+                for item in message_item_group:
+                    canonical_item_id = item.item_id
                     execution_row = connection.execute(
                         "SELECT execution_id FROM item_catalog WHERE item_id = ?",
-                        (item.item_id,),
+                        (canonical_item_id,),
                     ).fetchone()
                     if (
                         execution_row is None
@@ -147,27 +150,27 @@ def prepare_messages(
                         or not execution_row[0]
                     ):
                         raise RuntimeError(
-                            f"canonical item 缺少 execution attribution: {item.item_id}"
+                            f"canonical item 缺少 execution attribution: {canonical_item_id}"
                         )
                     stored_execution_ids.add(execution_row[0])
                 if len(stored_execution_ids) != 1:
                     raise RuntimeError(
-                        f"canonical message group execution identity 不一致: {message_id}"
+                        f"canonical message group execution identity 不一致: {canonical_message_id}"
                     )
                 stored_execution_id = next(iter(stored_execution_ids))
-                if catalog is None or (
-                    catalog[2] != stored_turn_id or catalog[3] != stored_execution_id
+                if canonical_anchor is None or (
+                    canonical_anchor[2] != stored_turn_id or canonical_anchor[3] != stored_execution_id
                 ):
                     raise RuntimeError(
                         "canonical item 与 message-root catalog attribution 不一致: "
-                        f"{message_id}"
+                        f"{canonical_message_id}"
                     )
-                if indexed is not None and (
-                    indexed[1] != stored_turn_id or indexed[2] != stored_execution_id
+                if (
+                    message_locator[1] != stored_turn_id or message_locator[2] != stored_execution_id
                 ):
                     raise RuntimeError(
                         "message projection 与 canonical item attribution 不一致: "
-                        f"{message_id}"
+                        f"{canonical_message_id}"
                     )
                 turn_id = stored_turn_id
                 execution_id = stored_execution_id
@@ -207,49 +210,52 @@ def prepare_messages(
             )
             group = codec.items_for_message(
                 message,
-                item_sequence=stored[0].item_sequence
-                if stored
+                item_sequence=message_item_group[0].item_sequence
+                if message_item_group
                 else batch.next_item_sequence,
-                message_id=message_id,
+                message_id=canonical_message_id,
                 turn_id=turn_id,
                 execution_id=execution_id,
                 timestamp=datetime.now(UTC).isoformat(),
                 model_call_id=model_call_id,
+                canonical_items=message_item_group,
             )
             # codec 自身验证 group 完整性；不能接受返回顺序与投影不一致的适配器。
             codec.project_message(group)
-            if stored:
-                _compare_group(group, stored)
+            if message_item_group:
+                _compare_group(group, message_item_group)
             batch.item_ids.extend(item.item_id for item in group)
             for item in group:
                 if item.turn_id is not None:
                     continue
                 if item.semantic_kind == "runtime_notice":
-                    if "display_part" not in item.payload:
+                    if (
+                        item.payload_kind != PayloadKind.STRUCTURED_CONTENT
+                        or not isinstance(item.payload, Mapping)
+                        or set(item.payload) != {"prompt", "display_part"}
+                    ):
                         continue
                     RuntimeNoticePayload.from_dict(item.payload)
                 if item.turn_scope is None or item.semantic_kind == "runtime_notice":
                     batch.display_only_item_ids.append(item.item_id)
-            if indexed is not None:
-                batch.visible_sequences.append(indexed[0])
+            if message_locator is not None:
+                # 候选组只验证内容与身份；已存消息继续引用原 locator，不写候选坐标。
+                batch.visible_sequences.append(message_locator[0])
                 continue
             sequence = batch.last_message_sequence + 1
             locations: list[ItemLocation] = []
-            if not stored:
-                for item in group:
-                    raw = canonical_json_line(item.to_dict())
-                    locations.append((item, offset, len(raw)))
-                    offset += len(raw)
-                _, message_offset, message_length = locations[-1]
-                batch.next_item_sequence += len(group)
-            else:
-                message_offset, message_length = catalog[:2]
-            serialized = codec.project_message(stored or group)
+            for item in group:
+                raw = canonical_json_line(item.to_dict())
+                locations.append((item, offset, len(raw)))
+                offset += len(raw)
+            _, message_offset, message_length = locations[-1]
+            batch.next_item_sequence += len(group)
+            serialized = codec.project_message(group)
             # 派生 message projection 也从唯一 canonical group 构造，不保存第二份正文。
             batch.prepared.append(
                 (
                     sequence,
-                    message_id,
+                    canonical_message_id,
                     turn_id,
                     codec.message_role(message),
                     canonical_json_text(serialized),

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
+from app.agents.model_tool_schema import filter_tool_event_injected_arguments
 from app.agents.tools.session_messaging import create_send_message_to_session_tool
 from app.schemas.internal_v2.communication import CommunicationReceipt
 from app.services.business.communication.addresses import GlobalThreadAddress
@@ -45,6 +47,16 @@ async def test_send_returns_durable_acceptance_and_software_identity(send_tool, 
 def test_model_schema_contains_only_business_parameters(send_tool):
     fields = send_tool.args_schema.model_json_schema()["properties"]
     assert set(fields) == {"target_session_id", "target_workspace_id", "content", "kind", "reply_to_communication_id", "delivery_policy"}
+    assert send_tool.args_schema.model_json_schema()["additionalProperties"] is False
+
+
+@pytest.mark.parametrize("field", ["team_state", "team_task", "goal_state"])
+async def test_send_rejects_foreign_business_state_before_transport(send_tool, communication_probe, field):
+    arguments = {"target_session_id": TARGET_SESSION, "content": "数据", field: {"status": "completed"}}
+    assert filter_tool_event_injected_arguments(send_tool, arguments) == arguments
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        await send_tool.ainvoke(arguments)
+    assert communication_probe.calls == []
 
 
 @pytest.mark.parametrize("policy", ["after_turn", "after_tool_result", "after_interrupt"])

@@ -112,6 +112,7 @@ describe("工作区 Terminal owner 镜像", () => {
     const mounted = await mount();
     let operation!: Promise<WorkspaceResourceDTO | string>;
     act(() => { operation = mounted.current().create({ session_id: "ses_owner", thread_id: "thr_actual" }, "workspace").catch((cause: unknown) => String(cause)); });
+    expect(createTerminal).toHaveBeenCalledWith(49_945, "gateway-a", { session_id: "ses_owner", thread_id: "thr_actual" }, "workspace");
     await mounted.switchTo("gateway-b");
     await mounted.switchTo("gateway-a");
     await act(async () => { response.resolve(resource(1, "term_old_create")); await operation; });

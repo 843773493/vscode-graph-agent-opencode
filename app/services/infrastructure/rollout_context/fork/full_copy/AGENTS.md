@@ -1,10 +1,10 @@
 # 目录用途
 
-完整 fork 的私有 staging、protected artifact 和 target manifest 收敛。
+冻结 Thread 快照所使用的 SQLite 一致捕获叶模块。
 
 # 可修改内容
 
-- 复用既有 storage writer、typed detail capability 和 identity mapping 的复制事务。
+- 可以维护有界 SQLite backup 与只读源连接；目标安装由 fork/snapshot_copy.py 负责。
 
 # 不可修改内容
 
@@ -13,5 +13,6 @@
 
 # 规范
 
-- 所有正文经显式 capability 验证；目标 key、detail、plan、ref 均为 target-local。
+- 历史 local ID、正文、时间、hash 与 pending 事实保持原值；只建立目标自己的运行状态。
+- 历史 detail/ref/plan 必须在目标物理节点冷读，不改写为目标身份、不回读 source locator。
 - 保留 retention/visibility，失败只留下明确错误，不泄露敏感原文。

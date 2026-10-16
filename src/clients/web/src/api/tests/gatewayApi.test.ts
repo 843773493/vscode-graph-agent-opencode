@@ -219,16 +219,17 @@ describe("手动创建会话连接", () => {
       { preconnect: originalFetch.preconnect },
     );
 
+    const thread = { session_id: "ses_manual", thread_id: "thr_manual" };
     const terminal = await createSessionConnection(
       49_901,
       "gw_manual",
-      "ses_manual",
+      thread,
       "terminal",
     );
     const browser = await createSessionConnection(
       49_901,
       "gw_manual",
-      "ses_manual",
+      thread,
       "browser",
     );
 
@@ -239,12 +240,13 @@ describe("手动创建会话连接", () => {
       "/api/v1/resources/terminals",
     );
     expect(requests[0].workspaceId).toBe("gw_manual");
-    expect(requests[0].body).toMatchObject({ session_id: "ses_manual", retention_scope: "thread" });
+    expect(requests[0].body).toMatchObject({ session_id: "ses_manual", thread_id: "thr_manual", retention_scope: "thread" });
     expect(requests[1].url).toContain(
       "/api/v1/resources/browsers",
     );
     expect(requests[1].body).toMatchObject({
       session_id: "ses_manual",
+      thread_id: "thr_manual",
       retention_scope: "thread",
       url: "about:blank",
     });

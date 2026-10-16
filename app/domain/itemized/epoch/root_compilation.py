@@ -173,6 +173,7 @@ class CompiledRootItem:
     sources: tuple[CompiledRootSourceProvenance, ...]
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "sources", tuple(self.sources))
         if not isinstance(self.epoch, PrefixEpoch):
             raise RootCompileBoundaryError("CompiledRootItem.epoch 必须是 PrefixEpoch")
         _non_empty_string(self.provider_profile, "CompiledRootItem.provider_profile")

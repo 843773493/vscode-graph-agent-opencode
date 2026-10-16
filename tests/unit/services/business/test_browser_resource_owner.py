@@ -33,6 +33,32 @@ async def test_precise_thread_filter_and_unload_remove_detached_temporary_browse
 
 
 @pytest.mark.asyncio
+async def test_delete_is_unavailable_until_thread_association_is_detached(bundle: BrowserBundle) -> None:
+    browser = await bundle.create()
+    rid = str(browser["resource_id"])
+    ref = ThreadRef(SESSION_A, THREAD_A)
+    assert "delete" not in browser["available_actions"]
+
+    with pytest.raises(ResourceConflict, match="仍有关联"):
+        await bundle.command(rid, action="delete", expected_revision=1)
+
+    associated = await bundle.owner.get_resource(rid)
+    assert associated["thread_associations"] == [{"session_id": SESSION_A, "thread_id": THREAD_A}]
+    assert associated["owner_revision"] == 1
+    assert associated["status"] == "running"
+    assert bundle.transport.records[rid]["transport_owner_revision"] == 1
+    assert bundle.transport.deleted == []
+    assert bundle.leases.leases_for_resource(rid) == []
+
+    detached = await bundle.command(rid, action="detach", expected_revision=1, thread=ref)
+    assert detached["thread_associations"] == []
+    assert "delete" in detached["available_actions"]
+    deleted = await bundle.command(rid, action="delete", expected_revision=2)
+    assert deleted["status"] == "deleted"
+    assert bundle.transport.deleted == [rid]
+
+
+@pytest.mark.asyncio
 async def test_workspace_browser_keeps_identity_after_session_cleanup_and_new_association(bundle: BrowserBundle) -> None:
     browser = await bundle.create(scope="workspace")
     source = browser["source_thread"]

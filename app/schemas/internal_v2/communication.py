@@ -8,7 +8,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-from app.gateway.federation.grants import ContextGrantTarget
+from app.gateway.federation.grants import ContextGrantTarget, ForkGrantTarget
+from app.schemas.internal_v2.session_fork_transfer import SessionForkTransferRequest
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
     SessionContextSearchRequest,
@@ -49,7 +50,7 @@ class CommunicationReceipt(BaseModel):
     payload_hash: str
     admission_id: str
     state: Literal["target_accepted"] = "target_accepted"
-    accepted_at: str
+    accepted_at: str = Field(description="target 首次持久接受此通信的 UTC 时刻，与 inbox.created_at 同源；重放保留原值，不表示 execution 或 Job 开始。")
 
 
 class CommunicationObservationRequest(BaseModel):
@@ -59,11 +60,14 @@ class CommunicationObservationRequest(BaseModel):
     source_call_id: str = Field(min_length=1)
     page_identity: str = Field(min_length=1)
     page_ordinal: int = Field(ge=0, strict=True)
-    expires_at: datetime
+    expires_at: datetime = Field(
+        description="从 tool call 起算的一天恢复窗口；query.deadline 独立冻结真正的 wait 预算"
+    )
     source: GlobalThreadAddress
     target: GlobalThreadAddress
     operation: Literal["read", "wait"]
     query: dict[str, object]
+    terminal_replay: bool = False
 
     @model_validator(mode="after")
     def validate_query(self) -> CommunicationObservationRequest:
@@ -110,15 +114,24 @@ class ContextQueryRequest(BaseModel):
 class CommunicationGatewayRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    operation: Literal["send", "reply", "read", "wait"]
+    operation: Literal["send", "reply", "read", "wait", "fork_source", "fork_target"]
     target: GlobalThreadAddress | None = None
     resource_target: ContextGrantTarget | None = None
+    fork_target: ForkGrantTarget | None = None
     body: dict[str, object]
 
     @model_validator(mode="after")
     def validate_target(self) -> CommunicationGatewayRequest:
-        if (self.target is None) == (self.resource_target is None):
-            raise ValueError("relay 必须恰好提供 Session target 或 resource_target")
+        if sum(target is not None for target in (self.target, self.resource_target, self.fork_target)) != 1:
+            raise ValueError("relay 必须恰好提供一个 typed target")
+        if self.fork_target is not None:
+            if self.operation != "fork_" + self.fork_target.fork_role:
+                raise ValueError("fork target 必须使用对应的独立 fork capability")
+            transfer = SessionForkTransferRequest.model_validate(self.body)
+            if transfer.fork_target != self.fork_target:
+                raise ValueError("relay fork target 与冻结 envelope 不一致")
+        elif self.operation in {"fork_source", "fork_target"}:
+            raise ValueError("fork capability 必须绑定 ForkGrantTarget")
         if self.resource_target is not None:
             if self.operation != "read":
                 raise ValueError("资源 target 只能使用 read capability")

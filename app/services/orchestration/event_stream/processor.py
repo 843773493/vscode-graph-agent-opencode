@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
@@ -16,12 +17,12 @@ from app.abstractions.session_changes import (
 )
 from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.model_capability_routing import MODEL_FAILED_CUSTOM_EVENT
-from app.agents.model_tool_schema import normalize_model_tool_arguments
+from app.agents.model_tool_schema import filter_tool_event_injected_arguments
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.agents.tools.apply_patch import APPLY_PATCH_TOOL_NAME
 from app.core.job_context import set_active_tool_name, set_interruptible_phase
 from app.core.job_event_bus import EventType
-from app.core.model_delta_context import ModelRunIdentityCallbackHandler
+from app.core.model_delta_context import AgentRunLifecycleCallbackHandler
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.turn_execution_scope import (
     CancellationSignal,
@@ -109,7 +110,7 @@ def _model_output_content(output: object) -> object | None:
 async def process_agent_event_stream(
     *,
     agent: AgentEventSource,
-    input_payload: dict[str, Any],
+    input_payload: dict[str, Any] | None,
     config: dict[str, Any],
     session_id: str,
     job_id: str,
@@ -145,6 +146,7 @@ async def process_agent_event_stream(
     activity_bindings_by_run_id: dict[str, tuple[tuple[str, str, str | None], ...]] = {}
     tool_scopes_by_run_id: dict[str, TurnExecutionScope] = {}
     message_stream_tool_call_ids_by_run_id: dict[str, str] = {}
+    message_stream_tool_attempt_ids_by_run_id: dict[str, str] = {}
     file_edit_snapshots_by_run_id: dict[str, list[FileEditSnapshot]] = {}
     last_tool_result_text = ""
     successful_tool_calls: list[SuccessfulToolCall] = []
@@ -167,12 +169,12 @@ async def process_agent_event_stream(
     stream_callbacks = stream_config.get("callbacks")
     if stream_callbacks is None:
         stream_config["callbacks"] = [
-            ModelRunIdentityCallbackHandler(message_stream_runtime)
+            AgentRunLifecycleCallbackHandler(message_stream_runtime)
         ]
     elif isinstance(stream_callbacks, list):
         stream_config["callbacks"] = [
             *stream_callbacks,
-            ModelRunIdentityCallbackHandler(message_stream_runtime),
+            AgentRunLifecycleCallbackHandler(message_stream_runtime),
         ]
     else:
         raise TypeError("Agent 事件流 config.callbacks 必须是 list")
@@ -257,7 +259,7 @@ async def process_agent_event_stream(
             normalized.append(block)
         return normalized
 
-    async for event in iter_agent_events(
+    events = iter_agent_events(
         agent=agent,
         input_payload=input_payload,
         stream_config=stream_config,
@@ -268,528 +270,540 @@ async def process_agent_event_stream(
         idle_model_timeout_seconds=idle_model_timeout_seconds,
         initial_event_timeout_seconds=initial_event_timeout_seconds,
         effective_tool_dispatch_timeout_seconds=effective_tool_dispatch_timeout_seconds,
-    ):
-        if cancellation_signal is not None:
-            try:
-                cancellation_signal.raise_if_cancelled()
-            except ScopeCancelledError as error:
-                raise asyncio.CancelledError(str(error)) from error
-        event_type = event.get("event")
-        name = event.get("name", "")
-        data = event.get("data", {})
-        metadata = event.get("metadata", {})
-        is_model_event = (
-            isinstance(event_type, str)
-            and event_type.startswith("on_chat_model_")
-            and is_tracked_chat_model_event(name)
-        )
-        is_model_failed_event = (
-            event_type == "on_custom_event" and name == MODEL_FAILED_CUSTOM_EVENT
-        )
-        if (
-            is_model_event
-            or is_model_failed_event
-            or event_type in {"on_tool_start", "on_tool_end"}
-        ):
-            validate_stream_event_identity(
-                metadata,
-                session_id=session_id,
-                job_id=job_id,
-                event_type=event_type,
-                name=name,
+    )
+    try:
+        async for event in events:
+            if cancellation_signal is not None:
+                try:
+                    cancellation_signal.raise_if_cancelled()
+                except ScopeCancelledError as error:
+                    raise asyncio.CancelledError(str(error)) from error
+            event_type = event.get("event")
+            name = event.get("name", "")
+            data = event.get("data", {})
+            metadata = event.get("metadata", {})
+            is_model_event = (
+                isinstance(event_type, str)
+                and event_type.startswith("on_chat_model_")
+                and is_tracked_chat_model_event(name)
             )
-
-        if progress_reporter is not None:
-            if is_model_event:
-                progress_reporter("model")
-            elif is_model_failed_event:
-                progress_reporter("model_failed")
-            elif event_type in {"on_tool_start", "on_tool_end"}:
-                progress_reporter(f"tool:{name or 'unknown'}")
-
-        if is_model_failed_event:
-            if not isinstance(data, dict):
-                raise TypeError("模型失败自定义事件 data 必须是 dict")
-            await publish(EventType.MODEL_FAILED, dict(data))
-            if message_stream_runtime is not None:
-                error_type = data.get("error_type")
-                error_message = data.get("error")
-                await message_stream_runtime.fail_model(
-                    code=(
-                        str(error_type)
-                        if isinstance(error_type, str) and error_type
-                        else "provider_failed"
-                    ),
-                    message=(
-                        str(error_message)
-                        if isinstance(error_message, str) and error_message
-                        else "模型 provider 请求失败"
-                    ),
-                    outcome="upstream_error",
-                    retryable=True,
-                )
-            continue
-
-        if event_type == "on_chat_model_start" and is_tracked_chat_model_event(name):
-            latest_model_part_order.clear()
-            latest_model_parts.clear()
-            latest_model_visible_text_seen = False
-            latest_model_reasoning_seen = False
-            model_run_id = event_run_id(event)
-            if model_run_id:
-                track_model_run(model_run_id)
-            model_name = metadata.get("ls_model_name") or "unknown_model"
-            if execution_scope is not None:
-                previous_model_scope = model_scopes_by_run_id.get(model_run_id)
-                if previous_model_scope is not None:
-                    execution_scope.clear_active_operation(previous_model_scope)
-                    await previous_model_scope.close()
-                # 模型事件的 timeout 只用于下面的 idle watchdog。这里不能再给
-                # child scope 设置固定 deadline，否则持续输出超过该时长时会
-                # 取消底层流，路由层再误当作 provider 失败切到 backup_4。
-                model_scope = execution_scope.child(
-                    f"model-{model_run_id or len(model_scopes_by_run_id)}",
-                )
-                model_scopes_by_run_id[model_run_id] = model_scope
-                model_scope_tokens_by_run_id[model_run_id] = (
-                    set_current_turn_execution_scope(model_scope)
-                )
-                execution_scope.set_active_operation(model_scope)
-            if message_stream_runtime is not None:
-                await message_stream_runtime.start_model(
-                    model_run_id or f"model_{int(time.time() * 1000)}",
-                    str(model_name),
-                )
-            await publish(
-                EventType.LLM_REQUEST,
-                {
-                    "model": model_name,
-                    "timestamp": int(time.time() * 1000),
-                },
+            is_model_failed_event = (
+                event_type == "on_custom_event" and name == MODEL_FAILED_CUSTOM_EVENT
             )
-            continue
-
-        if event_type == "on_chat_model_stream" and is_tracked_chat_model_event(name):
-            chunk = data.get("chunk")
-            if chunk is None:
-                continue
-            chunk_token_usage = stream_chunk_token_usage(chunk)
-            if chunk_token_usage is not None:
-                model_run_id = event_run_id(event)
-                if not model_run_id:
-                    raise RuntimeError("带 usage_metadata 的模型流事件缺少 run_id")
-                track_model_run(model_run_id)
-                model_usage_by_run_id[model_run_id] = chunk_token_usage
-            chunk_message = _field_value(chunk, "message")
-            if chunk_message is not None:
-                content = _field_value(chunk_message, "content") or ""
-            else:
-                content = _field_value(chunk, "content") or ""
-
-            record_model_content_parts(extract_agent_stream_content_parts(content))
-
-            continue
-
-        if event_type == "on_chat_model_end" and is_tracked_chat_model_event(name):
-            model_run_id = event_run_id(event)
-            if not latest_model_visible_text_seen:
-                canonical_visible_text = (
-                    message_stream_runtime.visible_text_for_model_call(model_run_id)
-                    if message_stream_runtime is not None
-                    else ""
-                )
-                if canonical_visible_text:
-                    # provider hook 已经提交了权威正文。这里仅把同一份已提交
-                    # 内容补进 AgentLoop 的本地结果，不再次写入消息流。
-                    record_model_content_parts(
-                        extract_agent_stream_content_parts(
-                            [
-                                {
-                                    "type": "text",
-                                    "text": canonical_visible_text,
-                                    "id": f"{model_run_id or 'model'}:canonical:text",
-                                    "index": 0,
-                                }
-                            ]
-                        )
-                    )
-                else:
-                    model_output = data.get("output")
-                    output_content = _model_output_content(model_output)
-                    end_output_blocks = normalize_end_output_content(
-                        output_content,
-                        model_call_id=model_run_id,
-                    )
-                    canonical_has_reasoning = (
-                        message_stream_runtime.model_call_has_carrier(
-                            model_run_id,
-                            {
-                                "reasoning",
-                                "reasoning_content",
-                                "reasoning_items",
-                                "thinking",
-                                "redacted_thinking",
-                            },
-                        )
-                        if message_stream_runtime is not None
-                        else False
-                    )
-                    if latest_model_reasoning_seen or canonical_has_reasoning:
-                        end_output_blocks = [
-                            block
-                            for block in end_output_blocks
-                            if block.get("type")
-                            in {"text", "output_text", "refusal"}
-                        ]
-                    if end_output_blocks:
-                        if message_stream_runtime is not None:
-                            await message_stream_runtime.accept_message_chunk(
-                                AIMessageChunk(content=end_output_blocks),
-                                model_call_id=model_run_id,
-                            )
-                        record_model_content_parts(
-                            extract_agent_stream_content_parts(end_output_blocks)
-                        )
-            if message_stream_runtime is not None:
-                await message_stream_runtime.finish_model()
-            model_scope = model_scopes_by_run_id.pop(event_run_id(event), None)
-            if execution_scope is not None and model_scope is not None:
-                execution_scope.clear_active_operation(model_scope)
-                scope_token = model_scope_tokens_by_run_id.pop(
-                    event_run_id(event),
-                    None,
-                )
-                if scope_token is not None:
-                    reset_current_turn_execution_scope(scope_token)
-                await model_scope.close()
-            continue
-
-        if event_type == "on_tool_start":
-            if collected_text_parts:
-                collected_text_parts.clear()
-                SessionInterruptState.set(session_id, current_text="")
-            if not name:
-                raise RuntimeError("工具开始事件缺少 name")
-            raw_tool_name = name
-            raw_tool_args = normalize_tool_args(data.get("input"))
-            if agent_has_tool_registry:
-                model_tool = model_tools_by_name.get(raw_tool_name)
-                if model_tool is None:
-                    raise RuntimeError(
-                        "工具开始事件中的工具不在 Agent 工具注册表中: "
-                        f"tool_name={raw_tool_name}"
-                    )
-                if not isinstance(model_tool, BaseTool):
-                    raise TypeError(
-                        "Agent 工具注册表包含无效工具对象: "
-                        f"tool_name={raw_tool_name} "
-                        f"actual_type={type(model_tool).__name__}"
-                    )
-                raw_tool_args = normalize_model_tool_arguments(
-                    model_tool,
-                    raw_tool_args,
-                )
-            display_context = build_tool_display_context(
-                raw_tool_name=raw_tool_name,
-                raw_tool_args=raw_tool_args,
-            )
-            run_id = event_run_id(event)
-            if not run_id:
-                raise RuntimeError(
-                    f"{display_context.tool_name} 工具开始事件缺少 run_id"
-                )
-            if run_id in tool_contexts_by_run_id:
-                raise RuntimeError(
-                    f"工具开始事件使用了重复的 run_id: run_id={run_id} "
-                    f"tool={display_context.tool_name}"
-                )
-            if execution_scope is not None:
-                tool_scopes_by_run_id[run_id] = execution_scope.child(f"tool-{run_id}")
-            tool_contexts_by_run_id[run_id] = display_context
-            file_paths = file_paths_from_tool_args(
-                display_context.tool_name,
-                display_context.tool_args,
-            )
-            if file_paths:
-                file_edit_snapshots_by_run_id[run_id] = [
-                    session_changes_service.capture_before(file_path)
-                    for file_path in file_paths
-                ]
-            skill_names = custom_tool_skill_sources.get(display_context.tool_name, [])
-            interrupt_state = SessionInterruptState.start_tool(
-                session_id,
-                run_id=run_id,
-                tool_name=display_context.tool_name,
-            )
-            set_interruptible_phase("tool")
-            set_active_tool_name(interrupt_state.tool_name)
-            payload: dict[str, object] = {
-                "part_id": run_id,
-                "execution_id": run_id,
-                "tool_name": display_context.tool_name,
-                "args": display_context.tool_args,
-                "agent_id": agent_id,
-            }
-            if display_context.invocation_tool_name:
-                payload["invocation_tool_name"] = display_context.invocation_tool_name
-            if skill_names:
-                payload["skill_names"] = skill_names
-            await publish(
-                EventType.TOOL_CALL_START,
-                payload,
-            )
-            if message_stream_runtime is not None:
-                provider_tool_name = (
-                    display_context.invocation_tool_name or display_context.tool_name
-                )
-                message_stream_tool_call_id = message_stream_runtime.claim_tool_call_id(
-                    provider_tool_name,
-                    display_context.tool_args,
-                    target_tool_name=display_context.tool_name,
-                )
-                if message_stream_tool_call_id is None:
-                    raise RuntimeError(
-                        "工具开始事件无法关联已提交的 provider tool_call: "
-                        f"tool={display_context.tool_name} run_id={run_id}"
-                    )
-                message_stream_tool_call_ids_by_run_id[run_id] = (
-                    message_stream_tool_call_id
-                )
-                await message_stream_runtime.start_tool(
-                    tool_execution_id=run_id,
-                    tool_call_id=message_stream_tool_call_id,
-                    tool_name=display_context.tool_name,
-                )
-                activity_bindings: list[tuple[str, str, str | None]] = []
-                if (
-                    message_stream_runtime.writer is not None
-                    and message_stream_runtime.activities is not None
-                    and display_context.tool_name in SUBAGENT_TOOL_NAMES
-                ):
-                    activity_id = (
-                        f"{job_id}:"
-                        f"subagent:{run_id}"
-                    )
-                    await message_stream_runtime.activities.started(
-                        activity_id=activity_id,
-                        kind="subagent.run",
-                        summary="子 Agent 启动中",
-                        cancellable=False,
-                        resumable=True,
-                        side_effect_policy="external",
-                        detail={
-                            "phase": "starting",
-                            "agent_id": agent_id,
-                        },
-                    )
-                    activity_bindings.append((activity_id, "subagent.run", None))
-                resource_binding = resource_activity_binding_from_metadata(
-                    event.get("metadata")
-                )
-                if (
-                    message_stream_runtime.writer is not None
-                    and message_stream_runtime.activities is not None
-                    and resource_binding is not None
-                ):
-                    activity_id = (
-                        f"{job_id}:"
-                        f"resource:{run_id}"
-                    )
-                    await message_stream_runtime.activities.started(
-                        activity_id=activity_id,
-                        kind="resource.operation",
-                        summary="资源操作执行中",
-                        cancellable=True,
-                        resumable=False,
-                        side_effect_policy="external",
-                        resource_refs=(resource_binding.resource_id,),
-                        detail={
-                            "resource_id": resource_binding.resource_id,
-                            "operation": display_context.tool_name,
-                            "phase": "starting",
-                            "agent_id": agent_id,
-                        },
-                    )
-                    activity_bindings.append(
-                        (activity_id, "resource.operation", resource_binding.resource_id)
-                    )
-                if activity_bindings:
-                    activity_bindings_by_run_id[run_id] = tuple(activity_bindings)
-            continue
-
-        if event_type == "on_tool_end":
-            run_id = event_run_id(event)
-            if not run_id:
-                raise RuntimeError(f"{name or 'unknown_tool'} 工具结束事件缺少 run_id")
-            display_context = tool_contexts_by_run_id.pop(run_id, None)
-            if display_context is None:
-                raise RuntimeError(
-                    f"工具结束事件找不到对应的开始事件: run_id={run_id} "
-                    f"tool={name or 'unknown_tool'}"
-                )
-            raw_output = data.get("output")
-            raw_output = tool_message_from_output(
-                raw_output,
-                execution_id=run_id,
-                tool_name=display_context.tool_name,
-            )
-            tool_call_id = raw_output.tool_call_id
-            if not isinstance(tool_call_id, str) or not tool_call_id:
-                raise RuntimeError(
-                    "工具结束事件的 ToolMessage 缺少 tool_call_id: "
-                    f"execution_id={run_id} tool={display_context.tool_name}"
-                )
-            raw_result_text = extract_tool_result_text(raw_output)
-            effective_tool_status = tool_output_status(raw_output)
-            output = raw_output
             if (
-                isinstance(raw_output, ToolMessage)
-                and effective_tool_status == "success"
+                is_model_event
+                or is_model_failed_event
+                or event_type in {"on_tool_start", "on_tool_end"}
             ):
-                output = await tool_output_store.abound(
+                validate_stream_event_identity(
+                    metadata,
                     session_id=session_id,
-                    tool_name=display_context.tool_name,
-                    tool_call_id=raw_output.tool_call_id,
-                    message=raw_output,
+                    job_id=job_id,
+                    event_type=event_type,
+                    name=name,
                 )
-            result_text = extract_tool_result_text(output)
-            last_tool_result_text = result_text
-            skill_names = custom_tool_skill_sources.get(display_context.tool_name, [])
-            if effective_tool_status == "success":
-                successful_tool_calls.append(
-                    SuccessfulToolCall(
-                        tool_name=display_context.tool_name,
-                        tool_args=dict(display_context.tool_args),
+
+            if progress_reporter is not None:
+                if is_model_event:
+                    progress_reporter("model")
+                elif is_model_failed_event:
+                    progress_reporter("model_failed")
+                elif event_type in {"on_tool_start", "on_tool_end"}:
+                    progress_reporter(f"tool:{name or 'unknown'}")
+
+            if is_model_failed_event:
+                if not isinstance(data, dict):
+                    raise TypeError("模型失败自定义事件 data 必须是 dict")
+                await publish(EventType.MODEL_FAILED, dict(data))
+                if message_stream_runtime is not None:
+                    error_type = data.get("error_type")
+                    error_message = data.get("error")
+                    await message_stream_runtime.fail_model(
+                        code=(
+                            str(error_type)
+                            if isinstance(error_type, str) and error_type
+                            else "provider_failed"
+                        ),
+                        message=(
+                            str(error_message)
+                            if isinstance(error_message, str) and error_message
+                            else "模型 provider 请求失败"
+                        ),
+                        outcome="upstream_error",
+                        retryable=True,
                     )
+                continue
+
+            if event_type == "on_chat_model_start" and is_tracked_chat_model_event(name):
+                latest_model_part_order.clear()
+                latest_model_parts.clear()
+                latest_model_visible_text_seen = False
+                latest_model_reasoning_seen = False
+                model_run_id = event_run_id(event)
+                if model_run_id:
+                    track_model_run(model_run_id)
+                model_name = metadata.get("ls_model_name") or "unknown_model"
+                if execution_scope is not None:
+                    previous_model_scope = model_scopes_by_run_id.get(model_run_id)
+                    if previous_model_scope is not None:
+                        execution_scope.clear_active_operation(previous_model_scope)
+                        await previous_model_scope.close()
+                    # 模型事件的 timeout 只用于下面的 idle watchdog。这里不能再给
+                    # child scope 设置固定 deadline，否则持续输出超过该时长时会
+                    # 取消底层流，路由层再误当作 provider 失败切到 backup_4。
+                    model_scope = execution_scope.child(
+                        f"model-{model_run_id or len(model_scopes_by_run_id)}",
+                    )
+                    model_scopes_by_run_id[model_run_id] = model_scope
+                    model_scope_tokens_by_run_id[model_run_id] = (
+                        set_current_turn_execution_scope(model_scope)
+                    )
+                    execution_scope.set_active_operation(model_scope)
+                if message_stream_runtime is not None:
+                    await message_stream_runtime.start_model(
+                        model_run_id or f"model_{int(time.time() * 1000)}",
+                        str(model_name),
+                    )
+                await publish(
+                    EventType.LLM_REQUEST,
+                    {
+                        "model": model_name,
+                        "timestamp": int(time.time() * 1000),
+                    },
                 )
-            if display_context.invocation_tool_name == EXTENSION_TOOL_INVOKER_NAME:
-                completed_custom_tool_names.append(display_context.tool_name)
-            stored_edits: list[StoredFileEdit] = []
-            if run_id:
-                snapshots = file_edit_snapshots_by_run_id.pop(run_id, None)
-                if (
-                    snapshots is None
-                    and display_context.tool_name == APPLY_PATCH_TOOL_NAME
-                    and tool_output_succeeded(raw_output)
-                ):
-                    snapshots = apply_patch_snapshots_from_result(
-                        result_text=raw_result_text,
-                        session_changes_service=session_changes_service,
-                        workspace_root=workspace_root,
+                continue
+
+            if event_type == "on_chat_model_stream" and is_tracked_chat_model_event(name):
+                chunk = data.get("chunk")
+                if chunk is None:
+                    continue
+                chunk_token_usage = stream_chunk_token_usage(chunk)
+                if chunk_token_usage is not None:
+                    model_run_id = event_run_id(event)
+                    if not model_run_id:
+                        raise RuntimeError("带 usage_metadata 的模型流事件缺少 run_id")
+                    track_model_run(model_run_id)
+                    model_usage_by_run_id[model_run_id] = chunk_token_usage
+                if message_stream_runtime is not None and message_stream_runtime.is_summary_candidate(event_run_id(event)):
+                    continue
+                chunk_message = _field_value(chunk, "message")
+                if chunk_message is not None:
+                    content = _field_value(chunk_message, "content") or ""
+                else:
+                    content = _field_value(chunk, "content") or ""
+
+                record_model_content_parts(extract_agent_stream_content_parts(content))
+
+                continue
+
+            if event_type == "on_chat_model_end" and is_tracked_chat_model_event(name):
+                model_run_id = event_run_id(event)
+                is_summary_candidate = message_stream_runtime is not None and message_stream_runtime.is_summary_candidate(model_run_id)
+                if not is_summary_candidate and not latest_model_visible_text_seen:
+                    canonical_visible_text = (
+                        message_stream_runtime.visible_text_for_model_call(model_run_id)
+                        if message_stream_runtime is not None
+                        else ""
                     )
-                if snapshots is not None and tool_output_succeeded(raw_output):
-                    for snapshot in snapshots:
-                        stored_edit = (
-                            await session_changes_service.record_tool_file_edit(
-                                session_id=session_id,
-                                turn_id=turn_id,
-                                tool_call_id=tool_call_id,
-                                execution_id=run_id,
-                                tool_name=display_context.tool_name,
-                                before=snapshot,
+                    if canonical_visible_text:
+                        # provider hook 已经提交了权威正文。这里仅把同一份已提交
+                        # 内容补进 AgentLoop 的本地结果，不再次写入消息流。
+                        record_model_content_parts(
+                            extract_agent_stream_content_parts(
+                                [
+                                    {
+                                        "type": "text",
+                                        "text": canonical_visible_text,
+                                        "id": f"{model_run_id or 'model'}:canonical:text",
+                                        "index": 0,
+                                    }
+                                ]
                             )
-                        )
-                        if stored_edit is not None:
-                            stored_edits.append(stored_edit)
-            interrupt_state = SessionInterruptState.end_tool(session_id, run_id=run_id)
-            if interrupt_state.active_tools_by_run_id:
-                set_interruptible_phase("tool")
-                set_active_tool_name(interrupt_state.tool_name)
-            else:
-                set_interruptible_phase("text")
-                set_active_tool_name(None)
-            payload = {
-                "part_id": run_id,
-                "execution_id": run_id,
-                "tool_call_id": tool_call_id,
-                "tool_name": display_context.tool_name,
-                "result": result_text,
-                "status": effective_tool_status,
-                "failed": effective_tool_status == "error",
-                "agent_id": agent_id,
-            }
-            tool_output_reference = extract_tool_output_reference(output)
-            if tool_output_reference is not None:
-                payload["tool_output"] = tool_output_reference
-            if display_context.invocation_tool_name:
-                payload["invocation_tool_name"] = display_context.invocation_tool_name
-            if skill_names:
-                payload["skill_names"] = skill_names
-            if stored_edits:
-                payload["file_edits"] = [
-                    stored_edit_payload(stored_edit) for stored_edit in stored_edits
-                ]
-                if len(stored_edits) == 1:
-                    payload["file_edit"] = stored_edit_payload(stored_edits[0])
-            await publish(
-                EventType.TOOL_CALL_END,
-                payload,
-            )
-            if message_stream_runtime is not None:
-                message_stream_tool_call_id = (
-                    message_stream_tool_call_ids_by_run_id.pop(
-                        run_id,
-                        None,
-                    )
-                )
-                if message_stream_tool_call_id is None:
-                    raise RuntimeError(
-                        "工具结束事件缺少已关联的 provider tool_call: "
-                        f"tool={display_context.tool_name} run_id={run_id}"
-                    )
-                await message_stream_runtime.complete_tool(
-                    tool_execution_id=run_id,
-                    tool_call_id=message_stream_tool_call_id,
-                    tool_name=display_context.tool_name,
-                    status=(
-                        "failed" if effective_tool_status == "error" else "succeeded"
-                    ),
-                    result=result_text,
-                    error=result_text if effective_tool_status == "error" else None,
-                )
-                activity_bindings = activity_bindings_by_run_id.pop(run_id, ())
-                activities = message_stream_runtime.activities
-                if activity_bindings and activities is None:
-                    raise RuntimeError(
-                        "message-stream activity runtime 不可在执行中消失"
-                    )
-                for activity_id, activity_kind, resource_id in activity_bindings:
-                    detail = activity_result_detail(
-                        result_text,
-                        tool_name=display_context.tool_name,
-                        agent_id=agent_id,
-                    )
-                    if activity_kind == "resource.operation":
-                        detail["operation"] = display_context.tool_name
-                        if resource_id is not None:
-                            detail["resource_id"] = resource_id
-                    await activities.updated(
-                        activity_id=activity_id,
-                        kind=activity_kind,
-                        status="stopping",
-                        detail=detail,
-                    )
-                    if effective_tool_status == "error":
-                        await activities.failed(
-                            activity_id=activity_id,
-                            kind=activity_kind,
-                            outcome="outcome_unknown",
-                            summary=result_text,
-                            detail=detail,
                         )
                     else:
-                        await activities.completed(
+                        model_output = data.get("output")
+                        output_content = _model_output_content(model_output)
+                        end_output_blocks = normalize_end_output_content(
+                            output_content,
+                            model_call_id=model_run_id,
+                        )
+                        canonical_has_reasoning = (
+                            message_stream_runtime.model_call_has_carrier(
+                                model_run_id,
+                                {
+                                    "reasoning",
+                                    "reasoning_content",
+                                    "reasoning_items",
+                                    "thinking",
+                                    "redacted_thinking",
+                                },
+                            )
+                            if message_stream_runtime is not None
+                            else False
+                        )
+                        if latest_model_reasoning_seen or canonical_has_reasoning:
+                            end_output_blocks = [
+                                block
+                                for block in end_output_blocks
+                                if block.get("type")
+                                in {"text", "output_text", "refusal"}
+                            ]
+                        if end_output_blocks:
+                            if message_stream_runtime is not None:
+                                await message_stream_runtime.accept_message_chunk(
+                                    AIMessageChunk(content=end_output_blocks),
+                                    model_call_id=model_run_id,
+                                )
+                            record_model_content_parts(
+                                extract_agent_stream_content_parts(end_output_blocks)
+                            )
+                if message_stream_runtime is not None:
+                    await message_stream_runtime.finish_model()
+                    if is_summary_candidate:
+                        await message_stream_runtime.complete_model(
+                            outcome="accepted",
+                            reason="摘要候选传输完成；正文是否可用由压缩中间件校验",
+                        )
+                model_scope = model_scopes_by_run_id.pop(event_run_id(event), None)
+                if execution_scope is not None and model_scope is not None:
+                    execution_scope.clear_active_operation(model_scope)
+                    scope_token = model_scope_tokens_by_run_id.pop(
+                        event_run_id(event),
+                        None,
+                    )
+                    if scope_token is not None:
+                        reset_current_turn_execution_scope(scope_token)
+                    await model_scope.close()
+                continue
+
+            if event_type == "on_tool_start":
+                if collected_text_parts:
+                    collected_text_parts.clear()
+                    SessionInterruptState.set(session_id, current_text="")
+                if not name:
+                    raise RuntimeError("工具开始事件缺少 name")
+                raw_tool_name = name
+                raw_tool_args = normalize_tool_args(data.get("input"))
+                if agent_has_tool_registry:
+                    model_tool = model_tools_by_name.get(raw_tool_name)
+                    if model_tool is None:
+                        raise RuntimeError(
+                            "工具开始事件中的工具不在 Agent 工具注册表中: "
+                            f"tool_name={raw_tool_name}"
+                        )
+                    if not isinstance(model_tool, BaseTool):
+                        raise TypeError(
+                            "Agent 工具注册表包含无效工具对象: "
+                            f"tool_name={raw_tool_name} "
+                            f"actual_type={type(model_tool).__name__}"
+                        )
+                    raw_tool_args = filter_tool_event_injected_arguments(
+                        model_tool,
+                        raw_tool_args,
+                    )
+                display_context = build_tool_display_context(
+                    raw_tool_name=raw_tool_name,
+                    raw_tool_args=raw_tool_args,
+                )
+                run_id = event_run_id(event)
+                if not run_id:
+                    raise RuntimeError(
+                        f"{display_context.tool_name} 工具开始事件缺少 run_id"
+                    )
+                if run_id in tool_contexts_by_run_id:
+                    raise RuntimeError(
+                        f"工具开始事件使用了重复的 run_id: run_id={run_id} "
+                        f"tool={display_context.tool_name}"
+                    )
+                if execution_scope is not None:
+                    tool_scopes_by_run_id[run_id] = execution_scope.child(f"tool-{run_id}")
+                tool_contexts_by_run_id[run_id] = display_context
+                file_paths = file_paths_from_tool_args(
+                    display_context.tool_name,
+                    display_context.tool_args,
+                )
+                if file_paths:
+                    file_edit_snapshots_by_run_id[run_id] = [
+                        session_changes_service.capture_before(file_path)
+                        for file_path in file_paths
+                    ]
+                tool_attempt_id = run_id
+                if message_stream_runtime is not None:
+                    message_stream_tool_call_id = await message_stream_runtime.tool_call_for_callback(run_id)
+                    message_stream_tool_call_ids_by_run_id[run_id] = message_stream_tool_call_id
+                    tool_attempt_id = message_stream_runtime.resumed_tool_execution_id(
+                        message_stream_tool_call_id, callback_run_id=run_id,
+                    )
+                    message_stream_tool_attempt_ids_by_run_id[run_id] = tool_attempt_id
+                skill_names = custom_tool_skill_sources.get(display_context.tool_name, [])
+                interrupt_state = SessionInterruptState.start_tool(
+                    session_id,
+                    run_id=run_id,
+                    tool_name=display_context.tool_name,
+                )
+                set_interruptible_phase("tool")
+                set_active_tool_name(interrupt_state.tool_name)
+                payload: dict[str, object] = {
+                    "part_id": tool_attempt_id,
+                    "execution_id": tool_attempt_id,
+                    "tool_name": display_context.tool_name,
+                    "args": display_context.tool_args,
+                    "agent_id": agent_id,
+                }
+                if display_context.invocation_tool_name:
+                    payload["invocation_tool_name"] = display_context.invocation_tool_name
+                if skill_names:
+                    payload["skill_names"] = skill_names
+                await publish(
+                    EventType.TOOL_CALL_START,
+                    payload,
+                )
+                if message_stream_runtime is not None:
+                    await message_stream_runtime.start_tool(
+                        tool_execution_id=tool_attempt_id,
+                        tool_call_id=message_stream_tool_call_id,
+                        tool_name=display_context.tool_name,
+                    )
+                    activity_bindings: list[tuple[str, str, str | None]] = []
+                    if (
+                        message_stream_runtime.writer is not None
+                        and message_stream_runtime.activities is not None
+                        and display_context.tool_name in SUBAGENT_TOOL_NAMES
+                    ):
+                        activity_id = (
+                            f"{job_id}:"
+                            f"subagent:{run_id}"
+                        )
+                        await message_stream_runtime.activities.started(
+                            activity_id=activity_id,
+                            kind="subagent.run",
+                            summary="子 Agent 启动中",
+                            cancellable=False,
+                            resumable=True,
+                            side_effect_policy="external",
+                            detail={
+                                "phase": "starting",
+                                "agent_id": agent_id,
+                            },
+                        )
+                        activity_bindings.append((activity_id, "subagent.run", None))
+                    resource_binding = resource_activity_binding_from_metadata(
+                        event.get("metadata")
+                    )
+                    if (
+                        message_stream_runtime.writer is not None
+                        and message_stream_runtime.activities is not None
+                        and resource_binding is not None
+                    ):
+                        activity_id = (
+                            f"{job_id}:"
+                            f"resource:{run_id}"
+                        )
+                        await message_stream_runtime.activities.started(
+                            activity_id=activity_id,
+                            kind="resource.operation",
+                            summary="资源操作执行中",
+                            cancellable=True,
+                            resumable=False,
+                            side_effect_policy="external",
+                            resource_refs=(resource_binding.resource_id,),
+                            detail={
+                                "resource_id": resource_binding.resource_id,
+                                "operation": display_context.tool_name,
+                                "phase": "starting",
+                                "agent_id": agent_id,
+                            },
+                        )
+                        activity_bindings.append(
+                            (activity_id, "resource.operation", resource_binding.resource_id)
+                        )
+                    if activity_bindings:
+                        activity_bindings_by_run_id[run_id] = tuple(activity_bindings)
+                continue
+
+            if event_type == "on_tool_end":
+                run_id = event_run_id(event)
+                if not run_id:
+                    raise RuntimeError(f"{name or 'unknown_tool'} 工具结束事件缺少 run_id")
+                display_context = tool_contexts_by_run_id.pop(run_id, None)
+                if display_context is None:
+                    raise RuntimeError(
+                        f"工具结束事件找不到对应的开始事件: run_id={run_id} "
+                        f"tool={name or 'unknown_tool'}"
+                    )
+                raw_output = data.get("output")
+                raw_output = tool_message_from_output(
+                    raw_output,
+                    execution_id=run_id,
+                    tool_name=display_context.tool_name,
+                )
+                tool_call_id = raw_output.tool_call_id
+                if not isinstance(tool_call_id, str) or not tool_call_id:
+                    raise RuntimeError(
+                        "工具结束事件的 ToolMessage 缺少 tool_call_id: "
+                        f"execution_id={run_id} tool={display_context.tool_name}"
+                    )
+                raw_result_text = extract_tool_result_text(raw_output)
+                effective_tool_status = tool_output_status(raw_output)
+                output = raw_output
+                if (
+                    isinstance(raw_output, ToolMessage)
+                    and effective_tool_status == "success"
+                ):
+                    output = await tool_output_store.abound(
+                        session_id=session_id,
+                        tool_name=display_context.tool_name,
+                        tool_call_id=raw_output.tool_call_id,
+                        message=raw_output,
+                    )
+                result_text = extract_tool_result_text(output)
+                last_tool_result_text = result_text
+                skill_names = custom_tool_skill_sources.get(display_context.tool_name, [])
+                if effective_tool_status == "success":
+                    successful_tool_calls.append(
+                        SuccessfulToolCall(
+                            tool_name=display_context.tool_name,
+                            tool_args=dict(display_context.tool_args),
+                        )
+                    )
+                if display_context.invocation_tool_name == EXTENSION_TOOL_INVOKER_NAME:
+                    completed_custom_tool_names.append(display_context.tool_name)
+                stored_edits: list[StoredFileEdit] = []
+                if run_id:
+                    snapshots = file_edit_snapshots_by_run_id.pop(run_id, None)
+                    if (
+                        snapshots is None
+                        and display_context.tool_name == APPLY_PATCH_TOOL_NAME
+                        and tool_output_succeeded(raw_output)
+                    ):
+                        snapshots = apply_patch_snapshots_from_result(
+                            result_text=raw_result_text,
+                            session_changes_service=session_changes_service,
+                            workspace_root=workspace_root,
+                        )
+                    if snapshots is not None and tool_output_succeeded(raw_output):
+                        for snapshot in snapshots:
+                            stored_edit = (
+                                await session_changes_service.record_tool_file_edit(
+                                    session_id=session_id,
+                                    turn_id=turn_id,
+                                    tool_call_id=tool_call_id,
+                                    execution_id=run_id,
+                                    tool_name=display_context.tool_name,
+                                    before=snapshot,
+                                )
+                            )
+                            if stored_edit is not None:
+                                stored_edits.append(stored_edit)
+                interrupt_state = SessionInterruptState.end_tool(session_id, run_id=run_id)
+                if interrupt_state.active_tools_by_run_id:
+                    set_interruptible_phase("tool")
+                    set_active_tool_name(interrupt_state.tool_name)
+                else:
+                    set_interruptible_phase("text")
+                    set_active_tool_name(None)
+                tool_attempt_id = message_stream_tool_attempt_ids_by_run_id.get(run_id, run_id)
+                payload = {
+                    "part_id": tool_attempt_id,
+                    "execution_id": tool_attempt_id,
+                    "tool_call_id": tool_call_id,
+                    "tool_name": display_context.tool_name,
+                    "result": result_text,
+                    "status": effective_tool_status,
+                    "failed": effective_tool_status == "error",
+                    "agent_id": agent_id,
+                }
+                tool_output_reference = extract_tool_output_reference(output)
+                if tool_output_reference is not None:
+                    payload["tool_output"] = tool_output_reference
+                if display_context.invocation_tool_name:
+                    payload["invocation_tool_name"] = display_context.invocation_tool_name
+                if skill_names:
+                    payload["skill_names"] = skill_names
+                if stored_edits:
+                    payload["file_edits"] = [
+                        stored_edit_payload(stored_edit) for stored_edit in stored_edits
+                    ]
+                    if len(stored_edits) == 1:
+                        payload["file_edit"] = stored_edit_payload(stored_edits[0])
+                await publish(
+                    EventType.TOOL_CALL_END,
+                    payload,
+                )
+                if message_stream_runtime is not None:
+                    message_stream_tool_call_id = (
+                        message_stream_tool_call_ids_by_run_id.pop(
+                            run_id,
+                            None,
+                        )
+                    )
+                    if message_stream_tool_call_id is None:
+                        raise RuntimeError(
+                            "工具结束事件缺少已关联的 provider tool_call: "
+                            f"tool={display_context.tool_name} run_id={run_id}"
+                        )
+                    await message_stream_runtime.complete_tool(
+                        tool_execution_id=message_stream_tool_attempt_ids_by_run_id.pop(run_id),
+                        tool_call_id=message_stream_tool_call_id,
+                        tool_name=display_context.tool_name,
+                        status=(
+                            "failed" if effective_tool_status == "error" else "succeeded"
+                        ),
+                        result=result_text,
+                        error=result_text if effective_tool_status == "error" else None,
+                    )
+                    activity_bindings = activity_bindings_by_run_id.pop(run_id, ())
+                    activities = message_stream_runtime.activities
+                    if activity_bindings and activities is None:
+                        raise RuntimeError(
+                            "message-stream activity runtime 不可在执行中消失"
+                        )
+                    for activity_id, activity_kind, resource_id in activity_bindings:
+                        detail = activity_result_detail(
+                            result_text,
+                            tool_name=display_context.tool_name,
+                            agent_id=agent_id,
+                        )
+                        if activity_kind == "resource.operation":
+                            detail["operation"] = display_context.tool_name
+                            if resource_id is not None:
+                                detail["resource_id"] = resource_id
+                        await activities.updated(
                             activity_id=activity_id,
                             kind=activity_kind,
-                            summary=(
-                                "子 Agent 已接受并独立运行"
-                                if activity_kind == "subagent.run"
-                                else f"资源操作已完成：{display_context.tool_name}"
-                            ),
+                            status="stopping",
+                            detail=detail,
                         )
-            tool_scope = tool_scopes_by_run_id.pop(run_id, None)
-            if tool_scope is not None:
-                await tool_scope.close()
+                        if effective_tool_status == "error":
+                            await activities.failed(
+                                activity_id=activity_id,
+                                kind=activity_kind,
+                                outcome="outcome_unknown",
+                                summary=result_text,
+                                detail=detail,
+                            )
+                        else:
+                            await activities.completed(
+                                activity_id=activity_id,
+                                kind=activity_kind,
+                                summary=(
+                                    "子 Agent 已接受并独立运行"
+                                    if activity_kind == "subagent.run"
+                                    else f"资源操作已完成：{display_context.tool_name}"
+                                ),
+                            )
+                tool_scope = tool_scopes_by_run_id.pop(run_id, None)
+                if tool_scope is not None:
+                    await tool_scope.close()
+
+    finally:
+        primary_error = sys.exception()
+        try:
+            await events.aclose()
+        except BaseException as close_error:
+            if primary_error is None:
+                raise
+            primary_error.add_note(f"关闭 Agent 事件源失败: {close_error!r}")
 
     if message_stream_runtime is not None:
         pending_tool_calls = message_stream_runtime.pending_tool_calls()

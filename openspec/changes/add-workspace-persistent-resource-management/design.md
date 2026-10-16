@@ -61,6 +61,8 @@ Thread unload 是独立的、立即执行的清理路径：对临时资源，own
 
 工作区后端通过 `/api/v1/resources` 提供列表和详情查询，以及由领域管理方执行的提升、建立关联、解除关联、停止、删除命令。创建资源的 Agent 工具必须使用默认 `retention_scope=thread`，并允许显式选择 `workspace`。投影至少包含稳定身份、资源类型、保留范围、来源 Thread、当前关联、已核实的生命周期状态和可用操作；Thread 范围资源零关联时还显示待回收状态和计划回收时间。如果注册表查询领域管理方时发生错误，必须返回错误或明确标记结果不完整，不能伪装成空列表。Gateway 只透明代理 API，不读取工作区业务数据。
 
+`available_actions` 是按已核实状态和持久关联筛选的候选用户动作，存在 Thread 关联时不列 `delete`。候选列表不复制实时 lease 或 CAS 准入逻辑；命令提交时仍由同一 owner 校验当前修订、关联和 lease。前端直接消费完整投影，避免显示已知被关联阻断的删除动作，也不把候选动作当作操作成功承诺。
+
 用户可在工作区范围的资源入口中管理资源，包括没有任何 Thread 关联的记录，也包括仍在 30 分钟宽限期内的临时孤儿资源。Session 资源界面展示当前 Thread 的关联资源，并可提供提升或解除关联的快捷操作。工作区终端资源显示在主窗口底部面板；其它类型继续显示在各自所属的资源区域。前端操作成功时用 API 返回的完整管理方投影替换本地对象，失败时重新读取权威状态。
 
 考虑过只提供 Session 范围控件，或将所有资源放进一个混合面板。只提供 Session 控件会让失去来源 Session 的工作区资源无处可找；混合面板则会违反现有资源区域归属。把工作区入口放入每种资源既有的展示区域，既能找到资源，也不会把工作区状态错误地放进 Session 面板。
@@ -101,6 +103,10 @@ Thread unload 是独立的、立即执行的清理路径：对临时资源，own
 这两个修复已由同一 Sol 实现者贯穿十一条生产路径，主线程补齐六条测试路径并机械集成。runtime 在 backend 成功完成关闭后才关闭 auxiliary；超时强杀保原 handle/close_failure 并明确失败，后续重试即使进程已退出也不能证明 unload 完成或继续洗掉失败事实。registry/CRUD/remote 清理成功后才移除对应对象；8 秒关闭预算不变。 Linux由同目录process_groups叶模块核原PGID/session、leader starttime与非zombie活成员，root PID退出不能当整组退出；关闭预算由根wait和剩余成员共用。unit清理从root启动即保护，child未登记时仍按原组收口，故障注入已通过。Browser 的 Node grant 边界在 token/Map 副作用前返回专用 409/no-effect 当前快照，Python client/owner 仅在精确入口、身份/工作区/verified/revision 联校通过时消费这一确定拒绝；其余异常仍按未知结果阻断。已核实非 running 资源的本地短路优先于 Thread admission，其拒绝不证明 Thread 有效。
 
 已集成 `1b6305d7`、固定候选 `340dcbd74a9051584a20b730d8f90525e84800ca` 的正式非 preserve 关闭集成通过（真实 Gateway/backend/Job/residency/PTY/Chromium，模型采用 TCP Responses 回放替身），目标端 grant HTTP 竞争两场景通过，独审和 ROOT 定向检查通过；具体收据与范围见 tasks 5.4/5.5。首次 Chat fixture 的 canonical typed provenance 冲突在关闭前发生，仍属于后续 R producer 未修缺口；本次 Responses 关闭成功不证明 Chat 或完整模型 E2E 已通过。既有 safe restart、5.2 Web 和 5.3 崩溃收据分别保留，不混作本项证据。
+
+### Fork复用已有资源owner
+
+目标检查的公共合同归统一寻址owner；本change只提供和执行资源领域事实。沿现有available_actions/retention_scope/关联/owner_revision接线，显式选择后才调用attach等真实owner操作；不让fork writer直接改资源表或恢复Terminal/Browser句柄。thread范围禁止跨thread关联不因fork改变。新增导出/导入能力按确实可移植kind实施，不为活进程预写兼容adapter。
 
 ## 风险与权衡
 

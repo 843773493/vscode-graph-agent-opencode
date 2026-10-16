@@ -216,7 +216,7 @@ async def proxy_auxiliary_http(
             forwarded = client.build_request(
                 request.method,
                 target_url,
-                params=request.query_params,
+                params=request.query_params.multi_items(),
                 content=await request.body(),
                 headers=_proxy_request_headers(request, target, service),
             )
@@ -436,7 +436,7 @@ async def _proxy_attach_frontend(request: Request, *, kind: str, path: str):
     try:
         response = await client.get(
             target_url,
-            params=request.query_params,
+            params=request.query_params.multi_items(),
             headers=_proxy_request_headers(request),
         )
     except httpx.RequestError as error:

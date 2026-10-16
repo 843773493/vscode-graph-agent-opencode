@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import base64
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,10 @@ from pydantic import ValidationError
 from app.agents import workspace_filesystem_tools
 from app.agents.workspace_backend import build_workspace_backend
 from app.agents.workspace_filesystem_tools import configure_workspace_filesystem_tools
+from app.schemas.internal_v2.message import AttachmentRef
+from app.services.infrastructure.attachment_blob_catalog.store import (
+    AttachmentBlobStore,
+)
 from app.services.infrastructure.tool_output_store import (
     ToolOutputStore,
     extract_tool_output_reference,
@@ -389,64 +394,83 @@ async def test_glob_rejects_runtime_pattern_before_backend_scan(tmp_path: Path) 
     assert "运行时目录" in result.content
 
 
-@pytest.mark.asyncio
-async def test_read_file_allows_injected_session_attachment_path(tmp_path: Path) -> None:
-    """被注入的用户附件 path 必须可读，其余 .boxteam 运行时路径仍然禁止。"""
-    session_dir = (
-        tmp_path / ".boxteam" / "sessions" / "folder_x" / "ses_attachment_demo"
-    )
-    attachments_dir = session_dir / "attachments"
-    attachments_dir.mkdir(parents=True)
-    attachment_path = attachments_dir / "abc.png"
-    attachment_path.write_bytes(b"\x89PNG\r\n\x1a\nattachment")
-    logs_dir = session_dir / "logs" / "traces"
-    logs_dir.mkdir(parents=True)
-    (logs_dir / "events.jsonl").write_text("runtime", encoding="utf-8")
+@pytest.fixture
+async def attachment_tools(tmp_path: Path, session_bundle_factory):
+    """附件通过真实 ingest 发布，工具只取得当前 Session 的受信读取端口。"""
+    session_id = "ses_019b781159d47374805bc4427d081a14"
+    session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
+    store = AttachmentBlobStore(tmp_path)
+    data = b"\x89PNG\r\n\x1a\nattachment"
+    ref = (await store.persist_inline(session_id, [AttachmentRef(file_id="inline:abc.png", name="abc.png", content_type="image/png", data_url="data:image/png;base64," + base64.b64encode(data).decode())], thread_id=store._path_resolver.main_thread_id(session_id)))[0]
+
+    def read(uri_session_id, file_id):
+        if uri_session_id != session_id:
+            raise PermissionError("附件 URI 不属于当前 Agent SessionThread")
+        return store.read(session_id, file_id, owner_thread_id=store._path_resolver.main_thread_id(session_id))
+
     middleware = FilesystemMiddleware(
-        backend=build_workspace_backend(tmp_path),
+        backend=build_workspace_backend(tmp_path, attachment_reader=read),
         tool_token_limit_before_evict=None,
     )
     configure_workspace_filesystem_tools(middleware, workspace_root=tmp_path)
     tools = {item.name: item for item in middleware.tools}
+    yield tmp_path, tools, ref, store
+    store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("alias", [False, True])
+async def test_read_file_reads_logical_attachment_with_catalog_mime(attachment_tools, alias: bool) -> None:
+    _root, tools, ref, _store = attachment_tools
     runtime = cast(
         "ToolRuntime[None, FilesystemState]",
         SimpleNamespace(tool_call_id="call_attachment_read"),
     )
-    relative_attachment = (
-        ".boxteam/sessions/folder_x/ses_attachment_demo/attachments/abc.png"
-    )
-
     attachment_result = await tools["read_file"].coroutine(
-        path=relative_attachment,
+        path=ref.file_id.replace("boxteam-session://", "session-artifacts/") if alias else ref.file_id,
         runtime=runtime,
     )
 
     assert isinstance(attachment_result, ToolMessage)
     assert attachment_result.status == "success"
     assert any(
-        isinstance(block, dict) and block.get("type") == "image"
+        isinstance(block, dict) and block.get("type") == "image" and block.get("mime_type") == "image/png"
         for block in attachment_result.content
     )
+
+
+@pytest.mark.asyncio
+async def test_logical_attachment_rejects_cross_session_writes_and_old_paths(attachment_tools) -> None:
+    _root, tools, ref, store = attachment_tools
+    runtime = cast("ToolRuntime[None, FilesystemState]", SimpleNamespace(tool_call_id="call_attachment_denied"))
+    peer_uri = ref.file_id.replace("ses_019b781159d47374805bc4427d081a14", "ses_019b9cdd1ad5758788a18bb227323523")
+    assert (await tools["read_file"].coroutine(path=peer_uri, runtime=runtime)).status == "error"
+    before = store.read("ses_019b781159d47374805bc4427d081a14", ref.file_id).data
 
     for tool_name, kwargs in (
         (
             "read_file",
             {
                 "path": (
-                    ".boxteam/sessions/folder_x/ses_attachment_demo/"
-                    "logs/traces/events.jsonl"
+                    ".boxteam/sessions/ses_019b781159d47374805bc4427d081a14/"
+                    "attachments/abc.png"
                 )
             },
         ),
         (
             "ls",
-            {"path": ".boxteam/sessions/folder_x/ses_attachment_demo/attachments"},
+            {"path": ref.file_id},
         ),
+        ("write_file", {"file_path": ref.file_id, "content": "spoofed"}),
+        ("write_file", {"file_path": ref.file_id.replace("boxteam-session://", "session-artifacts/"), "content": "spoofed"}),
+        ("edit_file", {"file_path": ref.file_id, "old_string": "attachment", "new_string": "spoofed"}),
     ):
         result = await tools[tool_name].coroutine(runtime=runtime, **kwargs)
         assert isinstance(result, ToolMessage)
         assert result.status == "error"
-        assert "运行时目录" in result.content
+        assert "运行时目录" in result.content or "capability" in result.content
+    assert store.read("ses_019b781159d47374805bc4427d081a14", ref.file_id).data == before
+    assert not (store._path_resolver.resolve_session_node("ses_019b781159d47374805bc4427d081a14") / "attachments").exists()
 
 
 @pytest.mark.asyncio

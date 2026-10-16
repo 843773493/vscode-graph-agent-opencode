@@ -4,11 +4,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.api.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.api.deps import get_node_debug_service, get_request_id, verify_local_token
 from app.api.errors import forbidden_http_error, state_conflict_http_error
 from app.core.exceptions import ForbiddenError
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.node_debug import (
     NodeDebugActionRequest,

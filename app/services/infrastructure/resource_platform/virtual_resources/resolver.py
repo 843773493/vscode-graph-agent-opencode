@@ -23,8 +23,86 @@ from app.services.infrastructure.resource_platform.virtual_resources.values impo
     ResolutionContext,
     ResolvedResourceHandle,
     ResourceProvenance,
+    ResourceTargetAction,
+    ResourceTargetContext,
+    ResourceTargetDecision,
+    ResourceTargetFacts,
     SemanticResourceDescriptor,
 )
+
+
+def _has_target_retention(facts: ResourceTargetFacts, target: ResourceTargetContext) -> bool:
+    """保留范围由 owner 给出，URI scope 不参与生命周期推导。"""
+    return facts.lifecycle == "workspace" or facts.retention_scope == "workspace" or (
+        facts.retention_scope == "session" and facts.owner_session_id is not None
+        and facts.owner_session_id == target.owner_session_id
+    ) or (
+        facts.retention_scope == "thread" and facts.owner_session_id is not None
+        and facts.owner_session_id == target.owner_session_id
+        and facts.owner_thread_id is not None and facts.owner_thread_id == target.owner_thread_id
+    )
+
+
+def check_resource_target(
+    facts: ResourceTargetFacts,
+    target: ResourceTargetContext,
+    *,
+    choice: ResourceTargetAction | None = None,
+) -> ResourceTargetDecision:
+    """单点决定引用处理；副作用仍由提供事实的原领域 owner 执行。"""
+    if choice == "omit":
+        if facts.required_for_context:
+            raise ValueError(f"context_required_resource: 必需正文不能遗漏: {facts.resource_uri}")
+        return ResourceTargetDecision(facts.resource_uri, "omit", False, "用户未继承该资源")
+    same_domain = facts.storage_domain_id == target.storage_domain_id
+    if facts.lifecycle == "runtime":
+        runtime = facts.runtime
+        if runtime is None or facts.resource_uri is not None:
+            raise ValueError("运行资源目标检查缺少 typed owner 事实")
+        if choice is None:
+            return ResourceTargetDecision(None, "omit", False, "运行资源默认不继承", runtime=runtime)
+        reason = None
+        if choice != "reuse_reference":
+            reason = "运行资源只能复用原身份与实例"
+        elif not same_domain or runtime.workspace_id != target.workspace_id:
+            reason = "跨工作区不支持复制 live Terminal/Browser 实例"
+        elif runtime.retention_scope != "workspace" and runtime.source_thread != (target.owner_session_id, target.owner_thread_id):
+            reason = "thread 范围资源不能关联其它 Thread；fork 不自动 promote"
+        elif not facts.available or runtime.reconciliation_status != "verified" or "attach" not in runtime.available_actions:
+            reason = "原 owner 未核实资源或不允许 attach"
+        return ResourceTargetDecision(None, "unsupported" if reason else "reuse_reference", reason is None, reason, runtime=runtime)
+    existing = target.existing_reference
+    if (
+        existing is not None and (same_domain or choice is not None or facts.required_for_context)
+        and existing.available and existing.lifecycle != "runtime" and _has_target_retention(existing, target)
+        and existing.storage_domain_id == target.storage_domain_id
+        and facts.revision is not None and facts.content_hash is not None and facts.content_length is not None
+        and (existing.revision, existing.content_hash, existing.content_length)
+        == (facts.revision, facts.content_hash, facts.content_length)
+    ):
+        return ResourceTargetDecision(facts.resource_uri, "reuse_reference", True, target_uri=existing.resource_uri)
+    if not facts.available:
+        if facts.required_for_context:
+            raise FileNotFoundError(f"context_required_resource_unavailable: {facts.resource_uri}")
+        return ResourceTargetDecision(facts.resource_uri, "omit", False, "来源资源不可用")
+    if same_domain and _has_target_retention(facts, target):
+        if choice not in {None, "reuse_reference", "retain_reference", "copy_snapshot"}:
+            raise ValueError(f"resource_target_action_mismatch: 资源 owner 要求 reuse_reference: {facts.resource_uri}")
+        return ResourceTargetDecision(facts.resource_uri, "reuse_reference", True, target_uri=facts.resource_uri)
+    if facts.lifecycle == "snapshot" or not same_domain:
+        if not facts.required_for_context and choice is None:
+            return ResourceTargetDecision(facts.resource_uri, "omit", False, "跨存储域资源未选择继承")
+        if not (facts.snapshot_import_supported and target.snapshot_import_supported):
+            if facts.required_for_context:
+                raise ValueError(f"context_required_resource_unsupported: {facts.resource_uri}")
+            return ResourceTargetDecision(facts.resource_uri, "unsupported", False, "目标不支持资源快照导入")
+        if choice not in {None, "copy_snapshot"}:
+            raise ValueError(f"resource_target_action_mismatch: 跨域资源必须选择快照导入: {facts.resource_uri}")
+        return ResourceTargetDecision(facts.resource_uri, "copy_snapshot", True)
+    action: ResourceTargetAction = "retain_reference"
+    if choice not in {None, action, "copy_snapshot"}:
+        raise ValueError(f"resource_target_action_mismatch: 资源 owner 要求 {action}: {facts.resource_uri}")
+    return ResourceTargetDecision(facts.resource_uri, action, True)
 
 RESOURCE_URI_RESOLVE_REASON_CODES = frozenset(
     {

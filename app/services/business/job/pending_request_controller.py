@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Protocol
 
+from app.abstractions.job_executor import JobInputOwnerProtocol
 from app.domain.itemized.execution_admission import (
     ExecutionBinding,
     InternalExecutionIntent,
@@ -14,6 +15,7 @@ from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.message import AttachmentRef
 from app.schemas.internal_v2.pending_request import (
     DeliveryPolicy,
+    PendingRequestControl,
     PendingRequestDTO,
     PendingRequestListDTO,
     PendingRequestSummaryDTO,
@@ -55,11 +57,15 @@ class JobPendingRequestController:
         lock: asyncio.Lock,
         get_jobs: Callable[[], dict[str, PendingJob]],
         get_current_jobs: Callable[[], dict[tuple[str, str], str]],
+        persist_terminal_status: Callable[[PendingJob, str], Awaitable[bool]],
+        input_owner: JobInputOwnerProtocol | None,
     ) -> None:
         self._queue = queue
         self._lock = lock
         self._get_jobs = get_jobs
         self._get_current_jobs = get_current_jobs
+        self._persist_terminal_status = persist_terminal_status
+        self._input_owner = input_owner
 
     def _job_by_message_id(self, session_id: str, message_id: str) -> PendingJob:
         jobs = self._get_jobs()
@@ -84,7 +90,7 @@ class JobPendingRequestController:
             turn_id = None
         else:
             raise TypeError("待处理 Job execution_binding 类型非法")
-        return PendingRequestDTO(
+        result = PendingRequestDTO(
             job_id=job.job_id,
             execution_binding=execution_binding,
             message_id=job.message_id,
@@ -108,20 +114,41 @@ class JobPendingRequestController:
             updated_at=job.updated_at,
             snapshot_version=self._queue.snapshot_version(job.session_id),
         )
+        if self._input_owner is None:
+            return result
+        reference = PendingRequestControl.model_validate(result.model_dump(exclude={
+            "content", "attachments", "message_created_at", "message_metadata",
+        }))
+        message = self._input_owner.accepted_job_message(reference, display=display)
+        return result.model_copy(update={
+            "content": message.content, "attachments": message.attachments,
+            "message_created_at": message.created_at.isoformat(),
+            "message_metadata": {**message.metadata,
+                                 "boxteam_session_provider_id": job.message_metadata.get("boxteam_session_provider_id")},
+        })
 
-    async def list(self, session_id: str, *, display: bool = True) -> PendingRequestListDTO:
+    def _active_job_id(self, session_id: str, thread_id: str | None) -> str | None:
+        current_jobs = self._get_current_jobs()
+        if thread_id is not None:
+            return current_jobs.get((session_id, thread_id))
+        return next((value for key, value in current_jobs.items() if key[0] == session_id), None)
+
+    async def list(
+        self, session_id: str, *, display: bool = True, thread_id: str | None = None,
+    ) -> PendingRequestListDTO:
         async with self._lock:
-            return self._snapshot_unlocked(session_id, display=display)
+            return self._snapshot_unlocked(session_id, display=display, thread_id=thread_id)
 
     async def list_summaries(
         self,
         session_id: str,
         *,
         limit: int,
+        thread_id: str | None = None,
     ) -> PendingRequestSummaryListDTO:
         async with self._lock:
             jobs = self._get_jobs()
-            job_ids = self._queue.ids(session_id)
+            job_ids = self._queue.ids(session_id, thread_id)
             summaries = []
             for job_id in job_ids[:limit]:
                 job = jobs.get(job_id)
@@ -143,17 +170,20 @@ class JobPendingRequestController:
                 )
             return PendingRequestSummaryListDTO(
                 session_id=session_id,
-                active_job_id=next((value for key, value in self._get_current_jobs().items() if key[0] == session_id), None),
+                thread_id=thread_id,
+                active_job_id=self._active_job_id(session_id, thread_id),
                 requests=summaries,
                 request_count=len(job_ids),
                 snapshot_version=self._queue.snapshot_version(session_id),
                 truncated=len(summaries) < len(job_ids),
             )
 
-    def _snapshot_unlocked(self, session_id: str, *, display: bool = True) -> PendingRequestListDTO:
+    def _snapshot_unlocked(
+        self, session_id: str, *, display: bool = True, thread_id: str | None = None,
+    ) -> PendingRequestListDTO:
         jobs = self._get_jobs()
         requests = []
-        for position, job_id in enumerate(self._queue.ids(session_id)):
+        for position, job_id in enumerate(self._queue.ids(session_id, thread_id)):
             job = jobs.get(job_id)
             if job is None:
                 raise RuntimeError(
@@ -162,32 +192,11 @@ class JobPendingRequestController:
             requests.append(self._dto(job, position, display=display))
         return PendingRequestListDTO(
             session_id=session_id,
-            active_job_id=next((value for key, value in self._get_current_jobs().items() if key[0] == session_id), None),
+            thread_id=thread_id,
+            active_job_id=self._active_job_id(session_id, thread_id),
             requests=requests,
             snapshot_version=self._queue.snapshot_version(session_id),
         )
-
-    async def update(
-        self,
-        session_id: str,
-        message_id: str,
-        *,
-        content: str,
-        attachments: list[AttachmentRef],
-    ) -> PendingRequestListDTO:
-        normalized_content = content.strip()
-        if not normalized_content and not attachments:
-            raise ValueError("待处理消息正文和附件不能同时为空")
-        async with self._lock:
-            job = self._job_by_message_id(session_id, message_id)
-            if isinstance(job.execution_binding, InternalExecutionIntent):
-                raise ValueError("已冻结 internal request 的正文不可编辑")  # noqa: TRY004
-            job.message = normalized_content
-            job.attachments = list(attachments)
-            # JobState 沿用现有无时区本地时间字段约定。
-            job.updated_at = datetime.now()  # noqa: DTZ005
-            self._queue.touch(session_id)
-        return await self.list(session_id)
 
     async def update_policy(
         self,
@@ -216,6 +225,7 @@ class JobPendingRequestController:
     async def remove(self, session_id: str, message_id: str) -> PendingRequestListDTO:
         async with self._lock:
             job = self._job_by_message_id(session_id, message_id)
+            await self._persist_terminal_status(job, "cancelled")
             self._queue.remove(session_id, job.job_id)
             transition_job_status(
                 job,
@@ -226,18 +236,18 @@ class JobPendingRequestController:
 
     async def clear(self, session_id: str) -> PendingRequestListDTO:
         async with self._lock:
-            removed = self._queue.clear(session_id)
             jobs = self._get_jobs()
             now = datetime.now()  # noqa: DTZ005
-            for entry in removed:
-                job = jobs.get(entry.job_id)
-                if job is not None:
-                    transition_job_status(
-                        job,
-                        JobStatus.cancelled,
-                        error_message="消息已从队列撤回",
-                        now=now,
-                    )
+            for job_id in self._queue.ids(session_id):
+                job = jobs[job_id]
+                await self._persist_terminal_status(job, "cancelled")
+                self._queue.remove(session_id, job_id)
+                transition_job_status(
+                    job,
+                    JobStatus.cancelled,
+                    error_message="消息已从队列撤回",
+                    now=now,
+                )
         return await self.list(session_id)
 
     async def reject_reorder(self, session_id: str) -> None:

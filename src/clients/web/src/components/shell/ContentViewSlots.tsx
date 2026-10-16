@@ -40,10 +40,10 @@ interface ContentViewSlotsProps extends Pick<
   | "onRetryHistory"
   | "onOpenChanges"
   | "onReplayTurn"
-  | "onUpdatePending"
   | "onRemovePending"
   | "onChangePendingPolicy"
   | "onOpenAttachment"
+  | "onForkConversation"
   | "onViewStateChange"
   | "onViewStateRestoreStatus"
 > {
@@ -138,10 +138,10 @@ export default function ContentViewSlots({
   onRetryHistory,
   onOpenChanges,
   onReplayTurn,
-  onUpdatePending,
   onRemovePending,
   onChangePendingPolicy,
   onOpenAttachment,
+  onForkConversation,
   onViewStateChange,
   onViewStateRestoreStatus,
 }: ContentViewSlotsProps) {
@@ -197,6 +197,7 @@ export default function ContentViewSlots({
           items={receivedEvents}
           limit={FRONTEND_EVENT_QUEUE_LIMIT}
           sessionId={sessionId ?? ""}
+          scopeKey={activeSessionCacheKey ?? ""}
           active={contentView === "events"}
           historyLoading={activeTraceHistory?.loading ?? false}
           historyLoadingOlder={activeTraceHistory?.loadingOlder ?? false}
@@ -213,6 +214,7 @@ export default function ContentViewSlots({
           error={requestLogsError}
           loadedAt={requestLogsLoadedAt}
           sessionId={sessionId ?? ""}
+          scopeKey={activeSessionCacheKey ?? ""}
           active={contentView === "requests"}
           onRetryRequestLogs={onRetryRequestLogs}
         />
@@ -221,6 +223,8 @@ export default function ContentViewSlots({
         <ChatPanel
           apiPort={apiPort}
           workspaceId={workspaceId}
+          sessionId={sessionId}
+          threadId={activeTurnTimeline?.threadId ?? null}
           conversations={conversations}
           internalExecutions={activeTurnTimeline?.internalExecutions ?? []}
           expandDetails={expandedDetails}
@@ -245,10 +249,10 @@ export default function ContentViewSlots({
           sessionChangesLoading={changesHintLoading}
           onOpenChanges={onOpenChanges}
           onReplayTurn={onReplayTurn}
-          onUpdatePending={onUpdatePending}
           onRemovePending={onRemovePending}
           onChangePendingPolicy={onChangePendingPolicy}
           onOpenAttachment={onOpenAttachment}
+          onForkConversation={onForkConversation}
           viewState={
             activeSessionCacheKey
               ? gatewayUserViewStates.get(activeSessionCacheKey) ?? null

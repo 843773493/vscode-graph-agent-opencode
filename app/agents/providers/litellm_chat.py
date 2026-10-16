@@ -90,7 +90,12 @@ from app.core.model_delta_context import (
     get_current_model_delta_sink,
     resolve_model_run_id,
 )
-from app.core.turn_execution_scope import get_current_turn_execution_scope
+from app.core.turn_execution_scope import (
+    ScopeCancelledError,
+    get_current_turn_execution_scope,
+)
+from app.runtime.model_stream import ensure_model_stream_installed
+from app.runtime.provider_errors import mark_provider_failure
 
 logger = logging.getLogger(__name__)
 
@@ -329,10 +334,17 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         **kwargs: Any,
     ) -> Any:
         self._validate_completion_dispatch(kwargs)
+        ensure_model_stream_installed()
         client = self._provider_http_client(is_async=False)
         if client is not None:
             kwargs.setdefault("client", client)
-        return super().completion_with_retry(run_manager=run_manager, **kwargs)
+        try:
+            return super().completion_with_retry(run_manager=run_manager, **kwargs)
+        except ScopeCancelledError:
+            raise
+        except Exception as error:
+            mark_provider_failure(error)
+            raise
 
     async def acompletion_with_retry(
         self,
@@ -340,12 +352,19 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         **kwargs: Any,
     ) -> Any:
         self._validate_completion_dispatch(kwargs)
+        ensure_model_stream_installed()
         client = self._provider_http_client(is_async=True)
         if client is not None:
             kwargs.setdefault("client", client)
-        return await super().acompletion_with_retry(
-            run_manager=run_manager, **kwargs
-        )
+        try:
+            return await super().acompletion_with_retry(
+                run_manager=run_manager, **kwargs
+            )
+        except ScopeCancelledError:
+            raise
+        except Exception as error:
+            mark_provider_failure(error)
+            raise
 
     def _stream_attempt_count(self) -> int:
         """返回包含首次请求在内的流式请求总尝试次数。"""
@@ -368,10 +387,12 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
     def _incomplete_stream_error(self, attempts: int) -> RuntimeError:
         provider = self.provider_id or self.custom_llm_provider or "<unknown>"
         model = self.model_name or self.model
-        return RuntimeError(
-            "模型流在上游返回真实 finish_reason 前提前结束；"
-            f"provider={provider}，model={model}，已尝试 {attempts} 次。"
-            "已经收到的半截 delta 不会静默重试，AgentLoop 必须将本次调用标记为失败。"
+        return mark_provider_failure(
+            RuntimeError(
+                "模型流在上游返回真实 finish_reason 前提前结束；"
+                f"provider={provider}，model={model}，已尝试 {attempts} 次。"
+                "已经收到的半截 delta 不会静默重试，AgentLoop 必须将本次调用标记为失败。"
+            )
         )
 
     def _convert_messages_to_dicts(
@@ -609,7 +630,23 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
                     lambda _reason, stream=raw_stream: _close_sync_stream(stream)
                 )
             try:
-                for raw_chunk in raw_stream:
+                try:
+                    iterator = iter(raw_stream)
+                except ScopeCancelledError:
+                    raise
+                except Exception as error:
+                    mark_provider_failure(error)
+                    raise
+                while True:
+                    try:
+                        raw_chunk = next(iterator)
+                    except StopIteration:
+                        break
+                    except ScopeCancelledError:
+                        raise
+                    except Exception as error:
+                        mark_provider_failure(error)
+                        raise
                     if scope is not None:
                         scope.raise_if_cancelled()
                     for cg_chunk in self._convert_stream_response_chunk(
@@ -679,8 +716,25 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             apply_upstream_call_details(raw_stream)
             scope = get_current_turn_execution_scope()
             signal = scope.effective_cancellation_signal if scope else None
-            async with CancelableStream(raw_stream, signal) as cancelable_stream:
-                async for raw_chunk in cancelable_stream:
+            try:
+                cancelable_stream = CancelableStream(raw_stream, signal)
+            except ScopeCancelledError:
+                raise
+            except Exception as error:
+                mark_provider_failure(error)
+                raise
+            async with cancelable_stream:
+                iterator = aiter(cancelable_stream)
+                while True:
+                    try:
+                        raw_chunk = await anext(iterator)
+                    except StopAsyncIteration:
+                        break
+                    except ScopeCancelledError:
+                        raise
+                    except Exception as error:
+                        mark_provider_failure(error)
+                        raise
                     if scope is not None:
                         scope.raise_if_cancelled()
                     for cg_chunk in self._convert_stream_response_chunk(

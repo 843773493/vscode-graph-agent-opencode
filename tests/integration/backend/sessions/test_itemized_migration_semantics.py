@@ -201,6 +201,23 @@ def test_system_reminder_never_becomes_a_turn_member(
             None,
             "pending_next_turn",
         )
+        target_thread_id = storage.storage.main_thread_id(TARGET_SESSION_ID)
+        with storage.storage._connect(
+            target_thread_id, session_id=TARGET_SESSION_ID, read_only=True,
+        ) as connection:
+            execution_id, job_id, outcome, first_call, last_call = connection.execute(
+                "SELECT execution_id, job_id, outcome, first_model_call_id, last_model_call_id "
+                "FROM executions WHERE execution_origin='internal'",
+            ).fetchone()
+        assert outcome == "unknown"
+        assert first_call is last_call is None
+        assert storage.executions.cold_execution_observations(TARGET_SESSION_ID, target_thread_id) == []
+        assert storage.executions.cold_execution_observations(
+            TARGET_SESSION_ID, target_thread_id, job_ids=[job_id],
+        ) == []
+        assert storage.executions.internal_execution_request_input(
+            TARGET_SESSION_ID, target_thread_id, execution_id,
+        ) == {"kind": "runtime_notice", "payload": item.payload}
     else:
         assert result["rejected"][0]["candidate_status"] == "legacy_unsupported_role"
         assert (

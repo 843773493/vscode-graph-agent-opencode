@@ -28,7 +28,11 @@ _SNAPSHOT_ERROR_CODES = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class SemanticResourceDescriptor:
-    """语义资源的不可变描述:identity/display URI/来源绑定。
+    """derivation 的派生与登记描述，供 graph 和 semantic_registry 使用。
+
+    ResourceDerivationGraph.register 将它登记到 semantic_registry.ResourceRegistry，
+    表达资源 identity、语义面和依赖形状，不含已发布 ResourceSnapshot 的 revision/hash；
+    与 virtual_resources.values 中供 URI resolver 使用的同名 catalog 描述不可互换。
 
     ``resource_id`` 是语义资源稳定 identity(如 skill:demo:metadata),
     ``facet`` 标记同一来源可派生的独立语义面(metadata/activation/config

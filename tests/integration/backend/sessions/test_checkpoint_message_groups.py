@@ -391,7 +391,55 @@ def test_indexed_reader_keeps_reused_provider_tool_call_within_requested_model_s
         "文件正文" if suffix == "1" else "另一调用的结果"
     )
     assert len(detail.items) == 2
-    assert {item.part_id for item in detail.items} == {expected_id}
+    # 同一 Turn 的完整 DTO 必须经过真实 Web 合并，不能只验单个 ModelCall 的筛选结果。
+    reader = RolloutHistoryReader(RolloutContextReader(saver._storage))
+    summary = reader.load(
+        session_id, config["configurable"]["thread_id"],
+        TurnHistoryLoadRequest(turn_ids=["turn-tool-result"], include=["tool_summary"]),
+    ).items[0]
+    complete = reader.load(
+        session_id, config["configurable"]["thread_id"],
+        TurnHistoryLoadRequest(
+            turn_ids=["turn-tool-result"],
+            include=["tool_call", "tool_result", "tool_summary"],
+        ),
+    ).items[0]
+    assert len(complete.items) == 4
+    scoped_ids = {f"model-call-{index}:tool-call:call-1" for index in (1, 2)}
+    assert {item.part_id for item in complete.items} == scoped_ids
+    assert {item.tool_call_id for item in summary.tool_summary} == scoped_ids
+    assert {item.tool_call_id for item in complete.tool_summary} == scoped_ids
+    assert {part.tool_call_id for part in complete.response_parts} == {first_id, second_id}
+    merged = subprocess.run(
+        ["bun", "-e", """
+import assert from 'node:assert/strict';
+import {createSessionTurnTimeline, upsertTurn} from './src/clients/web/src/state/session/turnTimeline.ts';
+import {responsePartsToTimelineItems} from './src/clients/web/src/state/timeline/responseParts.ts';
+const {summary, complete} = JSON.parse(await Bun.stdin.text());
+let timeline = upsertTurn(createSessionTurnTimeline('history-contract'), summary);
+timeline = upsertTurn(timeline, complete);
+timeline = upsertTurn(timeline, complete);
+const items = timeline.turnsById[complete.turn_id].items;
+const keys = items.map(item => `${item.part_id ?? item.event_id}:${item.type}`);
+console.log(JSON.stringify({before: complete.items.length, after: items.length, keys}));
+assert.equal(items.length, 4);
+assert.equal(new Set(keys).size, 4);
+const tools = responsePartsToTimelineItems(timeline.turnsById[complete.turn_id].response_parts)
+  .filter(item => item.kind === 'aggregated_tool');
+assert.equal(tools.length, 2);
+assert.deepEqual(tools.map(item => item.resultText), ['文件正文', '另一调用的结果']);
+"""],
+        input=json.dumps({
+            "summary": summary.model_dump(mode="json"),
+            "complete": complete.model_dump(mode="json"),
+        }),
+        text=True, capture_output=True, cwd=Path.cwd(), timeout=30,
+    )
+    assert merged.returncode == 0, merged.stdout + merged.stderr
+    # Trace 与摘要用于跨 ModelCall 聚合；canonical payload 与 Provider raw ID 各守原表示。
+    scoped_id = f"{model_call}:tool-call:call-1"
+    assert {item.part_id for item in detail.items} == {scoped_id}
+    assert {item.tool_call_id for item in detail.tool_summary} == {scoped_id}
     assert len(detail.tool_summary) == 2
     with saver._storage.storage.open_read_snapshot(
         session_id, config["configurable"]["thread_id"]

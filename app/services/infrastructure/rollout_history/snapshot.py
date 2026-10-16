@@ -31,8 +31,7 @@ class IndexedHistoryCacheEntry:
     projection_epoch: int
     committed_sequence: int
     active_branch_id: str
-    checkpoint_id: str
-    message_sequence: int
+    history_view_revision: int
     view_id: str
     turn_count: int
     context_ranges: tuple[tuple[str, int, int], ...]
@@ -79,36 +78,17 @@ class IndexedHistorySnapshots:
         session_id: str,
         snapshot: RolloutReadSnapshot,
     ) -> IndexedHistory:
-        """只通过统一 reader 解析逻辑链和 SQLite Turn 范围。"""
+        """history 绑定同一 snapshot 的 active view，不用 checkpoint 上界截断。"""
         manifest = snapshot.manifest
-        checkpoint = self._context_reader.latest_checkpoint(snapshot)
-        if checkpoint is None:
-            # acceptance/terminal convergence 可能在首个 LangGraph checkpoint
-            # 之前完成。此时 active context view 仍是已提交的 v2 索引；不能把
-            # “没有 checkpoint”误判为“没有历史”，否则 item-bearing terminal
-            # convergence 的 output 只在 storage 中可见，Web history 却丢失。
-            chain = self._context_reader.resolve_chain(
-                snapshot,
-                snapshot.manifest.committed_sequence,
-            )
-            view_id = self._context_reader.context_view_id(chain)
-            turn_count = self._context_reader.context_turn_count(snapshot, chain)
-            return IndexedHistory(
-                rollout_id=manifest.rollout_id,
-                projection_epoch=manifest.projection_epoch,
-                view_id=view_id,
-                turn_count=turn_count,
-                snapshot=snapshot,
-                chain=chain,
-            )
+        active_view_id = self._context_reader.active_view_id(snapshot)
         cache_entry = self._cached_indexed_history(
             session_id,
             rollout_id=manifest.rollout_id,
             projection_epoch=manifest.projection_epoch,
             committed_sequence=manifest.committed_sequence,
             active_branch_id=manifest.active_branch_id,
-            checkpoint_id=checkpoint.checkpoint_id,
-            message_sequence=checkpoint.message_sequence,
+            history_view_revision=manifest.history_view_revision,
+            view_id=active_view_id,
         )
         if cache_entry is not None:
             return IndexedHistory(
@@ -118,15 +98,14 @@ class IndexedHistorySnapshots:
                 turn_count=cache_entry.turn_count,
                 snapshot=snapshot,
                 chain=ContextChain(
-                    message_sequence=checkpoint.message_sequence,
+                    message_sequence=manifest.committed_sequence,
                     ranges=cache_entry.context_ranges,
                 ),
             )
-        chain = self._context_reader.resolve_chain(
-            snapshot,
-            checkpoint.message_sequence,
-        )
+        chain = self._context_reader.resolve_chain(snapshot)
         view_id = self._context_reader.context_view_id(chain)
+        if view_id != active_view_id:
+            raise RuntimeError("history chain 与同一 snapshot 的 active view 不一致")
         turn_count = self._context_reader.context_turn_count(snapshot, chain)
         self._cache_indexed_history(
             session_id,
@@ -135,8 +114,7 @@ class IndexedHistorySnapshots:
                 projection_epoch=manifest.projection_epoch,
                 committed_sequence=manifest.committed_sequence,
                 active_branch_id=manifest.active_branch_id,
-                checkpoint_id=checkpoint.checkpoint_id,
-                message_sequence=checkpoint.message_sequence,
+                history_view_revision=manifest.history_view_revision,
                 view_id=view_id,
                 turn_count=turn_count,
                 context_ranges=chain.ranges,
@@ -159,8 +137,8 @@ class IndexedHistorySnapshots:
         projection_epoch: int,
         committed_sequence: int,
         active_branch_id: str,
-        checkpoint_id: str,
-        message_sequence: int,
+        history_view_revision: int,
+        view_id: str | None,
     ) -> IndexedHistoryCacheEntry | None:
         with self._indexed_history_cache_lock:
             entry = self._indexed_history_cache.get(session_id)
@@ -171,8 +149,8 @@ class IndexedHistorySnapshots:
                 or entry.projection_epoch != projection_epoch
                 or entry.committed_sequence != committed_sequence
                 or entry.active_branch_id != active_branch_id
-                or entry.checkpoint_id != checkpoint_id
-                or entry.message_sequence != message_sequence
+                or entry.history_view_revision != history_view_revision
+                or entry.view_id != view_id
             ):
                 self._indexed_history_cache.pop(session_id, None)
                 return None

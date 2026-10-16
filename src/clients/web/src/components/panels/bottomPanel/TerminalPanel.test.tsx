@@ -33,13 +33,14 @@ function entry(workspaceId: string, resourceId: string): WorkspaceResourceDTO {
   };
 }
 
-function panelProps(entries: WorkspaceResourceDTO[]) {
+function panelProps(entries: WorkspaceResourceDTO[], threadTargetUnavailable = false) {
   return {
     controller: {
       items: entries, loading: false, mutating: false, error: null, refresh: async () => {},
       control: async () => entries[0]!, create: async () => entries[0]!,
     },
     currentThread: null,
+    threadTargetUnavailable,
     workspaceId: entries[0]?.workspace_id ?? "workspace_test",
     workspaceName: "测试工作区",
     selectedTerminalId: null,
@@ -52,10 +53,10 @@ function panelProps(entries: WorkspaceResourceDTO[]) {
   };
 }
 
-function renderPanel(entries: WorkspaceResourceDTO[]): ReactTestRenderer {
+function renderPanel(entries: WorkspaceResourceDTO[], threadTargetUnavailable = false): ReactTestRenderer {
   let renderer!: ReactTestRenderer;
   act(() => {
-    renderer = create(<TerminalPanel {...panelProps(entries)} />);
+    renderer = create(<TerminalPanel {...panelProps(entries, threadTargetUnavailable)} />);
   });
   return renderer;
 }
@@ -135,6 +136,18 @@ describe("TerminalPanel 终端连接兜底", () => {
     expect(textOf(findFrameFallback(renderer)!.props.children)).toContain("没有线程关联");
     const promote = renderer.root.findAllByType("button").find((button) => textOf(button.props.children) === "保留到工作区");
     expect(promote?.props.disabled).toBe(false);
+    renderer.unmount();
+  });
+
+  test("child 目标尚未解析时禁用新建与资源管理操作", () => {
+    installWindow();
+    const renderer = renderPanel([entry("workspace_test", "term_pending_target")], true);
+
+    const createButton = renderer.root.findAllByType("button").find(
+      (button) => textOf(button.props.children) === "新建终端",
+    );
+    expect(createButton?.props.disabled).toBe(true);
+    expect(renderer.root.findAllByType("iframe")).toHaveLength(0);
     renderer.unmount();
   });
 });

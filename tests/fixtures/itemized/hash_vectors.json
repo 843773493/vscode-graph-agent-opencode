@@ -891,7 +891,6 @@
             "overlay_to_revision": null,
             "overlay_diff_hash": null,
             "session_id": "session-golden",
-            "plan_id": null,
             "thread_id": "thread-1"
           }
         ],
@@ -914,7 +913,6 @@
             "overlay_to_revision": null,
             "overlay_diff_hash": null,
             "contribution_ordinal": null,
-            "detail_ref": null,
             "contribution_id": null,
             "ref": {
               "ref_type": "canonical_item",
@@ -926,7 +924,6 @@
               "overlay_to_revision": null,
               "overlay_diff_hash": null,
               "session_id": "session-golden",
-              "plan_id": null,
               "thread_id": "thread-1"
             }
           }
@@ -937,13 +934,13 @@
         "session_id": "session-golden",
         "thread_id": "thread-1"
       },
-      "canonical": "{\"active_view_id\":null,\"compiler_version\":\"itemized-context-v1\",\"contributions\":[],\"format_version\":2,\"history_view_revision\":0,\"refs\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"item_sequence\":1,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"payload_kind\":\"text\",\"plan_id\":null,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"semantic_kind\":\"user_input\",\"session_id\":\"session-golden\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\",\"status\":\"completed\",\"thread_id\":\"thread-1\"}],\"schema\":\"context-plan-hash:v2\",\"selection\":[{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"protection\":\"public\",\"ref\":{\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_id\":null,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"session_id\":\"session-golden\",\"source_revision\":\"rev-golden\",\"thread_id\":\"thread-1\"},\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\",\"visibility\":\"internal\"}],\"selection_policy\":\"active_view\",\"session_id\":\"session-golden\",\"source_overlay_epoch\":0,\"thread_id\":\"thread-1\",\"tool_set_refs\":[]}",
-      "hash": "sha256:jcs:v1:3117c04763e9396e9ae93e72f220568158f43f95a13a4f9121b59ee3c57bdf72"
+      "canonical": "{\"active_view_id\":null,\"compiler_version\":\"itemized-context-v1\",\"contributions\":[],\"format_version\":2,\"history_view_revision\":0,\"refs\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"item_sequence\":1,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"payload_kind\":\"text\",\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"semantic_kind\":\"user_input\",\"session_id\":\"session-golden\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\",\"status\":\"completed\",\"thread_id\":\"thread-1\"}],\"schema\":\"context-plan-hash:v2\",\"selection\":[{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"contribution_id\":null,\"contribution_ordinal\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"protection\":\"public\",\"ref\":{\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"session_id\":\"session-golden\",\"source_revision\":\"rev-golden\",\"thread_id\":\"thread-1\"},\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\",\"visibility\":\"internal\"}],\"selection_policy\":\"active_view\",\"session_id\":\"session-golden\",\"source_overlay_epoch\":0,\"thread_id\":\"thread-1\",\"tool_set_refs\":[]}",
+      "hash": "sha256:jcs:v1:f64f3eb55160ee00d1bd164f24a76e4339048866ea3194d0187322dd77dc2b8c"
     },
     {
       "id": "core-request",
       "preimage": {
-        "plan_hash": "sha256:jcs:v1:3117c04763e9396e9ae93e72f220568158f43f95a13a4f9121b59ee3c57bdf72",
+        "plan_hash": "sha256:jcs:v1:f64f3eb55160ee00d1bd164f24a76e4339048866ea3194d0187322dd77dc2b8c",
         "provider": "provider-golden",
         "projector_id": "itemized-context-provider",
         "projector_version": "v1",
@@ -988,7 +985,6 @@
             "overlay_to_revision": null,
             "overlay_diff_hash": null,
             "contribution_ordinal": null,
-            "detail_ref": null,
             "contribution_id": null,
             "ref": {
               "ref_type": "canonical_item",
@@ -1020,7 +1016,6 @@
               "overlay_to_revision": null,
               "overlay_diff_hash": null,
               "contribution_ordinal": null,
-              "detail_ref": null,
               "contribution_id": null,
               "ref_type": "canonical_item",
               "ref_id": "item-golden-1"
@@ -1028,8 +1023,8 @@
           ]
         }
       },
-      "canonical": "{\"contributions\":[],\"plan_hash\":\"sha256:jcs:v1:3117c04763e9396e9ae93e72f220568158f43f95a13a4f9121b59ee3c57bdf72\",\"projector_id\":\"itemized-context-provider\",\"projector_version\":\"v1\",\"provider\":\"provider-golden\",\"refs\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"payload_kind\":\"text\",\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"semantic_kind\":\"user_input\",\"session_id\":\"session-golden\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\",\"status\":\"completed\",\"thread_id\":\"thread-1\"}],\"selection\":[{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"protection\":\"public\",\"ref\":{\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"session_id\":\"session-golden\",\"source_revision\":\"rev-golden\",\"thread_id\":\"thread-1\"},\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\",\"visibility\":\"internal\"}],\"target_format\":\"native\",\"tool_set_refs\":[],\"tool_snapshot\":[],\"wire_request\":{\"selection\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\"}],\"target_format\":\"native\"}}",
-      "hash": "sha256:jcs:v1:7e77208323181b313368eaea1366d2f9ba6aeea7350468954ea87f2080095b48"
+      "canonical": "{\"contributions\":[],\"plan_hash\":\"sha256:jcs:v1:f64f3eb55160ee00d1bd164f24a76e4339048866ea3194d0187322dd77dc2b8c\",\"projector_id\":\"itemized-context-provider\",\"projector_version\":\"v1\",\"provider\":\"provider-golden\",\"refs\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"payload_kind\":\"text\",\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"semantic_kind\":\"user_input\",\"session_id\":\"session-golden\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\",\"status\":\"completed\",\"thread_id\":\"thread-1\"}],\"selection\":[{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"contribution_id\":null,\"contribution_ordinal\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"protection\":\"public\",\"ref\":{\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"session_id\":\"session-golden\",\"source_revision\":\"rev-golden\",\"thread_id\":\"thread-1\"},\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\",\"visibility\":\"internal\"}],\"target_format\":\"native\",\"tool_set_refs\":[],\"tool_snapshot\":[],\"wire_request\":{\"selection\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"contribution_id\":null,\"contribution_ordinal\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\"}],\"target_format\":\"native\"}}",
+      "hash": "sha256:jcs:v1:6cf0e42d699e8279d3b4e4d8d46985f104639a225baf56b3a89c01bebc0a1619"
     }
   ],
   "idempotency": {

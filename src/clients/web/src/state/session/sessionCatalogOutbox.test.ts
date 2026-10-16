@@ -44,7 +44,7 @@ function receipt(
     committed_catalog_revision: null,
     error_code: null,
     error_detail: null,
-    pending_settlement: false,
+    settlement: null,
     receipt_revision: 1,
     updated_at: "2026-09-24T00:00:00Z",
     ...overrides,
@@ -280,6 +280,28 @@ describe("会话目录 outbox 有序批量入队", () => {
     ]);
   });
 
+  test("移入待提交父 Folder 的同批及跨批 wire 都显式携带父字段", () => {
+    let outbox = addCatalogOutboxIntent(createCatalogOutbox(LOCAL_PARTITION), opId("parent"), {
+      kind: "create_folder", name: "待提交父目录",
+    }, { baseCatalogRevision: 7 });
+    outbox = persisted(outbox, opId("parent"), 1);
+    outbox = addCatalogOutboxIntent(outbox, opId("move"), {
+      kind: "move_node", targetNodeId: "ses_1", parentCreatedByOperationId: opId("parent"),
+    }, { baseCatalogRevision: 7, expectedRevision: 3, dependsOn: [opId("parent")] });
+    outbox = persisted(outbox, opId("move"), 2);
+    const sameBatch = catalogOutboxBatchToIntents(planCatalogOutboxBatch(outbox, { maxBatchSize: 10 }));
+    expect(sameBatch[1]).toEqual({
+      client_operation_id: opId("move"), client_sequence: 2, kind: "move_node",
+      target_node_id: "ses_1", base_catalog_revision: 7, expected_revision: 3,
+      created_by_operation_id: opId("parent"), parent_node_id: null, depends_on: [opId("parent")],
+    });
+    outbox = applyCatalogOutboxReceipts(outbox, [receipt(opId("parent"), {
+      kind: "create_folder", state: "queued", created_node_id: "cnode_reserved",
+    })]);
+    const nextBatch = catalogOutboxBatchToIntents(planCatalogOutboxBatch(outbox, { maxBatchSize: 10 }));
+    expect(nextBatch).toEqual([{ ...sameBatch[1], depends_on: [] }]);
+  });
+
   test("依赖未取得 acceptance 时后继不得越序入队", () => {
     let outbox = outboxWithRename();
     outbox = persisted(outbox, opId("a"), 1);
@@ -439,6 +461,30 @@ describe("会话目录 outbox 对账", () => {
     );
     expect(pruneReconciledCatalogOutbox(outbox, 1_000_000).operations
       .map((item) => item.client_operation_id)).toEqual([opId("a")]);
+  });
+
+  test("逻辑删除保留到晚到 settled，旧回执不能覆盖 repair 或撤销 committed", () => {
+    let outbox = addCatalogOutboxIntent(createCatalogOutbox(LOCAL_PARTITION), opId("delete"),
+      { kind: "delete_folder", targetNodeId: "node-1", recursive: true },
+      { baseCatalogRevision: 7, expectedRevision: 3 });
+    const deletion = (revision: number, settlement: "pending" | "repair_required" | "settled") =>
+      receipt(opId("delete"), { kind: "delete_folder", state: "committed",
+        committed_catalog_revision: 8, receipt_revision: revision, settlement,
+        error_code: settlement === "repair_required" ? "delete_settlement_repair_required" : null,
+        error_detail: settlement === "repair_required" ? "日期目录隔离失败" : null });
+    outbox = applyCatalogOutboxReceipts(outbox, [deletion(2, "pending")]);
+    expect(unsettledCatalogOutboxOperations(outbox).map((item) => item.client_operation_id)).toEqual([opId("delete")]);
+    expect(pruneReconciledCatalogOutbox(outbox, 9).operations).toHaveLength(1);
+    outbox = applyCatalogOutboxReceipts(outbox, [deletion(3, "repair_required"), deletion(2, "pending")]);
+    expect(operation(outbox, opId("delete")).settlement).toBe("repair_required");
+    expect(pruneReconciledCatalogOutbox(outbox, 9).operations).toHaveLength(1);
+    expect(() => applyCatalogOutboxReceipts(outbox, [receipt(opId("delete"), {
+      kind: "delete_folder", state: "rejected", receipt_revision: 4,
+    })])).toThrow();
+    outbox = applyCatalogOutboxReceipts(outbox, [deletion(4, "settled")]);
+    expect(operation(outbox, opId("delete")).error_code).toBeNull();
+    expect(unsettledCatalogOutboxOperations(outbox)).toEqual([]);
+    expect(pruneReconciledCatalogOutbox(outbox, 8).operations).toEqual([]);
   });
 
   test("unknown 属于未终态：仍留在投影与对账集合中", () => {

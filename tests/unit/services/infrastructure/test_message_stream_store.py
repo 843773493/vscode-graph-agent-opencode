@@ -5,12 +5,16 @@ import json
 import os
 import shutil
 import threading
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
+from langchain_core.messages import AIMessageChunk, ToolMessage
 
 import app.services.infrastructure.message_stream_store as message_stream_store_module
+from app.abstractions.turn_terminal_status import ToolResultCompletion
 from app.core.path_utils import get_session_path_resolver
 from app.services.infrastructure.message_stream_store import (
     MessageStreamCursorAheadError,
@@ -23,6 +27,7 @@ from app.services.orchestration.activity_runtime import (
     ActivityHandlerRegistry,
     ActivityRuntime,
 )
+from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 
@@ -976,6 +981,399 @@ async def test_delta_boundary_interrupt_matrix_has_same_live_checkpoint_snapshot
 
 
 @pytest.mark.asyncio
+async def test_tool_message_completion_stays_persisted_through_interrupt_and_reopen(
+    message_stream_store: tuple[MessageStreamStore, object, str],
+) -> None:
+    store, resolver, session_id = message_stream_store
+    turn_id = "job_reconciled_tool_message_interrupt"
+    writer = await store.open(
+        thread_id=store._path_resolver.main_thread_id(session_id),
+        session_id=session_id,
+        turn_id=turn_id,
+    )
+    canonical_item_sink = AsyncMock()
+    tool_result_sink = AsyncMock()
+    runtime = MessageStreamRuntime(
+        writer,
+        canonical_item_sink=canonical_item_sink,
+        tool_result_sink=tool_result_sink,
+    )
+
+    model_call_id = "model_tool_message"
+    provider_call_id = "call_tool_message"
+    await runtime.start_model(model_call_id, "primary")
+    await runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "index": 0,
+                    "id": provider_call_id,
+                    "name": "read_file",
+                    "args": '{"path":"README.md"}',
+                }
+            ],
+        )
+    )
+    reconcile = asyncio.create_task(
+        runtime.complete_tool_from_message(
+            ToolMessage(
+                content="README 内容",
+                tool_call_id=provider_call_id,
+                name="read_file",
+            ),
+            model_call_id=model_call_id,
+        )
+    )
+    call_id = f"{model_call_id}:tool-call:{provider_call_id}"
+    await asyncio.sleep(0)
+    assert not reconcile.done()
+    assert runtime.claim_tool_call_id(model_call_id, provider_call_id) == call_id
+    await runtime.start_tool(
+        tool_execution_id="execution_a",
+        tool_call_id=call_id,
+        tool_name="read_file",
+    )
+    await reconcile
+    canonical_item_sink.assert_not_awaited()
+    tool_result_sink.assert_awaited_once()
+    completion: ToolResultCompletion = tool_result_sink.await_args.args[0]
+    assert completion.model_call_id == model_call_id
+    assert completion.tool_call_id == call_id
+    assert completion.tool_invocation_id == (
+        f"tool-invocation:{model_call_id}:{provider_call_id}"
+    )
+    assert completion.tool_attempt_id == "execution_a"
+    assert completion.content == "README 内容"
+    assert completion.tool_outcome == "success"
+
+    tool_events = [
+        event for event in await store.list_events(
+            session_id=session_id,
+            turn_stream_id=writer.turn_stream_id,
+        )
+        if event["type"] in {"tool_call.completed", "tool.started", "tool.completed"}
+    ]
+    assert [event["type"] for event in tool_events] == [
+        "tool_call.completed",
+        "tool.started",
+        "tool.completed",
+    ]
+    assert tool_events[0]["payload"]["completion_reason"] == "tool_started"
+    assert tool_events[1]["payload"]["tool_execution_id"] == "execution_a"
+    assert tool_events[2]["payload"]["tool_execution_id"] == "execution_a"
+    assert tool_events[2]["payload"]["completion_reason"] == "tool_completed"
+
+    await writer.commit(
+        "interrupt.requested",
+        {"interrupt_request_id": "intr_tool_message", "reason": "user_requested"},
+    )
+    await runtime.finalize_interruption_facts()
+    await writer.close_interrupted("intr_tool_message")
+    tool_result_sink.assert_awaited_once()
+
+    state = await store.get_state(writer.turn_stream_id)
+    assert state["stream_status"] == "interrupted"
+    assert len(state["tool_calls"]) == 1
+    assert state["tool_calls"][0]["status"] == "completed"
+    assert state["tool_calls"][0]["completion_reason"] == "tool_started"
+    assert state["tool_calls"][0]["arguments_complete"] is True
+    executions_by_id = {
+        execution["tool_execution_id"]: execution
+        for execution in state["tool_executions"]
+    }
+    assert set(executions_by_id) == {"execution_a"}
+    assert executions_by_id["execution_a"]["status"] == "completed"
+    assert executions_by_id["execution_a"]["outcome"] == "success"
+    assert executions_by_id["execution_a"]["result"] == "README 内容"
+    assert executions_by_id["execution_a"]["completion_reason"] == "tool_completed"
+
+    events = await store.list_events(
+        session_id=session_id,
+        turn_stream_id=writer.turn_stream_id,
+    )
+    call_completions = [
+        event for event in events if event["type"] == "tool_call.completed"
+    ]
+    assert len(call_completions) == 1
+    assert (
+        call_completions[0]["payload"]["completion_reason"]
+        == "tool_started"
+    )
+    tool_completions = [event for event in events if event["type"] == "tool.completed"]
+    assert len(tool_completions) == 1
+    assert call_completions[0]["event_seq"] < tool_completions[0]["event_seq"]
+
+    restarted = MessageStreamStore(path_resolver=resolver)
+    restarted_writer = await restarted.open_existing(
+        session_id=session_id,
+        turn_id=turn_id,
+        turn_stream_id=writer.turn_stream_id,
+    )
+    reopened = (await restarted_writer.snapshot())["payload"]
+    assert reopened["stream_status"] == "interrupted"
+    assert reopened["tool_calls"][0]["status"] == "completed"
+    assert reopened["tool_calls"][0]["completion_reason"] == "tool_started"
+    reopened_executions = {
+        execution["tool_execution_id"]: execution
+        for execution in reopened["tool_executions"]
+    }
+    assert set(reopened_executions) == {"execution_a"}
+    assert reopened_executions["execution_a"]["status"] == "completed"
+    assert reopened_executions["execution_a"]["outcome"] == "success"
+    assert reopened_executions["execution_a"]["result"] == "README 内容"
+    assert reopened_executions["execution_a"]["completion_reason"] == "tool_completed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "completion_path",
+    ["normal", "tool_message", "pending_tool_message"],
+)
+@pytest.mark.parametrize("failure_stage", ["before_append", "after_fsync"])
+async def test_tool_completion_writer_failure_reuses_original_completion(
+    message_stream_store: tuple[MessageStreamStore, object, str],
+    monkeypatch: pytest.MonkeyPatch,
+    completion_path: str,
+    failure_stage: str,
+) -> None:
+    store, resolver, session_id = message_stream_store
+    turn_id = f"job_tool_completion_{completion_path}_{failure_stage}"
+    writer = await store.open(
+        thread_id=resolver.main_thread_id(session_id),
+        session_id=session_id,
+        turn_id=turn_id,
+    )
+    canonical_item_sink = AsyncMock()
+    tool_result_sink = AsyncMock()
+    runtime = MessageStreamRuntime(
+        writer,
+        canonical_item_sink=canonical_item_sink,
+        tool_result_sink=tool_result_sink,
+    )
+    model_call_id = "model_tool_completion"
+    provider_call_id = "provider_tool_completion"
+    await runtime.start_model(model_call_id, "primary")
+    await runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "index": 0,
+                    "id": provider_call_id,
+                    "name": "read_file",
+                    "args": '{"path":"README.md"}',
+                }
+            ],
+        )
+    )
+    if completion_path == "pending_tool_message":
+        call_id = runtime._tool_call_order[-1]
+    else:
+        call_id = runtime.claim_tool_call_id(model_call_id, provider_call_id)
+    tool_execution_id = "exec_tool_completion"
+    if completion_path != "pending_tool_message":
+        await runtime.start_tool(
+            tool_execution_id=tool_execution_id,
+            tool_call_id=call_id,
+            tool_name="read_file",
+        )
+
+    async def complete() -> None:
+        if completion_path in {"tool_message", "pending_tool_message"}:
+            # ToolMessage 由真实消息流先到达；此处验证它等待工具 start 后持久化结果。
+            await runtime.complete_tool_from_message(
+                ToolMessage(
+                    content="README 原始内容",
+                    tool_call_id=provider_call_id,
+                    name="read_file",
+                    # 此处是 ToolMessage 消息 ID；本测试故意让它与持久 attempt 值相同，不能据消息 ID 创建 attempt。
+                    id=(
+                        tool_execution_id
+                        if completion_path == "pending_tool_message"
+                        else None
+                    ),
+                ),
+                model_call_id=model_call_id,
+            )
+        else:
+            await runtime.complete_tool(
+                tool_execution_id=tool_execution_id,
+                tool_call_id=call_id,
+                tool_name="read_file",
+                status="succeeded",
+                result="README 原始内容",
+            )
+
+    original_append = store._append_durable_event
+    injected = False
+    injected_error = RuntimeError(f"injected {failure_stage}")
+
+    def append_with_failure(*args: object) -> None:
+        nonlocal injected
+        event = args[-1]
+        if (
+            not injected
+            and isinstance(event, Mapping)
+            and event.get("type") == "tool.completed"
+        ):
+            injected = True
+            if failure_stage == "after_fsync":
+                original_append(*args)
+            raise injected_error
+        original_append(*args)
+
+    monkeypatch.setattr(store, "_append_durable_event", append_with_failure)
+    completion_calls: list[tuple[dict[str, object], str | None]] = []
+    original_commit = writer.commit
+
+    async def capture_completion_commit(
+        event_type: str,
+        payload: Mapping[str, object] | None = None,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        if event_type == "tool.completed":
+            completion_calls.append((dict(payload or {}), kwargs.get("event_id")))
+        return await original_commit(event_type, payload, **kwargs)
+
+    monkeypatch.setattr(writer, "commit", capture_completion_commit)
+
+    if completion_path == "pending_tool_message":
+        completing = asyncio.create_task(complete())
+        await asyncio.sleep(0)
+        assert not completing.done()
+        claimed_call_id = runtime.claim_tool_call_id(
+            model_call_id, provider_call_id,
+        )
+        assert claimed_call_id == call_id
+        await runtime.start_tool(
+            tool_execution_id=tool_execution_id,
+            tool_call_id=claimed_call_id,
+            tool_name="read_file",
+        )
+        with pytest.raises(RuntimeError, match=f"injected {failure_stage}") as error_info:
+            await completing
+    else:
+        with pytest.raises(RuntimeError, match=f"injected {failure_stage}") as error_info:
+            await complete()
+    assert error_info.value is injected_error
+
+    pending = runtime._pending_tool_completions[tool_execution_id]
+    assert runtime._active_tool_executions[tool_execution_id] == (call_id, "read_file")
+    assert tool_execution_id not in runtime._completed_tool_execution_ids
+    assert pending.payload["result"] == "README 原始内容"
+    if failure_stage == "before_append":
+        state_after_failure = await store.get_state(writer.turn_stream_id)
+        assert state_after_failure["tool_executions"][0]["status"] == "running"
+    else:
+        state_after_failure = await store.get_state(writer.turn_stream_id)
+        assert state_after_failure["tool_executions"][0]["status"] == "completed"
+    tool_result_sink.assert_awaited_once()
+
+    await runtime.fail_active_tool_executions(
+        completion_reason="execution_error",
+        error="清理错误不得覆盖原结果",
+    )
+    await writer.close_failed(
+        code="execution_error",
+        message="注入 writer 错误后的清理已完成",
+    )
+
+    assert injected
+    assert runtime._pending_tool_completions == {}
+    assert tool_execution_id not in runtime._active_tool_executions
+    assert tool_execution_id in runtime._completed_tool_execution_ids
+    assert len(completion_calls) == 2
+    assert completion_calls[0] == completion_calls[1]
+    events = await store.list_events(
+        session_id=session_id,
+        turn_stream_id=writer.turn_stream_id,
+    )
+    tool_completions = [event for event in events if event["type"] == "tool.completed"]
+    assert len(tool_completions) == 1
+    assert tool_completions[0]["event_id"] == completion_calls[0][1]
+    expected_payload = {
+        **completion_calls[0][0],
+        "model_call_id": "model_tool_completion",
+    }
+    assert tool_completions[0]["payload"] == expected_payload
+    assert tool_completions[0]["payload"]["result"] == "README 原始内容"
+    assert tool_completions[0]["payload"]["completion_reason"] == "tool_completed"
+    final_state = await store.get_state(writer.turn_stream_id)
+    assert final_state["stream_status"] == "failed"
+    assert final_state["tool_executions"][0]["status"] == "completed"
+    tool_result_sink.assert_awaited_once()
+    completion: ToolResultCompletion = tool_result_sink.await_args.args[0]
+    assert completion.model_call_id == model_call_id
+    assert completion.tool_call_id == call_id
+    assert completion.tool_invocation_id == (
+        f"tool-invocation:{model_call_id}:{provider_call_id}"
+    )
+    assert completion.tool_attempt_id == tool_execution_id
+    assert completion.tool_name == "read_file"
+    assert completion.content == "README 原始内容"
+    assert completion.tool_outcome == "success"
+
+
+@pytest.mark.asyncio
+async def test_zero_argument_tool_call_stays_complete_through_interrupt_and_reopen(
+    message_stream_store: tuple[MessageStreamStore, object, str],
+) -> None:
+    store, resolver, session_id = message_stream_store
+    turn_id = "job_zero_argument_tool_interrupt"
+    writer = await store.open(
+        thread_id=store._path_resolver.main_thread_id(session_id),
+        session_id=session_id,
+        turn_id=turn_id,
+    )
+    runtime = MessageStreamRuntime(writer)
+
+    await runtime.start_model("model_zero_arguments", "primary")
+    await runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "index": 0,
+                    "id": "call_zero_arguments",
+                    "name": "test_tool",
+                    "args": "{}",
+                }
+            ],
+        )
+    )
+    await writer.commit(
+        "interrupt.requested",
+        {"interrupt_request_id": "intr_zero_arguments", "reason": "user_requested"},
+    )
+    await runtime.finalize_interruption_facts()
+    await writer.close_interrupted("intr_zero_arguments")
+
+    call_id = "model_zero_arguments:tool-call:call_zero_arguments"
+    state = await store.get_state(writer.turn_stream_id)
+    tool_call = state["tool_calls"][0]
+    assert state["stream_status"] == "interrupted"
+    assert tool_call["tool_call_id"] == call_id
+    assert tool_call["arguments"] == {}
+    assert tool_call["arguments_complete"] is True
+    assert tool_call["status"] == "cancelled"
+
+    restarted = MessageStreamStore(path_resolver=resolver)
+    restarted_writer = await restarted.open_existing(
+        session_id=session_id,
+        turn_id=turn_id,
+        turn_stream_id=writer.turn_stream_id,
+    )
+    reopened = (await restarted_writer.snapshot())["payload"]
+    reopened_call = reopened["tool_calls"][0]
+    assert reopened["stream_status"] == "interrupted"
+    assert reopened_call["tool_call_id"] == call_id
+    assert reopened_call["arguments"] == {}
+    assert reopened_call["arguments_complete"] is True
+    assert reopened_call["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
 async def test_interrupt_and_model_completion_race_has_one_terminal_winner(
     message_stream_store: tuple[MessageStreamStore, object, str],
 ) -> None:
@@ -1156,6 +1554,115 @@ async def test_fsync_failure_reloads_uncertain_append_before_next_commit(
     restarted_state = await restarted_store.get_state(restarted_writer.turn_stream_id)
     assert restarted_state["snapshot_seq"] == seqs[-1]
     assert restarted_state["blocks"][0]["text"] in {"边界事件后续事件", "后续事件"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fsync_fails", [False, True])
+async def test_cancelled_commit_waits_for_fsync_before_next_commit(
+    message_stream_store: tuple[MessageStreamStore, object, str],
+    monkeypatch: pytest.MonkeyPatch,
+    fsync_fails: bool,
+) -> None:
+    store, resolver, session_id = message_stream_store
+    writer = await store.open(
+        thread_id=store._path_resolver.main_thread_id(session_id),
+        session_id=session_id, turn_id="job_cancelled_fsync",
+    )
+    subscription = await store.subscribe(writer.turn_stream_id)
+    entered, release, append_finished = threading.Event(), threading.Event(), threading.Event()
+    original_fsync = os.fsync
+    original_append = store._append_durable_event
+    stream_path = store._stream_path(session_id, writer.turn_stream_id)
+    first_fsync = True
+
+    def observed_append(
+        owner_session: str, path: Path, encoded: bytes, stream_id: str,
+        state: Mapping[str, object], event: Mapping[str, object] | None = None,
+    ) -> None:
+        try:
+            original_append(owner_session, path, encoded, stream_id, state, event)
+        finally:
+            if event is not None and event["event_id"] == "evt_cancelled_fsync":
+                append_finished.set()
+
+    def blocked_fsync(fd: int) -> None:
+        nonlocal first_fsync
+        if first_fsync and os.path.samefile(fd, stream_path):
+            first_fsync = False
+            entered.set()
+            if not release.wait(5):
+                raise TimeoutError("取消测试的真实 fsync 屏障未释放")
+            if fsync_fails:
+                raise OSError("取消后的真实 fsync 失败")
+        original_fsync(fd)
+
+    monkeypatch.setattr(message_stream_store_module.os, "fsync", blocked_fsync)
+    monkeypatch.setattr(store, "_append_durable_event", observed_append)
+    cancelled_payload = {
+        "block_id": "block_cancelled", "operation": "append", "text": "取消边界",
+    }
+    first = asyncio.create_task(writer.commit(
+        "block.delta", cancelled_payload, event_id="evt_cancelled_fsync",
+    ))
+    following_started = asyncio.Event()
+
+    async def commit_following() -> dict[str, object]:
+        following_started.set()
+        return await writer.commit(
+            "block.delta", {**cancelled_payload, "text": "后续边界"},
+            event_id="evt_following_fsync",
+        )
+
+    following = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 3)
+        # fsync 前已 flush 完整事件；取消不能把 worker 的写入事实当成未发生。
+        records = [json.loads(line) for line in store._stream_path(
+            session_id, writer.turn_stream_id,
+        ).read_text().splitlines()]
+        assert [record["event"]["event_seq"] for record in records] == [1, 2]
+        assert records[-1]["event"]["event_id"] == "evt_cancelled_fsync"
+        for _ in range(3):
+            first.cancel()
+            await asyncio.sleep(0)
+        following = asyncio.create_task(commit_following())
+        await following_started.wait()
+        assert not first.done(), "真实 append worker 未结算前不能传播取消或释放 Turn 锁"
+        assert not following.done(), "同 Turn 后继提交不能越过未结算 fsync"
+    finally:
+        release.set()
+        assert await asyncio.to_thread(append_finished.wait, 3), "真实 append worker 未退出"
+        settled = await asyncio.gather(
+            *([first, following] if following is not None else [first]),
+            return_exceptions=True,
+        )
+    expected_failure = OSError if fsync_fails else asyncio.CancelledError
+    assert isinstance(settled[0], expected_failure), settled[0]
+    next_event = settled[1]
+    assert isinstance(next_event, dict) and next_event["event_seq"] == 3
+    assert subscription.queue.get_nowait().event == next_event
+    with pytest.raises(asyncio.QueueEmpty):
+        subscription.queue.get_nowait()
+    duplicate = await writer.commit(
+        "block.delta", cancelled_payload, event_id="evt_cancelled_fsync",
+    )
+    assert duplicate["event_seq"] == 2
+    terminal = await writer.close_interrupted("intr_cancelled_fsync")
+    assert terminal["event_seq"] == 4
+    events = await store.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id)
+    assert [event["event_seq"] for event in events] == [1, 2, 3, 4]
+    assert [event["event_id"] for event in events].count("evt_cancelled_fsync") == 1
+    state = await store.get_state(writer.turn_stream_id)
+    assert state["blocks"][0]["text"] == "取消边界后续边界"
+    assert state["stream_status"] == "interrupted"
+    cold = MessageStreamStore(path_resolver=resolver)
+    cold_writer = await cold.open_existing(
+        session_id=session_id, thread_id=writer.thread_id, turn_id=writer.turn_id,
+    )
+    assert cold_writer.turn_stream_id == writer.turn_stream_id
+    assert await cold.get_state(writer.turn_stream_id) == state
+    assert await cold.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id) == events
+    await store.unsubscribe(subscription)
 
 
 @pytest.mark.asyncio

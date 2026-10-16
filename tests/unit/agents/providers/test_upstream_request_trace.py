@@ -17,8 +17,8 @@ from app.agents.upstream_request_trace import (
     begin_upstream_capture,
     end_upstream_capture,
 )
+from app.runtime.model_stream import ModelStreamTransportController
 from app.testing.model_stream import (
-    ModelStreamTransportController,
     load_model_stream_config,
 )
 
@@ -40,7 +40,7 @@ async def _capture(model, messages) -> list[dict]:
 @pytest.mark.asyncio
 async def test_chat_attempts_do_not_accumulate_across_calls() -> None:
     config = load_model_stream_config(CHAT_CONFIG_PATH)
-    controller = ModelStreamTransportController.install(config)
+    controller = ModelStreamTransportController.configure(config)
     if controller is None:
         raise RuntimeError("model stream replay controller 未安装")
     try:
@@ -69,7 +69,7 @@ async def test_chat_attempts_do_not_accumulate_across_calls() -> None:
 @pytest.mark.asyncio
 async def test_responses_attempts_do_not_accumulate_across_calls() -> None:
     config = load_model_stream_config(RESPONSES_CONFIG_PATH)
-    controller = ModelStreamTransportController.install(config)
+    controller = ModelStreamTransportController.configure(config)
     if controller is None:
         raise RuntimeError("model stream replay controller 未安装")
     try:
@@ -99,7 +99,7 @@ async def test_responses_attempts_do_not_accumulate_across_calls() -> None:
 @pytest.mark.asyncio
 async def test_model_calls_leave_litellm_callback_tables_untouched() -> None:
     config = load_model_stream_config(CHAT_CONFIG_PATH)
-    controller = ModelStreamTransportController.install(config)
+    controller = ModelStreamTransportController.configure(config)
     if controller is None:
         raise RuntimeError("model stream replay controller 未安装")
     try:

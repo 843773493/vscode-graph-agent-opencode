@@ -335,7 +335,7 @@ describe("useSessionResourceTreeNavigation 拖放提交", () => {
     });
     expect(moveCalls).toEqual([["gw_1", "cnode_1", "cnode_2", null]]);
     expect(refreshed).toEqual(["gw_1"]);
-    expect(statuses).toEqual(["已移动会话"]);
+    expect(statuses).toEqual(["会话移动已保存本地待同步变更，等待提交"]);
   });
 
   test("会话已经位于目标文件夹下时拒绝且不提交目录移动", async () => {
@@ -415,7 +415,7 @@ describe("useSessionResourceTreeNavigation 拖放提交", () => {
       await new Promise((resolve) => setTimeout(resolve, 30));
     });
     expect(moveCalls).toBe(1);
-    expect(statuses).toEqual(["已移动会话"]);
+    expect(statuses).toEqual(["会话移动已保存本地待同步变更，等待提交"]);
   });
 
   test("目录移动成功但跟随刷新失败时报告刷新失败而不是整次拖放失败", async () => {
@@ -454,7 +454,7 @@ describe("useSessionResourceTreeNavigation 拖放提交", () => {
       await flushDrop();
     });
     // 移动已成功：状态仍须报告已移动，失败只归因到跟随刷新这一步
-    expect(statuses).toEqual(["已移动会话"]);
+    expect(statuses).toEqual(["会话移动已保存本地待同步变更，等待提交"]);
     expect(errors).toEqual([
       { prefix: "移动后刷新工作区会话列表失败", message: "刷新会话列表失败" },
     ]);

@@ -28,9 +28,14 @@ class TeamMemberDTO(BaseModel):
     source: TeamMemberSource
     work_mode: TeamWorkMode
     instructions: str = ""
-    status: TeamMemberStatus = "active"
+    status: TeamMemberStatus = Field(
+        default="active",
+        description="团队成员资格与初始准入的合成状态：委派成员已发布且初始 execution intent 已绑定时为 active，尚未满足时为 pending，成员已取消时为 cancelled；不表示执行结果或正在运行。",
+    )
     joined_at: datetime
-    updated_at: datetime
+    updated_at: datetime = Field(
+        description="协调者取 TeamBoard 创建时刻；委派成员取 child 初始 execution intent 最近更新时间，会随领取、接管、绑定和错误记录更新，不是 collaboration member 行的更新时间。",
+    )
 
 
 class TeamTaskDTO(TimestampedDTO):
@@ -78,7 +83,10 @@ class TeamMemberOperationDTO(BaseModel):
     member: TeamMemberDTO
     child_thread_id: str | None = None
     child_delegation_id: str | None = None
-    child_admission_state: str | None = None
+    child_admission_state: str | None = Field(
+        default=None,
+        description="子线程初始 execution intent 状态（pending 或 bound）；bound 仅表示 execution/job identity 已绑定，不代表 Job 已启动。",
+    )
 
 
 class TeamTaskOperationDTO(BaseModel):

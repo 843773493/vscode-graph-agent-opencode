@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import nullcontext
 
 import pytest
 from pydantic import ValidationError
@@ -15,6 +16,12 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     SkillCatalogBinding,
     _revision,
 )
+
+
+@pytest.fixture
+def skill_control_admission():
+    """CSM 消费者测试显式隔离 Session 生命周期准入。"""
+    return lambda _name, _mode: nullcontext()
 
 
 def _manager(source_seal_case):
@@ -136,12 +143,13 @@ def _assert_no_locator_or_body(payload: dict, locator: str, body: str) -> None:
         assert ".boxteam" not in serialized, f"{key} 泄露物理路径"
 
 
-def test_skill_load_tool_resolves_only_from_frozen_snapshot(source_seal_case):
+@pytest.mark.asyncio
+async def test_skill_load_tool_resolves_only_from_frozen_snapshot(source_seal_case, skill_control_admission):
     manager = _manager(source_seal_case)
     _install_snapshot(manager, "debugging", "正文\n")
-    skill_load = create_skill_load_tool(manager)
-    first = json.loads(skill_load.invoke({"name": "debugging"}))
-    second = json.loads(skill_load.invoke({"name": "debugging"}))
+    skill_load = create_skill_load_tool(manager, control_admission=skill_control_admission)
+    first = json.loads(await skill_load.ainvoke({"name": "debugging"}))
+    second = json.loads(await skill_load.ainvoke({"name": "debugging"}))
 
     assert first["name"] == second["name"] == "debugging"
     assert first["revision"] == second["revision"]
@@ -159,9 +167,9 @@ def test_skill_load_tool_resolves_only_from_frozen_snapshot(source_seal_case):
         _assert_no_locator_or_body(payload, "/.boxteam/skills/debugging/SKILL.md", "正文")
 
 
-def test_skill_load_tool_rejects_unknown_arguments(source_seal_case):
+def test_skill_load_tool_rejects_unknown_arguments(source_seal_case, skill_control_admission):
     manager = _manager(source_seal_case)
-    skill_load = create_skill_load_tool(manager)
+    skill_load = create_skill_load_tool(manager, control_admission=skill_control_admission)
 
     with pytest.raises(ValidationError, match="unexpected"):
         skill_load.args_schema.model_validate(
@@ -218,10 +226,11 @@ def test_skill_load_tracked_mode_registers_tracking_and_appends(source_seal_case
     assert receipt.display_uri == binding.display_uri
 
 
-def test_skill_load_untrack_not_tracked_is_deterministic(source_seal_case):
+@pytest.mark.asyncio
+async def test_skill_load_untrack_not_tracked_is_deterministic(source_seal_case, skill_control_admission):
     manager = _manager(source_seal_case)
-    skill_load = create_skill_load_tool(manager)
-    result = json.loads(skill_load.invoke({"name": "debugging", "mode": "untrack"}))
+    skill_load = create_skill_load_tool(manager, control_admission=skill_control_admission)
+    result = json.loads(await skill_load.ainvoke({"name": "debugging", "mode": "untrack"}))
     assert result["status"] == "not_tracked"
     assert result["tracked"] is False
     assert result["append_status"] == "none"
@@ -230,22 +239,24 @@ def test_skill_load_untrack_not_tracked_is_deterministic(source_seal_case):
     assert manager.prepare_pending() is None  # 不伪造 source item
 
 
-def test_skill_load_untrack_stops_tracking_without_reading_source(source_seal_case):
+@pytest.mark.asyncio
+async def test_skill_load_untrack_stops_tracking_without_reading_source(source_seal_case, skill_control_admission):
     manager = _manager(source_seal_case)
     _install_snapshot(manager, "debugging", "v1\n")
     manager.load_skill("debugging", mode="tracked")
-    skill_load = create_skill_load_tool(manager)
-    result = json.loads(skill_load.invoke({"name": "debugging", "mode": "untrack"}))
+    skill_load = create_skill_load_tool(manager, control_admission=skill_control_admission)
+    result = json.loads(await skill_load.ainvoke({"name": "debugging", "mode": "untrack"}))
     assert result["status"] == "loaded"
     assert result["tracked"] is False
     # untrack 不重新解析 entry、不读取 source。
     assert manager.observe("skill:debugging", "v2\n") is False
 
 
-def test_skill_load_unknown_name_returns_explicit_error(source_seal_case):
+@pytest.mark.asyncio
+async def test_skill_load_unknown_name_returns_explicit_error(source_seal_case, skill_control_admission):
     manager = _manager(source_seal_case)
-    skill_load = create_skill_load_tool(manager)
-    result = json.loads(skill_load.invoke({"name": "missing"}))
+    skill_load = create_skill_load_tool(manager, control_admission=skill_control_admission)
+    result = json.loads(await skill_load.ainvoke({"name": "missing"}))
     assert result["status"] == "error"
     assert result["error"]["code"] == "skill-not-found"
     assert "missing" in result["error"]["message"]

@@ -12,16 +12,15 @@ export type LoadTurnDetails = (
 export type LoadToolDetails = (turnId: string, toolCallId: string) => Promise<void>;
 
 export interface ChatTurnHandlers {
+  onForkConversation?: (point: {
+    workspaceId: string; sessionId: string; threadId: string; sourceViewId: string; sourceViewRevision: number;
+    turnId?: string; itemId?: string;
+  }) => void;
   onReplayTurn: (
     targetMessageId: string,
     action: MessageReplayRequest["action"],
     displayContent: string,
     content?: string,
-    attachments?: AttachmentRef[],
-  ) => Promise<void>;
-  onUpdatePending: (
-    messageId: string,
-    content: string,
     attachments?: AttachmentRef[],
   ) => Promise<void>;
   onRemovePending: (messageId: string) => Promise<void>;

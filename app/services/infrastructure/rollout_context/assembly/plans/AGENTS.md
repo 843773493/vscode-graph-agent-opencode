@@ -17,4 +17,4 @@
 - 事务与提交只由 Saver/storage owner 发起；本目录的写操作必须在该事务内。
 - draft 不持有 selection/最终 detail/assembly ordinal；敏感和普通贡献正文均不复制入 registry。
 - sealed plan 只能只读；损坏与幂等冲突必须显式报错，不重新猜测源数据。
-- fork 导入只保存显式来源与 sealed manifest，creation/draft 字段必须为 NULL；不得伪造运行时草稿创建历史。
+- fork 保留原 scope 的真实 creation/draft/revision 与封存 hash，通过目标本地历史 binding 只读恢复；不得重造导入 variant 或修订历史记录。

@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 from app.core.workspace_identity import load_or_create_workspace_id
 from tests.support.processes import (
-    kill_process_on_port,
+    ensure_local_port_available,
     terminate_process,
     wait_for_http_ok,
 )
@@ -36,8 +36,8 @@ def start_browser_manager_processes(
     frontend_port: int,
     backend_host: str,
 ) -> BrowserManagerProcesses:
-    kill_process_on_port(backend_port)
-    kill_process_on_port(frontend_port)
+    ensure_local_port_available(backend_port, service_name="浏览器管理器后端")
+    ensure_local_port_available(frontend_port, service_name="浏览器管理器前端")
     project_root = Path.cwd().resolve()
     node_bin = shutil.which("node")
     if node_bin is None:
@@ -67,27 +67,37 @@ def start_browser_manager_processes(
         stderr=subprocess.PIPE,
         text=True,
     )
-    frontend_process = subprocess.Popen(
-        [
-            node_bin,
-            "server.js",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(frontend_port),
-            "--backend-url",
-            f"http://127.0.0.1:{backend_port}",
-            "--workspace-root",
-            str(workspace_root),
-            "--asset-root",
-            str(project_root),
-        ],
-        cwd=project_root / "src" / "workspace-services" / "browser" / "client",
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    try:
+        frontend_process = subprocess.Popen(
+            [
+                node_bin,
+                "server.js",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(frontend_port),
+                "--backend-url",
+                f"http://127.0.0.1:{backend_port}",
+                "--workspace-root",
+                str(workspace_root),
+                "--asset-root",
+                str(project_root),
+            ],
+            cwd=project_root / "src" / "workspace-services" / "browser" / "client",
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except BaseException as startup_error:
+        try:
+            terminate_process(backend_process)
+        except BaseException as cleanup_error:  # noqa: BLE001 - 两个错误都必须保留
+            raise BaseExceptionGroup(
+                "浏览器管理器前端启动失败且后端进程清理失败",
+                [startup_error, cleanup_error],
+            ) from None
+        raise
     handle = BrowserManagerProcesses(
         backend_process=backend_process,
         frontend_process=frontend_process,
@@ -97,17 +107,27 @@ def start_browser_manager_processes(
     try:
         wait_for_http_ok(f"http://127.0.0.1:{backend_port}/health", backend_process)
         wait_for_http_ok(f"http://127.0.0.1:{frontend_port}/health", frontend_process)
-    except Exception:
-        close_browser_manager_processes(handle)
+    except BaseException as startup_error:
+        try:
+            close_browser_manager_processes(handle)
+        except BaseException as cleanup_error:  # noqa: BLE001 - 两个错误都必须保留
+            raise BaseExceptionGroup(
+                "浏览器管理器就绪检查失败且进程清理失败",
+                [startup_error, cleanup_error],
+            ) from None
         raise
     return handle
 
 
 def close_browser_manager_processes(handle: BrowserManagerProcesses) -> None:
-    terminate_process(handle.frontend_process)
-    terminate_process(handle.backend_process)
-    kill_process_on_port(handle.frontend_port)
-    kill_process_on_port(handle.backend_port)
+    errors: list[BaseException] = []
+    for process in (handle.frontend_process, handle.backend_process):
+        try:
+            terminate_process(process)
+        except BaseException as error:  # noqa: BLE001 - 后续 owned 进程仍须清理
+            errors.append(error)
+    if errors:
+        raise BaseExceptionGroup("浏览器管理器进程清理失败", errors)
 
 
 def start_browser_frontend_process(
@@ -115,7 +135,7 @@ def start_browser_frontend_process(
     workspace_root: Path,
     frontend_port: int,
 ) -> BrowserFrontendProcess:
-    kill_process_on_port(frontend_port)
+    ensure_local_port_available(frontend_port, service_name="浏览器管理器前端")
     project_root = Path.cwd().resolve()
     node_bin = shutil.which("node")
     if node_bin is None:
@@ -147,15 +167,20 @@ def start_browser_frontend_process(
     handle = BrowserFrontendProcess(process=process, port=frontend_port)
     try:
         wait_for_http_ok(f"http://127.0.0.1:{frontend_port}/health", process)
-    except Exception:
-        close_browser_frontend_process(handle)
+    except BaseException as startup_error:
+        try:
+            close_browser_frontend_process(handle)
+        except BaseException as cleanup_error:  # noqa: BLE001 - 两个错误都必须保留
+            raise BaseExceptionGroup(
+                "浏览器 attach 前端就绪检查失败且进程清理失败",
+                [startup_error, cleanup_error],
+            ) from None
         raise
     return handle
 
 
 def close_browser_frontend_process(handle: BrowserFrontendProcess) -> None:
     terminate_process(handle.process)
-    kill_process_on_port(handle.port)
 
 
 def browser_test_data_url() -> str:

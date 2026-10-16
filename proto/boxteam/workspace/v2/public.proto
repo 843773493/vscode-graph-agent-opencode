@@ -114,6 +114,7 @@ message ChildThreadListDTO {
   string parent_session_id = 1;
   repeated ChildThreadSummaryDTO items = 2;
   int64 total = 3;
+  repeated TeamBoardDTO teams = 4;
 }
 
 message ChildThreadSummaryDTO {
@@ -125,6 +126,7 @@ message ChildThreadSummaryDTO {
   optional string title = 6;
   optional string collaboration_state = 7;
   optional string admission_state = 8;
+  // 子线程合成展示状态；bound 仅表示初始 admission 已绑定，不保证 Job 已开始。
   string status = 9;
   optional ChildThreadRuntimeDTO runtime = 10;
   optional string report_execution_id = 11;
@@ -269,6 +271,7 @@ message JobUpdatedExecutionEventDTO {
 message LLMRequestLogRecordDTO {
   string session_id = 1;
   optional string job_id = 2;
+  // handler 结束或失败后组装日志的 epoch 毫秒时刻；文件名的 epoch 纳秒只用于排序。
   int64 timestamp = 3;
   string file_name = 4;
   string file_path = 5;
@@ -305,6 +308,7 @@ message MessageCreateRequest {
 }
 
 message MessageDTO {
+  // 消息创建和更新时刻；事件发布时刻由事件 header.time 独立表示。
   google.protobuf.Timestamp created_at = 1;
   google.protobuf.Timestamp updated_at = 2;
   string message_id = 3;
@@ -313,16 +317,7 @@ message MessageDTO {
   string content = 6;
   repeated AttachmentRef attachments = 7;
   optional google.protobuf.Struct metadata = 8;
-}
-
-message MessageObservationDTO {
-  string message_id = 1;
-  string session_id = 2;
-  string role = 3;
-  string content = 4;
-  repeated google.protobuf.Struct attachments = 5;
-  optional google.protobuf.Struct metadata = 6;
-  google.protobuf.Timestamp created_at = 7;
+  string thread_id = 9;
 }
 
 message MessageReplayAccepted {
@@ -336,6 +331,8 @@ message MessageReplayAccepted {
   int64 removed_message_count = 8;
   optional bool workspace_changes_reverted = 9;
   string notice = 10;
+  string thread_id = 11;
+  optional string turn_id = 12;
 }
 
 message MessageReplayRequest {
@@ -350,20 +347,12 @@ message MessageRunAccepted {
   string status = 3;
   JobDispatchSnapshotDTO dispatch = 4;
   string thread_id = 5;
+  optional string turn_id = 6;
 }
 
 message MessageRunRequest {
   MessageCreateRequest message = 1;
   RunOptions run = 2;
-}
-
-message MessageUpdatedExecutionEventDTO {
-  string event_id = 1;
-  string session_id = 2;
-  optional string job_id = 3;
-  google.protobuf.Timestamp time = 4;
-  string type = 5;
-  MessageObservationDTO payload = 6;
 }
 
 message ExtensionCatalogBindingAuditDTO {
@@ -674,6 +663,8 @@ message PendingRequestListDTO {
   optional string active_job_id = 2;
   repeated PendingRequestDTO requests = 3;
   optional int64 snapshot_version = 4;
+  // 精确 thread 读取的范围；Session 聚合快照不设置。
+  optional string thread_id = 5;
 }
 
 message PendingRequestPolicyUpdateRequest {
@@ -688,6 +679,7 @@ message PendingRequestSummaryDTO {
   string delivery_policy = 4;
   string status = 5;
   google.protobuf.Timestamp updated_at = 6;
+  string thread_id = 7;
 }
 
 message PendingRequestSummaryListDTO {
@@ -697,11 +689,7 @@ message PendingRequestSummaryListDTO {
   int64 request_count = 4;
   optional int64 snapshot_version = 5;
   optional bool truncated = 6;
-}
-
-message PendingRequestUpdateRequest {
-  string content = 1;
-  repeated AttachmentRef attachments = 2;
+  optional string thread_id = 7;
 }
 
 message PermissionRequestDTO {
@@ -900,6 +888,7 @@ message SessionContextReadRequest {
   optional int64 recent_rounds = 4;
   optional bool include_initial_goal = 5;
   optional string cursor = 6;
+  // 投影 items 的单页条数上限；messages 中用户与助手消息分别计条，max_chars 可进一步截短。不是 recent_rounds、Turn 数或完整 snapshot，续页由 has_more/next_cursor 判定。
   optional int64 limit = 7;
   optional int64 max_chars = 8;
   optional string revision = 9;
@@ -1000,7 +989,9 @@ message SessionCreateRequest {
 message SessionDTO {
   reserved 12;
   reserved "delegation";
+  // Session 创建 intent 冻结并由 catalog 投影的 UTC 创建时刻；导航改名和移动不重写。
   google.protobuf.Timestamp created_at = 1;
+  // catalog 记录的 Session 配置最近一次更新 UTC 时刻；初建等于 created_at，导航改名和移动不推进。
   google.protobuf.Timestamp updated_at = 2;
   string session_id = 3;
   string workspace_id = 4;
@@ -1008,7 +999,9 @@ message SessionDTO {
   optional string title_source = 6;
   string current_agent_id = 7;
   optional string current_provider_id = 8;
+  // catalog 导航父链中最近祖先 Session 的稳定 ID；随导航移动派生，不表示物理父目录。
   optional string parent_session_id = 9;
+  // 创建 metadata 冻结的 fork 来源 Session 稳定 ID；独立于导航祖先，普通 Session 可为空。
   optional string context_source_session_id = 10;
   optional string kind = 11;
   optional SessionGenerationOriginDTO generation_origin = 13;
@@ -1095,10 +1088,106 @@ message SessionFileTreeSettingsDTO {
 
 message SessionForkRequest {
   optional string mode = 1;
-  optional string turn_id = 2;
+  reserved 2, 4, 5;
+  reserved "turn_id", "pinned", "place_under_source";
+  // inclusive 包含点击 item；before 不包含点击 item。
   optional string anchor_mode = 3;
-  optional bool pinned = 4;
-  optional bool place_under_source = 5;
+  // 精确来源 Thread；Session 兼容入口由 service 按 catalog main 归一。
+  string source_uri = 6;
+  string idempotency_key = 7;
+  // 来源 Thread 中所选历史 view 的冻结身份。
+  string source_view_id = 8;
+  // 冻结所选来源 view 的 revision，不追随 latest。
+  int64 source_view_revision = 9;
+  // 冻结来源 view 中点击的稳定 item 身份。
+  optional string anchor_item_id = 10;
+  // 创建容器；结果 thread_uri/thread_id 才是实际新目标 Thread。
+  string target_container_uri = 11;
+  optional string creation_kind = 12;
+  optional string title = 13;
+  optional string relationship = 14;
+  repeated SessionForkResourceChoice resources = 15;
+  optional SessionForkGoalSelection goal = 16;
+}
+
+message SessionForkGoalSelection {
+  optional int64 token_budget = 1;
+}
+
+message SessionForkResourceChoice {
+  optional string resource_uri = 1;
+  string action = 2;
+  optional SessionForkOwnerReference owner_reference = 3;
+}
+
+message SessionForkOwnerReference {
+  string kind = 1;
+  string resource_id = 2;
+  string workspace_id = 3;
+  // attach 的 CAS 预期版本，必须为正数并与当前 owner revision 匹配。
+  int64 expected_revision = 4;
+}
+
+message SessionForkResourceResult {
+  optional string resource_uri = 1;
+  string action = 2;
+  string availability = 3;
+  optional string target_uri = 4;
+  optional string reason = 5;
+  optional SessionForkOwnerReference owner_reference = 6;
+  optional WorkspaceResourceDTO owner_resource = 7;
+  // 本次 attach 的历史提交事实；当前可用性仍由 owner_resource 核实。
+  optional string operation_state = 8;
+  // 本次 attach 的历史提交 revision；尚未提交时省略，当前 owner 版本见 owner_resource.owner_revision。
+  optional int64 committed_revision = 9;
+}
+
+message SessionForkExportReleaseDTO {
+  // 目标本地清理事实；只有核实来源终结回执才为 confirmed。
+  string state = 1;
+  optional string error = 2;
+}
+
+message SessionForkResultDTO {
+  // 实际目标 Thread 所属 Session，不表示应切换主会话。
+  SessionDTO session = 1;
+  string thread_id = 2;
+  string thread_uri = 3;
+  string creation_kind = 4;
+  string source_uri = 5;
+  string source_view_id = 6;
+  int64 source_view_revision = 7;
+  optional string anchor_item_id = 8;
+  string mode = 9;
+  repeated SessionForkResourceResult resources = 10;
+  optional string goal_id = 11;
+  optional SessionForkExportReleaseDTO export_release = 12;
+}
+
+message SessionForkResourceSourceDTO {
+  string resource_uri = 1;
+  // 附件 owner 的 file_name / mime_type 展示投影。
+  optional string name = 2;
+  optional string content_type = 3;
+  // 来源可用性与本次选择的正文依赖，不表示目标授权。
+  string availability = 4;
+  bool required_for_context = 5;
+}
+
+message SessionForkSourcePointDTO {
+  string source_uri = 1;
+  string source_view_id = 2;
+  int64 source_view_revision = 3;
+  optional string anchor_item_id = 4;
+  string child_container_uri = 5;
+  string main_container_uri = 6;
+  string title = 7; // 新目标名称的可编辑预填值。
+  bool goal_available = 8; // 来源是否有可选 Goal，不表示目标已继承。
+  repeated SessionForkResourceSourceDTO resources = 9;
+  string resource_mode = 10;
+  string resource_anchor_mode = 11;
+  // 当前工作区领域 owner 的实时投影，不属于冻结历史快照。
+  repeated WorkspaceResourceDTO live_resources = 12;
 }
 
 message SessionGenerationOriginDTO {
@@ -1120,10 +1209,15 @@ message SessionGoalDTO {
   string objective = 3;
   string status = 4;
   optional int64 token_budget = 5;
+  // 当前 Goal 的累计 Token；fork 创建独立 Goal 时从 0 开始。
   optional int64 tokens_used = 6;
+  // 当前 Goal 的累计用时；fork 创建独立 Goal 时从 0 开始。
   optional int64 time_used_seconds = 7;
   optional int64 revision = 8;
+  // fork 的新 Goal 使用目标 Session 冻结创建时刻，不继承来源 Goal 的时间。
   google.protobuf.Timestamp created_at = 9;
+  // 当前 Goal 记录最近一次写入时刻，含设置、用量记账和续跑标记写入或失败回滚；fork 初值取目标 Session 冻结创建时刻。
+  // 与 revision 不同：revision 仅随普通设置更新递增。
   google.protobuf.Timestamp updated_at = 10;
   optional string last_accounted_job_id = 11;
   optional string last_continued_job_id = 12;
@@ -1142,6 +1236,7 @@ message SessionInformationErrorDTO {
   string job_id = 2;
   string type = 3;
   string message = 4;
+  // 所选错误 Trace 的来源事件时间；保留其时刻与显式时区偏移，不在收集诊断信息时重新取时。
   google.protobuf.Timestamp timestamp = 5;
   optional bool message_truncated = 6;
 }
@@ -1170,10 +1265,14 @@ message SessionInformationSessionDTO {
   string title = 3;
   string current_agent_id = 4;
   optional string current_provider_id = 5;
+  // catalog 导航父链中最近祖先 Session 的稳定 ID；随导航移动派生，不表示物理父目录。
   optional string parent_session_id = 6;
+  // 创建 metadata 冻结的 fork 来源 Session 稳定 ID；独立于导航祖先，普通 Session 可为空。
   optional string context_source_session_id = 7;
   string kind = 8;
+  // Session 创建 intent 冻结并由 catalog 投影的 UTC 创建时刻；导航改名和移动不重写。
   google.protobuf.Timestamp created_at = 9;
+  // catalog 记录的 Session 配置最近一次更新 UTC 时刻；初建等于 created_at，导航改名和移动不推进。
   google.protobuf.Timestamp updated_at = 10;
   optional bool title_truncated = 11;
 }
@@ -1197,6 +1296,7 @@ message SessionInformationRelationsDTO {
 message SessionInformationSnapshotDTO {
   optional string kind = 1;
   optional int64 schema_version = 2;
+  // 诊断读取完成后构造快照时取得的当前 UTC 时刻，接口按 ISO8601 表达；不等同于所含事件时间，也不代表跨 owner 的事务快照。
   google.protobuf.Timestamp generated_at = 3;
   SessionInformationSessionDTO session = 4;
   reserved 5;
@@ -1215,6 +1315,7 @@ message SessionInformationTraceDTO {
   optional int64 observed_event_count = 1;
   optional string last_event_id = 2;
   optional string last_event_type = 3;
+  // 本次已读取 Trace 中最后一项的来源事件时间；保留显式时区偏移，无 Trace 时为空，不是诊断快照生成时刻。
   optional google.protobuf.Timestamp last_event_at = 4;
   optional bool truncated = 5;
 }
@@ -1279,6 +1380,7 @@ message CommunicationReceipt {
   string payload_hash = 4;
   string admission_id = 5;
   string state = 6;
+  // target 首次持久接受此通信的 UTC 时刻，与 inbox.created_at 同源；重放保留原值，不表示 execution 或 Job 开始。
   string accepted_at = 7;
 }
 
@@ -1291,7 +1393,9 @@ message CommunicationObservationRequest {
   string operation = 6;
   google.protobuf.Struct query = 7;
   uint32 page_ordinal = 8;
+  // 从 tool call 起算的一天恢复窗口；query.deadline 独立冻结真正的 wait 预算。
   string expires_at = 9;
+  bool terminal_replay = 10;
 }
 
 // read 授权绑定真实资源引用；清单不制造 Session 或 main thread。
@@ -1316,8 +1420,64 @@ message CommunicationGatewayRequest {
   oneof destination {
     GlobalThreadAddress target = 2;
     ContextGrantTarget resource_target = 4;
+    ForkGrantTarget fork_target = 5;
   }
   google.protobuf.Struct body = 3;
+}
+
+message ForkGrantTarget {
+  string gateway_id = 1;
+  string uri = 2;
+  string fork_role = 3;
+}
+
+message ForkSourceCaptureDTO {
+  string copy_operation_id = 1;
+  optional string creation_key = 2;
+  string source_session_id = 3;
+  string source_thread_id = 4;
+  string target_session_id = 5;
+  string target_thread_id = 6;
+  string snapshot_id = 7;
+  string snapshot_relative_locator = 8;
+  string fork_id = 9;
+  string materialization_id = 10;
+  string request_json = 11;
+  string preimage_hash = 12;
+  string state = 13;
+  optional string snapshot_sha256 = 14;
+  optional string marker_sha256 = 15;
+  optional string abort_reason = 16;
+}
+
+message SessionForkTransferRequest {
+  string source_gateway_id = 1;
+  ForkGrantTarget fork_target = 2;
+  string action = 3;
+  SessionForkRequest request = 4;
+  optional ForkSourceCaptureDTO capture = 5;
+  optional int64 cursor = 6;
+  optional string file_name = 7;
+  optional int64 offset = 8;
+  optional SessionGenerationOriginDTO generation_origin = 9;
+  optional string release_state = 10;
+  optional string blob_id = 11;
+}
+
+message ForkTransferFileDTO {
+  string name = 1;
+  int64 size_bytes = 2;
+}
+
+message SessionForkTransferResultDTO {
+  optional ForkSourceCaptureDTO capture = 1;
+  optional google.protobuf.Struct intent = 2;
+  repeated ForkTransferFileDTO files = 3;
+  optional int64 next_cursor = 4;
+  optional string chunk_base64 = 5;
+  optional string chunk_sha256 = 6;
+  optional int64 offset = 7;
+  optional SessionForkResultDTO result = 8;
 }
 
 message SessionNetworkWaitDTO {
@@ -1382,6 +1542,7 @@ message WorkspaceResourceDTO {
   string retention_scope = 4;
   ResourceThreadRef source_thread = 5;
   repeated ResourceThreadRef thread_associations = 6;
+  // owner 持久化的传输授权版本，用于版本校验，并与外部 transport_owner_revision 对账。
   uint64 owner_revision = 7;
   string status = 8;
   string reconciliation_status = 9;
@@ -1468,6 +1629,7 @@ message SessionTurnBootstrapDTO {
   optional string older_cursor = 8;
   optional string event_cursor = 9;
   int64 projection_epoch = 10;
+  string thread_id = 11;
 }
 
 message SessionUpdateRequest {
@@ -1544,10 +1706,12 @@ message TeamMemberDTO {
   string source = 3;
   string work_mode = 4;
   optional string instructions = 5;
+  // 团队成员资格与初始准入的合成状态，不表示 execution outcome 或运行状态。
   optional string status = 6;
   reserved 7, 8;
   reserved "activation_job_id", "activation_error";
   google.protobuf.Timestamp joined_at = 9;
+  // 协调者取 TeamBoard 创建时刻；委派成员取 child 初始 execution intent 最近更新时间，不是 collaboration member 行更新时间。
   google.protobuf.Timestamp updated_at = 10;
 }
 
@@ -1558,6 +1722,7 @@ message TeamMemberOperationDTO {
   reserved "child_session_id", "child_message_id", "child_job_id";
   optional string child_thread_id = 6;
   optional string child_delegation_id = 7;
+  // 子线程初始 execution intent 状态；bound 表示 identity 已绑定，不代表 Job 已启动。
   optional string child_admission_state = 8;
 }
 
@@ -1671,6 +1836,7 @@ message ToolTestStartRequest {
 
 message TraceEventDTO {
   string event_id = 1;
+  // 来源路径提供的部件引用；历史工具路径在已知 emitting ModelCall 时使用其限定的聚合引用，通用 Trace 不承诺所有 part_id 都遵循该格式。
   optional string part_id = 2;
   string session_id = 3;
   string job_id = 4;
@@ -1682,6 +1848,7 @@ message TraceEventDTO {
   optional string tool_name = 10;
   repeated string skill_names = 11;
   optional string step_id = 12;
+  // 来源事件的带时区时间，Trace 映射保留其时刻与显式时区偏移，不在投影时重新取时；历史工具事件沿对应 canonical 消息/item 时间。
   google.protobuf.Timestamp timestamp = 13;
   optional google.protobuf.Struct raw = 14;
 }
@@ -1700,9 +1867,12 @@ message TraceObservedPayloadDTO {
 }
 
 message TurnActivityStatsDTO {
+  // 历史值取 Turn projection.created_at 到 updated_at 的整数毫秒差；缺失或非法时为空，无时区按 UTC，负差钳为零。
   optional int64 duration_ms = 1;
   optional int64 item_count = 2;
+  // 所属 rollout 中已选 activity 成员的物理 item_sequence 最小值；空 activity 为空，不表示连续成员区间或跨副本稳定身份。
   optional int64 first_item_sequence = 3;
+  // 所属 rollout 中已选 activity 成员的物理 item_sequence 最大值；空 activity 为空，不表示连续成员区间或跨副本稳定身份。
   optional int64 last_item_sequence = 4;
 }
 
@@ -1710,6 +1880,8 @@ message TurnAttachmentDTO {
   string file_id = 1;
   optional string name = 2;
   optional string content_type = 3;
+  // 来自附件 owner 的冻结可用性；不凭预览读取结果推断。
+  optional string availability = 4;
 }
 
 message TurnBaseDTO {
@@ -1718,10 +1890,17 @@ message TurnBaseDTO {
   string session_id = 3;
   int64 ordinal = 4;
   int64 revision = 5;
+  // Turn 历史展示状态映射：open→accepted、active→running、completed_empty→completed、interrupted→timed_out、unknown→failed；不是 Job 状态事实。
   string status = 6;
+  // 带时区 ISO8601 展示时刻：非空 Turn projection 的 created_at 会先校验为有效且带时区，即使消息自身有时间也不能省略。随后取本次实际加载的首个非 internal HumanMessage 的 response_metadata.created_at，否则取首个已加载消息；候选消息或其时间缺失时，回退已校验的 turns.created_at，两者均无可用时间则报错。非空但非法的消息日期字符串直接报错，不触发回退。消息时间保留显式时区偏移，无时区按 UTC 解释；展示值受 include 加载范围影响。
   google.protobuf.Timestamp created_at = 7;
+  // 带时区 ISO8601 展示时刻：取本次所选 canonical Turn projection 的 turns.updated_at；缺少 projection、时刻非法或无时区时历史读取失败，不回退到消息时间；保留显式时区偏移。fork 历史沿用来源投影的原始时刻。
   google.protobuf.Timestamp updated_at = 8;
+  // 直接映射 updated_at 的同一时刻，不是独立完成事件，非终态 Turn 也可能有值；fork 历史沿用来源投影的原始时刻。
   optional google.protobuf.Timestamp completed_at = 9;
+  // 本次真实历史读取的快照身份；消息操作必须原样携带，不能重新猜测 active view。
+  string source_view_id = 10;
+  int64 source_view_revision = 11;
 }
 
 message TurnCursorDTO {
@@ -1761,9 +1940,13 @@ message TurnDetailDTO {
   string session_id = 3;
   int64 ordinal = 4;
   int64 revision = 5;
+  // Turn 历史展示状态映射：open→accepted、active→running、completed_empty→completed、interrupted→timed_out、unknown→failed；不是 Job 状态事实。
   string status = 6;
+  // 带时区 ISO8601 展示时刻：非空 Turn projection 的 created_at 会先校验为有效且带时区，即使消息自身有时间也不能省略。随后取本次实际加载的首个非 internal HumanMessage 的 response_metadata.created_at，否则取首个已加载消息；候选消息或其时间缺失时，回退已校验的 turns.created_at，两者均无可用时间则报错。非空但非法的消息日期字符串直接报错，不触发回退。消息时间保留显式时区偏移，无时区按 UTC 解释；展示值受 include 加载范围影响。
   google.protobuf.Timestamp created_at = 7;
+  // 带时区 ISO8601 展示时刻：取本次所选 canonical Turn projection 的 turns.updated_at；缺少 projection、时刻非法或无时区时历史读取失败，不回退到消息时间；保留显式时区偏移。fork 历史沿用来源投影的原始时刻。
   google.protobuf.Timestamp updated_at = 8;
+  // 直接映射 updated_at 的同一时刻，不是独立完成事件，非终态 Turn 也可能有值；fork 历史沿用来源投影的原始时刻。
   optional google.protobuf.Timestamp completed_at = 9;
   optional string items_view = 10;
   repeated string source_message_ids = 11;
@@ -1781,6 +1964,8 @@ message TurnDetailDTO {
   optional string detail_next_cursor = 23;
   optional TurnActivityStatsDTO activity_stats = 24;
   int64 root_logical_item_ordinal = 25;
+  string source_view_id = 26;
+  int64 source_view_revision = 27;
 }
 
 message TurnHistoryLoadRequest {
@@ -1808,17 +1993,24 @@ message TurnHistoryPageDTO {
   repeated TurnSummaryDTO summaries = 9;
   repeated InternalExecutionHistoryDTO internal_executions = 10;
   optional string thread_id = 11;
+  optional string source_view_id = 12;
+  optional int64 source_view_revision = 13;
 }
 
 message InternalExecutionHistoryDTO {
   string execution_id = 1;
   string job_id = 2;
+  // 对应 executions.outcome 的独立 internal execution 历史结果，不是 Job 或 Turn 状态。
   string status = 3;
+  // 对应 executions 持久记录不可变的 UTC 创建时刻，接口按 ISO8601 表达，复制保留源值。
   google.protobuf.Timestamp created_at = 4;
   repeated InternalExecutionDisplayPartDTO display_parts = 5;
   repeated TurnResponsePartDTO response_parts = 6;
+  // 持久 execution/admission 的历史 Session scope；fork 保留原值，可不同于请求目标，仅由目标本地冻结 namespace binding 校验，不用于重新寻址来源。
   string session_id = 7;
+  // 持久 execution/admission 的历史 thread scope；fork 保留原值，可不同于本页请求 thread，仅由目标本地冻结 namespace binding 校验，不用于重新寻址来源。
   string thread_id = 8;
+  // 对应 executions 持久记录的 UTC ISO8601 更新时刻；fork 保留已终态来源值，未终态目标取消使用目标收敛时刻。
   google.protobuf.Timestamp updated_at = 9;
   reserved 10;
   reserved "logical_item_ordinal";
@@ -1863,19 +2055,23 @@ message TurnProjectionCorruptedErrorDTO {
 }
 
 message TurnResponsePartDTO {
+  // 历史部件由 canonical item_id 与 part_ordinal 生成唯一引用；streaming 为临时部件 ID，不代表 canonical item 身份。
   string part_id = 1;
   string kind = 2;
   string projection = 3;
+  // 响应部件的归一化状态；历史值由 canonical/消息投影映射，streaming 值随部件更新。completed 仅表示该部件完成，可与工具拒绝、Job 或 Execution 失败并存，不证明工具执行成功。
   optional string status = 4;
   TurnResponseSourceDTO source = 5;
   optional string text = 6;
   optional string carrier_type = 7;
+  // 保留 canonical payload 中合法的工具调用 ID 表示，可为 Provider 原始 ID 或已有 ModelCall 限定 ID；不等同于历史工具 Trace/摘要的聚合引用，也不等同于 part_id。
   optional string tool_call_id = 8;
   optional string tool_name = 9;
   optional string arguments = 10;
   optional string result = 11;
   optional bool truncated = 12;
   optional bool final = 13;
+  // 历史 terminal Turn 的本次 mapper 输入缺少同一 ModelCall 与 Provider call ID 的匹配结果；不证明底层工具未执行或执行失败。
   optional bool outcome_unknown = 14;
   optional string completion_reason = 15;
   optional bool partial = 16;
@@ -1891,7 +2087,9 @@ message TurnResponseSourceDTO {
   optional string item_id = 7;
   optional int64 item_sequence = 8;
   optional int64 part_ordinal = 9;
+  // 历史 activity 沿 canonical item 创建时刻；final 沿 final_item_created_at；standalone internal 沿原 item 创建时刻。streaming 可缺省。
   optional google.protobuf.Timestamp created_at = 10;
+  // 历史 activity 首项从 Turn projection.created_at 起算，后续按逻辑 activity 顺序计算相邻 item 的整数毫秒差；final 固定为零；standalone internal 首项从 execution.created_at 起算，后续沿同 view、同 execution 的前一 visible/display_only 逻辑成员计算。负差钳为零；streaming 可缺省。
   optional int64 elapsed_ms = 11;
   optional int64 logical_item_ordinal = 12;
 }
@@ -1902,9 +2100,13 @@ message TurnSummaryDTO {
   string session_id = 3;
   int64 ordinal = 4;
   int64 revision = 5;
+  // Turn 历史展示状态映射：open→accepted、active→running、completed_empty→completed、interrupted→timed_out、unknown→failed；不是 Job 状态事实。
   string status = 6;
+  // 带时区 ISO8601 展示时刻：非空 Turn projection 的 created_at 会先校验为有效且带时区，即使消息自身有时间也不能省略。随后取本次实际加载的首个非 internal HumanMessage 的 response_metadata.created_at，否则取首个已加载消息；候选消息或其时间缺失时，回退已校验的 turns.created_at，两者均无可用时间则报错。非空但非法的消息日期字符串直接报错，不触发回退。消息时间保留显式时区偏移，无时区按 UTC 解释；展示值受 include 加载范围影响。
   google.protobuf.Timestamp created_at = 7;
+  // 带时区 ISO8601 展示时刻：取本次所选 canonical Turn projection 的 turns.updated_at；缺少 projection、时刻非法或无时区时历史读取失败，不回退到消息时间；保留显式时区偏移。fork 历史沿用来源投影的原始时刻。
   google.protobuf.Timestamp updated_at = 8;
+  // 直接映射 updated_at 的同一时刻，不是独立完成事件，非终态 Turn 也可能有值；fork 历史沿用来源投影的原始时刻。
   optional google.protobuf.Timestamp completed_at = 9;
   optional string items_view = 10;
   repeated string source_message_ids = 11;
@@ -1923,6 +2125,8 @@ message TurnSummaryDTO {
   repeated TurnResponsePartDTO response_parts = 24;
   optional TurnActivityStatsDTO activity_stats = 25;
   int64 root_logical_item_ordinal = 26;
+  string source_view_id = 27;
+  int64 source_view_revision = 28;
 }
 
 message TurnThinkingBlockDTO {
@@ -1933,6 +2137,7 @@ message TurnThinkingBlockDTO {
 message TurnToolSummaryDTO {
   string tool_name = 1;
   string status = 2;
+  // 历史工具聚合引用：已知 emitting ModelCall 时由其 ID 与 Provider 原始 call ID 限定，未知时保留原 call ID；不同 ModelCall 重用同一原始 ID 仍分别展示。
   optional string tool_call_id = 3;
 }
 
@@ -1942,6 +2147,7 @@ message TurnUserMessageDTO {
   optional bool content_truncated = 3;
   repeated TurnAttachmentDTO attachments = 4;
   optional google.protobuf.Struct metadata = 5;
+  // canonical 用户消息的不可变创建时刻，接口为带时区 ISO8601；沿消息 response_metadata.created_at，保留显式时区偏移，无时区时按 UTC 解释，缺失时报错。复制保留源消息时间事实。
   google.protobuf.Timestamp created_at = 6;
 }
 
@@ -1950,6 +2156,7 @@ message TurnUserMessageSummaryDTO {
   optional string preview = 2;
   optional bool content_truncated = 3;
   optional int64 attachment_count = 4;
+  // 对应用户消息详情的 created_at，接口为带时区 ISO8601；摘要直接复用详情时间，保留显式时区偏移，详情对无时区值按 UTC 解释，复制保留源消息时间事实。
   google.protobuf.Timestamp created_at = 5;
 }
 
@@ -2113,6 +2320,33 @@ message WorkspaceFileUpdateRequest {
 message WorkspaceFileWatchRequest {
   repeated string paths = 1;
   optional int64 after_event_id = 2;
+}
+
+// 每个逻辑观察者保留独立的 source、恢复游标和生命周期。
+message WorkspaceObservationSubscription {
+  string subscription_id = 1;
+  string kind = 2;
+  optional string session_id = 3;
+  optional int64 activity_after = 4;
+  optional string trace_after = 5;
+  repeated string paths = 6;
+  optional int64 files_after = 7;
+}
+
+message WorkspaceObservationRequest {
+  repeated WorkspaceObservationSubscription subscriptions = 1;
+}
+
+// frame 携带领域 owner 的完整原 SSE 帧；物理聚合不重编码领域事件。
+message WorkspaceObservationFrameDTO {
+  string subscription_id = 1;
+  string state = 2;
+  optional string frame = 3;
+  optional int32 status = 4;
+  optional string detail_json = 5;
+  // connected 时逻辑 reader 的续读水位；files 是事件序号的十进制字符串，
+  // Trace/activity 当前不设置。它不是历史分页 cursor 或路由 revision。
+  optional string cursor = 6;
 }
 
 message WorkspaceIndexRebuildDTO {

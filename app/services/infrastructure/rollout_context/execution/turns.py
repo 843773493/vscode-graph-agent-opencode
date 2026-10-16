@@ -401,14 +401,13 @@ class RolloutTurnsMixin:
                 ).fetchone()
                 if branch_exists is None:
                     raise ValueError(f"acceptance source branch 不可用: {branch_value}")
+                # 导入历史保留原 owner，仍占用当前 Thread 数据库的序号空间。
                 ordinal = (
                     turn_ordinal
                     if turn_ordinal is not None
                     else strict_non_negative_int(
                         connection.execute(
-                            "SELECT COALESCE(MAX(turn_ordinal), 0) + 1 FROM turn_records "
-                            "WHERE session_id = ? AND thread_id = ?",
-                            (session_id, owner_thread_id),
+                            "SELECT COALESCE(MAX(turn_ordinal), 0) + 1 FROM turn_records",
                         ).fetchone()[0],
                         field="turn_records.turn_ordinal",
                     )
@@ -421,8 +420,8 @@ class RolloutTurnsMixin:
                     raise ValueError("turn_ordinal 必须是正整数")
                 if (
                     connection.execute(
-                        "SELECT 1 FROM turn_records WHERE session_id = ? AND thread_id = ? AND turn_ordinal = ?",
-                        (session_id, owner_thread_id, ordinal),
+                        "SELECT 1 FROM turn_records WHERE turn_ordinal = ?",
+                        (ordinal,),
                     ).fetchone()
                     is not None
                 ):
@@ -609,7 +608,7 @@ class RolloutTurnsMixin:
                     ),
                 )
                 connection.execute(
-                    "INSERT INTO turn_records(turn_id, session_id, thread_id, turn_ordinal, source_branch_id, root_input_item_id, root_input_item_sequence, accepted_ingress_id, acceptance_idempotency_key, initial_execution_id, last_execution_id, status, replay_of_turn_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)",
+                    "INSERT INTO turn_records(turn_id, session_id, thread_id, turn_ordinal, source_branch_id, root_input_item_id, root_input_item_sequence, accepted_ingress_id, acceptance_idempotency_key, initial_execution_id, last_execution_id, status, replay_of_turn_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)",
                     (
                         turn_value,
                         session_id,
@@ -626,6 +625,9 @@ class RolloutTurnsMixin:
                         timestamp,
                         timestamp,
                     ),
+                )
+                connection.execute(
+                    "UPDATE turns SET status='accepted' WHERE turn_id=?", (turn_value,),
                 )
                 # acceptance-time 可能早于第一个 LangGraph checkpoint。除了
                 # canonical item membership，还必须立即登记 active view 的

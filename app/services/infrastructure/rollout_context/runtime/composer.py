@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from typing import cast
 
 from app.domain.itemized.assembly_snapshot import (
     ContextAssemblySnapshot,
-    context_request_hash,
 )
 from app.domain.itemized.enums import (
     BaseDeltaRole,
@@ -16,6 +16,8 @@ from app.domain.itemized.enums import (
 )
 from app.domain.itemized.epoch.seal_binding import ContextSealBinding
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.hash.request_hash import context_request_hash_preimage
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.request_plan import (
@@ -118,25 +120,6 @@ class ContextPlanComposer:
             active_view_id=active_view_id,
             selection_policy=selection_policy,
             tool_set_refs=tool_set_refs,
-        )
-
-    @staticmethod
-    def request_hash(
-        plan: ContextRequestPlan,
-        provider: str,
-        *,
-        projector_id: str = "itemized-context-provider",
-        projector_version: str = "v1",
-        target_format: str = "unknown",
-        wire_request: object | None = None,
-    ) -> str:
-        return context_request_hash(
-            plan,
-            provider,
-            projector_id=projector_id,
-            projector_version=projector_version,
-            target_format=target_format,
-            wire_request=wire_request,
         )
 
     def assembly(
@@ -313,7 +296,6 @@ class ContextPlanComposer:
                 )
             )
         next_ordinal = len(selection_refs)
-        bound_tool_refs: list[ToolSetRef] = []
         for tool_ref in plan.tool_set_refs:
             bound = ToolSetRef(
                 session_id=tool_ref.session_id,
@@ -332,7 +314,6 @@ class ContextPlanComposer:
                 tools=tool_ref.tools,
                 assembly_id=assembly_id,
             )
-            bound_tool_refs.append(bound)
             selection_refs.append(
                 ContextSelectionEntry(
                     assembly_id=assembly_id,
@@ -379,6 +360,20 @@ class ContextPlanComposer:
             assembly_id,
             selection=selection_refs,
         )
+        # 同次组装直接使用唯一 preimage 已算出的 plan 摘要；恢复仍独立重算。
+        hash_preimage = context_request_hash_preimage(
+            sealed_plan,
+            provider_version,
+            projector_id=projector_id,
+            projector_version=projector_version,
+            target_format=target_format,
+            wire_request=wire_request,
+        )
+        # 首次返回与冷恢复使用同一工具 manifest 形态；omitted 只留 selection identity。
+        selected_tool_refs = tuple(sorted(
+            (entry.ref for entry in selection_refs if entry.included and isinstance(entry.ref, ToolSetRef)),
+            key=lambda ref: ref.ref_id,
+        ))
         return ContextAssemblySnapshot(
             assembly_id=assembly_id,
             session_id=session_id,
@@ -386,20 +381,13 @@ class ContextPlanComposer:
             turn_id=turn_id,
             execution_id=execution_id,
             plan_id=plan.plan_id,
-            plan_hash=sealed_plan.plan_hash(),
-            request_hash=self.request_hash(
-                sealed_plan,
-                provider_version,
-                projector_id=projector_id,
-                projector_version=projector_version,
-                target_format=target_format,
-                wire_request=wire_request,
-            ),
+            plan_hash=cast(str, hash_preimage["plan_hash"]),
+            request_hash=sha256_jcs(hash_preimage),
             history_view_revision=sealed_plan.history_view_revision,
             source_overlay_epoch=sealed_plan.source_overlay_epoch,
             refs=sealed_plan.refs,
             contributions=contributions,
-            tool_snapshot=sealed_plan.tool_snapshot,
+            tool_snapshot=tuple(tool for ref in selected_tool_refs for tool in ref.tools),
             compiler_version=sealed_plan.compiler_version,
             provider_version=provider_version,
             active_view_id=sealed_plan.active_view_id,
@@ -407,7 +395,7 @@ class ContextPlanComposer:
             model_call_id=model_call_id,
             loss=tuple(loss),
             sealed=True,
-            tool_set_refs=tuple(bound_tool_refs),
+            tool_set_refs=selected_tool_refs,
             selection=tuple(selection_refs),
             projector_id=projector_id,
             projector_version=projector_version,

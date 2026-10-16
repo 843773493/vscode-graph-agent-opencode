@@ -9,10 +9,17 @@ from contextlib import AbstractAsyncContextManager
 
 from app.abstractions.session_subagent import OwnerThreadCreationFactoryProtocol
 from app.core.exceptions import NotFoundError
+from app.core.execution_admission_context import current_execution_admission
+from app.core.phase_observer import observe_phase_sync
 from app.core.session_control_store import SessionControlStore
 from app.schemas.internal_v2.team import TeamBoardDTO, TeamEventDTO
 
 TEAM_ID_PATTERN = re.compile(r"^team_[0-9a-f]{32}$")
+
+
+def _observe_read(session_id: str) -> None:
+    admission = current_execution_admission()
+    observe_phase_sync(admission.execution_id if admission is not None else session_id, "team.ledger.read")
 
 
 class TeamStore:
@@ -41,6 +48,7 @@ class TeamStore:
 
     def get(self, session_id: str, team_id: str) -> TeamBoardDTO:
         self._validate_team_id(team_id)
+        _observe_read(session_id)
         rows = self.control(session_id).collaboration_boards(team_id)
         if not rows:
             raise NotFoundError(f"团队不存在: {team_id}")
@@ -50,15 +58,18 @@ class TeamStore:
         return board
 
     def list(self, session_id: str) -> list[TeamBoardDTO]:
+        _observe_read(session_id)
         return [self.get(session_id, TeamBoardDTO.model_validate_json(row).team_id)
                 for row in self.control(session_id).collaboration_boards()]
 
     def recent_events(self, session_id: str, team_id: str, *, limit: int = 20) -> list[TeamEventDTO]:
         self._validate_team_id(team_id)
+        _observe_read(session_id)
         return [TeamEventDTO.model_validate_json(row) for row in self.control(session_id).collaboration_recent_events(team_id, limit)]
 
     def latest_task_event(self, session_id: str, team_id: str, task_id: str) -> TeamEventDTO | None:
         self._validate_team_id(team_id)
+        _observe_read(session_id)
         row = self.control(session_id).collaboration_latest_task_event(team_id, task_id)
         if row is None:
             return None

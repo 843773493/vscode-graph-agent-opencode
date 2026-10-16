@@ -1,7 +1,7 @@
 import { useEffect, useRef, type MutableRefObject } from "react";
 import { isTransientNetworkError } from "../../api/http";
 import { getSessionTurnBootstrap } from "../../api/session/sessionTurnHistory";
-import { listPendingRequests } from "../../pendingRequestsApi";
+import { listMainThreadPendingRequests } from "../../pendingRequestsApi";
 import { cloneMaps } from "../../state/appStateMaps";
 import { replaceSessionMetadata } from "../../state/session/sessions";
 import {
@@ -131,6 +131,9 @@ export function useTurnBootstrap({
             {
               ...timeline,
               generation: targetGeneration,
+              loadingBefore: false,
+              loadingAfter: false,
+              loadingDetailIds: [],
               error: null,
             },
           ),
@@ -197,6 +200,8 @@ export function useTurnBootstrap({
               sessionId,
               activeJobId,
               sessionCacheKey,
+              Object.values(timelineForScope(next.turnTimelinesBySession, sessionCacheKey).turnsById)
+                .find((turn) => turn.job_id === activeJobId) ?? null,
             );
           } else {
             next.activeJobIdsBySession.delete(sessionCacheKey);
@@ -206,6 +211,7 @@ export function useTurnBootstrap({
                 next.activeJobIdsBySession,
                 {
                   session_id: sessionId,
+                  thread_id: bootstrap.thread_id,
                   active_job_id: null,
                   requests: [],
                 },
@@ -217,6 +223,7 @@ export function useTurnBootstrap({
                 sessionId,
                 null,
                 sessionCacheKey,
+                null,
               );
             }
           }
@@ -235,7 +242,7 @@ export function useTurnBootstrap({
           ].join(":");
           if (nextPendingIdentity !== pendingSnapshotIdentity) {
             pendingSnapshotIdentity = nextPendingIdentity;
-            void listPendingRequests(
+            void listMainThreadPendingRequests(
               apiPort,
               sessionId,
               workspaceId,

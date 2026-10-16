@@ -76,7 +76,7 @@ def source_store(tmp_path: Path) -> tuple[NodeDebugSessionStore, Path]:
     return store, session_dir
 
 
-def test_capture_matrix_is_manifest_bound_and_does_not_copy_runtime_pointer(
+def test_explicit_configuration_selection_is_manifest_bound_and_does_not_copy_runtime_pointer(
     source_store: tuple[NodeDebugSessionStore, Path],
 ) -> None:
     store, _session_dir = source_store
@@ -97,7 +97,7 @@ def test_capture_matrix_is_manifest_bound_and_does_not_copy_runtime_pointer(
         store,
         session_id=_SESSION_ID,
         thread_id=main_thread_id,
-        capture_mode="context_fork",
+        configuration_ids=(_CONFIGURATION_ID,),
         workspace_config_revision="workspace-debug-v1",
         workspace_config_hash="config-hash-v1",
     )
@@ -111,19 +111,11 @@ def test_capture_matrix_is_manifest_bound_and_does_not_copy_runtime_pointer(
     assert artifact.sha256 == hashlib.sha256(artifact.payload_bytes).hexdigest()
     assert artifact.configuration().revision == 3
 
-    history = capture_source_copy_snapshot(
-        store,
-        session_id=_SESSION_ID,
-        thread_id=main_thread_id,
-        capture_mode="history_prefix_fork",
-    )
-    assert history.configuration_artifacts == ()
-
     full = capture_source_copy_snapshot(
         store,
         session_id=_SESSION_ID,
         thread_id=main_thread_id,
-        capture_mode="full_rollout_copy",
+        configuration_ids=(_CONFIGURATION_ID, _CONFIGURATION_ID_2),
     )
     assert [item.configuration_id for item in full.configuration_artifacts] == [
         _CONFIGURATION_ID,
@@ -166,7 +158,7 @@ def test_capture_fails_closed_when_registered_source_drifts(
             store,
             session_id=_SESSION_ID,
             thread_id=main_thread_id,
-            capture_mode="context_fork",
+            configuration_ids=(_CONFIGURATION_ID,),
         )
 
 
@@ -177,11 +169,16 @@ def test_target_prepublication_rechecks_paths_profile_and_config_revision(
     store, _session_dir = source_store
     main_thread_id = store.path_resolver.main_thread_id(_SESSION_ID)
     (tmp_path / "main.mjs").write_text("console.log('main')", encoding="utf-8")
+    store.write_configuration(
+        _SESSION_ID,
+        _configuration(_CONFIGURATION_ID, "主方案", "main.mjs").model_copy(update={"launch_profile_name": "node-default"}),
+        main_thread_id,
+    )
     snapshot = capture_source_copy_snapshot(
         store,
         session_id=_SESSION_ID,
         thread_id=main_thread_id,
-        capture_mode="context_fork",
+        configuration_ids=(_CONFIGURATION_ID,),
         workspace_config_revision="workspace-debug-v1",
         workspace_config_hash="config-hash-v1",
         workspace_id="workspace-a",
@@ -214,12 +211,31 @@ def test_target_prepublication_rechecks_paths_profile_and_config_revision(
             launch_profiles={},
         )
 
-    with pytest.raises(RuntimeError, match="不支持跨 Workspace"):
+    target_root = tmp_path / "target-workspace"
+    target_root.mkdir()
+    with pytest.raises(RuntimeError, match="target launch profile 不存在"):
         validate_target_prepublication(
             snapshot,
-            target_workspace_root=tmp_path,
-            target_workspace_config_revision="workspace-debug-v1",
-            target_workspace_config_hash="config-hash-v1",
+            target_workspace_root=target_root,
+            target_workspace_config_revision="target-debug-v2",
+            target_workspace_config_hash="target-config-hash-v2",
             target_workspace_id="workspace-b",
             launch_profiles={},
         )
+    profiles = {"node-default": NodeDebugLaunchProfileDTO(
+        name="node-default", adapter="node_inspector", runtime="node", supported=True,
+    )}
+    with pytest.raises(RuntimeError, match="target 调试入口不存在"):
+        validate_target_prepublication(
+            snapshot, target_workspace_root=target_root,
+            target_workspace_config_revision="target-debug-v2", target_workspace_config_hash="target-config-hash-v2",
+            target_workspace_id="workspace-b", launch_profiles=profiles,
+        )
+    (target_root / "main.mjs").write_text("console.log('target')", encoding="utf-8")
+    foreign = validate_target_prepublication(
+        snapshot, target_workspace_root=target_root,
+        target_workspace_config_revision="target-debug-v2", target_workspace_config_hash="target-config-hash-v2",
+        target_workspace_id="workspace-b", launch_profiles=profiles,
+    )
+    assert foreign.active_configuration_id is None
+    assert foreign.validated_configuration_ids == (_CONFIGURATION_ID,)

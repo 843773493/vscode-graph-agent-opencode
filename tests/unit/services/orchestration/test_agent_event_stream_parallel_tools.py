@@ -15,15 +15,25 @@ from langchain_core.tools import BaseTool, tool
 from langgraph.prebuilt.tool_node import ToolRuntime
 from langgraph.types import Command
 
+from app.abstractions.turn_terminal_status import ToolResultCompletion
+from app.agents.tool_invocation_context import ToolInvocationContext
+from app.agents.tools.session_messaging import create_send_message_to_session_tool
 from app.core.job_context import get_active_tool_name, get_interruptible_phase
 from app.core.job_event_bus import EventType
-from app.core.model_delta_context import ModelRunIdentityCallbackHandler
+from app.core.model_delta_context import (
+    AgentRunLifecycleCallbackHandler,
+    model_tool_invocation_scope,
+)
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.turn_execution_scope import (
     CancellationSignal,
     ScopeCancelledError,
     TurnExecutionScope,
     get_current_turn_execution_scope,
+)
+from app.protocol.codecs.message_stream import (
+    message_stream_to_json,
+    message_stream_to_proto,
 )
 from app.schemas.event import ModelTokenUsagePayload
 from app.services.orchestration.event_stream.contracts import (
@@ -45,8 +55,12 @@ pytestmark = pytest.mark.usefixtures("workspace_scope")
 
 
 class FakeAgent:
-    def __init__(self, events: list[dict[str, Any]]) -> None:
+    def __init__(
+        self, events: list[dict[str, Any]], *,
+        tool_invocations: dict[str, tuple[str, str]] | None = None,
+    ) -> None:
         self._events = events
+        self.tool_invocations = tool_invocations or {}
         self.received_configs: list[dict[str, Any]] = []
 
     async def astream_events(
@@ -61,22 +75,43 @@ class FakeAgent:
         config_metadata = config.get("metadata")
         if not isinstance(config_metadata, dict):
             raise TypeError("测试 Agent 必须收到 dict 类型 metadata")
-        for event in self._events:
-            event_metadata = event.get("metadata", {})
-            if not isinstance(event_metadata, dict):
-                raise TypeError("测试事件 metadata 必须为 dict")
-            yield {
-                **event,
-                "metadata": {
-                    **config_metadata,
-                    **event_metadata,
-                },
-            }
+        callbacks: list[asyncio.Task[None]] = []
+        try:
+            for event in self._events:
+                event_metadata = event.get("metadata", {})
+                if not isinstance(event_metadata, dict):
+                    raise TypeError("测试事件 metadata 必须为 dict")
+                callback = None
+                if event["event"] == "on_tool_start" and event["run_id"] in self.tool_invocations:
+                    model_call_id, provider_id = self.tool_invocations[event["run_id"]]
+                    lifecycle = next(
+                        handler for handler in config["callbacks"]
+                        if isinstance(handler, AgentRunLifecycleCallbackHandler)
+                    )
+                    with model_tool_invocation_scope(model_call_id, provider_id):
+                        callback = asyncio.create_task(lifecycle.on_tool_start(
+                            {}, "", run_id=event["run_id"], tool_call_id=provider_id,
+                        ))
+                    callbacks.append(callback)
+                yield {
+                    **event,
+                    "metadata": {**config_metadata, **event_metadata},
+                }
+                if callback is not None:
+                    await callback
+        finally:
+            for callback in callbacks:
+                if not callback.done():
+                    callback.cancel()
+            await asyncio.gather(*callbacks, return_exceptions=True)
 
 
 class GraphFakeAgent(FakeAgent):
-    def __init__(self, events: list[dict[str, Any]], tools: list[BaseTool]) -> None:
-        super().__init__(events)
+    def __init__(
+        self, events: list[dict[str, Any]], tools: list[BaseTool], *,
+        tool_invocations: dict[str, tuple[str, str]] | None = None,
+    ) -> None:
+        super().__init__(events, tool_invocations=tool_invocations)
         self._tools_by_name = {item.name: item for item in tools}
 
     def get_graph(self) -> SimpleNamespace:
@@ -87,6 +122,23 @@ class GraphFakeAgent(FakeAgent):
                 )
             }
         )
+
+
+class DelayedFakeAgent(FakeAgent):
+    def __init__(self, steps: list[tuple[float, dict[str, Any]]]) -> None:
+        super().__init__([event for _delay, event in steps])
+        self.delays = [delay for delay, _event in steps]
+        self.emitted_events = 0
+        self.closed = False
+
+    async def astream_events(self, *args, **kwargs) -> AsyncIterator[dict[str, Any]]:
+        try:
+            async for event in super().astream_events(*args, **kwargs):
+                await asyncio.sleep(self.delays[self.emitted_events])
+                self.emitted_events += 1
+                yield event
+        finally:
+            self.closed = True
 
 
 class ResolvingConfigAgent(FakeAgent):
@@ -448,6 +500,284 @@ async def test_active_model_stream_is_not_cancelled_by_fixed_model_scope_deadlin
     assert result.final_text == "part-0part-1"
 
 
+@pytest.fixture
+async def dispatch_watchdog_case(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    session_changes_service: FakeSessionChangesService,
+):
+    count = getattr(request, "param", 3)
+    writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_dispatch_progress")
+    sink = AsyncMock()
+    tool_result_sink = AsyncMock()
+    runtime = MessageStreamRuntime(
+        writer,
+        canonical_item_sink=sink,
+        tool_result_sink=tool_result_sink,
+    )
+    await runtime.start_model("model_dispatch_progress", "primary")
+    arguments = [{"path": f"fixture-{index}.txt"} for index in range(count)]
+    provider_ids = [f"call_{index}" for index in range(count)]
+    await runtime.accept_message_chunk(AIMessageChunk(
+        content="",
+        tool_call_chunks=[
+            {"index": index, "id": provider_ids[index], "name": "read_file",
+             "args": json.dumps(args)}
+            for index, args in enumerate(arguments)
+        ],
+    ))
+    await runtime.finish_model()
+    writer.commit.reset_mock()
+    sink.reset_mock()
+    tool_result_sink.reset_mock()
+    starts = [
+        {"event": "on_tool_start", "run_id": f"run_{index}", "name": "read_file",
+         "data": {"input": args}, "metadata": {}}
+        for index, args in enumerate(arguments)
+    ]
+    ends = [
+        {"event": "on_tool_end", "run_id": f"run_{index}", "name": "read_file",
+         "data": {"output": ToolMessage(
+             content=f"result-{index}", tool_call_id=provider_ids[index], name="read_file",
+         )}, "metadata": {}}
+        for index in range(count)
+    ]
+
+    async def process(agent, *, timeout=0.05, publish=None, cancellation_signal=None):
+        session_id = "ses_dispatch_progress"
+        if isinstance(agent, FakeAgent):
+            agent.tool_invocations.update({
+                f"run_{index}": ("model_dispatch_progress", provider_id)
+                for index, provider_id in enumerate(provider_ids)
+            })
+        try:
+            return await process_agent_event_stream(
+                agent=agent, input_payload={"messages": []}, config={},
+                session_id=session_id, job_id="job_dispatch_progress",
+                turn_id="job_dispatch_progress", agent_id="default",
+                custom_tool_skill_sources={},
+                publish=publish or (lambda *_args, **_kwargs: _async_noop()),
+                session_changes_service=session_changes_service, workspace_root=tmp_path,
+                message_stream_runtime=runtime, tool_dispatch_timeout_seconds=timeout,
+                cancellation_signal=cancellation_signal,
+            )
+        finally:
+            SessionInterruptState.clear(session_id)
+
+    return SimpleNamespace(
+        runtime=runtime, writer=writer, sink=sink,
+        tool_result_sink=tool_result_sink, starts=starts, ends=ends,
+        call_ids=[f"model_dispatch_progress:tool-call:{call_id}" for call_id in provider_ids],
+        process=process,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dispatch_watchdog_case", [130], indirect=True)
+async def test_tool_dispatch_progress_refreshes_wait_for_full_parallel_batch(dispatch_watchdog_case):
+    case = dispatch_watchdog_case
+    # 总分派时间大于预算，但每个 canonical call 都持续被真实 processor claim。
+    agent = DelayedFakeAgent([
+        *((0.002, event) for event in case.starts),
+        *((0, event) for event in reversed(case.ends)),
+    ])
+    await case.process(agent)
+
+    started = [call.args[1] for call in case.writer.commit.await_args_list
+               if call.args[0] == "tool.started"]
+    completed = [call.args[1] for call in case.writer.commit.await_args_list
+                 if call.args[0] == "tool.completed"]
+    assert [event["tool_call_id"] for event in started] == case.call_ids
+    assert [event["tool_call_id"] for event in completed] == list(reversed(case.call_ids))
+    assert all(event["outcome"] == "success" for event in completed)
+    assert case.runtime.pending_tool_calls() == ()
+    assert case.runtime._active_tool_executions == {}
+    completions: list[ToolResultCompletion] = [
+        call.args[0] for call in case.tool_result_sink.await_args_list
+    ]
+    assert [completion.tool_call_id for completion in completions] == list(reversed(case.call_ids))
+    assert [completion.tool_attempt_id for completion in completions] == [
+        f"run_{index}" for index in reversed(range(len(case.call_ids)))
+    ]
+    assert all(completion.model_call_id == "model_dispatch_progress" for completion in completions)
+    assert all(completion.tool_name == "read_file" for completion in completions)
+    assert [completion.tool_invocation_id for completion in completions] == [
+        f"tool-invocation:model_dispatch_progress:call_{index}"
+        for index in reversed(range(len(case.call_ids)))
+    ]
+    assert [completion.content for completion in completions] == [
+        f"result-{index}" for index in reversed(range(len(case.call_ids)))
+    ]
+    assert all(completion.tool_outcome == "success" for completion in completions)
+    assert agent.closed
+
+
+@pytest.mark.asyncio
+async def test_buffered_dispatch_excludes_processing_time_of_completed_tool(dispatch_watchdog_case):
+    case = dispatch_watchdog_case
+
+    async def publish(event_type, payload):
+        if event_type == EventType.TOOL_CALL_END and payload["part_id"] == "run_0":
+            # 下一 start 已在事件源中，慢的是当前结果的提交/发布消费者。
+            await asyncio.sleep(0.08)
+
+    events = [event for pair in zip(case.starts, case.ends, strict=True) for event in pair]
+    await case.process(FakeAgent(events), timeout=0.03, publish=publish)
+    assert case.runtime.pending_tool_calls() == ()
+    assert len(case.runtime._completed_tool_result_call_ids) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("claimed_count", [0, 2])
+async def test_chain_noise_cannot_refresh_stalled_dispatch(dispatch_watchdog_case, claimed_count):
+    case = dispatch_watchdog_case
+    noise = {"event": "on_chain_stream", "name": "agent", "data": {}, "metadata": {}}
+    agent = DelayedFakeAgent([
+        *((0.015, event) for event in case.starts[:claimed_count]),
+        *((0.01, noise) for _ in range(12)),
+    ])
+    with pytest.raises(AgentEventStreamTimeoutError) as raised:
+        await case.process(agent)
+    assert raised.value.code == "tool_dispatch_timeout"
+    assert agent.emitted_events < claimed_count + 12
+    assert agent.closed
+    incomplete = [call.args[1] for call in case.writer.commit.await_args_list
+                  if call.args[0] == "tool_call.completed" and call.args[1]["status"] == "incomplete"]
+    assert [event["tool_call_id"] for event in incomplete] == case.call_ids[claimed_count:]
+    assert all(event["completion_reason"] == "tool_dispatch_timeout" for event in incomplete)
+    assert set(case.runtime._active_tool_executions) == {f"run_{index}" for index in range(claimed_count)}
+    assert not [call for call in case.writer.commit.await_args_list if call.args[0] == "tool.completed"]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_budget_does_not_limit_already_claimed_tool_execution(dispatch_watchdog_case):
+    case = dispatch_watchdog_case
+    agent = DelayedFakeAgent([
+        *((0, event) for event in case.starts),
+        (0.08, case.ends[0]),
+        *((0, event) for event in case.ends[1:]),
+    ])
+    await case.process(agent, timeout=0.03)
+    assert len(case.runtime._completed_tool_result_call_ids) == 3
+
+
+@pytest.mark.asyncio
+async def test_tool_message_without_real_start_remains_pending_until_dispatch_timeout(
+    dispatch_watchdog_case,
+):
+    case = dispatch_watchdog_case
+
+    noise = {"event": "on_chain_stream", "name": "agent", "data": {}, "metadata": {}}
+    agent = DelayedFakeAgent([(0.06, noise)])
+    reconcile = asyncio.create_task(
+        case.runtime.complete_tool_from_message(
+            case.ends[0]["data"]["output"],
+            model_call_id="model_dispatch_progress",
+        )
+    )
+    await asyncio.sleep(0)
+    assert not reconcile.done()
+    try:
+        with pytest.raises(AgentEventStreamTimeoutError) as raised:
+            await case.process(agent, timeout=0.03)
+        assert raised.value.code == "tool_dispatch_timeout"
+    finally:
+        if not reconcile.done():
+            reconcile.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await reconcile
+
+    assert agent.closed
+    assert case.runtime.pending_tool_calls() == ()
+    assert case.runtime._active_tool_executions == {}
+    assert case.runtime._completed_tool_result_call_ids == set()
+    assert case.tool_result_sink.await_count == 0
+    assert not [
+        call for call in case.writer.commit.await_args_list
+        if call.args[0] in {"tool.started", "tool.completed"}
+    ]
+    incomplete = [
+        call.args[1]
+        for call in case.writer.commit.await_args_list
+        if call.args[0] == "tool_call.completed"
+    ]
+    assert [event["tool_call_id"] for event in incomplete] == case.call_ids
+    assert all(event["status"] == "incomplete" for event in incomplete)
+    assert all(event["completion_reason"] == "tool_dispatch_timeout" for event in incomplete)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dispatch_watchdog_case", [0], indirect=True)
+async def test_default_model_wait_does_not_arm_dispatch_for_streaming_tool_arguments(dispatch_watchdog_case):
+    case = dispatch_watchdog_case
+    model_base = {"name": "BoxteamOpenAIResponsesModel", "run_id": "model_streaming_args", "metadata": {}}
+    fragments = [
+        AIMessageChunk(content="", tool_call_chunks=[
+            {"index": 0, "id": "call_streaming_args", "name": "read_file", "args": '{"path":'},
+        ]),
+        AIMessageChunk(content="", tool_call_chunks=[
+            {"index": 0, "args": '"fixture.txt"}'},
+        ]),
+    ]
+
+    class StreamingArgumentsAgent(DelayedFakeAgent):
+        async def astream_events(self, *args, **kwargs):
+            async for event in super().astream_events(*args, **kwargs):
+                if event["event"] == "on_chat_model_stream":
+                    # 与真实 provider hook 相同，先提交参数，再交付外层模型事件。
+                    await case.runtime.accept_message_chunk(
+                        event["data"]["chunk"], model_call_id="model_streaming_args",
+                    )
+                yield event
+
+    agent = StreamingArgumentsAgent([
+        (0, {"event": "on_chat_model_start", "data": {}, **model_base}),
+        (0, {"event": "on_chat_model_stream", "data": {"chunk": fragments[0]}, **model_base}),
+        (0.08, {"event": "on_chat_model_stream", "data": {"chunk": fragments[1]}, **model_base}),
+        (0, {"event": "on_chat_model_end", "data": {}, **model_base}),
+        (0, {"event": "on_tool_start", "name": "read_file", "run_id": "streamed_tool",
+             "data": {"input": {"path": "fixture.txt"}}, "metadata": {}}),
+        (0, {"event": "on_tool_end", "name": "read_file", "run_id": "streamed_tool",
+             "data": {"output": ToolMessage(content="原结果", tool_call_id="call_streaming_args", name="read_file")},
+             "metadata": {}}),
+    ])
+    agent.tool_invocations["streamed_tool"] = ("model_streaming_args", "call_streaming_args")
+    await case.process(agent, timeout=0.03)
+    assert case.runtime.pending_tool_calls() == ()
+    assert case.runtime._completed_tool_result_call_ids == {"model_streaming_args:tool-call:call_streaming_args"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_stream_exhaustion_fails_only_unclaimed_calls(dispatch_watchdog_case):
+    case = dispatch_watchdog_case
+    with pytest.raises(AgentEventStreamTimeoutError, match="事件流结束时仍存在未分派") as raised:
+        await case.process(FakeAgent([case.starts[0]]))
+    assert raised.value.code == "tool_dispatch_timeout"
+    incomplete = [call.args[1] for call in case.writer.commit.await_args_list
+                  if call.args[0] == "tool_call.completed" and call.args[1]["status"] == "incomplete"]
+    assert [event["tool_call_id"] for event in incomplete] == case.call_ids[1:]
+    assert set(case.runtime._active_tool_executions) == {"run_0"}
+
+
+@pytest.mark.asyncio
+async def test_user_cancellation_after_dispatch_progress_keeps_user_reason(dispatch_watchdog_case):
+    case = dispatch_watchdog_case
+    signal = CancellationSignal()
+
+    class CancellingAgent(FakeAgent):
+        async def astream_events(self, *args, **kwargs):
+            async for event in super().astream_events(*args, **kwargs):
+                yield event
+            await signal.cancel("user_requested")
+            raise ScopeCancelledError("user_requested")
+
+    with pytest.raises(asyncio.CancelledError, match="user_requested"):
+        await case.process(CancellingAgent([case.starts[0]]), cancellation_signal=signal)
+    assert not [call for call in case.writer.commit.await_args_list
+                if call.args[0] == "tool_call.completed" and call.args[1]["status"] == "incomplete"]
+    assert [item[0] for item in case.runtime.pending_tool_calls()] == case.call_ids[1:]
+
+
 @pytest.mark.asyncio
 async def test_tool_dispatch_timeout_does_not_escape_as_agent_cancellation(
     tmp_path: Path,
@@ -610,13 +940,128 @@ async def test_tool_start_event_contains_only_model_visible_arguments(
     json.dumps(start_payload)
 
 
+@pytest.fixture
+def schema_send_tool() -> BaseTool:
+    return create_send_message_to_session_tool(
+        "ses_schema_observer",
+        communication_service=AsyncMock(),
+        invocation_context=ToolInvocationContext(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_parallel_schema_errors_keep_original_provider_arguments_and_claims(
+    tmp_path: Path,
+    schema_send_tool: BaseTool,
+) -> None:
+    writer = SimpleNamespace(commit=AsyncMock())
+    canonical_sink = AsyncMock()
+    tool_result_sink = AsyncMock()
+    runtime = MessageStreamRuntime(
+        writer,
+        canonical_item_sink=canonical_sink,
+        tool_result_sink=tool_result_sink,
+    )
+    await runtime.start_model("model_schema_calls", "primary")
+    base = {"target_session_id": "ses_target", "content": "保留原调用参数。"}
+    arguments = [
+        dict(base),
+        {**base, "target_workspace_id": None, "kind": "result",
+         "reply_to_communication_id": None, "delivery_policy": "after_turn"},
+        *({**base, field: {"status": "completed"}}
+          for field in ("team_state", "team_task", "goal_state")),
+    ]
+    call_ids = [f"call_schema_{index}" for index in range(len(arguments))]
+    await runtime.accept_message_chunk(AIMessageChunk(
+        content="",
+        tool_call_chunks=[
+            {"index": index, "id": call_ids[index], "name": schema_send_tool.name,
+             "args": json.dumps(args, ensure_ascii=False)}
+            for index, args in enumerate(arguments)
+        ],
+    ))
+    # 同名调用并行开始，并反向结束；精确身份与非法字段的展示彼此独立。
+    order = [4, 1, 2, 0, 3]
+    events = [
+        {"event": "on_tool_start", "run_id": f"run_schema_{index}",
+         "name": schema_send_tool.name, "data": {"input": arguments[index]},
+         "metadata": {}}
+        for index in order
+    ]
+    events.extend(
+        {"event": "on_tool_end", "run_id": f"run_schema_{index}",
+         "name": schema_send_tool.name,
+         "data": {"output": ToolMessage(
+             content=f"schema-error-{index}" if index >= 2 else "已接收。",
+             tool_call_id=call_ids[index], name=schema_send_tool.name,
+             status="error" if index >= 2 else "success",
+         )}, "metadata": {}}
+        for index in reversed(order)
+    )
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def publish(event_type: str, payload: dict[str, Any]) -> None:
+        published.append((event_type, payload))
+
+    result = await process_agent_event_stream(
+        agent=GraphFakeAgent(events, [schema_send_tool], tool_invocations={
+            f"run_schema_{index}": ("model_schema_calls", provider_id)
+            for index, provider_id in enumerate(call_ids)
+        }),
+        input_payload={"messages": []}, config={},
+        session_id="ses_schema_observer", job_id="job_schema_observer",
+        turn_id="turn_schema_observer", agent_id="default",
+        custom_tool_skill_sources={}, publish=publish,
+        session_changes_service=FakeSessionChangesService(), workspace_root=tmp_path,
+        message_stream_runtime=runtime,
+    )
+    scoped_ids = [f"model_schema_calls:tool-call:{call_id}" for call_id in call_ids]
+    started = [call.args[1] for call in writer.commit.await_args_list
+               if call.args[0] == "tool.started"]
+    assert [payload["tool_call_id"] for payload in started] == [scoped_ids[index] for index in order]
+    assert runtime._tool_call_arguments_by_id == dict(zip(scoped_ids, arguments, strict=True))
+    shown_args = [payload["args"] for event, payload in published
+                  if event == EventType.TOOL_CALL_START]
+    assert shown_args == [arguments[index] for index in order]
+    json.dumps(shown_args)
+    completions: list[ToolResultCompletion] = [
+        call.args[0] for call in tool_result_sink.await_args_list
+    ]
+    assert len(completions) == len(arguments)
+    assert [completion.tool_call_id for completion in completions] == [
+        scoped_ids[index] for index in reversed(order)
+    ]
+    assert [completion.tool_attempt_id for completion in completions] == [
+        f"run_schema_{index}" for index in reversed(order)
+    ]
+    assert all(completion.model_call_id == "model_schema_calls" for completion in completions)
+    assert all(completion.tool_name == schema_send_tool.name for completion in completions)
+    assert [completion.tool_invocation_id for completion in completions] == [
+        f"tool-invocation:model_schema_calls:call_schema_{index}"
+        for index in reversed(order)
+    ]
+    assert [completion.content for completion in completions] == [
+        f"schema-error-{index}" if index >= 2 else "已接收。"
+        for index in reversed(order)
+    ]
+    assert [completion.tool_outcome for completion in completions] == [
+        "failure" if index >= 2 else "success" for index in reversed(order)
+    ]
+    assert len(result.successful_tool_calls) == 2
+
+
 @pytest.mark.asyncio
 async def test_custom_tool_execution_keeps_provider_tool_call_identity(
     tmp_path: Path,
 ) -> None:
     writer = SimpleNamespace(commit=AsyncMock())
     canonical_sink = AsyncMock()
-    runtime = MessageStreamRuntime(writer, canonical_item_sink=canonical_sink)
+    tool_result_sink = AsyncMock()
+    runtime = MessageStreamRuntime(
+        writer,
+        canonical_item_sink=canonical_sink,
+        tool_result_sink=tool_result_sink,
+    )
     await runtime.start_model("model_unknown_tool", "primary")
     await runtime.accept_message_chunk(
         AIMessageChunk(
@@ -634,7 +1079,16 @@ async def test_custom_tool_execution_keeps_provider_tool_call_identity(
             ],
         )
     )
+    # 上面的 provider start/delta 直接驱动 runtime；补上对应的真实 model-end
+    # 事件，让 processor 封存该次调用的 canonical tool-call item。
     events = [
+        {
+            "event": "on_chat_model_end",
+            "run_id": "model_unknown_tool",
+            "name": "BoxteamOpenAIResponsesModel",
+            "data": {"output": AIMessage(content="")},
+            "metadata": {},
+        },
         {
             "event": "on_tool_start",
             "run_id": "run_unknown_tool",
@@ -663,7 +1117,9 @@ async def test_custom_tool_execution_keeps_provider_tool_call_identity(
     ]
 
     await process_agent_event_stream(
-        agent=FakeAgent(events),
+        agent=FakeAgent(events, tool_invocations={
+            "run_unknown_tool": ("model_unknown_tool", "call_unknown_tool"),
+        }),
         input_payload={"messages": []},
         config={},
         session_id="ses_unknown_tool",
@@ -685,15 +1141,30 @@ async def test_custom_tool_execution_keeps_provider_tool_call_identity(
     assert tool_started["tool_name"] == "totally_unknown_tool"
     assert tool_completed["tool_call_id"] == expected_tool_call_id
     assert tool_completed["tool_name"] == "totally_unknown_tool"
-    result_item, = canonical_sink.await_args.args[0]
-    assert result_item.semantic_kind == "tool_result"
-    assert result_item.payload["tool_call_id"] == expected_tool_call_id
-    assert result_item.payload["name"] == "invoke_extension_tool"
-    assert result_item.payload["content"] == "unknown tool"
+    tool_result_sink.assert_awaited_once()
+    completion: ToolResultCompletion = tool_result_sink.await_args.args[0]
+    assert completion.model_call_id == "model_unknown_tool"
+    assert completion.tool_call_id == expected_tool_call_id
+    assert completion.tool_invocation_id == (
+        "tool-invocation:model_unknown_tool:call_unknown_tool"
+    )
+    assert completion.tool_attempt_id == "run_unknown_tool"
+    assert completion.tool_outcome == "success"
+    assert completion.content == "unknown tool"
+    assert completion.tool_name == tool_completed["tool_name"]
+    tool_call_items = [
+        item
+        for call in canonical_sink.await_args_list
+        for item in call.args[0]
+        if item.semantic_kind == "tool_call"
+    ]
+    assert len(tool_call_items) == 1
+    assert tool_call_items[0].payload["tool_call_id"] == expected_tool_call_id
+    assert tool_call_items[0].payload["name"] == "invoke_extension_tool"
 
 
 @pytest.mark.asyncio
-async def test_envelope_tool_claim_matches_target_and_never_guesses_latest_call() -> None:
+async def test_envelope_tool_claim_uses_exact_provider_id_and_rejects_missing_call() -> None:
     writer = SimpleNamespace(commit=AsyncMock())
     runtime = MessageStreamRuntime(writer)
     await runtime.start_model("model_envelope_claim", "primary")
@@ -726,28 +1197,20 @@ async def test_envelope_tool_claim_matches_target_and_never_guesses_latest_call(
 
     assert (
         runtime.claim_tool_call_id(
-            "invoke_extension_tool",
-            {},
-            target_tool_name="list_breakpoints",
+            "model_envelope_claim", "call_list_breakpoints",
         )
         == "model_envelope_claim:tool-call:call_list_breakpoints"
     )
     assert (
         runtime.claim_tool_call_id(
-            "invoke_extension_tool",
-            {"fileFullPath": "app.mjs", "workingDirectory": "."},
-            target_tool_name="start_debugging",
+            "model_envelope_claim", "call_start_debugging",
         )
         == "model_envelope_claim:tool-call:call_start_debugging"
     )
-    assert (
+    with pytest.raises(RuntimeError, match="缺少原 emitting ModelCall/ToolCall"):
         runtime.claim_tool_call_id(
-            "invoke_extension_tool",
-            {},
-            target_tool_name="missing_tool",
+            "model_envelope_claim", "call_missing_tool",
         )
-        is None
-    )
 
 
 def test_last_model_token_usage_keeps_last_execution_request() -> None:
@@ -891,6 +1354,75 @@ def session_changes_service() -> FakeSessionChangesService:
     return FakeSessionChangesService()
 
 
+@pytest.fixture
+def failing_event_source(request: pytest.FixtureRequest):
+    failure_stage, primary_kind = request.param
+    primary_error = (
+        asyncio.CancelledError("原事件取消")
+        if primary_kind == "cancelled" else RuntimeError("原事件失败")
+    )
+    cleanup_error = OSError("原迭代器关闭失败")
+
+    class FailingEventSource:
+        def __init__(self):
+            self.closed = False
+
+        def astream_events(self, *_args, **_kwargs):
+            return self
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if failure_stage == "iterator":
+                raise primary_error
+            return {
+                "event": "on_chat_model_start", "name": "BoxteamLiteLLMChatModel",
+                "run_id": "cleanup-model", "data": {}, "metadata": {
+                    "boxteam_session_id": "ses_cleanup", "boxteam_job_id": "job_cleanup",
+                },
+            }
+
+        async def aclose(self):
+            self.closed = True
+            raise cleanup_error
+
+    return SimpleNamespace(
+        source=FailingEventSource(), primary=primary_error, cleanup=cleanup_error,
+        stage=failure_stage,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failing_event_source",
+    [("iterator", "failed"), ("iterator", "cancelled"),
+     ("processor", "failed"), ("processor", "cancelled")],
+    indirect=True,
+)
+async def test_stream_cleanup_preserves_primary_error_and_reports_close_failure(
+    failing_event_source, tmp_path: Path, session_changes_service: FakeSessionChangesService,
+) -> None:
+    case = failing_event_source
+
+    def report_progress(_phase):
+        raise case.primary
+
+    # processor 分支在消费已 yield 的事件时失败；iterator 分支在 anext 内失败。
+    with pytest.raises(type(case.primary)) as raised:
+        await process_agent_event_stream(
+            agent=case.source, input_payload={"messages": []}, config={},
+            session_id="ses_cleanup", job_id="job_cleanup", turn_id="job_cleanup",
+            agent_id="default", custom_tool_skill_sources={},
+            publish=lambda *_args, **_kwargs: _async_noop(),
+            session_changes_service=session_changes_service, workspace_root=tmp_path,
+            progress_reporter=report_progress if case.stage == "processor" else None,
+        )
+    assert raised.value is case.primary
+    assert case.source.closed
+    assert any(str(case.cleanup) in note for note in case.primary.__notes__)
+
+
 @pytest.mark.asyncio
 async def test_agent_stream_starts_with_isolated_callbacks_and_business_identity(
     tmp_path: Path,
@@ -917,7 +1449,7 @@ async def test_agent_stream_starts_with_isolated_callbacks_and_business_identity
     assert len(stream_config["callbacks"]) == 1
     assert isinstance(
         stream_config["callbacks"][0],
-        ModelRunIdentityCallbackHandler,
+        AgentRunLifecycleCallbackHandler,
     )
     assert stream_config["metadata"]["boxteam_session_id"] == "ses_isolated"
     assert stream_config["metadata"]["boxteam_job_id"] == "job_isolated"
@@ -954,7 +1486,7 @@ async def test_agent_stream_does_not_inherit_sender_callback_context(
     assert len(agent.resolved_configs[0]["callbacks"]) == 1
     assert isinstance(
         agent.resolved_configs[0]["callbacks"][0],
-        ModelRunIdentityCallbackHandler,
+        AgentRunLifecycleCallbackHandler,
     )
 
 
@@ -1633,6 +2165,95 @@ async def test_model_end_output_recovers_text_missing_from_stream_callback(
 
 
 @pytest.mark.asyncio
+async def test_summary_candidate_completion_uses_public_outcome_and_hides_candidate_text(
+    tmp_path: Path,
+    session_changes_service: FakeSessionChangesService,
+) -> None:
+    model_call_id = "model_summary_candidate"
+    candidate_text = "仅供压缩中间件校验的摘要候选"
+    events = [
+        {
+            "event": "on_chat_model_start",
+            "run_id": model_call_id,
+            "name": "BoxteamLiteLLMChatModel",
+            "data": {},
+            "metadata": {},
+        },
+        {
+            "event": "on_chat_model_end",
+            "run_id": model_call_id,
+            "name": "BoxteamLiteLLMChatModel",
+            "data": {"output": AIMessage(content=candidate_text)},
+            "metadata": {},
+        },
+    ]
+    writer = SimpleNamespace(
+        commit=AsyncMock(),
+        turn_stream_id="stream_summary_candidate",
+    )
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def publish(event_type: str, payload: dict[str, Any]) -> None:
+        published.append((event_type, payload))
+
+    runtime = MessageStreamRuntime(
+        writer,
+        normalized_block_observer=MessageStreamTraceObserver(publish).observe,
+    )
+    runtime.register_summary_candidate(model_call_id)
+
+    result = await process_agent_event_stream(
+        agent=FakeAgent(events),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_019bef80066f7038ae8e88ccb2e5e2ea",
+        job_id="job_summary_candidate",
+        turn_id="turn_summary_candidate",
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=publish,
+        session_changes_service=session_changes_service,
+        workspace_root=tmp_path,
+        message_stream_runtime=runtime,
+    )
+
+    committed = [call.args for call in writer.commit.await_args_list]
+    assert [event_type for event_type, _payload in committed] == [
+        "model.started",
+        "model.completed",
+    ]
+    completed_payload = committed[-1][1]
+    assert completed_payload == {
+        "model_call_id": model_call_id,
+        "attempt": 1,
+        "outcome": "accepted",
+        "reason": "摘要候选传输完成；正文是否可用由压缩中间件校验",
+    }
+
+    encoded = message_stream_to_proto(
+        {
+            "event_id": "evt_summary_candidate_completed",
+            "session_id": "ses_019bef80066f7038ae8e88ccb2e5e2ea",
+            "thread_id": "thr_00000000400070008000000000000002",
+            "turn_id": "turn_summary_candidate",
+            "turn_stream_id": "stream_summary_candidate",
+            "event_seq": 2,
+            "type": "model.completed",
+            "model_call_id": model_call_id,
+            "payload": completed_payload,
+        }
+    )
+    public_event = message_stream_to_json(encoded)
+    assert public_event["payload"]["outcome"] == "accepted"
+    assert public_event["payload"]["reason"] == completed_payload["reason"]
+
+    assert candidate_text not in result.final_text
+    assert not any(event_type.startswith("block.") for event_type, _payload in committed)
+    assert not any(event_type.startswith("block.") for event_type, _payload in published)
+    assert all(candidate_text not in repr(payload) for _event_type, payload in committed)
+
+
+@pytest.mark.asyncio
 async def test_model_end_does_not_replay_text_already_committed_by_provider_hook(
     tmp_path: Path,
     session_changes_service: FakeSessionChangesService,
@@ -2000,7 +2621,9 @@ async def test_task_tool_is_projected_as_subagent_activity(
     ]
 
     await process_agent_event_stream(
-        agent=FakeAgent(events),
+        agent=FakeAgent(events, tool_invocations={
+            "run_task": ("model_subagent", "call_task"),
+        }),
         input_payload={"messages": []},
         config={},
         session_id="ses_parent",
@@ -2074,7 +2697,9 @@ async def test_resource_tool_is_projected_as_resource_activity(
     ]
 
     await process_agent_event_stream(
-        agent=FakeAgent(events),
+        agent=FakeAgent(events, tool_invocations={
+            "run_page": ("model_resource", "call_page"),
+        }),
         input_payload={"messages": []},
         config={},
         session_id="ses_resource",
@@ -2184,7 +2809,9 @@ async def test_retryable_resource_failure_does_not_abort_event_stream(
     ]
 
     result = await process_agent_event_stream(
-        agent=FakeAgent(events),
+        agent=FakeAgent(events, tool_invocations={
+            "run_page_error": ("model_resource_error", "call_page_error"),
+        }),
         input_payload={"messages": []},
         config={},
         session_id="ses_resource_error",

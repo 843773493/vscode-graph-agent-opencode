@@ -9,11 +9,19 @@ from dataclasses import replace
 import pytest
 
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
-from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.hashing import content_hash, sha256_jcs
+from app.domain.itemized.identity.item_projection import ItemSourceManifest
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     CommittedContextSourceBatch,
     ContextSourceDescriptor,
     ContextSourceManager,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.source_observation import (
+    SourceObservation,
+    build_source_lifecycle_decision,
 )
 
 
@@ -38,6 +46,20 @@ def _descriptor(source_id: str, name: str) -> ContextSourceDescriptor:
 def _activate(manager: ContextSourceManager, source_id: str, name: str, content: str) -> None:
     manager.register(_descriptor(source_id, name))
     manager.activate_skill_content(name, content)
+
+
+def _source_owner_snapshot(saver, owner):
+    control = saver.load_context_source_control_states(owner)
+    items = tuple(saver._storage.storage.read_items(owner.session_id, owner.thread_id))
+    with closing(
+        saver._storage.storage._connect(owner.thread_id, session_id=owner.session_id),
+    ) as connection:
+        commits = tuple(
+            tuple(row) for row in connection.execute(
+                "SELECT * FROM storage_commits ORDER BY commit_id",
+            )
+        )
+    return control, items, commits
 
 
 def test_prepare_pending_is_readonly_and_sealed_receipt_is_idempotent(source_seal_case):
@@ -157,6 +179,148 @@ def test_first_observation_preserves_semantic_revision_through_prepare_and_seal(
     assert second.revision == "agent-config-revision:8"
     assert second.previous_revision == "agent-config-revision:7"
     assert second.observation_provenance == ("agent-config-revision:8",)
+
+
+@pytest.mark.parametrize("decision_kind", ["base", "delta", "rebuild"])
+def test_ordinary_lifecycle_intent_keeps_visible_revision_until_real_seal(
+    source_seal_case, tmp_path, decision_kind,
+):
+    manager = source_seal_case.manager()
+    _activate(manager, "src_a", "a", "已封存正文")
+    source_seal_case.seal(manager)
+    saver, owner = source_seal_case.saver, source_seal_case.owner
+    (before_state,) = saver.load_context_source_control_states(owner)
+    prior_visible_revision = before_state.latest_visible_committed_revision
+    assert prior_visible_revision == before_state.latest_revision
+
+    prior_items = saver._storage.storage.read_items(owner.session_id, owner.thread_id)
+    prior_last_sequence = max(
+        (item.item_sequence for item in prior_items), default=0,
+    )
+    content = f"{decision_kind} 生命周期 intent 正文"
+    observation = SourceObservation(
+        owner=owner,
+        source_id="src_a",
+        source_kind="skill",
+        name="a",
+        revision=f"ordinary-{decision_kind}-revision",
+        tracking_mode="tracked",
+        from_revision=(
+            prior_visible_revision if decision_kind == "delta" else None
+        ),
+        content=content,
+    )
+    decision = build_source_lifecycle_decision(
+        observation, decision_kind=decision_kind,
+    )
+
+    saver.consume_mutation_intent(decision)
+    (after_state,) = saver.load_context_source_control_states(owner)
+    assert after_state.latest_visible_committed_revision == prior_visible_revision
+    assert after_state.latest_revision == decision.revision
+    assert after_state.tracking_status == "tracked"
+    assert after_state.state_revision == before_state.state_revision + 1
+
+    (item,) = saver._storage.storage.read_items(
+        owner.session_id, owner.thread_id, item_ids=(decision.item_id,),
+    )
+    assert item.payload == content
+    assert item.source_manifest == ItemSourceManifest(
+        decision.revision, "internal", "public",
+    )
+    assert item.item_sequence == prior_last_sequence + 1
+    assert item.content_hash == content_hash("text", content)
+
+    saver.consume_mutation_intent(decision)
+    (replayed_state,) = saver.load_context_source_control_states(owner)
+    (replayed_item,) = saver._storage.storage.read_items(
+        owner.session_id, owner.thread_id, item_ids=(decision.item_id,),
+    )
+    assert replayed_state == after_state
+    assert replayed_item == item
+
+    restored_saver = RolloutCheckpointSaver(
+        tmp_path / ".boxteam" / "sessions",
+    )
+    (restored_state,) = restored_saver.load_context_source_control_states(owner)
+    (restored_item,) = restored_saver._storage.storage.read_items(
+        owner.session_id, owner.thread_id, item_ids=(decision.item_id,),
+    )
+    assert restored_state == after_state
+    assert restored_item == item
+
+
+@pytest.mark.parametrize(
+    "decision_kind", ["base", "delta", "rebuild", "observe_pending"],
+)
+def test_owner_rejects_source_decision_without_canonical_item(
+    source_seal_case, decision_kind,
+):
+    saver, owner = source_seal_case.saver, source_seal_case.owner
+    observation = SourceObservation(
+        owner=owner,
+        source_id=f"missing-item:{decision_kind}",
+        source_kind="skill",
+        name=f"missing-item-{decision_kind}",
+        revision=f"revision-{decision_kind}",
+        tracking_mode="tracked",
+        from_revision="previous-revision" if decision_kind == "delta" else None,
+        content="冻结来源正文",
+    )
+    decision = build_source_lifecycle_decision(
+        observation,
+        decision_kind=decision_kind,
+        pending_only=(decision_kind == "observe_pending"),
+    )
+    before = _source_owner_snapshot(saver, owner)
+    with pytest.raises(ValueError, match="必须携带对应 CanonicalItemRecord"):
+        saver.apply_source_lifecycle_decision(decision, None)
+    assert _source_owner_snapshot(saver, owner) == before
+
+
+@pytest.mark.parametrize(
+    "decision_kind,tracking_mode,tracking_status",
+    [("track", "tracked", "tracked"), ("untrack", "untrack", "untracked")],
+)
+def test_control_decision_keeps_itemless_contract_at_owner(
+    source_seal_case, decision_kind, tracking_mode, tracking_status,
+):
+    saver, owner = source_seal_case.saver, source_seal_case.owner
+    source_observation = SourceObservation(
+        owner=owner, source_id="control-source", source_kind="skill",
+        name="control-source", revision="source-revision",
+        tracking_mode="tracked", content="source item",
+    )
+    source_decision = build_source_lifecycle_decision(
+        source_observation, decision_kind="base",
+    )
+    saver.consume_mutation_intent(source_decision)
+    (item,) = saver._storage.storage.read_items(
+        owner.session_id, owner.thread_id, item_ids=(source_decision.item_id,),
+    )
+
+    observation = SourceObservation(
+        owner=owner, source_id=f"{decision_kind}-source", source_kind="skill",
+        name=f"{decision_kind}-source", revision="control-revision",
+        tracking_mode=tracking_mode, content=None,
+    )
+    decision = build_source_lifecycle_decision(
+        observation, decision_kind=decision_kind,
+    )
+    before = _source_owner_snapshot(saver, owner)
+    assert saver.apply_source_lifecycle_decision(decision, None) == ()
+    after_control, after_items, after_commits = _source_owner_snapshot(saver, owner)
+    assert after_items == before[1]
+    assert after_commits == before[2]
+    (control_state,) = tuple(
+        state for state in after_control if state.source_id == decision.source_id
+    )
+    assert control_state.tracking_status == tracking_status
+
+    before_invalid_item = _source_owner_snapshot(saver, owner)
+    with pytest.raises(ValueError, match="不得携带.*CanonicalItemRecord"):
+        saver.apply_source_lifecycle_decision(decision, item)
+    assert _source_owner_snapshot(saver, owner) == before_invalid_item
 
 
 @pytest.mark.parametrize("revision", ["", 7])

@@ -9,7 +9,7 @@ from langchain.agents.middleware.types import ExtendedModelResponse
 from langchain_core.messages import AIMessage
 
 from app.agents.summarization.retry import validate_summary_text
-from app.agents.summarization.state import SummaryToolCallError
+from app.agents.summarization.state import SummaryTextError, SummaryToolCallError
 
 
 def _summary_response_text(response: ModelResponse | ExtendedModelResponse) -> str:
@@ -18,8 +18,10 @@ def _summary_response_text(response: ModelResponse | ExtendedModelResponse) -> s
         if isinstance(response, ExtendedModelResponse)
         else response
     )
-    if not isinstance(model_response, ModelResponse) or not model_response.result:
+    if not isinstance(model_response, ModelResponse):
         raise TypeError("压缩摘要 handler 必须返回包含消息的 ModelResponse")
+    if not model_response.result:
+        raise SummaryTextError("压缩摘要模型没有返回消息")
     message = model_response.result[-1]
     if not isinstance(message, AIMessage):
         raise TypeError(

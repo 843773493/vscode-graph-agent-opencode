@@ -1,10 +1,40 @@
-import type { TurnResponsePart } from "../../types/backend";
+import type { InternalExecutionHistory, TurnResponsePart } from "../../types/backend";
 import type { TimelineItem } from "./timelineTypes";
 import { isRecord } from "../../utils/jsonDisplay";
 
 export interface ResponsePartsProjectionOptions {
   terminalFailure?: boolean;
   terminalCancellation?: boolean;
+}
+
+function internalResponsePartOrder(
+  part: InternalExecutionHistory["response_parts"][number],
+): [number, number] {
+  const logicalItemOrdinal = part.source.logical_item_ordinal;
+  const partOrdinal = part.source.part_ordinal;
+  if (
+    typeof logicalItemOrdinal !== "number"
+    || !Number.isSafeInteger(logicalItemOrdinal)
+    || logicalItemOrdinal < 0
+    || typeof partOrdinal !== "number"
+    || !Number.isSafeInteger(partOrdinal)
+    || partOrdinal < 0
+  ) {
+    throw new Error("internal execution response part 缺少 canonical order");
+  }
+  return [logicalItemOrdinal, partOrdinal];
+}
+
+/** 按 execution response part 的成员坐标排序，缺少权威坐标时直接报错。 */
+export function compareInternalResponseParts(
+  left: InternalExecutionHistory["response_parts"][number],
+  right: InternalExecutionHistory["response_parts"][number],
+): number {
+  const [leftLogicalOrdinal, leftPartOrdinal] = internalResponsePartOrder(left);
+  const [rightLogicalOrdinal, rightPartOrdinal] = internalResponsePartOrder(right);
+  return leftLogicalOrdinal - rightLogicalOrdinal
+    || leftPartOrdinal - rightPartOrdinal
+    || left.part_id.localeCompare(right.part_id);
 }
 
 function toolPartKey(part: TurnResponsePart): string {
@@ -55,7 +85,7 @@ export function responsePartsToTimelineItems(
       .filter((value): value is string => Boolean(value)),
   );
 
-  for (const part of parts) {
+  for (const [partIndex, part] of parts.entries()) {
     const text = part.text ?? "";
     if (part.kind === "text" || part.kind === "final_text") {
       if (!text) continue;
@@ -68,6 +98,7 @@ export function responsePartsToTimelineItems(
         timestamp: null,
         eventCount: 1,
         rawEvents: [],
+        responseSources: [{ part_id: part.part_id, kind: part.kind, source: part.source }],
       });
       continue;
     }
@@ -75,6 +106,7 @@ export function responsePartsToTimelineItems(
       part.kind === "reasoning"
       || part.kind === "reasoning_summary"
       || part.kind === "reasoning_encrypted"
+      || part.kind === "compaction_summary"
     ) {
       // redacted/encrypted reasoning 可能只有存在性和元数据，没有可读正文；
       // 不能因 text 为空丢掉该时间线项，否则前端无法显示隐藏提示。
@@ -84,13 +116,14 @@ export function responsePartsToTimelineItems(
         kind: "aggregated_text",
         id: part.part_id,
         text,
-        partKind: "reasoning",
-        reasoningKind: part.kind,
+        partKind: part.kind === "compaction_summary" ? "compaction" : "reasoning",
+        ...(part.kind !== "compaction_summary" ? { reasoningKind: part.kind } : {}),
         redacted: encrypted || part.carrier_type?.includes("redacted_thinking") === true,
         active: part.projection === "streaming" && part.status !== "completed",
         timestamp: null,
         eventCount: 1,
         rawEvents: [],
+        responseSources: [{ part_id: part.part_id, kind: part.kind, source: part.source }],
       });
       continue;
     }
@@ -127,6 +160,7 @@ export function responsePartsToTimelineItems(
         failed: !incomplete && (part.status === "failed" || unresolvedTerminalTool),
         incomplete,
         outcomeUnknown: !incomplete && (part.outcome_unknown === true || unresolvedTerminalTool),
+        responseSources: [{ part_id: part.part_id, kind: part.kind, source: part.source }],
       };
       const index = items.length;
       toolIndexes.set(toolPartKey(part), index);
@@ -138,40 +172,50 @@ export function responsePartsToTimelineItems(
     }
     if (part.kind === "tool_result") {
       const key = toolPartKey(part);
-      const existingIndex = part.tool_call_id
-        ? toolIndexesByCallId.get(part.tool_call_id) ?? toolIndexes.get(key)
-        : toolIndexes.get(key);
-      if (existingIndex !== undefined) {
-        const existing = items[existingIndex];
-        if (existing.kind === "aggregated_tool") {
+      const assistantSequence = "assistant_message_sequence" in part.source
+        ? part.source.assistant_message_sequence
+        : undefined;
+      const existingIndex = toolIndexes.get(key)
+        ?? (assistantSequence == null && part.tool_call_id
+          ? toolIndexesByCallId.get(part.tool_call_id)
+          : undefined);
+      const existing = existingIndex === undefined ? undefined : items[existingIndex];
+      const status = {
+        active: false,
+        failed: (existing?.kind === "aggregated_tool" && existing.failed === true)
+          || part.status === "failed",
+        incomplete: part.status === "cancelled",
+        outcomeUnknown: part.outcome_unknown === true,
+      };
+      if (existingIndex !== undefined && existing?.kind === "aggregated_tool") {
+        const completed = { ...existing, ...status };
+        // 只有相邻的调用与结果合并同卡；跨部件的结果保留权威顺序。
+        if (parts[partIndex - 1]?.part_id === existing.id) {
           items[existingIndex] = {
-            ...existing,
+            ...completed,
             resultText: part.result ?? part.text ?? "",
-            active: false,
             detailsLoaded: existing.detailsLoaded || part.projection === "detail",
-            failed: part.status === "failed",
-            incomplete: part.status === "cancelled",
-            outcomeUnknown: part.outcome_unknown === true,
+            responseSources: [...(existing.responseSources ?? []), { part_id: part.part_id, kind: part.kind, source: part.source }],
           };
+          continue;
         }
-      } else {
-        items.push({
-          kind: "aggregated_tool",
-          id: part.part_id,
-          toolName: part.tool_name ?? "tool",
-          toolCallId: part.tool_call_id ?? undefined,
-          inputText: "",
-          resultText: part.result ?? text,
-          timestamp: null,
-          rawStart: recordField(part, "raw_start"),
-          rawEnd: recordField(part, "raw_end"),
-          active: false,
-          detailsLoaded: part.projection === "detail",
-          failed: part.status === "failed",
-          incomplete: part.status === "cancelled",
-          outcomeUnknown: part.outcome_unknown === true,
-        });
+        items[existingIndex] = completed;
       }
+      items.push({
+        kind: "aggregated_tool",
+        id: part.part_id,
+        toolName: part.tool_name
+          ?? (existing?.kind === "aggregated_tool" ? existing.toolName : "tool"),
+        toolCallId: part.tool_call_id ?? undefined,
+        inputText: "",
+        resultText: part.result ?? text,
+        timestamp: null,
+        rawStart: recordField(part, "raw_start"),
+        rawEnd: recordField(part, "raw_end"),
+        detailsLoaded: part.projection === "detail",
+        ...status,
+        responseSources: [{ part_id: part.part_id, kind: part.kind, source: part.source }],
+      });
     }
   }
   return items;

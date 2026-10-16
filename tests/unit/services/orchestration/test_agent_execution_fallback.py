@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import traceback
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,6 +13,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.abstractions.tool_selection import ToolSelectionSnapshot
 from app.agents.graph_binding import DEEP_AGENT_GRAPH_BINDING, GraphBindingStorePort
+from app.agents.tools.testing import create_test_tool
 from app.core.model_delta_context import get_current_model_delta_sink
 from app.core.path_utils import get_session_catalog_components
 from app.core.session_interrupt_state import SessionInterruptState
@@ -24,15 +27,28 @@ from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.config.snapshot import build_config_snapshot
+from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.mcp.catalog_activation import (
     MCP_TOOL_CATALOG_RESOURCE_ID,
     McpCatalogResourcePublisher,
 )
-from app.services.infrastructure.mcp.catalog_owner import McpCatalogPublication
+from app.services.infrastructure.mcp.catalog_owner import (
+    McpCatalogOwner,
+    McpCatalogPublication,
+)
 from app.services.infrastructure.mcp.extension_catalog import (
     build_extension_catalog_binding,
 )
 from app.services.infrastructure.message_stream_store import MessageStreamTerminalError
+from app.services.infrastructure.resource_platform.derivation.types import (
+    ResourceSnapshot,
+)
+from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
+    WorkspaceFileResourceRegistry,
+)
+from app.services.infrastructure.workspace_file_watch_service import (
+    WorkspaceFileWatchService,
+)
 from app.services.orchestration.agent_execution_service import (
     AgentExecutionService,
 )
@@ -55,9 +71,146 @@ from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from configs.runtime import read_jsonc_object
 from tests.harness.python.run_context import TestRunContext
 from tests.support.communication import SOURCE_SESSION, SOURCE_THREAD, WORKSPACE_ID
+from tests.support.mcp_session_doubles import (
+    FakeMcpSessionFactory,
+    drain_pending_relists,
+)
 from tests.support.workspaces import prepare_default_test_workspace
 
 pytestmark = pytest.mark.usefixtures("workspace_scope")
+
+_SKILL_CATALOG_RESOURCE_ID = "skill-entry:workspace:catalog:catalog"
+
+
+class _AcceptedUserInputStore:
+    """按真实 owner/job/message 身份提供已接受输入和 admission。"""
+
+    def __init__(self) -> None:
+        self._messages: dict[tuple[str, str, str, str], HumanMessage] = {}
+        self._bindings: dict[tuple[str, str, str], UserExecutionIdentity] = {}
+
+    def accept(
+        self,
+        *,
+        session_id: str,
+        thread_id: str,
+        job_id: str,
+        message_id: str,
+        message: str,
+        message_created_at: str,
+        message_metadata: dict[str, object] | None,
+        execution_binding: UserExecutionIdentity,
+    ) -> None:
+        if execution_binding.job_id != job_id:
+            raise ValueError("已接受输入的 execution binding 与 Job 不一致")
+        owner_job = (session_id, thread_id, job_id)
+        key = (*owner_job, message_id)
+        if owner_job in self._bindings or key in self._messages:
+            raise ValueError(f"重复登记已接受输入: {owner_job}/{message_id}")
+        self._bindings[owner_job] = execution_binding
+        self._messages[key] = HumanMessage(
+            id=message_id,
+            content=message,
+            response_metadata={
+                "message_id": message_id,
+                "created_at": message_created_at,
+                "updated_at": message_created_at,
+                "message_metadata": dict(message_metadata or {}),
+            },
+        )
+
+    def read_user_message(
+        self,
+        session_id: str,
+        *,
+        thread_id: str,
+        job_id: str,
+        message_id: str,
+        checkpoint_ns: str = "",
+    ) -> HumanMessage:
+        if checkpoint_ns:
+            raise KeyError(f"测试已接受输入没有该 checkpoint namespace: {checkpoint_ns}")
+        key = (session_id, thread_id, job_id, message_id)
+        try:
+            message = self._messages[key]
+        except KeyError as error:
+            raise KeyError(f"没有精确匹配的已接受用户输入: {key}") from error
+        if message.id != message_id:
+            raise ValueError(f"已接受用户输入 message identity 不一致: {key}")
+        return message.model_copy(deep=True)
+
+    def read_admission(
+        self,
+        session_id: str,
+        *,
+        thread_id: str,
+        job_id: str,
+        checkpoint_ns: str = "",
+    ) -> ExecutionAdmission:
+        if checkpoint_ns:
+            raise KeyError(f"测试 admission 没有该 checkpoint namespace: {checkpoint_ns}")
+        key = (session_id, thread_id, job_id)
+        try:
+            binding = self._bindings[key]
+        except KeyError as error:
+            raise KeyError(f"没有精确匹配的已接受 execution binding: {key}") from error
+        return ExecutionAdmission(
+            session_id=session_id,
+            thread_id=thread_id,
+            execution_id="execution_test",
+            job_id=job_id,
+            admission_idempotency_key=binding.admission_idempotency_key,
+            execution_origin="user_turn",
+            turn_id=binding.turn_id,
+        )
+
+
+class _ActivationBodyStore:
+    """只接受当前测试真实发布的两个 catalog 正文和精确 owner 引用。"""
+
+    _EXPECTED: ClassVar[dict[str, tuple[int, object]]] = {
+        MCP_TOOL_CATALOG_RESOURCE_ID: (0, {"content": ""}),
+        _SKILL_CATALOG_RESOURCE_ID: (1, {"entries": []}),
+    }
+
+    def __init__(self) -> None:
+        self.written: list[tuple[str, int, object, DetailRef]] = []
+        self._issued: set[tuple[str, str]] = set()
+
+    def write_resource_body(
+        self,
+        *,
+        owner_session_id: str,
+        owner_thread_id: str,
+        activation_snapshot_id: str,
+        resource_id: str,
+        activation_ordinal: int,
+        payload: object,
+        checkpoint_ns: str,
+    ) -> DetailRef:
+        expected = self._EXPECTED.get(resource_id)
+        if expected is None:
+            raise AssertionError(f"activation 发布了未登记资源: {resource_id}")
+        if (activation_ordinal, payload) != expected:
+            raise AssertionError(
+                f"activation body 与真实 {resource_id} 发布不一致: "
+                f"ordinal={activation_ordinal} payload={payload!r}"
+            )
+        if not all((owner_session_id, owner_thread_id, activation_snapshot_id)):
+            raise AssertionError("activation body 缺少完整 session/thread/snapshot owner")
+        if checkpoint_ns != "":
+            raise AssertionError(f"activation body checkpoint namespace 不匹配: {checkpoint_ns!r}")
+        identity = (activation_snapshot_id, resource_id)
+        if identity in self._issued:
+            raise AssertionError(f"activation body identity 重复: {identity}")
+        detail_id = f"resource-body-{activation_ordinal}-{resource_id.replace(':', '-') }"
+        reference = DetailRef(
+            owner_session_id, owner_thread_id, activation_snapshot_id, detail_id,
+        )
+        reference.require_owner(owner_session_id, owner_thread_id, activation_snapshot_id)
+        self._issued.add(identity)
+        self.written.append((resource_id, activation_ordinal, payload, reference))
+        return reference
 
 
 @pytest.fixture
@@ -117,6 +270,7 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
     dependency_provider.get_message_service.return_value = MagicMock()
     dependency_provider.get_session_service.return_value = MagicMock()
     dependency_provider.get_session_orchestrator.return_value = MagicMock()
+    accepted_inputs = _AcceptedUserInputStore()
     # 此处只测编排，Saver 端口和 checkpoint 业务写入由显式 fake 替代。
     # 生产依赖始终包含 checkpointer，不能用 None 隐式关闭整个 v2 生命周期。
     saver = MagicMock(
@@ -130,26 +284,21 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
             "get_canonical_item",
             "converge_execution",
             "mark_execution_lost",
+            "accepted_user_message",
+            "context_owner_namespace",
             "frozen_resource_activation_for_admission",
+            "find_resource_activation_snapshot",
             "save_resource_activation_snapshot",
             "register_execution_retry_source",
         ]
     )
+    saver.accepted_user_message.side_effect = accepted_inputs.read_user_message
+    saver.execution_admission_for_job.side_effect = accepted_inputs.read_admission
+    saver.context_owner_namespace.side_effect = lambda checkpoint_ns: checkpoint_ns
     saver.frozen_resource_activation_for_admission.return_value = None
+    saver.find_resource_activation_snapshot.return_value = None
     saver.save_resource_activation_snapshot = AsyncMock()
-    activation_body_store = MagicMock()
-    def write_activation_body(
-        *, owner_session_id, owner_thread_id, activation_snapshot_id,
-        resource_id, activation_ordinal, payload, checkpoint_ns,
-    ):
-        assert resource_id == MCP_TOOL_CATALOG_RESOURCE_ID
-        assert activation_ordinal == 0 and payload == {"content": ""}
-        assert checkpoint_ns == ""
-        return DetailRef(
-            owner_session_id, owner_thread_id, activation_snapshot_id, "detail-empty-mcp",
-        )
-
-    activation_body_store.write_resource_body.side_effect = write_activation_body
+    activation_body_store = _ActivationBodyStore()
 
     def activation_factory(resource_registry):
         publisher = McpCatalogResourcePublisher(registry=resource_registry)
@@ -158,6 +307,17 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
                 catalog_revision=sha256_jcs([]), generation=1, targets=(),
             ),
             descriptors=(), tools={}, status="available",
+        ))
+        skill_catalog_payload = {"entries": []}
+        resource_registry.publish(ResourceSnapshot(
+            resource_id=_SKILL_CATALOG_RESOURCE_ID,
+            resource_kind="skill",
+            facet="catalog",
+            display_uri=None,
+            revision=sha256_jcs(skill_catalog_payload),
+            payload=skill_catalog_payload,
+            source_lineage=(("skill-source:workspace:catalog", "sha256:fixture-empty"),),
+            generation=0,
         ))
         return ResourceActivationCoordinator(
             registry=resource_registry, saver=saver, body_store=activation_body_store,
@@ -172,17 +332,6 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
         lambda admission, *, message_id, message: HumanMessage(
             id=message_id, content=message.content,
             response_metadata=dict(message.metadata),
-        )
-    )
-    saver.execution_admission_for_job.side_effect = (
-        lambda session_id, *, thread_id, job_id, checkpoint_ns: ExecutionAdmission(
-            session_id=session_id,
-            thread_id=thread_id,
-            job_id=job_id,
-            execution_id="execution_test",
-            execution_origin="user_turn",
-            turn_id=f"turn_{job_id}",
-            admission_idempotency_key=f"adm_{job_id}",
         )
     )
     saved_items: dict[str, CanonicalItemRecord] = {}
@@ -235,6 +384,10 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
         workspace_root=workspace_root,
         template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
     )
+    workspace_file_resource_registry = WorkspaceFileResourceRegistry(
+        workspace_root=workspace_root,
+        watch_service=WorkspaceFileWatchService(workspace_root=workspace_root),
+    )
 
     message_stream_writer = MagicMock()
     message_stream_writer.turn_stream_id = "strm_test"
@@ -261,8 +414,10 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
         "session_changes_service": session_changes_service,
         "tool_selection_store": tool_selection_store,
         "dependency_provider": dependency_provider,
+        "accepted_user_inputs": accepted_inputs,
         "message_stream_store": message_stream_store,
         "workspace_root": workspace_root,
+        "workspace_file_resource_registry": workspace_file_resource_registry,
         "workspace_id": load_or_create_workspace_id(workspace_root),
     }
 
@@ -344,6 +499,24 @@ def _user_execution_binding(job_id: str) -> UserExecutionIdentity:
     )
 
 
+async def _run_accepted_step(service, mock_dependencies, **step_args):
+    """先登记真实 owner/job/message 输入，再从正式 Step 入口执行。"""
+    execution_binding = step_args["execution_binding"]
+    if not isinstance(execution_binding, UserExecutionIdentity):
+        raise TypeError("测试 helper 只接受已登记的用户执行身份")
+    mock_dependencies["accepted_user_inputs"].accept(
+        session_id=step_args["session_id"],
+        thread_id=step_args["thread_id"],
+        job_id=step_args["job_id"],
+        message_id=step_args["message_id"],
+        message=step_args["message"],
+        message_created_at=step_args["message_created_at"],
+        message_metadata=step_args.get("message_metadata"),
+        execution_binding=execution_binding,
+    )
+    return await service.run_step(**step_args)
+
+
 def _make_service(deps):
     """用当前测试夹具构造 AgentExecutionService。"""
     return AgentExecutionService(
@@ -361,6 +534,7 @@ def _make_service(deps):
         message_stream_store=deps["message_stream_store"],
         workspace_id=deps["workspace_id"],
         workspace_root=deps["workspace_root"],
+        workspace_file_resource_registry=deps["workspace_file_resource_registry"],
         session_catalog=get_session_catalog_components(
             deps["workspace_root"] / ".boxteam" / "sessions",
             workspace_id=deps["workspace_id"],
@@ -405,6 +579,11 @@ def test_tool_face_blueprint_cache_is_keyed_without_session(
         second = service.get_available_tools("test_agent")
 
     assert build_runtime.call_count == 2  # 配置 revision 变化 → 重建
+    assert all(
+        call.kwargs["workspace_file_resource_registry"]
+        is mock_dependencies["workspace_file_resource_registry"]
+        for call in build_runtime.call_args_list
+    )
     assert second is not first
     # 缓存键不含 session_id：不含任何会话身份。
     keys = list(service._tool_face_cache)
@@ -475,7 +654,7 @@ async def test_run_step_pins_snapshot_through_async_tool_stage(
             side_effect=fake_process_events,
         ) as process_events,
     ):
-        result = await service.run_step(
+        result = await _run_accepted_step(service, mock_dependencies,
             session_id="ses_test",
             message="test",
             agent_id="test_agent",
@@ -566,7 +745,7 @@ async def test_delegated_report_is_not_enforced_by_default(mock_dependencies):
             new=AsyncMock(return_value=stream_result),
         ) as process,
     ):
-        result = await service.run_step(
+        result = await _run_accepted_step(service, mock_dependencies,
             session_id="ses_child",
             message="委派任务",
             agent_id="test_agent",
@@ -613,7 +792,7 @@ async def test_delegated_first_turn_fails_after_two_missing_tool_reports(
         ) as process,
     ):
         with pytest.raises(RuntimeError, match="没有通过 send_message_to_session"):
-            await service.run_step(
+            await _run_accepted_step(service, mock_dependencies,
                 session_id="ses_child",
                 message="委派任务",
                 agent_id="test_agent",
@@ -668,7 +847,7 @@ async def test_delegated_progress_only_cannot_replace_final_result(
         ),
     ):
         with pytest.raises(RuntimeError, match="没有通过 send_message_to_session"):
-            await service.run_step(
+            await _run_accepted_step(service, mock_dependencies,
                 session_id="ses_child",
                 message="委派任务",
                 agent_id="test_agent",
@@ -727,7 +906,7 @@ async def test_cross_session_question_retries_until_correlated_tool_reply(
             side_effect=process_side_effect,
         ),
     ):
-        result = await service.run_step(
+        result = await _run_accepted_step(service, mock_dependencies,
             session_id="ses_answerer",
             message="跨会话问题",
             agent_id="test_agent",
@@ -783,7 +962,7 @@ async def test_primary_success_no_fallback(mock_dependencies):
         mock_agent.astream_events = mock_events
         mock_build.return_value = mock_agent
 
-        result = await service.run_step(
+        result = await _run_accepted_step(service, mock_dependencies,
             session_id="test",
             message="test",
             agent_id="test_agent",
@@ -866,7 +1045,7 @@ async def test_reasoning_stream_not_mixed_into_final_text(mock_dependencies):
         mock_agent.astream_events = mock_events
         mock_build.return_value = mock_agent
 
-        result = await service.run_step(
+        result = await _run_accepted_step(service, mock_dependencies,
             session_id="test",
             message="test",
             agent_id="test_agent",
@@ -927,7 +1106,7 @@ async def test_model_event_stream_does_not_recreate_legacy_text_events(
         mock_agent.astream_events = mock_events
         mock_build.return_value = mock_agent
 
-        result = await service.run_step(
+        result = await _run_accepted_step(service, mock_dependencies,
             session_id="test",
             message="test",
             agent_id="test_agent",
@@ -1016,7 +1195,7 @@ async def test_reasoning_only_response_retries_with_system_reminder(mock_depende
         mock_agent.astream_events = mock_events
         mock_build.return_value = mock_agent
 
-        result = await service.run_step(
+        result = await _run_accepted_step(service, mock_dependencies,
             session_id="test",
             message="test",
             agent_id="test_agent",
@@ -1109,7 +1288,7 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
 
         mock_process.side_effect = process_side_effect
 
-        result = await service.run_step(
+        result = await _run_accepted_step(service, mock_dependencies,
             session_id="test",
             message="请调用 test_tool_2",
             agent_id="test_agent",
@@ -1174,7 +1353,7 @@ async def test_standard_content_blocks_stream_split_reasoning_and_text(
         mock_agent.astream_events = mock_events
         mock_build.return_value = mock_agent
 
-        result = await service.run_step(
+        result = await _run_accepted_step(service, mock_dependencies,
             session_id="test",
             message="test",
             agent_id="test_agent",
@@ -1214,6 +1393,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(
         "system_prompt": "test",
     }
     service = _make_service(deps)
+    tool_arguments = {"code": "print('LC_BLOCK_OK_2')"}
 
     with patch(
         "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
@@ -1226,7 +1406,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(
                     {
                         "id": "call_1",
                         "name": "python_exec",
-                        "args": {},
+                        "args": dict(tool_arguments),
                     }
                 ],
             )
@@ -1246,7 +1426,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(
                 "event": "on_tool_start",
                 "run_id": "run_python_exec",
                 "name": "python_exec",
-                "data": {"input": {"code": "print('LC_BLOCK_OK_2')"}},
+                "data": {"input": dict(tool_arguments)},
                 "metadata": stream_metadata(),
             }
             yield {
@@ -1280,7 +1460,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(
         mock_agent.get_graph = None
         mock_build.return_value = mock_agent
 
-        result = await service.run_step(
+        result = await _run_accepted_step(service, mock_dependencies,
             session_id="test",
             message="test",
             agent_id="test_agent",
@@ -1323,13 +1503,24 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(
             "agent_id": "test_agent",
         }
     ]
+    tool_publish_sequence = [
+        (call.kwargs["event_type"], call.kwargs["payload"]["execution_id"])
+        for call in deps["job_event_bus"].publish.call_args_list
+        if call.kwargs.get("event_type") in {"tool_call_start", "tool_call_end"}
+    ]
+    assert tool_publish_sequence == [
+        ("tool_call_start", "run_python_exec"),
+        ("tool_call_end", "run_python_exec"),
+    ]
     assert "ToolMessage" not in tool_end_payloads[0]["result"]
     assert "content=" not in tool_end_payloads[0]["result"]
 
 
 @pytest.mark.asyncio
-async def test_execution_delegates_model_fallback_to_single_agent(mock_dependencies):
-    """模型 fallback 由请求中间件完成，执行服务不应重建 Agent。"""
+async def test_execution_builds_single_agent_runtime_without_model_override(
+    mock_dependencies,
+):
+    """成功 fake Agent 流验证单次 runtime 构建且不传模型覆盖参数。"""
     deps = mock_dependencies
     service = _make_service(deps)
 
@@ -1347,8 +1538,8 @@ async def test_execution_delegates_model_fallback_to_single_agent(mock_dependenc
                         "name": "ChatOpenAI",
                         "data": {
                             "chunk": create_chunk(
-                                "fallback 成功",
-                                part_id="part_fallback_success",
+                                "Agent 流成功",
+                                part_id="part_agent_success",
                                 index=0,
                             )
                         },
@@ -1361,7 +1552,7 @@ async def test_execution_delegates_model_fallback_to_single_agent(mock_dependenc
 
             mock_build.side_effect = create_mock_agent
 
-            result = await service.run_step(
+            result = await _run_accepted_step(service, mock_dependencies,
                 session_id="test",
                 message="test",
                 agent_id="test_agent",
@@ -1372,24 +1563,24 @@ async def test_execution_delegates_model_fallback_to_single_agent(mock_dependenc
                 thread_id="thr_test",
             )
 
-            assert result == "fallback 成功"
+            assert result == "Agent 流成功"
             assert mock_build.call_count == 1
             assert "override_model" not in mock_build.call_args.kwargs
 
 
 @pytest.mark.asyncio
-async def test_all_models_fail(mock_dependencies):
-    """测试：所有模型都失败时，抛出异常。"""
+async def test_agent_runtime_build_exception_propagates(mock_dependencies):
+    """Agent runtime 构建阶段异常会传播给调用方。"""
     deps = mock_dependencies
     service = _make_service(deps)
 
     with patch(
         "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
     ) as mock_build:
-        mock_build.side_effect = Exception("所有模型都失败")
+        mock_build.side_effect = Exception("Agent runtime 构建失败")
 
-        with pytest.raises(Exception, match="所有模型都失败"):
-            await service.run_step(
+        with pytest.raises(Exception, match="Agent runtime 构建失败"):
+            await _run_accepted_step(service, mock_dependencies,
                 session_id="test",
                 message="test",
                 agent_id="test_agent",
@@ -1402,8 +1593,8 @@ async def test_all_models_fail(mock_dependencies):
 
 
 @pytest.mark.asyncio
-async def test_model_fallback_does_not_republish_agent_start(mock_dependencies):
-    """模型中间件内部 fallback 不应伪装成一次新的 Agent 启动。"""
+async def test_successful_agent_stream_publishes_agent_start_once(mock_dependencies):
+    """成功 fake Agent 流只发布一次 agent_start。"""
     deps = mock_dependencies
     service = _make_service(deps)
 
@@ -1421,8 +1612,8 @@ async def test_model_fallback_does_not_republish_agent_start(mock_dependencies):
                         "name": "ChatOpenAI",
                         "data": {
                             "chunk": create_chunk(
-                                "fallback",
-                                part_id="part_fallback",
+                                "Agent 流成功",
+                                part_id="part_agent_success",
                                 index=0,
                             )
                         },
@@ -1435,7 +1626,7 @@ async def test_model_fallback_does_not_republish_agent_start(mock_dependencies):
 
             mock_build.side_effect = create_mock_agent
 
-            await service.run_step(
+            await _run_accepted_step(service, mock_dependencies,
                 session_id="test",
                 message="test",
                 agent_id="test_agent",
@@ -1498,7 +1689,7 @@ async def test_agent_loop_retry_keeps_model_attempt_boundaries(
             side_effect=process_with_retry,
         ),
     ):
-        result = await service.run_step(
+        result = await _run_accepted_step(service, mock_dependencies,
             session_id="ses_retry",
             message="重试",
             agent_id="test_agent",
@@ -1566,7 +1757,7 @@ async def test_interrupt_wins_when_completion_races_with_persisted_request(
             side_effect=process_success,
         ),
     ):
-        result = await service.run_step(
+        result = await _run_accepted_step(service, mock_dependencies,
             session_id="ses_race",
             message="竞态",
             agent_id="test_agent",
@@ -1605,7 +1796,7 @@ async def test_cancelled_without_user_interrupt_persists_checkpoint_and_closes_a
         ) as persist_checkpoint,
     ):
         with pytest.raises(asyncio.CancelledError):
-            await service.run_step(
+            await _run_accepted_step(service, mock_dependencies,
                 session_id="ses_cancelled",
                 message="取消",
                 agent_id="test_agent",
@@ -1649,7 +1840,7 @@ async def test_scope_job_timeout_cancelled_error_keeps_job_timeout_code(
         ),
         pytest.raises(asyncio.CancelledError),
     ):
-        await service.run_step(
+        await _run_accepted_step(service, mock_dependencies,
             session_id="ses_scope_job_timeout",
             message="总超时",
             agent_id="test_agent",
@@ -1691,7 +1882,7 @@ async def test_scope_deadline_failure_persists_checkpoint_without_user_interrupt
         ) as persist_checkpoint,
         pytest.raises(ScopeCancelledError, match="scope_deadline_exceeded"),
     ):
-        await service.run_step(
+        await _run_accepted_step(service, mock_dependencies,
             session_id="ses_scope_deadline",
             message="在预算内完成",
             agent_id="test_agent",
@@ -1720,6 +1911,8 @@ async def test_cancelled_with_complete_tool_call_closes_as_dispatch_timeout(
     mock_dependencies,
 ):
     service = _make_service(mock_dependencies)
+    zero_argument_tool = create_test_tool()
+    assert zero_argument_tool.args == {}
 
     async def process_cancelled(**kwargs):
         runtime = kwargs["message_stream_runtime"]
@@ -1729,8 +1922,8 @@ async def test_cancelled_with_complete_tool_call_closes_as_dispatch_timeout(
                 tool_calls=[
                     {
                         "id": "call_dispatch_timeout",
-                        "name": "exec_command",
-                        "args": '{"cmd":"pwd"}',
+                        "name": zero_argument_tool.name,
+                        "args": "{}",
                     }
                 ]
             )
@@ -1751,7 +1944,7 @@ async def test_cancelled_with_complete_tool_call_closes_as_dispatch_timeout(
         ),
         pytest.raises(asyncio.CancelledError),
     ):
-        await service.run_step(
+        await _run_accepted_step(service, mock_dependencies,
             session_id="ses_dispatch_timeout_cancelled",
             message="分派超时",
             agent_id="test_agent",
@@ -1793,7 +1986,7 @@ async def test_job_timeout_cancel_closes_stream_as_timed_out(
         ),
         pytest.raises(asyncio.CancelledError),
     ):
-        await service.run_step(
+        await _run_accepted_step(service, mock_dependencies,
             session_id="ses_job_timeout_stream",
             message="总超时",
             agent_id="test_agent",
@@ -1838,7 +2031,7 @@ async def test_cancelled_after_user_interrupt_closes_as_interrupted(
         ),
     ):
         with pytest.raises(asyncio.CancelledError):
-            await service.run_step(
+            await _run_accepted_step(service, mock_dependencies,
                 session_id="ses_user_cancelled",
                 message="用户打断",
                 agent_id="test_agent",
@@ -1856,12 +2049,13 @@ async def test_cancelled_after_user_interrupt_closes_as_interrupted(
 
 @pytest.mark.asyncio
 async def test_agent_exception_persists_stream_failure_before_rethrow(
-    mock_dependencies,
+    mock_dependencies, caplog,
 ):
     service = _make_service(mock_dependencies)
+    original_error = RuntimeError("上游异常")
 
     async def process_failed(**_kwargs):
-        raise RuntimeError("上游异常")
+        raise original_error
 
     with (  # noqa: SIM117 - 异常路径需要单独断言原始执行异常。
         patch(
@@ -1873,8 +2067,8 @@ async def test_agent_exception_persists_stream_failure_before_rethrow(
             side_effect=process_failed,
         ),
     ):
-        with pytest.raises(RuntimeError, match="上游异常"):
-            await service.run_step(
+        with pytest.raises(RuntimeError, match="上游异常") as raised:
+            await _run_accepted_step(service, mock_dependencies,
                 session_id="ses_execution_error",
                 message="异常",
                 agent_id="test_agent",
@@ -1884,6 +2078,24 @@ async def test_agent_exception_persists_stream_failure_before_rethrow(
                 message_created_at="2026-07-20T00:00:00+00:00",
                 thread_id="thr_test",
             )
+
+    assert raised.value is original_error
+    (failure_record,) = [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith(
+            "[agent_execution_service] ERROR published:"
+        )
+    ]
+    assert failure_record.exc_info is not None
+    error_type, logged_error, error_traceback = failure_record.exc_info
+    assert error_type is RuntimeError
+    assert logged_error is original_error
+    assert error_traceback is not None
+    assert any(
+        frame.name == "process_failed"
+        for frame in traceback.extract_tb(error_traceback)
+    )
 
     writer = mock_dependencies["message_stream_store"].open.return_value
     writer.close_failed.assert_awaited_once_with(
@@ -1953,3 +2165,66 @@ async def test_generation_reactor_release_is_isolated_per_thread(mock_dependenci
                     active.release()
                     await service.shutdown()
                     reactors["ses_b"].assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_mcp_catalog_change_updates_resident_registry_without_rebuilding_runtime(mock_dependencies):
+    factory = FakeMcpSessionFactory(initial_tools={"mini": []})
+    owner = McpCatalogOwner(
+        raw_config={"servers": {"mini": {"enabled": True, "transport": "stdio", "command": "fake"}}},
+        workspace_root=mock_dependencies["workspace_root"],
+        event_service=EventChannelService(), session_factory=factory,
+    )
+    await owner.start()
+    mock_dependencies["dependency_provider"].get_mcp_catalog_owner.return_value = owner
+    service = _make_service(mock_dependencies)
+    registries = []
+
+    def build(*, resource_registry, reactor_lifetime_scope, **_kwargs):
+        registries.append(resource_registry)
+        publisher = McpCatalogResourcePublisher(registry=resource_registry)
+        reactor_lifetime_scope.register(owner.subscribe_publication(publisher.publish), label="MCP publication")
+        return object()
+
+    async def acquire(job_id: str, mcp_enabled: bool | None = None):
+        return await service._acquire_step_agent(
+            admission=ExecutionAdmission(
+                session_id="ses_mcp_resident", thread_id="thr_test",
+                execution_id=f"exec_{job_id}", job_id=job_id,
+                admission_idempotency_key=f"adm_{job_id}", execution_origin="user_turn", turn_id=f"turn_{job_id}",
+            ),
+            agent_id="test_agent",
+            execution_overrides={} if mcp_enabled is None else {"mcp__mini__echo": mcp_enabled},
+            model_visibility_overrides={} if mcp_enabled is None else {"mcp__mini__echo": mcp_enabled},
+            preferred_provider_id=None, include_team_tools=False,
+        )
+
+    try:
+        with patch("app.services.orchestration.agent_execution_service.build_session_agent_runtime", side_effect=build) as builder:
+            first = await acquire("job_empty")
+            async with first:
+                original = first.runtime
+                original_generation = first.generation
+            empty = registries[0].snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
+            assert not empty.members
+            factory.sessions["mini"].tool_names = ["echo"]
+            factory.notify_callbacks["mini"]()
+            await drain_pending_relists(owner)
+            updated = registries[0].snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
+            assert updated.members[0].member_id == "mcp__mini__echo"
+            assert updated.revision != empty.revision
+            second = await acquire("job_added", True)
+            async with second:
+                assert second.runtime is original
+                assert second.generation == original_generation
+            factory.sessions["mini"].tool_names = []
+            factory.notify_callbacks["mini"]()
+            await drain_pending_relists(owner)
+            third = await acquire("job_removed", False)
+            async with third:
+                assert third.runtime is original
+                assert not registries[0].snapshot(MCP_TOOL_CATALOG_RESOURCE_ID).members
+            assert builder.call_count == 1
+    finally:
+        await service.shutdown()
+        await owner.shutdown()

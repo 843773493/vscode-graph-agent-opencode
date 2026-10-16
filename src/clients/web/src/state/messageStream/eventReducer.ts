@@ -18,7 +18,6 @@ import {
   booleanValue,
   boundedMessageStreamText,
   cloneMessageStreamState,
-  createMessageStreamState,
   defaultedTextValue,
   failureFromValue,
   findBlock,
@@ -45,12 +44,10 @@ import type {
 } from "./types";
 
 export function applyMessageStreamEvent(
-  current: MessageStreamState | null,
+  current: MessageStreamState,
   event: MessageStreamEvent,
 ): MessageStreamState {
-  const state = current
-    ? cloneMessageStreamState(current)
-    : createMessageStreamState(event.session_id, event.turn_id);
+  const state = cloneMessageStreamState(current);
   if (state.sessionId !== event.session_id || state.turnId !== event.turn_id
     || (state.threadId !== null && state.threadId !== event.thread_id)) {
     return {

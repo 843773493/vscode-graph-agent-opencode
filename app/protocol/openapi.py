@@ -6,6 +6,7 @@ from google.protobuf.descriptor import Descriptor
 
 from app.protocol.generated.boxteam.workspace.v2 import (
     file_events_pb2,
+    public_pb2,
     session_stream_pb2,
     trace_pb2,
 )
@@ -15,6 +16,7 @@ _SSE_DESCRIPTORS: Mapping[str, Descriptor] = {
     "TraceEventDTO": trace_pb2.TraceEvent.DESCRIPTOR,
     "WorkspaceFileChangeBatchDTO": file_events_pb2.WorkspaceFileChangeBatch.DESCRIPTOR,
     "SseErrorDTO": file_events_pb2.SseError.DESCRIPTOR,
+    "WorkspaceObservationFrameDTO": public_pb2.WorkspaceObservationFrameDTO.DESCRIPTOR,
 }
 
 

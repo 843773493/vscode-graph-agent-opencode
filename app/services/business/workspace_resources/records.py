@@ -7,6 +7,7 @@ import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from app.abstractions.workspace_resources import ResourceKind, RetentionScope
 from app.core.session_catalog_store import validate_session_id, validate_thread_id
@@ -24,20 +25,54 @@ class ThreadRef:
 
 
 @dataclass(slots=True)
+class ForkAttachReceipt:
+    """原 owner 的一次 fork attach 事实；不复制当前生命周期或外部实例。"""
+
+    creation_key: str
+    target_thread: ThreadRef
+    expected_revision: int
+    state: Literal["dispatching", "committed", "rejected"]
+    lease_id: str | None = None
+    committed_revision: int | None = None
+    error: str | None = None
+
+    def validate(self, key: str, revision: int) -> None:
+        if not self.creation_key or self.creation_key != key or self.expected_revision < 1:
+            raise ValueError("fork attach 回执缺少冻结 operation 身份或版本")
+        if self.state not in {"dispatching", "committed", "rejected"}:
+            raise ValueError("fork attach 回执状态无效")
+        if self.state == "committed" and (
+            self.committed_revision != self.expected_revision + 1 or self.committed_revision > revision
+        ):
+            raise ValueError("fork attach 提交回执版本与原 owner 不一致")
+        if self.state != "committed" and self.committed_revision is not None:
+            raise ValueError("未提交的 fork attach 不能携带提交版本")
+        if self.state != "rejected" and not self.lease_id:
+            raise ValueError("已派发的 fork attach 缺少精确 operation lease")
+
+
+@dataclass(slots=True)
 class OwnedResourceRecord:
     resource_id: str
     workspace_id: str
+    # 资源创建时记录的来源 Thread，是起源事实，不随显式关联的增删而改变。
     source_thread: ThreadRef
     retention_scope: RetentionScope
     title: str
     created_at: str
     updated_at: str
+    # 当前显式关联列表，可变且可空；Thread 级资源为空时，查询仍可按 source_thread 筛选。
+    # 该列表只记录关联，不代表操作租约持有者或完整准入结果。
     thread_associations: list[ThreadRef] = field(default_factory=list)
+    # owner 持久化的传输授权版本，用于版本校验，并与外部 transport_owner_revision 对账。
     owner_revision: int = 1
+    # 生命周期状态；观察时来自外部运行快照，创建、停止或删除期间也可处于过渡状态。
     status: str = "creating"
+    # 外部状态及前次操作结果的核实状态，与生命周期状态分开。
     reconciliation_status: str = "reconcile_required"
     unattached_since: str | None = None
     error: str | None = None
+    fork_attachments: dict[str, ForkAttachReceipt] = field(default_factory=dict)
 
     def validate(self, workspace_id: str, kind: ResourceKind) -> None:
         if self.workspace_id != workspace_id:
@@ -63,6 +98,8 @@ class OwnedResourceRecord:
             self.retention_scope != "thread" or self.thread_associations
         ):
             raise ValueError(f"资源 孤儿期限与关联冲突: {self.resource_id}")
+        for key, receipt in self.fork_attachments.items():
+            receipt.validate(key, self.owner_revision)
 
 
 class ResourceRecordStore:
@@ -86,6 +123,10 @@ class ResourceRecordStore:
                     **raw,
                     "source_thread": ThreadRef(**raw["source_thread"]),
                     "thread_associations": [ThreadRef(**item) for item in raw["thread_associations"]],
+                    "fork_attachments": {
+                        key: ForkAttachReceipt(**{**item, "target_thread": ThreadRef(**item["target_thread"])})
+                        for key, item in raw.get("fork_attachments", {}).items()
+                    },
                 }
             )
             record.validate(workspace_id, kind)
