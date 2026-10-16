@@ -92,15 +92,17 @@ def production_context(frozen_provider_activation, frozen_provider_wire, registr
     return saver, session, thread, connection, manager, prepare
 
 
-def test_prepare_and_public_composition_read_predecessor_once_per_snapshot(
+def test_prepare_reads_predecessor_once_per_attempt_and_public_composition_per_snapshot(
     production_context, monkeypatch,
 ):
     saver, session, thread, _connection, manager, prepare = production_context
     assemblies = saver._storage.assemblies
     original_latest = assemblies.latest_context_assembly
     original_transaction_latest = assemblies._latest_context_assembly_connection
+    original_id = assemblies._latest_context_assembly_id_connection
     reads = []
     seal_predecessors = []
+    identities = []
 
     def read_latest(snapshot):
         previous = original_latest(snapshot)
@@ -113,16 +115,23 @@ def test_prepare_and_public_composition_read_predecessor_once_per_snapshot(
             seal_predecessors.append(kwargs["excluding_assembly_id"])
         return original_transaction_latest(connection, *args, **kwargs)
 
+    def read_id(*args, **kwargs):
+        assembly_id = original_id(*args, **kwargs)
+        identities.append(assembly_id)
+        return assembly_id
+
     monkeypatch.setattr(assemblies, "latest_context_assembly", read_latest)
     monkeypatch.setattr(assemblies, "_latest_context_assembly_connection", read_transaction_latest)
+    monkeypatch.setattr(assemblies, "_latest_context_assembly_id_connection", read_id)
     first = prepare("snapshot-first")
     manager.observe("instruction:R01", "基础规则第二版", revision="instructions:2")
     second = prepare("snapshot-second")
-    assert len(reads) == len({id(snapshot) for snapshot, _ in reads}) == 4
+    assert len(reads) == len({id(snapshot) for snapshot, _ in reads}) == 2
     assert [None if previous is None else previous.assembly_id for _, previous in reads] == [
-        None, None, first["assembly_id"], first["assembly_id"],
+        None, first["assembly_id"],
     ]
     assert seal_predecessors == [first["assembly_id"], second["assembly_id"]]
+    assert identities == [None] * 3 + [first["assembly_id"]] * 3
     cold = RolloutCheckpointSaver(saver._storage.storage.sessions_dir)
     restored = cold.get_context_assembly(session, thread, assembly_id=second["assembly_id"])
     messages, tools, losses = cold.project_context_plan_to_provider(
@@ -138,7 +147,7 @@ def test_prepare_and_public_composition_read_predecessor_once_per_snapshot(
         )
         assert reads[-1][0] is snapshot
         assert reads[-1][1].assembly_id == second["assembly_id"]
-    assert len(reads) == 5
+    assert len(reads) == 3
     assert (plan.session_id, plan.thread_id) == (session, thread)
 
 

@@ -291,7 +291,17 @@ def prepare_registered_context(
                 )
                 bodies[contribution.contribution_id] = contribution.body
             with owner._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns) as read_snapshot:
-                previous = owner._storage.assemblies.latest_context_assembly(read_snapshot)
+                assemblies = owner._storage.assemblies
+                latest_id = assemblies._latest_context_assembly_id_connection(
+                    read_snapshot.connection, session_id, thread_id, checkpoint_ns=checkpoint_ns,
+                )
+                # 不可变 sealed 前驱同 ID 时复用本次已校验值；资格或身份变化
+                # 仍在当前 snapshot 完整读取，writer 再独立校验并执行 CAS。
+                if latest_id != (None if previous is None else previous.assembly_id):
+                    previous = None if latest_id is None else assemblies._read_context_assembly_connection(
+                        read_snapshot.connection, session_id, thread_id,
+                        assembly_id=latest_id, checkpoint_ns=checkpoint_ns,
+                    )[0]
                 initial_assembly = previous is not None and (
                     previous.session_id, previous.thread_id
                 ) != (session_id, thread_id)

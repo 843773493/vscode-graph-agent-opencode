@@ -92,6 +92,27 @@ class ContextAssemblyReaderMixin:
         excluding_assembly_id: str | None = None,
     ) -> ContextAssemblySnapshot | None:
         """同一读或 seal 事务共用精确可见的历史 predecessor。"""
+        assembly_id = self._latest_context_assembly_id_connection(
+            connection, session_id, thread_id, checkpoint_ns=checkpoint_ns,
+            excluding_assembly_id=excluding_assembly_id,
+        )
+        if assembly_id is None:
+            return None
+        return self._read_context_assembly_connection(
+            connection, session_id, thread_id,
+            assembly_id=assembly_id, checkpoint_ns=checkpoint_ns,
+        )[0]
+
+    def _latest_context_assembly_id_connection(
+        self,
+        connection: sqlite3.Connection,
+        session_id: str,
+        thread_id: str,
+        *,
+        checkpoint_ns: str,
+        excluding_assembly_id: str | None = None,
+    ) -> str | None:
+        """只判定当前 snapshot 的前驱身份；调用方负责完整校验。"""
         # 导入请求只有真实输出在当前 view 可见时才能继承，正文 backing 不扩大前缀。
         row = connection.execute(
             "SELECT assembly.assembly_id FROM context_assemblies assembly "
@@ -108,13 +129,7 @@ class ContextAssemblyReaderMixin:
             "ORDER BY assembly.rowid DESC LIMIT 1",
             (excluding_assembly_id, excluding_assembly_id, session_id, thread_id, checkpoint_ns),
         ).fetchone()
-        if row is None:
-            return None
-        return self._read_context_assembly_connection(
-            connection, session_id, thread_id,
-            assembly_id=required_text(row[0], field="assembly_id"),
-            checkpoint_ns=checkpoint_ns,
-        )[0]
+        return None if row is None else required_text(row[0], field="assembly_id")
 
     def _read_context_assembly_connection(
         self, connection: sqlite3.Connection, session_id: str, thread_id: str,
