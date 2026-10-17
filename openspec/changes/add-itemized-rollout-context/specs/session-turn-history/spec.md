@@ -196,7 +196,7 @@ main-thread history bootstrap、pending 队列和 active Job 展示 SHALL 消费
 
 #### Scenario: 基础两轮 tool loop 仍是前置验收
 
-- **WHEN** 运行 `uv run pytest tests/e2e/clients/web/test_basic_chat_tool_loop.py`
+- **WHEN** 运行 `BOXTEAM_E2E_SECTION8_FOCUS=default bun run test:matrix -- --suite=e2e-web-basic-chat-tool-loop`
 - **THEN** 基础两轮分别按后端权威坐标精确断言时长、item数量、reasoning→tool→reasoning展开顺序和刷新恢复；不存在按文本去重、重影item或“无消息但计数”。任一新场景不得替代这些断言
 
 #### Scenario: 多 Session 与 child 右侧对话在真实页面中隔离

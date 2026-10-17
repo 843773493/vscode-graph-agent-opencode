@@ -7,6 +7,7 @@ import sqlite3
 from collections.abc import Iterable
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.identity.refs import selection_ref_identity
 from app.domain.itemized.serialization import ordered_selection
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     optional_detail_ref_key,
@@ -67,7 +68,7 @@ def _frozen_source_refs(
             if identity == (provenance.source_identity, provenance.revision)
             and contributions[next(
                 entry.contribution_id for entry in snapshot.selection
-                if entry.ref.ref_id == ref_id
+                if entry.ref.ref_type == "request_only" and entry.ref.ref_id == ref_id
             )].root_placement == "root_eligible"
         ]
         if len(matches) != 1:
@@ -109,6 +110,7 @@ class ContextAssemblyManifestMixin:
         canonical_ids = {
             entry.ref.ref_id for entry in snapshot.selection
             if entry.included and entry.ref.ref_type == "canonical_item"
+            and entry.ref.thread_id == snapshot.thread_id
         }
         view_rows = connection.execute(
             "SELECT item_id, source_kind FROM context_view_items "
@@ -176,8 +178,8 @@ class ContextAssemblyManifestMixin:
             rows = connection.execute(
                 "SELECT ref_id, source_revision, source_cut_position_kind, source_cut_item_id "
                 "FROM context_assembly_selections WHERE assembly_id = ? "
-                "AND included = 1 AND ref_type = 'request_only'",
-                (predecessor_id,),
+                "AND included = 1 AND ref_type = 'request_only' AND ref_thread_id = ?",
+                (predecessor_id, predecessor.thread_id),
             ).fetchall()
             for ref_id, revision, kind, item_id in rows:
                 if ref_id not in previous_sources:
@@ -219,20 +221,21 @@ class ContextAssemblyManifestMixin:
         if not connection.in_transaction:
             raise RuntimeError("context assembly manifest 写入需要活动事务")
         selection_by_identity = {
-            (entry.ref.ref_type, entry.ref.ref_id): entry
+            selection_ref_identity(entry.ref): entry
             for entry in snapshot.selection
         }
         for ordinal, ref in enumerate(snapshot.refs):
             selection_entry = selection_by_identity.get(
-                (ref.ref_type, ref.ref_id)
+                selection_ref_identity(ref)
             )
             cursor = connection.execute(
-                'INSERT INTO assembly_item_refs(assembly_id, ref_ordinal, ref_type, ref_id, semantic_kind, payload_kind, status, content_hash, source_revision, content_length, detail_ref, contribution_id, visibility, protection, availability) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'INSERT INTO assembly_item_refs(assembly_id, ref_ordinal, ref_type, ref_id, ref_thread_id, semantic_kind, payload_kind, status, content_hash, source_revision, content_length, detail_ref, contribution_id, visibility, protection, availability) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 (
                     snapshot.assembly_id,
                     ordinal,
                     ref.ref_type,
                     ref.ref_id,
+                    ref.thread_id,
                     ref.semantic_kind,
                     ref.payload_kind,
                     ref.status,
@@ -275,13 +278,14 @@ class ContextAssemblyManifestMixin:
         )
         for entry in snapshot.selection:
             cursor = connection.execute(
-                'INSERT INTO context_assembly_selections(assembly_id, plan_ordinal, selection_kind, ref_type, ref_id, included, omission_reason, loss_json, source_revision, content_length, content_hash, visibility, protection, availability, base_delta_role, source_overlay_epoch, overlay_from_revision, overlay_to_revision, overlay_diff_hash, detail_ref, contribution_id, contribution_ordinal, source_cut_position_kind, source_cut_item_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'INSERT INTO context_assembly_selections(assembly_id, plan_ordinal, selection_kind, ref_type, ref_id, ref_thread_id, included, omission_reason, loss_json, source_revision, content_length, content_hash, visibility, protection, availability, base_delta_role, source_overlay_epoch, overlay_from_revision, overlay_to_revision, overlay_diff_hash, detail_ref, contribution_id, contribution_ordinal, source_cut_position_kind, source_cut_item_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 (
                     snapshot.assembly_id,
                     entry.plan_ordinal,
                     entry.selection_kind,
                     entry.ref.ref_type,
                     entry.ref.ref_id,
+                    entry.ref.thread_id,
                     int(entry.included),
                     entry.omission_reason,
                     _json(list(entry.loss)),
@@ -299,7 +303,8 @@ class ContextAssemblyManifestMixin:
                     optional_detail_ref_key(entry.detail_ref),
                     entry.contribution_id,
                     entry.contribution_ordinal,
-                    *source_frontiers.get(entry.ref.ref_id, (None, None)),
+                    *(source_frontiers.get(entry.ref.ref_id, (None, None))
+                      if entry.ref.ref_type == "request_only" else (None, None)),
                 ),
             )
             self._require_manifest_insert(cursor, "assembly selection")
@@ -337,17 +342,18 @@ class ContextAssemblyManifestMixin:
             )
 
         ref_rows = connection.execute(
-            'SELECT ref_ordinal, ref_type, ref_id, semantic_kind, payload_kind, status, content_hash, source_revision, content_length, detail_ref, contribution_id, visibility, protection, availability FROM assembly_item_refs WHERE assembly_id = ? ORDER BY ref_ordinal',
+            'SELECT ref_ordinal, ref_type, ref_id, ref_thread_id, semantic_kind, payload_kind, status, content_hash, source_revision, content_length, detail_ref, contribution_id, visibility, protection, availability FROM assembly_item_refs WHERE assembly_id = ? ORDER BY ref_ordinal',
             (snapshot.assembly_id,),
         ).fetchall()
         selection_by_identity = {}
         for entry in snapshot.selection:
-            selection_by_identity.setdefault((entry.ref.ref_type, entry.ref.ref_id), entry)
+            selection_by_identity.setdefault(selection_ref_identity(entry.ref), entry)
         expected_refs = [
             (
                 ordinal,
                 ref.ref_type,
                 ref.ref_id,
+                ref.thread_id,
                 ref.semantic_kind,
                 ref.payload_kind,
                 ref.status,
@@ -362,7 +368,7 @@ class ContextAssemblyManifestMixin:
             )
             for ordinal, ref in enumerate(snapshot.refs)
             for entry in [
-                selection_by_identity.get((ref.ref_type, ref.ref_id))
+                selection_by_identity.get(selection_ref_identity(ref))
             ]
         ]
         exact_row(
@@ -411,7 +417,7 @@ class ContextAssemblyManifestMixin:
             connection, snapshot, checkpoint_ns=checkpoint_ns,
         )
         selection_rows = connection.execute(
-            'SELECT plan_ordinal, selection_kind, ref_type, ref_id, included, omission_reason, loss_json, source_revision, content_length, content_hash, visibility, protection, availability, base_delta_role, source_overlay_epoch, overlay_from_revision, overlay_to_revision, overlay_diff_hash, detail_ref, contribution_id, contribution_ordinal, source_cut_position_kind, source_cut_item_id FROM context_assembly_selections WHERE assembly_id = ? ORDER BY plan_ordinal',
+            'SELECT plan_ordinal, selection_kind, ref_type, ref_id, ref_thread_id, included, omission_reason, loss_json, source_revision, content_length, content_hash, visibility, protection, availability, base_delta_role, source_overlay_epoch, overlay_from_revision, overlay_to_revision, overlay_diff_hash, detail_ref, contribution_id, contribution_ordinal, source_cut_position_kind, source_cut_item_id FROM context_assembly_selections WHERE assembly_id = ? ORDER BY plan_ordinal',
             (snapshot.assembly_id,),
         ).fetchall()
         expected_selection = [
@@ -420,6 +426,7 @@ class ContextAssemblyManifestMixin:
                 entry.selection_kind,
                 entry.ref.ref_type,
                 entry.ref.ref_id,
+                entry.ref.thread_id,
                 int(entry.included),
                 entry.omission_reason,
                 _json(list(entry.loss)),
@@ -437,7 +444,8 @@ class ContextAssemblyManifestMixin:
                 optional_detail_ref_key(entry.detail_ref),
                 entry.contribution_id,
                 entry.contribution_ordinal,
-                *source_frontiers.get(entry.ref.ref_id, (None, None)),
+                *(source_frontiers.get(entry.ref.ref_id, (None, None))
+                      if entry.ref.ref_type == "request_only" else (None, None)),
             )
             for entry in snapshot.selection
         ]

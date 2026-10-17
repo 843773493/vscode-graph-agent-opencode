@@ -39,6 +39,7 @@ from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
     ItemSourceManifest,
 )
+from app.domain.itemized.identity.refs import selection_ref_identity
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.parts import ContentPart, ContentPartAnchor
 from app.domain.itemized.records import CanonicalItemRecord
@@ -2236,7 +2237,7 @@ def test_optional_omitted_selection_skips_detail_body_and_provider_tools(
         execution_id=str(accepted["initial_execution_id"]),
         provider_version="provider-v2", target_format="chat_completions",
         seal_idempotency_key="optional-omission:seal",
-        omitted_ref_ids=(contribution.contribution_id,),
+        omitted_ref_identities=(selection_ref_identity(next(ref for ref in draft.refs if ref.ref_id == contribution.contribution_id)),),
     )
     omitted = next(
         entry

@@ -6,6 +6,8 @@ checkpoint 的公开 seal 调用链验收，也不安装测试 DDL 或回填旧 
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import sqlite3
 from collections.abc import Callable, Iterator
@@ -14,7 +16,16 @@ from pathlib import Path
 
 import pytest
 
+from app.agents.graph_binding import (
+    DEEP_AGENT_CAPABILITY_PROFILE,
+    DEEP_AGENT_GRAPH_BINDING,
+    compute_capability_profile_hash,
+)
 from app.core.identifier import create_uuid_hex
+from app.core.path_utils import get_session_path_resolver
+from app.core.session_catalog_store import SessionCatalogStore
+from app.core.session_control_store import SessionControlStore
+from app.core.thread_creation import ThreadCreationService
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.enums import DetailProtection
 from app.domain.itemized.epoch.prefix_epoch import (
@@ -32,7 +43,12 @@ from app.domain.itemized.hashing import (
     contribution_content_hash,
     sha256_jcs,
 )
-from app.domain.itemized.identity.refs import ContextRef, ToolSetIdentityRef, ToolSetRef
+from app.domain.itemized.identity.refs import (
+    ContextRef,
+    ToolSetIdentityRef,
+    ToolSetRef,
+    selection_ref_identity,
+)
 from app.domain.itemized.request_plan import (
     ContextContribution,
     ContextRequestPlan,
@@ -42,11 +58,17 @@ from app.domain.itemized.selection import ContextSelectionEntry
 from app.services.infrastructure.rollout_context.assembly.manifest import (
     ContextAssemblyManifestMixin,
 )
+from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
+    draft_manifest,
+)
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
     read_registration,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (
+    seal_input_hash,
 )
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
@@ -54,8 +76,20 @@ from app.services.infrastructure.rollout_context.runtime.composer import (
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     ContextPlanDetailStore,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    HistoricalNamespaceBinding,
+    bind_captured_namespace,
+)
 from app.services.infrastructure.rollout_context.storage.schema import (
     ROLLOUT_SCHEMA_VERSION,
+)
+from app.services.infrastructure.rollout_context.storage.schema_assembly_refs import (
+    ASSEMBLY_REF_SCHEMA_SQL,
+    ASSEMBLY_REF_THREAD_MIGRATION_SQL,
+)
+from app.services.mapping.itemized.prefix_frames import (
+    project_canonical_prefix_frames,
+    project_sealed_prefix,
 )
 from tests.harness.python.run_context import TestRunContext
 
@@ -70,6 +104,73 @@ class AssemblyCase:
     execution_id: str
     connection: sqlite3.Connection
     jsonl_path: Path
+
+
+@pytest.fixture
+def sibling_draft(assembly_case):
+    """两个真实线程写入同名、不同正文的 root，并登记完整身份。"""
+    case = assembly_case
+    catalog = SessionCatalogStore(case.sessions.parent / "navigation/session-catalog.sqlite", case.sessions)
+    session_node = get_session_path_resolver(case.sessions).resolve_session_node(case.session_id)
+    control = SessionControlStore(session_node / "session-control.sqlite")
+    creator = ThreadCreationService(
+        store=catalog, control_store=control, sessions_root=case.sessions,
+        workspace_id=catalog.get_node(case.session_id).workspace_id,
+        compute_capability_profile_hash=compute_capability_profile_hash,
+    )
+    child = asyncio.run(creator.create(
+        idempotency_key="qualified-ref-child", session_id=case.session_id,
+        thread_id=None, delegation_id=None, initial_state="idle",
+        session_metadata={
+            "graph_binding": {
+                "graph_id": DEEP_AGENT_GRAPH_BINDING.graph_id,
+                "graph_revision": DEEP_AGENT_GRAPH_BINDING.graph_revision,
+                "graph_schema_hash": DEEP_AGENT_GRAPH_BINDING.graph_schema_hash,
+                "capability_profile_hash": DEEP_AGENT_GRAPH_BINDING.capability_profile_hash,
+            },
+            "capability_profile": dict(DEEP_AGENT_CAPABILITY_PROFILE),
+            "task_seed": None, "task_reference": None,
+        }, artifact_manifest={},
+    ))
+    root_id = case.connection.execute(
+        "SELECT root_input_item_id FROM turn_records WHERE turn_id = ?", (case.turn_id,),
+    ).fetchone()[0]
+    case.saver.accept_turn(
+        case.session_id, thread_id=child.child_thread_id,
+        accepted_ingress_id="sibling-ingress", acceptance_idempotency_key="sibling-accept",
+        job_id="sibling-job", admission_idempotency_key="sibling-admission",
+        root_item_id=root_id, payload="兄弟线程的独立正文", payload_kind="text",
+    )
+    items = tuple(
+        case.saver._storage.storage.read_items(case.session_id, thread, item_ids=(root_id,))[0]
+        for thread in (case.thread_id, child.child_thread_id)
+    )
+    refs = tuple(ContextRef.canonical_item(item, session_id=case.session_id, thread_id=thread)
+                 for thread, item in zip((case.thread_id, child.child_thread_id), items, strict=True))
+    plan = ContextRequestPlan(
+        session_id=case.session_id, thread_id=case.thread_id, plan_id="qualified-sibling-plan",
+        plan_creation_idempotency_key="qualified-sibling-create", refs=refs,
+    )
+    registered = case.saver.create_context_plan(case.session_id, plan)
+    yield registered.draft, items
+    control.close()
+    catalog.close()
+
+
+@pytest.fixture
+def sibling_assembly(assembly_case, sibling_draft):
+    case = assembly_case
+    draft, items = sibling_draft
+    snapshot = ContextPlanComposer().assembly(
+        plan=draft, assembly_id="qualified-sibling-assembly",
+        session_id=case.session_id, thread_id=case.thread_id, turn_id=case.turn_id,
+        execution_id=case.execution_id, provider_version="qualified-ref-test",
+    )
+    case.saver.seal_context_assembly(
+        case.session_id, case.thread_id, snapshot,
+        seal_idempotency_key="qualified-sibling-seal", seal_input_hash=sha256_jcs("qualified-input"),
+    )
+    return snapshot, items
 
 
 @pytest.fixture
@@ -153,10 +254,7 @@ def _candidate(
         for item in contributions
     )
     active_view_id = None
-    omitted_ref_ids = [
-        "omitted-source-ref", "omitted-tools",
-        *(f"{source_id}-ref" for source_id in extra_source_ids),
-    ]
+    omitted_ref_identities = [selection_ref_identity(ref) for ref in refs[1:]]
     if admission_root:
         root_id = case.connection.execute(
             "SELECT root_input_item_id FROM turn_records "
@@ -177,7 +275,7 @@ def _candidate(
             ),
             *refs,
         )
-        omitted_ref_ids.append(root_id)
+        omitted_ref_identities.append(selection_ref_identity(refs[0]))
     plan = ContextRequestPlan(
         session_id=case.session_id,
         thread_id=case.thread_id,
@@ -200,6 +298,7 @@ def _candidate(
         active_view_id=active_view_id,
         selection_policy="compaction_selection" if admission_root else "active_view",
     )
+    omitted_ref_identities.append(selection_ref_identity(plan.tool_set_refs[1]))
     registered = case.saver.create_context_plan(case.session_id, plan)
     assembly_id = f"assembly-{plan_id}"
     detail = ContextPlanDetailStore(case.sessions).write(
@@ -221,8 +320,8 @@ def _candidate(
         turn_id=case.turn_id,
         execution_id=case.execution_id,
         provider_version="schema4-manifest-contract",
-        request_detail_refs={"included-source-ref": detail.detail_ref},
-        omitted_ref_ids=tuple(omitted_ref_ids),
+        request_detail_refs={selection_ref_identity(next(ref for ref in refs if ref.ref_id == "included-source-ref")): detail.detail_ref},
+        omitted_ref_identities=tuple(omitted_ref_identities),
     )
 
 
@@ -303,6 +402,367 @@ def _seal_snapshot(case: AssemblyCase, snapshot: ContextAssemblySnapshot) -> Non
         seal_idempotency_key=f"seal-{snapshot.plan_id}",
         seal_input_hash=sha256_jcs("storage-seal-test-input"),
     )
+
+
+def test_sibling_canonical_identity_survives_seal_and_cold_projection(assembly_case, sibling_assembly):
+    case = assembly_case
+    snapshot, items = sibling_assembly
+    expected = [(ref.ref_type, ref.ref_id, ref.thread_id) for ref in snapshot.refs]
+    for table, ordinal in (("assembly_item_refs", "ref_ordinal"), ("context_assembly_selections", "plan_ordinal")):
+        assert case.connection.execute(
+            f"SELECT ref_type,ref_id,ref_thread_id FROM {table} WHERE assembly_id=? ORDER BY {ordinal}",
+            (snapshot.assembly_id,),
+        ).fetchall() == expected
+        with pytest.raises(sqlite3.IntegrityError):
+            case.connection.execute(
+                f"UPDATE {table} SET ref_thread_id=? WHERE assembly_id=? AND {ordinal}=1",
+                (case.thread_id, snapshot.assembly_id),
+            )
+        case.connection.rollback()
+    cold = RolloutCheckpointSaver(case.sessions)
+    loaded = cold.get_context_assembly(case.session_id, thread_id=case.thread_id, assembly_id=snapshot.assembly_id)
+    assert loaded.refs == snapshot.refs
+    plan = loaded.as_sealed_plan()
+    expected_bodies = [item.payload for item in items]
+    assert expected_bodies[0] != expected_bodies[1]
+    assert [message.content for message in cold.project_context_plan_to_history(case.session_id, case.thread_id, plan)] == expected_bodies
+    assert [message.content for message in cold.project_context_plan_to_messages(case.session_id, case.thread_id, plan)] == expected_bodies
+    native = cold.project_context_plan_to_native(case.session_id, case.thread_id, plan)
+    assert [value["content"][0]["text"] for value in native["request"]["input"]] == expected_bodies
+
+
+@pytest.mark.parametrize("omitted_ordinal", [0, 1])
+def test_sibling_omission_seals_only_the_exact_identity(
+    assembly_case, sibling_draft, omitted_ordinal, monkeypatch,
+):
+    case = assembly_case
+    plan, items = sibling_draft
+    identities = tuple(selection_ref_identity(ref) for ref in plan.refs)
+    assert plan.refs[0].ref_id == plan.refs[1].ref_id
+    assert identities[0] != identities[1]
+    options = {
+        "turn_id": case.turn_id, "execution_id": case.execution_id,
+        "provider_version": "qualified-omission-test",
+        "omitted_ref_identities": (identities[omitted_ordinal],),
+    }
+    candidate = ContextPlanComposer().assembly(
+        plan=plan, assembly_id="qualified-omission-candidate",
+        session_id=case.session_id, thread_id=case.thread_id, **options,
+    )
+    expected_included = tuple(ordinal != omitted_ordinal for ordinal in range(2))
+    assert tuple(selection_ref_identity(ref) for ref in candidate.refs) == identities
+    assert tuple(selection_ref_identity(entry.ref) for entry in candidate.selection) == identities
+    assert tuple(entry.included for entry in candidate.selection) == expected_included
+    assert candidate.selection[omitted_ordinal].omission_reason == "selection_omitted"
+    assert candidate.selection[omitted_ordinal].loss == ("selection_omitted",)
+    assert candidate.selection[1 - omitted_ordinal].omission_reason is None
+    assert candidate.selection[1 - omitted_ordinal].loss == ()
+    snapshot = case.saver.seal_context_plan(
+        case.session_id, case.thread_id, plan, wire_profile=None, wire_params=None,
+        seal_idempotency_key="qualified-omission-seal", **options,
+    )
+    assert tuple(selection_ref_identity(entry.ref) for entry in snapshot.selection) == identities
+    assert tuple(entry.included for entry in snapshot.selection) == expected_included
+    assert case.connection.execute(
+        "SELECT ref_type,ref_id,ref_thread_id,included FROM context_assembly_selections "
+        "WHERE assembly_id=? ORDER BY plan_ordinal", (snapshot.assembly_id,),
+    ).fetchall() == [(*identity, int(included)) for identity, included in zip(identities, expected_included, strict=True)]
+    before = _state(case)
+    with RolloutCheckpointSaver(case.sessions) as cold:
+        loaded = cold.get_context_assembly(
+            case.session_id, thread_id=case.thread_id, assembly_id=snapshot.assembly_id,
+        )
+        assert loaded.to_dict() == snapshot.to_dict()
+        expected_body = [items[1 - omitted_ordinal].payload]
+        assert [message.content for message in cold.project_context_plan_to_history(case.session_id, case.thread_id, loaded.as_sealed_plan())] == expected_body
+        assert [message.content for message in cold.project_context_plan_to_messages(case.session_id, case.thread_id, loaded.as_sealed_plan())] == expected_body
+        native = cold.project_context_plan_to_native(case.session_id, case.thread_id, loaded.as_sealed_plan())
+        assert [value["content"][0]["text"] for value in native["request"]["input"]] == expected_body
+
+        def reject_allocation(*_args, **_kwargs):
+            pytest.fail("已提交 omission 重试必须在分配新身份之前完成比较")
+
+        monkeypatch.setattr(cold._detail_store, "prepare", reject_allocation)
+        monkeypatch.setattr(
+            "app.services.infrastructure.rollout_context.checkpoint.seal.lifecycle.uuid4",
+            reject_allocation,
+        )
+        retry = cold.seal_context_plan(
+            case.session_id, case.thread_id, plan, wire_profile=None, wire_params=None,
+            seal_idempotency_key="qualified-omission-seal", **options,
+        )
+        assert retry.to_dict() == snapshot.to_dict()
+        with pytest.raises(ValueError, match="assembly-idempotency-conflict"):
+            cold.seal_context_plan(
+                case.session_id, case.thread_id, plan, wire_profile=None, wire_params=None,
+                seal_idempotency_key="qualified-omission-seal",
+                **{**options, "omitted_ref_identities": (identities[1 - omitted_ordinal],)},
+            )
+    assert _state(case) == before
+
+
+@pytest.mark.parametrize("invalid", ["missing-thread", "wrong-thread", "wrong-tag", "unknown", "raw-id"])
+def test_composer_rejects_unknown_omission_identity_without_writes(
+    assembly_case, sibling_draft, invalid,
+):
+    case = assembly_case
+    plan, _items = sibling_draft
+    ref_type, ref_id, thread_id = selection_ref_identity(plan.refs[0])
+    invalid_identity = {
+        "missing-thread": (ref_type, ref_id),
+        "wrong-thread": (ref_type, ref_id, "unregistered-thread"),
+        "wrong-tag": ("request_only", ref_id, thread_id),
+        "unknown": (ref_type, "unregistered-ref", thread_id),
+        "raw-id": ref_id,
+    }[invalid]
+    before = _state(case)
+    with pytest.raises(ValueError, match="omitted ref identity 不在当前 plan registry") as error:
+        ContextPlanComposer().assembly(
+            plan=plan, assembly_id="invalid-omission-candidate",
+            session_id=case.session_id, thread_id=case.thread_id,
+            turn_id=case.turn_id, execution_id=case.execution_id,
+            provider_version="qualified-omission-test", omitted_ref_identities=(invalid_identity,),
+        )
+    assert repr(invalid_identity) in str(error.value)
+    assert _state(case) == before
+
+
+def test_retry_hash_distinguishes_sibling_omission_identities(sibling_draft):
+    plan, _items = sibling_draft
+    identities = tuple(selection_ref_identity(ref) for ref in plan.refs)
+    manifest = draft_manifest(plan)
+
+    def input_hash(omitted):
+        return seal_input_hash(
+            manifest, "", {"omitted_ref_identities": omitted, "loss": ()},
+            None, wire_configuration=None,
+        )
+
+    assert input_hash((identities[0],)) != input_hash((identities[1],))
+    assert input_hash(identities) == input_hash(tuple(reversed(identities)))
+
+
+@pytest.mark.parametrize("omitted_tag", ["canonical_item", "request_only", "tool_set"])
+def test_tagged_omission_keeps_same_id_request_detail_and_contribution_exact(
+    assembly_case, omitted_tag,
+):
+    case = assembly_case
+    root_id = case.connection.execute(
+        "SELECT root_input_item_id FROM turn_records WHERE turn_id=?", (case.turn_id,),
+    ).fetchone()[0]
+    item = case.saver._storage.storage.read_items(
+        case.session_id, case.thread_id, item_ids=(root_id,),
+    )[0]
+    plan_id = "tagged-omission-plan"
+    body = {"instructions": "同名 request-only 的独立正文"}
+    contribution = ContextContribution(
+        contribution_id=root_id, source_kind="workspace_instructions",
+        source_revision="tagged-source-v1", body=body,
+        content_hash=contribution_content_hash("prompt", body), source_ordinal=0,
+    )
+    refs = (
+        ContextRef.canonical_item(item, session_id=case.session_id, thread_id=case.thread_id),
+        ContextRef.request_only_ref(
+            root_id, session_id=case.session_id, thread_id=case.thread_id,
+            plan_id=plan_id, source_revision=contribution.source_revision,
+            content_hash_value=contribution.content_hash,
+            content_length=contribution.content_length,
+        ),
+    )
+    tool_ref = ToolSetRef.from_tool_snapshot(
+        session_id=case.session_id, thread_id=case.thread_id, plan_id=plan_id,
+        snapshot_id=root_id, source_revision=sha256_jcs("tagged-tools"),
+        tools=({"name": "identity_probe", "parameters": {"type": "object"}},),
+        tool_policy={"mode": "auto"},
+    )
+    plan = case.saver.create_context_plan(case.session_id, ContextRequestPlan(
+        session_id=case.session_id, thread_id=case.thread_id, plan_id=plan_id,
+        plan_creation_idempotency_key="tagged-omission-create", refs=refs,
+        contributions=(contribution,), tool_set_refs=(tool_ref,),
+    )).draft
+    registry = (*plan.refs, *plan.tool_set_refs)
+    omitted = next(ref for ref in registry if ref.ref_type == omitted_tag)
+    snapshot = case.saver.seal_context_plan(
+        case.session_id, case.thread_id, plan, wire_profile=None, wire_params=None,
+        turn_id=case.turn_id, execution_id=case.execution_id,
+        provider_version="tagged-omission-test", seal_idempotency_key="tagged-omission-seal",
+        omitted_ref_identities=(selection_ref_identity(omitted),),
+        request_only_content={root_id: object() if omitted_tag == "request_only" else body},
+    )
+    expected_identities = tuple(selection_ref_identity(ref) for ref in registry)
+    expected_included = tuple(tag != omitted_tag for tag in ("canonical_item", "request_only", "tool_set"))
+    assert tuple(selection_ref_identity(entry.ref) for entry in snapshot.selection) == expected_identities
+    assert tuple(entry.included for entry in snapshot.selection) == expected_included
+    request_entry = snapshot.selection[1]
+    if omitted_tag == "request_only":
+        assert snapshot.contributions == ()
+        assert request_entry.detail_ref is None
+        assert request_entry.contribution_id is None
+        assert request_entry.contribution_ordinal is None
+    else:
+        assert [source.contribution_id for source in snapshot.contributions] == [root_id]
+        assert request_entry.contribution_id == root_id
+        assert request_entry.contribution_ordinal == 0
+        assert request_entry.detail_ref is not None
+    assert snapshot.tool_snapshot == (() if omitted_tag == "tool_set" else tool_ref.tools)
+    with RolloutCheckpointSaver(case.sessions) as cold:
+        loaded = cold.get_context_assembly(
+            case.session_id, thread_id=case.thread_id, assembly_id=snapshot.assembly_id,
+        )
+        assert loaded.to_dict() == snapshot.to_dict()
+        if request_entry.included:
+            assert cold.read_context_plan_detail(
+                case.session_id, case.thread_id, detail_ref=loaded.selection[1].detail_ref,
+            )["detail"] == body
+
+
+def test_captured_ref_uses_local_frozen_body_without_live_sibling_fallback(assembly_case, sibling_assembly):
+    case = assembly_case
+    snapshot, _items = sibling_assembly
+    sibling = snapshot.refs[1]
+    # 目标有该历史 scope 的冻结 binding，但相同 ID 的本地正文不匹配。
+    # live sibling 仍完整可读；冷恢复必须暴露冻结正文冲突，不能在线回源掩盖。
+    case.connection.execute("BEGIN")
+    bind_captured_namespace(case.connection, HistoricalNamespaceBinding(
+        sibling.session_id, sibling.thread_id, "boxteam-session://captured-source",
+        "captured-rollout", "f" * 64,
+    ))
+    case.connection.commit()
+    cold = RolloutCheckpointSaver(case.sessions)
+    with pytest.raises(ValueError, match="source-mismatch"):
+        cold.project_context_plan_to_history(case.session_id, case.thread_id, snapshot.as_sealed_plan())
+
+
+def test_owner_prefix_rejects_foreign_same_id_canonical_ref(assembly_case, sibling_assembly):
+    snapshot, _items = sibling_assembly
+    state = initial_epoch_state(provider_profile="qualified-prefix", tool_compatibility_key=sha256_jcs("tools"))
+    binding = ContextSealBinding(
+        prefix=seal_assembly(state, assembly_id=snapshot.assembly_id), root=None,
+        tool_set_snapshot_id="qualified-tools", applied_toolset_revision=sha256_jcs("tools"),
+        selection_revision=sha256_jcs("selection"), previous_assembly_id=None,
+    )
+    registry = assembly_case.saver._storage.storage.read_ref_items(
+        assembly_case.session_id, assembly_case.thread_id, refs=snapshot.refs,
+    )
+    # CIL 的稳定前缀不跨线程；无 prefix 的上述三个投影允许精确 sibling ref。
+    with pytest.raises(ValueError, match="stable prefix 不得跨 thread"):
+        project_sealed_prefix(snapshot.as_sealed_plan(), binding, registry, {})
+    # registry 即使包含 sibling 同名正文，owner-only prefix 仍只取得 owner。
+    owner = ContextPlanComposer().assembly(
+        plan=ContextRequestPlan(session_id=snapshot.session_id, thread_id=snapshot.thread_id,
+                                plan_id=snapshot.plan_id, refs=snapshot.refs[:1]),
+        assembly_id=snapshot.assembly_id, session_id=snapshot.session_id, thread_id=snapshot.thread_id,
+        turn_id=snapshot.turn_id, execution_id=snapshot.execution_id, provider_version=snapshot.provider_version,
+    )
+    frames, _ids = project_canonical_prefix_frames(_items[:1], provider_profile=state.provider_profile, start_ordinal=0)
+    state = append_items(state, frames, desired_provider_profile=state.provider_profile,
+                         desired_tool_compatibility_key=state.tool_compatibility_key)
+    binding = replace(binding, prefix=seal_assembly(state, assembly_id=snapshot.assembly_id))
+    assert [message.content for message in project_sealed_prefix(owner.as_sealed_plan(), binding, registry, {})] == [_items[0].payload]
+
+
+@pytest.mark.parametrize("table", ("assembly_item_refs", "context_assembly_selections"))
+def test_cold_read_checks_manifest_ref_thread_field(assembly_case, sibling_assembly, table):
+    case = assembly_case
+    snapshot, _items = sibling_assembly
+    case.connection.execute(
+        f"UPDATE {table} SET ref_thread_id='wrong-thread' WHERE assembly_id=? AND ref_thread_id=?",
+        (snapshot.assembly_id, snapshot.refs[1].thread_id),
+    )
+    case.connection.commit()
+    with pytest.raises(RuntimeError, match="manifest"):
+        RolloutCheckpointSaver(case.sessions).get_context_assembly(
+            case.session_id, thread_id=case.thread_id, assembly_id=snapshot.assembly_id,
+        )
+
+
+def _restore_schema18(case: AssemblyCase) -> None:
+    """真实旧表：旧的内联二元 UNIQUE，所有已封存行和 ordinal 原样保留。"""
+    captured = {}
+    for table in ("assembly_item_refs", "context_assembly_selections"):
+        columns = [row[1] for row in case.connection.execute(f"PRAGMA table_info({table})") if row[1] != "ref_thread_id"]
+        captured[table] = columns, case.connection.execute(f"SELECT {','.join(columns)} FROM {table}").fetchall()
+        case.connection.execute(f"DROP TABLE {table}")
+    legacy = ASSEMBLY_REF_SCHEMA_SQL.replace(
+        "    ref_thread_id TEXT NOT NULL CHECK(length(ref_thread_id) > 0),\n", "",
+    ).replace(", ref_thread_id)", ")")
+    case.connection.executescript(legacy)
+    for table, (columns, rows) in captured.items():
+        case.connection.executemany(
+            f"INSERT INTO {table} ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})", rows,
+        )
+    case.connection.execute("UPDATE database_meta SET schema_version=18")
+    case.connection.execute(
+        "UPDATE schema_migrations SET to_version=18,migration_name='rollout_sqlite_v18',migration_checksum=? WHERE from_version=0",
+        (hashlib.sha256(b"rollout_sqlite_v18").hexdigest(),),
+    )
+    case.connection.commit()
+
+
+def _migrate_ref_threads(case: AssemblyCase) -> None:
+    snapshot = case.saver._storage.storage.migrate_schema(
+        case.thread_id, session_id=case.session_id, to_version=19,
+        migration_name="thread_qualified_assembly_refs", migration_sql=ASSEMBLY_REF_THREAD_MIGRATION_SQL,
+    )
+    snapshot.close()
+
+
+def test_schema18_migration_rebuilds_unique_keys_and_backfills_snapshot_threads(assembly_case):
+    case = assembly_case
+    snapshot = _seal(case, "schema18-migration")
+    _restore_schema18(case)
+    _migrate_ref_threads(case)
+    cold = RolloutCheckpointSaver(case.sessions)
+    assert cold.get_context_assembly(case.session_id, thread_id=case.thread_id, assembly_id=snapshot.assembly_id).refs == snapshot.refs
+    for table in ("assembly_item_refs", "context_assembly_selections"):
+        unique_columns = [tuple(row[2] for row in case.connection.execute(f"PRAGMA index_info({index[1]})"))
+                          for index in case.connection.execute(f"PRAGMA index_list({table})") if index[2]]
+        assert ("assembly_id", "ref_type", "ref_id", "ref_thread_id") in unique_columns
+        assert ("assembly_id", "ref_type", "ref_id") not in unique_columns
+    assert case.connection.execute("SELECT schema_version,database_state FROM database_meta").fetchone() == (19, "active")
+
+
+def test_schema18_migration_preserves_foreign_ref_thread_from_frozen_snapshot(assembly_case):
+    case = assembly_case
+    foreign = ContextRef("canonical_item", "omitted-foreign-item", session_id=case.session_id,
+                         thread_id=f"thr_{create_uuid_hex()}", availability="unavailable")
+    plan = case.saver.create_context_plan(case.session_id, ContextRequestPlan(
+        session_id=case.session_id, thread_id=case.thread_id, plan_id="foreign-migration-plan",
+        plan_creation_idempotency_key="foreign-migration-create", refs=(foreign,),
+    )).draft
+    snapshot = ContextPlanComposer().assembly(
+        plan=plan, assembly_id="foreign-migration-assembly", session_id=case.session_id,
+        thread_id=case.thread_id, turn_id=case.turn_id, execution_id=case.execution_id, provider_version="migration-test",
+    )
+    _seal_snapshot(case, snapshot)
+    _restore_schema18(case)
+    _migrate_ref_threads(case)
+    for table in ("assembly_item_refs", "context_assembly_selections"):
+        assert case.connection.execute(f"SELECT ref_thread_id FROM {table} WHERE assembly_id=?", (snapshot.assembly_id,)).fetchone() == (foreign.thread_id,)
+    assert foreign.thread_id != case.thread_id
+
+
+@pytest.mark.parametrize("corruption", ("missing_thread", "wrong_id", "wrong_ordinal", "registry_thread"))
+def test_schema18_migration_rejects_unrecoverable_identity_without_guessing_owner(assembly_case, corruption):
+    case = assembly_case
+    snapshot = _seal(case, f"schema18-invalid-{corruption}")
+    _restore_schema18(case)
+    if corruption == "registry_thread":
+        case.connection.execute("UPDATE context_plan_refs SET ref_thread_id='wrong-thread'")
+    else:
+        payload = snapshot.to_dict()
+        if corruption == "missing_thread":
+            del payload["refs"][0]["thread_id"]
+        elif corruption == "wrong_id":
+            payload["selection"][0]["ref"]["ref_id"] = "wrong-ref"
+        else:
+            payload["selection"][0]["plan_ordinal"] = 99
+        case.connection.execute("UPDATE context_assemblies SET snapshot_json=?", (json.dumps(payload),))
+    case.connection.commit()
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
+        _migrate_ref_threads(case)
+    assert case.connection.execute("SELECT schema_version,database_state FROM database_meta").fetchone() == (18, "recovery_required")
+    assert "ref_thread_id" not in {row[1] for row in case.connection.execute("PRAGMA table_info(assembly_item_refs)")}
 
 
 def test_admission_root_uses_visible_canonical_membership_outside_selection(assembly_case):
@@ -595,7 +1055,7 @@ def test_registration_cannot_authorize_another_assembly(assembly_case):
         turn_id=case.turn_id,
         execution_id=case.execution_id,
         provider_version="schema4-manifest-contract",
-        omitted_ref_ids=tuple(ref.ref_id for ref in registered.draft.refs),
+        omitted_ref_identities=tuple(selection_ref_identity(ref) for ref in registered.draft.refs),
     )
     before = _state(case)
     with pytest.raises(RuntimeError, match="registry binding 不一致"):

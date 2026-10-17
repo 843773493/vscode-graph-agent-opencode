@@ -13,12 +13,6 @@ const timeoutGraceMs = 30 * 1000;
 const defaultDataLimitKb = 8 * 1024 * 1024;
 const isPosix = process.platform !== "win32";
 
-function readArgument(name) {
-  const prefix = `--${name}=`;
-  const value = process.argv.slice(2).find((argument) => argument.startsWith(prefix));
-  return value?.slice(prefix.length) ?? null;
-}
-
 function validateSuite(suite) {
   if (!suite || typeof suite !== "object") throw new Error("测试 suite 必须是对象");
   if (typeof suite.id !== "string" || !suite.id) throw new Error("测试 suite 缺少 id");
@@ -75,6 +69,34 @@ async function loadMatrix() {
   }
   matrix.suites.forEach(validateSuite);
   return matrix;
+}
+
+function parseArguments(args) {
+  let listCount = 0;
+  let suiteCount = 0;
+  let suiteId = null;
+  for (const argument of args) {
+    if (argument === "--list") {
+      listCount += 1;
+    } else if (argument === "--all") {
+      throw new Error("不支持 --all；必须使用 --suite=<id> 选择单个测试套件");
+    } else if (argument === "--suite") {
+      throw new Error("--suite 缺少值；必须使用 --suite=<id>");
+    } else if (argument.startsWith("--suite=")) {
+      suiteCount += 1;
+      suiteId = argument.slice("--suite=".length);
+    } else {
+      throw new Error(`未知参数: ${argument}`);
+    }
+  }
+  if (listCount > 1) throw new Error("--list 不能重复");
+  if (suiteCount > 1) throw new Error("--suite 不能重复");
+  if (listCount > 0 && suiteCount > 0) throw new Error("--list 与 --suite 不能同时使用");
+  if (listCount === 1) return { mode: "list" };
+  if (suiteCount === 0) throw new Error("必须使用 --suite=<id> 选择测试套件；使用 --list 查看列表");
+  if (!suiteId.trim()) throw new Error("--suite 的值不能为空");
+  if (suiteId === "all") throw new Error("不支持 --suite=all；必须选择单个测试套件");
+  return { mode: "suite", suiteId };
 }
 
 function unmetPrerequisites(suite) {
@@ -137,7 +159,8 @@ async function runSuite(suite) {
 }
 
 const matrix = await loadMatrix();
-if (process.argv.includes("--list")) {
+const selection = parseArguments(process.argv.slice(2));
+if (selection.mode === "list") {
   for (const suite of matrix.suites) {
     process.stdout.write(
       `${suite.id}\t${suite.layer}\t${suite.client ?? "system"}\t${suite.enabled ? "enabled" : "TODO"}\n`,
@@ -146,8 +169,6 @@ if (process.argv.includes("--list")) {
   process.exit(0);
 }
 
-const suiteId = readArgument("suite");
-if (!suiteId) throw new Error("必须使用 --suite=<id> 选择测试套件；使用 --list 查看列表");
-const suite = matrix.suites.find((item) => item.id === suiteId);
-if (!suite) throw new Error(`测试矩阵中不存在 suite: ${suiteId}`);
+const suite = matrix.suites.find((item) => item.id === selection.suiteId);
+if (!suite) throw new Error(`测试矩阵中不存在 suite: ${selection.suiteId}`);
 process.exit(await runSuite(suite));

@@ -10,6 +10,7 @@ from app.domain.itemized.hashing import (
     payload_content_length,
     sha256_jcs,
 )
+from app.domain.itemized.identity.refs import ref_identity
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
@@ -28,11 +29,11 @@ def validate_projection_selection(
 
 def resolve_selected_item(
     entry: ContextSelectionEntry,
-    items: Mapping[str, CanonicalItemRecord],
+    items: Mapping[tuple[str, str, str], CanonicalItemRecord],
 ) -> CanonicalItemRecord:
     """三投影共用 canonical source 的正文完整性验证。"""
     ref = entry.ref
-    item = items.get(ref.ref_id)
+    item = items.get(ref_identity(ref))
     if item is None:
         raise ValueError(
             f"source-mismatch: context plan canonical ref 缺失: {ref.ref_id}"
@@ -42,7 +43,8 @@ def resolve_selected_item(
         or f"canonical:{item.item_id}:{item.content_hash}"
     )
     if (
-        ref.semantic_kind != item.semantic_kind
+        ref.ref_id != item.item_id
+        or ref.semantic_kind != item.semantic_kind
         or ref.payload_kind != item.payload_kind
         or ref.status != item.status
         or ref.source_revision != expected_source

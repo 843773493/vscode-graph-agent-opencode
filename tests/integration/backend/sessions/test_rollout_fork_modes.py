@@ -5550,6 +5550,24 @@ def _fork_intent_state(context: ForkIntegrationContext) -> tuple[object, ...]:
     return rows, entries
 
 
+def _session_control_state(path: Path) -> tuple[object, ...]:
+    """只读快照 session-control 中所有表，包含未发布的 child creation intent。"""
+    uri = path.as_uri() + "?mode=ro"
+    with sqlite3.connect(uri, uri=True) as connection:
+        tables = tuple(row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+        ))
+        state = []
+        for table in tables:
+            quoted = '"' + table.replace('"', '""') + '"'
+            rows = tuple(sorted(
+                (tuple(row) for row in connection.execute(f"SELECT * FROM {quoted}")),
+                key=repr,
+            ))
+            state.append((table, rows))
+    return tuple(state)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["terminal", "browser"])
 @pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
@@ -5688,6 +5706,43 @@ async def test_live_fork_preflight_rejects_before_target_or_attach(
         await context.forks.fork(request)
     assert _fork_intent_state(context) == before
     assert owner._store.records[resource["resource_id"]].fork_attachments == {}
+    assert external.revisions == revisions and external.creates == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["terminal", "browser"])
+async def test_thread_scope_live_fork_rejects_child_before_thread_creation(
+    production_fork_container: AppContainer, fork_provider_prepare, live_resource_transport_factory,
+    fork_gateway_request_context: None, kind: ResourceKind,
+) -> None:
+    context = _production_fork_context(production_fork_container)
+    external = live_resource_transport_factory(production_fork_container, kind)
+    source = await _seed_source(context, fork_provider_prepare)
+    owner, resource = await _create_fork_live_resource(
+        production_fork_container, kind, source.session_id, scope="thread",
+    )
+    request = (await _fork_request(
+        context, source.session_id, creation_kind="new_child_thread", mode="context_fork",
+    )).model_copy(update={"resources": [_fork_live_choice(resource)]})
+    session_node = context.sessions.path_resolver.resolve_session_node(source.session_id)
+    control_path = session_node / "session-control.sqlite"
+    control_before = _session_control_state(control_path)
+    intent_before = _fork_intent_state(context)
+    revisions = list(external.revisions)
+    owner_before = await owner.get_resource(resource["resource_id"])
+    child_key = context.forks._creation_key(request.idempotency_key)
+
+    with pytest.raises(ValueError, match="fork_live_resource_rejected:"):
+        await context.forks.fork(request)
+
+    control_after = _session_control_state(control_path)
+    intent_after = _fork_intent_state(context)
+    assert control_after == control_before
+    assert intent_after == intent_before
+    with pytest.raises(KeyError):
+        context.forks._threads.for_owner_session(source.session_id).control_store.get_thread_creation_record(child_key)
+    assert owner._store.records[resource["resource_id"]].fork_attachments == {}
+    assert await owner.get_resource(resource["resource_id"]) == owner_before
     assert external.revisions == revisions and external.creates == 1
 
 

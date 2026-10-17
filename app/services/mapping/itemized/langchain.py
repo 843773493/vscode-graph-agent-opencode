@@ -13,7 +13,10 @@ from langchain_core.messages import BaseMessage, SystemMessage
 
 from app.domain.itemized.epoch.seal_binding import ContextSealBinding
 from app.domain.itemized.identity.detail_ref import DetailRef
-from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
+from app.domain.itemized.identity.refs import (
+    ToolSetRef,
+    selection_ref_identity,
+)
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.services.mapping.itemized.canonical_langchain import (
@@ -29,7 +32,7 @@ from app.services.mapping.itemized.selection import (
 
 def project_context_plan(
     plan: ContextRequestPlan,
-    items: Iterable[CanonicalItemRecord],
+    items: Mapping[tuple[str, str, str], CanonicalItemRecord],
     *,
     include_runtime_notices: bool = False,
     include_summaries: bool = False,
@@ -41,15 +44,11 @@ def project_context_plan(
     """只按 Saver seal 的 selection 生成消息，缺失或 mismatch 立即失败。"""
     if plan.plan_state != "sealed" or plan.assembly_id is None:
         raise ValueError("context plan 未 sealed，不能进入 projector")
-    item_values = tuple(items)
     if seal_binding is not None and include_request_only:
         return project_sealed_prefix(
-            plan, seal_binding, item_values, request_only_content or {},
+            plan, seal_binding, items, request_only_content or {},
         )
-    by_id = {item.item_id: item for item in item_values}
-    if len(by_id) != len(item_values):
-        raise ValueError("canonical item registry 存在重复 item_id")
-    ref_registry = {(ref.ref_type, ref.ref_id): ref for ref in plan.refs}
+    ref_registry = {selection_ref_identity(ref): ref for ref in plan.refs}
     contribution_registry = {
         contribution.contribution_id: contribution
         for contribution in plan.contributions
@@ -90,22 +89,11 @@ def project_context_plan(
             )
             canonical_run.clear()
 
-    selected_items: list[CanonicalItemRecord] = []
+    seen: set[tuple[str, ...]] = set()
+    canonical_thread: str | None = None
     for entry in validate_projection_selection(plan.selection):
-        if not entry.included or not isinstance(entry.ref, ContextRef):
-            continue
-        if entry.ref.ref_type != "canonical_item":
-            continue
-        item = by_id.get(entry.ref.ref_id)
-        if item is None:
-            raise ValueError(
-                f"source-mismatch: context plan canonical ref 缺失: {entry.ref.ref_id}"
-            )
-        selected_items.append(item)
-    seen: set[tuple[str, str]] = set()
-    for entry in plan.selection:
         ref = entry.ref
-        identity = (ref.ref_type, ref.ref_id)
+        identity = selection_ref_identity(ref)
         if identity in seen:
             raise ValueError(f"plan-order-integrity: selection 重复: {identity}")
         seen.add(identity)
@@ -137,7 +125,10 @@ def project_context_plan(
             raise ValueError(f"plan-order-integrity: selection ref 缺失: {ref.ref_id}")
         if ref.ref_type == "canonical_item":
             flush_system()
-            item = resolve_selected_item(entry, by_id)
+            item = resolve_selected_item(entry, items)
+            if canonical_thread != ref.thread_id:
+                flush_canonical()
+            canonical_thread = ref.thread_id
             canonical_run.append(item)
             continue
         if not include_request_only:

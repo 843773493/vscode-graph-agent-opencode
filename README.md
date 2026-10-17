@@ -19,6 +19,9 @@
 | 构建当前纯 Web 客户端 | `bun run build:web` |
 | 查看测试套件矩阵 | `bun run test:matrix -- --list` |
 | 运行指定测试套件 | `bun run test:matrix -- --suite=contracts-python` |
+| 运行 Web E2E 全目录（Section 8 默认场景） | `BOXTEAM_E2E_SECTION8_FOCUS=default bun run test:matrix -- --suite=e2e-web` |
+| 运行 Web Section 8 默认场景集 | `BOXTEAM_E2E_SECTION8_FOCUS=default bun run test:matrix -- --suite=e2e-web-basic-chat-tool-loop` |
+| 聚焦附件复制 Web 场景 | `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment bun run test:matrix -- --suite=e2e-web-basic-chat-tool-loop` |
 
 ### Python — uv
 
@@ -28,7 +31,7 @@
 | 添加依赖 | `uv add <package>` |
 | 移除依赖 | `uv remove <package>` |
 | 同步依赖（首次/拉取后） | `uv sync` |
-| 运行测试 | `uv run pytest` |
+| 运行单元测试 | `bun run test:matrix -- --suite=unit-python` |
 | 运行 lint | `uv run ruff check .` |
 
 > 当前只开发 `src/clients/web/` 纯 Web 客户端。Electron、React Native 及其 parity 客户端仅保留清晰的运行面边界。首次运行请分别执行根目录 `bun install` 与 `bun install --cwd src/clients/web`。

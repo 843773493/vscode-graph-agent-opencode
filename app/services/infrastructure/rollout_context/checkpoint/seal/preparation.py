@@ -24,7 +24,7 @@ from app.domain.itemized.epoch.prefix_epoch import (
 )
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
-from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
 from app.domain.itemized.request_plan import resolve_contribution_for_ref
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.domain.itemized.serialization import normalize_wire_request
@@ -35,6 +35,9 @@ from app.services.infrastructure.mcp.catalog_activation import (
 )
 from app.services.infrastructure.rollout_context.assembly.manifest import (
     _frozen_source_refs,
+)
+from app.services.infrastructure.rollout_context.assembly.plans.registry import (
+    _new_validated_predecessors,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextPlanRegistration,
@@ -213,6 +216,8 @@ def prepare_registered_context(
                 target_format=target_format, checkpoint_ns=checkpoint_ns,
             )
         else:
+            # 成功摘要仅沿本次 prepare 传给 seal writer 的前驱重读，不跨请求保存对象。
+            validated_predecessors = _new_validated_predecessors()
             # 只有新请求读取 desired；已 sealed/in-flight attempt 完全复用旧 binding。
             tool_set = tool_set_supplier()
             if not isinstance(tool_set, ToolSetSnapshot):
@@ -264,7 +269,9 @@ def prepare_registered_context(
                 if seed_source is not None:
                     batch = PendingContextSourceBatch(deltas=batch.deltas, sources=(*batch.sources, seed_source))
             with owner._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns) as read_snapshot:
-                previous = owner._storage.assemblies.latest_context_assembly(read_snapshot)
+                previous = owner._storage.assemblies.latest_context_assembly(
+                    read_snapshot, validated_predecessors=validated_predecessors,
+                )
             batch = _activation_guidance_batch(
                 owner, activation_snapshot, previous, batch, checkpoint_ns=checkpoint_ns,
             )
@@ -301,6 +308,7 @@ def prepare_registered_context(
                     previous = None if latest_id is None else assemblies._read_context_assembly_connection(
                         read_snapshot.connection, session_id, thread_id,
                         assembly_id=latest_id, checkpoint_ns=checkpoint_ns,
+                        validated_predecessors=validated_predecessors,
                     )[0]
                 initial_assembly = previous is not None and (
                     previous.session_id, previous.thread_id
@@ -403,7 +411,7 @@ def prepare_registered_context(
                 plan = replace(plan, refs=(*candidate_refs, *backing),
                                contributions=tuple(registered_sources),
                                selection_policy="summary_candidate")
-                omitted = tuple(ref.ref_id for ref in backing)
+                omitted = tuple(selection_ref_identity(ref) for ref in backing)
             registered = owner.create_context_plan(
                 session_id, replace(plan, plan_creation_idempotency_key=plan_creation_idempotency_key),
                 checkpoint_ns=checkpoint_ns,
@@ -412,11 +420,12 @@ def prepare_registered_context(
                 owner, session_id, thread_id, registered.draft,
                 # 复用本次创建返回值；写事务仍重新读取并校验当前 registry/CAS。
                 registered=registered,
+                validated_predecessors=validated_predecessors,
                 seal_idempotency_key=seal_idempotency_key,
                 assembly_options={
                     "turn_id": turn_id, "execution_id": execution_id,
                     "provider_version": provider_version, "model_call_id": model_call_id,
-                    "target_format": target_format, "loss": (), "omitted_ref_ids": frozenset(omitted),
+                    "target_format": target_format, "loss": (), "omitted_ref_identities": frozenset(omitted),
                 },
                 wire_profile=wire_profile, wire_params=wire_params,
                 request_input_hash=input_hash,

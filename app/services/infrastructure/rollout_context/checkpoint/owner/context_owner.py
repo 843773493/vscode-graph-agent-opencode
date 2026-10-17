@@ -343,7 +343,7 @@ class ContextOwnerMixin(
         session_id: str,
         thread_id: str,
         committed_snapshot: ContextAssemblySnapshot,
-        items: list[CanonicalItemRecord],
+        items: Mapping[tuple[str, str, str], CanonicalItemRecord],
         resolved_request_content: Mapping[str, object],
         *,
         include_runtime_notices: bool,

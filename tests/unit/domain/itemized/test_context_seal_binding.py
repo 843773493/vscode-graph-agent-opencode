@@ -282,6 +282,29 @@ def test_wire_request_is_isolated_from_input_getter_and_serialization(snapshot):
         snapshot.validate_hashes()
 
 
+def test_snapshot_tool_snapshot_is_isolated_from_input_getter_and_serialization(
+    snapshot, tool_set,
+):
+    tools = tool_set.tools
+    snapshot = replace(snapshot, tool_snapshot=tools)
+    expected_tools = tool_set.tools
+    expected_manifest = snapshot.to_dict()
+    expected_hashes = snapshot.plan_hash, snapshot.request_hash
+    snapshot.validate_hashes()
+
+    for copied_tools in (tools, snapshot.tool_snapshot, snapshot.to_dict()["tool_snapshot"]):
+        parameters = copied_tools[0]["function"]["parameters"]
+        parameters["properties"]["path"]["type"] = "number"
+        parameters["required"].append("副本新增字段")
+        assert snapshot.tool_snapshot == expected_tools
+        plan = snapshot.as_sealed_plan()
+        assert plan.tool_snapshot == expected_tools
+        assert plan.plan_hash() == expected_hashes[0]
+        assert snapshot.to_dict() == expected_manifest
+        assert (snapshot.plan_hash, snapshot.request_hash) == expected_hashes
+        snapshot.validate_hashes()
+
+
 @pytest.fixture
 def tampered_binding(binding):
     """保持 ToolSet identity，却共同改写 root/prefix 并重算帧摘要。"""

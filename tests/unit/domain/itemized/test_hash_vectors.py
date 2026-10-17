@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import json
+import re
 import struct
+from collections import UserDict
 from copy import deepcopy
 from dataclasses import replace
 from decimal import Decimal
+from types import MappingProxyType
 
 import pytest
 
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hash import plan_hash, request_hash
 from app.domain.itemized.hashing import (
+    _ensure_json_value,
     canonical_json_bytes,
     canonical_json_bytes_and_hash,
     content_hash,
@@ -148,6 +152,54 @@ def test_jcs_bytes_and_hash_freeze_same_input_without_caching() -> None:
 def test_non_json_values_are_rejected(value: object) -> None:
     with pytest.raises(ItemSchemaError):
         canonical_json_bytes(value)
+
+
+def test_jcs_adapts_nested_mapping_and_large_integers_without_mutating_input() -> None:
+    counter = UserDict({"counter": 2**53, "flag": True})
+    children = (counter, 10**20)
+    value = MappingProxyType({"tuple": children})
+    expected = b'{"tuple":[{"counter":9007199254740992,"flag":true},100000000000000000000]}'
+
+    assert canonical_json_bytes(value) == expected
+    assert canonical_json_bytes_and_hash(value) == (
+        expected, sha256_jcs(json.loads(expected)),
+    )
+    assert value["tuple"] is children
+    assert children[0] is counter
+    assert counter == {"counter": 2**53, "flag": True}
+    assert type(counter["counter"]) is int
+    assert type(children[1]) is int
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ({"a": [{1: "bad key"}]}, "value.a[0] object key 必须是字符串"),
+        ({"a": ["\ud800"]}, "'value.a[0]' 包含非法 Unicode surrogate"),
+        ({"a": {"\udfff": "value"}}, "'value.a object key' 包含非法 Unicode surrogate"),
+        ({"a": [float("inf")]}, "value.a[0] 包含非有限浮点数"),
+        ({"a": [b"bytes"]}, "value.a[0] 不是 JSON value: bytes"),
+        ({"large": 2**53 + 1, "later": float("nan")}, "value.later 包含非有限浮点数"),
+        ({"large": 2**53 + 1, "later": {1: "value"}}, "value.later object key 必须是字符串"),
+    ],
+)
+def test_jcs_keeps_nested_validation_paths_and_error_precedence(
+    value: object, message: str,
+) -> None:
+    with pytest.raises(ItemSchemaError, match=re.escape(message)):
+        canonical_json_bytes(value)
+    with pytest.raises(ItemSchemaError, match=re.escape(message)):
+        canonical_json_bytes_and_hash(value)
+
+
+@pytest.mark.parametrize("number", [2**53 + 1, 10**400])
+def test_plain_json_validation_does_not_adapt_jcs_integer_range(number: int) -> None:
+    value = {"counter": number}
+    assert _ensure_json_value(value) is None
+    with pytest.raises(ItemSchemaError, match="整数"):
+        canonical_json_bytes(value)
+    assert value == {"counter": number}
+    assert type(value["counter"]) is int
 
 
 def test_request_normalization_cannot_coerce_non_string_keys(

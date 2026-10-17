@@ -19,9 +19,13 @@ from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.hash.request_hash import _context_request_hash_preimage
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.identity.refs import ref_identity
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.serialization import normalize_wire_request
+from app.services.infrastructure.rollout_context.assembly.plans.registry import (
+    _ValidatedPredecessors,
+)
 from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextAssemblySealReceipt,
     ContextPlanRegistration,
@@ -71,7 +75,7 @@ def _project_wire_snapshot(
     owner,
     snapshot: ContextAssemblySnapshot,
     sealed_plan: ContextRequestPlan,
-    items: list[CanonicalItemRecord],
+    items: dict[tuple[str, str, str], CanonicalItemRecord],
     prepared_details: tuple[PreparedDetail, ...],
     wire_profile: ChatWireProfile | ResponsesWireProfile,
     wire_params: Mapping[str, object],
@@ -150,20 +154,21 @@ def seal_snapshot(
     wire: tuple[ChatWireProfile | ResponsesWireProfile, Mapping[str, object]] | None,
     activation_binding: ActivationSealBinding | None = None,
     prepared_details: tuple[PreparedDetail, ...] = (),
+    validated_predecessors: _ValidatedPredecessors | None = None,
 ) -> tuple[ContextAssemblySealReceipt, ContextProjection | None]:
-    source_ids = tuple(
-        entry.ref.ref_id for entry in snapshot.selection
+    source_refs = tuple(
+        entry.ref for entry in snapshot.selection
         if entry.ref.ref_type == "canonical_item" and (
             entry.included or snapshot.selection_policy == "summary_candidate"
         )
     )
-    tool_ids = tuple(
-        entry.ref.ref_id for entry in snapshot.selection
+    tool_refs = tuple(
+        entry.ref for entry in snapshot.selection
         if entry.included and entry.ref.ref_type == "canonical_item"
         and entry.ref.semantic_kind in (SemanticKind.TOOL_CALL.value, SemanticKind.TOOL_RESULT.value)
     )
-    tool_id_set = frozenset(tool_ids)
-    items: list[CanonicalItemRecord] = []
+    tool_keys = frozenset(ref_identity(ref) for ref in tool_refs)
+    items: dict[tuple[str, str, str], CanonicalItemRecord] = {}
     projection = None
     if wire is not None:
         try:
@@ -171,9 +176,9 @@ def seal_snapshot(
             if snapshot.seal_binding is None:
                 raise ValueError("source-mismatch: wire seal 缺少已绑定 prefix")
             # wire 首次投影、tool preflight 与 source 验证只消费本次 fresh 读。
-            # read_items 返回前已关闭读 snapshot，后续 projector 不持有读锁。
-            items = owner._storage.storage.read_items(
-                session_id, thread_id, item_ids=source_ids, checkpoint_ns=checkpoint_ns,
+            # read_ref_items 返回前已关闭读 snapshot，后续 projector 不持有读锁。
+            items = owner._storage.storage.read_ref_items(
+                session_id, thread_id, refs=source_refs, checkpoint_ns=checkpoint_ns,
             )
             snapshot, projection = _project_wire_snapshot(
                 owner, snapshot, sealed_plan, items, prepared_details, wire[0], wire[1], checkpoint_ns,
@@ -195,16 +200,16 @@ def seal_snapshot(
     # 已提交 assembly 的幂等重试不重新绑定 activation：旧 assembly 若在接入前
     # 封存，其 activation 事实必须由显式迁移 quarantine 表达，不得在重试时补造。
     bind_activation = _activation_binding_callable(activation_binding, snapshot)
-    if wire is None and tool_ids:
+    if wire is None and tool_refs:
         # 直接 snapshot seal 保留 tool-first：非工具正文错误不得抢先于 preflight。
-        items = owner._storage.storage.read_items(
-            session_id, thread_id, item_ids=tool_ids, checkpoint_ns=checkpoint_ns,
+        items = owner._storage.storage.read_ref_items(
+            session_id, thread_id, refs=tool_refs, checkpoint_ns=checkpoint_ns,
         )
     # seal 与已提交 retry 都必须先通过唯一 preflight；冲突 fail closed，
     # 不进入字节比对或 detail 写入。
     validate_seal_dispatch_invariants(
         snapshot,
-        tool_pairings=canonical_tool_pairings(item for item in items if item.item_id in tool_id_set),
+        tool_pairings=canonical_tool_pairings({key: item for key, item in items.items() if key in tool_keys}),
     )
     if (registered.session_id, registered.thread_id, registered.draft.plan_id) != (
         snapshot.session_id, snapshot.thread_id, snapshot.plan_id,
@@ -283,9 +288,9 @@ def seal_snapshot(
         if wire is None:
             # tool 读取后至此只有纯 preflight；同次局部值不重复解码。
             # 空补集仍经过 fresh reader，保留原 source authority 边界。
-            items.extend(owner._storage.storage.read_items(
+            items.update(owner._storage.storage.read_ref_items(
                 session_id, thread_id, checkpoint_ns=checkpoint_ns,
-                item_ids=tuple(item_id for item_id in source_ids if item_id not in tool_id_set),
+                refs=tuple(ref for ref in source_refs if ref_identity(ref) not in tool_keys),
             ))
         owner._validate_snapshot_sources(
             snapshot, checkpoint_ns, items=items, prepared_details=prepared_details,
@@ -321,6 +326,7 @@ def seal_snapshot(
             activation_binding=bind_activation,
             prepared_details=prepared_details + ((header,) if header is not None else ()),
             detail_store=owner._detail_store,
+            validated_predecessors=validated_predecessors,
         )
         return receipt, projection
     except BaseException as error:

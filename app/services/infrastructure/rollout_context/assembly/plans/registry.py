@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime
+from hashlib import sha256
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.hashing import canonical_json_bytes_and_hash
@@ -32,6 +34,37 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as json_text,
 )
 
+_VALIDATION_STATE_TOKEN = object()
+
+
+class _ValidatedPredecessors:
+    """仅接收当前 prepare 中由 registry 成功校验的前驱指纹。"""
+
+    __slots__ = ("_fingerprints",)
+
+    def __init__(self, token: object) -> None:
+        if token is not _VALIDATION_STATE_TOKEN:
+            raise TypeError("前驱校验状态只能由 plan registry 创建")
+        self._fingerprints: set[bytes] = set()
+
+    def __contains__(self, fingerprint: bytes) -> bool:
+        return fingerprint in self._fingerprints
+
+    def __iter__(self) -> Iterator[bytes]:
+        return iter(self._fingerprints)
+
+    def __len__(self) -> int:
+        return len(self._fingerprints)
+
+    def _record(self, fingerprint: bytes, token: object) -> None:
+        if token is not _VALIDATION_STATE_TOKEN:
+            raise TypeError("前驱校验状态只能记录 registry 验证结果")
+        self._fingerprints.add(fingerprint)
+
+
+def _new_validated_predecessors() -> _ValidatedPredecessors:
+    return _ValidatedPredecessors(_VALIDATION_STATE_TOKEN)
+
 
 def require_transaction(connection: sqlite3.Connection) -> None:
     if not connection.in_transaction:
@@ -55,12 +88,18 @@ def read_registration(
     session_id: str,
     thread_id: str,
     plan_id: str,
+    *,
+    validated_predecessors: _ValidatedPredecessors | None = None,
 ) -> ContextPlanRegistration:
+    if validated_predecessors is not None and not isinstance(
+        validated_predecessors, _ValidatedPredecessors,
+    ):
+        raise TypeError("前驱校验状态必须由 plan registry 创建")
     require_historical_scope(connection, session_id, thread_id)
     row = connection.execute(
         "SELECT draft_json, draft_hash, creation_hash, revision, plan_state, assembly_id, "
         "seal_idempotency_key, seal_hash, plan_creation_idempotency_key, creation_json, "
-        "seal_input_hash "
+        "seal_input_hash, created_at, updated_at "
         "FROM context_plans WHERE session_id = ? AND thread_id = ? AND plan_id = ?",
         (session_id, thread_id, plan_id),
     ).fetchone()
@@ -122,16 +161,33 @@ def read_registration(
     snapshot = None
     if row[4] == "sealed":
         assembly = connection.execute(
-            "SELECT snapshot_json, detail_ref, status FROM context_assemblies "
+            "SELECT snapshot_json, detail_ref, status, assembly_id, session_id, thread_id, "
+            "plan_id, plan_hash, request_hash, turn_id, execution_id, history_view_revision, "
+            "source_overlay_epoch, model_call_id, outcome, created_at, sealed_at, terminal_at "
+            "FROM context_assemblies "
             "WHERE session_id = ? AND thread_id = ? AND plan_id = ? AND assembly_id = ?",
             (session_id, thread_id, plan_id, row[5]),
         ).fetchone()
         if assembly is None or assembly[2] not in {"sealed", "terminal"}:
             raise ValueError("source-mismatch: sealed plan 缺少同一 assembly")
         snapshot = ContextAssemblySnapshot.from_dict(json.loads(assembly[0]))
-        validate_sealed_plan(plan, snapshot)
-        if row[7] != runtime_seal_hash(snapshot, assembly[1], row[10]):
-            raise ValueError("source-mismatch: sealed plan preimage 与 assembly 不一致")
+        fingerprint = None
+        if validated_predecessors is not None:
+            # 只保存本次 prepare 的成功摘要；每次仍读取 SQL、校验 registry 并重建 snapshot。
+            # 精确 JSON 字节和所有持久 scalar 均绑定，不能用稳定 ID 代替 seal 输入。
+            snapshot_bytes = assembly[0].encode("utf-8") if isinstance(assembly[0], str) else assembly[0]
+            fingerprint = sha256(repr((
+                session_id, thread_id, plan_id,
+                sha256(row[0].encode("utf-8")).digest(), *row[1:9],
+                sha256(row[9].encode("utf-8")).digest(), *row[10:],
+                type(assembly[0]).__name__, sha256(snapshot_bytes).digest(), *assembly[1:],
+            )).encode("utf-8")).digest()
+        if validated_predecessors is None or fingerprint not in validated_predecessors:
+            validate_sealed_plan(plan, snapshot)
+            if row[7] != runtime_seal_hash(snapshot, assembly[1], row[10]):
+                raise ValueError("source-mismatch: sealed plan preimage 与 assembly 不一致")
+            if validated_predecessors is not None and fingerprint is not None:
+                validated_predecessors._record(fingerprint, _VALIDATION_STATE_TOKEN)
     return ContextPlanRegistration(
         session_id=session_id,
         thread_id=thread_id,

@@ -72,6 +72,20 @@ def read_namespace_bindings(
     return tuple(bindings)
 
 
+def read_local_scopes(
+    connection: sqlite3.Connection,
+    *,
+    historical_scope_key: tuple[str, str] | None = None,
+) -> frozenset[tuple[str, str]]:
+    """唯一的本地可读 scope 集合；binding 必须先通过冻结 hash 校验。"""
+    return frozenset({
+        current_scope(connection),
+        *((binding.session_id, binding.thread_id) for binding in read_namespace_bindings(
+            connection, historical_scope_key=historical_scope_key,
+        )),
+    })
+
+
 def require_historical_scope(
     connection: sqlite3.Connection,
     session_id: str,
@@ -86,10 +100,7 @@ def require_historical_scope(
     requested = (session_id, thread_id)
     if requested == owner:
         return
-    if requested not in {
-        (binding.session_id, binding.thread_id)
-        for binding in read_namespace_bindings(connection, historical_scope_key=requested)
-    }:
+    if requested not in read_local_scopes(connection, historical_scope_key=requested):
         raise ValueError(
             "source-mismatch: 历史 SessionThread 不属于目标本地冻结 snapshot: "
             f"current={owner}, historical={requested}"
@@ -145,6 +156,7 @@ __all__ = [
     "HistoricalNamespaceBinding",
     "bind_captured_namespace",
     "current_scope",
+    "read_local_scopes",
     "read_namespace_bindings",
     "require_historical_scope",
     "require_resumable_turn",

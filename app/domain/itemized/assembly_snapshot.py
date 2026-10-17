@@ -84,10 +84,13 @@ class ContextAssemblySnapshot:
 
     def __post_init__(self) -> None:
         tools = object.__getattribute__(self, "tool_snapshot")
-        object.__setattr__(self, "tool_snapshot", copy_json_value(tools))
-        object.__setattr__(self, "request_hash_preimage", copy_json_value(
+        tools = copy_json_value(tools)
+        request_hash_preimage = copy_json_value(
             object.__getattribute__(self, "request_hash_preimage")
-        ))
+        )
+        object.__setattr__(self, "tool_snapshot", tools)
+        object.__setattr__(self, "request_hash_preimage", request_hash_preimage)
+        # 构造内校验共用本次已隔离的 JSON；对外 getter 仍逐次返回副本。
         for name in (
             "assembly_id",
             "session_id",
@@ -114,14 +117,12 @@ class ContextAssemblySnapshot:
             self.projector_version, "ContextAssemblySnapshot.projector_version"
         )
         _non_empty_string(self.target_format, "ContextAssemblySnapshot.target_format")
-        if self.request_hash_preimage is not None:
+        if request_hash_preimage is not None:
             _ensure_json_value(
-                self.request_hash_preimage,
+                request_hash_preimage,
                 "ContextAssemblySnapshot.request_hash_preimage",
             )
-            if normalize_wire_request(self.request_hash_preimage) != (
-                self.request_hash_preimage
-            ):
+            if normalize_wire_request(request_hash_preimage) != request_hash_preimage:
                 raise ItemSchemaError(
                     "ContextAssemblySnapshot.request_hash_preimage 必须已规范化，"
                     "不得包含认证、传输或易变字段"
@@ -156,7 +157,7 @@ class ContextAssemblySnapshot:
         for name, value in (
             ("refs", self.refs),
             ("contributions", self.contributions),
-            ("tool_snapshot", self.tool_snapshot),
+            ("tool_snapshot", tools),
             ("tool_set_refs", self.tool_set_refs),
             ("selection", self.selection),
         ):
@@ -166,12 +167,12 @@ class ContextAssemblySnapshot:
             isinstance(value, str) and value for value in self.loss
         ):
             raise ItemSchemaError("ContextAssemblySnapshot.loss 必须是非空字符串 tuple")
-        if not all(isinstance(tool, Mapping) for tool in self.tool_snapshot):
+        if not all(isinstance(tool, Mapping) for tool in tools):
             raise ItemSchemaError(
                 "ContextAssemblySnapshot.tool_snapshot 元素必须是 object"
             )
         _ensure_json_value(
-            self.tool_snapshot,
+            tools,
             "ContextAssemblySnapshot.tool_snapshot",
         )
         for ref in self.refs:
@@ -334,7 +335,7 @@ class ContextAssemblySnapshot:
         expected_tool_snapshot = tuple(
             tool for ref in self._selected_tool_refs() for tool in ref.tools
         )
-        if canonical_json_bytes(self.tool_snapshot) != canonical_json_bytes(expected_tool_snapshot):
+        if canonical_json_bytes(tools) != canonical_json_bytes(expected_tool_snapshot):
             raise ItemSchemaError(
                 "ContextAssemblySnapshot.tool_snapshot 与已选 ToolSet manifest 不一致"
             )

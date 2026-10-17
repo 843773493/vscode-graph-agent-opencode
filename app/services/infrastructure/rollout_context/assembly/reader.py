@@ -11,6 +11,7 @@ from app.services.infrastructure.rollout_context.assembly.detail_identity import
     optional_detail_ref_key,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
+    _ValidatedPredecessors,
     read_registration,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.types import (
@@ -75,11 +76,13 @@ class ContextAssemblyReaderMixin:
 
     def latest_context_assembly(
         self, snapshot: RolloutReadSnapshot,
+        *, validated_predecessors: _ValidatedPredecessors | None = None,
     ) -> ContextAssemblySnapshot | None:
         """在 caller 的同一 SQLite snapshot 中读取并验证唯一 applied predecessor。"""
         return self._latest_context_assembly_connection(
             snapshot.connection, snapshot.session_id, snapshot.thread_id,
             checkpoint_ns=snapshot.checkpoint_ns,
+            validated_predecessors=validated_predecessors,
         )
 
     def _latest_context_assembly_connection(
@@ -90,6 +93,7 @@ class ContextAssemblyReaderMixin:
         *,
         checkpoint_ns: str,
         excluding_assembly_id: str | None = None,
+        validated_predecessors: _ValidatedPredecessors | None = None,
     ) -> ContextAssemblySnapshot | None:
         """同一读或 seal 事务共用精确可见的历史 predecessor。"""
         assembly_id = self._latest_context_assembly_id_connection(
@@ -101,6 +105,7 @@ class ContextAssemblyReaderMixin:
         return self._read_context_assembly_connection(
             connection, session_id, thread_id,
             assembly_id=assembly_id, checkpoint_ns=checkpoint_ns,
+            validated_predecessors=validated_predecessors,
         )[0]
 
     def _latest_context_assembly_id_connection(
@@ -135,10 +140,12 @@ class ContextAssemblyReaderMixin:
         self, connection: sqlite3.Connection, session_id: str, thread_id: str,
         *, assembly_id: str, checkpoint_ns: str,
         registration: ContextPlanRegistration | None = None,
+        validated_predecessors: _ValidatedPredecessors | None = None,
     ) -> tuple[ContextAssemblySnapshot, DetailRef | None]:
         snapshot, header_ref, registration = self._read_context_assembly_header(
             connection, session_id, thread_id, assembly_id=assembly_id,
             registration=registration,
+            validated_predecessors=validated_predecessors,
         )
         self._validate_context_assembly_manifest(
             connection,
@@ -153,6 +160,7 @@ class ContextAssemblyReaderMixin:
         self, connection: sqlite3.Connection, session_id: str, thread_id: str,
         *, assembly_id: str,
         registration: ContextPlanRegistration | None = None,
+        validated_predecessors: _ValidatedPredecessors | None = None,
     ) -> tuple[ContextAssemblySnapshot, DetailRef | None, ContextPlanRegistration]:
         """精确校验封存前驱的身份和 registry hash，不递归展开历史前驱链。
 
@@ -183,6 +191,7 @@ class ContextAssemblyReaderMixin:
         if registration is None:
             registration = read_registration(
                 connection, *historical_owner, required_text(row[2], field="plan_id"),
+                validated_predecessors=validated_predecessors,
             )
         if (registration.session_id, registration.thread_id, registration.draft.plan_id) != (
             *historical_owner, row[2],

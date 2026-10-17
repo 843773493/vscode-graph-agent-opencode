@@ -228,7 +228,7 @@ def test_crash_recovery_preserves_commit_with_independent_idle_reader(
         "provider_version": "reader-contract",
         "model_call_id": None,
         "target_format": "unknown",
-        "omitted_ref_ids": (),
+        "omitted_ref_identities": (),
         "loss": (),
     }
     input_hash = seal_input_hash(

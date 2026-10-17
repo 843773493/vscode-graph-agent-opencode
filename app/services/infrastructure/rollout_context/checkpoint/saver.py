@@ -604,13 +604,12 @@ class RolloutCheckpointSaver(
             if entry.included and isinstance(entry.ref, ContextRef)
             and entry.ref.ref_type == "canonical_item"
         )
-        items = self._storage.storage.read_items(
+        items = self._storage.storage.read_ref_items(
             session_id, thread_id, checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
-            item_ids=tuple(entry.ref.ref_id for entry in entries),
+            refs=tuple(entry.ref for entry in entries),
         )
-        by_id = {item.item_id: item for item in items}
         for entry in entries:
-            item = resolve_selected_item(entry, by_id)
+            item = resolve_selected_item(entry, items)
             payload = self._storage.storage.project_attachment_payload(session_id, thread_id, item.payload)
             if not isinstance(payload, Mapping):
                 continue

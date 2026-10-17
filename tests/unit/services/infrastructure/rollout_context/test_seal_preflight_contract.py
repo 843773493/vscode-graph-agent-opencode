@@ -38,6 +38,15 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 )
 
 
+def _tool_registry(items):
+    return {("canonical_item", item.item_id, "thread-1"): item for item in items}
+
+
+def _pair_keys(pairs):
+    return tuple((("canonical_item", call, "thread-1"), ("canonical_item", result, "thread-1"))
+                 for call, result in pairs)
+
+
 def _canonical_ref(
     ref_id: str,
     semantic_kind: str = SemanticKind.ASSISTANT_OUTPUT.value,
@@ -289,38 +298,19 @@ def test_duplicate_included_identity_fails_closed() -> None:
     assert error.value.code == "seal-dispatch-source-identity-conflict"
 
 
-def test_seal_identity_is_ref_type_and_ref_id_pair_only_current_boundary() -> None:
-    """锁定**现状边界**：seal preflight 的 source identity 目前只用二元组
-    (ref_type, ref_id)，thread_id 完全不参与判定。
-
-    这是对**当前实现事实**的刻画，不是 thread 契约：同一 (ref_type, ref_id)
-    但 thread_id 不同的两个 ref，现在会被判为同一 identity 而冲突放行失败。
-    一旦有人把该 identity 改成 thread-qualified 三元组，本用例必须变红
-    （届时不再抛错），从而立刻暴露改动的真实影响面。
-    """
+def test_seal_identity_includes_thread_for_same_type_and_id() -> None:
+    """同一 session 的 sibling 同名 ref 是独立 source identity。"""
     snapshot = _minimal_snapshot()
     ref_a = snapshot.selection[0].ref
     ref_b = replace(ref_a, thread_id="thread-2")
-    # 前提自检：两者 thread 不同而 (ref_type, ref_id) 逐字相同；否则本用例
-    # 鉴别的就不是二元组边界，而是别的东西。
     assert ref_a != ref_b
     assert (ref_a.ref_type, ref_a.ref_id) == (ref_b.ref_type, ref_b.ref_id)
-    with pytest.raises(ContextAssemblySealPreflightError) as error:
-        validate_seal_dispatch_invariants(
-            _clone_with(
-                snapshot,
-                refs=(ref_a, ref_b),
-                selection=(
-                    snapshot.selection[0],
-                    _entry(
-                        1,
-                        ref_b,
-                        selection_kind=SelectionKind.CANONICAL_HISTORY.value,
-                    ),
-                ),
-            )
-        )
-    assert error.value.code == "seal-dispatch-source-identity-conflict"
+    validate_seal_dispatch_invariants(_clone_with(
+        snapshot, refs=(ref_a, ref_b),
+        selection=(snapshot.selection[0], _entry(
+            1, ref_b, selection_kind=SelectionKind.CANONICAL_HISTORY.value,
+        )),
+    ))
 
 
 def test_selection_ref_manifest_mismatch_fails_closed() -> None:
@@ -446,7 +436,7 @@ def test_tool_entries_without_pairings_fail_closed() -> None:
 def test_tool_entries_with_valid_pairing_pass() -> None:
     validate_seal_dispatch_invariants(
         _tool_pair_snapshot(),
-        tool_pairings=(("call-1", "result-1"),),
+        tool_pairings=_pair_keys((("call-1", "result-1"),)),
     )
 
 
@@ -454,7 +444,7 @@ def test_unpaired_tool_result_fails_closed() -> None:
     with pytest.raises(ContextAssemblySealPreflightError) as error:
         validate_seal_dispatch_invariants(
             _tool_pair_snapshot(),
-            tool_pairings=(("call-1", "missing-result"),),
+            tool_pairings=_pair_keys((("call-1", "missing-result"),)),
         )
     assert error.value.code == "seal-dispatch-tool-pairing-conflict"
 
@@ -504,9 +494,9 @@ def test_canonical_tool_pairings_derive_from_explicit_ids() -> None:
         },
     )
 
-    assert canonical_tool_pairings((call, result)) == (
+    assert canonical_tool_pairings(_tool_registry((call, result))) == _pair_keys((
         ("call-item-1", "result-item-1"),
-    )
+    ))
 
 
 def test_canonical_tool_pairings_ignore_non_tool_items() -> None:
@@ -517,7 +507,26 @@ def test_canonical_tool_pairings_ignore_non_tool_items() -> None:
         payload="正文",
     )
 
-    assert canonical_tool_pairings((plain,)) == ()
+    assert canonical_tool_pairings(_tool_registry((plain,))) == ()
+
+
+def test_canonical_tool_pairings_keep_same_ids_in_sibling_threads_separate() -> None:
+    call = _canonical_record(
+        "same-call", semantic_kind=SemanticKind.TOOL_CALL.value,
+        payload_kind=PayloadKind.TOOL_CALL.value,
+        payload={"tool_calls": [{"id": "same-provider-call", "name": "tool", "args": {}}]},
+    )
+    result = _canonical_record(
+        "same-result", semantic_kind=SemanticKind.TOOL_RESULT.value,
+        payload_kind=PayloadKind.TOOL_RESULT.value,
+        payload={"tool_call_id": "same-provider-call", "result_id": "result", "content": "ok", "execution_confirmed": True},
+    )
+    registry = {("canonical_item", item.item_id, thread): item
+                for thread in ("thread-1", "thread-2") for item in (call, result)}
+    assert canonical_tool_pairings(registry) == (
+        (("canonical_item", "same-call", "thread-1"), ("canonical_item", "same-result", "thread-1")),
+        (("canonical_item", "same-call", "thread-2"), ("canonical_item", "same-result", "thread-2")),
+    )
 
 
 def test_canonical_tool_pairings_fail_closed_without_explicit_link() -> None:
@@ -537,7 +546,7 @@ def test_canonical_tool_pairings_fail_closed_without_explicit_link() -> None:
     object.__setattr__(result, "payload", {"content": "缺少 tool_call_id"})
 
     with pytest.raises(ContextAssemblySealPreflightError) as error:
-        canonical_tool_pairings((result,))
+        canonical_tool_pairings(_tool_registry((result,)))
     assert error.value.code == "seal-dispatch-tool-pairing-conflict"
 
 
@@ -556,7 +565,7 @@ def test_canonical_tool_pairings_fail_closed_on_duplicate_call_id() -> None:
     )
 
     with pytest.raises(ContextAssemblySealPreflightError) as error:
-        canonical_tool_pairings((first, second))
+        canonical_tool_pairings(_tool_registry((first, second)))
     assert error.value.code == "seal-dispatch-tool-pairing-conflict"
 
 
@@ -588,9 +597,9 @@ def test_canonical_tool_pairings_restore_scoped_stream_call_id() -> None:
         },
     )
 
-    assert canonical_tool_pairings((stream_call, result)) == (
+    assert canonical_tool_pairings(_tool_registry((stream_call, result))) == _pair_keys((
         ("item-stream-call-1", "result-item-1"),
-    )
+    ))
 
 
 def test_canonical_tool_pairings_cover_dual_carriers_with_one_result() -> None:
@@ -634,10 +643,10 @@ def test_canonical_tool_pairings_cover_dual_carriers_with_one_result() -> None:
         },
     )
 
-    assert canonical_tool_pairings((stream_call, checkpoint_call, result)) == (
+    assert canonical_tool_pairings(_tool_registry((stream_call, checkpoint_call, result))) == _pair_keys((
         ("item-stream-call-1", "result-item-1"),
         ("item-checkpoint-call-1", "result-item-1"),
-    )
+    ))
 
 
 def test_parallel_tool_group_canonicalizes_dual_completion_carriers() -> None:
@@ -762,11 +771,11 @@ def test_parallel_tool_group_canonicalizes_dual_completion_carriers() -> None:
         + tuple(stream_results)
         + tuple(checkpoint_results)
     )
-    pairings = canonical_tool_pairings(items)
+    pairings = canonical_tool_pairings(_tool_registry(items))
     assert len(pairings) == 8
     assert len({call_ref for call_ref, _ in pairings}) == 8
     assert {result_ref for _, result_ref in pairings} == {
-        item.item_id for item in checkpoint_results
+        ("canonical_item", item.item_id, "thread-1") for item in checkpoint_results
     }
     refs = tuple(
         _canonical_ref(

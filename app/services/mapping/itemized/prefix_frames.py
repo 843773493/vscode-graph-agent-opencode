@@ -19,6 +19,7 @@ from app.domain.itemized.epoch.prefix_epoch import (
 )
 from app.domain.itemized.epoch.seal_binding import ContextSealBinding
 from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
+from app.domain.itemized.identity.refs import selection_ref_identity
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.mapping.itemized.canonical_langchain import (
@@ -74,20 +75,22 @@ def project_canonical_prefix_frames(
 def project_sealed_prefix(
     plan: ContextRequestPlan,
     binding: ContextSealBinding,
-    items: Sequence[CanonicalItemRecord],
+    items: Mapping[tuple[str, str, str], CanonicalItemRecord],
     bodies: Mapping[str, object],
 ) -> list[BaseMessage]:
     """每一 wire frame 都必须对应同一 assembly 的真实 canonical/source selection。"""
     if binding.prefix.assembly_id != plan.assembly_id:
         raise ValueError("source-mismatch: prefix 与 sealed plan assembly 不一致")
+    if any(entry.included and entry.ref.ref_type == "canonical_item"
+           and entry.ref.thread_id != plan.thread_id for entry in plan.selection):
+        raise ValueError("source-mismatch: stable prefix 不得跨 thread 拼接 canonical refs")
     entries = {
-        entry.ref.ref_id: entry for entry in validate_projection_selection(plan.selection)
+        selection_ref_identity(entry.ref): entry for entry in validate_projection_selection(plan.selection)
         if entry.included and entry.ref.ref_type != "tool_set"
     }
     contributions = {source.contribution_id: source for source in plan.contributions}
-    by_id = {item.item_id: item for item in items}
-    canonical_entries = {entry.ref.ref_id: entry for entry in plan.selection if entry.ref.ref_type == "canonical_item"}
-    used: set[str] = set()
+    canonical_entries = {selection_ref_identity(entry.ref): entry for entry in plan.selection if entry.ref.ref_type == "canonical_item"}
+    used: set[tuple[str, ...]] = set()
     root = binding.root
     if root is not None:
         root_bodies = []
@@ -108,7 +111,7 @@ def project_sealed_prefix(
             if not isinstance(body, str) or contribution_content_hash("root_source", body) != provenance.content_hash:
                 raise ValueError("source-mismatch: compiled root 正文与 provenance 不一致")
             root_bodies.append(body)
-            used.add(entry.ref.ref_id)
+            used.add(selection_ref_identity(entry.ref))
         if "\n\n".join(root_bodies) != root.content:
             raise ValueError("source-mismatch: compiled root 正文与来源顺序不一致")
     messages: list[BaseMessage] = []
@@ -121,7 +124,7 @@ def project_sealed_prefix(
             messages.append(SystemMessage(content=root.content, id=ref.ref_id))
             continue
         if ref.ref_type == "source_item":
-            entry = entries.get(ref.ref_id)
+            entry = entries.get(("request_only", ref.ref_id, plan.thread_id))
             if entry is None or entry.ref.ref_type != "request_only":
                 raise ValueError("source-mismatch: source frame 缺少独立 user selection")
             source = contributions.get(entry.contribution_id)
@@ -141,28 +144,28 @@ def project_sealed_prefix(
                     raise ValueError("source-mismatch: 摘要候选消息角色不一致")
                 group = []
                 for item_id in body["item_ids"]:
-                    if item_id not in by_id:
+                    if ("canonical_item", item_id, plan.thread_id) not in items:
                         raise ValueError("source-mismatch: 摘要候选 canonical 来源已丢失")
-                    selected = canonical_entries.get(item_id)
+                    selected = canonical_entries.get(("canonical_item", item_id, plan.thread_id))
                     if selected is None:
                         raise ValueError("source-mismatch: 摘要候选 canonical 来源没有封存")
-                    group.append(resolve_selected_item(selected, by_id))
+                    group.append(resolve_selected_item(selected, items))
                 ordinal, separator, phase = source.source_revision.partition(":")
                 if not separator or not ordinal.isdecimal() or phase not in {"initial", "tool_free", "visible_text"}:
                     raise ValueError("source-mismatch: 摘要候选重试身份非法")
                 retry_items = []
                 for item_id in body["retry_source_item_ids"]:
-                    selected = canonical_entries.get(item_id)
+                    selected = canonical_entries.get(("canonical_item", item_id, plan.thread_id))
                     if selected is None:
                         raise ValueError("source-mismatch: 摘要重试中段没有封存 canonical 来源")
-                    retry_items.append(resolve_selected_item(selected, by_id))
+                    retry_items.append(resolve_selected_item(selected, items))
                 if retry_items and int(ordinal) == 0:
                     raise ValueError("source-mismatch: 初始候选不能声明重试变换来源")
                 retry_messages = [project_summary_source(value) for value in summary_source_groups(retry_items).values()]
                 variants = summary_retry_variants(retry_messages) if retry_items else {}
                 validate_summary_source(projected, group, retry_variants=variants.get(projected.id, ()))
                 messages.append(projected)
-                used.add(ref.ref_id)
+                used.add(("request_only", ref.ref_id, plan.thread_id))
                 continue
             if frame.role != "user":
                 raise ValueError("source-mismatch: 普通 source frame 必须为 user")
@@ -186,7 +189,7 @@ def project_sealed_prefix(
                 content=content,
                 id=ref.ref_id, response_metadata={"internal": True},
             ))
-            used.add(ref.ref_id)
+            used.add(("request_only", ref.ref_id, plan.thread_id))
             continue
         content = frame.content
         if not isinstance(content, Mapping) or set(content) != {"item_ids", "message"}:
@@ -200,10 +203,10 @@ def project_sealed_prefix(
         if key not in groups:
             selected = []
             for item_id in key:
-                entry = entries.get(item_id)
+                entry = entries.get(("canonical_item", item_id, plan.thread_id))
                 if entry is None or entry.ref.ref_type != "canonical_item":
                     raise ValueError("source-mismatch: canonical frame source 未被选入")
-                selected.append(resolve_selected_item(entry, by_id))
+                selected.append(resolve_selected_item(entry, items))
             losses: list[str] = []
             expected = project_canonical_items(
                 selected, include_runtime_notices=True, include_summaries=True,
@@ -220,7 +223,7 @@ def project_sealed_prefix(
             raise ValueError("source-mismatch: canonical frame wire role 不一致")
         messages.append(projected)
         groups[key] = expected, index + 1
-        used.update(key)
+        used.update(("canonical_item", item_id, plan.thread_id) for item_id in key)
     if any(index != len(expected) for expected, index in groups.values()) or used != set(entries):
         raise ValueError("source-mismatch: sealed selection 与最终 wire frames 未完整联校")
     return messages

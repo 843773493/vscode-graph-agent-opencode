@@ -57,6 +57,7 @@ from app.services.infrastructure.rollout_context.fork.source_snapshot import (
     capture_fork_rollout_snapshot,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    read_local_scopes,
     require_historical_scope,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
@@ -353,8 +354,11 @@ class CheckpointForkSource:
                     ).fetchall()
                 else:
                     # 只展开可见正文的精确 producer；审计前任与 backing producer 不展开。
+                    local_scopes = sorted(read_local_scopes(connection))
+                    scope_values = ",".join("(?,?)" for _ in local_scopes)
                     references = connection.execute(
-                        "WITH RECURSIVE visible(item_id) AS ("
+                        "WITH RECURSIVE local_scope(session_id,thread_id) AS ("
+                        f"VALUES {scope_values}), visible(item_id) AS ("
                         f"SELECT item_id FROM ({EFFECTIVE_PREFIX_SQL})), "
                         "selected(item_id) AS (SELECT item_id FROM visible UNION "
                         "SELECT selection.ref_id FROM visible JOIN item_catalog item USING(item_id) "
@@ -362,6 +366,15 @@ class CheckpointForkSource:
                         "json_extract(item.producer_ref_json,'$.model_call_id'),"
                         "json_extract(item.projection_manifest_json,'$.projection_identity.model_call_id')) "
                         "JOIN context_assembly_selections selection ON selection.assembly_id=call.assembly_id "
+                        "JOIN context_assemblies assembly ON assembly.assembly_id=selection.assembly_id "
+                        "JOIN local_scope scope ON scope.session_id=assembly.session_id "
+                        "AND scope.thread_id=selection.ref_thread_id "
+                        "JOIN item_catalog source ON source.item_id=selection.ref_id "
+                        "AND source.content_hash=selection.content_hash "
+                        "AND source.payload_length=selection.content_length "
+                        "AND source.source_revision=selection.source_revision "
+                        "AND source.item_sequence=json_extract(assembly.snapshot_json, "
+                        "'$.selection[' || selection.plan_ordinal || '].ref.item_sequence') "
                         "WHERE selection.included=1 AND selection.ref_type='canonical_item' UNION "
                         "SELECT peer.item_id FROM selected JOIN item_catalog item USING(item_id) "
                         "JOIN item_catalog peer ON peer.message_group_id=item.message_group_id UNION "
@@ -371,7 +384,8 @@ class CheckpointForkSource:
                         "JOIN turn_records turn ON turn.turn_id=item.turn_id WHERE turn.final_item_id IS NOT NULL) "
                         "SELECT DISTINCT ref.resource_uri,1 FROM selected JOIN item_resource_references ref USING(item_id) "
                         "WHERE ref.resource_kind='attachment' ORDER BY ref.resource_uri",
-                        (point.anchor_item_id, source_view_id, 1 if anchor_mode == "before" else 0),
+                        (*[value for scope in local_scopes for value in scope], point.anchor_item_id,
+                         source_view_id, 1 if anchor_mode == "before" else 0),
                     ).fetchall()
             native = tuple((uri, bool(required)) for uri, required in references if uri.startswith("boxteam-session://"))
             if native and self.attachment_store is None:

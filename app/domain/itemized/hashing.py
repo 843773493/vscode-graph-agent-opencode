@@ -28,27 +28,35 @@ def copy_json_value(value: object) -> object:
 
 
 def _ensure_json_value(value: object, path: str = "value") -> None:
+    _validate_json_value(value, path)
+
+
+def _validate_json_value(value: object, path: str) -> bool:
+    """完整校验 JSON，同时标记 RFC 8785 编码前是否需要适配输入。"""
     if isinstance(value, str):
         if _UNICODE_SURROGATE_PATTERN.search(value) is not None:
             raise ItemSchemaError(f"{path!r} 包含非法 Unicode surrogate")
-        return
+        return False
     if isinstance(value, float) and not math.isfinite(value):
         raise ItemSchemaError(f"{path} 包含非有限浮点数")
     if isinstance(value, Mapping):
+        needs_adaptation = type(value) is not dict
         for key, child in value.items():
             if not isinstance(key, str):
                 raise ItemSchemaError(f"{path} object key 必须是字符串")
-            _ensure_json_value(key, f"{path} object key")
-            _ensure_json_value(child, f"{path}.{key}")
-        return
+            _validate_json_value(key, f"{path} object key")
+            needs_adaptation = _validate_json_value(child, f"{path}.{key}") or needs_adaptation
+        return needs_adaptation
     if isinstance(value, (list, tuple)):
+        needs_adaptation = False
         for index, child in enumerate(value):
-            _ensure_json_value(child, f"{path}[{index}]")
-        return
+            needs_adaptation = _validate_json_value(child, f"{path}[{index}]") or needs_adaptation
+        return needs_adaptation
     if value is None or isinstance(value, (int, bool)):
-        return
+        # 这里只标记，不提前适配：后续结构错误仍须先于 JCS 数字范围错误暴露。
+        return isinstance(value, int) and abs(value) > 2**53 - 1
     if isinstance(value, float):
-        return
+        return False
     raise ItemSchemaError(f"{path} 不是 JSON value: {type(value).__name__}")
 
 
@@ -77,9 +85,10 @@ def _jcs_input(value: object) -> object:
 
 def canonical_json_bytes(value: object) -> bytes:
     """返回 RFC 8785 JCS 的无空白 UTF-8 字节。"""
-    _ensure_json_value(value)
+    needs_adaptation = _validate_json_value(value, "value")
     try:
-        return rfc8785.dumps(_jcs_input(value))
+        # 常规 dict/list/tuple 已被 RFC 8785 直接支持，不再复制遍历同一份 JSON。
+        return rfc8785.dumps(_jcs_input(value) if needs_adaptation else value)
     except (
         rfc8785.CanonicalizationError,
         rfc8785.FloatDomainError,

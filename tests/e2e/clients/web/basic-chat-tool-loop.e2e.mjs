@@ -13,17 +13,94 @@ function requiredEnvironment(name) {
   return value;
 }
 
-const messageStreamDiagnosticsSelfTest = process.argv.includes("--message-stream-diagnostics-self-test");
-const baseUrl = messageStreamDiagnosticsSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_BASE_URL");
-const expectedWorkspaceId = messageStreamDiagnosticsSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_WORKSPACE_ID");
-const resultPath = messageStreamDiagnosticsSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_RESULT_PATH");
-const screenshotPath = messageStreamDiagnosticsSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_SCREENSHOT_PATH");
 const firstPrompt = "请读取 README.md，并确认首轮工具调用已完成。";
 const firstFinalText = "首轮工具调用已完成。";
 const secondPrompt = "请再次读取 README.md，确认历史上下文仍然可用。";
 const secondFinalText = "第二轮工具调用也已完成。";
+const SECTION8_SELECTION_CONTRACT_ARG = "--section8-selection-contract";
+
+function section8ScenarioRegistry(surfaces, facts) {
+  let foreign;
+  const teamTarget = async () => foreign ??= await createProductSession(surfaces.b, "团队拒绝跨 Session 目标");
+  return {
+    child: { default: true, run: () => runChildFifoAndResidency(surfaces.a) },
+    team_turn: { default: true, run: async () => runTeamActivation(surfaces.a, "turn", await teamTarget()) },
+    team_model_call: { default: true, run: async () => runTeamActivation(surfaces.c, "model_call", await teamTarget()) },
+    mcp_turn: { default: true, run: () => runMcpActivation(surfaces.a, "turn") },
+    mcp_model_call: { default: true, run: () => runMcpActivation(surfaces.c, "model_call") },
+    weekly: { default: true, run: () => runWeeklyReport(surfaces) },
+    fork_child_ui: { default: true, run: () => runDefaultChildForkUi(surfaces.a) },
+    forks: { default: true, run: () => runPublicForks(surfaces) },
+    copy_attachments: { default: false, run: () => runCopyAttachmentFocus(surfaces.a) },
+    copy_missing_attachment: {
+      default: false,
+      run: async () => {
+        const owners = [];
+        return runCopyMissingAttachment(surfaces.a, owners);
+      },
+    },
+    optional_seed_revisit: { default: false, run: () => runOptionalSeedRevisit(surfaces.a) },
+    compaction: { default: true, run: () => runRealCompaction(surfaces.a) },
+    communication_recovery: { default: true, run: () => runCommunicationRecovery(surfaces) },
+    read_recovery: { default: true, run: () => facts.weekly?.frozenRead ?? runReadRecovery(surfaces) },
+    wait_recovery: { default: true, run: () => runWaitRecovery(surfaces) },
+    observation_deletion: { default: true, run: () => runObservationDeletion(surfaces) },
+    lifecycle_admission_deletion: { default: true, run: () => runLifecycleAdmissionDeletion(surfaces) },
+    navigation_dates: { default: true, run: () => runNavigationDates(surfaces) },
+    navigation_optimism: { default: true, run: () => runNavigationOptimism(surfaces) },
+    initial_admission_recovery: { default: true, run: () => runInitialAdmissionRecovery(surfaces) },
+    generated_internal_history: { default: true, run: () => runGeneratedInternalHistory(surfaces) },
+    turn_navigation: { default: true, run: () => runTurnNavigation(surfaces.a) },
+    read_cursor_expiry: { default: true, run: () => runReadCursorExpiry(surfaces, facts.read_recovery) },
+  };
+}
+
+function section8SelectionContract(raw) {
+  if (typeof raw !== "string" || !raw || raw.trim() !== raw) {
+    throw new Error("BOXTEAM_E2E_SECTION8_FOCUS 必须显式设置为 default 或合法 scenario key 列表");
+  }
+  const registry = section8ScenarioRegistry({}, {});
+  const entries = Object.entries(registry);
+  const validScenarios = entries.map(([name]) => name);
+  const defaultScenarios = entries.filter(([, scenario]) => scenario.default).map(([name]) => name);
+  if (raw === "default") {
+    return { mode: "default", requested: ["default"], selected: defaultScenarios, validScenarios, defaultScenarios };
+  }
+  const requested = raw.split(",");
+  if (requested.some((name) => !name || name.trim() !== name || !/^[a-z][a-z0-9_]*$/.test(name))) {
+    throw new Error("BOXTEAM_E2E_SECTION8_FOCUS 含空白、空项或非法 scenario key");
+  }
+  if (new Set(requested).size !== requested.length) {
+    throw new Error("BOXTEAM_E2E_SECTION8_FOCUS 不得重复选择 scenario");
+  }
+  if (requested.includes("default") || requested.some((name) => !validScenarios.includes(name))) {
+    throw new Error("BOXTEAM_E2E_SECTION8_FOCUS 包含 default 混选或未知 scenario key");
+  }
+  if (requested.includes("read_cursor_expiry")) {
+    if (!requested.includes("read_recovery")) {
+      throw new Error("read_cursor_expiry focus 必须按顺序选择 read_recovery,read_cursor_expiry");
+    }
+    if (requested.at(-1) !== "read_cursor_expiry") {
+      throw new Error("read_cursor_expiry focus 必须按顺序选择 read_recovery,read_cursor_expiry");
+    }
+  }
+  return { mode: "focus", requested, selected: requested, validScenarios, defaultScenarios };
+}
+
+const messageStreamDiagnosticsSelfTest = process.argv.includes("--message-stream-diagnostics-self-test");
+const section8Selection = messageStreamDiagnosticsSelfTest
+  ? null
+  : section8SelectionContract(process.env.BOXTEAM_E2E_SECTION8_FOCUS);
+if (process.argv.includes(SECTION8_SELECTION_CONTRACT_ARG)) {
+  if (messageStreamDiagnosticsSelfTest) throw new Error("selector contract 与 diagnostic self-test 不能同时选择");
+  process.stdout.write(JSON.stringify(section8Selection) + "\n");
+  process.exit(0);
+}
+const baseUrl = messageStreamDiagnosticsSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_BASE_URL");
+const expectedWorkspaceId = messageStreamDiagnosticsSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_WORKSPACE_ID");
+const resultPath = messageStreamDiagnosticsSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_RESULT_PATH");
+const screenshotPath = messageStreamDiagnosticsSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_SCREENSHOT_PATH");
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
-const focusedScenarios = (process.env.BOXTEAM_E2E_SECTION8_FOCUS ?? "").split(",").map((name) => name.trim()).filter(Boolean);
 const TRANSCRIPT_NAVIGATION_TIMEOUT_MS = 60_000;
 const VIRTUOSO_AT_BOTTOM_THRESHOLD_PX = 4;
 const HISTORY_TIMING_EVENT_LIMIT = 32;
@@ -179,11 +256,13 @@ function messageStreamTarget(url) {
   if (!match) return null;
   const threadIds = parsed.searchParams.getAll("thread_id");
   const afterSeqs = parsed.searchParams.getAll("after_seq");
-  if (threadIds.length > 1 || afterSeqs.length > 1) return null;
+  const streamIds = parsed.searchParams.getAll("turn_stream_id");
+  if (threadIds.length > 1 || afterSeqs.length > 1 || streamIds.length > 1) return null;
   return {
     sessionId: match[1],
     turnId: match[2],
     threadId: threadIds.length === 0 ? null : threadIds[0],
+    turnStreamId: streamIds.length === 0 ? null : streamIds[0],
     afterSeq: afterSeqs.length === 0 ? null : afterSeqs[0],
   };
 }
@@ -369,6 +448,168 @@ function classifyMessageStreamErrors(consoleErrorFacts, consoleErrors, messageSt
   };
 }
 
+function classifyIncompleteMessageStreamErrors(consoleErrorFacts, failedRequests, messageStreamResponses, admissions) {
+  const handled = [];
+  const consumedFailures = new Set();
+  const consumedResponses = new Set();
+  const consumedRecoveries = new Set();
+  const consumedConsoleIndexes = new Set();
+  for (const [failureIndex, failure] of failedRequests.entries()) {
+    if (failure.error !== "net::ERR_INCOMPLETE_CHUNKED_ENCODING"
+        || typeof failure.url !== "string" || !failure.url
+        || !Number.isInteger(failure.pageId) || !Number.isInteger(failure.documentId)
+        || !Number.isFinite(failure.requestedAt) || !Number.isFinite(failure.failedAt)
+        || failure.failedAt < failure.requestedAt) continue;
+    const responseCandidates = messageStreamResponses.filter((fact) => fact.requestId === failure.responseRequestId
+      && fact.url === failure.url && fact.method === "GET" && fact.status === 200
+      && fact.pageId === failure.pageId && fact.documentId === failure.documentId
+      && fact.receivedAt <= failure.failedAt && isEventStreamResponse(fact)
+      && typeof fact.requestId === "string" && fact.requestId.length > 0
+      && typeof fact.messageStreamId === "string" && fact.messageStreamId.length > 0
+      && typeof fact.workspaceHeader === "string" && fact.workspaceHeader.length > 0
+      && failure.status === fact.status && failure.sessionId === fact.sessionId
+      && failure.turnId === fact.turnId && failure.threadId === fact.threadId
+      && failure.turnStreamId === fact.turnStreamId && failure.afterSeq === fact.afterSeq
+      && failure.workspaceHeader === fact.workspaceHeader && failure.messageStreamId === fact.messageStreamId);
+    if (responseCandidates.length !== 1) continue;
+    const [response] = responseCandidates;
+    if (consumedResponses.has(response)) continue;
+    const target = messageStreamTarget(response.url);
+    if (!target || target.afterSeq === null || !/^(0|[1-9]\d*)$/.test(target.afterSeq)
+        || target.turnStreamId !== null && target.turnStreamId !== response.messageStreamId) continue;
+    const ownerThreads = admissions.map((admission) => runningAdmissionThreadId(admission, response, target))
+      .filter((threadId) => threadId !== null);
+    if (ownerThreads.length !== 1 || target.threadId !== null && target.threadId !== ownerThreads[0]) continue;
+    const afterSeq = Number(target.afterSeq);
+    if (!Number.isSafeInteger(afterSeq)) continue;
+    const recoveries = messageStreamResponses.filter((fact) => fact.status === 200 && fact.method === "GET"
+      && !consumedRecoveries.has(fact)
+      && new URL(fact.url).origin === new URL(response.url).origin
+      && fact.pageId === response.pageId && fact.documentId === response.documentId
+      && fact.sessionId === target.sessionId && fact.turnId === target.turnId
+      && (fact.threadId === null || fact.threadId === ownerThreads[0])
+      && fact.workspaceHeader === response.workspaceHeader
+      && fact.requestId && fact.requestId !== response.requestId
+      && fact.messageStreamId === response.messageStreamId
+      && isEventStreamResponse(fact)
+      && Number.isFinite(fact.requestedAt) && fact.requestedAt >= failure.failedAt
+      && Number.isFinite(fact.receivedAt) && fact.receivedAt >= fact.requestedAt
+      && (() => {
+        const recoveryTarget = messageStreamTarget(fact.url);
+        return recoveryTarget?.sessionId === target.sessionId
+          && recoveryTarget.turnId === target.turnId
+          && (recoveryTarget.threadId === null || recoveryTarget.threadId === ownerThreads[0])
+          && recoveryTarget.turnStreamId === fact.messageStreamId
+          && recoveryTarget.afterSeq !== null
+          && Number.isSafeInteger(Number(recoveryTarget.afterSeq))
+          && Number(recoveryTarget.afterSeq) >= afterSeq;
+      })())
+      .sort((left, right) => left.requestedAt - right.requestedAt);
+    const recovery = recoveries[0];
+    if (!recovery || recoveries[1]?.requestedAt === recovery.requestedAt) continue;
+    const consoleCandidates = consoleErrorFacts.filter((fact) => !consumedConsoleIndexes.has(fact.index)
+      && fact.text === "Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING"
+      && fact.url === failure.url && fact.pageId === failure.pageId && fact.documentId === failure.documentId
+      && Number.isFinite(fact.receivedAt) && Math.abs(fact.receivedAt - failure.failedAt) <= 5_000)
+      .sort((left, right) => Math.abs(left.receivedAt - failure.failedAt) - Math.abs(right.receivedAt - failure.failedAt));
+    const consoleError = consoleCandidates[0];
+    if (consoleError && consoleCandidates[1]
+        && Math.abs(consoleCandidates[1].receivedAt - failure.failedAt)
+          === Math.abs(consoleError.receivedAt - failure.failedAt)) continue;
+    consumedFailures.add(failureIndex);
+    consumedResponses.add(response);
+    consumedRecoveries.add(recovery);
+    if (consoleError) consumedConsoleIndexes.add(consoleError.index);
+    handled.push({ failedRequestIndex: failureIndex, consoleIndex: consoleError?.index ?? null,
+      responseRequestId: response.requestId, recoveryRequestId: recovery.requestId,
+      messageStreamId: response.messageStreamId, workspaceId: response.workspaceHeader,
+      sessionId: target.sessionId, threadId: ownerThreads[0], turnId: target.turnId,
+      failedAfterSeq: target.afterSeq, recoveredAfterSeq: messageStreamTarget(recovery.url).afterSeq });
+  }
+  return {
+    handled,
+    consumedConsoleIndexes,
+    unhandledFailedRequests: failedRequests.filter((_failure, index) => !consumedFailures.has(index)),
+  };
+}
+
+function classifyForkAttachmentDeletionConflicts(consoleErrorFacts, conflictResponses, raceFacts) {
+  const handled = [];
+  const consumedResponses = new Set();
+  const consumedRaces = new Set();
+  for (const error of consoleErrorFacts) {
+    if (error.text !== "Failed to load resource: the server responded with a status of 409 (Conflict)"
+        || typeof error.url !== "string" || !error.url) continue;
+    const responses = conflictResponses.filter((response) => response.status === 409
+      && response.method === "POST" && response.kind === "fork_context"
+      && response.url === error.url && response.pageId === error.pageId
+      && response.documentId === error.documentId
+      && typeof response.requestId === "string" && response.requestId.length > 0
+      && response.body?.request_id === response.requestId
+      && response.bodyError === undefined
+      && Number.isFinite(response.requestedAt) && Number.isFinite(response.receivedAt)
+      && response.receivedAt >= response.requestedAt
+      && typeof response.workspaceHeader === "string" && response.workspaceHeader.length > 0
+      && response.forkRequest && typeof response.forkRequest.idempotency_key === "string"
+      && response.forkRequestBodyError === undefined);
+    if (responses.length !== 1) continue;
+    const [response] = responses;
+    if (consumedResponses.has(response)) continue;
+    const match = /^https?:\/\/[^/]+\/api\/v1\/sessions\/([^/]+)\/fork-context$/.exec(response.url);
+    if (!match || match[1] !== response.sessionId) continue;
+    const operationId = forkOperationId(response.forkRequest);
+    const matchingRaces = raceFacts.filter((race) => {
+      const detail = `Session catalog 节点非 active，拒绝附件准入/发布: session_id=${race.targetSessionId}, state='deleting'`;
+      const requestOwner = /\/resources\/session\/([^/]+)\/threads\/([^/]+)$/.exec(race.request?.source_uri ?? "");
+      return race.finalizerFirst === false
+        && race.operationId === operationId
+        && race.request?.idempotency_key === response.forkRequest.idempotency_key
+        && JSON.stringify(race.request) === JSON.stringify(response.forkRequest)
+        && race.capture?.copy_operation_id === operationId
+        && race.capture?.source_session_id === race.sourceSessionId
+        && race.capture?.source_thread_id === race.sourceThreadId
+        && race.capture?.target_session_id === race.targetSessionId
+        && race.capture?.target_thread_id === race.targetThreadId
+        && requestOwner?.[1] === race.sourceSessionId
+        && requestOwner?.[2] === race.sourceThreadId
+        && match[1] === race.sourceSessionId
+        && response.sessionId === race.sourceSessionId
+        && response.workspaceHeader === race.workspaceId
+        && response.pageId === error.pageId && response.documentId === error.documentId
+        && response.pageId === race.requestPageId && response.documentId === race.requestDocumentId
+        && race.deletion?.intent?.kind === "delete_session"
+        && race.deletion.intent.target_node_id === race.targetSessionId
+        && race.initialBarrier?.phase === "copy.attachments.before_finalize"
+        && race.initialBarrier.operation_id === operationId
+        && race.deletionCatalogBarrier?.phase === "deletion.catalog_deleting"
+        && race.deletionCatalogBarrier.operation_id === race.deletion.operationId
+        && race.deletionDrainBarrier?.phase === `deletion.drain_waiting/${race.targetSessionId}`
+        && race.deletionDrainBarrier.operation_id === race.deletion.operationId
+        && Number.isFinite(race.requestStartedAt) && Number.isFinite(response.requestedAt)
+        && response.requestedAt >= race.requestStartedAt
+        && Number.isFinite(race.deletionCatalogAt) && response.requestedAt <= race.deletionCatalogAt
+        && Number.isFinite(race.initialReleasedAt) && race.initialReleasedAt >= race.deletionCatalogAt
+        && Number.isFinite(race.responseReceivedAt) && response.receivedAt <= race.responseReceivedAt
+        && race.responseReceivedAt >= race.initialReleasedAt
+        && Number.isFinite(race.deletionDrainReleasedAt) && race.deletionDrainReleasedAt >= race.responseReceivedAt
+        && race.response?.status === 409
+        && race.response?.requestId === response.requestId
+        && race.response?.body?.request_id === response.body.request_id
+        && race.response?.body?.detail === detail
+        && response.body.detail === detail;
+    });
+    if (matchingRaces.length !== 1) continue;
+    const [race] = matchingRaces;
+    if (consumedRaces.has(race)) continue;
+    consumedResponses.add(response);
+    consumedRaces.add(race);
+    handled.push({ consoleIndex: error.index, responseRequestId: response.requestId,
+      operationId, sourceSessionId: race.sourceSessionId, targetSessionId: race.targetSessionId,
+      deletionOperationId: race.deletion.operationId });
+  }
+  return handled;
+}
+
 function runMessageStreamDiagnosticsSelfTest() {
   const url = "http://127.0.0.1:19000/api/v1/sessions/ses_owner/turns/turn_appended/message-stream?thread_id=thr_owner&after_seq=0";
   const owner = {
@@ -510,12 +751,133 @@ function runMessageStreamDiagnosticsSelfTest() {
   const duplicateResult = classify([refusal, recovery], [owner], [consoleError, duplicate], [consoleError.text, duplicate.text]);
   assert.equal(duplicateResult.handledMessageStreamErrors.length, 1, "单个 404 response fact 只能消费一次");
   assert.equal(duplicateResult.unhandledConsoleErrors.length, 1, "重复 console error 不能借用已消费 response");
-}
 
-if (messageStreamDiagnosticsSelfTest) {
-  runMessageStreamDiagnosticsSelfTest();
-  process.stdout.write("message-stream diagnostics self-test passed\n");
-  process.exit(0);
+  const chunkedUrl = "http://127.0.0.1:19000/api/v1/sessions/ses_owner/turns/turn_appended/message-stream?thread_id=thr_owner&turn_stream_id=stream-appended&after_seq=20";
+  const interruptedResponse = { url: chunkedUrl, method: "GET", status: 200, pageId: 1, documentId: 2,
+    sessionId: "ses_owner", turnId: "turn_appended", threadId: "thr_owner", turnStreamId: "stream-appended",
+    afterSeq: "20", workspaceHeader: "workspace-owner", requestId: "request-stream-interrupted",
+    messageStreamId: "stream-appended", requestedAt: 70, receivedAt: 80,
+    headers: { contentType: "text/event-stream; charset=utf-8" } };
+  const reconnect = { ...interruptedResponse, requestId: "request-stream-reconnect", requestedAt: 100, receivedAt: 110 };
+  const failedRequest = { url: chunkedUrl, error: "net::ERR_INCOMPLETE_CHUNKED_ENCODING", pageId: 1, documentId: 2,
+    requestedAt: 70, failedAt: 90, responseRequestId: "request-stream-interrupted", status: 200,
+    sessionId: "ses_owner", turnId: "turn_appended", threadId: "thr_owner", turnStreamId: "stream-appended",
+    afterSeq: "20", workspaceHeader: "workspace-owner", messageStreamId: "stream-appended" };
+  const chunkedConsoleError = { index: 0, text: "Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING",
+    url: chunkedUrl, pageId: 1, documentId: 2, receivedAt: 90 };
+  const classifyChunked = (responses = [interruptedResponse, reconnect], admissions = [owner], failures = [failedRequest], errors = [chunkedConsoleError]) =>
+    classifyIncompleteMessageStreamErrors(errors, failures, responses, admissions);
+  const assertChunkedIsUnhandled = (responses, admissions, failures, errors, message) => {
+    const classified = classifyChunked(responses, admissions, failures, errors);
+    assert.equal(classified.unhandledFailedRequests.length, 1, message);
+    assert.equal(classified.consumedConsoleIndexes.size, 0, `${message}；对应 console error 也必须保留`);
+  };
+  const recoveredChunked = classifyChunked();
+  assert.equal(recoveredChunked.handled.length, 1,
+    "相同 page/document、owner、workspace、stream ID 的后续 SSE 重连才允许分类 chunked 中断");
+  assert.deepEqual([...recoveredChunked.consumedConsoleIndexes], [0]);
+  assert.deepEqual(recoveredChunked.unhandledFailedRequests, []);
+  assertChunkedIsUnhandled([interruptedResponse], [owner], [failedRequest], [chunkedConsoleError],
+    "没有后续 SSE 响应时必须保留 chunked 中断");
+  assertChunkedIsUnhandled([interruptedResponse, { ...reconnect,
+    messageStreamId: "stream-other", turnStreamId: "stream-other",
+  }], [owner], [failedRequest], [chunkedConsoleError], "重连必须保持原 stream 身份");
+  assertChunkedIsUnhandled([interruptedResponse, { ...reconnect, workspaceHeader: "workspace-other" }],
+    [owner], [failedRequest], [chunkedConsoleError], "跨 workspace 重连不能处理原 stream 中断");
+  assertChunkedIsUnhandled([interruptedResponse, { ...reconnect, documentId: 3 }],
+    [owner], [failedRequest], [chunkedConsoleError], "跨 document 重连不能处理原 stream 中断");
+  assertChunkedIsUnhandled([interruptedResponse, reconnect], [], [failedRequest], [chunkedConsoleError],
+    "缺少唯一 admission owner 时必须保留 chunked 中断");
+  assertChunkedIsUnhandled([interruptedResponse, reconnect], [owner, { ...owner, requestId: "request-admission-duplicate",
+    body: { ...owner.body, request_id: "request-admission-duplicate" },
+  }], [failedRequest], [chunkedConsoleError], "多个 owner admission 时必须保留 chunked 中断");
+  assertChunkedIsUnhandled([interruptedResponse, reconnect], [owner], [{ ...failedRequest,
+    responseRequestId: "request-other",
+  }], [chunkedConsoleError], "failed request 必须绑定触发它的 stream response request ID");
+  assertChunkedIsUnhandled([interruptedResponse, { ...reconnect,
+    url: `${chunkedUrl.replace("stream-appended", "stream-other")}`,
+  }], [owner], [failedRequest], [chunkedConsoleError], "重连 URL 的 turn_stream_id 必须等于 response owner");
+  assertChunkedIsUnhandled([interruptedResponse, { ...reconnect, url: reconnect.url.replace("after_seq=20", "after_seq=10"), afterSeq: "10" }],
+    [owner], [failedRequest], [chunkedConsoleError], "重连不能倒退到已中断响应的 cursor 之前");
+
+  const forkRequest = {
+    idempotency_key: "fork-delete-race-key",
+    source_uri: "boxteam://gateway/workspace/ws_source/resources/session/ses_source/threads/thr_source",
+    mode: "full_rollout_copy",
+  };
+  const forkOperation = forkOperationId(forkRequest);
+  const forkUrl = "http://127.0.0.1:19000/api/v1/sessions/ses_source/fork-context";
+  const forkDetail = "Session catalog 节点非 active，拒绝附件准入/发布: session_id=ses_target, state='deleting'";
+  const forkRequestId = "request-fork-delete-race";
+  const forkResponse = {
+    url: forkUrl, method: "POST", status: 409, kind: "fork_context", pageId: 7, documentId: 8,
+    sessionId: "ses_source", workspaceHeader: "workspace-source", requestId: forkRequestId,
+    requestedAt: 120, receivedAt: 170, body: { request_id: forkRequestId, detail: forkDetail },
+    forkRequest: structuredClone(forkRequest),
+  };
+  const race = {
+    finalizerFirst: false, operationId: forkOperation, sourceSessionId: "ses_source", sourceThreadId: "thr_source",
+    targetSessionId: "ses_target", targetThreadId: "thr_target", workspaceId: "workspace-source",
+    request: structuredClone(forkRequest), requestPageId: 7, requestDocumentId: 8, requestStartedAt: 100,
+    response: { status: 409, requestId: forkRequestId, body: structuredClone(forkResponse.body) }, responseReceivedAt: 180,
+    initialBarrier: { operation_id: forkOperation, phase: "copy.attachments.before_finalize" },
+    deletionCatalogBarrier: { operation_id: "op_delete_target", phase: "deletion.catalog_deleting" },
+    deletionCatalogAt: 130, initialReleasedAt: 140,
+    deletionDrainBarrier: { operation_id: "op_delete_target", phase: "deletion.drain_waiting/ses_target" },
+    deletionDrainReleasedAt: 190,
+    capture: { copy_operation_id: forkOperation, source_session_id: "ses_source", source_thread_id: "thr_source",
+      target_session_id: "ses_target", target_thread_id: "thr_target" },
+    deletion: { operationId: "op_delete_target", intent: { kind: "delete_session", target_node_id: "ses_target" } },
+  };
+  const forkConsoleError = { index: 0,
+    text: "Failed to load resource: the server responded with a status of 409 (Conflict)",
+    url: forkUrl, pageId: 7, documentId: 8 };
+  const gatewayTimeoutText = "Failed to load resource: the server responded with a status of 504 (Gateway Timeout)";
+  const unmatchedChunkedText = "Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING";
+  const unmatchedChunkedFailure = { url: `${url}&after_seq=20`, error: "net::ERR_INCOMPLETE_CHUNKED_ENCODING",
+    pageId: 7, documentId: 8, requestedAt: 200, failedAt: 210 };
+  const classifyPipeline = ({ races = [race], responses = [forkResponse], forkErrors = [forkConsoleError],
+    chunkedFailure = unmatchedChunkedFailure, streamResponses = [], admissions = [] } = {}) => {
+    const consoleErrorFacts = [...forkErrors,
+      { index: forkErrors.length, text: gatewayTimeoutText, url: "http://127.0.0.1:19000/api/v1/probe/timeout", pageId: 7, documentId: 8 },
+      { index: forkErrors.length + 1, text: unmatchedChunkedText, url: chunkedFailure.url,
+        pageId: chunkedFailure.pageId, documentId: chunkedFailure.documentId, receivedAt: chunkedFailure.failedAt }];
+    const consoleErrors = consoleErrorFacts.map((fact) => fact.text);
+    return classifyConsoleErrors({ consoleErrorFacts, consoleErrors,
+      failedRequests: [chunkedFailure], conflictResponses: responses, forkDeletionRaceFacts: races,
+      messageStreamResponses: streamResponses, jobOwnerResponses: admissions, historyErrorResponses: [], lifecycleErrorResponses: [],
+      lifecycleDeletionProofs: [], turnNavigationMissingTurnProofs: [], historyLiveProofs: [], historyRecoveryResponses: [] });
+  };
+  const classifiedFork = classifyPipeline();
+  assert.equal(classifiedFork.handledForkAttachmentDeletionConflicts.length, 1,
+    "完整 console 分类 pipeline 必须识别唯一、同 owner、删除先行的 fork 409");
+  assert.equal(classifiedFork.handledForkAttachmentDeletionConflicts[0].responseRequestId, forkRequestId);
+  assert.deepEqual(classifiedFork.unhandledConsoleErrors, [gatewayTimeoutText, unmatchedChunkedText],
+    "无恢复证据的 504 与 chunked console error 必须继续未处理");
+  assert.deepEqual(classifiedFork.unhandledFailedRequests, [unmatchedChunkedFailure],
+    "没有有效 SSE 重连配对的 chunked request 必须继续未处理");
+  assert.equal(classifyPipeline({ races: [] }).handledForkAttachmentDeletionConflicts.length, 0,
+    "没有 race 删除证据时不得分类 fork 409");
+  const crossOwnerRace = { ...race, sourceSessionId: "ses_foreign" };
+  assert.equal(classifyPipeline({ races: [crossOwnerRace] }).handledForkAttachmentDeletionConflicts.length, 0,
+    "fork request、capture 与 race source owner 不一致时不得分类");
+  const crossOriginFailure = { ...failedRequest, pageId: 7, documentId: 8 };
+  const crossOriginResponses = [
+    { ...interruptedResponse, pageId: 7, documentId: 8 },
+    { ...reconnect, url: reconnect.url.replace("127.0.0.1:19000", "127.0.0.1:19001"), pageId: 7, documentId: 8 },
+  ];
+  const crossOriginPipeline = classifyPipeline({ chunkedFailure: crossOriginFailure,
+    streamResponses: crossOriginResponses, admissions: [{ ...owner, pageId: 7, documentId: 8 }] });
+  assert.deepEqual(crossOriginPipeline.unhandledFailedRequests, [crossOriginFailure],
+    "跨 origin 的 SSE recovery 不得处理 chunked failed request");
+  assert.ok(crossOriginPipeline.unhandledConsoleErrors.includes(unmatchedChunkedText),
+    "跨 origin 的 SSE recovery 不得处理对应 chunked console error");
+  const duplicateForkError = { ...forkConsoleError, index: 1 };
+  const duplicateFork = classifyPipeline({ forkErrors: [forkConsoleError, duplicateForkError] });
+  assert.equal(duplicateFork.handledForkAttachmentDeletionConflicts.length, 1,
+    "单个 response/race 证据只能处理一条 fork 409 console error");
+  assert.ok(duplicateFork.unhandledConsoleErrors.includes(forkConsoleError.text),
+    "重复 fork 409 console error 必须保留一条未处理记录");
 }
 
 function isExpectedBrowserAbort(request) {
@@ -1815,16 +2177,18 @@ async function completeOwnerTurn(owner, prompt, responses, attachments = [], {
   expectedExecutionOutcome = "completed",
   expectedTurnStatus = "completed",
   historyTiming = null,
+  verifyHistory = true,
+  openBeforeSend = true,
 } = {}) {
   const calls = await planChatCalls(owner.sessionId, owner.threadId, responses);
-  await openOwner(owner);
+  if (openBeforeSend) await openOwner(owner);
   if (attachments.length) await owner.page.locator(".composer-file-input").setInputFiles(attachments);
   const sent = await sendOwnerPrompt(owner, prompt);
   const job = await waitForJobStatus(owner, sent.jobId, expectedJobStatus);
   const executions = await waitForPlannedExecutions(owner, calls, expectedExecutionOutcome);
   const turn = await assertAcceptedTurn(owner, sent);
   assert.equal(turn.status, expectedTurnStatus);
-  const evidence = await verifyOwnerTurns(owner, { historyTiming });
+  const evidence = verifyHistory ? await verifyOwnerTurns(owner, { historyTiming }) : null;
   return { calls, sent, job, executions, turn, evidence };
 }
 
@@ -3505,11 +3869,15 @@ function requestFork(source, request, expectedStatus, targetSurface = source) {
   }, expectedStatus);
 }
 
-function requestForkResponse(source, request, targetSurface = source) {
+function requestForkResponse(source, request, targetSurface = source, timeout) {
   result.forkRequests.push(structuredClone(request));
-  return ownerApiResponse(targetSurface, `/api/v1/sessions/${source.sessionId}/fork-context`, {
+  const requestOptions = {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
+  };
+  return ownerApiResponse(targetSurface, `/api/v1/sessions/${source.sessionId}/fork-context`, {
+    ...requestOptions,
+    ...(timeout === undefined ? {} : { timeout }),
   });
 }
 
@@ -4383,7 +4751,9 @@ async function runCopyCaptureLifecycle(surface, owners) {
     const barrier = { operation_id: operationId, phase };
     await testControl({ action: "arm", ...barrier });
     const requestSurface = await copyRequestSurface(source);
-    const pending = requestFork(source, request, undefined, requestSurface).then((value) => ({ value }), (error) => ({ error: String(error) }));
+    const requestStartedAt = Date.now();
+    const pending = requestForkResponse(source, request, requestSurface, 0)
+      .then((response) => ({ response }), (error) => ({ error: String(error) }));
     await testControl({ action: "acknowledged", ...barrier });
     const captured = await readCopyCapture(surface, operationId);
     assert.equal(captured.state, "preparing");
@@ -4416,13 +4786,26 @@ async function runCopyCaptureLifecycle(surface, owners) {
       assert.deepEqual(await readCatalog(surface, "SELECT node_id FROM nodes WHERE node_id=?", [source.sessionId]), [], "capture guard 释放后删除必须能先于 target 物化完成");
       assert.deepEqual(await readFile(markerPath), markerBytes, "source 隔离/删除不能改变已冻结 snapshot");
     }
-    await requestSurface.page.close();
     const reopen = await replaceNodePage(surface, owners);
     const killed = await testControl({ action: "process", name: surface.name, operation: "kill" });
     await testControl({ action: "release", ...barrier });
+    const firstHttp = await pending;
+    assert.equal(firstHttp.error, undefined, firstHttp.error);
+    const firstHttpElapsedMs = Date.now() - requestStartedAt;
+    if (firstHttp.response.status === 502) {
+      assert.match(firstHttp.response.body.detail, /^无法连接工作区后端 /,
+        "进程立即退出时原 HTTP 必须收到 Gateway 的明确上游连接失败");
+      assert.ok(firstHttpElapsedMs < 60_000, "502 必须早于 Gateway 60 秒响应头期限");
+    } else {
+      assert.equal(firstHttp.response.status, 504,
+        "只有精确 Gateway 响应头超时可解释长屏障期间的失败");
+      assert.match(firstHttp.response.body.detail, /timeout_seconds=60(?:\.0)?$/,
+        "长屏障超时必须明确绑定 Gateway 60 秒期限");
+      assert.ok(firstHttpElapsedMs >= 59_000, "504 必须经过 Gateway 60 秒响应头期限");
+    }
+    await requestSurface.page.close();
     const restarted = await testControl({ action: "process", name: surface.name, operation: "start" });
     assert.notEqual(killed.before_pid, restarted.after_pid);
-    assert.ok((await pending).error, "copy phase 崩溃时原 HTTP 必须明确失败");
     await reopen();
     const after = await readCopyCapture(surface, operationId);
     assert.deepEqual({ ...after, state: captured.state, snapshot_sha256: captured.snapshot_sha256, marker_sha256: captured.marker_sha256, abort_reason: captured.abort_reason }, captured,
@@ -4445,10 +4828,68 @@ async function runCopyCaptureLifecycle(surface, owners) {
       assert.deepEqual((await loadCompleteThreadHistory(source)).items, before.history.items, "partial 失败不能修改 source");
       await deleteOwner(source);
     }
-    recoveries.push({ phase, operationId, captured, marker, appended, viewChange, sourceDelete, killed, restarted, after,
+    recoveries.push({ phase, operationId, captured, marker, appended, viewChange, sourceDelete, killed,
+      firstHttp: { ...firstHttp.response, elapsed_ms: firstHttpElapsedMs }, restarted, after,
       target: target ? { sessionId: target.owner.sessionId, history: target.targetHistory, displayed: target.displayed } : null });
   }
-  return recoveries;
+  const markerCrash = await runCopyMarkerCrashRecovery(surface, owners);
+  return [...recoveries, markerCrash];
+}
+
+async function runCopyMarkerCrashRecovery(surface, owners) {
+  const source = await createProductSession(surface, "marker durable 后立即崩溃");
+  owners.push(source);
+  await completeOwnerTurn(source, "为 marker 崩溃恢复建立不可变 source 正文。", [
+    finalResponse("copy-marker-crash-source", "marker 崩溃后仍应消费冻结的 source。"),
+  ]);
+  const before = await forkHistoryEvidence(source);
+  const request = await freezeForkRequest(source);
+  const operationId = forkOperationId(request);
+  const barrier = { operation_id: operationId, phase: "copy.source.before_captured_cas" };
+  await testControl({ action: "arm", ...barrier });
+  const requestSurface = await copyRequestSurface(source);
+  const requestStartedAt = Date.now();
+  const pending = requestForkResponse(source, request, requestSurface, 0)
+    .then((response) => ({ response }), (error) => ({ error: String(error) }));
+  await testControl({ action: "acknowledged", ...barrier });
+  const captured = await readCopyCapture(surface, operationId);
+  assert.equal(captured.state, "preparing");
+  assert.equal(captured.snapshot_sha256, null);
+  assert.equal(captured.marker_sha256, null);
+  const markerPath = `${source.workspace}/.boxteam/navigation/${captured.snapshot_relative_locator}/captured.json`;
+  const markerBytes = await readFile(markerPath);
+  const marker = JSON.parse(markerBytes);
+  assert.equal(marker.copy_operation_id, operationId);
+  assert.equal(marker.source_snapshot_id, captured.snapshot_id);
+  assert.equal(marker.preimage_hash, captured.preimage_hash);
+  const reopen = await replaceNodePage(surface, owners);
+  const killed = await testControl({ action: "process", name: surface.name, operation: "kill" });
+  await testControl({ action: "release", ...barrier });
+  const firstHttp = await pending;
+  assert.equal(firstHttp.error, undefined, firstHttp.error);
+  assert.equal(firstHttp.response.status, 502, "marker durable 后立即崩溃必须使原 fork HTTP 收到真实上游失败");
+  assert.match(firstHttp.response.body.detail, /^无法连接工作区后端 /);
+  const firstHttpElapsedMs = Date.now() - requestStartedAt;
+  assert.ok(firstHttpElapsedMs < 60_000, "原 HTTP 失败必须发生在 Gateway 60 秒期限前");
+  await requestSurface.page.close();
+  const restarted = await testControl({ action: "process", name: surface.name, operation: "start" });
+  assert.notEqual(killed.before_pid, restarted.after_pid);
+  await reopen();
+  const after = await readCopyCapture(surface, operationId);
+  assert.equal(after.state, "materialized");
+  assert.equal(after.marker_sha256, createHash("sha256").update(markerBytes).digest("hex"));
+  assert.deepEqual(await readFile(markerPath), markerBytes);
+  const fork = (await requestFork(source, request)).data;
+  const target = await publishedForkOwner(source, request, fork, before);
+  owners.push(target.owner);
+  assert.deepEqual((await loadCompleteThreadHistory(source)).items, before.history.items,
+    "marker 崩溃重放不能改变 source history");
+  assert.equal((await readCopyCapture(surface, operationId)).state, "materialized");
+  await deleteOwner(target.owner);
+  const sourceDelete = await deleteOwner(source);
+  return { phase: barrier.phase, operationId, captured, marker, killed, restarted,
+    firstHttp: { ...firstHttp.response, elapsed_ms: firstHttpElapsedMs }, after,
+    targetSessionId: target.owner.sessionId, sourceDelete };
 }
 
 async function readAttachmentContent(owner, fileId, expectedStatus = 200) {
@@ -4471,15 +4912,19 @@ async function copyAttachmentClaims(surface, operationId) {
   return readAttachmentSql(surface, "SELECT c.*,r.state AS target_owner_state,r.blob_id AS target_owner_blob_id FROM fork_attachment_claims c LEFT JOIN attachment_owner_refs r ON r.owner_ref_id=c.target_owner_ref_id WHERE c.copy_operation_id=? ORDER BY c.claim_id", [operationId]);
 }
 
-async function createAttachmentSource(surface, title, owners, { prefixTurns = 0 } = {}) {
+async function createAttachmentSource(surface, title, owners, { prefixTurns = 0, turnOptions = {} } = {}) {
   const source = await createProductSession(surface, title);
   owners.push(source);
   const prefix = [];
   for (let index = 0; index < prefixTurns; index += 1) prefix.push(await completeOwnerTurn(source,
-    `无附件的稳定前缀 ${index}。`, [finalResponse(`attachment-prefix-${index}`, `第 ${index} 轮稳定前缀已完成。`)]));
+    `无附件的稳定前缀 ${index}。`, [finalResponse(`attachment-prefix-${index}`, `第 ${index} 轮稳定前缀已完成。`)], [], {
+      ...turnOptions, openBeforeSend: turnOptions.openBeforeSend ?? true,
+    }));
   const buffer = Buffer.concat([await readFile(`${source.workspace}/README.md`), Buffer.from(`\n独占附件事实：${source.sessionId}\n`)]);
   const file = { name: "source-attachment.txt", mimeType: "text/plain", buffer };
-  const material = await completeOwnerTurn(source, "这份已上传的附件属于本轮 source Turn，请保留其独占事实。", [finalResponse(`attachment-${source.sessionId}`, "附件已成为本轮 source 的可用输入。")], [file]);
+  const material = await completeOwnerTurn(source, "这份已上传的附件属于本轮 source Turn，请保留其独占事实。", [finalResponse(`attachment-${source.sessionId}`, "附件已成为本轮 source 的可用输入。")], [file], {
+    ...turnOptions, openBeforeSend: turnOptions.openBeforeSend ?? prefixTurns === 0,
+  });
   const refs = material.turn.user_messages.flatMap((message) => message.attachments);
   assert.equal(refs.length, 1);
   const attachment = refs[0];
@@ -4639,8 +5084,11 @@ async function runCopyAttachmentDeletionRace(surface, owners) {
     await testControl({ action: "arm", ...initial });
     if (finalizerFirst) await testControl({ action: "arm", ...committing });
     const requestSurface = await copyRequestSurface(source);
+    const requestPageId = requestSurface.page.diagnosticId;
+    const requestDocumentId = requestSurface.page.diagnosticDocumentId;
+    const requestStartedAt = Date.now();
     let settled = false;
-    const pending = requestFork(source, request, undefined, requestSurface).then(
+    const pending = requestForkResponse(source, request, requestSurface).then(
       (value) => { settled = true; return { value }; },
       (error) => { settled = true; return { error: String(error) }; },
     );
@@ -4661,6 +5109,11 @@ async function runCopyAttachmentDeletionRace(surface, owners) {
     const catalogDeleting = { operation_id: deletion.operationId, phase: "deletion.catalog_deleting" };
     const drainWaiting = { operation_id: deletion.operationId, phase: "deletion.drain_waiting/" + target.sessionId };
     const fenceClosed = { operation_id: deletion.operationId, phase: "deletion.fence_closed/" + target.sessionId };
+    let deletionCatalogAt = null;
+    let initialReleasedAt = null;
+    let responseReceivedAt = null;
+    let deletionDrainReleasedAt = null;
+    let rejection = null;
     await testControl({ action: "arm", ...fenceClosed });
     if (!finalizerFirst) {
       await testControl({ action: "arm", ...catalogDeleting });
@@ -4686,17 +5139,38 @@ async function runCopyAttachmentDeletionRace(surface, owners) {
     } else {
       await testControl({ action: "acknowledged", ...catalogDeleting });
       assert.equal((await readCatalog(surface, "SELECT state FROM nodes WHERE node_id=?", [target.sessionId]))[0].state, "deleting");
+      deletionCatalogAt = Date.now();
       assert.equal(settled, false);
       await testControl({ action: "release", ...catalogDeleting });
       await testControl({ action: "acknowledged", ...drainWaiting });
       assert.equal(settled, false);
       // 删除尚未持排空 gate；先让原 POST 实际经过 deleting 校验，再核删除终态和重启。
       await testControl({ action: "release", ...initial });
+      initialReleasedAt = Date.now();
       const reply = await pending;
+      responseReceivedAt = Date.now();
       assert.equal(settled, true);
-      assert.match(reply.error, /API 409:/, "删除先行后的原 POST 必须收到真实业务冲突");
-      assert.ok(reply.error.includes("Session catalog 节点非 active") && reply.error.includes(target.sessionId));
+      assert.equal(reply.error, undefined, reply.error);
+      assert.equal(reply.value.status, 409, "删除先行后的原 POST 必须收到真实业务冲突");
+      assert.equal(reply.value.body.detail,
+        `Session catalog 节点非 active，拒绝附件准入/发布: session_id=${target.sessionId}, state='deleting'`);
+      assert.equal(reply.value.body.request_id, reply.value.requestId);
+      rejection = reply.value;
+      const observedResponses = conflictResponses.filter((response) => response.requestId === rejection.requestId);
+      assert.ok(observedResponses.length <= 1, "同一 fork 409 request ID 不得重复登记");
+      if (observedResponses.length === 0) {
+        conflictResponses.push({
+          url: new URL(`/api/v1/sessions/${source.sessionId}/fork-context`, requestSurface.page.url()).toString(),
+          method: "POST", status: rejection.status, pageId: requestPageId, documentId: requestDocumentId,
+          requestedAt: requestStartedAt, receivedAt: responseReceivedAt, kind: "fork_context",
+          sessionId: source.sessionId, workspaceHeader: requestSurface.gatewayWorkspaceId,
+          requestId: rejection.requestId, body: rejection.body, forkRequest: structuredClone(request),
+        });
+      } else {
+        assert.deepEqual(observedResponses[0].forkRequest, request, "fork 409 response 必须绑定真实请求正文");
+      }
       await testControl({ action: "release", ...drainWaiting });
+      deletionDrainReleasedAt = Date.now();
     }
     await testControl({ action: "acknowledged", ...fenceClosed });
     const deletedClaims = await copyAttachmentClaims(surface, operationId);
@@ -4721,13 +5195,25 @@ async function runCopyAttachmentDeletionRace(surface, owners) {
     assert.equal(blobs.length, 1);
     assert.equal(blobs[0].availability, "tombstoned");
     assert.equal((await readAttachmentSql(surface, "SELECT COUNT(*) AS count FROM attachment_owner_refs WHERE blob_id=? AND state='active'", [blob.blob_id]))[0].count, 0);
-    facts.push({ finalizerFirst, capture, claims, publishedSettlement, deletion, claimsBeforeRelease, settlementBeforeRelease, deletedClaims, deletedSettlement, lease, killed, restarted, terminal, sourceDelete, blobs });
+    facts.push({ finalizerFirst, sourceSessionId: source.sessionId, sourceThreadId: source.threadId,
+      targetSessionId: target.sessionId, targetThreadId: target.threadId, workspaceId: requestSurface.gatewayWorkspaceId,
+      operationId, request: structuredClone(request), requestPageId, requestDocumentId, requestStartedAt,
+      response: rejection, responseReceivedAt, initialBarrier: initial,
+      deletionCatalogBarrier: finalizerFirst ? null : catalogDeleting, deletionCatalogAt,
+      initialReleasedAt, deletionDrainBarrier: finalizerFirst ? null : drainWaiting, deletionDrainReleasedAt,
+      capture, claims, publishedSettlement, deletion, claimsBeforeRelease, settlementBeforeRelease, deletedClaims,
+      deletedSettlement, lease, killed, restarted, terminal, sourceDelete, blobs });
   }
   return facts;
 }
 
 async function runCopyMissingAttachment(surface, owners) {
-  const input = await createAttachmentSource(surface, "公开 copy required 与 optional 正文缺失", owners);
+  const historyTiming = { targetTurnId: null, events: [] };
+  if (result.section8) result.section8.copy_missing_attachment = { historyTiming };
+  const recordPhase = (phase, operation) => measureHistoryPhase(historyTiming, phase, operation);
+  const input = await createAttachmentSource(surface, "公开 copy required 与 optional 正文缺失", owners, {
+    turnOptions: { verifyHistory: false, openBeforeSend: true },
+  });
   const { source, material, attachment, blob } = input;
   const blobPath = `${source.workspace}/.boxteam/attachments/${blob.relative_locator}`;
   const requiredRequest = await freezeForkRequest(source);
@@ -4753,19 +5239,24 @@ async function runCopyMissingAttachment(surface, owners) {
   await ownerApi(surface, "/api/v1/tools/selection", { method: "PATCH", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ agent_id: "default", changes: [{ tool_id: compactTool.tool_id, execution_enabled: true, model_visible: true }] }) });
   // 附件放在稳定缓存前缀之后，确保真实压缩归纳的是附件所在中段。
-  const optionalInput = await createAttachmentSource(surface, "optional source 保留历史与真实 compaction", owners, { prefixTurns: 4 });
+  const optionalInput = await recordPhase("copy_missing_attachment.setup_prefix_and_attachment", () =>
+    createAttachmentSource(surface, "optional source 保留历史与真实 compaction", owners, {
+      prefixTurns: 4, turnOptions: { verifyHistory: false, openBeforeSend: true },
+    }));
   const earlier = optionalInput.source, optionalTurn = optionalInput.material, optionalAttachment = optionalInput.attachment, optionalBlob = optionalInput.blob;
   const seeds = [];
   for (let index = 0; index < 3; index += 1) seeds.push(await completeOwnerTurn(earlier,
     `附件后的上下文素材 ${index}：${"这段详细过程必须由真实压缩归纳。".repeat(160)}`, [
       toolResponse(`optional-seed-${index}`, "read_file", { path: "README.md" }),
       finalResponse(`optional-seed-final-${index}`, `第 ${index} 轮素材已核对。${"详细过程只作为旧上下文。".repeat(160)}`),
-    ]));
+    ], [], { verifyHistory: false, openBeforeSend: false }));
   const compact = await completeOwnerTurn(earlier, "压缩旧上下文，历史附件保留在用户历史中。", [
     { ...toolResponse("optional-compact-real", "compact_conversation", {}), usage: { input: 100000, output: 16 } },
     { label: "optional-compact-summary", text: "之前已上传独占附件并核对 README，详细过程已完成。" },
     finalResponse("optional-compact-final", "旧上下文已经真实压缩，用户历史仍保留附件引用。"),
-  ]);
+  ], [], { historyTiming, openBeforeSend: false });
+  historyTiming.targetTurnId = compact.turn.turn_id;
+  result.section8.copy_missing_attachment = { historyTiming };
   assert.ok(compact.turn.response_parts.some((part) => part.kind === "compaction_summary"));
   const visible = (await ownerApi(earlier, `/api/v1/sessions/${earlier.sessionId}/messages`)).data.items;
   assert.ok(visible.some((message) => message.attachments.some((ref) => ref.file_id === optionalAttachment.file_id)), "压缩不得从完整可见消息中删掉历史附件");
@@ -4820,6 +5311,7 @@ async function runCopyMissingAttachment(surface, owners) {
   ]);
   const successorRequest = await modelRequest(successor.calls[0]);
   assert.ok(!JSON.stringify(successorRequest.request.messages).includes(optionalAttachment.file_id), "副本首次 Provider 不得复活历史不可用附件");
+  assert.ok(!JSON.stringify(successorRequest.request.messages).includes(targetFile), "副本首次 Provider 不得发送目标侧不可用附件引用");
   return { source: source.sessionId, material, missing, failedCapture, optionalSource: earlier.sessionId,
     optionalPrefix: optionalInput.prefix, optionalTurn, seeds, compact, attachmentMember, compactRequest, optionalPoint, unavailable, successor, successorRequest,
     target: { sessionId: target.owner.sessionId, history: target.targetHistory, displayed: target.displayed }, history };
@@ -7276,42 +7768,11 @@ async function runSection8Product(browser, primaryPage) {
     }
     const facts = {};
     result.section8 = facts;
-    let foreign;
-    const teamTarget = async () => foreign ??= await createProductSession(surfaces.b, "团队拒绝跨 Session 目标");
-    const scenarios = {
-      child: () => runChildFifoAndResidency(surfaces.a),
-      team_turn: async () => runTeamActivation(surfaces.a, "turn", await teamTarget()),
-      team_model_call: async () => runTeamActivation(surfaces.c, "model_call", await teamTarget()),
-      mcp_turn: () => runMcpActivation(surfaces.a, "turn"),
-      mcp_model_call: () => runMcpActivation(surfaces.c, "model_call"),
-      weekly: () => runWeeklyReport(surfaces),
-      fork_child_ui: () => runDefaultChildForkUi(surfaces.a),
-      forks: () => runPublicForks(surfaces),
-      copy_attachments: () => runCopyAttachmentFocus(surfaces.a),
-      optional_seed_revisit: () => runOptionalSeedRevisit(surfaces.a),
-      compaction: () => runRealCompaction(surfaces.a),
-      communication_recovery: () => runCommunicationRecovery(surfaces),
-      read_recovery: () => facts.weekly?.frozenRead ?? runReadRecovery(surfaces),
-      wait_recovery: () => runWaitRecovery(surfaces),
-      observation_deletion: () => runObservationDeletion(surfaces),
-      lifecycle_admission_deletion: () => runLifecycleAdmissionDeletion(surfaces),
-      navigation_dates: () => runNavigationDates(surfaces),
-      navigation_optimism: () => runNavigationOptimism(surfaces),
-      initial_admission_recovery: () => runInitialAdmissionRecovery(surfaces),
-      generated_internal_history: () => runGeneratedInternalHistory(surfaces),
-      turn_navigation: () => runTurnNavigation(surfaces.a),
-      read_cursor_expiry: () => runReadCursorExpiry(surfaces, facts.read_recovery),
-    };
-    const requested = focusedScenarios.length ? focusedScenarios
-      : Object.keys(scenarios).filter((name) => !["copy_attachments", "optional_seed_revisit"].includes(name));
-    if (requested.includes("read_cursor_expiry")) {
-      assert.ok(requested.includes("read_recovery"), "expiry focus 必须包含同轮 read_recovery");
-      assert.equal(requested.at(-1), "read_cursor_expiry", "wait 时钟不回拨，cursor expiry 必须在所有场景之后");
-    }
-    for (const name of requested) {
-      assert.equal(typeof scenarios[name], "function", '未知 Section 8 场景：' + name);
+    const scenarios = section8ScenarioRegistry(surfaces, facts);
+    for (const name of section8Selection.selected) {
+      assert.equal(typeof scenarios[name]?.run, "function", '未知 Section 8 场景：' + name);
       result.runningScenario = name;
-      facts[name] = await scenarios[name]();
+      facts[name] = await scenarios[name].run();
     }
     delete result.runningScenario;
     return facts;
@@ -7320,7 +7781,8 @@ async function runSection8Product(browser, primaryPage) {
   }
 }
 
-const phasePath = `${requiredEnvironment("BOXTEAM_BROWSER_ARTIFACT_ROOT")}/basic-chat-tool-loop-phases.log`;
+const phasePath = messageStreamDiagnosticsSelfTest ? ""
+  : `${requiredEnvironment("BOXTEAM_BROWSER_ARTIFACT_ROOT")}/basic-chat-tool-loop-phases.log`;
 async function browserStartup(label, create) {
   const phase = async (suffix) => {
     const line = `${new Date().toISOString()} ${label}_${suffix} pid=${process.pid}\n`;
@@ -7362,24 +7824,47 @@ const navigationReads = new Set();
 const messageStreamResponses = [];
 let diagnosticPageId = 0;
 
-function classifyConsoleErrors() {
+function classifyConsoleErrors(input = {}) {
+  const {
+    consoleErrorFacts: errorFacts = consoleErrorFacts,
+    consoleErrors: errorTexts = consoleErrors,
+    failedRequests: failures = failedRequests,
+    messageStreamResponses: streamResponses = messageStreamResponses,
+    jobOwnerResponses: ownerResponses = jobOwnerResponses,
+    conflictResponses: conflictFacts = conflictResponses,
+    historyErrorResponses: historyErrors = historyErrorResponses,
+    lifecycleErrorResponses: lifecycleErrors = lifecycleErrorResponses,
+    lifecycleDeletionProofs: deletionProofs = lifecycleDeletionProofs,
+    turnNavigationMissingTurnProofs: missingTurnProofs = turnNavigationMissingTurnProofs,
+    historyLiveProofs: liveProofs = historyLiveProofs,
+    historyRecoveryResponses: recoveryFacts = historyRecoveryResponses,
+    forkDeletionRaceFacts = input.section8Facts?.forks?.attachmentDeletionRace
+      ?? result.section8?.forks?.attachmentDeletionRace ?? [],
+  } = input;
   const handled = [];
   const handledLifecycle = [];
   const handledTurnNavigation = [];
   const messageStreamClassification = classifyMessageStreamErrors(
-    consoleErrorFacts, consoleErrors, messageStreamResponses, jobOwnerResponses,
+    errorFacts, errorTexts, streamResponses, ownerResponses,
   );
+  const incompleteStreamClassification = classifyIncompleteMessageStreamErrors(
+    errorFacts, failures, streamResponses, ownerResponses,
+  );
+  const handledForkDeletion = classifyForkAttachmentDeletionConflicts(errorFacts, conflictFacts, forkDeletionRaceFacts);
   const handledMessageStream = messageStreamClassification.handledMessageStreamErrors;
   const handledMessageStreamIndexes = new Set(handledMessageStream.map((fact) => fact.consoleIndex));
+  const handledIncompleteStreamIndexes = incompleteStreamClassification.consumedConsoleIndexes;
+  const handledForkDeletionIndexes = new Set(handledForkDeletion.map((fact) => fact.consoleIndex));
   const consumed = new Set();
   const consumedTurnNavigationRequests = new Set();
-  for (const error of consoleErrorFacts) {
-    if (handledMessageStreamIndexes.has(error.index)) continue;
+  for (const error of errorFacts) {
+    if (handledMessageStreamIndexes.has(error.index) || handledIncompleteStreamIndexes.has(error.index)
+        || handledForkDeletionIndexes.has(error.index)) continue;
     const status = error.text === "Failed to load resource: the server responded with a status of 409 (Conflict)" ? 409
       : error.text === "Failed to load resource: the server responded with a status of 404 (Not Found)" ? 404 : null;
     if (status === null || typeof error.url !== "string" || !error.url) continue;
     // 每条拒绝必须绑定同文档的实际响应；删除还需原 journal、tombstone 和目录 DOM 证据。
-    const responses = status === 409 ? conflictResponses : [...historyErrorResponses, ...lifecycleErrorResponses];
+    const responses = status === 409 ? conflictFacts : [...historyErrors, ...lifecycleErrors];
     const candidates = responses.filter((response) => response.pageId === error.pageId
       && response.documentId === error.documentId && response.url === error.url);
     const deletionFacts = candidates.map((refusal) => {
@@ -7420,7 +7905,7 @@ function classifyConsoleErrors() {
         jobOwnerRequestId = owners[0].requestId;
       } else if (typeof nodeId !== "string" || !detail.includes(nodeId)) return null;
       if (status === 409 && (refusal.kind === "breadcrumb" || !detail.startsWith("session_deletion_pending:"))) return null;
-      const lifecycleProofIndex = lifecycleDeletionProofs.findIndex((proof) => proof.origin === new URL(refusal.url).origin
+      const lifecycleProofIndex = deletionProofs.findIndex((proof) => proof.origin === new URL(refusal.url).origin
         && proof.workspaceHeader === refusal.workspaceHeader && proof.terminalRequestId
         && proof.journal.state === "completed" && proof.remaining.length === 0
         && proof.verifiedAt >= refusal.receivedAt
@@ -7449,7 +7934,7 @@ function classifyConsoleErrors() {
             || response.parameters.direction !== "around" || response.parameters.before_turns !== 3
             || response.parameters.after_turns !== 3
             || Object.keys(response.parameters).length !== 4) return null;
-        const proofIndex = turnNavigationMissingTurnProofs.findIndex((proof) => proof.pageId === error.pageId
+        const proofIndex = missingTurnProofs.findIndex((proof) => proof.pageId === error.pageId
           && proof.documentId === error.documentId && proof.pageId === response.pageId
           && proof.documentId === response.documentId && proof.sessionId === response.sessionId
           && proof.threadId === response.threadId && proof.workspaceId === response.workspaceHeader
@@ -7496,10 +7981,10 @@ function classifyConsoleErrors() {
           || !Number.isInteger(detail.cursor_history_view_revision) || detail.cursor_history_view_revision < 0
           || !Number.isInteger(detail.current_history_view_revision)
           || detail.current_history_view_revision <= detail.cursor_history_view_revision) return null;
-      for (const [liveProofIndex, proof] of historyLiveProofs.entries()) {
+      for (const [liveProofIndex, proof] of liveProofs.entries()) {
         if (proof.pageId !== conflict.pageId || proof.documentId !== conflict.documentId
             || proof.sessionId !== conflict.sessionId || proof.workspaceId !== conflict.workspaceHeader) continue;
-        const responses = historyRecoveryResponses.filter((response) => response.pageId === proof.pageId
+        const responses = recoveryFacts.filter((response) => response.pageId === proof.pageId
           && response.documentId === proof.documentId && response.sessionId === proof.sessionId
           && response.workspaceHeader === proof.workspaceId && response.body?.request_id === response.requestId
           && response.requestId && response.body.threadId === proof.threadId
@@ -7524,12 +8009,17 @@ function classifyConsoleErrors() {
     consumed.add(candidates[index].requestId);
     handled.push({ consoleIndex: error.index, ...recoveries[index] });
   }
-  const handledConsoleIndexes = new Set([...handled, ...handledLifecycle, ...handledTurnNavigation, ...handledMessageStream]
+  const handledConsoleIndexes = new Set([...handled, ...handledLifecycle, ...handledTurnNavigation,
+    ...handledMessageStream, ...handledForkDeletion]
     .map((fact) => fact.consoleIndex));
+  for (const index of handledIncompleteStreamIndexes) handledConsoleIndexes.add(index);
   return { handledHistoryConflicts: handled, handledLifecycleErrors: handledLifecycle,
     handledTurnNavigationErrors: handledTurnNavigation,
     handledMessageStreamErrors: handledMessageStream,
-    unhandledConsoleErrors: consoleErrors.filter((_error, index) => !handledConsoleIndexes.has(index)) };
+    handledForkAttachmentDeletionConflicts: handledForkDeletion,
+    handledIncompleteMessageStreamErrors: incompleteStreamClassification.handled,
+    unhandledConsoleErrors: errorTexts.filter((_error, index) => !handledConsoleIndexes.has(index)),
+    unhandledFailedRequests: incompleteStreamClassification.unhandledFailedRequests };
 }
 
 function installPageDiagnostics(page) {
@@ -7537,6 +8027,7 @@ function installPageDiagnostics(page) {
   page.diagnosticId = ++diagnosticPageId;
   page.diagnosticDocumentId = 0;
   const requestDocuments = new WeakMap();
+  const streamResponseByRequest = new WeakMap();
   page.on("framenavigated", (frame) => {
     if (frame === page.mainFrame()) page.diagnosticDocumentId += 1;
   });
@@ -7567,7 +8058,20 @@ page.on("request", (request) => {
 });
 page.on("requestfailed", (request) => {
   if (isExpectedBrowserAbort(request)) return;
-  failedRequests.push({ url: request.url(), error: request.failure()?.errorText || "unknown" });
+  const failedAt = Date.now();
+  const requestDocument = requestDocuments.get(request);
+  const streamResponse = streamResponseByRequest.get(request);
+  const error = request.failure()?.errorText || "unknown";
+  if (streamResponse) {
+    streamResponse.failedAt = failedAt;
+    streamResponse.failure = error;
+  }
+  failedRequests.push({ url: request.url(), error, pageId: page.diagnosticId,
+    documentId: requestDocument?.documentId ?? null, requestedAt: requestDocument?.requestedAt ?? null, failedAt,
+    ...(streamResponse ? { responseRequestId: streamResponse.requestId, status: streamResponse.status,
+      sessionId: streamResponse.sessionId, turnId: streamResponse.turnId, threadId: streamResponse.threadId,
+      turnStreamId: streamResponse.turnStreamId, afterSeq: streamResponse.afterSeq,
+      workspaceHeader: streamResponse.workspaceHeader, messageStreamId: streamResponse.messageStreamId } : {}) });
 });
 page.on("response", (response) => {
   const url = new URL(response.url());
@@ -7587,6 +8091,7 @@ page.on("response", (response) => {
       sessionId: streamTarget.sessionId,
       turnId: streamTarget.turnId,
       threadId: streamTarget.threadId,
+      turnStreamId: streamTarget.turnStreamId,
       afterSeq: streamTarget.afterSeq,
       workspaceHeader: request.headers()["x-boxteam-workspace-id"] ?? null,
       requestId: responseHeaders["x-request-id"] ?? null,
@@ -7599,6 +8104,7 @@ page.on("response", (response) => {
       },
     };
     messageStreamResponses.push(fact);
+    streamResponseByRequest.set(request, fact);
     if (fact.status === 404) {
       const read = readBoundedMessageStreamErrorBody(response, fact)
         .catch((error) => { fact.bodyError = String(error); });
@@ -7617,6 +8123,7 @@ page.on("response", (response) => {
   const attachmentContent = /^\/api\/v1\/sessions\/([^/]+)\/attachments\/content$/.exec(url.pathname);
   const job = /^\/api\/v1\/jobs\/([^/]+)$/.exec(url.pathname);
   const admission = /^\/api\/v1\/sessions\/([^/]+)\/(?:threads\/([^/]+)\/)?messages$/.exec(url.pathname);
+  const forkContext = /^\/api\/v1\/sessions\/([^/]+)\/fork-context$/.exec(url.pathname);
   if (response.status() === 409 || history && [200, 404].includes(response.status())
       || (pending || breadcrumb || mainThread) && response.status() === 404
       || (session || fileTreeSettings || goal || attachmentContent) && response.status() === 404
@@ -7627,9 +8134,10 @@ page.on("response", (response) => {
       pageId: page.diagnosticId, ...requestDocuments.get(request),
       kind: historyKind ?? (pending ? "pending" : breadcrumb ? "breadcrumb"
         : mainThread ? "main_thread" : session ? "session" : fileTreeSettings ? "file_tree_settings"
-          : goal ? "goal" : attachmentContent ? "attachment_content" : job ? "job" : admission ? "admission" : null),
+          : goal ? "goal" : attachmentContent ? "attachment_content" : job ? "job"
+            : admission ? "admission" : forkContext ? "fork_context" : null),
       sessionId: history?.[1] ?? pending?.[1] ?? mainThread?.[1] ?? session?.[1] ?? fileTreeSettings?.[1]
-        ?? goal?.[1] ?? attachmentContent?.[1] ?? admission?.[1] ?? null,
+        ?? goal?.[1] ?? attachmentContent?.[1] ?? admission?.[1] ?? forkContext?.[1] ?? null,
       nodeId: breadcrumb?.[1] ?? null, jobId: job?.[1] ?? null,
       attachmentFileId: attachmentContent ? url.searchParams.get("file_id") : null,
       threadId: history?.[3] ?? admission?.[2] ?? null,
@@ -7637,6 +8145,13 @@ page.on("response", (response) => {
       workspaceHeader: request.headers()["x-boxteam-workspace-id"] ?? null,
       requestId: response.headers()["x-request-id"] ?? null,
       receivedAt: Date.now() };
+    if (fact.kind === "fork_context" && request.method() === "POST") {
+      try {
+        fact.forkRequest = request.postDataJSON();
+      } catch (error) {
+        fact.forkRequestBodyError = String(error);
+      }
+    }
     if (fact.status === 409) {
       conflictResponses.push(fact);
       if (fact.kind === "history") historyConflictResponses.push(fact);
@@ -7695,6 +8210,10 @@ const result = {
   forkRequests: [],
 };
 
+if (messageStreamDiagnosticsSelfTest) {
+  runMessageStreamDiagnosticsSelfTest();
+  process.stdout.write("message stream diagnostics self-test passed\n");
+} else {
 try {
   browser = await browserStartup("browser_launch", () => chromium.launch({ executablePath, headless: true, timeout: 30_000 }));
   context = await browserStartup("browser_context", () => browser.newContext({ viewport: { width: 1920, height: 1100 } }));
@@ -7709,7 +8228,7 @@ try {
   const workspaces = await api(page, "/api/gateway/workspaces");
   assert.equal(workspaces?.data?.active_workspace_id, expectedWorkspaceId, "active workspace 不一致");
 
-  if (focusedScenarios.length === 0) {
+  if (section8Selection.mode === "default") {
     const rootOwner = await createSessionThroughGateway(page, expectedWorkspaceId);
     result.sessionId = rootOwner.sessionId;
     await page.reload({ waitUntil: "domcontentloaded" });
@@ -7764,13 +8283,14 @@ try {
     ]);
     assert.match(result.persisted.agentStateJsonl, /先读取 README\.md/);
   }
-  result.focusedScenarios = focusedScenarios;
+  result.section8Mode = section8Selection.mode;
+  result.focusedScenarios = section8Selection.requested;
   result.section8 = await runSection8Product(browser, page);
   await Promise.all(navigationReads);
   Object.assign(result.diagnostics, classifyConsoleErrors());
   assert.deepEqual(pageErrors, [], "浏览器 pageerror 出现");
   assert.deepEqual(result.diagnostics.unhandledConsoleErrors, [], "浏览器存在未处理的 console error");
-  assert.deepEqual(failedRequests, [], "浏览器请求失败");
+  assert.deepEqual(result.diagnostics.unhandledFailedRequests, [], "浏览器请求失败缺少同一 stream 的后续恢复证据");
   await writeFile(resultPath, JSON.stringify(result, null, 2));
 } catch (error) {
   let screenshotError = null;
@@ -7789,4 +8309,5 @@ try {
   } finally {
     if (browser) await browserStartup("browser_close", () => browser.close());
   }
+}
 }

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from langchain_core.messages import BaseMessage
 
@@ -31,7 +31,7 @@ def project_history_items(
 
 def project_history_plan(
     plan: ContextRequestPlan,
-    items: Sequence[CanonicalItemRecord],
+    items: Mapping[tuple[str, str, str], CanonicalItemRecord],
     *,
     include_runtime_notices: bool = False,
     include_summaries: bool = False,

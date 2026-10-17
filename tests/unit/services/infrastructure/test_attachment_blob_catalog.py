@@ -20,17 +20,34 @@ from unittest.mock import AsyncMock
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, message_to_dict
+from langgraph.checkpoint.base import empty_checkpoint
 from PIL import Image
 
+from app.agents.graph_binding import (
+    DEEP_AGENT_CAPABILITY_PROFILE,
+    DEEP_AGENT_GRAPH_BINDING,
+    compute_capability_profile_hash,
+)
+from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
+from app.core.identifier import create_uuid_hex
+from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_catalog_store.contracts import ForkSourceCaptureRecord
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.core.session_thread_context import session_thread_owner_scope
+from app.core.thread_creation import ThreadCreationService
+from app.core.trace_middleware import (
+    get_current_gateway_id,
+    reset_current_gateway_id,
+    set_current_gateway_id,
+)
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import user_input_payload
+from app.domain.itemized.request_plan import ContextRequestPlan
 from app.schemas.internal_v2.message import AttachmentRef
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.session_context_fork_service import SessionContextForkService
@@ -57,6 +74,9 @@ from app.services.infrastructure.attachment_content_service import (
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.runtime.composer import (
+    ContextPlanComposer,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
@@ -151,6 +171,51 @@ async def attachment_tool_owner(fork_capture, tmp_path, frozen_provider_wire, fr
 
 
 @pytest.fixture
+def attachment_sibling_factory(attachment_tool_owner):
+    """通过真实 Thread 创建和 ingress 建立与 owner 同 ID 的 sibling item。"""
+    case = attachment_tool_owner
+    sessions = case.saver._storage.storage.sessions_dir
+    catalog = SessionCatalogStore(sessions.parent / "navigation/session-catalog.sqlite", sessions)
+    control = SessionControlStore(case.store._path_resolver.resolve_session_node(SESSION_A) / "session-control.sqlite")
+    creator = ThreadCreationService(
+        store=catalog, control_store=control, sessions_root=sessions,
+        workspace_id=catalog.get_node(SESSION_A).workspace_id,
+        compute_capability_profile_hash=compute_capability_profile_hash,
+    )
+
+    async def create(payload: object) -> ContextRef:
+        child = await creator.create(
+            idempotency_key="attachment-sibling", session_id=SESSION_A, thread_id=None,
+            delegation_id=None, initial_state="idle", artifact_manifest={},
+            session_metadata={
+                "graph_binding": {
+                    "graph_id": DEEP_AGENT_GRAPH_BINDING.graph_id,
+                    "graph_revision": DEEP_AGENT_GRAPH_BINDING.graph_revision,
+                    "graph_schema_hash": DEEP_AGENT_GRAPH_BINDING.graph_schema_hash,
+                    "capability_profile_hash": DEEP_AGENT_GRAPH_BINDING.capability_profile_hash,
+                }, "capability_profile": dict(DEEP_AGENT_CAPABILITY_PROFILE),
+                "task_seed": None, "task_reference": None,
+            },
+        )
+        snapshot = case.saver.get_context_assembly(SESSION_A, thread_id=case.owner.thread_id, assembly_id=case.assembly_id)
+        root = next(ref for ref in snapshot.refs if ref.semantic_kind == "user_input")
+        case.saver.accept_turn(
+            SESSION_A, thread_id=child.child_thread_id, root_item_id=root.ref_id,
+            accepted_ingress_id="sibling-ingress", acceptance_idempotency_key="sibling-accept",
+            job_id="sibling-job", admission_idempotency_key="sibling-admit",
+            payload=payload, payload_kind="structured_content" if isinstance(payload, dict) else "text",
+        )
+        item = case.saver._storage.storage.read_items(SESSION_A, child.child_thread_id, item_ids=(root.ref_id,))[0]
+        return ContextRef.canonical_item(item, session_id=SESSION_A, thread_id=child.child_thread_id)
+
+    try:
+        yield create
+    finally:
+        control.close()
+        catalog.close()
+
+
+@pytest.fixture
 def fork_source_point_service(attachment_tool_owner):
     """外层 Session/Goal 只提供展示 metadata；附件必须由真实 ingress 索引取得。"""
     owner = attachment_tool_owner.owner
@@ -165,13 +230,18 @@ def fork_source_point_service(attachment_tool_owner):
     async def get_goal(session_id):
         assert session_id == owner.session_id
 
-    return SessionContextForkService(
+    service = SessionContextForkService(
         session_service=SimpleNamespace(get=get_session),
         checkpointer=attachment_tool_owner.saver,
         thread_creation_factory=SimpleNamespace(), goal_service=SimpleNamespace(get=get_goal),
         terminal_resource_owner=SimpleNamespace(list_resources=AsyncMock(return_value=[])),
         browser_resource_owner=SimpleNamespace(list_resources=AsyncMock(return_value=[])),
     )
+    token = set_current_gateway_id("attachment-fork-gateway")
+    try:
+        yield service
+    finally:
+        reset_current_gateway_id(token)
 
 
 async def test_source_point_projects_ingress_attachment_with_frozen_scope(
@@ -258,6 +328,137 @@ async def test_attachment_capability_rejects_other_session_even_with_same_blob(a
     with pytest.raises(RuntimeError, match="identity 缺失或歧义"):
         case.saver.read_tool_call_attachment(SESSION_A, thread_id=case.owner.thread_id,
             tool_call_id="unissued-call", model_call_id=case.model_call_id, file_id=case.ref.file_id)
+
+
+@pytest.mark.asyncio
+async def test_cold_attachment_capability_does_not_alias_same_item_id_in_sibling(
+    attachment_tool_owner, attachment_sibling_factory,
+):
+    case = attachment_tool_owner
+    sessions = case.saver._storage.storage.sessions_dir
+    ref = await attachment_sibling_factory("该 sibling item 没有 owner 的附件")
+    owner_snapshot = case.saver.get_context_assembly(SESSION_A, thread_id=case.owner.thread_id, assembly_id=case.assembly_id)
+    plan = case.saver.create_context_plan(SESSION_A, ContextRequestPlan(
+        session_id=SESSION_A, thread_id=case.owner.thread_id, plan_id="sibling-attachment-plan",
+        plan_creation_idempotency_key="sibling-attachment-create", refs=(ref,),
+    )).draft
+    execution = owner_snapshot.execution_id
+    model_call_id = create_uuid_hex()
+    snapshot = ContextPlanComposer().assembly(
+        plan=plan, assembly_id="sibling-attachment-assembly", session_id=SESSION_A,
+        thread_id=case.owner.thread_id, turn_id=case.turn_id,
+        execution_id=execution, provider_version="attachment-sibling-test", model_call_id=model_call_id,
+    )
+    case.saver.seal_context_assembly(SESSION_A, case.owner.thread_id, snapshot,
+        seal_idempotency_key="sibling-attachment-seal", seal_input_hash=sha256_jcs("sibling-input"))
+    admission = case.saver.execution_admission(SESSION_A, thread_id=case.owner.thread_id, execution_id=execution)
+    with session_thread_owner_scope(case.owner, langgraph_thread_id=case.owner.thread_id), execution_admission_scope(admission, langgraph_thread_id=case.owner.thread_id):
+        case.saver.register_model_call(SESSION_A, thread_id=case.owner.thread_id, execution_id=execution,
+            model_call_id=model_call_id, attempt=2, provider="attachment-sibling-test", assembly_id=snapshot.assembly_id)
+        case.saver.ensure_request_items(SESSION_A, case.owner.thread_id, turn_id=case.turn_id, execution_id=execution,
+            messages=[AIMessage(content="", id="lc_run--" + model_call_id,
+                tool_calls=[{"id": "sibling-read", "name": "read_file", "args": {}, "type": "tool_call"}])])
+    cold = RolloutCheckpointSaver(sessions, attachment_store=case.store)
+    assert cold.read_tool_call_attachment(SESSION_A, thread_id=case.owner.thread_id,
+        tool_call_id=case.call_id, model_call_id=case.model_call_id, file_id=case.ref.file_id).data == b"first\noriginal attachment\n"
+    with pytest.raises(PermissionError, match="原始 assembly"):
+        cold.read_tool_call_attachment(SESSION_A, thread_id=case.owner.thread_id,
+            tool_call_id="sibling-read", model_call_id=model_call_id, file_id=case.ref.file_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ref_scope", ["owner", "sibling"])
+async def test_fork_source_attachment_candidates_require_frozen_ref_thread(
+    attachment_tool_owner, attachment_sibling_factory, fork_source_point_service, ref_scope, monkeypatch,
+):
+    case = attachment_tool_owner
+    storage = case.saver._storage.storage
+    root = next(item for item in storage.read_items(SESSION_A, case.owner.thread_id) if item.semantic_kind == "user_input")
+    owner_ref = ContextRef.canonical_item(root, session_id=SESSION_A, thread_id=case.owner.thread_id)
+    sibling_ref = await attachment_sibling_factory(root.payload)
+    # 正文和所有本地 JOIN 字段相同，只有冻结 thread 不同；拒绝不能借助 hash 不匹配。
+    assert sibling_ref.ref_id == owner_ref.ref_id and sibling_ref.thread_id != owner_ref.thread_id
+    assert (sibling_ref.content_hash, sibling_ref.content_length, sibling_ref.source_revision, sibling_ref.item_sequence) == (
+        owner_ref.content_hash, owner_ref.content_length, owner_ref.source_revision, owner_ref.item_sequence,
+    )
+    accepted = case.saver.accept_turn(SESSION_A, thread_id=case.owner.thread_id,
+        accepted_ingress_id="fork-visible-ingress", acceptance_idempotency_key="fork-visible-accept",
+        job_id="fork-visible-job", admission_idempotency_key="fork-visible-admit",
+        payload="后继 Turn 自身没有附件", payload_kind="text")
+    new_root = storage.read_items(SESSION_A, case.owner.thread_id, item_ids=(accepted["root_input_item_id"],))[0]
+    assert new_root.projection_identity is not None
+    execution = accepted["initial_execution_id"]
+    ref = owner_ref if ref_scope == "owner" else sibling_ref
+    plan = case.saver.create_context_plan(SESSION_A, ContextRequestPlan(
+        session_id=SESSION_A, thread_id=case.owner.thread_id, plan_id="fork-scope-plan",
+        plan_creation_idempotency_key="fork-scope-create", refs=(ref,),
+    )).draft
+    model_call_id = create_uuid_hex()
+    snapshot = ContextPlanComposer().assembly(
+        plan=plan, assembly_id="fork-scope-assembly", session_id=SESSION_A, thread_id=case.owner.thread_id,
+        turn_id=accepted["turn_id"], execution_id=execution, provider_version="fork-scope-test", model_call_id=model_call_id,
+    )
+    case.saver.seal_context_assembly(SESSION_A, case.owner.thread_id, snapshot,
+        seal_idempotency_key="fork-scope-seal", seal_input_hash=sha256_jcs("fork-scope-input"))
+    admission = case.saver.execution_admission(SESSION_A, thread_id=case.owner.thread_id, execution_id=execution)
+    with session_thread_owner_scope(case.owner, langgraph_thread_id=case.owner.thread_id), execution_admission_scope(admission, langgraph_thread_id=case.owner.thread_id):
+        case.saver.register_model_call(SESSION_A, thread_id=case.owner.thread_id, execution_id=execution,
+            model_call_id=model_call_id, attempt=1, provider="fork-scope-test", assembly_id=snapshot.assembly_id)
+        checkpoint = empty_checkpoint()
+        checkpoint["id"] = "fork-scope-checkpoint"
+        checkpoint["channel_values"] = {"messages": [
+            HumanMessage(content=new_root.payload, id=new_root.projection_identity.projection_message_id,
+                         response_metadata={"turn_id": accepted["turn_id"]}),
+            AIMessage(content="仅 producer manifest 引用前一条附件", id="lc_run--" + model_call_id,
+                      response_metadata={"model_call_id": model_call_id}),
+        ]}
+        checkpoint["channel_versions"] = {"messages": "1"}
+        case.saver.put(build_checkpoint_config(case.owner.thread_id), checkpoint, {"source": "loop"}, {"messages": "1"})
+    answer = next(item for item in storage.read_items(SESSION_A, case.owner.thread_id)
+                  if item.semantic_kind == "assistant_output" and item.turn_id == accepted["turn_id"])
+    with storage._connect(case.owner.thread_id, "", session_id=SESSION_A) as connection:
+        view, revision = connection.execute(
+            "SELECT branch.head_view_id,meta.history_view_revision FROM checkpoint_namespace_state namespace "
+            "JOIN branches branch ON branch.branch_id=namespace.active_branch_id "
+            "JOIN database_meta meta ON meta.singleton_id=1 WHERE namespace.checkpoint_ns=''",
+        ).fetchone()
+        # 收窄查询 fixture 的有效 view；前一个 Turn 只保留为 producer 正文依赖。
+        connection.execute(
+            "UPDATE context_view_items SET visible=0,context_selected=0,context_ordinal=NULL "
+            "WHERE view_id=? AND item_id IN (SELECT item_id FROM item_catalog WHERE turn_id=?)",
+            (view, case.turn_id),
+        )
+        assert connection.execute(
+            "SELECT 1 FROM context_view_items WHERE view_id=? AND item_id=? AND visible=1 AND context_selected=1",
+            (view, root.item_id),
+        ).fetchall() == []
+        assert connection.execute(
+            "SELECT ref_thread_id FROM context_assembly_selections WHERE assembly_id=? AND ref_type='canonical_item'",
+            (snapshot.assembly_id,),
+        ).fetchall() == [(ref.thread_id,)]
+        assert connection.execute(
+            "SELECT 1 FROM history_namespace_bindings WHERE session_id=? AND thread_id=?",
+            (SESSION_A, sibling_ref.thread_id),
+        ).fetchall() == []
+        assert connection.execute("SELECT resource_uri FROM item_resource_references WHERE item_id=?", (root.item_id,)).fetchall() == [(case.ref.file_id,)]
+    observed = []
+    project = case.saver.forks.source.project_display_resources
+
+    async def project_resources(**kwargs):
+        observed.append((kwargs["source_owner"], kwargs["source_view_id"], kwargs["source_view_revision"]))
+        return await project(**kwargs)
+
+    monkeypatch.setattr(case.saver.forks.source, "project_display_resources", project_resources)
+    assert get_current_gateway_id() == "attachment-fork-gateway"
+    point = await fork_source_point_service.source_point(
+        session_id=SESSION_A, thread_id=case.owner.thread_id, item_id=answer.item_id,
+        source_view_id=view, source_view_revision=revision,
+    )
+    assert observed == [(case.owner, view, revision)]
+    assert point.anchor_item_id == answer.item_id and point.source_view_revision == revision
+    assert [(resource.resource_uri, resource.required_for_context) for resource in point.resources] == (
+        [(case.ref.file_id, True)] if ref_scope == "owner" else []
+    )
 
 
 @pytest.mark.asyncio

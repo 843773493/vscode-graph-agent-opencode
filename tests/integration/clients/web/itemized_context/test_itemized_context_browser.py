@@ -21,7 +21,7 @@ from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
 )
-from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
 from app.domain.itemized.records import (
     CanonicalItemRecord,
     TurnScope,
@@ -271,7 +271,10 @@ async def browser_source(browser_runtime, native_http_server):
                 turn_id=turn_id,
                 execution_id=execution_id,
                 provider_version="browser-contract",
-                omitted_ref_ids=(canonical[1].ref_id, "a-delta"),
+                omitted_ref_identities=(
+                    selection_ref_identity(canonical[1]),
+                    selection_ref_identity(next(ref for ref in requests if ref.ref_id == "a-delta")),
+                ),
                 request_only_content={plain.ref_id: plain_body},
             )
             # 第三个真实封存快照用于通过 UI 翻页找到最早请求。

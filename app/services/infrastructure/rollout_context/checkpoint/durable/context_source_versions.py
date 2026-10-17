@@ -394,8 +394,8 @@ class ContextSourceVersionsStorageMixin:
             for ref_id, revision, kind, item_id in connection.execute(
                 "SELECT ref_id, source_revision, source_cut_position_kind, source_cut_item_id "
                 "FROM context_assembly_selections WHERE assembly_id = ? AND included = 1 "
-                "AND ref_type = 'request_only'",
-                (source_assembly.assembly_id,),
+                "AND ref_type = 'request_only' AND ref_thread_id = ?",
+                (source_assembly.assembly_id, source_assembly.thread_id),
             ).fetchall()
             if ref_id in selected and revision == selected[ref_id]
         }

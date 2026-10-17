@@ -22,7 +22,7 @@ from app.domain.itemized.hashing import (
     contribution_content_hash,
     sha256_jcs,
 )
-from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextContribution, SourceBinding
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
@@ -230,7 +230,7 @@ def test_omission_keeps_selection_without_resolving_body_or_tools(
     saver, session_id, session = projection_saver
     draft, bodies = projection_draft
     omitted = tuple(
-        ref.ref_id
+        selection_ref_identity(ref)
         for ref in (*draft.refs, *draft.tool_set_refs)
         if omission == "all" or ref.ref_type == omission
     )
@@ -266,7 +266,7 @@ def test_omission_keeps_selection_without_resolving_body_or_tools(
             thread_id=saver._storage.storage.main_thread_id(session_id),
         ),
         provider_version="contract-provider",
-        omitted_ref_ids=omitted,
+        omitted_ref_identities=omitted,
         request_only_content=bodies,
     )
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
@@ -279,8 +279,12 @@ def test_omission_keeps_selection_without_resolving_body_or_tools(
     )
     assert result["losses"] == result["history_losses"] == result["native"]["losses"]
     assert len(result["losses"]) == len(omitted)
-    assert not set(omitted) & {
+    assert not {identity[1] for identity in omitted} & {
         source["ref_id"] for source in result["native"]["wire_sources"]
+    }
+    assert not set(omitted) & {
+        selection_ref_identity(snapshot.selection[source["plan_ordinal"]].ref)
+        for source in result["native"]["wire_sources"]
     }
     if omission in {"tool_set", "all"}:
         assert result["native"]["request"]["tools"] == []
@@ -731,10 +735,10 @@ def test_invalid_selection_union_is_rejected_in_domain_and_restore(
         ()
         if included
         else tuple(
-            ref.ref_id for ref in draft.refs if ref.base_delta_role in {"base", "delta"}
+            selection_ref_identity(ref) for ref in draft.refs if ref.base_delta_role in {"base", "delta"}
         )
         if tag == "overlay_base"
-        else (target.ref_id,)
+        else (selection_ref_identity(target),)
     )
     draft = register_projection_draft(saver, session_id, draft)
     snapshot = saver.seal_context_plan(
@@ -747,7 +751,7 @@ def test_invalid_selection_union_is_rejected_in_domain_and_restore(
         turn_id="turn-1",
         execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
         provider_version="contract-provider",
-        omitted_ref_ids=omitted,
+        omitted_ref_identities=omitted,
     )
     entry = next(
         entry for entry in snapshot.selection if entry.ref.ref_id == target.ref_id
@@ -834,7 +838,7 @@ def test_canonical_and_tool_selection_forbid_detail_and_contribution_slots(
         turn_id="turn-1",
         execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
         provider_version="contract-provider",
-        omitted_ref_ids=() if included else (target.ref_id,),
+        omitted_ref_identities=() if included else (selection_ref_identity(target),),
     )
     entry = next(
         entry for entry in snapshot.selection if entry.ref.ref_id == target.ref_id
@@ -1175,7 +1179,11 @@ def test_overlay_omission_preserves_role_without_allocating_contribution(
         plan_id=f"omit-overlay-{omission}",
         tool_set=EMPTY_TOOL_SET,
     )
-    omitted = ("z-base", "a-delta") if omission == "both" else (omission,)
+    omitted = tuple(
+        selection_ref_identity(ref) for ref in draft.refs
+        if ref.base_delta_role in {"base", "delta"}
+        and (omission == "both" or ref.ref_id == omission)
+    )
     draft = register_projection_draft(saver, session_id, draft)
     # 若 base 被省略，delta 必须同时省略；独立 delta 不能伪装为可应用的链。
     if omission == "z-base":
@@ -1194,7 +1202,7 @@ def test_overlay_omission_preserves_role_without_allocating_contribution(
                     thread_id=saver._storage.storage.main_thread_id(session_id),
                 ),
                 provider_version="contract-provider",
-                omitted_ref_ids=omitted,
+                omitted_ref_identities=omitted,
             )
         return
     snapshot = saver.seal_context_plan(
@@ -1211,19 +1219,23 @@ def test_overlay_omission_preserves_role_without_allocating_contribution(
             thread_id=saver._storage.storage.main_thread_id(session_id),
         ),
         provider_version="contract-provider",
-        omitted_ref_ids=omitted,
+        omitted_ref_identities=omitted,
     )
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
         result = _project(restarted, session_id, snapshot.assembly_id)
     for entry in snapshot.selection:
-        if entry.ref.ref_id in omitted:
+        if selection_ref_identity(entry.ref) in omitted:
             assert not entry.included and entry.omission_reason
             assert entry.contribution_id is None and entry.contribution_ordinal is None
             assert entry.detail_ref is None
             assert entry.base_delta_role in {"base", "delta"}
     assert result["losses"] == result["history_losses"] == result["native"]["losses"]
-    assert not set(omitted) & {
+    assert not {identity[1] for identity in omitted} & {
         source["ref_id"] for source in result["native"]["wire_sources"]
+    }
+    assert not set(omitted) & {
+        selection_ref_identity(snapshot.selection[source["plan_ordinal"]].ref)
+        for source in result["native"]["wire_sources"]
     }
 
 

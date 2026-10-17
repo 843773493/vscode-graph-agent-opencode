@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
+
+from cachetools import LRUCache
 
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import payload_content_length
@@ -16,6 +20,38 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_line,
     canonical_json_text,
 )
+
+_BODY_VALIDATION_MAX_BYTES = 8 * 1024 * 1024
+_BODY_VALIDATION_MAX_ENTRIES = 4096
+_BodyValidationKey = tuple[bytes, int, str, str, int, str]
+_body_validation_scope: ContextVar[tuple[LRUCache[_BodyValidationKey, bytes], int] | None] = (
+    ContextVar("catalog_body_validation_scope", default=None)
+)
+
+
+@contextmanager
+def catalog_body_validation_scope(
+    *, max_bytes: int = _BODY_VALIDATION_MAX_BYTES, max_entries: int = _BODY_VALIDATION_MAX_ENTRIES,
+) -> Iterator[None]:
+    """单次 prepare 只复用相同实际字节的成功校验，退出后释放全部正文。"""
+    if type(max_bytes) is not int or type(max_entries) is not int:
+        raise TypeError(
+            "正文校验作用域的字节和条目上限必须是严格整数: "
+            f"max_bytes={max_bytes!r}, max_entries={max_entries!r}"
+        )
+    if max_bytes <= 0 or max_entries <= 0:
+        raise ValueError("正文校验作用域的字节和条目上限必须大于 0")
+    if max_bytes > _BODY_VALIDATION_MAX_BYTES or max_entries > _BODY_VALIDATION_MAX_ENTRIES:
+        raise ValueError("正文校验作用域不能超过硬上限：8MiB / 4096 条")
+    successful: LRUCache[_BodyValidationKey, bytes] = LRUCache(
+        maxsize=max_bytes, getsizeof=len,
+    )
+    token = _body_validation_scope.set((successful, max_entries))
+    try:
+        yield
+    finally:
+        _body_validation_scope.reset(token)
+        successful.clear()
 
 
 def validate_catalog_projection(
@@ -49,6 +85,10 @@ def validate_catalog_body(
     source_revision: str,
 ) -> None:
     """以已提交正文验证 locator、hash 和逻辑 source manifest。"""
+    scope = _body_validation_scope.get()
+    key = (raw, sequence, item_id, catalog_hash, payload_length, source_revision)
+    if scope is not None and scope[0].get(key) is not None:
+        return
     try:
         envelope = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -76,6 +116,12 @@ def validate_catalog_body(
         expected_revision = f"canonical:{item.item_id}:{item.content_hash}"
     if source_revision != expected_revision:
         raise RuntimeError(f"item catalog 与 JSONL source_revision 不一致: {item_id}")
+    if scope is not None:
+        successful, max_entries = scope
+        if len(raw) <= successful.maxsize:
+            while len(successful) >= max_entries:
+                successful.popitem()
+            successful[key] = raw
 
 
 def validate_projection_membership(connection: sqlite3.Connection) -> None:

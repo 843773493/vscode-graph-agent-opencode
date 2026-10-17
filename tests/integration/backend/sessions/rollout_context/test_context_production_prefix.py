@@ -5,21 +5,38 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.agents.graph_binding import (
+    DEEP_AGENT_CAPABILITY_PROFILE,
+    DEEP_AGENT_GRAPH_BINDING,
+    compute_capability_profile_hash,
+)
 from app.agents.providers.wire_finalize import finalize_provider_wire
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.model_request_context import SummaryCandidateScope
+from app.core.session_catalog_store import SessionCatalogStore
+from app.core.session_control_store import SessionControlStore
 from app.core.session_thread_context import session_thread_owner_scope
+from app.core.thread_creation import ThreadCreationService
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.identity.refs import selection_ref_identity
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.serialization import normalize_wire_request
+from app.services.infrastructure.rollout_context.assembly import (
+    reader as assembly_reader,
+)
+from app.services.infrastructure.rollout_context.assembly.plans import (
+    registry as plan_registry,
+)
 from app.services.infrastructure.rollout_context.assembly.plans import (
     sealing as plan_sealing,
 )
@@ -50,18 +67,19 @@ from tests.integration.backend.sessions.rollout_context.test_context_plan_regist
 pytestmark = pytest.mark.parametrize("registry_db", ["protected"], indirect=True)
 
 @pytest.fixture
-def production_context(frozen_provider_activation, frozen_provider_wire, registry_db):
+def production_context(frozen_provider_activation, frozen_provider_wire, registry_db, request):
     saver, session, connection, accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
     manager = ContextSourceManager(
         owner=ContextSourceOwnerKey(session, thread), control_state_port=saver,
     )
-    manager.register(ContextSourceDescriptor(
-        source_id="instruction:R01", source_kind="agent_instructions", name="Agent 基础说明",
-        description="Agent 基础说明", internal_locator="instruction-producer://R01",
-        root_placement="root_eligible",
-    ), tracking_status="tracked")
-    manager.observe("instruction:R01", "基础规则第一版", revision="instructions:1")
+    if getattr(request, "param", True):
+        manager.register(ContextSourceDescriptor(
+            source_id="instruction:R01", source_kind="agent_instructions", name="Agent 基础说明",
+            description="Agent 基础说明", internal_locator="instruction-producer://R01",
+            root_placement="root_eligible",
+        ), tracking_status="tracked")
+        manager.observe("instruction:R01", "基础规则第一版", revision="instructions:1")
     selected = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
     admission = saver.execution_admission(
         session, thread_id=thread, execution_id=accepted["initial_execution_id"],
@@ -92,6 +110,47 @@ def production_context(frozen_provider_activation, frozen_provider_wire, registr
     return saver, session, thread, connection, manager, prepare
 
 
+@pytest.fixture
+async def production_sibling(production_context):
+    """建立与 owner 真实 ingress 同 ID、正文不同的 sibling canonical 输入。"""
+    saver, session, thread, _connection, _manager, _prepare = production_context
+    storage = saver._storage.storage
+    owner_item = next(item for item in storage.read_items(session, thread) if item.semantic_kind == "user_input")
+    sessions = storage.sessions_dir
+    catalog = SessionCatalogStore(sessions.parent / "navigation/session-catalog.sqlite", sessions)
+    control = SessionControlStore(storage._path_resolver.resolve_session_node(session) / "session-control.sqlite")
+    creator = ThreadCreationService(
+        store=catalog, control_store=control, sessions_root=sessions,
+        workspace_id=catalog.get_node(session).workspace_id,
+        compute_capability_profile_hash=compute_capability_profile_hash,
+    )
+    try:
+        child = await creator.create(
+            idempotency_key="prefix-sibling", session_id=session, thread_id=None,
+            delegation_id=None, initial_state="idle", artifact_manifest={},
+            session_metadata={
+                "graph_binding": {
+                    "graph_id": DEEP_AGENT_GRAPH_BINDING.graph_id,
+                    "graph_revision": DEEP_AGENT_GRAPH_BINDING.graph_revision,
+                    "graph_schema_hash": DEEP_AGENT_GRAPH_BINDING.graph_schema_hash,
+                    "capability_profile_hash": DEEP_AGENT_GRAPH_BINDING.capability_profile_hash,
+                }, "capability_profile": dict(DEEP_AGENT_CAPABILITY_PROFILE),
+                "task_seed": None, "task_reference": None,
+            },
+        )
+        saver.accept_turn(
+            session, thread_id=child.child_thread_id, root_item_id=owner_item.item_id,
+            accepted_ingress_id="prefix-sibling-ingress", acceptance_idempotency_key="prefix-sibling-accept",
+            job_id="prefix-sibling-job", admission_idempotency_key="prefix-sibling-admit",
+            payload="兄弟线程同名输入不能进入 owner 的前缀或 source-cut", payload_kind="text",
+        )
+        sibling_item = storage.read_items(session, child.child_thread_id, item_ids=(owner_item.item_id,))[0]
+        yield owner_item, child.child_thread_id, sibling_item
+    finally:
+        control.close()
+        catalog.close()
+
+
 def test_prepare_reads_predecessor_once_per_attempt_and_public_composition_per_snapshot(
     production_context, monkeypatch,
 ):
@@ -104,8 +163,8 @@ def test_prepare_reads_predecessor_once_per_attempt_and_public_composition_per_s
     seal_predecessors = []
     identities = []
 
-    def read_latest(snapshot):
-        previous = original_latest(snapshot)
+    def read_latest(snapshot, **kwargs):
+        previous = original_latest(snapshot, **kwargs)
         reads.append((snapshot, previous))
         return previous
 
@@ -149,6 +208,212 @@ def test_prepare_reads_predecessor_once_per_attempt_and_public_composition_per_s
         assert reads[-1][1].assembly_id == second["assembly_id"]
     assert len(reads) == 3
     assert (plan.session_id, plan.thread_id) == (session, thread)
+
+
+@pytest.mark.parametrize("production_context", [False], indirect=True, ids=["no-sources"])
+def test_prepare_reuses_only_pure_predecessor_validation_within_one_attempt(
+    production_context, monkeypatch,
+):
+    saver, session, thread, _connection, _manager, prepare = production_context
+    first = prepare("pure-validation-first")
+    assemblies = saver._storage.assemblies
+    original_registration = assembly_reader.read_registration
+    original_read = assemblies._read_context_assembly_connection
+    original_validate = plan_registry.validate_sealed_plan
+    original_hash = plan_registry.runtime_seal_hash
+    original_registry = plan_registry.validate_registry
+    original_parse = ContextAssemblySnapshot.from_dict
+    original_draft_hash = plan_registry.canonical_json_bytes_and_hash
+    validations, hashes, registries, parsed, drafts, reads, registrations = [], [], [], [], [], [], []
+
+    def validate(plan, snapshot):
+        original_validate(plan, snapshot)
+        validations.append(snapshot.assembly_id)
+
+    def seal_hash(snapshot, *args):
+        result = original_hash(snapshot, *args)
+        hashes.append(snapshot.assembly_id)
+        return result
+
+    def validate_registry(connection, plan, assembly_id):
+        original_registry(connection, plan, assembly_id)
+        registries.append(plan.plan_id)
+
+    def parse(cls, value):
+        snapshot = original_parse(value)
+        parsed.append(snapshot)
+        return snapshot
+
+    def draft_hash(value):
+        result = original_draft_hash(value)
+        drafts.append(result[1])
+        return result
+
+    def read_registration(connection, *args, **kwargs):
+        fingerprints = kwargs.get("validated_predecessors")
+        before = (len(validations), len(hashes), len(registries), len(parsed), len(drafts))
+        initial_size = None if fingerprints is None else len(fingerprints)
+        result = original_registration(connection, *args, **kwargs)
+        delta = tuple(after - start for after, start in zip(
+            (len(validations), len(hashes), len(registries), len(parsed), len(drafts)), before, strict=True,
+        ))
+        registrations.append((fingerprints, initial_size, result, delta))
+        return result
+
+    def read(connection, *args, **kwargs):
+        statements = []
+        connection.set_trace_callback(statements.append)
+        try:
+            result = original_read(connection, *args, **kwargs)
+        finally:
+            connection.set_trace_callback(None)
+        reads.append((connection, result[0], statements))
+        return result
+
+    monkeypatch.setattr(plan_registry, "validate_sealed_plan", validate)
+    monkeypatch.setattr(plan_registry, "runtime_seal_hash", seal_hash)
+    monkeypatch.setattr(plan_registry, "validate_registry", validate_registry)
+    monkeypatch.setattr(plan_registry, "canonical_json_bytes_and_hash", draft_hash)
+    monkeypatch.setattr(ContextAssemblySnapshot, "from_dict", classmethod(parse))
+    monkeypatch.setattr(assembly_reader, "read_registration", read_registration)
+    monkeypatch.setattr(assemblies, "_read_context_assembly_connection", read)
+    second = prepare("pure-validation-second")
+    assert [entry[1] for entry in registrations] == [0, 1]
+    assert [entry[3] for entry in registrations] == [(1, 1, 1, 1, 1), (0, 0, 1, 1, 1)]
+    assert registrations[0][0] is registrations[1][0]
+    assert all(isinstance(key, bytes) for key in registrations[0][0])
+    assert registrations[0][2] is not registrations[1][2]
+    assert registrations[0][2].draft is not registrations[1][2].draft
+    assert reads[0][0] is not reads[1][0]
+    assert reads[0][1] is not reads[1][1]
+    assert [snapshot.assembly_id for _, snapshot, _ in reads] == [first["assembly_id"]] * 2
+    for _connection, _snapshot, statements in reads:
+        assert any("FROM context_assemblies WHERE assembly_id =" in sql for sql in statements)
+        for table in (
+            "context_plans", "context_plan_refs", "context_plan_contributions", "tool_set_snapshots",
+            "assembly_item_refs", "context_assembly_contributions", "context_assembly_selections",
+        ):
+            assert any(f"FROM {table} WHERE" in sql for sql in statements), table
+
+    # summary 不成为常规前驱；随后新 prepare 必须对同一前驱重新完整校验。
+    items = saver._storage.storage.read_items(session, thread)
+    messages = tuple(project_summary_source(group) for group in summary_source_groups(items).values())
+    prepare(
+        "pure-validation-summary", request_messages=messages,
+        summary_candidate=SummaryCandidateScope(0, "initial", False, True),
+    )
+    prepare("pure-validation-third")
+    assert [entry[1] for entry in registrations] == [0, 1, 0, 0, 1]
+    assert [entry[2].assembly_id for entry in registrations[2:]] == [second["assembly_id"]] * 3
+    assert [entry[3] for entry in registrations[2:]] == [(1, 1, 1, 1, 1), (1, 1, 1, 1, 1), (0, 0, 1, 1, 1)]
+    assert registrations[2][0] is not registrations[3][0]
+    assert registrations[3][0] is registrations[4][0]
+    assert registrations[0][0] is not registrations[3][0]
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        restored = cold.get_context_assembly(session, thread, assembly_id=second["assembly_id"])
+        again = cold.get_context_assembly(session, thread, assembly_id=second["assembly_id"])
+    assert again is not restored
+    assert [entry[0] for entry in registrations[-2:]] == [None, None]
+    assert [entry[3] for entry in registrations[-2:]] == [(1, 1, 1, 1, 1), (1, 1, 1, 1, 1)]
+
+
+@pytest.mark.parametrize("production_context", [False], indirect=True, ids=["no-sources"])
+def test_registry_rejects_caller_supplied_predecessor_fingerprint(production_context):
+    _saver, session, thread, connection, _manager, prepare = production_context
+    prepared = prepare("caller-fingerprint")
+    plan_id = prepared["plan"].plan_id
+    cache = plan_registry._new_validated_predecessors()
+    registration = plan_registry.read_registration(
+        connection, session, thread, plan_id, validated_predecessors=cache,
+    )
+    assert registration.assembly_id == prepared["assembly_id"]
+    assert len(cache) == 1
+
+    with pytest.raises(TypeError, match="必须由 plan registry 创建"):
+        plan_registry.read_registration(
+            connection, session, thread, plan_id,
+            validated_predecessors=set(cache),
+        )
+
+
+@pytest.mark.parametrize("production_context", [False], indirect=True, ids=["no-sources"])
+@pytest.mark.parametrize("changed_field", ["seal_hash", "seal_input_hash", "detail_ref"])
+def test_prepare_revalidates_predecessor_changed_after_assembly_insert(
+    production_context, monkeypatch, changed_field,
+):
+    saver, session, thread, connection, manager, prepare = production_context
+    first = prepare("predecessor-before-trigger")
+    assembly_id, plan_id = first["assembly_id"], first["plan"].plan_id
+    old_plan = connection.execute("SELECT * FROM context_plans WHERE plan_id=?", (plan_id,)).fetchone()
+    old_assembly = connection.execute(
+        "SELECT * FROM context_assemblies WHERE assembly_id=?", (assembly_id,),
+    ).fetchone()
+    old_commits = connection.execute("SELECT * FROM storage_commits").fetchall()
+    original_jsonl = saver._storage.storage.jsonl_path(session).read_bytes()
+    pending = manager.prepare_pending()
+    changed_value = sha256_jcs({"changed": changed_field})
+    table, identity, identity_value = "context_plans", "plan_id", plan_id
+    if changed_field == "detail_ref":
+        table, identity, identity_value = "context_assemblies", "assembly_id", assembly_id
+        changed_value = json.dumps(DetailRef(session, thread, assembly_id, "forged-detail").to_dict())
+    connection.execute(
+        "CREATE TRIGGER change_predecessor_after_insert AFTER INSERT ON context_assemblies "
+        f"BEGIN UPDATE {table} SET {changed_field}='{changed_value}' "
+        f"WHERE {identity}='{identity_value}'; END"
+    )
+    connection.commit()
+    original_registration = assembly_reader.read_registration
+    original_validate = plan_registry.validate_sealed_plan
+    original_hash = plan_registry.runtime_seal_hash
+    stages, validations, hashes = [], [], []
+
+    def read_registration(connection, *args, **kwargs):
+        fingerprints = kwargs.get("validated_predecessors")
+        assert args == (session, thread, plan_id)
+        assert fingerprints is not None
+        observed = connection.execute(
+            f"SELECT {changed_field} FROM {table} WHERE {identity}=?", (identity_value,),
+        ).fetchone()[0]
+        assembly_count = connection.execute("SELECT count(*) FROM context_assemblies").fetchone()[0]
+        stages.append((connection.in_transaction, fingerprints, len(fingerprints), observed, assembly_count))
+        return original_registration(connection, *args, **kwargs)
+
+    def validate(plan, snapshot):
+        validations.append(snapshot.assembly_id)
+        return original_validate(plan, snapshot)
+
+    def seal_hash(snapshot, detail_ref, input_hash):
+        hashes.append((snapshot.assembly_id, detail_ref, input_hash))
+        return original_hash(snapshot, detail_ref, input_hash)
+
+    monkeypatch.setattr(assembly_reader, "read_registration", read_registration)
+    monkeypatch.setattr(plan_registry, "validate_sealed_plan", validate)
+    monkeypatch.setattr(plan_registry, "runtime_seal_hash", seal_hash)
+    with pytest.raises(ValueError, match="source-mismatch: sealed plan preimage 与 assembly 不一致"):
+        prepare("predecessor-after-trigger")
+    assert len(stages) == 2
+    assert stages[0][1] is stages[1][1]
+    assert [stage[2] for stage in stages] == [0, 1]
+    assert stages[0][3] != changed_value and stages[1][3] == changed_value
+    assert [stage[4] for stage in stages] == [1, 2]
+    assert stages[1][0]
+    assert validations == [assembly_id, assembly_id]
+    assert [entry[0] for entry in hashes] == [assembly_id, assembly_id]
+    assert len(stages[1][1]) == 1  # 失败的 fresh 指纹不得登记。
+    assert connection.execute("SELECT * FROM context_plans WHERE plan_id=?", (plan_id,)).fetchone() == old_plan
+    assert connection.execute("SELECT * FROM context_assemblies").fetchall() == [old_assembly]
+    assert connection.execute("SELECT * FROM storage_commits").fetchall() == old_commits
+    assert connection.execute("SELECT seal_idempotency_key, error_code FROM context_plan_seal_failures").fetchall() == [
+        ("seal:predecessor-after-trigger", "source-mismatch"),
+    ]
+    assert connection.execute("SELECT plan_state FROM context_plans WHERE plan_id<>?", (plan_id,)).fetchall() == [("unsealed",)]
+    for table in (
+        "assembly_item_refs", "context_assembly_contributions", "context_assembly_selections",
+        "resource_activation_assembly_bindings",
+    ):
+        assert connection.execute(f"SELECT DISTINCT assembly_id FROM {table} WHERE assembly_id<>?", (assembly_id,)).fetchall() == []
+    assert manager.prepare_pending() == pending
+    assert saver._storage.storage.jsonl_path(session).read_bytes() == original_jsonl
 
 
 def test_cold_assembly_recomputes_one_plan_hash_per_validation(
@@ -325,7 +590,7 @@ def test_seal_projection_is_reused_and_independent_cold_projection_maps_after_cl
         (saver._activation_store(), "find_assembly_binding", "activation"),
         (assemblies, "get_context_plan_detail", "detail_manifest"),
         (saver._detail_store, "read", "detail_body"),
-        (storage, "read_items", "items"),
+        (storage, "read_ref_items", "items"),
     ):
         monkeypatch.setattr(owner, name, read(getattr(owner, name), label))
     monkeypatch.setattr(preparation, "seal_registered_plan", seal)
@@ -649,6 +914,77 @@ def test_initial_and_delta_use_one_seal_and_exact_prefix(production_context):
     assert connection.execute(
         "SELECT count(*) FROM storage_commits WHERE commit_kind='assembly_sealed'"
     ).fetchone() == (2,)
+
+
+@pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
+async def test_prepare_source_cut_uses_owner_view_with_same_id_sibling(
+    production_context, production_sibling, target_format,
+):
+    saver, session, thread, connection, manager, prepare = production_context
+    owner_item, sibling_thread, sibling_item = production_sibling
+    assert owner_item.item_id == sibling_item.item_id and sibling_thread != thread
+    assert owner_item.payload != sibling_item.payload
+    first = prepare("owner-source-cut-first", target_format=target_format)
+    manager.observe("instruction:R01", "基础规则第二版", revision="instructions:2")
+    second = prepare("owner-source-cut-delta", target_format=target_format)
+    for result, source_count in ((first, 1), (second, 2)):
+        snapshot = result["snapshot"]
+        assert tuple(selection_ref_identity(ref) for ref in snapshot.refs if ref.ref_type == "canonical_item") == (
+            ("canonical_item", owner_item.item_id, thread),
+        )
+        assert [message.content for message in result["messages"][:2]] == ["基础规则第一版", owner_item.payload]
+        assert connection.execute(
+            "SELECT visible,source_kind FROM context_view_items WHERE view_id=? AND item_id=?",
+            (snapshot.active_view_id, owner_item.item_id),
+        ).fetchone() == (1, "canonical")
+        assert connection.execute(
+            "SELECT ref_thread_id,source_cut_position_kind,source_cut_item_id FROM context_assembly_selections "
+            "WHERE assembly_id=? AND ref_type='request_only' AND included=1 ORDER BY plan_ordinal",
+            (snapshot.assembly_id,),
+        ).fetchall() == [(thread, "after_canonical", owner_item.item_id)] * source_count
+    assert second["snapshot"].seal_binding.prefix.state.frames[:len(first["snapshot"].seal_binding.prefix.state.frames)] == first["snapshot"].seal_binding.prefix.state.frames
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        restored = cold.get_context_assembly(session, thread, assembly_id=second["assembly_id"])
+        assert cold.project_context_plan_for_dispatch(
+            session, thread, restored.as_sealed_plan(), target_format=target_format,
+        ) == (second["messages"], second["tools"], second["losses"], second.get("native_projection"))
+
+
+@pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
+def test_prefix_preserves_same_id_canonical_and_request_only_on_inheritance_and_cold_read(
+    production_context, target_format,
+):
+    saver, session, thread, _connection, _manager, prepare = production_context
+    item = next(item for item in saver._storage.storage.read_items(session, thread)
+                if item.semantic_kind == "user_input")
+    overlay_body = "同名 request-only 的独立正文"
+    saver.register_source_overlay(
+        SimpleNamespace(
+            overlay_id="same-id-overlay", session_id=session, thread_id=thread,
+            checkpoint_ns="", source_kind="workspace_policy", source_revision="same-id:1",
+            source_overlay_epoch=1, base_ref=item.item_id, delta_ref=None,
+            status="active", idempotency_key="same-id-overlay-create",
+        ),
+        session_id=session, thread_id=thread, base_content=overlay_body,
+    )
+    expected_keys = (
+        ("canonical_item", item.item_id, thread),
+        ("request_only", item.item_id, thread),
+    )
+    first = prepare("same-id-first", target_format=target_format)
+    second = prepare("same-id-inherited", target_format=target_format)
+    for result in (first, second):
+        selection = tuple(entry for entry in result["snapshot"].selection if entry.ref.ref_id == item.item_id)
+        assert tuple(selection_ref_identity(entry.ref) for entry in selection) == expected_keys
+        assert all(entry.included for entry in selection)
+        assert [message.content for message in result["messages"]] == ["基础规则第一版", item.payload, overlay_body]
+    assert second["snapshot"].seal_binding.prefix.state.frames == first["snapshot"].seal_binding.prefix.state.frames
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        restored = cold.get_context_assembly(session, thread, assembly_id=second["assembly_id"])
+        assert tuple(selection_ref_identity(ref) for ref in restored.refs if ref.ref_id == item.item_id) == expected_keys
+        assert cold.project_context_plan_for_dispatch(
+            session, thread, restored.as_sealed_plan(), target_format=target_format,
+        ) == (second["messages"], second["tools"], second["losses"], second.get("native_projection"))
 
 
 def test_failed_seal_never_acknowledges_source(production_context):

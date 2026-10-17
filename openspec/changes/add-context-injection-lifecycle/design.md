@@ -528,6 +528,8 @@ display/history projector 可以显示安全摘要和 provenance，但不得把�
 
 required source 的 detail、hash、revision、owner、stable prefix 或 catalog identity 校验失败时，assembly seal/dispatch 必须失败。optional source 只能通过 included=false、availability、omission/loss 明确记录。
 
+seal omission 与 request detail binding 统一使用 `selection_ref_identity(ref)`：ContextRef 为 `(ref_type, ref_id, thread_id)`，ToolSetRef 在当前 plan scope 内为 `("tool_set", ref_id)`；未知或不完整 identity 必须明确拒绝，不得以裸 `ref_id` 扩大省略范围，retry input hash 必须包含同一完整 identity。
+
 恢复旧 assembly 时只能读取已提交 item/detail/manifest，不得重新读取当前 AGENTS、Skill 或团队状态拼出历史请求。Provider adapter 若合并相邻 message、移动 system item、改变已提交 frame序列化，或在新 ToolSet下无法表达 active history中的旧 tool call/result，也必须明确拒绝；后者只能通过显式 compaction或终止 execution处理，不能静默改写协议事实。
 
 ### 13. SessionThread 是 CSM、stable prefix 与 ToolSet applied state 的唯一 owner key

@@ -19,6 +19,7 @@ from app.domain.itemized.errors import FormatDispatchError
 from app.domain.itemized.hashing import (
     payload_content_length,
 )
+from app.domain.itemized.identity.refs import ContextRef, ref_identity
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     check_resource_target,
@@ -27,6 +28,10 @@ from app.services.infrastructure.resource_platform.virtual_resources.values impo
     ResourceTargetAction,
     ResourceTargetContext,
     ResourceTargetFacts,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    current_scope,
+    read_local_scopes,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.integrity import (
     validate_catalog_projection,
@@ -383,6 +388,45 @@ class RolloutItemsMixin:
                 )
                 self._commit_connection(connection)
                 return commit_id
+
+    def read_ref_items(
+        self,
+        session_id: str,
+        thread_id: str,
+        *,
+        refs: Iterable[ContextRef],
+        checkpoint_ns: str = "",
+        snapshot: RolloutReadSnapshot | None = None,
+    ) -> dict[tuple[str, str, str], CanonicalItemRecord]:
+        """按 ref 的精确线程读取；已捕获历史只消费目标本地冻结正文。
+
+        read_items 仍是单物理 rollout 的 locator 原语；ContextRef 消费者
+        只能从这里取得带身份的 registry，不能先压成一组裸 item ID。
+        """
+        references = tuple(refs)
+        if any(not isinstance(ref, ContextRef) or ref.ref_type != "canonical_item" for ref in references):
+            raise TypeError("canonical ref reader 只接受 canonical ContextRef")
+        with self.read_connection(session_id, thread_id, checkpoint_ns, snapshot=snapshot) as connection:
+            owner = current_scope(connection)
+            if owner != (session_id, thread_id):
+                raise ValueError("source-mismatch: canonical ref reader 物理 owner 不一致")
+            local_scopes = read_local_scopes(connection)
+            groups: dict[tuple[str, str], list[ContextRef]] = {}
+            for ref in references:
+                groups.setdefault((ref.session_id, ref.thread_id), []).append(ref)
+            result: dict[tuple[str, str, str], CanonicalItemRecord] = {}
+            for scope, group in groups.items():
+                # binding 是已捕获历史的权威；本地缺失必须报错，不能在线回源。
+                local = scope in local_scopes
+                items = self.read_items(
+                    *(owner if local else scope), checkpoint_ns=checkpoint_ns,
+                    item_ids=(ref.ref_id for ref in group),
+                    connection=connection if local else None,
+                )
+                by_id = {item.item_id: item for item in items}
+                for ref in group:
+                    result[ref_identity(ref)] = by_id[ref.ref_id]
+            return result
 
     def read_items(
         self,

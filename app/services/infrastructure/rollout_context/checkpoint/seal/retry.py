@@ -6,6 +6,7 @@ from collections.abc import Mapping
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.identity.refs import selection_ref_identity
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
     draft_manifest,
@@ -33,13 +34,13 @@ def seal_input_hash(
 ) -> str:
     """仅消费本次核验过的 draft manifest，不重新投影或跨调用缓存。"""
     preimage = {
-        "schema": "saver-context-seal-input:v2",
+        "schema": "saver-context-seal-input:v3",
         "session_id": registered_manifest["session_id"],
         "checkpoint_ns": checkpoint_ns,
         "draft_manifest": registered_manifest,
         "assembly_options": {
             **assembly_options,
-            "omitted_ref_ids": sorted(assembly_options["omitted_ref_ids"]),
+            "omitted_ref_identities": sorted(assembly_options["omitted_ref_identities"]),
             "loss": list(assembly_options["loss"]),
         },
         "request_input_hash": request_input_hash,
@@ -114,7 +115,7 @@ def committed_retry(
     # 只复用已经存在的 included detail mapping。omission 改变时由 composer
     # 严格拒绝多余/缺失 binding，不能为重试临时补造 locator 或读取当前 source。
     detail_refs = {
-        entry.ref.ref_id: entry.detail_ref
+        selection_ref_identity(entry.ref): entry.detail_ref
         for entry in committed.selection
         if entry.included and entry.ref.ref_type == "request_only"
     }

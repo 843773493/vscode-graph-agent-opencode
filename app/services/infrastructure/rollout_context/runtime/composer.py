@@ -19,7 +19,11 @@ from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hash.request_hash import context_request_hash_preimage
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
-from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
+from app.domain.itemized.identity.refs import (
+    ContextRef,
+    ToolSetRef,
+    selection_ref_identity,
+)
 from app.domain.itemized.request_plan import (
     ContextContribution,
     ContextRequestPlan,
@@ -97,9 +101,9 @@ class ContextPlanComposer:
                     visibility=contribution.visibility,
                 )
             )
-        known = {(ref.ref_type, ref.ref_id) for ref in refs}
+        known = {selection_ref_identity(ref) for ref in refs}
         normalized_refs = tuple(
-            [ref for ref in contribution_refs if (ref.ref_type, ref.ref_id) not in known]
+            [ref for ref in contribution_refs if selection_ref_identity(ref) not in known]
             + list(refs)
         )
         if not isinstance(tool_set, ToolSetSnapshot):
@@ -139,8 +143,8 @@ class ContextPlanComposer:
         target_format: str = "unknown",
         wire_request: object | None = None,
         request_input_hash: str | None = None,
-        omitted_ref_ids: Iterable[str] = (),
-        request_detail_refs: Mapping[str, DetailRef] | None = None,
+        omitted_ref_identities: Iterable[tuple[str, ...]] = (),
+        request_detail_refs: Mapping[tuple[str, ...], DetailRef] | None = None,
         seal_binding: ContextSealBinding | None = None,
     ) -> ContextAssemblySnapshot:
         if (plan.session_id, plan.thread_id) != (session_id, thread_id):
@@ -151,29 +155,31 @@ class ContextPlanComposer:
         # metadata_json 会发生虚假的 source-mismatch。
         registry_refs = tuple(plan.refs)
         detail_refs = dict(request_detail_refs) if request_detail_refs is not None else {}
-        omitted_ids = frozenset(omitted_ref_ids)
-        request_source_ids = {
-            ref.ref_id for ref in registry_refs
+        omitted_identities = frozenset(omitted_ref_identities)
+        known_identities = {
+            selection_ref_identity(ref)
+            for ref in (*registry_refs, *plan.tool_set_refs)
+        }
+        unknown_omitted_identities = omitted_identities - known_identities
+        if unknown_omitted_identities:
+            raise ValueError(
+                "plan-order-integrity: omitted ref identity 不在当前 plan registry: "
+                + ", ".join(sorted(map(repr, unknown_omitted_identities)))
+            )
+        request_source_identities = {
+            selection_ref_identity(ref) for ref in registry_refs
             if ref.ref_type == "request_only"
-            and ref.ref_id not in omitted_ids
+            and selection_ref_identity(ref) not in omitted_identities
             and ref.availability == "available"
         }
-        for ref_id, detail_ref in detail_refs.items():
-            if not isinstance(ref_id, str) or ref_id not in request_source_ids:
+        for identity, detail_ref in detail_refs.items():
+            if identity not in request_source_identities:
                 raise ValueError(
                     "plan-order-integrity: final detail 只能绑定 included request-only ref"
                 )
             if not isinstance(detail_ref, DetailRef):
                 raise TypeError("source-mismatch: final detail 必须是 typed DetailRef")
             detail_ref.require_owner(session_id, thread_id, assembly_id)
-        known_ids = {ref.ref_id for ref in registry_refs}
-        known_ids.update(ref.ref_id for ref in plan.tool_set_refs)
-        unknown_omitted_ids = omitted_ids - known_ids
-        if unknown_omitted_ids:
-            raise ValueError(
-                "plan-order-integrity: omitted ref 不在当前 plan registry: "
-                + ",".join(sorted(unknown_omitted_ids))
-            )
 
         def contribution_for_ref(
             ref: ContextRef,
@@ -185,7 +191,8 @@ class ContextPlanComposer:
         selected_contribution_ids = {
             contribution.contribution_id
             for ref in registry_refs
-            if ref.availability == "available" and ref.ref_id not in omitted_ids
+            if ref.availability == "available"
+            and selection_ref_identity(ref) not in omitted_identities
             for contribution in (contribution_for_ref(ref),)
             if contribution is not None
         }
@@ -218,11 +225,13 @@ class ContextPlanComposer:
             item.contribution_id: item for item in contributions
         }
         contribution_by_ref = {
-            (ref.ref_type, ref.ref_id): contribution_for_ref(ref)
+            selection_ref_identity(ref): contribution_for_ref(ref)
             for ref in registry_refs
         }
         selection_refs: list[ContextSelectionEntry] = []
         for ordinal, ref in enumerate(registry_refs):
+            identity = selection_ref_identity(ref)
+            omitted = identity in omitted_identities
             if ref.ref_type == "canonical_item":
                 selection_kind = SelectionKind.CANONICAL_HISTORY.value
                 base_delta_role = BaseDeltaRole.NONE.value
@@ -236,13 +245,13 @@ class ContextPlanComposer:
                 selection_kind = SelectionKind.REQUEST_ONLY.value
                 base_delta_role = BaseDeltaRole.NONE.value
             contribution = (
-                contribution_by_ref.get((ref.ref_type, ref.ref_id))
-                if ref.ref_id not in omitted_ids
+                contribution_by_ref.get(identity)
+                if not omitted
                 else None
             )
             if contribution is not None:
                 contribution = contribution_by_id.get(contribution.contribution_id)
-            included = ref.availability == "available" and ref.ref_id not in omitted_ids
+            included = ref.availability == "available" and not omitted
             selection_refs.append(
                 ContextSelectionEntry(
                     assembly_id=assembly_id,
@@ -255,7 +264,7 @@ class ContextPlanComposer:
                         if included
                         else (
                             "selection_omitted"
-                            if ref.ref_id in omitted_ids
+                            if omitted
                             else f"source_{ref.availability}"
                         )
                     ),
@@ -265,7 +274,7 @@ class ContextPlanComposer:
                         else (
                             "selection_omitted",
                         )
-                        if ref.ref_id in omitted_ids
+                        if omitted
                         else (f"source_{ref.availability}",)
                     ),
                     visibility=ref.visibility,
@@ -275,7 +284,7 @@ class ContextPlanComposer:
                     content_length=ref.content_length,
                     content_hash=ref.content_hash,
                     detail_ref=(
-                        detail_refs.get(ref.ref_id)
+                        detail_refs.get(identity)
                         if ref.ref_type == "request_only" and included else None
                     ),
                     contribution_id=(
@@ -297,6 +306,8 @@ class ContextPlanComposer:
             )
         next_ordinal = len(selection_refs)
         for tool_ref in plan.tool_set_refs:
+            omitted = selection_ref_identity(tool_ref) in omitted_identities
+            included = tool_ref.availability == "available" and not omitted
             bound = ToolSetRef(
                 session_id=tool_ref.session_id,
                 thread_id=tool_ref.thread_id,
@@ -320,28 +331,23 @@ class ContextPlanComposer:
                     plan_ordinal=next_ordinal,
                     ref=bound,
                     selection_kind=SelectionKind.TOOL_SET.value,
-                    included=(
-                        bound.availability == "available"
-                        and bound.ref_id not in omitted_ids
-                    ),
+                    included=included,
                     omission_reason=(
                         None
-                        if bound.availability == "available"
-                        and bound.ref_id not in omitted_ids
+                        if included
                         else (
                             "selection_omitted"
-                            if bound.ref_id in omitted_ids
+                            if omitted
                             else f"source_{bound.availability}"
                         )
                     ),
                     loss=(
                         ()
-                        if bound.availability == "available"
-                        and bound.ref_id not in omitted_ids
+                        if included
                         else (
                             "selection_omitted",
                         )
-                        if bound.ref_id in omitted_ids
+                        if omitted
                         else (f"source_{bound.availability}",)
                     ),
                     visibility="internal",

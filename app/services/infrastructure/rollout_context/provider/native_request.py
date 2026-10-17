@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 
 from app.domain.itemized.epoch.seal_binding import ContextSealBinding
 from app.domain.itemized.hashing import canonical_json_bytes
-from app.domain.itemized.identity.refs import ToolSetRef
+from app.domain.itemized.identity.refs import (
+    ToolSetRef,
+    ref_identity,
+    selection_ref_identity,
+)
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextRequestPlan
@@ -110,7 +114,7 @@ def _text_blocks(body: object, *, role: str) -> list[dict[str, object]]:
 
 def project_native_request(
     plan: ContextRequestPlan,
-    items: Sequence[CanonicalItemRecord],
+    items: Mapping[tuple[str, str, str], CanonicalItemRecord],
     request_only_content: Mapping[str, object],
     *, seal_binding: ContextSealBinding | None = None,
     attachment_projector: Callable[[object], object] | None = None,
@@ -120,35 +124,39 @@ def project_native_request(
         raise ValueError("context plan 未 sealed，不能进入 projector")
     if seal_binding is not None:
         project_sealed_prefix(plan, seal_binding, items, request_only_content)
-    by_id = {item.item_id: item for item in items}
-    if len(by_id) != len(items):
-        raise ValueError("plan-order-integrity: canonical item registry 重复")
     # stream sink 与 checkpoint sink 都保存了同一次模型调用的 canonical 事实，
     # 但 provider wire 只能发送一个 carrier；否则历史会出现两份工具调用/输出。
     # 同一规则必须和 LangChain/history 投影保持一致。
-    superseded_ids = superseded_item_ids(items)
+    by_thread: dict[str, list[CanonicalItemRecord]] = {}
+    for (_ref_type, _item_id, thread_id), item in items.items():
+        by_thread.setdefault(thread_id, []).append(item)
+    superseded = {
+        ("canonical_item", item_id, thread_id)
+        for thread_id, values in by_thread.items()
+        for item_id in superseded_item_ids(values)
+    }
     inputs: list[dict[str, object]] = []
     tools: list[dict[str, object]] = []
     losses: list[str] = []
     wire_sources: list[dict[str, object]] = []
     entries = list(validate_projection_selection(plan.selection))
     frame_by_ref = {}
-    root_source_refs: set[str] = set()
+    root_source_refs: set[tuple[str, ...]] = set()
     if seal_binding is not None:
         for frame in seal_binding.prefix.state.frames:
             if frame.role != "system":
                 ids = frame.content.get("item_ids", [frame.item_ref.ref_id]) if isinstance(frame.content, Mapping) and frame.item_ref.ref_type == "canonical_item" else [frame.item_ref.ref_id]
                 for ref_id in ids:
-                    frame_by_ref[ref_id] = frame
+                    frame_by_ref[("canonical_item" if frame.item_ref.ref_type == "canonical_item" else "request_only", ref_id, plan.thread_id)] = frame
         root_source_refs = {
-            entry.ref.ref_id for entry in entries
+            selection_ref_identity(entry.ref) for entry in entries
             if entry.included and entry.ref.ref_type != "tool_set"
-            and entry.ref.ref_id not in frame_by_ref
+            and selection_ref_identity(entry.ref) not in frame_by_ref
         }
         if seal_binding.root is not None:
             inputs.append({"role": "system", "content": _text_blocks(seal_binding.root.content, role="system")})
         entries.sort(key=lambda entry: (
-            frame_by_ref[entry.ref.ref_id].ordinal if entry.ref.ref_id in frame_by_ref else -1
+            frame_by_ref[selection_ref_identity(entry.ref)].ordinal if selection_ref_identity(entry.ref) in frame_by_ref else -1
         ))
     for entry in entries:
         losses.extend(entry.loss)
@@ -160,7 +168,7 @@ def project_native_request(
         if isinstance(ref, ToolSetRef):
             tools.extend(project_tool_set_ref(ref, target_format="responses"))
             continue
-        if ref.ref_id in root_source_refs:
+        if selection_ref_identity(ref) in root_source_refs:
             continue
         start = len(inputs)
         if ref.ref_type == "request_only":
@@ -182,8 +190,8 @@ def project_native_request(
                 role = "user" if seal_binding is not None else "system"
                 inputs.append({"role": role, "content": _text_blocks(body, role=role)})
         else:
-            item = resolve_selected_item(entry, by_id)
-            if item.item_id in superseded_ids:
+            item = resolve_selected_item(entry, items)
+            if ref_identity(ref) in superseded:
                 continue
             kind = item.semantic_kind
             if kind in {"user_input", "assistant_output"}:

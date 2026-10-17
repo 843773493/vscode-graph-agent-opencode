@@ -11,7 +11,11 @@ import pytest
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
-from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
+from app.domain.itemized.identity.refs import (
+    ContextRef,
+    ToolSetRef,
+    selection_ref_identity,
+)
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
     validate_sealed_plan,
@@ -75,7 +79,7 @@ def _snapshot(draft, accepted, omitted):
         turn_id=str(accepted["turn_id"]),
         execution_id=str(accepted["initial_execution_id"]),
         provider_version="registry-integration",
-        omitted_ref_ids=omitted,
+        omitted_ref_identities=omitted,
     )
 
 
@@ -91,7 +95,7 @@ def _jsonl_roundtrip(snapshot, run_context):
     return restored
 
 
-@pytest.mark.parametrize("omitted", [(), ("z",), ("a",), ("z", "a")])
+@pytest.mark.parametrize("omitted", [(), (("tool_set", "z"),), (("tool_set", "a"),), (("tool_set", "z"), ("tool_set", "a"))])
 @pytest.mark.parametrize("reverse_rows", [False, True])
 def test_toolsets_jsonl_sqlite_and_saver_restart(
     registry_db, run_context, tool_draft, omitted, reverse_rows
@@ -114,8 +118,8 @@ def test_toolsets_jsonl_sqlite_and_saver_restart(
     validate_sealed_plan(registered.draft, snapshot)
     restored = _jsonl_roundtrip(snapshot, run_context)
     validate_sealed_plan(registered.draft, restored)
-    assert [ref.ref_id for ref in restored.tool_set_refs] == sorted(
-        {"z", "a"} - set(omitted)
+    assert [selection_ref_identity(ref) for ref in restored.tool_set_refs] == sorted(
+        {("tool_set", "z"), ("tool_set", "a")} - set(omitted)
     )
     assert [entry.ref.ref_id for entry in restored.selection] == ["z", "a"]
     assert [entry.plan_ordinal for entry in restored.selection] == [0, 1]
@@ -123,7 +127,7 @@ def test_toolsets_jsonl_sqlite_and_saver_restart(
         entry.to_dict() for entry in snapshot.selection
     ]
     for entry in restored.selection:
-        assert entry.included == (entry.ref.ref_id not in omitted)
+        assert entry.included == (selection_ref_identity(entry.ref) not in omitted)
         assert entry.detail_ref is None and entry.contribution_id is None
         if not entry.included:
             assert entry.omission_reason and entry.loss
@@ -166,7 +170,7 @@ def test_toolsets_jsonl_sqlite_and_saver_restart(
     )
 
 
-@pytest.mark.parametrize("omitted", [("z",), ("z", "a")])
+@pytest.mark.parametrize("omitted", [(("tool_set", "z"),), (("tool_set", "z"), ("tool_set", "a"))])
 def test_omitted_comparison_never_reads_candidate_definitions(
     registry_db, tool_draft, omitted, monkeypatch
 ):
@@ -177,7 +181,7 @@ def test_omitted_comparison_never_reads_candidate_definitions(
     guarded = {
         id(ref)
         for ref in (*registered.draft.tool_set_refs, *snapshot.tool_set_refs)
-        if ref.ref_id in omitted
+        if selection_ref_identity(ref) in omitted
     }
     original = ToolSetRef.__getattribute__
 
@@ -191,7 +195,7 @@ def test_omitted_comparison_never_reads_candidate_definitions(
     validate_sealed_plan(registered.draft, restored)
 
 
-@pytest.mark.parametrize("omitted", [(), ("z",)])
+@pytest.mark.parametrize("omitted", [(), (("tool_set", "z"),)])
 @pytest.mark.parametrize(
     "mutation", ["source_revision", "content", "policy", "schema", "missing_tag"]
 )
@@ -225,7 +229,7 @@ def test_seal_rejects_self_consistent_but_different_tool_manifest(
     altered_draft = replace(
         tool_draft, tool_set_refs=(changed, tool_draft.tool_set_refs[1])
     )
-    altered_omission = (changed.ref_id,) if omitted else ()
+    altered_omission = (selection_ref_identity(changed),) if omitted else ()
     snapshot = _jsonl_roundtrip(
         _snapshot(altered_draft, accepted, altered_omission), run_context
     )
@@ -262,7 +266,7 @@ def test_omitted_tool_identity_does_not_resolve_to_request_only_tag(
     )
     saver.create_context_plan(session, draft)
     # 相同裸 ID 的 request_only 不能为未注册的 tool_set 授权。
-    snapshot = _snapshot(tool_draft, accepted, ("z",))
+    snapshot = _snapshot(tool_draft, accepted, (("tool_set", "z"),))
     with pytest.raises(ValueError, match="ToolSetRef 与 draft source manifest"):
         preflight_seal(
             connection,
@@ -282,14 +286,14 @@ def test_sealed_selection_semantics_cannot_change_after_restart(
 ):
     saver, session, connection, accepted = registry_db
     saver.create_context_plan(session, tool_draft)
-    original = _snapshot(tool_draft, accepted, ("a",))
+    original = _snapshot(tool_draft, accepted, (("tool_set", "a"),))
     if mutation == "order":
         changed = _snapshot(
             replace(
                 tool_draft, tool_set_refs=tuple(reversed(tool_draft.tool_set_refs))
             ),
             accepted,
-            ("a",),
+            (("tool_set", "a"),),
         )
     elif mutation == "inclusion":
         changed = _snapshot(tool_draft, accepted, ())
@@ -371,7 +375,7 @@ def test_recovery_rejects_tampered_tool_registry_rows(
 ):
     saver, session, connection, accepted = registry_db
     saver.create_context_plan(session, tool_draft)
-    snapshot = _snapshot(tool_draft, accepted, ("z",))
+    snapshot = _snapshot(tool_draft, accepted, (("tool_set", "z"),))
     with connection:
         connection.execute("BEGIN IMMEDIATE")
         preflight = preflight_seal(

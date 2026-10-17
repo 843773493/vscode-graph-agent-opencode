@@ -20,6 +20,9 @@ from app.services.infrastructure.rollout_context.assembly.detail_registry import
 from app.services.infrastructure.rollout_context.assembly.manifest import (
     ContextAssemblyManifestMixin,
 )
+from app.services.infrastructure.rollout_context.assembly.plans.registry import (
+    _ValidatedPredecessors,
+)
 from app.services.infrastructure.rollout_context.assembly.plans.sealing import (
     bind_sealed_registration,
     preflight_seal,
@@ -61,6 +64,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
         activation_binding: Callable[[sqlite3.Connection], None] | None = None,
         prepared_details: tuple[PreparedDetail, ...] = (),
         detail_store: ContextPlanDetailStore | None = None,
+        validated_predecessors: _ValidatedPredecessors | None = None,
     ) -> ContextAssemblySealReceipt:
         """在 dispatch 前持久化不可变 assembly snapshot。
 
@@ -259,6 +263,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                     previous = self._latest_context_assembly_connection(
                         connection, session_id, thread_id, checkpoint_ns=checkpoint_ns,
                         excluding_assembly_id=snapshot.assembly_id,
+                        validated_predecessors=validated_predecessors,
                     )
                     self._context.checkpoints._apply_sealed_context_sources(
                         connection, snapshot, previous=previous,

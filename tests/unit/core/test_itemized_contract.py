@@ -48,6 +48,10 @@ from app.services.mapping.itemized.history import project_history_plan
 from app.services.mapping.itemized.langchain import project_context_plan
 
 
+def _canonical_registry(plan: ContextRequestPlan, items):
+    return {("canonical_item", item.item_id, plan.thread_id): item for item in items}
+
+
 def _assistant_tool_item(
     *,
     item_sequence: int,
@@ -869,7 +873,7 @@ def test_native_projection_restores_scoped_ids_and_drops_stream_shadow() -> None
 
     projection = project_native_request(
         plan,
-        items,
+        _canonical_registry(plan, items),
         request_only_content={},
     )
 
@@ -952,7 +956,7 @@ def test_parallel_checkpoint_tool_items_keep_unique_refs_and_one_provider_messag
         assembly_id="assembly-parallel-native",
         items=items,
     )
-    native = project_native_request(plan, items, request_only_content={})
+    native = project_native_request(plan, _canonical_registry(plan, items), request_only_content={})
     inputs = native["request"]["input"]
     assert [item["call_id"] for item in inputs if item["type"] == "function_call"] == [
         call["id"] for call in calls
@@ -1002,10 +1006,10 @@ def test_runtime_notice_uses_same_user_text_contract_for_both_provider_formats(
 
     messages = project_context_plan(
         plan,
-        (item,),
+        _canonical_registry(plan, (item,)),
         include_runtime_notices=True,
     )
-    native = project_native_request(plan, (item,), request_only_content={})
+    native = project_native_request(plan, _canonical_registry(plan, (item,)), request_only_content={})
 
     assert len(messages) == 1
     assert isinstance(messages[0], HumanMessage)
@@ -1044,9 +1048,9 @@ def test_runtime_notice_rejects_non_text_payload_for_both_provider_formats(
     )
 
     with pytest.raises((TypeError, ValueError), match="runtime_notice"):
-        project_context_plan(plan, (item,), include_runtime_notices=True)
+        project_context_plan(plan, _canonical_registry(plan, (item,)), include_runtime_notices=True)
     with pytest.raises((TypeError, ValueError), match="runtime_notice"):
-        project_native_request(plan, (item,), request_only_content={})
+        project_native_request(plan, _canonical_registry(plan, (item,)), request_only_content={})
 
 
 @pytest.fixture
@@ -1385,10 +1389,10 @@ def test_history_and_provider_consume_the_same_sealed_selection_order(
 
     provider_messages = project_context_plan(
         plan,
-        (item,),
+        _canonical_registry(plan, (item,)),
         request_only_content={contribution.contribution_id: body},
     )
-    history_messages = project_history_plan(plan, (item,))
+    history_messages = project_history_plan(plan, _canonical_registry(plan, (item,)))
 
     assert [
         message.id for message in provider_messages if isinstance(message, HumanMessage)

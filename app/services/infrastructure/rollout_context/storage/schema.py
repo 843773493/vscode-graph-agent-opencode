@@ -5,6 +5,9 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 
+from app.services.infrastructure.rollout_context.storage.schema_assembly_refs import (
+    ASSEMBLY_REF_SCHEMA_SQL,
+)
 from app.services.infrastructure.rollout_context.storage.schema_plans import (
     PLAN_REGISTRY_SCHEMA_SQL,
     TOOL_SET_SNAPSHOT_SCHEMA_SQL,
@@ -13,7 +16,7 @@ from app.services.infrastructure.rollout_context.storage.schema_wakeup import (
     RUNTIME_WAKEUP_SCHEMA_SQL,
 )
 
-ROLLOUT_SCHEMA_VERSION = 18
+ROLLOUT_SCHEMA_VERSION = 19
 MESSAGE_FORMAT_VERSION = 1
 ROLLOUT_FORMAT_VERSION = 2
 
@@ -164,6 +167,7 @@ def initialize_rollout_schema(
         + RUNTIME_WAKEUP_SCHEMA_SQL
         + HISTORY_NAMESPACE_SCHEMA_SQL
         + ITEM_RESOURCE_REFERENCES_SCHEMA_SQL
+        + ASSEMBLY_REF_SCHEMA_SQL
         +
         """
         CREATE TABLE IF NOT EXISTS database_meta (
@@ -574,25 +578,6 @@ def initialize_rollout_schema(
             terminal_at TEXT,
             UNIQUE(session_id, thread_id, assembly_id)
         );
-        CREATE TABLE IF NOT EXISTS assembly_item_refs (
-            assembly_id TEXT NOT NULL,
-            ref_ordinal INTEGER NOT NULL,
-            ref_type TEXT NOT NULL,
-            ref_id TEXT NOT NULL,
-            semantic_kind TEXT,
-            payload_kind TEXT,
-            status TEXT,
-            content_hash TEXT,
-            source_revision TEXT,
-            content_length INTEGER,
-            detail_ref TEXT,
-            contribution_id TEXT,
-            visibility TEXT NOT NULL DEFAULT 'internal',
-            protection TEXT NOT NULL DEFAULT 'public',
-            availability TEXT NOT NULL DEFAULT 'available',
-            PRIMARY KEY(assembly_id, ref_ordinal),
-            UNIQUE(assembly_id, ref_type, ref_id)
-        );
         CREATE TABLE IF NOT EXISTS context_assembly_contributions (
             assembly_id TEXT NOT NULL,
             contribution_ordinal INTEGER NOT NULL,
@@ -616,42 +601,6 @@ def initialize_rollout_schema(
             CHECK(content_hash IS NOT NULL),
             PRIMARY KEY(assembly_id, contribution_ordinal),
             UNIQUE(assembly_id, contribution_id)
-        );
-        CREATE TABLE IF NOT EXISTS context_assembly_selections (
-            assembly_id TEXT NOT NULL,
-            plan_ordinal INTEGER NOT NULL,
-            selection_kind TEXT NOT NULL,
-            ref_type TEXT NOT NULL,
-            ref_id TEXT NOT NULL,
-            included INTEGER NOT NULL,
-            omission_reason TEXT,
-            loss_json TEXT NOT NULL DEFAULT '[]',
-            source_revision TEXT,
-            content_length INTEGER,
-            content_hash TEXT,
-            visibility TEXT NOT NULL,
-            protection TEXT NOT NULL,
-            availability TEXT NOT NULL,
-            base_delta_role TEXT NOT NULL,
-            source_overlay_epoch INTEGER,
-            overlay_from_revision TEXT,
-            overlay_to_revision TEXT,
-            overlay_diff_hash TEXT,
-            detail_ref TEXT,
-            contribution_id TEXT,
-            contribution_ordinal INTEGER,
-            source_cut_position_kind TEXT,
-            source_cut_item_id TEXT,
-            CHECK (
-                (source_cut_position_kind IS NULL AND source_cut_item_id IS NULL)
-                OR (source_cut_position_kind IS 'start' AND source_cut_item_id IS NULL
-                    AND included = 1 AND ref_type = 'request_only')
-                OR (source_cut_position_kind IS 'after_canonical'
-                    AND source_cut_item_id IS NOT NULL AND length(source_cut_item_id) > 0
-                    AND included = 1 AND ref_type = 'request_only')
-            ),
-            PRIMARY KEY(assembly_id, plan_ordinal),
-            UNIQUE(assembly_id, ref_type, ref_id)
         );
         CREATE TABLE IF NOT EXISTS context_contributions (
             contribution_id TEXT PRIMARY KEY,
@@ -799,16 +748,9 @@ def initialize_rollout_schema(
         CREATE INDEX IF NOT EXISTS context_assemblies_turn_index ON context_assemblies(turn_id, created_at);
         CREATE INDEX IF NOT EXISTS context_assemblies_owner_index ON context_assemblies(session_id, thread_id, turn_id, execution_id);
         CREATE INDEX IF NOT EXISTS context_plan_details_owner_index ON context_plan_details(session_id, thread_id, assembly_id);
-        CREATE INDEX IF NOT EXISTS assembly_item_refs_item_index ON assembly_item_refs(ref_type, ref_id);
         CREATE INDEX IF NOT EXISTS context_assembly_contributions_source_index ON context_assembly_contributions(source_kind, source_revision);
-        CREATE INDEX IF NOT EXISTS assembly_item_refs_ordinal_index ON assembly_item_refs(assembly_id, ref_ordinal);
-        CREATE INDEX IF NOT EXISTS assembly_item_refs_contribution_index ON assembly_item_refs(assembly_id, contribution_id);
-        CREATE INDEX IF NOT EXISTS assembly_item_refs_detail_index ON assembly_item_refs(assembly_id, detail_ref);
         CREATE INDEX IF NOT EXISTS tool_set_snapshots_assembly_index ON tool_set_snapshots(assembly_id, tool_set_snapshot_id);
         CREATE INDEX IF NOT EXISTS context_assembly_contributions_ordinal_index ON context_assembly_contributions(assembly_id, contribution_ordinal);
-        CREATE INDEX IF NOT EXISTS context_assembly_selections_ref_index ON context_assembly_selections(ref_type, ref_id);
-        CREATE INDEX IF NOT EXISTS context_assembly_selections_contribution_index ON context_assembly_selections(assembly_id, contribution_id);
-        CREATE UNIQUE INDEX IF NOT EXISTS context_assembly_selections_contribution_unique ON context_assembly_selections(assembly_id, contribution_id) WHERE contribution_id IS NOT NULL;
         CREATE INDEX IF NOT EXISTS context_view_items_ordinal_index ON context_view_items(view_id, logical_item_ordinal);
         CREATE INDEX IF NOT EXISTS source_overlays_epoch_index ON source_overlays(session_id, thread_id, source_overlay_epoch);
         CREATE UNIQUE INDEX IF NOT EXISTS context_contributions_source_ordinal_unique

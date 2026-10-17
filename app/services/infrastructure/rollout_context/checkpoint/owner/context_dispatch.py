@@ -151,26 +151,27 @@ class ContextDispatchOwnerMixin:
         ``wire_params`` 是 Bridge 从实际模型/请求提取的纯数据有效参数
         （wire_finalize 提取器输出），Saver 只透传，不持有模型实例。
         """
-        return prepare_registered_context(
-            self,
-            session_id,
-            thread_id,
-            turn_id=turn_id,
-            execution_id=execution_id,
-            plan_creation_idempotency_key=plan_creation_idempotency_key,
-            seal_idempotency_key=seal_idempotency_key,
-            request_messages=request_messages,
-            context_source_manager=context_source_manager,
-            tool_set_supplier=tool_set_supplier,
-            provider_version=provider_version,
-            wire_profile=wire_profile,
-            wire_params=wire_params,
-            target_format=target_format,
-            model_call_id=model_call_id, activation_snapshot=activation_snapshot,
-            checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
-            summary_candidate=summary_candidate,
-            sealed_context=sealed_context,
-        )
+        with self._storage.storage.catalog_body_validation_scope():
+            return prepare_registered_context(
+                self,
+                session_id,
+                thread_id,
+                turn_id=turn_id,
+                execution_id=execution_id,
+                plan_creation_idempotency_key=plan_creation_idempotency_key,
+                seal_idempotency_key=seal_idempotency_key,
+                request_messages=request_messages,
+                context_source_manager=context_source_manager,
+                tool_set_supplier=tool_set_supplier,
+                provider_version=provider_version,
+                wire_profile=wire_profile,
+                wire_params=wire_params,
+                target_format=target_format,
+                model_call_id=model_call_id, activation_snapshot=activation_snapshot,
+                checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
+                summary_candidate=summary_candidate,
+                sealed_context=sealed_context,
+            )
 
     def consume_prepared_context_for_dispatch(
         self,

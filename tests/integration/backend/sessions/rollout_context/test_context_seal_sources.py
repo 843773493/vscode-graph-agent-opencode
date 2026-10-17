@@ -1,5 +1,8 @@
 """真实 seal 的同次 canonical 读取、首错顺序与提交完整性合同。"""
 
+from collections import Counter
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import replace
 
 import pytest
@@ -8,6 +11,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.identity.refs import ref_identity
 from app.services.infrastructure.rollout_context.assembly.seal_preflight import (
     ContextAssemblySealPreflightError,
 )
@@ -15,6 +19,10 @@ from app.services.infrastructure.rollout_context.checkpoint.seal import preparat
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
 )
+from app.services.infrastructure.rollout_context.storage import (
+    rollout_schema_introspection,
+)
+from app.services.infrastructure.rollout_context.storage.catalog import integrity
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     registry_db as registry_db,  # noqa: PLC0414 - 按当前文件隔离正式工作区
 )
@@ -45,7 +53,7 @@ def test_wire_seal_reads_canonical_once_and_validates_after_projection(
 ):
     saver, _session, _thread, _connection, _manager, prepare = production_context
     original_seal = preparation.seal_registered_plan
-    original_read = saver._storage.storage.read_items
+    original_read = saver._storage.storage.read_ref_items
     original_project = saver._project_context_projection
     original_validate = saver._validate_snapshot_sources
     active, reads, projected, validated = [], [], [], []
@@ -62,7 +70,7 @@ def test_wire_seal_reads_canonical_once_and_validates_after_projection(
         result = original_read(*args, **kwargs)
         if active:
             assert kwargs.get("snapshot") is None
-            reads.append((tuple(kwargs["item_ids"]), result))
+            reads.append((tuple(kwargs["refs"]), result))
             events.append("read")
         return result
 
@@ -77,18 +85,20 @@ def test_wire_seal_reads_canonical_once_and_validates_after_projection(
         return original_validate(*args, **kwargs)
 
     monkeypatch.setattr(preparation, "seal_registered_plan", seal)
-    monkeypatch.setattr(saver._storage.storage, "read_items", read)
+    monkeypatch.setattr(saver._storage.storage, "read_ref_items", read)
     monkeypatch.setattr(saver, "_project_context_projection", project)
     monkeypatch.setattr(saver, "_validate_snapshot_sources", validate)
     result = prepare("one-source-read", request_messages=tool_messages, target_format=target_format)
-    expected = {
-        entry.ref.ref_id for entry in result["snapshot"].selection
+    expected_refs = tuple(
+        entry.ref for entry in result["snapshot"].selection
         if entry.ref.ref_type == "canonical_item" and entry.included
-    }
+    )
+    expected = {ref_identity(ref) for ref in expected_refs}
     assert len(reads) == len(projected) == len(validated) == 1
-    assert set(reads[0][0]) == expected == {item.item_id for item in reads[0][1]}
+    assert reads[0][0] == expected_refs
+    assert {ref_identity(ref) for ref in reads[0][0]} == expected == set(reads[0][1])
     assert reads[0][1] is projected[0] is validated[0]
-    assert {item.semantic_kind for item in validated[0]} >= {"tool_call", "tool_result", "assistant_output"}
+    assert {item.semantic_kind for item in validated[0].values()} >= {"tool_call", "tool_result", "assistant_output"}
     assert events == ["read", "project", "validate"]
 
 
@@ -104,7 +114,7 @@ def test_wire_seal_rejects_nested_payload_mutation_after_first_projection(
 
     def project(*args, **kwargs):
         result = original_project(*args, **kwargs)
-        content = next(item for item in args[3] if item.semantic_kind == "assistant_output")
+        content = next(item for item in args[3].values() if item.semantic_kind == "assistant_output")
         assert isinstance(content.payload, list)
         content.payload[0]["text"] = "投影后正文已改变"
         events.append("project-mutate")
@@ -169,6 +179,119 @@ def test_wire_seal_writer_initialize_rejects_damage_after_projection(
 
 
 @pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
+def test_wire_seal_rechecks_same_length_body_damage_after_successful_validation(
+    production_context, monkeypatch, target_format,
+):
+    saver, session, thread, connection, manager, prepare = production_context
+    storage = saver._storage.storage
+    path = storage.jsonl_path(session, thread_id=thread)
+    original_project = saver._project_context_projection
+    original_line = integrity.canonical_json_line
+    successful_reads = []
+    damaged_bytes = []
+    source_state = []
+    pending = manager.prepare_pending()
+
+    def observe(value):
+        result = original_line(value)
+        if value.get("payload") in ("独立草稿", "损坏草稿"):
+            successful_reads.append(result)
+        return result
+
+    def project(*args, **kwargs):
+        result = original_project(*args, **kwargs)
+        assert successful_reads
+        source_state.append((connection.execute(
+            "SELECT item_id,jsonl_offset,jsonl_length,content_hash,payload_length,source_revision "
+            "FROM item_catalog ORDER BY item_sequence"
+        ).fetchall(), connection.execute(
+            "SELECT committed_jsonl_offset,last_commit_id FROM database_meta"
+        ).fetchone()))
+        before = path.read_bytes()
+        damaged = before.replace("独立草稿".encode(), "损坏草稿".encode())
+        assert before != damaged and len(before) == len(damaged)
+        path.write_bytes(damaged)
+        damaged_bytes.append(damaged)
+        return result
+
+    monkeypatch.setattr(integrity, "canonical_json_line", observe)
+    monkeypatch.setattr(saver, "_project_context_projection", project)
+    with pytest.raises(RuntimeError, match="schema/content 非法"):
+        prepare("same-length-body-damage", target_format=target_format)
+    assert len(successful_reads) >= 2
+    assert connection.execute("SELECT count(*) FROM context_assemblies").fetchone() == (0,)
+    assert connection.execute("SELECT plan_state FROM context_plans").fetchall() == [("unsealed",)]
+    assert connection.execute(
+        "SELECT item_id,jsonl_offset,jsonl_length,content_hash,payload_length,source_revision "
+        "FROM item_catalog ORDER BY item_sequence"
+    ).fetchall() == source_state[0][0]
+    assert connection.execute(
+        "SELECT committed_jsonl_offset,last_commit_id FROM database_meta"
+    ).fetchone() == source_state[0][1]
+    assert manager.prepare_pending() == pending
+    assert path.read_bytes() == damaged_bytes[0]
+
+
+def test_provider_uses_storage_body_validation_scope_and_ends_after_success(production_context, monkeypatch):
+    saver, session, thread, _connection, _manager, prepare = production_context
+    storage = saver._storage.storage
+    original_scope = storage.catalog_body_validation_scope
+    original_validate = rollout_schema_introspection.validate_catalog_body
+    original_line = integrity.canonical_json_line
+    scope_events = []
+    phase = "before"
+    requests = {label: Counter() for label in ("before", "inside", "after")}
+    validations = {label: Counter() for label in ("before", "inside", "after")}
+    active_request: ContextVar[
+        tuple[str, tuple[bytes, int, str, str, int, str]] | None
+    ] = ContextVar("body_validation_request", default=None)
+
+    @contextmanager
+    def observe_scope():
+        nonlocal phase
+        scope_events.append("enter")
+        with original_scope():
+            phase = "inside"
+            yield
+        phase = "after"
+        scope_events.append("exit")
+
+    def observe_validation(raw, *, sequence, item_id, catalog_hash, payload_length, source_revision):
+        key = (raw, sequence, item_id, catalog_hash, payload_length, source_revision)
+        requests[phase][key] += 1
+        token = active_request.set((phase, key))
+        try:
+            return original_validate(
+                raw, sequence=sequence, item_id=item_id, catalog_hash=catalog_hash,
+                payload_length=payload_length, source_revision=source_revision,
+            )
+        finally:
+            active_request.reset(token)
+
+    def observe(value):
+        result = original_line(value)
+        request = active_request.get()
+        assert request is not None
+        request_phase, key = request
+        validations[request_phase][key] += 1
+        return result
+
+    monkeypatch.setattr(storage, "catalog_body_validation_scope", observe_scope)
+    monkeypatch.setattr(rollout_schema_introspection, "validate_catalog_body", observe_validation)
+    monkeypatch.setattr(integrity, "canonical_json_line", observe)
+    prepare("body-validation-success-scope")
+    assert scope_events == ["enter", "exit"]
+    assert requests["inside"]
+    assert all(count >= 2 for count in requests["inside"].values())
+    expected_validations = Counter({key: 1 for key in requests["inside"]})
+    assert requests["before"] == validations["before"] == expected_validations
+    assert validations["inside"] == expected_validations
+    storage.initialize(session, thread_id=thread)
+    assert scope_events == ["enter", "exit"]
+    assert requests["after"] == validations["after"] == expected_validations
+
+
+@pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
 @pytest.mark.parametrize("missing_prefix", [False, True])
 def test_wire_seal_keeps_plan_and_prefix_validation_before_source_read(
     production_context, monkeypatch, target_format, missing_prefix,
@@ -230,25 +353,26 @@ def test_direct_snapshot_reads_disjoint_tool_and_remaining_sources(
     registry_db, direct_snapshot, monkeypatch,
 ):
     saver, session, connection, _accepted = registry_db
-    original_read = saver._storage.storage.read_items
+    original_read = saver._storage.storage.read_ref_items
     reads = []
 
     def read(*args, **kwargs):
-        reads.append(tuple(kwargs["item_ids"]))
+        reads.append(tuple(kwargs["refs"]))
         return original_read(*args, **kwargs)
 
-    monkeypatch.setattr(saver._storage.storage, "read_items", read)
+    monkeypatch.setattr(saver._storage.storage, "read_ref_items", read)
     commit_id = saver.seal_context_assembly(
         session, direct_snapshot.thread_id, direct_snapshot,
         seal_idempotency_key="direct-source-key", seal_input_hash=sha256_jcs("direct-source-input"),
     )
     assert isinstance(commit_id, int)
     assert len(reads) == 2
-    assert set(reads[0]).isdisjoint(reads[1])
-    assert set(reads[0]) == {
-        ref.ref_id for ref in direct_snapshot.refs if ref.semantic_kind in {"tool_call", "tool_result"}
+    tool_keys, remaining_keys = ({ref_identity(ref) for ref in refs} for refs in reads)
+    assert tool_keys.isdisjoint(remaining_keys)
+    assert tool_keys == {
+        ref_identity(ref) for ref in direct_snapshot.refs if ref.semantic_kind in {"tool_call", "tool_result"}
     }
-    assert set(reads[0]) | set(reads[1]) == {ref.ref_id for ref in direct_snapshot.refs}
+    assert tool_keys | remaining_keys == {ref_identity(ref) for ref in direct_snapshot.refs}
     assert connection.execute("SELECT assembly_id FROM context_assemblies").fetchall() == [(direct_snapshot.assembly_id,)]
 
 
@@ -271,14 +395,14 @@ def test_direct_snapshot_keeps_tool_read_before_preflight_and_remaining_read_aft
             replace(selection[result_index].ref, ref_id="missing-result"),
         )
     object.__setattr__(direct_snapshot.selection[0], "plan_ordinal", 9)
-    original_read = saver._storage.storage.read_items
+    original_read = saver._storage.storage.read_ref_items
     reads = []
 
     def read(*args, **kwargs):
-        reads.append(tuple(kwargs["item_ids"]))
+        reads.append(tuple(kwargs["refs"]))
         return original_read(*args, **kwargs)
 
-    monkeypatch.setattr(saver._storage.storage, "read_items", read)
+    monkeypatch.setattr(saver._storage.storage, "read_ref_items", read)
     error, match = (
         (KeyError, "canonical item catalog 缺少请求的 item: missing-source")
         if missing_kind in {"tool_call", "tool-pair"}
@@ -290,7 +414,10 @@ def test_direct_snapshot_keeps_tool_read_before_preflight_and_remaining_read_aft
             seal_idempotency_key="invalid-direct-key", seal_input_hash=sha256_jcs("invalid-direct-input"),
         )
     assert len(reads) == 1
-    assert ("missing-source" in reads[0]) == (missing_kind in {"tool_call", "tool-pair"})
+    assert any(ref.ref_id == "missing-source" for ref in reads[0]) == (missing_kind in {"tool_call", "tool-pair"})
     if missing_kind == "tool-pair":
-        assert reads[0] == ("missing-source", "missing-result")
+        assert tuple(ref_identity(ref) for ref in reads[0]) == (
+            ("canonical_item", "missing-source", direct_snapshot.thread_id),
+            ("canonical_item", "missing-result", direct_snapshot.thread_id),
+        )
     assert connection.execute("SELECT count(*) FROM context_assemblies").fetchone() == (0,)

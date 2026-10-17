@@ -8,6 +8,7 @@ import pytest
 
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import contribution_content_hash, sha256_jcs
+from app.domain.itemized.identity.refs import selection_ref_identity
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -153,7 +154,9 @@ def test_omitted_retry_never_reads_supplied_or_persisted_body(
 ):
     saver, session, connection, accepted = registry_db
     plan = saver.create_context_plan(session, draft).draft
-    options = {"omitted_ref_ids": ("request-ref", "tools")}
+    options = {"omitted_ref_identities": tuple(
+        selection_ref_identity(ref) for ref in (*plan.refs, *plan.tool_set_refs)
+    )}
     snapshot = _seal(saver, session, plan, accepted, **options)
     before = _state(saver, session, connection)
     with RolloutCheckpointSaver(saver._detail_store.sessions_dir) as restarted:

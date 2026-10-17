@@ -28,6 +28,7 @@ from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
     ItemProvenanceRelation,
 )
+from app.domain.itemized.identity.refs import selection_ref_identity
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
@@ -260,6 +261,10 @@ def test_composition_preserves_checkpoint_supersession_for_tool_call(
         "session",
         "assembly",
         "untyped",
+        "thread",
+        "ref_type",
+        "unqualified",
+        "raw_id",
     ],
 )
 def test_composer_rejects_detail_binding_outside_included_request_scope(
@@ -270,15 +275,15 @@ def test_composer_rejects_detail_binding_outside_included_request_scope(
     plan = saver.compose_committed_context_plan(session_id, saver._storage.storage.main_thread_id(session_id), plan_id='detail-scope-plan', tool_set=EMPTY_TOOL_SET)
     request_ref = next(ref for ref in plan.refs if ref.ref_type == "request_only")
     canonical_ref = next(ref for ref in plan.refs if ref.ref_type == "canonical_item")
-    ref_id = request_ref.ref_id
+    identity = selection_ref_identity(request_ref)
     detail = DetailRef(session_id, plan.thread_id, "detail-scope-assembly", "detail")
     omitted = ()
     if case == "canonical":
-        ref_id = canonical_ref.ref_id
+        identity = selection_ref_identity(canonical_ref)
     elif case == "unknown":
-        ref_id = "not-in-plan"
+        identity = ("request_only", "not-in-plan", plan.thread_id)
     elif case == "omitted":
-        omitted = (request_ref.ref_id,)
+        omitted = (selection_ref_identity(request_ref),)
     elif case == "unavailable":
         plan = replace(
             plan,
@@ -295,12 +300,20 @@ def test_composer_rejects_detail_binding_outside_included_request_scope(
         detail = DetailRef(session_id, plan.thread_id, "foreign-assembly", "detail")
     elif case == "untyped":
         detail = "detail"
+    elif case == "thread":
+        identity = (request_ref.ref_type, request_ref.ref_id, "foreign-thread")
+    elif case == "ref_type":
+        identity = ("canonical_item", request_ref.ref_id, request_ref.thread_id)
+    elif case == "unqualified":
+        identity = (request_ref.ref_type, request_ref.ref_id)
+    elif case == "raw_id":
+        identity = request_ref.ref_id
     root = saver._storage.storage.root(session_id)
     before = (root / "rollout.jsonl").read_bytes()
     with pytest.raises(
         (TypeError, ValueError), match="source-mismatch|plan-order-integrity"
     ):
-        ContextPlanComposer().assembly(plan=plan, session_id=session_id, assembly_id='detail-scope-assembly', turn_id=turn_id, execution_id='unused-preflight-execution', provider_version='scope-test', request_detail_refs={ref_id: detail}, omitted_ref_ids=omitted, thread_id=plan.thread_id)
+        ContextPlanComposer().assembly(plan=plan, session_id=session_id, assembly_id='detail-scope-assembly', turn_id=turn_id, execution_id='unused-preflight-execution', provider_version='scope-test', request_detail_refs={identity: detail}, omitted_ref_identities=omitted, thread_id=plan.thread_id)
     assert (root / "rollout.jsonl").read_bytes() == before
 
 

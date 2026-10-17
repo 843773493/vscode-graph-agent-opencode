@@ -12,7 +12,11 @@ from collections.abc import Iterable, Mapping, Sequence
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.enums import BaseDeltaRole, SemanticKind
-from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.identity.refs import (
+    ContextRef,
+    ref_identity,
+    selection_ref_identity,
+)
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.mapping.itemized.carrier_dedup import superseded_item_ids
@@ -40,12 +44,13 @@ class ContextAssemblySealPreflightError(RuntimeError):
 def validate_seal_dispatch_invariants(
     snapshot: ContextAssemblySnapshot,
     *,
-    tool_pairings: Sequence[tuple[str, str]] | None = None,
+    tool_pairings: Sequence[tuple[tuple[str, str, str], tuple[str, str, str]]] | None = None,
 ) -> None:
     """在 seal 提交与 dispatch 复用前验证同一 assembly 的结构性不变量。
 
     tool_pairings 是 seal owner 从 canonical item metadata 解析出的
-    (tool_call_ref_id, tool_result_ref_id) 显式配对；assembly 含 tool 条目
+    (tool_call_ref_identity, tool_result_ref_identity) 显式配对，identity 包含
+    ref_type、ref_id 和 thread_id；assembly 含 tool 条目
     而不提供配对时必须 fail closed，不允许用猜测关系放行 dispatch。
     """
     _validate_plan_ordinals(snapshot)
@@ -55,6 +60,24 @@ def validate_seal_dispatch_invariants(
 
 
 def canonical_tool_pairings(
+    items: Mapping[tuple[str, str, str], CanonicalItemRecord],
+) -> tuple[tuple[tuple[str, str, str], tuple[str, str, str]], ...]:
+    """不同线程的同名 carrier 和 provider call ID 分别配对。"""
+    groups: dict[str, list[CanonicalItemRecord]] = {}
+    for (ref_type, item_id, thread_id), item in items.items():
+        if not isinstance(item, CanonicalItemRecord):
+            raise TypeError("canonical tool pairing 只接受 CanonicalItemRecord")
+        if ref_type != "canonical_item" or item_id != item.item_id or not thread_id:
+            raise ValueError("source-mismatch: tool pairing registry identity 不一致")
+        groups.setdefault(thread_id, []).append(item)
+    return tuple(
+        (("canonical_item", call, thread_id), ("canonical_item", result, thread_id))
+        for thread_id, values in groups.items()
+        for call, result in _thread_tool_pairings(values)
+    )
+
+
+def _thread_tool_pairings(
     items: Iterable[CanonicalItemRecord],
 ) -> tuple[tuple[str, str], ...]:
     """从已提交 canonical items 的显式 tool_call_id 派生 (call, result) 配对。
@@ -177,15 +200,15 @@ def _validate_plan_ordinals(snapshot: ContextAssemblySnapshot) -> None:
 
 
 def _validate_source_identity_uniqueness(snapshot: ContextAssemblySnapshot) -> None:
-    seen: set[tuple[str, str]] = set()
-    registry = {(ref.ref_type, ref.ref_id): ref for ref in snapshot.refs}
+    seen: set[tuple[str, ...]] = set()
+    registry = {selection_ref_identity(ref): ref for ref in snapshot.refs}
     included = _included_entries(snapshot)
     entry_by_identity = {
-        (ref.ref_type, ref.ref_id): snapshot.selection[ordinal]
+        selection_ref_identity(ref): snapshot.selection[ordinal]
         for ordinal, ref in included
     }
     for _, ref in included:
-        identity = (ref.ref_type, ref.ref_id)
+        identity = selection_ref_identity(ref)
         if identity in seen:
             raise ContextAssemblySealPreflightError(
                 "seal-dispatch-source-identity-conflict",
@@ -266,20 +289,20 @@ def _validate_overlay_order(snapshot: ContextAssemblySnapshot) -> None:
 
 def _validate_tool_pairing(
     snapshot: ContextAssemblySnapshot,
-    tool_pairings: Sequence[tuple[str, str]] | None,
+    tool_pairings: Sequence[tuple[tuple[str, str, str], tuple[str, str, str]]] | None,
 ) -> None:
-    calls: dict[str, int] = {}
-    results: dict[str, int] = {}
+    calls: dict[tuple[str, str, str], int] = {}
+    results: dict[tuple[str, str, str], int] = {}
     for ordinal, ref in _included_entries(snapshot):
         if ref.ref_type != "canonical_item" or ref.semantic_kind not in _TOOL_KINDS:
             continue
         target = calls if ref.semantic_kind == SemanticKind.TOOL_CALL.value else results
-        if ref.ref_id in target:
+        if ref_identity(ref) in target:
             raise ContextAssemblySealPreflightError(
                 "seal-dispatch-tool-pairing-conflict",
                 f"included tool entry 重复 ref_id: {ref.ref_id}",
             )
-        target[ref.ref_id] = ordinal
+        target[ref_identity(ref)] = ordinal
     if not calls and not results:
         if tool_pairings:
             raise ContextAssemblySealPreflightError(
@@ -292,7 +315,7 @@ def _validate_tool_pairing(
             "seal-dispatch-tool-pairing-conflict",
             "assembly 含 tool entry 但缺少显式 tool 配对，禁止 dispatch",
         )
-    seen_calls: set[str] = set()
+    seen_calls: set[tuple[str, str, str]] = set()
     for call_ref_id, result_ref_id in tool_pairings:
         if call_ref_id not in calls or result_ref_id not in results:
             raise ContextAssemblySealPreflightError(

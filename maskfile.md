@@ -53,41 +53,21 @@
 ```sh
   bun run test:matrix -- --list
 ```
-> ### suite [name]
+> ### suite <name> [focus]
 > [测试] 运行测试矩阵中的指定套件
+> 必须显式传入套件名。`e2e-web` 运行整个 Web E2E 目录，`e2e-web-basic-chat-tool-loop` 只运行 Section 8 目标 node。两者都要求通过 `focus` 参数或 `BOXTEAM_E2E_SECTION8_FOCUS` 显式选择该 node 内的 `default` 场景集或合法 scenario key；focus 不改变 pytest node 范围。多个 key 用逗号分隔，`read_cursor_expiry` 必须与 `read_recovery` 连续选择并位于最后。
 ```sh
-  name="${name:-unit-python}"
-  bun run test:matrix -- --suite="$name"
-```
-> ### unit
-> [测试] 运行 Python 单元测试
-```sh
-  uv run pytest tests/unit
-```
-> ### contracts
-> [测试] 运行协议契约测试
-```sh
-  uv run pytest tests/contracts
-```
-> ### integration
-> [测试] 运行 Python 集成测试
-```sh
-  uv run pytest tests/integration
-```
-> ### e2e-web
-> [测试] 运行当前纯 Web E2E 测试
-```sh
-  uv run pytest tests/e2e/clients/web
-```
-> ### e2e-basic-chat-tool-loop
-> [测试] 运行 Web 基础聊天工具循环完整流程 E2E
-```sh
-  uv run pytest tests/e2e/clients/web/test_basic_chat_tool_loop.py
-```
-> ### e2e-gateway
-> [测试] 运行 Gateway 真实进程 E2E 测试
-```sh
-  uv run pytest tests/e2e/system/gateway
+  name="${name:?请显式指定测试矩阵 suite 名称}"
+  if [ "$name" = "e2e-web" ] || [ "$name" = "e2e-web-basic-chat-tool-loop" ]; then
+    focus="${focus:-${BOXTEAM_E2E_SECTION8_FOCUS:-}}"
+    focus="${focus:?运行 Web E2E suite 必须显式指定 Section 8 focus}"
+    BOXTEAM_E2E_SECTION8_FOCUS="$focus" bun run test:matrix -- --suite="$name"
+  elif [ -n "$focus" ]; then
+    echo "focus 只适用于 Web E2E suite" >&2
+    exit 2
+  else
+    bun run test:matrix -- --suite="$name"
+  fi
 ```
 ## install
 > ### release

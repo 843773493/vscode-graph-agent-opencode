@@ -29,6 +29,7 @@ from app.domain.itemized.hashing import (
     contribution_content_hash,
     payload_content_length,
 )
+from app.domain.itemized.identity.refs import selection_ref_identity
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import (
     ContextContribution,
@@ -145,13 +146,16 @@ def compile_prefix_context(
                 and source.source_binding is not None and source.root_placement == "root_eligible"
                 and (source.source_binding.source_ref, source.source_revision) in prior_roots
             )
-    by_id = {ref.ref_id: ref for ref in plan.refs}
+    if any(ref.ref_type == "canonical_item" and ref.thread_id != plan.thread_id for ref in plan.refs):
+        raise ValueError("source-mismatch: stable prefix 不得跨 thread 拼接 canonical refs")
+    by_identity = {selection_ref_identity(ref): ref for ref in plan.refs}
+    # prefix wire 的 local ID 只在当前 owner thread 内解析。
     by_contribution = {source.contribution_id: source for source in plan.contributions}
-    selected_ids: list[str] = []
+    selected_identities: list[tuple[str, ...]] = []
     root = previous_binding.root if previous_binding is not None else None
     frames: list[ProviderProfileItemFrame] = []
     if rebuilding:
-        candidates: dict[str, tuple[RootCandidateSource, str]] = {}
+        candidates: dict[str, tuple[RootCandidateSource, tuple[str, ...]]] = {}
         observed = {source.descriptor.source_id for source in batch.sources}
         if retained_source_assembly is not None:
             retained_binding = retained_source_assembly.seal_binding
@@ -185,7 +189,7 @@ def compile_prefix_context(
                     revision=source.source_revision, content=content,
                     source_ordinal=contribution.source_ordinal, root_placement="root_eligible",
                     included_reason="initial" if state.epoch.reason == EpochReason.INITIAL else "epoch_rebuild",
-                ), entry.ref.ref_id)
+                ), ("request_only", entry.ref.ref_id, plan.thread_id))
         for source in batch.sources:
             if source.descriptor.root_placement != "root_eligible" or not source.content:
                 continue
@@ -203,8 +207,8 @@ def compile_prefix_context(
                     "toolset_policy" if source.descriptor.policy_key is not None
                     else "initial" if state.epoch.reason == EpochReason.INITIAL else "epoch_rebuild"
                 ),
-            ), contribution.contribution_id)
-        selected_ids.extend(ref_id for _, ref_id in candidates.values())
+            ), ("request_only", contribution.contribution_id, plan.thread_id))
+        selected_identities.extend(identity for _, identity in candidates.values())
         root = compile_root_item(state, [candidate for candidate, _ in candidates.values()])
         if root is not None:
             frames.append(ProviderProfileItemFrame(
@@ -217,16 +221,18 @@ def compile_prefix_context(
     elif previous is not None:
         for entry in previous.selection:
             if entry.included and entry.ref.ref_type != "tool_set":
-                if entry.ref.ref_id not in by_id:
+                identity = selection_ref_identity(entry.ref)
+                if identity not in by_identity:
                     raise RuntimeError(
                         "stable-prefix-violation: canonical/source 消失而没有真实 rebuild boundary: "
                         + entry.ref.ref_id
                     )
-                selected_ids.append(entry.ref.ref_id)
-    inherited = set(selected_ids)
+                selected_identities.append(identity)
+    inherited = set(selected_identities)
     canonical_items = [
         item for item in items
-        if item.item_id in by_id and item.item_id not in inherited
+        if ("canonical_item", item.item_id, plan.thread_id) in by_identity
+        and ("canonical_item", item.item_id, plan.thread_id) not in inherited
     ]
     # 真实 terminal outcomes 全部选入之后才追加来源通知；不以物理 append 交错排序。
     canonical_items = [
@@ -239,7 +245,7 @@ def compile_prefix_context(
         start_ordinal=len(state.frames) + len(frames),
     )
     frames.extend(canonical_frames)
-    selected_ids.extend(canonical_ids)
+    selected_identities.extend(("canonical_item", item_id, plan.thread_id) for item_id in canonical_ids)
     source_by_id = {source.descriptor.source_id: source for source in batch.sources}
     tail_values = (
         [
@@ -261,13 +267,13 @@ def compile_prefix_context(
         for frame in retained_source_assembly.seal_binding.prefix.state.frames:
             if frame.item_ref.source_identity in {MCP_GUIDANCE_SOURCE_ID, *TEAM_SOURCE_IDS.values()}:
                 continue
+            ref_identity = ("request_only", frame.item_ref.ref_id, plan.thread_id)
             if ((frame.item_ref.ref_id, frame.item_ref.source_revision) not in retained_source_refs
-                    or frame.role != "user" or frame.item_ref.ref_id in inherited):
+                    or frame.role != "user" or ref_identity in inherited):
                 continue
-            ref_id = frame.item_ref.ref_id
-            if ref_id not in by_id:
+            if ref_identity not in by_identity:
                 raise RuntimeError("checkpoint-context-state-conflict: retained source ref 已丢失")
-            source = resolve_contribution_for_ref(by_id[ref_id], plan.contributions)
+            source = resolve_contribution_for_ref(by_identity[ref_identity], plan.contributions)
             identity = (frame.item_ref.source_identity, frame.item_ref.source_revision)
             if source is not None and source.contribution_kind == "prompt" and identity in current_tail:
                 if frame.content != current_tail[identity]:
@@ -275,14 +281,14 @@ def compile_prefix_context(
                 # fork 本地化后的旧 ref 与当前完整来源只能贡献一次，异 revision 历史仍携带。
                 continue
             ordinal += 1
-            selected_ids.append(ref_id)
+            selected_identities.append(ref_identity)
             frames.append(replace(
                 frame, ordinal=ordinal, provider_profile=provider_profile,
                 item_ref=replace(frame.item_ref, tracking_state="not_tracked"),
             ))
     for ref_id, source, content in tail_values:
         ordinal += 1
-        selected_ids.append(ref_id)
+        selected_identities.append(("request_only", ref_id, plan.thread_id))
         frames.append(ProviderProfileItemFrame(
             ordinal, provider_profile, "user", "text", content,
             AppendedItemRef(
@@ -291,11 +297,12 @@ def compile_prefix_context(
             ),
         ))
     # 持久 overlay 是独立的 post-user 来源；沿已有 typed ref 的 base/delta 顺序追加。
-    inherited = set(selected_ids)
+    inherited = set(selected_identities)
     for ref in plan.refs:
-        if ref.base_delta_role not in {"base", "delta"} or ref.ref_id in inherited:
+        identity = selection_ref_identity(ref)
+        if ref.base_delta_role not in {"base", "delta"} or identity in inherited:
             continue
-        selected_ids.append(ref.ref_id)
+        selected_identities.append(identity)
         if ref.availability != "available":
             continue
         contribution = resolve_contribution_for_ref(ref, plan.contributions)
@@ -314,7 +321,7 @@ def compile_prefix_context(
         state, frames, desired_provider_profile=provider_profile,
         desired_tool_compatibility_key=compatibility_key,
     )
-    selected_refs = tuple(by_id[ref_id] for ref_id in selected_ids)
+    selected_refs = tuple(by_identity[identity] for identity in selected_identities)
     selected_contribution_ids = {
         contribution.contribution_id
         for ref in selected_refs

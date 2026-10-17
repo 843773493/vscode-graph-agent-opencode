@@ -264,6 +264,7 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
     section8_product_nodes: dict[str, CommunicationNode],
     section8_browser_temporary_directory: str,
     section8_mcp_catalogs: dict[str, dict[str, Path]],
+    section8_selection_contract: dict[str, object],
 ) -> None:
     del request
     project_root = Path.cwd().resolve()
@@ -378,10 +379,13 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
             for response in message_stream_responses
             if response["status"] == 404
         ), "404 diagnostic body 必须有界"
-        focus = [name.strip() for name in os.getenv("BOXTEAM_E2E_SECTION8_FOCUS", "").split(",") if name.strip()]
-        if focus:
-            assert result["focusedScenarios"] == focus
-            assert set(result["section8"]) == set(focus)
+        requested = section8_selection_contract["requested"]
+        selected = section8_selection_contract["selected"]
+        assert isinstance(requested, list)
+        assert isinstance(selected, list)
+        assert result["focusedScenarios"] == requested
+        assert set(result["section8"]) == set(selected)
+        if section8_selection_contract["mode"] == "focus":
             return
         assert result["firstJob"]["status"] in {"completed", "succeeded"}
         assert result["secondJob"]["status"] in {"completed", "succeeded"}

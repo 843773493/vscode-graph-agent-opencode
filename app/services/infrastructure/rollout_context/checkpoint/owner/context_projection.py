@@ -13,7 +13,7 @@ from app.domain.itemized.hashing import (
     sha256_jcs,
 )
 from app.domain.itemized.identity.detail_ref import DetailRef
-from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import (
     ContextRequestPlan,
@@ -74,7 +74,7 @@ class ContextProjectionOwnerMixin:
 
     def _validate_snapshot_sources(
         self, snapshot: ContextAssemblySnapshot, checkpoint_ns: str, *,
-        items: list[CanonicalItemRecord],
+        items: Mapping[tuple[str, str, str], CanonicalItemRecord],
         prepared_details: tuple[PreparedDetail, ...] = (),
     ) -> None:
         """校验已选正文；摘要候选同时核对冻结的 canonical 来源。"""
@@ -87,9 +87,8 @@ class ContextProjectionOwnerMixin:
                 entry.included or snapshot.selection_policy == "summary_candidate"
             )
         )
-        by_id = {item.item_id: item for item in items}
         for entry in entries:
-            resolve_selected_item(entry, by_id)
+            resolve_selected_item(entry, items)
         self._request_content_for_plan(
             snapshot.session_id,
             snapshot.thread_id,
@@ -125,7 +124,7 @@ class ContextProjectionOwnerMixin:
         checkpoint_ns: str,
         request_only_content: Mapping[str, object] | None = None,
         include_request_only: bool = True,
-    ) -> tuple[ContextAssemblySnapshot, list[CanonicalItemRecord], dict[str, object]]:
+    ) -> tuple[ContextAssemblySnapshot, dict[tuple[str, str, str], CanonicalItemRecord], dict[str, object]]:
         """一次 fresh authority 读取冻结投影材料，关闭连接后才运行各 projector。"""
         if plan.plan_state != "sealed" or plan.assembly_id is None:
             self._require_context_plan_owner(session_id, thread_id, plan)
@@ -144,8 +143,8 @@ class ContextProjectionOwnerMixin:
                 snapshot=read_snapshot,
             )
             committed = committed_snapshot.as_sealed_plan()
-            item_ids = [
-                entry.ref.ref_id
+            refs = [
+                entry.ref
                 for entry in committed.selection
                 if (entry.included or committed.selection_policy == "summary_candidate")
                 and isinstance(entry.ref, ContextRef)
@@ -158,8 +157,8 @@ class ContextProjectionOwnerMixin:
                 )
                 if include_request_only else {}
             )
-            items = self._storage.storage.read_items(
-                session_id, thread_id, checkpoint_ns=checkpoint_ns, item_ids=item_ids,
+            items = self._storage.storage.read_ref_items(
+                session_id, thread_id, checkpoint_ns=checkpoint_ns, refs=refs,
                 snapshot=read_snapshot,
             )
         return committed_snapshot, items, request_content
@@ -169,7 +168,7 @@ class ContextProjectionOwnerMixin:
         session_id: str,
         thread_id: str,
         snapshot: ContextAssemblySnapshot,
-        items: list[CanonicalItemRecord],
+        items: Mapping[tuple[str, str, str], CanonicalItemRecord],
         request_content: Mapping[str, object],
     ) -> dict[str, object]:
         """只消费本次读取的材料，不自行重读或重新选择 context。"""
@@ -541,14 +540,15 @@ class ContextProjectionOwnerMixin:
         plan: ContextRequestPlan,
         *,
         assembly_id: str,
-        omitted_ref_ids: frozenset[str] = frozenset(),
+        omitted_ref_identities: frozenset[tuple[str, ...]] = frozenset(),
         request_only_content: Mapping[str, object] | None = None,
-    ) -> tuple[ContextRequestPlan, tuple[PreparedDetail, ...], dict[str, DetailRef]]:
+    ) -> tuple[ContextRequestPlan, tuple[PreparedDetail, ...], dict[tuple[str, ...], DetailRef]]:
         """为本次 sealed assembly 建立 target-local request detail binding。
 
-        `ContextRef.ref_id` 是 source/plan identity，不是 contribution identity，
-        也不是 detail path。每个 included request-only entry 都必须拥有同一
-        assembly 下的 detail_ref；contribution-backed entry 另外通过显式
+        omission 和 detail mapping 都以 selection_ref_identity(ref) 为键，
+        不把裸 ref_id 当作完整 source identity 或 detail path。每个 included
+        request-only entry 都必须拥有同一 assembly 下的 detail_ref；
+        contribution-backed entry 另外通过显式
         `contribution_id` 关联 manifest。正文来自当前已登记的实时 body 或
         同一 source identity 的旧 sealed detail，不读取当前源文件，
         也不把正文写入 canonical item。
@@ -563,7 +563,7 @@ class ContextProjectionOwnerMixin:
         for ref in plan.refs:
             if ref.ref_type != "request_only":
                 continue
-            if ref.ref_id in omitted_ref_ids:
+            if selection_ref_identity(ref) in omitted_ref_identities:
                 # omitted entry 只保留 source identity，由 assembly composer
                 # 创建 tagged selection；不能为了未发送的 source 生成 detail。
                 continue
@@ -576,7 +576,7 @@ class ContextProjectionOwnerMixin:
                 request_only_content=request_only_content,
             )
             pending.append((ref, body))
-        detail_by_ref: dict[str, DetailRef] = {}
+        detail_by_ref: dict[tuple[str, ...], DetailRef] = {}
         for ref, body in pending:
             prepared = self._detail_store.prepare(
                 session_id=session_id,
@@ -594,7 +594,7 @@ class ContextProjectionOwnerMixin:
             )
             record = prepared.record
             prepared_details.append(prepared)
-            detail_by_ref[ref.ref_id] = record.detail_ref
+            detail_by_ref[selection_ref_identity(ref)] = record.detail_ref
         return plan, tuple(prepared_details), detail_by_ref
 
 

@@ -13,7 +13,7 @@ import pytest
 from app.core.path_utils import get_session_path_resolver
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import sha256_jcs
-from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
 from app.domain.itemized.records import CanonicalItemRecord
 from app.schemas.internal_v2.session_context import SessionContextReadResultDTO
 from app.services.business.session_context_resource import (
@@ -329,7 +329,7 @@ async def test_http_selection_preserves_order_omission_toolset_and_typed_details
     )
     draft = replace(draft, refs=(canonical[1], *overlay, plain, canonical[0]))
     omitted = tuple(
-        ref.ref_id
+        selection_ref_identity(ref)
         for ref in (*draft.refs, *draft.tool_set_refs)
         if omission in (ref.ref_type, "all")
     )
@@ -346,7 +346,7 @@ async def test_http_selection_preserves_order_omission_toolset_and_typed_details
             thread_id=saver._storage.storage.main_thread_id(session_id),
         ),
         provider_version="api-contract",
-        omitted_ref_ids=omitted,
+        omitted_ref_identities=omitted,
         request_only_content={"plain-api": plain_body},
     )
     items, _ = await _read_pages(
@@ -354,7 +354,7 @@ async def test_http_selection_preserves_order_omission_toolset_and_typed_details
     )
     _assert_snapshot(items, snapshot, saver, session_id)
     assert [
-        entry.ref.ref_id for entry in snapshot.selection if not entry.included
+        selection_ref_identity(entry.ref) for entry in snapshot.selection if not entry.included
     ] == list(omitted)
     assert {entry.ref.ref_type for entry in snapshot.selection} == {
         "canonical_item",

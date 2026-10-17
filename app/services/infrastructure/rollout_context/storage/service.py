@@ -11,7 +11,7 @@ import hashlib
 import sqlite3
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from html import escape
@@ -28,6 +28,9 @@ from app.core.session_catalog_store import (
 )
 from app.core.session_thread_context import require_current_session_thread_owner
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.infrastructure.rollout_context.storage.catalog.integrity import (
+    catalog_body_validation_scope,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.internal_history import (
     InternalExecutionHistoryMixin,
 )
@@ -146,6 +149,10 @@ class RolloutStorage(
         self._fork_recovery = fork_recovery
         self._initialize_activation = initialize_activation
         self._attachment_ref_projector = attachment_ref_projector
+
+    def catalog_body_validation_scope(self) -> AbstractContextManager[None]:
+        """为单次 provider prepare 提供有界正文成功校验作用域。"""
+        return catalog_body_validation_scope()
 
     def project_message_attachments(self, session_id: str, thread_id: str, message: dict[str, object]) -> dict[str, object]:
         """投影附件 owner 冻结的引用和可用性，不改 canonical bytes/hash。"""

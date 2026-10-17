@@ -15,6 +15,7 @@ from app.domain.itemized.hashing import (
     contribution_content_hash,
     sha256_jcs,
 )
+from app.domain.itemized.identity.refs import selection_ref_identity
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextRequestPlan, SourceBinding
@@ -213,22 +214,24 @@ def test_overlay_source_binding_matches_before_real_plan_seal_writes(
     assert saver._storage.storage.jsonl_path(session).read_bytes() == before[0]
 
 
-@pytest.mark.parametrize("omitted, tool_ids", [
+@pytest.mark.parametrize("omitted_ordinals, tool_ids", [
     ((), ("tools",)),
-    (("tools",), ("tools",)),
-    (("request-ref", "tools"), ("tools",)),
-    (("tools",), ("z-tools", "tools", "a-tools")),
+    ((1,), ("tools",)),
+    ((0, 1), ("tools",)),
+    ((2,), ("z-tools", "tools", "a-tools")),
 ])
 def test_seal_restart_and_retry_reuse_committed_identity(
-    registry_db, draft, monkeypatch, omitted, tool_ids
+    registry_db, draft, monkeypatch, omitted_ordinals, tool_ids
 ):
     saver, session, connection, accepted = registry_db
     draft = replace(draft, tool_set_refs=tuple(
         replace(draft.tool_set_refs[0], ref_id=ref_id) for ref_id in tool_ids
     ))
+    registry = (*draft.refs, *draft.tool_set_refs)
+    omitted = tuple(selection_ref_identity(registry[ordinal]) for ordinal in omitted_ordinals)
     registered = saver.create_context_plan(session, draft)
     snapshot = _seal(
-        saver, session, registered.draft, accepted, omitted_ref_ids=omitted
+        saver, session, registered.draft, accepted, omitted_ref_identities=omitted
     )
     sealed = saver.get_context_plan_registration(
         session, plan_id=draft.plan_id, thread_id=saver._storage.storage.main_thread_id(session)
@@ -249,7 +252,7 @@ def test_seal_restart_and_retry_reuse_committed_identity(
             thread_id=restarted._storage.storage.main_thread_id(session),
         )
         retry = _seal(
-            restarted, session, restored.draft, accepted, omitted_ref_ids=omitted
+            restarted, session, restored.draft, accepted, omitted_ref_identities=omitted
         )
         assert retry.to_dict() == snapshot.to_dict()
         assert retry == snapshot
@@ -264,7 +267,7 @@ def test_seal_restart_and_retry_reuse_committed_identity(
         {"provider_version": "different-provider"},
         {"model_call_id": "different-call"},
         {"target_format": "chat_completions"},
-        {"omitted_ref_ids": ("tools",)},
+        {"omitted_ref_identities": (("tool_set", "tools"),)},
         {"loss": ("different-loss",)},
         {"seal_idempotency_key": "different-key"},
         {"request_input_hash": "different-input"},

@@ -17,6 +17,9 @@ from app.domain.itemized.epoch.seal_binding import ContextSealPreparation
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.domain.itemized.serialization import normalize_wire_request
+from app.services.infrastructure.rollout_context.assembly.plans.registry import (
+    _ValidatedPredecessors,
+)
 from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextPlanRegistration,
 )
@@ -59,6 +62,7 @@ def seal_registered_plan(
     activation_snapshot: ResourceActivationSnapshotRef | None = None,
     context_preparation: ContextSealPreparation | None = None,
     registered: ContextPlanRegistration | None = None,
+    validated_predecessors: _ValidatedPredecessors | None = None,
 ) -> ContextPlanSealResult:
     require_key(seal_idempotency_key, field="seal_idempotency_key")
     if (wire_profile is None) != (wire_params is None):
@@ -162,7 +166,7 @@ def seal_registered_plan(
                 checkpoint_ns,
                 draft,
                 assembly_id=assembly_id,
-                omitted_ref_ids=frozenset(assembly_options["omitted_ref_ids"]),
+                omitted_ref_identities=frozenset(assembly_options["omitted_ref_identities"]),
                 request_only_content=request_only_content,
             )
             # detail_refs 绑定 included request_only 的真实正文；整体 assembly 审计详情是可选的，可以为空。
@@ -205,6 +209,7 @@ def seal_registered_plan(
             detail=None, required_detail=False, sensitive_detail=False,
             activation_binding=activation_binding,
             prepared_details=prepared_details,
+            validated_predecessors=validated_predecessors,
         )
         # storage owner 已核对 hash、registry CAS、manifest 和 activation 并原子提交。
         # ack 只同步 CSM 内存，不修改这些 sealed 事实；本次输出不再冷读同一 assembly。
