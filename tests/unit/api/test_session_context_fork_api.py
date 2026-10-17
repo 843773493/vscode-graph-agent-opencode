@@ -18,6 +18,7 @@ from app.schemas.internal_v2.session import (
 from app.services.business.session_context_resource import (
     session_resource_identity,
     session_resource_uri,
+    workspace_session_inventory_uri,
 )
 
 SOURCE_SESSION_ID = "ses_00000000400070008000000000000001"
@@ -63,7 +64,7 @@ class _ForkService:
             source_uri=thread_resource_uri(WORKSPACE_ID, SOURCE_SESSION_ID, SOURCE_THREAD_ID),
             source_view_id="view-source", source_view_revision=4, anchor_item_id=None,
             child_container_uri=session_resource_uri(WORKSPACE_ID, SOURCE_SESSION_ID),
-            main_container_uri=f"boxteam://workspace/{WORKSPACE_ID}/resources/workspace",
+            main_container_uri=workspace_session_inventory_uri(WORKSPACE_ID),
             title="完整历史分支", goal_available=False, resources=[],
             resource_mode="full_rollout_copy", resource_anchor_mode="inclusive",
         )
@@ -81,7 +82,7 @@ def _request(mode: SessionForkMode, creation_kind: SessionForkCreationKind, rela
         anchor_item_id="item-clicked" if mode == "view_prefix_fork" else None,
         mode=mode, creation_kind=creation_kind, relationship=relationship,
         target_container_uri=(session_resource_uri(WORKSPACE_ID, SOURCE_SESSION_ID)
-                              if creation_kind == "new_child_thread" else f"boxteam://workspace/{WORKSPACE_ID}/resources/workspace"),
+                              if creation_kind == "new_child_thread" else workspace_session_inventory_uri(WORKSPACE_ID)),
     )
 
 

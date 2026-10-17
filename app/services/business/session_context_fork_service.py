@@ -60,6 +60,9 @@ from app.schemas.internal_v2.workspace_resource import (
     ResourceThreadRef,
     WorkspaceResourceDTO,
 )
+from app.services.business.session_context_resource import (
+    workspace_session_inventory_uri,
+)
 from app.services.business.session_goal_service import SessionGoalService
 from app.services.business.session_service import SessionService
 from app.services.business.workspace_resources.facts import (
@@ -232,7 +235,7 @@ class SessionContextForkService:
             source_uri=thread_resource_uri(session.workspace_id, session_id, thread_id),
             source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
             anchor_item_id=point.anchor_item_id, child_container_uri=session.uri,
-            main_container_uri=resource_display_uri(scope="workspace", scope_id=session.workspace_id, kind="workspace", tail_segments=()),
+            main_container_uri=workspace_session_inventory_uri(session.workspace_id),
             title=f"{session.title}（上下文分支）", goal_available=await self._goals.get(session_id) is not None,
             resources=list(resources), resource_mode=mode, resource_anchor_mode=anchor_mode,
             live_resources=[WorkspaceResourceDTO.from_owner(snapshot)
@@ -246,10 +249,13 @@ class SessionContextForkService:
     ) -> SessionForkRequest:
         """生成策略只冻结同一公开请求；重试先取原 point，不追随 source latest。"""
         idempotency_key = "context-fork-generation:" + hashlib.sha256(canonical_json_bytes(origin.model_dump(mode="json"))).hexdigest()
-        target_uri = resource_display_uri(
-            scope="workspace", scope_id=self._session_service.workspace_id,
-            kind="folder" if parent_node_id is not None else "workspace",
-            tail_segments=(parent_node_id,) if parent_node_id is not None else (),
+        target_uri = (
+            resource_display_uri(
+                scope="workspace", scope_id=self._session_service.workspace_id,
+                kind="folder", tail_segments=(parent_node_id,),
+            )
+            if parent_node_id is not None
+            else workspace_session_inventory_uri(self._session_service.workspace_id)
         )
         try:
             existing = self._session_service.path_resolver.catalog_store.get_creation_record(self._creation_key(idempotency_key))
@@ -431,7 +437,7 @@ class SessionContextForkService:
             else:
                 self._session_service.path_resolver.resolve_session_node(session_id)
             return None, session_id
-        if target.kind == "workspace" or target.kind == "session" and target.tail_segments == ("inventory",):
+        if target.kind == "session" and not target.tail_segments:
             return None, None
         if target.kind == "folder":
             node = self._session_service.path_resolver.catalog_store.get_node(target.tail_segments[0])

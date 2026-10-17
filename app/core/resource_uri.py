@@ -18,7 +18,7 @@ _SCHEME: Final = "boxteam://"
 _SCOPE_KEYWORDS: Final = frozenset({"workspace", "user", "gateway", "inline"})
 # 语法 kind 闭集（parse_resource_uri 侧）；与 values.py 的描述符闭集 _DESCRIPTOR_KINDS 是两个
 # 独立闭集，不可混用。「config」承载配置来源文件本身，「session」承载会话上下文资源
-# （会话定位，规范形态 .../resources/session/{...canonical path segments}）。
+# （工作区集合根、Session 定位和 Thread 定位）。
 _RESOURCE_KINDS: Final = frozenset({"agent-spec", "skills", "config", "session", "workspace", "folder"})
 _NAME_CHARSET: Final = frozenset(string.ascii_letters + string.digits + "_-")
 
@@ -234,9 +234,10 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
         _expect_fixed_segment(tails[1], "AGENTS.md")
         return _parsed(scope, body[0], kind, tails, "root/AGENTS.md", uri, authority)
 
-    # config / session 无固定尾段（规范形态 .../resources/{kind}/{...canonical path
-    # segments}）；logical_name 即尾段逐段拼接的规范化结果。
-    if not tails:
+    # config 需要文件尾段；只有 workspace session 可以用空尾段表示集合根。
+    if not tails and (
+        kind == "config" or (kind == "session" and scope != "workspace")
+    ):
         raise ResourceUriGrammarError(
             "malformed_path",
             f"{kind} URI 必须携带规范化尾段: boxteam://{scope}/{{id}}/resources/"
@@ -255,7 +256,7 @@ def parse_session_thread_uri(
     if parsed.scope != "workspace" or parsed.kind != "session":
         raise ResourceUriGrammarError("malformed_path", "Session/Thread URI 必须属于 Workspace Session 资源")
     tails = parsed.tail_segments
-    if len(tails) == 1 and tails[0] != "inventory":
+    if len(tails) == 1:
         return parsed, tails[0], None
     if len(tails) == 3 and tails[1] == "threads":
         return parsed, tails[0], tails[2]

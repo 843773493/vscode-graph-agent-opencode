@@ -55,6 +55,11 @@ async def test_a04_remote_session_inventory_search_and_durable_read(communicatio
     session_uri = session_resource_uri(
         target.workspace_id, target_session, gateway_authority=target.gateway_id,
     )
+    assert workspace_session_inventory_uri(
+        target.workspace_id, gateway_authority=target.gateway_id,
+    ) == (
+        f"boxteam://{target.gateway_id}/workspace/{target.workspace_id}/resources/session"
+    )
     refs = (
         (session_resource_identity(target.workspace_id, target_session), session_uri, "workspace", "information"),
         (workspace_session_inventory_identity(target.workspace_id), workspace_session_inventory_uri(
@@ -106,7 +111,12 @@ async def test_a04_remote_session_inventory_search_and_durable_read(communicatio
         query = {"resource_identity":str(identity), "uri":uri, "scope":"workspace", "view":view}
         response = await source.client.post("/api/v1/context/read", json=query)
         assert response.status_code == 409, response.text
-        assert response.json()["detail"]["code"] == code
+        detail = response.json()["detail"]
+        if code == "unsupported_view":
+            assert detail["code"] == "federation-target-owner-rejected"
+            assert detail["detail"] == {"owner": "resource_uri_resolver", "code": code}
+        else:
+            assert detail["code"] == code
         assert response.headers["X-Request-ID"] == response.json()["request_id"]
         evidence.append({"rejected":query, "code":code})
 

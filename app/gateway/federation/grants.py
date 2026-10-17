@@ -147,8 +147,8 @@ class ForkGrantTarget:
             raise ValueError("fork grant URI 不属于固定 audience Workspace")
         if self.fork_role == "source":
             parse_session_thread_uri(self.uri, local_gateway_id=self.gateway_id)
-        elif resource.kind not in {"workspace", "session", "folder"}:
-            raise ValueError("fork target grant 必须指向 Workspace/Session 容器")
+        elif resource.kind not in {"session", "folder"}:
+            raise ValueError("fork target grant 必须指向 Session 集合、Session 或 Folder 容器")
 
     def to_payload(self) -> dict[str, object]:
         return {"gateway_id": self.gateway_id, "uri": self.uri, "fork_role": self.fork_role}
@@ -483,8 +483,8 @@ __all__ = [
     "MAX_GATEWAY_HOPS",
     "MAX_TRANSIT_GATEWAYS",
     "ContextGrantTarget",
-    "ForkGrantTarget",
     "FederationGrant",
+    "ForkGrantTarget",
     "GrantKind",
     "GrantTarget",
     "OperationKind",

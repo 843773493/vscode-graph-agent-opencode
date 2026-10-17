@@ -55,7 +55,10 @@ def parse_session_context_ref(
     if parsed.kind != "session":
         kind: Literal["session", "workspace_sessions", "other"] = "other"
         session_id = None
-    elif parsed.tail_segments == ("inventory",):
+    elif (
+        (parsed.scope == "workspace" and not parsed.tail_segments)
+        or (parsed.scope == "gateway" and parsed.tail_segments == ("inventory",))
+    ):
         kind = "workspace_sessions"
         session_id = None
     elif len(parsed.tail_segments) == 1:
@@ -63,7 +66,7 @@ def parse_session_context_ref(
         session_id = parsed.tail_segments[0]
     else:
         raise ValueError(
-            "session URI 必须指向单个 session_id 或 inventory 资源"
+            "session URI 必须指向 Workspace Session 集合根、单个 session_id 或 Gateway inventory"
         )
     return ParsedSessionContextResource(
         resource_identity=identity,
@@ -95,7 +98,7 @@ def workspace_session_inventory_uri(
         scope="workspace",
         scope_id=workspace_id,
         kind="session",
-        tail_segments=("inventory",),
+        tail_segments=(),
         gateway_authority=gateway_authority,
     )
 

@@ -115,6 +115,9 @@ from app.schemas.internal_v2.session_fork_transfer import (
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.job.service import JobService
 from app.services.business.session_context_fork_service import SessionContextForkService
+from app.services.business.session_context_resource import (
+    workspace_session_inventory_uri,
+)
 from app.services.business.session_service import SessionService
 from app.services.business.user_content_builder import UserContentBuilder
 from app.services.business.workspace_resources.owner import WorkspaceResourceOwner
@@ -3827,7 +3830,7 @@ async def test_remote_fork_task_cancel_recovers_same_durable_owner(
         ),
         target_container_uri=resource_display_uri(
             scope="workspace", scope_id=target.session_service.workspace_id,
-            kind="session" if creation_kind == "new_child_thread" else "workspace",
+            kind="session",
             tail_segments=(parent.session_id,) if creation_kind == "new_child_thread" else (),
             gateway_authority="fork-target-gateway",
         ),
@@ -4002,7 +4005,7 @@ async def test_remote_partial_import_recovers_by_exact_owner_abort(
         source_context, source.session_id, creation_kind=creation_kind, mode="full_rollout_copy",
         target_container_uri=resource_display_uri(
             scope="workspace", scope_id=target.session_service.workspace_id,
-            kind="session" if creation_kind == "new_child_thread" else "workspace",
+            kind="session",
             tail_segments=(parent.session_id,) if creation_kind == "new_child_thread" else (),
             gateway_authority="fork-target-gateway",
         ),
@@ -4159,7 +4162,7 @@ async def test_remote_fork_source_release_waits_for_durable_target_abort(
         ),
         target_container_uri=resource_display_uri(
             scope="workspace", scope_id=target.session_service.workspace_id,
-            kind="session" if creation_kind == "new_child_thread" else "workspace",
+            kind="session",
             tail_segments=(parent.session_id,) if creation_kind == "new_child_thread" else (),
             gateway_authority="fork-target-gateway",
         ),
@@ -4282,10 +4285,7 @@ async def test_lifespan_retries_pending_remote_export_without_restart_or_fork_re
             gateway_authority="fork-source-gateway",
         ),
         target_container_uri=resource_display_uri(
-            scope="workspace",
-            scope_id=target.workspace_id,
-            kind="workspace",
-            tail_segments=(),
+            scope="workspace", scope_id=target.workspace_id, kind="session", tail_segments=(),
             gateway_authority="fork-target-gateway",
         ),
         creation_kind="new_session_main",
@@ -4481,11 +4481,15 @@ async def test_qualified_local_fork_lifespan_recovers_without_http_context(
     try:
         request = await _fork_request(
             context, source.session_id, creation_kind=creation_kind, mode="context_fork",
-            target_container_uri=resource_display_uri(
-                scope="workspace", scope_id=source.workspace_id,
-                kind="workspace" if creation_kind == "new_session_main" else "session",
-                tail_segments=() if creation_kind == "new_session_main" else (source.session_id,),
-                gateway_authority="qualified-local-fork-gateway",
+            target_container_uri=(
+                workspace_session_inventory_uri(
+                    source.workspace_id, gateway_authority="qualified-local-fork-gateway",
+                )
+                if creation_kind == "new_session_main"
+                else resource_display_uri(
+                    scope="workspace", scope_id=source.workspace_id, kind="session",
+                    tail_segments=(source.session_id,), gateway_authority="qualified-local-fork-gateway",
+                )
             ),
         )
 
@@ -5694,11 +5698,11 @@ async def test_live_fork_preflight_rejects_before_target_or_attach(
     elif fault == "unverified":
         external.records[resource["resource_id"]]["reconciliation_status"] = "unknown"
     elif fault == "cross_workspace":
-        request = request.model_copy(update={"target_container_uri": resource_display_uri(
-            scope="workspace", scope_id="wksp_00000000400070008000000000000099", kind="workspace", tail_segments=())})
+        request = request.model_copy(update={"target_container_uri": workspace_session_inventory_uri(
+            "wksp_00000000400070008000000000000099")})
     elif fault == "cross_gateway":
-        request = request.model_copy(update={"target_container_uri": resource_display_uri(
-            scope="workspace", scope_id=source.workspace_id, kind="workspace", tail_segments=(), gateway_authority="other-gateway")})
+        request = request.model_copy(update={"target_container_uri": workspace_session_inventory_uri(
+            source.workspace_id, gateway_authority="other-gateway")})
     request = request.model_copy(update={"resources": [choice]})
     before = _fork_intent_state(context)
     revisions = list(external.revisions)

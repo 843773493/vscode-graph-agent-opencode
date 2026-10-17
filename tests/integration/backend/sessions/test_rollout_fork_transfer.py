@@ -20,6 +20,9 @@ from app.core.resource_uri import (
     thread_resource_uri,
 )
 from app.schemas.internal_v2.session_fork_transfer import FORK_TRANSFER_CHUNK_BYTES
+from app.services.business.session_context_resource import (
+    workspace_session_inventory_uri,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     _completed,
@@ -215,12 +218,9 @@ async def test_debug_configuration_choice_uses_source_owner_thread_across_gatewa
         assert repeated["resources"] == result["resources"]
         return result
 
-    local_workspace_uri = resource_display_uri(
-        scope="workspace", scope_id=remote_target.workspace_id, kind="workspace", tail_segments=(),
-    )
-    remote_target_uri = resource_display_uri(
-        scope="workspace", scope_id=remote_target.workspace_id, kind="workspace", tail_segments=(),
-        gateway_authority=remote_target.gateway_id,
+    local_workspace_uri = workspace_session_inventory_uri(remote_target.workspace_id)
+    remote_target_uri = workspace_session_inventory_uri(
+        remote_target.workspace_id, gateway_authority=remote_target.gateway_id,
     )
 
     local_to_remote = await fork_debug(
@@ -233,9 +233,7 @@ async def test_debug_configuration_choice_uses_source_owner_thread_across_gatewa
     )
     same_gateway_to_local = await fork_debug(
         source, source, source_uri=explicit_source_session_uri,
-        target_uri=resource_display_uri(
-            scope="workspace", scope_id=source.workspace_id, kind="workspace", tail_segments=(),
-        ),
+        target_uri=workspace_session_inventory_uri(source.workspace_id),
         idempotency_key="debug-choice-explicit-gateway-source-local-target",
     )
     assert local_to_remote["thread_uri"] != remote_to_local["thread_uri"]
@@ -265,9 +263,7 @@ async def test_debug_configuration_choice_uses_source_owner_thread_across_gatewa
                 "source_view_id": point["source_view_id"],
                 "source_view_revision": point["source_view_revision"],
                 "mode": "full_rollout_copy",
-                "target_container_uri": resource_display_uri(
-                    scope="workspace", scope_id=source.workspace_id, kind="workspace", tail_segments=(),
-                ),
+                "target_container_uri": workspace_session_inventory_uri(source.workspace_id),
                 "creation_kind": "new_session_main",
                 "resources": [{"resource_uri": choice_uri, "action": "copy_snapshot"}],
             },
@@ -313,9 +309,7 @@ async def test_debug_configuration_choice_uses_source_owner_thread_across_gatewa
                 "source_view_id": point["source_view_id"],
                 "source_view_revision": point["source_view_revision"],
                 "mode": "full_rollout_copy",
-                "target_container_uri": resource_display_uri(
-                    scope="workspace", scope_id=source.workspace_id, kind="workspace", tail_segments=(),
-                ),
+                "target_container_uri": workspace_session_inventory_uri(source.workspace_id),
                 "creation_kind": "new_session_main",
                 "resources": choices,
             },
@@ -400,9 +394,8 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
             scope=source_uri.scope, scope_id=source_uri.scope_id, kind=source_uri.kind,
             tail_segments=source_uri.tail_segments, gateway_authority=source.gateway_id,
         ),
-        "target_container_uri": resource_display_uri(
-            scope="workspace", scope_id=target.workspace_id, kind="workspace", tail_segments=(),
-            gateway_authority=target.gateway_id,
+        "target_container_uri": workspace_session_inventory_uri(
+            target.workspace_id, gateway_authority=target.gateway_id,
         ),
         "creation_kind": "new_session_main", "mode": "full_rollout_copy",
         "source_view_id": point["source_view_id"],
@@ -595,7 +588,7 @@ async def test_real_source_child_fork_cold_history_attachment_and_successor(
         ),
         "target_container_uri": resource_display_uri(
             scope="workspace", scope_id=target.workspace_id,
-            kind="session" if target_parent is not None else "workspace",
+            kind="session",
             tail_segments=(target_parent,) if target_parent is not None else (), gateway_authority=target.gateway_id,
         ),
         "creation_kind": creation_kind, "mode": "full_rollout_copy",
@@ -729,7 +722,7 @@ async def test_real_fork_delivery_trace_survives_owner_failure(
         ),
         "target_container_uri": resource_display_uri(
             scope="workspace", scope_id=target.workspace_id,
-            kind="session" if child_session_id is not None else "workspace",
+            kind="session",
             tail_segments=(child_session_id,) if child_session_id is not None else (),
             gateway_authority=target.gateway_id,
         ),

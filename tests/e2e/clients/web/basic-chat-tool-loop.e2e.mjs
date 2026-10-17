@@ -31,6 +31,7 @@ function section8ScenarioRegistry(surfaces, facts) {
     weekly: { default: true, run: () => runWeeklyReport(surfaces) },
     fork_child_ui: { default: true, run: () => runDefaultChildForkUi(surfaces.a) },
     forks: { default: true, run: () => runPublicForks(surfaces) },
+    live_resource_forks: { default: false, run: () => runLiveResourceForks(surfaces.a, []) },
     copy_attachments: { default: false, run: () => runCopyAttachmentFocus(surfaces.a) },
     copy_missing_attachment: {
       default: false,

@@ -329,7 +329,7 @@ describe("上下文分支候选与冻结重试", () => {
     source_uri: "boxteam://workspace/ws-source/resources/session/ses-source/threads/tid-source",
     source_view_id: "view-source", source_view_revision: 9, anchor_item_id: "item-source",
     child_container_uri: "boxteam://workspace/ws-source/resources/session/ses-source",
-    main_container_uri: "boxteam://workspace/ws-source/resources/workspace",
+    main_container_uri: "boxteam://workspace/ws-source/resources/session",
     title: "目标预填名称", goal_available: false, resources: [], live_resources: [],
     resource_mode: "view_prefix_fork", resource_anchor_mode: "inclusive", ...overrides,
   });
@@ -371,7 +371,7 @@ describe("上下文分支候选与冻结重试", () => {
     let pendingOld!: Promise<void>;
     let pendingCurrent!: Promise<void>;
     await act(async () => { pendingOld = mounted.hook().updateForkDialogSelection({ mode: "full_rollout_copy" }); });
-    await act(async () => { pendingCurrent = mounted.hook().updateForkDialogSelection({ targetContainerUri: "boxteam://gateway-c/workspace/ws-target/resources/workspace" }); });
+    await act(async () => { pendingCurrent = mounted.hook().updateForkDialogSelection({ targetContainerUri: "boxteam://gateway-c/workspace/ws-target/resources/session" }); });
     const request: SessionForkRequest = {
       idempotency_key: mounted.hook().forkDialog!.idempotencyKey,
       source_uri: point().source_uri, source_view_id: "view-source", source_view_revision: 9,

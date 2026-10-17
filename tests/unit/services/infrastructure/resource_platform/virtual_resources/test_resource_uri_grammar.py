@@ -7,6 +7,7 @@ import pytest
 from app.core.resource_uri import (
     ResourceUriGrammarError,
     parse_resource_uri,
+    parse_session_thread_uri,
     resource_display_uri,
     skill_display_uri,
     workspace_agent_spec_display_uri,
@@ -59,6 +60,13 @@ def test_parse_config_and_session_kinds() -> None:
     assert parsed.tail_segments == ("sess-1", "child")
     assert parsed.display_uri == "boxteam://workspace/ws-1/resources/session/sess-1/child"
 
+    collection = parse_resource_uri("boxteam://workspace/ws-1/resources/session")
+    assert collection.scope == "workspace"
+    assert collection.scope_id == "ws-1"
+    assert collection.kind == "session"
+    assert collection.logical_name == ""
+    assert collection.tail_segments == ()
+
 
 def test_resource_display_uri_round_trip_all_kinds() -> None:
     # 统一构造函数：闭集内任一 kind 都能构造并解析回自身。
@@ -67,6 +75,7 @@ def test_resource_display_uri_round_trip_all_kinds() -> None:
         ("user", "local", "config", ("workspace_mutable_override",)),
         ("gateway", "gw-1", "skills", ("review", "SKILL.md")),
         ("inline", "source-development-0_0_2", "config", ("workspace_inline",)),
+        ("workspace", "ws-1", "session", ()),
         ("workspace", "ws-1", "session", ("sess-1",)),
     )
     for scope, scope_id, kind, tail in cases:
@@ -110,12 +119,32 @@ def test_resource_display_uri_rejects_unregistered_kind_and_scope() -> None:
     assert excinfo.value.reason_code == "unknown_scope"
 
 
-def test_config_and_session_require_canonical_tail() -> None:
-    # 闭集内的新 kind 仍 fail-closed：缺少规范化尾段即 malformed_path。
-    for kind in ("config", "session"):
-        with pytest.raises(ResourceUriGrammarError) as excinfo:
-            parse_resource_uri(f"boxteam://workspace/ws-1/resources/{kind}")
-        assert excinfo.value.reason_code == "malformed_path"
+def test_config_requires_canonical_tail_but_session_allows_collection_root() -> None:
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
+        parse_resource_uri("boxteam://workspace/ws-1/resources/config")
+    assert excinfo.value.reason_code == "malformed_path"
+    assert parse_resource_uri("boxteam://workspace/ws-1/resources/session").tail_segments == ()
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
+        parse_resource_uri("boxteam://gateway/gw-1/resources/session")
+    assert excinfo.value.reason_code == "malformed_path"
+
+
+def test_session_thread_template_rejects_collection_root() -> None:
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
+        parse_session_thread_uri("boxteam://workspace/ws-1/resources/session")
+    assert excinfo.value.reason_code == "malformed_path"
+
+    session_uri = "boxteam://workspace/ws-1/resources/session/ses_00000000400070008000000000000001"
+    parsed, session_id, thread_id = parse_session_thread_uri(session_uri)
+    assert parsed.display_uri == session_uri
+    assert session_id == "ses_00000000400070008000000000000001"
+    assert thread_id is None
+
+    thread_uri = session_uri + "/threads/thr_00000000400070008000000000000002"
+    parsed, session_id, thread_id = parse_session_thread_uri(thread_uri)
+    assert parsed.display_uri == thread_uri
+    assert session_id == "ses_00000000400070008000000000000001"
+    assert thread_id == "thr_00000000400070008000000000000002"
 
 
 def test_descriptor_closure_excludes_config_and_session() -> None:
