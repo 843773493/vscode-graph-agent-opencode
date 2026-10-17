@@ -4878,7 +4878,9 @@ async function runCopyMarkerCrashRecovery(surface, owners) {
   const after = await readCopyCapture(surface, operationId);
   assert.equal(after.state, "materialized");
   assert.equal(after.marker_sha256, createHash("sha256").update(markerBytes).digest("hex"));
-  assert.deepEqual(await readFile(markerPath), markerBytes);
+  assert.equal(await testControl({ action: "read_directory", name: surface.name,
+    relative_path: `.boxteam/navigation/${after.snapshot_relative_locator}` }), null,
+  "恢复完成并 materialize 后必须清理原 captured snapshot");
   const fork = (await requestFork(source, request)).data;
   const target = await publishedForkOwner(source, request, fork, before);
   owners.push(target.owner);
@@ -6317,9 +6319,13 @@ async function runInitialAdmissionRecovery(surfaces) {
     model_call_id: parentCalls[0], model_session_id: owner.sessionId, model_thread_id: owner.threadId,
     model_execution_id: parentTurn[0].execution_id }],
   "emitting ModelCall 必须由持久 model_calls/executions 证明属于同一父 Session/Thread/Turn/Execution");
-  const canonicalToolCarriers = await readFrozenRollout(owner, node,
-    "SELECT item_sequence,item_id,semantic_kind,payload_kind,status,execution_id,turn_id,turn_scope,message_group_id,wire_role,tool_call_id,projection_manifest_json FROM item_catalog WHERE json_extract(projection_manifest_json,'$.projection_identity.model_call_id')=? AND semantic_kind='tool_call' ORDER BY item_sequence",
-    [parentCalls[0]]);
+  let canonicalToolCarriers = [];
+  await waitUntil(async () => {
+    canonicalToolCarriers = await readFrozenRollout(owner, node,
+      "SELECT item_sequence,item_id,semantic_kind,payload_kind,status,execution_id,turn_id,turn_scope,message_group_id,wire_role,tool_call_id,projection_manifest_json FROM item_catalog WHERE json_extract(projection_manifest_json,'$.projection_identity.model_call_id')=? AND semantic_kind='tool_call' ORDER BY item_sequence",
+      [parentCalls[0]]);
+    return canonicalToolCarriers.length >= 2;
+  }, "emitting ModelCall 的 stream 与 checkpoint canonical carrier 持久化");
   assert.equal(canonicalToolCarriers.length, 2, "emitting ModelCall 必须恰有 stream 与 checkpoint 两个 canonical carrier");
   const streamCarriers = canonicalToolCarriers.filter((carrier) => {
     const identity = JSON.parse(carrier.projection_manifest_json).projection_identity;

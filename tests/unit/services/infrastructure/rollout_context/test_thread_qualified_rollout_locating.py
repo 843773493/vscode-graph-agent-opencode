@@ -135,13 +135,56 @@ def test_main_thread_owner_resolves_to_one_rollout_lock_and_rejects_session_alia
     storage: RolloutContextStore,
 ) -> None:
     thread_id = storage.storage.main_thread_id(SESSION_ID)
-    assert storage.storage._lock(thread_id, "", session_id=SESSION_ID) is storage.storage._lock(
+    main_lock = storage.storage._lock(thread_id, "", session_id=SESSION_ID)
+    assert main_lock is storage.storage._lock(
         thread_id,
         "",
         session_id=SESSION_ID,
     )
+    assert main_lock is storage.storage._lock(
+        thread_id,
+        "branch:parallel",
+        session_id=SESSION_ID,
+    )
+    _publish_child_thread(
+        storage.storage._path_resolver.resolve_session_node(SESSION_ID),
+        thread_id=CHILD_THREAD_ID,
+    )
+    assert main_lock is not storage.storage._lock(
+        CHILD_THREAD_ID,
+        "branch:parallel",
+        session_id=SESSION_ID,
+    )
     with pytest.raises(RuntimeError, match="拒绝 thread alias"):
         storage.storage._lock(SESSION_ID, "", session_id=SESSION_ID)
+
+
+def test_initialize_reenters_owner_lock_across_checkpoint_namespaces(
+    storage: RolloutContextStore,
+) -> None:
+    thread_id = storage.storage.main_thread_id(SESSION_ID)
+    default_root = storage.storage.root(SESSION_ID, thread_id=thread_id)
+    namespace_root = storage.storage.root(
+        SESSION_ID,
+        "branch:parallel",
+        thread_id=thread_id,
+    )
+    assert namespace_root == default_root
+    storage.storage.initialize(SESSION_ID, thread_id=thread_id)
+    storage.storage.initialize(
+        SESSION_ID,
+        "branch:parallel",
+        thread_id=thread_id,
+    )
+
+    with storage.storage._lock(thread_id, "", session_id=SESSION_ID):
+        namespace_manifest = storage.storage.initialize(
+            SESSION_ID,
+            "branch:parallel",
+            thread_id=thread_id,
+        )
+
+    assert namespace_manifest.checkpoint_ns == "branch:parallel"
 
 
 def test_child_thread_resolves_to_own_thread_node_rollout(

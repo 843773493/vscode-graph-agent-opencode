@@ -5730,10 +5730,15 @@ async def test_thread_scope_live_fork_rejects_child_before_thread_creation(
     intent_before = _fork_intent_state(context)
     revisions = list(external.revisions)
     owner_before = await owner.get_resource(resource["resource_id"])
+    assert owner_before["retention_scope"] == "thread"
+    assert owner_before["reconciliation_status"] == "verified"
+    assert owner_before["owner_revision"] == resource["owner_revision"]
+    assert "attach" in owner_before["available_actions"]
     child_key = context.forks._creation_key(request.idempotency_key)
 
-    with pytest.raises(ValueError, match="fork_live_resource_rejected:"):
+    with pytest.raises(ValueError, match="fork_live_resource_rejected:") as rejection:
         await context.forks.fork(request)
+    assert "thread 范围资源不能关联其它 Thread" in str(rejection.value)
 
     control_after = _session_control_state(control_path)
     intent_after = _fork_intent_state(context)

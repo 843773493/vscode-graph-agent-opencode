@@ -59,7 +59,9 @@
 
 - 上述登记只补录越限事实与归口，**本 change 不拆这些文件**；拆分与相应架构审查证据属后续独立实施。
 
-## 7. Fork目标资源关联（2026-10-13，待实施）
+## 7. Fork目标资源关联（2026-10-13，已验收）
 
-- [ ] 7.1 向统一目标检查提供现有owner scope/关联/revision/状态和真实操作能力；显式复用只调用owner，默认fork不附加Terminal/Browser，不保存第二资源状态或实例fork布尔字段。
-- [ ] 7.2 验证workspace资源身份/实例复用和source删除后目标关联、thread范围不自动promote、lease/revision冲突、不可移植跨端资源明确失败，操作结果和恢复仍由owner核实。
+- [x] 7.1 向统一目标检查提供现有owner scope/关联/revision/状态和真实操作能力；显式复用只调用owner，默认fork不附加Terminal/Browser，不保存第二资源状态或实例fork布尔字段。
+- [x] 7.2 验证workspace资源身份/实例复用和source删除后目标关联、thread范围不自动promote、lease/revision冲突、不可移植跨端资源明确失败，操作结果和恢复仍由owner核实。
+
+7.1/7.2 验收（2026-10-17）：固定候选 `6d84cf4a6436fdf5086e67976e6ccc33b5de0b7bab24fdcbda9484f4ba48c9a7` 的 38 个 fork/owner/API 场景全部通过，Ruff 与 compileall 通过；独审未发现阻断问题。新增 child-thread 负例在调用前核对资源为 verified、thread scope、revision 匹配且可 attach，并断言预检以 thread-scope 原因拒绝且 session-control、catalog、物理节点、owner 投影、fork receipt 和外部 revision 均无变化。收据：`out/tests/temp/2026/10/17/hierarchical-goal-resume-06/delivery_owner/artifacts/persistent_resources/artifacts/acceptance_038/acceptance-receipt-038-003.json`。验收使用测试内存 transport，不启动真实 Terminal PTY 或 Chromium，因此不覆盖进程级连续性。

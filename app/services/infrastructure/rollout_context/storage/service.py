@@ -142,7 +142,7 @@ class RolloutStorage(
         self._path_resolver = get_session_path_resolver(self.sessions_dir)
         self._serde = serde
         self._message_codec = message_codec
-        self._locks: dict[tuple[str, str, str], _RolloutOperationLock] = {}
+        self._locks: dict[tuple[str, str], _RolloutOperationLock] = {}
         self._locks_guard = threading.Lock()
         self._active_fork_materializations: set[tuple[str, str, str]] = set()
         self._maintenance_owner = RolloutMaintenanceOwner(self)
@@ -253,15 +253,11 @@ class RolloutStorage(
     ) -> _RolloutOperationLock:
         owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
         with self._locks_guard:
-            key = (session_id, owner_thread_id, checkpoint_ns)
+            key = (session_id, owner_thread_id)
             return self._locks.setdefault(
                 key,
                 _RolloutOperationLock(
-                    self.root(
-                        session_id,
-                        checkpoint_ns,
-                        thread_id=owner_thread_id,
-                    ).parent
+                    self.root(session_id, thread_id=owner_thread_id).parent
                     / ".rollout.write.lock",
                     timeout_seconds=_ROLLOUT_FILE_LOCK_TIMEOUT_SECONDS,
                 ),
