@@ -12,9 +12,34 @@ from app.core.resource_uri import (
     skill_display_uri,
     workspace_agent_spec_display_uri,
 )
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    CatalogBinding,
+    ResourceUriCatalog,
+    ResourceUriResolver,
+)
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
+    OPERATION_READ_CONTENT,
+    ResolutionContext,
     SemanticResourceDescriptor,
 )
+
+
+class _RecordingBindings(dict[str, CatalogBinding]):
+    """记录真实 resolver 的查表键，证明规范化与拒绝发生在查表之前。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.accessed_keys: list[str] = []
+
+    def __getitem__(self, key: str) -> CatalogBinding:
+        self.accessed_keys.append(key)
+        return super().__getitem__(key)
+
+
+@pytest.fixture
+def resolver_and_bindings() -> tuple[ResourceUriResolver, _RecordingBindings]:
+    bindings = _RecordingBindings()
+    return ResourceUriResolver(ResourceUriCatalog(bindings=bindings, name_index={})), bindings
 
 
 def test_parse_workspace_agent_spec() -> None:
@@ -203,15 +228,15 @@ def test_memory_scope_is_rejected_fail_closed() -> None:
         ),
         (
             "boxteam://workspace/ws-1/resources/skills/s%2f../SKILL.md",
-            "percent_encoding_rejected",
+            "invalid_percent_encoding",
         ),
         (
             "boxteam://workspace/ws%252f/resources/skills/s/SKILL.md",
-            "percent_encoding_rejected",
+            "invalid_percent_encoding",
         ),
         (
             "boxteam://workspace/%2e%2e/resources/skills/s/SKILL.md",
-            "percent_encoding_rejected",
+            "invalid_percent_encoding",
         ),
         (
             "boxteam://workspace/../resources/skills/s/SKILL.md",
@@ -245,20 +270,12 @@ def test_memory_scope_is_rejected_fail_closed() -> None:
             "boxteam://workspace/ws-1/resources/Skills/s/SKILL.md",
             "case_error",
         ),
-        (
-            "boxteam://workspace/ws-1/resources/skills/s/skill.md",
-            "case_error",
-        ),
         ("boxteam://gateway2/gw-1/resources/skills/s/SKILL.md", "unknown_scope"),
         (
             "boxteam://workspace/ws-1/resources/plugins/x",
             "unknown_resource_kind",
         ),
         ("boxteam://workspace/ws-1/resources/skills", "malformed_path"),
-        (
-            "boxteam://workspace/ws-1/resources/skills/s/SKILL.md/extra",
-            "malformed_path",
-        ),
     ],
 )
 def test_grammar_rejects(uri: str, reason_code: str) -> None:
@@ -281,3 +298,221 @@ def test_display_builders_reject_bad_names() -> None:
     with pytest.raises(ResourceUriGrammarError) as excinfo:
         workspace_agent_spec_display_uri("ws/1")
     assert excinfo.value.reason_code == "invalid_character"
+
+
+@pytest.mark.parametrize(
+    ("scope", "scope_id"),
+    [("workspace", "ws-1"), ("user", "local"), ("gateway", "gw-1"), ("inline", "dist-1")],
+)
+@pytest.mark.parametrize(
+    ("children", "encoded_path"),
+    [
+        ((), ""),
+        (("SKILL.md",), "/SKILL.md"),
+        (("skill.md",), "/skill.md"),
+        (("references", "中文 文档.v2.md"), "/references/%E4%B8%AD%E6%96%87%20%E6%96%87%E6%A1%A3.v2.md"),
+        (("scripts", "run.py"), "/scripts/run.py"),
+        (("100%.txt",), "/100%25.txt"),
+        (("%2e%2e",), "/%252e%252e"),
+        (("%2e%2e.txt",), "/%252e%252e.txt"),
+        (("a?b#c+.txt",), "/a%3Fb%23c%2B.txt"),
+        ((".hidden", "a-_.~z.txt"), "/.hidden/a-_.~z.txt"),
+        (("café.md",), "/caf%C3%A9.md"),
+        (("cafe\u0301.md",), "/cafe%CC%81.md"),
+    ],
+)
+def test_skill_root_and_file_children_round_trip(
+    scope: str, scope_id: str, children: tuple[str, ...], encoded_path: str,
+) -> None:
+    # 这里只验证 grammar；包根与 child 可解析不代表目录访问能力已实现。
+    uri = resource_display_uri(
+        scope=scope, scope_id=scope_id, kind="skills", tail_segments=("review", *children),
+    )
+    assert uri == f"boxteam://{scope}/{scope_id}/resources/skills/review{encoded_path}"
+    parsed = parse_resource_uri(uri)
+    assert parsed.tail_segments == ("review", *children)
+    assert parsed.logical_name == "review"
+    assert parsed.display_uri == uri
+    assert resource_display_uri(
+        scope=parsed.scope, scope_id=parsed.scope_id, kind=parsed.kind,
+        tail_segments=parsed.tail_segments,
+    ) == uri
+
+
+@pytest.mark.parametrize(
+    ("wire_child", "filename", "canonical_child"),
+    [
+        ("%252e%252e.txt", "%2e%2e.txt", "%252e%252e.txt"),
+        ("%53K%49LL.md", "SKILL.md", "SKILL.md"),
+        ("caf%c3%a9.md", "café.md", "caf%C3%A9.md"),
+        ("%7e%2e%5f%2d.txt", "~._-.txt", "~._-.txt"),
+        ("a+b.txt", "a+b.txt", "a%2Bb.txt"),
+    ],
+)
+def test_file_escape_normalization_reaches_canonical_catalog_key(
+    wire_child: str, filename: str, canonical_child: str,
+    resolver_and_bindings: tuple[ResourceUriResolver, _RecordingBindings],
+) -> None:
+    prefix = "boxteam://workspace/ws-1/resources/skills/review/"
+    parsed = parse_resource_uri(prefix + wire_child)
+    canonical_uri = prefix + canonical_child
+    assert parsed.display_uri == canonical_uri
+    assert parsed.tail_segments == ("review", filename)
+    resolver, bindings = resolver_and_bindings
+    descriptor = SemanticResourceDescriptor(
+        resource_id="res-1", source_id="src-1", kind="skills", display_uri=canonical_uri,
+        semantic_revision="rev-1", semantic_hash="hash-1",
+    )
+    bindings[canonical_uri] = CatalogBinding(
+        descriptor=descriptor, capabilities=frozenset({OPERATION_READ_CONTENT}), snapshot_ref="snapshot-1",
+    )
+    handle = resolver.resolve(
+        prefix + wire_child, operation=OPERATION_READ_CONTENT,
+        context=ResolutionContext(workspace_id="ws-1"),
+    )
+    assert bindings.accessed_keys == [canonical_uri]
+    assert handle.descriptor is descriptor
+    assert handle.provenance.display_uri == canonical_uri
+
+
+@pytest.mark.parametrize(
+    ("child", "reason_code"),
+    [
+        ("%", "invalid_percent_encoding"),
+        ("a%2", "invalid_percent_encoding"),
+        ("%GG.txt", "invalid_percent_encoding"),
+        ("%C3%28", "invalid_path_encoding"),
+        ("%FF", "invalid_path_encoding"),
+        ("%C0%AF", "invalid_path_encoding"),
+        ("%ED%A0%80", "invalid_path_encoding"),
+        ("%F4%90%80%80", "invalid_path_encoding"),
+        ("%E4%B8", "invalid_path_encoding"),
+        ("%2F", "invalid_character"),
+        ("a%2fb", "invalid_character"),
+        ("%5C", "backslash_rejected"),
+        (".", "dot_segment"),
+        ("..", "dot_segment"),
+        ("%2e", "dot_segment"),
+        ("%2E%2e", "dot_segment"),
+        ("%00", "control_char_rejected"),
+        ("%1F", "control_char_rejected"),
+        ("%7F", "control_char_rejected"),
+        ("%C2%85", "control_char_rejected"),
+        ("", "empty_segment"),
+        ("references//a.md", "empty_segment"),
+        ("a.md/", "empty_segment"),
+        ("中文.md", "non_ascii_rejected"),
+        ("a b.md", "invalid_character"),
+        ("a\tb.md", "control_char_rejected"),
+        ("a\\b.md", "backslash_rejected"),
+        ("a.md?x=1", "query_rejected"),
+        ("a.md#fragment", "fragment_rejected"),
+    ],
+)
+def test_invalid_file_child_rejected_before_catalog_access(
+    child: str, reason_code: str,
+    resolver_and_bindings: tuple[ResourceUriResolver, _RecordingBindings],
+) -> None:
+    uri = "boxteam://workspace/ws-1/resources/skills/review/" + child
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
+        parse_resource_uri(uri)
+    assert excinfo.value.reason_code == reason_code
+    resolver, bindings = resolver_and_bindings
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
+        resolver.resolve(
+            uri, operation=OPERATION_READ_CONTENT, context=ResolutionContext(workspace_id="ws-1"),
+        )
+    assert excinfo.value.reason_code == reason_code
+    assert bindings.accessed_keys == []
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "boxteam://gw%2D1/workspace/ws-1/resources/skills/review/SKILL.md",
+        "boxteam://%77orkspace/ws-1/resources/skills/review/SKILL.md",
+        "boxteam://workspace/ws%2D1/resources/skills/review/SKILL.md",
+        "boxteam://workspace/ws-1/res%6Furces/skills/review/SKILL.md",
+        "boxteam://workspace/ws-1/resources/%73kills/review/SKILL.md",
+        "boxteam://workspace/ws-1/resources/skills/%72eview/SKILL.md",
+        "boxteam://workspace/ws-1/resources/agent-spec/root/%41GENTS.md",
+        "boxteam://inline/dist-1/resources/config/workspace%5Finline",
+        "boxteam://workspace/ws-1/resources/session/sess%2D1",
+        "boxteam://workspace/ws-1/resources/session/sess-1/assemblies/assembly%2D1",
+        "boxteam://workspace/ws-1/resources/session/sess-1/attachments/attachment%2D1",
+        "boxteam://workspace/ws-1/resources/session/sess-1/tool-results/result%2D1",
+        "boxteam://workspace/ws-1/resources/folder/folder%2D1",
+    ],
+)
+def test_identity_and_structure_escapes_are_never_decoded(uri: str) -> None:
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
+        parse_resource_uri(uri)
+    assert excinfo.value.reason_code == "invalid_percent_encoding"
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "boxteam://网关/workspace/ws-1/resources/skills/review/SKILL.md",
+        "boxteam://workspace/工作区/resources/skills/review/SKILL.md",
+        "boxteam://workspace/ws-1/resources/skills/技能/SKILL.md",
+        "boxteam://inline/dist-1/resources/config/配置",
+        "boxteam://workspace/ws-1/resources/session/会话",
+        "boxteam://workspace/ws-1/resources/session/sess-1/assemblies/装配",
+    ],
+)
+def test_wire_identity_segments_remain_ascii(uri: str) -> None:
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
+        parse_resource_uri(uri)
+    assert excinfo.value.reason_code == "non_ascii_rejected"
+
+
+@pytest.mark.parametrize(
+    "authority",
+    ["gw-1/workspace/other-ws/resources/skills/other-skill", "gw-1/inline/dist-2/resources/skills/other-skill"],
+)
+def test_builder_rejects_authority_segment_injection(authority: str) -> None:
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
+        resource_display_uri(
+            scope="workspace", scope_id="ws-1", kind="skills",
+            tail_segments=("review", "SKILL.md"), gateway_authority=authority,
+        )
+    assert excinfo.value.reason_code == "invalid_character"
+
+
+def test_file_canonicalization_preserves_authority_and_scope() -> None:
+    uri = resource_display_uri(
+        scope="workspace", scope_id="ws-1", kind="skills", tail_segments=("review", "中文.md"),
+        gateway_authority="gw-1",
+    )
+    assert uri == "boxteam://gw-1/workspace/ws-1/resources/skills/review/%E4%B8%AD%E6%96%87.md"
+    parsed = parse_resource_uri(uri)
+    assert (parsed.gateway_authority, parsed.scope, parsed.scope_id) == ("gw-1", "workspace", "ws-1")
+    local = parse_resource_uri(uri, local_gateway_id="gw-1")
+    assert local.gateway_authority is None
+    assert local.display_uri == "boxteam://workspace/ws-1/resources/skills/review/%E4%B8%AD%E6%96%87.md"
+    assert local.tail_segments == ("review", "中文.md")
+
+
+@pytest.mark.parametrize(
+    ("filename", "reason_code"),
+    [
+        ("", "empty_segment"), (".", "dot_segment"), ("..", "dot_segment"),
+        ("a/b.md", "invalid_character"), ("a\\b.md", "backslash_rejected"),
+        ("\0", "control_char_rejected"), ("\u0085", "control_char_rejected"),
+        ("\ud800", "invalid_path_encoding"),
+    ],
+)
+def test_builder_rejects_invalid_unencoded_file_segments(filename: str, reason_code: str) -> None:
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
+        resource_display_uri(
+            scope="workspace", scope_id="ws-1", kind="skills", tail_segments=("review", filename),
+        )
+    assert excinfo.value.reason_code == reason_code
+
+
+def test_grammar_error_codes_remain_closed() -> None:
+    for reason_code in ("invalid_percent_encoding", "invalid_path_encoding"):
+        assert ResourceUriGrammarError(reason_code, "拒绝编码").reason_code == reason_code
+    with pytest.raises(ValueError, match="未知 ResourceUriGrammarError reason_code"):
+        ResourceUriGrammarError("unregistered_reason", "不得新增隐式拒绝码")

@@ -1,18 +1,19 @@
 """资源 URI 的纯 grammar 与构造：boxteam:// 的唯一实现。
 
 规范 URI 只表达逻辑 scope/kind/name，不携带 revision、物理路径、endpoint
-或 credential。解析只接受已登记 grammar：百分号编码整体拒绝（因此不存在
-二次解码歧义），userinfo、query/fragment、控制字符、反斜杠、空 segment、
-`.`/`..`、非 ASCII 与大小写变体一律显式报错。URI 是安全展示/引用层，
-不是 identity、capability、dedupe 或幂等 key。
+或 credential。结构与身份段遵守严格 ASCII profile；只有已公布根的文件
+child 段按 UTF-8 解码一次并规范重编码。URI 是安全展示/引用层，不是
+identity、capability、dedupe 或幂等 key。
 """
 
 from __future__ import annotations
 
+import re
 import string
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
+from urllib.parse import quote, unquote
 
 _SCHEME: Final = "boxteam://"
 _SCOPE_KEYWORDS: Final = frozenset({"workspace", "user", "gateway", "inline"})
@@ -21,6 +22,7 @@ _SCOPE_KEYWORDS: Final = frozenset({"workspace", "user", "gateway", "inline"})
 # （工作区集合根、Session 定位和 Thread 定位）。
 _RESOURCE_KINDS: Final = frozenset({"agent-spec", "skills", "config", "session", "workspace", "folder"})
 _NAME_CHARSET: Final = frozenset(string.ascii_letters + string.digits + "_-")
+_INVALID_PERCENT_ESCAPE: Final = re.compile(r"%(?![0-9A-Fa-f]{2})")
 
 _GRAMMAR_REASON_CODES: Final = frozenset(
     {
@@ -32,7 +34,8 @@ _GRAMMAR_REASON_CODES: Final = frozenset(
         "fragment_rejected",
         "backslash_rejected",
         "control_char_rejected",
-        "percent_encoding_rejected",
+        "invalid_percent_encoding",
+        "invalid_path_encoding",
         "non_ascii_rejected",
         "empty_segment",
         "dot_segment",
@@ -70,18 +73,26 @@ class ParsedResourceUri:
     logical_name: str
     display_uri: str
     gateway_authority: str | None
-    # 规范化尾段（resources/{kind}/ 之后的全部 segment）。固定形态 kind（skills /
-    # agent-spec）的 logical_name 是规范化后的权威值，可能与尾段字面不同（大小写、
-    # skills 尾段丢弃文件名）；发现式 kind（config / session）的 logical_name 即尾段
-    # 逐段拼接。
+    # resources/{kind}/ 之后的身份与解码后的文件 segment；skills 的 logical_name
+    # 只取包名，文件名逐字保留。config/session 的 logical_name 即身份尾段逐段拼接。
     tail_segments: tuple[str, ...]
 
 
 def _has_control_char(value: str) -> bool:
-    return any(ord(char) < 0x20 or ord(char) == 0x7F for char in value)
+    return any(ord(char) < 0x20 or 0x7F <= ord(char) <= 0x9F for char in value)
+
+
+def _reject_identity_escape(segment: str) -> None:
+    if "%" in segment:
+        raise ResourceUriGrammarError(
+            "invalid_percent_encoding", f"URI 结构或身份段不得使用百分号编码: {segment!r}"
+        )
 
 
 def _validate_dynamic_segment(segment: str, *, field: str) -> None:
+    _reject_identity_escape(segment)
+    if not segment:
+        raise ResourceUriGrammarError("empty_segment", f"URI {field} 不得为空")
     if segment in (".", ".."):
         raise ResourceUriGrammarError(
             "dot_segment", f"URI {field} 不得是 '.' 或 '..': {segment!r}"
@@ -92,7 +103,40 @@ def _validate_dynamic_segment(segment: str, *, field: str) -> None:
         )
 
 
+def _encode_file_segment(segment: str) -> str:
+    if not segment:
+        raise ResourceUriGrammarError("empty_segment", "URI 文件段不得为空")
+    if segment in (".", ".."):
+        raise ResourceUriGrammarError("dot_segment", f"URI 文件段不得是 '.' 或 '..': {segment!r}")
+    if "/" in segment:
+        raise ResourceUriGrammarError("invalid_character", f"URI 文件段不得包含分隔符: {segment!r}")
+    if "\\" in segment:
+        raise ResourceUriGrammarError("backslash_rejected", f"URI 文件段不得包含反斜杠: {segment!r}")
+    if _has_control_char(segment):
+        raise ResourceUriGrammarError("control_char_rejected", f"URI 文件段含控制字符: {segment!r}")
+    try:
+        return quote(segment, safe="", encoding="utf-8", errors="strict")
+    except UnicodeEncodeError as error:
+        raise ResourceUriGrammarError(
+            "invalid_path_encoding", f"URI 文件段无法编码为 UTF-8: {segment!r}"
+        ) from error
+
+
+def _decode_file_segment(segment: str) -> str:
+    if _INVALID_PERCENT_ESCAPE.search(segment):
+        raise ResourceUriGrammarError(
+            "invalid_percent_encoding", f"URI 文件段含非法百分号编码: {segment!r}"
+        )
+    try:
+        return unquote(segment, encoding="utf-8", errors="strict")
+    except UnicodeDecodeError as error:
+        raise ResourceUriGrammarError(
+            "invalid_path_encoding", f"URI 文件段不是有效 UTF-8: {segment!r}"
+        ) from error
+
+
 def _parse_scope(segment: str) -> str:
+    _reject_identity_escape(segment)
     if segment in _SCOPE_KEYWORDS:
         return segment
     if segment.lower() in _SCOPE_KEYWORDS:
@@ -103,6 +147,7 @@ def _parse_scope(segment: str) -> str:
 
 
 def _parse_kind(segment: str) -> str:
+    _reject_identity_escape(segment)
     if segment in _RESOURCE_KINDS:
         return segment
     if segment.lower() in _RESOURCE_KINDS:
@@ -115,6 +160,7 @@ def _parse_kind(segment: str) -> str:
 
 
 def _expect_fixed_segment(segment: str, expected: str) -> None:
+    _reject_identity_escape(segment)
     if segment == expected:
         return
     if segment.lower() == expected.lower():
@@ -130,7 +176,7 @@ def _parsed(
     scope: str,
     scope_id: str,
     kind: str,
-    tail_segments: list[str],
+    tail_segments: Sequence[str],
     logical_name: str,
     display_uri: str,
     gateway_authority: str | None,
@@ -152,11 +198,6 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
         raise ResourceUriGrammarError("empty_uri", "URI 必须是非空字符串")
     if "\\" in uri:
         raise ResourceUriGrammarError("backslash_rejected", f"URI 不得包含反斜杠: {uri!r}")
-    if "%" in uri:
-        raise ResourceUriGrammarError(
-            "percent_encoding_rejected",
-            f"URI 拒绝百分号编码（含双重编码）: {uri!r}",
-        )
     if "?" in uri:
         raise ResourceUriGrammarError("query_rejected", f"URI 不得携带 query: {uri!r}")
     if "#" in uri:
@@ -165,6 +206,8 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
         raise ResourceUriGrammarError("control_char_rejected", f"URI 含控制字符: {uri!r}")
     if not uri.isascii():
         raise ResourceUriGrammarError("non_ascii_rejected", f"URI 必须是纯 ASCII: {uri!r}")
+    if " " in uri:
+        raise ResourceUriGrammarError("invalid_character", f"URI 空格必须在文件段编码为 %20: {uri!r}")
     if not uri.startswith(_SCHEME):
         if uri.lower().startswith(_SCHEME):
             raise ResourceUriGrammarError(
@@ -213,14 +256,18 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
         return _parsed(scope, body[0], kind, tails, tails[0], uri, authority)
 
     if kind == "skills":
-        if len(tails) != 2:
+        if not tails:
             raise ResourceUriGrammarError(
                 "malformed_path",
                 f"skills URI 必须是 boxteam://{scope}/{{id}}/resources/skills/"
-                f"{{skill_name}}/SKILL.md: {uri!r}",
+                f"{{skill_name}} 或其文件 child: {uri!r}",
             )
-        _expect_fixed_segment(tails[1], "SKILL.md")
         _validate_dynamic_segment(tails[0], field="skill name")
+        children = [_decode_file_segment(segment) for segment in tails[1:]]
+        body[3:] = [tails[0], *(_encode_file_segment(child) for child in children)]
+        prefix = () if authority is None else (authority,)
+        uri = _SCHEME + "/".join((*prefix, scope, *body))
+        tails = [tails[0], *children]
         return _parsed(scope, body[0], kind, tails, tails[0], uri, authority)
 
     if kind == "agent-spec":
@@ -234,7 +281,7 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
         _expect_fixed_segment(tails[1], "AGENTS.md")
         return _parsed(scope, body[0], kind, tails, "root/AGENTS.md", uri, authority)
 
-    # config 需要文件尾段；只有 workspace session 可以用空尾段表示集合根。
+    # config 需要逻辑身份尾段；只有 workspace session 可以用空尾段表示集合根。
     if not tails and (
         kind == "config" or (kind == "session" and scope != "workspace")
     ):
@@ -278,8 +325,8 @@ def resource_display_uri(
 ) -> str:
     """按 kind 构造规范 display URI；URI 构造的唯一通用入口。
 
-    scope/scope_id/kind 取自同一套闭集，尾段按 kind 校验固定段：构造后立即走
-    `parse_resource_uri`（构造即校验），故禁止裸拼接，且闭集内任一 kind 都能解析回自身。
+    scope/scope_id/kind 取自同一套闭集，文件 child 接收未编码文件名，逐段编码后
+    立即走 `parse_resource_uri` 校验；构造与解析使用相同的身份和文件规则。
     """
     if scope not in _SCOPE_KEYWORDS:
         raise ResourceUriGrammarError("unknown_scope", f"URI scope 未登记: {scope!r}")
@@ -288,9 +335,13 @@ def resource_display_uri(
             "unknown_resource_kind", f"URI 资源 kind 未登记: {kind!r}"
         )
     _validate_dynamic_segment(scope_id, field="scope id")
-    # 固定尾段（skills 的 SKILL.md / agent-spec 的 AGENTS.md）合法含 '.'，不在
-    # charset 内，故不在此逐段校验；尾段的固定/动态约束与拒绝码统一由 parse_resource_uri
-    # 判定（kind 专属的动态段校验由各 kind 包装函数负责）。
+    if gateway_authority is not None:
+        _validate_dynamic_segment(gateway_authority, field="gateway authority")
+    if kind == "skills" and tail_segments:
+        _validate_dynamic_segment(tail_segments[0], field="skill name")
+        tail_segments = (
+            tail_segments[0], *(_encode_file_segment(segment) for segment in tail_segments[1:])
+        )
     prefix = () if gateway_authority is None else (gateway_authority,)
     if kind == "workspace":
         if scope != "workspace" or tail_segments:
