@@ -14,6 +14,11 @@ from app.services.infrastructure.rollout_context.assembly.detail_identity import
     detail_ref_from_key,
     detail_ref_key,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    current_scope,
+    read_local_scopes,
+    require_historical_scope,
+)
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
 )
@@ -96,20 +101,25 @@ class DetailRetentionMixin:
         try:
             with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
                 self._storage._require_v2_runtime(connection)
+                if current_scope(connection) != (session_id, thread_id):
+                    raise ValueError("source-mismatch: detail GC owner 与 rollout catalog 不一致")
+                scopes = read_local_scopes(connection)
                 rows = connection.execute(
-                    "SELECT detail_ref, assembly_id FROM context_plan_details "
-                    "WHERE session_id = ? AND thread_id = ? AND checkpoint_ns = ? "
+                    "SELECT detail_ref, session_id, thread_id, assembly_id "
+                    "FROM context_plan_details WHERE checkpoint_ns = ? "
                     "AND status IN ('available','unavailable') "
                     "AND expires_at IS NOT NULL AND expires_at < ? ORDER BY detail_ref",
-                    (session_id, thread_id, checkpoint_ns, expired_before.isoformat()),
+                    (checkpoint_ns, expired_before.isoformat()),
                 ).fetchall()
         except RolloutNotMaterializedError:
             return ()
         result: list[tuple[DetailRef, str]] = []
-        for key, assembly in rows:
+        for key, owner_session_id, owner_thread_id, assembly in rows:
             ref = detail_ref_from_key(key)
             assembly = strict_text(assembly, field="assembly_id")
-            ref.require_owner(session_id, thread_id, assembly)
+            ref.require_owner(owner_session_id, owner_thread_id, assembly)
+            if (owner_session_id, owner_thread_id) not in scopes:
+                raise ValueError("source-mismatch: detail manifest 不属于当前 rollout 的冻结本地 scope")
             result.append((ref, assembly))
         return tuple(result)
 
@@ -126,13 +136,19 @@ class DetailRetentionMixin:
         thread_id = strict_text(thread_id, field="context_assembly_references.thread_id")
         assembly_id = strict_text(assembly_id, field="assembly_id")
         key = detail_ref_key(detail_ref)
-        detail_ref.require_owner(session_id, thread_id, assembly_id)
+        if detail_ref.assembly_id != assembly_id:
+            raise ValueError("source-mismatch: detail_ref 不属于请求的 assembly")
         checkpoint_ns = strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
         try:
             with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
                 self._storage._require_v2_runtime(connection)
+                require_historical_scope(
+                    connection, detail_ref.session_id, detail_ref.thread_id,
+                    current_owner=(session_id, thread_id),
+                )
                 return _referenced(
-                    connection, session_id, thread_id, checkpoint_ns, key, assembly_id
+                    connection, detail_ref.session_id, detail_ref.thread_id,
+                    checkpoint_ns, key, assembly_id,
                 )
         except RolloutNotMaterializedError:
             return False
@@ -149,9 +165,14 @@ class DetailRetentionMixin:
         thread_id = strict_text(thread_id, field="mark_details_unavailable.thread_id")
         checkpoint_ns = strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
         keys: list[str] = []
+        owners: dict[str, tuple[str, str]] = {}
+        ref_by_key: dict[str, DetailRef] = {}
         for ref in detail_refs:
+            if not isinstance(ref, DetailRef):
+                raise TypeError("detail_refs 只能包含 DetailRef")
             key = detail_ref_key(ref)
-            ref.require_owner(session_id, thread_id)
+            owners[key] = (ref.session_id, ref.thread_id)
+            ref_by_key[key] = ref
             keys.append(key)
         refs = tuple(dict.fromkeys(keys))
         if not refs:
@@ -160,12 +181,27 @@ class DetailRetentionMixin:
             self._storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
             with self._storage._connect(thread_id, checkpoint_ns, session_id=session_id) as connection:
                 self._storage._require_v2_runtime(connection)
+                if current_scope(connection) != (session_id, thread_id):
+                    raise ValueError("source-mismatch: detail GC owner 与 rollout catalog 不一致")
+                for ref_session_id, ref_thread_id in owners.values():
+                    require_historical_scope(
+                        connection, ref_session_id, ref_thread_id,
+                        current_owner=(session_id, thread_id),
+                    )
+                for key, ref in ref_by_key.items():
+                    row = connection.execute(
+                        "SELECT session_id, thread_id, assembly_id, checkpoint_ns "
+                        "FROM context_plan_details WHERE detail_ref = ?",
+                        (key,),
+                    ).fetchone()
+                    if row != (ref.session_id, ref.thread_id, ref.assembly_id, checkpoint_ns):
+                        raise RuntimeError("detail tombstone 目标缺失或 identity 不一致")
                 # 候选扫描和实际 tombstone 之间可能发生 seal；在同一个写锁内
                 # 重新检查，不能依赖 GC 调用方之前拿到的过期候选快照。
                 protected = tuple(
                     ref for ref in refs
                     if _referenced(
-                        connection, session_id, thread_id, checkpoint_ns, ref
+                        connection, *owners[ref], checkpoint_ns, ref
                     )
                 )
                 if protected:
@@ -176,8 +212,8 @@ class DetailRetentionMixin:
                 placeholders = ",".join("?" for _ in refs)
                 result = connection.execute(
                     "UPDATE context_plan_details SET status = 'unavailable', availability = 'unavailable' "
-                    f"WHERE session_id = ? AND thread_id = ? AND checkpoint_ns = ? AND detail_ref IN ({placeholders})",
-                    (session_id, thread_id, checkpoint_ns, *refs),
+                    f"WHERE checkpoint_ns = ? AND detail_ref IN ({placeholders})",
+                    (checkpoint_ns, *refs),
                 )
                 if result.rowcount != len(refs):
                     raise RuntimeError("detail tombstone 目标缺失或 identity 不一致")

@@ -47,6 +47,16 @@ class DetailFiles:
         owner_session, owner_thread = storage_owner or (ref.session_id, ref.thread_id)
         if create or creation_record is not None:
             ref.require_owner(owner_session, owner_thread)
+        elif (ref.session_id, ref.thread_id) != (owner_session, owner_thread):
+            index_path = (
+                self._resolver.resolve_thread_node(owner_session, owner_thread)
+                / "rollout" / "index.sqlite"
+            )
+            with closing(sqlite3.connect(index_path.as_uri() + "?mode=ro", uri=True)) as connection:
+                require_historical_scope(
+                    connection, ref.session_id, ref.thread_id,
+                    current_owner=(owner_session, owner_thread),
+                )
         if creation_record is not None and creation_record.session_id != ref.session_id:
             raise ValueError("source-mismatch: detail 与 prepared Session creation owner 不一致")
         root = (
@@ -167,9 +177,11 @@ class DetailFiles:
                 temporary.unlink(missing_ok=True)
         return target
 
-    def remove_paths(self, ref: DetailRef) -> tuple[Path, ...]:
+    def remove_paths(
+        self, ref: DetailRef, *, storage_owner: tuple[str, str] | None = None,
+    ) -> tuple[Path, ...]:
         """删除只使用唯一 typed locator，不扫描任何旁挂位置。"""
-        target = self.path(ref)
+        target = self.path(ref, storage_owner=storage_owner)
         return (target,) if target is not None and self._info(target) is not None else ()
 
 

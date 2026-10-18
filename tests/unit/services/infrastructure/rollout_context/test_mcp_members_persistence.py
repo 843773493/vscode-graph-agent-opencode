@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from langchain_core.tools import StructuredTool
 
+from app.core.identifier import create_uuid_hex
 from app.core.lifecycle import LifetimeScope
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.identity.detail_ref import DetailRef
@@ -44,6 +45,80 @@ from tests.unit.services.infrastructure.mcp.test_catalog_activation import (
 )
 
 TARGET_SESSION_ID = "ses_019c49da91667f7b842224c1bfc58b01"
+
+
+@pytest.mark.asyncio
+async def test_gc_removes_unreferenced_historical_detail_from_target_node_only(
+    registry_db, session_bundle_factory, fork_deadlines,
+):
+    saver, source_session_id, _connection, _accepted = registry_db
+    storage = saver._storage.storage
+    source_thread_id = storage.main_thread_id(source_session_id)
+    body = {"source": "expired historical detail"}
+    record = saver._detail_store.write(
+        session_id=source_session_id,
+        thread_id=source_thread_id,
+        assembly_id="historical-orphan",
+        detail_kind="request_source",
+        retention_class="request_replay",
+        visibility="internal",
+        detail=body,
+        retention_days=1,
+    )
+    saver._storage.assemblies.register_context_plan_detail(record)
+    source_node = storage._path_resolver.resolve_thread_node(
+        source_session_id, source_thread_id
+    )
+    source_body = source_node / record.relative_path
+    assert source_body.is_file()
+
+    target_session_id = f"ses_{create_uuid_hex()}"
+    session_bundle_factory(storage.sessions_dir, target_session_id)
+    await copy_rollout_snapshot(
+        saver, source_session_id, target_session_id, fork_deadlines=fork_deadlines,
+    )
+
+    with RolloutCheckpointSaver(storage.sessions_dir) as target_saver:
+        target_storage = target_saver._storage.storage
+        target_thread_id = target_storage.main_thread_id(target_session_id)
+        target_node = target_storage._path_resolver.resolve_thread_node(
+            target_session_id, target_thread_id
+        )
+        target_body = target_node / record.relative_path
+        assert target_body.is_file()
+        assert target_body.read_bytes() == source_body.read_bytes()
+        assert record.detail_ref.session_id == source_session_id
+        assert (record.detail_ref.session_id, record.detail_ref.thread_id) != (
+            target_session_id, target_thread_id,
+        )
+        assert not target_saver._storage.assemblies.context_assembly_references_detail(
+            target_session_id,
+            target_thread_id,
+            assembly_id=record.detail_ref.assembly_id,
+            detail_ref=record.detail_ref,
+        )
+
+        expired_before = datetime.now(UTC) + timedelta(days=2)
+        candidates = target_saver._storage.assemblies.list_expired_context_plan_details(
+            target_session_id, target_thread_id, expired_before=expired_before,
+        )
+        assert candidates == ((record.detail_ref, record.detail_ref.assembly_id),)
+        assert target_saver.gc_context_plan_details(
+            target_session_id, target_thread_id, expired_before=expired_before,
+        ) == (record.detail_ref,)
+        assert not target_body.exists()
+        with closing(sqlite3.connect(target_storage.index_path(
+            target_session_id, "", thread_id=target_thread_id,
+        ))) as connection:
+            assert connection.execute(
+                "SELECT status, availability FROM context_plan_details WHERE detail_ref = ?",
+                (canonical_json_bytes(record.detail_ref.to_dict()).decode("utf-8"),),
+            ).fetchone() == ("unavailable", "unavailable")
+
+    assert source_body.is_file()
+    assert saver.read_context_plan_detail(
+        source_session_id, source_thread_id, detail_ref=record.detail_ref,
+    )["detail"] == body
 
 
 @pytest.fixture

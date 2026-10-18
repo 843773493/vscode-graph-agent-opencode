@@ -28,9 +28,11 @@ class DetailRemoval:
         record.detail_ref.require_owner(session_id, thread_id)
         self._remove_ref(record.detail_ref)
 
-    def _remove_ref(self, ref: DetailRef) -> bool:
+    def _remove_ref(
+        self, ref: DetailRef, *, storage_owner: tuple[str, str] | None = None,
+    ) -> bool:
         # 两个位置全部 preflight 后再删除；保留普通 manifest 到最后，便于重试。
-        paths = self._files.remove_paths(ref)
+        paths = self._files.remove_paths(ref, storage_owner=storage_owner)
         for path in reversed(paths):
             path.unlink()
         return bool(paths)
@@ -52,19 +54,20 @@ class DetailRemoval:
         ):
             raise ValueError("expired_before 必须是带时区的 datetime")
         refs = tuple(allowed_refs)
+        storage_owner = (session_id, thread_id)
         # 先校验整批身份，不能删除前几项后才发现跨 session 输入。
         for ref in refs:
             if not isinstance(ref, DetailRef):
                 raise TypeError("GC allowed_refs 必须只包含 typed DetailRef")
-            ref.require_owner(session_id, thread_id)
+            self._files.path(ref, storage_owner=storage_owner)
         removed: list[DetailRef] = []
         for ref in sorted(
             set(refs), key=lambda item: (item.assembly_id, item.detail_id)
         ):
-            paths = self._files.remove_paths(ref)
+            paths = self._files.remove_paths(ref, storage_owner=storage_owner)
             if not paths:
                 continue
-            manifest = self._files.path(ref)
+            manifest = self._files.path(ref, storage_owner=storage_owner)
             if manifest is not None and manifest in paths:
                 _payload, record = parse_detail_payload(
                     self._files.read(
@@ -75,8 +78,8 @@ class DetailRemoval:
                 expires = expiry_time(record.expires_at)
                 if expires is None or expires > expired_before:
                     continue
-            # manifest 已缺失时，owner 的 tombstone 仍授权删除该 ref 的残留密文。
-            if self._remove_ref(ref):
+            # manifest 已缺失时，owner 的 tombstone 仍授权删除该 ref 的残留正文文件。
+            if self._remove_ref(ref, storage_owner=storage_owner):
                 removed.append(ref)
         return tuple(removed)
 
