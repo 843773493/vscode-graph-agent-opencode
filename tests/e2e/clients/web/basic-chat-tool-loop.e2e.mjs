@@ -53,6 +53,7 @@ function section8ScenarioRegistry(surfaces, facts) {
     navigation_optimism: { default: true, run: () => runNavigationOptimism(surfaces) },
     initial_admission_recovery: { default: true, run: () => runInitialAdmissionRecovery(surfaces) },
     generated_internal_history: { default: true, run: () => runGeneratedInternalHistory(surfaces) },
+    owner_turns_navigation_smoke: { default: false, run: () => runOwnerTurnsNavigationSmoke(surfaces.a) },
     turn_navigation: { default: true, run: () => runTurnNavigation(surfaces.a) },
     read_cursor_expiry: { default: true, run: () => runReadCursorExpiry(surfaces, facts.read_recovery) },
   };
@@ -1561,12 +1562,13 @@ async function assertLocatedTurn(owner, turn, timeoutMs = TRANSCRIPT_NAVIGATION_
   return await readTurnViewportState(owner.page, turn.turn_id);
 }
 
-async function visitTranscriptIndex(owner, index, expected, timeoutMs = TRANSCRIPT_NAVIGATION_TIMEOUT_MS) {
+async function visitTranscriptIndex(owner, index, expected, timeoutMs = TRANSCRIPT_NAVIGATION_TIMEOUT_MS, navigationEvidence = null) {
   if (expected.kind === "turn") {
     const form = owner.page.getByRole("form", { name: "跳到指定轮次", exact: true });
     const input = form.getByLabel("轮次 ID", { exact: true });
     await input.fill(expected.turnId);
     await form.getByRole("button", { name: "跳到指定轮次", exact: true }).click();
+    if (navigationEvidence) navigationEvidence.counts[navigationEvidence.stage] += 1;
     const target = owner.page.locator(
       `.chat-stream-shell .chat-stream-virtual-shell .chat-virtual-item[data-turn-id="${expected.turnId}"]`,
     );
@@ -1748,8 +1750,10 @@ async function leaveLatestFollowAtVisibleTurn(owner, index, expected) {
   })}`);
 }
 
-async function assertTranscriptDom(owner, history, stage) {
+async function assertTranscriptDom(owner, history, stage, { onTurn = null, navigationCounts = null, historyTiming = null } = {}) {
   const expected = expectedTranscript(history);
+  const turnsById = new Map(history.items.map((turn) => [turn.turn_id, turn]));
+  let turnAnchorJumpCount = 0;
   let inspectedIndex = null;
   try {
   if (owner.child) {
@@ -1757,7 +1761,8 @@ async function assertTranscriptDom(owner, history, stage) {
     await waitUntil(async () => await turns.count() === history.items.length, `${stage}: child Turn 数量`);
     assert.deepEqual(await turns.evaluateAll((elements) => elements.map((element) => element.getAttribute("data-turn-id"))),
       history.items.map((turn) => turn.turn_id), "可见 Turn 顺序必须由 root logical ordinal 决定");
-    return;
+    if (onTurn) for (const turn of history.items) await onTurn(turn);
+    return { turnAnchorJumpCount };
   }
   const shell = owner.page.locator(".chat-stream-shell .chat-stream-virtual-shell");
   await waitUntil(async () => {
@@ -1771,11 +1776,25 @@ async function assertTranscriptDom(owner, history, stage) {
   const actual = [];
   for (const [index, entry] of expected.entries()) {
     inspectedIndex = index;
-    const { observed } = await visitTranscriptIndex(owner, index, entry);
+    const navigationEvidence = navigationCounts ? { counts: navigationCounts, stage } : null;
+    const locateTarget = entry.kind === "turn" && onTurn && stage === "live"
+      && historyTiming?.targetTurnId === entry.turnId ? historyTiming : null;
+    const { observed } = await measureHistoryPhase(locateTarget, `transcript.old_turn_virtual_location.${stage}`,
+      () => visitTranscriptIndex(owner, index, entry, TRANSCRIPT_NAVIGATION_TIMEOUT_MS, navigationEvidence));
     assert.deepEqual(observed, entry.kind === "turn" ? { kind: "turn", turnId: entry.turnId } : { kind: "internal", text: entry.text });
     actual.push(observed);
+    if (entry.kind === "turn") {
+      turnAnchorJumpCount += 1;
+      if (onTurn) {
+        const turn = turnsById.get(entry.turnId);
+        assert.ok(turn, `${stage}: transcript Turn 必须属于同一份 owner history`);
+        await onTurn(turn);
+      }
+    }
   }
   assert.deepEqual(actual.filter((entry) => entry.kind === "turn").map((entry) => entry.turnId), history.items.map((turn) => turn.turn_id));
+  if (onTurn) assert.equal(turnAnchorJumpCount, history.items.length, `${stage}: 每个 owner Turn 必须只在 transcript 遍历中跳转一次`);
+  return { turnAnchorJumpCount };
   } catch (error) {
     const expectedOffset = Math.max(0, (inspectedIndex ?? 0) - 8);
     const failure = {
@@ -1825,21 +1844,23 @@ async function assertTranscriptDom(owner, history, stage) {
   }
 }
 
-async function assertTurnDom(owner, turn, stage, history, timing = null) {
-  let phase = "transcript navigation";
+async function assertTurnDom(owner, turn, stage, history, timing = null,
+  { navigationCounts = null, transcriptLocated = false } = {}) {
+  let phase = transcriptLocated || owner.child ? "Turn article visibility and root identity" : "transcript navigation";
   let expected = [];
   let latestActual = null;
   const transcript = owner.page.locator(owner.child
     ? `.child-thread-conversation[data-thread-id="${owner.threadId}"]` : ".chat-stream-shell");
   const article = transcript.locator(`.chat-turn[data-turn-id="${turn.turn_id}"]`);
   try {
-    if (!owner.child) {
+    if (!owner.child && !transcriptLocated) {
       const transcriptItems = expectedTranscript(history);
       const index = transcriptItems.findIndex((entry) => entry.turnId === turn.turn_id);
       phase = "reconfirm transcript item identity";
       const locateTarget = stage === "live" && timing?.targetTurnId === turn.turn_id ? timing : null;
+      const navigationEvidence = navigationCounts ? { counts: navigationCounts, stage } : null;
       const { observed } = await measureHistoryPhase(locateTarget, `transcript.old_turn_virtual_location.${stage}`,
-        () => visitTranscriptIndex(owner, index, transcriptItems[index]));
+        () => visitTranscriptIndex(owner, index, transcriptItems[index], TRANSCRIPT_NAVIGATION_TIMEOUT_MS, navigationEvidence));
       assert.deepEqual(observed, { kind: "turn", turnId: turn.turn_id }, `${stage}: 回看 Turn 必须核对同一身份`);
     }
 
@@ -2132,22 +2153,53 @@ async function assertInternalHistory(owner, history, stage) {
 
 async function verifyOwnerTurns(owner, { reload = true, historyTiming = null } = {}) {
   const page = await loadCompleteThreadHistory(owner, {}, historyTiming);
-  await assertTranscriptDom(owner, page, "live");
-  const facts = [];
-  for (const turn of page.items) facts.push(await assertTurnDom(owner, turn, "live", page, historyTiming));
+  const navigationCounts = { live: 0, refresh: 0 };
+  const verifyStage = async (stage) => {
+    const factsByTurnId = new Map();
+    const transcript = await assertTranscriptDom(owner, page, stage, {
+      navigationCounts,
+      historyTiming: stage === "live" ? historyTiming : null,
+      onTurn: async (turn) => {
+        factsByTurnId.set(turn.turn_id, await assertTurnDom(owner, turn, stage, page,
+          stage === "live" ? historyTiming : null, { navigationCounts, transcriptLocated: true }));
+      },
+    });
+    const expectedAnchorJumps = owner.child ? 0 : page.items.length;
+    assert.equal(navigationCounts[stage], expectedAnchorJumps,
+      `${stage}: 每个 owner Turn 必须恰好触发一次 DOM 锚点跳转`);
+    assert.equal(transcript.turnAnchorJumpCount, expectedAnchorJumps,
+      `${stage}: transcript 完整性遍历必须覆盖全部 Turn 锚点跳转`);
+    assert.equal(factsByTurnId.size, page.items.length, `${stage}: 每个 owner Turn 都必须完成详情校验`);
+    return {
+      facts: page.items.map((turn) => factsByTurnId.get(turn.turn_id)),
+      turnAnchorJumpCount: navigationCounts[stage],
+    };
+  };
+  const live = await verifyStage("live");
+  const facts = live.facts;
   const internal = await assertInternalHistory(owner, page, "live");
   // 必须在测试驱动主动刷新之前证明当前页面已完成真实历史校准。
   historyLiveProofs.push({ pageId: owner.page.diagnosticId, documentId: owner.page.diagnosticDocumentId,
     sessionId: owner.sessionId, threadId: owner.threadId, workspaceId: owner.gatewayWorkspaceId,
     turnIds: page.items.map((turn) => turn.turn_id),
     internalExecutionIds: page.internal_executions.map((execution) => execution.execution_id), verifiedAt: Date.now() });
+  const turnNavigationProof = {
+    pageId: owner.page.diagnosticId, documentId: owner.page.diagnosticDocumentId,
+    sessionId: owner.sessionId, threadId: owner.threadId, child: Boolean(owner.child),
+    expectedTurnCount: page.items.length,
+    liveAnchorJumps: live.turnAnchorJumpCount,
+    refreshAnchorJumps: null,
+  };
+  historyTurnNavigationProofs.push(turnNavigationProof);
   if (reload) {
     await openOwner(owner);
-    await assertTranscriptDom(owner, page, "refresh");
-    for (let index = 0; index < page.items.length; index += 1) assert.deepEqual(await assertTurnDom(owner, page.items[index], "refresh", page), facts[index]);
+    const refresh = await verifyStage("refresh");
+    for (let index = 0; index < page.items.length; index += 1) assert.deepEqual(refresh.facts[index], facts[index]);
+    turnNavigationProof.refreshAnchorJumps = refresh.turnAnchorJumpCount;
     assert.deepEqual(await assertInternalHistory(owner, page, "refresh"), internal);
   }
-  return { turns: facts, internal: page.internal_executions };
+  return { turns: facts, internal: page.internal_executions,
+    turnNavigation: { live: turnNavigationProof.liveAnchorJumps, refresh: turnNavigationProof.refreshAnchorJumps } };
 }
 
 async function waitForPlannedExecutions(owner, calls, expectedExecutionOutcome = "completed", failedAdmissionIdempotencyKey = null) {
@@ -5495,6 +5547,7 @@ async function runCopyMissingAttachment(surface, owners) {
   assert.deepEqual(await copyAttachmentClaims(surface, requiredOperation), []);
   assert.equal((await readCatalog(surface, "SELECT state FROM session_creation_records WHERE session_creation_idempotency_key=?", [requiredOperation]))[0].state, "aborted");
   assert.equal((await readAttachmentSql(source, "SELECT availability FROM attachment_blobs WHERE blob_id=?", [blob.blob_id]))[0].availability, "available", "真实字节缺失输入不得改写 catalog 业务事实");
+  await finishForkDeadline(forkOperationDeadlines.get(requiredRequest.idempotency_key));
   const tools = (await ownerApi(surface, "/api/v1/tools?agent_id=default")).data;
   const compactTool = tools.find((tool) => tool.name === "compact_conversation");
   assert.ok(compactTool);
@@ -8046,6 +8099,31 @@ async function runTurnNavigation(surface) {
   };
 }
 
+async function runOwnerTurnsNavigationSmoke(surface) {
+  const owner = await createProductSession(surface, "单 Turn 主窗口历史校验导航");
+  const completed = await completeOwnerTurn(owner, "完成单 Turn 历史校验导航 smoke。", [
+    finalResponse("owner-turns-navigation-smoke", "Gateway 页面与 owner history 已完成校验。"),
+  ]);
+  assert.equal(completed.evidence.turns.length, 1);
+  assert.deepEqual(completed.evidence.turnNavigation, { live: 1, refresh: 1 });
+  const proof = historyTurnNavigationProofs.at(-1);
+  assert.ok(proof);
+  assert.deepEqual({
+    sessionId: proof.sessionId,
+    threadId: proof.threadId,
+    expectedTurnCount: proof.expectedTurnCount,
+    liveAnchorJumps: proof.liveAnchorJumps,
+    refreshAnchorJumps: proof.refreshAnchorJumps,
+  }, {
+    sessionId: owner.sessionId,
+    threadId: owner.threadId,
+    expectedTurnCount: 1,
+    liveAnchorJumps: 1,
+    refreshAnchorJumps: 1,
+  });
+  return { sessionId: owner.sessionId, threadId: owner.threadId, turnId: completed.sent.turnId, proof };
+}
+
 async function runSection8Product(browser, primaryPage) {
   const config = JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_NODES"));
   const surfaces = {};
@@ -8120,6 +8198,7 @@ const jobOwnerResponses = [];
 const lifecycleDeletionProofs = [];
 const turnNavigationMissingTurnProofs = [];
 const historyLiveProofs = [];
+const historyTurnNavigationProofs = [];
 const transcriptDomFailures = [];
 const navigationReads = new Set();
 const messageStreamResponses = [];
@@ -8507,6 +8586,7 @@ const result = {
   lifecycleDeletionProofs,
   turnNavigationMissingTurnProofs,
   historyLiveProofs,
+  historyTurnNavigationProofs,
   transcriptDomFailures,
   forkRequests: [],
   forkDurabilityProofs: [],
