@@ -7,6 +7,8 @@ import errno
 import hashlib
 import logging
 from collections.abc import Callable
+from contextvars import Context
+from dataclasses import dataclass, field
 
 import httpx
 
@@ -40,8 +42,19 @@ def _connection_refused(error: BaseException) -> bool:
     return False
 
 
+@dataclass(slots=True)
+class _GatewaySkillState:
+    gateway_id: str
+    snapshot: GatewaySkillSourcesDTO | None = None
+    error: str | None = "not-ready"
+    etag: str | None = None
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    task: asyncio.Task[None] | None = None
+    client: httpx.AsyncClient | None = None
+
+
 class GatewaySkillSources:
-    """每个 Workspace 进程共享一次连接；请求准备只读取 accepted 内存事实。"""
+    """按真实 Gateway owner 共享来源；请求准备只读取该 owner 的 accepted 事实。"""
 
     def __init__(
         self, *, workspace_id: str, connection: GatewayTransportConnection,
@@ -51,57 +64,55 @@ class GatewaySkillSources:
         self._connection = connection
         self._local_token_supplier = local_token_supplier
         self._channel = observation_channel
-        self._gateway_id: str | None = None
-        self._snapshot: GatewaySkillSourcesDTO | None = None
-        self._error: str | None = "not-ready"
-        self._etag: str | None = None
-        self._lock = asyncio.Lock()
-        self._task: asyncio.Task[None] | None = None
-        self._client: httpx.AsyncClient | None = None
+        self._owners: dict[str, _GatewaySkillState] = {}
 
-    @property
-    def gateway_id(self) -> str:
-        if self._gateway_id is None:
-            raise RuntimeError("Gateway Skill source 尚未绑定真实 Gateway 身份")
-        return self._gateway_id
+    def _state(self, gateway_id: str) -> _GatewaySkillState:
+        if not gateway_id:
+            raise ValueError("Gateway Skill source 必须显式指定真实 owner")
+        state = self._owners.get(gateway_id)
+        if state is None:
+            state = _GatewaySkillState(gateway_id)
+            self._owners[gateway_id] = state
+        return state
 
-    @property
-    def directory_id(self) -> str:
-        if self._gateway_id is None:
-            raise RuntimeError("Gateway Skill source 尚未绑定真实 Gateway 身份")
-        return "skill-directory:" + hashlib.sha256(f"gateway-skill-sources:{self._gateway_id}".encode()).hexdigest()
+    def directory_id(self, *, gateway_id: str) -> str:
+        return "skill-directory:" + hashlib.sha256(f"gateway-skill-sources:{gateway_id}".encode()).hexdigest()
 
     def snapshot(self, *, gateway_id: str) -> GatewaySkillSourcesDTO:
-        if gateway_id != self._gateway_id:
-            raise RuntimeError("Gateway Skill source owner mismatch")
-        if self._error is not None or self._snapshot is None:
-            raise RuntimeError(f"Gateway Skill source unavailable: {self._error}")
-        return self._snapshot
+        state = self._owners.get(gateway_id)
+        if state is None or state.error is not None or state.snapshot is None:
+            raise RuntimeError(f"Gateway Skill source unavailable: gateway_id={gateway_id}, error={state.error if state is not None else 'not-ready'}")
+        return state.snapshot
 
     async def navigate(
         self, request: ResourceNavigationRequest, *, gateway_id: str,
     ) -> ResourceNavigationResultDTO:
-        """普通读取走固定 Gateway 的认证 owner，不绑定来源或启动快照观察。"""
+        """经显式配置的可信 Gateway 路由到目标 owner，不启动快照观察。"""
         parsed = parse_resource_uri(request.uri, local_gateway_id=gateway_id)
         if parsed.gateway_authority is not None or parsed.scope != "gateway" or parsed.scope_id != gateway_id or parsed.kind != "skills":
             raise ResourceUriResolveError("scope_mismatch", "Gateway Skill 导航目标与固定 owner 不符")
-        async with httpx.AsyncClient(trust_env=False) as client:
-            response = await client.post(
-                self._connection.resolve_gateway_url()
-                + f"/api/gateway/skill-sources/{gateway_id}/workspaces/{self._workspace_id}/navigation",
-                headers={
-                    "X-Local-Token": self._local_token_supplier(),
-                    "X-Request-ID": require_current_request_id("Gateway Skill navigation"),
-                },
-                json=request.model_copy(update={"uri": parsed.display_uri}).model_dump(),
-                timeout=self._connection.resolve_timeout_seconds(),
-            )
+        state = self._state(gateway_id)
+        request_id = require_current_request_id("Gateway Skill navigation")
+        response = await self._client(state).post(
+            self._connection.resolve_gateway_url()
+            + f"/api/gateway/skill-source-connections/{gateway_id}/workspaces/{self._workspace_id}/navigation",
+            headers={
+                "X-Local-Token": self._local_token_supplier(),
+                "X-Request-ID": request_id,
+            },
+            json=request.model_copy(update={"uri": parsed.display_uri}).model_dump(),
+            timeout=self._connection.resolve_timeout_seconds(),
+        )
         if response.status_code in {400, 403, 404}:
             detail = response.json().get("detail")
             if isinstance(detail, dict) and detail.get("owner") == "resource_uri_resolver":
                 raise ResourceUriResolveError(detail["code"], detail["message"])
         response.raise_for_status()
+        if response.headers.get("X-Request-ID") != request_id:
+            raise ValueError("Gateway Skill navigation 响应头 request_id 与创建请求不一致")
         envelope = APIResponse[ResourceNavigationResultDTO].model_validate_json(response.content)
+        if envelope.request_id != request_id:
+            raise ValueError("Gateway Skill navigation 响应正文 request_id 与创建请求不一致")
         result = envelope.data
         if envelope.code != 0 or result is None or result.node.uri != parsed.display_uri:
             raise ValueError("Gateway Skill navigation 响应目标不一致")
@@ -117,31 +128,40 @@ class GatewaySkillSources:
 
     async def ensure_bound(self, gateway_id: str) -> None:
         """真实 runtime 编译前建立来源；不参与 prepare 或 skill_load。"""
-        async with self._lock:
-            if self._gateway_id is not None and self._gateway_id != gateway_id:
-                raise RuntimeError("Workspace 已绑定另一 Gateway Skill source owner")
-            if self._task is not None:
-                if self._task.done():
-                    self._task.result()
+        require_current_request_id("Gateway Skill source binding")
+        state = self._state(gateway_id)
+        async with state.lock:
+            if state.task is not None:
+                if state.task.done():
+                    state.task.result()
                     raise RuntimeError("Gateway Skill source observation 意外退出")
                 self.snapshot(gateway_id=gateway_id)
                 return
-            self._gateway_id = gateway_id
-            await self.reconcile(wait_for_connection=True)
+            await self.reconcile(gateway_id=gateway_id, wait_for_connection=True)
             self.snapshot(gateway_id=gateway_id)
-            self._task = asyncio.create_task(self._observe(), name="workspace-gateway-skill-sources")
+            # 长驻轮询是独立 HTTP 请求，由 Gateway TraceMiddleware 创建每轮身份。
+            state.task = asyncio.create_task(
+                self._observe(gateway_id),
+                name=f"workspace-gateway-skill-sources:{gateway_id}", context=Context(),
+            )
 
-    async def reconcile(self, *, wait_for_connection: bool = False) -> None:
-        """认证响应校验是唯一接受远端正文与 revision 的入口。"""
-        gateway_id = self._gateway_id
-        if gateway_id is None:
-            raise RuntimeError("Gateway Skill source 未绑定 owner")
+    def _client(self, state: _GatewaySkillState) -> httpx.AsyncClient:
+        if state.client is None:
+            state.client = httpx.AsyncClient(trust_env=False)
+        return state.client
+
+    async def reconcile(
+        self, *, gateway_id: str, wait_for_connection: bool = False, independent_poll: bool = False,
+    ) -> None:
+        """唯一接受入口；仅独立观察轮询由 Gateway 的 HTTP 入口创建请求身份。"""
+        state = self._state(gateway_id)
         try:
-            if self._client is None:
-                self._client = httpx.AsyncClient(trust_env=False)
+            request_id = None if independent_poll else require_current_request_id("Gateway Skill source snapshot")
             headers = {"X-Local-Token": self._local_token_supplier()}
-            if self._etag is not None and self._snapshot is not None:
-                headers["If-None-Match"] = self._etag
+            if request_id is not None:
+                headers["X-Request-ID"] = request_id
+            if state.etag is not None and state.snapshot is not None:
+                headers["If-None-Match"] = state.etag
             timeout = self._connection.resolve_timeout_seconds()
             loop = asyncio.get_running_loop()
             deadline = loop.time() + timeout
@@ -152,9 +172,9 @@ class GatewaySkillSources:
                     if wait_for_connection and remaining <= 0:
                         raise TimeoutError("Gateway Skill source 首次绑定超时")
                     try:
-                        response = await self._client.get(
+                        response = await self._client(state).get(
                             self._connection.resolve_gateway_url()
-                            + f"/api/gateway/skill-sources/{gateway_id}/workspaces/{self._workspace_id}",
+                            + f"/api/gateway/skill-source-connections/{gateway_id}/workspaces/{self._workspace_id}",
                             headers=headers,
                             timeout=remaining,
                         )
@@ -167,29 +187,38 @@ class GatewaySkillSources:
                         await asyncio.sleep(min(0.1, max(deadline - loop.time(), 0)))
                         continue
                     break
+            if response.status_code != 304:
+                response.raise_for_status()
+            response_request_id = response.headers.get("X-Request-ID")
+            if not response_request_id or not response_request_id.strip() or (
+                request_id is not None and response_request_id != request_id
+            ):
+                raise ValueError("Gateway Skill source 响应头 request_id 无效或与创建请求不一致")
             if response.status_code == 304:
-                if self._snapshot is None:
+                if response.content:
+                    raise ValueError("Gateway Skill source 304 响应正文必须为空")
+                if state.snapshot is None:
                     raise ValueError("Gateway Skill source 304 缺少 accepted revision")
-                recovered = self._error is not None
-                self._error = None
+                recovered = state.error is not None
+                state.error = None
                 if recovered:
-                    self._notify()
+                    self._notify(state)
                 return
-            response.raise_for_status()
             envelope = APIResponse[GatewaySkillSourcesDTO].model_validate_json(response.content)
+            if envelope.request_id != response_request_id:
+                raise ValueError("Gateway Skill source 响应正文 request_id 与响应头不一致")
             snapshot = envelope.data
             if envelope.code != 0 or snapshot is None:
                 raise ValueError("Gateway Skill source 缺少有效 data")
-            self._accept_snapshot(snapshot)
-            self._etag = response.headers.get("ETag")
+            self._accept_snapshot(snapshot, gateway_id=gateway_id)
+            state.etag = response.headers.get("ETag")
         except (httpx.HTTPError, OSError, RuntimeError, ValueError) as error:
             # 内部日志保留详细原因；公开观察只发布 owner 可用性，不泄漏凭据或路径。
-            self._error = type(error).__name__
-            self._notify()
+            state.error = type(error).__name__
+            self._notify(state)
             logger.error("Gateway Skill source 对账失败: gateway_id=%s error=%s", gateway_id, error)
 
-    def _accept_snapshot(self, snapshot: GatewaySkillSourcesDTO) -> None:
-        gateway_id = self.gateway_id
+    def _accept_snapshot(self, snapshot: GatewaySkillSourcesDTO, *, gateway_id: str) -> None:
         if snapshot.gateway_id != gateway_id or snapshot.workspace_id != self._workspace_id:
             raise ValueError("Gateway Skill source owner/audience mismatch")
         names: set[str] = set()
@@ -214,33 +243,35 @@ class GatewaySkillSources:
         })).hexdigest()
         if snapshot.revision != expected_revision:
             raise ValueError("Gateway Skill source publication revision mismatch")
-        changed = snapshot != self._snapshot or self._error is not None
-        self._snapshot = snapshot
-        self._error = None
+        state = self._state(gateway_id)
+        changed = snapshot != state.snapshot or state.error is not None
+        state.snapshot = snapshot
+        state.error = None
         if changed:
-            self._notify()
+            self._notify(state)
 
-    def _notify(self) -> None:
+    def _notify(self, state: _GatewaySkillState) -> None:
         self._channel.notify(ResourceObservation(
-            uri=None, directory_id=self.directory_id,
-            revision=self._snapshot.revision if self._snapshot is not None else None,
-            available=self._error is None and self._snapshot is not None and self._snapshot.available,
+            uri=None, directory_id=self.directory_id(gateway_id=state.gateway_id),
+            revision=state.snapshot.revision if state.snapshot is not None else None,
+            available=state.error is None and state.snapshot is not None and state.snapshot.available,
         ))
 
-    async def _observe(self) -> None:
+    async def _observe(self, gateway_id: str) -> None:
         while True:
             await asyncio.sleep(1)
-            await self.reconcile()
+            await self.reconcile(gateway_id=gateway_id, independent_poll=True)
 
     async def close(self) -> None:
-        task, self._task = self._task, None
+        tasks = [state.task for state in self._owners.values() if state.task is not None]
+        for state in self._owners.values():
+            state.task = None
+        for task in tasks:
+            task.cancel()
         try:
-            if task is not None:
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            failures = [result for result in results if isinstance(result, Exception)]
+            if failures:
+                raise ExceptionGroup("Gateway Skill source observation 清理失败", failures)
         finally:
-            if self._client is not None:
-                await self._client.aclose()
+            await asyncio.gather(*(state.client.aclose() for state in self._owners.values() if state.client is not None))

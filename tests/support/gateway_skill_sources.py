@@ -25,6 +25,5 @@ def accepted_gateway_skill_sources(
         workspace_id=workspace_id, connection=GatewayTransportConnection(gateway_url="http://gateway.invalid"),
         local_token_supplier=lambda: "fixture-local-token", observation_channel=observation_channel,
     )
-    consumer._gateway_id = gateway_id
-    consumer._accept_snapshot(producer.snapshot(workspace_id=workspace_id))
+    consumer._accept_snapshot(producer.snapshot(workspace_id=workspace_id), gateway_id=gateway_id)
     return consumer

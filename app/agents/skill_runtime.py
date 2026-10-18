@@ -477,6 +477,7 @@ class PublishedSkillCatalog:
     activation_bodies: Mapping[str, str]
     sources: tuple[SkillCatalogSource, ...]
     directory_ids: Mapping[str, str]
+    gateway_id: str | None
 
     @property
     def catalog_revision(self) -> str:
@@ -578,16 +579,17 @@ def build_workspace_skill_catalog(
         if gateway_sources is None:
             raise _SkillSourceError("Gateway Skill 来源必须由认证 Gateway source owner 发布")
         gateway_sources.snapshot(gateway_id=resolved_gateway_id)
-        directory_ids["gateway"] = gateway_sources.directory_id
+        directory_ids["gateway"] = gateway_sources.directory_id(gateway_id=resolved_gateway_id)
     return _publish_workspace_skill_catalog(
-        _accepted_skill_sources(directory_ids, file_registry=file_registry, gateway_sources=gateway_sources),
-        registry=registry, directory_ids=directory_ids,
+        _accepted_skill_sources(directory_ids, file_registry=file_registry, gateway_sources=gateway_sources, gateway_id=resolved_gateway_id),
+        registry=registry, directory_ids=directory_ids, gateway_id=resolved_gateway_id,
     )
 
 
 def _accepted_skill_sources(
     directory_ids: Mapping[str, str], *, file_registry: WorkspaceFileResourceRegistry,
     gateway_sources: GatewaySkillSources | None = None,
+    gateway_id: str | None = None,
 ) -> dict[str, dict[str, _AcceptedSkillSource]]:
     """消费 typed 来源 owner 已接受的事实；本函数零 I/O。"""
     scanned: dict[str, dict[str, _AcceptedSkillSource]] = {
@@ -595,10 +597,10 @@ def _accepted_skill_sources(
     }
     for layer, directory_id in directory_ids.items():
         if layer == "gateway":
-            if gateway_sources is None or gateway_sources.directory_id != directory_id:
+            if gateway_sources is None or gateway_id is None or gateway_sources.directory_id(gateway_id=gateway_id) != directory_id:
                 raise _SkillSourceError("Gateway Skill source owner mismatch")
             try:
-                remote = gateway_sources.snapshot(gateway_id=gateway_sources.gateway_id)
+                remote = gateway_sources.snapshot(gateway_id=gateway_id)
             except RuntimeError as error:
                 raise _SkillSourceError(str(error)) from error
             if not remote.available:
@@ -633,6 +635,7 @@ def _publish_workspace_skill_catalog(
     *,
     registry: ResourceRegistry,
     directory_ids: Mapping[str, str],
+    gateway_id: str | None,
     previous_sources: tuple[SkillCatalogSource, ...] = (),
 ) -> PublishedSkillCatalog:
     """从同一批 accepted 来源派生全部 facets；发布段没有 await 或文件读取。"""
@@ -713,6 +716,7 @@ def _publish_workspace_skill_catalog(
         activation_bodies=activation_bodies,
         sources=tuple(sources),
         directory_ids=directory_ids,
+        gateway_id=gateway_id,
     )
 
 
@@ -736,7 +740,7 @@ def start_workspace_skill_catalog_publication(
         if closed or lifetime_scope.state != "open":
             return
         try:
-            scanned = _accepted_skill_sources(catalog.directory_ids, file_registry=file_registry, gateway_sources=gateway_sources)
+            scanned = _accepted_skill_sources(catalog.directory_ids, file_registry=file_registry, gateway_sources=gateway_sources, gateway_id=catalog.gateway_id)
         except (_SkillSourceError, SkillFrontmatterError) as error:
             # required 来源失败必须阻止后续 capture；旧正文仅保留为审计 revision。
             registry.publish(replace(
@@ -747,7 +751,7 @@ def start_workspace_skill_catalog_publication(
             logging.getLogger(__name__).error("Skill catalog 刷新失败: %s", error)
             return
         catalog = _publish_workspace_skill_catalog(
-            scanned, registry=registry, directory_ids=catalog.directory_ids,
+            scanned, registry=registry, directory_ids=catalog.directory_ids, gateway_id=catalog.gateway_id,
             previous_sources=catalog.sources,
         )
 

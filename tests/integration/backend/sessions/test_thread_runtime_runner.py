@@ -2354,17 +2354,25 @@ async def gateway_skill_publication(runtime_case: RuntimeCase):
     await owner.start()
     source = runtime_case.runner.container.resource_platform.gateway_skill_sources
     assert source is not None
+    independent_requests = 0
 
     def handle(request: httpx.Request) -> httpx.Response:
+        nonlocal independent_requests
+        request_id = request.headers.get("X-Request-ID")
+        if request_id is None:
+            # 真实 Gateway 的 TraceMiddleware 为独立轮询创建 ID；协议桩显式模拟此边界。
+            independent_requests += 1
+            request_id = f"gateway-skill-fixture-poll-{independent_requests}"
         snapshot = owner.snapshot(workspace_id=runtime_case.runner.container.workspace_id)
         etag = '"' + snapshot.revision + '"'
+        headers = {"ETag": etag, "X-Request-ID": request_id}
         if request.headers.get("If-None-Match") == etag:
-            return httpx.Response(304, headers={"ETag": etag})
+            return httpx.Response(304, headers=headers)
         return httpx.Response(200, json={
-            "code": 0, "request_id": "gateway-skill-fixture-request", "data": snapshot.model_dump(mode="json"),
-        }, headers={"ETag": etag})
+            "code": 0, "request_id": request_id, "data": snapshot.model_dump(mode="json"),
+        }, headers=headers)
 
-    source._client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    source._state(COMPACTION_GATEWAY_ID).client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
     try:
         yield source
     finally:

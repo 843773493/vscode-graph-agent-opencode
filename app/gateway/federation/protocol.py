@@ -31,7 +31,8 @@ FRAME_RESPONSE = "response"
 METHOD_DISCOVERY = "federation.discovery"
 METHOD_RELAY = "federation.relay"
 METHOD_STATUS = "federation.status"
-KNOWN_METHODS = frozenset({METHOD_DISCOVERY, METHOD_RELAY, METHOD_STATUS})
+METHOD_SKILL_SOURCES = "gateway.skill_sources"
+KNOWN_METHODS = frozenset({METHOD_DISCOVERY, METHOD_RELAY, METHOD_STATUS, METHOD_SKILL_SOURCES})
 
 
 def new_correlation_id() -> str:

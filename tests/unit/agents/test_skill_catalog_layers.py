@@ -2,19 +2,29 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+from contextvars import Context
 from dataclasses import replace
 from pathlib import Path
 
+import httpx
 import pytest
 
-from app.agents.skill_runtime import build_workspace_skill_catalog
+from app.agents.skill_runtime import (
+    build_workspace_skill_catalog,
+    start_workspace_skill_catalog_publication,
+)
+from app.core.lifecycle import LifetimeScope
 from app.core.path_utils import get_boxteam_home
 from app.core.trace_middleware import (
     reset_current_gateway_id,
+    reset_current_request_id,
     set_current_gateway_id,
+    set_current_request_id,
 )
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.services.infrastructure.resource_platform.derivation.types import (
     ResourceSnapshot,
 )
@@ -119,6 +129,87 @@ def _build(
             workspace_id=load_or_create_workspace_id(tmp_path), observation_channel=file_registry.observation_channel,
         ),
     )
+
+
+async def test_background_catalog_publications_keep_their_frozen_gateway_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BOXTEAM_DEFAULT_SKILL_GROUPS", raising=False)
+    gateway_b = "gateway_fedcba9876543210fedcba9876543210"
+    roots = {FAKE_GATEWAY_ID: tmp_path / "home-a/skills", gateway_b: tmp_path / "home-b/skills"}
+    for gateway_id, root in roots.items():
+        _write_skill(root, "shared", "owner " + gateway_id, "body " + gateway_id + "\n")
+    files = WorkspaceFileResourceRegistry(
+        workspace_root=tmp_path, watch_service=WorkspaceFileWatchService(workspace_root=tmp_path),
+    )
+    workspace_id = load_or_create_workspace_id(tmp_path)
+    sources = accepted_gateway_skill_sources(
+        skills_root=roots[FAKE_GATEWAY_ID], gateway_id=FAKE_GATEWAY_ID,
+        workspace_id=workspace_id, observation_channel=files.observation_channel,
+    )
+
+    def publication(gateway_id: str):
+        producer = GatewaySkillSourceOwner(gateway_id=gateway_id, skills_root=roots[gateway_id])
+        producer._publish()
+        return producer.snapshot(workspace_id=workspace_id)
+
+    sources._accept_snapshot(publication(gateway_b), gateway_id=gateway_b)
+    registries = {gateway_id: ResourceRegistry() for gateway_id in roots}
+    scopes = {gateway_id: LifetimeScope("catalog " + gateway_id) for gateway_id in roots}
+    catalogs = {
+        gateway_id: build_workspace_skill_catalog(
+            tmp_path, registry=registries[gateway_id], file_registry=files,
+            gateway_id=gateway_id, gateway_sources=sources,
+        )
+        for gateway_id in roots
+    }
+    for gateway_id, catalog in catalogs.items():
+        assert catalog.gateway_id == gateway_id
+        assert catalog.entries[0].display_uri == f"boxteam://gateway/{gateway_id}/resources/skills/shared/SKILL.md"
+        # 后台任务继承空请求 Context，必须只依赖各 catalog 冻结的 owner。
+        Context().run(
+            start_workspace_skill_catalog_publication, catalog,
+            registry=registries[gateway_id], file_registry=files,
+            lifetime_scope=scopes[gateway_id], gateway_sources=sources,
+        )
+    catalog_id = catalogs[gateway_b].catalog_snapshot.resource_id
+    initial_a = registries[FAKE_GATEWAY_ID].snapshot(catalog_id)
+    initial_b = registries[gateway_b].snapshot(catalog_id)
+
+    async def wait_for_b(predicate) -> None:
+        async with asyncio.timeout(1):
+            while not predicate(registries[gateway_b].snapshot(catalog_id)):
+                await asyncio.sleep(0)
+
+    try:
+        sources._state(gateway_b).client = httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda _request: httpx.Response(403, json={"detail": "B 已断开"}),
+        ))
+        token = set_current_request_id("req-background-owner-b-disconnect")
+        try:
+            await sources.reconcile(gateway_id=gateway_b)
+        finally:
+            reset_current_request_id(token)
+        await wait_for_b(lambda snapshot: not snapshot.available)
+        assert registries[FAKE_GATEWAY_ID].snapshot(catalog_id) is initial_a
+        assert registries[gateway_b].last_valid_snapshot(catalog_id) is initial_b
+
+        skill = roots[gateway_b] / "shared/SKILL.md"
+        skill.write_text("---\nname: shared\ndescription: B 已更新\n---\nB 新正文\n")
+        sources._accept_snapshot(publication(gateway_b), gateway_id=gateway_b)
+        await wait_for_b(lambda snapshot: snapshot.available and snapshot.revision != initial_b.revision)
+        assert registries[FAKE_GATEWAY_ID].snapshot(catalog_id) is initial_a
+        updated_b = registries[gateway_b].snapshot(catalog_id)
+        assert updated_b.payload["entries"][0]["display_uri"] == catalogs[gateway_b].entries[0].display_uri
+        activation = registries[gateway_b].snapshot(catalogs[gateway_b].entries[0].activation_resource_id)
+        assert activation.payload == {"body": "B 新正文\n"}
+        assert all(gateway_b in source_id for source_id, _revision in activation.source_lineage)
+        original_activation = registries[FAKE_GATEWAY_ID].snapshot(catalogs[FAKE_GATEWAY_ID].entries[0].activation_resource_id)
+        assert original_activation.payload == {"body": "body " + FAKE_GATEWAY_ID + "\n"}
+    finally:
+        for scope in scopes.values():
+            await scope.close()
+        await sources.close()
 
 
 def test_catalog_publishes_unique_entry_with_fixed_priority(

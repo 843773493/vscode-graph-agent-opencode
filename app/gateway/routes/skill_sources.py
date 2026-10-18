@@ -6,9 +6,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 
-from app.core.resource_uri import ResourceUriGrammarError
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
+from app.gateway.federation.errors import FederationError
+from app.gateway.federation.skill_sources import (
+    GatewaySkillSourcePort,
+    relay_gateway_skill_sources,
+)
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.routes._shared import get_registry
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
@@ -18,15 +22,56 @@ from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
 )
-from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
-    ResourceUriResolveError,
-)
 
 router = APIRouter()
 
 
 def _get_skill_source_owner(request: Request) -> GatewaySkillSourceOwner:
     return request.app.state.skill_source_owner
+
+
+async def _source_request(
+    *, request: Request, registry: GatewayWorkspaceRegistry, owner: GatewaySkillSourceOwner,
+    gateway_id: str, workspace_id: str, request_id: str, kind: str,
+    if_none_match: str | None = None, navigation: ResourceNavigationRequest | None = None,
+    resolve_owner: bool = False,
+) -> dict[str, object]:
+    port = GatewaySkillSourcePort(owner=owner, registry=registry)
+    payload = {
+        "gateway_id": gateway_id, "workspace_id": workspace_id,
+        "request_id": request_id, "kind": kind, "if_none_match": if_none_match,
+        "navigation": navigation.model_dump(mode="json") if navigation is not None else None,
+    }
+    if gateway_id == owner.gateway_id:
+        result = await port.execute(payload)
+    else:
+        if not resolve_owner:
+            raise HTTPException(status_code=409, detail="Gateway Skill source owner mismatch")
+        if not port.accepts_workspace(workspace_id):
+            raise HTTPException(403, detail="Workspace is outside Gateway Skill source audience")
+        try:
+            result = await relay_gateway_skill_sources(request.app.state.federation_rpc_service, payload)
+        except FederationError as error:
+            raise HTTPException(status_code=409, detail=error.to_wire()) from error
+    status = result.get("status")
+    if status not in {200, 304}:
+        if status not in {400, 403, 404, 409}:
+            raise ValueError("Gateway Skill source 回执 status 无效")
+        raise HTTPException(status_code=status, detail=result.get("detail"))
+    return result
+
+
+def _snapshot_response(
+    result: dict[str, object], response: Response, request_id: str,
+) -> APIResponse[GatewaySkillSourcesDTO] | Response:
+    etag = result.get("etag")
+    if not isinstance(etag, str) or not etag:
+        raise ValueError("Gateway Skill source 回执缺少 ETag")
+    if result["status"] == 304:
+        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-store"})
+    response.headers["ETag"] = etag
+    response.headers["Cache-Control"] = "no-store"
+    return APIResponse(data=GatewaySkillSourcesDTO.model_validate(result["data"]), request_id=request_id)
 
 
 @router.post(
@@ -38,25 +83,14 @@ async def navigate_skill_source(
     gateway_id: str, workspace_id: str, body: ResourceNavigationRequest,
     registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
     owner: Annotated[GatewaySkillSourceOwner, Depends(_get_skill_source_owner)],
+    request: Request,
     request_id: str = Depends(get_request_id),
 ) -> APIResponse[ResourceNavigationResultDTO]:
-    if gateway_id != owner.gateway_id:
-        raise HTTPException(status_code=409, detail="Gateway Skill source owner mismatch")
-    if not any(
-        target.connection_kind == "local" and target.backend_workspace_id == workspace_id
-        for target in registry.targets()
-    ):
-        raise HTTPException(status_code=403, detail="Workspace is outside Gateway Skill source audience")
-    try:
-        result = await owner.navigate(body)
-    except ResourceUriGrammarError as error:
-        raise HTTPException(400, detail={"owner": "resource_uri_grammar", "code": error.reason_code, "message": str(error)}) from error
-    except ResourceUriResolveError as error:
-        status = 404 if error.reason_code == "unknown_resource" else 403
-        raise HTTPException(status, detail={"owner": "resource_uri_resolver", "code": error.reason_code, "message": str(error)}) from error
-    except (OSError, UnicodeError) as error:
-        raise HTTPException(400, detail={"owner": "resource_navigation", "type": type(error).__name__, "errno": getattr(error, "errno", None)}) from error
-    return APIResponse(data=result, request_id=request_id)
+    result = await _source_request(
+        request=request, registry=registry, owner=owner, gateway_id=gateway_id,
+        workspace_id=workspace_id, request_id=request_id, kind="navigation", navigation=body,
+    )
+    return APIResponse(data=ResourceNavigationResultDTO.model_validate(result["data"]), request_id=request_id)
 
 
 @router.get(
@@ -68,20 +102,53 @@ async def skill_sources(
     gateway_id: str, workspace_id: str, response: Response,
     registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
     owner: Annotated[GatewaySkillSourceOwner, Depends(_get_skill_source_owner)],
+    request: Request,
     request_id: str = Depends(get_request_id),
     if_none_match: str | None = Header(default=None),
 ) -> APIResponse[GatewaySkillSourcesDTO] | Response:
-    if gateway_id != owner.gateway_id:
-        raise HTTPException(status_code=409, detail="Gateway Skill source owner mismatch")
-    if not any(
-        target.connection_kind == "local" and target.backend_workspace_id == workspace_id
-        for target in registry.targets()
-    ):
-        raise HTTPException(status_code=403, detail="Workspace is outside Gateway Skill source audience")
-    snapshot = owner.snapshot(workspace_id=workspace_id)
-    etag = '"' + snapshot.revision + '"'
-    if if_none_match == etag:
-        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-store"})
-    response.headers["ETag"] = etag
-    response.headers["Cache-Control"] = "no-store"
-    return APIResponse(data=snapshot, request_id=request_id)
+    result = await _source_request(
+        request=request, registry=registry, owner=owner, gateway_id=gateway_id,
+        workspace_id=workspace_id, request_id=request_id, kind="snapshot", if_none_match=if_none_match,
+    )
+    return _snapshot_response(result, response, request_id)
+
+
+@router.post(
+    "/api/gateway/skill-source-connections/{gateway_id}/workspaces/{workspace_id}/navigation",
+    response_model=APIResponse[ResourceNavigationResultDTO],
+    dependencies=[Depends(verify_gateway_token)],
+)
+async def navigate_connected_skill_source(
+    gateway_id: str, workspace_id: str, body: ResourceNavigationRequest,
+    registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
+    owner: Annotated[GatewaySkillSourceOwner, Depends(_get_skill_source_owner)],
+    request: Request,
+    request_id: str = Depends(get_request_id),
+) -> APIResponse[ResourceNavigationResultDTO]:
+    result = await _source_request(
+        request=request, registry=registry, owner=owner, gateway_id=gateway_id,
+        workspace_id=workspace_id, request_id=request_id, kind="navigation", navigation=body,
+        resolve_owner=True,
+    )
+    return APIResponse(data=ResourceNavigationResultDTO.model_validate(result["data"]), request_id=request_id)
+
+
+@router.get(
+    "/api/gateway/skill-source-connections/{gateway_id}/workspaces/{workspace_id}",
+    response_model=APIResponse[GatewaySkillSourcesDTO],
+    dependencies=[Depends(verify_gateway_token)],
+)
+async def connected_skill_sources(
+    gateway_id: str, workspace_id: str, response: Response,
+    registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
+    owner: Annotated[GatewaySkillSourceOwner, Depends(_get_skill_source_owner)],
+    request: Request,
+    request_id: str = Depends(get_request_id),
+    if_none_match: str | None = Header(default=None),
+) -> APIResponse[GatewaySkillSourcesDTO] | Response:
+    result = await _source_request(
+        request=request, registry=registry, owner=owner, gateway_id=gateway_id,
+        workspace_id=workspace_id, request_id=request_id, kind="snapshot", if_none_match=if_none_match,
+        resolve_owner=True,
+    )
+    return _snapshot_response(result, response, request_id)

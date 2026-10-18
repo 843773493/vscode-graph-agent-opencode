@@ -92,8 +92,13 @@ from app.gateway.federation.ports import (
 from app.gateway.federation.protocol import (
     METHOD_DISCOVERY,
     METHOD_RELAY,
+    METHOD_SKILL_SOURCES,
     METHOD_STATUS,
     require_str,
+)
+from app.gateway.federation.skill_sources import (
+    GatewaySkillSourcePort,
+    serve_gateway_skill_sources,
 )
 from app.gateway.federation.store import (
     TRANSPORT_REPLAY_MARGIN_SECONDS,
@@ -115,6 +120,7 @@ class FederationRpcService:
     session_main: FederationSessionMainPort
     credential_store: FederationCredentialStore
     spoke_directory: FederationSpokeDirectoryPort | None = None
+    gateway_skill_sources: GatewaySkillSourcePort | None = None
     _channels: dict[str, FederationChannelSession] = field(default_factory=dict)
     _local_channels: dict[str, FederationChannelSession] = field(default_factory=dict)
     _hub_channel: FederationChannelSession | None = None
@@ -292,6 +298,10 @@ class FederationRpcService:
                 "channel_epoch": session.channel_epoch,
                 "policy_revision": self.policy_store.snapshot.revision,
             }
+        if method == METHOD_SKILL_SOURCES:
+            return await serve_gateway_skill_sources(
+                self, request, session=session, deadline_at=deadline_at,
+            )
         if method == METHOD_DISCOVERY:
             if session.local_role == "spoke":
                 return await self._serve_discovery_as_spoke(

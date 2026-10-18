@@ -48,6 +48,7 @@ from app.gateway.federation.channel_owner import (
 from app.gateway.federation.identity import load_or_create_signing_key
 from app.gateway.federation.policy import FederationPolicyStore
 from app.gateway.federation.rpc import FederationRpcService
+from app.gateway.federation.skill_sources import GatewaySkillSourcePort
 from app.gateway.federation.store import (
     FederationControlStore,
     federation_control_database,
@@ -201,6 +202,7 @@ async def lifespan(app: FastAPI):
             ),
             credential_store=app.state.federation_credential_store,
             spoke_directory=FederationSpokeDirectory(provider=lambda: registered_spokes(registry)),
+            gateway_skill_sources=GatewaySkillSourcePort(owner=skill_source_owner, registry=registry),
         )
         app.state.federation_channel_owner = FederationChannelOwner(
             registry=registry, credentials=app.state.federation_credential_store,
