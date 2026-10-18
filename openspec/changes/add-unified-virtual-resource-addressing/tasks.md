@@ -70,11 +70,11 @@
 - [ ] 7.6 增加配置来源契约测试：校验 source URI/`layer`/`precedence` 继续为平级字段，逻辑来源映射符合 owner requirement；读侧 runtime override 报逻辑 layer 与原 precedence，物理 SQLite carrier 不外露，`active_snapshot` / `pending_snapshot` 不进入 `sources[]`；无可寻址来源文件时 URI 为空且不伪造地址；持久化与 API 不泄漏 real path。
 - [ ] 7.7 运行仓库既有校验并记录证据：`openspec validate --strict --all` 必须 0 failed，且本 change 与其它四个 change 之间均无残留的第二套 URI 语法、自造 kind 或自造拒绝码。
 
-## 8. 可导航资源根与轻量文件寻址（2026-10-05 新增，未实施）
+## 8. 可导航资源根与轻量文件寻址（2026-10-05 新增，部分实施）
 
-- [ ] 8.1 在唯一寻址 owner 实现 directory/file/domain_object shape、公布的 child path 和操作能力，登记 files/root 工作区根、技能包根及单文件边界；不把 Session/assembly/config私有存储转成目录，不动态装配资源插件。
-- [ ] 8.2 完成技能包根、SKILL.md 与 references/scripts多层child的单一构造/解析；使用第1.4/7.1组分段编码，验证根 containment及越界symlink拒绝，目录可导航不等于可写。
-- [ ] 8.3 接入 files/root 唯一工作区文件树根，明确固定 workspace_id/Gateway/root，不依赖激活态；普通 ls/search/read 不注册每个文件的长期身份、revision或快照，只有显式来源追踪由原owner登记。
+- [x] 8.1 在唯一寻址 owner 实现 directory/file/domain_object shape、公布的 child path 和操作能力，登记 files/root 工作区根、技能包根及单文件边界；不把 Session/assembly/config私有存储转成目录，不动态装配资源插件。
+- [x] 8.2 完成技能包根、SKILL.md 与 references/scripts多层child的单一构造/解析；使用第1.4/7.1组分段编码，验证根 containment及越界symlink拒绝，目录可导航不等于可写。
+- [x] 8.3 接入 files/root 唯一工作区文件树根，明确固定 workspace_id/Gateway/root，不依赖激活态；普通 ls/search/read 不注册每个文件的长期身份、revision或快照，只有显式来源追踪由原owner登记。
 - [ ] 8.4 在本 owner 登记 Session 产物单文件模板：`session/{session_id}/attachments/{attachment_id}`、`session/{session_id}/tool-results/{result_id}`；保留业务 ID 的既有 profile，原owner决定读取/授权/保留，不允许目录猜测或通用修改。消费迁移归 add-unified-resource-file-tools。
 - [ ] 8.5 为本地/远端目录结果、Skill读取无activation、轻量搜索无注册、固定目标、文件能力拒绝和路径编码逐项留生产验收；文件执行错误归其独立owner合同，寻址错误仍只在本登记处。先固定本公共合同，再交独立文件工具消费change，不以规范修订勾实现。
 
