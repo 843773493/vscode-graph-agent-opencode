@@ -6,9 +6,9 @@ import hashlib
 import json
 import shutil
 import sqlite3
-import time
 import subprocess
 import sys
+import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import closing
 from dataclasses import dataclass, field, replace
@@ -381,10 +381,6 @@ def production_fork_container(request: pytest.FixtureRequest,
     return container
 
 
-@pytest.mark.asyncio
-async def test_fork_deadline_starts_before_asgi_client_post(
-    production_fork_container: AppContainer, monkeypatch: pytest.MonkeyPatch,
-) -> None:
 def _run_protected_fork_deadline_probe(mode: str, artifacts_dir: Path) -> subprocess.CompletedProcess[bytes]:
     probe = r'''
 import asyncio
@@ -476,6 +472,10 @@ asyncio.run(main(sys.argv[1], Path(sys.argv[2])))
     return result
 
 
+@pytest.mark.asyncio
+async def test_fork_deadline_starts_before_asgi_client_post(
+    production_fork_container: AppContainer, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     requested_identity: list[tuple[str, str]] = []
     stages: list[str] = []
     entered_http_request = asyncio.Event()
@@ -572,13 +572,6 @@ async def test_fork_http_response_after_deadline_error_uses_durable_completion(
 
     class DelayedResponse(httpx.AsyncBaseTransport):
         async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-            await asyncio.sleep(0.005)
-            deadline.complete()
-            durable_completion.set()
-            await asyncio.sleep(0.02)
-            return httpx.Response(
-                200, json={"data": {"export_release": None}}, request=request,
-            )
             payload = json.loads(request.content)
             identity = (
                 f"{production_fork_container.workspace_id}/{payload['target_container_uri']}",
@@ -586,6 +579,13 @@ async def test_fork_http_response_after_deadline_error_uses_durable_completion(
             )
             assert identity == expected_identity
             deadline = deadlines[identity]
+            await asyncio.sleep(0.005)
+            deadline.complete()
+            durable_completion.set()
+            await asyncio.sleep(0.02)
+            return httpx.Response(
+                200, json={"data": {"export_release": None}}, request=request,
+            )
 
     body = {
         "idempotency_key": operation_key,
@@ -598,14 +598,24 @@ async def test_fork_http_response_after_deadline_error_uses_durable_completion(
             "/api/v1/sessions/ses_fork_deadline_probe/fork-context", json=body,
         )
 
-    assert response.status_code == 200
-    assert deadline.elapsed > 0.01
-    assert deadline._completed
-    assert watchdog.completions == 1
     assert requested_identity == [expected_identity]
     deadline = deadlines[expected_identity]
     assert deadline.deadline - deadline.started_at == 60.0
     assert deadline._completed and deadline.elapsed > 0.02
+    assert response.status_code == 200
+    assert response.json() == {"data": {"export_release": None}}
+
+
+@pytest.mark.asyncio
+async def test_fork_deadline_helper_returns_response_after_test_budget_if_completed(
+    request: pytest.FixtureRequest,
+) -> None:
+    context = TestRunContext.from_test_file(Path(request.node.path))
+    artifacts = context.runtime_root_for_node(request.node.nodeid) / "fork-deadline-probes"
+    result = _run_protected_fork_deadline_probe("durable-response", artifacts)
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    output = json.loads(result.stdout)
+    assert output["elapsed"] > 0.01 and output["completed"] is True
 
 
 @pytest.mark.asyncio
