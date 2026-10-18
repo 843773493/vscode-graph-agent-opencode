@@ -4165,8 +4165,10 @@ function requestFork(source, request, expectedStatus, targetSurface = source) {
 
 async function requestForkResponse(source, request, targetSurface = source) {
   result.forkRequests.push(structuredClone(request));
-  const token = await localToken(targetSurface.page);
   const deadline = await forkDeadline(request, source, targetSurface);
+  const token = await waitForForkBudget(
+    localToken(targetSurface.page), deadline, "读取 fork 本地凭据",
+  );
   const remaining = await deadline.remainingMs();
   if (remaining <= 0) throw forkDeadlineError(deadline);
   let response;
@@ -5086,7 +5088,6 @@ async function runCopyCaptureLifecycle(surface, owners) {
       marker = { sha256: createHash("sha256").update(markerBytes).digest("hex"), snapshot: frozen };
     }
     let firstHttp;
-    if (phase === "copy.source.partial") firstHttp = await pending;
     const reopen = await replaceNodePage(surface, owners);
     const killed = await testControl({ action: "process", name: surface.name, operation: "kill" });
     await testControl({ action: "release", ...barrier });
@@ -5800,7 +5801,7 @@ async function runLiveResourceForks(surface, owners) {
       await dialog.getByRole("alert").waitFor({ state: "visible" });
       assert.equal(retryDeadline, submissionDeadline, "partial retry 必须复用首次 POST 的 deadline token");
       assert.equal(await completePartialForkRetry(
-        retryDeadline, retried.status(), retry, retryDurableHistory,
+        retryDeadline, retried.status(), retriedPayload, retryDurableHistory,
       ), true, "只能凭 durable target history 与 rejected terminal resource 完成 partial deadline");
       await dialog.getByRole("button", { name: "取消", exact: true }).click();
       await dialog.waitFor({ state: "hidden" });
