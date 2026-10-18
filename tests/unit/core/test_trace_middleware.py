@@ -278,7 +278,10 @@ async def test_cancelled_request_resets_trace_contextvars() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_chunk_is_forwarded_and_started_response_error_propagates() -> None:
+async def test_stream_chunk_is_forwarded_and_started_response_error_propagates(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.ERROR, logger="app.core.trace_middleware")
     scope: Scope = {
         "type": "http",
         "asgi": {"version": "3.0", "spec_version": "2.3"},
@@ -329,6 +332,16 @@ async def test_stream_chunk_is_forwarded_and_started_response_error_propagates()
         release_app.set()
         with pytest.raises(RuntimeError, match="流式响应开始后失败"):
             await task
+        record = next(
+            record
+            for record in caplog.records
+            if "request_id=req_stream" in record.getMessage()
+        )
+        assert "response_started=true" in record.getMessage()
+        assert "status=200" in record.getMessage()
+        assert record.exc_info is not None
+        assert record.exc_info[1] is not None
+        assert str(record.exc_info[1]) == "流式响应开始后失败"
     finally:
         release_app.set()
         if not task.done():

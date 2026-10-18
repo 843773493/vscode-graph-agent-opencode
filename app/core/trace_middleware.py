@@ -197,6 +197,14 @@ class TraceMiddleware:
                 raise RuntimeError("No response returned.")
         except Exception as error:
             if response_started:
+                logger.exception(
+                    "[TRACE] method=%s path=%s status=%s duration=%.4fs request_id=%s response_started=true",
+                    request.method,
+                    request.url.path,
+                    response_status,
+                    time.perf_counter() - start_time,
+                    request_id,
+                )
                 raise
             duration = time.perf_counter() - start_time
             logger.exception(
