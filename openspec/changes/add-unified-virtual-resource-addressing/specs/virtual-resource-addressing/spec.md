@@ -329,8 +329,6 @@ URI kind 闭集 MUST 为 `agent-spec` | `skills` | `config` | `session` | `files
 
 URI 的可选 gateway authority 段 MUST 承载**稳定 gateway_id**：段缺省表示本机 gateway；段等于本机 gateway_id 与缺省等价；段等于对端 gateway_id 表示跨 gateway。系统 MUST NOT 为「其它 gateway」引入新 scope，MUST NOT 把 authority 段与 scope 段混为一谈，MUST NOT 让 authority 承载瞬时通道标识（channel instance/epoch/route）。
 
-**实施状态注记（2026-10-01 第八轮）**：当前 `parse_resource_uri` 无 authority 分支（`grammar.py` 对 `authority` 零命中），故以下三条 Scenario 待 authority 解析（本 change task 3.4）实施后方可判真；本注记只标实施状态，不删除 Scenario。
-
 #### Scenario: authority 缺省等价本机
 
 - **WHEN** URI 不含 authority 段
@@ -620,7 +618,7 @@ config `layer` MUST 只表示逻辑配置来源，其闭集与 `precedence` 唯�
 
 统一寻址 owner SHALL 在既有 `session` kind 登记 Workspace Session 集合根 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/session`、单 Session `.../resources/session/{session_id}` 和精确 Thread `.../resources/session/{session_id}/threads/{thread_id}`。集合根、Session和Thread均为domain_object，尾段仅按登记的领域模板校验，不允许猜测其私有文件树。集合根只表示工作区会话容器，不以虚构Session ID占位；导航父节点或parent thread以并列结构化引用传递。
 
-URI的位置、revision/view/anchor的并列字段及ResourceIdentity职责 MUST 保持原合同。集合、Session和Thread分别从权威workspace/catalog/thread owner取得身份和允许操作；Thread ID必须属于URI中的Session。目标创建使用容器URI与 `new_session_main|new_child_thread` 意图，创建完成返回真实新Thread URI；不能将未创建对象的猜测地址作为已存在资源。
+URI的位置、revision/view/anchor的并列字段及ResourceIdentity职责 MUST 保持原合同。集合、Session和Thread分别从权威workspace/catalog/thread owner取得身份和允许操作；Thread ID必须属于URI中的Session。目标创建使用容器URI与 `new_session_main|new_child_thread` 意图，创建完成返回真实新Thread URI；不能将未创建对象的猜测地址作为已存在资源。对 fork 的 `new_child_thread`，目标 URI 若含已存在 Thread ID，只校验并定位该 Thread 所属 Session；它 MUST NOT 建立新 Thread 的 parent-thread 关系。来源 Thread 仍由独立 source URI 固定，source lineage 与目标导航/Thread parent 关系分离；不得从 source 或 target URI 推断 parent-thread。
 
 已有 send/read/wait 的 Session-main 产品入口不因Thread URI登记而自动扩展到child或获得fork能力；具体操作授权仍归对应owner。所有模板构造、解析及跨端路由 MUST 迁齐后删除fork专属URI拼接/解析，不提供旧字符串alias。
 

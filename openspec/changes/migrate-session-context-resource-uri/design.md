@@ -173,7 +173,7 @@ send/read/wait复用同一target-main owner，冻结稳定Gateway/workspace/Sess
 
 ### Fork的精确来源和创建目标
 
-fork消费统一owner登记的领域URI，不再用Session-only source_uri校验拒绝所有远端或隐式main。source定位具体Thread，target在创建前定位Workspace Session集合或已有Session容器并带创建意图；发布后使用实际目标URI。规范化只做地址与归属，snapshot/资源迁移/目标准入由itemized及领域owner处理，不能复制一套URI parser或把定位成功当成执行授权。跨Session send/read/wait仍按原main-thread消费，不因新Thread模板悄悄扩展。
+fork消费统一owner登记的领域URI，不再用Session-only source_uri校验拒绝所有远端或隐式main。source定位具体Thread，target在创建前定位Workspace Session集合或已有Session容器并带创建意图；发布后使用实际目标URI。对于 `new_child_thread`，target 若为已有 Thread URI，则由目标 owner 核验其 Session 归属后只定位到该 Session，不建立 parent-thread 关系；source URI 独立保留来源 Thread/fork lineage。规范化只做地址与归属，snapshot/资源迁移/目标准入由itemized及领域owner处理，不能复制一套URI parser或把定位成功当成执行授权。跨Session send/read/wait仍按原main-thread消费，不因新Thread模板悄悄扩展。
 
 ## Risks / Trade-offs
 

@@ -40,7 +40,11 @@ from app.core import session_subtree_delete
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
-from app.core.resource_uri import resource_display_uri
+from app.core.resource_uri import (
+    parse_session_thread_uri,
+    resource_display_uri,
+    thread_resource_uri,
+)
 from app.core.session_catalog_store.contracts import (
     ForkSourceCaptureRecord,
     SessionGenerationOriginDTO,
@@ -90,6 +94,7 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord, user_input_payload
 from app.domain.itemized.request_plan import ContextContribution
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
+from app.gateway.federation.grants import ForkGrantTarget
 from app.prompting.factory import PromptSection, internal_message_factory
 from app.schemas.internal_v2.message import AttachmentRef, MessageCreateRequest
 from app.schemas.internal_v2.node_debug import (
@@ -3804,6 +3809,201 @@ async def test_production_http_pinned_fork_and_preflight_have_exact_side_effects
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
+@pytest.mark.parametrize("fault", [
+    "point", "thread_uri", "thread_owner", "missing_source_uri", "missing_source_point",
+    "missing_display_title", "malformed_source_uri", "bad_source_point",
+    "bad_source_point_type", "bad_source_graph_binding", "bad_display_title", "bad_source_agent_id",
+    "bad_goal_snapshot", "bad_goal_objective",
+])
+async def test_remote_source_intent_rejects_response_rebinding_before_creation(
+    fork_provider_prepare, production_fork_container: AppContainer,
+    remote_fork_target: tuple[AppContainer, SourceForkOwnerTransport],
+    fork_gateway_request_context: None, monkeypatch: pytest.MonkeyPatch,
+    creation_kind: SessionForkCreationKind, fault: str,
+) -> None:
+    source_context = _production_fork_context(production_fork_container)
+    source = await _seed_source(source_context, fork_provider_prepare)
+    selected = await _fork_request(
+        source_context, source.session_id, creation_kind=creation_kind, turn_id="turn-2",
+    )
+    earlier = await _fork_request(
+        source_context, source.session_id, creation_kind=creation_kind, turn_id="turn-1",
+    )
+    assert selected.anchor_item_id != earlier.anchor_item_id
+    other_thread = None
+    if fault in {"thread_uri", "thread_owner"}:
+        other_thread = (await source_context.forks.fork(await _fork_request(
+            source_context, source.session_id, creation_kind="new_child_thread", turn_id="turn-1",
+        ))).thread_id
+        assert other_thread != _main_thread_id(source_context, source.session_id)
+    target, transport = remote_fork_target
+    target_context = _production_fork_context(target)
+    parent = await target.session_service.create(SessionCreateRequest(title="绑定拒绝目标"))
+    control = target_context.forks._threads.for_owner_session(parent.session_id).control_store
+    request = SessionForkRequest.model_validate({
+        **selected.model_dump(mode="json"),
+        "source_uri": thread_resource_uri(
+            source.workspace_id, source.session_id, _main_thread_id(source_context, source.session_id),
+            gateway_authority="fork-source-gateway",
+        ),
+        "target_container_uri": resource_display_uri(
+            scope="workspace", scope_id=target.workspace_id, kind="session",
+            tail_segments=(parent.session_id,) if creation_kind == "new_child_thread" else (),
+            gateway_authority="fork-target-gateway",
+        ),
+    })
+    original_transfer = transport.fork_transfer
+
+    async def rebind_intent(payload: SessionForkTransferRequest) -> SessionForkTransferResultDTO:
+        reply = await original_transfer(payload)
+        if payload.action != "intent":
+            return reply
+        assert reply.intent is not None
+        intent = dict(reply.intent)
+        if fault == "point":
+            alternate_request = SessionForkRequest.model_validate({
+                **payload.request.model_dump(mode="json"),
+                "source_view_id": earlier.source_view_id, "source_view_revision": earlier.source_view_revision,
+                "anchor_item_id": earlier.anchor_item_id,
+            })
+            alternate = await original_transfer(fork_transfer.source_transfer_request(alternate_request, None, action="intent"))
+            assert alternate.intent is not None
+            assert alternate.intent["source_point"] != intent["source_point"]
+            intent["source_point"] = alternate.intent["source_point"]
+        elif fault in {"thread_uri", "thread_owner"}:
+            assert other_thread is not None
+            intent["source_thread_id"] = other_thread
+            if fault == "thread_uri":
+                intent["source_uri"] = thread_resource_uri(
+                    source.workspace_id, source.session_id, other_thread, gateway_authority="fork-source-gateway",
+                )
+        elif fault.startswith("missing_"):
+            del intent[fault.removeprefix("missing_")]
+        elif fault == "malformed_source_uri":
+            intent["source_uri"] = "boxteam://invalid"
+        elif fault == "bad_source_point":
+            intent["source_point"] = {"source_view_id": request.source_view_id}
+        elif fault == "bad_source_point_type":
+            intent["source_point"] = {**intent["source_point"], "source_checkpoint_id": []}
+        elif fault == "bad_source_graph_binding":
+            intent["source_graph_binding"] = {**intent["source_graph_binding"], "graph_revision": []}
+        elif fault in {"bad_display_title", "bad_source_agent_id"}:
+            intent[fault.removeprefix("bad_")] = []
+        elif fault == "bad_goal_snapshot":
+            intent["goal_snapshot"] = []
+        else:
+            intent["goal_snapshot"] = {"goal_id": "goal-invalid-objective", "objective": [], "token_budget": None}
+        return SessionForkTransferResultDTO.model_validate({"intent": intent})
+
+    monkeypatch.setattr(transport, "fork_transfer", rebind_intent)
+    key = target_context.forks._creation_key(request.idempotency_key)
+    source_before, target_before = _fork_intent_state(source_context), _fork_intent_state(target_context)
+    control_path = target_context.sessions.path_resolver.resolve_session_node(parent.session_id) / "session-control.sqlite"
+    control_before = _session_control_state(control_path)
+    error = {
+        "point": "来源 anchor 与固定请求不一致",
+        "thread_uri": "来源 URI 与固定请求不一致",
+        "thread_owner": "Session/Thread 与来源 URI 不一致",
+    }.get(fault, "fork_response_protocol_invalid")
+    gateway_token = set_current_gateway_id("fork-target-gateway")
+    request_token = set_current_request_id("response-binding-intent")
+    try:
+        with pytest.raises(RuntimeError, match=error) as caught:
+            if creation_kind == "new_session_main":
+                await target_context.forks.fork(request)
+            else:
+                await target_context.forks.transfer(SessionForkTransferRequest(
+                    source_gateway_id="fork-target-gateway", action="create", request=request,
+                    fork_target=ForkGrantTarget(
+                        gateway_id="fork-target-gateway", uri=request.target_container_uri, fork_role="target",
+                    ),
+                ))
+        protocol_causes = {
+            "missing_source_uri": KeyError, "missing_source_point": KeyError,
+            "missing_display_title": KeyError,
+            "malformed_source_uri": ValueError, "bad_source_point": TypeError,
+            "bad_source_point_type": ValueError, "bad_source_graph_binding": TypeError,
+            "bad_display_title": ValueError, "bad_source_agent_id": ValueError,
+            "bad_goal_snapshot": TypeError, "bad_goal_objective": ValueError,
+        }
+        if fault in protocol_causes:
+            assert isinstance(caught.value.__cause__, protocol_causes[fault])
+            assert not isinstance(caught.value, WorkspaceSessionContextAccessError)
+        assert _fork_intent_state(source_context) == source_before
+        assert _fork_intent_state(target_context) == target_before
+        assert _session_control_state(control_path) == control_before
+        assert [call.action for call in transport.calls] == ["intent"] * (2 if fault == "point" else 1)
+        with pytest.raises(KeyError):
+            target_context.sessions.path_resolver.catalog_store.get_creation_record(key)
+        with pytest.raises(KeyError):
+            control.get_thread_creation_record(key)
+        for context in (source_context, target_context):
+            assert context.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=key) is None
+        assert not await target.job_service.list()
+    finally:
+        reset_current_request_id(request_token)
+        reset_current_gateway_id(gateway_token)
+
+
+@pytest.mark.asyncio
+async def test_remote_source_preserves_default_thread_and_context_anchor(
+    fork_provider_prepare, production_fork_container: AppContainer,
+    remote_fork_target: tuple[AppContainer, SourceForkOwnerTransport],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_context = _production_fork_context(production_fork_container)
+    source = await _seed_source(source_context, fork_provider_prepare)
+    source_main_thread_id = source_context.sessions.path_resolver.main_thread_id(source.session_id)
+    selected = await _fork_request(
+        source_context, source.session_id, creation_kind="new_session_main", mode="context_fork",
+    )
+    assert selected.anchor_item_id is not None
+    target, transport = remote_fork_target
+    request = SessionForkRequest.model_validate({
+        **selected.model_dump(mode="json"), "anchor_item_id": None,
+        "source_uri": resource_display_uri(
+            scope="workspace", scope_id=source.workspace_id, kind="session", tail_segments=(source.session_id,),
+            gateway_authority="fork-source-gateway",
+        ),
+        "target_container_uri": workspace_session_inventory_uri(target.workspace_id, gateway_authority="fork-target-gateway"),
+    })
+    intents: list[dict[str, object]] = []
+    original_transfer = transport.fork_transfer
+
+    async def observe_intent(payload: SessionForkTransferRequest) -> SessionForkTransferResultDTO:
+        reply = await original_transfer(payload)
+        if payload.action == "intent":
+            assert reply.intent is not None
+            intents.append(reply.intent)
+        return reply
+
+    monkeypatch.setattr(transport, "fork_transfer", observe_intent)
+    gateway_token = set_current_gateway_id("fork-target-gateway")
+    request_token = set_current_request_id("response-binding-defaults")
+    try:
+        result = await target.session_context_fork_service.fork(request)
+        assert len(intents) == 1
+        assert intents[0]["source_thread_id"] == source_main_thread_id
+        assert result.source_uri == intents[0]["source_uri"]
+        assert result.source_uri == thread_resource_uri(
+            source.workspace_id, source.session_id, source_main_thread_id, gateway_authority="fork-source-gateway",
+        )
+        _, result_source_session_id, result_source_thread_id = parse_session_thread_uri(result.source_uri)
+        assert (result_source_session_id, result_source_thread_id) == (source.session_id, source_main_thread_id)
+        point = intents[0]["source_point"]
+        assert isinstance(point, dict)
+        assert result.anchor_item_id == point["anchor_item_id"] == selected.anchor_item_id
+        assert (result.source_view_id, result.source_view_revision) == (request.source_view_id, request.source_view_revision)
+        assert result.export_release is not None
+        assert result.export_release.state == "confirmed"
+        assert not await target.job_service.list()
+    finally:
+        reset_current_request_id(request_token)
+        reset_current_gateway_id(gateway_token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
 @pytest.mark.parametrize("cancel_window", ["source_marker", "materialized", "before_publish"])
 async def test_remote_fork_task_cancel_recovers_same_durable_owner(
     fork_provider_prepare,
@@ -4509,7 +4709,13 @@ async def test_qualified_local_fork_lifespan_recovers_without_http_context(
         assert frozen.state == "preparing" and frozen.fork_delivery_request_id is None
         assert intent["source_remote"] is False
         assert intent["target_gateway_id"] == "qualified-local-fork-gateway"
-        assert intent["request"] == request.model_dump(mode="json")
+        qualified_request = request.model_copy(update={
+            "source_uri": thread_resource_uri(
+                source.workspace_id, source.session_id, _main_thread_id(context, source.session_id),
+                gateway_authority="qualified-local-fork-gateway",
+            ),
+        })
+        assert intent["request"] == qualified_request.model_dump(mode="json")
     finally:
         reset_current_request_id(request_token)
         reset_current_gateway_id(gateway_token)
@@ -4553,8 +4759,26 @@ async def test_qualified_local_fork_lifespan_recovers_without_http_context(
             )
             replay_token = set_current_gateway_id("qualified-local-fork-gateway")
             try:
-                replay = await recovered.forks.fork(request)
-                assert replay.thread_uri == result.thread_uri
+                alias_request = qualified_request.model_copy(update={
+                    "target_container_uri": (
+                        workspace_session_inventory_uri(source.workspace_id)
+                        if creation_kind == "new_session_main" else
+                        resource_display_uri(
+                            scope="workspace", scope_id=source.workspace_id, kind="session",
+                            tail_segments=(source.session_id,),
+                        )
+                    ),
+                })
+                replay = await recovered.forks.fork(alias_request)
+                assert replay == result
+                replay_record = (
+                    recovered.sessions.path_resolver.catalog_store.get_creation_record(key)
+                    if creation_kind == "new_session_main" else
+                    recovered.forks._threads.for_owner_session(source.session_id).control_store.get_thread_creation_record(key)
+                )
+                assert (replay_record.preimage_hash, replay_record.request_intent_json) == (
+                    frozen.preimage_hash, frozen.request_intent_json,
+                )
             finally:
                 reset_current_gateway_id(replay_token)
             assert await recovered.forks.recover_prepared_forks() == 0
@@ -5545,12 +5769,27 @@ async def test_generation_fork_reuses_one_durable_target_after_source_deletion(
 
 
 def _fork_intent_state(context: ForkIntegrationContext) -> tuple[object, ...]:
-    """请求冲突前后比较权威 creation/retention/navigation 与物理节点清单。"""
+    """比较权威 intent 与持久业务文件；忽略经运行原件确认的 SQLite/锁辅助文件。"""
     with context.sessions.path_resolver.catalog_store.read_transaction() as connection:
         rows = tuple(tuple(tuple(row) for row in connection.execute(f"SELECT * FROM {table} ORDER BY rowid"))
                      for table in ("session_creation_records", "fork_retention_claims", "nodes", "catalog_metadata"))
-    entries = tuple(sorted(str(path.relative_to(context.workspace / ".boxteam"))
-                           for path in (context.workspace / ".boxteam").rglob("*")))
+    root = context.workspace / ".boxteam"
+    entries = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        name = path.name
+        if name.endswith((".lock", ".write.lock", ".sqlite-shm", ".sqlite-wal")):
+            continue
+        if path.is_dir() and relative == Path("navigation/session-lifecycle-gates"):
+            continue
+        if path.is_file():
+            data = path.read_bytes()
+            # SQLite 主文件的权威业务行由上方 catalog 查询及调用方的 control/job 断言核对。
+            content = None if name.endswith(".sqlite") else hashlib.sha256(data).hexdigest()
+            entries.append((relative.as_posix(), "file", content))
+        else:
+            entries.append((relative.as_posix(), "directory", None))
+    entries = tuple(entries)
     return rows, entries
 
 
@@ -5683,7 +5922,7 @@ async def test_live_fork_source_delete_retains_committed_target_and_instance(
 async def test_live_fork_preflight_rejects_before_target_or_attach(
     production_fork_container: AppContainer, fork_provider_prepare, live_resource_transport_factory,
     fork_gateway_request_context: None,
-    kind: ResourceKind, fault: str,
+    monkeypatch: pytest.MonkeyPatch, kind: ResourceKind, fault: str,
 ) -> None:
     context = _production_fork_context(production_fork_container)
     external = live_resource_transport_factory(production_fork_container, kind)
@@ -5704,10 +5943,20 @@ async def test_live_fork_preflight_rejects_before_target_or_attach(
         request = request.model_copy(update={"target_container_uri": workspace_session_inventory_uri(
             source.workspace_id, gateway_authority="other-gateway")})
     request = request.model_copy(update={"resources": [choice]})
+    # 完整快照保留 lease 账本；固定观察时间，避免合法读取仅因时钟变化改写 updated_at。
+    monkeypatch.setattr(owner._leases, "_now", lambda: "2026-10-18T00:00:00Z")
+    owner_before = await owner.get_resource(resource["resource_id"])
+    expected_revision = resource["owner_revision"] + (1 if fault == "stale_revision" else 0)
+    assert owner_before["owner_revision"] == expected_revision
+    assert owner_before["retention_scope"] == ("thread" if fault == "thread_scope" else "workspace")
+    assert owner_before["reconciliation_status"] == ("unknown" if fault == "unverified" else "verified")
+    assert owner._store.records[resource["resource_id"]].fork_attachments == {}
     before = _fork_intent_state(context)
     revisions = list(external.revisions)
     with pytest.raises(ValueError, match="fork_live_"):
         await context.forks.fork(request)
+    owner_after = await owner.get_resource(resource["resource_id"])
+    assert owner_after == owner_before
     assert _fork_intent_state(context) == before
     assert owner._store.records[resource["resource_id"]].fork_attachments == {}
     assert external.revisions == revisions and external.creates == 1
@@ -5717,7 +5966,7 @@ async def test_live_fork_preflight_rejects_before_target_or_attach(
 @pytest.mark.parametrize("kind", ["terminal", "browser"])
 async def test_thread_scope_live_fork_rejects_child_before_thread_creation(
     production_fork_container: AppContainer, fork_provider_prepare, live_resource_transport_factory,
-    fork_gateway_request_context: None, kind: ResourceKind,
+    fork_gateway_request_context: None, monkeypatch: pytest.MonkeyPatch, kind: ResourceKind,
 ) -> None:
     context = _production_fork_context(production_fork_container)
     external = live_resource_transport_factory(production_fork_container, kind)
@@ -5730,20 +5979,24 @@ async def test_thread_scope_live_fork_rejects_child_before_thread_creation(
     )).model_copy(update={"resources": [_fork_live_choice(resource)]})
     session_node = context.sessions.path_resolver.resolve_session_node(source.session_id)
     control_path = session_node / "session-control.sqlite"
-    control_before = _session_control_state(control_path)
-    intent_before = _fork_intent_state(context)
-    revisions = list(external.revisions)
+    monkeypatch.setattr(owner._leases, "_now", lambda: "2026-10-18T00:00:00Z")
     owner_before = await owner.get_resource(resource["resource_id"])
     assert owner_before["retention_scope"] == "thread"
     assert owner_before["reconciliation_status"] == "verified"
     assert owner_before["owner_revision"] == resource["owner_revision"]
     assert "attach" in owner_before["available_actions"]
+    assert owner._store.records[resource["resource_id"]].fork_attachments == {}
+    control_before = _session_control_state(control_path)
+    intent_before = _fork_intent_state(context)
+    revisions = list(external.revisions)
     child_key = context.forks._creation_key(request.idempotency_key)
 
     with pytest.raises(ValueError, match="fork_live_resource_rejected:") as rejection:
         await context.forks.fork(request)
     assert "thread 范围资源不能关联其它 Thread" in str(rejection.value)
 
+    owner_after = await owner.get_resource(resource["resource_id"])
+    assert owner_after == owner_before
     control_after = _session_control_state(control_path)
     intent_after = _fork_intent_state(context)
     assert control_after == control_before
@@ -5751,7 +6004,6 @@ async def test_thread_scope_live_fork_rejects_child_before_thread_creation(
     with pytest.raises(KeyError):
         context.forks._threads.for_owner_session(source.session_id).control_store.get_thread_creation_record(child_key)
     assert owner._store.records[resource["resource_id"]].fork_attachments == {}
-    assert await owner.get_resource(resource["resource_id"]) == owner_before
     assert external.revisions == revisions and external.creates == 1
 
 
@@ -5926,10 +6178,12 @@ async def test_http_live_fork_serializes_complete_owner_and_partial_failure_with
 async def test_generation_fork_intent_drift_rejects_before_any_side_effect(
     fork_provider_prepare,
     production_fork_container: AppContainer, monkeypatch: pytest.MonkeyPatch,
+    fork_gateway_request_context: None,
     state: str, drift: str,
 ) -> None:
     context = _production_fork_context(production_fork_container)
     source = await _seed_source(context, fork_provider_prepare)
+    alternate_session = await context.sessions.create(SessionCreateRequest(title="漂移目标 Session"))
     origin = SessionGenerationOriginDTO(generator_id="generator-intent", run_id="run-intent",
                                        idempotency_key="key-intent", generator_type_id="context-fork",
                                        generator_type_version="1")
@@ -5937,9 +6191,7 @@ async def test_generation_fork_intent_drift_rejects_before_any_side_effect(
         source_session_id=source.session_id, source_thread_id=None,
         origin=origin, title="冻结分叉意图", parent_node_id=None,
     )
-    alternative_container_uri = resource_display_uri(
-        scope="workspace", scope_id=context.sessions.workspace_id, kind="session", tail_segments=("inventory",),
-    )
+    alternative_container_uri = alternate_session.uri
     other_source_id = source.session_id[:-1] + ("0" if source.session_id[-1] != "0" else "1")
     overrides: dict[str, object] = {
         "mode": "full_rollout_copy", "relationship": "pinned", "title": "另一标题",
@@ -5987,6 +6239,7 @@ async def test_generation_fork_intent_drift_rejects_before_any_side_effect(
 async def test_generation_implicit_latest_fork_replays_frozen_request_after_source_deletion(
     fork_provider_prepare,
     production_fork_container: AppContainer,
+    fork_gateway_request_context: None,
 ) -> None:
     context = _production_fork_context(production_fork_container)
     source = await _seed_source(context, fork_provider_prepare)
@@ -5996,6 +6249,13 @@ async def test_generation_implicit_latest_fork_replays_frozen_request_after_sour
     request = await context.forks.prepare_generation_request(
         source_session_id=source.session_id, source_thread_id=None,
         origin=origin, title="", parent_node_id=None,
+    )
+    assert request.source_uri == thread_resource_uri(
+        source.workspace_id, source.session_id, _main_thread_id(context, source.session_id),
+        gateway_authority="compaction-fork-gateway",
+    )
+    assert request.target_container_uri == workspace_session_inventory_uri(
+        source.workspace_id, gateway_authority="compaction-fork-gateway",
     )
     result = await context.forks.fork(request, generation_origin=origin)
     target = result.session

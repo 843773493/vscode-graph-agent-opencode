@@ -1,26 +1,33 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
+from json import JSONDecodeError
 from unittest.mock import Mock
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from app.abstractions.session_context import WorkspaceSessionContextAccessError
 from app.core.identifier import create_uuid_hex
+from app.core.resource_uri import thread_resource_uri
 from app.core.trace_middleware import (
     reset_current_gateway_id,
     reset_current_request_id,
     set_current_gateway_id,
     set_current_request_id,
 )
+from app.gateway.federation.grants import ForkGrantTarget
+from app.schemas.internal_v2.session import SessionForkRequest
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
 )
+from app.schemas.internal_v2.session_fork_transfer import SessionForkTransferRequest
 from app.services.business.session_context_resource import (
     session_resource_identity,
     session_resource_uri,
+    workspace_session_inventory_uri,
 )
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.gateway_session_context_client import (
@@ -63,6 +70,26 @@ async def gateway_clients() -> AsyncIterator[list[GatewaySessionContextClient]]:
     yield clients
     for client in clients:
         await client.aclose()
+
+
+@pytest.fixture
+def gateway_fork_request() -> Iterator[SessionForkTransferRequest]:
+    gateway_token = set_current_gateway_id("gateway_local")
+    request_token = set_current_request_id("req_gateway_fork")
+    source_uri = thread_resource_uri("ws_source", f"ses_{create_uuid_hex()}", f"thr_{create_uuid_hex()}", gateway_authority="gateway_local")
+    try:
+        yield SessionForkTransferRequest(
+            source_gateway_id="gateway_local", action="intent",
+            fork_target=ForkGrantTarget(gateway_id="gateway_local", uri=source_uri, fork_role="source"),
+            request=SessionForkRequest(
+                idempotency_key="gateway-fork", source_uri=source_uri,
+                target_container_uri=workspace_session_inventory_uri("ws_target", gateway_authority="gateway_target"),
+                mode="full_rollout_copy", source_view_id="view-frozen", source_view_revision=7,
+            ),
+        )
+    finally:
+        reset_current_request_id(request_token)
+        reset_current_gateway_id(gateway_token)
 
 
 def _read_request(workspace_id: str):
@@ -356,3 +383,111 @@ async def test_gateway_pool_keeps_concurrent_relay_request_identities(
     assert all(request.headers["X-Local-Token"] == "gateway-pool-token" for request in requests)
     assert all("X-BoxTeam-Workspace-Id" not in request.headers for request in requests)
     assert not http_clients[0].is_closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fault", "cause"),
+    [("json", JSONDecodeError), ("envelope", TypeError), ("schema", ValidationError), ("action", ValueError)],
+    ids=["json", "envelope", "schema", "action"],
+)
+async def test_gateway_fork_classifies_success_response_decode_failures(
+    monkeypatch: pytest.MonkeyPatch, gateway_clients: list[GatewaySessionContextClient],
+    gateway_fork_request: SessionForkTransferRequest, fault: str, cause: type[Exception],
+) -> None:
+    async def respond(
+        _client: httpx.AsyncClient, method: str, url: str, *, headers: dict[str, str], **_kwargs: object,
+    ) -> httpx.Response:
+        request = httpx.Request(method, url, headers=headers)
+        response_headers = {"X-Request-ID": headers["X-Request-ID"]}
+        if fault == "json":
+            return httpx.Response(200, request=request, headers=response_headers, text="not JSON")
+        data = [] if fault == "envelope" else {"intent": []} if fault == "schema" else {}
+        return httpx.Response(200, request=request, headers=response_headers,
+                              json={"request_id": headers["X-Request-ID"], "data": data})
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", respond)
+    client = GatewaySessionContextClient(local_token_supplier=lambda: "fork-token")
+    gateway_clients.append(client)
+
+    with pytest.raises(RuntimeError, match="fork_response_protocol_invalid") as caught:
+        await client.fork_transfer(gateway_fork_request)
+    assert isinstance(caught.value.__cause__, cause)
+    assert not isinstance(caught.value, WorkspaceSessionContextAccessError)
+
+
+@pytest.mark.asyncio
+async def test_gateway_fork_decodes_valid_intent_with_same_request_id(
+    monkeypatch: pytest.MonkeyPatch, gateway_clients: list[GatewaySessionContextClient],
+    gateway_fork_request: SessionForkTransferRequest,
+) -> None:
+    intent = {"request": gateway_fork_request.request.model_dump(mode="json")}
+
+    async def respond(
+        _client: httpx.AsyncClient, method: str, url: str, *, headers: dict[str, str], **_kwargs: object,
+    ) -> httpx.Response:
+        assert headers["X-Request-ID"] == "req_gateway_fork"
+        return httpx.Response(200, request=httpx.Request(method, url, headers=headers),
+                              headers={"X-Request-ID": headers["X-Request-ID"]},
+                              json={"request_id": headers["X-Request-ID"], "data": {"intent": intent}})
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", respond)
+    client = GatewaySessionContextClient(local_token_supplier=lambda: "fork-token")
+    gateway_clients.append(client)
+
+    assert (await client.fork_transfer(gateway_fork_request)).intent == intent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [400, 403, 404, 422, 500])
+async def test_gateway_fork_preserves_http_owner_failure_attribution(
+    monkeypatch: pytest.MonkeyPatch, gateway_clients: list[GatewaySessionContextClient],
+    gateway_fork_request: SessionForkTransferRequest, status: int,
+) -> None:
+    async def respond(_client: httpx.AsyncClient, method: str, url: str, **_kwargs: object) -> httpx.Response:
+        return httpx.Response(status, request=httpx.Request(method, url), text="owner refused")
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", respond)
+    client = GatewaySessionContextClient(local_token_supplier=lambda: "fork-token")
+    gateway_clients.append(client)
+
+    with pytest.raises(RuntimeError, match=f"status={status}") as caught:
+        await client.fork_transfer(gateway_fork_request)
+    assert isinstance(caught.value, WorkspaceSessionContextAccessError) is (status != 500)
+    assert caught.value.__cause__ is None
+    assert "fork_response_protocol_invalid" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_gateway_fork_preserves_connection_failure_attribution(
+    monkeypatch: pytest.MonkeyPatch, gateway_clients: list[GatewaySessionContextClient],
+    gateway_fork_request: SessionForkTransferRequest,
+) -> None:
+    failure = httpx.ConnectError("fork channel closed")
+
+    async def fail(_client: httpx.AsyncClient, _method: str, _url: str, **_kwargs: object) -> httpx.Response:
+        raise failure
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", fail)
+    client = GatewaySessionContextClient(local_token_supplier=lambda: "fork-token")
+    gateway_clients.append(client)
+
+    with pytest.raises(WorkspaceSessionContextAccessError) as caught:
+        await client.fork_transfer(gateway_fork_request)
+    assert caught.value.__cause__ is failure
+
+
+@pytest.mark.asyncio
+async def test_gateway_fork_keeps_local_origin_error_as_input_failure(
+    monkeypatch: pytest.MonkeyPatch, gateway_clients: list[GatewaySessionContextClient],
+    gateway_fork_request: SessionForkTransferRequest,
+) -> None:
+    async def fail(_client: httpx.AsyncClient, _method: str, _url: str, **_kwargs: object) -> httpx.Response:
+        pytest.fail("本地 origin 不匹配不得发出 HTTP 请求")
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", fail)
+    client = GatewaySessionContextClient(local_token_supplier=lambda: "fork-token")
+    gateway_clients.append(client)
+
+    with pytest.raises(ValueError, match="origin 与当前 Gateway 不一致"):
+        await client.fork_transfer(gateway_fork_request.model_copy(update={"source_gateway_id": "gateway_other"}))

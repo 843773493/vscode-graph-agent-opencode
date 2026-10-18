@@ -127,12 +127,17 @@ class GatewaySessionContextClient:
         """只传一个有界 artifact 分块；正文冻结及目标发布归两端 owner。"""
         if request.source_gateway_id != require_current_gateway_id("fork relay"):
             raise ValueError("fork transport origin 与当前 Gateway 不一致")
-        reply = await self._request(
-            "POST", "/api/gateway/federation/relay", response_type=SessionForkTransferResultDTO,
+        path = "/api/gateway/federation/relay"
+        response, request_id = await self._send_request(
+            "POST", path,
             json_body={"operation": "fork_" + request.fork_target.fork_role,
                        "fork_target": request.fork_target.to_payload(), "body": request.model_dump(mode="json")},
         )
-        return reply.validate_for_request(request)
+        try:
+            reply = self._decode_response(response, path=path, request_id=request_id, response_type=SessionForkTransferResultDTO)
+            return reply.validate_for_request(request)
+        except (KeyError, TypeError, ValueError) as error:
+            raise RuntimeError(f"fork_response_protocol_invalid: Gateway fork 回执协议无效: {error}") from error
 
     async def _request(
         self,
@@ -143,6 +148,13 @@ class GatewaySessionContextClient:
         workspace_id: str | None = None,
         json_body: dict[str, object] | None = None,
     ) -> ResponseDTO:
+        response, request_id = await self._send_request(method, path, workspace_id=workspace_id, json_body=json_body)
+        return self._decode_response(response, path=path, request_id=request_id, response_type=response_type)
+
+    async def _send_request(
+        self, method: str, path: str, *, workspace_id: str | None = None,
+        json_body: dict[str, object] | None = None,
+    ) -> tuple[httpx.Response, str | None]:
         if workspace_id is not None and not workspace_id.strip():
             raise WorkspaceSessionContextAccessError(
                 "workspace_id 不能为空；请使用 Gateway inventory 返回的工作区 ID"
@@ -175,6 +187,12 @@ class GatewaySessionContextClient:
             if response.status_code in MODEL_RECOVERABLE_HTTP_STATUSES:
                 raise WorkspaceSessionContextAccessError(message)
             raise RuntimeError(message)
+        return response, request_id
+
+    @staticmethod
+    def _decode_response(
+        response: httpx.Response, *, path: str, request_id: str | None, response_type: type[ResponseDTO],
+    ) -> ResponseDTO:
         payload = response.json()
         if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
             raise TypeError(f"Gateway 上下文查询响应缺少 data object: path={path}")

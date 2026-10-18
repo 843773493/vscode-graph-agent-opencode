@@ -346,7 +346,7 @@ workspace 共享附件正文 MUST NOT 进入 source/thread staging 重复复制�
 
 fork SHALL 用资源 URI 定位 source thread 及 target 容器，用并列结构化字段表达 view/revision、anchor、范围、资源继承和 `new_session_main|new_child_thread` 创建意图。source Session 入口明确规范化为其 catalog main thread；显式 child 来源不得回退 main。target 不存在时 URI 指向已有 Workspace/Session 容器，发布后返回新目标的完整身份与 URI；不覆盖、合并或恢复既有 thread。既有生成策略明确要求新 Session 时 MUST 显式传 new_session_main，不受消息 UI 的 subthread 默认值影响；委派仍按既定 seed/任务合同创建 child，不因此隐式继承整条 main history。
 
-URI 的 kind/模板及规范化只由统一寻址 owner 登记；Session/Thread/Workspace 容器均为领域目标，不伪装为文件目录。目标固定 Gateway、Workspace、Session/parent thread，不依赖当前激活工作区。跨端操作要求 source 读取/导出和 target 创建/导入的对应授权；send/read/wait grant 不能升级为 fork 授权。不可达、不支持或目标 fence 已关闭时明确失败，无本地同名回退。
+URI 的 kind/模板及规范化只由统一寻址 owner 登记；Session/Thread/Workspace 容器均为领域目标，不伪装为文件目录。目标固定 Gateway、Workspace 和目标 Session，不依赖当前激活工作区。当 `new_child_thread` 的目标 URI 是某个已存在 Thread 时，owner 必须核验该 Thread 属于 URI 中的 Session；该 Thread 只用于定位目标 Session，不建立新 Thread 的 parent-thread 关系。source URI 独立保留来源 Thread 与 fork context lineage；不得从目标 URI 推导 source lineage 或目标 parent-thread。跨端操作要求 source 读取/导出和 target 创建/导入的对应授权；send/read/wait grant 不能升级为 fork 授权。不可达、不支持或目标 fence 已关闭时明确失败，无本地同名回退。
 
 #### Scenario: 同 Session 默认目标是新 subthread
 

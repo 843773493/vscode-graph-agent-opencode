@@ -42,8 +42,6 @@
 
 会话上下文资源 MUST 使用该统一形态（保留既有段序，MUST NOT 简化）；会话上下文侧的规范形态为 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/session/{...canonical path segments}`（`session` 为 owner 定稿的 kind 取值）。本 capability MUST NOT 自行变更固定段序、MUST NOT 把 `scope_id` 改为可选、MUST NOT 省略 `resources` 固定段。
 
-**owner 待实施项（关联 `add-unified-virtual-resource-addressing` task 3.4）**：`{gateway_authority?}` 段当前在 owner 的 `grammar.py` 的 `parse_resource_uri` 中无解析分支（authority 首段会被当作 scope 并以 `unknown_scope` 拒绝），本 capability 对 authority 的使用依赖 owner 的 authority 实现。
-
 #### Scenario: 会话身份编码和 fragment 不成为后门
 - **WHEN** 调用方提交身份/领域段百分号编码或原始 fragment
 - **THEN** 按统一寻址 owner 的分段合同显式拒绝；已公布的文件child段合法编码由owner处理，不在本change另设整体百分号拒绝规则
@@ -208,12 +206,17 @@
 
 会话fork寻址 SHALL 具名消费统一寻址owner requirement「Session 集合与 Thread 创建目标必须有正式领域 URI」，并消费itemized checkpoint-context-branching的范围/目标/资源合同。本capability只负责将入口规范化结果传给精确领域owner，不复述模板、追加kind或维护fork专属parser。source完整Thread URI不得降级为Session main；Session快捷入口明确解析catalog main。view/revision/anchor和目标创建意图是结构化字段，不编码进URI。
 
-本地/跨端目标 SHALL 固定最终Gateway、Workspace和Session/thread归属；source导出和target创建/导入由对应操作授权，不把read权限视为复制许可。发布后返回真实目标身份与URI；不可达、未授权或不支持明确失败，不回退当前激活工作区或同名目标。既有跨Session send/read/wait仍按其main-thread合同执行。
+本地/跨端目标 SHALL 固定最终Gateway和Workspace及目标Session；source导出和target创建/导入由对应操作授权，不把read权限视为复制许可。`new_child_thread` 的 target URI 可以指向已有 Session 或其中一个已存在 Thread；Thread ID 必须由目标 owner 核验归属，但仅用于定位目标 Session，不建立新 Thread 的 parent-thread 关系。source URI 独立固定来源 Thread 与 fork context lineage，不得从目标 Thread URI 推断来源或导航 parent。发布后返回真实目标身份与URI；不可达、未授权或不支持明确失败，不回退当前激活工作区或同名目标。既有跨Session send/read/wait仍按其main-thread合同执行。
 
 #### Scenario: child来源与远端目标精确传递
 
 - **WHEN** fork输入为source child URI，target为远端Session容器加new_child_thread意图
 - **THEN** 统一解析保留精确来源和目标，目标端创建真实新child并返回URI，不读取source main、不把远端child挂入本地Session
+
+#### Scenario: Thread目标只定位其所属Session
+
+- **WHEN** fork 使用 `new_child_thread`，目标 URI 指向目标 Session 中一个已存在 Thread
+- **THEN** owner 验证该 Thread 属于 URI 中的 Session，并在该 Session 创建真实新 Thread；target Thread 不成为新 Thread 的 parent，source URI 仍单独决定 fork 来源
 
 #### Scenario: URI位置与修订选择分离
 

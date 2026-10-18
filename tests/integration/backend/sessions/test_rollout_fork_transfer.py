@@ -544,8 +544,20 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
 async def test_real_source_child_fork_cold_history_attachment_and_successor(
     transfer_triad, creation_kind: str,
 ):
-    nodes, model, artifacts, _control = transfer_triad
-    source, target = nodes["b"], nodes["c"]
+    nodes, model, artifacts, control = transfer_triad
+    hub, source, target = nodes["a"], nodes["b"], nodes["c"]
+    for node in (source, target):
+        inventory = await node.client.get("/api/gateway/workspaces")
+        assert inventory.status_code == 200, inventory.text
+        own = next(item for item in inventory.json()["data"]["items"]
+                   if item["backend_workspace_id"] == node.workspace_id and item["connection_kind"] == "local")
+        node.client.headers["X-BoxTeam-Workspace-Id"] = own["workspace_id"]
+    hub_inventory = await hub.client.get("/api/gateway/workspaces")
+    assert hub_inventory.status_code == 200, hub_inventory.text
+    hub_items = hub_inventory.json()["data"]["items"]
+    source_route = next(item for item in hub_items if (item.get("remote") or {}).get("gateway_id") == source.gateway_id)
+    hub_local = next(item for item in hub_items
+                     if item["backend_workspace_id"] == hub.workspace_id and item["connection_kind"] == "local")
     inherited = "来源 B 主线程的共同历史。"
     child_only = "来源 B child 独有输入：目标必须继承这个 thread。"
     main_only = "来源 B main 后来的独有输入：不能混入 child 分支。"
@@ -586,6 +598,11 @@ async def test_real_source_child_fork_cold_history_attachment_and_successor(
     assert attachment_source["availability"] == "available" and attachment_source["required_for_context"]
     target_parent = await create_session(target.client, "已有目标 C child") if creation_kind == "new_child_thread" else None
     child_session_node = await target.session_node(target_parent) if target_parent is not None else None
+    target_container_thread = None
+    if target_parent is not None:
+        target_main = await target.client.get(f"/api/v1/sessions/{target_parent}/main-thread")
+        assert target_main.status_code == 200, target_main.text
+        target_container_thread = target_main.json()["data"]["thread_id"]
     request = {
         "idempotency_key": f"real-source-child-{creation_kind}",
         "source_uri": resource_display_uri(
@@ -595,15 +612,85 @@ async def test_real_source_child_fork_cold_history_attachment_and_successor(
         "target_container_uri": resource_display_uri(
             scope="workspace", scope_id=target.workspace_id,
             kind="session",
-            tail_segments=(target_parent,) if target_parent is not None else (), gateway_authority=target.gateway_id,
+            tail_segments=(target_parent, "threads", target_container_thread) if target_parent is not None else (),
+            gateway_authority=target.gateway_id,
         ),
         "creation_kind": creation_kind, "mode": "full_rollout_copy",
         "source_view_id": point["source_view_id"], "source_view_revision": point["source_view_revision"],
         "resources": [{"resource_uri": attachment_source["resource_uri"], "action": "copy_snapshot"}],
     }
     (artifacts / "source-child-fork-request.json").write_text(json.dumps(request, ensure_ascii=False, indent=2) + "\n")
+    before_rejections = await target.client.get("/api/v1/session-catalog/export")
+    assert before_rejections.status_code == 200, before_rejections.text
+    missing_request = {
+        **request, "idempotency_key": f"missing-target-session-{creation_kind}", "creation_kind": "new_child_thread",
+        "target_container_uri": resource_display_uri(
+            scope="workspace", scope_id=target.workspace_id, kind="session",
+            tail_segments=("ses_00000000400070008000000000000001",), gateway_authority=target.gateway_id,
+        ),
+    }
+    missing = await target.client.post(f"/api/v1/sessions/{source_session_id}/fork-context", json=missing_request)
+    assert missing.status_code == 404, missing.text
+    rejections = {"missing_session": missing.json()}
+    rejected_keys = [missing_request["idempotency_key"]]
+    for case, gateway_id, workspace_id, expected_code in (
+        ("unknown_gateway", "gateway_unknown", target.workspace_id, "federation-unknown-peer"),
+        ("missing_workspace", target.gateway_id, "00000000-0000-4000-8000-000000000099", "target_not_resolvable"),
+    ):
+        target_uri = workspace_session_inventory_uri(workspace_id, gateway_authority=gateway_id)
+        rejected_key = f"source-child-{case}-{creation_kind}"
+        rejected_keys.append(rejected_key)
+        fork_target = {"gateway_id": gateway_id, "uri": target_uri, "fork_role": "target"}
+        rejected = await hub.client.post("/api/gateway/federation/relay", json={
+            "operation": "fork_target", "fork_target": fork_target,
+            "body": {
+                "source_gateway_id": hub.gateway_id, "fork_target": fork_target, "action": "create",
+                "request": {**request, "idempotency_key": rejected_key, "creation_kind": "new_session_main", "target_container_uri": target_uri},
+            },
+        })
+        assert rejected.status_code == 409, rejected.text
+        assert rejected.json()["detail"]["code"] == expected_code, rejected.text
+        rejections[case] = rejected.json()
+    after_rejections = await target.client.get("/api/v1/session-catalog/export")
+    assert after_rejections.status_code == 200, after_rejections.text
+    assert after_rejections.json()["data"] == before_rejections.json()["data"]
+    for rejected_key in rejected_keys:
+        rejected_operation = "fork-" + hashlib.sha256(rejected_key.encode()).hexdigest()
+        assert _capture_record(source, rejected_operation) is None
+        assert _capture_record(target, rejected_operation) is None
+    (artifacts / "source-child-rejections.json").write_text(json.dumps(rejections, ensure_ascii=False, indent=2) + "\n")
     provider_requests_before_fork = len(model.requests)
-    response = await target.client.post(f"/api/v1/sessions/{source_session_id}/fork-context", json=request)
+    key = "fork-" + hashlib.sha256(request["idempotency_key"].encode()).hexdigest()
+    phase = "copy.target.prepared"
+    activation = await hub.client.post(f"/api/gateway/workspaces/{source_route['workspace_id']}/activate")
+    assert activation.status_code == 200, activation.text
+    control.arm(key, phase)
+    fork_call = asyncio.create_task(hub.client.post(
+        f"/api/v1/sessions/{source_session_id}/fork-context", json=request,
+        headers={"X-BoxTeam-Workspace-Id": source_route["workspace_id"]},
+    ))
+    reached = asyncio.create_task(asyncio.to_thread(control.acknowledged, key, phase))
+    try:
+        done, _ = await asyncio.wait((fork_call, reached), return_when=asyncio.FIRST_COMPLETED)
+        if fork_call in done:
+            early_response = await fork_call
+            reached.cancel()
+            pytest.fail(f"fork 在固定目标准备屏障前返回 HTTP {early_response.status_code}: {early_response.text}")
+        await reached
+        prepared = _creation_record(target, key, child_session_node)
+        assert prepared["state"] == "preparing"
+        switched = await hub.client.post(f"/api/gateway/workspaces/{hub_local['workspace_id']}/activate")
+        assert switched.status_code == 200, switched.text
+        health = await hub.client.get("/api/gateway/health")
+        assert health.status_code == 200, health.text
+        assert health.json()["data"]["active_workspace_id"] == hub_local["workspace_id"]
+        (artifacts / "source-child-workspace-switch.json").write_text(json.dumps({
+            "fixed_source_route": source_route["workspace_id"], "activated_workspace": hub_local["workspace_id"],
+            "prepared": prepared, "health": health.json(),
+        }, ensure_ascii=False, indent=2) + "\n")
+    finally:
+        control.release(key, phase)
+    response = await asyncio.wait_for(fork_call, timeout=60)
     (artifacts / "source-child-fork-response.json").write_text(response.text)
     assert response.status_code == 200, response.text
     published = response.json()["data"]
@@ -615,11 +702,11 @@ async def test_real_source_child_fork_cold_history_attachment_and_successor(
     target_session_id, target_thread_id = published["session"]["session_id"], published["thread_id"]
     if target_parent is not None:
         assert target_session_id == target_parent
+        assert target_thread_id not in {source_thread_id, target_container_thread}
     target_address = parse_resource_uri(published["thread_uri"])
     assert (target_address.gateway_authority, target_address.scope_id, target_address.tail_segments) == (
         target.gateway_id, target.workspace_id, (target_session_id, "threads", target_thread_id),
     )
-    key = "fork-" + hashlib.sha256(request["idempotency_key"].encode()).hexdigest()
     source_capture = _capture_record(source, key)
     target_capture = _capture_record(target, key)
     assert source_capture is not None and target_capture is not None
@@ -628,6 +715,7 @@ async def test_real_source_child_fork_cold_history_attachment_and_successor(
     assert target_capture["target_thread_id"] == target_thread_id
     frozen = _creation_record(target, key, child_session_node)
     assert frozen["state"] == "published"
+    assert (frozen["preimage_hash"], frozen["request_intent_json"]) == (prepared["preimage_hash"], prepared["request_intent_json"])
     claims = _attachment_claims(target, key)
     assert len(claims) == 1 and claims[0]["state"] == "committed"
     assert (claims[0]["target_session_id"], claims[0]["target_thread_id"]) == (target_session_id, target_thread_id)
@@ -656,7 +744,12 @@ async def test_real_source_child_fork_cold_history_attachment_and_successor(
     })
     assert attachment.status_code == 200, attachment.text
     assert attachment.content == attachment_body
-    replay = await target.client.post(f"/api/v1/sessions/{source_session_id}/fork-context", json=request)
+    target_container = parse_resource_uri(request["target_container_uri"])
+    alias_request = {**request, "target_container_uri": resource_display_uri(
+        scope=target_container.scope, scope_id=target_container.scope_id,
+        kind=target_container.kind, tail_segments=target_container.tail_segments,
+    )}
+    replay = await target.client.post(f"/api/v1/sessions/{source_session_id}/fork-context", json=alias_request)
     assert replay.status_code == 200, replay.text
     assert replay.json()["data"] == published
     assert _creation_record(target, key, child_session_node) == frozen

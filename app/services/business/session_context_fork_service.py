@@ -8,6 +8,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
 
+from pydantic import TypeAdapter
+
 from app.abstractions.session_context import (
     SessionForkTransportProtocol,
     WorkspaceSessionContextAccessError,
@@ -15,6 +17,7 @@ from app.abstractions.session_context import (
 from app.agents.graph_binding import (
     DEEP_AGENT_CAPABILITY_PROFILE,
     DEEP_AGENT_GRAPH_BINDING,
+    GraphBinding,
 )
 from app.core.identifier import create_prefixed_id
 from app.core.key_lock_pool import KeyLockPool
@@ -40,6 +43,7 @@ from app.core.trace_middleware import (
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.gateway.federation.grants import ForkGrantTarget
+from app.schemas.internal_v2.goal import SessionGoalSetRequest
 from app.schemas.internal_v2.session import (
     SessionDTO,
     SessionForkExportReleaseDTO,
@@ -61,6 +65,8 @@ from app.schemas.internal_v2.workspace_resource import (
     WorkspaceResourceDTO,
 )
 from app.services.business.session_context_resource import (
+    parse_session_context_ref,
+    session_resource_identity,
     workspace_session_inventory_uri,
 )
 from app.services.business.session_goal_service import SessionGoalService
@@ -249,13 +255,14 @@ class SessionContextForkService:
     ) -> SessionForkRequest:
         """生成策略只冻结同一公开请求；重试先取原 point，不追随 source latest。"""
         idempotency_key = "context-fork-generation:" + hashlib.sha256(canonical_json_bytes(origin.model_dump(mode="json"))).hexdigest()
+        gateway_id = get_current_gateway_id()
         target_uri = (
             resource_display_uri(
                 scope="workspace", scope_id=self._session_service.workspace_id,
-                kind="folder", tail_segments=(parent_node_id,),
+                kind="folder", tail_segments=(parent_node_id,), gateway_authority=gateway_id,
             )
             if parent_node_id is not None
-            else workspace_session_inventory_uri(self._session_service.workspace_id)
+            else workspace_session_inventory_uri(self._session_service.workspace_id, gateway_authority=gateway_id)
         )
         try:
             existing = self._session_service.path_resolver.catalog_store.get_creation_record(self._creation_key(idempotency_key))
@@ -281,7 +288,8 @@ class SessionContextForkService:
             raise RuntimeError("generation fork 缺少已完成 source point")
         return SessionForkRequest(
             idempotency_key=idempotency_key,
-            source_uri=thread_resource_uri(self._session_service.workspace_id, source_session_id, source_thread_id),
+            source_uri=thread_resource_uri(self._session_service.workspace_id, source_session_id, source_thread_id,
+                                           gateway_authority=gateway_id),
             source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
             anchor_item_id=point.anchor_item_id, mode="context_fork", target_container_uri=target_uri,
             creation_kind="new_session_main", title=title,
@@ -333,20 +341,60 @@ class SessionContextForkService:
                 "source_uri": source_uri,
                 "target_container_uri": target_uri,
             })
+            target_session_id = (
+                parse_session_thread_uri(target.display_uri)[1]
+                if request.creation_kind == "new_child_thread" else None
+            )
             audience = target.gateway_authority or origin
             reply = await self._transport.fork_transfer(SessionForkTransferRequest(
                 source_gateway_id=origin,
                 fork_target=ForkGrantTarget(gateway_id=audience, uri=qualified.target_container_uri, fork_role="target"),
                 action="create", request=qualified, generation_origin=generation_origin,
             ))
-            if reply.result is None or reply.result.session.workspace_id != target.scope_id:
-                raise RuntimeError("fork target owner 未返回固定目标 Workspace 的真实发布结果")
-            expected_thread_uri = thread_resource_uri(
-                target.scope_id, reply.result.session.session_id, reply.result.thread_id, gateway_authority=audience,
-            )
-            if reply.result.thread_uri != expected_thread_uri:
-                raise RuntimeError("fork target owner 返回的 Thread URI 与固定目标身份不一致")
+            try:
+                if reply.result is None or reply.result.session.workspace_id != target.scope_id:
+                    raise RuntimeError("fork target owner 未返回固定目标 Workspace 的真实发布结果")
+                if reply.result.creation_kind != request.creation_kind:
+                    raise RuntimeError("fork target owner 返回的创建意图与固定请求不一致")
+                if reply.result.mode != qualified.mode:
+                    raise RuntimeError("fork target owner 返回的 mode 与固定请求不一致")
+                self._validate_source_response(qualified, reply.result.source_uri, reply.result)
+                if target_session_id is not None and reply.result.session.session_id != target_session_id:
+                    raise RuntimeError("fork target owner 返回的 child 不属于固定目标 Session")
+                session_ref = parse_session_context_ref(
+                    resource_identity=reply.result.session.resource_identity,
+                    uri=reply.result.session.uri, scope=reply.result.session.scope,
+                    local_gateway_id=audience,
+                )
+                if (
+                    session_ref.gateway_authority is not None or session_ref.scope != "workspace"
+                    or session_ref.scope_id != target.scope_id or session_ref.kind != "session"
+                    or session_ref.session_id != reply.result.session.session_id
+                ):
+                    raise RuntimeError("fork target owner 返回的 Session URI 与固定目标身份不一致")
+                if session_ref.resource_identity != session_resource_identity(
+                    target.scope_id, reply.result.session.session_id,
+                ):
+                    raise RuntimeError("fork target owner 返回的 Session resource_identity 与固定目标身份不一致")
+                expected_thread_uri = thread_resource_uri(
+                    target.scope_id, reply.result.session.session_id, reply.result.thread_id, gateway_authority=audience,
+                )
+                if reply.result.thread_uri != expected_thread_uri:
+                    raise RuntimeError("fork target owner 返回的 Thread URI 与固定目标身份不一致")
+            except (KeyError, TypeError, ValueError) as error:
+                raise RuntimeError(f"fork_response_protocol_invalid: 远端 target 发布回执协议无效: {error}") from error
             return reply.result
+        # 在权威创建 owner 冻结前统一补齐 Gateway；本机 authority 的两种写法共用同一请求。
+        request = request.model_copy(update={
+            "source_uri": resource_display_uri(
+                scope=source.scope, scope_id=source.scope_id, kind=source.kind,
+                tail_segments=source.tail_segments, gateway_authority=source.gateway_authority or gateway_id,
+            ),
+            "target_container_uri": resource_display_uri(
+                scope=target.scope, scope_id=target.scope_id, kind=target.kind,
+                tail_segments=target.tail_segments, gateway_authority=target.gateway_authority or gateway_id,
+            ),
+        })
         parent_node_id, target_session_id = self._target_container(request, target)
         key = self._creation_key(request.idempotency_key)
         async with self._key_locks.lock_for(key):
@@ -460,6 +508,26 @@ class SessionContextForkService:
         if intent["request"] != request.model_dump(mode="json") or intent["generation_origin"] != origin:
             raise RuntimeError("fork request conflict: 同 idempotency_key 不同冻结请求")
 
+    @staticmethod
+    def _validate_source_response(
+        request: SessionForkRequest, source_uri: str, point: RolloutForkResult | SessionForkResultDTO,
+    ) -> tuple[str, str]:
+        expected, expected_session, expected_thread = parse_session_thread_uri(request.source_uri)
+        actual, actual_session, actual_thread = parse_session_thread_uri(source_uri)
+        if (
+            (actual.gateway_authority, actual.scope_id, actual_session)
+            != (expected.gateway_authority, expected.scope_id, expected_session)
+            or actual_thread is None
+            or (expected_thread is not None and actual_thread != expected_thread)
+        ):
+            raise RuntimeError("fork owner 返回的来源 URI 与固定请求不一致")
+        if (point.source_view_id, point.source_view_revision) != (request.source_view_id, request.source_view_revision):
+            raise RuntimeError("fork owner 返回的来源 view/revision 与固定请求不一致")
+        # context_fork 未指定 anchor 时仍由来源 owner 解析安全截止点。
+        if (request.mode != "context_fork" or request.anchor_item_id is not None) and point.anchor_item_id != request.anchor_item_id:
+            raise RuntimeError("fork owner 返回的来源 anchor 与固定请求不一致")
+        return actual_session, actual_thread
+
     async def _new_intent(
         self, request: SessionForkRequest, source_session_id: str, source_thread_id: str | None,
         generation_origin: SessionGenerationOriginDTO | None,
@@ -479,13 +547,37 @@ class SessionContextForkService:
             reply = await self._transport.fork_transfer(source_transfer_request(qualified, None, action="intent"))
             if reply.intent is None or reply.intent.get("request") != qualified.model_dump(mode="json"):
                 raise RuntimeError("fork source owner 未返回同一冻结请求的真实来源意图")
-            intent = dict(reply.intent)
+            try:
+                intent = dict(reply.intent)
+                for field in (
+                    "source_gateway_id", "source_uri", "source_point", "source_session_id", "source_thread_id",
+                    "source_graph_binding", "display_title", "source_agent_id", "goal_snapshot",
+                ):
+                    if field not in intent:
+                        raise KeyError(f"fork source intent 缺少字段: {field}")
+                if intent["source_gateway_id"] != (source.gateway_authority or require_current_gateway_id("fork source identity")):
+                    raise RuntimeError("fork source owner 返回了其它 Gateway，拒绝改绑")
+                point = RolloutForkResult(**intent["source_point"])
+                point = TypeAdapter(RolloutForkResult).validate_json(json.dumps(asdict(point)), strict=True)
+                frozen_owner = self._validate_source_response(
+                    qualified, intent["source_uri"], point,
+                )
+                if (intent["source_session_id"], intent["source_thread_id"]) != frozen_owner:
+                    raise RuntimeError("fork source owner 返回的 Session/Thread 与来源 URI 不一致")
+                GraphBinding(**intent["source_graph_binding"])
+                for field in ("display_title", "source_agent_id"):
+                    TypeAdapter(str).validate_python(intent[field], strict=True)
+                goal_snapshot = intent["goal_snapshot"]
+                if goal_snapshot is not None:
+                    TypeAdapter(str).validate_python(goal_snapshot["goal_id"], strict=True)
+                    goal_settings = SessionGoalSetRequest.model_validate({
+                        "objective": goal_snapshot["objective"], "token_budget": goal_snapshot["token_budget"],
+                    }, strict=True)
+                    if goal_settings.objective is None or not goal_settings.objective.strip():
+                        raise ValueError("fork source intent 的 Goal objective 不能为空")
+            except (KeyError, TypeError, ValueError) as error:
+                raise RuntimeError(f"fork_response_protocol_invalid: 远端 source intent 回执协议无效: {error}") from error
             intent["request"] = request.model_dump(mode="json")
-            if intent["source_gateway_id"] != (source.gateway_authority or require_current_gateway_id("fork source identity")):
-                raise RuntimeError("fork source owner 返回了其它 Gateway，拒绝改绑")
-            _, frozen_session, frozen_thread = parse_session_thread_uri(intent["source_uri"])
-            if frozen_session != source_session_id or frozen_thread is None or source_thread_id not in {None, frozen_thread}:
-                raise RuntimeError("fork source owner 返回了其它 Session/Thread，拒绝回退")
             intent["source_remote"] = True
             intent["target_gateway_id"] = get_current_gateway_id()
             intent["generation_origin"] = generation_origin.model_dump(mode="json") if generation_origin is not None else None

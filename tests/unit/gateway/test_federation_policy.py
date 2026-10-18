@@ -5,13 +5,18 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from app.core.resource_uri import thread_resource_uri
 from app.gateway.federation.errors import (
+    FEDERATION_AUTHORIZATION_REVOKED,
+    FEDERATION_CHANNEL_CLOSED,
     FEDERATION_GRANT_AUDIENCE_MISMATCH,
     FEDERATION_GRANT_EXPIRED,
     FEDERATION_GRANT_INVALID_SIGNATURE,
+    FEDERATION_GRANT_KIND_MISMATCH,
     FEDERATION_GRANT_LIFETIME_INSUFFICIENT,
     FEDERATION_GRANT_PATH_MISMATCH,
     FederationError,
@@ -21,10 +26,13 @@ from app.gateway.federation.grants import (
     MAX_TRANSIT_GATEWAYS,
     ContextGrantTarget,
     FederationGrant,
+    ForkGrantTarget,
     GrantTarget,
+    OperationKind,
     decode_grant_target,
     required_wait_grant_lifetime,
     sign_grant,
+    validate_grant_operation,
     verify_grant,
 )
 from app.gateway.federation.identity import (
@@ -37,6 +45,7 @@ from app.gateway.federation.policy import (
     default_policy_payload,
     normalize_policy,
 )
+from app.gateway.federation.rpc import FederationRpcService
 from app.services.business.session_context_resource import (
     gateway_session_inventory_identity,
     gateway_session_inventory_uri,
@@ -56,7 +65,7 @@ def test_default_policy_allows_all_core_capabilities() -> None:
     assert snapshot.default_effect == "allow"
     assert snapshot.rules == ()
     assert snapshot.hardening_enabled is False
-    for capability in ("discovery", "send", "read", "wait", "reply", "transit"):
+    for capability in ("discovery", "send", "read", "wait", "reply", "transit", "fork_source", "fork_target"):
         assert snapshot.evaluate(
             capability=capability,  # type: ignore[arg-type]
             origin_gateway_id="gateway_peer",
@@ -450,3 +459,183 @@ def test_context_grant_target_rejects_wrong_type_or_owner(
     with pytest.raises(FederationError) as error:
         decode_grant_target(raw)
     assert error.value.code == "federation-malformed-frame"
+
+
+@pytest.fixture(params=("source", "target"))
+def fork_grant_target(request: pytest.FixtureRequest) -> ForkGrantTarget:
+    return ForkGrantTarget(
+        gateway_id="gateway_c",
+        uri=thread_resource_uri(
+            WORKSPACE_ID, TARGET_SESSION, "thr_00000000400070008000000000000001", gateway_authority="gateway_c",
+        ),
+        fork_role="source" if request.param == "source" else "target",
+    )
+
+
+@pytest.fixture
+def fork_preimage(grant_request: dict[str, object], fork_grant_target: ForkGrantTarget) -> dict[str, object]:
+    source_uri = fork_grant_target.uri if fork_grant_target.fork_role == "source" else thread_resource_uri(
+        WORKSPACE_ID, TARGET_SESSION, "thr_00000000400070008000000000000002", gateway_authority="gateway_b",
+    )
+    target_uri = fork_grant_target.uri if fork_grant_target.fork_role == "target" else session_resource_uri(
+        WORKSPACE_ID, TARGET_SESSION, gateway_authority="gateway_b",
+    )
+    return {
+        **{key: value for key, value in grant_request.items() if key != "session_id"},
+        "operation": "fork_" + fork_grant_target.fork_role,
+        "target": fork_grant_target.to_payload(),
+        "body": {
+            "source_gateway_id": "gateway_b", "fork_target": fork_grant_target.to_payload(),
+            "action": "intent" if fork_grant_target.fork_role == "source" else "create",
+            "request": {
+                "idempotency_key": "fork-grant-exact-child", "source_uri": source_uri,
+                "target_container_uri": target_uri, "creation_kind": "new_child_thread",
+                "source_view_id": "view-fixed", "source_view_revision": 7,
+                "anchor_item_id": None, "mode": "full_rollout_copy",
+            },
+        },
+    }
+
+
+def test_fork_grant_roundtrip_binds_role_target_and_complete_request(
+    tmp_path: Path, fork_grant_target: ForkGrantTarget, fork_preimage: dict[str, object],
+) -> None:
+    operation: OperationKind = "fork_source" if fork_grant_target.fork_role == "source" else "fork_target"
+    grant = sign_grant(
+        private_key=load_or_create_signing_key(tmp_path), grant_kind="operation",
+        issuer_gateway_id="gateway_hub", origin_gateway_id="gateway_b", audience_gateway_id="gateway_c",
+        transit_path=("gateway_b", "gateway_hub", "gateway_c"), request_id="req", principal_ref="prn_b",
+        request_preimage=fork_preimage, lifetime_seconds=30, target=fork_grant_target, operation=operation,
+    )
+    decoded = FederationGrant.decode(grant.encode())
+    assert isinstance(decoded.target, ForkGrantTarget) and decoded.target == fork_grant_target
+    assert decoded.operation == operation and decoded.encode() == grant.encode()
+    verify_grant(
+        decoded, issuer=_identity(tmp_path, "gateway_hub"), local_gateway_id="gateway_c",
+        expected_kind="operation", request_preimage=fork_preimage, expected_origin="gateway_b",
+        expected_path=("gateway_b", "gateway_hub", "gateway_c"),
+    )
+    for field in ("source_uri", "target_container_uri", "creation_kind", "source_view_id", "source_view_revision", "anchor_item_id"):
+        changed = deepcopy(fork_preimage)
+        changed["body"]["request"][field] = "changed"
+        with pytest.raises(FederationError) as error:
+            verify_grant(
+                decoded, issuer=_identity(tmp_path, "gateway_hub"), local_gateway_id="gateway_c",
+                expected_kind="operation", request_preimage=changed,
+            )
+        assert error.value.code == FEDERATION_GRANT_INVALID_SIGNATURE
+    for field in ("gateway_id", "uri", "fork_role"):
+        changed = deepcopy(fork_preimage)
+        changed["target"][field] = "changed"
+        with pytest.raises(FederationError) as error:
+            verify_grant(
+                decoded, issuer=_identity(tmp_path, "gateway_hub"), local_gateway_id="gateway_c",
+                expected_kind="operation", request_preimage=changed,
+            )
+        assert error.value.code == FEDERATION_GRANT_INVALID_SIGNATURE
+
+
+@pytest.mark.parametrize("operation", ["send", "read", "wait", "reply"])
+def test_fork_grant_cannot_be_signed_with_read_or_communication_capability(
+    tmp_path: Path, fork_grant_target: ForkGrantTarget, fork_preimage: dict[str, object], operation: OperationKind,
+) -> None:
+    with pytest.raises(FederationError) as error:
+        sign_grant(
+            private_key=load_or_create_signing_key(tmp_path), grant_kind="operation",
+            issuer_gateway_id="gateway_hub", origin_gateway_id="gateway_b", audience_gateway_id="gateway_c",
+            transit_path=("gateway_b", "gateway_hub", "gateway_c"), request_id="req", principal_ref="prn_b",
+            request_preimage=fork_preimage, lifetime_seconds=30, target=fork_grant_target, operation=operation,
+        )
+    assert error.value.code == FEDERATION_GRANT_KIND_MISMATCH
+    opposite: OperationKind = "fork_target" if fork_grant_target.fork_role == "source" else "fork_source"
+    with pytest.raises(FederationError) as error:
+        validate_grant_operation(fork_grant_target, opposite)
+    assert error.value.code == FEDERATION_GRANT_KIND_MISMATCH
+
+
+@pytest.fixture
+def read_only_fork_relay() -> FederationRpcService:
+    return FederationRpcService(
+        gateway_id="gateway_c",
+        policy_store=FederationPolicyStore(initial={
+            "default_effect": "deny", "rules": [{"capability": "read", "effect": "allow"}],
+        }),
+        control_store=Mock(), signing_key=Mock(), catalog=Mock(),
+        session_main=Mock(execute=AsyncMock(side_effect=AssertionError("未获 fork 权限不得访问业务 owner"))),
+        credential_store=Mock(),
+    )
+
+
+async def test_real_relay_owner_denies_fork_when_only_read_is_allowed(
+    read_only_fork_relay: FederationRpcService, fork_grant_target: ForkGrantTarget, fork_preimage: dict[str, object],
+) -> None:
+    operation: OperationKind = "fork_source" if fork_grant_target.fork_role == "source" else "fork_target"
+    assert read_only_fork_relay.policy_store.snapshot.evaluate(
+        capability="read", origin_gateway_id="gateway_c", principal_ref="prn_c",
+    )
+    frozen_body = fork_preimage["body"]
+    assert isinstance(frozen_body, dict)
+    body = {**frozen_body, "source_gateway_id": read_only_fork_relay.gateway_id}
+    with pytest.raises(FederationError) as error:
+        await read_only_fork_relay.relay_operation(
+            target=fork_grant_target, operation=operation, body=body,
+        )
+    assert error.value.code == FEDERATION_AUTHORIZATION_REVOKED
+    assert error.value.detail["capability"] == operation
+
+
+async def test_real_relay_owner_reports_unreachable_fork_target(
+    read_only_fork_relay: FederationRpcService, fork_grant_target: ForkGrantTarget, fork_preimage: dict[str, object],
+) -> None:
+    read_only_fork_relay.policy_store.publish(default_policy_payload())
+    target = ForkGrantTarget(
+        gateway_id="gateway_offline",
+        uri=thread_resource_uri(
+            WORKSPACE_ID, TARGET_SESSION, "thr_00000000400070008000000000000001", gateway_authority="gateway_offline",
+        ),
+        fork_role=fork_grant_target.fork_role,
+    )
+    operation: OperationKind = "fork_source" if target.fork_role == "source" else "fork_target"
+    frozen_body = fork_preimage["body"]
+    assert isinstance(frozen_body, dict)
+    frozen_request = frozen_body["request"]
+    assert isinstance(frozen_request, dict)
+    uri_field = "source_uri" if target.fork_role == "source" else "target_container_uri"
+    body = {
+        **frozen_body, "source_gateway_id": read_only_fork_relay.gateway_id,
+        "fork_target": target.to_payload(), "request": {**frozen_request, uri_field: target.uri},
+    }
+    with pytest.raises(FederationError) as error:
+        await read_only_fork_relay.relay_operation(target=target, operation=operation, body=body)
+    assert error.value.code == FEDERATION_CHANNEL_CLOSED
+
+
+def test_signed_read_grant_target_cannot_authorize_fork(
+    tmp_path: Path, grant_request: dict[str, object], context_grant_target: ContextGrantTarget,
+) -> None:
+    fields = {key: context_grant_target.to_payload()[key] for key in ("resource_identity", "uri", "scope")}
+    preimage = {
+        **{key: value for key, value in grant_request.items() if key != "session_id"},
+        "operation": "read", "target": context_grant_target.to_payload(),
+        "body": {
+            "source_gateway_id": "gateway_b", "resource_target": context_grant_target.to_payload(),
+            "read": {**fields, "view": "inventory" if context_grant_target.scope == "gateway" else "information"},
+        },
+    }
+    grant = sign_grant(
+        private_key=load_or_create_signing_key(tmp_path), grant_kind="operation",
+        issuer_gateway_id="gateway_hub", origin_gateway_id="gateway_b", audience_gateway_id="gateway_c",
+        transit_path=("gateway_b", "gateway_hub", "gateway_c"), request_id="req", principal_ref="prn_b",
+        request_preimage=preimage, lifetime_seconds=30, target=context_grant_target, operation="read",
+    )
+    decoded = FederationGrant.decode(grant.encode())
+    assert isinstance(decoded.target, ContextGrantTarget)
+    verify_grant(
+        decoded, issuer=_identity(tmp_path, "gateway_hub"), local_gateway_id="gateway_c",
+        expected_kind="operation", request_preimage=preimage,
+    )
+    operations: tuple[OperationKind, ...] = ("fork_source", "fork_target")
+    for operation in operations:
+        with pytest.raises(FederationError) as error:
+            validate_grant_operation(decoded.target, operation)
+        assert error.value.code == FEDERATION_GRANT_KIND_MISMATCH
