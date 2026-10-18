@@ -608,7 +608,7 @@ async def test_fork_deadline_timeout_keeps_operation_armed_until_watchdog_termin
         await asyncio.Event().wait()
 
     operation_task = asyncio.create_task(operation())
-    with pytest.raises(ForkDeadlineExceeded):
+    with pytest.raises(ForkDeadlineExceeded, match="backend_state=unknown"):
         await deadline.wait(operation_task, "blocked-operation")
 
     assert operation_started.is_set()
@@ -621,6 +621,49 @@ async def test_fork_deadline_timeout_keeps_operation_armed_until_watchdog_termin
     operation_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await operation_task
+
+
+@pytest.mark.asyncio
+async def test_fork_deadline_caller_cancellation_waits_for_operation_cleanup(
+    fork_deadlines: ForkDeadlineRegistry,
+) -> None:
+    deadline = fork_deadlines.for_operation("target-uri", "fork-caller-cancellation-probe")
+    operation_started = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    operation_cleaned = asyncio.Event()
+    operation_task: asyncio.Task[None] | None = None
+
+    async def operation() -> None:
+        nonlocal operation_task
+        operation_task = asyncio.current_task()
+        operation_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cleanup_started.set()
+            await release_cleanup.wait()
+            operation_cleaned.set()
+            raise
+
+    waiting = asyncio.create_task(deadline.wait(operation(), "blocked-operation"))
+    await asyncio.wait_for(operation_started.wait(), timeout=1)
+    waiting.cancel("caller cancelled fork deadline wait")
+    try:
+        await asyncio.wait_for(cleanup_started.wait(), timeout=1)
+        assert not waiting.done(), "deadline wait must remain pending through operation cleanup"
+        assert not operation_cleaned.is_set()
+        release_cleanup.set()
+        with pytest.raises(asyncio.CancelledError, match="caller cancelled fork deadline wait"):
+            await waiting
+        assert operation_cleaned.is_set()
+    finally:
+        release_cleanup.set()
+        if operation_task is not None and not operation_task.done():
+            operation_task.cancel()
+        if not waiting.done():
+            waiting.cancel()
+        await asyncio.gather(waiting, *([operation_task] if operation_task is not None else []), return_exceptions=True)
 
 
 @dataclass

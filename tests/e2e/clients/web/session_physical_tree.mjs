@@ -6,6 +6,7 @@ import { beginForkSubmissionDeadline, bindForkOperationDeadline, closeForkDeadli
   waitForForkOperation } from "../../../support/e2e-test-control.mjs";
 
 const FORK_OPERATION_TIMEOUT_MS = 60_000;
+const FORK_POST_RESPONSE_VALIDATION_TIMEOUT_MS = 60_000;
 
 function requiredEnvironment(name) {
   const value = process.env[name];
@@ -43,13 +44,15 @@ let sessionMainActionOpenedCatalogSession = false;
 let folderMainActionToggledExpansion = false;
 
 async function localToken() {
-  return page.evaluate(async () => {
-    const response = await fetch("/api/gateway/auth/local-credential");
+  return page.evaluate(async (timeoutMs) => {
+    const response = await fetch("/api/gateway/auth/local-credential", {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
     if (!response.ok) throw new Error(`获取本地凭据失败: HTTP ${response.status}`);
     const payload = await response.json();
     if (typeof payload?.data?.token !== "string") throw new Error("本地凭据缺少 token");
     return payload.data.token;
-  });
+  }, FORK_POST_RESPONSE_VALIDATION_TIMEOUT_MS);
 }
 
 async function loadForkThreadHistory(sessionId, threadId) {
@@ -65,6 +68,7 @@ async function loadForkThreadHistory(sessionId, threadId) {
           "X-BoxTeam-Workspace-Id": workspaceId,
         },
         body: JSON.stringify({ direction: "tail", turns: 256 }),
+        signal: AbortSignal.timeout(FORK_POST_RESPONSE_VALIDATION_TIMEOUT_MS),
         credentials: "include",
       },
     );
@@ -495,22 +499,32 @@ try {
   const forkRequestId = forkResponse.headers()["x-request-id"];
   assert.ok(forkRequestId, "fork API 响应缺少 X-Request-ID");
   assert.equal(forkPayload?.request_id, forkRequestId, "fork API 响应体与 X-Request-ID 不一致");
-  assert.deepEqual([forkRequest.source_uri, forkRequest.source_view_id, forkRequest.source_view_revision, forkRequest.anchor_item_id],
-    [point.source_uri, point.source_view_id, point.source_view_revision, point.anchor_item_id]);
-  assert.deepEqual([forkRequest.creation_kind, forkRequest.target_container_uri, forkRequest.resources],
-    ["new_child_thread", point.child_container_uri, []]);
+  assert.equal(forkRequest.idempotency_key, forkDeadline.operationKey);
+  assert.deepEqual([forkRequest.source_uri, forkRequest.source_view_id, forkRequest.source_view_revision,
+    forkRequest.anchor_item_id, forkRequest.mode, forkRequest.anchor_mode],
+  [prefixPoint.source_uri, prefixPoint.source_view_id, prefixPoint.source_view_revision,
+    prefixPoint.anchor_item_id, "view_prefix_fork", "inclusive"]);
+  assert.deepEqual([forkRequest.creation_kind, forkRequest.target_container_uri,
+    forkRequest.title, forkRequest.relationship, forkRequest.resources, forkRequest.goal],
+  ["new_child_thread", point.child_container_uri, "目录入口的上下文分支", "detached", [], null]);
   const fork = forkPayload.data;
   assert.equal(fork.session.session_id, fixture.parentSessionId);
-  assert.equal(fork.creation_kind, "new_child_thread");
+  assert.deepEqual([fork.creation_kind, fork.source_uri, fork.source_view_id, fork.source_view_revision,
+    fork.anchor_item_id, fork.mode],
+  [forkRequest.creation_kind, forkRequest.source_uri, forkRequest.source_view_id,
+    forkRequest.source_view_revision, forkRequest.anchor_item_id, forkRequest.mode]);
+  assert.equal(typeof fork.thread_id, "string");
+  assert.ok(fork.thread_id.length > 0);
+  assert.equal(fork.session.workspace_id, fixture.parentWorkspaceId);
   assert.notEqual(fork.thread_id, fork.session.thread_id);
-  assert.notEqual(fork.thread_uri, point.child_container_uri);
+  assert.equal(fork.thread_uri, `${point.child_container_uri}/threads/${fork.thread_id}`);
+  assert.equal(Array.isArray(fork.resources), true);
+  assert.deepEqual(fork.resources.filter((resource) => resource.owner_reference), [],
+    "请求未选择 live owner 时终态响应不能附带额外 owner receipt");
   forkThreadId = fork.thread_id;
   forkThreadUri = fork.thread_uri;
-  const durableHistory = await waitForForkOperation(
-    loadForkThreadHistory(fork.session.session_id, fork.thread_id),
-    forkDeadline,
-    "确认 fork Thread 历史已持久化",
-  );
+  await forkDeadline.complete();
+  const durableHistory = await loadForkThreadHistory(fork.session.session_id, fork.thread_id);
   assert.equal(durableHistory.data.thread_id, fork.thread_id);
   assert.ok(durableHistory.data.items.length > 0, "持久 fork Thread 必须读回来源历史 Turn");
   forkDurableHistory = {
@@ -519,13 +533,8 @@ try {
     sourceViewRevision: durableHistory.data.source_view_revision,
     turnCount: durableHistory.data.items.length,
   };
-  await waitForForkOperation(
-    page.locator(`.child-thread-conversation[data-thread-id="${forkThreadId}"]`)
-      .waitFor({ state: "visible", timeout: 0 }),
-    forkDeadline,
-    "显示已持久 fork Thread",
-  );
-  await forkDeadline.complete();
+  await page.locator(`.child-thread-conversation[data-thread-id="${forkThreadId}"]`)
+    .waitFor({ state: "visible", timeout: FORK_POST_RESPONSE_VALIDATION_TIMEOUT_MS });
   await parentRow.waitFor({ state: "visible", timeout: 15_000 });
   assert.equal(await parentRow.getAttribute("aria-current"), "true");
 

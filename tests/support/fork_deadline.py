@@ -163,7 +163,15 @@ class ForkOperationDeadline:
                 awaitable.close()
             raise self._timeout()
         task = asyncio.ensure_future(awaitable)
-        done, _ = await asyncio.wait({task}, timeout=remaining if remaining > 0 else None)
+        try:
+            done, _ = await asyncio.wait({task}, timeout=remaining if remaining > 0 else None)
+        except asyncio.CancelledError:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            raise
         if task not in done:
             if self._completed:
                 return await task
