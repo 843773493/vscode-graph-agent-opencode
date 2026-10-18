@@ -494,11 +494,34 @@ try {
   const forkResponse = await waitForForkOperation(forkResponsePromise, forkDeadline, "fork POST 响应头");
   assert.equal(forkResponse.request(), forkPostRequest, "fork 响应必须属于唯一已观察 POST");
   const forkResponseText = await waitForForkOperation(forkResponse.text(), forkDeadline, "fork POST 响应正文");
-  if (!forkResponse.ok()) throw new Error(`创建上下文子会话失败: ${forkResponseText}`);
-  const forkPayload = JSON.parse(forkResponseText);
+  const forkResponseStatus = forkResponse.status();
+  let forkPayload;
+  try {
+    forkPayload = JSON.parse(forkResponseText);
+  } catch (error) {
+    if (!forkResponse.ok()) {
+      throw new Error(`创建上下文子会话失败 HTTP ${forkResponseStatus}: ${forkResponseText}`);
+    }
+    throw error;
+  }
   const forkRequestId = forkResponse.headers()["x-request-id"];
-  assert.ok(forkRequestId, "fork API 响应缺少 X-Request-ID");
-  assert.equal(forkPayload?.request_id, forkRequestId, "fork API 响应体与 X-Request-ID 不一致");
+  if (!forkRequestId || forkPayload?.request_id !== forkRequestId) {
+    if (!forkResponse.ok()) {
+      throw new Error(
+        `创建上下文子会话失败 HTTP ${forkResponseStatus}: ${forkResponseText}; `
+        + "fork API 响应 request_id 缺失或不一致",
+      );
+    }
+    assert.ok(forkRequestId, "fork API 响应缺少 X-Request-ID");
+    assert.equal(forkPayload?.request_id, forkRequestId, "fork API 响应体与 X-Request-ID 不一致");
+  }
+  if (!forkResponse.ok()) {
+    if (forkResponseStatus >= 400 && forkResponseStatus < 500) {
+      await forkDeadline.complete();
+      throw new Error(`创建上下文子会话失败: ${forkResponseText}`);
+    }
+    throw new Error(`创建上下文子会话失败 HTTP ${forkResponseStatus}: ${forkResponseText}`);
+  }
   assert.equal(forkRequest.idempotency_key, forkDeadline.operationKey);
   assert.deepEqual([forkRequest.source_uri, forkRequest.source_view_id, forkRequest.source_view_revision,
     forkRequest.anchor_item_id, forkRequest.mode, forkRequest.anchor_mode],

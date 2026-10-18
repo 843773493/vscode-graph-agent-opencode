@@ -93,10 +93,12 @@ function section8SelectionContract(raw) {
 
 const messageStreamDiagnosticsSelfTest = process.argv.includes("--message-stream-diagnostics-self-test");
 const forkDeadlineClassifierSelfTest = process.argv.includes("--fork-deadline-classifier-self-test");
-if (messageStreamDiagnosticsSelfTest && forkDeadlineClassifierSelfTest) {
-  throw new Error("fork deadline 与 message stream self-test 不能同时选择");
+const forkPeerContextCleanupSelfTest = process.argv.includes("--fork-peer-context-cleanup-self-test");
+if ([messageStreamDiagnosticsSelfTest, forkDeadlineClassifierSelfTest, forkPeerContextCleanupSelfTest].filter(Boolean).length > 1) {
+  throw new Error("一次只能选择一个 MJS self-test");
 }
-const standaloneSelfTest = messageStreamDiagnosticsSelfTest || forkDeadlineClassifierSelfTest;
+const standaloneSelfTest = messageStreamDiagnosticsSelfTest || forkDeadlineClassifierSelfTest
+  || forkPeerContextCleanupSelfTest;
 const section8Selection = standaloneSelfTest
   ? null
   : section8SelectionContract(process.env.BOXTEAM_E2E_SECTION8_FOCUS);
@@ -3930,6 +3932,68 @@ function forkOperationId(request) {
   return "fork-" + createHash("sha256").update(request.idempotency_key).digest("hex");
 }
 
+async function closeForkPeerContexts(contexts, primaryError, hasPrimaryError) {
+  const closeErrors = [];
+  for (const peerContext of [...contexts].reverse()) {
+    try {
+      await peerContext.close();
+    } catch (error) {
+      closeErrors.push(error);
+    }
+  }
+  if (closeErrors.length === 0) return;
+
+  const cleanupMessage = `fork peer context 关闭失败: ${closeErrors.map(String).join("; ")}`;
+  if (hasPrimaryError && primaryError instanceof Error) {
+    primaryError.message = `${primaryError.message}\n${cleanupMessage}`;
+    return;
+  }
+  if (hasPrimaryError) {
+    throw new AggregateError([primaryError, ...closeErrors], `${String(primaryError)}\n${cleanupMessage}`, {
+      cause: primaryError,
+    });
+  }
+  if (closeErrors.length === 1) throw closeErrors[0];
+  throw new AggregateError(closeErrors, cleanupMessage);
+}
+
+async function runForkPeerContextCleanupSelfTest() {
+  const primaryError = new Error("fork operation deadline exceeded");
+  const closeErrors = [new Error("peer C already closed"), new Error("peer A close failed")];
+  const closeOrder = [];
+  const contexts = ["A", "B", "C"].map((name) => ({
+    async close() {
+      closeOrder.push(name);
+      if (name === "C") throw closeErrors[0];
+      if (name === "A") throw closeErrors[1];
+    },
+  }));
+
+  await assert.rejects(async () => {
+    let capturedError;
+    let hasPrimaryError = false;
+    try {
+      throw primaryError;
+    } catch (error) {
+      capturedError = error;
+      hasPrimaryError = true;
+      throw error;
+    } finally {
+      await closeForkPeerContexts(contexts, capturedError, hasPrimaryError);
+    }
+  }, (error) => error === primaryError
+    && error.message.startsWith("fork operation deadline exceeded")
+    && error.message.includes(String(closeErrors[0]))
+    && error.message.includes(String(closeErrors[1])));
+  assert.deepEqual(closeOrder, ["C", "B", "A"], "单个关闭失败后仍必须尝试关闭剩余 Context");
+
+  const standaloneCloseError = new Error("peer context close failed");
+  await assert.rejects(
+    closeForkPeerContexts([{ close: async () => { throw standaloneCloseError; } }], undefined, false),
+    (error) => error === standaloneCloseError,
+  );
+}
+
 async function forkDeadline(request, source, targetSurface, stage = "fork_context POST") {
   assert.equal(typeof request.idempotency_key, "string");
   let deadline = forkOperationDeadlines.get(request.idempotency_key);
@@ -4033,14 +4097,34 @@ function forkContainerUriIdentity(uri) {
     kind: match.groups.kind, container: match.groups.container ?? null, thread: match.groups.thread ?? null };
 }
 
-function forkResponseTargetsFrozenRequest(payload, request) {
+function forkUriGatewayIdentity(identity, localGatewayId) {
+  return identity.gateway ?? localGatewayId ?? null;
+}
+
+function sameForkUriAuthority(identities, localGatewayId) {
+  const [first, ...rest] = identities;
+  return identities.every((identity) => identity)
+    && rest.every((identity) => forkUriGatewayIdentity(identity, localGatewayId)
+      === forkUriGatewayIdentity(first, localGatewayId));
+}
+
+function sameForkContainerUriIdentity(leftUri, rightUri, localGatewayId) {
+  const left = forkContainerUriIdentity(leftUri);
+  const right = forkContainerUriIdentity(rightUri);
+  return sameForkUriAuthority([left, right], localGatewayId)
+    && left.workspace === right.workspace && left.kind === right.kind
+    && left.container === right.container && left.thread === right.thread;
+}
+
+function forkResponseTargetsFrozenRequest(payload, request, localGatewayId) {
   const fork = payload?.data;
   const requestedTarget = forkContainerUriIdentity(request?.target_container_uri);
   const sessionUri = forkContainerUriIdentity(fork?.session?.uri);
   const threadUri = forkContainerUriIdentity(fork?.thread_uri);
   if (!requestedTarget || !sessionUri || !threadUri
       || fork.creation_kind !== request.creation_kind || fork.mode !== request.mode
-      || fork.source_uri !== request.source_uri || fork.source_view_id !== request.source_view_id
+      || !sameForkContainerUriIdentity(request.source_uri, fork.source_uri, localGatewayId)
+      || fork.source_view_id !== request.source_view_id
       || fork.source_view_revision !== request.source_view_revision
       || (fork.anchor_item_id ?? null) !== (request.anchor_item_id ?? null)
       || typeof fork.session?.session_id !== "string" || typeof fork.session?.workspace_id !== "string"
@@ -4049,9 +4133,9 @@ function forkResponseTargetsFrozenRequest(payload, request) {
       || requestedTarget.workspace !== sessionUri.workspace || requestedTarget.workspace !== threadUri.workspace
       || sessionUri.kind !== "session" || sessionUri.container !== fork.session.session_id || sessionUri.thread !== null
       || threadUri.kind !== "session" || threadUri.container !== fork.session.session_id
-      || threadUri.thread !== fork.thread_id) return false;
-  if (requestedTarget.gateway !== null && threadUri.gateway !== requestedTarget.gateway) return false;
-  if (sessionUri.gateway !== null && sessionUri.gateway !== threadUri.gateway) return false;
+      || threadUri.thread !== fork.thread_id
+      || threadUri.gateway !== (requestedTarget.gateway ?? localGatewayId ?? null)
+      || (sessionUri.gateway !== null && sessionUri.gateway !== threadUri.gateway)) return false;
   if (request.creation_kind === "new_child_thread") {
     return requestedTarget.kind === "session" && requestedTarget.container !== null
       && fork.session.session_id === requestedTarget.container;
@@ -4069,8 +4153,8 @@ function sameForkOwnerReference(left, right) {
     && left?.workspace_id === right?.workspace_id && left?.expected_revision === right?.expected_revision;
 }
 
-function hasTerminalForkOwnerReceipt(payload, request) {
-  if (!forkResponseTargetsFrozenRequest(payload, request)) return false;
+function hasTerminalForkOwnerReceipt(payload, request, localGatewayId) {
+  if (!forkResponseTargetsFrozenRequest(payload, request, localGatewayId)) return false;
   const requested = Array.isArray(request.resources) ? request.resources.filter((resource) => resource.owner_reference) : [];
   const receipts = Array.isArray(payload.data.resources)
     ? payload.data.resources.filter((resource) => resource.owner_reference) : [];
@@ -4095,25 +4179,28 @@ async function remainingForkDeadlineMs(deadline) {
   return deadline.backendCompleted ? null : deadline.remainingMs();
 }
 
-function isResourceIndependentForkRejection(status, payload, request) {
+function isTerminalForkRejection(status, payload, request) {
   if (status < 400 || status >= 500) return false;
   const selected = Array.isArray(request?.resources)
     ? request.resources.filter((resource) => resource.owner_reference && resource.action !== "omit") : [];
-  return selected.length === 0
-    && liveForkResources(payload).every((resource) => resource.operation_state === "not_dispatched");
+  if (selected.length > 0) {
+    return status === 400 && typeof payload?.detail === "string"
+      && payload.detail.startsWith("fork_live_resource_rejected:");
+  }
+  return liveForkResources(payload).every((resource) => resource.operation_state === "not_dispatched");
 }
 
-async function classifyForkResponse(deadline, status, payload, request) {
+async function classifyForkResponse(deadline, status, payload, request, localGatewayId) {
   if (status >= 500 || status < 200 || status >= 300 && status < 400) return "unknown";
   if (status >= 400) {
-    if (isResourceIndependentForkRejection(status, payload, request)) {
+    if (isTerminalForkRejection(status, payload, request)) {
       await finishForkDeadline(deadline);
       return "completed";
     }
     return "known";
   }
 
-  if (hasTerminalForkOwnerReceipt(payload, request)) {
+  if (hasTerminalForkOwnerReceipt(payload, request, localGatewayId)) {
     await finishForkDeadline(deadline);
     return "completed";
   }
@@ -4121,23 +4208,28 @@ async function classifyForkResponse(deadline, status, payload, request) {
 }
 
 async function runForkDeadlineClassifierSelfTest() {
+  const localGatewayId = "gateway-local";
+  const testDeadlines = [];
   const createDeadline = (operationKey) => {
     const deadline = { operationKey, completed: 0, remainingReads: 0,
       async complete() { this.completed += 1; },
       async remainingMs() { this.remainingReads += 1; return 12_345; } };
     forkOperationDeadlines.set(operationKey, deadline);
+    testDeadlines.push(deadline);
     return deadline;
   };
   const request = { idempotency_key: "first-partial",
-    source_uri: "boxteam://gateway/workspace/ws-source/resources/session/ses-source/threads/thr-source",
+    source_uri: "boxteam://workspace/ws-source/resources/session/ses-source/threads/thr-source",
     source_view_id: "view-source", source_view_revision: 7, anchor_item_id: null, mode: "full_rollout_copy",
-    creation_kind: "new_session_main", target_container_uri: "boxteam://gateway/workspace/ws-target/resources/session",
+    creation_kind: "new_session_main", target_container_uri: "boxteam://workspace/ws-target/resources/session",
     resources: [] };
   const makePayload = (resources = []) => ({ data: {
     session: { session_id: "ses-target", workspace_id: "ws-target",
       uri: "boxteam://workspace/ws-target/resources/session/ses-target", parent_session_id: null },
-    thread_id: "thr-target", thread_uri: "boxteam://gateway/workspace/ws-target/resources/session/ses-target/threads/thr-target",
-    creation_kind: request.creation_kind, source_uri: request.source_uri, source_view_id: request.source_view_id,
+    thread_id: "thr-target", thread_uri: `boxteam://${localGatewayId}/workspace/ws-target/resources/session/ses-target/threads/thr-target`,
+    creation_kind: request.creation_kind,
+    source_uri: `boxteam://${localGatewayId}/workspace/ws-source/resources/session/ses-source/threads/thr-source`,
+    source_view_id: request.source_view_id,
     source_view_revision: request.source_view_revision, anchor_item_id: null, mode: request.mode, resources,
   } });
   const rejectedResource = { owner_reference: { kind: "terminal", resource_id: "term-1",
@@ -4148,11 +4240,46 @@ async function runForkDeadlineClassifierSelfTest() {
     action: "reuse_reference", operation_state: "committed", availability: "available" };
 
   const rejected = createDeadline("rejected-4xx");
-  assert.equal(await classifyForkResponse(rejected, 422, { request_id: "req-4xx", detail: "invalid request" }, null), "completed");
+  assert.equal(await classifyForkResponse(rejected, 422, { request_id: "req-4xx", detail: "invalid request" }, null, localGatewayId), "completed");
   assert.equal(rejected.completed, 1, "无 live resource 的明确 4xx 必须结束预算");
 
+  const resourceRequest = { ...request, resources: [
+    { owner_reference: rejectedResource.owner_reference, action: "reuse_reference" },
+  ] };
+  const resourceRejection = createDeadline("selected-resource-rejection");
+  assert.equal(await classifyForkResponse(resourceRejection, 400,
+    { request_id: "req-resource-rejected", detail: "fork_live_resource_rejected: target mismatch" },
+    resourceRequest, localGatewayId), "completed");
+  assert.equal(resourceRejection.completed, 1, "后端明确拒绝已选 live resource 时必须结束原预算");
+  assert.equal(await remainingForkDeadlineMs(resourceRejection), null,
+    "明确的 live-resource 前置拒绝结束后不再读取 inactive deadline");
+  assert.equal(forkOperationDeadlines.has(resourceRejection.operationKey), false,
+    "明确的 live-resource 前置拒绝必须移除对应 watchdog token");
+
+  const unclassifiedResourceFailure = createDeadline("unclassified-selected-resource-4xx");
+  assert.equal(await classifyForkResponse(unclassifiedResourceFailure, 400,
+    { request_id: "req-resource-unknown", detail: "fork_live_revision_conflict: revision changed" },
+    resourceRequest, localGatewayId), "known");
+  assert.equal(unclassifiedResourceFailure.completed, 0,
+    "其它带资源的 4xx 不能仅凭状态码结束预算");
+  assert.equal(await remainingForkDeadlineMs(unclassifiedResourceFailure), 12_345,
+    "其它带资源的 4xx 仍保留活动 deadline");
+  assert.equal(forkOperationDeadlines.has(unclassifiedResourceFailure.operationKey), true,
+    "未识别的资源拒绝不能清除 watchdog token");
+
+  const wrongStatusResourceRejection = createDeadline("wrong-status-resource-rejection");
+  assert.equal(await classifyForkResponse(wrongStatusResourceRejection, 422,
+    { request_id: "req-resource-wrong-status", detail: "fork_live_resource_rejected: target mismatch" },
+    resourceRequest, localGatewayId), "known");
+  assert.equal(wrongStatusResourceRejection.completed, 0,
+    "只有后端约定的 HTTP 400 才能结算 live-resource 前置拒绝");
+  assert.equal(await remainingForkDeadlineMs(wrongStatusResourceRejection), 12_345,
+    "相同错误前缀但不是 HTTP 400 时仍保留活动 deadline");
+  assert.equal(forkOperationDeadlines.has(wrongStatusResourceRejection.operationKey), true,
+    "相同错误前缀但不是 HTTP 400 时不能清除 watchdog token");
+
   const serverFailure = createDeadline("server-5xx");
-  assert.equal(await classifyForkResponse(serverFailure, 503, { request_id: "req-5xx" }, null), "unknown");
+  assert.equal(await classifyForkResponse(serverFailure, 503, { request_id: "req-5xx" }, null, localGatewayId), "unknown");
   assert.equal(serverFailure.completed, 0, "5xx 不得结束预算");
 
   const firstPartial = createDeadline("first-partial");
@@ -4161,7 +4288,7 @@ async function runForkDeadlineClassifierSelfTest() {
     { owner_reference: committedResource.owner_reference, action: "reuse_reference" },
   ];
   const firstPartialPayload = makePayload([rejectedResource, committedResource]);
-  assert.equal(await classifyForkResponse(firstPartial, 200, firstPartialPayload, request), "completed");
+  assert.equal(await classifyForkResponse(firstPartial, 200, firstPartialPayload, request, localGatewayId), "completed");
   assert.equal(firstPartial.completed, 1, "目标匹配且所有 live owner receipt 已提交或拒绝时结束首次 deadline");
   assert.equal(await remainingForkDeadlineMs(firstPartial), null,
     "终态回执结束原预算后，不再向 watchdog 查询 inactive token");
@@ -4172,20 +4299,22 @@ async function runForkDeadlineClassifierSelfTest() {
   const replayable = makePayload([
     { ...rejectedResource, operation_state: "dispatching" }, committedResource,
   ]);
-  assert.equal(await classifyForkResponse(retry, 200, replayable, request), "pending");
-  assert.equal(retry.completed, 0, "dispatching owner receipt 不得结束新重试的 deadline");
+  assert.equal(await classifyForkResponse(retry, 202, replayable, request, localGatewayId), "pending");
+  assert.equal(retry.completed, 0, "HTTP 202 与 dispatching owner receipt 不得结束新重试的 deadline");
   assert.equal(await remainingForkDeadlineMs(retry), 12_345,
-    "dispatching owner receipt 仍必须读取且保留 active 操作预算");
+    "HTTP 202 pending receipt 仍必须读取且保留 active 操作预算");
   assert.equal(retry.remainingReads, 1);
+  assert.equal(forkOperationDeadlines.has(retry.operationKey), true,
+    "HTTP 202 pending receipt 必须保留 watchdog token");
   const notDispatched = makePayload([
     { ...rejectedResource, operation_state: "not_dispatched" }, committedResource,
   ]);
-  assert.equal(await classifyForkResponse(retry, 200, notDispatched, request), "pending");
+  assert.equal(await classifyForkResponse(retry, 200, notDispatched, request, localGatewayId), "pending");
   assert.equal(retry.completed, 0, "not_dispatched owner receipt 不得结束新重试的 deadline");
-  assert.equal(await classifyForkResponse(retry, 503, firstPartialPayload, request), "unknown");
+  assert.equal(await classifyForkResponse(retry, 503, firstPartialPayload, request, localGatewayId), "unknown");
   assert.equal(retry.completed, 0, "partial retry 的 5xx 不得结束预算");
 
-  assert.equal(await classifyForkResponse(retry, 200, firstPartialPayload, request), "completed");
+  assert.equal(await classifyForkResponse(retry, 200, firstPartialPayload, request, localGatewayId), "completed");
   assert.equal(retry.completed, 1, "后续同 key 重试使用新 deadline，并凭 rejected terminal receipt 结束");
   assert.equal(await remainingForkDeadlineMs(retry), null,
     "后续同 key 重试收到终态回执后也不再查询 inactive deadline");
@@ -4195,21 +4324,60 @@ async function runForkDeadlineClassifierSelfTest() {
   const wrongTarget = createDeadline("wrong-target");
   const wrongTargetPayload = makePayload([rejectedResource, committedResource]);
   wrongTargetPayload.data.thread_uri = "boxteam://gateway/workspace/ws-other/resources/session/ses-target/threads/thr-target";
-  assert.equal(await classifyForkResponse(wrongTarget, 200, wrongTargetPayload, request), "pending");
+  assert.equal(await classifyForkResponse(wrongTarget, 200, wrongTargetPayload, request, localGatewayId), "pending");
   assert.equal(wrongTarget.completed, 0, "不属于冻结目标 workspace 的响应必须继续受 operation deadline 约束");
 
+  const sourceAuthorityMismatch = createDeadline("source-authority-mismatch");
+  const qualifiedSourceRequest = { ...request,
+    source_uri: "boxteam://gateway-request/workspace/ws-source/resources/session/ses-source/threads/thr-source" };
+  const sourceAuthorityMismatchPayload = makePayload([rejectedResource, committedResource]);
+  sourceAuthorityMismatchPayload.data.source_uri =
+    "boxteam://gateway-response/workspace/ws-source/resources/session/ses-source/threads/thr-source";
+  assert.equal(await classifyForkResponse(sourceAuthorityMismatch, 200, sourceAuthorityMismatchPayload,
+    qualifiedSourceRequest, localGatewayId), "pending");
+  assert.equal(sourceAuthorityMismatch.completed, 0, "显式来源 Gateway authority 不一致必须继续等待");
+
+  const remoteTarget = createDeadline("remote-target");
+  const remoteTargetRequest = { ...request,
+    target_container_uri: "boxteam://gateway-target/workspace/ws-target/resources/session" };
+  const remoteTargetPayload = makePayload([rejectedResource, committedResource]);
+  remoteTargetPayload.data.thread_uri =
+    "boxteam://gateway-target/workspace/ws-target/resources/session/ses-target/threads/thr-target";
+  assert.equal(remoteTargetPayload.data.session.uri,
+    "boxteam://workspace/ws-target/resources/session/ses-target", "remote Session URI 可省略 Gateway authority");
+  assert.equal(await classifyForkResponse(remoteTarget, 200, remoteTargetPayload,
+    remoteTargetRequest, localGatewayId), "completed");
+  assert.equal(remoteTarget.completed, 1, "remote Thread URI 与显式目标 Gateway 匹配时终态 owner 回执必须结束预算");
+
+  const targetAuthorityMismatch = createDeadline("target-authority-mismatch");
+  const qualifiedTargetRequest = { ...request,
+    target_container_uri: "boxteam://gateway-request/workspace/ws-target/resources/session" };
+  assert.equal(await classifyForkResponse(targetAuthorityMismatch, 200,
+    makePayload([rejectedResource, committedResource]), qualifiedTargetRequest, localGatewayId), "pending");
+  assert.equal(targetAuthorityMismatch.completed, 0, "显式目标 Gateway authority 不一致必须继续等待");
+
   const missingReceipt = createDeadline("missing-receipt");
-  assert.equal(await classifyForkResponse(missingReceipt, 200, makePayload([]), request), "pending");
+  assert.equal(await classifyForkResponse(missingReceipt, 200, makePayload([]), request, localGatewayId), "pending");
   assert.equal(missingReceipt.completed, 0, "缺少已选 live owner receipt 必须继续等待");
+
+  for (const [field, value] of [["kind", "browser"], ["resource_id", "term-other"],
+    ["workspace_id", "ws-other"], ["expected_revision", 5]]) {
+    const identityMismatch = createDeadline(`owner-identity-mismatch-${field}`);
+    const mismatchPayload = makePayload([
+      { ...rejectedResource, owner_reference: { ...rejectedResource.owner_reference, [field]: value } },
+      committedResource,
+    ]);
+    assert.equal(await classifyForkResponse(identityMismatch, 200, mismatchPayload, request, localGatewayId), "pending",
+      `owner receipt 的 ${field} 不匹配必须继续等待`);
+    assert.equal(identityMismatch.completed, 0, `owner receipt 的 ${field} 不匹配不得结束预算`);
+  }
 
   const resourceConflict = createDeadline("resource-4xx");
   assert.equal(await classifyForkResponse(resourceConflict, 409,
-    { data: { resources: [rejectedResource] } }, null), "known");
+    { data: { resources: [rejectedResource] } }, null, localGatewayId), "known");
   assert.equal(resourceConflict.completed, 0, "资源相关 4xx 不能冒充无资源副作用的明确拒绝");
 
-  for (const key of [rejected, serverFailure, firstPartial, retry, wrongTarget, missingReceipt, resourceConflict]) {
-    forkOperationDeadlines.delete(key.operationKey);
-  }
+  for (const deadline of testDeadlines) forkOperationDeadlines.delete(deadline.operationKey);
 }
 
 async function beginForkUiSubmission(page, source, targetSurface, sessionId, submit) {
@@ -4250,7 +4418,7 @@ async function beginForkUiSubmission(page, source, targetSurface, sessionId, sub
     const text = await waitForForkBudget(response.text(), boundDeadline, "fork POST 响应正文");
     const payload = text ? JSON.parse(text) : null;
     assertForkResponseRequestId(response, payload, "UI fork API");
-    const backendState = await classifyForkResponse(boundDeadline, response.status(), payload, body);
+    const backendState = await classifyForkResponse(boundDeadline, response.status(), payload, body, targetSurface.gatewayId);
     const durableHistory = response.status() >= 200 && response.status() < 300
       ? await readForkDurableHistory(targetSurface, payload, boundDeadline)
       : null;
@@ -4298,7 +4466,7 @@ async function requestForkResponse(source, request, targetSurface = source) {
   const body = text ? JSON.parse(text) : null;
   const requestId = assertForkResponseRequestId(response, body,
     `API /api/v1/sessions/${source.sessionId}/fork-context`);
-  const backendState = await classifyForkResponse(deadline, response.status(), body, request);
+  const backendState = await classifyForkResponse(deadline, response.status(), body, request, targetSurface.gatewayId);
   const durableHistory = response.status() >= 200 && response.status() < 300
     ? await readForkDurableHistory(targetSurface, body, deadline)
     : null;
@@ -5834,6 +6002,8 @@ async function runLiveResourceForks(surface, owners) {
     const before = await readCatalog(source, countsQuery);
     const rejected = await requestForkResponse(source, request);
     assert.equal(rejected.status, 400);
+    assert.equal(rejected.backendState, "completed", "已返回明确资源前置拒绝后必须结束该 fork deadline");
+    assert.equal(rejected.remainingMs, null, "明确资源前置拒绝完成后不能继续向 watchdog 暴露剩余时间");
     assert.match(rejected.body.detail, /^fork_live_resource_rejected:/);
     assert.deepEqual(await readCatalog(source, countsQuery), before, "thread 范围资源拒绝必须先于目标发布");
     assert.equal((await get(resource.resource_id)).retention_scope, "thread", "fork 不得自动 promote 原资源");
@@ -8259,6 +8429,8 @@ async function runSection8Product(browser, primaryPage) {
   const config = JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_NODES"));
   const surfaces = {};
   const contexts = [];
+  let primaryError;
+  let hasPrimaryError = false;
   try {
     for (const [name, node] of Object.entries(config)) {
       const peerContext = name === "a" ? null : await browserStartup(`browser_context_${name}`, () => browser.newContext({ viewport: { width: 1920, height: 1100 } }));
@@ -8286,8 +8458,12 @@ async function runSection8Product(browser, primaryPage) {
     }
     delete result.runningScenario;
     return facts;
+  } catch (error) {
+    primaryError = error;
+    hasPrimaryError = true;
+    throw error;
   } finally {
-    for (const peerContext of contexts.reverse()) await peerContext.close();
+    await closeForkPeerContexts(contexts, primaryError, hasPrimaryError);
   }
 }
 
@@ -8729,6 +8905,9 @@ if (messageStreamDiagnosticsSelfTest) {
 } else if (forkDeadlineClassifierSelfTest) {
   await runForkDeadlineClassifierSelfTest();
   process.stdout.write("fork deadline classifier self-test passed\n");
+} else if (forkPeerContextCleanupSelfTest) {
+  await runForkPeerContextCleanupSelfTest();
+  process.stdout.write("fork peer context cleanup self-test passed\n");
 } else {
 try {
   browser = await browserStartup("browser_launch", () => chromium.launch({ executablePath, headless: true, timeout: 30_000 }));

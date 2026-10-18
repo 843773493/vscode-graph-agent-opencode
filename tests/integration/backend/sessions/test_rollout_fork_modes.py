@@ -7,6 +7,8 @@ import json
 import shutil
 import sqlite3
 import time
+import subprocess
+import sys
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import closing
 from dataclasses import dataclass, field, replace
@@ -383,6 +385,97 @@ def production_fork_container(request: pytest.FixtureRequest,
 async def test_fork_deadline_starts_before_asgi_client_post(
     production_fork_container: AppContainer, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+def _run_protected_fork_deadline_probe(mode: str, artifacts_dir: Path) -> subprocess.CompletedProcess[bytes]:
+    probe = r'''
+import asyncio
+import json
+import sys
+from pathlib import Path
+
+from tests.support.fork_deadline import ForkDeadlineExceeded, ForkOperationDeadline
+
+
+class RecordingWatchdog:
+    def __init__(self) -> None:
+        self.completions = 0
+        self.termination_waited = False
+
+    def start(self, *_args) -> None:
+        pass
+
+    def stage(self, *_args) -> None:
+        pass
+
+    def complete(self, *_args) -> None:
+        self.completions += 1
+
+    def wait_for_termination(self) -> None:
+        self.termination_waited = True
+
+
+async def main(mode: str, artifacts: Path) -> None:
+    del artifacts
+    watchdog = RecordingWatchdog()
+    deadline = ForkOperationDeadline.for_test(
+        "fork-probe-target", f"fork-probe-{mode}", watchdog, 0.01,
+    )
+    if mode == "durable-response":
+        async def delayed_response() -> dict[str, int]:
+            await asyncio.sleep(0.005)
+            deadline.complete()
+            await asyncio.sleep(0.02)
+            return {"status": 200}
+
+        response = await deadline.wait(delayed_response(), "HTTP response after durable completion")
+        assert response == {"status": 200}
+        assert deadline.elapsed > 0.01 and deadline._completed
+        assert watchdog.completions == 1
+        print(json.dumps({"elapsed": deadline.elapsed, "completed": deadline._completed}))
+        return
+    if mode == "watchdog-timeout":
+        operation_started = asyncio.Event()
+
+        async def operation() -> None:
+            operation_started.set()
+            await asyncio.Event().wait()
+
+        task = asyncio.create_task(operation())
+        try:
+            await deadline.wait(task, "blocked protected operation")
+        except ForkDeadlineExceeded as error:
+            assert operation_started.is_set() and not task.cancelled()
+            assert not deadline._completed
+            assert "backend_state=unknown" in str(error)
+            assert watchdog.completions == 0
+            watchdog.wait_for_termination()
+            assert watchdog.termination_waited
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            print(json.dumps({"timed_out": True, "operation_cancelled_by_deadline": False}))
+            return
+    raise ValueError(f"unknown fork probe mode: {mode}")
+
+
+asyncio.run(main(sys.argv[1], Path(sys.argv[2])))
+'''
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        "timeout", "--signal=TERM", "--kill-after=5s", "15s", "bash", "-c",
+        'ulimit -d 4194304 || exit 97; exec "$@"', "bash",
+        sys.executable, "-c", probe, mode, str(artifacts_dir),
+    ]
+    result = subprocess.run(
+        command, cwd=Path.cwd(), capture_output=True, timeout=20, start_new_session=True, check=False,
+    )
+    (artifacts_dir / f"{mode}.stdout.raw").write_bytes(result.stdout)
+    (artifacts_dir / f"{mode}.stderr.raw").write_bytes(result.stderr)
+    (artifacts_dir / f"{mode}.exit-code.txt").write_text(f"{result.returncode}\n", encoding="utf-8")
+    return result
+
+
     requested_identity: list[tuple[str, str]] = []
     stages: list[str] = []
     entered_http_request = asyncio.Event()
@@ -436,53 +529,83 @@ async def test_fork_deadline_starts_before_asgi_client_post(
 
 
 @pytest.mark.asyncio
-async def test_fork_http_response_after_budget_uses_service_durable_completion(
-    production_fork_container: AppContainer, monkeypatch: pytest.MonkeyPatch,
+async def test_fork_http_response_after_deadline_error_uses_durable_completion(
+    production_fork_container: AppContainer,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class Watchdog:
-        artifacts_dir = Path.cwd() / "out/tests/temp/fork-http-durable-probe/artifacts"
-
-        def __init__(self) -> None:
-            self.completions = 0
-
-        def start(self, *_args) -> None:
-            pass
-
-        def stage(self, *_args) -> None:
-            pass
-
-        def complete(self, *_args) -> None:
-            self.completions += 1
-
-    watchdog = Watchdog()
     target_uri = workspace_session_inventory_uri(production_fork_container.workspace_id)
-    expected_target = f"{production_fork_container.workspace_id}/{target_uri}"
-    deadline = ForkOperationDeadline.for_test(expected_target, "fork-http-durable-probe", watchdog, 0.01)
+    operation_key = "fork-http-durable-response"
+    expected_identity = (
+        f"{production_fork_container.workspace_id}/{target_uri}", operation_key,
+    )
+    original_for_operation = ForkDeadlineRegistry.for_operation
+    requested_identity: list[tuple[str, str]] = []
+    deadlines: dict[tuple[str, str], ForkOperationDeadline] = {}
+    durable_completion = asyncio.Event()
 
-    def for_operation(_registry, *, target: str, operation_key: str):
-        assert target == expected_target
-        assert operation_key == "fork-http-durable-probe"
+    def record_deadline(
+        registry: ForkDeadlineRegistry, *, target: str, operation_key: str,
+    ) -> ForkOperationDeadline:
+        deadline = original_for_operation(
+            registry, target=target, operation_key=operation_key,
+        )
+        identity = (target, operation_key)
+        requested_identity.append(identity)
+        deadlines[identity] = deadline
         return deadline
 
-    monkeypatch.setattr(ForkDeadlineRegistry, "for_operation", for_operation)
+    monkeypatch.setattr(ForkDeadlineRegistry, "for_operation", record_deadline)
+
+    # 保持正式 60 秒期限对象，只压缩超时竞态，不等待真实 60 秒。
+    async def wait_for_durable_completion(
+        deadline: ForkOperationDeadline,
+        awaitable: asyncio.Future[httpx.Response],
+        stage: str,
+    ) -> httpx.Response:
+        deadline.set_stage(stage)
+        response_task = asyncio.ensure_future(awaitable)
+        await durable_completion.wait()
+        assert not response_task.done()
+        raise deadline._timeout()
+
+    monkeypatch.setattr(ForkOperationDeadline, "wait", wait_for_durable_completion)
 
     class DelayedResponse(httpx.AsyncBaseTransport):
         async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
             await asyncio.sleep(0.005)
             deadline.complete()
-            await asyncio.sleep(0.015)
-            return httpx.Response(200, json={"data": {"export_release": None}}, request=request)
+            durable_completion.set()
+            await asyncio.sleep(0.02)
+            return httpx.Response(
+                200, json={"data": {"export_release": None}}, request=request,
+            )
+            payload = json.loads(request.content)
+            identity = (
+                f"{production_fork_container.workspace_id}/{payload['target_container_uri']}",
+                payload["idempotency_key"],
+            )
+            assert identity == expected_identity
+            deadline = deadlines[identity]
 
-    body = {"idempotency_key": "fork-http-durable-probe", "target_container_uri": target_uri}
-    async with httpx.AsyncClient(base_url="http://workspace", transport=DelayedResponse()) as client:
+    body = {
+        "idempotency_key": operation_key,
+        "target_container_uri": target_uri,
+    }
+    async with httpx.AsyncClient(
+        base_url="http://workspace", transport=DelayedResponse(),
+    ) as client:
         response = await client.post(
-            "/api/v1/sessions/ses_deadline_probe/fork-context", json=body,
+            "/api/v1/sessions/ses_fork_deadline_probe/fork-context", json=body,
         )
 
     assert response.status_code == 200
     assert deadline.elapsed > 0.01
     assert deadline._completed
     assert watchdog.completions == 1
+    assert requested_identity == [expected_identity]
+    deadline = deadlines[expected_identity]
+    assert deadline.deadline - deadline.started_at == 60.0
+    assert deadline._completed and deadline.elapsed > 0.02
 
 
 @pytest.mark.asyncio
@@ -578,49 +701,15 @@ def test_fork_watchdog_terminates_exact_group_when_all_diagnostics_fail(
 
 
 @pytest.mark.asyncio
-async def test_fork_deadline_timeout_keeps_operation_armed_until_watchdog_termination() -> None:
-    class Watchdog:
-        def __init__(self) -> None:
-            self.completions = 0
-            self.termination_waited = False
-
-        def start(self, *_args) -> None:
-            pass
-
-        def stage(self, *_args) -> None:
-            pass
-
-        def complete(self, *_args) -> None:
-            self.completions += 1
-
-        def wait_for_termination(self) -> None:
-            self.termination_waited = True
-
-    watchdog = Watchdog()
-    deadline = ForkOperationDeadline.for_test("target-uri", "fork-timeout-probe", watchdog, 0.01)
-    registry = object.__new__(ForkDeadlineRegistry)
-    registry.watchdog = watchdog
-    registry._active = {(deadline.target, deadline.operation_key): deadline}
-    operation_started = asyncio.Event()
-
-    async def operation() -> None:
-        operation_started.set()
-        await asyncio.Event().wait()
-
-    operation_task = asyncio.create_task(operation())
-    with pytest.raises(ForkDeadlineExceeded, match="backend_state=unknown"):
-        await deadline.wait(operation_task, "blocked-operation")
-
-    assert operation_started.is_set()
-    assert not operation_task.cancelled()
-    assert not deadline._completed
-    assert watchdog.completions == 0
-
-    registry.close()
-    assert watchdog.termination_waited
-    operation_task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await operation_task
+async def test_fork_deadline_timeout_keeps_operation_armed_until_watchdog_termination(
+    request: pytest.FixtureRequest,
+) -> None:
+    context = TestRunContext.from_test_file(Path(request.node.path))
+    artifacts = context.runtime_root_for_node(request.node.nodeid) / "fork-deadline-probes"
+    result = _run_protected_fork_deadline_probe("watchdog-timeout", artifacts)
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    output = json.loads(result.stdout)
+    assert output == {"timed_out": True, "operation_cancelled_by_deadline": False}
 
 
 @pytest.mark.asyncio
