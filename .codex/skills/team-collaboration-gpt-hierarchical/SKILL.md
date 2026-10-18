@@ -12,13 +12,13 @@ description: 使用最多三个 Luna 协调子代理管理唯一核心 Sol 和�
 | 层级 | 模型与数量 | 责任 |
 | --- | --- | --- |
 | 主线程 | 用户选择的模型 | 用户沟通、范围、必要裁决；平时等待协调结果 |
-| 交付协调 child | `gpt-6-luna` / `max`，1 名 | 唯一交付负责人：派单、依赖、写租约、运行窗口、证据、固定候选、串行集成 |
+| 交付协调 child | `gpt-6-luna` / `max`，1 名 | 唯一业务协调负责人：派单、依赖、写租约、运行窗口、证据、固定候选与验收；Git 集成可分配给本轮唯一指定的集成者 |
 | 独审协调 child | `gpt-6-luna` / `max`，按需 1 名 | 前移消费者核查、安排未参与写入者审查、直接同交付协调者解决 finding |
 | 辅助协调 child | `gpt-6-luna` / `max`，按需 1 名 | 隔离小修、命名核查及其验证；交准确结果后停止，不接管核心 |
 | 核心 grandchild | `gpt-6.1-sol` / `max`，全队唯一 | 贯穿完整核心场景，同批迁齐声明、权威写入、查询、恢复、DTO、消费者和测试 |
 | 辅助 grandchildren | `gpt-6-luna` / `max` | 消费者及测试前提核查、独审、外围小修，并自行完成相关验证 |
 
-主线程最多直接管理 3 个 child；全部后代最多 15 个。长期实施至少保持 3 名有明确授权工作的 Luna，包含协调者；收尾按实际工作留人，不为凑人数扩大范围。只有交付协调者创建或续派唯一核心 Sol。child 可管理 grandchildren，孙层不继续派生。
+主线程最多直接管理 3 个 child；全部后代最多 15 个。业务协调者与唯一 Git 集成者可以分开，但集成职责须由本轮明确指定的既有成员承担，不额外突破直属 child 上限；作者和审查者不写 Git index。长期实施至少保持 3 名有明确授权工作的 Luna，包含协调者；收尾按实际工作留人，不为凑人数扩大范围。只有交付协调者创建或续派唯一核心 Sol。child 可管理 grandchildren，孙层不继续派生。
 
 切换旧团队时先结束旧写租约和在途运行；旧直系 Sol 停写交接后，再创建新的核心 grandchild。主线程不直接管理孙代理的日常实现或报告；真实阻塞需要主介入时，限定范围，处理后归还协调层。
 
@@ -38,7 +38,7 @@ start_delegated_task({
 
 模型 ID 不带 provider 前缀，不省略、不静默替换。候选列表不能单独证明不可用；实际调用失败保留原错误，明确受影响工作。后续派单不能改变成员原模型。
 
-交付协调者在本轮产物目录维护一份简短的当前接续记录：自己的 canonical ID 和职责、当前用户边界、成员 canonical ID/父级/角色/模型、唯一 Sol、写租约、在途命令、验收门及下一可执行动作。阶段变化即更新，不把旧流水当当前分配表。接续先读这份当前记录；最近一条局部请求不能替代整轮职责。成员 ID 必须来自本轮工具返回，续派目标须属于预定父级，不能按同名旧角色推测路径。
+交付协调者在本轮产物目录维护一份简短的当前接续记录：自己的 canonical ID 和职责、当前用户边界、成员 canonical ID/父级/角色/模型、唯一 Sol、写租约、在途命令、验收门及下一可执行动作。阶段变化即更新，不把旧流水当当前分配表。接续先读这份当前记录；上下文压缩或最后一条局部请求不重置既有职责与未变授权。成员 ID 必须来自本轮工具返回，续派目标须属于预定父级，不能按同名旧角色推测路径。
 
 completed 成员用 continue/followup 唤醒；send/deliver 只补运行中任务。收到 429 直接向原成员续发“继续”，不额外查状态、进程或模型，不创建替代者。其它错误据原件判断；持续不可用时报告影响，不无限重试或自行改环境配置。
 
@@ -46,7 +46,7 @@ completed 成员用 continue/followup 唤醒；send/deliver 只补运行中任�
 
 ## 实施与审查怎样衔接
 
-Sol 改完整核心场景；Luna 可在作者实施期只读当前源码与真实入口的消费者闭包（含 SQL 列、loader、恢复及测试 setup），将注明所读源码版本的观察交直属协调者收敛并与交付协调者、Sol 协同。隔离小修由 Luna 完成自己的相关验证，不交 Sol 补救。公共合同只设一个写入 owner。
+Sol 改完整核心场景；Luna 可在作者实施期只读当前源码与真实入口的消费者闭包（含 SQL 列、loader、恢复及测试 setup），将注明所读源码版本的观察交直属协调者收敛并与交付协调者、Sol 协同。按现有授权做源码只读核查时，读前后取 SHA 用来限定观察版本，不是审批门；授权未变时无需为此另向主线程申请许可。隔离小修由 Luna 完成自己的相关验证，不交 Sol 补救。公共合同只设一个写入 owner。
 
 一次授权覆盖该任务的必要实现、接线和受保护验证。协调者分配运行窗口后，作者可以连续完成临时诊断脚本、实际输入固定、运行与有证据的接线修正；不逐个脚本或 profile 设置 STOP→转交→二次授权。优先复用真实入口及有效 fixture，不为诊断自造另一套业务前提。临时观测只证明它实际覆盖的行为，人为锁竞争不等于复现产品持锁故障。
 
@@ -95,6 +95,6 @@ Git index 的创建、写入与状态变更由本轮唯一集成者负责，并�
 
 - RUN18 的审查 GO 绑定了工作树内容，没有核对最终提交中的 Python blob。`commit-tree-bce3fbf-final-001` 的外层 wrapper 退出 97：设置 `ulimit` 被拒，矩阵命令未启动；`final-002` 才实际启动，收集阶段以退出码 2 因 `test_rollout_fork_modes.py` 的 `IndentationError` 中止。同批 Ruff 输出报 F821 未定义 `sys`，普通修复提交 `cf56c0b` 才补齐。候选 diff 中 `DelayedResponse.handle_async_request` 先引用 `deadline`、后在同一局部作用域赋值；该缺陷属于 Ruff F823，故提交检查覆盖 F821/F823。私有索引 fixture 验证 staged 语法错误、F821/F823 会阻止提交，`commit -a` 在 staged 合法而工作树语法错误时会被拒绝且 HEAD 不变，staged 正确 blob 会按索引提交，合法 Python 变动可提交；这些检查不证明业务行为或测试提速，且要求环境可调用 Ruff CLI。原件：`out/tests/temp/2026/10/18/fork60-fixture-closeout-18/coordinator/artifacts/fork60-final-candidate.patch`、`fork60-independent-review.md`、`runs/commit-tree-bce3fbf-final-001/`、`runs/commit-tree-bce3fbf-final-002/`、`runs/ruff-test-rollout-fork-modes-001/`。
 
-RUN19 中，owner 曾拟把 final review/wiring 交回 root；root 已明确交付 owner 仍负责最终集成、commit/push 与远端核验。短当前接续入口与历史已拆分保存，分别见 `core_owner/CONTINUATION.md` 和 `core_owner/HISTORY.md`。candidate-003 的 unit-003 为 109 passed、定向 integration-002 为 20 passed，真实双 Gateway main/child 为 2 passed；这些切片不等于全产品验收。完整产品门仍未完成，也没有证据证明效率或提速收益。原件：`core_sol/artifacts/runs/fork-shared-owner-unit-003/`、`fork-shared-owner-integration-002/`、`fork-shared-owner-two-gateway-001/`；接续入口及历史位于 `core_owner/`。
+- RUN19 角色接续原件将业务 owner `/root/fork60_fixture_closeout_18` 与唯一 Git 集成者 `/root/fork_final_integrator19` 分开。上下文压缩曾使 owner 把自己误读为只读角色并重问许可；只读消费者也曾把当前源码指纹设成批准门。正确做法是先读当前接续记录，按未变授权继续，读前后 SHA 只绑定观察版本。Web005 只进入 `initial_admission_recovery` 后因恢复 Job 的权威 `request_id` 丢失退出；Web006 在 `before_captured_cas` 的 marker 分支没有执行来源 DELETE，却断言 source 不存在，catalog 仍为 active，不能据此声称生产恢复复活了 source。完整调用接续见 `out/tests/temp/2026/10/19/goal-core-resume-19/core_owner/CONTINUATION.md`；原件在 `out/tests/temp/2026/10/19/goal-core-resume-19/core_sol/artifacts/runs/fork-owner-boundary-three-focus-005/`、`out/tests/temp/2026/10/19/goal-core-resume-19/core_sol/artifacts/runs/fork-owner-boundary-web-after-005/`、`out/tests/temp/2026/10/19/goal-core-resume-19/core_sol/artifacts/runs/fork-owner-boundary-three-focus-006/` 和 `out/tests/temp/2026/10/19/goal-core-resume-19/core_sol/artifacts/fork-owner-web006-failure-evidence-002.json`。整体提速、成本或效率收益仍未证明；candidate-003 的 109 unit、20 integration、2 dual-Gateway 通过仅是局部切片，不代表产品闭合。
 
 - 2026-10-19，peer 按 raw 更正了三类周转归因：正式 SSH fixture 共用固定端口和产物，fixture 生命周期须由唯一运行窗口独占；固定 14960 被 detached sshd 占用时 `same-owner-repro-001` 仅在 setup 失败（1746 deselected、1 error）；未引用 `-k` 使 `same-backend-two-gateway-main-001` 在 pytest 入口报 `file or directory not found: and`、退出 4；`uri-transfer-and-run15-locks-001` 是 35 passed、1710 deselected、1 个旧 `fork_deadline.py` SHA 的 setup error，不是全量或 fork 业务结果。记录须区分 collection、筛选数、实际阶段和退出码，旧 SHA 的 setup 原件不能在修复后再次触发 STOP。原件根：`out/tests/temp/2026/10/19/goal-core-resume-19/`；fixture 与端口记录在 `core_sol/artifacts/runs/same-owner-repro-001/`、`sshd-identity-luna/artifacts/attempt-003/`、`attempt-005/`、`attempt-007/`；未引用 selector 的 stderr 与 profile 在 `core_owner/artifacts/runs/same-backend-two-gateway-main-001/` 和 `core_owner/artifacts/same-backend-two-gateway-main-profile.json`；旧 SHA setup 输出在 `core_sol/artifacts/runs/uri-transfer-and-run15-locks-001/`，SHA 归因在 `core_owner/CONTINUATION.md`。工具候选已由新入口普通提交并 push（`a730e2aced875bdc0fcc176794644a5a9abb211a`），且已核远端 SHA 一致；提交入口检查不证明业务验收，整体提速/成本收益未证。
