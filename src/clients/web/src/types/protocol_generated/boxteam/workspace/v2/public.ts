@@ -1555,6 +1555,29 @@ export interface ResourceThreadRef {
   thread_id: string;
 }
 
+/** 普通只读导航；不携带来源身份、revision、snapshot 或真实路径。 */
+export interface ResourceNavigationRequest {
+  uri: string;
+  operation: string;
+  query?: string | undefined;
+  limit: number;
+  max_bytes: number;
+}
+
+export interface ResourceNavigationNodeDTO {
+  uri: string;
+  resource_shape: string;
+  operations: string[];
+  child_path?: string | undefined;
+}
+
+export interface ResourceNavigationResultDTO {
+  node: ResourceNavigationNodeDTO | undefined;
+  entries: ResourceNavigationNodeDTO[];
+  content?: string | undefined;
+  truncated: boolean;
+}
+
 export interface WorkspaceResourceDTO {
   resource_id: string;
   workspace_id: string;
@@ -12276,6 +12299,149 @@ export const ResourceThreadRef: MessageFns<ResourceThreadRef> = {
     const message = createBaseResourceThreadRef();
     message.session_id = object.session_id ?? "";
     message.thread_id = object.thread_id ?? "";
+    return message;
+  },
+};
+
+function createBaseResourceNavigationRequest(): ResourceNavigationRequest {
+  return { uri: "", operation: "", query: undefined, limit: 0, max_bytes: 0 };
+}
+
+export const ResourceNavigationRequest: MessageFns<ResourceNavigationRequest> = {
+  fromJSON(object: any): ResourceNavigationRequest {
+    return {
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
+      operation: isSet(object.operation) ? globalThis.String(object.operation) : "",
+      query: isSet(object.query) ? globalThis.String(object.query) : undefined,
+      limit: isSet(object.limit) ? globalThis.Number(object.limit) : 0,
+      max_bytes: isSet(object.max_bytes) ? globalThis.Number(object.max_bytes) : 0,
+    };
+  },
+
+  toJSON(message: ResourceNavigationRequest): unknown {
+    const obj: any = {};
+    if (message.uri !== "") {
+      obj.uri = message.uri;
+    }
+    if (message.operation !== "") {
+      obj.operation = message.operation;
+    }
+    if (message.query !== undefined) {
+      obj.query = message.query;
+    }
+    if (message.limit !== 0) {
+      obj.limit = Math.round(message.limit);
+    }
+    if (message.max_bytes !== 0) {
+      obj.max_bytes = Math.round(message.max_bytes);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ResourceNavigationRequest>, I>>(base?: I): ResourceNavigationRequest {
+    return ResourceNavigationRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ResourceNavigationRequest>, I>>(object: I): ResourceNavigationRequest {
+    const message = createBaseResourceNavigationRequest();
+    message.uri = object.uri ?? "";
+    message.operation = object.operation ?? "";
+    message.query = object.query ?? undefined;
+    message.limit = object.limit ?? 0;
+    message.max_bytes = object.max_bytes ?? 0;
+    return message;
+  },
+};
+
+function createBaseResourceNavigationNodeDTO(): ResourceNavigationNodeDTO {
+  return { uri: "", resource_shape: "", operations: [], child_path: undefined };
+}
+
+export const ResourceNavigationNodeDTO: MessageFns<ResourceNavigationNodeDTO> = {
+  fromJSON(object: any): ResourceNavigationNodeDTO {
+    return {
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
+      resource_shape: isSet(object.resource_shape) ? globalThis.String(object.resource_shape) : "",
+      operations: globalThis.Array.isArray(object?.operations)
+        ? object.operations.map((e: any) => globalThis.String(e))
+        : [],
+      child_path: isSet(object.child_path) ? globalThis.String(object.child_path) : undefined,
+    };
+  },
+
+  toJSON(message: ResourceNavigationNodeDTO): unknown {
+    const obj: any = {};
+    if (message.uri !== "") {
+      obj.uri = message.uri;
+    }
+    if (message.resource_shape !== "") {
+      obj.resource_shape = message.resource_shape;
+    }
+    if (message.operations?.length) {
+      obj.operations = message.operations;
+    }
+    if (message.child_path !== undefined) {
+      obj.child_path = message.child_path;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ResourceNavigationNodeDTO>, I>>(base?: I): ResourceNavigationNodeDTO {
+    return ResourceNavigationNodeDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ResourceNavigationNodeDTO>, I>>(object: I): ResourceNavigationNodeDTO {
+    const message = createBaseResourceNavigationNodeDTO();
+    message.uri = object.uri ?? "";
+    message.resource_shape = object.resource_shape ?? "";
+    message.operations = object.operations?.map((e) => e) || [];
+    message.child_path = object.child_path ?? undefined;
+    return message;
+  },
+};
+
+function createBaseResourceNavigationResultDTO(): ResourceNavigationResultDTO {
+  return { node: undefined, entries: [], content: undefined, truncated: false };
+}
+
+export const ResourceNavigationResultDTO: MessageFns<ResourceNavigationResultDTO> = {
+  fromJSON(object: any): ResourceNavigationResultDTO {
+    return {
+      node: isSet(object.node) ? ResourceNavigationNodeDTO.fromJSON(object.node) : undefined,
+      entries: globalThis.Array.isArray(object?.entries)
+        ? object.entries.map((e: any) => ResourceNavigationNodeDTO.fromJSON(e))
+        : [],
+      content: isSet(object.content) ? globalThis.String(object.content) : undefined,
+      truncated: isSet(object.truncated) ? globalThis.Boolean(object.truncated) : false,
+    };
+  },
+
+  toJSON(message: ResourceNavigationResultDTO): unknown {
+    const obj: any = {};
+    if (message.node !== undefined) {
+      obj.node = ResourceNavigationNodeDTO.toJSON(message.node);
+    }
+    if (message.entries?.length) {
+      obj.entries = message.entries.map((e) => ResourceNavigationNodeDTO.toJSON(e));
+    }
+    if (message.content !== undefined) {
+      obj.content = message.content;
+    }
+    if (message.truncated !== false) {
+      obj.truncated = message.truncated;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ResourceNavigationResultDTO>, I>>(base?: I): ResourceNavigationResultDTO {
+    return ResourceNavigationResultDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ResourceNavigationResultDTO>, I>>(object: I): ResourceNavigationResultDTO {
+    const message = createBaseResourceNavigationResultDTO();
+    message.node = (object.node !== undefined && object.node !== null)
+      ? ResourceNavigationNodeDTO.fromPartial(object.node)
+      : undefined;
+    message.entries = object.entries?.map((e) => ResourceNavigationNodeDTO.fromPartial(e)) || [];
+    message.content = object.content ?? undefined;
+    message.truncated = object.truncated ?? false;
     return message;
   },
 };

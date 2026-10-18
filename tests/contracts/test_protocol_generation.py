@@ -59,6 +59,51 @@ def test_message_owner_survives_public_binding_round_trip() -> None:
         assert decoded.thread_id == "thr_child"
 
 
+def test_resource_navigation_wire_keeps_bounded_request_and_lightweight_nodes() -> None:
+    request_fields = public_pb2.ResourceNavigationRequest.DESCRIPTOR.fields_by_name
+    assert {name: field.number for name, field in request_fields.items()} == {
+        "uri": 1, "operation": 2, "query": 3, "limit": 4, "max_bytes": 5,
+    }
+    request = public_pb2.ResourceNavigationRequest(
+        uri="boxteam://workspace/ws-1/resources/files/root", operation="search",
+        query="中文 文档", limit=7, max_bytes=1024,
+    )
+    decoded_request = type(request).FromString(request.SerializeToString())
+    assert decoded_request == request and decoded_request.HasField("query")
+    assert not type(request)().HasField("query")
+    request.query = ""
+    assert type(request).FromString(request.SerializeToString()).HasField("query")
+
+    node_fields = public_pb2.ResourceNavigationNodeDTO.DESCRIPTOR.fields_by_name
+    assert {name: field.number for name, field in node_fields.items()} == {
+        "uri": 1, "resource_shape": 2, "operations": 3, "child_path": 4,
+    }
+    root = public_pb2.ResourceNavigationNodeDTO(
+        uri=decoded_request.uri, resource_shape="directory",
+        operations=["describe", "list", "search"], child_path="file_segments",
+    )
+    decoded_root = type(root).FromString(root.SerializeToString())
+    assert decoded_root == root and decoded_root.HasField("child_path")
+    file = public_pb2.ResourceNavigationNodeDTO(
+        uri=root.uri + "/SKILL.md", resource_shape="file", operations=["describe", "read"],
+    )
+    decoded_file = type(file).FromString(file.SerializeToString())
+    assert decoded_file == file and not decoded_file.HasField("child_path")
+
+    result_fields = public_pb2.ResourceNavigationResultDTO.DESCRIPTOR.fields_by_name
+    assert {name: field.number for name, field in result_fields.items()} == {
+        "node": 1, "entries": 2, "content": 3, "truncated": 4,
+    }
+    listing = public_pb2.ResourceNavigationResultDTO(node=root, entries=[file], truncated=True)
+    decoded_listing = type(listing).FromString(listing.SerializeToString())
+    assert decoded_listing == listing and not decoded_listing.HasField("content")
+    read = public_pb2.ResourceNavigationResultDTO(node=file, content="多层正文 Ω\n")
+    decoded_read = type(read).FromString(read.SerializeToString())
+    assert decoded_read == read and decoded_read.HasField("content")
+    read.content = ""
+    assert type(read).FromString(read.SerializeToString()).HasField("content")
+
+
 def test_information_wire_reserves_removed_physical_location_fields() -> None:
     for message_type, field_name, number in (
         (public_pb2.SessionInformationSnapshotDTO, "storage_path", 7),

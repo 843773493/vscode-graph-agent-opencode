@@ -16,13 +16,16 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from app.core.resource_uri import (
+    ParsedResourceUri,
     parse_resource_uri,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
     ALL_OPERATIONS,
     ResolutionContext,
     ResolvedResourceHandle,
+    ResourceNavigationNode,
     ResourceProvenance,
+    ResourceShape,
     ResourceTargetAction,
     ResourceTargetContext,
     ResourceTargetDecision,
@@ -125,6 +128,31 @@ class ResourceUriResolveError(RuntimeError):
             raise ValueError(f"未知 ResourceUriResolveError reason_code: {reason_code}")
         super().__init__(message)
         self.reason_code = reason_code
+
+
+def resource_navigation_node(
+    parsed: ParsedResourceUri, *, resource_shape: ResourceShape,
+) -> ResourceNavigationNode:
+    """固定根模板的唯一导航合同；实际节点 shape 由持有文件的 owner 核实。"""
+    if parsed.kind in {"skills", "files"}:
+        if len(parsed.tail_segments) == 1 and resource_shape != "directory":
+            raise ResourceUriResolveError("capability_denied", "已公布的资源根必须是目录")
+        if resource_shape not in {"directory", "file"}:
+            raise ResourceUriResolveError("capability_denied", "文件树节点不能作为领域对象")
+    elif parsed.kind in {"agent-spec", "config"}:
+        if resource_shape != "file" or (parsed.kind == "config" and len(parsed.tail_segments) != 1):
+            raise ResourceUriResolveError("capability_denied", "单文件引用不允许追加子路径")
+    elif resource_shape != "domain_object":
+        raise ResourceUriResolveError("capability_denied", "领域资源不公开私有文件树")
+    operations = (
+        ("describe", "list", "search") if resource_shape == "directory"
+        else ("describe", "read") if resource_shape == "file" else ("describe",)
+    )
+    return ResourceNavigationNode(
+        uri=parsed.display_uri, resource_shape=resource_shape,
+        operations=operations,
+        child_path="file_segments" if resource_shape == "directory" else None,
+    )
 
 
 @dataclass(frozen=True, slots=True)

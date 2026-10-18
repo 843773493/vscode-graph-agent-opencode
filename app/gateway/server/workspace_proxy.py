@@ -716,6 +716,50 @@ async def proxy_context_search(
     return await _proxy_context_request(request, payload, auth=auth, user_access=user_access)
 
 
+@router.post(
+    "/api/v1/workspaces/{backend_workspace_id}/resources/navigation",
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/ResourceNavigationRequest"},
+                },
+            },
+        },
+        "responses": {
+            "200": {
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/APIResponse_ResourceNavigationResultDTO_"},
+                    },
+                },
+            },
+        },
+    },
+)
+async def proxy_resource_navigation(
+    backend_workspace_id: str,
+    request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    user_access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
+) -> Response:
+    # canonical 路径已经固定 Workspace 身份，不能再由当前激活 target 改选上游。
+    targets = [
+        target for target in _registry(request).targets()
+        if target.connection_kind == "local" and target.backend_workspace_id == backend_workspace_id
+    ]
+    if not targets:
+        raise HTTPException(status_code=404, detail="导航 workspace 未注册或不存在")
+    if len(targets) != 1:
+        raise HTTPException(status_code=409, detail="多个本地 Gateway target 指向同一导航 workspace")
+    return await _proxy_workspace_request(
+        f"workspaces/{backend_workspace_id}/resources/navigation", request,
+        auth=auth, user_access=user_access, include_credentials=True,
+        target_workspace_id=targets[0].workspace_id,
+    )
+
+
 @router.api_route(
     "/api/v1/{path:path}",
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],

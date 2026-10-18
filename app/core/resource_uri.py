@@ -20,7 +20,7 @@ _SCOPE_KEYWORDS: Final = frozenset({"workspace", "user", "gateway", "inline"})
 # 语法 kind 闭集（parse_resource_uri 侧）；与 values.py 的描述符闭集 _DESCRIPTOR_KINDS 是两个
 # 独立闭集，不可混用。「config」承载配置来源文件本身，「session」承载会话上下文资源
 # （工作区集合根、Session 定位和 Thread 定位）。
-_RESOURCE_KINDS: Final = frozenset({"agent-spec", "skills", "config", "session", "workspace", "folder"})
+_RESOURCE_KINDS: Final = frozenset({"agent-spec", "skills", "config", "session", "workspace", "folder", "files"})
 _NAME_CHARSET: Final = frozenset(string.ascii_letters + string.digits + "_-")
 _INVALID_PERCENT_ESCAPE: Final = re.compile(r"%(?![0-9A-Fa-f]{2})")
 
@@ -255,14 +255,18 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
         _validate_dynamic_segment(tails[0], field="folder id")
         return _parsed(scope, body[0], kind, tails, tails[0], uri, authority)
 
-    if kind == "skills":
+    if kind in {"skills", "files"}:
         if not tails:
             raise ResourceUriGrammarError(
                 "malformed_path",
-                f"skills URI 必须是 boxteam://{scope}/{{id}}/resources/skills/"
-                f"{{skill_name}} 或其文件 child: {uri!r}",
+                f"{kind} URI 必须携带已登记的目录根: {uri!r}",
             )
-        _validate_dynamic_segment(tails[0], field="skill name")
+        if kind == "files":
+            if scope != "workspace":
+                raise ResourceUriGrammarError("malformed_path", "files/root 只属于 workspace scope")
+            _expect_fixed_segment(tails[0], "root")
+        else:
+            _validate_dynamic_segment(tails[0], field="skill name")
         children = [_decode_file_segment(segment) for segment in tails[1:]]
         body[3:] = [tails[0], *(_encode_file_segment(child) for child in children)]
         prefix = () if authority is None else (authority,)
@@ -337,8 +341,11 @@ def resource_display_uri(
     _validate_dynamic_segment(scope_id, field="scope id")
     if gateway_authority is not None:
         _validate_dynamic_segment(gateway_authority, field="gateway authority")
-    if kind == "skills" and tail_segments:
-        _validate_dynamic_segment(tail_segments[0], field="skill name")
+    if kind in {"skills", "files"} and tail_segments:
+        if kind == "skills":
+            _validate_dynamic_segment(tail_segments[0], field="skill name")
+        else:
+            _expect_fixed_segment(tail_segments[0], "root")
         tail_segments = (
             tail_segments[0], *(_encode_file_segment(segment) for segment in tail_segments[1:])
         )

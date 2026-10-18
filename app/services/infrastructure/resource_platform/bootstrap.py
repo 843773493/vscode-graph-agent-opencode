@@ -27,6 +27,9 @@ from app.services.infrastructure.resource_platform.observation.resource_observat
 from app.services.infrastructure.resource_platform.sources.gateway_skill_sources import (
     GatewaySkillSources,
 )
+from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    ResourceNavigation,
+)
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
@@ -50,6 +53,7 @@ class ResourcePlatform:
     file_registry: WorkspaceFileResourceRegistry
     state_events: ResourceStateEventPublisher
     gateway_skill_sources: GatewaySkillSources | None
+    navigation: ResourceNavigation | None
 
     async def close(self) -> None:
         """释放实际持有的进程资源并发布 owner 已确认的轻量状态。"""
@@ -141,6 +145,10 @@ def bootstrap_resource_platform(
         file_registry=file_registry,
         state_events=state_events,
         gateway_skill_sources=gateway_skill_sources,
+        navigation=ResourceNavigation(
+            workspace_root=workspace_root, workspace_id=workspace_id,
+            project_root=project_root, gateway_sources=gateway_skill_sources,
+        ) if workspace_id is not None else None,
     )
 
 

@@ -7,18 +7,26 @@ from contextlib import contextmanager
 from typing import Annotated, Literal
 from urllib.error import URLError
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.abstractions.browser_resources import BrowserRequestError
 from app.api.deps import (
     get_browser_resource_owner,
     get_request_id,
+    get_resource_navigation,
     get_terminal_resource_owner,
     get_workspace_resource_owner,
     verify_local_token,
 )
+from app.core.resource_uri import ResourceUriGrammarError
+from app.core.trace_middleware import require_current_gateway_id
 from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.resource_navigation import (
+    ResourceNavigationRequest,
+    ResourceNavigationResultDTO,
+)
 from app.schemas.internal_v2.workspace_resource import (
     BrowserResourceCreateRequest,
     BrowserResourceOperationRequest,
@@ -36,8 +44,36 @@ from app.services.business.workspace_resources.owner import (
     WorkspaceResourceOwner,
 )
 from app.services.business.workspace_resources.records import ThreadRef
+from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    ResourceNavigation,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    ResourceUriResolveError,
+)
 
 router = APIRouter(prefix="/resources", tags=["resources"])
+
+
+@router.post("/navigation", response_model=APIResponse[ResourceNavigationResultDTO])
+async def navigate_resource(
+    body: ResourceNavigationRequest,
+    _: str = Depends(verify_local_token), request_id: str = Depends(get_request_id),
+    *, owner: Annotated[ResourceNavigation, Depends(get_resource_navigation)],
+):
+    try:
+        result = await owner.navigate(body, local_gateway_id=require_current_gateway_id("资源导航"))
+    except ResourceUriGrammarError as error:
+        raise HTTPException(400, detail={"owner": "resource_uri_grammar", "code": error.reason_code, "message": str(error)}) from error
+    except ResourceUriResolveError as error:
+        status = 404 if error.reason_code == "unknown_resource" else 403
+        raise HTTPException(status, detail={"owner": "resource_uri_resolver", "code": error.reason_code, "message": str(error)}) from error
+    except httpx.HTTPStatusError as error:
+        raise HTTPException(error.response.status_code, detail=error.response.json()["detail"]) from error
+    except httpx.RequestError as error:
+        raise HTTPException(502, detail={"owner": "gateway_transport", "type": type(error).__name__}) from error
+    except (OSError, UnicodeError) as error:
+        raise HTTPException(400, detail={"owner": "resource_navigation", "type": type(error).__name__, "errno": getattr(error, "errno", None)}) from error
+    return APIResponse(data=result, request_id=request_id)
 
 
 @contextmanager

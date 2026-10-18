@@ -15,6 +15,7 @@ from app.services.infrastructure.resource_platform.virtual_resources.resolver im
     ResourceUriResolveError,
     ResourceUriResolver,
     require_scope_binding,
+    resource_navigation_node,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
     OPERATION_ACTIVATE,
@@ -270,3 +271,38 @@ def test_user_scope_resolves_through_catalog() -> None:
             context=ResolutionContext(user_scope_id="someone"),
         )
     assert excinfo.value.reason_code == "scope_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("uri", "shape", "operations", "child_path"),
+    [
+        ("boxteam://workspace/ws-1/resources/files/root", "directory", ("describe", "list", "search"), "file_segments"),
+        ("boxteam://inline/dist-1/resources/skills/review", "directory", ("describe", "list", "search"), "file_segments"),
+        ("boxteam://workspace/ws-1/resources/skills/review/references", "directory", ("describe", "list", "search"), "file_segments"),
+        ("boxteam://workspace/ws-1/resources/skills/review/SKILL.md", "file", ("describe", "read"), None),
+        ("boxteam://workspace/ws-1/resources/agent-spec/root/AGENTS.md", "file", ("describe", "read"), None),
+        ("boxteam://inline/dist-1/resources/config/workspace_inline", "file", ("describe", "read"), None),
+        ("boxteam://workspace/ws-1/resources/session/sess-1", "domain_object", ("describe",), None),
+    ],
+)
+def test_fixed_navigation_templates_publish_shape_and_capabilities(uri, shape, operations, child_path) -> None:
+    node = resource_navigation_node(parse_resource_uri(uri), resource_shape=shape)
+    assert node.resource_shape == shape
+    assert node.operations == operations
+    assert node.child_path == child_path
+    assert not {"activate", "write", "patch"} & set(node.operations)
+
+
+@pytest.mark.parametrize(
+    ("uri", "shape"),
+    [
+        ("boxteam://workspace/ws-1/resources/files/root", "file"),
+        ("boxteam://workspace/ws-1/resources/skills/review", "file"),
+        ("boxteam://inline/dist-1/resources/config/workspace_inline/guess", "file"),
+        ("boxteam://workspace/ws-1/resources/session/sess-1/checkpoints", "directory"),
+    ],
+)
+def test_navigation_cannot_turn_files_or_domain_objects_into_directories(uri, shape) -> None:
+    with pytest.raises(ResourceUriResolveError) as excinfo:
+        resource_navigation_node(parse_resource_uri(uri), resource_shape=shape)
+    assert excinfo.value.reason_code == "capability_denied"

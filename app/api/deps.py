@@ -49,6 +49,9 @@ from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.node_debug.service import NodeDebugService
+from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    ResourceNavigation,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -97,6 +100,7 @@ class _AppContainerProtocol(Protocol):
     tool_service: ToolService
     tool_test_service: ToolTestService
     workspace_service: WorkspaceService
+    resource_navigation: ResourceNavigation
     workspace_file_watch_service: WorkspaceFileWatchService
     file_tree_settings_service: FileTreeSettingsService
     node_debug_service: NodeDebugService
@@ -336,6 +340,10 @@ def get_mcp_catalog_owner(request: Request) -> McpCatalogOwner:
 
 def get_workspace_service(request: Request) -> WorkspaceService:
     return _require_service(request, "workspace_service", WorkspaceService, "WorkspaceService 尚未在应用启动阶段初始化")
+
+
+def get_resource_navigation(request: Request) -> ResourceNavigation:
+    return _require_service(request, "resource_navigation", ResourceNavigation, "ResourceNavigation 尚未在应用启动阶段初始化")
 
 
 def get_workspace_file_watch_service(request: Request) -> WorkspaceFileWatchService:

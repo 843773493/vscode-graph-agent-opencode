@@ -1535,6 +1535,29 @@ message ResourceThreadRef {
   string thread_id = 2;
 }
 
+// 普通只读导航；不携带来源身份、revision、snapshot 或真实路径。
+message ResourceNavigationRequest {
+  string uri = 1;
+  string operation = 2;
+  optional string query = 3;
+  uint32 limit = 4;
+  uint32 max_bytes = 5;
+}
+
+message ResourceNavigationNodeDTO {
+  string uri = 1;
+  string resource_shape = 2;
+  repeated string operations = 3;
+  optional string child_path = 4;
+}
+
+message ResourceNavigationResultDTO {
+  ResourceNavigationNodeDTO node = 1;
+  repeated ResourceNavigationNodeDTO entries = 2;
+  optional string content = 3;
+  bool truncated = 4;
+}
+
 message WorkspaceResourceDTO {
   string resource_id = 1;
   string workspace_id = 2;

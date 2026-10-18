@@ -516,3 +516,35 @@ def test_grammar_error_codes_remain_closed() -> None:
         assert ResourceUriGrammarError(reason_code, "拒绝编码").reason_code == reason_code
     with pytest.raises(ValueError, match="未知 ResourceUriGrammarError reason_code"):
         ResourceUriGrammarError("unregistered_reason", "不得新增隐式拒绝码")
+
+
+@pytest.mark.parametrize("children", [(), ("src", "中文 文档.v2.md"), (".github", "100%.txt"), ("%2e", "a?#.md")])
+def test_workspace_files_root_uses_same_file_segment_profile(children: tuple[str, ...]) -> None:
+    uri = resource_display_uri(
+        scope="workspace", scope_id="ws-1", kind="files", tail_segments=("root", *children),
+        gateway_authority="gw-1",
+    )
+    parsed = parse_resource_uri(uri)
+    assert parsed.tail_segments == ("root", *children)
+    assert (parsed.scope_id, parsed.kind, parsed.gateway_authority) == ("ws-1", "files", "gw-1")
+    assert parse_resource_uri(parsed.display_uri) == parsed
+
+
+@pytest.mark.parametrize("scope", ["user", "gateway", "inline"])
+def test_files_root_rejects_non_workspace_scope(scope: str) -> None:
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
+        parse_resource_uri(f"boxteam://{scope}/test/resources/files/root")
+    assert excinfo.value.reason_code == "malformed_path"
+
+
+@pytest.mark.parametrize(
+    ("tail", "reason"),
+    [("", "malformed_path"), ("Root", "case_error"), ("other", "malformed_path"),
+     ("%72oot", "invalid_percent_encoding"), ("root/%2e%2e", "dot_segment"),
+     ("root/a%2fb", "invalid_character"), ("root/%FF", "invalid_path_encoding")],
+)
+def test_files_root_rejects_unknown_root_or_invalid_child(tail: str, reason: str) -> None:
+    uri = "boxteam://workspace/ws-1/resources/files" + ("/" + tail if tail else "")
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
+        parse_resource_uri(uri)
+    assert excinfo.value.reason_code == reason

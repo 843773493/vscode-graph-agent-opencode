@@ -34,6 +34,29 @@ SESSION_RESOURCE_IDENTITY_NAMESPACE: Final = "session-resource-v1"
 CONTEXT_ASSEMBLY_IDENTITY_NAMESPACE: Final = "context-assembly-v1"
 ResourceIdentity = NewType("ResourceIdentity", str)
 
+ResourceShape = Literal["directory", "file", "domain_object"]
+ResourceNavigationOperation = Literal["describe", "list", "search", "read"]
+NAVIGATION_OPERATIONS: Final = frozenset({"describe", "list", "search", "read"})
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceNavigationNode:
+    """普通导航结果，不创建来源身份、revision 或快照。"""
+
+    uri: str
+    resource_shape: ResourceShape
+    operations: tuple[ResourceNavigationOperation, ...]
+    child_path: Literal["file_segments"] | None
+
+    def __post_init__(self) -> None:
+        parse_resource_uri(self.uri)
+        if self.resource_shape not in {"directory", "file", "domain_object"}:
+            raise ValueError(f"未登记的资源 shape: {self.resource_shape!r}")
+        if set(self.operations) - NAVIGATION_OPERATIONS:
+            raise ValueError(f"未登记的导航 operations: {self.operations!r}")
+        if (self.resource_shape == "directory") != (self.child_path == "file_segments"):
+            raise ValueError("只有公布 file_segments 规则的目录允许追加文件段")
+
 ResourceTargetAction = Literal[
     "reuse_reference", "retain_reference", "copy_snapshot", "omit", "unsupported"
 ]

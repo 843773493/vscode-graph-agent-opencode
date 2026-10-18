@@ -132,6 +132,9 @@ from app.services.infrastructure.resource_platform.bootstrap import (
     ResourcePlatform,
     bootstrap_resource_platform,
 )
+from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    ResourceNavigation,
+)
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
@@ -364,6 +367,7 @@ class AppContainer:
     tool_selection_store: ToolSelectionStore
     workspace_service: WorkspaceService
     resource_platform: ResourcePlatform
+    resource_navigation: ResourceNavigation
     workspace_file_watch_service: WorkspaceFileWatchService
     workspace_file_resource_registry: WorkspaceFileResourceRegistry
     file_tree_settings_service: FileTreeSettingsService
@@ -678,6 +682,9 @@ def _build_app_container(
     )
     workspace_file_watch_service = resource_platform.file_watch_service
     workspace_file_resource_registry = resource_platform.file_registry
+    resource_navigation = resource_platform.navigation
+    if resource_navigation is None:
+        raise RuntimeError("Workspace 资源导航未绑定显式身份")
     terminal_resource_owner = TerminalResourceOwner(
         workspace_root=resolved_workspace_root, workspace_id=workspace_id,
         sessions=session_service, threads=session_path_resolver,
@@ -1049,6 +1056,7 @@ def _build_app_container(
         workspace_file_watch_service=workspace_file_watch_service,
         workspace_file_resource_registry=workspace_file_resource_registry,
         resource_platform=resource_platform,
+        resource_navigation=resource_navigation,
         file_tree_settings_service=file_tree_settings_service,
         agent_execution_service=agent_execution_service,
         node_debug_service=node_debug_service,

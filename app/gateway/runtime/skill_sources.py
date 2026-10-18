@@ -15,6 +15,13 @@ from app.schemas.gateway.skill_sources import (
     GatewaySkillSourceEntryDTO,
     GatewaySkillSourcesDTO,
 )
+from app.schemas.internal_v2.resource_navigation import (
+    ResourceNavigationRequest,
+    ResourceNavigationResultDTO,
+)
+from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    ResourceNavigation,
+)
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
@@ -35,6 +42,7 @@ class GatewaySkillSourceOwner:
 
     def __init__(self, *, gateway_id: str, skills_root: Path) -> None:
         self.gateway_id = gateway_id
+        self._navigation = ResourceNavigation(gateway_id=gateway_id, gateway_skills_root=skills_root)
         self._scope = LifetimeScope("gateway-skill-sources")
         watcher = WorkspaceFileWatchService(workspace_root=skills_root)
         self.file_registry = WorkspaceFileResourceRegistry(
@@ -69,6 +77,9 @@ class GatewaySkillSourceOwner:
             "entries": [(entry.source_id, entry.revision, entry.available) for entry in entries],
         })).hexdigest()
         self._publication = _GatewaySkillPublication(revision, tuple(entries), available)
+
+    async def navigate(self, request: ResourceNavigationRequest) -> ResourceNavigationResultDTO:
+        return await self._navigation.navigate(request, local_gateway_id=self.gateway_id)
 
     async def start(self) -> None:
         subscription = self.file_registry.subscribe_observation(label="Gateway raw Skill publication")

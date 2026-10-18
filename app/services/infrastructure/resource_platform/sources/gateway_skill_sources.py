@@ -10,14 +10,22 @@ from collections.abc import Callable
 
 import httpx
 
-from app.core.resource_uri import skill_display_uri
+from app.core.resource_uri import parse_resource_uri, skill_display_uri
+from app.core.trace_middleware import require_current_request_id
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.schemas.gateway.skill_sources import GatewaySkillSourcesDTO
 from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.resource_navigation import (
+    ResourceNavigationRequest,
+    ResourceNavigationResultDTO,
+)
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservation,
     ResourceObservationChannel,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    ResourceUriResolveError,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,6 +77,43 @@ class GatewaySkillSources:
         if self._error is not None or self._snapshot is None:
             raise RuntimeError(f"Gateway Skill source unavailable: {self._error}")
         return self._snapshot
+
+    async def navigate(
+        self, request: ResourceNavigationRequest, *, gateway_id: str,
+    ) -> ResourceNavigationResultDTO:
+        """普通读取走固定 Gateway 的认证 owner，不绑定来源或启动快照观察。"""
+        parsed = parse_resource_uri(request.uri, local_gateway_id=gateway_id)
+        if parsed.gateway_authority is not None or parsed.scope != "gateway" or parsed.scope_id != gateway_id or parsed.kind != "skills":
+            raise ResourceUriResolveError("scope_mismatch", "Gateway Skill 导航目标与固定 owner 不符")
+        async with httpx.AsyncClient(trust_env=False) as client:
+            response = await client.post(
+                self._connection.resolve_gateway_url()
+                + f"/api/gateway/skill-sources/{gateway_id}/workspaces/{self._workspace_id}/navigation",
+                headers={
+                    "X-Local-Token": self._local_token_supplier(),
+                    "X-Request-ID": require_current_request_id("Gateway Skill navigation"),
+                },
+                json=request.model_copy(update={"uri": parsed.display_uri}).model_dump(),
+                timeout=self._connection.resolve_timeout_seconds(),
+            )
+        if response.status_code in {400, 403, 404}:
+            detail = response.json().get("detail")
+            if isinstance(detail, dict) and detail.get("owner") == "resource_uri_resolver":
+                raise ResourceUriResolveError(detail["code"], detail["message"])
+        response.raise_for_status()
+        envelope = APIResponse[ResourceNavigationResultDTO].model_validate_json(response.content)
+        result = envelope.data
+        if envelope.code != 0 or result is None or result.node.uri != parsed.display_uri:
+            raise ValueError("Gateway Skill navigation 响应目标不一致")
+        for node in (result.node, *result.entries):
+            child = parse_resource_uri(node.uri, local_gateway_id=gateway_id)
+            if (
+                child.gateway_authority is not None or child.scope != parsed.scope
+                or child.scope_id != parsed.scope_id or child.kind != parsed.kind
+                or child.tail_segments[:len(parsed.tail_segments)] != parsed.tail_segments
+            ):
+                raise ValueError("Gateway Skill navigation 返回了另一根的节点")
+        return result
 
     async def ensure_bound(self, gateway_id: str) -> None:
         """真实 runtime 编译前建立来源；不参与 prepare 或 skill_load。"""

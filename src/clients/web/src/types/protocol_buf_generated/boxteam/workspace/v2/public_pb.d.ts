@@ -6746,6 +6746,106 @@ export declare type ResourceThreadRef = Message<"boxteam.workspace.v2.ResourceTh
 export declare const ResourceThreadRefSchema: GenMessage<ResourceThreadRef>;
 
 /**
+ * 普通只读导航；不携带来源身份、revision、snapshot 或真实路径。
+ *
+ * @generated from message boxteam.workspace.v2.ResourceNavigationRequest
+ */
+export declare type ResourceNavigationRequest = Message<"boxteam.workspace.v2.ResourceNavigationRequest"> & {
+  /**
+   * @generated from field: string uri = 1;
+   */
+  uri: string;
+
+  /**
+   * @generated from field: string operation = 2;
+   */
+  operation: string;
+
+  /**
+   * @generated from field: optional string query = 3;
+   */
+  query?: string | undefined;
+
+  /**
+   * @generated from field: uint32 limit = 4;
+   */
+  limit: number;
+
+  /**
+   * @generated from field: uint32 max_bytes = 5;
+   */
+  maxBytes: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ResourceNavigationRequest.
+ * Use `create(ResourceNavigationRequestSchema)` to create a new message.
+ */
+export declare const ResourceNavigationRequestSchema: GenMessage<ResourceNavigationRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ResourceNavigationNodeDTO
+ */
+export declare type ResourceNavigationNodeDTO = Message<"boxteam.workspace.v2.ResourceNavigationNodeDTO"> & {
+  /**
+   * @generated from field: string uri = 1;
+   */
+  uri: string;
+
+  /**
+   * @generated from field: string resource_shape = 2;
+   */
+  resourceShape: string;
+
+  /**
+   * @generated from field: repeated string operations = 3;
+   */
+  operations: string[];
+
+  /**
+   * @generated from field: optional string child_path = 4;
+   */
+  childPath?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ResourceNavigationNodeDTO.
+ * Use `create(ResourceNavigationNodeDTOSchema)` to create a new message.
+ */
+export declare const ResourceNavigationNodeDTOSchema: GenMessage<ResourceNavigationNodeDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ResourceNavigationResultDTO
+ */
+export declare type ResourceNavigationResultDTO = Message<"boxteam.workspace.v2.ResourceNavigationResultDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.ResourceNavigationNodeDTO node = 1;
+   */
+  node?: ResourceNavigationNodeDTO | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.ResourceNavigationNodeDTO entries = 2;
+   */
+  entries: ResourceNavigationNodeDTO[];
+
+  /**
+   * @generated from field: optional string content = 3;
+   */
+  content?: string | undefined;
+
+  /**
+   * @generated from field: bool truncated = 4;
+   */
+  truncated: boolean;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ResourceNavigationResultDTO.
+ * Use `create(ResourceNavigationResultDTOSchema)` to create a new message.
+ */
+export declare const ResourceNavigationResultDTOSchema: GenMessage<ResourceNavigationResultDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.WorkspaceResourceDTO
  */
 export declare type WorkspaceResourceDTO = Message<"boxteam.workspace.v2.WorkspaceResourceDTO"> & {

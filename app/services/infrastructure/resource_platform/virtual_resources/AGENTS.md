@@ -5,7 +5,7 @@
 # 可修改内容
 
 - 可以维护已登记资源 kind、operation、catalog 绑定和 resolve 闭合错误码；authority/path 的纯语法改动在 `app/core/resource_uri.py` 及其 owner 规范统一登记。
-- 可以维护 `SemanticResourceDescriptor`、`ResolvedResourceHandle`、`ResourceProvenance`、`ResolutionContext` 的一致性校验与公共出口；`ObservedSourceDescriptor` 的唯一实现仍归 `sources/` 所有，这里只复用。
+- 可以维护 `SemanticResourceDescriptor`、`ResolvedResourceHandle`、`ResourceProvenance`、`ResolutionContext` 和只读导航 shape/operation 的一致性校验与公共出口；`ObservedSourceDescriptor` 的唯一实现仍归 `sources/` 所有，这里只复用。
 
 # 不可修改内容
 
@@ -16,6 +16,6 @@
 
 # 规范
 
-- 解析只消费内核的已登记 grammar 与错误码，不复制正则或构造分支。当前源码范围的身份/领域段仍严格校验；可导航文件根与 child 编码是独立规划任务，未实施前不得把规划能力当成已支持。
+- 解析只消费内核的已登记 grammar 与错误码，不复制正则或构造分支。身份/领域段仍严格校验；skills 包根与 workspace files/root 公布 file_segments child，文件节点不接受 child，领域资源不转成私有文件树。实际文件 shape/containment 由 sources/resource_navigation.py 核实。
 - resolver 必须在任何 owner/provider 访问前依次完成 grammar、scope、catalog 绑定、operation 与 capability 校验。
 - tracked 绑定在绑定时冻结 resource/revision/hash/snapshot_ref；同名覆盖只影响未来名称解析，不改绑既有 registration。
