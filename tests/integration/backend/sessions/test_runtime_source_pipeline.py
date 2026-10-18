@@ -1328,7 +1328,7 @@ async def completed_empty_seed_source(
                 "graph_schema_hash": "sha256:" + "a" * 64,
                 "capability_profile_hash": compute_capability_profile_hash(capability_profile=profile)},
             "capability_profile": profile,
-            "task_seed": {"description": "H5 合法无输出冻结任务"},
+            "task_seed": {"description": "H5 合法无输出冻结任务", "gateway_id": None},
             "task_reference": {"parent_session_id": session_id,
                 "parent_thread_id": await case.container.session_service.resolve_main_thread(session_id)},
         },

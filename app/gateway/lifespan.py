@@ -18,6 +18,7 @@ from app.core.env import (
 )
 from app.core.logging_config import configure_application_logging
 from app.core.path_utils import (
+    get_boxteam_home,
     get_user_gateway_config_path,
     get_user_gateway_local_config_path,
 )
@@ -66,6 +67,7 @@ from app.gateway.runtime.consumer_protocol import (
 )
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
+from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.gateway.runtime_proof import (
     _apply_gateway_runtime_config,
     _cleanup_user_access_periodically,
@@ -180,7 +182,13 @@ async def lifespan(app: FastAPI):
         )
 
     # Gateway 代理本机工作区时必须直连，不能把本地后端请求送入用户的 HTTP 代理。
-    async with httpx.AsyncClient(timeout=None, trust_env=False) as http_client:
+    async with (
+        httpx.AsyncClient(timeout=None, trust_env=False) as http_client,
+        GatewaySkillSourceOwner(
+            gateway_id=gateway_id, skills_root=get_boxteam_home() / "skills",
+        ).lifespan() as skill_source_owner,
+    ):
+        app.state.skill_source_owner = skill_source_owner
         app.state.http_client = http_client
         app.state.federation_rpc_service = FederationRpcService(
             gateway_id=gateway_id,

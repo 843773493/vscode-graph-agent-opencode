@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -105,6 +106,7 @@ from app.services.infrastructure.external_resource_leases import (
 from app.services.infrastructure.file_tree_settings_service import (
     FileTreeSettingsService,
 )
+from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 from app.services.infrastructure.gateway_communication_client import (
     GatewayCommunicationClient,
 )
@@ -668,6 +670,11 @@ def _build_app_container(
         workspace_root=resolved_workspace_root,
         project_root=resolved_project_root,
         event_service=job_event_bus.event_channel_service,
+        workspace_id=workspace_id,
+        gateway_connection=GatewayTransportConnection(
+            gateway_url=os.environ.get("BOXTEAM_GATEWAY_URL"), config_service=config_service,
+        ),
+        gateway_token_supplier=get_gateway_local_token,
     )
     workspace_file_watch_service = resource_platform.file_watch_service
     workspace_file_resource_registry = resource_platform.file_registry
@@ -744,6 +751,7 @@ def _build_app_container(
         workspace_root=resolved_workspace_root,
         external_resource_leases=external_resource_leases,
         workspace_file_resource_registry=workspace_file_resource_registry,
+        gateway_skill_sources=resource_platform.gateway_skill_sources,
         graph_binding_store=SessionControlGraphBindingStore(
             session_control_store_factory=lambda session_id: SessionControlStore(
                 session_path_resolver.resolve_session_node(session_id)

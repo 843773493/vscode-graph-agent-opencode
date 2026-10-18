@@ -12,11 +12,10 @@ import asyncio
 import hashlib
 import json
 import logging
-from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from collections.abc import AsyncGenerator
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-from app.core.path_utils import get_boxteam_home
 from app.core.resource_uri import parse_resource_uri, skill_display_uri
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservation,
@@ -89,24 +88,26 @@ class WorkspaceFileResourceRegistry:
     def __init__(
         self,
         *,
-        workspace_root: Path,
+        workspace_root: Path | None,
         watch_service: WorkspaceFileWatchService,
         project_root: Path | None = None,
         observation_channel: ResourceObservationChannel | None = None,
+        gateway_skills_root: Path | None = None,
     ) -> None:
-        self._workspace_root = workspace_root.resolve()
+        if (workspace_root is None) == (gateway_skills_root is None):
+            raise ValueError("文件 owner 必须且只能绑定 Workspace 或 Gateway 配置域")
+        self._workspace_root = workspace_root.resolve() if workspace_root is not None else None
         self._project_root = (project_root or Path.cwd()).resolve()
         self._watch_service = watch_service
         self._observation_channel = observation_channel or ResourceObservationChannel()
-        self._gateway_skills_root = (get_boxteam_home() / "skills").absolute()
-        self._gateway_home = self._gateway_skills_root.parent
+        self._gateway_skills_root = gateway_skills_root.absolute() if gateway_skills_root is not None else None
         bundled_root = self._project_root / "resources" / "skills"
         self._bundled_skills_root = bundled_root.absolute()
         # 工作区/SKILL 发行资源保持递归监听；Gateway 全局根使用后续的分层浅监听。
         roots = tuple(sorted(
             {
                 root for root in (self._workspace_root, self._bundled_skills_root)
-                if root.is_dir()
+                if self._workspace_root is not None and root is not None and root.is_dir()
             },
             key=lambda path: (len(path.parts), str(path)),
         ))
@@ -126,6 +127,7 @@ class WorkspaceFileResourceRegistry:
         self._watch_subscriptions: dict[tuple[Path, bool, int | None], asyncio.Task[None]] = {}
         self._watch_events: asyncio.Queue[WorkspaceFileChangeBatch] | None = None
         self._watch_config_changed = asyncio.Event()
+        self._watch_unavailable = False
 
     def register_file(self, *, uri: str, path: Path, optional: bool = False) -> WorkspaceFileResourceSnapshot:
         parse_resource_uri(uri)
@@ -168,6 +170,8 @@ class WorkspaceFileResourceRegistry:
 
     @property
     def workspace_root(self) -> Path:
+        if self._workspace_root is None:
+            raise RuntimeError("Gateway 文件 owner 没有 Workspace 根目录")
         return self._workspace_root
 
     @property
@@ -204,12 +208,13 @@ class WorkspaceFileResourceRegistry:
         declared_entries: tuple[str, ...] | None = None,
     ) -> WorkspaceSkillDirectorySnapshot:
         """登记固定一层边界；后续发现仅由共享 watcher 的 dirty 事件触发。"""
-        expected_roots = {
-            "workspace": self._workspace_root / ".boxteam" / "skills",
-            "gateway": self._gateway_skills_root,
-            "inline": self._project_root / "resources" / "skills",
-        }
-        if scope not in expected_roots or root.absolute() != expected_roots[scope].absolute():
+        expected_roots = (
+            {"workspace": self._workspace_root / ".boxteam" / "skills", "inline": self._bundled_skills_root}
+            if self._workspace_root is not None
+            else {"gateway": self._gateway_skills_root}
+        )
+        expected_root = expected_roots.get(scope)
+        if expected_root is None or root.absolute() != expected_root.absolute():
             raise ValueError(f"Skill 目录必须是已知固定根: scope={scope} root={root}")
         identity = json.dumps(
             [scope, scope_id, declared_entries], ensure_ascii=False, separators=(",", ":"),
@@ -327,11 +332,15 @@ class WorkspaceFileResourceRegistry:
 
     def _allowed_root_candidates(self) -> tuple[Path, ...]:
         """当前配置域的允许根候选;按路径深度降序, deepest-match 优先。"""
-        bundled_root = (self._project_root / "resources" / "skills").resolve()
-        gateway_root = self._gateway_skills_root.resolve()
+        if self._workspace_root is not None:
+            roots = {self._workspace_root, self._bundled_skills_root.resolve()}
+        elif self._gateway_skills_root is not None:
+            roots = {self._gateway_skills_root.resolve()}
+        else:
+            raise RuntimeError("文件来源 owner 未绑定配置域")
         return tuple(
             sorted(
-                {self._workspace_root, bundled_root, gateway_root},
+                roots,
                 key=lambda root: (len(root.parts), str(root)),
                 reverse=True,
             )
@@ -388,6 +397,14 @@ class WorkspaceFileResourceRegistry:
             self._task = None
             task.result()
 
+    def check_running(self) -> None:
+        """owner 对外发布前核实实际观察任务仍存活。"""
+        if self._task is None:
+            raise RuntimeError("文件来源观察任务尚未启动")
+        if self._task.done():
+            self._task.result()
+            raise RuntimeError("文件来源观察任务意外退出")
+
     async def stop(self) -> None:
         task = self._task
         self._task = None
@@ -412,11 +429,23 @@ class WorkspaceFileResourceRegistry:
                 if batch is not None:
                     if batch.error is not None:
                         logger.error("工作区文件来源监听失败: %s", batch.error)
+                        self._watch_unavailable = True
+                        for uri, previous in tuple(self._snapshots.items()):
+                            current = replace(previous, available=False, error=batch.error)
+                            self._snapshots[uri] = current
+                            self._publish_observation(uri, previous, current)
+                        for directory_id, previous in tuple(self._skill_directory_snapshots.items()):
+                            self._skill_directory_snapshots[directory_id] = replace(
+                                previous, available=False, error=batch.error,
+                            )
+                            self._observation_channel.notify(ResourceObservation(
+                                uri=None, directory_id=directory_id, revision=previous.revision, available=False,
+                            ))
                     else:
                         changed_paths = {Path(change.path) for change in batch.changes}
                         dirty_directories = tuple(
                             directory_id for directory_id, handle in tuple(self._skill_directories.items())
-                            if batch.overflow or any(
+                            if batch.overflow or self._watch_unavailable or any(
                                 handle.root.is_relative_to(path)
                                 or (path.is_relative_to(handle.root) and (
                                     len(path.relative_to(handle.root).parts) <= 1
@@ -429,7 +458,7 @@ class WorkspaceFileResourceRegistry:
                             entry.uri for directory_id in dirty_directories
                             for entry in self.skill_directory_snapshot(directory_id).entries
                         }
-                        if batch.overflow:
+                        if batch.overflow or self._watch_unavailable:
                             # 只对已登记文件和固定 Skill 一层边界对账。
                             paths = tuple(self._paths_by_uri.values())
                         else:
@@ -443,6 +472,7 @@ class WorkspaceFileResourceRegistry:
                                 self.refresh(uri)
                         for directory_id in dirty_directories:
                             self._reconcile_skill_directory(directory_id, self._skill_directories[directory_id])
+                        self._watch_unavailable = False
                 await self._sync_watch_subscriptions()
         finally:
             subscriptions = tuple(self._watch_subscriptions.values())
@@ -473,7 +503,7 @@ class WorkspaceFileResourceRegistry:
             for task in pending:
                 task.cancel()
             if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
+                await asyncio.gather(batch_task, config_task, return_exceptions=True)
 
     async def _sync_watch_subscriptions(self) -> None:
         """按当前安全边界增删监听；新增目录 ready 后立即重新对账。"""
@@ -532,13 +562,13 @@ class WorkspaceFileResourceRegistry:
         events = self._watch_events
         if events is None:
             raise RuntimeError("工作区文件来源 watcher 尚未初始化事件队列")
-        iterator: AsyncIterator[WorkspaceFileChangeBatch] = self._watch_service.subscribe_roots(
+        iterator: AsyncGenerator[WorkspaceFileChangeBatch, None] = self._watch_service.subscribe_roots(
             (root,),
             include_internal_paths=True,
             recursive=recursive,
             change_filter=self._watch_filter,
         )
-        next_batch = asyncio.create_task(anext(iterator))
+        next_batch = asyncio.ensure_future(anext(iterator))
         try:
             await self._watch_service.wait_until_ready(
                 (root,), recursive=recursive, change_filter=self._watch_filter,
@@ -549,7 +579,7 @@ class WorkspaceFileResourceRegistry:
                 except StopAsyncIteration:
                     return
                 await events.put(batch)
-                next_batch = asyncio.create_task(anext(iterator))
+                next_batch = asyncio.ensure_future(anext(iterator))
         finally:
             if not next_batch.done():
                 next_batch.cancel()
@@ -566,8 +596,9 @@ class WorkspaceFileResourceRegistry:
             for directory_id, handle in self._skill_directories.items()
             if handle.scope == "gateway"
         )
-        if gateway_directories and self._gateway_home.is_dir():
-            roots.add((self._gateway_home, False))
+        gateway_root = self._gateway_skills_root
+        if gateway_directories and gateway_root is not None and gateway_root.parent.is_dir():
+            roots.add((gateway_root.parent, False))
         for directory_id, handle in gateway_directories:
             root = handle.root
             if root.is_dir() and not root.is_symlink():

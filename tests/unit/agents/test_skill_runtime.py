@@ -26,6 +26,7 @@ from app.agents.tools.custom_invocation import (
 from app.agents.tools.testing import create_test_tool_2
 from app.agents.workspace_backend import build_workspace_backend
 from app.core.lifecycle import LifetimeScope
+from app.core.path_utils import get_boxteam_home
 from app.core.trace_middleware import (
     GATEWAY_ID_HEADER,
     TraceMiddleware,
@@ -51,6 +52,7 @@ from app.services.infrastructure.resource_platform.virtual_resources.resolver im
     ResourceUriResolveError,
     require_scope_binding,
 )
+from tests.support.gateway_skill_sources import accepted_gateway_skill_sources
 from tests.unit.services.infrastructure.rollout_context.conftest import source_seal_case
 
 __all__ = ["source_seal_case"]
@@ -108,18 +110,26 @@ def _build_catalog(
     file_registry: WorkspaceFileResourceRegistry | None = None,
     bundled_skill_groups=None,
     project_root: Path | None = None,
+    gateway_sources=None,
 ):
     source_owner = file_registry or WorkspaceFileResourceRegistry(
         workspace_root=workspace,
         watch_service=WorkspaceFileWatchService(workspace_root=workspace),
         project_root=project_root,
     )
+    gateway_id = get_current_gateway_id()
+    if gateway_sources is None and gateway_id is not None:
+        gateway_sources = accepted_gateway_skill_sources(
+            skills_root=get_boxteam_home() / "skills", gateway_id=gateway_id,
+            workspace_id=load_or_create_workspace_id(workspace), observation_channel=source_owner.observation_channel,
+        )
     return build_workspace_skill_catalog(
         workspace,
         registry=registry,
         file_registry=source_owner,
         bundled_skill_groups=bundled_skill_groups,
         project_root=project_root,
+        gateway_sources=gateway_sources,
     )
 
 
@@ -246,8 +256,15 @@ def test_build_workspace_skill_catalog_fails_closed_without_gateway_identity(
     monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
 
     assert get_current_gateway_id() is None
-    with pytest.raises(RuntimeError, match="gateway scope 的 scope_id 需要真实的 gateway_id"):
-        _build_catalog(tmp_path, registry=ResourceRegistry())
+    channel = WorkspaceFileResourceRegistry(
+        workspace_root=tmp_path, watch_service=WorkspaceFileWatchService(workspace_root=tmp_path),
+    ).observation_channel
+    remote = accepted_gateway_skill_sources(
+        skills_root=boxteam_home / "skills", gateway_id=FAKE_GATEWAY_ID,
+        workspace_id=load_or_create_workspace_id(tmp_path), observation_channel=channel,
+    )
+    with pytest.raises(RuntimeError, match="缺少请求级 Gateway 身份绑定"):
+        _build_catalog(tmp_path, registry=ResourceRegistry(), gateway_sources=remote)
 
 
 def test_gateway_identity_flows_from_request_header_into_catalog(
@@ -269,6 +286,13 @@ def test_gateway_identity_flows_from_request_header_into_catalog(
     )
     monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
 
+    file_owner = WorkspaceFileResourceRegistry(
+        workspace_root=tmp_path, watch_service=WorkspaceFileWatchService(workspace_root=tmp_path),
+    )
+    remote = accepted_gateway_skill_sources(
+        skills_root=boxteam_home / "skills", gateway_id=FAKE_GATEWAY_ID,
+        workspace_id=load_or_create_workspace_id(tmp_path), observation_channel=file_owner.observation_channel,
+    )
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
 
@@ -276,7 +300,7 @@ def test_gateway_identity_flows_from_request_header_into_catalog(
     def _build() -> dict[str, object]:
         bound = get_current_gateway_id()
         try:
-            catalog = _build_catalog(tmp_path, registry=ResourceRegistry())
+            catalog = _build_catalog(tmp_path, registry=ResourceRegistry(), gateway_sources=remote)
         except RuntimeError as error:
             return {"bound": bound, "error": str(error)}
         parsed = parse_resource_uri(catalog.entries[0].display_uri)
@@ -292,7 +316,7 @@ def test_gateway_identity_flows_from_request_header_into_catalog(
     missing = client.get("/build")
     assert missing.status_code == 200
     assert missing.json()["bound"] is None
-    assert "gateway scope 的 scope_id 需要真实的 gateway_id" in missing.json()["error"]
+    assert "缺少请求级 Gateway 身份绑定" in missing.json()["error"]
 
     ok = client.get("/build", headers={GATEWAY_ID_HEADER: FAKE_GATEWAY_ID})
     assert ok.status_code == 200

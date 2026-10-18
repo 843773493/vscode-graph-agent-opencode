@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-import app.services.infrastructure.resource_platform.sources.workspace_file_resources as resource_module
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
@@ -93,10 +92,9 @@ async def test_gateway_skills_root_creation_update_delete_and_rebuild_use_shallo
     workspace.mkdir()
     gateway_home = tmp_path / "gateway-home"
     gateway_home.mkdir()
-    monkeypatch.setattr(resource_module, "get_boxteam_home", lambda: gateway_home)
     watcher = WorkspaceFileWatchService(workspace_root=workspace)
     registry = WorkspaceFileResourceRegistry(
-        workspace_root=workspace, project_root=tmp_path / "project", watch_service=watcher,
+        workspace_root=None, gateway_skills_root=gateway_home / "skills", watch_service=watcher,
     )
     root = gateway_home / "skills"
     initial = registry.register_skill_directory(root=root, scope="gateway", scope_id="gateway-test")

@@ -475,20 +475,22 @@ def create_my_deep_agent(
 
     workspace_root = workspace_root.resolve()
 
-    # 正式 runtime 复用 compiler 已发布的快照；合成工具面仍走唯一 catalog builder。
-    resolved_skills = (
-        build_workspace_skill_catalog(
-            workspace_root,
-            registry=resource_registry,
-            file_registry=workspace_file_resource_registry,
+    # 合成工具目录只构建固定 schema；只有真实 thread 消费 Skill catalog。
+    resolved_skills = None
+    if owns_thread:
+        resolved_skills = (
+            build_workspace_skill_catalog(
+                workspace_root,
+                registry=resource_registry,
+                file_registry=workspace_file_resource_registry,
+            )
+            if skill_catalog is None and workspace_file_resource_registry is not None
+            else skill_catalog
         )
-        if skill_catalog is None and workspace_file_resource_registry is not None
-        else skill_catalog
-    )
-    if resolved_skills is None:
-        raise RuntimeError(
-            "构建 Workspace Skill catalog 需要 WorkspaceFileResourceRegistry"
-        )
+        if resolved_skills is None:
+            raise RuntimeError(
+                "构建 Workspace Skill catalog 需要 WorkspaceFileResourceRegistry"
+            )
     attachment_reader: Callable[[str, str], StoredAttachmentContent] | None = None
     if owns_thread and isinstance(checkpointer, RolloutCheckpointSaver):
         def read_attachment(uri_session_id: str, file_id: str) -> StoredAttachmentContent:

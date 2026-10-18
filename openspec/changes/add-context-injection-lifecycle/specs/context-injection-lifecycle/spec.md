@@ -220,7 +220,7 @@ Workspace配置`context.resource_activation.overrides.mcp_tool_catalog` SHALL使
 
 系统 SHALL 对代码内明确装配的文件、Gateway受认证内部快照提供统一的变化观察（原「权威内存来源」适配已随 `remove-agent-memory` 移除 `MemoryStateAdapter`/`MemoryStateReader`/`memory_states` 装配点，不在当前装配面内）、稳定快照、解析与语义发布流程；typed适配合同可以供测试注入替身，但本change不得要求可安装资源插件、plugin manifest监视或动态执行任意provider/loader/reaction。已登记观察来源和已发布语义资源 MUST是不同身份与存储边界：`source_id`标识owner scope内的软件登记来源，`resource_id`标识可由一个或多个来源及其它语义资源派生的语义资源；路径、watch key、display URI均不得充当这两种身份。每个底层文件监视订阅 MUST 按monitor instance、规范化私有locator及recursive/filter/exclude/correlation/options等完整语义共享并引用计数，不能误合并不同观察合同，也不得为每个SessionThread建立独立watcher。资源观察、Job事件、配置生命周期和context source通知 MUST使用相互隔离的事件channel、queue、cursor、背压和故障域；资源事件不得进入job专属队列。
 
-观察事件只能把已登记来源标记为dirty/change/gap/overflow，不能携带正文、credential或直接成为来源/语义revision。SourceReconciler MUST 用已知来源适配的稳定一致性合同形成不可变 `ObservedSourceRevision`：文件用允许根、稳定双读与完整原始 byte hash，其它来源用其自身可验证版本 token，不能把后者伪装成文件读取（「权威内存状态」来源与 `gateway_snapshot` version token 通路均已随 `remove-agent-memory` 移除、不在当前装配面内；本 change 的 SourceReconciler 只需处理 file 来源；此义务仅约束将来确实缺少文件双读语义的来源）。ResourceDerivationGraph MUST从已接受的来源/语义依赖revision按无环拓扑、版本化loader、语义diff和CAS发布不可变`ResourceSnapshot`，并保留可验证source lineage；依赖环、缺失required依赖和跨generation不一致的多输入组合 MUST显式失败。同一来源可派生多个资源，多个来源可合成一个资源；原始来源变化但某facet语义payload不变时该facet不得推进revision或追加context item。重复、乱序、rename burst、丢失或overflow MUST通过有界reconcile收敛；失败时保留上一份valid snapshot并显式标记unavailable/diagnostic，required consumer不得使用旧valid替代当前失败。启动、Gateway内部快照重连和已知来源登记变更 MUST先完成已登记边界的initial reconcile并通过readiness gate；不得递归扫描未知目录、运行周期`rg`或根据物理目录猜测资源owner。
+观察事件只能把已登记来源标记为dirty/change/gap/overflow，不能携带正文、credential或直接成为来源/语义revision。SourceReconciler MUST 用已知来源适配的稳定一致性合同形成不可变 `ObservedSourceRevision`：文件用允许根、稳定双读与完整原始 byte hash，其它来源用其自身可验证版本 token，不能把后者伪装成文件读取（通用SourceReconciler继续只处理file；Gateway global Skill使用精确typed raw owner/Workspace source，以已接受byte revision组合publication revision，不恢复generic gateway_snapshot、version_token或memory-state）。ResourceDerivationGraph MUST从已接受的来源/语义依赖revision按无环拓扑、版本化loader、语义diff和CAS发布不可变`ResourceSnapshot`，并保留可验证source lineage；依赖环、缺失required依赖和跨generation不一致的多输入组合 MUST显式失败。同一来源可派生多个资源，多个来源可合成一个资源；原始来源变化但某facet语义payload不变时该facet不得推进revision或追加context item。重复、乱序、rename burst、丢失或overflow MUST通过有界reconcile收敛；失败时保留上一份valid snapshot并显式标记unavailable/diagnostic，required consumer不得使用旧valid替代当前失败。启动、Gateway内部快照重连和已知来源登记变更 MUST先完成已登记边界的initial reconcile并通过readiness gate；不得递归扫描未知目录、运行周期`rg`或根据物理目录猜测资源owner。
 
 配置改变已知来源登记时，config domain owner MUST先在独立shadow lifetime scope校验候选配置与受影响的订阅、完成initial reconcile与health检查，再原子发布新配置/来源generation、阻断旧generation继续发布并排空旧scope；失败时只关闭candidate scope，旧generation保持权威，新旧generation不得同时发布同一来源。动态配置只能更改已知source registration和业务policy，不得安装可执行provider/loader/reaction。进程内释放机制不得决定candidate有效性、发布时机或业务reload policy。事件变化不得主动唤醒所有thread、直接追加context item或修改sealed assembly。
 
@@ -270,6 +270,21 @@ Workspace配置`context.resource_activation.overrides.mcp_tool_catalog` SHALL使
 
 - **WHEN** 已配置MCP Server提供工具或其工具目录发生变化
 - **THEN** 明确的McpCatalogOwner验证完整工具目录，McpToolGuidanceProducer从其派生一个`tail_only` CSM指引来源；原始MCP prompts/resources/server instructions不自动注册或注入，亦不安装可执行资源插件；未来消费MCP resources/subscriptions须另行定义来源owner与版本合同
+
+#### Scenario: delegated child 冷恢复保留创建 Gateway 来源
+
+- **WHEN** 真实委派调用已发布child creation record、初次execution尚未调度时进程退出，随后从权威catalog与record冷启动恢复
+- **THEN** 创建调用Trace身份冻结于`task_seed.gateway_id`并参与creation preimage；`FrozenThreadSeed`只从该record映射它，初次dispatch在调用`start_job`前显式绑定该身份，结果reply在调用`RuntimeSourceDispatcher.submit`前绑定同一身份，二者均由既有Job/wakeup持久合同继续传递并在作用域结束后恢复Context；缺字段或非法值明确失败，直接Workspace调用必须显式保存`null`，不能从启动进程或当前请求补值、不能回退本机路径
+
+#### Scenario: 工具目录独立于 Skill 来源可用性
+
+- **WHEN** 经真实Gateway调用`GET /api/v1/tools`，包括Gateway Skill来源处于unavailable状态
+- **THEN** 无durable thread owner的合成工具面只产出固定tool schema，仍返回`skill_load`的同一tool id与`name/mode`输入schema及请求`request_id`；不得因此构建或读取Skill catalog，真实执行的来源readiness与冻结激活义务保持不变
+
+#### Scenario: 首次绑定只等待 Gateway 尚未监听的有界窗口
+
+- **WHEN** 冷启动恢复的独立执行根首次绑定Gateway Skill来源，而Gateway仍在等待受管Workspace健康、尚未监听
+- **THEN** 仅`ConnectTimeout`或cause/context链中`OSError.errno == ECONNREFUSED`允许重试；请求与退避共用现有连接配置的一个总墙钟预算（默认30秒），每轮GET前检查剩余预算，连接后延迟响应同样不能越过deadline；超时明确记录错误并发布unavailable且不建立观察任务，不接受迟到快照。DNS、网络不可达、TLS、无底层拒绝原因及其它传输错误、401/403、坏协议、source-unavailable都只尝试一次；后续观察不重试，首次失败后的新ensure入口可以重新取得该配置预算，不增加生产常量或隐式回退
 
 ### Requirement: 进程内资源释放必须只有一个无业务决策的所有权机制
 
@@ -457,7 +472,7 @@ activation registration MUST 绑定`name + catalog_entry_identity + resolved_sou
 
 ### Requirement: 文件 source 必须通过稳定且有界的统一读取协议
 
-系统 SHALL 让 Skill metadata、Skill activation、AGENTS及其它文件 source由对应SnapshotProvider/SourceReconciler统一通过`StableSourceReader`读取，再由ResourceDerivationGraph产生语义facet。reader MUST 接受provider-owned `SourceReadHandle`与允许根；workspace source可由workspace provider读取，Gateway global Skill MUST由Gateway provider读取并通过仅内部可用、受认证且不含路径的`StableSourceSnapshot`向workspace发布entry/resource/source identity、来源revision hash、byte length和精确正文，随后按同一来源revision派生metadata/body语义resource。handle MUST 能在进程重启后由持久catalog entry identity重新解析，不得把临时进程token、物理路径或正文泄露给模型、普通工具结果或canonical history。CSM、middleware、`skill_load`和model-call preparation不得直接调用reader。
+系统 SHALL 让 Skill metadata、Skill activation、AGENTS及其它文件 source由对应SnapshotProvider/SourceReconciler统一通过`StableSourceReader`读取，再由ResourceDerivationGraph产生语义facet。reader MUST 接受provider-owned `SourceReadHandle`与允许根；workspace source可由workspace provider读取，Gateway global Skill MUST由Gateway provider读取并通过仅内部可用、受认证且不含路径的`StableSourceSnapshot`向workspace发布entry/source identity、来源revision hash、byte length和精确正文；Workspace据此派生metadata/activation resource identity，随后按同一来源revision派生metadata/body语义resource。handle MUST 能在进程重启后由持久catalog entry identity重新解析，不得把临时进程token、物理路径或正文泄露给模型、普通工具结果或canonical history。CSM、middleware、`skill_load`和model-call preparation不得直接调用reader。 Gateway原始快照MUST使用现有本地token认证，同时绑定真实Gateway身份与本Gateway已登记的本机Workspace UUID受众；远端投影、错误身份、失败认证及错误byte hash MUST被拒绝。Workspace MUST通过进程共享typed source接收，不得回读Gateway本机路径；initial reconcile、断连不可用、gap后全量快照及重启重建归现有source lifecycle，prepare与skill_load不得网络取数。
 
 每个读取attempt MUST 重新验证允许根containment，拒绝非普通文件和不允许的symlink，通过no-follow handle分别在读取前后比较filesystem identity、size与高精度时间签名，并进行第二次独立打开/读取；只有两次读取各自稳定、identity/signature一致且精确内容hash相同才可接受。系统最多尝试三次，持续变化返回`source-changed-during-read`并阻止candidate、seal和dispatch。超过产品固定byte上限返回`source-too-large`且不得截断；非严格UTF-8返回`source-invalid-encoding`。`source_snapshot_hash` MUST覆盖接受的完整原始字节，不得隐式规范化BOM、换行、空白或Unicode；logical source使用版本化extractor计算模型可见`facet_revision_hash`，只有facet payload变化才可追加item。AGENTS整文件facet使用原始正文；Skill metadata只使用name/description的确定性表示，activation只使用frontmatter之后的精确正文bytes；source item再使用版本化确定性serializer。
 

@@ -86,6 +86,7 @@ from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
+from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.job import JobControlRequest
 from app.schemas.internal_v2.session import SessionForkRequest
@@ -2325,12 +2326,40 @@ async def skill_tracking_client(runtime_case: RuntimeCase):
         yield client
 
 
+@pytest.fixture
+async def gateway_skill_publication(runtime_case: RuntimeCase):
+    """真实 raw 文件 owner 与传输协议桩；真实 Gateway 进程另由闭环用例验证。"""
+    owner = GatewaySkillSourceOwner(
+        gateway_id="gateway_0123456789abcdef0123456789abcdef", skills_root=get_boxteam_home() / "skills",
+    )
+    await owner.start()
+    source = runtime_case.runner.container.resource_platform.gateway_skill_sources
+    assert source is not None
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        snapshot = owner.snapshot(workspace_id=runtime_case.runner.container.workspace_id)
+        etag = '"' + snapshot.revision + '"'
+        if request.headers.get("If-None-Match") == etag:
+            return httpx.Response(304, headers={"ETag": etag})
+        return httpx.Response(200, json={
+            "code": 0, "request_id": "gateway-skill-fixture-request", "data": snapshot.model_dump(mode="json"),
+        }, headers={"ETag": etag})
+
+    source._client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    try:
+        yield source
+    finally:
+        await owner.close()
+
+
 @pytest.mark.asyncio
 async def test_real_runner_discovers_skill_overrides_and_downgrades_without_rebinding_tracked_source(
     runtime_case: RuntimeCase,
     skill_tracking_client: httpx.AsyncClient,
+    gateway_skill_publication,
 ):
     case = runtime_case
+    source = gateway_skill_publication
     name = "runtime-directory-skill"
     gateway_id = "gateway_0123456789abcdef0123456789abcdef"
     gateway_body = "Gateway 原 tracked 正文 G1\n"
@@ -2379,14 +2408,13 @@ async def test_real_runner_discovers_skill_overrides_and_downgrades_without_rebi
     generation = case.tracker.snapshot(session_id, thread_id).generation
     directories = case.skill_catalogs[0].directory_ids
     initial_workspace_directory = file_registry.skill_directory_snapshot(directories["workspace"])
-    initial_gateway_directory = file_registry.skill_directory_snapshot(directories["gateway"])
+    initial_gateway_directory = source.snapshot(gateway_id=gateway_id)
     assert initial_workspace_directory.entries == initial_gateway_directory.entries == ()
 
     def assert_dispatch_source(resource_id: str, source_revision: str | None):
         assert source_revision is not None
         activation = registry.snapshot(resource_id)
-        layer = resource_id.split(":")[1]
-        assert activation.source_lineage == ((f"skill-source:{layer}:{name}", source_revision),)
+        assert activation.source_lineage == ((f"gateway-skill-source:{gateway_id}:{name}", source_revision),)
         assembly = case.model_dispatches[-1].snapshot
         frozen = case.runner.saver.load_sealed_resource_activation(
             session_id, thread_id=thread_id, assembly_id=assembly.assembly_id,
@@ -2411,15 +2439,15 @@ async def test_real_runner_discovers_skill_overrides_and_downgrades_without_rebi
     gateway_file.parent.mkdir(parents=True, exist_ok=True)
     gateway_file.write_text(frontmatter + gateway_body, encoding="utf-8", newline="")
     await wait_for_layer("gateway", extra=False)
-    accepted_gateway_directory = file_registry.skill_directory_snapshot(directories["gateway"])
+    accepted_gateway_directory = source.snapshot(gateway_id=gateway_id)
     assert accepted_gateway_directory.revision != initial_gateway_directory.revision
-    assert [entry.uri for entry in accepted_gateway_directory.entries] == [gateway_uri]
+    assert [entry.display_uri for entry in accepted_gateway_directory.entries] == [gateway_uri]
     # 第二个 admission 显式加载真正新发现的 Gateway entry。
     second = await complete_with_gateway()
     assert first.execution_id != second.execution_id
     assert len(case.model_requests) == 3
     assert gateway_body.strip() in json.dumps(case.model_requests[2]["messages"], ensure_ascii=False)
-    assert_dispatch_source(f"skill-entry:gateway:{name}:activation", file_registry.snapshot(gateway_uri).revision)
+    assert_dispatch_source(f"skill-entry:gateway:{gateway_id}:{name}:activation", next(entry.revision for entry in source.snapshot(gateway_id=gateway_id).entries if entry.name == name))
 
     workspace_file.parent.mkdir(parents=True, exist_ok=True)
     workspace_file.write_text(frontmatter + workspace_body, encoding="utf-8", newline="")
@@ -2433,16 +2461,16 @@ async def test_real_runner_discovers_skill_overrides_and_downgrades_without_rebi
     assert accepted_workspace_directory.revision != initial_workspace_directory.revision
     gateway_file.write_text(frontmatter + gateway_updated, encoding="utf-8", newline="")
     async with asyncio.timeout(6):
-        while registry.snapshot(f"skill-entry:gateway:{name}:activation").payload != {"body": gateway_updated}:
+        while registry.snapshot(f"skill-entry:gateway:{gateway_id}:{name}:activation").payload != {"body": gateway_updated}:
             await asyncio.sleep(0.02)
     await complete_with_gateway()
     overridden_request = json.dumps(case.model_requests[-1]["messages"], ensure_ascii=False)
     assert gateway_updated.strip() in overridden_request
     assert workspace_body.strip() not in overridden_request
-    assert_dispatch_source(f"skill-entry:gateway:{name}:activation", file_registry.snapshot(gateway_uri).revision)
+    assert_dispatch_source(f"skill-entry:gateway:{gateway_id}:{name}:activation", next(entry.revision for entry in source.snapshot(gateway_id=gateway_id).entries if entry.name == name))
     state = case.runner.saver.load_context_source_control_states(ContextSourceOwnerKey(session_id, thread_id))
     tracked = [item for item in state if item.source_kind == "skill" and item.tracking_status == "tracked"]
-    assert [item.source_id for item in tracked] == [f"skill:skill-entry:gateway:{name}"]
+    assert [item.source_id for item in tracked] == [f"skill:skill-entry:gateway:{gateway_id}:{name}"]
 
     workspace_file.unlink()
     extra_file.unlink()
@@ -2460,8 +2488,8 @@ async def test_real_runner_discovers_skill_overrides_and_downgrades_without_rebi
     gateway_file.unlink()
     async with asyncio.timeout(6):
         while (
-            file_registry.skill_directory_snapshot(directories["gateway"]).entries
-            or f"skill-entry:gateway:{name}:activation" in {item.resource_id for item in registry.snapshots()}
+            source.snapshot(gateway_id=gateway_id).entries
+            or f"skill-entry:gateway:{gateway_id}:{name}:activation" in {item.resource_id for item in registry.snapshots()}
         ):
             await asyncio.sleep(0.02)
     await wait_for_layer("workspace", extra=False)
@@ -2475,7 +2503,9 @@ async def test_real_runner_discovers_skill_overrides_and_downgrades_without_rebi
     await asyncio.wait_for(asyncio.shield(job.task), 25)
     assert job.status == JobStatus.failed and "tracked-source-unavailable" in job.error_message
     assert len(case.model_requests) == before_failure
-    assert file_registry.snapshot(gateway_uri).available is False
+    assert not source.snapshot(gateway_id=gateway_id).entries
+    with pytest.raises(KeyError, match="尚未注册"):
+        file_registry.snapshot(gateway_uri)
 
     # 用户通过已有受信入口停止原 tracking，无需恢复已删除来源即可继续真实请求。
     response = await skill_tracking_client.post(
@@ -2485,7 +2515,7 @@ async def test_real_runner_discovers_skill_overrides_and_downgrades_without_rebi
     receipt = response.json()["data"]
     assert receipt["status"] == "loaded" and receipt["tracked"] is False and receipt["error"] is None
     control_states = case.runner.saver.load_context_source_control_states(ContextSourceOwnerKey(session_id, thread_id))
-    assert next(item for item in control_states if item.source_id == f"skill:skill-entry:gateway:{name}").tracking_status == "untracked"
+    assert next(item for item in control_states if item.source_id == f"skill:skill-entry:gateway:{gateway_id}:{name}").tracking_status == "untracked"
     await complete_with_gateway()
     assert len(case.model_requests) == before_failure + 1
     assert case.compiled == [(pair, graph, scope)] and scope.state == "open"

@@ -16,5 +16,5 @@
 - Workspace API、Terminal、Browser 和 SSH tunnel 必须使用明确名称管理。
 - 关闭过程先优雅终止，超时后终止完整进程组，并暴露清理错误。
 - 后端重启不得无必要地重启 Terminal 或 Browser。
-- Gateway 只把 `runtime.workspace.default_skill_groups` 作为环境变量传给受管 Workspace；Skill 文件、工具注册和 Agent 业务逻辑由 Workspace 运行时负责。
+- Gateway 把 `runtime.workspace.default_skill_groups` 作为环境变量传给受管 Workspace，并仅观察自身 `${BOXTEAM_HOME}/skills`，向认证且已登记的本机 Workspace 发布无路径的原始 Skill 快照；Skill 语义、工具注册和 Agent 业务逻辑由 Workspace 运行时负责。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

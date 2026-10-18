@@ -21,6 +21,7 @@ from app.agents.graph_binding import (
     DEEP_AGENT_GRAPH_BINDING,
     compute_capability_profile_hash,
 )
+from app.core.trace_middleware import get_current_gateway_id
 from app.services.orchestration.initial_execution_binding_worker import (
     InitialExecutionBinder,
 )
@@ -154,6 +155,7 @@ class SessionSubagentService:
         task_seed: dict[str, object] = {
             "description": normalized_description,
             "agent_id": parent_agent_id,
+            "gateway_id": get_current_gateway_id(),
             "subagent_type": subagent_type,
             "title": normalized_title,
             "parent_job_id": parent_job_id,

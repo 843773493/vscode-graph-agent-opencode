@@ -444,7 +444,7 @@ async def seed_execution_intent(tmp_path, session_bundle_factory):
             initial_state="running", artifact_manifest={}, session_metadata={
                 "graph_binding": {"graph_id": "deep-agent", "graph_revision": 1, "graph_schema_hash": "sha256:" + "a" * 64,
                                   "capability_profile_hash": compute_capability_profile_hash(capability_profile=profile)},
-                "capability_profile": profile, "task_seed": {"description": "冻结任务"},
+                "capability_profile": profile, "task_seed": {"description": "冻结任务", "gateway_id": None},
                 "task_reference": {"parent_session_id": session_id, "parent_thread_id": resolver.main_thread_id(session_id)},
             },
         )

@@ -11,6 +11,7 @@ from dataclasses import replace
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.job_event_bus import EventType
 from app.core.key_lock_pool import KeyLockPool
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.event import Event
@@ -18,7 +19,10 @@ from app.services.business.session_service import SessionService
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.mapping.itemized.thread_seed import frozen_thread_seed
+from app.services.mapping.itemized.thread_seed import (
+    FrozenThreadSeed,
+    frozen_thread_seed,
+)
 from app.services.orchestration.initial_execution_binding_worker import (
     InitialExecutionBinder,
     InitialExecutionBindingTarget,
@@ -51,7 +55,7 @@ class ThreadInitialExecutionService:
     def binder(self) -> InitialExecutionBinder:
         return self._bind
 
-    def _binding(self, target: InitialExecutionBindingTarget) -> tuple[InternalExecutionIntent, str, dict[str, object]]:
+    def _binding(self, target: InitialExecutionBindingTarget) -> tuple[InternalExecutionIntent, FrozenThreadSeed]:
         intent = target.intent
         control = self._factory.for_owner_session(intent.session_id).control_store
         record = control.get_thread_creation_record(intent.creation_idempotency_key)
@@ -61,10 +65,10 @@ class ThreadInitialExecutionService:
             admission_idempotency_key=intent.admission_idempotency_key,
             input_reference_json=json.dumps(frozen.reference, sort_keys=True, ensure_ascii=False, separators=(",", ":")),
         )
-        return binding, frozen.message.content, dict(frozen.message.metadata)
+        return binding, frozen
 
     def _bind(self, target: InitialExecutionBindingTarget) -> InitialExecutionBindOutcome:
-        binding, _content, _metadata = self._binding(target)
+        binding, _frozen = self._binding(target)
         self._saver.admit_internal_execution(
             target.intent.session_id, thread_id=target.intent.thread_id,
             job_id=target.job_id, intent=binding, message=None,
@@ -92,15 +96,19 @@ class ThreadInitialExecutionService:
                 if outcome != "unknown":
                     await self._report(intent.session_id, intent.job_id)
                     continue
-                binding, content, metadata = self._binding(target)
+                binding, frozen = self._binding(target)
                 record = control.get_thread_creation_record(intent.creation_idempotency_key)
                 frozen_agent_id = json.loads(record.task_seed)["agent_id"]
-                await self._jobs.start_job(
-                    session_id, content, thread_id=intent.thread_id,
-                    execution_binding=binding, reserved_job_id=intent.job_id,
-                    message_id=binding.message_id, message_created_at=intent.intent_created_at,
-                    message_metadata=metadata, agent_id=frozen_agent_id,
-                )
+                gateway_token = set_current_gateway_id(frozen.gateway_id)
+                try:
+                    await self._jobs.start_job(
+                        session_id, frozen.message.content, thread_id=intent.thread_id,
+                        execution_binding=binding, reserved_job_id=intent.job_id,
+                        message_id=binding.message_id, message_created_at=intent.intent_created_at,
+                        message_metadata=dict(frozen.message.metadata), agent_id=frozen_agent_id,
+                    )
+                finally:
+                    reset_current_gateway_id(gateway_token)
 
     async def start(self) -> None:
         _revision, nodes = self._sessions.path_resolver.catalog_store.read_nodes_snapshot()
@@ -133,6 +141,7 @@ class ThreadInitialExecutionService:
         if intent is None or intent.initial_state != "running":
             return
         record = control.get_thread_creation_record(intent.creation_idempotency_key)
+        frozen = frozen_thread_seed(record)
         if record.task_reference is None:
             raise RuntimeError("delegated child 缺少冻结 parent thread address")
         parent = json.loads(record.task_reference)
@@ -147,11 +156,15 @@ class ThreadInitialExecutionService:
             display_content="委派任务已结束，正在处理返回结果。",
             display_provenance=replace(provenance, delegation_id=record.delegation_id),
         )
-        await self._dispatcher.submit(
-            session_id, parent["parent_thread_id"], message,
-            source_id=f"subagent:{record.delegation_id}:result",
-            idempotency_key=f"subagent-result:{intent.admission_idempotency_key}",
-        )
+        gateway_token = set_current_gateway_id(frozen.gateway_id)
+        try:
+            await self._dispatcher.submit(
+                session_id, parent["parent_thread_id"], message,
+                source_id=f"subagent:{record.delegation_id}:result",
+                idempotency_key=f"subagent-result:{intent.admission_idempotency_key}",
+            )
+        finally:
+            reset_current_gateway_id(gateway_token)
 
     async def stop(self) -> None:
         self._closed = True

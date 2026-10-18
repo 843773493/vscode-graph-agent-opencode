@@ -9,10 +9,12 @@ from pathlib import Path
 import pytest
 
 from app.agents.skill_runtime import build_workspace_skill_catalog
+from app.core.path_utils import get_boxteam_home
 from app.core.trace_middleware import (
     reset_current_gateway_id,
     set_current_gateway_id,
 )
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.infrastructure.resource_platform.derivation.types import (
     ResourceSnapshot,
 )
@@ -29,6 +31,7 @@ from app.services.infrastructure.resource_platform.virtual_resources import (
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
+from tests.support.gateway_skill_sources import accepted_gateway_skill_sources
 
 
 def _write_skill(root: Path, name: str, description: str, body: str) -> None:
@@ -111,6 +114,10 @@ def _build(
         tmp_path,
         registry=registry,
         file_registry=file_registry,
+        gateway_sources=accepted_gateway_skill_sources(
+            skills_root=get_boxteam_home() / "skills", gateway_id=FAKE_GATEWAY_ID,
+            workspace_id=load_or_create_workspace_id(tmp_path), observation_channel=file_registry.observation_channel,
+        ),
     )
 
 
@@ -202,7 +209,7 @@ def test_activation_facet_uses_exact_bytes_after_frontmatter(
     assert activation.source_lineage == metadata.source_lineage
 
     # 覆盖只改变 effective catalog；原 Gateway 来源仍发布 exact facets 供 tracked 冻结。
-    shadowed = registry.snapshot("skill-entry:gateway:shared:activation")
+    shadowed = registry.snapshot(f"skill-entry:gateway:{FAKE_GATEWAY_ID}:shared:activation")
     assert shadowed.available and shadowed.payload == {"body": "gateway body   \n"}
     assert shadowed.display_uri != by_name["shared"].display_uri
     assert by_name["shared"].layer == "workspace"
@@ -234,12 +241,16 @@ def test_required_unavailable_skill_snapshot_never_uses_retained_content(
         lambda uri: replace(stale_snapshot, uri=uri),
     )
 
-    with pytest.raises(RuntimeError, match="Skill 文件来源不可用"):
+    with pytest.raises(RuntimeError, match="Skill 来源不可用"):
         build_workspace_skill_catalog(
             layered_workspace,
             registry=ResourceRegistry(),
             file_registry=file_registry,
             bundled_skill_groups=(),
+            gateway_sources=accepted_gateway_skill_sources(
+                skills_root=get_boxteam_home() / "skills", gateway_id=FAKE_GATEWAY_ID,
+                workspace_id=load_or_create_workspace_id(layered_workspace), observation_channel=file_registry.observation_channel,
+            ),
         )
 
 

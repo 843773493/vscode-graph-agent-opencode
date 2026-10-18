@@ -9,8 +9,8 @@ import pytest
 from app.agents import agent_factory
 from app.agents.instruction_producers import runtime_instruction_producers
 from app.agents.policy import ToolPolicyResolver
-from app.agents.skill_runtime import build_workspace_skill_catalog
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
@@ -145,13 +145,6 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         workspace_root=tmp_path,
         watch_service=WorkspaceFileWatchService(workspace_root=tmp_path),
     )
-    skill_catalog = build_workspace_skill_catalog(
-        tmp_path,
-        registry=resource_registry,
-        file_registry=file_registry,
-        bundled_skill_groups=(),
-    )
-
     required = {
         "model": MagicMock(),
         "instruction_producers": runtime_instruction_producers(
@@ -181,7 +174,6 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         "resource_registry": resource_registry,
         "resource_activation": None,
         "workspace_root": tmp_path,
-        "skill_catalog": skill_catalog,
         "workspace_file_resource_registry": file_registry,
         "middleware": [],
     }
@@ -194,6 +186,7 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         ),
         patch.object(agent_factory, "ContextSourceManager", wraps=ContextSourceManager) as context_manager,
         patch.object(agent_factory, "build_workspace_backend"),
+        patch.object(agent_factory, "build_workspace_skill_catalog") as build_catalog,
         patch.object(agent_factory, "append_skill_middlewares"),
         patch.object(
             agent_factory, "build_deep_agent_middleware", return_value=[]
@@ -205,7 +198,11 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         patch.object(agent_factory, "create_agent", return_value=built_agent),
         patch.object(agent_factory.GRAPH_FACTORY_REGISTRY, "resolve"),
     ):
-        agent_factory.create_my_deep_agent(**required)
+        gateway_token = set_current_gateway_id("gateway_tools_inspection")
+        try:
+            agent_factory.create_my_deep_agent(**required)
+        finally:
+            reset_current_gateway_id(gateway_token)
 
     call = context_manager.call_args.kwargs
     assert call["owner"] is None
@@ -213,6 +210,8 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
     assert call["mutation_intent_port"] is None
     assert call["lifecycle_event_sink"] is None
     reactor.assert_not_called()
+    build_catalog.assert_not_called()
     middleware_kwargs = build_middleware.call_args.kwargs
+    assert middleware_kwargs["resolved_skills"] is None
     assert middleware_kwargs["source_registry"] is None
     assert middleware_kwargs["context_source_reactor"] is None

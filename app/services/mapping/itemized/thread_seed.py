@@ -17,6 +17,7 @@ THREAD_SEED_DISPLAY_CONTENT = "已收到委派任务。"
 class FrozenThreadSeed:
     reference: dict[str, object]
     message: PreparedInternalMessage
+    gateway_id: str | None
 
 
 def frozen_thread_seed(record: ThreadCreationRecord) -> FrozenThreadSeed:
@@ -29,6 +30,11 @@ def frozen_thread_seed(record: ThreadCreationRecord) -> FrozenThreadSeed:
     description = seed.get("description")
     if not isinstance(description, str) or not description:
         raise ValueError("child seed 缺少 description")
+    if "gateway_id" not in seed:
+        raise ValueError("child seed 缺少冻结 gateway_id；独立工作区必须显式保存 null")
+    gateway_id = seed["gateway_id"]
+    if gateway_id is not None and (not isinstance(gateway_id, str) or not gateway_id.strip()):
+        raise ValueError("child seed gateway_id 必须是非空字符串或显式 null")
     sections = [
         PromptSection("control_context", {**reference, **dict(seed.get("trusted_context", {}))}),
         PromptSection("delegated_task", description),
@@ -37,6 +43,7 @@ def frozen_thread_seed(record: ThreadCreationRecord) -> FrozenThreadSeed:
     if instructions is not None:
         sections.append(PromptSection("untrusted_instructions", instructions))
     return FrozenThreadSeed(
+        gateway_id=gateway_id,
         reference={
             "creation_idempotency_key": record.thread_creation_idempotency_key,
             "task_seed_hash": sha256_jcs(seed),

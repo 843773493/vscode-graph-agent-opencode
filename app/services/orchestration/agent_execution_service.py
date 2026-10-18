@@ -72,6 +72,9 @@ from app.services.infrastructure.message_stream_store import (
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
+from app.services.infrastructure.resource_platform.sources.gateway_skill_sources import (
+    GatewaySkillSources,
+)
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
@@ -117,6 +120,7 @@ class AgentExecutionService(JobStepExecutor):
         team_resource_subscriber: Callable[[str, str, ResourceRegistry, LifetimeScope], None],
         # Turn 控制 inbox 状态路径解析器；None 时用 SQLite catalog 解析到会话节点。
         control_inbox_state_path: Callable[[str, str], Path] | None = None,
+        gateway_skill_sources: GatewaySkillSources | None = None,
     ):
         # OpenSpec 8.4：进程内复用的只有不含 Session/Thread 的 graph
         # blueprint/topology 投影——这里缓存的是 Provider 工具面定义（纯 DTO）
@@ -142,6 +146,7 @@ class AgentExecutionService(JobStepExecutor):
         )
         self._external_resource_leases = external_resource_leases
         self._workspace_file_resource_registry = workspace_file_resource_registry
+        self._gateway_skill_sources = gateway_skill_sources
         self._graph_binding_store = graph_binding_store
         self._residency_tracker = residency_tracker
         self._resource_activation_factory = resource_activation_factory
@@ -267,6 +272,10 @@ class AgentExecutionService(JobStepExecutor):
         mcp_tools = tuple(publication.tools.values())
         # Job 执行根已经绑定真实 Gateway；空 Context builder 与后台发布显式用此身份。
         gateway_id = get_current_gateway_id()
+        if gateway_id is not None:
+            if self._gateway_skill_sources is None:
+                raise RuntimeError("正式 Gateway runtime 需要认证 Gateway Skill source owner")
+            await self._gateway_skill_sources.ensure_bound(gateway_id)
         generation_key = (
             binding.selector_fields(),
             snapshot.revision,
@@ -310,6 +319,7 @@ class AgentExecutionService(JobStepExecutor):
                         self._workspace_root, registry=resource_registry,
                         file_registry=file_registry,
                         gateway_id=gateway_id,
+                        gateway_sources=self._gateway_skill_sources if gateway_id is not None else None,
                     )
                     agent = self._build_agent(
                         session_id=session_id,
@@ -333,6 +343,7 @@ class AgentExecutionService(JobStepExecutor):
                 skill_catalog, registry=resource_registry,
                 file_registry=file_registry,
                 lifetime_scope=scope,
+                gateway_sources=self._gateway_skill_sources if gateway_id is not None else None,
             )
             await observe_phase(thread_id, "thread.runtime.built", details={
                 "session_id": session_id, "thread_id": thread_id,

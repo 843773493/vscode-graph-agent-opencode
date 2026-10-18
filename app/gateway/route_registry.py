@@ -11,6 +11,7 @@ from app.gateway.federation.router import router as federation_router
 from app.gateway.routes import (
     federation,
     health_config,
+    skill_sources,
     ui_assets,
     users,
     workspaces,
@@ -29,6 +30,7 @@ ROUTE_MODULES = (
     workspaces_managed,
     ui_assets,
     workspaces_lifecycle,
+    skill_sources,
 )
 
 

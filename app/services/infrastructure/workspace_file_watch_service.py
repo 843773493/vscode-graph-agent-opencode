@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 import time
-from collections.abc import AsyncIterator, Callable, Iterable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -114,7 +114,7 @@ class WorkspaceFileWatchService:
         include_internal_paths: bool = False,
         recursive: bool = True,
         change_filter: WorkspaceFileChangeFilter | None = None,
-    ) -> AsyncIterator[WorkspaceFileChangeBatch]:
+    ) -> AsyncGenerator[WorkspaceFileChangeBatch, None]:
         queue: asyncio.Queue[WorkspaceFileChangeBatch] = asyncio.Queue(
             maxsize=FILE_WATCH_QUEUE_SIZE,
         )

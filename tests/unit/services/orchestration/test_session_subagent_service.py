@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -14,11 +16,13 @@ from app.core.session_catalog_store import (
 from app.core.session_control_store import SessionControlStore
 from app.core.session_creation import SessionCreationService
 from app.core.session_lifecycle_gate import NavigationTopologyGate
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.schemas.internal_v2.session import SessionDTO
 from app.services.business.session_context_resource import (
     session_resource_identity,
     session_resource_uri,
 )
+from app.services.mapping.itemized.thread_seed import frozen_thread_seed
 from app.services.orchestration.initial_execution_binding_worker import (
     InitialExecutionBindingWorker,
     InitialExecutionBindOutcome,
@@ -175,7 +179,11 @@ async def test_delegate_creates_durable_child_thread_with_pending_intent(
 ) -> None:
     service = make_service(parent_session, factory)
 
-    accepted = await delegate_parent(service, parent_session)
+    gateway_token = set_current_gateway_id("gateway_frozen_creation")
+    try:
+        accepted = await delegate_parent(service, parent_session)
+    finally:
+        reset_current_gateway_id(gateway_token)
 
     assert accepted.owner_session_id == parent_session.session_id
     assert accepted.child_thread_id.startswith("thr_")
@@ -185,7 +193,6 @@ async def test_delegate_creates_durable_child_thread_with_pending_intent(
     assert accepted.execution_binding_id.startswith("tbind_")
     assert accepted.frozen_job_id.startswith("job_")
 
-    # 唯一可见性：workspace catalog 节点数不变（没有第二个 Session）。
     # 唯一可见性：workspace catalog 节点数不变（没有第二个 Session）。
     node_count = int(
         catalog.connection.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
@@ -211,6 +218,11 @@ async def test_delegate_creates_durable_child_thread_with_pending_intent(
         assert intent.state == "bound"
         assert intent.execution_binding_id == accepted.execution_binding_id
         assert intent.job_id == accepted.frozen_job_id
+        record = control.get_thread_creation_record(accepted.delegation_id)
+        assert json.loads(record.task_seed)["gateway_id"] == "gateway_frozen_creation"
+        frozen = frozen_thread_seed(record)
+        assert frozen.gateway_id == "gateway_frozen_creation"
+        assert "gateway_frozen_creation" not in frozen.message.content
         # child thread 只有一条初始 intent。
         assert len(control.list_initial_execution_intents()) == 1
     finally:
@@ -228,6 +240,38 @@ async def test_delegate_same_tool_call_retry_converges(
     again = await delegate_parent(service, parent_session)
 
     assert again == first
+
+
+@pytest.mark.asyncio
+async def test_delegate_gateway_identity_is_part_of_creation_preimage(
+    parent_session: SessionDTO, factory: OwnerThreadCreationFactory,
+) -> None:
+    service = make_service(parent_session, factory)
+    gateway_token = set_current_gateway_id("gateway_original")
+    try:
+        first = await delegate_parent(service, parent_session)
+        assert await delegate_parent(service, parent_session) == first
+        changed_token = set_current_gateway_id("gateway_changed")
+        try:
+            with pytest.raises(RuntimeError, match="冲突"):
+                await delegate_parent(service, parent_session)
+        finally:
+            reset_current_gateway_id(changed_token)
+    finally:
+        reset_current_gateway_id(gateway_token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gateway_field", [{}, {"gateway_id": ""}, {"gateway_id": " "}, {"gateway_id": 42}])
+async def test_frozen_child_seed_rejects_missing_or_invalid_gateway_identity(
+    parent_session: SessionDTO, factory: OwnerThreadCreationFactory, gateway_field: dict[str, object],
+) -> None:
+    accepted = await delegate_parent(make_service(parent_session, factory), parent_session)
+    record = factory.for_owner_session(parent_session.session_id).control_store.get_thread_creation_record(accepted.delegation_id)
+    seed = json.loads(record.task_seed)
+    seed.pop("gateway_id")
+    with pytest.raises(ValueError, match="gateway_id"):
+        frozen_thread_seed(replace(record, task_seed=json.dumps({**seed, **gateway_field})))
 
 
 @pytest.mark.asyncio

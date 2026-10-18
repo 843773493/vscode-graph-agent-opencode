@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,8 +20,12 @@ from app.services.infrastructure.events.channel_events import (
 from app.services.infrastructure.events.event_channel_service import (
     EventChannelService,
 )
+from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservationChannel,
+)
+from app.services.infrastructure.resource_platform.sources.gateway_skill_sources import (
+    GatewaySkillSources,
 )
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
@@ -44,6 +49,7 @@ class ResourcePlatform:
     file_watch_service: WorkspaceFileWatchService
     file_registry: WorkspaceFileResourceRegistry
     state_events: ResourceStateEventPublisher
+    gateway_skill_sources: GatewaySkillSources | None
 
     async def close(self) -> None:
         """释放实际持有的进程资源并发布 owner 已确认的轻量状态。"""
@@ -84,6 +90,9 @@ def bootstrap_resource_platform(
     project_root: Path | None = None,
     process_scope_name: str = "resource-platform-root",
     event_service: EventChannelService | None = None,
+    workspace_id: str | None = None,
+    gateway_connection: GatewayTransportConnection | None = None,
+    gateway_token_supplier: Callable[[], str] | None = None,
 ) -> ResourcePlatform:
     """按固定顺序装配进程级资源平台。
 
@@ -115,12 +124,23 @@ def bootstrap_resource_platform(
         file_registry.stop,
         label="workspace-file-resource-registry",
     )
+    gateway_skill_sources = None
+    connection_fields = (gateway_connection, gateway_token_supplier, workspace_id)
+    if any(value is not None for value in connection_fields) and not all(value is not None for value in connection_fields):
+        raise ValueError("Gateway Skill source 装配必须同时提供连接、凭据供应方和Workspace身份")
+    if gateway_connection is not None and gateway_token_supplier is not None and workspace_id is not None:
+        gateway_skill_sources = GatewaySkillSources(
+            workspace_id=workspace_id, connection=gateway_connection,
+            local_token_supplier=gateway_token_supplier, observation_channel=observation_channel,
+        )
+        scope.register(gateway_skill_sources.close, label="gateway-skill-sources")
     return ResourcePlatform(
         process_root_scope=scope,
         observation_channel=observation_channel,
         file_watch_service=watch_service,
         file_registry=file_registry,
         state_events=state_events,
+        gateway_skill_sources=gateway_skill_sources,
     )
 
 
