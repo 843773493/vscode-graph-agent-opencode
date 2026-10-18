@@ -160,9 +160,9 @@ class ForkMaterializationMixin:
                 "UPDATE context_views SET logical_turn_count=(SELECT COUNT(*) FROM context_view_turns WHERE view_id=?), "
                 "head_turn_id=(SELECT item.turn_id FROM context_view_items member JOIN item_catalog item ON item.item_id=member.item_id "
                 "WHERE member.view_id=? ORDER BY member.logical_item_ordinal DESC LIMIT 1), "
-                "head_message_sequence=(SELECT MAX(message.message_sequence) FROM context_view_items member "
+                "head_message_sequence=COALESCE((SELECT MAX(message.message_sequence) FROM context_view_items member "
                 "JOIN item_catalog item ON item.item_id=member.item_id JOIN messages message ON message.jsonl_offset=item.jsonl_offset "
-                "AND message.jsonl_length=item.jsonl_length WHERE member.view_id=?) "
+                "AND message.jsonl_length=item.jsonl_length WHERE member.view_id=?), 0) "
                 "WHERE view_id=?", (message_view, message_view, message_view, message_view),
             )
             count = connection.execute(

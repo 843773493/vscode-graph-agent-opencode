@@ -53,7 +53,7 @@ def fork_source(request: pytest.FixtureRequest, session_bundle_factory) -> Calla
 
 @pytest.mark.asyncio
 async def test_full_copy_rejects_v1_without_migration_side_effects(
-    fork_source: Callable,
+    fork_source: Callable, fork_deadlines,
 ) -> None:
     records = _accepted_records()
     storage = fork_source(records)
@@ -62,7 +62,7 @@ async def test_full_copy_rejects_v1_without_migration_side_effects(
         pytest.raises(FormatDispatchError, match="v1_migration_required"),
         RolloutCheckpointSaver(storage.storage.sessions_dir, storage=storage) as saver,
     ):
-        await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID)
+        await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID, fork_deadlines=fork_deadlines)
     assert not storage.storage.root(TARGET_SESSION_ID).exists()
     assert artifact_manifest(storage.storage.root(SOURCE_SESSION_ID)) == before
     assert migration_audits(storage) == []
@@ -70,7 +70,7 @@ async def test_full_copy_rejects_v1_without_migration_side_effects(
 
 @pytest.mark.asyncio
 async def test_explicit_v1_import_then_v2_full_copy_keeps_tool_lineage_local(
-    fork_source: Callable,
+    fork_source: Callable, fork_deadlines,
 ) -> None:
     records = _accepted_records()
     final = copy.deepcopy(records[1])
@@ -128,7 +128,9 @@ async def test_explicit_v1_import_then_v2_full_copy_keeps_tool_lineage_local(
     call = next(item for item in items if item.semantic_kind == "tool_call")
     target_before = artifact_manifest(storage.storage.root(TARGET_SESSION_ID))
     with RolloutCheckpointSaver(storage.storage.sessions_dir, storage=storage) as saver:
-        await copy_rollout_snapshot(saver, TARGET_SESSION_ID, GRANDCHILD_SESSION_ID)
+        await copy_rollout_snapshot(
+            saver, TARGET_SESSION_ID, GRANDCHILD_SESSION_ID, fork_deadlines=fork_deadlines,
+        )
     assert artifact_manifest(storage.storage.root(SOURCE_SESSION_ID)) == source_before
     assert artifact_manifest(storage.storage.root(TARGET_SESSION_ID)) == target_before
     child_items = storage.storage.read_items(

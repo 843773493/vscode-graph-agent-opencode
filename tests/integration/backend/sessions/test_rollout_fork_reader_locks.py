@@ -110,6 +110,7 @@ async def test_fork_preserves_live_reader_and_independent_writer(
     source_reader,
     lock_artifacts,
     forbid_parent_sqlite_copy,
+    fork_deadlines,
     operation,
 ):
     saver = protected_source[0]
@@ -123,7 +124,7 @@ async def test_fork_preserves_live_reader_and_independent_writer(
     if operation == "preflight":
         await saver.forks.source.preflight_fork(source_session_id=SOURCE_SESSION_ID, mode="full_rollout_copy")
     else:
-        await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID)
+        await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID, fork_deadlines=fork_deadlines)
     after = _locks(index)
     assert after, "fork 不得因父进程 open/close 原始 DB 而释放其它 SQLite reader 的锁"
     assert source_reader.in_transaction == transaction_reader

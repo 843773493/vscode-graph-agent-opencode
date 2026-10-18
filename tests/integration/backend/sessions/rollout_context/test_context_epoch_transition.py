@@ -1282,7 +1282,7 @@ def test_desired_provider_profile_switch_requires_actual_rebuild(epoch_case):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source_phase", ["pending", "consumed", "continued"])
 async def test_full_copy_preserves_original_versions_transition_and_prefix(
-    epoch_case, session_bundle_factory, monkeypatch, source_phase,
+    epoch_case, session_bundle_factory, monkeypatch, source_phase, fork_deadlines,
 ):
     case = epoch_case
     prepared = [case.first, case.advance()]
@@ -1310,7 +1310,9 @@ async def test_full_copy_preserves_original_versions_transition_and_prefix(
     original_jsonl = source_jsonl.read_bytes()
     target_session = f"ses_{create_uuid_hex()}"
     session_bundle_factory(case.saver._storage.storage.sessions_dir, target_session)
-    await copy_rollout_snapshot(case.saver, case.owner.session_id, target_session)
+    await copy_rollout_snapshot(
+        case.saver, case.owner.session_id, target_session, fork_deadlines=fork_deadlines,
+    )
     with RolloutCheckpointSaver(case.saver._storage.storage.sessions_dir) as saver:
         target_thread = saver._storage.storage.main_thread_id(target_session)
         with saver._storage.storage.read_connection(target_session, target_thread, "") as connection:

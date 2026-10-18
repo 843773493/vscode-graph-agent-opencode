@@ -2296,7 +2296,7 @@ async def test_debug_config_drift_aborts_entire_public_fork(
 @pytest.mark.parametrize("fault", ["mkdir", "rename", "materialization_commit"])
 async def test_debug_frozen_operation_recovers_publication_without_live_source(
     fork_provider_prepare, fork_context: ForkIntegrationContext,
-    monkeypatch: pytest.MonkeyPatch, fault: str,
+    monkeypatch: pytest.MonkeyPatch, fork_deadlines, fault: str,
 ) -> None:
     source = await _seed_source(fork_context, fork_provider_prepare)
     _, saved_id = _seed_debug_configurations(fork_context, source.session_id)
@@ -2306,6 +2306,8 @@ async def test_debug_frozen_operation_recovers_publication_without_live_source(
     target_node = _main_thread_node(fork_context, target.session_id)
     storage = fork_context.saver._storage
     operation_id, materialization_id = uuid4().hex, uuid4().hex
+    deadline_target = f"{fork_context.sessions.workspace_id}/{target.session_id}"
+    deadline = fork_deadlines.for_operation(target=deadline_target, operation_key=operation_id)
     arguments = {
         "source_session_id": source.session_id, "target_session_id": target.session_id,
         "source_uri": request.source_uri,
@@ -2341,7 +2343,11 @@ async def test_debug_frozen_operation_recovers_publication_without_live_source(
     else:
         monkeypatch.setattr(storage.forks, "commit_fork_materialization", crash_commit)
     with pytest.raises(RuntimeError, match="injected debug"):
-        await fork_context.saver.forks.afork(**arguments)
+        await deadline.wait(
+            fork_context.saver.forks.afork(**arguments),
+            "RolloutCheckpointSaver.forks.afork.initial",
+        )
+    assert not deadline._completed
     capture = fork_context.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=operation_id)
     assert capture is not None and capture.state == "source_captured"
     frozen, _ = read_captured_snapshot(storage.storage.sessions_dir, capture)
@@ -2361,8 +2367,14 @@ async def test_debug_frozen_operation_recovers_publication_without_live_source(
         raise AssertionError("ready/published 恢复不得读取当前 debug 配置")
 
     with RolloutCheckpointSaver(storage.storage.sessions_dir, node_debug_workspace_config=forbid_live_configuration) as restarted:
-        recovered = await restarted.forks.afork(**arguments)
+        recovery_deadline = fork_deadlines.for_operation(target=deadline_target, operation_key=operation_id)
+        assert recovery_deadline is deadline and not recovery_deadline._completed
+        recovered = await recovery_deadline.wait(
+            restarted.forks.afork(**arguments),
+            "RolloutCheckpointSaver.forks.afork.recovery",
+        )
         assert recovered.journal_state == "committed"
+        fork_deadlines.complete(recovery_deadline)
         manifest = restarted._node_debug_store.read_manifest(target.session_id, target_thread)
         assert manifest is not None and manifest.active_configuration_id is None and manifest.actions == []
         configurations = restarted._node_debug_store.list_configurations(target.session_id, target_thread)

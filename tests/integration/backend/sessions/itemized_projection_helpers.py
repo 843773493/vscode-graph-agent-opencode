@@ -31,10 +31,12 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.support.fork_deadline import ForkDeadlineRegistry
 
 
 async def copy_rollout_snapshot(
     saver: RolloutCheckpointSaver, source_session_id: str, target_session_id: str, *,
+    fork_deadlines: ForkDeadlineRegistry,
     mode: str = "full_rollout_copy", anchor_item_id: str | None = None,
     relationship: str = "detached", target_thread_id: str | None = None,
 ):
@@ -42,6 +44,12 @@ async def copy_rollout_snapshot(
     storage = saver._storage.storage
     source_thread_id = storage.main_thread_id(source_session_id)
     target_thread_id = target_thread_id or storage.main_thread_id(target_session_id)
+    operation_id = create_uuid_hex(namespace="fork/operation")
+    target_workspace_id = storage._path_resolver.catalog_store.get_node(target_session_id).workspace_id
+    deadline = fork_deadlines.for_operation(
+        target=f"{target_workspace_id}/{target_session_id}", operation_key=operation_id,
+    )
+    deadline.set_stage("fork.source_revision_read")
     with storage.read_connection(source_session_id, source_thread_id, "") as connection:
         view, revision = connection.execute(
             "SELECT branch.head_view_id,meta.history_view_revision FROM checkpoint_namespace_state namespace "
@@ -49,19 +57,29 @@ async def copy_rollout_snapshot(
             "JOIN database_meta meta ON meta.singleton_id=1 WHERE namespace.checkpoint_ns=''",
         ).fetchone()
     source_owner = MutationIntentOwner(source_session_id, source_thread_id)
-    point = await saver.forks.source.preflight_fork(
-        source_session_id=source_session_id, source_owner=source_owner, mode=mode,
-        source_view_id=view, source_view_revision=revision, anchor_item_id=anchor_item_id,
+    point = await deadline.wait(
+        saver.forks.source.preflight_fork(
+            source_session_id=source_session_id, source_owner=source_owner, mode=mode,
+            source_view_id=view, source_view_revision=revision, anchor_item_id=anchor_item_id,
+        ),
+        "fork.source_preflight",
     )
-    return await saver.forks.afork(
-        source_session_id=source_session_id, target_session_id=target_session_id,
-        source_uri=thread_resource_uri(storage._path_resolver.catalog_store.get_node(source_session_id).workspace_id,
-                                       source_session_id, source_thread_id),
-        source_owner=source_owner, target_owner=MutationIntentOwner(target_session_id, target_thread_id),
-        mode=mode, relationship=relationship, source_preflight=point,
-        source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
-        anchor_item_id=point.anchor_item_id,
+    result = await deadline.wait(
+        saver.forks.afork(
+            source_session_id=source_session_id, target_session_id=target_session_id,
+            source_uri=thread_resource_uri(storage._path_resolver.catalog_store.get_node(source_session_id).workspace_id,
+                                           source_session_id, source_thread_id),
+            source_owner=source_owner, target_owner=MutationIntentOwner(target_session_id, target_thread_id),
+            mode=mode, relationship=relationship, source_preflight=point, fork_id=operation_id,
+            source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
+            anchor_item_id=point.anchor_item_id,
+        ),
+        "fork.checkpoint_afork",
     )
+    if result.journal_state != "committed":
+        raise RuntimeError(f"fork 未 durable commit: {result.journal_state!r}")
+    fork_deadlines.complete(deadline)
+    return result
 
 
 @pytest.fixture(scope="module")

@@ -20,7 +20,7 @@ TARGET_SESSION_ID = "ses_019c49da91667f7b842224c1bfc58b01"
 
 @pytest.mark.asyncio
 async def test_full_copy_preserves_original_activation_identity_and_local_bodies(
-    tmp_path, session_bundle_factory,
+    tmp_path, session_bundle_factory, fork_deadlines,
 ):
     sessions = tmp_path / "sessions"
     for session in (SESSION_ID, TARGET_SESSION_ID):
@@ -33,7 +33,7 @@ async def test_full_copy_preserves_original_activation_identity_and_local_bodies
             table: connection.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
             for table in ("resource_activation_snapshots", "resource_activation_assembly_bindings")
         }
-    await copy_rollout_snapshot(saver, SESSION_ID, TARGET_SESSION_ID)
+    await copy_rollout_snapshot(saver, SESSION_ID, TARGET_SESSION_ID, fork_deadlines=fork_deadlines)
     with saver._storage.storage.read_connection(TARGET_SESSION_ID, target_thread, "") as connection:
         for table, rows in original_rows.items():
             assert connection.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall() == rows

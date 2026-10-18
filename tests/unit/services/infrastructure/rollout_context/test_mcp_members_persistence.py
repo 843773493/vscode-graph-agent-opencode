@@ -80,6 +80,7 @@ async def catalog_runtime(catalog_workspace):
 @pytest.mark.asyncio
 async def test_complete_mixed_members_survive_five_real_persistence_paths(
     catalog_runtime, registry_db, guidance_prepare, session_bundle_factory, monkeypatch,
+    fork_deadlines,
 ):
     _owner, factory, registry, _scope = catalog_runtime
     saver, session, _connection, _accepted = registry_db
@@ -139,7 +140,9 @@ async def test_complete_mixed_members_survive_five_real_persistence_paths(
         assert restored.to_dict() == frozen.to_dict()
         assert restored.parent.to_dict() == frozen.parent.to_dict()
         session_bundle_factory(restarted._storage.storage.sessions_dir, TARGET_SESSION_ID)
-        await copy_rollout_snapshot(restarted, session, TARGET_SESSION_ID)
+        await copy_rollout_snapshot(
+            restarted, session, TARGET_SESSION_ID, fork_deadlines=fork_deadlines,
+        )
         target_thread = restarted._storage.storage.main_thread_id(TARGET_SESSION_ID)
         target_path = restarted._storage.storage.index_path(TARGET_SESSION_ID, "", thread_id=target_thread)
         with closing(sqlite3.connect(target_path)) as connection:

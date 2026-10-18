@@ -318,6 +318,7 @@ def test_legacy_migration_rejects_same_source_and_target_session(
 async def test_full_copy_v1_source_requires_explicit_import_without_side_effects(
     migration_workspace: Path,
     session_bundle_factory,
+    fork_deadlines,
 ) -> None:
     sessions_root = migration_workspace / ".boxteam" / "sessions"
     source_lines = _write_v1_source(
@@ -334,7 +335,7 @@ async def test_full_copy_v1_source_requires_explicit_import_without_side_effects
         pytest.raises(FormatDispatchError, match="v1_migration_required"),
         RolloutCheckpointSaver(sessions_root, storage=storage) as saver,
     ):
-        await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID)
+        await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID, fork_deadlines=fork_deadlines)
     assert not storage.storage.root(TARGET_SESSION_ID).exists()
     assert migration_audits(storage) == []
     assert (
@@ -348,6 +349,7 @@ async def test_full_copy_v1_source_requires_explicit_import_without_side_effects
 async def test_explicit_v1_import_then_full_copy_records_v2_source_lineage(
     migration_workspace: Path,
     session_bundle_factory,
+    fork_deadlines,
 ) -> None:
     sessions_root = migration_workspace / ".boxteam" / "sessions"
     _write_v1_source(
@@ -373,7 +375,9 @@ async def test_explicit_v1_import_then_full_copy_records_v2_source_lineage(
         TARGET_SESSION_ID, storage.storage.main_thread_id(TARGET_SESSION_ID)
     )
     with RolloutCheckpointSaver(sessions_root, storage=storage) as saver:
-        copied = await copy_rollout_snapshot(saver, TARGET_SESSION_ID, FORK_SESSION_ID)
+        copied = await copy_rollout_snapshot(
+            saver, TARGET_SESSION_ID, FORK_SESSION_ID, fork_deadlines=fork_deadlines,
+        )
     fork_items = storage.storage.read_items(FORK_SESSION_ID, storage.storage.main_thread_id(FORK_SESSION_ID))
     assert [item.to_dict() for item in fork_items] == [item.to_dict() for item in source_items]
     assert all(not item.item_id.startswith("legacy:v1:") for item in fork_items)

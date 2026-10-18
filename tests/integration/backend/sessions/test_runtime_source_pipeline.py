@@ -9,8 +9,8 @@ import os
 import sqlite3
 import subprocess
 import sys
-from collections.abc import AsyncIterator, Callable
-from contextlib import ExitStack, closing
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, closing
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -18,6 +18,8 @@ from threading import Event
 import commentjson
 import httpx
 import pytest
+import uvicorn
+from fastapi import FastAPI
 
 from app import main
 from app.abstractions.job_executor import JobRuntimeStateProtocol
@@ -29,6 +31,7 @@ from app.core.execution_admission_context import execution_admission_scope
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore, ThreadExecutionIntent
 from app.core.session_thread_context import session_thread_owner_scope
+from app.core.trace_middleware import TraceMiddleware
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.execution_admission import InternalExecutionIntent
@@ -40,6 +43,11 @@ from app.domain.itemized.hashing import (
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord, RuntimeNoticePayload
 from app.domain.itemized.serialization import normalize_wire_request
+from app.gateway.credentials import load_or_create_gateway_id
+from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.routes.skill_sources import router as gateway_skill_sources_router
+from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
+from app.gateway.workspace_ids import build_managed_local_workspace_id
 from app.prompting import PromptSection, internal_message_factory
 from app.services.business.message_display import project_message_for_display
 from app.services.business.system_reminder_checkpoint_service import (
@@ -77,6 +85,7 @@ from tests.e2e.system.workspace_services.terminal.terminal_process_helpers impor
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.stubs.http_stubs import HTTPStubState, openai_chat_stub
 from tests.support.api_helpers import create_session
+from tests.support.fork_deadline import ForkDeadlineRegistry
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import (
     BackendProcess,
@@ -97,6 +106,8 @@ class RuntimeSourceCase:
     model: HTTPStubState
     context: TestRunContext
     artifacts_dir: Path
+    gateway_id: str | None
+    gateway_skill_source_owner: GatewaySkillSourceOwner | None
 
     def write_actual(self, name: str, value: dict[str, object]) -> None:
         (self.artifacts_dir / f"{name}-actual.json").write_text(
@@ -141,6 +152,56 @@ def _prepare_source_workspace(
     return workspace
 
 
+@asynccontextmanager
+async def _managed_gateway_skill_source(
+    *, workspace: Path, workspace_id: str, boxteam_home: Path, port: int,
+):
+    """为 managed 测试提供真实 owner、已登记本地 Workspace 和认证快照路由。"""
+    gateway_root = boxteam_home / "state" / "gateway"
+    gateway_id = load_or_create_gateway_id(gateway_root / "identity.json")
+    skills_root = boxteam_home / "skills"
+    skills_root.mkdir(parents=True, exist_ok=True)
+    owner = GatewaySkillSourceOwner(gateway_id=gateway_id, skills_root=skills_root)
+    registry = GatewayWorkspaceRegistry(storage_path=gateway_root / "skill-source-registry.json")
+    registry.upsert(WorkspaceTarget(
+        workspace_id=build_managed_local_workspace_id(str(workspace.resolve())),
+        name="runtime-source-pipeline",
+        root_path=str(workspace.resolve()),
+        backend_url="http://127.0.0.1:8010",
+        backend_workspace_id=workspace_id,
+        connection_kind="local",
+        owner="system",
+        managed=False,
+        removable=False,
+        system_default=True,
+    ))
+    api = FastAPI()
+    api.include_router(gateway_skill_sources_router)
+    api.add_middleware(TraceMiddleware)
+    api.state.registry = registry
+    api.state.skill_source_owner = owner
+    server = uvicorn.Server(uvicorn.Config(
+        api, host="127.0.0.1", port=port, log_level="error", access_log=False,
+        log_config=None, lifespan="off",
+    ))
+    server_task: asyncio.Task[None] | None = None
+    try:
+        await owner.start()
+        server_task = asyncio.create_task(asyncio.to_thread(server.run))
+        async with asyncio.timeout(10):
+            while not server.started:
+                if server_task.done():
+                    await server_task
+                await asyncio.sleep(0.01)
+        yield gateway_id, owner
+    finally:
+        if server_task is not None:
+            server.should_exit = True
+            await asyncio.wait_for(server_task, timeout=10)
+        registry.close()
+        await owner.close()
+
+
 @pytest.fixture
 async def source_case(
     request: pytest.FixtureRequest,
@@ -155,36 +216,57 @@ async def source_case(
     )
     workspace_id = load_or_create_workspace_id(workspace)
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
-    monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home_for_node(request.node.nodeid)))
-    mount_payload = {
-        "workspace_id": workspace_id, "workspace_root": str(workspace), "terminal_backend_url": None, "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None}
-    with ExitStack() as services, openai_chat_stub(port) as model:
-        if options.get("terminal"):
-            terminal_port = integration_port_block_for_file(Path(request.node.path)).port(40)
-            mount_payload["terminal_backend_url"] = f"http://127.0.0.1:{terminal_port}"
-            process = start_terminal_backend(backend_port=terminal_port, workspace_root=str(workspace))
-            services.callback(terminate_process, process)
-        monkeypatch.setenv("BOXTEAM_MOUNTED_WORKSPACES", json.dumps([mount_payload]))
-        async with main.lifespan(main.app):
-            registry = main.app.state.workspace_container_registry
-            container = registry.get(workspace_id)
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=main.app), base_url="http://workspace.test",
-                headers={
-                    "X-Local-Token": "local-dev-token",
-                    "X-BoxTeam-Workspace-Id": workspace_id,
-                    "X-BoxTeam-Gateway-Id": "0197d9a3-7d2a-7c29-8d76-58b3cf3f8a21",
-                },
-                timeout=30,
-            ) as client:
-                runtime_root = context.runtime_root_for_node(request.node.nodeid)
-                artifacts_dir = context.artifacts_dir / runtime_root.parent.name / runtime_root.name
-                artifacts_dir.mkdir(parents=True, exist_ok=True)
-                case = RuntimeSourceCase(client, container, model, context, artifacts_dir)
-                try:
-                    yield case
-                finally:
-                    case.write_actual(request.node.name + "-wire", {"requests": model.requests})
+    boxteam_home = context.boxteam_home_for_node(request.node.nodeid)
+    monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
+    monkeypatch.delenv("BOXTEAM_GATEWAY_ROOT", raising=False)
+    gateway_id = None
+    gateway_skill_source_owner = None
+    async with AsyncExitStack() as managed_services:
+        if options.get("managed_gateway"):
+            gateway_id, gateway_skill_source_owner = await managed_services.enter_async_context(
+                _managed_gateway_skill_source(
+                    workspace=workspace, workspace_id=workspace_id, boxteam_home=boxteam_home,
+                    port=integration_port_block_for_file(Path(request.node.path)).port(11),
+                ),
+            )
+            monkeypatch.setenv(
+                "BOXTEAM_GATEWAY_URL",
+                f"http://127.0.0.1:{integration_port_block_for_file(Path(request.node.path)).port(11)}",
+            )
+        else:
+            monkeypatch.delenv("BOXTEAM_GATEWAY_URL", raising=False)
+        mount_payload = {
+            "workspace_id": workspace_id, "workspace_root": str(workspace), "terminal_backend_url": None, "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None}
+        with ExitStack() as services, openai_chat_stub(port) as model:
+            if options.get("terminal"):
+                terminal_port = integration_port_block_for_file(Path(request.node.path)).port(40)
+                mount_payload["terminal_backend_url"] = f"http://127.0.0.1:{terminal_port}"
+                process = start_terminal_backend(backend_port=terminal_port, workspace_root=str(workspace))
+                services.callback(terminate_process, process)
+            monkeypatch.setenv("BOXTEAM_MOUNTED_WORKSPACES", json.dumps([mount_payload]))
+            async with main.lifespan(main.app):
+                registry = main.app.state.workspace_container_registry
+                container = registry.get(workspace_id)
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=main.app), base_url="http://workspace.test",
+                    headers={
+                        "X-Local-Token": "local-dev-token",
+                        "X-BoxTeam-Workspace-Id": workspace_id,
+                        **({"X-BoxTeam-Gateway-Id": gateway_id} if gateway_id is not None else {}),
+                    },
+                    timeout=30,
+                ) as client:
+                    runtime_root = context.runtime_root_for_node(request.node.nodeid)
+                    artifacts_dir = context.artifacts_dir / runtime_root.parent.name / runtime_root.name
+                    artifacts_dir.mkdir(parents=True, exist_ok=True)
+                    case = RuntimeSourceCase(
+                        client, container, model, context, artifacts_dir, gateway_id,
+                        gateway_skill_source_owner,
+                    )
+                    try:
+                        yield case
+                    finally:
+                        case.write_actual(request.node.name + "-wire", {"requests": model.requests})
 
 
 async def _wait_until(predicate: Callable[[], bool], seconds: float = 30) -> None:
@@ -468,6 +550,7 @@ async def test_runtime_wakeup_before_provider_preserves_started_job_and_frozen_a
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("source_case", [{"managed_gateway": True}], indirect=True)
 async def test_h1_http_team_child_seed_binder_and_exact_parent_report(source_case: RuntimeSourceCase) -> None:
     case = source_case
     parent_job, child_job, intent = await _team_child(case)
@@ -750,7 +833,7 @@ async def test_e07_reminder_reasons_commit_once_and_cold_restore_without_checkpo
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source_case", [{"terminal": True}], indirect=True)
+@pytest.mark.parametrize("source_case", [{"terminal": True, "managed_gateway": True}], indirect=True)
 async def test_e05_terminal_completion_rehydrates_exact_cold_child_owner(source_case: RuntimeSourceCase, monkeypatch) -> None:
     case = source_case
     parent, _child, intent = await _team_child(case)
@@ -818,6 +901,7 @@ async def test_e05_terminal_completion_rehydrates_exact_cold_child_owner(source_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("source_case", [{"managed_gateway": True}], indirect=True)
 async def test_h4_generated_branch_returns_to_frozen_child_thread(source_case: RuntimeSourceCase) -> None:
     case = source_case
     parent_job, _child_job, intent = await _team_child(case)
@@ -947,7 +1031,8 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
 from tests.support.session_catalog_owner import fixture_catalog_scope
 
-sessions, source_session, source_thread, target_session, phase, mode = sys.argv[1:]
+sessions, source_session, source_thread, target_session, phase, mode, commit_signal_fd = sys.argv[1:]
+commit_signal_fd = int(commit_signal_fd)
 with fixture_catalog_scope(), RolloutCheckpointSaver(sessions) as saver:
     storage = saver._storage
     if phase != 'read':
@@ -1018,6 +1103,14 @@ with fixture_catalog_scope(), RolloutCheckpointSaver(sessions) as saver:
             source_view_revision=frozen['source_view_revision'], anchor_item_id=frozen['anchor_item_id'],
         ))
         assert result.journal_state == 'committed', result.journal_state
+        commit_signal = json.dumps({
+            'operation_key': operation_id,
+            'target_session_id': target_session,
+            'journal_state': result.journal_state,
+            'phase': phase,
+        }, ensure_ascii=False).encode('utf-8') + bytes((10,))
+        assert os.write(commit_signal_fd, commit_signal) == len(commit_signal)
+        os.close(commit_signal_fd)
         session, thread = target_session, target_thread
     else:
         session, thread = source_session, source_thread
@@ -1052,14 +1145,16 @@ with fixture_catalog_scope(), RolloutCheckpointSaver(sessions) as saver:
             checkpoints.append({'checkpoint_id': checkpoint[0], 'metadata': json.loads(checkpoint[13]),
                                 'facts_sha256': hashlib.sha256(raw).hexdigest()})
         head = connection.execute(
-            'SELECT cp.checkpoint_id,cp.metadata_json,cp.pending_sends_type,cp.pending_sends_blob '
+            'SELECT cp.checkpoint_id,cp.metadata_json,cp.pending_sends_type,cp.pending_sends_blob,view_state.head_message_sequence '
             'FROM checkpoint_namespace_state namespace JOIN branches branch '
             'ON branch.branch_id=namespace.active_branch_id JOIN checkpoints cp '
-            'ON cp.checkpoint_id=branch.head_checkpoint_id WHERE namespace.checkpoint_ns=?', ('',),
+            'ON cp.checkpoint_id=branch.head_checkpoint_id JOIN context_views view_state '
+            'ON view_state.view_id=cp.view_id WHERE namespace.checkpoint_ns=?', ('',),
         ).fetchone()
         head_checkpoint = None if head is None else {
             'checkpoint_id': head[0], 'metadata': json.loads(head[1]),
-            'pending_sends': storage.storage.decode_value(tuple(head[2:])),
+            'pending_sends': storage.storage.decode_value(tuple(head[2:4])),
+            'head_message_sequence': head[4],
             'pending_write_count': connection.execute(
                 'SELECT COUNT(*) FROM pending_writes WHERE checkpoint_id=?', (head[0],),
             ).fetchone()[0],
@@ -1156,16 +1251,78 @@ with fixture_catalog_scope(), RolloutCheckpointSaver(sessions) as saver:
 
 
 @pytest.fixture
-def cold_fork_process(source_case: RuntimeSourceCase):
+def cold_fork_deadlines(source_case: RuntimeSourceCase) -> Iterator[ForkDeadlineRegistry]:
+    deadlines = ForkDeadlineRegistry(source_case.artifacts_dir)
+    try:
+        yield deadlines
+    finally:
+        deadlines.close()
+
+
+def _read_fork_commit_signal(descriptor: int) -> bytes:
+    try:
+        chunks = bytearray()
+        while True:
+            chunk = os.read(descriptor, 4096)
+            if not chunk:
+                return bytes(chunks)
+            chunks.extend(chunk)
+            if b"\n" in chunk:
+                return bytes(chunks).split(b"\n", maxsplit=1)[0]
+    finally:
+        os.close(descriptor)
+
+
+@pytest.fixture
+def cold_fork_process(source_case: RuntimeSourceCase, cold_fork_deadlines: ForkDeadlineRegistry):
     case = source_case
 
     async def invoke(session_id: str, thread_id: str, target_session_id: str = "", *, phase: str = "read", mode: str = "context_fork"):
         command = [sys.executable, "-c", _COLD_FORK_PROCESS,
                    str(case.container.checkpointer._storage.storage.sessions_dir), session_id,
                    thread_id, target_session_id, phase, mode]
-        result = await asyncio.to_thread(
-            subprocess.run, command, cwd=Path.cwd(), capture_output=True, text=True, timeout=90,
-        )
+        deadline = None
+        if phase != "read":
+            if not target_session_id:
+                raise ValueError("fork 子进程必须指定 target session")
+            operation_key = "h5-" + target_session_id
+            target = f"{case.container.workspace_id}/{target_session_id}"
+            deadline = cold_fork_deadlines.for_operation(target, operation_key)
+            deadline.set_stage(f"cold_fork_child:{phase}")
+        if deadline is None:
+            result = await asyncio.to_thread(
+                subprocess.run, [*command, "-1"], cwd=Path.cwd(), capture_output=True,
+                text=True, timeout=90,
+            )
+        else:
+            read_fd, write_fd = os.pipe()
+            command.append(str(write_fd))
+            try:
+                process = await asyncio.to_thread(
+                    subprocess.Popen, command, cwd=Path.cwd(), stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, text=True, pass_fds=(write_fd,),
+                )
+            except BaseException:
+                os.close(read_fd)
+                raise
+            finally:
+                os.close(write_fd)
+            output_task = asyncio.create_task(asyncio.to_thread(process.communicate))
+            signal_task = asyncio.create_task(asyncio.to_thread(_read_fork_commit_signal, read_fd))
+            signal_bytes = await deadline.wait(
+                signal_task, f"cold_fork_child:{phase}:owner_committed",
+            )
+            if signal_bytes:
+                signal = json.loads(signal_bytes)
+                assert signal == {
+                    "operation_key": operation_key,
+                    "target_session_id": target_session_id,
+                    "journal_state": "committed",
+                    "phase": phase,
+                }, signal
+                cold_fork_deadlines.complete(deadline)
+            stdout, stderr = await output_task
+            result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
         name = f"cold-{phase}-{target_session_id or session_id}"
         (case.artifacts_dir / f"{name}.log").write_text(result.stdout + result.stderr)
         expected_code = {"publication_crash": 73, "finish_crash": 74}.get(phase, 0)
@@ -1180,6 +1337,9 @@ def cold_fork_process(source_case: RuntimeSourceCase):
             return None
         actual = json.loads(result.stdout.splitlines()[-1])
         assert actual["pid"] != os.getpid()
+        if deadline is not None:
+            assert signal_bytes, "fork 子进程未报告 durable committed owner 结果"
+            assert actual["journals"] == [["committed"]], actual["journals"]
         case.write_actual(name, actual)
         return actual
 
@@ -1211,10 +1371,21 @@ def _assert_cold_fork_checkpoints(source: dict[str, object], target: dict[str, o
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["context_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("source_case", [{"managed_gateway": True}], indirect=True)
 async def test_h5_cold_refork_and_hard_exit_recovery(source_case: RuntimeSourceCase, cold_fork_process, mode: str) -> None:
     case = source_case
     parent_job, _child_job, intent = await _team_child(case)
     source_session, source_thread = parent_job["session_id"], intent.thread_id
+    assert case.gateway_id is not None and case.gateway_skill_source_owner is not None
+    creation_owner = case.container.thread_initial_execution_service._factory.for_owner_session(source_session)
+    creation_record = creation_owner.control_store.get_thread_creation_record(intent.creation_idempotency_key)
+    assert creation_record.task_seed is not None
+    assert json.loads(creation_record.task_seed)["gateway_id"] == case.gateway_id
+    gateway_sources = case.container.resource_platform.gateway_skill_sources
+    assert gateway_sources is not None
+    assert gateway_sources.snapshot(gateway_id=case.gateway_id) == case.gateway_skill_source_owner.snapshot(
+        workspace_id=case.container.workspace_id,
+    )
     admission = case.container.checkpointer._storage.executions.execution_admission(
         source_session, thread_id=source_thread, execution_id=intent.execution_binding_id,
     )
@@ -1420,6 +1591,8 @@ async def test_h5_completed_empty_seed_preserves_metadata_only_admission(
     _assert_cold_fork_checkpoints(source, first)
     _assert_cold_fork_checkpoints(first, second)
     for actual in (first, second):
+        assert actual["head_checkpoint"]["head_message_sequence"] == 0
+    for actual in (first, second):
         assert actual["accepted_seed"] is None and actual["historical_execution_rejected"] is True
         assert actual["executions"] == source["executions"]
         assert actual["model_calls"] == source["model_calls"]
@@ -1429,6 +1602,7 @@ async def test_h5_completed_empty_seed_preserves_metadata_only_admission(
         second_session, second["thread_id"], third_session, phase="fork", mode="context_fork",
     )
     _assert_cold_fork_checkpoints(second, third)
+    assert third["head_checkpoint"]["head_message_sequence"] == 0
     assert third["executions"] == source["executions"]
     assert third["seed"] == source["seed"] and third["detail_owners"] == source["detail_owners"]
     assert third["historical_execution_rejected"] is True

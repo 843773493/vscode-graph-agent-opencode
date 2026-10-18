@@ -11,6 +11,7 @@ import pytest
 from dotenv import load_dotenv
 
 from tests.harness.python.run_context import TestRunContext
+from tests.support.fork_deadline import ForkDeadlineRegistry
 from tests.support.process_scope import capture_test_processes
 from tests.support.session_catalog_owner import (
     FixtureCatalogOwner,
@@ -32,6 +33,16 @@ TEST_CONFIG_PATH = os.path.join(CONFIGS_DIR, "tests", "workspace", "default.json
 @pytest.fixture
 def test_config_path() -> str:
     return TEST_CONFIG_PATH
+
+
+@pytest.fixture
+def fork_deadlines(request: pytest.FixtureRequest) -> Iterator[ForkDeadlineRegistry]:
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    deadlines = ForkDeadlineRegistry(context.artifacts_dir)
+    try:
+        yield deadlines
+    finally:
+        deadlines.close()
 
 
 @pytest.fixture

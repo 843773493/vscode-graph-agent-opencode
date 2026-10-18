@@ -157,6 +157,8 @@ from tests.integration.backend.sessions.test_runner_cancellation import (
 )
 from tests.support.session_navigation_queue import create_catalog_intent
 
+COMPACTION_GATEWAY_ID = "gateway_0123456789abcdef0123456789abcdef"
+
 
 @pytest.fixture
 def runner_case(
@@ -1235,9 +1237,14 @@ def compaction_runtime_call_profile(request: pytest.FixtureRequest, monkeypatch:
 
 
 @pytest.fixture
-def runner_compaction_gateway_context() -> Iterator[None]:
-    gateway_token = set_current_gateway_id("compaction-fork-gateway")
+def runner_compaction_gateway_context(
+    runtime_case: RuntimeCase, monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[None]:
+    gateway_token = set_current_gateway_id(COMPACTION_GATEWAY_ID)
     request_token = set_current_request_id("compaction-fork-request")
+    for kind in ("terminal", "browser"):
+        provider = runtime_case.runner.container.session_resource_service._provider_registry.get(kind)
+        monkeypatch.setattr(provider._owner._transport, "list_resources", AsyncMock(return_value=[]))
     try:
         yield
     finally:
@@ -1247,10 +1254,11 @@ def runner_compaction_gateway_context() -> Iterator[None]:
 
 async def test_real_runner_compaction_seals_candidates_then_continues_and_forks_selected_context(
     runtime_case: RuntimeCase, cold_message_stream_client: httpx.AsyncClient,
-    runner_compaction_gateway_context: None,
+    runner_compaction_gateway_context: None, gateway_skill_publication, fork_deadlines,
 ) -> None:
     """仅替换 Provider 响应，经过真实准入、摘要重试、checkpoint、冷流和 fork 后继。"""
     case = runtime_case
+    assert gateway_skill_publication is case.runner.container.resource_platform.gateway_skill_sources
     session_id, thread_id = await _session(case.runner)
     phase = "history"
     history_count = 0
@@ -1568,11 +1576,22 @@ async def test_real_runner_compaction_seals_candidates_then_continues_and_forks_
     assert all(marker not in json.dumps(case.model_requests[-1]["messages"], ensure_ascii=False) for marker in repeated_markers)
     forks = case.runner.container.session_context_fork_service
     point = await forks.source_point(session_id=session_id, thread_id=thread_id, mode="context_fork")
-    forked = await forks.fork(SessionForkRequest(
+    fork_request = SessionForkRequest(
         idempotency_key="runtime-compacted-fork", source_uri=point.source_uri,
         source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
         mode="context_fork", creation_kind="new_child_thread", target_container_uri=point.child_container_uri,
-    ))
+    )
+    fork_deadline = fork_deadlines.for_operation(
+        target=(f"{case.runner.container.workspace_service.workspace_id}/"
+                f"{fork_request.target_container_uri}"),
+        operation_key=fork_request.idempotency_key,
+    )
+    forked = await fork_deadline.wait(
+        forks.fork(fork_request), "SessionContextForkService.fork",
+    )
+    assert forked.creation_kind == "new_child_thread" and forked.session.session_id == session_id
+    assert forked.export_release is None or forked.export_release.state == "confirmed"
+    fork_deadlines.complete(fork_deadline)
     with session_thread_owner_scope(MutationIntentOwner(session_id, forked.thread_id), langgraph_thread_id=forked.thread_id):
         fork_head = await recovered.aget_tuple(build_checkpoint_config(forked.thread_id))
     fork_values = fork_head.checkpoint["channel_values"]
@@ -2330,7 +2349,7 @@ async def skill_tracking_client(runtime_case: RuntimeCase):
 async def gateway_skill_publication(runtime_case: RuntimeCase):
     """真实 raw 文件 owner 与传输协议桩；真实 Gateway 进程另由闭环用例验证。"""
     owner = GatewaySkillSourceOwner(
-        gateway_id="gateway_0123456789abcdef0123456789abcdef", skills_root=get_boxteam_home() / "skills",
+        gateway_id=COMPACTION_GATEWAY_ID, skills_root=get_boxteam_home() / "skills",
     )
     await owner.start()
     source = runtime_case.runner.container.resource_platform.gateway_skill_sources

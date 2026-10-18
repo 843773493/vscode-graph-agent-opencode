@@ -52,7 +52,7 @@ def draft_factory(protected_source):
 
 @pytest.mark.asyncio
 async def test_full_copy_preserves_true_registry_rows_and_rejects_historical_writes(
-    protected_source, draft_factory,
+    protected_source, draft_factory, fork_deadlines,
 ):
     saver, sealed, _, _ = protected_source
     source_thread = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
@@ -65,7 +65,7 @@ async def test_full_copy_preserves_true_registry_rows_and_rejects_historical_wri
         originals = {table: connection.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall() for table in tables}
         original_draft = read_registration(connection, SOURCE_SESSION_ID, source_thread, initial.plan_id)
         original_sealed = read_registration(connection, SOURCE_SESSION_ID, source_thread, sealed.plan_id)
-    await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID)
+    await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID, fork_deadlines=fork_deadlines)
     with saver._storage.storage.read_connection(TARGET_SESSION_ID, target_thread, "") as connection:
         for table in tables:
             assert connection.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall() == originals[table]
@@ -103,10 +103,10 @@ async def test_full_copy_preserves_true_registry_rows_and_rejects_historical_wri
 
 
 @pytest.mark.asyncio
-async def test_full_copy_same_tool_id_stays_scoped_to_original_plans(protected_source, draft_factory):
+async def test_full_copy_same_tool_id_stays_scoped_to_original_plans(protected_source, draft_factory, fork_deadlines):
     saver = protected_source[0]
     drafts = (draft_factory("draft-a", tool_name="read_file"), draft_factory("draft-b", tool_name="write_file"))
-    await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID)
+    await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID, fork_deadlines=fork_deadlines)
     thread = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
     values = [saver.get_context_plan_registration(TARGET_SESSION_ID, thread_id=thread, plan_id=plan.plan_id).draft for plan in drafts]
     assert values == list(drafts)
@@ -118,9 +118,9 @@ async def test_full_copy_same_tool_id_stays_scoped_to_original_plans(protected_s
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("owner", ["historical_source", "foreign"])
-async def test_cold_target_snapshot_and_plan_reject_wrong_database_owner(protected_source, owner: str):
+async def test_cold_target_snapshot_and_plan_reject_wrong_database_owner(protected_source, owner: str, fork_deadlines):
     saver, sealed, _, _ = protected_source
-    await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID)
+    await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID, fork_deadlines=fork_deadlines)
     storage = saver._storage.storage
     target_thread = storage.main_thread_id(TARGET_SESSION_ID)
     assert saver.get_context_plan_registration(
@@ -150,9 +150,9 @@ async def test_cold_target_snapshot_and_plan_reject_wrong_database_owner(protect
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("column", ["creation_hash", "draft_hash", "seal_input_hash"])
-async def test_cold_history_rejects_tampered_original_registry_hash(protected_source, column):
+async def test_cold_history_rejects_tampered_original_registry_hash(protected_source, column, fork_deadlines):
     saver, sealed, _, _ = protected_source
-    await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID)
+    await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID, fork_deadlines=fork_deadlines)
     thread = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
     with saver._storage.storage._connect(thread, "", session_id=TARGET_SESSION_ID) as connection:
         connection.execute(f"UPDATE context_plans SET {column}=? WHERE plan_id=?", (sha256_jcs({"tampered": column}), sealed.plan_id))

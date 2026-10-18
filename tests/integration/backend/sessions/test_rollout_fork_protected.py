@@ -186,7 +186,7 @@ def _artifacts(root):
 
 @pytest.mark.asyncio
 async def test_full_copy_protected_detached_restarts_without_source(
-    protected_source
+    protected_source, fork_deadlines,
 ):
     saver, sealed, source_record, body = protected_source
     source_thread_id = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
@@ -195,7 +195,7 @@ async def test_full_copy_protected_detached_restarts_without_source(
     source_blob = (
         source.parent / detail_relative_path(source_record.detail_ref)
     ).read_bytes()
-    await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID)
+    await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID, fork_deadlines=fork_deadlines)
     assert _artifacts(source) == original
 
     target_thread_id = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
@@ -299,7 +299,7 @@ async def test_full_copy_protected_detached_restarts_without_source(
     ],
 )
 async def test_full_copy_preserves_corrupt_detail_bytes_and_reader_rejects(
-    protected_source, failure, error_message,
+    protected_source, failure, error_message, fork_deadlines,
 ):
     saver, _, record, body = protected_source
     source_thread_id = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
@@ -313,7 +313,7 @@ async def test_full_copy_preserves_corrupt_detail_bytes_and_reader_rejects(
         path.write_bytes(canonical_json_bytes(payload))
     source_blob = path.read_bytes()
     original = _artifacts(source)
-    await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID)
+    await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID, fork_deadlines=fork_deadlines)
     target_thread_id = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
     target_root = saver._storage.storage.root(
         TARGET_SESSION_ID, thread_id=target_thread_id,
@@ -334,14 +334,14 @@ async def test_full_copy_preserves_corrupt_detail_bytes_and_reader_rejects(
 
 
 @pytest.mark.asyncio
-async def test_full_copy_missing_required_detail_never_installs_target(protected_source):
+async def test_full_copy_missing_required_detail_never_installs_target(protected_source, fork_deadlines):
     saver, _, record, body = protected_source
     source_thread_id = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
     source = saver._storage.storage.root(SOURCE_SESSION_ID, thread_id=source_thread_id)
     (source.parent / detail_relative_path(record.detail_ref)).unlink()
     original = _artifacts(source)
     with pytest.raises(FileNotFoundError, match="context_required_resource_unavailable") as error:
-        await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID)
+        await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID, fork_deadlines=fork_deadlines)
     assert body[0]["text"] not in str(error.value)
     target_root = saver._storage.storage.root(
         TARGET_SESSION_ID, thread_id=saver._storage.storage.main_thread_id(TARGET_SESSION_ID),
@@ -352,7 +352,7 @@ async def test_full_copy_missing_required_detail_never_installs_target(protected
 
 
 @pytest.mark.asyncio
-async def test_pinned_protected_copy_retains_lineage_not_shared_body(protected_source):
+async def test_pinned_protected_copy_retains_lineage_not_shared_body(protected_source, fork_deadlines):
     saver, _, record, _ = protected_source
     source_thread_id = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
     source_root = saver._storage.storage.root(SOURCE_SESSION_ID, thread_id=source_thread_id)
@@ -360,7 +360,10 @@ async def test_pinned_protected_copy_retains_lineage_not_shared_body(protected_s
         source_root.parent / detail_relative_path(record.detail_ref)
     ).read_bytes()
     generation = saver._storage.forks._source_lifecycle_generation(SOURCE_SESSION_ID)
-    result = await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID, relationship="pinned")
+    result = await copy_rollout_snapshot(
+        saver, SOURCE_SESSION_ID, TARGET_SESSION_ID,
+        fork_deadlines=fork_deadlines, relationship="pinned",
+    )
     fork_id = result.fork_id
     with saver._storage.storage._connect(
         source_thread_id,
@@ -382,7 +385,7 @@ async def test_pinned_protected_copy_retains_lineage_not_shared_body(protected_s
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("boundary", ["prepare", "install"])
-async def test_failure_before_install_has_no_publication(protected_source, monkeypatch, boundary):
+async def test_failure_before_install_has_no_publication(protected_source, monkeypatch, boundary, fork_deadlines):
     from app.services.infrastructure.rollout_context.checkpoint import fork_copy
 
     saver, _, _, body = protected_source
@@ -399,7 +402,7 @@ async def test_failure_before_install_has_no_publication(protected_source, monke
 
     monkeypatch.setattr(fork_copy, "prepare_target_snapshot" if boundary == "prepare" else "publish_target_snapshot", fail)
     with pytest.raises(OSError, match="injected fork publication") as error:
-        await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID)
+        await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID, fork_deadlines=fork_deadlines)
     assert body[0]["text"] not in str(error.value)
     with saver._storage.storage._connect(target_thread, "", session_id=TARGET_SESSION_ID, read_only=True) as connection:
         assert connection.execute("SELECT COUNT(*) FROM item_catalog").fetchone() == (0,)
@@ -480,7 +483,7 @@ def optional_header(header_detail_factory):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("available", [True, False])
 async def test_optional_header_preserves_explicit_availability(
-    optional_header, available
+    optional_header, available, fork_deadlines,
 ):
     saver, record = optional_header
     if not available:
@@ -493,7 +496,7 @@ async def test_optional_header_preserves_explicit_availability(
             ).parent
             / detail_relative_path(record.detail_ref)
         ).unlink()
-    await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID)
+    await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID, fork_deadlines=fork_deadlines)
     target_thread_id = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
     with saver._storage.storage._connect(
         target_thread_id,
@@ -526,7 +529,7 @@ async def test_optional_header_preserves_explicit_availability(
 
 @pytest.mark.asyncio
 async def test_required_header_unavailable_rejects_restore_and_fork(
-    header_detail_factory,
+    header_detail_factory, fork_deadlines,
 ):
     saver, record = header_detail_factory(required=True)
     assert record.required is True
@@ -553,7 +556,7 @@ async def test_required_header_unavailable_rejects_restore_and_fork(
             assembly_id=record.assembly_id,
         )
     with pytest.raises(FileNotFoundError, match="context_required_resource_unavailable"):
-        await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID)
+        await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID, fork_deadlines=fork_deadlines)
     target_root = saver._storage.storage.root(
         TARGET_SESSION_ID,
         thread_id=saver._storage.storage.main_thread_id(TARGET_SESSION_ID),
@@ -564,7 +567,7 @@ async def test_required_header_unavailable_rejects_restore_and_fork(
 
 @pytest.mark.asyncio
 async def test_included_source_unavailable_rejects_corrupted_optional_flag(
-    protected_source,
+    protected_source, fork_deadlines,
 ):
     saver, snapshot, record, _ = protected_source
     entry = next(
@@ -594,7 +597,7 @@ async def test_included_source_unavailable_rejects_corrupted_optional_flag(
             source_thread_id,
             assembly_id=record.assembly_id,
         )
-    await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID)
+    await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID, fork_deadlines=fork_deadlines)
     target_thread_id = saver._storage.storage.main_thread_id(TARGET_SESSION_ID)
     target_root = saver._storage.storage.root(
         TARGET_SESSION_ID, thread_id=target_thread_id,
@@ -617,7 +620,7 @@ async def test_included_source_unavailable_rejects_corrupted_optional_flag(
 
 
 @pytest.mark.asyncio
-async def test_fork_does_not_copy_unregistered_detail_orphans(protected_source):
+async def test_fork_does_not_copy_unregistered_detail_orphans(protected_source, fork_deadlines):
     saver, _, record, _ = protected_source
     source_root = saver._storage.storage.root(
         SOURCE_SESSION_ID,
@@ -630,7 +633,7 @@ async def test_fork_does_not_copy_unregistered_detail_orphans(protected_source):
         / "unregistered-detail"
     )
     orphan.write_bytes(b"private orphan must not be copied")
-    await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID)
+    await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID, fork_deadlines=fork_deadlines)
     assert orphan.read_bytes() == b"private orphan must not be copied"
     assert not tuple(
         saver._storage.storage.root(
@@ -641,7 +644,7 @@ async def test_fork_does_not_copy_unregistered_detail_orphans(protected_source):
 
 
 @pytest.mark.asyncio
-async def test_source_schema_error_in_wal_is_rejected_without_source_mutation(protected_source):
+async def test_source_schema_error_in_wal_is_rejected_without_source_mutation(protected_source, fork_deadlines):
     saver = protected_source[0]
     source_thread = saver._storage.storage.main_thread_id(SOURCE_SESSION_ID)
     source = saver._storage.storage.root(SOURCE_SESSION_ID, thread_id=source_thread)
@@ -654,7 +657,7 @@ async def test_source_schema_error_in_wal_is_rejected_without_source_mutation(pr
         # mode=ro 读取有效 WAL 可更新 SQLite 的共享 read-mark；SHM 不是持久事实。
         original.pop("index.sqlite-shm")
         with pytest.raises(RuntimeError, match=r"^schema-incompatible:.*current=1, target=\d+$"):
-            await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID)
+            await copy_rollout_snapshot(saver, SOURCE_SESSION_ID, TARGET_SESSION_ID, fork_deadlines=fork_deadlines)
         actual = _artifacts(source)
         actual.pop("index.sqlite-shm")
         assert actual == original

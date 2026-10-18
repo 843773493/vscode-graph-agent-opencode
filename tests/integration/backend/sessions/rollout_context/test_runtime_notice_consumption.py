@@ -423,7 +423,7 @@ def test_notice_rebase_preserves_applied_untracked_root_and_tail_after_restart(n
 
 @pytest.mark.asyncio
 async def test_fork_copies_notice_epoch_without_source_boundary_and_new_user_binds_target_acceptance(
-    notice_case, session_bundle_factory,
+    notice_case, session_bundle_factory, fork_deadlines,
 ):
     case = notice_case
     internal, _intent = case.internal("fork")
@@ -442,7 +442,9 @@ async def test_fork_copies_notice_epoch_without_source_boundary_and_new_user_bin
                        {"source": "loop", "step": 1}, checkpoint["channel_versions"])
     target_session = f"ses_{create_uuid_hex()}"
     session_bundle_factory(case.sessions, target_session)
-    await copy_rollout_snapshot(case.saver, case.session, target_session)
+    await copy_rollout_snapshot(
+        case.saver, case.session, target_session, fork_deadlines=fork_deadlines,
+    )
     target_saver = RolloutCheckpointSaver(case.sessions)
     target_thread = target_saver._storage.storage.main_thread_id(target_session)
     copied = target_saver.get_context_assembly(target_session, target_thread, assembly_id=sealed.assembly_id)
