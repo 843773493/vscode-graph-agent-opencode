@@ -3829,6 +3829,12 @@ function assertForkSourceOwner(uri, source, localGatewayId = source.gatewayId) {
     "local URI 按请求 Gateway 解析后必须仍是冻结的真实 source owner");
 }
 
+function workspaceSessionInventoryUri(surface) {
+  const sessionPlaceholder = "/__SESSION__";
+  assert.ok(surface.uriTemplate.endsWith(sessionPlaceholder), "workspace Session URI 模板必须指向具体 Session");
+  return surface.uriTemplate.slice(0, -sessionPlaceholder.length);
+}
+
 async function freezeForkRequest(source, {
   mode = "full_rollout_copy", relationship = "detached", creationKind = "new_session_main",
   anchorMode = "inclusive", turnId, resources = [],
@@ -3853,7 +3859,7 @@ async function freezeForkRequest(source, {
     anchor_item_id: mode === "view_prefix_fork" ? point.anchor_item_id : null,
     anchor_mode: mode === "view_prefix_fork" ? anchorMode : "inclusive", mode,
     target_container_uri: creationKind === "new_child_thread" ? targetSurface.resource.uri
-      : `boxteam://${targetSurface.gatewayId}/workspace/${targetSurface.workspaceIdentity}`,
+      : workspaceSessionInventoryUri(targetSurface),
     creation_kind: creationKind, relationship, resources,
   };
 }
@@ -5226,6 +5232,9 @@ async function runCopyMissingAttachment(surface, owners) {
   const missing = await ownerApiResponse(source, `/api/v1/sessions/${source.sessionId}/fork-context`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requiredRequest),
   });
+  result.section8.copy_missing_attachment.requiredMissingResponse = {
+    status: missing.status, requestId: missing.requestId, body: missing.body,
+  };
   assert.equal(missing.status, 500, "required 正文真实缺失必须使整个公开 copy 明确失败");
   assert.equal(missing.body.code, 500);
   assert.equal(missing.body.data, null);
