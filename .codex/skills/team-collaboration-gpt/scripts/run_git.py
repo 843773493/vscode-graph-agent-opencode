@@ -199,6 +199,8 @@ def validate_staged_python(root: Path, env: dict[str, str]) -> None:
                     ruff,
                     "check",
                     "--isolated",
+                    "--target-version",
+                    "py311",
                     "--select",
                     "F821,F823",
                     "--output-format",

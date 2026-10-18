@@ -98,6 +98,16 @@ def pytest_selectors(command: list[str]) -> list[str]:
     return selectors
 
 
+def matrix_runner_owns_memory_limit(command: list[str]) -> bool:
+    """正式单 suite matrix runner 自己设置其 suite 数据段上限。"""
+    return (
+        len(command) == 5
+        and command[:4] == ["bun", "run", "test:matrix", "--"]
+        and command[4].startswith("--suite=")
+        and len(command[4]) > len("--suite=")
+    )
+
+
 def enforce_pytest_node_selection(
     command: list[str], profile: dict[str, object], workdir: Path, result_dir: Path,
 ) -> str | None:
@@ -272,8 +282,16 @@ def main() -> int:
             "result": str(result_path), "exit_code": 2, "launch_blocked": True,
         }), flush=True)
         return 2
-    argv = ["timeout", "--kill-after=10", str(args.seconds), "bash", "-c",
-            'ulimit -d 4194304; exec "$@"', "bash", *command]
+    argv = ["timeout", "--kill-after=10", str(args.seconds)]
+    if matrix_runner_owns_memory_limit(command):
+        # 正式 suite runner 按矩阵配置设硬上限，外层不能提前压低 hard limit。
+        argv.extend(command)
+    else:
+        argv.extend([
+            "bash", "-c",
+            'ulimit -d 4194304 || { printf "run_task: 无法设置数据段内存上限，未启动命令\\n" >&2; exit 97; }; exec "$@"',
+            "bash", *command,
+        ])
     start = {"started_utc": utc_now(), "runner_pid": os.getpid(),
              "cwd": str(workdir), "profile": str(profile_path),
              "profile_sha256": hashlib.sha256(profile_path.read_bytes()).hexdigest(),

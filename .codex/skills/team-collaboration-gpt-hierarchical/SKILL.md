@@ -52,7 +52,7 @@ Sol 改完整核心场景；Luna 可在作者实施期只读当前源码与真�
 
 整批迁齐后集中静态检查、少量真实完整入口与受影响回归，保留已约定的验收门。最终产品候选才集中 STOP，锁定唯一正式 manifest 与固定 Git 树并严格重建；未参与写入者基于该候选核完整调用链及证据，GO 绑定这份 manifest、Git 树，以及审查所依据的相关源码 blob。审查疑点先查真实 caller 和错误路径，再决定是否阻断；附加标签、报告形式或尚无具体错误路径的精度猜测不自动成为新验收门。已通过项按真实源码依赖复用，只审新增差异，不放宽身份、顺序、冲突或错误归属断言。
 
-Git 只交本轮唯一集成者；每个 Git 子进程使用绝对私有 `GIT_INDEX_FILE` 与 `GIT_OPTIONAL_LOCKS=0`，保留共享暂存。禁 Git 的作者和审查者不建索引。用户已授权的普通提交与 push 可直接执行，核提交树和远端 SHA；不 force、不改写历史。上游审查失败不能记作 GO；必要替代审查须保持作者独立性，并明确记录替代范围。
+Git index 的创建、写入与状态变更由本轮唯一集成者负责，并使用绝对私有 `GIT_INDEX_FILE` 与 `GIT_OPTIONAL_LOCKS=0`，保留共享暂存。作者和审查者不建或写 Git index；审查者在固定候选审查中可设置 `GIT_OPTIONAL_LOCKS=0`，只读查询指定不可变 Git 对象（`rev-parse`、`show`、`cat-file`、`ls-tree`），无需建索引。只有本轮唯一集成者在用户已授权时执行普通提交与 push，并核提交树和远端 SHA；不 force、不改写历史。上游审查失败不能记作 GO；必要替代审查须保持作者独立性，并明确记录替代范围。
 
 集成者调用 [run_git.py](../team-collaboration-gpt/scripts/run_git.py) 自动接好私有索引；直接运行 `commit` 子命令时，入口先检查私有索引中的 Python blob，`--task-dir` 使用本批产物绝对路径：
 
@@ -95,4 +95,6 @@ Git 只交本轮唯一集成者；每个 Git 子进程使用绝对私有 `GIT_IN
 
 - RUN18 的审查 GO 绑定了工作树内容，没有核对最终提交中的 Python blob。`commit-tree-bce3fbf-final-001` 的外层 wrapper 退出 97：设置 `ulimit` 被拒，矩阵命令未启动；`final-002` 才实际启动，收集阶段以退出码 2 因 `test_rollout_fork_modes.py` 的 `IndentationError` 中止。同批 Ruff 输出报 F821 未定义 `sys`，普通修复提交 `cf56c0b` 才补齐。候选 diff 中 `DelayedResponse.handle_async_request` 先引用 `deadline`、后在同一局部作用域赋值；该缺陷属于 Ruff F823，故提交检查覆盖 F821/F823。私有索引 fixture 验证 staged 语法错误、F821/F823 会阻止提交，`commit -a` 在 staged 合法而工作树语法错误时会被拒绝且 HEAD 不变，staged 正确 blob 会按索引提交，合法 Python 变动可提交；这些检查不证明业务行为或测试提速，且要求环境可调用 Ruff CLI。原件：`out/tests/temp/2026/10/18/fork60-fixture-closeout-18/coordinator/artifacts/fork60-final-candidate.patch`、`fork60-independent-review.md`、`runs/commit-tree-bce3fbf-final-001/`、`runs/commit-tree-bce3fbf-final-002/`、`runs/ruff-test-rollout-fork-modes-001/`。
 
-RUN17 的 owner 两次把停止描述为只读 STOP，root 随后更换 owner；这说明了当时的直接交接经过，但角色或阶段漂移的更深层根因仍不明。分层协作对 token、耗时或成本的收益也未获证据。
+RUN19 中，owner 曾拟把 final review/wiring 交回 root；root 已明确交付 owner 仍负责最终集成、commit/push 与远端核验。短当前接续入口与历史已拆分保存，分别见 `core_owner/CONTINUATION.md` 和 `core_owner/HISTORY.md`。candidate-003 的 unit-003 为 109 passed、定向 integration-002 为 20 passed，真实双 Gateway main/child 为 2 passed；这些切片不等于全产品验收。完整产品门仍未完成，也没有证据证明效率或提速收益。原件：`core_sol/artifacts/runs/fork-shared-owner-unit-003/`、`fork-shared-owner-integration-002/`、`fork-shared-owner-two-gateway-001/`；接续入口及历史位于 `core_owner/`。
+
+- 2026-10-19，peer 按 raw 更正了三类周转归因：正式 SSH fixture 共用固定端口和产物，fixture 生命周期须由唯一运行窗口独占；固定 14960 被 detached sshd 占用时 `same-owner-repro-001` 仅在 setup 失败（1746 deselected、1 error）；未引用 `-k` 使 `same-backend-two-gateway-main-001` 在 pytest 入口报 `file or directory not found: and`、退出 4；`uri-transfer-and-run15-locks-001` 是 35 passed、1710 deselected、1 个旧 `fork_deadline.py` SHA 的 setup error，不是全量或 fork 业务结果。记录须区分 collection、筛选数、实际阶段和退出码，旧 SHA 的 setup 原件不能在修复后再次触发 STOP。原件根：`out/tests/temp/2026/10/19/goal-core-resume-19/`；fixture 与端口记录在 `core_sol/artifacts/runs/same-owner-repro-001/`、`sshd-identity-luna/artifacts/attempt-003/`、`attempt-005/`、`attempt-007/`；未引用 selector 的 stderr 与 profile 在 `core_owner/artifacts/runs/same-backend-two-gateway-main-001/` 和 `core_owner/artifacts/same-backend-two-gateway-main-profile.json`；旧 SHA setup 输出在 `core_sol/artifacts/runs/uri-transfer-and-run15-locks-001/`，SHA 归因在 `core_owner/CONTINUATION.md`。工具候选已由新入口普通提交并 push（`a730e2aced875bdc0fcc176794644a5a9abb211a`），且已核远端 SHA 一致；提交入口检查不证明业务验收，整体提速/成本收益未证。

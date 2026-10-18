@@ -64,7 +64,7 @@ yield_time_ms按是否需要后台监视选择，进程外timeout/ulimit保护�
   -- <原命令及参数>
 ```
 
-[run_task.py](../../../../scripts/run_task.py) 自动设置cwd、ROOT venv、唯一代码根PYTHONPATH、UV_NO_SYNC、路径与timeout/ulimit保护；其它环境继承调用者，不宣称完全隔绝环境。profile由主建立；必要新源码、fixture/callee补`source_paths`，与已有manifest取并集。大型同批反复漏列消费者时，实测成本可接受就一次覆盖现有开发目录的代码与测试，保原非代码依赖；枚举后新增文件及隐式非代码依赖仍登记。原profile保留，扩范围用新版本，不改历史指纹或在途输入。对已支持的两个pytest前缀，runner另将命令中明确选中的现有`.py`文件加入前后指纹，`::node`取文件、绝对路径归一到workdir，`--ignore/--deselect`独立值不作选中；目录selector和隐式fixture/callee不自动展开。清单相同只证明其覆盖路径不变，不证明整个测试组合已覆盖。禁Git任务使用不可用index标记，不初始化索引；这不是工具沙箱或Git命令授权。正式fixture继续写原`out/tests/<同名测试>/`，不创建平行产品入口或业务工作区。
+[run_task.py](../../../../scripts/run_task.py) 自动设置cwd、ROOT venv、唯一代码根PYTHONPATH、UV_NO_SYNC、路径和进程外timeout；普通命令再由外层shell设置4GiB `RLIMIT_DATA`。仅精确形如`bun run test:matrix -- --suite=<id>`的命令由matrix按suite配置设置数据段上限，外层保留继承的hard limit，避免重复降低后matrix无法上调。其它环境继承调用者，不宣称完全隔绝环境。profile由主建立；必要新源码、fixture/callee补`source_paths`，与已有manifest取并集。大型同批反复漏列消费者时，实测成本可接受就一次覆盖现有开发目录的代码与测试，保原非代码依赖；枚举后新增文件及隐式非代码依赖仍登记。原profile保留，扩范围用新版本，不改历史指纹或在途输入。对已支持的两个pytest前缀，runner另将命令中明确选中的现有`.py`文件加入前后指纹，`::node`取文件、绝对路径归一到workdir，`--ignore/--deselect`独立值不作选中；目录selector和隐式fixture/callee不自动展开。清单相同只证明其覆盖路径不变，不证明整个测试组合已覆盖。禁Git任务使用不可用index标记，不初始化索引；这不是工具沙箱或Git命令授权。正式fixture继续写原`out/tests/<同名测试>/`，不创建平行产品入口或业务工作区。
 
 对只应按具名场景运行的产品文件，profile可登记`pytest_node_ids`对象：键为该文件路径，值为允许的完整node ID列表。runner只识别`uv run pytest`与`uv run --no-sync pytest`，显式传入登记文件时核相对/绝对路径；裸文件或未登记node在child启动前exit2，保存`command-selection-check.json`及原始结果。`--ignore`、`--deselect`的紧邻独立值只作排除项，继续检查其后真实selector。无规则或其它命令保持原行为；目录选择、其它命令前缀和未公布的pytest选项语义不由此检查覆盖，不宣称命令沙箱。作者仍传完整具名selector，主不因防错检查增加业务验收门。
 
