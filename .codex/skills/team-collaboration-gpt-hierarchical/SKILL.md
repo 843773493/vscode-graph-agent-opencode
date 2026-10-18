@@ -50,18 +50,18 @@ Sol 改完整核心场景；Luna 可在作者实施期只读当前源码与真�
 
 一次授权覆盖该任务的必要实现、接线和受保护验证。协调者分配运行窗口后，作者可以连续完成临时诊断脚本、实际输入固定、运行与有证据的接线修正；不逐个脚本或 profile 设置 STOP→转交→二次授权。优先复用真实入口及有效 fixture，不为诊断自造另一套业务前提。临时观测只证明它实际覆盖的行为，人为锁竞争不等于复现产品持锁故障。
 
-整批迁齐后集中静态检查、少量真实完整入口与受影响回归，保留已约定的验收门。最终产品候选才集中 STOP，锁定唯一正式 manifest 与固定 Git 树并严格重建；未参与写入者基于该候选核完整调用链及证据，GO 仅绑定这份 manifest 与该树。审查疑点先查真实 caller 和错误路径，再决定是否阻断；附加标签、报告形式或尚无具体错误路径的精度猜测不自动成为新验收门。已通过项按真实源码依赖复用，只审新增差异，不放宽身份、顺序、冲突或错误归属断言。
+整批迁齐后集中静态检查、少量真实完整入口与受影响回归，保留已约定的验收门。最终产品候选才集中 STOP，锁定唯一正式 manifest 与固定 Git 树并严格重建；未参与写入者基于该候选核完整调用链及证据，GO 绑定这份 manifest、Git 树，以及审查所依据的相关源码 blob。审查疑点先查真实 caller 和错误路径，再决定是否阻断；附加标签、报告形式或尚无具体错误路径的精度猜测不自动成为新验收门。已通过项按真实源码依赖复用，只审新增差异，不放宽身份、顺序、冲突或错误归属断言。
 
 Git 只交本轮唯一集成者；每个 Git 子进程使用绝对私有 `GIT_INDEX_FILE` 与 `GIT_OPTIONAL_LOCKS=0`，保留共享暂存。禁 Git 的作者和审查者不建索引。用户已授权的普通提交与 push 可直接执行，核提交树和远端 SHA；不 force、不改写历史。上游审查失败不能记作 GO；必要替代审查须保持作者独立性，并明确记录替代范围。
 
-集成者调用 [run_git.py](../team-collaboration-gpt/scripts/run_git.py) 自动接好私有索引，`--task-dir` 使用本批产物绝对路径：
+集成者调用 [run_git.py](../team-collaboration-gpt/scripts/run_git.py) 自动接好私有索引；直接运行 `commit` 子命令时，入口先检查私有索引中的 Python blob，`--task-dir` 使用本批产物绝对路径：
 
 ~~~bash
 <ROOT>/.venv/bin/python <ROOT>/.codex/skills/team-collaboration-gpt/scripts/run_git.py \
   --task-dir <ROOT>/out/tests/temp/YYYY/MM/DD/<run_id>/<role>/artifacts -- status --short
 ~~~
 
-同批 Git 命令复用该 task-dir；新批次使用新目录。入口只在索引不存在时从 HEAD 初始化，不清空已有私有暂存；它不代替最终树核验或扩大 Git 授权。
+同批 Git 命令复用该 task-dir；新批次使用新目录。入口只在索引不存在时从 HEAD 初始化，不清空已有私有暂存。不支持以 `-` 开头的 Git 全局选项前缀（例如 `-C <repo>`）；必须直接提供 Git 子命令，避免全局前缀绕过提交检查。命令向量首项为 `commit` 时，入口拒绝 `-a/--all`、`-i/--include`、`--interactive`、`-o/--only`、`-p/--patch`、pathspec 选项及位置路径，再从私有索引读取相对 HEAD 变动的 Python blob，先做 AST 解析，再用 Ruff 检查 F821/F823；任一失败都会阻止该直接提交调用。提交变动 Python 文件时环境须能调用 Ruff CLI。该检查不代替最终树核验或业务验收。
 
 ## 路径与运行证据
 
@@ -91,6 +91,8 @@ Git 只交本轮唯一集成者；每个 Git 子进程使用绝对私有 `GIT_IN
 只保留能改变后续决策且可追溯原件的实践结论，过程记录留在本轮 artifacts。
 
 - 2026-10-18，未设 `PYTEST_ADDOPTS` 启动 Python integration matrix，收集了全部 1,716 项后由负责人停止（143）；精确选择 6 个 fork 用例后 6 项通过。原件：`out/tests/temp/2026/10/18/fork60-deadline/fork60_closeout/artifacts/python/matrix.*`、`out/tests/temp/2026/10/18/fork60-deadline/fork60_closeout/artifacts/python/attempt-003/`。
-- 同日，外层 `ulimit -d 4194304` 因当前 shell 无权调整限制而在 pytest 启动前失败（97）；移除外层限制后由 matrix 管理资源，真实 API 用例 1 项通过。原件：`out/tests/temp/2026/10/18/fork60-deadline/fork60_delivery/artifacts/runs/python-real-fork-001/`、`out/tests/temp/2026/10/18/fork60-deadline/fork60_delivery/artifacts/runs/python-real-fork-003/`。
+- 同日，RUN16 在 pytest 启动前退出 97：`run_task.py` 先将 soft/hard 都降至 4 GiB，正式 integration runner 再设 8 GiB 时被拒；受保护探针确认了继承关系。入口已改为正式单 suite matrix 自行设内存上限，其余命令保留 4 GiB 硬限制且设置失败不启动。短探针通过，新入口的真实 `live_resource_forks` 为 1 passed /167.89s；该业务 suite 使用 4 GiB，8 GiB 设置仅由短探针验证，不据此声称整体提速。原件：`out/tests/temp/2026/10/18/hierarchical-goal-resume-16/goal_delivery_run15/artifacts/runs/core-current-sha-integration-001/`、`core-live-resource-forks-002/`，以及同批 `skill_practice_run16/artifacts/`。
 
-角色或阶段漂移的根因，以及分层协作对 token、耗时或成本的收益，均未获证据。
+- RUN18 的审查 GO 绑定了工作树内容，没有核对最终提交中的 Python blob。`commit-tree-bce3fbf-final-001` 的外层 wrapper 退出 97：设置 `ulimit` 被拒，矩阵命令未启动；`final-002` 才实际启动，收集阶段以退出码 2 因 `test_rollout_fork_modes.py` 的 `IndentationError` 中止。同批 Ruff 输出报 F821 未定义 `sys`，普通修复提交 `cf56c0b` 才补齐。候选 diff 中 `DelayedResponse.handle_async_request` 先引用 `deadline`、后在同一局部作用域赋值；该缺陷属于 Ruff F823，故提交检查覆盖 F821/F823。私有索引 fixture 验证 staged 语法错误、F821/F823 会阻止提交，`commit -a` 在 staged 合法而工作树语法错误时会被拒绝且 HEAD 不变，staged 正确 blob 会按索引提交，合法 Python 变动可提交；这些检查不证明业务行为或测试提速，且要求环境可调用 Ruff CLI。原件：`out/tests/temp/2026/10/18/fork60-fixture-closeout-18/coordinator/artifacts/fork60-final-candidate.patch`、`fork60-independent-review.md`、`runs/commit-tree-bce3fbf-final-001/`、`runs/commit-tree-bce3fbf-final-002/`、`runs/ruff-test-rollout-fork-modes-001/`。
+
+RUN17 的 owner 两次把停止描述为只读 STOP，root 随后更换 owner；这说明了当时的直接交接经过，但角色或阶段漂移的更深层根因仍不明。分层协作对 token、耗时或成本的收益也未获证据。
