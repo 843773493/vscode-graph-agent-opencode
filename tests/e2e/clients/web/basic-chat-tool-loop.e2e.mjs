@@ -4,7 +4,9 @@ import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import process from "node:process";
 import { chromium } from "playwright";
-import { planGoldenLoop, planChatCalls, testControl, uuidText } from "../../../support/e2e-test-control.mjs";
+import { beginForkOperationDeadline, beginForkSubmissionDeadline, bindForkOperationDeadline,
+  closeForkDeadlineWatchdog, planGoldenLoop, planChatCalls, testControl,
+  uuidText, waitForForkOperation } from "../../../support/e2e-test-control.mjs";
 import { expectedTypedInternalHistoryMembership } from "./generated-internal-history-oracle.mjs";
 
 function requiredEnvironment(name) {
@@ -89,20 +91,27 @@ function section8SelectionContract(raw) {
 }
 
 const messageStreamDiagnosticsSelfTest = process.argv.includes("--message-stream-diagnostics-self-test");
-const section8Selection = messageStreamDiagnosticsSelfTest
+const forkDeadlineClassifierSelfTest = process.argv.includes("--fork-deadline-classifier-self-test");
+if (messageStreamDiagnosticsSelfTest && forkDeadlineClassifierSelfTest) {
+  throw new Error("fork deadline 与 message stream self-test 不能同时选择");
+}
+const standaloneSelfTest = messageStreamDiagnosticsSelfTest || forkDeadlineClassifierSelfTest;
+const section8Selection = standaloneSelfTest
   ? null
   : section8SelectionContract(process.env.BOXTEAM_E2E_SECTION8_FOCUS);
 if (process.argv.includes(SECTION8_SELECTION_CONTRACT_ARG)) {
-  if (messageStreamDiagnosticsSelfTest) throw new Error("selector contract 与 diagnostic self-test 不能同时选择");
+  if (standaloneSelfTest) throw new Error("selector contract 与 self-test 不能同时选择");
   process.stdout.write(JSON.stringify(section8Selection) + "\n");
   process.exit(0);
 }
-const baseUrl = messageStreamDiagnosticsSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_BASE_URL");
-const expectedWorkspaceId = messageStreamDiagnosticsSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_WORKSPACE_ID");
-const resultPath = messageStreamDiagnosticsSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_RESULT_PATH");
-const screenshotPath = messageStreamDiagnosticsSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_SCREENSHOT_PATH");
+const baseUrl = standaloneSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_BASE_URL");
+const expectedWorkspaceId = standaloneSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_WORKSPACE_ID");
+const resultPath = standaloneSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_RESULT_PATH");
+const screenshotPath = standaloneSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_SCREENSHOT_PATH");
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
 const TRANSCRIPT_NAVIGATION_TIMEOUT_MS = 60_000;
+const FORK_OPERATION_DEADLINE_MS = 60_000;
+const forkOperationDeadlines = new Map();
 const VIRTUOSO_AT_BOTTOM_THRESHOLD_PX = 4;
 const HISTORY_TIMING_EVENT_LIMIT = 32;
 // 生产 residency worker 每 60 秒扫描；后台卸载观察统一覆盖一个扫描周期。
@@ -3868,24 +3877,273 @@ function forkOperationId(request) {
   return "fork-" + createHash("sha256").update(request.idempotency_key).digest("hex");
 }
 
-function requestFork(source, request, expectedStatus, targetSurface = source) {
-  result.forkRequests.push(structuredClone(request));
-  return ownerApi(targetSurface, `/api/v1/sessions/${source.sessionId}/fork-context`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(request),
-  }, expectedStatus);
+async function forkDeadline(request, source, targetSurface, stage = "fork_context POST") {
+  assert.equal(typeof request.idempotency_key, "string");
+  let deadline = forkOperationDeadlines.get(request.idempotency_key);
+  if (!deadline) {
+    deadline = await beginForkOperationDeadline({
+      target: `${targetSurface.gatewayId}/${targetSurface.workspaceIdentity}/${source.sessionId}`,
+      operationKey: request.idempotency_key,
+      timeoutMs: FORK_OPERATION_DEADLINE_MS,
+    });
+    deadline.sourceSessionId = source.sessionId;
+    deadline.targetWorkspace = targetSurface.workspaceIdentity;
+    forkOperationDeadlines.set(request.idempotency_key, deadline);
+  }
+  await deadline.setStage(stage);
+  return deadline;
 }
 
-function requestForkResponse(source, request, targetSurface = source, timeout) {
-  result.forkRequests.push(structuredClone(request));
-  const requestOptions = {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(request),
+function forkDeadlineError(deadline) {
+  return deadline.error();
+}
+
+function waitForForkBudget(awaitable, deadline, stage) {
+  return waitForForkOperation(awaitable, deadline, stage);
+}
+
+async function readForkDurableHistory(targetSurface, payload, deadline) {
+  const fork = payload?.data;
+  const sessionId = fork?.session?.session_id;
+  const threadId = fork?.thread_id;
+  assert.equal(typeof sessionId, "string", "fork 响应必须返回持久目标 Session");
+  assert.equal(typeof threadId, "string", "fork 响应必须返回持久目标 Thread");
+  const token = await waitForForkBudget(localToken(targetSurface.page), deadline, "读取 fork Thread 持久历史凭据");
+  const response = await waitForForkBudget(targetSurface.page.request.fetch(new URL(
+    `/api/v1/sessions/${sessionId}/threads/${threadId}/history`, targetSurface.page.url()).toString(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Local-Token": token,
+      "X-BoxTeam-Workspace-Id": targetSurface.gatewayWorkspaceId },
+    data: JSON.stringify({ direction: "tail", turns: 256 }),
+    timeout: 0,
+  }), deadline, "读取 fork Thread 持久历史");
+  const text = await waitForForkBudget(response.text(), deadline, "读取 fork Thread 持久历史响应正文");
+  if (!response.ok()) throw new Error(`fork Thread 持久历史读取失败 ${response.status()}: ${text}`);
+  const history = text ? JSON.parse(text) : null;
+  const requestId = response.headers()["x-request-id"];
+  assert.ok(requestId, "fork Thread 历史响应缺少 X-Request-ID");
+  assert.equal(history?.request_id, requestId, "fork Thread 历史响应体与 X-Request-ID 不一致");
+  assert.equal(history.data.thread_id, threadId, "真实历史读取必须落在刚发布的 fork Thread owner");
+  assert.equal(typeof history.data.source_view_id, "string", "fork Thread 历史必须返回实际读取 view");
+  assert.ok(Number.isSafeInteger(history.data.source_view_revision), "fork Thread 历史必须返回实际读取 revision");
+  const proof = { sessionId, threadId, sourceViewId: history.data.source_view_id,
+    sourceViewRevision: history.data.source_view_revision, turnCount: history.data.items.length };
+  result.forkDurabilityProofs.push(proof);
+  return proof;
+}
+
+function liveForkResources(payload) {
+  return (Array.isArray(payload?.data?.resources) ? payload.data.resources : [])
+    .filter((resource) => resource.owner_reference && resource.action !== "omit");
+}
+
+function assertForkResponseRequestId(response, payload, description) {
+  const requestId = response.headers()["x-request-id"];
+  assert.ok(requestId, `${description} 缺少 X-Request-ID`);
+  assert.equal(payload?.request_id, requestId, `${description} 响应体与 X-Request-ID 不一致`);
+  return requestId;
+}
+
+function hasDurableTargetHistory(payload, durableHistory, requireTurns = false) {
+  const sessionId = payload?.data?.session?.session_id;
+  const threadId = payload?.data?.thread_id;
+  return typeof sessionId === "string" && typeof threadId === "string"
+    && durableHistory?.sessionId === sessionId && durableHistory?.threadId === threadId
+    && typeof durableHistory.sourceViewId === "string"
+    && Number.isSafeInteger(durableHistory.sourceViewRevision)
+    && Number.isSafeInteger(durableHistory.turnCount)
+    && (!requireTurns || durableHistory.turnCount > 0);
+}
+
+function hasRejectedTerminalResources(payload) {
+  const resources = liveForkResources(payload);
+  return resources.length > 0
+    && resources.some((resource) => resource.operation_state === "rejected")
+    && resources.every((resource) => ["committed", "rejected"].includes(resource.operation_state));
+}
+
+async function finishForkDeadline(deadline) {
+  await deadline.complete();
+  forkOperationDeadlines.delete(deadline.operationKey);
+}
+
+async function completePartialForkRetry(deadline, status, payload, durableHistory) {
+  if (status < 200 || status >= 300
+      || !hasDurableTargetHistory(payload, durableHistory, true)
+      || !hasRejectedTerminalResources(payload)) return false;
+  await finishForkDeadline(deadline);
+  return true;
+}
+
+function isResourceIndependentForkRejection(status, payload) {
+  if (status < 400 || status >= 500) return false;
+  return liveForkResources(payload).every((resource) => resource.operation_state === "not_dispatched");
+}
+
+async function classifyForkResponse(deadline, status, payload, durableHistory) {
+  if (status >= 500 || status < 200 || status >= 300 && status < 400) return "unknown";
+  if (status >= 400) {
+    if (isResourceIndependentForkRejection(status, payload)) await finishForkDeadline(deadline);
+    return "known";
+  }
+
+  if (deadline.partialRetryRequested) return "known";
+  const resources = liveForkResources(payload);
+  const resourceNeedsRetry = resources.some((resource) => resource.availability === "unavailable"
+    || !["committed", "rejected"].includes(resource.operation_state));
+  const rejectedResource = resources.some((resource) => resource.operation_state === "rejected");
+  if (!resourceNeedsRetry && !rejectedResource && hasDurableTargetHistory(payload, durableHistory)) {
+    await finishForkDeadline(deadline);
+  }
+  return "known";
+}
+
+async function runForkDeadlineClassifierSelfTest() {
+  const createDeadline = (operationKey) => {
+    const deadline = { operationKey, partialRetryRequested: false, completed: 0,
+      async complete() { this.completed += 1; } };
+    forkOperationDeadlines.set(operationKey, deadline);
+    return deadline;
   };
-  return ownerApiResponse(targetSurface, `/api/v1/sessions/${source.sessionId}/fork-context`, {
-    ...requestOptions,
-    ...(timeout === undefined ? {} : { timeout }),
+  const proof = { sessionId: "ses-target", threadId: "thr-target", sourceViewId: "view-target",
+    sourceViewRevision: 7, turnCount: 1 };
+  const target = { session: { session_id: proof.sessionId }, thread_id: proof.threadId };
+  const rejectedResource = { owner_reference: { kind: "terminal", resource_id: "term-1" },
+    action: "reuse_reference", operation_state: "rejected", availability: "unavailable" };
+  const committedResource = { owner_reference: { kind: "browser", resource_id: "browser-1" },
+    action: "reuse_reference", operation_state: "committed", availability: "available" };
+
+  const rejected = createDeadline("rejected-4xx");
+  assert.equal(await classifyForkResponse(rejected, 422, { request_id: "req-4xx", detail: "invalid request" }, null), "known");
+  assert.equal(rejected.completed, 1, "无 live resource 的明确 4xx 必须结束预算");
+
+  const serverFailure = createDeadline("server-5xx");
+  assert.equal(await classifyForkResponse(serverFailure, 503, { request_id: "req-5xx" }, null), "unknown");
+  assert.equal(serverFailure.completed, 0, "5xx 不得结束预算");
+
+  const firstPartial = createDeadline("first-partial");
+  const firstPartialPayload = { data: { ...target, resources: [rejectedResource, committedResource] } };
+  assert.equal(await classifyForkResponse(firstPartial, 200, firstPartialPayload, proof), "known");
+  assert.equal(firstPartial.completed, 0, "首次 partial 的 rejected resource 仍需允许原 key 重试");
+
+  const retry = createDeadline("partial-retry");
+  retry.partialRetryRequested = true;
+  const replayable = { data: { ...target, resources: [
+    { ...rejectedResource, operation_state: "dispatching" }, committedResource,
+  ] } };
+  assert.equal(await classifyForkResponse(retry, 200, replayable, proof), "known");
+  assert.equal(await completePartialForkRetry(retry, 200, replayable, proof), false);
+  assert.equal(retry.completed, 0, "可重放或非 terminal resource state 不得结束预算");
+  assert.equal(await classifyForkResponse(retry, 503, firstPartialPayload, proof), "unknown");
+  assert.equal(retry.completed, 0, "partial retry 的 5xx 不得结束预算");
+
+  assert.equal(await classifyForkResponse(retry, 200, firstPartialPayload, proof), "known");
+  assert.equal(retry.completed, 0, "classifier 不得先于真实 caller 的 durable proof 断言结束 partial retry");
+  assert.equal(await completePartialForkRetry(retry, 200, firstPartialPayload, proof), true);
+  assert.equal(retry.completed, 1, "目标 history proof 加 rejected terminal state 必须结束预算");
+  assert.equal(forkOperationDeadlines.has(retry.operationKey), false);
+
+  const resourceConflict = createDeadline("resource-4xx");
+  assert.equal(await classifyForkResponse(resourceConflict, 409,
+    { data: { resources: [rejectedResource] } }, null), "known");
+  assert.equal(resourceConflict.completed, 0, "资源相关 4xx 不能冒充无资源副作用的明确拒绝");
+
+  for (const key of [rejected, serverFailure, firstPartial, resourceConflict]) {
+    forkOperationDeadlines.delete(key.operationKey);
+  }
+}
+
+async function beginForkUiSubmission(page, source, targetSurface, sessionId, submit) {
+  const pathname = `/api/v1/sessions/${sessionId}/fork-context`;
+  const matches = (request) => request.method() === "POST" && new URL(request.url()).pathname === pathname;
+  const deadline = await beginForkSubmissionDeadline({
+    target: `${targetSurface.gatewayId}/${targetSurface.workspaceIdentity}/${source.sessionId}`,
+    timeoutMs: FORK_OPERATION_DEADLINE_MS,
   });
+  deadline.sourceSessionId = source.sessionId;
+  deadline.targetWorkspace = targetSurface.workspaceIdentity;
+  const responsePending = page.waitForResponse((response) => matches(response.request()), { timeout: 0 });
+  const requestPending = page.waitForRequest(matches, { timeout: 0 }).then(async (request) => {
+    const body = request.postDataJSON();
+    const boundDeadline = await bindForkOperationDeadline(deadline, body.idempotency_key);
+    boundDeadline.sourceSessionId = source.sessionId;
+    boundDeadline.targetWorkspace = targetSurface.workspaceIdentity;
+    await boundDeadline.setStage("确认按钮提交后的 fork POST 已发出");
+    forkOperationDeadlines.set(body.idempotency_key, boundDeadline);
+    return { request, body, deadline: boundDeadline };
+  });
+  const clickPending = submit({ timeout: 0 });
+  const [{ request, body, deadline: boundDeadline }] = await waitForForkOperation(
+    Promise.all([requestPending, clickPending]), deadline, "确认按钮提交并等待 fork POST request",
+  );
+  const waitForResponse = async () => {
+    let response;
+    try {
+      response = await waitForForkBudget(responsePending, boundDeadline, "fork POST 响应头");
+    } catch (error) {
+      const remaining = await boundDeadline.remainingMs();
+      if (remaining <= 1) throw forkDeadlineError(boundDeadline);
+      throw new Error(`fork response wait failed: source_session_id=${boundDeadline.sourceSessionId}, `
+        + `target_workspace=${boundDeadline.targetWorkspace}, idempotency_key=${boundDeadline.operationKey}, `
+        + `last_phase=${boundDeadline.lastStage}, backend_state=unknown; ${String(error)}`);
+    }
+    assert.equal(response.request(), request, "UI fork 响应必须属于本次确认后的 POST");
+    const text = await waitForForkBudget(response.text(), boundDeadline, "fork POST 响应正文");
+    const payload = text ? JSON.parse(text) : null;
+    assertForkResponseRequestId(response, payload, "UI fork API");
+    const durableHistory = response.status() >= 200 && response.status() < 300
+      ? await readForkDurableHistory(targetSurface, payload, boundDeadline)
+      : null;
+    const remainingMs = await boundDeadline.remainingMs();
+    const backendState = await classifyForkResponse(boundDeadline, response.status(), payload, durableHistory);
+    return { response, request: body, payload, backendState, durableHistory, remainingMs,
+      deadline: boundDeadline, deadlineToken: boundDeadline.token, deadlineNs: boundDeadline.deadlineNs };
+  };
+  return { request: body, waitForResponse };
+}
+
+function requestFork(source, request, expectedStatus, targetSurface = source) {
+  return requestForkResponse(source, request, targetSurface).then((response) => {
+    const statusMatches = expectedStatus === undefined ? response.status >= 200 && response.status < 300
+      : response.status === expectedStatus;
+    if (!statusMatches) throw new Error(`API ${response.status}, backend_state=${response.backendState}: ${JSON.stringify(response.body)}`);
+    return response.body;
+  });
+}
+
+async function requestForkResponse(source, request, targetSurface = source) {
+  result.forkRequests.push(structuredClone(request));
+  const token = await localToken(targetSurface.page);
+  const deadline = await forkDeadline(request, source, targetSurface);
+  const remaining = await deadline.remainingMs();
+  if (remaining <= 0) throw forkDeadlineError(deadline);
+  let response;
+  try {
+    response = await targetSurface.page.request.fetch(new URL(
+      `/api/v1/sessions/${source.sessionId}/fork-context`, targetSurface.page.url()).toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Local-Token": token,
+        "X-BoxTeam-Workspace-Id": targetSurface.gatewayWorkspaceId },
+      data: JSON.stringify(request),
+      timeout: 0,
+    });
+  } catch (error) {
+    if (await deadline.remainingMs() <= 1) throw forkDeadlineError(deadline);
+    throw new Error(`fork POST failed: source_session_id=${deadline.sourceSessionId}, `
+      + `target_workspace=${deadline.targetWorkspace}, idempotency_key=${deadline.operationKey}, `
+      + `last_phase=${deadline.lastStage}, backend_state=unknown; ${String(error)}`);
+  }
+  const text = await waitForForkBudget(response.text(), deadline, "fork_context POST 响应正文");
+  const body = text ? JSON.parse(text) : null;
+  const requestId = assertForkResponseRequestId(response, body,
+    `API /api/v1/sessions/${source.sessionId}/fork-context`);
+  const durableHistory = response.status() >= 200 && response.status() < 300
+    ? await readForkDurableHistory(targetSurface, body, deadline)
+    : null;
+  const remainingMs = await deadline.remainingMs();
+  const backendState = await classifyForkResponse(deadline, response.status(), body, durableHistory);
+  return { status: response.status(), requestId, body, backendState, durableHistory,
+    remainingMs, deadlineToken: deadline.token, deadlineNs: deadline.deadlineNs };
 }
 
 async function forkHistoryEvidence(owner) {
@@ -4330,7 +4588,12 @@ async function publishedForkOwner(source, request, fork, sourceEvidence, targetS
 async function forkOwner(source, options = {}, targetSurface = source) {
   const before = await forkHistoryEvidence(source);
   const request = await freezeForkRequest(source, options, targetSurface);
-  return { ...await publishedForkOwner(source, request, (await requestFork(source, request, undefined, targetSurface)).data, before, targetSurface), request };
+  const response = await requestForkResponse(source, request, targetSurface);
+  assert.equal(response.backendState, "known", `真实 fork 首次提交必须是明确终态: ${response.status}`);
+  assert.ok(response.status >= 200 && response.status < 300,
+    `API ${response.status}, backend_state=${response.backendState}: ${JSON.stringify(response.body)}`);
+  return { ...await publishedForkOwner(source, request, response.body.data, before, targetSurface), request,
+    deadlineToken: response.deadlineToken, deadlineNs: response.deadlineNs };
 }
 
 async function runDefaultChildForkUi(surface) {
@@ -4366,14 +4629,11 @@ async function runDefaultChildForkUi(surface) {
   assert.deepEqual([fullPoint.source_uri, fullPoint.source_view_id, fullPoint.source_view_revision, fullPoint.anchor_item_id],
     [emptyPoint.source_uri, emptyPoint.source_view_id, emptyPoint.source_view_revision, null]);
   await waitUntil(async () => await emptyDialog.getByRole("button", { name: "创建分支", exact: true }).isEnabled(), "空来源显式完整历史候选收敛");
-  const [emptyForkResponse] = await Promise.all([
-    empty.page.waitForResponse((response) => response.request().method() === "POST"
-      && new URL(response.url()).pathname === `/api/v1/sessions/${empty.sessionId}/fork-context`, { timeout: 30_000 }),
-    emptyDialog.getByRole("button", { name: "创建分支", exact: true }).click(),
-  ]);
-  assert.equal(emptyForkResponse.status(), 200, await emptyForkResponse.text());
-  const emptyRequest = emptyForkResponse.request().postDataJSON();
-  const emptyFork = (await emptyForkResponse.json()).data;
+  const emptySubmission = await beginForkUiSubmission(empty.page, empty, empty, empty.sessionId,
+    (options) => emptyDialog.getByRole("button", { name: "创建分支", exact: true }).click(options));
+  const { response: emptyForkResponse, request: emptyRequest, payload: emptyPayload } = await emptySubmission.waitForResponse();
+  assert.equal(emptyForkResponse.status(), 200, JSON.stringify(emptyPayload));
+  const emptyFork = emptyPayload.data;
   assert.deepEqual([emptyRequest.mode, emptyRequest.creation_kind, emptyRequest.anchor_item_id, emptyRequest.resources],
     ["full_rollout_copy", "new_child_thread", null, []]);
   assert.deepEqual([emptyRequest.source_uri, emptyRequest.source_view_id, emptyRequest.source_view_revision],
@@ -4495,14 +4755,11 @@ async function runDefaultChildForkUi(surface) {
     const box = await control.boundingBox();
     assert.ok(box && box.y >= 0 && box.y + box.height <= viewport.height, "弹窗标题和创建操作必须保持在可见视口内");
   }
-  const forkPath = `/api/v1/sessions/${source.sessionId}/fork-context`;
-  const [forkResponse] = await Promise.all([
-    source.page.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname === forkPath, { timeout: 30_000 }),
-    dialog.getByRole("button", { name: "创建分支", exact: true }).click(),
-  ]);
-  assert.equal(forkResponse.status(), 200, await forkResponse.text());
-  const request = forkResponse.request().postDataJSON();
-  const fork = (await forkResponse.json()).data;
+  const submission = await beginForkUiSubmission(source.page, source, source, source.sessionId,
+    (options) => dialog.getByRole("button", { name: "创建分支", exact: true }).click(options));
+  const { response: forkResponse, request, payload } = await submission.waitForResponse();
+  assert.equal(forkResponse.status(), 200, JSON.stringify(payload));
+  const fork = payload.data;
   assert.deepEqual([request.source_uri, request.source_view_id, request.source_view_revision, request.anchor_item_id],
     [point.source_uri, point.source_view_id, point.source_view_revision, point.anchor_item_id]);
   assert.deepEqual([request.mode, request.anchor_mode, request.creation_kind, request.title, request.relationship, request.resources],
@@ -4623,14 +4880,11 @@ async function runDefaultChildForkUi(surface) {
     childDialog.getByLabel(label, { exact: true }).inputValue())),
   ["view_prefix_fork", "inclusive", "new_child_thread", childPoint.child_container_uri]);
   await waitUntil(async () => await childDialog.getByRole("button", { name: "创建分支", exact: true }).isEnabled(), "右侧 child 的真实候选允许默认创建");
-  const [childForkResponse] = await Promise.all([
-    child.page.waitForResponse((response) => response.request().method() === "POST"
-      && new URL(response.url()).pathname === forkPath, { timeout: 30_000 }),
-    childDialog.getByRole("button", { name: "创建分支", exact: true }).click(),
-  ]);
-  assert.equal(childForkResponse.status(), 200, await childForkResponse.text());
-  const childRequest = childForkResponse.request().postDataJSON();
-  const childFork = (await childForkResponse.json()).data;
+  const childSubmission = await beginForkUiSubmission(child.page, child, child, source.sessionId,
+    (options) => childDialog.getByRole("button", { name: "创建分支", exact: true }).click(options));
+  const { response: childForkResponse, request: childRequest, payload: childPayload } = await childSubmission.waitForResponse();
+  assert.equal(childForkResponse.status(), 200, JSON.stringify(childPayload));
+  const childFork = childPayload.data;
   assert.deepEqual([childRequest.source_uri, childRequest.source_view_id, childRequest.source_view_revision, childRequest.anchor_item_id,
     childRequest.mode, childRequest.anchor_mode, childRequest.creation_kind, childRequest.target_container_uri, childRequest.relationship, childRequest.resources],
   [childPoint.source_uri, childPoint.source_view_id, childPoint.source_view_revision, childPoint.anchor_item_id,
@@ -4758,8 +5012,8 @@ async function runCopyCaptureLifecycle(surface, owners) {
     const barrier = { operation_id: operationId, phase };
     await testControl({ action: "arm", ...barrier });
     const requestSurface = await copyRequestSurface(source);
-    const requestStartedAt = Date.now();
-    const pending = requestForkResponse(source, request, requestSurface, 0)
+    const requestStartedAt = performance.now();
+    const pending = requestForkResponse(source, request, requestSurface)
       .then((response) => ({ response }), (error) => ({ error: String(error) }));
     await testControl({ action: "acknowledged", ...barrier });
     const captured = await readCopyCapture(surface, operationId);
@@ -4767,7 +5021,7 @@ async function runCopyCaptureLifecycle(surface, owners) {
     assert.equal(captured.snapshot_sha256, null);
     assert.equal(captured.marker_sha256, null);
     assert.deepEqual(await readCatalog(surface, "SELECT node_id FROM nodes WHERE node_id=?", [captured.target_session_id]), [], "capture 完成前不能公开 target");
-    let marker, appended, viewChange, sourceDelete;
+    let marker;
     if (phase === "copy.source.before_captured_cas") {
       const markerPath = `${source.workspace}/.boxteam/navigation/${captured.snapshot_relative_locator}/captured.json`;
       const markerBytes = await readFile(markerPath);
@@ -4778,37 +5032,29 @@ async function runCopyCaptureLifecycle(surface, owners) {
       assert.equal(frozen.rollout.source_session_id, source.sessionId);
       assert.equal(frozen.rollout.source_thread_id, source.threadId);
       marker = { sha256: createHash("sha256").update(markerBytes).digest("hex"), snapshot: frozen };
-      appended = await completeOwnerTurn(source, "capture 之后正常追加的新 Turn 不得进入已冻结的副本。", [finalResponse("capture-after-append", "这是 capture 之后的追加正文。")]);
-      const viewBefore = await readRollout(source, "SELECT active_branch_id,history_view_revision FROM database_meta");
-      await planChatCalls(source.sessionId, source.threadId, [finalResponse("capture-after-view", "这是 capture 之后独立 view 的正文。")]);
-      viewChange = (await ownerApi(source, `/api/v1/sessions/${source.sessionId}/turns/${appended.sent.turnId}/replay`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "regenerate", acknowledge_context_only: true }),
-      })).data;
-      await waitForJobStatus(source, viewChange.job_id);
-      assert.notDeepEqual(await readRollout(source, "SELECT active_branch_id,history_view_revision FROM database_meta"), viewBefore);
-      await verifyOwnerTurns(source);
-      assert.deepEqual(await readFile(markerPath), markerBytes, "并发 append/view 不得更换冻结 revision 或 marker bytes");
-      sourceDelete = await deleteOwner(source);
-      assert.deepEqual(await readCatalog(surface, "SELECT node_id FROM nodes WHERE node_id=?", [source.sessionId]), [], "capture guard 释放后删除必须能先于 target 物化完成");
-      assert.deepEqual(await readFile(markerPath), markerBytes, "source 隔离/删除不能改变已冻结 snapshot");
     }
+    let firstHttp;
+    if (phase === "copy.source.partial") firstHttp = await pending;
     const reopen = await replaceNodePage(surface, owners);
     const killed = await testControl({ action: "process", name: surface.name, operation: "kill" });
     await testControl({ action: "release", ...barrier });
-    const firstHttp = await pending;
-    assert.equal(firstHttp.error, undefined, firstHttp.error);
-    const firstHttpElapsedMs = Date.now() - requestStartedAt;
-    if (firstHttp.response.status === 502) {
+    firstHttp ??= await pending;
+    const firstHttpElapsedMs = performance.now() - requestStartedAt;
+    if (firstHttp.error) {
+      assert.match(firstHttp.error, /backend_state=unknown/,
+        "客户端本地绝对期限到达必须明确报告后端终态未知");
+      assert.ok(firstHttpElapsedMs >= FORK_OPERATION_DEADLINE_MS - 1_000,
+        "本地 deadline 错误必须发生在原始预算边界");
+    } else if (firstHttp.response.status === 502) {
       assert.match(firstHttp.response.body.detail, /^无法连接工作区后端 /,
         "进程立即退出时原 HTTP 必须收到 Gateway 的明确上游连接失败");
-      assert.ok(firstHttpElapsedMs < 60_000, "502 必须早于 Gateway 60 秒响应头期限");
+      assert.ok(firstHttpElapsedMs < FORK_OPERATION_DEADLINE_MS, "502 必须发生在单次 fork 总期限内");
     } else {
       assert.equal(firstHttp.response.status, 504,
         "只有精确 Gateway 响应头超时可解释长屏障期间的失败");
       assert.match(firstHttp.response.body.detail, /timeout_seconds=60(?:\.0)?$/,
         "长屏障超时必须明确绑定 Gateway 60 秒期限");
-      assert.ok(firstHttpElapsedMs >= 59_000, "504 必须经过 Gateway 60 秒响应头期限");
+      assert.ok(firstHttpElapsedMs >= FORK_OPERATION_DEADLINE_MS - 1_000, "504 必须发生在 fork 总期限边界附近");
     }
     await requestSurface.page.close();
     const restarted = await testControl({ action: "process", name: surface.name, operation: "start" });
@@ -4823,6 +5069,9 @@ async function runCopyCaptureLifecycle(surface, owners) {
       assert.equal(after.marker_sha256, marker.sha256);
       assert.equal(after.snapshot_sha256, marker.snapshot.snapshot_sha256);
       const fork = (await requestFork(source, request, undefined, surface)).data;
+      const totalElapsedMs = performance.now() - requestStartedAt;
+      assert.ok(totalElapsedMs < FORK_OPERATION_DEADLINE_MS,
+        `marker 崩溃后同 key 恢复必须沿用首次 POST 的原始期限，elapsed_ms=${totalElapsedMs.toFixed(3)}`);
       target = await publishedForkOwner(source, request, fork, before);
       owners.push(target.owner);
       assert.deepEqual(await readCatalog(surface, "SELECT node_id FROM nodes WHERE node_id=?", [source.sessionId]), [], "恢复只能消费 SourceCopySnapshot，不能复活 source");
@@ -4835,8 +5084,9 @@ async function runCopyCaptureLifecycle(surface, owners) {
       assert.deepEqual((await loadCompleteThreadHistory(source)).items, before.history.items, "partial 失败不能修改 source");
       await deleteOwner(source);
     }
-    recoveries.push({ phase, operationId, captured, marker, appended, viewChange, sourceDelete, killed,
-      firstHttp: { ...firstHttp.response, elapsed_ms: firstHttpElapsedMs }, restarted, after,
+    recoveries.push({ phase, operationId, captured, marker, killed,
+      firstHttp: firstHttp.response ? { ...firstHttp.response, elapsed_ms: firstHttpElapsedMs }
+        : { error: firstHttp.error, elapsed_ms: firstHttpElapsedMs }, restarted, after,
       target: target ? { sessionId: target.owner.sessionId, history: target.targetHistory, displayed: target.displayed } : null });
   }
   const markerCrash = await runCopyMarkerCrashRecovery(surface, owners);
@@ -4855,8 +5105,8 @@ async function runCopyMarkerCrashRecovery(surface, owners) {
   const barrier = { operation_id: operationId, phase: "copy.source.before_captured_cas" };
   await testControl({ action: "arm", ...barrier });
   const requestSurface = await copyRequestSurface(source);
-  const requestStartedAt = Date.now();
-  const pending = requestForkResponse(source, request, requestSurface, 0)
+  const requestStartedAt = performance.now();
+  const pending = requestForkResponse(source, request, requestSurface)
     .then((response) => ({ response }), (error) => ({ error: String(error) }));
   await testControl({ action: "acknowledged", ...barrier });
   const captured = await readCopyCapture(surface, operationId);
@@ -4876,7 +5126,7 @@ async function runCopyMarkerCrashRecovery(surface, owners) {
   assert.equal(firstHttp.error, undefined, firstHttp.error);
   assert.equal(firstHttp.response.status, 502, "marker durable 后立即崩溃必须使原 fork HTTP 收到真实上游失败");
   assert.match(firstHttp.response.body.detail, /^无法连接工作区后端 /);
-  const firstHttpElapsedMs = Date.now() - requestStartedAt;
+  const firstHttpElapsedMs = performance.now() - requestStartedAt;
   assert.ok(firstHttpElapsedMs < 60_000, "原 HTTP 失败必须发生在 Gateway 60 秒期限前");
   await requestSurface.page.close();
   const restarted = await testControl({ action: "process", name: surface.name, operation: "start" });
@@ -4889,6 +5139,9 @@ async function runCopyMarkerCrashRecovery(surface, owners) {
     relative_path: `.boxteam/navigation/${after.snapshot_relative_locator}` }), null,
   "恢复完成并 materialize 后必须清理原 captured snapshot");
   const fork = (await requestFork(source, request)).data;
+  const totalElapsedMs = performance.now() - requestStartedAt;
+  assert.ok(totalElapsedMs < FORK_OPERATION_DEADLINE_MS,
+    `marker durable 崩溃后的同 key 恢复必须沿用首次 POST 的期限，elapsed_ms=${totalElapsedMs.toFixed(3)}`);
   const target = await publishedForkOwner(source, request, fork, before);
   owners.push(target.owner);
   assert.deepEqual((await loadCompleteThreadHistory(source)).items, before.history.items,
@@ -4897,7 +5150,7 @@ async function runCopyMarkerCrashRecovery(surface, owners) {
   await deleteOwner(target.owner);
   const sourceDelete = await deleteOwner(source);
   return { phase: barrier.phase, operationId, captured, marker, killed, restarted,
-    firstHttp: { ...firstHttp.response, elapsed_ms: firstHttpElapsedMs }, after,
+    firstHttp: { ...firstHttp.response, elapsed_ms: firstHttpElapsedMs }, total_elapsed_ms: totalElapsedMs, after,
     targetSessionId: target.owner.sessionId, sourceDelete };
 }
 
@@ -5228,10 +5481,7 @@ async function runCopyMissingAttachment(surface, owners) {
   const requiredRequest = await freezeForkRequest(source);
   await unlink(blobPath);
   const requiredOperation = forkOperationId(requiredRequest);
-  result.forkRequests.push(structuredClone(requiredRequest));
-  const missing = await ownerApiResponse(source, `/api/v1/sessions/${source.sessionId}/fork-context`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requiredRequest),
-  });
+  const missing = await requestForkResponse(source, requiredRequest);
   result.section8.copy_missing_attachment.requiredMissingResponse = {
     status: missing.status, requestId: missing.requestId, body: missing.body,
   };
@@ -5268,7 +5518,6 @@ async function runCopyMissingAttachment(surface, owners) {
     finalResponse("optional-compact-final", "旧上下文已经真实压缩，用户历史仍保留附件引用。"),
   ], [], { historyTiming, openBeforeSend: false });
   historyTiming.targetTurnId = compact.turn.turn_id;
-  result.section8.copy_missing_attachment = { historyTiming };
   assert.ok(compact.turn.response_parts.some((part) => part.kind === "compaction_summary"));
   const visible = (await ownerApi(earlier, `/api/v1/sessions/${earlier.sessionId}/messages`)).data.items;
   assert.ok(visible.some((message) => message.attachments.some((ref) => ref.file_id === optionalAttachment.file_id)), "压缩不得从完整可见消息中删掉历史附件");
@@ -5318,14 +5567,32 @@ async function runCopyMissingAttachment(surface, owners) {
   const reopenedCard = await locateAttachmentCard(target.owner, reopenedHistory,
     targetFile, optionalAttachment.name, "unavailable");
   assert.equal(await reopenedCard.getByRole("status").innerText(), "附件不可用");
-  const successor = await completeOwnerTurn(target.owner, "继续使用压缩后的上下文，不读取历史附件。", [
-    finalResponse("optional-copy-successor", "副本只使用当前有效上下文完成了新一轮。"),
-  ]);
+  const successorTurnTiming = {
+    phase: "copy_missing_attachment.successor_turn",
+    outcome: "started",
+    started_at: new Date().toISOString(),
+  };
+  result.section8.copy_missing_attachment.successorTurnTiming = successorTurnTiming;
+  const successorTurnStartedAt = performance.now();
+  let successor;
+  try {
+    successor = await completeOwnerTurn(target.owner, "继续使用压缩后的上下文，不读取历史附件。", [
+      finalResponse("optional-copy-successor", "副本只使用当前有效上下文完成了新一轮。"),
+    ]);
+    successorTurnTiming.outcome = "completed";
+    successorTurnTiming.completed_at = new Date().toISOString();
+    successorTurnTiming.duration_ms = Number((performance.now() - successorTurnStartedAt).toFixed(3));
+  } catch (error) {
+    successorTurnTiming.outcome = "failed";
+    successorTurnTiming.failed_at = new Date().toISOString();
+    successorTurnTiming.duration_ms = Number((performance.now() - successorTurnStartedAt).toFixed(3));
+    throw error;
+  }
   const successorRequest = await modelRequest(successor.calls[0]);
   assert.ok(!JSON.stringify(successorRequest.request.messages).includes(optionalAttachment.file_id), "副本首次 Provider 不得复活历史不可用附件");
   assert.ok(!JSON.stringify(successorRequest.request.messages).includes(targetFile), "副本首次 Provider 不得发送目标侧不可用附件引用");
   return { source: source.sessionId, material, missing, failedCapture, optionalSource: earlier.sessionId,
-    optionalPrefix: optionalInput.prefix, optionalTurn, seeds, compact, attachmentMember, compactRequest, optionalPoint, unavailable, successor, successorRequest,
+    optionalPrefix: optionalInput.prefix, optionalTurn, seeds, compact, attachmentMember, compactRequest, optionalPoint, unavailable, successor, successorRequest, successorTurnTiming,
     target: { sessionId: target.owner.sessionId, history: target.targetHistory, displayed: target.displayed }, history };
 }
 
@@ -5430,18 +5697,16 @@ async function runLiveResourceForks(surface, owners) {
     const barrierId = `live-fork-partial:${source.sessionId}`;
     if (partial) await testControl({ action: "arm_match", barrier_id: barrierId,
       phase: "fork.live.before_attach.terminal", details: { resource_id: terminal.resource_id } });
-    const replyPending = source.page.waitForResponse((response) => response.request().method() === "POST"
-      && new URL(response.url()).pathname === `/api/v1/sessions/${source.sessionId}/fork-context`);
-    await dialog.getByRole("button", { name: "创建分支", exact: true }).click();
+    const submission = await beginForkUiSubmission(source.page, source, source, source.sessionId,
+      (options) => dialog.getByRole("button", { name: "创建分支", exact: true }).click(options));
     if (partial) {
       await testControl({ action: "acknowledged_match", barrier_id: barrierId });
       await command(terminal.resource_id, "attach", sourceRef);
       await testControl({ action: "release_match", barrier_id: barrierId });
     }
-    const reply = await replyPending;
-    assert.equal(reply.status(), 200, await reply.text());
-    const request = reply.request().postDataJSON();
-    const fork = (await reply.json()).data;
+    const { response: reply, request, payload, deadline: submissionDeadline } = await submission.waitForResponse();
+    assert.equal(reply.status(), 200, JSON.stringify(payload));
+    const fork = payload.data;
     result.forkRequests.push(structuredClone(request));
     assert.deepEqual(request.resources, point.live_resources.filter((resource) => reusable.some((item) => item.resource_id === resource.resource_id)).map(choice),
       "真实 Dialog 必须提交冻结 owner_revision 与 typed identity，不创建伪 URI");
@@ -5454,18 +5719,38 @@ async function runLiveResourceForks(surface, owners) {
     if (partial) {
       await dialog.getByRole("alert").waitFor({ state: "visible" });
       assert.ok((await dialog.getByRole("alert").innerText()).includes(`目标已创建（${fork.thread_id}）`));
-      const retriedPending = source.page.waitForResponse((response) => response.request().method() === "POST"
-        && new URL(response.url()).pathname === `/api/v1/sessions/${source.sessionId}/fork-context`);
-      await dialog.getByRole("button", { name: "重试原请求", exact: true }).click();
-      const retried = await retriedPending;
-      assert.equal(retried.status(), 200, await retried.text());
-      assert.deepEqual(retried.request().postDataJSON(), request, "部分失败重试必须使用原 key 与原 expected_revision");
-      const retry = (await retried.json()).data;
+      assert.equal(forkOperationDeadlines.get(request.idempotency_key), submissionDeadline,
+        "partial retry 必须沿用首次真实 UI POST 的 operation deadline");
+      submissionDeadline.partialRetryRequested = true;
+      const retrySubmission = await beginForkUiSubmission(source.page, source, source, source.sessionId,
+        (options) => dialog.getByRole("button", { name: "重试原请求", exact: true }).click(options));
+      const { response: retried, request: retriedRequest, payload: retriedPayload,
+        backendState: retryBackendState, durableHistory: retryDurableHistory,
+        deadline: retryDeadline } = await retrySubmission.waitForResponse();
+      assert.equal(retried.status(), 200, JSON.stringify(retriedPayload));
+      assert.equal(retryBackendState, "known", "原 key 的 partial retry 必须返回可判定的终态");
+      assert.deepEqual(retriedRequest, request, "部分失败重试必须使用原 key 与原 expected_revision");
+      const retry = retriedPayload.data;
       assert.deepEqual([retry.session.session_id, retry.thread_id], [fork.session.session_id, fork.thread_id]);
       assert.deepEqual(retry.resources.map((resource) => [resource.owner_reference, resource.operation_state, resource.availability]),
         fork.resources.map((resource) => [resource.owner_reference, resource.operation_state, resource.availability]));
+      assert.ok(retryDurableHistory, "partial retry 必须读回目标 Thread 的持久历史");
+      assert.deepEqual([retryDurableHistory.sessionId, retryDurableHistory.threadId],
+        [retry.session.session_id, retry.thread_id], "partial retry 必须读回同一目标 Thread 的持久历史");
+      assert.equal(typeof retryDurableHistory.sourceViewId, "string", "持久目标历史必须返回实际读取 view");
+      assert.ok(Number.isSafeInteger(retryDurableHistory.sourceViewRevision), "持久目标历史必须有可核验 view revision");
+      assert.ok(retryDurableHistory.turnCount > 0, "持久目标历史必须包含来源 Turn");
+      const retryTerminal = retry.resources.find((resource) => resource.owner_reference?.kind === "terminal");
+      assert.ok(retryTerminal, "partial retry 必须返回原 Terminal 操作终态");
+      assert.deepEqual([retryTerminal.operation_state, retryTerminal.availability], ["rejected", "unavailable"],
+        "partial retry 只能在 live resource 的 rejected 终态得到确认后结束 deadline");
       await dialog.getByRole("alert").waitFor({ state: "visible" });
+      assert.equal(retryDeadline, submissionDeadline, "partial retry 必须复用首次 POST 的 deadline token");
+      assert.equal(await completePartialForkRetry(
+        retryDeadline, retried.status(), retry, retryDurableHistory,
+      ), true, "只能凭 durable target history 与 rejected terminal resource 完成 partial deadline");
       await dialog.getByRole("button", { name: "取消", exact: true }).click();
+      await dialog.waitFor({ state: "hidden" });
     } else {
       await dialog.waitFor({ state: "hidden" });
       const retry = (await requestFork(source, request)).data;
@@ -7797,7 +8082,7 @@ async function runSection8Product(browser, primaryPage) {
   }
 }
 
-const phasePath = messageStreamDiagnosticsSelfTest ? ""
+const phasePath = standaloneSelfTest ? ""
   : `${requiredEnvironment("BOXTEAM_BROWSER_ARTIFACT_ROOT")}/basic-chat-tool-loop-phases.log`;
 async function browserStartup(label, create) {
   const phase = async (suffix) => {
@@ -8224,11 +8509,15 @@ const result = {
   historyLiveProofs,
   transcriptDomFailures,
   forkRequests: [],
+  forkDurabilityProofs: [],
 };
 
 if (messageStreamDiagnosticsSelfTest) {
   runMessageStreamDiagnosticsSelfTest();
   process.stdout.write("message stream diagnostics self-test passed\n");
+} else if (forkDeadlineClassifierSelfTest) {
+  await runForkDeadlineClassifierSelfTest();
+  process.stdout.write("fork deadline classifier self-test passed\n");
 } else {
 try {
   browser = await browserStartup("browser_launch", () => chromium.launch({ executablePath, headless: true, timeout: 30_000 }));
@@ -8323,7 +8612,11 @@ try {
   try {
     if (context) await browserStartup("browser_context_close", () => context.close());
   } finally {
-    if (browser) await browserStartup("browser_close", () => browser.close());
+    try {
+      if (browser) await browserStartup("browser_close", () => browser.close());
+    } finally {
+      await closeForkDeadlineWatchdog();
+    }
   }
 }
 }

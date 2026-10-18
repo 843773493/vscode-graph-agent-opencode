@@ -375,6 +375,10 @@ fork 的 normative 合同由 `specs/checkpoint-context-branching/spec.md` 唯一
 
 实施时一次盘齐身份、索引owner、detail/activation/plan解析、history/provider、DTO/proto、URI/API、侧边UI和测试消费者，再删除fork/remap与模式复制矩阵；不得先套兼容adapter再保留旧链。旧已接受实现/测试只证明旧合同，本修订对应任务重新验收。
 
+所有 fork 测试入口共用固定 60 秒单次操作预算。预算在用户确认提交、API 发请求或直接服务调用时创建，UI 弹窗思考与 fixture setup 不计时；完成必须由 durable/published owner 结果证明，跨 Gateway 的 `pending` 回执继续计时至 `confirmed`。同一逻辑操作的 phase wait、重试及恢复都沿用该 monotonic 绝对 deadline，成功后的独立幂等重放才创建新预算。套件总超时是单独的外层运行预算。fixture 不能通过参数关闭或延长单次上限；测试可用更短的测试阈值验证拒绝与 watchdog 行为，但不得改变生产默认 60 秒。
+
+每个操作的 await 层只读取同一 deadline 的 remaining；独立 watchdog 也只观察这个 deadline，用于在同步阻塞或事件循环失去调度时硬终止当前隔离测试运行。watchdog 先独占创建并 fsync 诊断 sidecar（target、operation/key、last stage、elapsed、`backend_state=unknown`），再终止已验证的本次测试进程组；正常结束、异常和可恢复 retry 都要收停并回收 watchdog。超时后不推断 backend 已取消或回滚，不因超时增加生产侧取消、持久 deadline 或恢复协议。
+
 ### 3. JSONL 保存 canonical item，SQLite 按用途分层保存索引和 view
 
 JSONL 每行保存一个 item envelope，包含可独立校验的版本、identity、payload 和 hash。SQLite 不把所有 item 都做成同样宽的 message 表，而是按用途分层：

@@ -91,6 +91,24 @@ fork SHALL 使用既有 operation journal 固定请求 preimage、来源 snapsho
 - **WHEN** target 已发布但资源回执尚未终结，随后进程退出或目标被删除
 - **THEN** 恢复按原 journal 和目标 fence 定点确认或释放，不重复导入、不复活目标、不以响应丢失推断未执行
 
+### Requirement: Fork 测试 fixture 对单次操作施加固定期限
+
+所有触发 fork 的测试 fixture SHALL 对单次 fork 操作施加固定 60 秒的单调绝对期限：浏览器场景从用户确认提交开始，API 场景从发出请求开始，直接服务调用从进入调用开始；fixture setup、弹窗中的用户思考时间和 fork 完成后的独立聊天不计入。操作完成以服务端可证明目标已 durable/published 的完成结果为准；跨 Gateway 场景中 `pending` 回执不算完成，必须等到 owner 确认。
+
+同一次未完成操作的 HTTP 请求、phase wait、重试和恢复 MUST 共用最初的单调 deadline，不能在每个阶段、连接或重试时重新获得 60 秒。目标已完成后发起的独立幂等验证属于新操作，重新取得固定 60 秒。单次预算不可禁用或延长，测试套件总预算独立管理。
+
+达到 deadline 时测试 MUST 明确失败并保留包含 target、operation/key、最后阶段、elapsed 与 `backend_state=unknown` 的诊断；不得据客户端超时推断后端已经停止、取消或回滚。为覆盖阻塞事件循环的同步工作，fixture 的外部 watchdog MUST 独立于被测进程观察同一个绝对 deadline，在写入并持久化该诊断后终止当前隔离测试运行；不得引入生产 deadline 协议或伪造失败后的成功结果。
+
+#### Scenario: 一次 fork 的重试和恢复共用 deadline
+
+- **WHEN** 同一次 fork 在初次请求、phase wait 或恢复请求中耗尽 60 秒
+- **THEN** 测试明确失败并记录 `backend_state=unknown`，不能重置预算或将后端继续运行误报为已取消；若在 deadline 内恢复完成，则只以 durable/published 结果判定成功
+
+#### Scenario: 已完成操作的幂等验证重新计时
+
+- **WHEN** 一次 fork 已得到 durable/published 完成结果，随后测试独立重放同一幂等请求核验结果身份
+- **THEN** 重放拥有新的固定 60 秒期限，原操作创建时间不会使它立即过期
+
 ### Requirement: Compaction 创建 SQLite context view
 
 系统 SHALL将compaction表达为SQLite中新的context view和控制事件，不创建新的JSONL segment或控制记录。摘要和保留的canonical item继续作为不可变item追加到rollout.jsonl，新的view通过item range/reference选择摘要和保留范围。实际compaction是source/root重建的prefix epoch边界；compaction事务提交view及`PendingPrefixEpochTransition(reason=compaction)`，但pending记录没有wire bytes且不是applied epoch。下一次真正model-call preparation可以精确复用source base/delta，也可以从activation coordinator冻结的ResourceRegistry内存snapshot取得tracked published revision并物化为完整source，然后把source decision、首个新epoch assembly seal与transition消费原子提交。仅为移除已处理 head-internal notice refs 的`runtime_notice_consumed` transition必须复用同一 transition/applied owner，不能当作compaction/rewind source boundary；与compaction同 seal 时由该 owner保留两个reason事实并原子提交。source restore/fork/copy consumers MUST 过滤 `runtime_notice_consumed`，不从其恢复source checkpoint或继承fork lineage。snapshot不可用时保留compaction view/transition但不产生半assembly或dispatch，且不读取文件、网络或其它provider。所有第一条真实用户消息后的summary/source完整或增量内容必须保持独立user-role item。source/detail失效不能被解释为物化理由来修复旧sealed assembly；精确恢复仍显式失败。

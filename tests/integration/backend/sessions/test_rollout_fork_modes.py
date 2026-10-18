@@ -6,6 +6,7 @@ import hashlib
 import json
 import shutil
 import sqlite3
+import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import closing
 from dataclasses import dataclass, field, replace
@@ -112,6 +113,7 @@ from app.schemas.internal_v2.session import (
     SessionForkOwnerReference,
     SessionForkRequest,
     SessionForkResourceChoice,
+    SessionForkResultDTO,
 )
 from app.schemas.internal_v2.session_fork_transfer import (
     SessionForkTransferRequest,
@@ -208,6 +210,12 @@ from tests.integration.backend.sessions.test_navigation_worker_lifespan import (
     _build_owned_container,
     _isolate_non_navigation_services,
 )
+from tests.support import fork_deadline as fork_deadline_module
+from tests.support.fork_deadline import (
+    ForkDeadlineExceeded,
+    ForkDeadlineRegistry,
+    ForkOperationDeadline,
+)
 from tests.support.session_navigation_queue import (
     create_catalog_intent,
     submit_catalog_intent,
@@ -295,6 +303,72 @@ def production_fork_container(request: pytest.FixtureRequest,
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
     monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home))
     container = _build_owned_container(workspace, monkeypatch, request)
+    fork_deadlines = ForkDeadlineRegistry(context.artifacts_dir)
+    original_fork = SessionContextForkService.fork
+
+    async def fork_with_deadline(
+        service: SessionContextForkService,
+        fork_request: SessionForkRequest,
+        *,
+        generation_origin: SessionGenerationOriginDTO | None = None,
+    ) -> SessionForkResultDTO:
+        deadline = fork_deadlines.for_operation(
+            target=f"{container.workspace_id}/{fork_request.target_container_uri}",
+            operation_key=fork_request.idempotency_key,
+        )
+        result = await deadline.wait(
+            original_fork(service, fork_request, generation_origin=generation_origin),
+            "SessionContextForkService.fork",
+        )
+        if result.export_release is None or result.export_release.state == "confirmed":
+            deadline.complete()
+        return result
+
+    monkeypatch.setattr(SessionContextForkService, "fork", fork_with_deadline)
+
+    original_http_post = httpx.AsyncClient.post
+
+    async def post_with_fork_deadline(client, url, *args, **kwargs):
+        if httpx.URL(url).path.endswith("/fork-context"):
+            body = kwargs.get("json")
+            if isinstance(body, dict):
+                operation_key = body.get("idempotency_key")
+                target_uri = body.get("target_container_uri")
+                if isinstance(operation_key, str) and isinstance(target_uri, str):
+                    deadline = fork_deadlines.for_operation(
+                        target=f"{container.workspace_id}/{target_uri}",
+                        operation_key=operation_key,
+                    )
+                    response_task = asyncio.create_task(
+                        original_http_post(client, url, *args, **kwargs),
+                    )
+                    try:
+                        response = await deadline.wait(
+                            response_task,
+                            "ASGI fork-context HTTP request",
+                        )
+                    except ForkDeadlineExceeded:
+                        if not deadline._completed:
+                            raise
+                        response = await response_task
+                    terminal = 400 <= response.status_code < 500
+                    if 200 <= response.status_code < 300:
+                        try:
+                            payload = response.json()
+                        except ValueError:
+                            payload = None
+                        data = payload.get("data") if isinstance(payload, dict) else None
+                        release = data.get("export_release") if isinstance(data, dict) else object()
+                        terminal = isinstance(data, dict) and (release is None or (
+                            isinstance(release, dict) and release.get("state") == "confirmed"
+                        ))
+                    if terminal:
+                        fork_deadlines.complete(deadline)
+                    return response
+        return await original_http_post(client, url, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", post_with_fork_deadline)
+    request.addfinalizer(fork_deadlines.close)
     _isolate_non_navigation_services(container, monkeypatch)
     # 默认场景无外设；live 用例另行提供真实 owner 所消费的完整传输事实。
     for kind in ("terminal", "browser"):
@@ -303,6 +377,250 @@ def production_fork_container(request: pytest.FixtureRequest,
     monkeypatch.setattr(main, "configure_application_logging", lambda **_: None)
     monkeypatch.setattr(main, "_model_stream_controller", None)
     return container
+
+
+@pytest.mark.asyncio
+async def test_fork_deadline_starts_before_asgi_client_post(
+    production_fork_container: AppContainer, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_identity: list[tuple[str, str]] = []
+    stages: list[str] = []
+    entered_http_request = asyncio.Event()
+
+    class RecordingDeadline:
+        completed = False
+        _completed = False
+
+        async def wait(self, awaitable, stage: str):
+            stages.append(stage)
+            task = asyncio.ensure_future(awaitable)
+            await asyncio.sleep(0)
+            assert entered_http_request.is_set(), "deadline 必须覆盖底层 HTTP request"
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            raise ForkDeadlineExceeded("probe deadline")
+
+        def complete(self) -> None:
+            self.completed = True
+            self._completed = True
+
+    deadline = RecordingDeadline()
+
+    def for_operation(_registry, *, target: str, operation_key: str):
+        requested_identity.append((target, operation_key))
+        return deadline
+
+    monkeypatch.setattr(ForkDeadlineRegistry, "for_operation", for_operation)
+
+    async def block_http_request(_client, *_args, **_kwargs):
+        entered_http_request.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", block_http_request)
+    target_uri = workspace_session_inventory_uri(production_fork_container.workspace_id)
+    body = {"idempotency_key": "fork-http-deadline-probe", "target_container_uri": target_uri}
+    async with httpx.AsyncClient(base_url="http://workspace") as client:
+        with pytest.raises(ForkDeadlineExceeded, match="probe deadline"):
+            await client.post(
+                "/api/v1/sessions/ses_deadline_probe/fork-context", json=body,
+            )
+
+    assert requested_identity == [
+        (f"{production_fork_container.workspace_id}/{target_uri}", body["idempotency_key"]),
+    ]
+    assert stages == ["ASGI fork-context HTTP request"]
+    assert not deadline.completed
+
+
+@pytest.mark.asyncio
+async def test_fork_http_response_after_budget_uses_service_durable_completion(
+    production_fork_container: AppContainer, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Watchdog:
+        artifacts_dir = Path.cwd() / "out/tests/temp/fork-http-durable-probe/artifacts"
+
+        def __init__(self) -> None:
+            self.completions = 0
+
+        def start(self, *_args) -> None:
+            pass
+
+        def stage(self, *_args) -> None:
+            pass
+
+        def complete(self, *_args) -> None:
+            self.completions += 1
+
+    watchdog = Watchdog()
+    target_uri = workspace_session_inventory_uri(production_fork_container.workspace_id)
+    expected_target = f"{production_fork_container.workspace_id}/{target_uri}"
+    deadline = ForkOperationDeadline.for_test(expected_target, "fork-http-durable-probe", watchdog, 0.01)
+
+    def for_operation(_registry, *, target: str, operation_key: str):
+        assert target == expected_target
+        assert operation_key == "fork-http-durable-probe"
+        return deadline
+
+    monkeypatch.setattr(ForkDeadlineRegistry, "for_operation", for_operation)
+
+    class DelayedResponse(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            await asyncio.sleep(0.005)
+            deadline.complete()
+            await asyncio.sleep(0.015)
+            return httpx.Response(200, json={"data": {"export_release": None}}, request=request)
+
+    body = {"idempotency_key": "fork-http-durable-probe", "target_container_uri": target_uri}
+    async with httpx.AsyncClient(base_url="http://workspace", transport=DelayedResponse()) as client:
+        response = await client.post(
+            "/api/v1/sessions/ses_deadline_probe/fork-context", json=body,
+        )
+
+    assert response.status_code == 200
+    assert deadline.elapsed > 0.01
+    assert deadline._completed
+    assert watchdog.completions == 1
+
+
+@pytest.mark.asyncio
+async def test_direct_service_fork_completes_deadline_after_durable_result(
+    fork_provider_prepare, production_fork_container: AppContainer,
+    fork_gateway_request_context: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _production_fork_context(production_fork_container)
+    source = await _seed_source(context, fork_provider_prepare)
+    request = await _fork_request(
+        context, source.session_id, creation_kind="new_session_main", mode="context_fork",
+    )
+
+    class RecordingDeadline:
+        _completed = False
+
+        async def wait(self, awaitable, _stage: str):
+            return await awaitable
+
+        def complete(self) -> None:
+            self._completed = True
+
+    deadline = RecordingDeadline()
+    monkeypatch.setattr(
+        ForkDeadlineRegistry, "for_operation",
+        lambda _registry, **_kwargs: deadline,
+    )
+
+    result = await production_fork_container.session_context_fork_service.fork(request)
+
+    assert result.export_release is None or result.export_release.state == "confirmed"
+    assert deadline._completed
+
+
+def test_fork_watchdog_terminates_exact_group_when_all_diagnostics_fail(
+    production_fork_container: AppContainer, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[tuple[object, ...]] = []
+    identity = {"pid": 501, "pgid": 501}
+    now = time.monotonic()
+    messages = [
+        {"action": "sshd_identity", "identity": identity},
+        {
+            "action": "start", "token": "expired-token", "target": "target-uri",
+            "operation_key": "fork-diagnostic-failure", "started_at": now - 2,
+            "deadline": now - 1, "last_stage": "http-request",
+        },
+    ]
+    start_message = b"".join(json.dumps(message).encode() + b"\n" for message in messages)
+
+    class ClosedStderr:
+        def write(self, _message: str) -> None:
+            raise ValueError("stderr is closed")
+
+        def flush(self) -> None:
+            raise ValueError("stderr is closed")
+
+    monkeypatch.setattr(fork_deadline_module.sys, "stderr", ClosedStderr())
+    class ReadableStdin:
+        def fileno(self) -> int:
+            return 29
+
+    monkeypatch.setattr(fork_deadline_module.sys, "stdin", ReadableStdin())
+    monkeypatch.setattr(fork_deadline_module.os, "write", lambda *_args: (_ for _ in ()).throw(OSError("fd closed")))
+    monkeypatch.setattr(
+        fork_deadline_module, "_write_exclusive_json",
+        lambda *_args: (_ for _ in ()).throw(OSError("sidecar is unavailable")),
+    )
+    monkeypatch.setattr(
+        fork_deadline_module.select, "select", lambda *_args: ([29], [], []),
+    )
+    monkeypatch.setattr(fork_deadline_module.os, "read", lambda *_args: start_message)
+    monkeypatch.setattr(
+        fork_deadline_module, "_kill_owned_c3_sshd",
+        lambda frozen: events.append(("c3-identity-checked-and-killed", frozen)),
+    )
+    monkeypatch.setattr(
+        fork_deadline_module, "_terminate_process_group",
+        lambda pgid, parent_pid: events.append(("terminate", pgid, parent_pid)),
+    )
+
+    exit_code = fork_deadline_module._watchdog_main(
+        Path.cwd() / "out/tests/temp/2026/10/18/fork60-deadline/fork60_closeout/artifacts/python",
+        7123,
+        7123,
+    )
+
+    assert exit_code == 137
+    assert events == [
+        ("c3-identity-checked-and-killed", identity),
+        ("terminate", 7123, 7123),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fork_deadline_timeout_keeps_operation_armed_until_watchdog_termination() -> None:
+    class Watchdog:
+        def __init__(self) -> None:
+            self.completions = 0
+            self.termination_waited = False
+
+        def start(self, *_args) -> None:
+            pass
+
+        def stage(self, *_args) -> None:
+            pass
+
+        def complete(self, *_args) -> None:
+            self.completions += 1
+
+        def wait_for_termination(self) -> None:
+            self.termination_waited = True
+
+    watchdog = Watchdog()
+    deadline = ForkOperationDeadline.for_test("target-uri", "fork-timeout-probe", watchdog, 0.01)
+    registry = object.__new__(ForkDeadlineRegistry)
+    registry.watchdog = watchdog
+    registry._active = {(deadline.target, deadline.operation_key): deadline}
+    operation_started = asyncio.Event()
+
+    async def operation() -> None:
+        operation_started.set()
+        await asyncio.Event().wait()
+
+    operation_task = asyncio.create_task(operation())
+    with pytest.raises(ForkDeadlineExceeded):
+        await deadline.wait(operation_task, "blocked-operation")
+
+    assert operation_started.is_set()
+    assert not operation_task.cancelled()
+    assert not deadline._completed
+    assert watchdog.completions == 0
+
+    registry.close()
+    assert watchdog.termination_waited
+    operation_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await operation_task
 
 
 @dataclass
@@ -3762,7 +4080,7 @@ async def test_production_http_pinned_fork_and_preflight_have_exact_side_effects
     catalog = context.sessions.path_resolver.catalog_store
     async with main.lifespan(main.app), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main.app), base_url="http://workspace",
-        headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": context.sessions.workspace_id, "X-Request-ID": "fork-http-proof"},
+        headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": context.sessions.workspace_id, "X-BoxTeam-Gateway-Id": "fork-http-gateway", "X-Request-ID": "fork-http-proof"},
     ) as client:
         before = (await context.sessions.list(limit=100)).total
         with catalog.read_transaction() as connection:

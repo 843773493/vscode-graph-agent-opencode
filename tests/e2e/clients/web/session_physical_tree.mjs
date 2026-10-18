@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import process from "node:process";
 import { chromium } from "playwright";
+import { beginForkSubmissionDeadline, bindForkOperationDeadline, closeForkDeadlineWatchdog,
+  waitForForkOperation } from "../../../support/e2e-test-control.mjs";
+
+const FORK_OPERATION_TIMEOUT_MS = 60_000;
 
 function requiredEnvironment(name) {
   const value = process.env[name];
@@ -25,6 +29,7 @@ const childRow = page.locator(`[data-testid$="-${fixture.childSessionId}"]`);
 const folderRow = page.locator(`[data-testid$="-${fixture.folderId}"]`);
 let forkThreadId = null;
 let forkThreadUri = null;
+let forkDurableHistory = null;
 let nestedWorkspaceFolders = false;
 let childWorkspaceMoved = false;
 let workspaceFolderReturnedToRoot = false;
@@ -36,6 +41,41 @@ let warmDialogBackground = "";
 let workspaceMenuCreatedSessionFolder = false;
 let sessionMainActionOpenedCatalogSession = false;
 let folderMainActionToggledExpansion = false;
+
+async function localToken() {
+  return page.evaluate(async () => {
+    const response = await fetch("/api/gateway/auth/local-credential");
+    if (!response.ok) throw new Error(`获取本地凭据失败: HTTP ${response.status}`);
+    const payload = await response.json();
+    if (typeof payload?.data?.token !== "string") throw new Error("本地凭据缺少 token");
+    return payload.data.token;
+  });
+}
+
+async function loadForkThreadHistory(sessionId, threadId) {
+  const token = await localToken();
+  return page.evaluate(async ({ sessionId: targetSessionId, threadId: targetThreadId, token: localTokenValue, workspaceId }) => {
+    const response = await fetch(
+      `/api/v1/sessions/${targetSessionId}/threads/${targetThreadId}/history`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Local-Token": localTokenValue,
+          "X-BoxTeam-Workspace-Id": workspaceId,
+        },
+        body: JSON.stringify({ direction: "tail", turns: 256 }),
+        credentials: "include",
+      },
+    );
+    const text = await response.text();
+    const payload = text ? JSON.parse(text) : null;
+    const requestId = response.headers.get("X-Request-ID");
+    if (!response.ok) throw new Error(`fork Thread 历史读取失败 ${response.status}: ${text}`);
+    if (!requestId || payload?.request_id !== requestId) throw new Error("fork Thread 历史响应 request_id 不一致");
+    return payload;
+  }, { sessionId, threadId, token, workspaceId: fixture.parentWorkspaceId });
+}
 
 async function expandRow(row) {
   const chevron = row.locator(".session-resource-chevron");
@@ -424,26 +464,68 @@ try {
   assert.deepEqual([prefixPoint.source_uri, prefixPoint.source_view_id, prefixPoint.source_view_revision, prefixPoint.anchor_item_id],
     [point.source_uri, point.source_view_id, point.source_view_revision, point.anchor_item_id]);
   await forkDialog.getByLabel("目标名称", { exact: true }).fill("目录入口的上下文分支");
+  const forkPath = `/api/v1/sessions/${fixture.parentSessionId}/fork-context`;
+  const isForkPost = (request) => request.method() === "POST" && new URL(request.url()).pathname === forkPath;
   const forkResponsePromise = page.waitForResponse(
-    (response) => response.request().method() === "POST"
-      && new URL(response.url()).pathname === `/api/v1/sessions/${fixture.parentSessionId}/fork-context`,
+    (response) => isForkPost(response.request()), { timeout: 0 },
   );
-  await forkDialog.getByRole("button", { name: "创建分支", exact: true }).click();
-  const forkResponse = await forkResponsePromise;
-  if (!forkResponse.ok()) throw new Error(`创建上下文子会话失败: ${await forkResponse.text()}`);
-  const forkRequest = forkResponse.request().postDataJSON();
+  const forkSubmissionDeadline = await beginForkSubmissionDeadline({
+    target: `${fixture.parentWorkspaceId}/${fixture.parentSessionId}`,
+    timeoutMs: FORK_OPERATION_TIMEOUT_MS,
+  });
+  const forkRequestPromise = page.waitForRequest(isForkPost, { timeout: 0 })
+    .then(async (request) => {
+      const body = request.postDataJSON();
+      assert.equal(typeof body?.idempotency_key, "string");
+      assert.ok(body.idempotency_key.length > 0);
+      const deadline = await bindForkOperationDeadline(forkSubmissionDeadline, body.idempotency_key);
+      return { request, body, deadline };
+    });
+  const clickPromise = forkDialog.getByRole("button", { name: "创建分支", exact: true })
+    .click({ timeout: 0 });
+  const [{ request: forkPostRequest, body: forkRequest, deadline: forkDeadline }] = await Promise.all([
+    waitForForkOperation(Promise.all([forkRequestPromise, clickPromise]),
+      forkSubmissionDeadline, "提交 fork 并等待实际 POST request"),
+  ]);
+  const forkResponse = await waitForForkOperation(forkResponsePromise, forkDeadline, "fork POST 响应头");
+  assert.equal(forkResponse.request(), forkPostRequest, "fork 响应必须属于唯一已观察 POST");
+  const forkResponseText = await waitForForkOperation(forkResponse.text(), forkDeadline, "fork POST 响应正文");
+  if (!forkResponse.ok()) throw new Error(`创建上下文子会话失败: ${forkResponseText}`);
+  const forkPayload = JSON.parse(forkResponseText);
+  const forkRequestId = forkResponse.headers()["x-request-id"];
+  assert.ok(forkRequestId, "fork API 响应缺少 X-Request-ID");
+  assert.equal(forkPayload?.request_id, forkRequestId, "fork API 响应体与 X-Request-ID 不一致");
   assert.deepEqual([forkRequest.source_uri, forkRequest.source_view_id, forkRequest.source_view_revision, forkRequest.anchor_item_id],
     [point.source_uri, point.source_view_id, point.source_view_revision, point.anchor_item_id]);
   assert.deepEqual([forkRequest.creation_kind, forkRequest.target_container_uri, forkRequest.resources],
     ["new_child_thread", point.child_container_uri, []]);
-  const fork = (await forkResponse.json()).data;
+  const fork = forkPayload.data;
   assert.equal(fork.session.session_id, fixture.parentSessionId);
   assert.equal(fork.creation_kind, "new_child_thread");
   assert.notEqual(fork.thread_id, fork.session.thread_id);
   assert.notEqual(fork.thread_uri, point.child_container_uri);
   forkThreadId = fork.thread_id;
   forkThreadUri = fork.thread_uri;
-  await page.locator(`.child-thread-conversation[data-thread-id="${forkThreadId}"]`).waitFor({ state: "visible", timeout: 10_000 });
+  const durableHistory = await waitForForkOperation(
+    loadForkThreadHistory(fork.session.session_id, fork.thread_id),
+    forkDeadline,
+    "确认 fork Thread 历史已持久化",
+  );
+  assert.equal(durableHistory.data.thread_id, fork.thread_id);
+  assert.ok(durableHistory.data.items.length > 0, "持久 fork Thread 必须读回来源历史 Turn");
+  forkDurableHistory = {
+    threadId: durableHistory.data.thread_id,
+    sourceViewId: durableHistory.data.source_view_id,
+    sourceViewRevision: durableHistory.data.source_view_revision,
+    turnCount: durableHistory.data.items.length,
+  };
+  await waitForForkOperation(
+    page.locator(`.child-thread-conversation[data-thread-id="${forkThreadId}"]`)
+      .waitFor({ state: "visible", timeout: 0 }),
+    forkDeadline,
+    "显示已持久 fork Thread",
+  );
+  await forkDeadline.complete();
   await parentRow.waitFor({ state: "visible", timeout: 15_000 });
   assert.equal(await parentRow.getAttribute("aria-current"), "true");
 
@@ -462,6 +544,7 @@ try {
     folderMainActionToggledExpansion,
     forkThreadId,
     forkThreadUri,
+    forkDurableHistory,
     nestedWorkspaceFolders,
     childWorkspaceMoved,
     workspaceFolderReturnedToRoot,
@@ -476,5 +559,9 @@ try {
   await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
   throw error;
 } finally {
-  await browser.close();
+  try {
+    await browser.close();
+  } finally {
+    await closeForkDeadlineWatchdog();
+  }
 }

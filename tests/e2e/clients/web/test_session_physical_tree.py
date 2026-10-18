@@ -10,6 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.core.workspace_identity import workspace_identity_path
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
@@ -89,6 +90,7 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
                     / "default_test_workspace"
                 ),
             )
+            workspace_identity_path(secondary_workspace).unlink()
             add_workspace_response = await client.post(
                 "/api/gateway/workspaces/local",
                 json={
@@ -144,6 +146,7 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
                 "BOXTEAM_E2E_FIXTURE": json.dumps(fixture, ensure_ascii=False),
                 "BOXTEAM_E2E_RESULT_PATH": str(result_path),
                 "BOXTEAM_E2E_SCREENSHOT_PATH": str(screenshot_path),
+                "BOXTEAM_E2E_FORK_ARTIFACT_ROOT": str(artifacts),
                 "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium_path,
             }
         )
@@ -155,6 +158,7 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
             capture_output=True,
             text=True,
             timeout=90,
+            start_new_session=True,
             check=False,
         )
         assert result.returncode == 0, (
@@ -173,6 +177,8 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
         assert browser_result["workspaceRootUsesContextMenu"] is True
         assert browser_result["workspaceFolderRecursiveDelete"] is True
         assert browser_result["workspaceMenuCreatedSessionFolder"] is True
+        assert browser_result["forkDurableHistory"]["threadId"] == browser_result["forkThreadId"]
+        assert browser_result["forkDurableHistory"]["turnCount"] > 0
         assert browser_result["warmDialogBackground"] not in {
             "rgb(255, 255, 255)",
             "rgba(255, 255, 255, 1)",

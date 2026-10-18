@@ -620,5 +620,6 @@ v1 reader/adapter 只能由显式、一次性的 `legacy_import_v1_to_v2` migrat
 - [ ] 12.7 消息底部fork弹窗迁齐来源、目标、继承选项与精确点击item；默认view_prefix_fork、当前Session新subthread、不额外复制资源，成功在右侧侧边栏打开可聊天child且保主线程选择；侧边新建共用同入口，打开已有child不fork，不自动执行/回报。
 - [ ] 12.8 同批验证源并发append/view切换、source删除/capture、同Session单gate与整体删除、staging崩溃、资源claim/GC/finalizer删除、跨端传输中断/响应丢失、两端授权和不可达零本地回退；新Session可选Goal仅复制objective/选定预算、新ID/清零/paused，child不得覆盖父Goal。
 - [ ] 12.9 完成受影响静态、真实类型与Web构建、少量完整核心场景及边界产品验收；全仓检索直接/间接消费者后物理删除旧fork/remap/路径解析链，不以OpenSpec validate或旧raw证明新实现完成。
+- [ ] 12.10 所有触发单次fork的UI/API/直接服务测试统一使用不可关闭、不可延长的60秒monotonic absolute deadline；从确认提交/发送/调用计至durable或published完成，setup与后继聊天不计。phase wait、retry和恢复共用deadline，成功后的独立幂等replay重新计时。async等待与独立外部watchdog消费同一deadline；超时先fsync诊断sidecar（target、operation/key、stage、elapsed、`backend_state=unknown`）后只终止当前隔离测试运行组，明确失败且不宣称后端取消/回滚。短阈值只用于独立受保护子进程内的fixture/watchdog判别验证；不新增生产deadline、持久时钟、取消或回滚协议。
 
 12.2/12.3/12.7 的共同验收补充：有效 prefix 按 context selection 截止、展示保源 logical 相对序；hidden root 仅作真实身份/排序 backing，选中摘要及 retained final 必须经同一普通 Turn history API 可读且旧 root 不显示、不进 Provider。逐 Turn 的真实 source view/revision 必须从 history 读快照贯穿首次点击，不以页面 head 代替。full 保完整历史 checkpoint，prefix 只保正文依赖闭合者；目标新 head 在裁 seed 前由同事务唯一内核继承非 messages state/versions、绑定目标 selection 并隔离旧 pending，不能为了保 seed 扩全部正文，也不能将新 head 当原历史 checkpoint。

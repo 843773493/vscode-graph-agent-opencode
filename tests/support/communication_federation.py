@@ -113,6 +113,7 @@ async def open_communication_triad(
     backend_asgi_app: str = "app.main:app",
     backend_environment: dict[str, str] | None = None,
     gateway_environment: dict[str, str] | None = None,
+    on_sshd_started: Callable[[subprocess.Popen[str], Path], None] | None = None,
 ) -> AsyncIterator[dict[str, CommunicationNode]]:
     ports = ports or integration_port_block_for_file(context.test_file)
     root = context.project_root
@@ -142,6 +143,8 @@ async def open_communication_triad(
         ssh_owner = ManagedProcess(process=process, log_file=log)
         register_test_process(ssh_owner, lambda: _close_ssh(ssh_owner))
         resources.push_async_callback(asyncio.to_thread, _close_ssh, ssh_owner)
+        if on_sshd_started is not None:
+            on_sshd_started(process, config)
         username = getpass.getuser()
         target = GatewaySshTarget("communication-localhost", "linux", "127.0.0.1", ports.port(60), username, private_key, known_hosts, str(root), str(root / ".venv"))
         await asyncio.to_thread(wait_for_ssh_ready, target)
