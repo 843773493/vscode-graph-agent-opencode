@@ -518,8 +518,14 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
     assert original in successor_wire
     assert successor in successor_wire
     target_session_node = await target.session_node(target_session_id)
-    deletion = await submit_navigation_operation(target.client, "delete_session", target_node_id=target_session_id)
+    deletion = await submit_navigation_operation(
+        target.client,
+        "delete_session",
+        target_node_id=target_session_id,
+        wait_for_settlement=True,
+    )
     assert deletion["state"] == "committed", deletion
+    assert deletion["settlement"] == "settled", deletion
     assert not target_session_node.exists()
     deleted_claims = _attachment_claims(target, key)
     assert [claim["claim_id"] for claim in deleted_claims] == [claim["claim_id"] for claim in target_claims]

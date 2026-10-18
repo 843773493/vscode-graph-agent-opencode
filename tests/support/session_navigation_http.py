@@ -25,6 +25,8 @@ def _response_data(response: httpx.Response) -> dict[str, object]:
 async def wait_for_navigation_operation(
     client: httpx.AsyncClient,
     operation_id: str,
+    *,
+    wait_for_settlement: bool = False,
 ) -> dict[str, object]:
     deadline = asyncio.get_running_loop().time() + 30
     while asyncio.get_running_loop().time() < deadline:
@@ -48,10 +50,17 @@ async def wait_for_navigation_operation(
         )
         if receipt is not None:
             state = receipt.get("state")
-            if state in _TERMINAL_STATES:
+            pending_delete_settlement = (
+                wait_for_settlement
+                and state == "committed"
+                and receipt.get("kind") in {"delete_folder", "delete_session"}
+                and receipt.get("settlement") == "pending"
+            )
+            if state in _TERMINAL_STATES and not pending_delete_settlement:
                 return receipt
         await asyncio.sleep(0.05)
-    raise AssertionError(f"导航 operation 未到终态: {operation_id}")
+    detail = "物理 settlement 未到终态" if wait_for_settlement else "未到终态"
+    raise AssertionError(f"导航 operation {detail}: {operation_id}")
 
 
 async def enqueue_navigation_operation(
@@ -158,6 +167,7 @@ async def submit_navigation_operation(
     name: str | None = None,
     parent_node_id: str | None | object = _PARENT_UNSET,
     recursive: bool = False,
+    wait_for_settlement: bool = False,
 ) -> dict[str, object]:
     operation_id = await enqueue_navigation_operation(
         client,
@@ -167,7 +177,11 @@ async def submit_navigation_operation(
         parent_node_id=parent_node_id,
         recursive=recursive,
     )
-    return await wait_for_navigation_operation(client, operation_id)
+    return await wait_for_navigation_operation(
+        client,
+        operation_id,
+        wait_for_settlement=wait_for_settlement,
+    )
 
 
 __all__ = [
