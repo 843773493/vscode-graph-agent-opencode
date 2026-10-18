@@ -88,12 +88,9 @@ Git 只交本轮唯一集成者；每个 Git 子进程使用绝对私有 `GIT_IN
 
 ## 按实践维护
 
-入口由主线程维护；交付协调者维护当前接续记录与[实时台账](../team-collaboration-gpt/memory/2026/10/10/team-collaboration-state.md)的当前段，按需加载准确原件，不默认展开旧长流程与失败历史。旧 GPT 的 `scripts/` 保持执行工具唯一实现。
+只保留能改变后续决策且可追溯原件的实践结论，过程记录留在本轮 artifacts。
 
-RUN05–RUN06 曾以职责提醒和角色交接应对闭环失焦；RUN09 中，旧负责人已承认唯一职责并被主线程两次纠正，仍多次停在“只收到摘要、无子任务/请派工”。明确结束其在途运行后，新负责人 `/root/delivery_run10` 完成已落地切片并普通 commit/push 到远端一致（`9b014d6d40e4953b4293e77448c67ef275309c4f`）；这只是局部提交，七项 goal 与 Web 完整门仍未通过。RUN10 仍反复停在只读审计、日常续租请求和本可按 producer/spec 判定的 URI 边界求裁决。短接续记录已用于恢复身份和下一动作，但本例中并未避免主线程多次介入，不能以多写记录证明解决失忆。
+- 2026-10-18，未设 `PYTEST_ADDOPTS` 启动 Python integration matrix，收集了全部 1,716 项后由负责人停止（143）；精确选择 6 个 fork 用例后 6 项通过。原件：`out/tests/temp/2026/10/18/fork60-deadline/fork60_closeout/artifacts/python/matrix.*`、`out/tests/temp/2026/10/18/fork60-deadline/fork60_closeout/artifacts/python/attempt-003/`。
+- 同日，外层 `ulimit -d 4194304` 因当前 shell 无权调整限制而在 pytest 启动前失败（97）；移除外层限制后由 matrix 管理资源，真实 API 用例 1 项通过。原件：`out/tests/temp/2026/10/18/fork60-deadline/fork60_delivery/artifacts/runs/python-real-fork-001/`、`out/tests/temp/2026/10/18/fork60-deadline/fork60_delivery/artifacts/runs/python-real-fork-003/`。
 
-RUN10 的远端 fork 回执审查迟至后期才发现嵌套 `session.uri` 未与 `resource_identity` 绑定；人工 fixture 与真实 owner 的 authority 形状不同，又造成正确实现误拒。按真实 producer 形状统一 parser 并覆盖无 authority 与匹配 audience authority 后，定向 unit、跨 Gateway/debug/main/child 检查通过。`local-003` 的 42 失败/8 通过暴露缺失 `fork_gateway_request_context` 及 owner/ledger 时钟快照基线错配；修后相关集成 46/46、受影响 12/12 通过。RUN11 的 `copy_missing_attachment` helper 又因裸 workspace URI 在 capture 前返回 400；保存原始响应定位构造问题后，改由真实 target `uriTemplate` 派生 inventory 根，保留 required 500/cleanup 断言，单 focus 1 passed。独审确认目标根符合 API 合同，响应诊断只写 result JSON。实践证据支持先核对真实 producer/caller 合同并保留原始失败响应，再修具体请求或 fixture 前置；不据一例扩张通用校验，也不以单场替代完整门。
-
-RUN05 改用 `run_git.py` 后，18 项合成检查和真实仓库只读检查通过，共享 index 指纹不变；验证中发现的索引符号链接穿透已修复。这只证明入口隔离行为，不能证明调度提效。候选与准确 attempt 绑定，阶段变化直接替换当前记录。
-
-本轮合并同次历史读取后，一次 24 轮 frozen-provider 诊断的 reader 调用从 119 降至 72，`provider.prepare_context_for_provider` 阶段耗时下降 14.63%，`provider.prepare_total` 总准备耗时下降 12.83%；不能外推到真实 Provider，原 427 门仍在 600 秒超时。这是代码优化证据，不是分层调度提速证据。分层结构是否降低总 token 或交付成本仍未证明，应比较完整场景交付、返工、主线程展开报告量及同口径 token；不以活跃人数、局部测试或“落盘到启动”的短间隔代替。
+角色或阶段漂移的根因，以及分层协作对 token、耗时或成本的收益，均未获证据。
