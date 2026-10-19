@@ -88,6 +88,7 @@ def _dispatch(
     guidance_revision: str,
     policy_revision: str = "resource-activation-policy:v1:test",
     generation: int = 1,
+    args: dict[str, object] | None = None,
 ) -> ExtensionDispatchBindingRef:
     binding = build_extension_catalog_binding(
         catalog_revision=catalog_revision,
@@ -97,7 +98,7 @@ def _dispatch(
                 target_id=TARGET_ID,
                 origin="mcp",
                 server_id="mini",
-                args={"text": {"type": "string"}},
+                args=args if args is not None else {"text": {"type": "string"}},
             )
         ],
     )
@@ -193,6 +194,52 @@ def test_dispatch_hash_differs_when_catalog_or_guidance_changes() -> None:
         turn_id="turn:other",
     )
     assert identity_changed.dispatch_binding_hash == base.dispatch_binding_hash
+
+
+def test_member_schema_change_moves_catalog_and_dispatch_hash() -> None:
+    """仅成员 schema 改变时，catalog 与 dispatch hash 都覆盖该成员。"""
+    catalog_revision = "sha256:" + "a" * 64
+    base = _dispatch(
+        catalog_revision=catalog_revision,
+        guidance_revision="sha256:" + "b" * 64,
+        generation=3,
+        args={"text": {"type": "string"}},
+    )
+    schema_changed = _dispatch(
+        catalog_revision=catalog_revision,
+        guidance_revision="sha256:" + "b" * 64,
+        generation=3,
+        args={"text": {"type": "number"}},
+    )
+
+    base_member = base.binding_ref.members[0]
+    changed_member = schema_changed.binding_ref.members[0]
+    assert replace(base_member, schema_hash=changed_member.schema_hash) == changed_member
+    assert base.binding_ref.catalog_revision == schema_changed.binding_ref.catalog_revision
+    assert base.binding_ref.generation == schema_changed.binding_ref.generation
+    assert base.binding_ref.binding_id == schema_changed.binding_ref.binding_id
+    assert base_member.schema_hash != changed_member.schema_hash
+
+    base_catalog_preimage = base.binding_ref.binding_preimage()
+    changed_catalog_preimage = schema_changed.binding_ref.binding_preimage()
+    assert base_catalog_preimage["members"] == [base_member.to_dict()]
+    assert changed_catalog_preimage["members"] == [changed_member.to_dict()]
+    assert {
+        **base_catalog_preimage,
+        "members": [changed_member.to_dict()],
+    } == changed_catalog_preimage
+    assert base.binding_ref.binding_hash != schema_changed.binding_ref.binding_hash
+
+    base_dispatch_preimage = base.dispatch_preimage()
+    changed_dispatch_preimage = schema_changed.dispatch_preimage()
+    assert base_dispatch_preimage["members"] == [base_member.to_dict()]
+    assert changed_dispatch_preimage["members"] == [changed_member.to_dict()]
+    assert {
+        **base_dispatch_preimage,
+        "catalog_binding_hash": schema_changed.binding_ref.binding_hash,
+        "members": [changed_member.to_dict()],
+    } == changed_dispatch_preimage
+    assert base.dispatch_binding_hash != schema_changed.dispatch_binding_hash
 
 
 def test_toolset_manifest_hash_has_no_extension_identity() -> None:

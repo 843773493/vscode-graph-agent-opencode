@@ -530,6 +530,45 @@ def test_members_roundtrip_sort_identity_and_preserve_v1_hash_preimages() -> Non
         assert altered.to_dict() != populated.to_dict()
 
 
+@pytest.fixture
+def catalog_parent_with_members() -> ResourceActivationSnapshotRef:
+    policy = ResourceActivationPolicySnapshot(default_boundary="turn", boundaries={})
+    ref = replace(binding(display_uri=None), resource_id="mcp:catalog",
+                  resource_kind="mcp_tool_catalog", members=(member(),))
+    return execution_snapshot(
+        bindings=(ref,), activation_policy=policy,
+        activation_policy_revision=policy.revision, activation_policy_hash=policy.hash,
+    )
+
+
+def test_null_field_is_in_original_jcs_v1_preimage(catalog_parent_with_members) -> None:
+    parent = catalog_parent_with_members
+    ref = parent.bindings[0]
+    preimage = {
+        "schema": "resource-activation-bindings:v1",
+        "bindings": [{
+            "resource_id": ref.resource_id, "resource_kind": ref.resource_kind,
+            "owner_scope": ref.owner_scope, "facet": ref.facet, "revision": ref.revision,
+            "content_length": ref.content_length, "content_hash": ref.content_hash,
+            "availability": ref.availability, "display_uri": None,
+        }],
+    }
+    assert parent.bindings_hash == sha256_jcs(preimage)
+    del preimage["bindings"][0]["display_uri"]
+    assert parent.bindings_hash != sha256_jcs(preimage)
+
+
+@pytest.mark.parametrize("changes", [
+    {"resource_id": "mcp:other"},
+    {"resource_kind": "skills"},
+    {"revision": "semantic-revision-2"},
+], ids=("resource-id", "resource-kind", "semantic-revision"))
+def test_parent_semantic_selection_changes_v1_bindings_hash(catalog_parent_with_members, changes) -> None:
+    parent = catalog_parent_with_members
+    changed = replace(parent, bindings=(replace(parent.bindings[0], **changes),))
+    assert changed.bindings_hash != parent.bindings_hash
+
+
 @pytest.mark.parametrize(
     "overrides",
     [

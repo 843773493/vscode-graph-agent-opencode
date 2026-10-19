@@ -1,74 +1,74 @@
-"""v1 hash preimage 的成员细节负向证明；真实 PrefixEpoch 另由 MCP/Saver 用例验证。"""
+"""真实 Coordinator 消费成员变化；PrefixEpoch 另由 MCP/Saver 用例验证。"""
 
 from dataclasses import replace
 
 import pytest
 
-from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.resource_activation import (
     ResourceActivationPolicySnapshot,
     ResourceMemberBinding,
 )
-from tests.unit.domain.itemized.test_resource_activation_contract import (
-    binding,
-    execution_snapshot,
+from app.services.infrastructure.resource_platform.derivation.types import (
+    ResourceSnapshot,
+)
+from app.services.infrastructure.resource_platform.registry.semantic_registry import (
+    ResourceRegistry,
+)
+from tests.unit.services.orchestration.resource_activation.test_resource_activation import (
+    _admission,
+    _coordinator,
+    _FakeSaver,
 )
 
 
 @pytest.fixture
-def parent_with_members():
-    ref = replace(binding(display_uri=None), resource_id="mcp:catalog", resource_kind="mcp_tool_catalog")
+def published_catalog():
     member = ResourceMemberBinding(
         member_id="tool-a", member_kind="mcp", schema_hash="sha256:" + "a" * 64,
         server_id="server-a", revision="catalog-a",
     )
-    policy = ResourceActivationPolicySnapshot(default_boundary="turn", boundaries={})
-    return execution_snapshot(
-        bindings=(replace(ref, members=(member,)),),
-        activation_policy=policy, activation_policy_revision=policy.revision,
-        activation_policy_hash=policy.hash,
+    return ResourceSnapshot(
+        resource_id="mcp:catalog", resource_kind="mcp_tool_catalog", facet="activation",
+        display_uri=None, revision="guidance-1", payload={"content": "稳定指引"},
+        source_lineage=(("catalog-source", "source-1"),), generation=3, members=(member,),
     )
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("changes", [
-    {"member_id":"tool-b"},
-    {"member_kind":"custom", "server_id":None},
-    {"schema_hash":"sha256:" + "b" * 64},
-    {"server_id":"server-b"},
-    {"revision":"catalog-b"},
-])
-def test_only_member_detail_changes_neither_v1_content_hash(parent_with_members, changes):
-    parent = parent_with_members
-    ref = parent.bindings[0]
-    changed = replace(parent, bindings=(replace(ref, members=(replace(ref.members[0], **changes),)),))
-    assert changed.bindings[0].members != ref.members
-    assert changed.bindings_hash == parent.bindings_hash
-    assert changed.activation_provenance_hash == parent.activation_provenance_hash
+    {"member_id": "tool-b"},
+    {"member_kind": "custom", "server_id": None},
+    {"schema_hash": "sha256:" + "b" * 64},
+    {"server_id": "server-b"},
+    {"revision": "catalog-b"},
+], ids=("member-id", "member-kind", "schema-hash", "server-id", "member-revision"))
+async def test_only_member_detail_changes_neither_v1_content_hash(published_catalog, changes):
+    registry = ResourceRegistry()
+    registry.publish(published_catalog)
+    saver = _FakeSaver()
+    coordinator = _coordinator(registry, saver)
+    parent = await coordinator.freeze_execution(
+        admission=_admission("turn-epoch-neutral"),
+        policy=ResourceActivationPolicySnapshot(
+            default_boundary="turn", boundaries={"mcp_tool_catalog": "model_call"},
+        ),
+    )
+    original = await coordinator.commit_model_call(await coordinator.capture_model_call(
+        parent=parent, model_call_id="before-members",
+    ))
+    updated = replace(published_catalog, members=(replace(published_catalog.members[0], **changes),))
+    registry.publish(updated)
+    changed = await coordinator.commit_model_call(await coordinator.capture_model_call(
+        parent=parent, model_call_id="after-members",
+    ))
 
-
-def test_null_field_is_in_original_jcs_v1_preimage(parent_with_members):
-    parent = parent_with_members
-    ref = parent.bindings[0]
-    preimage = {
-        "schema":"resource-activation-bindings:v1",
-        "bindings":[{
-            "resource_id":ref.resource_id, "resource_kind":ref.resource_kind,
-            "owner_scope":ref.owner_scope, "facet":ref.facet, "revision":ref.revision,
-            "content_length":ref.content_length, "content_hash":ref.content_hash,
-            "availability":ref.availability, "display_uri":None,
-        }],
-    }
-    assert parent.bindings_hash == sha256_jcs(preimage)
-    del preimage["bindings"][0]["display_uri"]
-    assert parent.bindings_hash != sha256_jcs(preimage)
-
-
-@pytest.mark.parametrize("changes", [
-    {"resource_id":"mcp:other"},
-    {"resource_kind":"skills"},
-    {"revision":"semantic-revision-2"},
-])
-def test_parent_semantic_selection_changes_v1_bindings_hash(parent_with_members, changes):
-    parent = parent_with_members
-    changed = replace(parent, bindings=(replace(parent.bindings[0], **changes),))
-    assert changed.bindings_hash != parent.bindings_hash
+    assert original.parent is changed.parent is parent
+    assert original.bindings[0].members == published_catalog.members
+    assert changed.bindings[0].members == updated.members != published_catalog.members
+    # 两次都走 Registry capture 和 Coordinator；除成员与 typed 正文引用外父行不变。
+    assert replace(changed.bindings[0], members=original.bindings[0].members,
+                   detail_ref=original.bindings[0].detail_ref) == original.bindings[0]
+    assert changed.registry_generation == original.registry_generation == published_catalog.generation
+    assert changed.bindings_hash == original.bindings_hash
+    assert changed.activation_provenance_hash == original.activation_provenance_hash
+    assert saver.snapshots == [parent, original, changed]
