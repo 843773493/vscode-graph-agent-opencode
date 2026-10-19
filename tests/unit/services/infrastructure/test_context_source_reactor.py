@@ -14,6 +14,7 @@ from app.domain.itemized.epoch.prefix_epoch import (
     EpochReason,
     PendingPrefixEpochTransition,
 )
+from app.services.infrastructure import workspace_file_watch_service as watch_module
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservation,
     ResourceObservationChannel,
@@ -37,6 +38,8 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     _revision,
 )
 from app.services.infrastructure.workspace_file_watch_service import (
+    WorkspaceFileChange,
+    WorkspaceFileChangeBatch,
     WorkspaceFileWatchService,
 )
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
@@ -349,6 +352,83 @@ def _overflow_fixture(
         reactor_id="test-overflow",
     )
     return manager, registry, watch_service, reactor, lifetime_scope, uris
+
+
+@pytest.fixture
+async def raw_overflow_case(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[tuple[
+    ContextSourceManager, WorkspaceFileResourceRegistry, WorkspaceFileWatchService,
+    ContextSourceReactor, list[str], asyncio.Event,
+]]:
+    async def quiet_awatch(_root: Path, **_options: object):
+        # 原生事件源在本例保持静止，防止真实 OS 通知替漏掉 overflow 的错误实现补救。
+        yield set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(watch_module, "awatch", quiet_awatch)
+    monkeypatch.setattr(watch_module, "FILE_WATCH_QUEUE_SIZE", 1)
+    (tmp_path / "workspace").mkdir()
+    manager, registry, watcher, reactor, scope, uris = _overflow_fixture(
+        tmp_path, skill_count=3, max_queue_size=1,
+    )
+    overflow_seen = asyncio.Event()
+    next_event = registry._next_watch_event
+
+    async def record_overflow():
+        batch = await next_event()
+        if batch is not None and batch.overflow:
+            overflow_seen.set()
+        return batch
+
+    monkeypatch.setattr(registry, "_next_watch_event", record_overflow)
+    await registry.start()
+    try:
+        yield manager, registry, watcher, reactor, uris, overflow_seen
+    finally:
+        await scope.close()
+        await registry.stop()
+        await watcher.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_raw_watcher_overflow_reconciles_registered_sources_through_csm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw_overflow_case,
+) -> None:
+    manager, registry, watcher, reactor, uris, overflow_seen = raw_overflow_case
+    assert len(reactor.sync_sources()) == 3
+    assert len(tuple(reactor.drain())) == 3
+    before = {uri: registry.snapshot(uri).revision for uri in uris}
+    shared = next(iter(watcher._watchers.values()))
+    path = tmp_path / "workspace" / ".boxteam" / "skills" / "demo0" / "SKILL.md"
+    batch = WorkspaceFileChangeBatch(changes=(WorkspaceFileChange("edit", str(path)),))
+    for index in range(3):
+        skill = tmp_path / "workspace" / ".boxteam" / "skills" / f"demo{index}" / "SKILL.md"
+        skill.write_text(f"overflow-{index}\n", encoding="utf-8")
+    watcher._publish(shared.subscribers, batch)
+    watcher._publish(shared.subscribers, batch)
+    async with asyncio.timeout(5):
+        await overflow_seen.wait()
+        while any(registry.snapshot(uri).revision == before[uri] for uri in uris):
+            await asyncio.sleep(0)
+
+    observed_events: list[ResourceObservation] = []
+    handle_event = reactor._handle_event
+
+    def record_event(event: ResourceObservation) -> int:
+        observed_events.append(event)
+        return handle_event(event)
+
+    monkeypatch.setattr(reactor, "_handle_event", record_event)
+    assert reactor.ingest_notifications() >= 3
+    assert any(event.gap for event in observed_events)
+    assert manager.pending_observation_count() == 3
+    observed = tuple(reactor.drain())
+    assert {item.source_id: reactor.content_for(item) for item in observed} == {
+        f"skill:demo{index}": f"overflow-{index}\n" for index in range(3)
+    }
+    assert {item.revision for item in observed} == {registry.snapshot(uri).revision for uri in uris}
+    assert manager.pending_observation_count() == 0
 
 
 @pytest.mark.asyncio

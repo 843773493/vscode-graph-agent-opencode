@@ -63,6 +63,9 @@ async def test_register_after_close_is_rejected() -> None:
     await scope.close()
     with pytest.raises(RuntimeError, match="不允许注册"):
         scope.register(lambda: None, label="late")
+    with pytest.raises(RuntimeError, match="不允许创建 child"):
+        scope.child("late-child")
+    assert scope.snapshot().child_count == 0
 
 
 @pytest.mark.asyncio

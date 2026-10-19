@@ -129,6 +129,34 @@ async def test_lifetime_scope_returns_failure_and_retries_failed_resource() -> N
 
 
 @pytest.mark.asyncio
+async def test_concurrent_close_waiters_receive_the_same_failure() -> None:
+    scope = LifetimeScope("shared-failure")
+    entered = asyncio.Event()
+    finish = asyncio.Event()
+    calls = 0
+    failure = OSError("release failure")
+
+    async def cleanup() -> None:
+        nonlocal calls
+        calls += 1
+        entered.set()
+        await finish.wait()
+        raise failure
+
+    scope.register(cleanup)
+    waiters = [asyncio.create_task(scope.close()) for _ in range(3)]
+    await entered.wait()
+    finish.set()
+    results = await asyncio.gather(*waiters, return_exceptions=True)
+
+    assert calls == 1
+    assert isinstance(results[0], ExceptionGroup)
+    assert all(result is results[0] for result in results)
+    assert results[0].exceptions[0].__cause__ is failure
+    assert scope.state == "close_failed"
+
+
+@pytest.mark.asyncio
 async def test_cancelled_close_waiter_does_not_abandon_owned_cleanup() -> None:
     scope = LifetimeScope("cancelled-waiter")
     entered = asyncio.Event()

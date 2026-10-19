@@ -88,3 +88,32 @@ async def test_bootstrap_close_event_failure_is_explicit(
     with pytest.raises(RuntimeError, match="event unavailable"):
         await platform.close()
     assert platform.process_root_scope.snapshot().state == "closed"
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_preserves_release_and_event_failure(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = EventChannelService()
+    platform = bootstrap_resource_platform(workspace_root=tmp_path, event_service=service)
+    release_error = OSError("resource still attached")
+    event_error = RuntimeError("event unavailable")
+
+    def fail_release() -> None:
+        raise release_error
+
+    def fail_publish(_event) -> None:
+        raise event_error
+
+    platform.process_root_scope.register(fail_release, label="failing-resource")
+    channel = service.channel("resource.state/workspace_resource_platform")
+    monkeypatch.setattr(channel, "publish", fail_publish)
+    with pytest.raises(ExceptionGroup) as captured:
+        await platform.close()
+
+    cleanup_group, notification_error = captured.value.exceptions
+    assert isinstance(cleanup_group, ExceptionGroup)
+    assert cleanup_group.exceptions[0].__cause__ is release_error
+    assert notification_error is event_error
+    assert platform.process_root_scope.state == "close_failed"
+    assert platform.process_root_scope.snapshot().resource_count == 1

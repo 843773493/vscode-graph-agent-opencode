@@ -173,6 +173,56 @@ async def test_fixed_skill_directory_discovers_only_direct_entries_and_publishes
 
 
 @pytest.mark.asyncio
+async def test_skill_directory_rename_burst_publishes_only_final_entries(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    root = workspace / ".boxteam" / "skills"
+    original = root / "original"
+    original.mkdir(parents=True)
+    (original / "SKILL.md").write_text("原始正文\n", encoding="utf-8")
+    watcher = WorkspaceFileWatchService(workspace_root=workspace)
+    registry = WorkspaceFileResourceRegistry(workspace_root=workspace, watch_service=watcher)
+    initial = registry.register_skill_directory(root=root, scope="workspace", scope_id="test")
+    old_entry = initial.entries[0]
+    await registry.start()
+    try:
+        original.rename(root / "intermediate")
+        (root / "intermediate").rename(root / "final")
+        transient = root / "transient"
+        transient.mkdir()
+        (transient / "SKILL.md").write_text("不应登记\n", encoding="utf-8")
+        (transient / "SKILL.md").unlink()
+        transient.rmdir()
+        nested = root / "container" / "nested"
+        nested.mkdir(parents=True)
+        (nested / "SKILL.md").write_text("不应递归发现\n", encoding="utf-8")
+
+        async with asyncio.timeout(5):
+            while [entry.name for entry in registry.skill_directory_snapshot(initial.directory_id).entries] != ["final"]:
+                await asyncio.sleep(0.02)
+        entry = registry.skill_directory_snapshot(initial.directory_id).entries[0]
+        assert (entry.source_id, entry.entry_identity) == (
+            "skill-source:workspace:final", "skill-entry:workspace:final",
+        )
+        assert registry.snapshot(entry.uri).content == "原始正文\n"
+        assert not registry.snapshot(old_entry.uri).available
+        assert not registry.snapshot(old_entry.uri).exists
+        assert {
+            registry.source_descriptor_for_uri(uri).source_id
+            for uri in registry._file_handles_by_uri
+        } == {
+            "skill-source:workspace:original", "skill-source:workspace:final",
+        }
+
+        (root / "final" / "SKILL.md").write_text("重命名后更新\n", encoding="utf-8")
+        async with asyncio.timeout(5):
+            while registry.snapshot(entry.uri).content != "重命名后更新\n":
+                await asyncio.sleep(0.02)
+    finally:
+        await registry.stop()
+        await watcher.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_gateway_skills_root_creation_update_delete_and_rebuild_use_shallow_watches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
