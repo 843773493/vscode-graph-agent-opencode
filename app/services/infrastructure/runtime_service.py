@@ -138,39 +138,60 @@ class RuntimeService:
             "job_failed",
             "session_interrupted",
         }
-        started_owners: dict[str, tuple[str, str]] = {}
+        job_owners: dict[str, tuple[str, str]] = {}
+        started_job_ids: set[str] = set()
+        lifecycle_jobs_by_session: dict[str, set[str]] = {}
+        event: Event | None = None
         for session_id in self._trace_event_store.list_session_ids():
-            events = self._trace_event_store.read_events(session_id)
-            lifecycle_by_job: dict[str, Event] = {}
-            requests_by_job: dict[str, JobCreatedPayload] = {}
-            for event in events:
-                if event.type == "job_created":
-                    requests_by_job[event.job_id] = event.payload
-                if event.type == "job_started":
+            lifecycle_jobs: set[str] = set()
+            for event in self._trace_event_store.read_events(session_id):
+                if event.type in {"job_created", "job_started"}:
                     owner = (event.payload.session_id, event.payload.thread_id)
+                    phase = event.type.removeprefix("job_")
                     if owner[0] != session_id:
                         raise RuntimeError(
-                            f"Job started owner 与 Trace 会话冲突: job_id={event.job_id!r}, "
+                            f"Job {phase} owner 与 Trace 会话冲突: job_id={event.job_id!r}, "
                             f"trace_session={session_id!r}, owner={owner!r}"
                         )
-                    previous = started_owners.setdefault(event.job_id, owner)
+                    previous = job_owners.setdefault(event.job_id, owner)
                     if previous != owner:
                         raise RuntimeError(
-                            f"同一 Job 的 started owner 漂移: job_id={event.job_id!r}, "
+                            f"同一 Job 的 {phase} owner 漂移: job_id={event.job_id!r}, "
                             f"previous={previous!r}, current={owner!r}"
                         )
+                    if event.type == "job_started":
+                        started_job_ids.add(event.job_id)
                 if event.type == "job_started" or event.type in terminal_types:
-                    lifecycle_by_job[event.job_id] = event
-            for job_id, event in lifecycle_by_job.items():
-                owner = started_owners.get(job_id)
-                # 排队取消或准入前失败可以没有 started，不产生 execution/Turn。
-                if owner is None:
-                    continue
-                if owner[0] != session_id:
+                    lifecycle_jobs.add(event.job_id)
+            lifecycle_jobs_by_session[session_id] = lifecycle_jobs
+            event = None
+
+        # 先校验全部 Trace 的 owner，再调用恢复端口或写入终态，避免跨会话冲突留下部分副作用。
+        for session_id, lifecycle_jobs in lifecycle_jobs_by_session.items():
+            for job_id in lifecycle_jobs:
+                owner = job_owners.get(job_id)
+                if owner is not None and owner[0] != session_id:
                     raise RuntimeError(
                         f"Job 终态 Trace 与 started owner 冲突: job_id={job_id!r}, "
                         f"trace_session={session_id!r}, owner={owner!r}"
                     )
+
+        for session_id in lifecycle_jobs_by_session:
+            # 校验通过后逐会话读取正文，不在全库扫描期间常驻全部请求与事件。
+            event = None
+            request: JobCreatedPayload | None = None
+            requests_by_job: dict[str, JobCreatedPayload] = {}
+            lifecycle_by_job: dict[str, Event] = {}
+            for event in self._trace_event_store.read_events(session_id):
+                if event.type == "job_created":
+                    requests_by_job[event.job_id] = event.payload
+                if event.type == "job_started" or event.type in terminal_types:
+                    lifecycle_by_job[event.job_id] = event
+            for job_id, event in lifecycle_by_job.items():
+                # 排队取消或准入前失败可以没有 started，不产生 execution/Turn。
+                if job_id not in started_job_ids:
+                    continue
+                owner = job_owners[job_id]
                 event_type = event.type
                 if event_type == "job_failed":
                     status = "timed_out" if is_job_timeout_event(event) else "failed"

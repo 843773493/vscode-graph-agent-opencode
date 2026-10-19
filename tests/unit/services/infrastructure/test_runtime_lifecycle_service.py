@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import weakref
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_session_path_resolver, workspace_context
 from app.domain.itemized.execution_admission import UserExecutionIdentity
 from app.schemas.event import (
+    JobCreatedEvent,
+    JobCreatedPayload,
     JobFailedEvent,
     JobFailedPayload,
     JobStartedEvent,
@@ -467,3 +470,204 @@ async def test_startup_requires_structured_timeout_code(pending_checkpoint_inspe
             "status": "failed",
         }
     ]
+
+
+@pytest.fixture
+def recovery_inspectors():
+    calls: list[tuple[str, JobState]] = []
+
+    async def before_provider(job: JobState) -> bool:
+        calls.append(("before_provider", job))
+        return False
+
+    async def pending_checkpoint(job: JobState) -> str:
+        calls.append(("pending_checkpoint", job))
+        return "checkpoint-original"
+
+    return calls, before_provider, pending_checkpoint
+
+
+def _created_request(session_id: str, thread_id: str, job_id: str) -> JobCreatedEvent:
+    return JobCreatedEvent(
+        event_id=create_prefixed_id("evt"), job_id=job_id, timestamp=datetime.now(UTC),
+        payload=JobCreatedPayload(
+            session_id=session_id, thread_id=thread_id, message=f"原始消息 {thread_id}",
+            agent_id="default", message_id=create_prefixed_id("msg"),
+            message_created_at=datetime.now(UTC),
+            execution_binding=UserExecutionIdentity(
+                job_id=job_id, turn_id=create_prefixed_id("turn"),
+                admission_idempotency_key=create_prefixed_id("adm"),
+            ),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("thread_role", ["main", "child"])
+async def test_startup_restores_only_the_matching_created_and_started_owner(
+    tmp_path: Path, session_bundle_factory, session_lifecycle_guard,
+    recovery_inspectors, thread_role: str,
+) -> None:
+    session_id = "ses_019c70f868da751480de63aa344e28c9"
+    sessions_dir = tmp_path / ".boxteam" / "sessions"
+    session_bundle_factory(sessions_dir, session_id)
+    main_thread = get_session_path_resolver(sessions_dir).main_thread_id(session_id)
+    thread_id = main_thread if thread_role == "main" else create_prefixed_id("thr")
+    calls, before_provider, pending_checkpoint = recovery_inspectors
+    writer = RecordingTurnStatusWriter()
+    runtime, jobs = build_runtime(
+        pending_checkpoint_inspector=pending_checkpoint,
+        before_provider_inspector=before_provider, tmp_path=tmp_path,
+        terminal_status_writer=writer, session_lifecycle_guard=session_lifecycle_guard,
+    )
+    request = _created_request(session_id, thread_id, "job-owner-match")
+    # 同 owner 的重复 created/started 保持原恢复身份，不造成第二个 Job。
+    for _ in range(2):
+        await runtime._trace_event_store.append(session_id, request)
+        await runtime._trace_event_store.append(session_id, JobStartedEvent(
+            event_id=create_prefixed_id("evt"), job_id=request.job_id,
+            timestamp=datetime.now(UTC),
+            payload=JobStartedPayload(session_id=session_id, thread_id=thread_id),
+        ))
+
+    assert await runtime.reconcile_stale_executions() == 0
+
+    assert [kind for kind, _ in calls] == ["before_provider", "pending_checkpoint"]
+    restored = jobs._jobs[request.job_id]
+    assert all(job is restored for _, job in calls)
+    assert (restored.session_id, restored.thread_id) == (session_id, thread_id)
+    assert restored.message == request.payload.message
+    assert restored.message_id == request.payload.message_id
+    assert restored.execution_binding == request.payload.execution_binding
+    assert restored.resume_checkpoint_id == "checkpoint-original"
+    assert jobs._thread_current_job == {(session_id, thread_id): request.job_id}
+    assert restored.task is None
+    assert writer.calls == []
+    assert len(runtime._trace_event_store.read_events(session_id)) == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", [
+    "created_thread_vs_started", "created_session_vs_trace", "duplicate_created_owner",
+    "cross_trace_created_owner", "cross_trace_started_owner", "cross_trace_terminal",
+])
+async def test_startup_rejects_owner_conflicts_before_any_recovery_side_effect(
+    tmp_path: Path, session_bundle_factory, session_lifecycle_guard,
+    recovery_inspectors, fault: str,
+) -> None:
+    sessions_dir = tmp_path / ".boxteam" / "sessions"
+    session_id = "ses_019c70f868da751480de63aa344e28c9"
+    other_session = "ses_019d70f868da751480de63aa344e28c9"
+    for owner_session in (session_id, other_session):
+        session_bundle_factory(sessions_dir, owner_session)
+    resolver = get_session_path_resolver(sessions_dir)
+    main_thread = resolver.main_thread_id(session_id)
+    other_thread = resolver.main_thread_id(other_session)
+    calls, before_provider, pending_checkpoint = recovery_inspectors
+    writer = RecordingTurnStatusWriter()
+    runtime, jobs = build_runtime(
+        pending_checkpoint_inspector=pending_checkpoint,
+        before_provider_inspector=before_provider, tmp_path=tmp_path,
+        terminal_status_writer=writer, session_lifecycle_guard=session_lifecycle_guard,
+    )
+    store = runtime._trace_event_store
+    request = _created_request(session_id, main_thread, "job-conflicted")
+    await store.append(session_id, request)
+    started_thread = create_prefixed_id("thr") if fault == "created_thread_vs_started" else main_thread
+    await store.append(session_id, JobStartedEvent(
+        event_id=create_prefixed_id("evt"), job_id=request.job_id,
+        timestamp=datetime.now(UTC),
+        payload=JobStartedPayload(session_id=session_id, thread_id=started_thread),
+    ))
+    # 前面的合法 started 也不能在后面的冲突被发现前先写入 execution_lost。
+    await store.append(session_id, JobStartedEvent(
+        event_id=create_prefixed_id("evt"), job_id="job-valid-before-conflict",
+        timestamp=datetime.now(UTC),
+        payload=JobStartedPayload(session_id=session_id, thread_id=main_thread),
+    ))
+    if fault == "created_session_vs_trace":
+        await store.append(session_id, _created_request(other_session, other_thread, "job-request-wrong-trace"))
+    elif fault == "duplicate_created_owner":
+        await store.append(session_id, _created_request(session_id, create_prefixed_id("thr"), request.job_id))
+    elif fault == "cross_trace_created_owner":
+        await store.append(other_session, _created_request(other_session, other_thread, request.job_id))
+    elif fault == "cross_trace_started_owner":
+        await store.append(other_session, JobStartedEvent(
+            event_id=create_prefixed_id("evt"), job_id=request.job_id,
+            timestamp=datetime.now(UTC),
+            payload=JobStartedPayload(session_id=other_session, thread_id=other_thread),
+        ))
+    elif fault == "cross_trace_terminal":
+        await store.append(other_session, JobFailedEvent(
+            event_id=create_prefixed_id("evt"), job_id=request.job_id,
+            timestamp=datetime.now(UTC), payload=JobFailedPayload(error="错误会话终态"),
+        ))
+    events_before = {owner: store.read_events(owner) for owner in (session_id, other_session)}
+
+    with pytest.raises(RuntimeError, match="owner"):
+        await runtime.reconcile_stale_executions()
+
+    assert calls == []
+    assert writer.calls == []
+    assert jobs._jobs == {}
+    assert jobs._thread_current_job == {}
+    assert {owner: store.read_events(owner) for owner in (session_id, other_session)} == events_before
+
+
+@pytest.mark.asyncio
+async def test_startup_releases_other_session_request_bodies_before_recovery(
+    tmp_path: Path, session_bundle_factory, session_lifecycle_guard, monkeypatch: pytest.MonkeyPatch,
+    recovery_inspectors,
+) -> None:
+    sessions_dir = tmp_path / ".boxteam" / "sessions"
+    session_ids = (
+        "ses_019c70f868da751480de63aa344e28c9",
+        "ses_019d70f868da751480de63aa344e28c9",
+    )
+    calls, before_provider, pending_checkpoint = recovery_inspectors
+    runtime, jobs = build_runtime(
+        pending_checkpoint_inspector=pending_checkpoint,
+        before_provider_inspector=before_provider, tmp_path=tmp_path,
+        session_lifecycle_guard=session_lifecycle_guard,
+    )
+    store = runtime._trace_event_store
+    for index, session_id in enumerate(session_ids):
+        session_bundle_factory(sessions_dir, session_id)
+        thread_id = get_session_path_resolver(sessions_dir).main_thread_id(session_id)
+        request = _created_request(session_id, thread_id, f"job-large-request-{index}")
+        request.payload.message = "独立会话正文" * 200_000
+        await store.append(session_id, request)
+        await store.append(session_id, JobStartedEvent(
+            event_id=create_prefixed_id("evt"), job_id=request.job_id,
+            timestamp=datetime.now(UTC),
+            payload=JobStartedPayload(session_id=session_id, thread_id=thread_id),
+        ))
+        queued = _created_request(session_id, thread_id, f"job-queued-request-{index}")
+        queued.payload.message = "排队请求正文" * 200_000
+        await store.append(session_id, queued)
+    payloads: dict[str, list[weakref.ReferenceType[JobCreatedPayload]]] = {}
+    original_read = store.read_events
+
+    def observed_read(session_id: str):
+        events = original_read(session_id)
+        payloads.setdefault(session_id, [
+            weakref.ref(event.payload) for event in events if event.type == "job_created"
+        ])
+        return events
+
+    async def observed_restart(job: JobState) -> bool:
+        # 恢复任何会话前已经核完全部 owner，且不再持有其他会话的预校验正文。
+        assert set(payloads) == set(session_ids)
+        assert all(
+            reference() is None for owner, references in payloads.items()
+            if owner != job.session_id for reference in references
+        )
+        return await before_provider(job)
+
+    monkeypatch.setattr(store, "read_events", observed_read)
+    monkeypatch.setattr(runtime, "_can_restart_before_provider", observed_restart)
+
+    assert await runtime.reconcile_stale_executions() == 0
+
+    assert len(calls) == 4
+    assert len(jobs._jobs) == 2
