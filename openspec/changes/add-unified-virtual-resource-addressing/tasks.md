@@ -77,7 +77,8 @@
 - [x] 8.3 为 Workspace 文件树登记 `files/root` 根资源，并按显式固定的 `workspace_id` 解析；不以当前激活态补充身份。普通 ls/search/read 不为每个文件登记长期身份、revision 或快照，显式来源追踪仍由原 owner 登记。本项仅记录已实现的 `files/root` 登记与解析范围，不表示物理根已由原生 Gateway root binding 提供，也不证明 URI、解析结果或普通 DTO 不含真实路径；这些边界仍由未勾选的 8.6、7.2 等项验收。
 - [x] 8.4 在本 owner 登记 Session 产物单文件模板：`session/{session_id}/attachments/{attachment_id}`、`session/{session_id}/tool-results/{result_id}`；保留业务 ID 的既有 profile，原owner决定读取/授权/保留，不允许目录猜测或通用修改。消费迁移归 add-unified-resource-file-tools。
 - [ ] 8.5 为本地/远端目录结果、Skill读取无activation、轻量搜索无注册、固定目标、文件能力拒绝和路径编码逐项留生产验收；文件执行错误归其独立owner合同，寻址错误仍只在本登记处。先固定本公共合同，再交独立文件工具消费change，不以规范修订勾实现。
-- [ ] 8.6 验收 files/root 的 root-binding 边界：原生 Gateway 唯一 registry 按 target 与 `workspace_id` 提供根；本地 managed token 或经目标 Gateway 现有 federation policy 授权的 `managed_workspace_admin` 注册输入可送达该 owner，权限合同以 `add-multi-workspace-backend-mounting` 为准；解析结果、跨 Gateway 投影、模型载荷与普通 Workspace DTO 不含根路径，缺失 binding 或身份不符明确失败且不扫描/猜根。
+- [x] 8.6 验收 files/root 的 root-binding 边界：原生 Gateway 唯一 registry 按 target 与 `workspace_id` 提供根；本地 managed token 或经目标 Gateway 现有 federation policy 授权的 `managed_workspace_admin` 注册输入可送达该 owner，权限合同以 `add-multi-workspace-backend-mounting` 为准；解析结果、跨 Gateway 投影、模型载荷与普通 Workspace DTO 不含根路径，缺失 binding 或身份不符明确失败且不扫描/猜根。
+  - 2026-10-19 根绑定原生边界已按多工作区唯一 owner 的 4.5 完整验收：`root-binding-native-001` 2 passed、`root-binding-contracts-001` 212 passed、`root-binding-cold-restore-001` 37 passed，均 exit 0。真实 URI 读取跨 Gateway 重启仍命中原根，普通本地/联邦 Workspace DTO 无根路径；缺失/错误 binding 在写入或启动前响亮失败。准确原件见 `out/tests/temp/openspec_takeover/artifacts/runs/`；其它资源 DTO/业务持久化位置不变量仍由 2.1/2.2/7.2 独立验收。
 
 ## 9. Fork容器寻址与统一资源目标检查（2026-10-13，待实施）
 
