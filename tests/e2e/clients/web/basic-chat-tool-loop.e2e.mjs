@@ -115,6 +115,7 @@ const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefi
 const TRANSCRIPT_NAVIGATION_TIMEOUT_MS = 60_000;
 const FORK_OPERATION_DEADLINE_MS = 60_000;
 const FORK_HISTORY_VALIDATION_TIMEOUT_MS = 60_000;
+const CONTROLLED_RESTART_EVENT_MATCH_WINDOW_MS = 5_000;
 const forkOperationDeadlines = new Map();
 const VIRTUOSO_AT_BOTTOM_THRESHOLD_PX = 4;
 const HISTORY_TIMING_EVENT_LIMIT = 32;
@@ -498,6 +499,11 @@ function classifyIncompleteMessageStreamErrors(consoleErrorFacts, failedRequests
     if (!Number.isSafeInteger(afterSeq)) continue;
     const recoveries = messageStreamResponses.filter((fact) => fact.status === 200 && fact.method === "GET"
       && !consumedRecoveries.has(fact)
+      && fact.failure === undefined && !Number.isFinite(fact.failedAt)
+      && !failedRequests.some((failed) => failed.error === "net::ERR_INCOMPLETE_CHUNKED_ENCODING"
+        && failed.responseRequestId === fact.requestId && failed.url === fact.url
+        && failed.pageId === fact.pageId && failed.documentId === fact.documentId
+        && failed.failedAt >= fact.receivedAt)
       && new URL(fact.url).origin === new URL(response.url).origin
       && fact.pageId === response.pageId && fact.documentId === response.documentId
       && fact.sessionId === target.sessionId && fact.turnId === target.turnId
@@ -543,7 +549,113 @@ function classifyIncompleteMessageStreamErrors(consoleErrorFacts, failedRequests
   return {
     handled,
     consumedConsoleIndexes,
+    consumedFailureIndexes: consumedFailures,
     unhandledFailedRequests: failedRequests.filter((_failure, index) => !consumedFailures.has(index)),
+  };
+}
+
+function controlledRestartEndpoint(url, window) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.origin !== window.origin || parsed.search || parsed.hash) return null;
+  if (parsed.pathname === "/api/v1/workspace/observations/stream") return "observations";
+  if (parsed.pathname === `/api/v1/sessions/${window.activeSessionId}/history`) return "history";
+  if (parsed.pathname === `/api/v1/sessions/${window.activeSessionId}/file-tree-settings`
+      || parsed.pathname === `/api/v1/sessions/${window.activeSessionId}/goal`
+      || parsed.pathname === `/api/v1/sessions/${window.activeSessionId}/bootstrap`
+      || parsed.pathname === `/api/v1/session-catalog/breadcrumb/${window.activeSessionId}`) return "session-read";
+  return null;
+}
+
+function validControlledRestartWindow(window) {
+  return typeof window.operationId === "string" && window.operationId.length > 0
+    && window.operationId === window.captureOperationId
+    && ["copy.source.partial", "copy.source.before_captured_cas"].includes(window.phase)
+    && typeof window.sourceSessionId === "string" && window.sourceSessionId.length > 0
+    && typeof window.sourceThreadId === "string" && window.sourceThreadId.length > 0
+    && typeof window.targetSessionId === "string" && window.targetSessionId.length > 0
+    && typeof window.activeSessionId === "string" && window.activeSessionId.length > 0
+    && typeof window.workspaceId === "string" && window.workspaceId.length > 0
+    && typeof window.origin === "string" && window.origin.length > 0
+    && Number.isInteger(window.pageId) && Array.isArray(window.documentIds)
+    && window.documentIds.length > 0 && window.documentIds.every(Number.isInteger)
+    && Number.isFinite(window.startedAt) && Number.isFinite(window.endedAt)
+    && window.endedAt >= window.startedAt;
+}
+
+function classifyControlledRestartErrors(consoleErrorFacts, consoleErrors, failedRequests, responseFacts, restartWindows) {
+  const handled = [];
+  const consumedConsoleIndexes = new Set();
+  const consumedFailureIndexes = new Set();
+  const consumedResponses = new Set();
+  for (const error of consoleErrorFacts) {
+    const matchingWindows = restartWindows.filter((candidate) => candidate.operationId === error.restartWindowId);
+    if (matchingWindows.length !== 1) continue;
+    const [window] = matchingWindows;
+    if (!validControlledRestartWindow(window)
+        || !Number.isInteger(error.index) || consumedConsoleIndexes.has(error.index)
+        || error.pageId !== window.pageId || !window.documentIds.includes(error.documentId)
+        || !Number.isFinite(error.receivedAt) || error.receivedAt < window.startedAt || error.receivedAt > window.endedAt) continue;
+    const endpoint = controlledRestartEndpoint(error.url, window);
+    if (!endpoint) continue;
+    const isBadGateway = error.text === "Failed to load resource: the server responded with a status of 502 (Bad Gateway)";
+    const isIncompleteObservationStream = endpoint === "observations"
+      && error.text === "Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING";
+    if (isBadGateway) {
+      const responses = responseFacts.filter((response) => !consumedResponses.has(response)
+        && response.restartWindowId === window.operationId
+        && response.method === (endpoint === "history" ? "POST" : "GET") && response.status === 502
+        && response.url === error.url && response.pageId === error.pageId && response.documentId === error.documentId
+        && typeof response.requestId === "string" && response.requestId.length > 0
+        && response.workspaceHeader === window.workspaceId
+        && Number.isFinite(response.requestedAt) && Number.isFinite(response.receivedAt)
+        && response.requestedAt <= response.receivedAt && response.receivedAt >= window.startedAt
+        && response.receivedAt <= window.endedAt
+        && Math.abs(response.receivedAt - error.receivedAt) <= CONTROLLED_RESTART_EVENT_MATCH_WINDOW_MS);
+      if (responses.length !== 1) continue;
+      const [response] = responses;
+      const competingErrors = consoleErrorFacts.filter((candidate) =>
+        candidate.text === error.text && candidate.restartWindowId === window.operationId
+        && candidate.pageId === response.pageId && candidate.documentId === response.documentId
+        && candidate.url === response.url && Number.isInteger(candidate.index)
+        && Number.isFinite(candidate.receivedAt) && candidate.receivedAt >= window.startedAt
+        && candidate.receivedAt <= window.endedAt
+        && Math.abs(candidate.receivedAt - response.receivedAt) <= CONTROLLED_RESTART_EVENT_MATCH_WINDOW_MS);
+      if (competingErrors.length !== 1 || competingErrors[0] !== error) continue;
+      consumedResponses.add(response);
+      consumedConsoleIndexes.add(error.index);
+      handled.push({ consoleIndex: error.index, responseRequestId: response.requestId ?? null,
+        operationId: window.operationId, phase: window.phase, sourceSessionId: window.sourceSessionId,
+        sourceThreadId: window.sourceThreadId, targetSessionId: window.targetSessionId,
+        activeSessionId: window.activeSessionId, endpoint });
+      continue;
+    }
+    if (!isIncompleteObservationStream) continue;
+    const failures = failedRequests.map((failure, index) => ({ failure, index })).filter(({ failure, index }) =>
+      !consumedFailureIndexes.has(index) && failure.restartWindowId === window.operationId
+      && failure.method === "GET" && failure.error === "net::ERR_INCOMPLETE_CHUNKED_ENCODING"
+      && failure.url === error.url && failure.pageId === error.pageId && failure.documentId === error.documentId
+      && Number.isFinite(failure.requestedAt) && Number.isFinite(failure.failedAt)
+      && failure.requestedAt <= failure.failedAt && failure.failedAt >= window.startedAt
+      && failure.failedAt <= window.endedAt && Math.abs(failure.failedAt - error.receivedAt) <= 5_000);
+    if (failures.length !== 1) continue;
+    const [{ failure, index }] = failures;
+    consumedFailureIndexes.add(index);
+    consumedConsoleIndexes.add(error.index);
+    handled.push({ consoleIndex: error.index, failedRequestIndex: index, operationId: window.operationId,
+      phase: window.phase, sourceSessionId: window.sourceSessionId, sourceThreadId: window.sourceThreadId,
+      targetSessionId: window.targetSessionId, activeSessionId: window.activeSessionId, endpoint });
+  }
+  return {
+    handled,
+    consumedConsoleIndexes,
+    consumedFailureIndexes,
+    unhandledConsoleErrors: consoleErrors.filter((_text, index) => !consumedConsoleIndexes.has(index)),
+    unhandledFailedRequests: failedRequests.filter((_failure, index) => !consumedFailureIndexes.has(index)),
   };
 }
 
@@ -813,6 +925,28 @@ function runMessageStreamDiagnosticsSelfTest() {
   }], [owner], [failedRequest], [chunkedConsoleError], "重连 URL 的 turn_stream_id 必须等于 response owner");
   assertChunkedIsUnhandled([interruptedResponse, { ...reconnect, url: reconnect.url.replace("after_seq=20", "after_seq=10"), afterSeq: "10" }],
     [owner], [failedRequest], [chunkedConsoleError], "重连不能倒退到已中断响应的 cursor 之前");
+  const reconnectFailure = { ...failedRequest, requestedAt: reconnect.requestedAt, failedAt: 130,
+    responseRequestId: reconnect.requestId };
+  const failedReconnect = { ...reconnect, failedAt: 130, failure: "net::ERR_INCOMPLETE_CHUNKED_ENCODING" };
+  const secondChunkedConsoleError = { ...chunkedConsoleError, index: 1, receivedAt: 130 };
+  const twoAfterTwentyFailures = classifyChunked([interruptedResponse, failedReconnect], [owner],
+    [failedRequest, reconnectFailure], [chunkedConsoleError, secondChunkedConsoleError]);
+  assert.equal(twoAfterTwentyFailures.handled.length, 0,
+    "after_seq=20 的响应 body 也断流时，两个 200 headers 都不能充当恢复证据");
+  assert.equal(twoAfterTwentyFailures.unhandledFailedRequests.length, 2,
+    "连续两个 after_seq=20 chunked failures 都必须保留为失败");
+  assert.deepEqual([...twoAfterTwentyFailures.consumedConsoleIndexes], [],
+    "连续断流的 console errors 都必须保留");
+  const initialStreamUrl = "http://127.0.0.1:19000/api/v1/sessions/ses_owner/turns/turn_appended/message-stream?after_seq=0";
+  const initialStreamResponse = { ...interruptedResponse, url: initialStreamUrl, threadId: null,
+    turnStreamId: null, afterSeq: "0", requestId: "request-stream-initial" };
+  const initialStreamFailure = { ...failedRequest, url: initialStreamUrl, threadId: null,
+    turnStreamId: null, afterSeq: "0", responseRequestId: "request-stream-initial" };
+  const brokenInitialRecovery = classifyChunked([initialStreamResponse, failedReconnect], [owner],
+    [initialStreamFailure, reconnectFailure], [chunkedConsoleError, secondChunkedConsoleError]);
+  assert.equal(brokenInitialRecovery.handled.length, 0,
+    "after_seq=0 的原请求只能由 body 正常结束的后续 SSE 响应恢复");
+  assert.equal(brokenInitialRecovery.unhandledFailedRequests.length, 2);
 
   const forkRequest = {
     idempotency_key: "fork-delete-race-key",
@@ -892,6 +1026,170 @@ function runMessageStreamDiagnosticsSelfTest() {
     "单个 response/race 证据只能处理一条 fork 409 console error");
   assert.ok(duplicateFork.unhandledConsoleErrors.includes(forkConsoleError.text),
     "重复 fork 409 console error 必须保留一条未处理记录");
+
+  const restartWindows = [
+    { operationId: "fork-op-partial", captureOperationId: "fork-op-partial", phase: "copy.source.partial", sourceSessionId: "ses_source_partial",
+      sourceThreadId: "thr_source_partial", targetSessionId: "ses_target_partial", activeSessionId: "ses_active",
+      workspaceId: "workspace-a", origin: "http://127.0.0.1:19001", pageId: 9, documentIds: [1],
+      startedAt: 100, endedAt: 200 },
+    { operationId: "fork-op-before-cas", captureOperationId: "fork-op-before-cas", phase: "copy.source.before_captured_cas", sourceSessionId: "ses_source_cas",
+      sourceThreadId: "thr_source_cas", targetSessionId: "ses_target_cas", activeSessionId: "ses_active",
+      workspaceId: "workspace-a", origin: "http://127.0.0.1:19001", pageId: 11, documentIds: [1],
+      startedAt: 100, endedAt: 200 },
+    { operationId: "fork-op-marker", captureOperationId: "fork-op-marker", phase: "copy.source.before_captured_cas", sourceSessionId: "ses_source_marker",
+      sourceThreadId: "thr_source_marker", targetSessionId: "ses_target_marker", activeSessionId: "ses_active",
+      workspaceId: "workspace-a", origin: "http://127.0.0.1:19001", pageId: 13, documentIds: [1],
+      startedAt: 100, endedAt: 200 },
+  ];
+  const restartConsoleFacts = [];
+  const restartConsoleErrors = [];
+  const restartResponses = [];
+  const restartFailures = [];
+  const status502Text = "Failed to load resource: the server responded with a status of 502 (Bad Gateway)";
+  const restartTargets = [
+    { windowIndex: 0, paths: ["/api/v1/sessions/ses_active/history",
+      "/api/v1/sessions/ses_active/file-tree-settings", "/api/v1/sessions/ses_active/goal"] },
+    { windowIndex: 1, paths: ["/api/v1/workspace/observations/stream"] },
+    { windowIndex: 2, paths: ["/api/v1/workspace/observations/stream",
+      "/api/v1/sessions/ses_active/bootstrap", "/api/v1/session-catalog/breadcrumb/ses_active"] },
+  ];
+  for (const { windowIndex, paths } of restartTargets) {
+    const window = restartWindows[windowIndex];
+    for (const path of paths) {
+      const errorIndex = restartConsoleFacts.length;
+      const targetUrl = `${window.origin}${path}`;
+      const method = path.endsWith("/history") ? "POST" : "GET";
+      restartConsoleFacts.push({ index: errorIndex, text: status502Text, url: targetUrl,
+        pageId: window.pageId, documentId: 1, receivedAt: 150, restartWindowId: window.operationId });
+      restartConsoleErrors.push(status502Text);
+      restartResponses.push({ restartWindowId: window.operationId, url: targetUrl, method, status: 502,
+        pageId: window.pageId, documentId: 1, requestedAt: 140, receivedAt: 150,
+        requestId: `request-${errorIndex}`, workspaceHeader: window.workspaceId });
+    }
+  }
+  const observationsUrl = "http://127.0.0.1:19001/api/v1/workspace/observations/stream";
+  const observationErrorIndex = restartConsoleFacts.length;
+  restartConsoleFacts.push({ index: observationErrorIndex,
+    text: "Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING", url: observationsUrl,
+    pageId: restartWindows[0].pageId, documentId: 1, receivedAt: 150,
+    restartWindowId: restartWindows[0].operationId });
+  restartConsoleErrors.push(restartConsoleFacts.at(-1).text);
+  restartFailures.push({ url: observationsUrl, method: "GET", error: "net::ERR_INCOMPLETE_CHUNKED_ENCODING",
+    pageId: restartWindows[0].pageId, documentId: 1, requestedAt: 140, failedAt: 150,
+    restartWindowId: restartWindows[0].operationId });
+  const classifiedRestart = classifyControlledRestartErrors(restartConsoleFacts, restartConsoleErrors,
+    restartFailures, restartResponses, restartWindows);
+  assert.equal(classifiedRestart.handled.length, 8,
+    "三次受控 capture 重启只能分类七条精确 502 与一条 observations stream chunked failure");
+  assert.deepEqual(classifiedRestart.unhandledConsoleErrors, []);
+  assert.deepEqual(classifiedRestart.unhandledFailedRequests, []);
+  assert.ok(classifiedRestart.handled.every((fact) => fact.activeSessionId === "ses_active"
+    && fact.sourceSessionId !== fact.activeSessionId && fact.sourceThreadId.startsWith("thr_source_")),
+  "重启分类必须保留 active browser Session 与本次 fork source session/thread 的独立身份");
+
+  const baseRestartError = restartConsoleFacts[0];
+  const baseRestartResponse = restartResponses[0];
+  const assertRestartRemainsUnhandled = (error, response, window, failure = null, message, windows = [window]) => {
+    const classified = classifyControlledRestartErrors([error], [error.text], failure ? [failure] : [],
+      response ? [response] : [], windows);
+    assert.equal(classified.handled.length, 0, message);
+    assert.deepEqual(classified.unhandledConsoleErrors, [error.text], `${message}；console error 必须保留`);
+    assert.deepEqual(classified.unhandledFailedRequests, failure ? [failure] : [], `${message}；request failure 必须保留`);
+  };
+  assertRestartRemainsUnhandled({ ...baseRestartError, receivedAt: 201 }, baseRestartResponse,
+    restartWindows[0], null, "重启窗口外的相同 URL 不能分類");
+  assertRestartRemainsUnhandled({ ...baseRestartError, pageId: 99 }, { ...baseRestartResponse, pageId: 99 },
+    restartWindows[0], null, "窗口内错 page 不能分类");
+  assertRestartRemainsUnhandled({ ...baseRestartError, documentId: 2 }, { ...baseRestartResponse, documentId: 2 },
+    restartWindows[0], null, "窗口内错 document 不能分类");
+  const nonAllowlistedUrl = `${restartWindows[0].origin}/api/v1/sessions/ses_active/messages`;
+  assertRestartRemainsUnhandled({ ...baseRestartError, url: nonAllowlistedUrl },
+    { ...baseRestartResponse, url: nonAllowlistedUrl }, restartWindows[0], null,
+  "受控窗口内非 allowlist endpoint 不能分类");
+  const queriedRestartUrl = `${baseRestartError.url}?after_seq=0`;
+  assertRestartRemainsUnhandled({ ...baseRestartError, url: queriedRestartUrl },
+    { ...baseRestartResponse, url: queriedRestartUrl }, restartWindows[0], null,
+  "受控 endpoint 带 query 的不同 URL 不能分类");
+  assertRestartRemainsUnhandled({ ...baseRestartError, restartWindowId: null },
+    { ...baseRestartResponse, restartWindowId: null }, { ...restartWindows[0], operationId: null }, null,
+  "缺少 fork operation ID 的窗口不能分类");
+  assertRestartRemainsUnhandled({ ...baseRestartError, restartWindowId: "fork-op-other" },
+    baseRestartResponse, restartWindows[0], null,
+  "console 错误的 operation ID 必须精确匹配受控窗口");
+  assertRestartRemainsUnhandled(baseRestartError,
+    { ...baseRestartResponse, restartWindowId: "fork-op-other" }, restartWindows[0], null,
+  "真实 response fact 的 operation ID 必须精确匹配受控窗口");
+  assertRestartRemainsUnhandled(baseRestartError, baseRestartResponse,
+    { ...restartWindows[0], captureOperationId: "fork-op-other" }, null,
+  "受控窗口 operation ID 必须与 capture receipt 一致");
+  assertRestartRemainsUnhandled(baseRestartError, baseRestartResponse, restartWindows[0], null,
+    "相同 operation ID 的重复窗口会造成归属歧义，必须保留错误",
+    [restartWindows[0], { ...restartWindows[0], sourceSessionId: "ses_source_ambiguous" }]);
+  assertRestartRemainsUnhandled(baseRestartError, { ...baseRestartResponse, method: "GET" }, restartWindows[0], null,
+    "history 502 必须绑定实际 POST 请求");
+  assertRestartRemainsUnhandled({ ...baseRestartError, url: baseRestartError.url.replace("ses_active", "ses_source_partial") },
+    { ...baseRestartResponse, url: baseRestartResponse.url.replace("ses_active", "ses_source_partial") }, restartWindows[0], null,
+  "active browser Session endpoint 不得与 fork source Session 混用");
+  assertRestartRemainsUnhandled({ ...baseRestartError, text: "Failed to load resource: net::ERR_CONNECTION_RESET" },
+    baseRestartResponse, restartWindows[0], null, "未列入 allowlist 的错误文本不能分类");
+  assertRestartRemainsUnhandled(baseRestartError, null, restartWindows[0], null,
+    "缺少同一请求的真实 502 response fact 时不能分类");
+  assertRestartRemainsUnhandled(baseRestartError, { ...baseRestartResponse, requestId: null }, restartWindows[0], null,
+    "缺少 request ID 的 502 response fact 不能分类");
+  assertRestartRemainsUnhandled(baseRestartError,
+    { ...baseRestartResponse, requestedAt: 5_190, receivedAt: 5_200 },
+    { ...restartWindows[0], endedAt: 6_000 }, null,
+  "超出有界关联时间的真实 response fact 不能分类");
+  const competingResponse = { ...baseRestartResponse, requestedAt: 149, receivedAt: 155,
+    requestId: "request-competing-response" };
+  const competingResponses = classifyControlledRestartErrors([baseRestartError], [baseRestartError.text], [],
+    [baseRestartResponse, competingResponse], [restartWindows[0]]);
+  assert.equal(competingResponses.handled.length, 0,
+    "同一 console 错误附近有多个 response 时不得猜测匹配对象");
+  assert.deepEqual(competingResponses.unhandledConsoleErrors, [baseRestartError.text],
+    "response 配对歧义时原 console error 必须保留");
+  const competingConsoleError = { ...baseRestartError, index: 1, receivedAt: 151 };
+  const competingConsoleErrors = classifyControlledRestartErrors(
+    [baseRestartError, competingConsoleError], [baseRestartError.text, competingConsoleError.text], [],
+    [baseRestartResponse], [restartWindows[0]]);
+  assert.equal(competingConsoleErrors.handled.length, 0,
+    "同一 response 附近有多个 console error 时不得猜测匹配对象");
+  assert.deepEqual(competingConsoleErrors.unhandledConsoleErrors,
+    [baseRestartError.text, competingConsoleError.text], "console 配对歧义时两个原错误都必须保留");
+  const observationConsoleError = restartConsoleFacts.at(-1);
+  const observationFailure = restartFailures[0];
+  assertRestartRemainsUnhandled(observationConsoleError, null, restartWindows[0],
+    { ...observationFailure, error: "net::ERR_CONNECTION_RESET" },
+  "受控 observations stream 不得豁免其它网络错误类型");
+  assertRestartRemainsUnhandled(observationConsoleError, null, restartWindows[0],
+    { ...observationFailure, restartWindowId: "fork-op-other" },
+  "observations stream failure 的 operation ID 必须精确匹配受控窗口");
+
+  const controlledStreamWindow = { ...restartWindows[0], origin: "http://127.0.0.1:19000",
+    pageId: 1, documentIds: [2], startedAt: 60, endedAt: 140 };
+  const afterTwentyConsoleErrors = [chunkedConsoleError, secondChunkedConsoleError].map((error) => ({
+    ...error, restartWindowId: controlledStreamWindow.operationId,
+  }));
+  const afterTwentyPipeline = classifyConsoleErrors({
+    consoleErrorFacts: afterTwentyConsoleErrors,
+    consoleErrors: afterTwentyConsoleErrors.map((error) => error.text),
+    failedRequests: [failedRequest, reconnectFailure],
+    messageStreamResponses: [interruptedResponse, failedReconnect],
+    jobOwnerResponses: [owner],
+    controlledRestartWindows: [controlledStreamWindow],
+    controlledRestartResponses: [],
+    conflictResponses: [], historyErrorResponses: [], lifecycleErrorResponses: [],
+    lifecycleDeletionProofs: [], turnNavigationMissingTurnProofs: [], historyLiveProofs: [],
+    historyRecoveryResponses: [], section8Facts: { forks: { attachmentDeletionRace: [] } },
+  });
+  assert.equal(afterTwentyPipeline.handledControlledRestartErrors.length, 0,
+    "message-stream endpoint 不属于受控 restart allowlist");
+  assert.equal(afterTwentyPipeline.handledIncompleteMessageStreamErrors.length, 0,
+    "连续 after_seq=20 的两个 HTTP 200 chunked failure 没有成功 recovery，均不得豁免");
+  assert.deepEqual(afterTwentyPipeline.unhandledConsoleErrors, afterTwentyConsoleErrors.map((error) => error.text),
+    "两个 after_seq=20 chunked console errors 必须保留为未处理错误");
+  assert.deepEqual(afterTwentyPipeline.unhandledFailedRequests, [failedRequest, reconnectFailure],
+    "两个 after_seq=20 chunked request failures 必须保留为未处理失败");
 }
 
 function isExpectedBrowserAbort(request) {
@@ -4116,6 +4414,16 @@ function sameForkContainerUriIdentity(leftUri, rightUri, localGatewayId) {
     && left.container === right.container && left.thread === right.thread;
 }
 
+function forkResponseAnchorMatchesFrozenRequest(fork, request) {
+  // context_fork 的 null 代表由来源 owner 按冻结 view 解析安全截止点。
+  if (request?.mode === "context_fork" && request.anchor_item_id == null) {
+    return Object.hasOwn(fork, "anchor_item_id")
+      && (fork.anchor_item_id === null
+        || typeof fork.anchor_item_id === "string" && fork.anchor_item_id.length > 0);
+  }
+  return (fork?.anchor_item_id ?? null) === (request?.anchor_item_id ?? null);
+}
+
 function forkResponseTargetsFrozenRequest(payload, request, localGatewayId) {
   const fork = payload?.data;
   const requestedTarget = forkContainerUriIdentity(request?.target_container_uri);
@@ -4126,7 +4434,7 @@ function forkResponseTargetsFrozenRequest(payload, request, localGatewayId) {
       || !sameForkContainerUriIdentity(request.source_uri, fork.source_uri, localGatewayId)
       || fork.source_view_id !== request.source_view_id
       || fork.source_view_revision !== request.source_view_revision
-      || (fork.anchor_item_id ?? null) !== (request.anchor_item_id ?? null)
+      || !forkResponseAnchorMatchesFrozenRequest(fork, request)
       || typeof fork.session?.session_id !== "string" || typeof fork.session?.workspace_id !== "string"
       || typeof fork.thread_id !== "string") return false;
   if (requestedTarget.workspace !== fork.session.workspace_id
@@ -4223,14 +4531,14 @@ async function runForkDeadlineClassifierSelfTest() {
     source_view_id: "view-source", source_view_revision: 7, anchor_item_id: null, mode: "full_rollout_copy",
     creation_kind: "new_session_main", target_container_uri: "boxteam://workspace/ws-target/resources/session",
     resources: [] };
-  const makePayload = (resources = []) => ({ data: {
+  const makePayload = (resources = [], mode = request.mode, anchorItemId = request.anchor_item_id) => ({ data: {
     session: { session_id: "ses-target", workspace_id: "ws-target",
       uri: "boxteam://workspace/ws-target/resources/session/ses-target", parent_session_id: null },
     thread_id: "thr-target", thread_uri: `boxteam://${localGatewayId}/workspace/ws-target/resources/session/ses-target/threads/thr-target`,
     creation_kind: request.creation_kind,
     source_uri: `boxteam://${localGatewayId}/workspace/ws-source/resources/session/ses-source/threads/thr-source`,
     source_view_id: request.source_view_id,
-    source_view_revision: request.source_view_revision, anchor_item_id: null, mode: request.mode, resources,
+    source_view_revision: request.source_view_revision, anchor_item_id: anchorItemId, mode, resources,
   } });
   const rejectedResource = { owner_reference: { kind: "terminal", resource_id: "term-1",
     workspace_id: "ws-target", expected_revision: 4 },
@@ -4294,6 +4602,79 @@ async function runForkDeadlineClassifierSelfTest() {
     "终态回执结束原预算后，不再向 watchdog 查询 inactive token");
   assert.equal(firstPartial.remainingReads, 0, "终态预算不再读取 active 剩余时间");
   assert.equal(forkOperationDeadlines.has(request.idempotency_key), false);
+
+  const contextForkRequest = { ...request, idempotency_key: "context-fork-safe-anchor",
+    mode: "context_fork", anchor_item_id: null, resources: [] };
+  const contextForkPayload = makePayload([], "context_fork", "item-safe-context-cutoff");
+  const resolvedSafeAnchor = createDeadline(contextForkRequest.idempotency_key);
+  assert.equal(await classifyForkResponse(resolvedSafeAnchor, 200, contextForkPayload,
+    contextForkRequest, localGatewayId), "completed",
+  "context_fork 未指定锚点时允许来源 owner 返回冻结 view 的规范安全截止 item");
+  assert.equal(resolvedSafeAnchor.completed, 1,
+    "规范安全截止 item 与其它冻结来源/目标身份匹配后结束原 deadline");
+
+  const emptyContextAnchor = createDeadline("context-fork-empty-source-anchor");
+  assert.equal(await classifyForkResponse(emptyContextAnchor, 200,
+    makePayload([], "context_fork", null), contextForkRequest, localGatewayId), "completed",
+  "来源 owner 对没有安全截止 item 的冻结 view 可以返回显式 null");
+  assert.equal(emptyContextAnchor.completed, 1);
+
+  const missingResolvedAnchor = createDeadline("context-fork-missing-safe-anchor");
+  const missingResolvedAnchorPayload = structuredClone(contextForkPayload);
+  delete missingResolvedAnchorPayload.data.anchor_item_id;
+  assert.equal(await classifyForkResponse(missingResolvedAnchor, 200, missingResolvedAnchorPayload,
+    contextForkRequest, localGatewayId), "pending",
+  "未返回 context_fork anchor 字段不能冒充来源 owner 已解析安全截止点");
+  assert.equal(missingResolvedAnchor.completed, 0);
+
+  const invalidResolvedAnchor = createDeadline("context-fork-empty-safe-anchor");
+  const invalidResolvedAnchorPayload = structuredClone(contextForkPayload);
+  invalidResolvedAnchorPayload.data.anchor_item_id = "";
+  assert.equal(await classifyForkResponse(invalidResolvedAnchor, 200, invalidResolvedAnchorPayload,
+    contextForkRequest, localGatewayId), "pending",
+  "空字符串不能作为来源 owner 解析出的安全截止 item");
+  assert.equal(invalidResolvedAnchor.completed, 0);
+
+  const explicitContextAnchorRequest = { ...contextForkRequest,
+    idempotency_key: "context-fork-explicit-anchor", anchor_item_id: "item-context-requested-anchor" };
+  const explicitContextAnchorMismatch = createDeadline(explicitContextAnchorRequest.idempotency_key);
+  assert.equal(await classifyForkResponse(explicitContextAnchorMismatch, 200,
+    makePayload([], "context_fork", "item-context-other-anchor"),
+    explicitContextAnchorRequest, localGatewayId), "pending",
+  "context_fork 显式请求 anchor 时，响应中的不同 ID 仍必须保持 pending");
+  assert.equal(explicitContextAnchorMismatch.completed, 0);
+
+  const explicitContextAnchorMatch = createDeadline("context-fork-explicit-anchor-match");
+  assert.equal(await classifyForkResponse(explicitContextAnchorMatch, 200,
+    makePayload([], "context_fork", "item-context-requested-anchor"),
+    explicitContextAnchorRequest, localGatewayId), "completed");
+  assert.equal(explicitContextAnchorMatch.completed, 1);
+
+  const contextSourceViewMismatch = createDeadline("context-fork-source-view-mismatch");
+  const contextSourceViewMismatchPayload = structuredClone(contextForkPayload);
+  contextSourceViewMismatchPayload.data.source_view_id = "view-drifted";
+  assert.equal(await classifyForkResponse(contextSourceViewMismatch, 200, contextSourceViewMismatchPayload,
+    contextForkRequest, localGatewayId), "pending",
+  "解析安全 anchor 不能掩盖来源冻结 view 身份漂移");
+  assert.equal(contextSourceViewMismatch.completed, 0);
+
+  const contextTargetMismatch = createDeadline("context-fork-target-mismatch");
+  const contextTargetMismatchPayload = structuredClone(contextForkPayload);
+  contextTargetMismatchPayload.data.thread_uri =
+    "boxteam://gateway/workspace/ws-other/resources/session/ses-target/threads/thr-target";
+  assert.equal(await classifyForkResponse(contextTargetMismatch, 200, contextTargetMismatchPayload,
+    contextForkRequest, localGatewayId), "pending",
+  "解析安全 anchor 不能掩盖冻结目标 Gateway/workspace 漂移");
+  assert.equal(contextTargetMismatch.completed, 0);
+
+  const explicitAnchorMismatch = createDeadline("explicit-anchor-mismatch");
+  const explicitAnchorRequest = { ...request, idempotency_key: "explicit-anchor-request",
+    mode: "view_prefix_fork", anchor_item_id: "item-requested-anchor", resources: [] };
+  const explicitAnchorPayload = makePayload([], "view_prefix_fork", "item-other-anchor");
+  assert.equal(await classifyForkResponse(explicitAnchorMismatch, 200, explicitAnchorPayload,
+    explicitAnchorRequest, localGatewayId), "pending",
+  "显式请求 anchor 仍必须与服务端返回 anchor 完全一致");
+  assert.equal(explicitAnchorMismatch.completed, 0);
 
   const retry = createDeadline(request.idempotency_key);
   const replayable = makePayload([
@@ -5261,7 +5642,19 @@ async function copyRequestSurface(source) {
   return { ...source, page };
 }
 
-async function runCopyCaptureLifecycle(surface, owners) {
+function beginControlledRestartWindow(surface, { operationId, phase, captured, activeSessionId }) {
+  assert.equal(captured.copy_operation_id, operationId, "重启窗口必须绑定真实 capture operation ID");
+  const node = JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_NODES"))[surface.name];
+  const window = { operationId, phase, sourceSessionId: captured.source_session_id,
+    captureOperationId: captured.copy_operation_id,
+    sourceThreadId: captured.source_thread_id, targetSessionId: captured.target_session_id,
+    activeSessionId, workspaceId: surface.gatewayWorkspaceId, origin: new URL(node.base_url).origin,
+    startedAt: Date.now(), endedAt: null, pageId: null, documentIds: [] };
+  controlledRestartWindows.push(window);
+  return window;
+}
+
+async function runCopyCaptureLifecycle(surface, owners, activeSessionId) {
   const recoveries = [];
   const heldSource = await createProductSession(surface, "copy 持有 source guard 时删除等待 capture");
   owners.push(heldSource);
@@ -5362,8 +5755,15 @@ async function runCopyCaptureLifecycle(surface, owners) {
       assert.equal(frozen.rollout.source_thread_id, source.threadId);
       marker = { sha256: createHash("sha256").update(markerBytes).digest("hex"), snapshot: frozen };
     }
+    const sourceDeletion = marker
+      ? await enqueueNavigationIntent(source, await prepareNavigationIntent(source, {
+        kind: "delete_session", target_node_id: source.sessionId,
+      }))
+      : null;
     let firstHttp;
-    const reopen = await replaceNodePage(surface, owners);
+    const restartWindow = beginControlledRestartWindow(surface, { operationId, phase,
+      captured, activeSessionId });
+    const reopen = await replaceNodePage(surface, owners, restartWindow);
     const killed = await testControl({ action: "process", name: surface.name, operation: "kill" });
     await testControl({ action: "release", ...barrier });
     firstHttp ??= await pending;
@@ -5396,6 +5796,29 @@ async function runCopyCaptureLifecycle(surface, owners) {
       assert.equal(after.state, "materialized");
       assert.equal(after.marker_sha256, marker.sha256);
       assert.equal(after.snapshot_sha256, marker.snapshot.snapshot_sha256);
+      assert.ok(sourceDeletion, "durable marker recovery 必须保留崩溃前已接受的 source DELETE");
+      const sourceDelete = await navigationTerminal(source, sourceDeletion);
+      assert.equal(sourceDelete.state, "committed");
+      assert.deepEqual(await readCatalog(surface, "SELECT node_id FROM nodes WHERE node_id=?", [source.sessionId]), [],
+        "source DELETE 必须在同 key replay 前真实提交");
+      const captureAndDeleteEvents = (await testControl({ action: "events" })).filter((event) =>
+        event.operation_id === operationId && event.phase === "copy.source.captured"
+        || event.operation_id === sourceDeletion.operationId && event.phase === `deletion.fence_closed/${source.sessionId}`);
+      const capturedEvent = captureAndDeleteEvents.filter((event) => event.operation_id === operationId);
+      const deletedFenceEvent = captureAndDeleteEvents.filter((event) => event.operation_id === sourceDeletion.operationId);
+      assert.equal(capturedEvent.length, 1, "startup recovery 必须恰好从原 marker 捕获一次 source");
+      assert.equal(deletedFenceEvent.length, 1, "source DELETE 必须经过真实 lifecycle fence close");
+      assert.ok(capturedEvent[0].at < deletedFenceEvent[0].at,
+        "startup recovery 消费 durable marker 后，source DELETE 才能关闭 source fence");
+      const targetReceipt = await readCatalog(surface,
+        "SELECT session_id,main_thread_id,state FROM session_creation_records WHERE session_creation_idempotency_key=?",
+        [after.creation_key]);
+      assert.deepEqual(targetReceipt, [{ session_id: after.target_session_id,
+        main_thread_id: after.target_thread_id, state: "published" }],
+      "startup recovery 必须发布同一个 target owner receipt");
+      assert.deepEqual(await readCatalog(surface, "SELECT node_id,state FROM nodes WHERE node_id=?", [after.target_session_id]),
+        [{ node_id: after.target_session_id, state: "active" }],
+      "source 删除后 target catalog owner 必须保持 active");
       const fork = (await requestFork(source, request, undefined, surface)).data;
       const totalElapsedMs = performance.now() - requestStartedAt;
       assert.ok(totalElapsedMs < FORK_OPERATION_DEADLINE_MS,
@@ -5421,11 +5844,11 @@ async function runCopyCaptureLifecycle(surface, owners) {
         : { error: firstHttp.error, elapsed_ms: firstHttpElapsedMs }, restarted, after,
       target: target ? { sessionId: target.owner.sessionId, history: target.targetHistory, displayed: target.displayed } : null });
   }
-  const markerCrash = await runCopyMarkerCrashRecovery(surface, owners);
+  const markerCrash = await runCopyMarkerCrashRecovery(surface, owners, activeSessionId);
   return [...recoveries, markerCrash];
 }
 
-async function runCopyMarkerCrashRecovery(surface, owners) {
+async function runCopyMarkerCrashRecovery(surface, owners, activeSessionId) {
   const source = await createProductSession(surface, "marker durable 后立即崩溃");
   owners.push(source);
   await completeOwnerTurn(source, "为 marker 崩溃恢复建立不可变 source 正文。", [
@@ -5451,7 +5874,9 @@ async function runCopyMarkerCrashRecovery(surface, owners) {
   assert.equal(marker.copy_operation_id, operationId);
   assert.equal(marker.source_snapshot_id, captured.snapshot_id);
   assert.equal(marker.preimage_hash, captured.preimage_hash);
-  const reopen = await replaceNodePage(surface, owners);
+  const restartWindow = beginControlledRestartWindow(surface, { operationId, phase: barrier.phase,
+    captured, activeSessionId });
+  const reopen = await replaceNodePage(surface, owners, restartWindow);
   const killed = await testControl({ action: "process", name: surface.name, operation: "kill" });
   await testControl({ action: "release", ...barrier });
   const firstHttp = await pending;
@@ -6356,7 +6781,7 @@ async function runPublicForks(surfaces) {
     assert.deepEqual(await readCatalog(source, "SELECT node_id FROM nodes WHERE node_id=?", [target.owner.sessionId]), []);
     releaseRecoveries.push({ phase, deletion, preparing, pausedClaim, committed, finalClaim, finalLease, releaseKilled, releaseRestarted, terminal });
   }
-  const captureLifecycle = await runCopyCaptureLifecycle(surface, owners);
+  const captureLifecycle = await runCopyCaptureLifecycle(surface, owners, source.sessionId);
   const attachmentLifecycle = await runCopyAttachmentLifecycle(surface, owners);
   const attachmentDeletionRace = await runCopyAttachmentDeletionRace(surface, owners);
   const missingAttachment = await runCopyMissingAttachment(surface, owners);
@@ -6626,16 +7051,35 @@ async function executionProof(owner, jobId) {
   return { proof, carrier, binding: await graphBinding(owner) };
 }
 
-async function replaceNodePage(surface, owners) {
+async function replaceNodePage(surface, owners, restartWindow = null) {
   const peerContext = surface.page.context();
   const replacesPrimaryPage = surface.page === page;
+  if (restartWindow) {
+    assert.equal(surface.page.controlledRestartWindow, null, "页面不能同时属于两个受控重启窗口");
+    restartWindow.pageId = surface.page.diagnosticId;
+    surface.page.controlledRestartWindow = restartWindow;
+  }
   await surface.page.close();
   return async () => {
     surface.page = await browserStartup("recovery_peer_page", () => peerContext.newPage());
     if (replacesPrimaryPage) page = surface.page;
     installPageDiagnostics(surface.page);
-    await ensureGuest(surface.page, JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_NODES"))[surface.name].base_url);
-    for (const owner of owners) owner.page = surface.page;
+    if (restartWindow) {
+      restartWindow.pageId = surface.page.diagnosticId;
+      surface.page.controlledRestartWindow = restartWindow;
+    }
+    try {
+      await ensureGuest(surface.page, JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_NODES"))[surface.name].base_url);
+      for (const owner of owners) owner.page = surface.page;
+    } finally {
+      if (restartWindow) {
+        if (!restartWindow.documentIds.includes(surface.page.diagnosticDocumentId)) {
+          restartWindow.documentIds.push(surface.page.diagnosticDocumentId);
+        }
+        restartWindow.endedAt = Date.now();
+        surface.page.controlledRestartWindow = null;
+      }
+    }
   };
 }
 
@@ -8509,6 +8953,8 @@ const historyTurnNavigationProofs = [];
 const transcriptDomFailures = [];
 const navigationReads = new Set();
 const messageStreamResponses = [];
+const controlledRestartWindows = [];
+const controlledRestartResponses = [];
 let diagnosticPageId = 0;
 
 function classifyConsoleErrors(input = {}) {
@@ -8525,6 +8971,8 @@ function classifyConsoleErrors(input = {}) {
     turnNavigationMissingTurnProofs: missingTurnProofs = turnNavigationMissingTurnProofs,
     historyLiveProofs: liveProofs = historyLiveProofs,
     historyRecoveryResponses: recoveryFacts = historyRecoveryResponses,
+    controlledRestartWindows: restartWindows = controlledRestartWindows,
+    controlledRestartResponses: restartResponses = controlledRestartResponses,
     forkDeletionRaceFacts = input.section8Facts?.forks?.attachmentDeletionRace
       ?? result.section8?.forks?.attachmentDeletionRace ?? [],
   } = input;
@@ -8537,16 +8985,20 @@ function classifyConsoleErrors(input = {}) {
   const incompleteStreamClassification = classifyIncompleteMessageStreamErrors(
     errorFacts, failures, streamResponses, ownerResponses,
   );
+  const controlledRestartClassification = classifyControlledRestartErrors(
+    errorFacts, errorTexts, failures, restartResponses, restartWindows,
+  );
   const handledForkDeletion = classifyForkAttachmentDeletionConflicts(errorFacts, conflictFacts, forkDeletionRaceFacts);
   const handledMessageStream = messageStreamClassification.handledMessageStreamErrors;
   const handledMessageStreamIndexes = new Set(handledMessageStream.map((fact) => fact.consoleIndex));
   const handledIncompleteStreamIndexes = incompleteStreamClassification.consumedConsoleIndexes;
   const handledForkDeletionIndexes = new Set(handledForkDeletion.map((fact) => fact.consoleIndex));
+  const handledControlledRestartIndexes = controlledRestartClassification.consumedConsoleIndexes;
   const consumed = new Set();
   const consumedTurnNavigationRequests = new Set();
   for (const error of errorFacts) {
     if (handledMessageStreamIndexes.has(error.index) || handledIncompleteStreamIndexes.has(error.index)
-        || handledForkDeletionIndexes.has(error.index)) continue;
+        || handledForkDeletionIndexes.has(error.index) || handledControlledRestartIndexes.has(error.index)) continue;
     const status = error.text === "Failed to load resource: the server responded with a status of 409 (Conflict)" ? 409
       : error.text === "Failed to load resource: the server responded with a status of 404 (Not Found)" ? 404 : null;
     if (status === null || typeof error.url !== "string" || !error.url) continue;
@@ -8700,23 +9152,33 @@ function classifyConsoleErrors(input = {}) {
     ...handledMessageStream, ...handledForkDeletion]
     .map((fact) => fact.consoleIndex));
   for (const index of handledIncompleteStreamIndexes) handledConsoleIndexes.add(index);
+  for (const index of handledControlledRestartIndexes) handledConsoleIndexes.add(index);
+  const handledFailureIndexes = new Set([...incompleteStreamClassification.consumedFailureIndexes,
+    ...controlledRestartClassification.consumedFailureIndexes]);
   return { handledHistoryConflicts: handled, handledLifecycleErrors: handledLifecycle,
     handledTurnNavigationErrors: handledTurnNavigation,
     handledMessageStreamErrors: handledMessageStream,
     handledForkAttachmentDeletionConflicts: handledForkDeletion,
     handledIncompleteMessageStreamErrors: incompleteStreamClassification.handled,
+    handledControlledRestartErrors: controlledRestartClassification.handled,
     unhandledConsoleErrors: errorTexts.filter((_error, index) => !handledConsoleIndexes.has(index)),
-    unhandledFailedRequests: incompleteStreamClassification.unhandledFailedRequests };
+    unhandledFailedRequests: failures.filter((_failure, index) => !handledFailureIndexes.has(index)) };
 }
 
 function installPageDiagnostics(page) {
   page.streamResponses = [];
+  page.controlledRestartWindow = null;
   page.diagnosticId = ++diagnosticPageId;
   page.diagnosticDocumentId = 0;
   const requestDocuments = new WeakMap();
   const streamResponseByRequest = new WeakMap();
   page.on("framenavigated", (frame) => {
-    if (frame === page.mainFrame()) page.diagnosticDocumentId += 1;
+    if (frame !== page.mainFrame()) return;
+    page.diagnosticDocumentId += 1;
+    const restartWindow = page.controlledRestartWindow;
+    if (restartWindow && !restartWindow.documentIds.includes(page.diagnosticDocumentId)) {
+      restartWindow.documentIds.push(page.diagnosticDocumentId);
+    }
   });
   let expectedUnauthorizedProbeCount = 0;
   page.on("pageerror", (error) => pageErrors.push(String(error)));
@@ -8730,12 +9192,15 @@ function installPageDiagnostics(page) {
     expectedUnauthorizedProbeCount -= 1;
     return;
   }
+  const restartWindow = page.controlledRestartWindow;
   consoleErrorFacts.push({ index: consoleErrors.length, text, pageId: page.diagnosticId,
-    documentId: page.diagnosticDocumentId, receivedAt: Date.now(), ...message.location() });
+    documentId: page.diagnosticDocumentId, receivedAt: Date.now(),
+    restartWindowId: restartWindow?.operationId ?? null, ...message.location() });
   consoleErrors.push(text);
 });
 page.on("request", (request) => {
-  requestDocuments.set(request, { documentId: page.diagnosticDocumentId, requestedAt: Date.now() });
+  requestDocuments.set(request, { documentId: page.diagnosticDocumentId, requestedAt: Date.now(),
+    restartWindowId: page.controlledRestartWindow?.operationId ?? null });
   if (
     request.method() === "GET"
     && new URL(request.url()).pathname === "/api/gateway/users/current"
@@ -8754,7 +9219,9 @@ page.on("requestfailed", (request) => {
     streamResponse.failure = error;
   }
   failedRequests.push({ url: request.url(), error, pageId: page.diagnosticId,
-    documentId: requestDocument?.documentId ?? null, requestedAt: requestDocument?.requestedAt ?? null, failedAt,
+    method: request.method(), documentId: requestDocument?.documentId ?? null,
+    requestedAt: requestDocument?.requestedAt ?? null, failedAt,
+    restartWindowId: requestDocument?.restartWindowId ?? null,
     ...(streamResponse ? { responseRequestId: streamResponse.requestId, status: streamResponse.status,
       sessionId: streamResponse.sessionId, turnId: streamResponse.turnId, threadId: streamResponse.threadId,
       turnStreamId: streamResponse.turnStreamId, afterSeq: streamResponse.afterSeq,
@@ -8762,6 +9229,18 @@ page.on("requestfailed", (request) => {
 });
 page.on("response", (response) => {
   const url = new URL(response.url());
+  if (response.status() === 502) {
+    const request = response.request();
+    const requestDocument = requestDocuments.get(request);
+    if (requestDocument?.restartWindowId) {
+      const responseHeaders = response.headers();
+      controlledRestartResponses.push({ restartWindowId: requestDocument.restartWindowId,
+        url: response.url(), method: request.method(), status: response.status(), pageId: page.diagnosticId,
+        documentId: requestDocument.documentId, requestedAt: requestDocument.requestedAt,
+        receivedAt: Date.now(), requestId: responseHeaders["x-request-id"] ?? null,
+        workspaceHeader: request.headers()["x-boxteam-workspace-id"] ?? null });
+    }
+  }
   const streamTarget = messageStreamTarget(response.url());
   if (streamTarget) {
     const request = response.request();
@@ -8881,7 +9360,8 @@ const result = {
   secondTurn: null,
   persisted: null,
   streams: { trace: 0, message: 0 },
-  diagnostics: { pageErrors, consoleErrors, consoleErrorFacts, failedRequests },
+  diagnostics: { pageErrors, consoleErrors, consoleErrorFacts, failedRequests,
+    controlledRestartWindows, controlledRestartResponses },
   messageStreamResponses,
   navigationResponses,
   historyConflictResponses,
