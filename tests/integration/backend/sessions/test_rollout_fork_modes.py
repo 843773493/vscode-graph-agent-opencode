@@ -3013,6 +3013,64 @@ async def test_first_fork_click_rejects_stale_actual_history_snapshot(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
+async def test_before_root_fork_keeps_completed_prefix_without_clicked_or_future_input(
+    fork_context: ForkIntegrationContext, fork_provider_prepare,
+    creation_kind: SessionForkCreationKind,
+) -> None:
+    source = await _seed_source(fork_context, fork_provider_prepare)
+    source_thread = _main_thread_id(fork_context, source.session_id)
+    request = (await _fork_request(
+        fork_context, source.session_id, creation_kind=creation_kind, item_id="item-u2",
+    )).model_copy(update={"anchor_mode": "before"})
+    source_items = fork_context.saver._storage.storage.read_items(source.session_id, source_thread)
+    with fork_context.saver._storage.storage.read_connection(source.session_id, source_thread) as connection:
+        selected = [row[0] for row in connection.execute(
+            "SELECT member.item_id FROM context_view_items member "
+            "JOIN context_view_items anchor ON anchor.view_id=member.view_id AND anchor.item_id=? "
+            "WHERE member.view_id=? AND member.visible=1 AND member.context_selected=1 "
+            "AND member.context_ordinal<anchor.context_ordinal ORDER BY member.context_ordinal",
+            (request.anchor_item_id, request.source_view_id),
+        )]
+    assert selected and "item-u1" in selected and "item-u2" not in selected
+    result = await fork_context.forks.fork(request)
+    cold = RolloutCheckpointSaver(fork_context.sessions.path_resolver.sessions_root)
+    target, thread = result.session.session_id, result.thread_id
+    with session_thread_owner_scope(MutationIntentOwner(target, thread), langgraph_thread_id=thread):
+        restored = await cold.aget_tuple(build_checkpoint_config(thread))
+    assert restored is not None
+    assert [message.id for message in restored.checkpoint["channel_values"]["messages"]] == ["u1", "a1"]
+    with cold._storage.storage.read_connection(target, thread) as connection:
+        active = cold._storage.storage._active_context_view_id(connection, "")
+        visible = [row[0] for row in connection.execute(
+            "SELECT item_id FROM context_view_items WHERE view_id=? AND visible=1 "
+            "AND context_selected=1 ORDER BY context_ordinal", (active,),
+        )]
+    assert visible == selected
+    copied = cold._storage.storage.read_items(target, thread)
+    source_by_id = {item.item_id: item.to_dict() for item in source_items}
+    assert all(item.to_dict() == source_by_id[item.item_id] for item in copied)
+    assert "item-u2" not in {item.item_id for item in copied}
+    page = cold.load_history(target, thread, TurnHistoryLoadRequest(direction="tail"))
+    assert [turn.turn_id for turn in page.items] == ["turn-1"]
+    assert page.items[0].final_response == "回答一"
+    accepted = cold.accept_turn(
+        target, thread_id=thread, accepted_ingress_id="before-target-user",
+        acceptance_idempotency_key="before-target-accept", job_id="before-target-job",
+        admission_idempotency_key="before-target-admission", payload="边界之后的新问题",
+    )
+    prepared = fork_provider_prepare(
+        replace(fork_context, saver=cold), target, str(accepted["initial_execution_id"]),
+        ContextSourceManager(owner=ContextSourceOwnerKey(target, thread), control_state_port=cold),
+        "before-target-first", attempt=1, thread_id=thread,
+    )
+    assert [message.content for message in prepared["messages"] if isinstance(message, (HumanMessage, AIMessage))] == [
+        "问题一", "回答一", "边界之后的新问题",
+    ]
+    assert all(entry.ref.ref_id != "item-u2" for entry in prepared["snapshot"].selection)
+
+
+@pytest.mark.asyncio
 async def test_stale_fork_anchor_is_rejected_before_target_creation(
     fork_provider_prepare,
     fork_context: ForkIntegrationContext,
