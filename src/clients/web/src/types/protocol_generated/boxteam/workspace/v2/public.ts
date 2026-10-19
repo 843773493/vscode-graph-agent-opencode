@@ -767,7 +767,6 @@ export interface RuntimeInfoDTO {
   accepting_jobs: boolean;
   blockers: RuntimeDrainBlockerDTO[];
   loaded_agents: string[];
-  storage: RuntimeStorageDTO | undefined;
 }
 
 export interface RuntimeShutdownDTO {
@@ -789,14 +788,6 @@ export interface RuntimeStatusDTO {
   accepting_jobs: boolean;
   blockers: RuntimeDrainBlockerDTO[];
   loaded_agents: string[];
-  storage: RuntimeStorageDTO | undefined;
-}
-
-export interface RuntimeStorageDTO {
-  root: string;
-  artifact_dir: string;
-  log_dir: string;
-  cache_dir: string;
 }
 
 export interface SessionChangesSummaryDTO {
@@ -7444,7 +7435,6 @@ function createBaseRuntimeInfoDTO(): RuntimeInfoDTO {
     accepting_jobs: false,
     blockers: [],
     loaded_agents: [],
-    storage: undefined,
   };
 }
 
@@ -7463,7 +7453,6 @@ export const RuntimeInfoDTO: MessageFns<RuntimeInfoDTO> = {
       loaded_agents: globalThis.Array.isArray(object?.loaded_agents)
         ? object.loaded_agents.map((e: any) => globalThis.String(e))
         : [],
-      storage: isSet(object.storage) ? RuntimeStorageDTO.fromJSON(object.storage) : undefined,
     };
   },
 
@@ -7493,9 +7482,6 @@ export const RuntimeInfoDTO: MessageFns<RuntimeInfoDTO> = {
     if (message.loaded_agents?.length) {
       obj.loaded_agents = message.loaded_agents;
     }
-    if (message.storage !== undefined) {
-      obj.storage = RuntimeStorageDTO.toJSON(message.storage);
-    }
     return obj;
   },
 
@@ -7512,9 +7498,6 @@ export const RuntimeInfoDTO: MessageFns<RuntimeInfoDTO> = {
     message.accepting_jobs = object.accepting_jobs ?? false;
     message.blockers = object.blockers?.map((e) => RuntimeDrainBlockerDTO.fromPartial(e)) || [];
     message.loaded_agents = object.loaded_agents?.map((e) => e) || [];
-    message.storage = (object.storage !== undefined && object.storage !== null)
-      ? RuntimeStorageDTO.fromPartial(object.storage)
-      : undefined;
     return message;
   },
 };
@@ -7597,7 +7580,6 @@ function createBaseRuntimeStatusDTO(): RuntimeStatusDTO {
     accepting_jobs: false,
     blockers: [],
     loaded_agents: [],
-    storage: undefined,
   };
 }
 
@@ -7616,7 +7598,6 @@ export const RuntimeStatusDTO: MessageFns<RuntimeStatusDTO> = {
       loaded_agents: globalThis.Array.isArray(object?.loaded_agents)
         ? object.loaded_agents.map((e: any) => globalThis.String(e))
         : [],
-      storage: isSet(object.storage) ? RuntimeStorageDTO.fromJSON(object.storage) : undefined,
     };
   },
 
@@ -7646,9 +7627,6 @@ export const RuntimeStatusDTO: MessageFns<RuntimeStatusDTO> = {
     if (message.loaded_agents?.length) {
       obj.loaded_agents = message.loaded_agents;
     }
-    if (message.storage !== undefined) {
-      obj.storage = RuntimeStorageDTO.toJSON(message.storage);
-    }
     return obj;
   },
 
@@ -7665,53 +7643,6 @@ export const RuntimeStatusDTO: MessageFns<RuntimeStatusDTO> = {
     message.accepting_jobs = object.accepting_jobs ?? false;
     message.blockers = object.blockers?.map((e) => RuntimeDrainBlockerDTO.fromPartial(e)) || [];
     message.loaded_agents = object.loaded_agents?.map((e) => e) || [];
-    message.storage = (object.storage !== undefined && object.storage !== null)
-      ? RuntimeStorageDTO.fromPartial(object.storage)
-      : undefined;
-    return message;
-  },
-};
-
-function createBaseRuntimeStorageDTO(): RuntimeStorageDTO {
-  return { root: "", artifact_dir: "", log_dir: "", cache_dir: "" };
-}
-
-export const RuntimeStorageDTO: MessageFns<RuntimeStorageDTO> = {
-  fromJSON(object: any): RuntimeStorageDTO {
-    return {
-      root: isSet(object.root) ? globalThis.String(object.root) : "",
-      artifact_dir: isSet(object.artifact_dir) ? globalThis.String(object.artifact_dir) : "",
-      log_dir: isSet(object.log_dir) ? globalThis.String(object.log_dir) : "",
-      cache_dir: isSet(object.cache_dir) ? globalThis.String(object.cache_dir) : "",
-    };
-  },
-
-  toJSON(message: RuntimeStorageDTO): unknown {
-    const obj: any = {};
-    if (message.root !== "") {
-      obj.root = message.root;
-    }
-    if (message.artifact_dir !== "") {
-      obj.artifact_dir = message.artifact_dir;
-    }
-    if (message.log_dir !== "") {
-      obj.log_dir = message.log_dir;
-    }
-    if (message.cache_dir !== "") {
-      obj.cache_dir = message.cache_dir;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<RuntimeStorageDTO>, I>>(base?: I): RuntimeStorageDTO {
-    return RuntimeStorageDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<RuntimeStorageDTO>, I>>(object: I): RuntimeStorageDTO {
-    const message = createBaseRuntimeStorageDTO();
-    message.root = object.root ?? "";
-    message.artifact_dir = object.artifact_dir ?? "";
-    message.log_dir = object.log_dir ?? "";
-    message.cache_dir = object.cache_dir ?? "";
     return message;
   },
 };

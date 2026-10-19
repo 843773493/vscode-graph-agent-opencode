@@ -25,7 +25,6 @@ from app.schemas.internal_v2.runtime import (
     RuntimeDrainResultDTO,
     RuntimeInfoDTO,
     RuntimeLifecycleState,
-    RuntimeStorageDTO,
 )
 from app.services.business.job.service import JobService, JobState
 from app.services.infrastructure.message_stream_store import MessageStreamStore
@@ -86,12 +85,6 @@ class RuntimeService:
             accepting_jobs=self._job_service.accepting_jobs,
             blockers=blockers,
             loaded_agents=["planner", "executor", "reviewer", "summarizer"],
-            storage=RuntimeStorageDTO(
-                root=str(self._workspace_root),
-                artifact_dir=str(self._workspace_root / ".boxteam" / "artifacts"),
-                log_dir=str(self._workspace_root / ".boxteam" / "logs"),
-                cache_dir=str(self._workspace_root / ".boxteam" / "cache"),
-            ),
         )
 
     async def begin_drain(self) -> RuntimeDrainResultDTO:

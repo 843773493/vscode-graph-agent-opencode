@@ -765,7 +765,8 @@ message RuntimeInfoDTO {
   bool accepting_jobs = 6;
   repeated RuntimeDrainBlockerDTO blockers = 7;
   repeated string loaded_agents = 8;
-  RuntimeStorageDTO storage = 9;
+  reserved 9;
+  reserved "storage";
 }
 
 message RuntimeShutdownDTO {
@@ -787,14 +788,8 @@ message RuntimeStatusDTO {
   bool accepting_jobs = 6;
   repeated RuntimeDrainBlockerDTO blockers = 7;
   repeated string loaded_agents = 8;
-  RuntimeStorageDTO storage = 9;
-}
-
-message RuntimeStorageDTO {
-  string root = 1;
-  string artifact_dir = 2;
-  string log_dir = 3;
-  string cache_dir = 4;
+  reserved 9;
+  reserved "storage";
 }
 
 message SessionChangesSummaryDTO {

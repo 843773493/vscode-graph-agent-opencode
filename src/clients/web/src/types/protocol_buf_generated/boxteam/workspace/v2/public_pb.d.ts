@@ -3423,11 +3423,6 @@ export declare type RuntimeInfoDTO = Message<"boxteam.workspace.v2.RuntimeInfoDT
    * @generated from field: repeated string loaded_agents = 8;
    */
   loadedAgents: string[];
-
-  /**
-   * @generated from field: boxteam.workspace.v2.RuntimeStorageDTO storage = 9;
-   */
-  storage?: RuntimeStorageDTO | undefined;
 };
 
 /**
@@ -3521,11 +3516,6 @@ export declare type RuntimeStatusDTO = Message<"boxteam.workspace.v2.RuntimeStat
    * @generated from field: repeated string loaded_agents = 8;
    */
   loadedAgents: string[];
-
-  /**
-   * @generated from field: boxteam.workspace.v2.RuntimeStorageDTO storage = 9;
-   */
-  storage?: RuntimeStorageDTO | undefined;
 };
 
 /**
@@ -3533,37 +3523,6 @@ export declare type RuntimeStatusDTO = Message<"boxteam.workspace.v2.RuntimeStat
  * Use `create(RuntimeStatusDTOSchema)` to create a new message.
  */
 export declare const RuntimeStatusDTOSchema: GenMessage<RuntimeStatusDTO>;
-
-/**
- * @generated from message boxteam.workspace.v2.RuntimeStorageDTO
- */
-export declare type RuntimeStorageDTO = Message<"boxteam.workspace.v2.RuntimeStorageDTO"> & {
-  /**
-   * @generated from field: string root = 1;
-   */
-  root: string;
-
-  /**
-   * @generated from field: string artifact_dir = 2;
-   */
-  artifactDir: string;
-
-  /**
-   * @generated from field: string log_dir = 3;
-   */
-  logDir: string;
-
-  /**
-   * @generated from field: string cache_dir = 4;
-   */
-  cacheDir: string;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.RuntimeStorageDTO.
- * Use `create(RuntimeStorageDTOSchema)` to create a new message.
- */
-export declare const RuntimeStorageDTOSchema: GenMessage<RuntimeStorageDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.SessionChangesSummaryDTO

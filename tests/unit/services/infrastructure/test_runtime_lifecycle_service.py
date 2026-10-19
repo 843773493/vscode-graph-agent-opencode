@@ -113,7 +113,7 @@ def build_runtime(pending_checkpoint_inspector, before_provider_inspector,
 
 
 @pytest.mark.asyncio
-async def test_status_reports_the_injected_workspace_uuid_and_root(pending_checkpoint_inspector, before_provider_inspector,
+async def test_status_reports_the_injected_workspace_uuid_without_storage_location(pending_checkpoint_inspector, before_provider_inspector,
     tmp_path: Path,
     session_lifecycle_guard,
 ) -> None:
@@ -126,8 +126,9 @@ async def test_status_reports_the_injected_workspace_uuid_and_root(pending_check
     status = await runtime.status()
 
     assert status.workspace_id == "00000000-0000-4000-8000-000000000001"
-    assert status.storage.root == str(tmp_path)
-    assert status.storage.log_dir == str(tmp_path / ".boxteam" / "logs")
+    assert "storage" not in status.model_dump()
+    assert str(tmp_path) not in status.model_dump_json()
+    assert runtime.get_log_dir() == tmp_path / ".boxteam" / "logs"
 
 
 @pytest.mark.asyncio
