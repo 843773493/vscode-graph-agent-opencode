@@ -1,52 +1,93 @@
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlencode
 
-from app.schemas.internal_v2.common import LogSnapshotResultDTO
+from app.core.identifier import create_prefixed_id
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
+from app.core.session_lifecycle_gate import SessionLifecycleGate
+from app.schemas.internal_v2.runtime import UiSnapshotResultDTO
 
 
 @dataclass(slots=True)
 class LogSnapshotRecord:
-    workspace_root: str
     session_id: str | None
     html: str
     page_title: str | None = None
     status: str | None = None
     source: str = "webview"
-    category: str = "webview"
 
 
 class LogService:
-    def _build_file_stem(self, session_id: str | None) -> str:
-        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
-        safe_session_id = session_id.strip() if session_id else "no-session"
-        safe_session_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in safe_session_id)
-        return f"{timestamp}_{safe_session_id}"
+    def __init__(self, *, workspace_root: Path, path_resolver: SessionCatalogPathResolver) -> None:
+        self._workspace_root = workspace_root
+        self._path_resolver = path_resolver
+        self._lifecycle_gate = SessionLifecycleGate(path_resolver.sessions_root)
 
-    def write_html_snapshot(self, record: LogSnapshotRecord) -> LogSnapshotResultDTO:
-        workspace_root = Path(record.workspace_root).expanduser().resolve()
-        base_dir = workspace_root / ".boxteam" / "logs" / record.category
-        base_dir.mkdir(parents=True, exist_ok=True)
-        file_stem = self._build_file_stem(record.session_id)
+    @asynccontextmanager
+    async def _snapshot_directory(self, session_id: str | None) -> AsyncIterator[Path]:
+        if session_id is None:
+            yield self._workspace_root / ".boxteam" / "logs" / "webview"
+        else:
+            async with self._lifecycle_gate.shared(session_id):
+                node = self._path_resolver.resolve_session_node_for_runtime(session_id)
+                yield node / "logs" / "webview"
 
-        html_path = base_dir / f"{file_stem}.html"
-        meta_path = base_dir / f"{file_stem}.json"
-
-        meta = {
-            "workspace_root": record.workspace_root,
+    async def write_html_snapshot(self, record: LogSnapshotRecord) -> UiSnapshotResultDTO:
+        snapshot_id = create_prefixed_id("snapshot")
+        metadata = {
+            "snapshot_id": snapshot_id,
+            "workspace_id": self._path_resolver.workspace_id,
             "session_id": record.session_id,
             "page_title": record.page_title,
             "status": record.status,
             "source": record.source,
-            "category": record.category,
-            "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            "html_file": html_path.name,
+            "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         }
+        async with self._snapshot_directory(record.session_id) as directory:
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / f"{snapshot_id}.html").write_text(record.html, encoding="utf-8")
+            # metadata 是快照发布标记；读取端必须先确认它存在。
+            (directory / f"{snapshot_id}.json").write_text(
+                json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8",
+            )
+        base = (
+            f"/api/v1/workspaces/{self._path_resolver.workspace_id}"
+            f"/runtime/log-snapshot/{snapshot_id}"
+        )
+        query = f"?{urlencode({'session_id': record.session_id})}" if record.session_id else ""
+        return UiSnapshotResultDTO(
+            snapshot_id=snapshot_id,
+            html_url=f"{base}/html{query}",
+            metadata_url=f"{base}/metadata{query}",
+        )
 
-        html_path.write_text(record.html, encoding="utf-8")
-        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-
-        return LogSnapshotResultDTO(html_path=str(html_path), meta_path=str(meta_path))
+    async def read_html_snapshot(
+        self, snapshot_id: str, *, session_id: str | None, metadata: bool,
+    ) -> str:
+        if re.fullmatch(r"snapshot_[0-9a-f]{32}", snapshot_id) is None:
+            raise ValueError(f"非法 snapshot_id: {snapshot_id!r}")
+        async with self._snapshot_directory(session_id) as directory:
+            meta_path = directory / f"{snapshot_id}.json"
+            if not meta_path.exists():
+                raise KeyError(f"快照不存在: {snapshot_id}")
+            raw_metadata = meta_path.read_text(encoding="utf-8")
+            try:
+                value = json.loads(raw_metadata)
+            except json.JSONDecodeError as error:
+                raise RuntimeError(f"快照 metadata 损坏: {snapshot_id}") from error
+            if not isinstance(value, dict) or (
+                value.get("snapshot_id") != snapshot_id
+                or value.get("workspace_id") != self._path_resolver.workspace_id
+                or value.get("session_id") != session_id
+            ):
+                raise RuntimeError(f"快照 metadata 与请求身份不一致: {snapshot_id}")
+            if metadata:
+                return raw_metadata
+            return (directory / f"{snapshot_id}.html").read_text(encoding="utf-8")

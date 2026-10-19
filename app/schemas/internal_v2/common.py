@@ -75,11 +75,6 @@ class CursorPage(BaseModel, Generic[T]):
     has_more: bool = False
 
 
-class LogSnapshotResultDTO(BaseModel):
-    html_path: str
-    meta_path: str
-
-
 class EntityRef(BaseModel):
     id: str
     name: Optional[str] = None

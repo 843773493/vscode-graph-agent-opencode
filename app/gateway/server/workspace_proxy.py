@@ -371,6 +371,18 @@ async def _proxy_workspace_request(
     request_body: bytes | None = None,
 ) -> Response:
     registry = _registry(request)
+    if path.startswith("workspaces/"):
+        backend_workspace_id = path.split("/", 2)[1]
+        targets = [
+            target for target in registry.targets()
+            if target.backend_workspace_id == backend_workspace_id
+        ]
+        if not targets:
+            raise HTTPException(status_code=404, detail="workspace 未注册或不存在")
+        if len(targets) != 1:
+            raise HTTPException(status_code=409, detail="多个 Gateway target 指向同一 workspace")
+        # canonical 路径固定归属，普通选择头或当前激活态不能改选上游。
+        target_workspace_id = targets[0].workspace_id
     workspace_id = target_workspace_id or request.headers.get("X-BoxTeam-Workspace-Id")
     try:
         target = registry.resolve(workspace_id)
@@ -744,19 +756,9 @@ async def proxy_resource_navigation(
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
     user_access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
 ) -> Response:
-    # canonical 路径已经固定 Workspace 身份，不能再由当前激活 target 改选上游。
-    targets = [
-        target for target in _registry(request).targets()
-        if target.connection_kind == "local" and target.backend_workspace_id == backend_workspace_id
-    ]
-    if not targets:
-        raise HTTPException(status_code=404, detail="导航 workspace 未注册或不存在")
-    if len(targets) != 1:
-        raise HTTPException(status_code=409, detail="多个本地 Gateway target 指向同一导航 workspace")
     return await _proxy_workspace_request(
         f"workspaces/{backend_workspace_id}/resources/navigation", request,
         auth=auth, user_access=user_access, include_credentials=True,
-        target_workspace_id=targets[0].workspace_id,
     )
 
 

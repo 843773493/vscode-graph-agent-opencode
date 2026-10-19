@@ -281,11 +281,6 @@ export interface LLMRequestLogRecordDTO {
   upstream?: { [key: string]: any } | undefined;
 }
 
-export interface LogSnapshotResultDTO {
-  html_path: string;
-  meta_path: string;
-}
-
 export interface McpServerDTO {
   server_id: string;
   transport: string;
@@ -2248,8 +2243,11 @@ export interface TurnUserMessageSummaryDTO {
 }
 
 export interface UiSnapshotResultDTO {
-  html_path: string;
   status?: string | undefined;
+  snapshot_id: string;
+  /** 显式 workspace API 引用，不包含物理文件位置。 */
+  html_url: string;
+  metadata_url: string;
 }
 
 export interface WorkspaceContextDTO {
@@ -4166,40 +4164,6 @@ export const LLMRequestLogRecordDTO: MessageFns<LLMRequestLogRecordDTO> = {
     message.request = object.request ?? undefined;
     message.response = object.response ?? undefined;
     message.upstream = object.upstream ?? undefined;
-    return message;
-  },
-};
-
-function createBaseLogSnapshotResultDTO(): LogSnapshotResultDTO {
-  return { html_path: "", meta_path: "" };
-}
-
-export const LogSnapshotResultDTO: MessageFns<LogSnapshotResultDTO> = {
-  fromJSON(object: any): LogSnapshotResultDTO {
-    return {
-      html_path: isSet(object.html_path) ? globalThis.String(object.html_path) : "",
-      meta_path: isSet(object.meta_path) ? globalThis.String(object.meta_path) : "",
-    };
-  },
-
-  toJSON(message: LogSnapshotResultDTO): unknown {
-    const obj: any = {};
-    if (message.html_path !== "") {
-      obj.html_path = message.html_path;
-    }
-    if (message.meta_path !== "") {
-      obj.meta_path = message.meta_path;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<LogSnapshotResultDTO>, I>>(base?: I): LogSnapshotResultDTO {
-    return LogSnapshotResultDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<LogSnapshotResultDTO>, I>>(object: I): LogSnapshotResultDTO {
-    const message = createBaseLogSnapshotResultDTO();
-    message.html_path = object.html_path ?? "";
-    message.meta_path = object.meta_path ?? "";
     return message;
   },
 };
@@ -16441,24 +16405,32 @@ export const TurnUserMessageSummaryDTO: MessageFns<TurnUserMessageSummaryDTO> = 
 };
 
 function createBaseUiSnapshotResultDTO(): UiSnapshotResultDTO {
-  return { html_path: "", status: undefined };
+  return { status: undefined, snapshot_id: "", html_url: "", metadata_url: "" };
 }
 
 export const UiSnapshotResultDTO: MessageFns<UiSnapshotResultDTO> = {
   fromJSON(object: any): UiSnapshotResultDTO {
     return {
-      html_path: isSet(object.html_path) ? globalThis.String(object.html_path) : "",
       status: isSet(object.status) ? globalThis.String(object.status) : undefined,
+      snapshot_id: isSet(object.snapshot_id) ? globalThis.String(object.snapshot_id) : "",
+      html_url: isSet(object.html_url) ? globalThis.String(object.html_url) : "",
+      metadata_url: isSet(object.metadata_url) ? globalThis.String(object.metadata_url) : "",
     };
   },
 
   toJSON(message: UiSnapshotResultDTO): unknown {
     const obj: any = {};
-    if (message.html_path !== "") {
-      obj.html_path = message.html_path;
-    }
     if (message.status !== undefined) {
       obj.status = message.status;
+    }
+    if (message.snapshot_id !== "") {
+      obj.snapshot_id = message.snapshot_id;
+    }
+    if (message.html_url !== "") {
+      obj.html_url = message.html_url;
+    }
+    if (message.metadata_url !== "") {
+      obj.metadata_url = message.metadata_url;
     }
     return obj;
   },
@@ -16468,8 +16440,10 @@ export const UiSnapshotResultDTO: MessageFns<UiSnapshotResultDTO> = {
   },
   fromPartial<I extends Exact<DeepPartial<UiSnapshotResultDTO>, I>>(object: I): UiSnapshotResultDTO {
     const message = createBaseUiSnapshotResultDTO();
-    message.html_path = object.html_path ?? "";
     message.status = object.status ?? undefined;
+    message.snapshot_id = object.snapshot_id ?? "";
+    message.html_url = object.html_url ?? "";
+    message.metadata_url = object.metadata_url ?? "";
     return message;
   },
 };

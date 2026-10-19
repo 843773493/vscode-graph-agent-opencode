@@ -72,8 +72,9 @@ async def test_navigation_path_selects_registered_target_without_selection_heade
     assert registry.route_reference_counts("original-target") == (0, 0)
 
 
-@pytest.mark.parametrize("mapping", ["unknown", "duplicate", "remote_only"])
-async def test_navigation_missing_or_ambiguous_local_target_never_uses_active(navigation_proxy, mapping: str) -> None:
+@pytest.mark.parametrize("mapping", ["unknown", "duplicate", "local_remote_duplicate"])
+@pytest.mark.parametrize("suffix", ["resources/navigation", "runtime/log-snapshot/snapshot_id/html"])
+async def test_navigation_missing_or_ambiguous_target_never_uses_active(navigation_proxy, mapping: str, suffix: str) -> None:
     client, registry, forwarded = navigation_proxy
     requested_id = "00000000-0000-4000-8000-000000000099"
     if mapping == "duplicate":
@@ -83,7 +84,8 @@ async def test_navigation_missing_or_ambiguous_local_target_never_uses_active(na
             name="duplicate", root_path="/unused-duplicate", backend_url="http://duplicate.test",
             connection_kind="local",
         ), activate=False)
-    elif mapping == "remote_only":
+    elif mapping == "local_remote_duplicate":
+        requested_id = WORKSPACE_ID
         registry.upsert(WorkspaceTarget(
             workspace_id="remote-target", backend_workspace_id=requested_id,
             name="remote", root_path=None, backend_url="http://remote.test",
@@ -91,11 +93,26 @@ async def test_navigation_missing_or_ambiguous_local_target_never_uses_active(na
             remote_workspace_id="remote-route",
         ), activate=False)
     response = await client.post(
-        f"/api/v1/workspaces/{requested_id}/resources/navigation",
+        f"/api/v1/workspaces/{requested_id}/{suffix}",
         json={"uri": f"boxteam://workspace/{requested_id}/resources/files/root", "operation": "list"},
     )
-    assert response.status_code == (409 if mapping == "duplicate" else 404), response.text
+    assert response.status_code == (404 if mapping == "unknown" else 409), response.text
     assert forwarded == []
+    assert registry.active_workspace_id == "active-target"
+
+
+@pytest.mark.parametrize("suffix", ["runtime/status", "runtime/log-snapshot/snapshot_id/html", "runtime/log-snapshot/snapshot_id/metadata"])
+async def test_canonical_snapshot_and_runtime_path_keep_workspace_after_active_switch(navigation_proxy, suffix: str) -> None:
+    client, registry, forwarded = navigation_proxy
+    assert registry.active_workspace_id == "active-target"
+    response = await client.get(
+        f"/api/v1/workspaces/{WORKSPACE_ID}/{suffix}",
+        headers={"X-BoxTeam-Workspace-Id": "active-target"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["selected"] == "original.test"
+    assert forwarded[0].headers["X-BoxTeam-Workspace-Id"] == WORKSPACE_ID
+    assert forwarded[0].url.path == f"/api/v1/workspaces/{WORKSPACE_ID}/{suffix}"
     assert registry.active_workspace_id == "active-target"
 
 

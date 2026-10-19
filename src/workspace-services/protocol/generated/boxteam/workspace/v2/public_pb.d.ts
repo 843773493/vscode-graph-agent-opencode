@@ -1194,27 +1194,6 @@ export declare type LLMRequestLogRecordDTO = Message<"boxteam.workspace.v2.LLMRe
 export declare const LLMRequestLogRecordDTOSchema: GenMessage<LLMRequestLogRecordDTO>;
 
 /**
- * @generated from message boxteam.workspace.v2.LogSnapshotResultDTO
- */
-export declare type LogSnapshotResultDTO = Message<"boxteam.workspace.v2.LogSnapshotResultDTO"> & {
-  /**
-   * @generated from field: string html_path = 1;
-   */
-  htmlPath: string;
-
-  /**
-   * @generated from field: string meta_path = 2;
-   */
-  metaPath: string;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.LogSnapshotResultDTO.
- * Use `create(LogSnapshotResultDTOSchema)` to create a new message.
- */
-export declare const LogSnapshotResultDTOSchema: GenMessage<LogSnapshotResultDTO>;
-
-/**
  * @generated from message boxteam.workspace.v2.McpServerDTO
  */
 export declare type McpServerDTO = Message<"boxteam.workspace.v2.McpServerDTO"> & {
@@ -9649,14 +9628,26 @@ export declare const TurnUserMessageSummaryDTOSchema: GenMessage<TurnUserMessage
  */
 export declare type UiSnapshotResultDTO = Message<"boxteam.workspace.v2.UiSnapshotResultDTO"> & {
   /**
-   * @generated from field: string html_path = 1;
-   */
-  htmlPath: string;
-
-  /**
    * @generated from field: optional string status = 2;
    */
   status?: string | undefined;
+
+  /**
+   * @generated from field: string snapshot_id = 3;
+   */
+  snapshotId: string;
+
+  /**
+   * 显式 workspace API 引用，不包含物理文件位置。
+   *
+   * @generated from field: string html_url = 4;
+   */
+  htmlUrl: string;
+
+  /**
+   * @generated from field: string metadata_url = 5;
+   */
+  metadataUrl: string;
 };
 
 /**

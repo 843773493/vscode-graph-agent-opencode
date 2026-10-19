@@ -3,7 +3,7 @@
 覆盖用户明确要求的「前端访问在各种边界情况下都没问题」：
 
 - 查询/路径参数里的非法 agent_id、非法上下文 resource 必须落 4xx；
-- 请求体里的不可写 workspace_root 必须落 4xx；
+- 快照 owner 的磁盘错误必须显式失败；
 - 同一工具重复启动测试的 RuntimeError 必须落 409 而不是 500。
 """
 
@@ -57,8 +57,8 @@ class _RejectingContextService:
 
 
 class _UnwritableLogService:
-    def write_html_snapshot(self, record):
-        raise PermissionError(f"[Errno 13] Permission denied: {record.workspace_root!r}")
+    async def write_html_snapshot(self, record):
+        raise PermissionError("快照 owner 目录不可写")
 
 
 class _RejectingAgentService:
@@ -149,20 +149,16 @@ async def test_read_context_maps_bad_resource_to_400() -> None:
 
 
 @pytest.mark.asyncio
-async def test_save_log_snapshot_maps_unwritable_root_to_400() -> None:
-    with pytest.raises(HTTPException) as captured:
+async def test_save_log_snapshot_exposes_owner_storage_failure() -> None:
+    with pytest.raises(PermissionError, match="owner 目录不可写"):
         await runtime_api.save_log_snapshot(
             payload=runtime_api.UiSnapshotRequest(
-                workspace_root="/definitely/missing",
                 html="<p>x</p>",
             ),
             _="local",
             request_id="req",
-            runtime_service=_StubRuntimeService(),
             log_service=_UnwritableLogService(),
         )
-
-    assert captured.value.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -189,13 +185,6 @@ def _read_request():
         resource_identity=session_resource_identity(WORKSPACE_ID, TARGET_SESSION),
         uri="!!bad!!", scope="workspace", view="overview",
     )
-
-
-class _StubRuntimeService:
-    def get_log_dir(self):
-        from pathlib import Path
-
-        return Path("/definitely/missing/.boxteam/logs")
 
 
 # 显式引用，避免未使用 import 被误删后失去契约覆盖。

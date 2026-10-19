@@ -986,7 +986,7 @@ def _build_app_container(
         resolved_sessions_root,
         path_resolver=session_path_resolver,
     )
-    log_service = LogService()
+    log_service = LogService(workspace_root=resolved_workspace_root, path_resolver=session_path_resolver)
     tool_test_service = ToolTestService(
         config_service=config_service,
         registry=ToolTestRegistry(),

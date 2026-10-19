@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.abstractions.state_conflict import ClientStateConflictError
 from app.api.deps import (
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 class UiSnapshotRequest(BaseModel):
-    workspace_root: str = Field(min_length=1)
+    model_config = ConfigDict(extra="forbid")
     session_id: CanonicalSessionId | None = None
     html: str = Field(min_length=1)
     page_title: str | None = None
@@ -105,24 +106,55 @@ async def save_log_snapshot(
     payload: UiSnapshotRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    runtime_service: RuntimeService = Depends(get_runtime_service),
     log_service: LogService = Depends(get_log_service),
 ):
-    _ = runtime_service.get_log_dir()
     try:
-        result = log_service.write_html_snapshot(
+        result = await log_service.write_html_snapshot(
             LogSnapshotRecord(
-                workspace_root=payload.workspace_root,
                 session_id=payload.session_id,
                 html=payload.html,
                 page_title=payload.page_title,
                 status=payload.status,
                 source=payload.source,
-                category="webview",
             )
         )
-    except OSError as error:
-        # workspace_root 来自请求体，指到不可写路径属于客户端输入错误。
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    logger.info("UI HTML 快照已落盘: %s", result.html_path)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    logger.info("UI HTML 快照已保存: %s", result.snapshot_id)
     return APIResponse(data=result, request_id=request_id)
+
+
+@router.get("/log-snapshot/{snapshot_id}/html", response_class=HTMLResponse, summary="读取前端 HTML 快照")
+async def read_log_snapshot_html(
+    snapshot_id: str,
+    session_id: CanonicalSessionId | None = None,
+    _: str = Depends(verify_local_token),
+    log_service: LogService = Depends(get_log_service),
+):
+    content = await _read_log_snapshot(log_service, snapshot_id, session_id, metadata=False)
+    return Response(content, media_type="text/html", headers={
+        "Content-Disposition": f'attachment; filename="{snapshot_id}.html"',
+        "Content-Security-Policy": "sandbox; default-src 'none'",
+    })
+
+
+@router.get("/log-snapshot/{snapshot_id}/metadata", summary="读取前端快照 metadata")
+async def read_log_snapshot_metadata(
+    snapshot_id: str,
+    session_id: CanonicalSessionId | None = None,
+    _: str = Depends(verify_local_token),
+    log_service: LogService = Depends(get_log_service),
+):
+    content = await _read_log_snapshot(log_service, snapshot_id, session_id, metadata=True)
+    return Response(content, media_type="application/json")
+
+
+async def _read_log_snapshot(
+    log_service: LogService, snapshot_id: str, session_id: str | None, *, metadata: bool,
+) -> str:
+    try:
+        return await log_service.read_html_snapshot(snapshot_id, session_id=session_id, metadata=metadata)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error

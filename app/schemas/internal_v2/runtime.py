@@ -39,7 +39,9 @@ class RuntimeDrainResultDTO(BaseModel):
 
 
 class UiSnapshotResultDTO(BaseModel):
-    html_path: str
+    snapshot_id: str
+    html_url: str
+    metadata_url: str
     status: str = "saved"
 
 

@@ -282,11 +282,6 @@ message LLMRequestLogRecordDTO {
   optional google.protobuf.Struct upstream = 8;
 }
 
-message LogSnapshotResultDTO {
-  string html_path = 1;
-  string meta_path = 2;
-}
-
 message McpServerDTO {
   string server_id = 1;
   string transport = 2;
@@ -2206,8 +2201,13 @@ message TurnUserMessageSummaryDTO {
 }
 
 message UiSnapshotResultDTO {
-  string html_path = 1;
+  reserved 1;
+  reserved "html_path";
   optional string status = 2;
+  string snapshot_id = 3;
+  // 显式 workspace API 引用，不包含物理文件位置。
+  string html_url = 4;
+  string metadata_url = 5;
 }
 
 message WorkspaceContextDTO {
