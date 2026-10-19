@@ -8,12 +8,18 @@ from contextlib import closing
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from langchain_core.messages import HumanMessage
 from langchain_core.tools import StructuredTool
+from langgraph.checkpoint.base import empty_checkpoint
 
+from app.core.checkpoint_config import build_checkpoint_config
+from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex
 from app.core.lifecycle import LifetimeScope
+from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.mcp import McpCatalogOwner, McpCatalogResourcePublisher
 from app.services.infrastructure.mcp.catalog_activation import (
@@ -284,4 +290,208 @@ async def test_complete_mixed_members_survive_five_real_persistence_paths(
             session, thread_id=thread, assembly_id=assembly.assembly_id,
             plan_hash=assembly.plan_hash, request_hash=assembly.request_hash,
         ).to_dict() == frozen.to_dict()
+    assert factory.session.list_calls == before_list_calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("copy_before_restore", (False, True), ids=("source", "full-copy"))
+async def test_checkpoint_restore_preserves_frozen_mcp_parent_and_members(
+    catalog_runtime, registry_db, guidance_prepare, session_bundle_factory, monkeypatch,
+    fork_deadlines, copy_before_restore,
+):
+    _owner, factory, registry, _scope = catalog_runtime
+    saver, session, _connection, accepted = registry_db
+    thread = saver._storage.storage.main_thread_id(session)
+    published = registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
+    assert published.display_uri is None
+    assert len(published.members) == 3
+    assert {member.member_kind for member in published.members} == {"mcp", "custom"}
+    assert [member.member_id for member in published.members] == sorted(
+        member.member_id for member in published.members
+    )
+    before_list_calls = factory.session.list_calls
+
+    async def forbid_list():
+        raise AssertionError("checkpoint 持久恢复不得调用 MCP tools/list")
+
+    monkeypatch.setattr(factory.session, "list_tools", forbid_list)
+    prepared, frozen = guidance_prepare("members-checkpoint-restore")
+    parent_row = next(
+        binding for binding in frozen.bindings
+        if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID
+    )
+    assert parent_row.members == published.members
+    assembly = saver.get_context_assembly(
+        session, thread, assembly_id=prepared["assembly_id"],
+    )
+    assert frozen.model_call_id is not None
+    saver.register_model_call(
+        session, thread_id=thread, execution_id=frozen.execution_id,
+        model_call_id=frozen.model_call_id, attempt=1, provider="fixture-model",
+        assembly_id=assembly.assembly_id,
+    )
+    # 使用真实 prepare 投影出的 accepted root，不能构造第二份用户输入。
+    user = next(message for message in prepared["messages"] if isinstance(message, HumanMessage))
+    assert "item-" + user.id == accepted["root_input_item_id"]
+    checkpoint = empty_checkpoint()
+    checkpoint["id"] = "members-checkpoint"
+    checkpoint["channel_values"] = {"messages": [user]}
+    checkpoint["channel_versions"] = {"messages": checkpoint["id"]}
+    checkpoint["updated_channels"] = ["messages"]
+    admission = saver.execution_admission(
+        session, thread_id=thread, execution_id=accepted["initial_execution_id"],
+    )
+    with (
+        session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),
+        execution_admission_scope(admission, langgraph_thread_id=thread),
+    ):
+        saver.put(
+            build_checkpoint_config(thread), checkpoint, {"source": "loop", "step": 1},
+            checkpoint["channel_versions"],
+        )
+
+    def forbid_registry_read(*_args, **_kwargs):
+        raise AssertionError("checkpoint 持久恢复不得读取 live Registry")
+
+    monkeypatch.setattr(registry, "capture", forbid_registry_read)
+    monkeypatch.setattr(registry, "snapshot", forbid_registry_read)
+    target_session = session
+    if copy_before_restore:
+        target_session = TARGET_SESSION_ID
+        session_bundle_factory(saver._storage.storage.sessions_dir, target_session)
+        await copy_rollout_snapshot(
+            saver, session, target_session, fork_deadlines=fork_deadlines,
+        )
+        source_root = saver._storage.storage.root(session, thread_id=thread)
+        source_root.rename(source_root.with_name("source-offline"))
+
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
+        target_thread = restarted._storage.storage.main_thread_id(target_session)
+        config = build_checkpoint_config(target_thread, checkpoint_id=checkpoint["id"])
+        with session_thread_owner_scope(
+            MutationIntentOwner(target_session, target_thread), langgraph_thread_id=target_thread,
+        ):
+            restored_checkpoint = restarted.get_tuple(config)
+            assert restored_checkpoint is not None
+            assert restored_checkpoint.checkpoint["id"] == checkpoint["id"]
+            assert restored_checkpoint.checkpoint["channel_versions"] == checkpoint["channel_versions"]
+            assert restored_checkpoint.checkpoint["updated_channels"] == checkpoint["updated_channels"]
+            assert restored_checkpoint.checkpoint["versions_seen"] == checkpoint["versions_seen"]
+            assert restored_checkpoint.checkpoint["pending_sends"] == checkpoint["pending_sends"]
+            assert restored_checkpoint.checkpoint["channel_values"].keys() == checkpoint["channel_values"].keys()
+            restored_messages = restored_checkpoint.checkpoint["channel_values"]["messages"]
+            assert len(restored_messages) == 1
+            restored_user = restored_messages[0]
+            assert isinstance(restored_user, HumanMessage)
+            assert restored_user.id == user.id
+            assert restored_user.content == user.content
+
+            # get_tuple 返回 canonical projection，并按 SQLite 权威身份 hydration；
+            # 按同一持久 item 的展示 projection 比较正文与 typed provenance。
+            target_codec = restarted._storage.storage._codec()
+            canonical_root = restarted._storage.storage.read_items(
+                target_session, target_thread, item_ids=(accepted["root_input_item_id"],),
+            )
+            assert len(canonical_root) == 1
+            expected_projection = target_codec.project_message(canonical_root)
+            expected_projection_data = dict(expected_projection["data"])
+            restored_projection = target_codec.to_dict(restored_user)
+            restored_projection_data = dict(restored_projection["data"])
+            expected_canonical_metadata = dict(expected_projection_data.pop("response_metadata"))
+            restored_projection_metadata = dict(restored_projection_data.pop("response_metadata"))
+            assert restored_projection["type"] == expected_projection["type"]
+            assert restored_projection_data == expected_projection_data
+            assert expected_canonical_metadata["provenance_relations"] == [
+                relation.to_dict()
+                for item in canonical_root
+                for relation in item.provenance_relations
+            ]
+            assert [
+                manifest["item_id"]
+                for manifest in expected_canonical_metadata["canonical_item_manifests"]
+            ] == [item.item_id for item in canonical_root]
+
+            with closing(sqlite3.connect(restarted._storage.storage.index_path(
+                target_session, "", thread_id=target_thread,
+            ))) as connection:
+                sqlite_identity = connection.execute(
+                    "SELECT message_id, turn_id, created_at FROM messages WHERE message_id = ?",
+                    (user.id,),
+                ).fetchone()
+            assert sqlite_identity is not None
+            assert sqlite_identity[1] is not None
+            expected_message_metadata = dict(
+                expected_canonical_metadata.pop("message_metadata", {}),
+            )
+            restored_message_metadata = dict(
+                restored_projection_metadata.pop("message_metadata", {}),
+            )
+            assert restored_message_metadata == {
+                **expected_message_metadata,
+                "turn_id": sqlite_identity[1],
+            }
+            assert {
+                "message_id": restored_projection_metadata.pop("message_id"),
+                "created_at": restored_projection_metadata.pop("created_at"),
+                "updated_at": restored_projection_metadata.pop("updated_at"),
+            } == {
+                "message_id": sqlite_identity[0],
+                "created_at": sqlite_identity[2],
+                "updated_at": sqlite_identity[2],
+            }
+            assert restored_projection_metadata == expected_canonical_metadata
+            restored_config = restarted.rewind(
+                restored_checkpoint.config, checkpoint_id=restored_checkpoint.checkpoint["id"],
+            )
+            rewound = restarted.get_tuple(restored_config)
+            assert rewound is not None
+            rewound_messages = rewound.checkpoint["channel_values"]["messages"]
+            assert len(rewound_messages) == 1
+            assert isinstance(rewound_messages[0], HumanMessage)
+            assert target_codec.to_dict(rewound_messages[0]) == restored_projection
+
+    # rewind 提交后重新创建 Saver，后继只消费 control 里已提交的精确引用。
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        with closing(sqlite3.connect(cold._storage.storage.index_path(
+            target_session, "", thread_id=target_thread,
+        ))) as connection:
+            control_rows = connection.execute(
+                "SELECT payload_json FROM control_events WHERE control_kind = 'rewind'"
+            ).fetchall()
+        assert len(control_rows) == 1
+        control = json.loads(control_rows[0][0])
+        assert control["source_checkpoint_id"] == restored_checkpoint.checkpoint["id"]
+        assert control["resource_activation_refs"] == [{
+            "assembly_id": assembly.assembly_id,
+            "turn_id": frozen.turn_id,
+            "activation_snapshot_id": frozen.activation_snapshot_id,
+            "plan_hash": assembly.plan_hash,
+            "request_hash": assembly.request_hash,
+            "bindings_hash": frozen.bindings_hash,
+            "activation_provenance_hash": frozen.activation_provenance_hash,
+        }]
+        ref = control["resource_activation_refs"][0]
+        restored = cold.load_sealed_resource_activation(
+            target_session, thread_id=target_thread, assembly_id=ref["assembly_id"],
+            plan_hash=ref["plan_hash"], request_hash=ref["request_hash"],
+        )
+        assert restored.activation_snapshot_id == ref["activation_snapshot_id"]
+        assert (restored.owner_session_id, restored.owner_thread_id) == (session, thread)
+        assert restored.to_dict() == frozen.to_dict()
+        assert restored.parent.to_dict() == frozen.parent.to_dict()
+        assert restored.bindings_hash == ref["bindings_hash"] == frozen.bindings_hash
+        assert restored.activation_provenance_hash == ref["activation_provenance_hash"]
+        assert lineage_manifest(restored) == lineage_manifest(frozen)
+        restored_parent = next(
+            binding for binding in restored.bindings
+            if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID
+        )
+        assert restored_parent.to_dict() == parent_row.to_dict()
+        assert [member.to_dict() for member in restored_parent.members] == [
+            member.to_dict() for member in published.members
+        ]
+        assert restored_parent.source_lineage_ref.sources == tuple(sorted(published.source_lineage))
+        assert cold.read_resource_activation_payload(
+            restored, restored_parent, storage_owner=(target_session, target_thread),
+        ) == published.payload
     assert factory.session.list_calls == before_list_calls
