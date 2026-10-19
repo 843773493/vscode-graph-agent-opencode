@@ -3345,8 +3345,8 @@ async def test_view_prefix_click_keeps_exact_completed_turn_root_or_middle_item(
     cold = RolloutCheckpointSaver(fork_context.sessions.path_resolver.sessions_root)
     restored = await _get_tuple(fork_context, target.session_id, saver=cold)
     assert restored is not None
-    # active checkpoint 消费原 acceptance 的 notice 排除集；可见历史和请求选择分别核对。
-    expected_message_ids = ["retry-user"] if click == "user_root" else ["retry-user", "retry-call", "retry-result"]
+    # 冷读保留冻结历史 notice；新准入的 Provider selection 在下方独立核对。
+    expected_message_ids = ["retry-notice", "retry-user"] if click == "user_root" else ["retry-notice", "retry-user", "retry-call", "retry-result"]
     completed_messages = {message.id: message for message in completed.checkpoint["channel_values"]["messages"]}
     expected_messages = [completed_messages[message_id] for message_id in expected_message_ids]
     assert by_message["retry-notice"].item_id in expected_visible
@@ -4244,7 +4244,7 @@ async def test_production_http_pinned_fork_and_preflight_have_exact_side_effects
     catalog = context.sessions.path_resolver.catalog_store
     async with main.lifespan(main.app), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main.app), base_url="http://workspace",
-        headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": context.sessions.workspace_id, "X-BoxTeam-Gateway-Id": "fork-http-gateway", "X-Request-ID": "fork-http-proof"},
+        headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": context.sessions.workspace_id, "X-BoxTeam-Gateway-Id": "gateway_6c8b2f9317a5a2c6c4569958b1e23d84", "X-Request-ID": "fork-http-proof"},
     ) as client:
         before = (await context.sessions.list(limit=100)).total
         with catalog.read_transaction() as connection:
@@ -8379,8 +8379,24 @@ async def test_production_lifespan_recovers_detached_fork_after_source_deletion(
         restored = await _get_tuple(_production_fork_context(restarted), record.session_id)
         assert restored is not None
         assert [message.id for message in restored.checkpoint["channel_values"]["messages"]] == [
-            "retry-user", "retry-call", "retry-result", "retry-final",
+            "retry-notice", "retry-user", "retry-call", "retry-result", "retry-final",
         ]
+        recovered = _production_fork_context(restarted)
+        target_thread = _main_thread_id(recovered, record.session_id)
+        accepted = recovered.saver.accept_turn(
+            record.session_id, thread_id=target_thread, accepted_ingress_id="restart-successor-input",
+            acceptance_idempotency_key="restart-successor-accept", job_id="restart-successor-job",
+            admission_idempotency_key="restart-successor-admission", payload="恢复后的目标新问题",
+        )
+        prepared = fork_provider_prepare(
+            recovered, record.session_id, str(accepted["initial_execution_id"]),
+            ContextSourceManager(owner=ContextSourceOwnerKey(record.session_id, target_thread), control_state_port=recovered.saver),
+            "restart-successor", attempt=1,
+        )
+        assert all(message.id != "retry-notice" for message in prepared["messages"])
+        assert all(entry.ref.ref_id != "item-retry-notice" for entry in prepared["snapshot"].selection if entry.included and entry.ref.ref_type == "canonical_item")
+        assert [message.tool_call_id for message in prepared["messages"] if isinstance(message, ToolMessage)] == ["retry-tool-call"]
+        assert any(isinstance(message, HumanMessage) and message.content == "恢复后的目标新问题" for message in prepared["messages"])
 
 
 @pytest.mark.asyncio
@@ -8754,7 +8770,7 @@ async def test_fork_of_imported_internal_lineage_uses_local_committed_proof(
     restored = await _get_tuple(context, second.session_id)
     assert restored is not None
     assert [message.id for message in restored.checkpoint["channel_values"]["messages"]] == [
-        "retry-user", "retry-call", "retry-result", "retry-final",
+        "retry-notice", "retry-user", "retry-call", "retry-result", "retry-final",
     ]
     with sqlite3.connect(_main_thread_node(context, second.session_id) / "rollout" / "index.sqlite") as connection:
         assert connection.execute("SELECT COUNT(*) FROM executions").fetchone() == (3,)
@@ -8793,6 +8809,8 @@ async def test_fork_of_imported_internal_lineage_uses_local_committed_proof(
             "refork-successor", attempt=1,
         )
         assert (prepared["snapshot"].session_id, prepared["snapshot"].thread_id) == (second.session_id, second_thread)
+        assert all(message.id != "retry-notice" for message in prepared["messages"])
+        assert all(entry.ref.ref_id != "item-retry-notice" for entry in prepared["snapshot"].selection if entry.included and entry.ref.ref_type == "canonical_item")
         assert any(isinstance(message, HumanMessage) and message.content == "检查工作区" for message in prepared["messages"])
         assert any(isinstance(message, ToolMessage) and message.content == "文件内容" for message in prepared["messages"])
         assert any(isinstance(message, HumanMessage) and message.content == "删源副本继续聊天" for message in prepared["messages"])
