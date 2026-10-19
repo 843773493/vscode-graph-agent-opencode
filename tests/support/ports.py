@@ -3,14 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-E2E_PORT_START = 18800
 E2E_PORT_BLOCK_SIZE = 100
 E2E_PORT_MAX_FILES = 100
-E2E_PORT_END = E2E_PORT_START + E2E_PORT_BLOCK_SIZE * E2E_PORT_MAX_FILES - 1
 INTEGRATION_PORT_START = 8800
+INTEGRATION_PORT_MAX_FILES = 128
 INTEGRATION_PORT_END = (
-    INTEGRATION_PORT_START + E2E_PORT_BLOCK_SIZE * E2E_PORT_MAX_FILES - 1
+    INTEGRATION_PORT_START
+    + E2E_PORT_BLOCK_SIZE * INTEGRATION_PORT_MAX_FILES
+    - 1
 )
+E2E_PORT_START = INTEGRATION_PORT_END + 1
+E2E_PORT_END = E2E_PORT_START + E2E_PORT_BLOCK_SIZE * E2E_PORT_MAX_FILES - 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +40,7 @@ def port_block_for_file(
     *,
     test_layer: str,
     port_start: int,
+    max_files: int,
     tests_root: Path,
 ) -> E2EPortBlock:
     root = tests_root.resolve()
@@ -46,10 +50,10 @@ def port_block_for_file(
         raise ValueError(f"未能为 {test_layer} 测试文件分配端口块: {resolved_file}")
 
     index = test_files.index(resolved_file)
-    if index >= E2E_PORT_MAX_FILES:
+    if index >= max_files:
         raise RuntimeError(
             f"{test_layer} 测试文件数量超过端口块容量: "
-            f"count={len(test_files)}, max={E2E_PORT_MAX_FILES}"
+            f"count={len(test_files)}, max={max_files}"
         )
 
     start = port_start + index * E2E_PORT_BLOCK_SIZE
@@ -70,6 +74,7 @@ def e2e_port_block_for_file(
         test_file_path,
         test_layer="e2e",
         port_start=E2E_PORT_START,
+        max_files=E2E_PORT_MAX_FILES,
         tests_root=(
             tests_root.resolve()
             if tests_root is not None
@@ -83,5 +88,6 @@ def integration_port_block_for_file(test_file_path: Path) -> E2EPortBlock:
         test_file_path,
         test_layer="integration",
         port_start=INTEGRATION_PORT_START,
+        max_files=INTEGRATION_PORT_MAX_FILES,
         tests_root=Path.cwd().resolve() / "tests" / "integration",
     )
