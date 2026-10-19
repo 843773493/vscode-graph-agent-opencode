@@ -28,6 +28,10 @@ from app.domain.itemized.identity.item_projection import (
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord, InternalDisplayProvenance
 from app.domain.itemized.runtime_wakeup import RuntimeExecutionWakeup
+from app.domain.itemized.serde.runtime import (
+    execution_record_from_dict,
+    execution_record_to_dict,
+)
 from app.prompting.factory import PromptSection, internal_message_factory
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -189,6 +193,15 @@ def test_internal_admission_creates_turnless_execution_and_reuses_exact_identity
             "FROM executions WHERE execution_id = ?",
             (expected.execution_id,),
         ).fetchone()
+        db.row_factory = sqlite3.Row
+        execution_row = dict(db.execute(
+            "SELECT session_id, thread_id, execution_id, turn_id, attempt, outcome, "
+            "resumed_from_execution_id FROM executions WHERE execution_id = ?",
+            (expected.execution_id,),
+        ).fetchone())
+    execution = execution_record_from_dict(execution_row)
+    assert execution.turn_id is None
+    assert execution_record_to_dict(execution) == execution_row
     assert row == (
         None,
         None,

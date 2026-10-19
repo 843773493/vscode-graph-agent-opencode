@@ -76,7 +76,8 @@ class ExecutionRecord:
     session_id: str
     thread_id: str
     execution_id: str
-    turn_id: str
+    # 用户 execution 关联真实 Turn；内部 execution 与 SQLite admission 一致为 None。
+    turn_id: str | None
     attempt: int
     outcome: str = ControlOutcome.UNKNOWN
     resumed_from_execution_id: str | None = None
@@ -85,7 +86,8 @@ class ExecutionRecord:
         _non_empty_string(self.session_id, "session_id")
         _non_empty_string(self.thread_id, "thread_id")
         _non_empty_string(self.execution_id, "execution_id")
-        _non_empty_string(self.turn_id, "turn_id")
+        if self.turn_id is not None:
+            _non_empty_string(self.turn_id, "turn_id")
         if (
             not isinstance(self.attempt, int)
             or isinstance(self.attempt, bool)

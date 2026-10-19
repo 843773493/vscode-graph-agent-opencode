@@ -171,6 +171,19 @@ def test_turn_execution_link_roundtrips_complete_owner_pair() -> None:
     assert turn_execution_link_from_dict(turn_execution_link_to_dict(link)) == link
 
 
+@pytest.mark.parametrize("turn_id", ["turn-1", None])
+def test_execution_record_preserves_optional_turn_without_inventing_identity(
+    control_records: tuple[ExecutionRecord, ModelCallRecord], turn_id: str | None,
+) -> None:
+    execution = replace(control_records[0], turn_id=turn_id)
+    raw = json.loads(canonical_json_bytes(execution_record_to_dict(execution)))
+    assert raw["turn_id"] == turn_id
+    assert execution_record_from_dict(raw) == execution
+    for invalid in ("", False, 0):
+        with pytest.raises(ItemSchemaError, match="turn_id"):
+            execution_record_from_dict({**raw, "turn_id": invalid})
+
+
 @pytest.mark.parametrize("record_kind", ["execution", "model_call", "link"])
 @pytest.mark.parametrize("fault", ["missing", "none", "empty"])
 def test_control_identity_rejects_missing_thread_in_constructor_and_serde(
