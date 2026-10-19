@@ -323,11 +323,10 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
         del state, runtime
         if self._context_source_manager is None:
             return None
-        self._context_source_manager.refresh_context_rebuild_state()
         self._sync_source_bindings()
         if self._context_source_reactor is not None:
             self._observe_pending_sources()
-        # before_model 只观察 desired；唯一 Saver seal 成功后才确认 applied。
+        # rebuild 由唯一 Saver preparation 在受控事务内恢复；此处只观察 desired。
         return None
 
 

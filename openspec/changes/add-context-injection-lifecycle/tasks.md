@@ -1,4 +1,4 @@
-当前验收坐标（2026-10-09）：A01–A03、R01/R03 已接受范围沿原具名收据复用；4.6 的已证部分仅 R01/R03，不整项补勾。最终 Sol 批已将八个 summarization caller 迁唯一 owner 并物理删除旧 facade，TC001 真实 canonical 提交后 observer 失败、namespace 归一及锁内 writer connection 闭包已通过核心/受影响边界及独立审查，已集成 `e11c8c6b`。6.8 的真实产品 Provider403 仍 UNMET，integration 不能代替。旧阶段缺口仅作历史事实，不据未勾复建已关闭链路。
+当前验收坐标（2026-10-19）：A01–A03 已接受范围沿原具名收据复用；4.6 已由 instruction generation、条件来源与 Skill metadata 的具名验收收口，见本节对应收据。最终 Sol 批已将八个 summarization caller 迁唯一 owner 并物理删除旧 facade，TC001 真实 canonical 提交后 observer 失败、namespace 归一及锁内 writer connection 闭包已通过核心/受影响边界及独立审查，已集成 `e11c8c6b`。6.8 的真实产品 Provider403 仍 UNMET，integration 不能代替。旧阶段缺口仅作历史事实，不据未勾复建已关闭链路。
 
 ## 1. Context mutation、stable-prefix 与 source domain contract
 
@@ -29,7 +29,9 @@
 - [x] 2.5 将同一 assembly的 canonical ordinal/tool配对、source identity/revision唯一性、base→delta顺序、plan ordinal、ToolSet compatibility和 stable parent-prefix校验接入 seal/dispatch preflight。
 - [x] 2.6 让 Skill snapshot/tracked 正文和 source diff 使用现有受保护 detail owner及 retention/GC；required detail 缺失阻止 seal，optional detail只能显式 omission/loss。
 - [x] 2.7 增加独立进程的 checkpoint/assembly恢复检查，覆盖 canonical append、tracked、untracked、pending candidate、desired/applied ToolSet revision和 sealed Provider frames，禁止从当前文件或当前 ToolSelectionStore重建旧 request。
-- [ ] 2.8 实现 ContextStore/CSM 与 resident ThreadRuntime 的 rehydration port、generation fence 和持久状态恢复；Thread residency、deadline、`ThreadResidencySnapshot`、cold read 与 GraphBinding lazy rehydrate 复用 `add-itemized-rollout-context` 的唯一合同。本 change 验证 main/child runtime unload 后 source/tracking/prefix/ToolSet/assembly 状态逐字段不变、history/detail 不 materialize writer；迟到 callback 按精确 thread 解析当前 owner。接收 debug owner 核实的 `launch_pending`、运行中进程与 `reconcile_required` 阻断，并在 backend 重启时先恢复该 owner 状态，不虚报 cold 或让 scope 停止 Node。
+- [x] 2.8 实现 ContextStore/CSM 与 resident ThreadRuntime 的 rehydration port、generation fence 和持久状态恢复；Thread residency、deadline、`ThreadResidencySnapshot`、cold read 与 GraphBinding lazy rehydrate 复用 `add-itemized-rollout-context` 的唯一合同。本 change 验证 main/child runtime unload 后 source/tracking/prefix/ToolSet/assembly 状态逐字段不变、history/detail 不 materialize writer；迟到 callback 按精确 thread 解析当前 owner。接收 debug owner 核实的 `launch_pending`、运行中进程与 `reconcile_required` 阻断，并在 backend 重启时先恢复该 owner 状态，不虚报 cold 或让 scope 停止 Node。
+
+2.8 验收（2026-10-19）：`cil-cold-parallel-closure-001` exit 0，9 passed；真实 main/child/sibling 非空 history 经 29:59/30:00 unload、HTTP cold read 和 main/child rehydrate，原 SQLite/JSONL、CSM controls/tracking、GraphBinding 与旧 sealed assembly/prefix/ToolSet 逐字段不变，sibling 保持 cold，child 同 generation 后继不重复编译。同轮使用真实 NodeDebugSessionStore durable claim、新 tracker/NodeDebugService 恢复验证 launch_pending/starting/running/paused/stopping 与 reconcile_required 阻断；此处验 debug owner 恢复/阻断边界，不外推 Inspector/进程控制全流程。`cil-cold-late-callback-001` exit 0，1 passed：真实 terminal 完成事件在 child cold 后经 steering 唤醒原 child 的新 generation，main 零新增 execution、旧 generation fenced、重复 scan 零新增。命令、原始输出、退出码和各轮源码指纹位于 `out/tests/temp/openspec_takeover/artifacts/runs/`。
 
 2.7 验收（2026-10-19）：`test_context_state_process_recovery.py` 通过真实 Saver put/put_writes/get_tuple 与独立子进程冷读，逐字段核完整 checkpoint、pending writes、sealed assembly、Provider frames、tracked/untracked/pending source 与新 desired/旧 applied ToolSet，冷读不改持久文件。`process-recovery-checkpoint-review/runs/checkpoint-process-recovery-001` 退出 0；该检查不代替 2.8 runtime unload 验收。
 

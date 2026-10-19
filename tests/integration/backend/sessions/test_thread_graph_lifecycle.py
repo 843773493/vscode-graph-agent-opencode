@@ -10,6 +10,9 @@ import pytest
 
 from app.agents.graph_binding import GraphBindingOwnerKey
 from app.core.path_utils import workspace_context
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+)
 from tests.integration.backend.sessions.test_runner_cancellation import _session
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
     RuntimeCase,
@@ -70,12 +73,35 @@ async def test_real_cold_nonempty_http_history_preserves_graph_binding_until_rea
     assert all(binding is not None for binding in bindings.values())
     assert case.compiled == []
 
-    admissions = [await _complete_job(case, session_id, thread) for thread in threads]
+    admissions = [
+        await _complete_job(case, session_id, thread, timeout_seconds=25)
+        for thread in threads
+    ]
     assert [pair for pair, _graph, _scope in case.compiled] == [
         (session_id, thread) for thread in threads
     ]
     assert len({id(graph) for _pair, graph, _scope in case.compiled}) == 3
     assert case.bindings == [bindings[thread] for thread in threads]
+    saver = case.runner.saver
+    control_states = {
+        thread: saver.load_context_source_control_states(ContextSourceOwnerKey(session_id, thread))
+        for thread in threads
+    }
+    assemblies = {
+        thread: saver.list_context_assemblies(session_id, thread)
+        for thread in threads
+    }
+    sealed_bytes = {}
+    for thread in threads:
+        assert control_states[thread]
+        assert all(state.tracking_status == "tracked" for state in control_states[thread])
+        assert assemblies[thread]
+        sealed = [assembly for assembly in assemblies[thread] if assembly.seal_binding is not None]
+        assert sealed
+        assert all(assembly.tool_set_refs for assembly in sealed)
+        sealed_bytes[thread] = {
+            assembly.assembly_id: assembly.to_dict() for assembly in sealed
+        }
     first_compiled = tuple(case.compiled)
     generations = {thread: case.tracker.snapshot(session_id, thread).generation for thread in threads}
     requests_before = len(case.model_requests)
@@ -94,6 +120,7 @@ async def test_real_cold_nonempty_http_history_preserves_graph_binding_until_rea
             resident_pages[thread] = pages
 
     runtime_clock[0] = 1799
+    durable_before_unload = _durable_snapshot(case, session_id, threads)
     await case.tracker.sweep()
     assert all(case.tracker.snapshot(session_id, thread).residency == "resident" for thread in threads)
     assert all(scope.state == "open" for _pair, _graph, scope in first_compiled)
@@ -101,6 +128,7 @@ async def test_real_cold_nonempty_http_history_preserves_graph_binding_until_rea
     await case.tracker.sweep()
     assert all(case.tracker.snapshot(session_id, thread).residency == "cold" for thread in threads)
     assert all(scope.state == "closed" for _pair, _graph, scope in first_compiled)
+    assert _durable_snapshot(case, session_id, threads) == durable_before_unload
     cold_snapshots = {thread: case.tracker.snapshot(session_id, thread) for thread in threads}
     durable_before = _durable_snapshot(case, session_id, threads)
 
@@ -147,8 +175,16 @@ async def test_real_cold_nonempty_http_history_preserves_graph_binding_until_rea
         assert case.tracker.snapshot(session_id, thread) == cold_snapshots[thread]
         assert store.load_graph_binding(GraphBindingOwnerKey(session_id, thread)) == bindings[thread]
     assert _durable_snapshot(case, session_id, threads) == durable_before
+    for thread in threads:
+        assert saver.load_context_source_control_states(ContextSourceOwnerKey(session_id, thread)) == control_states[thread]
+        restored = saver.list_context_assemblies(session_id, thread)
+        restored_sealed = {
+            assembly.assembly_id: assembly.to_dict()
+            for assembly in restored if assembly.seal_binding is not None
+        }
+        assert restored_sealed == sealed_bytes[thread]
 
-    resumed = await _complete_job(case, session_id, child)
+    resumed = await _complete_job(case, session_id, child, timeout_seconds=25)
     assert resumed.execution_id != admissions[1].execution_id
     assert resumed.turn_id != admissions[1].turn_id
     assert len(case.compiled) == 4
@@ -158,10 +194,49 @@ async def test_real_cold_nonempty_http_history_preserves_graph_binding_until_rea
     assert case.bindings[-1] == bindings[child]
     assert case.tracker.snapshot(session_id, child).generation > generations[child]
     assert all(case.tracker.snapshot(session_id, thread).residency == "cold" for thread in (main, sibling))
+    for thread in threads:
+        assert saver.load_context_source_control_states(ContextSourceOwnerKey(session_id, thread)) == control_states[thread]
+        restored = saver.list_context_assemblies(session_id, thread)
+        restored_sealed = {
+            assembly.assembly_id: assembly.to_dict()
+            for assembly in restored if assembly.seal_binding is not None
+        }
+        assert all(
+            restored_sealed[assembly_id] == assembly
+            for assembly_id, assembly in sealed_bytes[thread].items()
+        )
+        if thread != child:
+            assert restored_sealed == sealed_bytes[thread]
+
+    main_generation = case.tracker.snapshot(session_id, main).generation
+    resumed_main = await _complete_job(case, session_id, main, timeout_seconds=25)
+    assert resumed_main.execution_id != admissions[0].execution_id
+    assert resumed_main.turn_id != admissions[0].turn_id
+    assert len(case.compiled) == 5
+    assert case.compiled[-1][0] == (session_id, main)
+    assert case.compiled[-1][1] is not first_compiled[0][1]
+    assert case.compiled[-1][2].state == "open"
+    assert case.bindings[-1] == bindings[main]
+    assert case.tracker.snapshot(session_id, main).generation > main_generation
+    assert case.tracker.snapshot(session_id, sibling).residency == "cold"
+    for thread in (main, child, sibling):
+        assert saver.load_context_source_control_states(ContextSourceOwnerKey(session_id, thread)) == control_states[thread]
+        restored = saver.list_context_assemblies(session_id, thread)
+        restored_sealed = {
+            assembly.assembly_id: assembly.to_dict()
+            for assembly in restored if assembly.seal_binding is not None
+        }
+        assert all(
+            restored_sealed[assembly_id] == assembly
+            for assembly_id, assembly in sealed_bytes[thread].items()
+        )
+        if thread == sibling:
+            assert restored_sealed == sealed_bytes[thread]
 
     generation = case.tracker.snapshot(session_id, child).generation
-    subsequent = await _complete_job(case, session_id, child)
+    subsequent = await _complete_job(case, session_id, child, timeout_seconds=25)
     assert subsequent.turn_id != resumed.turn_id
-    assert len(case.compiled) == 4
+    assert len(case.compiled) == 5
     assert case.tracker.snapshot(session_id, child).generation == generation
-    assert case.compiled[-1][2].state == "open"
+    assert case.compiled[3][0] == (session_id, child)
+    assert case.compiled[3][2].state == "open"
