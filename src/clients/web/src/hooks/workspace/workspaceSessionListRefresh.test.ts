@@ -40,7 +40,7 @@ function workspaceTarget(workspaceId: string) {
 }
 
 describe("工作区会话列表快照", () => {
-  test("/sessions 为空时从 session-catalog 根节点回填会话并支持刷新恢复", async () => {
+  test("/sessions 的完整空页不从另一目录接口伪造回填", async () => {
     const requestedUrls: string[] = [];
     globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
       const url = input instanceof Request ? input.url : String(input);
@@ -54,25 +54,6 @@ describe("工作区会话列表快照", () => {
       if (url.includes("/api/v1/sessions?") || url.endsWith("/api/v1/sessions")) {
         return apiResponse({ items: [], next_cursor: null, has_more: false });
       }
-      if (url.includes("/api/v1/session-catalog/children")) {
-        return apiResponse({
-          revision: "catalog-revision",
-          parent_node_id: null,
-          items: [{
-            node_id: session.session_id,
-            kind: "session",
-            name: session.title,
-            session_id: session.session_id,
-            parent_node_id: null,
-            has_children: false,
-          }],
-          cursor: null,
-          total: 1,
-        });
-      }
-      if (url.includes(`/api/v1/sessions/${session.session_id}`)) {
-        return apiResponse(session);
-      }
       throw new Error(`测试收到未声明请求: ${url}`);
     }, { preconnect: originalFetch.preconnect });
 
@@ -81,9 +62,10 @@ describe("工作区会话列表快照", () => {
       workspaceTarget("ws-test"),
     );
 
-    expect(result.sessions).toEqual([session]);
-    expect(requestedUrls.some((url) => url.includes("/session-catalog/children"))).toBe(true);
-    expect(requestedUrls.some((url) => url.endsWith(`/sessions/${session.session_id}`))).toBe(true);
+    expect(result.sessions).toEqual([]);
+    expect(result.complete).toBe(true);
+    expect(requestedUrls.some((url) => url.includes("/session-catalog/children"))).toBe(false);
+    expect(requestedUrls.some((url) => url.endsWith(`/sessions/${session.session_id}`))).toBe(false);
   });
 
   test("并发读取同一工作区时共享同一个会话列表请求", async () => {

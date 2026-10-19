@@ -3,6 +3,17 @@ import type { AppState } from "../../types/frontend";
 import { cloneMaps } from "../appStateMaps";
 import { sessionScopeKey } from "./sessionScope";
 
+/** 首页只能替换已返回的完整对象；缺席节点只有在完整列表中才表示已移除。 */
+export function mergeSessionListPage(
+  knownSessions: readonly Session[],
+  page: readonly Session[],
+  complete: boolean,
+): Session[] {
+  if (complete) return [...page];
+  const returnedIds = new Set(page.map((session) => session.session_id));
+  return [...page, ...knownSessions.filter((session) => !returnedIds.has(session.session_id))];
+}
+
 /** 异步补读只更新仍在会话镜像中的精确 owner，删除后的迟到结果不得复活会话。 */
 export function hasSessionOwner(
   state: AppState,

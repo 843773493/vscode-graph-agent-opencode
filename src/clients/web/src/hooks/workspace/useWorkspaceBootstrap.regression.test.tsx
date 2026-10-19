@@ -7,7 +7,7 @@ import * as userAccessApi from "../../api/gateway/userAccess";
 import * as userViewStateApi from "../../api/gateway/userViewState";
 import * as workspaceSessionListRefresh from "./workspaceSessionListRefresh";
 import type { AppState } from "../../types/frontend";
-import type { GatewayWorkspaceList } from "../../types/backend";
+import type { GatewayWorkspaceList, Session } from "../../types/backend";
 import { useWorkspaceBootstrap } from "./useWorkspaceBootstrap";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 import { createSerialTaskQueue } from "../runtime/serialTaskQueue";
@@ -106,6 +106,7 @@ async function mountBootstrap(initialState: AppState, flushStartup = true): Prom
       gatewayListRequestRef,
       runGatewayWorkspaceListTask: queue.enqueue,
       uiSettings: current.uiSettings,
+      readState: () => current,
       setState,
     });
     setParent = useGatewayWorkspaceHierarchy(API_PORT, setState, gatewayListRequestRef, queue.enqueue, selectionIntentRef);
@@ -190,6 +191,79 @@ function stubCommonBootstrap(): void {
 }
 
 describe("useWorkspaceBootstrap 失效标记", () => {
+  for (const persisted of [false, true]) {
+    test(`${persisted ? "重载时定点恢复" : "普通刷新保留"}首页外的已选会话，不拉取全部分页`, async () => {
+      installWindow(); stubCommonBootstrap(); installDocumentStub();
+      const selected: Session = {
+        session_id: `ses_bootstrap_off_page_${persisted}`, workspace_id: "00000000-0000-0000-0000-000000000001",
+        resource_identity: "fixture-off-page", uri: "boxteam://fixture/off-page", scope: "workspace",
+        title: "首页外会话", title_source: "user", current_agent_id: "default", parent_session_id: null,
+        created_at: "2026-10-19T00:00:00Z", updated_at: "2026-10-19T00:00:00Z",
+      };
+      const first = { ...selected, session_id: "ses_bootstrap_first", title: "首页会话" };
+      spy("getGatewayUiSettings").mockResolvedValue(defaultUiSettings() as never);
+      spy("listGatewayWorkspaces").mockResolvedValue(gatewayWorkspaceList([
+        { workspace_id: "ws-1", name: "工作区一", status: "ready" },
+      ]));
+      const list = spyOn(api, "listSessions").mockResolvedValue({ items: [first], next_cursor: "next", has_more: true });
+      const detail = spyOn(api, "getSession").mockResolvedValue(selected);
+      restoreSpies.push(() => list.mockRestore(), () => detail.mockRestore());
+      if (persisted) {
+        const user = spyOn(userAccessApi, "ensureGatewayUserAccess").mockResolvedValue({ kind: "user", user_id: "user-page" } as never);
+        const view = spyOn(userViewStateApi, "getLatestGatewayUserViewState").mockResolvedValue({
+          user_id: "user-page", workspace_id: "ws-1", session_id: selected.session_id,
+        } as never);
+        restoreSpies.push(() => user.mockRestore(), () => view.mockRestore());
+      }
+      const mounted = await mountBootstrap(appState({
+        activeGatewayWorkspaceId: "ws-1", currentSessionWorkspaceId: persisted ? null : "ws-1",
+        currentSession: persisted ? null : selected,
+        sessions: persisted ? [] : [selected],
+        sessionsByWorkspace: new Map([["ws-1", persisted ? [] : [selected]]]),
+        gatewayUserAccess: { kind: "guest", user_id: null } as never,
+      }));
+      expect(mounted.state().currentSession).toEqual(selected);
+      expect(mounted.state().sessions.map((session) => session.session_id)).toEqual([first.session_id, selected.session_id]);
+      expect(list).toHaveBeenCalledTimes(1);
+      expect(detail).toHaveBeenCalledTimes(persisted ? 1 : 0);
+      if (persisted) expect(detail).toHaveBeenCalledWith(API_PORT, selected.session_id, "ws-1", { signal: expect.any(AbortSignal) });
+    });
+  }
+
+  test("用户切换时不定点读取旧用户偏好的首页外会话，只恢复新用户的选择", async () => {
+    installWindow(); stubCommonBootstrap(); installDocumentStub();
+    const first = { session_id: "ses_new_first", title: "新用户首页会话" } as Session;
+    const restored = { session_id: "ses_new_persisted", title: "新用户首页外会话" } as Session;
+    const old = { session_id: "ses_old_preferred", title: "旧用户会话" } as Session;
+    spy("getGatewayUiSettings").mockResolvedValue(defaultUiSettings() as never);
+    spy("listGatewayWorkspaces").mockResolvedValue(gatewayWorkspaceList([
+      { workspace_id: "ws-1", name: "工作区一", status: "ready" },
+    ]));
+    const user = spyOn(userAccessApi, "ensureGatewayUserAccess")
+      .mockResolvedValue({ kind: "user", user_id: "user-new" } as never);
+    const view = spyOn(userViewStateApi, "getLatestGatewayUserViewState").mockResolvedValue({
+      user_id: "user-new", workspace_id: "ws-1", session_id: restored.session_id,
+    } as never);
+    const list = spyOn(api, "listSessions").mockResolvedValue({ items: [first], next_cursor: "next", has_more: true });
+    const detail = spyOn(api, "getSession").mockImplementation(async (_port, id) => {
+      expect(id).toBe(restored.session_id);
+      return restored;
+    });
+    restoreSpies.push(() => user.mockRestore(), () => view.mockRestore(), () => list.mockRestore(), () => detail.mockRestore());
+    const mounted = await mountBootstrap(appState({
+      activeGatewayWorkspaceId: "ws-1", currentSessionWorkspaceId: "ws-1", currentSession: old,
+      sessions: [old], sessionsByWorkspace: new Map([["ws-1", [old]]]),
+      gatewayUserAccess: { kind: "user", user_id: "user-old" } as never,
+    }), false);
+    await act(async () => { await mounted.refreshSessions(old.session_id); });
+    expect(detail).toHaveBeenCalledTimes(1);
+    expect(detail).toHaveBeenCalledWith(API_PORT, restored.session_id, "ws-1", { signal: expect.any(AbortSignal) });
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(mounted.state().currentSession).toEqual(restored);
+    expect(mounted.state().sessions).toEqual([first, restored]);
+    expect(mounted.state().sessionsByWorkspace.get("ws-1")).toEqual([first, restored]);
+  });
+
   test("真实 React 激活组合在成功后立即读取状态时保留已排入 bootstrap 的选择与会话镜像", async () => {
     installWindow(); stubCommonBootstrap(); installDocumentStub();
     let list = gatewayWorkspaceList([
@@ -204,7 +278,7 @@ describe("useWorkspaceBootstrap 失效标记", () => {
     });
     const snapshots = spyOn(workspaceSessionListRefresh, "fetchWorkspaceSessionListSnapshot")
       .mockImplementation(async (_port, target) => ({ apiPort: API_PORT, workspaceId: target.workspace_id,
-        generation: 1, sessions: [] }));
+        generation: 1, sessions: [], complete: true }));
     const isCurrent = spyOn(workspaceSessionListRefresh, "isCurrentWorkspaceSessionListSnapshot").mockReturnValue(true);
     restoreSpies.push(() => snapshots.mockRestore(), () => isCurrent.mockRestore());
     let current = appState();
@@ -217,7 +291,7 @@ describe("useWorkspaceBootstrap 失效标记", () => {
       const gatewayListRequestRef = React.useRef(0);
       const queue = React.useRef(createSerialTaskQueue()).current;
       const bootstrap = useWorkspaceBootstrap({ apiPort: API_PORT, uiSettings: state.uiSettings,
-        setState, selectionIntentRef, gatewayListRequestRef, runGatewayWorkspaceListTask: queue.enqueue });
+        readState: () => latestStateRef.current, setState, selectionIntentRef, gatewayListRequestRef, runGatewayWorkspaceListTask: queue.enqueue });
       const refresh = useWorkspaceRefreshOrchestration({ apiPort: API_PORT, gatewayWorkspaces: state.gatewayWorkspaces,
         setState, refreshSessions: bootstrap.refreshSessions, abortCurrentStream: () => {}, selectionIntentRef });
       activate = useGatewayWorkspaceActivation({ apiPort: API_PORT, currentSessionId: null, latestStateRef,
@@ -364,7 +438,7 @@ describe("useWorkspaceBootstrap 失效标记", () => {
         return {} as never;
       });
       const snapshot = spyOn(workspaceSessionListRefresh, "fetchWorkspaceSessionListSnapshot")
-        .mockResolvedValue({ apiPort: API_PORT, workspaceId: "ws-1", generation: 0, sessions: [] } as never);
+        .mockResolvedValue({ apiPort: API_PORT, workspaceId: "ws-1", generation: 0, sessions: [], complete: true } as never);
       restoreSpies.push(() => snapshot.mockRestore());
       const isCurrent = spyOn(workspaceSessionListRefresh, "isCurrentWorkspaceSessionListSnapshot")
         .mockReturnValue(true);
@@ -465,6 +539,7 @@ describe("useWorkspaceBootstrap 失效标记", () => {
         workspaceId: "ws-1",
         generation: 0,
         sessions: [],
+        complete: true,
       } as never);
     restoreSpies.push(() => snapshot.mockRestore());
 

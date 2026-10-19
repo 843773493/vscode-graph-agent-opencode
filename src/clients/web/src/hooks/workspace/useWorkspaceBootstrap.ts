@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, type MutableRefObject } from "react";
 import {
   DEFAULT_BACKEND_PORT,
   getWorkspace,
+  getSession,
   listAgents as apiListAgents,
 } from "../../api";
 import {
@@ -17,7 +18,9 @@ import { ensureGatewayUserAccess } from "../../api/gateway/userAccess";
 import { getLatestGatewayUserViewState } from "../../api/gateway/userViewState";
 import { writeCachedUiSettings } from "../../state/storage";
 import { sessionScopeKey } from "../../state/session/sessionScope";
+import { mergeSessionListPage } from "../../state/session/sessions";
 import { withFreshGatewayWorkspaceList } from "../../state/gatewayWorkspaceState";
+import type { AppState } from "../../types/frontend";
 import type { SetAppState, RunGatewayWorkspaceListTask } from "../contentViewLoaderTypes";
 import { loadAndApplyResolvedGatewayTheme } from "../../theme/theme";
 import {
@@ -202,6 +205,8 @@ async function loadWorkspaceBootstrap(
   options: {
     restorePersistedWorkspace: boolean;
     checkGatewayWorkspaceHealth: boolean;
+    preferredSessionId?: string | null;
+    previousUserAccess: AppState["gatewayUserAccess"];
     uiSettings?: Awaited<ReturnType<typeof getGatewayUiSettings>>;
     signal?: AbortSignal;
     assertCurrentSelection: () => void;
@@ -300,6 +305,24 @@ async function loadWorkspaceBootstrap(
     ),
     apiListAgents(apiPort, activeWorkspaceId),
   ]);
+  const targetSessionId = selectBootstrapSessionId({
+    preferredSessionId: options.preferredSessionId,
+    persistedSessionId: userViewState?.workspace_id === activeWorkspaceId ? userViewState.session_id : null,
+    userChanged: options.previousUserAccess?.kind !== userAccess.kind
+      || options.previousUserAccess?.user_id !== userAccess.user_id,
+  });
+  const sessionResult = workspaceSessionResults[0];
+  if (targetSessionId && sessionResult?.status === "fulfilled"
+    && !sessionResult.value.complete
+    && !sessionResult.value.sessions.some((session) => session.session_id === targetSessionId)) {
+    // 恢复首页外的选择只定点读取目标，不能为了定位会话拉完全部分页。
+    try {
+      const selected = await getSession(apiPort, targetSessionId, activeWorkspaceId, { signal });
+      sessionResult.value = { ...sessionResult.value, sessions: [...sessionResult.value.sessions, selected] };
+    } catch (error: unknown) {
+      if (!(error instanceof HttpRequestError) || error.status !== 404) throw error;
+    }
+  }
   return {
     userAccess,
     userViewState,
@@ -339,6 +362,7 @@ async function loadWorkspaceBootstrapWithRetry(
 export function useWorkspaceBootstrap({
   apiPort,
   uiSettings,
+  readState,
   setState,
   selectionIntentRef,
   gatewayListRequestRef,
@@ -346,6 +370,7 @@ export function useWorkspaceBootstrap({
 }: {
   apiPort: number | null;
   uiSettings: Awaited<ReturnType<typeof getGatewayUiSettings>>;
+  readState: () => Pick<AppState, "gatewayUserAccess">;
   setState: SetAppState;
   selectionIntentRef: MutableRefObject<number>;
   gatewayListRequestRef: MutableRefObject<number>;
@@ -393,6 +418,8 @@ export function useWorkspaceBootstrap({
         workspaceSessionResults,
         agents,
       } = await runGatewayWorkspaceListTask(() => loadWorkspaceBootstrapWithRetry(resolvedApiPort, {
+        preferredSessionId,
+        previousUserAccess: readState().gatewayUserAccess,
         restorePersistedWorkspace: options.restorePersistedWorkspace ?? false,
         checkGatewayWorkspaceHealth: options.checkGatewayWorkspaceHealth ?? true,
         uiSettings: options.reuseCurrentUiSettings
@@ -465,7 +492,11 @@ export function useWorkspaceBootstrap({
         }
         for (const snapshot of workspaceSessionEntries) {
           if (isCurrentWorkspaceSessionListSnapshot(snapshot)) {
-            sessionsByWorkspace.set(snapshot.workspaceId, snapshot.sessions);
+            sessionsByWorkspace.set(snapshot.workspaceId, mergeSessionListPage(
+              userChanged ? [] : sessionsByWorkspace.get(snapshot.workspaceId) ?? [],
+              snapshot.sessions,
+              snapshot.complete,
+            ));
           }
         }
         const sessionGatewayWorkspaceById = new Map<string, string>();
@@ -587,7 +618,7 @@ export function useWorkspaceBootstrap({
         refreshAbortRef.current = null;
       }
     }
-  }, [apiPort, setState, selectionIntentRef, gatewayListRequestRef]);
+  }, [apiPort, readState, setState, selectionIntentRef, gatewayListRequestRef]);
 
   const refreshGatewayWorkspaceStatuses = useCallback(async (
     expectedWorkspaceId?: string | null,

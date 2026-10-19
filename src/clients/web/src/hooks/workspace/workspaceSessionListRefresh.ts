@@ -1,5 +1,4 @@
-import { getSession, listSessions } from "../../api";
-import { listSessionCatalogChildren } from "../../api/session/sessionCatalog";
+import { listSessions } from "../../api";
 import type { Session } from "../../types/backend";
 import { trackInFlightRequest } from "../runtime/inFlightRequests";
 import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
@@ -23,6 +22,7 @@ export interface WorkspaceSessionListSnapshot {
   workspaceId: string;
   generation: number;
   sessions: Session[];
+  complete: boolean;
 }
 
 export async function fetchWorkspaceSessionListSnapshot(
@@ -49,21 +49,10 @@ export async function fetchWorkspaceSessionListSnapshot(
   generations.set(scopeKey, generation);
   const request = (async (): Promise<WorkspaceSessionListSnapshot> => {
     const page = await listSessions(apiPort, workspaceId);
-    if (page.items.length > 0) {
-      return { apiPort, workspaceId, generation, sessions: page.items };
+    if (typeof page.has_more !== "boolean") {
+      throw new Error("会话列表响应缺少 has_more，无法判断本页是否完整");
     }
-
-    // 会话目录索引是会话位置的权威来源。工作区后端刚恢复或旧版本迁移后，
-    // /sessions 可能暂时返回空页，但目录索引已经可读；此时回填根级会话的
-    // 完整 DTO，避免刷新后把有效导航误投影成“暂无会话”。
-    const catalogPage = await listSessionCatalogChildren(apiPort, workspaceTarget);
-    const catalogSessionIds = catalogPage.items
-      .filter((node) => node.kind === "session" && node.session_id)
-      .map((node) => node.session_id as string);
-    const catalogSessions = await Promise.all(
-      catalogSessionIds.map((sessionId) => getSession(apiPort, sessionId, workspaceId)),
-    );
-    return { apiPort, workspaceId, generation, sessions: catalogSessions };
+    return { apiPort, workspaceId, generation, sessions: page.items, complete: !page.has_more };
   })();
   trackInFlightRequest(inFlightRequests, scopeKey, request);
   return await request;

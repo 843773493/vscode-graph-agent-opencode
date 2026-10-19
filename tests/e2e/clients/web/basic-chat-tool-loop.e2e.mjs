@@ -25,6 +25,7 @@ function section8ScenarioRegistry(surfaces, facts) {
   let foreign;
   const teamTarget = async () => foreign ??= await createProductSession(surfaces.b, "团队拒绝跨 Session 目标");
   return {
+    session_page_selection: { default: true, run: () => runSessionPageSelection(surfaces.a) },
     child: { default: true, run: () => runChildFifoAndResidency(surfaces.a) },
     team_turn: { default: true, run: async () => runTeamActivation(surfaces.a, "turn", await teamTarget()) },
     team_model_call: { default: true, run: async () => runTeamActivation(surfaces.c, "model_call", await teamTarget()) },
@@ -6894,6 +6895,44 @@ async function runCopyAttachmentFocus(surface) {
   const lifecycle = await runCopyAttachmentLifecycle(surface, owners);
   const missing = await runCopyMissingAttachment(surface, owners);
   return { lifecycle, missing };
+}
+
+async function runSessionPageSelection(surface) {
+  const owners = [];
+  for (let index = 0; index < 22; index += 1) {
+    owners.push(await createProductSession(surface, `会话分页选择 ${index}`));
+  }
+  const firstPage = (await ownerApi(surface, "/api/v1/sessions")).data;
+  assert.equal(firstPage.has_more, true);
+  assert.equal(firstPage.items.length, 20);
+  const visibleIds = new Set(firstPage.items.map((session) => session.session_id));
+  const owner = owners.find((entry) => !visibleIds.has(entry.sessionId));
+  assert.ok(owner, "必须选择真实首页以外的会话");
+  await openOwner(owner);
+  await waitUntil(async () => await catalogRow(owner, owner.sessionId).getAttribute("aria-current") === "true",
+    "首页外会话成为当前选择");
+  const refreshed = owner.page.waitForResponse((response) =>
+    new URL(response.url()).pathname === "/api/v1/sessions"
+      && response.request().method() === "GET" && response.status() === 200, { timeout: 30_000 });
+  const first = await completeOwnerTurn(owner, "在首页外的会话完成首轮。", [
+    finalResponse("off-page-first", "首轮仍属于选中的会话。"),
+  ], [], { openBeforeSend: false, verifyHistory: false });
+  const refreshedPage = (await (await refreshed).json()).data;
+  assert.equal(refreshedPage.has_more, true);
+  assert.ok(!refreshedPage.items.some((session) => session.session_id === owner.sessionId));
+  assert.equal(await catalogRow(owner, owner.sessionId).getAttribute("aria-current"), "true",
+    "活动刷新收到首页后不得把首页外会话当作已删除");
+  const second = await completeOwnerTurn(owner, "不重新选择会话，继续发送第二轮。", [
+    finalResponse("off-page-second", "第二轮仍属于原会话。"),
+  ], [], { openBeforeSend: false, verifyHistory: false });
+  assert.equal(first.turn.ordinal, 1);
+  assert.equal(second.turn.ordinal, 2);
+  const history = await loadCompleteThreadHistory(owner);
+  assert.deepEqual(history.items.map((turn) => turn.turn_id), [first.turn.turn_id, second.turn.turn_id]);
+  const cleanup = [];
+  for (const entry of owners) cleanup.push(await deleteOwner(entry));
+  return { sessionId: owner.sessionId, firstPage: firstPage.items.map((session) => session.session_id),
+    first, refreshedPage: refreshedPage.items.map((session) => session.session_id), second, history, cleanup };
 }
 
 async function runOptionalSeedRevisit(surface) {

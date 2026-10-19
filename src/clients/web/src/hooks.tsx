@@ -338,6 +338,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   } = useWorkspaceBootstrap({
     apiPort: state.apiPort,
     uiSettings: state.uiSettings,
+    readState,
     setState,
     selectionIntentRef,
     gatewayListRequestRef,

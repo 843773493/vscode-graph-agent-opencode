@@ -1,6 +1,6 @@
 import { getSession } from "../../api/session/sessions";
 import { sessionScopeKey } from "../../state/session/sessionScope";
-import { applySessionListConvergence, hasSessionOwner, replaceSessionMetadata } from "../../state/session/sessions";
+import { applySessionListConvergence, hasSessionOwner, mergeSessionListPage, replaceSessionMetadata } from "../../state/session/sessions";
 import type { AppState } from "../../types/frontend";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import {
@@ -75,6 +75,7 @@ export async function refreshWorkspaceSessionList(
     }
     const previousWorkspaceSessions =
       previous.sessionsByWorkspace.get(workspaceId) ?? [];
+    const sessions = mergeSessionListPage(previousWorkspaceSessions, snapshot.sessions, snapshot.complete);
     const currentSessionIsInWorkspace =
       previous.activeGatewayWorkspaceId === workspaceId
       || previous.currentSessionWorkspaceId === workspaceId;
@@ -82,25 +83,24 @@ export async function refreshWorkspaceSessionList(
     const currentSessionRemoved = Boolean(
       currentSessionIsInWorkspace
       && currentSessionId
-      && !snapshot.sessions.some((session) => session.session_id === currentSessionId),
+      && !sessions.some((session) => session.session_id === currentSessionId),
     );
     if (
-      sessionListsMatch(previousWorkspaceSessions, snapshot.sessions)
+      sessionListsMatch(previousWorkspaceSessions, sessions)
       && !currentSessionRemoved
     ) {
       return previous;
     }
-    const next = applySessionListConvergence(previous, workspaceId, snapshot.sessions);
-    for (const session of snapshot.sessions) {
+    const next = applySessionListConvergence(previous, workspaceId, sessions);
+    for (const session of sessions) {
       next.sessionGatewayWorkspaceById.set(
         sessionScopeKey(workspaceId, session.session_id),
         workspaceId,
       );
     }
     if (currentSessionIsInWorkspace) {
-      next.sessions = snapshot.sessions;
       if (currentSessionRemoved) {
-        const nextSession = snapshot.sessions[0] ?? null;
+        const nextSession = sessions[0] ?? null;
         next.currentSession = nextSession;
         next.currentSessionWorkspaceId = nextSession ? workspaceId : null;
       }
