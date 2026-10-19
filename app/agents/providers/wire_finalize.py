@@ -25,6 +25,10 @@ from langchain_core.messages import (
 from langchain_openai.chat_models.base import _construct_responses_api_payload
 
 from app.agents.providers.litellm_stream_types import _openai_tool_call
+from app.agents.providers.request_validation import (
+    reject_sealed_overrides,
+    validate_provider_system_scope,
+)
 from app.services.mapping.itemized.provider_history import reasoning_projection_rows
 from app.services.mapping.itemized.provider_request import (
     project_ai_message_content,
@@ -153,16 +157,6 @@ def provider_wire_params(params: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _reject_sealed_overrides(params: Mapping[str, Any], forbidden: frozenset[str], *, protocol: str) -> None:
-    """参数不得覆盖封存正文；出现即网络前失败，不能只哈希另一份正文。"""
-    overridden = sorted(key for key in params if key in forbidden)
-    if overridden:
-        raise ValueError(
-            f"""source-mismatch: {protocol} provider 参数覆盖 sealed context: """
-            + ",".join(overridden)
-        )
-
-
 def finalize_chat_wire(
     *,
     messages: Sequence[Mapping[str, Any]],
@@ -170,11 +164,12 @@ def finalize_chat_wire(
     params: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Chat Completions 最终 wire：真实消息、sealed tools 与剩余请求参数。"""
-    _reject_sealed_overrides(params, CHAT_SEALED_KEYS, protocol="Chat Completions")
+    reject_sealed_overrides(params, CHAT_SEALED_KEYS, protocol="Chat Completions")
     payload: dict[str, Any] = {"messages": [dict(message) for message in messages]}
     if tools is not None:
         payload["tools"] = [dict(tool) for tool in tools]
     payload.update(params)
+    validate_provider_system_scope(payload)
     return payload
 
 
@@ -289,6 +284,7 @@ def finalize_responses_body(
     body = strip_responses_reasoning_output(body)
     if merge_system_to_instructions:
         body = merge_system_messages_into_instructions(body)
+    validate_provider_system_scope(body)
     return body
 
 
@@ -307,7 +303,7 @@ def finalize_responses_wire(
     SDK 参数映射、reasoning 输出态 content 清洗与 chatgpt 的
     system/developer→instructions 属于同一转换，adapter 不得再复制一份。
     """
-    _reject_sealed_overrides(params, RESPONSES_SEALED_KEYS, protocol="Responses")
+    reject_sealed_overrides(params, RESPONSES_SEALED_KEYS, protocol="Responses")
     payload: dict[str, Any] = {
         **params,
         "input": list(input_items),
@@ -589,7 +585,7 @@ def chat_wire_params(
     params = wire_request_params(
         model, chat_send_params(model, stop=stop, kwargs=kwargs, stream=stream)
     )
-    _reject_sealed_overrides(params, CHAT_SEALED_KEYS, protocol="Chat Completions")
+    reject_sealed_overrides(params, CHAT_SEALED_KEYS, protocol="Chat Completions")
     return params
 
 
@@ -624,7 +620,7 @@ def responses_wire_params(
             "store": profile.store,
         },
     )
-    _reject_sealed_overrides(params, RESPONSES_SEALED_KEYS, protocol="Responses")
+    reject_sealed_overrides(params, RESPONSES_SEALED_KEYS, protocol="Responses")
     return params
 
 def finalize_chat_messages(

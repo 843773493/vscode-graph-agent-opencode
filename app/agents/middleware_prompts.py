@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+RUNTIME_IDENTITY_HEADER = "## 当前运行时身份与路径边界（系统权威元数据）"
+RUNTIME_WORKSPACE_SCOPE_FIELD = "- workspace 根目录（exec_command 未提供 workdir 时的 cwd）："
+
 TODO_SYSTEM_PROMPT = (
     "Use `write_todos` only when a complex request benefits from visible multi-step tracking. "
     "Skip it for simple or conversational requests. Update a step as soon as its state changes, "

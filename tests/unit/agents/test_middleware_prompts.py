@@ -197,10 +197,9 @@ def test_team_source_rules_forbid_polling():
     assert "never claim that the team board is pending" in TEAM_COORDINATION_SYSTEM_PROMPT
 
 
-def test_runtime_identity_separates_model_from_project_and_path_roots(tmp_path):
+def test_runtime_identity_separates_model_from_project_and_uses_relative_workspace_scope():
     producers = runtime_instruction_producers(
         agent_id="default", content="base prompt", config_revision="config:1",
-        workspace_root=str(tmp_path.resolve()),
         provider_candidates=(
             ("backup_3", "gpt-5.6-luna"),
             ("backup_4", "gpt-5.6-luna"),
@@ -212,13 +211,12 @@ def test_runtime_identity_separates_model_from_project_and_path_roots(tmp_path):
     assert "provider id：`backup_3`" in prompt
     assert "model id：`gpt-5.6-luna`" in prompt
     assert "config/name` 只是项目显示名" in prompt
-    assert str(tmp_path.resolve()) in prompt
+    assert "cwd）：`.`" in prompt
     assert "parry_arena/godot_export/parry_arena.html" in prompt
-    assert "exec_command 的相对 workdir 只相对于上述 workspace 根目录解析一次" in prompt
+    assert "exec_command 的相对 workdir 只相对于当前 workspace 根目录解析一次" in prompt
 
 
-def test_build_runtime_injects_selected_provider_and_workspace_root(
-    tmp_path,
+def test_build_runtime_injects_selected_provider_and_relative_workspace_scope(
     monkeypatch,
 ):
     from unittest.mock import MagicMock
@@ -265,9 +263,8 @@ def test_build_runtime_injects_selected_provider_and_workspace_root(
     runtime = agent_factory.build_runtime_for_agent(
         "default",
         config_service,
-        workspace_root=tmp_path,
     )
 
     assert "backup_3" in runtime["instruction_producers"][1].content
     assert "gpt-5.6-luna" in runtime["instruction_producers"][1].content
-    assert str(tmp_path.resolve()) in runtime["instruction_producers"][1].content
+    assert "cwd）：`.`" in runtime["instruction_producers"][1].content

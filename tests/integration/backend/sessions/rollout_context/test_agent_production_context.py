@@ -17,10 +17,8 @@ from langgraph.runtime import ExecutionInfo, Runtime
 
 from app.agents import agent_factory
 from app.agents.graph_tool_adapter import extract_agent_tools_by_name
-from app.agents.instruction_producers import runtime_instruction_producers
 from app.agents.itemized_context_middleware import SealedAssemblyDispatchBridge
 from app.agents.policy import ToolPolicyResolver
-from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.skill_runtime import (
     WorkspaceSkillsMiddleware,
     build_workspace_skill_catalog,
@@ -109,22 +107,29 @@ def factory_context(registry_db, request, monkeypatch):
         return original_create(*args, **kwargs)
 
     monkeypatch.setattr(agent_factory, "create_agent", capture_create)
-    # 使用正式 Provider 的真实 bind_tools；回答仍由下方显式集成桩提供。
-    model = BoxteamLiteLLMChatModel(
-        model="openai/gpt-4.1", api_key="factory-fixture-key",
-        api_base="http://127.0.0.1:1/v1", custom_llm_provider="openai",
-        streaming=False, max_retries=0,
-    )
+    # 由正式 runtime builder 构造真实 Provider；默认回答由下方显式集成桩提供。
+    protocol = getattr(request, "param", "chat_completions")
+    config.get_revision.return_value = "config:production:1"
+    config.get_agent_runtime_config.return_value = {
+        "system_prompt": "配置基础说明",
+        "providers": [{
+            "id": "fixture", "model": "openai/gpt-4.1",
+            "api_key": "factory-fixture-key", "endpoint": "http://127.0.0.1:1/v1",
+            "custom_llm_provider": "openai",
+            "api_mode": {"protocol": protocol},
+        }],
+    }
+    agent_runtime = agent_factory.build_runtime_for_agent("default", config)
+    model = agent_runtime["model"]
+    captured["model"] = model
     tools = [StructuredTool.from_function(
         lambda value: value, name=name, description="受信注册工具",
     ) for name in ("create_team", "send_session_message")]
     sessions = MagicMock()
     sessions.session_context_control_admission.side_effect = lambda *_args, **_kwargs: nullcontext()
     graph = agent_factory.create_my_deep_agent(
-        model=model, instruction_producers=runtime_instruction_producers(
-            agent_id="default", content="配置基础说明", config_revision="config:production:1",
-            workspace_root=str(workspace), provider_candidates=(("fixture", "model"),),
-        ), tool_selection_reader=selection, checkpointer=saver,
+        model=model, instruction_producers=agent_runtime["instruction_producers"],
+        tool_selection_reader=selection, checkpointer=saver,
         session_id=session, thread_id=thread, agent_id="default", tools=tools,
         background_task_registry=MagicMock(), background_message_bus=MagicMock(),
         job_event_bus=MagicMock(), job_service=MagicMock(), message_service=MagicMock(),
@@ -161,7 +166,7 @@ def factory_context(registry_db, request, monkeypatch):
         ))
     registered = extract_agent_tools_by_name(graph)
 
-    def dispatch(task, *, system_message=None):
+    def dispatch(task, *, system_message=None, provider_handler=None):
         incoming = ModelRequest(
             model=model, messages=[], state={"messages": []}, tools=list(registered.values()),
             system_message=system_message, runtime=Runtime(execution_info=ExecutionInfo(
@@ -171,7 +176,7 @@ def factory_context(registry_db, request, monkeypatch):
         )
         outbound = []
 
-        def provider_handler(actual):
+        def fixture_handler(actual):
             outbound.append(actual)
             return ModelResponse(result=[AIMessage(content="集成桩响应")])
 
@@ -181,7 +186,7 @@ def factory_context(registry_db, request, monkeypatch):
         ):
             token = set_current_execution_resource_activation(parent, admission=admission)
             try:
-                model_chain(incoming, provider_handler)
+                model_chain(incoming, provider_handler or fixture_handler)
             finally:
                 reset_current_execution_resource_activation(token)
         return outbound[0]

@@ -309,7 +309,6 @@ def build_runtime_for_agent(
     *,
     prompt_cache_key: str | None = None,
     preferred_provider_id: str | None = None,
-    workspace_root: Path | None = None,
 ) -> dict[str, Any]:
     if config_service is None:
         raise RuntimeError("build_runtime_for_agent 需要显式传入 ConfigService")
@@ -352,7 +351,6 @@ def build_runtime_for_agent(
         "instruction_producers": runtime_instruction_producers(
             agent_id=agent_id, content=runtime_config["system_prompt"],
             config_revision=service.get_revision(),
-            workspace_root=str(workspace_root.resolve()) if workspace_root is not None else None,
             provider_candidates=[
                 (candidate.provider_id, candidate.model_id)
                 for candidate in candidates
@@ -1016,7 +1014,6 @@ def create_runtime_deep_agent_for_session(
         config_service=service,
         prompt_cache_key=session_id,
         preferred_provider_id=preferred_provider_id,
-        workspace_root=workspace_root,
     )
     tool_config = service.get_agent_tool_config(agent_id)
     tool_policy = service.resolve_agent_tool_policy(agent_id)
