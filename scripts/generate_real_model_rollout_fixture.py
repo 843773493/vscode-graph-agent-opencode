@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import re
 import shutil
 import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -19,12 +21,22 @@ PROJECT_ROOT = Path.cwd().resolve()
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
+from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.checkpoint.base import empty_checkpoint
 
 from app.agents.agent_factory import build_model_from_provider
 from app.agents.provider_api_mode import parse_provider_api_mode
+from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
+from app.agents.providers.wire_finalize import (
+    chat_wire_params,
+    chat_wire_profile,
+    responses_wire_params,
+    responses_wire_profile,
+)
+from app.agents.sealed_assembly_dispatch import sealed_assembly_dispatch_scope
 from app.container import WorkspaceContainerRegistry
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
@@ -33,12 +45,30 @@ from app.core.path_utils import catalog_provider_scope, get_session_path_resolve
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.execution_admission import ExecutionAdmission
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.resource_platform.registry.semantic_registry import (
+    ResourceRegistry,
+)
+from app.services.infrastructure.rollout_context.activation.body import (
+    ResourceActivationBodyStore,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
+)
 from app.services.mapping.itemized.provider_history import visible_text
+from app.services.orchestration.execution_step.model_call import StepModelCallAdapter
+from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 
 SESSION_ID = "ses_019c27f816b17ee394a67f9312bb669e"
 
@@ -146,12 +176,12 @@ def _checkpoint(
         "turn_count": turn,
     }
     checkpoint["channel_versions"] = {
-        "messages": str(turn),
-        "model_provider": str(turn),
-        "turn_count": str(turn),
+        "messages": checkpoint_id,
+        "model_provider": checkpoint_id,
+        "turn_count": checkpoint_id,
     }
     checkpoint["updated_channels"] = ["messages", "model_provider", "turn_count"]
-    checkpoint["versions_seen"] = {"agent": {"messages": str(turn)}}
+    checkpoint["versions_seen"] = {"agent": {"messages": checkpoint_id}}
     checkpoint["pending_sends"] = []
     return checkpoint
 
@@ -183,11 +213,89 @@ def _provider_id_for_turn(turn: int, provider_ids: tuple[str, ...]) -> str:
     return provider_ids[(turn - 1) % len(provider_ids)]
 
 
+def _invoke_fixture_model(
+    model: BaseChatModel,
+    *,
+    saver: RolloutCheckpointSaver,
+    admission: ExecutionAdmission,
+    adapter: StepModelCallAdapter,
+    provider_id: str,
+    messages: list[BaseMessage],
+    use_tools: bool,
+    attempt: int,
+) -> AIMessage:
+    """生成器也先冻结实际请求，再经正式登记与 Provider 派发链调用模型。"""
+    with (
+        session_thread_owner_scope(
+            MutationIntentOwner(admission.session_id, admission.thread_id),
+            langgraph_thread_id=admission.thread_id,
+        ),
+        execution_admission_scope(admission, langgraph_thread_id=admission.thread_id),
+    ):
+        coordinator = ResourceActivationCoordinator(
+            registry=ResourceRegistry(), saver=saver,
+            body_store=ResourceActivationBodyStore(saver._storage, saver._detail_store),
+        )
+        model_call_id = str(uuid4())
+
+        async def freeze():
+            parent = await coordinator.freeze_execution(
+                admission=admission,
+                policy=ResourceActivationPolicySnapshot(default_boundary="turn", boundaries={}),
+            )
+            return await coordinator.commit_model_call(await coordinator.capture_model_call(
+                parent=parent, model_call_id=model_call_id,
+            ))
+
+        activation = asyncio.run(freeze())
+        schemas = [convert_to_openai_tool(inspect_fixture)] if use_tools else []
+        tool_set = ToolSetSnapshot(selection_revision=sha256_jcs(schemas), tools=schemas)
+        native = isinstance(model, BoxteamOpenAIResponsesModel)
+        profile = responses_wire_profile(model) if native else chat_wire_profile(model)
+        prepared = saver.prepare_context_for_provider(
+            admission.session_id, admission.thread_id,
+            turn_id=admission.turn_id, execution_id=admission.execution_id,
+            plan_creation_idempotency_key=f"real-request:{model_call_id}",
+            seal_idempotency_key=f"real-seal:{model_call_id}",
+            request_messages=messages,
+            context_source_manager=ContextSourceManager(
+                owner=ContextSourceOwnerKey(admission.session_id, admission.thread_id),
+                control_state_port=saver,
+            ),
+            tool_set_supplier=lambda: tool_set,
+            provider_version=profile.identity(), wire_profile=profile,
+            wire_params=responses_wire_params(model) if native else chat_wire_params(model, stream=True),
+            target_format="responses" if native else "chat_completions",
+            model_call_id=model_call_id, activation_snapshot=activation,
+        )
+        asyncio.run(adapter.register(model_call_id, attempt, provider_id))
+        try:
+            with sealed_assembly_dispatch_scope(
+                prepared["dispatch_ref"], prepared["snapshot"],
+                native_projection=prepared.get("native_projection"),
+            ):
+                options = {"tools": prepared["tools"]} if prepared["tools"] else {}
+                response = model.invoke(prepared["messages"], **options)
+        except Exception:
+            saver.update_model_call_outcome(
+                admission.session_id, thread_id=admission.thread_id,
+                model_call_id=model_call_id, outcome="failed", dispatch_state="failed",
+            )
+            raise
+        saver.update_model_call_outcome(
+            admission.session_id, thread_id=admission.thread_id,
+            model_call_id=model_call_id, outcome="completed", dispatch_state="completed",
+        )
+        return response.model_copy(update={
+            "response_metadata": {**response.response_metadata, "model_call_id": model_call_id},
+        })
+
+
 def _invoke_with_provider_fallback(
-    models: dict[str, Any],
+    invoke: Callable[[str, list[BaseMessage], bool], AIMessage],
     provider_ids: tuple[str, ...],
     requested_provider_id: str,
-    messages: list[object],
+    messages: list[BaseMessage],
     *,
     provider_available: dict[str, bool],
     use_tools: bool,
@@ -199,12 +307,6 @@ def _invoke_with_provider_fallback(
     已失败的 provider 会在它再次成为轮换请求目标时重试，因此短暂限流
     恢复后仍能重新进入同一 rollout，而不会永久粘在某个 fallback 上。
     """
-
-    def invoke(provider_id: str) -> AIMessage:
-        model = models[provider_id]
-        if use_tools:
-            return model.bind_tools([inspect_fixture]).invoke(messages)
-        return model.invoke(messages)
 
     ordered_provider_ids = (
         (requested_provider_id,)
@@ -218,7 +320,7 @@ def _invoke_with_provider_fallback(
             ),
         )
     )
-    last_error: Exception | None = None
+    errors: list[Exception] = []
     for provider_id in ordered_provider_ids:
         # 当前轮次明确请求的 provider 即使之前失败也要重试；其它 provider
         # 在本轮只使用已知可用的候选，避免每个 Turn 重复撞限流。
@@ -227,7 +329,7 @@ def _invoke_with_provider_fallback(
         ):
             continue
         try:
-            response = invoke(provider_id)
+            response = invoke(provider_id, messages, use_tools)
             if require_visible_output and not (
                 response.tool_calls or visible_text(response.content).strip()
             ):
@@ -236,7 +338,8 @@ def _invoke_with_provider_fallback(
                 )
         except Exception as error:  # noqa: BLE001 - provider 异常必须触发候选切换
             provider_available[provider_id] = False
-            last_error = error
+            error.add_note(f"fixture provider={provider_id} requested={requested_provider_id}")
+            errors.append(error)
             print(
                 "provider fallback: "
                 f"requested={requested_provider_id} failed={provider_id} "
@@ -246,13 +349,13 @@ def _invoke_with_provider_fallback(
         provider_available[provider_id] = True
         return response, provider_id
 
-    if last_error is None:
+    if not errors:
         raise RuntimeError(
             f"真实模型 fixture 没有可用 provider: requested={requested_provider_id}"
         )
     raise RuntimeError(
         f"真实模型 fixture 的 provider fallback 全部失败: requested={requested_provider_id}"
-    ) from last_error
+    ) from ExceptionGroup("真实模型 fixture 的各 Provider 原始失败", errors)
 
 
 def generate(
@@ -321,7 +424,7 @@ def generate(
             raise RuntimeError(
                 "真实模型 fixture 至少需要两个配置 provider，才能验证模型切换"
             )
-        models: dict[str, Any] = {}
+        models: dict[str, BaseChatModel] = {}
         provider_specs: dict[str, dict[str, Any]] = {}
         for provider_id in provider_ids:
             provider = configured_providers[provider_id]
@@ -338,10 +441,11 @@ def generate(
 
         saver = RolloutCheckpointSaver(sessions_dir)
         config = build_checkpoint_config(thread_id)
-        messages: list[object] = []
+        messages: list[BaseMessage] = []
         last_provider_id = provider_ids[0]
         observed_provider_ids: set[str] = set()
         provider_available = {provider_id: True for provider_id in provider_ids}
+        previous_request_provider: str | None = None
         for turn in range(start_turn, end_turn + 1):
             requested_provider_id = (
                 requested_provider_sequence[(turn - 1) % len(requested_provider_sequence)]
@@ -382,9 +486,48 @@ def generate(
                 SESSION_ID, thread_id=thread_id,
                 execution_id=str(accepted["initial_execution_id"]),
             )
+            adapter = StepModelCallAdapter(
+                checkpointer=saver, session_id=SESSION_ID, thread_id=thread_id,
+                job_id=admission.job_id, checkpoint_ns="",
+            )
+            model_call_attempt = 0
+
+            def invoke(
+                provider_id: str, request: list[BaseMessage], use_tools: bool, *,
+                frozen_admission: ExecutionAdmission = admission,
+                turn_adapter: StepModelCallAdapter = adapter,
+                turn_number: int = turn,
+            ) -> AIMessage:
+                nonlocal model_call_attempt, config, previous_request_provider
+                model_call_attempt += 1
+                if previous_request_provider is not None and previous_request_provider != provider_id:
+                    # 模型轮换明确创建真实 rewind view，保留完整对话前缀；
+                    # 不给普通同 epoch append 伪造 profile 或 ToolSet 变更。
+                    with (
+                        session_thread_owner_scope(
+                            MutationIntentOwner(SESSION_ID, thread_id), langgraph_thread_id=thread_id,
+                        ),
+                        execution_admission_scope(frozen_admission, langgraph_thread_id=thread_id),
+                    ):
+                        boundary = _checkpoint(
+                            f"real-switch-{frozen_admission.turn_id}-{model_call_attempt}",
+                            request, previous_request_provider, turn_number,
+                        )
+                        config = saver.put(
+                            config, boundary, {"source": "real-model-provider-switch"},
+                            boundary["channel_versions"],
+                        )
+                        config = saver.rewind(config, checkpoint_id=boundary["id"])
+                previous_request_provider = provider_id
+                return _invoke_fixture_model(
+                    models[provider_id], saver=saver, admission=frozen_admission, adapter=turn_adapter,
+                    provider_id=provider_id, messages=request, use_tools=use_tools,
+                    attempt=model_call_attempt,
+                )
+
             messages.append(user)
             response, provider_id = _invoke_with_provider_fallback(
-                models,
+                invoke,
                 provider_ids,
                 requested_provider_id,
                 messages,
@@ -441,7 +584,7 @@ def generate(
                         )
                     )
                 final_response, final_provider_id = _invoke_with_provider_fallback(
-                    models,
+                    invoke,
                     provider_ids,
                     provider_id,
                     messages,
@@ -474,9 +617,11 @@ def generate(
                 ),
                 execution_admission_scope(admission, langgraph_thread_id=thread_id),
             ):
+                adapter.converge_final_message(final_response)
+                checkpoint = _checkpoint(f"real-checkpoint-{turn:04d}", messages, provider_id, turn)
                 config = saver.put(
                     config,
-                    _checkpoint(f"real-checkpoint-{turn:04d}", messages, provider_id, turn),
+                    checkpoint,
                     {
                         "source": "real-model-rollout-fixture",
                         "turn": turn,
@@ -488,20 +633,9 @@ def generate(
                         ).protocol,
                         "model_switch": provider_id != requested_provider_id,
                     },
-                    {
-                        "messages": str(turn),
-                        "model_provider": str(turn),
-                        "turn_count": str(turn),
-                    },
+                    checkpoint["channel_versions"],
                 )
-            if not isinstance(final_response.id, str) or not final_response.id:
-                raise RuntimeError(f"真实模型最终消息缺少 ID: turn={turn}")
-            saver.finalize_turn(
-                session_id=SESSION_ID,
-                thread_id=thread_id,
-                turn_id=turn_id,
-                final_message_id=final_response.id,
-            )
+                asyncio.run(adapter.converge_final_checkpoint(final_response.id))
             if turn % 8 == 0 or turn in {1, 64, 65, 96, 97, 128}:
                 print(
                     "real rollout progress: "

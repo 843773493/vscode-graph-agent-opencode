@@ -296,6 +296,14 @@ def create_frozen_provider_prepare(
                         **activation_arguments,
                     )
                 snapshot = prepared["snapshot"]
+                # 静态历史没有 model-start callback，登记前仍须像真实执行器一样
+                # 消费 pending handle，不能让长历史累计持有每轮完整请求快照。
+                dispatched = saver.consume_prepared_context_for_dispatch(
+                    session, thread, execution_id=admission.execution_id,
+                    model_call_id=snapshot.model_call_id,
+                )
+                if dispatched is None or dispatched["assembly_id"] != snapshot.assembly_id:
+                    raise AssertionError("历史 fixture 缺少同一 assembly 的派发 handle")
             with timed_fixture_stage(
                 observer,
                 "provider.register_model_call",
