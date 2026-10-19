@@ -7,6 +7,7 @@ import sqlite3
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
+from copy import deepcopy
 
 from cachetools import LRUCache
 
@@ -24,7 +25,8 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
 _BODY_VALIDATION_MAX_BYTES = 8 * 1024 * 1024
 _BODY_VALIDATION_MAX_ENTRIES = 4096
 _BodyValidationKey = tuple[bytes, int, str, str, int, str]
-_body_validation_scope: ContextVar[tuple[LRUCache[_BodyValidationKey, bytes], int] | None] = (
+_BodyValidationValue = tuple[bytes, CanonicalItemRecord]
+_body_validation_scope: ContextVar[tuple[LRUCache[_BodyValidationKey, _BodyValidationValue], int] | None] = (
     ContextVar("catalog_body_validation_scope", default=None)
 )
 
@@ -43,8 +45,8 @@ def catalog_body_validation_scope(
         raise ValueError("正文校验作用域的字节和条目上限必须大于 0")
     if max_bytes > _BODY_VALIDATION_MAX_BYTES or max_entries > _BODY_VALIDATION_MAX_ENTRIES:
         raise ValueError("正文校验作用域不能超过硬上限：8MiB / 4096 条")
-    successful: LRUCache[_BodyValidationKey, bytes] = LRUCache(
-        maxsize=max_bytes, getsizeof=len,
+    successful: LRUCache[_BodyValidationKey, _BodyValidationValue] = LRUCache(
+        maxsize=max_bytes, getsizeof=lambda value: len(value[0]),
     )
     token = _body_validation_scope.set((successful, max_entries))
     try:
@@ -84,11 +86,35 @@ def validate_catalog_body(
     payload_length: int,
     source_revision: str,
 ) -> None:
-    """以已提交正文验证 locator、hash 和逻辑 source manifest。"""
+    """校验实际正文与 catalog；初始化只验证，不分配调用方副本。"""
+    _validated_catalog_body((raw, sequence, item_id, catalog_hash, payload_length, source_revision))
+
+
+def read_catalog_body(
+    raw: bytes,
+    *,
+    sequence: int,
+    item_id: str,
+    catalog_hash: str,
+    payload_length: int,
+    source_revision: str,
+) -> CanonicalItemRecord:
+    """返回调用方独有的 typed item，避免可变正文污染同次校验结果。
+
+    同次 prepare 只复用完整原字节和 catalog 参数均相等的成功结果；缓存
+    不持有调用方可修改的容器，每次返回独立副本。投影索引仍由读取方现查。
+    """
+    return deepcopy(_validated_catalog_body(
+        (raw, sequence, item_id, catalog_hash, payload_length, source_revision),
+    ))
+
+
+def _validated_catalog_body(key: _BodyValidationKey) -> CanonicalItemRecord:
+    raw, sequence, item_id, catalog_hash, payload_length, source_revision = key
     scope = _body_validation_scope.get()
-    key = (raw, sequence, item_id, catalog_hash, payload_length, source_revision)
-    if scope is not None and scope[0].get(key) is not None:
-        return
+    cached = scope[0].get(key) if scope is not None else None
+    if cached is not None:
+        return cached[1]
     try:
         envelope = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -102,9 +128,13 @@ def validate_catalog_body(
         or envelope.get("record_type") != "item"
         or envelope.get("item_sequence") != sequence
         or envelope.get("item_id") != item_id
-        or envelope.get("content_hash") != catalog_hash
     ):
         raise RuntimeError(f"v2 item catalog 与 JSONL identity 不一致: item_id={item_id}")
+    if envelope.get("content_hash") != catalog_hash:
+        raise RuntimeError(
+            f"v2 item catalog 与 JSONL identity 不一致: item_id={item_id}; "
+            "item catalog 与 JSONL content_hash 不一致"
+        )
     try:
         item = CanonicalItemRecord.from_dict(envelope)
     except (KeyError, ItemSchemaError, TypeError, ValueError) as error:
@@ -121,7 +151,8 @@ def validate_catalog_body(
         if len(raw) <= successful.maxsize:
             while len(successful) >= max_entries:
                 successful.popitem()
-            successful[key] = raw
+            successful[key] = (raw, item)
+    return item
 
 
 def validate_projection_membership(connection: sqlite3.Connection) -> None:

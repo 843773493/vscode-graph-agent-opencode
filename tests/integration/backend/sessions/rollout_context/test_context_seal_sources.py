@@ -4,6 +4,7 @@ from collections import Counter
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
+from functools import partial
 
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
@@ -22,7 +23,11 @@ from app.services.infrastructure.rollout_context.runtime.composer import (
 from app.services.infrastructure.rollout_context.storage import (
     rollout_schema_introspection,
 )
-from app.services.infrastructure.rollout_context.storage.catalog import integrity
+from app.services.infrastructure.rollout_context.storage.catalog import (
+    integrity,
+    item_reader,
+    items,
+)
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     registry_db as registry_db,  # noqa: PLC0414 - 按当前文件隔离正式工作区
 )
@@ -31,6 +36,59 @@ from tests.integration.backend.sessions.rollout_context.test_context_production_
 )
 
 pytestmark = pytest.mark.parametrize("registry_db", ["protected"], indirect=True)
+
+
+@pytest.fixture(params=["batch", "checkpoint", "catalog"])
+def canonical_reader(registry_db, request):
+    saver, session, connection, _accepted = registry_db
+    storage = saver._storage.storage
+    thread = storage.main_thread_id(session)
+    sequence, item_id, offset, length = connection.execute(
+        "SELECT item_sequence,item_id,jsonl_offset,jsonl_length FROM item_catalog ORDER BY item_sequence LIMIT 1",
+    ).fetchone()
+
+    def read():
+        if request.param == "batch":
+            return storage.read_items(session, thread, item_ids=(item_id,), connection=connection)[0]
+        if request.param == "checkpoint":
+            with storage.jsonl_path(session, thread_id=thread).open("rb") as stream:
+                return storage._read_v2_item_at(
+                    connection, stream, sequence=sequence, offset=offset, length=length,
+                )
+        return storage._read_canonical_item_from_catalog(
+            connection, session_id=session, thread_id=thread, checkpoint_ns="", item_id=item_id,
+        )
+
+    return storage, session, thread, connection, item_id, read
+
+
+def test_canonical_readers_reuse_validated_bytes_but_recheck_projection(
+    canonical_reader, monkeypatch,
+):
+    storage, session, thread, connection, item_id, read = canonical_reader
+    original_line = integrity.canonical_json_line
+    validations = []
+
+    def observe(value):
+        validations.append(value)
+        return original_line(value)
+
+    monkeypatch.setattr(integrity, "canonical_json_line", observe)
+    with storage.catalog_body_validation_scope():
+        storage.initialize(session, thread_id=thread)
+        assert len(validations) == 1
+        first = read()
+        original = first.to_dict()
+        first.producer_ref["producer_id"] = "caller mutation"
+        second = read()
+        assert second.to_dict() == original
+        assert len(validations) == 1
+
+        connection.execute("UPDATE item_catalog SET tool_call_id='forged-projection' WHERE item_id=?", (item_id,))
+        connection.commit()
+        with pytest.raises(RuntimeError, match="tool_call_id 不一致"):
+            read()
+        assert len(validations) == 1
 
 
 @pytest.fixture
@@ -237,6 +295,7 @@ def test_provider_uses_storage_body_validation_scope_and_ends_after_success(prod
     storage = saver._storage.storage
     original_scope = storage.catalog_body_validation_scope
     original_validate = rollout_schema_introspection.validate_catalog_body
+    original_read = integrity.read_catalog_body
     original_line = integrity.canonical_json_line
     scope_events = []
     phase = "before"
@@ -256,12 +315,12 @@ def test_provider_uses_storage_body_validation_scope_and_ends_after_success(prod
         phase = "after"
         scope_events.append("exit")
 
-    def observe_validation(raw, *, sequence, item_id, catalog_hash, payload_length, source_revision):
+    def observe_validation(operation, raw, *, sequence, item_id, catalog_hash, payload_length, source_revision):
         key = (raw, sequence, item_id, catalog_hash, payload_length, source_revision)
         requests[phase][key] += 1
         token = active_request.set((phase, key))
         try:
-            return original_validate(
+            return operation(
                 raw, sequence=sequence, item_id=item_id, catalog_hash=catalog_hash,
                 payload_length=payload_length, source_revision=source_revision,
             )
@@ -277,7 +336,9 @@ def test_provider_uses_storage_body_validation_scope_and_ends_after_success(prod
         return result
 
     monkeypatch.setattr(storage, "catalog_body_validation_scope", observe_scope)
-    monkeypatch.setattr(rollout_schema_introspection, "validate_catalog_body", observe_validation)
+    monkeypatch.setattr(rollout_schema_introspection, "validate_catalog_body", partial(observe_validation, original_validate))
+    monkeypatch.setattr(items, "read_catalog_body", partial(observe_validation, original_read))
+    monkeypatch.setattr(item_reader, "read_catalog_body", partial(observe_validation, original_read))
     monkeypatch.setattr(integrity, "canonical_json_line", observe)
     prepare("body-validation-success-scope")
     assert scope_events == ["enter", "exit"]

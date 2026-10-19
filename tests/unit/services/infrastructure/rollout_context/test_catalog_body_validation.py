@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 import pytest
 
+from app.domain.itemized.hashing import payload_content_length
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.catalog import integrity
 from app.services.infrastructure.rollout_context.storage.serialization import (
@@ -77,6 +78,41 @@ def test_body_validation_resets_scope_after_exception_and_restores_nested_scope(
         raise RuntimeError("scope failure")
     integrity.validate_catalog_body(raw, **parameters)
     assert len(validation_calls) == 3
+
+
+def test_body_validation_returns_isolated_nested_values_on_every_read(
+    validation_calls: list[object],
+) -> None:
+    item = CanonicalItemRecord.create(
+        item_sequence=1, item_id="nested-validation", semantic_kind="user_input",
+        payload_kind="structured_content", status="completed", payload={"text": ["original"]},
+        producer_ref={"producer_kind": "user", "producer_id": "body-ingress"},
+        created_at="2026-10-19T00:00:00+00:00",
+    )
+    raw = canonical_json_line(item.to_dict())
+    parameters = {
+        "sequence": item.item_sequence, "item_id": item.item_id,
+        "catalog_hash": item.content_hash,
+        "payload_length": payload_content_length(item.payload_kind, item.payload),
+        "source_revision": f"canonical:{item.item_id}:{item.content_hash}",
+    }
+    with integrity.catalog_body_validation_scope():
+        first = integrity.read_catalog_body(raw, **parameters)
+        assert isinstance(first.payload, dict)
+        assert isinstance(first.payload["text"], list)
+        assert isinstance(first.producer_ref, dict)
+        first.payload["text"].append("caller mutation")
+        first.producer_ref["producer_id"] = "caller mutation"
+        second = integrity.read_catalog_body(raw, **parameters)
+        assert second.to_dict() == item.to_dict()
+        assert isinstance(second.payload, dict)
+        assert isinstance(second.payload["text"], list)
+        second.payload["text"].append("second caller mutation")
+        third = integrity.read_catalog_body(raw, **parameters)
+        assert third.to_dict() == item.to_dict()
+    assert len(validation_calls) == 1
+    assert integrity.read_catalog_body(raw, **parameters).to_dict() == item.to_dict()
+    assert len(validation_calls) == 2
 
 
 @pytest.mark.parametrize(("field", "changed"), [

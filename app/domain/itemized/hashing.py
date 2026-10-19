@@ -83,16 +83,36 @@ def _jcs_input(value: object) -> object:
     return value
 
 
+def _has_mapping_adapter(value: object) -> bool:
+    """只探测库不支持的 Mapping，普通标量的合法性由 RFC 8785 校验。"""
+    if value is None or isinstance(value, (str, int, float)):
+        return False
+    if type(value) is dict:
+        return any(_has_mapping_adapter(child) for child in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_has_mapping_adapter(child) for child in value)
+    return isinstance(value, Mapping)
+
+
 def canonical_json_bytes(value: object) -> bytes:
     """返回 RFC 8785 JCS 的无空白 UTF-8 字节。"""
-    needs_adaptation = _validate_json_value(value, "value")
+    if _has_mapping_adapter(value):
+        _validate_json_value(value, "value")
+        value = _jcs_input(value)
     try:
-        # 常规 dict/list/tuple 已被 RFC 8785 直接支持，不再复制遍历同一份 JSON。
-        return rfc8785.dumps(_jcs_input(value) if needs_adaptation else value)
+        try:
+            # RFC 8785 自身完整校验普通 JSON，不再预先递归遍历同一输入。
+            return rfc8785.dumps(value)
+        except (rfc8785.CanonicalizationError, UnicodeError, TypeError):
+            # Python Mapping 与大整数仍使用唯一适配器；失败时先保留既有
+            # 结构路径及错误先后，不能让前面的大整数掩盖后面的非法字段。
+            if not _validate_json_value(value, "value"):
+                raise
+            return rfc8785.dumps(_jcs_input(value))
     except (
         rfc8785.CanonicalizationError,
-        rfc8785.FloatDomainError,
-        rfc8785.IntegerDomainError,
+        UnicodeError,
+        TypeError,
     ) as error:
         raise ItemSchemaError(f"RFC 8785 JCS 无法编码 value: {error}") from error
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
@@ -15,7 +14,6 @@ from app.domain.itemized.enums import (
     ControlOutcome,
     SemanticKind,
 )
-from app.domain.itemized.errors import FormatDispatchError
 from app.domain.itemized.hashing import (
     payload_content_length,
 )
@@ -34,6 +32,7 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
     read_local_scopes,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.integrity import (
+    read_catalog_body,
     validate_catalog_projection,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
@@ -548,42 +547,11 @@ class RolloutItemsMixin:
                         raw = stream.read(length)
                         if len(raw) != length:
                             raise RuntimeError(f"item JSONL locator 长度不足: {item_id}")
-                        envelope = json.loads(raw.decode("utf-8"))
-                        if not isinstance(envelope, Mapping):
-                            raise TypeError(f"item envelope 非法: {item_id}")
-                        if raw != _v2_json_line(envelope):
-                            raise FormatDispatchError(
-                                f"v2 item JSONL 不是 RFC 8785 JCS canonical line: {item_id}"
-                            )
-                        item = CanonicalItemRecord.from_dict(envelope)
-                        if item.item_sequence != sequence or item.item_id != item_id:
-                            raise RuntimeError(
-                                f"item catalog 与 JSONL identity 不一致: {item_id}"
-                            )
-                        if item.content_hash != expected_hash:
-                            raise RuntimeError(
-                                f"item catalog 与 JSONL content_hash 不一致: {item_id}"
-                            )
-                        payload_length = payload_content_length(item.payload_kind, item.payload)
-                        if payload_length_value != payload_length:
-                            raise RuntimeError(
-                                f"item catalog 与 JSONL payload_length 不一致: {item_id}"
-                            )
-                        source_revision = (
-                            item.source_manifest.source_revision
-                            if item.source_manifest is not None
-                            else None
+                        item = read_catalog_body(
+                            raw, sequence=sequence, item_id=item_id,
+                            catalog_hash=expected_hash, payload_length=payload_length_value,
+                            source_revision=expected_source_revision,
                         )
-                        if source_revision is None:
-                            source_revision = f"canonical:{item.item_id}:{item.content_hash}"
-                        elif not isinstance(source_revision, str) or not source_revision:
-                            raise RuntimeError(
-                                f"canonical item source_revision 非法: {item.item_id}"
-                            )
-                        if expected_source_revision != source_revision:
-                            raise RuntimeError(
-                                f"item catalog 与 JSONL source_revision 不一致: {item_id}"
-                            )
                         validate_catalog_projection(
                             item,
                             projection_manifest_json=expected_projection_manifest,

@@ -263,6 +263,7 @@
         "structured_content": {
           "summary_id": "summary-1",
           "view_revision": "view-3",
+          "summary": "结构化摘要",
           "parts": []
         }
       }

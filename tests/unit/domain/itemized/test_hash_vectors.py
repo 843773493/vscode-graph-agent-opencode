@@ -171,6 +171,17 @@ def test_jcs_adapts_nested_mapping_and_large_integers_without_mutating_input() -
     assert type(children[1]) is int
 
 
+def test_jcs_keeps_nested_mapping_subclass_logical_items() -> None:
+    class LogicalMapping(dict[str, str]):
+        def items(self):
+            return {"logical": "published"}.items()
+
+    source = LogicalMapping(physical="private")
+    value = {"nested": [source]}
+    assert canonical_json_bytes(value) == b'{"nested":[{"logical":"published"}]}'
+    assert source["physical"] == "private"
+
+
 @pytest.mark.parametrize(
     ("value", "message"),
     [
