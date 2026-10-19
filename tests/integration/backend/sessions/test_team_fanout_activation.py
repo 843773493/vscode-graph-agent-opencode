@@ -32,6 +32,13 @@ from app.domain.itemized.resource_activation import ResourceActivationPolicySnap
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
 from app.schemas.internal_v2.team import TeamBoardDTO, TeamEventDTO
+from app.services.business.resource_derivations.team import (
+    TEAM_EVENT_SOURCE_ID,
+    TEAM_FACETS,
+    TEAM_LEDGER_SOURCE_ID,
+    TEAM_RESOURCE_IDS,
+    TeamFacetLoader,
+)
 from app.services.business.session_service import SessionService
 from app.services.business.team.service import TeamCoordinationService
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
@@ -48,10 +55,6 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
-)
-from app.services.infrastructure.team.activation import (
-    TEAM_RESOURCE_IDS,
-    team_projection,
 )
 from app.services.infrastructure.team.store import TeamStore
 from app.services.infrastructure.trace_event_store import TraceEventStore
@@ -326,9 +329,15 @@ async def test_required_unready_revision_blocks_dispatch_and_ready_without_sourc
     await case.fanout.start()
     registry, _scope = subscribe(case)
     await case.fanout.stop()
+    valid = {snapshot.resource_id: snapshot for snapshot in registry.snapshots()}
     latest = await commit_board(case, name="连续变化一")
     latest = await commit_board(case, name="连续变化二")
     assert not all(snapshot.available for snapshot in registry.snapshots())
+    for snapshot in registry.snapshots():
+        previous = valid[snapshot.resource_id]
+        assert snapshot.payload is None and snapshot.retained_revision == previous.revision
+        assert snapshot.revision == previous.revision and snapshot.source_lineage == previous.source_lineage
+        assert registry.last_valid_snapshot(snapshot.resource_id) is previous
     with pytest.raises(ResourceActivationError, match="source-unavailable"):
         await coordinator(case, registry).freeze_execution(admission=admission(case, 1),
             policy=ResourceActivationPolicySnapshot(default_boundary="turn", boundaries={}))
@@ -337,7 +346,14 @@ async def test_required_unready_revision_blocks_dispatch_and_ready_without_sourc
     frozen = await coordinator(case, registry).freeze_execution(admission=case.saver.execution_admission(SESSION, thread_id=case.main,
         execution_id=case.saver.execution_for_turn(SESSION, thread_id=case.main, turn_id="turn-1")),
         policy=ResourceActivationPolicySnapshot(default_boundary="turn", boundaries={}))
-    assert frozen.registry_generation == latest
+    assert frozen.registry_generation == max(snapshot.generation for snapshot in registry.snapshots())
+    record = case.control.get_collaboration_fanout(latest)
+    for binding in frozen.bindings:
+        assert binding.captured_registry_generation == registry.snapshot(binding.resource_id).generation
+        assert binding.source_lineage_ref is not None
+        assert binding.source_lineage_ref.sources == tuple(sorted((
+            (TEAM_LEDGER_SOURCE_ID, str(latest)), (TEAM_EVENT_SOURCE_ID, record.event_hash),
+        )))
     assert case.saver._storage.checkpoints.read_context_source_control_states(SESSION, thread_id=case.main) == ()
 
 
@@ -402,7 +418,10 @@ async def test_frozen_fanout_damage_fails_closed(team_case, damage):
 @pytest.mark.asyncio
 async def test_hidden_registering_member_does_not_change_facet_revision(team_case):
     case = team_case
-    original = team_projection(case.control.get_collaboration_fanout(1).payload_json, case.main)
+    await case.fanout.start()
+    registry, _scope = subscribe(case)
+    await case.fanout.stop()
+    original = {snapshot.facet: snapshot for snapshot in registry.snapshots()}
     async with case.sessions.session_write_admission(SESSION):
         case.control.create_or_get_thread_creation_record(
             idempotency_key="hidden", delegation_id="hidden", initial_state="running", preimage_hash="c" * 64,
@@ -418,7 +437,68 @@ async def test_hidden_registering_member_does_not_change_facet_revision(team_cas
                 subagent_type="general-purpose", title="隐藏成员",
             ),
         )
-    assert team_projection(case.control.get_collaboration_fanout(2).payload_json, case.main) == original
+    await case.fanout.reconcile(SESSION)
+    record = case.control.get_collaboration_fanout(2)
+    for snapshot in registry.snapshots():
+        assert snapshot.available
+        assert snapshot.revision == original[snapshot.facet].revision
+        assert snapshot.payload == original[snapshot.facet].payload
+        assert snapshot.source_lineage == tuple(sorted((
+            (TEAM_LEDGER_SOURCE_ID, "2"), (TEAM_EVENT_SOURCE_ID, record.event_hash),
+        )))
+
+
+@pytest.mark.asyncio
+async def test_real_fanout_uses_versioned_graph_loaders_and_accepted_inputs_only(team_case, monkeypatch):
+    case = team_case
+    await case.fanout.start()
+    calls = []
+    load = TeamFacetLoader.__call__
+
+    def capture(loader, inputs):
+        calls.append({"facet": loader.facet, "inputs": {
+            source_id: {"revision": source.revision, "content": source.content}
+            for source_id, source in inputs.items()
+        }})
+        return load(loader, inputs)
+
+    def no_ledger(*args, **kwargs):
+        raise AssertionError("Team graph 发布只能消费已接受输入")
+
+    monkeypatch.setattr(TeamFacetLoader, "__call__", capture)
+    with monkeypatch.context() as accepted_only:
+        accepted_only.setattr(case.factory, "for_owner_session", no_ledger)
+        registry, _scope = subscribe(case)
+    assert [call["facet"] for call in calls] == list(TEAM_FACETS)
+    await case.fanout.stop()
+    original = {snapshot.facet: snapshot for snapshot in registry.snapshots()}
+    revision = await commit_board(case, name="图接线任务变化")
+    assert len(calls) == len(TEAM_FACETS)
+    await case.fanout.reconcile(SESSION)
+    record = case.control.get_collaboration_fanout(revision)
+    changed_tasks = {snapshot.facet: snapshot for snapshot in registry.snapshots()}
+    assert changed_tasks["membership"].revision == original["membership"].revision
+    assert changed_tasks["tasks"].revision != original["tasks"].revision
+    for call in calls[-len(TEAM_FACETS):]:
+        assert call["inputs"] == {
+            TEAM_LEDGER_SOURCE_ID: {"revision": str(revision), "content": record.payload_json},
+            TEAM_EVENT_SOURCE_ID: {"revision": record.event_hash, "content": record.event_hash},
+        }
+    await create_member(case, "graph-member")
+    await case.fanout.reconcile(SESSION)
+    changed_members = {snapshot.facet: snapshot for snapshot in registry.snapshots()}
+    assert changed_members["membership"].revision != changed_tasks["membership"].revision
+    assert changed_members["tasks"].revision == changed_tasks["tasks"].revision
+    for descriptor in registry.descriptors():
+        assert descriptor.source_ids == (TEAM_LEDGER_SOURCE_ID, TEAM_EVENT_SOURCE_ID)
+        assert descriptor.loader_version == TeamFacetLoader.version
+    (case.context.artifacts_dir / "team-loader-actual.json").write_text(json.dumps({
+        "loader_calls": calls,
+        "observations": observation_rows(case, case.main),
+        "snapshots": [{"resource_id": snapshot.resource_id, "revision": snapshot.revision,
+                       "generation": snapshot.generation, "payload": snapshot.payload,
+                       "source_lineage": snapshot.source_lineage} for snapshot in registry.snapshots()],
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 @pytest.mark.asyncio
@@ -474,7 +554,14 @@ async def test_queue_acceptance_does_not_freeze_team_before_active_slot(team_cas
     assert case.saver._storage.executions.mark_job_terminal_status(session_id=SESSION, thread_id=case.main, job_id=first.job_id, status="cancelled")
     frozen = await coordinator(case, registry).freeze_execution(admission=queued,
         policy=ResourceActivationPolicySnapshot(default_boundary="turn", boundaries={}))
-    assert frozen.registry_generation == latest
+    assert frozen.registry_generation == max(snapshot.generation for snapshot in registry.snapshots())
+    latest_record = case.control.get_collaboration_fanout(latest)
+    for binding in frozen.bindings:
+        assert binding.captured_registry_generation == registry.snapshot(binding.resource_id).generation
+        assert binding.source_lineage_ref is not None
+        assert binding.source_lineage_ref.sources == tuple(sorted((
+            (TEAM_LEDGER_SOURCE_ID, str(latest)), (TEAM_EVENT_SOURCE_ID, latest_record.event_hash),
+        )))
     task_binding = next(binding for binding in frozen.bindings if binding.resource_id == TEAM_RESOURCE_IDS["tasks"])
     assert "排队后激活前变化" in case.saver.read_resource_activation_payload(
         frozen, task_binding, storage_owner=(SESSION, case.main),

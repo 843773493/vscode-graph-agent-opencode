@@ -10,7 +10,7 @@ import pytest
 from langchain_core.messages import messages_to_dict
 
 from app.agents.graph_tool_adapter import extract_agent_tools_by_name
-from app.agents.itemized_context_middleware import SealedAssemblyDispatchBridge
+from app.agents.model_call_execution import ModelCallExecution
 from app.core.execution_admission_context import (
     execution_admission_scope,
     require_current_execution_admission,
@@ -20,6 +20,12 @@ from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.epoch.prefix_epoch import EpochReason
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.services.business.resource_derivations.team import (
+    TEAM_LEDGER_SOURCE_ID,
+    TEAM_RESOURCE_IDS,
+    TEAM_SOURCE_IDS,
+    team_guidance_content,
+)
 from app.services.infrastructure.mcp import (
     MCP_GUIDANCE_SOURCE_ID,
     MCP_TOOL_CATALOG_RESOURCE_ID,
@@ -27,12 +33,6 @@ from app.services.infrastructure.mcp import (
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
-)
-from app.services.infrastructure.team.activation import (
-    TEAM_LEDGER_SOURCE_ID,
-    TEAM_RESOURCE_IDS,
-    TEAM_SOURCE_IDS,
-    team_guidance_content,
 )
 from configs.runtime import read_jsonc_object
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
@@ -64,10 +64,10 @@ async def test_real_run_mode_reload_rebuilds_r03_registration_and_preserves_old_
     observed_calls = []
     sealed_records = []
     retry_checks = []
-    wrap = SealedAssemblyDispatchBridge.awrap_model_call
-    project = SealedAssemblyDispatchBridge._prepare_projection
+    wrap = ModelCallExecution.aexecute
+    project = ModelCallExecution._project_prepared
 
-    def retry_sealed_requests(bridge, admission, records, *, pending):
+    async def retry_sealed_requests(bridge, admission, records, *, pending):
         manager = bridge._context_source_manager
         owner = ContextSourceOwnerKey(admission.session_id, admission.thread_id)
         control = saver.load_context_source_control_states(owner)
@@ -103,7 +103,8 @@ async def test_real_run_mode_reload_rebuilds_r03_registration_and_preserves_old_
                     with execution_admission_scope(
                         old_admission, langgraph_thread_id=old_admission.thread_id,
                     ):
-                        retry, messages, tools = project(bridge, old_request)
+                        prepared = await bridge._aprepare(old_request)
+                        retry, messages, tools = project(bridge, old_request, prepared)
                     assert retry["assembly_id"] == old_snapshot.assembly_id
                     assert canonical_json_bytes(retry["snapshot"].to_dict()) == old_bytes
                     assert canonical_json_bytes(messages_to_dict(messages)) == old_messages
@@ -122,7 +123,7 @@ async def test_real_run_mode_reload_rebuilds_r03_registration_and_preserves_old_
         assert saver.load_context_source_control_states(owner) == control
         assert selection_reader.snapshot("default") == chosen
 
-    async def record_call(bridge, request, handler):
+    async def record_call(bridge, request):
         admission = require_current_execution_admission()
         saved_request = request.override(messages=deepcopy(request.messages))
         assert (admission.session_id, admission.thread_id) == (session_id, thread_id)
@@ -134,23 +135,26 @@ async def test_real_run_mode_reload_rebuilds_r03_registration_and_preserves_old_
                 for delta in pending.deltas
             )
             # 新 generation 的首个真实 dispatch 前只重试紧邻的上一请求。
-            retry_sealed_requests(bridge, admission, sealed_records[-1:], pending=pending)
+            await retry_sealed_requests(bridge, admission, sealed_records[-1:], pending=pending)
         # handler 只记录真正投影出的请求；正文、参数及返回值原样通过生产调用。
         projected_payloads = []
 
-        async def record_handler(actual_request):
+        original_invoke = bridge._ainvoke
+        async def record_invoke(prepared, messages, tools):
             projected_payloads.append((
-                canonical_json_bytes(messages_to_dict(actual_request.messages)),
-                canonical_json_bytes(actual_request.tools),
+                canonical_json_bytes(messages_to_dict(messages)),
+                canonical_json_bytes(tools),
             ))
-            return await handler(actual_request)
+            return await original_invoke(prepared, messages, tools)
 
-        response = await wrap(bridge, request, record_handler)
+        with monkeypatch.context() as dispatch_patch:
+            dispatch_patch.setattr(bridge, "_ainvoke", record_invoke)
+            response = await wrap(bridge, request)
         assert len(projected_payloads) == 1
         observed_calls.append((bridge, saved_request, admission, *projected_payloads[0]))
         return response
 
-    monkeypatch.setattr(SealedAssemblyDispatchBridge, "awrap_model_call", record_call)
+    monkeypatch.setattr(ModelCallExecution, "aexecute", record_call)
     for step, mode in enumerate(("team", "single_agent", "team")):
         before = config.get_snapshot()
         assert before.to_dict()["runtime"]["agent"]["run"]["mode"] != mode
@@ -207,7 +211,7 @@ async def test_real_run_mode_reload_rebuilds_r03_registration_and_preserves_old_
                 ),
                 execution_admission_scope(admission, langgraph_thread_id=thread_id),
             ):
-                retry_sealed_requests(
+                await retry_sealed_requests(
                     bridge, admission, sealed_records[:-1],
                     pending=bridge._context_source_manager.prepare_pending(),
                 )

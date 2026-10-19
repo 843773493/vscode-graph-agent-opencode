@@ -16,11 +16,11 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
 
-from app.agents.itemized_context_middleware import SealedAssemblyDispatchBridge
+from app.agents.model_call_execution import ModelCallExecution
+from app.agents.model_call_graph import create_model_call_agent
 from app.agents.policy import ToolPolicyResolver
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
@@ -202,6 +202,7 @@ class NativeHTTPState:
     api_key: str = "native-contract-key"
     call_tool: bool = False
     response_text: str = "native-http-result"
+    response_status: int = 200
     output_tool_name: str | None = None
     reasoning_item: dict[str, object] | None = None
     request_ready: Event = field(default_factory=Event)
@@ -403,6 +404,15 @@ def native_http_server(
             ):
                 self.send_error(400, "native contract endpoint/auth mismatch")
                 return
+            if state.response_status != 200:
+                response = json.dumps({"error": {"message": "native contract injected HTTP failure", "type": "server_error"}}).encode()
+                self.send_response(state.response_status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response)))
+                self.send_header("x-should-retry", "false")
+                self.end_headers()
+                self.wfile.write(response)
+                return
             response = (
                 _response_events(
                     ordinal, call_tool=(state.call_tool or state.output_tool_name is not None) and ordinal == 1,
@@ -433,13 +443,9 @@ def native_http_server(
         thread.join(timeout=5)
 
 
-def create_dispatch_agent(model, *, middleware, **options):
-    """真实图创建后显式绑定每个 Bridge，不替换框架注册表或 binding。"""
-    agent = create_agent(model, middleware=middleware, **options)
-    for item in middleware:
-        if isinstance(item, SealedAssemblyDispatchBridge):
-            item.bind_graph(agent)
-    return agent
+def create_dispatch_agent(model, *, execution: ModelCallExecution, **options):
+    """所有集成调用通过生产 terminal graph 适配器装配。"""
+    return create_model_call_agent(model, execution=execution, **options)
 
 
 async def invoke_provider_dispatch(
@@ -495,8 +501,7 @@ async def invoke_provider_dispatch(
     )
     agent = create_dispatch_agent(
         model,
-        middleware=[
-            SealedAssemblyDispatchBridge(
+        execution=ModelCallExecution(
                 context_read_admission=nullcontext,
                 context_control_admission=lambda _operation, _payload, _ref: nullcontext(),
                 checkpointer=saver,
@@ -505,8 +510,7 @@ async def invoke_provider_dispatch(
                 context_source_manager=manager,
                 tool_set_producer=producer,
                 resource_activation=coordinator,
-            )
-        ],
+            ),
         checkpointer=saver,
     )
     with dispatch_execution_scope(saver, session_id, turn_id):

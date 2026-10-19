@@ -12,20 +12,31 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.abstractions.tool_selection import ToolSelectionSnapshot
+from app.abstractions.turn_terminal_status import ToolResultCompletion
 from app.agents.graph_binding import DEEP_AGENT_GRAPH_BINDING, GraphBindingStorePort
 from app.agents.tools.testing import create_test_tool
-from app.core.model_delta_context import get_current_model_delta_sink
+from app.core.execution_admission_context import require_current_execution_admission
+from app.core.model_delta_context import (
+    AgentRunLifecycleCallbackHandler,
+    get_current_model_delta_sink,
+    model_tool_invocation_scope,
+)
 from app.core.path_utils import get_session_catalog_components
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.turn_execution_scope import ScopeCancelledError
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
     UserExecutionIdentity,
 )
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.business.resource_derivations.agents import (
+    WORKSPACE_AGENTS_RESOURCE_ID,
+)
 from app.services.infrastructure.config.snapshot import build_config_snapshot
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.mcp.catalog_activation import (
@@ -166,14 +177,21 @@ class _AcceptedUserInputStore:
 
 
 class _ActivationBodyStore:
-    """只接受当前测试真实发布的两个 catalog 正文和精确 owner 引用。"""
+    """只接受测试真实发布的 catalog、空 AGENTS chain 正文和精确 owner 引用。"""
 
     _EXPECTED: ClassVar[dict[str, tuple[int, object]]] = {
         MCP_TOOL_CATALOG_RESOURCE_ID: (0, {"content": ""}),
         _SKILL_CATALOG_RESOURCE_ID: (1, {"entries": []}),
+        WORKSPACE_AGENTS_RESOURCE_ID: (2, {"content": ""}),
     }
 
-    def __init__(self) -> None:
+    def __init__(self, *, workspace_id: str) -> None:
+        self._expected = {
+            **self._EXPECTED,
+            f"workspace-agents:raw-file:workspace-agents-source:{workspace_id}": (
+                3, {"content": ""},
+            ),
+        }
         self.written: list[tuple[str, int, object, DetailRef]] = []
         self._issued: set[tuple[str, str]] = set()
 
@@ -188,7 +206,7 @@ class _ActivationBodyStore:
         payload: object,
         checkpoint_ns: str,
     ) -> DetailRef:
-        expected = self._EXPECTED.get(resource_id)
+        expected = self._expected.get(resource_id)
         if expected is None:
             raise AssertionError(f"activation 发布了未登记资源: {resource_id}")
         if (activation_ordinal, payload) != expected:
@@ -276,6 +294,7 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
     saver = MagicMock(
         spec=[
             "append_items",
+            "commit_tool_result",
             "register_model_call",
             "consume_prepared_context_for_dispatch",
             "update_model_call_outcome",
@@ -298,8 +317,6 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
     saver.frozen_resource_activation_for_admission.return_value = None
     saver.find_resource_activation_snapshot.return_value = None
     saver.save_resource_activation_snapshot = AsyncMock()
-    activation_body_store = _ActivationBodyStore()
-
     def activation_factory(resource_registry):
         publisher = McpCatalogResourcePublisher(registry=resource_registry)
         publisher.publish(McpCatalogPublication(
@@ -327,6 +344,21 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
         "assembly_id": "assembly_test",
         "execution_id": "execution_test",
     }
+    default_prepared = saver.consume_prepared_context_for_dispatch.return_value
+
+    def consume_prepared(session_id, thread_id, *, execution_id, model_call_id, checkpoint_ns):
+        prepared = saver.consume_prepared_context_for_dispatch.return_value
+        if prepared is not default_prepared:
+            return prepared
+        admission = require_current_execution_admission(langgraph_thread_id=thread_id)
+        return {**prepared, "dispatch_ref": MagicMock(
+            spec=SealedContextDispatchRef, session_id=session_id, thread_id=thread_id,
+            execution_id=execution_id, turn_id=admission.turn_id,
+            assembly_id=prepared["assembly_id"], callback_model_call_id=model_call_id,
+        )}
+
+    saver.consume_prepared_context_for_dispatch.side_effect = consume_prepared
+
     saver.execution_for_turn.return_value = "execution_test"
     saver.register_execution_retry_source.side_effect = (
         lambda admission, *, message_id, message: HumanMessage(
@@ -335,6 +367,49 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
         )
     )
     saved_items: dict[str, CanonicalItemRecord] = {}
+
+    def commit_tool_result(
+        *, session_id: str, thread_id: str, job_id: str,
+        completion: ToolResultCompletion, recovery: bool = False, checkpoint_ns: str = "",
+    ) -> CanonicalItemRecord:
+        if checkpoint_ns:
+            raise ValueError(f"测试工具终态不接受 checkpoint namespace: {checkpoint_ns!r}")
+        if recovery and completion.tool_outcome != "unknown":
+            raise ValueError("测试冷恢复只接受未知工具终态")
+        admission = accepted_inputs.read_admission(
+            session_id, thread_id=thread_id, job_id=job_id, checkpoint_ns=checkpoint_ns,
+        )
+        item = CanonicalItemRecord.create(
+            item_sequence=1,
+            item_id=completion.item_id,
+            semantic_kind="tool_result",
+            payload_kind="tool_result",
+            status="completed",
+            producer_ref={
+                "producer_kind": "tool",
+                "producer_id": completion.tool_attempt_id,
+                "invocation_id": completion.model_call_id,
+            },
+            payload={
+                "tool_call_id": completion.tool_call_id,
+                "tool_invocation_id": completion.tool_invocation_id,
+                "tool_attempt_id": completion.tool_attempt_id,
+                "result_id": completion.tool_attempt_id,
+                "name": completion.tool_name,
+                "content": completion.content,
+                "tool_outcome": completion.tool_outcome,
+                "execution_confirmed": completion.tool_outcome != "unknown",
+            },
+            projection_identity=ItemProjectionIdentity(model_call_id=completion.model_call_id),
+            turn_id=admission.turn_id,
+            turn_scope="turn_member" if admission.turn_id is not None else None,
+            message_group_id=f"message-{completion.tool_attempt_id}",
+            wire_role="tool",
+        )
+        saved_items[item.item_id] = item
+        return item
+
+    saver.commit_tool_result.side_effect = commit_tool_result
 
     def persist_final(
         *, message_id, turn_id, final_text, before_persist=None, **_kwargs
@@ -384,6 +459,8 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
         workspace_root=workspace_root,
         template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
     )
+    workspace_id = load_or_create_workspace_id(workspace_root)
+    activation_body_store = _ActivationBodyStore(workspace_id=workspace_id)
     workspace_file_resource_registry = WorkspaceFileResourceRegistry(
         workspace_root=workspace_root,
         watch_service=WorkspaceFileWatchService(workspace_root=workspace_root),
@@ -418,7 +495,7 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
         "message_stream_store": message_stream_store,
         "workspace_root": workspace_root,
         "workspace_file_resource_registry": workspace_file_resource_registry,
-        "workspace_id": load_or_create_workspace_id(workspace_root),
+        "workspace_id": workspace_id,
     }
 
 
@@ -1400,28 +1477,54 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(
     ) as mock_build:
 
         async def mock_events(*args, **kwargs):
-            tool_chunk = create_chunk(
-                "",
-                tool_calls=[
-                    {
-                        "id": "call_1",
-                        "name": "python_exec",
-                        "args": dict(tool_arguments),
-                    }
-                ],
-            )
             delta_sink = get_current_model_delta_sink()
             if delta_sink is None:
                 raise AssertionError("测试模型流缺少消息 delta sink")
-            await delta_sink.accept_message_chunk(tool_chunk)
+            event_metadata = {
+                **stream_metadata(),
+                "ls_model_name": "primary",
+            }
+            model_run_id = "model_run_with_tool"
+            yield {
+                "event": "on_chat_model_start",
+                "name": "ChatOpenAI",
+                "run_id": model_run_id,
+                "data": {"input": []},
+                "metadata": event_metadata,
+            }
+            tool_call = {
+                "id": "call_1",
+                "name": "python_exec",
+                "args": dict(tool_arguments),
+                "type": "tool_call",
+            }
+            tool_chunk = create_chunk("", tool_calls=[tool_call])
+            await delta_sink.accept_message_chunk(
+                tool_chunk, model_call_id=model_run_id,
+            )
             yield {
                 "event": "on_chat_model_stream",
                 "name": "ChatOpenAI",
-                "data": {
-                    "chunk": tool_chunk,
-                },
-                "metadata": stream_metadata(),
+                "run_id": model_run_id,
+                "data": {"chunk": tool_chunk},
+                "metadata": event_metadata,
             }
+            yield {
+                "event": "on_chat_model_end",
+                "name": "ChatOpenAI",
+                "run_id": model_run_id,
+                "data": {"output": AIMessage(content="", tool_calls=[tool_call])},
+                "metadata": event_metadata,
+            }
+            await delta_sink.prepare_tool_execution(model_run_id)
+            lifecycle_callback = AgentRunLifecycleCallbackHandler(delta_sink)
+            with model_tool_invocation_scope(model_run_id, "call_1"):
+                tool_callback = asyncio.create_task(
+                    lifecycle_callback.on_tool_start(
+                        run_id="run_python_exec",
+                        tool_call_id="call_1",
+                    )
+                )
             yield {
                 "event": "on_tool_start",
                 "run_id": "run_python_exec",
@@ -1429,6 +1532,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(
                 "data": {"input": dict(tool_arguments)},
                 "metadata": stream_metadata(),
             }
+            await tool_callback
             yield {
                 "event": "on_tool_end",
                 "run_id": "run_python_exec",
@@ -1442,17 +1546,35 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(
                 },
                 "metadata": stream_metadata(),
             }
+            final_model_run_id = "model_run_after_tool"
+            yield {
+                "event": "on_chat_model_start",
+                "name": "ChatOpenAI",
+                "run_id": final_model_run_id,
+                "data": {"input": []},
+                "metadata": event_metadata,
+            }
+            final_chunk = create_chunk(
+                "完成",
+                part_id="part_after_tool",
+                index=0,
+            )
+            await delta_sink.accept_message_chunk(
+                final_chunk, model_call_id=final_model_run_id,
+            )
             yield {
                 "event": "on_chat_model_stream",
                 "name": "ChatOpenAI",
-                "data": {
-                    "chunk": create_chunk(
-                        "完成",
-                        part_id="part_after_tool",
-                        index=0,
-                    )
-                },
-                "metadata": stream_metadata(),
+                "run_id": final_model_run_id,
+                "data": {"chunk": final_chunk},
+                "metadata": event_metadata,
+            }
+            yield {
+                "event": "on_chat_model_end",
+                "name": "ChatOpenAI",
+                "run_id": final_model_run_id,
+                "data": {"output": AIMessage(content="完成")},
+                "metadata": event_metadata,
             }
 
         mock_agent = MagicMock()

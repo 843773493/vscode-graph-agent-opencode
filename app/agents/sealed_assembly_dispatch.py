@@ -12,7 +12,6 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Literal
-from uuid import UUID
 
 from app.agents.providers.wire_finalize import (
     WIRE_PROJECTOR_ID,
@@ -20,7 +19,9 @@ from app.agents.providers.wire_finalize import (
     ChatWireProfile,
     ResponsesWireProfile,
 )
+from app.core.execution_admission_context import require_current_execution_admission
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import canonical_json_bytes
@@ -33,9 +34,13 @@ ProviderInvocationPurpose = Literal["agent", "tool_test"]
 class SealedAssemblyDispatch:
     """同一已提交 snapshot 与它的可选 Responses 原生投影。"""
 
+    reference: SealedContextDispatchRef
     snapshot: ContextAssemblySnapshot
-    callback_model_call_id: str
     native_projection: dict[str, object] | None = None
+
+    @property
+    def callback_model_call_id(self) -> str:
+        return self.reference.callback_model_call_id
 
 _SEALED_ASSEMBLY_DISPATCH: ContextVar[SealedAssemblyDispatch | None] = ContextVar(
     "sealed_assembly_dispatch",
@@ -45,19 +50,20 @@ _SEALED_ASSEMBLY_DISPATCH: ContextVar[SealedAssemblyDispatch | None] = ContextVa
 
 @contextmanager
 def sealed_assembly_dispatch_scope(
+    reference: SealedContextDispatchRef,
     snapshot: ContextAssemblySnapshot,
     *,
-    callback_model_call_id: str,
     native_projection: Mapping[str, object] | None = None,
 ) -> Iterator[None]:
     """仅在本次 handler 内绑定 Saver snapshot；两协议都必须有真实封存。"""
-    UUID(callback_model_call_id)
+    if not isinstance(reference, SealedContextDispatchRef):
+        raise TypeError("sealed-assembly binding violation: 缺少 Saver dispatch reference")
     if not isinstance(snapshot, ContextAssemblySnapshot):
         raise TypeError("source-mismatch: dispatch 需要已提交 ContextAssemblySnapshot")
     if not isinstance(snapshot.request_hash_preimage, Mapping):
         raise TypeError("source-mismatch: sealed assembly 缺少完整 wire preimage")
     try:
-        snapshot.validate_hashes()
+        reference.validate_snapshot(snapshot)
     except ItemSchemaError as error:
         raise ValueError("source-mismatch: sealed assembly hash/manifest 非法") from error
     if snapshot.target_format == "responses":
@@ -82,7 +88,7 @@ def sealed_assembly_dispatch_scope(
     elif snapshot.target_format != "chat_completions" or native_projection is not None:
         raise ValueError("source-mismatch: sealed dispatch protocol/native projection 不一致")
     binding = SealedAssemblyDispatch(
-        snapshot=snapshot, callback_model_call_id=callback_model_call_id,
+        reference=reference, snapshot=snapshot,
         native_projection=dict(native_projection) if native_projection is not None else None,
     )
     token = _SEALED_ASSEMBLY_DISPATCH.set(copy.deepcopy(binding))
@@ -105,6 +111,13 @@ def read_sealed_assembly_dispatch(
         raise ValueError("source-mismatch: Provider invocation_purpose 非法")
     if value is None:
         raise ValueError("source-mismatch: Agent Provider 发送缺少 sealed assembly binding")
+    value.reference.validate_snapshot(value.snapshot)
+    admission = require_current_execution_admission(langgraph_thread_id=value.reference.thread_id)
+    if (admission.session_id, admission.thread_id, admission.execution_id, admission.turn_id) != (
+        value.reference.session_id, value.reference.thread_id,
+        value.reference.execution_id, value.reference.turn_id,
+    ):
+        raise ValueError("sealed-assembly binding violation: reference 与当前 execution 不一致")
     return copy.deepcopy(value)
 
 

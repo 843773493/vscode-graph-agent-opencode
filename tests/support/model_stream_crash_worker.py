@@ -240,8 +240,7 @@ async def _run_with_catalog_owner(args: argparse.Namespace) -> None:
                     session_thread_owner_scope(owner, langgraph_thread_id=thread_id),
                     execution_admission_scope(admission, langgraph_thread_id=thread_id),
                     sealed_assembly_dispatch_scope(
-                        snapshot,
-                        callback_model_call_id=model_call_id,
+                        prepared["dispatch_ref"], snapshot,
                         native_projection=native_projection,
                     ),
                 ):

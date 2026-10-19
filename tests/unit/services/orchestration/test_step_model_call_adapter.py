@@ -7,8 +7,12 @@ from unittest.mock import MagicMock
 import pytest
 from langchain_core.messages import AIMessage
 
-from app.core.execution_admission_context import execution_admission_scope
+from app.core.execution_admission_context import (
+    execution_admission_scope,
+    require_current_execution_admission,
+)
 from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
@@ -51,6 +55,21 @@ def saver() -> MagicMock:
     port.consume_prepared_context_for_dispatch.return_value = {
         "assembly_id": "assembly_1", "execution_id": "execution_1",
     }
+    default_prepared = port.consume_prepared_context_for_dispatch.return_value
+
+    def consume_prepared(session_id, thread_id, *, execution_id, model_call_id, checkpoint_ns):
+        prepared = port.consume_prepared_context_for_dispatch.return_value
+        if prepared is not default_prepared:
+            return prepared
+        admission = require_current_execution_admission(langgraph_thread_id=thread_id)
+        return {**prepared, "dispatch_ref": MagicMock(
+            spec=SealedContextDispatchRef, session_id=session_id, thread_id=thread_id,
+            execution_id=execution_id, turn_id=admission.turn_id,
+            assembly_id=prepared["assembly_id"], callback_model_call_id=model_call_id,
+        )}
+
+    port.consume_prepared_context_for_dispatch.side_effect = consume_prepared
+
     return port
 
 
@@ -161,6 +180,7 @@ async def test_registration_only_binds_prepared_assembly(
         "session_1",
         "thread_1",
         execution_id="execution_1",
+        model_call_id="model_1",
         checkpoint_ns="agent",
     )
     saver.append_items.assert_not_called()

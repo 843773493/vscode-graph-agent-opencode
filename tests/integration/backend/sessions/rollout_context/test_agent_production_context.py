@@ -17,7 +17,7 @@ from langgraph.runtime import ExecutionInfo, Runtime
 
 from app.agents import agent_factory
 from app.agents.graph_tool_adapter import extract_agent_tools_by_name
-from app.agents.itemized_context_middleware import SealedAssemblyDispatchBridge
+from app.agents.model_call_execution import ModelCallExecution
 from app.agents.policy import ToolPolicyResolver
 from app.agents.skill_runtime import (
     WorkspaceSkillsMiddleware,
@@ -100,13 +100,13 @@ def factory_context(registry_db, request, monkeypatch):
     )
     selection = ToolSelectionStore(boxteam_root=workspace / ".boxteam")
     captured = {}
-    original_create = agent_factory.create_agent
+    original_create = agent_factory.create_model_call_agent
 
     def capture_create(*args, **kwargs):
         captured.update(kwargs)
         return original_create(*args, **kwargs)
 
-    monkeypatch.setattr(agent_factory, "create_agent", capture_create)
+    monkeypatch.setattr(agent_factory, "create_model_call_agent", capture_create)
     # 由正式 runtime builder 构造真实 Provider；默认回答由下方显式集成桩提供。
     protocol = getattr(request, "param", "chat_completions")
     config.get_revision.return_value = "config:production:1"
@@ -140,8 +140,8 @@ def factory_context(registry_db, request, monkeypatch):
         resource_registry=registry, resource_activation=coordinator,
         mcp_catalog_owner=owner, reactor_lifetime_scope=scope,
     )
-    bridge = captured["middleware"][-1]
-    assert isinstance(bridge, SealedAssemblyDispatchBridge)
+    bridge = captured["execution"]
+    assert isinstance(bridge, ModelCallExecution)
     for middleware in captured["middleware"]:
         if isinstance(middleware, WorkspaceSkillsMiddleware):
             middleware.before_agent({}, None, {})
@@ -186,7 +186,17 @@ def factory_context(registry_db, request, monkeypatch):
         ):
             token = set_current_execution_resource_activation(parent, admission=admission)
             try:
-                model_chain(incoming, provider_handler or fixture_handler)
+                original = bridge._invoke
+                def invoke_fixture(prepared, messages, tools):
+                    return (provider_handler or fixture_handler)(incoming.override(
+                        messages=messages, system_message=None, tools=tools,
+                    ))
+                bridge._invoke = invoke_fixture
+                try:
+                    assert model_chain is not None
+                    model_chain(incoming, bridge.execute)
+                finally:
+                    bridge._invoke = original
             finally:
                 reset_current_execution_resource_activation(token)
         return outbound[0]
@@ -236,7 +246,7 @@ def test_runtime_selection_hard_rebase_preserves_retry_and_graph_registration(fa
     def no_live_desired(*_args: object, **_kwargs: object):
         raise AssertionError("sealed retry 不得重读 source/ToolSet desired")
 
-    bridge = captured["middleware"][-1]
+    bridge = captured["execution"]
     with monkeypatch.context() as retry_patch:
         retry_patch.setattr(manager, "prepare_sources", no_live_desired)
         retry_patch.setattr(bridge._tool_set_producer, "snapshot", no_live_desired)
@@ -265,7 +275,7 @@ def test_factory_skill_graph_blocks_required_capture_and_recovers_without_semant
 ):
     saver, session, thread, _connection, _selection, _manager, captured, _registered, dispatch, files = factory_context
     dispatch("skill-graph-initial")
-    bridge = captured["middleware"][-1]
+    bridge = captured["execution"]
     coordinator = bridge._resource_activation
     registry = coordinator._registry
     resource_id = "skill-entry:workspace:example:activation"
@@ -325,7 +335,7 @@ def test_frozen_skill_tool_uses_durable_body_after_live_catalog_changes(
     workspace = TestRunContext.from_test_file(Path(request.node.path)).workspace_root
     source = workspace / ".boxteam" / "skills" / "example" / "SKILL.md"
     source.write_text("---\nname: example\ndescription: 当前已更新目录\n---\n新的 live 正文\n")
-    bridge = captured["middleware"][-1]
+    bridge = captured["execution"]
     activation_descriptor = bridge._resource_activation._registry.descriptor(
         "skill-entry:workspace:example:activation"
     )

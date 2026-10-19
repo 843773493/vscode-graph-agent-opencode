@@ -10,6 +10,14 @@ from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
+from app.services.business.resource_derivations.team import (
+    TEAM_EVENT_SOURCE_ID,
+    TEAM_FACETS,
+    TEAM_LEDGER_SOURCE_ID,
+    TEAM_RESOURCE_IDS,
+    TEAM_SOURCE_IDS,
+    team_facet_payload,
+)
 from app.services.infrastructure.mcp.catalog_activation import (
     MCP_GUIDANCE_SOURCE_ID,
     MCP_TOOL_CATALOG_RESOURCE_ID,
@@ -18,13 +26,6 @@ from app.services.infrastructure.rollout_context.checkpoint.durable.context_sour
     _SELECT_COLUMNS,
     _TABLE_NAME,
     _state_from_row,
-)
-from app.services.infrastructure.team.activation import (
-    TEAM_FACETS,
-    TEAM_LEDGER_SOURCE_ID,
-    TEAM_RESOURCE_IDS,
-    TEAM_SOURCE_IDS,
-    team_projection,
 )
 
 
@@ -129,9 +130,9 @@ class ContextSourceActivationMixin:
                 row = connection.execute("SELECT event_hash,payload_json FROM team_source_observations "
                                          "WHERE session_id=? AND thread_id=? AND ledger_revision=?",
                                          (snapshot.owner_session_id, snapshot.owner_thread_id, revision)).fetchone()
-                if row is None or row[0] != lineage["collaboration-event:v1"]:
+                if row is None or row[0] != lineage[TEAM_EVENT_SOURCE_ID]:
                     raise ItemSchemaError("team-state-not-ready: required revision 尚未持久 reconcile")
-                payload = team_projection(str(row[1]), snapshot.owner_thread_id)[binding.facet]
+                payload = team_facet_payload(str(row[1]), snapshot.owner_thread_id, binding.facet)
             if binding.revision != sha256_jcs(payload) or binding.content_hash != sha256_jcs(payload):
                 raise ItemSchemaError("team-state-snapshot-conflict: facet 与原 pending observation 不一致")
     def _apply_sealed_context_sources(

@@ -7,6 +7,7 @@ import json
 import logging
 from _thread import RLock
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
 
 from app.abstractions.internal_message import PreparedInternalMessage
 from app.core.exceptions import NotFoundError
@@ -20,9 +21,18 @@ from app.core.session_lifecycle_gate import (
     OperationHolderGate,
     SessionDeletionPendingError,
 )
+from app.services.business.resource_derivations.team import (
+    TEAM_EVENT_SOURCE_ID,
+    TEAM_FACETS,
+    TEAM_LEDGER_SOURCE_ID,
+    TEAM_RESOURCE_IDS,
+    TeamFacetLoader,
+)
 from app.services.business.session_service import SessionService
+from app.services.infrastructure.resource_platform.derivation.graph import (
+    ResourceDerivationGraph,
+)
 from app.services.infrastructure.resource_platform.derivation.types import (
-    ResourceSnapshot,
     SemanticResourceDescriptor,
 )
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
@@ -31,19 +41,46 @@ from app.services.infrastructure.resource_platform.registry.semantic_registry im
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.team.activation import (
-    TEAM_FACETS,
-    TEAM_RESOURCE_IDS,
-    TEAM_SOURCE_IDS,
-    team_projection,
-    team_resource_snapshots,
-)
 from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
 from app.services.orchestration.runtime_source_dispatcher import RuntimeSourceDispatcher
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _TeamAcceptedRevision:
+    revision: str
+    content: str
+    available: bool
+    error: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _TeamAcceptedSources:
+    """原 fanout 的冻结输入与持久投递门；不保存第二份协作正文。"""
+
+    session_id: str
+    record: CollaborationFanoutRecord | None = None
+    ready: bool = True
+
+    def observed_revision(self, source_id: str) -> _TeamAcceptedRevision:
+        record = self.record
+        revision = 0 if record is None else record.ledger_revision
+        event_hash = "empty" if record is None else record.event_hash
+        if source_id == TEAM_LEDGER_SOURCE_ID:
+            source_revision = str(revision)
+            content = record.payload_json if record is not None else json.dumps({
+                "session_id": self.session_id, "ledger_revision": 0, "event_hash": event_hash,
+                "event": None, "boards": [], "members": [],
+            })
+        elif source_id == TEAM_EVENT_SOURCE_ID:
+            source_revision, content = event_hash, event_hash
+        else:
+            raise KeyError(source_id)
+        return _TeamAcceptedRevision(source_revision, content, self.ready,
+            None if self.ready else f"collaboration required revision={revision} 尚未完成 recipient 持久投递")
 
 
 class TeamFanoutService:
@@ -54,8 +91,7 @@ class TeamFanoutService:
         self._publication_lock = publication_lock
         self._holder = OperationHolderGate(sessions.path_resolver.sessions_root, namespace="collaboration")
         self._locks = KeyLockPool()
-        self._desired: dict[tuple[str, str], CollaborationFanoutRecord] = {}
-        self._published: dict[tuple[str, str], tuple[ResourceSnapshot, ...]] = {}
+        self._accepted: dict[tuple[str, str], _TeamAcceptedSources] = {}
         self._subscribers: dict[tuple[str, str], set[ResourceRegistry]] = {}
         self._ready = False
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -72,14 +108,11 @@ class TeamFanoutService:
         with self._publication_lock:
             for recipient in record.recipients:
                 pair = record.session_id, recipient.thread_id
-                previous = self._desired.get(pair)
-                if previous is not None and previous.ledger_revision > record.ledger_revision:
+                previous = self._accepted.get(pair)
+                if previous is not None and previous.record is not None and previous.record.ledger_revision > record.ledger_revision:
                     continue
-                self._desired[pair] = record
-                snapshots = team_resource_snapshots(payloads=team_projection(record.payload_json, recipient.thread_id),
-                                                    revision=record.ledger_revision, event_hash=record.event_hash,
-                                                    generation=record.ledger_revision, ready=False)
-                self._publish(pair, snapshots)
+                self._accepted[pair] = _TeamAcceptedSources(record.session_id, record, ready=False)
+                self._publish(pair)
         if self._loop is not None:
             self._loop.call_soon_threadsafe(self._changed.set)
         observe_phase_sync(record.lease_id, "team.mutation.committed", details={
@@ -87,11 +120,21 @@ class TeamFanoutService:
             "event_hash": record.event_hash,
         })
 
-    def _publish(self, pair: tuple[str, str], snapshots: tuple[ResourceSnapshot, ...]) -> None:
-        self._published[pair] = snapshots
+    def _publish(self, pair: tuple[str, str]) -> None:
         for registry in tuple(self._subscribers.get(pair, ())):
-            for snapshot in snapshots:
-                registry.publish(snapshot)
+            self._publish_registry(self._accepted[pair], pair[1], registry)
+
+    @staticmethod
+    def _publish_registry(sources: _TeamAcceptedSources, thread_id: str, registry: ResourceRegistry) -> None:
+        with registry.publication():
+            graph = ResourceDerivationGraph(reconciler=sources, registry=registry)
+            for facet in TEAM_FACETS:
+                graph.register(SemanticResourceDescriptor(
+                    resource_id=TEAM_RESOURCE_IDS[facet], resource_kind="team_state", facet=facet,
+                    display_uri=None, source_ids=(TEAM_LEDGER_SOURCE_ID, TEAM_EVENT_SOURCE_ID),
+                    loader_version=TeamFacetLoader.version,
+                ), TeamFacetLoader(sources.session_id, thread_id, facet))
+            graph.publish_all()
 
     def subscribe(self, session_id: str, thread_id: str, registry: ResourceRegistry, scope: LifetimeScope) -> None:
         """generation builder 只订阅内存投影，不查询 ledger、磁盘或当前成员。"""
@@ -99,17 +142,8 @@ class TeamFanoutService:
             raise RuntimeError("team-state-not-ready: 启动持久 owner 尚未恢复完成，拒绝 dispatch")
         pair = session_id, thread_id
         with self._publication_lock:
-            for facet in TEAM_FACETS:
-                registry.register_descriptor(SemanticResourceDescriptor(
-                    resource_id=TEAM_RESOURCE_IDS[facet], resource_kind="team_state", facet=facet,
-                    display_uri=None, source_ids=(TEAM_SOURCE_IDS[facet],),
-                ))
-            snapshots = self._published.get(pair)
-            if snapshots is None:
-                snapshots = team_resource_snapshots(payloads={facet: {"content": ""} for facet in TEAM_FACETS},
-                                                    revision=0, event_hash="empty", generation=0, ready=True)
-            for snapshot in snapshots:
-                registry.publish(snapshot)
+            sources = self._accepted.setdefault(pair, _TeamAcceptedSources(session_id))
+            self._publish_registry(sources, thread_id, registry)
             self._subscribers.setdefault(pair, set()).add(registry)
 
         def unsubscribe() -> None:
@@ -188,8 +222,9 @@ class TeamFanoutService:
     def _publish_reconciled(self, session_id: str) -> None:
         control = self._factory.for_owner_session(session_id).control_store
         with self._publication_lock:
-            for pair, desired in tuple(self._desired.items()):
-                if pair[0] != session_id or control.collaboration_recipient_pending(pair[1], desired.ledger_revision):
+            for pair, sources in tuple(self._accepted.items()):
+                desired = sources.record
+                if desired is None or pair[0] != session_id or control.collaboration_recipient_pending(pair[1], desired.ledger_revision):
                     continue
                 record = control.get_collaboration_fanout(desired.ledger_revision)
                 delivery = next(item for item in record.recipients if item.thread_id == pair[1])
@@ -197,9 +232,8 @@ class TeamFanoutService:
                     continue
                 self._saver.require_team_source_observation(session_id, pair[1], ledger_revision=record.ledger_revision,
                                                            event_hash=record.event_hash, payload_json=record.payload_json)
-                self._publish(pair, team_resource_snapshots(payloads=team_projection(record.payload_json, pair[1]),
-                                                            revision=record.ledger_revision, event_hash=record.event_hash,
-                                                            generation=record.ledger_revision, ready=True))
+                self._accepted[pair] = replace(sources, ready=True)
+                self._publish(pair)
 
     async def reconcile(self, session_id: str) -> None:
         self._check_worker()
@@ -255,7 +289,7 @@ class TeamFanoutService:
             while True:
                 await self._changed.wait()
                 self._changed.clear()
-                owners = {session_id for session_id, _thread in self._desired}
+                owners = {session_id for (session_id, _thread), sources in self._accepted.items() if sources.record is not None}
                 for session_id in sorted(owners):
                     await self.reconcile(session_id)
                     await self._dispatch_pending(session_id)
@@ -291,10 +325,9 @@ class TeamFanoutService:
                                                           fencing_token=lease.fencing_token, outcome="fence_closed")
             control.finish_collaboration_fanout(record.ledger_revision, fencing_token=lease.fencing_token, cancelled=True)
         with self._publication_lock:
-            for pair in tuple(self._desired):
+            for pair in tuple(self._accepted):
                 if pair[0] == session_id:
-                    self._desired.pop(pair)
-                    self._published.pop(pair, None)
+                    self._accepted.pop(pair)
 
     async def stop(self) -> None:
         worker, self._worker = self._worker, None

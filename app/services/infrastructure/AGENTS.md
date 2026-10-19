@@ -6,7 +6,7 @@
 
 - 可以新增、修改、删除基础设施服务实现文件。
 - 可以补充与外部数据、系统状态或通用能力交互的实现。
-- `team/`访问既有Session control协作存储并投影冻结membership/tasks，不保存JSON board或承担fanout编排。
+- `team/`访问既有Session control协作存储，不保存JSON board或承担业务语义派生、fanout编排。
 - `workspace_files/`承载WorkspaceService装配的文件树观察、operation存储及worker；真实文件事实归文件系统，不借Session catalog或新增第二文件writer。
 
 ## 不可修改内容

@@ -599,6 +599,7 @@ def test_required_detail_failure_blocks_prepared_dispatch(
                     session_id,
                     thread,
                     execution_id=execution_id,
+                    model_call_id=arguments["model_call_id"],
                 )
                 is None
             )

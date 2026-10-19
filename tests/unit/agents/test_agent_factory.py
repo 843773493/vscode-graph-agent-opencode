@@ -95,9 +95,9 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
         patch.object(agent_factory, "build_deep_agent_middleware", return_value=[]),
         patch.object(agent_factory, "ToolOutputMiddleware"),
         patch.object(agent_factory, "ToolInvocationContextMiddleware"),
-        patch.object(agent_factory, "SealedAssemblyDispatchBridge"),
+        patch.object(agent_factory, "ModelCallExecution"),
         patch.object(
-            agent_factory, "create_agent", return_value=built_agent
+            agent_factory, "create_model_call_agent", return_value=built_agent
         ) as create_agent,
         patch.object(agent_factory.GRAPH_FACTORY_REGISTRY, "resolve"),
         patch.object(
@@ -194,8 +194,8 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         patch.object(agent_factory, "ToolOutputMiddleware"),
         patch.object(agent_factory, "ToolInvocationContextMiddleware"),
         patch.object(agent_factory, "ContextSourceReactor") as reactor,
-        patch.object(agent_factory, "SealedAssemblyDispatchBridge"),
-        patch.object(agent_factory, "create_agent", return_value=built_agent),
+        patch.object(agent_factory, "ModelCallExecution"),
+        patch.object(agent_factory, "create_model_call_agent", return_value=built_agent),
         patch.object(agent_factory.GRAPH_FACTORY_REGISTRY, "resolve"),
     ):
         gateway_token = set_current_gateway_id("gateway_tools_inspection")

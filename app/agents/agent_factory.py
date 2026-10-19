@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from deepagents.middleware.permissions import FilesystemPermission
-from langchain.agents import create_agent
 from langchain.agents.middleware import InterruptOnConfig
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain.agents.structured_output import ResponseFormat
@@ -43,9 +42,10 @@ from app.agents.instruction_producers import (
     register_instruction_producer,
     runtime_instruction_producers,
 )
-from app.agents.itemized_context_middleware import SealedAssemblyDispatchBridge
 from app.agents.llm_logging_middleware import LLMLoggingMiddleware
 from app.agents.middleware_prompts import TEAM_COORDINATION_SYSTEM_PROMPT
+from app.agents.model_call_execution import ModelCallExecution
+from app.agents.model_call_graph import create_model_call_agent
 from app.agents.model_capability_routing import (
     CapabilityRoutingMiddleware,
     build_provider_model_candidate,
@@ -894,9 +894,8 @@ def create_my_deep_agent(
             ) for tool in registered_tools
         },
     )
-    # 唯一 Bridge 固定放在 routing 和所有 request producer 之后；每个真实
-    # provider candidate 都走自己的 Saver prepare/seal，而非反捕最终请求。
-    sealed_dispatch_bridge = SealedAssemblyDispatchBridge(
+    # routing 和所有 request producer 的真实 attempt 直接调用唯一执行 owner。
+    execution = ModelCallExecution(
         checkpointer=checkpointer, session_id=session_id, thread_id=thread_id,
         context_source_manager=context_source_manager,
         tool_set_producer=tool_set_producer,
@@ -907,10 +906,9 @@ def create_my_deep_agent(
             payload=payload, recovery_ref=recovery_ref,
         ),
     )
-    deepagent_middleware.append(sealed_dispatch_bridge)
-
-    agent = create_agent(
+    agent = create_model_call_agent(
         model,
+        execution=execution,
         system_prompt=None,
         tools=list(resolved_tools) if resolved_tools else None,
         middleware=deepagent_middleware,
@@ -922,7 +920,6 @@ def create_my_deep_agent(
         name=name,
         cache=None,
     )
-    sealed_dispatch_bridge.bind_graph(agent)
 
     if hasattr(agent, "with_config"):
         runtime_agent = agent.with_config(

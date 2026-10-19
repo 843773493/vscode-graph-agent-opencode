@@ -13,8 +13,8 @@ from langchain.agents.middleware.types import ExtendedModelResponse
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langgraph.types import Command
 
-from app.agents import itemized_context_middleware
-from app.agents.itemized_context_middleware import SealedAssemblyDispatchBridge
+from app.agents import model_call_execution
+from app.agents.model_call_execution import ModelCallExecution
 from app.core.identifier import uuid7_datetime_from_hex
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
@@ -27,7 +27,7 @@ from app.services.orchestration.message_stream_runtime import MessageStreamRunti
 
 @pytest.fixture
 def bridge(registered_tool_set_producer_factory):
-    return SealedAssemblyDispatchBridge(
+    return ModelCallExecution(
         context_read_admission=nullcontext,
         context_control_admission=lambda _operation, _payload, _ref: nullcontext(),
         checkpointer=object(), session_id="session-unit", thread_id="thread-unit",
@@ -40,24 +40,25 @@ def bridge(registered_tool_set_producer_factory):
 @pytest.fixture
 def response_dispatch(bridge, monkeypatch):
     model_call_id = "00000000-0000-4000-8000-000000000001"
-    prepared = {"snapshot": object(), "callback_model_call_id": model_call_id}
+    prepared = {"dispatch_ref": object(), "snapshot": object(), "callback_model_call_id": model_call_id}
     bridge._prepare_projection = MagicMock(return_value=(prepared, [], []))
     bridge._aprepare = AsyncMock(return_value=prepared)
+    bridge._invoke = MagicMock(return_value=ModelResponse(result=[]))
+    bridge._ainvoke = AsyncMock(return_value=ModelResponse(result=[]))
     bridge._project_prepared = MagicMock(return_value=(prepared, [], []))
     monkeypatch.setattr(
-        itemized_context_middleware, "sealed_assembly_dispatch_scope",
+        model_call_execution, "sealed_assembly_dispatch_scope",
         lambda *_args, **_kwargs: nullcontext(),
     )
 
     async def dispatch(response, mode):
         request = ModelRequest(model=MagicMock(), messages=[])
+        bridge._invoke.return_value = response
+        bridge._ainvoke.return_value = response
         if mode == "sync":
-            return bridge.wrap_model_call(request, lambda _request: response)
+            return bridge.execute(request)
 
-        async def handler(_request):
-            return response
-
-        return await bridge.awrap_model_call(request, handler)
+        return await bridge.aexecute(request)
 
     return model_call_id, dispatch
 
@@ -89,6 +90,8 @@ async def test_vendor_carrier_binds_emitting_call_and_its_structured_tool_result
         bound = bound.model_response
     assert bound.structured_response is structured
     bound_assistant, bound_result = bound.result
+    assert isinstance(bound_assistant, AIMessage)
+    assert isinstance(bound_result, ToolMessage)
     assert bound_assistant.id == assistant.id == "resp-vendor"
     assert bound_assistant.content == assistant.content
     assert bound_assistant.tool_calls == assistant.tool_calls
@@ -138,26 +141,23 @@ async def test_request_tool_result_phase_precedes_preparation(
     async def observe_async(operation_id, phase):
         observe(operation_id, phase)
 
-    monkeypatch.setattr(itemized_context_middleware, "observe_phase_sync", observe)
-    monkeypatch.setattr(itemized_context_middleware, "observe_phase", observe_async)
+    monkeypatch.setattr(model_call_execution, "observe_phase_sync", observe)
+    monkeypatch.setattr(model_call_execution, "observe_phase", observe_async)
     async def reconcile_result(_message, *, model_call_id):
         assert "prepare" not in phases
         phases.append("reconcile")
 
     reconcile = AsyncMock(side_effect=reconcile_result)
     monkeypatch.setattr(
-        itemized_context_middleware, "get_current_model_delta_sink",
+        model_call_execution, "get_current_model_delta_sink",
         lambda: SimpleNamespace(complete_tool_from_message=reconcile),
     )
-    response = ModelResponse(result=[AIMessage(content="完成")])
     if mode == "sync":
-        bridge.wrap_model_call(request, lambda _request: response)
+        bridge.execute(request)
         assert phases == ["observe", "prepare"]
         reconcile.assert_not_awaited()
     else:
-        async def handler(_request):
-            return response
-        await bridge.awrap_model_call(request, handler)
+        await bridge.aexecute(request)
         reconcile.assert_awaited_once_with(messages[1], model_call_id=model_call_id)
         assert phases == ["observe", "reconcile", "prepare"]
     assert observed == [(f"{model_call_id}:tool-call:call-queued", "canonical.tool_result.before_commit")]
@@ -173,13 +173,13 @@ async def test_request_reconciliation_requires_explicit_emitting_model_call(
 ):
     reconcile = AsyncMock()
     monkeypatch.setattr(
-        itemized_context_middleware, "get_current_model_delta_sink",
+        model_call_execution, "get_current_model_delta_sink",
         lambda: SimpleNamespace(complete_tool_from_message=reconcile),
     )
     request = ModelRequest(model=MagicMock(), messages=[ToolMessage(content="结果", tool_call_id="unbound")])
-    handler = AsyncMock()
+    handler = bridge._ainvoke
     with pytest.raises(RuntimeError, match="emitting model-call identity"):
-        await bridge.awrap_model_call(request, handler)
+        await bridge.aexecute(request)
     reconcile.assert_not_awaited()
     bridge._aprepare.assert_not_awaited()
     handler.assert_not_awaited()
@@ -224,7 +224,7 @@ async def test_request_preparation_failure_preserves_reconciled_tool_completion(
 
     bridge._aprepare.side_effect = fail_preparation
     monkeypatch.setattr(
-        itemized_context_middleware,
+        model_call_execution,
         "get_current_model_delta_sink",
         lambda: runtime,
     )
@@ -237,8 +237,8 @@ async def test_request_preparation_failure_preserves_reconciled_tool_completion(
                   }]),
         ToolMessage(content="原结果", tool_call_id="call", name="read_file"),
     ])
-    handler = AsyncMock()
-    preparation = asyncio.create_task(bridge.awrap_model_call(request, handler))
+    handler = bridge._ainvoke
+    preparation = asyncio.create_task(bridge.aexecute(request))
     await asyncio.sleep(0)
     assert not preparation.done()
     tool_call_id = runtime.claim_tool_call_id(model_call_id, "call")
@@ -314,10 +314,10 @@ def test_prepare_projection_rejects_illegal_structure(bridge, prepared):
 
 def test_prepare_projection_records_capability_loss(bridge, monkeypatch):
     bridge._prepare = MagicMock(return_value={"messages": [], "tools": [], "losses": ["image"], "include_structured_output": False})
-    monkeypatch.setattr(itemized_context_middleware, "_runtime_thread_id", lambda request: "thread-unit")
-    monkeypatch.setattr(itemized_context_middleware, "require_current_execution_admission", lambda **_: SimpleNamespace(job_id="job-unit"))
+    monkeypatch.setattr(model_call_execution, "_runtime_thread_id", lambda request: "thread-unit")
+    monkeypatch.setattr(model_call_execution, "require_current_execution_admission", lambda **_: SimpleNamespace(job_id="job-unit"))
     warning = MagicMock()
-    monkeypatch.setattr(itemized_context_middleware.logger, "warning", warning)
+    monkeypatch.setattr(model_call_execution.logger, "warning", warning)
     bridge._prepare_projection(object())
     loss_calls = [call for call in warning.call_args_list if call.args[0].startswith("itemized provider projection capability loss")]
     assert len(loss_calls) == 1
@@ -330,9 +330,9 @@ def test_prepare_projection_without_losses_skips_loss_identity(bridge, monkeypat
     def fail(**kwargs):
         raise AssertionError("losses 为空时不得解析 capability loss identity")
 
-    monkeypatch.setattr(itemized_context_middleware, "require_current_execution_admission", fail)
+    monkeypatch.setattr(model_call_execution, "require_current_execution_admission", fail)
     warning = MagicMock()
-    monkeypatch.setattr(itemized_context_middleware.logger, "warning", warning)
+    monkeypatch.setattr(model_call_execution.logger, "warning", warning)
     bridge._prepare_projection(object())
     assert not [call for call in warning.call_args_list if call.args[0].startswith("itemized provider projection capability loss")]
 

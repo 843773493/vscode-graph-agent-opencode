@@ -30,7 +30,7 @@ from langchain_core.messages import (
 from langgraph.config import get_config
 from langgraph.types import Command
 
-from app.agents.itemized_context_middleware import _runtime_checkpoint_ns
+from app.agents.model_call_execution import _runtime_checkpoint_ns
 from app.agents.summarization.planning import (
     _prefix_cutoff_candidates,
     build_cache_preserving_event,

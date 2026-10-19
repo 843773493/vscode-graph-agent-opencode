@@ -8,30 +8,36 @@ import sqlite3
 import subprocess
 import sys
 from contextlib import closing, nullcontext
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from threading import Event, get_ident
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 import pytest
 from langchain.agents import create_agent
-from langchain.agents.middleware import ModelRequest, ModelResponse
+from langchain.agents.middleware import ModelRequest
 from langchain.agents.structured_output import (
     AutoStrategy,
     ProviderStrategy,
     ToolStrategy,
 )
+from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.runtime import ExecutionInfo, Runtime
 from pydantic import BaseModel
 
-from app.agents.itemized_context_middleware import SealedAssemblyDispatchBridge
+from app.agents.model_call_execution import ModelCallExecution
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
 from app.agents.providers.wire_finalize import chat_wire_profile, responses_wire_profile
-from app.agents.sealed_assembly_dispatch import read_sealed_assembly_dispatch
+from app.agents.sealed_assembly_dispatch import (
+    read_sealed_assembly_dispatch,
+    sealed_assembly_dispatch_scope,
+)
 from app.agents.tool_invocation_context import (
     ToolInvocationContext,
     ToolInvocationContextMiddleware,
@@ -88,6 +94,7 @@ from app.services.infrastructure.rollout_context.runtime.stream_accumulator impo
 )
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
 from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.orchestration.execution_step.model_call import StepModelCallAdapter
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 from app.tool_testing.definitions import PreparedToolTest, ToolTestEvaluation
@@ -143,7 +150,7 @@ def dispatch_bridge(dispatch_saver, registered_tool_set_producer_factory):
             "instruction:native-contract", instruction, revision="native-contract:1"
         )
         producer = registered_tool_set_producer_factory(tools)
-        return SealedAssemblyDispatchBridge(
+        return ModelCallExecution(
             context_read_admission=nullcontext,
             context_control_admission=lambda _operation, _payload, _ref: nullcontext(),
             checkpointer=checkpointer,
@@ -192,14 +199,12 @@ async def test_native_dispatch_sends_sealed_selection_over_real_http(
     agent = create_dispatch_agent(
         model,
         tools=[inspect_file],
-        middleware=[
-            dispatch_bridge(
+        execution=dispatch_bridge(
                 session_id=session_id,
                 instruction="HTTP system prompt",
                 checkpointer=saver,
                 tools=(inspect_file,),
-            )
-        ],
+            ),
         checkpointer=saver,
     )
     with dispatch_execution_scope(saver, session_id, turn_id):
@@ -207,12 +212,12 @@ async def test_native_dispatch_sends_sealed_selection_over_real_http(
             result = await asyncio.to_thread(
                 agent.invoke,
                 {"messages": []},
-                build_checkpoint_config(saver._storage.storage.main_thread_id(session_id)),
+                cast(RunnableConfig, build_checkpoint_config(saver._storage.storage.main_thread_id(session_id))),
             )
         else:
             result = await agent.ainvoke(
                 {"messages": []},
-                build_checkpoint_config(saver._storage.storage.main_thread_id(session_id)),
+                cast(RunnableConfig, build_checkpoint_config(saver._storage.storage.main_thread_id(session_id))),
             )
     assert "native-http-result" in json.dumps(result["messages"][-1].content)
     assert read_sealed_assembly_dispatch(invocation_purpose="tool_test") is None
@@ -302,19 +307,17 @@ async def test_concurrent_native_dispatch_does_not_share_context(
         )
         agent = create_dispatch_agent(
             model,
-            middleware=[
-                dispatch_bridge(
+            execution=dispatch_bridge(
                     session_id=session_id,
                     instruction=session_id,
                     checkpointer=saver,
-                )
-            ],
+                ),
             checkpointer=saver,
         )
         with dispatch_execution_scope(saver, session_id, turn_id):
             await agent.ainvoke(
                 {"messages": []},
-                build_checkpoint_config(saver._storage.storage.main_thread_id(session_id)),
+                cast(RunnableConfig, build_checkpoint_config(saver._storage.storage.main_thread_id(session_id))),
             )
 
     await asyncio.gather(dispatch(first_session), dispatch(second_session))
@@ -365,19 +368,16 @@ async def test_native_http_tool_loop_replays_canonical_call_and_result(
     agent = create_dispatch_agent(
         model,
         tools=[inspection_tool],
-        middleware=[
-            ToolInvocationContextMiddleware(context),
-            dispatch_bridge(
+        execution=dispatch_bridge(
                 session_id=session_id,
                 instruction="HTTP tool loop",
                 checkpointer=saver,
                 tools=(inspection_tool,),
-            )
-        ],
+            ), middleware=[ToolInvocationContextMiddleware(context)],
         checkpointer=saver,
     )
     with dispatch_execution_scope(saver, session_id, turn_id):
-        config = build_checkpoint_config(saver._storage.storage.main_thread_id(session_id))
+        config = cast(RunnableConfig, build_checkpoint_config(saver._storage.storage.main_thread_id(session_id)))
         if mode == "sync":
             result = await asyncio.to_thread(agent.invoke, {"messages": []}, config)
         else:
@@ -461,11 +461,9 @@ async def test_missing_saver_owner_fails_before_provider_http(
     # 缺少强制 owner 是错误配置，不以替身伪造 prepare/supports 成功。
     agent = create_dispatch_agent(
         model,
-        middleware=[
-            dispatch_bridge(
+        execution=dispatch_bridge(
                 session_id=session_id, instruction="missing owner", checkpointer=None
-            )
-        ],
+            ),
         checkpointer=saver,
     )
     with (
@@ -476,12 +474,12 @@ async def test_missing_saver_owner_fails_before_provider_http(
             await asyncio.to_thread(
                 agent.invoke,
                 {"messages": []},
-                build_checkpoint_config(saver._storage.storage.main_thread_id(session_id)),
+                cast(RunnableConfig, build_checkpoint_config(saver._storage.storage.main_thread_id(session_id))),
             )
         else:
             await agent.ainvoke(
                 {"messages": []},
-                build_checkpoint_config(saver._storage.storage.main_thread_id(session_id)),
+                cast(RunnableConfig, build_checkpoint_config(saver._storage.storage.main_thread_id(session_id))),
             )
     assert state.requests == []
     assert (
@@ -510,13 +508,11 @@ async def test_provider_parameters_cannot_override_sealed_input(
     )
     agent = create_dispatch_agent(
         model,
-        middleware=[
-            dispatch_bridge(
+        execution=dispatch_bridge(
                 session_id=session_id,
                 instruction="sealed prompt",
                 checkpointer=saver,
-            )
-        ],
+            ),
         checkpointer=saver,
     )
     with (
@@ -525,7 +521,7 @@ async def test_provider_parameters_cannot_override_sealed_input(
     ):
         await agent.ainvoke(
             {"messages": []},
-            build_checkpoint_config(saver._storage.storage.main_thread_id(session_id)),
+            cast(RunnableConfig, build_checkpoint_config(saver._storage.storage.main_thread_id(session_id))),
         )
     assert state.requests == []
     assert read_sealed_assembly_dispatch(invocation_purpose="tool_test") is None
@@ -548,12 +544,6 @@ async def test_new_seals_bind_effective_parameters_and_profile_over_real_http(
     )
     snapshots = []
 
-    async def send_actual_request(request: ModelRequest) -> ModelResponse:
-        # 真实 bind_tools 和 SDK/TCP 发送；不把模型回答写回历史，保持两次 selection 相同。
-        bound = request.model.bind_tools(request.tools)
-        answer = await bound.ainvoke(request.messages, **request.model_settings)
-        return ModelResponse(result=[answer])
-
     for ordinal, temperature in enumerate((0.1, 0.8)):
         model_type = {
             "chat_completions": BoxteamLiteLLMChatModel,
@@ -566,7 +556,7 @@ async def test_new_seals_bind_effective_parameters_and_profile_over_real_http(
             image_input_replay=False,
         )
         if ordinal == 0:
-            create_dispatch_agent(model, tools=[inspect_file], middleware=[bridge], checkpointer=saver)
+            create_dispatch_agent(model, tools=[inspect_file], execution=bridge, checkpointer=saver)
         request = ModelRequest(
             model=model, messages=[], tools=[inspect_file],
             model_settings={"temperature": temperature} if changed_field == "request_temperature" else {},
@@ -577,7 +567,7 @@ async def test_new_seals_bind_effective_parameters_and_profile_over_real_http(
         )
         prior_ids = {snapshot.assembly_id for snapshot in saver.list_context_assemblies(session_id, thread)}
         with dispatch_execution_scope(saver, session_id, turn_id):
-            await bridge.awrap_model_call(request, send_actual_request)
+            await bridge.aexecute(request)
         (snapshot,) = [
             snapshot for snapshot in saver.list_context_assemblies(session_id, thread)
             if snapshot.assembly_id not in prior_ids
@@ -639,7 +629,7 @@ async def test_cold_dispatch_retry_reads_committed_owner_namespace_before_real_p
         model="openai/gpt-4.1", api_key=state.api_key, api_base=endpoint,
         custom_llm_provider="openai", streaming=True, max_retries=0,
     )
-    create_dispatch_agent(model, middleware=[bridge], checkpointer=saver)
+    create_dispatch_agent(model, execution=bridge, checkpointer=saver)
     request = ModelRequest(
         model=model, messages=[], tools=[], model_settings={},
         runtime=Runtime(execution_info=ExecutionInfo(
@@ -663,13 +653,10 @@ async def test_cold_dispatch_retry_reads_committed_owner_namespace_before_real_p
             assembly_id=assembly_id, checkpoint_ns=checkpoint_ns, registration=registration,
         )
 
-    async def send_actual_request(prepared: ModelRequest) -> ModelResponse:
-        return ModelResponse(result=[await prepared.model.ainvoke(prepared.messages)])
-
     # 首次 seal 的 request-local snapshot 完成真实 HTTP dispatch；随后同一 attempt 的
     # cold retry 必须通过 authority reader 重新验证持久事实。
     with dispatch_execution_scope(saver, session_id, turn_id):
-        await bridge.awrap_model_call(request, send_actual_request)
+        await bridge.aexecute(request)
     assert len(state.requests) == 1
 
     with monkeypatch.context() as cold_read_patch:
@@ -681,10 +668,10 @@ async def test_cold_dispatch_retry_reads_committed_owner_namespace_before_real_p
         with dispatch_execution_scope(saver, session_id, turn_id):
             if missing_assembly:
                 with pytest.raises(KeyError, match="committed assembly lookup loss") as error:
-                    await bridge.awrap_model_call(request, send_actual_request)
+                    await bridge.aexecute(request)
                 assert error.value is missing
             else:
-                await bridge.awrap_model_call(request, send_actual_request)
+                await bridge.aexecute(request)
 
     (snapshot,) = saver.list_context_assemblies(session_id, thread)
     assert seen_owners
@@ -729,11 +716,7 @@ async def test_profile_capability_is_bound_and_same_epoch_change_rejected_over_r
         custom_llm_provider="openai", streaming=True, max_retries=0,
         image_input_replay=not image_input_replay,
     )
-    create_dispatch_agent(model, tools=[inspect_file], middleware=[bridge], checkpointer=saver)
-
-    async def send_actual_request(request: ModelRequest) -> ModelResponse:
-        bound = request.model.bind_tools(request.tools)
-        return ModelResponse(result=[await bound.ainvoke(request.messages, **request.model_settings)])
+    create_dispatch_agent(model, tools=[inspect_file], execution=bridge, checkpointer=saver)
 
     def request_for(selected_model, ordinal):
         return ModelRequest(
@@ -745,7 +728,7 @@ async def test_profile_capability_is_bound_and_same_epoch_change_rejected_over_r
         )
 
     with dispatch_execution_scope(saver, session_id, turn_id):
-        await bridge.awrap_model_call(request_for(model, 0), send_actual_request)
+        await bridge.aexecute(request_for(model, 0))
     (snapshot,) = saver.list_context_assemblies(session_id, thread)
     assert len(state.requests) == 1
     assert snapshot.provider_version == profile(model).identity()
@@ -767,7 +750,7 @@ async def test_profile_capability_is_bound_and_same_epoch_change_rejected_over_r
         dispatch_execution_scope(saver, session_id, turn_id),
         pytest.raises(ProviderProfileChangeRequiresRebuildError, match="provider-profile-change-requires-rebuild"),
     ):
-        await bridge.awrap_model_call(request_for(changed_model, 1), send_actual_request)
+        await bridge.aexecute(request_for(changed_model, 1))
     assert len(state.requests) == 1
     assert saver.list_context_assemblies(session_id, thread) == (snapshot,)
     assert read_sealed_assembly_dispatch(invocation_purpose="tool_test") is None
@@ -798,9 +781,9 @@ async def test_agent_without_dispatch_binding_fails_before_provider_http(
         pytest.raises(ValueError, match="source-mismatch.*binding"),
     ):
         if mode == "sync":
-            agent.invoke({"messages": []}, build_checkpoint_config(thread))
+            agent.invoke({"messages": []}, cast(RunnableConfig, build_checkpoint_config(thread)))
         else:
-            await agent.ainvoke({"messages": []}, build_checkpoint_config(thread))
+            await agent.ainvoke({"messages": []}, cast(RunnableConfig, build_checkpoint_config(thread)))
     assert state.requests == []
     assert saver.list_context_assemblies(session_id, thread) == ()
     assert read_sealed_assembly_dispatch(invocation_purpose="tool_test") is None
@@ -840,16 +823,16 @@ async def test_provider_drift_after_committed_seal_fails_before_http(
     monkeypatch.setattr(saver, "prepare_context_for_provider", seal_then_change_model)
     agent = create_dispatch_agent(
         model, tools=[inspect_file], checkpointer=saver,
-        middleware=[dispatch_bridge(
+        execution=dispatch_bridge(
             session_id=session_id, instruction="已封存后不得改变模型参数",
             checkpointer=saver, tools=[inspect_file],
-        )],
+        ),
     )
     with (
         dispatch_execution_scope(saver, session_id, turn_id),
         pytest.raises(ValueError, match="source-mismatch"),
     ):
-        await agent.ainvoke({"messages": []}, build_checkpoint_config(thread))
+        await agent.ainvoke({"messages": []}, cast(RunnableConfig, build_checkpoint_config(thread)))
     assert len(sealed_ids) == 1
     (snapshot,) = saver.list_context_assemblies(session_id, thread)
     assert snapshot.assembly_id == sealed_ids[0]
@@ -1047,11 +1030,11 @@ async def test_chat_rejects_unknown_overlay_before_assembly_and_provider_http(
         model="openai/gpt-4.1", api_key=state.api_key, api_base=endpoint,
         custom_llm_provider="openai", streaming=True, max_retries=0,
     )
-    agent = create_dispatch_agent(model, middleware=[bridge], checkpointer=saver)
+    agent = create_dispatch_agent(model, execution=bridge, checkpointer=saver)
     with dispatch_execution_scope(saver, session_id, turn_id), pytest.raises(
         ValueError, match="source-mismatch: Chat source frame 包含无法编码",
     ):
-        await agent.ainvoke({"messages": []}, build_checkpoint_config(thread))
+        await agent.ainvoke({"messages": []}, cast(RunnableConfig, build_checkpoint_config(thread)))
     assert state.requests == []
     assert saver.list_context_assemblies(session_id, thread) == ()
     assert manager.prepare_pending() == pending
@@ -1437,12 +1420,12 @@ async def test_structured_output_graph_seals_registered_tools_once_over_http(
         tools=[inspect_file],
     )
     agent = create_dispatch_agent(
-        model, tools=[inspect_file], middleware=[bridge], response_format=response_format,
+        model, tools=[inspect_file], execution=bridge, response_format=response_format,
         checkpointer=saver,
     )
     thread = saver._storage.storage.main_thread_id(session_id)
     with dispatch_execution_scope(saver, session_id, turn_id):
-        result = await agent.ainvoke({"messages": []}, build_checkpoint_config(thread))
+        result = await agent.ainvoke({"messages": []}, cast(RunnableConfig, build_checkpoint_config(thread)))
     assert result["structured_response"] == StructuredAnswer(answer="native-http-result")
     assert len(state.requests) == 1
     (snapshot,) = saver.list_context_assemblies(session_id, thread)
@@ -1495,12 +1478,12 @@ async def test_schema_named_credentials_and_timestamp_survive_real_provider_http
         checkpointer=saver, tools=[inspect_file],
     )
     agent = create_dispatch_agent(
-        model, tools=[inspect_file], middleware=[bridge],
+        model, tools=[inspect_file], execution=bridge,
         response_format=ProviderStrategy(schema), checkpointer=saver,
     )
     thread = saver._storage.storage.main_thread_id(session_id)
     with dispatch_execution_scope(saver, session_id, turn_id):
-        result = await agent.ainvoke({"messages": []}, build_checkpoint_config(thread))
+        result = await agent.ainvoke({"messages": []}, cast(RunnableConfig, build_checkpoint_config(thread)))
     assert result["structured_response"] == {"answer": "native-http-result"}
     assert len(state.requests) == 1
     (snapshot,) = saver.list_context_assemblies(session_id, thread)
@@ -1543,7 +1526,7 @@ def search_notes(query: str) -> str:
 
 
 @pytest.fixture
-def toolset_dispatch_case(dispatch_saver, native_http_server, dispatch_bridge, target_format):
+def toolset_dispatch_case(dispatch_saver, native_http_server, dispatch_bridge, target_format, monkeypatch):
     """ToolSelectionStore→正式 producer→实际 Bridge/Saver/HTTP，响应仍是协议桩。"""
     saver, session, turn, sessions = dispatch_saver
     state, endpoint = native_http_server
@@ -1562,7 +1545,7 @@ def toolset_dispatch_case(dispatch_saver, native_http_server, dispatch_bridge, t
         session_id=session, instruction="ToolSet sealed owner 合同",
         checkpointer=saver, tools=tools,
     )
-    create_dispatch_agent(model, tools=list(tools), middleware=[bridge], checkpointer=saver)
+    create_dispatch_agent(model, tools=list(tools), execution=bridge, checkpointer=saver)
     producer = bridge._tool_set_producer
     selection = producer._selection_reader
     assert isinstance(selection, ToolSelectionStore)
@@ -1582,7 +1565,9 @@ def toolset_dispatch_case(dispatch_saver, native_http_server, dispatch_bridge, t
         )
         outbound = []
 
-        async def send_actual(request):
+        original_invoke = bridge._ainvoke
+
+        async def send_actual(prepared, messages, tools):
             # handler 只读已成功提交的 assembly，真实 SDK 还会联校 finalized wire/hash。
             handle = read_sealed_assembly_dispatch(invocation_purpose="agent")
             assert handle is not None
@@ -1594,12 +1579,11 @@ def toolset_dispatch_case(dispatch_saver, native_http_server, dispatch_bridge, t
                 assert native["selection"] == [entry.to_dict() for entry in snapshot.selection]
             dispatches.append(handle)
             outbound.append(handle.snapshot)
-            bound = request.model.bind_tools(request.tools)
-            answer = await bound.ainvoke(request.messages, **request.model_settings)
-            return ModelResponse(result=[answer])
+            return await original_invoke(prepared, messages, tools)
 
-        with dispatch_execution_scope(saver, session, turn):
-            await bridge.awrap_model_call(incoming, send_actual)
+        with dispatch_execution_scope(saver, session, turn), monkeypatch.context() as dispatch_patch:
+            dispatch_patch.setattr(bridge, "_ainvoke", send_actual)
+            await bridge.aexecute(incoming)
         assert len(outbound) == 1
         assert outbound[0].request_hash_preimage == normalize_wire_request(state.requests[-1]["body"])
         return outbound[0]
@@ -1609,7 +1593,179 @@ def toolset_dispatch_case(dispatch_saver, native_http_server, dispatch_bridge, t
         state=state, target_format=target_format, bridge=bridge, producer=producer,
         selection=selection, manager=bridge._context_source_manager,
         tools=tools, dispatch=dispatch, dispatches=dispatches,
+        model=model,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
+async def test_typed_dispatch_reference_blocks_each_binding_mismatch_before_http(
+    toolset_dispatch_case, target_format,
+):
+    case = toolset_dispatch_case
+    snapshot = await case.dispatch("reference-source")
+    reference = case.dispatches[-1].reference
+    native = case.dispatches[-1].native_projection
+    changes = {
+        "session_id": "foreign-session", "thread_id": "foreign-thread",
+        "execution_id": "foreign-execution", "attempt_key": "foreign-attempt",
+        "checkpoint_ns": "foreign-namespace", "assembly_id": "foreign-assembly",
+        "callback_model_call_id": str(uuid4()), "provider_version": "foreign-provider",
+        "prefix_epoch": "foreign-epoch", "epoch_reason": "foreign-reason",
+        "prefix_hash": "foreign-prefix", "frame_hashes": ("foreign-frame",),
+        "tool_set_refs": (), "tool_policy_hash": "foreign-policy",
+    }
+    for field, value in changes.items():
+        with (
+            dispatch_execution_scope(case.saver, case.session, case.turn),
+            pytest.raises(ValueError, match="sealed-assembly binding violation"),
+            sealed_assembly_dispatch_scope(replace(reference, **{field: value}), snapshot, native_projection=native),
+        ):
+            await case.model.ainvoke([])
+        assert len(case.state.requests) == 1, field
+    with (
+        pytest.raises(TypeError, match="dispatch reference"),
+        # 有意向类型边界注入缺失引用，证明真实发送前拒绝。
+        sealed_assembly_dispatch_scope(None, snapshot, native_projection=native),  # pyright: ignore[reportArgumentType]
+    ):
+        await case.model.ainvoke([])
+    assert len(case.state.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
+async def test_cold_dispatch_reference_reads_exact_payload_without_preparation(
+    toolset_dispatch_case, monkeypatch, target_format,
+):
+    case = toolset_dispatch_case
+    snapshot = await case.dispatch("reference-cold-retry")
+    reference = case.dispatches[-1].reference
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("只读 dispatch 不得重取 CSM/ToolSet 或重新准备")
+
+    monkeypatch.setattr(case.manager, "prepare_sources", unexpected)
+    monkeypatch.setattr(case.selection, "snapshot", unexpected)
+    with RolloutCheckpointSaver(case.sessions) as restarted:
+        monkeypatch.setattr(restarted, "prepare_context_for_provider", unexpected)
+        payload = restarted.read_context_for_dispatch(reference)
+        assert payload["snapshot"] == snapshot
+        assert payload["execution_id"] == snapshot.execution_id
+        assert restarted._prepared_dispatches == {}
+        with (
+            dispatch_execution_scope(restarted, case.session, case.turn),
+            sealed_assembly_dispatch_scope(reference, payload["snapshot"], native_projection=payload.get("native_projection")),
+        ):
+            await case.model.bind_tools(payload["tools"]).ainvoke(payload["messages"])
+        assert restarted.get_context_assembly(case.session, case.thread, assembly_id=snapshot.assembly_id) == snapshot
+    assert len(case.state.requests) == 2
+    assert case.state.requests[0]["body"] == case.state.requests[1]["body"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
+@pytest.mark.parametrize("callback_mismatch", [False, True], ids=["matched-callback", "stale-callback"])
+async def test_sealed_retry_callback_reference_reaches_real_step_adapter(
+    toolset_dispatch_case, target_format, callback_mismatch, monkeypatch,
+):
+    """真实 HTTP 失败后重试同一 payload；每次 callback 精确消费自己的引用。"""
+    case = toolset_dispatch_case
+    admission = current_execution_admission(langgraph_thread_id=case.thread)
+    assert admission is not None
+    consumed_ids = []
+    consume = case.saver.consume_prepared_context_for_dispatch
+
+    def consume_actual(*args, **kwargs):
+        consumed_ids.append(kwargs["model_call_id"])
+        return consume(*args, **kwargs)
+
+    monkeypatch.setattr(case.saver, "consume_prepared_context_for_dispatch", consume_actual)
+    adapter = StepModelCallAdapter(
+        checkpointer=case.saver, session_id=case.session, thread_id=case.thread,
+        job_id=admission.job_id, checkpoint_ns="",
+    )
+    references = []
+    callback_ids = []
+    outcomes = []
+    reject_retry_callback = False
+
+    def record_bindings():
+        (case.state.artifacts / "step-callback-bindings.json").write_text(json.dumps({
+            "references": [asdict(reference) for reference in references],
+            "callback_model_call_ids": callback_ids, "consumed_model_call_ids": consumed_ids,
+            "outcomes": outcomes, "http_request_count": len(case.state.requests),
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    class StepCallbacks(AsyncCallbackHandler):
+        raise_error = True
+
+        async def on_chat_model_start(self, serialized, messages, *, run_id, **kwargs):
+            dispatch = read_sealed_assembly_dispatch(invocation_purpose="agent")
+            assert dispatch is not None
+            reference = dispatch.reference
+            assert str(run_id) == reference.callback_model_call_id
+            callback_ids.append(str(run_id))
+            references.append(reference)
+            call_id = callback_ids[0] if reject_retry_callback else str(run_id)
+            execution_id = await adapter.register(call_id, len(references), case.model.model)
+            assert execution_id == reference.execution_id
+            assert case.saver._prepared_dispatches == {}
+
+        async def on_llm_error(self, error, *, run_id, **kwargs):
+            outcomes.append((str(run_id), "failed"))
+            await adapter.update_outcome(str(run_id), "failed")
+
+        async def on_llm_end(self, response, *, run_id, **kwargs):
+            outcomes.append((str(run_id), "completed"))
+            await adapter.update_outcome(str(run_id), "completed")
+
+    case.model.callbacks = [StepCallbacks()]
+    # 两次失败后再成功，确保下一次冷恢复仍引用最初封存的 model-call，
+    # 而持久 model_calls 链逐次指向上一个真实 callback。
+    case.state.response_status = 503
+    with pytest.raises(Exception, match="503|ServiceUnavailable|InternalServerError"):
+        await case.dispatch("reference-step-retry")
+    if callback_mismatch:
+        reject_retry_callback = True
+        with pytest.raises(RuntimeError, match="callback 没有唯一 prepared reference"):
+            await case.dispatch("reference-step-retry")
+        record_bindings()
+        assert len(case.state.requests) == 1
+        assert len(set(callback_ids)) == 2
+        assert consumed_ids == [callback_ids[0], callback_ids[0]]
+        pending = [prepared for queue in case.saver._prepared_dispatches.values() for prepared in queue]
+        assert [prepared["dispatch_ref"] for prepared in pending] == [references[-1]]
+        with case.saver._storage.storage._connect(case.thread, session_id=case.session, read_only=True) as connection:
+            rows = connection.execute("SELECT model_call_id, outcome FROM model_calls").fetchall()
+        assert rows == [(callback_ids[0], "failed")]
+        return
+    with pytest.raises(Exception, match="503|ServiceUnavailable|InternalServerError"):
+        await case.dispatch("reference-step-retry")
+    case.state.response_status = 200
+    snapshot = await case.dispatch("reference-step-retry")
+    record_bindings()
+    assert len(references) == len(case.state.requests) == 3
+    assert len(set(callback_ids)) == 3
+    assert consumed_ids == callback_ids
+    assert outcomes == list(zip(callback_ids, ["failed", "failed", "completed"], strict=True))
+    assert {reference.sealed_model_call_id for reference in references} == {snapshot.model_call_id}
+    assert callback_ids[0] == snapshot.model_call_id
+    for reference in references:
+        reference.validate_snapshot(snapshot)
+        assert (reference.assembly_id, reference.request_hash) == (snapshot.assembly_id, snapshot.request_hash)
+    assert all(request["body"] == case.state.requests[0]["body"] for request in case.state.requests)
+    with case.saver._storage.storage._connect(case.thread, session_id=case.session, read_only=True) as connection:
+        rows = connection.execute(
+            "SELECT model_call_id, retry_of_model_call_id, assembly_id, execution_id, attempt, outcome "
+            "FROM model_calls WHERE session_id=? AND thread_id=? ORDER BY attempt",
+            (case.session, case.thread),
+        ).fetchall()
+    assert rows == [
+        (call_id, callback_ids[index - 1] if index else None, snapshot.assembly_id,
+         snapshot.execution_id, index + 1, outcomes[index][1])
+        for index, call_id in enumerate(callback_ids)
+    ]
+    assert case.saver.list_context_assemblies(case.session, case.thread) == (snapshot,)
 
 
 @pytest.mark.asyncio

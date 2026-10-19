@@ -28,6 +28,12 @@ from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
 from app.domain.itemized.request_plan import resolve_contribution_for_ref
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.domain.itemized.serialization import normalize_wire_request
+from app.services.business.resource_derivations.team import (
+    TEAM_FACETS,
+    TEAM_RESOURCE_IDS,
+    TEAM_SOURCE_IDS,
+    team_guidance_content,
+)
 from app.services.infrastructure.mcp.catalog_activation import (
     MCP_GUIDANCE_SOURCE_ID,
     MCP_TOOL_CATALOG_RESOURCE_ID,
@@ -75,12 +81,6 @@ from app.services.infrastructure.rollout_context.runtime.prefix_compiler import 
 )
 from app.services.infrastructure.rollout_context.runtime.summary_compiler import (
     compile_summary_candidate,
-)
-from app.services.infrastructure.team.activation import (
-    TEAM_FACETS,
-    TEAM_RESOURCE_IDS,
-    TEAM_SOURCE_IDS,
-    team_guidance_content,
 )
 
 
@@ -473,9 +473,6 @@ def prepare_registered_context(
         }
         if native is not None:
             pending["native_projection"] = native
-        queue = owner._prepared_dispatches.setdefault((session_id, thread_id, checkpoint_ns, execution_id), [])
-        if not any(item["assembly_id"] == snapshot.assembly_id for item in queue):
-            queue.append(pending)
         return pending
 
 

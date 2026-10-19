@@ -69,17 +69,18 @@ def _restore_and_send(saver, session, thread, model):
     restored = cold.get_context_assembly(session, thread, assembly_id=snapshot.assembly_id)
     assert restored == snapshot
     assert restored.model_call_id is not None
-    messages, tools, losses = cold.project_context_plan_to_provider(
-        session, thread, restored.as_sealed_plan(), target_format=restored.target_format,
-        include_runtime_notices=True, include_summaries=True,
+    reference = cold.issue_context_dispatch_ref(
+        restored, attempt_key=restored.plan_id, callback_model_call_id=restored.model_call_id,
     )
+    payload = cold.read_context_for_dispatch(reference)
+    messages, tools, losses = payload["messages"], payload["tools"], payload["losses"]
     assert losses == ()
-    native = cold.project_context_plan_to_native(session, thread, restored.as_sealed_plan()) if restored.target_format == "responses" else None
+    native = payload.get("native_projection")
     admission = cold.execution_admission(session, thread_id=thread, execution_id=restored.execution_id)
     with (
         session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),
         execution_admission_scope(admission, langgraph_thread_id=thread),
-        sealed_assembly_dispatch_scope(restored, callback_model_call_id=restored.model_call_id, native_projection=native),
+        sealed_assembly_dispatch_scope(reference, restored, native_projection=native),
     ):
         next(model.bind_tools(tools).stream(messages))
 

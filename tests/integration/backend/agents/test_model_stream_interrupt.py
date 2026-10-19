@@ -42,7 +42,9 @@ from app.core.turn_execution_scope import (
     reset_current_turn_execution_scope,
     set_current_turn_execution_scope,
 )
+from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.message_stream_store import (
@@ -50,6 +52,9 @@ from app.services.infrastructure.message_stream_store import (
     MessageStreamStore,
     MessageStreamSubscription,
     MessageStreamTerminalError,
+)
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_dispatch import (
+    ContextDispatchPayload,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -432,7 +437,7 @@ async def _prepare_sealed_provider_request(
     session_id: str,
     thread_id: str,
     accepted: Mapping[str, object],
-    admission: object,
+    admission: ExecutionAdmission,
     owner: MutationIntentOwner,
     ingress_message: HumanMessage,
     provider: ProviderKind,
@@ -636,21 +641,20 @@ def _event_payload(event: Mapping[str, object]) -> Mapping[str, object]:
 
 async def _consume_model(
     model,
-    prepared: Mapping[str, object],
+    prepared: ContextDispatchPayload,
     *,
     owner: MutationIntentOwner,
-    admission: object,
+    admission: ExecutionAdmission,
     thread_id: str,
     model_call_id: str,
-    snapshot: object,
-    native_projection: object | None,
+    snapshot: ContextAssemblySnapshot,
+    native_projection: Mapping[str, object] | None,
 ) -> None:
     with (
         session_thread_owner_scope(owner, langgraph_thread_id=thread_id),
         execution_admission_scope(admission, langgraph_thread_id=thread_id),
         sealed_assembly_dispatch_scope(
-            snapshot,
-            callback_model_call_id=model_call_id,
+            prepared["dispatch_ref"], snapshot,
             native_projection=native_projection,
         ),
     ):
@@ -993,13 +997,13 @@ async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_re
                     model_call_id=model_call_id,
                 ),
             )
-            snapshot = prepared["snapshot"]
+            sealed_snapshot = prepared["snapshot"]
             assert saver.get_context_assembly(
                 session_id,
                 thread_id,
-                assembly_id=snapshot.assembly_id,
-            ) == snapshot
-            assert snapshot.model_call_id == model_call_id
+                assembly_id=sealed_snapshot.assembly_id,
+            ) == sealed_snapshot
+            assert sealed_snapshot.model_call_id == model_call_id
             native_projection = (
                 saver.project_context_plan_to_native(
                     session_id,
@@ -1022,8 +1026,7 @@ async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_re
                         langgraph_thread_id=thread_id,
                     ),
                     sealed_assembly_dispatch_scope(
-                        snapshot,
-                        callback_model_call_id=model_call_id,
+                        prepared["dispatch_ref"], sealed_snapshot,
                         native_projection=native_projection,
                     ),
                 ):

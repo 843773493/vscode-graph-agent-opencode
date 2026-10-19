@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from langchain_core.messages import AIMessage
 
 from app.core.execution_admission_context import require_current_execution_admission
+from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.enums import CanonicalItemStatus, SemanticKind
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.runtime import ModelCallRecord
@@ -71,6 +72,7 @@ class StepModelCallAdapter:
             self._session_id,
             self._thread_id,
             execution_id=admission.execution_id,
+            model_call_id=model_call_id,
             checkpoint_ns=self._checkpoint_ns,
         )
         if prepared is None:
@@ -86,7 +88,7 @@ class StepModelCallAdapter:
                     f"model_call_id={model_call_id}"
                 )
             # Provider 在一次已封存 dispatch 内部自动切换 fallback 时不会再次经过
-            # context middleware。只有前一调用已提交 failed 终态时，才允许新 attempt
+            # model-call execution。只有前一调用已提交 failed 终态时，才允许新 attempt
             # 复用同一份不可变 assembly/execution binding。
             assembly_id = self._last_assembly_id
             execution_id = self._last_execution_id
@@ -104,6 +106,15 @@ class StepModelCallAdapter:
                 raise RuntimeError(
                     "prepared context dispatch handle 缺少 assembly_id/execution_id"
                 )
+            reference = prepared.get("dispatch_ref")
+            if not isinstance(reference, SealedContextDispatchRef) or (
+                reference.session_id, reference.thread_id, reference.execution_id,
+                reference.turn_id, reference.assembly_id, reference.callback_model_call_id,
+            ) != (
+                self._session_id, self._thread_id, admission.execution_id,
+                admission.turn_id, assembly_id, model_call_id,
+            ):
+                raise RuntimeError("sealed-assembly binding violation: prepared context callback/owner 不一致")
         if admission.execution_id != execution_id:
             raise RuntimeError(
                 "prepared context dispatch 与当前 execution admission 不一致: "

@@ -1,6 +1,6 @@
 # 目录用途
 
-维护已接受来源的业务语义派生，包括 AGENTS 原文与有序链、Skill frontmatter、metadata、activation 与有效 catalog。
+维护已接受来源的业务语义派生，包括 AGENTS 原文与有序链、Skill frontmatter、metadata、activation、有效 catalog 和 Team ledger 的 membership/tasks。
 
 # 可修改内容
 

@@ -1,4 +1,4 @@
-"""把 Saver-owned itemized context 接到 LangChain model request 边界。"""
+"""唯一 model-call 执行入口：收敛 canonical、准备封存，然后直接发送。"""
 
 from __future__ import annotations
 
@@ -7,16 +7,14 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, replace
-from inspect import getclosurevars
-from typing import Any
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, cast, overload
 from uuid import UUID
 
-from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
-from langchain.agents.middleware.types import ExtendedModelResponse, StateT
-from langchain.agents.structured_output import ToolStrategy
-from langchain_core.messages import AIMessage, ToolMessage
-from langchain_core.tools import BaseTool
-from langgraph.graph.state import CompiledStateGraph
+from langchain.agents.middleware import ModelRequest, ModelResponse
+from langchain.agents.middleware.types import ExtendedModelResponse
+from langchain.agents.structured_output import ResponseFormat, ToolStrategy
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.runnables import Runnable, RunnableBinding
 
 from app.agents.providers.wire_finalize import (
     ChatWireProfile,
@@ -27,7 +25,6 @@ from app.agents.providers.wire_finalize import (
     responses_wire_profile,
 )
 from app.agents.sealed_assembly_dispatch import sealed_assembly_dispatch_scope
-from app.agents.tool_identity import tool_definition_name
 from app.agents.tool_set_producer import RegisteredToolSetProducer
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.identifier import create_uuid_hex
@@ -36,6 +33,7 @@ from app.core.model_request_context import current_summary_candidate
 from app.core.phase_observer import observe_phase, observe_phase_sync
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
@@ -55,28 +53,33 @@ from app.services.orchestration.resource_activation.contracts import (
     require_current_execution_resource_activation,
 )
 
+if TYPE_CHECKING:
+    from app.services.infrastructure.rollout_context.checkpoint.saver import (
+        RolloutCheckpointSaver,
+    )
+
 logger = logging.getLogger(__name__)
 
 
 def _runtime_thread_id(request: ModelRequest[Any]) -> str:
     runtime = request.runtime
     if runtime is None:
-        raise RuntimeError("itemized context middleware 缺少 runtime")
+        raise RuntimeError("model-call execution 缺少 runtime")
     execution_info = runtime.execution_info
     thread_id = getattr(execution_info, "thread_id", None)
     if not isinstance(thread_id, str) or not thread_id:
-        raise RuntimeError("itemized context middleware 缺少 runtime thread_id")
+        raise RuntimeError("model-call execution 缺少 runtime thread_id")
     return thread_id
 
 
 def _runtime_checkpoint_ns(request: ModelRequest[Any]) -> str:
     runtime = request.runtime
     if runtime is None:
-        raise RuntimeError("itemized context middleware 缺少 runtime")
+        raise RuntimeError("model-call execution 缺少 runtime")
     execution_info = runtime.execution_info
     checkpoint_ns = getattr(execution_info, "checkpoint_ns", "")
     if not isinstance(checkpoint_ns, str):
-        raise TypeError("itemized context middleware checkpoint_ns 非法")
+        raise TypeError("model-call execution checkpoint_ns 非法")
     return checkpoint_ns
 
 
@@ -100,10 +103,10 @@ def _request_idempotency_keys(
         for value in (checkpoint_id, task_id, execution_id)
     ):
         raise RuntimeError(
-            "itemized context middleware 缺少 checkpoint/task/execution identity"
+            "model-call execution 缺少 checkpoint/task/execution identity"
         )
     if type(attempt) is not int or attempt < 1:
-        raise RuntimeError("itemized context middleware 缺少合法 node_attempt")
+        raise RuntimeError("model-call execution 缺少合法 node_attempt")
     identity = sha256_jcs(
         {
             "schema": "itemized-provider-attempt:v1",
@@ -136,6 +139,14 @@ def _request_wire_options(bound_model: object) -> dict[str, Any]:
     return {key: value for key, value in kwargs.items() if key != "tools"}
 
 
+@overload
+def _bind_response_model_call(response: ModelResponse[Any], *, model_call_id: str) -> ModelResponse[Any]: ...
+
+
+@overload
+def _bind_response_model_call(response: ExtendedModelResponse[Any], *, model_call_id: str) -> ExtendedModelResponse[Any]: ...
+
+
 def _bind_response_model_call(
     response: ModelResponse[Any] | ExtendedModelResponse[Any], *, model_call_id: str,
 ) -> ModelResponse[Any] | ExtendedModelResponse[Any]:
@@ -157,7 +168,8 @@ def _bind_response_model_call(
                     call
                     for assistant in messages if isinstance(assistant, AIMessage)
                     for call in assistant.tool_calls
-                    if matches_tool_call_id(identity, call["id"], message.tool_call_id)
+                    if isinstance(call["id"], str)
+                    and matches_tool_call_id(identity, call["id"], message.tool_call_id)
                 ]
                 if len(matches) != 1:
                     raise ValueError(
@@ -185,10 +197,27 @@ class _ProviderPreparation:
     wire_profile: ChatWireProfile | ResponsesWireProfile
     wire_params: Mapping[str, object]
     include_structured_output: bool
+    bound_model: Runnable[Any, AIMessage]
+    response_format: ResponseFormat[Any] | None
 
 
-class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
-    """用构建时的 SessionThread owner 转发 Saver sealed selection。"""
+class _PreparedModelCall(TypedDict):
+    """本次执行的已验证 Saver receipt 与框架绑定，不写入持久化。"""
+
+    assembly_id: str
+    snapshot: ContextAssemblySnapshot
+    dispatch_ref: SealedContextDispatchRef
+    callback_model_call_id: str
+    bound_model: Runnable[Any, AIMessage]
+    response_format: ResponseFormat[Any] | None
+    messages: list[BaseMessage]
+    tools: list[dict[str, object]]
+    losses: tuple[str, ...]
+    native_projection: NotRequired[Mapping[str, object]]
+
+
+class ModelCallExecution:
+    """按真实 attempt 完成准备并直接消费 Saver 的封存 payload。"""
 
     def __init__(
         self, *, checkpointer: object, session_id: str, thread_id: str,
@@ -199,8 +228,9 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         context_control_admission: Callable[[str, Mapping[str, object], str], AbstractAsyncContextManager[None]],
     ) -> None:
         if not session_id or not thread_id:
-            raise ValueError("itemized context middleware 需要显式 SessionThread owner")
-        self._checkpointer = checkpointer
+            raise ValueError("model-call execution 需要显式 SessionThread owner")
+        # 合成 inspection 图也可装配；真正执行时先校验 Saver 端口及资源准入。
+        self._checkpointer = cast("RolloutCheckpointSaver", checkpointer)
         self._session_id = session_id
         self._thread_id = thread_id
         self._context_source_manager = context_source_manager
@@ -208,27 +238,18 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         self._resource_activation = resource_activation
         self._context_read_admission = context_read_admission
         self._context_control_admission = context_control_admission
-        self._graph_model_binding: Callable[[ModelRequest[Any]], tuple[object, object]] | None = None
+        self._graph_model_binding: Callable[[ModelRequest[Any]], tuple[Runnable[Any, AIMessage], ResponseFormat[Any] | None]] | None = None
+        self._decode_output: Callable[..., Mapping[str, Any]] | None = None
+        self._model_name: str | None = None
 
-    def bind_graph(self, graph: CompiledStateGraph) -> None:
-        """在 Agent 适配边界读取实际图注册表和绑定函数，不修改框架闭包。
-
-        LangChain 未公开该注册端口；访问集中在此处。图创建后工具已经注册，
-        这里冻结同一批 schema，再使用同一 _get_bound_model 决定请求策略。
-        """
+    def bind_model(self, *, bind_model, decode_output, name, structured_tools) -> None:
+        """图适配器只注入一次框架的真实绑定、解析和结构化工具注册表。"""
         if self._graph_model_binding is not None:
-            raise RuntimeError("itemized context bridge 已绑定 Agent 图")
-        model_node = graph.builder.nodes["model"].runnable.func
-        execute_model = getclosurevars(model_node).nonlocals["_execute_model_sync"]
-        bind_model = getclosurevars(execute_model).nonlocals["_get_bound_model"]
-        registry = getclosurevars(bind_model).nonlocals["structured_output_tools"]
-        if not isinstance(registry, Mapping) or not callable(bind_model):
-            raise TypeError("itemized context 缺少实际图结构化输出注册表/绑定端口")
-        tools = {name: binding.tool for name, binding in registry.items()}
-        if not all(isinstance(tool, BaseTool) for tool in tools.values()):
-            raise TypeError("itemized context 图结构化输出注册表包含非法工具")
-        self._tool_set_producer.freeze_structured_output_tools(tools)
+            raise RuntimeError("model-call execution 已绑定模型")
+        self._tool_set_producer.freeze_structured_output_tools(structured_tools)
         self._graph_model_binding = bind_model
+        self._decode_output = decode_output
+        self._model_name = name
 
     def _request_preparation(self, request: ModelRequest[Any]) -> _ProviderPreparation:
         if request.system_message is not None:
@@ -260,7 +281,7 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
             raise RuntimeError("itemized context Turn 与 execution admission origin 不一致")
         target_format = _target_format(request.model)
         if self._graph_model_binding is None:
-            raise RuntimeError("itemized context bridge 尚未绑定实际 Agent 图")
+            raise RuntimeError("model-call execution 尚未绑定实际 Agent 图")
         bound_model, response_format = self._graph_model_binding(request)
         include_structured_output = isinstance(response_format, ToolStrategy)
         options = _request_wire_options(bound_model)
@@ -308,6 +329,7 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
             provider_version=provider_version, target_format=target_format,
             wire_profile=wire_profile, wire_params=wire_params,
             include_structured_output=include_structured_output,
+            bound_model=bound_model, response_format=response_format,
         )
 
     def _frozen_preparation(
@@ -334,7 +356,7 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
             return sealed, frozen
         return None, require_current_execution_resource_activation(admission)
 
-    def _prepare(self, request: ModelRequest[Any]) -> dict[str, object]:
+    def _prepare(self, request: ModelRequest[Any]) -> _PreparedModelCall:
         # 同步调用复用唯一异步准入链；不能在运行中的事件循环里等待 gate。
         try:
             asyncio.get_running_loop()
@@ -342,8 +364,11 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
             return asyncio.run(self._aprepare(request))
         raise RuntimeError("同步 model-call preparation 不能阻塞运行中的事件循环")
 
-    async def _aprepare(self, request: ModelRequest[Any]) -> dict[str, object]:
+    async def _aprepare(self, request: ModelRequest[Any]) -> _PreparedModelCall:
         context = self._request_preparation(request)
+        activation = self._resource_activation
+        if activation is None:
+            raise RuntimeError("resource-activation-unavailable: inspection graph 不得执行模型调用")
         callback_id = str(UUID(create_uuid_hex(namespace=f"model_call/{context.admission.session_id}/{context.admission.thread_id}")))
         async with self._context_read_admission():
             read_worker = asyncio.create_task(asyncio.to_thread(self._frozen_preparation, context))
@@ -357,7 +382,7 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
                 # to_thread 继承本次 ContextVar owner；取消后仍须等真实读取
                 # 结束再退出 read gate，不能让删除提前隔离 worker 的目录。
                 await run_cleanup_shielded(settle_read)
-        pending = None if sealed is not None else await self._resource_activation.capture_model_call(
+        pending = None if sealed is not None else await activation.capture_model_call(
             parent=frozen, model_call_id=callback_id, checkpoint_ns=context.checkpoint_ns,
         )
         async with self._context_control_admission(
@@ -367,7 +392,9 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
             context.seal_key,
         ):
             if sealed is None:
-                frozen = await self._resource_activation.commit_model_call(pending)
+                if pending is None:
+                    raise RuntimeError("resource-activation-unavailable: model-call capture 缺失")
+                frozen = await activation.commit_model_call(pending)
             prepare_worker = asyncio.create_task(asyncio.to_thread(
                 self._complete_preparation, request, context, sealed, frozen, callback_id,
             ))
@@ -386,12 +413,18 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         self, request: ModelRequest[Any], context: _ProviderPreparation,
         sealed: ContextPlanRegistration | None, activation: ResourceActivationSnapshotRef,
         callback_id: str,
-    ) -> dict[str, object]:
+    ) -> _PreparedModelCall:
         admission = context.admission
         session_id, thread_id, turn_id = admission.session_id, admission.thread_id, admission.turn_id
         checkpoint_ns = context.checkpoint_ns
         include_structured_output = context.include_structured_output
         candidate = current_summary_candidate()
+        original = None if sealed is None else sealed.sealed_snapshot
+        if sealed is not None and (original is None or original.model_call_id is None):
+            raise ValueError("source-mismatch: sealed provider registration 缺少 snapshot")
+        sealed_model_call_id = callback_id if original is None else original.model_call_id
+        if sealed_model_call_id is None:
+            raise ValueError("source-mismatch: sealed provider registration 缺少 model-call identity")
         prepared = self._checkpointer.prepare_context_for_provider(
             session_id, thread_id,
             turn_id=turn_id, execution_id=admission.execution_id,
@@ -406,11 +439,15 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
             provider_version=context.provider_version,
             wire_profile=context.wire_profile, wire_params=context.wire_params,
             target_format=context.target_format, checkpoint_ns=checkpoint_ns,
-            model_call_id=callback_id if sealed is None else sealed.sealed_snapshot.model_call_id,
+            model_call_id=sealed_model_call_id,
+            callback_model_call_id=callback_id,
             activation_snapshot=activation,
             summary_candidate=candidate,
             sealed_context=sealed,
         )
+        prepared = dict(prepared)
+        prepared["bound_model"] = context.bound_model
+        prepared["response_format"] = context.response_format
         prepared["callback_model_call_id"] = callback_id
         prepared["activation_snapshot"] = activation
         prepared["include_structured_output"] = include_structured_output
@@ -441,30 +478,22 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
             checkpoint_ns,
             prepared.get("assembly_id"),
         )
-        return prepared
+        return cast(_PreparedModelCall, prepared)
 
     def _prepare_projection(
         self,
         request: ModelRequest[Any],
-    ) -> tuple[dict[str, object], list[Any], list[Any]]:
+    ) -> tuple[_PreparedModelCall, list[BaseMessage], list[dict[str, object]]]:
         """执行 provider projection，校验 messages/tools 结构并记录结果与能力损失。"""
         return self._project_prepared(request, self._prepare(request))
 
     def _project_prepared(
-        self, request: ModelRequest[Any], prepared: dict[str, object],
-    ) -> tuple[dict[str, object], list[Any], list[Any]]:
+        self, request: ModelRequest[Any], prepared: _PreparedModelCall,
+    ) -> tuple[_PreparedModelCall, list[BaseMessage], list[dict[str, object]]]:
         messages = prepared.get("messages")
         tools = prepared.get("tools")
         if not isinstance(messages, list) or not isinstance(tools, list):
             raise TypeError("itemized provider projection 返回结构非法")
-        if prepared["include_structured_output"]:
-            # Saver 封存完整 ToolSet；框架会追加原注册的 structured tools，
-            # handler 的普通 tools 因此只保留非结构化条目，避免发送两份 schema。
-            structured_tool_names = frozenset(self._tool_set_producer.structured_tool_names)
-            tools = [
-                tool for tool in tools
-                if tool_definition_name(tool) not in structured_tool_names
-            ]
         logger.warning(
             "[itemized-context] provider projection result: message_types=%s message_ids=%s",
             [type(message).__name__ for message in messages],
@@ -482,38 +511,58 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
             )
         return prepared, messages, tools
 
-    def wrap_model_call(
+    def _response(self, output: AIMessage, prepared: _PreparedModelCall) -> ModelResponse[Any]:
+        if self._model_name:
+            output.name = self._model_name
+        decode = self._decode_output
+        if decode is None:
+            raise RuntimeError("model-call execution 尚未绑定输出解析器")
+        handled = decode(output, prepared["response_format"])
+        return ModelResponse(result=handled["messages"], structured_response=handled.get("structured_response"))
+
+    def _invoke(self, prepared: _PreparedModelCall, messages: list[BaseMessage], tools: list[dict[str, object]]) -> ModelResponse[Any]:
+        output = self._dispatch_model(prepared, tools).invoke(messages)
+        return self._response(output, prepared)
+
+    async def _ainvoke(self, prepared: _PreparedModelCall, messages: list[BaseMessage], tools: list[dict[str, object]]) -> ModelResponse[Any]:
+        output = await self._dispatch_model(prepared, tools).ainvoke(messages)
+        return self._response(output, prepared)
+
+    @staticmethod
+    def _dispatch_model(prepared: _PreparedModelCall, tools: list[dict[str, object]]) -> Runnable[Any, AIMessage]:
+        # 完整替换 sealed ToolSet；空集合在 wire 中省略 tools，不能额外发送 []。
+        binding = prepared["bound_model"]
+        if not isinstance(binding, RunnableBinding):
+            raise TypeError("model-call execution 缺少可冻结的模型 binding")
+        options = {key: value for key, value in binding.kwargs.items() if key != "tools"}
+        if tools:
+            options["tools"] = tools
+        return binding.model_copy(update={"kwargs": options})
+
+    def execute(
         self,
         request: ModelRequest[Any],
-        handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
-    ) -> ModelResponse[Any] | ExtendedModelResponse[Any]:
+    ) -> ModelResponse[Any]:
         for call_id in LangChainMessageCodec().tool_result_call_ids(request.messages):
             observe_phase_sync(call_id, "canonical.tool_result.before_commit")
         prepared, messages, tools = self._prepare_projection(request)
         # LangChain 的 provider handler 返回时，外层 astream_events 可能尚未
         # 消费 on_chat_model_start。prepared handle 必须保留到该事件由
         # RolloutCheckpointSaver 绑定真实 model_call_id 后再移除，不能在
-        # middleware 的 handler 返回路径提前清理。
+        # execution 的返回路径提前清理。
         with sealed_assembly_dispatch_scope(
-            prepared["snapshot"], native_projection=prepared.get("native_projection"),
-            callback_model_call_id=prepared["callback_model_call_id"],
+            prepared["dispatch_ref"], prepared["snapshot"],
+            native_projection=prepared.get("native_projection"),
         ):
-            response = handler(
-                request.override(
-                    messages=messages,
-                    system_message=None,
-                    tools=tools,
-                )
-            )
+            response = self._invoke(prepared, messages, tools)
             return _bind_response_model_call(
                 response, model_call_id=prepared["callback_model_call_id"],
             )
 
-    async def awrap_model_call(
+    async def aexecute(
         self,
         request: ModelRequest[Any],
-        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
-    ) -> ModelResponse[Any] | ExtendedModelResponse[Any]:
+    ) -> ModelResponse[Any]:
         # ToolMessage 可能先于外层 on_tool_end 抵达请求边界；在任何同步
         # preparation/rollout 锁之前观察同一真实结果，不能阻塞 backend loop。
         for call_id in LangChainMessageCodec().tool_result_call_ids(request.messages):
@@ -532,24 +581,18 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
                 tool_results.append((message, emitting_model_call_id))
         # 真实 attempt 先提交唯一终态；随后 request carrier 只保留其独立投影身份。
         for message, emitting_model_call_id in tool_results:
-            await reconcile(message, model_call_id=emitting_model_call_id)
+            await cast(Callable[..., Awaitable[None]], reconcile)(message, model_call_id=emitting_model_call_id)
         prepared, messages, tools = self._project_prepared(request, await self._aprepare(request))
-        # 同步包装器的相同生命周期约束：真实 model-start event 消费前不
+        # 同步执行入口的相同生命周期约束：真实 model-start event 消费前不
         # 得删除 Saver-owned prepared handle。
         with sealed_assembly_dispatch_scope(
-            prepared["snapshot"], native_projection=prepared.get("native_projection"),
-            callback_model_call_id=prepared["callback_model_call_id"],
+            prepared["dispatch_ref"], prepared["snapshot"],
+            native_projection=prepared.get("native_projection"),
         ):
-            response = await handler(
-                request.override(
-                    messages=messages,
-                    system_message=None,
-                    tools=tools,
-                )
-            )
+            response = await self._ainvoke(prepared, messages, tools)
             return _bind_response_model_call(
                 response, model_call_id=prepared["callback_model_call_id"],
             )
 
 
-__all__ = ["SealedAssemblyDispatchBridge"]
+__all__ = ["ModelCallExecution"]
