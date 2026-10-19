@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar, Token
+from dataclasses import asdict
 from datetime import date, datetime
 from enum import Enum
 from typing import Any
 
 from pydantic import SecretStr
+
+from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 
 _REDACTED_KEYS = {
     "api_key",
@@ -91,8 +94,9 @@ def record_upstream_request(
     provider: str | None,
     api_base: str | None,
     call_type: str,
+    dispatch_ref: SealedContextDispatchRef | None,
 ) -> None:
-    """在 Provider 发起上游请求前登记本次 attempt。
+    """在本地 preflight 完成、Provider 发起 SDK 调用前登记本次 attempt。
 
     先按 Provider 已知信息登记，保证建立流之前的失败也有据可查；调用建立后由
     ``apply_upstream_call_details`` 用 LiteLLM 解析结果校正。
@@ -106,6 +110,8 @@ def record_upstream_request(
             "provider": provider,
             "model": model,
             "api_base": api_base,
+            # 直接保留 Saver 签发的引用；日志不从 Provider payload 重建封存事实。
+            "sealed_dispatch": _safe_value(asdict(dispatch_ref)) if dispatch_ref is not None else None,
             "request": _safe_value(request),
             "response": None,
             "error": None,

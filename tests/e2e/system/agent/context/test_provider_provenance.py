@@ -1,0 +1,421 @@
+"""真实 Provider 的 request→sealed assembly→checkpoint→冷历史闭环。"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import sqlite3
+import subprocess
+from collections.abc import AsyncIterator, Generator
+from dataclasses import asdict
+from pathlib import Path
+from uuid import uuid4
+
+import httpx
+import pytest
+
+from app.agents.providers.wire_finalize import provider_wire_params
+from app.core.path_utils import get_session_path_resolver
+from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
+from app.domain.itemized.epoch.prefix_epoch import (
+    stable_prefix_bytes,
+    stable_prefix_digest,
+)
+from app.domain.itemized.serialization import normalize_wire_request
+from app.services.business.session_context_resource import context_assembly_identity
+from app.services.infrastructure.tool_selection_store import ToolSelectionStore
+from tests.support.gateway_processes import (
+    LOCAL_TOKEN_HEADERS,
+    GatewayProcess,
+    acquire_gateway_guest,
+    close_gateway_process,
+    start_gateway_process,
+)
+from tests.support.paths import output_root_for_test
+from tests.support.ports import e2e_port_block_for_file
+from tests.support.processes import (
+    close_backend_process,
+    start_backend_process,
+    terminate_process,
+)
+
+
+@pytest.fixture(scope="module")
+def provenance_artifacts(request: pytest.FixtureRequest) -> Path:
+    root = output_root_for_test(Path(request.node.fspath), test_layer="e2e", project_root=Path.cwd())
+    artifacts = root / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    return artifacts
+
+
+@pytest.fixture(scope="module")
+def e2e_backend_composition(request: pytest.FixtureRequest) -> tuple[str, dict[str, str]]:
+    """真实工作区的 Skill 回查必须指向同一隔离 Gateway。"""
+    port = e2e_port_block_for_file(Path(request.node.fspath)).port(1)
+    return "app.main:app", {"BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{port}"}
+
+
+@pytest.fixture(scope="module")
+def provenance_gateway(
+    request: pytest.FixtureRequest,
+    e2e_backend_process: subprocess.Popen[str],
+    e2e_workspace_root_path: str,
+    client_base_url: str,
+    provenance_artifacts: Path,
+) -> Generator[GatewayProcess, None, None]:
+    gateway = start_gateway_process(
+        workspace_root=Path(e2e_workspace_root_path), default_backend_url=client_base_url,
+        port=e2e_port_block_for_file(Path(request.node.fspath)).port(1),
+        artifacts_dir=provenance_artifacts,
+    )
+    try:
+        yield gateway
+    finally:
+        close_gateway_process(gateway)
+
+
+@pytest.fixture
+async def client(provenance_gateway: GatewayProcess) -> AsyncIterator[httpx.AsyncClient]:
+    async with httpx.AsyncClient(
+        base_url=f"http://127.0.0.1:{provenance_gateway.port}", headers=LOCAL_TOKEN_HEADERS,
+        timeout=30,
+    ) as connection:
+        await acquire_gateway_guest(connection)
+        yield connection
+
+
+def _save(path: Path, payload: object) -> None:
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _response(response: httpx.Response, path: Path) -> dict:
+    path.write_text(response.text, encoding="utf-8")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert response.headers["X-Request-ID"] == payload["request_id"]
+    return payload
+
+
+async def _terminal_job(client: httpx.AsyncClient, job_id: str, path: Path) -> dict:
+    """保留真实终态后再审计，失败调用也不能丢失 provenance。"""
+    for poll in range(180):
+        response = await client.get(f"/api/v1/jobs/{job_id}")
+        assert response.status_code == 200, response.text
+        job = response.json()["data"]
+        if job["status"] in {"completed", "succeeded", "failed", "cancelled", "timed_out"}:
+            _save(path, job)
+            return job
+        if poll == 179:
+            _save(path, job)
+            break
+        await asyncio.sleep(1)
+    pytest.fail(f"Job {job_id} 超时未完成；最后状态已保存")
+
+
+async def _audit_log_api(
+    client: httpx.AsyncClient, session_node: Path, session_id: str, artifacts: Path, *, phase: str,
+) -> list[dict]:
+    """经真实 Gateway 消费完整日志，逐字段核对磁盘里的同一次调用。"""
+    request_id = str(uuid4())
+    payload = _response(
+        await client.get(f"/api/v1/sessions/{session_id}/llm-request-logs", headers={"X-Request-ID": request_id}),
+        artifacts / f"{phase}-llm-request-logs.json",
+    )
+    assert payload["request_id"] == request_id, "Gateway 与工作区后端必须透传同一个 request_id"
+    records = payload["data"]
+    paths = sorted((session_node / "logs" / "llm_requests").glob("*.json"), key=lambda path: int(path.stem))
+    assert len(records) == len(paths)
+    for record, path in zip(records, paths, strict=True):
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        assert record["file_name"] == path.name
+        assert record["file_path"] == str(path)
+        assert record["session_id"] == session_id
+        for field in ("session_id", "job_id", "timestamp", "request", "response", "upstream"):
+            assert record[field] == raw[field], f"日志 API 丢失或改变 {field}: {path.name}"
+    return records
+
+
+def _audit_call(
+    session_node: Path, *, session_id: str, thread_id: str, job_id: str,
+    desired_revision: str, artifacts: Path, ordinal: int, succeeded: bool,
+) -> tuple[ContextAssemblySnapshot, dict]:
+    logs = [json.loads(path.read_text(encoding="utf-8"))
+            for path in sorted((session_node / "logs" / "llm_requests").glob("*.json"))]
+    logs = [log for log in logs if log["job_id"] == job_id]
+    _save(artifacts / f"turn-{ordinal}-provider-logs.json", logs)
+    assert len(logs) == 1, "本场景每个真实用户 Turn 应只有一次模型调用"
+    log = logs[0]
+    attempts = log["upstream"]["attempts"]
+    successful = [attempt for attempt in attempts if attempt["response"] is not None]
+    if succeeded:
+        assert len(successful) == 1, attempts
+        attempt = successful[0]
+        assert attempt["error"] is None
+        assert attempt["response"]["status"] == "completed", "incomplete terminal 不满足真实成功验收门"
+        assert log["response"]["error"] is None
+    else:
+        assert len(attempts) == 1 and not successful, attempts
+        attempt = attempts[0]
+        assert isinstance(attempt["error"], str) and attempt["error"]
+        assert log["response"]["error"] and not log["response"]["result"]
+    reference = attempt["sealed_dispatch"]
+    assert reference["session_id"] == session_id
+    assert reference["thread_id"] == thread_id
+    assert log["session_id"] == session_id
+    assert all(candidate["sealed_dispatch"] == reference for candidate in attempts)
+    if succeeded:
+        assert {message["response_metadata"]["model_call_id"] for message in log["response"]["result"]} == {
+            reference["callback_model_call_id"]
+        }
+
+    index = session_node / "rollout" / "index.sqlite"
+    with sqlite3.connect(f"file:{index}?mode=ro", uri=True) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT * FROM context_assemblies WHERE assembly_id=? AND session_id=? AND thread_id=?",
+            (reference["assembly_id"], session_id, thread_id),
+        ).fetchone()
+        assert row is not None
+        snapshot = ContextAssemblySnapshot.from_dict(json.loads(row["snapshot_json"]))
+        _save(artifacts / f"turn-{ordinal}-sealed-assembly.json", snapshot.to_dict())
+        snapshot.validate_hashes()
+        expected_reference = SealedContextDispatchRef.from_snapshot(
+            snapshot, checkpoint_ns=reference["checkpoint_ns"], attempt_key=reference["attempt_key"],
+            callback_model_call_id=reference["callback_model_call_id"],
+        )
+        assert reference == json.loads(json.dumps(asdict(expected_reference)))
+        actual_wire = normalize_wire_request(provider_wire_params(attempt["request"]))
+        _save(artifacts / f"turn-{ordinal}-actual-wire.json", actual_wire)
+        assert actual_wire == snapshot.request_hash_preimage
+        assert row["plan_hash"] == reference["plan_hash"]
+        assert row["request_hash"] == reference["request_hash"]
+        model_call = connection.execute(
+            "SELECT * FROM model_calls WHERE model_call_id=?",
+            (reference["sealed_model_call_id"],),
+        ).fetchone()
+        assert model_call is not None
+        assert (model_call["session_id"], model_call["thread_id"], model_call["execution_id"], model_call["assembly_id"]) == (
+            session_id, thread_id, reference["execution_id"], reference["assembly_id"],
+        )
+        expected_outcome = "completed" if succeeded else "failed"
+        assert (model_call["dispatch_state"], model_call["outcome"]) == (expected_outcome, expected_outcome)
+        binding = snapshot.seal_binding
+        assert binding is not None
+        assert binding.selection_revision == desired_revision
+        assert len(snapshot.tool_set_refs) == 1
+        tool_ref = snapshot.tool_set_refs[0]
+        assert binding.applied_toolset_revision == tool_ref.source_revision
+        tools = connection.execute(
+            "SELECT source_revision, content_hash, tools_json, tool_policy_json FROM tool_set_snapshots "
+            "WHERE assembly_id=? AND tool_set_snapshot_id=?",
+            (snapshot.assembly_id, tool_ref.ref_id),
+        ).fetchone()
+        assert tools is not None
+        assert tools["source_revision"] == binding.applied_toolset_revision
+        assert tools["content_hash"] == tool_ref.content_hash
+        assert json.loads(tools["tools_json"]) == list(tool_ref.tools)
+        assert json.loads(tools["tool_policy_json"]) == tool_ref.tool_policy
+        selection = [tuple(selected) for selected in connection.execute(
+            "SELECT plan_ordinal, ref_type, ref_id, ref_thread_id, included, content_hash, source_revision "
+            "FROM context_assembly_selections WHERE assembly_id=? ORDER BY plan_ordinal",
+            (snapshot.assembly_id,),
+        )]
+        assert selection == [
+            (entry.plan_ordinal, entry.ref.ref_type, entry.ref.ref_id, entry.ref.thread_id,
+             int(entry.included), entry.content_hash, entry.source_revision)
+            for entry in snapshot.selection
+        ]
+        history_message_ids = []
+        for entry in snapshot.selection:
+            if entry.included and entry.ref.ref_type == "canonical_item":
+                identity = connection.execute(
+                    "SELECT json_extract(projection_manifest_json, '$.projection_identity.projection_message_id') "
+                    "FROM item_catalog WHERE item_id=?", (entry.ref.ref_id,),
+                ).fetchone()
+                assert identity is not None and isinstance(identity[0], str)
+                if identity[0] not in history_message_ids:
+                    history_message_ids.append(identity[0])
+        checkpoint = connection.execute(
+            "SELECT checkpoint_id, view_id, checkpoint_json, metadata_json FROM checkpoints "
+            "WHERE checkpoint_ns=? ORDER BY commit_id DESC, rowid DESC LIMIT 1",
+            (reference["checkpoint_ns"],),
+        ).fetchone()
+        assert checkpoint is not None
+        channel = connection.execute(
+            "SELECT storage_kind, context_view_id FROM checkpoint_channels "
+            "WHERE checkpoint_id=? AND channel_name='messages'", (checkpoint["checkpoint_id"],),
+        ).fetchone()
+        assert channel is not None and channel["storage_kind"] == "rollout_view"
+        output_ids = [item[0] for item in connection.execute(
+            "SELECT item_id FROM item_catalog WHERE execution_id=? AND semantic_kind='assistant_output' "
+            "AND json_extract(projection_manifest_json, '$.projection_identity.model_call_id')=?",
+            (reference["execution_id"], reference["callback_model_call_id"]),
+        )]
+        if succeeded:
+            assert output_ids, "同一次 callback 的真实输出必须进入 canonical checkpoint"
+        checkpoint_items = {item[0] for item in connection.execute(
+            "SELECT item_id FROM context_view_items WHERE view_id=? AND visible=1",
+            (channel["context_view_id"],),
+        )}
+        assert set(output_ids) <= checkpoint_items
+        assert {entry.ref.ref_id for entry in snapshot.selection
+                if entry.included and entry.ref.ref_type == "canonical_item"} <= checkpoint_items
+
+    prefix = binding.prefix
+    prefix_bytes = stable_prefix_bytes(prefix.state.frames)
+    digest = stable_prefix_digest(prefix_bytes)
+    assert (digest.prefix_hash, digest.prefix_byte_length) == (reference["prefix_hash"], reference["prefix_byte_length"])
+    assert reference["frame_hashes"] == [frame.frame_hash() for frame in prefix.state.frames]
+    receipt = {
+        "job_id": job_id, "dispatch_ref": reference, "checkpoint": dict(checkpoint),
+        "messages_channel": dict(channel), "output_item_ids": output_ids, "selection": selection,
+        "selected_history_message_ids": history_message_ids,
+        "desired_selection_revision": desired_revision,
+        "applied_toolset_revision": binding.applied_toolset_revision,
+        "provider_succeeded": succeeded, "upstream_error": attempt["error"],
+        "handler_error": log["response"]["error"], "model_call": dict(model_call),
+    }
+    _save(artifacts / f"turn-{ordinal}-provenance-receipt.json", receipt)
+    return snapshot, receipt
+
+
+async def _assembly_history(
+    client: httpx.AsyncClient, session: dict, snapshot: ContextAssemblySnapshot, artifacts: Path,
+    *, phase: str, selected_message_ids: list[str],
+) -> list[dict]:
+    request = {key: session[key] for key in ("resource_identity", "uri", "scope")}
+    request.update({
+        "view": "assembly", "assembly_ref": context_assembly_identity(session["resource_identity"], snapshot.assembly_id),
+        "include": ["visible_text", "reasoning", "tool_calls", "tool_results", "system", "raw_record"],
+        "limit": 200, "max_chars": 65536,
+    })
+    page = _response(await client.post("/api/v1/context/read", json=request), artifacts / f"{phase}-{snapshot.assembly_id}-history.json")["data"]
+    assert not page["has_more"] and not page["truncated"], page
+    assert not page["partial_errors"]
+    selected = [item["data"] for item in page["items"] if item["kind"] == "selection"]
+    assert selected == [entry.to_dict() for entry in snapshot.selection]
+    messages = [item for item in page["items"] if item["kind"] == "message"]
+    # assembly history 只投影 canonical selection；request-only prefix frame 不物化为历史消息。
+    assert [item["data"]["message_id"] for item in messages] == selected_message_ids
+    request.update({"view": "records"})
+    request.pop("assembly_ref")
+    records = _response(await client.post("/api/v1/context/read", json=request), artifacts / f"{phase}-{snapshot.assembly_id}-canonical-records.json")["data"]
+    assert not records["has_more"] and not records["truncated"] and not records["partial_errors"]
+    canonical = {item["raw_record"]["response_metadata"]["message_id"]: item for item in records["items"]}
+    for message in messages:
+        expected = canonical[message["data"]["message_id"]]
+        assert message["role"] == expected["role"]
+        for field in ("type", "content"):
+            assert message["raw_record"][field] == expected["raw_record"][field]
+    return messages
+
+
+def _checkpoint_state(session_node: Path) -> dict:
+    with sqlite3.connect(f"file:{session_node / 'rollout' / 'index.sqlite'}?mode=ro", uri=True) as connection:
+        return {
+            "checkpoints": connection.execute("SELECT checkpoint_id, view_id, checkpoint_json, metadata_json FROM checkpoints ORDER BY rowid").fetchall(),
+            "channels": connection.execute("SELECT checkpoint_id, channel_name, storage_kind, value_state, value_hash, context_view_id FROM checkpoint_channels ORDER BY checkpoint_id, channel_name").fetchall(),
+            "assemblies": connection.execute("SELECT assembly_id, snapshot_json FROM context_assemblies ORDER BY rowid").fetchall(),
+        }
+
+
+@pytest.mark.asyncio
+async def test_real_provider_provenance_survives_cold_history(
+    client: httpx.AsyncClient, e2e_workspace_root_path: str, e2e_backend_process: subprocess.Popen[str],
+    e2e_backend_port: int, e2e_backend_composition: tuple[str, dict[str, str]],
+    provenance_artifacts: Path,
+) -> None:
+    artifacts = provenance_artifacts
+    for endpoint in ("/api/gateway/health", "/api/gateway/workspaces", "/api/v1/workspace"):
+        _response(await client.get(endpoint), artifacts / f"{endpoint.rsplit('/', 1)[1]}-initialization.json")
+    session = _response(await client.post("/api/v1/sessions", json={"title": "真实 Provider provenance"}), artifacts / "created-session.json")["data"]
+    session_id, thread_id = session["session_id"], session["thread_id"]
+    # 只选择隔离 Session 已配置的真实 Responses Provider，不改全局配置或增加请求覆盖。
+    session = _response(await client.patch(f"/api/v1/sessions/{session_id}", json={"provider_id": "backup_3"}), artifacts / "selected-provider.json")["data"]
+    workspace = Path(e2e_workspace_root_path)
+    session_node = get_session_path_resolver(workspace / ".boxteam" / "sessions").resolve_thread_node(session_id, thread_id)
+    desired = ToolSelectionStore(boxteam_root=workspace / ".boxteam").snapshot("default")
+    snapshots = []
+    receipts = []
+    failed_job = None
+    for ordinal in (1, 2):
+        marker = f"CIL_PROVENANCE_TURN_{ordinal}_OK"
+        prompt = f"不要调用任何工具。只回复这一行且不添加其它内容：{marker}"
+        sent = _response(await client.post(f"/api/v1/sessions/{session_id}/messages", json={
+            "message": {"content": prompt}, "run": {"mode": "single_agent", "agent_id": "default"},
+        }), artifacts / f"turn-{ordinal}-entry.json")["data"]
+        job = await _terminal_job(client, sent["job_id"], artifacts / f"turn-{ordinal}-job.json")
+        succeeded = job["status"] in {"completed", "succeeded"}
+        traces = _response(await client.get(f"/api/v1/sessions/{session_id}/traces", params={"limit": 200}), artifacts / f"turn-{ordinal}-trace.json")["data"]
+        assert not traces["has_more"]
+        assert len([event for event in traces["items"]
+                    if event["job_id"] == sent["job_id"] and event["type"] == "llm_request"]) == 1
+        snapshot, receipt = _audit_call(session_node, session_id=session_id, thread_id=thread_id,
+            job_id=sent["job_id"], desired_revision=desired.revision, artifacts=artifacts,
+            ordinal=ordinal, succeeded=succeeded)
+        snapshots.append(snapshot)
+        receipts.append(receipt)
+        await _audit_log_api(client, session_node, session_id, artifacts, phase=f"turn-{ordinal}-live")
+        await _assembly_history(client, session, snapshot, artifacts, phase="live",
+                                selected_message_ids=receipt["selected_history_message_ids"])
+        history = _response(await client.post(f"/api/v1/sessions/{session_id}/history", json={
+            "turn_ids": [snapshot.turn_id], "include": ["user", "text", "final_response", "metadata"],
+        }), artifacts / f"turn-{ordinal}-history.json")["data"]
+        assert len(history["items"]) == 1
+        turn = history["items"][0]
+        assert (turn["turn_id"], turn["job_id"]) == (snapshot.turn_id, sent["job_id"])
+        assert turn["user_messages"][0]["content"] == prompt
+        projected_ids = {part["source"]["item_id"] for part in turn["response_parts"]}
+        assert set(receipt["output_item_ids"]) <= projected_ids
+        if succeeded:
+            assert turn["final_response"].strip() == marker
+        else:
+            if not receipt["output_item_ids"]:
+                assert not projected_ids and not turn["final_response"], "失败调用不得伪造 assistant 输出"
+            failed_job = job
+            break
+
+    first = snapshots[0].seal_binding
+    assert first is not None
+    assert first.prefix.state.epoch.reason.value == "initial"
+    if len(snapshots) == 2:
+        second = snapshots[1].seal_binding
+        assert second is not None
+        assert first.prefix.state.epoch == second.prefix.state.epoch
+        assert second.previous_assembly_id == snapshots[0].assembly_id
+        assert stable_prefix_bytes(second.prefix.state.frames).startswith(stable_prefix_bytes(first.prefix.state.frames))
+    assert ToolSelectionStore(boxteam_root=workspace / ".boxteam").snapshot("default").revision == desired.revision
+    before = _checkpoint_state(session_node)
+    _save(artifacts / "before-cold-checkpoint-state.json", before)
+    live_history = _response(await client.post(f"/api/v1/sessions/{session_id}/history", json={
+        "direction": "head", "turns": 2, "include": ["user", "text", "final_response", "metadata"],
+    }), artifacts / "live-history.json")["data"]
+    live_logs = await _audit_log_api(client, session_node, session_id, artifacts, phase="before-cold")
+    terminate_process(e2e_backend_process)
+    asgi_app, environment = e2e_backend_composition
+    restarted = start_backend_process(
+        workspace_root=e2e_workspace_root_path, port=e2e_backend_port,
+        log_name="provenance-cold-backend", asgi_app=asgi_app, env_overrides=environment,
+        refresh_user_configuration=False,
+    )
+    try:
+        cold_history = _response(await client.post(f"/api/v1/sessions/{session_id}/history", json={
+            "direction": "head", "turns": 2, "include": ["user", "text", "final_response", "metadata"],
+        }), artifacts / "cold-history.json")["data"]
+        assert cold_history["items"] == live_history["items"]
+        assert await _audit_log_api(client, session_node, session_id, artifacts, phase="cold") == live_logs
+        for snapshot, receipt in zip(snapshots, receipts, strict=True):
+            await _assembly_history(client, session, snapshot, artifacts, phase="cold",
+                                    selected_message_ids=receipt["selected_history_message_ids"])
+        after = _checkpoint_state(session_node)
+        _save(artifacts / "after-cold-checkpoint-state.json", after)
+        assert after == before, "冷 history/assembly projection 不得创建或改写 checkpoint/seal"
+    finally:
+        close_backend_process(restarted)
+    _save(artifacts / "provenance-audit.json", {
+        "status": "failed_call" if failed_job is not None else "passed",
+        "session_id": session_id, "thread_id": thread_id, "calls": receipts,
+        "failed_job": failed_job,
+    })
+    assert failed_job is None, f"真实调用失败；完整失败审计与冷恢复收据已保存: {failed_job}"

@@ -82,6 +82,7 @@ from app.agents.sealed_assembly_dispatch import (
 )
 from app.agents.upstream_request_trace import (
     apply_upstream_call_details,
+    record_upstream_error,
     record_upstream_request,
     record_upstream_response,
 )
@@ -336,6 +337,17 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         self._validate_completion_dispatch(kwargs)
         ensure_model_stream_installed()
         client = self._provider_http_client(is_async=False)
+        # 非流调用由父类 _generate/_agenerate 消费，不属于流式 attempt 采集。
+        if kwargs.get("stream") is True:
+            binding = read_sealed_assembly_dispatch(invocation_purpose=self.invocation_purpose)
+            record_upstream_request(
+                request=kwargs,
+                model=self.model_name or self.model,
+                provider=self.custom_llm_provider,
+                api_base=self.api_base,
+                call_type="completion",
+                dispatch_ref=binding.reference if binding is not None else None,
+            )
         if client is not None:
             kwargs.setdefault("client", client)
         try:
@@ -344,6 +356,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             raise
         except Exception as error:
             mark_provider_failure(error)
+            record_upstream_error(error)
             raise
 
     async def acompletion_with_retry(
@@ -354,6 +367,16 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         self._validate_completion_dispatch(kwargs)
         ensure_model_stream_installed()
         client = self._provider_http_client(is_async=True)
+        if kwargs.get("stream") is True:
+            binding = read_sealed_assembly_dispatch(invocation_purpose=self.invocation_purpose)
+            record_upstream_request(
+                request=kwargs,
+                model=self.model_name or self.model,
+                provider=self.custom_llm_provider,
+                api_base=self.api_base,
+                call_type="acompletion",
+                dispatch_ref=binding.reference if binding is not None else None,
+            )
         if client is not None:
             kwargs.setdefault("client", client)
         try:
@@ -364,6 +387,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             raise
         except Exception as error:
             mark_provider_failure(error)
+            record_upstream_error(error)
             raise
 
     def _stream_attempt_count(self) -> int:
@@ -602,7 +626,6 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         message_dicts, params = self._create_message_dicts(
             messages, stop, stream=True, **kwargs,
         )
-
         delta_sink = get_current_model_delta_sink()
         attempts = self._stream_attempt_count()
         for attempt in range(1, attempts + 1):
@@ -610,13 +633,6 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             part_state = _StreamPartState()
             semantic_delta_seen = False
             streamed_chunks: list[AIMessageChunk] = []
-            record_upstream_request(
-                request={**params, "messages": message_dicts},
-                model=self.model_name or self.model,
-                provider=self.custom_llm_provider,
-                api_base=self.api_base,
-                call_type="completion",
-            )
             raw_stream = self.completion_with_retry(
                 messages=message_dicts,
                 run_manager=run_manager,
@@ -636,6 +652,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
                     raise
                 except Exception as error:
                     mark_provider_failure(error)
+                    record_upstream_error(error)
                     raise
                 while True:
                     try:
@@ -646,6 +663,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
                         raise
                     except Exception as error:
                         mark_provider_failure(error)
+                        record_upstream_error(error)
                         raise
                     if scope is not None:
                         scope.raise_if_cancelled()
@@ -678,8 +696,10 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             if self._has_real_stream_termination(raw_stream):
                 record_upstream_response(_streamed_response_payload(streamed_chunks))
                 return
-            if semantic_delta_seen:
-                raise self._incomplete_stream_error(attempt)
+            error = self._incomplete_stream_error(attempt)
+            record_upstream_error(error)
+            if semantic_delta_seen or attempt == attempts:
+                raise error
         raise self._incomplete_stream_error(attempts)
 
     async def _astream(
@@ -692,7 +712,6 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         message_dicts, params = self._create_message_dicts(
             messages, stop, stream=True, **kwargs,
         )
-
         delta_sink = get_current_model_delta_sink()
         model_call_id = resolve_model_run_id(delta_sink, run_manager)
         attempts = self._stream_attempt_count()
@@ -701,13 +720,6 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             part_state = _StreamPartState()
             semantic_delta_seen = False
             streamed_chunks: list[AIMessageChunk] = []
-            record_upstream_request(
-                request={**params, "messages": message_dicts},
-                model=self.model_name or self.model,
-                provider=self.custom_llm_provider,
-                api_base=self.api_base,
-                call_type="acompletion",
-            )
             raw_stream = await self.acompletion_with_retry(
                 messages=message_dicts,
                 run_manager=run_manager,
@@ -722,6 +734,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
                 raise
             except Exception as error:
                 mark_provider_failure(error)
+                record_upstream_error(error)
                 raise
             async with cancelable_stream:
                 iterator = aiter(cancelable_stream)
@@ -734,6 +747,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
                         raise
                     except Exception as error:
                         mark_provider_failure(error)
+                        record_upstream_error(error)
                         raise
                     if scope is not None:
                         scope.raise_if_cancelled()
@@ -767,8 +781,10 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             if self._has_real_stream_termination(raw_stream):
                 record_upstream_response(_streamed_response_payload(streamed_chunks))
                 return
-            if semantic_delta_seen:
-                raise self._incomplete_stream_error(attempt)
+            error = self._incomplete_stream_error(attempt)
+            record_upstream_error(error)
+            if semantic_delta_seen or attempt == attempts:
+                raise error
         raise self._incomplete_stream_error(attempts)
 
     @staticmethod

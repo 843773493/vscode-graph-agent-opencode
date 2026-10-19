@@ -53,6 +53,7 @@ from app.agents.sealed_assembly_dispatch import (
 )
 from app.agents.upstream_request_trace import (
     apply_upstream_call_details,
+    record_upstream_error,
     record_upstream_request,
     record_upstream_response,
 )
@@ -354,6 +355,10 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             return current_index, current_output_index, current_sub_index, chunk
         if event_type in {"response.completed", "response.incomplete"}:
             response = getattr(event, "response", None)
+            if response is None:
+                raise RuntimeError(
+                    f"Responses 流协议错误: {event_type} terminal event 缺少 response"
+                )
             record_upstream_response(response)
             usage = getattr(response, "usage", None)
             metadata = {
@@ -375,6 +380,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         if event_type in {"response.failed", "error"}:
             error = RuntimeError(f"LiteLLM Responses 请求失败: {event!r}")
             mark_provider_failure(error)
+            record_upstream_error(error)
             raise error
 
         if (
@@ -551,25 +557,28 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
         payload = self._responses_payload(messages, stop, kwargs)
-        record_upstream_request(
-            request=payload,
-            model=self.model,
-            provider=self.custom_llm_provider,
-            api_base=self.api_base,
-            call_type="responses",
-        )
+        binding = read_sealed_assembly_dispatch(invocation_purpose=self.invocation_purpose)
         validate_sealed_assembly_dispatch(
             invocation_purpose=self.invocation_purpose,
             profile=responses_wire_profile(self),
             wire_request=wire_request_params(self, payload),
         )
         ensure_model_stream_installed()
+        record_upstream_request(
+            request=payload,
+            model=self.model,
+            provider=self.custom_llm_provider,
+            api_base=self.api_base,
+            call_type="responses",
+            dispatch_ref=binding.reference if binding is not None else None,
+        )
         try:
             stream = litellm.responses(**payload)
         except ScopeCancelledError:
             raise
         except Exception as error:
             mark_provider_failure(error)
+            record_upstream_error(error)
             raise
         apply_upstream_call_details(stream)
         current_index = current_output_index = current_sub_index = -1
@@ -582,30 +591,48 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             raise
         except Exception as error:
             mark_provider_failure(error)
+            record_upstream_error(error)
             raise
+        terminal_received = False
         while True:
             try:
                 event = next(iterator)
             except StopIteration:
+                if not terminal_received:
+                    error = RuntimeError(
+                        "Responses 流协议错误: EOF 前未收到 "
+                        "response.completed/response.incomplete terminal event"
+                    )
+                    mark_provider_failure(error)
+                    record_upstream_error(error)
+                    raise error
                 break
             except ScopeCancelledError:
                 raise
             except Exception as error:
                 mark_provider_failure(error)
+                record_upstream_error(error)
                 raise
-            (
-                current_index,
-                current_output_index,
-                current_sub_index,
-                generation_chunk,
-            ) = self._convert_response_event(
-                event,
-                current_index=current_index,
-                current_output_index=current_output_index,
-                current_sub_index=current_sub_index,
-                part_state=part_state,
-                original_schema=original_schema,
-            )
+            try:
+                (
+                    current_index,
+                    current_output_index,
+                    current_sub_index,
+                    generation_chunk,
+                ) = self._convert_response_event(
+                    event,
+                    current_index=current_index,
+                    current_output_index=current_output_index,
+                    current_sub_index=current_sub_index,
+                    part_state=part_state,
+                    original_schema=original_schema,
+                )
+            except Exception as error:
+                mark_provider_failure(error)
+                record_upstream_error(error)
+                raise
+            if getattr(event, "type", None) in {"response.completed", "response.incomplete"}:
+                terminal_received = True
             if generation_chunk is None:
                 continue
             if (
@@ -663,13 +690,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                 f"timeout_seconds={DEFAULT_RESPONSES_PAYLOAD_BUILD_TIMEOUT_SECONDS:g}"
             ) from error
         provider_id = self.provider_id or self.custom_llm_provider or "<unknown>"
-        record_upstream_request(
-            request=raw_payload,
-            model=self.model,
-            provider=self.custom_llm_provider,
-            api_base=self.api_base,
-            call_type="aresponses",
-        )
+        binding = read_sealed_assembly_dispatch(invocation_purpose=self.invocation_purpose)
         logger.info(
             "Responses provider stream open begin: provider=%s model=%s",
             provider_id,
@@ -682,12 +703,21 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         )
         ensure_model_stream_installed()
         open_timeout = asyncio.timeout(DEFAULT_RESPONSES_STREAM_OPEN_TIMEOUT_SECONDS)
+        record_upstream_request(
+            request=raw_payload,
+            model=self.model,
+            provider=self.custom_llm_provider,
+            api_base=self.api_base,
+            call_type="aresponses",
+            dispatch_ref=binding.reference if binding is not None else None,
+        )
         try:
             async with open_timeout:
                 stream = await litellm.aresponses(**raw_payload)
         except TimeoutError as error:
             if not open_timeout.expired():
                 mark_provider_failure(error)
+                record_upstream_error(error)
                 raise
             logger.warning(
                 "Responses provider stream open timeout: provider=%s model=%s "
@@ -696,15 +726,18 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                 self.model,
                 DEFAULT_RESPONSES_STREAM_OPEN_TIMEOUT_SECONDS,
             )
-            raise ResponsesStreamOpenTimeoutError(
+            timeout_error = ResponsesStreamOpenTimeoutError(
                 "Responses provider 在有限时间内未建立事件流: "
                 f"provider={provider_id} model={self.model} "
                 f"timeout_seconds={DEFAULT_RESPONSES_STREAM_OPEN_TIMEOUT_SECONDS:g}"
-            ) from error
+            )
+            record_upstream_error(timeout_error)
+            raise timeout_error from error
         except ScopeCancelledError:
             raise
         except Exception as error:
             mark_provider_failure(error)
+            record_upstream_error(error)
             raise
         apply_upstream_call_details(stream)
         logger.info(
@@ -736,34 +769,52 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             raise
         except Exception as error:
             mark_provider_failure(error)
+            record_upstream_error(error)
             raise
+        terminal_received = False
         async with cancelable_stream:
             iterator = aiter(cancelable_stream)
             while True:
                 try:
                     event = await anext(iterator)
                 except StopAsyncIteration:
+                    if not terminal_received:
+                        error = RuntimeError(
+                            "Responses 流协议错误: EOF 前未收到 "
+                            "response.completed/response.incomplete terminal event"
+                        )
+                        mark_provider_failure(error)
+                        record_upstream_error(error)
+                        raise error
                     break
                 except ScopeCancelledError:
                     raise
                 except Exception as error:
                     mark_provider_failure(error)
+                    record_upstream_error(error)
                     raise
                 if scope is not None:
                     scope.raise_if_cancelled()
-                (
-                    current_index,
-                    current_output_index,
-                    current_sub_index,
-                    generation_chunk,
-                ) = self._convert_response_event(
-                    event,
-                    current_index=current_index,
-                    current_output_index=current_output_index,
-                    current_sub_index=current_sub_index,
-                    part_state=part_state,
-                    original_schema=original_schema,
-                )
+                try:
+                    (
+                        current_index,
+                        current_output_index,
+                        current_sub_index,
+                        generation_chunk,
+                    ) = self._convert_response_event(
+                        event,
+                        current_index=current_index,
+                        current_output_index=current_output_index,
+                        current_sub_index=current_sub_index,
+                        part_state=part_state,
+                        original_schema=original_schema,
+                    )
+                except Exception as error:
+                    mark_provider_failure(error)
+                    record_upstream_error(error)
+                    raise
+                if getattr(event, "type", None) in {"response.completed", "response.incomplete"}:
+                    terminal_received = True
                 if generation_chunk is None:
                     continue
                 if (

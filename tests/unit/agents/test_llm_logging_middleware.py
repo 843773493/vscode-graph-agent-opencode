@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from contextlib import ExitStack
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,13 +15,18 @@ from app.agents import llm_logging_middleware
 from app.agents.llm_logging_middleware import LLMLoggingMiddleware
 from app.agents.upstream_request_trace import (
     apply_upstream_call_details,
+    record_upstream_error,
     record_upstream_request,
     record_upstream_response,
 )
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
+from app.domain.itemized.epoch.prefix_epoch import EpochReason
 from app.domain.itemized.execution_admission import ExecutionAdmission
+from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 
 
@@ -55,6 +61,31 @@ def log_session(session_bundle_factory):
             return directory
 
         yield create
+
+
+@pytest.fixture
+def log_dispatch_reference():
+    """日志序列化使用完整 typed 引用，包含嵌套 ToolSet 与 epoch。"""
+    def create(session_id: str, thread_id: str) -> SealedContextDispatchRef:
+        tool_ref = ToolSetRef.from_tool_snapshot(
+            snapshot_id="tools-log", session_id=session_id, thread_id=thread_id,
+            plan_id="plan-log", tools=(), source_revision="selection-log",
+        )
+        return SealedContextDispatchRef(
+            session_id=session_id, thread_id=thread_id, execution_id="execution-log",
+            turn_id="turn-log", checkpoint_ns="", attempt_key="plan-log",
+            callback_model_call_id="019c47af-8f1a-75e0-8243-db221ad02820",
+            sealed_model_call_id="model-log", assembly_id="assembly-log",
+            plan_hash=sha256_jcs("plan"), request_hash=sha256_jcs("request"),
+            provider_version="profile-log", projector_id="projector-log",
+            projector_version="v1", target_format="chat_completions",
+            prefix_epoch="epoch-log", epoch_reason=EpochReason.INITIAL,
+            prefix_hash=sha256_jcs("prefix"), prefix_byte_length=16,
+            frame_hashes=(sha256_jcs("frame"),), tool_set_refs=(tool_ref,),
+            tool_policy_hash=sha256_jcs("policy"), reference_hash=sha256_jcs("ref"),
+        )
+
+    return create
 
 
 def test_llm_log_persists_request_and_tool_stats_without_prompt_replay(
@@ -124,6 +155,7 @@ def test_llm_logging_does_not_capture_prompt_replacement_side_channel(
 def test_llm_log_merges_redacted_upstream_request_and_response(
     tmp_path: Path,
     log_session,
+    log_dispatch_reference,
 ) -> None:
     session_id = "ses_019bfd6198be7272a4dfb986435f5ce9"
     session_dir = log_session(tmp_path, session_id)
@@ -141,6 +173,8 @@ def test_llm_log_merges_redacted_upstream_request_and_response(
         runtime=runtime,
     )
     middleware = LLMLoggingMiddleware(sessions_dir=tmp_path)
+    assert runtime.execution_info is not None
+    reference = log_dispatch_reference(session_id, runtime.execution_info.thread_id)
 
     def invoke(_: ModelRequest) -> ModelResponse:
         record_upstream_request(
@@ -153,6 +187,7 @@ def test_llm_log_merges_redacted_upstream_request_and_response(
             provider="openai",
             api_base="https://example.com/v1",
             call_type="acompletion",
+            dispatch_ref=reference,
         )
         apply_upstream_call_details(
             SimpleNamespace(
@@ -186,6 +221,8 @@ def test_llm_log_merges_redacted_upstream_request_and_response(
     assert attempts[0]["request"]["messages"][0]["role"] == "user"
     assert attempts[0]["request"]["api_key"] == "[REDACTED]"
     assert attempts[0]["response"]["choices"][0]["message"]["content"] == "done"
+    assert attempts[0]["sealed_dispatch"] == json.loads(json.dumps(asdict(reference)))
+    assert attempts[0]["sealed_dispatch"]["tool_set_refs"][0] == reference.tool_set_refs[0].to_dict()
 
 
 def test_llm_log_bounds_large_payload_and_keeps_valid_json(
@@ -247,9 +284,12 @@ def test_llm_log_pruning_enforces_file_count_and_total_bytes(
     assert sum(path.stat().st_size for path in log_dir.glob("*.json")) <= 10
 
 
+@pytest.mark.parametrize("handler_error", [None, "provider-profile-change-requires-rebuild"])
 def test_llm_log_persists_failed_upstream_attempt(
     tmp_path: Path,
     log_session,
+    log_dispatch_reference,
+    handler_error: str | None,
 ) -> None:
     session_id = "ses_019c47af8f1a75e08243db221ad02820"
     session_dir = log_session(tmp_path, session_id)
@@ -267,6 +307,8 @@ def test_llm_log_persists_failed_upstream_attempt(
         runtime=runtime,
     )
     middleware = LLMLoggingMiddleware(sessions_dir=tmp_path)
+    assert runtime.execution_info is not None
+    reference = log_dispatch_reference(session_id, runtime.execution_info.thread_id)
 
     def invoke(_: ModelRequest) -> ModelResponse:
         record_upstream_request(
@@ -278,13 +320,18 @@ def test_llm_log_persists_failed_upstream_attempt(
             provider="openai",
             api_base=None,
             call_type="acompletion",
+            dispatch_ref=reference,
         )
-        raise RuntimeError("upstream unavailable")
+        if handler_error is not None:
+            record_upstream_error(RuntimeError("upstream unavailable"))
+        raise RuntimeError(handler_error or "upstream unavailable")
 
-    with pytest.raises(RuntimeError, match="upstream unavailable"):
+    with pytest.raises(RuntimeError, match=handler_error or "upstream unavailable"):
         middleware.wrap_model_call(request, invoke)
 
     log_file = next((session_dir / "logs" / "llm_requests").glob("*.json"))
     payload = json.loads(log_file.read_text(encoding="utf-8"))
-    assert payload["response"]["error"] == "upstream unavailable"
-    assert "upstream unavailable" in payload["upstream"]["attempts"][0]["error"]
+    assert payload["response"]["error"] == (handler_error or "upstream unavailable")
+    assert payload["upstream"]["attempts"][0]["error"] == "upstream unavailable"
+    assert payload["upstream"]["attempts"][0]["sealed_dispatch"]["assembly_id"] == reference.assembly_id
+    assert payload["upstream"]["attempts"][0]["sealed_dispatch"]["callback_model_call_id"] == reference.callback_model_call_id

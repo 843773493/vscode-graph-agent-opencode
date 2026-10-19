@@ -1361,6 +1361,7 @@ def test_responses_upstream_trace_uses_final_payload_when_litellm_input_is_empty
         provider="openai",
         api_base="https://example.com/v1",
         call_type="aresponses",
+        dispatch_ref=None,
     )
     apply_upstream_call_details(
         _fake_llm_stream(
@@ -1390,6 +1391,7 @@ def test_responses_stream_terminal_event_records_complete_upstream_response():
         provider="openai",
         api_base="https://example.com/v1",
         call_type="aresponses",
+        dispatch_ref=None,
     )
     apply_upstream_call_details(
         _fake_llm_stream(
