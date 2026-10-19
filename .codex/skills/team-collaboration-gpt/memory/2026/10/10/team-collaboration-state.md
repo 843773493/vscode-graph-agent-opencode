@@ -1,10 +1,8 @@
 # 当前接续入口
 
-当前运行是 **RUN19**。职责、成员、写租约、候选、在途验证与下一动作只在 [RUN19 当前接续记录](/data1/hyf/20260822_agent/vscode-graph-agent-opencode/out/tests/temp/2026/10/19/goal-core-resume-19/core_owner/CONTINUATION.md) 维护；先按该记录定位自己的 canonical ID 与直属负责人，不从下面的历史快照恢复当前派单。
+当前协调者为 `/root/core_coordination_owner22`。职责、成员、授权边界、候选、验证状态及下一动作仅以[本轮当前接续记录](/data1/hyf/20260822_agent/vscode-graph-agent-opencode/out/tests/temp/2026/10/19/core-coordination-owner22/coordinator/artifacts/CURRENT.md)与原始收据为准；请先由该记录确认当前 canonical ID 与直属负责人。
 
-完整交接与七项 OpenSpec 的 goal 仍未完成。局部通过、冻结候选或阶段提交不结束该目标；当前结果以接续记录所链接的源码及原始输出核实。
-
-以下内容均为历史记录。
+以下 RUN19、RUN12 等内容均为历史快照，不恢复其角色、写租约或验证状态。完整 goal 的状态也以本轮记录为准。
 
 ## RUN12 历史快照：CIL 已集成，H5 deadline 与 UVAR grammar 推进中
 
