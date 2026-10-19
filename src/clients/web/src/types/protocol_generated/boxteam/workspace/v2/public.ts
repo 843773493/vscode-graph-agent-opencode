@@ -2239,7 +2239,6 @@ export interface UiSnapshotResultDTO {
 
 export interface WorkspaceContextDTO {
   workspace_id: string;
-  root_path: string;
   project_type?: string | undefined;
   languages: string[];
   git?: { [key: string]: any } | undefined;
@@ -2249,7 +2248,6 @@ export interface WorkspaceContextDTO {
 
 export interface WorkspaceDTO {
   workspace_id: string;
-  root_path: string;
   name: string;
   project_type?: string | undefined;
   git?: { [key: string]: any } | undefined;
@@ -16370,7 +16368,6 @@ export const UiSnapshotResultDTO: MessageFns<UiSnapshotResultDTO> = {
 function createBaseWorkspaceContextDTO(): WorkspaceContextDTO {
   return {
     workspace_id: "",
-    root_path: "",
     project_type: undefined,
     languages: [],
     git: undefined,
@@ -16383,7 +16380,6 @@ export const WorkspaceContextDTO: MessageFns<WorkspaceContextDTO> = {
   fromJSON(object: any): WorkspaceContextDTO {
     return {
       workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
-      root_path: isSet(object.root_path) ? globalThis.String(object.root_path) : "",
       project_type: isSet(object.project_type) ? globalThis.String(object.project_type) : undefined,
       languages: globalThis.Array.isArray(object?.languages)
         ? object.languages.map((e: any) => globalThis.String(e))
@@ -16398,9 +16394,6 @@ export const WorkspaceContextDTO: MessageFns<WorkspaceContextDTO> = {
     const obj: any = {};
     if (message.workspace_id !== "") {
       obj.workspace_id = message.workspace_id;
-    }
-    if (message.root_path !== "") {
-      obj.root_path = message.root_path;
     }
     if (message.project_type !== undefined) {
       obj.project_type = message.project_type;
@@ -16426,7 +16419,6 @@ export const WorkspaceContextDTO: MessageFns<WorkspaceContextDTO> = {
   fromPartial<I extends Exact<DeepPartial<WorkspaceContextDTO>, I>>(object: I): WorkspaceContextDTO {
     const message = createBaseWorkspaceContextDTO();
     message.workspace_id = object.workspace_id ?? "";
-    message.root_path = object.root_path ?? "";
     message.project_type = object.project_type ?? undefined;
     message.languages = object.languages?.map((e) => e) || [];
     message.git = object.git ?? undefined;
@@ -16437,14 +16429,13 @@ export const WorkspaceContextDTO: MessageFns<WorkspaceContextDTO> = {
 };
 
 function createBaseWorkspaceDTO(): WorkspaceDTO {
-  return { workspace_id: "", root_path: "", name: "", project_type: undefined, git: undefined, runtime: undefined };
+  return { workspace_id: "", name: "", project_type: undefined, git: undefined, runtime: undefined };
 }
 
 export const WorkspaceDTO: MessageFns<WorkspaceDTO> = {
   fromJSON(object: any): WorkspaceDTO {
     return {
       workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
-      root_path: isSet(object.root_path) ? globalThis.String(object.root_path) : "",
       name: isSet(object.name) ? globalThis.String(object.name) : "",
       project_type: isSet(object.project_type) ? globalThis.String(object.project_type) : undefined,
       git: isObject(object.git) ? object.git : undefined,
@@ -16456,9 +16447,6 @@ export const WorkspaceDTO: MessageFns<WorkspaceDTO> = {
     const obj: any = {};
     if (message.workspace_id !== "") {
       obj.workspace_id = message.workspace_id;
-    }
-    if (message.root_path !== "") {
-      obj.root_path = message.root_path;
     }
     if (message.name !== "") {
       obj.name = message.name;
@@ -16481,7 +16469,6 @@ export const WorkspaceDTO: MessageFns<WorkspaceDTO> = {
   fromPartial<I extends Exact<DeepPartial<WorkspaceDTO>, I>>(object: I): WorkspaceDTO {
     const message = createBaseWorkspaceDTO();
     message.workspace_id = object.workspace_id ?? "";
-    message.root_path = object.root_path ?? "";
     message.name = object.name ?? "";
     message.project_type = object.project_type ?? undefined;
     message.git = object.git ?? undefined;

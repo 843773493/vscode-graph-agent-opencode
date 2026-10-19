@@ -128,12 +128,10 @@ class WorkspaceService:
     async def get(self) -> WorkspaceDTO:
         return WorkspaceDTO(
             workspace_id=self.workspace_id,
-            root_path=self.root_path,
             name=self.name,
             project_type="python",
             git={
                 "enabled": False,
-                "root": self.root_path,
                 "branch": "main"
             },
             runtime={
@@ -145,7 +143,6 @@ class WorkspaceService:
     async def get_context(self) -> WorkspaceContextDTO:
         return WorkspaceContextDTO(
             workspace_id=self.workspace_id,
-            root_path=self.root_path,
             project_type="python",
             languages=["python", "javascript", "typescript"],
             git={},

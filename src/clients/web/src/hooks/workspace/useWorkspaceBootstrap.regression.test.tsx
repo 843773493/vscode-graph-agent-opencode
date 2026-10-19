@@ -184,7 +184,7 @@ function stubCommonBootstrap(): void {
     .mockResolvedValue(null as never);
   restoreSpies.push(() => userViewState.mockRestore());
   const getWorkspace = spyOn(api, "getWorkspace")
-    .mockResolvedValue({ name: "工作区", root_path: "/tmp/ws" } as never);
+    .mockResolvedValue({ workspace_id: "00000000-0000-0000-0000-000000000001", name: "工作区" });
   restoreSpies.push(() => getWorkspace.mockRestore());
   const listAgents = spyOn(api, "listAgents").mockResolvedValue([] as never);
   restoreSpies.push(() => listAgents.mockRestore());
@@ -240,6 +240,7 @@ describe("useWorkspaceBootstrap 失效标记", () => {
     expect(snapshots).toHaveBeenCalledWith(API_PORT, expect.objectContaining({ workspace_id: "ws-1" }));
     expect(current.activeGatewayWorkspaceId).toBe("ws-1");
     expect(current.workspaceName).toBe("工作区");
+    expect(current.workspaceRoot).toBe("/tmp/ws-1");
     expect(current.sessionsByWorkspace.get("ws-1")).toEqual([]);
     expect(current.workspaceSwitching).toBe(false);
     expect(current.error).toBeNull();

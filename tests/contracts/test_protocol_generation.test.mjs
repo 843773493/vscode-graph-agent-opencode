@@ -39,6 +39,11 @@ test("公开诊断字段没有真实定位，通信目标的三种 destination �
   expect(SessionInformationWorkspaceDTOSchema.fields.map((field) => field.name)).not.toContain("root_path");
 
   for (const binding of [workspaceBinding, webBinding]) {
+    for (const schema of [binding.WorkspaceDTOSchema, binding.WorkspaceContextDTOSchema]) {
+      expect(schema.fields.map((field) => field.name)).not.toContain("root_path");
+      const value = create(schema, { workspaceId: "workspace-stable-identity" });
+      expect(fromBinary(schema, toBinary(schema, value)).workspaceId).toBe("workspace-stable-identity");
+    }
     const schema = binding.CommunicationGatewayRequestSchema;
     expect(schema.fields.find((field) => field.name === "fork_target")?.number).toBe(5);
     const threadTarget = create(schema, {

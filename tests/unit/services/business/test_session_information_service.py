@@ -85,7 +85,6 @@ class _Workspace:
     async def get(self) -> WorkspaceDTO:
         return WorkspaceDTO(
             workspace_id="workspace_information",
-            root_path="/workspace",
             name="workspace",
         )
 

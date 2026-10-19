@@ -235,9 +235,12 @@ def close_gateway_process(handle: GatewayProcess) -> None:
     unregister_test_process(handle)
 
 
-def workspace_root_from_response(response: httpx.Response) -> str:
+def workspace_id_from_response(response: httpx.Response) -> str:
     assert response.status_code == 200, response.text
-    return str(response.json()["data"]["root_path"])
+    data = response.json()["data"]
+    assert "root_path" not in data
+    assert "root" not in data["git"]
+    return str(data["workspace_id"])
 
 
 def reset_gateway_user_configuration(*, workspace_root: Path) -> None:

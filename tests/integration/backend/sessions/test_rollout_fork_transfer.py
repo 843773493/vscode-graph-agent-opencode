@@ -423,7 +423,8 @@ async def test_same_backend_two_gateway_routes_fork_and_cold_replay(transfer_tri
             assert response.headers["X-Request-ID"] == response.json()["request_id"]
         assert health.json()["data"]["gateway_id"] == node.gateway_id
         assert workspace.json()["data"]["workspace_id"] == node.workspace_id
-        assert Path(workspace.json()["data"]["root_path"]) == node.workspace
+        assert "root_path" not in workspace.json()["data"]
+        assert "root" not in workspace.json()["data"]["git"]
         topology[name] = {"health": health.json(), "inventory": inventory.json(), "workspace": workspace.json(),
                           "backend_pid": node.backend.process.pid, "gateway_pid": node.gateway.process.pid, "gateway_home": str(node.gateway_home)}
     (artifacts / "same-owner-topology.json").write_text(json.dumps(topology, ensure_ascii=False, indent=2) + "\n")

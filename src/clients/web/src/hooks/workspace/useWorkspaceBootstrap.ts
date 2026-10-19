@@ -28,6 +28,7 @@ import {
 import { errorMessage } from "../../utils/errorMessage";
 import { isNavigationBackpressureStatus } from "../../api/session/sessionCatalogOperations";
 import { requireGatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
+import { activeGatewayWorkspaceFields } from "../gatewayWorkspace/activeGatewayWorkspaceFields";
 
 type WorkspaceBootstrapPayload = {
   userAccess: Awaited<ReturnType<typeof ensureGatewayUserAccess>>;
@@ -501,7 +502,6 @@ export function useWorkspaceBootstrap({
         return {
           ...prev,
           gatewayWorkspaces: visibleGatewayWorkspaces,
-          activeGatewayWorkspaceId: activeWorkspaceId,
           sessionsByWorkspace,
           sessionGatewayWorkspaceById,
           gatewayError: partialGatewayError,
@@ -524,7 +524,11 @@ export function useWorkspaceBootstrap({
             previousToolDetailsExpanded: prev.expandDetails,
             userChanged,
           }),
-          workspaceRoot: workspace.root_path,
+          ...activeGatewayWorkspaceFields({
+            ...gatewayWorkspaces,
+            items: visibleGatewayWorkspaces,
+            active_workspace_id: activeWorkspaceId,
+          }),
           workspaceName: workspace.name,
           agents,
           sessions: activeSessions,

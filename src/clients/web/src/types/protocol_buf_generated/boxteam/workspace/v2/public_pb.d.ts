@@ -9611,11 +9611,6 @@ export declare type WorkspaceContextDTO = Message<"boxteam.workspace.v2.Workspac
   workspaceId: string;
 
   /**
-   * @generated from field: string root_path = 2;
-   */
-  rootPath: string;
-
-  /**
    * @generated from field: optional string project_type = 3;
    */
   projectType?: string | undefined;
@@ -9655,11 +9650,6 @@ export declare type WorkspaceDTO = Message<"boxteam.workspace.v2.WorkspaceDTO"> 
    * @generated from field: string workspace_id = 1;
    */
   workspaceId: string;
-
-  /**
-   * @generated from field: string root_path = 2;
-   */
-  rootPath: string;
 
   /**
    * @generated from field: string name = 3;

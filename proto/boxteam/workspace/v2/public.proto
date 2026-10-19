@@ -2189,8 +2189,9 @@ message UiSnapshotResultDTO {
 }
 
 message WorkspaceContextDTO {
+  reserved 2;
+  reserved "root_path";
   string workspace_id = 1;
-  string root_path = 2;
   optional string project_type = 3;
   repeated string languages = 4;
   optional google.protobuf.Struct git = 5;
@@ -2199,8 +2200,9 @@ message WorkspaceContextDTO {
 }
 
 message WorkspaceDTO {
+  reserved 2;
+  reserved "root_path";
   string workspace_id = 1;
-  string root_path = 2;
   string name = 3;
   optional string project_type = 4;
   optional google.protobuf.Struct git = 5;

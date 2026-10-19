@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
     SessionContextSearchRequest,
@@ -47,7 +48,7 @@ from tests.support.gateway_processes import (
     acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
-    workspace_root_from_response,
+    workspace_id_from_response,
     write_gateway_remote_gateway_config,
 )
 from tests.support.ports import e2e_port_block_for_file
@@ -170,14 +171,13 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             assert configured_connection["ssh_config_host"] is None
 
             default_workspace_response = await client.get("/api/v1/workspace")
-            assert Path(workspace_root_from_response(default_workspace_response)).resolve() == local_workspace
+            assert workspace_id_from_response(default_workspace_response) == load_or_create_workspace_id(local_workspace)
 
             remote_workspace_response = await client.get(
                 "/api/v1/workspace",
                 headers={"X-BoxTeam-Workspace-Id": remote_workspace_id},
             )
-            assert Path(workspace_root_from_response(remote_workspace_response)).as_posix() == remote_workspace_path
-            remote_backend_workspace_id = remote_workspace_response.json()["data"]["workspace_id"]
+            remote_backend_workspace_id = workspace_id_from_response(remote_workspace_response)
             assert remote_backend_workspace_id == remote_workspace["backend_workspace_id"]
             assert remote_backend_workspace_id != remote_workspace_id
 

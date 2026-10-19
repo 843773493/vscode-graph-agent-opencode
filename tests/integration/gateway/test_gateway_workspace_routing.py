@@ -70,7 +70,7 @@ from tests.support.gateway_processes import (
     close_gateway_process,
     reset_gateway_persistent_state,
     start_gateway_process,
-    workspace_root_from_response,
+    workspace_id_from_response,
 )
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import (
@@ -364,7 +364,7 @@ async def test_gateway_routes_sessions_between_local_workspaces(
             default_request_id = default_workspace_response.json()["request_id"]
             assert default_request_id
             assert default_workspace_response.headers["X-Request-ID"] == default_request_id
-            assert Path(workspace_root_from_response(default_workspace_response)).resolve() == primary_workspace
+            assert workspace_id_from_response(default_workspace_response) == load_or_create_workspace_id(primary_workspace)
 
             add_response = await client.post(
                 "/api/gateway/workspaces/local",
@@ -416,7 +416,7 @@ async def test_gateway_routes_sessions_between_local_workspaces(
             ][:2] == [secondary_workspace_id, default_workspace_id]
 
             routed_workspace_response = await client.get("/api/v1/workspace")
-            assert Path(workspace_root_from_response(routed_workspace_response)).resolve() == primary_workspace
+            assert workspace_id_from_response(routed_workspace_response) == load_or_create_workspace_id(primary_workspace)
 
             create_response = await client.post(
                 "/api/v1/sessions",
