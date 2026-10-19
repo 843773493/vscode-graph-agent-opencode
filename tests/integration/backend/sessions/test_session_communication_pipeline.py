@@ -403,8 +403,11 @@ async def test_communication_crash_windows_keep_original_identity(communication_
             assert marker["receipt"]["admission_id"] == accepted.admission_id
             assert accepted.state == "target_accepted"
             assert accepted.job_id is None and accepted.execution_id is None
-            # 全新 target 的 acceptance 不初始化运行时；数据库应由恢复 admission 创建。
-            assert not (target_node / "rollout/index.sqlite").exists()
+            # Session 发布已经初始化存储；仅接受 inbox 尚不能创建执行或上下文。
+            database = target_node / "rollout/index.sqlite"
+            with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
+                for table in ("executions", "turn_records", "runtime_execution_wakeups", "model_calls", "item_catalog"):
+                    assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0, table
         else:
             assert accepted.state == "target_accepted" and accepted.job_id is None
             await _completed(case.client, response.json()["data"]["job_id"])
