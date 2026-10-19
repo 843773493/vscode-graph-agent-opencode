@@ -2,7 +2,7 @@
 
 ## 1. 已挂载工作区注册表与身份层
 
-- [x] 1.1 引入进程内权威的「已挂载工作区注册表」：每项含稳定 `workspace_id`（严格 UUID 文本，复用 `app/core/workspace_identity.validate_workspace_id`）与其根目录；提供按 `workspace_id` 的精确查找与「未登记即 fail-closed」行为，不提供默认工作区回退。
+- [x] 1.1 引入进程内只读的「已挂载工作区注册表」：每项以稳定 `workspace_id`（严格 UUID 文本，复用 `app/core/workspace_identity.validate_workspace_id`）索引显式 mount 配置中的 `workspace_root`，并提供按 `workspace_id` 的精确查找与「未登记即 fail-closed」行为，不提供默认工作区回退。本项完成范围仅为 Backend 启动 mount 配置与 generation 内注册表查找；不表示根已由唯一原生 Gateway binding 提供，也不验收 resolver、API/普通 DTO 或其它输出是否泄漏真实路径，这些边界仍由未勾选的 1.8、4.3 等项验收。
 - [x] 1.2 把工作区根目录与 `.boxteam/` 数据目录定位从 `app/core/path_utils.py` 的环境变量单例改为「显式 `workspace_id` → 注册表」；`get_workspace_root()`/`get_boxteam_root()`/`get_sessions_dir()` 不再作为业务解析入口（保留或删除由实施时确认调用方全量平移后决定）。
 - [x] 1.3 把 `get_session_path_resolver()`/`get_session_creation_service()` 的 `lru_cache` 键从「会话根目录」改为 workspace 维度；每工作区独立 catalog 连接与 `SQLiteProcessOwnership` 锁。
 - [x] 1.4 确认 workspace_id 只有**一个**命名空间：寻址层统一使用后端身份 UUID；`app/gateway/workspace_ids.py` 的 `gw_` ID 若保留，MUST 只作 Gateway 控制面内部标识，不进入工作区寻址。且 MUST 与 URI `workspace` scope 必填 `scope_id` 取值同源（同一个稳定 workspace_id）。
@@ -10,6 +10,7 @@
 - [x] 1.6 登记两处既存硬编码违反点并定界：`gateway` 与 `inline`（原 `builtin`）的 scope_id 硬编码违反点**均已修复**：`inline` 由 `298ef599`+`f3bd8213` 装配、`gateway` 由 `64ba30c8`/`53befbfc`/`9881a3b2` 装配，原 `skill_runtime.py` 的 `else "local"` 分支已物理删除；`distribution_id` 来源为发行包 runtime manifest（`packages/launcher/runtime-manifest.schema.json`）的 `distribution` + `version`（编码规则与缺失 fail-closed 见「统一资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」），装配提交 `298ef599`+`f3bd8213`。**2026-10-01 第八轮复核更正**。
 - [x] 1.7 全仓 `rg` 复核「当前激活工作区 / active workspace / WORKSPACE_ROOT / 进程级单根」全部调用方，形成平移清单，确认无遗留悬空调用。
   - 2026-10-15 静态闭包：`out/tests/temp/2026/10/13/fork-contract-implementation/luna_context_owner_cleanup/artifacts/r1891-a05-caller-coverage-closure.json` 对原146路径精确分区为后端/配置/工具33、测试71、前端42，missing/extra/duplicates均为空；归类区分合法Gateway激活选路与Backend显式身份，不把关键字命中等同隐式回退。`r1893-a05-current-caller-delta.json` 沿原rg表达式及排除项核当前集合仍为146路径，新增3、移出3；新增均为Gateway控制面或显式身份测试，无Backend隐式身份，移出的旧fork测试已删除。非src旧路径沿用具名静态分类，本轮不声称其当前源码全部重新语义复核；R1898独审核此边界可支撑清单子项。此项只完成调用方清单与语义复核，复用已接受隔离动态证据，不表示4.3真实路径合同、其它任务或整个change完成。
+- [ ] 1.8 将物理工作区根绑定归入唯一原生 Gateway control-plane registry，键为 Gateway target ID 与 Backend `workspace_id`；managed Backend group 的持久化启动合同只保存成员身份与 generation，Backend runtime registry 仅作为 generation 内存视图，不作为根来源。根绑定的本机变更使用本 Gateway 既有 managed token；远端变更按 capability requirement「工作区物理根必须绑定到唯一原生 Gateway」由目标 Gateway 的 federation `managed_workspace_admin` policy 授权。
 
 ## 2. 服务图按 workspace_id 分区
 
@@ -29,8 +30,9 @@
 
 - [ ] 4.1 盘点只描述单工作区前提的旧持久化字段，按用户授权显式失效并删除旧读取分支，保留新写字段与单一读路径，不双读、不留别名。
 - [ ] 4.2 核验旧开发运行数据清理与新 writer 切换：停止对应写入后清理不兼容开发数据，保普通源码及独有未集成改动；不新增旧数据迁移/扫描/回填，fresh writer 与精确恢复错误必须修复并验证。
-- [ ] 4.3 校验**真实路径 / real path** 不变量（**三层分离 / three-layer separation**）：迁移后新增/变更的持久化记录与 API 响应体 MUST NOT 出现 real path，只允许 `资源身份 / ResourceIdentity` + `资源 URI`（+ 独立 revision 字段）。
+- [ ] 4.3 校验**真实路径 / real path** 不变量（**三层分离 / three-layer separation**）：业务持久化记录、普通 API/Workspace DTO、解析结果、模型载荷与联邦资源投影 MUST NOT 出现 real path，只允许 `资源身份 / ResourceIdentity` + `资源 URI`（+ 独立 revision 字段）；唯一例外是按 requirement「工作区物理根必须绑定到唯一原生 Gateway」持久化在原生 Gateway registry 的 root binding，该根不得复制到普通输出。
 - [ ] 4.4 记录代码、数据与生成快照的回滚边界及不可回滚点：旧开发数据按授权失效/清理，不承诺恢复；新形态数据不能交旧 reader。原零 URI、无装配、seal 恒为空是历史取证，A01 `16f09ee7` 已接通真实 activation freeze/seal/restore，不重复派发已完成接线，不虚构旧 URI 迁移。
+- [ ] 4.5 验收 root binding 注册与恢复闭包：本地 managed token 代表本 Gateway 管理权限；远端注册/替换/移除由原生目标 Gateway 复用唯一 `permissions.federation` policy owner，以认证 peer 的 `principal_ref_for_gateway` 和显式 `managed_workspace_admin` allow 判权。授权按目标 Gateway 作用，不依赖首次创建时尚不存在的 `workspace_id`；配对、read/其他通信能力与 `default_effect="allow"` 不授予管理权，且现有通信默认保持不变。policy schema、规范化/snapshot/evaluator 与全部 callers 同批迁齐，不加 RBAC/权限 registry/路径 ACL；relay 只转送、native owner 作最终判权，未授权请求返回 403 且在 root/group/registry 状态零写入。用户提供的物理根只送达获授权的原生 owner。冷启动按完整成员身份从唯一 registry 解析根；缺 binding、target/Backend UUID 不符或 mount 成员集合不符时响亮失败，不扫描、猜根或部分启动；普通 DTO、模型载荷和联邦资源投影不含根。
 
 ## 5. 契约快照与门禁
 

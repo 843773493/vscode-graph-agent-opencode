@@ -35,17 +35,22 @@
 
 - **资源身份 / ResourceIdentity**：不透明、稳定、**不含 revision**、**不依赖当前激活工作区**，持久化，用于去重与 lineage。
 - **资源 URI**：可解析的地址，持久化，**允许悬空**（指向已不存在的资源是合法值），**禁止编码 revision 或 hash**，是软件内部与模型可见载荷中传递资源的默认形式。
-- **真实路径 / real path**：机器本地、**临时**、**永不持久化**、**永不进入模型可见载荷**、**永不跨 gateway 边界**，只作为 fs/sqlite 调用点内的局部变量存在。
+- **真实路径 / real path**：业务资源访问时在机器本地临时使用，只在原生 owner 的最终 fs/sqlite 调用点及其必要的局部调用链中存在；除「工作区物理根必须绑定到唯一原生 Gateway」定义的控制面 root binding 外，MUST NOT 持久化。真实路径 MUST NOT 进入模型可见载荷、普通 API/Workspace DTO、解析结果或跨 Gateway 资源投影。唯一 root binding 只由负责原生 target 的 Gateway registry 持久化，且不是可传递的资源引用；注册输入只可在 `add-multi-workspace-backend-mounting` 的该 requirement 授权后送达原生 owner。
 
-#### Scenario: real path 只作为局部变量存在
+#### Scenario: 业务资源 real path 只在本地访问链中存在
 
 - **WHEN** 某个 owner 需要访问底层文件或 sqlite 资源
-- **THEN** 它先由 identity + URI 解析出 real path，且该 real path 只在该调用栈内使用，不写入任何持久化记录、不写入 API 响应体、不写入模型可见载荷
+- **THEN** 原生 owner 在本地取得 real path 并只在访问调用链内使用，不写入业务持久化记录、普通 API 响应体或模型可见载荷；工作区文件根只从唯一原生 Gateway root binding 取得，注册请求须先通过 `add-multi-workspace-backend-mounting` 的唯一授权合同，解析结果仍只含 URI/身份/内容/操作结果
 
 #### Scenario: real path 外泄即缺陷
 
-- **WHEN** 一次 API 响应体、一条持久化记录或一份模型可见载荷中出现了 real path
-- **THEN** 系统 MUST 将其判定为缺陷并显式失败，不得以 `display_uri`、日志脱敏或截断静默掩盖
+- **WHEN** 除唯一原生 Gateway root binding 或按 `add-multi-workspace-backend-mounting` 授权后发往该 owner 的注册输入外，API 响应体、业务持久化记录、解析结果、跨 Gateway 资源投影或模型可见载荷中出现 real path
+- **THEN** 系统 MUST 将其判定为缺陷并显式失败，不得以 `display_uri`、日志脱敏或截断静默掩盖；root binding 也 MUST NOT 出现在上述输出中
+
+#### Scenario: 工作区根绑定是唯一控制面持久化例外
+
+- **WHEN** 系统持久化已注册工作区的物理根
+- **THEN** 该根 MUST 只保存在负责原生 target 的 Gateway 控制面 registry，并按 target ID 与 Backend `workspace_id` 绑定；用户提供的注册根只可经身份认证且通过 `add-multi-workspace-backend-mounting` 目标 Gateway 授权的请求送达该 owner。managed group、业务记录、普通 DTO、解析结果、模型载荷和联邦资源投影均 MUST NOT 复制或输出该根
 
 #### Scenario: URI 允许悬空
 
@@ -66,10 +71,11 @@
 
 资源引用中的「位置 / location」判定 MUST 使用如下**可机械判定**的统一判据，MUST NOT 各 change 自行解释：一个字段承载的是「位置」，当且仅当它（或由它经确定性推导得到的值）可直接用于 `open`/`stat`/`join` 等文件系统或 sqlite 访问，且指向本体位于持久化记录 owner 之外的资源或产物。据此：
 
+- **唯一控制面例外**：工作区物理根是由 Gateway target ID 与 Backend `workspace_id` 组成的 mount binding 输入，不是业务资源引用或资源位置字段；它只按 requirement「工作区物理根必须绑定到唯一原生 Gateway」持久化在负责原生 target 的 Gateway registry。该特例不改变下述资源位置判据，也不授权持久化任何其它 real path。
 - **可判定为「位置」⇒ MUST NOT 落盘**：任何「位置」MUST 由 `资源身份 / ResourceIdentity` 加 `资源 URI`（必要时加并列 revision 字段）表达；当且仅当该位置可由 owner 身份（资源 id 与工作区身份）确定性推导时，MUST NOT 落盘，改为在该次 fs/进程调用栈内由 owner 身份重推导。
 - **不可由 owner 身份推导、但必须对外可寻址 ⇒ MUST 用既有 API 端点引用**，MUST NOT 落盘 real path、MUST NOT 为此自造 URI kind、MUST NOT 裸拼接 URI。
 - **唯一例外边界**：owner **自身**的运行态字段（典型为终端 shell 的当前工作目录）表达的是 owner 的运行状态而非「资源所在位置」，MUST NOT 被当作位置引用或位置表达；此类字段 MUST 以工作区内**相对路径**持久化，MUST NOT 落盘绝对路径或工作区根路径。
-- **real path 出现在持久化记录、API 响应体或模型可见载荷中 ⇒ 缺陷**：MUST 显式失败，MUST NOT 以脱敏、截断或 `display_uri` 静默掩盖。
+- **real path 出现在一般持久化记录、API 响应体或模型可见载荷中 ⇒ 缺陷**：唯一例外是工作区物理根作为控制面 mount binding 仅存于负责原生 target 的 Gateway registry；经 `add-multi-workspace-backend-mounting` 授权的注册输入只送达该 owner。任何例外都不允许将根复制到业务记录、普通 DTO、解析结果、模型载荷或联邦资源投影。违反时 MUST 显式失败，MUST NOT 以脱敏、截断或 `display_uri` 静默掩盖。
 
 以上判据 MUST 是「位置 vs 非位置」的唯一判定来源；`add-workspace-persistent-resource-management` 的 D-A2/D-A3 与 owner 运行态字段例外 MUST 引用本 requirement，MUST NOT 另立一套判据。
 
@@ -87,6 +93,11 @@
 
 - **WHEN** 持久化记录需要保存 owner 自身的运行态字段（典型为终端 shell 的当前工作目录）
 - **THEN** 该字段 MUST 以工作区内相对路径持久化，MUST NOT 落盘绝对路径或工作区根路径；该字段 MUST NOT 被当作「资源所在位置」的位置引用，也 MUST NOT 被扩张解释为「任何位置都可改用文件系统路径代替 URI」
+
+#### Scenario: 物理工作区根只作为原生 Gateway 控制面绑定持久化
+
+- **WHEN** 一个工作区根不能由 `workspace_id` 推导，且必须供原生 Gateway 恢复 mount
+- **THEN** 它 MUST 只按 requirement「工作区物理根必须绑定到唯一原生 Gateway」的合同持久化于唯一 Gateway binding；该基础设施绑定不是业务资源位置字段，MUST NOT 扩展为其它 real path 的持久化许可
 
 #### Scenario: 判据可机械判定
 
@@ -278,7 +289,7 @@ URI kind 闭集 MUST 为 `agent-spec` | `skills` | `config` | `session` | `files
 #### Scenario: 工作区文件树有正式根
 
 - **WHEN** 用 files/root 定位某个已明确指定工作区的源码树
-- **THEN** owner 返回其目录根和操作能力，可按公布的 child path 规则导航，不依据当前激活工作区替换 scope_id
+- **THEN** owner 以 URI/身份解析到目录根并返回目录 shape、规范 URI 与操作能力，可按公布的 child path 规则导航；解析结果和普通 DTO MUST NOT 返回物理根，实际文件访问只在原生 owner 本地使用 root binding，且不依据当前激活工作区替换 scope_id
 
 #### Scenario: 未登记 kind 或 scope 组合被拒绝
 

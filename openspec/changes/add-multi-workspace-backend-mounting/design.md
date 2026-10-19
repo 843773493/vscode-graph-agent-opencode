@@ -48,11 +48,13 @@
 
 「当前激活工作区」是**进程级可变状态**，与多个要求冲突：并发请求无法各自指向不同工作区；持久化记录一旦隐含它，语义就随写入/读取时刻的激活态漂移；跨 gateway（**星型解析 / star-topology resolution**）时激活态无意义。多工作区挂载把这些矛盾从「理论问题」变成「必然故障」，因此 MUST 显式化。契约 v2 把 `scope_id` 对**所有** scope 都设为必填，正是把「workspace_id 必须显式」这条原则扩展到全部 scope，与本决策方向一致。
 
-### D3: 注册表是进程内权威，且与 Gateway 注册表分属两层
+### D3: Gateway 唯一持有物理根绑定，后端注册表只是运行时挂载视图
 
-**决策**：后端维护「已挂载工作区注册表」（`workspace_id -> 根目录` 等），是**后端侧**权威；Gateway 维持自己的 `workspace_id -> 目标` 路由表。两者通过**同一 `workspace_id` 取值**对齐，但**不共享存储、不互相代理**（Gateway 不直读工作区 `.boxteam/`，符合既有架构原则）。
+**决策**：负责原生 target 的 Gateway 唯一 registry 按稳定 Gateway target ID 与 Backend `workspace_id` 保存物理 workspace-root binding，并将其作为 Backend 启动输入。Backend 的已挂载工作区 registry 是当前 generation 的运行时 mount view，可在进程内持有实际根供显式 `workspace_id` 查找，但不持久化根、不拥有其来源，也不形成第二份 root registry。Managed Backend group 只记录 target/backend 身份与 generation；Gateway 路由、group membership 与根绑定按稳定身份关联。
 
-**理由**：Gateway 控制面数据与工作区业务数据必须物理分离（既有 AGENTS 约束）。注册表只是把「哪个 workspace_id 挂在本进程、根在哪」这条**寻址事实**显式化。
+**授权设计**：本机变更使用现有本地 managed token，该 token 已代表本 Gateway 的管理权限。远端变更由原生目标 Gateway 最终判权：复用现有 `permissions.federation` / `FederationPolicyStore`，从认证 peer gateway_id 派生 `principal_ref_for_gateway(authenticated_peer.gateway_id)`，要求针对该 principal 的显式 `managed_workspace_admin` allow。授权属于接收请求的目标 Gateway，不按 workspace_id 或路径分配，因此首次创建时不需要已有 workspace_id。pair、read/discovery 等通信权限和 `default_effect="allow"` 都不授予此管理能力；保留其对现有核心通信操作的默认语义。schema、policy 规范化/snapshot/evaluator 与所有注册、替换、移除 callers 在同一批迁齐；不增加 RBAC、权限 registry 或路径 ACL。Relay 只转送，不作最终授权；目标 policy 拒绝时原生 Gateway 返回 403 且不写入 root/group 状态。
+
+**理由**：Gateway registry 是 workspace target 生命周期的控制面权威；Backend 只接收已登记的明确启动输入。现有本地管理 token 和联邦 policy 分别提供本机与远端管理授权，远端用户提供的 target root 只有经原生 owner 授权后才能进入唯一 registry；relay 不复制根。从资源读取权限不能推出注册授权。这样保留外部工作区注册与冷启动，同时避免 Gateway group 或 Backend 进程重启时产生第二份持久化根事实。Gateway 仍不读取工作区 `.boxteam/` 业务数据。
 
 ### D4: 路径解析器与 SQLite 连接按 workspace_id 分区
 
@@ -111,7 +113,7 @@
 
 ### D9: Gateway 共享 Backend 由唯一生命周期 owner 管理
 
-后端已挂载注册表负责一个 generation 的实际 workspace UUID→根寻址；Gateway 的 managed Backend owner 只负责控制面的一份完整启动合同、generation 与唯一进程句柄。每项绑定 Gateway target ID、Backend UUID、规范化根；成员 runtime 只引用 owner，Terminal/Browser 仍归各 target。共享关系显式登记，不按相同 URL 或所有运行 target 推导，也不维护重复的双向成员权威。普通新增 managed workspace 保持现有独立 singleton 启动行为；只有显式加入共享组才等待整组切换。
+Gateway native root registry 按 target ID 唯一保存物理根，并绑定 Backend UUID；Managed Backend owner 只持有完整成员身份集合、generation 与唯一进程句柄，启动时按 target ID 从该 registry 解析每个成员的根并作为一次性启动输入，不把根复制进 group contract。Backend 的 runtime mount registry 只物化当前 generation 的 mount roots。成员 runtime 只引用 owner，Terminal/Browser 仍归各 target。共享关系显式登记，不按相同 URL 或所有运行 target 推导，也不维护重复的成员或 root authority。普通新增 managed workspace 保持现有独立 singleton 启动行为；只有显式加入共享组才等待整组切换。
 
 唯一生命周期规范为本 change 的 `managed-backend-lifecycle` delta；mounting capability 只引用，不另写排空/force/adopt/close 规则。Backend generation 的 mount 集合不可变；运行中增删成员走现有受控整组 drain→新集合启动→全量身份/健康验证→路由公布，不预造动态 mount RPC。旧组未排空或新组失败时保留/恢复完整旧组，不以一个成员成功代表组成功。
 
@@ -119,7 +121,7 @@
 
 safe 在原30秒期限内汇总全组执行与代理引用；超时撤销 drain并保留旧组。force 先持久化全部受影响执行 interrupted，再关闭唯一 Backend handle。remove、替换、shutdown、preserve/adopt、startup recovery 均按 owner 一次处理；故障使全成员 fail-closed/offline并逐成员反馈，按权威完整启动合同仅恢复一次。外部/attached target仍仅探测和透明转发，不因URL相同成为managed成员；默认工作区不可stop的现有限制保留。
 
-共享组配置 restart 只 promotion 发起 target 的匹配 pending proof，sibling仅校验自身UUID/根/健康；失败恢复完整旧 generation 和旧 mount 集合，失败补偿按原 `recovery_required` 合同报告，不新造恢复状态机。当前固定16f只有按target的句柄/锁/恢复；该合同未实施，不把静态计划记为生命周期验收。
+共享组配置 restart 只 promotion 发起 target 的匹配 pending proof；sibling 以各自 target ID 从唯一 Gateway registry 重新解析 root binding，并核对 Backend UUID 与健康，不从 group 副本取根。缺少 binding 或 UUID/membership 不符时必须显式拒绝，不能扫描或猜根；失败恢复完整旧 generation 和旧 mount 集合，失败补偿按原 `recovery_required` 合同报告，不新造恢复状态机。当前固定16f只有按target的句柄/锁/恢复；该合同未实施，不把静态计划记为生命周期验收。
 
 实施仍采用整批源码/DTO/调用方/核心公共fixture→少量真实共享进程核心→集中边界回归→最终一次停写冻结。首个核心须经一个Gateway/一个真实managed Backend/两个mount验证身份与数据隔离；边界覆盖单target blocked、完整集合/陈旧generation、全组排空与force、成员进退、一次close/adopt/recovery、配置失败补偿以及外部target边界。
 

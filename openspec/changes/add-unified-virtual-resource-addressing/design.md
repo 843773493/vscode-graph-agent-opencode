@@ -37,11 +37,11 @@
 
 - **ResourceIdentity**：持久化，无 revision，不依赖激活工作区 → 用于去重与 lineage。
 - **URI**：持久化，允许悬空，禁 revision/hash → 软件内部与模型可见载荷的默认引用形式。
-- **real path**：不持久化、不进模型可见载荷、不跨 gateway → 只在 fs/sqlite 调用点作为局部变量。
+- **real path**：资源访问时仅在原生 owner 的最终 fs/sqlite 调用点临时出现；不得进入模型载荷、普通 DTO、解析结果或跨 Gateway 资源投影。物理 workspace root 是单独的控制面启动绑定，只由负责原生 target 的 Gateway 唯一 registry 持久化，具体合同引用 `add-multi-workspace-backend-mounting`，不归 URI 或解析器管理。
 
-**理由**：审计发现的真实缺陷正是「路径形状」泄漏（skill 目录扫描、`skillPaths.ts` 解析物理路径、catalog URI 裸拼接、`ConfigSourceLayerRecord.source_path` 落库）。以「是否持久化」「是否可跨边界」两条可机械判定的性质切分，比按命名切分更抗漂移。
+**理由**：审计发现的真实缺陷正是资源路径泄漏（skill 目录扫描、`skillPaths.ts` 解析物理路径、catalog URI 裸拼接、`ConfigSourceLayerRecord.source_path` 落库）。资源引用以身份和 URI 表达；唯一 Gateway root binding 是目标生命周期的控制面输入，不能作为 URI、资源记录或跨 Gateway 资源投影携带。
 
-**备选**：把 revision 编进 URI（被否：revision 变化会让同一资源产生不同地址，破坏「地址稳定、revision 独立」）；把 real path 作为可选调试字段随记录持久化（被否：正是当前要消除的违约，且违反跨 gateway 边界约束）。
+**备选**：把 revision 编进 URI（被否：revision 变化会让同一资源产生不同地址，破坏「地址稳定、revision 独立」）；把 real path 作为可选调试字段随资源记录持久化（被否：正是当前要消除的违约）。将 workspace root 复制进 managed-group 或联邦记录同样被否；只允许唯一 Gateway registry 持有根绑定，注册请求必须由 `add-multi-workspace-backend-mounting` 的唯一 root-binding requirement 授权后作为控制面输入送达原生 owner，中继不持久化或转为资源数据。
 
 ### D2：保留既有段序，scope_id 全必填
 
@@ -107,7 +107,7 @@
 
 **不变量**：`locator 是输入，不是输出`。
 
-**备选**：转发方缓存并本地解析对端资源（被否：第二份事实源）；对端返回 real path 由本机访问（被否：跨边界传路径，且远端路径在本机无意义）；把上界写死在解析器里（被否：拓扑变化即改代码）。
+**备选**：转发方缓存并本地解析对端资源（被否：第二份事实源）；对端返回 real path 由本机访问（被否：跨边界传资源 locator，且远端路径在本机无意义）；把上界写死在解析器里（被否：拓扑变化即改代码）。经目标 Gateway 按 `add-multi-workspace-backend-mounting` 唯一 root-binding requirement 授权的 workspace registration 是独立控制面输入，可把用户提供的 root 交给原生 Gateway owner；relay 只转送，不授权、不持久化该输入，它不进入资源解析或跨 Gateway projection。
 
 ### D7：拒绝码分三套集中登记，不可混用
 
@@ -181,9 +181,9 @@ MCP/Skill catalog 聚合是 Registry/activation 内部语义资源，当前没�
 
 ### D14：导航类型、根模板与路径编码分开
 
-本次按 spec「导航形态与操作能力必须由资源 owner 公布」定稿 directory/file/domain_object。skills/{name} 是技能包根，其后是文件 child path；files/root 是 workspace 源码树根。config/agent-spec既有地址为单文件，Session/assembly为领域对象，Session附件/工具结果由原owner公布单文件引用，不开放私有存储树。文件工具消费单独change，避免把目录工具、context激活和业务资源ID合成一种万能对象。
+本次按 spec「导航形态与操作能力必须由资源 owner 公布」定稿 directory/file/domain_object。skills/{name} 是技能包根，其后是文件 child path；files/root 是 workspace 源码树根 URI，原生 Gateway 通过唯一 workspace-root binding 在本地取得实际根，URI、解析结果与普通 DTO 均不返回物理根。该 binding 的注册与授权（含本地 managed token、远端 `managed_workspace_admin`、目标 owner 判权）、冷启动和唯一持久化 owner 由 `add-multi-workspace-backend-mounting` 定义，本 change 不建立第二套授权规则。config/agent-spec既有地址为单文件，Session/assembly为领域对象，Session附件/工具结果由原owner公布单文件引用，不开放私有存储树。文件工具消费单独change，避免把目录工具、context激活和业务资源ID合成一种万能对象。
 
-身份段继续用既有严格profile，包括D4b distribution_id编码；该段不支持escape。文件段使用spec的单次UTF-8解码和规范重编码，保留原Unicode、大小写和字面百分号，不将filename套身份charset。中央grammar接收wire URI、构造器接收未编码segments；所有工具共用，不能各自unquote或把glob/grep pattern当路径。文件shape、child规则和operation由实际owner发布；roots只固定登记，不引入插件注册表。
+身份段继续用既有严格profile，包括D4b distribution_id编码；该段不支持escape。文件段使用spec的单次UTF-8解码和规范重编码，保留原Unicode、大小写和字面百分号，不将filename套身份charset。中央grammar接收wire URI、构造器接收未编码segments；所有工具共用，不能各自unquote或把glob/grep pattern当路径。文件shape、child规则和operation由实际owner发布；资源根模板固定登记，不引入插件注册表；物理 workspace root 只取自具名 Gateway binding，不由 URI 编码、扫描磁盘或猜测。
 
 ### D15：轻量导航与会话产物模板
 

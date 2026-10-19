@@ -6,7 +6,8 @@
 
 ## What Changes
 
-- **BREAKING** 工作区后端从「单工作区进程 + `WORKSPACE_ROOT` 环境变量隐式根」改为「**已挂载工作区注册表**（进程内权威），每项含稳定 `workspace_id` 与其根目录」；工作区根目录与 `.boxteam/` 数据目录定位 MUST 由「显式 workspace_id → 注册表」得出，MUST NOT 再依赖进程级单例或激活态。
+- **BREAKING** 工作区后端从「单工作区进程 + `WORKSPACE_ROOT` 环境变量隐式根」改为 generation-local 已挂载 workspace runtime 注册表；每项按稳定 `workspace_id` 挂载对应工作区根。物理根的持久化来源只有负责原生 target 的 Gateway 唯一 registry；后端 runtime 注册表仅从该绑定构造，不持久化第二份根事实。
+- 明确物理 workspace root 的唯一 owner：Gateway registry 将用户登记的根与稳定 Gateway target ID、Backend `workspace_id` 绑定，并将该绑定作为启动输入；managed Backend group 只存成员身份与 generation，不复制 root。本机现有 managed token 代表本 Gateway 管理权限；远端注册、替换、移除须由原生目标 Gateway 的现有 `permissions.federation` policy 以 `managed_workspace_admin` 显式授权，并按认证 peer 派生 `principal_ref_for_gateway`。授权按目标 Gateway 生效，不依赖首次创建前尚不存在的 `workspace_id`。保留外部工作区注册与冷启动；中继只转送，不持久化根、不作最终授权；默认通信 allow、配对和读取权限均不授予管理权。
 - **BREAKING** 按工作区维度操作的 HTTP API 改为**显式携带 workspace 身份**：路径段 `/api/v1/workspaces/{workspace_id}/...` 为规范载体（`X-BoxTeam-Workspace-Id` 请求头为 Gateway 内部代理层等价载体，两者必须指向同一注册表项、不得各自为政）。决策与理由见 design。
 - **BREAKING** Gateway 角色变化：Gateway 仍**选**目标工作区，但目标 MUST 显式传给后端（经上述显式载体），后端 MUST NOT 猜；Gateway 不再需要为每个工作区拉起独立后端进程。
 - 明确 `workspace_id` 是**寻址层身份**，与 URI `workspace` scope 必填的 `scope_id` MUST 是同一个稳定 `workspace_id`（URI 的 `workspace` scope 中 `scope_id` 必填且等于 workspace_id，语法本体属「统一资源寻址」change）；两处 MUST NOT 各自为政。本 change 不定义 URI 语法，只声明 workspace 身份在寻址层的唯一来源。
@@ -21,7 +22,7 @@
 
 ### New Capabilities
 
-- `multi-workspace-backend-mounting`: 一个后端进程挂载多个工作区时的进程内权威注册表、workspace 身份的显式寻址载体（路径段/头）、工作区根目录与 `.boxteam/` 定位规则、按 workspace_id 分区的进程级资源边界、Gateway 显式传目标的角色变化、破坏性迁移与回滚边界、测试影响面分层口径。
+- `multi-workspace-backend-mounting`: 一个后端进程挂载多个工作区时的 generation-local runtime 注册表、Gateway 唯一 workspace-root binding 与冷启动/管理授权输入（本地 managed token、远端 federation `managed_workspace_admin`）、workspace 身份的显式寻址载体（路径段/头）、`.boxteam/` 定位规则、按 workspace_id 分区的进程级资源边界、Gateway 显式传目标的角色变化、破坏性迁移与回滚边界、测试影响面分层口径。
 
 ### Modified Capabilities
 
@@ -31,7 +32,7 @@
 
 - **实施合同**：本 change 的 proposal、specs、design 和 tasks 共同约束实现，并按具名引用与 `add-unified-virtual-resource-addressing` 的 requirement「多工作区场景下寻址层必须显式承载 scope_id 身份」互为对称收口。
 - **本轮已收口**：`add-workspace-persistent-resource-management` 的 `proposal.md`/`design.md`/`tasks.md` 与 `specs/workspace-persistent-resources/spec.md` 中「当前工作区」「`${workspace_abs_path}`」的单工作区前提已改为指向本 change 的显式 `workspace_id` 身份与已挂载工作区注册表（该 change 当时空闲，无并发编辑冲突）。
-- **受影响系统**：`app/container.py`（单根装配 → 多工作区注册表）、`app/core/path_utils.py`（解析器与工作区路径 owner）、`app/main.py`（挂载和生命周期）、`app/api/**`（workspace 身份载体）、`app/core/sqlite_state.py` 的 `SQLiteProcessOwnership`、`app/services/**` 中按工作区构造的服务/注册表/总线、Gateway registry 与 workspace proxy（目标显式传递）、OpenAPI 快照及相关测试。
+- **受影响系统**：`app/container.py`（单根装配 → 多工作区 runtime 注册表）、`app/core/path_utils.py`（解析器与工作区路径 owner）、`app/main.py`（挂载和生命周期）、`app/api/**`（workspace 身份载体，普通 Workspace DTO 不暴露物理根）、`app/core/sqlite_state.py` 的 `SQLiteProcessOwnership`、`app/services/**` 中按工作区构造的服务/注册表/总线、Gateway 唯一 root registry 与 workspace proxy（目标显式传递；root 不进入资源投影）、现有 `permissions.federation` schema/policy owner 及其全部注册调用方、OpenAPI 快照及相关测试。
 - **破坏性**：既有「一个后端进程一个工作区」的部署形态、只描述单工作区前提的**非 URI** 持久化字段、以「当前激活工作区」为隐含前提的客户端调用一并收敛；不提供旧形态兼容层或双读。
 - **不涉及旧开发数据迁移**：原零 URI 取证属于历史基线；A01 `16f09ee7` 已将真实 activation freeze/seal/restore 接入生产，不能再用“无装配、seal 恒为空”推断当前状态。本 change 按用户清理授权完成显式身份的新写字段与单一读路径，不从旧数据反推默认工作区或当前来源。
 - **契约依赖**：URI 语法、scope 闭合集、`scope_id` 取值语义与拒绝码登记由「统一资源寻址」change 独占，本 change 只引用其权威表；会话上下文资源的承载由「会话上下文 URI 统一改造」change 负责。

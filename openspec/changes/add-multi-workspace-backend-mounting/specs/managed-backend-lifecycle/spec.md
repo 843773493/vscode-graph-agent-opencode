@@ -4,7 +4,7 @@
 
 Gateway SHALL（必须）拥有默认本地工作区 runtime 和每个新增的本地托管工作区 runtime；显式声明为外部管理的本地后端 SHALL（必须）保持仅可探测。一个本地托管 Backend MAY 挂载多个工作区，但其进程句柄、generation 和完整 mount 清单 MUST 由一个 Gateway managed Backend owner 唯一持有。工作区成员 MUST 保留自己的身份、业务数据、路由、运行意图与辅助服务，只引用该 owner，MUST NOT 各自持有或关闭同一 Backend 句柄。
 
-共享关系 MUST 来自 Gateway 控制面显式登记的一份 owner 成员集合/启动合同；MUST NOT 根据相同 URL、端口、根目录相似性或所有 `managed && desired_running` target 猜测共享。清单 MUST 绑定每个 Gateway target ID、后端 workspace UUID 与规范化根；后端的已挂载工作区注册表仍唯一拥有该 generation 的实际寻址事实。Gateway 只管理控制面合同，MUST NOT 直接读取工作区业务数据。
+共享关系 MUST 来自 Gateway 控制面显式登记的 owner 成员集合与 generation 启动合同；MUST NOT 根据相同 URL、端口、根目录相似性或所有 `managed && desired_running` target 猜测共享。持久化启动合同只包含每个 Gateway target ID、Backend `workspace_id` 与 generation，不保存物理根。负责原生 target 的 Gateway 唯一 registry 按 target ID 与 Backend `workspace_id` 持有 root binding；启动时 owner 从该 binding 组装完整 mount 输入。Backend 的已挂载工作区注册表只是该 generation 的内存 runtime view，不成为持久化根来源。Gateway 只管理控制面合同，MUST NOT 直接读取工作区业务数据。
 
 #### Scenario: 默认工作区启动
 
@@ -57,7 +57,7 @@ Workspace API 在 draining 期间 SHALL（必须）停止接受新 Job，并 SHA
 #### Scenario: 没有活动任务
 
 - **WHEN** 请求安全重启且后端报告没有 blockers
-- **THEN** Gateway 优雅停止并重启 Workspace API，在报告成功前验证其健康状态；共享 Backend MUST 验证完整 mount 集合的 UUID、根与健康
+- **THEN** Gateway 优雅停止并重启 Workspace API，在报告成功前验证其健康状态；共享 Backend MUST 按完整成员身份从唯一 Gateway registry 解析 root binding，并验证 mount UUID 与健康
 
 #### Scenario: 活动任务超过超时
 
@@ -85,7 +85,7 @@ Gateway MUST（必须）在中断活动任务前要求显式 force 请求；Work
 
 ### Requirement: 重启状态对账
 
-Workspace API MUST（必须）在启动时对账已持久化的执行状态，确保没有缺少活动执行所有者的记录仍保持 running。共享 Backend 故障 MUST 使当前 generation 全部成员路由失效，并逐成员公开 offline/connection error；恢复 MUST 由 Backend owner 只执行一次，按控制面权威启动合同恢复完整 mount 集合。身份、根或成员集合不符 MUST 拒绝 adopt，MUST NOT 逐 target 重复启动、部分恢复或把未验证的 sibling 显示在线。
+Workspace API MUST（必须）在启动时对账已持久化的执行状态，确保没有缺少活动执行所有者的记录仍保持 running。共享 Backend 故障 MUST 使当前 generation 全部成员路由失效，并逐成员公开 offline/connection error；恢复 MUST 由 Backend owner 只执行一次，按控制面权威启动合同解析每个成员唯一的 Gateway root binding 并恢复完整 mount 集合。binding 缺失、target 与 Backend `workspace_id` 绑定不符或实际 mount 成员集合不符时 MUST 显式失败并拒绝 adopt，MUST NOT 扫描磁盘、猜测根、逐 target 重复启动、部分恢复或把未验证的 sibling 显示在线。
 
 #### Scenario: Job 执行期间后端退出
 
@@ -95,7 +95,7 @@ Workspace API MUST（必须）在启动时对账已持久化的执行状态，�
 #### Scenario: 共享进程退出与启动恢复
 
 - **WHEN** 共享 Backend 退出或 Gateway 启动时需要恢复该 owner
-- **THEN** Gateway MUST 统一失效其全部成员路由，按精确完整启动合同仅恢复/接管一次，并在全部 mount 验证成功后公布在线
+- **THEN** Gateway MUST 统一失效其全部成员路由，只按 target ID、Backend `workspace_id` 与 generation 重建完整启动输入，并从唯一原生 Gateway registry 解析各根；缺失 binding、身份不符或成员集合不符时 MUST 显式失败且不部分启动，全部 mount 验证成功后才公布在线
 
 ### Requirement: 托管进程组清理
 
@@ -113,7 +113,7 @@ Gateway SHALL（必须）管理服务进程组，并 SHALL（必须）在优雅�
 
 ### Requirement: 需重启的配置必须通过受控生命周期应用
 
-当 Workspace 配置候选需要重启时，Gateway SHALL（必须）使用现有 Workspace backend 的排空、阻塞项报告和重启对账流程应用 pending revision。系统 MUST（必须）避免直接杀死活动 Job；排空超时且未显式 force 时 MUST（必须）保留旧 backend 和旧 active revision。共享 Backend MUST 遵守完整组前置校验与排空；candidate promotion proof MUST 只提交发起 target 的匹配 pending candidate，其它 mount MUST 验证各自 UUID、根与健康，MUST NOT 被顺带 promotion。候选失败 MUST 恢复完整旧组与旧 mount 集合；恢复失败 MUST 按原配置副作用合同进入 `recovery_required`，MUST NOT 仅恢复发起成员并伪报全组成功。
+当 Workspace 配置候选需要重启时，Gateway SHALL（必须）使用现有 Workspace backend 的排空、阻塞项报告和重启对账流程应用 pending revision。系统 MUST（必须）避免直接杀死活动 Job；排空超时且未显式 force 时 MUST（必须）保留旧 backend 和旧 active revision。共享 Backend MUST 遵守完整组前置校验与排空；candidate promotion proof MUST 只提交发起 target 的匹配 pending candidate，其它 mount MUST 通过唯一 Gateway registry 按 target ID 与 Backend `workspace_id` 解析 root binding，并验证各自 UUID 与健康，MUST NOT 被顺带 promotion。候选失败 MUST 恢复完整旧组与旧 mount 集合；恢复失败 MUST 按原配置副作用合同进入 `recovery_required`，MUST NOT 仅恢复发起成员并伪报全组成功。
 
 #### Scenario: 无活动阻塞项
 

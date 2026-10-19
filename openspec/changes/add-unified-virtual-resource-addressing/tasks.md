@@ -17,8 +17,8 @@
 
 ## 2. 三层分离与不变量
 
-- [ ] 2.1 定义三层职责的类型与持久化边界：`ResourceIdentity`（不透明、稳定、revision-free、不依赖激活工作区、持久化）、`URI`（可解析、持久化、允许悬空、禁 revision/hash）、`real path`（机器本地、临时、永不持久化、永不进模型可见载荷、永不跨 gateway 边界，仅作调用栈局部变量）。
-- [ ] 2.2 落实 **real path 不变量**的可机械检查：real path 出现在 API 响应体 / 持久化记录 / 模型可见载荷中即为缺陷；给出检查点（响应序列化前、记录落盘前、模型载荷组装前）与显式失败行为，禁止用脱敏或截断静默掩盖。
+- [ ] 2.1 定义三层职责的类型与持久化边界：`ResourceIdentity`（不透明、稳定、revision-free、不依赖激活工作区、持久化）、`URI`（可解析、持久化、允许悬空、禁 revision/hash）、`real path`（资源访问只在原生 owner 的最终点临时使用，不进模型、普通 DTO、解析结果或跨 Gateway 资源投影）；物理 workspace root 只按多工作区 change 的唯一 Gateway binding 持久化。
+- [ ] 2.2 落实 **real path 不变量**的可机械检查：资源响应、普通 DTO、解析结果、联邦资源投影、业务持久化记录或模型载荷出现 real path 即为缺陷；唯一 root binding 与经 `add-multi-workspace-backend-mounting` 唯一 root-binding requirement 授权、送达原生 owner 的注册输入按具名例外处理，并给出序列化/落盘/模型组装检查点与显式失败行为，禁止用脱敏或截断静默掩盖。
 - [ ] 2.3 落实 **identity 独立于 URI**：同逻辑名跨两个不同 scope（如 `user` 与某个 `workspace`）为两个不同 identity；跨来源等价/覆盖是独立 concern；给出「覆盖只影响后续解析与 catalog 快照、既有 identity 与已封存绑定稳定」的验证点。
 - [ ] 2.4 落实 **「locator 是输入，不是输出」**不变量：解析命中（含跨 gateway）只返回稳定身份与内容，返回值 MUST NOT 携带 locator；给出可机械检查点。
 - [ ] 2.5 落实 requirement「「位置」必须有可机械判定的统一判据」（`spec.md:42`，5 条 Scenario）：把「能不能经确定性推导直接用于 fs/sqlite 访问」与「是否属 owner 自身运行态字段」判据做成唯一判定来源，覆盖「可由 owner 身份推导的位置不落盘」「不可推导但需寻址时用既有 API 端点」「owner 运行态字段以工作区内相对路径持久化」「判据可机械判定」「配置应用事件的路径字段不是位置」五条。**该 requirement 被 `add-workspace-persistent-resource-management` 强引用**（其 `specs/workspace-persistent-resources/spec.md:35` 与 D-A2/D-A3 明写「引用本 requirement、MUST NOT 另立一套判据」），故本 change 作为 owner MUST 有可机械判定验收；门槛：五条 Scenario 各至少一条断言，且 D-A2/D-A3 消费方按本判据接线。
@@ -63,7 +63,7 @@
 ## 7. 验证与收口
 
 - [ ] 7.1 增加统一构造/解析矩阵：固定 resources/scope_id、身份闭集和大小写 profile、技能根/SKILL.md/多层child、files/root、中文/空格/点号/字面百分号、合法 escape 规范化与只解码一次；拒绝无效 escape/UTF-8/编码分隔符/点段/控制字符/query/fragment，未登记 scope/kind和错误 scope组合显式失败。身份版本的既有编码规则不因文件 profile 改变。
-- [ ] 7.2 增加三层分离与不变量测试：real path 外泄即缺陷（响应体/持久化/模型载荷三处检查点）、URI 悬空合法、revision 不进 URI、identity 不承担寻址、同名跨 scope 是两个 identity、locator 不在解析输出中；内部聚合必填null在publish/seal/restart/fork/hash中一致，缺字段/空字符串/非法非空地址仍拒绝、不降级null、不伪造默认地址或额外展示内部身份。
+- [ ] 7.2 增加三层分离与不变量测试：real path 外泄即缺陷（普通响应/DTO、业务持久化、模型载荷与解析输出检查点；唯一 Gateway root binding 和按 `add-multi-workspace-backend-mounting` requirement 授权的注册输入按具名例外核验）、URI 悬空合法、revision 不进 URI、identity 不承担寻址、同名跨 scope 是两个 identity、locator 不在解析输出中；内部聚合必填null在publish/seal/restart/fork/hash中一致，缺字段/空字符串/非法非空地址仍拒绝、不降级null、不伪造默认地址或额外展示内部身份。
 - [ ] 7.3 增加 scope_id 推导测试：`gateway`/`inline` 的 scope_id 不再是字面量 `local` 且两者不再相同；`inline` 使用真实 `distribution_id` 并按 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」的编码规则单射（不同 (distribution, version) 必得不同 scope_id，由 version charset 不含下划线保证）、跨安装路径稳定、manifest 缺字段时 fail-closed；`gateway` 按 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」验证「按请求注入而非进程级单例」「缺失/非法时 fail-closed」「MUST NOT 用 host:port/监听端口」；`user` 恒为 `local`。
 - [ ] 7.4 增加星型解析与失败语义测试：authority 缺省与本机 gateway_id 同解、hub 直连直接 spoke、spoke 经唯一 hub 一次有界 transit、上界与 deadline 为 policy 常量且超限显式失败、不可达/未共享/未知 gateway 分别返回集中登记的**联邦解析期**拒绝码（`federation-channel-closed`/`target_not_resolvable`/`federation-unknown-peer`）、「未授权存在」与「不存在」不可区分、不递归转发。
 - [ ] 7.5 增加拒绝码登记测试：grammar、resolve 与联邦解析期三套闭集各自独立、未登记码构造即失败、三套不混用、其它模块无自造同义码。
@@ -74,9 +74,10 @@
 
 - [x] 8.1 在唯一寻址 owner 实现 directory/file/domain_object shape、公布的 child path 和操作能力，登记 files/root 工作区根、技能包根及单文件边界；不把 Session/assembly/config私有存储转成目录，不动态装配资源插件。
 - [x] 8.2 完成技能包根、SKILL.md 与 references/scripts多层child的单一构造/解析；使用第1.4/7.1组分段编码，验证根 containment及越界symlink拒绝，目录可导航不等于可写。
-- [x] 8.3 接入 files/root 唯一工作区文件树根，明确固定 workspace_id/Gateway/root，不依赖激活态；普通 ls/search/read 不注册每个文件的长期身份、revision或快照，只有显式来源追踪由原owner登记。
+- [x] 8.3 为 Workspace 文件树登记 `files/root` 根资源，并按显式固定的 `workspace_id` 解析；不以当前激活态补充身份。普通 ls/search/read 不为每个文件登记长期身份、revision 或快照，显式来源追踪仍由原 owner 登记。本项仅记录已实现的 `files/root` 登记与解析范围，不表示物理根已由原生 Gateway root binding 提供，也不证明 URI、解析结果或普通 DTO 不含真实路径；这些边界仍由未勾选的 8.6、7.2 等项验收。
 - [x] 8.4 在本 owner 登记 Session 产物单文件模板：`session/{session_id}/attachments/{attachment_id}`、`session/{session_id}/tool-results/{result_id}`；保留业务 ID 的既有 profile，原owner决定读取/授权/保留，不允许目录猜测或通用修改。消费迁移归 add-unified-resource-file-tools。
 - [ ] 8.5 为本地/远端目录结果、Skill读取无activation、轻量搜索无注册、固定目标、文件能力拒绝和路径编码逐项留生产验收；文件执行错误归其独立owner合同，寻址错误仍只在本登记处。先固定本公共合同，再交独立文件工具消费change，不以规范修订勾实现。
+- [ ] 8.6 验收 files/root 的 root-binding 边界：原生 Gateway 唯一 registry 按 target 与 `workspace_id` 提供根；本地 managed token 或经目标 Gateway 现有 federation policy 授权的 `managed_workspace_admin` 注册输入可送达该 owner，权限合同以 `add-multi-workspace-backend-mounting` 为准；解析结果、跨 Gateway 投影、模型载荷与普通 Workspace DTO 不含根路径，缺失 binding 或身份不符明确失败且不扫描/猜根。
 
 ## 9. Fork容器寻址与统一资源目标检查（2026-10-13，待实施）
 
