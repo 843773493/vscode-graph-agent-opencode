@@ -49,7 +49,10 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.skill_c
     skill_catalog_from_activation,
 )
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
-from app.services.orchestration.resource_activation import ResourceActivationCoordinator
+from app.services.orchestration.resource_activation import (
+    ResourceActivationCoordinator,
+    ResourceActivationError,
+)
 from app.services.orchestration.resource_activation.contracts import (
     reset_current_execution_resource_activation,
     set_current_execution_resource_activation,
@@ -88,12 +91,7 @@ def factory_context(registry_db, request, monkeypatch):
     registry = ResourceRegistry(
         publication_lock=owner.publication_lock, capture_validator=owner.validate_resource_capture,
     )
-    catalog = build_workspace_skill_catalog(
-        workspace,
-        registry=registry,
-        file_registry=platform.file_registry,
-        bundled_skill_groups=(),
-    )
+    monkeypatch.setenv("BOXTEAM_DEFAULT_SKILL_GROUPS", "[]")
     coordinator = ResourceActivationCoordinator(
         registry=registry, saver=saver,
         body_store=ResourceActivationBodyStore(saver._storage, saver._detail_store),
@@ -133,7 +131,7 @@ def factory_context(registry_db, request, monkeypatch):
         session_service=sessions, session_orchestrator=MagicMock(),
         session_subagent_service=MagicMock(), session_context_query_service=MagicMock(),
         workspace_session_context_client=MagicMock(), config_service=config,
-        workspace_root=workspace, skill_catalog=catalog, middleware=[],
+        workspace_root=workspace, workspace_file_resource_registry=platform.file_registry, middleware=[],
         resource_registry=registry, resource_activation=coordinator,
         mcp_catalog_owner=owner, reactor_lifetime_scope=scope,
     )
@@ -255,6 +253,51 @@ def test_unregistered_system_prompt_is_rejected_before_seal(factory_context):
         dispatch("unregistered", system_message=SystemMessage(content="未登记说明"))
     assert manager.prepare_pending() == before
     assert connection.execute("SELECT count(*) FROM context_assemblies").fetchone() == (0,)
+
+
+def test_factory_skill_graph_blocks_required_capture_and_recovers_without_semantic_change(
+    factory_context, monkeypatch,
+):
+    saver, session, thread, _connection, _selection, _manager, captured, _registered, dispatch, files = factory_context
+    dispatch("skill-graph-initial")
+    bridge = captured["middleware"][-1]
+    coordinator = bridge._resource_activation
+    registry = coordinator._registry
+    resource_id = "skill-entry:workspace:example:activation"
+    catalog_id = "skill-entry:workspace:catalog:catalog"
+    spec = registry.descriptor(resource_id)
+    assert spec.loader_version == "skill-frontmatter:v1"
+    assert spec.source_ids == ("skill-source:workspace:example",)
+    assert resource_id in registry.descriptor(catalog_id).dependency_resource_ids
+    original = registry.snapshot(resource_id)
+    source = files.workspace_root / ".boxteam/skills/example/SKILL.md"
+    valid = source.read_bytes()
+    source.write_bytes(b"---\nname: example\n---\ninvalid\n")
+    assert spec.display_uri is not None
+    files.refresh(spec.display_uri)
+    monkeypatch.setattr(coordinator, "_wait_seconds", 0)
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="description"):
+            build_workspace_skill_catalog(files.workspace_root, registry=registry, file_registry=files, bundled_skill_groups=())
+        assert registry.snapshot(resource_id).retained_revision == original.revision
+        assert registry.last_valid_snapshot(resource_id) is original
+        with pytest.raises(ResourceActivationError, match="required snapshot"):
+            asyncio.run(coordinator._await_required_snapshots(ResourceActivationPolicySnapshot(default_boundary="turn", boundaries={}), boundary="turn"))
+    # 已 seal 的 assembly 仍只消费自身冻结正文。
+    sealed = saver._storage.assemblies.list_context_assemblies(session, thread)[-1]
+    frozen = saver.load_sealed_resource_activation(
+        session, thread_id=thread, assembly_id=sealed.assembly_id,
+        plan_hash=sealed.plan_hash, request_hash=sealed.request_hash,
+    )
+    restored = skill_catalog_from_activation(frozen, lambda snapshot, binding: saver.read_resource_activation_payload(snapshot, binding, storage_owner=(session, thread)))
+    assert restored is not None and restored.entries["example"].body == original.payload["body"]
+    source.write_bytes(valid)
+    files.refresh(spec.display_uri)
+    recovered = build_workspace_skill_catalog(files.workspace_root, registry=registry, file_registry=files, bundled_skill_groups=())
+    assert registry.snapshot(resource_id).available
+    assert registry.snapshot(resource_id).revision == original.revision
+    assert recovered.catalog_snapshot.available
+    asyncio.run(coordinator._await_required_snapshots(ResourceActivationPolicySnapshot(default_boundary="turn", boundaries={}), boundary="turn"))
 
 
 def test_frozen_skill_tool_uses_durable_body_after_live_catalog_changes(

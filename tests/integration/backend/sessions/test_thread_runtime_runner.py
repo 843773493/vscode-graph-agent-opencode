@@ -2262,6 +2262,7 @@ async def test_real_runner_refreshes_tracked_skill_in_same_generation_and_stops_
     catalog_id = "skill-entry:workspace:catalog:catalog"
     original_catalog = registry.snapshot(catalog_id)
     original_activation = registry.snapshot(activation_id)
+    original_metadata = registry.snapshot(metadata_id)
     uri = original_activation.display_uri
     assert uri is not None
     original_source = file_registry.snapshot(uri)
@@ -2299,7 +2300,15 @@ async def test_real_runner_refreshes_tracked_skill_in_same_generation_and_stops_
     assert unavailable_catalog.error is not None and "description" in unavailable_catalog.error
     assert unavailable_catalog.payload is None
     assert unavailable_catalog.retained_revision == original_catalog.revision
-    assert registry.snapshot(activation_id) == original_activation
+    assert registry.last_valid_snapshot(catalog_id) == original_catalog
+    unavailable_activation = registry.snapshot(activation_id)
+    assert not unavailable_activation.available and unavailable_activation.payload is None
+    assert unavailable_activation.retained_revision == original_activation.revision
+    assert registry.last_valid_snapshot(activation_id) == original_activation
+    unavailable_metadata = registry.snapshot(metadata_id)
+    assert not unavailable_metadata.available and unavailable_metadata.payload is None
+    assert unavailable_metadata.retained_revision == original_metadata.revision
+    assert registry.last_valid_snapshot(metadata_id) == original_metadata
     assert invalid_source.revision != original_source.revision
 
     skill_file.write_text(frontmatter + new_body, encoding="utf-8", newline="")
@@ -2454,12 +2463,17 @@ async def test_real_runner_discovers_skill_overrides_and_downgrades_without_rebi
     file_registry = case.runner.container.workspace_file_resource_registry
     catalog_id = "skill-entry:workspace:catalog:catalog"
     gateway_uri = f"boxteam://gateway/{gateway_id}/resources/skills/{name}/SKILL.md"
+    gateway_request_number = 0
 
     async def complete_with_gateway():
+        nonlocal gateway_request_number
+        gateway_request_number += 1
         token = set_current_gateway_id(gateway_id)
+        request_token = set_current_request_id(f"skill-directory-request-{session_id}-{gateway_request_number}")
         try:
             return await _complete_job(case, session_id, thread_id, timeout_seconds=25)
         finally:
+            reset_current_request_id(request_token)
             reset_current_gateway_id(token)
 
     # 首次编译时 Gateway skills 根尚不存在；后续新建也必须被现有共享 watcher 接受。
@@ -2557,9 +2571,11 @@ async def test_real_runner_discovers_skill_overrides_and_downgrades_without_rebi
     await wait_for_layer("workspace", extra=False)
     before_failure = len(case.model_requests)
     token = set_current_gateway_id(gateway_id)
+    request_token = set_current_request_id(f"skill-directory-rejected-request-{session_id}")
     try:
         job = await _start_job(case.runner, "user", session_id, thread_id)
     finally:
+        reset_current_request_id(request_token)
         reset_current_gateway_id(token)
     assert job.task is not None
     await asyncio.wait_for(asyncio.shield(job.task), 25)

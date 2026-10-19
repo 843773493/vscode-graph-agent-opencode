@@ -5,7 +5,9 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from app.agents.builtin_tool_registry import resolve_builtin_tool_factory
-from app.agents.skill_frontmatter import SKILL_NAME_PATTERN
+from app.services.business.resource_derivations.skill_frontmatter import (
+    SKILL_NAME_PATTERN,
+)
 
 _CUSTOM_TOOL_NAME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9._-]{1,63}$")
 _FACTORY_PATH_PATTERN = re.compile(

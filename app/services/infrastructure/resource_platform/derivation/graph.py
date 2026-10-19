@@ -9,7 +9,6 @@ ResourceRegistry 已发布的快照(经 Protocol 解耦,不直接调用 reader);
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from app.domain.itemized.hashing import sha256_jcs
@@ -17,7 +16,6 @@ from app.services.infrastructure.resource_platform.derivation.types import (
     ResourceSnapshot,
     SemanticInput,
     SemanticLoader,
-    SemanticPayload,
     SemanticResourceDescriptor,
 )
 
@@ -28,22 +26,29 @@ if TYPE_CHECKING:
 
 
 @runtime_checkable
+class AcceptedSourceRevision(Protocol):
+    """来源 owner 已接受的最小不可变值，不包含 locator 或读取能力。"""
+
+    @property
+    def revision(self) -> str: ...
+
+    @property
+    def content(self) -> object: ...
+
+    @property
+    def available(self) -> bool: ...
+
+    @property
+    def error(self) -> str | None: ...
+
+
+@runtime_checkable
 class ObservedRevisionSource(Protocol):
     """graph 需要的 reconciler 窄接口;不暴露 reader 与 locator。"""
 
-    def observed_revision(self, source_id: str) -> object:
+    def observed_revision(self, source_id: str) -> AcceptedSourceRevision:
         """返回已发布的不可变来源 revision;未 observe 过时抛 KeyError。"""
         ...
-
-
-def _invoke_loader(
-    loader: SemanticLoader, inputs: Mapping[str, SemanticInput],
-) -> SemanticPayload:
-    """统一调用 loader:带 load 方法的 port 对象或纯函数均可。"""
-    load = getattr(loader, "load", None)
-    if callable(load):
-        return load(inputs)
-    return loader(inputs)
 
 
 class _DerivationBlocked(Exception):
@@ -62,7 +67,7 @@ class ResourceDerivationGraph:
     - observe_source 由来源 owner 在 reconciler 发布新 revision 后调用,
       推进来源代际;发布要求全部输入同一 generation;
     - publish 对单 facet 做语义 diff:payload 的 JCS hash 未变时不推进
-      语义 revision、不重新发布(CAS 幂等)。
+      语义 revision；lineage 和可用性仍按完整值发布(CAS 幂等)。
     """
 
     def __init__(
@@ -75,11 +80,14 @@ class ResourceDerivationGraph:
         self._registry = registry
         self._specs: dict[str, SemanticResourceDescriptor] = {}
         self._loaders: dict[str, SemanticLoader] = {}
-        # 代际在每次成功发布时推进;unavailable 快照沿用当前代际。
-        self._generation = 0
+        # 重建图仍延续同一 Registry 的发布代际，不能让来源刷新回退至零。
+        self._generation = max(
+            (snapshot.generation for snapshot in registry.snapshots()), default=0,
+        )
 
     def register(
-        self, spec: SemanticResourceDescriptor, loader: SemanticLoader
+        self, spec: SemanticResourceDescriptor, loader: SemanticLoader,
+        *, expected: SemanticResourceDescriptor | None = None,
     ) -> None:
         """代码内注册 derivation 规范与版本化 loader;重复注册同 id 冲突。"""
         if not isinstance(spec, SemanticResourceDescriptor):
@@ -91,9 +99,13 @@ class ResourceDerivationGraph:
         if spec.resource_id in self._specs:
             raise ValueError(f"语义资源重复注册: resource_id={spec.resource_id}")
         self._specs[spec.resource_id] = spec
+        try:
+            self._topological_order()
+            self._registry.register_descriptor(spec, expected=expected)
+        except BaseException:
+            del self._specs[spec.resource_id]
+            raise
         self._loaders[spec.resource_id] = loader
-        self._ensure_acyclic()
-        self._registry.register_descriptor(spec)
 
     def specs(self) -> tuple[SemanticResourceDescriptor, ...]:
         return tuple(self._specs.values())
@@ -117,19 +129,13 @@ class ResourceDerivationGraph:
         spec = self._specs.get(resource_id)
         if spec is None:
             raise KeyError(f"语义资源尚未注册: resource_id={resource_id}")
-        self._ensure_acyclic()
+        self._topological_order()
         try:
             inputs = self._collect_inputs(spec)
         except _DerivationBlocked as blocked:
             return self._publish_unavailable(spec, blocked)
         loader = self._loaders[resource_id]
-        try:
-            payload = _invoke_loader(loader, inputs)
-        except (TypeError, ValueError) as error:
-            return self._publish_unavailable(
-                spec,
-                _DerivationBlocked("loader-error", f"语义 loader 失败: {error}"),
-            )
+        payload = loader(inputs)
         if not payload.available:
             return self._publish_unavailable(
                 spec,
@@ -144,10 +150,15 @@ class ResourceDerivationGraph:
             raise ValueError(
                 f"语义 loader 的 payload 不是 JSON value: resource_id={resource_id}"
             ) from error
-        previous = self._previous_valid(resource_id)
-        if previous is not None and previous.revision == revision:
-            # facet payload 未变:不推进语义 revision,不重新发布。
-            return previous
+        lineage = tuple(sorted(
+            (identity, item.revision) for identity, item in inputs.items()
+        ))
+        current = self._current_snapshot(resource_id)
+        if (
+            current is not None and current.available
+            and current.revision == revision and current.source_lineage == lineage
+        ):
+            return current
         self._generation += 1
         snapshot = ResourceSnapshot(
             resource_id=resource_id,
@@ -156,18 +167,23 @@ class ResourceDerivationGraph:
             display_uri=spec.display_uri,
             revision=revision,
             payload=payload.payload,
-            source_lineage=tuple(sorted(
-                (identity, item.revision) for identity, item in inputs.items()
-            )),
+            source_lineage=lineage,
             generation=self._generation,
         )
         return self._registry.publish(snapshot)
 
     def publish_all(self) -> tuple[ResourceSnapshot, ...]:
         """对全部已注册语义资源做一次有界派生(不扫描、不递归文件系统)。"""
-        return tuple(
-            self.publish(resource_id) for resource_id in tuple(self._specs)
-        )
+        with self._registry.publication():
+            try:
+                return tuple(
+                    self.publish(resource_id) for resource_id in self._topological_order()
+                )
+            except Exception as error:
+                # 部分 facet 已推进时也必须先阻断整批 required，再暴露程序缺陷。
+                for spec in self._specs.values():
+                    self._publish_unavailable(spec, _DerivationBlocked("loader-error", f"语义派生图求值失败: {type(error).__name__}"))
+                raise
 
     def _collect_inputs(
         self, spec: SemanticResourceDescriptor,
@@ -181,11 +197,10 @@ class ResourceDerivationGraph:
                     "dependency-missing",
                     f"来源尚未 observe: source_id={source_id}",
                 ) from error
-            if not getattr(observed, "available", False):
+            if not observed.available:
                 raise _DerivationBlocked(
                     "source-unavailable",
-                    "来源 revision 不可用: "
-                    + f"source_id={source_id} error={getattr(observed, 'error', None)}",
+                    f"来源 revision 不可用: source_id={source_id}",
                 )
             inputs[source_id] = SemanticInput(
                 identity=source_id,
@@ -231,15 +246,28 @@ class ResourceDerivationGraph:
         lineage = dict(dependency.source_lineage)
         for upstream_source in dependency_spec.source_ids:
             try:
-                current = self._reconciler.observed_revision(upstream_source).revision
+                source = self._reconciler.observed_revision(upstream_source)
             except KeyError:
-                current = None
-            if lineage.get(upstream_source) != current:
+                source = None
+            if (
+                source is None or not source.available
+                or lineage.get(upstream_source) != source.revision
+            ):
                 raise _DerivationBlocked(
                     "generation-mismatch",
                     "依赖快照落后于来源当前 revision: "
                     + f"resource_id={dependency_id} source_id={upstream_source}",
                 )
+        for upstream_id in dependency_spec.dependency_resource_ids:
+            current = self._current_snapshot(upstream_id)
+            if current is None or not current.available or (
+                lineage.get(upstream_id) != current.revision
+            ):
+                raise _DerivationBlocked(
+                    "generation-mismatch",
+                    f"依赖快照落后于上游发布: resource_id={dependency_id} dependency={upstream_id}",
+                )
+            self._ensure_dependency_fresh(upstream_id, current)
 
 
     def _publish_unavailable(
@@ -265,14 +293,20 @@ class ResourceDerivationGraph:
 
     def _previous_valid(self, resource_id: str) -> ResourceSnapshot | None:
         try:
-            snapshot = self._registry.snapshot(resource_id)
+            return self._registry.last_valid_snapshot(resource_id)
         except KeyError:
             return None
-        return snapshot if snapshot.available else None
 
-    def _ensure_acyclic(self) -> None:
+    def _current_snapshot(self, resource_id: str) -> ResourceSnapshot | None:
+        try:
+            return self._registry.snapshot(resource_id)
+        except KeyError:
+            return None
+
+    def _topological_order(self) -> tuple[str, ...]:
         """对全部已注册规范做 DFS 无环校验;依赖成环显式失败。"""
         state: dict[str, int] = {}
+        ordered: list[str] = []
 
         def visit(resource_id: str, trail: tuple[str, ...]) -> None:
             marker = state.get(resource_id)
@@ -289,6 +323,8 @@ class ResourceDerivationGraph:
             for dependency_id in spec.dependency_resource_ids:
                 visit(dependency_id, (*trail, resource_id))
             state[resource_id] = 2
+            ordered.append(resource_id)
 
         for resource_id in tuple(self._specs):
             visit(resource_id, ())
+        return tuple(ordered)

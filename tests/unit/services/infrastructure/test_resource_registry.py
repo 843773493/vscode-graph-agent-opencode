@@ -145,7 +145,8 @@ def test_fan_out_facets_advance_independently(tmp_path: Path) -> None:
     metadata_v2 = graph.publish("skill:demo:metadata")
     activation_still = graph.publish("skill:demo:activation")
     assert metadata_v2.revision != metadata_v1.revision
-    assert activation_still is activation_v1
+    assert activation_still.revision == activation_v1.revision
+    assert activation_still.source_lineage == metadata_v2.source_lineage
 
     # 只改正文:activation 推进,metadata 不推进。
     source.write_text("description: v2\n---\nbody v2\n", encoding="utf-8")
@@ -153,7 +154,8 @@ def test_fan_out_facets_advance_independently(tmp_path: Path) -> None:
     graph.observe_source("src-skill")
     metadata_still = graph.publish("skill:demo:metadata")
     activation_v2 = graph.publish("skill:demo:activation")
-    assert metadata_still is metadata_v2
+    assert metadata_still.revision == metadata_v2.revision
+    assert metadata_still.source_lineage == activation_v2.source_lineage
     assert activation_v2.revision != activation_v1.revision
 
     # 只改被忽略的 frontmatter 字段:来源 raw revision 推进,两个 facet 都不推进。
@@ -161,12 +163,13 @@ def test_fan_out_facets_advance_independently(tmp_path: Path) -> None:
     _reconcile_skill(reconciler)
     source_revision = reconciler.observed_revision("src-skill").revision
     graph.observe_source("src-skill")
-    assert graph.publish("skill:demo:metadata") is metadata_v2
-    assert graph.publish("skill:demo:activation") is activation_v2
-    # 来源 lineage 仍绑定当前 raw revision,但语义 revision 未变。
-    assert metadata_v2.source_lineage != (
-        (("src-skill", source_revision)),
-    )
+    metadata_ignored = graph.publish("skill:demo:metadata")
+    activation_ignored = graph.publish("skill:demo:activation")
+    assert metadata_ignored.revision == metadata_v2.revision
+    assert activation_ignored.revision == activation_v2.revision
+    assert metadata_ignored.source_lineage == (("src-skill", source_revision),)
+    assert activation_ignored.source_lineage == metadata_ignored.source_lineage
+    assert graph.publish("skill:demo:metadata") is metadata_ignored
 
 
 def test_fan_in_multiple_sources_one_resource(tmp_path: Path) -> None:
@@ -284,18 +287,6 @@ def test_publish_all_follows_topological_order(tmp_path: Path) -> None:
     graph.register(
         SemanticResourceDescriptor(
             resource_kind="skills",
-            resource_id="agents:content",
-            facet="content",
-            display_uri="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
-            source_ids=("src-agents",),
-        ),
-        lambda inputs: SemanticPayload(
-            payload={"content": inputs["src-agents"].content}
-        ),
-    )
-    graph.register(
-        SemanticResourceDescriptor(
-            resource_kind="skills",
             resource_id="agents:projected",
             facet="projected",
             display_uri="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
@@ -303,6 +294,18 @@ def test_publish_all_follows_topological_order(tmp_path: Path) -> None:
         ),
         lambda inputs: SemanticPayload(
             payload={"projected": inputs["agents:content"].content}
+        ),
+    )
+    graph.register(
+        SemanticResourceDescriptor(
+            resource_kind="skills",
+            resource_id="agents:content",
+            facet="content",
+            display_uri="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
+            source_ids=("src-agents",),
+        ),
+        lambda inputs: SemanticPayload(
+            payload={"content": inputs["src-agents"].content}
         ),
     )
     reconciler.reconcile("src-agents")
@@ -334,8 +337,21 @@ def test_source_unavailable_retains_last_valid(tmp_path: Path) -> None:
     assert unavailable.error_code == "source-unavailable"
     assert unavailable.retained_revision == valid.revision
     assert unavailable.payload is None
+    assert str(source) not in repr(unavailable)
+    source_failure = reconciler.observed_revision("src-skill")
+    assert source_failure.error_code == "invalid_utf8"
+    assert source_failure.error is not None and str(source) in source_failure.error
     # 旧 valid 快照仍可审计,不冒充新版本。
     assert registry.last_valid_snapshot("skill:demo:metadata") is valid
+    repeated = graph.publish("skill:demo:metadata")
+    assert repeated.retained_revision == valid.revision
+    assert registry.last_valid_snapshot("skill:demo:metadata") is valid
+
+    source.write_text("description: v1\n---\nbody\n", encoding="utf-8")
+    _reconcile_skill(reconciler)
+    restored = graph.publish("skill:demo:metadata")
+    assert restored.available and restored.revision == valid.revision
+    assert registry.snapshot("skill:demo:metadata") is restored
 
     source.write_text("description: v2\n---\nbody\n", encoding="utf-8")
     _reconcile_skill(reconciler)
@@ -380,6 +396,108 @@ def test_loader_failure_marks_unavailable_and_keeps_old(tmp_path: Path) -> None:
     assert failed.error_code == "loader-error"
     assert failed.retained_revision == valid.revision
     assert registry.last_valid_snapshot("skill:demo:metadata") is valid
+
+
+def test_loader_defect_blocks_the_whole_publication_and_is_not_swallowed(tmp_path: Path) -> None:
+    source = tmp_path / "SKILL.md"
+    source.write_text("v1", encoding="utf-8")
+    reconciler = SourceReconciler(handles={"src": _skill_source("src", source, tmp_path)})
+    reconciler.reconcile("src")
+    registry = ResourceRegistry()
+    graph = ResourceDerivationGraph(reconciler=reconciler, registry=registry)
+    state = {"fail": False}
+    defect = ValueError(f"loader 程序缺陷: {source}")
+
+    def load(inputs):
+        if state["fail"]:
+            raise defect
+        return SemanticPayload(payload={"content": inputs["src"].content})
+
+    for resource_id in ("first", "second"):
+        graph.register(SemanticResourceDescriptor(
+            resource_id=resource_id, resource_kind="skill", facet="metadata", display_uri=None,
+            source_ids=("src",),
+        ), load)
+    valid = graph.publish_all()
+    state["fail"] = True
+    with pytest.raises(ValueError, match="程序缺陷") as caught:
+        graph.publish_all()
+    assert caught.value is defect
+    for previous in valid:
+        current = registry.snapshot(previous.resource_id)
+        assert not current.available and current.retained_revision == previous.revision
+        assert current.error == "语义派生图求值失败: ValueError"
+        assert str(source) not in repr(current)
+        assert registry.last_valid_snapshot(previous.resource_id) is previous
+
+
+def test_registry_replaces_only_the_expected_dependency_descriptor() -> None:
+    registry = ResourceRegistry()
+    original = SemanticResourceDescriptor(
+        resource_id="catalog", resource_kind="skill", facet="catalog", display_uri=None,
+        dependency_resource_ids=("first",),
+    )
+    registry.register_descriptor(original)
+    candidate = replace(original, dependency_resource_ids=("second",))
+    with pytest.raises(ValueError, match="描述冲突"):
+        registry.register_descriptor(candidate)
+    registry.register_descriptor(candidate, expected=original)
+    assert registry.descriptor("catalog") is candidate
+    with pytest.raises(ValueError, match="描述冲突"):
+        registry.register_descriptor(original, expected=original)
+    with pytest.raises(ValueError, match="身份不可替换"):
+        registry.register_descriptor(replace(candidate, facet="metadata"), expected=candidate)
+
+
+def test_graph_publication_hides_a_partially_updated_facet_batch(tmp_path: Path) -> None:
+    source = tmp_path / "SKILL.md"
+    source.write_text("v1", encoding="utf-8")
+    reconciler = SourceReconciler(handles={"src": _skill_source("src", source, tmp_path)})
+    reconciler.reconcile("src")
+    registry = ResourceRegistry()
+    graph = ResourceDerivationGraph(reconciler=reconciler, registry=registry)
+    inside_second = Event()
+    release = Event()
+    capture_started = Event()
+    state = {"pause": False}
+
+    def first(inputs):
+        return SemanticPayload(payload={"body": inputs["src"].content})
+
+    def second(inputs):
+        if state["pause"]:
+            inside_second.set()
+            assert release.wait(2)
+        return first(inputs)
+
+    for resource_id, loader in (("first", first), ("second", second)):
+        graph.register(SemanticResourceDescriptor(
+            resource_id=resource_id, resource_kind="skill", facet="activation", display_uri=None,
+            source_ids=("src",),
+        ), loader)
+    graph.publish_all()
+    source.write_text("v2", encoding="utf-8")
+    reconciler.reconcile("src")
+    state["pause"] = True
+
+    def capture():
+        capture_started.set()
+        return registry.capture()
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        publishing = workers.submit(graph.publish_all)
+        try:
+            assert inside_second.wait(1)
+            captured = workers.submit(capture)
+            assert capture_started.wait(1)
+            with pytest.raises(FutureTimeoutError):
+                captured.result(timeout=0.05)
+        finally:
+            release.set()
+        assert len(publishing.result(timeout=1)) == 2
+        snapshots = captured.result(timeout=1).snapshots
+    assert len(snapshots) == 2
+    assert all(snapshot.payload == {"body": "v2"} for snapshot in snapshots)
 
 
 def test_cas_publish_is_idempotent(tmp_path: Path) -> None:

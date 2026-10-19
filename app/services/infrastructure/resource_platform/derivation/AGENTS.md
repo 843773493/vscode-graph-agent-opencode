@@ -18,6 +18,6 @@
 
 # 规范
 
-- 来源 revision 与语义 revision 分离：语义 revision 只由 facet payload 的 JCS hash 决定，payload 不变不推进、不重发布。
+- 来源 revision 与语义 revision 分离：语义 revision 只由 facet payload 的 JCS hash 决定；payload 不变不推进语义 revision，来源 lineage 或可用性改变时仍发布完整新值。
 - 依赖缺失、依赖成环、混合 generation、来源 unavailable 都必须显式 unavailable 并保留旧 valid 快照可审计。
 - loader 失败/无效输入由 loader 以 SemanticPayload(available=False) 显式返回；loader 自身缺陷直接抛出。

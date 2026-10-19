@@ -335,7 +335,9 @@ class SourceReconciler:
         error: StableSourceReadError,
     ) -> ObservedSourceRevision:
         previous = self._revisions.get(source_id)
-        previous_valid = previous is not None and previous.available
+        previous_valid = previous is not None and (
+            previous.available or previous.retained_revision is not None
+        )
         retained = previous.revision if previous_valid else None
         return ObservedSourceRevision(
         source_id=source_id,

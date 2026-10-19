@@ -8,7 +8,8 @@ locator/handle 归实际 owner 私有。完整发布值相同才幂等返回既�
 from __future__ import annotations
 
 from _thread import RLock
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from app.services.infrastructure.resource_platform.derivation.types import (
@@ -43,7 +44,8 @@ class ResourceRegistry:
         self._last_valid: dict[str, ResourceSnapshot] = {}
 
     def register_descriptor(
-        self, descriptor: SemanticResourceDescriptor
+        self, descriptor: SemanticResourceDescriptor,
+        *, expected: SemanticResourceDescriptor | None = None,
     ) -> None:
         """登记或恢复语义资源描述；同 id 幂等，冲突显式失败。"""
         if not isinstance(descriptor, SemanticResourceDescriptor):
@@ -52,11 +54,23 @@ class ResourceRegistry:
             )
         with self._lock:
             existing = self._descriptors.get(descriptor.resource_id)
-            if existing is not None and existing != descriptor:
+            if existing != descriptor and existing != expected:
                 raise ValueError(
                     f"语义资源描述冲突: resource_id={descriptor.resource_id}"
                 )
+            if existing is not None and (
+                existing.resource_kind, existing.facet, existing.display_uri,
+            ) != (
+                descriptor.resource_kind, descriptor.facet, descriptor.display_uri,
+            ):
+                raise ValueError(f"语义资源身份不可替换: resource_id={descriptor.resource_id}")
             self._descriptors[descriptor.resource_id] = descriptor
+
+    @contextmanager
+    def publication(self) -> Iterator[None]:
+        """一批派生描述、facets 与聚合快照对 capture 原子可见。"""
+        with self._lock:
+            yield
 
     def descriptor(self, resource_id: str) -> SemanticResourceDescriptor:
         with self._lock:

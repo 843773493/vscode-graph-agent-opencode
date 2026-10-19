@@ -25,6 +25,7 @@ from app.core.trace_middleware import (
 )
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
+from app.services.business.resource_derivations.skills import SkillFacetLoader
 from app.services.infrastructure.resource_platform.derivation.types import (
     ResourceSnapshot,
 )
@@ -398,3 +399,129 @@ def test_published_snapshot_does_not_reresolve_current_file(
     assert rebuilt_entry.activation_revision != frozen_revision
     assert frozen.revision == frozen_revision
     assert frozen.payload == frozen_payload
+
+
+def test_graph_keeps_current_raw_lineage_when_ignored_fields_do_not_change_facets(
+    layered_workspace, file_registry,
+):
+    registry = ResourceRegistry()
+    first = _build(layered_workspace, registry, file_registry)
+    entry = next(item for item in first.entries if item.name == "shared")
+    before = registry.snapshot(entry.metadata_resource_id)
+    source = layered_workspace / ".boxteam/skills/shared/SKILL.md"
+    source.write_text(source.read_text().replace("---\nworkspace body", "ignored: audit\n---\nworkspace body"))
+    raw = file_registry.refresh(entry.display_uri)
+    current = _build(layered_workspace, registry, file_registry)
+    metadata = registry.snapshot(entry.metadata_resource_id)
+    activation = registry.snapshot(entry.activation_resource_id)
+    assert metadata.revision == before.revision
+    assert metadata.source_lineage != before.source_lineage
+    assert metadata.source_lineage == (("skill-source:workspace:shared", raw.revision),)
+    assert activation.source_lineage == metadata.source_lineage
+    assert activation.revision == entry.activation_revision
+    assert current.catalog_revision == first.catalog_revision
+    catalog_spec = registry.descriptor(current.catalog_snapshot.resource_id)
+    assert catalog_spec.loader_version == "skill-catalog:v1"
+    assert set(catalog_spec.source_ids) == set(current.directory_ids.values())
+    assert {entry.metadata_resource_id, entry.activation_resource_id} <= set(catalog_spec.dependency_resource_ids)
+    assert registry.descriptor(entry.metadata_resource_id).loader_version == "skill-frontmatter:v1"
+
+
+@pytest.mark.parametrize("invalid", [
+    b"\xff\xfe",
+    b"---\nname: shared\n---\ninvalid\n",
+    b"---\nname: shared\n  private-invalid-frontmatter\n---\ninvalid\n",
+])
+def test_graph_failure_preserves_audit_and_recovers_identical_skill_revision(
+    layered_workspace, file_registry, invalid, caplog,
+):
+    registry = ResourceRegistry()
+    original = _build(layered_workspace, registry, file_registry)
+    entry = next(item for item in original.entries if item.name == "shared")
+    source = layered_workspace / ".boxteam/skills/shared/SKILL.md"
+    valid_bytes = source.read_bytes()
+    resource_ids = (entry.metadata_resource_id, entry.activation_resource_id, original.catalog_snapshot.resource_id)
+    valid = {resource_id: registry.snapshot(resource_id) for resource_id in resource_ids}
+    source.write_bytes(invalid)
+    for _ in range(2):
+        file_registry.refresh(entry.display_uri)
+        with pytest.raises(RuntimeError) as caught:
+            _build(layered_workspace, registry, file_registry)
+        if invalid == b"\xff\xfe":
+            assert "invalid_utf8" in str(caught.value)
+            assert str(source) in str(caught.value)
+            raw_error = file_registry.snapshot(entry.display_uri).error
+            assert raw_error is not None and raw_error in str(caught.value)
+        elif b"private-invalid-frontmatter" in invalid:
+            assert entry.display_uri in caplog.text
+            assert "unsupported_structure" in caplog.text
+            assert "private-invalid-frontmatter" in caplog.text
+        for resource_id in resource_ids:
+            current = registry.snapshot(resource_id)
+            assert not current.available and current.payload is None
+            assert str(layered_workspace) not in repr(current)
+            assert "private-invalid-frontmatter" not in repr(current)
+            assert current.retained_revision == valid[resource_id].revision
+            assert registry.last_valid_snapshot(resource_id) is valid[resource_id]
+    source.write_bytes(valid_bytes)
+    file_registry.refresh(entry.display_uri)
+    recovered = _build(layered_workspace, registry, file_registry)
+    assert recovered.catalog_revision == original.catalog_revision
+    for resource_id in resource_ids:
+        current = registry.snapshot(resource_id)
+        assert current.available and current.retained_revision is None
+        assert current.revision == valid[resource_id].revision
+
+
+async def test_background_catalog_loader_defect_exposes_original_error_without_snapshot_leak(
+    layered_workspace, file_registry, monkeypatch,
+):
+    registry = ResourceRegistry()
+    sources = accepted_gateway_skill_sources(
+        skills_root=get_boxteam_home() / "skills", gateway_id=FAKE_GATEWAY_ID,
+        workspace_id=load_or_create_workspace_id(layered_workspace), observation_channel=file_registry.observation_channel,
+    )
+    catalog = build_workspace_skill_catalog(
+        layered_workspace, registry=registry, file_registry=file_registry, gateway_sources=sources,
+    )
+    valid = {item.resource_id: item for item in registry.snapshots()}
+    scope = LifetimeScope("catalog loader defect")
+    loop = asyncio.get_running_loop()
+    prior_handler = loop.get_exception_handler()
+    reported = []
+    loop.set_exception_handler(lambda _loop, context: reported.append(context))
+    source = layered_workspace / ".boxteam/skills/shared/SKILL.md"
+    defect = ValueError(f"loader 程序缺陷: {source} private-invalid-frontmatter")
+
+    def broken_loader(_loader, _inputs):
+        raise defect
+
+    try:
+        start_workspace_skill_catalog_publication(
+            catalog, registry=registry, file_registry=file_registry, lifetime_scope=scope, gateway_sources=sources,
+        )
+        monkeypatch.setattr(SkillFacetLoader, "__call__", broken_loader)
+        source.write_text(source.read_text() + "新正文\n")
+        uri = next(item.display_uri for item in catalog.entries if item.name == "shared")
+        file_registry.refresh(uri)
+        async with asyncio.timeout(1):
+            while not reported:
+                await asyncio.sleep(0)
+        assert reported[0]["exception"] is defect
+        for resource_id, previous in valid.items():
+            current = registry.snapshot(resource_id)
+            assert not current.available and current.payload is None
+            assert current.retained_revision == previous.revision
+            assert registry.last_valid_snapshot(resource_id) is previous
+            assert str(source) not in repr(current)
+            assert "private-invalid-frontmatter" not in repr(current)
+            assert "ValueError" in current.error
+    finally:
+        try:
+            with pytest.raises(ExceptionGroup) as caught:
+                await scope.close()
+            assert len(caught.value.exceptions) == 1
+            assert caught.value.exceptions[0].__cause__ is defect
+        finally:
+            loop.set_exception_handler(prior_handler)
+            await sources.close()

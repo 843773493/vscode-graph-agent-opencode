@@ -129,6 +129,10 @@ def test_unstable_read_exhausts_attempts_and_reconciler_retains_previous(
     assert unavailable.revision_kind == "file_byte_hash"
     assert unavailable.content == first.content
     assert unavailable.retained_revision == first.revision
+    repeated = reconciler.reconcile("src-1")
+    assert not repeated.available
+    assert repeated.retained_revision == first.revision
+    assert repeated.content == first.content
     monkeypatch.undo()
     source.write_text("v4\n", encoding="utf-8")
     recovered = reconciler.reconcile("src-1")

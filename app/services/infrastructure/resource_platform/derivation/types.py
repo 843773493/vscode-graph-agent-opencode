@@ -46,9 +46,10 @@ class SemanticResourceDescriptor:
     display_uri: str | None
     source_ids: tuple[str, ...] = ()
     dependency_resource_ids: tuple[str, ...] = ()
+    loader_version: str = "v1"
 
     def __post_init__(self) -> None:
-        for field_name in ("resource_id", "resource_kind", "facet"):
+        for field_name in ("resource_id", "resource_kind", "facet", "loader_version"):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value:
                 raise ValueError(
@@ -185,4 +186,4 @@ class SemanticLoader(Protocol):
     当前文件;同版本 loader 对相同输入必须产出相同 payload。
     """
 
-    def load(self, inputs: Mapping[str, SemanticInput]) -> SemanticPayload: ...
+    def __call__(self, inputs: Mapping[str, SemanticInput]) -> SemanticPayload: ...
