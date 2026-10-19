@@ -7417,32 +7417,37 @@ async def test_live_fork_published_startup_preserves_dispatch_and_commit_facts(
     cold_request = set_current_request_id(None)
     try:
         async with main.lifespan(main.app):
-            repeated = await restarted.session_context_fork_service.fork(request)
-            assert (repeated.session.session_id, repeated.thread_id) == (target_session, target_thread)
-            live = next(item for item in repeated.resources if item.owner_reference is not None)
-            current = live.owner_resource
-            assert external.creates == 1 and current.resource_id == rid
-            # 冷 recover 本身加一次版本；原冻结 CAS 不得自动换成新 revision。
-            assert current.owner_revision == resource["owner_revision"] + (2 if crash_phase == "committed" else 1)
-            assert len(external.revisions) == (2 if crash_phase == "committed" else 1)
-            if crash_phase == "before_attach":
-                assert live.operation_state == "rejected" and live.availability == "unavailable"
-                assert target_ref not in recovered_owner._store.records[rid].thread_associations
-            elif crash_phase == "dispatched":
-                assert live.operation_state == "dispatching" and live.availability == "unavailable"
-                assert target_ref not in recovered_owner._store.records[rid].thread_associations
-                assert current.reconciliation_status != "verified"
-            else:
-                assert live.operation_state == "committed" and live.committed_revision == resource["owner_revision"] + 1
-                assert target_ref in recovered_owner._store.records[rid].thread_associations
-                assert recovered_owner._leases.get_lease(receipt.lease_id).status == "released"
-                assert recovered_owner._leases.get_lease(unrelated.lease_id).status == "reconcile_required"
-                assert live.availability == "unavailable" and current.reconciliation_status != "verified"
-            revisions = list(external.revisions)
-            again = await restarted.session_context_fork_service.fork(request)
-            assert again.resources == repeated.resources and external.revisions == revisions
-            assert await restarted.session_context_fork_service.recover_prepared_forks() == 0
-            assert (await restarted.session_service.list(limit=100)).total == (2 if creation_kind == "new_session_main" else 1)
+            # lifespan 在无 HTTP context 下恢复；公开 replay 仍带真实路由的 Gateway 身份。
+            replay_gateway = set_current_gateway_id("compaction-fork-gateway")
+            try:
+                repeated = await restarted.session_context_fork_service.fork(request)
+                assert (repeated.session.session_id, repeated.thread_id) == (target_session, target_thread)
+                live = next(item for item in repeated.resources if item.owner_reference is not None)
+                current = live.owner_resource
+                assert external.creates == 1 and current.resource_id == rid
+                # 冷 recover 本身加一次版本；原冻结 CAS 不得自动换成新 revision。
+                assert current.owner_revision == resource["owner_revision"] + (2 if crash_phase == "committed" else 1)
+                assert len(external.revisions) == (2 if crash_phase == "committed" else 1)
+                if crash_phase == "before_attach":
+                    assert live.operation_state == "rejected" and live.availability == "unavailable"
+                    assert target_ref not in recovered_owner._store.records[rid].thread_associations
+                elif crash_phase == "dispatched":
+                    assert live.operation_state == "dispatching" and live.availability == "unavailable"
+                    assert target_ref not in recovered_owner._store.records[rid].thread_associations
+                    assert current.reconciliation_status != "verified"
+                else:
+                    assert live.operation_state == "committed" and live.committed_revision == resource["owner_revision"] + 1
+                    assert target_ref in recovered_owner._store.records[rid].thread_associations
+                    assert recovered_owner._leases.get_lease(receipt.lease_id).status == "released"
+                    assert recovered_owner._leases.get_lease(unrelated.lease_id).status == "reconcile_required"
+                    assert live.availability == "unavailable" and current.reconciliation_status != "verified"
+                revisions = list(external.revisions)
+                again = await restarted.session_context_fork_service.fork(request)
+                assert again.resources == repeated.resources and external.revisions == revisions
+                assert await restarted.session_context_fork_service.recover_prepared_forks() == 0
+                assert (await restarted.session_service.list(limit=100)).total == (2 if creation_kind == "new_session_main" else 1)
+            finally:
+                reset_current_gateway_id(replay_gateway)
     finally:
         reset_current_request_id(cold_request)
         reset_current_gateway_id(cold_gateway)
