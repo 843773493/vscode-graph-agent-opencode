@@ -23,7 +23,6 @@ export const INITIAL_APP_STATE: AppState = {
   uiSettings: readCachedUiSettings(),
   uiSettingsLoaded: false,
   themeBackgroundWarning: null,
-  workspaceRoot: null,
   workspaceName: null,
   agents: [],
   sessions: [],

@@ -10,6 +10,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 
+import commentjson
 import httpx
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -34,9 +35,11 @@ from app.gateway.federation import (
     FEDERATION_PROTOCOL_VERSION,
     RemoteGatewayConnection,
 )
+from app.gateway.federation.ports import principal_ref_for_gateway
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.remote_gateway import refresh_remote_gateway_projections
 from app.gateway.runtime.workspace import WorkspaceRuntime
+from app.gateway.workspace_ids import build_managed_local_workspace_id
 from app.services.business.gateway_context_query_service import (
     GatewayContextQueryService,
 )
@@ -381,7 +384,7 @@ async def test_gateway_routes_sessions_between_local_workspaces(
             default_workspace_id = next(
                 item["workspace_id"]
                 for item in workspace_list["items"]
-                if Path(item["root_path"]).resolve() == primary_workspace
+                if item["workspace_id"] == build_managed_local_workspace_id(str(primary_workspace))
             )
             assert re.fullmatch(r"gw_[0-9a-f]{32}", default_workspace_id)
             assert workspace_list["active_workspace_id"] == default_workspace_id
@@ -396,7 +399,7 @@ async def test_gateway_routes_sessions_between_local_workspaces(
             secondary_workspace_item = next(
                 item
                 for item in workspace_list["items"]
-                if Path(item["root_path"]).resolve() == secondary_workspace
+                if item["workspace_id"] == build_managed_local_workspace_id(str(secondary_workspace))
             )
             secondary_workspace_id = secondary_workspace_item["workspace_id"]
             assert re.fullmatch(r"gw_[0-9a-f]{32}", secondary_workspace_id)
@@ -599,7 +602,7 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
             secondary_workspace_id = next(
                 item["workspace_id"]
                 for item in workspace_items
-                if Path(item["root_path"]).resolve() == secondary_workspace
+                if item["workspace_id"] == build_managed_local_workspace_id(str(secondary_workspace))
             )
 
             create_response = await client.post(
@@ -834,7 +837,7 @@ async def test_gateway_restores_frontend_added_managed_local_workspace(
             existing_response = await client.get("/api/gateway/workspaces")
             assert existing_response.status_code == 200, existing_response.text
             for existing_item in existing_response.json()["data"]["items"]:
-                if Path(existing_item["root_path"]).resolve() != managed_workspace:
+                if existing_item["workspace_id"] != build_managed_local_workspace_id(str(managed_workspace)):
                     continue
                 cleanup_response = await client.delete(
                     f"/api/gateway/workspaces/{existing_item['workspace_id']}"
@@ -848,7 +851,7 @@ async def test_gateway_restores_frontend_added_managed_local_workspace(
             managed_item = next(
                 item
                 for item in add_response.json()["data"]["items"]
-                if Path(item["root_path"]).resolve() == managed_workspace
+                if item["workspace_id"] == build_managed_local_workspace_id(str(managed_workspace))
             )
             managed_workspace_id = managed_item["workspace_id"]
             assert re.fullmatch(r"gw_[0-9a-f]{32}", managed_workspace_id)
@@ -1483,7 +1486,13 @@ async def test_gateway_federation_reconciles_pending_restart_offline_and_cursor_
             remote_workspace.parent / "boxteam-home" / "config" / "gateway.jsonc"
         )
         document = remote_config_path.read_text(encoding="utf-8")
-        changed_document = document.replace(
+        remote_config = commentjson.loads(document)
+        remote_config.setdefault("permissions", {}).setdefault("federation", {}).setdefault("rules", []).append({
+            "capability": "managed_workspace_admin",
+            "effect": "allow",
+            "principal_ref": principal_ref_for_gateway(credential.peer_gateway_id),
+        })
+        changed_document = json.dumps(remote_config, ensure_ascii=False, indent=2).replace(
             '"poll_interval_seconds": 0.5',
             '"poll_interval_seconds": 0.75',
             1,
@@ -1579,7 +1588,7 @@ async def test_gateway_federation_reconciles_pending_restart_offline_and_cursor_
             connection_id=connection_id,
         )
         assert any(
-            item.root_path == str(remote_managed_root.resolve())
+            item.name == "projected managed workspace" and item.root_path is None
             for item in projected_after_update
         )
 

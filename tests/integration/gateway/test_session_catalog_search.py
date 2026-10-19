@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.gateway.workspace_ids import build_managed_local_workspace_id
+
 import asyncio
 import json
 from datetime import UTC, datetime
@@ -162,7 +164,7 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
                 secondary_workspace_id = next(
                     item["workspace_id"]
                     for item in add_response.json()["data"]["items"]
-                    if Path(item["root_path"]).resolve() == secondary_workspace
+                    if item["workspace_id"] == build_managed_local_workspace_id(str(secondary_workspace))
                 )
                 assert secondary_workspace_id != secondary_backend_workspace_id
 

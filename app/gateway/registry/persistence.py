@@ -8,8 +8,9 @@ from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
-from app.core.mounted_workspaces import MountedWorkspace
+from app.core.env import get_project_root
 from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.runtime.managed_backend import (
     ManagedBackendContract,
@@ -18,6 +19,9 @@ from app.gateway.runtime.managed_backend import (
 )
 
 from .core import _REGISTRY_SCHEMA_VERSION, WorkspaceTarget
+
+if TYPE_CHECKING:
+    from . import GatewayWorkspaceRegistry
 
 
 class RegistryPersistenceMixin:
@@ -132,7 +136,7 @@ class RegistryPersistenceMixin:
             if not isinstance(item, dict):
                 raise ValueError(f"Gateway registry target 必须是对象: {self._storage_path}")  # noqa: TRY004 — 保留注册表格式校验既有拒绝类型。
             original_workspace_id = str(item["workspace_id"])
-            root_path = str(item["root_path"])
+            root_path = item.get("root_path")
             backend_url = str(item["backend_url"])
             connection_kind = item["connection_kind"]
             if connection_kind == "ssh":
@@ -301,28 +305,20 @@ class RegistryPersistenceMixin:
                 raise TypeError("managed Backend owner 必须为完整合同对象")
             member_payloads = item["members"]
             for member in member_payloads:
-                if not isinstance(member, dict) or set(member) != {"workspace_id", "mount"}:
-                    raise TypeError("managed Backend member 必须包含 Gateway ID 与完整 mount")
-                mount = member["mount"]
-                if not isinstance(mount, dict) or set(mount) != {
-                    "workspace_id", "workspace_root", "terminal_backend_url", "browser_backend_url",
-                    "config_candidate_ref", "config_generation", "config_fencing_token",
-                }:
-                    raise TypeError("managed Backend mount 必须为完整启动合同")
+                if not isinstance(member, dict) or set(member) != {"workspace_id", "backend_workspace_id"}:
+                    raise TypeError("managed Backend member 只能包含 Gateway ID 与 Backend UUID")
             members = tuple(
-                ManagedBackendMember(member["workspace_id"], MountedWorkspace(
-                    member["mount"]["workspace_id"], Path(member["mount"]["workspace_root"]),
-                    member["mount"]["terminal_backend_url"], member["mount"]["browser_backend_url"],
-                    member["mount"]["config_candidate_ref"], member["mount"]["config_generation"], member["mount"]["config_fencing_token"],
-                )) for member in member_payloads
+                ManagedBackendMember(member["workspace_id"], member["backend_workspace_id"])
+                for member in member_payloads
             )
             contract = ManagedBackendContract(item["owner_id"], item["generation"], members, item["backend_url"], item["debug_port"])
             if contract.owner_id in self._backend_owners or seen_members.intersection(contract.workspace_ids):
                 raise ValueError("managed Backend owner 或成员重复")
             for member in members:
                 target = self.resolve(member.workspace_id)
-                if not target.managed or target.connection_kind != "local" or target.backend_workspace_id != member.mount.workspace_id or target.root_path != str(member.mount.workspace_root):
-                    raise ValueError("持久化 Backend 完整合同与成员 UUID/根不匹配")
+                if not target.managed or target.connection_kind != "local" or target.backend_workspace_id != member.backend_workspace_id:
+                    raise ValueError("持久化 Backend 完整合同与成员 UUID 不匹配")
+            cast("GatewayWorkspaceRegistry", self).resolve_backend_mounts(contract)
             if len({self.resolve(workspace_id).desired_running for workspace_id in contract.workspace_ids}) != 1:
                 raise ValueError("同一 Backend 完整组启动意图不一致")
             seen_members.update(contract.workspace_ids)
@@ -335,6 +331,7 @@ class RegistryPersistenceMixin:
             self._active_workspace_id = next(iter(self._targets))
         self._order_customized = bool(payload.get("order_customized", False))
         if migrated_to_sqlite:
+            cast("GatewayWorkspaceRegistry", self).validate_local_root_bindings(get_project_root())
             if migrated_to_sqlite and self._storage_path.is_file():
                 backup_path = self._storage_path.with_name(
                     f"{self._storage_path.name}.migrated.bak"
@@ -375,7 +372,10 @@ class RegistryPersistenceMixin:
                 asdict(connection)
                 for connection in self._remote_gateway_connections.values()
             ],
-            "targets": [asdict(target) for target in selected_targets.values()],
+            "targets": [
+                {key: value for key, value in asdict(target).items() if key != "root_path" or target.connection_kind == "local"}
+                for target in selected_targets.values()
+            ],
         }
         if self._state_store is not None:
             try:

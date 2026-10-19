@@ -128,13 +128,11 @@ const WorkspaceFileReferenceContext = createContext<WorkspaceFileReferenceContex
 export function WorkspaceFileReferenceProvider({
   apiPort,
   workspaceId,
-  workspaceRoot,
   onOpen,
   children,
 }: {
   apiPort: number;
   workspaceId: string | null;
-  workspaceRoot: string;
   onOpen: (
     content: WorkspaceFileContent,
     reference: WorkspaceFileReference,
@@ -151,10 +149,18 @@ export function WorkspaceFileReferenceProvider({
   useEffect(() => {
     cacheRef.current.clear();
     pathCacheRef.current.clear();
-  }, [apiPort, workspaceId, workspaceRoot]);
+  }, [apiPort, workspaceId]);
 
   const resolve = useCallback(
     async (target: string): Promise<WorkspaceFileReferenceResolution> => {
+      if (!workspaceId) return { status: "error", message: "文件引用缺少工作区身份" };
+      let workspaceRoot: string;
+      try {
+        // 根仅来自当前工作区既有的 scoped 文件响应，不进入 Gateway 展示态。
+        workspaceRoot = (await getWorkspaceFiles(apiPort, "", workspaceId)).directory_key.root;
+      } catch (error: unknown) {
+        return { status: "error", message: errorDisplayMessage(error) };
+      }
       const reference = parseWorkspaceFileReference(target, workspaceRoot);
       if (!reference) {
         return { status: "missing" };
@@ -216,7 +222,7 @@ export function WorkspaceFileReferenceProvider({
           : lookup,
       );
     },
-    [apiPort, workspaceId, workspaceRoot],
+    [apiPort, workspaceId],
   );
 
   const open = useCallback(

@@ -401,11 +401,7 @@ export function useSessionLifecycleActions({
           (item) => item.workspace_id === workspaceId,
         );
         if (!workspace && workspaceId !== prev.activeGatewayWorkspaceId) {
-          // 目标工作区既不在 Gateway 列表里、也不是当前活动工作区时，它的
-          // 根目录/名称无从得知。旧实现用 `?? prev.workspaceRoot/Name` 沿用
-          // 上一个工作区的元数据，把「未知工作区」伪装成切换成功，后续文件树
-          // 与预览会指向错误的根目录。等于活动工作区时沿用是正确的（那些
-          // 字段描述的就是它），因此只对真正未知的目标失败。
+          // 未知身份不能沿用上一个工作区的展示信息。
           return {
             ...prev,
             status: `切换会话失败: 未知工作区 ${workspaceId}`,
@@ -420,7 +416,6 @@ export function useSessionLifecycleActions({
         ];
         next.activeGatewayWorkspaceId = workspaceId;
         if (workspace) {
-          next.workspaceRoot = workspace.root_path;
           next.workspaceName = workspace.name;
         }
         next.sessions = nextWorkspaceSessions;
@@ -495,7 +490,6 @@ export function useSessionLifecycleActions({
           if (selectionIntent === selectionIntentRef.current) {
             next.activeGatewayWorkspaceId = resolvedWorkspaceId;
             next.currentSessionWorkspaceId = resolvedWorkspaceId ?? null;
-            next.workspaceRoot = workspace?.root_path ?? prev.workspaceRoot;
             next.workspaceName = workspace?.name ?? prev.workspaceName;
             next.sessions = workspaceSessions;
             next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;

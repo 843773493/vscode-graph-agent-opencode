@@ -310,7 +310,6 @@ export default function AppShell() {
   const workspacePreview = useWorkspacePreviewTabs({
     apiPort: resolvedApiPort,
     workspaceId: activeSessionWorkspaceId,
-    workspaceRoot: state.workspaceRoot ?? "",
     settingsLoaded: state.uiSettingsLoaded,
     restoredLayout: state.uiSettings.layout,
     onPersistLayout: persistLayoutSettings,
@@ -690,7 +689,6 @@ export default function AppShell() {
     <WorkspaceFileReferenceProvider
       apiPort={resolvedApiPort}
       workspaceId={activeSessionWorkspaceId}
-      workspaceRoot={state.workspaceRoot ?? ""}
       onOpen={(content, reference) => {
         openAuxiliaryTab("files");
         workspacePreview.openWorkspaceFileReference(content, reference);
@@ -1017,7 +1015,6 @@ export default function AppShell() {
                       && activeSessionWorkspaceId !== null
                     }
                     workspaceName={state.workspaceName ?? ""}
-                    workspaceRoot={state.workspaceRoot ?? ""}
                     sessionId={activeSession?.session_id ?? ""}
                     sessionTitle={activeSession?.title ?? "新会话"}
                     extensionWindow={extensionWindowVisible}

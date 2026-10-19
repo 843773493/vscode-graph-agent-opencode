@@ -26,7 +26,6 @@ async def list_direct_managed_workspaces(
         GatewayManagedWorkspaceDTO(
             workspace_id=workspace.workspace_id,
             name=workspace.name,
-            root_path=workspace.root_path,
             status=workspace.status,
             removable=(
                 workspace.removable

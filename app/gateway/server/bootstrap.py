@@ -7,7 +7,6 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.core.env import get_project_root
-from app.core.mounted_workspaces import MountedWorkspace
 from app.core.path_utils import get_gateway_root, get_user_workspace_root
 from app.gateway.config import GatewayConfig, load_gateway_config
 from app.gateway.control.gateway_state import GatewayStateStore
@@ -86,19 +85,7 @@ async def _restore_managed_local_runtimes(
     exclude_workspace_ids: set[str] | None = None, preserve_existing_managed_runtimes: bool = False,
 ) -> None:
     resolved = gateway_config or load_gateway_config()
-    for target in registry.targets():
-        workspace_id = target.workspace_id
-        if target.connection_kind != "local" or not target.managed or not target.desired_running or workspace_id == default_workspace_id:
-            continue
-        if (only_workspace_ids is not None and workspace_id not in only_workspace_ids) or (exclude_workspace_ids is not None and workspace_id in exclude_workspace_ids):
-            continue
-        if registry.backend_owner(workspace_id) is None:
-            message = f"期望运行的 managed target 缺少显式 Backend owner 完整合同: workspace_id={workspace_id}"
-            registry.mark_connection_error(workspace_id, message)
-            logger.error(message)
-            if registry.active_workspace_id == workspace_id and registry.has_target(default_workspace_id):
-                registry.activate(default_workspace_id)
-                logger.warning("Gateway 恢复失败，已回退到默认工作区: requested_workspace_id=%s", workspace_id)
+    await asyncio.to_thread(registry.validate_local_root_bindings, get_project_root())
     for owner in registry.backend_owners():
         ids = set(owner.contract.workspace_ids)
         if (only_workspace_ids is not None and not ids.intersection(only_workspace_ids)) or (
@@ -113,7 +100,7 @@ async def _restore_managed_local_runtimes(
                 owner.close(timeout_seconds=resolved.gateway_process_connection_drain_timeout_seconds)
                 reusable = {member_id: registry.managed_runtime(member_id) for member_id in ids if registry.has_runtime(member_id)}
                 contract, runtimes = await start_managed_backend_runtime(
-                    owner=owner, project_root=get_project_root(), log_dir=gateway_root / "logs",
+                    owner=owner, registry=registry, project_root=get_project_root(), log_dir=gateway_root / "logs",
                     reusable_runtimes=reusable,
                     adopt_existing_backend=preserve_existing_managed_runtimes,
                     health_request_timeout_seconds=resolved.gateway_process_health_request_timeout_seconds,
@@ -133,6 +120,7 @@ async def _restore_managed_local_runtimes(
                     logger.warning("Gateway 完整组恢复失败，已回退到默认工作区: owner=%s", owner.contract.owner_id)
 
 
+
 async def create_registry(
     gateway_config: GatewayConfig | None = None,
     state_store: GatewayStateStore | None = None,
@@ -149,30 +137,10 @@ async def create_registry(
         target.workspace_id: target for target in persisted_targets
     }
     persisted_active_workspace_id = registry.active_workspace_id
+    await asyncio.to_thread(registry.validate_local_root_bindings, get_project_root())
     default_root_path = _default_workspace_root()
     root_path = str(default_root_path)
     default_workspace_id = build_managed_local_workspace_id(root_path)
-    for target in persisted_targets:
-        if target.connection_kind != "local":
-            continue
-        workspace_root = Path(target.root_path).expanduser().resolve()
-        if not workspace_root.is_dir():
-            continue
-        actual_backend_workspace_id = await asyncio.to_thread(
-            resolve_backend_workspace_id,
-            get_project_root(),
-            workspace_root,
-        )
-        if (
-            target.backend_workspace_id is not None
-            and target.backend_workspace_id != actual_backend_workspace_id
-        ):
-            raise RuntimeError(
-                "Gateway registry 工作区 backend UUID 与本地身份文件不一致: "
-                f"workspace_id={target.workspace_id}, "
-                f"expected={target.backend_workspace_id}, "
-                f"actual={actual_backend_workspace_id}, root={workspace_root}"
-            )
     persisted_default = persisted_targets_by_id.get(default_workspace_id)
     if persisted_default is None:
         persisted_default = next(
@@ -248,16 +216,13 @@ async def _complete_registry_startup(
         if owner is None:
             owner = ManagedBackendOwner(ManagedBackendContract(
                 f"backend_owner_{uuid4().hex}", f"backend_generation_{uuid4().hex}",
-                (ManagedBackendMember(default_workspace_id, MountedWorkspace(
-                    backend_workspace_id, default_root_path,
-                    persisted_default.local_service_urls.get("terminal_manager") if persisted_default is not None else None,
-                    persisted_default.local_service_urls.get("browser_manager") if persisted_default is not None else None,
-                )),), persisted_default.backend_url if persisted_default is not None else "",
+                (ManagedBackendMember(default_workspace_id, backend_workspace_id),),
+                persisted_default.backend_url if persisted_default is not None else "",
                 _default_backend_debug_port(),
             ))
             registry.register_backend_owner(owner)
         contract, runtimes = await start_managed_backend_runtime(
-            owner=owner, project_root=get_project_root(), log_dir=gateway_root / "logs",
+            owner=owner, registry=registry, project_root=get_project_root(), log_dir=gateway_root / "logs",
             preferred_backend_port=_default_backend_port(), adopt_existing_backend=preserve_existing_managed_runtimes,
             health_request_timeout_seconds=resolved_gateway_config.gateway_process_health_request_timeout_seconds,
             health_poll_interval_seconds=resolved_gateway_config.gateway_process_health_poll_interval_seconds,

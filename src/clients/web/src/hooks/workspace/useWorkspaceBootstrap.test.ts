@@ -185,7 +185,6 @@ describe("selectHealthyGatewayWorkspace", () => {
       workspace_id: "workspace-ready",
       parent_workspace_id: null,
       name: "Ready",
-      root_path: "/tmp/ready",
       backend_url: "http://127.0.0.1:41000",
       connection_kind: "local",
       status: "ready",
@@ -207,13 +206,11 @@ describe("selectHealthyGatewayWorkspace", () => {
   const defaultWorkspace = workspace({
     workspace_id: "workspace-default",
     name: "Default",
-    root_path: "/tmp/default",
     system_default: true,
   });
   const offline = workspace({
     workspace_id: "workspace-offline",
     name: "Offline",
-    root_path: "/tmp/offline",
     status: "offline",
   });
 

@@ -17,7 +17,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-Capability = Literal["discovery", "send", "read", "wait", "reply", "transit", "fork_source", "fork_target"]
+Capability = Literal["discovery", "send", "read", "wait", "reply", "transit", "fork_source", "fork_target", "managed_workspace_admin"]
 Effect = Literal["allow", "deny"]
 
 CORE_CAPABILITIES: tuple[Capability, ...] = (
@@ -30,6 +30,8 @@ CORE_CAPABILITIES: tuple[Capability, ...] = (
     "fork_source",
     "fork_target",
 )
+
+CAPABILITIES: tuple[Capability, ...] = (*CORE_CAPABILITIES, "managed_workspace_admin")
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,20 +88,22 @@ class FederationPolicySnapshot:
     ) -> bool:
         """返回该实际操作/披露点是否获准；规则命中优先于默认值。"""
 
-        effect = self.default_effect
+        administrative = capability == "managed_workspace_admin"
+        effect = "deny" if administrative else self.default_effect
         for rule in self.rules:
+            # 管理能力只接受精确认证主体的显式 allow；通配 allow 不授予它。
             if rule.matches(
                 capability=capability,
                 origin_gateway_id=origin_gateway_id,
                 principal_ref=principal_ref,
-            ):
+            ) and (not administrative or rule.effect == "deny" or rule.principal_ref == principal_ref):
                 effect = rule.effect
         return effect == "allow"
 
 
 def _normalize_rule(raw: Mapping[str, object]) -> FederationPolicyRule:
     capability = raw.get("capability")
-    if capability not in CORE_CAPABILITIES:
+    if capability not in CAPABILITIES:
         raise ValueError(f"federation 规则 capability 非法: {capability!r}")
     effect = raw.get("effect", "deny")
     if effect not in ("allow", "deny"):

@@ -159,7 +159,6 @@ async function mountTree(port: number, promptValue: string | null = null): Promi
         apiPort={port}
         workspaceId="gw_conv"
         workspaceName="project"
-        workspaceRoot="/w/project"
         sessionId=""
         activeFilePath={null}
         searchOpen={false}
@@ -265,11 +264,11 @@ describe("工作区文件树精确收敛", () => {
       await settle(10);
     }
 
-    // 成功路径用后端返回的完整目录对象替换该目录：不得再重拉任何目录。
+    // 目录内容直接消费权威快照；持久 intent 的三次根目录读取用于冻结与重验身份。
     expect(requestCount(handle, "src")).toBe(1);
     expect(requestCount(handle, "other")).toBe(1);
-    expect(requestCount(handle, "")).toBe(1);
-    expect(handle.listingRequests).toHaveLength(3);
+    expect(requestCount(handle, "")).toBe(4);
+    expect(handle.listingRequests).toEqual(["", "src", "other", "", "", ""]);
     expect(titlesOf(handle.renderer)).toContain("/w/project/src/new.ts");
   });
 

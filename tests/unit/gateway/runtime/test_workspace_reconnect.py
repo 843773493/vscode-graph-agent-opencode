@@ -16,7 +16,9 @@ from app.core.mounted_workspaces import (
     mounted_workspace_manifest_digest,
 )
 from app.core.trace_middleware import TraceMiddleware
-from app.gateway.auth import verify_federation_token, verify_gateway_token
+from app.gateway.auth import GatewayAuthContext, verify_federation_token, verify_gateway_token
+from app.gateway.federation.policy import FederationPolicyStore
+from app.gateway.federation.ports import principal_ref_for_gateway
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.main import gateway_http_exception_handler
@@ -63,10 +65,11 @@ class ProcessBoundary:
     nodes: list[tuple[str, ProcessProbe]] = field(default_factory=list)
     next_port: int = 43000
 
-    def register(self, contract: ManagedBackendContract) -> None:
-        self.identities.update({member.mount.workspace_root: member.mount.workspace_id for member in contract.members})
-        if contract.backend_url:
-            self.proofs[contract.backend_url] = (contract.mounts, contract.generation, 7000)
+    def register(self, graph: ManagedBackendGraph, registry: GatewayWorkspaceRegistry) -> None:
+        mounts = registry.resolve_backend_mounts(graph.owner.contract)
+        self.identities.update({mount.workspace_root: mount.workspace_id for mount in mounts})
+        if graph.owner.contract.backend_url:
+            self.proofs[graph.owner.contract.backend_url] = (mounts, graph.owner.contract.generation, 7000)
 
     def allocate(self) -> int:
         self.next_port += 1
@@ -109,8 +112,8 @@ class ProcessBoundary:
 @pytest.fixture
 def process_boundary(monkeypatch: pytest.MonkeyPatch) -> ProcessBoundary:
     boundary = ProcessBoundary()
-    monkeypatch.setattr(local_workspace, "resolve_backend_workspace_id", lambda _project, root: boundary.identities[root.resolve()])
-    monkeypatch.setattr("app.gateway.runtime.group_actions.resolve_backend_workspace_id", lambda _project, root: boundary.identities[root.resolve()])
+    monkeypatch.setattr(local_workspace, "resolve_backend_workspace_id", lambda _project, root, **_: boundary.identities[root.resolve()])
+    monkeypatch.setattr("app.gateway.runtime.group_actions.resolve_backend_workspace_id", lambda _project, root, **_: boundary.identities[root.resolve()])
     monkeypatch.setattr(local_workspace, "allocate_local_port", boundary.allocate)
     monkeypatch.setattr(local_workspace, "is_local_port_available", lambda _port: True)
     monkeypatch.setattr(local_workspace, "start_local_backend_process", boundary.start_backend)
@@ -136,8 +139,19 @@ def singleton(tmp_path: Path, managed_backend_factory, process_boundary: Process
         (target,), backend_url=target.backend_url, process=ProcessProbe("old"),
         auxiliary_processes={"member-a": {"terminal_manager": ProcessProbe("terminal"), "browser_manager": ProcessProbe("browser")}},
     )
-    process_boundary.register(graph.owner.contract)
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "singleton-registry.json")
+    registry.upsert(target)
+    graph.publish(registry)
+    process_boundary.register(graph, registry)
     return graph
+
+
+@pytest.fixture
+def singleton_registry(tmp_path: Path, singleton: ManagedBackendGraph):
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "runtime-registry.json")
+    registry.upsert(singleton.targets[0])
+    singleton.publish(registry)
+    return registry
 
 
 @pytest.fixture
@@ -168,7 +182,7 @@ def controller_case(tmp_path: Path, managed_backend_factory, process_boundary: P
         auxiliary_processes={target.workspace_id: {"terminal_manager": ProcessProbe("terminal"), "browser_manager": ProcessProbe("browser")} for target in targets},
     )
     graph.publish(registry)
-    process_boundary.register(graph.owner.contract)
+    process_boundary.register(graph, registry)
     controller = GatewayWorkspaceRuntimeController(
         registry=registry, project_root=tmp_path, log_dir=tmp_path / "logs",
         drain_timeout_seconds=0, drain_poll_interval_seconds=0.001,
@@ -292,7 +306,7 @@ async def test_reconnect_http_keeps_published_projection_and_reports_both_errors
     old_target = WorkspaceTarget(
         workspace_id=workspace_id,
         name="Reconnect HTTP workspace",
-        root_path="/remote/reconnect-http",
+        root_path=None,
         backend_url=old_runtime.service_urls["workspace_api"],
         connection_kind="remote_gateway",
         backend_workspace_id=UUID_B,
@@ -615,8 +629,7 @@ async def test_runtime_controller_resolves_pending_after_candidate_restart(tmp_p
 
 @pytest.mark.asyncio
 async def test_managed_runtime_rejects_terminal_wrong_uuid_before_backend_and_closes_owned_handles(
-    singleton, process_boundary, monkeypatch, tmp_path,
-) -> None:
+    singleton, process_boundary, monkeypatch, tmp_path, singleton_registry) -> None:
     singleton.owner.close()
     runtime = singleton.runtimes["member-a"]
     adopted = runtime.processes["terminal_manager"]
@@ -628,13 +641,13 @@ async def test_managed_runtime_rejects_terminal_wrong_uuid_before_backend_and_cl
     monkeypatch.setattr(local_workspace, "_adopt_local_node_service", adopt)
     monkeypatch.setattr(local_workspace, "wait_for_workspace_health", wrong_uuid)
     with pytest.raises(RuntimeError, match="backend UUID 不匹配"):
-        await start_managed_backend_runtime(owner=singleton.owner, project_root=tmp_path, log_dir=tmp_path / "logs")
+        await start_managed_backend_runtime(owner=singleton.owner, registry=singleton_registry, project_root=tmp_path, log_dir=tmp_path / "logs")
     assert not process_boundary.starts and not process_boundary.nodes
     assert adopted.closed
 
 
 @pytest.mark.asyncio
-async def test_candidate_runtime_start_failure_detaches_adopted_and_closes_new_processes(singleton, process_boundary, monkeypatch, tmp_path) -> None:
+async def test_candidate_runtime_start_failure_detaches_adopted_and_closes_new_processes(singleton, process_boundary, monkeypatch, tmp_path, singleton_registry) -> None:
     singleton.owner.close()
     adopted = ProcessProbe("adopted-terminal")
     async def adopt(*, service_name, **_):
@@ -644,7 +657,7 @@ async def test_candidate_runtime_start_failure_detaches_adopted_and_closes_new_p
     process_boundary.backend_outcomes[:] = [error]
     with pytest.raises(RuntimeError) as raised:
         await start_managed_backend_runtime(
-            owner=singleton.owner, project_root=tmp_path, log_dir=tmp_path / "logs",
+            owner=singleton.owner, registry=singleton_registry, project_root=tmp_path, log_dir=tmp_path / "logs",
             preserve_adopted_processes_on_failure=True,
         )
     assert raised.value is error
@@ -665,13 +678,13 @@ def test_workspace_config_proof_expectation_redacts_fencing_token() -> None:
 
 
 @pytest.mark.asyncio
-async def test_backend_restart_preserves_terminal_and_browser(singleton, process_boundary, tmp_path) -> None:
+async def test_backend_restart_preserves_terminal_and_browser(singleton, process_boundary, tmp_path, singleton_registry) -> None:
     owner = singleton.owner
     old_handle = owner.process
     runtime = singleton.runtimes["member-a"]
     auxiliary_handles = dict(runtime.processes)
     contract, runtimes = await rebuild_managed_backend_runtime(
-        owner=owner, desired_members=owner.contract.members, runtimes=singleton.runtimes,
+        owner=owner, registry=singleton_registry, desired_members=owner.contract.members, runtimes=singleton.runtimes,
         project_root=tmp_path, log_dir=tmp_path / "logs",
     )
     assert old_handle.closed and owner.process is process_boundary.handles[0]
@@ -683,7 +696,7 @@ async def test_backend_restart_preserves_terminal_and_browser(singleton, process
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["health", "config-proof"])
-async def test_backend_restart_failure_keeps_old_generation(singleton, process_boundary, tmp_path, failure) -> None:
+async def test_backend_restart_failure_keeps_old_generation(singleton, process_boundary, tmp_path, failure, singleton_registry) -> None:
     old_contract = singleton.owner.contract
     old_handle = singleton.owner.process
     startup = {
@@ -697,14 +710,14 @@ async def test_backend_restart_failure_keeps_old_generation(singleton, process_b
         process_boundary.config_proofs[UUID_A] = {"loaded_source": "active"}
     with pytest.raises(RuntimeError, match="candidate backend unhealthy|config proof 不匹配"):
         await rebuild_managed_backend_runtime(
-            owner=singleton.owner, desired_members=old_contract.members, runtimes=singleton.runtimes,
+            owner=singleton.owner, registry=singleton_registry, desired_members=old_contract.members, runtimes=singleton.runtimes,
             project_root=tmp_path, log_dir=tmp_path / "logs",
             startup_contracts={"member-a": startup} if failure == "config-proof" else None,
         )
     assert old_handle.closed and process_boundary.handles[0].closed
     assert singleton.owner.process is None
     restored_contract, _ = await start_managed_backend_runtime(
-        owner=singleton.owner, mount_contract=old_contract, reusable_runtimes=singleton.runtimes,
+        owner=singleton.owner, registry=singleton_registry, mount_contract=old_contract, reusable_runtimes=singleton.runtimes,
         project_root=tmp_path, log_dir=tmp_path / "logs",
         preferred_backend_port=41000, preserve_generation=True,
     )
@@ -745,14 +758,14 @@ async def test_gateway_rejects_mismatched_node_manager_without_adoption(local_ht
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mismatch", [None, "generation", "manifest", "pid"])
 async def test_gateway_adopts_matching_workspace_backend(controller_case, local_http, mismatch) -> None:
-    _, graph, _, _, _, _ = controller_case
+    registry, graph, _, _, _, _ = controller_case
     contract = graph.owner.contract
     requests = []
     def response(request):
         identity = request.headers["X-BoxTeam-Workspace-Id"]
         requests.append(identity)
         payload = {"workspace_id": identity, "status": "ok", "process_id": 43212,
-                   "backend_generation": contract.generation, "mount_manifest_digest": contract.manifest_digest}
+                   "backend_generation": contract.generation, "mount_manifest_digest": mounted_workspace_manifest_digest(registry.resolve_backend_mounts(contract))}
         if mismatch == "generation":
             payload["backend_generation"] = "stale"
         elif mismatch == "manifest":
@@ -762,16 +775,16 @@ async def test_gateway_adopts_matching_workspace_backend(controller_case, local_
         return httpx.Response(200, json=payload)
     local_http(response)
     if mismatch is None:
-        adopted = await _adopt_workspace_backend(contract=contract)
+        adopted = await _adopt_workspace_backend(contract=contract, mounts=registry.resolve_backend_mounts(contract))
         assert adopted.pid == 43212 and requests == [UUID_A, UUID_B]
     else:
         with pytest.raises(RuntimeError, match="完整组"):
-            await _adopt_workspace_backend(contract=contract)
+            await _adopt_workspace_backend(contract=contract, mounts=registry.resolve_backend_mounts(contract))
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("adopt_backend", [False, True])
-async def test_managed_runtime_adopts_or_reclaims_persisted_backend_once(singleton, process_boundary, monkeypatch, tmp_path, adopt_backend) -> None:
+async def test_managed_runtime_adopts_or_reclaims_persisted_backend_once(singleton, process_boundary, monkeypatch, tmp_path, adopt_backend, singleton_registry) -> None:
     singleton.owner.close()
     previous = singleton.owner.contract
     backend = ProcessProbe("persisted-backend")
@@ -783,7 +796,7 @@ async def test_managed_runtime_adopts_or_reclaims_persisted_backend_once(singlet
     monkeypatch.setattr(local_workspace, "_adopt_workspace_backend", adopt_backend_handle)
     monkeypatch.setattr(local_workspace, "_adopt_local_node_service", adopt_node)
     contract, runtimes = await start_managed_backend_runtime(
-        owner=singleton.owner, project_root=tmp_path, log_dir=tmp_path / "logs", adopt_existing_backend=adopt_backend,
+        owner=singleton.owner, registry=singleton_registry, project_root=tmp_path, log_dir=tmp_path / "logs", adopt_existing_backend=adopt_backend,
     )
     assert contract.workspace_ids == ("member-a",)
     assert runtimes["member-a"].processes == auxiliaries
@@ -796,35 +809,35 @@ async def test_managed_runtime_adopts_or_reclaims_persisted_backend_once(singlet
 
 
 @pytest.mark.asyncio
-async def test_managed_runtime_replaces_default_backend_when_adoption_is_disabled(singleton, process_boundary, monkeypatch, tmp_path) -> None:
+async def test_managed_runtime_replaces_default_backend_when_adoption_is_disabled(singleton, process_boundary, monkeypatch, tmp_path, singleton_registry) -> None:
     singleton.owner.close()
     stale = ProcessProbe("stale")
     async def adopt(**_):
         return stale
     monkeypatch.setattr(local_workspace, "_adopt_workspace_backend", adopt)
-    await start_managed_backend_runtime(owner=singleton.owner, project_root=tmp_path, log_dir=tmp_path / "logs",
+    await start_managed_backend_runtime(owner=singleton.owner, registry=singleton_registry, project_root=tmp_path, log_dir=tmp_path / "logs",
                                         preferred_backend_port=8010, adopt_existing_backend=False)
     assert stale.closed and process_boundary.starts[0]["port"] == 8010
     assert [service for service, _ in process_boundary.nodes] == ["terminal", "browser"]
 
 
 @pytest.mark.asyncio
-async def test_managed_runtime_reuses_browser_without_starting_replacement(singleton, process_boundary, monkeypatch, tmp_path) -> None:
+async def test_managed_runtime_reuses_browser_without_starting_replacement(singleton, process_boundary, monkeypatch, tmp_path, singleton_registry) -> None:
     singleton.owner.close()
     adopted = ProcessProbe("browser")
     async def adopt(*, service_name, **_):
         return adopted if service_name == "browser_manager" else None
     monkeypatch.setattr(local_workspace, "_adopt_local_node_service", adopt)
-    contract, runtimes = await start_managed_backend_runtime(owner=singleton.owner, project_root=tmp_path, log_dir=tmp_path / "logs")
+    contract, runtimes = await start_managed_backend_runtime(owner=singleton.owner, registry=singleton_registry, project_root=tmp_path, log_dir=tmp_path / "logs")
     assert [service for service, _ in process_boundary.nodes] == ["terminal"]
-    assert contract.mounts[0].browser_backend_url == runtimes["member-a"].service_urls["browser_manager"]
+    assert process_boundary.starts[0]["mounts"][0].browser_backend_url == runtimes["member-a"].service_urls["browser_manager"]
     assert runtimes["member-a"].processes["browser_manager"] is adopted
 
 
 @pytest.mark.asyncio
 async def test_full_health_proof_requires_all_mounts_same_process(controller_case, process_boundary) -> None:
-    _, graph, _, _, _, _ = controller_case
-    assert await verify_managed_backend_group(graph.owner.contract) == 7000
+    registry, graph, _, _, _, _ = controller_case
+    assert await verify_managed_backend_group(graph.owner.contract, mounts=registry.resolve_backend_mounts(graph.owner.contract)) == 7000
 
 
 @pytest.mark.asyncio
@@ -1023,11 +1036,11 @@ async def test_default_exit_and_duplicate_mount_identity_reject_before_drain(con
     registry.resolve("member-b").system_default = False
     first = graph.owner.contract.members[0]
     duplicate = WorkspaceTarget(
-        workspace_id="duplicate", name="Duplicate", root_path=str(first.mount.workspace_root),
-        backend_url="", connection_kind="local", backend_workspace_id=first.mount.workspace_id, managed=True,
+        workspace_id="duplicate", name="Duplicate", root_path=str(registry.local_workspace_root(first.workspace_id, first.backend_workspace_id)),
+        backend_url="", connection_kind="local", backend_workspace_id=first.backend_workspace_id, managed=True,
     )
     registry.upsert(duplicate, activate=False)
-    with pytest.raises(ValueError, match="重复身份或根"):
+    with pytest.raises(ValueError, match="重复身份"):
         await controller.safe_restart_managed_backend(
             "member-a", request_id="duplicate", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": ["member-a", "duplicate"]}),
         )
@@ -1155,7 +1168,10 @@ def deletion_http_application(controller_case, tmp_path, monkeypatch):
         registry=registry, storage_path=tmp_path / "forwards.json", log_dir=tmp_path / "logs",
     )
     app.dependency_overrides[verify_gateway_token] = lambda: "local-test-token"
-    app.dependency_overrides[verify_federation_token] = lambda: object()
+    app.dependency_overrides[verify_federation_token] = lambda: GatewayAuthContext(kind="federation", peer_gateway_id="peer")
+    app.state.federation_policy_store = FederationPolicyStore(initial={"rules": [{
+        "capability": "managed_workspace_admin", "effect": "allow", "principal_ref": principal_ref_for_gateway("peer"),
+    }]})
     app.dependency_overrides[_shared.get_workspace_runtime_controller] = lambda: controller
     app.dependency_overrides[get_port_forward_manager] = lambda: app.state.port_forward_manager
     monkeypatch.setattr(_shared, "_gateway_root", lambda: tmp_path / "gateway-home")
@@ -1301,9 +1317,9 @@ async def test_stopped_delete_http_preserves_offline_contract_then_starts_only_r
     started = await controller.start_managed_backend("member-b", request_id="remaining-start", group_request=graph.group_request)
     assert started.status == "started" and len(process_boundary.starts) == 1
     mounts = process_boundary.starts[0]["mounts"]
-    assert [(mount.workspace_id, mount.workspace_root) for mount in mounts] == [(UUID_B, previous.members[1].mount.workspace_root)]
+    assert [(mount.workspace_id, mount.workspace_root) for mount in mounts] == [(UUID_B, registry.local_workspace_root("member-b", UUID_B))]
     assert graph.owner.contract.workspace_ids == ("member-b",)
-    assert await verify_managed_backend_group(graph.owner.contract) == 7001
+    assert await verify_managed_backend_group(graph.owner.contract, mounts=registry.resolve_backend_mounts(graph.owner.contract)) == 7001
 
 
 @pytest.mark.asyncio
@@ -1363,10 +1379,10 @@ async def test_stopped_delete_preflight_keeps_complete_old_contract(
         exception, message = PermissionError, "不能越过 target owner"
     elif invalid == "uuid":
         monkeypatch.setattr(target, "backend_workspace_id", UUID_B)
-        exception, message = RuntimeError, "UUID/根合同"
+        exception, message = RuntimeError, "binding 身份不匹配"
     else:
         monkeypatch.setattr(target, "root_path", str(Path(target.root_path) / "changed"))
-        exception, message = RuntimeError, "UUID/根合同"
+        exception, message = FileNotFoundError, "工作区目录不存在"
     with pytest.raises(exception, match=message):
         await controller.remove_managed_workspace("member-a", request_id="offline-invalid", group_request=request)
     assert graph.owner.contract is previous and registry.resolve("member-a") is target
@@ -1637,3 +1653,68 @@ async def test_stopped_publication_online_null_member_runtime_fails_before_commi
         registry.publish_backend_runtime(graph.owner, previous, {identity: None for identity in previous.workspace_ids})
     assert graph.owner.contract is previous and registry._state_store.load_workspace_registry() == committed
     assert all(registry.resolve(identity) is target for identity, target in held_targets.items())
+
+
+@pytest.fixture
+def paired_deletion_http_application(deletion_http_application, tmp_path, monkeypatch):
+    from app.gateway.credentials import FederationCredentialStore
+    app = deletion_http_application
+    app.dependency_overrides.pop(verify_federation_token)
+    gateway_root = tmp_path / "paired-gateway"
+    monkeypatch.setenv("BOXTEAM_GATEWAY_ROOT", str(gateway_root))
+    credential = FederationCredentialStore(storage_path=gateway_root / "credentials/federation.json").issue(
+        connection_id="paired-peer", peer_gateway_id="peer",
+    )
+    return app, {"X-BoxTeam-Federation-Token": credential.token, "X-Request-ID": "root-admin-denied"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rules", [
+    [],
+    [{"capability": "read", "effect": "allow", "principal_ref": principal_ref_for_gateway("peer")}],
+    [{"capability": "managed_workspace_admin", "effect": "allow"}],
+    [{"capability": "managed_workspace_admin", "effect": "allow", "principal_ref": principal_ref_for_gateway("other")}],
+])
+@pytest.mark.parametrize("method", ["POST", "DELETE"])
+async def test_paired_peer_without_explicit_admin_has_zero_side_effects(
+    controller_case, process_boundary, paired_deletion_http_application, tmp_path, rules, method,
+) -> None:
+    registry, graph, _, calls, _, _ = controller_case
+    app, headers = paired_deletion_http_application
+    app.state.federation_policy_store.publish({"default_effect": "allow", "rules": rules})
+    before = registry._storage_path.read_bytes()
+    revision = registry.registry_revision
+    contract = graph.owner.contract
+    process = graph.owner.process
+    runtimes = dict(graph.runtimes)
+    root = tmp_path / "must-not-exist" / "new-workspace"
+    path = "/api/gateway/federation/managed-workspaces"
+    if method == "DELETE":
+        path += "/member-a"
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://target") as client:
+        response = await client.request(method, path, headers=headers, json={"root_path": str(root), "create_directory": True} if method == "POST" else None)
+    assert response.status_code == 403
+    assert response.headers["X-Request-ID"] == headers["X-Request-ID"]
+    assert response.json()["request_id"] == headers["X-Request-ID"]
+    assert registry._storage_path.read_bytes() == before and registry.registry_revision == revision
+    assert graph.owner.contract is contract and graph.owner.process is process and not process.closed
+    assert not calls and not process_boundary.starts and not process_boundary.nodes and not root.exists()
+    assert all(registry.managed_runtime(identity) is runtime and all(not handle.closed for handle in runtime.processes.values()) for identity, runtime in runtimes.items())
+
+
+@pytest.mark.asyncio
+async def test_admin_revocation_is_checked_before_delete_side_effects(
+    controller_case, process_boundary, paired_deletion_http_application,
+) -> None:
+    registry, graph, _, calls, _, _ = controller_case
+    app, headers = paired_deletion_http_application
+    policy = app.state.federation_policy_store
+    policy.publish({"rules": [{"capability": "managed_workspace_admin", "effect": "allow", "principal_ref": principal_ref_for_gateway("peer")}]})
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://target") as client:
+        blocked = await client.delete("/api/gateway/federation/managed-workspaces/member-a", headers=headers)
+        assert blocked.status_code == 409
+        before = registry._storage_path.read_bytes()
+        policy.publish({"rules": []})
+        denied = await client.delete("/api/gateway/federation/managed-workspaces/member-a", headers=headers)
+    assert denied.status_code == 403 and registry._storage_path.read_bytes() == before
+    assert not calls and not graph.owner.process.closed and not process_boundary.starts

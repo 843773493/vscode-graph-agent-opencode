@@ -281,7 +281,7 @@ def test_registry_persists_remote_gateway_without_federation_token(
         WorkspaceTarget(
             workspace_id=build_projected_workspace_id("rgw_test", "remote_ws"),
             name="Remote workspace",
-            root_path="/srv/workspace",
+            root_path=None,
             backend_url="http://127.0.0.1:41000",
             connection_kind="remote_gateway",
             backend_workspace_id="00000000-0000-4000-8000-000000000002",
@@ -328,7 +328,7 @@ async def test_configured_remote_reconcile_stages_all_and_preserves_manual_proje
         WorkspaceTarget(
             workspace_id="manual-projection",
             name="Manual projection",
-            root_path="/manual/project",
+            root_path=None,
             backend_url="http://manual",
             connection_kind="remote_gateway",
             backend_workspace_id="00000000-0000-4000-8000-000000000002",
@@ -372,7 +372,6 @@ async def test_configured_remote_reconcile_stages_all_and_preserves_manual_proje
                 {
                     "workspace_id": f"{configured.connection_id}-workspace",
                     "name": configured.name or configured.connection_id,
-                    "root_path": f"/{configured.connection_id}",
                     "managed": False,
                     "services": ["workspace_api"],
                     "backend_workspace_id": "00000000-0000-4000-8000-000000000002",
@@ -447,7 +446,7 @@ def test_remote_projection_rejects_stale_cursor_and_accepts_full_snapshot_jump(
         return WorkspaceTarget(
             workspace_id=build_projected_workspace_id("rgw_cursor", "workspace"),
             name="Cursor workspace",
-            root_path="/cursor",
+            root_path=None,
             backend_url="http://cursor",
             connection_kind="remote_gateway",
             backend_workspace_id="00000000-0000-4000-8000-000000000002",
@@ -561,7 +560,7 @@ async def test_remote_gateway_registration_closes_staged_runtime_before_commit(
             connection.connection_id, "old-workspace"
         ),
         name="Old workspace",
-        root_path="/old",
+        root_path=None,
         backend_url="http://old",
         connection_kind="remote_gateway",
         backend_workspace_id="00000000-0000-4000-8000-000000000002",
@@ -589,7 +588,6 @@ async def test_remote_gateway_registration_closes_staged_runtime_before_commit(
                 {
                     "workspace_id": "new-workspace",
                     "name": "New workspace",
-                    "root_path": "/new",
                     "backend_workspace_id": "00000000-0000-4000-8000-000000000003",
                     "services": ["workspace_api"],
                 }
@@ -671,7 +669,7 @@ async def test_remote_gateway_registration_keeps_published_runtime_after_observe
             connection.connection_id, "old-workspace"
         ),
         name="Old workspace",
-        root_path="/old",
+        root_path=None,
         backend_url="http://old",
         connection_kind="remote_gateway",
         backend_workspace_id="00000000-0000-4000-8000-000000000002",
@@ -698,7 +696,6 @@ async def test_remote_gateway_registration_keeps_published_runtime_after_observe
                 {
                     "workspace_id": "new-workspace",
                     "name": "New workspace",
-                    "root_path": "/new",
                     "backend_workspace_id": "00000000-0000-4000-8000-000000000003",
                     "services": ["workspace_api"],
                 }
@@ -808,7 +805,6 @@ async def test_configured_remote_reconcile_keeps_published_runtime_after_observe
                 {
                     "workspace_id": "batch-workspace",
                     "name": "Batch workspace",
-                    "root_path": "/batch",
                     "managed": False,
                     "services": ["workspace_api"],
                     "backend_workspace_id": "00000000-0000-4000-8000-000000000002",
@@ -894,7 +890,7 @@ async def test_configured_remote_reconcile_keeps_old_projection_when_peer_is_off
                         "old-workspace",
                     ),
                     name="Old workspace",
-                    root_path="/old",
+                    root_path=None,
                     backend_url="http://old",
                     connection_kind="remote_gateway",
                     backend_workspace_id="00000000-0000-4000-8000-000000000002",
@@ -942,7 +938,6 @@ async def test_configured_remote_reconcile_keeps_old_projection_when_peer_is_off
                 {
                     "workspace_id": "new-workspace",
                     "name": "New workspace",
-                    "root_path": "/new",
                     "managed": False,
                     "services": ["workspace_api"],
                     "backend_workspace_id": "00000000-0000-4000-8000-000000000002",
@@ -1043,7 +1038,7 @@ async def test_remote_reconnect_refreshes_projection_cursor_and_retires_old_tunn
                     "rgw_reconnect", "old-workspace"
                 ),
                 name="Old workspace",
-                root_path="/old",
+                root_path=None,
                 backend_url="http://old",
                 connection_kind="remote_gateway",
                 backend_workspace_id="00000000-0000-4000-8000-000000000002",
@@ -1075,7 +1070,6 @@ async def test_remote_reconnect_refreshes_projection_cursor_and_retires_old_tunn
                 {
                     "workspace_id": "new-workspace",
                     "name": "New workspace",
-                    "root_path": "/new",
                     "managed": True,
                     "connection_kind": "local",
                     "services": ["workspace_api"],
@@ -1166,7 +1160,7 @@ async def test_workspace_dto_exposes_safe_remote_connection_summary(
         WorkspaceTarget(
             workspace_id="projected",
             name="Remote workspace",
-            root_path="/srv/workspace",
+            root_path=None,
             backend_url="http://127.0.0.1:41000",
             connection_kind="remote_gateway",
             backend_workspace_id="00000000-0000-4000-8000-000000000002",
@@ -1252,7 +1246,6 @@ async def test_discovery_filters_nested_workspaces_and_checks_protocol(
             {
                 "workspace_id": "direct",
                 "name": "Direct",
-                "root_path": "/direct",
                 "connection_kind": "local",
                 "managed": True,
                 "backend_workspace_id": "00000000-0000-4000-8000-000000000002",
@@ -1260,7 +1253,6 @@ async def test_discovery_filters_nested_workspaces_and_checks_protocol(
             {
                 "workspace_id": "nested",
                 "name": "Nested",
-                "root_path": "/nested",
                 "connection_kind": "remote_gateway",
                 "managed": True,
                 "backend_workspace_id": "00000000-0000-4000-8000-000000000002",
@@ -1330,7 +1322,7 @@ def test_remote_proxy_headers_preserve_request_id_and_hide_local_token(
     target = WorkspaceTarget(
         workspace_id="projected",
         name="Remote",
-        root_path="/remote",
+        root_path=None,
         backend_url="http://127.0.0.1:41000",
         connection_kind="remote_gateway",
         backend_workspace_id="00000000-0000-4000-8000-000000000002",
@@ -1357,7 +1349,6 @@ def test_legacy_ssh_registry_has_explicit_migration_error(tmp_path: Path) -> Non
                     {
                         "workspace_id": "legacy",
                         "name": "Legacy",
-                        "root_path": "/remote",
                         "backend_url": "http://127.0.0.1:41000",
                         "connection_kind": "ssh",
                         "managed": True,
@@ -1493,7 +1484,7 @@ async def test_remote_restart_is_delegated_with_request_id(
     for index, (remote_id, local_id) in enumerate(zip(remote_ids, local_ids, strict=True)):
         backend_id = f"00000000-0000-4000-8000-{index + 2:012d}"
         registry.upsert(WorkspaceTarget(
-            workspace_id=local_id, name=f"Remote {index}", root_path=f"/remote-{index}",
+            workspace_id=local_id, name=f"Remote {index}", root_path=None,
             backend_url="http://127.0.0.1:41000", connection_kind="remote_gateway",
             owner="remote_projection", connection_id="rgw_test",
             backend_workspace_id=backend_id, managed=True,
@@ -1503,7 +1494,7 @@ async def test_remote_restart_is_delegated_with_request_id(
         ), activate=index == 0)
         remote_workspaces.append({
             "workspace_id": remote_id, "backend_workspace_id": backend_id,
-            "name": f"Remote {index}", "root_path": f"/remote-{index}", "managed": True,
+            "name": f"Remote {index}", "managed": True,
             "backend_generation": generation, "affected_workspace_ids": remote_ids,
             "services": ["workspace_api"],
         })
@@ -1644,7 +1635,6 @@ async def test_discovery_rejects_missing_or_noncanonical_backend_uuid(
             {
                 "workspace_id": "remote-alias",
                 "name": "Remote",
-                "root_path": "/remote",
                 "managed": False,
                 "connection_kind": "local",
                 "backend_workspace_id": backend_id,

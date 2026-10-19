@@ -170,7 +170,6 @@ function baseState(current: ReturnType<typeof session> | null): AppState {
     currentGoal: null,
     currentGoalSessionId: null,
     workspaceName: "",
-    workspaceRoot: "",
     uiSettingsLoaded: true,
   } as unknown as AppState;
 }

@@ -9,7 +9,6 @@ function createWorkspace(
   return {
     workspace_id: "workspace-1",
     name: "workspace",
-    root_path: "/workspace",
     backend_url: "http://127.0.0.1:8010",
     connection_kind: "local",
     status: "ready",

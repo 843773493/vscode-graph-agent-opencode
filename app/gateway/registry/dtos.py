@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING, cast
 from urllib.parse import urlparse
 
 import httpx
 
+from app.core.mounted_workspaces import mounted_workspace_manifest_digest
 from app.gateway.service_types import GatewayServiceName
 from app.schemas.gateway.config import GatewayConfigReloadStatusDTO
 from app.schemas.gateway.workspaces import (
@@ -16,6 +18,9 @@ from app.schemas.gateway.workspaces import (
 )
 
 from .core import WorkspaceTarget
+
+if TYPE_CHECKING:
+    from . import GatewayWorkspaceRegistry
 
 
 class RegistryDtosMixin:
@@ -94,7 +99,7 @@ class RegistryDtosMixin:
                                 )
                             if backend_owner is not None and (
                                 health_payload.get("backend_generation") != backend_contract.generation
-                                or health_payload.get("mount_manifest_digest") != backend_contract.manifest_digest
+                                or health_payload.get("mount_manifest_digest") != mounted_workspace_manifest_digest(cast("GatewayWorkspaceRegistry", self).resolve_backend_mounts(backend_contract))
                                 or health_payload.get("status") != "ok"
                             ):
                                 raise RuntimeError("managed Backend 完整组健康证明不匹配")
@@ -226,7 +231,6 @@ class RegistryDtosMixin:
                     affected_workspace_ids=list(backend_contract.workspace_ids) if backend_contract is not None else list(target.remote_affected_workspace_ids) if target.remote_backend_generation is not None else [target.workspace_id],
                     parent_workspace_id=target.parent_workspace_id,
                     name=target.name,
-                    root_path=target.root_path,
                     backend_url=target.backend_url,
                     connection_kind=target.connection_kind,
                     status=status,

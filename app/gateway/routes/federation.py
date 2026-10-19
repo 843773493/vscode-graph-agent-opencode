@@ -16,11 +16,13 @@ from fastapi import (
 
 from app.core.env import get_project_root
 from app.core.trace_middleware import get_request_id
-from app.gateway.auth import verify_federation_token
+from app.gateway.auth import GatewayAuthContext, verify_federation_token
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.diagnostics import collect_gateway_diagnostics
 from app.gateway.federation import FEDERATION_PROTOCOL_VERSION
+from app.gateway.federation.policy import FederationPolicyStore
+from app.gateway.federation.ports import principal_ref_for_gateway
 from app.gateway.managed_workspaces import (
     create_direct_managed_workspace,
     remove_direct_managed_workspace,
@@ -50,6 +52,22 @@ from app.schemas.gateway.workspaces import (
 from app.schemas.internal_v2.common import APIResponse
 
 router = APIRouter()
+
+
+def require_managed_workspace_admin(
+    request: Request, auth: Annotated[GatewayAuthContext, Depends(verify_federation_token)],
+) -> None:
+    """目标 Gateway 在目录、registry 与 runtime 副作用前读取唯一 policy。"""
+    policy_store = request.app.state.federation_policy_store
+    if not isinstance(policy_store, FederationPolicyStore):
+        raise TypeError("Gateway federation policy 尚未初始化")
+    if auth.kind != "federation" or not auth.peer_gateway_id:
+        raise RuntimeError("federation 管理请求缺少认证 peer 身份")
+    if not policy_store.snapshot.evaluate(
+        capability="managed_workspace_admin", origin_gateway_id=auth.peer_gateway_id,
+        principal_ref=principal_ref_for_gateway(auth.peer_gateway_id),
+    ):
+        raise HTTPException(status_code=403, detail="目标 Gateway 未授权 managed_workspace_admin")
 
 
 @router.get(
@@ -116,7 +134,6 @@ async def federation_workspaces(
             backend_generation=registry.backend_owner(target.workspace_id).contract.generation if registry.backend_owner(target.workspace_id) is not None else None,
             affected_workspace_ids=list(registry.backend_owner(target.workspace_id).contract.workspace_ids) if registry.backend_owner(target.workspace_id) is not None else [target.workspace_id],
             name=target.name,
-            root_path=target.root_path,
             managed=target.managed,
             connection_kind="local",
             services=services_for(target.workspace_id),
@@ -187,7 +204,7 @@ async def federation_managed_workspaces(
 )
 async def create_federation_managed_workspace(
     payload: CreateFederationManagedWorkspaceRequest,
-    _: object = Depends(verify_federation_token),
+    _: None = Depends(require_managed_workspace_admin),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
@@ -218,7 +235,7 @@ async def remove_federation_managed_workspace(
     workspace_id: str,
     payload: Annotated[GatewayRuntimeGroupRequest | None, Body()] = None,
     force: bool = False,
-    _: object = Depends(verify_federation_token),
+    _: None = Depends(require_managed_workspace_admin),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
     controller: Annotated[GatewayWorkspaceRuntimeController, Depends(get_workspace_runtime_controller)] = None,

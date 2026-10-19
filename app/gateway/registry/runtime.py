@@ -1,15 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Literal
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal, cast
 from uuid import uuid4
 
+from app.core.mounted_workspaces import (
+    MountedWorkspace,
+    mounted_workspace_manifest_digest,
+)
 from app.gateway.runtime.consumer_protocol import GatewayRuntimeHealthProof
 from app.gateway.runtime.managed_backend import (
     ManagedBackendContract,
     ManagedBackendOwner,
 )
+from app.gateway.runtime.process import resolve_backend_workspace_id
 from app.gateway.runtime.workspace import WorkspaceRuntime
+
+if TYPE_CHECKING:
+    from . import GatewayWorkspaceRegistry
 
 
 class RegistryRuntimeMixin:
@@ -20,15 +29,63 @@ class RegistryRuntimeMixin:
     def backend_owners(self) -> tuple[ManagedBackendOwner, ...]:
         return tuple(self._backend_owners.values())
 
+    def local_workspace_root(self, workspace_id: str, backend_workspace_id: str) -> Path:
+        """只按精确 target/Backend 身份取得唯一 registry root binding。"""
+        registry = cast("GatewayWorkspaceRegistry", self)
+        target = registry.resolve(workspace_id)
+        if target.connection_kind != "local" or target.backend_workspace_id != backend_workspace_id:
+            raise RuntimeError(f"Gateway root binding 身份不匹配: workspace_id={workspace_id}")
+        if not isinstance(target.root_path, str) or not target.root_path or not Path(target.root_path).is_absolute():
+            raise RuntimeError(f"Gateway 缺少绝对 root binding: workspace_id={workspace_id}")
+        return Path(target.root_path)
+
+    def resolve_backend_mounts(self, contract: ManagedBackendContract) -> tuple[MountedWorkspace, ...]:
+        """组合同只给身份；根与辅助服务地址只从当前 registry 组装成启动输入。"""
+        registry = cast("GatewayWorkspaceRegistry", self)
+        mounts = []
+        for member in contract.members:
+            target = registry.resolve(member.workspace_id)
+            if not target.managed:
+                raise RuntimeError(f"Backend 成员不是托管 target: {member.workspace_id}")
+            mounts.append(MountedWorkspace(
+                member.backend_workspace_id,
+                self.local_workspace_root(member.workspace_id, member.backend_workspace_id),
+                target.local_service_urls.get("terminal_manager"),
+                target.local_service_urls.get("browser_manager"),
+            ))
+        if len({mount.workspace_root for mount in mounts}) != len(mounts):
+            raise RuntimeError("Backend 完整成员的 root binding 重复")
+        return tuple(mounts)
+
+    def validate_local_root_bindings(self, project_root: Path) -> None:
+        """冷启动在任何写入/进程前只读核验全部本地 binding，包括停机成员。"""
+        registry = cast("GatewayWorkspaceRegistry", self)
+        managed_ids = {target.workspace_id for target in registry.targets() if target.connection_kind == "local" and target.managed}
+        member_ids = {member_id for owner in self.backend_owners() for member_id in owner.contract.workspace_ids}
+        if member_ids != managed_ids:
+            raise RuntimeError(f"Backend 完整成员集合与 registry 不匹配: missing={sorted(managed_ids-member_ids)}, extra={sorted(member_ids-managed_ids)}")
+        for owner in self.backend_owners():
+            self.resolve_backend_mounts(owner.contract)
+        for target in registry.targets():
+            if target.connection_kind != "local":
+                continue
+            if target.backend_workspace_id is None:
+                raise RuntimeError(f"本地 root binding 缺少 Backend UUID: {target.workspace_id}")
+            root = self.local_workspace_root(target.workspace_id, target.backend_workspace_id)
+            actual_id = resolve_backend_workspace_id(project_root, root, initialize=False)
+            if actual_id != target.backend_workspace_id:
+                raise RuntimeError(f"Gateway registry 工作区 backend UUID 与本地身份文件不一致: workspace_id={target.workspace_id}, expected={target.backend_workspace_id}, actual={actual_id}")
+
     def register_backend_owner(self, owner: ManagedBackendOwner) -> None:
         """在启动任何进程前登记显式完整合同，失败句柄仍有唯一回收入口。"""
         if owner.contract.owner_id in self._backend_owners:
             raise ValueError("Backend owner 已登记")
+        self.resolve_backend_mounts(owner.contract)
         for member in owner.contract.members:
             target = self.resolve(member.workspace_id)
             if self.backend_owner(member.workspace_id) is not None:
                 raise ValueError("Backend 成员已属于其它 owner")
-            if target.connection_kind != "local" or not target.managed or target.backend_workspace_id != member.mount.workspace_id or target.root_path != str(member.mount.workspace_root):
+            if target.connection_kind != "local" or not target.managed or target.backend_workspace_id != member.backend_workspace_id:
                 raise ValueError("Backend 完整合同与已登记 target 不匹配")
         previous_commit = getattr(self, "_last_committed_snapshot", None)
         self._backend_owners[owner.contract.owner_id] = owner
@@ -89,8 +146,7 @@ class RegistryRuntimeMixin:
             target = self.resolve(member.workspace_id)
             if target.connection_kind != "local" or not target.managed:
                 raise ValueError("Backend 成员必须是已登记 local managed target")
-            if target.backend_workspace_id != member.mount.workspace_id or target.root_path != str(member.mount.workspace_root):
-                raise RuntimeError("Backend 成员合同与 target UUID/根不匹配")
+            self.local_workspace_root(member.workspace_id, member.backend_workspace_id)
             other = self.backend_owner(member.workspace_id)
             if other is not None and other is not owner:
                 if other.process is not None or other.unpublished_runtimes:
@@ -100,16 +156,19 @@ class RegistryRuntimeMixin:
                 staged_owners.pop(other.contract.owner_id, None)
             if not stopped:
                 runtime = published_runtimes[member.workspace_id]
-                if runtime.service_urls.get("terminal_manager") != member.mount.terminal_backend_url or runtime.service_urls.get("browser_manager") != member.mount.browser_backend_url:
-                    raise RuntimeError("Backend mount 服务地址与完整 runtime 不匹配")
+                if any(not runtime.service_urls.get(name) for name in ("terminal_manager", "browser_manager")):
+                    raise RuntimeError("Backend 完整 runtime 缺少辅助服务地址")
+                if runtime.backend_workspace_id != member.backend_workspace_id:
+                    raise RuntimeError("Backend runtime 与完整成员 UUID 不匹配")
                 runtime_urls[member.workspace_id] = {**runtime.service_urls, "workspace_api": contract.backend_url}
                 staged_runtimes[member.workspace_id] = runtime
             staged_targets[member.workspace_id] = replace(
                 target, backend_url=contract.backend_url,
-                local_service_urls={name: url for name, url in (
-                    ("terminal_manager", member.mount.terminal_backend_url),
-                    ("browser_manager", member.mount.browser_backend_url),
-                ) if url is not None},
+                local_service_urls=target.local_service_urls if stopped else {
+                    name: published_runtimes[member.workspace_id].service_urls[name]
+                    for name in ("terminal_manager", "browser_manager")
+                    if name in published_runtimes[member.workspace_id].service_urls
+                },
                 desired_running=not stopped, connection_error=None,
                 target_generation=f"target_generation_{uuid4().hex}",
                 runtime_lease_id=None if stopped else f"runtime_lease_{uuid4().hex}",
@@ -310,7 +369,7 @@ class RegistryRuntimeMixin:
                 contracts.append({
                     "owner_id": owner.contract.owner_id, "backend_generation": owner.contract.generation,
                     "affected_workspace_ids": list(owner.contract.workspace_ids),
-                    "mount_manifest_digest": owner.contract.manifest_digest,
+                    "mount_manifest_digest": mounted_workspace_manifest_digest(self.resolve_backend_mounts(owner.contract)),
                 })
             details = {"managed_backend_count": len(contracts), "backends": contracts}
 

@@ -374,8 +374,8 @@ def resolve_python_executable(_: Path) -> Path:
     return Path(sys.executable).absolute()
 
 
-def resolve_backend_workspace_id(project_root: Path, workspace_root: Path) -> str:
-    """通过 Workspace 自己的 CLI 读取或初始化稳定 backend UUID。"""
+def resolve_backend_workspace_id(project_root: Path, workspace_root: Path, *, initialize: bool = True) -> str:
+    """通过 Workspace CLI 取得 UUID；恢复必须只读，不得重建缺失身份。"""
 
     resolved_project_root = project_root.expanduser().resolve(strict=True)
     resolved_workspace_root = workspace_root.expanduser().resolve(strict=True)
@@ -388,6 +388,7 @@ def resolve_backend_workspace_id(project_root: Path, workspace_root: Path) -> st
             "app.core.workspace_identity",
             "--workspace-root",
             str(resolved_workspace_root),
+            *([] if initialize else ["--read-only"]),
         ],
         cwd=resolved_project_root,
         env=_local_child_environment(),

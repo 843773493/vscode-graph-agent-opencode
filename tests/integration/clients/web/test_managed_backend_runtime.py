@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from app.gateway.workspace_ids import build_managed_local_workspace_id
 from tests.integration.test_shared_managed_backend_lifecycle import SharedBackendCase
 
 pytest_plugins = ("tests.integration.test_shared_managed_backend_lifecycle",)
@@ -37,7 +38,7 @@ async def test_complete_backend_group_confirmation_and_runtime_actions(
     added = await case.data("POST", "/api/gateway/workspaces/local", json={
         "root_path": str(case.roots[1]), "name": "Web Secondary",
     })
-    secondary = next(item for item in added["items"] if item["root_path"] == str(case.roots[1]))
+    secondary = next(item for item in added["items"] if item["workspace_id"] == build_managed_local_workspace_id(str(case.roots[1])))
     await case.data("POST", f"/api/gateway/workspaces/{secondary['workspace_id']}/runtime/stop")
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium") or shutil.which("chromium-browser")
     assert chromium is not None, "Backend 完整组 Web Integration 需要 Chromium"

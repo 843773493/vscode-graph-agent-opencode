@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from uuid import uuid4
 
-from app.core.mounted_workspaces import MountedWorkspace
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.managed_backend import (
     ManagedBackendContract,
@@ -53,6 +51,7 @@ class ProcessProbe:
 class ManagedBackendGraph:
     owner: ManagedBackendOwner
     runtimes: dict[str, WorkspaceRuntime]
+    targets: tuple[WorkspaceTarget, ...]
 
     @property
     def group_request(self) -> GatewayRuntimeGroupRequest:
@@ -82,10 +81,7 @@ def backend_graph(
             "terminal_manager": target.local_service_urls.get("terminal_manager", f"http://127.0.0.1:{42001 + index * 2}"),
             "browser_manager": target.local_service_urls.get("browser_manager", f"http://127.0.0.1:{42002 + index * 2}"),
         }
-        members.append(ManagedBackendMember(target.workspace_id, MountedWorkspace(
-            target.backend_workspace_id, Path(target.root_path),
-            services["terminal_manager"], services["browser_manager"],
-        )))
+        members.append(ManagedBackendMember(target.workspace_id, target.backend_workspace_id))
         runtimes[target.workspace_id] = WorkspaceRuntime(
             service_urls={"workspace_api": backend_url, **services},
             processes=dict((auxiliary_processes or {}).get(target.workspace_id, {})),
@@ -100,4 +96,4 @@ def backend_graph(
         owner.set_process(process)
     for runtime in runtimes.values():
         runtime.backend_owner = owner
-    return ManagedBackendGraph(owner, runtimes)
+    return ManagedBackendGraph(owner, runtimes, targets)

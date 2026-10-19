@@ -67,6 +67,9 @@ function installBackend(
           message: "ok",
           request_id: "req_files",
           data: {
+            path: "",
+            directory_key: { workspace_id: "backend-uuid", scope: "workspace", root: workspaceRoot, path: "" },
+            directory_revision: 1,
             items: [
               {
                 name: "broken.ts",
@@ -111,7 +114,6 @@ async function renderProvider(): Promise<Harness> {
       <WorkspaceFileReferenceProvider
         apiPort={port}
         workspaceId="ws_test"
-        workspaceRoot={workspaceRoot}
         onOpen={() => {}}
       >
         <Capture />

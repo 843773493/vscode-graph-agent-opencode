@@ -77,7 +77,7 @@ async def test_remote_workspace_removal_keeps_registry_when_forward_cleanup_fail
             WorkspaceTarget(
                 workspace_id=workspace_id,
                 name=workspace_id,
-                root_path=f"/remote/{workspace_id}",
+                root_path=None,
                 backend_url="http://127.0.0.1:41000",
                 connection_kind="remote_gateway",
                 backend_workspace_id="00000000-0000-4000-8000-000000000002",
@@ -225,7 +225,7 @@ async def test_add_remote_gateway_http_reconciles_published_projection_and_repor
     old_target = WorkspaceTarget(
         workspace_id=old_workspace_id,
         name="Old remote workspace",
-        root_path="/remote/old",
+        root_path=None,
         backend_url=old_runtime.service_urls["workspace_api"],
         connection_kind="remote_gateway",
         backend_workspace_id="00000000-0000-4000-8000-000000000002",
@@ -277,7 +277,7 @@ async def test_add_remote_gateway_http_reconciles_published_projection_and_repor
             connection_id, "new-remote-workspace"
         ),
         name="New remote workspace",
-        root_path="/remote/new",
+        root_path=None,
         backend_url=new_runtime.service_urls["workspace_api"],
         connection_kind="remote_gateway",
         backend_workspace_id="00000000-0000-4000-8000-000000000003",

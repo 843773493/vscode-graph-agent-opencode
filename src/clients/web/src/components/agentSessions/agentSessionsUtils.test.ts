@@ -12,7 +12,6 @@ function workspace(overrides: Partial<GatewayWorkspace>): GatewayWorkspace {
     workspace_id: "gw_test",
     parent_workspace_id: null,
     name: "home",
-    root_path: "/home/test",
     backend_url: "http://127.0.0.1:9000",
     connection_kind: "local",
     status: "ready",

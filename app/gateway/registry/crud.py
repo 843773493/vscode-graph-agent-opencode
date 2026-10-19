@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import UUID, uuid4
 
 from app.gateway.runtime.workspace import WorkspaceRuntime
@@ -28,11 +29,11 @@ class RegistryCrudMixin:
             raise ValueError(f"Gateway registry mutation owner 非法: {mutation_owner}")
         existing = self._targets.get(target.workspace_id)
         backend_owner = self.backend_owner(target.workspace_id) if existing is not None else None
-        if backend_owner is not None:
+        if existing is not None and backend_owner is not None:
             if backend_owner.lock.locked() or self.backend_topology_lock.locked():
                 raise RuntimeError("Backend 完整组生命周期操作进行中，不能单独 upsert 成员")
             member = next(member for member in backend_owner.contract.members if member.workspace_id == target.workspace_id)
-            if target.root_path != str(member.mount.workspace_root) or target.backend_workspace_id != member.mount.workspace_id:
+            if target.root_path != existing.root_path or target.backend_workspace_id != member.backend_workspace_id:
                 raise ValueError("Backend 成员身份变更必须经完整组切换")
             if target.connection_kind != "local" or not target.managed or target.backend_url != backend_owner.contract.backend_url or target.desired_running != existing.desired_running or target.local_service_urls != existing.local_service_urls:
                 raise ValueError("Backend 成员路由和启动意图只能由完整组操作提交")
@@ -103,6 +104,11 @@ class RegistryCrudMixin:
 
     @staticmethod
     def _validate_target_identity(target: WorkspaceTarget) -> None:
+        if target.connection_kind == "local":
+            if not isinstance(target.root_path, str) or not target.root_path or not Path(target.root_path).is_absolute():
+                raise ValueError(f"本地 target 缺少绝对 root binding: {target.workspace_id}")
+        elif target.root_path is not None:
+            raise ValueError(f"远端 projection 不得包含 root binding: {target.workspace_id}")
         if target.owner not in {"config", "manual", "system", "remote_projection"}:
             raise ValueError(f"Gateway registry target owner 非法: {target.owner}")
         if not target.target_namespace.strip():

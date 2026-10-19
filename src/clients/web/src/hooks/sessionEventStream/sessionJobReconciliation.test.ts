@@ -166,7 +166,6 @@ function appState(): AppState {
     },
     uiSettingsLoaded: true,
     themeBackgroundWarning: null,
-    workspaceRoot: "/tmp/reconciliation-workspace",
     workspaceName: "reconciliation-workspace",
     agents: [],
     sessions: [currentSession],

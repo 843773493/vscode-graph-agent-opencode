@@ -483,10 +483,12 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
                 raise ValueError(
                     "只有外部本地后端可以执行重新探测"
                 )
+            if target.backend_workspace_id is None:
+                raise RuntimeError("外部 target 缺少 Backend UUID binding")
             backend_workspace_id = await asyncio.to_thread(
                 resolve_backend_workspace_id,
                 self._project_root,
-                Path(target.root_path),
+                self._registry.local_workspace_root(workspace_id, target.backend_workspace_id), initialize=False,
             )
             if (
                 target.backend_workspace_id is not None
@@ -673,10 +675,12 @@ async def reconnect_gateway_workspace(
         await controller.start_managed_backend(workspace_id, request_id=f"reconnect_{uuid4().hex}", group_request=request)
         return
     else:
+        if target.backend_workspace_id is None:
+            raise RuntimeError("外部 target 缺少 Backend UUID binding")
         backend_workspace_id = await asyncio.to_thread(
             resolve_backend_workspace_id,
             project_root,
-            Path(target.root_path),
+            registry.local_workspace_root(workspace_id, target.backend_workspace_id), initialize=False,
         )
         if (
             target.backend_workspace_id is not None

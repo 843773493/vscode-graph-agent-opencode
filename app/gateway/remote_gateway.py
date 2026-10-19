@@ -80,6 +80,8 @@ def _projected_workspace_targets(
     projected: list[WorkspaceTarget] = []
     remote_ids = {str(item["workspace_id"]) for item in remote_workspaces}
     for remote in remote_workspaces:
+        if "root_path" in remote:
+            raise ValueError("远端 workspace projection 不得包含物理 root")
         generation = remote.get("backend_generation")
         affected = remote.get("affected_workspace_ids", [])
         if generation is not None and (
@@ -120,7 +122,7 @@ def _projected_workspace_targets(
                     if keep_existing_name and existing is not None
                     else False
                 ),
-                root_path=str(remote["root_path"]),
+                root_path=None,
                 backend_url=gateway_url,
                 connection_kind="remote_gateway",
                 owner="remote_projection",

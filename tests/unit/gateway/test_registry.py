@@ -12,6 +12,7 @@ from app.gateway.federation import (
     RemoteGatewayConnection,
     build_projected_workspace_id,
 )
+from app.core.mounted_workspaces import mounted_workspace_manifest_digest
 from app.gateway.registry import (
     GatewayWorkspaceRegistry,
     WorkspaceTarget,
@@ -60,7 +61,7 @@ def test_remote_gateway_sqlite_publication_survives_registry_reopen(
             connection.connection_id, "remote-workspace"
         ),
         name="持久化远程工作区",
-        root_path="/remote/project",
+        root_path=None,
         backend_url="http://127.0.0.1:43100",
         connection_kind="remote_gateway",
         backend_workspace_id="00000000-0000-4000-8000-000000000002",
@@ -147,7 +148,7 @@ def test_removing_last_projection_deletes_connection_in_same_sqlite_publication(
                     WorkspaceTarget(
                         workspace_id=workspace_id,
                         name=workspace_id,
-                        root_path="/remote/" + workspace_id,
+                        root_path=None,
                         backend_url="http://127.0.0.1:43100",
                         connection_kind="remote_gateway",
                         backend_workspace_id="00000000-0000-4000-8000-000000000002",
@@ -443,7 +444,7 @@ def test_remote_gateway_runtime_retires_until_proxy_references_are_drained(
         WorkspaceTarget(
             workspace_id="projected",
             name="Projected",
-            root_path=str(tmp_path),
+            root_path=None,
             backend_url="http://127.0.0.1:41000",
             connection_kind="remote_gateway",
             backend_workspace_id="00000000-0000-4000-8000-000000000002",
@@ -495,7 +496,7 @@ def test_remote_projection_config_batch_is_atomic_and_respects_route_lease(
         return WorkspaceTarget(
             workspace_id="projected-batch",
             name="Projected batch",
-            root_path="/remote/project",
+            root_path=None,
             backend_url=url,
             connection_kind="remote_gateway",
             backend_workspace_id="00000000-0000-4000-8000-000000000002",
@@ -591,7 +592,7 @@ def test_remote_projection_batch_handoff_defers_old_runtime_and_can_rollback(
         return WorkspaceTarget(
             workspace_id="handoff-workspace",
             name="Handoff workspace",
-            root_path="/handoff",
+            root_path=None,
             backend_url=url,
             connection_kind="remote_gateway",
             backend_workspace_id="00000000-0000-4000-8000-000000000002",
@@ -670,7 +671,7 @@ def test_remote_projection_batch_handoff_closes_old_runtime_only_on_promotion(
     target = WorkspaceTarget(
         workspace_id="promote-workspace",
         name="Promotion workspace",
-        root_path="/promote",
+        root_path=None,
         backend_url="http://127.0.0.1:43300",
         connection_kind="remote_gateway",
         backend_workspace_id="00000000-0000-4000-8000-000000000002",
@@ -869,7 +870,7 @@ def test_registry_rejects_legacy_contract_without_rewriting_identity_or_running_
 
 def test_registry_rejects_removed_ssh_direct_backend_in_current_schema(tmp_path: Path) -> None:
     path = tmp_path / "gateway.json"
-    path.write_text(json.dumps({"schema_version": 12, "managed_backends": [], "targets": [{
+    path.write_text(json.dumps({"schema_version": 13, "managed_backends": [], "targets": [{
         "workspace_id": "old-ssh", "name": "Old SSH", "root_path": "/workspace/remote",
         "backend_url": "http://127.0.0.1:41000", "connection_kind": "ssh", "managed": True,
     }]}))
@@ -946,6 +947,7 @@ async def test_registry_persists_managed_runtime_intent_until_explicit_stop(
     monkeypatch.setattr(controller, "_runtime_action", action)
     monkeypatch.setattr(controller, "_runtime_status", status)
     monkeypatch.setattr(registry, "list_dtos", listed)
+    monkeypatch.setattr("app.gateway.runtime.local_workspace.resolve_backend_workspace_id", lambda *_, **__: target.backend_workspace_id)
     await controller.stop_managed_backend(target.workspace_id, request_id="stop")
 
     assert registry.resolve(target.workspace_id).desired_running is False
@@ -1136,7 +1138,7 @@ async def test_backend_dtos_probe_published_contract_inside_lifecycle_lock(
                 "status": "ok",
                 "workspace_id": request.headers["X-BoxTeam-Workspace-Id"],
                 "backend_generation": graph.owner.contract.generation,
-                "mount_manifest_digest": graph.owner.contract.manifest_digest,
+                "mount_manifest_digest": mounted_workspace_manifest_digest(registry.resolve_backend_mounts(graph.owner.contract)),
             }
         return httpx.Response(200, json=payload)
 
@@ -1170,7 +1172,7 @@ async def test_backend_dto_probe_failure_is_visible_and_only_stable_owner_persis
             payload = {
                 "status": "ok", "workspace_id": request.headers["X-BoxTeam-Workspace-Id"],
                 "backend_generation": "wrong-generation",
-                "mount_manifest_digest": graph.owner.contract.manifest_digest,
+                "mount_manifest_digest": mounted_workspace_manifest_digest(registry.resolve_backend_mounts(graph.owner.contract)),
             }
         return httpx.Response(200, json=payload)
 
@@ -1212,7 +1214,7 @@ async def test_old_dto_probe_cannot_mark_newly_published_owner_failed(
         return httpx.Response(200, json={
             "status": "ok", "workspace_id": request.headers["X-BoxTeam-Workspace-Id"],
             "backend_generation": "bad-old-proof",
-            "mount_manifest_digest": old_contract.manifest_digest,
+            "mount_manifest_digest": mounted_workspace_manifest_digest(registry.resolve_backend_mounts(old_contract)),
         })
 
     monkeypatch.setattr("app.gateway.registry.httpx.AsyncClient", lambda **options: client_type(
@@ -1253,7 +1255,7 @@ async def test_dto_active_state_uses_snapshot_from_list_entry_during_health_prob
             "status": "ok",
             "workspace_id": request.headers["X-BoxTeam-Workspace-Id"],
             "backend_generation": graph.owner.contract.generation,
-            "mount_manifest_digest": graph.owner.contract.manifest_digest,
+            "mount_manifest_digest": mounted_workspace_manifest_digest(registry.resolve_backend_mounts(graph.owner.contract)),
         })
 
     monkeypatch.setattr("app.gateway.registry.httpx.AsyncClient", lambda **options: client_type(

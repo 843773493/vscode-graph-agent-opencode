@@ -87,7 +87,6 @@ export interface FederationProtocolManifestDTO {
 export interface FederationWorkspaceDTO {
   workspace_id: string;
   name: string;
-  root_path: string;
   managed: boolean;
   connection_kind: string;
   services: string[];
@@ -159,7 +158,6 @@ export interface GatewayDiagnosticLogDTO {
 export interface GatewayDiagnosticWorkspaceDTO {
   workspace_id: string;
   name: string;
-  root_path: string;
   connection_kind: string;
   status: string;
   managed: boolean;
@@ -217,7 +215,6 @@ export interface GatewayInboundPeerDTO {
 export interface GatewayInboundWorkspaceDTO {
   workspace_id: string;
   name: string;
-  root_path: string;
   status: string;
   managed: boolean;
   system_default: boolean;
@@ -226,7 +223,6 @@ export interface GatewayInboundWorkspaceDTO {
 export interface GatewayManagedWorkspaceDTO {
   workspace_id: string;
   name: string;
-  root_path: string;
   status: string;
   removable: boolean;
   system_default: boolean;
@@ -457,7 +453,6 @@ export interface GatewayWorkspaceDTO {
   workspace_id: string;
   parent_workspace_id?: string | undefined;
   name: string;
-  root_path: string;
   backend_url: string;
   connection_kind: string;
   status: string;
@@ -1359,7 +1354,6 @@ function createBaseFederationWorkspaceDTO(): FederationWorkspaceDTO {
   return {
     workspace_id: "",
     name: "",
-    root_path: "",
     managed: false,
     connection_kind: "",
     services: [],
@@ -1374,7 +1368,6 @@ export const FederationWorkspaceDTO: MessageFns<FederationWorkspaceDTO> = {
     return {
       workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
       name: isSet(object.name) ? globalThis.String(object.name) : "",
-      root_path: isSet(object.root_path) ? globalThis.String(object.root_path) : "",
       managed: isSet(object.managed) ? globalThis.Boolean(object.managed) : false,
       connection_kind: isSet(object.connection_kind) ? globalThis.String(object.connection_kind) : "",
       services: globalThis.Array.isArray(object?.services)
@@ -1395,9 +1388,6 @@ export const FederationWorkspaceDTO: MessageFns<FederationWorkspaceDTO> = {
     }
     if (message.name !== "") {
       obj.name = message.name;
-    }
-    if (message.root_path !== "") {
-      obj.root_path = message.root_path;
     }
     if (message.managed !== false) {
       obj.managed = message.managed;
@@ -1427,7 +1417,6 @@ export const FederationWorkspaceDTO: MessageFns<FederationWorkspaceDTO> = {
     const message = createBaseFederationWorkspaceDTO();
     message.workspace_id = object.workspace_id ?? "";
     message.name = object.name ?? "";
-    message.root_path = object.root_path ?? "";
     message.managed = object.managed ?? false;
     message.connection_kind = object.connection_kind ?? "";
     message.services = object.services?.map((e) => e) || [];
@@ -1788,7 +1777,6 @@ function createBaseGatewayDiagnosticWorkspaceDTO(): GatewayDiagnosticWorkspaceDT
   return {
     workspace_id: "",
     name: "",
-    root_path: "",
     connection_kind: "",
     status: "",
     managed: false,
@@ -1802,7 +1790,6 @@ export const GatewayDiagnosticWorkspaceDTO: MessageFns<GatewayDiagnosticWorkspac
     return {
       workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
       name: isSet(object.name) ? globalThis.String(object.name) : "",
-      root_path: isSet(object.root_path) ? globalThis.String(object.root_path) : "",
       connection_kind: isSet(object.connection_kind) ? globalThis.String(object.connection_kind) : "",
       status: isSet(object.status) ? globalThis.String(object.status) : "",
       managed: isSet(object.managed) ? globalThis.Boolean(object.managed) : false,
@@ -1818,9 +1805,6 @@ export const GatewayDiagnosticWorkspaceDTO: MessageFns<GatewayDiagnosticWorkspac
     }
     if (message.name !== "") {
       obj.name = message.name;
-    }
-    if (message.root_path !== "") {
-      obj.root_path = message.root_path;
     }
     if (message.connection_kind !== "") {
       obj.connection_kind = message.connection_kind;
@@ -1849,7 +1833,6 @@ export const GatewayDiagnosticWorkspaceDTO: MessageFns<GatewayDiagnosticWorkspac
     const message = createBaseGatewayDiagnosticWorkspaceDTO();
     message.workspace_id = object.workspace_id ?? "";
     message.name = object.name ?? "";
-    message.root_path = object.root_path ?? "";
     message.connection_kind = object.connection_kind ?? "";
     message.status = object.status ?? "";
     message.managed = object.managed ?? false;
@@ -2184,7 +2167,7 @@ export const GatewayInboundPeerDTO: MessageFns<GatewayInboundPeerDTO> = {
 };
 
 function createBaseGatewayInboundWorkspaceDTO(): GatewayInboundWorkspaceDTO {
-  return { workspace_id: "", name: "", root_path: "", status: "", managed: false, system_default: false };
+  return { workspace_id: "", name: "", status: "", managed: false, system_default: false };
 }
 
 export const GatewayInboundWorkspaceDTO: MessageFns<GatewayInboundWorkspaceDTO> = {
@@ -2192,7 +2175,6 @@ export const GatewayInboundWorkspaceDTO: MessageFns<GatewayInboundWorkspaceDTO> 
     return {
       workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
       name: isSet(object.name) ? globalThis.String(object.name) : "",
-      root_path: isSet(object.root_path) ? globalThis.String(object.root_path) : "",
       status: isSet(object.status) ? globalThis.String(object.status) : "",
       managed: isSet(object.managed) ? globalThis.Boolean(object.managed) : false,
       system_default: isSet(object.system_default) ? globalThis.Boolean(object.system_default) : false,
@@ -2206,9 +2188,6 @@ export const GatewayInboundWorkspaceDTO: MessageFns<GatewayInboundWorkspaceDTO> 
     }
     if (message.name !== "") {
       obj.name = message.name;
-    }
-    if (message.root_path !== "") {
-      obj.root_path = message.root_path;
     }
     if (message.status !== "") {
       obj.status = message.status;
@@ -2229,7 +2208,6 @@ export const GatewayInboundWorkspaceDTO: MessageFns<GatewayInboundWorkspaceDTO> 
     const message = createBaseGatewayInboundWorkspaceDTO();
     message.workspace_id = object.workspace_id ?? "";
     message.name = object.name ?? "";
-    message.root_path = object.root_path ?? "";
     message.status = object.status ?? "";
     message.managed = object.managed ?? false;
     message.system_default = object.system_default ?? false;
@@ -2238,7 +2216,7 @@ export const GatewayInboundWorkspaceDTO: MessageFns<GatewayInboundWorkspaceDTO> 
 };
 
 function createBaseGatewayManagedWorkspaceDTO(): GatewayManagedWorkspaceDTO {
-  return { workspace_id: "", name: "", root_path: "", status: "", removable: false, system_default: false };
+  return { workspace_id: "", name: "", status: "", removable: false, system_default: false };
 }
 
 export const GatewayManagedWorkspaceDTO: MessageFns<GatewayManagedWorkspaceDTO> = {
@@ -2246,7 +2224,6 @@ export const GatewayManagedWorkspaceDTO: MessageFns<GatewayManagedWorkspaceDTO> 
     return {
       workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
       name: isSet(object.name) ? globalThis.String(object.name) : "",
-      root_path: isSet(object.root_path) ? globalThis.String(object.root_path) : "",
       status: isSet(object.status) ? globalThis.String(object.status) : "",
       removable: isSet(object.removable) ? globalThis.Boolean(object.removable) : false,
       system_default: isSet(object.system_default) ? globalThis.Boolean(object.system_default) : false,
@@ -2260,9 +2237,6 @@ export const GatewayManagedWorkspaceDTO: MessageFns<GatewayManagedWorkspaceDTO> 
     }
     if (message.name !== "") {
       obj.name = message.name;
-    }
-    if (message.root_path !== "") {
-      obj.root_path = message.root_path;
     }
     if (message.status !== "") {
       obj.status = message.status;
@@ -2283,7 +2257,6 @@ export const GatewayManagedWorkspaceDTO: MessageFns<GatewayManagedWorkspaceDTO> 
     const message = createBaseGatewayManagedWorkspaceDTO();
     message.workspace_id = object.workspace_id ?? "";
     message.name = object.name ?? "";
-    message.root_path = object.root_path ?? "";
     message.status = object.status ?? "";
     message.removable = object.removable ?? false;
     message.system_default = object.system_default ?? false;
@@ -3702,7 +3675,6 @@ function createBaseGatewayWorkspaceDTO(): GatewayWorkspaceDTO {
     workspace_id: "",
     parent_workspace_id: undefined,
     name: "",
-    root_path: "",
     backend_url: "",
     connection_kind: "",
     status: "",
@@ -3730,7 +3702,6 @@ export const GatewayWorkspaceDTO: MessageFns<GatewayWorkspaceDTO> = {
         ? globalThis.String(object.parent_workspace_id)
         : undefined,
       name: isSet(object.name) ? globalThis.String(object.name) : "",
-      root_path: isSet(object.root_path) ? globalThis.String(object.root_path) : "",
       backend_url: isSet(object.backend_url) ? globalThis.String(object.backend_url) : "",
       connection_kind: isSet(object.connection_kind) ? globalThis.String(object.connection_kind) : "",
       status: isSet(object.status) ? globalThis.String(object.status) : "",
@@ -3766,9 +3737,6 @@ export const GatewayWorkspaceDTO: MessageFns<GatewayWorkspaceDTO> = {
     }
     if (message.name !== "") {
       obj.name = message.name;
-    }
-    if (message.root_path !== "") {
-      obj.root_path = message.root_path;
     }
     if (message.backend_url !== "") {
       obj.backend_url = message.backend_url;
@@ -3829,7 +3797,6 @@ export const GatewayWorkspaceDTO: MessageFns<GatewayWorkspaceDTO> = {
     message.workspace_id = object.workspace_id ?? "";
     message.parent_workspace_id = object.parent_workspace_id ?? undefined;
     message.name = object.name ?? "";
-    message.root_path = object.root_path ?? "";
     message.backend_url = object.backend_url ?? "";
     message.connection_kind = object.connection_kind ?? "";
     message.status = object.status ?? "";

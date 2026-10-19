@@ -54,7 +54,6 @@ export function workspaceHoverTitle(workspace: GatewayWorkspace): string {
   if (workspace.connection_kind === 'remote_gateway') {
     lines.push(`hostname: ${workspace.remote?.host ?? '<连接信息不可用>'}`);
   }
-  lines.push(`root_path: ${workspace.root_path}`);
   return lines.join('\n');
 }
 

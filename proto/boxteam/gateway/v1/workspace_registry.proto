@@ -9,9 +9,10 @@ enum WorkspaceStatus {
 }
 
 message WorkspaceSummary {
+  reserved 3;
+  reserved "root_path";
   string workspace_id = 1;
   string name = 2;
-  string root_path = 3;
   string backend_url = 4;
   WorkspaceStatus status = 5;
   bool active = 6;

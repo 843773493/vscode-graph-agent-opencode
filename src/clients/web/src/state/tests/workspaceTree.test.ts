@@ -9,7 +9,6 @@ function workspace(
     workspace_id: workspaceId,
     parent_workspace_id: parentWorkspaceId,
     name: workspaceId,
-    root_path: `/workspace/${workspaceId}`,
     backend_url: "http://127.0.0.1:8010",
     connection_kind: "local",
     status: "ready",

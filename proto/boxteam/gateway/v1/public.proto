@@ -85,9 +85,10 @@ message FederationProtocolManifestDTO {
 }
 
 message FederationWorkspaceDTO {
+  reserved 3;
+  reserved "root_path";
   string workspace_id = 1;
   string name = 2;
-  string root_path = 3;
   bool managed = 4;
   string connection_kind = 5;
   repeated string services = 6;
@@ -159,9 +160,10 @@ message GatewayDiagnosticLogDTO {
 }
 
 message GatewayDiagnosticWorkspaceDTO {
+  reserved 3;
+  reserved "root_path";
   string workspace_id = 1;
   string name = 2;
-  string root_path = 3;
   string connection_kind = 4;
   string status = 5;
   bool managed = 6;
@@ -217,18 +219,20 @@ message GatewayInboundPeerDTO {
 }
 
 message GatewayInboundWorkspaceDTO {
+  reserved 3;
+  reserved "root_path";
   string workspace_id = 1;
   string name = 2;
-  string root_path = 3;
   string status = 4;
   bool managed = 5;
   bool system_default = 6;
 }
 
 message GatewayManagedWorkspaceDTO {
+  reserved 3;
+  reserved "root_path";
   string workspace_id = 1;
   string name = 2;
-  string root_path = 3;
   string status = 4;
   bool removable = 5;
   bool system_default = 6;
@@ -449,10 +453,11 @@ message GatewayUserViewStateUpdateRequest {
 }
 
 message GatewayWorkspaceDTO {
+  reserved 4;
+  reserved "root_path";
   string workspace_id = 1;
   optional string parent_workspace_id = 2;
   string name = 3;
-  string root_path = 4;
   string backend_url = 5;
   string connection_kind = 6;
   string status = 7;

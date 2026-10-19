@@ -7,9 +7,18 @@ from pathlib import Path
 
 import pytest
 
+from app.core.workspace_identity import (
+    load_or_create_workspace_id,
+    workspace_identity_path,
+)
 from app.gateway.config import GatewayConfig
+from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from app.gateway.runtime.managed_backend import ManagedBackendMember
+from app.gateway.runtime.managed_backend import (
+    ManagedBackendContract,
+    ManagedBackendMember,
+    ManagedBackendOwner,
+)
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server import bootstrap
 from app.gateway.workspace_ids import build_managed_local_workspace_id
@@ -27,32 +36,30 @@ class StartupCase:
     auxiliary_failure: Exception | None = None
     bad_fields: bool = False
 
-    async def start(self, *, owner, **options):
-        for member in owner.contract.members:
-            if not member.mount.workspace_root.is_dir():
-                raise FileNotFoundError(f"工作区目录不存在: {member.mount.workspace_root}")
+    async def start(self, *, owner, registry, **options):
+        mounts = registry.resolve_backend_mounts(owner.contract)
+        for mount in mounts:
+            if not mount.workspace_root.is_dir():
+                raise FileNotFoundError(f"工作区目录不存在: {mount.workspace_root}")
         self.started.append((owner, options))
         port = 44000 + len(self.started) * 10
-        members, runtimes = [], {}
+        runtimes = {}
         backend = ProcessProbe("backend")
         terminal = ProcessProbe("terminal", failure=self.auxiliary_failure)
         self.handles.append((backend, terminal))
         owner.set_process(backend, adopted=self.backend_adopted)
         for index, member in enumerate(owner.contract.members):
             terminal_url, browser_url = f"http://127.0.0.1:{port + index * 2 + 1}", f"http://127.0.0.1:{port + index * 2 + 2}"
-            members.append(ManagedBackendMember(member.workspace_id, replace(
-                member.mount, terminal_backend_url=terminal_url, browser_backend_url=browser_url,
-            )))
             runtime = WorkspaceRuntime(
                 service_urls={"workspace_api": f"http://127.0.0.1:{port}", "terminal_manager": terminal_url, "browser_manager": browser_url},
-                backend_owner=owner, backend_workspace_id=member.mount.workspace_id,
+                backend_owner=owner, backend_workspace_id=member.backend_workspace_id,
                 processes={"terminal_manager": terminal} if index == 0 else {},
             )
             if self.bad_fields:
                 runtime.service_urls.pop("browser_manager")
             runtimes[member.workspace_id] = runtime
             owner.unpublished_runtimes[member.workspace_id] = runtime
-        return replace(owner.contract, members=tuple(members), backend_url=f"http://127.0.0.1:{port}"), runtimes
+        return replace(owner.contract, backend_url=f"http://127.0.0.1:{port}"), runtimes
 
 
 @pytest.fixture
@@ -66,7 +73,12 @@ def startup_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> StartupCase
     monkeypatch.setattr(bootstrap, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(bootstrap, "_default_workspace_root", lambda: case.default_root)
     monkeypatch.setattr(bootstrap, "load_gateway_config", lambda: GatewayConfig())
-    monkeypatch.setattr(bootstrap, "resolve_backend_workspace_id", lambda _project, root: case.identities[root])
+    def identity(_project, root, **_):
+        if not root.is_dir():
+            raise FileNotFoundError(f"工作区目录不存在: {root}")
+        return case.identities[root]
+    monkeypatch.setattr(bootstrap, "resolve_backend_workspace_id", identity)
+    monkeypatch.setattr("app.gateway.registry.runtime.resolve_backend_workspace_id", identity)
     monkeypatch.setattr(bootstrap, "start_managed_backend_runtime", case.start)
     return case
 
@@ -138,17 +150,27 @@ async def test_gateway_start_restores_all_desired_managed_workspaces(startup_cas
 
 
 @pytest.mark.asyncio
-async def test_gateway_restore_failure_keeps_intent_and_restores_other_targets(startup_case, persisted_targets, caplog) -> None:
+async def test_gateway_non_root_start_failure_keeps_intent_and_restores_other_targets(
+    startup_case, persisted_targets, monkeypatch, caplog,
+) -> None:
     registry, add = persisted_targets
     defaults, _ = add(("Default",), default=True)
-    missing, _ = add(("Missing-a", "Missing-b"), missing=True)
+    unavailable, graph = add(("Unavailable-a", "Unavailable-b"))
     healthy, _ = add(("Healthy",))
-    registry.activate(missing[0].workspace_id)
+    registry.activate(unavailable[0].workspace_id)
+
+    async def start(*, owner, **options):
+        if owner is graph.owner:
+            raise RuntimeError("Backend start rejected")
+        return await startup_case.start(owner=owner, **options)
+
+    monkeypatch.setattr(bootstrap, "start_managed_backend_runtime", start)
     await bootstrap._restore_managed_local_runtimes(
-        registry=registry, default_workspace_id=defaults[0].workspace_id, gateway_root=startup_case.gateway_root,
+        registry=registry, default_workspace_id=defaults[0].workspace_id,
+        gateway_root=startup_case.gateway_root,
     )
-    assert all(registry.resolve(target.workspace_id).desired_running for target in missing)
-    assert all("工作区目录不存在" in registry.resolve(target.workspace_id).connection_error for target in missing)
+    assert all(registry.resolve(target.workspace_id).desired_running for target in unavailable)
+    assert all("Backend start rejected" in registry.resolve(target.workspace_id).connection_error for target in unavailable)
     assert registry.has_runtime(healthy[0].workspace_id)
     assert registry.active_workspace_id == defaults[0].workspace_id
     assert any("已回退到默认工作区" in record.getMessage() for record in caplog.records)
@@ -156,19 +178,108 @@ async def test_gateway_restore_failure_keeps_intent_and_restores_other_targets(s
 
 
 @pytest.mark.asyncio
-async def test_gateway_restore_rejects_missing_explicit_owner_without_guessing_url(startup_case, persisted_targets, caplog) -> None:
+@pytest.mark.parametrize("desired_running", [True, False])
+@pytest.mark.parametrize("failure", ["root-missing", "uuid-mismatch", "owner-missing"])
+async def test_cold_restore_rejects_invalid_binding_before_any_write_or_process(
+    startup_case, persisted_targets, desired_running, failure, monkeypatch,
+) -> None:
+    registry, add = persisted_targets
+    targets, _ = add(("Invalid",), desired_running=desired_running, missing=failure == "root-missing", owner=failure != "owner-missing")
+    target = targets[0]
+    registry.activate(target.workspace_id)
+    if failure == "uuid-mismatch":
+        startup_case.identities[Path(target.root_path)] = "00000000-0000-4000-8000-000000000099"
+    before = registry._storage_path.read_bytes()
+    revision = registry.registry_revision
+    default_calls = []
+    def default_root():
+        default_calls.append(True)
+        raise AssertionError("无效 binding 不得解析或创建默认工作区")
+    monkeypatch.setattr(bootstrap, "_default_workspace_root", default_root)
+    with pytest.raises((RuntimeError, FileNotFoundError), match="目录不存在|UUID|完整成员集合"):
+        await bootstrap.create_registry()
+    assert registry._storage_path.read_bytes() == before
+    assert registry.registry_revision == revision
+    assert not startup_case.started and not startup_case.handles and not default_calls
+    assert registry.active_workspace_id == target.workspace_id
+    assert registry.resolve(target.workspace_id).desired_running is desired_running
+    assert not (Path(target.root_path) / ".boxteam").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("desired_running", [True, False])
+@pytest.mark.parametrize("storage", ["sqlite", "json-migration"])
+@pytest.mark.parametrize("failure", ["root-missing", "identity-missing", "uuid-mismatch", "owner-missing"])
+async def test_cold_restore_real_identity_cli_preserves_registry_on_invalid_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    desired_running: bool, storage: str, failure: str,
+) -> None:
+    gateway_root = tmp_path / "gateway"
+    root = tmp_path / "registered"
+    root.mkdir()
+    backend_id = load_or_create_workspace_id(root)
+    state = GatewayStateStore(path=gateway_root / "gateway.sqlite")
+    path = gateway_root / "workspaces.json"
+    persisted = GatewayWorkspaceRegistry(storage_path=path, state_store=state if storage == "sqlite" else None)
+    target = WorkspaceTarget(
+        workspace_id=build_managed_local_workspace_id(str(root)), name="Registered",
+        root_path=str(root), backend_url="", connection_kind="local", managed=True,
+        backend_workspace_id=backend_id, desired_running=desired_running,
+    )
+    persisted.upsert(target)
+    if failure != "owner-missing":
+        persisted.register_backend_owner(ManagedBackendOwner(ManagedBackendContract(
+            "cold-owner", "cold-generation", (ManagedBackendMember(target.workspace_id, backend_id),), "",
+        )))
+    identity_path = workspace_identity_path(root)
+    if failure in {"root-missing", "identity-missing"}:
+        identity_path.unlink()
+        identity_path.parent.rmdir()
+        if failure == "root-missing":
+            root.rmdir()
+    elif failure == "uuid-mismatch":
+        identity_path.write_text('{"workspace_id":"00000000-0000-4000-8000-000000000099"}\n')
+    before = state.load_workspace_registry()
+    revision = state.get_registry_revision()
+    json_before = path.read_bytes() if path.exists() else None
+    identity_before = identity_path.read_bytes() if identity_path.exists() else None
+    default_root = tmp_path / "default-must-not-exist"
+    monkeypatch.setattr(bootstrap, "get_gateway_root", lambda: gateway_root)
+    monkeypatch.setenv("BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT", str(default_root))
+    try:
+        with pytest.raises((RuntimeError, FileNotFoundError), match="UUID|完整成员集合|No such file"):
+            await bootstrap.create_registry(gateway_config=GatewayConfig(), state_store=state)
+        assert state.load_workspace_registry() == before
+        assert state.get_registry_revision() == revision
+        assert (path.read_bytes() if path.exists() else None) == json_before
+        assert not path.with_name("workspaces.json.migrated.bak").exists()
+        assert (identity_path.read_bytes() if identity_path.exists() else None) == identity_before
+        assert not default_root.exists()
+        if failure in {"root-missing", "identity-missing"}:
+            assert not (root / ".boxteam").exists()
+        else:
+            assert identity_path.exists()
+        assert not (gateway_root / "logs").exists()
+        assert not persisted.backend_owners() or persisted.backend_owners()[0].process is None
+    finally:
+        state.close()
+
+
+@pytest.mark.asyncio
+async def test_restore_missing_owner_rejects_without_guessing_url_or_fallback(startup_case, persisted_targets) -> None:
     registry, add = persisted_targets
     defaults, _ = add(("Default",), default=True)
     orphan, _ = add(("Orphan",), owner=False)
     registry.activate(orphan[0].workspace_id)
-    await bootstrap._restore_managed_local_runtimes(
-        registry=registry, default_workspace_id=defaults[0].workspace_id, gateway_root=startup_case.gateway_root,
-    )
+    before = registry._storage_path.read_bytes()
+    with pytest.raises(RuntimeError, match="完整成员集合"):
+        await bootstrap._restore_managed_local_runtimes(
+            registry=registry, default_workspace_id=defaults[0].workspace_id, gateway_root=startup_case.gateway_root,
+        )
+    assert registry._storage_path.read_bytes() == before
     assert not startup_case.started
-    assert "缺少显式 Backend owner 完整合同" in registry.resolve(orphan[0].workspace_id).connection_error
     assert registry.backend_owner(orphan[0].workspace_id) is None
-    assert registry.active_workspace_id == defaults[0].workspace_id
-    assert any(record.levelname == "ERROR" for record in caplog.records)
+    assert registry.active_workspace_id == orphan[0].workspace_id
 
 
 @pytest.mark.asyncio

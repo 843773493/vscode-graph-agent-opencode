@@ -17,14 +17,14 @@ if TYPE_CHECKING:
     from app.gateway.registry import GatewayWorkspaceRegistry
 
 
-_REGISTRY_SCHEMA_VERSION = 12
+_REGISTRY_SCHEMA_VERSION = 13
 _UNSET = object()
 RegistryTargetOwner = Literal["config", "manual", "system", "remote_projection"]
 @dataclass(slots=True)
 class WorkspaceTarget:
     workspace_id: str
     name: str
-    root_path: str
+    root_path: str | None
     backend_url: str
     connection_kind: GatewayConnectionKind
     parent_workspace_id: str | None = None

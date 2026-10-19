@@ -68,7 +68,7 @@
                 "additionalProperties": false,
                 "required": ["capability"],
                 "properties": {
-                  "capability": { "enum": ["discovery", "send", "read", "wait", "reply", "transit"] },
+                  "capability": { "enum": ["discovery", "send", "read", "wait", "reply", "transit", "fork_source", "fork_target", "managed_workspace_admin"] },
                   "effect": { "enum": ["allow", "deny"], "default": "deny" },
                   "origin_gateway_id": { "type": ["string", "null"], "minLength": 1 },
                   "principal_ref": { "type": ["string", "null"], "minLength": 1 }

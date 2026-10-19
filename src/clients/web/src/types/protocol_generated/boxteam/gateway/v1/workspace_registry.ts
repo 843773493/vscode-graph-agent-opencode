@@ -50,7 +50,6 @@ export function workspaceStatusToJSON(object: WorkspaceStatus): string {
 export interface WorkspaceSummary {
   workspace_id: string;
   name: string;
-  root_path: string;
   backend_url: string;
   status: WorkspaceStatus;
   active: boolean;
@@ -63,7 +62,7 @@ export interface WorkspaceRegistry {
 }
 
 function createBaseWorkspaceSummary(): WorkspaceSummary {
-  return { workspace_id: "", name: "", root_path: "", backend_url: "", status: 0, active: false, connection_kind: "" };
+  return { workspace_id: "", name: "", backend_url: "", status: 0, active: false, connection_kind: "" };
 }
 
 export const WorkspaceSummary: MessageFns<WorkspaceSummary> = {
@@ -71,7 +70,6 @@ export const WorkspaceSummary: MessageFns<WorkspaceSummary> = {
     return {
       workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
       name: isSet(object.name) ? globalThis.String(object.name) : "",
-      root_path: isSet(object.root_path) ? globalThis.String(object.root_path) : "",
       backend_url: isSet(object.backend_url) ? globalThis.String(object.backend_url) : "",
       status: isSet(object.status) ? workspaceStatusFromJSON(object.status) : 0,
       active: isSet(object.active) ? globalThis.Boolean(object.active) : false,
@@ -86,9 +84,6 @@ export const WorkspaceSummary: MessageFns<WorkspaceSummary> = {
     }
     if (message.name !== "") {
       obj.name = message.name;
-    }
-    if (message.root_path !== "") {
-      obj.root_path = message.root_path;
     }
     if (message.backend_url !== "") {
       obj.backend_url = message.backend_url;
@@ -112,7 +107,6 @@ export const WorkspaceSummary: MessageFns<WorkspaceSummary> = {
     const message = createBaseWorkspaceSummary();
     message.workspace_id = object.workspace_id ?? "";
     message.name = object.name ?? "";
-    message.root_path = object.root_path ?? "";
     message.backend_url = object.backend_url ?? "";
     message.status = object.status ?? 0;
     message.active = object.active ?? false;

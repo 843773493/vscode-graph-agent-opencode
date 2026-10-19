@@ -730,7 +730,7 @@ interface BuildSessionHookStateOverrides {
   workspaceId: string;
   current: Session | null;
   sessions: Session[];
-  gatewayWorkspaces?: { workspace_id: string; root_path: string; name: string }[];
+  gatewayWorkspaces?: { workspace_id: string; name: string }[];
   sessionsByWorkspace?: Map<string, Session[]>;
   sessionGatewayWorkspaceById?: Map<string, string>;
   eventQueuesBySession?: Map<string, unknown>;

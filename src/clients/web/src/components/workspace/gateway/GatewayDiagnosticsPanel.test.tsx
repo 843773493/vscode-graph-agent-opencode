@@ -22,7 +22,6 @@ afterEach(() => {
 const workspace: GatewayWorkspace = {
   workspace_id: "gw_local",
   name: "本地项目",
-  root_path: "/workspace/local",
   backend_url: "http://127.0.0.1:8010",
   connection_kind: "local",
   status: "ready",

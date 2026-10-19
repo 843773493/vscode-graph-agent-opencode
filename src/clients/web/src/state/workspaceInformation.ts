@@ -14,7 +14,6 @@ export interface WorkspaceInformationDump {
     parent_workspace_id: string | null;
     child_workspace_ids: string[];
     name: string;
-    root_path: string;
     connection_kind: GatewayWorkspace["connection_kind"];
     backend_url: string;
     active: boolean;
@@ -49,7 +48,6 @@ export function buildWorkspaceInformationDump(
         )
         .map((candidate) => candidate.workspace_id),
       name: workspace.name,
-      root_path: workspace.root_path,
       connection_kind: workspace.connection_kind,
       backend_url: workspace.backend_url,
       active: workspace.active,

@@ -126,13 +126,18 @@ def main(argv: list[str] | None = None) -> int:
         description="读取或初始化显式 Workspace 的后端 UUID。"
     )
     parser.add_argument(
+        "--read-only",
+        action="store_true",
+        help="只读取既有身份；缺失时直接失败，不初始化目录或 UUID",
+    )
+    parser.add_argument(
         "--workspace-root",
         required=True,
         type=_absolute_workspace_root,
         help="Workspace 根目录绝对路径",
     )
     args = parser.parse_args(argv)
-    print(load_or_create_workspace_id(args.workspace_root))
+    print(_read_workspace_id(workspace_identity_path(args.workspace_root)) if args.read_only else load_or_create_workspace_id(args.workspace_root))
     return 0
 
 

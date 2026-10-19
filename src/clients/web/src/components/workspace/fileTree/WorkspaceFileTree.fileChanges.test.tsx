@@ -132,7 +132,6 @@ async function mountTree(port: number): Promise<Harness> {
         apiPort={port}
         workspaceId="gw_changes"
         workspaceName="project"
-        workspaceRoot="/w/project"
         sessionId=""
         activeFilePath={null}
         searchOpen={false}

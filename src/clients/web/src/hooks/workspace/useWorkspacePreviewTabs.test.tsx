@@ -93,7 +93,6 @@ async function mountPreviewTabsWith(
     current = useWorkspacePreviewTabs({
       apiPort: API_PORT,
       workspaceId: "workspace-preview",
-      workspaceRoot: "/workspace-root",
       settingsLoaded: true,
       restoredLayout: layout(),
       onPersistLayout,

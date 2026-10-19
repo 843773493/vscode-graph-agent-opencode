@@ -569,7 +569,6 @@ describe("useGatewayWorkspaceActivation 后台激活", () => {
       initialState: appState({
         activeGatewayWorkspaceId: "ws-b",
         currentSessionWorkspaceId: "ws-b",
-        workspaceRoot: "/workspaces/b",
         workspaceName: "B",
       }),
       finishWorkspaceRefresh: async () => {
@@ -577,7 +576,6 @@ describe("useGatewayWorkspaceActivation 后台激活", () => {
           ...readState(),
           activeGatewayWorkspaceId: "ws-a",
           currentSessionWorkspaceId: "ws-a",
-          workspaceRoot: "/workspaces/a",
           workspaceName: "A",
         });
         return "ws-a";
@@ -599,7 +597,6 @@ describe("useGatewayWorkspaceActivation 后台激活", () => {
     ]);
     expect(mounted.state().activeGatewayWorkspaceId).toBe("ws-a");
     expect(mounted.state().currentSessionWorkspaceId).toBe("ws-a");
-    expect(mounted.state().workspaceRoot).toBe("/workspaces/a");
     expect(mounted.state().workspaceName).toBe("A");
     expect(mounted.state().gatewayError).toBe("ws-b 激活被拒绝");
     expect(mounted.state().status).toBe("后台切换工作区失败: ws-b 激活被拒绝");
@@ -619,7 +616,6 @@ describe("useGatewayWorkspaceActivation 后台激活", () => {
       initialState: appState({
         activeGatewayWorkspaceId: "ws-b",
         currentSessionWorkspaceId: "ws-b",
-        workspaceRoot: "/workspaces/b",
         workspaceName: "B",
       }),
       finishWorkspaceRefresh: async (_preferredSessionId, options) => {
@@ -628,7 +624,6 @@ describe("useGatewayWorkspaceActivation 后台激活", () => {
             ...state(),
             activeGatewayWorkspaceId: "ws-c",
             currentSessionWorkspaceId: "ws-c",
-            workspaceRoot: "/workspaces/c",
             workspaceName: "C",
             gatewayError: null,
             status: "正式激活完成",
@@ -655,7 +650,6 @@ describe("useGatewayWorkspaceActivation 后台激活", () => {
 
     expect(state().activeGatewayWorkspaceId).toBe("ws-c");
     expect(state().currentSessionWorkspaceId).toBe("ws-c");
-    expect(state().workspaceRoot).toBe("/workspaces/c");
     expect(state().workspaceName).toBe("C");
     expect(state().gatewayError).toBeNull();
     expect(state().status).toBe("正式激活完成");
@@ -919,7 +913,6 @@ describe("useGatewayWorkspaceActivation 正式激活", () => {
     const authorityState = appState({
       activeGatewayWorkspaceId: "ws-authority",
       currentSessionWorkspaceId: "ws-authority",
-      workspaceRoot: "/authority/workspace",
       agents: [authoritativeAgent],
       gatewayError: null,
       error: null,
@@ -932,7 +925,6 @@ describe("useGatewayWorkspaceActivation 正式激活", () => {
       initialState: appState({
         activeGatewayWorkspaceId: "ws-formal",
         currentSessionWorkspaceId: "ws-formal",
-        workspaceRoot: "/stale/workspace",
         workspaceName: "stale selection only",
         isBootstrapping: true,
         workspaceSwitching: true,
@@ -958,7 +950,6 @@ describe("useGatewayWorkspaceActivation 正式激活", () => {
     const next = mounted.state();
     expect(next.activeGatewayWorkspaceId).toBe("ws-authority");
     expect(next.currentSessionWorkspaceId).toBe("ws-authority");
-    expect(next.workspaceRoot).toBe("/authority/workspace");
     expect(next.workspaceName).toBeUndefined();
     expect(next.agents).toEqual([authoritativeAgent]);
     expect(next.gatewayError).toBe("激活接口不可用");

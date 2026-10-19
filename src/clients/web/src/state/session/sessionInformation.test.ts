@@ -68,7 +68,6 @@ function gatewayWorkspace(
     workspace_id: "gateway_workspace",
     backend_workspace_id: "ws_local",
     name: "project",
-    root_path: "/workspace/project/",
     backend_url: "http://127.0.0.1:41001",
     connection_kind: connectionKind,
     status: "ready",

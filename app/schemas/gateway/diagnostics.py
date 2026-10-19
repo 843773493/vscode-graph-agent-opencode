@@ -42,7 +42,6 @@ class GatewayDiagnosticLogDTO(BaseModel):
 class GatewayDiagnosticWorkspaceDTO(BaseModel):
     workspace_id: str
     name: str
-    root_path: str
     connection_kind: GatewayConnectionKind
     status: GatewayWorkspaceStatus
     managed: bool

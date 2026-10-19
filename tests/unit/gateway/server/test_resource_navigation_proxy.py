@@ -86,7 +86,7 @@ async def test_navigation_missing_or_ambiguous_local_target_never_uses_active(na
     elif mapping == "remote_only":
         registry.upsert(WorkspaceTarget(
             workspace_id="remote-target", backend_workspace_id=requested_id,
-            name="remote", root_path="/unused-remote", backend_url="http://remote.test",
+            name="remote", root_path=None, backend_url="http://remote.test",
             connection_kind="remote_gateway", remote_gateway_connection_id="remote-connection",
             remote_workspace_id="remote-route",
         ), activate=False)

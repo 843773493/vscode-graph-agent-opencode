@@ -7,12 +7,16 @@ import os
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 import httpx
 
-from app.core.mounted_workspaces import MountedWorkspace
+from app.core.mounted_workspaces import (
+    MountedWorkspace,
+    mounted_workspace_manifest_digest,
+)
 from app.gateway.runtime.managed_backend import (
     ManagedBackendContract,
     ManagedBackendMember,
@@ -28,6 +32,9 @@ from app.gateway.runtime.process import (
     start_local_node_service_process,
 )
 from app.gateway.runtime.workspace import WorkspaceRuntime
+
+if TYPE_CHECKING:
+    from app.gateway.registry import GatewayWorkspaceRegistry
 
 
 def validate_workspace_root_access(workspace_root: Path) -> None:
@@ -264,11 +271,11 @@ async def _adopt_local_node_service(
 
 def _validate_group_health(
     payload: dict[str, object], contract: ManagedBackendContract, mount: MountedWorkspace,
-    *, process_id: int | None = None, startup_contract: dict[str, object] | None = None,
+    *, manifest_digest: str, process_id: int | None = None, startup_contract: dict[str, object] | None = None,
 ) -> int:
     expected = {
         "workspace_id": mount.workspace_id, "backend_generation": contract.generation,
-        "mount_manifest_digest": contract.manifest_digest, "status": "ok",
+        "mount_manifest_digest": manifest_digest, "status": "ok",
     }
     mismatches = {key: (value, payload.get(key)) for key, value in expected.items() if payload.get(key) != value}
     if mismatches:
@@ -290,20 +297,23 @@ def _validate_group_health(
 
 
 async def verify_managed_backend_group(
-    contract: ManagedBackendContract, *, process: object | None = None,
+    contract: ManagedBackendContract, *, mounts: tuple[MountedWorkspace, ...], process: object | None = None,
     startup_contracts: dict[str, dict[str, object]] | None = None,
     request_timeout_seconds: float = 2, poll_interval_seconds: float = 0.5,
 ) -> int:
     """只在完整集合的 UUID、根摘要、generation、健康与候选 proof 全部通过后返回。"""
+    if tuple(mount.workspace_id for mount in mounts) != tuple(member.backend_workspace_id for member in contract.members):
+        raise RuntimeError("Backend 启动输入与完整成员身份不匹配")
+    manifest_digest = mounted_workspace_manifest_digest(mounts)
     process_id = None
-    for member in contract.members:
+    for member, mount in zip(contract.members, mounts, strict=True):
         payload = await wait_for_workspace_health(
-            f"{contract.backend_url.rstrip('/')}/api/v1/health", member.mount.workspace_id,
+            f"{contract.backend_url.rstrip('/')}/api/v1/health", mount.workspace_id,
             process, request_timeout_seconds=request_timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
         )
         process_id = _validate_group_health(
-            payload, contract, member.mount, process_id=process_id,
+            payload, contract, mount, manifest_digest=manifest_digest, process_id=process_id,
             startup_contract=(startup_contracts or {}).get(member.workspace_id),
         )
     if process_id is None:
@@ -312,18 +322,18 @@ async def verify_managed_backend_group(
 
 
 async def _adopt_workspace_backend(
-    *, contract: ManagedBackendContract,
+    *, contract: ManagedBackendContract, mounts: tuple[MountedWorkspace, ...],
 ) -> AdoptedManagedProcess | None:
     parsed = urlparse(contract.backend_url)
     if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"} or parsed.port is None:
         raise ValueError(f"持久化 Workspace API URL 必须是本机 HTTP 地址: {contract.backend_url}")
     process_id = None
     async with httpx.AsyncClient(timeout=2) as client:
-        for member in contract.members:
+        for mount in mounts:
             try:
                 response = await client.get(
                     f"{contract.backend_url.rstrip('/')}/api/v1/health",
-                    headers=_workspace_backend_headers(member.mount.workspace_id),
+                    headers=_workspace_backend_headers(mount.workspace_id),
                 )
             except httpx.HTTPError:
                 return None
@@ -331,24 +341,19 @@ async def _adopt_workspace_backend(
             payload = response.json()
             if not isinstance(payload, dict):
                 raise TypeError("Backend 健康响应必须是 JSON 对象")
-            process_id = _validate_group_health(payload, contract, member.mount, process_id=process_id)
+            process_id = _validate_group_health(payload, contract, mount, manifest_digest=mounted_workspace_manifest_digest(mounts), process_id=process_id)
     if process_id is None:
         raise RuntimeError("Backend 接管合同没有成员")
     return AdoptedManagedProcess(pid=process_id)
 
 
 async def _start_member_auxiliary_services(
-    member: ManagedBackendMember, *, project_root: Path, log_dir: Path,
+    mount: MountedWorkspace, *, project_root: Path, log_dir: Path,
     request_timeout_seconds: float, poll_interval_seconds: float,
     runtime: WorkspaceRuntime | None = None,
     preserve_adopted_processes_on_failure: bool = False,
     preserve_mount_urls: bool = False,
 ) -> WorkspaceRuntime:
-    mount = member.mount
-    validate_workspace_root_access(mount.workspace_root)
-    actual_id = await asyncio.to_thread(resolve_backend_workspace_id, project_root, mount.workspace_root)
-    if actual_id != mount.workspace_id:
-        raise RuntimeError(f"mount 根的 Backend UUID 不匹配: expected={mount.workspace_id}, actual={actual_id}")
     runtime = runtime or WorkspaceRuntime(service_urls={}, backend_workspace_id=mount.workspace_id)
     started: list[str] = []
     try:
@@ -397,8 +402,17 @@ async def _start_member_auxiliary_services(
         raise
 
 
+async def validate_managed_backend_bindings(mounts: tuple[MountedWorkspace, ...], project_root: Path) -> None:
+    """完整组先只读核验；不得启动一个成员后才发现 sibling 根丢失。"""
+    for mount in mounts:
+        validate_workspace_root_access(mount.workspace_root)
+        actual_id = await asyncio.to_thread(resolve_backend_workspace_id, project_root, mount.workspace_root, initialize=False)
+        if actual_id != mount.workspace_id:
+            raise RuntimeError(f"mount 根的 Backend UUID 不匹配: expected={mount.workspace_id}, actual={actual_id}")
+
+
 async def start_managed_backend_runtime(
-    *, owner: ManagedBackendOwner, project_root: Path, log_dir: Path,
+    *, owner: ManagedBackendOwner, registry: GatewayWorkspaceRegistry, project_root: Path, log_dir: Path,
     reusable_runtimes: dict[str, WorkspaceRuntime] | None = None,
     mount_contract: ManagedBackendContract | None = None,
     adopt_existing_backend: bool = False,
@@ -411,13 +425,15 @@ async def start_managed_backend_runtime(
 ) -> tuple[ManagedBackendContract, dict[str, WorkspaceRuntime]]:
     """唯一 owner 持有启动句柄；完整候选合同仅由 registry 公布。"""
     previous = mount_contract or owner.contract
+    mounts = registry.resolve_backend_mounts(previous)
+    await validate_managed_backend_bindings(mounts, project_root)
     if owner.process is not None or owner.unpublished_runtimes:
         raise ValueError("managed Backend 仍持有句柄；先完成唯一 owner 的回收")
     if preferred_backend_port is not None and (
         isinstance(preferred_backend_port, bool) or not 1 <= preferred_backend_port <= 65535
     ):
         raise ValueError(f"Backend 首选端口非法: {preferred_backend_port}")
-    adopted = await _adopt_workspace_backend(contract=previous) if previous.backend_url else None
+    adopted = await _adopt_workspace_backend(contract=previous, mounts=mounts) if previous.backend_url else None
     if adopted is not None and adopt_existing_backend and preferred_backend_port is not None and urlparse(previous.backend_url).port != preferred_backend_port:
         adopted.detach()
         raise RuntimeError(
@@ -436,38 +452,38 @@ async def start_managed_backend_runtime(
         raise RuntimeError(f"Backend 端口已被占用: 127.0.0.1:{port}")
     runtimes = dict(reusable_runtimes or {})
     try:
-        members = []
-        for member in previous.members:
+        ready_mounts = []
+        for member, mount in zip(previous.members, mounts, strict=True):
             runtime = runtimes.get(member.workspace_id)
             if runtime is None:
-                runtime = WorkspaceRuntime(service_urls={}, backend_workspace_id=member.mount.workspace_id)
+                runtime = WorkspaceRuntime(service_urls={}, backend_workspace_id=member.backend_workspace_id)
                 owner.unpublished_runtimes[member.workspace_id] = runtime
                 runtimes[member.workspace_id] = runtime
             await _start_member_auxiliary_services(
-                member, project_root=project_root, log_dir=log_dir, runtime=runtime,
+                mount, project_root=project_root, log_dir=log_dir, runtime=runtime,
                 request_timeout_seconds=health_request_timeout_seconds,
                 poll_interval_seconds=health_poll_interval_seconds,
                 preserve_adopted_processes_on_failure=preserve_adopted_processes_on_failure,
                 preserve_mount_urls=preserve_generation or adopted is not None,
             )
             mount = replace(
-                member.mount,
+                mount,
                 terminal_backend_url=runtime.service_urls["terminal_manager"],
                 browser_backend_url=runtime.service_urls["browser_manager"],
             )
-            members.append(ManagedBackendMember(member.workspace_id, mount))
+            ready_mounts.append(mount)
         contract = replace(
-            previous, members=tuple(members), backend_url=f"http://127.0.0.1:{port}",
+            previous, backend_url=f"http://127.0.0.1:{port}",
             generation=previous.generation if adopted is not None or preserve_generation else f"backend_generation_{uuid4().hex}",
         )
         startup_mounts = []
-        for member in contract.members:
+        for member, mount in zip(contract.members, ready_mounts, strict=True):
             startup = (startup_contracts or {}).get(member.workspace_id)
             startup_mounts.append(
-                replace(member.mount, config_candidate_ref=str(startup["candidate_ref"]),
+                replace(mount, config_candidate_ref=str(startup["candidate_ref"]),
                         config_generation=str(startup["target_generation"]),
                         config_fencing_token=str(startup["fencing_token"]))
-                if startup is not None else member.mount
+                if startup is not None else mount
             )
         if adopted is None:
             owner.set_process(start_local_backend_process(
@@ -477,7 +493,7 @@ async def start_managed_backend_runtime(
                 debug_port=contract.debug_port, connection_drain_timeout_seconds=connection_drain_timeout_seconds,
             ))
         await verify_managed_backend_group(
-            contract, process=getattr(owner.process, "process", None), startup_contracts=startup_contracts,
+            contract, mounts=tuple(ready_mounts), process=getattr(owner.process, "process", None), startup_contracts=startup_contracts,
             request_timeout_seconds=health_request_timeout_seconds, poll_interval_seconds=health_poll_interval_seconds,
         )
         for member in contract.members:
@@ -497,16 +513,18 @@ async def start_managed_backend_runtime(
 
 
 async def rebuild_managed_backend_runtime(
-    *, owner: ManagedBackendOwner, desired_members: tuple[ManagedBackendMember, ...],
+    *, owner: ManagedBackendOwner, registry: GatewayWorkspaceRegistry, desired_members: tuple[ManagedBackendMember, ...],
     runtimes: dict[str, WorkspaceRuntime], project_root: Path, log_dir: Path,
     health_request_timeout_seconds: float = 2, health_poll_interval_seconds: float = 0.5,
     connection_drain_timeout_seconds: float = 2, default_skill_groups: Sequence[str] = (),
     startup_contracts: dict[str, dict[str, object]] | None = None,
 ) -> tuple[ManagedBackendContract, dict[str, WorkspaceRuntime]]:
     """关闭旧进程后在同一 owner 上启动候选；完整恢复由组控制器统一执行。"""
+    desired_contract = replace(owner.contract, members=desired_members, backend_url="")
+    await validate_managed_backend_bindings(registry.resolve_backend_mounts(desired_contract), project_root)
     owner.close(timeout_seconds=connection_drain_timeout_seconds)
     return await start_managed_backend_runtime(
-        owner=owner, mount_contract=replace(owner.contract, members=desired_members, backend_url=""),
+        owner=owner, registry=registry, mount_contract=desired_contract,
         project_root=project_root, log_dir=log_dir, reusable_runtimes=runtimes,
         health_request_timeout_seconds=health_request_timeout_seconds,
         health_poll_interval_seconds=health_poll_interval_seconds,

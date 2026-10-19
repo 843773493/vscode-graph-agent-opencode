@@ -260,7 +260,6 @@ async def collect_gateway_diagnostics(
         GatewayDiagnosticWorkspaceDTO(
             workspace_id=item.workspace_id,
             name=item.name,
-            root_path=item.root_path,
             connection_kind=item.connection_kind,
             status=item.status,
             managed=item.managed,

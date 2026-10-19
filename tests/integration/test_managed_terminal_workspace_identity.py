@@ -11,7 +11,6 @@ import httpx
 import pytest
 import websockets
 
-from app.core.mounted_workspaces import MountedWorkspace
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.local_workspace import (
@@ -51,7 +50,7 @@ async def test_managed_terminal_uses_backend_uuid_and_python_client_controls_it(
     backend_workspace_id = load_or_create_workspace_id(workspace_root)
     owner = ManagedBackendOwner(ManagedBackendContract(
         "backend_owner_terminal", "backend_generation_terminal",
-        (ManagedBackendMember("terminal-target", MountedWorkspace(backend_workspace_id, workspace_root)),), "",
+        (ManagedBackendMember("terminal-target", backend_workspace_id),), "",
     ))
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "managed-runtime-gateway.json")
     registry.upsert(WorkspaceTarget(
@@ -60,7 +59,7 @@ async def test_managed_terminal_uses_backend_uuid_and_python_client_controls_it(
     ))
     registry.register_backend_owner(owner)
     contract, runtimes = await start_managed_backend_runtime(
-        owner=owner, project_root=Path.cwd().resolve(), log_dir=artifacts / "managed-runtime-logs",
+        owner=owner, registry=registry, project_root=Path.cwd().resolve(), log_dir=artifacts / "managed-runtime-logs",
     )
     registry.publish_backend_runtime(owner, contract, runtimes)
     runtime = runtimes["terminal-target"]

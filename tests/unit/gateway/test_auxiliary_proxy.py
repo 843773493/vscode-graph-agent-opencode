@@ -206,7 +206,7 @@ async def test_auxiliary_http_releases_reference_when_registry_raises_runtime(
         WorkspaceTarget(
             workspace_id="gw_bad",
             name="bad",
-            root_path=str(tmp_path / "bad"),
+            root_path=None,
             backend_url="",
             connection_kind="remote_gateway",
             backend_workspace_id="00000000-0000-4000-8000-000000000002",

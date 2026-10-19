@@ -415,7 +415,6 @@ def _workspace_inventory_revision(inventory: GatewayWorkspaceListDTO) -> str:
                     "backend_workspace_id": item.backend_workspace_id,
                     "parent_workspace_id": item.parent_workspace_id,
                     "name": item.name,
-                    "root_path": item.root_path,
                     "backend_url": item.backend_url,
                     "connection_kind": item.connection_kind,
                     "active": item.active,

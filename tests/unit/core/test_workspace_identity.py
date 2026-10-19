@@ -99,3 +99,33 @@ def test_identity_cli_rejects_non_uuid_workspace_identity(
     assert result.stdout == ""
     assert "必须是标准 UUID" in result.stderr
     assert str(identity_path) in result.stderr
+
+
+@pytest.mark.parametrize("existing_root", [False, True])
+def test_read_only_identity_cli_never_creates_missing_identity(
+    cli_workspace: Path, existing_root: bool,
+) -> None:
+    root = cli_workspace / "read-only-root"
+    if existing_root:
+        root.mkdir()
+
+    result = _run_workspace_identity_cli("--read-only", "--workspace-root", str(root))
+
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert str(workspace_identity_path(root)) in result.stderr
+    assert root.exists() is existing_root
+    assert not (root / ".boxteam").exists()
+
+
+def test_read_only_identity_cli_preserves_existing_identity(cli_workspace: Path) -> None:
+    identity = load_or_create_workspace_id(cli_workspace)
+    identity_path = workspace_identity_path(cli_workspace)
+    before = identity_path.read_bytes(), identity_path.stat().st_mtime_ns
+
+    result = _run_workspace_identity_cli("--read-only", "--workspace-root", str(cli_workspace))
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == identity + "\n"
+    assert result.stderr == ""
+    assert (identity_path.read_bytes(), identity_path.stat().st_mtime_ns) == before

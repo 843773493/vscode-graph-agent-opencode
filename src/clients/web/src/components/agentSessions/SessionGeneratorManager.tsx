@@ -257,7 +257,7 @@ export default function SessionGeneratorManager({
               </div>
               <div className="session-generator-meta">
                 <span>{generatorStrategyLabel(generator.session_strategy.mode)}</span>
-                {targetWorkspace ? <span title={targetWorkspace.root_path}>目标：{targetWorkspace.name}</span> : null}
+                {targetWorkspace ? <span title={targetWorkspace.workspace_id}>目标：{targetWorkspace.name}</span> : null}
                 <span>{generatorTriggerLabel(generator.trigger)}</span>
               </div>
               {status.title && status.message ? (
@@ -381,7 +381,7 @@ export default function SessionGeneratorManager({
             <select value={targetWorkspaceId} onChange={(event) => setTargetWorkspaceId(event.target.value)}>
               {workspaces.filter((workspace) => workspace.workspace_id === activeWorkspaceId).map((workspace) => (
                 <option key={workspace.workspace_id} value={workspace.workspace_id}>
-                  {workspace.name} — {workspace.root_path} · {workspace.status} · {workspace.workspace_id.slice(-8)}
+                  {workspace.name} · {workspace.status} · {workspace.workspace_id.slice(-8)}
                 </option>
               ))}
             </select>

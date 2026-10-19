@@ -68,24 +68,26 @@ async def test_create_and_remove_direct_managed_workspace_preserves_directory(
     workspace_root = tmp_path / "created" / "workspace"
     monkeypatch.setattr(
         "app.gateway.managed_workspaces.resolve_backend_workspace_id",
-        lambda *_: "00000000-0000-4000-8000-000000000001",
+        lambda *_, **__: "00000000-0000-4000-8000-000000000001",
     )
 
     backend = ProcessProbe("backend")
     async def start_runtime(*, owner, **_):
         owner.set_process(backend)
         member = owner.contract.members[0]
-        mount = replace(member.mount, terminal_backend_url="http://127.0.0.1:42001", browser_backend_url="http://127.0.0.1:42002")
-        contract = replace(owner.contract, members=(replace(member, mount=mount),), backend_url="http://127.0.0.1:42000")
+        contract = replace(owner.contract, backend_url="http://127.0.0.1:42000")
         runtime = WorkspaceRuntime(
-            service_urls={"terminal_manager": mount.terminal_backend_url, "browser_manager": mount.browser_backend_url},
-            backend_owner=owner, backend_workspace_id=mount.workspace_id,
+            service_urls={"terminal_manager": "http://127.0.0.1:42001", "browser_manager": "http://127.0.0.1:42002"},
+            backend_owner=owner, backend_workspace_id=member.backend_workspace_id,
         )
         owner.unpublished_runtimes[member.workspace_id] = runtime
         return contract, {member.workspace_id: runtime}
     async def listed():
         return []
-    monkeypatch.setattr("app.gateway.runtime.group_actions.resolve_backend_workspace_id", lambda *_: "00000000-0000-4000-8000-000000000001")
+    monkeypatch.setattr("app.gateway.runtime.group_actions.resolve_backend_workspace_id", lambda *_, **__: "00000000-0000-4000-8000-000000000001")
+    async def bindings_valid(*_):
+        return None
+    monkeypatch.setattr("app.gateway.runtime.group_actions.validate_managed_backend_bindings", bindings_valid)
     monkeypatch.setattr("app.gateway.runtime.group_actions.start_managed_backend_runtime", start_runtime)
     monkeypatch.setattr(registry, "list_dtos", listed)
 

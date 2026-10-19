@@ -37,7 +37,6 @@ function gatewayWorkspace(workspaceId: string): GatewayWorkspace {
     backend_workspace_id: "00000000-0000-0000-0000-000000000001",
     parent_workspace_id: null,
     name: workspaceId,
-    root_path: "/home/test",
     backend_url: "http://127.0.0.1:9000",
     connection_kind: "local",
     status: "ready",

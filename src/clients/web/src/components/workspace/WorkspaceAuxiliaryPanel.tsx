@@ -18,7 +18,6 @@ interface WorkspaceAuxiliaryPanelProps {
   workspaceId: string | null;
   workspaceFileTreeReady: boolean;
   workspaceName: string;
-  workspaceRoot: string;
   sessionId: string;
   sessionTitle: string;
   extensionWindow?: boolean;
@@ -58,7 +57,6 @@ export default function WorkspaceAuxiliaryPanel({
   workspaceId,
   workspaceFileTreeReady,
   workspaceName,
-  workspaceRoot,
   sessionId,
   sessionTitle,
   extensionWindow = false,
@@ -102,7 +100,7 @@ export default function WorkspaceAuxiliaryPanel({
       >
           <div className="auxiliary-scope-context" aria-label="更改范围">
             <span>变更范围</span>
-            <strong title={workspaceRoot || workspaceName}>{workspaceName || "当前工作区"}</strong>
+            <strong title={workspaceName}>{workspaceName || "当前工作区"}</strong>
             <span title={sessionTitle}>{sessionTitle || "当前会话"} · 仅会话文件变更</span>
           </div>
           <SessionChangesTree
@@ -165,7 +163,6 @@ export default function WorkspaceAuxiliaryPanel({
             apiPort={apiPort}
             workspaceId={workspaceId}
             workspaceName={workspaceName}
-            workspaceRoot={workspaceRoot}
             sessionId={sessionId}
             activeFilePath={activeFilePath}
             searchOpen={searchOpen}

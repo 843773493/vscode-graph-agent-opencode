@@ -105,7 +105,6 @@ async def _inbound_gateway_access_list(
         GatewayInboundWorkspaceDTO(
             workspace_id=workspace.workspace_id,
             name=workspace.name,
-            root_path=workspace.root_path,
             status=workspace.status,
             managed=workspace.managed,
             system_default=workspace.system_default,

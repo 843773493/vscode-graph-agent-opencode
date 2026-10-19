@@ -66,7 +66,7 @@ export default function WorkspaceRenameDialog({
         <header className="workspace-dialog-header workspace-dialog-heading">
           <div>
             <h2 id="workspace-rename-dialog-title">重命名工作区</h2>
-            <p title={workspace.root_path}>{workspace.root_path}</p>
+            <p title={workspace.workspace_id}>{workspace.workspace_id}</p>
           </div>
           <button
             type="button"

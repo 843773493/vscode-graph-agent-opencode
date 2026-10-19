@@ -127,7 +127,7 @@ for (const entry of ["session", "workspace"] as const) {
     const initial = buildSessionHookState({
       workspaceId: workspaceA, current: sessionA, sessions: [sessionA, sessionB],
       gatewayWorkspaces: targets.map((target) => ({
-        workspace_id: target.workspace_id, root_path: "/selection", name: target.workspace_id,
+        workspace_id: target.workspace_id, name: target.workspace_id,
       })),
     });
     initial.sessionsByWorkspace.set(workspaceB, workspaceB === workspaceA ? [sessionA, sessionB] : [sessionB]);

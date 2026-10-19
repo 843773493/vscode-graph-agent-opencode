@@ -73,6 +73,21 @@ def test_default_policy_allows_all_core_capabilities() -> None:
         )
 
 
+@pytest.mark.parametrize("rules, expected", [
+    ([], False),
+    ([{"capability": "read", "effect": "allow", "principal_ref": "peer-principal"}], False),
+    ([{"capability": "managed_workspace_admin", "effect": "allow"}], False),
+    ([{"capability": "managed_workspace_admin", "effect": "allow", "origin_gateway_id": "peer"}], False),
+    ([{"capability": "managed_workspace_admin", "effect": "allow", "principal_ref": "other"}], False),
+    ([{"capability": "managed_workspace_admin", "effect": "allow", "principal_ref": "peer-principal"}], True),
+    ([{"capability": "managed_workspace_admin", "effect": "allow", "principal_ref": "peer-principal"},
+      {"capability": "managed_workspace_admin", "effect": "deny", "principal_ref": "peer-principal"}], False),
+])
+def test_workspace_admin_requires_explicit_authenticated_peer_principal(rules, expected) -> None:
+    snapshot = normalize_policy({"default_effect": "allow", "rules": rules})
+    assert snapshot.evaluate(capability="managed_workspace_admin", origin_gateway_id="peer", principal_ref="peer-principal") is expected
+
+
 def test_publish_advances_revision_atomically() -> None:
     store = FederationPolicyStore()
     base = store.snapshot.revision

@@ -62,7 +62,6 @@ def _workspace(
         workspace_id=workspace_id,
         backend_workspace_id=_backend_workspace_id(index),
         name=name or workspace_id,
-        root_path=f"/workspaces/{workspace_id}",
         backend_url=f"http://127.0.0.1/{workspace_id}",
         connection_kind="local",
         status="ready",
@@ -223,6 +222,32 @@ async def test_gateway_inventory_cursor_ignores_dynamic_checked_at() -> None:
         _backend_workspace_id(2)
     )
     assert second.revision == first.revision
+
+
+@pytest.fixture
+def root_free_inventory_transport() -> _FakeTransport:
+    return _FakeTransport([_workspace_id(1), _workspace_id(2)])
+
+
+@pytest.mark.asyncio
+async def test_gateway_inventory_without_root_tracks_public_name_revision(
+    root_free_inventory_transport: _FakeTransport,
+) -> None:
+    transport = root_free_inventory_transport
+    service = GatewayContextQueryService(transport=transport)
+    inventory = await service.list_gateway_workspaces()
+    assert all("root_path" not in item.model_dump() for item in inventory.items)
+    first = await service.read_gateway_context(_gateway_read_request(view="inventory"))
+    repeated = await service.read_gateway_context(_gateway_read_request(view="inventory"))
+    assert first.revision == repeated.revision
+    assert first.items
+    assert all("root_path" not in item.data for item in first.items)
+
+    transport.workspace_names[_workspace_id(2)] = "Renamed workspace"
+    changed = await service.read_gateway_context(_gateway_read_request(view="inventory"))
+    assert changed.revision != first.revision
+    with pytest.raises(SessionContextRevisionChangedError):
+        await service.read_gateway_context(_gateway_read_request(view="inventory", revision=first.revision))
 
 
 @pytest.mark.asyncio

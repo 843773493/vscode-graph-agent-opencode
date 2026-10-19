@@ -105,7 +105,6 @@ async function mount(port: number, activeFilePath: string | null, expanded: stri
           apiPort={port}
           workspaceId="gw_virt"
           workspaceName="project"
-          workspaceRoot="/w/project"
           sessionId=""
           activeFilePath={activeFilePath}
           searchOpen={false}

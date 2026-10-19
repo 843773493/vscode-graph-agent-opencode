@@ -46,7 +46,6 @@ function gatewayWorkspaceList(items: Array<{ workspace_id: string; name: string;
       ...item,
       backend_workspace_id: `00000000-0000-0000-0000-${String(index + 1).padStart(12, "0")}`,
       connection_kind: "local",
-      root_path: `/tmp/${item.workspace_id}`,
       system_default: false,
     })),
   } as GatewayWorkspaceList;
@@ -56,7 +55,7 @@ function appState(overrides: Partial<AppState> = {}): AppState {
   return {
     apiPort: API_PORT,
     gatewayWorkspaces: [
-      { workspace_id: "ws-old", name: "旧工作区", status: "ready", root_path: "/tmp/ws-old" },
+      { workspace_id: "ws-old", name: "旧工作区", status: "ready", },
     ] as never,
     activeGatewayWorkspaceId: "ws-old",
     gatewayWorkspacesStale: false,
@@ -240,7 +239,6 @@ describe("useWorkspaceBootstrap 失效标记", () => {
     expect(snapshots).toHaveBeenCalledWith(API_PORT, expect.objectContaining({ workspace_id: "ws-1" }));
     expect(current.activeGatewayWorkspaceId).toBe("ws-1");
     expect(current.workspaceName).toBe("工作区");
-    expect(current.workspaceRoot).toBe("/tmp/ws-1");
     expect(current.sessionsByWorkspace.get("ws-1")).toEqual([]);
     expect(current.workspaceSwitching).toBe(false);
     expect(current.error).toBeNull();

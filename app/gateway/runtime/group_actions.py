@@ -9,11 +9,11 @@ from typing import Literal
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from app.core.mounted_workspaces import MountedWorkspace
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.local_workspace import (
     rebuild_managed_backend_runtime,
     start_managed_backend_runtime,
+    validate_managed_backend_bindings,
     verify_managed_backend_group,
 )
 from app.gateway.runtime.managed_backend import (
@@ -80,16 +80,17 @@ class ManagedBackendGroupActions:
                 self._registry.remove(workspace_id, owner="manual_crud")
                 return await self._group_result(workspace_id, "stopped", None, [workspace_id], restart=True, forced=action == "restart-force")
             if owner is None:
-                backend_id = await asyncio.to_thread(resolve_backend_workspace_id, self._project_root, Path(target.root_path))
+                if target.backend_workspace_id is None:
+                    raise RuntimeError("Gateway target 缺少 Backend UUID binding")
+                backend_id = await asyncio.to_thread(
+                    resolve_backend_workspace_id, self._project_root,
+                    self._registry.local_workspace_root(workspace_id, target.backend_workspace_id), initialize=False,
+                )
                 if target.backend_workspace_id != backend_id:
                     raise RuntimeError("Gateway target 与根的 Backend UUID 不匹配")
-                mount = MountedWorkspace(
-                    backend_id, Path(target.root_path).resolve(),
-                    target.local_service_urls.get("terminal_manager"), target.local_service_urls.get("browser_manager"),
-                )
                 owner = ManagedBackendOwner(ManagedBackendContract(
                     f"backend_owner_{uuid4().hex}", f"backend_generation_{uuid4().hex}",
-                    (ManagedBackendMember(workspace_id, mount),), target.backend_url,
+                    (ManagedBackendMember(workspace_id, backend_id),), target.backend_url,
                 ))
                 self._registry.register_backend_owner(owner)
             async with owner.lock:
@@ -134,21 +135,17 @@ class ManagedBackendGroupActions:
                     else:
                         if self._registry.has_runtime(member_id):
                             raise ValueError("加入项仍持有成员辅助运行时；先完成原组受控清理")
-                        actual_id = await asyncio.to_thread(resolve_backend_workspace_id, self._project_root, Path(member_target.root_path))
-                        if member_target.backend_workspace_id != actual_id:
-                            raise RuntimeError("加入项 Backend UUID 与登记身份不匹配")
-                        members.append(ManagedBackendMember(member_id, MountedWorkspace(
-                            actual_id, Path(member_target.root_path).resolve(),
-                            member_target.local_service_urls.get("terminal_manager"), member_target.local_service_urls.get("browser_manager"),
-                        )))
+                        if member_target.backend_workspace_id is None:
+                            raise RuntimeError("加入项缺少 Backend UUID binding")
+                        members.append(ManagedBackendMember(member_id, member_target.backend_workspace_id))
                 if members:
                     # 完整身份集合在排空前校验；空目标只表达退出，不构造空运行合同。
-                    replace(owner.contract, members=tuple(members))
+                    desired_contract = replace(owner.contract, members=tuple(members))
+                    await validate_managed_backend_bindings(self._registry.resolve_backend_mounts(desired_contract), self._project_root)
+                await validate_managed_backend_bindings(self._registry.resolve_backend_mounts(owner.contract), self._project_root)
                 for member in owner.contract.members:
                     member_id = member.workspace_id
                     member_target = self._registry.resolve(member_id)
-                    if member_target.backend_workspace_id != member.mount.workspace_id or member_target.root_path != str(member.mount.workspace_root):
-                        raise RuntimeError("当前成员 target 与 owner UUID/根合同不匹配")
                     if (action == "stop" or member_id not in desired_ids) and (
                         member_target.system_default or not member_target.removable
                     ):
@@ -166,7 +163,7 @@ class ManagedBackendGroupActions:
                     try:
                         owner.close(timeout_seconds=self._connection_drain_timeout_seconds)
                         contract, runtimes = await start_managed_backend_runtime(
-                            owner=owner, project_root=self._project_root, log_dir=self._log_dir,
+                            owner=owner, registry=self._registry, project_root=self._project_root, log_dir=self._log_dir,
                             reusable_runtimes=previous_runtimes, **self._startup_options(),
                         )
                         self._registry.publish_backend_runtime(owner, contract, runtimes)
@@ -251,7 +248,7 @@ class ManagedBackendGroupActions:
                             )
                             return await self._group_result(workspace_id, "stopped", owner, affected, restart=True, forced=forced, blockers=blockers if forced else None)
                         candidate_contract, candidate_runtimes = await rebuild_managed_backend_runtime(
-                            owner=owner, desired_members=tuple(members), runtimes=old_runtimes,
+                            owner=owner, registry=self._registry, desired_members=tuple(members), runtimes=old_runtimes,
                             project_root=self._project_root, log_dir=self._log_dir,
                             startup_contracts={workspace_id: startup_contract} if startup_contract is not None else None,
                             **self._startup_options(),
@@ -273,7 +270,7 @@ class ManagedBackendGroupActions:
                         try:
                             owner.close(timeout_seconds=self._connection_drain_timeout_seconds)
                             restored_contract, restored = await start_managed_backend_runtime(
-                                owner=owner, mount_contract=old_contract, reusable_runtimes=old_runtimes,
+                                owner=owner, registry=self._registry, mount_contract=old_contract, reusable_runtimes=old_runtimes,
                                 preferred_backend_port=urlparse(old_contract.backend_url).port,
                                 preserve_generation=True, project_root=self._project_root,
                                 log_dir=self._log_dir, **self._startup_options(),
@@ -290,7 +287,7 @@ class ManagedBackendGroupActions:
                     recovered = owner.process is not None and owner.error is None
                     if recovered:
                         try:
-                            await verify_managed_backend_group(owner.contract)
+                            await verify_managed_backend_group(owner.contract, mounts=self._registry.resolve_backend_mounts(owner.contract))
                             await self._cancel_group_drain(drained, request_id=request_id)
                         except Exception as recovery_error:  # noqa: BLE001 — 全组恢复证据失败必须 fail-closed。
                             recovered = False

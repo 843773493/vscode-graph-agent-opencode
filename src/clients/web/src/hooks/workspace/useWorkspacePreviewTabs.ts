@@ -26,7 +26,6 @@ import { trackInFlightRequest } from "../runtime/inFlightRequests";
 interface UseWorkspacePreviewTabsOptions {
   apiPort: number;
   workspaceId: string | null;
-  workspaceRoot: string;
   settingsLoaded: boolean;
   restoredLayout: WebUiLayoutSettings;
   onPersistLayout: (layout: WebUiLayoutSettings) => void;
@@ -45,7 +44,6 @@ function previewLayoutKey(layout: WebUiLayoutSettings): string {
 export function useWorkspacePreviewTabs({
   apiPort,
   workspaceId,
-  workspaceRoot,
   settingsLoaded,
   restoredLayout,
   onPersistLayout,
@@ -116,7 +114,7 @@ export function useWorkspacePreviewTabs({
     setVisible(restoredLayout.workspace_preview_visible ?? false);
     setMaximized(restoredLayout.workspace_preview_maximized ?? false);
 
-    if (!settingsLoaded || !workspaceRoot) {
+    if (!settingsLoaded || !workspaceId) {
       return () => {
         cancelled = true;
       };
@@ -195,7 +193,7 @@ export function useWorkspacePreviewTabs({
     return () => {
       cancelled = true;
     };
-  }, [beginFileOpenIntent, loadWorkspaceFileContent, settingsLoaded, workspaceId, workspaceRoot]);
+  }, [beginFileOpenIntent, loadWorkspaceFileContent, settingsLoaded, workspaceId]);
 
   const persistedFilePaths = tabs
     .filter((tab) =>

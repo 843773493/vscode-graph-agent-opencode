@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.gateway.workspace_ids import build_managed_local_workspace_id
+
 import os
 import subprocess
 from collections.abc import Iterator, Sequence
@@ -194,7 +196,7 @@ def navigation_scope_proxy_runtime(
         gateway_workspace_id = next(
             item["workspace_id"]
             for item in workspace_entries
-            if Path(item["root_path"]).resolve() == workspace_root
+            if item["workspace_id"] == build_managed_local_workspace_id(str(workspace_root))
         )
         yield _NavigationScopeProxyRuntime(
             workspace_id=workspace_id,

@@ -13,7 +13,6 @@ import WorkspacePortForwardPanel, {
 const remoteWorkspace: GatewayWorkspace = {
   workspace_id: "gw_remote_project",
   name: "远程项目",
-  root_path: "/workspace/project",
   backend_url: "http://127.0.0.1:8010",
   connection_kind: "remote_gateway",
   status: "ready",

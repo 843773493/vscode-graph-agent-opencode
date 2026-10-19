@@ -24,17 +24,17 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n+boxteam/gateway/v1/workspace_registry.proto\x12\x12\x62oxteam.gateway.v1\"\x85\x02\n\x10WorkspaceSummary\x12!\n\x0cworkspace_id\x18\x01 \x01(\tR\x0bworkspaceId\x12\x12\n\x04name\x18\x02 \x01(\tR\x04name\x12\x1b\n\troot_path\x18\x03 \x01(\tR\x08rootPath\x12\x1f\n\x0b\x62\x61\x63kend_url\x18\x04 \x01(\tR\nbackendUrl\x12;\n\x06status\x18\x05 \x01(\x0e\x32#.boxteam.gateway.v1.WorkspaceStatusR\x06status\x12\x16\n\x06\x61\x63tive\x18\x06 \x01(\x08R\x06\x61\x63tive\x12\'\n\x0f\x63onnection_kind\x18\x07 \x01(\tR\x0e\x63onnectionKind\"\x7f\n\x11WorkspaceRegistry\x12.\n\x13\x61\x63tive_workspace_id\x18\x01 \x01(\tR\x11\x61\x63tiveWorkspaceId\x12:\n\x05items\x18\x02 \x03(\x0b\x32$.boxteam.gateway.v1.WorkspaceSummaryR\x05items*m\n\x0fWorkspaceStatus\x12 \n\x1cWORKSPACE_STATUS_UNSPECIFIED\x10\x00\x12\x1a\n\x16WORKSPACE_STATUS_READY\x10\x01\x12\x1c\n\x18WORKSPACE_STATUS_OFFLINE\x10\x02\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n+boxteam/gateway/v1/workspace_registry.proto\x12\x12\x62oxteam.gateway.v1\"\xf9\x01\n\x10WorkspaceSummary\x12!\n\x0cworkspace_id\x18\x01 \x01(\tR\x0bworkspaceId\x12\x12\n\x04name\x18\x02 \x01(\tR\x04name\x12\x1f\n\x0b\x62\x61\x63kend_url\x18\x04 \x01(\tR\nbackendUrl\x12;\n\x06status\x18\x05 \x01(\x0e\x32#.boxteam.gateway.v1.WorkspaceStatusR\x06status\x12\x16\n\x06\x61\x63tive\x18\x06 \x01(\x08R\x06\x61\x63tive\x12\'\n\x0f\x63onnection_kind\x18\x07 \x01(\tR\x0e\x63onnectionKindJ\x04\x08\x03\x10\x04R\troot_path\"\x7f\n\x11WorkspaceRegistry\x12.\n\x13\x61\x63tive_workspace_id\x18\x01 \x01(\tR\x11\x61\x63tiveWorkspaceId\x12:\n\x05items\x18\x02 \x03(\x0b\x32$.boxteam.gateway.v1.WorkspaceSummaryR\x05items*m\n\x0fWorkspaceStatus\x12 \n\x1cWORKSPACE_STATUS_UNSPECIFIED\x10\x00\x12\x1a\n\x16WORKSPACE_STATUS_READY\x10\x01\x12\x1c\n\x18WORKSPACE_STATUS_OFFLINE\x10\x02\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'boxteam.gateway.v1.workspace_registry_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_WORKSPACESTATUS']._serialized_start=460
-  _globals['_WORKSPACESTATUS']._serialized_end=569
+  _globals['_WORKSPACESTATUS']._serialized_start=448
+  _globals['_WORKSPACESTATUS']._serialized_end=557
   _globals['_WORKSPACESUMMARY']._serialized_start=68
-  _globals['_WORKSPACESUMMARY']._serialized_end=329
-  _globals['_WORKSPACEREGISTRY']._serialized_start=331
-  _globals['_WORKSPACEREGISTRY']._serialized_end=458
+  _globals['_WORKSPACESUMMARY']._serialized_end=317
+  _globals['_WORKSPACEREGISTRY']._serialized_start=319
+  _globals['_WORKSPACEREGISTRY']._serialized_end=446
 # @@protoc_insertion_point(module_scope)

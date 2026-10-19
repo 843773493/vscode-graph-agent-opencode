@@ -90,7 +90,7 @@ def test_registry_health_rejects_configured_remote_projection_error(
         WorkspaceTarget(
             workspace_id="projected-health",
             name="Projected health",
-            root_path="/remote",
+            root_path=None,
             backend_url="http://remote",
             connection_kind="remote_gateway",
             backend_workspace_id="00000000-0000-4000-8000-000000000002",

@@ -25,11 +25,6 @@ export declare type WorkspaceSummary = Message<"boxteam.gateway.v1.WorkspaceSumm
   name: string;
 
   /**
-   * @generated from field: string root_path = 3;
-   */
-  rootPath: string;
-
-  /**
    * @generated from field: string backend_url = 4;
    */
   backendUrl: string;

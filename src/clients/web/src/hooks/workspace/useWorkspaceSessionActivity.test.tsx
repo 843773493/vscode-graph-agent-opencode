@@ -81,7 +81,8 @@ function gatewayWorkspace(backendWorkspaceId: string): AppState["gatewayWorkspac
     backend_workspace_id: backendWorkspaceId,
     connection_kind: "local",
     name: "测试工作区",
-    root_path: "/tmp/test-workspace",
+    backend_url: "http://127.0.0.1:8010",
+    affected_workspace_ids: [], active: false, managed: true, removable: true, system_default: false, services: {}, checked_at: "2026-10-19",
     status: "ready",
   } as AppState["gatewayWorkspaces"][number];
 }

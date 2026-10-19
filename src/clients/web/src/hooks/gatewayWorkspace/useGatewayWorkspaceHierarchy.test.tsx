@@ -16,7 +16,6 @@ function gatewayWorkspace(
     workspace_id: "ws-1",
     parent_workspace_id: null,
     name: "工作区一",
-    root_path: "/tmp/workspace-one",
     backend_url: "http://127.0.0.1:41000",
     connection_kind: "local",
     status: "ready",
@@ -45,7 +44,6 @@ function appState(overrides: Partial<AppState> = {}): AppState {
   return {
     gatewayWorkspaces: [],
     activeGatewayWorkspaceId: "ws-active",
-    workspaceRoot: "/tmp/stale-root",
     workspaceName: "陈旧的工作区",
     gatewayError: null,
     error: null,
@@ -97,15 +95,14 @@ afterEach(() => {
 
 test("失败对账时工作区根路径与名称跟着活动工作区一起替换", async () => {
   // 对账把 activeGatewayWorkspaceId 换成回滚结果里的活动工作区后，若还留着旧的
-  // workspaceRoot/workspaceName，文件树与预览就会按新工作区 id 去读旧根路径。
+  // workspaceName，文件树与预览就会按新工作区 id 去读旧根路径。
   spyOnGatewayApi("updateGatewayWorkspace").mockRejectedValue(new Error("父工作区不存在"));
   const list = spyOnGatewayApi("listGatewayWorkspaces").mockResolvedValue(
     workspaceList("ws-other", [
       gatewayWorkspace({
         workspace_id: "ws-other",
         name: "对账后的活动工作区",
-        root_path: "/tmp/reconciled-active",
-      }),
+        }),
     ]),
   );
   const { hook, state } = await mountHook(appState({
@@ -119,7 +116,6 @@ test("失败对账时工作区根路径与名称跟着活动工作区一起替�
   expect(list).toHaveBeenCalledWith(API_PORT);
   const next = state();
   expect(next.activeGatewayWorkspaceId).toBe("ws-other");
-  expect(next.workspaceRoot).toBe("/tmp/reconciled-active");
   expect(next.workspaceName).toBe("对账后的活动工作区");
   expect(next.gatewayError).toBe("父工作区不存在");
   expect(next.status).toBe("更新工作区父子关系失败: 父工作区不存在");
@@ -157,13 +153,11 @@ test("列表对账成功期间选择意图改变时仍替换完整列表并保�
     gatewayWorkspace({
       workspace_id: "ws-reconciled",
       name: "对账后的工作区",
-      root_path: "/tmp/reconciled",
-    }),
+      }),
     gatewayWorkspace({
       workspace_id: "ws-sibling",
       name: "对账后的其他工作区",
-      root_path: "/tmp/sibling",
-    }),
+      }),
   ]);
   const { hook, state, setState, selectionIntentRef } = await mountHook(appState({
     gatewayWorkspaces: [gatewayWorkspace({ workspace_id: "ws-obsolete", name: "旧工作区" })],
@@ -177,7 +171,6 @@ test("列表对账成功期间选择意图改变时仍替换完整列表并保�
     setState((previous) => ({
       ...previous,
       activeGatewayWorkspaceId: "ws-new-selection",
-      workspaceRoot: "/tmp/new-selection",
       workspaceName: "较新的选择",
       gatewayError: "较新的错误状态",
       status: "用户已切换到较新工作区",
@@ -198,7 +191,6 @@ test("列表对账成功期间选择意图改变时仍替换完整列表并保�
     "ws-sibling",
   ]);
   expect(next.activeGatewayWorkspaceId).toBe("ws-new-selection");
-  expect(next.workspaceRoot).toBe("/tmp/new-selection");
   expect(next.workspaceName).toBe("较新的选择");
   expect(next.gatewayError).toBe("较新的错误状态");
   expect(next.status).toBe("用户已切换到较新工作区");
@@ -228,7 +220,6 @@ test("列表对账失败期间选择意图改变时仍标记列表过期并保�
     setState((previous) => ({
       ...previous,
       activeGatewayWorkspaceId: "ws-new-selection",
-      workspaceRoot: "/tmp/new-selection",
       workspaceName: "较新的选择",
       gatewayError: "较新的错误状态",
       status: "用户已切换到较新工作区",
@@ -245,7 +236,6 @@ test("列表对账失败期间选择意图改变时仍标记列表过期并保�
   const next = state();
   expect(next.gatewayWorkspacesStale).toBe(true);
   expect(next.activeGatewayWorkspaceId).toBe("ws-new-selection");
-  expect(next.workspaceRoot).toBe("/tmp/new-selection");
   expect(next.workspaceName).toBe("较新的选择");
   expect(next.gatewayError).toBe("较新的错误状态");
   expect(next.status).toBe("用户已切换到较新工作区");
@@ -256,14 +246,12 @@ test("成功时整体替换工作区列表与活动工作区派生字段", async
     gatewayWorkspace({
       workspace_id: "ws-1",
       name: "工作区一",
-      root_path: "/tmp/one",
       parent_workspace_id: "ws-parent",
     }),
     gatewayWorkspace({
       workspace_id: "ws-2",
       name: "工作区二",
-      root_path: "/tmp/two",
-    }),
+      }),
   ]);
   spyOnGatewayApi("updateGatewayWorkspace").mockResolvedValue(
     updatedList,
@@ -281,7 +269,6 @@ test("成功时整体替换工作区列表与活动工作区派生字段", async
     "ws-2",
   ]);
   expect(next.activeGatewayWorkspaceId).toBe("ws-1");
-  expect(next.workspaceRoot).toBe("/tmp/one");
   expect(next.workspaceName).toBe("工作区一");
   expect(next.gatewayError).toBeNull();
   expect(next.error).toBeNull();

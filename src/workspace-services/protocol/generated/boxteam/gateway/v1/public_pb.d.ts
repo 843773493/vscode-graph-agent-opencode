@@ -354,11 +354,6 @@ export declare type FederationWorkspaceDTO = Message<"boxteam.gateway.v1.Federat
   name: string;
 
   /**
-   * @generated from field: string root_path = 3;
-   */
-  rootPath: string;
-
-  /**
    * @generated from field: bool managed = 4;
    */
   managed: boolean;
@@ -657,11 +652,6 @@ export declare type GatewayDiagnosticWorkspaceDTO = Message<"boxteam.gateway.v1.
   name: string;
 
   /**
-   * @generated from field: string root_path = 3;
-   */
-  rootPath: string;
-
-  /**
    * @generated from field: string connection_kind = 4;
    */
   connectionKind: string;
@@ -919,11 +909,6 @@ export declare type GatewayInboundWorkspaceDTO = Message<"boxteam.gateway.v1.Gat
   name: string;
 
   /**
-   * @generated from field: string root_path = 3;
-   */
-  rootPath: string;
-
-  /**
    * @generated from field: string status = 4;
    */
   status: string;
@@ -958,11 +943,6 @@ export declare type GatewayManagedWorkspaceDTO = Message<"boxteam.gateway.v1.Gat
    * @generated from field: string name = 2;
    */
   name: string;
-
-  /**
-   * @generated from field: string root_path = 3;
-   */
-  rootPath: string;
 
   /**
    * @generated from field: string status = 4;
@@ -1938,11 +1918,6 @@ export declare type GatewayWorkspaceDTO = Message<"boxteam.gateway.v1.GatewayWor
    * @generated from field: string name = 3;
    */
   name: string;
-
-  /**
-   * @generated from field: string root_path = 4;
-   */
-  rootPath: string;
 
   /**
    * @generated from field: string backend_url = 5;

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.gateway.workspace_ids import build_managed_local_workspace_id
+
 import asyncio
 import json
 from pathlib import Path
@@ -140,7 +142,7 @@ async def test_generator_crud_preview_and_idempotent_manual_run(
                 workspace_id = next(
                     item["workspace_id"]
                     for item in add_target_response.json()["data"]["items"]
-                    if Path(item["root_path"]).resolve() == target_workspace
+                    if item["workspace_id"] == build_managed_local_workspace_id(str(target_workspace))
                 )
 
                 preview_response = await client.post(
@@ -377,7 +379,7 @@ async def test_generator_rejects_split_execution_then_runs_on_cross_workspace_mo
                 secondary_workspace_id = next(
                     item["workspace_id"]
                     for item in add_response.json()["data"]["items"]
-                    if Path(item["root_path"]).resolve() == secondary_workspace
+                    if item["workspace_id"] == build_managed_local_workspace_id(str(secondary_workspace))
                 )
                 create_response = await client.post(
                     "/api/gateway/session-generators",

@@ -52,7 +52,7 @@ def _registry(tmp_path: Path) -> GatewayWorkspaceRegistry:
             WorkspaceTarget(
                 workspace_id=workspace_id,
                 name=workspace_id,
-                root_path=root_path,
+                root_path=None,
                 backend_url="http://127.0.0.1:41000",
                 connection_kind="remote_gateway",
                 backend_workspace_id="00000000-0000-4000-8000-000000000002",

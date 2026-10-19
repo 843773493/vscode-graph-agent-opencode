@@ -31,7 +31,6 @@ function gatewayWorkspace(
     workspace_id: "ws-old",
     parent_workspace_id: null,
     name: "测试工作区",
-    root_path: "/tmp/test-workspace",
     backend_url: "http://127.0.0.1:41000",
     connection_kind: "local",
     status: "ready",

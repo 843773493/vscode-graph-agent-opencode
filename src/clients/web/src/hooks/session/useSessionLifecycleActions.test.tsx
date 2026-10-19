@@ -147,7 +147,7 @@ function raceState(current: Session | null, sessions: Session[]) {
     current,
     sessions,
     gatewayWorkspaces: [
-      { workspace_id: RACE_WORKSPACE, root_path: "/tmp/ws", name: "ws" },
+      { workspace_id: RACE_WORKSPACE, name: "ws" },
     ],
   });
 }
@@ -809,7 +809,6 @@ describe("会话生命周期失败后的后端重取校准", () => {
 
     const unknownState = raceState(current, [current]);
     unknownState.gatewayWorkspaces = [];
-    unknownState.workspaceRoot = "/prev/root";
     unknownState.workspaceName = "prev-ws";
     unknownState.sessionsByWorkspace = new Map([["gw_unknown", [target]]]);
     const { state: readState, actions } = mountLifecycle(current, unknownState);
@@ -819,7 +818,6 @@ describe("会话生命周期失败后的后端重取校准", () => {
     expect(readState().status).toBe("切换会话失败: 未知工作区 gw_unknown");
     expect(readState().currentSession?.session_id).toBe(current.session_id);
     // 旧工作区的根目录/名称不得被当成新工作区身份继续用下去。
-    expect(readState().workspaceRoot).toBe("/prev/root");
   });
 });
 
@@ -834,8 +832,8 @@ function crossWorkspaceState(current: Session) {
     current,
     sessions: [current],
     gatewayWorkspaces: [
-      { workspace_id: RACE_WORKSPACE, root_path: "/tmp/ws", name: "ws" },
-      { workspace_id: OTHER_WORKSPACE, root_path: "/tmp/other", name: "other" },
+      { workspace_id: RACE_WORKSPACE, name: "ws" },
+      { workspace_id: OTHER_WORKSPACE, name: "other" },
     ],
     sessionsByWorkspace: new Map([
       [RACE_WORKSPACE, [current]],

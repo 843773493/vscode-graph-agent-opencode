@@ -55,7 +55,6 @@ interface WorkspaceFileTreeProps {
   apiPort: number | null;
   workspaceId: string | null;
   workspaceName: string | null;
-  workspaceRoot: string | null;
   sessionId: string;
   activeFilePath: string | null;
   searchOpen: boolean;
@@ -84,7 +83,6 @@ export default function WorkspaceFileTree({
   apiPort,
   workspaceId,
   workspaceName,
-  workspaceRoot,
   sessionId,
   activeFilePath,
   searchOpen,
@@ -96,10 +94,6 @@ export default function WorkspaceFileTree({
   onStatusChange,
 }: WorkspaceFileTreeProps) {
   const port = apiPort ?? DEFAULT_BACKEND_PORT;
-  const rootLabel = useMemo(
-    () => shortWorkspaceLabel(workspaceRoot, workspaceName),
-    [workspaceName, workspaceRoot],
-  );
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(
     () => new Set(restoredExpandedPaths),
   );
@@ -150,6 +144,11 @@ export default function WorkspaceFileTree({
     onStatusChange,
   });
 
+  const workspaceRoot = directories[ROOT_PATH]?.directoryKey?.root ?? null;
+  const rootLabel = useMemo(
+    () => shortWorkspaceLabel(workspaceRoot, workspaceName),
+    [workspaceName, workspaceRoot],
+  );
   const acceptFileTreeSettings = useCallback((result: SessionFileTreeSettings) => {
     shortcutTreePathsRef.current = new Set(
       (result.effective_shortcuts ?? []).map((shortcut) => (
@@ -401,7 +400,7 @@ export default function WorkspaceFileTree({
     return () => {
       abortAllDirectoryRequests();
     };
-  }, [abortAllDirectoryRequests, loadDirectory, resetDirectories, workspaceId, workspaceRoot]);
+  }, [abortAllDirectoryRequests, loadDirectory, resetDirectories, workspaceId]);
 
   useEffect(() => {
     const resumedAfterPause = !previousActiveRef.current && active;

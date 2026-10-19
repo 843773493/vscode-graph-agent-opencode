@@ -176,7 +176,7 @@ async def test_rename_workspace_endpoint_rejects_extra_fields(
 
 @pytest.mark.asyncio
 async def test_default_workspace_starts_as_home_and_keeps_renamed_value(
-    tmp_path: Path,
+    tmp_path: Path, managed_backend_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway_root = tmp_path / "gateway"
@@ -214,11 +214,16 @@ async def test_default_workspace_starts_as_home_and_keeps_renamed_value(
         ),
         activate=False,
     )
+    optional = persisted.resolve("optional")
+    graph = managed_backend_factory((optional,), backend_url=optional.backend_url)
+    persisted.register_backend_owner(graph.owner)
     persisted.close()
     monkeypatch.delenv("BOXTEAM_DEFAULT_WORKSPACE_NAME", raising=False)
     monkeypatch.setattr(bootstrap, "get_gateway_root", lambda: gateway_root)
     monkeypatch.setattr(bootstrap, "_default_workspace_root", lambda: default_root)
     monkeypatch.setattr(bootstrap, "load_gateway_config", lambda: GatewayConfig())
+    monkeypatch.setattr(bootstrap, "resolve_backend_workspace_id", lambda *_, **__: "00000000-0000-4000-8000-000000000001")
+    monkeypatch.setattr("app.gateway.registry.runtime.resolve_backend_workspace_id", lambda *_, **__: "00000000-0000-4000-8000-000000000001")
 
     async def start_default_runtime(*, owner, **_: object):
         owner.set_process(ProcessProbe("default"))
@@ -231,12 +236,7 @@ async def test_default_workspace_starts_as_home_and_keeps_renamed_value(
             backend_workspace_id="00000000-0000-4000-8000-000000000001",
             backend_owner=owner,
         )
-        contract = replace(owner.contract, backend_url=backend_url, members=(replace(
-            owner.contract.members[0], mount=replace(owner.contract.members[0].mount,
-                terminal_backend_url=runtime.service_urls["terminal_manager"],
-                browser_backend_url=runtime.service_urls["browser_manager"],
-            ),
-        ),))
+        contract = replace(owner.contract, backend_url=backend_url)
         owner.unpublished_runtimes[owner.contract.workspace_ids[0]] = runtime
         return contract, {owner.contract.workspace_ids[0]: runtime}
 

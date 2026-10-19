@@ -8,7 +8,6 @@ const legacyWorkspace: GatewayWorkspace = {
   workspace_id: "gw_legacy",
   affected_workspace_ids: ["gw_legacy"],
   name: "旧版 Gateway 工作区",
-  root_path: "/workspace/legacy",
   backend_url: "http://127.0.0.1:8010",
   connection_kind: "local",
   status: "ready",

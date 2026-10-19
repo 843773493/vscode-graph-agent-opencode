@@ -181,7 +181,6 @@ export interface AppState {
   /** 主题背景图（纯装饰画布）加载失败时的可见警告；核心主题已正常应用，
    * 该字段非空不表示初始化失败，只用于在状态栏给出非致命提示。 */
   themeBackgroundWarning: string | null;
-  workspaceRoot: string | null;
   workspaceName: string | null;
   agents: Agent[];
   sessions: Session[];

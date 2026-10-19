@@ -7,10 +7,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
-from app.core.mounted_workspaces import (
-    MountedWorkspace,
-    mounted_workspace_manifest_digest,
-)
 from app.core.workspace_identity import validate_workspace_id
 from app.gateway.runtime.process import ManagedProcessHandle
 
@@ -21,10 +17,10 @@ if TYPE_CHECKING:
 @dataclass(frozen=True, slots=True)
 class ManagedBackendMember:
     workspace_id: str
-    mount: MountedWorkspace
+    backend_workspace_id: str
 
     def to_payload(self) -> dict[str, object]:
-        return {"workspace_id": self.workspace_id, "mount": self.mount.to_payload()}
+        return {"workspace_id": self.workspace_id, "backend_workspace_id": self.backend_workspace_id}
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,30 +47,17 @@ class ManagedBackendContract:
         for member in self.members:
             if not isinstance(member.workspace_id, str) or not member.workspace_id:
                 raise ValueError("managed Backend 成员缺少 Gateway target ID")
-            validate_workspace_id(member.mount.workspace_id)
-            if not member.mount.workspace_root.is_absolute():
-                raise ValueError("managed Backend mount 根必须是绝对路径")
-            if member.mount.config_candidate_ref is not None:
-                raise ValueError("配置候选只属于单次 mount 启动输入，不能写入 Backend owner 合同")
+            validate_workspace_id(member.backend_workspace_id)
         for values in (
             [member.workspace_id for member in self.members],
-            [member.mount.workspace_id for member in self.members],
-            [member.mount.workspace_root for member in self.members],
+            [member.backend_workspace_id for member in self.members],
         ):
             if len(values) != len(set(values)):
-                raise ValueError("managed Backend 完整成员合同含重复身份或根")
+                raise ValueError("managed Backend 完整成员合同含重复身份")
 
     @property
     def workspace_ids(self) -> tuple[str, ...]:
         return tuple(member.workspace_id for member in self.members)
-
-    @property
-    def mounts(self) -> tuple[MountedWorkspace, ...]:
-        return tuple(member.mount for member in self.members)
-
-    @property
-    def manifest_digest(self) -> str:
-        return mounted_workspace_manifest_digest(self.mounts)
 
     def to_payload(self) -> dict[str, object]:
         return {

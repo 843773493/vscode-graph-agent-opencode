@@ -57,7 +57,6 @@ class GatewayWorkspaceDTO(BaseModel):
     affected_workspace_ids: list[str] = Field(default_factory=list)
     parent_workspace_id: str | None = None
     name: str
-    root_path: str
     backend_url: str
     connection_kind: GatewayConnectionKind
     status: GatewayWorkspaceStatus
@@ -78,7 +77,6 @@ class GatewayWorkspaceDTO(BaseModel):
 class GatewayManagedWorkspaceDTO(BaseModel):
     workspace_id: str
     name: str
-    root_path: str
     status: GatewayWorkspaceStatus
     removable: bool
     system_default: bool

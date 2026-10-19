@@ -8,7 +8,6 @@ function workspace(workspaceId: string, active: boolean): GatewayWorkspace {
   return {
     workspace_id: workspaceId,
     name: workspaceId,
-    root_path: `/tmp/${workspaceId}`,
     backend_url: "http://127.0.0.1:8010",
     connection_kind: "local",
     status: "ready",

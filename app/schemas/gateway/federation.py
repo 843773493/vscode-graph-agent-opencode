@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.workspace_identity import validate_workspace_id
 from app.schemas.gateway.workspaces import GatewayWorkspaceStatus
@@ -20,12 +20,13 @@ class FederationProtocolManifestDTO(BaseModel):
 
 
 class FederationWorkspaceDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     workspace_id: str
     backend_workspace_id: str
     backend_generation: str | None = None
     affected_workspace_ids: list[str] = Field(default_factory=list)
     name: str
-    root_path: str
     managed: bool
     connection_kind: Literal["local"]
     services: list[Literal["workspace_api", "terminal_manager", "browser_manager"]] = (
@@ -58,7 +59,6 @@ class GatewayInboundPeerDTO(BaseModel):
 class GatewayInboundWorkspaceDTO(BaseModel):
     workspace_id: str
     name: str
-    root_path: str
     status: GatewayWorkspaceStatus
     managed: bool
     system_default: bool

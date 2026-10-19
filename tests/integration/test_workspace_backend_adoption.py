@@ -14,6 +14,7 @@ from app.core.mounted_workspaces import (
     mounted_workspace_manifest_digest,
 )
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.local_workspace import start_managed_backend_runtime
 from app.gateway.runtime.managed_backend import (
     ManagedBackendContract,
@@ -125,12 +126,19 @@ async def test_preferred_port_mismatch_rejects_without_stopping_adopted_backend(
 
     owner = ManagedBackendOwner(ManagedBackendContract(
         "backend_owner_adoption", backend.generation,
-        (ManagedBackendMember("registered-target", MountedWorkspace(backend.workspace_id, backend.workspace_root)),),
+        (ManagedBackendMember("registered-target", backend.workspace_id),),
         f"http://127.0.0.1:{backend.port}",
     ))
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
+    registry.upsert(WorkspaceTarget(
+        workspace_id="registered-target", name="Adopted", root_path=str(backend.workspace_root),
+        backend_url=owner.contract.backend_url, connection_kind="local", managed=True,
+        backend_workspace_id=backend.workspace_id,
+    ))
+    registry.register_backend_owner(owner)
     with pytest.raises(RuntimeError, match="端口与首选端口不匹配") as raised:
         await start_managed_backend_runtime(
-            owner=owner, project_root=Path.cwd(), log_dir=tmp_path / "logs",
+            owner=owner, registry=registry, project_root=Path.cwd(), log_dir=tmp_path / "logs",
             preferred_backend_port=preferred_backend_port, adopt_existing_backend=True,
         )
 

@@ -57,7 +57,6 @@ try {
 const remoteGatewayWorkspace: GatewayWorkspace = {
   workspace_id: "gw_ssh",
   name: "远程开发",
-  root_path: "/srv/project",
   backend_url: "http://127.0.0.1:42000",
   connection_kind: "remote_gateway",
   status: "ready",
@@ -89,25 +88,18 @@ const remoteGatewayWorkspace: GatewayWorkspace = {
 };
 
 const hoverTitle = workspaceHoverTitle(remoteGatewayWorkspace);
-if (!hoverTitle.includes("root_path: /srv/project")) {
-  throw new Error(`悬停提示缺少完整路径: ${hoverTitle}`);
-}
-if (!hoverTitle.includes("hostname: 192.0.2.10")) {
-  throw new Error(`悬停提示缺少 SSH hostname: ${hoverTitle}`);
+if (hoverTitle !== "远程开发\nhostname: 192.0.2.10") {
+  throw new Error(`远程工作区悬停提示与展示合同不符: ${hoverTitle}`);
 }
 
 const localHoverTitle = workspaceHoverTitle({
   ...remoteGatewayWorkspace,
   workspace_id: "gw_local",
-  root_path: "/data/local-project",
   connection_kind: "local",
   remote: null,
 });
-if (localHoverTitle.includes("hostname:")) {
-  throw new Error(`本地工作区不应显示 hostname: ${localHoverTitle}`);
-}
-if (!localHoverTitle.includes("root_path: /data/local-project")) {
-  throw new Error(`本地工作区悬停提示缺少 root_path: ${localHoverTitle}`);
+if (localHoverTitle !== "远程开发") {
+  throw new Error(`本地工作区悬停提示与展示合同不符: ${localHoverTitle}`);
 }
 
 const grouped = groupGatewayWorkspaces([
@@ -116,7 +108,6 @@ const grouped = groupGatewayWorkspaces([
     ...remoteGatewayWorkspace,
     workspace_id: "gw_ssh_second",
     name: "远程后端",
-    root_path: "/srv/backend",
   },
 ]);
 if (grouped.length !== 1 || grouped[0].workspaces.length !== 2) {
