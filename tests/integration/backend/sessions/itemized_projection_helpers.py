@@ -49,21 +49,27 @@ async def copy_rollout_snapshot(
     deadline = fork_deadlines.for_operation(
         target=f"{target_workspace_id}/{target_session_id}", operation_key=operation_id,
     )
-    deadline.set_stage("fork.source_revision_read")
-    with storage.read_connection(source_session_id, source_thread_id, "") as connection:
-        view, revision = connection.execute(
-            "SELECT branch.head_view_id,meta.history_view_revision FROM checkpoint_namespace_state namespace "
-            "JOIN branches branch ON branch.branch_id=namespace.active_branch_id "
-            "JOIN database_meta meta ON meta.singleton_id=1 WHERE namespace.checkpoint_ns=''",
-        ).fetchone()
-    source_owner = MutationIntentOwner(source_session_id, source_thread_id)
-    point = await deadline.wait(
-        saver.forks.source.preflight_fork(
-            source_session_id=source_session_id, source_owner=source_owner, mode=mode,
-            source_view_id=view, source_view_revision=revision, anchor_item_id=anchor_item_id,
-        ),
-        "fork.source_preflight",
-    )
+    try:
+        deadline.set_stage("fork.source_revision_read")
+        with storage.read_connection(source_session_id, source_thread_id, "") as connection:
+            view, revision = connection.execute(
+                "SELECT branch.head_view_id,meta.history_view_revision FROM checkpoint_namespace_state namespace "
+                "JOIN branches branch ON branch.branch_id=namespace.active_branch_id "
+                "JOIN database_meta meta ON meta.singleton_id=1 WHERE namespace.checkpoint_ns=''",
+            ).fetchone()
+        source_owner = MutationIntentOwner(source_session_id, source_thread_id)
+        point = await deadline.wait(
+            saver.forks.source.preflight_fork(
+                source_session_id=source_session_id, source_owner=source_owner, mode=mode,
+                source_view_id=view, source_view_revision=revision, anchor_item_id=anchor_item_id,
+            ),
+            "fork.source_preflight",
+        )
+    except Exception:
+        # preflight_fork 只持有来源 read lease，不创建目标或提交 capture。
+        if not deadline._timed_out:
+            fork_deadlines.complete(deadline)
+        raise
     result = await deadline.wait(
         saver.forks.afork(
             source_session_id=source_session_id, target_session_id=target_session_id,

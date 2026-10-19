@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import process from "node:process";
 import { chromium } from "playwright";
 import { beginForkOperationDeadline, beginForkSubmissionDeadline, bindForkOperationDeadline,
-  closeForkDeadlineWatchdog, planGoldenLoop, planChatCalls, testControl,
+  assertForkDeadlineCloseSemanticsForTest, closeForkDeadlineWatchdog, planGoldenLoop, planChatCalls, testControl,
   uuidText, waitForForkOperation } from "../../../support/e2e-test-control.mjs";
 import { expectedTypedInternalHistoryMembership } from "./generated-internal-history-oracle.mjs";
 
@@ -4529,6 +4529,8 @@ async function classifyForkResponse(deadline, status, payload, request, localGat
 async function runForkDeadlineClassifierSelfTest() {
   const localGatewayId = "gateway-local";
   const testDeadlines = [];
+  await assertForkDeadlineCloseSemanticsForTest();
+
   const createDeadline = (operationKey) => {
     const deadline = { operationKey, completed: 0, remainingReads: 0,
       async complete() { this.completed += 1; },

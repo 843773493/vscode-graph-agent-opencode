@@ -52,6 +52,7 @@ class ForkDeadlineWatchdog:
         if os.getpgid(parent_pid) != pgid:
             raise RuntimeError("pytest 当前进程不属于其受保护的 matrix 子进程组")
         self._pgid = pgid
+        self._active_tokens: set[str] = set()
         self._lock = threading.Lock()
         self._process = subprocess.Popen(
             [
@@ -83,12 +84,14 @@ class ForkDeadlineWatchdog:
             "operation_key": operation_key, "started_at": started_at, "deadline": deadline,
             "last_stage": "started",
         })
+        self._active_tokens.add(token)
 
     def stage(self, token: str, stage: str) -> None:
         self._send({"action": "stage", "token": token, "last_stage": stage})
 
     def complete(self, token: str) -> None:
         self._send({"action": "complete", "token": token})
+        self._active_tokens.discard(token)
 
     def _send(self, message: dict[str, object]) -> None:
         with self._lock:
@@ -98,6 +101,10 @@ class ForkDeadlineWatchdog:
             self._process.stdin.flush()
 
     def close(self) -> None:
+        if self._active_tokens:
+            raise RuntimeError(
+                f"拒绝关闭仍有 active fork deadline 的 watchdog: {sorted(self._active_tokens)}"
+            )
         with self._lock:
             if self._process.poll() is None and self._process.stdin is not None:
                 self._process.stdin.write('{"action":"stop"}\n')
@@ -234,7 +241,9 @@ class ForkDeadlineRegistry:
         self._active.pop((deadline.target, deadline.operation_key), None)
 
     def close(self) -> None:
-        if any(deadline._timed_out and not deadline._completed for deadline in self._active.values()):
+        if any(not deadline._completed for deadline in self._active.values()):
+            # 未完成的操作可能仍在后端运行；等待独立 watcher 到原绝对期限，
+            # 由它写诊断并终止当前隔离运行组。不得发送 stop。
             self.watchdog.wait_for_termination()
             return
         self.watchdog.close()
@@ -258,7 +267,7 @@ def _watchdog_main(artifacts_dir: Path, parent_pid: int, protected_pgid: int) ->
     ForkDeadlineWatchdog._validate_artifacts_dir(artifacts_dir)
     active: dict[str, dict[str, object]] = {}
     sshd_identity: dict[str, object] | None = None
-    source_fd = sys.stdin.fileno()
+    source_fd: int | None = sys.stdin.fileno()
     input_buffer = bytearray()
     while True:
         now = time.monotonic()
@@ -298,12 +307,16 @@ def _watchdog_main(artifacts_dir: Path, parent_pid: int, protected_pgid: int) ->
             (max(0.0, float(record["deadline"]) - now) for record in active.values()),
             default=None,
         )
-        readable, _, _ = select.select([source_fd], [], [], timeout)
+        readable, _, _ = select.select([source_fd] if source_fd is not None else [], [], [], timeout)
         if not readable:
             continue
         chunk = os.read(source_fd, 65536)
         if not chunk:
-            return 0
+            if not active:
+                return 0
+            os.close(source_fd)
+            source_fd = None
+            continue
         input_buffer.extend(chunk)
         while True:
             newline = input_buffer.find(b"\n")
@@ -316,6 +329,9 @@ def _watchdog_main(artifacts_dir: Path, parent_pid: int, protected_pgid: int) ->
             message = json.loads(line)
             action = message["action"]
             if action == "stop":
+                if active:
+                    _write_watchdog_stderr("拒绝停止仍保护未终结 fork deadline 的 watchdog\n")
+                    continue
                 return 0
             if action == "sshd_identity":
                 identity = message.get("identity")

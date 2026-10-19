@@ -10,6 +10,7 @@ const FORK_WATCHDOG_ENTRY = fileURLToPath(import.meta.url);
 let forkWatchdog;
 let forkOperationOrdinal = 0;
 const forkOperations = new Map();
+const forkActiveDeadlineTokens = new Set();
 
 function forkOperationIdentity(target, operationKey) {
   return `${target}\0${operationKey}`;
@@ -94,6 +95,9 @@ class ForkDeadlineWatchdogClient {
 
   async close() {
     if (this.closing) return;
+    if (forkOperations.size > 0) {
+      throw new Error(`仍有未终结 fork operation，不能停止 deadline watchdog: ${[...forkOperations.keys()].join(", ")}`);
+    }
     this.closing = true;
     const exited = new Promise((resolveExit, rejectExit) => {
       this.child.once("exit", (code, signal) => {
@@ -150,6 +154,7 @@ async function startForkOperationDeadline({ target, operationKey, timeoutMs = FO
     },
     async complete() {
       await watchdog.request("complete", { token: this.token });
+      forkActiveDeadlineTokens.delete(this.token);
       if (this.identity !== null) forkOperations.delete(this.identity);
       this.identity = null;
     },
@@ -163,6 +168,7 @@ async function startForkOperationDeadline({ target, operationKey, timeoutMs = FO
     identity,
   };
   if (identity !== null) forkOperations.set(identity, deadline);
+  forkActiveDeadlineTokens.add(deadline.token);
   return deadline;
 }
 
@@ -212,10 +218,27 @@ export async function waitForForkOperation(awaitable, deadline, stage) {
 }
 
 export async function closeForkDeadlineWatchdog() {
+  if (forkActiveDeadlineTokens.size > 0) {
+    throw new Error(`仍有未终结的 fork deadline，不能关闭外部 watchdog: ${[...forkActiveDeadlineTokens].join(", ")}`);
+  }
   if (!forkWatchdog) return;
   const watchdog = forkWatchdog;
   forkWatchdog = undefined;
   await watchdog.close();
+}
+
+export async function assertForkDeadlineCloseSemanticsForTest() {
+  const token = "fork-close-active-probe";
+  forkActiveDeadlineTokens.add(token);
+  try {
+    await closeForkDeadlineWatchdog();
+    throw new Error("active fork deadline unexpectedly allowed watchdog close");
+  } catch (error) {
+    if (!String(error).includes("仍有未终结的 fork deadline")) throw error;
+  } finally {
+    forkActiveDeadlineTokens.delete(token);
+  }
+  await closeForkDeadlineWatchdog();
 }
 
 function procStat(pid) {
@@ -391,6 +414,10 @@ async function runForkDeadlineWatchdog(targetPid, targetStartTime, artifactRoot)
         }
         reply(message.id, null);
       } else if (message.action === "stop") {
+        if (active.size > 0) {
+          reply(message.id, null, "拒绝停止仍保护未终结 fork deadline 的 watchdog");
+          return;
+        }
         stopTimer();
         process.stdout.write(`${JSON.stringify({ id: message.id, value: null })}\n`, () => process.exit(0));
         process.stdin.pause();
@@ -412,7 +439,7 @@ async function runForkDeadlineWatchdog(targetPid, targetStartTime, artifactRoot)
     }
   });
   process.stdin.on("end", () => {
-    if (expiring) return;
+    if (expiring || active.size > 0) return;
     stopTimer();
     process.exit(0);
   });

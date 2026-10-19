@@ -47,6 +47,7 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
 from app.core.resource_uri import (
+    parse_resource_uri,
     parse_session_thread_uri,
     resource_display_uri,
     thread_resource_uri,
@@ -317,6 +318,37 @@ def production_fork_container(request: pytest.FixtureRequest,
     fork_deadlines = ForkDeadlineRegistry(context.artifacts_dir)
     original_fork = SessionContextForkService.fork
 
+    def terminal_fork_failure(
+        service: SessionContextForkService, fork_request: SessionForkRequest, error: Exception,
+    ) -> bool:
+        """只认可同工作区无副作用预检拒绝或 catalog 的持久终态。"""
+        try:
+            target = parse_resource_uri(
+                fork_request.target_container_uri, local_gateway_id=get_current_gateway_id(),
+            )
+        except ValueError:
+            return False
+        if (target.scope != "workspace" or target.scope_id != service._session_service.workspace_id
+                or target.gateway_authority not in {None, get_current_gateway_id()}):
+            return False
+        key = service._creation_key(fork_request.idempotency_key)
+        catalog = service._session_service.path_resolver.catalog_store
+        try:
+            record = catalog.get_creation_record(key)
+        except KeyError:
+            record = None
+        if record is not None:
+            return record.state in {"aborted", "published"}
+        if (catalog.get_fork_source_capture(creation_key=key) is not None
+                or catalog.get_fork_source_capture(copy_operation_id=key) is not None):
+            return False
+        # Pending、传输或运行时失败仍属未知状态；只有稳定的来源校验码
+        # 才表示目标创建前发生了无写入拒绝。
+        return error is not None and str(error).startswith((
+            "source-mismatch:", "fork_source_not_completed:", "unknown_fork_resource:",
+            "fork_owner_overlap:", "不支持的 fork mode:", "fork anchor_mode 必须",
+        ))
+
     async def fork_with_deadline(
         service: SessionContextForkService,
         fork_request: SessionForkRequest,
@@ -327,10 +359,17 @@ def production_fork_container(request: pytest.FixtureRequest,
             target=f"{container.workspace_id}/{fork_request.target_container_uri}",
             operation_key=fork_request.idempotency_key,
         )
-        result = await deadline.wait(
-            original_fork(service, fork_request, generation_origin=generation_origin),
-            "SessionContextForkService.fork",
-        )
+        try:
+            result = await deadline.wait(
+                original_fork(service, fork_request, generation_origin=generation_origin),
+                "SessionContextForkService.fork",
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            if terminal_fork_failure(service, fork_request, error) and not deadline._timed_out:
+                fork_deadlines.complete(deadline)
+            raise
         if result.export_release is None or result.export_release.state == "confirmed":
             deadline.complete()
         return result
@@ -397,7 +436,7 @@ import json
 import sys
 from pathlib import Path
 
-from tests.support.fork_deadline import ForkDeadlineExceeded, ForkOperationDeadline
+from tests.support.fork_deadline import ForkDeadlineExceeded, ForkDeadlineRegistry, ForkOperationDeadline
 
 
 class RecordingWatchdog:
@@ -461,6 +500,41 @@ async def main(mode: str, artifacts: Path) -> None:
                 pass
             print(json.dumps({"timed_out": True, "operation_cancelled_by_deadline": False}))
             return
+    if mode in {"registry-active-close", "registry-completed-close"}:
+        class RegistryWatchdog:
+            def __init__(self) -> None:
+                self.waited = 0
+                self.closed = 0
+
+            def start(self, *_args: object) -> None:
+                pass
+
+            def complete(self, *_args: object) -> None:
+                pass
+
+            def wait_for_termination(self) -> None:
+                self.waited += 1
+
+            def close(self) -> None:
+                self.closed += 1
+
+        registry = ForkDeadlineRegistry.__new__(ForkDeadlineRegistry)
+        registry.watchdog = RegistryWatchdog()
+        registry._active = {}
+        active = ForkOperationDeadline.for_test(
+            "fork-probe-target", f"fork-probe-{mode}", registry.watchdog, 0.01,
+        )
+        registry._active[(active.target, active.operation_key)] = active
+        if mode == "registry-active-close":
+            registry.close()
+            assert registry.watchdog.waited == 1 and registry.watchdog.closed == 0
+        else:
+            registry.complete(active)
+            registry.close()
+            assert registry.watchdog.waited == 0 and registry.watchdog.closed == 1
+        print(json.dumps({"mode": mode, "waited": registry.watchdog.waited,
+                          "closed": registry.watchdog.closed}))
+        return
     raise ValueError(f"unknown fork probe mode: {mode}")
 
 
@@ -729,6 +803,21 @@ async def test_fork_deadline_timeout_keeps_operation_armed_until_watchdog_termin
     assert result.returncode == 0, result.stderr.decode(errors="replace")
     output = json.loads(result.stdout)
     assert output == {"timed_out": True, "operation_cancelled_by_deadline": False}
+
+
+@pytest.mark.asyncio
+async def test_fork_deadline_registry_close_keeps_active_watchdog_and_closes_completed(
+    request: pytest.FixtureRequest,
+) -> None:
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    artifacts = context.runtime_root_for_node(request.node.nodeid) / "fork-deadline-close-probes"
+    for mode, expected in (
+        ("registry-active-close", {"mode": "registry-active-close", "waited": 1, "closed": 0}),
+        ("registry-completed-close", {"mode": "registry-completed-close", "waited": 0, "closed": 1}),
+    ):
+        result = _run_protected_fork_deadline_probe(mode, artifacts / mode)
+        assert result.returncode == 0, result.stderr.decode(errors="replace")
+        assert json.loads(result.stdout) == expected
 
 
 @pytest.mark.asyncio
