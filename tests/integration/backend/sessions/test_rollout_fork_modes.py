@@ -304,7 +304,8 @@ def fork_provider_prepare(
 
 @pytest.fixture
 def production_fork_container(request: pytest.FixtureRequest,
-                              monkeypatch: pytest.MonkeyPatch) -> AppContainer:
+                              monkeypatch: pytest.MonkeyPatch,
+                              fork_gateway_request_context: None) -> AppContainer:
     """fork/creation/admission 使用真实生产装配，只隔离无关 lifespan 外部服务。"""
     workspace = prepare_rollout_workspace(request)
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
@@ -3349,7 +3350,12 @@ async def test_view_prefix_click_keeps_exact_completed_turn_root_or_middle_item(
     cold = RolloutCheckpointSaver(fork_context.sessions.path_resolver.sessions_root)
     restored = await _get_tuple(fork_context, target.session_id, saver=cold)
     assert restored is not None
-    expected_messages = completed.checkpoint["channel_values"]["messages"][:2 if click == "user_root" else 4]
+    # active checkpoint 消费原 acceptance 的 notice 排除集；可见历史和请求选择分别核对。
+    expected_message_ids = ["retry-user"] if click == "user_root" else ["retry-user", "retry-call", "retry-result"]
+    completed_messages = {message.id: message for message in completed.checkpoint["channel_values"]["messages"]}
+    expected_messages = [completed_messages[message_id] for message_id in expected_message_ids]
+    assert by_message["retry-notice"].item_id in expected_visible
+    assert [message.id for message in restored.checkpoint["channel_values"]["messages"]] == expected_message_ids
     assert restored.checkpoint["channel_values"]["messages"] == expected_messages
     with cold._storage.storage.read_connection(target.session_id, target_thread) as connection:
         visible = [row[0] for row in connection.execute(
@@ -3378,8 +3384,9 @@ async def test_view_prefix_click_keeps_exact_completed_turn_root_or_middle_item(
         replace(fork_context, saver=cold), target.session_id,
         str(accepted["initial_execution_id"]), manager, "click-target-first", attempt=1,
     )
-    _assert_fork_provider_history(prepared, source_prepared, original_items, expected_visible, "click-target-root")
-    excluded_ids = {message.id for message in completed.checkpoint["channel_values"]["messages"][len(expected_messages):]}
+    selected_ids = [item_id for item_id in expected_visible if item_id != "item-retry-notice"]
+    _assert_fork_provider_history(prepared, source_prepared, original_items, selected_ids, "click-target-root")
+    excluded_ids = set(completed_messages) - set(expected_message_ids)
     assert all(message.id not in excluded_ids for message in prepared["messages"])
     assert any(isinstance(message, HumanMessage) and message.content == "点击后的新问题" for message in prepared["messages"])
 
@@ -5751,32 +5758,30 @@ async def test_production_lifespan_recovers_unpublished_fork(
     context = _production_fork_context(production_fork_container)
     source = await _seed_source(context, fork_provider_prepare)
     request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="context_fork", relationship="pinned")
-    intent = await context.forks._new_intent(request, source.session_id, _main_thread_id(context, source.session_id), None)
-    target, record = await context.sessions.prepare_context_fork(
-        idempotency_key=context.forks._creation_key(request.idempotency_key), title="待恢复 fork",
-        agent_id=source.current_agent_id, parent_session_id=None,
-        context_source_session_id=source.session_id, request_intent=intent,
-    )
     storage = context.saver._storage
     method = "materialize_fork_checkpoint" if crash_state == "prepared" else "complete_fork_materialization"
-    original = getattr(storage.forks, method)
+
+    class OwnerProcessExit(BaseException):
+        pass
 
     def crash(**_kwargs: object) -> None:
-        raise RuntimeError("模拟进程在 fork journal 边界中断")
+        raise OwnerProcessExit("模拟进程在 fork journal 边界中断")
 
-    if crash_state != "committed":
-        monkeypatch.setattr(storage.forks, method, crash)
-    try:
+    async def crash_before_publish(*_args: object) -> None:
+        raise OwnerProcessExit("模拟进程在 fork journal 边界中断")
+
+    # 走公开入口冻结经过 Gateway 规范化的真实创建意图，异常不执行进程内补偿。
+    with monkeypatch.context() as failure:
         if crash_state == "committed":
-            await context.forks._materialize(request, intent, target.session_id, creation=record)
+            failure.setattr(context.forks, "_publish_prepared_fork", crash_before_publish)
         else:
-            with pytest.raises(RuntimeError, match="模拟进程"):
-                await context.forks._materialize(request, intent, target.session_id, creation=record)
-    finally:
-        monkeypatch.setattr(storage.forks, method, original)
-    assert context.sessions.path_resolver.catalog_store.get_creation_record(
-        record.session_creation_idempotency_key
-    ).state == "preparing"
+            failure.setattr(storage.forks, method, crash)
+        with pytest.raises(OwnerProcessExit, match="模拟进程"):
+            await context.forks.fork(request)
+    record = context.sessions.path_resolver.catalog_store.get_creation_record(
+        context.forks._creation_key(request.idempotency_key)
+    )
+    assert record.state == "preparing"
     if crash_state == "target_committed":
         capture = storage.forks._catalog_store().get_fork_source_capture(
             creation_key=record.session_creation_idempotency_key,
@@ -5807,8 +5812,8 @@ async def test_production_lifespan_recovers_unpublished_fork(
         claim = restarted.session_service.path_resolver.catalog_store.get_fork_retention_claim(capture.fork_id)
         assert durable.state == "published"
         assert claim.state == "active"
-        assert (await restarted.session_service.get(target.session_id)).context_source_session_id == source.session_id
-        restored = await _get_tuple(_production_fork_context(restarted), target.session_id)
+        assert (await restarted.session_service.get(record.session_id)).context_source_session_id == source.session_id
+        restored = await _get_tuple(_production_fork_context(restarted), record.session_id)
         assert restored is not None
         assert [message.content for message in restored.checkpoint["channel_values"]["messages"]] == ["问题一", "回答一"]
 
@@ -6739,9 +6744,9 @@ async def test_completed_turn_fork_excludes_later_internal_input_header(
         ContextSourceManager(owner=ContextSourceOwnerKey(target.session_id, result.thread_id), control_state_port=restarted.saver),
         "header-target-first", attempt=1,
     )
-    _assert_fork_provider_history(
-        target_prepared, source_prepared, selected_items, [item.item_id for item in selected_items], "header-target-root",
-    )
+    # 源、目标新 acceptance 均排除已消费 notice，canonical 历史上方仍逐字段保留。
+    effective_ids = [item.item_id for item in selected_items if item.item_id != "item-retry-notice"]
+    _assert_fork_provider_history(target_prepared, source_prepared, selected_items, effective_ids, "header-target-root")
 
 
 @pytest.mark.asyncio
@@ -6819,7 +6824,9 @@ async def test_fork_preserves_real_retry_internal_and_closed_tool_lineage(
             excluded = context.saver._storage.executions.execution_context_excluded_item_ids(
                 admission, connection=connection,
             )
-            expected = {item.item_id for item in target_items if item.turn_id == initial[1]} if row is internal else set()
+            # internal 排除未来用户 Turn；同一用户 Turn 的 retry 复用 acceptance 冻结的 notice 排除集。
+            expected = ({item.item_id for item in target_items if item.turn_id == initial[1]}
+                        if row is internal else {"item-retry-notice"})
             assert excluded == expected
         assert cursors[internal[0]] < cursors[initial[0]] == cursors[retry[0]]
         root_commit = connection.execute(
