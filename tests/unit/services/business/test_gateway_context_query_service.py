@@ -10,7 +10,11 @@ from app.abstractions.session_context import (
     WorkspaceSessionContextAccessError,
 )
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
-from app.schemas.gateway.workspaces import GatewayWorkspaceDTO, GatewayWorkspaceListDTO
+from app.schemas.gateway.workspaces import (
+    GatewayRemoteConnectionSummaryDTO,
+    GatewayWorkspaceDTO,
+    GatewayWorkspaceListDTO,
+)
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
     SessionContextReadResultDTO,
@@ -24,6 +28,7 @@ from app.services.business.gateway_context_query_service import (
 from app.services.business.session_context_resource import (
     gateway_session_inventory_identity,
     gateway_session_inventory_uri,
+    parse_session_context_ref,
     session_resource_identity,
     session_resource_uri,
     workspace_session_inventory_identity,
@@ -138,6 +143,7 @@ class _FakeTransport:
     def __init__(self, workspace_ids: list[str]) -> None:
         self.workspace_ids = workspace_ids
         self.workspace_names: dict[str, str] = {}
+        self.remote_workspaces: dict[str, GatewayRemoteConnectionSummaryDTO] = {}
         self.backend_workspace_ids: dict[str, str] = {}
         self.missing_backend_workspace_ids: set[str] = set()
         self.inventory_calls = 0
@@ -170,11 +176,12 @@ class _FakeTransport:
                     "backend_workspace_id": self.backend_workspace_ids.get(workspace_id)
                 }
             )
+        if workspace_id in self.remote_workspaces:
+            workspace = workspace.model_copy(update={"connection_kind": "remote_gateway", "remote": self.remote_workspaces[workspace_id]})
         return workspace
 
-    async def read_context_in_workspace(
+    async def read_resource_context(
         self,
-        workspace_id: str,
         request: SessionContextReadRequest,
     ) -> SessionContextReadResultDTO:
         return SessionContextReadResultDTO(
@@ -182,14 +189,20 @@ class _FakeTransport:
             uri=request.uri,
             scope=request.scope,
             view=request.view,
-            revision=f"rev-{workspace_id}",
+            revision="rev-read",
         )
 
-    async def search_context_in_workspace(
+    async def search_resource_context(
         self,
-        workspace_id: str,
         request: SessionContextSearchRequest,
     ) -> SessionContextSearchResultDTO:
+        resource = parse_session_context_ref(
+            resource_identity=request.resource_identity, uri=request.uri, scope=request.scope,
+        )
+        workspace_id = next(
+            item for item in self.workspace_ids
+            if self._workspace_item(item).backend_workspace_id == resource.scope_id
+        )
         self.visited.append(workspace_id)
         self.search_requests[workspace_id] = request
         error = self.search_errors.get(workspace_id)
@@ -505,3 +518,31 @@ async def test_gateway_search_rejects_oversized_base_envelope(
         await service.search_gateway_context(
             _gateway_search_request(query=query, max_chars=max_chars)
         )
+
+
+async def test_gateway_inventory_and_fanout_preserve_remote_gateway_authority() -> None:
+    route = _workspace_id(2)
+    backend_id = _backend_workspace_id(2)
+    transport = _FakeTransport([_workspace_id(1), route])
+    transport.remote_workspaces[route] = GatewayRemoteConnectionSummaryDTO(
+        gateway_connection_id="connection-remote", remote_workspace_id="remote-route",
+        gateway_id="gateway_remote", name="remote", host="remote.example", port=22,
+        username="test", remote_gateway_port=8014,
+    )
+    remote_uri = workspace_session_inventory_uri(backend_id, gateway_authority="gateway_remote")
+    remote_match = _session_match(backend_id, "remote-session").model_copy(update={
+        "uri": session_resource_uri(backend_id, "remote-session", gateway_authority="gateway_remote"),
+    })
+    transport.search_results[route] = _workspace_search_result(
+        route, query="marker", total_matches=1, matches=[remote_match],
+    ).model_copy(update={"uri": remote_uri})
+    service = GatewayContextQueryService(transport=transport)
+
+    inventory = await service.read_gateway_context(_gateway_read_request(view="inventory"))
+    assert inventory.items[0].uri == workspace_session_inventory_uri(_backend_workspace_id(1))
+    assert inventory.items[1].uri == remote_uri
+    result = await service.search_gateway_context(_gateway_search_request(query="marker"))
+    assert result.partial_errors == []
+    assert result.matches == [remote_match]
+    assert transport.search_requests[route].uri == remote_uri
+    assert transport.search_requests[route].resource_identity == workspace_session_inventory_identity(backend_id)

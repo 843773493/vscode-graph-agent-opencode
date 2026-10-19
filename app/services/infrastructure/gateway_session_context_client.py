@@ -71,32 +71,6 @@ class GatewaySessionContextClient:
             response_type=GatewayWorkspaceListDTO,
         )
 
-    async def read_context_in_workspace(
-        self,
-        workspace_id: str,
-        request: SessionContextReadRequest,
-    ) -> SessionContextReadResultDTO:
-        return await self._request(
-            "POST",
-            "/api/v1/context/read",
-            workspace_id=workspace_id,
-            response_type=SessionContextReadResultDTO,
-            json_body=request.model_dump(mode="json"),
-        )
-
-    async def search_context_in_workspace(
-        self,
-        workspace_id: str,
-        request: SessionContextSearchRequest,
-    ) -> SessionContextSearchResultDTO:
-        return await self._request(
-            "POST",
-            "/api/v1/context/search",
-            workspace_id=workspace_id,
-            response_type=SessionContextSearchResultDTO,
-            json_body=request.model_dump(mode="json"),
-        )
-
     async def read_resource_context(
         self, request: SessionContextReadRequest,
     ) -> SessionContextReadResultDTO:
@@ -143,7 +117,7 @@ class GatewaySessionContextClient:
         )
         if not response.is_success:
             self._raise_incomplete_capture(response, request=request, request_id=request_id)
-            self._raise_http_error(response, method="POST", path=path, workspace_id=None)
+            self._raise_http_error(response, method="POST", path=path)
         try:
             reply = self._decode_response(response, path=path, request_id=request_id, response_type=SessionForkTransferResultDTO)
             return reply.validate_for_request(request)
@@ -156,11 +130,10 @@ class GatewaySessionContextClient:
         path: str,
         *,
         response_type: type[ResponseDTO],
-        workspace_id: str | None = None,
         json_body: dict[str, object] | None = None,
     ) -> ResponseDTO:
-        response, request_id = await self._send_request(method, path, workspace_id=workspace_id, json_body=json_body)
-        self._raise_http_error(response, method=method, path=path, workspace_id=workspace_id)
+        response, request_id = await self._send_request(method, path, json_body=json_body)
+        self._raise_http_error(response, method=method, path=path)
         return self._decode_response(response, path=path, request_id=request_id, response_type=response_type)
 
     @staticmethod
@@ -175,7 +148,7 @@ class GatewaySessionContextClient:
             return
         federation = payload.get("detail") if isinstance(payload, dict) else None
         detail = federation.get("detail") if isinstance(federation, dict) else None
-        if not isinstance(detail, dict) or detail.get("code") != IncompleteForkSourceCaptureError.code:
+        if not isinstance(federation, dict) or not isinstance(detail, dict) or detail.get("code") != IncompleteForkSourceCaptureError.code:
             return
         try:
             if federation["code"] != FEDERATION_TARGET_OWNER_REJECTED or detail["owner"] != IncompleteForkSourceCaptureError.owner:
@@ -193,20 +166,14 @@ class GatewaySessionContextClient:
         raise IncompleteForkSourceCaptureError(capture)
 
     async def _send_request(
-        self, method: str, path: str, *, workspace_id: str | None = None,
+        self, method: str, path: str, *,
         json_body: dict[str, object] | None = None,
     ) -> tuple[httpx.Response, str | None]:
-        if workspace_id is not None and not workspace_id.strip():
-            raise WorkspaceSessionContextAccessError(
-                "workspace_id 不能为空；请使用 Gateway inventory 返回的工作区 ID"
-            )
         headers = {"X-Local-Token": self._local_token_supplier()}
         request_id = None
         if path == "/api/gateway/federation/relay":
             request_id = require_current_request_id("上下文资源 relay")
             headers["X-Request-ID"] = request_id
-        if workspace_id is not None:
-            headers["X-BoxTeam-Workspace-Id"] = workspace_id.strip()
         try:
             response = await self._http_client.request(
                 method, self._connection.resolve_gateway_url() + path,
@@ -216,19 +183,19 @@ class GatewaySessionContextClient:
         except httpx.RequestError as error:
             raise WorkspaceSessionContextAccessError(
                 "无法连接 Workspace Gateway: "
-                f"workspace_id={workspace_id}, method={method}, path={path}, "
+                f"method={method}, path={path}, "
                 f"error_type={type(error).__name__}, error={error}"
             ) from error
         return response, request_id
 
     @staticmethod
     def _raise_http_error(
-        response: httpx.Response, *, method: str, path: str, workspace_id: str | None,
+        response: httpx.Response, *, method: str, path: str,
     ) -> None:
         if not response.is_success:
             message = (
                 "Gateway 上下文查询失败: "
-                f"workspace_id={workspace_id}, method={method}, path={path}, "
+                f"method={method}, path={path}, "
                 f"status={response.status_code}, detail={response.text[:2000]}"
             )
             if response.status_code in MODEL_RECOVERABLE_HTTP_STATUSES:

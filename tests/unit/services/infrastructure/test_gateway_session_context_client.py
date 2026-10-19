@@ -75,10 +75,14 @@ def gateway_local_token_supplier() -> Callable[[], str]:
 
 @pytest.fixture
 async def gateway_clients() -> AsyncIterator[list[GatewaySessionContextClient]]:
+    gateway_token = set_current_gateway_id("gateway_local")
+    request_token = set_current_request_id("req_gateway_context")
     clients: list[GatewaySessionContextClient] = []
     yield clients
     for client in clients:
         await client.aclose()
+    reset_current_request_id(request_token)
+    reset_current_gateway_id(gateway_token)
 
 
 @pytest.fixture
@@ -165,15 +169,11 @@ async def test_gateway_connection_error_includes_target_context(
     gateway_clients.append(client)
 
     with pytest.raises(WorkspaceSessionContextAccessError) as captured:
-        await client.read_context_in_workspace(
-            "gw_missing_backend",
-            _read_request("gw_missing_backend"),
-        )
+        await client.read_resource_context(_read_request("gw_missing_backend"))
 
     message = str(captured.value)
     assert "无法连接 Workspace Gateway" in message
-    assert "workspace_id=gw_missing_backend" in message
-    assert "path=/api/v1/context/read" in message
+    assert "path=/api/gateway/federation/relay" in message
     assert "error_type=ConnectError" in message
     assert isinstance(captured.value.__cause__, httpx.ConnectError)
 
@@ -211,20 +211,17 @@ async def test_gateway_client_uses_default_runtime_url_with_current_local_token(
     gateway_clients.append(client)
 
     with pytest.raises(WorkspaceSessionContextAccessError):
-        await client.read_context_in_workspace(
-            "gw_target",
-            _read_request("gw_target"),
-        )
+        await client.read_resource_context(_read_request("gw_target"))
 
     current_token[0] = "gateway-context-token-2"
     with pytest.raises(WorkspaceSessionContextAccessError):
-        await client.read_context_in_workspace("gw_target", _read_request("gw_target"))
+        await client.read_resource_context(_read_request("gw_target"))
 
     assert len(captured_requests) == 2
     assert all(request.url.host == "127.0.0.1" for request in captured_requests)
     assert all(request.url.port == 8014 for request in captured_requests)
     assert all(
-        request.headers["X-BoxTeam-Workspace-Id"] == "gw_target"
+        request.headers["X-Request-ID"] == "req_gateway_context"
         for request in captured_requests
     )
     assert [request.headers["X-Local-Token"] for request in captured_requests] == [
@@ -263,13 +260,9 @@ async def test_gateway_unknown_workspace_is_model_recoverable(
     gateway_clients.append(client)
 
     with pytest.raises(WorkspaceSessionContextAccessError) as captured:
-        await client.read_context_in_workspace(
-            "gw_typo",
-            _read_request("gw_typo"),
-        )
+        await client.read_resource_context(_read_request("gw_typo"))
 
     message = str(captured.value)
-    assert "workspace_id=gw_typo" in message
     assert "status=404" in message
     assert "Gateway 工作区不存在" in message
 
@@ -297,10 +290,7 @@ async def test_gateway_internal_server_error_still_fails_fast(
     gateway_clients.append(client)
 
     with pytest.raises(RuntimeError, match="status=500") as captured:
-        await client.read_context_in_workspace(
-            "gw_valid",
-            _read_request("gw_valid"),
-        )
+        await client.read_resource_context(_read_request("gw_valid"))
 
     assert not isinstance(captured.value, WorkspaceSessionContextAccessError)
 
@@ -333,9 +323,11 @@ async def test_gateway_url_is_resolved_from_current_config_snapshot(
         return httpx.Response(
             200,
             request=request,
+            headers={"X-Request-ID": kwargs["headers"]["X-Request-ID"]},
             json={
+                "request_id": kwargs["headers"]["X-Request-ID"],
                 "data": {
-                    **kwargs["json"],
+                    **kwargs["json"]["body"]["read"],
                     "view": "overview",
                     "revision": "rev-1",
                 }
@@ -349,20 +341,14 @@ async def test_gateway_url_is_resolved_from_current_config_snapshot(
     )
     gateway_clients.append(client)
 
-    await client.read_context_in_workspace(
-        "gw_target",
-        _read_request("gw_target"),
-    )
+    await client.read_resource_context(_read_request("gw_target"))
     current_url[0] = "http://gateway-b"
     current_timeout[0] = 12
-    await client.read_context_in_workspace(
-        "gw_target",
-        _read_request("gw_target"),
-    )
+    await client.read_resource_context(_read_request("gw_target"))
 
     assert captured_urls == [
-        "http://gateway-a/api/v1/context/read",
-        "http://gateway-b/api/v1/context/read",
+        "http://gateway-a/api/gateway/federation/relay",
+        "http://gateway-b/api/gateway/federation/relay",
     ]
     assert captured_timeouts == [30, 12]
     assert captured_clients[0] is captured_clients[1]

@@ -4,6 +4,7 @@ import base64
 import binascii
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypeVar
 
@@ -153,7 +154,7 @@ def context_assembly_identity(
 def session_context_read_operation(
     *,
     view: str,
-    include: list[str],
+    include: Sequence[str],
     recent_rounds: int,
     include_initial_goal: bool,
 ) -> str:

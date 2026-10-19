@@ -152,18 +152,6 @@ class WorkspaceSessionContextClientProtocol(Protocol):
         request: SessionContextSearchRequest,
     ) -> SessionContextSearchResultDTO: ...
 
-    async def read_context_in_workspace(
-        self,
-        workspace_id: str,
-        request: SessionContextReadRequest,
-    ) -> SessionContextReadResultDTO: ...
-
-    async def search_context_in_workspace(
-        self,
-        workspace_id: str,
-        request: SessionContextSearchRequest,
-    ) -> SessionContextSearchResultDTO: ...
-
 
 class WorkspaceSessionContextTransportProtocol(Protocol):
     async def read_resource_context(
@@ -175,15 +163,3 @@ class WorkspaceSessionContextTransportProtocol(Protocol):
     ) -> SessionContextSearchResultDTO: ...
 
     async def list_gateway_workspaces(self) -> GatewayWorkspaceListDTO: ...
-
-    async def read_context_in_workspace(
-        self,
-        workspace_id: str,
-        request: SessionContextReadRequest,
-    ) -> SessionContextReadResultDTO: ...
-
-    async def search_context_in_workspace(
-        self,
-        workspace_id: str,
-        request: SessionContextSearchRequest,
-    ) -> SessionContextSearchResultDTO: ...

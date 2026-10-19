@@ -52,20 +52,6 @@ class GatewayContextQueryService:
     async def list_gateway_workspaces(self) -> GatewayWorkspaceListDTO:
         return await self._transport.list_gateway_workspaces()
 
-    async def read_context_in_workspace(
-        self,
-        workspace_id: str,
-        request: SessionContextReadRequest,
-    ) -> SessionContextReadResultDTO:
-        return await self._transport.read_context_in_workspace(workspace_id, request)
-
-    async def search_context_in_workspace(
-        self,
-        workspace_id: str,
-        request: SessionContextSearchRequest,
-    ) -> SessionContextSearchResultDTO:
-        return await self._transport.search_context_in_workspace(workspace_id, request)
-
     async def read_resource_context(
         self, request: SessionContextReadRequest,
     ) -> SessionContextReadResultDTO:
@@ -120,7 +106,7 @@ class GatewayContextQueryService:
                 resource_identity=workspace_session_inventory_identity(
                     _backend_workspace_id(item)
                 ),
-                uri=workspace_session_inventory_uri(_backend_workspace_id(item), gateway_authority=resource.gateway_authority),
+                uri=workspace_session_inventory_uri(_backend_workspace_id(item), gateway_authority=_workspace_gateway_authority(item, resource)),
                 scope="workspace",
                 data=_workspace_public_data(item),
             )
@@ -167,7 +153,7 @@ class GatewayContextQueryService:
         targets = [(item, _backend_workspace_id(item)) for item in inventory.items]
 
         async def search_one(
-            workspace_id: str,
+            workspace: GatewayWorkspaceDTO,
             backend_workspace_id: str,
         ) -> SessionContextSearchResultDTO:
             workspace_request = request.model_copy(
@@ -175,7 +161,7 @@ class GatewayContextQueryService:
                     "resource_identity": str(
                         workspace_session_inventory_identity(backend_workspace_id)
                     ),
-                    "uri": workspace_session_inventory_uri(backend_workspace_id, gateway_authority=resource.gateway_authority),
+                    "uri": workspace_session_inventory_uri(backend_workspace_id, gateway_authority=_workspace_gateway_authority(workspace, resource)),
                     "scope": "workspace",
                     "cursor": None,
                     "revision": None,
@@ -184,10 +170,7 @@ class GatewayContextQueryService:
                 }
             )
             async with semaphore:
-                response = await self._transport.search_context_in_workspace(
-                    workspace_id,
-                    workspace_request,
-                )
+                response = await self._transport.search_resource_context(workspace_request)
             _validate_workspace_search_result(
                 response,
                 request=workspace_request,
@@ -197,7 +180,7 @@ class GatewayContextQueryService:
 
         gathered = await asyncio.gather(
             *(
-                search_one(item.workspace_id, backend_workspace_id)
+                search_one(item, backend_workspace_id)
                 for item, backend_workspace_id in targets
             ),
             return_exceptions=True,
@@ -467,6 +450,18 @@ def _require_gateway_inventory(
             "Gateway session inventory resource_identity/URI 与当前真实 Gateway 身份不匹配"
         )
     return resource
+
+
+def _workspace_gateway_authority(
+    item: GatewayWorkspaceDTO, inventory: ParsedSessionContextResource,
+) -> str | None:
+    if item.connection_kind == "remote_gateway":
+        if item.remote is None:
+            raise WorkspaceSessionContextAccessError(
+                f"远端工作区缺少所属 Gateway 身份: workspace_id={item.workspace_id}"
+            )
+        return item.remote.gateway_id
+    return inventory.gateway_authority
 
 
 def _backend_workspace_id(item: GatewayWorkspaceDTO) -> str:

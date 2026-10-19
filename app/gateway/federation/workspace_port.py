@@ -33,6 +33,7 @@ from app.schemas.internal_v2.session_context import (
 from app.services.business.gateway_context_query_service import (
     GatewayContextQueryService,
 )
+from app.services.business.session_context_resource import parse_session_context_ref
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     RESOURCE_URI_RESOLVE_REASON_CODES,
 )
@@ -241,21 +242,32 @@ class WorkspaceSessionMainPort:
             "items": [item for item in inventory.items if item.connection_kind == "local"],
         })
 
-    async def read_context_in_workspace(
-        self, workspace_id: str, request: SessionContextReadRequest,
+    def _context_workspace_id(
+        self, request: SessionContextReadRequest | SessionContextSearchRequest,
+    ) -> str:
+        resource = parse_session_context_ref(
+            resource_identity=request.resource_identity, uri=request.uri, scope=request.scope,
+            local_gateway_id=require_current_gateway_id("context target"),
+        )
+        if resource.gateway_authority is not None or resource.scope != "workspace" or resource.scope_id not in self._backend_urls:
+            raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "上下文资源不属于当前 Gateway 的本地 workspace")
+        return resource.scope_id
+
+    async def read_resource_context(
+        self, request: SessionContextReadRequest,
     ) -> SessionContextReadResultDTO:
         data = await self._request(
-            workspace_id=self.canonical_workspace_id(workspace_id), method="POST",
+            workspace_id=self._context_workspace_id(request), method="POST",
             path="/api/v1/context/read", origin=require_current_gateway_id("read context target"),
             body=request.model_dump(mode="json"),
         )
         return SessionContextReadResultDTO.model_validate(data)
 
-    async def search_context_in_workspace(
-        self, workspace_id: str, request: SessionContextSearchRequest,
+    async def search_resource_context(
+        self, request: SessionContextSearchRequest,
     ) -> SessionContextSearchResultDTO:
         data = await self._request(
-            workspace_id=self.canonical_workspace_id(workspace_id), method="POST",
+            workspace_id=self._context_workspace_id(request), method="POST",
             path="/api/v1/context/search", origin=require_current_gateway_id("search context target"),
             body=request.model_dump(mode="json"),
         )
@@ -271,6 +283,8 @@ class WorkspaceSessionMainPort:
         if data.get("session_id") != session_id:
             raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "main-thread 响应 Session 身份漂移")
         thread_id = data.get("thread_id")
+        if not isinstance(thread_id, str):
+            raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "main-thread 响应缺少 thread_id")
         validate_thread_id(thread_id)
         return thread_id
 
@@ -293,9 +307,6 @@ class WorkspaceSessionMainPort:
             )
         if "resource_identity" in target:
             from app.schemas.internal_v2.communication import ContextQueryRequest
-            from app.services.business.session_context_resource import (
-                parse_session_context_ref,
-            )
             query = ContextQueryRequest.model_validate(body)
             if operation != "read" or query.resource_target.to_payload() != target or query.source_gateway_id != origin:
                 raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "上下文查询与 read grant target/origin 不一致")
@@ -310,12 +321,12 @@ class WorkspaceSessionMainPort:
                 raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "上下文 workspace 未共享或不存在")
             try:
                 async with asyncio.timeout(timeout):
-                    if resource.scope == "gateway":
-                        result = await self._context_query.read_gateway_context(query.read) if query.read is not None else await self._context_query.search_gateway_context(query.search)
-                    elif query.read is not None:
-                        result = await self.read_context_in_workspace(resource.scope_id, query.read)
+                    if query.read is not None:
+                        result = await self._context_query.read_gateway_context(query.read) if resource.scope == "gateway" else await self.read_resource_context(query.read)
+                    elif query.search is not None:
+                        result = await self._context_query.search_gateway_context(query.search) if resource.scope == "gateway" else await self.search_resource_context(query.search)
                     else:
-                        result = await self.search_context_in_workspace(resource.scope_id, query.search)
+                        raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "上下文查询缺少 read/search")
             except TimeoutError as error:
                 raise FederationError(FEDERATION_DEADLINE_EXCEEDED, "上下文查询超过联邦总 deadline") from error
             return result.model_dump(mode="json")
@@ -324,6 +335,7 @@ class WorkspaceSessionMainPort:
                 CommunicationAcceptanceRequest,
             )
             accepted = CommunicationAcceptanceRequest.model_validate(body)
+            address = accepted.target
             if (accepted.payload.kind == "reply") != (operation == "reply"):
                 raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "relay operation 与 payload kind 不一致")
         else:
@@ -331,6 +343,7 @@ class WorkspaceSessionMainPort:
                 CommunicationObservationRequest,
             )
             observed = CommunicationObservationRequest.model_validate(body)
+            address = observed.target
             if observed.operation != operation:
                 raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "relay operation 与 observation 不一致")
         source = body.get("source")
@@ -338,9 +351,9 @@ class WorkspaceSessionMainPort:
             raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "通信 source 与认证 channel origin 不一致")
         if body.get("target") != target:
             raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "通信 body target 与冻结 target main 不一致")
-        session_id = target["session_id"]
+        session_id = address.session_id
         path = f"/api/v1/sessions/{session_id}/" + ("inter-agent-messages" if operation in {"send", "reply"} else "communication-observations")
-        return await self._request(workspace_id=target["workspace_id"], method="POST", path=path, origin=origin, body=body, timeout=timeout)
+        return await self._request(workspace_id=address.workspace_id, method="POST", path=path, origin=origin, body=body, timeout=timeout)
 
 
 __all__ = ["LOCAL_TOKEN", "SESSION_MAIN_THREAD_ENDPOINT", "FederationSpokeDirectory", "WorkspaceCatalogPort", "WorkspaceSessionMainPort"]

@@ -10,8 +10,10 @@ from app.abstractions.session_context import (
     SessionContextRevisionChangedError,
     WorkspaceSessionContextAccessError,
 )
-from app.abstractions.session_target import SessionTarget
 from app.agents.custom_tools import CustomToolFactoryContext
+from app.core.session_control_communication_ledger.observations import (
+    RemoteObservationError,
+)
 from app.core.trace_middleware import get_current_gateway_id, require_current_gateway_id
 from app.schemas.internal_v2.session_context import (
     SessionContextInclude,
@@ -21,10 +23,14 @@ from app.schemas.internal_v2.session_context import (
     SessionContextSearchSource,
 )
 from app.services.business.session_context_resource import (
+    ParsedSessionContextResource,
     gateway_session_inventory_identity,
     gateway_session_inventory_uri,
     parse_session_context_ref,
     session_resource_identity,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.values import (
+    validate_resource_identity,
 )
 
 ResultModel = TypeVar("ResultModel", bound=BaseModel)
@@ -73,7 +79,7 @@ class SearchContextInput(BaseModel):
 
 def _request_identity(
     *, resource_identity: str, uri: str, scope: str
-) -> tuple[str, str, str]:
+) -> ParsedSessionContextResource:
     try:
         resource = parse_session_context_ref(
             resource_identity=resource_identity,
@@ -83,45 +89,7 @@ def _request_identity(
         )
     except ValueError as error:
         raise ToolException(str(error)) from error
-    return str(resource.resource_identity), resource.uri, resource.scope
-
-
-async def _resolve_session_target(
-    context: CustomToolFactoryContext,
-    *,
-    session_id: str,
-    backend_workspace_id: str,
-) -> SessionTarget:
-    resolver = context.session_target_resolver
-    if resolver is None:
-        if backend_workspace_id != context.session_context_query_service.workspace_id:
-            raise ToolException(
-                "未配置 SessionTargetResolver，无法把 backend_workspace_id 映射为 Gateway 路由 ID"
-            )
-        return SessionTarget(session_id=session_id)
-    try:
-        target = await resolver.resolve_session(
-            session_id,
-            backend_workspace_id=backend_workspace_id,
-        )
-    except WorkspaceSessionContextAccessError as error:
-        raise ToolException(str(error)) from error
-    return target
-
-
-async def _resolve_workspace_target(
-    context: CustomToolFactoryContext,
-    backend_workspace_id: str,
-) -> str:
-    resolver = context.session_target_resolver
-    if resolver is None:
-        raise ToolException(
-            "未配置 SessionTargetResolver，无法把 backend_workspace_id 映射为 Gateway 路由 ID"
-        )
-    try:
-        return await resolver.resolve_backend_workspace(backend_workspace_id)
-    except WorkspaceSessionContextAccessError as error:
-        raise ToolException(str(error)) from error
+    return resource
 
 
 def _validate_target_identity(
@@ -150,7 +118,7 @@ def _validate_target_identity(
 async def _result_json(operation: Awaitable[ResultModel]) -> str:
     try:
         result = await operation
-    except (WorkspaceSessionContextAccessError, SessionContextRevisionChangedError) as error:
+    except (WorkspaceSessionContextAccessError, SessionContextRevisionChangedError, RemoteObservationError) as error:
         raise ToolException(str(error)) from error
     return result.model_dump_json()
 
@@ -173,23 +141,19 @@ def create_read_context_tool(context: CustomToolFactoryContext) -> BaseTool:
         max_chars: int = 16_384,
         revision: str | None = None,
     ) -> str:
-        identity, canonical_uri, canonical_scope = _request_identity(
+        resource = _request_identity(
             resource_identity=resource_identity,
             uri=uri,
             scope=scope,
         )
-        resource = parse_session_context_ref(
-            resource_identity=identity,
-            uri=canonical_uri,
-            scope=canonical_scope,
-        )
+        identity, canonical_uri, canonical_scope = resource.resource_identity, resource.uri, scope
         request = SessionContextReadRequest(
             resource_identity=identity,
             uri=canonical_uri,
             scope=canonical_scope,
             view=view,
             record_index=record_index,
-            assembly_ref=assembly_ref,
+            assembly_ref=validate_resource_identity(assembly_ref) if assembly_ref is not None else None,
             include=include or ["visible_text", "tool_summary"],
             recent_rounds=recent_rounds,
             include_initial_goal=include_initial_goal,
@@ -222,15 +186,8 @@ def create_read_context_tool(context: CustomToolFactoryContext) -> BaseTool:
                 return await _result_json(
                     context.session_context_query_service.read_context(request)
                 )
-            gateway_workspace_id = await _resolve_workspace_target(
-                context,
-                resource.scope_id,
-            )
             return await _result_json(
-                context.workspace_session_context_client.read_context_in_workspace(
-                    gateway_workspace_id,
-                    request,
-                )
+                context.workspace_session_context_client.read_resource_context(request)
             )
 
         if resource.kind != "session" or resource.session_id is None:
@@ -278,16 +235,12 @@ def create_search_context_tool(context: CustomToolFactoryContext) -> BaseTool:
         cursor: str | None = None,
         revision: str | None = None,
     ) -> str:
-        identity, canonical_uri, canonical_scope = _request_identity(
+        resource = _request_identity(
             resource_identity=resource_identity,
             uri=uri,
             scope=scope,
         )
-        resource = parse_session_context_ref(
-            resource_identity=identity,
-            uri=canonical_uri,
-            scope=canonical_scope,
-        )
+        identity, canonical_uri, canonical_scope = resource.resource_identity, resource.uri, scope
         request = SessionContextSearchRequest(
             resource_identity=identity,
             uri=canonical_uri,
@@ -323,15 +276,8 @@ def create_search_context_tool(context: CustomToolFactoryContext) -> BaseTool:
                 return await _result_json(
                     context.session_context_query_service.search_context(request)
                 )
-            gateway_workspace_id = await _resolve_workspace_target(
-                context,
-                resource.scope_id,
-            )
             return await _result_json(
-                context.workspace_session_context_client.search_context_in_workspace(
-                    gateway_workspace_id,
-                    request,
-                )
+                context.workspace_session_context_client.search_resource_context(request)
             )
 
         if resource.kind != "session" or resource.session_id is None:
@@ -343,27 +289,12 @@ def create_search_context_tool(context: CustomToolFactoryContext) -> BaseTool:
             backend_workspace_id=resource.scope_id,
             session_id=resource.session_id,
         )
-        target = await _resolve_session_target(
-            context,
-            session_id=resource.session_id,
-            backend_workspace_id=resource.scope_id,
-        )
-        if (
-            resource.scope_id == context.session_context_query_service.workspace_id
-            and target.workspace_id is None
-        ):
+        if resource.scope_id == context.session_context_query_service.workspace_id:
             return await _result_json(
                 context.session_context_query_service.search_context(request)
             )
-        if target.workspace_id is None:
-            raise ToolException(
-                "SessionTargetResolver 未返回远程 Gateway workspace 路由 ID"
-            )
         return await _result_json(
-            context.workspace_session_context_client.search_context_in_workspace(
-                target.workspace_id,
-                request,
-            )
+            context.workspace_session_context_client.search_resource_context(request)
         )
 
     return StructuredTool.from_function(

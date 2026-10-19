@@ -411,7 +411,7 @@ async def test_context_target_enforces_one_total_deadline(
 ) -> None:
     async def wait_beyond_deadline(*_args, **_kwargs):
         await asyncio.Event().wait()
-    monkeypatch.setattr(http_context.port, "read_context_in_workspace", wait_beyond_deadline)
+    monkeypatch.setattr(http_context.port, "read_resource_context", wait_beyond_deadline)
     with pytest.raises(FederationError) as error:
         await http_context.port.execute(
             operation="read", target=context_read_body["resource_target"], body=context_read_body,
