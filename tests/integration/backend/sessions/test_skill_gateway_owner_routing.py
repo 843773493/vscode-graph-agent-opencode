@@ -7,13 +7,16 @@ import json
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from hashlib import sha256
 from pathlib import Path
 from threading import Event
 
 import pytest
 
+from app.core.resource_uri import parse_resource_uri, resource_display_uri
 from app.services.business.session_context_resource import session_resource_uri
 from tests.harness.python.run_context import TestRunContext
+from tests.integration.backend.agents.test_resource_navigation import _tracking_counts
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     _completed,
     _prepare_workspace,
@@ -308,6 +311,142 @@ async def test_shared_backend_routes_snapshot_navigation_and_concurrent_messages
     assert not set(observer_ids) & {"req-owner-run-a", "req-owner-run-b"}
     case.record("request-identity-exchanges", case.observations())
     case.record("connected-owner-results", {"snapshot": connected.json(), "navigation": navigation.json(), "jobs": completed})
+
+
+async def test_remote_skill_navigation_is_lightweight_encoded_and_fixed_to_owner(skill_gateways: SkillGatewayCase):
+    case = skill_gateways
+    source, target = case.nodes["a"], case.nodes["b"]
+    for name, node in case.nodes.items():
+        root = node.gateway_home / "skills" / SKILL_NAME
+        (root / "references/deep").mkdir(parents=True)
+        (root / ".notes").mkdir()
+        (root / "scripts").mkdir()
+        (root / "references/deep/中文 文档.v2.md").write_text(f"多层正文 owner-{name} Ω\n")
+        (root / ".notes/100%.txt").write_text(f"点号目录 owner-{name}\n")
+        (root / "%2e%2e.txt").write_text(f"字面百分号 owner-{name}\n")
+        (root / "scripts/non-text.bin").write_bytes(b"\xff")
+        for index in range(257):
+            (root / f"references/deep/bulk-needle-{index:03}.txt").write_text(f"未追踪 owner-{name}\n")
+
+    connected_path = f"/api/gateway/skill-source-connections/{target.gateway_id}/workspaces/{target.workspace_id}"
+    product_path = f"/api/v1/workspaces/{target.workspace_id}/resources/navigation"
+    root_uri = resource_display_uri(scope="gateway", scope_id=target.gateway_id, kind="skills", tail_segments=(SKILL_NAME,))
+    receipts = []
+
+    def persistent_facts() -> dict[str, object]:
+        sessions = target.workspace / ".boxteam/sessions"
+        return {
+            "tracking": _tracking_counts(case.context.workspace_root),
+            "session_files": {str(path.relative_to(sessions)): sha256(path.read_bytes()).hexdigest()
+                              for path in sorted(sessions.rglob("*")) if path.is_file()},
+        }
+
+    before = persistent_facts()
+    publication = await source.client.get(connected_path)
+    assert publication.status_code == 200, publication.text
+    assert publication.json()["data"] == case.snapshots["b"]
+
+    async def navigate(uri: str, operation: str, *, route: str = "connection", status: int = 200, **extra: object) -> dict:
+        request_id = f"req-remote-navigation-{len(receipts):03}"
+        client, path = (source.client, connected_path + "/navigation") if route == "connection" else (target.client, product_path)
+        response = await client.post(path, headers={"X-Request-ID": request_id}, json={"uri": uri, "operation": operation, **extra})
+        body = response.json()
+        receipts.append({"route": route, "uri": uri, "operation": operation, "status": response.status_code,
+                         "header_request_id": response.headers["X-Request-ID"], "body": body})
+        case.record("remote-navigation-receipts", receipts)
+        assert response.status_code == status, response.text
+        assert response.headers["X-Request-ID"] == request_id
+        for private in (str(target.workspace), *(str(node.gateway_home) for node in case.nodes.values()), "local-dev-token"):
+            assert private not in response.text
+        if status != 422:
+            assert body["request_id"] == request_id
+            owner, = [row for row in case.observations()
+                      if row["event"] == "owner_receipt" and row["request_id"] == request_id and row["kind"] == "navigation"]
+            assert owner["pid"] == target.gateway.process.pid
+            assert owner["owner_gateway_id"] == owner["request_gateway_id"] == owner["result_gateway_id"] == target.gateway_id
+            assert owner["request_workspace_id"] == owner["result_workspace_id"] == target.workspace_id
+            assert owner["result_request_id"] == request_id and owner["status"] == status
+        else:
+            assert body["detail"][0]["loc"] == ["body", "operation"]
+            assert body["detail"][0]["input"] == operation
+            assert not any(row["event"] == "owner_receipt" and row["request_id"] == request_id for row in case.observations())
+        if status != 200:
+            return body
+        data = body["data"]
+        assert set(data) == {"node", "entries", "content", "truncated"}
+        assert data["node"]["uri"] == parse_resource_uri(uri, local_gateway_id=target.gateway_id).display_uri
+        for node in (data["node"], *data["entries"]):
+            assert set(node) == {"uri", "resource_shape", "operations", "child_path"}
+            assert node["uri"].startswith(root_uri)
+        if route == "workspace":
+            row, = [row for row in case.observations()
+                    if row["event"] == "workspace_response" and row["sent_request_id"] == request_id]
+            case.assert_exchange(row, "b", request_id)
+        return data
+
+    for route in ("connection", "workspace"):
+        root = await navigate(root_uri, "describe", route=route)
+        assert root["node"] == {"uri": root_uri, "resource_shape": "directory", "operations": ["describe", "list", "search"], "child_path": "file_segments"}
+        listed = await navigate(root_uri, "list", route=route)
+        entries = {node["uri"].rsplit("/", 1)[1]: node for node in listed["entries"]}
+        skill_uri = entries["SKILL.md"]["uri"]
+        assert entries["SKILL.md"]["operations"] == ["describe", "read"] and entries["SKILL.md"]["child_path"] is None
+        assert (await navigate(skill_uri, "read", route=route))["content"] == case.snapshots["b"]["entries"][0]["content"]
+        explicit = resource_display_uri(scope="gateway", scope_id=target.gateway_id, kind="skills",
+                                        tail_segments=(SKILL_NAME, "SKILL.md"), gateway_authority=target.gateway_id)
+        assert (await navigate(explicit, "read", route=route))["node"]["uri"] == skill_uri
+        references = await navigate(entries["references"]["uri"], "list", route=route)
+        deep, = references["entries"]
+        assert deep["resource_shape"] == "directory" and deep["uri"].endswith("/references/deep")
+        found = await navigate(deep["uri"], "search", route=route, query="中文 文档")
+        child, = found["entries"]
+        assert child["uri"] == root_uri + "/references/deep/%E4%B8%AD%E6%96%87%20%E6%96%87%E6%A1%A3.v2.md"
+        assert (await navigate(child["uri"], "read", route=route))["content"] == "多层正文 owner-b Ω\n"
+        bounded = await navigate(child["uri"], "read", route=route, max_bytes=4)
+        assert bounded["content"] == "多" and bounded["truncated"]
+        dot = await navigate(entries[".notes"]["uri"], "list", route=route)
+        literal_percent, = dot["entries"]
+        assert literal_percent["uri"] == root_uri + "/.notes/100%25.txt"
+        assert (await navigate(literal_percent["uri"], "read", route=route))["content"] == "点号目录 owner-b\n"
+        assert entries["%252e%252e.txt"]["uri"] == root_uri + "/%252e%252e.txt"
+        assert (await navigate(entries["%252e%252e.txt"]["uri"], "read", route=route))["content"] == "字面百分号 owner-b\n"
+        bulk = await navigate(root_uri, "search", route=route, query="bulk-needle", limit=7)
+        assert len(bulk["entries"]) == 7 and bulk["truncated"]
+        assert all(node["resource_shape"] == "file" for node in bulk["entries"])
+        assert (await navigate(bulk["entries"][0]["uri"], "read", route=route))["content"] == "未追踪 owner-b\n"
+
+    # 同名文件分别属于 A/B；固定 B 的路径不能读取 A，也不能把读能力提升为目录或写能力。
+    for uri, operation, code in (
+        (root_uri.replace(target.gateway_id, source.gateway_id), "list", "scope_mismatch"),
+        (root_uri, "read", "capability_denied"),
+        (root_uri + "/SKILL.md", "list", "capability_denied"),
+        (root_uri + "/SKILL.md/child", "read", "capability_denied"),
+    ):
+        denied = await navigate(uri, operation, status=403)
+        assert denied["detail"]["owner"] == "resource_uri_resolver" and denied["detail"]["code"] == code
+    for suffix, code in (("/%2e%2e", "dot_segment"), ("/references%2Fdeep", "invalid_character")):
+        denied = await navigate(root_uri + suffix, "read", status=400)
+        assert denied["detail"]["owner"] == "resource_uri_grammar" and denied["detail"]["code"] == code
+    await navigate(root_uri + "/SKILL.md", "write", status=422)
+    invalid_content = await navigate(root_uri + "/scripts/non-text.bin", "read", status=400)
+    assert invalid_content["detail"] == {"owner": "resource_navigation", "type": "UnicodeDecodeError", "errno": None}
+    outside = case.context.workspace_root / "remote-private-proof.txt"
+    outside.write_text("私有根外正文\n")
+    link = target.gateway_home / "skills" / SKILL_NAME / "references/escape"
+    link.symlink_to(outside)
+    denied = await navigate(root_uri + "/references/escape", "read", status=403)
+    assert denied["detail"]["code"] == "capability_denied"
+    link.unlink()
+
+    after = persistent_facts()
+    assert after == before
+    current = await source.client.get(connected_path)
+    assert current.status_code == 200 and current.json()["data"] == publication.json()["data"]
+    assert current.headers["ETag"] == publication.headers["ETag"]
+    assert not case.model.requests
+    assert not case.source_responses("a") and not case.source_responses("b")
+    case.record("remote-navigation-lightweight", {"before": before, "after": after, "publication": current.json(),
+                                                  "backend_pid": target.backend.process.pid, "owner_pid": target.gateway.process.pid})
 
 
 async def test_queued_job_cold_restore_keeps_frozen_gateway_and_request_id(skill_gateways):
