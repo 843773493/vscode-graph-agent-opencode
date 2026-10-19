@@ -87,8 +87,8 @@ async def run_agent_with_retries(
     resume_from_checkpoint: bool = False,
 ) -> StepAgentRetryResult:
 
-    def retry_input(*, message_id: str, kind: str, reminder: str, metadata: dict[str, object]) -> object:
-        return checkpointer.register_execution_retry_source(
+    def register_retry(*, message_id: str, kind: str, reminder: str, metadata: dict[str, object]) -> None:
+        checkpointer.register_execution_retry_source(
             admission, message_id=message_id,
             message=internal_retry_message(kind=kind, reminder=reminder, metadata=metadata),
         )
@@ -219,18 +219,17 @@ async def run_agent_with_retries(
                     "agent_id": resolved_agent_id,
                 },
             )
-            next_input_messages = [
-                retry_input(
-                    message_id=f"{job_id}:missing_custom_tool_retry:{custom_tool_response_retries}",
-                    kind="missing_custom_tool_retry",
-                    reminder=reminder,
-                    metadata={
-                        "source": "missing_custom_tool_retry",
-                        "attempt": custom_tool_response_retries,
-                        "missing_tools": sorted(missing_custom_tool_names),
-                    },
-                )
-            ]
+            register_retry(
+                message_id=f"{job_id}:missing_custom_tool_retry:{custom_tool_response_retries}",
+                kind="missing_custom_tool_retry",
+                reminder=reminder,
+                metadata={
+                    "source": "missing_custom_tool_retry",
+                    "attempt": custom_tool_response_retries,
+                    "missing_tools": sorted(missing_custom_tool_names),
+                },
+            )
+            next_input_messages = []
             continue
 
         if final_text and missing_delegated_report:
@@ -255,20 +254,19 @@ async def run_agent_with_retries(
                     "agent_id": resolved_agent_id,
                 },
             )
-            next_input_messages = [
-                retry_input(
-                    message_id=(
-                        f"{job_id}:delegated_report_retry:{delegated_report_retries}"
-                    ),
-                    kind="delegated_report_retry",
-                    reminder=reminder,
-                    metadata={
-                        "source": "delegated_report_retry",
-                        "attempt": delegated_report_retries,
-                        "parent_session_id": parent_session_id,
-                    },
-                )
-            ]
+            register_retry(
+                message_id=(
+                    f"{job_id}:delegated_report_retry:{delegated_report_retries}"
+                ),
+                kind="delegated_report_retry",
+                reminder=reminder,
+                metadata={
+                    "source": "delegated_report_retry",
+                    "attempt": delegated_report_retries,
+                    "parent_session_id": parent_session_id,
+                },
+            )
+            next_input_messages = []
             continue
 
         if final_text and missing_session_question_reply:
@@ -300,22 +298,21 @@ async def run_agent_with_retries(
                     "agent_id": resolved_agent_id,
                 },
             )
-            next_input_messages = [
-                retry_input(
-                    message_id=(
-                        f"{job_id}:session_question_reply_retry:"
-                        f"{delegated_report_retries}"
-                    ),
-                    kind="session_question_reply_retry",
-                    reminder=reminder,
-                    metadata={
-                        "source": "session_question_reply_retry",
-                        "attempt": delegated_report_retries,
-                        "source_address": {"gateway_id": question_source.gateway_id, "workspace_id": question_source.workspace_id, "session_id": question_source.session_id, "thread_id": question_source.thread_id},
-                        "communication_id": question_communication_id,
-                    },
-                )
-            ]
+            register_retry(
+                message_id=(
+                    f"{job_id}:session_question_reply_retry:"
+                    f"{delegated_report_retries}"
+                ),
+                kind="session_question_reply_retry",
+                reminder=reminder,
+                metadata={
+                    "source": "session_question_reply_retry",
+                    "attempt": delegated_report_retries,
+                    "source_address": {"gateway_id": question_source.gateway_id, "workspace_id": question_source.workspace_id, "session_id": question_source.session_id, "thread_id": question_source.thread_id},
+                    "communication_id": question_communication_id,
+                },
+            )
+            next_input_messages = []
             continue
 
         empty_response_retries += 1
@@ -340,17 +337,16 @@ async def run_agent_with_retries(
                 "agent_id": resolved_agent_id,
             },
         )
-        next_input_messages = [
-            retry_input(
-                message_id=f"{job_id}:empty_response_retry:{empty_response_retries}",
-                kind="empty_response_retry",
-                reminder=reminder,
-                metadata={
-                    "source": "empty_response_retry",
-                    "attempt": empty_response_retries,
-                },
-            )
-        ]
+        register_retry(
+            message_id=f"{job_id}:empty_response_retry:{empty_response_retries}",
+            kind="empty_response_retry",
+            reminder=reminder,
+            metadata={
+                "source": "empty_response_retry",
+                "attempt": empty_response_retries,
+            },
+        )
+        next_input_messages = []
 
     return StepAgentRetryResult(
         final_text=final_text,

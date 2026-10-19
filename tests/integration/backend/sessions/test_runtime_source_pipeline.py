@@ -770,6 +770,13 @@ async def test_h3_four_retries_share_one_real_execution(source_case: RuntimeSour
     assert all(value.turn_scope == "pending_next_turn" and value.turn_id is None for value in frozen_items)
     assert all(value.extensions["boxteam.checkpoint.annotations"]["value"]["structured_prompt_kind"] == source_kind
                for value in frozen_items)
+    retry_prompts = [_wire_text(value.payload) for value in sorted(frozen_items, key=lambda item: item.item_sequence)]
+    for request_index, request in enumerate(case.model.requests):
+        selected_retry_prompts = [_wire_text(message["content"]) for message in request["json"]["messages"]
+                                  if _wire_text(message.get("content", "")) in retry_prompts]
+        assert selected_retry_prompts == retry_prompts[:min(request_index, 2)]
+        assert all(message["role"] == "user" for message in request["json"]["messages"]
+                   if _wire_text(message.get("content", "")) in retry_prompts)
     sealed = [saver.get_context_assembly(session_id, thread_id, assembly_id=row[0]) for row in assemblies]
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         assert canonical_json_bytes([value.to_dict() for value in cold._storage.storage.read_items(
@@ -780,6 +787,20 @@ async def test_h3_four_retries_share_one_real_execution(source_case: RuntimeSour
         for snapshot in sealed:
             restored = cold.get_context_assembly(session_id, thread_id, assembly_id=snapshot.assembly_id)
             assert canonical_json_bytes(restored.to_dict()) == canonical_json_bytes(snapshot.to_dict())
+    if origin == "user_turn":
+        previous_wire = case.model.requests[-1]["json"]
+        continued = await _send(case, session_id, "H3 后续用户输入：直接完成。")
+        await _job(case, continued["job_id"])
+        assert continued["turn_id"] != turn_id
+        following_wire = case.model.requests[-1]["json"]
+        assert following_wire["messages"][:len(previous_wire["messages"])] == previous_wire["messages"]
+        assert following_wire["tools"] == previous_wire["tools"]
+        assert [_wire_text(message["content"]) for message in following_wire["messages"]
+                if _wire_text(message.get("content", "")) in retry_prompts] == retry_prompts
+        assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM executions") == [(2,)]
+        assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM turn_records") == [(2,)]
+        assert case.sql(session_id, thread_id,
+            "SELECT item_id,execution_id FROM item_catalog WHERE semantic_kind='runtime_notice' AND item_id LIKE '%retry:%' ORDER BY item_sequence") == retry_items
     case.write_actual(f"h3-{retry_kind}", {"job": result, "executions": executions,
         "retry_items": retry_items, "model_calls": model_calls, "assemblies": assemblies,
         "provider_requests": calls, "retry_source_kind": source_kind, "retry_sources": sorted(expected_ids),

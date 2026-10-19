@@ -244,7 +244,7 @@ class RuntimeExecutionOwnerMixin:
 
     def register_execution_retry_source(
         self, admission: ExecutionAdmission, *, message_id: str, message: PreparedInternalMessage,
-    ) -> HumanMessage:
+    ) -> None:
         """四类 retry 只绑定当前 execution，不创建新 admission 或 Job。"""
         self._storage.executions.execution_admission(
             admission.session_id, thread_id=admission.thread_id, execution_id=admission.execution_id,
@@ -261,13 +261,6 @@ class RuntimeExecutionOwnerMixin:
             }},
         )
         self.submit_execution_pending_source(decision)
-        item = self._storage.storage.read_items(
-            admission.session_id, admission.thread_id, item_ids=(decision.item_id,),
-        )[0]
-        restored = self._storage.storage._codec().from_dict(self._storage.storage._codec().project_message((item,)))
-        if not isinstance(restored, HumanMessage):
-            raise TypeError("retry canonical projection 必须是 HumanMessage")
-        return restored
 
     def internal_seed_source(self, session_id: str, thread_id: str, execution_id: str) -> ContextSourceSnapshot | None:
         request = self._storage.executions.internal_execution_request_input(session_id, thread_id, execution_id)

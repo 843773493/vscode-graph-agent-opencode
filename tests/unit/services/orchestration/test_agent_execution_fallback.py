@@ -360,12 +360,7 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
     saver.consume_prepared_context_for_dispatch.side_effect = consume_prepared
 
     saver.execution_for_turn.return_value = "execution_test"
-    saver.register_execution_retry_source.side_effect = (
-        lambda admission, *, message_id, message: HumanMessage(
-            id=message_id, content=message.content,
-            response_metadata=dict(message.metadata),
-        )
-    )
+    saver.register_execution_retry_source.return_value = None
     saved_items: dict[str, CanonicalItemRecord] = {}
 
     def commit_tool_result(
@@ -970,7 +965,7 @@ async def test_cross_session_question_retries_until_correlated_tool_reply(
     ]
 
     async def process_side_effect(*, input_payload, **_kwargs):
-        input_messages.append(input_payload["messages"][0])
+        input_messages.append(input_payload["messages"])
         return stream_results.pop(0)
 
     with (
@@ -1003,9 +998,9 @@ async def test_cross_session_question_retries_until_correlated_tool_reply(
 
     assert result == "已通过会话工具回复"
     assert len(input_messages) == 2
-    assert (
-        input_messages[1].response_metadata["source"] == "session_question_reply_retry"
-    )
+    assert input_messages[1] == []
+    retry = mock_dependencies["dependency_provider"].get_checkpointer.return_value.register_execution_retry_source.call_args.kwargs["message"]
+    assert retry.metadata["source"] == "session_question_reply_retry"
 
 
 @pytest.mark.asyncio
@@ -1229,7 +1224,7 @@ async def test_reasoning_only_response_retries_with_system_reminder(mock_depende
     ) as mock_build:
 
         async def mock_events(input_payload, *args, **kwargs):
-            input_messages.append(input_payload["messages"][0])
+            input_messages.append(input_payload["messages"])
             if len(input_messages) == 1:
                 yield {
                     "event": "on_chat_model_stream",
@@ -1249,7 +1244,9 @@ async def test_reasoning_only_response_retries_with_system_reminder(mock_depende
                     "metadata": stream_metadata(),
                 }
                 return
-            assert "<system_reminder>" in input_payload["messages"][0].content
+            assert input_payload["messages"] == []
+            reminder = deps["dependency_provider"].get_checkpointer.return_value.register_execution_retry_source.call_args.kwargs["message"]
+            assert "<system_reminder>" in reminder.content
             yield {
                 "event": "on_chat_model_stream",
                 "name": "ChatOpenAI",
@@ -1285,7 +1282,9 @@ async def test_reasoning_only_response_retries_with_system_reminder(mock_depende
 
     assert result == "OK"
     assert len(input_messages) == 2
-    assert input_messages[1].response_metadata["source"] == "empty_response_retry"
+    assert input_messages[1] == []
+    retry = mock_dependencies["dependency_provider"].get_checkpointer.return_value.register_execution_retry_source.call_args.kwargs["message"]
+    assert retry.metadata["source"] == "empty_response_retry"
 
 
 @pytest.mark.asyncio
@@ -1360,7 +1359,7 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
         mock_build.return_value = MagicMock()
 
         async def process_side_effect(*, input_payload, **kwargs):
-            input_messages.append(input_payload["messages"][0])
+            input_messages.append(input_payload["messages"])
             return stream_results.pop(0)
 
         mock_process.side_effect = process_side_effect
@@ -1378,8 +1377,10 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
 
     assert result == "4568"
     assert len(input_messages) == 2
-    assert input_messages[1].response_metadata["source"] == "missing_custom_tool_retry"
-    assert "test_tool_2" in input_messages[1].response_metadata["missing_tools"]
+    assert input_messages[1] == []
+    retry = mock_dependencies["dependency_provider"].get_checkpointer.return_value.register_execution_retry_source.call_args.kwargs["message"]
+    assert retry.metadata["source"] == "missing_custom_tool_retry"
+    assert "test_tool_2" in retry.metadata["missing_tools"]
 
 
 @pytest.mark.asyncio

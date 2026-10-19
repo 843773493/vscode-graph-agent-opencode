@@ -504,11 +504,6 @@ class ContextSourceControlStorageMixin:
                     idempotency_key=decision.idempotency_key,
                     begin_transaction=False,
                 )
-                self._storage._append_context_view_items(
-                    connection,
-                    checkpoint_ns="",
-                    item_ids=(prepared_item.item_id,),
-                )
                 commit_ids = (commit_id,)
         else:
             commit_ids = ()
@@ -517,6 +512,12 @@ class ContextSourceControlStorageMixin:
             self._storage._bind_canonical_item_execution(
                 connection, item_id=item.item_id, execution_id=decision.execution_id,
             )
+            if existing_item is None:
+                # Turn 外来源进入唯一 view membership，不靠物理 catalog 扫描补回。
+                self._storage._append_context_view_items(
+                    connection, checkpoint_ns="", item_ids=(item.item_id,),
+                    source_kind="display_only", require_view=True,
+                )
 
         # observe_pending 只保留 immutable pending item；提醒等一次性
         # runtime source 不建立 tracking row，避免把事件伪装成 CSM

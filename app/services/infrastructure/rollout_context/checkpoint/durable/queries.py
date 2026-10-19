@@ -259,7 +259,7 @@ class RolloutCheckpointQueriesMixin:
         *,
         include_pending_notices: bool = True,
     ) -> tuple[CanonicalItemRecord, ...]:
-        """canonical 历史加当前 internal 准入；已 applied 内部前缀只精确继承。"""
+        """canonical 历史加当前准入来源；已 applied 前缀只精确继承。"""
         view_id = self.active_view_id(snapshot)
         if view_id is None:
             # v2 初始化会先建立 active view，acceptance/stream sink 只会补充
@@ -297,14 +297,14 @@ class RolloutCheckpointQueriesMixin:
         )
         item_ids = [item_id for item_id, _ordinal in selected if item_id not in excluded]
         admission = current_execution_admission(langgraph_thread_id=thread_id)
-        if not include_pending_notices or admission is None or admission.execution_origin != "internal":
+        if not include_pending_notices or admission is None:
             return tuple(item_ids)
         self._context.executions.execution_admission_cursor(
             admission, connection=connection, checkpoint_ns=checkpoint_ns,
         )
         pending_ids = []
-        # internal 不消费旧 notice。连续 internal 从唯一 applied assembly 携带
-        # 精确前缀，然后只追加当前 durable admission 自己的输入和输出。
+        # 从唯一 applied assembly 携带精确前缀，再追加当前准入自己的
+        # 输入、输出和 retry 来源；用户执行同样可能产生 Turn 外来源。
         previous = self._context.assemblies._latest_context_assembly_connection(
             connection, session_id, thread_id, checkpoint_ns=checkpoint_ns,
         )
@@ -312,8 +312,11 @@ class RolloutCheckpointQueriesMixin:
             pending_ids.extend(entry.ref.ref_id for entry in previous.selection
                                if entry.included and entry.ref.ref_type == "canonical_item")
         pending_ids.extend(row[0] for row in connection.execute(
-            "SELECT item_id FROM item_catalog WHERE execution_id=? ORDER BY item_sequence",
-            (admission.execution_id,),
+            "SELECT item.item_id FROM context_view_items member "
+            "JOIN item_catalog item ON item.item_id=member.item_id "
+            "WHERE member.view_id=? AND member.visible=1 AND member.context_selected=1 "
+            "AND item.execution_id=? ORDER BY member.context_ordinal",
+            (view_id, admission.execution_id),
         ).fetchall())
         known = set(item_ids)
         for raw_id in pending_ids:
