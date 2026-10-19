@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import closing
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -176,6 +177,12 @@ def test_internal_admission_creates_turnless_execution_and_reuses_exact_identity
     )
 
     assert first == repeated == expected
+    assert asdict(first) == {
+        "session_id": SESSION_ID, "thread_id": thread_id,
+        "execution_id": expected.execution_id, "job_id": expected.job_id,
+        "admission_idempotency_key": intent.admission_idempotency_key,
+        "execution_origin": "internal", "turn_id": None,
+    }
     assert saver.execution_admission(
         SESSION_ID,
         thread_id=thread_id,

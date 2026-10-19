@@ -31,9 +31,12 @@ from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
     InternalExecutionIntent,
 )
-from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.hashing import canonical_json_bytes, content_hash, sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.domain.itemized.records import RuntimeNoticePayload
+from app.prompting.factory import PromptSection, internal_message_factory
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
+from app.services.business.message_display import project_message_for_display
 from app.services.business.system_reminder_checkpoint_service import (
     submit_checkpoint_reminder,
 )
@@ -2131,6 +2134,68 @@ def test_checkpoint_reminder_source_transaction_rolls_back_jsonl_on_sqlite_failu
                 ).fetchone()
                 == before_meta
             )
+
+
+def test_structured_runtime_notice_checkpoint_cold_restore_preserves_private_and_safe_parts(
+    tmp_path: Path, session_bundle_factory,
+) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, SESSION_ID)
+    prepared = internal_message_factory.build(
+        kind="generated_session_result", control="处理返回的分支结果。",
+        sections=(
+            PromptSection("control_context", {}),
+            PromptSection("generated_session_result", "仅供模型的私有分支结果"),
+        ),
+        display_content="分支任务已完成。",
+    )
+    message = HumanMessage(
+        content=prepared.content, id="structured-notice-checkpoint",
+        response_metadata={
+            "message_id": "structured-notice-checkpoint",
+            "created_at": "2026-10-19T00:00:00+00:00",
+            "message_metadata": prepared.metadata,
+        },
+    )
+    intent = InternalExecutionIntent(
+        message_id=message.id, execution_id="execution-structured-notice",
+        admission_idempotency_key="admission-structured-notice",
+    )
+    with RolloutCheckpointSaver(sessions_dir) as saver:
+        thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
+        admission = saver.admit_internal_execution(
+            SESSION_ID, thread_id=thread_id, job_id="job-structured-notice",
+            intent=intent, message=message,
+        )
+        with _execution_scope(admission):
+            config = saver.put(
+                build_checkpoint_config(thread_id),
+                _checkpoint("checkpoint-structured-notice", [message]),
+                {"source": "runtime-notice-roundtrip"}, {"messages": "1"},
+            )
+        (original,) = saver._storage.storage.read_items(
+            SESSION_ID, thread_id, item_ids=(intent.notice_item_id,),
+        )
+        original_bytes = canonical_json_bytes(original.to_dict())
+    with RolloutCheckpointSaver(sessions_dir) as cold, _execution_scope(admission):
+        restored = cold.get_tuple(config)
+        assert restored is not None
+        (restored_message,) = restored.checkpoint["channel_values"]["messages"]
+        assert isinstance(restored_message, HumanMessage)
+        assert restored_message.content == prepared.content
+        assert "仅供模型的私有分支结果" not in canonical_json_bytes(restored_message.response_metadata).decode()
+        display = project_message_for_display(restored_message.content, restored_message.response_metadata)
+        assert display.content == "分支任务已完成。"
+        (notice,) = cold._storage.storage.read_items(
+            SESSION_ID, thread_id, item_ids=(intent.notice_item_id,),
+        )
+        payload = RuntimeNoticePayload.from_dict(notice.payload)
+        assert payload.prompt == prepared.content
+        assert payload.display_part.text == display.content
+        assert canonical_json_bytes(notice.to_dict()) == original_bytes
+        assert notice.content_hash == content_hash("structured_content", notice.payload)
+        assert notice.turn_id is None and notice.turn_scope == "pending_next_turn"
+        assert cold.execution_admission(SESSION_ID, thread_id=thread_id, execution_id=intent.execution_id) == admission
 
 
 def test_legacy_hidden_reminder_turn_is_excluded_from_history(

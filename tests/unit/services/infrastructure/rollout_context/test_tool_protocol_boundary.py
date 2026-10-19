@@ -166,6 +166,7 @@ def test_generated_session_notice_keeps_provider_prompt_and_safe_display_separat
 @pytest.mark.parametrize("field", [
     "boxteam_generation_run_id", "boxteam_generator_id", "boxteam_generation_phase",
     "branch_result", "generated_job_id",
+    "unregistered_annotation",
 ])
 def test_generated_notice_rejects_control_annotations_on_write_and_cold_projection(field: str) -> None:
     prepared = internal_message_factory.build(

@@ -148,6 +148,27 @@ def test_runtime_notice_cannot_masquerade_as_user_turn_root() -> None:
                 "provenance": {"run_id": "禁止的来源推断"},
             },
         },
+        {"prompt": "<system_reminder/>"},
+        {
+            "prompt": "<system_reminder/>",
+            "display_part": {"kind": "generated_session_result", "provenance": {}},
+        },
+        {
+            "prompt": "<system_reminder/>",
+            "display_part": {
+                "kind": "generated_session_result", "text": "", "provenance": {},
+            },
+        },
+        *[
+            {
+                "prompt": "<system_reminder/>",
+                "display_part": {
+                    "kind": "generated_session_result", "text": "安全展示", "provenance": {},
+                },
+                field: {"private_result": "禁止的第二份正文"},
+            }
+            for field in ("metadata", "extensions")
+        ],
     ],
 )
 def test_runtime_notice_display_payload_rejects_unknown_kind_and_fields(
@@ -167,6 +188,36 @@ def test_runtime_notice_display_payload_rejects_unknown_kind_and_fields(
             payload=payload,
             turn_scope="pending_next_turn",
         )
+
+
+@pytest.mark.parametrize("missing_field", ["display_part", "kind", "text", "provenance"])
+def test_runtime_notice_cold_decode_rejects_missing_display_with_matching_hash(
+    missing_field: str,
+) -> None:
+    payload = RuntimeNoticePayload(
+        prompt="仅供 Provider 的私有分支结果",
+        display_part=InternalDisplayPart(
+            kind="generated_session_result", text="任务已完成。",
+            provenance=InternalDisplayProvenance(),
+        ),
+    ).to_dict()
+    item = CanonicalItemRecord.create(
+        item_sequence=1, item_id="item-notice-missing-display",
+        semantic_kind=SemanticKind.RUNTIME_NOTICE,
+        payload_kind=PayloadKind.STRUCTURED_CONTENT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={"producer_kind": "runtime", "producer_id": "notice-missing-display"},
+        payload=payload, turn_scope="pending_next_turn",
+    )
+    raw = json.loads(canonical_json_bytes(item.to_dict()))
+    if missing_field == "display_part":
+        del raw["payload"][missing_field]
+    else:
+        del raw["payload"]["display_part"][missing_field]
+    # 重新计算摘要，证明拒绝来自展示合同，而非碰巧命中旧 hash 不匹配。
+    raw["content_hash"] = content_hash(PayloadKind.STRUCTURED_CONTENT, raw["payload"])
+    with pytest.raises(ItemSchemaError, match="缺少字段"):
+        CanonicalItemRecord.from_dict(raw)
 
 
 @pytest.fixture
