@@ -443,6 +443,61 @@ def test_bind_assembly_requires_committed_snapshot(
     assert binding["snapshot"].to_dict() == snapshot.to_dict()
 
 
+def test_internal_admission_activation_restores_nullable_turn_and_exact_parent(
+    activation_store: ResourceActivationStore, storage: RolloutContextStore, sessions_root: Path,
+) -> None:
+    thread_id = storage.storage.main_thread_id(SESSION_ID)
+    admission = storage.executions.admit_internal_execution(
+        SESSION_ID, thread_id=thread_id, execution_id="execution-internal",
+        job_id="job-internal", admission_idempotency_key="seed-reference-internal",
+        runtime_notice_item=None,
+        request_input={"kind": "seed_reference", "reference": {"seed_id": "seed-internal"}},
+    )
+    parent = ResourceActivationSnapshotRef(
+        activation_snapshot_id="activation-internal", snapshot_kind="execution",
+        activation_policy_revision=POLICY.revision, activation_policy_hash=POLICY.hash,
+        activation_policy=POLICY, registry_generation=3,
+        owner_session_id=SESSION_ID, owner_thread_id=thread_id,
+        execution_id=admission.execution_id, turn_id=admission.turn_id,
+        captured_at="2026-10-19T00:00:00+00:00",
+        bindings=(_binding("skill:demo", ordinal=0, boundary="turn", storage=storage),),
+    )
+    call = _model_call_snapshot(parent, storage)
+    activation_store.save_snapshot(call)
+
+    cold_storage = RolloutContextStore(sessions_root, message_codec=LangChainMessageCodec())
+    cold = ResourceActivationStore(
+        cold_storage, ActivationLineageBodyStore(cold_storage, ContextPlanDetailStore(sessions_root)),
+    )
+    restored = cold.read_snapshot(
+        SESSION_ID, thread_id=thread_id, activation_snapshot_id=call.activation_snapshot_id,
+    )
+    assert restored.to_dict() == call.to_dict()
+    assert restored.parent.to_dict() == parent.to_dict()
+    assert restored.turn_id is restored.parent.turn_id is None
+    assert restored.bindings[:len(parent.bindings)] == parent.bindings
+    with closing(sqlite3.connect(storage.storage.index_path(SESSION_ID, thread_id=thread_id))) as connection:
+        assert connection.execute(
+            "SELECT snapshot_kind, execution_id, turn_id FROM resource_activation_snapshots "
+            "ORDER BY snapshot_kind"
+        ).fetchall() == [("execution", admission.execution_id, None), ("model_call", admission.execution_id, None)]
+        assert connection.execute(
+            "SELECT (SELECT COUNT(*) FROM turn_records), (SELECT COUNT(*) FROM turn_acceptances), "
+            "(SELECT COUNT(*) FROM turn_execution_links), (SELECT COUNT(*) FROM item_catalog)"
+        ).fetchone() == (0, 0, 0, 0)
+        # 用真实查询计划证明按 execution/model-call 定点读取，不只检查索引名称存在。
+        for kind, column, value, index_name in (
+            ("execution", "execution_id", admission.execution_id, "resource_activation_execution_owner"),
+            ("model_call", "model_call_id", call.model_call_id, "resource_activation_model_call_owner"),
+        ):
+            plan = connection.execute(
+                "EXPLAIN QUERY PLAN SELECT activation_snapshot_id FROM resource_activation_snapshots "
+                f"WHERE snapshot_kind=? AND session_id=? AND thread_id=? AND {column}=?",
+                (kind, SESSION_ID, thread_id, value),
+            ).fetchall()
+            assert any(index_name in row[3] for row in plan), plan
+
+
 def test_fresh_schema_has_current_marker_without_legacy_migration_or_fabricated_rows(
     activation_store: ResourceActivationStore, storage: RolloutContextStore,
 ) -> None:
