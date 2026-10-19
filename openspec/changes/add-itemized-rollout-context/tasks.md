@@ -614,9 +614,9 @@ v1 reader/adapter 只能由显式、一次性的 `legacy_import_v1_to_v2` migrat
 
 本节的规划修订及源码实施已获授权，按新合同恢复实施；旧测试/勾选仅证明旧合同，不作为新范围已交付证据。先迁齐公共合同和全部消费者，再集中核心验证，最后补齐边界。取消固定2 GiB磁盘快照验收及专门的大数据峰值内存门，其余原未完成的产品、规模和并发门保持原范围。
 
-- [ ] 12.1 将公开schema、API/工具、DTO/proto生成、前端与测试的范围名统一为view_prefix_fork；context_fork使用同一安全默认内核，删除旧名alias、逐实体remap和模式绑定资源矩阵。
-- [ ] 12.2 统一当前存储归属与历史执行scope：保留local ID、正文/历史请求原字节、时间/hash和历史pending facts；所有canonical/detail/plan/activation/history/provider/checkpoint查找验证目标本地snapshot binding，不跳过owner/hash，不恢复旧Job或准入。迁齐索引条件、root/acceptance及后继新请求消费者。
-- [ ] 12.3 实现固定view/revision/item inclusive或before前缀与发布前typed正文引用闭包；去重、防环、有界读取，保摘要和边界前有效成员，依赖不自动加入visible上下文，provenance不展开，错误锚点/协议不闭合明确拒绝。
+- [x] 12.1 将公开schema、API/工具、DTO/proto生成、前端与测试的范围名统一为view_prefix_fork；context_fork使用同一安全默认内核，删除旧名alias、逐实体remap和模式绑定资源矩阵。
+- [x] 12.2 统一当前存储归属与历史执行scope：保留local ID、正文/历史请求原字节、时间/hash和历史pending facts；所有canonical/detail/plan/activation/history/provider/checkpoint查找验证目标本地snapshot binding，不跳过owner/hash，不恢复旧Job或准入。迁齐索引条件、root/acceptance及后继新请求消费者。
+- [x] 12.3 实现固定view/revision/item inclusive或before前缀与发布前typed正文引用闭包；去重、防环、有界读取，保摘要和边界前有效成员，依赖不自动加入visible上下文，provenance不展开，错误锚点/协议不闭合明确拒绝。
 - [x] 12.4 full_rollout_copy使用一致SQLite磁盘快照和分块原字节复制，固定buffer/有界batch，不全量JSON/item/relations/mapping累积或业务hash重算；失败删除staging。用代表性真实入口验证字节保真、删除独立source后读取/附件及首次续聊按需读取，不设固定数据体积或专门的大数据峰值内存门。
 - [ ] 12.5 消费统一寻址owner的Workspace Session集合、Session/Thread URI与source/target创建意图；支持默认同Session新child、本地/跨端新Session main及已有Session新child，固定target与授权，无覆盖/合并或激活工作区回退。
 - [ ] 12.6 所有引用资源接入统一目标检查与各领域owner副作用：同存储域共享附件复用现有正文/内容身份，只有需要时保活；跨域显式选择后复用目标相同内容或流式导入；默认不额外复制Goal/调试/终端/浏览器，未继承附件明确不可用，正文必需依赖缺失则失败。
@@ -630,3 +630,5 @@ v1 reader/adapter 只能由显式、一次性的 `legacy_import_v1_to_v2` migrat
 2026-10-19 §12.4 验收：正式 `bun run test:matrix -- --suite=integration-python` 经 `run_task.py` 外置 timeout 和 matrix 内存保护运行，原件统一位于 `out/tests/temp/openspec_takeover/artifacts/runs/`。`fork-full-copy-streaming-001` 为 1 passed/exit 0：公开 full-copy 调用期间禁止全量 `read_items` 和 `select_view_prefix`，仍逐字段保留 canonical identity/时间、JSONL 原字节与历史 pending facts，删除源后冷读通过。`fork-copy-attachment-001` 为 4 passed/exit 0：现有附件 owner 用例扩为 prefix/full × child/main，独立 main 删除源后冷读正文、首次新 Turn 封存并按真实 model-call/tool-call capability 读取继承附件，同时验证 child 删除不移除源附件。源码核验：一致 SQLite read transaction/backup 位于 `fork/full_copy/sqlite_snapshot.py`，`snapshot_copy.py::stage_captured_rollout` 固定 1 MiB 分块核对文件 hash/length，失败删除 staging；full 分支不进入逐 item 前缀闭包或重算历史业务 hash。
 
 同轮 Fork 边界原件：`fork-navigation-retention-001` 为 39 passed/10 failed，`fork-activation-retry-001` 为 25 passed/3 failed；失败仅修正测试缺失 Gateway 身份、绕开规范化公开入口的崩溃准备及已消费 notice 的 active checkpoint 预期，`fork-retention-closure-001` 13 passed/exit 0。可见历史 membership、Provider exclusion 和 dispatch/commit/lease/删除先后断言保持。当前文件新增两个 full-copy 附件场景，共 307 cases；分组证据不表述为一次全文件通过，亦不替代 §12.9 产品/type/build 门槛。
+
+2026-10-19 §12.1–12.3 验收：公开入口与 schema 合同 `fork-public-owner-001` 66 passed；完整 fork 文件运行 `fork-final-core-001` 为 299 passed/8 failed，8 项冷历史 notice/Gateway 装具修正后 `fork-cold-history-fix-002` 8 passed。新增真实 `before` 边界经公开 fork→目标冷 Saver/history→首次新准入/Provider preparation，`fork-before-anchor-003` 的新 Session main 与新 child 两项均通过（31.38s），精确核对 visible prefix、原 canonical 字段、旧轮次及新请求排除点击/未来输入；最终 Ruff `fork-before-anchor-static-003` exit 0。逐项复核统一 `_resolve_fork_source`、`select_view_prefix` 的 typed 正文闭包与有界去重，以及 `history_scope` 的目标本地 binding/hash 校验；依赖 backing 不加入 visible、摘要 provenance 不展开、历史 execution 不可恢复，坏 binding/plan/activation/model-call 拒绝和多代删除源后冷读均由上述具名用例覆盖。运行期间源码未变；之后生产差异仅请求日志/runtime DTO、service 与协议生成，不改变 fork 依赖。原件均在 `out/tests/temp/openspec_takeover/artifacts/runs/`；这是分组证据，不称一次整文件全绿，§12.5–12.10 仍分别验收。
