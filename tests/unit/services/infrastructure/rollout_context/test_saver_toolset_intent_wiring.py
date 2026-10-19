@@ -27,6 +27,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutNotMaterializedError,
+)
 
 SESSION_ID = "ses_019c38b8b88476a58ce3735618d44bc8"
 
@@ -207,7 +210,10 @@ def test_unregistered_thread_cannot_prepare_or_receive_applied_toolset(
         sealed_toolset_context(thread_id=missing),
     ):
         pytest.fail("未注册 thread 不应建立 execution admission")
-    assert saver.list_context_assemblies(SESSION_ID, _main_thread_id(saver)) == ()
+    main_thread = _main_thread_id(saver)
+    with pytest.raises(RolloutNotMaterializedError):
+        saver.list_context_assemblies(SESSION_ID, main_thread)
+    assert not saver._storage.storage.root(SESSION_ID, thread_id=main_thread).exists()
     session_dir = saver._storage.storage._path_resolver.resolve_session_node(SESSION_ID)
     control = SessionControlStore(session_dir / "session-control.sqlite")
     try:
@@ -299,7 +305,10 @@ def test_successful_seal_applies_toolset_to_published_child_thread(
     assert child.seal_binding.applied_toolset_revision == tools_a.revision
     assert child.seal_binding.tool_set_snapshot_id == tools_a.snapshot_id
     assert child.seal_binding.prefix.state.epoch.ordinal == 1
-    assert saver.list_context_assemblies(SESSION_ID, _main_thread_id(saver)) == ()
+    main_thread = _main_thread_id(saver)
+    with pytest.raises(RolloutNotMaterializedError):
+        saver.list_context_assemblies(SESSION_ID, main_thread)
+    assert not saver._storage.storage.root(SESSION_ID, thread_id=main_thread).exists()
     store = SessionControlStore(session_dir / "session-control.sqlite")
     try:
         owner = store.get_thread_owner_binding(child_thread_id)
