@@ -457,6 +457,8 @@ assembly 必须持久化 `hash_algorithm`、`plan_hash`、`request_hash` 及其 
 
 `content_hash` 的 preimage 固定为 `{ "payload_kind": <payload_kind>, "payload": <payload> }` 的 JCS bytes；`plan_hash`、`request_hash`、acceptance idempotency key 和 legacy seed 必须引用同一版本化 serializer，并把其 preimage schema/version 写入 assembly/migration metadata。具有语义的 ref/contribution/content-part/tool 数组按已分配 ordinal 保序，真正的集合字段才按稳定 identity 排序；不能由 serializer 的默认排序改变业务顺序。实现验收必须以至少一组跨语言 golden vector 覆盖浮点、`-0`、指数、Unicode/UTF-16 key、数组顺序和非法数字，证明 content/hash/idempotency 在重启与跨语言恢复中相等或明确拒绝。
 
+seal preflight 对本次 snapshot 只生成一次完整 `context-plan-seal:v1` JCS envelope：同次 SHA-256 绑定完整 envelope，其中的 snapshot 规范字节直接作为 SQLite `snapshot_json`，不重新读取或编码 snapshot。只复用本次不可变字节，不保存跨请求缓存；`seal_input_hash`、注册/幂等冲突、sealed plan/hash 准入的首次错误顺序保持不变。冷读仍从 SQLite 解析并独立核验 plan、snapshot、seal、header/manifest 与 dispatch reference；seal 后实际 Provider wire 相等性及 dispatch 的 request hash 核验继续执行，不能用这份写入结果跳过。
+
 ### 4. 流式 item 先 draft，终态才进入 canonical history，并携带实时 provenance
 
 `MessageStreamRuntime` 继续负责 `block.started`、`block.delta`、`block.completed`、tool-call delta 和 stream 终态；它可以为订阅者提供低延迟状态，也可以维护恢复 snapshot，但不能把网络 chunk 当成 rollout item。

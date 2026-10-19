@@ -17,6 +17,7 @@ from app.domain.itemized.hashing import (
     contribution_content_hash,
     sha256_jcs,
 )
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.request_plan import (
     ContextContribution,
@@ -25,6 +26,9 @@ from app.domain.itemized.request_plan import (
 )
 from app.services.infrastructure.rollout_context.assembly.plans import (
     registry as plan_registry,
+)
+from app.services.infrastructure.rollout_context.assembly.plans import (
+    sealing as plan_sealing,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
     create_registration,
@@ -422,7 +426,7 @@ def test_failure_control_keeps_draft_correctable_without_selection(registry_db, 
         )
 
 
-def test_seal_requires_current_draft_and_atomic_snapshot(registry_db):
+def test_seal_requires_current_draft_and_atomic_snapshot(registry_db, monkeypatch):
     saver, session, connection, accepted = registry_db
     draft = ContextRequestPlan(
         session_id=session,
@@ -446,10 +450,46 @@ def test_seal_requires_current_draft_and_atomic_snapshot(registry_db):
         "detail_key": None,
         "seal_input_hash": sha256_jcs("storage-seal-test-input"),
     }
-    preflight_seal(connection, snapshot, **seal_options)
+    events = []
+
+    def observe(event, operation):
+        def called(*args):
+            events.append(event)
+            return operation(*args)
+
+        return called
+
+    for name, event in (
+        ("runtime_seal_bytes_and_hash", "hash"),
+        ("read_registration", "read"),
+        ("validate_sealed_plan", "validate"),
+    ):
+        monkeypatch.setattr(plan_sealing, name, observe(event, getattr(plan_sealing, name)))
+
+    jsonl_path = saver._storage.storage.jsonl_path(session)
+
+    def preflight(candidate=snapshot, *, expected=("hash", "read", "validate"), **options):
+        before = (tuple(connection.iterdump()), connection.total_changes, jsonl_path.read_bytes())
+        events.clear()
+        try:
+            return preflight_seal(connection, candidate, **(seal_options | options))
+        finally:
+            assert events == list(expected)
+            assert (
+                tuple(connection.iterdump()), connection.total_changes, jsonl_path.read_bytes()
+            ) == before
+
+    damaged = replace(snapshot, plan_hash=sha256_jcs("damaged-plan-hash"))
+    with pytest.raises(ValueError, match="seal_input_hash") as error:
+        preflight(damaged, expected=("hash",), seal_input_hash="invalid-hash")
+    assert type(error.value) is ValueError
+    with pytest.raises(ItemSchemaError, match="context assembly plan_hash"):
+        preflight(damaged)
+    prepared = preflight(detail_key='引号"\\\n𐀀\ue000,"snapshot":')
+    assert prepared.snapshot_json.encode() == canonical_json_bytes(snapshot.to_dict())
     with pytest.raises(ValueError, match="同事务 assembly"), connection:
         connection.execute("BEGIN IMMEDIATE")
-        registered = preflight_seal(connection, snapshot, **seal_options)
+        registered = preflight()
         bind_sealed_registration(connection, registered)
     assert (
         read_registration(connection, session, draft.thread_id, draft.plan_id).plan_state
@@ -457,7 +497,7 @@ def test_seal_requires_current_draft_and_atomic_snapshot(registry_db):
     )
     with pytest.raises(RuntimeError, match="injected crash"), connection:
         connection.execute("BEGIN IMMEDIATE")
-        registered = preflight_seal(connection, snapshot, **seal_options)
+        registered = preflight()
         _insert_snapshot(connection, snapshot)
         bind_sealed_registration(connection, registered)
         assert (
@@ -474,21 +514,44 @@ def test_seal_requires_current_draft_and_atomic_snapshot(registry_db):
     )
     with connection:
         connection.execute("BEGIN IMMEDIATE")
-        registered = preflight_seal(connection, snapshot, **seal_options)
+        registered = preflight()
         _insert_snapshot(connection, snapshot)
         bind_sealed_registration(connection, registered)
     with connection:
         connection.execute("BEGIN IMMEDIATE")
-        registered = preflight_seal(connection, snapshot, **seal_options)
+        registered = preflight()
         bind_sealed_registration(connection, registered)
-    with pytest.raises(ValueError, match="assembly-idempotency-conflict"):
-        preflight_seal(
-            connection,
-            snapshot,
+    with pytest.raises(ValueError, match="同一 plan 已封存为不同请求") as error:
+        preflight(
+            damaged,
+            expected=("hash", "read"),
             seal_idempotency_key="different-key",
-            detail_key=None,
-            seal_input_hash=sha256_jcs("storage-seal-test-input"),
         )
+    assert type(error.value) is ValueError
+    for invalid_detail, message in (
+        ("\ud800", "value.detail_ref.*非法 Unicode surrogate"),
+        (b"\xff", "value.detail_ref 不是 JSON value: bytes"),
+    ):
+        with pytest.raises(ItemSchemaError, match=message):
+            preflight(
+                damaged, expected=("hash",), detail_key=invalid_detail,
+                seal_idempotency_key="different-key",
+            )
+    before = (tuple(connection.iterdump()), connection.total_changes, jsonl_path.read_bytes())
+    events.clear()
+    for invalid_ref, error_type, message in (
+        (b"\xff", TypeError, "detail_ref 必须是 DetailRef"),
+        (DetailRef(session, draft.thread_id, snapshot.assembly_id, "\ud800"),
+         ItemSchemaError, "value.detail_id.*非法 Unicode surrogate"),
+    ):
+        with pytest.raises(error_type, match=message):
+            saver._storage.assemblies.seal_context_assembly(
+                session, draft.thread_id, damaged, detail_ref=invalid_ref,
+                seal_idempotency_key="different-key",
+                seal_input_hash=seal_options["seal_input_hash"],
+            )
+    assert events == []
+    assert (tuple(connection.iterdump()), connection.total_changes, jsonl_path.read_bytes()) == before
     with pytest.raises(ValueError, match="assembly-idempotency-conflict"), connection:
         connection.execute("BEGIN IMMEDIATE")
         revise_registration(connection, draft, expected_revision=0)

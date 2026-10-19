@@ -1,12 +1,26 @@
 """真实 prepare 的同次摘要复用与 seal 输入首次错误合同。"""
 
+import hashlib
+import json
 from dataclasses import replace
 
 import pytest
+import rfc8785
 
+from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hash.request_hash import context_request_hash
+from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.request_plan import ContextRequestPlan
+from app.services.infrastructure.rollout_context.assembly import (
+    sealing as assembly_writer,
+)
+from app.services.infrastructure.rollout_context.assembly.plans import manifest
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.infrastructure.rollout_context.checkpoint.seal import (
     assembly as assembly_seal,
 )
@@ -194,3 +208,104 @@ def test_prepare_reuses_only_current_draft_and_final_wire_plan_digest(
             projector_id=snapshot.projector_id, projector_version=snapshot.projector_version,
             target_format=snapshot.target_format, wire_request=snapshot.request_hash_preimage,
         )
+
+
+@pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
+def test_prepare_persists_the_once_encoded_snapshot_and_cold_retry_revalidates(
+    production_context, monkeypatch, target_format,
+):
+    saver, session, thread, connection, _manager, prepare = production_context
+    selected = ToolSetSnapshot(
+        selection_revision=sha256_jcs("canonical-seal-tools"),
+        tools=({
+            "name": "seal_bytes", "parameters": {"type": "object", "properties": {
+                "value": {"default": -0.0, "minimum": 1e-7,
+                          "examples": [{"\ue000": "尾", "𐀀": "引号\"\\\n"}]},
+            }},
+        },),
+    )
+    original_encode = rfc8785.dumps
+    original_preflight = assembly_writer.preflight_seal
+    writing = False
+    encodings = []
+
+    def encode(value):
+        encoded = original_encode(value)
+        if writing and isinstance(value, dict) and (
+            (value.get("schema") == "context-plan-seal:v1" and "snapshot" in value)
+            or "request_hash_preimage" in value
+        ):
+            encodings.append((value, encoded))
+        return encoded
+
+    def preflight(*args, **kwargs):
+        nonlocal writing
+        writing = True
+        try:
+            return original_preflight(*args, **kwargs)
+        finally:
+            writing = False
+
+    monkeypatch.setattr(rfc8785, "dumps", encode)
+    monkeypatch.setattr(assembly_writer, "preflight_seal", preflight)
+    prepared = prepare("canonical-seal", supplier=lambda: selected, target_format=target_format)
+    snapshot = prepared["snapshot"]
+    # 真实 writer 对这份大 snapshot 只编码一次；同次 seal 与持久文本共用该结果。
+    assert len(encodings) == 1
+    seal_preimage, encoded_seal = encodings[0]
+    assert seal_preimage["schema"] == "context-plan-seal:v1"
+    persisted, detail_key = connection.execute(
+        "SELECT snapshot_json,detail_ref FROM context_assemblies WHERE assembly_id=?",
+        (snapshot.assembly_id,),
+    ).fetchone()
+    assert persisted.encode() == original_encode(seal_preimage["snapshot"])
+    assert ContextAssemblySnapshot.from_dict(json.loads(persisted)).to_dict() == snapshot.to_dict()
+    registration = saver.get_context_plan_registration(session, thread_id=thread, plan_id=snapshot.plan_id)
+    expected_hash = "sha256:jcs:v1:" + hashlib.sha256(original_encode({
+        "schema": "context-plan-runtime-seal:v1",
+        "seal_input_hash": registration.seal_input_hash,
+        "sealed_hash": "sha256:jcs:v1:" + hashlib.sha256(encoded_seal).hexdigest(),
+    })).hexdigest()
+    assert registration.seal_hash == expected_hash
+    assert seal_preimage["detail_ref"] == detail_key
+    retried = prepare("canonical-seal", supplier=lambda: selected, target_format=target_format)
+    assert retried["snapshot"].to_dict() == snapshot.to_dict()
+    assert len(encodings) == 1
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        first = cold.read_context_for_dispatch(prepared["dispatch_ref"])
+        second = cold.read_context_for_dispatch(prepared["dispatch_ref"])
+    assert first["snapshot"] is not second["snapshot"]
+    assert first["snapshot"].to_dict() == second["snapshot"].to_dict() == snapshot.to_dict()
+    assert connection.execute(
+        "SELECT count(*) FROM storage_commits WHERE commit_kind='assembly_sealed'",
+    ).fetchone() == (1,)
+
+
+def test_seal_encoding_preserves_envelope_bytes_and_observes_each_snapshot(production_context):
+    _saver, _session, _thread, _connection, _manager, prepare = production_context
+    snapshot = prepare("seal-envelope-vectors")["snapshot"]
+    input_hash = sha256_jcs("seal-envelope-input")
+    for detail_key in (None, '引号"\\\n𐀀\ue000,"snapshot":'):
+        encoded, digest = manifest.runtime_seal_bytes_and_hash(snapshot, detail_key, input_hash)
+        assert encoded == canonical_json_bytes({
+            "schema": "context-plan-seal:v1", "snapshot": snapshot.to_dict(),
+            "detail_ref": detail_key,
+        })
+        assert digest == sha256_jcs({
+            "schema": "context-plan-runtime-seal:v1", "seal_input_hash": input_hash,
+            "sealed_hash": sha256_jcs({
+                "schema": "context-plan-seal:v1", "snapshot": snapshot.to_dict(),
+                "detail_ref": detail_key,
+            }),
+        })
+    damaged = ContextAssemblySnapshot.from_dict(snapshot.to_dict())
+    object.__setattr__(damaged, "request_hash_preimage", {"changed": "新正文"})
+    changed_bytes, changed_hash = manifest.runtime_seal_bytes_and_hash(damaged, detail_key, input_hash)
+    assert changed_bytes != encoded and changed_hash != digest
+    with pytest.raises(ItemSchemaError, match="request_hash"):
+        damaged.validate_hashes()
+    object.__setattr__(damaged, "request_hash_preimage", {"invalid": object()})
+    with pytest.raises(ValueError, match="seal_input_hash"):
+        manifest.runtime_seal_bytes_and_hash(damaged, detail_key, "not-a-hash")
+    with pytest.raises(ItemSchemaError, match="value.snapshot.request_hash_preimage.invalid"):
+        manifest.runtime_seal_bytes_and_hash(damaged, detail_key, input_hash)

@@ -220,7 +220,7 @@ def test_prepare_reuses_only_pure_predecessor_validation_within_one_attempt(
     original_registration = assembly_reader.read_registration
     original_read = assemblies._read_context_assembly_connection
     original_validate = plan_registry.validate_sealed_plan
-    original_hash = plan_registry.runtime_seal_hash
+    original_hash = plan_registry.runtime_seal_bytes_and_hash
     original_registry = plan_registry.validate_registry
     original_parse = ContextAssemblySnapshot.from_dict
     original_draft_hash = plan_registry.canonical_json_bytes_and_hash
@@ -271,7 +271,7 @@ def test_prepare_reuses_only_pure_predecessor_validation_within_one_attempt(
         return result
 
     monkeypatch.setattr(plan_registry, "validate_sealed_plan", validate)
-    monkeypatch.setattr(plan_registry, "runtime_seal_hash", seal_hash)
+    monkeypatch.setattr(plan_registry, "runtime_seal_bytes_and_hash", seal_hash)
     monkeypatch.setattr(plan_registry, "validate_registry", validate_registry)
     monkeypatch.setattr(plan_registry, "canonical_json_bytes_and_hash", draft_hash)
     monkeypatch.setattr(ContextAssemblySnapshot, "from_dict", classmethod(parse))
@@ -364,7 +364,7 @@ def test_prepare_revalidates_predecessor_changed_after_assembly_insert(
     connection.commit()
     original_registration = assembly_reader.read_registration
     original_validate = plan_registry.validate_sealed_plan
-    original_hash = plan_registry.runtime_seal_hash
+    original_hash = plan_registry.runtime_seal_bytes_and_hash
     stages, validations, hashes = [], [], []
 
     def read_registration(connection, *args, **kwargs):
@@ -388,7 +388,7 @@ def test_prepare_revalidates_predecessor_changed_after_assembly_insert(
 
     monkeypatch.setattr(assembly_reader, "read_registration", read_registration)
     monkeypatch.setattr(plan_registry, "validate_sealed_plan", validate)
-    monkeypatch.setattr(plan_registry, "runtime_seal_hash", seal_hash)
+    monkeypatch.setattr(plan_registry, "runtime_seal_bytes_and_hash", seal_hash)
     with pytest.raises(ValueError, match="source-mismatch: sealed plan preimage 与 assembly 不一致"):
         prepare("predecessor-after-trigger")
     assert len(stages) == 2
@@ -462,11 +462,13 @@ def test_new_prepare_reuses_seal_validation_and_cold_projection_revalidates(
     original_read = saver._storage.assemblies._read_context_assembly_connection
     original_registration = plan_sealing.read_registration
     original_ack = manager.acknowledge_sealed_pending
+    original_reference = saver.issue_context_dispatch_ref
     registration_reads = []
+    phase = "seal"
 
     def validate(snapshot):
         original_validate(snapshot)
-        validated.append(snapshot.assembly_id)
+        validated.append((phase, snapshot.assembly_id))
 
     def read(*args, **kwargs):
         reads.append(kwargs["assembly_id"])
@@ -482,18 +484,33 @@ def test_new_prepare_reuses_seal_validation_and_cold_projection_revalidates(
         assert reads == []
         return original_ack(*args, **kwargs)
 
+    def issue_reference(*args, **kwargs):
+        nonlocal phase
+        phase = "dispatch-reference"
+        try:
+            return original_reference(*args, **kwargs)
+        finally:
+            phase = "seal"
+
     monkeypatch.setattr(ContextAssemblySnapshot, "validate_hashes", validate)
     monkeypatch.setattr(saver._storage.assemblies, "_read_context_assembly_connection", read)
     monkeypatch.setattr(plan_sealing, "read_registration", read_registration)
     monkeypatch.setattr(manager, "acknowledge_sealed_pending", acknowledge)
+    monkeypatch.setattr(saver, "issue_context_dispatch_ref", issue_reference)
     result = prepare("one-seal-admission")
-    assert validated == [result["assembly_id"]]
+    assert validated == [
+        ("seal", result["assembly_id"]), ("dispatch-reference", result["assembly_id"]),
+    ]
     assert reads == []
     assert registration_reads == [(session, thread, result["plan"].plan_id)]
+    phase = "cold-projection"
     assert saver.project_context_plan_for_dispatch(
         session, thread, result["plan"], target_format="chat_completions",
     ) == (result["messages"], result["tools"], result["losses"], None)
-    assert validated == [result["assembly_id"], result["assembly_id"]]
+    assert validated == [
+        ("seal", result["assembly_id"]), ("dispatch-reference", result["assembly_id"]),
+        ("cold-projection", result["assembly_id"]),
+    ]
     assert reads == [result["assembly_id"]]
 
 

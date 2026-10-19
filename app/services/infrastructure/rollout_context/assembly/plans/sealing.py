@@ -10,7 +10,7 @@ from uuid import uuid4
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
-    runtime_seal_hash,
+    runtime_seal_bytes_and_hash,
     validate_sealed_plan,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
@@ -38,7 +38,9 @@ def preflight_seal(
     require_owner(connection, snapshot.session_id, snapshot.thread_id)
     if not isinstance(seal_idempotency_key, str) or not seal_idempotency_key:
         raise ValueError("assembly-idempotency-conflict: seal 必须有非空幂等键")
-    input_bound_hash = runtime_seal_hash(snapshot, detail_key, seal_input_hash)
+    sealed_bytes, input_bound_hash = runtime_seal_bytes_and_hash(
+        snapshot, detail_key, seal_input_hash,
+    )
     registered = read_registration(
         connection, snapshot.session_id, snapshot.thread_id, snapshot.plan_id
     )
@@ -50,9 +52,15 @@ def preflight_seal(
     ):
         raise ValueError("assembly-idempotency-conflict: 同一 plan 已封存为不同请求")
     validate_sealed_plan(registered.draft, snapshot)
+    # RFC 8785 将固定成员排为 detail_ref、schema、snapshot；最后一个 value
+    # 就是本次已编码的 snapshot。只在 writer 准入成功后取其字节，冷读只核
+    # envelope hash；前缀转义仍交给唯一 JCS 编码器，不另行拼装 JSON。
+    prefix_length = len(canonical_json_bytes({
+        "schema": "context-plan-seal:v1", "detail_ref": detail_key,
+    })) - 1 + len(b',"snapshot":')
     return ContextPlanSeal(
         registered=registered, snapshot=snapshot,
-        snapshot_json=canonical_json_bytes(snapshot.to_dict()).decode("utf-8"),
+        snapshot_json=sealed_bytes[prefix_length:-1].decode("utf-8"),
         seal_idempotency_key=seal_idempotency_key, seal_input_hash=seal_input_hash,
         detail_key=detail_key, seal_hash=input_bound_hash,
     )

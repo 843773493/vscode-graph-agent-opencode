@@ -7,7 +7,11 @@ from dataclasses import fields, replace
 from typing import cast
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.hashing import (
+    canonical_json_bytes,
+    canonical_json_bytes_and_hash,
+    sha256_jcs,
+)
 from app.domain.itemized.identity.refs import (
     ToolSetIdentityRef,
     ToolSetRef,
@@ -151,25 +155,19 @@ def _included_tool_draft(
     return replace(draft, tool_set_refs=tuple(sources[key] for key in sorted(included)))
 
 
-def sealed_hash(snapshot: ContextAssemblySnapshot, detail_key: str | None) -> str:
-    """绑定整份 sealed semantic identity，不能仅用忽略 provider 的 plan_hash 去重。"""
-    return sha256_jcs(
-        {
-            "schema": "context-plan-seal:v1",
-            "snapshot": snapshot.to_dict(),
-            "detail_ref": detail_key,
-        }
-    )
-
-
-def runtime_seal_hash(
+def runtime_seal_bytes_and_hash(
     snapshot: ContextAssemblySnapshot, detail_key: str | None, input_hash: str
-) -> str:
-    """将调用前输入摘要与最终封存身份一起绑定，拒绝独立篡改重试依据。"""
+) -> tuple[bytes, str]:
+    """同次返回完整 seal envelope 字节与绑定摘要，不保留跨调用缓存。"""
     if not isinstance(input_hash, str) or re.fullmatch(r"sha256:jcs:v1:[0-9a-f]{64}", input_hash) is None:
         raise ValueError("assembly-idempotency-conflict: seal_input_hash 必须是规范 JCS SHA-256 摘要")
-    return sha256_jcs({
+    sealed_bytes, sealed_hash = canonical_json_bytes_and_hash({
+        "schema": "context-plan-seal:v1",
+        "snapshot": snapshot.to_dict(),
+        "detail_ref": detail_key,
+    })
+    return sealed_bytes, sha256_jcs({
         "schema": "context-plan-runtime-seal:v1",
         "seal_input_hash": input_hash,
-        "sealed_hash": sealed_hash(snapshot, detail_key),
+        "sealed_hash": sealed_hash,
     })

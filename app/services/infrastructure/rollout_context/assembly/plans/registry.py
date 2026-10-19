@@ -16,7 +16,7 @@ from app.domain.itemized.serde.plan import unsealed_context_plan_from_dict
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
     _creation_hash_manifest,
     draft_manifest,
-    runtime_seal_hash,
+    runtime_seal_bytes_and_hash,
     validate_sealed_plan,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.rows import (
@@ -184,7 +184,10 @@ def read_registration(
             )).encode("utf-8")).digest()
         if validated_predecessors is None or fingerprint not in validated_predecessors:
             validate_sealed_plan(plan, snapshot)
-            if row[7] != runtime_seal_hash(snapshot, assembly[1], row[10]):
+            _sealed_bytes, seal_hash = runtime_seal_bytes_and_hash(
+                snapshot, assembly[1], row[10],
+            )
+            if row[7] != seal_hash:
                 raise ValueError("source-mismatch: sealed plan preimage 与 assembly 不一致")
             if validated_predecessors is not None and fingerprint is not None:
                 validated_predecessors._record(fingerprint, _VALIDATION_STATE_TOKEN)
