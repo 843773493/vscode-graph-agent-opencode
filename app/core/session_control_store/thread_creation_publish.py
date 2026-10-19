@@ -144,10 +144,11 @@ class ThreadCreationPublishMixin:
         locator 形态与日期）；**CAS 1**——owner fence 仍为 record 捕获的
         ``(active, generation)``；**CAS 2**——thread catalog 行数不得小于冻结
         的 catalog precondition revision（收缩=外部改动 fail closed；并发
-        sibling publish 的合法增长不拦截，2.3-A 合同）；collaboration precondition
-        revision 非空时 fail closed（collaboration ledger 归 8.5）。随后
-        同一事务内插入 ``thread_catalog`` child row（kind='child'）并把
-        record 推进为 ``published``。任何失败回滚整个事务：child row 不
+        sibling publish 的合法增长不拦截，2.3-A 合同）；**CAS 3**——delegated
+        member 的登记 revision 未回退、冻结 membership preimage 精确一致且仍为
+        registering。随后同一事务内插入 ``thread_catalog`` child row（kind='child'），
+        将 record/member 推进为 ``published``，为 task child 建立 pending execution
+        intent 并冻结 member publication fanout。任何失败回滚整个事务：child row 不
         发布、record 保持 preparing（调用方定点清理后 abort）。
         """
         validate_thread_creation_key(idempotency_key)
@@ -261,12 +262,11 @@ class ThreadCreationPublishMixin:
                 frozen_collaboration_revision = int(
                     row["collaboration_precondition_revision"]
                 )
-                # 与 CAS 2 同口径：revision 是「member 登记」单调推进的
-                # 计数，同 Session 并发 sibling delegation 登记（不同
-                # delegation_id）是合法交错，sibling 会让 revision 合法
-                # 增长。故只有收缩（actual < frozen）才是外部直改/账本被
-                # 回退，必须 fail closed；相等与合法增长都放行，随后只按
-                # 本 delegation 自身 member 行状态做真正的转正闸门。
+                # 与 CAS 2 同口径：revision 随协作变更单调推进；同 Session
+                # sibling delegation 等合法变更会增加 revision。只有收缩
+                # （actual < frozen）表明账本被回退，必须 fail closed；相等与
+                # 合法增长都放行，随后精确核验本 delegation 的冻结 preimage
+                # 与 registering 状态。
                 if actual_collaboration_revision < frozen_collaboration_revision:
                     raise RuntimeError(
                         "thread creation publish CAS 失败：collaboration "
@@ -276,21 +276,17 @@ class ThreadCreationPublishMixin:
                         f"frozen_revision={frozen_collaboration_revision}, "
                         f"actual_revision={actual_collaboration_revision}"
                     )
-                member_row = connection.execute(
-                    "SELECT state FROM collaboration_members WHERE delegation_id = ?",
-                    (str(row["delegation_id"]),),
-                ).fetchone()
-                if member_row is None:
-                    raise RuntimeError(
-                        "delegated thread creation record 的 collaboration "
-                        f"member 缺失（fail closed）: key={idempotency_key!r}, "
-                        f"delegation_id={row['delegation_id']!r}"
-                    )
-                if str(member_row["state"]) != "registering":
+                try:
+                    member = self.get_collaboration_member(str(row["delegation_id"]))
+                except KeyError as error:
+                    raise RuntimeError("thread creation publish 的 collaboration member 缺失") from error
+                if member.coordinator_session_id != session_id:
+                    raise RuntimeError("collaboration member 与 publish owner Session 不一致")
+                if member.state != "registering":
                     raise RuntimeError(
                         "collaboration member 非 registering，拒绝 publish "
                         f"转正（fail closed）: key={idempotency_key!r}, "
-                        f"state={member_row['state']!r}"
+                        f"state={member.state!r}"
                     )
             # 唯一可见性提交点前的最后占用预检（UNIQUE 兜底）。
             occupied = connection.execute(
@@ -342,14 +338,13 @@ class ThreadCreationPublishMixin:
                 updated_at=datetime.now(UTC).isoformat(),
             )
             if row["collaboration_precondition_revision"] is not None:
-                # ledger 与 thread catalog 原子可见性：member 在同一事务内
-                # registering → published 并回填 child_thread_id。
+                # ledger 与 thread catalog 原子可见性：child_thread_id 已在
+                # prepare 时冻结，此处只将 member 从 registering 转为 published。
                 connection.execute(
                     "UPDATE collaboration_members "
-                    "SET state = 'published', child_thread_id = ?, "
+                    "SET state = 'published', "
                     "updated_at = ? WHERE delegation_id = ?",
                     (
-                        child_thread_id,
                         datetime.now(UTC).isoformat(),
                         str(row["delegation_id"]),
                     ),
@@ -389,6 +384,7 @@ class ThreadCreationPublishMixin:
             raise TypeError(f"abort reason 必须是字符串: {reason!r}")
         if not reason:
             raise ValueError("abort reason 不能为空")
+        integrity_error: RuntimeError | None = None
         with self._write_transaction() as connection:
             row = self._fetch_thread_creation_record(connection, idempotency_key)
             if row is None:
@@ -401,28 +397,41 @@ class ThreadCreationPublishMixin:
                     f"thread creation record 已发布，不可撤销: key={idempotency_key!r}"
                 )
             if state == "aborted":
+                if row["delegation_id"] is not None:
+                    self.get_collaboration_member(str(row["delegation_id"]))
                 return self._thread_creation_record_from_row(row)
+            member_snapshot = None
+            if row["delegation_id"] is not None:
+                member_snapshot = self.registered_collaboration_member_snapshot(row)
+                try:
+                    self.get_collaboration_member(str(row["delegation_id"]))
+                except (KeyError, RuntimeError) as error:
+                    # 损坏不阻止终结原 operation；提交后仍显式报告，绝不重基。
+                    integrity_error = RuntimeError(
+                        "thread creation abort 已终结原 operation，但 membership 完整性失败: "
+                        f"key={idempotency_key!r}, delegation={row['delegation_id']!r}: {error}"
+                    )
             connection.execute(
                 "UPDATE thread_creation_records "
                 "SET state = 'aborted', abort_reason = ?, record_updated_at = ? "
                 "WHERE thread_creation_idempotency_key = ?",
-                (reason, datetime.now(UTC).isoformat(), idempotency_key),
+                (reason if integrity_error is None else f"{reason}; {integrity_error}",
+                 datetime.now(UTC).isoformat(), idempotency_key),
             )
-            if (
-                row["delegation_id"] is not None
-                and row["collaboration_precondition_revision"] is not None
-            ):
+            if member_snapshot is not None:
                 # 同 delegation 不换绑：abort 在同一事务内定点取消 member，
                 # 重试必须换新 delegation（register 对 cancelled fail closed）。
-                connection.execute(
+                cancelled = connection.execute(
                     "UPDATE collaboration_members "
                     "SET state = 'cancelled', updated_at = ? "
                     "WHERE delegation_id = ? AND state = 'registering'",
                     (datetime.now(UTC).isoformat(), str(row["delegation_id"])),
-                )
-                self._freeze_collaboration_member_change_transaction(
-                    connection, str(row["delegation_id"]), "member.cancelled",
-                )
+                ).rowcount
+                if cancelled != 1:
+                    raise RuntimeError("thread creation abort 的原 registering member 缺失或已被改动")
+                member_snapshot["state"] = "cancelled"
+                member_snapshot["updated_at"] = datetime.now(UTC).isoformat()
+                self.freeze_collaboration_member_cancellation(connection, member_snapshot=member_snapshot)
             updated = self._fetch_thread_creation_record(connection, idempotency_key)
             if updated is None:
                 # 防御性兜底：同事务内更新后必然可见。
@@ -430,7 +439,10 @@ class ThreadCreationPublishMixin:
                     "thread creation record abort 后不可见（事务异常）: "
                     f"key={idempotency_key!r}"
                 )
-            return self._thread_creation_record_from_row(updated)
+            aborted = self._thread_creation_record_from_row(updated)
+        if integrity_error is not None:
+            raise integrity_error
+        return aborted
 
     def mark_thread_creation_published(
         self,
@@ -472,4 +484,6 @@ class ThreadCreationPublishMixin:
                 f"key={idempotency_key!r}, "
                 f"child_thread_id={row['child_thread_id']!r}"
             )
+        if row["delegation_id"] is not None:
+            self.get_collaboration_member(str(row["delegation_id"]))
         return self._thread_creation_record_from_row(row)

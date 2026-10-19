@@ -85,6 +85,7 @@ from tests.e2e.system.workspace_services.terminal.terminal_process_helpers impor
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.stubs.http_stubs import HTTPStubState, openai_chat_stub
 from tests.support.api_helpers import create_session
+from tests.support.e2e_test_control import E2ETestControlHarness, control_request
 from tests.support.fork_deadline import ForkDeadlineRegistry
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import (
@@ -1616,6 +1617,7 @@ class RestartRuntimeSourceCase:
     artifacts_dir: Path
     backends: list[BackendProcess]
     release_report: Event
+    control: E2ETestControlHarness | None = None
 
     def write_actual(self, name: str, value: dict[str, object]) -> None:
         (self.artifacts_dir / f"{name}-actual.json").write_text(
@@ -1636,6 +1638,8 @@ class RestartRuntimeSourceCase:
         backend = await asyncio.to_thread(
             start_backend_process, workspace_root=str(self.workspace), port=previous.port,
             log_name=f"runtime-source-restart-{len(self.backends)}",
+            asgi_app="tests.support.section8_backend:app" if self.control is not None else "app.main:app",
+            env_overrides=self.control.environment if self.control is not None else None,
         )
         assert backend.process.pid != previous.process.pid
         self.backends.append(backend)
@@ -1662,6 +1666,12 @@ class RestartRuntimeSourceCase:
                 result[name] = {
                     "executions": connection.execute(
                         "SELECT execution_id,execution_origin,turn_id,outcome,job_id FROM executions ORDER BY created_at",
+                    ).fetchall(),
+                    "admissions": connection.execute(
+                        "SELECT execution_id,job_id,admission_idempotency_key,admission_payload_hash FROM executions ORDER BY created_at",
+                    ).fetchall(),
+                    "admission_commits": connection.execute(
+                        "SELECT subject_id,idempotency_key,status FROM storage_commits WHERE commit_kind='execution_admission' ORDER BY commit_id",
                     ).fetchall(),
                     "turns": connection.execute("SELECT turn_id,status FROM turn_records").fetchall(),
                     "notices": connection.execute(
@@ -1693,10 +1703,16 @@ async def restart_source_case(request: pytest.FixtureRequest) -> AsyncIterator[R
     artifacts_dir = context.artifacts_dir / runtime_root.parent.name / runtime_root.name
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     release = Event()
-    with openai_chat_stub(ports.port(10)) as model:
+    with ExitStack() as resources, openai_chat_stub(ports.port(10)) as model:
+        control = E2ETestControlHarness(artifacts_dir / "test-control") if params.get("controlled_phases") else None
+        if control is not None:
+            control.start()
+            resources.callback(control.close)
         backend = await asyncio.to_thread(
             start_backend_process, workspace_root=str(workspace), port=ports.port(0),
             log_name="runtime-source-restart-0",
+            asgi_app="tests.support.section8_backend:app" if control is not None else "app.main:app",
+            env_overrides=control.environment if control is not None else None,
         )
         backends = [backend]
         try:
@@ -1705,7 +1721,7 @@ async def restart_source_case(request: pytest.FixtureRequest) -> AsyncIterator[R
                 headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": backend.workspace_id},
                 timeout=30,
             ) as client:
-                case = RestartRuntimeSourceCase(client, model, workspace, artifacts_dir, backends, release)
+                case = RestartRuntimeSourceCase(client, model, workspace, artifacts_dir, backends, release, control)
                 yield case
         finally:
             release.set()
@@ -1716,6 +1732,85 @@ async def restart_source_case(request: pytest.FixtureRequest) -> AsyncIterator[R
                            ensure_ascii=False, indent=2) + "\n",
             )
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restart_source_case", [{"controlled_phases": True}], indirect=True)
+async def test_initial_binding_durable_admission_crash_before_bound_recovers_same_job(
+    restart_source_case: RestartRuntimeSourceCase,
+) -> None:
+    """真实 binder 已提交 admission、mark_bound 前硬杀，再以原 key 重启两次。"""
+    case = restart_source_case
+    assert case.control is not None
+    child_requests: list[dict[str, object]] = []
+    def reply(payload: dict[str, object]) -> dict[str, object]:
+        messages = payload["messages"]
+        human = "\n".join(_wire_text(message["content"]) for message in messages
+                          if message["role"] == "user" and message["content"])
+        if "<generated_session_result" in human:
+            return {"content": "binding-crash-parent-ack"}
+        if "<delegated_task" in human and "binding-crash-private-seed" in human:
+            child_requests.append(payload)
+            return {"content": "binding-crash-child-result"}
+        if "binding-crash-team-trigger" not in human:
+            return {"content": "初始绑定恢复会话"}
+        tools = [message for message in messages if message["role"] == "tool"]
+        if not any(message.get("name") == "create_team" for message in tools):
+            return _tool_reply("create_team", {"name": "初始绑定恢复团队"}, "call_binding_crash_team")
+        team = json.loads(next(message["content"] for message in tools if message.get("name") == "create_team"))
+        if not any(message.get("name") == "create_team_member" for message in tools):
+            return _tool_reply("create_team_member", {
+                "team_id": team["team_id"], "role": "reviewer", "startup_prompt": "binding-crash-private-seed，返回任务结果。",
+            }, "call_binding_crash_member")
+        return {"content": "binding-crash-parent-dispatched"}
+    case.model.response_callback = reply
+    session_id = await create_session(case.client, "初始绑定 durable admission 恢复")
+    catalog = await case.client.get("/api/v1/session-catalog/export")
+    assert catalog.status_code == 200, catalog.text
+    node = next(node for node in catalog.json()["data"]["items"] if node["node_id"] == session_id)
+    session_dir = case.workspace / ".boxteam/sessions" / node["storage_relative_path"]
+    case.control.arm_match("initial-admission", "thread.initial.admitted_before_bound", {"session_id": session_id})
+    await _send(case, session_id, "binding-crash-team-trigger：创建团队并启动成员。")
+    barrier = await asyncio.to_thread(case.control.acknowledged_match, "initial-admission")
+    before = case.snapshot(session_dir)
+    intent = before["intent"]
+    assert intent["state"] == "pending"
+    assert barrier["operation_id"] == intent["admission_idempotency_key"]
+    assert (barrier["details"]["execution_binding_id"], barrier["details"]["job_id"]) == (intent["execution_binding_id"], intent["job_id"])
+    with closing(SessionControlStore(session_dir / CONTROL_DATABASE_NAME)) as control:
+        claimed = control.get_initial_execution_intent(intent["admission_idempotency_key"])
+        assert (claimed.claim_owner, claimed.claim_generation) == ("initial-execution", 1)
+    assert child_requests == []
+    assert before["child"]["turns"] == before["child"]["models"] == []
+    assert before["child"]["executions"] == [(intent["execution_binding_id"], "internal", None, "unknown", intent["job_id"])]
+    assert len(before["child"]["admissions"]) == 1
+    admission = before["child"]["admissions"][0]
+    assert admission[:3] == (intent["execution_binding_id"], intent["job_id"], intent["admission_idempotency_key"])
+    assert admission[3].startswith("sha256:jcs:v1:") and admission[3] != intent["binding_preimage_hash"]
+    assert before["child"]["admission_commits"] == [(intent["execution_binding_id"], "internal-admission:" + intent["admission_idempotency_key"], "committed")]
+    case.write_actual("initial-binding-before-kill", {"barrier": barrier, "snapshot": before})
+
+    await case.restart(hard=True, while_stopped=lambda: control_request(
+        json.loads(case.control.environment["BOXTEAM_E2E_TEST_CONTROL"]),
+        {"action": "release_match", "barrier_id": "initial-admission"},
+    ))
+    child_job = await _job(case, intent["job_id"])
+    assert (child_job["job_id"], child_job["session_id"], child_job["thread_id"]) == (intent["job_id"], session_id, intent["thread_id"])
+    after = case.snapshot(session_dir)
+    assert after["intent"] == {**intent, "state": "bound"}
+    assert after["child"]["admissions"] == before["child"]["admissions"]
+    assert after["child"]["admission_commits"] == before["child"]["admission_commits"]
+    assert after["child"]["executions"] == [(intent["execution_binding_id"], "internal", None, "completed", intent["job_id"])]
+    assert after["child"]["turns"] == [] and len(child_requests) == 1
+    case.write_actual("initial-binding-after-restart", {"snapshot": after, "job": child_job})
+    await case.restart(hard=False)
+    second = case.snapshot(session_dir)
+    assert second["intent"] == after["intent"]
+    assert second["child"] == after["child"]
+    assert len(child_requests) == 1
+    case.write_actual("initial-binding-second-restart", {"snapshot": second, "processes": [
+        {"pid": backend.process.pid, "returncode": backend.process.poll()} for backend in case.backends
+    ]})
 
 @pytest.mark.asyncio
 async def test_h6_backend_hard_restart_keeps_child_and_runtime_report_identity(

@@ -32,6 +32,7 @@ from app.core.session_catalog_store import (
     SessionCatalogStore,
 )
 from app.core.session_control_store import (
+    CollaborationMemberInput,
     SessionControlStore,
     ThreadCreationRecord,
 )
@@ -219,7 +220,8 @@ async def do_create(
 ) -> ThreadCreationResult:
     default_metadata = (
         make_metadata(
-            task_reference={"ref": "doc-1", "parent_thread_id": owner.main_thread_id}
+            task_reference={"ref": "doc-1", "parent_session_id": owner.session_id,
+                            "parent_thread_id": owner.main_thread_id, "delegation_id": delegation_id}
         )
         if delegation_id is not None
         else make_metadata()
@@ -232,7 +234,9 @@ async def do_create(
         initial_state=initial_state,
         session_metadata=metadata if metadata is not None else default_metadata,
         artifact_manifest=artifacts if artifacts is not None else make_artifacts(),
-        collaboration_member=collaboration_member,
+        collaboration_member=(collaboration_member if collaboration_member is not None else {
+            "role": "delegated_subagent", "subagent_type": "general-purpose", "title": "委派：做一件事",
+        } if delegation_id is not None else None),
     )
 
 
@@ -293,7 +297,8 @@ def prepare_manual_record(
     """
     default_metadata = (
         make_metadata(
-            task_reference={"ref": "doc-1", "parent_thread_id": owner.main_thread_id}
+            task_reference={"ref": "doc-1", "parent_session_id": owner.session_id,
+                            "parent_thread_id": owner.main_thread_id, "delegation_id": delegation_id}
         )
         if delegation_id is not None
         else make_metadata()
@@ -326,6 +331,12 @@ def prepare_manual_record(
         created_at=fixture_created_at,
         thread_id=fixture_thread_id,
         delegation_id=delegation_id,
+        owner_session_id=owner.session_id,
+        collaboration_member=(CollaborationMemberInput(
+            coordinator_session_id=owner.session_id,
+            coordinator_thread_id=owner.main_thread_id,
+            role="delegated_subagent", subagent_type="general-purpose", title="委派：做一件事",
+        ) if delegation_id is not None else None),
         task_seed=(
             canonical_json_text(effective_metadata["task_seed"])
             if effective_metadata["task_seed"] is not None
@@ -857,7 +868,8 @@ async def test_concurrent_sibling_delegations_each_publish_without_poisoning(
             initial_state="running",
             session_metadata=make_metadata(
                 task_seed={"task": "任务 " + key},
-                task_reference={"ref": "doc-1", "parent_thread_id": owner.main_thread_id},
+                task_reference={"ref": "doc-1", "parent_session_id": owner.session_id,
+                                "parent_thread_id": owner.main_thread_id, "delegation_id": key},
             ),
             artifact_manifest={},
             collaboration_member={
@@ -1909,6 +1921,7 @@ def test_thread_node_files_deterministic() -> None:
         owner_session_lifecycle_generation=1,
         catalog_precondition_revision=1,
         collaboration_precondition_revision=None,
+        membership_preimage_hash=None,
         initial_state="running",
         admission_intent="{}",
         abort_reason=None,

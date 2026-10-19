@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from app.core.session_control_store import (
+    CollaborationMemberInput,
     SessionControlStore,
     ThreadCreationRecord,
     ThreadExecutionIntent,
@@ -80,7 +81,7 @@ def test_initialize_creates_tables_and_sets_user_version(tmp_path: Path) -> None
     try:
         version = int(created.connection.execute("PRAGMA user_version").fetchone()[0])
         # fresh schema 11 不再维护 SessionControl 的第二套 ToolSet 镜像。
-        assert version == SessionControlStore.SCHEMA_VERSION == 15
+        assert version == SessionControlStore.SCHEMA_VERSION == 17
         tables = {
             str(row[0])
             for row in created.connection.execute(
@@ -177,7 +178,7 @@ def test_initialize_is_idempotent_on_reopen(tmp_path: Path) -> None:
         assert str(row["kind"]) == "main"
         version = int(second.connection.execute("PRAGMA user_version").fetchone()[0])
         # 当前 schema 重开保持完整 GraphBinding，不升级旧生成数据。
-        assert version == 15
+        assert version == 17
     finally:
         second.close()
 
@@ -195,7 +196,7 @@ def _assert_unsupported_schema_unchanged(target: Path, version: int) -> None:
     """拒绝旧库时不改数据库字节，也不产生 journal/WAL/shm 副作用。"""
     paths = tuple(target.with_name(target.name + suffix) for suffix in ("", "-journal", "-wal", "-shm"))
     before = {path.name: path.read_bytes() for path in paths if path.exists()}
-    with pytest.raises(RuntimeError, match=rf"schema 版本不受支持.*user_version={version}, supported=15"):
+    with pytest.raises(RuntimeError, match=rf"schema 版本不受支持.*user_version={version}, supported=17"):
         SessionControlStore(target)
     after = {path.name: path.read_bytes() for path in paths if path.exists()}
     assert after == before
@@ -753,7 +754,7 @@ def test_v1_database_repeated_rejection_is_byte_preserving(tmp_path: Path) -> No
     _assert_unsupported_schema_unchanged(target, 1)
 
 
-@pytest.mark.parametrize("version", range(1, 15))
+@pytest.mark.parametrize("version", range(1, 17))
 def test_old_generated_schema_versions_reject_before_wal_and_keep_bytes(tmp_path: Path, version: int) -> None:
     """所有旧生成版本都在初始化与 journal/WAL 设置前拒绝。"""
     target = tmp_path / "session-control.sqlite"
@@ -777,7 +778,7 @@ def test_current_schema_with_missing_graph_binding_columns_fails_closed(tmp_path
     build_v1_database(target, make_thread_id())
     outside = sqlite3.connect(target)
     try:
-        outside.execute("PRAGMA user_version = 15")
+        outside.execute("PRAGMA user_version = 17")
         outside.commit()
     finally:
         outside.close()
@@ -914,29 +915,25 @@ def valid_thread_creation_kwargs(
     }
 
 
-def register_collaboration_member_for_test(
-    store: SessionControlStore,
-    *,
-    delegation_id: str,
-    coordinator_session_id: str,
-    coordinator_thread_id: str,
-    description: str,
-) -> int:
-    """测试辅助：登记一个 collaboration member 并返回当前 ledger revision。"""
-    return store.register_collaboration_member(
-        delegation_id=delegation_id,
-        coordinator_session_id=coordinator_session_id,
-        coordinator_thread_id=coordinator_thread_id,
-        role="delegated_subagent",
-        subagent_type="general-purpose",
-        title=f"委派：{description}",
-        task_seed=json.dumps(
-            {"description": description},
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
+def delegated_thread_creation_kwargs(
+    store: SessionControlStore, *, idempotency_key: str = "key-1",
+    delegation_id: str = "del-1", owner_session_id: str = PUBLISHED_OWNER_SESSION_ID,
+    title: str = "委派：做一件事",
+) -> dict[str, object]:
+    """从真实同库 parent 构造原子 delegated prepare 请求。"""
+    kwargs = valid_thread_creation_kwargs(store, idempotency_key=idempotency_key)
+    parent = str(store.get_main_thread()["thread_id"])
+    kwargs.update(
+        delegation_id=delegation_id, owner_session_id=owner_session_id,
+        collaboration_member=CollaborationMemberInput(
+            coordinator_session_id=owner_session_id, coordinator_thread_id=parent,
+            role="delegated_subagent", subagent_type="general-purpose", title=title,
         ),
+        task_reference=json.dumps({"parent_session_id": owner_session_id,
+                                   "parent_thread_id": parent, "delegation_id": delegation_id},
+                                  ensure_ascii=False, sort_keys=True, separators=(",", ":")),
     )
+    return kwargs
 
 
 def prepare_record(
@@ -948,7 +945,10 @@ def prepare_record(
         make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
     )
     store.initialize_fence("active", 1)
-    kwargs = valid_thread_creation_kwargs(store)
+    kwargs = (
+        delegated_thread_creation_kwargs(store, delegation_id=str(overrides["delegation_id"]))
+        if overrides.get("delegation_id") is not None else valid_thread_creation_kwargs(store)
+    )
     kwargs.update(overrides)
     return store.create_or_get_thread_creation_record(**kwargs)  # type: ignore[arg-type]
 
@@ -1128,13 +1128,11 @@ def test_create_or_get_record_delegation_unique(
 ) -> None:
     prepare_record(store, delegation_id="dlg-1")
     # 同 delegation 不同 key → 部分唯一约束拒绝
-    kwargs = valid_thread_creation_kwargs(store, idempotency_key="key-2")
-    kwargs["delegation_id"] = "dlg-1"
+    kwargs = delegated_thread_creation_kwargs(store, idempotency_key="key-2", delegation_id="dlg-1")
     with pytest.raises(RuntimeError, match="delegation_id"):
         store.create_or_get_thread_creation_record(**kwargs)  # type: ignore[arg-type]
     # 不同 delegation / None delegation 不受影响
-    kwargs2 = valid_thread_creation_kwargs(store, idempotency_key="key-3")
-    kwargs2["delegation_id"] = "dlg-2"
+    kwargs2 = delegated_thread_creation_kwargs(store, idempotency_key="key-3", delegation_id="dlg-2")
     store.create_or_get_thread_creation_record(**kwargs2)  # type: ignore[arg-type]
     kwargs3 = valid_thread_creation_kwargs(store, idempotency_key="key-4")
     kwargs3["delegation_id"] = None
@@ -1149,8 +1147,7 @@ def test_create_or_get_record_rejects_rebind_aborted_delegation(
     prepare_record(store, delegation_id="dlg-1")
     aborted = store.abort_thread_creation_record("key-1", "定点清理完成")
     assert aborted.state == "aborted"
-    kwargs = valid_thread_creation_kwargs(store, idempotency_key="key-2")
-    kwargs["delegation_id"] = "dlg-1"
+    kwargs = delegated_thread_creation_kwargs(store, idempotency_key="key-2", delegation_id="dlg-1")
     with pytest.raises(RuntimeError, match="delegation_id"):
         store.create_or_get_thread_creation_record(**kwargs)  # type: ignore[arg-type]
     # 不产生第二条 record（既有 aborted record 保持原状）
@@ -1407,219 +1404,62 @@ def test_publish_record_requires_frozen_artifact_manifest(
     assert store.get_thread_creation_record("key-1").state == "preparing"
 
 
-def test_publish_record_rejects_collaboration_ledger_regression(
-    store: SessionControlStore,
-) -> None:
-    """ledger revision 回退（账本收缩=外部直改）才 fail closed。
-
-    与 catalog CAS 同口径：revision 是 member 登记单调推进的计数，合法
-    sibling 增长必须放行；只有 actual < frozen（账本被外部回退）才拒绝。
-    """
-    store.initialize_main_thread(
-        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
-    )
-    store.initialize_fence("active", 1)
-    coordinator_session_id = make_session_id()
-    register_collaboration_member_for_test(
-        store,
-        delegation_id="del-1",
-        coordinator_session_id=coordinator_session_id,
-        coordinator_thread_id=make_thread_id(),
-        description="做一件事",
-    )
-    revision = store.get_collaboration_ledger_revision()
-    kwargs = valid_thread_creation_kwargs(store)
-    store.create_or_get_thread_creation_record(
-        **kwargs,
-        delegation_id="del-1",
-        collaboration_precondition_revision=revision,
-    )
-    manifest = json.dumps({}, sort_keys=True, separators=(",", ":"))
-    store.freeze_thread_creation_artifact_manifest(
-        "key-1", artifact_manifest=manifest, artifact_manifest_hash="c" * 64
-    )
-    # 外部直改把 ledger revision 回退到冻结值以下 → publish fail closed。
-    raw_execute(
-        store,
-        "UPDATE collaboration_ledger SET revision = revision - 1 WHERE id = 1",
-    )
+def test_publish_record_rejects_collaboration_ledger_regression(store: SessionControlStore) -> None:
+    record = prepare_record(store, delegation_id="del-1")
+    store.freeze_thread_creation_artifact_manifest("key-1", artifact_manifest="{}", artifact_manifest_hash="c" * 64)
+    raw_execute(store, "UPDATE collaboration_ledger SET revision=revision-1 WHERE id=1")
     with pytest.raises(RuntimeError, match="collaboration ledger revision 已回退"):
-        store.publish_thread_creation_record("key-1", session_id=coordinator_session_id)
+        store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
     assert store.get_thread_creation_record("key-1").state == "preparing"
+    assert store.connection.execute("SELECT 1 FROM thread_catalog WHERE thread_id=?", (record.child_thread_id,)).fetchone() is None
 
 
-def test_publish_record_tolerates_sibling_delegation_growth(
-    store: SessionControlStore,
-) -> None:
-    """同 Session 并发 sibling delegation 是合法交错：冻结 revision 小于
-    当前 revision（合法增长）不拦截，只按本 delegation 自身 member 行
-    状态转正。"""
-    store.initialize_main_thread(
-        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
-    )
-    store.initialize_fence("active", 1)
-    coordinator_session_id = make_session_id()
-    register_collaboration_member_for_test(
-        store,
-        delegation_id="del-1",
-        coordinator_session_id=coordinator_session_id,
-        coordinator_thread_id=make_thread_id(),
-        description="做一件事",
-    )
-    revision = store.get_collaboration_ledger_revision()
-    kwargs = valid_thread_creation_kwargs(store)
-    record = store.create_or_get_thread_creation_record(
-        **kwargs,
-        delegation_id="del-1",
-        collaboration_precondition_revision=revision,
-    )
-    manifest = json.dumps({}, sort_keys=True, separators=(",", ":"))
-    store.freeze_thread_creation_artifact_manifest(
-        "key-1", artifact_manifest=manifest, artifact_manifest_hash="c" * 64
-    )
-    # sibling delegation 并发登记（合法增长，冻结 revision 落后）。
-    register_collaboration_member_for_test(
-        store,
-        delegation_id="del-sibling",
-        coordinator_session_id=coordinator_session_id,
-        coordinator_thread_id=make_thread_id(),
-        description="另一件事",
-    )
-    assert store.get_collaboration_ledger_revision() > revision
-    published = store.publish_thread_creation_record("key-1", session_id=coordinator_session_id)
-    assert published.state == "published"
-    # 本 delegation member 原子转正；sibling 仍 registering（未被本 publish 触碰）
+def test_publish_record_tolerates_sibling_delegation_growth(store: SessionControlStore) -> None:
+    record = prepare_record(store, delegation_id="del-1")
+    store.freeze_thread_creation_artifact_manifest("key-1", artifact_manifest="{}", artifact_manifest_hash="c" * 64)
     own = store.get_collaboration_member("del-1")
-    assert own.state == "published"
-    assert own.child_thread_id == record.child_thread_id
+    sibling = store.create_or_get_thread_creation_record(**delegated_thread_creation_kwargs(
+        store, idempotency_key="key-sibling", delegation_id="del-sibling", title="另一件事",
+    ))
+    assert sibling.collaboration_precondition_revision > record.collaboration_precondition_revision
+    again = store.create_or_get_thread_creation_record(**delegated_thread_creation_kwargs(store))
+    assert again == store.get_thread_creation_record("key-1")
+    assert again.child_thread_id == record.child_thread_id
+    assert again.membership_preimage_hash == record.membership_preimage_hash
+    assert store.get_collaboration_member("del-1") == own
+    store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
+    assert store.get_collaboration_member("del-1").state == "published"
     assert store.get_collaboration_member("del-sibling").state == "registering"
 
 
-def test_publish_record_rejects_own_member_already_published(
-    store: SessionControlStore,
-) -> None:
-    """自有 member 闸门只接受 registering：已 published 的自身 member 行
-    在 publish 时必须 fail closed（防重复转正/绕过登记），不得静默接受。
-
-    仅外部直改 DB 可达（正常路径 member 由本 publish 在同一事务内转正，
-    不会在 publish 前已是 published）。
-    """
-    store.initialize_main_thread(
-        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
-    )
-    store.initialize_fence("active", 1)
-    coordinator_session_id = make_session_id()
-    revision = register_collaboration_member_for_test(
-        store,
-        delegation_id="del-1",
-        coordinator_session_id=coordinator_session_id,
-        coordinator_thread_id=make_thread_id(),
-        description="做一件事",
-    )
-    kwargs = valid_thread_creation_kwargs(store)
-    record = store.create_or_get_thread_creation_record(
-        **kwargs,
-        delegation_id="del-1",
-        collaboration_precondition_revision=revision,
-    )
-    manifest = json.dumps({}, sort_keys=True, separators=(",", ":"))
-    store.freeze_thread_creation_artifact_manifest(
-        "key-1", artifact_manifest=manifest, artifact_manifest_hash="c" * 64
-    )
-    # 外部直改：自身 member 行已是 published。
-    raw_execute(
-        store,
-        "UPDATE collaboration_members SET state = 'published' WHERE delegation_id = ?",
-        ("del-1",),
-    )
-    with pytest.raises(RuntimeError, match="非 registering"):
-        store.publish_thread_creation_record("key-1", session_id=coordinator_session_id)
+@pytest.mark.parametrize("state", ["published", "cancelled"])
+def test_publish_record_rejects_own_member_wrong_state(store: SessionControlStore, state: str) -> None:
+    record = prepare_record(store, delegation_id="del-1")
+    store.freeze_thread_creation_artifact_manifest("key-1", artifact_manifest="{}", artifact_manifest_hash="c" * 64)
+    raw_execute(store, "UPDATE collaboration_members SET state=? WHERE delegation_id='del-1'", (state,))
+    with pytest.raises(RuntimeError, match="publication 状态不一致"):
+        store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
     assert store.get_thread_creation_record("key-1").state == "preparing"
-    visible = store.connection.execute(
-        "SELECT 1 FROM thread_catalog WHERE thread_id = ?",
-        (record.child_thread_id,),
-    ).fetchone()
-    assert visible is None
+    assert store.connection.execute("SELECT 1 FROM thread_catalog WHERE thread_id=?", (record.child_thread_id,)).fetchone() is None
 
 
-def test_publish_record_rejects_missing_own_member_row(
-    store: SessionControlStore,
-) -> None:
-    """delegated record 的自身 member 行缺失时 publish 必须 fail closed，
-    绝不落下无协作账本支撑的可见 child。
-
-    仅外部直改 DB 可达（member 与 record 同事务创建、delegation_id 有
-    部分唯一约束，正常路径不会缺行）。
-    """
-    store.initialize_main_thread(
-        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
-    )
-    store.initialize_fence("active", 1)
-    coordinator_session_id = make_session_id()
-    revision = register_collaboration_member_for_test(
-        store,
-        delegation_id="del-1",
-        coordinator_session_id=coordinator_session_id,
-        coordinator_thread_id=make_thread_id(),
-        description="做一件事",
-    )
-    kwargs = valid_thread_creation_kwargs(store)
-    record = store.create_or_get_thread_creation_record(
-        **kwargs,
-        delegation_id="del-1",
-        collaboration_precondition_revision=revision,
-    )
-    manifest = json.dumps({}, sort_keys=True, separators=(",", ":"))
-    store.freeze_thread_creation_artifact_manifest(
-        "key-1", artifact_manifest=manifest, artifact_manifest_hash="c" * 64
-    )
-    # 外部直改：删除自身 member 行。
-    raw_execute(
-        store,
-        "DELETE FROM collaboration_members WHERE delegation_id = ?",
-        ("del-1",),
-    )
+def test_publish_record_rejects_missing_own_member_row(store: SessionControlStore) -> None:
+    record = prepare_record(store, delegation_id="del-1")
+    store.freeze_thread_creation_artifact_manifest("key-1", artifact_manifest="{}", artifact_manifest_hash="c" * 64)
+    raw_execute(store, "DELETE FROM collaboration_members WHERE delegation_id='del-1'")
     with pytest.raises(RuntimeError, match="member 缺失"):
-        store.publish_thread_creation_record("key-1", session_id=coordinator_session_id)
+        store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
     assert store.get_thread_creation_record("key-1").state == "preparing"
-    visible = store.connection.execute(
-        "SELECT 1 FROM thread_catalog WHERE thread_id = ?",
-        (record.child_thread_id,),
-    ).fetchone()
-    assert visible is None
+    assert store.connection.execute("SELECT 1 FROM thread_catalog WHERE thread_id=?", (record.child_thread_id,)).fetchone() is None
 
 
-def test_publish_record_rejects_delegated_without_collaboration_revision(
-    store: SessionControlStore,
-) -> None:
-    """delegated record 若冻结的 collaboration precondition revision 为空，
-    publish 必须 fail closed（不得跳过 ledger CAS 直接转正）。
-
-    仅外部直改 record 可达（creation 流对 delegated child 必带 member、
-    因而必带非空 revision）。
-    """
-    store.initialize_main_thread(
-        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
-    )
-    store.initialize_fence("active", 1)
-    kwargs = valid_thread_creation_kwargs(store)
-    record = store.create_or_get_thread_creation_record(
-        **kwargs,
-        delegation_id="del-1",  # delegated，但 revision 留空
-    )
-    assert record.collaboration_precondition_revision is None
-    manifest = json.dumps({}, sort_keys=True, separators=(",", ":"))
-    store.freeze_thread_creation_artifact_manifest(
-        "key-1", artifact_manifest=manifest, artifact_manifest_hash="c" * 64
-    )
+def test_publish_record_rejects_delegated_without_collaboration_revision(store: SessionControlStore) -> None:
+    prepare_record(store, delegation_id="del-1")
+    store.freeze_thread_creation_artifact_manifest("key-1", artifact_manifest="{}", artifact_manifest_hash="c" * 64)
+    raw_execute(store, "UPDATE thread_creation_records SET collaboration_precondition_revision=NULL")
     with pytest.raises(RuntimeError, match="缺少 collaboration"):
         store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
     assert store.get_thread_creation_record("key-1").state == "preparing"
-    visible = store.connection.execute(
-        "SELECT 1 FROM thread_catalog WHERE thread_id = ?",
-        (record.child_thread_id,),
-    ).fetchone()
-    assert visible is None
 
 
 def test_publish_record_rejects_published_and_aborted(
@@ -2341,204 +2181,181 @@ def test_record_failure_keeps_pending_recoverable(
         )
 
 
-def test_collaboration_member_register_idempotent_and_conflict(
-    store: SessionControlStore,
-) -> None:
-    """member 登记：revision 只在新登记推进；同 delegation 漂移/取消换绑拒绝。"""
-    store.initialize_main_thread(
-        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
-    )
-    store.initialize_fence("active", 1)
-    assert store.get_collaboration_ledger_revision() == 0
-    first = store.register_collaboration_member(
-        delegation_id="del-1",
-        coordinator_session_id=make_session_id(),
-        coordinator_thread_id=make_thread_id(),
-        role="delegated_subagent",
-        subagent_type="general-purpose",
-        title="委派：做一件事",
-        task_seed=json.dumps(
-            {"description": "做一件事"},
-            sort_keys=True,
-            separators=(",", ":"),
-        ),
-    )
-    assert first == 1
+def test_collaboration_prepare_freezes_identity_and_idempotent_member(store: SessionControlStore) -> None:
+    record = prepare_record(store, delegation_id="del-1")
     member = store.get_collaboration_member("del-1")
+    assert record.collaboration_precondition_revision == member.registered_revision == 1
+    assert record.membership_preimage_hash == member.membership_preimage_hash
+    assert member.creation_idempotency_key == "key-1"
+    assert member.child_thread_id == record.child_thread_id
     assert member.state == "registering"
-    assert member.child_thread_id is None
-    # 同 delegation 同内容重入 → 幂等（revision 不变）。
-    again = store.register_collaboration_member(
-        delegation_id="del-1",
-        coordinator_session_id=member.coordinator_session_id,
-        coordinator_thread_id=member.coordinator_thread_id,
-        role=member.role,
-        subagent_type=member.subagent_type,
-        title=member.title,
-        task_seed=member.task_seed,
+    assert store.connection.execute("SELECT COUNT(*) FROM thread_catalog").fetchone()[0] == 1
+    assert store.create_or_get_thread_creation_record(**delegated_thread_creation_kwargs(store)) == record
+    assert store.get_collaboration_ledger_revision() == 1
+    kwargs = delegated_thread_creation_kwargs(store)
+    kwargs["collaboration_member"] = CollaborationMemberInput(
+        coordinator_session_id=member.coordinator_session_id, coordinator_thread_id=member.coordinator_thread_id,
+        role=member.role, subagent_type="other-type", title=member.title,
     )
-    assert again == 1
-    # 新 delegation → revision +1。
-    second = store.register_collaboration_member(
-        delegation_id="del-2",
-        coordinator_session_id=member.coordinator_session_id,
-        coordinator_thread_id=member.coordinator_thread_id,
-        role=member.role,
-        subagent_type=member.subagent_type,
-        title="委派：另一件事",
-        task_seed=json.dumps(
-            {"description": "另一件事"},
-            sort_keys=True,
-            separators=(",", ":"),
-        ),
-    )
-    assert second == 2
-    # 同 delegation 内容漂移 → 冲突拒绝。
-    with pytest.raises(RuntimeError, match="拒绝换绑"):
-        store.register_collaboration_member(
-            delegation_id="del-1",
-            coordinator_session_id=member.coordinator_session_id,
-            coordinator_thread_id=member.coordinator_thread_id,
-            role=member.role,
-            subagent_type="other-type",
-            title=member.title,
-            task_seed=member.task_seed,
-        )
-    # 列表按 coordinator 过滤。
-    members = store.list_collaboration_members(
-        coordinator_session_id=member.coordinator_session_id
-    )
+    with pytest.raises(RuntimeError, match="preimage 冲突"):
+        store.create_or_get_thread_creation_record(**kwargs)
+    store.create_or_get_thread_creation_record(**delegated_thread_creation_kwargs(
+        store, idempotency_key="key-2", delegation_id="del-2", title="另一件事",
+    ))
+    assert store.get_collaboration_ledger_revision() == 2
+    members = store.list_collaboration_members(coordinator_session_id=PUBLISHED_OWNER_SESSION_ID)
     assert [item.delegation_id for item in members] == ["del-1", "del-2"]
     assert store.list_collaboration_members() == members
     with pytest.raises(KeyError):
-        store.get_collaboration_member("del-missing")
+        store.get_collaboration_member("missing")
 
 
-def test_delegated_record_publish_cas_and_member_atomic_visibility(
-    store: SessionControlStore,
-) -> None:
-    """delegated record：ledger CAS + member 随 publish 原子转正回填。"""
-    store.initialize_main_thread(
-        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
-    )
+
+def test_delegated_retry_rejects_reference_change_even_when_caller_reuses_hash(store: SessionControlStore) -> None:
+    record = prepare_record(store, delegation_id="del-1")
+    kwargs = delegated_thread_creation_kwargs(store)
+    reference = json.loads(kwargs["task_reference"])
+    reference["ref"] = "不属于原创建的引用"
+    kwargs["task_reference"] = json.dumps(reference)
+    with pytest.raises(RuntimeError, match="冻结请求 preimage 冲突"):
+        store.create_or_get_thread_creation_record(**kwargs)
+    assert store.get_thread_creation_record("key-1") == record
+    assert store.get_collaboration_ledger_revision() == 1
+
+
+@pytest.mark.parametrize("missing", ["collaboration_member", "owner_session_id", "task_seed", "task_reference"])
+def test_delegated_prepare_requires_complete_owner_request_before_writes(store: SessionControlStore, missing: str) -> None:
+    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING)
     store.initialize_fence("active", 1)
-    coordinator_session_id = make_session_id()
-    coordinator_thread_id = make_thread_id()
-    revision = store.register_collaboration_member(
-        delegation_id="del-1",
-        coordinator_session_id=coordinator_session_id,
-        coordinator_thread_id=coordinator_thread_id,
-        role="delegated_subagent",
-        subagent_type="general-purpose",
-        title="委派：做一件事",
-        task_seed=json.dumps(
-            {"description": "做一件事"}, sort_keys=True, separators=(",", ":")
-        ),
-    )
-    kwargs = valid_thread_creation_kwargs(store)
-    record = store.create_or_get_thread_creation_record(
-        **kwargs,
-        delegation_id="del-1",
-        collaboration_precondition_revision=revision,
-    )
-    store.freeze_thread_creation_artifact_manifest(
-        "key-1", artifact_manifest="{}", artifact_manifest_hash="c" * 64
-    )
-    # publish 前 API 不可见：member 仍 registering、无 child_thread_id。
-    member = store.get_collaboration_member("del-1")
-    assert member.state == "registering"
-    assert member.child_thread_id is None
-    # 真损坏：本 delegation 自身 member 行被外部改成非 registering →
-    # publish 的自身 member 转正闸门 fail closed，record 保持 preparing、
-    # 无 child row 可见性。（合法 sibling 增长不属于此，见
-    # test_publish_record_tolerates_sibling_delegation_growth。）
-    raw_execute(
-        store,
-        "UPDATE collaboration_members SET state = 'cancelled' WHERE delegation_id = ?",
-        ("del-1",),
-    )
-    with pytest.raises(RuntimeError, match="非 registering"):
-        store.publish_thread_creation_record("key-1", session_id=coordinator_session_id)
-    assert store.get_thread_creation_record("key-1").state == "preparing"
-    raw_execute(
-        store,
-        "UPDATE collaboration_members SET state = 'registering' "
-        "WHERE delegation_id = ?",
-        ("del-1",),
-    )
-    visible = store.connection.execute(
-        "SELECT 1 FROM thread_catalog WHERE thread_id = ?",
-        (record.child_thread_id,),
-    ).fetchone()
-    assert visible is None
-    # 成功路径：新 operation（新 delegation 先登记，再以登记后 revision
-    # 冻结 record）正常发布，member 与 catalog child row 原子可见。
-    revision_now = store.register_collaboration_member(
-        delegation_id="del-3",
-        coordinator_session_id=coordinator_session_id,
-        coordinator_thread_id=coordinator_thread_id,
-        role="delegated_subagent",
-        subagent_type="general-purpose",
-        title="委派：第三件事",
-        task_seed=json.dumps(
-            {"description": "第三件事"}, sort_keys=True, separators=(",", ":")
-        ),
-    )
-    kwargs2 = valid_thread_creation_kwargs(store, idempotency_key="key-2")
-    record2 = store.create_or_get_thread_creation_record(
-        **kwargs2,
-        delegation_id="del-3",
-        collaboration_precondition_revision=revision_now,
-    )
-    store.freeze_thread_creation_artifact_manifest(
-        "key-2", artifact_manifest="{}", artifact_manifest_hash="c" * 64
-    )
-    store.publish_thread_creation_record("key-2", session_id=coordinator_session_id)
-    member3 = store.get_collaboration_member("del-3")
-    assert member3.state == "published"
-    assert member3.child_thread_id == record2.child_thread_id
+    kwargs = delegated_thread_creation_kwargs(store)
+    kwargs[missing] = None
+    with pytest.raises(ValueError, match="delegated creation"):
+        store.create_or_get_thread_creation_record(**kwargs)
+    assert store.get_collaboration_ledger_revision() == 0
+    for table in ("thread_creation_records", "collaboration_members", "collaboration_fanouts", "session_operation_leases"):
+        assert store.connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+
+def test_delegated_record_publish_and_member_atomic_visibility(store: SessionControlStore) -> None:
+    record = prepare_record(store, delegation_id="del-1")
+    store.freeze_thread_creation_artifact_manifest("key-1", artifact_manifest="{}", artifact_manifest_hash="c" * 64)
+    assert store.get_collaboration_member("del-1").child_thread_id == record.child_thread_id
+    assert store.connection.execute("SELECT COUNT(*) FROM thread_execution_intents").fetchone()[0] == 0
+    store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
+    assert store.get_collaboration_member("del-1").state == "published"
+    assert store.get_initial_execution_intent("key-1").thread_id == record.child_thread_id
+    assert store.connection.execute("SELECT kind FROM thread_catalog WHERE thread_id=?", (record.child_thread_id,)).fetchone()[0] == "child"
 
 
-def test_abort_record_cancels_collaboration_member_no_rebind(
-    store: SessionControlStore,
-) -> None:
-    """record abort 定点取消 member；同 delegation 重登记拒绝（不换绑）。"""
-    store.initialize_main_thread(
-        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
-    )
-    store.initialize_fence("active", 1)
-    coordinator_session_id = make_session_id()
-    revision = store.register_collaboration_member(
-        delegation_id="del-1",
-        coordinator_session_id=coordinator_session_id,
-        coordinator_thread_id=make_thread_id(),
-        role="delegated_subagent",
-        subagent_type="general-purpose",
-        title="委派：做一件事",
-        task_seed=json.dumps(
-            {"description": "做一件事"}, sort_keys=True, separators=(",", ":")
-        ),
-    )
-    kwargs = valid_thread_creation_kwargs(store)
-    store.create_or_get_thread_creation_record(
-        **kwargs,
-        delegation_id="del-1",
-        collaboration_precondition_revision=revision,
-    )
-    store.abort_thread_creation_record("key-1", "publish CAS 失败")
+def test_abort_record_cancels_collaboration_member_no_rebind(store: SessionControlStore) -> None:
+    prepare_record(store, delegation_id="del-1")
+    aborted = store.abort_thread_creation_record("key-1", "定点清理完成")
+    assert aborted.state == "aborted"
+    assert store.abort_thread_creation_record("key-1", "其他原因") == aborted
     member = store.get_collaboration_member("del-1")
     assert member.state == "cancelled"
-    # 同 delegation 重登记 → 换绑拒绝（重试须换新 delegation）。
-    with pytest.raises(RuntimeError, match="不换绑"):
-        store.register_collaboration_member(
-            delegation_id="del-1",
-            coordinator_session_id=coordinator_session_id,
-            coordinator_thread_id=member.coordinator_thread_id,
-            role=member.role,
-            subagent_type=member.subagent_type,
-            title=member.title,
-            task_seed=member.task_seed,
-        )
+    assert json.loads(store.get_collaboration_fanout(2).payload_json)["event"]["type"] == "member.cancelled"
+    with pytest.raises(RuntimeError, match="delegation_id"):
+        store.create_or_get_thread_creation_record(**delegated_thread_creation_kwargs(store, idempotency_key="key-2"))
+    with pytest.raises(RuntimeError, match="已取消"):
+        store.create_or_get_thread_creation_record(**delegated_thread_creation_kwargs(store))
+    assert store.connection.execute("SELECT COUNT(*) FROM thread_catalog").fetchone()[0] == 1
+    assert store.connection.execute("SELECT COUNT(*) FROM thread_execution_intents").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(("table", "field", "value"), [
+    ("collaboration_members", "role", "other"),
+    ("collaboration_members", "subagent_type", "other"),
+    ("collaboration_members", "title", "改变标题"),
+    ("collaboration_members", "task_seed", '{"task":"改变任务"}'),
+    ("collaboration_members", "coordinator_session_id", session_id_at(JUNE_2)),
+    ("collaboration_members", "coordinator_thread_id", thread_id_at(JUNE_2)),
+    ("collaboration_members", "child_thread_id", thread_id_at(JUNE_2)),
+    ("collaboration_members", "creation_idempotency_key", "other-creation"),
+    ("collaboration_members", "membership_preimage_hash", "f" * 64),
+    ("collaboration_members", "registered_revision", 99),
+    ("thread_creation_records", "preimage_hash", "f" * 64),
+    ("thread_creation_records", "membership_preimage_hash", "f" * 64),
+    ("thread_creation_records", "task_seed", '{"task":"改变任务"}'),
+    ("thread_creation_records", "task_reference", '{}'),
+    ("thread_creation_records", "child_thread_id", thread_id_at(JUNE_2)),
+    ("thread_creation_records", "collaboration_precondition_revision", 99),
+])
+def test_membership_loader_and_publish_reject_frozen_drift_without_side_effects(
+    store: SessionControlStore, table: str, field: str, value: object,
+) -> None:
+    prepare_record(store, delegation_id="del-1")
+    store.freeze_thread_creation_artifact_manifest("key-1", artifact_manifest="{}", artifact_manifest_hash="c" * 64)
+    tables = ("thread_catalog", "thread_execution_intents", "collaboration_fanouts", "session_operation_leases")
+    before = {name: [tuple(row) for row in store.connection.execute(f"SELECT * FROM {name}")] for name in tables}
+    raw_execute(store, f"UPDATE {table} SET {field}=?", (value,))
+    with pytest.raises(RuntimeError, match="collaboration"):
+        store.get_collaboration_member("del-1")
+    publish_error = "最终 locator" if (table, field) == ("thread_creation_records", "child_thread_id") else "collaboration"
+    with pytest.raises(RuntimeError, match=publish_error):
+        store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
+    after = {name: [tuple(row) for row in store.connection.execute(f"SELECT * FROM {name}")] for name in tables}
+    assert after == before
+    assert store.get_thread_creation_record("key-1").state == "preparing"
+
+
+def test_damaged_membership_abort_commits_original_cancellation_and_rethrows(store: SessionControlStore) -> None:
+    prepare_record(store, delegation_id="del-1")
+    original_fanouts = store.list_collaboration_fanouts()
+    raw_execute(store, "UPDATE collaboration_members SET title='损坏内容'")
+    with pytest.raises(RuntimeError, match="abort 已终结.*完整性失败"):
+        store.abort_thread_creation_record("key-1", "publish 完整性失败")
+    assert store.get_thread_creation_record("key-1").state == "aborted"
+    assert store.connection.execute("SELECT state,title FROM collaboration_members").fetchone()[:] == ("cancelled", "损坏内容")
+    fanouts = store.list_collaboration_fanouts()
+    assert fanouts[:-1] == original_fanouts
+    cancelled = json.loads(fanouts[-1].payload_json)
+    assert cancelled["event"] == {"type": "member.cancelled", "delegation_id": "del-1"}
+    assert cancelled["members"][0]["title"] == "委派：做一件事"
+    assert cancelled["members"][0]["state"] == "cancelled"
+    assert "损坏内容" not in fanouts[-1].payload_json
+    assert store.get_collaboration_ledger_revision() == 2
+    for action in (
+        lambda: store.abort_thread_creation_record("key-1", "重入"),
+        lambda: store.create_or_get_thread_creation_record(**delegated_thread_creation_kwargs(store)),
+        lambda: store.list_collaboration_members(coordinator_session_id=PUBLISHED_OWNER_SESSION_ID),
+    ):
+        with pytest.raises(RuntimeError, match="membership preimage"):
+            action()
+
+
+
+@pytest.mark.parametrize("damage", ["missing", "payload", "lease"])
+def test_abort_requires_original_registered_snapshot_before_any_terminal_write(
+    store: SessionControlStore, damage: str,
+) -> None:
+    record = prepare_record(store, delegation_id="del-1")
+    original = store.get_collaboration_fanout(1)
+    if damage == "missing":
+        store.connection.execute("DELETE FROM collaboration_deliveries WHERE ledger_revision=1")
+        store.connection.execute("DELETE FROM collaboration_fanouts WHERE ledger_revision=1")
+    elif damage == "payload":
+        payload = json.loads(original.payload_json)
+        payload["members"][0]["title"] = "伪造原快照"
+        store.connection.execute("UPDATE collaboration_fanouts SET payload_json=?", (json.dumps(payload),))
+    else:
+        store.connection.execute("UPDATE session_operation_leases SET preimage_hash=? WHERE lease_id=?", ("f" * 64, original.lease_id))
+    with pytest.raises((KeyError, RuntimeError), match="collaboration fanout"):
+        store.abort_thread_creation_record("key-1", "不能伪造取消快照")
+    assert store.get_thread_creation_record("key-1") == record
+    assert store.get_collaboration_member("del-1").state == "registering"
+    assert store.get_collaboration_ledger_revision() == 1
+    assert store.connection.execute("SELECT COUNT(*) FROM thread_catalog").fetchone()[0] == 1
+    assert store.connection.execute("SELECT COUNT(*) FROM thread_execution_intents").fetchone()[0] == 0
+
+def test_atomic_delegated_prepare_rolls_back_member_revision_and_fanout_on_record_failure(store: SessionControlStore) -> None:
+    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING)
+    store.initialize_fence("active", 1)
+    raw_execute(store, "CREATE TRIGGER fail_creation BEFORE INSERT ON thread_creation_records BEGIN SELECT RAISE(ABORT,'creation failure'); END")
+    with pytest.raises(sqlite3.IntegrityError, match="creation failure"):
+        store.create_or_get_thread_creation_record(**delegated_thread_creation_kwargs(store))
+    assert store.get_collaboration_ledger_revision() == 0
+    for table in ("thread_creation_records", "collaboration_members", "collaboration_fanouts", "session_operation_leases"):
+        assert store.connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
 
 
 # ----------------------------------------------------------------------
@@ -3973,7 +3790,7 @@ def test_empty_existing_v0_database_initializes_current_schema(tmp_path: Path) -
         empty.close()
     created = SessionControlStore(target)
     try:
-        assert created.connection.execute("PRAGMA user_version").fetchone()[0] == 15
+        assert created.connection.execute("PRAGMA user_version").fetchone()[0] == 17
         assert created.connection.execute("SELECT name FROM sqlite_schema WHERE name = 'thread_catalog'").fetchone() is not None
     finally:
         created.close()

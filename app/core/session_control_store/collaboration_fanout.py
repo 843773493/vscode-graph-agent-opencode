@@ -12,6 +12,7 @@ from app.core.session_catalog_store.validators import (
     validate_session_id,
     validate_thread_id,
 )
+from app.core.session_control_store.collaboration import validate_collaboration_member
 from app.core.session_control_thread_catalog.thread_catalog import read_fence_row
 
 COLLABORATION_STATE_DDL = (
@@ -71,6 +72,7 @@ class CollaborationFanoutMixin:
         self, connection: sqlite3.Connection, *, session_id: str,
         event: dict[str, object], wakeup: dict[str, object] | None = None,
         bump_revision: bool = True,
+        cancelled_member_snapshot: dict[str, object] | None = None,
     ) -> int:
         if connection is not self._connection or not connection.in_transaction:
             raise RuntimeError("collaboration fanout 必须在原 ledger 事务中冻结")
@@ -80,11 +82,23 @@ class CollaborationFanoutMixin:
         if bump_revision:
             connection.execute("UPDATE collaboration_ledger SET revision=revision+1 WHERE id=1")
         revision = self.get_collaboration_ledger_revision()
-        members = [dict(row) for row in connection.execute(
+        member_rows = connection.execute(
             "SELECT m.*, i.state AS admission_state FROM collaboration_members m "
             "LEFT JOIN thread_execution_intents i ON i.thread_id=m.child_thread_id "
             "ORDER BY m.registered_at,m.delegation_id",
-        )]
+        ).fetchall()
+        members = []
+        for row in member_rows:
+            if cancelled_member_snapshot is not None and row["delegation_id"] == cancelled_member_snapshot["delegation_id"]:
+                continue
+            validate_collaboration_member(connection, row)
+            members.append(dict(row))
+        if cancelled_member_snapshot is not None:
+            if event != {"type": "member.cancelled", "delegation_id": cancelled_member_snapshot["delegation_id"]}:
+                raise RuntimeError("取消快照只能冻结原 member.cancelled 事件")
+            validate_collaboration_member(connection, cancelled_member_snapshot)
+            members.append(cancelled_member_snapshot)
+            members.sort(key=lambda member: (member["registered_at"], member["delegation_id"]))
         boards = [json.loads(row[0]) for row in connection.execute(
             "SELECT board_json FROM collaboration_boards ORDER BY team_id",
         )]
@@ -121,19 +135,48 @@ class CollaborationFanoutMixin:
         self._collaboration_notifications.append(revision)
         return revision
 
+    def registered_collaboration_member_snapshot(self, creation: sqlite3.Row) -> dict[str, object]:
+        """取消只读取原登记 outbox 的不可变正文，禁止用漂移 live row 补齐。"""
+        revision = creation["collaboration_precondition_revision"]
+        if revision is None:
+            raise RuntimeError("取消成员缺少 creation 冻结的 registered revision")
+        original = self.get_collaboration_fanout(int(revision))
+        payload = json.loads(original.payload_json)
+        if payload["event"] != {"type": "member.registered", "delegation_id": creation["delegation_id"]}:
+            raise RuntimeError("取消成员的原 registered fanout event identity 不一致")
+        matches = [member for member in payload["members"] if member["delegation_id"] == creation["delegation_id"]]
+        if len(matches) != 1:
+            raise RuntimeError("取消成员的原 registered fanout 缺少唯一 member snapshot")
+        member = matches[0]
+        if (original.session_id, member["creation_idempotency_key"], member["child_thread_id"],
+            member["membership_preimage_hash"], member["registered_revision"], member["state"]) != (
+                member["coordinator_session_id"], creation["thread_creation_idempotency_key"],
+                creation["child_thread_id"], creation["membership_preimage_hash"], revision, "registering"):
+            raise RuntimeError("取消成员的原 registered fanout 与 creation 冻结 identity/preimage 不一致")
+        validate_collaboration_member(self._connection, member)
+        return member
+
+    def freeze_collaboration_member_cancellation(
+        self, connection: sqlite3.Connection, *, member_snapshot: dict[str, object],
+    ) -> None:
+        """原取消事件与 terminal record 同事务；关闭 fence 只结算原 revision。"""
+        if connection is not self._connection or not connection.in_transaction:
+            raise RuntimeError("成员取消必须在原 creation 事务中冻结")
+        validate_collaboration_member(connection, member_snapshot)
+        if read_fence_row(connection, database_path=self.database_path)["state"] != "active":
+            connection.execute("UPDATE collaboration_ledger SET revision=revision+1 WHERE id=1")
+            return
+        self._freeze_collaboration_change_transaction(
+            connection, session_id=str(member_snapshot["coordinator_session_id"]),
+            event={"type": "member.cancelled", "delegation_id": member_snapshot["delegation_id"]},
+            cancelled_member_snapshot=member_snapshot,
+        )
+
     def _freeze_collaboration_member_change_transaction(
         self, connection: sqlite3.Connection, delegation_id: str, event_type: str,
         *, bump_revision: bool = True,
     ) -> None:
         member = self.get_collaboration_member(delegation_id)
-        if read_fence_row(connection, database_path=self.database_path)["state"] != "active" and event_type == "member.cancelled":
-            if member.state != "cancelled":
-                raise RuntimeError("关闭 fence 的成员终结必须对应原 cancelled member")
-            # 删除只结算原创建；不在关闭的 fence 下接受新 fanout lease。
-            # 已冻结的投递由原删除 drain 终结，不能向 Thread 晚到 append。
-            if bump_revision:
-                connection.execute("UPDATE collaboration_ledger SET revision=revision+1 WHERE id=1")
-            return
         self._freeze_collaboration_change_transaction(
             connection, session_id=member.coordinator_session_id,
             event={"type": event_type, "delegation_id": delegation_id}, bump_revision=bump_revision,

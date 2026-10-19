@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.core.session_control_store import SessionControlStore
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING_JSON
 
 
 @pytest.fixture
@@ -97,15 +98,12 @@ def test_rollback_failure_closes_store_without_replacing_original_exception(
         with pytest.raises(RuntimeError, match="已关闭"):
             store.get_collaboration_ledger_revision()
         with pytest.raises(RuntimeError, match="已关闭"):
-            store.register_collaboration_member(
-                delegation_id="del-after-rollback-failure",
-                coordinator_session_id="ses-after-rollback-failure",
-                coordinator_thread_id="thr-after-rollback-failure",
-                role="delegated_subagent",
-                subagent_type="general-purpose",
-                title="回滚失败后写入",
-                task_seed="{}",
+            store.create_or_get_thread_creation_record(
+                idempotency_key="closed-store-creation", initial_state="running",
+                preimage_hash="a" * 64, graph_binding=TEST_THREAD_GRAPH_BINDING_JSON,
+                capability_profile="{}", task_seed="{}",
             )
+
     finally:
         store._connection = connection
         if close_fails:

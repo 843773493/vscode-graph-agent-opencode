@@ -22,6 +22,7 @@ from app.core.path_utils import (
     get_session_path_resolver,
     workspace_context,
 )
+from app.core.session_control_store import CollaborationMemberInput
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
@@ -175,7 +176,8 @@ async def create_member(case, name):
                                              "capability_profile_hash": compute_capability_profile_hash(capability_profile=profile)},
                           "capability_profile": profile, "task_seed": {"trusted_context": {"team_id": case.board.team_id,
                               "coordinator_thread_id": case.main, "work_mode": "read_only"}, "untrusted_instructions": "只读验证"},
-                          "task_reference": {"parent_thread_id": case.main}},
+                          "task_reference": {"parent_session_id": SESSION, "parent_thread_id": case.main,
+                                             "delegation_id": "delegate-" + name}},
         collaboration_member={"role": "reviewer", "subagent_type": "general-purpose", "title": name},
     )
     return result.child_thread_id
@@ -183,20 +185,22 @@ async def create_member(case, name):
 
 async def test_member_abort_after_fence_close_settles_without_new_fanout(team_case):
     case = team_case
-    revision = case.control.register_collaboration_member(
-        delegation_id="closed-member", coordinator_session_id=SESSION,
-        coordinator_thread_id=case.main, role="reviewer", subagent_type="general-purpose",
-        title="删除期间中止", task_seed="{}",
-    )
     record = case.control.create_or_get_thread_creation_record(
         idempotency_key="closed-member", delegation_id="closed-member", initial_state="running",
         preimage_hash="b" * 64,
         graph_binding=json.dumps({"graph_id": "deep-agent", "graph_revision": 1,
                                   "graph_schema_hash": "sha256:" + "a" * 64,
                                   "capability_profile_hash": compute_capability_profile_hash(capability_profile={"goal_enabled": False})}),
-        capability_profile='{"goal_enabled": false}',
-        task_seed="{}", task_reference="{}", collaboration_precondition_revision=revision,
+        capability_profile='{"goal_enabled": false}', task_seed="{}",
+        task_reference=json.dumps({"parent_session_id": SESSION, "parent_thread_id": case.main,
+                                   "delegation_id": "closed-member"}),
+        owner_session_id=SESSION,
+        collaboration_member=CollaborationMemberInput(
+            coordinator_session_id=SESSION, coordinator_thread_id=case.main, role="reviewer",
+            subagent_type="general-purpose", title="删除期间中止",
+        ),
     )
+    revision = case.control.get_collaboration_ledger_revision()
     original_fanouts = case.control.list_collaboration_fanouts()
     original_lease_count = case.control.connection.execute("SELECT COUNT(*) FROM session_operation_leases").fetchone()[0]
     case.control.cas_fence_transition(1, "deleting")
@@ -400,9 +404,20 @@ async def test_hidden_registering_member_does_not_change_facet_revision(team_cas
     case = team_case
     original = team_projection(case.control.get_collaboration_fanout(1).payload_json, case.main)
     async with case.sessions.session_write_admission(SESSION):
-        case.control.register_collaboration_member(delegation_id="hidden", coordinator_session_id=SESSION,
-            coordinator_thread_id=case.main, role="reviewer", subagent_type="general-purpose", title="隐藏成员",
-            task_seed=json.dumps({"trusted_context": {"team_id": case.board.team_id}}))
+        case.control.create_or_get_thread_creation_record(
+            idempotency_key="hidden", delegation_id="hidden", initial_state="running", preimage_hash="c" * 64,
+            graph_binding=json.dumps({"graph_id": "deep-agent", "graph_revision": 1,
+                "graph_schema_hash": "sha256:" + "a" * 64,
+                "capability_profile_hash": compute_capability_profile_hash(capability_profile={"goal_enabled": False})}),
+            capability_profile='{"goal_enabled": false}',
+            task_seed=json.dumps({"trusted_context": {"team_id": case.board.team_id}}),
+            task_reference=json.dumps({"parent_session_id": SESSION, "parent_thread_id": case.main,
+                                       "delegation_id": "hidden"}), owner_session_id=SESSION,
+            collaboration_member=CollaborationMemberInput(
+                coordinator_session_id=SESSION, coordinator_thread_id=case.main, role="reviewer",
+                subagent_type="general-purpose", title="隐藏成员",
+            ),
+        )
     assert team_projection(case.control.get_collaboration_fanout(2).payload_json, case.main) == original
 
 

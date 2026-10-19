@@ -499,6 +499,7 @@ class ExecutionIntentMixin:
                     f"后不可再领取）: admission_key="
                     f"{admission_idempotency_key!r}, state={state!r}"
                 )
+            self.validate_initial_execution_readiness(self._thread_execution_intent_from_row(row))
             existing_owner = row["claim_owner"]
             existing_generation = row["claim_generation"]
             if existing_owner is None:
@@ -596,6 +597,7 @@ class ExecutionIntentMixin:
                     f"admission_key={admission_idempotency_key!r}"
                 )
             state = str(row["state"])
+            self.validate_initial_execution_readiness(self._thread_execution_intent_from_row(row))
             if row["claim_owner"] is None:
                 raise RuntimeError(
                     "initial execution intent 未被领取，拒绝 mark bound: "
@@ -639,25 +641,6 @@ class ExecutionIntentMixin:
                     f"submitted_binding={execution_binding_id!r}, "
                     f"frozen_job={row['job_id']!r}, "
                     f"submitted_job={job_id!r}"
-                )
-            expected_hash = compute_initial_execution_binding_preimage_hash(
-                admission_idempotency_key=str(
-                    row["admission_idempotency_key"]
-                ),
-                session_id=str(row["session_id"]),
-                thread_id=str(row["thread_id"]),
-                creation_idempotency_key=str(
-                    row["creation_idempotency_key"]
-                ),
-                initial_state=str(row["initial_state"]),
-                execution_binding_id=execution_binding_id,
-                job_id=job_id,
-            )
-            if expected_hash != str(row["binding_preimage_hash"]):
-                raise RuntimeError(
-                    "mark bound preimage 复算失败（binding_preimage_hash 与"
-                    "冻结 identity 不一致，库被外部改动，fail closed）: "
-                    f"admission_key={admission_idempotency_key!r}"
                 )
             cursor = connection.execute(
                 "UPDATE thread_execution_intents "
@@ -758,3 +741,45 @@ class ExecutionIntentMixin:
                     f"异常）: admission_key={admission_idempotency_key!r}"
                 )
             return self._thread_execution_intent_from_row(updated)
+
+    def validate_initial_execution_readiness(self, intent: ThreadExecutionIntent) -> None:
+        """claim、binder、bound 共用同库精确 creation/member/preimage 闸门。"""
+        self._ensure_open()
+        current = self.get_initial_execution_intent(intent.admission_idempotency_key)
+        frozen_fields = (
+            "admission_idempotency_key", "session_id", "thread_id", "creation_idempotency_key",
+            "initial_state", "execution_binding_id", "job_id", "binding_preimage_hash",
+        )
+        if any(getattr(current, name) != getattr(intent, name) for name in frozen_fields):
+            raise RuntimeError("initial execution readiness intent 冻结快照已漂移")
+        creation = self.get_thread_creation_record(intent.creation_idempotency_key)
+        if (creation.delegation_id is None) != (
+            creation.collaboration_precondition_revision is None and creation.membership_preimage_hash is None
+        ):
+            raise RuntimeError("initial execution readiness creation membership identity 不一致")
+        expected_hash = compute_initial_execution_binding_preimage_hash(
+            admission_idempotency_key=intent.admission_idempotency_key,
+            session_id=intent.session_id, thread_id=intent.thread_id,
+            creation_idempotency_key=intent.creation_idempotency_key,
+            initial_state=intent.initial_state, execution_binding_id=intent.execution_binding_id,
+            job_id=intent.job_id,
+        )
+        expected_identity = derive_initial_execution_identity(intent.admission_idempotency_key)
+        if expected_hash != intent.binding_preimage_hash:
+            raise RuntimeError(
+                "initial execution readiness preimage 复算失败（binding_preimage_hash 与冻结 identity 不一致）: "
+                f"admission_key={intent.admission_idempotency_key!r}"
+            )
+        if (creation.state != "published" or creation.child_thread_id != intent.thread_id
+            or creation.initial_state != intent.initial_state
+            or expected_identity != (intent.execution_binding_id, intent.job_id)):
+            raise RuntimeError("initial execution readiness creation/identity/preimage 不一致")
+        if self._connection.execute(
+            "SELECT 1 FROM thread_catalog WHERE thread_id=? AND kind='child'", (intent.thread_id,),
+        ).fetchone() is None:
+            raise RuntimeError("initial execution readiness child catalog 缺失")
+        if creation.delegation_id is not None:
+            member = self.get_collaboration_member(creation.delegation_id)
+            if (member.state != "published" or member.child_thread_id != intent.thread_id
+                or member.coordinator_session_id != intent.session_id):
+                raise RuntimeError("initial execution readiness collaboration owner integrity error")

@@ -100,6 +100,7 @@ from app.core.session_control_primitives import (
 )
 from app.core.session_control_store import (
     _INITIAL_STATE_VALUES,
+    CollaborationMemberInput,
     SessionControlStore,
     ThreadCreationRecord,
     validate_thread_id,
@@ -756,24 +757,6 @@ class ThreadCreationService:
                     idempotency_key=idempotency_key,
                     artifact_manifest=artifact_manifest,
                 )
-                collaboration_revision: int | None = None
-                if collaboration_member is not None:
-                    # ledger 登记先于 record 冻结（同一 gate 临界区内）：
-                    # record 冻结登记后的 ledger revision，publish 时 CAS
-                    # 校验未漂移；重入时登记幂等、revision 不变。
-                    collaboration_revision = (
-                        self._control_store.register_collaboration_member(
-                            delegation_id=delegation_id,  # type: ignore[arg-type]
-                            coordinator_session_id=session_id,
-                            coordinator_thread_id=str(session_metadata["task_reference"]["parent_thread_id"]),
-                            role=str(collaboration_member["role"]),
-                            subagent_type=str(collaboration_member["subagent_type"]),
-                            title=str(collaboration_member["title"]),
-                            task_seed=canonical_json_text(
-                                session_metadata["task_seed"]
-                            ),
-                        )
-                    )
                 record = self._control_store.create_or_get_thread_creation_record(
                     idempotency_key=idempotency_key,
                     initial_state=initial_state,
@@ -791,7 +774,14 @@ class ThreadCreationService:
                     ),
                     thread_id=thread_id,
                     delegation_id=delegation_id,
-                    collaboration_precondition_revision=collaboration_revision,
+                    owner_session_id=session_id,
+                    collaboration_member=(CollaborationMemberInput(
+                        coordinator_session_id=session_id,
+                        coordinator_thread_id=str(session_metadata["task_reference"]["parent_thread_id"]),
+                        role=str(collaboration_member["role"]),
+                        subagent_type=str(collaboration_member["subagent_type"]),
+                        title=str(collaboration_member["title"]),
+                    ) if collaboration_member is not None else None),
                     purpose=purpose,
                     request_intent_json=canonical_json_text(request_intent) if request_intent is not None else None,
                     fork_delivery_request_id=fork_delivery_request_id,
@@ -983,6 +973,8 @@ class ThreadCreationService:
             session_metadata=session_metadata,
             artifact_manifest=artifact_manifest,
         )
+        if (delegation_id is None) != (collaboration_member is None):
+            raise ValueError("delegated creation 必须同时提供 delegation_id 与 collaboration_member")
         if collaboration_member is None:
             return
         if delegation_id is None:

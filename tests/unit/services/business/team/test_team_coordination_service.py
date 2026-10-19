@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -60,9 +61,26 @@ class Factory:
         assert coordinator_session_id == "ses_owner"
         return tuple(self.members)
 
-    def get_initial_execution_intent(self, delegation_id):
-        assert any(row.delegation_id == delegation_id for row in self.members)
-        return SimpleNamespace(state="bound", intent_updated_at=datetime.now(UTC))
+    def read_transaction(self):
+        return nullcontext()
+
+    def get_initial_execution_intent(self, creation_idempotency_key):
+        member = next(
+            row
+            for row in self.members
+            if row.creation_idempotency_key == creation_idempotency_key
+        )
+        return SimpleNamespace(
+            state="bound",
+            thread_id=member.child_thread_id,
+            intent_updated_at=datetime.now(UTC),
+        )
+
+    def validate_initial_execution_readiness(self, intent):
+        assert any(
+            row.state == "published" and row.child_thread_id == intent.thread_id
+            for row in self.members
+        )
 
 
 class Sessions:
@@ -83,8 +101,10 @@ class Subagents:
         child_thread_id = f"thr_child_{index}"
         self.factory.members.append(SimpleNamespace(
             delegation_id=delegation_id, coordinator_session_id=kwargs["parent_session_id"],
+            creation_idempotency_key=delegation_id,
             coordinator_thread_id=kwargs["parent_thread_id"], child_thread_id=child_thread_id,
             role=kwargs["collaboration_member"]["role"], state="published", registered_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
             task_seed=json.dumps({"trusted_context": kwargs["trusted_context"], "untrusted_instructions": kwargs["untrusted_instructions"]}),
         ))
         return SessionSubagentAccepted(owner_session_id=kwargs["parent_session_id"], child_thread_id=child_thread_id,

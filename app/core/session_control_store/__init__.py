@@ -8,7 +8,7 @@ publish.py``）、初始 execution intent（``execution_intent.py``）、collabo
 
 本 facade 只保留 ``SessionControlStore`` 的类声明（四个既有 mixin + 五个新
 mixin）与连接生命周期方法（``__init__``/``connection``/``close``/
-``_ensure_open``/``_begin_immediate``/``_write_transaction``/``_connect``），
+``_ensure_open``/``_begin_immediate``/``_write_transaction``/``read_transaction``/``_connect``），
 并按原名再导出模块级公开符号，对外契约与导入路径保持不变：
 ``app.core.session_control_store.SessionControlStore``。
 
@@ -49,6 +49,9 @@ from app.core.session_control_store.background_mailbox import BackgroundMailboxM
 from app.core.session_control_store.background_work import BackgroundWorkMixin
 from app.core.session_control_store.collaboration import (
     CollaborationMember as CollaborationMember,
+)
+from app.core.session_control_store.collaboration import (
+    CollaborationMemberInput as CollaborationMemberInput,
 )
 from app.core.session_control_store.collaboration import (
     CollaborationMixin,
@@ -92,6 +95,7 @@ from app.core.sqlite_state import (
 )
 
 __all__ = [
+    "CollaborationMemberInput",
     "CommunicationInboxRecord",
     "CommunicationOutboxRecord",
     "SessionControlStore",
@@ -124,11 +128,11 @@ class SessionControlStore(
     lease（2.3-E）/ 跨 Session 通信 outbox+inbox ledger（D5）。
 
     构造时创建 database_path 父目录并幂等建表；``user_version`` 只接受
-    全新库0与当前版本16。旧生成数据在任何 journal/WAL 设置前显式拒绝，
+    全新库0与当前版本17。旧生成数据在任何 journal/WAL 设置前显式拒绝，
     不迁移、不回填；当前 GraphBinding 仍由 thread_catalog 唯一持有。
     """
 
-    SCHEMA_VERSION = 16
+    SCHEMA_VERSION = 17
 
     def __init__(self, database_path: Path, *, read_only: bool = False) -> None:
         if not isinstance(database_path, Path):
@@ -255,6 +259,38 @@ class SessionControlStore(
             if self._collaboration_publication is not None:
                 for revision in revisions:
                     self._collaboration_publication(self.get_collaboration_fanout(revision))
+
+    @contextmanager
+    def read_transaction(self) -> Iterator[sqlite3.Connection]:
+        """单个只读事务：多语句读取共享同一 SQLite 快照。"""
+        with self._publication_lock:
+            self._ensure_open()
+            if self._connection.in_transaction:
+                raise RuntimeError(
+                    "session control 读事务嵌套：read_transaction 不可重入: "
+                    f"path={self.database_path}"
+                )
+            self._connection.execute("BEGIN DEFERRED")
+            try:
+                yield self._connection
+                self._connection.execute("COMMIT")
+            except BaseException as error:
+                try:
+                    if self._connection.in_transaction:
+                        self._connection.execute("ROLLBACK")
+                except BaseException as rollback_error:  # noqa: BLE001 - 保留原始事务异常。
+                    error.add_note(
+                        "session control 读事务回滚失败；原始事务异常仍优先保留: "
+                        f"{rollback_error!r}"
+                    )
+                    try:
+                        self.close()
+                    except BaseException as close_error:  # noqa: BLE001 - 关闭失败只附加诊断。
+                        error.add_note(
+                            "session control 关闭失败；原始事务异常仍优先保留: "
+                            f"{close_error!r}"
+                        )
+                raise
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(

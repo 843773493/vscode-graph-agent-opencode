@@ -185,23 +185,18 @@ class InitialExecutionBindingWorker:
         binder: InitialExecutionBinder,
     ) -> InitialExecutionBindingAttempt:
         """消费单条 intent；claim 冲突按并发契约分类，binder 失败记录。"""
-        creation = self._store.get_thread_creation_record(intent.creation_idempotency_key)
-        if creation.state != "published" or creation.child_thread_id != intent.thread_id:
-            raise RuntimeError("initial execution readiness 缺少已发布 creation/child")
-        if creation.delegation_id is not None:
-            member = self._store.get_collaboration_member(creation.delegation_id)
-            if member.state != "published" or member.child_thread_id != intent.thread_id:
-                raise RuntimeError("initial execution readiness 缺少已发布 collaboration member")
+        self._store.validate_initial_execution_readiness(intent)
         key = intent.admission_idempotency_key
         claim_kwargs = {
             "claim_owner": self._claim_owner,
             "claim_generation": self._claim_generation,
         }
         try:
-            self._store.claim_initial_execution_intent(key, **claim_kwargs)
+            intent = self._store.claim_initial_execution_intent(key, **claim_kwargs)
         except RuntimeError:
             # claim 被拒：区分并发契约的正常输家与真实 store 错误。
             current = self._store.get_initial_execution_intent(key)
+            self._store.validate_initial_execution_readiness(current)
             if current.state == "bound":
                 return InitialExecutionBindingAttempt(
                     admission_idempotency_key=key,
@@ -247,7 +242,10 @@ class InitialExecutionBindingWorker:
                 f"{outcome.job_id!r})",
                 claim_kwargs,
             )
-        observe_phase_sync(key, "thread.initial.admitted_before_bound")
+        observe_phase_sync(key, "thread.initial.admitted_before_bound", details={
+            "session_id": intent.session_id, "thread_id": intent.thread_id,
+            "execution_binding_id": intent.execution_binding_id, "job_id": intent.job_id,
+        })
         bound = self._store.mark_initial_execution_bound(
             key,
             execution_binding_id=intent.execution_binding_id,

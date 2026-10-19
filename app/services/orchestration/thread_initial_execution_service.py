@@ -62,7 +62,10 @@ class ThreadInitialExecutionService:
 
     def _binding(self, target: InitialExecutionBindingTarget) -> tuple[InternalExecutionIntent, FrozenThreadSeed]:
         intent = target.intent
+        if (target.execution_binding_id, target.job_id) != (intent.execution_binding_id, intent.job_id):
+            raise RuntimeError("initial execution binder target 与冻结 identity 不一致")
         control = self._factory.for_owner_session(intent.session_id).control_store
+        control.validate_initial_execution_readiness(intent)
         record = control.get_thread_creation_record(intent.creation_idempotency_key)
         frozen = frozen_thread_seed(record)
         binding = InternalExecutionIntent(

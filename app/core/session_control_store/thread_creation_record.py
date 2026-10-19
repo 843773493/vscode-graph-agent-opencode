@@ -24,8 +24,16 @@ from app.core.identifier import (
     to_epoch_ms,
     uuid7_datetime_from_hex,
 )
-from app.core.session_catalog_store.validators import validate_thread_id
+from app.core.session_catalog_store.validators import (
+    validate_session_id,
+    validate_thread_id,
+)
 from app.core.session_control_primitives import validate_thread_creation_key
+from app.core.session_control_store.collaboration import (
+    CollaborationMemberInput,
+    prepare_collaboration_member,
+)
+from app.core.session_control_store.collaboration_fanout import CollaborationFanoutMixin
 from app.core.session_control_store.contracts import ThreadGraphBindingRecord
 from app.core.session_control_store.sql import (
     SELECT_THREAD_CATALOG_CHILD_ROW,
@@ -66,6 +74,7 @@ CREATE TABLE IF NOT EXISTS thread_creation_records (
     owner_session_lifecycle_generation INTEGER NOT NULL,
     catalog_precondition_revision INTEGER NOT NULL,
     collaboration_precondition_revision INTEGER,
+    membership_preimage_hash TEXT,
     initial_state TEXT NOT NULL CHECK (initial_state IN ('running', 'idle')),
     admission_intent TEXT,
     abort_reason TEXT,
@@ -94,7 +103,7 @@ _THREAD_CREATION_RECORD_COLUMNS = (
     "artifact_manifest, artifact_manifest_hash, graph_binding, "
     "capability_profile, task_seed, task_reference, "
     "owner_session_lifecycle_generation, catalog_precondition_revision, "
-    "collaboration_precondition_revision, initial_state, admission_intent, "
+    "collaboration_precondition_revision, membership_preimage_hash, initial_state, admission_intent, "
     "abort_reason, child_created_at, record_created_at, record_updated_at, "
     "purpose, request_intent_json, fork_delivery_request_id, fork_completion_json"
 )
@@ -134,6 +143,7 @@ class ThreadCreationRecord:
     owner_session_lifecycle_generation: int
     catalog_precondition_revision: int
     collaboration_precondition_revision: int | None
+    membership_preimage_hash: str | None
     initial_state: str
     admission_intent: str | None
     abort_reason: str | None
@@ -259,6 +269,8 @@ class ThreadCreationRecordMixin:
                 if row["collaboration_precondition_revision"] is not None
                 else None
             ),
+            membership_preimage_hash=(str(row["membership_preimage_hash"])
+                                      if row["membership_preimage_hash"] is not None else None),
             initial_state=str(row["initial_state"]),
             admission_intent=str(row["admission_intent"]) if row["admission_intent"] is not None else None,
             abort_reason=(
@@ -286,7 +298,8 @@ class ThreadCreationRecordMixin:
         delegation_id: str | None = None,
         task_seed: str | None = None,
         task_reference: str | None = None,
-        collaboration_precondition_revision: int | None = None,
+        owner_session_id: str | None = None,
+        collaboration_member: CollaborationMemberInput | None = None,
         purpose: str = "task",
         request_intent_json: str | None = None,
         fork_delivery_request_id: str | None = None,
@@ -308,8 +321,8 @@ class ThreadCreationRecordMixin:
         - delegated child 必须携带非空 ``delegation_id``，并受
           ``idx_thread_creation_delegation`` 部分唯一约束（同一
           delegation 至多一条 record，含 aborted）。
-        - ``collaboration_precondition_revision`` 本轮恒为 None（
-          collaboration ledger 归 8.5）；publish 时遇非空值 fail closed。
+        - delegated member 与 record 在本事务内一起冻结 child、creation
+          identity、membership preimage 和登记 revision，不接受外部 revision。
         """
         validate_thread_creation_key(idempotency_key)
         if initial_state not in _INITIAL_STATE_VALUES:
@@ -357,14 +370,27 @@ class ThreadCreationRecordMixin:
             raise ValueError(
                 f"delegated child 必须携带非空 delegation_id: {delegation_id!r}"
             )
-        if collaboration_precondition_revision is not None and (
-            not isinstance(collaboration_precondition_revision, int)
-            or isinstance(collaboration_precondition_revision, bool)
-        ):
-            raise TypeError(
-                "collaboration_precondition_revision 必须是整数或 None: "
-                f"{collaboration_precondition_revision!r}"
-            )
+        if (delegation_id is None) != (collaboration_member is None):
+            raise ValueError("delegated creation 必须同时提供 delegation 与 member")
+        if collaboration_member is not None:
+            if not isinstance(collaboration_member, CollaborationMemberInput):
+                raise TypeError("collaboration_member 必须是 CollaborationMemberInput")
+            if task_seed is None or task_reference is None or owner_session_id is None:
+                raise ValueError("delegated creation 必须冻结 owner、task seed/reference")
+            validate_session_id(owner_session_id)
+            validate_thread_id(collaboration_member.coordinator_thread_id)
+            for value in (collaboration_member.coordinator_session_id,
+                          collaboration_member.coordinator_thread_id,
+                          collaboration_member.role, collaboration_member.subagent_type,
+                          collaboration_member.title):
+                if not isinstance(value, str) or not value:
+                    raise ValueError("collaboration member 冻结字段不能为空")
+            reference = json.loads(task_reference)
+            if (reference.get("parent_session_id"), reference.get("parent_thread_id"),
+                reference.get("delegation_id"), collaboration_member.coordinator_session_id) != (
+                    owner_session_id, collaboration_member.coordinator_thread_id,
+                    delegation_id, owner_session_id):
+                raise RuntimeError("collaboration member 与 owner/task reference 不一致")
         with self._write_transaction():
             existing = self._fetch_thread_creation_record(
                 self._connection, idempotency_key
@@ -390,6 +416,23 @@ class ThreadCreationRecordMixin:
                         f"requested_thread_id={thread_id!r}"
                     )
                 record = self._thread_creation_record_from_row(existing)
+                if delegation_id != record.delegation_id:
+                    raise RuntimeError("thread creation delegation 与冻结身份不一致")
+                if collaboration_member is not None:
+                    if (record.initial_state, record.graph_binding, record.capability_profile,
+                        record.task_seed, record.task_reference) != (
+                            initial_state, graph_binding, capability_profile, task_seed, task_reference):
+                        raise RuntimeError("delegated creation 同 key 的冻结请求 preimage 冲突")
+                    member = self.get_collaboration_member(record.delegation_id)
+                    if record.state == "aborted" or (
+                        member.coordinator_session_id, member.coordinator_thread_id,
+                        member.role, member.subagent_type, member.title, member.task_seed,
+                    ) != (
+                        collaboration_member.coordinator_session_id, collaboration_member.coordinator_thread_id,
+                        collaboration_member.role, collaboration_member.subagent_type,
+                        collaboration_member.title, task_seed,
+                    ):
+                        raise RuntimeError("collaboration member 幂等 preimage 冲突或已取消")
                 if (record.purpose, record.request_intent_json) != (purpose, request_intent_json):
                     raise RuntimeError("thread creation 同 key 的 purpose/请求意图冲突")
             else:
@@ -404,9 +447,7 @@ class ThreadCreationRecordMixin:
                     delegation_id=delegation_id,
                     task_seed=task_seed,
                     task_reference=task_reference,
-                    collaboration_precondition_revision=(
-                        collaboration_precondition_revision
-                    ),
+                    collaboration_member=collaboration_member,
                     purpose=purpose,
                     request_intent_json=request_intent_json,
                     fork_delivery_request_id=fork_delivery_request_id,
@@ -426,7 +467,7 @@ class ThreadCreationRecordMixin:
         delegation_id: str | None,
         task_seed: str | None,
         task_reference: str | None,
-        collaboration_precondition_revision: int | None,
+        collaboration_member: CollaborationMemberInput | None,
         purpose: str,
         request_intent_json: str | None,
         fork_delivery_request_id: str | None,
@@ -522,6 +563,22 @@ class ThreadCreationRecordMixin:
             separators=(",", ":"),
         ) if purpose == "task" else None
         record_created_at = datetime.now(UTC).isoformat()
+        collaboration_revision = None
+        membership_hash = None
+        if collaboration_member is not None:
+            if delegation_id is None or task_seed is None or task_reference is None:
+                raise RuntimeError("delegated creation 缺少已校验的冻结请求")
+            if self._connection.execute(
+                "SELECT 1 FROM thread_catalog WHERE thread_id=?",
+                (collaboration_member.coordinator_thread_id,),
+            ).fetchone() is None:
+                raise RuntimeError("delegated parent thread 不在 owner catalog")
+            collaboration_revision, membership_hash = prepare_collaboration_member(
+                self._connection, creation_idempotency_key=idempotency_key,
+                creation_preimage_hash=preimage_hash, delegation_id=delegation_id,
+                child_thread_id=child_thread_id, task_seed=task_seed,
+                task_reference=task_reference, member=collaboration_member,
+            )
         # 命名参数逐列对应（避免位置占位符错位）：artifact_manifest/
         # artifact_manifest_hash/abort_reason 三列此处为 NULL，由
         # freeze_thread_creation_artifact_manifest 与 abort 流程分别回填。
@@ -532,7 +589,7 @@ class ThreadCreationRecordMixin:
             ":delegation_id, :child_thread_id, :final_relative_locator, "
             ":staging_locator, NULL, NULL, :graph_binding, "
             ":capability_profile, :task_seed, :task_reference, "
-            ":owner_generation, :catalog_revision, :collaboration_revision, "
+            ":owner_generation, :catalog_revision, :collaboration_revision, :membership_hash, "
             ":initial_state, :admission_intent, NULL, :child_created_at, "
             ":record_created_at, :record_updated_at, :purpose, :request_intent_json, :fork_delivery_request_id, NULL)",
             {
@@ -548,7 +605,8 @@ class ThreadCreationRecordMixin:
                 "task_reference": task_reference,
                 "owner_generation": int(fence_row["generation"]),
                 "catalog_revision": catalog_precondition_revision,
-                "collaboration_revision": collaboration_precondition_revision,
+                "collaboration_revision": collaboration_revision,
+                "membership_hash": membership_hash,
                 "initial_state": initial_state,
                 "admission_intent": admission_intent,
                 "child_created_at": child_created_at.isoformat(),
@@ -565,6 +623,11 @@ class ThreadCreationRecordMixin:
             raise RuntimeError(
                 "thread creation record 插入后不可见（事务异常）: "
                 f"key={idempotency_key!r}"
+            )
+        if collaboration_member is not None:
+            CollaborationFanoutMixin._freeze_collaboration_member_change_transaction(
+                self,
+                self._connection, delegation_id, "member.registered", bump_revision=False,
             )
         return self._thread_creation_record_from_row(row)
 

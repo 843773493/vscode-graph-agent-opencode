@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from app.core.session_control_store import ThreadCreationRecord
     from app.core.session_control_store.contracts import ThreadGraphBindingRecord
 
 from app.core.identifier import (
@@ -39,7 +40,6 @@ from app.core.session_catalog_store.validators import (
     validate_thread_id,
 )
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
-from app.core.session_control_store import SessionControlStore, ThreadCreationRecord
 
 
 class CreationJournalMixin:
@@ -247,6 +247,11 @@ class CreationJournalMixin:
         self, capture: ForkSourceCaptureRecord, *, creation: SessionCreationRecord | ThreadCreationRecord, reason: str,
     ) -> None:
         """调用方持有目标 gate；先关闭 child 控制库，再提交 workspace 事务。"""
+        from app.core.session_control_store import (
+            SessionControlStore,
+            ThreadCreationRecord,
+        )
+
         if capture.creation_key is None:
             raise RuntimeError("fork abort 缺少 prepared creation capability")
         request = json.loads(capture.request_json)

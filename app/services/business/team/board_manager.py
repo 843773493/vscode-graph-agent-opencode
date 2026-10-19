@@ -272,25 +272,50 @@ class TeamBoardManager:
             work_mode="write", instructions="负责拆分工作、修改代码并协调团队成员。",
             status="active", joined_at=board.created_at, updated_at=board.created_at,
         )]
-        for row in control.list_collaboration_members(coordinator_session_id=board.session_id):
-            seed = json.loads(row.task_seed)
-            context = seed["trusted_context"]
-            if context.get("team_id") != board.team_id:
-                continue
-            if row.coordinator_thread_id != board.coordinator_thread_id or context["coordinator_thread_id"] != board.coordinator_thread_id:
-                raise RuntimeError(f"团队成员的冻结协调线程不一致: {row.delegation_id}")
-            if row.child_thread_id is None:
-                if row.state == "published":
-                    raise RuntimeError(f"published 团队成员缺少 child thread: {row.delegation_id}")
-                continue
-            intent = control.get_initial_execution_intent(row.delegation_id)
-            status = "cancelled" if row.state == "cancelled" else "active" if row.state == "published" and intent.state == "bound" else "pending"
-            members.append(TeamMemberDTO(
-                thread_id=row.child_thread_id, delegation_id=row.delegation_id,
-                role=row.role, source="delegated", work_mode=context["work_mode"],
-                instructions=seed.get("untrusted_instructions", ""), status=status,
-                joined_at=row.registered_at, updated_at=intent.intent_updated_at,
-            ))
+        with control.read_transaction():
+            for row in control.list_collaboration_members(
+                coordinator_session_id=board.session_id
+            ):
+                if row.state == "registering":
+                    continue
+                seed = json.loads(row.task_seed)
+                context = seed["trusted_context"]
+                if context.get("team_id") != board.team_id:
+                    continue
+                if row.coordinator_thread_id != board.coordinator_thread_id or context["coordinator_thread_id"] != board.coordinator_thread_id:
+                    raise RuntimeError(f"团队成员的冻结协调线程不一致: {row.delegation_id}")
+                if row.child_thread_id is None:
+                    if row.state == "published":
+                        raise RuntimeError(f"published 团队成员缺少 child thread: {row.delegation_id}")
+                    continue
+                if row.state == "cancelled":
+                    status = "cancelled"
+                    updated_at = row.updated_at
+                elif row.state == "published":
+                    intent = control.get_initial_execution_intent(
+                        row.creation_idempotency_key
+                    )
+                    if intent.thread_id != row.child_thread_id:
+                        raise RuntimeError(
+                            "published 团队成员与 initial execution intent 不一致: "
+                            f"delegation_id={row.delegation_id}, "
+                            f"member_thread_id={row.child_thread_id}, "
+                            f"intent_thread_id={intent.thread_id}"
+                        )
+                    control.validate_initial_execution_readiness(intent)
+                    status = "active" if intent.state == "bound" else "pending"
+                    updated_at = intent.intent_updated_at
+                else:
+                    raise RuntimeError(
+                        "团队成员状态非法（fail closed）: "
+                        f"delegation_id={row.delegation_id}, state={row.state!r}"
+                    )
+                members.append(TeamMemberDTO(
+                    thread_id=row.child_thread_id, delegation_id=row.delegation_id,
+                    role=row.role, source="delegated", work_mode=context["work_mode"],
+                    instructions=seed.get("untrusted_instructions", ""), status=status,
+                    joined_at=row.registered_at, updated_at=updated_at,
+                ))
         return board.model_copy(update={
             "members": members, "recent_events": self._store.recent_events(board.session_id, board.team_id),
         })

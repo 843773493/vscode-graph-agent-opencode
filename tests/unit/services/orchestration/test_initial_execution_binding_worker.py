@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from app.core.identifier import create_uuid_hex
-from app.core.session_control_store import SessionControlStore
+from app.core.session_control_store import CollaborationMemberInput, SessionControlStore
 from app.services.orchestration.initial_execution_binding_worker import (
     InitialExecutionBindingError,
     InitialExecutionBindingTarget,
@@ -47,12 +47,14 @@ def store(tmp_path: Path) -> SessionControlStore:
     created.close()
 
 
-def prepare_published_intent(store: SessionControlStore):
+def prepare_published_intent(store: SessionControlStore, *, delegated: bool = False):
     """published record + pending intent（identity 由 admission key 派生）。"""
     store.initialize_main_thread(
         make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
     )
     store.initialize_fence("active", 1)
+    owner_session_id = make_session_id()
+    parent_thread_id = str(store.get_main_thread()["thread_id"])
     graph_binding = TEST_THREAD_GRAPH_BINDING_JSON
     capability_profile = json.dumps(
         {"tools": ["read_file"]}, sort_keys=True, separators=(",", ":")
@@ -71,12 +73,17 @@ def prepare_published_intent(store: SessionControlStore):
             sort_keys=True,
             separators=(",", ":"),
         ),
-        task_reference=None,
+        task_reference=(json.dumps({"parent_session_id": owner_session_id,
+            "parent_thread_id": parent_thread_id, "delegation_id": "del-1"}) if delegated else None),
+        delegation_id="del-1" if delegated else None, owner_session_id=owner_session_id,
+        collaboration_member=(CollaborationMemberInput(
+            coordinator_session_id=owner_session_id, coordinator_thread_id=parent_thread_id,
+            role="reviewer", subagent_type="general-purpose", title="冻结任务",
+        ) if delegated else None),
     )
     store.freeze_thread_creation_artifact_manifest(
         "key-1", artifact_manifest="{}", artifact_manifest_hash="c" * 64
     )
-    owner_session_id = make_session_id()
     store.publish_thread_creation_record("key-1", session_id=owner_session_id)
     return store.get_initial_execution_intent("key-1")
 
@@ -371,3 +378,64 @@ def test_lifecycle_requires_start_and_stop_is_idempotent(
     worker.stop()
     with pytest.raises(RuntimeError, match="未启动"):
         worker.bind_pending_once()
+
+
+@pytest.mark.parametrize(("table", "field", "value"), [
+    ("collaboration_members", "role", "other"),
+    ("collaboration_members", "subagent_type", "other"),
+    ("collaboration_members", "title", "任务漂移"),
+    ("collaboration_members", "task_seed", '{}'),
+    ("collaboration_members", "coordinator_session_id", "ses_" + "1" * 32),
+    ("collaboration_members", "coordinator_thread_id", "thr_" + "1" * 32),
+    ("collaboration_members", "child_thread_id", "thr_" + "1" * 32),
+    ("collaboration_members", "creation_idempotency_key", "other-creation"),
+    ("collaboration_members", "membership_preimage_hash", "f" * 64),
+    ("collaboration_members", "registered_revision", 99),
+    ("thread_creation_records", "task_seed", '{}'),
+    ("thread_creation_records", "task_reference", '{}'),
+    ("thread_creation_records", "preimage_hash", "f" * 64),
+])
+def test_readiness_and_claim_reject_membership_drift_before_binder(
+    store: SessionControlStore, table: str, field: str, value: object,
+) -> None:
+    intent = prepare_published_intent(store, delegated=True)
+    before_fanouts = store.list_collaboration_fanouts()
+    store.connection.execute(f"UPDATE {table} SET {field}=?", (value,))
+    calls = []
+    def binder(target: InitialExecutionBindingTarget) -> InitialExecutionBindOutcome:
+        calls.append(target)
+        return identity_binder(target)
+    worker = make_worker(store, binder=binder)
+    worker.start()
+    with pytest.raises(RuntimeError, match="collaboration"):
+        worker.bind_pending_once()
+    with pytest.raises(RuntimeError, match="collaboration"):
+        store.claim_initial_execution_intent("key-1", claim_owner="worker-a", claim_generation=1)
+    assert calls == []
+    assert store.get_initial_execution_intent("key-1") == intent
+    assert store.list_collaboration_fanouts() == before_fanouts
+
+
+def test_binder_to_bound_rechecks_membership_without_ready_event(store: SessionControlStore) -> None:
+    intent = prepare_published_intent(store, delegated=True)
+    before_fanouts = store.list_collaboration_fanouts()
+    def binder(target: InitialExecutionBindingTarget) -> InitialExecutionBindOutcome:
+        store.connection.execute("UPDATE collaboration_members SET title='binder后漂移'")
+        return identity_binder(target)
+    worker = make_worker(store, binder=binder)
+    worker.start()
+    with pytest.raises(RuntimeError, match="membership preimage"):
+        worker.bind_pending_once()
+    current = store.get_initial_execution_intent("key-1")
+    assert current.state == "pending"
+    assert (current.execution_binding_id, current.job_id) == (intent.execution_binding_id, intent.job_id)
+    assert current.claim_owner == "worker-a"
+    assert store.list_collaboration_fanouts() == before_fanouts
+
+
+def test_readiness_rejects_stale_intent_snapshot_before_binder(store: SessionControlStore) -> None:
+    intent = prepare_published_intent(store)
+    store.connection.execute("UPDATE thread_execution_intents SET binding_preimage_hash=?", ("f" * 64,))
+    with pytest.raises(RuntimeError, match="冻结快照已漂移"):
+        store.validate_initial_execution_readiness(intent)
+    assert store.get_initial_execution_intent("key-1").claim_owner is None

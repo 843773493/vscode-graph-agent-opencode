@@ -8,8 +8,11 @@ session/thread/name 复用生产 CSM 的同一 load_skill(mode="untrack") mutati
 
 from __future__ import annotations
 
+from contextlib import closing
+
 from app.core.exceptions import NotFoundError
 from app.core.identifier import create_uuid_hex
+from app.core.session_control_store import SessionControlStore
 from app.schemas.internal_v2.session import (
     SessionSkillUntrackErrorDTO,
     SessionSkillUntrackResultDTO,
@@ -51,7 +54,6 @@ class SessionSkillTrackingService:
             session_id, thread_id, operation_id=operation_id,
             payload={"kind": "skill_untrack", "name": name}, recovery_ref=operation_id,
         ):
-            main_thread_id = self._session_service.path_resolver.main_thread_id(session_id)
             owner = ContextSourceOwnerKey(session_id=session_id, thread_id=thread_id)
             if thread_id == session_id:
                 # 裸 session_id 不是合法 thread 身份，提前拒绝保证零状态变化。
@@ -59,16 +61,38 @@ class SessionSkillTrackingService:
                     "SessionThread 必须使用 catalog 冻结的真实 thread_id，"
                     f"不能把裸 session_id 当作 thread_id: {session_id}"
                 )
-            # 错误 thread 零状态变化：会话不存在（404）或 thread 未在权威
-            # thread_catalog 登记（404）都在触碰 rollout owner 之前失败。
-            child_threads = await self._session_service.list_child_threads(session_id)
-            if thread_id != main_thread_id and thread_id not in {
-                item.thread_id for item in child_threads.items
-            }:
-                raise NotFoundError(
-                    f"SessionThread 不存在: session_id={session_id}, "
-                    f"thread_id={thread_id}"
+            # 当前调用已持 Session exclusive admission；直接用 owner control
+            # catalog 校验精确身份，避免嵌套 child-list shared admission。
+            control_database = (
+                self._session_service.path_resolver.resolve_session_node(session_id)
+                / "session-control.sqlite"
+            )
+            with closing(SessionControlStore(control_database, read_only=True)) as control:
+                main_thread_id = str(control.get_main_thread()["thread_id"])
+                catalog_main_thread_id = (
+                    self._session_service.path_resolver.main_thread_id(session_id)
                 )
+                if main_thread_id != catalog_main_thread_id:
+                    raise RuntimeError(
+                        "session control main row 与 workspace catalog 冻结的 "
+                        "main_thread_id 不一致（fail closed）: "
+                        f"session_id={session_id}, "
+                        f"control_thread_id={main_thread_id!r}, "
+                        f"catalog_main_thread_id={catalog_main_thread_id!r}"
+                    )
+                if thread_id != main_thread_id:
+                    if thread_id == "main":
+                        raise NotFoundError(
+                            f"SessionThread 不存在: session_id={session_id}, "
+                            f"thread_id={thread_id}"
+                        )
+                    try:
+                        control.get_published_child_thread_locator(thread_id)
+                    except KeyError as error:
+                        raise NotFoundError(
+                            f"SessionThread 不存在: session_id={session_id}, "
+                            f"thread_id={thread_id}"
+                        ) from error
             if not self._checkpointer.context_source_control_owner_available(owner):
                 # 合成 SessionThread 没有 durable ContextStore owner，不允许为它
                 # 伪造持久化 untrack。
