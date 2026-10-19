@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC
 from typing import cast
 
 from google.protobuf import json_format
@@ -206,7 +207,7 @@ def session_sse_to_json(value: session_stream_pb2.SessionExecutionSse) -> dict[s
         "session_id": header.session_id,
         "job_id": header.job_id if header.HasField("job_id") else None,
         "type": event.type,
-        "time": header.time.ToDatetime().isoformat().replace("+00:00", "Z"),
+        "time": header.time.ToDatetime(tzinfo=UTC).isoformat().replace("+00:00", "Z"),
         "payload": _event_payload_to_json(event),
     }
     return {

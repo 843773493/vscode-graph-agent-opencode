@@ -20,13 +20,13 @@ def test_child_message_sse_round_trip_preserves_owner_and_lifecycle_time() -> No
     value = SessionExecutionSseDTO(
         event=MessageUpdatedExecutionEventDTO(
             event_id="evt_child_message",
-            session_id="ses_child_owner",
+            session_id="ses_019bef80066f7038ae8e88ccb2e5e2ea",
             job_id="job_child_message",
             time=published_at,
             type="message.updated",
             payload=MessageObservationDTO(
                 message_id="msg_child",
-                session_id="ses_child_owner",
+                session_id="ses_019bef80066f7038ae8e88ccb2e5e2ea",
                 thread_id="thr_child",
                 role="user",
                 content="child input",
