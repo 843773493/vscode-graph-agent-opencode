@@ -67,7 +67,6 @@ class LLMRequestLogService:
             job_id=raw_job_id if isinstance(raw_job_id, str) else None,
             timestamp=timestamp,
             file_name=log_file.name,
-            file_path=str(log_file),
             request=request,
             response=response,
             upstream=upstream,

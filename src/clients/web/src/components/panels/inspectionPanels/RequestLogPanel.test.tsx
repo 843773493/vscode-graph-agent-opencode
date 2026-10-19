@@ -12,7 +12,6 @@ function requestLog(index: number): LLMRequestLogRecord {
     job_id: `job_${index}`,
     timestamp: index,
     file_name: `${index}.json`,
-    file_path: `/logs/${index}.json`,
     request: { model_name: `model-${index}`, messages: [] },
     response: {},
     upstream: {},

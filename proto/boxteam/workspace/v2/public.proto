@@ -269,12 +269,14 @@ message JobUpdatedExecutionEventDTO {
 }
 
 message LLMRequestLogRecordDTO {
+  reserved 5;
+  reserved "file_path";
+
   string session_id = 1;
   optional string job_id = 2;
   // handler 结束或失败后组装日志的 epoch 毫秒时刻；文件名的 epoch 纳秒只用于排序。
   int64 timestamp = 3;
   string file_name = 4;
-  string file_path = 5;
   optional google.protobuf.Struct request = 6;
   optional google.protobuf.Struct response = 7;
   optional google.protobuf.Struct upstream = 8;

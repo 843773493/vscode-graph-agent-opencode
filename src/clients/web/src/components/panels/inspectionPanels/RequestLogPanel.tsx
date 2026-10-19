@@ -492,7 +492,7 @@ export default function RequestLogPanel({
           <RequestLogKeyFlowSummary {...keyFlow} />
           {renderedLogs.map((log, index) => (
             <RequestLogCard
-              key={`${log.file_path}-${log.timestamp}-${index}`}
+              key={`${log.file_name}-${log.timestamp}-${index}`}
               log={log}
               chronologicalIndex={firstVisibleIndex + index}
             />

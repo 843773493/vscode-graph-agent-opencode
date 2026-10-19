@@ -49,7 +49,8 @@ def test_list_session_logs_reads_request_and_response(
     records = LLMRequestLogService(sessions_dir=sessions_dir).list_session_logs(session_id)
 
     assert [record.timestamp for record in records] == [1000, 2000]
-    assert [record.file_path for record in records] == [str(first), str(second)]
+    assert [record.file_name for record in records] == [first.name, second.name]
+    assert all("file_path" not in record.model_dump() for record in records)
     assert records[0].request["messages"][0]["content"] == "前一个"
     assert records[0].response["result"][0]["content"] == "响应一"
     assert records[0].upstream == {"attempts": []}

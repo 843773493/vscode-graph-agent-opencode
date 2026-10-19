@@ -107,6 +107,7 @@ def test_resource_navigation_wire_keeps_bounded_request_and_lightweight_nodes() 
 def test_information_wire_reserves_removed_physical_location_fields() -> None:
     for message_type, field_name, number in (
         (public_pb2.SessionInformationSnapshotDTO, "storage_path", 7),
+        (public_pb2.LLMRequestLogRecordDTO, "file_path", 5),
         (public_pb2.SessionInformationWorkspaceDTO, "root_path", 3),
         (public_pb2.WorkspaceDTO, "root_path", 2),
         (public_pb2.WorkspaceContextDTO, "root_path", 2),

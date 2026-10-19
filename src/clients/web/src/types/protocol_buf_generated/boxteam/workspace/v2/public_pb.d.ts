@@ -1172,11 +1172,6 @@ export declare type LLMRequestLogRecordDTO = Message<"boxteam.workspace.v2.LLMRe
   fileName: string;
 
   /**
-   * @generated from field: string file_path = 5;
-   */
-  filePath: string;
-
-  /**
    * @generated from field: optional google.protobuf.Struct request = 6;
    */
   request?: JsonObject | undefined;

@@ -276,7 +276,6 @@ export interface LLMRequestLogRecordDTO {
   /** handler 结束或失败后组装日志的 epoch 毫秒时刻；文件名的 epoch 纳秒只用于排序。 */
   timestamp: number;
   file_name: string;
-  file_path: string;
   request?: { [key: string]: any } | undefined;
   response?: { [key: string]: any } | undefined;
   upstream?: { [key: string]: any } | undefined;
@@ -4119,7 +4118,6 @@ function createBaseLLMRequestLogRecordDTO(): LLMRequestLogRecordDTO {
     job_id: undefined,
     timestamp: 0,
     file_name: "",
-    file_path: "",
     request: undefined,
     response: undefined,
     upstream: undefined,
@@ -4133,7 +4131,6 @@ export const LLMRequestLogRecordDTO: MessageFns<LLMRequestLogRecordDTO> = {
       job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : undefined,
       timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : 0,
       file_name: isSet(object.file_name) ? globalThis.String(object.file_name) : "",
-      file_path: isSet(object.file_path) ? globalThis.String(object.file_path) : "",
       request: isObject(object.request) ? object.request : undefined,
       response: isObject(object.response) ? object.response : undefined,
       upstream: isObject(object.upstream) ? object.upstream : undefined,
@@ -4153,9 +4150,6 @@ export const LLMRequestLogRecordDTO: MessageFns<LLMRequestLogRecordDTO> = {
     }
     if (message.file_name !== "") {
       obj.file_name = message.file_name;
-    }
-    if (message.file_path !== "") {
-      obj.file_path = message.file_path;
     }
     if (message.request !== undefined) {
       obj.request = message.request;
@@ -4178,7 +4172,6 @@ export const LLMRequestLogRecordDTO: MessageFns<LLMRequestLogRecordDTO> = {
     message.job_id = object.job_id ?? undefined;
     message.timestamp = object.timestamp ?? 0;
     message.file_name = object.file_name ?? "";
-    message.file_path = object.file_path ?? "";
     message.request = object.request ?? undefined;
     message.response = object.response ?? undefined;
     message.upstream = object.upstream ?? undefined;

@@ -15,7 +15,6 @@ function requestLog(
     session_id: "ses_request_log_fixture",
     timestamp: 0,
     file_name: "request-log.json",
-    file_path: "/tmp/request-log.json",
     request: {},
     response: {},
     upstream: {},
@@ -62,7 +61,6 @@ function assert(condition: unknown, message: string): asserts condition {
 const multiCustomToolLog = requestLog({
   timestamp: 1,
   session_id: "ses_multi_custom_tool",
-  file_path: "/tmp/request-log.json",
   file_name: "request-log.json",
   request: {
     tools: [{ name: "invoke_extension_tool" }],
@@ -120,7 +118,6 @@ assert(
 const splitResultLog = requestLog({
   timestamp: 1,
   session_id: "ses_split_custom_tool",
-  file_path: "/tmp/result-log.json",
   file_name: "result-log.json",
   request: {
     tools: [{ name: "invoke_extension_tool" }],
@@ -140,7 +137,6 @@ const splitResultLog = requestLog({
 const splitCallLog = requestLog({
   timestamp: 2,
   session_id: "ses_split_custom_tool",
-  file_path: "/tmp/call-log.json",
   file_name: "call-log.json",
   request: {
     tools: [{ name: "invoke_extension_tool" }],
@@ -172,7 +168,6 @@ assert(
 const retryAfterInvalidInvocationLog = requestLog({
   timestamp: 3,
   session_id: "ses_retry_after_invalid_invocation",
-  file_path: "/tmp/retry-after-invalid-invocation.json",
   file_name: "retry-after-invalid-invocation.json",
   request: {
     tools: [{ name: "invoke_extension_tool" }],
@@ -236,7 +231,6 @@ assert(
 const malformedArgumentLog = requestLog({
   timestamp: 2,
   session_id: "ses_malformed_argument",
-  file_path: "/tmp/malformed-request-log.json",
   file_name: "malformed-request-log.json",
   request: {
     tools: [{ name: "invoke_extension_tool" }],
@@ -324,7 +318,6 @@ assert(
 const replayLog = requestLog({
   timestamp: 4,
   session_id: "ses_request_replay",
-  file_path: "/tmp/request-replay.json",
   file_name: "request-replay.json",
   request: {
     messages: [{ type: "human", content: "测试" }],
