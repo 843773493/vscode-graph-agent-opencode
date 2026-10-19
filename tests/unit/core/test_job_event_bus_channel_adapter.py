@@ -12,6 +12,7 @@ import asyncio
 import pytest
 
 from app.core.job_event_bus import JOB_EVENT_HISTORY_SIZE, EventType, JobEventBus
+from tests.support.job_thread_fixture import job_fixture_thread_id
 
 
 @pytest.mark.asyncio
@@ -83,7 +84,7 @@ async def test_shared_event_service_reuses_channels_across_buses() -> None:
     await first.publish(
         job_id="job_shared",
         event_type=EventType.JOB_CREATED,
-        payload={"session_id": "ses_1", "message": "hi", "agent_id": "default"},
+        payload={"session_id": "ses_1", "thread_id": job_fixture_thread_id("ses_1"), "message": "hi", "agent_id": "default"},
         agent_id="test",
     )
     await second.publish(

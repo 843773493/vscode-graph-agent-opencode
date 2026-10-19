@@ -19,6 +19,7 @@ from app.schemas.event import (
 from app.services.infrastructure.trace_event_recorder import TraceEventRecorder
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.orchestration.execution_step.stream_bindings import StepEventPublisher
+from tests.support.job_thread_fixture import job_fixture_thread_id
 
 
 def _job_created(job_id: str, session_id: str) -> JobCreatedEvent:
@@ -26,7 +27,7 @@ def _job_created(job_id: str, session_id: str) -> JobCreatedEvent:
         event_id=f"evt_created_{job_id}",
         job_id=job_id,
         timestamp=datetime.now(UTC),
-        payload=JobCreatedPayload(session_id=session_id, message="hi", agent_id="a"),
+        payload=JobCreatedPayload(session_id=session_id, thread_id=job_fixture_thread_id(session_id), message="hi", agent_id="a"),
     )
 
 
@@ -83,7 +84,7 @@ async def test_recorder_persists_job_events(tmp_path: Path, session_bundle_facto
         await bus.publish(
             job_id="job_1",
             event_type=EventType.JOB_CREATED,
-            payload={"session_id": "ses_019ba1bfed0773fc80049132b9745deb", "message": "hi", "agent_id": "default"},
+            payload={"session_id": "ses_019ba1bfed0773fc80049132b9745deb", "thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_019ba1bfed0773fc80049132b9745deb"), "message": "hi", "agent_id": "default"},
             agent_id="test",
         )
         await bus.publish(

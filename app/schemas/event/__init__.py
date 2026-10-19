@@ -62,6 +62,7 @@ class MessageCreatedPayload(BaseModel):
 class JobCreatedPayload(BaseModel):
     """JOB_CREATED 事件的 payload"""
     session_id: str
+    thread_id: str = Field(min_length=1)
     message: str
     agent_id: str
     message_id: str | None = None

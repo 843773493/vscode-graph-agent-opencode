@@ -437,6 +437,7 @@ async def test_turn_migration_snapshot_uses_immutable_message_boundary(
         timestamp=datetime.now(UTC),
         payload=JobCreatedPayload(
             session_id=session_id,
+            thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
             message="first",
             agent_id="default",
         ),
@@ -447,6 +448,7 @@ async def test_turn_migration_snapshot_uses_immutable_message_boundary(
         timestamp=datetime.now(UTC),
         payload=JobCreatedPayload(
             session_id=session_id,
+            thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
             message="second",
             agent_id="default",
         ),
@@ -494,7 +496,7 @@ async def test_store_appends_message_trace_for_key_events(
         event_id="evt_job",
         job_id="job_3",
         timestamp=now,
-        payload=JobCreatedPayload(session_id=session_id, message="hi", agent_id="default"),
+        payload=JobCreatedPayload(session_id=session_id, thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id), message="hi", agent_id="default"),
     )
     text_end = TextEndEvent(
         event_id="evt_text",
@@ -680,6 +682,7 @@ async def test_turn_bootstrap_index_keeps_job_start_beyond_128_events(
         timestamp=now,
         payload=JobCreatedPayload(
             session_id=session_id,
+            thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
             message="long",
             agent_id="default",
         ),
@@ -728,6 +731,7 @@ async def test_turn_bootstrap_uses_compact_index_without_parsing_huge_trace_line
             timestamp=datetime.now(UTC),
             payload=JobCreatedPayload(
                 session_id=session_id,
+                thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
                 message="x" * (2 * 1024 * 1024),
                 agent_id="default",
             ),
@@ -794,6 +798,7 @@ async def test_turn_index_recovers_commit_after_trace_files_were_flushed(
                 timestamp=datetime.now(UTC),
                 payload=JobCreatedPayload(
                     session_id=session_id,
+                    thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
                     message="recover",
                     agent_id="default",
                 ),
@@ -816,6 +821,7 @@ async def test_turn_index_recovers_commit_after_trace_files_were_flushed(
             timestamp=datetime.now(UTC),
             payload=JobCreatedPayload(
                 session_id=session_id,
+                thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
                 message="after recover",
                 agent_id="default",
             ),
@@ -878,6 +884,7 @@ async def test_next_append_recovers_incomplete_trace_transaction(
                 timestamp=datetime.now(UTC),
                 payload=JobCreatedPayload(
                     session_id=session_id,
+                    thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
                     message="failed",
                     agent_id="default",
                 ),
@@ -897,6 +904,7 @@ async def test_next_append_recovers_incomplete_trace_transaction(
             timestamp=datetime.now(UTC),
             payload=JobCreatedPayload(
                 session_id=session_id,
+                thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
                 message="next",
                 agent_id="default",
             ),
@@ -969,6 +977,7 @@ async def test_non_indexed_append_recovers_incomplete_trace_transaction(
                 timestamp=now,
                 payload=JobCreatedPayload(
                     session_id=session_id,
+                    thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
                     message="failed",
                     agent_id="default",
                 ),
@@ -997,6 +1006,7 @@ async def test_non_indexed_append_recovers_incomplete_trace_transaction(
             timestamp=now,
             payload=JobCreatedPayload(
                 session_id=session_id,
+                thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
                 message="indexed after recovery",
                 agent_id="default",
             ),
@@ -1100,6 +1110,7 @@ async def test_partial_trace_tail_invading_committed_watermark_fails_fast(
             timestamp=now,
             payload=JobCreatedPayload(
                 session_id=session_id,
+                thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
                 message="committed",
                 agent_id="default",
             ),
@@ -1150,6 +1161,7 @@ async def test_next_append_succeeds_when_caller_crashes_after_index_manifest(
                 timestamp=datetime.now(UTC),
                 payload=JobCreatedPayload(
                     session_id=session_id,
+                    thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
                     message="committed",
                     agent_id="default",
                 ),
@@ -1165,6 +1177,7 @@ async def test_next_append_succeeds_when_caller_crashes_after_index_manifest(
             timestamp=datetime.now(UTC),
             payload=JobCreatedPayload(
                 session_id=session_id,
+                thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
                 message="after",
                 agent_id="default",
             ),
@@ -1220,6 +1233,7 @@ async def test_partial_semantic_trace_recovery_preserves_prior_text_delta(
                 timestamp=now,
                 payload=JobCreatedPayload(
                     session_id=session_id,
+                    thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
                     message="partial",
                     agent_id="default",
                 ),
@@ -1239,6 +1253,7 @@ async def test_partial_semantic_trace_recovery_preserves_prior_text_delta(
             timestamp=now,
             payload=JobCreatedPayload(
                 session_id=session_id,
+                thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
                 message="after",
                 agent_id="default",
             ),
@@ -1266,6 +1281,7 @@ async def test_latest_semantic_cursor_uses_index_without_full_trace_scan(
             timestamp=datetime.now(UTC),
             payload=JobCreatedPayload(
                 session_id=session_id,
+                thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
                 message="cursor",
                 agent_id="default",
             ),
@@ -1300,6 +1316,7 @@ async def test_projected_cursor_streams_later_indexed_non_projected_event(
             timestamp=now,
             payload=JobCreatedPayload(
                 session_id=session_id,
+                thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
                 message="cursor",
                 agent_id="default",
             ),
@@ -1365,6 +1382,7 @@ async def test_text_delta_transport_cursor_resumes_without_trace_scan(
             timestamp=now,
             payload=JobCreatedPayload(
                 session_id=session_id,
+                thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
                 message="delta",
                 agent_id="default",
             ),
@@ -1448,6 +1466,7 @@ def test_legacy_index_rebuild_allows_unrecorded_interrupted_event(
         timestamp=now,
         payload=JobCreatedPayload(
             session_id=session_id,
+            thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
             message="legacy",
             agent_id="default",
         ),
@@ -1506,6 +1525,7 @@ async def test_legacy_prefix_is_rebuilt_after_non_semantic_append_for_resume(
         timestamp=now,
         payload=JobCreatedPayload(
             session_id=session_id,
+            thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
             message="legacy",
             agent_id="default",
         ),

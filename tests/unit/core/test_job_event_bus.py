@@ -4,8 +4,37 @@ import asyncio
 import logging
 
 import pytest
+from pydantic import ValidationError
 
 from app.core.job_event_bus import EventType, JobEventBus
+from app.schemas.event import Event
+from tests.support.job_thread_fixture import job_fixture_thread_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("thread_fields", [{}, {"thread_id": ""}, {"thread_id": None}])
+async def test_job_created_rejects_missing_thread_before_delivery(
+    thread_fields: dict[str, str | None],
+) -> None:
+    bus = JobEventBus()
+    received: list[Event] = []
+
+    async def record(event: Event) -> None:
+        received.append(event)
+
+    await bus.register_durable_listener(record)
+    with pytest.raises(ValidationError, match="thread_id"):
+        await bus.publish(
+            job_id="job_missing_thread",
+            event_type=EventType.JOB_CREATED,
+            payload={
+                "session_id": "ses_1", "message": "hi", "agent_id": "default",
+                **thread_fields,
+            },
+        )
+
+    assert received == []
+    assert await bus.list_events("job_missing_thread") == []
 
 
 @pytest.mark.asyncio
@@ -26,7 +55,7 @@ async def test_durable_listener_receives_event_before_publish_returns():
         bus.publish(
             job_id="job_1",
             event_type=EventType.JOB_CREATED,
-            payload={"session_id": "ses_1", "message": "hi", "agent_id": "default"},
+            payload={"session_id": "ses_1", "thread_id": job_fixture_thread_id("ses_1"), "message": "hi", "agent_id": "default"},
             agent_id="test",
         )
     )
@@ -54,7 +83,7 @@ async def test_unregister_durable_listener_stops_receiving():
     await bus.publish(
         job_id="job_1",
         event_type=EventType.JOB_CREATED,
-        payload={"session_id": "ses_1", "message": "hi", "agent_id": "default"},
+        payload={"session_id": "ses_1", "thread_id": job_fixture_thread_id("ses_1"), "message": "hi", "agent_id": "default"},
         agent_id="test",
     )
 

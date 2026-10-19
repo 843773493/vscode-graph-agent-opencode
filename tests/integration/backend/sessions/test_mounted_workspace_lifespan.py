@@ -536,12 +536,14 @@ async def test_double_mount_event_trace_message_background_and_catalog_isolation
         message_subscriptions = []
         try:
             event_a = await a.job_event_bus.publish(job_id, EventType.JOB_CREATED, {
-                "session_id": session_a, "message": "仅 A 的事件", "agent_id": "default",
+                "session_id": session_a, "thread_id": a.session_catalog.resolver.main_thread_id(session_a),
+                "message": "仅 A 的事件", "agent_id": "default",
             })
             assert (await asyncio.wait_for(subscriptions[0].get(), 2)).event_id == event_a.event_id
             assert subscriptions[1].empty()
             event_b = await b.job_event_bus.publish(job_id, EventType.JOB_CREATED, {
-                "session_id": session_b, "message": "仅 B 的事件", "agent_id": "default",
+                "session_id": session_b, "thread_id": b.session_catalog.resolver.main_thread_id(session_b),
+                "message": "仅 B 的事件", "agent_id": "default",
             })
             assert (await asyncio.wait_for(subscriptions[1].get(), 2)).event_id == event_b.event_id
             assert subscriptions[0].empty()

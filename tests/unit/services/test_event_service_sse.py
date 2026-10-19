@@ -6,9 +6,11 @@ import pytest
 
 from app.core.job_event_bus import JOB_EVENT_HISTORY_SIZE, JobEventBus
 from app.services.event_service import EventService, JobEventCursorGoneError
+from tests.support.job_thread_fixture import job_fixture_thread_id
 
 # SSE 编码边界强制 canonical session_id（OpenSpec 2.1），事件载荷必须自带。
 SESSION_ID = "ses_019bef80066f7038ae8e88ccb2e5e2ea"
+THREAD_ID = job_fixture_thread_id(SESSION_ID)
 
 
 @pytest.fixture
@@ -29,10 +31,10 @@ async def test_job_sse_replays_after_cursor_with_transport_id(
     first = await event_bus.publish(
         "job-replay",
         "job_created",
-        {"session_id": SESSION_ID, "message": "start", "agent_id": "default"},
+        {"session_id": SESSION_ID, "thread_id": THREAD_ID, "message": "start", "agent_id": "default"},
     )
     second = await event_bus.publish(
-        "job-replay", "job_started", {"session_id": SESSION_ID, "thread_id": "thr_sse_replay"}
+        "job-replay", "job_started", {"session_id": SESSION_ID, "thread_id": THREAD_ID}
     )
     await event_service.ensure_cursor("job-replay", first.event_id)
 
@@ -55,7 +57,7 @@ async def test_job_sse_rejects_foreign_or_missing_cursor(
     foreign = await event_bus.publish(
         "other-job",
         "job_created",
-        {"session_id": SESSION_ID, "message": "start", "agent_id": "default"},
+        {"session_id": SESSION_ID, "thread_id": THREAD_ID, "message": "start", "agent_id": "default"},
     )
 
     with pytest.raises(JobEventCursorGoneError):
@@ -70,7 +72,7 @@ async def _publish_many(bus: JobEventBus, job_id: str, count: int) -> list[str]:
         event = await bus.publish(
             job_id,
             "job_created",
-            {"session_id": SESSION_ID, "message": str(index), "agent_id": "default"},
+            {"session_id": SESSION_ID, "thread_id": THREAD_ID, "message": str(index), "agent_id": "default"},
         )
         event_ids.append(event.event_id)
     return event_ids
