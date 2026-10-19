@@ -176,6 +176,23 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
                 response = await client.post(path, json={"uri": uri, "operation": operation})
                 assert response.status_code in {400, 403, 404}, response.text
                 assert response.json()["detail"]["code"] == code
+            # 新模板只公布引用；通用文件树入口必须把私有产物留给原领域 owner。
+            session_id = "ses_019c3567da377a6f855e1bddac8f1f76"
+            for collection, artifact_id in (
+                ("attachments", "att_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                ("tool-results", "tool_bbbbbbbbbbbbbbbbbbbbbbbb.txt"),
+            ):
+                uri = resource_display_uri(
+                    scope="workspace", scope_id=workspace_id, kind="session",
+                    tail_segments=(session_id, collection, artifact_id),
+                )
+                response = await client.post(path, json={"uri": uri, "operation": "read"})
+                body = response.json()
+                receipts.append({"uri": uri, "operation": "read", "status": response.status_code, "body": body})
+                assert response.status_code == 403, response.text
+                assert body["detail"]["owner"] == "resource_uri_resolver"
+                assert body["detail"]["code"] == "capability_denied"
+                assert response.headers["X-Request-ID"] == body["request_id"]
             invalid_operation = await client.post(path, json={"uri": files_root, "operation": "write"})
             assert invalid_operation.status_code == 422
             # 激活另一个真实工作区后，原canonical Workspace路由仍命中原根。

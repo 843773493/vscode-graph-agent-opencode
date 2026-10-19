@@ -12,8 +12,10 @@ import re
 import string
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 from urllib.parse import quote, unquote
+
+from app.core.session_catalog_store.validators import validate_session_id
 
 _SCHEME: Final = "boxteam://"
 _SCOPE_KEYWORDS: Final = frozenset({"workspace", "user", "gateway", "inline"})
@@ -23,6 +25,11 @@ _SCOPE_KEYWORDS: Final = frozenset({"workspace", "user", "gateway", "inline"})
 _RESOURCE_KINDS: Final = frozenset({"agent-spec", "skills", "config", "session", "workspace", "folder", "files"})
 _NAME_CHARSET: Final = frozenset(string.ascii_letters + string.digits + "_-")
 _INVALID_PERCENT_ESCAPE: Final = re.compile(r"%(?![0-9A-Fa-f]{2})")
+# 产物末段保留原 owner 的业务 profile；工具结果的固定 .txt 不代表开放文件 child。
+_SESSION_ARTIFACT_ID_PATTERNS: Final = {
+    "attachments": re.compile(r"att_[0-9a-f]{32}"),
+    "tool-results": re.compile(r"tool_[0-9a-f]{24}\.txt"),
+}
 
 _GRAMMAR_REASON_CODES: Final = frozenset(
     {
@@ -76,6 +83,7 @@ class ParsedResourceUri:
     # resources/{kind}/ 之后的身份与解码后的文件 segment；skills 的 logical_name
     # 只取包名，文件名逐字保留。config/session 的 logical_name 即身份尾段逐段拼接。
     tail_segments: tuple[str, ...]
+    session_artifact_kind: Literal["attachments", "tool-results"] | None = None
 
 
 def _has_control_char(value: str) -> bool:
@@ -180,6 +188,7 @@ def _parsed(
     logical_name: str,
     display_uri: str,
     gateway_authority: str | None,
+    session_artifact_kind: Literal["attachments", "tool-results"] | None = None,
 ) -> ParsedResourceUri:
     return ParsedResourceUri(
         scope=scope,
@@ -189,6 +198,7 @@ def _parsed(
         display_uri=display_uri,
         gateway_authority=gateway_authority,
         tail_segments=tuple(tail_segments),
+        session_artifact_kind=session_artifact_kind,
     )
 
 
@@ -285,6 +295,34 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
         _expect_fixed_segment(tails[1], "AGENTS.md")
         return _parsed(scope, body[0], kind, tails, "root/AGENTS.md", uri, authority)
 
+    if kind == "session" and len(tails) >= 2 and tails[1].lower() in _SESSION_ARTIFACT_ID_PATTERNS:
+        # 所有段都是业务身份：先拒绝 escape，再校验结构与原 owner 的 ID profile。
+        for tail in tails:
+            _reject_identity_escape(tail)
+        if scope != "workspace" or len(tails) != 3:
+            raise ResourceUriGrammarError(
+                "malformed_path", "Session 产物必须精确指向 Workspace 内的单个附件或工具结果",
+            )
+        artifact_kind = tails[1].lower()
+        _expect_fixed_segment(tails[1], artifact_kind)
+        _validate_dynamic_segment(tails[0], field="session id")
+        try:
+            validate_session_id(tails[0])
+        except ValueError as error:
+            raise ResourceUriGrammarError(
+                "invalid_character", f"Session 产物的 session_id 非法: {tails[0]!r}",
+            ) from error
+        if tails[2] in {".", ".."}:
+            raise ResourceUriGrammarError("dot_segment", "Session 产物 ID 不得是点段")
+        if _SESSION_ARTIFACT_ID_PATTERNS[artifact_kind].fullmatch(tails[2]) is None:
+            raise ResourceUriGrammarError(
+                "invalid_character", f"Session 产物 ID 不符合原 owner profile: {tails[2]!r}",
+            )
+        return _parsed(
+            scope, body[0], kind, tails, "/".join(tails), uri, authority,
+            "attachments" if artifact_kind == "attachments" else "tool-results",
+        )
+
     # config 需要逻辑身份尾段；只有 workspace session 可以用空尾段表示集合根。
     if not tails and (
         kind == "config" or (kind == "session" and scope != "workspace")
@@ -341,6 +379,8 @@ def resource_display_uri(
     _validate_dynamic_segment(scope_id, field="scope id")
     if gateway_authority is not None:
         _validate_dynamic_segment(gateway_authority, field="gateway authority")
+    if any("/" in segment for segment in tail_segments):
+        raise ResourceUriGrammarError("invalid_character", "URI 构造的单个尾段不得包含分隔符")
     if kind in {"skills", "files"} and tail_segments:
         if kind == "skills":
             _validate_dynamic_segment(tail_segments[0], field="skill name")

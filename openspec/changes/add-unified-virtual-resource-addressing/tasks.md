@@ -75,7 +75,7 @@
 - [x] 8.1 在唯一寻址 owner 实现 directory/file/domain_object shape、公布的 child path 和操作能力，登记 files/root 工作区根、技能包根及单文件边界；不把 Session/assembly/config私有存储转成目录，不动态装配资源插件。
 - [x] 8.2 完成技能包根、SKILL.md 与 references/scripts多层child的单一构造/解析；使用第1.4/7.1组分段编码，验证根 containment及越界symlink拒绝，目录可导航不等于可写。
 - [x] 8.3 接入 files/root 唯一工作区文件树根，明确固定 workspace_id/Gateway/root，不依赖激活态；普通 ls/search/read 不注册每个文件的长期身份、revision或快照，只有显式来源追踪由原owner登记。
-- [ ] 8.4 在本 owner 登记 Session 产物单文件模板：`session/{session_id}/attachments/{attachment_id}`、`session/{session_id}/tool-results/{result_id}`；保留业务 ID 的既有 profile，原owner决定读取/授权/保留，不允许目录猜测或通用修改。消费迁移归 add-unified-resource-file-tools。
+- [x] 8.4 在本 owner 登记 Session 产物单文件模板：`session/{session_id}/attachments/{attachment_id}`、`session/{session_id}/tool-results/{result_id}`；保留业务 ID 的既有 profile，原owner决定读取/授权/保留，不允许目录猜测或通用修改。消费迁移归 add-unified-resource-file-tools。
 - [ ] 8.5 为本地/远端目录结果、Skill读取无activation、轻量搜索无注册、固定目标、文件能力拒绝和路径编码逐项留生产验收；文件执行错误归其独立owner合同，寻址错误仍只在本登记处。先固定本公共合同，再交独立文件工具消费change，不以规范修订勾实现。
 
 ## 9. Fork容器寻址与统一资源目标检查（2026-10-13，待实施）

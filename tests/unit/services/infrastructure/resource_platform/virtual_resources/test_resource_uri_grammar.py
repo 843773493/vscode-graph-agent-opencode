@@ -548,3 +548,98 @@ def test_files_root_rejects_unknown_root_or_invalid_child(tail: str, reason: str
     with pytest.raises(ResourceUriGrammarError) as excinfo:
         parse_resource_uri(uri)
     assert excinfo.value.reason_code == reason
+
+
+@pytest.mark.parametrize("authority", [None, "gateway_peer"])
+@pytest.mark.parametrize(
+    ("collection", "artifact_id"),
+    [
+        ("attachments", "att_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        ("tool-results", "tool_bbbbbbbbbbbbbbbbbbbbbbbb.txt"),
+    ],
+)
+def test_session_artifact_templates_preserve_owner_ids(
+    authority: str | None, collection: str, artifact_id: str,
+) -> None:
+    session_id = "ses_019c3567da377a6f855e1bddac8f1f76"
+    uri = resource_display_uri(
+        scope="workspace", scope_id="ws-1", kind="session",
+        tail_segments=(session_id, collection, artifact_id), gateway_authority=authority,
+    )
+    prefix = "boxteam://" + (f"{authority}/" if authority is not None else "")
+    assert uri == f"{prefix}workspace/ws-1/resources/session/{session_id}/{collection}/{artifact_id}"
+    parsed = parse_resource_uri(uri)
+    assert parsed.session_artifact_kind == collection
+    assert parsed.tail_segments == (session_id, collection, artifact_id)
+    assert parsed.display_uri == uri
+    assert parse_resource_uri(parsed.display_uri) == parsed
+    if authority is not None:
+        local = parse_resource_uri(uri, local_gateway_id=authority)
+        assert local.gateway_authority is None
+        assert local.display_uri == uri.replace(f"{authority}/", "", 1)
+        assert local.session_artifact_kind == collection
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
+        parse_session_thread_uri(uri)
+    assert excinfo.value.reason_code == "malformed_path"
+
+
+@pytest.mark.parametrize(
+    ("scope", "tail", "reason"),
+    [
+        ("gateway", "ses_019c3567da377a6f855e1bddac8f1f76/attachments/att_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "malformed_path"),
+        ("user", "ses_019c3567da377a6f855e1bddac8f1f76/attachments/att_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "malformed_path"),
+        ("inline", "ses_019c3567da377a6f855e1bddac8f1f76/tool-results/tool_bbbbbbbbbbbbbbbbbbbbbbbb.txt", "malformed_path"),
+        ("workspace", "ses_019c3567da377a6f855e1bddac8f1f76/attachments", "malformed_path"),
+        ("workspace", "ses_019c3567da377a6f855e1bddac8f1f76/tool-results", "malformed_path"),
+        ("workspace", "ses_019c3567da377a6f855e1bddac8f1f76/attachments/att_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/child", "malformed_path"),
+        ("workspace", "ses_019c3567da377a6f855e1bddac8f1f76/tool-results/tool_bbbbbbbbbbbbbbbbbbbbbbbb.txt/child", "malformed_path"),
+        ("workspace", "ses_019c3567da377a6f855e1bddac8f1f76/Attachments/att_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "case_error"),
+        ("workspace", "ses_019c3567da377a6f855e1bddac8f1f76/Tool-results/tool_bbbbbbbbbbbbbbbbbbbbbbbb.txt", "case_error"),
+        ("workspace", "sess-invalid/attachments/att_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "invalid_character"),
+        ("workspace", "ses_019c3567da374a6f855e1bddac8f1f76/attachments/att_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "invalid_character"),
+        ("workspace", "ses_019c3567da377a6f855e1bddac8f1f76/attachments/att_short", "invalid_character"),
+        ("workspace", "ses_019c3567da377a6f855e1bddac8f1f76/attachments/att_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "invalid_character"),
+        ("workspace", "ses_019c3567da377a6f855e1bddac8f1f76/attachments/att_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.txt", "invalid_character"),
+        ("workspace", "ses_019c3567da377a6f855e1bddac8f1f76/attachments/tool_bbbbbbbbbbbbbbbbbbbbbbbb.txt", "invalid_character"),
+        ("workspace", "ses_019c3567da377a6f855e1bddac8f1f76/tool-results/att_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "invalid_character"),
+        ("workspace", "ses_019c3567da377a6f855e1bddac8f1f76/tool-results/tool_bbbbbbbbbbbbbbbbbbbbbbbb", "invalid_character"),
+        ("workspace", "ses_019c3567da377a6f855e1bddac8f1f76/tool-results/tool_bbbbbbbbbbbbbbbbbbbbbbbb.txt.bak", "invalid_character"),
+        ("workspace", "ses_019c3567da377a6f855e1bddac8f1f76/tool-results/tool_bbbbbbbbbbbbbbbbbbbbbbbb.TXT", "invalid_character"),
+        ("workspace", "ses_019c3567da377a6f855e1bddac8f1f76/tool-results/arbitrary.txt", "invalid_character"),
+        ("workspace", "ses_019c3567da377a6f855e1bddac8f1f76/attachments/%61tt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "invalid_percent_encoding"),
+        ("workspace", "ses_019c3567da377a6f855e1bddac8f1f76/tool-results/tool_bbbbbbbbbbbbbbbbbbbbbbbb%2Etxt", "invalid_percent_encoding"),
+        ("workspace", "ses_019c3567da377a6f855e1bddac8f1f76/attachments/..", "dot_segment"),
+    ],
+)
+def test_session_artifact_templates_reject_before_catalog_access(
+    scope: str, tail: str, reason: str,
+    resolver_and_bindings: tuple[ResourceUriResolver, _RecordingBindings],
+) -> None:
+    uri = f"boxteam://{scope}/ws-1/resources/session/{tail}"
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
+        parse_resource_uri(uri)
+    assert excinfo.value.reason_code == reason
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
+        resource_display_uri(scope=scope, scope_id="ws-1", kind="session", tail_segments=tail.split("/"))
+    assert excinfo.value.reason_code == reason
+    resolver, bindings = resolver_and_bindings
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
+        resolver.resolve(uri, operation=OPERATION_READ_CONTENT, context=ResolutionContext(workspace_id="ws-1"))
+    assert excinfo.value.reason_code == reason
+    assert bindings.accessed_keys == []
+
+
+@pytest.mark.parametrize(
+    "segments",
+    [
+        ("ses_019c3567da377a6f855e1bddac8f1f76/attachments/att_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",),
+        ("ses_019c3567da377a6f855e1bddac8f1f76", "attachments/att_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        ("ses_019c3567da377a6f855e1bddac8f1f76/attachments", "att_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        ("ses_019c3567da377a6f855e1bddac8f1f76/tool-results/tool_bbbbbbbbbbbbbbbbbbbbbbbb.txt",),
+        ("ses_019c3567da377a6f855e1bddac8f1f76", "tool-results/tool_bbbbbbbbbbbbbbbbbbbbbbbb.txt"),
+    ],
+)
+def test_session_artifact_builder_rejects_segment_injection(segments: tuple[str, ...]) -> None:
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
+        resource_display_uri(scope="workspace", scope_id="ws-1", kind="session", tail_segments=segments)
+    assert excinfo.value.reason_code == "invalid_character"
