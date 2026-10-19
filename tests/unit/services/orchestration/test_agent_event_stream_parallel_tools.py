@@ -20,6 +20,7 @@ from app.agents.tool_invocation_context import ToolInvocationContext
 from app.agents.tools.session_messaging import create_send_message_to_session_tool
 from app.core.job_context import get_active_tool_name, get_interruptible_phase
 from app.core.job_event_bus import EventType
+from app.core.lifecycle import LifetimeScope
 from app.core.model_delta_context import (
     AgentRunLifecycleCallbackHandler,
     model_tool_invocation_scope,
@@ -52,6 +53,15 @@ from app.services.orchestration.message_stream_runtime import MessageStreamRunti
 from app.services.orchestration.trace_observer import MessageStreamTraceObserver
 
 pytestmark = pytest.mark.usefixtures("workspace_scope")
+
+
+@pytest.fixture
+async def cancellation_signal() -> AsyncIterator[CancellationSignal]:
+    scope = LifetimeScope("event-stream-cancellation")
+    try:
+        yield CancellationSignal(lifetime_scope=scope)
+    finally:
+        await scope.close()
 
 
 class FakeAgent:
@@ -760,19 +770,20 @@ async def test_dispatch_stream_exhaustion_fails_only_unclaimed_calls(dispatch_wa
 
 
 @pytest.mark.asyncio
-async def test_user_cancellation_after_dispatch_progress_keeps_user_reason(dispatch_watchdog_case):
+async def test_user_cancellation_after_dispatch_progress_keeps_user_reason(
+    dispatch_watchdog_case, cancellation_signal: CancellationSignal,
+):
     case = dispatch_watchdog_case
-    signal = CancellationSignal()
 
     class CancellingAgent(FakeAgent):
         async def astream_events(self, *args, **kwargs):
             async for event in super().astream_events(*args, **kwargs):
                 yield event
-            await signal.cancel("user_requested")
+            await cancellation_signal.cancel("user_requested")
             raise ScopeCancelledError("user_requested")
 
     with pytest.raises(asyncio.CancelledError, match="user_requested"):
-        await case.process(CancellingAgent([case.starts[0]]), cancellation_signal=signal)
+        await case.process(CancellingAgent([case.starts[0]]), cancellation_signal=cancellation_signal)
     assert not [call for call in case.writer.commit.await_args_list
                 if call.args[0] == "tool_call.completed" and call.args[1]["status"] == "incomplete"]
     assert [item[0] for item in case.runtime.pending_tool_calls()] == case.call_ids[1:]
@@ -845,6 +856,7 @@ async def test_tool_dispatch_timeout_does_not_escape_as_agent_cancellation(
 @pytest.mark.asyncio
 async def test_provider_scope_cancellation_from_event_iterator_reaches_agent_loop(
     tmp_path: Path,
+    cancellation_signal: CancellationSignal,
 ) -> None:
     class CancelledAgent:
         async def astream_events(
@@ -859,7 +871,6 @@ async def test_provider_scope_cancellation_from_event_iterator_reaches_agent_loo
                 yield {}
             raise ScopeCancelledError("user_requested")
 
-    cancellation_signal = CancellationSignal()
     await cancellation_signal.cancel("user_requested")
 
     with pytest.raises(asyncio.CancelledError, match="user_requested"):

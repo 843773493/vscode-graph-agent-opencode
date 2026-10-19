@@ -51,7 +51,13 @@ CleanupHook = Callable[[], Awaitable[None] | None]
 class CancellationSignal:
     """只负责取消通知、原因和 hook 的窄职责信号。"""
 
-    def __init__(self, parent: CancellationSignal | None = None) -> None:
+    def __init__(
+        self,
+        parent: CancellationSignal | None = None,
+        *,
+        lifetime_scope: LifetimeScope,
+    ) -> None:
+        self._lifetime_scope = lifetime_scope
         self._cancelled = False
         self._reason: str | None = None
         self._event = asyncio.Event()
@@ -60,11 +66,12 @@ class CancellationSignal:
         self._parent = parent
         self._parent_hook_id: int | None = None
         if parent is not None:
-            self._parent_hook_id = parent.add_hook(self._cascade_from_parent)
             if parent.is_cancelled:
                 self._cancelled = True
                 self._reason = parent.reason or "parent_cancelled"
                 self._event.set()
+            else:
+                self._parent_hook_id = parent.add_hook(self._cascade_from_parent)
 
     @property
     def is_cancelled(self) -> bool:
@@ -75,13 +82,15 @@ class CancellationSignal:
         return self._reason
 
     def add_hook(self, hook: CancellationHook) -> int:
+        if self._lifetime_scope.state != "open":
+            raise RuntimeError("已关闭的 CancellationSignal 不能注册 hook")
         hook_id = self._next_hook_id
         self._next_hook_id += 1
         self._hooks[hook_id] = hook
         if self._cancelled:
             result = hook(self._reason or "cancelled")
             if inspect.isawaitable(result):
-                asyncio.create_task(result)
+                self._lifetime_scope.start_task(lambda: result, label="late-cancel-hook")
         return hook_id
 
     def remove_hook(self, hook_id: int) -> None:
@@ -146,8 +155,11 @@ class TurnExecutionScope:
             parent=self.parent._lifetime_scope if self.parent is not None else None,
         )
         parent_signal = self.parent.cancellation_signal if self.parent else None
-        self.cancellation_signal = CancellationSignal(parent_signal)
+        self.cancellation_signal = CancellationSignal(
+            parent_signal, lifetime_scope=self._lifetime_scope,
+        )
         self.cancellation_signal.add_hook(self._run_abort_hooks)
+        self._lifetime_scope.register(self._release_process_state, label="turn-state")
         if self.deadline is not None:
             try:
                 loop = asyncio.get_running_loop()
@@ -217,7 +229,7 @@ class TurnExecutionScope:
         if self.cancellation_signal.is_cancelled:
             result = hook(self.cancellation_signal.reason or "cancelled")
             if inspect.isawaitable(result):
-                asyncio.create_task(result)
+                self._lifetime_scope.start_task(lambda: result, label="late-abort-hook")
         return hook_id
 
     def remove_abort(self, hook_id: int) -> None:
@@ -264,18 +276,21 @@ class TurnExecutionScope:
 
     def _schedule_deadline_cancel(self) -> None:
         if self._lifetime_scope.state == "open" and not self.cancellation_signal.is_cancelled:
-            asyncio.create_task(self.cancel("scope_deadline_exceeded"))
+            self._lifetime_scope.start_task(
+                lambda: self.cancel("scope_deadline_exceeded"), label="deadline-cancel",
+            )
 
     async def close(self) -> None:
-        try:
-            await self._lifetime_scope.close()
-        finally:
-            self.cancellation_signal.detach_parent()
-            if self._deadline_handle is not None:
-                self._deadline_handle.cancel()
-                self._deadline_handle = None
-            self._abort_hooks.clear()
-            self._active_operation = None
+        await self._lifetime_scope.close()
+
+    def _release_process_state(self) -> None:
+        """父 scope 直接关闭子 lifetime 时也走同一释放登记。"""
+        self.cancellation_signal.detach_parent()
+        if self._deadline_handle is not None:
+            self._deadline_handle.cancel()
+            self._deadline_handle = None
+        self._abort_hooks.clear()
+        self._active_operation = None
 
 
 class TurnExecutionScopeRegistry:
@@ -581,7 +596,7 @@ class AgentLoopControlCoordinator:
                 )
                 for task in pending:
                     task.cancel()
-                await asyncio.gather(*pending, return_exceptions=True)
+                await asyncio.gather(next_command, stop_waiter, return_exceptions=True)
                 if stop_waiter in done:
                     return
                 command = next_command.result()

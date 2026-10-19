@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import threading
 from collections.abc import Awaitable, Callable
@@ -21,6 +22,7 @@ class _OwnedResource:
     callback: ReleaseCallback
     label: str
     released: bool = False
+    release_task: asyncio.Task[None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +33,7 @@ class LifetimeSnapshot:
     state: str
     resource_count: int
     child_count: int
+    task_count: int
 
 
 class LifetimeHandle:
@@ -93,8 +96,8 @@ class LifetimeScope:
         self._children: dict[int, LifetimeScope] = {}
         self._next_resource_id = 0
         self._state_lock = threading.RLock()
-        self._close_future = None
-        self._close_error: ExceptionGroup[Exception] | None = None
+        self._tasks: dict[asyncio.Future[object], str] = {}
+        self._close_task: asyncio.Task[None] | None = None
         if parent is not None:
             parent._attach_child(self)
 
@@ -120,7 +123,35 @@ class LifetimeScope:
                     not resource.released for resource in self._resources.values()
                 ),
                 child_count=len(self._children),
+                task_count=len(self._tasks),
             )
+
+    def start_task(
+        self,
+        operation: Callable[[], Awaitable[object]],
+        *,
+        label: str,
+    ) -> asyncio.Future[object]:
+        """持有后台操作；关闭前先取消并排空，失败保留给 owner。"""
+        with self._state_lock:
+            self._require_open_for_registration()
+            task = asyncio.ensure_future(operation())
+            self._tasks[task] = label
+            task.add_done_callback(self._task_finished)
+            return task
+
+    def _task_finished(self, task: asyncio.Future[object]) -> None:
+        error = None if task.cancelled() else task.exception()
+        with self._state_lock:
+            if error is None:
+                self._tasks.pop(task, None)
+                return
+        # 终态失败仍由 scope 持有；后续 close 重报，不能把已失败的操作虚报成功。
+        task.get_loop().call_exception_handler({
+            "message": f"LifetimeScope 后台任务失败: scope={self._name}",
+            "exception": error,
+            "task": task,
+        })
 
     def register(self, callback: ReleaseCallback, *, label: str = "resource") -> LifetimeHandle:
         """登记一个由当前 scope 独占的释放回调，返回可撤销句柄。
@@ -146,17 +177,7 @@ class LifetimeScope:
             if self._state == self._CLOSED:
                 # 成功关闭意味着资源已按逆序释放完毕；再次撤销是无操作。
                 return
-            self._require_open_for_registration()
-            resource = self._resources.get(handle.resource_id)
-            if resource is None:
-                raise KeyError(f"LifetimeScope resource 不存在: {handle.resource_id}")
-            if resource.released:
-                return
-        result = resource.callback()
-        if inspect.isawaitable(result):
-            await result
-        with self._state_lock:
-            resource.released = True
+        await self.release(handle.resource_id)
 
     async def release(self, resource_id: int) -> None:
         """提前释放一个已登记资源；释放失败原样返回给 owner。"""
@@ -165,13 +186,40 @@ class LifetimeScope:
             resource = self._resources.get(resource_id)
             if resource is None:
                 raise KeyError(f"LifetimeScope resource 不存在: {resource_id}")
+        await self._release_resource(resource)
+
+    async def _release_resource(self, resource: _OwnedResource) -> None:
+        with self._state_lock:
             if resource.released:
                 return
+            if resource.release_task is None or resource.release_task.done():
+                resource.release_task = asyncio.create_task(
+                    self._release_owned_resource(resource),
+                    name=f"{self._name}:release:{resource.label}",
+                )
+                resource.release_task.add_done_callback(self._report_cleanup_failure)
+            releasing = resource.release_task
+        # 提前撤销与 close 共用一次释放；取消等待者不能遗弃释放操作。
+        await asyncio.shield(releasing)
+
+    async def _release_owned_resource(self, resource: _OwnedResource) -> None:
         result = resource.callback()
         if inspect.isawaitable(result):
             await result
         with self._state_lock:
             resource.released = True
+
+    def _report_cleanup_failure(self, task: asyncio.Task[None]) -> None:
+        if task.cancelled():
+            error: BaseException | None = asyncio.CancelledError(task.get_name())
+        else:
+            error = task.exception()
+        if error is not None:
+            task.get_loop().call_exception_handler({
+                "message": f"LifetimeScope 清理失败: scope={self._name}",
+                "exception": error,
+                "task": task,
+            })
 
     def child(self, name: str) -> LifetimeScope:
         """创建一个受当前 scope 所有的子 scope。"""
@@ -179,50 +227,55 @@ class LifetimeScope:
 
     async def close(self) -> None:
         """排空所有子 scope 和资源；关闭错误不会被吞掉或转换成成功。"""
-        import asyncio
-
         with self._state_lock:
             if self._state == self._CLOSED:
                 return
-            if self._state == self._CLOSING:
-                close_future = self._close_future
-                leader = False
-            else:
+            if self._state != self._CLOSING:
                 self._state = self._CLOSING
-                self._close_error = None
-                close_future = asyncio.get_running_loop().create_future()
-                self._close_future = close_future
-                leader = True
+                # 关闭操作属于 scope；任一等待者被取消都不能遗弃其它资源。
+                self._close_task = asyncio.create_task(
+                    self._close_owned(), name=f"{self._name}:close",
+                )
+                self._close_task.add_done_callback(self._report_cleanup_failure)
+            closing = self._close_task
+        if closing is None:
+            raise RuntimeError("LifetimeScope closing 缺少 close task")
+        await asyncio.shield(closing)
 
-        if not leader:
-            if close_future is None:
-                raise RuntimeError("LifetimeScope closing 缺少 close future")
-            await close_future
-            with self._state_lock:
-                if self._close_error is not None:
-                    raise self._close_error
-            return
-
+    async def _close_owned(self) -> None:
         errors: list[Exception] = []
         with self._state_lock:
-            children = tuple(self._children.values())
-        for child in reversed(children):
-            try:
-                await child.close()
-            except Exception as error:  # noqa: BLE001
+            tasks = tuple(self._tasks.items())
+            children = tuple(reversed(tuple(self._children.values())))
+        for task, _label in tasks:
+            if not task.done():
+                task.cancel()
+        outcomes = await asyncio.gather(
+            *(task for task, _label in tasks),
+            *(child.close() for child in children),
+            return_exceptions=True,
+        )
+        for (_task, label), outcome in zip(tasks, outcomes[:len(tasks)], strict=True):
+            if isinstance(outcome, Exception):
+                error = RuntimeError(
+                    f"LifetimeScope 后台任务失败: scope={self._name} task={label}"
+                )
+                error.__cause__ = outcome
+                errors.append(error)
+        for child, outcome in zip(children, outcomes[len(tasks):], strict=True):
+            if isinstance(outcome, (Exception, asyncio.CancelledError)):
+                error = RuntimeError(
+                    f"LifetimeScope 子 scope 关闭失败: scope={self._name} child={child.name}"
+                )
+                error.__cause__ = outcome
                 errors.append(error)
 
         with self._state_lock:
             resources = tuple(self._resources.items())
         for resource_id, resource in reversed(resources):
-            with self._state_lock:
-                if resource.released:
-                    continue
             try:
-                result = resource.callback()
-                if inspect.isawaitable(result):
-                    await result
-            except Exception as error:  # noqa: BLE001
+                await self._release_resource(resource)
+            except (Exception, asyncio.CancelledError) as error:  # noqa: BLE001
                 errors.append(
                     RuntimeError(
                         f"LifetimeScope 释放资源失败: scope={self._name} "
@@ -231,9 +284,6 @@ class LifetimeScope:
                 )
                 errors[-1].__cause__ = error
                 continue
-            with self._state_lock:
-                resource.released = True
-
         error_group: ExceptionGroup[Exception] | None = None
         with self._state_lock:
             if errors:
@@ -241,14 +291,8 @@ class LifetimeScope:
                     f"LifetimeScope close 失败: {self._name}", errors
                 )
                 self._state = self._CLOSE_FAILED
-                self._close_error = error_group
             else:
                 self._state = self._CLOSED
-                self._close_error = None
-            if close_future is not None and not close_future.done():
-                # 并发调用者在 future 完成后读取 _close_error；future 本身不
-                # 设置 exception，避免没有并发 waiter 时出现未消费异常警告。
-                close_future.set_result(None)
         if error_group is not None:
             raise error_group
 

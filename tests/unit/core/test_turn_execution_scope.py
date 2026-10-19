@@ -56,6 +56,51 @@ async def test_closing_child_detaches_parent_cancellation_hook() -> None:
     await parent.close()
 
 
+@pytest.mark.asyncio
+async def test_parent_close_releases_child_signal_and_deadline() -> None:
+    parent = TurnExecutionScope("parent")
+    child = parent.child("child", timeout_seconds=60)
+    grandchild = child.child("grandchild", timeout_seconds=60)
+
+    await parent.close()
+    await parent.cancel("late-parent-cancel")
+
+    assert child.is_closed and grandchild.is_closed
+    assert not child.cancellation_signal.is_cancelled
+    assert not grandchild.cancellation_signal.is_cancelled
+    assert child._deadline_handle is None
+    assert grandchild._deadline_handle is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hook_kind", ["abort", "signal"])
+async def test_late_cancel_hook_is_owned_and_drained_on_close(hook_kind: str) -> None:
+    scope = TurnExecutionScope("late-hook")
+    started = asyncio.Event()
+    calls: list[str] = []
+    await scope.cancel("user_requested")
+
+    async def hook(_reason: str) -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            calls.append("hook-drained")
+
+    if hook_kind == "abort":
+        scope.register_abort(hook)
+    else:
+        scope.cancellation_signal.add_hook(hook)
+    scope.register_cleanup(lambda: calls.append("handle-released"))
+    await started.wait()
+    assert scope.lifetime_scope.snapshot().task_count == 1
+
+    await scope.close()
+
+    assert calls == ["hook-drained", "handle-released"]
+    assert scope.lifetime_scope.snapshot().task_count == 0
+
+
 def test_control_inbox_is_idempotent_and_ordered() -> None:
     inbox = AgentControlInbox("stream_1")
     first = inbox.accept(
