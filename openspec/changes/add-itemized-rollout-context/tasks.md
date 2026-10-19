@@ -614,7 +614,7 @@ v1 reader/adapter 只能由显式、一次性的 `legacy_import_v1_to_v2` migrat
 - [ ] 12.1 将公开schema、API/工具、DTO/proto生成、前端与测试的范围名统一为view_prefix_fork；context_fork使用同一安全默认内核，删除旧名alias、逐实体remap和模式绑定资源矩阵。
 - [ ] 12.2 统一当前存储归属与历史执行scope：保留local ID、正文/历史请求原字节、时间/hash和历史pending facts；所有canonical/detail/plan/activation/history/provider/checkpoint查找验证目标本地snapshot binding，不跳过owner/hash，不恢复旧Job或准入。迁齐索引条件、root/acceptance及后继新请求消费者。
 - [ ] 12.3 实现固定view/revision/item inclusive或before前缀与发布前typed正文引用闭包；去重、防环、有界读取，保摘要和边界前有效成员，依赖不自动加入visible上下文，provenance不展开，错误锚点/协议不闭合明确拒绝。
-- [ ] 12.4 full_rollout_copy使用一致SQLite磁盘快照和分块原字节复制，固定buffer/有界batch，不全量JSON/item/relations/mapping累积或业务hash重算；失败删除staging。用代表性真实入口验证字节保真、删除独立source后读取/附件及首次续聊按需读取，不设固定数据体积或专门的大数据峰值内存门。
+- [x] 12.4 full_rollout_copy使用一致SQLite磁盘快照和分块原字节复制，固定buffer/有界batch，不全量JSON/item/relations/mapping累积或业务hash重算；失败删除staging。用代表性真实入口验证字节保真、删除独立source后读取/附件及首次续聊按需读取，不设固定数据体积或专门的大数据峰值内存门。
 - [ ] 12.5 消费统一寻址owner的Workspace Session集合、Session/Thread URI与source/target创建意图；支持默认同Session新child、本地/跨端新Session main及已有Session新child，固定target与授权，无覆盖/合并或激活工作区回退。
 - [ ] 12.6 所有引用资源接入统一目标检查与各领域owner副作用：同存储域共享附件复用现有正文/内容身份，只有需要时保活；跨域显式选择后复用目标相同内容或流式导入；默认不额外复制Goal/调试/终端/浏览器，未继承附件明确不可用，正文必需依赖缺失则失败。
 - [ ] 12.7 消息底部fork弹窗迁齐来源、目标、继承选项与精确点击item；默认view_prefix_fork、当前Session新subthread、不额外复制资源，成功在右侧侧边栏打开可聊天child且保主线程选择；侧边新建共用同入口，打开已有child不fork，不自动执行/回报。
@@ -623,3 +623,7 @@ v1 reader/adapter 只能由显式、一次性的 `legacy_import_v1_to_v2` migrat
 - [ ] 12.10 所有触发单次fork的UI/API/直接服务测试统一使用不可关闭、不可延长的60秒monotonic absolute deadline；从确认提交/发送/调用计至durable或published完成，setup与后继聊天不计。phase wait、retry和恢复共用deadline，成功后的独立幂等replay重新计时。async等待与独立外部watchdog消费同一deadline；超时先fsync诊断sidecar（target、operation/key、stage、elapsed、`backend_state=unknown`）后只终止当前隔离测试运行组，明确失败且不宣称后端取消/回滚。短阈值只用于独立受保护子进程内的fixture/watchdog判别验证；不新增生产deadline、持久时钟、取消或回滚协议。
 
 12.2/12.3/12.7 的共同验收补充：有效 prefix 按 context selection 截止、展示保源 logical 相对序；hidden root 仅作真实身份/排序 backing，选中摘要及 retained final 必须经同一普通 Turn history API 可读且旧 root 不显示、不进 Provider。逐 Turn 的真实 source view/revision 必须从 history 读快照贯穿首次点击，不以页面 head 代替。full 保完整历史 checkpoint，prefix 只保正文依赖闭合者；目标新 head 在裁 seed 前由同事务唯一内核继承非 messages state/versions、绑定目标 selection 并隔离旧 pending，不能为了保 seed 扩全部正文，也不能将新 head 当原历史 checkpoint。
+
+2026-10-19 §12.4 验收：正式 `bun run test:matrix -- --suite=integration-python` 经 `run_task.py` 外置 timeout 和 matrix 内存保护运行，原件统一位于 `out/tests/temp/openspec_takeover/artifacts/runs/`。`fork-full-copy-streaming-001` 为 1 passed/exit 0：公开 full-copy 调用期间禁止全量 `read_items` 和 `select_view_prefix`，仍逐字段保留 canonical identity/时间、JSONL 原字节与历史 pending facts，删除源后冷读通过。`fork-copy-attachment-001` 为 4 passed/exit 0：现有附件 owner 用例扩为 prefix/full × child/main，独立 main 删除源后冷读正文、首次新 Turn 封存并按真实 model-call/tool-call capability 读取继承附件，同时验证 child 删除不移除源附件。源码核验：一致 SQLite read transaction/backup 位于 `fork/full_copy/sqlite_snapshot.py`，`snapshot_copy.py::stage_captured_rollout` 固定 1 MiB 分块核对文件 hash/length，失败删除 staging；full 分支不进入逐 item 前缀闭包或重算历史业务 hash。
+
+同轮 Fork 边界原件：`fork-navigation-retention-001` 为 39 passed/10 failed，`fork-activation-retry-001` 为 25 passed/3 failed；失败仅修正测试缺失 Gateway 身份、绕开规范化公开入口的崩溃准备及已消费 notice 的 active checkpoint 预期，`fork-retention-closure-001` 13 passed/exit 0。可见历史 membership、Provider exclusion 和 dispatch/commit/lease/删除先后断言保持。当前文件新增两个 full-copy 附件场景，共 307 cases；分组证据不表述为一次全文件通过，亦不替代 §12.9 产品/type/build 门槛。

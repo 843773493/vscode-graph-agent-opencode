@@ -179,6 +179,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.rollout_context.fork import (
     node_debug_materialization,
     retention_release,
+    snapshot_copy,
     source_snapshot,
 )
 from app.services.infrastructure.rollout_context.fork import transfer as fork_transfer
@@ -1363,8 +1364,10 @@ async def test_child_message_ingest_keeps_exact_attachment_owner_through_source_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("creation_kind", ["new_child_thread", "new_session_main"])
+@pytest.mark.parametrize("mode", ["view_prefix_fork", "full_rollout_copy"])
 async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
     production_fork_container: AppContainer, fork_provider_prepare, creation_kind: SessionForkCreationKind,
+    mode: SessionForkMode,
 ) -> None:
     """真实 fork 证明 main 复用、独立保活、删除源后冷读和目标新工具 capability。"""
     context = _production_fork_context(production_fork_container)
@@ -1406,7 +1409,7 @@ async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
     )
     original = context.saver._storage.storage.read_items(source.session_id, source_thread)
     result = await context.forks.fork(await _fork_request(
-        context, source.session_id, creation_kind=creation_kind, item_id="item-resource-source-input",
+        context, source.session_id, creation_kind=creation_kind, mode=mode, item_id="item-resource-source-input",
     ))
     assert len(result.resources) == 1
     receipt = result.resources[0]
@@ -2545,6 +2548,7 @@ async def test_debug_frozen_operation_recovers_publication_without_live_source(
 @pytest.mark.parametrize("mode", ["context_fork", "view_prefix_fork", "full_rollout_copy"])
 async def test_all_fork_modes_preserve_independent_original_history(
     fork_provider_prepare, fork_context: ForkIntegrationContext, mode: SessionForkMode,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = await _seed_source(fork_context, fork_provider_prepare)
     source_thread = _main_thread_id(fork_context, source.session_id)
@@ -2552,7 +2556,14 @@ async def test_all_fork_modes_preserve_independent_original_history(
     source_clocks = _turn_history_clocks(fork_context, source.session_id)
     source_message_clocks = _message_history_clocks(fork_context, source.session_id)
     request = await _fork_request(fork_context, source.session_id, creation_kind="new_session_main", mode=mode)
-    result = await fork_context.forks.fork(request)
+    with monkeypatch.context() as copy_guard:
+        if mode == "full_rollout_copy":
+            def forbid_item_materialization(*_args: object, **_kwargs: object) -> None:
+                pytest.fail("full-copy 必须保留磁盘快照，不能全量读取 item 或展开前缀")
+
+            copy_guard.setattr(fork_context.saver._storage.storage, "read_items", forbid_item_materialization)
+            copy_guard.setattr(snapshot_copy, "select_view_prefix", forbid_item_materialization)
+        result = await fork_context.forks.fork(request)
     child, thread = result.session, result.thread_id
     copied = fork_context.saver._storage.storage.read_items(child.session_id, thread)
     assert copied and all(item.to_dict() == original_items[item.item_id] for item in copied)
@@ -7963,7 +7974,8 @@ async def test_http_fork_reply_preserves_committed_copy_across_target_delete(
 
     async with main.lifespan(main.app), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main.app), base_url="http://workspace",
-        headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": context.sessions.workspace_id, "X-Request-ID": "copy-delete-order"},
+        headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": context.sessions.workspace_id,
+                 "X-BoxTeam-Gateway-Id": "compaction-fork-gateway", "X-Request-ID": "copy-delete-order"},
     ) as client:
         if replay:
             first = await client.post(f"/api/v1/sessions/{source.session_id}/fork-context", json=request.model_dump(mode="json"))
@@ -8350,11 +8362,6 @@ async def test_production_lifespan_recovers_detached_fork_after_source_deletion(
     context = _production_fork_context(production_fork_container)
     source, _ = await _seed_retry_tool_source(context, fork_provider_prepare)
     request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="context_fork")
-    intent = await context.forks._new_intent(request, source.session_id, _main_thread_id(context, source.session_id), None)
-    target, record = await context.sessions.prepare_context_fork(
-        idempotency_key=context.forks._creation_key(request.idempotency_key), title="源已删除的待恢复副本",
-        agent_id=source.current_agent_id, parent_session_id=None, context_source_session_id=source.session_id, request_intent=intent,
-    )
     capture = context.saver.forks.source._capture_fork_source_snapshot
 
     async def capture_then_delete(**kwargs: object):
@@ -8363,18 +8370,27 @@ async def test_production_lifespan_recovers_detached_fork_after_source_deletion(
         return snapshot
 
     monkeypatch.setattr(context.saver.forks.source, "_capture_fork_source_snapshot", capture_then_delete)
-    completion = context.saver._storage.forks.complete_fork_materialization
+    class OwnerProcessExit(BaseException):
+        pass
 
     def crash(**_kwargs: object) -> None:
-        raise RuntimeError("detached target_committed 后中断")
+        raise OwnerProcessExit("模拟 detached fork owner 退出")
 
-    if crash_state == "target_committed":
-        monkeypatch.setattr(context.saver._storage.forks, "complete_fork_materialization", crash)
-        with pytest.raises(RuntimeError, match="target_committed 后中断"):
-            await context.forks._materialize(request, intent, target.session_id, creation=record)
-        monkeypatch.setattr(context.saver._storage.forks, "complete_fork_materialization", completion)
-    else:
-        await context.forks._materialize(request, intent, target.session_id, creation=record)
+    async def crash_before_publish(*_args: object) -> None:
+        raise OwnerProcessExit("模拟 detached fork owner 退出")
+
+    # 公开入口冻结规范化意图；源删除后在真实 journal 边界模拟进程退出。
+    with monkeypatch.context() as failure:
+        if crash_state == "target_committed":
+            failure.setattr(context.saver._storage.forks, "complete_fork_materialization", crash)
+        else:
+            failure.setattr(context.forks, "_publish_prepared_fork", crash_before_publish)
+        with pytest.raises(OwnerProcessExit, match="detached fork owner"):
+            await context.forks.fork(request)
+    record = context.sessions.path_resolver.catalog_store.get_creation_record(
+        context.forks._creation_key(request.idempotency_key)
+    )
+    assert record.state == "preparing"
     production_fork_container.workspace_activity_service.store.close()
     production_fork_container.session_catalog.close()
     restarted = _build_owned_container(context.workspace, monkeypatch)
@@ -8385,9 +8401,12 @@ async def test_production_lifespan_recovers_detached_fork_after_source_deletion(
         )
         assert durable.state == "published"
         assert (await restarted.session_service.list(limit=100)).total == 1
-        assert (await restarted.session_service.get(target.session_id)).context_source_session_id == source.session_id
-        restored = await _get_tuple(_production_fork_context(restarted), target.session_id)
-        assert restored is not None and len(restored.checkpoint["channel_values"]["messages"]) == 5
+        assert (await restarted.session_service.get(record.session_id)).context_source_session_id == source.session_id
+        restored = await _get_tuple(_production_fork_context(restarted), record.session_id)
+        assert restored is not None
+        assert [message.id for message in restored.checkpoint["channel_values"]["messages"]] == [
+            "retry-user", "retry-call", "retry-result", "retry-final",
+        ]
 
 
 @pytest.mark.asyncio
@@ -8762,7 +8781,10 @@ async def test_fork_of_imported_internal_lineage_uses_local_committed_proof(
         second = (await context.forks.fork(second_request)).session
     assert second.context_source_session_id == first.session_id
     restored = await _get_tuple(context, second.session_id)
-    assert restored is not None and len(restored.checkpoint["channel_values"]["messages"]) == 5
+    assert restored is not None
+    assert [message.id for message in restored.checkpoint["channel_values"]["messages"]] == [
+        "retry-user", "retry-call", "retry-result", "retry-final",
+    ]
     with sqlite3.connect(_main_thread_node(context, second.session_id) / "rollout" / "index.sqlite") as connection:
         assert connection.execute("SELECT COUNT(*) FROM executions").fetchone() == (3,)
         assert connection.execute("SELECT COUNT(*) FROM turn_records").fetchone() == (1,)
