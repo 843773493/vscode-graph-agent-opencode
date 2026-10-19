@@ -157,20 +157,8 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
     ) -> dict[str, Any]:
         if self._context_source_manager is None:
             return dict(update)
-        raw_skills = update.get("skills_metadata", [])
-        if not isinstance(raw_skills, list):
-            raise TypeError("Skills metadata 必须是列表")
-        for raw_skill in raw_skills:
-            if not isinstance(raw_skill, Mapping):
-                raise TypeError("Skill metadata 元素必须是对象")
-            name = raw_skill.get("name")
-            description = raw_skill.get("description")
-            resource_uri = raw_skill.get("display_uri")
-            if not all(isinstance(value, str) and value for value in (name, resource_uri)):
-                raise TypeError("Skill metadata 缺少 name/display_uri")
-            if not isinstance(description, str):
-                raise TypeError("Skill metadata.description 必须是字符串")
-
+        for entry in self._catalog.entries if self._catalog is not None else ():
+            name, description, resource_uri = entry.name, entry.description, entry.display_uri
             if self._source_registry is not None:
                 source_path = self._catalog.source_path(name)
                 if source_path is not None:
@@ -196,7 +184,9 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
                 binding_revision=self._catalog.catalog_revision,
             )
         normalized = dict(update)
-        normalized["skills_metadata"] = [dict(item) for item in raw_skills]
+        normalized["skills_metadata"] = [
+            entry.metadata_view() for entry in self._catalog.entries
+        ] if self._catalog is not None else []
         return normalized
 
     def _install_activation_snapshot(self) -> None:
@@ -411,11 +401,10 @@ class SkillCatalogEntry:
     activation_revision: str
 
     def metadata_view(self) -> dict[str, Any]:
-        """模型可见 metadata;绝不携带 path/locator/物理路径。"""
+        """Skill metadata 只暴露名称和描述。"""
         return {
             "name": self.name,
             "description": self.description,
-            "display_uri": self.display_uri,
         }
 
 

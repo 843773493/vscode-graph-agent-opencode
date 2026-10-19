@@ -62,11 +62,7 @@ class SkillFacetLoader:
             )
         if self.facet == "activation":
             return SemanticPayload(payload={"body": content[parsed.body_offset:]})
-        return SemanticPayload(payload={
-            "name": parsed.name, "description": parsed.description,
-            "display_uri": self.entry.display_uri,
-            "entry_identity": self.entry.entry_identity,
-        })
+        return SemanticPayload(payload={"name": parsed.name, "description": parsed.description})
 
 
 @dataclass(frozen=True, slots=True)

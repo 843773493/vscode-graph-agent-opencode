@@ -55,23 +55,24 @@ def skill_catalog_from_activation(
         if metadata_ref.facet != "metadata":
             continue
         metadata = read_payload(activation, metadata_ref)
-        activation_ref = activation_by_uri.get(metadata_ref.display_uri)
-        if activation_ref is None or not isinstance(metadata, Mapping) or set(metadata) != {
-            "name", "description", "display_uri", "entry_identity",
-        } or not all(isinstance(metadata[key], str) and metadata[key] for key in ("name", "display_uri", "entry_identity")) or (
-            metadata["display_uri"] != metadata_ref.display_uri
-            or not isinstance(metadata["description"], str)
-        ):
+        uri = metadata_ref.display_uri
+        metadata_suffix = ":metadata"
+        if not metadata_ref.resource_id.endswith(metadata_suffix):
+            raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: Skill metadata descriptor identity 非法")
+        entry_identity = metadata_ref.resource_id[:-len(metadata_suffix)]
+        activation_ref = activation_by_uri.get(uri)
+        if uri is None or activation_ref is None or uri in sources or not entry_identity or (
+            activation_ref.resource_id != f"{entry_identity}:activation"
+        ) or not isinstance(metadata, Mapping) or set(metadata) != {
+            "name", "description",
+        } or not isinstance(metadata["name"], str) or not metadata["name"] or not isinstance(metadata["description"], str):
             raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: Skill metadata 正文非法")
         body = read_payload(activation, activation_ref)
         if not isinstance(body, Mapping) or set(body) != {"body"} or not isinstance(body["body"], str):
             raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: Skill activation 正文非法")
-        uri = metadata["display_uri"]
-        if uri in sources:
-            raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: 同来源 metadata 重复")
         sources[uri] = SkillCatalogBinding(
             name=metadata["name"], resource_id=activation_ref.resource_id,
-            entry_identity=metadata["entry_identity"], display_uri=uri,
+            entry_identity=entry_identity, display_uri=uri,
             activation_revision=activation_ref.revision, body=body["body"],
             description=metadata["description"],
         )

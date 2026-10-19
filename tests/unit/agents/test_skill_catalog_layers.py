@@ -228,6 +228,72 @@ def test_catalog_publishes_unique_entry_with_fixed_priority(
     assert by_name["local-only"].layer == "workspace"
 
 
+def test_inline_gateway_workspace_priority_and_cross_workspace_availability(tmp_path, monkeypatch):
+    from app.core.trace_middleware import (
+        reset_current_gateway_id,
+        set_current_gateway_id,
+    )
+
+    monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path / "boxteam-home"))
+    manifest = tmp_path / "runtime-manifest.json"
+    manifest.write_text(
+        '{"schema_version":1,"distribution":"source-development","version":"0.0.2"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BOXTEAM_RUNTIME_MANIFEST", str(manifest))
+    project_root = tmp_path / "distribution"
+    inline_root = project_root / "resources" / "skills"
+    inline_root.mkdir(parents=True)
+    _write_skill(inline_root, "shared", "Inline", "inline body\n")
+    gateway_root = tmp_path / "boxteam-home" / "skills"
+    _write_skill(gateway_root, "shared", "Gateway", "gateway body\n")
+
+    workspace_a = tmp_path / "workspace-a"
+    workspace_b = tmp_path / "workspace-b"
+    workspace_inline = tmp_path / "workspace-inline"
+    for workspace in (workspace_a, workspace_b, workspace_inline):
+        workspace.mkdir()
+        (workspace / ".boxteam" / "skills").mkdir(parents=True)
+    _write_skill(workspace_a / ".boxteam" / "skills", "shared", "Workspace", "workspace body\n")
+
+    gateway_id = "gateway_0123456789abcdef0123456789abcdef"
+    gateway_token = set_current_gateway_id(gateway_id)
+    try:
+        catalogs = []
+        for workspace in (workspace_a, workspace_b):
+            files = WorkspaceFileResourceRegistry(
+                workspace_root=workspace,
+                watch_service=WorkspaceFileWatchService(workspace_root=workspace),
+                project_root=project_root,
+            )
+            sources = accepted_gateway_skill_sources(
+                skills_root=gateway_root, gateway_id=gateway_id,
+                workspace_id=load_or_create_workspace_id(workspace),
+                observation_channel=files.observation_channel,
+            )
+            catalogs.append(build_workspace_skill_catalog(
+                workspace, registry=ResourceRegistry(), file_registry=files,
+                project_root=project_root, gateway_sources=sources,
+                gateway_id=gateway_id,
+                bundled_skill_groups=("shared",),
+            ))
+    finally:
+        reset_current_gateway_id(gateway_token)
+    inline_files = WorkspaceFileResourceRegistry(
+        workspace_root=workspace_inline,
+        watch_service=WorkspaceFileWatchService(workspace_root=workspace_inline),
+        project_root=project_root,
+    )
+    catalogs.append(build_workspace_skill_catalog(
+        workspace_inline, registry=ResourceRegistry(), file_registry=inline_files,
+        project_root=project_root, bundled_skill_groups=("shared",),
+    ))
+
+    assert (catalogs[0].entries[0].layer, catalogs[0].entries[0].description) == ("workspace", "Workspace")
+    assert (catalogs[1].entries[0].layer, catalogs[1].entries[0].description) == ("gateway", "Gateway")
+    assert (catalogs[2].entries[0].layer, catalogs[2].entries[0].description) == ("inline", "Inline")
+
+
 def test_catalog_revision_is_immutable_and_registry_cas_is_idempotent(
     layered_workspace, file_registry,
 ):
@@ -357,10 +423,36 @@ def test_metadata_facet_payload_hides_locator_and_ignored_fields(
     assert metadata.payload == {
         "name": "shared",
         "description": "Workspace 版本",
-        "display_uri": entry.display_uri,
-        "entry_identity": entry.entry_identity,
     }
+    assert registry.descriptor(entry.metadata_resource_id).display_uri == entry.display_uri
     assert metadata.source_lineage[0][0] == "skill-source:workspace:shared"
+
+
+def test_metadata_facet_ignores_uri_and_identity_carriers(layered_workspace, file_registry):
+    from app.services.business.resource_derivations.skills import (
+        SkillDerivationEntry,
+        SkillFacetLoader,
+    )
+    from app.services.infrastructure.resource_platform.derivation.types import (
+        SemanticInput,
+    )
+
+    entry = SkillDerivationEntry(
+        layer="workspace", name="shared",
+        display_uri="boxteam://workspace/one/resources/skills/shared/SKILL.md",
+        entry_identity="skill-entry:workspace:shared", source_id="skill-source:workspace:shared",
+    )
+    renamed = SkillDerivationEntry(
+        layer=entry.layer, name=entry.name,
+        display_uri="boxteam://workspace/two/resources/skills/shared/SKILL.md",
+        entry_identity="skill-entry:workspace:renamed-carrier",
+        source_id=entry.source_id,
+    )
+    content = "---\nname: shared\ndescription: stable\n---\nbody\n"
+    inputs = {entry.source_id: SemanticInput(entry.source_id, "rev-1", 1, content)}
+
+    assert SkillFacetLoader(entry, "metadata")(inputs) == SkillFacetLoader(renamed, "metadata")(inputs)
+    assert SkillFacetLoader(entry, "metadata")(inputs).payload == {"name": "shared", "description": "stable"}
 
 
 def test_published_snapshot_does_not_reresolve_current_file(

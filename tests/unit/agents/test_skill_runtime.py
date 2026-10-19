@@ -181,7 +181,6 @@ def test_build_workspace_skill_catalog_resolves_gateway_layer(
     assert entry.metadata_view() == {
         "name": "shared",
         "description": "Gateway skill",
-        "display_uri": entry.display_uri,
     }
     # 模型可见挂载已移除:backend 不再暴露 gateway skill 路由。
     backend = build_workspace_backend(tmp_path)

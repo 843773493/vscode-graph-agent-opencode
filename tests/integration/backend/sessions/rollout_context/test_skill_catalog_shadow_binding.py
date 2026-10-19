@@ -6,6 +6,7 @@ import asyncio
 import json
 import shutil
 from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
+    SkillCatalogSnapshotConflict,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.skill_catalog import (
     skill_catalog_from_activation,
@@ -155,6 +159,41 @@ async def test_workspace_shadow_keeps_gateway_tracked_and_sealed_binding(
     assert gateway.entry_identity == f"skill-entry:gateway:{GATEWAY_ID}:shared"
     assert gateway.display_uri == f"boxteam://gateway/{GATEWAY_ID}/resources/skills/shared/SKILL.md"
     assert gateway.body == GATEWAY_BODY
+
+    frozen_activation = saver.load_sealed_resource_activation(
+        session, thread_id=thread, assembly_id=initial.assembly_id,
+        plan_hash=initial.plan_hash, request_hash=initial.request_hash,
+    )
+    metadata_ref = next(
+        ref for ref in frozen_activation.bindings
+        if ref.resource_kind == "skill" and ref.facet == "metadata"
+    )
+    activation_ref = next(
+        ref for ref in frozen_activation.bindings
+        if ref.resource_kind == "skill" and ref.facet == "activation"
+        and ref.display_uri == metadata_ref.display_uri
+    )
+    mismatched_activation = replace(
+        activation_ref, resource_id=f"{metadata_ref.resource_id.removesuffix(':metadata')}:other",
+    )
+    malformed_activation = replace(
+        frozen_activation,
+        bindings=tuple(
+            mismatched_activation if ref is activation_ref else ref
+            for ref in frozen_activation.bindings
+        ),
+    )
+
+    def read_malformed(_snapshot, binding):
+        if binding.facet == "catalog":
+            return {"entries": []}
+        if binding.facet == "metadata":
+            return {"name": "shared", "description": "Gateway 共享来源"}
+        return {"body": GATEWAY_BODY}
+
+    with pytest.raises(SkillCatalogSnapshotConflict, match="Skill metadata 正文非法"):
+        skill_catalog_from_activation(malformed_activation, read_malformed)
+
     skill_load = create_skill_load_tool(manager, control_admission=lambda _name, _mode: nullcontext())
     with (
         session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),
@@ -194,7 +233,10 @@ async def test_workspace_shadow_keeps_gateway_tracked_and_sealed_binding(
     assert workspace.body == WORKSPACE_BODY
     assert workspace.activation_revision != gateway.activation_revision
     assert current_catalog.sources[gateway.display_uri] == gateway
-    tracked = tuple(state for state in saver.load_context_source_control_states(owner) if state.tracking_status == "tracked")
+    tracked = tuple(
+        state for state in saver.load_context_source_control_states(owner)
+        if state.tracking_status == "tracked" and state.source_kind == "skill"
+    )
     assert len(tracked) == 1
     assert (tracked[0].source_id, tracked[0].latest_revision, tracked[0].latest_visible_committed_revision) == (
         f"skill:{gateway.entry_identity}", gateway.activation_revision, gateway.activation_revision,
