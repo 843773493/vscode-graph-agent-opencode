@@ -340,9 +340,10 @@ def test_prepare_projection_without_losses_skips_loss_identity(bridge, monkeypat
 @pytest.fixture
 def preparation_bridge(bridge):
     frozen = SimpleNamespace(activation_policy=SimpleNamespace(has_model_call_boundary=lambda: True))
-    bridge._request_preparation = MagicMock(return_value=SimpleNamespace(checkpoint_ns="", creation_key="unit-creation", seal_key="unit-seal", admission=SimpleNamespace(session_id="unit-session", thread_id="unit-thread", execution_id="unit-execution")))
+    bridge._request_preparation = MagicMock(return_value=SimpleNamespace(checkpoint_ns="", creation_key="unit-creation", seal_key="unit-seal", admission=SimpleNamespace(session_id="unit-session", thread_id="unit-thread", execution_id="unit-execution", turn_id="unit-turn")))
     bridge._frozen_preparation = MagicMock(return_value=(None, frozen))
     bridge._resource_activation = SimpleNamespace(capture_model_call=AsyncMock(return_value=frozen), commit_model_call=AsyncMock(return_value=frozen))
+    bridge._checkpointer = SimpleNamespace(prepare_model_call_boundary=MagicMock(return_value=None))
     bridge._complete_preparation = MagicMock(side_effect=lambda *_args: _args[-1])
     return bridge
 
@@ -351,7 +352,8 @@ def preparation_bridge(bridge):
 def test_actual_preparation_allocates_uuid7_for_frozen_call_and_callback(preparation_bridge, mode):
     bridge = preparation_bridge
     started = datetime.now(UTC)
-    callback = bridge._prepare(object()) if mode == "sync" else asyncio.run(bridge._aprepare(object()))
+    request = SimpleNamespace(messages=[])
+    callback = bridge._prepare(request) if mode == "sync" else asyncio.run(bridge._aprepare(request))
     ended = datetime.now(UTC)
     identity = UUID(callback)
     assert identity.version == 7

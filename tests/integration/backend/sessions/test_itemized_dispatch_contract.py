@@ -48,7 +48,9 @@ from app.core.identifier import create_uuid_hex
 from app.core.path_utils import get_session_catalog_components
 from app.core.session_control_store import SessionControlStore
 from app.domain.itemized.epoch.prefix_epoch import (
+    EpochReason,
     ProviderProfileChangeRequiresRebuildError,
+    stable_prefix_bytes,
 )
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hash.request_hash import context_request_hash
@@ -59,6 +61,7 @@ from app.domain.itemized.hashing import (
 )
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
 from app.domain.itemized.serialization import normalize_wire_request
 from app.schemas.internal_v2.tool_test import ToolTestStartRequest
 from app.services.business.session_service import SessionService
@@ -1850,7 +1853,7 @@ def preparation_session_service(toolset_dispatch_case):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("target_format", ["chat_completions"])
-@pytest.mark.parametrize("stage", ["read", "commit"])
+@pytest.mark.parametrize("stage", ["read", "boundary", "activation_boundary", "commit"])
 @pytest.mark.parametrize("cancelled", [False, True])
 async def test_real_preparation_worker_keeps_loop_and_admission_until_settled(
     toolset_dispatch_case, preparation_session_service, monkeypatch, stage, cancelled, target_format,
@@ -1861,11 +1864,29 @@ async def test_real_preparation_worker_keeps_loop_and_admission_until_settled(
     loop, loop_thread = asyncio.get_running_loop(), get_ident()
     entered, released = asyncio.Event(), Event()
     settled, queued_ready = Event(), asyncio.Event()
-    method_name = "find_sealed_context_for_provider_creation" if stage == "read" else "prepare_context_for_provider"
+    method_name = {
+        "read": "find_sealed_context_for_provider_creation",
+        "boundary": "prepare_model_call_boundary",
+        "activation_boundary": "prepare_model_call_boundary",
+        "commit": "prepare_context_for_provider",
+    }[stage]
     actual = getattr(case.saver, method_name)
     observed_admissions = []
+    boundary_calls = 0
+    operations = []
+    admit = case.bridge._context_control_admission
+
+    def record_admission(operation, payload, ref):
+        operations.append(operation)
+        return admit(operation, payload, ref)
+
+    monkeypatch.setattr(case.bridge, "_context_control_admission", record_admission)
 
     def pause_worker(*args, **kwargs):
+        nonlocal boundary_calls
+        boundary_calls += 1
+        if stage == "activation_boundary" and boundary_calls == 1:
+            return actual(*args, **kwargs)
         assert get_ident() != loop_thread, "同步 Saver preparation 仍在 backend loop 中执行"
         observed_admissions.append(current_execution_admission())
         loop.call_soon_threadsafe(entered.set)
@@ -1905,7 +1926,7 @@ async def test_real_preparation_worker_keeps_loop_and_admission_until_settled(
         assert not settled.is_set()
         with closing(SessionControlStore(control_path)) as control:
             context_leases = [lease for lease in control.list_non_terminal_leases() if lease.operation_kind == "context_control"]
-            assert len(context_leases) == (1 if stage == "commit" else 0)
+            assert len(context_leases) == (0 if stage == "read" else 1)
             assert all(lease.state == "settling" for lease in context_leases)
     finally:
         released.set()
@@ -1921,8 +1942,10 @@ async def test_real_preparation_worker_keeps_loop_and_admission_until_settled(
     assert len(case.state.requests) == (0 if cancelled else 1)
     with closing(SessionControlStore(control_path)) as control:
         assert not [lease for lease in control.list_non_terminal_leases() if lease.operation_kind == "context_control"]
+        for operation in operations:
+            assert control.find_lease_by_operation(f"context-control:{operation}").state == "completed"
     assemblies = case.saver.list_context_assemblies(case.session, case.thread)
-    assert len(assemblies) == (0 if cancelled and stage == "read" else 1)
+    assert len(assemblies) == (0 if cancelled and stage != "commit" else 1)
     for assembly in assemblies:
         assert "worker 结算后接受的队列输入" not in json.dumps(assembly.request_hash_preimage, ensure_ascii=False)
 
@@ -1946,6 +1969,206 @@ def _contract_wire_tool_names(case, body):
         entry["name"] if case.target_format == "responses" else entry["function"]["name"]
         for entry in body.get("tools", ())
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
+async def test_real_request_prefix_chain_keeps_tool_group_full_delta_and_retry_bytes(
+    toolset_dispatch_case, target_format,
+):
+    """正常 HTTP 链逐字节继承 root/canonical/full/delta；仅工具切换重建 epoch。"""
+    del target_format
+    case = toolset_dispatch_case
+    initial = await case.dispatch("prefix-chain-initial")
+    case.manager.register(ContextSourceDescriptor(
+        source_id="prefix-chain:tail", source_kind="workspace_policy",
+        name="前缀来源", description="工具组之后的完整正文与增量",
+        internal_locator="instruction-producer://prefix-chain-tail", root_placement="tail_only",
+    ), tracking_status="tracked")
+    case.manager.observe("prefix-chain:tail", "完整来源 A\n", revision="tail:A")
+    call = AIMessage(content="读取两个文件", id="prefix-chain-call", tool_calls=[
+        {"name": "inspect_file", "args": {"path": path}, "id": identity}
+        for path, identity in (("README.md", "prefix-call-a"), ("AGENTS.md", "prefix-call-b"))
+    ])
+    results = [ToolMessage(content=body, id=f"prefix-result-{index}", tool_call_id=identity,
+                           name="inspect_file")
+               for index, (identity, body) in enumerate((("prefix-call-a", "README 结果"), ("prefix-call-b", "AGENTS 结果")))]
+    messages = (call, *results)
+    full = await case.dispatch("prefix-chain-full", messages=messages)
+    case.manager.observe("prefix-chain:tail", "完整来源 B\n", revision="tail:B")
+    delta = await case.dispatch("prefix-chain-delta", messages=messages)
+    expected_delta = "--- 前缀来源@tail:A\n+++ 前缀来源@tail:B\n@@ -1 +1 @@\n-完整来源 A\n+完整来源 B\n"
+    for previous, current in ((initial, full), (full, delta)):
+        old = previous.seal_binding.prefix.state
+        new = current.seal_binding.prefix.state
+        assert new.epoch == old.epoch
+        assert new.tool_compatibility_key == old.tool_compatibility_key
+        assert stable_prefix_bytes(new.frames[:len(old.frames)]) == stable_prefix_bytes(old.frames)
+        assert current.seal_binding.root == initial.seal_binding.root
+    frames = delta.seal_binding.prefix.state.frames
+    tail = [frame for frame in frames if frame.item_ref.source_identity == "prefix-chain:tail"]
+    assert [(frame.role, frame.content) for frame in tail] == [
+        ("user", "完整来源 A\n"), ("user", expected_delta),
+    ]
+    full_tail_index = frames.index(tail[0])
+    assert [frame.role for frame in frames[full_tail_index - 3:full_tail_index]] == [
+        "assistant", "tool", "tool",
+    ]
+    assert frames[0].role == "system"
+    assert any(frame.role == "user" and "HTTP canonical user" in str(frame.content) for frame in frames)
+    before = _sealed_contract_rows(case)
+    retry = await case.dispatch("prefix-chain-delta", messages=messages)
+    assert retry == delta
+    assert case.state.requests[-1]["body"] == case.state.requests[-2]["body"]
+    assert _sealed_contract_rows(case) == before
+    _select_contract_tools(case, "inspect_folder")
+    rebuilt = await case.dispatch("prefix-chain-rebase", messages=messages)
+    assert rebuilt.seal_binding.prefix.state.epoch.ordinal == initial.seal_binding.prefix.state.epoch.ordinal + 1
+    assert rebuilt.seal_binding.prefix.state.epoch.reason == EpochReason.TOOLSET_CHANGED
+    assert rebuilt.seal_binding.prefix.state.tool_compatibility_key != delta.seal_binding.prefix.state.tool_compatibility_key
+    assert _sealed_contract_rows(case)[:-1] == before
+    # 实际 HTTP 正文必须维持两个独立 user 来源块，不能由 adapter 合并。
+    body = case.state.requests[2]["body"]
+    wire_items = body["input"] if case.target_format == "responses" else body["messages"]
+    assert [entry for entry in wire_items if entry.get("role") == "user"][-2:] == [
+        {"role": "user", "content": [{"type": "input_text", "text": text}]
+         if case.target_format == "responses" else text}
+        for text in ("完整来源 A\n", expected_delta)
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
+@pytest.mark.parametrize("dispatch_saver", [
+    ResourceActivationPolicySnapshot(default_boundary="model_call", boundaries={}),
+], indirect=True)
+async def test_unpaired_tool_group_does_not_capture_model_call_resources(
+    toolset_dispatch_case, preparation_session_service, target_format, monkeypatch,
+):
+    """未闭合协议组必须先失败，不能提前消费 Registry 或持久化下一次 snapshot。"""
+    del target_format
+    case = toolset_dispatch_case
+    control_operations = []
+    admit = case.bridge._context_control_admission
+
+    def record_admission(operation, payload, ref):
+        control_operations.append(operation)
+        return admit(operation, payload, ref)
+
+    monkeypatch.setattr(case.bridge, "_context_control_admission", record_admission)
+    await case.dispatch("activation-protocol-initial")
+    activation = case.bridge._resource_activation
+    original_capture = activation.capture_model_call
+    captures = []
+
+    async def record_capture(**kwargs):
+        captures.append(kwargs["model_call_id"])
+        return await original_capture(**kwargs)
+
+    monkeypatch.setattr(activation, "capture_model_call", record_capture)
+
+    def frozen_ids():
+        with case.saver._context_reader.open_snapshot(case.session, case.thread) as snapshot:
+            return tuple(snapshot.connection.execute(
+                "SELECT activation_snapshot_id FROM resource_activation_snapshots "
+                "WHERE snapshot_kind='model_call' ORDER BY rowid",
+            ))
+
+    before = frozen_ids()
+    assert len(before) == 1, "首次真实请求必须冻结独立的 model_call snapshot"
+    call = AIMessage(content="", id="activation-unpaired-call", tool_calls=[
+        {"name": "inspect_file", "args": {"path": "README.md"}, "id": "activation-call"},
+    ])
+    with pytest.raises(ToolProtocolBoundaryConflict):
+        await case.dispatch("activation-protocol-next", messages=(call,))
+    rejected_operation = control_operations[-1]
+    control_path = preparation_session_service.path_resolver.resolve_session_node(case.session) / "session-control.sqlite"
+    with closing(SessionControlStore(control_path)) as control:
+        assert control.find_lease_by_operation(f"context-control:{rejected_operation}").state == "completed"
+    # 相同不完整输入也可以重入；不能被 failed lease 提前挡住。
+    with pytest.raises(ToolProtocolBoundaryConflict):
+        await case.dispatch("activation-protocol-next", messages=(call,))
+    assert control_operations[-1] == rejected_operation
+    assert captures == []
+    assert frozen_ids() == before
+    assert len(case.state.requests) == 1
+    result = ToolMessage(content="完整结果", id="activation-paired-result", tool_call_id="activation-call",
+                         name="inspect_file")
+    await case.dispatch("activation-protocol-next", messages=(call, result))
+    assert len(captures) == 1
+    assert len(frozen_ids()) == len(before) + 1
+    assert len(case.state.requests) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
+@pytest.mark.parametrize("dispatch_saver", [
+    ResourceActivationPolicySnapshot(default_boundary="model_call", boundaries={}),
+], indirect=True)
+async def test_registry_wait_rechecks_protocol_before_committing_activation(
+    toolset_dispatch_case, preparation_session_service, monkeypatch, target_format,
+):
+    """来源等待不占 gate；期间新 open group 必须先于 snapshot/source/seal 被拒绝。"""
+    del target_format
+    case = toolset_dispatch_case
+    await case.dispatch("activation-race-initial")
+    before_rows = _sealed_contract_rows(case)
+    with case.saver._context_reader.open_snapshot(case.session, case.thread) as snapshot:
+        before_ids = tuple(snapshot.connection.execute(
+            "SELECT activation_snapshot_id FROM resource_activation_snapshots ORDER BY rowid",
+        ))
+    entered, released = asyncio.Event(), asyncio.Event()
+    activation = case.bridge._resource_activation
+    capture = activation.capture_model_call
+
+    async def wait_for_registry(**kwargs):
+        pending = await capture(**kwargs)
+        entered.set()
+        await released.wait()
+        return pending
+
+    monkeypatch.setattr(activation, "capture_model_call", wait_for_registry)
+    calls = {"source": 0, "seal": 0}
+
+    def count(name, actual):
+        def counted(*args, **kwargs):
+            calls[name] += 1
+            return actual(*args, **kwargs)
+        return counted
+
+    monkeypatch.setattr(case.manager, "prepare_sources", count("source", case.manager.prepare_sources))
+    from app.services.infrastructure.rollout_context.checkpoint.seal import preparation
+    monkeypatch.setattr(preparation, "seal_registered_plan", count("seal", preparation.seal_registered_plan))
+    running = asyncio.create_task(case.dispatch("activation-race-next"))
+    call = AIMessage(content="", id="activation-race-call", tool_calls=[
+        {"name": "inspect_file", "args": {"path": "README.md"}, "id": "activation-race-tool"},
+    ])
+    try:
+        await asyncio.wait_for(entered.wait(), 10)
+        async with preparation_session_service.session_write_admission(case.session):
+            with dispatch_execution_scope(case.saver, case.session, case.turn):
+                admission = current_execution_admission()
+                assert admission is not None
+                case.saver.ensure_request_items(
+                    case.session, case.thread, turn_id=case.turn, execution_id=admission.execution_id,
+                    messages=(call,),
+                )
+    finally:
+        released.set()
+        with pytest.raises(ToolProtocolBoundaryConflict):
+            await asyncio.wait_for(running, 20)
+    assert calls == {"source": 0, "seal": 0}
+    assert len(case.state.requests) == 1
+    assert _sealed_contract_rows(case) == before_rows
+    with case.saver._context_reader.open_snapshot(case.session, case.thread) as snapshot:
+        assert tuple(snapshot.connection.execute(
+            "SELECT activation_snapshot_id FROM resource_activation_snapshots ORDER BY rowid",
+        )) == before_ids
+    result = ToolMessage(content="完整结果", id="activation-race-result", tool_call_id="activation-race-tool",
+                         name="inspect_file")
+    await case.dispatch("activation-race-next", messages=(call, result))
+    assert calls == {"source": 1, "seal": 1}
+    assert len(case.state.requests) == 2
 
 
 @pytest.mark.asyncio

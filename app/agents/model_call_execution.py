@@ -42,6 +42,9 @@ from app.domain.itemized.resource_activation import ResourceActivationSnapshotRe
 from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextPlanRegistration,
 )
+from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
+    ToolProtocolBoundaryConflict,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -364,6 +367,33 @@ class ModelCallExecution:
             return asyncio.run(self._aprepare(request))
         raise RuntimeError("同步 model-call preparation 不能阻塞运行中的事件循环")
 
+    async def _settle_boundary(
+        self, request: ModelRequest[Any], context: _ProviderPreparation,
+    ) -> tuple[ToolProtocolBoundaryConflict | None, asyncio.CancelledError | None]:
+        """排空 canonical worker；由持 gate 的调用者结算后传播预期拒绝或取消。"""
+        worker = asyncio.create_task(asyncio.to_thread(
+            self._checkpointer.prepare_model_call_boundary,
+            context.admission.session_id, context.admission.thread_id,
+            turn_id=context.admission.turn_id, execution_id=context.admission.execution_id,
+            messages=request.messages, checkpoint_ns=context.checkpoint_ns,
+            reconcile_request_items=current_summary_candidate() is None,
+        ))
+
+        async def settle() -> None:
+            await worker
+
+        cancelled = None
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError as error:
+            cancelled = error
+        finally:
+            await run_cleanup_shielded(settle)
+        task = asyncio.current_task()
+        if cancelled is None and task is not None and task.cancelling():
+            cancelled = asyncio.CancelledError()
+        return worker.result(), cancelled
+
     async def _aprepare(self, request: ModelRequest[Any]) -> _PreparedModelCall:
         context = self._request_preparation(request)
         activation = self._resource_activation
@@ -382,9 +412,31 @@ class ModelCallExecution:
                 # to_thread 继承本次 ContextVar owner；取消后仍须等真实读取
                 # 结束再退出 read gate，不能让删除提前隔离 worker 的目录。
                 await run_cleanup_shielded(settle_read)
-        pending = None if sealed is not None else await activation.capture_model_call(
-            parent=frozen, model_call_id=callback_id, checkpoint_ns=context.checkpoint_ns,
-        )
+        pending = None
+        if sealed is None:
+            candidate = current_summary_candidate()
+            preflight_id = "provider-boundary:" + sha256_jcs({
+                "schema": "provider-boundary-input:v1",
+                "creation_key": context.creation_key,
+                "request_messages": [message.model_dump(mode="json") for message in request.messages],
+                "summary_candidate": candidate.identity() if candidate is not None else None,
+            })
+            async with self._context_control_admission(
+                preflight_id,
+                {"kind": "model_call_boundary", "execution_id": context.admission.execution_id,
+                 "checkpoint_ns": context.checkpoint_ns},
+                context.creation_key,
+            ):
+                conflict, cancelled = await self._settle_boundary(request, context)
+            if cancelled is not None:
+                raise cancelled
+            if conflict is not None:
+                raise conflict
+            # 来源等待不持 Session gate；只有完整 tool group 才能进入冻结边界。
+            pending = await activation.capture_model_call(
+                parent=frozen, model_call_id=callback_id, checkpoint_ns=context.checkpoint_ns,
+            )
+        conflict, cancelled = None, None
         async with self._context_control_admission(
             context.creation_key,
             {"kind": "tool_set", "execution_id": context.admission.execution_id,
@@ -394,20 +446,35 @@ class ModelCallExecution:
             if sealed is None:
                 if pending is None:
                     raise RuntimeError("resource-activation-unavailable: model-call capture 缺失")
-                frozen = await activation.commit_model_call(pending)
-            prepare_worker = asyncio.create_task(asyncio.to_thread(
-                self._complete_preparation, request, context, sealed, frozen, callback_id,
-            ))
+                # 等待来源时释放过 gate，提交 snapshot 前必须先核最新 canonical 边界。
+                conflict, cancelled = await self._settle_boundary(request, context)
+                if conflict is None and cancelled is None:
+                    frozen = await activation.commit_model_call(pending)
+            if conflict is None and cancelled is None:
+                prepare_worker = asyncio.create_task(asyncio.to_thread(
+                    self._complete_preparation, request, context, sealed, frozen, callback_id,
+                ))
 
-            async def settle_preparation() -> None:
-                await prepare_worker
+                async def settle_preparation() -> None:
+                    await prepare_worker
 
-            try:
-                return await asyncio.shield(prepare_worker)
-            finally:
-                # 持原 context-control gate/lease 直到提交线程结算；重复
-                # cancel 不能让后继准入抢先进入仍在落盘的请求准备。
-                await run_cleanup_shielded(settle_preparation)
+                try:
+                    await asyncio.shield(prepare_worker)
+                except asyncio.CancelledError as error:
+                    cancelled = error
+                finally:
+                    # 持原 gate/lease 直到真实提交线程结算。
+                    await run_cleanup_shielded(settle_preparation)
+                task = asyncio.current_task()
+                if cancelled is None and task is not None and task.cancelling():
+                    cancelled = asyncio.CancelledError()
+                if cancelled is None:
+                    return prepare_worker.result()
+        if cancelled is not None:
+            raise cancelled
+        if conflict is not None:
+            raise conflict
+        raise RuntimeError("model-call preparation 未产生结果")
 
     def _complete_preparation(
         self, request: ModelRequest[Any], context: _ProviderPreparation,

@@ -221,23 +221,19 @@ def prepare_registered_context(
         else:
             # 成功 SQL 行仅沿本次 prepare 传给 seal writer 重读，不跨请求保存。
             validated_predecessors: _ValidatedPredecessors = {}
+            # Registry 等待期间 canonical 可能推进；封存前复用唯一边界端口重新检查。
+            conflict = owner.prepare_model_call_boundary(
+                session_id, thread_id, turn_id=turn_id, execution_id=execution_id,
+                messages=request_messages, checkpoint_ns=checkpoint_ns,
+                reconcile_request_items=summary_candidate is None,
+            )
+            if conflict is not None:
+                raise conflict
             # 只有新请求读取 desired；已 sealed/in-flight attempt 完全复用旧 binding。
             tool_set = tool_set_supplier()
             if not isinstance(tool_set, ToolSetSnapshot):
                 raise TypeError("Tool producer 必须返回正向 ToolSetSnapshot")
-            if turn_id is not None:
-                owner._storage.checkpoints.ensure_active_view_contains_turn_root(
-                    session_id, thread_id, turn_id=turn_id, checkpoint_ns=checkpoint_ns,
-                )
-            if summary_candidate is None:
-                owner.ensure_request_items(
-                    session_id, thread_id, turn_id=turn_id, execution_id=execution_id,
-                    messages=request_messages, checkpoint_ns=checkpoint_ns,
-                )
-            # 先收敛真实 call/result group；未闭合时不得冻结或登记恢复 source。
             with owner._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns) as read_snapshot:
-                sequences = owner.selected_context_message_sequences(read_snapshot)
-                validate_tool_protocol_closure(read_snapshot.connection, sequences, len(sequences))
                 previous = owner._storage.assemblies.latest_context_assembly(
                     read_snapshot, validated_predecessors=validated_predecessors,
                 )

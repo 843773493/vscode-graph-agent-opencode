@@ -66,7 +66,8 @@ EMPTY_TOOL_SET = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
 
 @contextmanager
 def dispatch_execution_scope(
-    saver: RolloutCheckpointSaver, session_id: str, turn_id: str
+    saver: RolloutCheckpointSaver, session_id: str, turn_id: str,
+    *, activation_policy: ResourceActivationPolicySnapshot | None = None,
 ) -> Iterator[str]:
     """真实测试 fixture 与 native dispatch 共用当前执行授权，不伪造 owner。"""
     thread = saver._storage.storage.main_thread_id(session_id)
@@ -95,7 +96,7 @@ def dispatch_execution_scope(
                     copy_context().run, asyncio.run,
                     coordinator.freeze_execution(
                         admission=admission,
-                        policy=ResourceActivationPolicySnapshot(default_boundary="turn", boundaries={}),
+                        policy=activation_policy or ResourceActivationPolicySnapshot(default_boundary="turn", boundaries={}),
                     ),
                 ).result()
             activation_token = set_current_execution_resource_activation(parent, admission=admission)
@@ -107,7 +108,10 @@ def dispatch_execution_scope(
         reset_current_job_id(token)
 
 
-def seed_dispatch_history(saver: RolloutCheckpointSaver, session_id: str) -> str:
+def seed_dispatch_history(
+    saver: RolloutCheckpointSaver, session_id: str,
+    *, activation_policy: ResourceActivationPolicySnapshot | None = None,
+) -> str:
     """正式 Saver ingress 创建 canonical history，不手工构造 sealed plan。"""
     thread = saver._storage.storage.main_thread_id(session_id)
     saver.accept_turn(
@@ -133,7 +137,7 @@ def seed_dispatch_history(saver: RolloutCheckpointSaver, session_id: str) -> str
         ]
     }
     checkpoint["channel_versions"] = {"messages": "1"}
-    with dispatch_execution_scope(saver, session_id, "http-turn"):
+    with dispatch_execution_scope(saver, session_id, "http-turn", activation_policy=activation_policy):
         saver.put(
             build_checkpoint_config(thread),
             checkpoint,
@@ -183,12 +187,12 @@ def native_dispatch_workspace(integration_workspace_root_path) -> Path:
 
 
 @pytest.fixture
-def dispatch_saver(native_dispatch_workspace, session_bundle_factory):
+def dispatch_saver(native_dispatch_workspace, session_bundle_factory, request):
     sessions = native_dispatch_workspace / ".boxteam/sessions"
     session_id = f"ses_{create_uuid_hex()}"
     session_bundle_factory(sessions, session_id)
     with RolloutCheckpointSaver(sessions) as saver:
-        turn_id = seed_dispatch_history(saver, session_id)
+        turn_id = seed_dispatch_history(saver, session_id, activation_policy=getattr(request, "param", None))
         seed_dispatch_overlay(saver, session_id)
         with dispatch_execution_scope(saver, session_id, turn_id):
             yield saver, session_id, turn_id, sessions

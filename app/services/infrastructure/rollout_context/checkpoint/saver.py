@@ -52,6 +52,10 @@ from app.services.infrastructure.rollout_context.activation.lineage import (
 from app.services.infrastructure.rollout_context.activation.store import (
     ResourceActivationStore,
 )
+from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
+    ToolProtocolBoundaryConflict,
+    validate_tool_protocol_closure,
+)
 from app.services.infrastructure.rollout_context.checkpoint.fork_copy import (
     CheckpointForkCopy,
 )
@@ -308,6 +312,36 @@ class RolloutCheckpointSaver(
             return self._storage.executions.append_request_groups(
                 session_id, thread_id, groups=pending, execution_id=execution_id, checkpoint_ns=checkpoint_ns,
             )
+
+    def prepare_model_call_boundary(
+        self, session_id: str, thread_id: str, *, turn_id: str | None,
+        execution_id: str, messages: Sequence[object], checkpoint_ns: str = "",
+        reconcile_request_items: bool = True,
+    ) -> ToolProtocolBoundaryConflict | None:
+        """先提交 canonical group 并检查闭合；预期冲突不撤销已提交事实。"""
+        admission = require_current_execution_admission(langgraph_thread_id=thread_id)
+        if (admission.session_id, admission.thread_id, admission.execution_id, admission.turn_id) != (
+            session_id, thread_id, execution_id, turn_id,
+        ):
+            raise RuntimeError("model-call boundary 与当前 execution admission 不一致")
+        checkpoint_ns = self.context_owner_namespace(checkpoint_ns)
+        with self._lock, self._storage.storage.catalog_body_validation_scope():
+            if turn_id is not None:
+                self._storage.checkpoints.ensure_active_view_contains_turn_root(
+                    session_id, thread_id, turn_id=turn_id, checkpoint_ns=checkpoint_ns,
+                )
+            if reconcile_request_items:
+                self.ensure_request_items(
+                    session_id, thread_id, turn_id=turn_id, execution_id=execution_id,
+                    messages=messages, checkpoint_ns=checkpoint_ns,
+                )
+            with self._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns) as snapshot:
+                sequences = self.selected_context_message_sequences(snapshot)
+                try:
+                    validate_tool_protocol_closure(snapshot.connection, sequences, len(sequences))
+                except ToolProtocolBoundaryConflict as conflict:
+                    return conflict
+        return None
 
     def accept_turn(
         self,
