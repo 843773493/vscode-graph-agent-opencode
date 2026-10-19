@@ -40,6 +40,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceDescriptor,
     ContextSourceManager,
 )
+from app.services.infrastructure.rollout_context.storage.schema import (
+    ROLLOUT_SCHEMA_VERSION,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.itemized_projection_helpers import (
     copy_rollout_snapshot,
@@ -294,7 +297,7 @@ def test_v17_database_is_rejected_without_rewrite(notice_case):
         connection.execute("UPDATE database_meta SET schema_version=17")
     before = hashlib.sha256(path.read_bytes()).hexdigest()
     case.restart()
-    with pytest.raises(RuntimeError, match="schema-incompatible.*current=17, target=18"):
+    with pytest.raises(RuntimeError, match=rf"schema-incompatible.*current=17, target={ROLLOUT_SCHEMA_VERSION}"):
         case.saver.execution_admission_for_job(case.session, thread_id=case.thread, job_id="job-schema")
     assert hashlib.sha256(path.read_bytes()).hexdigest() == before
 

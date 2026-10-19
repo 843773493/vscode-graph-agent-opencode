@@ -616,7 +616,10 @@ class RolloutCheckpointQueriesMixin:
                         selection_view_id=selection_view_id,
                         execution_view_id=execution_view_id,
                         additional_message_sequences=additional_sequences,
-                        execution_fenced=include_execution_context,
+                        # 冷查询读取冻结历史；只有真实执行准入才能按其私有
+                        # notice selection 过滤，不能把无准入当成空选集。
+                        execution_fenced=(include_execution_context and
+                            current_execution_admission(langgraph_thread_id=thread_id) is not None),
                     )
                 elif state == "present":
                     if (
