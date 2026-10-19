@@ -34,8 +34,11 @@
 
 ## 5. 契约快照与门禁
 
-- [ ] 5.1 重新生成 OpenAPI 快照（`bun run gen:openapi`）与前端类型，修复 `tests/contracts/api/**` 中因路径形态变化而失效的断言。
-- [ ] 5.2 确认门禁在快照未更新时 fail-closed（不会静默通过）。
+- [x] 5.1 重新生成 OpenAPI 两份 JSON 快照（`bun run gen:openapi`），核对前端类型影响，修复 `tests/contracts/api/**` 中因路径形态变化而失效的断言。
+  - **2026-10-19 当前源码验收**：`bun run gen:openapi` 退出 0；`src/clients/web/openapi.json` 与 `src/clients/web/src/types/openapi/index.json` 生成前后逐字节一致，且与当前 `app.openapi()` 原件相同（SHA-256 `8d3646db53bc13c89e209c7a0794ded27cb6bf7f086ae0a3ba68357621ba6c5e`）。受保护 `contracts-python` 矩阵为 123 passed、2 warnings、退出 0；独立 Bun OpenAPI 合同为 15 passed、退出 0；Web `tsc --noEmit` 与 build 均退出 0。矩阵首跑指出 ChildThreadStatus 测试预期漏了现有 `idle` 值；该值已存在于生产 DTO 与 OpenAPI，按实际合同补入测试预期后全矩阵通过，未改生产代码。证据原件：`out/tests/temp/2026/10/19/goal-delivery-owner20/openapi_contract_luna/artifacts/`。
+  - **前端类型边界**：`src/clients/web/src/types/openapi/` 只有 JSON 索引和目录说明；当前 `gen:openapi` 仅写入两份 JSON 快照，仓库没有 OpenAPI→TypeScript 生成命令、生成产物或消费者。`backend.ts` 的后端类型来源为 protobuf 生成类型。本项没有新增 OpenAPI→TS 生成流程或类型产物；目录清单和生成器检索原件位于上述 artifacts 的 `frontend-openapi-type-audit/`。
+- [x] 5.2 确认门禁在快照未更新时 fail-closed（不会静默通过）。
+  - **2026-10-19 当前源码负例**：在临时隔离工作区的两份快照副本中仅删除 `/api/v1/workspaces/{workspace_id}/context/read`，语义差异核验确认没有其它变化。复制的实际 equality 测试文件 SHA 与源码完全一致（`254e672d96c11d4e47d781e505113832235f4d76d44f6ace52b2d0b1a5906beb`）；受 `timeout -k 30 120` 和 `ulimit -S -d 4194304` 保护，运行 `test_offline_openapi_is_generated_from_current_routes` 后两个快照用例均在 `document == app.openapi()` 断言失败，实际退出码 1。`app/main.py`、快照清单、测试源码及真实快照的 SHA 在探针前后相同。首次隔离尝试只触发了测试 harness 的路径约束错误，不计入负例；修正隔离测试路径后的有效结果、stale 快照输入、命令、原始输出、退出码及源码指纹均在 `out/tests/temp/2026/10/19/goal-delivery-owner20/openapi_contract_luna/artifacts/stale-snapshot-fail-closed-002/`。
 
 ## 6. 测试影响面（因无存量迁移而重述为接口契约层）
 
