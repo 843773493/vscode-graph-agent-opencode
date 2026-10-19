@@ -67,6 +67,7 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+from tests.support.rollout_output import commit_fixture_output
 from tests.support.session_catalog_owner import fixture_catalog_scope
 from tests.support.workspaces import prepare_default_test_workspace
 
@@ -1582,17 +1583,12 @@ def test_history_reads_accepted_turn_from_active_successor_before_next_checkpoin
     )
     with _execution_scope(first_admission):
         start_model_call(saver, first_admission, first[0])
+        commit_fixture_output(saver, messages=first)
         checkpoint_config = saver.put(
             build_checkpoint_config(thread_id),
             _checkpoint("cp-1", first),
             {"source": "active-history-test"},
             {"messages": "1"},
-        )
-        saver.finalize_turn(
-            session_id=SESSION_ID,
-            thread_id=thread_id,
-            turn_id="turn-1",
-            final_message_id="final-001",
         )
     context_reader = RolloutContextReader(_storage(sessions_dir))
     reader = RolloutHistoryReader(context_reader)
@@ -1694,17 +1690,12 @@ def test_checkpoint_envelope_and_channels_are_authoritative_sqlite(
     )
     with _execution_scope(admission):
         start_model_call(saver, admission, messages[0])
+        commit_fixture_output(saver, messages=messages)
         checkpoint_config = saver.put(
             build_checkpoint_config(thread_id),
             _checkpoint("cp-1", messages, counter=3, task_state=None),
             {"source": "unit", "step": 1},
             {"messages": "1", "counter": "1", "task_state": "1"},
-        )
-        saver.finalize_turn(
-            session_id=SESSION_ID,
-            thread_id=thread_id,
-            turn_id="turn-1",
-            final_message_id="final-001",
         )
 
         restored = saver.get_tuple(checkpoint_config)
@@ -1746,10 +1737,17 @@ def test_checkpoint_envelope_and_channels_are_authoritative_sqlite(
         assert all(line["record_type"] == "item" for line in lines)
         assert all("message" not in line and "role" not in line for line in lines)
         with sqlite3.connect(rollout_root / "index.sqlite") as connection:
-            assert (
-                connection.execute("SELECT COUNT(*) FROM control_events").fetchone()[0]
-                >= 2
-            )
+            terminal = connection.execute(
+                "SELECT commit_id,commit_mode,outcome FROM storage_commits "
+                "WHERE commit_kind='terminal_convergence'",
+            ).fetchall()
+            assert len(terminal) == 1 and terminal[0][1:] == ("item_bearing", "completed")
+            assert connection.execute(
+                "SELECT item.commit_id,execution.outcome FROM turn_records turn "
+                "JOIN item_catalog item ON item.item_id=turn.final_item_id "
+                "JOIN executions execution ON execution.execution_id=turn.last_execution_id "
+                "WHERE turn.turn_id='turn-1'",
+            ).fetchone() == (terminal[0][0], "completed")
             assert (
                 connection.execute(
                     "SELECT COUNT(*) FROM checkpoint_channels"
@@ -2197,17 +2195,12 @@ def test_rewind_replay_uses_new_canonical_suffix_without_replacement_event(
     )
     with _execution_scope(first_admission):
         start_model_call(saver, first_admission, first[0])
+        commit_fixture_output(saver, messages=first)
         first_config = saver.put(
             build_checkpoint_config(thread_id),
             _checkpoint("cp-1", first),
             {"source": "unit"},
             {"messages": "1"},
-        )
-        saver.finalize_turn(
-            session_id=SESSION_ID,
-            thread_id=thread_id,
-            turn_id="turn-1",
-            final_message_id="final-001",
         )
         first_snapshot = saver.get_tuple(first_config)
         assert first_snapshot is not None

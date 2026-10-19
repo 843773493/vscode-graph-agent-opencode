@@ -154,8 +154,8 @@ class RolloutCheckpointOperationsMixin:
                 visible_sequences = source_sequences[:cutoff]
                 # rewind/compaction 必须保留被切断/隐藏的 sealed assembly 的精确
                 # activation snapshot/ref：这些引用写入同一 control event，后续
-                # restore 只读该引用，永不解析当前 URI 或 Registry。schema 未 bootstrap
-                # 或没有任何 sealed activation 绑定时不写该键，保持既有 payload 字节。
+                # restore 只读该引用，永不解析当前 URI 或 Registry。没有任何 sealed
+                # activation 绑定时不写该键，schema 缺失或陈旧则直接失败。
                 source_turn_ids = tuple(
                     dict.fromkeys(
                         strict_text(row[0], field="context_view_turns.turn_id")
@@ -169,6 +169,7 @@ class RolloutCheckpointOperationsMixin:
                 activation_refs = read_activation_refs_for_turns(
                     connection,
                     session_id=session_id,
+                    thread_id=thread_id,
                     turn_ids=source_turn_ids,
                 )
                 # 在创建目标 view/branch 前验证 tool protocol closure：

@@ -321,21 +321,6 @@ class RolloutLangGraphCheckpointMixin:
             }
         }
 
-    def finalize_turn(
-        self,
-        *,
-        session_id: str,
-        thread_id: str,
-        turn_id: str,
-        final_message_id: str,
-    ) -> None:
-        """根据最终消息 ID 写入 Turn 完成指针，不复制消息正文。"""
-        self._writer.finalize_turn(
-            session_id=session_id,
-            thread_id=thread_id,
-            turn_id=turn_id,
-            final_message_id=final_message_id,
-        )
 
     def put_writes(
         self,

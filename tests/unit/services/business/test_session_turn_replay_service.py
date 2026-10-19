@@ -22,6 +22,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from tests.support.message_service import build_message_service
+from tests.support.rollout_output import commit_fixture_output
 
 NOW = datetime(2026, 7, 16, tzinfo=UTC)
 
@@ -231,19 +232,18 @@ async def _build_service(
     ):
         prepare_execution(saver, key="replay-source-create")
     first_messages = [
-        HumanMessage(content="第一问", response_metadata=_metadata("msg_1")),
-        AIMessage(content="第一答", response_metadata=_metadata("assistant_1")),
+        HumanMessage(id="msg_1", content="第一问", response_metadata=_metadata("msg_1")),
+        AIMessage(id="assistant_1", content="第一答", response_metadata=_metadata("assistant_1")),
     ]
+    with (session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id),
+          execution_admission_scope(first_admission, langgraph_thread_id=owner.thread_id)):
+        commit_fixture_output(saver, messages=first_messages)
     config = await _put_checkpoint(
         saver,
         config,
         owner=owner, admission=first_admission,
         messages=first_messages,
         todos=["after_first"],
-    )
-    saver.finalize_turn(
-        session_id=owner.session_id, thread_id=owner.thread_id,
-        turn_id="turn-1", final_message_id="assistant_1",
     )
     saver.accept_turn(
         owner.session_id, thread_id=owner.thread_id, accepted_ingress_id="msg_2",
@@ -256,13 +256,14 @@ async def _build_service(
     )
     second_messages = [
         *first_messages,
-        HumanMessage(content="第二问", response_metadata=_metadata("msg_2")),
+        HumanMessage(id="msg_2", content="第二问", response_metadata=_metadata("msg_2")),
         AIMessage(
+            id="assistant-call-1",
             content="",
             tool_calls=[{"id": "call_1", "name": "read_file", "args": {}}],
         ),
-        ToolMessage(content="partial", tool_call_id="call_1"),
-        AIMessage(content="第二答", response_metadata=_metadata("assistant_2")),
+        ToolMessage(id="tool-result-1", content="partial", tool_call_id="call_1"),
+        AIMessage(id="assistant_2", content="第二答", response_metadata=_metadata("assistant_2")),
     ]
     await _put_checkpoint(
         saver,
@@ -272,7 +273,7 @@ async def _build_service(
         todos=["after_second"],
         summarization_event={
             "cutoff_index": 2,
-            "summary_message": HumanMessage(content="第一轮摘要"),
+            "summary_message": HumanMessage(id="summary-first-turn", content="第一轮摘要"),
             "file_path": "/history/ses_019c205391bb7a4b81b6728df70f63e6.jsonl",
         },
     )

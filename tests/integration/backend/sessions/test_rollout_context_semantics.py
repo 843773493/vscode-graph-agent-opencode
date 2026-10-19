@@ -21,6 +21,7 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from tests.support.rollout_output import commit_fixture_output
 
 SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
 
@@ -159,7 +160,7 @@ def test_context_view_filters_control_records_and_keeps_business_messages(
         response_metadata={"source": "subagent"},
     )
     admission = accept_context_turn(user, "turn-config")
-    saver.admit_internal_execution(
+    internal_admission = saver.admit_internal_execution(
         SESSION_ID,
         thread_id=thread_id,
         job_id="job-steering",
@@ -194,17 +195,18 @@ def test_context_view_filters_control_records_and_keeps_business_messages(
         message.id for message in restored.checkpoint["channel_values"]["messages"]
     ] == [
         "user-1",
-        "steering-1",
         "assistant-tool-1",
         "tool-result-1",
         "assistant-final-1",
     ]
-    assert (
-        restored.checkpoint["channel_values"]["messages"][1].response_metadata[
-            "internal"
-        ]
-        is True
-    )
+    # 用户 execution 的 acceptance 已先冻结，后来的 notice 只由其自身 admission 消费。
+    with execution_admission_scope(internal_admission, langgraph_thread_id=thread_id):
+        internal_checkpoint = saver.get_tuple(build_checkpoint_config(thread_id))
+    assert internal_checkpoint is not None
+    internal_messages = internal_checkpoint.checkpoint["channel_values"]["messages"]
+    assert [message.content for message in internal_messages if message.id == "steering-1"] == [
+        internal_steering.content
+    ]
 
     root = saver._storage.storage.root(SESSION_ID, thread_id=thread_id)
     records = [
@@ -655,18 +657,13 @@ def test_turn_anchor_walks_active_lineage_after_message_level_compaction(
     first_admission = accept_context_turn(turn_messages[0], "turn-1")
     with execution_admission_scope(first_admission, langgraph_thread_id=thread_id):
         frozen_provider_prepare(saver, key="turn-anchor:turn-1")
+        commit_fixture_output(saver, messages=turn_messages)
         config = saver.put(
             build_checkpoint_config(thread_id),
             _checkpoint("cp-1", turn_messages),
             {"source": "anchor-test", "step": 1},
             {"messages": "1"},
         )
-    saver.finalize_turn(
-        session_id=SESSION_ID,
-        thread_id=thread_id,
-        turn_id="turn-1",
-        final_message_id="turn-1-final",
-    )
     cp1_anchor = saver.resolve_turn_anchor(
         config,
         turn_id="turn-1",

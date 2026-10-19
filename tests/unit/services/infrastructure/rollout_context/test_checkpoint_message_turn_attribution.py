@@ -31,6 +31,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
+from tests.support.rollout_output import commit_fixture_output
 
 SESSION_ID = "ses_019c3635a6c278efb831fe265bdcd656"
 OTHER_SESSION_ID = "ses_019c3635a6c278efb831fe265bdcd657"
@@ -312,6 +313,11 @@ def test_internal_notice_and_tool_outputs_remain_turnless_and_do_not_reopen_fina
     ):
         frozen_provider_prepare(saver, key="attribution-user-create")
     final_message = AIMessage(content="completed answer", id="completed-final")
+    with (
+        session_thread_owner_scope(_owner(SESSION_ID, thread_id), langgraph_thread_id=thread_id),
+        execution_admission_scope(user_admission, langgraph_thread_id=thread_id),
+    ):
+        commit_fixture_output(saver, messages=[user_message, final_message])
     user_config = _put_with_admission(
         saver,
         session_id=SESSION_ID,
@@ -320,12 +326,6 @@ def test_internal_notice_and_tool_outputs_remain_turnless_and_do_not_reopen_fina
         config=build_checkpoint_config(thread_id),
         checkpoint_id="checkpoint-completed-turn",
         messages=[user_message, final_message],
-    )
-    saver.finalize_turn(
-        session_id=SESSION_ID,
-        thread_id=thread_id,
-        turn_id=USER_TURN_ID,
-        final_message_id="completed-final",
     )
 
     internal_execution_id = "execution-internal-attribution"

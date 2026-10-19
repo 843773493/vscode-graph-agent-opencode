@@ -8,10 +8,11 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from contextvars import copy_context
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from app.agents.providers.wire_finalize import ChatWireProfile, ResponsesWireProfile
 from app.core.execution_admission_context import require_current_execution_admission
+from app.core.identifier import create_uuid_hex
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import sha256_jcs
@@ -182,7 +183,7 @@ def create_frozen_provider_activation(
                 admission.session_id, admission.thread_id, admission.execution_id,
                 plan_creation_idempotency_key,
             )
-            call_id = model_call_id if model_call_id is not None else calls.setdefault(key, str(uuid4()))
+            call_id = model_call_id if model_call_id is not None else calls.setdefault(key, str(UUID(create_uuid_hex())))
             UUID(call_id)
 
             async def freeze():

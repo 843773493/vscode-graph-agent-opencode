@@ -133,7 +133,9 @@ class RolloutExecutionsMixin:
     ) -> int:
         """运行终态与显式历史安装共用唯一 items/commit/projection 事务。"""
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._storage._resolve_thread_identity(session_id, strict_text(thread_id, field="thread_id"))
+        owner_thread_id = self._storage._resolve_thread_identity(
+            session_id, strict_text(thread_id, field="thread_id")
+        )
         turn_id = strict_optional_text(turn_id, field="turn_id")
         strict_text(execution_id, field="execution_id")
         outcome = strict_text(outcome, field="execution outcome")
@@ -413,13 +415,10 @@ class RolloutExecutionsMixin:
                         raise ValueError(
                             "final_item_id 必须指向 completed canonical item"
                         )
-                    existing_final_item = None
                     if known is not None and candidate is None:
                         raise ValueError(
                             "completed terminal convergence 的 final item 必须属于同一 item-bearing commit"
                         )
-                else:
-                    existing_final_item = None
                 if assembly_id is not None:
                     assembly = connection.execute(
                         "SELECT session_id, thread_id, turn_id, execution_id, "
@@ -510,18 +509,10 @@ class RolloutExecutionsMixin:
                 # 在这一 SQLite 事务内同时可见；否则 output item 虽已 durable，
                 # history 仍会把它当成缺失 final projection。
                 projection_items = tuple(
-                    item.item_id
-                    for item in (
-                        *converged_items,
-                        *((existing_final_item,) if existing_final_item else ()),
-                    )
+                    item.item_id for item in converged_items
                 )
                 item_by_id = {
-                    item.item_id: item
-                    for item in (
-                        *converged_items,
-                        *((existing_final_item,) if existing_final_item else ()),
-                    )
+                    item.item_id: item for item in converged_items
                 }
                 if turn_status == TurnStatus.COMPLETED.value and final_item_id:
                     root_row = connection.execute(

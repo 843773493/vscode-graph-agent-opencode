@@ -6,210 +6,18 @@ ports；它们不承担 LangChain/provider projection，也不读取 v1 数据�
 
 from __future__ import annotations
 
-from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import (
-    CanonicalItemStatus,
-    CommitKind,
-    CommitMode,
     ControlOutcome,
-    SemanticKind,
     TurnStatus,
 )
-from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.execution_admission import ExecutionAdmission
-from app.domain.itemized.validation import (
-    validate_turn_transition,
-)
-from app.services.infrastructure.rollout_context.execution.internal_convergence import (
-    RolloutInternalConvergenceMixin,
-)
 from app.services.infrastructure.rollout_context.storage.transaction import (
-    strict_non_negative_int,
-    strict_optional_text,
     strict_text,
 )
 
-_V2_TO_HISTORY_STATUS = {
-    TurnStatus.OPEN.value: "accepted",
-    TurnStatus.ACTIVE.value: "running",
-    TurnStatus.COMPLETED.value: "completed",
-    TurnStatus.COMPLETED_EMPTY.value: "completed",
-    TurnStatus.INTERRUPTED.value: "timed_out",
-    TurnStatus.CANCELLED.value: "cancelled",
-    TurnStatus.FAILED.value: "failed",
-    TurnStatus.UNKNOWN.value: "failed",
-}
-
 
 class RolloutTurnLifecycleMixin:
-    """Turn finalization/cancel/status transition owner。"""
-
-    def append_turn_finalize(
-        self,
-        *,
-        session_id: str,
-        thread_id: str,
-        checkpoint_ns: str = "",
-        turn_id: str,
-        final_message_sequence: int,
-        final_message_id: str,
-    ) -> None:
-        """在 v2 TurnRecord 上完成 terminal convergence。
-
-        message projection 只用于解析外部 message id；Turn、final item、execution、
-        assembly 和 storage commit 的权威状态全部来自 v2 表，v1 rollout 不进入此入口。
-        """
-        strict_text(turn_id, field="turn_id")
-        strict_text(final_message_id, field="final_message_id")
-        strict_non_negative_int(
-            final_message_sequence,
-            field="final_message_sequence",
-        )
-        owner_thread_id = self._storage._resolve_thread_identity(session_id, strict_text(thread_id, field="thread_id"))
-        with self._storage._lock(
-            owner_thread_id, checkpoint_ns, session_id=session_id
-        ):
-            self._storage.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
-            with self._storage._connect(
-                owner_thread_id, checkpoint_ns, session_id=session_id
-            ) as connection:
-                self._storage._require_v2_runtime(connection)
-                row = connection.execute(
-                    "SELECT message_id, jsonl_offset, jsonl_length FROM messages WHERE message_sequence = ?",
-                    (final_message_sequence,),
-                ).fetchone()
-                if row is None or strict_text(row[0], field="messages.message_id") != final_message_id:
-                    raise RuntimeError(
-                        "turn_finalize 指向不存在或 ID 不匹配的消息 projection"
-                    )
-                item_row = connection.execute(
-                    "SELECT item_id, status, semantic_kind, turn_id "
-                    "FROM item_catalog WHERE jsonl_offset = ? AND jsonl_length = ?",
-                    row[1:3],
-                ).fetchone()
-                if item_row is None:
-                    raise RuntimeError(
-                        "turn_finalize 的 message projection 没有对应 canonical item: "
-                        f"{final_message_id}"
-                    )
-                turn_row = connection.execute(
-                    "SELECT status, final_item_id FROM turn_records WHERE turn_id = ?",
-                    (turn_id,),
-                ).fetchone()
-                if turn_row is None:
-                    raise KeyError(f"v2 Turn 不存在: {turn_id}")
-                current_turn_status = strict_text(
-                    turn_row[0], field="turn_records.status"
-                )
-                final_item_id = strict_text(
-                    item_row[0], field="item_catalog.item_id"
-                )
-                existing_final_item_id = strict_optional_text(
-                    turn_row[1], field="turn_records.final_item_id"
-                )
-                if current_turn_status == TurnStatus.COMPLETED.value:
-                    if existing_final_item_id == final_item_id:
-                        return
-                    raise ValueError("completed Turn 的 final_item_id 不可修改")
-                try:
-                    validate_turn_transition(
-                        current_turn_status, TurnStatus.COMPLETED.value
-                    )
-                except ItemSchemaError as error:
-                    raise ValueError(str(error)) from error
-                if (
-                    item_row[1] != CanonicalItemStatus.COMPLETED.value
-                    or item_row[2] != SemanticKind.ASSISTANT_OUTPUT.value
-                    or item_row[3] != turn_id
-                ):
-                    raise ValueError(
-                        "final_item_id 必须指向同一 Turn 的 completed assistant_output item"
-                    )
-                latest_execution = connection.execute(
-                    "SELECT execution_id FROM executions WHERE turn_id = ? "
-                    "ORDER BY attempt DESC, execution_ordinal DESC LIMIT 1",
-                    (turn_id,),
-                ).fetchone()
-                if latest_execution is None:
-                    raise RuntimeError(f"Turn 没有可收敛的 execution: {turn_id}")
-                latest_execution_id = strict_text(
-                    latest_execution[0], field="executions.execution_id"
-                )
-                latest_model_call_id = RolloutInternalConvergenceMixin._terminal_model_call_id(
-                    self, connection, session_id=session_id, thread_id=owner_thread_id,
-                    execution_id=latest_execution_id, outcome=ControlOutcome.COMPLETED.value,
-                )
-                timestamp = _now()
-                connection.execute("BEGIN IMMEDIATE")
-                commit_id, _commit_offset = self._storage._append_v2_records_transaction(
-                    connection,
-                    owner_thread_id,
-                    checkpoint_ns,
-                    (),
-                    session_id=session_id,
-                    commit_kind=CommitKind.TERMINAL_CONVERGENCE.value,
-                    commit_mode=CommitMode.METADATA_ONLY.value,
-                    outcome=ControlOutcome.COMPLETED.value,
-                    subject_id=turn_id,
-                    idempotency_key=(
-                        f"terminal:{turn_id}:{latest_execution_id}:{item_row[0]}"
-                    ),
-                    begin_transaction=False,
-                )
-                connection.execute(
-                    "UPDATE turn_records SET status = 'completed', final_item_id = ?, "
-                    "last_execution_id = ?, updated_at = ? WHERE turn_id = ?",
-                    (final_item_id, latest_execution_id, timestamp, turn_id),
-                )
-                connection.execute(
-                    "UPDATE executions SET outcome = 'completed', updated_at = ? "
-                    "WHERE turn_id = ? AND execution_id = ?",
-                    (timestamp, turn_id, latest_execution_id),
-                )
-                RolloutInternalConvergenceMixin._converge_execution_calls_and_assemblies(
-                    self, connection, session_id=session_id, thread_id=owner_thread_id,
-                    execution_id=latest_execution_id, latest_model_call_id=latest_model_call_id,
-                    outcome=ControlOutcome.COMPLETED.value, timestamp=timestamp, control_correction=False,
-                )
-                connection.execute(
-                    "UPDATE item_projections SET phase = 'final_answer', updated_at = ? "
-                    "WHERE item_id = ?",
-                    (timestamp, final_item_id),
-                )
-                # `turns`/`context_view_turns` 是旧消息坐标的派生索引，不是
-                # v2 lifecycle authority；同步它们是为了让已有 message-range
-                # reader 与 v2 TurnRecord 在同一事务后观察到同一 terminal pointer。
-                connection.execute(
-                    "UPDATE turns SET final_message_sequence = ?, final_message_id = ?, "
-                    "status = 'completed', updated_at = ? WHERE turn_id = ?",
-                    (
-                        final_message_sequence,
-                        final_message_id,
-                        timestamp,
-                        turn_id,
-                    ),
-                )
-                self._ensure_active_view_turn(
-                    connection, checkpoint_ns=checkpoint_ns, turn_id=turn_id
-                )
-                self._storage._insert_control(
-                    connection,
-                    "turn_finalized",
-                    "turn",
-                    turn_id,
-                    None,
-                    None,
-                    None,
-                    {
-                        "final_item_id": final_item_id,
-                        "execution_id": latest_execution_id,
-                        "outcome": ControlOutcome.COMPLETED.value,
-                    },
-                    f"terminal-control:{commit_id}",
-                    timestamp,
-                )
-                self._storage._commit_connection(connection)
-
+    """Turn/Job 控制终态的准入与收敛 owner。"""
 
     def mark_job_terminal_status(
         self,
@@ -244,7 +52,9 @@ class RolloutTurnLifecycleMixin:
     ) -> bool:
         """独立 Turn 控制也通过真实 execution 委派唯一 convergence 事务。"""
         session_id = strict_text(session_id, field="session_id")
-        thread_id = self._storage._resolve_thread_identity(session_id, strict_text(thread_id, field="thread_id"))
+        thread_id = self._storage._resolve_thread_identity(
+            session_id, strict_text(thread_id, field="thread_id")
+        )
         turn_id = strict_text(turn_id, field="turn_id")
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True,
@@ -346,29 +156,3 @@ class RolloutTurnLifecycleMixin:
                 ),
             )
             return True
-
-    def final_message_sequence(
-        self,
-        *,
-        session_id: str,
-        thread_id: str,
-        checkpoint_ns: str,
-        turn_id: str,
-        final_message_id: str,
-    ) -> int:
-        """解析已提交 final message 的物理序号，供受控 writer 使用。"""
-        owner_thread_id = self._storage._resolve_thread_identity(session_id, strict_text(thread_id, field="thread_id"))
-        with self._storage.read_connection(session_id, owner_thread_id, checkpoint_ns) as connection:
-            self._storage._require_v2_runtime(connection)
-            row = connection.execute(
-                "SELECT message_sequence FROM messages WHERE turn_id = ? AND message_id = ? ORDER BY message_sequence DESC LIMIT 1",
-                (turn_id, final_message_id),
-            ).fetchone()
-        if row is None:
-            raise RuntimeError(
-                "最终 assistant 消息未出现在 rollout projection 中: "
-                f"session_id={session_id}, turn_id={turn_id}, message_id={final_message_id}"
-            )
-        return strict_non_negative_int(
-            row[0], field="messages.message_sequence"
-        )

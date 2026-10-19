@@ -254,19 +254,6 @@ def persist_standard_assistant_checkpoint(
         metadata={"source": "standard_assistant_content", "step": -1, "writes": {}},
         new_versions={"messages": messages_version},
     )
-    finalize_turn = getattr(checkpointer, "finalize_turn", None)
-    itemized_convergence = callable(
-        getattr(checkpointer, "converge_execution", None)
-    ) and callable(getattr(checkpointer, "append_items", None))
-    if turn_id is not None and not itemized_convergence:
-        if not callable(finalize_turn):
-            raise RuntimeError("当前 checkpoint saver 不支持 Turn finalization")
-        finalize_turn(
-            session_id=session_id,
-            thread_id=thread_id,
-            turn_id=turn_id,
-            final_message_id=message_id,
-        )
     return True
 
 

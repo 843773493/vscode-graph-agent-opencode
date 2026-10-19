@@ -71,33 +71,6 @@ class RolloutAppendWriter:
             task_id=task_id,
             task_path=task_path,
         )
-
-    def finalize_turn(
-        self,
-        *,
-        session_id: str,
-        thread_id: str,
-        turn_id: str,
-        final_message_id: str,
-        checkpoint_ns: str = "",
-    ) -> None:
-        """把最终消息 ID 解析为 sequence，再追加 SQLite finalization。"""
-        final_message_sequence = self._storage.executions.final_message_sequence(
-            session_id=session_id,
-            thread_id=thread_id,
-            checkpoint_ns=checkpoint_ns,
-            turn_id=turn_id,
-            final_message_id=final_message_id,
-        )
-        self._storage.executions.append_turn_finalize(
-            session_id=session_id,
-            thread_id=thread_id,
-            checkpoint_ns=checkpoint_ns,
-            turn_id=turn_id,
-            final_message_sequence=final_message_sequence,
-            final_message_id=final_message_id,
-        )
-
     def mark_turn_terminal_status(
         self,
         *,

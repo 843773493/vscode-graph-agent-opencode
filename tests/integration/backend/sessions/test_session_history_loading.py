@@ -18,7 +18,6 @@ from app.core.path_utils import get_session_path_resolver
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
-from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import (
     parse_item_projection_manifest,
     user_input_payload,
@@ -41,6 +40,7 @@ from app.services.infrastructure.rollout_context.store import RolloutContextStor
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 from tests.support.api_helpers import checkpoint_fixture, create_session
 from tests.support.ports import integration_port_block_for_file
+from tests.support.rollout_output import commit_fixture_output
 
 
 @pytest.fixture(scope="module")
@@ -214,6 +214,7 @@ def _seed_rollout(
             prepare_execution, saver, session_id, messages[0], turn_id,
             execution_id=f"execution-{turn_index:04d}",
         ):
+            commit_fixture_output(saver, messages=all_messages)
             config = saver.put(
                 config,
                 checkpoint_fixture(
@@ -222,10 +223,6 @@ def _seed_rollout(
                 ),
                 {"source": "deterministic-rollout-stub", "turn": turn_index},
                 {"messages": str(turn_index)},
-            )
-            saver.finalize_turn(
-                session_id=session_id, thread_id=thread_id, turn_id=turn_id,
-                final_message_id=f"assistant-final-{turn_index:04d}",
             )
     session_dir = get_session_path_resolver(sessions_dir).resolve_session_node(session_id)
     return session_dir / "rollout"
@@ -473,22 +470,17 @@ async def test_history_user_projection_keeps_canonical_preview_out_of_display_co
     saver = RolloutCheckpointSaver(sessions_dir)
     owner = saver.forks.source.resolve_main_thread_owner(session_id)
     with _history_user_execution(frozen_provider_prepare, saver, session_id, user, "job-attachment-projection"):
+        completed_messages = [user, final]
+        commit_fixture_output(saver, messages=completed_messages)
         saver.put(
             build_checkpoint_config(owner.thread_id),
             checkpoint_fixture(
                 "checkpoint-attachment-projection",
-                [user, final],
+                completed_messages,
                 channel_version=1,
             ),
             {"source": "attachment-projection-test"},
             {"messages": "1"},
-        )
-    with _history_user_execution(frozen_provider_prepare, saver, session_id, user, "job-attachment-projection"):
-        saver.finalize_turn(
-            session_id=session_id,
-            thread_id=owner.thread_id,
-            turn_id="job-attachment-projection",
-            final_message_id=final.id,
         )
 
     page = await _load_history(
@@ -504,7 +496,7 @@ async def test_history_user_projection_keeps_canonical_preview_out_of_display_co
             "file_id": file_id,
             "name": "preview.png",
             "content_type": "image/png",
-            "availability": None,
+            "availability": "unavailable",
         }
     ]
     assert "attachments" not in user_payload["metadata"]
@@ -739,6 +731,7 @@ async def test_history_deduplicates_final_checkpoint_reasoning_by_part_ref(
     saver = RolloutCheckpointSaver(sessions_dir)
     thread_id = saver.forks.source.resolve_main_thread_owner(session_id).thread_id
     with _history_user_execution(frozen_provider_prepare, saver, session_id, messages[0], turn_id):
+        commit_fixture_output(saver, messages=messages)
         config = saver.put(
             build_checkpoint_config(thread_id),
             checkpoint_fixture("checkpoint-shared-reasoning", messages, channel_version=1),
@@ -746,13 +739,6 @@ async def test_history_deduplicates_final_checkpoint_reasoning_by_part_ref(
             {"messages": "1"},
         )
     assert config["configurable"]["checkpoint_id"] == "checkpoint-shared-reasoning"
-    with _history_user_execution(frozen_provider_prepare, saver, session_id, messages[0], turn_id):
-        saver.finalize_turn(
-            session_id=session_id,
-            thread_id=thread_id,
-            turn_id=turn_id,
-            final_message_id="assistant-final-shared-reasoning",
-        )
 
     storage = RolloutContextStore(sessions_dir, message_codec=LangChainMessageCodec())
     with storage.storage.open_read_snapshot(session_id, thread_id) as snapshot:
@@ -1057,6 +1043,20 @@ async def test_turn_finalize_pointer_wins_over_heuristic_final_response(
         id="assistant-later-unmarked", content="后写的未标记消息"
     )
     with _history_user_execution(frozen_provider_prepare, saver, session_id, user, "job-finalization"):
+        items = tuple(
+            item
+            for message in (marked_final, later_unmarked)
+            for item in LangChainMessageCodec().items_for_message(
+                message, item_sequence=1, message_id=message.id,
+                turn_id="job-finalization", execution_id="history-execution:job-finalization",
+                timestamp=datetime.now(UTC).isoformat(),
+            )
+        )
+        saver.converge_execution(
+            session_id, thread_id=thread_id, turn_id="job-finalization",
+            execution_id="history-execution:job-finalization", outcome="completed",
+            turn_status="completed", items=items, final_item_id=items[0].item_id,
+        )
         saver.put(
             config,
             checkpoint_fixture(
@@ -1066,13 +1066,6 @@ async def test_turn_finalize_pointer_wins_over_heuristic_final_response(
             ),
             {"source": "deterministic-finalization-stub"},
             {"messages": "1"},
-        )
-    with _history_user_execution(frozen_provider_prepare, saver, session_id, user, "job-finalization"):
-        saver.finalize_turn(
-            session_id=session_id,
-            thread_id=thread_id,
-            turn_id="job-finalization",
-            final_message_id="assistant-marked-final",
         )
 
     reader = RolloutHistoryReader(
@@ -1115,7 +1108,7 @@ async def test_finalization_window_keeps_unfinalized_history_readable(
             {"source": "deterministic-finalization-window-stub"},
             {"messages": "1"},
         )
-    # 故意不调用 finalize_turn，模拟最终消息 JSONL 已提交但控制记录尚未提交。
+    # 普通 assistant item 已提交仍不代表成功终态；不得事后补 metadata-only final。
     page = RolloutHistoryReader(
         RolloutContextReader(
             RolloutContextStore(sessions_dir, message_codec=LangChainMessageCodec())
@@ -1138,12 +1131,8 @@ async def test_finalization_window_keeps_unfinalized_history_readable(
     assert restored_final.content == "仍可恢复的最终响应"
 
     with _history_user_execution(frozen_provider_prepare, saver, session_id, user, turn_id):
-        saver.finalize_turn(
-            session_id=session_id,
-            thread_id=owner.thread_id,
-            turn_id=turn_id,
-            final_message_id=final.id,
-        )
+        completed_final = final.model_copy(update={"id": "assistant-atomic-finalization"})
+        commit_fixture_output(saver, messages=[user, final, completed_final])
     finalized = saver.load_history(
         session_id, owner.thread_id, TurnHistoryLoadRequest(direction="tail")
     )
@@ -1400,18 +1389,12 @@ async def test_history_final_summary_never_reads_final_jsonl_body(
     messages[-1] = messages[-1].model_copy(update={"content": final_text})
     owner = saver.forks.source.resolve_main_thread_owner(session_id)
     with _history_user_execution(frozen_provider_prepare, saver, session_id, messages[0], "job-0001"):
+        commit_fixture_output(saver, messages=messages)
         saver.put(
             build_checkpoint_config(owner.thread_id),
             checkpoint_fixture("bounded-final", messages, channel_version=1),
             {"source": "bounded-final-test"},
             {"messages": "1"},
-        )
-    with _history_user_execution(frozen_provider_prepare, saver, session_id, messages[0], "job-0001"):
-        saver.finalize_turn(
-            session_id=session_id,
-            thread_id=owner.thread_id,
-            turn_id="job-0001",
-            final_message_id="assistant-final-0001",
         )
     storage = RolloutContextStore(sessions_dir, message_codec=LangChainMessageCodec())
     jsonl_path = storage.storage.jsonl_path(session_id, thread_id=owner.thread_id)

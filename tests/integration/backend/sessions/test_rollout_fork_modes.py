@@ -225,6 +225,7 @@ from tests.support.fork_deadline import (
     ForkDeadlineRegistry,
     ForkOperationDeadline,
 )
+from tests.support.rollout_output import commit_fixture_output
 from tests.support.session_navigation_queue import (
     create_catalog_intent,
     submit_catalog_intent,
@@ -1060,6 +1061,7 @@ async def _seed_source(context: ForkIntegrationContext, fork_provider_prepare, *
             langgraph_thread_id=thread_id,
         ),
     ):
+        commit_fixture_output(context.saver, messages=second_messages)
         second_config = await context.saver.aput(
             first_config,
             _checkpoint(
@@ -1070,12 +1072,6 @@ async def _seed_source(context: ForkIntegrationContext, fork_provider_prepare, *
             {"source": "stub", "step": 2, "parents": {}},
             {"messages": "2", "counter": "2"},
         )
-    context.saver.finalize_turn(
-        session_id=source.session_id,
-        thread_id=thread_id,
-        turn_id="turn-1",
-        final_message_id="a1",
-    )
     second_accepted = context.saver.accept_turn(
         source.session_id,
         thread_id=thread_id,
@@ -1543,18 +1539,16 @@ async def test_default_fork_publishes_idle_child_without_interrupting_running_ma
         session_thread_owner_scope(MutationIntentOwner(source.session_id, main_thread), langgraph_thread_id=main_thread),
         execution_admission_scope(source_admission, langgraph_thread_id=main_thread),
     ):
-        await saver.aput(
-            source_latest.config,
-            _checkpoint("continued-main-checkpoint", [
+        completed_messages = [
                 *source_latest.checkpoint["channel_values"]["messages"],
                 AIMessage(content="主线程继续回答二", id="continued-main-final"),
-            ]),
+            ]
+        commit_fixture_output(saver, messages=completed_messages)
+        await saver.aput(
+            source_latest.config,
+            _checkpoint("continued-main-checkpoint", completed_messages),
             {"source": "loop", "step": 4, "parents": {}}, {"messages": "4", "counter": "4"},
         )
-    saver.finalize_turn(
-        session_id=source.session_id, thread_id=main_thread, turn_id="turn-2",
-        final_message_id="continued-main-final",
-    )
     continued = await _get_tuple(fork_context, source.session_id)
     assert continued is not None
     assert continued.checkpoint["channel_values"]["messages"][-1].content == "主线程继续回答二"
@@ -1606,19 +1600,17 @@ async def test_default_fork_publishes_idle_child_without_interrupting_running_ma
         assert current is not None
         assert current.checkpoint["pending_sends"] == []
         assert current.pending_writes == []
-        await cold.aput(
-            current.config,
-            _checkpoint("idle-child-first-checkpoint", [
+        completed_messages = [
                 *current.checkpoint["channel_values"]["messages"],
                 AIMessage(content="child 首次回答", id="idle-child-final",
                           response_metadata={"model_call_id": prepared["snapshot"].model_call_id}),
-            ]),
+            ]
+        commit_fixture_output(cold, messages=completed_messages)
+        await cold.aput(
+            current.config,
+            _checkpoint("idle-child-first-checkpoint", completed_messages),
             {"source": "loop", "step": 1, "parents": {}}, {"messages": "4", "counter": "4"},
         )
-    cold.finalize_turn(
-        session_id=source.session_id, thread_id=child, turn_id=str(child_accepted["turn_id"]),
-        final_message_id="idle-child-final",
-    )
     assert dict(control.get_main_thread()) == main_before
     main_after = await _get_tuple(fork_context, source.session_id)
     assert main_after is not None
@@ -1829,11 +1821,7 @@ async def test_fork_uses_typed_source_observation_not_extension_controls(
         ),
         execution_admission_scope(admission, langgraph_thread_id=source_thread),
     ):
-        await saver.aput(
-            build_checkpoint_config(source_thread),
-            _checkpoint(
-                "typed-observation-source-final",
-                [
+        completed_messages = [
                     source_user,
                     AIMessage(
                         content="typed 来源完成",
@@ -1842,17 +1830,17 @@ async def test_fork_uses_typed_source_observation_not_extension_controls(
                             "model_call_id": source_snapshot.model_call_id
                         },
                     ),
-                ],
+                ]
+        commit_fixture_output(saver, messages=completed_messages)
+        await saver.aput(
+            build_checkpoint_config(source_thread),
+            _checkpoint(
+                "typed-observation-source-final",
+                completed_messages,
             ),
             {"source": "loop", "step": 1, "parents": {}},
             {"messages": "2", "counter": "2"},
         )
-    saver.finalize_turn(
-        session_id=source.session_id,
-        thread_id=source_thread,
-        turn_id=str(accepted["turn_id"]),
-        final_message_id="typed-observation-source-answer",
-    )
     source_index = _main_thread_node(fork_context, source.session_id) / "rollout" / "index.sqlite"
     with closing(sqlite3.connect(source_index)) as connection:
         (source_assembly_bytes,) = connection.execute(
@@ -2103,14 +2091,15 @@ async def test_fork_first_provider_recompiles_typed_root_without_rewriting_impor
         session_thread_owner_scope(MutationIntentOwner(source.session_id, source_thread), langgraph_thread_id=source_thread),
         execution_admission_scope(admission, langgraph_thread_id=source_thread),
     ):
-        await saver.aput(
-            build_checkpoint_config(source_thread), _checkpoint("typed-root-checkpoint", [source_user, AIMessage(
+        completed_messages = [source_user, AIMessage(
                 content="来源完成", id="typed-root-final",
                 response_metadata={"model_call_id": second["snapshot"].model_call_id},
-            )]),
+            )]
+        commit_fixture_output(saver, messages=completed_messages)
+        await saver.aput(
+            build_checkpoint_config(source_thread), _checkpoint("typed-root-checkpoint", completed_messages),
             {"source": "loop", "step": 1, "parents": {}}, {"messages": "2", "counter": "2"},
         )
-    saver.finalize_turn(session_id=source.session_id, thread_id=source_thread, turn_id=str(accepted["turn_id"]), final_message_id="typed-root-final")
     with sqlite3.connect(_main_thread_node(fork_context, source.session_id) / "rollout/index.sqlite") as connection:
         source_bytes = connection.execute("SELECT assembly_id,snapshot_json FROM context_assemblies ORDER BY rowid").fetchall()
     fork_result = await fork_context.forks.fork(await _fork_request(
@@ -2303,18 +2292,16 @@ async def test_prefix_selected_required_detail_rejects_corruption_before_publica
         session_thread_owner_scope(MutationIntentOwner(source.session_id, source_thread), langgraph_thread_id=source_thread),
         execution_admission_scope(admission, langgraph_thread_id=source_thread),
     ):
-        await saver.aput(
-            build_checkpoint_config(source_thread),
-            _checkpoint("required-detail-completed", [source_user, AIMessage(
+        completed_messages = [source_user, AIMessage(
                 content="来源完成", id="required-detail-final",
                 response_metadata={"model_call_id": prepared["snapshot"].model_call_id},
-            )]),
+            )]
+        commit_fixture_output(saver, messages=completed_messages)
+        await saver.aput(
+            build_checkpoint_config(source_thread),
+            _checkpoint("required-detail-completed", completed_messages),
             {"source": "loop", "step": 1, "parents": {}}, {"messages": "2", "counter": "2"},
         )
-    saver.finalize_turn(
-        session_id=source.session_id, thread_id=source_thread,
-        turn_id=str(accepted["turn_id"]), final_message_id="required-detail-final",
-    )
     selected = next(
         entry for entry in prepared["snapshot"].selection
         if entry.included and entry.ref.ref_type == "request_only" and entry.detail_ref is not None
@@ -2645,15 +2632,12 @@ async def test_successor_fork_keeps_original_a_and_b_history_after_both_sources_
             session_thread_owner_scope(MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id),
             execution_admission_scope(admission, langgraph_thread_id=thread_id),
         ):
+            commit_fixture_output(saver, messages=history)
             await saver.aput(
                 build_checkpoint_config(thread_id), _checkpoint(f"successor-{key}-checkpoint", history),
                 {"source": "loop", "step": len(history), "parents": {}},
                 {"messages": str(len(history)), "counter": str(len(history))},
             )
-        saver.finalize_turn(
-            session_id=session_id, thread_id=thread_id,
-            turn_id=str(accepted["turn_id"]), final_message_id=f"successor-{key}-final",
-        )
         checkpoint_before_copy = await _get_tuple(fork_context, session_id)
         assert checkpoint_before_copy is not None
         checkpoint_history = checkpoint_before_copy.checkpoint["channel_values"]["messages"]
@@ -3449,12 +3433,11 @@ async def test_compaction_fork_keeps_only_required_body_backing(
     )
     with (session_thread_owner_scope(source_owner, langgraph_thread_id=source_thread),
           execution_admission_scope(old_admission, langgraph_thread_id=source_thread)):
+        commit_fixture_output(saver, messages=[old_user, old_final])
         await saver.aput(
             build_checkpoint_config(source_thread), _checkpoint("compaction-old-checkpoint", [old_user, old_final]),
             {"source": "loop", "step": 1, "parents": {}}, {"messages": "2", "counter": "2"},
         )
-    saver.finalize_turn(session_id=source.session_id, thread_id=source_thread,
-                        turn_id=str(old["turn_id"]), final_message_id="compaction-old-final")
     old_checkpoint = await _get_tuple(fork_context, source.session_id)
     assert old_checkpoint is not None
     old_messages = old_checkpoint.checkpoint["channel_values"]["messages"]
@@ -3490,6 +3473,7 @@ async def test_compaction_fork_keeps_only_required_body_backing(
                           id="compaction-source-final", response_metadata={"model_call_id": produced["snapshot"].model_call_id})
         with (session_thread_owner_scope(source_owner, langgraph_thread_id=source_thread),
               execution_admission_scope(admission, langgraph_thread_id=source_thread)):
+            commit_fixture_output(saver, messages=[*old_messages, user, final])
             await saver.aput(
                 build_checkpoint_config(source_thread),
                 _checkpoint("compaction-expanded-checkpoint", [*old_messages, user, final]),
@@ -3538,13 +3522,12 @@ async def test_compaction_fork_keeps_only_required_body_backing(
         final_checkpoint["pending_sends"] = compacted["pending_sends"]
         with (session_thread_owner_scope(source_owner, langgraph_thread_id=source_thread),
               execution_admission_scope(admission, langgraph_thread_id=source_thread)):
+            commit_fixture_output(saver, messages=[summary, user, final])
             await saver.aput(
                 build_checkpoint_config(source_thread), final_checkpoint,
                 {"source": "loop", "step": 4, "parents": {}},
                 {"messages": "7", "counter": "7", **frozen_versions},
             )
-    saver.finalize_turn(session_id=source.session_id, thread_id=source_thread,
-                        turn_id=str(accepted["turn_id"]), final_message_id="compaction-source-final")
     selected_checkpoint = await _get_tuple(fork_context, source.session_id)
     assert selected_checkpoint is not None
     assert {name: selected_checkpoint.checkpoint["channel_values"][name] for name in frozen_state} == frozen_state
@@ -3758,12 +3741,11 @@ async def test_fork_rejects_orphan_tool_result_before_publication(
     previous_admission = saver.execution_admission(source.session_id, thread_id=thread, execution_id="execution-turn-2")
     with (session_thread_owner_scope(owner, langgraph_thread_id=thread),
           execution_admission_scope(previous_admission, langgraph_thread_id=thread)):
+        commit_fixture_output(saver, messages=old_messages)
         await saver.aput(
             build_checkpoint_config(thread), _checkpoint("queue-tool-completed", old_messages),
             {"source": "loop", "step": 4, "parents": {}}, {"messages": "5", "counter": "5"},
         )
-    saver.finalize_turn(session_id=source.session_id, thread_id=thread,
-                        turn_id="turn-2", final_message_id="queue-tool-final")
     completed = await _get_tuple(fork_context, source.session_id)
     assert completed is not None
     old_messages = completed.checkpoint["channel_values"]["messages"]
@@ -6528,14 +6510,11 @@ async def _seed_retry_tool_source(
     ]
     with (session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id),
           execution_admission_scope(retry, langgraph_thread_id=owner.thread_id)):
+        commit_fixture_output(context.saver, messages=messages)
         await context.saver.aput(
             config, _checkpoint("cp-retry-final", messages),
             {"source": "loop", "step": 3, "parents": {}}, {"messages": "5", "counter": "5"},
         )
-    context.saver.finalize_turn(
-        session_id=source.session_id, thread_id=owner.thread_id, turn_id="turn-retry",
-        final_message_id="retry-final",
-    )
     return source, retry_id
 
 
@@ -6595,14 +6574,12 @@ async def test_fork_preserves_stream_member_time_across_checkpoint_carriers(
           execution_admission_scope(admission, langgraph_thread_id=owner.thread_id)):
         stream_items = stream.finalize(first_item_sequence=1)
         context.saver.append_items(source.session_id, stream_items, thread_id=owner.thread_id)
+        completed_messages = [user, final]
+        commit_fixture_output(context.saver, messages=completed_messages)
         await context.saver.aput(
-            config, _checkpoint("stream-completed", [user, final]),
+            config, _checkpoint("stream-completed", completed_messages),
             {"source": "loop", "step": 2, "parents": {}}, {"messages": "2", "counter": "2"},
         )
-    context.saver.finalize_turn(
-        session_id=source.session_id, thread_id=owner.thread_id, turn_id=admission.turn_id,
-        final_message_id=final.id,
-    )
     if reverse_membership:
         storage = context.saver._storage.storage
         with storage._connect(owner.thread_id, session_id=source.session_id) as connection:
@@ -6997,19 +6974,17 @@ async def test_fork_preserves_real_retry_internal_and_closed_tool_lineage(
             tool_call_id="successor-attachment-read", file_id=target_file_id,
         )
         assert read_content.data == "文件内容".encode() and read_content.content_type == "text/plain"
-        await context.saver.aput(
-            latest.config,
-            _checkpoint("fork-successor-checkpoint", [
+        completed_messages = [
                 *request_messages, read_call,
                 ToolMessage(content=read_content.data.decode(), id="successor-attachment-result", tool_call_id="successor-attachment-read"),
                 AIMessage(content="副本后继执行完成", id="fork-successor-final"),
-            ]),
+            ]
+        commit_fixture_output(context.saver, messages=completed_messages)
+        await context.saver.aput(
+            latest.config,
+            _checkpoint("fork-successor-checkpoint", completed_messages),
             {"source": "loop", "step": 1, "parents": {}},
             {"messages": "successor", "counter": "successor"},
-        )
-        context.saver.finalize_turn(
-            session_id=child.session_id, thread_id=target_owner.thread_id,
-            turn_id=admission.turn_id, final_message_id="fork-successor-final",
         )
         restored_successor = await _get_tuple(context, child.session_id)
         assert restored_successor is not None
@@ -8123,13 +8098,12 @@ async def test_http_published_fork_without_attachment_claim_rejects_deleting_tar
         })
         with (session_thread_owner_scope(owner, langgraph_thread_id=thread_id),
               execution_admission_scope(admission, langgraph_thread_id=thread_id)):
+            completed_messages = [*old_messages, user, final]
+            commit_fixture_output(context.saver, messages=completed_messages)
             await context.saver.aput(
-                build_checkpoint_config(thread_id), _checkpoint("cp-unclaimed-copy-final", [*old_messages, user, final]),
+                build_checkpoint_config(thread_id), _checkpoint("cp-unclaimed-copy-final", completed_messages),
                 {"source": "loop", "step": 5, "parents": {}}, {"messages": "7", "counter": "7"},
             )
-        context.saver.finalize_turn(
-            session_id=source.session_id, thread_id=thread_id, turn_id=str(accepted["turn_id"]), final_message_id=final.id,
-        )
     creation_kind: SessionForkCreationKind = "new_child_thread" if resource_case == "reuse" else "new_session_main"
     request = await _fork_request(context, source.session_id, creation_kind=creation_kind, mode="full_rollout_copy")
     if resource_case in {"omit", "unavailable", "missing"}:
@@ -8442,17 +8416,15 @@ async def test_fork_empty_activation_rejects_corruption_before_publication(
         session_thread_owner_scope(MutationIntentOwner(source.session_id, source_thread), langgraph_thread_id=source_thread),
         execution_admission_scope(admission, langgraph_thread_id=source_thread),
     ):
-        await saver.aput(
-            build_checkpoint_config(source_thread), _checkpoint("empty-activation-completed", [
+        completed_messages = [
                 source_user, AIMessage(content="空快照来源完成", id="empty-activation-final",
                                        response_metadata={"model_call_id": prepared["snapshot"].model_call_id}),
-            ]),
+            ]
+        commit_fixture_output(saver, messages=completed_messages)
+        await saver.aput(
+            build_checkpoint_config(source_thread), _checkpoint("empty-activation-completed", completed_messages),
             {"source": "loop", "step": 1, "parents": {}}, {"messages": "2", "counter": "2"},
         )
-    saver.finalize_turn(
-        session_id=source.session_id, thread_id=source_thread,
-        turn_id=str(accepted["turn_id"]), final_message_id="empty-activation-final",
-    )
     request = await _fork_request(fork_context, source.session_id, creation_kind="new_session_main", mode=mode)
     healthy = await fork_context.forks.fork(request)
     assert saver.load_sealed_resource_activation(
@@ -8609,14 +8581,13 @@ async def test_fork_preserves_failed_call_retry_reusing_one_assembly(
         session_thread_owner_scope(MutationIntentOwner(source.session_id, thread_id), langgraph_thread_id=thread_id),
         execution_admission_scope(admission, langgraph_thread_id=thread_id),
     ):
-        await saver.aput(
-            build_checkpoint_config(thread_id), _checkpoint("shared-assembly-completed", [
+        completed_messages = [
                 user, AIMessage(content="重试成功", id="shared-assembly-final", response_metadata={"model_call_id": retry_call}),
-            ]), {"source": "loop", "step": 1, "parents": {}}, {"messages": "2", "counter": "2"},
+            ]
+        commit_fixture_output(saver, messages=completed_messages)
+        await saver.aput(
+            build_checkpoint_config(thread_id), _checkpoint("shared-assembly-completed", completed_messages), {"source": "loop", "step": 1, "parents": {}}, {"messages": "2", "counter": "2"},
         )
-    saver.finalize_turn(
-        session_id=source.session_id, thread_id=thread_id, turn_id=str(accepted["turn_id"]), final_message_id="shared-assembly-final",
-    )
     expected_calls = [
         (first_call, prepared["assembly_id"], None, execution_id, "failed", "failed"),
         (retry_call, prepared["assembly_id"], first_call, execution_id, "completed", "completed"),
@@ -8669,14 +8640,14 @@ async def test_turn_finalize_keeps_each_provider_assembly_outcome_in_full_fork(
         session_thread_owner_scope(MutationIntentOwner(source.session_id, thread_id), langgraph_thread_id=thread_id),
         execution_admission_scope(admission, langgraph_thread_id=thread_id),
     ):
-        await saver.aput(
-            build_checkpoint_config(thread_id), _checkpoint("distinct-assembly-completed", [
+        completed_messages = [
                 user, AIMessage(content="第二次请求成功", id="distinct-assembly-final",
                                 response_metadata={"model_call_id": retry["snapshot"].model_call_id}),
-            ]), {"source": "loop", "step": 1, "parents": {}}, {"messages": "2", "counter": "2"},
+            ]
+        commit_fixture_output(saver, messages=completed_messages)
+        await saver.aput(
+            build_checkpoint_config(thread_id), _checkpoint("distinct-assembly-completed", completed_messages), {"source": "loop", "step": 1, "parents": {}}, {"messages": "2", "counter": "2"},
         )
-    saver.finalize_turn(session_id=source.session_id, thread_id=thread_id,
-                        turn_id=str(accepted["turn_id"]), final_message_id="distinct-assembly-final")
     target = await fork_context.forks.fork(await _fork_request(
         fork_context, source.session_id, creation_kind="new_session_main", mode="full_rollout_copy",
     ))

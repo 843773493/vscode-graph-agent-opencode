@@ -29,6 +29,9 @@ from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
+    LangChainMessageCodec,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -42,6 +45,7 @@ from tests.support.frozen_provider import (
     create_frozen_provider_prepare,
     frozen_provider_wire,
 )
+from tests.support.rollout_output import commit_fixture_output
 
 FIXTURE_VERSION: Final = 3
 STATIC_LONG_SESSION_ID: Final = "ses_019c642bc2ec78718d0a296b3319d6df"
@@ -637,6 +641,27 @@ def _create_session(
                         prepare_execution(saver, key=f"fixture-create:{turn_id}")
                     with timed_fixture_stage(
                         observer,
+                        "generator.terminal_convergence",
+                        session_id=session_id,
+                        turn_id=turn_id,
+                        turn_index=turn_index,
+                    ):
+                        # 本轮独立进度先于工具组提交；最终输出与终态只提交一次。
+                        codec = LangChainMessageCodec()
+                        for progress in latest_turn_messages[1:-1]:
+                            if isinstance(progress, AIMessage) and not progress.tool_calls:
+                                saver.append_items(
+                                    session_id,
+                                    codec.items_for_message(
+                                        progress, item_sequence=1, message_id=progress.id,
+                                        turn_id=turn_id, execution_id=admission.execution_id,
+                                        timestamp=datetime.now(UTC).isoformat(),
+                                    ),
+                                    thread_id=thread_id,
+                                )
+                        commit_fixture_output(saver, messages=latest_turn_messages)
+                    with timed_fixture_stage(
+                        observer,
                         "generator.saver_put",
                         session_id=session_id,
                         turn_id=turn_id,
@@ -663,19 +688,6 @@ def _create_session(
                                 **({"provider_id": provider_id} if real_provider_fixture else {}),
                             },
                             {"messages": str(turn_index)},
-                        )
-                    with timed_fixture_stage(
-                        observer,
-                        "generator.finalize_turn",
-                        session_id=session_id,
-                        turn_id=turn_id,
-                        turn_index=turn_index,
-                    ):
-                        saver.finalize_turn(
-                            session_id=session_id,
-                            thread_id=thread_id,
-                            turn_id=turn_id,
-                            final_message_id=f"assistant-final-{turn_index:04d}",
                         )
                 if turn_index in checkpoint_ends:
                     start = turn_index + 1

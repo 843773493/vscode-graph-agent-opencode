@@ -14,6 +14,7 @@ from app.core.session_thread_context import session_thread_owner_scope
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from tests.support.rollout_output import commit_fixture_output
 
 
 def seed_deterministic_v2_rollout(
@@ -90,13 +91,10 @@ def seed_deterministic_v2_rollout(
                 execution_admission_scope(admission, langgraph_thread_id=owner.thread_id),
             ):
                 prepare_execution(saver, key=f"deterministic-create:{turn_id}")
+                commit_fixture_output(saver, messages=checkpoint["channel_values"]["messages"])
                 config = saver.put(
                     config, checkpoint,
                     {"source": "deterministic-integration", "step": ordinal},
                     checkpoint["channel_versions"],
-                )
-                saver.finalize_turn(
-                    session_id=session_id, thread_id=owner.thread_id,
-                    turn_id=turn_id, final_message_id=final_id,
                 )
     return session_id, tool_bodies
