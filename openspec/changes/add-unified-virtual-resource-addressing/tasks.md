@@ -83,7 +83,11 @@
 
 ## 9. Fork容器寻址与统一资源目标检查（2026-10-13，待实施）
 
-- [ ] 9.1 同批实现session集合根、Session和Thread正式模板、ResourceIdentity归属与允许操作；迁齐构造/解析/Gateway路由/DTO/API和测试，集合根不伪造Session ID，Thread不存在/跨归属明确失败，send/read/wait原main合同保持。
+- [x] 9.1 同批实现session集合根、Session和Thread正式模板、ResourceIdentity归属与允许操作；迁齐构造/解析/Gateway路由/DTO/API和测试，集合根不伪造Session ID，Thread不存在/跨归属明确失败，send/read/wait原main合同保持。
 - [ ] 9.2 在现有资源解析/owner路由接入唯一目标检查入口，复用现有字段得到reuse_reference/retain_reference/copy_snapshot/omit/unsupported；只增加确实缺少的owner retain/export/import能力，不扩充身份或逐资源fork布尔字段，不建立第二registry。
 - [ ] 9.3 验证同存储域共享blob零字节复制/内容身份复用/必要保活、不同Gateway挂载同owner的域核实、固定revision与可变源、目标已有内容去重、显式跨域导入及不支持/未授权失败；URI解析成功不代替目标能力完成。
 - [ ] 9.4 与itemized第12节、会话URI及工作区资源change同批核消费合同；删除平行fork资源矩阵和专属URI解析，保留现有导航、轻量访问、授权与scope不变量。
+
+2026-10-19 real path 出口补证（2.1/2.2/2.5，尚不代替全项审计）：`5eb6e701` 将前端快照从任意request root与物理html_path改为注入工作区、catalog Session节点和稳定snapshot_id；响应仅给既有runtime能力下显式workspace API URL，metadata不保存root/path/html_file。真实HTTP保存/读取、移动/删除不复活、损坏metadata显式失败、protobuf reserved及本地/远端两层Gateway固定归属，由 `ui-snapshot-main-regression-001` 32 passed/8.18s验证；主树Ruff `ui-snapshot-main-static-002`、compile `ui-snapshot-main-compile-001`、真实tsc `ui-snapshot-main-typecheck-001` 与Web build `ui-snapshot-main-build-001` 均exit 0。Buf lint/build/format通过；`ui-snapshot-breaking-002` 仅报告授权删除 `LogSnapshotResultDTO` 与 `html_path` 两项，字段编号/名称已reserved，保留实际非零结果。原始候选与主树收据均位于 `out/tests/temp/openspec_takeover/artifacts/`；无新URI kind或别名。
+
+9.1 验收（2026-10-19）：集合根、Session/Thread 构造/解析、ResourceIdentity 归属和公开 schema/proto/API/Web 消费已迁至唯一寻址 owner。具名源码与五个真实 transfer 场景、当前主树 default/normalization/API拒绝/grammar-resolver/Thread归属证据见 `migrate-session-context-resource-uri/tasks.md` §10；包括复制中激活切换不漂移、source child 不回退 main、集合根新建 main和已有 Session child，保留 §9 send/read/wait 原合同。仅关闭容器寻址9.1；资源目标能力9.2–9.4继续分别验收。

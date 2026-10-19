@@ -78,7 +78,11 @@
 
 A04完整证据入口：`out/tests/temp/2026/10/04/024121-team-execution/coordinator/artifacts/sol-efficiency-trial/addressing-existing-source-bulk-dispatch/ROOT-full-final-candidate/`；105源码＋11主文档tree8215be15严格重建、两独审findings=[]并串行集成。作者manifest引用39具名attempt，028/029授权/loopback、032真实三节点受控Provider、031/037真实信息页/生命周期、035直接68项、038合同16项及039 Web build actual0。033/034原失败由具名fixture修订闭合，其余未变绿灯按依赖复用，不相加重叠pass；全局strict41/0。外部Provider quota与补充C1端口仍UNMET，原100条Ruff诊断无新增，SSE生成后续阶段未认证失败原子性。5.2已按明确数据政策修订，不代表原历史取证通过；9.1/9.2依据上方A06独立具名联合收据完成，不能由A04 read/search通过自动推断。
 
-## 10. Fork精确来源与目标寻址（2026-10-13，待实施）
+## 10. Fork精确来源与目标寻址（2026-10-19，已验收）
 
-- [ ] 10.1 消费统一owner的集合/Session/Thread模板，将fork source、target容器和创建意图规范化为稳定归属；迁齐公开schema/API/工具/DTO/proto及消费者，source child不回退main，view/revision/anchor不进URI。
-- [ ] 10.2 验证本地/跨端main和child目标、Gateway别名规范化、切换工作区期间目标不变、不存在/越权/不可达显式失败；业务grant不从read授权推导，既有send/read/wait合同及selector保持。
+- [x] 10.1 消费统一owner的集合/Session/Thread模板，将fork source、target容器和创建意图规范化为稳定归属；迁齐公开schema/API/工具/DTO/proto及消费者，source child不回退main，view/revision/anchor不进URI。
+- [x] 10.2 验证本地/跨端main和child目标、Gateway别名规范化、切换工作区期间目标不变、不存在/越权/不可达显式失败；业务grant不从read授权推导，既有send/read/wait合同及selector保持。
+
+10.1/10.2 验收（2026-10-19）：`SessionForkRequest` 的 schema/proto/Web 三字段及 fork service 唯一解析链已逐项核验，source Session 归一精确 main Thread，source child 保持自身 Thread；target 集合根/Session/Thread 及创建意图不携带 view/revision/anchor。`retry-fork-uri-transfer-011` 实际 5 passed/1902 deselected/599.36s、exit 0（三函数按参数展开为2+1+2）：同 Backend 双 Gateway route 的新 main/child 与冷重放；B→C 跨域 full-copy 在来源离线后冷读及新输入；精确 source child→目标新 main/已有 Session child，两种目标均在 copy.target.prepared 后真实切换 hub 激活工作区，再核 health 与最终 Gateway/workspace/Session/Thread URI 不漂移，缺 Session/未知 Gateway/缺 workspace 明确拒绝且零 capture/catalog 副作用。其 transfer 测试和相关生产依赖与当前树一致；不得误把 modes 文件旧指纹当本轮通过证明。原件：`out/tests/temp/openspec_takeover/artifacts/retry-source-candidate-001/out/tests/temp/retry_source/artifacts/runs/retry-fork-uri-transfer-011/`，对应正式 artifacts 中每个 source-child 参数目录均有 workspace-switch 与 fork-response 原件。
+
+当前主树补证均使用外置 timeout/内存保护：`fork-uri-default-001` 1 passed/1918 deselected/28.82s，验证默认同 Session 新 idle child、不创建 admission且运行 main 原 checkpoint/JSONL 不变；`fork-uri-normalization-001` 3 passed/1916 deselected/35.14s，验证 Session source 归一 main 和两种 target intent 的 qualified local URI/alias 在真实 lifespan 冷恢复中固定；`fork-uri-owner-rejections-001` 45 passed，覆盖公开 API 参数与固定 source/target 归属、跨 owner 响应篡改、不可达零本地创建；`fork-uri-grammar-resolver-001` 220 passed，覆盖集合根/Thread 模板、identity/scope 与能力边界；`fork-uri-thread-ownership-001` 核权威 catalog 的 Thread 缺失、非法及物理目录缺失拒绝。上述均 exit 0，原始 argv/stdout/exit/source 指纹在 `out/tests/temp/openspec_takeover/artifacts/runs/`。既有 send/read/wait selector、target-main 与冷观察合同复用本文件 §9 的具名联合验收；fork transfer 独立 grant 不从 read 权限推导。此处不替代 itemized §12.6–12.9 的资源/故障和完整 Web 门。
