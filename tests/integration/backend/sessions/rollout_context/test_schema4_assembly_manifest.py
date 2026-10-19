@@ -185,7 +185,7 @@ def assembly_case(
     saver = RolloutCheckpointSaver(sessions)
     accepted = saver.accept_turn(
         session_id,
-        accepted_ingress_id="manifest-ingress",
+        thread_id=saver._storage.storage.main_thread_id(session_id), accepted_ingress_id="manifest-ingress",
         acceptance_idempotency_key="manifest-acceptance",
         job_id="manifest-job",
         admission_idempotency_key="manifest-admission",

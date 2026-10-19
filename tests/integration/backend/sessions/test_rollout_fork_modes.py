@@ -4,12 +4,15 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -48,6 +51,7 @@ from app.core.resource_uri import (
     resource_display_uri,
     thread_resource_uri,
 )
+from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_catalog_store.contracts import (
     ForkSourceCaptureRecord,
     SessionGenerationOriginDTO,
@@ -64,6 +68,7 @@ from app.core.session_lifecycle_gate import (
     SessionLifecycleGate,
 )
 from app.core.session_thread_context import session_thread_owner_scope
+from app.core.thread_creation import ThreadCreationService
 from app.core.trace_middleware import (
     get_current_gateway_id,
     get_current_request_id,
@@ -72,7 +77,7 @@ from app.core.trace_middleware import (
     set_current_gateway_id,
     set_current_request_id,
 )
-from app.core.workspace_identity import load_or_create_workspace_id
+from app.core.workspace_identity import bind_workspace_id, load_or_create_workspace_id
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
     PayloadKind,
@@ -121,7 +126,7 @@ from app.schemas.internal_v2.session_fork_transfer import (
     SessionForkTransferRequest,
     SessionForkTransferResultDTO,
 )
-from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
+from app.schemas.internal_v2.turn import TurnHistoryLoadRequest, TurnHistoryPageDTO
 from app.services.business.job.service import JobService
 from app.services.business.session_context_fork_service import SessionContextForkService
 from app.services.business.session_context_resource import (
@@ -174,6 +179,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.rollout_context.fork import (
     node_debug_materialization,
     retention_release,
+    source_snapshot,
 )
 from app.services.infrastructure.rollout_context.fork import transfer as fork_transfer
 from app.services.infrastructure.rollout_context.fork.source_capture import (
@@ -838,6 +844,7 @@ def _fork_live_choice(snapshot: RuntimeResourceSnapshot) -> SessionForkResourceC
 class SourceForkOwnerTransport:
     source: SessionContextForkService
     calls: list[SessionForkTransferRequest]
+    replies: list[SessionForkTransferResultDTO] = field(default_factory=list)
 
     async def fork_transfer(self, payload: SessionForkTransferRequest) -> SessionForkTransferResultDTO:
         # 网络替身只负责传输；来源 transfer/捕获/释放均走真实生产 owner。
@@ -846,21 +853,24 @@ class SourceForkOwnerTransport:
         token = set_current_gateway_id("fork-source-gateway")
         try:
             result = await self.source.transfer(transferred)
-            return SessionForkTransferResultDTO.model_validate(result.model_dump(mode="json"))
+            reply = SessionForkTransferResultDTO.model_validate(result.model_dump(mode="json"))
+            self.replies.append(reply)
+            return reply
         finally:
             reset_current_gateway_id(token)
 
 
 @pytest.fixture
 async def remote_fork_target(
-    production_fork_container: AppContainer, monkeypatch: pytest.MonkeyPatch,
+    production_fork_container: AppContainer, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest,
 ) -> AsyncIterator[tuple[AppContainer, SourceForkOwnerTransport]]:
     workspace = prepare_default_test_workspace(
         workspace_root=production_fork_container.workspace_root / "fork-recovery-target",
         template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
     )
     shutil.rmtree(workspace / ".boxteam")
-    workspace_id = load_or_create_workspace_id(workspace)
+    workspace_id = (bind_workspace_id(workspace, production_fork_container.workspace_id)
+                    if getattr(request, "param", False) else load_or_create_workspace_id(workspace))
     registry = WorkspaceContainerRegistry(
         mounted_workspaces=MountedWorkspaceRegistry([MountedWorkspace(workspace_id, workspace)]),
         project_root=Path.cwd(),
@@ -1906,7 +1916,7 @@ async def test_fork_uses_typed_source_observation_not_extension_controls(
     assert cold.load_context_source_control_states(target_storage_owner) == ()
     target_accepted = cold.accept_turn(
         target_session_id,
-        accepted_ingress_id="typed-observation-target-ingress",
+        thread_id=cold._storage.storage.main_thread_id(target_session_id), accepted_ingress_id="typed-observation-target-ingress",
         acceptance_idempotency_key="typed-observation-target-accept",
         job_id="typed-observation-target-job",
         admission_idempotency_key="typed-observation-target-admission",
@@ -2050,7 +2060,7 @@ async def test_fork_first_provider_recompiles_typed_root_without_rewriting_impor
     saver = fork_context.saver
     source_thread = _main_thread_id(fork_context, source.session_id)
     accepted = saver.accept_turn(
-        source.session_id, accepted_ingress_id="typed-root-ingress", acceptance_idempotency_key="typed-root-accept",
+        source.session_id, thread_id=saver._storage.storage.main_thread_id(source.session_id), accepted_ingress_id="typed-root-ingress", acceptance_idempotency_key="typed-root-accept",
         job_id="typed-root-job", admission_idempotency_key="typed-root-admission", payload="保留来源历史",
     )
     manager = ContextSourceManager(owner=ContextSourceOwnerKey(source.session_id, source_thread), control_state_port=saver)
@@ -2172,7 +2182,7 @@ async def test_fork_first_provider_recompiles_typed_root_without_rewriting_impor
         assert observed_tail is True
     cold_context = replace(fork_context, saver=cold)
     target_accepted = cold.accept_turn(
-        target.session_id, accepted_ingress_id="typed-target-ingress", acceptance_idempotency_key="typed-target-accept",
+        target.session_id, thread_id=cold._storage.storage.main_thread_id(target.session_id), accepted_ingress_id="typed-target-ingress", acceptance_idempotency_key="typed-target-accept",
         job_id="typed-target-job", admission_idempotency_key="typed-target-admission", payload="开始目标请求",
     )
     result = fork_provider_prepare(cold_context, target.session_id, str(target_accepted["initial_execution_id"]), target_manager, "target-first", attempt=1)
@@ -4050,7 +4060,7 @@ async def test_full_copy_cancelled_historical_is_not_resumable_but_new_replay_is
     )
     accepted = fork_context.saver.accept_turn(
         source.session_id,
-        accepted_ingress_id="cancelled-ingress-1",
+        thread_id=fork_context.saver._storage.storage.main_thread_id(source.session_id), accepted_ingress_id="cancelled-ingress-1",
         acceptance_idempotency_key="cancelled-acceptance-1",
         job_id="cancelled-job-1",
         admission_idempotency_key="cancelled-admission-1",
@@ -4087,7 +4097,7 @@ async def test_full_copy_cancelled_historical_is_not_resumable_but_new_replay_is
         connection.commit()
     fork_context.saver.converge_execution(
         source.session_id,
-        turn_id="turn-cancelled-source",
+        thread_id=fork_context.saver._storage.storage.main_thread_id(source.session_id), turn_id="turn-cancelled-source",
         execution_id=str(accepted["initial_execution_id"]),
         outcome="cancelled",
         turn_status="cancelled",
@@ -4280,6 +4290,666 @@ async def test_production_http_pinned_fork_and_preflight_have_exact_side_effects
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("remote_fork_target", [True, False], ids=["same_scope", "different_scope"], indirect=True)
+@pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
+async def test_distinct_live_fork_owners_verify_scope_before_capture(
+    fork_provider_prepare, production_fork_container: AppContainer,
+    remote_fork_target: tuple[AppContainer, SourceForkOwnerTransport],
+    fork_gateway_request_context: None, creation_kind: SessionForkCreationKind,
+) -> None:
+    """独立 catalog 的真实 owner 不能靠不同 Gateway authority 绕过同 scope 冲突。"""
+    source_context = _production_fork_context(production_fork_container)
+    source, _ = await _seed_retry_tool_source(
+        source_context, fork_provider_prepare, attachment_store=production_fork_container.attachment_blob_store,
+    )
+    target, transport = remote_fork_target
+    target_context = _production_fork_context(target)
+    assert source_context.workspace != target_context.workspace
+    source_catalog = source_context.sessions.path_resolver.catalog_store
+    target_catalog = target_context.sessions.path_resolver.catalog_store
+    assert source_catalog.database_path != target_catalog.database_path
+    assert source_context.saver.forks.instance_id != target_context.saver.forks.instance_id
+    parent = await target.session_service.create(SessionCreateRequest(title="独立 owner 目标容器"))
+    point = await source_context.forks.source_point(session_id=source.session_id, mode="full_rollout_copy")
+    assert len(point.resources) == 1
+    request = SessionForkRequest(
+        idempotency_key="verified-scope-" + creation_kind,
+        source_uri=thread_resource_uri(source.workspace_id, source.session_id,
+            _main_thread_id(source_context, source.session_id), gateway_authority="fork-source-gateway"),
+        target_container_uri=resource_display_uri(
+            scope="workspace", scope_id=target.workspace_id, kind="session",
+            tail_segments=(parent.session_id,) if creation_kind == "new_child_thread" else (),
+            gateway_authority="fork-target-gateway",
+        ),
+        creation_kind=creation_kind, mode="full_rollout_copy",
+        source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
+        resources=[SessionForkResourceChoice(resource_uri=point.resources[0].resource_uri, action="copy_snapshot")],
+    )
+    key = target_context.forks._creation_key(request.idempotency_key)
+    before = (_fork_intent_state(source_context), _fork_intent_state(target_context))
+    attachment_paths = [container.attachment_blob_store._catalog.database_path
+                        for container in (production_fork_container, target)]
+    attachment_before = tuple(_session_control_state(path) if path.exists() else None for path in attachment_paths)
+    target_control = target_context.sessions.path_resolver.resolve_session_node(parent.session_id) / "session-control.sqlite"
+    control_before = _session_control_state(target_control)
+    gateway_token = set_current_gateway_id("fork-target-gateway")
+    request_token = set_current_request_id("verified-scope-fork")
+    try:
+        if source.workspace_id == target.workspace_id:
+            with pytest.raises(ValueError, match="fork_owner_overlap"):
+                await target_context.forks.fork(request)
+            assert [call.action for call in transport.calls] == ["intent"]
+            assert (_fork_intent_state(source_context), _fork_intent_state(target_context)) == before
+            assert tuple(_session_control_state(path) if path.exists() else None for path in attachment_paths) == attachment_before
+            assert _session_control_state(target_control) == control_before
+            for catalog in (source_catalog, target_catalog):
+                assert catalog.get_fork_source_capture(copy_operation_id=key) is None
+                with pytest.raises(KeyError):
+                    catalog.get_fork_export_release(key)
+            with pytest.raises(KeyError):
+                target_catalog.get_creation_record(key)
+        else:
+            result = await target_context.forks.fork(request)
+            assert result.export_release is not None and result.export_release.state == "confirmed"
+            assert len(result.resources) == 1 and result.resources[0].action == "copy_snapshot"
+            assert result.resources[0].availability == "available"
+            assert target.attachment_blob_store.read(
+                result.session.session_id, result.resources[0].target_uri, owner_thread_id=result.thread_id,
+            ).data == "文件内容".encode()
+            assert [call.action for call in transport.calls].count("intent") == 2
+            assert [call.action for call in transport.calls].count("capture") == 1
+            assert [call.action for call in transport.calls].count("release") == 1
+            for catalog in (source_catalog, target_catalog):
+                capture = catalog.get_fork_source_capture(copy_operation_id=key)
+                assert capture is not None and capture.state == "materialized"
+                assert "source_owner_instance_id" not in capture.request_json
+                frozen = json.loads(capture.request_json)
+                assert (frozen["source_storage_domain_id"], frozen["target_storage_domain_id"]) == (source.workspace_id, target.workspace_id)
+            assert target_catalog.get_fork_export_release(key) == ("confirmed", None)
+        intents = [reply.intent for reply in transport.replies if reply.intent is not None]
+        assert len(intents) == (1 if source.workspace_id == target.workspace_id else 2)
+        assert all(intent["source_owner_instance_id"] == source_context.saver.forks.instance_id for intent in intents)
+        assert all(intent["source_storage_domain_id"] == source_catalog.get_node(source.session_id).workspace_id for intent in intents)
+    finally:
+        reset_current_request_id(request_token)
+        reset_current_gateway_id(gateway_token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
+async def test_same_live_fork_owner_across_gateways_keeps_shared_capture_and_replay(
+    fork_provider_prepare, production_fork_container: AppContainer, monkeypatch: pytest.MonkeyPatch,
+    fork_gateway_request_context: None, creation_kind: SessionForkCreationKind,
+) -> None:
+    """两个 Gateway 的序列化请求实际回到同一 owner，发布后重放不访问来源。"""
+    context = _production_fork_context(production_fork_container)
+    source, _ = await _seed_retry_tool_source(
+        context, fork_provider_prepare, attachment_store=production_fork_container.attachment_blob_store,
+    )
+    point = await context.forks.source_point(session_id=source.session_id, mode="full_rollout_copy")
+    transport = SourceForkOwnerTransport(context.forks, [])
+    monkeypatch.setattr(context.forks, "_transport", transport)
+    request = SessionForkRequest(
+        idempotency_key="same-owner-gateways-" + creation_kind,
+        source_uri=thread_resource_uri(source.workspace_id, source.session_id,
+            _main_thread_id(context, source.session_id), gateway_authority="fork-source-gateway"),
+        target_container_uri=resource_display_uri(
+            scope="workspace", scope_id=source.workspace_id, kind="session",
+            tail_segments=(source.session_id,) if creation_kind == "new_child_thread" else (),
+            gateway_authority="fork-target-gateway",
+        ),
+        creation_kind=creation_kind, mode="full_rollout_copy",
+        source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
+    )
+    gateway_token = set_current_gateway_id("fork-target-gateway")
+    request_token = set_current_request_id("same-owner-two-gateway-fork")
+    try:
+        result = await context.forks.fork(request)
+        assert result.export_release is None
+        assert len(result.resources) == 1
+        assert result.resources[0].action == ("reuse_reference" if creation_kind == "new_child_thread" else "retain_reference")
+        assert production_fork_container.attachment_blob_store.read(
+            result.session.session_id, result.resources[0].target_uri, owner_thread_id=result.thread_id,
+        ).data == "文件内容".encode()
+        intents = [reply.intent for reply in transport.replies if reply.intent is not None]
+        assert len(intents) == 1
+        assert all(intent["source_owner_instance_id"] == context.saver.forks.instance_id for intent in intents)
+        assert all(intent["source_storage_domain_id"] == context.sessions.path_resolver.catalog_store.get_node(source.session_id).workspace_id
+                   for intent in intents)
+        key = context.forks._creation_key(request.idempotency_key)
+        catalog = context.sessions.path_resolver.catalog_store
+        capture = catalog.get_fork_source_capture(copy_operation_id=key)
+        assert capture is not None and capture.state == "materialized"
+        frozen = json.loads(capture.request_json)
+        assert frozen["source_storage_domain_id"] == frozen["target_storage_domain_id"] == source.workspace_id
+        assert catalog.get_fork_export_release(key) == (None, None)
+        assert [call.action for call in transport.calls] == ["intent"]
+        assert "source_owner_instance_id" not in capture.request_json
+        creation = (catalog.get_creation_record(key) if creation_kind == "new_session_main"
+                    else context.forks._threads.for_owner_session(source.session_id).control_store.get_thread_creation_record(key))
+        assert "source_owner_instance_id" not in creation.request_intent_json
+        assert "source_storage_domain_id" not in json.loads(creation.request_intent_json)
+        assert json.loads(creation.request_intent_json)["capture_decision"] == {
+            "source_storage_domain_id": source.workspace_id, "target_storage_domain_id": source.workspace_id,
+            "capture_owner": "local",
+        }
+
+        async def source_offline(payload: SessionForkTransferRequest) -> SessionForkTransferResultDTO:
+            raise AssertionError("已发布 same-owner replay 不得重新访问 Gateway B")
+
+        monkeypatch.setattr(transport, "fork_transfer", source_offline)
+        assert await context.forks.fork(request) == result
+        assert catalog.get_fork_source_capture(copy_operation_id=key) == capture
+    finally:
+        reset_current_request_id(request_token)
+        reset_current_gateway_id(gateway_token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
+@pytest.mark.parametrize("crash_phase", [
+    "creation_durable", "copy.source.reserved", "copy.source.partial", "copy.attachments.preparing",
+    "copy.source.before_captured_cas", "fork.target_committed", "copy.target.published",
+])
+async def test_shared_owner_cold_recovery_uses_frozen_creation_decision(
+    fork_provider_prepare, production_fork_container: AppContainer,
+    monkeypatch: pytest.MonkeyPatch, fork_gateway_request_context: None,
+    creation_kind: SessionForkCreationKind, crash_phase: str,
+) -> None:
+    """新 owner 启动时不经 Gateway 自绕；目录是否已创建决定捕获或精确中止。"""
+    from app.core import thread_creation as thread_creation_module
+    from app.services.business import session_context_fork_service as service_module
+
+    context = _production_fork_context(production_fork_container)
+    source, _ = await _seed_retry_tool_source(
+        context, fork_provider_prepare, attachment_store=production_fork_container.attachment_blob_store,
+    )
+    source_thread = _main_thread_id(context, source.session_id)
+    source_jsonl = (_main_thread_node(context, source.session_id) / "rollout/rollout.jsonl").read_bytes()
+    point = await context.forks.source_point(session_id=source.session_id, mode="full_rollout_copy")
+    request = SessionForkRequest(
+        idempotency_key=f"shared-crash-{creation_kind}-{crash_phase}",
+        source_uri=thread_resource_uri(source.workspace_id, source.session_id, source_thread, gateway_authority="fork-source-gateway"),
+        target_container_uri=resource_display_uri(
+            scope="workspace", scope_id=source.workspace_id, kind="session",
+            tail_segments=(source.session_id,) if creation_kind == "new_child_thread" else (),
+            gateway_authority="fork-target-gateway",
+        ),
+        creation_kind=creation_kind, mode="full_rollout_copy",
+        source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
+    )
+    key = context.forks._creation_key(request.idempotency_key)
+    transport = SourceForkOwnerTransport(context.forks, [])
+    monkeypatch.setattr(context.forks, "_transport", transport)
+    captures = 0
+    capture_source = context.saver.forks.source._capture_fork_source_snapshot
+
+    async def count_capture(**kwargs: object):
+        nonlocal captures
+        captures += 1
+        return await capture_source(**kwargs)
+
+    class OwnerProcessExit(BaseException):
+        pass
+
+    def interrupt_creation(*_args: object, **_kwargs: object):
+        raise OwnerProcessExit("creation journal 已持久，物理准备尚未开始")
+
+    monkeypatch.setattr(context.saver.forks.source, "_capture_fork_source_snapshot", count_capture)
+    observers = {module: module.observe_phase for module in (service_module, fork_owner, fork_source, thread_creation_module)}
+    with monkeypatch.context() as crash:
+        if crash_phase == "creation_durable" and creation_kind == "new_session_main":
+            crash.setattr(context.sessions._creation_service, "_prepare_staging", interrupt_creation)
+        else:
+            for module, observe in observers.items():
+                async def interrupt_phase(operation_id: str, phase: str, *, original=observe, **kwargs: object):
+                    await original(operation_id, phase, **kwargs)
+                    expected_phase = "thread.creation.prepared" if crash_phase == "creation_durable" else crash_phase
+                    if operation_id == key and phase == expected_phase:
+                        raise OwnerProcessExit(f"模拟实际 owner 在 {phase} 后退出")
+
+                crash.setattr(module, "observe_phase", interrupt_phase)
+        gateway_token = set_current_gateway_id("fork-target-gateway")
+        request_token = set_current_request_id("shared-crash-frozen-delivery")
+        try:
+            with pytest.raises(OwnerProcessExit):
+                await context.forks.fork(request)
+        finally:
+            reset_current_request_id(request_token)
+            reset_current_gateway_id(gateway_token)
+    catalog = context.sessions.path_resolver.catalog_store
+    frozen = (catalog.get_creation_record(key) if creation_kind == "new_session_main" else
+              context.forks._threads.for_owner_session(source.session_id).control_store.get_thread_creation_record(key))
+    intent = json.loads(frozen.request_intent_json)
+    incomplete = crash_phase in {"copy.source.partial", "copy.attachments.preparing"}
+    assert intent["source_remote"] is True
+    assert intent["capture_decision"] == {
+        "source_storage_domain_id": source.workspace_id, "target_storage_domain_id": source.workspace_id,
+        "capture_owner": "local",
+    }
+    assert "source_owner_instance_id" not in frozen.request_intent_json
+    assert "source_target_creation_preimage_hash" not in frozen.request_intent_json
+    assert frozen.fork_delivery_request_id == "shared-crash-frozen-delivery"
+    assert [call.action for call in transport.calls] == ["intent"]
+    capture = catalog.get_fork_source_capture(copy_operation_id=key)
+    root = capture_directory(context.saver._storage.storage.sessions_dir, capture) if capture is not None else None
+    if crash_phase == "creation_durable":
+        assert capture is None and captures == 0 and frozen.state == "preparing"
+        if creation_kind == "new_session_main":
+            assert not (context.sessions.path_resolver.sessions_root / ".staging" / frozen.session_id).exists()
+        else:
+            assert not (context.sessions.path_resolver.resolve_session_node(source.session_id) / frozen.final_relative_locator).exists()
+    else:
+        assert capture is not None and catalog.get_fork_export_release(key) == (None, None)
+        if crash_phase == "copy.source.reserved":
+            assert capture.state == "preparing" and not root.exists() and captures == 0
+        elif incomplete:
+            assert capture.state == "preparing" and root.is_dir() and not (root / "captured.json").exists()
+            with pytest.raises(IncompleteForkSourceCaptureError):
+                read_captured_snapshot(context.saver._storage.storage.sessions_dir, capture)
+        elif crash_phase in {"copy.source.before_captured_cas", "fork.target_committed"}:
+            read_captured_snapshot(context.saver._storage.storage.sessions_dir, capture)
+        else:
+            assert frozen.state == "published" and capture.state == "materialized" and not root.exists()
+    claims = [tuple(row) for row in production_fork_container.attachment_blob_store._catalog._connected().execute(
+        "SELECT claim_id,state FROM fork_attachment_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
+    )]
+    if crash_phase == "copy.attachments.preparing":
+        assert [row[1] for row in claims] == (["preparing"] if creation_kind == "new_session_main" else [])
+    prepared_target = (context.sessions.path_resolver.resolve_prepared_session_node(frozen)
+                       if incomplete and creation_kind == "new_session_main" else
+                       context.sessions.path_resolver.resolve_session_node(source.session_id) / frozen.final_relative_locator
+                       if incomplete else None)
+    old_instance = context.saver.forks.instance_id
+    production_fork_container.workspace_activity_service.store.close()
+    production_fork_container.session_catalog.close()
+    restarted = _build_owned_container(context.workspace, monkeypatch)
+    _isolate_non_navigation_services(restarted, monkeypatch)
+    recovered = _production_fork_context(restarted)
+    assert recovered.saver.forks.instance_id != old_instance
+    cold_capture_source = recovered.saver.forks.source._capture_fork_source_snapshot
+
+    def forbid_creation_configuration(*_args: object, **_kwargs: object):
+        pytest.fail("恢复必须复用 journal 的 Agent/Provider，不得重新解析当前配置")
+
+    monkeypatch.setattr(recovered.sessions._config_service, "resolve_new_session_agent_id", forbid_creation_configuration)
+    monkeypatch.setattr(recovered.sessions._config_service, "resolve_new_session_provider_id", forbid_creation_configuration)
+
+    async def offline_gateway(_payload: SessionForkTransferRequest):
+        pytest.fail("shared startup/replay 不得访问 Gateway 或回到尚未监听的同 Backend")
+
+    async def cold_capture(**kwargs: object):
+        nonlocal captures
+        assert crash_phase in {"creation_durable", "copy.source.reserved"}, "已有私有目录或已发布 snapshot 禁止回读 live source"
+        captures += 1
+        return await cold_capture_source(**kwargs)
+
+    monkeypatch.setattr(transport, "fork_transfer", offline_gateway)
+    monkeypatch.setattr(recovered.forks, "_transport", transport)
+    monkeypatch.setattr(recovered.saver.forks.source, "_capture_fork_source_snapshot", cold_capture)
+    cold_gateway = set_current_gateway_id(None)
+    cold_request = set_current_request_id(None)
+    try:
+        async with main.lifespan(main.app):
+            cold_catalog = recovered.sessions.path_resolver.catalog_store
+            terminal = (cold_catalog.get_creation_record(key) if creation_kind == "new_session_main" else
+                        recovered.forks._threads.for_owner_session(source.session_id).control_store.get_thread_creation_record(key))
+            terminal_capture = cold_catalog.get_fork_source_capture(copy_operation_id=key)
+            assert terminal_capture is not None
+            assert (terminal.preimage_hash, terminal.request_intent_json, terminal.fork_delivery_request_id) == (
+                frozen.preimage_hash, frozen.request_intent_json, frozen.fork_delivery_request_id,
+            )
+            if creation_kind == "new_session_main":
+                assert (terminal.session_id, terminal.main_thread_id, terminal.created_at, terminal.storage_relative_locator,
+                        terminal.session_metadata_json, terminal.graph_binding) == (
+                    frozen.session_id, frozen.main_thread_id, frozen.created_at, frozen.storage_relative_locator,
+                    frozen.session_metadata_json, frozen.graph_binding,
+                )
+            else:
+                assert (terminal.child_thread_id, terminal.child_created_at, terminal.record_created_at,
+                        terminal.final_relative_locator, terminal.staging_locator, terminal.graph_binding) == (
+                    frozen.child_thread_id, frozen.child_created_at, frozen.record_created_at,
+                    frozen.final_relative_locator, frozen.staging_locator, frozen.graph_binding,
+                )
+            assert terminal.state == ("aborted" if incomplete else "published")
+            assert terminal_capture.state == ("aborted" if incomplete else "materialized")
+            assert cold_catalog.get_fork_export_release(key) == (None, None)
+            assert not capture_directory(recovered.saver._storage.storage.sessions_dir, terminal_capture).exists()
+            if capture is not None:
+                assert (terminal_capture.snapshot_id, terminal_capture.snapshot_relative_locator, terminal_capture.preimage_hash,
+                        terminal_capture.fork_id, terminal_capture.materialization_id) == (
+                    capture.snapshot_id, capture.snapshot_relative_locator, capture.preimage_hash, capture.fork_id, capture.materialization_id,
+                )
+            assert captures == 1
+            terminal_claims = [tuple(row) for row in restarted.attachment_blob_store._catalog._connected().execute(
+                "SELECT claim_id,state FROM fork_attachment_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
+            )]
+            if incomplete:
+                assert terminal_claims == [(claim_id, "aborted") for claim_id, _ in claims]
+                assert not prepared_target.exists()
+            elif creation_kind == "new_session_main":
+                assert len(terminal_claims) == 1 and terminal_claims[0][1] == "committed"
+                assert not claims or terminal_claims[0][0] == claims[0][0]
+            else:
+                assert terminal_claims == []
+            replay_gateway = set_current_gateway_id("fork-target-gateway")
+            replay_request = set_current_request_id("shared-cold-replay-request")
+            try:
+                if incomplete:
+                    with pytest.raises(RuntimeError, match="已中止|aborted"):
+                        await recovered.forks.fork(request)
+                else:
+                    result = await recovered.forks.fork(request)
+                    assert result.export_release is None
+                    assert (result.session.session_id, result.thread_id) == (
+                        frozen.session_id if creation_kind == "new_session_main" else source.session_id,
+                        frozen.main_thread_id if creation_kind == "new_session_main" else frozen.child_thread_id,
+                    )
+                    resource, = result.resources
+                    assert resource.availability == "available"
+                    assert restarted.attachment_blob_store.read(
+                        result.session.session_id, resource.target_uri, owner_thread_id=result.thread_id,
+                    ).data == "文件内容".encode()
+                    owner = recovered.saver.forks.source.resolve_thread_owner(result.session.session_id, result.thread_id)
+                    with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+                        restored = await recovered.saver.aget_tuple(build_checkpoint_config(owner.thread_id))
+                    assert restored is not None
+            finally:
+                reset_current_request_id(replay_request)
+                reset_current_gateway_id(replay_gateway)
+            assert await recovered.forks.recover_prepared_forks() == 0
+            assert cold_catalog.get_fork_source_capture(copy_operation_id=key) == terminal_capture
+            assert [tuple(row) for row in restarted.attachment_blob_store._catalog._connected().execute(
+                "SELECT claim_id,state FROM fork_attachment_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
+            )] == terminal_claims
+            assert (_main_thread_node(recovered, source.session_id) / "rollout/rollout.jsonl").read_bytes() == source_jsonl
+            assert get_current_gateway_id() is None and get_current_request_id() is None
+    finally:
+        reset_current_request_id(cold_request)
+        reset_current_gateway_id(cold_gateway)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("crash_phase", ["copy.source.reserved", "copy.source.before_captured_cas"])
+async def test_child_capture_missing_final_locator_is_not_rebuilt(
+    fork_provider_prepare, production_fork_container: AppContainer,
+    monkeypatch: pytest.MonkeyPatch, fork_gateway_request_context: None, crash_phase: str,
+) -> None:
+    """capture 已在 final rename 后持久化，外删目录不能伪装成创建前崩溃。"""
+    context = _production_fork_context(production_fork_container)
+    source, _ = await _seed_retry_tool_source(
+        context, fork_provider_prepare, attachment_store=production_fork_container.attachment_blob_store,
+    )
+    request = await _fork_request(context, source.session_id, creation_kind="new_child_thread", mode="full_rollout_copy")
+    key = context.forks._creation_key(request.idempotency_key)
+    observer = fork_owner.observe_phase
+
+    class OwnerProcessExit(BaseException):
+        pass
+
+    async def interrupt(operation_id: str, phase: str, **kwargs: object):
+        await observer(operation_id, phase, **kwargs)
+        if operation_id == key and phase == crash_phase:
+            raise OwnerProcessExit("capture 已持久，模拟 owner 退出")
+
+    with monkeypatch.context() as crash:
+        crash.setattr(fork_owner, "observe_phase", interrupt)
+        with pytest.raises(OwnerProcessExit):
+            await context.forks.fork(request)
+    catalog = context.sessions.path_resolver.catalog_store
+    capture = catalog.get_fork_source_capture(copy_operation_id=key)
+    assert capture is not None and capture.state == "preparing"
+    control = context.forks._threads.for_owner_session(source.session_id).control_store
+    frozen = control.get_thread_creation_record(key)
+    session_node = context.sessions.path_resolver.resolve_session_node(source.session_id)
+    final = session_node / frozen.final_relative_locator
+    staging = session_node / frozen.staging_locator
+    assert final.is_dir() and not staging.exists() and frozen.state == "preparing"
+    root = capture_directory(context.saver._storage.storage.sessions_dir, capture)
+    captured_bytes = {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    source_jsonl = (_main_thread_node(context, source.session_id) / "rollout/rollout.jsonl").read_bytes()
+    shutil.rmtree(final)
+    production_fork_container.workspace_activity_service.store.close()
+    production_fork_container.session_catalog.close()
+    restarted = _build_owned_container(context.workspace, monkeypatch)
+    _isolate_non_navigation_services(restarted, monkeypatch)
+    recovered = _production_fork_context(restarted)
+
+    async def forbid_recapture(**_kwargs: object):
+        pytest.fail("已有 capture 的外删 target 不得重新读取 source")
+
+    monkeypatch.setattr(recovered.saver.forks.source, "_capture_fork_source_snapshot", forbid_recapture)
+    with pytest.raises(RuntimeError, match="已预留 capture.*最终 locator 目录缺失"):
+        async with main.lifespan(main.app):
+            pytest.fail("外删 target 不得让 startup ready")
+    assert not final.exists() and not staging.exists()
+    # 失败的 lifespan 会关闭真实 registry；从持久原件复核，不再使用已关闭容器。
+    with closing(SessionCatalogStore(catalog.database_path, catalog.sessions_root)) as cold_catalog:
+        assert cold_catalog.get_fork_source_capture(copy_operation_id=key) == capture
+    with closing(SessionControlStore(session_node / "session-control.sqlite", read_only=True)) as cold_control:
+        assert cold_control.get_thread_creation_record(key) == frozen
+    assert {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()} == captured_bytes
+    assert (session_node / "rollout/rollout.jsonl").read_bytes() == source_jsonl
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup_phase", ["capture_aborted", "directories_removed"])
+async def test_child_aborted_capture_resumes_original_cleanup_without_rebuilding(
+    fork_provider_prepare, production_fork_container: AppContainer,
+    monkeypatch: pytest.MonkeyPatch, fork_gateway_request_context: None, cleanup_phase: str,
+) -> None:
+    """资源已中止、creation 尚 preparing 的真实崩溃窗口继续清理，不创建目录。"""
+    context = _production_fork_context(production_fork_container)
+    source, _ = await _seed_retry_tool_source(
+        context, fork_provider_prepare, attachment_store=production_fork_container.attachment_blob_store,
+    )
+    parent = await context.sessions.create(SessionCreateRequest(title="原 cleanup 目标 owner"))
+    request = await _fork_request(
+        context, source.session_id, creation_kind="new_child_thread", mode="full_rollout_copy",
+        target_container_uri=resource_display_uri(
+            scope="workspace", scope_id=source.workspace_id, kind="session", tail_segments=(parent.session_id,),
+        ),
+    )
+    key = context.forks._creation_key(request.idempotency_key)
+    observer = fork_source.observe_phase
+    cleanup = ThreadCreationService._cleanup_after_failed_publish
+
+    class OwnerProcessExit(BaseException):
+        pass
+
+    async def fail_partial_capture(operation_id: str, phase: str, **kwargs: object):
+        await observer(operation_id, phase, **kwargs)
+        if operation_id == key and phase == "copy.attachments.preparing":
+            raise RuntimeError("真实 partial capture 失败，进入原 owner 中止")
+
+    async def interrupt_cleanup(record, **kwargs):
+        if cleanup_phase == "capture_aborted":
+            abort = kwargs["before_abort"]
+
+            async def abort_then_exit(current):
+                await abort(current)
+                raise OwnerProcessExit("capture 中止后退出")
+
+            kwargs["before_abort"] = abort_then_exit
+        await cleanup(record, **kwargs)
+        raise OwnerProcessExit("目录清理后、creation 中止前退出")
+
+    with monkeypatch.context() as crash:
+        crash.setattr(fork_source, "observe_phase", fail_partial_capture)
+        crash.setattr(ThreadCreationService, "_cleanup_after_failed_publish", staticmethod(interrupt_cleanup))
+        with pytest.raises(OwnerProcessExit):
+            await context.forks.fork(request)
+    capture = context.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=key)
+    frozen = context.forks._threads.for_owner_session(parent.session_id).control_store.get_thread_creation_record(key)
+    assert capture is not None and capture.state == "aborted" and frozen.state == "preparing"
+    session_node = context.sessions.path_resolver.resolve_session_node(parent.session_id)
+    final, staging = session_node / frozen.final_relative_locator, session_node / frozen.staging_locator
+    assert final.exists() == (cleanup_phase == "capture_aborted") and not staging.exists()
+    source_jsonl = (_main_thread_node(context, source.session_id) / "rollout/rollout.jsonl").read_bytes()
+    production_fork_container.workspace_activity_service.store.close()
+    production_fork_container.session_catalog.close()
+    restarted = _build_owned_container(context.workspace, monkeypatch)
+    _isolate_non_navigation_services(restarted, monkeypatch)
+    recovered = _production_fork_context(restarted)
+    service = recovered.forks._threads.for_owner_session(parent.session_id)
+
+    def forbid_rebuild(*_args: object, **_kwargs: object):
+        pytest.fail("已中止 capture 的原 cleanup 不能重建 staging")
+
+    async def forbid_recapture(**_kwargs: object):
+        pytest.fail("已中止 capture 的原 cleanup 不能重读 source")
+
+    monkeypatch.setattr(service, "_prepare_staging", forbid_rebuild)
+    monkeypatch.setattr(recovered.saver.forks.source, "_capture_fork_source_snapshot", forbid_recapture)
+    async with main.lifespan(main.app):
+        current = service.control_store.get_thread_creation_record(key)
+        assert current.state == "aborted"
+        assert replace(current, state=frozen.state, abort_reason=frozen.abort_reason, record_updated_at=frozen.record_updated_at) == frozen
+        assert recovered.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=key) == capture
+        assert not final.exists() and not staging.exists()
+        assert not capture_directory(recovered.saver._storage.storage.sessions_dir, capture).exists()
+        assert [tuple(row) for row in restarted.attachment_blob_store._catalog._connected().execute(
+            "SELECT state FROM fork_attachment_claims WHERE copy_operation_id=?", (key,),
+        )] == [("aborted",)]
+        with pytest.raises(RuntimeError, match="已中止"):
+            await recovered.forks.fork(request)
+        assert await recovered.forks.recover_prepared_forks() == 0
+        assert (_main_thread_node(recovered, source.session_id) / "rollout/rollout.jsonl").read_bytes() == source_jsonl
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["operation_id", "target_session", "target_thread", "creation_preimage", "capture_preimage"])
+async def test_main_fork_conflicting_capture_is_preserved_before_abort(
+    fork_provider_prepare, production_fork_container: AppContainer,
+    monkeypatch: pytest.MonkeyPatch, fork_gateway_request_context: None, fault: str,
+) -> None:
+    """真实恢复拒绝冲突 capture 后，附件、catalog 和私有快照都不能被错误清理。"""
+    context = _production_fork_context(production_fork_container)
+    source, _ = await _seed_retry_tool_source(
+        context, fork_provider_prepare, attachment_store=production_fork_container.attachment_blob_store,
+    )
+    request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="full_rollout_copy")
+    key = context.forks._creation_key(request.idempotency_key)
+    observer = fork_owner.observe_phase
+
+    class OwnerProcessExit(BaseException):
+        pass
+
+    async def interrupt(operation_id: str, phase: str, **kwargs: object):
+        await observer(operation_id, phase, **kwargs)
+        if operation_id == key and phase == "copy.source.before_captured_cas":
+            raise OwnerProcessExit("快照与附件已准备，尚未写 captured CAS")
+
+    with monkeypatch.context() as crash:
+        crash.setattr(fork_owner, "observe_phase", interrupt)
+        with pytest.raises(OwnerProcessExit):
+            await context.forks.fork(request)
+    catalog = context.sessions.path_resolver.catalog_store
+    frozen = catalog.get_creation_record(key)
+    capture = catalog.get_fork_source_capture(copy_operation_id=key)
+    assert capture is not None and capture.state == "preparing"
+    root = capture_directory(context.saver._storage.storage.sessions_dir, capture)
+    captured_bytes = {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    source_jsonl = (_main_thread_node(context, source.session_id) / "rollout/rollout.jsonl").read_bytes()
+    claims = [tuple(row) for row in production_fork_container.attachment_blob_store._catalog._connected().execute(
+        "SELECT * FROM fork_attachment_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
+    )]
+    attachment_catalog_path = production_fork_container.attachment_blob_store._catalog.database_path
+    source_node = _main_thread_node(context, source.session_id)
+    assert len(claims) == 1
+    with sqlite3.connect(context.workspace / ".boxteam/navigation/session-catalog.sqlite") as connection:
+        if fault == "operation_id":
+            connection.execute("UPDATE fork_source_captures SET copy_operation_id=? WHERE creation_key=?", (key + "-foreign", key))
+        elif fault == "target_session":
+            connection.execute("UPDATE fork_source_captures SET target_session_id=? WHERE creation_key=?", (source.session_id, key))
+        elif fault == "target_thread":
+            connection.execute("UPDATE fork_source_captures SET target_thread_id=? WHERE creation_key=?", (_main_thread_id(context, source.session_id), key))
+        elif fault == "creation_preimage":
+            payload = json.loads(capture.request_json)
+            payload["creation_preimage_hash"] = "0" * 64
+            encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            connection.execute("UPDATE fork_source_captures SET request_json=?,preimage_hash=? WHERE creation_key=?", (encoded, hashlib.sha256(encoded.encode()).hexdigest(), key))
+        else:
+            connection.execute("UPDATE fork_source_captures SET preimage_hash=? WHERE creation_key=?", ("0" * 64, key))
+    conflicting = catalog.get_fork_source_capture(creation_key=key)
+    assert conflicting is not None
+    # 直接事务入口也必须核原 creation，不能只因同 key 仍 preparing 就取得清理权限。
+    with pytest.raises(RuntimeError, match="owner 冲突"):
+        catalog.abort_unpublished_fork_capture(conflicting, creation=frozen, reason="不得清理冲突 owner")
+    assert catalog.get_fork_source_capture(creation_key=key) == conflicting
+    production_fork_container.workspace_activity_service.store.close()
+    production_fork_container.session_catalog.close()
+    restarted = _build_owned_container(context.workspace, monkeypatch)
+    _isolate_non_navigation_services(restarted, monkeypatch)
+    with pytest.raises(ValueError, match="fork_owner_overlap"):
+        async with main.lifespan(main.app):
+            pytest.fail("冲突 capture 不得让 startup ready")
+    with closing(SessionCatalogStore(catalog.database_path, catalog.sessions_root)) as cold_catalog:
+        assert cold_catalog.get_creation_record(key) == frozen
+        assert cold_catalog.get_fork_source_capture(creation_key=key) == conflicting
+    assert {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()} == captured_bytes
+    with closing(sqlite3.connect(attachment_catalog_path.as_uri() + "?mode=ro", uri=True)) as connection:
+        assert connection.execute(
+            "SELECT * FROM fork_attachment_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
+        ).fetchall() == claims
+    assert (source_node / "rollout/rollout.jsonl").read_bytes() == source_jsonl
+
+
+@pytest.mark.asyncio
+async def test_main_fork_abort_rejects_rebound_creation_capability(
+    fork_provider_prepare, production_fork_container: AppContainer,
+    monkeypatch: pytest.MonkeyPatch, fork_gateway_request_context: None,
+) -> None:
+    """同 key 的伪造 record 不能先清附件，再由下游 creation owner 才发现身份冲突。"""
+    context = _production_fork_context(production_fork_container)
+    source, _ = await _seed_retry_tool_source(
+        context, fork_provider_prepare, attachment_store=production_fork_container.attachment_blob_store,
+    )
+    request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="full_rollout_copy")
+    key = context.forks._creation_key(request.idempotency_key)
+    observer = fork_owner.observe_phase
+
+    class OwnerProcessExit(BaseException):
+        pass
+
+    async def interrupt(operation_id: str, phase: str, **kwargs: object):
+        await observer(operation_id, phase, **kwargs)
+        if operation_id == key and phase == "copy.source.before_captured_cas":
+            raise OwnerProcessExit("保留真实附件与 capture")
+
+    with monkeypatch.context() as crash:
+        crash.setattr(fork_owner, "observe_phase", interrupt)
+        with pytest.raises(OwnerProcessExit):
+            await context.forks.fork(request)
+    catalog = context.sessions.path_resolver.catalog_store
+    frozen = catalog.get_creation_record(key)
+    capture = catalog.get_fork_source_capture(copy_operation_id=key)
+    assert capture is not None
+    root = capture_directory(context.saver._storage.storage.sessions_dir, capture)
+    captured_bytes = {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    claims = [tuple(row) for row in production_fork_container.attachment_blob_store._catalog._connected().execute(
+        "SELECT * FROM fork_attachment_claims WHERE copy_operation_id=?", (key,),
+    )]
+    for name, value in {
+        "session_id": source.session_id, "main_thread_id": _main_thread_id(context, source.session_id),
+        "workspace_id": "foreign-workspace", "purpose": "normal", "preimage_hash": "0" * 64,
+        "request_intent_json": "{}", "storage_relative_locator": "2000/01/01/foreign",
+        "created_at": "2000-01-01T00:00:00+00:00", "record_created_at": "2000-01-01T00:00:00+00:00",
+    }.items():
+        rebound = replace(frozen, **{name: value})
+        with pytest.raises(ValueError, match="creation capability"):
+            await context.forks._abort_if_unpublished(rebound, "错误 caller 不得清理")
+        with pytest.raises(RuntimeError, match="owner 冲突"):
+            catalog.abort_unpublished_fork_capture(capture, creation=rebound, reason="错误 caller 不得清理")
+    assert catalog.get_creation_record(key) == frozen
+    assert catalog.get_fork_source_capture(copy_operation_id=key) == capture
+    assert {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()} == captured_bytes
+    assert [tuple(row) for row in production_fork_container.attachment_blob_store._catalog._connected().execute(
+        "SELECT * FROM fork_attachment_claims WHERE copy_operation_id=?", (key,),
+    )] == claims
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
 @pytest.mark.parametrize("fault", [
     "point", "thread_uri", "thread_owner", "missing_source_uri", "missing_source_point",
@@ -4454,7 +5124,10 @@ async def test_remote_source_preserves_default_thread_and_context_anchor(
     request_token = set_current_request_id("response-binding-defaults")
     try:
         result = await target.session_context_fork_service.fork(request)
-        assert len(intents) == 1
+        assert len(intents) == 2
+        assert intents[1]["source_uri"] == intents[0]["source_uri"]
+        assert intents[1]["source_point"] == intents[0]["source_point"]
+        assert intents[1]["source_owner_instance_id"] == intents[0]["source_owner_instance_id"]
         assert intents[0]["source_thread_id"] == source_main_thread_id
         assert result.source_uri == intents[0]["source_uri"]
         assert result.source_uri == thread_resource_uri(
@@ -5056,7 +5729,7 @@ async def test_lifespan_retries_pending_remote_export_without_restart_or_fork_re
                 ("fork-target-gateway", "frozen-export-delivery"),
                 ("fork-target-gateway", "frozen-export-delivery"),
             ]
-            assert sum(call.action == "intent" for call in transport.calls) == 1
+            assert sum(call.action == "intent" for call in transport.calls) == 2
             assert sum(call.action == "capture" for call in transport.calls) == 1
             assert sum(call.action == "release" for call in transport.calls) == 1
             assert await target.job_service.list() == []
@@ -5277,6 +5950,7 @@ async def test_qualified_local_fork_lifespan_recovers_without_http_context(
 async def test_local_partial_capture_abort_does_not_block_complete_marker_recovery(
     fork_provider_prepare, production_fork_container: AppContainer,
     monkeypatch: pytest.MonkeyPatch, creation_kind: SessionForkCreationKind, partial_phase: str,
+    fork_gateway_request_context: None,
 ) -> None:
     context = _production_fork_context(production_fork_container)
     store = production_fork_container.attachment_blob_store
@@ -5426,12 +6100,204 @@ async def test_local_partial_capture_abort_does_not_block_complete_marker_recove
         assert recovered.saver.forks.source.resolve_main_thread_owner(source.session_id).thread_id == source_thread
 
 
+@pytest.mark.skipif(os.name != "posix", reason="真实 source copy worker 的取消与共享锁生命周期")
+async def test_cancelled_source_copy_holds_read_lease_until_worker_finishes(
+    fork_provider_prepare, production_fork_container: AppContainer,
+    monkeypatch: pytest.MonkeyPatch, fork_gateway_request_context: None,
+) -> None:
+    context = _production_fork_context(production_fork_container)
+    source, _ = await _seed_retry_tool_source(
+        context, fork_provider_prepare, attachment_store=production_fork_container.attachment_blob_store,
+    )
+    thread_id = _main_thread_id(context, source.session_id)
+    storage = context.saver._storage.storage
+    source_root = storage.root(source.session_id, thread_id=thread_id)
+    original_jsonl = (source_root / "rollout.jsonl").read_bytes()
+    request = await _fork_request(
+        context, source.session_id, creation_kind="new_session_main", mode="context_fork",
+    )
+    operation_key = context.forks._creation_key(request.idempotency_key)
+    started = asyncio.Event()
+    release_worker, worker_finished = threading.Event(), threading.Event()
+    writer_ready, release_writer = threading.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+    original_ignore = source_snapshot._copy_ignore
+    original_capture = fork_source.capture_fork_rollout_snapshot
+
+    def pause_live_copy(directory: str, names: list[str]) -> set[str]:
+        if Path(directory) == source_root:
+            loop.call_soon_threadsafe(started.set)
+            if not release_worker.wait(timeout=10):
+                raise TimeoutError("测试未及时释放真实 source copy worker")
+        return original_ignore(directory, names)
+
+    def record_capture(*args, **kwargs):
+        try:
+            return original_capture(*args, **kwargs)
+        finally:
+            worker_finished.set()
+
+    def write() -> None:
+        with storage._lock(thread_id, "", session_id=source.session_id):
+            writer_ready.set()
+            assert worker_finished.is_set(), "worker 仍在读取 live source 时 writer 不得获准"
+            assert release_writer.wait(timeout=10)
+
+    monkeypatch.setattr(source_snapshot, "_copy_ignore", pause_live_copy)
+    monkeypatch.setattr(fork_source, "capture_fork_rollout_snapshot", record_capture)
+    operation = asyncio.create_task(context.forks.fork(request))
+    probe = None
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        writer = None
+        try:
+            await asyncio.wait_for(started.wait(), timeout=10)
+            assert not worker_finished.is_set()
+            probe = storage.read_lock(source.session_id, thread_id)
+            await probe.acquire_async()
+            admission = probe._admission
+            assert admission is not None
+            probe_owner = (threading.get_ident(), asyncio.current_task())
+            with admission._condition:
+                assert probe_owner in admission._holders
+                source_holds = [held for owner, held in admission._holders.items() if owner != probe_owner]
+                assert len(source_holds) == 1
+                source_hold = source_holds[0]
+            assert source_hold.owner[1] is not None
+            writer = executor.submit(write)
+            async with asyncio.timeout(2):
+                while True:
+                    with admission._condition:
+                        if len(admission._queue) == 1:
+                            break
+                    await asyncio.sleep(0)
+            probe.release()
+            for reason in ("首次取消真实 source copy", "重复取消真实 source copy"):
+                operation.cancel(reason)
+                await asyncio.sleep(0)
+                assert not operation.done(), "取消父 Task 不能提前结束 worker 的锁生命周期"
+                with admission._condition:
+                    assert admission._holders.get(source_hold.owner) is source_hold
+                    assert len(admission._queue) == 1
+                assert not writer_ready.is_set() and not worker_finished.is_set()
+            release_worker.set()
+            with pytest.raises(asyncio.CancelledError, match="首次取消真实 source copy"):
+                await asyncio.wait_for(operation, timeout=10)
+            assert worker_finished.is_set()
+            assert await asyncio.to_thread(writer_ready.wait, 2)
+            release_writer.set()
+            await asyncio.wait_for(asyncio.wrap_future(writer), timeout=2)
+            capture = context.sessions.path_resolver.catalog_store.get_fork_source_capture(
+                copy_operation_id=operation_key,
+            )
+            assert capture is not None and capture.state == "preparing"
+            with pytest.raises(IncompleteForkSourceCaptureError):
+                read_captured_snapshot(storage.sessions_dir, capture)
+            assert (source_root / "rollout.jsonl").read_bytes() == original_jsonl
+            assert not admission._holders and not admission._queue
+        finally:
+            release_worker.set()
+            release_writer.set()
+            if probe is not None:
+                probe.release()
+            if started.is_set():
+                assert await asyncio.to_thread(worker_finished.wait, 10), "真实 source copy worker 未退出"
+            if not operation.done():
+                operation.cancel()
+            await asyncio.gather(operation, return_exceptions=True)
+            if writer is not None:
+                await asyncio.gather(asyncio.wrap_future(writer), return_exceptions=True)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="真实 source capture 的共享锁与异步 Task 公平性")
+async def test_local_capture_waiters_do_not_borrow_another_task_shared_hold(
+    fork_provider_prepare, production_fork_container: AppContainer,
+    monkeypatch: pytest.MonkeyPatch, fork_gateway_request_context: None,
+) -> None:
+    context = _production_fork_context(production_fork_container)
+    source, _ = await _seed_retry_tool_source(
+        context, fork_provider_prepare, attachment_store=production_fork_container.attachment_blob_store,
+    )
+    thread_id = _main_thread_id(context, source.session_id)
+    storage = context.saver._storage.storage
+    original = storage.jsonl_path(source.session_id, thread_id=thread_id).read_bytes()
+    request = await _fork_request(
+        context, source.session_id, creation_kind="new_session_main", mode="context_fork",
+    )
+    operation_key = context.forks._creation_key(request.idempotency_key)
+    reached, release_capture = asyncio.Event(), asyncio.Event()
+    observer = fork_source.observe_phase
+
+    async def pause_capture(operation_id: str, phase: str, **kwargs):
+        await observer(operation_id, phase, **kwargs)
+        if operation_id == operation_key and phase == "copy.source.partial":
+            reached.set()
+            await release_capture.wait()
+
+    monkeypatch.setattr(fork_source, "observe_phase", pause_capture)
+    writer_ready, release_writer = threading.Event(), threading.Event()
+
+    def write() -> None:
+        with storage._lock(thread_id, "", session_id=source.session_id):
+            writer_ready.set()
+            assert release_writer.wait(timeout=2)
+
+    async def read() -> TurnHistoryPageDTO:
+        async with context.saver.history_read_lease(source.session_id, thread_id):
+            return context.saver.load_history(source.session_id, thread_id, TurnHistoryLoadRequest())
+
+    operation = asyncio.create_task(context.forks.fork(request))
+    probe = None
+    reader: asyncio.Task[TurnHistoryPageDTO] | None = None
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        try:
+            await asyncio.wait_for(reached.wait(), timeout=10)
+            probe = storage.read_lock(source.session_id, thread_id)
+            await probe.acquire_async()
+            admission = probe._admission
+            assert admission is not None
+
+            async def wait_queue(size: int) -> None:
+                async with asyncio.timeout(2):
+                    while True:
+                        with admission._condition:
+                            if len(admission._queue) == size:
+                                return
+                        await asyncio.sleep(0)
+
+            writer = executor.submit(write)
+            await wait_queue(1)
+            reader = asyncio.create_task(read())
+            await wait_queue(2)
+            probe.release()
+            assert not writer_ready.is_set() and not reader.done()
+            operation.cancel("验证真实 source capture 的取消清理")
+            with pytest.raises(asyncio.CancelledError):
+                await operation
+            assert await asyncio.to_thread(writer_ready.wait, 1)
+            assert not reader.done()
+            release_writer.set()
+            page = await asyncio.wait_for(reader, timeout=2)
+            writer.result(timeout=1)
+            assert page.items
+            assert storage.jsonl_path(source.session_id, thread_id=thread_id).read_bytes() == original
+        finally:
+            release_capture.set()
+            release_writer.set()
+            if probe is not None:
+                probe.release()
+            operation.cancel()
+            if reader is not None:
+                reader.cancel()
+            await asyncio.gather(operation, *([reader] if reader is not None else []), return_exceptions=True)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
 @pytest.mark.parametrize("fault", ["committed_missing", "marker_directory", "marker_symlink", "marker_identity", "marker_hash", "root_symlink"])
 async def test_fork_startup_rejects_corrupted_capture_proof(
     fork_provider_prepare, production_fork_container: AppContainer,
     monkeypatch: pytest.MonkeyPatch, creation_kind: SessionForkCreationKind, fault: str,
+    fork_gateway_request_context: None,
 ) -> None:
     context = _production_fork_context(production_fork_container)
     source = await _seed_source(context, fork_provider_prepare)

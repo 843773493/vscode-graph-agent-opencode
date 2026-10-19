@@ -53,7 +53,7 @@ _INDEXED_HISTORY_CACHE_LIMIT = 64
 class IndexedHistorySnapshots:
     def __init__(self, context_reader: RolloutContextReader) -> None:
         self._context_reader = context_reader
-        self._indexed_history_cache: OrderedDict[str, IndexedHistoryCacheEntry] = (
+        self._indexed_history_cache: OrderedDict[tuple[str, str], IndexedHistoryCacheEntry] = (
             OrderedDict()
         )
         self._indexed_history_cache_lock = threading.RLock()
@@ -68,6 +68,8 @@ class IndexedHistorySnapshots:
         except RolloutNotMaterializedError:
             return None
         try:
+            if (snapshot.session_id, snapshot.thread_id) != (session_id, thread_id):
+                raise ValueError("history snapshot 与请求 Session/thread owner 不一致")
             return self._read_indexed_history_snapshot(session_id, snapshot)
         except Exception:
             snapshot.close()
@@ -83,6 +85,7 @@ class IndexedHistorySnapshots:
         active_view_id = self._context_reader.active_view_id(snapshot)
         cache_entry = self._cached_indexed_history(
             session_id,
+            snapshot.thread_id,
             rollout_id=manifest.rollout_id,
             projection_epoch=manifest.projection_epoch,
             committed_sequence=manifest.committed_sequence,
@@ -109,6 +112,7 @@ class IndexedHistorySnapshots:
         turn_count = self._context_reader.context_turn_count(snapshot, chain)
         self._cache_indexed_history(
             session_id,
+            snapshot.thread_id,
             IndexedHistoryCacheEntry(
                 rollout_id=manifest.rollout_id,
                 projection_epoch=manifest.projection_epoch,
@@ -132,6 +136,7 @@ class IndexedHistorySnapshots:
     def _cached_indexed_history(
         self,
         session_id: str,
+        thread_id: str,
         *,
         rollout_id: str,
         projection_epoch: int,
@@ -141,7 +146,8 @@ class IndexedHistorySnapshots:
         view_id: str | None,
     ) -> IndexedHistoryCacheEntry | None:
         with self._indexed_history_cache_lock:
-            entry = self._indexed_history_cache.get(session_id)
+            key = (session_id, thread_id)
+            entry = self._indexed_history_cache.get(key)
             if entry is None:
                 return None
             if (
@@ -152,18 +158,20 @@ class IndexedHistorySnapshots:
                 or entry.history_view_revision != history_view_revision
                 or entry.view_id != view_id
             ):
-                self._indexed_history_cache.pop(session_id, None)
+                self._indexed_history_cache.pop(key, None)
                 return None
-            self._indexed_history_cache.move_to_end(session_id)
+            self._indexed_history_cache.move_to_end(key)
             return entry
 
     def _cache_indexed_history(
         self,
         session_id: str,
+        thread_id: str,
         entry: IndexedHistoryCacheEntry,
     ) -> None:
         with self._indexed_history_cache_lock:
-            self._indexed_history_cache[session_id] = entry
-            self._indexed_history_cache.move_to_end(session_id)
+            key = (session_id, thread_id)
+            self._indexed_history_cache[key] = entry
+            self._indexed_history_cache.move_to_end(key)
             while len(self._indexed_history_cache) > _INDEXED_HISTORY_CACHE_LIMIT:
                 self._indexed_history_cache.popitem(last=False)

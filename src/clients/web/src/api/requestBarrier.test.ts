@@ -207,7 +207,7 @@ describe("二进制与流式路径共享统一凭据刷新屏障", () => {
   test("streamSessionMessageEvents 凭据轮换后重试再消费流", async () => {
     const backend = installRotatingCredentialBackend({ businessResponse: emptySseStream });
 
-    await streamSessionMessageEvents(48_620, "ses_a", "turn_a", { workspaceId: "w" });
+    await streamSessionMessageEvents(48_620, "ses_a", "turn_a", { threadId: "thr_00000000400070008000000000000002", workspaceId: "w" });
 
     expect(backend.businessRequests).toEqual([
       "/api/v1/sessions/ses_a/turns/turn_a/message-stream#stale-token",
@@ -266,7 +266,7 @@ describe("原始响应入口的响应头等待有界", () => {
       connection_kind: "local",
     }, {})],
     ["streamSessionMessageEvents", (port) =>
-      streamSessionMessageEvents(port, "ses_a", "turn_a", { workspaceId: "w" })],
+      streamSessionMessageEvents(port, "ses_a", "turn_a", { threadId: "thr_00000000400070008000000000000002", workspaceId: "w" })],
     ["getWorkspaceRawFileBlob", (port) => getWorkspaceRawFileBlob(port, "docs/a.png", "w")],
     ["getSessionAttachmentBlob", (port) =>
       getSessionAttachmentBlob(port, "ses_a", "file_a", "w")],

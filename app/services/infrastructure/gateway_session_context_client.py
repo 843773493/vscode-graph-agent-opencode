@@ -11,6 +11,7 @@ from app.core.trace_middleware import (
     require_current_gateway_id,
     require_current_request_id,
 )
+from app.gateway.federation.errors import FEDERATION_TARGET_OWNER_REJECTED
 from app.gateway.federation.grants import ContextGrantTarget
 from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
 from app.schemas.internal_v2.communication import ContextQueryRequest
@@ -21,6 +22,7 @@ from app.schemas.internal_v2.session_context import (
     SessionContextSearchResultDTO,
 )
 from app.schemas.internal_v2.session_fork_transfer import (
+    ForkSourceCaptureDTO,
     SessionForkTransferRequest,
     SessionForkTransferResultDTO,
 )
@@ -29,6 +31,12 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.gateway_client_common import (
     MODEL_RECOVERABLE_HTTP_STATUSES,
     GatewayTransportConnection,
+)
+from app.services.infrastructure.rollout_context.fork.source_capture import (
+    IncompleteForkSourceCaptureError,
+)
+from app.services.infrastructure.rollout_context.fork.transfer import (
+    verify_capture_identity,
 )
 
 ResponseDTO = TypeVar("ResponseDTO", bound=BaseModel)
@@ -133,6 +141,9 @@ class GatewaySessionContextClient:
             json_body={"operation": "fork_" + request.fork_target.fork_role,
                        "fork_target": request.fork_target.to_payload(), "body": request.model_dump(mode="json")},
         )
+        if not response.is_success:
+            self._raise_incomplete_capture(response, request=request, request_id=request_id)
+            self._raise_http_error(response, method="POST", path=path, workspace_id=None)
         try:
             reply = self._decode_response(response, path=path, request_id=request_id, response_type=SessionForkTransferResultDTO)
             return reply.validate_for_request(request)
@@ -149,7 +160,37 @@ class GatewaySessionContextClient:
         json_body: dict[str, object] | None = None,
     ) -> ResponseDTO:
         response, request_id = await self._send_request(method, path, workspace_id=workspace_id, json_body=json_body)
+        self._raise_http_error(response, method=method, path=path, workspace_id=workspace_id)
         return self._decode_response(response, path=path, request_id=request_id, response_type=response_type)
+
+    @staticmethod
+    def _raise_incomplete_capture(
+        response: httpx.Response, *, request: SessionForkTransferRequest, request_id: str | None,
+    ) -> None:
+        if response.status_code != 409:
+            return
+        try:
+            payload = response.json()
+        except ValueError:
+            return
+        federation = payload.get("detail") if isinstance(payload, dict) else None
+        detail = federation.get("detail") if isinstance(federation, dict) else None
+        if not isinstance(detail, dict) or detail.get("code") != IncompleteForkSourceCaptureError.code:
+            return
+        try:
+            if federation["code"] != FEDERATION_TARGET_OWNER_REJECTED or detail["owner"] != IncompleteForkSourceCaptureError.owner:
+                raise ValueError("fork incomplete 回执缺少原 source owner 错误身份")
+            if request_id is None or payload.get("request_id") != request_id or response.headers.get("X-Request-ID") != request_id:
+                raise ValueError("fork incomplete 回执 request_id 漂移")
+            if request.action != "capture" or detail["action"] != request.action or request.capture is None:
+                raise ValueError("fork incomplete 回执不属于本 capture 请求")
+            received = ForkSourceCaptureDTO.model_validate(detail["capture"])
+            capture = verify_capture_identity(request.capture.to_record(), received)
+            if request.capture.state != "preparing" or capture.state != "preparing" or capture.snapshot_sha256 is not None or capture.marker_sha256 is not None or capture.abort_reason is not None:
+                raise ValueError("fork incomplete 回执不是未发布 marker 的 preparing capture")
+        except (KeyError, TypeError, ValueError, RuntimeError) as error:
+            raise RuntimeError(f"fork_response_protocol_invalid: Gateway fork 错误回执协议无效: {error}") from error
+        raise IncompleteForkSourceCaptureError(capture)
 
     async def _send_request(
         self, method: str, path: str, *, workspace_id: str | None = None,
@@ -178,6 +219,12 @@ class GatewaySessionContextClient:
                 f"workspace_id={workspace_id}, method={method}, path={path}, "
                 f"error_type={type(error).__name__}, error={error}"
             ) from error
+        return response, request_id
+
+    @staticmethod
+    def _raise_http_error(
+        response: httpx.Response, *, method: str, path: str, workspace_id: str | None,
+    ) -> None:
         if not response.is_success:
             message = (
                 "Gateway 上下文查询失败: "
@@ -187,7 +234,6 @@ class GatewaySessionContextClient:
             if response.status_code in MODEL_RECOVERABLE_HTTP_STATUSES:
                 raise WorkspaceSessionContextAccessError(message)
             raise RuntimeError(message)
-        return response, request_id
 
     @staticmethod
     def _decode_response(

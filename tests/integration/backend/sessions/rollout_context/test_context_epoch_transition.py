@@ -263,7 +263,7 @@ def epoch_db(request, session_bundle_factory):
     session_bundle_factory(sessions, session)
     with RolloutCheckpointSaver(sessions) as saver:
         accepted = saver.accept_turn(
-            session, accepted_ingress_id="epoch-ingress", acceptance_idempotency_key="epoch-acceptance",
+            session, thread_id=saver._storage.storage.main_thread_id(session), accepted_ingress_id="epoch-ingress", acceptance_idempotency_key="epoch-acceptance",
             job_id="epoch-job", admission_idempotency_key="epoch-admission",
             payload="真实用户输入", payload_kind="text", root_item_id="item-epoch-ingress",
         )

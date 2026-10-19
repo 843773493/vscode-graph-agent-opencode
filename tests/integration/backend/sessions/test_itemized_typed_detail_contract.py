@@ -57,7 +57,7 @@ def test_plain_request_recovery_requires_explicit_source_identity(
     draft, bodies = projection_draft
     draft = replace(draft, tool_set_refs=())
     draft = register_projection_draft(saver, session_id, draft)
-    first = saver.seal_context_plan(session_id, saver._storage.storage.main_thread_id(session_id), draft, wire_profile=None, wire_params=None, seal_idempotency_key=f'seal:{draft.plan_id}', turn_id='turn-1', execution_id=saver.execution_for_turn(session_id, turn_id='turn-1'), provider_version='contract-provider', request_only_content=bodies)
+    first = saver.seal_context_plan(session_id, saver._storage.storage.main_thread_id(session_id), draft, wire_profile=None, wire_params=None, seal_idempotency_key=f'seal:{draft.plan_id}', turn_id='turn-1', execution_id=saver.execution_for_turn(session_id, thread_id=saver._storage.storage.main_thread_id(session_id), turn_id='turn-1'), provider_version='contract-provider', request_only_content=bodies)
     # 新 plan 的 source locator 指向旧 selection，最终 detail 则必须重新分配。
     source = (
         DetailRef(
@@ -88,7 +88,7 @@ def test_plain_request_recovery_requires_explicit_source_identity(
         arguments = {
             "seal_idempotency_key": f"seal:{next_draft.plan_id}",
             "turn_id": "turn-1",
-            "execution_id": restarted.execution_for_turn(session_id, turn_id="turn-1"),
+            "execution_id": restarted.execution_for_turn(session_id, thread_id=restarted._storage.storage.main_thread_id(session_id), turn_id="turn-1"),
             "provider_version": "contract-provider",
         }
         if change_identity:
@@ -287,7 +287,7 @@ def test_seal_failure_keeps_prepared_details_out_of_durable_storage(frozen_provi
         arguments = {
             "turn_id": "turn-1",
             "provider_version": "typed-contract",
-            "execution_id": saver.execution_for_turn(session_id, turn_id="turn-1"),
+            "execution_id": saver.execution_for_turn(session_id, thread_id=saver._storage.storage.main_thread_id(session_id), turn_id="turn-1"),
         }
         with pytest.raises(RuntimeError, match="injected assembly commit failure"):
             if port == "seal":

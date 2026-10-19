@@ -203,7 +203,7 @@ def projection_plan(projection_saver, projection_draft):
         plan,
         wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{plan.plan_id}",
         turn_id="turn-1",
-        execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
+        execution_id=saver.execution_for_turn(session_id, thread_id=saver._storage.storage.main_thread_id(session_id), turn_id="turn-1"),
         provider_version="contract-provider",
         request_only_content=bodies,
     )

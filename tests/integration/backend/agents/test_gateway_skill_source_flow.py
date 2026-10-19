@@ -291,7 +291,7 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
     request: pytest.FixtureRequest, integration_workspace_root_path: str,
     integration_workspace_config_path: str, scripted_model,
 ):
-    """真实 task 发布后硬杀；冷恢复初次 child 与结果 reply 都消费冻结 Gateway 来源。"""
+    """真实 task 发布后硬杀；冷恢复 child 与结果 reply 保留原 HTTP 请求身份及 Skill 来源。"""
     state, endpoint = scripted_model
     workspace = Path(integration_workspace_root_path)
     output = workspace.parent
@@ -352,8 +352,10 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
             accepted = await client.post(f"/api/v1/sessions/{session_id}/messages", json={
                 "message": {"content": "创建独立子线程并验证 Gateway Skill 来源"},
                 "run": {"mode": "single_agent", "agent_id": "default"},
-            })
+            }, headers={"X-Request-ID": "request-cold-child-original"})
             assert accepted.status_code == 200, accepted.text
+            request_id = accepted.headers["X-Request-ID"]
+            assert request_id == accepted.json()["request_id"] == "request-cold-child-original"
             parent_job_id = accepted.json()["data"]["job_id"]
             delegation_id = _derive_delegation_id(
                 parent_session_id=session_id, parent_job_id=parent_job_id,
@@ -374,6 +376,7 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
             intent = _rows(creation_database, "SELECT * FROM thread_execution_intents WHERE admission_idempotency_key = ?", (delegation_id,))[0]
             assert record["state"] == "published" and intent["state"] == "pending"
             assert json.loads(record["task_seed"])["gateway_id"] == gateway_id
+            assert json.loads(record["task_seed"])["request_id"] == request_id
             assert len(state.requests) == 1, "初次 child 只能在冷启动后进入真实 Runner"
             (artifacts / "published-before-crash.json").write_text(json.dumps({"record": record, "intent": intent, "phase": published_event}, ensure_ascii=False, indent=2) + "\n")
             os.kill(crashed_pid, signal.SIGKILL)
@@ -399,6 +402,7 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
                         break
                     await asyncio.sleep(0.05)
             assert len(wakeups) == 1 and wakeups[0]["gateway_id"] == gateway_id
+            assert wakeups[0]["request_id"] == request_id
             reply = await _wait_job(client, wakeups[0]["job_id"])
             assert reply["status"] in {"completed", "succeeded"}, reply
             assert reply["thread_id"] == main_thread_id
@@ -406,14 +410,18 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
             assert compiled_child and all(event["pid"] != crashed_pid for event in compiled_child)
             traces = [json.loads(line) for line in (session_node / "logs" / "traces" / "messages.jsonl").read_text().splitlines()]
             jobs = {event["job_id"]: event for event in traces if event["type"] == "job_created"}
+            assert jobs[parent_job_id]["payload"]["request_id"] == request_id
             assert jobs[intent["job_id"]]["payload"]["gateway_id"] == gateway_id
+            assert jobs[intent["job_id"]]["payload"]["request_id"] == request_id
             assert jobs[wakeups[0]["job_id"]]["payload"]["gateway_id"] == gateway_id
+            assert jobs[wakeups[0]["job_id"]]["payload"]["request_id"] == request_id
             requests = [json.dumps(payload["messages"], ensure_ascii=False) for payload in state.requests]
             child_requests = [payload for payload in requests if "<delegated_task " in payload]
             reply_requests = [payload for payload in requests if "<generated_session_result " in payload]
             assert len(child_requests) == 2 and OLD_BODY.strip() in child_requests[1]
             assert len(reply_requests) == 2 and "COLD_CHILD_DONE" in reply_requests[0]
             assert OLD_BODY.strip() in reply_requests[1]
+            assert all(request_id not in payload for payload in requests), "请求身份不得进入 Provider 正文"
             (artifacts / "restored-dispatch-and-reply.json").write_text(json.dumps({"child_job": child_job, "reply_job": reply, "wakeup": wakeups[0], "job_created": jobs, "compiled_child": compiled_child}, ensure_ascii=False, indent=2) + "\n")
     finally:
         release_task_call.set()

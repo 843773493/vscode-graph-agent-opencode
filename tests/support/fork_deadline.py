@@ -74,7 +74,7 @@ class ForkDeadlineWatchdog:
         path.mkdir(parents=True, exist_ok=True)
 
     def register_c3_sshd(self, process: subprocess.Popen[str], config_file: Path) -> None:
-        identity = _read_c3_sshd_identity(self.artifacts_dir, process.pid, config_file)
+        identity = _read_c3_sshd_identity(self.artifacts_dir, process, config_file)
         self._send({"action": "sshd_identity", "identity": identity})
 
     def start(self, token: str, target: str, operation_key: str, started_at: float, deadline: float) -> None:
@@ -345,7 +345,7 @@ def _write_watchdog_stderr(message: str) -> None:
 
 
 def _read_c3_sshd_identity(
-    artifacts_dir: Path, process_pid: int, config_file: Path,
+    artifacts_dir: Path, process: subprocess.Popen[str], config_file: Path,
 ) -> dict[str, object]:
     output_root = (Path.cwd() / "out" / "tests").resolve()
     artifacts_root = next((
@@ -359,12 +359,18 @@ def _read_c3_sshd_identity(
     if not expected_config.is_file() or config_file.resolve() != expected_config:
         raise RuntimeError(f"C3 SSH harness 缺少正式 config 身份文件: {ssh_root}")
     try:
-        pid = process_pid
+        pid = process.pid
+        if not isinstance(process.args, list) or len(process.args) != 5:
+            raise RuntimeError(f"C3 SSHD 启动命令格式不匹配: {process.args!r}")
+        launch_arguments = [str(argument) for argument in process.args]
+        launch_executable = Path(launch_arguments[0]).resolve()
+        actual_config = Path(launch_arguments[4]).resolve()
+        if launch_arguments[1:4] != ["-D", "-e", "-f"] or actual_config != expected_config:
+            raise RuntimeError(
+                f"C3 SSHD 启动命令身份不匹配: arguments={launch_arguments!r}, "
+                f"expected_config={expected_config}"
+            )
         process_root = Path(f"/proc/{pid}")
-        command_line = process_root.joinpath("cmdline").read_bytes().split(b"\0")
-        arguments = [part.decode(errors="replace") for part in command_line if part]
-        config_index = arguments.index("-f") + 1
-        actual_config = Path(arguments[config_index]).resolve()
         expected_root = ssh_root.resolve()
         process_stat = process_root.joinpath("stat").read_text().rsplit(")", 1)[1].split()
         start_time = process_stat[19]
@@ -374,8 +380,8 @@ def _read_c3_sshd_identity(
         executable = process_root.joinpath("exe").resolve()
         if (
             pid <= 1
-            or
-            actual_config != expected_config
+            or executable != launch_executable
+            or actual_config != expected_config
             or not actual_config.is_relative_to(expected_root)
             or uid != os.geteuid()
             or pgid != pid
@@ -389,7 +395,8 @@ def _read_c3_sshd_identity(
         raise RuntimeError(f"无法读取 C3 SSHD 进程身份: {ssh_root}") from error
     return {
         "pid": pid, "start_time": start_time, "uid": uid,
-        "pgid": pgid, "sid": sid, "executable": str(executable), "arguments": arguments,
+        "pgid": pgid, "sid": sid, "executable": str(executable),
+        "launch_arguments": launch_arguments,
         "config_path": str(expected_config), "c3_root": str(expected_root),
     }
 
@@ -401,17 +408,22 @@ def _kill_owned_c3_sshd(identity: dict[str, object] | None) -> None:
         pid = int(identity["pid"])
         process_root = Path(f"/proc/{pid}")
         process_stat = process_root.joinpath("stat").read_text().rsplit(")", 1)[1].split()
-        command_line = [
-            part.decode(errors="replace") for part in process_root.joinpath("cmdline").read_bytes().split(b"\0") if part
-        ]
         executable = process_root.joinpath("exe").resolve()
         pgid = int(process_stat[2])
         sid = int(process_stat[3])
         output_root = (Path.cwd() / "out" / "tests").resolve()
         expected_root = Path(str(identity["c3_root"])).resolve()
         config_path = Path(str(identity["config_path"])).resolve()
-        config_index = command_line.index("-f") + 1
-        actual_config = Path(command_line[config_index]).resolve()
+        launch_arguments_value = identity["launch_arguments"]
+        if (
+            not isinstance(launch_arguments_value, list)
+            or not all(isinstance(argument, str) for argument in launch_arguments_value)
+            or len(launch_arguments_value) != 5
+        ):
+            raise RuntimeError(f"冻结的 C3 SSHD 启动命令无效: {identity!r}")
+        launch_arguments = launch_arguments_value
+        launch_executable = Path(launch_arguments[0]).resolve()
+        actual_config = Path(launch_arguments[4]).resolve()
         if (
             process_stat[19] != identity["start_time"]
             or process_root.stat().st_uid != identity["uid"]
@@ -421,7 +433,8 @@ def _kill_owned_c3_sshd(identity: dict[str, object] | None) -> None:
             or pgid != pid
             or sid != pid
             or str(executable) != identity["executable"]
-            or command_line != identity["arguments"]
+            or launch_arguments[1:4] != ["-D", "-e", "-f"]
+            or str(launch_executable) != identity["executable"]
             or actual_config != config_path
             or expected_root.name != "c3-ssh"
             or expected_root.parent.name != "artifacts"

@@ -6,6 +6,7 @@ import os
 import shutil
 import threading
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
@@ -16,10 +17,12 @@ from langchain_core.messages import AIMessageChunk, ToolMessage
 import app.services.infrastructure.message_stream_store as message_stream_store_module
 from app.abstractions.turn_terminal_status import ToolResultCompletion
 from app.core.path_utils import get_session_path_resolver
+from app.core.session_control_store import SessionControlStore
 from app.services.infrastructure.message_stream_store import (
     MessageStreamCursorAheadError,
     MessageStreamCursorGoneError,
     MessageStreamError,
+    MessageStreamNotFoundError,
     MessageStreamStore,
     MessageStreamTerminalError,
 )
@@ -28,6 +31,7 @@ from app.services.orchestration.activity_runtime import (
     ActivityRuntime,
 )
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from tests.support.canonical_id_at import thread_id_at
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 
@@ -46,6 +50,94 @@ def message_stream_store() -> tuple[MessageStreamStore, object, str]:
     session_id = "ses_00000000400070008000000000000011"
     seed_catalog_session_bundle(sessions_root, session_id)
     return MessageStreamStore(path_resolver=resolver), resolver, session_id
+
+
+@pytest.fixture
+def sibling_thread(message_stream_store: tuple[MessageStreamStore, object, str]) -> str:
+    _, resolver, session_id = message_stream_store
+    session_node = resolver.resolve_session_node(session_id)
+    created_at = datetime(2026, 6, 1, 12, tzinfo=UTC)
+    thread_id = thread_id_at(created_at)
+    control = SessionControlStore(session_node / "session-control.sqlite")
+    try:
+        control.create_or_get_thread_creation_record(
+            idempotency_key="stream-sibling", initial_state="idle", preimage_hash="a" * 64,
+            graph_binding=json.dumps({"graph_id": "stream-owner", "graph_revision": 1,
+                "graph_schema_hash": "sha256:" + "a" * 64, "capability_profile_hash": "sha256:" + "b" * 64}),
+            capability_profile="{}", created_at=created_at, thread_id=thread_id,
+        )
+        control.freeze_thread_creation_artifact_manifest(
+            "stream-sibling", artifact_manifest="{}",
+            artifact_manifest_hash="44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        )
+        record = control.publish_thread_creation_record("stream-sibling", session_id=session_id)
+    finally:
+        control.close()
+    (session_node / record.final_relative_locator).mkdir(parents=True)
+    return thread_id
+
+
+@pytest.mark.asyncio
+async def test_same_local_turn_streams_are_isolated_by_thread_on_warm_and_cold_reads(
+    message_stream_store: tuple[MessageStreamStore, object, str], sibling_thread: str,
+) -> None:
+    store, resolver, session_id = message_stream_store
+    main = resolver.main_thread_id(session_id)
+    streams = {}
+    for thread in (main, sibling_thread):
+        writer = await store.open(session_id=session_id, thread_id=thread, turn_id="same-turn")
+        streams[thread] = writer.turn_stream_id
+        await writer.commit("model.started", {"model_call_id": "same-call", "attempt": 1})
+        await writer.commit("model.completed", {"model_call_id": "same-call", "status": "completed"})
+        await writer.close_completed()
+    assert len(set(streams.values())) == 2
+    index = json.loads(store._index_path(session_id).read_text())
+    assert index == {"format_version": 2, "threads": {thread: {"same-turn": stream} for thread, stream in streams.items()}}
+    for reader in (store, MessageStreamStore(path_resolver=resolver)):
+        for thread, stream in streams.items():
+            assert await reader.existing_stream_ids(session_id=session_id, thread_id=thread, turn_ids=["same-turn", "absent"]) == {"same-turn": stream}
+            writer = await reader.open_existing(session_id=session_id, thread_id=thread, turn_id="same-turn")
+            assert writer.turn_stream_id == stream
+            state = await reader.get_state(stream)
+            assert (state["session_id"], state["thread_id"], state["turn_id"]) == (session_id, thread, "same-turn")
+            with pytest.raises(MessageStreamError, match="关联键不匹配"):
+                await reader.open_existing(session_id=session_id, thread_id=thread, turn_id="same-turn",
+                    turn_stream_id=streams[sibling_thread if thread == main else main])
+    child_only = await store.open(session_id=session_id, thread_id=sibling_thread, turn_id="child-only")
+    assert await store.existing_stream_ids(session_id=session_id, thread_id=main, turn_ids=["child-only"]) == {}
+    with pytest.raises(MessageStreamNotFoundError):
+        await store.open_existing(session_id=session_id, thread_id=main, turn_id="child-only")
+    assert child_only.thread_id == sibling_thread
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["open", "open_existing", "existing_stream_ids"])
+@pytest.mark.parametrize("thread", ["missing", None, "", "main"])
+async def test_stream_lookup_requires_explicit_canonical_thread_before_any_write(
+    message_stream_store: tuple[MessageStreamStore, object, str], operation: str, thread: str | None,
+) -> None:
+    store, resolver, session_id = message_stream_store
+    node = resolver.resolve_session_node(session_id)
+    before = {path: path.read_bytes() for path in node.rglob("*") if path.is_file()}
+    arguments = {"session_id": session_id, "turn_ids" if operation == "existing_stream_ids" else "turn_id": ["turn"] if operation == "existing_stream_ids" else "turn"}
+    if thread != "missing":
+        arguments["thread_id"] = thread
+    with pytest.raises((TypeError, ValueError), match="thread_id"):
+        await getattr(store, operation)(**arguments)
+    assert {path: path.read_bytes() for path in node.rglob("*") if path.is_file()} == before
+
+
+@pytest.mark.asyncio
+async def test_legacy_session_only_stream_index_is_explicitly_incompatible(
+    message_stream_store: tuple[MessageStreamStore, object, str],
+) -> None:
+    store, resolver, session_id = message_stream_store
+    path = store._index_path(session_id)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"same-turn": "old-stream"}))
+    with pytest.raises(MessageStreamError, match="索引格式不兼容"):
+        await store.open_existing(session_id=session_id, thread_id=resolver.main_thread_id(session_id), turn_id="same-turn")
+    assert json.loads(path.read_text()) == {"same-turn": "old-stream"}
 
 
 @pytest.mark.asyncio
@@ -441,7 +533,7 @@ async def test_restart_rejects_corrupt_event_log_identity_and_order(
     restarted = MessageStreamStore(path_resolver=resolver)
     with pytest.raises(MessageStreamError, match=error_pattern):
         await restarted.open_existing(
-            session_id=session_id,
+            thread_id=restarted._path_resolver.main_thread_id(session_id), session_id=session_id,
             turn_id=writer.turn_id,
             turn_stream_id=writer.turn_stream_id,
         )
@@ -475,7 +567,7 @@ async def test_restart_rejects_state_snapshot_with_foreign_identity(
     restarted = MessageStreamStore(path_resolver=resolver)
     with pytest.raises(MessageStreamError, match="状态快照关联键不匹配"):
         await restarted.open_existing(
-            session_id=session_id,
+            thread_id=restarted._path_resolver.main_thread_id(session_id), session_id=session_id,
             turn_id=writer.turn_id,
             turn_stream_id=writer.turn_stream_id,
         )
@@ -503,7 +595,7 @@ async def test_restart_rejects_damaged_state_snapshot(
     restarted = MessageStreamStore(path_resolver=resolver)
     with pytest.raises(MessageStreamError, match="状态快照损坏"):
         await restarted.open_existing(
-            session_id=session_id,
+            thread_id=restarted._path_resolver.main_thread_id(session_id), session_id=session_id,
             turn_id=writer.turn_id,
             turn_stream_id=writer.turn_stream_id,
         )
@@ -568,7 +660,7 @@ async def test_existing_stream_ids_skip_legacy_turns_without_creating_streams(
     writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_with_stream")
 
     streams = await store.existing_stream_ids(
-        session_id=session_id,
+        thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id,
         turn_ids=["job_with_stream", "job_legacy"],
     )
 
@@ -592,7 +684,7 @@ async def test_existing_stream_ids_does_not_materialize_historical_snapshots(
 
     restarted = MessageStreamStore(path_resolver=resolver)
     streams = await restarted.existing_stream_ids(
-        session_id=session_id,
+        thread_id=restarted._path_resolver.main_thread_id(session_id), session_id=session_id,
         turn_ids=["job_with_snapshot"],
     )
 
@@ -630,7 +722,7 @@ async def test_terminal_stream_cache_is_bounded_and_evicted_state_reloads(
     assert stream_ids[0] not in store._event_ids
 
     reopened = await store.open_existing(
-        session_id=session_id,
+        thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id,
         turn_id="job_terminal_cache_0",
     )
     assert reopened.turn_stream_id == stream_ids[0]
@@ -971,7 +1063,7 @@ async def test_delta_boundary_interrupt_matrix_has_same_live_checkpoint_snapshot
 
     restarted = MessageStreamStore(path_resolver=resolver)
     restarted_writer = await restarted.open_existing(
-        session_id=session_id,
+        thread_id=restarted._path_resolver.main_thread_id(session_id), session_id=session_id,
         turn_id=f"job_delta_interrupt_{stage}",
         turn_stream_id=writer.turn_stream_id,
     )
@@ -1106,7 +1198,7 @@ async def test_tool_message_completion_stays_persisted_through_interrupt_and_reo
 
     restarted = MessageStreamStore(path_resolver=resolver)
     restarted_writer = await restarted.open_existing(
-        session_id=session_id,
+        thread_id=restarted._path_resolver.main_thread_id(session_id), session_id=session_id,
         turn_id=turn_id,
         turn_stream_id=writer.turn_stream_id,
     )
@@ -1360,7 +1452,7 @@ async def test_zero_argument_tool_call_stays_complete_through_interrupt_and_reop
 
     restarted = MessageStreamStore(path_resolver=resolver)
     restarted_writer = await restarted.open_existing(
-        session_id=session_id,
+        thread_id=restarted._path_resolver.main_thread_id(session_id), session_id=session_id,
         turn_id=turn_id,
         turn_stream_id=writer.turn_stream_id,
     )
@@ -1772,7 +1864,7 @@ async def test_activity_lifecycle_is_replayable_and_snapshot_safe(
 
     restarted = MessageStreamStore(path_resolver=resolver)
     restarted_writer = await restarted.open_existing(
-        session_id=session_id,
+        thread_id=restarted._path_resolver.main_thread_id(session_id), session_id=session_id,
         turn_id="job_activity_lifecycle",
         turn_stream_id=writer.turn_stream_id,
     )
@@ -1919,7 +2011,7 @@ async def test_repeated_compaction_keeps_ordered_lifecycles_across_snapshot_and_
 
     restarted = MessageStreamStore(path_resolver=resolver)
     restarted_writer = await restarted.open_existing(
-        session_id=session_id,
+        thread_id=restarted._path_resolver.main_thread_id(session_id), session_id=session_id,
         turn_id="job_repeated_compaction",
         turn_stream_id=writer.turn_stream_id,
     )
@@ -2008,7 +2100,7 @@ async def test_completed_stream_closes_running_blocks_with_public_events(
     # 进程重启后从事件日志重放，公共序列与内存态一致。
     restarted = MessageStreamStore(path_resolver=resolver)
     restarted_writer = await restarted.open_existing(
-        session_id=session_id,
+        thread_id=restarted._path_resolver.main_thread_id(session_id), session_id=session_id,
         turn_id="job_autoclose_public",
         turn_stream_id=writer.turn_stream_id,
     )

@@ -625,3 +625,17 @@ def test_cursor_accepts_zero_logical_item_ordinal(
 
     assert cursor.logical_item_ordinal == 0
     assert cursor.logical_item_read_upper_bound == 100
+
+
+def test_cursor_rejects_sibling_thread_even_with_same_session_and_revision(
+    history_setup: tuple[_HistoryHarness, IndexedHistory, SimpleNamespace],
+) -> None:
+    reader, indexed, snapshot = history_setup
+    cursor = _cursor(reader, snapshot, direction="before", turn_ordinal=4, logical_item_ordinal=80)
+    snapshot.thread_id = "sibling-thread"
+    with pytest.raises(InvalidTurnCursorError, match="历史游标不属于当前 rollout"):
+        reader._load_indexed_history(
+            "session-1", TurnHistoryLoadRequest(direction="before", cursor=cursor), indexed, policy=None,
+        )
+    assert reader._context_reader.turn_queries == []
+    assert reader._context_reader.internal_queries == []

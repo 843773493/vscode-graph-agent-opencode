@@ -6,7 +6,7 @@ import json
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 from pydantic import TypeAdapter
 
@@ -31,6 +31,7 @@ from app.core.resource_uri import (
 from app.core.session_catalog_store import SessionCreationRecord
 from app.core.session_catalog_store.contracts import SessionGenerationOriginDTO
 from app.core.session_control_store import ThreadCreationRecord
+from app.core.thread_creation import ThreadCreationAbortedError
 from app.core.trace_middleware import (
     get_current_gateway_id,
     require_current_gateway_id,
@@ -422,9 +423,34 @@ class SessionContextForkService:
         _, source_session_id, source_thread_id = parse_session_thread_uri(payload.request.source_uri)
         if payload.action == "intent":
             intent = await self._new_intent(payload.request, source_session_id, source_thread_id, None)
-            return SessionForkTransferResultDTO(intent=intent)
+            target_creation = None
+            if destination.scope_id == self._session_service.workspace_id:
+                key = self._creation_key(payload.request.idempotency_key)
+                try:
+                    if payload.request.creation_kind == "new_session_main":
+                        target_creation = self._session_service.path_resolver.catalog_store.get_creation_record(key)
+                    else:
+                        _, target_session_id, _ = parse_session_thread_uri(payload.request.target_container_uri)
+                        target_creation = self._threads.for_owner_session(target_session_id).control_store.get_thread_creation_record(key)
+                except KeyError:
+                    # 没有本地 target 是普通独立来源；不扫描磁盘或注册第二份身份。
+                    pass
+            return SessionForkTransferResultDTO(intent={
+                **intent, "source_owner_instance_id": self._checkpointer.forks.instance_id,
+                "source_storage_domain_id": self._session_service.path_resolver.catalog_store.get_node(source_session_id).workspace_id,
+                "source_target_creation_preimage_hash": target_creation.preimage_hash if target_creation is not None else None,
+            })
         expected = payload.capture.to_record()
         frozen = json.loads(expected.request_json)
+        owner = self._checkpointer.forks
+        catalog = self._session_service.path_resolver.catalog_store
+        local_capture = catalog.get_fork_source_capture(copy_operation_id=expected.copy_operation_id)
+        if local_capture is not None and owner._capture_target_creation(local_capture) is not None:
+            raise ValueError("fork_owner_overlap: 本地 creation 的 capture 只由当前 owner 执行，拒绝外域导出或释放")
+        source_domain = self._session_service.workspace_id
+        target_domain = frozen["target_storage_domain_id"]
+        if source_domain != source.scope_id or target_domain != destination.scope_id or source_domain == target_domain:
+            raise ValueError("fork_owner_overlap: source export 的稳定资源域与实际 owner 不一致")
         if (expected.copy_operation_id != self._creation_key(payload.request.idempotency_key)
             or expected.creation_key != expected.copy_operation_id
             or (expected.source_session_id, expected.source_thread_id) != (source_session_id, source_thread_id)
@@ -437,8 +463,8 @@ class SessionContextForkService:
                 "relationship": payload.request.relationship, "checkpoint_ns": "",
                 "creation_kind": payload.request.creation_kind,
                 "resources": [choice.model_dump(mode="json") for choice in payload.request.resources if choice.owner_reference is None],
-                "source_storage_domain_id": f"{gateway_id}:{source.scope_id}",
-                "target_storage_domain_id": f"{payload.source_gateway_id}:{destination.scope_id}",
+                "source_storage_domain_id": source_domain,
+                "target_storage_domain_id": target_domain,
                 "target_main_thread_id": frozen.get("target_main_thread_id"),
                 "creation_preimage_hash": frozen.get("creation_preimage_hash"),
             }
@@ -449,8 +475,10 @@ class SessionContextForkService:
             if target_session_id != expected.target_session_id:
                 raise ValueError("fork source export target Session 与冻结 capture 不一致")
         async with self._key_locks.lock_for("export:" + expected.copy_operation_id):
-            owner = self._checkpointer.forks
             if payload.action == "capture":
+                await observe_phase(expected.copy_operation_id, "copy.source.export_authorized", details={
+                    "gateway_id": gateway_id, "same_storage_owner": False,
+                })
                 capture = await owner.export_source_capture(expected)
                 verify_capture_receipt(expected, ForkSourceCaptureDTO.from_record(capture))
             else:
@@ -528,6 +556,53 @@ class SessionContextForkService:
             raise RuntimeError("fork owner 返回的来源 anchor 与固定请求不一致")
         return actual_session, actual_thread
 
+    async def _request_source_intent(self, request: SessionForkRequest) -> tuple[dict[str, object], str, str, str | None]:
+        """临时 instance 回执只用于本次活 owner 核实，不进入 creation/capture。"""
+        if self._transport is None:
+            raise RuntimeError("fork_transport_unavailable: 指定来源未装配资源导出 owner")
+        source = parse_resource_uri(request.source_uri)
+        reply = await self._transport.fork_transfer(source_transfer_request(request, None, action="intent"))
+        if reply.intent is None or reply.intent.get("request") != request.model_dump(mode="json"):
+            raise RuntimeError("fork source owner 未返回同一冻结请求的真实来源意图")
+        try:
+            intent = dict(reply.intent)
+            owner_instance_id = TypeAdapter(str).validate_python(intent.pop("source_owner_instance_id"), strict=True)
+            storage_domain_id = TypeAdapter(str).validate_python(intent.pop("source_storage_domain_id"), strict=True)
+            target_preimage = TypeAdapter(str | None).validate_python(intent.pop("source_target_creation_preimage_hash"), strict=True)
+            if not owner_instance_id:
+                raise ValueError("fork source intent 缺少实际 owner instance 握手")
+            if storage_domain_id != source.scope_id:
+                raise ValueError("fork source intent 的实际存储域与寻址 Workspace 不一致")
+            for field in (
+                "source_gateway_id", "source_uri", "source_point", "source_session_id", "source_thread_id",
+                "source_graph_binding", "display_title", "source_agent_id", "goal_snapshot",
+            ):
+                if field not in intent:
+                    raise KeyError(f"fork source intent 缺少字段: {field}")
+            if intent["source_gateway_id"] != source.gateway_authority:
+                raise RuntimeError("fork source owner 返回了其它 Gateway，拒绝改绑")
+            point = RolloutForkResult(**intent["source_point"])
+            point = TypeAdapter(RolloutForkResult).validate_json(json.dumps(asdict(point)), strict=True)
+            frozen_owner = self._validate_source_response(
+                request, intent["source_uri"], point,
+            )
+            if (intent["source_session_id"], intent["source_thread_id"]) != frozen_owner:
+                raise RuntimeError("fork source owner 返回的 Session/Thread 与来源 URI 不一致")
+            GraphBinding(**intent["source_graph_binding"])
+            for field in ("display_title", "source_agent_id"):
+                TypeAdapter(str).validate_python(intent[field], strict=True)
+            goal_snapshot = intent["goal_snapshot"]
+            if goal_snapshot is not None:
+                TypeAdapter(str).validate_python(goal_snapshot["goal_id"], strict=True)
+                goal_settings = SessionGoalSetRequest.model_validate({
+                    "objective": goal_snapshot["objective"], "token_budget": goal_snapshot["token_budget"],
+                }, strict=True)
+                if goal_settings.objective is None or not goal_settings.objective.strip():
+                    raise ValueError("fork source intent 的 Goal objective 不能为空")
+        except (KeyError, TypeError, ValueError) as error:
+            raise RuntimeError(f"fork_response_protocol_invalid: 远端 source intent 回执协议无效: {error}") from error
+        return intent, owner_instance_id, storage_domain_id, target_preimage
+
     async def _new_intent(
         self, request: SessionForkRequest, source_session_id: str, source_thread_id: str | None,
         generation_origin: SessionGenerationOriginDTO | None,
@@ -544,41 +619,18 @@ class SessionContextForkService:
                     tail_segments=source.tail_segments, gateway_authority=source.gateway_authority or require_current_gateway_id("fork source identity")),
                 "target_container_uri": self._qualified_target_uri(request),
             })
-            reply = await self._transport.fork_transfer(source_transfer_request(qualified, None, action="intent"))
-            if reply.intent is None or reply.intent.get("request") != qualified.model_dump(mode="json"):
-                raise RuntimeError("fork source owner 未返回同一冻结请求的真实来源意图")
-            try:
-                intent = dict(reply.intent)
-                for field in (
-                    "source_gateway_id", "source_uri", "source_point", "source_session_id", "source_thread_id",
-                    "source_graph_binding", "display_title", "source_agent_id", "goal_snapshot",
-                ):
-                    if field not in intent:
-                        raise KeyError(f"fork source intent 缺少字段: {field}")
-                if intent["source_gateway_id"] != (source.gateway_authority or require_current_gateway_id("fork source identity")):
-                    raise RuntimeError("fork source owner 返回了其它 Gateway，拒绝改绑")
-                point = RolloutForkResult(**intent["source_point"])
-                point = TypeAdapter(RolloutForkResult).validate_json(json.dumps(asdict(point)), strict=True)
-                frozen_owner = self._validate_source_response(
-                    qualified, intent["source_uri"], point,
-                )
-                if (intent["source_session_id"], intent["source_thread_id"]) != frozen_owner:
-                    raise RuntimeError("fork source owner 返回的 Session/Thread 与来源 URI 不一致")
-                GraphBinding(**intent["source_graph_binding"])
-                for field in ("display_title", "source_agent_id"):
-                    TypeAdapter(str).validate_python(intent[field], strict=True)
-                goal_snapshot = intent["goal_snapshot"]
-                if goal_snapshot is not None:
-                    TypeAdapter(str).validate_python(goal_snapshot["goal_id"], strict=True)
-                    goal_settings = SessionGoalSetRequest.model_validate({
-                        "objective": goal_snapshot["objective"], "token_budget": goal_snapshot["token_budget"],
-                    }, strict=True)
-                    if goal_settings.objective is None or not goal_settings.objective.strip():
-                        raise ValueError("fork source intent 的 Goal objective 不能为空")
-            except (KeyError, TypeError, ValueError) as error:
-                raise RuntimeError(f"fork_response_protocol_invalid: 远端 source intent 回执协议无效: {error}") from error
+            intent, source_instance_id, source_domain, _ = await self._request_source_intent(qualified)
+            same_owner = self._checkpointer.forks.verify_source_domain(
+                source_domain, self._session_service.workspace_id, source_instance_id,
+            )
             intent["request"] = request.model_dump(mode="json")
             intent["source_remote"] = True
+            # 活 owner 握手只发生在冻结 creation 前；持久决定随原 creation preimage 固定。
+            intent["capture_decision"] = {
+                "source_storage_domain_id": source_domain,
+                "target_storage_domain_id": self._session_service.workspace_id,
+                "capture_owner": "local" if same_owner else "source_export",
+            }
             intent["target_gateway_id"] = get_current_gateway_id()
             intent["generation_origin"] = generation_origin.model_dump(mode="json") if generation_origin is not None else None
             return intent
@@ -609,6 +661,11 @@ class SessionContextForkService:
             "source_session_id": source_session_id, "source_thread_id": source_thread_id,
             "source_gateway_id": get_current_gateway_id(), "target_gateway_id": get_current_gateway_id(),
             "source_remote": False,
+            "capture_decision": {
+                "source_storage_domain_id": session.workspace_id,
+                "target_storage_domain_id": self._session_service.workspace_id,
+                "capture_owner": "local",
+            },
             "source_point": asdict(point), "source_graph_binding": asdict(binding),
             "display_title": request.title or f"{session.title}（上下文分支）",
             "source_agent_id": session.current_agent_id, "goal_snapshot": goal_snapshot,
@@ -620,20 +677,46 @@ class SessionContextForkService:
     ) -> RolloutForkResult:
         source_owner = MutationIntentOwner(session_id=intent["source_session_id"], thread_id=intent["source_thread_id"])
         point = RolloutForkResult(**intent["source_point"])
-        remote = intent["source_remote"]
-        if remote and self._transport is None:
-            raise RuntimeError("fork_transport_unavailable: 冻结远端来源缺少明确 transport，禁止本地回退")
-        source_resource = parse_resource_uri(intent["source_uri"])
-        source_domain = f"{intent['source_gateway_id']}:{source_resource.scope_id}" if remote else self._session_service.workspace_id
-        target_domain = f"{get_current_gateway_id()}:{self._session_service.workspace_id}" if remote else self._session_service.workspace_id
         if creation is not None:
             key = creation.session_creation_idempotency_key
         elif child is not None:
             key = child.thread_creation_idempotency_key
         else:
             raise ValueError("fork materialization 必须由已冻结的目标 creation record 发起")
-        resource_choices = self._materialized_resource_choices(request, intent)
-        await observe_phase(key, "copy.target.prepared")
+        owner = self._checkpointer.forks
+        source_domain, target_domain, same_owner = owner.require_creation_capture_decision(
+            creation or child, target_session_id=target_session_id, intent=intent,
+        )
+        source_external = not same_owner
+        if source_external and self._transport is None:
+            raise RuntimeError("fork_transport_unavailable: 冻结 export 来源缺少明确 transport，禁止本地回退")
+        resource_choices = owner.materialized_resource_choices(request, intent)
+        transfer_request = request.model_copy(update={
+            "source_uri": intent["source_uri"], "target_container_uri": self._qualified_target_uri(request),
+            "source_view_id": point.source_view_id, "source_view_revision": point.source_view_revision,
+            "anchor_item_id": point.anchor_item_id, "resources": resource_choices,
+        }) if source_external else None
+        catalog = self._session_service.path_resolver.catalog_store
+        capture = catalog.get_fork_source_capture(copy_operation_id=key)
+        source_owner_instance_id = None
+        if source_external and capture is None:
+            fresh, source_owner_instance_id, actual_domain, source_target_preimage = await self._request_source_intent(transfer_request)
+            if source_owner_instance_id != owner.instance_id and source_target_preimage == (creation or child).preimage_hash:
+                raise ValueError("fork_owner_overlap: 不同活 owner 命中同一冻结 target creation，拒绝建立 capture")
+            if actual_domain != source_domain or owner.verify_source_domain(actual_domain, target_domain, source_owner_instance_id):
+                raise ValueError("fork_owner_overlap: 本次 source owner 与原 creation 的 export 决定不一致")
+            if any(fresh[field] != intent[field] for field in (
+                "source_uri", "source_session_id", "source_thread_id", "source_gateway_id",
+                "source_point", "source_graph_binding",
+            )):
+                raise RuntimeError("fork source owner handshake 与冻结来源 point/owner 不一致")
+        if capture is not None:
+            frozen = json.loads(capture.request_json)
+            if (frozen["source_storage_domain_id"], frozen["target_storage_domain_id"]) != (source_domain, target_domain):
+                raise ValueError("fork_owner_overlap: capture 与原 creation 的实际存储归属不一致")
+        await observe_phase(key, "copy.target.prepared", details={
+            "gateway_id": get_current_gateway_id(), "same_storage_owner": same_owner,
+        })
         return await self._checkpointer.forks.afork(
             source_session_id=source_owner.session_id, target_session_id=target_session_id,
             source_uri=intent["source_uri"], source_owner=source_owner,
@@ -643,55 +726,9 @@ class SessionContextForkService:
             anchor_item_id=point.anchor_item_id, source_preflight=point,
             resource_choices=[choice.model_dump(mode="json") for choice in resource_choices],
             source_storage_domain_id=source_domain, target_storage_domain_id=target_domain,
-            source_transport=self._transport if remote else None,
-            transfer_request=request.model_copy(update={"source_uri": intent["source_uri"],
-                "target_container_uri": self._qualified_target_uri(request),
-                "source_view_id": point.source_view_id, "source_view_revision": point.source_view_revision,
-                "anchor_item_id": point.anchor_item_id, "resources": resource_choices}) if remote else None,
+            source_transport=self._transport if source_external else None,
+            transfer_request=transfer_request, source_owner_instance_id=source_owner_instance_id,
         )
-
-    @staticmethod
-    def _materialized_resource_choices(
-        request: SessionForkRequest, intent: dict[str, object],
-    ) -> list[SessionForkResourceChoice]:
-        source_uri = intent["source_uri"]
-        source, source_session_id, source_thread_id = parse_session_thread_uri(source_uri)
-        source_gateway_id = intent["source_gateway_id"]
-        if source_thread_id is None:
-            raise RuntimeError("fork materialization source owner 未返回精确 Thread URI")
-        if not isinstance(source_gateway_id, str) or not source_gateway_id:
-            raise RuntimeError("fork materialization source owner 缺少 Gateway identity")
-        if source.gateway_authority not in {None, source_gateway_id}:
-            raise RuntimeError("fork materialization source Thread URI 与 owner Gateway 不一致")
-
-        local_thread_uri = thread_resource_uri(source.scope_id, source_session_id, source_thread_id)
-        owner_thread_uris = {source_uri, local_thread_uri}
-        owner_thread_uris.add(thread_resource_uri(
-            source.scope_id, source_session_id, source_thread_id,
-            gateway_authority=source_gateway_id,
-        ))
-        debug_segment = "/debug/node/configurations/"
-        choices: list[SessionForkResourceChoice] = []
-        canonical_uris: set[str] = set()
-        for choice in request.resources:
-            if choice.owner_reference is not None:
-                continue
-            canonical_uri = choice.resource_uri
-            if canonical_uri is None:
-                raise ValueError("静态资源选择缺少 URI")
-            if canonical_uri in owner_thread_uris:
-                canonical_uri = source_uri
-            else:
-                for thread_uri in owner_thread_uris:
-                    prefix = thread_uri + debug_segment
-                    if canonical_uri.startswith(prefix):
-                        canonical_uri = source_uri + canonical_uri[len(thread_uri):]
-                        break
-            if canonical_uri in canonical_uris:
-                raise ValueError("duplicate_fork_resource_after_owner_normalization")
-            canonical_uris.add(canonical_uri)
-            choices.append(choice.model_copy(update={"resource_uri": canonical_uri}))
-        return choices
 
     def _qualified_target_uri(self, request: SessionForkRequest) -> str:
         target = parse_resource_uri(request.target_container_uri)
@@ -706,7 +743,10 @@ class SessionContextForkService:
         capture = catalog.get_fork_source_capture(copy_operation_id=key)
         if capture is None:
             return
+        self._checkpointer.forks.require_target_capture(capture)
         state, _ = catalog.get_fork_export_release(key)
+        if state is None:
+            return
         if state == "confirmed":
             return
         if state != "pending":
@@ -729,6 +769,7 @@ class SessionContextForkService:
             "source_uri": frozen["source_uri"], "target_container_uri": self._qualified_target_uri(frozen_request),
             "source_view_id": frozen["source_view_id"], "source_view_revision": frozen["source_view_revision"],
             "anchor_item_id": frozen["anchor_item_id"],
+            "resources": [SessionForkResourceChoice.model_validate(choice) for choice in frozen["resources"]],
         })
         if self._transport is None:
             raise RuntimeError("fork_transport_unavailable: 无法释放冻结远端 export")
@@ -822,6 +863,9 @@ class SessionContextForkService:
                 session = await self._session_service.get(record.session_id)
                 return await self._result(intent, session, record.main_thread_id, key, creation=record)
             try:
+                # capture 接管物理树后，其 rollout 发布目录由原物化 owner 恢复。
+                if catalog.get_fork_source_capture(copy_operation_id=key) is None:
+                    record = await self._session_service.resume_prepared_context_fork(record)
                 result = await self._materialize(request, intent, record.session_id, creation=record)
                 proof = self._checkpointer.forks.recovery.read_committed_fork_completion_proof(
                     record=record, source_session_id=intent["source_session_id"],
@@ -926,6 +970,8 @@ class SessionContextForkService:
 
     async def _abort_if_unpublished(self, record: SessionCreationRecord, reason: str) -> None:
         current = self._session_service.path_resolver.catalog_store.get_creation_record(record.session_creation_idempotency_key)
+        if replace(current, state=record.state, abort_reason=record.abort_reason, record_updated_at=record.record_updated_at) != record:
+            raise ValueError("fork_owner_overlap: main 清理的 creation capability 与当前原件不一致")
         if current.state != "preparing":
             return
         self._checkpointer.forks.abort_prepared_capture(current, reason)
@@ -948,20 +994,27 @@ class SessionContextForkService:
             with self._delivery_context(intent, record.fork_delivery_request_id):
                 await self.fork(SessionForkRequest.model_validate(intent["request"]),
                                 generation_origin=SessionGenerationOriginDTO.model_validate(origin) if origin is not None else None)
-        except IncompleteForkSourceCaptureError as error:
+        except (IncompleteForkSourceCaptureError, ThreadCreationAbortedError) as error:
             # fork 原 owner 完成中止与清理后，startup 才能继续处理其他 operation。
             catalog = self._session_service.path_resolver.catalog_store
             current = (catalog.get_creation_record(key) if main else
                        self._threads.for_owner_session(target_session_id).control_store.get_thread_creation_record(key))
             capture = catalog.get_fork_source_capture(copy_operation_id=key)
-            if (error.capture.copy_operation_id, error.capture.creation_key) != (key, key) or current.state != "aborted" or (
+            if isinstance(error, ThreadCreationAbortedError):
+                if main or error.record != current or capture is None:
+                    raise RuntimeError("fork child 清理未由原 creation owner 完成中止") from error
+                self._checkpointer.forks.require_target_capture(capture, creation=current)
+                expected_capture = capture
+            else:
+                expected_capture = error.capture
+            if (expected_capture.copy_operation_id, expected_capture.creation_key) != (key, key) or current.state != "aborted" or (
                 current.preimage_hash, current.request_intent_json,
             ) != (record.preimage_hash, record.request_intent_json) or capture is None or (
                 capture.state, capture.creation_key, capture.target_session_id, capture.target_thread_id,
                 capture.preimage_hash, capture.snapshot_id, capture.snapshot_relative_locator,
             ) != (
                 "aborted", key, target_session_id, thread_id,
-                error.capture.preimage_hash, error.capture.snapshot_id, error.capture.snapshot_relative_locator,
+                expected_capture.preimage_hash, expected_capture.snapshot_id, expected_capture.snapshot_relative_locator,
             ):
                 raise RuntimeError("fork incomplete capture 未由原 creation owner 完成精确中止") from error
             root = capture_directory(self._session_service.path_resolver.sessions_root, capture)

@@ -251,7 +251,7 @@ class RolloutExecutionAdmissionMixin:
         checkpoint_ns: str = "",
     ) -> ExecutionAdmission:
         """原子接受唯一 canonical request；seed/reference 不产生 notice。"""
-        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, strict_text(thread_id, field="thread_id"))
         with self._execution_input_transaction(session_id, owner_thread_id, checkpoint_ns) as connection:
             return self._admit_internal_execution_transaction(
                 connection, session_id, thread_id=owner_thread_id,
@@ -308,7 +308,7 @@ class RolloutExecutionAdmissionMixin:
         if not connection.in_transaction:
             raise RuntimeError("internal admission 需要活动 ContextStore 事务")
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, strict_text(thread_id, field="thread_id"))
         execution_id = strict_text(execution_id, field="execution_id")
         job_id = strict_text(job_id, field="job_id")
         admission_idempotency_key = strict_text(
@@ -667,7 +667,7 @@ class RolloutExecutionAdmissionMixin:
     ) -> ExecutionAdmission:
         """按精确 owner 和 Job 查唯一准入，不从 trace 或 main 别名补身份。"""
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, strict_text(thread_id, field="thread_id"))
         job_id = strict_text(job_id, field="job_id")
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
@@ -709,7 +709,7 @@ class RolloutExecutionAdmissionMixin:
     ) -> ExecutionAdmission:
         """读取并核验 owner 下的 user-turn/internal execution admission。"""
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, strict_text(thread_id, field="thread_id"))
         execution_id = strict_text(execution_id, field="execution_id")
         checkpoint_ns = strict_text(
             checkpoint_ns,

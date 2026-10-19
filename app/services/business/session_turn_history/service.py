@@ -53,11 +53,12 @@ class SessionTurnHistoryService:
             await observe_phase(thread_id, "history.read.guarded", details={
                 "session_id": session_id, "thread_id": thread_id, "kind": "bootstrap",
             })
-            latest, older_cursor, projection_epoch = self._checkpointer.bootstrap_history(
-                session_id,
-                thread_id,
-                policy=history_loading,
-            )
+            async with self._checkpointer.history_read_lease(session_id, thread_id):
+                latest, older_cursor, projection_epoch = self._checkpointer.bootstrap_history(
+                    session_id,
+                    thread_id,
+                    policy=history_loading,
+                )
             pending = await self._job_service.list_pending_summaries(
                 session_id,
                 limit=_BOOTSTRAP_ACTIVE_JOB_LIMIT,
@@ -114,12 +115,13 @@ class SessionTurnHistoryService:
             await observe_phase(thread_id, "history.read.guarded", details={
                 "session_id": session_id, "thread_id": thread_id, "kind": "history",
             })
-            page = self._checkpointer.load_history(
-                session_id,
-                thread_id,
-                request,
-                policy=history_loading,
-            )
+            async with self._checkpointer.history_read_lease(session_id, thread_id):
+                page = self._checkpointer.load_history(
+                    session_id,
+                    thread_id,
+                    request,
+                    policy=history_loading,
+                )
             return page.model_copy(update={"thread_id": thread_id})
 
 

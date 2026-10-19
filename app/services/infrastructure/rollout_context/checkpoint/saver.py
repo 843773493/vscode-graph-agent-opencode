@@ -313,7 +313,7 @@ class RolloutCheckpointSaver(
         self,
         session_id: str,
         *,
-        thread_id: str | None = None,
+        thread_id: str,
         accepted_ingress_id: str,
         acceptance_idempotency_key: str,
         job_id: str,
@@ -441,7 +441,7 @@ class RolloutCheckpointSaver(
         session_id: str,
         *,
         turn_id: str,
-        thread_id: str | None = None,
+        thread_id: str,
         checkpoint_ns: str = "",
     ) -> str:
         return self._storage.executions.execution_for_turn(
@@ -526,7 +526,7 @@ class RolloutCheckpointSaver(
         self,
         session_id: str,
         *,
-        thread_id: str | None = None,
+        thread_id: str,
         execution_id: str,
         model_call_id: str,
         attempt: int,
@@ -555,7 +555,7 @@ class RolloutCheckpointSaver(
         self,
         session_id: str,
         *,
-        thread_id: str | None = None,
+        thread_id: str,
         model_call_id: str,
         outcome: str,
         dispatch_state: str | None = None,
@@ -636,7 +636,7 @@ class RolloutCheckpointSaver(
         self,
         session_id: str,
         *,
-        thread_id: str | None = None,
+        thread_id: str,
         turn_id: str | None,
         execution_id: str,
         outcome: str,
@@ -765,6 +765,16 @@ class RolloutCheckpointSaver(
             thread_id,
             edge,
             checkpoint_ns=checkpoint_ns,
+        )
+
+    def history_read_lease(
+        self,
+        session_id: str,
+        thread_id: str,
+    ) -> AbstractAsyncContextManager[None]:
+        """历史异步入口借用同一 reader 准入，未物化状态仍交给原历史规则。"""
+        return self._context_reader.read_lease(
+            session_id, thread_id, allow_unmaterialized=True,
         )
 
     def bootstrap_history(

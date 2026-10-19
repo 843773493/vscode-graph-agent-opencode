@@ -134,7 +134,7 @@ export interface MessageStreamState {
   sessionCacheKey: string;
   workspaceId: string | null;
   sessionId: string;
-  threadId: string | null;
+  threadId: string;
   turnId: string;
   turnStreamId: string;
   lastEventSeq: number;

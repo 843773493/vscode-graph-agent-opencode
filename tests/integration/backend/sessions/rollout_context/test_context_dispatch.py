@@ -66,7 +66,7 @@ def dispatch_session(
     saver = RolloutCheckpointSaver(sessions)
     accepted = saver.accept_turn(
         session_id,
-        accepted_ingress_id="dispatch-ingress",
+        thread_id=saver._storage.storage.main_thread_id(session_id), accepted_ingress_id="dispatch-ingress",
         acceptance_idempotency_key="dispatch-key",
         job_id="dispatch-job",
         admission_idempotency_key="dispatch-admission",
@@ -493,7 +493,7 @@ def test_same_plan_and_source_ids_stay_with_their_session_owner(
     session_bundle_factory(sessions, second_session)
     second_acceptance = saver.accept_turn(
         second_session,
-        accepted_ingress_id="second-ingress",
+        thread_id=saver._storage.storage.main_thread_id(second_session), accepted_ingress_id="second-ingress",
         acceptance_idempotency_key="second-acceptance",
         job_id="second-job",
         admission_idempotency_key="second-admission",

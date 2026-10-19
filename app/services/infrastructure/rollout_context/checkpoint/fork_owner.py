@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from contextlib import nullcontext
 from dataclasses import replace
@@ -11,12 +12,23 @@ from dataclasses import replace
 from app.abstractions.session_context import SessionForkTransportProtocol
 from app.core.identifier import create_uuid_hex
 from app.core.phase_observer import observe_phase
+from app.core.resource_uri import (
+    parse_resource_uri,
+    parse_session_thread_uri,
+    thread_resource_uri,
+)
 from app.core.session_catalog_store import SessionCreationRecord
 from app.core.session_catalog_store.contracts import ForkSourceCaptureRecord
-from app.core.session_control_store import ThreadCreationRecord
+from app.core.session_control_store import SessionControlStore, ThreadCreationRecord
+from app.core.session_creation import compute_session_creation_preimage_hash
 from app.core.session_lifecycle_gate import NavigationTopologyGate, SessionLifecycleGate
+from app.core.thread_creation import compute_thread_creation_preimage_hash
+from app.core.trace_middleware import get_current_gateway_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.schemas.internal_v2.session import SessionForkRequest
+from app.schemas.internal_v2.session import (
+    SessionForkRequest,
+    SessionForkResourceChoice,
+)
 from app.services.infrastructure.rollout_context.checkpoint.fork_copy import (
     CheckpointForkCopy,
 )
@@ -53,6 +65,209 @@ class CheckpointForkOwner:
         self.source = source
         self.copy = copy
         self.recovery = recovery
+        # 只证明本次授权请求落到同一个实际 owner；不是持久 storage identity。
+        self.instance_id = create_uuid_hex(namespace="fork/owner_instance")
+
+    def verify_source_domain(self, source_domain: str, target_domain: str, source_instance_id: str) -> bool:
+        """稳定域来自实际 catalog owner；同域必须由本次活 owner 握手证明。"""
+        same_owner = source_instance_id == self.instance_id
+        if (source_domain == target_domain) != same_owner:
+            raise ValueError("fork_owner_overlap: 稳定资源域与本次实际 owner 不一致，拒绝捕获或导入")
+        return same_owner
+
+    def require_creation_capture_decision(
+        self, creation: SessionCreationRecord | ThreadCreationRecord, *, target_session_id: str,
+        intent: dict[str, object],
+    ) -> tuple[str, str, bool]:
+        """恢复消费 creation preimage 内的授权决定，不重新用 scope 猜测实际 owner。"""
+        catalog = self._storage.forks._catalog_store()
+        if creation.request_intent_json is None or json.loads(creation.request_intent_json) != intent:
+            raise ValueError("fork_owner_overlap: capture 决定缺少原 creation 的完整冻结意图")
+        request = SessionForkRequest.model_validate(intent["request"])
+        if isinstance(creation, SessionCreationRecord):
+            key, creation_kind, purpose = creation.session_creation_idempotency_key, "new_session_main", "context_fork"
+            target_domain = creation.workspace_id
+            if creation.session_id != target_session_id:
+                raise ValueError("fork_owner_overlap: capture 决定与实际 target Session 不一致")
+            preimage = compute_session_creation_preimage_hash(
+                workspace_id=creation.workspace_id, parent_node_id=creation.parent_node_id,
+                title=creation.display_name, title_source=creation.title_source, purpose=creation.purpose,
+                graph_binding=creation.graph_binding, session_metadata=json.loads(creation.session_metadata_json),
+                request_intent=intent,
+            )
+        else:
+            key, creation_kind, purpose = creation.thread_creation_idempotency_key, "new_child_thread", "fork"
+            target_domain = catalog.get_node(target_session_id).workspace_id
+            preimage = compute_thread_creation_preimage_hash(
+                workspace_id=target_domain, session_id=target_session_id, thread_id=None,
+                delegation_id=creation.delegation_id, initial_state=creation.initial_state,
+                session_metadata={
+                    "graph_binding": json.loads(creation.graph_binding),
+                    "capability_profile": json.loads(creation.capability_profile),
+                    "task_seed": json.loads(creation.task_seed) if creation.task_seed is not None else None,
+                    "task_reference": json.loads(creation.task_reference) if creation.task_reference is not None else None,
+                },
+                artifact_manifest={}, purpose=creation.purpose, request_intent=intent,
+            )
+        if (self._target_creation(key, creation_kind, target_session_id) != creation
+            or creation.purpose != purpose or creation.state not in {"preparing", "published", "aborted"}
+            or request.creation_kind != creation_kind or preimage != creation.preimage_hash):
+            raise ValueError("fork_owner_overlap: capture 决定与本地 creation 原件/preimage 不一致")
+        source, source_session_id, source_thread_id = parse_session_thread_uri(intent["source_uri"])
+        target = parse_resource_uri(request.target_container_uri)
+        decision = intent["capture_decision"]
+        if not isinstance(decision, dict) or set(decision) != {
+            "source_storage_domain_id", "target_storage_domain_id", "capture_owner",
+        }:
+            raise ValueError("fork_owner_overlap: creation 缺少完整的持久 capture 决定")
+        source_domain = decision["source_storage_domain_id"]
+        local = decision["capture_owner"] == "local"
+        if (decision["capture_owner"] not in {"local", "source_export"}
+            or source_domain != source.scope_id or decision["target_storage_domain_id"] != target_domain
+            or target.scope_id != target_domain or local != (source_domain == target_domain)
+            or not intent["source_remote"] and not local
+            or (source_session_id, source_thread_id) != (intent["source_session_id"], intent["source_thread_id"])
+            or source_thread_id is None or source.gateway_authority not in {None, intent["source_gateway_id"]}
+            or target.gateway_authority not in {None, intent["target_gateway_id"]}):
+            raise ValueError("fork_owner_overlap: 持久 capture 决定与冻结请求/实际 target owner 不一致")
+        # 相等只核对已授权的持久决定；首次 local 决定必须先经实际 owner nonce 握手。
+        return source_domain, target_domain, local
+
+    def require_target_capture(
+        self, expected: ForkSourceCaptureRecord, *, creation: SessionCreationRecord | ThreadCreationRecord | None = None,
+    ) -> ForkSourceCaptureRecord:
+        """物化、终结与清理只消费原 target creation 的同一 capture 和完整冻结请求。"""
+        catalog = self._storage.forks._catalog_store()
+        capture = catalog.get_fork_source_capture(copy_operation_id=expected.copy_operation_id)
+        if (capture != expected or capture.copy_operation_id != capture.creation_key
+            or hashlib.sha256(capture.request_json.encode()).hexdigest() != capture.preimage_hash):
+            raise ValueError("fork_owner_overlap: target capture 缺失或 operation/preimage 已漂移")
+        request = json.loads(capture.request_json)
+        current = self._capture_target_creation(capture)
+        if creation is not None and current != creation:
+            raise ValueError("fork_owner_overlap: target capture 不属于传入的 creation owner")
+        creation = current
+        if creation is None or creation.request_intent_json is None:
+            raise ValueError("fork_owner_overlap: target capture 缺少精确本地 creation")
+        if request["creation_kind"] == "new_session_main":
+            target_session, target_id = creation.session_id, creation.main_thread_id
+            purpose = "context_fork"
+            target_main = creation.main_thread_id
+        else:
+            target_session, target_id = capture.target_session_id, creation.child_thread_id
+            purpose = "fork"
+            target_main = self._storage.storage._path_resolver.main_thread_id(target_session)
+        if (target_session, target_id, creation.purpose, creation.preimage_hash) != (
+            capture.target_session_id, capture.target_thread_id, purpose, request["creation_preimage_hash"],
+        ) or creation.state not in {"preparing", "published", "aborted"}:
+            raise ValueError("fork_owner_overlap: target capture 与本地 creation owner 不一致")
+        intent = json.loads(creation.request_intent_json)
+        source_domain, target_domain, local = self.require_creation_capture_decision(
+            creation, target_session_id=target_session, intent=intent,
+        )
+        release_state, _ = catalog.get_fork_export_release(capture.copy_operation_id)
+        if (local and release_state is not None) or (not local and release_state not in {"pending", "confirmed"}):
+            raise ValueError("fork_owner_overlap: target capture 的 release 状态与原 creation 决定不一致")
+        if (intent["source_session_id"], intent["source_thread_id"], intent["source_uri"]) != (
+            capture.source_session_id, capture.source_thread_id, request["source_uri"],
+        ):
+            raise ValueError("fork_owner_overlap: target capture 与 creation 来源不一致")
+        frozen = SessionForkRequest.model_validate(intent["request"])
+        point = RolloutForkResult(**intent["source_point"])
+        # 域值核对原 creation 的持久授权；不从域相等或 release 缺省推导实际 owner。
+        if request != {
+            "source_uri": intent["source_uri"], "source_view_id": point.source_view_id,
+            "source_view_revision": point.source_view_revision, "anchor_item_id": point.anchor_item_id,
+            "mode": frozen.mode, "anchor_mode": frozen.anchor_mode, "relationship": frozen.relationship,
+            "checkpoint_ns": "", "creation_kind": frozen.creation_kind,
+            "resources": [choice.model_dump(mode="json") for choice in self.materialized_resource_choices(frozen, intent)],
+            "source_storage_domain_id": source_domain, "target_storage_domain_id": target_domain,
+            "target_main_thread_id": target_main, "creation_preimage_hash": creation.preimage_hash,
+        }:
+            raise ValueError("fork_owner_overlap: target capture 与完整冻结 creation 请求不一致")
+        return capture
+
+    def _capture_target_creation(self, capture: ForkSourceCaptureRecord) -> SessionCreationRecord | ThreadCreationRecord | None:
+        """只按精确 target key 查找；远端 source export 没有本地 target creation。"""
+        request = json.loads(capture.request_json)
+        return self._target_creation(capture.creation_key, request["creation_kind"], capture.target_session_id)
+
+    def _target_creation(
+        self, key: str, creation_kind: str, target_session_id: str,
+    ) -> SessionCreationRecord | ThreadCreationRecord | None:
+        """只从当前 storage owner 的精确 journal 解析目标，不跨库寻找同名 ID。"""
+        catalog = self._storage.forks._catalog_store()
+        if creation_kind == "new_session_main":
+            try:
+                return catalog.get_creation_record(key)
+            except KeyError:
+                return None
+        if creation_kind != "new_child_thread":
+            return None
+        try:
+            catalog.get_node(target_session_id)
+        except KeyError:
+            return None
+        directory = self._storage.storage._path_resolver.resolve_session_node(target_session_id)
+        control = SessionControlStore(directory / "session-control.sqlite", read_only=True)
+        try:
+            try:
+                return control.get_thread_creation_record(key)
+            except KeyError:
+                return None
+        finally:
+            control.close()
+
+    def require_source_export(self, capture: ForkSourceCaptureRecord) -> None:
+        """来源释放不能消费本地 target 的 journal，即使稳定资源域恰好相同。"""
+        catalog = self._storage.forks._catalog_store()
+        if (catalog.get_fork_source_capture(copy_operation_id=capture.copy_operation_id) != capture
+            or catalog.get_fork_export_release(capture.copy_operation_id) != (None, None)
+            or self._capture_target_creation(capture) is not None):
+            raise ValueError("fork_owner_overlap: source export 与本地 target creation/capture 重叠")
+
+    @staticmethod
+    def materialized_resource_choices(
+        request: SessionForkRequest, intent: dict[str, object],
+    ) -> list[SessionForkResourceChoice]:
+        source_uri = intent["source_uri"]
+        source, source_session_id, source_thread_id = parse_session_thread_uri(source_uri)
+        source_gateway_id = intent["source_gateway_id"]
+        if source_thread_id is None:
+            raise RuntimeError("fork materialization source owner 未返回精确 Thread URI")
+        if not isinstance(source_gateway_id, str) or not source_gateway_id:
+            raise RuntimeError("fork materialization source owner 缺少 Gateway identity")
+        if source.gateway_authority not in {None, source_gateway_id}:
+            raise RuntimeError("fork materialization source Thread URI 与 owner Gateway 不一致")
+
+        local_thread_uri = thread_resource_uri(source.scope_id, source_session_id, source_thread_id)
+        owner_thread_uris = {source_uri, local_thread_uri}
+        owner_thread_uris.add(thread_resource_uri(
+            source.scope_id, source_session_id, source_thread_id,
+            gateway_authority=source_gateway_id,
+        ))
+        debug_segment = "/debug/node/configurations/"
+        choices: list[SessionForkResourceChoice] = []
+        canonical_uris: set[str] = set()
+        for choice in request.resources:
+            if choice.owner_reference is not None:
+                continue
+            canonical_uri = choice.resource_uri
+            if canonical_uri is None:
+                raise ValueError("静态资源选择缺少 URI")
+            if canonical_uri in owner_thread_uris:
+                canonical_uri = source_uri
+            else:
+                for thread_uri in owner_thread_uris:
+                    prefix = thread_uri + debug_segment
+                    if canonical_uri.startswith(prefix):
+                        canonical_uri = source_uri + canonical_uri[len(thread_uri):]
+                        break
+            if canonical_uri in canonical_uris:
+                raise ValueError("duplicate_fork_resource_after_owner_normalization")
+            canonical_uris.add(canonical_uri)
+            choices.append(choice.model_copy(update={"resource_uri": canonical_uri}))
+        return choices
 
     def copy_resource_results(self, capture: ForkSourceCaptureRecord, *, target_thread_uri: str) -> list[dict[str, object]]:
         """结果从各资源 owner 的持久发布证据读取，重试不读取来源。"""
@@ -109,6 +324,7 @@ class CheckpointForkOwner:
         target_storage_domain_id: str | None = None,
         source_transport: SessionForkTransportProtocol | None = None,
         transfer_request: SessionForkRequest | None = None,
+        source_owner_instance_id: str | None = None,
     ) -> RolloutForkResult:
         """先冻结全部 source facts，再只从私有快照物化 target。"""
         if creation_record is not None and thread_creation_record is not None:
@@ -142,6 +358,14 @@ class CheckpointForkOwner:
         )
         operation_id = creation_key or (fork_id if fork_id is not None else create_uuid_hex(namespace="fork/operation"))
         source_external = source_transport is not None
+        creation = creation_record or thread_creation_record
+        creation_intent = json.loads(creation.request_intent_json) if creation is not None else None
+        if creation is not None:
+            _, _, local = self.require_creation_capture_decision(
+                creation, target_session_id=target_session_id, intent=creation_intent,
+            )
+            if local == source_external:
+                raise ValueError("fork_owner_overlap: capture 执行方式与原 creation 的授权决定不一致")
         if source_external and (transfer_request is None or source_owner is None):
             raise ValueError("跨端 fork 必须提供精确 source owner 和冻结 transfer request")
         if source_external and relationship == "pinned":
@@ -150,15 +374,34 @@ class CheckpointForkOwner:
         if capture is None:
             if not source_external:
                 source_owner = self.source._require_thread_owner(source_session_id, source_owner)
+            elif not isinstance(source_owner_instance_id, str) or not source_owner_instance_id:
+                raise ValueError("fork source capture 缺少本次实际 owner 握手")
         else:
             frozen_owner = MutationIntentOwner(session_id=capture.source_session_id, thread_id=capture.source_thread_id)
             if source_owner is not None and source_owner != frozen_owner:
                 raise RuntimeError("fork recovery source owner 与冻结 capture 不一致")
             source_owner = frozen_owner
         frozen_request = json.loads(capture.request_json) if capture is not None else None
+        actual_target_domain = (creation_record.workspace_id if creation_record is not None
+                                else catalog.get_node(target_session_id).workspace_id)
         source_domain = source_storage_domain_id or (frozen_request["source_storage_domain_id"] if frozen_request is not None
                                                     else catalog.get_node(source_session_id).workspace_id)
-        target_domain = target_storage_domain_id or (frozen_request["target_storage_domain_id"] if frozen_request is not None else source_domain)
+        target_domain = target_storage_domain_id or actual_target_domain
+        if target_domain != actual_target_domain:
+            raise ValueError("fork_owner_overlap: 冻结 target 资源域与实际 creation owner 不一致")
+        if capture is None:
+            same_owner = self.verify_source_domain(
+                source_domain, target_domain, source_owner_instance_id if source_external else self.instance_id,
+            )
+            if same_owner and catalog.get_node(source_session_id).workspace_id != source_domain:
+                raise ValueError("fork_owner_overlap: 冻结 source 资源域与实际 source owner 不一致")
+            if source_external and same_owner:
+                raise ValueError("fork_owner_overlap: 同 owner capture 不允许绕行来源 export")
+        else:
+            release_state, _ = catalog.get_fork_export_release(operation_id)
+            if (source_external and release_state not in {"pending", "confirmed"}
+                or not source_external and release_state is not None):
+                raise RuntimeError("fork capture 的冻结 release owner 状态非法")
         capture = catalog.reserve_fork_source_capture(
             copy_operation_id=operation_id, creation_key=creation_key,
             source_session_id=source_session_id, source_thread_id=source_owner.thread_id,
@@ -181,6 +424,9 @@ class CheckpointForkOwner:
         )
         if capture.state == "aborted":
             raise RuntimeError("fork source capture 已 aborted，拒绝复用")
+        if creation is not None:
+            self.require_target_capture(capture, creation=creation)
+        await observe_phase(operation_id, "copy.source.reserved")
         fork_id, materialization_id = capture.fork_id, capture.materialization_id
         if relationship == "pinned" and capture.state != "materialized":
             await self.recovery.begin_pinned_fork_retention_claim(capture)
@@ -205,6 +451,13 @@ class CheckpointForkOwner:
                 if row is None or row[2:] != ("committed", capture.snapshot_sha256):
                     raise RuntimeError("fork materialized capture 缺少精确 target committed journal")
                 frozen = json.loads(capture.request_json)
+                if source_preflight is not None and (
+                    row[0], row[1], frozen["source_view_revision"], frozen["anchor_item_id"],
+                ) != (
+                    source_preflight.source_checkpoint_id, source_preflight.source_view_id,
+                    source_preflight.source_view_revision, source_preflight.anchor_item_id,
+                ):
+                    raise RuntimeError("source-mismatch: committed journal 与原 creation 的冻结 source point 不一致")
                 return RolloutForkResult(
                     source_checkpoint_id=row[0], source_view_id=row[1],
                     source_view_revision=frozen["source_view_revision"], anchor_item_id=frozen["anchor_item_id"],
@@ -217,15 +470,25 @@ class CheckpointForkOwner:
             else:
                 if capture.state != "preparing":
                     raise RuntimeError("fork captured journal 缺少冻结 snapshot，禁止读取当前 source 补齐")
-                root.mkdir(parents=True, exist_ok=False, mode=0o700)
                 if source_external:
+                    # 来源先确认独立 export；首次接收正文时才创建目标 artifact 目录。
                     source_snapshot, marker_hash = await import_captured_artifact(
                         source_transport, transfer_request, self._storage.storage.sessions_dir, capture,
                     )
                 else:
+                    # creation 已固定 local 授权；无目录才允许由当前实际 owner 捕获原 source point。
+                    source_owner = self.source._require_thread_owner(source_session_id, source_owner)
+                    if catalog.get_node(source_session_id).workspace_id != source_domain:
+                        raise ValueError("fork_owner_overlap: 本地 capture 的实际 source catalog 归属已漂移")
+                    await observe_phase(operation_id, "copy.source.local_capture_authorized", details={
+                        "gateway_id": get_current_gateway_id(), "same_storage_owner": True,
+                        "source_gateway_id": creation_intent["source_gateway_id"] if creation_intent is not None else get_current_gateway_id(),
+                    })
+                    root.mkdir(parents=True, exist_ok=False, mode=0o700)
                     source_snapshot = await self.source._capture_fork_source_snapshot(
                         source_session_id=source_session_id, source_owner=source_owner, mode=mode,
                         checkpoint_ns=checkpoint_ns, snapshot_root=root, capture_record=capture,
+                        same_storage_owner=True,
                     )
                 source_snapshot, marker_hash = read_captured_snapshot(self._storage.storage.sessions_dir, capture)
             if source_external and source_snapshot.attachments:
@@ -289,6 +552,15 @@ class CheckpointForkOwner:
         """来源 owner 按目标冻结 identity 导出既有 artifact，重试不回读 live source。"""
         catalog = self._storage.forks._catalog_store()
         request = json.loads(expected.request_json)
+        existing = catalog.get_fork_source_capture(copy_operation_id=expected.copy_operation_id)
+        if existing is None and request["source_storage_domain_id"] != catalog.get_node(expected.source_session_id).workspace_id:
+            raise ValueError("fork_owner_overlap: 冻结 source export 资源域与实际 owner 不一致")
+        if request["source_storage_domain_id"] == request["target_storage_domain_id"]:
+            raise ValueError("fork_owner_overlap: 同一稳定资源域只允许原 creation owner 本地捕获")
+        if existing is not None and catalog.get_fork_export_release(expected.copy_operation_id)[0] is not None:
+            raise ValueError("fork_owner_overlap: source export 命中独立 target capture，拒绝重叠状态")
+        if existing is not None and self._capture_target_creation(existing) is not None:
+            raise ValueError("fork_owner_overlap: 本地 creation 的 capture 不允许独立 export")
         capture = catalog.reserve_fork_source_capture(
             copy_operation_id=expected.copy_operation_id, creation_key=expected.creation_key,
             source_session_id=expected.source_session_id, source_thread_id=expected.source_thread_id,
@@ -308,6 +580,7 @@ class CheckpointForkOwner:
                     source_session_id=capture.source_session_id,
                     source_owner=MutationIntentOwner(session_id=capture.source_session_id, thread_id=capture.source_thread_id),
                     mode=request["mode"], checkpoint_ns=request["checkpoint_ns"], snapshot_root=root, capture_record=capture,
+                    same_storage_owner=False,
                 )
             except Exception:
                 catalog.finish_fork_source_capture(capture.copy_operation_id, state="aborted", reason="source export capture failed")
@@ -321,6 +594,7 @@ class CheckpointForkOwner:
     async def release_source_export(self, capture: ForkSourceCaptureRecord, *, committed: bool) -> ForkSourceCaptureRecord:
         """只释放本导出的 artifact/附件 claim；目标生命周期由目标 journal 决定。"""
         catalog = self._storage.forks._catalog_store()
+        self.require_source_export(capture)
         if committed and capture.state not in {"source_captured", "materialized"}:
             raise RuntimeError("fork source export 未完整 captured，不能接受 committed 回执")
         catalog.finish_fork_source_capture(capture.copy_operation_id, state="materialized" if committed else "aborted")
@@ -394,6 +668,12 @@ class CheckpointForkOwner:
             target_session_id, record.child_thread_id, record.preimage_hash,
         ):
             raise RuntimeError("fork child 清理与冻结 capture owner 冲突")
+        self.require_target_capture(capture, creation=record)
+        final = self._storage.storage._path_resolver.resolve_session_node(target_session_id) / record.final_relative_locator
+        if capture.state == "aborted" and not (final.exists() or final.is_symlink()):
+            # catalog 中止前附件和 retention 已终结；目录清理后的重入只补删私有快照。
+            remove_captured_snapshot(self._storage.storage.sessions_dir, capture)
+            return False
         with self._storage.storage.prepared_child_fork_target_scope(target_session_id, record):
             storage = self._storage.storage
             target_root = storage.root(target_session_id, request["checkpoint_ns"], thread_id=record.child_thread_id)
@@ -415,8 +695,7 @@ class CheckpointForkOwner:
             async with NavigationTopologyGate(sessions_root).shared(), SessionLifecycleGate(sessions_root).exclusive(target_session_id):
                 if self.source.attachment_store is not None:
                     self.source.attachment_store.abort_copy_attachments(capture, record)
-                catalog.abort_unpublished_fork_capture(capture.copy_operation_id, reason="child publication failed",
-                                                      child_creation_preimage_hash=record.preimage_hash)
+                catalog.abort_unpublished_fork_capture(capture, creation=record, reason="child publication failed")
             remove_captured_snapshot(self._storage.storage.sessions_dir, capture)
             return has_rollout
 
@@ -431,13 +710,16 @@ class CheckpointForkOwner:
             await self.source.attachment_store.finalize_copy_attachments(capture, publication_preimage_hash=record.preimage_hash)
 
     def abort_prepared_capture(self, record: SessionCreationRecord, reason: str) -> None:
+        if record.state != "preparing" or record.purpose != "context_fork":
+            raise RuntimeError("fork main 清理缺少原 preparing creation intent")
         catalog = self._storage.forks._catalog_store()
         capture = catalog.get_fork_source_capture(creation_key=record.session_creation_idempotency_key)
         if capture is None:
             return
+        self.require_target_capture(capture, creation=record)
         if self.source.attachment_store is not None:
             self.source.attachment_store.abort_copy_attachments(capture, record)
         if capture.state != "aborted":
             # 未发布 target 即使已完成 rollout 物化，也允许创建 operation 失败终结。
-            catalog.abort_unpublished_fork_capture(capture.copy_operation_id, reason=reason)
+            catalog.abort_unpublished_fork_capture(capture, creation=record, reason=reason)
         remove_captured_snapshot(self._storage.storage.sessions_dir, capture)

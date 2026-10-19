@@ -56,7 +56,7 @@ def reader_case(
     saver = RolloutCheckpointSaver(sessions)
     accepted = saver.accept_turn(
         session,
-        accepted_ingress_id="reader-ingress",
+        thread_id=saver._storage.storage.main_thread_id(session), accepted_ingress_id="reader-ingress",
         acceptance_idempotency_key="reader-acceptance",
         job_id="reader-job",
         admission_idempotency_key="reader-admission",

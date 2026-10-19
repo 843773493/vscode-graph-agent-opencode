@@ -50,12 +50,12 @@ test("同 session/turn ID 的消息流投影和尾帧订阅按 Gateway 会话隔
   const turnId = "turn_same";
   const leftKey = "gateway_a::ses_same";
   const rightKey = "gateway_b::ses_same";
-  const pending: ConversationView = {
+  const pending: ConversationView = { threadId: "thr_conversation",
     conversationId: turnId, displayMode: "live", sessionId, turnId,
     userMessage: null, events: [], status: "running", jobId: null, pending: true, source: "pending",
   };
   const foreignStream = {
-    ...createMessageStreamState(sessionId, turnId, "stream_same", rightKey),
+    ...createMessageStreamState(sessionId, turnId, "stream_same", rightKey, "thr_conversation"),
     lastEventSeq: 100,
     failure: { code: "foreign", message: "其它工作区的失败", afterInterruptRequested: false, resumable: false },
     streamStatus: "failed" as const,
@@ -73,7 +73,7 @@ test("同 session/turn ID 的消息流投影和尾帧订阅按 Gateway 会话隔
 });
 
 test("历史 Turn 不显示实时事件流等待状态", () => {
-  const historyConversation: ConversationView = {
+  const historyConversation: ConversationView = { threadId: "thr_conversation",
     conversationId: "turn_history_running",
     displayMode: "history",
     sessionId: "ses_history_projection",
@@ -93,7 +93,7 @@ test("Job/Trace 先结束时仍保留未完成的消息流订阅目标", () => {
   const sessionCacheKey = "workspace_message_stream_tail::ses_message_stream_tail";
   const state = {
     activeJobIdsBySession: new Map(),
-    pendingConversations: new Map([[sessionCacheKey, [{
+    pendingConversations: new Map([[sessionCacheKey, [{ threadId: "thr_conversation",
       conversationId: "msg_message_stream_tail",
       displayMode: "live" as const,
       sessionId,
@@ -108,7 +108,7 @@ test("Job/Trace 先结束时仍保留未完成的消息流订阅目标", () => {
     messageStreamsByTurnStream: new Map([[
       "stream_message_stream_tail",
       {
-        ...createMessageStreamState(sessionId, "turn_message_stream_tail", "stream_message_stream_tail", sessionCacheKey),
+        ...createMessageStreamState(sessionId, "turn_message_stream_tail", "stream_message_stream_tail", sessionCacheKey, "thr_conversation"),
         lastEventSeq: 9,
         streamStatus: "open" as const,
       },
@@ -121,7 +121,7 @@ test("Job/Trace 先结束时仍保留未完成的消息流订阅目标", () => {
 });
 
 test("非 pending 来源即使带有 live 标记也不显示实时等待状态", () => {
-  const staleHistoryConversation: ConversationView = {
+  const staleHistoryConversation: ConversationView = { threadId: "thr_conversation",
     conversationId: "turn_stale_history",
     displayMode: "live",
     sessionId: "ses_stale_history",
@@ -137,7 +137,7 @@ test("非 pending 来源即使带有 live 标记也不显示实时等待状态",
 });
 
 test("消息流 active_state 直接映射为对应的阶段状态", () => {
-  const base: ConversationView = {
+  const base: ConversationView = { threadId: "thr_conversation",
     conversationId: "turn_active_state",
     displayMode: "live",
     sessionId: "ses_active_state",
@@ -181,7 +181,7 @@ test("消息流 active_state 直接映射为对应的阶段状态", () => {
 test("Job 终态先移除 live Turn，历史视图不会与实时视图并存", () => {
   const sessionId = "ses_terminal_projection";
   const jobId = "job_terminal_projection";
-  const liveConversation: ConversationView = {
+  const liveConversation: ConversationView = { threadId: "thr_conversation",
     conversationId: "msg_terminal_projection",
     displayMode: "live",
     sessionId,
@@ -219,7 +219,7 @@ test("Job 终态先移除 live Turn，历史视图不会与实时视图并存", 
 test("历史提交期间的终态 live Turn 不会被空 pending 快照删除", () => {
   const sessionId = "ses_pending_commit";
   const jobId = "job_pending_commit";
-  const terminalConversation: ConversationView = {
+  const terminalConversation: ConversationView = { threadId: "thr_018f0000000070008000000000000001",
     conversationId: "msg_pending_commit",
     displayMode: "live",
     sessionId,
@@ -252,7 +252,7 @@ test("历史提交期间的终态 live Turn 不会被空 pending 快照删除", 
 test("历史 stale_turn_reference 期间保留超时回合及可见错误", () => {
   const sessionId = "ses_timeout_fallback";
   const jobId = "job_timeout_fallback";
-  const pendingConversation: ConversationView = {
+  const pendingConversation: ConversationView = { threadId: "thr_conversation",
     conversationId: "msg_timeout_fallback",
     displayMode: "live",
     sessionId,
@@ -528,6 +528,7 @@ test("切入已有 active Job 后立即把流式文本和工具事件合入 Turn
     jobId,
     sessionId,
     timeline.turnsById[turnId],
+    timeline.threadId,
   );
   appendTraceEventsToPendingConversations(
     state.pendingConversations,
@@ -572,13 +573,13 @@ test("切入已有 active Job 后立即把流式文本和工具事件合入 Turn
   expect(conversations[0]?.activeJobOverlay).toBe(true);
   expect(isLiveConversationView(conversations[0]!)).toBe(true);
 
-  syncActiveJobConversation(state.pendingConversations, sessionId, null, sessionId, null);
+  syncActiveJobConversation(state.pendingConversations, sessionId, null, sessionId, null, "thr_conversation");
   expect(state.pendingConversations.has(sessionId)).toBe(false);
 });
 
 test("活动内部 Job 没有权威 Turn 时不创建聊天 overlay", () => {
   const pending = new Map<string, ConversationView[]>();
-  syncActiveJobConversation(pending, "ses_internal", "job_internal", "workspace::ses_internal", null);
+  syncActiveJobConversation(pending, "ses_internal", "job_internal", "workspace::ses_internal", null, "thr_conversation");
   expect(pending.size).toBe(0);
 });
 
@@ -605,7 +606,7 @@ test("活动 Turn 的正反和重复快照顺序只消费当前视图坐标并�
     user_messages: [],
     response_preview: "历史摘要不覆盖正在生成的正文",
   };
-  const live: ConversationView = {
+  const live: ConversationView = { threadId: "thr_018f0000000070008000000000000001",
     conversationId: "msg_active_identity",
     displayMode: "live",
     sessionId,
@@ -614,7 +615,7 @@ test("活动 Turn 的正反和重复快照顺序只消费当前视图坐标并�
     assistantMessages: [{
       message_id: "msg_live_assistant",
       session_id: sessionId,
-      thread_id: "thr_conversation",
+      thread_id: "thr_018f0000000070008000000000000001",
       role: "assistant",
       content: "已收到的实时正文",
       attachments: [],
@@ -666,8 +667,8 @@ test("活动 Turn 的正反和重复快照顺序只消费当前视图坐标并�
       turnTimelinesBySession: new Map([[mapKey, createSessionTurnTimeline(mapKey)]]),
     } as unknown as AppState;
     const projectTurn = () => {
-      state.turnTimelinesBySession.set(mapKey, upsertTurn({ ...createSessionTurnTimeline(mapKey), threadId: "thr_conversation" }, activeTurn));
-      syncActiveJobConversation(state.pendingConversations, sessionId, jobId, mapKey, activeTurn);
+      state.turnTimelinesBySession.set(mapKey, upsertTurn({ ...createSessionTurnTimeline(mapKey), threadId: "thr_018f0000000070008000000000000001" }, activeTurn));
+      syncActiveJobConversation(state.pendingConversations, sessionId, jobId, mapKey, activeTurn, threadId);
     };
     if (order === "turn_first") projectTurn();
     writePendingSnapshot(state.pendingConversations, state.activeJobIdsBySession, snapshot, mapKey);
@@ -683,7 +684,7 @@ test("活动 Turn 的正反和重复快照顺序只消费当前视图坐标并�
       expect(projected.responseParts).toBe(live.responseParts);
       expect(state.pendingConversations.get(mapKey)?.[0]?.rootLogicalItemOrdinal).toBeUndefined();
     }
-    state.turnTimelinesBySession.set(mapKey, upsertTurn({ ...createSessionTurnTimeline(mapKey), threadId: "thr_conversation" },
+    state.turnTimelinesBySession.set(mapKey, upsertTurn({ ...createSessionTurnTimeline(mapKey), threadId: "thr_018f0000000070008000000000000001" },
       { ...activeTurn, root_logical_item_ordinal: 4, revision: 4 }));
     expect(getConversationsForSession(sessionId, state, mapKey)[0]?.rootLogicalItemOrdinal).toBe(4);
     state.turnTimelinesBySession.set(mapKey, createSessionTurnTimeline(mapKey));
@@ -695,9 +696,9 @@ test("活动 Turn 的正反和重复快照顺序只消费当前视图坐标并�
   }
   const freshState = {
     pendingConversations: new Map<string, ConversationView[]>(),
-    turnTimelinesBySession: new Map([[mapKey, upsertTurn({ ...createSessionTurnTimeline(mapKey), threadId: "thr_conversation" }, activeTurn)]]),
+    turnTimelinesBySession: new Map([[mapKey, upsertTurn({ ...createSessionTurnTimeline(mapKey), threadId: "thr_018f0000000070008000000000000001" }, activeTurn)]]),
   } as unknown as AppState;
-  syncActiveJobConversation(freshState.pendingConversations, sessionId, jobId, mapKey, activeTurn);
+  syncActiveJobConversation(freshState.pendingConversations, sessionId, jobId, mapKey, activeTurn, threadId);
   expect(getConversationsForSession(sessionId, freshState, mapKey)[0]).toMatchObject(expected);
   expect(getConversationsForSession(sessionId, freshState, mapKey)[0]?.assistantMessages).toEqual([]);
   const existing = new Map([[mapKey, [live]]]);
@@ -708,7 +709,7 @@ test("活动 Turn 的正反和重复快照顺序只消费当前视图坐标并�
       const before = map.get(mapKey);
       expect(() => syncActiveJobConversation(map, sessionId, jobId, mapKey, {
         ...activeTurn, ...owner,
-      })).toThrow("活动 Job 与权威 Turn owner 不一致");
+      }, threadId)).toThrow("活动 Job 与权威 Turn owner 不一致");
       expect(map.get(mapKey)).toBe(before);
     }
   }
@@ -747,7 +748,7 @@ test("历史摘要与 replay live Turn 合并时保留回退元数据", () => {
       },
     },
   };
-  const pending: ConversationView = {
+  const pending: ConversationView = { threadId: "thr_conversation",
     conversationId: "msg_replay_metadata_merge",
     displayMode: "live",
     sessionId,
@@ -832,7 +833,7 @@ test("terminal 历史投影替换 live 镜像并保留权威 Item 统计", () =>
       },
     },
   };
-  const pending: ConversationView = {
+  const pending: ConversationView = { threadId: "thr_conversation",
     conversationId: messageId,
     displayMode: "live",
     sessionId,
@@ -902,7 +903,7 @@ test("terminal live 与 history Item 数不一致时显式报告协议错误", (
     },
   };
   const stream: MessageStreamState = {
-    ...createMessageStreamState(sessionId, turnId, "stream_item_count_mismatch", sessionId),
+    ...createMessageStreamState(sessionId, turnId, "stream_item_count_mismatch", sessionId, "thr_conversation"),
     streamStatus: "completed",
     connectionStatus: "terminal",
     blocks: [{
@@ -967,12 +968,12 @@ test("同一 terminal Turn 保留历史正文并选择最高序号消息流作�
     },
   };
   const stale: MessageStreamState = {
-    ...createMessageStreamState(sessionId, turnId, "strm_stale", sessionId),
+    ...createMessageStreamState(sessionId, turnId, "strm_stale", sessionId, "thr_conversation"),
     lastEventSeq: 12,
     connectionStatus: "gap" as const,
   };
   const terminal: MessageStreamState = {
-    ...createMessageStreamState(sessionId, turnId, "strm_terminal", sessionId),
+    ...createMessageStreamState(sessionId, turnId, "strm_terminal", sessionId, "thr_conversation"),
     lastEventSeq: 12,
     streamStatus: "completed" as const,
     connectionStatus: "terminal" as const,
@@ -1021,7 +1022,7 @@ test("Job failed 镜像优先于迟到的 open message stream", () => {
       error: "No tool call found for function call output with call_id call_old",
     },
   };
-  const pending: ConversationView = {
+  const pending: ConversationView = { threadId: "thr_conversation",
     conversationId: "msg_failed_job_mirror",
     displayMode: "live",
     sessionId,
@@ -1046,7 +1047,7 @@ test("Job failed 镜像优先于迟到的 open message stream", () => {
     source: "pending",
   };
   const staleStream = {
-    ...createMessageStreamState(sessionId, "turn_failed_job_mirror", "strm_stale_open", sessionId),
+    ...createMessageStreamState(sessionId, "turn_failed_job_mirror", "strm_stale_open", sessionId, "thr_conversation"),
     lastEventSeq: 99,
     streamStatus: "open" as const,
     connectionStatus: "connected" as const,

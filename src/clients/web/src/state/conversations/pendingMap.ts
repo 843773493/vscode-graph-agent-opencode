@@ -52,10 +52,10 @@ function boundTerminalConversations(
           pendingConversationTime(right) - pendingConversationTime(left),
       )
       .slice(PENDING_TERMINAL_CONVERSATION_RETENTION_LIMIT)
-      .map((conversation) => conversation.conversationId),
+      .map((conversation) => JSON.stringify([conversation.threadId, conversation.conversationId])),
   );
   return list.filter(
-    (conversation) => !droppedTerminalIds.has(conversation.conversationId),
+    (conversation) => !droppedTerminalIds.has(JSON.stringify([conversation.threadId, conversation.conversationId])),
   );
 }
 

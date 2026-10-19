@@ -63,7 +63,7 @@ def _seed_v2_partial_text_turn(workspace_root: Path) -> None:
     saver = RolloutCheckpointSaver(sessions_dir)
     accepted = saver.accept_turn(
         PARTIAL_TEXT_SESSION_ID,
-        accepted_ingress_id="ingress-boundary-partial-text-0004",
+        thread_id=saver._storage.storage.main_thread_id(PARTIAL_TEXT_SESSION_ID), accepted_ingress_id="ingress-boundary-partial-text-0004",
         acceptance_idempotency_key="acceptance-boundary-partial-text-0004",
         job_id="job-boundary-partial-text-0004",
         admission_idempotency_key="execution-boundary-partial-text-0004",
@@ -114,7 +114,7 @@ def _seed_v2_partial_text_turn(workspace_root: Path) -> None:
     )
     saver.converge_execution(
         PARTIAL_TEXT_SESSION_ID,
-        turn_id=PARTIAL_TEXT_TURN_ID,
+        thread_id=saver._storage.storage.main_thread_id(PARTIAL_TEXT_SESSION_ID), turn_id=PARTIAL_TEXT_TURN_ID,
         execution_id=str(accepted["initial_execution_id"]),
         outcome="cancelled",
         turn_status="cancelled",

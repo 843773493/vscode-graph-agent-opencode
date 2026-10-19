@@ -109,6 +109,9 @@ from app.services.infrastructure.llm_request_log_service import LLMRequestLogSer
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.fork.source_capture import (
+    IncompleteForkSourceCaptureError,
+)
 from app.services.infrastructure.trace_event_store import TraceCursorGoneError
 from app.services.infrastructure.turn_history.trace_page import (
     TracePageBudgetExceededError,
@@ -229,6 +232,8 @@ async def transfer_session_fork(
 ):
     try:
         result = await fork_service.transfer(payload)
+    except IncompleteForkSourceCaptureError as error:
+        raise HTTPException(status_code=409, detail=error.to_detail(action=payload.action)) from error
     except SessionDeletionPendingError as error:
         raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:

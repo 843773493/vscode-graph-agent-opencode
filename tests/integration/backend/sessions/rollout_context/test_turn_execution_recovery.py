@@ -373,7 +373,7 @@ def test_acceptance_and_provider_retry_keep_one_real_user_root(frozen_provider_a
     assembly_1 = str(prepared["assembly_id"])
     saver.register_model_call(
         SESSION_ID,
-        execution_id=execution_id,
+        thread_id=saver._storage.storage.main_thread_id(SESSION_ID), execution_id=execution_id,
         model_call_id=model_call_1,
         attempt=1,
         provider="test-provider",
@@ -381,13 +381,13 @@ def test_acceptance_and_provider_retry_keep_one_real_user_root(frozen_provider_a
     )
     saver.update_model_call_outcome(
         SESSION_ID,
-        model_call_id=model_call_1,
+        thread_id=saver._storage.storage.main_thread_id(SESSION_ID), model_call_id=model_call_1,
         outcome="failed",
         dispatch_state="failed",
     )
     saver.register_model_call(
         SESSION_ID,
-        execution_id=execution_id,
+        thread_id=saver._storage.storage.main_thread_id(SESSION_ID), execution_id=execution_id,
         model_call_id=model_call_2,
         attempt=2,
         provider="test-provider",
@@ -396,13 +396,13 @@ def test_acceptance_and_provider_retry_keep_one_real_user_root(frozen_provider_a
     )
     saver.update_model_call_outcome(
         SESSION_ID,
-        model_call_id=model_call_2,
+        thread_id=saver._storage.storage.main_thread_id(SESSION_ID), model_call_id=model_call_2,
         outcome="completed_empty",
         dispatch_state="completed",
     )
     saver.converge_execution(
         SESSION_ID,
-        turn_id="turn-user-1",
+        thread_id=saver._storage.storage.main_thread_id(SESSION_ID), turn_id="turn-user-1",
         execution_id=execution_id,
         outcome="completed_empty",
         turn_status="completed_empty",
@@ -554,7 +554,7 @@ def test_canonical_tool_call_recovers_coordinates_from_scoped_block_id(
     saver = RolloutCheckpointSaver(sessions_dir)
     accepted = saver.accept_turn(
         SESSION_ID,
-        accepted_ingress_id="ingress-tool-coordinate",
+        thread_id=saver._storage.storage.main_thread_id(SESSION_ID), accepted_ingress_id="ingress-tool-coordinate",
         acceptance_idempotency_key="acceptance-tool-coordinate",
         job_id="job-tool-coordinate", admission_idempotency_key="admission-tool-coordinate",
         payload="请检查状态", turn_id="turn-tool-call",
@@ -1079,7 +1079,7 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(frozen_pro
 
     restarted_stream_store = MessageStreamStore(path_resolver=resolver)
     restarted_writer = await restarted_stream_store.open_existing(
-        session_id=SESSION_ID,
+        thread_id=restarted_stream_store._path_resolver.main_thread_id(SESSION_ID), session_id=SESSION_ID,
         turn_id="turn-user-1",
         turn_stream_id=writer.turn_stream_id,
     )
@@ -1276,7 +1276,7 @@ def test_checkpoint_root_projection_preserves_acceptance_turn_ordinal(
     saver = RolloutCheckpointSaver(sessions_dir)
     accepted = saver.accept_turn(
         SESSION_ID,
-        accepted_ingress_id="ingress-checkpoint-root",
+        thread_id=saver._storage.storage.main_thread_id(SESSION_ID), accepted_ingress_id="ingress-checkpoint-root",
         acceptance_idempotency_key="acceptance-checkpoint-root",
         job_id="job-checkpoint-root",
         admission_idempotency_key="admission-checkpoint-root",
@@ -1590,7 +1590,7 @@ def test_item_bearing_terminal_convergence_materializes_output_and_restart(
         ).fetchone() == (0,)
     commit_id = saver.converge_execution(
         SESSION_ID,
-        turn_id="turn-user-1",
+        thread_id=saver._storage.storage.main_thread_id(SESSION_ID), turn_id="turn-user-1",
         execution_id=execution_id,
         outcome="completed",
         turn_status="completed",
@@ -1656,7 +1656,7 @@ def test_item_bearing_terminal_convergence_materializes_output_and_restart(
     assert (
         restarted.converge_execution(
             SESSION_ID,
-            turn_id="turn-user-1",
+            thread_id=restarted._storage.storage.main_thread_id(SESSION_ID), turn_id="turn-user-1",
             execution_id=execution_id,
             outcome="completed",
             turn_status="completed",
@@ -1688,7 +1688,7 @@ def test_item_bearing_terminal_convergence_materializes_output_and_restart(
     with pytest.raises(ValueError, match="幂等键冲突"):
         restarted.converge_execution(
             SESSION_ID,
-            turn_id="turn-user-1",
+            thread_id=restarted._storage.storage.main_thread_id(SESSION_ID), turn_id="turn-user-1",
             execution_id=execution_id,
             outcome="completed",
             turn_status="completed",
@@ -1737,7 +1737,7 @@ def test_item_bearing_terminal_projection_failure_rolls_back_jsonl_and_sqlite(
     with pytest.raises(ValueError, match="wire_role 与 message projection 不匹配"):
         saver.converge_execution(
             SESSION_ID,
-            turn_id="turn-user-1",
+            thread_id=saver._storage.storage.main_thread_id(SESSION_ID), turn_id="turn-user-1",
             execution_id=execution_id,
             outcome="completed",
             turn_status="completed",

@@ -227,6 +227,7 @@ export function syncActiveJobConversation(
   activeJobId: string | null,
   mapKey: string,
   activeTurn: TurnRecord | null,
+  threadId: string,
 ): void {
   if (activeJobId && activeTurn
     && (activeTurn.job_id !== activeJobId || activeTurn.session_id !== sessionId)) {
@@ -238,8 +239,8 @@ export function syncActiveJobConversation(
   }
   const retained = existing.filter(
     (conversation) =>
-      !conversation.activeJobOverlay || conversation.jobId === activeJobId,
-  ).map((conversation) => conversation.jobId === activeJobId
+      conversation.threadId !== threadId || !conversation.activeJobOverlay || conversation.jobId === activeJobId,
+  ).map((conversation) => conversation.jobId === activeJobId && conversation.threadId === threadId
     ? {
         ...conversation,
         turnId: activeTurn?.turn_id ?? conversation.turnId,
@@ -252,11 +253,12 @@ export function syncActiveJobConversation(
   if (
     activeJobId
     && activeTurn
-    && !retained.some((conversation) => conversation.jobId === activeJobId)
+    && !retained.some((conversation) => conversation.jobId === activeJobId && conversation.threadId === threadId)
   ) {
     retained.push({
       conversationId: activeTurn.turn_id,
       sessionId,
+      threadId,
       turnId: activeTurn.turn_id,
       userMessage: null,
       assistantMessages: [],
@@ -331,12 +333,13 @@ export function completePendingForJob(
   sessionId: string,
   jobId: string,
   turnStatus: Extract<JobStatus, "completed" | "failed" | "cancelled" | "timed_out">,
-  mapKey: string = sessionId,
+  mapKey: string,
+  threadId: string,
 ): void {
   if (!jobId) return;
   const pendingList = map.get(mapKey) ?? [];
   const pendingIndex = pendingList.findIndex(
-    (conversation) => conversation.jobId === jobId,
+    (conversation) => conversation.jobId === jobId && conversation.threadId === threadId,
   );
   if (pendingIndex === -1) return;
 

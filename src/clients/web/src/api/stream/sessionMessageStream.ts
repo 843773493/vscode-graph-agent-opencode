@@ -50,14 +50,15 @@ export async function getSessionMessageStreamSnapshot(
   turnId: string,
   options: {
     workspaceId?: string | null;
-    threadId?: string | null;
+    threadId: string;
     turnStreamId?: string | null;
     signal?: AbortSignal;
-  } = {},
+  },
 ): Promise<MessageStreamSnapshotResponse> {
   const targetThreadId = options.threadId;
+  if (!targetThreadId) throw new Error("消息流请求缺少权威 thread owner");
   const params = new URLSearchParams();
-  if (targetThreadId) params.set("thread_id", targetThreadId);
+  params.set("thread_id", targetThreadId);
   if (options.turnStreamId) params.set("turn_stream_id", options.turnStreamId);
   try {
     const response = await requestJson<APIResponse<MessageStreamSnapshotResponse>>(
@@ -70,7 +71,8 @@ export async function getSessionMessageStreamSnapshot(
     );
     const snapshot = validateMessageStreamSnapshot(unwrapApiData(response));
     if (snapshot.session_id !== sessionId || snapshot.turn_id !== turnId
-      || (targetThreadId && snapshot.thread_id !== targetThreadId)) {
+      || snapshot.thread_id !== targetThreadId
+      || (options.turnStreamId && snapshot.turn_stream_id !== options.turnStreamId)) {
       throw new Error("消息流快照 owner 与请求不一致");
     }
     return snapshot;
@@ -88,18 +90,19 @@ export async function streamSessionMessageEvents(
   turnId: string,
   options: {
     workspaceId?: string | null;
-    threadId?: string | null;
+    threadId: string;
     turnStreamId?: string | null;
     afterSeq?: number;
     onEvent?: (event: MessageStreamEvent) => void;
     onActivity?: () => void;
     onConnected?: (turnStreamId: string | null) => void;
     signal?: AbortSignal;
-  } = {},
+  },
 ): Promise<void> {
   const targetThreadId = options.threadId;
+  if (!targetThreadId) throw new Error("消息流请求缺少权威 thread owner");
   const params = new URLSearchParams();
-  if (targetThreadId) params.set("thread_id", targetThreadId);
+  params.set("thread_id", targetThreadId);
   if (options.turnStreamId) params.set("turn_stream_id", options.turnStreamId);
   if (options.afterSeq !== undefined) params.set("after_seq", String(options.afterSeq));
   // SSE 长期连接只共享统一凭据与刷新重试；生命周期内的断线重连由调用方负责。
@@ -129,9 +132,13 @@ export async function streamSessionMessageEvents(
   if (!response.body) {
     throw new MessageStreamConnectionError(response.status, response.statusText);
   }
-  options.onConnected?.(response.headers.get("X-Message-Stream-ID"));
   const deliveredEventSeqs = new Set<number>();
-  let frozenThreadId = targetThreadId;
+  let frozenStreamId = options.turnStreamId ?? response.headers.get("X-Message-Stream-ID");
+  if (options.turnStreamId && response.headers.get("X-Message-Stream-ID")
+    && response.headers.get("X-Message-Stream-ID") !== options.turnStreamId) {
+    throw new Error("消息流响应 stream owner 与请求不一致");
+  }
+  options.onConnected?.(response.headers.get("X-Message-Stream-ID"));
   await consumeSseResponse(response, {
     signal: options.signal,
     // 服务端每 15s 发一次 `: heartbeat` 注释；阈值必须大于该间隔，否则健康空闲
@@ -146,10 +153,11 @@ export async function streamSessionMessageEvents(
           if (!frame.id) throw new Error("SSE 消息流缺少 event_seq id 行");
           const event = validateMessageStreamEvent(decodeJsonSseData(data, frame));
           if (event.session_id !== sessionId || event.turn_id !== turnId
-            || (frozenThreadId && event.thread_id !== frozenThreadId)) {
+            || event.thread_id !== targetThreadId
+            || (frozenStreamId && event.turn_stream_id !== frozenStreamId)) {
             throw new Error("消息流事件 owner 与冻结请求不一致");
           }
-          frozenThreadId = event.thread_id;
+          frozenStreamId = event.turn_stream_id;
           const frameEventSeq = Number(frame.id);
           if (!Number.isSafeInteger(frameEventSeq) || frameEventSeq < 0) {
             throw new Error(`SSE 消息流 id 必须是非负整数: ${frame.id}`);

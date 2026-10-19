@@ -20,6 +20,7 @@ from app.abstractions.turn_terminal_status import (
 from app.core.bounded_json import bound_json_value
 from app.core.identifier import create_prefixed_id
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
+from app.core.session_catalog_store import validate_thread_id
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.domain.message_stream.errors import MessageStreamError
 from app.domain.message_stream.projection import (
@@ -741,12 +742,13 @@ class MessageStreamStore:
                 os.fsync(stream.fileno())
             temp_path.replace(path)
 
-    def _write_index(self, session_id: str, mapping: Mapping[str, str]) -> None:
+    def _write_index(self, session_id: str, mapping: Mapping[str, dict[str, str]]) -> None:
         index_path = self._index_path(session_id)
         index_path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = index_path.with_suffix(".tmp")
         with temp_path.open("w", encoding="utf-8") as stream:
-            json.dump(dict(mapping), stream, ensure_ascii=False, separators=(",", ":"))
+            json.dump({"format_version": 2, "threads": dict(mapping)}, stream,
+                      ensure_ascii=False, separators=(",", ":"))
             stream.flush()
             os.fsync(stream.fileno())
         temp_path.replace(index_path)
@@ -853,17 +855,25 @@ class MessageStreamStore:
             or event_seq % MESSAGE_STREAM_SNAPSHOT_INTERVAL_EVENTS == 0
         )
 
-    def _read_index(self, session_id: str) -> dict[str, str]:
+    def _read_index(self, session_id: str) -> dict[str, dict[str, str]]:
         path = self._index_path(session_id)
         if not path.is_file():
             return {}
         raw = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict):
-            raise MessageStreamError(f"消息流索引必须是对象: path={path}")
-        return {
-            str(turn_id): str(turn_stream_id)
-            for turn_id, turn_stream_id in raw.items()
-        }
+        if not isinstance(raw, dict) or raw.get("format_version") != 2:
+            raise MessageStreamError(f"消息流索引格式不兼容，需要显式 thread 索引: path={path}")
+        threads = raw.get("threads")
+        if not isinstance(threads, dict):
+            raise MessageStreamError(f"消息流索引 threads 必须是对象: path={path}")
+        for thread_id, turns in threads.items():
+            validate_thread_id(thread_id)
+            if not isinstance(turns, dict) or any(
+                not isinstance(turn_id, str) or not turn_id
+                or not isinstance(stream_id, str) or not stream_id
+                for turn_id, stream_id in turns.items()
+            ):
+                raise MessageStreamError(f"消息流 thread 索引损坏: path={path} thread_id={thread_id}")
+        return threads
 
     def _load_state(self, session_id: str, turn_stream_id: str) -> dict[str, Any]:
         cached = self._states.get(turn_stream_id)
@@ -984,10 +994,11 @@ class MessageStreamStore:
         turn_stream_id: str | None = None,
         job_id: str | None = None,
     ) -> MessageStreamWriter:
+        validate_thread_id(thread_id)
         self._path_resolver.resolve_thread_node(session_id, thread_id)
         async with self._index_lock_for(session_id):
             index = self._read_index(session_id)
-            resolved_stream_id = turn_stream_id or index.get(turn_id)
+            resolved_stream_id = turn_stream_id or index.get(thread_id, {}).get(turn_id)
             if resolved_stream_id is None:
                 resolved_stream_id = create_prefixed_id("strm")
                 state = self._empty_state(
@@ -998,7 +1009,7 @@ class MessageStreamStore:
                     job_id=job_id,
                 )
                 self._states[resolved_stream_id] = state
-                index[turn_id] = resolved_stream_id
+                index.setdefault(thread_id, {})[turn_id] = resolved_stream_id
                 self._write_index(session_id, index)
                 writer = MessageStreamWriter(
                     self,
@@ -1011,7 +1022,7 @@ class MessageStreamStore:
                 await writer.commit("stream.opened", {"status": "open"})
                 return writer
         state = self._load_state(session_id, resolved_stream_id)
-        if state["turn_id"] != turn_id or state["session_id"] != session_id or (thread_id is not None and state["thread_id"] != thread_id):
+        if (state["session_id"], state["thread_id"], state["turn_id"]) != (session_id, thread_id, turn_id):
             raise MessageStreamError(
                 "消息流关联键不匹配: "
                 "turn_stream_id="
@@ -1030,20 +1041,22 @@ class MessageStreamStore:
         self,
         *,
         session_id: str,
-        thread_id: str | None = None,
+        thread_id: str,
         turn_id: str,
         turn_stream_id: str | None = None,
     ) -> MessageStreamWriter:
         """只读取已持久化的消息流，不为历史查询创建空流。"""
+        validate_thread_id(thread_id)
+        self._path_resolver.resolve_thread_node(session_id, thread_id)
         async with self._index_lock_for(session_id):
             index = self._read_index(session_id)
-            resolved_stream_id = turn_stream_id or index.get(turn_id)
+            resolved_stream_id = turn_stream_id or index.get(thread_id, {}).get(turn_id)
         if resolved_stream_id is None:
             raise MessageStreamNotFoundError(
                 f"消息流不存在: session_id={session_id} turn_id={turn_id}"
             )
         state = self._load_state(session_id, resolved_stream_id)
-        if state["turn_id"] != turn_id or state["session_id"] != session_id or (thread_id is not None and state["thread_id"] != thread_id):
+        if (state["session_id"], state["thread_id"], state["turn_id"]) != (session_id, thread_id, turn_id):
             raise MessageStreamError(
                 "消息流关联键不匹配: "
                 "turn_stream_id="
@@ -1052,7 +1065,7 @@ class MessageStreamStore:
         return MessageStreamWriter(
             self,
             session_id=session_id,
-            thread_id=str(state["thread_id"]),
+            thread_id=thread_id,
             turn_id=turn_id,
             turn_stream_id=resolved_stream_id,
             job_id=state.get("job_id"),
@@ -1062,14 +1075,17 @@ class MessageStreamStore:
         self,
         *,
         session_id: str,
+        thread_id: str,
         turn_ids: list[str],
     ) -> dict[str, str]:
         """返回已持久化的 TurnStream，不为缺少 message.v1 的历史创建空流。"""
+        validate_thread_id(thread_id)
+        self._path_resolver.resolve_thread_node(session_id, thread_id)
         async with self._index_lock_for(session_id):
             index = self._read_index(session_id)
         result: dict[str, str] = {}
         for turn_id in turn_ids:
-            turn_stream_id = index.get(turn_id)
+            turn_stream_id = index.get(thread_id, {}).get(turn_id)
             if turn_stream_id is None:
                 continue
             # availability 只回答“索引指向的持久化流是否存在”，不能为了四个
@@ -1479,8 +1495,9 @@ class MessageStreamStore:
         terminal_status_writer: TurnTerminalStatusWriter,
     ) -> int:
         """先持久化原 attempt 的真实终态，再闭合它的消息流镜像。"""
+        validate_thread_id(thread_id)
         reconciled = 0
-        for turn_id, stream_id in self._read_index(session_id).items():
+        for turn_id, stream_id in self._read_index(session_id).get(thread_id, {}).items():
             state = self._load_state(session_id, stream_id)
             if state.get("job_id") != job_id:
                 continue

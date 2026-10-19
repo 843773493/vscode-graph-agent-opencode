@@ -156,6 +156,21 @@ class RolloutLangGraphCheckpointMixin:
         before: RunnableConfig | None = None,
         limit: int | None = None,
     ) -> Iterator[CheckpointTuple]:
+        owners, checkpoint_ns = self._checkpoint_list_owners(config, before=before)
+        yielded = 0
+        for owner in owners:
+            for item in self._list_owner_checkpoint_tuples(
+                owner, checkpoint_ns, filter=filter, before=before, limit=limit,
+            ):
+                yield item
+                yielded += 1
+                if limit is not None and yielded >= limit:
+                    return
+
+    def _checkpoint_list_owners(
+        self, config: RunnableConfig | None, *, before: RunnableConfig | None,
+    ) -> tuple[tuple[MutationIntentOwner, ...], str | None]:
+        """同步与异步 list 共用真实 owner 解析和 before 约束。"""
         if config is not None:
             thread_id, checkpoint_ns = _checkpoint_identity(config)
             if before is not None and _checkpoint_identity(before) != (
@@ -175,32 +190,36 @@ class RolloutLangGraphCheckpointMixin:
                 )
                 for session_id in self._storage.forks.list_thread_ids()
             )
+        return owners, checkpoint_ns
+
+    def _list_owner_checkpoint_tuples(
+        self, owner: MutationIntentOwner, checkpoint_ns: str | None, *,
+        filter: dict[str, Any] | None, before: RunnableConfig | None,
+        limit: int | None,
+    ) -> Iterator[CheckpointTuple]:
+        """在调用方选定的同步或异步准入内复用同一枚举与 materialize 链路。"""
         before_id = get_checkpoint_id(before) if before is not None else None
-        yielded = 0
-        for owner in owners:
-            indexes = self._storage.checkpoints.list_checkpoints(
-                owner.session_id,
-                owner.thread_id,
-                checkpoint_ns,
-                before_checkpoint_id=before_id,
-                limit=limit,
-            )
-            for index in indexes:
-                metadata = self._decode_metadata(index)
-                if filter and not all(
-                    metadata.get(key) == value for key, value in filter.items()
-                ):
-                    continue
-                with session_thread_owner_scope(
-                    owner,
-                    langgraph_thread_id=owner.thread_id,
-                ):
-                    yield self._tuple_from_index(
-                        owner.session_id, owner.thread_id, index
-                    )
-                yielded += 1
-                if limit is not None and yielded >= limit:
-                    return
+        indexes = self._storage.checkpoints.list_checkpoints(
+            owner.session_id,
+            owner.thread_id,
+            checkpoint_ns,
+            before_checkpoint_id=before_id,
+            limit=limit,
+        )
+        for index in indexes:
+            metadata = self._decode_metadata(index)
+            if filter and not all(
+                metadata.get(key) == value for key, value in filter.items()
+            ):
+                continue
+            with session_thread_owner_scope(
+                owner,
+                langgraph_thread_id=owner.thread_id,
+            ):
+                item = self._tuple_from_index(
+                    owner.session_id, owner.thread_id, index
+                )
+            yield item
 
     def put(
         self,

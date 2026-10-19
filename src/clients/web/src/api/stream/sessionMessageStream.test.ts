@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, jest, test } from "bun:test";
 
 import { SSE_IDLE_TIMEOUT_MS } from "../../sse/sseIdleTimeout";
-import { streamSessionMessageEvents } from "./sessionMessageStream";
+import { getSessionMessageStreamSnapshot, streamSessionMessageEvents } from "./sessionMessageStream";
 
 const originalFetch = globalThis.fetch;
 
@@ -70,6 +70,52 @@ function messageBlock(frameId: string, eventSeq: number): string {
 }
 
 describe("Turn 消息流空闲超时", () => {
+  test("首次 SSE 已携权威 thread，首帧为 sibling 时不能反填请求 owner", async () => {
+    const port = 49_881;
+    const threadId = "thr_00000000400070008000000000000003";
+    const requests: string[] = [];
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL): Promise<Response> => {
+      const url = String(input);
+      if (url.includes("/auth/local-credential")) {
+        return Response.json({ data: { token: "thread-first-frame" }, request_id: "req_thread" });
+      }
+      requests.push(url);
+      return streamResponse([messageBlock("1", 1)]);
+    }, { preconnect: originalFetch.preconnect });
+    const events: unknown[] = [];
+    await expect(streamSessionMessageEvents(port, "ses_message_test", "turn_message_test", {
+      threadId, onEvent: (event) => events.push(event),
+    })).rejects.toThrow("owner 与冻结请求不一致");
+    expect(requests).toHaveLength(1);
+    expect(new URL(requests[0]!, "http://localhost").searchParams.get("thread_id")).toBe(threadId);
+    expect(events).toEqual([]);
+  });
+
+  test("首个快照请求也冻结 thread，响应 sibling owner 明确拒绝", async () => {
+    const threadId = "thr_requested";
+    const requests: string[] = [];
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL): Promise<Response> => {
+      const url = String(input);
+      if (url.includes("/auth/local-credential")) {
+        return Response.json({ data: { token: "thread-snapshot" }, request_id: "req_thread" });
+      }
+      if (url.includes("/users/current")) {
+        return Response.json({ data: { kind: "guest", user_id: null }, request_id: "req_thread" });
+      }
+      requests.push(url);
+      return Response.json({ request_id: "req_snapshot", data: {
+        session_id: "ses_message_test", thread_id: "thr_sibling", turn_id: "turn_message_test",
+        turn_stream_id: "stream_message_test", snapshot_seq: 1, stream_status: "open",
+        agent_loop_status: "running", current_attempt: 1, resumable: true,
+        blocks: [], tool_executions: [], tool_calls: [], model_calls: [], activities: [], resource_refs: [],
+      }});
+    }, { preconnect: originalFetch.preconnect });
+    await expect(getSessionMessageStreamSnapshot(49_882, "ses_message_test", "turn_message_test", { threadId }))
+      .rejects.toThrow("owner 与请求不一致");
+    expect(requests).toHaveLength(1);
+    expect(new URL(requests[0]!, "http://localhost").searchParams.get("thread_id")).toBe(threadId);
+  });
+
   test("阈值必须严格大于服务端 15s 心跳间隔", () => {
     // 小于心跳间隔会把健康空闲流误判断线；该断言把口径钉死在代码里。
     expect(SSE_IDLE_TIMEOUT_MS).toBeGreaterThan(15_000);
@@ -88,7 +134,7 @@ describe("Turn 消息流空闲超时", () => {
       sseInit(),
     ));
     jest.useFakeTimers();
-    const pending = streamSessionMessageEvents(port, "ses_idle", "turn_idle", {});
+    const pending = streamSessionMessageEvents(port, "ses_idle", "turn_idle", { threadId: "thr_00000000400070008000000000000002",});
     // 不 await 这个 promise：若超时丢失它会永不 settle，await 会让用例挂死而
     // 不是给出清晰的红色断言。改为轮询其终态，把「挂起」本身变成失败。
     // 用对象承载终态：直接断言裸变量会被 bun 的 toBeNull 断言签名收窄类型。
@@ -134,7 +180,7 @@ describe("Turn 消息流空闲超时", () => {
     ));
     jest.useFakeTimers();
     let activityCount = 0;
-    const pending = streamSessionMessageEvents(port, "ses_hb", "turn_hb", {
+    const pending = streamSessionMessageEvents(port, "ses_hb", "turn_hb", { threadId: "thr_00000000400070008000000000000002",
       onActivity: () => {
         activityCount += 1;
       },
@@ -177,7 +223,7 @@ describe("Turn 消息流空闲超时", () => {
     jest.useFakeTimers();
     let activityCount = 0;
     const received: unknown[] = [];
-    const pending = streamSessionMessageEvents(port, "ses_live", "turn_live", {
+    const pending = streamSessionMessageEvents(port, "ses_live", "turn_live", { threadId: "thr_00000000400070008000000000000002",
       onActivity: () => {
         activityCount += 1;
       },
@@ -211,7 +257,7 @@ describe("Turn 消息流 SSE 序号校验", () => {
     const received: number[] = [];
     installStreamBackend(port, () => streamResponse([messageBlock("1", 1)]));
 
-    await streamSessionMessageEvents(port, "ses_message_test", "turn_message_test", {
+    await streamSessionMessageEvents(port, "ses_message_test", "turn_message_test", { threadId: "thr_00000000400070008000000000000002",
       onEvent: (event) => received.push(event.event_seq),
     });
 
@@ -223,7 +269,7 @@ describe("Turn 消息流 SSE 序号校验", () => {
     installStreamBackend(port, () => streamResponse([messageBlock("not-a-seq", 1)]));
 
     await expect(
-      streamSessionMessageEvents(port, "ses_message_test", "turn_message_test"),
+      streamSessionMessageEvents(port, "ses_message_test", "turn_message_test", { threadId: "thr_00000000400070008000000000000002" }),
     ).rejects.toThrow("SSE 消息流 id 必须是非负整数");
   });
 
@@ -232,7 +278,7 @@ describe("Turn 消息流 SSE 序号校验", () => {
     installStreamBackend(port, () => streamResponse([messageBlock("-1", 1)]));
 
     await expect(
-      streamSessionMessageEvents(port, "ses_message_test", "turn_message_test"),
+      streamSessionMessageEvents(port, "ses_message_test", "turn_message_test", { threadId: "thr_00000000400070008000000000000002" }),
     ).rejects.toThrow("SSE 消息流 id 必须是非负整数");
   });
 
@@ -241,7 +287,7 @@ describe("Turn 消息流 SSE 序号校验", () => {
     installStreamBackend(port, () => streamResponse([messageBlock("2", 1)]));
 
     await expect(
-      streamSessionMessageEvents(port, "ses_message_test", "turn_message_test"),
+      streamSessionMessageEvents(port, "ses_message_test", "turn_message_test", { threadId: "thr_00000000400070008000000000000002" }),
     ).rejects.toThrow("SSE 消息流 id 与 event_seq 不一致");
   });
 
@@ -253,7 +299,7 @@ describe("Turn 消息流 SSE 序号校验", () => {
     );
 
     await expect(
-      streamSessionMessageEvents(port, "ses_message_test", "turn_message_test"),
+      streamSessionMessageEvents(port, "ses_message_test", "turn_message_test", { threadId: "thr_00000000400070008000000000000002" }),
     ).rejects.toThrow("SSE 消息流重复 event_seq: 1");
   });
 });

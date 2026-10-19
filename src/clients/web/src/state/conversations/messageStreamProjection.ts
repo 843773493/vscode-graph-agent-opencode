@@ -74,6 +74,7 @@ export function applyMessageStreamProjection(
     const streamCandidates = [...streams.values()].filter((candidate) =>
       candidate.sessionCacheKey === sessionCacheKey
       && candidate.sessionId === conversation.sessionId
+      && candidate.threadId === conversation.threadId
       && candidate.turnId === conversation.turnId,
     );
     const stream = streamCandidates.sort((left, right) =>
@@ -170,21 +171,19 @@ export function messageStreamTurnIdForSession(
   const pending = state.pendingConversations.get(sessionCacheKey) ?? [];
   const timeline = state.turnTimelinesBySession?.get(sessionCacheKey);
   if (activeJobId) {
-    const activePending = pending.find((conversation) => conversation.jobId === activeJobId);
+    const activePending = pending.find((conversation) => conversation.jobId === activeJobId
+      && conversation.threadId === (timeline?.threadId ?? state.currentSession?.thread_id));
     if (activePending?.turnId) return activePending.turnId;
     const activeTurn = Object.values(timeline?.turnsById ?? {}).find((turn) => turn.job_id === activeJobId);
     return activeTurn?.turn_id ?? null;
   }
 
-  const pendingTurnIds = new Set(
-    pending.map((conversation) => conversation.turnId)
-      .filter((turnId): turnId is string => Boolean(turnId)),
-  );
   const candidate = [...(state.messageStreamsByTurnStream ?? new Map()).values()]
     .filter((stream) =>
       stream.sessionCacheKey === sessionCacheKey
       && stream.sessionId === sessionId
-      && pendingTurnIds.has(stream.turnId)
+      && pending.some((conversation) => conversation.turnId === stream.turnId
+        && conversation.threadId === stream.threadId)
       && !["completed", "interrupted", "failed"].includes(stream.streamStatus),
     )
     .sort((left, right) => right.lastEventSeq - left.lastEventSeq)[0];

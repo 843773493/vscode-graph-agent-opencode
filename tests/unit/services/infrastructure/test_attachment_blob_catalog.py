@@ -130,7 +130,8 @@ def fork_capture(tmp_path: Path, session_bundle_factory):
         fork_id="2" * 32, materialization_id="3" * 32,
         request_json=json.dumps({"resources": [], "creation_kind": "new_session_main",
                                  "target_main_thread_id": resolver.main_thread_id(SESSION_B),
-                                 "source_storage_domain_id": "test-workspace", "target_storage_domain_id": "test-workspace"}),
+                                 "source_storage_domain_id": resolver.catalog_store.get_node(SESSION_A).workspace_id,
+                                 "target_storage_domain_id": resolver.catalog_store.get_node(SESSION_B).workspace_id}),
         preimage_hash="4" * 64, state="preparing",
         snapshot_sha256=None, marker_sha256=None, abort_reason=None,
     )
@@ -470,7 +471,7 @@ async def test_fork_projects_generated_attachment_blocks_without_mutating_user_t
     ref = (await store.persist_inline(SESSION_A, [_attach("input", content_type, buffer.getvalue() if content_type == "image/png" else b"fork input")], thread_id=record.source_thread_id))[0]
     user_text = "用户文字中的 URI 必须保持原样 " + ref.file_id
     built = UserContentBuilder(attachment_service=AttachmentContentService(workspace_root=tmp_path, attachment_store=store)).build(user_text, [ref])
-    snapshots = store.capture_fork_attachments(record, references=((ref.file_id, True),))
+    snapshots = store.capture_fork_attachments(record, same_storage_owner=True, references=((ref.file_id, True),))
     captured = snapshots[0]
     await store.reserve_copy_attachments(record, None, snapshots)
     assert store.project_attachment(SESSION_B, record.target_thread_id, ref.file_id)["availability"] == "unavailable"
@@ -506,11 +507,11 @@ async def test_fork_attachment_missing_bytes_respects_required(fork_capture, req
     path.unlink()
     if required:
         with pytest.raises(FileNotFoundError):
-            store.capture_fork_attachments(record, references=((ref.file_id, True),))
+            store.capture_fork_attachments(record, same_storage_owner=True, references=((ref.file_id, True),))
         assert store._catalog.fork_attachment_claim_ids(record.copy_operation_id) == ()
         assert store.project_attachment(SESSION_B, record.target_thread_id, ref.file_id) == {"file_id": ref.file_id, "availability": "unavailable"}
     else:
-        snapshots = store.capture_fork_attachments(record, references=((ref.file_id, False),))
+        snapshots = store.capture_fork_attachments(record, same_storage_owner=True, references=((ref.file_id, False),))
         assert len(snapshots) == 1
         assert snapshots[0].availability == "unavailable"
         assert snapshots[0].claim_id is None
@@ -522,6 +523,19 @@ async def test_fork_attachment_missing_bytes_respects_required(fork_capture, req
         assert all(json.loads(row[1])["availability"] == "unavailable" for row in mappings)
     assert store._catalog.get_owner_ref(attachment_id) == source
     assert store._catalog.get_blob(source.blob_id) == blob
+
+
+@pytest.mark.asyncio
+async def test_fork_attachment_same_domain_different_owner_rejects_before_claim(fork_capture) -> None:
+    store, record = fork_capture
+    ref = (await store.persist_inline(SESSION_A, [_attach("owner.txt", "text/plain", b"same-domain")], thread_id=record.source_thread_id))[0]
+    source = store._catalog.get_owner_ref(parse_logical_file_id(SESSION_A, ref.file_id))
+    with pytest.raises(ValueError, match="fork_owner_overlap"):
+        store.capture_fork_attachments(record, references=((ref.file_id, True),), same_storage_owner=False)
+    assert store._catalog.fork_attachment_claim_ids(record.copy_operation_id) == ()
+    assert store._catalog.fork_attachment_snapshots(record.copy_operation_id, target_session_id=record.target_session_id,
+                                                  target_thread_id=record.target_thread_id) == ()
+    assert store._catalog.get_owner_ref(source.attachment_id) == source
 
 
 @pytest.mark.asyncio
@@ -540,7 +554,7 @@ async def test_optional_fork_attachment_damage_is_not_unavailable(fork_capture, 
         path.symlink_to(path.with_name("missing-body"))
         error = "符号链接"
     with pytest.raises(RuntimeError, match=error):
-        store.capture_fork_attachments(record, references=((ref.file_id, False),))
+        store.capture_fork_attachments(record, same_storage_owner=True, references=((ref.file_id, False),))
     assert store._catalog.fork_attachment_claim_ids(record.copy_operation_id) == ()
     assert store.project_attachment(SESSION_B, record.target_thread_id, ref.file_id) == {"file_id": ref.file_id, "availability": "unavailable"}
 
@@ -561,12 +575,12 @@ async def test_fork_attachment_same_length_damage_never_reuses_stat_cache(fork_c
     path = resolve_blob_path(store._attachments_root, blob.relative_locator)
     metadata = path.stat()
     if warm:
-        store.capture_fork_attachments(record, references=((ref.file_id, True),))
+        store.capture_fork_attachments(record, same_storage_owner=True, references=((ref.file_id, True),))
     claims = store._catalog.fork_attachment_claim_ids(record.copy_operation_id)
     path.write_bytes(b"bad-bytes")
     os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
     with pytest.raises(RuntimeError, match="hash/length"):
-        store.capture_fork_attachments(record, references=((ref.file_id, True),))
+        store.capture_fork_attachments(record, same_storage_owner=True, references=((ref.file_id, True),))
     assert store._catalog.fork_attachment_claim_ids(record.copy_operation_id) == claims
     assert store._catalog.get_owner_ref(source.attachment_id) == source
     assert store._catalog.get_blob(blob.blob_id) == blob

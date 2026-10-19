@@ -39,7 +39,7 @@ from app.core.session_catalog_store.validators import (
     validate_thread_id,
 )
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
-from app.core.session_control_store import SessionControlStore
+from app.core.session_control_store import SessionControlStore, ThreadCreationRecord
 
 
 class CreationJournalMixin:
@@ -243,42 +243,51 @@ class CreationJournalMixin:
                 raise RuntimeError("fork source capture 终态 CAS 冲突")
             connection.execute("UPDATE fork_source_captures SET state = ?, abort_reason = ? WHERE copy_operation_id = ?", (state, reason, copy_operation_id))
 
-    def abort_unpublished_fork_capture(self, copy_operation_id: str, *, reason: str, child_creation_preimage_hash: str | None = None) -> None:
+    def abort_unpublished_fork_capture(
+        self, capture: ForkSourceCaptureRecord, *, creation: SessionCreationRecord | ThreadCreationRecord, reason: str,
+    ) -> None:
         """调用方持有目标 gate；先关闭 child 控制库，再提交 workspace 事务。"""
-        capture = self.get_fork_source_capture(copy_operation_id=copy_operation_id)
-        if capture is None or capture.creation_key is None:
+        if capture.creation_key is None:
             raise RuntimeError("fork abort 缺少 prepared creation capability")
         request = json.loads(capture.request_json)
+        if (capture.copy_operation_id != capture.creation_key
+            or hashlib.sha256(capture.request_json.encode()).hexdigest() != capture.preimage_hash):
+            raise RuntimeError("fork abort 的 capture operation/preimage 与原创建 owner 冲突")
         child_owner = None
-        if request["creation_kind"] == "new_child_thread":
-            if not child_creation_preimage_hash or request["creation_preimage_hash"] != child_creation_preimage_hash:
-                raise RuntimeError("fork child abort 缺少原 creation preimage")
+        if isinstance(creation, ThreadCreationRecord):
+            if (request["creation_kind"], capture.creation_key, capture.target_thread_id,
+                request["creation_preimage_hash"], creation.purpose, creation.state) != (
+                "new_child_thread", creation.thread_creation_idempotency_key, creation.child_thread_id,
+                creation.preimage_hash, "fork", "preparing",
+            ):
+                raise RuntimeError("fork child abort 与原 creation owner 冲突")
             child_owner = self.get_node(capture.target_session_id)
             if child_owner.kind != "session" or child_owner.state not in {"active", "deleting"}:
                 raise RuntimeError("fork child abort 的 owner Session 已隔离或丢失")
             control = SessionControlStore(self.resolve_session_locator(child_owner.storage_relative_locator) / CONTROL_DATABASE_NAME, read_only=True)
             try:
-                creation = control.get_thread_creation_record(capture.creation_key)
-                if (creation.purpose, creation.state, creation.child_thread_id, creation.preimage_hash) != (
-                    "fork", "preparing", capture.target_thread_id, child_creation_preimage_hash,
-                ):
+                if control.get_thread_creation_record(capture.creation_key) != creation:
                     raise RuntimeError("fork child target 已发布/终结或创建 owner 冲突，禁止 capture abort")
             finally:
                 control.close()
         with self.write_transaction() as connection:
-            row = connection.execute("SELECT creation_key,request_json,target_session_id FROM fork_source_captures WHERE copy_operation_id = ?", (copy_operation_id,)).fetchone()
-            if row is None or tuple(row) != (capture.creation_key, capture.request_json, capture.target_session_id):
+            row = connection.execute("SELECT * FROM fork_source_captures WHERE copy_operation_id = ?", (capture.copy_operation_id,)).fetchone()
+            if row is None or self._fork_capture_from_row(row) != capture:
                 raise RuntimeError("fork abort 的冻结 capture 已变化")
             if child_owner is not None:
-                target = self._require_node(connection, row[2])
+                target = self._require_node(connection, row["target_session_id"])
                 if (target["kind"] != "session" or target["state"] not in {"active", "deleting"}
                     or target["storage_relative_locator"] != child_owner.storage_relative_locator):
                     raise RuntimeError("fork child abort 的 owner Session 已隔离或丢失")
             else:
-                creation = self._fetch_creation_record(connection, row[0])
-                if creation is None or creation["state"] != "preparing":
-                    raise RuntimeError("fork target 已发布/终结，禁止 capture abort")
-            connection.execute("UPDATE fork_source_captures SET state = 'aborted', abort_reason = ? WHERE copy_operation_id = ?", (reason, copy_operation_id))
+                current = self._fetch_creation_record(connection, row["creation_key"])
+                if (not isinstance(creation, SessionCreationRecord) or current is None
+                    or self._creation_record_from_row(current) != creation or request["creation_kind"] != "new_session_main"
+                    or (creation.purpose, creation.state, creation.session_id, creation.main_thread_id, creation.preimage_hash) != (
+                        "context_fork", "preparing", capture.target_session_id, capture.target_thread_id, request["creation_preimage_hash"],
+                    )):
+                    raise RuntimeError("fork target 已发布/终结或创建 owner 冲突，禁止 capture abort")
+            connection.execute("UPDATE fork_source_captures SET state = 'aborted', abort_reason = ? WHERE copy_operation_id = ?", (reason, capture.copy_operation_id))
 
     @staticmethod
     def _fetch_creation_record(

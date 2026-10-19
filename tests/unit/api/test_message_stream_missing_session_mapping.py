@@ -25,11 +25,11 @@ NOT_FOUND = NotFoundError(f"Session {MISSING} not found")
 class _MissingSessionStore:
     """MessageStreamStore 只实现本测试触及的入口，均按会话缺失失败。"""
 
-    async def existing_stream_ids(self, *, session_id: str, turn_ids: list[str]):
+    async def existing_stream_ids(self, *, session_id: str, thread_id: str, turn_ids: list[str]):
         raise CATALOG_KEY_ERROR
 
     async def open_existing(
-        self, *, session_id: str, turn_id: str, turn_stream_id=None, thread_id=None
+        self, *, session_id: str, thread_id: str, turn_id: str, turn_stream_id=None
     ):
         raise CATALOG_KEY_ERROR
 
@@ -72,6 +72,7 @@ async def test_message_stream_availability_maps_missing_session_to_404() -> None
         await message_stream_api.get_message_stream_availability(
             MISSING,
             turn_ids=["turn_x"],
+            thread_id="thr_00000000400070008000000000000002",
             _="local",
             request_id="req",
             store=_MissingSessionStore(),
@@ -89,6 +90,7 @@ async def test_stream_message_events_maps_missing_session_to_404() -> None:
             "turn_x",
             _request_stub(),
             turn_stream_id=None,
+            thread_id="thr_00000000400070008000000000000002",
             after_seq=None,
             last_event_id=None,
             _="local",
@@ -107,6 +109,7 @@ async def test_message_stream_snapshot_maps_missing_session_to_404() -> None:
             MISSING,
             "turn_x",
             turn_stream_id=None,
+            thread_id="thr_00000000400070008000000000000002",
             _="local",
             request_id="req",
             store=_MissingSessionStore(),
@@ -123,6 +126,7 @@ async def test_list_message_stream_events_maps_missing_session_to_404() -> None:
             MISSING,
             "turn_x",
             turn_stream_id=None,
+            thread_id="thr_00000000400070008000000000000002",
             after_seq=0,
             limit=100,
             _="local",

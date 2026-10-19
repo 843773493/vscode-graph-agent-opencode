@@ -23,7 +23,7 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
 
 
 class RolloutLangGraphAsyncMixin:
-    """仅把同步 Saver port 放入线程，不复制 checkpoint 业务规则。"""
+    """异步等待 Saver port 的真实准入，不复制 checkpoint 业务规则。"""
 
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         return await asyncio.to_thread(self.get_tuple, config)
@@ -41,8 +41,24 @@ class RolloutLangGraphAsyncMixin:
         before: RunnableConfig | None = None,
         limit: int | None = None,
     ) -> AsyncIterator[CheckpointTuple]:
-        for item in self.list(config, filter=filter, before=before, limit=limit):
-            yield item
+        owners, checkpoint_ns = self._checkpoint_list_owners(config, before=before)
+        yielded = 0
+        for owner in owners:
+            items = self._list_owner_checkpoint_tuples(
+                owner, checkpoint_ns, filter=filter, before=before, limit=limit,
+            )
+            while True:
+                async with self._context_reader.read_lease(
+                    owner.session_id, owner.thread_id, checkpoint_ns or "",
+                    allow_unmaterialized=True,
+                ):
+                    item = next(items, None)
+                if item is None:
+                    break
+                yield item
+                yielded += 1
+                if limit is not None and yielded >= limit:
+                    return
 
     async def aput(
         self,

@@ -564,8 +564,8 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
     initial.sessionAttachmentSummaries.set(deletedKey, { count: 1, names: ["删除.txt"], latestAt: null });
     initial.sessionAttachmentSummaries.set(otherKey, { count: 1, names: ["保留.txt"], latestAt: null });
     initial.messageStreamsByTurnStream = new Map([
-      [`${deletedKey}::strm_same`, createMessageStreamState(sesA.session_id, "turn_same", "strm_same", deletedKey)],
-      [`${otherKey}::strm_same`, createMessageStreamState(sesA.session_id, "turn_same", "strm_same", otherKey)],
+      [`${deletedKey}::strm_same`, createMessageStreamState(sesA.session_id, "turn_same", "strm_same", deletedKey, "thr_00000000400070008000000000000002")],
+      [`${otherKey}::strm_same`, createMessageStreamState(sesA.session_id, "turn_same", "strm_same", otherKey, "thr_00000000400070008000000000000002")],
     ]);
     const { state: readState, actions } = mountLifecycle(sesB, initial);
     await actions.deleteSession(sesA.session_id);

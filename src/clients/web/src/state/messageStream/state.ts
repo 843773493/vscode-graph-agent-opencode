@@ -34,6 +34,7 @@ export function writeMessageStreamCache(
     if (
       existingKey !== key
       && existing.sessionCacheKey === state.sessionCacheKey
+      && existing.threadId === state.threadId
       && existing.turnId === state.turnId
     ) {
       next.delete(existingKey);
@@ -59,12 +60,14 @@ export function createMessageStreamState(
   turnId: string,
   turnStreamId: string,
   sessionCacheKey: string,
+  threadId: string,
 ): MessageStreamState {
+  if (!threadId) throw new Error("消息流状态缺少权威 thread owner");
   return {
     sessionCacheKey,
     workspaceId: null,
     sessionId,
-    threadId: null,
+    threadId,
     turnId,
     turnStreamId,
     lastEventSeq: 0,

@@ -37,14 +37,15 @@ export function sortConversationViews(
 }
 
 function conversationIdentityKey(conversation: ConversationView): string | null {
+  const owner = JSON.stringify([conversation.sessionId, conversation.threadId]);
   const messageId = conversation.userMessage?.message_id ?? "";
   if (messageId) {
-    return `message:${messageId}`;
+    return `${owner}:message:${messageId}`;
   }
 
   const jobId = conversation.jobId ?? "";
   if (jobId) {
-    return `job:${jobId}`;
+    return `${owner}:job:${jobId}`;
   }
 
   return null;
@@ -54,6 +55,7 @@ export function conversationsMatch(
   left: ConversationView,
   right: ConversationView,
 ): boolean {
+  if (left.sessionId !== right.sessionId || left.threadId !== right.threadId) return false;
   const leftMessageId = left.userMessage?.message_id ?? "";
   const rightMessageId = right.userMessage?.message_id ?? "";
   if (leftMessageId && rightMessageId && leftMessageId === rightMessageId) {

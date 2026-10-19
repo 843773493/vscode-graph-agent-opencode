@@ -407,7 +407,7 @@ def test_user_turn_admission_hash_binds_acceptance_payload_without_conflating_ha
     payload = "accepted user payload"
     accepted = saver.accept_turn(
         SESSION_ID,
-        accepted_ingress_id="ingress-user-admission",
+        thread_id=saver._storage.storage.main_thread_id(SESSION_ID), accepted_ingress_id="ingress-user-admission",
         acceptance_idempotency_key="acceptance-user-admission",
         job_id="job-user-admission",
         admission_idempotency_key="admission-user-admission",

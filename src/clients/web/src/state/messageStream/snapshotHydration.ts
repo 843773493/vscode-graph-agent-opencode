@@ -45,7 +45,7 @@ export function applyMessageStreamSnapshot(
 ): MessageStreamState {
   const state = cloneMessageStreamState(current);
   if (state.sessionId !== snapshot.session_id || state.turnId !== snapshot.turn_id
-    || (state.threadId !== null && state.threadId !== snapshot.thread_id)) {
+    || state.threadId !== snapshot.thread_id) {
     return {
       ...state,
       connectionStatus: "gap",
@@ -80,8 +80,7 @@ export function applySnapshotState(
   snapshot: MessageStreamSnapshot,
   identity: MessageStreamSnapshotIdentity,
 ): MessageStreamState {
-  const next = createMessageStreamState(current.sessionId, current.turnId, identity.turn_stream_id, current.sessionCacheKey);
-  next.threadId = identity.thread_id;
+  const next = createMessageStreamState(current.sessionId, current.turnId, identity.turn_stream_id, current.sessionCacheKey, current.threadId);
   next.workspaceId = snapshot.workspace_id ?? identity.workspace_id ?? current.workspaceId;
   next.lastEventSeq = snapshot.snapshot_seq;
   next.streamStatus = snapshot.stream_status;

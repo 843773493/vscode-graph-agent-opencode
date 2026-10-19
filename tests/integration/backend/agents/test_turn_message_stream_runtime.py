@@ -238,7 +238,7 @@ async def test_disconnect_does_not_cancel_background_turn_and_snapshot_recovers(
     assert snapshot["payload"]["blocks"][0]["text"] == "后台继续"
     restarted = MessageStreamStore(path_resolver=resolver)
     recovered_writer = await restarted.open_existing(
-        session_id=session_id,
+        thread_id=restarted._path_resolver.main_thread_id(session_id), session_id=session_id,
         turn_id="job_disconnect",
         turn_stream_id=writer.turn_stream_id,
     )

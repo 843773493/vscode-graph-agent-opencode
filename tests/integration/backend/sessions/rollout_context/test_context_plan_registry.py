@@ -59,7 +59,7 @@ def registry_db(request, session_bundle_factory):
     )
     accepted = saver.accept_turn(
         session_id,
-        accepted_ingress_id="registry-ingress",
+        thread_id=saver._storage.storage.main_thread_id(session_id), accepted_ingress_id="registry-ingress",
         acceptance_idempotency_key="registry-root",
         job_id="registry-job",
         admission_idempotency_key="registry-admission",

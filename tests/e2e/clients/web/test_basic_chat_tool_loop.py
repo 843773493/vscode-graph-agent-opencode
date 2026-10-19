@@ -121,7 +121,7 @@ def section8_browser_temporary_directory(section8_output_root: Path) -> Iterator
 
 @pytest.fixture(scope="module")
 def e2e_workspace_root_path(section8_output_root: Path) -> str:
-    workspace = section8_output_root / "workspace/primary/workspace"
+    workspace = section8_output_root / "workspace/a/workspace"
     reset_gateway_persistent_state(workspace_root=workspace)
     return str(prepare_default_test_workspace(workspace_root=workspace, template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace", shared_skill_root=Path.cwd() / "resources/skills"))
 

@@ -338,7 +338,7 @@ def test_bounded_projection_preserves_original_text_length(
     saver = RolloutCheckpointSaver(rollout.sessions)
     accepted = saver.accept_turn(
         rollout.session_id,
-        accepted_ingress_id="long-text",
+        thread_id=saver._storage.storage.main_thread_id(rollout.session_id), accepted_ingress_id="long-text",
         acceptance_idempotency_key="long-text",
         job_id="long-text-job",
         admission_idempotency_key="long-text-admission",
@@ -387,7 +387,7 @@ def test_nullable_source_revision_uses_stable_canonical_revision(
     saver = RolloutCheckpointSaver(rollout.sessions)
     accepted = saver.accept_turn(
         rollout.session_id,
-        accepted_ingress_id="nullable-source",
+        thread_id=saver._storage.storage.main_thread_id(rollout.session_id), accepted_ingress_id="nullable-source",
         acceptance_idempotency_key="nullable-source",
         job_id="nullable-source-job",
         admission_idempotency_key="nullable-source-admission",

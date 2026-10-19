@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import multiprocessing
 import os
@@ -12,12 +13,12 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
-from types import SimpleNamespace
+from typing import BinaryIO
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.checkpoint.base import empty_checkpoint
+from langgraph.checkpoint.base import CheckpointTuple, empty_checkpoint
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from app.core.checkpoint_config import build_checkpoint_config
@@ -53,6 +54,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
+)
+from app.services.infrastructure.rollout_context.storage import (
+    primitives as rollout_primitives,
 )
 from app.services.infrastructure.rollout_context.storage import (
     schema as storage_version,
@@ -236,6 +240,532 @@ def test_rollout_file_lock_times_out_instead_of_waiting_forever(
         lock.acquire()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX rollout 文件锁准入公平性")
+def test_rollout_file_lock_writer_precedes_later_reader(tmp_path: Path) -> None:
+    """已有 reader 释放后，排队 writer 必须先于新 reader 获准。"""
+    lock_path = tmp_path / ".rollout.write.lock"
+    lock_path.touch()
+    earlier_reader = _RolloutFileLock(
+        lock_path, exclusive=False, timeout_seconds=2,
+    )
+    earlier_reader.acquire()
+
+    admission = earlier_reader._admission
+    assert admission is not None
+    condition = admission._condition
+    original_wait = condition.wait
+    writer_waiting = threading.Event()
+    later_reader_progress = threading.Event()
+    writer_admitted = threading.Event()
+    reader_admitted = threading.Event()
+    release_writer = threading.Event()
+    release_later_reader = threading.Event()
+    admission_order: list[str] = []
+    order_lock = threading.Lock()
+
+    def signal_waiting_thread(timeout: float | None = None) -> bool:
+        name = threading.current_thread().name
+        if name == "rollout-fairness-writer":
+            writer_waiting.set()
+        elif name == "rollout-fairness-later-reader":
+            later_reader_progress.set()
+        return original_wait(timeout)
+
+    condition.wait = signal_waiting_thread
+
+    def acquire_writer() -> None:
+        lock = _RolloutFileLock(lock_path, exclusive=True, timeout_seconds=2)
+        try:
+            lock.acquire()
+            with order_lock:
+                admission_order.append("writer")
+            writer_admitted.set()
+            if not release_writer.wait(timeout=2):
+                raise TimeoutError("测试未及时释放排队 writer")
+        finally:
+            lock.release()
+
+    def acquire_later_reader() -> None:
+        lock = _RolloutFileLock(lock_path, exclusive=False, timeout_seconds=2)
+        try:
+            lock.acquire()
+            with order_lock:
+                admission_order.append("later_reader")
+            reader_admitted.set()
+            later_reader_progress.set()
+            if not release_later_reader.wait(timeout=2):
+                raise TimeoutError("测试未及时释放后续 reader")
+        finally:
+            lock.release()
+
+    writer = threading.Thread(
+        target=acquire_writer, name="rollout-fairness-writer", daemon=True,
+    )
+    reader = threading.Thread(
+        target=acquire_later_reader, name="rollout-fairness-later-reader", daemon=True,
+    )
+    writer.start()
+    try:
+        assert writer_waiting.wait(timeout=1), "writer 未进入锁准入等待"
+        with condition:
+            assert len(admission._queue) == 1, "writer ticket 未留在 FIFO 队列"
+
+        reader.start()
+        assert later_reader_progress.wait(timeout=1), "后续 reader 未开始准入"
+        earlier_reader.release()
+        assert writer_admitted.wait(timeout=1), "已排队 writer 未先获准"
+        assert not reader_admitted.is_set(), "后续 reader 越过排队 writer 获准"
+        release_writer.set()
+        assert reader_admitted.wait(timeout=1), "writer 释放后后续 reader 未获准"
+        with order_lock:
+            assert admission_order == ["writer", "later_reader"]
+    finally:
+        release_writer.set()
+        release_later_reader.set()
+        earlier_reader.release()
+        writer.join(timeout=2)
+        if reader.ident is not None:
+            reader.join(timeout=2)
+        condition.wait = original_wait
+        assert not writer.is_alive(), "writer 测试线程未退出"
+        assert not reader.is_alive(), "reader 测试线程未退出"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX rollout 文件锁跨 facade 协调")
+def test_rollout_file_lock_facades_coordinate_normalized_paths(tmp_path: Path) -> None:
+    """规范路径相同的 FileLock 与 OperationLock 必须共享 FIFO 准入。"""
+    lock_path = tmp_path / ".rollout.write.lock"
+    lock_path.touch()
+    alias_path = lock_path.parent / "." / lock_path.name
+    symlink_parent = tmp_path / "same-directory-alias"
+    symlink_parent.symlink_to(tmp_path, target_is_directory=True)
+    symlink_lock_path = symlink_parent / lock_path.name
+    earlier_reader = _RolloutFileLock(
+        lock_path, exclusive=False, timeout_seconds=2,
+    )
+    earlier_reader.acquire()
+
+    admission = earlier_reader._admission
+    assert admission is not None
+    condition = admission._condition
+    original_wait = condition.wait
+    writer_waiting = threading.Event()
+    later_reader_progress = threading.Event()
+    writer_admitted = threading.Event()
+    reader_admitted = threading.Event()
+    release_writer = threading.Event()
+    release_later_reader = threading.Event()
+    admission_order: list[str] = []
+    order_lock = threading.Lock()
+
+    def signal_waiting_thread(timeout: float | None = None) -> bool:
+        name = threading.current_thread().name
+        if name == "rollout-facade-writer":
+            writer_waiting.set()
+        elif name == "rollout-facade-reader":
+            later_reader_progress.set()
+        return original_wait(timeout)
+
+    condition.wait = signal_waiting_thread
+
+    def acquire_writer() -> None:
+        lock = _RolloutOperationLock(alias_path, timeout_seconds=2)
+        try:
+            with lock:
+                with order_lock:
+                    admission_order.append("operation_writer")
+                writer_admitted.set()
+                if not release_writer.wait(timeout=2):
+                    raise TimeoutError("测试未及时释放跨 facade writer")
+        finally:
+            if lock._held is not None:
+                lock.__exit__(None, None, None)
+
+    def acquire_later_reader() -> None:
+        lock = _RolloutFileLock(symlink_lock_path, exclusive=False, timeout_seconds=2)
+        try:
+            lock.acquire()
+            with order_lock:
+                admission_order.append("later_reader")
+            reader_admitted.set()
+            later_reader_progress.set()
+            if not release_later_reader.wait(timeout=2):
+                raise TimeoutError("测试未及时释放跨 facade reader")
+        finally:
+            lock.release()
+
+    writer = threading.Thread(
+        target=acquire_writer, name="rollout-facade-writer", daemon=True,
+    )
+    reader = threading.Thread(
+        target=acquire_later_reader, name="rollout-facade-reader", daemon=True,
+    )
+    writer.start()
+    try:
+        assert writer_waiting.wait(timeout=1), "OperationLock 未进入同路径准入等待"
+        with condition:
+            assert len(admission._queue) == 1, "跨 facade writer 未进入共享 FIFO 队列"
+
+        reader.start()
+        assert later_reader_progress.wait(timeout=1), "后续 FileLock reader 未开始准入"
+        earlier_reader.release()
+        assert writer_admitted.wait(timeout=1), "同路径 OperationLock writer 未先获准"
+        assert not reader_admitted.is_set(), "后续 FileLock reader 越过 OperationLock writer"
+        release_writer.set()
+        assert reader_admitted.wait(timeout=1), "OperationLock writer 释放后 FileLock reader 未获准"
+        with order_lock:
+            assert admission_order == ["operation_writer", "later_reader"]
+    finally:
+        release_writer.set()
+        release_later_reader.set()
+        earlier_reader.release()
+        writer.join(timeout=2)
+        if reader.ident is not None:
+            reader.join(timeout=2)
+        condition.wait = original_wait
+        assert not writer.is_alive(), "跨 facade writer 测试线程未退出"
+        assert not reader.is_alive(), "跨 facade reader 测试线程未退出"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX rollout 文件锁读者 FIFO 准入")
+def test_rollout_file_lock_queued_reader_precedes_later_writer(tmp_path: Path) -> None:
+    """独占 holder 释放后，先排队的 shared reader 应先于后到 writer。"""
+    lock_path = tmp_path / ".rollout.write.lock"
+    holder = _RolloutFileLock(lock_path, exclusive=True, timeout_seconds=2)
+    holder.acquire()
+
+    admission = holder._admission
+    assert admission is not None
+    condition = admission._condition
+    original_wait = condition.wait
+    reader_waiting = threading.Event()
+    writer_waiting = threading.Event()
+    reader_admitted = threading.Event()
+    writer_admitted = threading.Event()
+    release_reader = threading.Event()
+    release_writer = threading.Event()
+    admission_order: list[str] = []
+    order_lock = threading.Lock()
+
+    def signal_waiting_thread(timeout: float | None = None) -> bool:
+        name = threading.current_thread().name
+        if name == "rollout-fifo-reader":
+            reader_waiting.set()
+        elif name == "rollout-fifo-writer":
+            writer_waiting.set()
+        return original_wait(timeout)
+
+    condition.wait = signal_waiting_thread
+
+    def acquire_reader() -> None:
+        lock = _RolloutFileLock(lock_path, exclusive=False, timeout_seconds=2)
+        try:
+            lock.acquire()
+            with order_lock:
+                admission_order.append("reader")
+            reader_admitted.set()
+            if not release_reader.wait(timeout=2):
+                raise TimeoutError("测试未及时释放先排队 reader")
+        finally:
+            lock.release()
+
+    def acquire_writer() -> None:
+        lock = _RolloutFileLock(lock_path, exclusive=True, timeout_seconds=2)
+        try:
+            lock.acquire()
+            with order_lock:
+                admission_order.append("writer")
+            writer_admitted.set()
+            if not release_writer.wait(timeout=2):
+                raise TimeoutError("测试未及时释放后到 writer")
+        finally:
+            lock.release()
+
+    reader = threading.Thread(
+        target=acquire_reader, name="rollout-fifo-reader", daemon=True,
+    )
+    writer = threading.Thread(
+        target=acquire_writer, name="rollout-fifo-writer", daemon=True,
+    )
+    reader.start()
+    try:
+        assert reader_waiting.wait(timeout=1), "shared reader 未进入锁准入等待"
+        with condition:
+            assert len(admission._queue) == 1, "shared reader ticket 未进入 FIFO 队列"
+
+        writer.start()
+        assert writer_waiting.wait(timeout=1), "后到 writer 未进入锁准入等待"
+        with condition:
+            assert len(admission._queue) == 2, "后到 writer ticket 未排在 reader 之后"
+
+        holder.release()
+        assert reader_admitted.wait(timeout=1), "先排队 shared reader 未先获准"
+        assert not writer_admitted.is_set(), "后到 writer 越过先排队 reader 获准"
+        release_reader.set()
+        assert writer_admitted.wait(timeout=1), "shared reader 释放后 writer 未获准"
+        with order_lock:
+            assert admission_order == ["reader", "writer"]
+    finally:
+        release_reader.set()
+        release_writer.set()
+        holder.release()
+        reader.join(timeout=2)
+        if writer.ident is not None:
+            writer.join(timeout=2)
+        condition.wait = original_wait
+        assert not reader.is_alive(), "FIFO reader 测试线程未退出"
+        assert not writer.is_alive(), "FIFO writer 测试线程未退出"
+
+
+async def _wait_for_rollout_lock_queue(lock: _RolloutFileLock, size: int) -> None:
+    admission = lock._admission
+    assert admission is not None
+    async with asyncio.timeout(2):
+        while True:
+            with admission._condition:
+                if len(admission._queue) == size:
+                    return
+            await asyncio.sleep(0)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX rollout 共享锁的 Task 公平性")
+async def test_rollout_async_reader_waits_behind_queued_thread_writer(tmp_path: Path) -> None:
+    """同 loop 的不同 Task 不能借用前一 reader 的 hold 越过排队 writer。"""
+    path = tmp_path / ".rollout.write.lock"
+    path.touch()
+    earlier = _RolloutFileLock(path, exclusive=False, timeout_seconds=2)
+    await earlier.acquire_async()
+    writer_ready = threading.Event()
+    release_writer = threading.Event()
+    order: list[str] = []
+
+    def write() -> None:
+        with _RolloutOperationLock(path, timeout_seconds=2):
+            order.append("writer")
+            writer_ready.set()
+            assert release_writer.wait(timeout=2)
+
+    async def read() -> None:
+        async with _RolloutFileLock(path, exclusive=False, timeout_seconds=2):
+            order.append("reader")
+
+    later: asyncio.Task[None] | None = None
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        writer = executor.submit(write)
+        try:
+            await _wait_for_rollout_lock_queue(earlier, 1)
+            later = asyncio.create_task(read())
+            await _wait_for_rollout_lock_queue(earlier, 2)
+            assert not writer_ready.is_set() and not later.done()
+            # 本 Task 能在等待期间继续运行并释放 earlier，证明没有阻塞事件循环。
+            earlier.release()
+            assert await asyncio.to_thread(writer_ready.wait, 1)
+            assert not later.done()
+            release_writer.set()
+            await asyncio.wait_for(later, timeout=2)
+            writer.result(timeout=1)
+            assert order == ["writer", "reader"]
+        finally:
+            earlier.release()
+            release_writer.set()
+            if later is not None:
+                later.cancel()
+                await asyncio.gather(later, return_exceptions=True)
+
+
+async def test_rollout_async_local_cancellation_removes_fifo_ticket(tmp_path: Path) -> None:
+    path = tmp_path / ".rollout.write.lock"
+    async with _RolloutOperationLock(path, timeout_seconds=2) as holder:
+        admission = holder._admission
+        assert admission is not None
+        waiting = _RolloutFileLock(path, exclusive=False, timeout_seconds=2)
+        task = asyncio.create_task(waiting.acquire_async())
+        try:
+            await _wait_for_rollout_lock_queue(holder, 1)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert not admission._queue
+            assert len(admission._holders) == 1
+            assert waiting._held is None
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    async with _RolloutOperationLock(path, timeout_seconds=0.1):
+        pass
+    assert not admission._holders
+
+
+@pytest.mark.skipif(os.name != "posix", reason="真实 flock 等待与文件句柄取消清理")
+async def test_rollout_async_file_cancellation_closes_fd_and_releases_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import fcntl
+
+    path = tmp_path / ".rollout.write.lock"
+    path.touch()
+    opened = asyncio.Event()
+    handles: list[BinaryIO] = []
+    original_open = _RolloutFileLock._open_handle
+
+    def record_open(lock: _RolloutFileLock) -> BinaryIO:
+        handle = original_open(lock)
+        handles.append(handle)
+        opened.set()
+        return handle
+
+    monkeypatch.setattr(_RolloutFileLock, "_open_handle", record_open)
+    with path.open("rb") as external:
+        fcntl.flock(external.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        waiting = _RolloutFileLock(path, exclusive=False, timeout_seconds=2)
+        task = asyncio.create_task(waiting.acquire_async())
+        try:
+            await asyncio.wait_for(opened.wait(), timeout=1)
+            admission = waiting._admission
+            assert admission is not None and len(admission._holders) == 1
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert len(handles) == 1 and handles[0].closed
+            assert not admission._holders and not admission._queue
+            assert waiting._held is None
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    with _RolloutOperationLock(path, timeout_seconds=0.1):
+        pass
+
+
+async def test_rollout_lock_reentry_is_bound_to_current_task(tmp_path: Path) -> None:
+    path = tmp_path / ".rollout.write.lock"
+    operation = _RolloutOperationLock(path, timeout_seconds=2)
+    async with operation:
+        held = operation._held
+        assert held is not None
+        with operation:
+            async with _RolloutFileLock(path, exclusive=False) as reader:
+                assert reader._held is held
+                assert held.depth == 3
+        assert held.depth == 1
+
+        async def reject_synchronous_wait() -> None:
+            with pytest.raises(RuntimeError, match="请使用 acquire_async"):
+                _RolloutFileLock(path, exclusive=False).acquire()
+
+        await asyncio.create_task(reject_synchronous_wait())
+        child = asyncio.create_task(operation.acquire_async())
+        try:
+            await _wait_for_rollout_lock_queue(operation, 1)
+            assert not child.done() and held.depth == 1
+            child.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await child
+        finally:
+            child.cancel()
+            await asyncio.gather(child, return_exceptions=True)
+    async with _RolloutFileLock(path, exclusive=False):
+        with pytest.raises(RuntimeError, match="共享锁不能升级为独占锁"):
+            operation.acquire()
+        with pytest.raises(RuntimeError, match="共享锁不能升级为独占锁"):
+            await operation.acquire_async()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX 本地排队与 flock 共用超时预算")
+def test_rollout_local_and_file_wait_share_one_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import fcntl
+
+    class Clock:
+        now = 100.0
+
+        def monotonic(self) -> float:
+            return self.now
+
+        def sleep(self, delay: float) -> None:
+            self.now += delay
+
+    path = tmp_path / ".rollout.write.lock"
+    path.touch()
+    holder = _RolloutFileLock(path, exclusive=False)
+    holder.acquire()
+    admission = holder._admission
+    assert admission is not None
+    clock = Clock()
+    original_wait = admission._condition.wait
+    queued = threading.Event()
+
+    def signal_wait(timeout: float | None = None) -> bool:
+        queued.set()
+        return original_wait(timeout)
+
+    monkeypatch.setattr(admission._condition, "wait", signal_wait)
+    monkeypatch.setattr(rollout_primitives, "time", clock)
+    with path.open("rb") as external, ThreadPoolExecutor(max_workers=1) as executor:
+        fcntl.flock(external.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+        waiter = _RolloutFileLock(path, exclusive=True, timeout_seconds=1)
+        future = executor.submit(waiter.acquire)
+        try:
+            assert queued.wait(timeout=1)
+            clock.now = 100.6
+            holder.release()
+            with pytest.raises(TimeoutError, match="rollout 文件锁获取超时"):
+                future.result(timeout=1)
+            assert clock.now == pytest.approx(101.0)
+            assert waiter._held is None and not admission._holders
+        finally:
+            holder.release()
+
+
+@pytest.mark.parametrize("wait_mode", ["sync", "async"])
+async def test_rollout_local_admission_rejects_release_after_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wait_mode: str,
+) -> None:
+    """holder 超预算后才唤醒 waiter，连本地准入也不得短暂成功。"""
+    class Clock:
+        now = 100.0
+
+        def monotonic(self) -> float:
+            return self.now
+
+    path = tmp_path / ".rollout.write.lock"
+    holder = _RolloutOperationLock(path, timeout_seconds=2)
+    await holder.acquire_async()
+    admission = holder._admission
+    assert admission is not None
+    original_admit = admission._admit
+    admitted: list[rollout_primitives._RolloutLockHold] = []
+
+    def record_admit(
+        ticket: rollout_primitives._RolloutLockWaiter,
+    ) -> rollout_primitives._RolloutLockHold | None:
+        held = original_admit(ticket)
+        if held is not None:
+            admitted.append(held)
+        return held
+
+    clock = Clock()
+    monkeypatch.setattr(admission, "_admit", record_admit)
+    monkeypatch.setattr(rollout_primitives, "time", clock)
+    waiter = _RolloutOperationLock(path, timeout_seconds=1)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        pending = (asyncio.get_running_loop().run_in_executor(executor, waiter.acquire)
+                   if wait_mode == "sync" else asyncio.create_task(waiter.acquire_async()))
+        try:
+            await _wait_for_rollout_lock_queue(holder, 1)
+            with admission._condition:
+                clock.now = 101.1
+            holder.release()
+            with pytest.raises(TimeoutError, match="stage=local_admission"):
+                await asyncio.wait_for(asyncio.shield(pending), timeout=2)
+            assert admitted == [], "超期 waiter 不得先获准再在 flock 阶段报错"
+            assert waiter._held is None
+            assert not admission._holders and not admission._queue
+        finally:
+            holder.release()
+            await asyncio.gather(pending, return_exceptions=True)
+
+
 def test_rollout_operation_lock_times_out_when_same_process_writer_is_busy(
     tmp_path: Path,
 ) -> None:
@@ -258,25 +788,42 @@ def test_rollout_operation_lock_times_out_when_same_process_writer_is_busy(
             lock.__enter__()
         release_holder.set()
         holder.result(timeout=1)
+        with lock:
+            assert lock._held is not None
 
 
-def test_rollout_operation_lock_releases_thread_lock_when_file_unlock_fails(
+@pytest.mark.skipif(os.name != "posix", reason="POSIX 文件解锁失败的真实句柄验证")
+def test_rollout_operation_lock_releases_admission_when_file_unlock_fails(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    lock = _RolloutOperationLock(tmp_path / ".rollout.write.lock")
-    lock._thread_lock.acquire()
-    lock._depth = 1
+    import fcntl
 
-    def fail_release() -> None:
-        raise OSError("模拟解锁失败")
+    lock_path = tmp_path / ".rollout.write.lock"
+    lock = _RolloutOperationLock(lock_path, timeout_seconds=0.1)
+    lock.acquire()
+    assert lock._held is not None
+    handle = lock._held.handle
+    assert handle is not None
+    original_flock = fcntl.flock
 
-    lock._file_lock = SimpleNamespace(release=fail_release)
+    def fail_unlock(fd: int, operation: int) -> None:
+        if fd == handle.fileno() and operation == fcntl.LOCK_UN:
+            raise OSError("模拟解锁失败")
+        original_flock(fd, operation)
 
-    with pytest.raises(OSError, match="模拟解锁失败"):
-        lock.__exit__(None, None, None)
+    with monkeypatch.context() as patch:
+        patch.setattr(fcntl, "flock", fail_unlock)
+        with pytest.raises(OSError, match="模拟解锁失败"):
+            lock.__exit__(None, None, None)
+    assert handle.closed
 
-    assert lock._thread_lock.acquire(timeout=0.01)
-    lock._thread_lock.release()
+    def acquire_after_failure() -> None:
+        with _RolloutOperationLock(lock_path, timeout_seconds=0.1):
+            pass
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        executor.submit(acquire_after_failure).result(timeout=1)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX 共享文件锁的非阻塞验证")
@@ -302,6 +849,16 @@ def test_read_items_borrows_writer_transaction_and_keeps_file_lock(
         assert len(original_items) == 1
         original_jsonl = storage.jsonl_path(SESSION_ID, thread_id=thread_id).read_bytes()
         lock_path = storage.root(SESSION_ID, thread_id=thread_id).parent / ".rollout.write.lock"
+
+        def acquire_shared_from_another_thread() -> None:
+            shared_lock = _RolloutFileLock(
+                lock_path, exclusive=False, timeout_seconds=0.01,
+            )
+            try:
+                shared_lock.acquire()
+            finally:
+                shared_lock.release()
+
         with (
             storage._lock(thread_id, "", session_id=SESSION_ID),
             storage._connect(thread_id, "", session_id=SESSION_ID) as connection,
@@ -311,12 +868,19 @@ def test_read_items_borrows_writer_transaction_and_keeps_file_lock(
                 SESSION_ID, thread_id, connection=connection,
             ) == original_items
             assert connection.in_transaction
-            # 读取后同一写锁仍被持有，另一真实句柄不能取得共享锁。
-            shared_lock = _RolloutFileLock(
-                lock_path, exclusive=False, timeout_seconds=0.01,
-            )
-            with pytest.raises(TimeoutError, match="rollout 文件锁获取超时"):
-                shared_lock.acquire()
+            # 同线程真实 snapshot 可以重入；关闭 snapshot 不得释放外层写锁。
+            with (
+                storage._lock(thread_id, "", session_id=SESSION_ID),
+                storage.open_read_snapshot(SESSION_ID, thread_id) as snapshot,
+            ):
+                assert storage.read_items(
+                    SESSION_ID, thread_id, snapshot=snapshot,
+                ) == original_items
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                probe = executor.submit(acquire_shared_from_another_thread)
+                with pytest.raises(TimeoutError, match="rollout 文件锁获取超时"):
+                    probe.result(timeout=1)
+            assert connection.in_transaction
             with pytest.raises(ValueError, match="writer connection 与目标 rollout owner 不一致"):
                 storage.read_items(
                     LEGACY_SESSION_ID, other_thread_id, connection=connection,
@@ -330,14 +894,20 @@ def test_read_items_borrows_writer_transaction_and_keeps_file_lock(
             connection.execute("RELEASE corrupt_catalog")
         assert storage.read_items(SESSION_ID, thread_id) == original_items
         assert storage.jsonl_path(SESSION_ID, thread_id=thread_id).read_bytes() == original_jsonl
-        with (
-            storage.open_read_snapshot(SESSION_ID, thread_id) as snapshot,
-            pytest.raises(ValueError, match="不能同时指定 snapshot 和 connection"),
-        ):
-            storage.read_items(
+        with storage.open_read_snapshot(SESSION_ID, thread_id) as snapshot:
+            with (
+                pytest.raises(RuntimeError, match="rollout 共享锁不能升级为独占锁"),
+                storage._lock(thread_id, "", session_id=SESSION_ID),
+            ):
+                pytest.fail("共享读快照不能升级为写锁")
+            assert storage.read_items(
                 SESSION_ID, thread_id, snapshot=snapshot,
-                connection=snapshot.connection,
-            )
+            ) == original_items
+            with pytest.raises(ValueError, match="不能同时指定 snapshot 和 connection"):
+                storage.read_items(
+                    SESSION_ID, thread_id, snapshot=snapshot,
+                    connection=snapshot.connection,
+                )
 
 
 def test_rollout_history_preserves_more_than_32_thinking_blocks() -> None:
@@ -609,6 +1179,163 @@ def test_checkpoint_namespace_queries_do_not_cross_match(
         assert [item.checkpoint["id"] for item in saver.list(namespace_b)] == [
             "cp-ns-b"
         ]
+
+
+@pytest.fixture
+def checkpoint_listing(
+    tmp_path: Path, session_bundle_factory,
+) -> Iterator[tuple[RolloutCheckpointSaver, MutationIntentOwner, RunnableConfig]]:
+    """通过真实 ingress 和 checkpoint 写入建立可枚举的 owner。"""
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, SESSION_ID)
+    with RolloutCheckpointSaver(sessions_dir) as saver:
+        owner = saver.forks.source.resolve_main_thread_owner(SESSION_ID)
+        config = build_checkpoint_config(owner.thread_id)
+        user = HumanMessage(content="真实异步 checkpoint 枚举", id="user-alist")
+        admission = _accept_user_execution(
+            saver, SESSION_ID, owner.thread_id, user, turn_id="turn-alist",
+        )
+        with _execution_scope(admission):
+            parent = config
+            for index in range(3):
+                parent = saver.put(
+                    parent, _checkpoint(f"cp-alist-{index}", [user]),
+                    {"source": "alist", "step": index}, {"messages": str(index)},
+                )
+        yield saver, owner, config
+
+
+@pytest.mark.parametrize("all_owners", [False, True])
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_checkpoint_alist_awaits_holder_and_cleans_cancelled_admission(
+    checkpoint_listing: tuple[RolloutCheckpointSaver, MutationIntentOwner, RunnableConfig],
+    all_owners: bool, cancel: bool,
+) -> None:
+    saver, owner, config = checkpoint_listing
+
+    async def collect() -> list[CheckpointTuple]:
+        with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+            return [item async for item in saver.alist(None if all_owners else config)]
+
+    holder = saver._storage.storage._lock(owner.thread_id, "", session_id=owner.session_id)
+    await holder.acquire_async()
+    admission = holder._admission
+    assert admission is not None
+    operation = asyncio.create_task(collect())
+    try:
+        await _wait_for_rollout_lock_queue(holder, 1)
+        assert not operation.done()
+        if cancel:
+            operation.cancel("取消真实 alist 入口")
+            with pytest.raises(asyncio.CancelledError):
+                await operation
+            assert not admission._queue and len(admission._holders) == 1
+        holder.release()
+        items = await asyncio.wait_for(collect() if cancel else operation, timeout=2)
+        assert [item.checkpoint["id"] for item in items] == [
+            "cp-alist-2", "cp-alist-1", "cp-alist-0",
+        ]
+        assert items[0].checkpoint["channel_values"]["messages"][0].content == "真实异步 checkpoint 枚举"
+        assert not admission._holders and not admission._queue
+    finally:
+        holder.release()
+        operation.cancel()
+        await asyncio.gather(operation, return_exceptions=True)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="真实 flock 竞争时 alist 必须让出事件循环")
+async def test_checkpoint_alist_awaits_external_file_lock(
+    checkpoint_listing: tuple[RolloutCheckpointSaver, MutationIntentOwner, RunnableConfig],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import fcntl
+
+    saver, owner, config = checkpoint_listing
+    lock_path = saver._storage.storage.root(owner.session_id, thread_id=owner.thread_id).parent / ".rollout.write.lock"
+    waiting = asyncio.Event()
+    original_delay = _RolloutFileLock._file_lock_delay
+
+    def observe_file_wait(lock: _RolloutFileLock, handle: BinaryIO, deadline: float) -> float | None:
+        delay = original_delay(lock, handle, deadline)
+        if delay is not None:
+            waiting.set()
+        return delay
+
+    async def collect() -> list[CheckpointTuple]:
+        with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+            return [item async for item in saver.alist(config, limit=1)]
+
+    monkeypatch.setattr(_RolloutFileLock, "_file_lock_delay", observe_file_wait)
+    with lock_path.open("rb") as external:
+        fcntl.flock(external.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        operation = asyncio.create_task(collect())
+        try:
+            await asyncio.wait_for(waiting.wait(), timeout=1)
+            assert not operation.done(), "alist 在外部锁释放前不应同步阻塞至超时"
+            fcntl.flock(external.fileno(), fcntl.LOCK_UN)
+            items = await asyncio.wait_for(operation, timeout=2)
+            assert [item.checkpoint["id"] for item in items] == ["cp-alist-2"]
+        finally:
+            operation.cancel()
+            await asyncio.gather(operation, return_exceptions=True)
+
+
+@pytest.mark.parametrize("all_owners", [False, True])
+async def test_checkpoint_alist_preserves_before_filter_and_limit(
+    checkpoint_listing: tuple[RolloutCheckpointSaver, MutationIntentOwner, RunnableConfig],
+    all_owners: bool,
+) -> None:
+    saver, owner, config = checkpoint_listing
+    before = build_checkpoint_config(owner.thread_id, checkpoint_id="cp-alist-2")
+    with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+        query = None if all_owners else config
+        expected = list(saver.list(query, before=before, filter={"step": 1}, limit=1))
+        actual = [item async for item in saver.alist(query, before=before, filter={"step": 1}, limit=1)]
+    assert [item.checkpoint["id"] for item in expected] == ["cp-alist-1"]
+    assert actual == expected
+
+
+async def test_checkpoint_alist_reenters_fifo_between_yields(
+    checkpoint_listing: tuple[RolloutCheckpointSaver, MutationIntentOwner, RunnableConfig],
+) -> None:
+    """消费方暂停枚举时不持锁，下一项仍须经过真实异步 FIFO。"""
+    saver, owner, config = checkpoint_listing
+    holder = saver._storage.storage._lock(owner.thread_id, "", session_id=owner.session_id)
+    with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+        stream = saver.alist(config)
+        operation: asyncio.Task[CheckpointTuple] | None = None
+        try:
+            assert (await anext(stream)).checkpoint["id"] == "cp-alist-2"
+            await holder.acquire_async()
+            operation = asyncio.create_task(anext(stream))
+            await _wait_for_rollout_lock_queue(holder, 1)
+            assert not operation.done()
+            holder.release()
+            assert (await asyncio.wait_for(operation, timeout=2)).checkpoint["id"] == "cp-alist-1"
+            assert [item.checkpoint["id"] async for item in stream] == ["cp-alist-0"]
+        finally:
+            holder.release()
+            if operation is not None:
+                operation.cancel()
+                await asyncio.gather(operation, return_exceptions=True)
+            await stream.aclose()
+
+
+def test_unmaterialized_main_item_projections_do_not_create_rollout(
+    tmp_path: Path, session_bundle_factory,
+) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, SESSION_ID)
+    with RolloutCheckpointSaver(sessions_dir) as saver:
+        storage = saver._storage.storage
+        owner = saver.forks.source.resolve_main_thread_owner(SESSION_ID)
+        root = storage.root(SESSION_ID, thread_id=owner.thread_id)
+        lock = root.parent / ".rollout.write.lock"
+        assert not root.exists() and not lock.exists()
+        assert storage.read_item_projections(SESSION_ID) == []
+        with pytest.raises(KeyError, match="item projection 缺少请求的 canonical item: item-missing"):
+            storage.read_item_projections(SESSION_ID, item_ids=("item-missing",))
+        assert not root.exists() and not lock.exists()
 
 
 def _append_checkpoint_in_child(sessions_dir: str, thread_id: str) -> None:

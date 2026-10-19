@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import AsyncIterator, Iterable, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from langchain_core.messages import BaseMessage
@@ -13,6 +14,7 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     HistorySnapshotBounds,
     InternalExecutionHistoryPage,
     RolloutCheckpointIndex,
+    RolloutNotMaterializedError,
     RolloutReadSnapshot,
     RolloutTurnAnchor,
 )
@@ -40,6 +42,26 @@ class RolloutContextReader:
 
     def __init__(self, storage: RolloutContextStore) -> None:
         self._storage = storage
+
+    @asynccontextmanager
+    async def read_lease(
+        self,
+        session_id: str,
+        thread_id: str,
+        checkpoint_ns: str = "",
+        *,
+        allow_unmaterialized: bool = False,
+    ) -> AsyncIterator[None]:
+        """异步等待统一准入，内部同步 snapshot 在同一 Task 内重入。"""
+        try:
+            lock = self._storage.storage.read_lock(session_id, thread_id, checkpoint_ns)
+        except RolloutNotMaterializedError:
+            if not allow_unmaterialized:
+                raise
+            yield
+            return
+        async with lock:
+            yield
 
     def open_snapshot(
         self,

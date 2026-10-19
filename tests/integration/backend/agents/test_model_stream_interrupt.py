@@ -842,7 +842,7 @@ async def test_handwritten_provider_interrupt_stops_pending_sse_read(
 
         restarted = MessageStreamStore(path_resolver=resolver)
         restarted_writer = await restarted.open_existing(
-            session_id=session_id,
+            thread_id=restarted._path_resolver.main_thread_id(session_id), session_id=session_id,
             turn_id=writer.turn_id,
             turn_stream_id=writer.turn_stream_id,
         )
@@ -1108,7 +1108,7 @@ async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_re
 
         restarted = MessageStreamStore(path_resolver=resolver)
         restarted_writer = await restarted.open_existing(
-            session_id=session_id,
+            thread_id=restarted._path_resolver.main_thread_id(session_id), session_id=session_id,
             turn_id=writer.turn_id,
             turn_stream_id=writer.turn_stream_id,
         )
@@ -1418,7 +1418,7 @@ async def test_tool_interrupt_reaps_real_subprocess_and_projects_unknown_result(
 
         restarted = MessageStreamStore(path_resolver=resolver)
         recovered_writer = await restarted.open_existing(
-            session_id=session_id,
+            thread_id=restarted._path_resolver.main_thread_id(session_id), session_id=session_id,
             turn_id=writer.turn_id,
             turn_stream_id=writer.turn_stream_id,
         )
@@ -1483,7 +1483,7 @@ async def test_provider_pending_read_crash_recovers_execution_lost(
 
         probe = MessageStreamStore(path_resolver=resolver)
         probe_writer = await probe.open_existing(
-            session_id=session_id,
+            thread_id=probe._path_resolver.main_thread_id(session_id), session_id=session_id,
             turn_id=turn_id,
         )
         before_crash = await probe.list_events(
@@ -1505,7 +1505,7 @@ async def test_provider_pending_read_crash_recovers_execution_lost(
         restarted = MessageStreamStore(path_resolver=resolver)
         assert await restarted.reconcile_unfinished_streams() == 1
         recovered_writer = await restarted.open_existing(
-            session_id=session_id,
+            thread_id=restarted._path_resolver.main_thread_id(session_id), session_id=session_id,
             turn_id=turn_id,
         )
         events = await restarted.list_events(

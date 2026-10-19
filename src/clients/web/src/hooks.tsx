@@ -183,6 +183,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useSessionMessageStream({
     apiPort: state.apiPort,
     sessionId: currentSessionId,
+    threadId: currentTurnTimeline?.threadId ?? state.currentSession?.thread_id ?? null,
     turnId: currentMessageStreamTurnId,
     workspaceId: currentSessionGatewayWorkspaceId,
     sessionCacheKey: currentSessionCacheKey,

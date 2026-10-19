@@ -63,6 +63,7 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutCheckpointIndex,
     RolloutManifest,
     RolloutReadSnapshot,
+    _RolloutFileLock,
     _RolloutOperationLock,
     _RolloutSQLiteConnection,
 )
@@ -675,6 +676,9 @@ class RolloutStorage(
 
     def _validate_v2_commit_offsets(self, connection: sqlite3.Connection, jsonl_path: Path, *, validate_jsonl_items: bool=True) -> None:
         return self._maintenance_owner._validate_v2_commit_offsets(connection, jsonl_path, validate_jsonl_items=validate_jsonl_items)
+
+    def read_lock(self, session_id: str, thread_id: str, checkpoint_ns: str='') -> _RolloutFileLock:
+        return self._maintenance_owner.read_lock(session_id, thread_id, checkpoint_ns)
 
     def open_read_snapshot(self, session_id: str, thread_id: str, checkpoint_ns: str='', *, validate_integrity: bool=False) -> RolloutReadSnapshot:
         return self._maintenance_owner.open_read_snapshot(session_id, thread_id, checkpoint_ns, validate_integrity=validate_integrity)

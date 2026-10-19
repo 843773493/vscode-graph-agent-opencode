@@ -582,6 +582,18 @@ class ThreadCreationResult:
     frozen_job_id: str | None
 
 
+class ThreadCreationAbortedError(RuntimeError):
+    """原创建 owner 已完成中止；恢复调用方可核验其持久终态。"""
+
+    def __init__(self, record: ThreadCreationRecord) -> None:
+        self.record = record
+        super().__init__(
+            "thread creation record 已中止，调用方须换新 "
+            f"idempotency_key 重试: key={record.thread_creation_idempotency_key!r}, "
+            f"reason={record.abort_reason!r}"
+        )
+
+
 class ThreadCreationService:
     """child thread 创建流编排（不切权威、不装配，结构对照 R13）。
 
@@ -802,11 +814,7 @@ class ThreadCreationService:
                     )
             await observe_phase(idempotency_key, "thread.creation.prepared")
             if record.state == "aborted":
-                raise RuntimeError(
-                    "thread creation record 已中止，调用方须换新 "
-                    f"idempotency_key 重试: key={idempotency_key!r}, "
-                    f"reason={record.abort_reason!r}"
-                )
+                raise ThreadCreationAbortedError(record)
             # 步骤 2/3：staging 准备 + 原子 rename（gate 外）。
             staging_dir = session_dir / record.staging_locator
             final_dir = session_dir / record.final_relative_locator
@@ -816,6 +824,31 @@ class ThreadCreationService:
                 artifact_manifest=artifact_manifest,
             )
             inventory = build_thread_node_inventory(expected_files)
+            if record.purpose == "fork" and record.state == "preparing":
+                capture = self._store.get_fork_source_capture(creation_key=idempotency_key)
+                if capture is not None:
+                    request = json.loads(capture.request_json)
+                    if (capture.copy_operation_id, capture.creation_key, capture.target_session_id,
+                        capture.target_thread_id, request["creation_kind"], request["creation_preimage_hash"]) != (
+                        idempotency_key, idempotency_key, session_id, record.child_thread_id, "new_child_thread", record.preimage_hash,
+                    ):
+                        raise RuntimeError("fork child capture 与原 creation owner 冲突，拒绝恢复目录")
+                    if capture.state == "aborted":
+                        # 资源先中止、目录后删除、creation 最后终结；崩溃后只接续原清理。
+                        await self._cleanup_after_failed_publish(
+                            record, session_id=session_id, session_dir=session_dir, inventory=inventory,
+                            before_abort=before_abort,
+                        )
+                        aborted = self._control_store.abort_thread_creation_record(
+                            idempotency_key, capture.abort_reason or "fork capture 已中止",
+                        )
+                        raise ThreadCreationAbortedError(aborted)
+                    if not (final_dir.exists() or final_dir.is_symlink()):
+                        # capture 只能在 final rename 后预留，缺目录不是创建前的合法窗口。
+                        raise RuntimeError(
+                            "fork child 已预留 capture 但最终 locator 目录缺失（外部删除，拒绝重建）: "
+                            f"key={idempotency_key!r}, final={final_dir}, staging={staging_dir}"
+                        )
             if record.state == "published" and not (
                 final_dir.exists() or final_dir.is_symlink()
             ):

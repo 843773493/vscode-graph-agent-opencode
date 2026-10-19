@@ -211,9 +211,9 @@ function streamHarness(props: {
 }): { mirror: Mirror; Harness: () => React.ReactNode } {
   const mirror = createStateMirror(props.initialState ?? minimalState());
   mirror.current().sessionsByWorkspace.set(props.workspaceId, [
-    { session_id: props.sessionId } as NonNullable<AppState["currentSession"]>,
+    { session_id: props.sessionId, thread_id: "thr_00000000400070008000000000000002" } as NonNullable<AppState["currentSession"]>,
   ]);
-  const Harness = useSessionMessageStreamHarness({
+  const Harness = useSessionMessageStreamHarness({ threadId: "thr_00000000400070008000000000000002",
     apiPort: props.port,
     sessionId: props.sessionId,
     turnId: props.turnId,
@@ -297,7 +297,7 @@ describe("useSessionMessageStream 有界重连", () => {
     const turnId = "turn_same_owner";
     const mirror = createStateMirror(minimalState());
     for (const workspaceId of ["gateway_a", "gateway_b"]) {
-      mirror.current().sessionsByWorkspace.set(workspaceId, [{ session_id: sessionId } as NonNullable<AppState["currentSession"]>]);
+      mirror.current().sessionsByWorkspace.set(workspaceId, [{ session_id: sessionId, thread_id: "thr_00000000400070008000000000000002" } as NonNullable<AppState["currentSession"]>]);
     }
     const targets: string[] = [];
     const streamSpy = spyOn(messageStreamApi, "streamSessionMessageEvents")
@@ -313,7 +313,7 @@ describe("useSessionMessageStream 有界重连", () => {
         }));
       });
     function Stream({ workspaceId }: { workspaceId: string }): React.ReactNode {
-      useSessionMessageStream({ apiPort: 49_760, sessionId, turnId, workspaceId,
+      useSessionMessageStream({ threadId: "thr_00000000400070008000000000000002", apiPort: 49_760, sessionId, turnId, workspaceId,
         sessionCacheKey: sessionScopeKey(workspaceId, sessionId), setState: mirror.setState });
       return null;
     }
@@ -328,7 +328,7 @@ describe("useSessionMessageStream 有界重连", () => {
       expect(streams.size).toBe(2);
       for (const workspaceId of targets) {
         const scope = sessionScopeKey(workspaceId, sessionId);
-        expect(streams.get(`${scope}::strm_same_owner`)).toMatchObject({
+        expect(streams.get(`${scope}::thr_00000000400070008000000000000002::strm_same_owner`)).toMatchObject({
           sessionCacheKey: scope, sessionId, turnId, turnStreamId: "strm_same_owner", streamStatus: "completed",
         });
       }
@@ -449,10 +449,66 @@ describe("useSessionMessageStream 有界重连", () => {
 });
 
 describe("useSessionMessageStream 首次连接", () => {
+  test("同 Session/Turn/stream 的 sibling 首帧前独立，切换后的旧终态不能收掉新队列", async () => {
+    installZeroDelayWindow();
+    const sessionId = "ses_thread_switch";
+    const turnId = "turn_same";
+    const scope = "workspace_thread::ses_thread_switch";
+    const main = "thr_main";
+    const child = "thr_child";
+    const callbacks = new Map<string, (event: MessageStreamEvent) => void>();
+    const requests: string[] = [];
+    const streamSpy = spyOn(messageStreamApi, "streamSessionMessageEvents")
+      .mockImplementation(async (_port, _session, _turn, options) => {
+        requests.push(options.threadId);
+        callbacks.set(options.threadId, options.onEvent!);
+        await new Promise<void>((resolve) => options.signal!.addEventListener("abort", () => resolve(), { once: true }));
+      });
+    const initial = minimalState();
+    initial.sessionsByWorkspace.set("workspace_thread", [{ session_id: sessionId, thread_id: main } as NonNullable<AppState["currentSession"]>]);
+    const mirror = createStateMirror(initial);
+    function Harness({ threadId }: { threadId: string }): React.ReactNode {
+      useSessionMessageStream({ apiPort: 49_883, sessionId, threadId, turnId,
+        workspaceId: "workspace_thread", sessionCacheKey: scope, setState: mirror.setState });
+      return null;
+    }
+    let renderer!: ReactTestRenderer;
+    try {
+      await act(async () => { renderer = create(<Harness threadId={main} />); });
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+      expect(mirror.current().messageStreamsByTurnStream?.get(`${scope}::${main}::pending:${turnId}`)?.threadId).toBe(main);
+      await act(async () => { renderer.update(<Harness threadId={child} />); });
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+      expect(requests).toEqual([main, child]);
+      expect(mirror.current().messageStreamsByTurnStream?.size).toBe(2);
+      mirror.setState((previous) => ({ ...previous,
+        currentSession: { session_id: sessionId, thread_id: child } as NonNullable<AppState["currentSession"]>,
+        currentSessionWorkspaceId: "workspace_thread", activeGatewayWorkspaceId: "workspace_thread", status: "child 正在运行",
+        activeJobIdsBySession: new Map([[scope, "same-job"]]),
+        pendingConversations: new Map([[scope, [{ conversationId: "same-message", displayMode: "live", sessionId,
+          threadId: child, turnId, jobId: "same-job", userMessage: null, assistantMessages: [], events: [],
+          status: "running", pending: true, source: "pending" }]]]),
+      }));
+      const before = mirror.current();
+      await act(async () => { callbacks.get(main)!({ ...streamEvent("same", sessionId, turnId, 1, "stream.failed", {
+        code: "old-failure", message: "main 的迟到失败", resumable: false,
+      }), thread_id: main }); });
+      expect(mirror.current()).toBe(before);
+      expect(mirror.current().activeJobIdsBySession.get(scope)).toBe("same-job");
+      expect(mirror.current().pendingConversations.get(scope)?.[0]?.pending).toBe(true);
+      await act(async () => { callbacks.get(child)!({ ...streamEvent("same", sessionId, turnId, 1, "stream.completed", {}), thread_id: child }); });
+      expect(mirror.current().activeJobIdsBySession.has(scope)).toBe(false);
+      expect(mirror.current().messageStreamsByTurnStream?.get(`${scope}::${child}::strm_same`)?.streamStatus).toBe("completed");
+    } finally {
+      if (renderer) act(() => renderer.unmount());
+      streamSpy.mockRestore();
+    }
+  });
+
   for (const fails of [false, true]) {
     test(`同 Session ID 切 Gateway 后，旧请求日志${fails ? "失败" : "成功"}不覆盖新 owner`, async () => {
       const sessionId = "ses_same_logs";
-      const mirror = createStateMirror({ ...minimalState(), currentSession: { session_id: sessionId } as AppState["currentSession"],
+      const mirror = createStateMirror({ ...minimalState(), currentSession: { session_id: sessionId, thread_id: "thr_00000000400070008000000000000002" } as AppState["currentSession"],
         currentSessionWorkspaceId: "gateway_logs_a", activeGatewayWorkspaceId: "gateway_logs_a", contentView: "requests" });
       const gate = hangUntilReleased<Awaited<ReturnType<typeof api.getLLMRequestLogs>>>();
       const logSpy = spyOn(api, "getLLMRequestLogs").mockImplementation(async () => {
@@ -503,7 +559,7 @@ describe("useSessionMessageStream 首次连接", () => {
       await act(async () => {
         onEvent(streamEvent("deleted", sessionId, "turn_deleted", 1, "stream.opened", { status: "open" }));
       });
-      expect(mirror.current().messageStreamsByTurnStream?.has(`${scope}::strm_deleted`)).toBe(false);
+      expect(mirror.current().messageStreamsByTurnStream?.has(`${scope}::thr_00000000400070008000000000000002::strm_deleted`)).toBe(false);
       expect(mirror.current().messageStreamsByTurnStream?.size).toBe(0);
     } finally {
       unmount(); streamSpy.mockRestore();
@@ -585,7 +641,7 @@ describe("useSessionMessageStream 首次连接", () => {
     const initialState = minimalState();
     initialState.activeJobIdsBySession.set("workspace_stream_open::ses_stream_open", "job_stream_open");
     initialState.pendingConversations.set("workspace_stream_open::ses_stream_open", [{
-      conversationId: "msg_stream_open", displayMode: "live", sessionId: "ses_stream_open",
+      conversationId: "msg_stream_open", threadId: "thr_00000000400070008000000000000002", displayMode: "live", sessionId: "ses_stream_open",
       userMessage: null, events: [], status: "running", jobId: "job_stream_open",
       turnId: "turn_stream_open", pending: true, source: "pending",
     }]);
@@ -620,14 +676,14 @@ describe("useSessionMessageStream 首次连接", () => {
       });
 
     const initialState = minimalState();
-    initialState.currentSession = { session_id: sessionId } as AppState["currentSession"];
+    initialState.currentSession = { session_id: sessionId, thread_id: "thr_00000000400070008000000000000002" } as AppState["currentSession"];
     initialState.currentSessionWorkspaceId = oldWorkspaceId;
     initialState.activeGatewayWorkspaceId = oldWorkspaceId;
     initialState.status = "旧 owner 状态";
-    initialState.sessionsByWorkspace.set(oldWorkspaceId, [{ session_id: sessionId } as NonNullable<AppState["currentSession"]>]);
+    initialState.sessionsByWorkspace.set(oldWorkspaceId, [{ session_id: sessionId, thread_id: "thr_00000000400070008000000000000002" } as NonNullable<AppState["currentSession"]>]);
     initialState.activeJobIdsBySession.set(oldScope, "job_old_owner");
     initialState.pendingConversations.set(oldScope, [{
-      conversationId: "msg_old_owner",
+      conversationId: "msg_old_owner", threadId: "thr_00000000400070008000000000000002",
       displayMode: "live",
       sessionId,
       userMessage: null,
@@ -647,7 +703,7 @@ describe("useSessionMessageStream 首次连接", () => {
       const [state, setState] = React.useState(initialState);
       latestState = state;
       updateAppState = setState;
-      useSessionMessageStream({
+      useSessionMessageStream({ threadId: "thr_00000000400070008000000000000002",
         apiPort: port,
         sessionId,
         turnId,
@@ -709,13 +765,13 @@ describe("useSessionMessageStream 首次连接", () => {
     // 因此保留独立的 useState Harness，不复用闭包镜像夹具。
     const initialState = minimalState();
     initialState.sessionsByWorkspace.set("workspace_stream_async", [
-      { session_id: "ses_stream_async" } as NonNullable<AppState["currentSession"]>,
+      { session_id: "ses_stream_async", thread_id: "thr_00000000400070008000000000000002" } as NonNullable<AppState["currentSession"]>,
     ]);
     let latestState = initialState;
     function Harness(): React.ReactNode {
       const [state, setState] = React.useState(initialState);
       latestState = state;
-      useSessionMessageStream({
+      useSessionMessageStream({ threadId: "thr_00000000400070008000000000000002",
         apiPort: port,
         sessionId: "ses_stream_async",
         turnId: "turn_stream_async",
@@ -784,7 +840,7 @@ describe("useSessionMessageStream 终态 failure 归一", () => {
     installGatewayFetch(() => response, { token: "failure-norm-token" });
     const initialState = minimalState();
     initialState.status = "任务失败前";
-    initialState.currentSession = { session_id: "ses_failure_norm" } as NonNullable<AppState["currentSession"]>;
+    initialState.currentSession = { session_id: "ses_failure_norm", thread_id: "thr_00000000400070008000000000000002" } as NonNullable<AppState["currentSession"]>;
     initialState.currentSessionWorkspaceId = "workspace_failure_norm";
     initialState.activeGatewayWorkspaceId = "workspace_failure_norm";
     const { mirror, Harness } = streamHarness({
@@ -887,13 +943,13 @@ describe("useSessionMessageStream 连接与终态语义", () => {
 
     const initialState = minimalState();
     initialState.status = "任务失败前";
-    initialState.currentSession = { session_id: "ses_cancel" } as NonNullable<AppState["currentSession"]>;
+    initialState.currentSession = { session_id: "ses_cancel", thread_id: "thr_00000000400070008000000000000002" } as NonNullable<AppState["currentSession"]>;
     initialState.currentSessionWorkspaceId = "ws_cancel";
     initialState.activeGatewayWorkspaceId = "ws_cancel";
     initialState.activeJobIdsBySession.set("ws_cancel::ses_cancel", "job_cancel");
     initialState.pendingConversations.set("ws_cancel::ses_cancel", [
       {
-        conversationId: "msg_cancel",
+        conversationId: "msg_cancel", threadId: "thr_00000000400070008000000000000002",
         displayMode: "live",
         sessionId: "ses_cancel",
         userMessage: null,

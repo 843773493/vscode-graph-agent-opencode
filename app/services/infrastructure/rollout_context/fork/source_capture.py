@@ -30,14 +30,23 @@ from app.services.infrastructure.rollout_context.fork.source_snapshot import (
 class IncompleteForkSourceCaptureError(RuntimeError):
     """冻结 capture 仍 preparing，普通私有目录尚未发布 captured marker。"""
 
+    code = "fork_source_capture_incomplete"
+    owner = "fork_source_capture"
+
     def __init__(self, record: ForkSourceCaptureRecord) -> None:
         self.capture = record
         super().__init__(
             "fork source capture 未完成: "
             f"operation_id={record.copy_operation_id}, snapshot_id={record.snapshot_id}, "
+            f"source={record.source_session_id}/{record.source_thread_id}, "
             f"target={record.target_session_id}/{record.target_thread_id}, "
             "state=preparing，普通私有目录缺少 captured marker"
         )
+
+    def to_detail(self, *, action: str) -> dict[str, object]:
+        """跨 HTTP 保留原 owner 的完整 operation/source/target 冻结身份。"""
+        return {"owner": self.owner, "code": self.code, "action": action,
+                "capture": asdict(self.capture), "message": str(self)}
 
 
 def capture_directory(sessions_root: Path, record: ForkSourceCaptureRecord) -> Path:

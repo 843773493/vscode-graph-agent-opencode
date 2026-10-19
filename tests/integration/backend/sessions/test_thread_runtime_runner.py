@@ -54,6 +54,7 @@ from app.api.deps import (
     get_message_stream_store,
     get_request_id,
     get_session_orchestrator,
+    get_session_service,
     get_session_skill_tracking_service,
     get_session_turn_history_service,
     verify_local_token,
@@ -1028,6 +1029,7 @@ async def cold_message_stream_client(runtime_case: RuntimeCase):
     application = FastAPI()
     application.include_router(message_stream_api.router, prefix="/api/v1")
     application.dependency_overrides[get_message_stream_store] = lambda: store
+    application.dependency_overrides[get_session_service] = lambda: runtime_case.runner.container.session_service
     application.dependency_overrides[verify_local_token] = lambda: "local-test"
     application.dependency_overrides[get_request_id] = lambda: "request-message-owner"
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://test") as client:
@@ -1082,7 +1084,40 @@ async def test_real_runner_message_v1_child_owner_matches_model_admission_and_re
                 wrong["turn_stream_id"] = stream_id
             rejected = await client.get(root + suffix, params=wrong)
             assert rejected.status_code == 404, rejected.text
+    for suffix in ("/snapshot", "/events"):
+        omitted = await client.get(root + suffix)
+        assert omitted.status_code == 404, omitted.text
+    availability = f"/api/v1/sessions/{session_id}/message-streams/availability"
+    implicit_main = await client.get(availability, params={"turn_ids": turn_id})
+    assert implicit_main.status_code == 200 and implicit_main.json()["data"] == {}
+    child_available = await client.get(availability, params={"turn_ids": turn_id, "thread_id": child})
+    assert child_available.status_code == 200
+    assert child_available.json()["data"] == {turn_id: frozen["turn_stream_id"]}
     assert len(case.compiled) == before
+
+    main_admission = await _complete_job(case, session_id, main, timeout_seconds=20)
+    main_root = f"/api/v1/sessions/{session_id}/turns/{main_admission.turn_id}/message-stream"
+    main_snapshot = await client.get(main_root + "/snapshot")
+    assert main_snapshot.status_code == 200, main_snapshot.text
+    main_frozen = main_snapshot.json()["data"]
+    assert main_frozen["thread_id"] == main
+    assert main_frozen["turn_stream_id"] != frozen["turn_stream_id"]
+    for suffix in ("", "/snapshot", "/events"):
+        rejected = await client.get(root + suffix, params={
+            "thread_id": child, "turn_stream_id": main_frozen["turn_stream_id"], "after_seq": 1,
+        })
+        assert rejected.status_code == 404, rejected.text
+    # 数值 seq 在各自已冻结的 thread/stream 中合法，不能当成全局身份。
+    for endpoint, thread, stream in (
+        (root, child, frozen["turn_stream_id"]),
+        (main_root, main, main_frozen["turn_stream_id"]),
+    ):
+        scoped = await client.get(endpoint + "/events", params={
+            "thread_id": thread, "turn_stream_id": stream, "after_seq": 1,
+        })
+        assert scoped.status_code == 200, scoped.text
+        assert scoped.json()["data"]
+        assert all(event["thread_id"] == thread and event["event_seq"] > 1 for event in scoped.json()["data"])
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     context.artifacts_dir.joinpath("message-v1-real-child-owner.json").write_text(json.dumps({
         "session_id": session_id, "thread_id": child, "execution_id": admission.execution_id,

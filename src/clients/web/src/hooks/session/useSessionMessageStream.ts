@@ -34,6 +34,7 @@ import { hasSessionOwner } from "../../state/session/sessions";
 export function useSessionMessageStream({
   apiPort,
   sessionId,
+  threadId,
   turnId,
   workspaceId,
   sessionCacheKey,
@@ -41,6 +42,7 @@ export function useSessionMessageStream({
 }: {
   apiPort: number | null;
   sessionId: string | null;
+  threadId: string | null;
   turnId: string | null;
   workspaceId: string | null;
   sessionCacheKey: string | null;
@@ -52,19 +54,19 @@ export function useSessionMessageStream({
   useEffect(() => {
     streamAbortRef.current?.abort();
     streamAbortRef.current = null;
-    if (!apiPort || !sessionId || !turnId || !sessionCacheKey || observationState.paused) return;
+    if (!apiPort || !sessionId || !threadId || !turnId || !sessionCacheKey || observationState.paused) return;
 
     const controller = new AbortController();
     const unregisterObservation = registerWorkspaceObservation(workspaceId, controller);
     streamAbortRef.current = controller;
     const targetSessionId = sessionId;
+    const targetThreadId = threadId;
     const targetTurnId = turnId;
     const targetWorkspaceId = workspaceId;
-    const streamCacheKey = (streamId: string) => `${sessionCacheKey}::${streamId}`;
+    const streamCacheKey = (streamId: string) => `${sessionCacheKey}::${targetThreadId}::${streamId}`;
     const pendingStreamKey = streamCacheKey(`pending:${targetTurnId}`);
     let lastEventSeq = 0;
     let turnStreamId: string | null = null;
-    let frozenThreadId: string | null = null;
     let terminalSeen = false;
     let terminalStateApplied = false;
     let terminalStatus: MessageStreamState["streamStatus"] = "open";
@@ -81,12 +83,13 @@ export function useSessionMessageStream({
         const currentKey = turnStreamId ? streamCacheKey(turnStreamId) : pendingStreamKey;
         const existingEntry = [...messageStreams.entries()].find(([key, value]) =>
           value.sessionCacheKey === sessionCacheKey
+          && value.threadId === targetThreadId
           && (key === currentKey || value.turnId === targetTurnId),
         );
         const existing = existingEntry?.[1];
         const current = existing && existing.turnId === targetTurnId
           ? existing
-          : createMessageStreamState(targetSessionId, targetTurnId, "", sessionCacheKey);
+          : createMessageStreamState(targetSessionId, targetTurnId, "", sessionCacheKey, targetThreadId);
         const updated = update(current);
         const resolvedKey = updated.turnStreamId ? streamCacheKey(updated.turnStreamId) : currentKey;
         next.messageStreamsByTurnStream = writeMessageStreamCache(
@@ -106,14 +109,17 @@ export function useSessionMessageStream({
       if (!terminalSeen || terminalStateApplied) return;
       terminalStateApplied = true;
       setState((previous) => {
+        if (controller.signal.aborted || !hasSessionOwner(previous, targetSessionId, targetWorkspaceId)) return previous;
         const next = cloneMaps(previous);
         const currentSessionId = previous.currentSession?.session_id;
         const currentWorkspaceId = previous.currentSessionWorkspaceId
           ?? previous.activeGatewayWorkspaceId;
         const ownsGlobalStatus = currentSessionId === targetSessionId
+          && previous.currentSession?.thread_id === targetThreadId
           && sessionScopeKey(currentWorkspaceId, currentSessionId)
             === sessionScopeKey(targetWorkspaceId, targetSessionId);
-        const conversation = previous.pendingConversations.get(sessionCacheKey)?.find((item) => item.turnId === targetTurnId);
+        const conversation = previous.pendingConversations.get(sessionCacheKey)?.find((item) =>
+          item.turnId === targetTurnId && item.threadId === targetThreadId);
         const terminalJobId = conversation?.jobId;
         if (terminalJobId && previous.activeJobIdsBySession.get(sessionCacheKey) === terminalJobId) {
           next.activeJobIdsBySession.delete(sessionCacheKey);
@@ -128,6 +134,7 @@ export function useSessionMessageStream({
               ? "cancelled"
               : "failed",
           sessionCacheKey,
+          targetThreadId,
         );
         if (ownsGlobalStatus && terminalStatus === "failed" && terminalFailure?.message) {
           next.status = `任务失败: ${terminalFailure.message}`;
@@ -151,7 +158,7 @@ export function useSessionMessageStream({
         targetTurnId,
         {
           workspaceId: targetWorkspaceId,
-          threadId: frozenThreadId,
+          threadId: targetThreadId,
           turnStreamId,
           signal: controller.signal,
         },
@@ -160,8 +167,7 @@ export function useSessionMessageStream({
       if (typeof snapshotTurnStreamId === "string" && snapshotTurnStreamId) {
         turnStreamId = snapshotTurnStreamId;
       }
-      if (frozenThreadId && snapshot.thread_id !== frozenThreadId) throw new Error("消息流快照 thread owner 在重连中变化");
-      frozenThreadId = snapshot.thread_id;
+      if (snapshot.thread_id !== targetThreadId) throw new Error("消息流快照 thread owner 与请求不一致");
       updateState((current) => applyMessageStreamSnapshot(current, snapshot));
       lastEventSeq = Math.max(lastEventSeq, snapshot.snapshot_seq);
       terminalSeen = snapshot.stream_status === "completed"
@@ -211,8 +217,7 @@ export function useSessionMessageStream({
     };
 
     const applyEvent = (event: MessageStreamEvent) => {
-      if (frozenThreadId && event.thread_id !== frozenThreadId) throw new Error("消息流 thread owner 在重连中变化");
-      frozenThreadId = event.thread_id;
+      if (event.thread_id !== targetThreadId) throw new Error("消息流 thread owner 与请求不一致");
       turnStreamId = event.turn_stream_id;
       // React 的函数式 setState updater 可能在当前回调返回后才执行，不能
       // 在 updater 内给这里的游标和终态变量赋值。否则真实浏览器会一直用旧
@@ -250,7 +255,7 @@ export function useSessionMessageStream({
             targetTurnId,
             {
               workspaceId: targetWorkspaceId,
-          threadId: frozenThreadId,
+              threadId: targetThreadId,
               turnStreamId,
               afterSeq: lastEventSeq,
               signal: controller.signal,
@@ -348,7 +353,7 @@ export function useSessionMessageStream({
       controller.abort();
       if (streamAbortRef.current === controller) streamAbortRef.current = null;
     };
-  }, [apiPort, sessionId, turnId, workspaceId, sessionCacheKey, observationState, setState]);
+  }, [apiPort, sessionId, threadId, turnId, workspaceId, sessionCacheKey, observationState, setState]);
 }
 
 type TerminalStreamStatus = Extract<

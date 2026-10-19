@@ -59,7 +59,7 @@ class RolloutTurnsMixin:
         self,
         session_id: str,
         *,
-        thread_id: str | None = None,
+        thread_id: str,
         accepted_ingress_id: str,
         acceptance_idempotency_key: str,
         job_id: str,
@@ -82,7 +82,7 @@ class RolloutTurnsMixin:
     ) -> dict[str, object]:
         """在同一事务建立 acceptance、Turn、root item 与 initial execution。"""
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, strict_text(thread_id, field="thread_id"))
         strict_text(accepted_ingress_id, field="accepted_ingress_id")
         strict_text(
             acceptance_idempotency_key,

@@ -170,10 +170,15 @@ class ForkAttachmentStoreMixin:
         ) for candidate, aliases, required in candidates)
 
     def capture_fork_attachments(
-        self, record: ForkSourceCaptureRecord, *, references: Sequence[tuple[str, bool]],
+        self, record: ForkSourceCaptureRecord, *, references: Sequence[tuple[str, bool]], same_storage_owner: bool,
     ) -> tuple[ForkAttachmentSnapshot, ...]:
         """source guard 内冻结实际 backing owner，事务结束后原子建立必要 claim。"""
         request = json.loads(record.request_json)
+        source_domain = request["source_storage_domain_id"]
+        target_domain = request["target_storage_domain_id"]
+        actual_domain = self._path_resolver.catalog_store.get_node(record.source_session_id).workspace_id
+        if source_domain != actual_domain or (source_domain == target_domain) != same_storage_owner:
+            raise ValueError("fork_owner_overlap: 冻结附件资源域与实际 owner 不一致")
         choices = {choice["resource_uri"]: choice["action"] for choice in request["resources"]}
         source_main = self._path_resolver.main_thread_id(record.source_session_id)
         target_main = request["target_main_thread_id"]
@@ -190,8 +195,8 @@ class ForkAttachmentStoreMixin:
                 raise ValueError("同一附件的 alias 不能选择不同继承动作")
             snapshot = self._decide_fork_attachment(
                 replace(candidate, source_file_id=source_file_id, source_file_aliases=tuple(other_aliases)),
-                source_storage_domain_id=request["source_storage_domain_id"],
-                target_storage_domain_id=request["target_storage_domain_id"],
+                source_storage_domain_id=source_domain,
+                target_storage_domain_id=target_domain,
                 source_main_thread_id=source_main, target_main_thread_id=target_main,
                 copy_operation_id=record.copy_operation_id, required=required, choice=next(iter(actions), None),
             )
@@ -340,9 +345,7 @@ class ForkAttachmentStoreMixin:
                                             chunk_sha256=hashlib.sha256(chunk).hexdigest())
 
     def release_fork_export(self, capture: ForkSourceCaptureRecord) -> None:
-        request = json.loads(capture.request_json)
-        if request["source_storage_domain_id"] == request["target_storage_domain_id"]:
-            raise RuntimeError("fork export 释放不得消费本地 copy operation")
+        """只消费 fork owner 已核实的独立 source export，不按域标签推导角色。"""
         self._catalog.release_fork_export_claims(capture.copy_operation_id)
 
     async def reserve_copy_attachments(

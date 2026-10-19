@@ -80,7 +80,7 @@ class NoticeCase:
                                                    intent=intent, message=message), intent
 
     def user(self, key):
-        accepted = self.saver.accept_turn(self.session, accepted_ingress_id=f"ingress-{key}",
+        accepted = self.saver.accept_turn(self.session, thread_id=self.saver._storage.storage.main_thread_id(self.session), accepted_ingress_id=f"ingress-{key}",
             acceptance_idempotency_key=f"acceptance-{key}", job_id=f"job-{key}",
             admission_idempotency_key=f"admission-{key}", payload="真正的用户输入")
         return accepted, self.saver.execution_admission(self.session, thread_id=self.thread,

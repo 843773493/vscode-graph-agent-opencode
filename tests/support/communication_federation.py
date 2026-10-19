@@ -1,4 +1,4 @@
-"""三个正式隔离 Gateway 与真实 localhost SSH -L 的进程装具。"""
+"""独立 Gateway 与真实 localhost SSH -L 的进程装具，支持共享唯一 Backend。"""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from app.core.workspace_identity import (
     workspace_identity_path,
 )
 from app.gateway.runtime.process import ManagedProcess
+from configs.installer import install_user_configuration
 from tests.e2e.system.gateway.gateway_target import GatewaySshTarget, wait_for_ssh_ready
 from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
     start_terminal_backend,
@@ -35,6 +36,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
+    GatewayProcess,
     acquire_gateway_guest,
     close_gateway_process,
     reset_gateway_persistent_state,
@@ -60,6 +62,8 @@ class CommunicationNode:
     workspace_id: str
     backend: BackendProcess
     backend_start: Callable[[], BackendProcess]
+    gateway_home: Path | None = None
+    gateway: GatewayProcess | None = None
 
     def restart_backend(self, operation: str = "restart") -> dict[str, object]:
         """pytest 只终止本 node 持有的 Popen；重启复用原 mount/composition 与端口。"""
@@ -83,7 +87,8 @@ class CommunicationNode:
 
     @property
     def gateway_root(self) -> Path:
-        return self.workspace.parent / "boxteam-home/state/gateway"
+        home = self.gateway_home or self.workspace.parent / "boxteam-home"
+        return home / "state/gateway"
 
     def channels(self) -> list[tuple[str, str]]:
         database = self.gateway_root / "federation/control.sqlite"
@@ -114,6 +119,7 @@ async def open_communication_triad(
     backend_environment: dict[str, str] | None = None,
     gateway_environment: dict[str, str] | None = None,
     on_sshd_started: Callable[[subprocess.Popen[str], Path], None] | None = None,
+    same_backend_routes: bool = False,
 ) -> AsyncIterator[dict[str, CommunicationNode]]:
     ports = ports or integration_port_block_for_file(context.test_file)
     root = context.project_root
@@ -152,7 +158,16 @@ async def open_communication_triad(
         backends = {}
         backend_starters = {}
         nodes = {}
-        for name, offset in (("a", 0), ("b", 20), ("c", 40)):
+        layout = (("a", 0), ("b", 20)) if same_backend_routes else (("a", 0), ("b", 20), ("c", 40))
+        gateway_homes = {name: context.workspace_root / name / "boxteam-home" for name, _ in layout}
+        for name, offset in layout:
+            if same_backend_routes and name == "b":
+                # 两条 Gateway 路由共享唯一 Popen；绝不启动第二个 backend 共写工作区。
+                workspaces[name], backends[name] = workspaces["a"], backends["a"]
+                backend_starters[name] = backend_starters["a"]
+                if gateway_homes[name].exists():
+                    shutil.rmtree(gateway_homes[name])
+                continue
             node_context = replace(context, workspace_root=context.workspace_root / name / "workspace")
             workspace = prepare_workspace(node_context, ports.port(10), ports.port(offset + 1))
             # 模板身份不能被三个独立工作区共享；由正式启动 owner 创建各自 UUID。
@@ -208,36 +223,41 @@ async def open_communication_triad(
             def close_owned_backend(name=name):
                 close_backend_process(nodes[name].backend if name in nodes else backends[name])
             resources.push_async_callback(asyncio.to_thread, close_owned_backend)
-        for name, offset in (("b", 20), ("c", 40), ("a", 0)):
+        for name, offset in (*layout[1:], layout[0]):
             workspace = workspaces[name]
+            # B 在单 Backend 模式没有启动 backend，仍必须独立初始化自己的 Gateway HOME。
+            install_user_configuration(config_root=gateway_homes[name] / "config", profile="default", project_root=root, force=False)
             if name == "a":
-                config_path = workspace.parent / "boxteam-home/config/gateway.jsonc"
+                config_path = gateway_homes[name] / "config/gateway.jsonc"
                 payload = commentjson.loads(config_path.read_text())
                 python = resolve_workspace_python_executable(root)
                 payload["workspaces"] = [{
                     "kind": "remote_gateway", "connection_id": "rgw_c3_" + peer, "name": "C3 " + peer,
                     "host": "127.0.0.1", "port": ports.port(60), "username": username, "private_key_path": str(private_key),
                     "remote_gateway_port": ports.port(peer_offset + 1), "activate": False,
-                    "remote_pair_command": f"cd {shlex.quote(str(root))} && BOXTEAM_HOME={shlex.quote(str(workspaces[peer].parent / 'boxteam-home'))} {shlex.quote(str(python))} -m app.gateway.federation_pairing",
-                } for peer, peer_offset in (("b", 20), ("c", 40))]
+                    "remote_pair_command": f"cd {shlex.quote(str(root))} && BOXTEAM_HOME={shlex.quote(str(gateway_homes[peer]))} {shlex.quote(str(python))} -m app.gateway.federation_pairing",
+                } for peer, peer_offset in layout[1:]]
                 config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
             gateway = await asyncio.to_thread(
                 start_gateway_process, workspace_root=workspace, port=ports.port(offset + 1),
                 default_backend_url=f"http://127.0.0.1:{backends[name].port}",
                 ssh_tunnel_port_range=(ports.port(70), ports.port(79)) if name == "a" else None,
                 extra_env=(gateway_environment or {}) | {"BOXTEAM_GATEWAY_SSH_KNOWN_HOSTS_FILE": str(known_hosts)},
+                boxteam_home=gateway_homes[name],
+                artifacts_dir=context.artifacts_dir / ("gateway-" + name),
             )
             resources.push_async_callback(asyncio.to_thread, close_gateway_process, gateway)
             client = await resources.enter_async_context(httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=90))
             await acquire_gateway_guest(client)
             health = await client.get("/api/gateway/health")
             assert health.status_code == 200, health.text
-            nodes[name] = CommunicationNode(workspace, client, health.json()["data"]["gateway_id"], backends[name].workspace_id, backends[name], backend_starters[name])
+            nodes[name] = CommunicationNode(workspace, client, health.json()["data"]["gateway_id"], backends[name].workspace_id, backends[name], backend_starters[name], gateway_homes[name], gateway)
         async with asyncio.timeout(20):
-            while len(nodes["a"].channels()) != 2 or len(nodes["b"].channels()) != 1 or len(nodes["c"].channels()) != 1:
+            while len(nodes["a"].channels()) != len(layout) - 1 or any(len(nodes[name].channels()) != 1 for name, _ in layout[1:]):
                 await asyncio.sleep(0.05)
-        assert sorted(nodes["a"].channels()) == sorted([(nodes["b"].gateway_id, "outbound"), (nodes["c"].gateway_id, "outbound")])
-        assert nodes["b"].channels() == [(nodes["a"].gateway_id, "inbound")]
-        assert nodes["c"].channels() == [(nodes["a"].gateway_id, "inbound")]
-        assert len({node.workspace_id for node in nodes.values()}) == 3
+        assert sorted(nodes["a"].channels()) == sorted((nodes[name].gateway_id, "outbound") for name, _ in layout[1:])
+        for name, _ in layout[1:]:
+            assert nodes[name].channels() == [(nodes["a"].gateway_id, "inbound")]
+        assert len({node.workspace_id for node in nodes.values()}) == (1 if same_backend_routes else 3)
+        assert len({id(node.backend.process) for node in nodes.values()}) == (1 if same_backend_routes else 3)
         yield nodes

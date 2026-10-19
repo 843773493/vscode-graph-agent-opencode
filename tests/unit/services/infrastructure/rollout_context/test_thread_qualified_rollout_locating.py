@@ -25,6 +25,8 @@ from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex, uuid7_datetime_from_hex
 from app.core.session_control_store import SessionControlStore
 from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
@@ -32,7 +34,14 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
+)
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
+from app.services.infrastructure.rollout_history.snapshot import IndexedHistorySnapshots
 from tests.support.canonical_id_at import thread_id_at
 from tests.support.catalog_session_bundle import (
     seed_catalog_session_bundle,
@@ -245,18 +254,16 @@ def test_main_and_child_rollout_stores_are_physically_isolated(
 def test_acceptance_owner_roundtrips_same_local_ids_in_sibling_threads(
     tmp_path: Path,
     session_bundle_factory,
+    frozen_provider_wire,
+    frozen_provider_activation,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     storage = saver._storage
     session_node = storage.storage._path_resolver.resolve_session_node(SESSION_ID)
-    thread_ids = (f"thr_{create_uuid_hex()}", f"thr_{create_uuid_hex()}")
-    for thread_id in thread_ids:
-        _publish_child_thread(
-            session_node,
-            thread_id=thread_id,
-        )
+    thread_ids = (storage.storage.main_thread_id(SESSION_ID), f"thr_{create_uuid_hex()}")
+    _publish_child_thread(session_node, thread_id=thread_ids[1])
 
     for thread_id in thread_ids:
         saver.accept_turn(
@@ -271,6 +278,39 @@ def test_acceptance_owner_roundtrips_same_local_ids_in_sibling_threads(
             root_item_id="item-root-local-1",
             initial_execution_id="execution-local-1",
         )
+        admission = saver.execution_admission(
+            SESSION_ID, thread_id=thread_id, execution_id="execution-local-1",
+        )
+        with (
+            session_thread_owner_scope(MutationIntentOwner(SESSION_ID, thread_id), langgraph_thread_id=thread_id),
+            execution_admission_scope(admission, langgraph_thread_id=thread_id),
+        ):
+            prepared = saver.prepare_context_for_provider(
+                SESSION_ID, thread_id, turn_id="turn-local-1", execution_id="execution-local-1",
+                plan_creation_idempotency_key="owner-plan", seal_idempotency_key="owner-seal",
+                context_source_manager=ContextSourceManager(
+                    owner=ContextSourceOwnerKey(SESSION_ID, thread_id), control_state_port=saver,
+                ),
+                tool_set_supplier=lambda: ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=()),
+                **frozen_provider_wire("test-provider", "chat_completions"),
+                **frozen_provider_activation(saver, plan_creation_idempotency_key="owner-plan",
+                                             model_call_id="00000000-0000-4000-8000-000000000001"),
+            )
+        saver.register_model_call(
+            SESSION_ID, thread_id=thread_id, execution_id="execution-local-1",
+            model_call_id="00000000-0000-4000-8000-000000000001", attempt=1,
+            provider="test-provider", assembly_id=str(prepared["assembly_id"]),
+        )
+
+    saver.update_model_call_outcome(
+        SESSION_ID, thread_id=thread_ids[0], model_call_id="00000000-0000-4000-8000-000000000001",
+        outcome="failed", dispatch_state="failed",
+    )
+
+    saver.converge_execution(
+        SESSION_ID, thread_id=thread_ids[0], turn_id="turn-local-1",
+        execution_id="execution-local-1", outcome="failed", turn_status="failed",
+    )
 
     for thread_id in thread_ids:
         index_path = storage.storage.index_path(SESSION_ID, thread_id=thread_id)
@@ -297,6 +337,70 @@ def test_acceptance_owner_roundtrips_same_local_ids_in_sibling_threads(
                 "SELECT item_id FROM item_catalog WHERE item_id = ?",
                 ("item-root-local-1",),
             ).fetchone() == ("item-root-local-1",)
+            assert connection.execute(
+                "SELECT m.session_id,m.thread_id,m.execution_id,e.turn_id,m.outcome "
+                "FROM model_calls m JOIN executions e USING(session_id,thread_id,execution_id)",
+            ).fetchone() == (
+                SESSION_ID, thread_id, "execution-local-1", "turn-local-1",
+                "failed" if thread_id == thread_ids[0] else "unknown",
+            )
+            assert connection.execute("SELECT outcome FROM executions").fetchone() == (
+                "failed" if thread_id == thread_ids[0] else "unknown",
+            )
+            for table in ("executions", "model_calls", "turn_execution_links"):
+                columns = {row[1]: row for row in connection.execute(f"PRAGMA table_info({table})")}
+                assert columns["thread_id"][3] == 1
+                indexes = connection.execute(f"PRAGMA index_list({table})").fetchall()
+                indexed = [(row[2], [column[2] for column in connection.execute(f"PRAGMA index_info('{row[1]}')")]) for row in indexes]
+                assert any(unique and names[:2] == ["session_id", "thread_id"] for unique, names in indexed)
+                assert any(names[:2] == ["session_id", "thread_id"] for _, names in indexed)
+                with pytest.raises(sqlite3.IntegrityError, match="NOT NULL"):
+                    connection.execute(f"UPDATE {table} SET thread_id=NULL")
+
+
+@pytest.mark.parametrize("entry", ["saver", "execution_store"])
+@pytest.mark.parametrize("operation", ["accept_turn", "execution_for_turn", "register_model_call", "update_model_call_outcome", "converge_execution"])
+@pytest.mark.parametrize("bad_thread", ["missing", None, "", "main", SESSION_ID])
+def test_execution_fact_entries_reject_missing_thread_without_writing(
+    storage: RolloutContextStore, entry: str, operation: str, bad_thread: str | None,
+) -> None:
+    main = storage.storage.main_thread_id(SESSION_ID)
+    storage.storage.initialize(SESSION_ID, thread_id=main)
+    owner = storage.executions if entry == "execution_store" else RolloutCheckpointSaver(storage.storage.sessions_dir)
+    parameters = {
+        "accept_turn": {"accepted_ingress_id": "bad-ingress", "acceptance_idempotency_key": "bad-key",
+                        "job_id": "bad-job", "admission_idempotency_key": "bad-admission", "payload": "bad"},
+        "execution_for_turn": {"turn_id": "bad-turn"},
+        "register_model_call": {"execution_id": "bad-execution", "model_call_id": "bad-call", "attempt": 1, "provider": "test"},
+        "update_model_call_outcome": {"model_call_id": "bad-call", "outcome": "failed"},
+        "converge_execution": {"turn_id": "bad-turn", "execution_id": "bad-execution", "outcome": "failed", "turn_status": "failed"},
+    }[operation]
+    if bad_thread != "missing":
+        parameters["thread_id"] = bad_thread
+    before = {path: path.read_bytes() for path in storage.storage.root(SESSION_ID, thread_id=main).rglob("*") if path.is_file()}
+    with pytest.raises((TypeError, RuntimeError), match="thread_id|thread alias"):
+        getattr(owner, operation)(SESSION_ID, **parameters)
+    after = {path: path.read_bytes() for path in storage.storage.root(SESSION_ID, thread_id=main).rglob("*") if path.is_file()}
+    assert after == before
+
+
+def test_execution_owner_never_comes_from_checkpoint_namespace(
+    storage: RolloutContextStore,
+) -> None:
+    main = storage.storage.main_thread_id(SESSION_ID)
+    child = f"thr_{create_uuid_hex()}"
+    _publish_child_thread(storage.storage._path_resolver.resolve_session_node(SESSION_ID), thread_id=child)
+    storage.executions.accept_turn(
+        SESSION_ID, thread_id=child, checkpoint_ns=main,
+        accepted_ingress_id="namespace-ingress", acceptance_idempotency_key="namespace-key",
+        job_id="namespace-job", admission_idempotency_key="namespace-admission", payload="child",
+        turn_id="namespace-turn", initial_execution_id="namespace-execution",
+    )
+    with storage.storage._connect(child, main, session_id=SESSION_ID, read_only=True) as connection:
+        assert connection.execute("SELECT session_id,thread_id,execution_id FROM executions").fetchall() == [
+            (SESSION_ID, child, "namespace-execution"),
+        ]
+    assert not storage.storage.index_path(SESSION_ID, thread_id=main).exists()
 
 
 def _write_admitted_checkpoint(
@@ -517,3 +621,30 @@ def test_checkpoint_reads_reject_cross_owner_config_and_snapshot(
             None,
             snapshot=child_snapshot,
         )
+
+
+def test_indexed_history_cache_keeps_same_local_ids_and_revisions_in_each_thread(
+    storage: RolloutContextStore,
+) -> None:
+    main = storage.storage.main_thread_id(SESSION_ID)
+    _publish_child_thread(storage.storage._path_resolver.resolve_session_node(SESSION_ID), thread_id=CHILD_THREAD_ID)
+    saver = RolloutCheckpointSaver(storage.storage.sessions_dir, storage=storage)
+    for thread in (main, CHILD_THREAD_ID):
+        _write_admitted_checkpoint(saver, session_id=SESSION_ID, thread_id=thread, label="cache-local")
+    snapshots = IndexedHistorySnapshots(saver._context_reader)
+    revisions = []
+    entries = {}
+    for thread in (main, CHILD_THREAD_ID, main, CHILD_THREAD_ID):
+        history = snapshots.read(SESSION_ID, thread)
+        assert history is not None
+        with history.snapshot as snapshot:
+            assert (snapshot.session_id, snapshot.thread_id) == (SESSION_ID, thread)
+            assert history.turn_count == 1
+            revisions.append((snapshot.manifest.history_view_revision, snapshot.manifest.committed_sequence))
+            key = (SESSION_ID, thread)
+            cached = snapshots._indexed_history_cache[key]
+            if key in entries:
+                assert cached is entries[key]
+            entries[key] = cached
+    assert len(set(revisions)) == 1
+    assert set(snapshots._indexed_history_cache) == {(SESSION_ID, main), (SESSION_ID, CHILD_THREAD_ID)}

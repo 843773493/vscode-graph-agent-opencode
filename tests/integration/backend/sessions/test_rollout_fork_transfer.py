@@ -37,6 +37,7 @@ from tests.support.communication_federation import (
 )
 from tests.support.e2e_test_control import E2ETestControlHarness
 from tests.support.fork_deadline import ForkDeadlineRegistry, ForkOperationDeadline
+from tests.support.gateway_processes import close_gateway_process
 from tests.support.ports import integration_port_block_for_file
 from tests.support.session_navigation_http import submit_navigation_operation
 
@@ -50,6 +51,7 @@ async def transfer_triad(request: pytest.FixtureRequest) -> AsyncIterator[
     artifacts = context.artifacts_dir / run_partition / request.node.name
     artifacts.mkdir(parents=True, exist_ok=True)
     ports = integration_port_block_for_file(Path(request.node.path))
+    same_backend_routes = bool(getattr(request, "param", {}).get("same_backend_routes"))
     control = E2ETestControlHarness(artifacts)
     fork_deadlines = ForkDeadlineRegistry(artifacts)
     control.start()
@@ -58,8 +60,10 @@ async def transfer_triad(request: pytest.FixtureRequest) -> AsyncIterator[
             async with open_communication_triad(
                 context, _prepare_workspace, backend_environment=control.environment,
                 backend_asgi_app="tests.support.section8_backend:app",
-                resource_service_nodes=("b",),
+                # 共享 Backend 时真实 owner 是 A，辅助服务必须跟随该 owner 启动。
+                resource_service_nodes=("a" if same_backend_routes else "b",),
                 on_sshd_started=fork_deadlines.watchdog.register_c3_sshd,
+                same_backend_routes=same_backend_routes,
             ) as nodes:
                 try:
                     yield nodes, model, artifacts, control, fork_deadlines
@@ -191,6 +195,7 @@ async def test_debug_configuration_choice_uses_source_owner_thread_across_gatewa
         )
         assert response.status_code == 200, response.text
         result = response.json()["data"]
+        assert result["export_release"] == ({"state": "confirmed", "error": None} if target is not source else None)
         assert result["source_uri"] == source_uri_owner
         target_thread_uri = result["thread_uri"]
         target_parsed, target_session_id, target_thread_id = parse_session_thread_uri(target_thread_uri)
@@ -245,6 +250,22 @@ async def test_debug_configuration_choice_uses_source_owner_thread_across_gatewa
         assert json.loads(capture_request)["resources"] == [{
             "resource_uri": copied["resource_uri"], "action": "copy_snapshot",
         }]
+        target_capture = _capture_record(target, operation_id)
+        source_capture = _capture_record(source, operation_id)
+        assert target_capture is not None and source_capture is not None
+        assert target_capture["state"] == source_capture["state"] == "materialized"
+        assert target_capture["snapshot_sha256"] == source_capture["snapshot_sha256"] is not None
+        assert target_capture["marker_sha256"] == source_capture["marker_sha256"] is not None
+        assert target_capture["request_json"] == source_capture["request_json"]
+        if target is not source:
+            assert target_capture["export_release_state"] == "confirmed"
+            receipt = json.loads(target_capture["export_release_receipt_json"])
+            assert receipt == {field: value for field, value in source_capture.items() if not field.startswith("export_release_")}
+        else:
+            assert target_capture["export_release_state"] is None
+        for node, capture in ((source, source_capture), (target, target_capture)):
+            root = node.workspace / ".boxteam/navigation" / capture["snapshot_relative_locator"]
+            assert not root.exists() and not root.is_symlink()
 
         retry = await _post_fork(
             origin, source_session_id, request, _fork_deadline(target, request, fork_deadlines),
@@ -256,6 +277,9 @@ async def test_debug_configuration_choice_uses_source_owner_thread_across_gatewa
             result["session"]["session_id"], result["thread_id"], result["thread_uri"],
         )
         assert repeated["resources"] == result["resources"]
+        assert repeated["export_release"] == result["export_release"]
+        assert _capture_record(target, operation_id) == target_capture
+        assert _capture_record(source, operation_id) == source_capture
         return result
 
     local_workspace_uri = workspace_session_inventory_uri(remote_target.workspace_id)
@@ -376,6 +400,160 @@ def _attachment_claims(node: CommunicationNode, key: str) -> list[dict[str, obje
             "SELECT * FROM fork_attachment_claims WHERE copy_operation_id=? ORDER BY claim_id", (key,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transfer_triad", [{"same_backend_routes": True}], indirect=True)
+@pytest.mark.parametrize("creation_kind", ["new_child_thread", "new_session_main"])
+async def test_same_backend_two_gateway_routes_fork_and_cold_replay(transfer_triad, creation_kind: str):
+    nodes, model, artifacts, control, fork_deadlines = transfer_triad
+    target, source = nodes["a"], nodes["b"]
+    assert target.backend.process is source.backend.process
+    assert target.workspace == source.workspace and target.workspace_id == source.workspace_id
+    assert target.gateway_id != source.gateway_id and target.gateway_home != source.gateway_home
+    assert target.gateway is not None and source.gateway is not None
+    assert target.gateway.process.pid != source.gateway.process.pid
+    topology = {}
+    for name, node in nodes.items():
+        health = await node.client.get("/api/gateway/health")
+        inventory = await node.client.get("/api/gateway/workspaces")
+        workspace = await node.client.get("/api/v1/workspace")
+        assert health.status_code == inventory.status_code == workspace.status_code == 200
+        for response in (health, inventory, workspace):
+            assert response.headers["X-Request-ID"] == response.json()["request_id"]
+        assert health.json()["data"]["gateway_id"] == node.gateway_id
+        assert workspace.json()["data"]["workspace_id"] == node.workspace_id
+        assert Path(workspace.json()["data"]["root_path"]) == node.workspace
+        topology[name] = {"health": health.json(), "inventory": inventory.json(), "workspace": workspace.json(),
+                          "backend_pid": node.backend.process.pid, "gateway_pid": node.gateway.process.pid, "gateway_home": str(node.gateway_home)}
+    (artifacts / "same-owner-topology.json").write_text(json.dumps(topology, ensure_ascii=False, indent=2) + "\n")
+    model.response_callback = lambda payload: {"content": "同 owner 来源已准备"}
+    session_id = await create_session(source.client, "同 Backend 双 Gateway")
+    body = b"same-owner-attachment" * 4096
+    await _send(source, session_id, "同 owner 主线程附件历史", attachments=_inline_attachment(body))
+    point_response = await source.client.get(f"/api/v1/sessions/{session_id}/fork-source-point", params={"mode": "full_rollout_copy"})
+    assert point_response.status_code == 200, point_response.text
+    point = point_response.json()["data"]
+    _, _, main_thread_id = parse_session_thread_uri(point["source_uri"])
+    request = {
+        "idempotency_key": "same-backend-two-gateway-" + creation_kind,
+        "source_uri": thread_resource_uri(source.workspace_id, session_id, main_thread_id, gateway_authority=source.gateway_id),
+        "target_container_uri": resource_display_uri(scope="workspace", scope_id=target.workspace_id, kind="session",
+            tail_segments=(session_id,) if creation_kind == "new_child_thread" else (), gateway_authority=target.gateway_id),
+        "creation_kind": creation_kind, "mode": "full_rollout_copy",
+        "source_view_id": point["source_view_id"], "source_view_revision": point["source_view_revision"],
+    }
+    (artifacts / "same-owner-source-point.json").write_text(point_response.text)
+    (artifacts / "same-owner-request.json").write_text(json.dumps(request, ensure_ascii=False, indent=2) + "\n")
+    source_database = source.workspace / ".boxteam/attachments/catalog.sqlite"
+    with sqlite3.connect(source_database.as_uri() + "?mode=ro", uri=True) as connection:
+        source_blobs = connection.execute("SELECT * FROM attachment_blobs ORDER BY blob_id").fetchall()
+        source_refs = connection.execute("SELECT * FROM attachment_owner_refs ORDER BY owner_ref_id").fetchall()
+    key = "fork-" + hashlib.sha256(request["idempotency_key"].encode()).hexdigest()
+    session_node = await target.session_node(session_id)
+    child_node = session_node if creation_kind == "new_child_thread" else None
+    deadline = _fork_deadline(target, request, fork_deadlines)
+    control.arm(key, "copy.target.prepared")
+    fork_call = asyncio.create_task(target.client.post(f"/api/v1/sessions/{session_id}/fork-context", json=request))
+    reached = asyncio.create_task(asyncio.to_thread(control.acknowledged, key, "copy.target.prepared"))
+    try:
+        done, _ = await deadline.wait(asyncio.wait((fork_call, reached), return_when=asyncio.FIRST_COMPLETED), "same_owner_pre_capture")
+        if fork_call in done:
+            early = await fork_call
+            pytest.fail(f"same-owner 在 preparing 故障窗口前返回: {early.status_code}: {early.text}")
+        await reached
+        preparing = _creation_record(target, key, child_node)
+        assert preparing["state"] == "preparing" and _capture_record(target, key) is None
+        assert "source_owner_instance_id" not in preparing["request_intent_json"]
+        assert "source_target_creation_preimage_hash" not in preparing["request_intent_json"]
+        assert json.loads(preparing["request_intent_json"])["capture_decision"] == {
+            "source_storage_domain_id": source.workspace_id, "target_storage_domain_id": target.workspace_id,
+            "capture_owner": "local",
+        }
+        assert _attachment_claims(target, key) == []
+        lifecycle = {"pre_capture_kill": target.restart_backend("kill")}
+        control.release(key, "copy.target.prepared")
+        interrupted = await deadline.wait(fork_call, "same_owner_interrupted_http")
+        assert interrupted.status_code >= 400, interrupted.text
+        # 首次真实握手已随 creation 固定；重启捕获不得依赖尚未监听的 Backend 或来源 Gateway。
+        close_gateway_process(source.gateway)
+        assert source.gateway.process.poll() is not None
+        lifecycle["pre_capture_start"] = target.restart_backend("start")
+    finally:
+        control.release(key, "copy.target.prepared")
+        for task in (fork_call, reached):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(fork_call, reached, return_exceptions=True)
+    response = await _post_fork(target, session_id, request, deadline, stage="same_owner_fork")
+    (artifacts / "same-owner-response.json").write_text(response.text)
+    assert response.status_code == 200, response.text
+    published = response.json()["data"]
+    target_thread_id = published["thread_id"]
+    target_session_id = published["session"]["session_id"]
+    assert target_thread_id != main_thread_id
+    assert (target_session_id == session_id) == (creation_kind == "new_child_thread")
+    assert published["source_uri"] == request["source_uri"]
+    assert published["export_release"] is None
+    assert len(published["resources"]) == 1
+    resource = published["resources"][0]
+    assert resource["action"] == ("reuse_reference" if creation_kind == "new_child_thread" else "retain_reference")
+    assert resource["availability"] == "available"
+    capture = _capture_record(target, key)
+    assert capture is not None and capture["state"] == "materialized"
+    frozen = json.loads(capture["request_json"])
+    assert frozen["source_storage_domain_id"] == frozen["target_storage_domain_id"] == target.workspace_id
+    assert "source_owner_instance_id" not in capture["request_json"]
+    assert "source_target_creation_preimage_hash" not in capture["request_json"]
+    assert capture["export_release_state"] is None
+    claims = _attachment_claims(target, key)
+    if creation_kind == "new_child_thread":
+        assert claims == []
+    else:
+        assert len(claims) == 1 and claims[0]["state"] == "committed"
+    assert not (target.workspace / ".boxteam/navigation" / capture["snapshot_relative_locator"]).exists()
+    creation = _creation_record(target, key, child_node)
+    with sqlite3.connect(source_database.as_uri() + "?mode=ro", uri=True) as connection:
+        assert connection.execute("SELECT * FROM attachment_blobs ORDER BY blob_id").fetchall() == source_blobs
+        refs = connection.execute("SELECT * FROM attachment_owner_refs ORDER BY owner_ref_id").fetchall()
+    assert all(row in refs for row in source_refs)
+    assert len(refs) == len(source_refs) + (creation_kind == "new_session_main")
+    if creation_kind == "new_child_thread":
+        with sqlite3.connect((session_node / "session-control.sqlite").as_uri() + "?mode=ro", uri=True) as connection:
+            assert connection.execute("SELECT * FROM copy_attachment_settlements WHERE copy_operation_id=?", (key,)).fetchall() == []
+    assert creation["state"] == "published"
+    assert creation["request_intent_json"] == preparing["request_intent_json"]
+    assert creation["preimage_hash"] == preparing["preimage_hash"]
+    assert creation["fork_delivery_request_id"] == preparing["fork_delivery_request_id"]
+    assert "source_owner_instance_id" not in creation["request_intent_json"]
+    assert "source_target_creation_preimage_hash" not in creation["request_intent_json"]
+    phases = [event for event in control.events if event.get("operation_id") == key]
+    source_phases = [event for event in phases if event["phase"] == "copy.source.export_authorized"]
+    assert source_phases == []
+    local_phases = [event for event in phases if event["phase"] == "copy.source.local_capture_authorized"]
+    assert len(local_phases) == 1
+    assert local_phases[0]["details"] == {
+        "gateway_id": target.gateway_id, "source_gateway_id": source.gateway_id, "same_storage_owner": True,
+    }
+    assert all(event["details"]["gateway_id"] == target.gateway_id for event in phases if event["phase"] == "copy.target.prepared")
+    (artifacts / "same-owner-capture.json").write_text(json.dumps({"capture": capture, "creation": creation, "phases": phases}, ensure_ascii=False, indent=2) + "\n")
+    before_requests = len(model.requests)
+    assert source.gateway.process.poll() is not None
+    lifecycle["cold_restart"] = target.restart_backend()
+    (artifacts / "same-owner-backend-restart.json").write_text(json.dumps(lifecycle, indent=2) + "\n")
+    replay = await _post_fork(target, session_id, request, _fork_deadline(target, request, fork_deadlines), stage="same_owner_cold_replay")
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["data"] == published
+    history = await target.client.post(f"/api/v1/sessions/{target_session_id}/threads/{target_thread_id}/history", json={})
+    assert history.status_code == 200 and "同 owner 主线程附件历史" in history.text, history.text
+    attachment = await target.client.get(f"/api/v1/sessions/{target_session_id}/attachments/content", params={"file_id": resource["target_uri"], "variant": "original"})
+    assert attachment.status_code == 200 and attachment.content == body
+    (artifacts / "same-owner-cold-history.json").write_text(history.text)
+    await _send(target, target_session_id, "同 owner 目标后继输入", thread_id=target_thread_id)
+    wire = json.dumps(model.requests[before_requests:], ensure_ascii=False)
+    assert "同 owner 主线程附件历史" in wire and "同 owner 目标后继输入" in wire
+    assert _capture_record(target, key) == capture and _attachment_claims(target, key) == claims
+    (artifacts / "same-owner-successor-wire.json").write_text(wire)
 
 
 @pytest.mark.asyncio
@@ -856,6 +1034,164 @@ def _capture_record(node: CommunicationNode, key: str) -> dict[str, object] | No
         connection.row_factory = sqlite3.Row
         row = connection.execute("SELECT * FROM fork_source_captures WHERE copy_operation_id=?", (key,)).fetchone()
     return dict(row) if row is not None else None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("creation_kind", "source_recovery"), [
+    ("new_session_main", "incomplete"),
+    ("new_child_thread", "incomplete"),
+    ("new_session_main", "transport_unavailable"),
+])
+async def test_real_partial_source_capture_recovery_preserves_owner_error(
+    transfer_triad, creation_kind: str, source_recovery: str,
+):
+    nodes, model, artifacts, control, fork_deadlines = transfer_triad
+    source, target = nodes["b"], nodes["c"]
+    model.response_callback = lambda payload: {"content": "来源已持久化，等待真实跨 Gateway fork"}
+    source_session_id = await create_session(source.client, "未完成来源 capture")
+    await _send(source, source_session_id, "来源正文必须保持可读", attachments=_inline_attachment(b"partial-source"))
+    point_response = await source.client.get(
+        f"/api/v1/sessions/{source_session_id}/fork-source-point", params={"mode": "full_rollout_copy"},
+    )
+    assert point_response.status_code == 200, point_response.text
+    point = point_response.json()["data"]
+    source_address = parse_resource_uri(point["source_uri"])
+    child_session_id = None
+    child_session_node = None
+    if creation_kind == "new_child_thread":
+        child_session_id = await create_session(target.client, "保留既有目标 Session")
+        child_session_node = await target.session_node(child_session_id)
+    request = {
+        "source_uri": resource_display_uri(
+            scope=source_address.scope, scope_id=source_address.scope_id, kind=source_address.kind,
+            tail_segments=source_address.tail_segments, gateway_authority=source.gateway_id,
+        ),
+        "target_container_uri": resource_display_uri(
+            scope="workspace", scope_id=target.workspace_id, kind="session",
+            tail_segments=(child_session_id,) if child_session_id is not None else (), gateway_authority=target.gateway_id,
+        ),
+        "creation_kind": creation_kind, "mode": "full_rollout_copy",
+        "source_view_id": point["source_view_id"], "source_view_revision": point["source_view_revision"],
+        "idempotency_key": f"partial-{creation_kind}-{source_recovery}",
+        "resources": [{"resource_uri": item["resource_uri"], "action": "copy_snapshot"} for item in point["resources"]],
+    }
+    (artifacts / "fork-request.json").write_text(json.dumps(request, ensure_ascii=False, indent=2) + "\n")
+    key = "fork-" + hashlib.sha256(request["idempotency_key"].encode()).hexdigest()
+    first_request_id = f"req-partial-{creation_kind}-{source_recovery}"
+    phase = "copy.source.partial"
+    control.arm(key, phase)
+    deadline = _fork_deadline(target, request, fork_deadlines)
+    provider_requests = len(model.requests)
+    fork_call = asyncio.create_task(target.client.post(
+        f"/api/v1/sessions/{source_session_id}/fork-context", json=request, headers={"X-Request-ID": first_request_id},
+    ))
+    reached = asyncio.create_task(asyncio.to_thread(control.acknowledged, key, phase))
+    lifecycle = {}
+    stderr_path = Path(target.backend.stderr_file.name)
+    try:
+        done, _ = await deadline.wait(
+            asyncio.wait((fork_call, reached), return_when=asyncio.FIRST_COMPLETED), "wait_for_partial_source_capture",
+        )
+        if fork_call in done:
+            response = await deadline.wait(fork_call, "unexpected_response_before_partial_capture")
+            pytest.fail(f"fork 未到来源 partial 窗口即返回 HTTP {response.status_code}: {response.text}")
+        await deadline.wait(reached, "partial_source_capture_acknowledged")
+        frozen = _creation_record(target, key, child_session_node)
+        target_before = _capture_record(target, key)
+        source_before = _capture_record(source, key)
+        assert frozen["state"] == "preparing" and frozen["fork_delivery_request_id"] == first_request_id
+        assert target_before is not None and source_before is not None
+        for capture in (source_before, target_before):
+            assert capture["state"] == "preparing" and capture["snapshot_sha256"] is None and capture["marker_sha256"] is None
+        assert target_before["export_release_state"] == "pending"
+        source_root = source.workspace / ".boxteam/navigation" / source_before["snapshot_relative_locator"]
+        target_root = target.workspace / ".boxteam/navigation" / target_before["snapshot_relative_locator"]
+        assert (source_root / source_session_id / "rollout").is_dir()
+        assert not (source_root / "captured.json").exists() and not target_root.exists()
+        (artifacts / "frozen-before-interruption.json").write_text(json.dumps({
+            "creation": frozen, "source": source_before, "target": target_before,
+        }, ensure_ascii=False, indent=2) + "\n")
+
+        # 两端只中断本 fixture 的真实 Popen；私有 artifact 保留原 owner preparing 事实。
+        deadline.set_stage("interrupt_target_before_source_http_failure")
+        lifecycle["target_kill"] = target.restart_backend("kill")
+        deadline.set_stage("interrupt_source_before_captured_marker")
+        lifecycle["source_kill"] = source.restart_backend("kill")
+        control.release(key, phase)
+        interrupted = await deadline.wait(fork_call, "interrupted_fork_http_response")
+        (artifacts / "interrupted-response.json").write_text(interrupted.text)
+        assert interrupted.status_code >= 400, interrupted.text
+        assert _creation_record(target, key, child_session_node) == frozen
+
+        if source_recovery == "incomplete":
+            lifecycle["source_start"] = await deadline.wait(asyncio.to_thread(source.restart_backend, "start"), "restart_partial_source_owner")
+        stderr_offset = stderr_path.stat().st_size
+        if source_recovery == "transport_unavailable":
+            with pytest.raises(RuntimeError, match="后端进程提前退出"):
+                await deadline.wait(asyncio.to_thread(target.restart_backend, "start"), "reject_unknown_source_transport_during_startup")
+            failed_startup = stderr_path.read_bytes()[stderr_offset:].decode()
+            (artifacts / "unknown-transport-startup.stderr.log").write_text(failed_startup)
+            assert "Gateway 上下文查询失败" in failed_startup and "path=/api/gateway/federation/relay" in failed_startup
+            assert "fork startup 已中止未完成 capture" not in failed_startup
+            aborted_pending = _capture_record(target, key)
+            assert aborted_pending["state"] == "aborted" and aborted_pending["export_release_state"] == "pending"
+            assert aborted_pending["export_release_error"]
+            lifecycle["source_start"] = await deadline.wait(asyncio.to_thread(source.restart_backend, "start"), "restore_source_after_loud_transport_failure")
+        lifecycle["target_start"] = await deadline.wait(asyncio.to_thread(target.restart_backend, "start"), "recover_target_through_real_gateway_relay")
+        if source_recovery == "incomplete":
+            startup_log = stderr_path.read_bytes()[stderr_offset:].decode()
+            (artifacts / "incomplete-source-startup.stderr.log").write_text(startup_log)
+            assert "fork startup 已中止未完成 capture" in startup_log
+        else:
+            # 原失败已明确中止 creation；重试只确认真实来源释放，不重新创建目标。
+            replay = await deadline.wait(target.client.post(
+                f"/api/v1/sessions/{source_session_id}/fork-context", json=request,
+            ), "confirm_aborted_operation_export_release")
+            (artifacts / "aborted-operation-replay.json").write_text(replay.text)
+            assert replay.status_code == 500, replay.text
+
+        aborted = _creation_record(target, key, child_session_node)
+        target_after = _capture_record(target, key)
+        source_after = _capture_record(source, key)
+        assert aborted["state"] == "aborted"
+        identity_fields = ("preimage_hash", "request_intent_json", "fork_delivery_request_id",
+                           "main_thread_id" if child_session_node is None else "child_thread_id")
+        assert {field: aborted[field] for field in identity_fields} == {field: frozen[field] for field in identity_fields}
+        assert source_after["state"] == target_after["state"] == "aborted"
+        assert target_after["export_release_state"] == "confirmed" and target_after["export_release_error"] is None
+        receipt = json.loads(target_after["export_release_receipt_json"])
+        assert receipt == {field: value for field, value in source_after.items() if not field.startswith("export_release_")}
+        for before, after in ((source_before, source_after), (target_before, target_after)):
+            assert {field: after[field] for field in ("copy_operation_id", "creation_key", "request_json", "preimage_hash", "snapshot_id", "snapshot_relative_locator")} == {
+                field: before[field] for field in ("copy_operation_id", "creation_key", "request_json", "preimage_hash", "snapshot_id", "snapshot_relative_locator")
+            }
+            assert after["snapshot_sha256"] is None and after["marker_sha256"] is None
+        assert not source_root.exists() and not target_root.exists()
+        assert _attachment_claims(source, key) == _attachment_claims(target, key) == []
+        if child_session_node is None:
+            visible = await deadline.wait(target.client.get("/api/v1/session-catalog/export"), "verify_aborted_session_invisible")
+            assert visible.status_code == 200, visible.text
+            assert target_after["target_session_id"] not in {item["node_id"] for item in visible.json()["data"]["items"]}
+        else:
+            with sqlite3.connect((child_session_node / "session-control.sqlite").as_uri() + "?mode=ro", uri=True) as connection:
+                assert connection.execute("SELECT thread_id FROM thread_catalog WHERE thread_id=?", (target_after["target_thread_id"],)).fetchall() == []
+
+        lifecycle["source_offline"] = source.restart_backend("kill")
+        lifecycle["target_second_start"] = await deadline.wait(asyncio.to_thread(target.restart_backend), "idempotent_aborted_startup_source_offline")
+        assert _creation_record(target, key, child_session_node) == aborted
+        assert _capture_record(target, key) == target_after and _capture_record(source, key) == source_after
+        assert len(model.requests) == provider_requests
+        (artifacts / "terminal-owner-records.json").write_text(json.dumps({
+            "creation": aborted, "source": source_after, "target": target_after,
+        }, ensure_ascii=False, indent=2) + "\n")
+        deadline.complete()
+    finally:
+        control.release(key, phase)
+        for task in (fork_call, reached):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(fork_call, reached, return_exceptions=True)
+        (artifacts / "backend-lifecycle.json").write_text(json.dumps(lifecycle, ensure_ascii=False, indent=2) + "\n")
 
 
 @pytest.mark.asyncio

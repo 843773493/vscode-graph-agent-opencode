@@ -171,6 +171,35 @@ def test_turn_execution_link_roundtrips_complete_owner_pair() -> None:
     assert turn_execution_link_from_dict(turn_execution_link_to_dict(link)) == link
 
 
+@pytest.mark.parametrize("record_kind", ["execution", "model_call", "link"])
+@pytest.mark.parametrize("fault", ["missing", "none", "empty"])
+def test_control_identity_rejects_missing_thread_in_constructor_and_serde(
+    control_records: tuple[ExecutionRecord, ModelCallRecord], record_kind: str, fault: str,
+) -> None:
+    execution, call = control_records
+    link = TurnExecutionLink(
+        session_id="session-1", thread_id="thread-1", turn_id="turn-1",
+        execution_id="execution-1", execution_role="initial", execution_ordinal=1,
+        link_idempotency_key="turn-1:initial:execution-1",
+    )
+    record, decode = {
+        "execution": (execution, execution_record_from_dict),
+        "model_call": (call, model_call_record_from_dict),
+        "link": (link, turn_execution_link_from_dict),
+    }[record_kind]
+    raw = asdict(record)
+    if fault == "missing":
+        del raw["thread_id"]
+        error = TypeError
+    else:
+        raw["thread_id"] = None if fault == "none" else ""
+        error = ItemSchemaError
+    with pytest.raises(error, match="thread_id"):
+        type(record)(**raw)
+    with pytest.raises(error, match="thread_id"):
+        decode(raw)
+
+
 @pytest.mark.parametrize(
     "outcome", ["partial", "incomplete", "draft", "empty", "running"]
 )

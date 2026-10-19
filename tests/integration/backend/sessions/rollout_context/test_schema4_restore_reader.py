@@ -47,7 +47,7 @@ def restore_case(
     saver = RolloutCheckpointSaver(sessions)
     saver.accept_turn(
         session,
-        accepted_ingress_id="restore-ingress",
+        thread_id=saver._storage.storage.main_thread_id(session), accepted_ingress_id="restore-ingress",
         acceptance_idempotency_key="restore-acceptance",
         job_id="restore-job",
         admission_idempotency_key="restore-admission",

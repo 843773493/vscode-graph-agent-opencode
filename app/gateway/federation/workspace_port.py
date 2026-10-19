@@ -182,6 +182,13 @@ class WorkspaceSessionMainPort:
             from app.core.session_control_communication_ledger.observations import (
                 observation_error_code,
             )
+            if path == "/api/v1/sessions/fork-transfer" and response.status_code == 409 and response.headers.get("content-type", "").startswith("application/json"):
+                payload = response.json()
+                detail = payload.get("detail") if isinstance(payload, dict) else None
+                if isinstance(detail, dict) and detail.get("owner") == "fork_source_capture" and detail.get("code") == "fork_source_capture_incomplete":
+                    if payload.get("request_id") != request_id or response.headers.get("X-Request-ID") != request_id:
+                        raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "工作区 fork 错误响应 request_id 漂移")
+                    raise FederationError(FEDERATION_TARGET_OWNER_REJECTED, "目标工作区拒绝 fork 来源捕获", detail=detail)
             if path in {"/api/v1/context/read", "/api/v1/context/search"}:
                 if response.status_code in {403, 404}:
                     raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "上下文资源未共享或不存在")

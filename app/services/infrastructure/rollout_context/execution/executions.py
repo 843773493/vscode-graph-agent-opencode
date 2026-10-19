@@ -53,7 +53,7 @@ class RolloutExecutionsMixin:
         self,
         session_id: str,
         *,
-        thread_id: str | None = None,
+        thread_id: str,
         turn_id: str | None,
         execution_id: str,
         outcome: str,
@@ -119,7 +119,7 @@ class RolloutExecutionsMixin:
         self,
         session_id: str,
         *,
-        thread_id: str | None = None,
+        thread_id: str,
         turn_id: str | None,
         execution_id: str,
         outcome: str,
@@ -133,7 +133,7 @@ class RolloutExecutionsMixin:
     ) -> int:
         """运行终态与显式历史安装共用唯一 items/commit/projection 事务。"""
         session_id = strict_text(session_id, field="session_id")
-        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, strict_text(thread_id, field="thread_id"))
         turn_id = strict_optional_text(turn_id, field="turn_id")
         strict_text(execution_id, field="execution_id")
         outcome = strict_text(outcome, field="execution outcome")

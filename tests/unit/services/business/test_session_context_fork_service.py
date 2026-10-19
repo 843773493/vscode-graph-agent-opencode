@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from functools import partial
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from app.abstractions.session_context import WorkspaceSessionContextAccessError
+from app.agents.graph_binding import DEEP_AGENT_GRAPH_BINDING
 from app.core.resource_uri import thread_resource_uri
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.schemas.internal_v2.session import (
@@ -27,6 +30,12 @@ from app.services.business.session_context_resource import (
     workspace_session_inventory_uri,
 )
 from app.services.business.session_service import SessionService
+from app.services.infrastructure.rollout_context.checkpoint.fork_owner import (
+    CheckpointForkOwner,
+)
+from app.services.infrastructure.rollout_context.checkpoint.fork_source import (
+    RolloutForkResult,
+)
 
 SOURCE_WORKSPACE_ID = "11111111-1111-4111-8111-111111111111"
 TARGET_WORKSPACE_ID = "22222222-2222-4222-8222-222222222222"
@@ -116,6 +125,113 @@ def fork_result(fork_request: SessionForkRequest) -> SessionForkResultDTO:
         source_view_id=fork_request.source_view_id, source_view_revision=fork_request.source_view_revision,
         mode=fork_request.mode,
     )
+
+
+@pytest.fixture
+def source_intent(fork_request: SessionForkRequest) -> dict[str, object]:
+    return {
+        "request": fork_request.model_dump(mode="json"), "generation_origin": None,
+        "source_uri": fork_request.source_uri, "source_session_id": SOURCE_SESSION_ID,
+        "source_thread_id": SOURCE_THREAD_ID, "source_gateway_id": "gateway_source",
+        "source_point": asdict(RolloutForkResult(source_checkpoint_id="checkpoint-frozen",
+            source_view_id=fork_request.source_view_id, source_view_revision=fork_request.source_view_revision)),
+        "source_graph_binding": asdict(DEEP_AGENT_GRAPH_BINDING), "display_title": "冻结来源",
+        "source_agent_id": "default", "goal_snapshot": None,
+        "source_owner_instance_id": "ephemeral-source-instance", "source_target_creation_preimage_hash": None,
+        "source_storage_domain_id": SOURCE_WORKSPACE_ID,
+    }
+
+
+@pytest.mark.parametrize("shared_owner", [False, True])
+async def test_remote_intent_consumes_runtime_owner_facts_before_creation(
+    fork_boundary: _ForkBoundary, fork_request: SessionForkRequest, source_intent: dict[str, object],
+    shared_owner: bool,
+) -> None:
+    target_domain = SOURCE_WORKSPACE_ID if shared_owner else TARGET_WORKSPACE_ID
+    fork_boundary.sessions.workspace_id = target_domain
+    fork_request = fork_request.model_copy(update={
+        "target_container_uri": session_resource_uri(target_domain, TARGET_SESSION_ID, gateway_authority="gateway_origin"),
+    })
+    source_intent["request"] = fork_request.model_dump(mode="json")
+    owner = fork_boundary.service._checkpointer.forks
+    owner.instance_id = "ephemeral-source-instance" if shared_owner else "ephemeral-target-instance"
+    owner.verify_source_domain = partial(CheckpointForkOwner.verify_source_domain, owner)
+    fork_boundary.transport.reply = SessionForkTransferResultDTO(intent=source_intent)
+    intent = await fork_boundary.service._new_intent(fork_request, SOURCE_SESSION_ID, SOURCE_THREAD_ID, None)
+    assert intent["source_remote"] is True and intent["source_point"] == source_intent["source_point"]
+    assert "source_owner_instance_id" not in intent and "source_target_creation_preimage_hash" not in intent
+    assert "source_storage_domain_id" not in intent
+    assert intent["capture_decision"] == {
+        "source_storage_domain_id": SOURCE_WORKSPACE_ID, "target_storage_domain_id": target_domain,
+        "capture_owner": "local" if shared_owner else "source_export",
+    }
+    assert intent["request"] == fork_request.model_dump(mode="json")
+    assert source_intent["source_owner_instance_id"] == "ephemeral-source-instance"
+    fork_boundary.main_owner.assert_not_awaited()
+    fork_boundary.child_owner.assert_not_awaited()
+
+
+@pytest.mark.parametrize("instance", [None, "", []])
+async def test_remote_intent_rejects_missing_actual_owner_handshake(
+    fork_boundary: _ForkBoundary, fork_request: SessionForkRequest, source_intent: dict[str, object], instance: object,
+) -> None:
+    if instance is None:
+        del source_intent["source_owner_instance_id"]
+    else:
+        source_intent["source_owner_instance_id"] = instance
+    fork_boundary.transport.reply = SessionForkTransferResultDTO(intent=source_intent)
+    with pytest.raises(RuntimeError, match="fork_response_protocol_invalid"):
+        await fork_boundary.service._new_intent(fork_request, SOURCE_SESSION_ID, SOURCE_THREAD_ID, None)
+    fork_boundary.main_owner.assert_not_awaited()
+    fork_boundary.child_owner.assert_not_awaited()
+
+
+async def test_same_domain_different_owner_stops_before_durable_capture_decision(
+    fork_boundary: _ForkBoundary, fork_request: SessionForkRequest, source_intent: dict[str, object],
+) -> None:
+    request = fork_request.model_copy(update={
+        "source_uri": thread_resource_uri(SOURCE_WORKSPACE_ID, SOURCE_SESSION_ID, SOURCE_THREAD_ID,
+                                           gateway_authority="gateway_source"),
+        "target_container_uri": workspace_session_inventory_uri(SOURCE_WORKSPACE_ID, gateway_authority="gateway_origin"),
+        "creation_kind": "new_session_main",
+    })
+    reply = {**source_intent, "request": request.model_dump(mode="json"), "source_uri": request.source_uri,
+             "source_gateway_id": "gateway_source"}
+    fork_boundary.transport.reply = SessionForkTransferResultDTO(intent=reply)
+    owner = fork_boundary.service._checkpointer.forks
+    owner.instance_id = "different-target-instance"
+    owner.verify_source_domain = partial(CheckpointForkOwner.verify_source_domain, owner)
+    owner.afork = AsyncMock()
+    with pytest.raises(ValueError, match="fork_owner_overlap"):
+        await fork_boundary.service._new_intent(request, SOURCE_SESSION_ID, SOURCE_THREAD_ID, None)
+    owner.afork.assert_not_awaited()
+    fork_boundary.sessions.prepare_context_fork.assert_not_called()
+    assert [call.action for call in fork_boundary.transport.calls] == ["intent"]
+
+
+async def test_shared_materialization_consumes_durable_decision_without_transport(
+    fork_boundary: _ForkBoundary, fork_request: SessionForkRequest, source_intent: dict[str, object],
+) -> None:
+    intent = {name: value for name, value in source_intent.items()
+              if name not in {"source_owner_instance_id", "source_storage_domain_id", "source_target_creation_preimage_hash"}}
+    intent.update(source_remote=True, target_gateway_id="gateway_origin")
+    owner = fork_boundary.service._checkpointer.forks
+    owner.require_creation_capture_decision.return_value = (SOURCE_WORKSPACE_ID, SOURCE_WORKSPACE_ID, True)
+    owner.materialized_resource_choices.return_value = []
+    expected = RolloutForkResult(**intent["source_point"])
+    owner.afork = AsyncMock(return_value=expected)
+    catalog = Mock()
+    catalog.get_fork_source_capture.return_value = None
+    fork_boundary.sessions.path_resolver = SimpleNamespace(catalog_store=catalog)
+    creation = SimpleNamespace(session_creation_idempotency_key="frozen-key")
+    fork_boundary.service._transport = None
+    result = await fork_boundary.service._materialize(fork_request, intent, TARGET_SESSION_ID, creation=creation)
+    assert result == expected
+    assert fork_boundary.transport.calls == []
+    assert owner.afork.await_args.kwargs["source_transport"] is None
+    assert owner.afork.await_args.kwargs["source_owner_instance_id"] is None
+    assert owner.afork.await_args.kwargs["transfer_request"] is None
+    owner.require_creation_capture_decision.assert_called_once_with(creation, target_session_id=TARGET_SESSION_ID, intent=intent)
 
 
 @pytest.mark.parametrize(

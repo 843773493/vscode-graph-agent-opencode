@@ -75,7 +75,7 @@ def terminal_case(
     saver = RolloutCheckpointSaver(sessions)
     accepted = saver.accept_turn(
         session_id,
-        accepted_ingress_id=f"ingress-{session_id}",
+        thread_id=saver._storage.storage.main_thread_id(session_id), accepted_ingress_id=f"ingress-{session_id}",
         acceptance_idempotency_key=f"acceptance-{session_id}",
         job_id=f"job-{session_id}",
         admission_idempotency_key=f"admission-{session_id}",
@@ -476,7 +476,7 @@ def test_item_bearing_terminal_is_one_barrier_and_one_transaction(frozen_provide
 
     commit_id = case.saver.converge_execution(
         case.session_id,
-        turn_id=case.turn_id,
+        thread_id=case.saver._storage.storage.main_thread_id(case.session_id), turn_id=case.turn_id,
         execution_id=case.execution_id,
         outcome="completed",
         turn_status="completed",
@@ -557,7 +557,7 @@ def test_metadata_only_terminal_does_not_move_offset_and_replays_idempotently(fr
     before = case.jsonl.read_bytes()
     first = case.saver.converge_execution(
         case.session_id,
-        turn_id=case.turn_id,
+        thread_id=case.saver._storage.storage.main_thread_id(case.session_id), turn_id=case.turn_id,
         execution_id=case.execution_id,
         outcome=outcome,
         turn_status=turn_status,
@@ -566,7 +566,7 @@ def test_metadata_only_terminal_does_not_move_offset_and_replays_idempotently(fr
     after_first = case.jsonl.read_bytes()
     second = case.saver.converge_execution(
         case.session_id,
-        turn_id=case.turn_id,
+        thread_id=case.saver._storage.storage.main_thread_id(case.session_id), turn_id=case.turn_id,
         execution_id=case.execution_id,
         outcome=outcome,
         turn_status=turn_status,
@@ -719,7 +719,7 @@ def test_terminal_idempotency_conflict_preserves_committed_prefix(
     output = _assistant_item(case, f"item-output-{case.execution_id}", "首个终态正文")
     case.saver.converge_execution(
         case.session_id,
-        turn_id=case.turn_id,
+        thread_id=case.saver._storage.storage.main_thread_id(case.session_id), turn_id=case.turn_id,
         execution_id=case.execution_id,
         outcome="completed",
         turn_status="completed",
@@ -734,7 +734,7 @@ def test_terminal_idempotency_conflict_preserves_committed_prefix(
     with pytest.raises(ValueError, match="幂等键冲突"):
         case.saver.converge_execution(
             case.session_id,
-            turn_id=case.turn_id,
+            thread_id=case.saver._storage.storage.main_thread_id(case.session_id), turn_id=case.turn_id,
             execution_id=case.execution_id,
             outcome="completed",
             turn_status="completed",
@@ -763,7 +763,7 @@ def test_completed_terminal_cannot_split_precommitted_final_item(
     with pytest.raises(ValueError, match="同一提交中包含 final canonical item"):
         case.saver.converge_execution(
             case.session_id,
-            turn_id=case.turn_id,
+            thread_id=case.saver._storage.storage.main_thread_id(case.session_id), turn_id=case.turn_id,
             execution_id=case.execution_id,
             outcome="completed",
             turn_status="completed",
@@ -790,7 +790,7 @@ def test_terminal_projection_failure_rolls_back_jsonl_and_all_control_state(
     with pytest.raises(ValueError, match="wire_role 与 message projection 不匹配"):
         case.saver.converge_execution(
             case.session_id,
-            turn_id=case.turn_id,
+            thread_id=case.saver._storage.storage.main_thread_id(case.session_id), turn_id=case.turn_id,
             execution_id=case.execution_id,
             outcome="completed",
             turn_status="completed",
@@ -886,7 +886,7 @@ with fixture_catalog_scope():
     assert case.jsonl.read_bytes() == before
     commit_id = restarted.converge_execution(
         case.session_id,
-        turn_id=case.turn_id,
+        thread_id=restarted._storage.storage.main_thread_id(case.session_id), turn_id=case.turn_id,
         execution_id=case.execution_id,
         outcome="completed",
         turn_status="completed",

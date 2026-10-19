@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from fastapi import FastAPI
 
-from app.api.deps import get_message_stream_store
+from app.api.deps import get_message_stream_store, get_session_service
 from app.api.message_stream import _sse_frame
 from app.api.message_stream import router as message_stream_router
 from app.core.path_utils import get_session_path_resolver
@@ -45,6 +47,9 @@ def message_stream_api() -> tuple[FastAPI, MessageStreamStore, str, str]:
     api.add_middleware(TraceMiddleware)
     api.include_router(message_stream_router, prefix="/api/v1")
     api.dependency_overrides[get_message_stream_store] = lambda: store
+    api.dependency_overrides[get_session_service] = lambda: SimpleNamespace(
+        resolve_main_thread=AsyncMock(side_effect=resolver.main_thread_id),
+    )
     try:
         yield api, store, session_id, turn_id
     finally:

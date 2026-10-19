@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from app.api.deps import (
     get_message_stream_store,
     get_request_id,
+    get_session_service,
     verify_local_token,
 )
 from app.api.errors import not_found_http_error
@@ -29,6 +30,7 @@ from app.protocol.codecs.message_stream import (
 from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.message_stream import MessageStreamSnapshotDTO
+from app.services.business.session_service import SessionService
 from app.services.infrastructure.message_stream_store import (
     MessageStreamCursorAheadError,
     MessageStreamCursorGoneError,
@@ -41,6 +43,20 @@ router = APIRouter(prefix="/sessions", tags=["message-stream"])
 MessageStreamEventRecord = Mapping[str, object]
 # stream.snapshot 的定位字段只保留在事件信封中，payload 不重复承载。
 _SNAPSHOT_ENVELOPE_FIELDS = ("session_id", "thread_id", "turn_id", "turn_stream_id")
+
+
+async def _message_stream_thread(
+    session_id: CanonicalSessionId,
+    service: Annotated[SessionService, Depends(get_session_service)],
+    thread_id: Annotated[CanonicalThreadId | None, Query()] = None,
+) -> str:
+    """Session-only 产品入口先解析权威 main，再进入严格的流读取链。"""
+    try:
+        if thread_id is None:
+            return await service.resolve_main_thread(session_id)
+        return await service.resolve_thread(session_id, thread_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
 
 
 def _parse_after_seq(after_seq: int | None, last_event_id: str | None) -> int:
@@ -169,11 +185,13 @@ async def get_message_stream_availability(
     turn_ids: list[str] = Query(min_length=1, max_length=4),  # noqa: B008
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
+    thread_id: str = Depends(_message_stream_thread),
     store: MessageStreamStore = Depends(get_message_stream_store),  # noqa: B008
 ):
     try:
         streams = await store.existing_stream_ids(
             session_id=session_id,
+            thread_id=thread_id,
             turn_ids=list(dict.fromkeys(turn_ids)),
         )
     except (KeyError, NotFoundError) as error:
@@ -192,11 +210,11 @@ async def stream_message_events(
     turn_id: str,
     request: Request,
     turn_stream_id: str | None = Query(default=None),
-    thread_id: Annotated[CanonicalThreadId | None, Query()] = None,
     after_seq: int | None = Query(default=None, ge=0),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
+    thread_id: str = Depends(_message_stream_thread),
     store: MessageStreamStore = Depends(get_message_stream_store),  # noqa: B008
 ):
     cursor = _parse_after_seq(after_seq, last_event_id)
@@ -261,9 +279,9 @@ async def get_message_stream_snapshot(
     session_id: CanonicalSessionId,
     turn_id: str,
     turn_stream_id: str | None = Query(default=None),
-    thread_id: Annotated[CanonicalThreadId | None, Query()] = None,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
+    thread_id: str = Depends(_message_stream_thread),
     store: MessageStreamStore = Depends(get_message_stream_store),  # noqa: B008
 ):
     try:
@@ -299,11 +317,11 @@ async def list_message_stream_events(
     session_id: CanonicalSessionId,
     turn_id: str,
     turn_stream_id: str | None = Query(default=None),
-    thread_id: Annotated[CanonicalThreadId | None, Query()] = None,
     after_seq: int = Query(default=0, ge=0),
     limit: int = Query(default=1000, ge=1, le=5000),
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
+    thread_id: str = Depends(_message_stream_thread),
     store: MessageStreamStore = Depends(get_message_stream_store),  # noqa: B008
 ):
     try:

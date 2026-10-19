@@ -202,6 +202,7 @@ export function useTurnBootstrap({
               sessionCacheKey,
               Object.values(timelineForScope(next.turnTimelinesBySession, sessionCacheKey).turnsById)
                 .find((turn) => turn.job_id === activeJobId) ?? null,
+              bootstrap.thread_id,
             );
           } else {
             next.activeJobIdsBySession.delete(sessionCacheKey);
@@ -224,6 +225,7 @@ export function useTurnBootstrap({
                 null,
                 sessionCacheKey,
                 null,
+                bootstrap.thread_id,
               );
             }
           }

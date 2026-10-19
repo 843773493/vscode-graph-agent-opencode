@@ -99,7 +99,7 @@ def source_seal_case(
     session_bundle_factory(sessions, session)
     saver = RolloutCheckpointSaver(sessions)
     accepted = saver.accept_turn(
-        session, accepted_ingress_id="source-ingress",
+        session, thread_id=saver._storage.storage.main_thread_id(session), accepted_ingress_id="source-ingress",
         acceptance_idempotency_key="source-acceptance",
         job_id="source-job", admission_idempotency_key="source-admission",
         payload="真实 source seal 合同",

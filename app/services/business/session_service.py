@@ -533,6 +533,19 @@ class SessionService:
     ) -> SessionCreationRecord:
         return await self._creation_service.abort_prepared(record, reason)
 
+    async def resume_prepared_context_fork(self, record: SessionCreationRecord) -> SessionCreationRecord:
+        """用原 journal envelope 重入唯一 creation owner，不重新选择模型或读取当前配置。"""
+        if record.purpose != "context_fork" or record.request_intent_json is None:
+            raise ValueError("context fork 恢复缺少原 creation intent")
+        return await self._creation_service.prepare(
+            idempotency_key=record.session_creation_idempotency_key,
+            title=record.display_name, title_source=record.title_source,
+            parent_node_id=record.parent_node_id, graph_binding=record.graph_binding,
+            session_metadata=json.loads(record.session_metadata_json), purpose=record.purpose,
+            request_intent=json.loads(record.request_intent_json),
+            fork_delivery_request_id=record.fork_delivery_request_id,
+        )
+
     def list_preparing_creation_records(
         self,
         *,

@@ -48,7 +48,7 @@ class RolloutTurnLifecycleMixin:
         self,
         *,
         session_id: str,
-        thread_id: str | None = None,
+        thread_id: str,
         checkpoint_ns: str = "",
         turn_id: str,
         final_message_sequence: int,
@@ -65,7 +65,7 @@ class RolloutTurnLifecycleMixin:
             final_message_sequence,
             field="final_message_sequence",
         )
-        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, strict_text(thread_id, field="thread_id"))
         with self._storage._lock(
             owner_thread_id, checkpoint_ns, session_id=session_id
         ):
@@ -244,7 +244,7 @@ class RolloutTurnLifecycleMixin:
     ) -> bool:
         """独立 Turn 控制也通过真实 execution 委派唯一 convergence 事务。"""
         session_id = strict_text(session_id, field="session_id")
-        thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
+        thread_id = self._storage._resolve_thread_identity(session_id, strict_text(thread_id, field="thread_id"))
         turn_id = strict_text(turn_id, field="turn_id")
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True,
@@ -351,13 +351,13 @@ class RolloutTurnLifecycleMixin:
         self,
         *,
         session_id: str,
-        thread_id: str | None = None,
+        thread_id: str,
         checkpoint_ns: str,
         turn_id: str,
         final_message_id: str,
     ) -> int:
         """解析已提交 final message 的物理序号，供受控 writer 使用。"""
-        owner_thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
+        owner_thread_id = self._storage._resolve_thread_identity(session_id, strict_text(thread_id, field="thread_id"))
         with self._storage.read_connection(session_id, owner_thread_id, checkpoint_ns) as connection:
             self._storage._require_v2_runtime(connection)
             row = connection.execute(

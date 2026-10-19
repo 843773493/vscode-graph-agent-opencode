@@ -394,7 +394,7 @@ def test_missing_or_changed_sealed_detail_cannot_fall_back_to_inline_body(
         wire_params=None,
         seal_idempotency_key=f"seal:{draft.plan_id}",
         turn_id="turn-1",
-        execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
+        execution_id=saver.execution_for_turn(session_id, thread_id=saver._storage.storage.main_thread_id(session_id), turn_id="turn-1"),
         provider_version="contract-provider",
         request_only_content=bodies,
     ).as_sealed_plan()
@@ -470,7 +470,7 @@ def test_missing_or_changed_sealed_detail_cannot_fall_back_to_inline_body(
                     seal_idempotency_key=f"seal:{next_draft.plan_id}",
                     turn_id="turn-1",
                     execution_id=restarted.execution_for_turn(
-                        session_id, turn_id="turn-1"
+                        session_id, thread_id=restarted._storage.storage.main_thread_id(session_id), turn_id="turn-1"
                     ),
                     provider_version="contract-provider",
                 )
@@ -522,7 +522,7 @@ def test_required_detail_failure_blocks_prepared_dispatch(
 ) -> None:
     saver, session_id, session = projection_saver
     thread = saver._storage.storage.main_thread_id(session_id)
-    execution_id = saver.execution_for_turn(session_id, turn_id="turn-1")
+    execution_id = saver.execution_for_turn(session_id, thread_id=saver._storage.storage.main_thread_id(session_id), turn_id="turn-1")
     key = f"required-provider-{target_format}-{damage}:create"
     arguments = {
         "turn_id": "turn-1",
@@ -749,7 +749,7 @@ def test_invalid_selection_union_is_rejected_in_domain_and_restore(
         wire_params=None,
         seal_idempotency_key=f"seal:{draft.plan_id}",
         turn_id="turn-1",
-        execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
+        execution_id=saver.execution_for_turn(session_id, thread_id=saver._storage.storage.main_thread_id(session_id), turn_id="turn-1"),
         provider_version="contract-provider",
         omitted_ref_identities=omitted,
     )
@@ -836,7 +836,7 @@ def test_canonical_and_tool_selection_forbid_detail_and_contribution_slots(
         wire_params=None,
         seal_idempotency_key=f"seal:{draft.plan_id}",
         turn_id="turn-1",
-        execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
+        execution_id=saver.execution_for_turn(session_id, thread_id=saver._storage.storage.main_thread_id(session_id), turn_id="turn-1"),
         provider_version="contract-provider",
         omitted_ref_identities=() if included else (selection_ref_identity(target),),
     )

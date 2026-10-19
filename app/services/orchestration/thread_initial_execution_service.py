@@ -11,7 +11,12 @@ from dataclasses import replace
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.job_event_bus import EventType
 from app.core.key_lock_pool import KeyLockPool
-from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
+from app.core.trace_middleware import (
+    reset_current_gateway_id,
+    reset_current_request_id,
+    set_current_gateway_id,
+    set_current_request_id,
+)
 from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.event import Event
@@ -100,6 +105,7 @@ class ThreadInitialExecutionService:
                 record = control.get_thread_creation_record(intent.creation_idempotency_key)
                 frozen_agent_id = json.loads(record.task_seed)["agent_id"]
                 gateway_token = set_current_gateway_id(frozen.gateway_id)
+                request_token = set_current_request_id(frozen.request_id)
                 try:
                     await self._jobs.start_job(
                         session_id, frozen.message.content, thread_id=intent.thread_id,
@@ -108,6 +114,7 @@ class ThreadInitialExecutionService:
                         message_metadata=dict(frozen.message.metadata), agent_id=frozen_agent_id,
                     )
                 finally:
+                    reset_current_request_id(request_token)
                     reset_current_gateway_id(gateway_token)
 
     async def start(self) -> None:
@@ -157,6 +164,7 @@ class ThreadInitialExecutionService:
             display_provenance=replace(provenance, delegation_id=record.delegation_id),
         )
         gateway_token = set_current_gateway_id(frozen.gateway_id)
+        request_token = set_current_request_id(frozen.request_id)
         try:
             await self._dispatcher.submit(
                 session_id, parent["parent_thread_id"], message,
@@ -164,6 +172,7 @@ class ThreadInitialExecutionService:
                 idempotency_key=f"subagent-result:{intent.admission_idempotency_key}",
             )
         finally:
+            reset_current_request_id(request_token)
             reset_current_gateway_id(gateway_token)
 
     async def stop(self) -> None:

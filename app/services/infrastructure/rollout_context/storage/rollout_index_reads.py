@@ -32,6 +32,26 @@ __all__ = ["RolloutIndexMixin"]
 
 
 class RolloutIndexMixin:
+    def read_lock(
+        self,
+        session_id: str,
+        thread_id: str,
+        checkpoint_ns: str = "",
+    ) -> _RolloutFileLock:
+        """读取只借用既有锁文件，不物化缺失 rollout。"""
+        root = self._host.root(session_id, checkpoint_ns, thread_id=thread_id)
+        lock_path = root.parent / ".rollout.write.lock"
+        if (
+            not root.exists() and not root.is_symlink()
+            and not lock_path.exists() and not lock_path.is_symlink()
+        ):
+            raise RolloutNotMaterializedError(
+                f"rollout 尚未物化: session_id={session_id}, thread_id={thread_id}, root={root}"
+            )
+        if not lock_path.is_file() or lock_path.is_symlink():
+            raise RuntimeError(f"recovery_required: rollout 缺少既有普通写锁文件: {lock_path}")
+        return _RolloutFileLock(lock_path, exclusive=False)
+
     def open_read_snapshot(
         self,
         session_id: str,
@@ -44,17 +64,7 @@ class RolloutIndexMixin:
         root = self._host.root(session_id, checkpoint_ns, thread_id=thread_id)
         jsonl_path = root / "rollout.jsonl"
         index_path = root / "index.sqlite"
-        lock_path = root.parent / ".rollout.write.lock"
-        if (
-            not root.exists() and not root.is_symlink()
-            and not lock_path.exists() and not lock_path.is_symlink()
-        ):
-            raise RolloutNotMaterializedError(
-                f"rollout 尚未物化: session_id={session_id}, thread_id={thread_id}, root={root}"
-            )
-        file_lock = _RolloutFileLock(lock_path, exclusive=False)
-        if not lock_path.is_file() or lock_path.is_symlink():
-            raise RuntimeError(f"recovery_required: rollout 缺少既有普通写锁文件: {lock_path}")
+        file_lock = self.read_lock(session_id, thread_id, checkpoint_ns)
         file_lock.acquire()
         connection: sqlite3.Connection | None = None
         try:

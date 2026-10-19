@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import hashlib
+import json
 from collections.abc import AsyncIterator, Callable, Iterator
 from json import JSONDecodeError
 from unittest.mock import Mock
@@ -11,7 +14,7 @@ from pydantic import ValidationError
 
 from app.abstractions.session_context import WorkspaceSessionContextAccessError
 from app.core.identifier import create_uuid_hex
-from app.core.resource_uri import thread_resource_uri
+from app.core.resource_uri import parse_session_thread_uri, thread_resource_uri
 from app.core.trace_middleware import (
     reset_current_gateway_id,
     reset_current_request_id,
@@ -23,7 +26,10 @@ from app.schemas.internal_v2.session import SessionForkRequest
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
 )
-from app.schemas.internal_v2.session_fork_transfer import SessionForkTransferRequest
+from app.schemas.internal_v2.session_fork_transfer import (
+    ForkSourceCaptureDTO,
+    SessionForkTransferRequest,
+)
 from app.services.business.session_context_resource import (
     session_resource_identity,
     session_resource_uri,
@@ -32,6 +38,9 @@ from app.services.business.session_context_resource import (
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.gateway_session_context_client import (
     GatewaySessionContextClient,
+)
+from app.services.infrastructure.rollout_context.fork.source_capture import (
+    IncompleteForkSourceCaptureError,
 )
 
 
@@ -90,6 +99,38 @@ def gateway_fork_request() -> Iterator[SessionForkTransferRequest]:
     finally:
         reset_current_request_id(request_token)
         reset_current_gateway_id(gateway_token)
+
+
+@pytest.fixture
+def gateway_capture_request(gateway_fork_request: SessionForkTransferRequest) -> SessionForkTransferRequest:
+    request = gateway_fork_request.request
+    _, session_id, thread_id = parse_session_thread_uri(request.source_uri)
+    key = "fork-" + hashlib.sha256(request.idempotency_key.encode()).hexdigest()
+    snapshot_id = create_uuid_hex()
+    capture = ForkSourceCaptureDTO(
+        copy_operation_id=key, creation_key=key,
+        source_session_id=session_id, source_thread_id=thread_id,
+        target_session_id=f"ses_{create_uuid_hex()}", target_thread_id=f"thr_{create_uuid_hex()}",
+        snapshot_id=snapshot_id, snapshot_relative_locator=f"fork-source-captures/{snapshot_id}",
+        fork_id=create_uuid_hex(), materialization_id=create_uuid_hex(),
+        request_json=json.dumps(request.model_dump(mode="json")), preimage_hash="a" * 64,
+        state="preparing", snapshot_sha256=None, marker_sha256=None, abort_reason=None,
+    )
+    return gateway_fork_request.model_copy(update={"action": "capture", "capture": capture})
+
+
+@pytest.fixture
+def incomplete_capture_wire(gateway_capture_request: SessionForkTransferRequest) -> dict[str, object]:
+    return {
+        "request_id": "req_gateway_fork",
+        "detail": {
+            "code": "federation-target-owner-rejected", "message": "来源 owner 拒绝未完成 capture",
+            "detail": {
+                "owner": "fork_source_capture", "code": "fork_source_capture_incomplete", "action": "capture",
+                "capture": gateway_capture_request.capture.model_dump(mode="json"), "message": "captured marker 尚未发布",
+            },
+        },
+    }
 
 
 def _read_request(workspace_id: str):
@@ -439,7 +480,7 @@ async def test_gateway_fork_decodes_valid_intent_with_same_request_id(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", [400, 403, 404, 422, 500])
+@pytest.mark.parametrize("status", [400, 403, 404, 409, 422, 500])
 async def test_gateway_fork_preserves_http_owner_failure_attribution(
     monkeypatch: pytest.MonkeyPatch, gateway_clients: list[GatewaySessionContextClient],
     gateway_fork_request: SessionForkTransferRequest, status: int,
@@ -456,6 +497,108 @@ async def test_gateway_fork_preserves_http_owner_failure_attribution(
     assert isinstance(caught.value, WorkspaceSessionContextAccessError) is (status != 500)
     assert caught.value.__cause__ is None
     assert "fork_response_protocol_invalid" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_gateway_fork_reconstructs_only_verified_incomplete_source_capture(
+    monkeypatch: pytest.MonkeyPatch, gateway_clients: list[GatewaySessionContextClient],
+    gateway_capture_request: SessionForkTransferRequest, incomplete_capture_wire: dict[str, object],
+) -> None:
+    async def respond(_client: httpx.AsyncClient, method: str, url: str, **_kwargs: object) -> httpx.Response:
+        return httpx.Response(409, request=httpx.Request(method, url), headers={"X-Request-ID": "req_gateway_fork"},
+                              json=incomplete_capture_wire)
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", respond)
+    client = GatewaySessionContextClient(local_token_supplier=lambda: "fork-token")
+    gateway_clients.append(client)
+
+    with pytest.raises(IncompleteForkSourceCaptureError) as caught:
+        await client.fork_transfer(gateway_capture_request)
+    assert caught.value.capture == gateway_capture_request.capture.to_record()
+    assert caught.value.code == "fork_source_capture_incomplete"
+    assert caught.value.__cause__ is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("field_path", "value"), [
+    (("request_id",), "req-other"),
+    (("detail", "code"), "federation-session-main-unavailable"),
+    (("detail", "detail", "owner"), "other_owner"),
+    (("detail", "detail", "action"), "release"),
+    (("detail", "detail", "capture"), {}),
+    *[(("detail", "detail", "capture", field), "drifted") for field in (
+        "copy_operation_id", "creation_key", "source_session_id", "source_thread_id",
+        "target_session_id", "target_thread_id", "snapshot_id", "snapshot_relative_locator",
+        "fork_id", "materialization_id", "request_json", "preimage_hash",
+    )],
+    (("detail", "detail", "capture", "state"), "source_captured"),
+    (("detail", "detail", "capture", "snapshot_sha256"), "b" * 64),
+    (("detail", "detail", "capture", "marker_sha256"), "c" * 64),
+    (("detail", "detail", "capture", "abort_reason"), "already aborted"),
+    (("header_request_id",), "req-other"),
+])
+async def test_gateway_fork_rejects_drifted_incomplete_receipt(
+    monkeypatch: pytest.MonkeyPatch, gateway_clients: list[GatewaySessionContextClient],
+    gateway_capture_request: SessionForkTransferRequest, incomplete_capture_wire: dict[str, object],
+    field_path: tuple[str, ...], value: object,
+) -> None:
+    payload = copy.deepcopy(incomplete_capture_wire)
+    headers = {"X-Request-ID": "req_gateway_fork"}
+    if field_path == ("header_request_id",):
+        headers["X-Request-ID"] = str(value)
+    else:
+        slot = payload
+        for key in field_path[:-1]:
+            nested = slot[key]
+            assert isinstance(nested, dict)
+            slot = nested
+        slot[field_path[-1]] = value
+
+    async def respond(_client: httpx.AsyncClient, method: str, url: str, **_kwargs: object) -> httpx.Response:
+        return httpx.Response(409, request=httpx.Request(method, url), headers=headers, json=payload)
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", respond)
+    client = GatewaySessionContextClient(local_token_supplier=lambda: "fork-token")
+    gateway_clients.append(client)
+
+    with pytest.raises(RuntimeError, match="fork_response_protocol_invalid") as caught:
+        await client.fork_transfer(gateway_capture_request)
+    assert not isinstance(caught.value, (IncompleteForkSourceCaptureError, WorkspaceSessionContextAccessError))
+    assert caught.value.__cause__ is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["unknown_code", "server_error", "wrong_action", "frozen_hash"])
+async def test_gateway_fork_keeps_unconfirmed_source_failures_fatal(
+    monkeypatch: pytest.MonkeyPatch, gateway_clients: list[GatewaySessionContextClient],
+    gateway_capture_request: SessionForkTransferRequest, incomplete_capture_wire: dict[str, object], fault: str,
+) -> None:
+    payload = copy.deepcopy(incomplete_capture_wire)
+    request = gateway_capture_request
+    if fault == "unknown_code":
+        payload["detail"]["detail"]["code"] = "source_owner_unavailable"
+    elif fault == "wrong_action":
+        request = request.model_copy(update={"action": "files"})
+    elif fault == "frozen_hash":
+        request = request.model_copy(update={"capture": request.capture.model_copy(update={"snapshot_sha256": "d" * 64})})
+    status = 500 if fault == "server_error" else 409
+
+    async def respond(_client: httpx.AsyncClient, method: str, url: str, **_kwargs: object) -> httpx.Response:
+        return httpx.Response(status, request=httpx.Request(method, url), headers={"X-Request-ID": "req_gateway_fork"}, json=payload)
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", respond)
+    client = GatewaySessionContextClient(local_token_supplier=lambda: "fork-token")
+    gateway_clients.append(client)
+
+    with pytest.raises(RuntimeError) as caught:
+        await client.fork_transfer(request)
+    assert not isinstance(caught.value, IncompleteForkSourceCaptureError)
+    if fault in {"unknown_code", "server_error"}:
+        assert isinstance(caught.value, WorkspaceSessionContextAccessError) is (fault == "unknown_code")
+        assert f"status={status}" in str(caught.value)
+        assert "fork_response_protocol_invalid" not in str(caught.value)
+    else:
+        assert "fork_response_protocol_invalid" in str(caught.value)
 
 
 @pytest.mark.asyncio

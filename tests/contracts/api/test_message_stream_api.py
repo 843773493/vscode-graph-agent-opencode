@@ -4,12 +4,14 @@ import asyncio
 import json
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from fastapi import FastAPI
 
-from app.api.deps import get_message_stream_store
+from app.api.deps import get_message_stream_store, get_session_service
 from app.api.message_stream import router as message_stream_router
 from app.core.path_utils import get_session_path_resolver
 from app.core.trace_middleware import TraceMiddleware
@@ -35,6 +37,9 @@ def message_stream_api() -> tuple[FastAPI, MessageStreamStore, str, str]:
     api.add_middleware(TraceMiddleware)
     api.include_router(message_stream_router, prefix="/api/v1")
     api.dependency_overrides[get_message_stream_store] = lambda: store
+    api.dependency_overrides[get_session_service] = lambda: SimpleNamespace(
+        resolve_main_thread=AsyncMock(side_effect=resolver.main_thread_id),
+    )
     try:
         yield api, store, session_id, turn_id
     finally:
@@ -64,6 +69,49 @@ def _sse_events(body: str) -> list[dict[str, object]]:
             assert isinstance(value, dict)
             events.append(value)
     return events
+
+
+@pytest.mark.asyncio
+async def test_message_stream_requires_auth_before_resolving_session_thread() -> None:
+    """会话级与显式 thread 请求均先认证，不读取 SessionService。"""
+    session_id = "ses_00000000400070008000000000000099"
+    thread_id = "thr_00000000700070008000000000000001"
+    session_service_calls = 0
+    session_service = SimpleNamespace(
+        resolve_main_thread=AsyncMock(),
+        resolve_thread=AsyncMock(),
+    )
+
+    def provide_session_service() -> SimpleNamespace:
+        nonlocal session_service_calls
+        session_service_calls += 1
+        return session_service
+
+    api = FastAPI()
+    api.add_middleware(TraceMiddleware)
+    api.include_router(message_stream_router, prefix="/api/v1")
+    api.dependency_overrides[get_session_service] = provide_session_service
+    paths = (
+        f"/api/v1/sessions/{session_id}/message-streams/availability?turn_ids=turn_missing",
+        f"/api/v1/sessions/{session_id}/message-streams/availability?turn_ids=turn_missing&thread_id={thread_id}",
+        f"/api/v1/sessions/{session_id}/turns/turn_missing/message-stream",
+        f"/api/v1/sessions/{session_id}/turns/turn_missing/message-stream?thread_id={thread_id}",
+        f"/api/v1/sessions/{session_id}/turns/turn_missing/message-stream/snapshot",
+        f"/api/v1/sessions/{session_id}/turns/turn_missing/message-stream/snapshot?thread_id={thread_id}",
+        f"/api/v1/sessions/{session_id}/turns/turn_missing/message-stream/events",
+        f"/api/v1/sessions/{session_id}/turns/turn_missing/message-stream/events?thread_id={thread_id}",
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=api),
+        base_url="http://testserver",
+    ) as client:
+        responses = [await client.get(path) for path in paths]
+
+    assert [response.status_code for response in responses] == [401] * 8
+    assert session_service_calls == 0
+    session_service.resolve_main_thread.assert_not_called()
+    session_service.resolve_thread.assert_not_called()
 
 
 @pytest.mark.asyncio

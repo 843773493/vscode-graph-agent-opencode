@@ -115,7 +115,7 @@ describe("responsePartsToTimelineItems", () => {
 
   it("live SSE 的 exec_command 参数和结果贯通到终端展示", () => {
     let state = applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "stream_1", "test-workspace::ses_1"),
+      createMessageStreamState("ses_1", "turn_1", "stream_1", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
       streamEvent(1, "tool_call", {
         tool_call_id: "call-exec",
         tool_name: "exec_command",

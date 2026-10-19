@@ -42,9 +42,30 @@ function event(
 }
 
 describe("message stream reducer", () => {
+  test("同一 Session 的 sibling 在首帧前独立缓存，晚到终态不进入另一个 thread", () => {
+    const main = createMessageStreamState("ses_1", "turn_1", "strm_1", "workspace::ses_1", "thr_main");
+    const child = createMessageStreamState("ses_1", "turn_1", "strm_1", "workspace::ses_1", "thr_child");
+    let streams = writeMessageStreamCache(new Map(), "main-pending", main);
+    streams = writeMessageStreamCache(streams, "child-pending", child);
+    expect(streams.size).toBe(2);
+    const completedMain = applyMessageStreamEvent(main, {
+      ...event(1, "stream.completed", {}), thread_id: "thr_main",
+    });
+    streams = writeMessageStreamCache(streams, "main-resolved", completedMain);
+    expect(streams.size).toBe(2);
+    expect(streams.get("child-pending")).toBe(child);
+    const rejected = applyMessageStreamEvent(child, {
+      ...event(1, "stream.completed", {}), thread_id: "thr_main",
+    });
+    expect(rejected.threadId).toBe("thr_child");
+    expect(rejected.streamStatus).toBe("open");
+    expect(rejected.lastEventSeq).toBe(0);
+    expect(rejected.protocolError).toContain("关联键");
+  });
+
   test("同 ID 的工作区消息流不合并，snapshot 保留 Gateway 会话缓存归属", () => {
-    const left = createMessageStreamState("ses_same", "turn_same", "strm_same", "gateway_a::ses_same");
-    const right = createMessageStreamState("ses_same", "turn_same", "strm_same", "gateway_b::ses_same");
+    const left = createMessageStreamState("ses_same", "turn_same", "strm_same", "gateway_a::ses_same", "thr_00000000400070008000000000000002");
+    const right = createMessageStreamState("ses_same", "turn_same", "strm_same", "gateway_b::ses_same", "thr_00000000400070008000000000000002");
     let streams = writeMessageStreamCache(new Map(), "gateway_a::strm_same", left);
     streams = writeMessageStreamCache(streams, "gateway_b::strm_same", right);
     expect(streams.size).toBe(2);
@@ -62,7 +83,7 @@ describe("message stream reducer", () => {
 
   test("乱序事件缓冲有明确上限，溢出后要求 snapshot 恢复", () => {
     let state = applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
       event(1, "stream.opened", { status: "open" }),
     );
     for (let seq = 3; seq < 303; seq += 1) {
@@ -83,13 +104,13 @@ describe("message stream reducer", () => {
     let streams = new Map<string, ReturnType<typeof createMessageStreamState>>();
     for (let index = 0; index < 12; index += 1) {
       const state = {
-        ...createMessageStreamState("ses_1", `turn_${index}`, `strm_${index}`, "test-workspace::ses_1"),
+        ...createMessageStreamState("ses_1", `turn_${index}`, `strm_${index}`, "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
         streamStatus: "completed" as const,
         connectionStatus: "terminal" as const,
       };
       streams = writeMessageStreamCache(streams, state.turnStreamId, state);
     }
-    const active = createMessageStreamState("ses_1", "turn_live", "strm_live", "test-workspace::ses_1");
+    const active = createMessageStreamState("ses_1", "turn_live", "strm_live", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     streams = writeMessageStreamCache(streams, active.turnStreamId, active);
 
     expect([...streams.keys()]).toEqual([
@@ -107,7 +128,7 @@ describe("message stream reducer", () => {
 
   test("超大 live 文本和工具结果保持有界并显示明确截断标记", () => {
     let state = applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
       event(1, "stream.opened", { status: "open" }),
     );
     state = applyMessageStreamEvent(state, event(2, "block.started", {
@@ -147,7 +168,7 @@ describe("message stream reducer", () => {
   });
 
   test("按 event_seq 聚合 reasoning/text，并对重复事件幂等", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
     state = applyMessageStreamEvent(state, event(2, "block.started", {
       block_id: "block_reasoning",
@@ -193,7 +214,7 @@ describe("message stream reducer", () => {
   });
 
   test("snapshot 是权威替换，缺口不会伪造连续状态", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
     const gap = applyMessageStreamEvent(state, event(3, "block.delta", {
       block_id: "b1",
@@ -235,7 +256,7 @@ describe("message stream reducer", () => {
   });
 
   test("缺口事件先缓冲，补齐高水位后按 event_seq 自动回放", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
     state = applyMessageStreamEvent(state, event(3, "block.delta", {
       block_id: "b1",
@@ -257,7 +278,7 @@ describe("message stream reducer", () => {
   });
 
   test("snapshot 只推进自己的高水位，不吞掉更晚的并发事件", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
     state = applyMessageStreamEvent(state, event(4, "block.delta", {
       block_id: "b1",
@@ -280,7 +301,7 @@ describe("message stream reducer", () => {
   });
 
   test("旧 snapshot 不能覆盖已经收到的新 delta", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
     state = applyMessageStreamEvent(state, event(2, "block.started", {
       block_id: "block_1",
@@ -311,7 +332,7 @@ describe("message stream reducer", () => {
   });
 
   test("stream.failed 和 stream.interrupted 都是明确终态", () => {
-    let failed = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let failed = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     failed = applyMessageStreamEvent(failed, event(1, "stream.failed", {
       code: "execution_lost",
       message: "后端重启导致执行丢失",
@@ -322,7 +343,7 @@ describe("message stream reducer", () => {
     expect(failed.connectionStatus).toBe("terminal");
     expect(failed.failure?.code).toBe("execution_lost");
 
-    let interrupted = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let interrupted = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     interrupted = applyMessageStreamEvent(interrupted, event(1, "stream.interrupted", {
       interrupt_request_id: "intr_1",
       status: "interrupted",
@@ -330,7 +351,7 @@ describe("message stream reducer", () => {
     expect(interrupted.streamStatus).toBe("interrupted");
     expect(interrupted.interruptState?.status).toBe("confirmed");
 
-    let interruptedWithBlock = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let interruptedWithBlock = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     interruptedWithBlock = applyMessageStreamEvent(interruptedWithBlock, event(1, "block.started", {
       block_id: "block_running",
       block_index: 0,
@@ -349,7 +370,7 @@ describe("message stream reducer", () => {
   });
 
   test("同一 Turn 不接受变化后的 turn_stream_id", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
     const changed = applyMessageStreamEvent(state, {
       ...event(2, "block.delta", {
@@ -368,7 +389,7 @@ describe("message stream reducer", () => {
     // 复现后端竞态契约：请求边界 ToolMessage 先完成 canonical 结果，
     // 迟到的 on_tool_start/on_tool_end 再写一条 reconciled_tool_message
     // 收口事件。投影必须折叠成一个逻辑工具。
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "model.started", {
       model_call_id: "mc_1",
       attempt: 1,
@@ -426,7 +447,7 @@ describe("message stream reducer", () => {
   });
 
   test("工具结果未知时保留可展示的未知事实", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "tool_call", {
       tool_call_id: "call_1",
       tool_name: "shell",
@@ -474,7 +495,7 @@ describe("message stream reducer", () => {
     ];
     for (const item of cases) {
       // tool.started 只带 running 状态，终态 outcome 必须由 tool.completed 透传进来
-      let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+      let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
       state = applyMessageStreamEvent(state, event(1, "tool.started", {
         tool_execution_id: "exec_1",
         tool_call_id: "call_1",
@@ -500,7 +521,7 @@ describe("message stream reducer", () => {
 
   test("工具信封身份可补入 payload 并在 active_state 中保留", () => {
     let state = applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
       {
         ...event(1, "stream.opened", { status: "open" }),
         workspace_id: "workspace_1",
@@ -551,7 +572,7 @@ describe("message stream reducer", () => {
   });
 
   test("模型和 block 的信封身份会补入前端实体", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, {
       ...event(1, "model.started", { attempt: 1 }),
       model_call_id: "model_1",
@@ -572,7 +593,7 @@ describe("message stream reducer", () => {
   });
 
   test("工具调用分片不因空名称和空参数覆盖已有信息", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "tool_call", {
       tool_call_id: "call_1",
       tool_name: "invoke_extension_tool",
@@ -597,7 +618,7 @@ describe("message stream reducer", () => {
   });
 
   test("model.retrying 不提前结束 stream，并允许下一 attempt 接续", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "model.started", {
       model_call_id: "model_1",
       attempt: 1,
@@ -622,7 +643,7 @@ describe("message stream reducer", () => {
   });
 
   test("校验重试会隐藏上一 attempt 的中间文本", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, {
       ...event(1, "model.started", {
         model_call_id: "model_1",
@@ -658,7 +679,7 @@ describe("message stream reducer", () => {
   });
 
   test("tool_call 未完成且没有执行结果时单独展示为失败调用", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "tool_call.delta", {
       tool_call_id: "call_incomplete",
       tool_name: "shell",
@@ -682,7 +703,7 @@ describe("message stream reducer", () => {
 
   test("snapshot 恢复统一 active_state、Activity 和 execution_lost", () => {
     const state = applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
       event(7, "stream.snapshot", {
         snapshot_seq: 7,
         stream_status: "failed",
@@ -725,7 +746,7 @@ describe("message stream reducer", () => {
   });
 
   test("partial block 不被投影成最终完成正文", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "block.started", {
       block_id: "b1",
       block_index: 0,
@@ -776,7 +797,7 @@ describe("message stream reducer", () => {
 
     for (const [index, item] of cases.entries()) {
       const state = applyMessageStreamEvent(
-        createMessageStreamState("ses_1", `turn_${index}`, "", "test-workspace::ses_1"),
+        createMessageStreamState("ses_1", `turn_${index}`, "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
         {
           ...event(1, "stream.snapshot", {
             snapshot_seq: 1,
@@ -801,7 +822,7 @@ describe("message stream reducer", () => {
 
   test("snapshot 按实体生命周期序号排序，不使用数组位置或 updated_at 推断顺序", () => {
     const state = applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
       event(20, "stream.snapshot", {
         snapshot_seq: 20,
         stream_status: "open",
@@ -930,7 +951,7 @@ describe("message stream reducer", () => {
   });
 
   test("连续两次压缩在 snapshot 高水位后继续按 event_seq 回放", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
     state = applyMessageStreamEvent(state, event(5, "stream.snapshot", {
       snapshot_seq: 5,
@@ -1000,7 +1021,7 @@ describe("message stream reducer", () => {
   });
 
   test("非法 activity status 收敛为 unknown，不冒充分已完成", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "activity.started", {
       activity_id: "compaction_1",
       kind: "context.compaction",
@@ -1014,7 +1035,7 @@ describe("message stream reducer", () => {
 
   test("snapshot 路径的非法 activity status 同样收敛为 unknown，不原样透传", () => {
     const state = applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
       event(1, "stream.snapshot", {
         snapshot_seq: 1,
         stream_status: "open",
@@ -1041,7 +1062,7 @@ describe("message stream reducer", () => {
     const statuses = ["running", "waiting", "stopping", "completed", "failed", "unknown"] as const;
     for (const status of statuses) {
       const state = applyMessageStreamEvent(
-        createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+        createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
         event(1, "stream.snapshot", {
           snapshot_seq: 1,
           stream_status: "open",
@@ -1063,7 +1084,7 @@ describe("message stream reducer", () => {
 
   test("snapshot 路径的非法 tool status 与事件路径收敛一致，不原样透传", () => {
     const snapshotState = applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
       event(1, "stream.snapshot", {
         snapshot_seq: 1,
         stream_status: "open",
@@ -1079,7 +1100,7 @@ describe("message stream reducer", () => {
       }),
     );
 
-    let eventState = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let eventState = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     eventState = applyMessageStreamEvent(eventState, event(1, "tool.started", {
       tool_execution_id: "exec_1",
       tool_call_id: "call_1",
@@ -1110,7 +1131,7 @@ describe("message stream reducer", () => {
 
     for (const [index, item] of cases.entries()) {
       const snapshotState = applyMessageStreamEvent(
-        createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+        createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
         event(1, "stream.snapshot", {
           snapshot_seq: 1,
           stream_status: "open",
@@ -1125,7 +1146,7 @@ describe("message stream reducer", () => {
           resumable: true,
         }),
       );
-      let eventState = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+      let eventState = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
       eventState = applyMessageStreamEvent(eventState, event(1, "tool.started", {
         tool_execution_id: "exec_1",
         tool_call_id: "call_1",
@@ -1149,7 +1170,7 @@ describe("message stream reducer", () => {
 
   test("snapshot 路径的非法 tool outcome 与事件路径收敛一致，不原样透传", () => {
     const snapshotState = applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
       event(1, "stream.snapshot", {
         snapshot_seq: 1,
         stream_status: "open",
@@ -1166,7 +1187,7 @@ describe("message stream reducer", () => {
       }),
     );
 
-    let eventState = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let eventState = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     eventState = applyMessageStreamEvent(eventState, event(1, "tool.started", {
       tool_execution_id: "exec_1",
       tool_call_id: "call_1",
@@ -1198,7 +1219,7 @@ describe("message stream reducer", () => {
 
     for (const item of cases) {
       const snapshotState = applyMessageStreamEvent(
-        createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+        createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
         event(1, "stream.snapshot", {
           snapshot_seq: 1,
           stream_status: "open",
@@ -1214,7 +1235,7 @@ describe("message stream reducer", () => {
           resumable: true,
         }),
       );
-      let eventState = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+      let eventState = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
       eventState = applyMessageStreamEvent(eventState, event(1, "tool.started", {
         tool_execution_id: "exec_1",
         tool_call_id: "call_1",
@@ -1245,7 +1266,7 @@ describe("message stream reducer", () => {
 
   function snapshotToolState(toolName: unknown, completionReason: unknown) {
     return applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
       event(1, "stream.snapshot", {
         snapshot_seq: 1,
         stream_status: "open",
@@ -1264,7 +1285,7 @@ describe("message stream reducer", () => {
   }
 
   function eventToolState(toolName: unknown, completionReason: unknown) {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "tool.started", {
       tool_execution_id: "exec_1",
       tool_call_id: "call_1",
@@ -1315,7 +1336,7 @@ describe("message stream reducer", () => {
 
   function snapshotActivityState(fields: Record<string, unknown>) {
     return applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
       event(1, "stream.snapshot", {
         snapshot_seq: 1,
         stream_status: "open",
@@ -1334,7 +1355,7 @@ describe("message stream reducer", () => {
   }
 
   function eventActivityState(fields: Record<string, unknown>) {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "activity.started", {
       activity_id: "act_1",
       kind: "browser.session",
@@ -1386,7 +1407,7 @@ describe("message stream reducer", () => {
 
   function snapshotBlockState(completionReason: unknown) {
     return applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
       event(1, "stream.snapshot", {
         snapshot_seq: 1,
         stream_status: "open",
@@ -1404,7 +1425,7 @@ describe("message stream reducer", () => {
   }
 
   function eventBlockState(completionReason: unknown) {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "block.started", { block_id: "b1" }));
     state = applyMessageStreamEvent(state, event(2, "block.completed", {
       block_id: "b1",
@@ -1435,7 +1456,7 @@ describe("message stream reducer", () => {
 
   test("运行中 block 的快照不发明 completion_reason，与 block.started 事件逐字段一致", () => {
     const snapshotState = applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
       event(1, "stream.snapshot", {
         snapshot_seq: 1,
         stream_status: "open",
@@ -1453,7 +1474,7 @@ describe("message stream reducer", () => {
         resumable: true,
       }),
     );
-    let eventState = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let eventState = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     eventState = applyMessageStreamEvent(eventState, event(1, "block.started", {
       block_id: "b1",
       block_index: 0,
@@ -1474,7 +1495,7 @@ describe("message stream reducer", () => {
   test("运行中 block 的 projection 非 streaming 时仍按 status 判定，不发明 completion_reason", () => {
     // model.retrying 会把运行中 block 置为 projection="intermediate"，此时快照仍不得产出 completion_reason。
     const snapshotState = applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
       event(1, "stream.snapshot", {
         snapshot_seq: 1,
         stream_status: "open",
@@ -1493,7 +1514,7 @@ describe("message stream reducer", () => {
         resumable: true,
       }),
     );
-    let eventState = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let eventState = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     eventState = applyMessageStreamEvent(eventState, event(1, "model.started", {
       model_call_id: "mc_1",
       attempt: 1,
@@ -1532,7 +1553,7 @@ describe("message stream reducer", () => {
     expect(missing?.completion_reason).toBe(eventBlockState(undefined)?.completion_reason);
     for (const status of ["completed", "interrupted", "failed"] as const) {
       const state = applyMessageStreamEvent(
-        createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+        createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
         event(1, "stream.snapshot", {
           snapshot_seq: 1,
           stream_status: "open",
@@ -1575,7 +1596,7 @@ describe("message stream reducer", () => {
       partial: false,
     };
     const snapshotState = applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
       event(1, "stream.snapshot", {
         snapshot_seq: 8,
         stream_status: "completed",
@@ -1586,7 +1607,7 @@ describe("message stream reducer", () => {
       }),
     );
 
-    let eventState = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let eventState = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     eventState = applyMessageStreamEvent(eventState, event(1, "stream.opened", { status: "open" }));
     eventState = applyMessageStreamEvent(eventState, event(2, "model.started", {
       model_call_id: "mc_1",
@@ -1661,7 +1682,7 @@ describe("message stream reducer", () => {
     // 公共事件流在终态前会补发规范 block.completed；前端不得在 stream.completed
     // 分支无条件闭合 running block，否则会在 provider 仍可能补 delta 的真实场景
     // 下伪造错误终态（completion_reason 由后端权威决定，不能由前端发明）。
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
     state = applyMessageStreamEvent(state, event(2, "block.started", {
       block_id: "b_open",
@@ -1679,7 +1700,7 @@ describe("message stream reducer", () => {
   test("snapshot 与事件路径对 block carrier_type / projection 的文本归一逐字一致", () => {
     for (const item of ILLEGAL_TEXT_INPUTS) {
       const snapshotState = applyMessageStreamEvent(
-        createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+        createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
         event(1, "stream.snapshot", {
           snapshot_seq: 1,
           stream_status: "open",
@@ -1695,7 +1716,7 @@ describe("message stream reducer", () => {
           resumable: true,
         }),
       );
-      let eventState = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+      let eventState = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
       eventState = applyMessageStreamEvent(eventState, event(1, "block.started", {
         block_id: "b1",
         block_index: 0,
@@ -1714,7 +1735,7 @@ describe("message stream reducer", () => {
   test("snapshot 与事件路径对 interrupt reason 的非法文本归一逐字一致", () => {
     for (const item of ILLEGAL_TEXT_INPUTS) {
       const snapshotState = applyMessageStreamEvent(
-        createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+        createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
         event(1, "stream.snapshot", {
           snapshot_seq: 1,
           stream_status: "interrupting",
@@ -1725,7 +1746,7 @@ describe("message stream reducer", () => {
         }),
       );
       const eventState = applyMessageStreamEvent(
-        createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+        createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
         event(1, "interrupt.requested", { interrupt_request_id: "intr_1", reason: item.value }),
       );
       expect(snapshotState.interruptState?.reason)
@@ -1751,7 +1772,7 @@ describe("message stream reducer", () => {
     for (const failure of wireFailureInputs) {
       const value = failure.message;
       const snapshotState = applyMessageStreamEvent(
-        createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+        createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
         event(1, "stream.snapshot", {
           snapshot_seq: 1,
           stream_status: "failed",
@@ -1762,7 +1783,7 @@ describe("message stream reducer", () => {
         }),
       );
       const eventState = applyMessageStreamEvent(
-        createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+        createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
         event(1, "stream.failed", {
           code: "execution_error",
           message: value,
@@ -1788,7 +1809,7 @@ describe("message stream reducer", () => {
 
 describe("activity completion_reason 与 tool 展示状态", () => {
   test("Activity 终态收口不写公共协议无法表达的 completion_reason", () => {
-    let interrupted = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let interrupted = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     interrupted = applyMessageStreamEvent(interrupted, event(1, "activity.started", {
       activity_id: "act_1",
       kind: "browser.session",
@@ -1808,7 +1829,7 @@ describe("activity completion_reason 与 tool 展示状态", () => {
     expect(interrupted.activities[0]?.completion_reason).toBeUndefined();
     expect("completion_reason" in (interrupted.activities[0] ?? {})).toBe(false);
 
-    let lost = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let lost = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     lost = applyMessageStreamEvent(lost, event(1, "activity.started", {
       activity_id: "act_2",
       kind: "browser.session",
@@ -1827,7 +1848,7 @@ describe("activity completion_reason 与 tool 展示状态", () => {
   });
 
   test("事件侧不消费 payload 中被 codec 摘除的 activity completion_reason", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "activity.started", {
       activity_id: "act_1",
       kind: "browser.session",
@@ -1844,7 +1865,7 @@ describe("activity completion_reason 与 tool 展示状态", () => {
     expect(state.activities[0]?.completion_reason).toBeUndefined();
     // snapshot 路径同样无法表达该字段，两条链路结果一致。
     const snapshotState = applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
       event(1, "stream.snapshot", {
         snapshot_seq: 1,
         stream_status: "open",
@@ -1870,7 +1891,7 @@ describe("activity completion_reason 与 tool 展示状态", () => {
       { outcome: "provider_error", displayStatus: "failed" },
     ] as const;
     for (const item of cases) {
-      let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+      let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
       state = applyMessageStreamEvent(state, event(1, "tool.started", {
         tool_execution_id: "exec_1",
         tool_call_id: "call_1",
@@ -1916,7 +1937,7 @@ describe("active state kind 对齐", () => {
 
   function snapshotOf(seq: number, activeState: Record<string, unknown>) {
     return applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
       event(seq, "stream.snapshot", {
         snapshot_seq: seq,
         stream_status: "open",
@@ -1929,7 +1950,7 @@ describe("active state kind 对齐", () => {
   }
 
   test("中断进行中：事件路径与快照路径都是 interrupting/stopping，并保留上一状态", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
     state = applyMessageStreamEvent(state, event(2, "model.started", { model_call_id: "mc_1", attempt: 1 }));
     state = applyMessageStreamEvent(state, event(3, "block.started", {
@@ -1968,7 +1989,7 @@ describe("active state kind 对齐", () => {
   });
 
   test("终态 completed：事件路径与快照路径都是 terminal/completed 并附 reason", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
     state = applyMessageStreamEvent(state, event(2, "model.started", { model_call_id: "mc_1", attempt: 1 }));
     state = applyMessageStreamEvent(state, event(3, "block.started", {
@@ -2004,7 +2025,7 @@ describe("active state kind 对齐", () => {
   });
 
   test("终态 interrupted：事件路径与快照路径都是 terminal/interrupted，last_kind=interrupting", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
     state = applyMessageStreamEvent(state, event(2, "model.started", { model_call_id: "mc_1", attempt: 1 }));
     state = applyMessageStreamEvent(state, event(3, "interrupt.requested", {
@@ -2041,7 +2062,7 @@ describe("active state kind 对齐", () => {
   });
 
   test("终态 failed：事件路径与快照路径都是 terminal/failed，reason 取 code", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
     state = applyMessageStreamEvent(state, event(2, "model.started", { model_call_id: "mc_1", attempt: 1 }));
     state = applyMessageStreamEvent(state, event(3, "stream.failed", {
@@ -2076,7 +2097,7 @@ describe("active state kind 对齐", () => {
   });
 
   test("tool_call 链路：accumulating/stopping 与快照路径逐字段一致", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
     state = applyMessageStreamEvent(state, {
       ...event(2, "tool_call.delta", {
@@ -2144,7 +2165,7 @@ describe("active state kind 对齐", () => {
   });
 
   test("tool_execution 链路：running/stopping 与快照路径逐字段一致", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
     state = applyMessageStreamEvent(state, {
       ...event(2, "tool.started", { tool_name: "shell" }),
@@ -2199,7 +2220,7 @@ describe("active state kind 对齐", () => {
   });
 
   test("model.completed 与 block.completed 不回写 active_state，与快照保留上一状态一致", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
     state = applyMessageStreamEvent(state, event(2, "model.started", { model_call_id: "mc_1", attempt: 1 }));
     state = applyMessageStreamEvent(state, event(3, "model.completed", { model_call_id: "mc_1", attempt: 1 }));
@@ -2254,7 +2275,7 @@ describe("block model_call_id 还原", () => {
     seq: number,
   ): MessageStreamState {
     let state = applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
       event(1, "stream.snapshot", snapshot),
     );
     state = applyMessageStreamEvent(state, event(seq, "model.retrying", {
@@ -2473,7 +2494,7 @@ describe("block model_call_id 还原", () => {
       resumable: true,
     }, 7);
 
-    let eventState = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let eventState = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     eventState = applyMessageStreamEvent(eventState, event(1, "stream.opened", { status: "open" }));
     eventState = applyMessageStreamEvent(eventState, event(2, "model.started", {
       model_call_id: "mc_1",
@@ -2550,7 +2571,7 @@ describe("active_state 越界写入收口", () => {
 
   function snapshotOf(seq: number, activeState: Record<string, unknown>) {
     return applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
       event(seq, "stream.snapshot", {
         snapshot_seq: seq,
         stream_status: "open",
@@ -2563,7 +2584,7 @@ describe("active_state 越界写入收口", () => {
   }
 
   test("迟到的 block.delta 不把 active_state 从 tool_execution 拉回 model_output", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
     state = applyMessageStreamEvent(state, event(2, "model.started", {
       model_call_id: "mc_1",
@@ -2612,7 +2633,7 @@ describe("active_state 越界写入收口", () => {
   });
 
   test("tool_call 之后的迟到 block.delta 同样不覆写 active_state", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
     state = applyMessageStreamEvent(state, event(2, "model.started", {
       model_call_id: "mc_1",
@@ -2657,7 +2678,7 @@ describe("active_state 越界写入收口", () => {
 
   test("block.started 仍然写入 active_state，与后端同一分支一致", () => {
     // 收口只删除 block.delta 的越界写入，block.started 的写入必须保留。
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
     state = applyMessageStreamEvent(state, event(2, "tool.started", {
       tool_execution_id: "exec_1",
@@ -2696,7 +2717,7 @@ describe("active_state 越界写入收口", () => {
   test("tool 链路的身份归一只有一处：payload 缺失时实体与 active_state 同源", () => {
     // payload 只带 tool_name，身份仅出现在信封；实体与 active_state 必须得到
     // 同一份补全结果，且与后端把身份写进 active_state 的行为一致。
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, {
       ...event(1, "tool.started", { tool_name: "shell" }),
       tool_execution_id: "exec_1",
@@ -2776,7 +2797,7 @@ describe("终态准入与连接镜像收敛", () => {
   // connected，界面把已结束的 Turn 重新显示成运行中。
 
   test("终态后到达的业务事件与第二个终态都被丢弃，连接镜像保持 terminal", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.completed", { status: "completed" }));
     expect([
       state.lastEventSeq,
@@ -2805,7 +2826,7 @@ describe("终态准入与连接镜像收敛", () => {
   });
 
   test("终态后的 interrupt.rejected 仍放行，但不得把连接镜像重开为 connected", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.completed", { status: "completed" }));
     state = applyMessageStreamEvent(state, event(2, "interrupt.rejected", {
       interrupt_request_id: "intr_1",
@@ -2822,7 +2843,7 @@ describe("终态准入与连接镜像收敛", () => {
   });
 
   test("终态后的 stream.snapshot 仍是恢复权威，按 snapshot_seq 决定是否应用", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
     state = applyMessageStreamEvent(state, event(2, "stream.completed", { status: "completed" }));
 
@@ -2868,7 +2889,7 @@ describe("终态准入与连接镜像收敛", () => {
   });
 
   test("缓冲回放在终态处收口，更高序号的残留帧不留在 pendingEvents", () => {
-    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1");
+    let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "stream.opened", { status: "open" }));
     state = applyMessageStreamEvent(state, event(4, "block.delta", {
       block_id: "b1",
@@ -2907,7 +2928,7 @@ describe("block model_call_id 归属真源", () => {
 
   function snapshotState(snapshot: Record<string, unknown>): MessageStreamState {
     return applyMessageStreamEvent(
-      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1"),
+      createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002"),
       event(1, "stream.snapshot", snapshot),
     );
   }
