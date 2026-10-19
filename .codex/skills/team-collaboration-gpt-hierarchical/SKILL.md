@@ -92,7 +92,7 @@ Git index 的创建、写入与状态变更由本轮唯一集成者负责，并�
 
 只保留能改变后续决策且可追溯的结论；详细过程按需读本轮原件，不默认加载旧流水。当前已观察的失败及处理如下，均不证明整体提速：
 
-- **筛选与失败阶段**：漏设 `PYTEST_ADDOPTS` 曾收集全套 1,716 项；未引用 `-k` 曾在 pytest 入口退出 4。固定准确 selector，并区分 collection、setup 与业务失败。原件：`out/tests/temp/2026/10/18/fork60-deadline/fork60_closeout/artifacts/python/`；RUN19 的 `core_owner/artifacts/runs/same-backend-two-gateway-main-001/`。
+- **筛选与有效证据**：RUN20 把 node ID 放进 `PYTEST_ADDOPTS`，与 matrix 自带的 `tests/integration` 合并成全套误跑；改用 `-k` 后实际选中 1 项、1,795 项取消选择，50.73 秒通过。该受保护 matrix 结果有效，曾因台账指定另一 runner 而安排的重复运行已撤回。精确 node ID 可走现有 `run_task.py` profile；判断范围看实际选中项，判断证据看源码依赖与行为，不以 runner 名称再设门。原件：`out/tests/integration/backend/agents/test_resource_navigation/artifacts/codex-verify-navigation-20261019{,-target1}.{stdout.log,stderr.log,exit-code.txt}`。历史漏筛选与 collection 失败原件仍见 `out/tests/temp/2026/10/18/fork60-deadline/fork60_closeout/artifacts/python/`。
 - **资源保护接线**：RUN16 外层先降低硬内存限制，导致正式 runner 无法再设 8 GiB，pytest 未启动。现由正式单 suite matrix 自行保护，其余命令保留入口保护；不能把保护接线失败算作业务失败。原件：`out/tests/temp/2026/10/18/hierarchical-goal-resume-16/goal_delivery_run15/artifacts/runs/core-current-sha-integration-001/` 与同批 `skill_practice_run16/artifacts/`。
 - **候选与提交不一致**：RUN18 工作树 GO 未挡住最终提交中的语法错误及 F821/F823，故提交入口检查实际私有索引 blob，并拒绝绕过索引的工作树提交参数。原件：`out/tests/temp/2026/10/18/fork60-fixture-closeout-18/coordinator/artifacts/` 中的 `fork60-final-candidate.patch`、`fork60-independent-review.md` 与 `runs/commit-tree-bce3fbf-final-002/`。
 - **角色与事实混淆**：RUN19 owner 曾退回只读角色，消费者曾把源码指纹当批准门；旧 Web fixture 也曾未执行 DELETE 就断言来源不存在。接续职责取当前记录，缺失的测试动作不能归因于生产行为。原件索引：`out/tests/temp/2026/10/19/goal-core-resume-19/core_owner/HISTORY.md`；具体失败：`core_sol/artifacts/fork-owner-boundary-web006-failure-evidence-002.json`。
