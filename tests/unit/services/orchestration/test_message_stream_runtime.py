@@ -8,6 +8,10 @@ from langchain_core.messages import AIMessageChunk, ToolMessage
 
 from app.abstractions.turn_terminal_status import ToolResultCompletion
 from app.core.job_event_bus import EventType
+from app.protocol.codecs.message_stream import (
+    message_stream_to_json,
+    message_stream_to_proto,
+)
 from app.services.orchestration.message_stream_runtime import (
     MessageStreamRuntime,
 )
@@ -854,27 +858,24 @@ async def test_historical_tool_message_does_not_complete_reused_call_in_next_mod
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("message_status", "expected_status", "outcome", "completion_reason"),
+    ("message_status", "expected_status", "stream_outcome", "canonical_outcome", "completion_reason"),
     [
-        ("success", "completed", "success", "tool_completed"),
-        ("error", "failed", "failure", "provider_failed"),
+        ("success", "completed", "success", "success", "tool_completed"),
+        ("error", "failed", "provider_error", "failure", "provider_failed"),
     ],
 )
 async def test_tool_message_waits_for_real_start_before_persisting_terminal_event(
+    tool_failure_runtime_case,
     message_status: str,
     expected_status: str,
-    outcome: str,
+    stream_outcome: str,
+    canonical_outcome: str,
     completion_reason: str,
 ) -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
-    canonical_item_sink = AsyncMock()
-    tool_result_sink = AsyncMock()
-    runtime = MessageStreamRuntime(
-        writer,
-        canonical_item_sink=canonical_item_sink,
-        tool_result_sink=tool_result_sink,
-    )
+    writer = tool_failure_runtime_case.writer
+    canonical_item_sink = tool_failure_runtime_case.sink
+    tool_result_sink = tool_failure_runtime_case.tool_result_sink
+    runtime = tool_failure_runtime_case.runtime
 
     await runtime.start_model("model_1", "primary")
     await runtime.accept_message_chunk(
@@ -924,7 +925,7 @@ async def test_tool_message_waits_for_real_start_before_persisting_terminal_even
         status="succeeded" if message_status == "success" else "failed",
         result="README 内容",
         error="README 内容" if message_status == "error" else None,
-        outcome=outcome,
+        outcome=stream_outcome,
     )
 
     assert runtime._active_tool_executions == {}
@@ -939,7 +940,7 @@ async def test_tool_message_waits_for_real_start_before_persisting_terminal_even
     )
     assert result_completion.tool_attempt_id == "execution_a"
     assert result_completion.content == "README 内容"
-    assert result_completion.tool_outcome == outcome
+    assert result_completion.tool_outcome == canonical_outcome
     tool_call_completions = [
         call.args[1]
         for call in writer.commit.await_args_list
@@ -958,11 +959,24 @@ async def test_tool_message_waits_for_real_start_before_persisting_terminal_even
     assert completion_events[0]["tool_execution_id"] == "execution_a"
     assert completion_events[0]["tool_attempt_id"] == "execution_a"
     assert completion_events[0]["status"] == expected_status
-    assert completion_events[0]["outcome"] == outcome
+    assert completion_events[0]["outcome"] == stream_outcome
     assert completion_events[0]["result"] == "README 内容"
     assert completion_events[0]["completion_reason"] == completion_reason
     if message_status == "error":
         assert completion_events[0]["error"] == "README 内容"
+    # 真实 producer 的完整 payload 必须能通过公开 SSE 使用的严格 codec。
+    public_event = message_stream_to_json(message_stream_to_proto({
+        "event_id": "event_tool_message_completion",
+        "session_id": "ses_00000000400070008000000000000099",
+        "thread_id": "thr_00000000700070008000000000000001",
+        "turn_id": "turn_tool_message_completion",
+        "turn_stream_id": "stream_tool_message_completion",
+        "event_seq": 1,
+        "type": "tool.completed",
+        "payload": completion_events[0],
+    }))
+    assert public_event["payload"]["status"] == expected_status
+    assert public_event["payload"]["outcome"] == stream_outcome
     assert [
         call.args[0]
         for call in writer.commit.await_args_list

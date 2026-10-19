@@ -35,6 +35,7 @@ function section8ScenarioRegistry(surfaces, facts) {
     forks: { default: true, run: () => runPublicForks(surfaces) },
     live_resource_forks: { default: false, run: () => runLiveResourceForks(surfaces.a, []) },
     copy_attachments: { default: false, run: () => runCopyAttachmentFocus(surfaces.a) },
+    message_stream_after20: { default: false, run: () => runMessageStreamAfter20(surfaces.a) },
     copy_missing_attachment: {
       default: false,
       run: async () => {
@@ -5957,7 +5958,7 @@ async function createAttachmentSource(surface, title, owners, { prefixTurns = 0,
   return { source, prefix, material, attachment, blob, buffer };
 }
 
-async function runCopyAttachmentLifecycle(surface, owners) {
+async function enableAttachmentCapabilityTools(surface) {
   const catalog = (await ownerApi(surface, "/api/v1/tools?agent_id=default")).data;
   const toolIds = ["read_file", "write_file", "edit_file"].map((name) => {
     const tool = catalog.find((entry) => entry.name === name);
@@ -5966,6 +5967,98 @@ async function runCopyAttachmentLifecycle(surface, owners) {
   });
   await ownerApi(surface, "/api/v1/tools/selection", { method: "PATCH", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ agent_id: "default", changes: toolIds.map((tool_id) => ({ tool_id, execution_enabled: true, model_visible: true })) }) });
+}
+
+async function runMessageStreamAfter20(surface) {
+  await enableAttachmentCapabilityTools(surface);
+  const owners = [];
+  const { source, attachment, buffer } = await createAttachmentSource(surface, "消息流游标 20 的真实工具失败", owners);
+  const before = await forkHistoryEvidence(source);
+  const request = await freezeForkRequest(source);
+  const fork = (await requestFork(source, request)).data;
+  const published = await publishedForkOwner(source, request, fork, before);
+  const targetFile = published.targetHistory.items.flatMap((turn) => turn.user_messages)
+    .flatMap((message) => message.attachments).find((item) => item.name === attachment.name)?.file_id;
+  assert.ok(targetFile?.startsWith(`boxteam-session://${published.owner.sessionId}/attachments/`));
+  const capabilityBoundary = await runAttachmentCapabilityBoundary(published.owner, source,
+    targetFile, attachment.file_id, "message-stream-after20");
+  const response = messageStreamResponses.findLast((fact) => fact.status === 200
+    && fact.sessionId === published.owner.sessionId && fact.turnId === capabilityBoundary.sent.turnId);
+  assert.ok(response?.messageStreamId, "真实页面必须先订阅同一 Turn 的消息流");
+  const query = new URLSearchParams({ thread_id: published.owner.threadId,
+    turn_stream_id: response.messageStreamId, after_seq: "20" });
+  const token = await localToken(published.owner.page);
+  // 浏览器从同一 Gateway 续读真实持久流；不构造或替换任何产品事件。
+  const replay = await published.owner.page.evaluate(async ({ path, token, workspaceId }) => {
+    const response = await fetch(path, { headers: { "X-Local-Token": token,
+      "X-BoxTeam-Workspace-Id": workspaceId, Accept: "text/event-stream", "Last-Event-ID": "20" } });
+    const fact = { status: response.status, requestId: response.headers.get("X-Request-ID"),
+      streamId: response.headers.get("X-Message-Stream-ID"), chunks: [], eof: false, error: null };
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) { fact.eof = true; break; }
+        fact.chunks.push(decoder.decode(value, { stream: true }));
+      }
+      fact.chunks.push(decoder.decode());
+    } catch (error) {
+      fact.error = String(error);
+    } finally {
+      reader.releaseLock();
+    }
+    return fact;
+  }, { path: `/api/v1/sessions/${published.owner.sessionId}/turns/${capabilityBoundary.sent.turnId}/message-stream?${query}`,
+    token, workspaceId: published.owner.gatewayWorkspaceId });
+  const facts = { sourceSessionId: source.sessionId, sessionId: published.owner.sessionId,
+    threadId: published.owner.threadId, turnId: capabilityBoundary.sent.turnId,
+    capabilityBoundary, originalSubscription: response, replay };
+  result.section8.message_stream_after20 = facts;
+  assert.equal(replay.status, 200);
+  assert.equal(replay.streamId, response.messageStreamId);
+  assert.ok(replay.requestId);
+  assert.equal(replay.error, null, `after_seq=20 必须完成真实 body: ${JSON.stringify(replay)}`);
+  assert.equal(replay.eof, true);
+  const events = replay.chunks.join("").split("\n\n").filter((frame) => frame.includes("\ndata:"))
+    .map((frame) => JSON.parse(frame.split("\n").find((line) => line.startsWith("data:")).slice(5)));
+  assert.ok(events.length > 0);
+  assert.equal(events[0].event_seq, 21, "续读必须从真实 seq21 开始");
+  assert.ok(events.every((event, index) => event.event_seq === index + 21
+    && event.session_id === published.owner.sessionId && event.thread_id === published.owner.threadId
+    && event.turn_stream_id === response.messageStreamId));
+  assert.equal(events.at(-1).type, "stream.completed");
+  facts.replayedEventSeqs = events.map((event) => event.event_seq);
+  assert.deepEqual(Buffer.from((await readAttachmentContent(published.owner, targetFile)).bytes), buffer);
+  return facts;
+}
+
+async function runAttachmentCapabilityBoundary(owner, source, targetFile, sourceFile, label) {
+  const alias = targetFile.replace("boxteam-session://", "session-artifacts/");
+  const completed = await completeOwnerTurn(owner, "读取附件的规范路径，并确认其它会话引用及两种路径的写入都被明确拒绝。", [
+    { label: `attachment-capability-boundary-${label}`, calls: [
+      { id: "attachment-alias-read", name: "read_file", arguments: { path: alias } },
+      { id: "attachment-source-read", name: "read_file", arguments: { path: sourceFile } },
+      { id: "attachment-uri-write", name: "write_file", arguments: { file_path: targetFile, content: "forbidden rewrite" } },
+      { id: "attachment-alias-write", name: "write_file", arguments: { file_path: alias, content: "forbidden rewrite" } },
+      { id: "attachment-alias-edit", name: "edit_file", arguments: { file_path: alias, old_string: "独占附件事实", new_string: "forbidden rewrite" } },
+    ] }, finalResponse(`attachment-capability-boundary-final-${label}`, "附件规范路径可读，跨会话与写入能力已明确拒绝。"),
+  ]);
+  assert.equal(completed.turn.response_parts.filter((part) => part.kind === "tool_result").length, 5);
+  const boundaryResult = (callId) => {
+    const toolName = callId.endsWith("read") ? "read_file" : callId.endsWith("write") ? "write_file" : "edit_file";
+    return String(assertBoundToolResult(owner, completed.sent, completed.turn, completed.calls[0], callId, toolName).result);
+  };
+  assert.ok(boundaryResult("attachment-alias-read").includes(source.sessionId), "规范 alias 必须消费同一受信附件 capability");
+  assert.match(boundaryResult("attachment-source-read"), /不属于当前 Agent SessionThread/);
+  for (const callId of ["attachment-uri-write", "attachment-alias-write", "attachment-alias-edit"]) {
+    assert.match(boundaryResult(callId), /不提供附件写入或枚举 capability/);
+  }
+  return completed;
+}
+
+async function runCopyAttachmentLifecycle(surface, owners) {
+  await enableAttachmentCapabilityTools(surface);
   const facts = [];
   for (const phase of ["copy.attachments.preparing", "copy.attachments.owner_reserved", "copy.attachments.before_finalize"]) {
     const input = await createAttachmentSource(surface, `公开 copy 附件恢复 ${phase}`, owners);
@@ -6060,27 +6153,8 @@ async function runCopyAttachmentLifecycle(surface, owners) {
       const resultPart = tool.turn.response_parts.find((part) => part.kind === "tool_result");
       assert.ok(JSON.stringify(resultPart).includes(source.sessionId), "正常工具 capability 必须读到原正文独占事实");
       await assertToolResultContinuation(published.owner, tool.calls, `copy-attachment-read-${phase}`, resultPart);
-      const alias = targetFile.replace("boxteam-session://", "session-artifacts/");
-      capabilityBoundary = await completeOwnerTurn(published.owner, "读取附件的规范路径，并确认其它会话引用及两种路径的写入都被明确拒绝。", [
-        { label: `attachment-capability-boundary-${phase}`, calls: [
-          { id: "attachment-alias-read", name: "read_file", arguments: { path: alias } },
-          { id: "attachment-source-read", name: "read_file", arguments: { path: attachment.file_id } },
-          { id: "attachment-uri-write", name: "write_file", arguments: { file_path: targetFile, content: "forbidden rewrite" } },
-          { id: "attachment-alias-write", name: "write_file", arguments: { file_path: alias, content: "forbidden rewrite" } },
-          { id: "attachment-alias-edit", name: "edit_file", arguments: { file_path: alias, old_string: "独占附件事实", new_string: "forbidden rewrite" } },
-        ] }, finalResponse(`attachment-capability-boundary-final-${phase}`, "附件规范路径可读，跨会话与写入能力已明确拒绝。"),
-      ]);
-      const boundaryResults = capabilityBoundary.turn.response_parts.filter((part) => part.kind === "tool_result");
-      assert.equal(boundaryResults.length, 5);
-      const boundaryResult = (callId) => {
-        const toolName = callId.endsWith("read") ? "read_file" : callId.endsWith("write") ? "write_file" : "edit_file";
-        const part = assertBoundToolResult(published.owner, capabilityBoundary.sent, capabilityBoundary.turn,
-          capabilityBoundary.calls[0], callId, toolName);
-        return String(part.result);
-      };
-      assert.ok(boundaryResult("attachment-alias-read").includes(source.sessionId), "规范 alias 必须消费同一受信附件 capability");
-      assert.match(boundaryResult("attachment-source-read"), /不属于当前 Agent SessionThread/);
-      for (const callId of ["attachment-uri-write", "attachment-alias-write", "attachment-alias-edit"]) assert.match(boundaryResult(callId), /不提供附件写入或枚举 capability/);
+      capabilityBoundary = await runAttachmentCapabilityBoundary(published.owner, source,
+        targetFile, attachment.file_id, phase);
       assert.deepEqual(Buffer.from((await readAttachmentContent(published.owner, targetFile)).bytes), buffer, "全部被拒写入后正文必须保持逐字节一致");
       await deleteOwner(published.owner);
     }

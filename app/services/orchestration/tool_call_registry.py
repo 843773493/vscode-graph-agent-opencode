@@ -458,5 +458,4 @@ class StreamToolRegistryMixin:
         await self.complete_tool(
             tool_execution_id=execution_id, tool_call_id=tool_call_id, tool_name=tool_name,
             status=status, result=result, error=result if status == "failed" else None,
-            outcome="success" if status == "succeeded" else "failure",
         )
