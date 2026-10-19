@@ -484,7 +484,8 @@ async def test_background_catalog_loader_defect_exposes_original_error_without_s
     catalog = build_workspace_skill_catalog(
         layered_workspace, registry=registry, file_registry=file_registry, gateway_sources=sources,
     )
-    valid = {item.resource_id: item for item in registry.snapshots()}
+    valid = {item.resource_id: item for item in registry.snapshots() if item.resource_kind == "skill"}
+    agents = {item.resource_id: item for item in registry.snapshots() if item.resource_kind == "workspace_agents"}
     scope = LifetimeScope("catalog loader defect")
     loop = asyncio.get_running_loop()
     prior_handler = loop.get_exception_handler()
@@ -508,6 +509,8 @@ async def test_background_catalog_loader_defect_exposes_original_error_without_s
             while not reported:
                 await asyncio.sleep(0)
         assert reported[0]["exception"] is defect
+        assert len(agents) == 2
+        assert all(registry.snapshot(resource_id) is previous for resource_id, previous in agents.items())
         for resource_id, previous in valid.items():
             current = registry.snapshot(resource_id)
             assert not current.available and current.payload is None

@@ -7,10 +7,90 @@ import pytest
 
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
+    WorkspaceFileResourceSnapshot,
 )
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
+
+
+def _register_file(
+    registry: WorkspaceFileResourceRegistry,
+    *,
+    uri: str,
+    path: Path,
+    owner_id: str,
+    optional: bool = False,
+) -> WorkspaceFileResourceSnapshot:
+    return registry.register_file(
+        uri=uri,
+        path=path,
+        source_id=f"test-file-source:{owner_id}",
+        entry_identity=f"test-file-entry:{owner_id}",
+        optional=optional,
+    )
+
+
+def test_file_identity_comes_from_owner_and_survives_locator_change_and_rebuild(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    path = workspace / "GUIDE.md"
+    path.write_text("稳定 identity\n", encoding="utf-8")
+    first_uri = "boxteam://workspace/test/resources/files/root/GUIDE.md"
+    changed_uri = "boxteam://workspace/test/resources/files/root/renamed-GUIDE.md"
+    source_id = "guide-source:workspace:test"
+    entry_identity = "guide-entry:workspace:test"
+    first_registry = WorkspaceFileResourceRegistry(
+        workspace_root=workspace,
+        watch_service=WorkspaceFileWatchService(workspace_root=workspace),
+    )
+    first_registry.register_file(
+        uri=first_uri,
+        path=path,
+        source_id=source_id,
+        entry_identity=entry_identity,
+    )
+
+    restarted_registry = WorkspaceFileResourceRegistry(
+        workspace_root=workspace,
+        watch_service=WorkspaceFileWatchService(workspace_root=workspace),
+    )
+    restarted_registry.register_file(
+        uri=changed_uri,
+        path=path,
+        source_id=source_id,
+        entry_identity=entry_identity,
+    )
+    first_descriptor = first_registry.source_descriptor_for_uri(first_uri)
+    restarted_descriptor = restarted_registry.source_descriptor_for_uri(changed_uri)
+    assert first_descriptor.source_id == restarted_descriptor.source_id == source_id
+    assert first_descriptor.entry_identity == restarted_descriptor.entry_identity == entry_identity
+    assert first_descriptor.display_uri == first_uri
+    assert restarted_descriptor.display_uri == changed_uri
+    assert source_id not in {first_uri, changed_uri}
+    assert entry_identity not in {first_uri, changed_uri, source_id}
+
+    with pytest.raises(ValueError, match="source_id"):
+        first_registry.register_file(
+            uri=changed_uri,
+            path=path,
+            source_id=source_id,
+            entry_identity="guide-entry:workspace:another",
+        )
+    with pytest.raises(ValueError, match="entry_identity"):
+        first_registry.register_file(
+            uri="boxteam://workspace/test/resources/files/root/another.md",
+            path=path,
+            source_id="guide-source:workspace:another",
+            entry_identity=entry_identity,
+        )
+    with pytest.raises(ValueError, match="URI identity"):
+        first_registry.register_file(
+            uri=first_uri,
+            path=path,
+            source_id="guide-source:workspace:changed",
+            entry_identity="guide-entry:workspace:changed",
+        )
 
 
 @pytest.mark.asyncio
@@ -24,9 +104,11 @@ async def test_registered_file_is_refreshed_by_shared_watcher(tmp_path: Path) ->
         workspace_root=workspace,
         watch_service=watcher,
     )
-    initial = registry.register_file(
+    initial = _register_file(
+        registry,
         uri="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
         path=agents_path,
+        owner_id="watched-agents",
     )
     assert initial.content == "v1\n"
 
@@ -69,6 +151,12 @@ async def test_fixed_skill_directory_discovers_only_direct_entries_and_publishes
         assert [entry.name for entry in accepted.entries] == ["direct"]
         entry = accepted.entries[0]
         assert registry.snapshot(entry.uri).content == "已接受正文\n"
+        assert entry.source_id == "skill-source:workspace:direct"
+        assert entry.entry_identity == "skill-entry:workspace:direct"
+        descriptor = registry.source_descriptor_for_uri(entry.uri)
+        assert (descriptor.source_id, descriptor.entry_identity) == (
+            entry.source_id, entry.entry_identity,
+        )
         notifications = subscription.pending()
         assert any(item.directory_id == initial.directory_id and item.uri is None for item in notifications)
         skill.unlink()
@@ -247,7 +335,7 @@ async def test_symlink_replacement_publishes_unavailable_without_reading_target(
         workspace_root=workspace,
         watch_service=watcher,
     )
-    initial = registry.register_file(uri=uri, path=source)
+    initial = _register_file(registry, uri=uri, path=source, owner_id="symlink-agents")
     reader = registry._reconciler._reader
     read_all = reader._read_all
     read_contents: list[bytes] = []
@@ -301,7 +389,7 @@ def test_duplicate_registration_reuses_latest_snapshot_without_source_io(
         return read(handle)
 
     monkeypatch.setattr(registry._reconciler._reader, "read", counted_read)
-    initial = registry.register_file(uri=uri, path=source)
+    initial = _register_file(registry, uri=uri, path=source, owner_id="duplicate-agents")
     assert initial.content == "v1\n"
     assert read_count == 1
     first_observations = subscription.pending()
@@ -319,7 +407,7 @@ def test_duplicate_registration_reuses_latest_snapshot_without_source_io(
         patch.setattr(registry._reconciler, "reconcile", forbid)
         patch.setattr(registry._reconciler._reader, "read", forbid)
         patch.setattr(registry, "_publish_observation", forbid)
-        duplicate = registry.register_file(uri=uri, path=source)
+        duplicate = _register_file(registry, uri=uri, path=source, owner_id="duplicate-agents")
     assert duplicate is initial
     assert read_count == 1
     assert subscription.pending() == ()
@@ -341,7 +429,7 @@ def test_duplicate_registration_reuses_latest_snapshot_without_source_io(
         patch.setattr(registry._reconciler, "reconcile", forbid)
         patch.setattr(registry._reconciler._reader, "read", forbid)
         patch.setattr(registry, "_publish_observation", forbid)
-        latest_duplicate = registry.register_file(uri=uri, path=source)
+        latest_duplicate = _register_file(registry, uri=uri, path=source, owner_id="duplicate-agents")
     assert latest_duplicate is refreshed
     assert read_count == 2
     assert subscription.pending() == ()
@@ -361,9 +449,11 @@ async def test_registered_internal_skill_is_refreshed_by_resource_subscription(
         workspace_root=workspace,
         watch_service=watcher,
     )
-    registry.register_file(
+    _register_file(
+        registry,
         uri="boxteam://workspace/test/resources/skills/demo/SKILL.md",
         path=skill_path,
+        owner_id="workspace-skill-demo",
     )
 
     await registry.start()
@@ -388,7 +478,12 @@ def test_unavailable_refresh_retains_previous_valid_content(tmp_path: Path) -> N
         workspace_root=workspace,
         watch_service=WorkspaceFileWatchService(workspace_root=workspace),
     )
-    registry.register_file(uri="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md", path=source)
+    _register_file(
+        registry,
+        uri="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
+        path=source,
+        owner_id="invalid-agents-utf8",
+    )
 
     source.write_bytes(b"\xff\xfe")
     snapshot = registry.refresh("boxteam://workspace/test/resources/agent-spec/root/AGENTS.md")
@@ -403,7 +498,7 @@ def test_optional_agents_absence_empty_body_and_deletion_have_distinct_revisions
     watcher = WorkspaceFileWatchService(workspace_root=tmp_path)
     registry = WorkspaceFileResourceRegistry(workspace_root=tmp_path, watch_service=watcher)
     path = tmp_path / "AGENTS.md"
-    absent = registry.register_file(uri=uri, path=path, optional=True)
+    absent = _register_file(registry, uri=uri, path=path, owner_id="optional-agents", optional=True)
     assert absent.available and not absent.exists and absent.revision and absent.content == ""
     path.write_text("")
     empty = registry.refresh(uri)
@@ -427,7 +522,7 @@ def test_duplicate_optional_absence_reuses_snapshot_and_keeps_handle_identity(
         workspace_root=tmp_path,
         watch_service=WorkspaceFileWatchService(workspace_root=tmp_path),
     )
-    absent = registry.register_file(uri=uri, path=path, optional=True)
+    absent = _register_file(registry, uri=uri, path=path, owner_id="optional-duplicate-agents", optional=True)
     assert absent.available and not absent.exists and absent.revision
 
     def forbid(*_args, **_kwargs):
@@ -440,10 +535,12 @@ def test_duplicate_optional_absence_reuses_snapshot_and_keeps_handle_identity(
         patch.setattr(Path, "exists", forbid)
         patch.setattr(registry._reconciler, "reconcile", forbid)
         patch.setattr(registry._reconciler._reader, "read", forbid)
-        duplicate = registry.register_file(uri=uri, path=path, optional=True)
+        duplicate = _register_file(
+            registry, uri=uri, path=path, owner_id="optional-duplicate-agents", optional=True,
+        )
         assert duplicate is absent
         with pytest.raises(ValueError, match="来源 handle 绑定冲突"):
-            registry.register_file(uri=uri, path=path, optional=False)
+            _register_file(registry, uri=uri, path=path, owner_id="optional-duplicate-agents")
 
     path.write_text("actual\n", encoding="utf-8")
     refreshed = registry.refresh(uri)
@@ -455,7 +552,9 @@ def test_duplicate_optional_absence_reuses_snapshot_and_keeps_handle_identity(
         patch.setattr(Path, "exists", forbid)
         patch.setattr(registry._reconciler, "reconcile", forbid)
         patch.setattr(registry._reconciler._reader, "read", forbid)
-        duplicate_after_refresh = registry.register_file(uri=uri, path=path, optional=True)
+        duplicate_after_refresh = _register_file(
+            registry, uri=uri, path=path, owner_id="optional-duplicate-agents", optional=True,
+        )
     assert duplicate_after_refresh is refreshed
 
 
@@ -464,13 +563,13 @@ def test_required_missing_source_does_not_publish_optional_absence(tmp_path: Pat
     registry = WorkspaceFileResourceRegistry(
         workspace_root=tmp_path, watch_service=WorkspaceFileWatchService(workspace_root=tmp_path),
     )
-    snapshot = registry.register_file(uri=uri, path=tmp_path / "SKILL.md")
+    snapshot = _register_file(registry, uri=uri, path=tmp_path / "SKILL.md", owner_id="required-skill")
     assert not snapshot.available and not snapshot.exists and snapshot.revision is None
     assert "不存在" in snapshot.error
 
     source = tmp_path / "SKILL.md"
     source.write_text("available after retry\n", encoding="utf-8")
-    retried = registry.register_file(uri=uri, path=source)
+    retried = _register_file(registry, uri=uri, path=source, owner_id="required-skill")
     assert retried.available and retried.exists
     assert retried.content == "available after retry\n"
 
@@ -487,9 +586,9 @@ def test_register_file_rejects_uri_bound_to_a_different_path(tmp_path: Path) -> 
         workspace_root=workspace,
         watch_service=WorkspaceFileWatchService(workspace_root=workspace),
     )
-    first = registry.register_file(uri=uri, path=first_path)
+    first = _register_file(registry, uri=uri, path=first_path, owner_id="path-binding-skill")
 
     with pytest.raises(ValueError, match="资源 URI 绑定冲突"):
-        registry.register_file(uri=uri, path=second_path)
+        _register_file(registry, uri=uri, path=second_path, owner_id="path-binding-skill")
 
     assert registry.snapshot(uri) is first

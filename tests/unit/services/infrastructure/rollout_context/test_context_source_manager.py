@@ -515,27 +515,27 @@ def test_load_tracked_with_multiple_active_registrations_fails_closed():
 
 
 def test_register_tracked_source_consumes_event_observations(source_seal_case):
-    # 受信来源（AGENTS）以 tracked 身份登记：首帧走 activation，重复注册不降级。
+    # 受信来源（工作区规则）以 tracked 身份登记：首帧走 activation，重复注册不降级。
     manager = source_seal_case.manager()
     descriptor = ContextSourceDescriptor(
-        source_id="agents:workspace",
-        source_kind="workspace_agents",
-        name="AGENTS.md",
+        source_id="workspace:rules",
+        source_kind="workspace_rules",
+        name="RULES.md",
         description="工作区指令",
-        internal_locator="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
-        resource_uri="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
+        internal_locator="boxteam://workspace/test/resources/files/root/RULES.md",
+        resource_uri="boxteam://workspace/test/resources/files/root/RULES.md",
     )
     manager.register(descriptor, tracking_status="tracked")
 
-    assert manager.observe("agents:workspace", "# 指令\n") is True
+    assert manager.observe("workspace:rules", "# 指令\n") is True
     batch = manager.prepare_pending()
     assert batch is not None
     delta = batch.deltas[0]
-    assert delta.source_kind == "workspace_agents"
+    assert delta.source_kind == "workspace_rules"
     assert delta.kind == "activation"
     source_seal_case.seal(manager)
 
     manager.register(descriptor)
-    status, latest = manager.source_observation_state("agents:workspace")
+    status, latest = manager.source_observation_state("workspace:rules")
     assert status == "tracked"
     assert latest is not None

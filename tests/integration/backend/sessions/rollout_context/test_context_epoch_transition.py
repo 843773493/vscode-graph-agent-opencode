@@ -68,7 +68,7 @@ from tests.integration.backend.sessions.itemized_projection_helpers import (
     copy_rollout_snapshot,
 )
 
-AGENTS_URI = "boxteam://workspace/agent-spec/epoch-test"
+RULES_URI = "boxteam://workspace/agent-spec/epoch-test"
 SKILL_URI = "boxteam://workspace/test/resources/skills/debugging/SKILL.md"
 SKILL_FRONTMATTER = "---\nname: debugging\ndescription: 调试规则\n---\n"
 
@@ -230,9 +230,9 @@ class EpochCase:
         ).fetchone()[0]
 
     def advance(self):
-        self.publisher.publish(AGENTS_URI, "agents:2", "基础规则第二版")
+        self.publisher.publish(RULES_URI, "rules:2", "基础规则第二版")
         self.publisher.publish(SKILL_URI, "skill:2", SKILL_FRONTMATTER + "v2\n")
-        self.manager.observe("agents:workspace", "基础规则第二版", revision="agents:2")
+        self.manager.observe("workspace:rules", "基础规则第二版", revision="rules:2")
         self.manager.observe("skill:debugging", "v2\n", revision="skill:2")
         return self.prepare("second")
 
@@ -284,13 +284,13 @@ def epoch_case(epoch_db, frozen_provider_wire, frozen_provider_activation):
     saver, session, connection, accepted = epoch_db
     thread = saver._storage.storage.main_thread_id(session)
     publisher = PublishedResourceOwner()
-    publisher.publish(AGENTS_URI, "agents:1", "基础规则第一版")
+    publisher.publish(RULES_URI, "rules:1", "基础规则第一版")
     publisher.publish(SKILL_URI, "skill:1", SKILL_FRONTMATTER + "v1\n")
     descriptors = (
         ContextSourceDescriptor(
-            source_id="agents:workspace", source_kind="workspace_agents", name="AGENTS.md",
-            description="受信工作区规则", internal_locator="/绝不读取/AGENTS.md",
-            resource_uri=AGENTS_URI, root_placement="root_eligible",
+            source_id="workspace:rules", source_kind="workspace_rules", name="RULES.md",
+            description="受信工作区规则", internal_locator="/绝不读取/RULES.md",
+            resource_uri=RULES_URI, root_placement="root_eligible",
         ),
         ContextSourceDescriptor(
             source_id="skill:debugging", source_kind="skill", name="debugging",
@@ -303,7 +303,7 @@ def epoch_case(epoch_db, frozen_provider_wire, frozen_provider_activation):
                          publisher, descriptors, stack)
         case.config = {"configurable": {"thread_id": thread, "checkpoint_ns": ""}}
         case.bind_manager()
-        case.manager.observe("agents:workspace", "基础规则第一版", revision="agents:1")
+        case.manager.observe("workspace:rules", "基础规则第一版", revision="rules:1")
         case.manager.observe("skill:debugging", "v1\n", revision="skill:1")
         case.first = case.prepare("first")
         case.user = next(message for message in case.first["messages"] if isinstance(message, HumanMessage))
@@ -341,7 +341,7 @@ def test_rewind_reconciles_only_from_frozen_control_state(epoch_case):
     assert rebuilt["messages"][-1].content == "v2\n"
     assert len([message for message in rebuilt["messages"] if isinstance(message, SystemMessage)]) == 1
     assert all(row[2] == row[3] and row[2].endswith(":2") for row in case.source_rows())
-    assert case.publisher.reads == [AGENTS_URI, SKILL_URI]
+    assert case.publisher.reads == [RULES_URI, SKILL_URI]
     (skill_delta,) = tuple(
         delta for delta in case.manager._last_model_call_receipt.deltas
         if delta.source_id == "skill:debugging"
@@ -546,7 +546,7 @@ def test_source_failure_keeps_view_pending_versions_and_retry_is_atomic(epoch_ca
         for delta in frozen.deltas
     }
     assert set(expected_drafts) == {
-        "source-update:agents:workspace:agents:2:rebuild",
+        "source-update:workspace:rules:rules:2:rebuild",
         "source-update:skill:debugging:skill:2:rebuild",
     }
     seal_queries = (
@@ -751,7 +751,7 @@ def test_same_checkpoint_earlier_user_anchor_removes_snapshot_after_restart(epoc
     assert snapshot.seal_binding.prefix.state.epoch.ordinal == original.seal_binding.prefix.state.epoch.ordinal + 1
     assert case.pending_rows()[0][3:] == ("consumed", snapshot.assembly_id)
     assert {row[0]: row[1] for row in case.source_rows()}["skill:one-shot"] == "untracked"
-    assert case.publisher.reads == [AGENTS_URI, SKILL_URI]
+    assert case.publisher.reads == [RULES_URI, SKILL_URI]
     assert binding.display_uri not in case.publisher.reads
     assert case.manager.prepare_pending() is None
     assert canonical_json_bytes(case.snapshot(visible).to_dict()) == old_bytes
@@ -840,15 +840,15 @@ def test_promoted_snapshot_root_preserves_activation_frontier_through_actual_rew
     else:
         assert all(binding.body not in message.content for message in rebuilt["messages"])
     assert {source.source_id: source.revision for source in snapshot.seal_binding.source_revisions} == {
-        "agents:workspace": "agents:1", "skill:debugging": "skill:1",
+        "workspace:rules": "rules:1", "skill:debugging": "skill:1",
     }
-    assert sources["agents:workspace"] == "agents:1"
+    assert sources["workspace:rules"] == "rules:1"
     assert any(frame.item_ref.source_identity == "skill:debugging" for frame in snapshot.seal_binding.prefix.state.frames)
     assert snapshot.seal_binding.prefix.state.epoch.reason == EpochReason.REWIND
     assert snapshot.seal_binding.prefix.state.epoch.ordinal == promoted_snapshot.seal_binding.prefix.state.epoch.ordinal + 1
     assert snapshot.seal_binding.prefix.consumed_transition.transition_id == pending[0]
     assert case.pending_rows()[-1][3:] == ("consumed", snapshot.assembly_id)
-    assert case.publisher.reads == [AGENTS_URI, SKILL_URI]
+    assert case.publisher.reads == [RULES_URI, SKILL_URI]
     assert binding.display_uri not in case.publisher.reads
     assert case.manager.prepare_pending() is None
     assert tuple(canonical_json_bytes(case.snapshot(value).to_dict()) for value in (visible, promoted)) == immutable
@@ -886,7 +886,7 @@ def test_visible_snapshot_is_carried_from_committed_detail_after_restart(epoch_c
     assert (frames[0].content, frames[0].item_ref.source_revision) == (binding.body, binding.activation_revision)
     assert all(source.source_id != "skill:one-shot" for source in snapshot.seal_binding.source_revisions)
     assert {row[0]: row[1:4] for row in case.source_rows()}["skill:one-shot"] == ("untracked", "snapshot:1", "snapshot:1")
-    assert case.publisher.reads == [AGENTS_URI, SKILL_URI]
+    assert case.publisher.reads == [RULES_URI, SKILL_URI]
     assert case.manager.prepare_pending() is None
     assert canonical_json_bytes(case.snapshot(visible).to_dict()) == old_bytes
 
@@ -962,14 +962,14 @@ def test_earlier_anchor_retains_only_first_untracked_revision_and_visible_contro
     assert retained == ((first_frame.item_ref.ref_id, "skill:1", first_frame.content),)
     assert all(frame.item_ref.ref_id != second_frame.item_ref.ref_id for frame in snapshot.seal_binding.prefix.state.frames)
     assert {source.source_id: source.revision for source in snapshot.seal_binding.source_revisions} == {
-        "agents:workspace": "agents:2",
+        "workspace:rules": "rules:2",
     }
     assert {row[0]: row[1:4] for row in case.source_rows()}["skill:debugging"] == (
         "untracked", "skill:2", "skill:1",
     )
     assert case.pending_rows()[0][3:] == ("consumed", snapshot.assembly_id)
     assert snapshot.seal_binding.prefix.consumed_transition.transition_id == pending[0]
-    assert case.publisher.reads == [AGENTS_URI]
+    assert case.publisher.reads == [RULES_URI]
     assert case.manager.prepare_pending() is None
     assert tuple(canonical_json_bytes(case.snapshot(value).to_dict()) for value in (case.first, second)) == immutable
 
@@ -998,7 +998,7 @@ def test_untrack_before_and_after_checkpoint_changes_actual_rewind_tracking(epoc
                  for frame in snapshot.seal_binding.prefix.state.frames
                  if frame.item_ref.source_identity == "skill:debugging") == old_frames
     assert all(source.source_id != "skill:debugging" for source in snapshot.seal_binding.source_revisions)
-    assert case.publisher.reads == [AGENTS_URI]
+    assert case.publisher.reads == [RULES_URI]
     assert case.manager.prepare_pending() is None
 
 
@@ -1187,7 +1187,7 @@ def test_replay_before_as_new_turn_seals_real_admission_and_reuses_after_restart
         (pending[0],),
     ).fetchone() == cut
     case.publisher.publish(binding.display_uri, "snapshot:wrong", "重放不得读取的旧来源", available=False)
-    case.publisher.publish(AGENTS_URI, "agents:replay", "重放时已发布的基础规则")
+    case.publisher.publish(RULES_URI, "rules:replay", "重放时已发布的基础规则")
     case.publisher.reads.clear()
     key = "replay-before-new-turn"
     prepared = case.prepare(key)
@@ -1205,11 +1205,11 @@ def test_replay_before_as_new_turn_seals_real_admission_and_reuses_after_restart
     assert all(frame.item_ref.source_identity != "skill:one-shot"
                for frame in rebuilt.seal_binding.prefix.state.frames)
     assert {source.source_id: source.revision for source in rebuilt.seal_binding.source_revisions} == {
-        "agents:workspace": "agents:replay", "skill:debugging": "skill:1",
+        "workspace:rules": "rules:replay", "skill:debugging": "skill:1",
     }
     consumed, states = case.pending_rows(), case.source_rows()
     assert consumed[0][3:] == ("consumed", rebuilt.assembly_id)
-    assert case.publisher.reads == [AGENTS_URI, SKILL_URI]
+    assert case.publisher.reads == [RULES_URI, SKILL_URI]
     assert case.manager.prepare_pending() is None
     assert case.checkpoint_versions() == versions
     assert tuple(canonical_json_bytes(case.snapshot(value).to_dict()) for value in (case.first, visible)) == old_snapshots

@@ -24,7 +24,6 @@ from fastapi import FastAPI
 from app import main
 from app.abstractions.job_executor import JobRuntimeStateProtocol
 from app.agents.graph_binding import compute_capability_profile_hash
-from app.agents.skill_runtime import WORKSPACE_AGENTS_SOURCE_ID
 from app.container import AppContainer
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
@@ -42,7 +41,6 @@ from app.domain.itemized.hashing import (
 )
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord, RuntimeNoticePayload
-from app.domain.itemized.serialization import normalize_wire_request
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.routes.skill_sources import router as gateway_skill_sources_router
@@ -81,6 +79,10 @@ from app.services.orchestration.initial_execution_binding_worker import (
 )
 from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
     start_terminal_backend,
+)
+from tests.harness.python.browser_manager import (
+    close_browser_manager_processes,
+    start_browser_manager_processes,
 )
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.stubs.http_stubs import HTTPStubState, openai_chat_stub
@@ -244,6 +246,15 @@ async def source_case(
                 mount_payload["terminal_backend_url"] = f"http://127.0.0.1:{terminal_port}"
                 process = start_terminal_backend(backend_port=terminal_port, workspace_root=str(workspace))
                 services.callback(terminate_process, process)
+            if options.get("browser"):
+                browser_port = integration_port_block_for_file(Path(request.node.path)).port(42)
+                mount_payload["browser_backend_url"] = f"http://127.0.0.1:{browser_port}"
+                browser = start_browser_manager_processes(
+                    workspace_root=workspace, backend_port=browser_port,
+                    frontend_port=integration_port_block_for_file(Path(request.node.path)).port(43),
+                    backend_host="127.0.0.1",
+                )
+                services.callback(close_browser_manager_processes, browser)
             monkeypatch.setenv("BOXTEAM_MOUNTED_WORKSPACES", json.dumps([mount_payload]))
             async with main.lifespan(main.app):
                 registry = main.app.state.workspace_container_registry
@@ -1894,131 +1905,6 @@ async def test_h6_backend_hard_restart_keeps_child_and_runtime_report_identity(
         assert after["parent"]["assemblies"][-1][2] == "execution_lost"
         assert after["parent"]["models"] == before["parent"]["models"]
         assert len(report_requests) == 1
-
-
-@pytest.mark.parametrize(
-    "agents_after,restart_source_case",
-    [(variant, {"agents_content": "CIL_OLD_AGENTS 已完成首帧。\n"})
-     for variant in ("unchanged", "changed", "absent")],
-    indirect=["restart_source_case"], ids=["unchanged", "changed", "absent"],
-)
-@pytest.mark.asyncio
-async def test_cold_agents_restart_reconciles_before_second_provider(
-    restart_source_case: RestartRuntimeSourceCase, agents_after: str,
-) -> None:
-    case = restart_source_case
-    first_body = "CIL_OLD_AGENTS 已完成首帧。\n"
-    current_body = "CIL_NEW_AGENTS 停机期间的新指令。\n" if agents_after == "changed" else (
-        "" if agents_after == "absent" else first_body
-    )
-    first_prompt, second_prompt = "cil-first-private", "cil-second-private"
-    case.model.response_callback = lambda _payload: {"content": "CIL 同 owner 回复"}
-    session_id = await create_session(case.client, "CIL 冷 AGENTS 首次绑定")
-    first = await _send(case, session_id, first_prompt)
-    await _job(case, first["job_id"])
-    catalog = await case.client.get("/api/v1/session-catalog/export")
-    assert catalog.status_code == 200, catalog.text
-    node = next(item for item in catalog.json()["data"]["items"] if item["node_id"] == session_id)
-    session_dir = case.workspace / ".boxteam/sessions" / node["storage_relative_path"]
-    sessions = case.workspace / ".boxteam/sessions"
-    with RolloutCheckpointSaver(sessions) as cold:
-        owner = cold.forks.source.resolve_main_thread_owner(session_id)
-        owner_key = ContextSourceOwnerKey(owner.session_id, owner.thread_id)
-        assert owner.thread_id != session_id
-        assemblies = cold.list_context_assemblies(session_id, owner.thread_id)
-        first_candidates = [snapshot for snapshot in assemblies
-                            if first_prompt in _wire_text(snapshot.request_hash_preimage["messages"])]
-        assert len(first_candidates) == 1
-        first_assembly = first_candidates[0]
-        assert first_assembly.seal_binding is not None
-        applied = [revision for revision in first_assembly.seal_binding.source_revisions
-                   if revision.source_id == WORKSPACE_AGENTS_SOURCE_ID]
-        assert len(applied) == 1 and applied[0].previous_revision is None
-        old_revision = applied[0].revision
-        before_control = next(state for state in cold.load_context_source_control_states(owner_key)
-                              if state.source_id == WORKSPACE_AGENTS_SOURCE_ID)
-        assert before_control.latest_revision == before_control.latest_visible_committed_revision == old_revision
-        assert before_control.tracking_status == "tracked"
-        assert first_body in first_assembly.seal_binding.root.content
-        first_bytes = canonical_json_bytes(first_assembly.to_dict())
-    first_requests = [request["json"] for request in case.model.requests
-                      if first_prompt in _wire_text(request["json"]["messages"])]
-    assert len(first_requests) == 1
-    assert normalize_wire_request(first_requests[0]) == first_assembly.request_hash_preimage
-
-    def change_agents_while_stopped() -> None:
-        path = case.workspace / "AGENTS.md"
-        if agents_after == "absent":
-            path.unlink()
-        else:
-            path.write_text(current_body, encoding="utf-8")
-
-    await case.restart(hard=True, while_stopped=change_agents_while_stopped)
-    # 服务重建不能自行推进 desired 或 visible；第二次真实 send 才观察并 seal。
-    with RolloutCheckpointSaver(sessions) as cold:
-        assert cold.forks.source.resolve_main_thread_owner(session_id) == owner
-        restored_control = next(state for state in cold.load_context_source_control_states(owner_key)
-                                if state.source_id == WORKSPACE_AGENTS_SOURCE_ID)
-        assert restored_control == before_control
-        restored_first = cold.get_context_assembly(session_id, owner.thread_id, assembly_id=first_assembly.assembly_id)
-        assert canonical_json_bytes(restored_first.to_dict()) == first_bytes
-    request_boundary = len(case.model.requests)
-    second = await _send(case, session_id, second_prompt)
-    assert second["thread_id"] == owner.thread_id
-    await _job(case, second["job_id"])
-    second_requests = [request["json"] for request in case.model.requests[request_boundary:]
-                       if second_prompt in _wire_text(request["json"]["messages"])]
-    assert len(second_requests) == 1
-    with RolloutCheckpointSaver(sessions) as cold:
-        assert cold.forks.source.resolve_main_thread_owner(session_id) == owner
-        second_candidates = [snapshot for snapshot in cold.list_context_assemblies(session_id, owner.thread_id)
-                             if second_prompt in _wire_text(snapshot.request_hash_preimage["messages"])]
-        assert len(second_candidates) == 1
-        second_assembly = second_candidates[0]
-        assert second_assembly.seal_binding is not None
-        assert (second_assembly.session_id, second_assembly.thread_id) == (session_id, owner.thread_id)
-        assert normalize_wire_request(second_requests[0]) == second_assembly.request_hash_preimage
-        current = next(state for state in cold.load_context_source_control_states(owner_key)
-                       if state.source_id == WORKSPACE_AGENTS_SOURCE_ID)
-        assert current.latest_revision == current.latest_visible_committed_revision
-        revisions = [revision for revision in second_assembly.seal_binding.source_revisions
-                     if revision.source_id == WORKSPACE_AGENTS_SOURCE_ID]
-        new_frames = [frame for frame in second_assembly.seal_binding.prefix.state.frames
-                      if frame.item_ref.source_identity == WORKSPACE_AGENTS_SOURCE_ID
-                      and frame.item_ref.source_revision == current.latest_revision]
-        if agents_after == "unchanged":
-            assert revisions == [] and new_frames == []
-            assert current == before_control
-            assert any(first_body in _wire_text(message["content"])
-                       for message in second_requests[0]["messages"] if message["role"] == "system")
-        else:
-            assert current.latest_revision != old_revision
-            assert [(revision.previous_revision, revision.revision) for revision in revisions] == [
-                (old_revision, current.latest_revision),
-            ]
-            assert len(new_frames) == 1 and new_frames[0].role == "user"
-            assert new_frames[0].content == current_body
-            assert {"role": "user", "content": current_body} in second_requests[0]["messages"]
-            assert current.state_revision > before_control.state_revision
-        restored_first = cold.get_context_assembly(session_id, owner.thread_id, assembly_id=first_assembly.assembly_id)
-        assert canonical_json_bytes(restored_first.to_dict()) == first_bytes
-    with sqlite3.connect((session_dir / "rollout/index.sqlite").as_uri() + "?mode=ro", uri=True) as connection:
-        model_owner = connection.execute(
-            "SELECT session_id,thread_id,execution_id,assembly_id FROM model_calls WHERE model_call_id=?",
-            (second_assembly.model_call_id,),
-        ).fetchall()
-    assert model_owner == [(session_id, owner.thread_id, second_assembly.execution_id, second_assembly.assembly_id)]
-    case.write_actual(f"cold-agents-{agents_after}", {
-        "session_id": session_id, "thread_id": owner.thread_id, "source_id": WORKSPACE_AGENTS_SOURCE_ID,
-        "backend_pids": [handle.process.pid for handle in case.backends],
-        "previous_revision": old_revision, "current_revision": current.latest_revision,
-        "visible_revision": current.latest_visible_committed_revision,
-        "first_assembly_id": first_assembly.assembly_id, "second_assembly_id": second_assembly.assembly_id,
-        "first_assembly_hash": hashlib.sha256(first_bytes).hexdigest(),
-        "source_receipts": [{"previous_revision": revision.previous_revision, "revision": revision.revision}
-                            for revision in revisions],
-        "second_wire": second_requests[0], "model_owner": model_owner,
-    })
 
 
 @pytest.mark.parametrize("source_case", [{"workspace_template": "model_tool_test_workspace"}], indirect=True)

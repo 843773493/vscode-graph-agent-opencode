@@ -178,7 +178,12 @@ def source_reactor(tmp_path: Path, source_seal_owner: SourceSealCase):
     registry = WorkspaceFileResourceRegistry(
         workspace_root=workspace, watch_service=watch_service, project_root=tmp_path,
     )
-    registry.register_file(uri="boxteam://workspace/test/resources/skills/demo/SKILL.md", path=skill_path)
+    registry.register_file(
+        uri="boxteam://workspace/test/resources/skills/demo/SKILL.md",
+        path=skill_path,
+        source_id="skill-source:workspace:demo",
+        entry_identity="skill-entry:workspace:demo",
+    )
     manager = source_seal_owner.manager()
     manager.register(ContextSourceDescriptor(
         source_id="skill:demo", source_kind="skill", name="demo", description="事件驱动测试 Skill",

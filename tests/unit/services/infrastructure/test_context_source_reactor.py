@@ -81,6 +81,8 @@ def _reactor_fixture(
     registry.register_file(
         uri=SKILL_URI,
         path=skill_path,
+        source_id="skill-source:workspace:demo",
+        entry_identity="skill-entry:workspace:demo",
     )
     manager = ContextSourceManager()
     manager.register(
@@ -318,7 +320,12 @@ def _overflow_fixture(
         skill_path.parent.mkdir(parents=True, exist_ok=True)
         skill_path.write_text(f"v{index}\n", encoding="utf-8")
         uri = f"boxteam://workspace/test/resources/skills/{name}/SKILL.md"
-        registry.register_file(uri=uri, path=skill_path)
+        registry.register_file(
+            uri=uri,
+            path=skill_path,
+            source_id=f"skill-source:workspace:{name}",
+            entry_identity=f"skill-entry:workspace:{name}",
+        )
         manager.register(
             ContextSourceDescriptor(
                 source_id=f"skill:{name}",
@@ -411,14 +418,14 @@ async def test_channel_gap_marks_all_sources_and_recovers(tmp_path: Path, direct
 
 
 @pytest.mark.asyncio
-async def test_optional_agents_reactor_and_rebuild_consume_only_published_revisions(
+async def test_optional_file_reactor_and_rebuild_consume_only_published_revisions(
     tmp_path: Path, registry_db, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """缺失、空文件、正文与删除都先由原 reader 发布；CSM 消费与重建不读源。"""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    path = workspace / "AGENTS.md"
-    uri = "boxteam://workspace/test/resources/agent-spec/root/AGENTS.md"
+    path = workspace / "GUIDE.md"
+    uri = "boxteam://workspace/test/resources/files/root/GUIDE.md"
     watch = WorkspaceFileWatchService(workspace_root=workspace)
     registry = WorkspaceFileResourceRegistry(
         workspace_root=workspace, watch_service=watch, project_root=tmp_path,
@@ -428,15 +435,15 @@ async def test_optional_agents_reactor_and_rebuild_consume_only_published_revisi
     manager = ContextSourceManager(owner=owner, control_state_port=saver)
     manager.register(
         ContextSourceDescriptor(
-            source_id="workspace-agents", source_kind="workspace_instructions",
-            name="AGENTS.md", description="可选工作区指引", internal_locator="AGENTS.md",
+            source_id="workspace-guide", source_kind="workspace_instructions",
+            name="GUIDE.md", description="可选工作区指引", internal_locator="GUIDE.md",
             resource_uri=uri,
         ), tracking_status="tracked",
     )
-    scope = LifetimeScope("optional-agents-rebuild")
+    scope = LifetimeScope("optional-guide-rebuild")
     reactor = ContextSourceReactor(
         sources=registry, context_sources=manager, lifetime_scope=scope,
-        reactor_id="optional-agents",
+        reactor_id="optional-guide",
     )
     manager.bind_published_revision_supplier(reactor.freeze_published_sources)
     revisions = []
@@ -445,13 +452,19 @@ async def test_optional_agents_reactor_and_rebuild_consume_only_published_revisi
         raise AssertionError("reactor/CSM rebuild 只能消费原 owner 的已发布内存 revision")
 
     try:
-        for index, body in enumerate((None, "", "实际 AGENTS 正文\n", None)):
+        for index, body in enumerate((None, "", "实际 指引 正文\n", None)):
             if body is None:
                 path.unlink(missing_ok=True)
             else:
                 path.write_text(body, encoding="utf-8")
             published = (
-                registry.register_file(uri=uri, path=path, optional=True)
+                registry.register_file(
+                    uri=uri,
+                    path=path,
+                    source_id="workspace-guide-source:optional",
+                    entry_identity="workspace-guide-entry:optional",
+                    optional=True,
+                )
                 if index == 0 else registry.refresh(uri)
             )
             assert published.available and published.revision
@@ -470,7 +483,7 @@ async def test_optional_agents_reactor_and_rebuild_consume_only_published_revisi
                     observed[0].source_id, reactor.content_for(observed[0]),
                     revision=observed[0].revision,
                 )
-                assert manager.source_observation_state("workspace-agents") == (
+                assert manager.source_observation_state("workspace-guide") == (
                     "tracked", published.revision,
                 )
                 frozen = reactor.freeze_published_sources(manager.descriptors())
@@ -497,7 +510,7 @@ async def test_optional_agents_reactor_and_rebuild_consume_only_published_revisi
 
 
 @dataclass(frozen=True)
-class ColdAgentsSourceCase:
+class ColdFileSourceCase:
     manager: ContextSourceManager
     registry: WorkspaceFileResourceRegistry
     reactor: ContextSourceReactor
@@ -507,30 +520,36 @@ class ColdAgentsSourceCase:
 
 
 @pytest.fixture
-async def cold_agents_source_case(
+async def cold_file_source_case(
     request: pytest.FixtureRequest, tmp_path: Path, source_seal_case: SourceSealCase,
-) -> AsyncIterator[ColdAgentsSourceCase]:
+) -> AsyncIterator[ColdFileSourceCase]:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    path = workspace / "AGENTS.md"
-    path.write_text("冷启动前的 AGENTS 正文\n", encoding="utf-8")
+    path = workspace / "GUIDE.md"
+    path.write_text("冷启动前的 指引 正文\n", encoding="utf-8")
     descriptor = ContextSourceDescriptor(
-        source_id="agents:workspace", source_kind="workspace_agents", name="AGENTS.md",
-        description="冷启动指引", internal_locator="AGENTS.md",
-        resource_uri="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
+        source_id="file:workspace-guide", source_kind="workspace_guide", name="GUIDE.md",
+        description="冷启动指引", internal_locator="GUIDE.md",
+        resource_uri="boxteam://workspace/test/resources/files/root/GUIDE.md",
         root_placement="root_eligible",
     )
     watch = WorkspaceFileWatchService(workspace_root=workspace)
     registry = WorkspaceFileResourceRegistry(
         workspace_root=workspace, watch_service=watch, project_root=tmp_path,
     )
-    baseline = registry.register_file(uri=descriptor.resource_uri, path=path, optional=True)
+    baseline = registry.register_file(
+        uri=descriptor.resource_uri,
+        path=path,
+        source_id="workspace-guide-source:cold-rebuild",
+        entry_identity="workspace-guide-entry:cold-rebuild",
+        optional=True,
+    )
     assert baseline.available and baseline.revision
     manager = source_seal_case.manager()
     manager.register(descriptor, tracking_status="tracked")
-    scope = LifetimeScope("agents-before-restart")
+    scope = LifetimeScope("guide-before-restart")
     reactor = ContextSourceReactor(
-        sources=registry, context_sources=manager, lifetime_scope=scope, reactor_id="agents-before",
+        sources=registry, context_sources=manager, lifetime_scope=scope, reactor_id="guide-before",
     )
     try:
         reactor.sync_sources()
@@ -548,7 +567,7 @@ async def cold_agents_source_case(
 
     variant = request.param
     if variant == "changed":
-        path.write_text("冷启动后的 AGENTS 新正文\n", encoding="utf-8")
+        path.write_text("冷启动后的 指引 新正文\n", encoding="utf-8")
     elif variant in {"absent", "required_unavailable"}:
         path.unlink()
     watch = WorkspaceFileWatchService(workspace_root=workspace)
@@ -557,30 +576,34 @@ async def cold_agents_source_case(
     )
     # 注册发布发生在新订阅之前，不能靠通知重放取得这次停机变化。
     published = registry.register_file(
-        uri=descriptor.resource_uri, path=path, optional=variant != "required_unavailable",
+        uri=descriptor.resource_uri,
+        path=path,
+        source_id="workspace-guide-source:cold-rebuild",
+        entry_identity="workspace-guide-entry:cold-rebuild",
+        optional=variant != "required_unavailable",
     )
     manager = source_seal_case.manager()
     manager.register(descriptor, tracking_status="tracked")
     assert manager.source_observation_state(descriptor.source_id) == ("tracked", baseline.revision)
     assert manager.prepare_sources().sources == ()
-    scope = LifetimeScope("agents-after-restart")
+    scope = LifetimeScope("guide-after-restart")
     reactor = ContextSourceReactor(
-        sources=registry, context_sources=manager, lifetime_scope=scope, reactor_id="agents-after",
+        sources=registry, context_sources=manager, lifetime_scope=scope, reactor_id="guide-after",
     )
     try:
-        yield ColdAgentsSourceCase(manager, registry, reactor, published, baseline.revision, source_seal_case)
+        yield ColdFileSourceCase(manager, registry, reactor, published, baseline.revision, source_seal_case)
     finally:
         await scope.close()
         await watch.shutdown()
 
 
-@pytest.mark.parametrize("cold_agents_source_case", ["unchanged", "changed", "absent"], indirect=True)
+@pytest.mark.parametrize("cold_file_source_case", ["unchanged", "changed", "absent"], indirect=True)
 @pytest.mark.asyncio
-async def test_cold_agents_first_binding_reconciles_published_snapshot(
-    cold_agents_source_case: ColdAgentsSourceCase, monkeypatch: pytest.MonkeyPatch,
+async def test_cold_file_first_binding_reconciles_published_snapshot(
+    cold_file_source_case: ColdFileSourceCase, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    case = cold_agents_source_case
-    source_id = "agents:workspace"
+    case = cold_file_source_case
+    source_id = "file:workspace-guide"
     published = case.published
     assert published.available and published.revision
     before = case.seal_case.saver.load_context_source_control_states(case.seal_case.owner)
@@ -632,12 +655,12 @@ async def test_cold_agents_first_binding_reconciles_published_snapshot(
         assert tuple(case.reactor.drain()) == ()
 
 
-@pytest.mark.parametrize("cold_agents_source_case", ["required_unavailable", "missing_revision"], indirect=True)
+@pytest.mark.parametrize("cold_file_source_case", ["required_unavailable", "missing_revision"], indirect=True)
 @pytest.mark.asyncio
 async def test_first_binding_rejects_unusable_published_snapshot(
-    cold_agents_source_case: ColdAgentsSourceCase, monkeypatch: pytest.MonkeyPatch,
+    cold_file_source_case: ColdFileSourceCase, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    case = cold_agents_source_case
+    case = cold_file_source_case
     before = case.seal_case.saver.load_context_source_control_states(case.seal_case.owner)
     if case.published.available:
         snapshot = replace(case.published, revision=None)
@@ -650,7 +673,7 @@ async def test_first_binding_rejects_unusable_published_snapshot(
     assert case.manager.pending_observation_count() == 1
     with pytest.raises(RuntimeError, match=expected_error) as failure:
         tuple(case.reactor.drain())
-    assert "source_id=agents:workspace" in str(failure.value)
+    assert "source_id=file:workspace-guide" in str(failure.value)
     assert case.published.uri in str(failure.value)
     assert case.manager.prepare_pending() is None
     assert case.seal_case.saver.load_context_source_control_states(case.seal_case.owner) == before

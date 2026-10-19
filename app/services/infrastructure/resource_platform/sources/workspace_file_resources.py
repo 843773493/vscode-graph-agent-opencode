@@ -27,6 +27,7 @@ from app.services.infrastructure.resource_platform.sources.observed_source impor
     STABLE_READ_ATTEMPTS,
     ObservedSourceDescriptor,
     ObservedSourceHandle,
+    ObservedSourceRevision,
     SourceReconciler,
 )
 from app.services.infrastructure.workspace_file_watch_service import (
@@ -58,6 +59,8 @@ class WorkspaceSkillDirectoryEntry:
     name: str
     path: Path
     uri: str
+    source_id: str
+    entry_identity: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,7 +119,7 @@ class WorkspaceFileResourceRegistry:
             if not any(root != parent and root.is_relative_to(parent) for parent in roots)
         )
         self._reconciler = SourceReconciler()
-        self._paths_by_uri: dict[str, Path] = {}
+        self._file_handles_by_uri: dict[str, ObservedSourceHandle] = {}
         self._snapshots: dict[str, WorkspaceFileResourceSnapshot] = {}
         self._skill_directories: dict[str, _SkillDirectoryHandle] = {}
         self._skill_directory_snapshots: dict[str, WorkspaceSkillDirectorySnapshot] = {}
@@ -129,44 +132,73 @@ class WorkspaceFileResourceRegistry:
         self._watch_config_changed = asyncio.Event()
         self._watch_unavailable = False
 
-    def register_file(self, *, uri: str, path: Path, optional: bool = False) -> WorkspaceFileResourceSnapshot:
+    def register_file(
+        self,
+        *,
+        uri: str,
+        path: Path,
+        source_id: str,
+        entry_identity: str,
+        optional: bool = False,
+    ) -> WorkspaceFileResourceSnapshot:
         parse_resource_uri(uri)
-        existing_path = self._paths_by_uri.get(uri)
-        if existing_path is not None and (
-            path == existing_path or path.absolute() == existing_path
-        ):
-            snapshot = self._snapshots.get(uri)
-            if snapshot is not None and snapshot.revision is not None:
-                handle = self._reconciler._handles[uri]
-                if handle.allow_missing != optional:
-                    raise ValueError(f"来源 handle 绑定冲突: source_id={uri}")
-                return snapshot
+        existing_handle = self._file_handles_by_uri.get(uri)
+        if existing_handle is not None:
+            descriptor = existing_handle.descriptor
+            if (descriptor.source_id, descriptor.entry_identity) != (source_id, entry_identity):
+                raise ValueError(f"资源 URI identity 绑定冲突: uri={uri}")
+            existing_path = self._handle_path(existing_handle)
+            if path == existing_path or path.absolute() == existing_path:
+                resolved_path = existing_path
+                snapshot = self._snapshots.get(uri)
+                if snapshot is not None and snapshot.revision is not None:
+                    if existing_handle.allow_missing != optional:
+                        raise ValueError(f"来源 handle 绑定冲突: source_id={source_id}")
+                    return snapshot
+            else:
+                resolved_path = path.resolve()
+                if existing_handle.file_path != str(resolved_path):
+                    raise ValueError(f"资源 URI 绑定冲突: uri={uri}")
+        else:
+            resolved_path = path.resolve()
 
-        resolved_path = path.resolve()
         if not resolved_path.is_file() and resolved_path.exists():
             raise RuntimeError(f"工作区资源路径不是文件: {resolved_path}")
-        if existing_path is not None and existing_path != resolved_path:
-            raise ValueError(f"资源 URI 绑定冲突: uri={uri}")
+        if any(
+            registered_uri != uri
+            and handle.descriptor.entry_identity == entry_identity
+            for registered_uri, handle in self._file_handles_by_uri.items()
+        ):
+            raise ValueError(f"文件来源 entry_identity 冲突: entry_identity={entry_identity}")
         allowed_root = self._allowed_root_for(resolved_path)
-        self._reconciler.bind_handle(
-            ObservedSourceHandle(
-                descriptor=ObservedSourceDescriptor(
-                    source_id=uri,
-                    source_kind="file",
-                    display_uri=uri,
-                    entry_identity=uri,
-                ),
-                file_path=str(resolved_path),
-                allowed_root=str(allowed_root),
-                allow_missing=optional,
-            )
+        handle = ObservedSourceHandle(
+            descriptor=ObservedSourceDescriptor(
+                source_id=source_id,
+                source_kind="file",
+                display_uri=uri,
+                entry_identity=entry_identity,
+            ),
+            file_path=str(resolved_path),
+            allowed_root=str(allowed_root),
+            allow_missing=optional,
         )
-        self._paths_by_uri[uri] = resolved_path
+        self._reconciler.bind_handle(handle)
+        self._file_handles_by_uri[uri] = handle
         snapshot = self._read_via_reconciler(uri)
         previous = self._snapshots.get(uri)
         self._snapshots[uri] = snapshot
         self._publish_observation(uri, previous, snapshot)
         return snapshot
+
+    def source_descriptor_for_uri(self, uri: str) -> ObservedSourceDescriptor:
+        """返回已登记 URI 对应的 owner identity，不从 locator 推导身份。"""
+        try:
+            return self._file_handles_by_uri[uri].descriptor
+        except KeyError as error:
+            raise KeyError(f"工作区资源尚未注册: uri={uri}") from error
+
+    def source_id_for_uri(self, uri: str) -> str:
+        return self.source_descriptor_for_uri(uri).source_id
 
     @property
     def workspace_root(self) -> Path:
@@ -202,6 +234,10 @@ class WorkspaceFileResourceRegistry:
             return self._snapshots[uri]
         except KeyError as error:
             raise KeyError(f"工作区资源尚未注册: uri={uri}") from error
+
+    def observed_revision(self, source_id: str) -> ObservedSourceRevision:
+        """向语义图提供原 reconciler 的 accepted 值，不暴露读取 handle。"""
+        return self._reconciler.observed_revision(source_id)
 
     def register_skill_directory(
         self, *, root: Path, scope: str, scope_id: str | None,
@@ -280,11 +316,23 @@ class WorkspaceFileResourceRegistry:
                 uri = skill_display_uri(
                     scope=handle.scope, scope_id=handle.scope_id, skill_name=entry_dir.name,
                 )
-                if uri in self._paths_by_uri:
+                source_id = f"skill-source:{handle.scope}:{entry_dir.name}"
+                entry_identity = f"skill-entry:{handle.scope}:{entry_dir.name}"
+                if uri in self._file_handles_by_uri:
+                    descriptor = self.source_descriptor_for_uri(uri)
+                    if (descriptor.source_id, descriptor.entry_identity) != (source_id, entry_identity):
+                        raise ValueError(f"Skill 文件来源 owner identity 绑定冲突: uri={uri}")
                     self.refresh(uri)
                 else:
-                    self.register_file(uri=uri, path=path)
-                entries.append(WorkspaceSkillDirectoryEntry(entry_dir.name, path, uri))
+                    self.register_file(
+                        uri=uri,
+                        path=path,
+                        source_id=source_id,
+                        entry_identity=entry_identity,
+                    )
+                entries.append(WorkspaceSkillDirectoryEntry(
+                    entry_dir.name, path, uri, source_id, entry_identity,
+                ))
         except (OSError, RuntimeError, ValueError) as failure:
             error = str(failure)
             logger.error("Skill 固定目录对账失败: directory_id=%s error=%s", directory_id, error)
@@ -310,7 +358,7 @@ class WorkspaceFileResourceRegistry:
 
 
     def refresh(self, uri: str) -> WorkspaceFileResourceSnapshot:
-        if uri not in self._paths_by_uri:
+        if uri not in self._file_handles_by_uri:
             raise KeyError(f"工作区资源尚未注册: uri={uri}")
         snapshot = self._read_via_reconciler(uri)
         previous = self._snapshots.get(uri)
@@ -320,7 +368,7 @@ class WorkspaceFileResourceRegistry:
 
     def _read_via_reconciler(self, uri: str) -> WorkspaceFileResourceSnapshot:
         """消费原来源 owner 的已观察事实；可选缺失与空文件保持独立 revision。"""
-        revision = self._reconciler.reconcile(uri)
+        revision = self._reconciler.reconcile(self.source_id_for_uri(uri))
         return WorkspaceFileResourceSnapshot(
             uri=uri,
             revision=revision.revision or None,
@@ -460,14 +508,18 @@ class WorkspaceFileResourceRegistry:
                         }
                         if batch.overflow or self._watch_unavailable:
                             # 只对已登记文件和固定 Skill 一层边界对账。
-                            paths = tuple(self._paths_by_uri.values())
+                            paths = tuple(
+                                self._handle_path(handle)
+                                for handle in self._file_handles_by_uri.values()
+                            )
                         else:
                             paths = tuple(
-                                path
-                                for path in self._paths_by_uri.values()
-                                if any(path.is_relative_to(changed) for changed in changed_paths)
+                                self._handle_path(handle)
+                                for handle in self._file_handles_by_uri.values()
+                                if any(self._handle_path(handle).is_relative_to(changed) for changed in changed_paths)
                             )
-                        for uri, path in tuple(self._paths_by_uri.items()):
+                        for uri, handle in tuple(self._file_handles_by_uri.items()):
+                            path = self._handle_path(handle)
                             if path in paths and uri not in skill_uris:
                                 self.refresh(uri)
                         for directory_id in dirty_directories:
@@ -618,7 +670,7 @@ class WorkspaceFileResourceRegistry:
         changed = Path(change.path)
         if any(
             path == changed or path.is_relative_to(changed)
-            for path in self._paths_by_uri.values()
+            for path in (self._handle_path(handle) for handle in self._file_handles_by_uri.values())
         ):
             return True
         for handle in self._skill_directories.values():
@@ -631,6 +683,12 @@ class WorkspaceFileResourceRegistry:
             if depth == 1 or (depth == 2 and changed.name == "SKILL.md"):
                 return True
         return False
+
+    @staticmethod
+    def _handle_path(handle: ObservedSourceHandle) -> Path:
+        if handle.file_path is None:
+            raise RuntimeError("文件来源 handle 缺少 file_path")
+        return Path(handle.file_path)
 
 
 __all__ = [

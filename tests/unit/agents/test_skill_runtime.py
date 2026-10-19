@@ -15,7 +15,6 @@ from app.agents.skill_runtime import (
     WorkspaceSkillsMiddleware,
     build_workspace_skill_catalog,
     resolve_bundled_skill_groups,
-    workspace_agents_uri,
 )
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.agents.tool_invocation_context import ToolInvocationContext
@@ -25,7 +24,6 @@ from app.agents.tools.custom_invocation import (
 )
 from app.agents.tools.testing import create_test_tool_2
 from app.agents.workspace_backend import build_workspace_backend
-from app.core.lifecycle import LifetimeScope
 from app.core.path_utils import get_boxteam_home
 from app.core.trace_middleware import (
     GATEWAY_ID_HEADER,
@@ -35,9 +33,6 @@ from app.core.trace_middleware import (
     set_current_gateway_id,
 )
 from app.core.workspace_identity import load_or_create_workspace_id
-from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
-    ContextSourceReactor,
-)
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
@@ -52,14 +47,10 @@ from app.services.infrastructure.resource_platform.virtual_resources.resolver im
     ResourceUriResolveError,
     require_scope_binding,
 )
-from tests.support.gateway_skill_sources import accepted_gateway_skill_sources
-from tests.unit.services.infrastructure.rollout_context.conftest import source_seal_case
-
-__all__ = ["source_seal_case"]
-
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
+from tests.support.gateway_skill_sources import accepted_gateway_skill_sources
 
 
 def _custom_tool_context(tmp_path) -> CustomToolFactoryContext:
@@ -795,166 +786,3 @@ async def test_custom_tool_invoker_preserves_container_injected_invocation_conte
         context.invocation_context.reset_tool_call_id(token)
 
     assert result == "call_from_outer_invoker"
-
-
-def _workspace_agents_stack(tmp_path, monkeypatch, source_seal_case):
-    # 构建唯一 CSM 消费链：registry + CSM + reactor + 统一中间件。
-    monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path / "boxteam-home"))
-    monkeypatch.delenv("BOXTEAM_DEFAULT_SKILL_GROUPS", raising=False)
-    watch_service = WorkspaceFileWatchService(workspace_root=tmp_path)
-    registry = WorkspaceFileResourceRegistry(
-        workspace_root=tmp_path,
-        watch_service=watch_service,
-    )
-    manager = source_seal_case.manager()
-    lifetime_scope = LifetimeScope("d3b-test")
-    reactor = ContextSourceReactor(
-        sources=registry,
-        context_sources=manager,
-        lifetime_scope=lifetime_scope,
-        reactor_id="d3b-test",
-    )
-    catalog = build_workspace_skill_catalog(
-        tmp_path,
-        registry=ResourceRegistry(),
-        file_registry=registry,
-    )
-    middleware = WorkspaceSkillsMiddleware(
-        catalog=catalog,
-        context_source_manager=manager,
-        source_registry=registry,
-        context_source_reactor=reactor,
-    )
-    return middleware, registry, manager, reactor
-
-
-def test_workspace_agents_first_activation_flows_through_unique_csm_chain(
-    tmp_path, monkeypatch, source_seal_case
-):
-    content = "# 指令\n\n使用新规则。\n"
-    (tmp_path / "AGENTS.md").write_text(content, encoding="utf-8")
-    middleware, _registry, manager, _reactor = _workspace_agents_stack(
-        tmp_path, monkeypatch, source_seal_case,
-    )
-    middleware.before_agent({}, MagicMock(), None)
-    assert middleware.before_model({}, MagicMock()) is None
-    batch = manager.prepare_pending()
-    assert batch is not None
-    assert batch.deltas[0].content == content
-    receipt, binding = source_seal_case.seal(manager)
-    assert receipt.deltas == batch.deltas
-    assert binding.root is not None and "使用新规则。" in binding.root.content
-    sources = [source for source in binding.root.sources
-               if source.source_identity == "agents:workspace"]
-    assert len(sources) == 1
-    assert sources[0].source_kind == "workspace_agents"
-    assert sources[0].revision == batch.deltas[0].revision
-    frames = [frame for frame in binding.prefix.state.frames if frame.role == "system"]
-    assert len(frames) == 1 and frames[0].content == binding.root.content
-    assert manager.pending_observation_count() == 0
-    assert manager.prepare_pending() is None
-    assert middleware.before_model({}, MagicMock()) is None
-
-
-def test_workspace_agents_change_is_typed_observation_not_direct_injection(
-    tmp_path, monkeypatch, source_seal_case
-):
-    agents_path = tmp_path / "AGENTS.md"
-    agents_path.write_text("# 指令\n\n使用旧规则。\n", encoding="utf-8")
-    middleware, registry, manager, reactor = _workspace_agents_stack(
-        tmp_path, monkeypatch, source_seal_case,
-    )
-    middleware.before_agent({}, MagicMock(), None)
-    assert middleware.before_model({}, MagicMock()) is None
-    _, first = source_seal_case.seal(manager)
-
-    agents_path.write_text("# 指令\n\n使用新规则。\n", encoding="utf-8")
-    registry.refresh(workspace_agents_uri(load_or_create_workspace_id(tmp_path)))
-    observations = list(reactor.drain())
-    assert [o.source_id for o in observations] == ["agents:workspace"]
-    for observation in observations:
-        manager.observe(
-            observation.source_id, reactor.content_for(observation),
-            revision=observation.revision,
-        )
-    batch = manager.prepare_pending()
-    assert batch is not None
-    delta = batch.deltas[0]
-    assert delta.source_kind == "workspace_agents" and delta.kind == "delta"
-    assert "+使用新规则。" in delta.content and "-使用旧规则。" in delta.content
-    assert middleware.before_model({}, MagicMock()) is None
-    receipt, binding = source_seal_case.seal(manager)
-    assert receipt.deltas == batch.deltas and binding.root == first.root
-    frames = [frame for frame in binding.prefix.state.frames
-              if frame.item_ref.source_identity == delta.source_id
-              and frame.item_ref.source_revision == delta.revision]
-    assert len(frames) == 1 and frames[0].role == "user"
-    assert frames[0].content == delta.content
-    assert manager.prepare_pending() is None
-    assert middleware.before_model({}, MagicMock()) is None
-
-
-def test_workspace_agents_request_boundary_avoids_file_reads_and_legacy_chain(
-    tmp_path, monkeypatch, source_seal_case
-):
-    (tmp_path / "AGENTS.md").write_text("# 指令\n\n使用规则。\n", encoding="utf-8")
-    middleware, registry, manager, _reactor = _workspace_agents_stack(
-        tmp_path, monkeypatch, source_seal_case,
-    )
-    middleware.before_agent({}, MagicMock(), None)
-    assert middleware.before_model({}, MagicMock()) is None
-    source_seal_case.seal(manager)
-
-    import app.agents.skill_runtime as skill_runtime_module
-
-    assert not hasattr(skill_runtime_module, "WorkspaceAgentsMiddleware")
-    assert not hasattr(skill_runtime_module, "WorkspaceAgentsState")
-    snapshot_calls = []
-    original_snapshot = registry.snapshot
-
-    def _counting_snapshot(uri):
-        snapshot_calls.append(uri)
-        return original_snapshot(uri)
-
-    monkeypatch.setattr(registry, "snapshot", _counting_snapshot)
-    assert middleware.before_model({}, MagicMock()) is None
-    assert snapshot_calls == []
-    assert not hasattr(middleware, "modify_request")
-
-
-def test_workspace_agents_source_late_appearance_still_uses_csm_chain(
-    tmp_path, monkeypatch, source_seal_case
-):
-    middleware, registry, manager, _reactor = _workspace_agents_stack(
-        tmp_path, monkeypatch, source_seal_case,
-    )
-    middleware.before_agent({}, MagicMock(), None)
-    assert middleware.before_model({}, MagicMock()) is None
-    uri = workspace_agents_uri(load_or_create_workspace_id(tmp_path))
-    absent = registry.snapshot(uri)
-    assert absent.available and not absent.exists
-    initial = manager.prepare_pending()
-    assert initial is not None
-    assert [(delta.source_id, delta.revision, delta.content) for delta in initial.deltas] == [
-        ("agents:workspace", absent.revision, ""),
-    ]
-    _, first = source_seal_case.seal(manager)
-    assert manager.prepare_pending() is None
-
-    (tmp_path / "AGENTS.md").write_text("# 迟到指令\n", encoding="utf-8")
-    present = registry.refresh(uri)
-    assert present.available and present.exists and present.revision != absent.revision
-    assert middleware.before_model({}, MagicMock()) is None
-    batch = manager.prepare_pending()
-    assert batch is not None and len(batch.deltas) == 1
-    delta = batch.deltas[0]
-    assert delta.kind == "delta" and "+# 迟到指令" in delta.content
-    assert delta.revision == present.revision
-    _, binding = source_seal_case.seal(manager)
-    assert binding.root == first.root
-    frames = [frame for frame in binding.prefix.state.frames
-              if frame.item_ref.source_identity == "agents:workspace"
-              and frame.item_ref.source_revision == delta.revision]
-    assert len(frames) == 1 and frames[0].role == "user"
-    assert frames[0].content == delta.content
-    assert manager.prepare_pending() is None

@@ -283,6 +283,47 @@ def test_restart_recovery_rebuilds_diff_baseline_from_latest_visible_committed_r
     assert "+v2" in delta.content
 
 
+@pytest.mark.parametrize("current_body", ["v2\n", ""], ids=["replace", "delete"])
+@pytest.mark.parametrize("pending_before_restart", [False, True], ids=["applied", "observed-later"])
+def test_cold_baseline_restoration_preserves_control_and_uses_applied_content(
+    manager: ContextSourceManager,
+    control_state_port: RolloutCheckpointSaver,
+    owner: ContextSourceOwnerKey,
+    seal_sources: Callable,
+    current_body: str,
+    pending_before_restart: bool,
+) -> None:
+    _track_skill(manager, seal_sources)
+    if pending_before_restart:
+        manager.observe("skill:debugging", "uncommitted\n")
+    before = control_state_port.load_context_source_control_states(owner)
+    rebuilt = _new_manager(owner, control_state_port)
+    reads: list[str] = []
+
+    def read_committed(revision: str) -> str:
+        reads.append(revision)
+        assert revision == V1_REVISION
+        return "v1\n"
+
+    rebuilt.restore_committed_baseline("skill:debugging", read_committed)
+    assert control_state_port.load_context_source_control_states(owner) == before
+    assert rebuilt.prepare_pending() is None
+    assert rebuilt.source_observation_state("skill:debugging") == ("tracked", before[0].latest_revision)
+    assert rebuilt.observe("skill:debugging", current_body) is True
+    batch = rebuilt.prepare_pending()
+    assert batch is not None
+    rebuilt.restore_committed_baseline("skill:debugging", read_committed)
+    assert reads == [V1_REVISION]
+    assert rebuilt.prepare_pending() == batch
+    delta, = batch.deltas
+    expected = f"--- debugging@{V1_REVISION}\n+++ debugging@{_revision(current_body)}\n"
+    expected += "@@ -1 +1 @@\n-v1\n+v2\n" if current_body else "@@ -1 +0,0 @@\n-v1\n"
+    assert delta.content == expected
+    assert delta.previous_revision == V1_REVISION
+    assert delta.observation_provenance == (_revision(current_body),)
+    assert seal_sources(rebuilt)[0].deltas == batch.deltas
+
+
 def test_different_threads_do_not_share_control_state(
     control_state_port: RolloutCheckpointSaver,
     source_seal_case,
@@ -336,18 +377,18 @@ def test_restart_recovery_allows_tracked_registration_awaiting_first_observation
     manager = ContextSourceManager(owner=owner, control_state_port=port)
     manager.register(
         ContextSourceDescriptor(
-            source_id="agents:workspace",
-            source_kind="workspace_agents",
-            name="AGENTS.md",
+            source_id="workspace:rules",
+            source_kind="workspace_rules",
+            name="RULES.md",
             description="工作区指令",
-            internal_locator="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
-            resource_uri="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
+            internal_locator="boxteam://workspace/test/resources/files/root/RULES.md",
+            resource_uri="boxteam://workspace/test/resources/files/root/RULES.md",
         ),
         tracking_status="tracked",
     )
 
     rebuilt = ContextSourceManager(owner=owner, control_state_port=port)
-    status, latest = rebuilt.source_observation_state("agents:workspace")
+    status, latest = rebuilt.source_observation_state("workspace:rules")
     assert status == "tracked"
     assert latest is None
-    assert rebuilt.observe("agents:workspace", "v1\n") is True
+    assert rebuilt.observe("workspace:rules", "v1\n") is True

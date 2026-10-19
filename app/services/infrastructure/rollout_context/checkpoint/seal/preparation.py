@@ -66,6 +66,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.models 
 from app.services.infrastructure.rollout_context.runtime.context_sources.skill_catalog import (
     skill_catalog_from_activation,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.workspace_agents import (
+    install_frozen_workspace_agents,
+)
 from app.services.infrastructure.rollout_context.runtime.prefix_compiler import (
     compile_prefix_context,
     source_contributions,
@@ -235,6 +238,9 @@ def prepare_registered_context(
             with owner._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns) as read_snapshot:
                 sequences = owner.selected_context_message_sequences(read_snapshot)
                 validate_tool_protocol_closure(read_snapshot.connection, sequences, len(sequences))
+                previous = owner._storage.assemblies.latest_context_assembly(
+                    read_snapshot, validated_predecessors=validated_predecessors,
+                )
             # context-control gate 内先接受权威 tracking/CAS，再消费本次冻结来源。
             context_source_manager.refresh_control_states()
             frozen_skills = skill_catalog_from_activation(
@@ -250,6 +256,25 @@ def prepare_registered_context(
                 )
             rebuild = None if summary_candidate is not None else owner.load_context_source_rebuild_state(
                 ContextSourceOwnerKey(session_id, thread_id), checkpoint_ns=checkpoint_ns,
+            )
+
+            def read_agents_committed_activation() -> ResourceActivationSnapshotRef:
+                source_assembly = rebuild.source_assembly if rebuild is not None else previous
+                if source_assembly is None:
+                    raise RuntimeError("resource-activation-unavailable: 已 applied AGENTS chain 缺少封存前驱")
+                return owner.load_sealed_resource_activation(
+                    session_id, thread_id=thread_id, assembly_id=source_assembly.assembly_id,
+                    plan_hash=source_assembly.plan_hash, request_hash=source_assembly.request_hash,
+                    checkpoint_ns=checkpoint_ns,
+                )
+
+            install_frozen_workspace_agents(
+                context_source_manager, activation_snapshot,
+                lambda frozen, binding: owner.read_resource_activation_payload(
+                    frozen, binding, checkpoint_ns=checkpoint_ns,
+                    storage_owner=(session_id, thread_id),
+                ),
+                read_agents_committed_activation,
             )
             frozen = (
                 context_source_manager.prepare_rebuild_sources(rebuild)
@@ -268,10 +293,6 @@ def prepare_registered_context(
                 seed_source = owner.internal_seed_source(session_id, thread_id, execution_id)
                 if seed_source is not None:
                     batch = PendingContextSourceBatch(deltas=batch.deltas, sources=(*batch.sources, seed_source))
-            with owner._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns) as read_snapshot:
-                previous = owner._storage.assemblies.latest_context_assembly(
-                    read_snapshot, validated_predecessors=validated_predecessors,
-                )
             batch = _activation_guidance_batch(
                 owner, activation_snapshot, previous, batch, checkpoint_ns=checkpoint_ns,
             )

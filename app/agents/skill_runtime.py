@@ -23,6 +23,10 @@ from app.agents.instruction_producers import (
     register_instruction_producer,
 )
 from app.agents.middleware_prompts import SKILLS_SYSTEM_PROMPT
+from app.agents.workspace_agents import (
+    publish_workspace_agents,
+    register_workspace_agents_source,
+)
 from app.core.distribution_identity import load_distribution_id
 from app.core.env import get_project_root
 from app.core.lifecycle import LifetimeScope
@@ -57,9 +61,6 @@ from app.services.infrastructure.resource_platform.sources.gateway_skill_sources
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
-from app.services.infrastructure.resource_platform.virtual_resources import (
-    workspace_agent_spec_display_uri,
-)
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceDescriptor,
     ContextSourceManager,
@@ -69,15 +70,6 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
     PublishedContextSourceRevision,
 )
-
-WORKSPACE_AGENTS_FILE = "AGENTS.md"
-WORKSPACE_AGENTS_SOURCE_ID = "agents:workspace"
-
-
-def workspace_agents_uri(workspace_id: str) -> str:
-    """工作区 AGENTS.md 的规范 URI（agent-spec kind）。"""
-    return workspace_agent_spec_display_uri(workspace_id)
-
 
 BUNDLED_SKILL_GROUP_PATTERN = re.compile(r"^[a-z][a-z0-9-]{1,63}$")
 
@@ -91,12 +83,9 @@ class WorkspaceSkillsState(AgentState):
 
 
 class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
-    """Skill catalog metadata/activation 与 AGENTS 的唯一 CSM 消费中间件。
+    """Skill catalog metadata/activation 的 CSM 消费中间件。
     Skill metadata 来自 ResourceRegistry 发布的 immutable catalog revision;
-    AGENTS.md 由 ``_register_agents_source`` 登记为 tracked 文件来源。两者的
-    首帧/delta 都只经 reactor typed observation 进入 CSM pending，再由唯一
-    Saver prepare/seal 消费链提交；请求路径不读磁盘，也不维护任何 AGENTS
-    快照、diff reminder 或 compaction marker 状态。
+    AGENTS 链由 Saver 消费冻结的语义资源，不经原始文件 reactor。
     """
 
     state_schema = WorkspaceSkillsState
@@ -112,7 +101,7 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
         execution_owned_catalog: bool = False,
     ) -> None:
         if source_registry is not None and context_source_manager is None:
-            raise RuntimeError("AGENTS 上下文来源注册需要 ContextSourceManager")
+            raise RuntimeError("Skill 上下文来源注册需要 ContextSourceManager")
         self._catalog = catalog
         self._execution_owned_catalog = execution_owned_catalog
         self._context_source_manager = context_source_manager
@@ -185,9 +174,12 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
             if self._source_registry is not None:
                 source_path = self._catalog.source_path(name)
                 if source_path is not None:
+                    source = self._source_registry.source_descriptor_for_uri(resource_uri)
                     self._source_registry.register_file(
                         uri=resource_uri,
                         path=source_path,
+                        source_id=source.source_id,
+                        entry_identity=source.entry_identity,
                     )
 
             self._context_source_manager.register(
@@ -247,9 +239,9 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
         return self._register_workspace_context_sources()
 
     def _register_workspace_context_sources(self) -> dict[str, Any]:
-        """登记 Skill catalog 与 AGENTS 来源，注册完成后统一建立订阅。
+        """登记 Skill catalog 来源，注册完成后统一建立订阅。
         顺序契约：descriptor 全部注册完成后才 sync_sources，reactor 才能一次
-        性为 Skill 文件与 AGENTS.md 建立订阅并播下首帧观察种子。
+        性为 Skill 文件建立订阅并播下首帧观察种子。
         """
         update: dict[str, Any] = {
             "skills_metadata": [
@@ -263,41 +255,11 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
             update = {"skills_metadata": []}
         else:
             update = self._register_context_sources(update)
-        self._register_agents_source()
         self._sync_source_bindings()
         if not self._execution_owned_catalog:
             self._install_activation_snapshot()
             self._register_catalog_instructions()
         return update
-
-    def _register_agents_source(self) -> None:
-        """把工作区 AGENTS.md 登记为唯一 CSM tracked 文件来源。
-        D3-B 起本中间件不维护任何 AGENTS 快照、diff reminder 或 compaction
-        marker 状态：首帧与后续 delta 全部经 reactor typed observation 进入
-        CSM pending，由唯一 Saver prepare/seal 消费链提交。
-        """
-        if self._source_registry is None:
-            return
-        agents_uri = workspace_agents_uri(
-            load_or_create_workspace_id(self._source_registry.workspace_root)
-        )
-        self._source_registry.register_file(
-            uri=agents_uri,
-            path=self._source_registry.workspace_root / WORKSPACE_AGENTS_FILE,
-            optional=True,
-        )
-        self._context_source_manager.register(
-            ContextSourceDescriptor(
-                source_id=WORKSPACE_AGENTS_SOURCE_ID,
-                source_kind="workspace_agents",
-                name="AGENTS.md",
-                description="当前工作区根目录 AGENTS.md 指令来源",
-                internal_locator=agents_uri,
-                resource_uri=agents_uri,
-                root_placement="root_eligible",
-            ),
-            tracking_status="tracked",
-        )
 
     def _register_catalog_instructions(self) -> None:
         """R05 只发布 catalog 正文与权威语义 revision，不编辑模型请求。"""
@@ -484,6 +446,7 @@ class PublishedSkillCatalog:
     sources: tuple[SkillCatalogSource, ...]
     directory_ids: Mapping[str, str]
     gateway_id: str | None
+    agents_file_uris: tuple[str, ...]
 
     @property
     def catalog_revision(self) -> str:
@@ -537,6 +500,8 @@ def build_workspace_skill_catalog(
     resolved_workspace_root = workspace_root or get_workspace_root()
     resolved_groups = resolve_bundled_skill_groups(bundled_skill_groups)
     workspace_id = load_or_create_workspace_id(resolved_workspace_root)
+    agents_file_uris = register_workspace_agents_source(file_registry, workspace_id=workspace_id)
+    publish_workspace_agents(registry=registry, file_registry=file_registry, file_uris=agents_file_uris)
     roots: dict[str, tuple[Path, str | None, tuple[str, ...] | None]] = {
         "workspace": (resolved_workspace_root / ".boxteam" / "skills", workspace_id, None),
     }
@@ -564,6 +529,7 @@ def build_workspace_skill_catalog(
     catalog = _publish_workspace_skill_catalog(
         batch,
         registry=registry, directory_ids=directory_ids, gateway_id=resolved_gateway_id,
+        agents_file_uris=agents_file_uris,
     )
     if not catalog.catalog_snapshot.available:
         raise _SkillSourceError(batch.diagnostic or catalog.catalog_snapshot.error)
@@ -611,7 +577,7 @@ def _accepted_skill_sources(
             for entry in directory.entries:
                 source = SkillCatalogSource(
                     layer, entry.name, entry.path, entry.uri,
-                    f"skill-entry:{layer}:{entry.name}", f"skill-source:{layer}:{entry.name}",
+                    entry.entry_identity, entry.source_id,
                 )
                 sources.append(source)
                 raw = file_registry.snapshot(entry.uri)
@@ -638,6 +604,7 @@ def _publish_workspace_skill_catalog(
     registry: ResourceRegistry,
     directory_ids: Mapping[str, str],
     gateway_id: str | None,
+    agents_file_uris: tuple[str, ...],
 ) -> PublishedSkillCatalog:
     """唯一 Skill 发布链：accepted vector → graph facets → catalog。"""
     derivations = tuple(SkillDerivationEntry(
@@ -687,6 +654,7 @@ def _publish_workspace_skill_catalog(
         catalog_snapshot=catalog_snapshot, entries=tuple(entries),
         source_paths=source_paths, activation_bodies=activation_bodies,
         sources=batch.sources, directory_ids=directory_ids, gateway_id=gateway_id,
+        agents_file_uris=agents_file_uris,
     )
 
 
@@ -709,12 +677,16 @@ def start_workspace_skill_catalog_publication(
         nonlocal catalog
         if closed or lifetime_scope.state != "open":
             return
+        publish_workspace_agents(
+            registry=registry, file_registry=file_registry, file_uris=catalog.agents_file_uris,
+        )
         batch = _accepted_skill_sources(
             catalog.directory_ids, file_registry=file_registry, gateway_sources=gateway_sources,
             gateway_id=catalog.gateway_id, previous_sources=catalog.sources,
         )
         catalog = _publish_workspace_skill_catalog(
             batch, registry=registry, directory_ids=catalog.directory_ids, gateway_id=catalog.gateway_id,
+            agents_file_uris=catalog.agents_file_uris,
         )
         if not catalog.catalog_snapshot.available:
             logging.getLogger(__name__).error("Skill catalog 刷新失败: %s", batch.diagnostic or catalog.catalog_snapshot.error)
@@ -722,7 +694,7 @@ def start_workspace_skill_catalog_publication(
     async def consume() -> None:
         while not closed and lifetime_scope.state == "open":
             observation = await subscription.next()
-            if observation.gap or observation.directory_id in directory_ids or any(
+            if observation.gap or observation.uri in catalog.agents_file_uris or observation.directory_id in directory_ids or any(
                 observation.uri == source.display_uri for source in catalog.sources
             ):
                 publish_current()
@@ -775,7 +747,7 @@ def append_skill_middlewares(
     context_source_reactor: ContextSourceReactor | None = None,
     execution_owned_catalog: bool = False,
 ) -> None:
-    """集中维护 workspace Skill/AGENTS 上下文来源 middleware 顺序。"""
+    """集中维护 workspace Skill 上下文来源 middleware 顺序。"""
     if (catalog is not None and catalog.entries) or source_registry is not None:
         middleware_stack.append(
             WorkspaceSkillsMiddleware(

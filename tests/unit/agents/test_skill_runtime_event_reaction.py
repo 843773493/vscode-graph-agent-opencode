@@ -105,8 +105,9 @@ async def test_before_model_consumes_event_driven_observation_only(
         # before_agent 消费已发布 metadata、注册来源并
         # 标记首次观察；该阶段是会话初始化边界，不属于请求路径轮询。
         assert middleware.before_agent({}, None, {}) is not None
-        assert manager.pending_observation_count() == 2
-        # Skill 与 optional AGENTS absence 都排首帧 reconcile；接线不读取快照。
+        assert manager.pending_observation_count() == 1
+        # middleware 仅登记 Skill；AGENTS 交给真实 activation/Saver 边界消费。
+        assert all(descriptor.source_kind != "workspace_agents" for descriptor in manager.descriptors())
         assert registry.snapshot_reads == initialization_reads
 
         # 模型调用 skill_load：从冻结 SkillCatalog binding 激活正文并进入
@@ -121,12 +122,10 @@ async def test_before_model_consumes_event_driven_observation_only(
         assert first is not None
         first_delta = next(delta for delta in first.deltas if delta.source_id == "skill:demo")
         assert "demo v1" in first_delta.content and first_delta.source_kind == "skill"
-        absent_agents = next(delta for delta in first.deltas if delta.source_id == "agents:workspace")
-        assert absent_agents.content == "" and absent_agents.revision
         # 每个来源各读两次内存快照：解析 observation revision 与取正文；
         # skill_load 本身零读取（正文来自冻结 binding）。
         assert reads_after_load == initialization_reads
-        assert registry.snapshot_reads == reads_after_load + 4
+        assert registry.snapshot_reads == reads_after_load + 2
         receipt, binding = source_seal_case.seal(manager)
         assert receipt.deltas == first.deltas
         frames = [frame for frame in binding.prefix.state.frames
@@ -188,9 +187,9 @@ async def test_unregistered_source_is_rejected_before_body_consumption(
         with pytest.raises(RuntimeError, match="观察来源缺少 descriptor: source_id=mystery:1"):
             middleware._source_body("mystery:1", "正文")
         assert manager.prepare_pending() == before
-        assert middleware._source_body("agents:workspace", "已知正文") == "已知正文"
+        assert middleware._source_body("skill:demo", "---\nname: demo\ndescription: 已知技能\n---\n已知正文") == "已知正文"
         descriptors = {descriptor.source_id: descriptor for descriptor in manager.descriptors()}
-        assert descriptors["agents:workspace"].source_kind == "workspace_agents"
+        assert descriptors["skill:demo"].source_kind == "skill"
         await scope.close()
     finally:
         await watch_service.shutdown()

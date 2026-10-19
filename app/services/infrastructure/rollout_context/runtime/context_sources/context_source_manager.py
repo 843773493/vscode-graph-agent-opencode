@@ -97,6 +97,19 @@ class ContextSourceManager(
         ] | None = None
         self.refresh_control_states()
 
+    def restore_committed_baseline(self, source_id: str, read_content: Callable[[str], str]) -> None:
+        """只补齐已 applied revision 的内存正文；不改 observation、pending 或控制版本。"""
+        state = self._sources[source_id]
+        revision = state.latest_visible_committed_revision
+        if revision is None or state.latest_visible_committed_content is not None:
+            return
+        content = read_content(revision)
+        if not isinstance(content, str):
+            raise TypeError("ContextSourceManager.restore_committed_baseline 正文必须是字符串")
+        state.latest_visible_committed_content = content
+        if state.latest_revision == revision and state.latest_content is None:
+            state.latest_content = content
+
     def _set_tracking_status(self, state: SourceState, status: str) -> None:
         """由 CSM facade 统一改写来源 tracking 状态。"""
         if status not in {"tracked", "untracked"}:
