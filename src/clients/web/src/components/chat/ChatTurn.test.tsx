@@ -1421,12 +1421,16 @@ describe("ChatTurn 轮次动作", () => {
       { part_id: "before", kind: "reasoning", projection: "detail", status: "completed",
         source: { message_sequence: 1, item_id: "item_before", logical_item_ordinal: 1 }, text: "压缩前思考" },
       { part_id: "summary", kind: "compaction_summary", projection: "detail", status: "completed",
-        source: { message_sequence: 2, item_id: "item_summary", logical_item_ordinal: 2 }, text: "压缩摘要" },
+        source: { message_sequence: 2, item_id: "item_summary", logical_item_ordinal: 2 },
+        text: "A condensed summary follows:\n\n<summary>\n三轮均通过 read_file 核对 README。\n</summary>" },
       { part_id: "after", kind: "reasoning", projection: "detail", status: "completed",
         source: { message_sequence: 3, item_id: "item_after", logical_item_ordinal: 3 }, text: "压缩后思考" },
       { part_id: "final", kind: "final_text", projection: "detail", status: "completed", final: true,
         source: { message_sequence: 4, item_id: "item_final", logical_item_ordinal: 4 }, text: "最终响应" },
     ];
+    const summaryMarkup = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
+    expect(summaryMarkup).toContain("三轮均通过 read_file 核对 README。");
+    expect(summaryMarkup).toContain("&lt;summary&gt;");
     let loads = 0;
     let renderer: ReactTestRenderer;
     await act(async () => {

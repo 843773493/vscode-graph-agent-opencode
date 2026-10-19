@@ -342,7 +342,8 @@ export function ResponsePart({
     return (
       <details className="chat-compaction-summary" data-response-sources={item.responseSources ? JSON.stringify(item.responseSources) : undefined}>
         <summary>上下文压缩摘要</summary>
-        <MarkdownContent value={item.text} />
+        {/* 摘要包含模型协议标签，按原文展示以免被 Markdown 当作 HTML 隐去正文。 */}
+        <MarkdownContent value={item.text} renderMode="plain" />
       </details>
     );
   }
