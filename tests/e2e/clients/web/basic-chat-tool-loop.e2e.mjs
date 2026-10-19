@@ -2850,7 +2850,7 @@ async function runObservationDeletion(surfaces) {
           operation === "read"
             ? toolResponse(label, "invoke_extension_tool", { tool_name: "read_context", arguments: query })
             : toolResponse(label, "wait_for_session", { target_session_id: target.sessionId, until: "terminal", timeout_seconds: 300 }),
-          ...(!observationFirst && operation === "read"
+          ...(operation === "read"
             ? [finalResponse(`${label}-done`, "目标寻址已拒绝，没有建立新观察。")] : []),
         ]);
         const sourceCallId = softwareOperation(operation, source, calls[0], label);
@@ -2916,14 +2916,22 @@ async function runObservationDeletion(surfaces) {
           const restarted = await testControl({ action: "process", name: "b", operation: "start" });
           await reopen();
           await testControl({ action: "release", ...canonical });
+          const expectedStatus = operation === "read" ? "completed" : "failed";
           const recovered = await assertRecoveredExecution(source, sent, proof, calls,
-            { expectedJobStatus: "failed", expectedExecutionOutcome: "failed", expectedTurnStatus: "failed" });
+            { expectedJobStatus: expectedStatus, expectedExecutionOutcome: expectedStatus, expectedTurnStatus: expectedStatus });
           const results = recovered.turn.response_parts.filter((part) => part.kind === "tool_result");
           assert.equal(results.length, 1, "同 source call 的新授权重放只提交一份 ToolResult");
           const result = assertBoundToolResult(source, sent, recovered.turn, calls[0], label,
             operation === "read" ? "invoke_extension_tool" : "wait_for_session");
           assert.equal(result.result, "target-deleted");
-          assert.equal(recovered.turn.response_parts.filter((part) => part.kind === "final_text").length, 0);
+          if (operation === "read") {
+            assert.deepEqual(recovered.turn.response_parts.filter((part) => part.kind === "final_text").map((part) => part.text),
+              ["目标寻址已拒绝，没有建立新观察。"]);
+            await assertToolResultContinuation(source, calls, label, result);
+          } else {
+            assert.equal(recovered.job.error_message, "target-deleted");
+            assert.equal(recovered.turn.response_parts.filter((part) => part.kind === "final_text").length, 0);
+          }
           assert.deepEqual(await observationPage(source, sourceCallId, "source"), saved);
           assert.deepEqual(await readDeletedControl(target, deletion,
             "SELECT p.*,o.snapshot_json,o.expires_at FROM remote_observation_pages p JOIN remote_observations o USING(observation_id,side) WHERE p.page_identity=? AND p.side='target'", [original.page_identity]), targetRows);
@@ -7377,7 +7385,7 @@ async function runReadRecovery(surfaces, reportOwners) {
   const tokenOffset = Math.floor(cursor.length / 2);
   const tampered = cursor.slice(0, tokenOffset) + (cursor[tokenOffset] === "A" ? "B" : "A") + cursor.slice(tokenOffset + 1);
   const negative = {};
-  // observation 业务错误终止当前 Turn；每项只计划实际会消费的原工具调用。
+  // read_context 的 ToolException 返回错误 ToolMessage；后继模型只确认原拒绝，不重试读取。
   for (const [label, code, arguments_] of [
     ["read-conflicting-parameters", "read-snapshot-mismatch", { ...args, cursor, limit: args.limit + 1 }],
     ["read-tampered-token", "read-snapshot-invalid", { ...args, cursor: tampered }],
@@ -7385,16 +7393,19 @@ async function runReadRecovery(surfaces, reportOwners) {
   ]) {
     const result = await completeOwnerTurn(source, `拒绝无效分页请求 ${label}。`, [
       toolResponse(label, "invoke_extension_tool", { tool_name: "read_context", arguments: arguments_ }),
-    ], [], { expectedJobStatus: "failed", expectedExecutionOutcome: "failed", expectedTurnStatus: "failed" });
-    assert.equal(result.job.error_message, code);
+      finalResponse(`${label}-done`, `读取已拒绝：${code}。`),
+    ]);
     const errors = result.turn.response_parts.filter((part) => part.kind === "tool_result");
     assert.equal(errors.length, 1, "每项业务失败只提交原工具调用的一个完整错误结果");
     assert.equal(errors[0].tool_name, "invoke_extension_tool");
     assert.equal(errors[0].status, "completed");
-    assert.equal(assertBoundToolResult(source, result.sent, result.turn, result.calls[0], label,
-      "invoke_extension_tool").result, code);
+    const errorResult = assertBoundToolResult(source, result.sent, result.turn, result.calls[0], label,
+      "invoke_extension_tool");
+    assert.equal(errorResult.result, code);
+    await assertToolResultContinuation(source, result.calls, label, errorResult);
     assert.ok(!String(errors[0].result).includes("冻结素材"), "读取失败不能泄露冻结正文");
-    assert.equal(result.turn.response_parts.filter((part) => part.kind === "final_text").length, 0);
+    assert.deepEqual(result.turn.response_parts.filter((part) => part.kind === "final_text").map((part) => part.text),
+      [`读取已拒绝：${code}。`]);
     assert.deepEqual(await readControl(target, targetEffects), effectsBefore, "无效读取不能创建目标 observation/page/inbox");
     assert.deepEqual(await observationPage(target, sourceCallId, "target"), frozen);
     negative[label] = result;
@@ -7421,18 +7432,21 @@ async function runReadCursorExpiry(surfaces, previous) {
   await testControl({ action: "identifier_date", utc: clock.wait_utc });
   const result = await completeOwnerTurn(source, "原周报 cursor 过期后不得重新开始观察。", [
     toolResponse("read-expired-cursor", "invoke_extension_tool", { tool_name: "read_context", arguments: { ...previous.args, cursor: previous.cursor } }),
-  ], [], { expectedJobStatus: "failed", expectedExecutionOutcome: "failed", expectedTurnStatus: "failed" });
+    finalResponse("read-expired-cursor-done", "原 cursor 已过期，没有重新读取。"),
+  ]);
   const operationCreatedAt = Number.parseInt(result.calls[0].replaceAll("-", "").slice(0, 12), 16);
   assert.equal(operationCreatedAt, Date.parse(clock.wait_utc), "新 source operation 必须仍在原恢复窗口内，由旧 cursor 过期拒绝");
-  assert.equal(result.job.error_message, "read-snapshot-expired");
   const errors = result.turn.response_parts.filter((part) => part.kind === "tool_result");
   assert.equal(errors.length, 1);
   assert.equal(errors[0].tool_name, "invoke_extension_tool");
   assert.equal(errors[0].status, "completed");
-  assert.equal(assertBoundToolResult(source, result.sent, result.turn, result.calls[0], "read-expired-cursor",
-    "invoke_extension_tool").result, "read-snapshot-expired");
+  const errorResult = assertBoundToolResult(source, result.sent, result.turn, result.calls[0], "read-expired-cursor",
+    "invoke_extension_tool");
+  assert.equal(errorResult.result, "read-snapshot-expired");
+  await assertToolResultContinuation(source, result.calls, "read-expired-cursor", errorResult);
   assert.ok(!String(errors[0].result).includes("冻结素材"));
-  assert.equal(result.turn.response_parts.filter((part) => part.kind === "final_text").length, 0);
+  assert.deepEqual(result.turn.response_parts.filter((part) => part.kind === "final_text").map((part) => part.text),
+    ["原 cursor 已过期，没有重新读取。"]);
   const after = await readControl(target, targetEffects);
   const original = new Set(before.map((row) => JSON.stringify(row)));
   assert.ok(after.every((row) => original.has(JSON.stringify(row))), "过期重试不能创建目标 observation/page/inbox；原事实可按到期规则回收");
