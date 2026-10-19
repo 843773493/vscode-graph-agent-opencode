@@ -450,7 +450,6 @@ def _create_session(
     sparse_tool_fixture: bool = False,
     large_tool_payloads: bool = False,
     checkpoint_prefix: str = "checkpoint",
-    final_compaction_cutoff: int | None = None,
     observer: FixtureStageObserver | None = None,
 ) -> None:
     fixture_kind = "fork" if fork_source is not None else "normal"
@@ -601,11 +600,7 @@ def _create_session(
                     event = {
                         "event_id": f"compaction-{start:04d}",
                         "strategy": "cache_preserving",
-                        "cutoff_index": (
-                            final_compaction_cutoff
-                            if turn_index == turn_count and final_compaction_cutoff is not None
-                            else cutoff_index
-                        ),
+                        "cutoff_index": cutoff_index,
                         "cache_prefix_messages": [],
                         "summary_message": HumanMessage(
                             id=f"summary-{start:04d}",
@@ -777,7 +772,6 @@ def _write_fixture(
         title="上下文压缩与摘要示例",
         turn_count=24,
         compaction_points=(8, 16),
-        final_compaction_cutoff=64,
         observer=observer,
     )
     _create_session(

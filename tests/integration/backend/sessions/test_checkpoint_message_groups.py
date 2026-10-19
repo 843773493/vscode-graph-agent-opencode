@@ -28,6 +28,9 @@ from app.services.infrastructure.rollout_context.checkpoint.codec.metadata impor
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
+from app.services.infrastructure.rollout_context.checkpoint.mutation.mutation_intents import (
+    MutationIntentDuplicateConsumption,
+)
 from app.services.infrastructure.rollout_context.checkpoint.reader import (
     RolloutContextReader,
 )
@@ -880,7 +883,7 @@ def test_request_tool_groups_are_committed_once_and_reused_by_checkpoint(
     assert path.read_bytes() == after
 
 
-def test_tool_result_shadow_reuses_completed_result_with_different_lifecycle_ids(
+def test_tool_result_shadow_preserves_distinct_carriers_with_different_lifecycle_ids(
     tmp_path, group_case
 ):
     session_id, session_dir, messages, _ = group_case
@@ -929,7 +932,26 @@ def test_tool_result_shadow_reuses_completed_result_with_different_lifecycle_ids
     saver.append_items(
         session_id, (result,), thread_id=saver._storage.storage.main_thread_id(session_id)
     )
-    assert (session_dir / "rollout" / "rollout.jsonl").read_bytes() == before
+    path = session_dir / "rollout" / "rollout.jsonl"
+    after = path.read_bytes()
+    assert after.startswith(before)
+    # request 与 live 载体保留各自身份；吞掉任意一方会丢失后续请求投影
+    # 或工具执行证据。同一 facade 拒绝重复消费且不能产生第二份正文。
+    added, = [json.loads(line) for line in after[len(before):].splitlines()]
+    assert added["item_id"] == result.item_id
+    with pytest.raises(MutationIntentDuplicateConsumption):
+        saver.append_items(
+            session_id, (result,), thread_id=saver._storage.storage.main_thread_id(session_id)
+        )
+    assert path.read_bytes() == after
+    with RolloutCheckpointSaver(tmp_path) as cold:
+        results = [item for item in cold._storage.storage.read_items(
+            session_id, cold._storage.storage.main_thread_id(session_id),
+        ) if item.semantic_kind == "tool_result"]
+    assert [item.item_id for item in results] == [*shadow_ids, result.item_id]
+    assert [item.projection_identity.projection_message_id for item in results] == ["result-1", None]
+    assert all(item.projection_identity.model_call_id == "model-call-1" for item in results)
+    assert results[-1].payload == result.payload
 
 
 def test_plain_reasoning_content_is_text_semantic_item(tmp_path, group_case):

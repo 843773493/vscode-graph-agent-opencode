@@ -92,10 +92,25 @@ def test_custom_tool_fixture_asset_contract(
             session_id,
             resolver.main_thread_id(session_id),
         ) / "rollout"
-        assert {child.name for child in rollout_root.iterdir()} == {
+        # SQLite WAL 辅助文件可能在在线访问后保留；context-plan-details 是
+        # assembly catalog 按 DetailRef 寻址的正式正文目录。二者均属于
+        # rollout 持久化布局，未知文件仍会被严格拒绝。
+        children = {child.name: child for child in rollout_root.iterdir()}
+        assert {"index.sqlite", "rollout.jsonl"}.issubset(children)
+        assert set(children).issubset({
             "index.sqlite",
+            "index.sqlite-wal",
+            "index.sqlite-shm",
             "rollout.jsonl",
-        }
+            "context-plan-details",
+        })
+        assert all(
+            children[name].is_file()
+            for name in ("index.sqlite", "rollout.jsonl", "index.sqlite-wal", "index.sqlite-shm")
+            if name in children
+        )
+        if "context-plan-details" in children:
+            assert children["context-plan-details"].is_dir()
         assert not list(rollout_root.glob("segment-*.jsonl"))
         assert not (session_node / "payloads").exists()
 
@@ -139,7 +154,14 @@ def test_custom_tool_fixture_asset_contract(
         # 仅审核可信 fixture 的原始 BLOB，不通过 runtime 的 v1 checkpoint reader。
         compact_event = JsonPlusSerializer().loads_typed((serializer, blob))
     assert compact_event["strategy"] == "cache_preserving"
-    assert compact_event["cutoff_index"] == 64
+    # 切点属于第 16 Turn 完整消息边界，不能用固定序号切开工具组。
+    with closing(sqlite3.connect(compact_index.as_uri() + "?mode=ro&immutable=1", uri=True)) as connection:
+        cutoff = compact_event["cutoff_index"]
+        message_ids = [row[0] for row in connection.execute(
+            "SELECT message_id FROM messages ORDER BY message_sequence"
+        ) if not row[0].startswith("summary-")]
+    assert message_ids[cutoff - 1] == "assistant-final-0016"
+    assert message_ids[cutoff] == "user-0017"
     assert compact_event["cache_prefix_messages"] == []
     assert compact_event["summary_message"].additional_kwargs["lc_source"] == (
         "summarization"

@@ -120,18 +120,18 @@ def prepare_compaction(
             batch.first_message_sequence = sequence
         if admission.turn_id is None:
             batch.display_only_item_ids.append(item.item_id)
-    ordered = [*prefixes, summary_message, *messages[cutoff:]]
-    pending_by_message = {row[1]: tuple(location[0].item_id for location in row[8]) for row in batch.prepared}
+    message_ids = [
+        *(codec.message_id(message, index) for index, message in enumerate(prefixes)),
+        summary_id,
+        *(codec.message_id(messages[index], index) for index in range(cutoff, len(messages))),
+    ]
+    # prepare_messages 已按同一事务校验完整 group；复用该权威映射，不能
+    # 仅按 projection_message_id 找 anchor 而丢失伴随正文或并行工具声明。
+    groups = {**batch.message_item_ids, summary_id: (item.item_id,)}
     selection: list[str] = []
-    for index, message in enumerate(ordered):
-        message_id = codec.message_id(message, index)
-        ids = pending_by_message.get(message_id)
-        if ids is None:
-            ids = tuple(row[0] for row in connection.execute(
-                "SELECT item_id FROM item_catalog "
-                "WHERE json_extract(projection_manifest_json,'$.projection_identity.projection_message_id')=? "
-                "ORDER BY item_sequence", (message_id,),
-            ).fetchall())
+    # 无显式 ID 的消息身份包含原始下标，插入摘要不能改变该坐标。
+    for message_id in message_ids:
+        ids = groups.get(message_id)
         if not ids:
             raise ValueError(f"compaction selection 缺少真实 canonical 来源: {message_id}")
         selection.extend(ids)

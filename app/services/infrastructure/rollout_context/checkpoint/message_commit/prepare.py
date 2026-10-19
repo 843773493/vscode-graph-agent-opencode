@@ -44,6 +44,7 @@ class MessageBatch:
     visible_sequences: list[int] = field(default_factory=list)
     item_ids: list[str] = field(default_factory=list)
     display_only_item_ids: list[str] = field(default_factory=list)
+    message_item_ids: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 def _compare_group(
@@ -225,6 +226,7 @@ def prepare_messages(
             if message_item_group:
                 _compare_group(group, message_item_group)
             batch.item_ids.extend(item.item_id for item in group)
+            batch.message_item_ids[canonical_message_id] = tuple(item.item_id for item in group)
             for item in group:
                 if item.turn_id is not None:
                     continue
