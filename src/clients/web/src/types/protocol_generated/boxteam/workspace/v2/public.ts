@@ -1209,6 +1209,31 @@ export interface SessionGoalClearResultDTO {
   cleared: boolean;
 }
 
+export interface SessionSkillUntrackRequest {
+  name: string;
+}
+
+export interface SessionSkillUntrackErrorDTO {
+  code: string;
+  message: string;
+}
+
+/** 精确 SessionThread 的停止跟踪结果；不删除已提交上下文，不携带物理来源路径。 */
+export interface SessionSkillUntrackResultDTO {
+  session_id: string;
+  thread_id: string;
+  name: string;
+  mode: string;
+  status: string;
+  display_uri?: string | undefined;
+  revision?: string | undefined;
+  content_hash?: string | undefined;
+  append_status: string;
+  tracked: boolean;
+  queued: boolean;
+  error?: SessionSkillUntrackErrorDTO | undefined;
+}
+
 export interface SessionGoalDTO {
   goal_id: string;
   session_id: string;
@@ -10179,6 +10204,166 @@ export const SessionGoalClearResultDTO: MessageFns<SessionGoalClearResultDTO> = 
     const message = createBaseSessionGoalClearResultDTO();
     message.session_id = object.session_id ?? "";
     message.cleared = object.cleared ?? false;
+    return message;
+  },
+};
+
+function createBaseSessionSkillUntrackRequest(): SessionSkillUntrackRequest {
+  return { name: "" };
+}
+
+export const SessionSkillUntrackRequest: MessageFns<SessionSkillUntrackRequest> = {
+  fromJSON(object: any): SessionSkillUntrackRequest {
+    return { name: isSet(object.name) ? globalThis.String(object.name) : "" };
+  },
+
+  toJSON(message: SessionSkillUntrackRequest): unknown {
+    const obj: any = {};
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionSkillUntrackRequest>, I>>(base?: I): SessionSkillUntrackRequest {
+    return SessionSkillUntrackRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionSkillUntrackRequest>, I>>(object: I): SessionSkillUntrackRequest {
+    const message = createBaseSessionSkillUntrackRequest();
+    message.name = object.name ?? "";
+    return message;
+  },
+};
+
+function createBaseSessionSkillUntrackErrorDTO(): SessionSkillUntrackErrorDTO {
+  return { code: "", message: "" };
+}
+
+export const SessionSkillUntrackErrorDTO: MessageFns<SessionSkillUntrackErrorDTO> = {
+  fromJSON(object: any): SessionSkillUntrackErrorDTO {
+    return {
+      code: isSet(object.code) ? globalThis.String(object.code) : "",
+      message: isSet(object.message) ? globalThis.String(object.message) : "",
+    };
+  },
+
+  toJSON(message: SessionSkillUntrackErrorDTO): unknown {
+    const obj: any = {};
+    if (message.code !== "") {
+      obj.code = message.code;
+    }
+    if (message.message !== "") {
+      obj.message = message.message;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionSkillUntrackErrorDTO>, I>>(base?: I): SessionSkillUntrackErrorDTO {
+    return SessionSkillUntrackErrorDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionSkillUntrackErrorDTO>, I>>(object: I): SessionSkillUntrackErrorDTO {
+    const message = createBaseSessionSkillUntrackErrorDTO();
+    message.code = object.code ?? "";
+    message.message = object.message ?? "";
+    return message;
+  },
+};
+
+function createBaseSessionSkillUntrackResultDTO(): SessionSkillUntrackResultDTO {
+  return {
+    session_id: "",
+    thread_id: "",
+    name: "",
+    mode: "",
+    status: "",
+    display_uri: undefined,
+    revision: undefined,
+    content_hash: undefined,
+    append_status: "",
+    tracked: false,
+    queued: false,
+    error: undefined,
+  };
+}
+
+export const SessionSkillUntrackResultDTO: MessageFns<SessionSkillUntrackResultDTO> = {
+  fromJSON(object: any): SessionSkillUntrackResultDTO {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      mode: isSet(object.mode) ? globalThis.String(object.mode) : "",
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+      display_uri: isSet(object.display_uri) ? globalThis.String(object.display_uri) : undefined,
+      revision: isSet(object.revision) ? globalThis.String(object.revision) : undefined,
+      content_hash: isSet(object.content_hash) ? globalThis.String(object.content_hash) : undefined,
+      append_status: isSet(object.append_status) ? globalThis.String(object.append_status) : "",
+      tracked: isSet(object.tracked) ? globalThis.Boolean(object.tracked) : false,
+      queued: isSet(object.queued) ? globalThis.Boolean(object.queued) : false,
+      error: isSet(object.error) ? SessionSkillUntrackErrorDTO.fromJSON(object.error) : undefined,
+    };
+  },
+
+  toJSON(message: SessionSkillUntrackResultDTO): unknown {
+    const obj: any = {};
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.mode !== "") {
+      obj.mode = message.mode;
+    }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    if (message.display_uri !== undefined) {
+      obj.display_uri = message.display_uri;
+    }
+    if (message.revision !== undefined) {
+      obj.revision = message.revision;
+    }
+    if (message.content_hash !== undefined) {
+      obj.content_hash = message.content_hash;
+    }
+    if (message.append_status !== "") {
+      obj.append_status = message.append_status;
+    }
+    if (message.tracked !== false) {
+      obj.tracked = message.tracked;
+    }
+    if (message.queued !== false) {
+      obj.queued = message.queued;
+    }
+    if (message.error !== undefined) {
+      obj.error = SessionSkillUntrackErrorDTO.toJSON(message.error);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionSkillUntrackResultDTO>, I>>(base?: I): SessionSkillUntrackResultDTO {
+    return SessionSkillUntrackResultDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionSkillUntrackResultDTO>, I>>(object: I): SessionSkillUntrackResultDTO {
+    const message = createBaseSessionSkillUntrackResultDTO();
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
+    message.name = object.name ?? "";
+    message.mode = object.mode ?? "";
+    message.status = object.status ?? "";
+    message.display_uri = object.display_uri ?? undefined;
+    message.revision = object.revision ?? undefined;
+    message.content_hash = object.content_hash ?? undefined;
+    message.append_status = object.append_status ?? "";
+    message.tracked = object.tracked ?? false;
+    message.queued = object.queued ?? false;
+    message.error = (object.error !== undefined && object.error !== null)
+      ? SessionSkillUntrackErrorDTO.fromPartial(object.error)
+      : undefined;
     return message;
   },
 };

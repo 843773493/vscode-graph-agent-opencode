@@ -5309,6 +5309,116 @@ export declare type SessionGoalClearResultDTO = Message<"boxteam.workspace.v2.Se
 export declare const SessionGoalClearResultDTOSchema: GenMessage<SessionGoalClearResultDTO>;
 
 /**
+ * @generated from message boxteam.workspace.v2.SessionSkillUntrackRequest
+ */
+export declare type SessionSkillUntrackRequest = Message<"boxteam.workspace.v2.SessionSkillUntrackRequest"> & {
+  /**
+   * @generated from field: string name = 1;
+   */
+  name: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionSkillUntrackRequest.
+ * Use `create(SessionSkillUntrackRequestSchema)` to create a new message.
+ */
+export declare const SessionSkillUntrackRequestSchema: GenMessage<SessionSkillUntrackRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionSkillUntrackErrorDTO
+ */
+export declare type SessionSkillUntrackErrorDTO = Message<"boxteam.workspace.v2.SessionSkillUntrackErrorDTO"> & {
+  /**
+   * @generated from field: string code = 1;
+   */
+  code: string;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionSkillUntrackErrorDTO.
+ * Use `create(SessionSkillUntrackErrorDTOSchema)` to create a new message.
+ */
+export declare const SessionSkillUntrackErrorDTOSchema: GenMessage<SessionSkillUntrackErrorDTO>;
+
+/**
+ * 精确 SessionThread 的停止跟踪结果；不删除已提交上下文，不携带物理来源路径。
+ *
+ * @generated from message boxteam.workspace.v2.SessionSkillUntrackResultDTO
+ */
+export declare type SessionSkillUntrackResultDTO = Message<"boxteam.workspace.v2.SessionSkillUntrackResultDTO"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 2;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: string name = 3;
+   */
+  name: string;
+
+  /**
+   * @generated from field: string mode = 4;
+   */
+  mode: string;
+
+  /**
+   * @generated from field: string status = 5;
+   */
+  status: string;
+
+  /**
+   * @generated from field: optional string display_uri = 6;
+   */
+  displayUri?: string | undefined;
+
+  /**
+   * @generated from field: optional string revision = 7;
+   */
+  revision?: string | undefined;
+
+  /**
+   * @generated from field: optional string content_hash = 8;
+   */
+  contentHash?: string | undefined;
+
+  /**
+   * @generated from field: string append_status = 9;
+   */
+  appendStatus: string;
+
+  /**
+   * @generated from field: bool tracked = 10;
+   */
+  tracked: boolean;
+
+  /**
+   * @generated from field: bool queued = 11;
+   */
+  queued: boolean;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.SessionSkillUntrackErrorDTO error = 12;
+   */
+  error?: SessionSkillUntrackErrorDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionSkillUntrackResultDTO.
+ * Use `create(SessionSkillUntrackResultDTOSchema)` to create a new message.
+ */
+export declare const SessionSkillUntrackResultDTOSchema: GenMessage<SessionSkillUntrackResultDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.SessionGoalDTO
  */
 export declare type SessionGoalDTO = Message<"boxteam.workspace.v2.SessionGoalDTO"> & {

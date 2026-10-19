@@ -1203,6 +1203,31 @@ message SessionGoalClearResultDTO {
   bool cleared = 2;
 }
 
+message SessionSkillUntrackRequest {
+  string name = 1;
+}
+
+message SessionSkillUntrackErrorDTO {
+  string code = 1;
+  string message = 2;
+}
+
+// 精确 SessionThread 的停止跟踪结果；不删除已提交上下文，不携带物理来源路径。
+message SessionSkillUntrackResultDTO {
+  string session_id = 1;
+  string thread_id = 2;
+  string name = 3;
+  string mode = 4;
+  string status = 5;
+  optional string display_uri = 6;
+  optional string revision = 7;
+  optional string content_hash = 8;
+  string append_status = 9;
+  bool tracked = 10;
+  bool queued = 11;
+  optional SessionSkillUntrackErrorDTO error = 12;
+}
+
 message SessionGoalDTO {
   string goal_id = 1;
   string session_id = 2;

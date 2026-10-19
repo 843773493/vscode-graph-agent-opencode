@@ -118,6 +118,12 @@ export const COMPOSER_SLASH_COMMANDS: SlashCommandOption[] = [
     description: "查看或设置目标；支持 edit、pause、resume、clear。",
   },
   {
+    id: "skill-untrack",
+    command: "/skill-untrack",
+    title: "停止跟踪 Skill",
+    description: "输入 Skill 名称，可选线程 ID；名称含空格时用双引号。默认主线程，保留已有上下文。",
+  },
+  {
     id: "agent",
     command: "/agent",
     title: "选择 Agent",

@@ -29,6 +29,7 @@ export function useComposerSlashCommands({
   switchContentView,
   compactSession,
   runGoalCommand,
+  runSkillUntrackCommand,
 }: {
   input: string;
   currentSession: Session | null;
@@ -46,6 +47,7 @@ export function useComposerSlashCommands({
   switchContentView: (view: ConversationContentView) => void;
   compactSession: () => Promise<SessionCompactResult>;
   runGoalCommand: (args: string) => void;
+  runSkillUntrackCommand: (args: string) => void;
 }) {
   const slashCommands = COMPOSER_SLASH_COMMANDS;
   const slashQuery = useMemo(() => slashQueryFromInput(input), [input]);
@@ -162,6 +164,9 @@ export function useComposerSlashCommands({
         case "goal":
           runGoalCommand(args);
           break;
+        case "skill-untrack":
+          runSkillUntrackCommand(args);
+          break;
         default:
           break;
       }
@@ -171,6 +176,7 @@ export function useComposerSlashCommands({
       createSession,
       renameCurrentSession,
       runGoalCommand,
+      runSkillUntrackCommand,
       setAgentMenuOpen,
       setAttachmentError,
       setAttachments,

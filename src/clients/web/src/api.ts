@@ -76,6 +76,7 @@ export {
   updateSessionAgent,
   updateSessionProvider,
 } from "./api/session/sessions";
+export { untrackSessionSkill } from "./api/session/sessionSkillTracking";
 export {
   clearSessionGoal,
   getSessionGoal,

@@ -9,6 +9,34 @@ import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
 
+test("停止跟踪命令消费输入并转交原始参数，不进入模型发送链路", () => {
+  let input = '/skill-untrack "review skill" child-thread';
+  const commands: string[] = [];
+  let submit!: (index: number) => boolean;
+  function Harness() {
+    ({ submitSlashInput: submit } = useComposerSlashCommands({
+      input, currentSession: null, compactLoading: false,
+      getLatestAssistantContent: () => null,
+      setInput: (value) => { input = typeof value === "function" ? value(input) : value; },
+      setAttachments: () => undefined, setAttachmentError: () => undefined,
+      setComposerNotice: () => undefined, setAgentMenuOpen: () => undefined,
+      setViewMenuOpen: () => undefined, setStatus: () => undefined,
+      createSession: async () => { throw new Error("不应创建会话"); },
+      renameCurrentSession: () => undefined, switchContentView: () => undefined,
+      compactSession: async () => { throw new Error("不应压缩会话"); },
+      runGoalCommand: () => { throw new Error("不应执行 Goal"); },
+      runSkillUntrackCommand: (args) => { commands.push(args); },
+    }));
+    return null;
+  }
+  let renderer!: ReturnType<typeof create>;
+  act(() => { renderer = create(<Harness />); });
+  act(() => { expect(submit(0)).toBe(true); });
+  expect(input).toBe("");
+  expect(commands).toEqual(['"review skill" child-thread']);
+  act(() => { renderer.unmount(); });
+});
+
 afterEach(() => {
   if (originalClipboard) {
     Object.defineProperty(navigator, "clipboard", originalClipboard);
@@ -72,6 +100,7 @@ describe("Composer /new 命令", () => {
           throw new Error("/new 测试不会执行压缩");
         },
         runGoalCommand: () => undefined,
+        runSkillUntrackCommand: () => undefined,
       }));
       return null;
     }
@@ -125,6 +154,7 @@ describe("Composer /new 命令", () => {
           throw new Error("/new 测试不会执行压缩");
         },
         runGoalCommand: () => undefined,
+        runSkillUntrackCommand: () => undefined,
       }));
       return null;
     }
@@ -204,6 +234,7 @@ describe("Composer /compact 命令", () => {
         switchContentView: () => undefined,
         compactSession: async () => result,
         runGoalCommand: () => undefined,
+        runSkillUntrackCommand: () => undefined,
       }));
       return null;
     }
@@ -265,6 +296,7 @@ describe("Composer /copy 命令的剪贴板唯一实现", () => {
           throw new Error("/copy 测试不会执行压缩");
         },
         runGoalCommand: () => undefined,
+        runSkillUntrackCommand: () => undefined,
       }));
       return null;
     }

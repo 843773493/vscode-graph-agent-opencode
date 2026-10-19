@@ -57,6 +57,7 @@ function section8ScenarioRegistry(surfaces, facts) {
     owner_turns_navigation_smoke: { default: false, run: () => runOwnerTurnsNavigationSmoke(surfaces.a) },
     turn_navigation: { default: true, run: () => runTurnNavigation(surfaces.a) },
     read_cursor_expiry: { default: true, run: () => runReadCursorExpiry(surfaces, facts.read_recovery) },
+    skill_untrack: { default: true, run: () => runSkillUntrack(surfaces.a) },
   };
 }
 
@@ -8296,6 +8297,76 @@ async function assertTeamDom(owner, board) {
     assert.equal(await row.getAttribute("data-team-task-status"), task.status);
     const value = await row.innerText();
     assert.ok(value.includes(task.title) && value.includes(task.assignee_thread_id));
+  }
+}
+
+async function runSkillUntrack(surface) {
+  const owner = await createProductSession(surface, "人工停止 Skill 跟踪");
+  const skillName = "gateway-context";
+  const setup = await completeOwnerTurn(owner, "跟踪上下文 Skill，然后由用户从输入框停止跟踪。", [
+    toolResponse("manual-untrack-load", "skill_load", { name: skillName, mode: "tracked" }),
+    finalResponse("manual-untrack-ready", "Skill 已跟踪，等待用户控制。"),
+  ]);
+  const controlQuery = "SELECT * FROM context_source_control_states WHERE session_id=? AND thread_id=? AND source_kind='skill' AND name=?";
+  const controlParameters = [owner.sessionId, owner.threadId, skillName];
+  const tracked = await readRollout(owner, controlQuery, controlParameters);
+  assert.equal(tracked.length, 1);
+  assert.equal(tracked[0].tracking_status, "tracked");
+  const historyQuery = "SELECT * FROM item_catalog ORDER BY item_sequence";
+  const callsQuery = "SELECT * FROM model_calls ORDER BY model_call_id";
+  const assembliesQuery = "SELECT * FROM context_assemblies ORDER BY assembly_id";
+  const before = {
+    items: await readRollout(owner, historyQuery), calls: await readRollout(owner, callsQuery),
+    assemblies: await readRollout(owner, assembliesQuery),
+  };
+  const node = await sessionCatalogNode(owner);
+  const jsonlPath = join(owner.workspace, (await threadRolloutLocator(owner, node)).replace(/index\.sqlite$/, "rollout.jsonl"));
+  const bytes = await readFile(jsonlPath);
+  const skillPath = join(owner.workspace, ".boxteam/skills", skillName, "SKILL.md");
+  const skillBytes = await readFile(skillPath);
+  const receipts = [];
+  try {
+    await openOwner(owner);
+    // 真实源已不存在时仍可人工控制；不恢复来源、不发送 LLM 消息。
+    await unlink(skillPath);
+    for (const explicitThread of [false, true]) {
+      const responsePending = owner.page.waitForResponse((response) => response.request().method() === "POST"
+        && new URL(response.url()).pathname === `/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/skills/untrack`);
+      const input = owner.page.getByTestId("composer-input");
+      await input.fill(`/skill-untrack ${skillName}${explicitThread ? ` ${owner.threadId}` : ""}`);
+      await input.press("Enter");
+      const response = await responsePending;
+      assert.equal(response.status(), 200);
+      const payload = await response.json();
+      assert.equal(payload.request_id, response.headers()["x-request-id"]);
+      const receipt = payload.data;
+      assert.equal(receipt.session_id, owner.sessionId);
+      assert.equal(receipt.thread_id, owner.threadId);
+      assert.equal(receipt.name, skillName);
+      assert.equal(receipt.mode, "untrack");
+      assert.equal(receipt.status, explicitThread ? "not_tracked" : "loaded");
+      assert.equal(receipt.tracked, false);
+      assert.equal(receipt.queued, false);
+      assert.equal(receipt.error, null);
+      await waitUntil(async () => (await owner.page.locator(".composer-attachment-notice").innerText())
+        === (explicitThread ? `${skillName} 在该线程未被跟踪，已有上下文保留` : `已停止跟踪 ${skillName}，已有上下文保留`),
+      "输入框显示完整后端停止跟踪结果");
+      assert.equal(await input.inputValue(), "");
+      receipts.push(payload);
+    }
+    const untracked = await readRollout(owner, controlQuery, controlParameters);
+    assert.equal(untracked.length, 1);
+    assert.equal(untracked[0].source_id, tracked[0].source_id);
+    assert.equal(untracked[0].tracking_status, "untracked");
+    assert.equal(untracked[0].state_revision, tracked[0].state_revision + 1);
+    assert.deepEqual(await readRollout(owner, historyQuery), before.items);
+    assert.deepEqual(await readRollout(owner, callsQuery), before.calls);
+    assert.deepEqual(await readRollout(owner, assembliesQuery), before.assemblies);
+    assert.deepEqual(await readFile(jsonlPath), bytes);
+    return { sessionId: owner.sessionId, threadId: owner.threadId, setup, tracked, untracked, receipts,
+      preservedJsonlSha256: createHash("sha256").update(bytes).digest("hex"), modelCallCount: before.calls.length };
+  } finally {
+    await writeFile(skillPath, skillBytes);
   }
 }
 

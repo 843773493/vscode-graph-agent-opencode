@@ -502,6 +502,17 @@ export interface SessionMainThread {
   session_id: string;
   thread_id: string;
 }
+export type SessionSkillUntrackResult = Omit<WorkspaceProtocol.SessionSkillUntrackResultDTO,
+  "mode" | "status" | "append_status" | "display_uri" | "revision" | "content_hash" | "error"
+> & {
+  mode: "untrack";
+  status: "loaded" | "already_active" | "not_tracked" | "rebound" | "error";
+  append_status: "appended" | "already_active" | "none";
+  display_uri: string | null;
+  revision: string | null;
+  content_hash: string | null;
+  error: WorkspaceProtocol.SessionSkillUntrackErrorDTO | null;
+};
 export type SessionUpdateRequest = WorkspaceProtocol.SessionUpdateRequest;
 export type DeleteSessionResult = WorkspaceProtocol.DeleteSessionResultDTO;
 export type SessionCompactResult = Omit<WorkspaceProtocol.SessionCompactResultDTO, "status" | "summary" | "history_file_path" | "strategy" | "compacted_at"> & {

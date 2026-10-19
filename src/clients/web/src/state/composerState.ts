@@ -1,9 +1,10 @@
-import type { Agent, Session, SessionGoal, WebUiSettings } from "../types/backend";
+import type { Agent, GatewayWorkspace, Session, SessionGoal, WebUiSettings } from "../types/backend";
 import type { AppState, ConversationContentView } from "../types/frontend";
 
 export interface ComposerStateSnapshot {
   apiPort: number | null;
   activeGatewayWorkspaceId: string | null;
+  gatewayWorkspaces: GatewayWorkspace[];
   gatewayUserScope: string | null;
   uiSettings: WebUiSettings;
   agents: Agent[];
@@ -29,6 +30,7 @@ export function selectComposerState(
   return {
     apiPort: state.apiPort,
     activeGatewayWorkspaceId: state.activeGatewayWorkspaceId,
+    gatewayWorkspaces: state.gatewayWorkspaces,
     gatewayUserScope: state.gatewayUserAccess
       ? state.gatewayUserAccess.kind === "user" && state.gatewayUserAccess.user_id
         ? `user:${state.gatewayUserAccess.user_id}`

@@ -3,6 +3,7 @@ import { DEFAULT_BACKEND_PORT } from "../../api";
 import { useComposerState } from "../../hooks";
 import { useComposerSlashCommands } from "../../hooks/composer/useComposerSlashCommands";
 import { useComposerDraft } from "../../hooks/composer/useComposerDraft";
+import { useSkillUntrackCommand } from "../../hooks/composer/useSkillUntrackCommand";
 import {
   composerDraftScopeKey,
   composerDraftExceedsLimit,
@@ -405,6 +406,15 @@ function Composer() {
     });
   };
 
+  const runSkillUntrackCommand = useSkillUntrackCommand({
+    state,
+    sessionId: currentSessionId,
+    workspaceId: currentWorkspaceId,
+    scopeKey: currentSessionCacheKey,
+    setNotice: setComposerNotice,
+    setError: setAttachmentError,
+  });
+
   const {
     slashQuery,
     matchingSlashCommands,
@@ -430,6 +440,7 @@ function Composer() {
     switchContentView,
     compactSession,
     runGoalCommand,
+    runSkillUntrackCommand,
   });
 
   useEffect(() => {

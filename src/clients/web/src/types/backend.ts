@@ -40,6 +40,7 @@ export type {
   RunOptions,
   Session,
   SessionMainThread,
+  SessionSkillUntrackResult,
   SessionCompactResult,
   SessionForkRequest,
   SessionForkResult,
