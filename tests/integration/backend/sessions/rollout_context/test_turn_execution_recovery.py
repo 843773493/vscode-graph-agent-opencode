@@ -524,6 +524,11 @@ def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
         projection = saver._storage.storage.read_turn_projections(snapshot, view_id, ("turn-user-1",))[
             "turn-user-1"
         ]
+        canonical_coordinates = snapshot.connection.execute(
+            "SELECT assistant_message_sequence, result_message_sequence, call_index "
+            "FROM tool_calls WHERE tool_call_id = ?",
+            ("model-call-1:tool-call:call-1",),
+        ).fetchone()
 
     assert projection["activity_stats"]["item_count"] == 2
     assert [item["kind"] for item in projection["activity_items"]] == [
@@ -533,6 +538,12 @@ def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
     assert {item["tool_call_id"] for item in projection["activity_items"]} == {
         "model-call-1:tool-call:call-1"
     }
+    assert canonical_coordinates is not None
+    # raw checkpoint carrier 只能归一化身份，不能覆盖已选 canonical 调用的配对坐标。
+    assert [
+        (item["assistant_message_sequence"], item["result_message_sequence"], item["call_index"])
+        for item in projection["activity_items"]
+    ] == [tuple(canonical_coordinates)] * 2
 
 
 def test_canonical_tool_call_recovers_coordinates_from_scoped_block_id(

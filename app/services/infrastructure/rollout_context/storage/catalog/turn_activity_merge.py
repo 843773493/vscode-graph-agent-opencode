@@ -214,6 +214,10 @@ def _merge_activity_items(
                         (turn_id, activity_model_call_id, call_index), tool_call_id,
                     )
                 )
+                selected_tool = tool_by_call_id.get(
+                    (turn_id, activity_model_call_id, canonical_tool_call_id),
+                    selected_tool,
+                )
                 if selected_tool is None:
                     if semantic_kind != "tool_call":
                         raise RuntimeError(
@@ -290,12 +294,11 @@ def _merge_activity_items(
                     if canonical_tool_call_id is None:
                         normalized_tools.append(matching_tool)
                         continue
-                    normalized_tool = {
-                        **matching_tool,
-                        "tool_call_id": canonical_tool_call_id,
-                    }
-                    tool_by_call_id[(turn_id, activity_model_call_id, canonical_tool_call_id)] = (
-                        normalized_tool
+                    # raw carrier 复用已选 canonical 配对，不能用自己的物理
+                    # message 坐标覆盖该逻辑调用与结果的共同来源。
+                    normalized_tool = tool_by_call_id.setdefault(
+                        (turn_id, activity_model_call_id, canonical_tool_call_id),
+                        {**matching_tool, "tool_call_id": canonical_tool_call_id},
                     )
                     raw_tool_call_id = matching_tool.get("tool_call_id")
                     if isinstance(raw_tool_call_id, str) and raw_tool_call_id:
