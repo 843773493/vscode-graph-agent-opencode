@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import EllipsisType
+
 from app.domain.itemized.epoch.seal_binding import ContextSealBinding
 from app.services.infrastructure.events.channel_events import ContextSourceEvent
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
@@ -212,11 +214,14 @@ class SourceLifecycleMixin:
             self._rebuild_source_batch = batch
             return batch
 
-        def prepare_sources(self) -> PendingContextSourceBatch:
+        def prepare_sources(
+            self,
+            rebuild: ContextSourceRebuildState | None | EllipsisType = ...,
+        ) -> PendingContextSourceBatch:
             """冻结完整有效来源与最终 delta；不写 applied 或消费任何 intent。"""
-            rebuild = self.refresh_context_rebuild_state()
-            if rebuild is not None:
-                return self.prepare_rebuild_sources(rebuild)
+            current_rebuild: ContextSourceRebuildState | None = self.refresh_context_rebuild_state(rebuild)
+            if current_rebuild is not None:
+                return self.prepare_rebuild_sources(current_rebuild)
             sources = []
             for state in self._sources.values():
                 if state.latest_revision is None or state.latest_content is None:
@@ -242,7 +247,7 @@ class SourceLifecycleMixin:
                 return self.prepare_rebuild_sources(rebuild)
             if not self._pending:
                 return None
-            return self.prepare_sources()
+            return self.prepare_sources(rebuild)
 
         def acknowledge_sealed_pending(
             self,

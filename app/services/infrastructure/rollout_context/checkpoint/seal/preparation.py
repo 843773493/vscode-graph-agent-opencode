@@ -277,8 +277,8 @@ def prepare_registered_context(
                 read_agents_committed_activation,
             )
             frozen = (
-                context_source_manager.prepare_rebuild_sources(rebuild)
-                if rebuild is not None else context_source_manager.prepare_sources()
+                context_source_manager.prepare_sources(rebuild)
+                if summary_candidate is None else context_source_manager.prepare_sources()
             )
             allowed = {
                 source.descriptor.source_id for source in frozen.sources

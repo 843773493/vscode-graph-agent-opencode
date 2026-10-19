@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from types import EllipsisType
 
 from app.services.infrastructure.events.channel_events import ContextSourceEvent
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
@@ -127,7 +128,7 @@ class ContextSourceManager(
 
     def refresh_context_rebuild_state(
         self,
-        rebuild: ContextSourceRebuildState | None = None,
+        rebuild: ContextSourceRebuildState | None | EllipsisType = ...,
         *,
         checkpoint_ns: str = "",
     ) -> ContextSourceRebuildState | None:
@@ -135,11 +136,12 @@ class ContextSourceManager(
 
         替换状态前会把当前 manager 已有的内存正文沿用到已发布版本缓存；正文
         不从 rebuild snapshot 或 source owner 读取，冷启动时没有旧内存正文可沿用。
+        省略 rebuild 才读取端口；显式 None 是同次准备已经读取的空结果。
         """
         owner, port = self._owner, self._control_state_port
         if owner is None or port is None:
             return None
-        if rebuild is None:
+        if rebuild is ...:
             rebuild = port.load_context_source_rebuild_state(owner, checkpoint_ns=checkpoint_ns)
         if rebuild is None or rebuild.transition.transition_id == self._rebuild_transition_id:
             return rebuild

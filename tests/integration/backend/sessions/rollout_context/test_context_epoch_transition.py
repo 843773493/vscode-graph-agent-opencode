@@ -25,6 +25,7 @@ from app.agents.skill_runtime import WorkspaceSkillsMiddleware
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex
 from app.core.lifecycle import LifetimeScope
+from app.core.model_request_context import SummaryCandidateScope
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.epoch.prefix_epoch import (
     EpochReason,
@@ -56,12 +57,17 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
+    ContextSourceRebuildState,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceDescriptor,
     ContextSourceManager,
     SkillCatalogActivationSnapshot,
     SkillCatalogBinding,
+)
+from app.services.mapping.itemized.canonical_langchain import (
+    project_summary_source,
+    summary_source_groups,
 )
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.itemized_projection_helpers import (
@@ -131,7 +137,11 @@ class EpochCase:
         ):
             yield
 
-    def prepare(self, key: str, *, model: str = "epoch-provider", supplier=None) -> dict[str, object]:
+    def prepare(
+        self, key: str, *, model: str = "epoch-provider", supplier=None,
+        request_messages: tuple[BaseMessage, ...] = (),
+        summary_candidate: SummaryCandidateScope | None = None,
+    ) -> dict[str, object]:
         selected = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
         with self.scope():
             return self.saver.prepare_context_for_provider(
@@ -139,6 +149,7 @@ class EpochCase:
                 turn_id=str(self.accepted["turn_id"]), execution_id=str(self.accepted["initial_execution_id"]),
                 plan_creation_idempotency_key="epoch-create:" + key, seal_idempotency_key="epoch-seal:" + key,
                 context_source_manager=self.manager, tool_set_supplier=supplier or (lambda: selected),
+                request_messages=request_messages, summary_candidate=summary_candidate,
                 **self.wire(model, "chat_completions"),
                 **self.activation(
                     self.saver, plan_creation_idempotency_key="epoch-create:" + key,
@@ -280,7 +291,21 @@ def epoch_db(request, session_bundle_factory):
 
 
 @pytest.fixture
-def epoch_case(epoch_db, frozen_provider_wire, frozen_provider_activation):
+def rebuild_reads(monkeypatch):
+    reads: list[ContextSourceRebuildState | None] = []
+    load = RolloutCheckpointSaver.load_context_source_rebuild_state
+
+    def observe(saver, owner, *, checkpoint_ns=""):
+        result = load(saver, owner, checkpoint_ns=checkpoint_ns)
+        reads.append(result)
+        return result
+
+    monkeypatch.setattr(RolloutCheckpointSaver, "load_context_source_rebuild_state", observe)
+    return reads
+
+
+@pytest.fixture
+def epoch_case(epoch_db, frozen_provider_wire, frozen_provider_activation, request):
     saver, session, connection, accepted = epoch_db
     thread = saver._storage.storage.main_thread_id(session)
     publisher = PublishedResourceOwner()
@@ -296,15 +321,16 @@ def epoch_case(epoch_db, frozen_provider_wire, frozen_provider_activation):
             source_id="skill:debugging", source_kind="skill", name="debugging",
             description="调试规则", internal_locator="/绝不读取/SKILL.md", resource_uri=SKILL_URI,
         ),
-    )
+    ) if getattr(request, "param", True) else ()
     with ExitStack() as stack:
         case = EpochCase(saver, ContextSourceOwnerKey(session, thread), connection,
                          accepted, frozen_provider_wire, frozen_provider_activation,
                          publisher, descriptors, stack)
         case.config = {"configurable": {"thread_id": thread, "checkpoint_ns": ""}}
         case.bind_manager()
-        case.manager.observe("workspace:rules", "基础规则第一版", revision="rules:1")
-        case.manager.observe("skill:debugging", "v1\n", revision="skill:1")
+        if descriptors:
+            case.manager.observe("workspace:rules", "基础规则第一版", revision="rules:1")
+            case.manager.observe("skill:debugging", "v1\n", revision="skill:1")
         case.first = case.prepare("first")
         case.user = next(message for message in case.first["messages"] if isinstance(message, HumanMessage))
         assert "item-" + case.user.id == accepted["root_input_item_id"]
@@ -312,7 +338,76 @@ def epoch_case(epoch_db, frozen_provider_wire, frozen_provider_activation):
         yield case
 
 
-def test_rewind_reconciles_only_from_frozen_control_state(epoch_case):
+@pytest.mark.parametrize("epoch_case", (False, True), indirect=True, ids=("no-sources", "tracked-sources"))
+def test_prepare_reuses_empty_rebuild_read_only_within_each_request(epoch_case, rebuild_reads):
+    case = epoch_case
+    before = case.source_rows()
+    assert len(before) == len(case.descriptors)
+    rebuild_reads.clear()
+    prepared = case.prepare("fresh-read:first")
+    assert rebuild_reads == [None]
+    next_prepared = case.prepare("fresh-read:second")
+    assert rebuild_reads == [None, None]
+    assert next_prepared["assembly_id"] != prepared["assembly_id"]
+    assert case.snapshot(next_prepared).seal_binding.prefix.state.epoch.ordinal == 1
+    assert case.source_rows() == before
+    assert case.pending_rows() == []
+
+
+def test_prepare_pending_reuses_empty_read_but_default_freeze_reads_again(epoch_case, rebuild_reads):
+    case = epoch_case
+    case.manager.observe("workspace:rules", "待发送第三版", revision="rules:3")
+    before = case.source_rows()
+    rebuild_reads.clear()
+    pending = case.manager.prepare_pending()
+    assert rebuild_reads == [None]
+    assert pending is not None and tuple(delta.revision for delta in pending.deltas) == ("rules:3",)
+    assert case.manager.prepare_sources() == pending
+    assert rebuild_reads == [None, None]
+    assert case.source_rows() == before
+
+
+@pytest.mark.parametrize("minimal_system", (False, True))
+@pytest.mark.parametrize("with_transition", (False, True))
+def test_summary_reads_rebuild_once_without_applying_sources_or_epoch(
+    epoch_case, rebuild_reads, minimal_system, with_transition,
+):
+    case = epoch_case
+    if with_transition:
+        case.advance()
+        case.rewind("checkpoint-first")
+    else:
+        case.manager.observe("workspace:rules", "待摘要的第二版", revision="rules:2")
+    before, pending, view = case.source_rows(), case.pending_rows(), case.active_view()
+    items = case.saver._storage.storage.read_items(case.owner.session_id, case.owner.thread_id)
+    messages = tuple(project_summary_source(group) for group in summary_source_groups(items).values())
+    rebuild_reads.clear()
+    result = case.prepare(
+        "summary-read", request_messages=messages,
+        summary_candidate=SummaryCandidateScope(0, "initial", False, minimal_system),
+    )
+    assert len(rebuild_reads) == 1
+    assert (rebuild_reads[0] is not None) is with_transition
+    snapshot = case.snapshot(result)
+    assert snapshot.selection_policy == "summary_candidate"
+    assert snapshot.seal_binding.source_revisions == ()
+    assert snapshot.seal_binding.prefix.consumed_transition is None
+    assert case.source_rows() == before
+    assert case.pending_rows() == pending
+    assert case.active_view() == view
+    rebuild_reads.clear()
+    following = case.snapshot(case.prepare("summary-following"))
+    assert len(rebuild_reads) == 1
+    assert (rebuild_reads[0] is not None) is with_transition
+    if with_transition:
+        assert following.seal_binding.prefix.consumed_transition.transition_id == pending[0][0]
+        assert case.pending_rows()[0][3:] == ("consumed", following.assembly_id)
+    else:
+        assert following.seal_binding.prefix.consumed_transition is None
+        assert {row[0]: row[3] for row in case.source_rows()}["workspace:rules"] == "rules:2"
+
+
+def test_rewind_reconciles_only_from_frozen_control_state(epoch_case, rebuild_reads):
     case = epoch_case
     second = case.advance()
     second_bytes = canonical_json_bytes(case.snapshot(second).to_dict())
@@ -326,7 +421,11 @@ def test_rewind_reconciles_only_from_frozen_control_state(epoch_case):
     assert case.connection.execute("SELECT count(*) FROM item_catalog").fetchone() == old_item_count
     assert all(row[2] == row[3] and row[2].endswith(":1") for row in case.source_rows())
     assert case.snapshot(second).seal_binding.prefix.state.epoch.ordinal == 1
+    rebuild_reads.clear()
     rebuilt = case.prepare("rewind")
+    assert len(rebuild_reads) == 1
+    assert rebuild_reads[0] is not None
+    assert rebuild_reads[0].transition.transition_id == pending[0]
     snapshot = case.snapshot(rebuilt)
     assert snapshot.seal_binding.prefix.state.epoch.reason == EpochReason.REWIND
     assert snapshot.seal_binding.prefix.state.epoch.ordinal == 2
@@ -506,7 +605,7 @@ async def test_explicit_rewind_target_refusal_keeps_storage_and_runtime_before_v
     assert case.pending_rows()[0][3:] == ("consumed", rebuilt.assembly_id)
 
 
-def test_source_failure_keeps_view_pending_versions_and_retry_is_atomic(epoch_case):
+def test_source_failure_keeps_view_pending_versions_and_retry_is_atomic(epoch_case, rebuild_reads):
     case = epoch_case
     second = case.advance()
     old_snapshot = canonical_json_bytes(case.snapshot(second).to_dict())
@@ -570,8 +669,10 @@ def test_source_failure_keeps_view_pending_versions_and_retry_is_atomic(epoch_ca
         "WHEN NEW.source_id='skill:debugging' BEGIN SELECT RAISE(ABORT, 'injected source failure'); END"
     )
     case.connection.commit()
+    rebuild_reads.clear()
     with pytest.raises(sqlite3.IntegrityError, match="injected source failure"):
         case.prepare("retry")
+    assert len(rebuild_reads) == 1 and rebuild_reads[0] is not None
     assert case.source_rows() == before
     assert case.pending_rows() == pending
     assert case.active_view() == view
@@ -622,7 +723,9 @@ def test_source_failure_keeps_view_pending_versions_and_retry_is_atomic(epoch_ca
     ).fetchall() == [(None,)]
     case.connection.execute("DROP TRIGGER refuse_restored_source")
     case.connection.commit()
+    rebuild_reads.clear()
     rebuilt = case.prepare("retry")
+    assert len(rebuild_reads) == 1 and rebuild_reads[0] is not None
     snapshot = case.snapshot(rebuilt)
     assert snapshot.seal_binding.prefix.state.epoch.ordinal == 2
     after = case.source_rows()
@@ -639,22 +742,28 @@ def test_source_failure_keeps_view_pending_versions_and_retry_is_atomic(epoch_ca
     assert case.pending_rows()[0][3:] == ("consumed", snapshot.assembly_id)
 
 
-def test_restart_consumes_pending_and_sealed_retry_never_reads_live_snapshot(epoch_case):
+def test_restart_consumes_pending_and_sealed_retry_never_reads_live_snapshot(epoch_case, rebuild_reads, monkeypatch):
     case = epoch_case
     case.advance()
     case.rewind("checkpoint-first")
     pending = case.pending_rows()
     case.restart()
+    rebuild_reads.clear()
     rebuilt = case.prepare("restart")
+    assert len(rebuild_reads) == 1
+    assert rebuild_reads[0] is not None
+    assert rebuild_reads[0].transition.transition_id == pending[0][0]
     snapshot_bytes = canonical_json_bytes(case.snapshot(rebuilt).to_dict())
     assert case.pending_rows()[0][0] == pending[0][0]
     assert case.pending_rows()[0][3] == "consumed"
     case.restart()
 
-    def refuse_desired(*_args):
+    def refuse_desired(*_args, **_kwargs):
         pytest.fail("重启 sealed retry 必须复用持久 binding 和旧 request bytes")
 
     case.manager.bind_published_revision_supplier(refuse_desired)
+    monkeypatch.setattr(case.saver, "load_context_source_rebuild_state", refuse_desired)
+    monkeypatch.setattr(case.manager, "prepare_sources", refuse_desired)
     retry = case.prepare("restart", supplier=refuse_desired)
     assert retry["assembly_id"] == rebuilt["assembly_id"]
     assert retry["messages"] == rebuilt["messages"]
@@ -1002,7 +1111,7 @@ def test_untrack_before_and_after_checkpoint_changes_actual_rewind_tracking(epoc
     assert case.manager.prepare_pending() is None
 
 
-def test_actual_compaction_checkpoint_defers_epoch_and_materializes_full_sources(epoch_case):
+def test_actual_compaction_checkpoint_defers_epoch_and_materializes_full_sources(epoch_case, rebuild_reads):
     case = epoch_case
     second = case.advance()
     old_snapshot = canonical_json_bytes(case.snapshot(second).to_dict())
@@ -1012,7 +1121,11 @@ def test_actual_compaction_checkpoint_defers_epoch_and_materializes_full_sources
     assert pending[2:] == ("compaction", "pending", None)
     assert case.connection.execute("SELECT count(*) FROM context_assemblies").fetchone() == before_assemblies
     assert case.snapshot(second).seal_binding.prefix.state.epoch.ordinal == 1
+    rebuild_reads.clear()
     rebuilt = case.prepare("compaction")
+    assert len(rebuild_reads) == 1
+    assert rebuild_reads[0] is not None
+    assert rebuild_reads[0].transition.transition_id == pending[0]
     snapshot = case.snapshot(rebuilt)
     assert snapshot.seal_binding.prefix.state.epoch.reason == EpochReason.COMPACTION
     assert snapshot.seal_binding.prefix.state.epoch.ordinal == 2
