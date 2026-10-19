@@ -11,7 +11,7 @@ from dataclasses import replace
 
 import pytest
 
-from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.resource_activation import (
     ResourceActivationContractError,
@@ -24,6 +24,36 @@ from app.domain.itemized.resource_activation import (
 )
 
 DEFAULT_POLICY = ResourceActivationPolicySnapshot.from_dict({"default_boundary": "turn", "overrides": {"mcp_tool_catalog": "model_call"}})
+
+
+def test_cross_language_activation_preimages(resource_activation_vectors) -> None:
+    for vector in resource_activation_vectors["preimages"]:
+        assert canonical_json_bytes(vector["preimage"]).decode("utf-8") == vector["canonical"], vector["id"]
+        assert sha256_jcs(vector["preimage"]) == vector["hash"], vector["id"]
+
+
+def test_cross_language_execution_and_model_call_restore(resource_activation_vectors) -> None:
+    scenario = resource_activation_vectors["scenario"]
+    execution = ResourceActivationSnapshotRef.from_dict(scenario["execution"])
+    call = ResourceActivationSnapshotRef.from_dict(scenario["model_call"], parent=execution)
+    assert execution.to_dict() == scenario["execution"]
+    assert call.to_dict() == scenario["model_call"]
+    assert call.parent is execution
+    assert execution.turn_id is call.turn_id is None
+    assert call.bindings[:len(execution.bindings)] == execution.bindings
+    # 摘要来自独立 ECMAScript 文本向量，领域恢复必须消费同一内容合同。
+    actual_hashes = {
+        "resource-policy": execution.activation_policy.hash,
+        "source-lineage": execution.bindings[0].source_lineage_ref.digest,
+        "execution-bindings": execution.bindings_hash,
+        "execution-provenance": execution.activation_provenance_hash,
+        "model-call-bindings": call.bindings_hash,
+        "model-call-provenance": call.activation_provenance_hash,
+    }
+    assert actual_hashes == {
+        vector["id"]: vector["hash"] for vector in resource_activation_vectors["preimages"]
+    }
+
 
 def lineage(*, revision: str = "raw-rev-1") -> SourceLineageRef:
     return SourceLineageRef(

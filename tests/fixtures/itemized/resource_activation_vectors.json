@@ -1,0 +1,312 @@
+{
+  "schema": "resource-activation-hash-golden:v1",
+  "source": "独立 ECMAScript JCS，固定 execution-owned nullable-Turn 与 members epoch-neutral v1 合同",
+  "serialization": [],
+  "preimages": [
+    {
+      "id": "resource-policy",
+      "preimage": {
+        "default_boundary": "turn",
+        "overrides": {
+          "mcp_tool_catalog": "model_call"
+        }
+      },
+      "canonical": "{\"default_boundary\":\"turn\",\"overrides\":{\"mcp_tool_catalog\":\"model_call\"}}",
+      "hash": "sha256:jcs:v1:27bdd6be4227c0f6a2960677581a56cd5ac2e5aba34b80d9756f0431ed3a02a4"
+    },
+    {
+      "id": "source-lineage",
+      "preimage": {
+        "schema": "source-lineage-digest:v1",
+        "derivation_version": "derive-v1",
+        "sources": [
+          [
+            "src-a",
+            "raw-a-1"
+          ],
+          [
+            "src-z",
+            "raw-z-2"
+          ]
+        ]
+      },
+      "canonical": "{\"derivation_version\":\"derive-v1\",\"schema\":\"source-lineage-digest:v1\",\"sources\":[[\"src-a\",\"raw-a-1\"],[\"src-z\",\"raw-z-2\"]]}",
+      "hash": "sha256:jcs:v1:21afe31dc3a81159dac38c6bd7b6f0a8ffd13dfe45f66d176ab99dbda28c0b6f"
+    },
+    {
+      "id": "execution-bindings",
+      "preimage": {
+        "schema": "resource-activation-bindings:v1",
+        "bindings": [
+          {
+            "resource_id": "skill:demo:metadata",
+            "resource_kind": "skills",
+            "owner_scope": "workspace",
+            "facet": "metadata",
+            "revision": "semantic-1",
+            "content_length": 12,
+            "content_hash": "sha256:jcs:v1:e5a9ef0f5862730cfa88a7904be3321eb4acd68998cbaae1ed8eadfd22220350",
+            "availability": "available",
+            "display_uri": "boxteam://workspace/ws/resources/skills/demo/SKILL.md"
+          }
+        ]
+      },
+      "canonical": "{\"bindings\":[{\"availability\":\"available\",\"content_hash\":\"sha256:jcs:v1:e5a9ef0f5862730cfa88a7904be3321eb4acd68998cbaae1ed8eadfd22220350\",\"content_length\":12,\"display_uri\":\"boxteam://workspace/ws/resources/skills/demo/SKILL.md\",\"facet\":\"metadata\",\"owner_scope\":\"workspace\",\"resource_id\":\"skill:demo:metadata\",\"resource_kind\":\"skills\",\"revision\":\"semantic-1\"}],\"schema\":\"resource-activation-bindings:v1\"}",
+      "hash": "sha256:jcs:v1:22066cd6a0f26eb91f482a145df002471579f2c9e5b0ab217bd0bb479059ce5f"
+    },
+    {
+      "id": "execution-provenance",
+      "preimage": {
+        "schema": "resource-activation-provenance:v1",
+        "snapshot_kind": "execution",
+        "parent_snapshot_kind": null,
+        "parent_bindings_hash": null,
+        "activation_policy_revision": "resource-activation-policy:v1:27bdd6be4227c0f6a2960677581a56cd5ac2e5aba34b80d9756f0431ed3a02a4",
+        "activation_policy_hash": "sha256:jcs:v1:27bdd6be4227c0f6a2960677581a56cd5ac2e5aba34b80d9756f0431ed3a02a4",
+        "registry_generation": 3,
+        "bindings": [
+          {
+            "resource_id": "skill:demo:metadata",
+            "effective_boundary": "turn",
+            "captured_registry_generation": 3,
+            "source_lineage_digest": "sha256:jcs:v1:21afe31dc3a81159dac38c6bd7b6f0a8ffd13dfe45f66d176ab99dbda28c0b6f"
+          }
+        ]
+      },
+      "canonical": "{\"activation_policy_hash\":\"sha256:jcs:v1:27bdd6be4227c0f6a2960677581a56cd5ac2e5aba34b80d9756f0431ed3a02a4\",\"activation_policy_revision\":\"resource-activation-policy:v1:27bdd6be4227c0f6a2960677581a56cd5ac2e5aba34b80d9756f0431ed3a02a4\",\"bindings\":[{\"captured_registry_generation\":3,\"effective_boundary\":\"turn\",\"resource_id\":\"skill:demo:metadata\",\"source_lineage_digest\":\"sha256:jcs:v1:21afe31dc3a81159dac38c6bd7b6f0a8ffd13dfe45f66d176ab99dbda28c0b6f\"}],\"parent_bindings_hash\":null,\"parent_snapshot_kind\":null,\"registry_generation\":3,\"schema\":\"resource-activation-provenance:v1\",\"snapshot_kind\":\"execution\"}",
+      "hash": "sha256:jcs:v1:60ee5d35e2b1db92aa7193d2ed2309e4d63c50955a5d01d192e157ba826bcb8d"
+    },
+    {
+      "id": "model-call-bindings",
+      "preimage": {
+        "schema": "resource-activation-bindings:v1",
+        "bindings": [
+          {
+            "resource_id": "skill:demo:metadata",
+            "resource_kind": "skills",
+            "owner_scope": "workspace",
+            "facet": "metadata",
+            "revision": "semantic-1",
+            "content_length": 12,
+            "content_hash": "sha256:jcs:v1:e5a9ef0f5862730cfa88a7904be3321eb4acd68998cbaae1ed8eadfd22220350",
+            "availability": "available",
+            "display_uri": "boxteam://workspace/ws/resources/skills/demo/SKILL.md"
+          },
+          {
+            "resource_id": "mcp:catalog",
+            "resource_kind": "mcp_tool_catalog",
+            "owner_scope": "workspace",
+            "facet": "tool_catalog",
+            "revision": "catalog-1",
+            "content_length": 12,
+            "content_hash": "sha256:jcs:v1:e5a9ef0f5862730cfa88a7904be3321eb4acd68998cbaae1ed8eadfd22220350",
+            "availability": "available",
+            "display_uri": null
+          }
+        ]
+      },
+      "canonical": "{\"bindings\":[{\"availability\":\"available\",\"content_hash\":\"sha256:jcs:v1:e5a9ef0f5862730cfa88a7904be3321eb4acd68998cbaae1ed8eadfd22220350\",\"content_length\":12,\"display_uri\":\"boxteam://workspace/ws/resources/skills/demo/SKILL.md\",\"facet\":\"metadata\",\"owner_scope\":\"workspace\",\"resource_id\":\"skill:demo:metadata\",\"resource_kind\":\"skills\",\"revision\":\"semantic-1\"},{\"availability\":\"available\",\"content_hash\":\"sha256:jcs:v1:e5a9ef0f5862730cfa88a7904be3321eb4acd68998cbaae1ed8eadfd22220350\",\"content_length\":12,\"display_uri\":null,\"facet\":\"tool_catalog\",\"owner_scope\":\"workspace\",\"resource_id\":\"mcp:catalog\",\"resource_kind\":\"mcp_tool_catalog\",\"revision\":\"catalog-1\"}],\"schema\":\"resource-activation-bindings:v1\"}",
+      "hash": "sha256:jcs:v1:199c7f7592b12579df633bd3ce69af1d9e17a3e7229231cafc6b6577d48674f1"
+    },
+    {
+      "id": "model-call-provenance",
+      "preimage": {
+        "schema": "resource-activation-provenance:v1",
+        "snapshot_kind": "model_call",
+        "parent_snapshot_kind": "execution",
+        "parent_bindings_hash": "sha256:jcs:v1:22066cd6a0f26eb91f482a145df002471579f2c9e5b0ab217bd0bb479059ce5f",
+        "activation_policy_revision": "resource-activation-policy:v1:27bdd6be4227c0f6a2960677581a56cd5ac2e5aba34b80d9756f0431ed3a02a4",
+        "activation_policy_hash": "sha256:jcs:v1:27bdd6be4227c0f6a2960677581a56cd5ac2e5aba34b80d9756f0431ed3a02a4",
+        "registry_generation": 4,
+        "bindings": [
+          {
+            "resource_id": "skill:demo:metadata",
+            "effective_boundary": "turn",
+            "captured_registry_generation": 3,
+            "source_lineage_digest": "sha256:jcs:v1:21afe31dc3a81159dac38c6bd7b6f0a8ffd13dfe45f66d176ab99dbda28c0b6f"
+          },
+          {
+            "resource_id": "mcp:catalog",
+            "effective_boundary": "model_call",
+            "captured_registry_generation": 4,
+            "source_lineage_digest": "sha256:jcs:v1:21afe31dc3a81159dac38c6bd7b6f0a8ffd13dfe45f66d176ab99dbda28c0b6f"
+          }
+        ]
+      },
+      "canonical": "{\"activation_policy_hash\":\"sha256:jcs:v1:27bdd6be4227c0f6a2960677581a56cd5ac2e5aba34b80d9756f0431ed3a02a4\",\"activation_policy_revision\":\"resource-activation-policy:v1:27bdd6be4227c0f6a2960677581a56cd5ac2e5aba34b80d9756f0431ed3a02a4\",\"bindings\":[{\"captured_registry_generation\":3,\"effective_boundary\":\"turn\",\"resource_id\":\"skill:demo:metadata\",\"source_lineage_digest\":\"sha256:jcs:v1:21afe31dc3a81159dac38c6bd7b6f0a8ffd13dfe45f66d176ab99dbda28c0b6f\"},{\"captured_registry_generation\":4,\"effective_boundary\":\"model_call\",\"resource_id\":\"mcp:catalog\",\"source_lineage_digest\":\"sha256:jcs:v1:21afe31dc3a81159dac38c6bd7b6f0a8ffd13dfe45f66d176ab99dbda28c0b6f\"}],\"parent_bindings_hash\":\"sha256:jcs:v1:22066cd6a0f26eb91f482a145df002471579f2c9e5b0ab217bd0bb479059ce5f\",\"parent_snapshot_kind\":\"execution\",\"registry_generation\":4,\"schema\":\"resource-activation-provenance:v1\",\"snapshot_kind\":\"model_call\"}",
+      "hash": "sha256:jcs:v1:6264b8396e7a57b86e949efe5af5b05fe3098f3b41e7f38fc5cf94bd153d23cf"
+    }
+  ],
+  "scenario": {
+    "execution": {
+      "activation_snapshot_id": "activation-execution",
+      "snapshot_kind": "execution",
+      "parent_execution_snapshot_id": null,
+      "activation_policy_revision": "resource-activation-policy:v1:27bdd6be4227c0f6a2960677581a56cd5ac2e5aba34b80d9756f0431ed3a02a4",
+      "activation_policy_hash": "sha256:jcs:v1:27bdd6be4227c0f6a2960677581a56cd5ac2e5aba34b80d9756f0431ed3a02a4",
+      "activation_policy": {
+        "default_boundary": "turn",
+        "overrides": {
+          "mcp_tool_catalog": "model_call"
+        }
+      },
+      "registry_generation": 3,
+      "owner_session_id": "ses_golden",
+      "owner_thread_id": "thr_golden",
+      "execution_id": "execution-internal",
+      "turn_id": null,
+      "model_call_id": null,
+      "captured_at": "2026-10-19T00:00:00+00:00",
+      "bindings_hash": "sha256:jcs:v1:22066cd6a0f26eb91f482a145df002471579f2c9e5b0ab217bd0bb479059ce5f",
+      "activation_provenance_hash": "sha256:jcs:v1:60ee5d35e2b1db92aa7193d2ed2309e4d63c50955a5d01d192e157ba826bcb8d",
+      "bindings": [
+        {
+          "resource_id": "skill:demo:metadata",
+          "resource_kind": "skills",
+          "owner_scope": "workspace",
+          "facet": "metadata",
+          "revision": "semantic-1",
+          "content_length": 12,
+          "content_hash": "sha256:jcs:v1:e5a9ef0f5862730cfa88a7904be3321eb4acd68998cbaae1ed8eadfd22220350",
+          "availability": "available",
+          "display_uri": "boxteam://workspace/ws/resources/skills/demo/SKILL.md",
+          "source_lineage_ref": {
+            "lineage_id": "lineage-demo",
+            "derivation_version": "derive-v1",
+            "sources": [
+              [
+                "src-z",
+                "raw-z-2"
+              ],
+              [
+                "src-a",
+                "raw-a-1"
+              ]
+            ],
+            "digest": "sha256:jcs:v1:21afe31dc3a81159dac38c6bd7b6f0a8ffd13dfe45f66d176ab99dbda28c0b6f"
+          },
+          "source_lineage_digest": "sha256:jcs:v1:21afe31dc3a81159dac38c6bd7b6f0a8ffd13dfe45f66d176ab99dbda28c0b6f",
+          "activation_ordinal": 1,
+          "effective_boundary": "turn",
+          "captured_registry_generation": 3,
+          "snapshot_ref": {
+            "session_id": "ses_golden",
+            "thread_id": "thr_golden",
+            "assembly_id": "asm_golden",
+            "detail_id": "skill-body"
+          },
+          "detail_ref": null,
+          "members": []
+        }
+      ]
+    },
+    "model_call": {
+      "activation_snapshot_id": "activation-call",
+      "snapshot_kind": "model_call",
+      "parent_execution_snapshot_id": "activation-execution",
+      "activation_policy_revision": "resource-activation-policy:v1:27bdd6be4227c0f6a2960677581a56cd5ac2e5aba34b80d9756f0431ed3a02a4",
+      "activation_policy_hash": "sha256:jcs:v1:27bdd6be4227c0f6a2960677581a56cd5ac2e5aba34b80d9756f0431ed3a02a4",
+      "activation_policy": {
+        "default_boundary": "turn",
+        "overrides": {
+          "mcp_tool_catalog": "model_call"
+        }
+      },
+      "registry_generation": 4,
+      "owner_session_id": "ses_golden",
+      "owner_thread_id": "thr_golden",
+      "execution_id": "execution-internal",
+      "turn_id": null,
+      "model_call_id": "call-golden",
+      "captured_at": "2026-10-19T00:00:01+00:00",
+      "bindings_hash": "sha256:jcs:v1:199c7f7592b12579df633bd3ce69af1d9e17a3e7229231cafc6b6577d48674f1",
+      "activation_provenance_hash": "sha256:jcs:v1:6264b8396e7a57b86e949efe5af5b05fe3098f3b41e7f38fc5cf94bd153d23cf",
+      "bindings": [
+        {
+          "resource_id": "skill:demo:metadata",
+          "resource_kind": "skills",
+          "owner_scope": "workspace",
+          "facet": "metadata",
+          "revision": "semantic-1",
+          "content_length": 12,
+          "content_hash": "sha256:jcs:v1:e5a9ef0f5862730cfa88a7904be3321eb4acd68998cbaae1ed8eadfd22220350",
+          "availability": "available",
+          "display_uri": "boxteam://workspace/ws/resources/skills/demo/SKILL.md",
+          "source_lineage_ref": {
+            "lineage_id": "lineage-demo",
+            "derivation_version": "derive-v1",
+            "sources": [
+              [
+                "src-z",
+                "raw-z-2"
+              ],
+              [
+                "src-a",
+                "raw-a-1"
+              ]
+            ],
+            "digest": "sha256:jcs:v1:21afe31dc3a81159dac38c6bd7b6f0a8ffd13dfe45f66d176ab99dbda28c0b6f"
+          },
+          "source_lineage_digest": "sha256:jcs:v1:21afe31dc3a81159dac38c6bd7b6f0a8ffd13dfe45f66d176ab99dbda28c0b6f",
+          "activation_ordinal": 1,
+          "effective_boundary": "turn",
+          "captured_registry_generation": 3,
+          "snapshot_ref": {
+            "session_id": "ses_golden",
+            "thread_id": "thr_golden",
+            "assembly_id": "asm_golden",
+            "detail_id": "skill-body"
+          },
+          "detail_ref": null,
+          "members": []
+        },
+        {
+          "resource_id": "mcp:catalog",
+          "resource_kind": "mcp_tool_catalog",
+          "owner_scope": "workspace",
+          "facet": "tool_catalog",
+          "revision": "catalog-1",
+          "content_length": 12,
+          "content_hash": "sha256:jcs:v1:e5a9ef0f5862730cfa88a7904be3321eb4acd68998cbaae1ed8eadfd22220350",
+          "availability": "available",
+          "display_uri": null,
+          "source_lineage_ref": {
+            "lineage_id": "lineage-demo",
+            "derivation_version": "derive-v1",
+            "sources": [
+              [
+                "src-z",
+                "raw-z-2"
+              ],
+              [
+                "src-a",
+                "raw-a-1"
+              ]
+            ],
+            "digest": "sha256:jcs:v1:21afe31dc3a81159dac38c6bd7b6f0a8ffd13dfe45f66d176ab99dbda28c0b6f"
+          },
+          "source_lineage_digest": "sha256:jcs:v1:21afe31dc3a81159dac38c6bd7b6f0a8ffd13dfe45f66d176ab99dbda28c0b6f",
+          "activation_ordinal": 2,
+          "effective_boundary": "model_call",
+          "captured_registry_generation": 4,
+          "snapshot_ref": null,
+          "detail_ref": {
+            "session_id": "ses_golden",
+            "thread_id": "thr_golden",
+            "assembly_id": "asm_golden",
+            "detail_id": "mcp-body"
+          },
+          "members": [
+            {
+              "member_id": "target-a",
+              "member_kind": "mcp",
+              "schema_hash": "sha256:fe2f3b4ef49492d81cb350fb689bf9f9dff6cfd1817d72d6ff9fe3350e3d5e6a",
+              "server_id": "server-a",
+              "revision": "server-v1"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

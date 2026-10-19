@@ -30,6 +30,12 @@ def hash_vectors() -> dict[str, object]:
 
 
 @pytest.fixture(scope="session")
+def resource_activation_vectors() -> dict[str, object]:
+    path = Path.cwd() / "tests/fixtures/itemized/resource_activation_vectors.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="session")
 def item_matrix() -> dict[str, object]:
     path = Path.cwd() / "tests/fixtures/itemized/item_matrix.json"
     return json.loads(path.read_text(encoding="utf-8"))

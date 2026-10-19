@@ -68,7 +68,16 @@ export function verifyVectors(vectors) {
 }
 
 if (import.meta.main) {
-  const path = resolve(process.cwd(), process.argv[2] ?? 'tests/fixtures/itemized/hash_vectors.json');
-  const vectors = JSON.parse(readFileSync(path, 'utf8'));
-  console.log(JSON.stringify(verifyVectors(vectors)));
+  const paths = process.argv.slice(2);
+  if (paths.length === 0) paths.push(
+    'tests/fixtures/itemized/hash_vectors.json',
+    'tests/fixtures/itemized/resource_activation_vectors.json',
+  );
+  const totals = { accepted: 0, rejected: 0, preimages: 0 };
+  for (const path of paths) {
+    const vectors = JSON.parse(readFileSync(resolve(process.cwd(), path), 'utf8'));
+    const result = verifyVectors(vectors);
+    for (const key of Object.keys(totals)) totals[key] += result[key];
+  }
+  console.log(JSON.stringify(totals));
 }
