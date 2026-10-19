@@ -55,7 +55,7 @@ def test_conditional_source_follows_visible_tool_policy_and_preserves_sealed_ret
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """create_team 是受信注册桩；这里只证明 policy/source，不执行团队创建。"""
-    saver, session, thread, _connection, selection, manager, captured, registered, dispatch = factory_context
+    saver, session, thread, _connection, selection, manager, captured, registered, dispatch, _file_registry = factory_context
     owner = ContextSourceOwnerKey(session, thread)
     bridge = captured["middleware"][-1]
     registered_names = set(registered)
