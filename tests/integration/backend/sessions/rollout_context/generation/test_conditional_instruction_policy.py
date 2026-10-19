@@ -47,17 +47,19 @@ def isolated_policy_workspace(request: pytest.FixtureRequest) -> None:
         ),
     ],
 )
+@pytest.mark.parametrize("disabled_selection", [(True, False), (False, False)], ids=["hidden", "disabled"])
 def test_conditional_source_follows_visible_tool_policy_and_preserves_sealed_retry(
     factory_context,
     source_id: str,
     policy_key: str,
     tool_names: tuple[str, ...],
+    disabled_selection: tuple[bool, bool],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """create_team 是受信注册桩；这里只证明 policy/source，不执行团队创建。"""
     saver, session, thread, _connection, selection, manager, captured, registered, dispatch, _file_registry = factory_context
     owner = ContextSourceOwnerKey(session, thread)
-    bridge = captured["middleware"][-1]
+    bridge = captured["execution"]
     registered_names = set(registered)
     assert set(tool_names) <= registered_names
     descriptors = {descriptor.source_id: descriptor for descriptor in manager.descriptors()}
@@ -83,13 +85,13 @@ def test_conditional_source_follows_visible_tool_policy_and_preserves_sealed_ret
         reads["tool_sets"] += 1
         return tool_snapshot(*args, **kwargs)
 
-    for step, visible in enumerate((True, False, True)):
+    for step, (executable, visible) in enumerate(((True, True), disabled_selection, (True, True))):
         selection.apply_changes(
             agent_id="default",
-            changes={name: (True, visible) for name in tool_names},
+            changes={name: (executable, visible) for name in tool_names},
         )
         chosen = selection.snapshot("default")
-        assert all(chosen.execution_overrides[name] is True for name in tool_names)
+        assert all(chosen.execution_overrides[name] is executable for name in tool_names)
         assert all(chosen.model_visibility_overrides[name] is visible for name in tool_names)
         assert set(registered) == registered_names
 

@@ -67,7 +67,8 @@
 - [ ] 7.3 增加 scope_id 推导测试：`gateway`/`inline` 的 scope_id 不再是字面量 `local` 且两者不再相同；`inline` 使用真实 `distribution_id` 并按 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」的编码规则单射（不同 (distribution, version) 必得不同 scope_id，由 version charset 不含下划线保证）、跨安装路径稳定、manifest 缺字段时 fail-closed；`gateway` 按 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」验证「按请求注入而非进程级单例」「缺失/非法时 fail-closed」「MUST NOT 用 host:port/监听端口」；`user` 恒为 `local`。
 - [ ] 7.4 增加星型解析与失败语义测试：authority 缺省与本机 gateway_id 同解、hub 直连直接 spoke、spoke 经唯一 hub 一次有界 transit、上界与 deadline 为 policy 常量且超限显式失败、不可达/未共享/未知 gateway 分别返回集中登记的**联邦解析期**拒绝码（`federation-channel-closed`/`target_not_resolvable`/`federation-unknown-peer`）、「未授权存在」与「不存在」不可区分、不递归转发。
 - [ ] 7.5 增加拒绝码登记测试：grammar、resolve 与联邦解析期三套闭集各自独立、未登记码构造即失败、三套不混用、其它模块无自造同义码。
-- [ ] 7.6 增加配置来源契约测试：校验 source URI/`layer`/`precedence` 继续为平级字段，逻辑来源映射符合 owner requirement；读侧 runtime override 报逻辑 layer 与原 precedence，物理 SQLite carrier 不外露，`active_snapshot` / `pending_snapshot` 不进入 `sources[]`；无可寻址来源文件时 URI 为空且不伪造地址；持久化与 API 不泄漏 real path。
+- [x] 7.6 增加配置来源契约测试：校验 source URI/`layer`/`precedence` 继续为平级字段，逻辑来源映射符合 owner requirement；读侧 runtime override 报逻辑 layer 与原 precedence，物理 SQLite carrier 不外露，`active_snapshot` / `pending_snapshot` 不进入 `sources[]`；无可寻址来源文件时 URI 为空且不伪造地址；持久化与 API 不泄漏 real path。
+  - 2026-10-19 `uri-config-source-contracts-001` 对 config API、workspace config source storage、ConfigService 三个完整文件验证通过（97 passed，94.91s，exit 0，源码前后指纹一致）。具名断言覆盖平级 URI/layer/precedence、runtime override 逻辑层及原 precedence、无稳定来源时 URI null、拒绝 active_snapshot/pending_snapshot 伪来源、持久化与 API 无 real path、冷读恢复层级一致；命令及原始输出见 `out/tests/temp/openspec_takeover/artifacts/runs/uri-config-source-contracts-001/`。
 - [ ] 7.7 运行仓库既有校验并记录证据：`openspec validate --strict --all` 必须 0 failed，且本 change 与其它四个 change 之间均无残留的第二套 URI 语法、自造 kind 或自造拒绝码。
 
 ## 8. 可导航资源根与轻量文件寻址（2026-10-05 新增，部分实施）
