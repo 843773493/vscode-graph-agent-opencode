@@ -8,9 +8,9 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
     runtime_seal_bytes_and_hash,
+    seal_snapshot_prefix,
     validate_sealed_plan,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
@@ -55,9 +55,7 @@ def preflight_seal(
     # RFC 8785 将固定成员排为 detail_ref、schema、snapshot；最后一个 value
     # 就是本次已编码的 snapshot。只在 writer 准入成功后取其字节，冷读只核
     # envelope hash；前缀转义仍交给唯一 JCS 编码器，不另行拼装 JSON。
-    prefix_length = len(canonical_json_bytes({
-        "schema": "context-plan-seal:v1", "detail_ref": detail_key,
-    })) - 1 + len(b',"snapshot":')
+    prefix_length = len(seal_snapshot_prefix(detail_key))
     return ContextPlanSeal(
         registered=registered, snapshot=snapshot,
         snapshot_json=sealed_bytes[prefix_length:-1].decode("utf-8"),

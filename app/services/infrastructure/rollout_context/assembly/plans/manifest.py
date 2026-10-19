@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import fields, replace
+from hashlib import sha256
 from typing import cast
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
@@ -155,19 +156,49 @@ def _included_tool_draft(
     return replace(draft, tool_set_refs=tuple(sources[key] for key in sorted(included)))
 
 
+def _require_seal_input_hash(input_hash: str) -> None:
+    if not isinstance(input_hash, str) or re.fullmatch(r"sha256:jcs:v1:[0-9a-f]{64}", input_hash) is None:
+        raise ValueError("assembly-idempotency-conflict: seal_input_hash 必须是规范 JCS SHA-256 摘要")
+
+
+def _runtime_seal_hash(sealed_hash: str, input_hash: str) -> str:
+    return sha256_jcs({
+        "schema": "context-plan-runtime-seal:v1",
+        "seal_input_hash": input_hash,
+        "sealed_hash": sealed_hash,
+    })
+
+
+def seal_snapshot_prefix(detail_key: str | None) -> bytes:
+    """固定 envelope 的前缀仍由唯一 JCS 编码器处理转义和字段顺序。"""
+    return canonical_json_bytes({
+        "schema": "context-plan-seal:v1", "detail_ref": detail_key,
+    })[:-1] + b',"snapshot":'
+
+
 def runtime_seal_bytes_and_hash(
     snapshot: ContextAssemblySnapshot, detail_key: str | None, input_hash: str
 ) -> tuple[bytes, str]:
-    """同次返回完整 seal envelope 字节与绑定摘要，不保留跨调用缓存。"""
-    if not isinstance(input_hash, str) or re.fullmatch(r"sha256:jcs:v1:[0-9a-f]{64}", input_hash) is None:
-        raise ValueError("assembly-idempotency-conflict: seal_input_hash 必须是规范 JCS SHA-256 摘要")
+    """writer 编码一次完整 envelope，持久正文与摘要共用本次字节。"""
+    _require_seal_input_hash(input_hash)
     sealed_bytes, sealed_hash = canonical_json_bytes_and_hash({
         "schema": "context-plan-seal:v1",
         "snapshot": snapshot.to_dict(),
         "detail_ref": detail_key,
     })
-    return sealed_bytes, sha256_jcs({
-        "schema": "context-plan-runtime-seal:v1",
-        "seal_input_hash": input_hash,
-        "sealed_hash": sealed_hash,
-    })
+    return sealed_bytes, _runtime_seal_hash(sealed_hash, input_hash)
+
+
+def persisted_runtime_seal_hash(
+    snapshot_json: str, detail_key: str | None, input_hash: str,
+) -> str:
+    """cold 读取直接校验本次 SQL 的规范正文，不再投影和重编码大 snapshot。
+
+    domain、plan/request 与 registry 仍由 reader 完整校验；持久文本的任何
+    字节变化都必须与原 writer 的 seal 摘要重新比对，不能信任已存摘要。
+    """
+    _require_seal_input_hash(input_hash)
+    sealed = sha256(seal_snapshot_prefix(detail_key))
+    sealed.update(snapshot_json.encode("utf-8"))
+    sealed.update(b"}")
+    return _runtime_seal_hash("sha256:jcs:v1:" + sealed.hexdigest(), input_hash)

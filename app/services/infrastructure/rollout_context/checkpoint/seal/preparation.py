@@ -43,7 +43,7 @@ from app.services.infrastructure.rollout_context.assembly.manifest import (
     _frozen_source_refs,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
-    _new_validated_predecessors,
+    _ValidatedPredecessors,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextPlanRegistration,
@@ -219,8 +219,8 @@ def prepare_registered_context(
                 target_format=target_format, checkpoint_ns=checkpoint_ns,
             )
         else:
-            # 成功摘要仅沿本次 prepare 传给 seal writer 的前驱重读，不跨请求保存对象。
-            validated_predecessors = _new_validated_predecessors()
+            # 成功 SQL 行仅沿本次 prepare 传给 seal writer 重读，不跨请求保存。
+            validated_predecessors: _ValidatedPredecessors = {}
             # 只有新请求读取 desired；已 sealed/in-flight attempt 完全复用旧 binding。
             tool_set = tool_set_supplier()
             if not isinstance(tool_set, ToolSetSnapshot):

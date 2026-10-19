@@ -159,6 +159,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                         self._validate_context_assembly_manifest(
                             connection, snapshot, registration=registration,
                             header_detail_ref=detail_key, checkpoint_ns=checkpoint_ns,
+                            validated_predecessors=validated_predecessors,
                         )
                         return ContextAssemblySealReceipt(
                             non_negative_int(commit_row[0], field="commit_id"),
@@ -252,6 +253,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                 _assert_one_row(cursor, context="context assembly 写入")
                 self._write_context_assembly_manifest(
                     connection, snapshot, checkpoint_ns=checkpoint_ns,
+                    validated_predecessors=validated_predecessors,
                 )
                 registration = bind_sealed_registration(connection, seal)
                 if activation_binding is not None:
@@ -274,6 +276,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                 self._validate_context_assembly_manifest(
                     connection, snapshot, registration=registration,
                     header_detail_ref=detail_key, checkpoint_ns=checkpoint_ns,
+                    validated_predecessors=validated_predecessors,
                 )
                 published = []
                 try:

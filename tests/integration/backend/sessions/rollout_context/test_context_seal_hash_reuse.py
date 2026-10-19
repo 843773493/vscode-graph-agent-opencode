@@ -268,6 +268,21 @@ def test_prepare_persists_the_once_encoded_snapshot_and_cold_retry_revalidates(
     })).hexdigest()
     assert registration.seal_hash == expected_hash
     assert seal_preimage["detail_ref"] == detail_key
+
+    def forbid_snapshot_projection(_snapshot):
+        raise AssertionError("cold registry 不得重新投影大 snapshot 来计算 seal hash")
+
+    # 经过真实 registry 入口证明 cold hash 消费当次 SQL 文本；typed parse、
+    # draft/plan/request 与派生索引仍完整验证，两次读取不共享对象或校验结果。
+    with (
+        monkeypatch.context() as cold_patch,
+        RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold,
+    ):
+        cold_patch.setattr(ContextAssemblySnapshot, "to_dict", forbid_snapshot_projection)
+        cold_first = cold.get_context_plan_registration(session, thread_id=thread, plan_id=snapshot.plan_id)
+        cold_second = cold.get_context_plan_registration(session, thread_id=thread, plan_id=snapshot.plan_id)
+        assert cold_first.sealed_snapshot is not cold_second.sealed_snapshot
+        assert cold_first.seal_hash == cold_second.seal_hash == registration.seal_hash
     retried = prepare("canonical-seal", supplier=lambda: selected, target_format=target_format)
     assert retried["snapshot"].to_dict() == snapshot.to_dict()
     assert len(encodings) == 1
@@ -298,6 +313,9 @@ def test_seal_encoding_preserves_envelope_bytes_and_observes_each_snapshot(produ
                 "detail_ref": detail_key,
             }),
         })
+        assert manifest.persisted_runtime_seal_hash(
+            canonical_json_bytes(snapshot.to_dict()).decode(), detail_key, input_hash,
+        ) == digest
     damaged = ContextAssemblySnapshot.from_dict(snapshot.to_dict())
     object.__setattr__(damaged, "request_hash_preimage", {"changed": "新正文"})
     changed_bytes, changed_hash = manifest.runtime_seal_bytes_and_hash(damaged, detail_key, input_hash)
@@ -309,3 +327,26 @@ def test_seal_encoding_preserves_envelope_bytes_and_observes_each_snapshot(produ
         manifest.runtime_seal_bytes_and_hash(damaged, detail_key, "not-a-hash")
     with pytest.raises(ItemSchemaError, match="value.snapshot.request_hash_preimage.invalid"):
         manifest.runtime_seal_bytes_and_hash(damaged, detail_key, input_hash)
+
+
+@pytest.mark.parametrize("damage", ["whitespace", "unknown-field"])
+def test_cold_registry_hash_binds_actual_snapshot_text(production_context, damage):
+    saver, session, thread, connection, _manager, prepare = production_context
+    snapshot = prepare("cold-text-integrity")["snapshot"]
+    original = connection.execute(
+        "SELECT snapshot_json FROM context_assemblies WHERE assembly_id=?", (snapshot.assembly_id,),
+    ).fetchone()[0]
+    altered = " " + original if damage == "whitespace" else original[:-1] + ',"unknown":null}'
+    with connection:
+        connection.execute(
+            "UPDATE context_assemblies SET snapshot_json=? WHERE assembly_id=?",
+            (altered, snapshot.assembly_id),
+        )
+    with (
+        RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold,
+        pytest.raises(ValueError, match="source-mismatch: sealed plan preimage 与 assembly 不一致"),
+    ):
+        cold.get_context_plan_registration(session, thread_id=thread, plan_id=snapshot.plan_id)
+    assert connection.execute(
+        "SELECT snapshot_json FROM context_assemblies WHERE assembly_id=?", (snapshot.assembly_id,),
+    ).fetchone() == (altered,)

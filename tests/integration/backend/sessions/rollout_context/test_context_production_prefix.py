@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections import Counter
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -210,6 +211,86 @@ def test_prepare_reads_predecessor_once_per_attempt_and_public_composition_per_s
     assert (plan.session_id, plan.thread_id) == (session, thread)
 
 
+@pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
+def test_prepare_shares_predecessor_validation_with_source_frontiers(
+    production_context, monkeypatch, target_format,
+):
+    saver, session, thread, connection, manager, prepare = production_context
+    selected = ToolSetSnapshot(
+        selection_revision=sha256_jcs("source-frontier-tools"),
+        tools=({
+            "name": "inspect_frontier", "description": "保留完整工具正文" * 256,
+            "parameters": {"type": "object", "properties": {
+                "value": {"type": "string", "examples": ["来源正文" * 128]},
+            }},
+        },),
+    )
+    first = prepare("frontier-first", target_format=target_format, supplier=lambda: selected)
+    original_registration = assembly_reader.read_registration
+    original_hash = plan_registry.persisted_runtime_seal_hash
+    original_registry = plan_registry.validate_registry
+    reads, hashes, registries = [], [], []
+
+    def seal_hash(snapshot_json, *args):
+        result = original_hash(snapshot_json, *args)
+        hashes.append(json.loads(snapshot_json)["assembly_id"])
+        return result
+
+    def validate_registry(connection, plan, assembly_id):
+        original_registry(connection, plan, assembly_id)
+        registries.append(assembly_id)
+
+    def read_registration(connection, *args, **kwargs):
+        before = len(registries)
+        registered = original_registration(connection, *args, **kwargs)
+        assert registries[before:] == [registered.assembly_id]
+        reads.append((kwargs.get("validated_predecessors"), registered))
+        return registered
+
+    monkeypatch.setattr(assembly_reader, "read_registration", read_registration)
+    monkeypatch.setattr(plan_registry, "persisted_runtime_seal_hash", seal_hash)
+    monkeypatch.setattr(plan_registry, "validate_registry", validate_registry)
+    predecessors = {first["assembly_id"]}
+    attempts = []
+    for key in ("frontier-second", "frontier-third"):
+        before_reads, before_hashes = len(reads), len(hashes)
+        manager.observe("instruction:R01", "基础规则第二版", revision="instructions:2")
+        prepared = prepare(key, target_format=target_format, supplier=lambda: selected)
+        current_reads = reads[before_reads:]
+        assert {registered.assembly_id for _, registered in current_reads} == predecessors
+        token = current_reads[0][0]
+        assert token is not None and all(state is token for state, _ in current_reads)
+        attempts.append(token)
+        assert Counter(hashes[before_hashes:]) == Counter(dict.fromkeys(predecessors, 1))
+        # source frontier 的写入、writer 重读和最终逐字段校验均保留真实 registry 读取。
+        assert len(current_reads) > len(predecessors)
+        assert len({id(registered.sealed_snapshot) for _, registered in current_reads}) == len(current_reads)
+        source_positions = connection.execute(
+            "SELECT source_cut_position_kind,source_cut_item_id FROM context_assembly_selections "
+            "WHERE assembly_id=? AND included=1 AND ref_type='request_only'",
+            (prepared["assembly_id"],),
+        ).fetchall()
+        assert source_positions and all(kind == "after_canonical" and item_id for kind, item_id in source_positions)
+        predecessors.add(prepared["assembly_id"])
+    assert attempts[0] is not attempts[1]
+
+    # 独立冷恢复不消费前一 prepare 的成功行，完整校验当前和精确来源前驱。
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        for _ in range(2):
+            before_reads, before_hashes = len(reads), len(hashes)
+            restored = cold.get_context_assembly(session, thread, assembly_id=prepared["assembly_id"])
+            current_reads = reads[before_reads:]
+            assert all(token is None for token, _ in current_reads)
+            assert Counter(hashes[before_hashes:]) == Counter(
+                registered.assembly_id for _, registered in current_reads
+            )
+            assert restored.to_dict() == prepared["snapshot"].to_dict()
+            assert cold.project_context_plan_to_provider(
+                session, thread, restored.as_sealed_plan(), target_format=target_format,
+                include_runtime_notices=True, include_summaries=True,
+            ) == (prepared["messages"], prepared["tools"], prepared["losses"])
+
+
 @pytest.mark.parametrize("production_context", [False], indirect=True, ids=["no-sources"])
 def test_prepare_reuses_only_pure_predecessor_validation_within_one_attempt(
     production_context, monkeypatch,
@@ -220,7 +301,7 @@ def test_prepare_reuses_only_pure_predecessor_validation_within_one_attempt(
     original_registration = assembly_reader.read_registration
     original_read = assemblies._read_context_assembly_connection
     original_validate = plan_registry.validate_sealed_plan
-    original_hash = plan_registry.runtime_seal_bytes_and_hash
+    original_hash = plan_registry.persisted_runtime_seal_hash
     original_registry = plan_registry.validate_registry
     original_parse = ContextAssemblySnapshot.from_dict
     original_draft_hash = plan_registry.canonical_json_bytes_and_hash
@@ -230,9 +311,9 @@ def test_prepare_reuses_only_pure_predecessor_validation_within_one_attempt(
         original_validate(plan, snapshot)
         validations.append(snapshot.assembly_id)
 
-    def seal_hash(snapshot, *args):
-        result = original_hash(snapshot, *args)
-        hashes.append(snapshot.assembly_id)
+    def seal_hash(snapshot_json, *args):
+        result = original_hash(snapshot_json, *args)
+        hashes.append(json.loads(snapshot_json)["assembly_id"])
         return result
 
     def validate_registry(connection, plan, assembly_id):
@@ -250,14 +331,14 @@ def test_prepare_reuses_only_pure_predecessor_validation_within_one_attempt(
         return result
 
     def read_registration(connection, *args, **kwargs):
-        fingerprints = kwargs.get("validated_predecessors")
+        validated_rows = kwargs.get("validated_predecessors")
         before = (len(validations), len(hashes), len(registries), len(parsed), len(drafts))
-        initial_size = None if fingerprints is None else len(fingerprints)
+        initial_size = None if validated_rows is None else len(validated_rows)
         result = original_registration(connection, *args, **kwargs)
         delta = tuple(after - start for after, start in zip(
             (len(validations), len(hashes), len(registries), len(parsed), len(drafts)), before, strict=True,
         ))
-        registrations.append((fingerprints, initial_size, result, delta))
+        registrations.append((validated_rows, initial_size, result, delta))
         return result
 
     def read(connection, *args, **kwargs):
@@ -271,7 +352,7 @@ def test_prepare_reuses_only_pure_predecessor_validation_within_one_attempt(
         return result
 
     monkeypatch.setattr(plan_registry, "validate_sealed_plan", validate)
-    monkeypatch.setattr(plan_registry, "runtime_seal_bytes_and_hash", seal_hash)
+    monkeypatch.setattr(plan_registry, "persisted_runtime_seal_hash", seal_hash)
     monkeypatch.setattr(plan_registry, "validate_registry", validate_registry)
     monkeypatch.setattr(plan_registry, "canonical_json_bytes_and_hash", draft_hash)
     monkeypatch.setattr(ContextAssemblySnapshot, "from_dict", classmethod(parse))
@@ -281,7 +362,6 @@ def test_prepare_reuses_only_pure_predecessor_validation_within_one_attempt(
     assert [entry[1] for entry in registrations] == [0, 1]
     assert [entry[3] for entry in registrations] == [(1, 1, 1, 1, 1), (0, 0, 1, 1, 1)]
     assert registrations[0][0] is registrations[1][0]
-    assert all(isinstance(key, bytes) for key in registrations[0][0])
     assert registrations[0][2] is not registrations[1][2]
     assert registrations[0][2].draft is not registrations[1][2].draft
     assert reads[0][0] is not reads[1][0]
@@ -318,26 +398,7 @@ def test_prepare_reuses_only_pure_predecessor_validation_within_one_attempt(
 
 
 @pytest.mark.parametrize("production_context", [False], indirect=True, ids=["no-sources"])
-def test_registry_rejects_caller_supplied_predecessor_fingerprint(production_context):
-    _saver, session, thread, connection, _manager, prepare = production_context
-    prepared = prepare("caller-fingerprint")
-    plan_id = prepared["plan"].plan_id
-    cache = plan_registry._new_validated_predecessors()
-    registration = plan_registry.read_registration(
-        connection, session, thread, plan_id, validated_predecessors=cache,
-    )
-    assert registration.assembly_id == prepared["assembly_id"]
-    assert len(cache) == 1
-
-    with pytest.raises(TypeError, match="必须由 plan registry 创建"):
-        plan_registry.read_registration(
-            connection, session, thread, plan_id,
-            validated_predecessors=set(cache),
-        )
-
-
-@pytest.mark.parametrize("production_context", [False], indirect=True, ids=["no-sources"])
-@pytest.mark.parametrize("changed_field", ["seal_hash", "seal_input_hash", "detail_ref"])
+@pytest.mark.parametrize("changed_field", ["seal_hash", "seal_input_hash", "detail_ref", "snapshot_json"])
 def test_prepare_revalidates_predecessor_changed_after_assembly_insert(
     production_context, monkeypatch, changed_field,
 ):
@@ -356,39 +417,45 @@ def test_prepare_revalidates_predecessor_changed_after_assembly_insert(
     if changed_field == "detail_ref":
         table, identity, identity_value = "context_assemblies", "assembly_id", assembly_id
         changed_value = json.dumps(DetailRef(session, thread, assembly_id, "forged-detail").to_dict())
+    elif changed_field == "snapshot_json":
+        table, identity, identity_value = "context_assemblies", "assembly_id", assembly_id
+        changed_value = " " + connection.execute(
+            "SELECT snapshot_json FROM context_assemblies WHERE assembly_id=?", (assembly_id,),
+        ).fetchone()[0]
+    changed_sql = "'" + changed_value.replace("'", "''") + "'"
     connection.execute(
         "CREATE TRIGGER change_predecessor_after_insert AFTER INSERT ON context_assemblies "
-        f"BEGIN UPDATE {table} SET {changed_field}='{changed_value}' "
+        f"BEGIN UPDATE {table} SET {changed_field}={changed_sql} "
         f"WHERE {identity}='{identity_value}'; END"
     )
     connection.commit()
     original_registration = assembly_reader.read_registration
     original_validate = plan_registry.validate_sealed_plan
-    original_hash = plan_registry.runtime_seal_bytes_and_hash
+    original_hash = plan_registry.persisted_runtime_seal_hash
     stages, validations, hashes = [], [], []
 
     def read_registration(connection, *args, **kwargs):
-        fingerprints = kwargs.get("validated_predecessors")
+        validated_rows = kwargs.get("validated_predecessors")
         assert args == (session, thread, plan_id)
-        assert fingerprints is not None
+        assert validated_rows is not None
         observed = connection.execute(
             f"SELECT {changed_field} FROM {table} WHERE {identity}=?", (identity_value,),
         ).fetchone()[0]
         assembly_count = connection.execute("SELECT count(*) FROM context_assemblies").fetchone()[0]
-        stages.append((connection.in_transaction, fingerprints, len(fingerprints), observed, assembly_count))
+        stages.append((connection.in_transaction, validated_rows, len(validated_rows), observed, assembly_count))
         return original_registration(connection, *args, **kwargs)
 
     def validate(plan, snapshot):
         validations.append(snapshot.assembly_id)
         return original_validate(plan, snapshot)
 
-    def seal_hash(snapshot, detail_ref, input_hash):
-        hashes.append((snapshot.assembly_id, detail_ref, input_hash))
-        return original_hash(snapshot, detail_ref, input_hash)
+    def seal_hash(snapshot_json, detail_ref, input_hash):
+        hashes.append((json.loads(snapshot_json)["assembly_id"], detail_ref, input_hash))
+        return original_hash(snapshot_json, detail_ref, input_hash)
 
     monkeypatch.setattr(assembly_reader, "read_registration", read_registration)
     monkeypatch.setattr(plan_registry, "validate_sealed_plan", validate)
-    monkeypatch.setattr(plan_registry, "runtime_seal_bytes_and_hash", seal_hash)
+    monkeypatch.setattr(plan_registry, "persisted_runtime_seal_hash", seal_hash)
     with pytest.raises(ValueError, match="source-mismatch: sealed plan preimage 与 assembly 不一致"):
         prepare("predecessor-after-trigger")
     assert len(stages) == 2
@@ -399,7 +466,7 @@ def test_prepare_revalidates_predecessor_changed_after_assembly_insert(
     assert stages[1][0]
     assert validations == [assembly_id, assembly_id]
     assert [entry[0] for entry in hashes] == [assembly_id, assembly_id]
-    assert len(stages[1][1]) == 1  # 失败的 fresh 指纹不得登记。
+    assert len(stages[1][1]) == 1  # 失败的 fresh 行不得登记。
     assert connection.execute("SELECT * FROM context_plans WHERE plan_id=?", (plan_id,)).fetchone() == old_plan
     assert connection.execute("SELECT * FROM context_assemblies").fetchall() == [old_assembly]
     assert connection.execute("SELECT * FROM storage_commits").fetchall() == old_commits

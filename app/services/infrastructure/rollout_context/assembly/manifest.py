@@ -15,6 +15,9 @@ from app.services.infrastructure.rollout_context.assembly.detail_identity import
 from app.services.infrastructure.rollout_context.assembly.detail_registry import (
     validate_assembly_details,
 )
+from app.services.infrastructure.rollout_context.assembly.plans.registry import (
+    _ValidatedPredecessors,
+)
 from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextPlanRegistration,
 )
@@ -97,6 +100,7 @@ class ContextAssemblyManifestMixin:
         snapshot: ContextAssemblySnapshot,
         *,
         checkpoint_ns: str,
+        validated_predecessors: _ValidatedPredecessors | None = None,
     ) -> dict[str, tuple[str, str | None]]:
         """seal 冻结 source 与 canonical 输入边界；恢复只核验已写的同行字段。
 
@@ -173,6 +177,7 @@ class ContextAssemblyManifestMixin:
         if predecessor_id is not None:
             predecessor = self._read_context_assembly_header(
                 connection, *current_scope(connection), assembly_id=predecessor_id,
+                validated_predecessors=validated_predecessors,
             )[0]
             previous_sources, _ = _frozen_source_refs(predecessor)
             rows = connection.execute(
@@ -216,6 +221,7 @@ class ContextAssemblyManifestMixin:
     def _write_context_assembly_manifest(
         self, connection: sqlite3.Connection, snapshot: ContextAssemblySnapshot,
         *, checkpoint_ns: str,
+        validated_predecessors: _ValidatedPredecessors | None = None,
     ) -> None:
         """runtime seal 与 fork import 共用唯一 selection/contribution 索引 writer。"""
         if not connection.in_transaction:
@@ -275,6 +281,7 @@ class ContextAssemblyManifestMixin:
             self._require_manifest_insert(cursor, "assembly contribution")
         source_frontiers = self._context_source_cut_frontiers(
             connection, snapshot, checkpoint_ns=checkpoint_ns,
+            validated_predecessors=validated_predecessors,
         )
         for entry in snapshot.selection:
             cursor = connection.execute(
@@ -317,6 +324,7 @@ class ContextAssemblyManifestMixin:
         registration: ContextPlanRegistration,
         header_detail_ref: str | None = None,
         checkpoint_ns: str = "",
+        validated_predecessors: _ValidatedPredecessors | None = None,
     ) -> None:
         """校验 snapshot JSON 与 assembly manifest 表的逐字段一致性。
 
@@ -415,6 +423,7 @@ class ContextAssemblyManifestMixin:
         )
         source_frontiers = self._context_source_cut_frontiers(
             connection, snapshot, checkpoint_ns=checkpoint_ns,
+            validated_predecessors=validated_predecessors,
         )
         selection_rows = connection.execute(
             'SELECT plan_ordinal, selection_kind, ref_type, ref_id, ref_thread_id, included, omission_reason, loss_json, source_revision, content_length, content_hash, visibility, protection, availability, base_delta_role, source_overlay_epoch, overlay_from_revision, overlay_to_revision, overlay_diff_hash, detail_ref, contribution_id, contribution_ordinal, source_cut_position_kind, source_cut_item_id FROM context_assembly_selections WHERE assembly_id = ? ORDER BY plan_ordinal',
