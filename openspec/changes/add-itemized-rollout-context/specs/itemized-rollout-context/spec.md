@@ -190,6 +190,8 @@ worker MUST在实际执行时按最新已提交SQLite和`NavigationTopologyGate`
 
 协议核心是共享语义，**operation 记录、执行 worker、事件通道与唯一键空间由该集合的权威 owner 各自实例化**：工作区目录的 owner 是工作区后端（`NavigationMutationRecord`）；Gateway 工作区导航的 owner 是 Gateway 控制面自身（MUST NOT 被读成「Gateway 不许接管自有导航」）。文件树是否引入异步受理，**由量化前置决定**（见 tasks §10.4b）：量化证明无瓶颈时 MUST NOT 引入，MUST NOT 以「一致性更好」为由先行实现。量化结果未达到开工条件时也 MUST NOT 默认引入，SHALL 按 10.4b/10.7 具名登记本轮不实施及证据原因，不将其伪称为已验证无瓶颈；精确失效、单目录替换和权威增量义务持续有效。
 
+Gateway 导航的幂等唯一键 SHALL 为 `(owner_scope, actor, client_operation_id)`；`owner_scope` SHALL 由认证路由所在 Gateway 的持久 `gateway_id` 与固定集合名 `workspace_navigation` 组成，不包含工作区 ID、激活目标、连接 ID 或 channel epoch，actor SHALL 单独取认证主体，不信任客户端自报归属。工作区后端的 `(gateway_id, workspace_id, actor, client_operation_id)` 是另一 owner 实例的唯一键空间，不得混用。Gateway 导航 operation 表 SHALL 与工作区 `NavigationMutationRecord` 逐项对应意图身份、preimage、client/queue 顺序、依赖、状态、receipt revision、终态结果/错误和事件提交义务；集合目标与归属字段由本 owner 实例化，MUST NOT 定义第二套状态机或复用 config 域记录代替导航 operation。此定义不代替 Gateway 导航的独立量化开工门。
+
 文件树的影响面 MUST 用精确子树失效（丢弃该路径及其后代缓存并中止在途请求）表达，MUST NOT 以把全部已展开目录标记为过期再逐个重载的方式作为成功路径。文件变更事件流 MUST 接成权威增量修正通道，使外部变更（Agent、终端）驱动树增量更新，与本地乐观投影形成收敛闭环。
 
 当原tasks10.4b分支①成立时，文件owner MUST按design9.2.2a统一目录索引、持久operation与恢复worker，目录观察revision由当前工作区后端发布并经list/operation/SSE携带；MUST NOT借Session catalog revision或前端自证。真实文件系统保留文件事实，目录索引 MUST NOT隐式注册逐文件长期身份或上下文快照。目录分页绑定目录revision，外部变更按同owner观察发布。四个现有集合写入口create/paste/copy/upload MUST直接迁入同一202协议，不保留同步旁路；正文PUT的expected_revision合同保留，本批MUST NOT新增未实现的文件delete/rename/move端点或UI。

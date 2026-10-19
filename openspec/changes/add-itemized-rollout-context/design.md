@@ -1126,7 +1126,8 @@ E2E 必须通过用户可见 DOM 语义、Gateway/workspace 网络回执、threa
 - **协议核心**（意图语义、`client_operation_id` 幂等规则、`client_sequence` 同分区有序、状态闭集、durable acceptance 语义、迟到重放返回原终态、`dependency_failed` 不执行）是**全前端共享的唯一语义**，MUST NOT 被任何 owner 重新定义。
 - **按 owner 实例**（operation 持久化表、执行 worker、事件通道、唯一键空间）由**该集合的权威 owner** 各自实例化。工作区目录的权威 owner 是工作区后端，故用 `NavigationMutationRecord` 与工作区 `NavigationTopologyGate`；Gateway 工作区导航的权威 owner 是 Gateway 自己（`workspace-tree.json` 是 Gateway 的控制面数据），故 Gateway MUST 自己是该面上 operation record 的 owner 与执行 worker。
 - 因此 §9.0 的「不覆盖」应读作**协议核心不因 Gateway 导航而改写**，而非「Gateway 导航不许接入」；§9.0 的「Gateway 仍只透明代理、不保管命令、不代替 worker」**只适用于它代理工作区业务接口时**，MUST NOT 被套用到 Gateway 自有导航面上。
-- 唯一键空间不同：工作区后端用 `(gateway_id, workspace_id, actor, client_operation_id)`，Gateway 自有导航用 `(owner_scope, actor, client_operation_id)`；两者 MUST 被写成同族实例、MUST NOT 混用同一键空间。
+- 唯一键空间不同：工作区后端用 `(gateway_id, workspace_id, actor, client_operation_id)`，Gateway 自有导航用 `(owner_scope, actor, client_operation_id)`。`owner_scope` 是由本 Gateway 的持久 `gateway_id` 与固定集合名 `workspace_navigation` 组成的控制面归属，不包含工作区 ID、激活目标、连接 ID、channel epoch 或客户端自报字段；actor 仍单独取认证主体。它不是资源 URI，也不能借用工作区后端的 `workspace_id` 键空间。
+- Gateway 导航 operation 表是工作区 `NavigationMutationRecord` 的同族 owner 实例：意图身份、preimage、client/queue 顺序、依赖、状态、receipt revision、终态结果/错误及事件提交义务逐项对应，只有集合目标与 owner scope 按 Gateway 导航领域实例化。不得另定义状态机、幂等规则或第二套协议，也不得把 config 域的 `config_events/config_apply_claim/config_pending_candidate/registry_apply_journal` 当作导航 operation 表。这里只固定实施合同；未满足该面的量化开工门时不创建表或 worker。
 
 #### 9.2.0b 文件树不预设必须接 202（先量化）
 
