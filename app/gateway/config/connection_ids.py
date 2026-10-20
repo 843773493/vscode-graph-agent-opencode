@@ -13,8 +13,27 @@ from app.core.config_sources import (
     read_stable_config_file,
     verify_stable_config_file,
 )
-from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.control.gateway_state import GatewayConfigRecord, GatewayStateStore
 from app.services.infrastructure.config.state import ConfigConflictError, new_config_id
+
+_CONNECTION_ID_RECORD_VERSION = 4
+
+
+def _connection_id_record(state_store: GatewayStateStore) -> GatewayConfigRecord | None:
+    record = state_store.get_config("gateway_connection_ids")
+    if record is not None:
+        if record.config_version != _CONNECTION_ID_RECORD_VERSION:
+            raise ConfigConflictError("Gateway connection_id 旧开发记录已失效，需要显式清理后重试")
+        migration = record.payload.get("migration")
+        if migration is not None and (not isinstance(migration, dict) or "backup_path" in migration):
+            raise ConfigConflictError("Gateway connection_id migration 记录损坏或包含已废弃的原生路径")
+    return record
+
+
+def _migration_backup_path(config_path: Path, migration_id: object) -> Path:
+    if not isinstance(migration_id, str) or re.fullmatch(r"migration_[0-9a-f]{32}", migration_id) is None:
+        raise ConfigConflictError("Gateway connection_id 迁移备份缺少有效的 migration_id")
+    return config_path.with_name(f"{config_path.name}.{migration_id}.v1.bak")
 
 
 def _connection_identity_fingerprint(item: dict[str, object]) -> tuple[object, ...]:
@@ -113,29 +132,26 @@ def _migrate_gateway_connection_ids_in_source(
         raise RuntimeError(f"Gateway 配置文件解析为空: {config_path}")
     source_version = source_config.get("config_version", 1)
     source_workspaces = source_config.get("workspaces")
-    record = state_store.get_config("gateway_connection_ids")
+    record = _connection_id_record(state_store)
     migration = record.payload.get("migration") if record is not None else None
-    if migration is not None and not isinstance(migration, dict):
-        raise ValueError("Gateway connection_id migration 记录损坏")
     migration = migration if isinstance(migration, dict) else {}
     if source_version == 1 and migration.get("state") == "rolled_back":
         raw_config["config_version"] = 1
         return
     if source_version == 2 and migration.get("state") == "planned":
-        backup_name = migration.get("backup_path")
+        backup_path = _migration_backup_path(config_path, migration.get("migration_id"))
         old_digest = migration.get("old_digest")
         if (
-            not isinstance(backup_name, str)
-            or not isinstance(old_digest, str)
-            or not Path(backup_name).is_file()
-            or hashlib.sha256(Path(backup_name).read_bytes()).hexdigest() != old_digest
+            not isinstance(old_digest, str)
+            or not backup_path.is_file()
+            or hashlib.sha256(backup_path.read_bytes()).hexdigest() != old_digest
         ):
             raise ConfigConflictError(
                 "Gateway connection_id 迁移已写入新文档，但 v1 备份无法核验"
             )
         state_store.set_config(
             config_key="gateway_connection_ids",
-            config_version=3,
+            config_version=_CONNECTION_ID_RECORD_VERSION,
             payload={
                 "entries": record.payload.get("entries", []) if record else [],
                 "migration": {
@@ -160,7 +176,7 @@ def _migrate_gateway_connection_ids_in_source(
         raise ConfigConflictError(
             "Gateway connection_id 迁移遇到 partial source layer，拒绝写入"
         )
-    migration_id = str(migration.get("migration_id") or new_config_id("migration"))
+    migration_id = migration.get("migration_id") if migration else new_config_id("migration")
     if (
         migration.get("state") == "planned"
         and migration.get("old_digest") != snapshot.digest
@@ -168,7 +184,7 @@ def _migrate_gateway_connection_ids_in_source(
         raise ConfigConflictError(
             "Gateway connection_id 迁移期间 source 文档再次变化，拒绝覆盖迁移计划"
         )
-    backup_path = config_path.with_name(f"{config_path.name}.{migration_id}.v1.bak")
+    backup_path = _migration_backup_path(config_path, migration_id)
     old_digest = snapshot.digest
     planned_payload = {
         "entries": [
@@ -183,7 +199,6 @@ def _migrate_gateway_connection_ids_in_source(
             "state": "planned",
             "old_digest": old_digest,
             "new_digest": migration.get("new_digest"),
-            "backup_path": str(backup_path),
             "old_version": 1,
             "new_version": 2,
         },
@@ -196,7 +211,7 @@ def _migrate_gateway_connection_ids_in_source(
         return
     state_store.set_config(
         config_key="gateway_connection_ids",
-        config_version=3,
+        config_version=_CONNECTION_ID_RECORD_VERSION,
         payload=planned_payload,
     )
     verify_stable_config_file(snapshot)
@@ -204,7 +219,7 @@ def _migrate_gateway_connection_ids_in_source(
         if backup_path.read_bytes() != snapshot.raw_bytes:
             raise ConfigConflictError("Gateway connection_id v1 备份内容不一致")
     else:
-        shutil.copy2(config_path, backup_path)
+        _atomic_write_gateway_jsonc(backup_path, snapshot.raw_bytes)
     starts = _jsonc_workspaces_object_starts(document)
     if len(starts) != len(connection_ids):
         raise ConfigConflictError(
@@ -247,7 +262,7 @@ def _migrate_gateway_connection_ids_in_source(
     }
     state_store.set_config(
         config_key="gateway_connection_ids",
-        config_version=3,
+        config_version=_CONNECTION_ID_RECORD_VERSION,
         payload=completed_payload,
     )
     raw_config["config_version"] = 2
@@ -258,7 +273,7 @@ def rollback_gateway_connection_id_migration(
 ) -> None:
     """按 migration journal 将 Gateway 配置恢复为旧 v1 字节。"""
 
-    record = state_store.get_config("gateway_connection_ids")
+    record = _connection_id_record(state_store)
     if record is None:
         raise ConfigConflictError("Gateway connection_id 迁移记录不存在")
     migration = record.payload.get("migration")
@@ -269,14 +284,13 @@ def rollback_gateway_connection_id_migration(
         raise ConfigConflictError(
             f"Gateway connection_id 迁移当前不可回滚: state={migration_state}"
         )
-    backup_value = migration.get("backup_path")
     old_digest = migration.get("old_digest")
     new_digest = migration.get("new_digest")
-    if not isinstance(backup_value, str) or not isinstance(old_digest, str):
+    if not isinstance(old_digest, str):
         raise ConfigConflictError("Gateway connection_id 迁移备份元数据不完整")
-    backup_path = Path(backup_value)
+    backup_path = _migration_backup_path(config_path, migration.get("migration_id"))
     if not backup_path.is_file():
-        raise ConfigConflictError(f"Gateway connection_id v1 备份不存在: {backup_path}")
+        raise ConfigConflictError("Gateway connection_id v1 备份不存在")
     backup_bytes = backup_path.read_bytes()
     if hashlib.sha256(backup_bytes).hexdigest() != old_digest:
         raise ConfigConflictError("Gateway connection_id v1 备份 digest 不匹配")
@@ -289,7 +303,7 @@ def rollback_gateway_connection_id_migration(
         _atomic_write_gateway_jsonc(config_path, backup_bytes)
     state_store.set_config(
         config_key="gateway_connection_ids",
-        config_version=3,
+        config_version=_CONNECTION_ID_RECORD_VERSION,
         payload={
             "entries": record.payload.get("entries", []),
             "migration": {
@@ -317,7 +331,7 @@ def _normalize_connection_ids(
 
     previous_entries: list[dict[str, object]] = []
     if state_store is not None:
-        identity_record = state_store.get_config("gateway_connection_ids")
+        identity_record = _connection_id_record(state_store)
         if identity_record is not None:
             raw_entries = identity_record.payload.get("entries", [])
             if not isinstance(raw_entries, list) or not all(
@@ -372,7 +386,7 @@ def _normalize_connection_ids(
             state_store=state_store,
             connection_ids=tuple(cast(str, item["connection_id"]) for item in items),
         )
-        identity_record = state_store.get_config("gateway_connection_ids")
+        identity_record = _connection_id_record(state_store)
         migration = (
             identity_record.payload.get("migration")
             if identity_record is not None
@@ -384,6 +398,6 @@ def _normalize_connection_ids(
         if identity_record is None or identity_record.payload != normalized_payload:
             state_store.set_config(
                 config_key="gateway_connection_ids",
-                config_version=3,
+                config_version=_CONNECTION_ID_RECORD_VERSION,
                 payload=normalized_payload,
             )

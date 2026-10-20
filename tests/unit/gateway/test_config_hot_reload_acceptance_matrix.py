@@ -108,7 +108,7 @@ ACCEPTANCE_MATRIX = (
         "tests/unit/gateway/test_gateway_config.py",
         (
             "test_gateway_connection_id_migration_is_comment_preserving_and_idempotent",
-            "test_gateway_connection_id_migration_recovers_after_file_write_crash",
+            "test_gateway_connection_id_migration_recovers_after_interrupted_file_write",
         ),
     ),
     AcceptanceCase(

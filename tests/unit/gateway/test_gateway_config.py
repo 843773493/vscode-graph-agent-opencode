@@ -786,9 +786,14 @@ def test_gateway_connection_id_migration_is_comment_preserving_and_idempotent(
         assert migrated.workspaces[0].connection_id in migrated_text
         record = state.get_config("gateway_connection_ids")
         assert record is not None
+        assert record.config_version == 4
         assert record.payload["migration"]["state"] == "completed"
-        backup_path = Path(record.payload["migration"]["backup_path"])
+        assert json.dumps(str(config_path.parent))[1:-1] not in json.dumps(record.payload)
+        migration_id = record.payload["migration"]["migration_id"]
+        backup_path = config_path.with_name(f"{config_path.name}.{migration_id}.v1.bak")
         assert backup_path.read_bytes() == original
+        state.close()
+        state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
         second = load_gateway_config(
             config_path=config_path,
             schema_path=schema_path,
@@ -825,6 +830,8 @@ def test_gateway_connection_id_migration_can_restore_v1_backup(
             state_store=state,
         )
         assert config_path.read_bytes() != original
+        state.close()
+        state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
         rollback_gateway_connection_id_migration(
             config_path=config_path,
             state_store=state,
@@ -833,13 +840,18 @@ def test_gateway_connection_id_migration_can_restore_v1_backup(
         record = state.get_config("gateway_connection_ids")
         assert record is not None
         assert record.payload["migration"]["state"] == "rolled_back"
+        assert json.dumps(str(config_path.parent))[1:-1] not in json.dumps(record.payload)
     finally:
         state.close()
 
 
-def test_gateway_connection_id_migration_recovers_after_file_write_crash(
+@pytest.mark.parametrize("crash_phase", [
+    "before_backup", "after_backup", "before_write", "after_write",
+])
+def test_gateway_connection_id_migration_recovers_after_interrupted_file_write(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    crash_phase: str,
 ) -> None:
     config_path, schema_path = _write_gateway_config(
         tmp_path,
@@ -853,11 +865,16 @@ def test_gateway_connection_id_migration_recovers_after_file_write_crash(
         ],
     )
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    original = config_path.read_bytes()
     original_writer = gateway_config_module.connection_ids._atomic_write_gateway_jsonc
 
     def write_then_crash(path: Path, raw_bytes: bytes) -> None:
-        original_writer(path, raw_bytes)
-        raise OSError("模拟迁移写入后进程退出")
+        interrupted = path == config_path if crash_phase.endswith("write") else path != config_path
+        if not interrupted or crash_phase.startswith("after"):
+            original_writer(path, raw_bytes)
+        if not interrupted:
+            return
+        raise OSError("模拟迁移写入阶段退出")
 
     # 拆分后 _atomic_write_gateway_jsonc 的_具名定义处_在 config 包的 connection_ids
     # 子模块；调用方 _migrate_gateway_connection_ids_in_source 也解析该子模块全局，
@@ -868,7 +885,7 @@ def test_gateway_connection_id_migration_recovers_after_file_write_crash(
         write_then_crash,
     )
     try:
-        with pytest.raises(OSError, match="写入后进程退出"):
+        with pytest.raises(OSError, match="迁移写入阶段退出"):
             load_gateway_config(
                 config_path=config_path,
                 schema_path=schema_path,
@@ -877,7 +894,16 @@ def test_gateway_connection_id_migration_recovers_after_file_write_crash(
         planned = state.get_config("gateway_connection_ids")
         assert planned is not None
         assert planned.payload["migration"]["state"] == "planned"
-        assert '"config_version": 2' in config_path.read_text(encoding="utf-8")
+        assert json.dumps(str(config_path.parent))[1:-1] not in json.dumps(planned.payload)
+        assert f'"config_version": {2 if crash_phase == "after_write" else 1}' in config_path.read_text(encoding="utf-8")
+        migration_id = planned.payload["migration"]["migration_id"]
+        backup = config_path.with_name(f"{config_path.name}.{migration_id}.v1.bak")
+        if crash_phase == "before_backup":
+            assert not backup.exists()
+        else:
+            assert backup.read_bytes() == original
+        state.close()
+        state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
 
         monkeypatch.setattr(
             gateway_config_module.connection_ids,
@@ -892,7 +918,121 @@ def test_gateway_connection_id_migration_recovers_after_file_write_crash(
         completed = state.get_config("gateway_connection_ids")
         assert completed is not None
         assert completed.payload["migration"]["state"] == "completed"
-        assert restored.workspaces[0].connection_id
+        assert completed.payload["migration"]["migration_id"] == planned.payload["migration"]["migration_id"]
+        assert restored.workspaces[0].connection_id == planned.payload["entries"][0]["connection_id"]
+        assert json.dumps(str(config_path.parent))[1:-1] not in json.dumps(completed.payload)
+    finally:
+        state.close()
+
+
+def test_gateway_connection_id_migration_backup_publication_failure_is_atomic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path, schema_path = _write_gateway_config(tmp_path, [{
+        "kind": "remote_gateway", "host": "remote.example.com", "username": "developer",
+        "private_key_path": "keys/id_ed25519",
+    }])
+    original = config_path.read_bytes()
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    replace = gateway_config_module.connection_ids.os.replace
+
+    def fail_backup_publication(source: str | Path, target: str | Path) -> None:
+        if Path(target).name.endswith(".v1.bak"):
+            assert Path(source).read_bytes() == original
+            raise OSError("备份发布失败")
+        replace(source, target)
+
+    monkeypatch.setattr(gateway_config_module.connection_ids.os, "replace", fail_backup_publication)
+    try:
+        with pytest.raises(OSError, match="备份发布失败"):
+            load_gateway_config(config_path=config_path, schema_path=schema_path, state_store=state)
+        assert config_path.read_bytes() == original
+        assert not tuple(tmp_path.glob("*.v1.bak"))
+        assert not tuple(tmp_path.glob(".*.migration-*"))
+        planned = state.get_config("gateway_connection_ids")
+        assert planned is not None and planned.payload["migration"]["state"] == "planned"
+        monkeypatch.setattr(gateway_config_module.connection_ids.os, "replace", replace)
+        state.close()
+        state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+        restored = load_gateway_config(config_path=config_path, schema_path=schema_path, state_store=state)
+        assert restored.workspaces[0].connection_id == planned.payload["entries"][0]["connection_id"]
+        (backup,) = tuple(tmp_path.glob("*.v1.bak"))
+        assert backup.read_bytes() == original
+        rollback_gateway_connection_id_migration(config_path=config_path, state_store=state)
+        assert config_path.read_bytes() == original
+    finally:
+        state.close()
+
+
+@pytest.mark.parametrize("operation", ["resume", "rollback"])
+@pytest.mark.parametrize("backup_state", ["missing", "corrupt"])
+def test_gateway_connection_id_migration_rejects_unverifiable_backup(
+    tmp_path: Path, operation: str, backup_state: str,
+) -> None:
+    config_path, schema_path = _write_gateway_config(tmp_path, [{
+        "kind": "remote_gateway", "host": "remote.example.com", "username": "developer",
+        "private_key_path": "keys/id_ed25519",
+    }])
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        load_gateway_config(config_path=config_path, schema_path=schema_path, state_store=state)
+        record = state.get_config("gateway_connection_ids")
+        assert record is not None
+        payload = record.payload
+        if operation == "resume":
+            payload["migration"]["state"] = "planned"
+            state.set_config(config_key=record.config_key, config_version=4, payload=payload)
+        migration_id = payload["migration"]["migration_id"]
+        backup = config_path.with_name(f"{config_path.name}.{migration_id}.v1.bak")
+        if backup_state == "missing":
+            backup.unlink()
+        else:
+            backup.write_bytes(b"wrong-migration-backup")
+        before = config_path.read_bytes()
+        state.close()
+        state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+        with pytest.raises(ConfigConflictError, match="备份") as caught:
+            if operation == "resume":
+                load_gateway_config(config_path=config_path, schema_path=schema_path, state_store=state)
+            else:
+                rollback_gateway_connection_id_migration(config_path=config_path, state_store=state)
+        assert str(config_path.parent) not in str(caught.value)
+        assert config_path.read_bytes() == before
+        assert state.get_config("gateway_connection_ids").payload == payload
+        if backup_state == "missing":
+            assert not backup.exists()
+        else:
+            assert backup.read_bytes() == b"wrong-migration-backup"
+    finally:
+        state.close()
+
+
+@pytest.mark.parametrize("operation", ["startup", "rollback"])
+@pytest.mark.parametrize("legacy_shape", ["old_version", "native_path"])
+def test_gateway_connection_id_migration_rejects_obsolete_records(
+    tmp_path: Path, operation: str, legacy_shape: str,
+) -> None:
+    config_path, schema_path = _write_gateway_config(tmp_path, [{
+        "kind": "remote_gateway", "host": "remote.example.com", "username": "developer",
+        "private_key_path": "keys/id_ed25519",
+    }])
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        load_gateway_config(config_path=config_path, schema_path=schema_path, state_store=state)
+        record = state.get_config("gateway_connection_ids")
+        assert record is not None
+        payload = record.payload
+        if legacy_shape == "native_path":
+            payload["migration"]["backup_path"] = str(tmp_path / "unrelated-backup")
+        state.set_config(config_key=record.config_key, config_version=3 if legacy_shape == "old_version" else 4, payload=payload)
+        before = config_path.read_bytes()
+        with pytest.raises(ConfigConflictError, match="旧开发记录已失效|已废弃的原生路径"):
+            if operation == "startup":
+                load_gateway_config(config_path=config_path, schema_path=schema_path, state_store=state)
+            else:
+                rollback_gateway_connection_id_migration(config_path=config_path, state_store=state)
+        assert config_path.read_bytes() == before
+        assert state.get_config("gateway_connection_ids").payload == payload
     finally:
         state.close()
 
