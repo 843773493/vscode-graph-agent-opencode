@@ -43,6 +43,7 @@ from tests.support.processes import (
     BackendProcess,
     close_backend_process,
     start_backend_process,
+    terminate_process,
 )
 
 
@@ -151,13 +152,20 @@ def test_large_startup_output_does_not_block_auxiliary_fixture(
     assert all(process.poll() is not None for process in loud_auxiliary_processes)
 
 
+@pytest.fixture
+def process_lifetime() -> Iterator[ExitStack]:
+    """测试自建子进程独立归属此 fixture，不受被测嵌套 scope 的释放影响。"""
+    with ExitStack() as lifetime:
+        yield lifetime
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind(("127.0.0.1", 0))
         return int(listener.getsockname()[1])
 
 
-def _start_listener(port: int) -> subprocess.Popen[str]:
+def _start_listener(port: int, process_lifetime: ExitStack) -> subprocess.Popen[str]:
     script = (
         "import socket, sys\n"
         "server = socket.socket()\n"
@@ -175,6 +183,7 @@ def _start_listener(port: int) -> subprocess.Popen[str]:
         stderr=subprocess.DEVNULL,
         text=True,
     )
+    process_lifetime.callback(terminate_process, process)
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         if process.poll() is not None:
@@ -184,18 +193,18 @@ def _start_listener(port: int) -> subprocess.Popen[str]:
                 return process
         except OSError:
             time.sleep(0.02)
-    process.terminate()
-    process.wait(timeout=5)
     raise TimeoutError(f"测试 listener 未能监听端口: {port}")
 
 
-def _start_idle_process() -> subprocess.Popen[str]:
-    return subprocess.Popen(
+def _start_idle_process(process_lifetime: ExitStack) -> subprocess.Popen[str]:
+    process = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(30)"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         text=True,
     )
+    process_lifetime.callback(terminate_process, process)
+    return process
 
 
 def _handle(
@@ -223,59 +232,53 @@ def _handle(
 
 @pytest.mark.parametrize("owner", ["gateway", "backend"])
 def test_process_scope_start_failure_preserves_replacement_port_owner(
+    process_lifetime: ExitStack,
     owner: Literal["gateway", "backend"],
     tmp_path: Path,
 ) -> None:
     port = _free_port()
-    original_process = _start_listener(port)
+    original_process = _start_listener(port, process_lifetime=process_lifetime)
     handle = _handle(original_process, port, owner, tmp_path)
     replacement_process: subprocess.Popen[str] | None = None
     close = close_gateway_process if owner == "gateway" else close_backend_process
 
-    try:
-        with (
-            pytest.raises(RuntimeError, match="模拟测试启动失败"),
-            capture_test_processes(),
-        ):
-            register_test_process(handle, lambda: close(handle))
-            original_process.terminate()
-            original_process.wait(timeout=5)
-            replacement_process = _start_listener(port)
+    with (
+        pytest.raises(RuntimeError, match="模拟测试启动失败"),
+        capture_test_processes(),
+    ):
+        register_test_process(handle, lambda: close(handle))
+        original_process.terminate()
+        original_process.wait(timeout=5)
+        replacement_process = _start_listener(port, process_lifetime=process_lifetime)
 
-            with pytest.raises(RuntimeError, match="测试端口已被占用"):
-                if owner == "gateway":
-                    start_gateway_process(
-                        workspace_root=tmp_path,
-                        default_backend_url=None,
-                        port=port,
-                    )
-                else:
-                    start_backend_process(
-                        workspace_root=str(tmp_path),
-                        port=port,
-                        log_name="occupied-backend",
-                    )
+        with pytest.raises(RuntimeError, match="测试端口已被占用"):
+            if owner == "gateway":
+                start_gateway_process(
+                    workspace_root=tmp_path,
+                    default_backend_url=None,
+                    port=port,
+                )
+            else:
+                start_backend_process(
+                    workspace_root=str(tmp_path),
+                    port=port,
+                    log_name="occupied-backend",
+                )
 
-            raise RuntimeError("模拟测试启动失败")
+        raise RuntimeError("模拟测试启动失败")
 
-        assert original_process.poll() is not None
-        assert replacement_process is not None
-        assert replacement_process.poll() is None
-        with socket.create_connection(("127.0.0.1", port), timeout=1):
-            pass
-    finally:
-        if original_process.poll() is None:
-            original_process.terminate()
-            original_process.wait(timeout=5)
-        if replacement_process is not None and replacement_process.poll() is None:
-            replacement_process.terminate()
-            replacement_process.wait(timeout=5)
+    assert original_process.poll() is not None
+    assert replacement_process is not None
+    assert replacement_process.poll() is None
+    with socket.create_connection(("127.0.0.1", port), timeout=1):
+        pass
 
 
 @pytest.mark.parametrize(
     "occupied_start", ["backend", "frontend", "frontend-only", "terminal-frontend"]
 )
 def test_auxiliary_start_refuses_occupied_port_without_killing_owner(
+    process_lifetime: ExitStack,
     occupied_start: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -285,7 +288,7 @@ def test_auxiliary_start_refuses_occupied_port_without_killing_owner(
     while frontend_port == backend_port:
         frontend_port = _free_port()
     occupied_port = backend_port if occupied_start == "backend" else frontend_port
-    listener = _start_listener(occupied_port)
+    listener = _start_listener(occupied_port, process_lifetime=process_lifetime)
     monkeypatch.setattr(browser_manager.shutil, "which", lambda _name: "node")
     monkeypatch.setattr(
         browser_manager.subprocess,
@@ -293,92 +296,78 @@ def test_auxiliary_start_refuses_occupied_port_without_killing_owner(
         lambda *_args, **_kwargs: pytest.fail("占用端口时不得启动子进程"),
     )
 
-    try:
-        with pytest.raises(RuntimeError, match="测试端口已被占用"):
-            if occupied_start == "terminal-frontend":
-                start_terminal_frontend_process(
-                    workspace_root=tmp_path,
-                    artifacts_dir=tmp_path / "artifacts",
-                    frontend_port=frontend_port,
-                )
-            elif occupied_start == "frontend-only":
-                start_browser_frontend_process(
-                    workspace_root=tmp_path,
-                    artifacts_dir=tmp_path / "artifacts",
-                    frontend_port=frontend_port,
-                )
-            else:
-                start_browser_manager_processes(
-                    workspace_root=tmp_path,
-                    artifacts_dir=tmp_path / "artifacts",
-                    backend_port=backend_port,
-                    frontend_port=frontend_port,
-                    backend_host="127.0.0.1",
-                )
-        assert listener.poll() is None
-        with socket.create_connection(("127.0.0.1", occupied_port), timeout=1):
-            pass
-    finally:
-        if listener.poll() is None:
-            listener.terminate()
-            listener.wait(timeout=5)
+    with pytest.raises(RuntimeError, match="测试端口已被占用"):
+        if occupied_start == "terminal-frontend":
+            start_terminal_frontend_process(
+                workspace_root=tmp_path,
+                artifacts_dir=tmp_path / "artifacts",
+                frontend_port=frontend_port,
+            )
+        elif occupied_start == "frontend-only":
+            start_browser_frontend_process(
+                workspace_root=tmp_path,
+                artifacts_dir=tmp_path / "artifacts",
+                frontend_port=frontend_port,
+            )
+        else:
+            start_browser_manager_processes(
+                workspace_root=tmp_path,
+                artifacts_dir=tmp_path / "artifacts",
+                backend_port=backend_port,
+                frontend_port=frontend_port,
+                backend_host="127.0.0.1",
+            )
+    assert listener.poll() is None
+    with socket.create_connection(("127.0.0.1", occupied_port), timeout=1):
+        pass
 
 
 @pytest.mark.parametrize("service", ["browser-manager", "browser-frontend", "terminal-frontend"])
 def test_auxiliary_close_terminates_owned_processes_only(
+    process_lifetime: ExitStack,
     service: str,
 ) -> None:
     backend_port = _free_port()
     frontend_port = _free_port()
     while frontend_port == backend_port:
         frontend_port = _free_port()
-    backend_replacement = _start_listener(backend_port)
-    frontend_replacement = _start_listener(frontend_port)
-    owned_backend = _start_idle_process()
-    owned_frontend = _start_idle_process()
+    backend_replacement = _start_listener(backend_port, process_lifetime=process_lifetime)
+    frontend_replacement = _start_listener(frontend_port, process_lifetime=process_lifetime)
+    owned_backend = _start_idle_process(process_lifetime)
+    owned_frontend = _start_idle_process(process_lifetime)
 
-    try:
-        if service == "terminal-frontend":
-            close_terminal_frontend_process(
-                TerminalFrontendProcess(process=owned_frontend, port=frontend_port)
+    if service == "terminal-frontend":
+        close_terminal_frontend_process(
+            TerminalFrontendProcess(process=owned_frontend, port=frontend_port)
+        )
+        assert owned_frontend.poll() is not None
+        assert owned_backend.poll() is None
+    elif service == "browser-frontend":
+        close_browser_frontend_process(
+            BrowserFrontendProcess(process=owned_frontend, port=frontend_port)
+        )
+        assert owned_frontend.poll() is not None
+        assert owned_backend.poll() is None
+    else:
+        close_browser_manager_processes(
+            BrowserManagerProcesses(
+                backend_process=owned_backend,
+                frontend_process=owned_frontend,
+                backend_port=backend_port,
+                frontend_port=frontend_port,
             )
-            assert owned_frontend.poll() is not None
-            assert owned_backend.poll() is None
-        elif service == "browser-frontend":
-            close_browser_frontend_process(
-                BrowserFrontendProcess(process=owned_frontend, port=frontend_port)
-            )
-            assert owned_frontend.poll() is not None
-            assert owned_backend.poll() is None
-        else:
-            close_browser_manager_processes(
-                BrowserManagerProcesses(
-                    backend_process=owned_backend,
-                    frontend_process=owned_frontend,
-                    backend_port=backend_port,
-                    frontend_port=frontend_port,
-                )
-            )
-            assert owned_frontend.poll() is not None
-            assert owned_backend.poll() is not None
-        assert backend_replacement.poll() is None
-        assert frontend_replacement.poll() is None
-        for port in (backend_port, frontend_port):
-            with socket.create_connection(("127.0.0.1", port), timeout=1):
-                pass
-    finally:
-        for process in (
-            owned_frontend,
-            owned_backend,
-            frontend_replacement,
-            backend_replacement,
-        ):
-            if process.poll() is None:
-                process.terminate()
-                process.wait(timeout=5)
+        )
+        assert owned_frontend.poll() is not None
+        assert owned_backend.poll() is not None
+    assert backend_replacement.poll() is None
+    assert frontend_replacement.poll() is None
+    for port in (backend_port, frontend_port):
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            pass
 
 
 def test_browser_manager_frontend_start_failure_terminates_started_backend(
+    process_lifetime: ExitStack,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -398,6 +387,7 @@ def test_browser_manager_frontend_start_failure_terminates_started_backend(
             stderr=subprocess.DEVNULL,
             text=True,
         )
+        process_lifetime.callback(terminate_process, process)
         started.append(process)
         return process
 
@@ -409,50 +399,40 @@ def test_browser_manager_frontend_start_failure_terminates_started_backend(
     )
     monkeypatch.setattr(browser_manager.subprocess, "Popen", fail_frontend_start)
 
-    try:
-        with pytest.raises(RuntimeError, match="模拟第二进程启动失败"):
-            start_browser_manager_processes(
-                workspace_root=tmp_path,
-                artifacts_dir=tmp_path / "artifacts",
-                backend_port=backend_port,
-                frontend_port=frontend_port,
-                backend_host="127.0.0.1",
-            )
+    with pytest.raises(RuntimeError, match="模拟第二进程启动失败"):
+        start_browser_manager_processes(
+            workspace_root=tmp_path,
+            artifacts_dir=tmp_path / "artifacts",
+            backend_port=backend_port,
+            frontend_port=frontend_port,
+            backend_host="127.0.0.1",
+        )
 
-        assert len(started) == 1
-        assert started[0].poll() is not None
-    finally:
-        for process in started:
-            if process.poll() is None:
-                process.terminate()
-                process.wait(timeout=5)
+    assert len(started) == 1
+    assert started[0].poll() is not None
 
 
 @pytest.mark.parametrize("service", ["terminal", "navigation-scope", "browser-performance"])
 def test_backend_start_preserves_existing_port_owner(
+    process_lifetime: ExitStack,
     service: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     port = _free_port()
-    listener = _start_listener(port)
+    listener = _start_listener(port, process_lifetime=process_lifetime)
     monkeypatch.setattr(
         subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("端口占用时不应创建进程"),
     )
-    try:
-        with pytest.raises(RuntimeError, match="测试端口已被占用"):
-            if service == "terminal":
-                terminal_backend.start_terminal_backend(backend_port=port, workspace_root=str(tmp_path), artifacts_dir=tmp_path / "artifacts")
-            elif service == "navigation-scope":
-                navigation_case._start_navigation_scope_backend(workspace_root=tmp_path, port=port)
-            else:
-                performance_case._browser_backend_process(
-                    workspace_root=tmp_path, backend_port=port, log_path=tmp_path / "browser.log",
-                )
-        assert listener.poll() is None
-        with socket.create_connection(("127.0.0.1", port), timeout=1):
-            pass
-    finally:
-        if listener.poll() is None:
-            listener.terminate()
-            listener.wait(timeout=5)
+    with pytest.raises(RuntimeError, match="测试端口已被占用"):
+        if service == "terminal":
+            terminal_backend.start_terminal_backend(backend_port=port, workspace_root=str(tmp_path), artifacts_dir=tmp_path / "artifacts")
+        elif service == "navigation-scope":
+            navigation_case._start_navigation_scope_backend(workspace_root=tmp_path, port=port)
+        else:
+            performance_case._browser_backend_process(
+                workspace_root=tmp_path, backend_port=port, log_path=tmp_path / "browser.log",
+            )
+    assert listener.poll() is None
+    with socket.create_connection(("127.0.0.1", port), timeout=1):
+        pass

@@ -4,6 +4,7 @@
 
 ```text
 harness/
+├── test_process_ownership.py               测试进程归属、端口替换及启动失败回收
 ├── test_outbox_fixture_lifetime.py          静态HTTP/Chromium装具的准备及清理失败回收
 ├── test_boundary_display_fixture_lifetime.py 历史边界展示装具的准备与清理失败回收
 └── test_manual_browser_fixture_lifetime.py  手动连接装具的Chromium/context/page准备与逆序释放
@@ -24,6 +25,7 @@ harness/
 
 - 通过 pytest fixture 注入依赖，所有测试子进程由创建者确定性回收。
 - 只操作本用例创建的进程；端口被占用时保留原所有者并明确失败。
+- 归属验证中自建的 listener/idle 子进程创建后立即交给 fixture 的 ExitStack，覆盖就绪中断及后续进程启动失败；该栈与被测嵌套 process scope 分开，防止把替代端口所有者也算成被测进程。
 - 高输出接线用例可用真实 HTTP 子进程替换被启动的程序，但保留装具实际输出载体和就绪路径；它证明 Browser、Terminal 装具日志不会阻塞，不证明相应产品行为。
 - 辅助服务高输出接线同时使用嵌套工作区和显式正式产物根，验证日志归属跟随调用测试，不随工作区深度改变；同一测试的多个服务共用产物根并以唯一日志名区分。
 - 工作区、日志和运行数据写入镜像路径 `out/tests/integration/harness/<测试名>/`。
