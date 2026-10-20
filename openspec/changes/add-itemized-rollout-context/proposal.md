@@ -58,6 +58,7 @@
 - 内部生成分支回报以 `runtime_notice` 保存私有的原模型 prompt（可包含完成回报所需的 branch result）和闭合的安全展示 part；历史/Web 只投影固定安全文案及“会话生成”标签，绝不把 prompt 或 branch result 暴露为用户可见内容。展示 carrier 不成为真实用户输入或 Turn root。
 - 冻结 SessionThread 与附件正文的物理布局：主 thread 固定为真实 session node 下的 `threads/{main_thread_id}/`；其它 durable thread 直接按创建日期存入 `threads/YYYY/MM/DD/{thread_id}/`。附件正文提升为 workspace 级内容寻址 blob，使用固定`blb_[0-9a-f]{64}`内容身份直接存入 `.boxteam/attachments/YYYY/MM/DD/{blob-id}`；独立 catalog 通过先于staging的ingest journal、digest claim和单一可见性发布维护逻辑 attachment、blob locator、owner reference 与 GC，Session/thread canonical history 只保存稳定 attachment reference，不保存或暴露物理路径。
 - **BREAKING（2026-10-13）** fork 按上下文范围、目标创建意图和资源继承三个维度统一：view_prefix_fork继承选定view截至点击item的有效前缀并提前解析正文依赖，context_fork只提供同内核安全默认入口，full_rollout_copy建立独立磁盘快照。默认当前Session新subthread，不额外复制资源；同工作区共享附件按owner属性复用及必要保活。允许URI指定本地/跨端新Session main或既有Session的新child。保留历史local ID、原字节、时间和业务hash，分离当前存储归属与历史执行scope，不逐项remap、不恢复活跃执行；复制和后继读取保持有界，不设固定数据体积验收门。Goal/调试/运行资源不再按模式自动复制。
+- 实施顺序按 2026-10-20 用户裁定调整：先完成影响后续 OpenSpec 的 fork 核心合同与真实入口验证，包括历史保真、精确目标、资源引用、发布恢复及复制后续聊。短期无法解决的耗时或性能优化，以及对其它 OpenSpec 依赖不大的独立复杂边缘流程，保留具名 TODO、已有证据与未验证范围，待主体功能完成后由用户人工介入；不再单独阻塞后续功能。正确性、恢复与授权缺陷仍须修复，固定测试期限和进程保护继续执行，超时或延期不得登记为通过。
 - 调试方案默认不继承；仅在显式选择且调试owner支持目标处理时冻结所选方案，由统一资源目标检查决定复用或导入。目标不带active指针/进程/动作，失败不发布半个target；跨Workspace export/import须由调试owner明示支持，不复用会话通信grant。
 
 ## Capabilities

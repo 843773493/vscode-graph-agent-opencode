@@ -99,6 +99,8 @@ fork SHALL 使用既有 operation journal 固定请求 preimage、来源 snapsho
 
 达到 deadline 时测试 MUST 明确失败并保留包含 target、operation/key、最后阶段、elapsed 与 `backend_state=unknown` 的诊断；不得据客户端超时推断后端已经停止、取消或回滚。为覆盖阻塞事件循环的同步工作，fixture 的外部 watchdog MUST 独立于被测进程观察同一个绝对 deadline，在写入并持久化该诊断后终止当前隔离测试运行；不得引入生产 deadline 协议或伪造失败后的成功结果。
 
+耗时或性能优化短期不能完成时，实施 MAY 按用户裁定保留具名 TODO 并继续后续功能，记录原始命令、结果和未验证范围，等待其它功能完成后人工优化。对其它 OpenSpec 依赖不大的独立复杂边缘流程 MAY 采用相同延期方式，保留原验收与断言，待主体功能完成后人工处理。延期 MUST NOT 放宽本 requirement 的测试保护或把失败记为通过，也不豁免历史保真、目标/资源归属、授权、并发一致性及发布恢复合同。
+
 #### Scenario: 一次 fork 的重试和恢复共用 deadline
 
 - **WHEN** 同一次 fork 在初次请求、phase wait 或恢复请求中耗尽 60 秒

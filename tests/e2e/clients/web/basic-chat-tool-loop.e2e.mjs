@@ -33,6 +33,7 @@ function section8ScenarioRegistry(surfaces, facts) {
     mcp_turn: { default: true, run: () => runMcpActivation(surfaces.a, "turn") },
     mcp_model_call: { default: true, run: () => runMcpActivation(surfaces.c, "model_call") },
     weekly: { default: true, run: () => runWeeklyReport(surfaces) },
+    empty_fork_ui: { default: true, run: () => runEmptyForkUi(surfaces.a) },
     fork_child_ui: { default: true, run: () => runDefaultChildForkUi(surfaces.a) },
     forks: { default: true, run: () => runPublicForks(surfaces) },
     live_resource_forks: { default: false, run: () => runLiveResourceForks(surfaces.a, []) },
@@ -5787,7 +5788,8 @@ async function forkOwner(source, options = {}, targetSurface = source) {
     deadlineToken: response.deadlineToken, deadlineNs: response.deadlineNs };
 }
 
-async function runDefaultChildForkUi(surface) {
+// TODO：新建未执行 Session 尚无 rollout；空来源场景需先明确冻结真实 view 的入口。
+async function runEmptyForkUi(surface) {
   const owners = [];
   const empty = await createProductSession(surface, "空来源的完整历史分支");
   owners.push(empty);
@@ -5843,6 +5845,12 @@ async function runDefaultChildForkUi(surface) {
   assert.equal(await empty.page.locator("#input").isVisible(), true);
   const emptyPublished = await publishedForkOwner(empty, emptyRequest, emptyFork, emptyBefore);
   assert.deepEqual(emptyFork.resources, []);
+  return { source: emptyPoint, fullPoint, request: emptyRequest, fork: emptyFork, summary: emptySummary,
+    publication: emptyPublished.publication };
+}
+
+async function runDefaultChildForkUi(surface) {
+  const owners = [];
   const { source, material, attachment } = await createAttachmentSource(surface, "页面默认子线程分支来源", owners);
   const before = await forkHistoryEvidence(source);
   const displayedTurn = before.history.items.find((turn) => turn.turn_id === material.turn.turn_id);
@@ -6095,8 +6103,7 @@ async function runDefaultChildForkUi(surface) {
   assert.deepEqual(await readRollout(childPublished.owner, "SELECT execution_id FROM executions WHERE session_id=? AND thread_id=?",
     [childPublished.owner.sessionId, childPublished.owner.threadId]), [], "右侧二次分支不得自动生成新的执行");
   assert.deepEqual((await loadCompleteThreadHistory(source)).items, before.history.items);
-  return { empty: { source: emptyPoint, fullPoint, request: emptyRequest, fork: emptyFork, summary: emptySummary,
-    publication: emptyPublished.publication }, source: { sessionId: source.sessionId, threadId: source.threadId },
+  return { source: { sessionId: source.sessionId, threadId: source.threadId },
     point, omitOption, request, fork, summary, coldHistory, displayed, successor, publication: published.publication,
     childBranch: { source: childPoint, request: childRequest, fork: childFork, publication: childPublished.publication,
       history: childPublished.targetHistory, displayed: childPublished.displayed } };

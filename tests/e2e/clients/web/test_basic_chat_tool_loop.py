@@ -348,13 +348,15 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
         result = json.loads(result_path.read_text(encoding="utf-8"))
         diagnostics = result["diagnostics"]
         assert diagnostics["pageErrors"] == []
-        assert diagnostics["failedRequests"] == []
+        assert diagnostics["unhandledFailedRequests"] == []
         assert diagnostics["unhandledConsoleErrors"] == []
         handled = (
             diagnostics["handledHistoryConflicts"]
             + diagnostics["handledLifecycleErrors"]
             + diagnostics["handledTurnNavigationErrors"]
             + diagnostics["handledMessageStreamErrors"]
+            + diagnostics["handledIncompleteMessageStreamErrors"]
+            + diagnostics["handledForkAttachmentDeletionConflicts"]
             + diagnostics["handledControlledRestartErrors"]
         )
         assert sorted(fact["consoleIndex"] for fact in handled) == list(
