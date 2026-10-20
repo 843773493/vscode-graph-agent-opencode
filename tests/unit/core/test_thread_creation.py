@@ -15,8 +15,8 @@ import asyncio
 import json
 import os
 import shutil
-from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from contextlib import asynccontextmanager, closing
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -1180,6 +1180,80 @@ async def test_publish_reentry_rejects_child_thread_id_drift_without_reuse(
 # ----------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("phase", ["prepared", "staged", "renamed", "published"])
+async def test_delegated_creation_cold_resume_preserves_atomic_membership_and_admission(
+    service: ThreadCreationService, store: SessionCatalogStore, owner: OwnerSession,
+    sessions_root: Path, monkeypatch: pytest.MonkeyPatch, phase: str,
+) -> None:
+    class CreationInterrupted(BaseException):
+        """模拟进程在已完成持久阶段后退出，不走业务失败补偿。"""
+
+    async def interrupt_phase(_key: str, observed: str, **_details: object) -> None:
+        if observed == f"thread.creation.{phase}":
+            raise CreationInterrupted(phase)
+
+    original_stage = ThreadCreationService._prepare_staging
+    original_rename = ThreadCreationService._rename_staging_to_final
+
+    def interrupt_staging(self, *arguments) -> None:
+        original_stage(self, *arguments)
+        raise CreationInterrupted(phase)
+
+    def interrupt_rename(self, *arguments) -> None:
+        original_rename(self, *arguments)
+        raise CreationInterrupted(phase)
+
+    with monkeypatch.context() as crash:
+        crash.setattr("app.core.thread_creation.observe_phase", interrupt_phase)
+        if phase == "staged":
+            crash.setattr(ThreadCreationService, "_prepare_staging", interrupt_staging)
+        elif phase == "renamed":
+            crash.setattr(ThreadCreationService, "_rename_staging_to_final", interrupt_rename)
+        with pytest.raises(CreationInterrupted, match=phase):
+            await do_create(service, owner, delegation_id="delegated-cold")
+
+    record = owner.control.get_thread_creation_record("key-1")
+    member = owner.control.get_collaboration_member("delegated-cold")
+    published = phase == "published"
+    assert record.state == ("published" if published else "preparing")
+    assert member.state == ("published" if published else "registering")
+    assert member.child_thread_id == record.child_thread_id
+    assert member.membership_preimage_hash == record.membership_preimage_hash
+    assert len(owner.control.list_child_thread_rows()) == int(published)
+    assert len(owner.control.list_initial_execution_intents()) == int(published)
+    assert owner.control.get_collaboration_ledger_revision() == (2 if published else 1)
+    # 关闭原连接，恢复必须从 SQLite 的原 record/member 取得身份及冻结内容。
+    owner.control.close()
+    with closing(SessionControlStore(owner.session_dir / "session-control.sqlite")) as cold:
+        assert cold.get_thread_creation_record("key-1") == record
+        assert cold.get_collaboration_member("delegated-cold") == member
+        recovered_owner = replace(owner, control=cold)
+        recovered_service = ThreadCreationService(
+            store=store, control_store=cold, sessions_root=sessions_root,
+            workspace_id=WORKSPACE_ID, compute_capability_profile_hash=compute_capability_profile_hash,
+            gate=NavigationTopologyGate(sessions_root),
+        )
+        result = await do_create(recovered_service, recovered_owner, delegation_id="delegated-cold")
+        final_record = cold.get_thread_creation_record("key-1")
+        final_member = cold.get_collaboration_member("delegated-cold")
+        intent = cold.get_initial_execution_intent("key-1")
+        assert result.child_thread_id == record.child_thread_id == final_member.child_thread_id == intent.thread_id
+        assert final_record.state == final_member.state == "published"
+        assert final_record.preimage_hash == record.preimage_hash
+        assert final_member.membership_preimage_hash == member.membership_preimage_hash
+        assert final_record.artifact_manifest_hash == record.artifact_manifest_hash
+        assert cold.get_collaboration_ledger_revision() == 2
+        assert count_rows(cold, "thread_catalog") == 2
+        assert count_rows(cold, "thread_creation_records") == count_rows(cold, "thread_execution_intents") == 1
+        cold.validate_initial_execution_readiness(intent)
+        replay = await do_create(recovered_service, recovered_owner, delegation_id="delegated-cold")
+        assert replay.child_thread_id == result.child_thread_id
+        assert cold.get_collaboration_ledger_revision() == 2
+        assert cold.list_initial_execution_intents() == (intent,)
+        assert not (owner.session_dir / record.staging_locator).exists()
+        assert count_rows(store, "nodes") == 1
+
+
 async def test_crash_after_record_before_staging_recovers(
     service: ThreadCreationService,
     owner: OwnerSession,
@@ -1374,9 +1448,10 @@ async def test_incomplete_staging_recovers_same_record(
     assert count_rows(owner.control, "thread_creation_records") == 1
 
 
+@pytest.mark.parametrize("delegation_id", [None, "delegated-delete"])
 async def test_delete_waits_live_creation_holder_without_holding_publish_gate(
     service: ThreadCreationService, store: SessionCatalogStore, owner: OwnerSession,
-    sessions_root: Path, monkeypatch: pytest.MonkeyPatch,
+    sessions_root: Path, monkeypatch: pytest.MonkeyPatch, delegation_id: str | None,
 ) -> None:
     """旧创建可取短时 Session gate 取消；删除不得持 gate 等 holder。"""
     prepared, release = asyncio.Event(), asyncio.Event()
@@ -1387,7 +1462,7 @@ async def test_delete_waits_live_creation_holder_without_holding_publish_gate(
             await release.wait()
 
     monkeypatch.setattr("app.core.thread_creation.observe_phase", pause_prepared)
-    creation = asyncio.create_task(do_create(service, owner))
+    creation = asyncio.create_task(do_create(service, owner, delegation_id=delegation_id))
     await asyncio.wait_for(prepared.wait(), 2)
     deletion = SessionSubtreeDeleteService(store=store, sessions_root=sessions_root, workspace_id=WORKSPACE_ID)
     deleting = asyncio.create_task(deletion.delete(idempotency_key="delete-live-creation", root_node_id=owner.session_id))
@@ -1403,6 +1478,9 @@ async def test_delete_waits_live_creation_holder_without_holding_publish_gate(
             await asyncio.wait_for(creation, 2)
         assert (await asyncio.wait_for(deleting, 2)).record_state == "completed"
         assert owner.control.get_thread_creation_record("key-1").state == "aborted"
+        assert owner.control.list_initial_execution_intents() == ()
+        if delegation_id is not None:
+            assert owner.control.get_collaboration_member(delegation_id).state == "cancelled"
     finally:
         release.set()
         for task in (creation, deleting):
@@ -1412,12 +1490,15 @@ async def test_delete_waits_live_creation_holder_without_holding_publish_gate(
 
 
 @pytest.mark.parametrize("interruption", ["record_only", "prepared", "partial", "atomic_temp", "renamed"])
+@pytest.mark.parametrize("delegation_id", [None, "delegated-delete"])
 async def test_delete_cancels_original_abandoned_creation(
     store: SessionCatalogStore, owner: OwnerSession, sessions_root: Path,
-    interruption: str,
+    interruption: str, delegation_id: str | None,
 ) -> None:
     """删除恢复复用原创建记录，完整 final 与合法部分 staging 都能定点取消。"""
-    record = prepare_manual_record(owner, freeze_manifest=interruption != "record_only")
+    record = prepare_manual_record(
+        owner, freeze_manifest=interruption != "record_only", delegation_id=delegation_id,
+    )
     staging = owner.session_dir / record.staging_locator
     if interruption == "renamed":
         materialize_node(owner.session_dir / record.final_relative_locator, record, owner, make_artifacts())
@@ -1426,19 +1507,35 @@ async def test_delete_cancels_original_abandoned_creation(
         (staging / "thread.json").unlink()
         if interruption == "atomic_temp":
             (staging / ".thread.json.a0_b1c2d").write_bytes(b'{"thread_id":')
-    deletion = SessionSubtreeDeleteService(store=store, sessions_root=sessions_root, workspace_id=WORKSPACE_ID)
-    result = await deletion.delete(idempotency_key="delete-original-creation", root_node_id=owner.session_id)
-    assert result.record_state == "completed"
-    assert owner.control.list_pending_thread_creations() == ()
-    terminal = owner.control.get_thread_creation_record("key-1")
-    assert terminal.state == "aborted"
-    assert terminal.child_thread_id == record.child_thread_id
-    assert terminal.preimage_hash == record.preimage_hash
-    assert terminal.owner_session_lifecycle_generation == record.owner_session_lifecycle_generation
-    assert count_rows(owner.control, "thread_catalog") == 1
-    isolated = sessions_root / ".deleting" / "delete-original-creation" / owner.session_id
-    assert not (isolated / record.staging_locator).exists()
-    assert not (isolated / record.final_relative_locator).exists()
+    owner.control.close()
+    with closing(SessionControlStore(owner.session_dir / "session-control.sqlite")) as cold:
+        assert cold.get_thread_creation_record("key-1") == record
+        deletion = SessionSubtreeDeleteService(store=store, sessions_root=sessions_root, workspace_id=WORKSPACE_ID)
+        result = await deletion.delete(idempotency_key="delete-original-creation", root_node_id=owner.session_id)
+        assert result.record_state == "completed"
+        assert cold.list_pending_thread_creations() == ()
+        terminal = cold.get_thread_creation_record("key-1")
+        assert terminal.state == "aborted"
+        assert terminal.child_thread_id == record.child_thread_id
+        assert terminal.preimage_hash == record.preimage_hash
+        assert terminal.owner_session_lifecycle_generation == record.owner_session_lifecycle_generation
+        assert cold.list_initial_execution_intents() == ()
+        assert count_rows(cold, "thread_catalog") == 1
+        if delegation_id is not None:
+            member = cold.get_collaboration_member(delegation_id)
+            assert member.state == "cancelled"
+            assert member.child_thread_id == record.child_thread_id
+            assert member.membership_preimage_hash == record.membership_preimage_hash
+            # 删除先排空原 creation，再关 fence；只允许原成员的取消事件。
+            assert cold.get_collaboration_ledger_revision() == 2
+            fanouts = cold.list_collaboration_fanouts()
+            assert len(fanouts) == 2
+            assert json.loads(fanouts[-1].payload_json)["event"] == {
+                "type": "member.cancelled", "delegation_id": delegation_id,
+            }
+        isolated = sessions_root / ".deleting" / "delete-original-creation" / owner.session_id
+        assert not (isolated / record.staging_locator).exists()
+        assert not (isolated / record.final_relative_locator).exists()
 
 
 async def test_tampered_staging_content_fail_closed(

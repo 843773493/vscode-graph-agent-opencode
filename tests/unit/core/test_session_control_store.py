@@ -2246,6 +2246,62 @@ def test_delegated_record_publish_and_member_atomic_visibility(store: SessionCon
     assert store.connection.execute("SELECT kind FROM thread_catalog WHERE thread_id=?", (record.child_thread_id,)).fetchone()[0] == "child"
 
 
+@pytest.mark.parametrize(("table", "operation"), [
+    ("collaboration_members", "UPDATE"),
+    ("thread_execution_intents", "INSERT"),
+    ("collaboration_fanouts", "INSERT"),
+])
+def test_delegated_publish_failure_cold_reopens_without_partial_visibility(
+    store: SessionControlStore, table: str, operation: str,
+) -> None:
+    prepare_record(store, delegation_id="del-1")
+    record = store.freeze_thread_creation_artifact_manifest(
+        "key-1", artifact_manifest="{}", artifact_manifest_hash="c" * 64,
+    )
+    member = store.get_collaboration_member("del-1")
+    tables = (
+        "thread_catalog", "thread_creation_records", "thread_owner_bindings",
+        "collaboration_members", "collaboration_ledger", "thread_execution_intents",
+        "collaboration_fanouts", "collaboration_deliveries", "session_operation_leases",
+    )
+    before = {name: [tuple(row) for row in store.connection.execute(f"SELECT * FROM {name}")] for name in tables}
+    # 在各后半段写入后打断，必须撤回此前同一事务已经写入的所有事实。
+    raw_execute(store, f"CREATE TRIGGER fail_publication AFTER {operation} ON {table} "
+                "BEGIN SELECT RAISE(ABORT,'publication interrupted'); END")
+    with pytest.raises(sqlite3.IntegrityError, match="publication interrupted"):
+        store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
+    assert not store.connection.in_transaction
+    database_path = store.database_path
+    store.close()
+    with closing(SessionControlStore(database_path)) as cold:
+        after = {name: [tuple(row) for row in cold.connection.execute(f"SELECT * FROM {name}")] for name in tables}
+        assert after == before
+        assert cold.get_thread_creation_record("key-1") == record
+        assert cold.get_collaboration_member("del-1") == member
+        assert cold.list_initial_execution_intents() == ()
+        assert cold.get_collaboration_ledger_revision() == 1
+        raw_execute(cold, "DROP TRIGGER fail_publication")
+        published = cold.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
+        assert published.state == cold.get_collaboration_member("del-1").state == "published"
+        assert published.child_thread_id == record.child_thread_id
+        assert published.preimage_hash == record.preimage_hash
+        intent = cold.get_initial_execution_intent("key-1")
+        assert intent.thread_id == record.child_thread_id
+        cold.validate_initial_execution_readiness(intent)
+        assert cold.list_initial_execution_intents() == (intent,)
+        assert len(cold.list_child_thread_rows()) == 1
+        assert cold.get_collaboration_ledger_revision() == 2
+        fanouts = cold.list_collaboration_fanouts()
+        assert len(fanouts) == 2
+        assert json.loads(fanouts[-1].payload_json)["event"] == {
+            "type": "member.published", "delegation_id": "del-1",
+        }
+        with pytest.raises(RuntimeError, match="已发布"):
+            cold.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
+        assert cold.list_collaboration_fanouts() == fanouts
+        assert cold.list_initial_execution_intents() == (intent,)
+
+
 def test_abort_record_cancels_collaboration_member_no_rebind(store: SessionControlStore) -> None:
     prepare_record(store, delegation_id="del-1")
     aborted = store.abort_thread_creation_record("key-1", "定点清理完成")

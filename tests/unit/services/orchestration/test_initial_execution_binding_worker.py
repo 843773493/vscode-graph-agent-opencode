@@ -244,26 +244,58 @@ def test_binder_exception_recorded_and_raised(
     assert store.get_initial_execution_intent("key-1").state == "bound"
 
 
+@pytest.mark.parametrize("delegated", [False, True])
 def test_crash_between_binder_and_mark_recovers(
-    store: SessionControlStore,
+    store: SessionControlStore, monkeypatch: pytest.MonkeyPatch, delegated: bool,
 ) -> None:
-    """binder 成功后、mark bound 前崩溃：同 claim 重试只产生一次绑定。"""
-    intent = prepare_published_intent(store)
-    # 模拟崩溃现场：claim 已提交、binder 已成功、mark bound 未发生。
-    store.claim_initial_execution_intent(
-        "key-1", claim_owner="worker-a", claim_generation=1
-    )
-    assert store.get_initial_execution_intent("key-1").state == "pending"
-    # 恢复 worker 使用同一 claim identity：幂等重入 → 单次有效绑定。
-    worker = make_worker(store)
+    """binder 返回后、bound 提交前中断，冷重开重用原成员与绑定身份。"""
+    class BindingInterrupted(BaseException):
+        pass
+
+    intent = prepare_published_intent(store, delegated=delegated)
+    seen: list[tuple[str, str]] = []
+
+    def bind(target: InitialExecutionBindingTarget) -> InitialExecutionBindOutcome:
+        seen.append((target.execution_binding_id, target.job_id))
+        return identity_binder(target)
+
+    def interrupt(_key: str, phase: str, **_details: object) -> None:
+        if phase == "thread.initial.admitted_before_bound":
+            raise BindingInterrupted
+
+    worker = make_worker(store, binder=bind)
     worker.start()
-    attempts = worker.bind_pending_once()
-    assert [attempt.outcome for attempt in attempts] == ["bound"]
-    bound = store.get_initial_execution_intent("key-1")
-    assert bound.state == "bound"
-    assert bound.execution_binding_id == intent.execution_binding_id
-    assert bound.job_id == intent.job_id
-    assert store.list_pending_initial_execution_intents() == ()
+    with monkeypatch.context() as crash:
+        crash.setattr("app.services.orchestration.initial_execution_binding_worker.observe_phase_sync", interrupt)
+        with pytest.raises(BindingInterrupted):
+            worker.bind_pending_once()
+    worker.stop()
+    assert seen == [(intent.execution_binding_id, intent.job_id)]
+    assert store.get_initial_execution_intent("key-1").state == "pending"
+    database_path = store.database_path
+    store.close()
+    with closing(SessionControlStore(database_path)) as cold:
+        recovered = make_worker(cold, binder=bind)
+        recovered.start()
+        assert [attempt.outcome for attempt in recovered.bind_pending_once()] == ["bound"]
+        assert recovered.bind_pending_once() == ()
+        recovered.stop()
+        bound = cold.get_initial_execution_intent("key-1")
+        assert bound.state == "bound"
+        assert seen == [(intent.execution_binding_id, intent.job_id)] * 2
+        assert (bound.execution_binding_id, bound.job_id) == seen[0]
+        assert cold.list_pending_initial_execution_intents() == ()
+        assert len(cold.list_child_thread_rows()) == 1
+        if delegated:
+            member = cold.get_collaboration_member("del-1")
+            assert member.state == "published"
+            assert member.child_thread_id == bound.thread_id
+            # bound 同事务冻结一次 ready，恢复不能重复 published 或 ready。
+            assert cold.get_collaboration_ledger_revision() == 3
+            fanouts = cold.list_collaboration_fanouts()
+            assert [json.loads(item.payload_json)["event"]["type"] for item in fanouts] == [
+                "member.registered", "member.published", "member.ready",
+            ]
 
 
 def test_two_workers_produce_single_binding(
