@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
@@ -23,7 +25,11 @@ from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationResultDTO,
 )
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    NAVIGATION_DEADLINE_HEADER,
     ResourceFileOperationError,
+    ResourceNavigation,
+    navigation_deadline,
+    navigation_deadline_at,
 )
 
 router = APIRouter()
@@ -38,6 +44,7 @@ async def _source_request(
     gateway_id: str, workspace_id: str, request_id: str, kind: str,
     if_none_match: str | None = None, navigation: ResourceNavigationRequest | None = None,
     resolve_owner: bool = False,
+    deadline: float | None = None,
 ) -> dict[str, object]:
     port = GatewaySkillSourcePort(owner=owner, registry=registry)
     payload = {
@@ -46,14 +53,15 @@ async def _source_request(
         "navigation": navigation.model_dump(mode="json") if navigation is not None else None,
     }
     if gateway_id == owner.gateway_id:
-        result = await port.execute(payload)
+        result = await port.execute(payload, deadline=deadline)
     else:
         if not resolve_owner:
             raise HTTPException(status_code=409, detail="Gateway Skill source owner mismatch")
         if not port.accepts_workspace(workspace_id):
             raise HTTPException(403, detail="Workspace is outside Gateway Skill source audience")
         try:
-            result = await relay_gateway_skill_sources(request.app.state.federation_rpc_service, payload)
+            result = await relay_gateway_skill_sources(request.app.state.federation_rpc_service, payload,
+                deadline_at=navigation_deadline_at(deadline) if deadline is not None else None)
         except FederationError as error:
             raise HTTPException(status_code=409, detail=error.to_wire()) from error
     status = result.get("status")
@@ -87,6 +95,28 @@ def _navigation_response(result: dict[str, object], body: ResourceNavigationRequ
     return envelope
 
 
+async def _navigate_source(
+    *, body: ResourceNavigationRequest, request: Request, registry: GatewayWorkspaceRegistry,
+    owner: GatewaySkillSourceOwner, gateway_id: str, workspace_id: str, request_id: str,
+    resolve_owner: bool = False,
+) -> APIResponse[ResourceNavigationResultDTO]:
+    try:
+        deadline = navigation_deadline(body, deadline_at=request.headers.get(NAVIGATION_DEADLINE_HEADER))
+        async with asyncio.timeout(max(0, deadline - time.monotonic())):
+            result = await _source_request(request=request, registry=registry, owner=owner,
+                gateway_id=gateway_id, workspace_id=workspace_id, request_id=request_id,
+                kind="navigation", navigation=body, resolve_owner=resolve_owner, deadline=deadline)
+            envelope = _navigation_response(result, body, request_id)
+            ResourceNavigation._check_deadline(deadline)
+            return envelope
+    except TimeoutError as error:
+        raise HTTPException(400, detail=ResourceFileOperationError(
+            "output_limit_exceeded", "文件导航超过本次总期限", reason="deadline",
+        ).detail()) from error
+    except ResourceFileOperationError as error:
+        raise HTTPException(400, detail=error.detail()) from error
+
+
 @router.post(
     "/api/gateway/skill-sources/{gateway_id}/workspaces/{workspace_id}/navigation",
     response_model=APIResponse[ResourceNavigationResultDTO],
@@ -99,11 +129,10 @@ async def navigate_skill_source(
     request: Request,
     request_id: str = Depends(get_request_id),
 ) -> APIResponse[ResourceNavigationResultDTO]:
-    result = await _source_request(
+    return await _navigate_source(
         request=request, registry=registry, owner=owner, gateway_id=gateway_id,
-        workspace_id=workspace_id, request_id=request_id, kind="navigation", navigation=body,
+        workspace_id=workspace_id, request_id=request_id, body=body,
     )
-    return _navigation_response(result, body, request_id)
 
 
 @router.get(
@@ -138,12 +167,11 @@ async def navigate_connected_skill_source(
     request: Request,
     request_id: str = Depends(get_request_id),
 ) -> APIResponse[ResourceNavigationResultDTO]:
-    result = await _source_request(
+    return await _navigate_source(
         request=request, registry=registry, owner=owner, gateway_id=gateway_id,
-        workspace_id=workspace_id, request_id=request_id, kind="navigation", navigation=body,
+        workspace_id=workspace_id, request_id=request_id, body=body,
         resolve_owner=True,
     )
-    return _navigation_response(result, body, request_id)
 
 
 @router.get(

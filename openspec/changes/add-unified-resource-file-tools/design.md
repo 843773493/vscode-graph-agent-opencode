@@ -28,6 +28,8 @@ read/write 的文件目标、ls/glob/grep 的根目标和 apply_patch 的根目�
 
 联邦 deadline 取请求预算与既有联邦上限的较小值，不能在进入联邦时重新获得固定长预算；source 工具和导航 owner 的总期限继续包含解析、传输及最终序列化。错误保留原文件执行、寻址与联邦域及同一 request_id，不把目标拒绝改为本机回退。只读工具沿 read grant 执行；条件文本修改使用下述独立 grant，会话产物继续按第5组迁移。
 
+一次导航的查询合同与执行期限分别传递：`timeout_ms` 仍是 cursor 绑定的原查询参数，不能在每跳改写为剩余毫秒。进程内传递同一 monotonic deadline，HTTP 使用 `X-BoxTeam-Resource-Navigation-Deadline` 携带对应 UTC 期限；接收端只取它与本地请求上限的较短值，非法或已过期期限明确拒绝。该头只约束本次执行，不提供资源权限或持久身份。跨 Gateway 仍使用原 federation `deadline_at`，到达目标文件 owner 前再转换为本机剩余期限，不建立新账本。同步/异步 HTTP 共用总墙钟限制，响应头、分块正文和最终序列化均计时；Gateway 导航 JSON 在期限内完整读取后交付，普通 SSE 代理保持原流式合同。取消只读等待不能强制中断目标原生阻塞调用，但目标恢复后必须检查原期限，不继续读取或回报成功。
+
 2026-10-20 条件文本传输直接复用 `/api/gateway/federation/relay`、原 SSH channel 和星型路由。`TextMutationGrantTarget` 以闭集字段绑定固定 Gateway、Workspace files URI 和 `mutation_kind=text`，只能签发 `file_write`；原 send/read/wait/reply/fork target 不能借用该能力。签名同时覆盖正文和预期版本，每个实际路由/执行点读取最新策略；默认值沿既有联邦策略，显式 read allow 不隐含 write allow。source Workspace 必须已注册且属于来源 Gateway，目标 Gateway 只将请求透明交固定工作区后端，联邦 HTTP 凭据不能直接访问公开文本修改接口绕过 grant。
 
 create/edit/patch 传输 DTO 与公开 proto 同步，封套只接受固定 Workspace files URI；普通工具原生输入仍由其明确目标 owner 解释。目标后端调用容器内同一个 `WorkspaceTextMutationOwner`，复用原字节 preflight、单文件发布和观察 journal，不复制补丁执行链。目标原件与后件经归属、逐路径预期版本及回执身份校验后，保存到 source 所属会话 journal；SessionChanges 不读取 source 同名文件。请求上限1 MiB，回执上限8 MiB；超限在目标 preflight 可确认时零写入，否则诚实返回 unknown。目标失联、丢响应或畸形回执均保留原目标和前置版本，不猜 diff、不自动重放。原生目录根远端写入、远端原生路径输入及 Windows 验收继续由对应任务闭包处理，取消确认仍保留具名 TODO；线程取消等待不代表文件发布已停止。

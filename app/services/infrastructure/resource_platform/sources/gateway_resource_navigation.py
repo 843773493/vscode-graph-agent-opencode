@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
+import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 
@@ -24,12 +28,34 @@ from app.schemas.internal_v2.resource_navigation import (
 )
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    NAVIGATION_DEADLINE_HEADER,
     ResourceFileOperationError,
+    ResourceNavigation,
+    navigation_deadline,
+    navigation_deadline_at,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
     resource_navigation_node,
 )
+
+
+async def send_navigation_request(outgoing: httpx.Request, *, deadline: float) -> httpx.Response:
+    """HTTPX 分阶段 timeout 之外，整个发送/读取共用原调用总期限。"""
+    ResourceNavigation._check_deadline(deadline)
+    try:
+        async with asyncio.timeout(max(0, deadline - time.monotonic())):
+            async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as client:
+                return await client.send(outgoing)
+    except (TimeoutError, httpx.TimeoutException) as error:
+        raise ResourceFileOperationError("output_limit_exceeded", "文件导航超过本次总期限", reason="deadline") from error
+
+
+def send_navigation_request_sync(outgoing: httpx.Request, *, deadline: float) -> httpx.Response:
+    # 同步工具也使用同一有界 HTTP 实现；独立事件循环不借用来源观察连接。
+    context = contextvars.copy_context()
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="file-navigation") as executor:
+        return executor.submit(context.run, asyncio.run, send_navigation_request(outgoing, deadline=deadline)).result()
 
 
 def qualify_navigation_result(
@@ -73,30 +99,35 @@ class GatewayResourceNavigation:
         self._workspace_id = workspace_id
         self._connection, self._local_token_supplier = connection, local_token_supplier
 
-    def _request(self, request: ResourceNavigationRequest) -> tuple[str, httpx.Request]:
+    def _request(self, request: ResourceNavigationRequest, *, deadline: float) -> tuple[str, httpx.Request]:
         parsed = parse_resource_uri(request.uri)
         if parsed.gateway_authority is None or parsed.scope not in {"workspace", "gateway"}:
             raise ResourceUriResolveError("scope_mismatch", "Gateway 文件传输必须固定目标 authority 和资源根")
         request_id = require_current_request_id("Gateway 文件导航")
         outgoing = httpx.Request("POST", self._connection.resolve_gateway_url()
             + f"/api/gateway/resource-navigation/workspaces/{self._workspace_id}",
-            headers={"X-Local-Token": self._local_token_supplier(), "X-Request-ID": request_id},
+            headers={"X-Local-Token": self._local_token_supplier(), "X-Request-ID": request_id,
+                     NAVIGATION_DEADLINE_HEADER: str(navigation_deadline_at(deadline))},
             json=request.model_dump(), extensions={"timeout": httpx.Timeout(min(
-                self._connection.resolve_timeout_seconds(), request.timeout_ms / 1000,
+                self._connection.resolve_timeout_seconds(), max(0, deadline - time.monotonic()),
             )).as_dict()})
         return parsed.gateway_authority, outgoing
 
-    def navigate_sync(self, request: ResourceNavigationRequest) -> ResourceNavigationResultDTO:
-        gateway_id, outgoing = self._request(request)
-        with httpx.Client(trust_env=False, follow_redirects=False) as client:
-            response = client.send(outgoing)
-        return self._response(response, request, outgoing.headers["X-Request-ID"], gateway_id)
+    def navigate_sync(self, request: ResourceNavigationRequest, *, deadline: float | None = None) -> ResourceNavigationResultDTO:
+        deadline = navigation_deadline(request, deadline=deadline)
+        gateway_id, outgoing = self._request(request, deadline=deadline)
+        response = send_navigation_request_sync(outgoing, deadline=deadline)
+        result = self._response(response, request, outgoing.headers["X-Request-ID"], gateway_id)
+        ResourceNavigation._check_deadline(deadline)
+        return result
 
-    async def navigate(self, request: ResourceNavigationRequest) -> ResourceNavigationResultDTO:
-        gateway_id, outgoing = self._request(request)
-        async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as client:
-            response = await client.send(outgoing)
-        return self._response(response, request, outgoing.headers["X-Request-ID"], gateway_id)
+    async def navigate(self, request: ResourceNavigationRequest, *, deadline: float | None = None) -> ResourceNavigationResultDTO:
+        deadline = navigation_deadline(request, deadline=deadline)
+        gateway_id, outgoing = self._request(request, deadline=deadline)
+        response = await send_navigation_request(outgoing, deadline=deadline)
+        result = self._response(response, request, outgoing.headers["X-Request-ID"], gateway_id)
+        ResourceNavigation._check_deadline(deadline)
+        return result
 
     @staticmethod
     def _response(response: httpx.Response, request: ResourceNavigationRequest,

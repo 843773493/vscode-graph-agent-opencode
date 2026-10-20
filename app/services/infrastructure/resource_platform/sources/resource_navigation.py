@@ -7,6 +7,7 @@ import base64
 import codecs
 import hashlib
 import json
+import math
 import mimetypes
 import os
 import stat
@@ -79,6 +80,33 @@ class ResourceFileOperationError(ValueError):
                 "reason": self.reason, "message": str(self)}
 
 
+NAVIGATION_DEADLINE_HEADER = "X-BoxTeam-Resource-Navigation-Deadline"
+
+
+def navigation_deadline(
+    request: ResourceNavigationRequest, *, deadline: float | None = None,
+    deadline_at: str | float | None = None,
+) -> float:
+    """查询限制不随路由改变；执行期限只能扣减，跨进程复用联邦 UTC 期限语义。"""
+    now = time.monotonic()
+    effective = min(now + request.timeout_ms / 1000, deadline) if deadline is not None else now + request.timeout_ms / 1000
+    if deadline_at is not None:
+        try:
+            timestamp = float(deadline_at)
+            if not math.isfinite(timestamp):
+                raise ValueError
+        except (ValueError, TypeError) as error:
+            raise ResourceFileOperationError("execution_failed", "文件导航执行期限无效", reason="invalid_deadline") from error
+        effective = min(effective, now + (timestamp - time.time()))
+    ResourceNavigation._check_deadline(effective)
+    return effective
+
+
+def navigation_deadline_at(deadline: float) -> float:
+    ResourceNavigation._check_deadline(deadline)
+    return time.time() + (deadline - time.monotonic())
+
+
 class ResourceNavigation:
     """Workspace 与 Gateway 共用一个文件访问实现，根绑定只来自显式 owner。"""
 
@@ -149,39 +177,41 @@ class ResourceNavigation:
 
     def navigate_sync(
         self, request: ResourceNavigationRequest, *, local_gateway_id: str, artifact_reader: ResourceFileReader | None = None,
+        deadline: float | None = None,
     ) -> ResourceNavigationResultDTO:
         """同步工具复用同一解析与文件执行；HTTP 传输不借用异步观察连接。"""
-        deadline = time.monotonic() + request.timeout_ms / 1000
+        deadline = navigation_deadline(request, deadline=deadline)
         routed = self._routed_request(request, local_gateway_id, artifact_reader)
         if routed is not None:
-            result = self._gateway_navigation.navigate_sync(routed)
+            result = self._gateway_navigation.navigate_sync(routed, deadline=deadline)
             return self._response(result, request, deadline)
         parsed = self._parse_target(request, local_gateway_id)
         if parsed.scope == "gateway" and parsed.kind == "skills" and self._workspace_root is not None:
             if self._gateway_sources is None:
                 raise ResourceUriResolveError("unknown_resource", "没有对应的 Gateway 文件 owner")
             result = self._gateway_sources.navigate_sync(
-                request.model_copy(update={"uri": parsed.display_uri}), gateway_id=local_gateway_id,
+                request.model_copy(update={"uri": parsed.display_uri}), gateway_id=local_gateway_id, deadline=deadline,
             )
             return self._response(result, request, deadline)
         return self._navigate_local(parsed, request, local_gateway_id, deadline, artifact_reader)
 
     async def navigate(
         self, request: ResourceNavigationRequest, *, local_gateway_id: str, artifact_reader: ResourceFileReader | None = None,
+        deadline: float | None = None,
     ) -> ResourceNavigationResultDTO:
-        deadline = time.monotonic() + request.timeout_ms / 1000
+        deadline = navigation_deadline(request, deadline=deadline)
         try:
             async with asyncio.timeout(max(0, deadline - time.monotonic())):
                 routed = self._routed_request(request, local_gateway_id, artifact_reader)
                 if routed is not None:
-                    result = await self._gateway_navigation.navigate(routed)
+                    result = await self._gateway_navigation.navigate(routed, deadline=deadline)
                     return self._response(result, request, deadline)
                 parsed = self._parse_target(request, local_gateway_id)
                 if parsed.scope == "gateway" and parsed.kind == "skills" and self._workspace_root is not None:
                     if self._gateway_sources is None:
                         raise ResourceUriResolveError("unknown_resource", "没有对应的 Gateway 文件 owner")
                     result = await self._gateway_sources.navigate(
-                        request.model_copy(update={"uri": parsed.display_uri}), gateway_id=local_gateway_id,
+                        request.model_copy(update={"uri": parsed.display_uri}), gateway_id=local_gateway_id, deadline=deadline,
                     )
                     return self._response(result, request, deadline)
                 # 取消等待不能中断原生阻塞 I/O；只读 worker 恢复后仍检查同一 deadline。

@@ -369,6 +369,7 @@ async def _proxy_workspace_request(
     include_credentials: bool,
     target_workspace_id: str | None = None,
     request_body: bytes | None = None,
+    navigation_deadline_at: float | None = None,
 ) -> Response:
     registry = _registry(request)
     if path.startswith("workspaces/"):
@@ -540,6 +541,11 @@ async def _proxy_workspace_request(
             if request_body is not None:
                 # typed 请求已由路由 owner 重写，长度必须属于重写后的 UTF-8 字节。
                 _set_authoritative_header(headers, "Content-Length", str(len(request_body)))
+            if navigation_deadline_at is not None:
+                from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+                    NAVIGATION_DEADLINE_HEADER,
+                )
+                _set_authoritative_header(headers, NAVIGATION_DEADLINE_HEADER, str(navigation_deadline_at))
             forwarded = client.build_request(
                 request.method,
                 target_url,
@@ -592,6 +598,14 @@ async def _proxy_workspace_request(
                 detail=f"工作区 availability 请求未获得响应: {target_url}",
             )
         media_type = response.headers.get("content-type")
+        if navigation_deadline_at is not None:
+            # 导航是有界 JSON；完整消费后再交付，避免流式响应绕过路由总期限。
+            try:
+                body = await response.aread()
+            finally:
+                await response.aclose()
+            return Response(content=body, status_code=response.status_code,
+                            headers=_response_headers(response), media_type=media_type)
         if media_type and "text/event-stream" in media_type:
             headers = _response_headers(response)
             # 路由 revision 是本机权威信息，上游的同名头部一律被这里覆盖。

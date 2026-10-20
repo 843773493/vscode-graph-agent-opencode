@@ -295,18 +295,17 @@ def configure_workspace_filesystem_tools(
             result = resource_navigation.navigate_sync(ResourceNavigationRequest(
                 uri=uri, operation="list", limit=limit, cursor=cursor,
                 timeout_ms=timeout_ms, scan_limit=scan_limit, max_response_bytes=max_response_bytes,
-            ), local_gateway_id=gateway_id, artifact_reader=artifact_reader)
+            ), local_gateway_id=gateway_id, artifact_reader=artifact_reader, deadline=deadline)
+            message = ToolMessage(content=result.model_dump_json(), name="ls", tool_call_id=runtime.tool_call_id, status="success")
             if time.monotonic() >= deadline:
-                raise ResourceFileOperationError("output_limit_exceeded", "目录导航超过本次总期限", reason="deadline")
+                raise TimeoutError
+            return message
         except (TimeoutError, httpx.TimeoutException):
             return _path_error("ls", runtime, ResourceFileOperationError(
                 "output_limit_exceeded", "目录导航超过本次总期限", reason="deadline",
             ))
         except (OSError, RuntimeError, ValueError, httpx.HTTPError, FederationError) as error:
             return _path_error("ls", runtime, error)
-        return ToolMessage(
-            content=result.model_dump_json(), name="ls", tool_call_id=runtime.tool_call_id, status="success",
-        )
 
     async def async_ls(
         path: str,
@@ -314,23 +313,25 @@ def configure_workspace_filesystem_tools(
         limit: int = 100, cursor: str | None = None, timeout_ms: int = 10000,
         scan_limit: int = 10000, max_response_bytes: int = 1048576,
     ) -> ToolMessage:
+        deadline = time.monotonic() + timeout_ms / 1000
         try:
             gateway_id = require_current_gateway_id("ls")
-            async with asyncio.timeout(timeout_ms / 1000):
+            async with asyncio.timeout(max(0, deadline - time.monotonic())):
                 uri = await asyncio.to_thread(resource_navigation.input_uri, path)
                 result = await resource_navigation.navigate(ResourceNavigationRequest(
                     uri=uri, operation="list", limit=limit, cursor=cursor,
                     timeout_ms=timeout_ms, scan_limit=scan_limit, max_response_bytes=max_response_bytes,
-                ), local_gateway_id=gateway_id, artifact_reader=artifact_reader)
+                ), local_gateway_id=gateway_id, artifact_reader=artifact_reader, deadline=deadline)
+                message = ToolMessage(content=result.model_dump_json(), name="ls", tool_call_id=runtime.tool_call_id, status="success")
+                if time.monotonic() >= deadline:
+                    raise TimeoutError
+                return message
         except (TimeoutError, httpx.TimeoutException):
             return _path_error("ls", runtime, ResourceFileOperationError(
                 "output_limit_exceeded", "目录导航超过本次总期限", reason="deadline",
             ))
         except (OSError, RuntimeError, ValueError, httpx.HTTPError, FederationError) as error:
             return _path_error("ls", runtime, error)
-        return ToolMessage(
-            content=result.model_dump_json(), name="ls", tool_call_id=runtime.tool_call_id, status="success",
-        )
 
     def sync_read_file(
         path: str,
@@ -348,7 +349,7 @@ def configure_workspace_filesystem_tools(
                 uri=uri, operation="read", read_format="auto", line_offset=line_offset,
                 max_lines=max_lines or DEFAULT_MAX_LINES, max_bytes=max_bytes,
                 max_response_bytes=max_response_bytes, timeout_ms=timeout_ms,
-            ), local_gateway_id=gateway_id, artifact_reader=artifact_reader)
+            ), local_gateway_id=gateway_id, artifact_reader=artifact_reader, deadline=deadline)
             message = _read_navigation_message(result, runtime, max_response_bytes)
             if time.monotonic() >= deadline:
                 raise TimeoutError
@@ -380,14 +381,14 @@ def configure_workspace_filesystem_tools(
         deadline = time.monotonic() + timeout_ms / 1000
         try:
             gateway_id = require_current_gateway_id("read_file")
-            async with asyncio.timeout(timeout_ms / 1000):
+            async with asyncio.timeout(max(0, deadline - time.monotonic())):
                 uri = await asyncio.to_thread(resource_navigation.input_uri, path)
                 require_read_permission(uri)
                 result = await resource_navigation.navigate(ResourceNavigationRequest(
                     uri=uri, operation="read", read_format="auto", line_offset=line_offset,
                     max_lines=max_lines or DEFAULT_MAX_LINES, max_bytes=max_bytes,
                     max_response_bytes=max_response_bytes, timeout_ms=timeout_ms,
-                ), local_gateway_id=gateway_id, artifact_reader=artifact_reader)
+                ), local_gateway_id=gateway_id, artifact_reader=artifact_reader, deadline=deadline)
                 message = _read_navigation_message(result, runtime, max_response_bytes)
                 if time.monotonic() >= deadline:
                     raise TimeoutError
@@ -505,7 +506,7 @@ def configure_workspace_filesystem_tools(
                                      max_response_bytes, max_bytes, max_snippet_bytes)
             if time.monotonic() >= deadline:
                 raise TimeoutError
-            result = resource_navigation.navigate_sync(request, local_gateway_id=gateway_id, artifact_reader=artifact_reader)
+            result = resource_navigation.navigate_sync(request, local_gateway_id=gateway_id, artifact_reader=artifact_reader, deadline=deadline)
             message = search_message(tool_name, result, output_mode, runtime, max_response_bytes)
             if time.monotonic() >= deadline:
                 raise TimeoutError
@@ -526,10 +527,10 @@ def configure_workspace_filesystem_tools(
         deadline = time.monotonic() + timeout_ms / 1000
         try:
             gateway_id = require_current_gateway_id(tool_name)
-            async with asyncio.timeout(timeout_ms / 1000):
+            async with asyncio.timeout(max(0, deadline - time.monotonic())):
                 request = await asyncio.to_thread(search_request, tool_name, pattern, path, glob, limit, cursor, timeout_ms,
                     scan_limit, max_response_bytes, max_bytes, max_snippet_bytes)
-                result = await resource_navigation.navigate(request, local_gateway_id=gateway_id, artifact_reader=artifact_reader)
+                result = await resource_navigation.navigate(request, local_gateway_id=gateway_id, artifact_reader=artifact_reader, deadline=deadline)
                 message = search_message(tool_name, result, output_mode, runtime, max_response_bytes)
                 if time.monotonic() >= deadline:
                     raise TimeoutError

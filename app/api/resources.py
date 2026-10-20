@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 from urllib.error import URLError
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.abstractions.browser_resources import BrowserRequestError
 from app.api.deps import (
@@ -53,8 +53,10 @@ from app.services.business.workspace_resources.owner import (
 )
 from app.services.business.workspace_resources.records import ThreadRef
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    NAVIGATION_DEADLINE_HEADER,
     ResourceFileOperationError,
     ResourceNavigation,
+    navigation_deadline,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
@@ -71,12 +73,20 @@ router = APIRouter(prefix="/resources", tags=["resources"])
 
 @router.post("/navigation", response_model=APIResponse[ResourceNavigationResultDTO])
 async def navigate_resource(
-    body: ResourceNavigationRequest,
+    body: ResourceNavigationRequest, request: Request,
     _: str = Depends(verify_local_token), request_id: str = Depends(get_request_id),
     *, owner: Annotated[ResourceNavigation, Depends(get_resource_navigation)],
 ):
     try:
-        result = await owner.navigate(body, local_gateway_id=require_current_gateway_id("资源导航"))
+        deadline = navigation_deadline(body, deadline_at=request.headers.get(NAVIGATION_DEADLINE_HEADER))
+        result = await owner.navigate(body, local_gateway_id=require_current_gateway_id("资源导航"), deadline=deadline)
+        envelope = APIResponse(data=result, request_id=request_id)
+        if len(envelope.model_dump_json().encode("utf-8")) > body.max_response_bytes:
+            raise ResourceFileOperationError(
+                "output_limit_exceeded", "导航响应及请求回执超过总字节上限", reason="response_byte_limit",
+            )
+        ResourceNavigation._check_deadline(deadline)
+        return envelope
     except ResourceUriGrammarError as error:
         raise HTTPException(400, detail={"owner": "resource_uri_grammar", "code": error.reason_code, "message": str(error)}) from error
     except ResourceUriResolveError as error:
@@ -92,12 +102,6 @@ async def navigate_resource(
         raise HTTPException(502, detail={"owner": "gateway_transport", "type": type(error).__name__}) from error
     except (OSError, UnicodeError) as error:
         raise HTTPException(400, detail={"owner": "resource_navigation", "type": type(error).__name__, "errno": getattr(error, "errno", None)}) from error
-    envelope = APIResponse(data=result, request_id=request_id)
-    if len(envelope.model_dump_json().encode("utf-8")) > body.max_response_bytes:
-        raise HTTPException(400, detail=ResourceFileOperationError(
-            "output_limit_exceeded", "导航响应及请求回执超过总字节上限", reason="response_byte_limit",
-        ).detail())
-    return envelope
 
 
 @router.post("/text-mutations", response_model=APIResponse[TextMutationTransferDTO])

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 
 import httpx
@@ -174,16 +175,24 @@ class WorkspaceSessionMainPort:
     def canonical_workspace_id(self, workspace_id: str) -> str:
         return self._backend_workspace_ids.get(workspace_id, workspace_id)
 
-    async def _request(self, *, workspace_id: str, method: str, path: str, origin: str, body: dict[str, object] | None = None, timeout: float | None = None) -> dict[str, object]:
+    async def _request(self, *, workspace_id: str, method: str, path: str, origin: str, body: dict[str, object] | None = None, timeout: float | None = None,
+                       navigation_deadline_at: float | None = None) -> dict[str, object]:
         request_id = require_current_request_id("联邦 workspace HTTP port")
         url = self._backend_urls.get(workspace_id)
         if url is None:
             raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, f"本地 workspace 不可达: {workspace_id}")
-        response = await self._http_client.request(method, url + path, json=body, headers={
+        headers = {
             "X-Local-Token": LOCAL_TOKEN, "X-BoxTeam-Workspace-Id": workspace_id,
             "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(), "X-Request-ID": request_id,
             "X-BoxTeam-Communication-Origin": origin,
-        }, timeout=timeout if timeout is not None else self._request_timeout)
+        }
+        if navigation_deadline_at is not None:
+            from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+                NAVIGATION_DEADLINE_HEADER,
+            )
+            headers[NAVIGATION_DEADLINE_HEADER] = str(navigation_deadline_at)
+        response = await self._http_client.request(method, url + path, json=body, headers=headers,
+            timeout=timeout if timeout is not None else self._request_timeout)
         if response.status_code >= 400:
             from app.core.session_control_communication_ledger.observations import (
                 observation_error_code,
@@ -298,6 +307,7 @@ class WorkspaceSessionMainPort:
         return thread_id
 
     async def execute(self, *, operation: str, target: dict[str, object], body: dict[str, object], origin: str, timeout: float) -> dict[str, object]:
+        execution_deadline = time.monotonic() + timeout
         if "mutation_kind" in target:
             from app.core.resource_uri import parse_resource_uri
             from app.schemas.internal_v2.communication import TextMutationRelayRequest
@@ -333,6 +343,7 @@ class WorkspaceSessionMainPort:
             )
             from app.services.infrastructure.resource_platform.sources.resource_navigation import (
                 ResourceFileOperationError,
+                navigation_deadline_at,
             )
             from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
                 ResourceUriResolveError,
@@ -347,13 +358,14 @@ class WorkspaceSessionMainPort:
                 raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "导航 URI 不属于当前 Gateway")
             navigation = query.navigation.model_copy(update={"uri": resource.display_uri})
             try:
-                async with asyncio.timeout(timeout):
+                async with asyncio.timeout(max(0, execution_deadline - time.monotonic())):
                     if resource.scope == "workspace":
                         if resource.scope_id not in self._backend_urls:
                             raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "导航 workspace 未共享或不存在")
                         data = await self._request(
                             workspace_id=resource.scope_id, method="POST", path="/api/v1/resources/navigation",
                             origin=origin, body=navigation.model_dump(mode="json"), timeout=timeout,
+                            navigation_deadline_at=navigation_deadline_at(execution_deadline),
                         )
                         result = ResourceNavigationResultDTO.model_validate(data)
                     elif resource.scope == "gateway" and resource.scope_id == gateway_id:
@@ -364,12 +376,13 @@ class WorkspaceSessionMainPort:
                             data = await self._request(
                                 workspace_id=min(self._backend_urls), method="POST", path="/api/v1/resources/navigation",
                                 origin=origin, body=navigation.model_dump(mode="json"), timeout=timeout,
+                                navigation_deadline_at=navigation_deadline_at(execution_deadline),
                             )
                             result = ResourceNavigationResultDTO.model_validate(data)
                         else:
                             if self._skill_source_owner is None:
                                 raise RuntimeError("Gateway Skill navigation owner 尚未装配")
-                            result = await self._skill_source_owner.navigate(navigation)
+                            result = await self._skill_source_owner.navigate(navigation, deadline=execution_deadline)
                     else:
                         raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "导航 scope 未共享或不存在")
             except ResourceUriResolveError as error:

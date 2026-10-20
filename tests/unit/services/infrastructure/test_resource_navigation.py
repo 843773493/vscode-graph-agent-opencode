@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -61,6 +62,23 @@ async def test_pages_return_reopenable_uris_without_creating_resource_state(navi
         assert str(workspace) not in decoded and "uri" not in decoded
     assert len(seen) == len(names)
     assert not (workspace / ".boxteam").exists()
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_execution_deadline_does_not_change_cursor_binding(navigation_case, synchronous):
+    owner, workspace, uri = navigation_case
+    for name in ("a.txt", "b.txt", "c.txt"):
+        (workspace / name).write_text(name)
+    query = ResourceNavigationRequest(uri=uri, operation="list", limit=1, timeout_ms=2000)
+    names, cursor = [], None
+    for remaining in (1.5, 0.8, 0.2):
+        request = query.model_copy(update={"cursor": cursor})
+        options = {"local_gateway_id": GATEWAY_ID, "deadline": time.monotonic() + remaining}
+        page = owner.navigate_sync(request, **options) if synchronous else await owner.navigate(request, **options)
+        names.extend(node.uri for node in page.entries)
+        cursor = page.next_cursor
+    assert names == [uri + "/" + name for name in ("a.txt", "b.txt", "c.txt")]
+    assert cursor is None
 
 
 @pytest.mark.asyncio

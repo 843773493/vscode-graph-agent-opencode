@@ -776,6 +776,7 @@ class FederationRpcService:
         return result
 
     async def _execute_local(self, *, target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | TextMutationGrantTarget, operation: OperationKind, body: dict[str, object], origin: str, remaining: float) -> dict[str, object]:
+        local_deadline = time.time() + remaining
         if target.gateway_id != self.gateway_id:
             raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "target audience 不是本 Gateway")
         self._authorize(capability=operation, origin=origin, session=None)
@@ -829,7 +830,7 @@ class FederationRpcService:
         self._authorize(capability=operation, origin=origin, session=None)
         gateway_token = set_current_gateway_id(self.gateway_id)
         try:
-            result = await self.session_main.execute(operation=operation, target=frozen_target, body=body, origin=origin, timeout=remaining)
+            result = await self.session_main.execute(operation=operation, target=frozen_target, body=body, origin=origin, timeout=remaining_deadline(local_deadline))
         finally:
             reset_current_gateway_id(gateway_token)
         self._authorize(capability=operation, origin=origin, session=None)

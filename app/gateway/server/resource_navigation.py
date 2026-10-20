@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Annotated
 
@@ -46,7 +47,11 @@ from app.services.infrastructure.resource_platform.sources.gateway_resource_navi
     qualify_navigation_result,
 )
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    NAVIGATION_DEADLINE_HEADER,
     ResourceFileOperationError,
+    ResourceNavigation,
+    navigation_deadline,
+    navigation_deadline_at,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
@@ -58,6 +63,25 @@ router = APIRouter()
 async def _navigate(
     payload: ResourceNavigationRequest, request: Request, *, auth: GatewayAuthContext | None,
     user_access: UserAccessContext | None, backend_workspace_id: str | None = None,
+) -> Response:
+    try:
+        deadline = navigation_deadline(payload, deadline_at=request.headers.get(NAVIGATION_DEADLINE_HEADER))
+        async with asyncio.timeout(max(0, deadline - time.monotonic())):
+            response = await _navigate_target(payload, request, auth=auth, user_access=user_access,
+                                             backend_workspace_id=backend_workspace_id, deadline=deadline)
+            ResourceNavigation._check_deadline(deadline)
+            return response
+    except TimeoutError as error:
+        raise HTTPException(400, detail=ResourceFileOperationError(
+            "output_limit_exceeded", "文件导航超过本次总期限", reason="deadline",
+        ).detail()) from error
+    except ResourceFileOperationError as error:
+        raise HTTPException(400, detail=error.detail()) from error
+
+
+async def _navigate_target(
+    payload: ResourceNavigationRequest, request: Request, *, auth: GatewayAuthContext | None,
+    user_access: UserAccessContext | None, backend_workspace_id: str | None, deadline: float,
 ) -> Response:
     gateway_id = request.app.state.gateway_id
     try:
@@ -86,6 +110,7 @@ async def _navigate(
                     f"workspaces/{backend_workspace_id}/resources/navigation", request,
                     auth=auth, user_access=user_access, include_credentials=True,
                     request_body=payload.model_dump_json(exclude_unset=True).encode("utf-8"),
+                    navigation_deadline_at=navigation_deadline_at(deadline),
                 )
             # 固定远端 Workspace 入口同样走签名 read grant，不再转发联邦 HTTP 凭据。
             uri = resource_display_uri(scope=resource.scope, scope_id=resource.scope_id, kind=resource.kind,
@@ -102,6 +127,7 @@ async def _navigate(
                 "resources/navigation", request, auth=auth, user_access=user_access,
                 include_credentials=True, target_workspace_id=targets[0].workspace_id,
                 request_body=payload.model_dump_json(exclude_unset=True).encode("utf-8"),
+                navigation_deadline_at=navigation_deadline_at(deadline),
             )
         if resource.gateway_authority is None:
             if resource.scope != "gateway" or resource.scope_id != gateway_id:
@@ -118,8 +144,9 @@ async def _navigate(
                     "resources/navigation", request, auth=auth, user_access=user_access,
                     include_credentials=True, target_workspace_id=targets[0].workspace_id,
                     request_body=payload.model_dump_json(exclude_unset=True).encode("utf-8"),
+                    navigation_deadline_at=navigation_deadline_at(deadline),
                 )
-            result = await request.app.state.skill_source_owner.navigate(payload)
+            result = await request.app.state.skill_source_owner.navigate(payload, deadline=deadline)
         else:
             if resource.scope not in {"workspace", "gateway"}:
                 raise ResourceUriResolveError("scope_mismatch", "远端导航 scope 需要明确的目标 owner")
@@ -127,7 +154,7 @@ async def _navigate(
             envelope = ResourceNavigationRelayRequest(source_gateway_id=gateway_id, navigation_target=target, navigation=payload)
             data = await request.app.state.federation_rpc_service.relay_operation(
                 target=target, operation="read", body=envelope.model_dump(mode="json"),
-                deadline_at=time.time() + min(FEDERATION_DEADLINE_SECONDS, payload.timeout_ms / 1000),
+                deadline_at=min(time.time() + FEDERATION_DEADLINE_SECONDS, navigation_deadline_at(deadline)),
             )
             while isinstance(data.get("result"), dict) and "relayed_by" in data:
                 data = data["result"]

@@ -23,6 +23,7 @@ from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.schemas.internal_v2.resource_navigation import ResourceNavigationRequest
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceFileOperationError,
+    navigation_deadline,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
@@ -46,7 +47,7 @@ class GatewaySkillSourcePort:
             for target in self._registry.targets()
         )
 
-    async def execute(self, request: dict[str, object]) -> dict[str, object]:
+    async def execute(self, request: dict[str, object], *, deadline: float | None = None) -> dict[str, object]:
         gateway_id = require_str(request, "gateway_id")
         workspace_id = require_str(request, "workspace_id")
         identity = {
@@ -68,7 +69,7 @@ class GatewaySkillSourcePort:
             raise FederationError(FEDERATION_MALFORMED_FRAME, "Gateway Skill source 请求类型无效")
         navigation = ResourceNavigationRequest.model_validate(request.get("navigation"))
         try:
-            result = await self.owner.navigate(navigation)
+            result = await self.owner.navigate(navigation, deadline=deadline)
         except ResourceUriGrammarError as error:
             return {**identity, "status": 400, "detail": {"owner": "resource_uri_grammar", "code": error.reason_code, "message": str(error)}}
         except ResourceUriResolveError as error:
@@ -82,7 +83,7 @@ class GatewaySkillSourcePort:
 
 
 async def relay_gateway_skill_sources(
-    service: FederationRpcService, request: dict[str, object],
+    service: FederationRpcService, request: dict[str, object], *, deadline_at: float | None = None,
 ) -> dict[str, object]:
     """可信入口只向 registry 唯一登记的直接 spoke 发起请求，绝不猜 URL。"""
     gateway_id = require_str(request, "gateway_id")
@@ -94,6 +95,11 @@ async def relay_gateway_skill_sources(
     # 这是独立的 Gateway 来源读取协议；不把 Skill 伪装成 Session read grant。
     service._authorize(capability="read", origin=service.gateway_id, session=channel)
     deadline = time.time() + FEDERATION_DEADLINE_SECONDS
+    if request.get("kind") == "navigation":
+        navigation = ResourceNavigationRequest.model_validate(request.get("navigation"))
+        deadline = min(deadline, time.time() + navigation.timeout_ms / 1000)
+    if deadline_at is not None:
+        deadline = min(deadline, deadline_at)
     result = await channel.request(
         method=METHOD_SKILL_SOURCES,
         request={**request, "origin_gateway_id": service.gateway_id, "nonce": new_origin_nonce()},
@@ -133,7 +139,10 @@ async def serve_gateway_skill_sources(
     service._adopt_origin_envelope(request=request, session=session, grant_kind="gateway_skill_sources")
     if service.gateway_skill_sources is None:
         raise FederationError(FEDERATION_CAPABILITY_DENIED, "Gateway Skill source owner 未装配")
-    result = await service.gateway_skill_sources.execute(request)
+    deadline = None
+    if request.get("kind") == "navigation":
+        deadline = navigation_deadline(ResourceNavigationRequest.model_validate(request.get("navigation")), deadline_at=deadline_at)
+    result = await service.gateway_skill_sources.execute(request, deadline=deadline)
     remaining_deadline(deadline_at)
     service._authorize(capability="read", origin=session.peer_gateway_id, session=session)
     return result

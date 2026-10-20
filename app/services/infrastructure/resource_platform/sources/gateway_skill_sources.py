@@ -6,6 +6,7 @@ import asyncio
 import errno
 import hashlib
 import logging
+import time
 from collections.abc import Callable
 from contextvars import Context
 from dataclasses import dataclass, field
@@ -30,8 +31,16 @@ from app.services.infrastructure.resource_platform.observation.resource_observat
     ResourceObservation,
     ResourceObservationChannel,
 )
+from app.services.infrastructure.resource_platform.sources.gateway_resource_navigation import (
+    send_navigation_request,
+    send_navigation_request_sync,
+)
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    NAVIGATION_DEADLINE_HEADER,
     ResourceFileOperationError,
+    ResourceNavigation,
+    navigation_deadline,
+    navigation_deadline_at,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
@@ -92,7 +101,7 @@ class GatewaySkillSources:
         return state.snapshot
 
     def _navigation_request(
-        self, request: ResourceNavigationRequest, *, gateway_id: str,
+        self, request: ResourceNavigationRequest, *, gateway_id: str, deadline: float,
     ) -> tuple[ParsedResourceUri, httpx.Request]:
         parsed = parse_resource_uri(request.uri, local_gateway_id=gateway_id)
         if parsed.gateway_authority is not None or parsed.scope != "gateway" or parsed.scope_id != gateway_id or parsed.kind != "skills":
@@ -104,30 +113,35 @@ class GatewaySkillSources:
             headers={
                 "X-Local-Token": self._local_token_supplier(),
                 "X-Request-ID": request_id,
+                NAVIGATION_DEADLINE_HEADER: str(navigation_deadline_at(deadline)),
             },
             json=request.model_copy(update={"uri": parsed.display_uri}).model_dump(),
             extensions={"timeout": httpx.Timeout(min(
-                self._connection.resolve_timeout_seconds(), request.timeout_ms / 1000,
+                self._connection.resolve_timeout_seconds(), max(0, deadline - time.monotonic()),
             )).as_dict()},
         )
         return parsed, outgoing
 
     def navigate_sync(
-        self, request: ResourceNavigationRequest, *, gateway_id: str,
+        self, request: ResourceNavigationRequest, *, gateway_id: str, deadline: float | None = None,
     ) -> ResourceNavigationResultDTO:
-        parsed, outgoing = self._navigation_request(request, gateway_id=gateway_id)
-        with httpx.Client(trust_env=False, follow_redirects=False) as client:
-            response = client.send(outgoing)
-        return self._navigation_response(response, parsed, outgoing.headers["X-Request-ID"], gateway_id)
+        deadline = navigation_deadline(request, deadline=deadline)
+        parsed, outgoing = self._navigation_request(request, gateway_id=gateway_id, deadline=deadline)
+        response = send_navigation_request_sync(outgoing, deadline=deadline)
+        result = self._navigation_response(response, parsed, outgoing.headers["X-Request-ID"], gateway_id)
+        ResourceNavigation._check_deadline(deadline)
+        return result
 
     async def navigate(
-        self, request: ResourceNavigationRequest, *, gateway_id: str,
+        self, request: ResourceNavigationRequest, *, gateway_id: str, deadline: float | None = None,
     ) -> ResourceNavigationResultDTO:
         """只读传输不建立 source owner，也不复用绑定其它事件循环的观察连接。"""
-        parsed, outgoing = self._navigation_request(request, gateway_id=gateway_id)
-        async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as client:
-            response = await client.send(outgoing)
-        return self._navigation_response(response, parsed, outgoing.headers["X-Request-ID"], gateway_id)
+        deadline = navigation_deadline(request, deadline=deadline)
+        parsed, outgoing = self._navigation_request(request, gateway_id=gateway_id, deadline=deadline)
+        response = await send_navigation_request(outgoing, deadline=deadline)
+        result = self._navigation_response(response, parsed, outgoing.headers["X-Request-ID"], gateway_id)
+        ResourceNavigation._check_deadline(deadline)
+        return result
 
     @staticmethod
     def _navigation_response(

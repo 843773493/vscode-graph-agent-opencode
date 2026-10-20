@@ -250,3 +250,22 @@ async def test_spoke_rejects_transit_replay_and_outside_workspace_audience(skill
             method=METHOD_SKILL_SOURCES, request=envelope, session=case.outbound, deadline_at=time.time() + 5,
         )
     assert reversed_channel.value.code == FEDERATION_CAPABILITY_DENIED
+
+
+async def test_skill_navigation_consumes_original_federation_deadline(skill_route_case, monkeypatch):
+    case = skill_route_case
+    uri = f"boxteam://gateway/{SPOKE}/resources/skills/shared/SKILL.md"
+    owner = case.spoke.gateway_skill_sources.owner
+    original = owner._navigation._navigate_local
+    seen = []
+
+    def inspect_deadline(parsed, query, gateway_id, deadline, artifact_reader=None):
+        seen.append((query.timeout_ms, deadline - time.monotonic()))
+        return original(parsed, query, gateway_id, deadline, artifact_reader)
+
+    monkeypatch.setattr(owner._navigation, "_navigate_local", inspect_deadline)
+    result = await relay_gateway_skill_sources(case.hub, case.request(kind="navigation",
+        navigation={"uri": uri, "operation": "read", "timeout_ms": 1234}), deadline_at=time.time() + 0.5)
+    assert result["status"] == 200 and result["data"]["content"] == "正文 " + SPOKE
+    query_timeout, remaining = seen.pop()
+    assert query_timeout == 1234 and 0 < remaining <= 0.5

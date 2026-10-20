@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -18,6 +20,7 @@ from app.core.trace_middleware import (
     set_current_gateway_id,
     set_current_request_id,
 )
+from app.gateway.federation import workspace_port
 from app.gateway.federation.errors import (
     FEDERATION_DEADLINE_EXCEEDED,
     FEDERATION_SESSION_MAIN_UNAVAILABLE,
@@ -32,6 +35,10 @@ from app.gateway.federation.workspace_port import (
 from app.services.business.session_context_resource import (
     session_resource_identity,
     session_resource_uri,
+)
+from app.services.infrastructure.resource_platform.sources import resource_navigation
+from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    NAVIGATION_DEADLINE_HEADER,
 )
 from tests.support.communication import (
     SOURCE_SESSION,
@@ -419,3 +426,24 @@ async def test_context_target_enforces_one_total_deadline(
         )
     assert error.value.code == FEDERATION_DEADLINE_EXCEEDED
     assert not http_context.requests
+
+
+async def test_navigation_forwards_execution_budget_without_changing_query(http_context, monkeypatch):
+    clock = SimpleNamespace(monotonic=lambda: 50.0, time=lambda: 1000.0)
+    monkeypatch.setattr(workspace_port, "time", clock)
+    monkeypatch.setattr(resource_navigation, "time", clock)
+    gateway_id = "gateway_3097a8378d6e2c98a52a687e4a004769"
+    uri = f"boxteam://workspace/{WORKSPACE_ID}/resources/files/root"
+    qualified = uri.replace("boxteam://", f"boxteam://{gateway_id}/")
+    query = {"uri": qualified, "operation": "list", "timeout_ms": 1234}
+    target = {"gateway_id": gateway_id, "uri": qualified}
+    http_context.data = {"request_id": REQUEST_ID, "data": {"node": {
+        "uri": uri, "resource_shape": "directory", "operations": ["describe", "list"], "child_path": "file_segments"}}}
+    result = await http_context.port.execute(operation="read", target=target,
+        body={"source_gateway_id": "gateway_source", "navigation_target": target, "navigation": query},
+        origin="gateway_source", timeout=0.5)
+    assert result["node"]["uri"] == uri
+    outgoing, = http_context.requests
+    assert json.loads(outgoing.content)["timeout_ms"] == 1234
+    assert float(outgoing.headers[NAVIGATION_DEADLINE_HEADER]) == 1000.5
+    assert outgoing.headers["X-Request-ID"] == REQUEST_ID

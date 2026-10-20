@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import AsyncIterator
@@ -24,6 +25,9 @@ from app.gateway.server.workspace_proxy import router, verify_user_access_for_pr
 from app.schemas.internal_v2.resource_navigation import ResourceNavigationResultDTO
 from app.services.infrastructure.resource_platform.sources.gateway_resource_navigation import (
     qualify_navigation_result,
+)
+from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    NAVIGATION_DEADLINE_HEADER,
 )
 
 WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
@@ -51,8 +55,13 @@ def navigation_relay() -> _NavigationRelay:
 
 
 @pytest.fixture
+def proxy_body():
+    return {}
+
+
+@pytest.fixture
 async def navigation_proxy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, navigation_relay: _NavigationRelay,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, navigation_relay: _NavigationRelay, proxy_body,
 ) -> AsyncIterator[tuple[httpx.AsyncClient, GatewayWorkspaceRegistry, list[httpx.Request]]]:
     monkeypatch.setenv("BOXTEAM_GATEWAY_ROOT", str(tmp_path / "gateway-root"))
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "targets.json")
@@ -69,6 +78,8 @@ async def navigation_proxy(
 
     async def receive(request: httpx.Request) -> httpx.Response:
         forwarded.append(request)
+        if proxy_body.get("stream") is not None:
+            return httpx.Response(200, stream=proxy_body["stream"], headers={"content-type": "application/json"})
         return httpx.Response(200, json={"data": {"selected": request.url.host}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(receive), trust_env=False) as upstream:
@@ -85,6 +96,65 @@ async def navigation_proxy(
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://gateway.test",
                                      headers={"X-Local-Token": get_gateway_local_token()}) as client:
             yield client, registry, forwarded
+
+
+@pytest.mark.parametrize("deadline_at,reason", [("nan", "invalid_deadline"), ("inf", "invalid_deadline"),
+    ("garbage", "invalid_deadline"), ("1", "deadline")])
+async def test_invalid_or_expired_execution_deadline_never_routes(navigation_proxy, navigation_relay, deadline_at, reason):
+    client, _, forwarded = navigation_proxy
+    uri = f"boxteam://workspace/{WORKSPACE_ID}/resources/files/root"
+    response = await client.post("/api/v1/resources/navigation", json={"uri": uri, "operation": "list"},
+        headers={NAVIGATION_DEADLINE_HEADER: deadline_at})
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"]["reason"] == reason
+    assert not forwarded and not navigation_relay.calls
+
+
+@pytest.mark.parametrize("remote", [False, True])
+async def test_execution_header_caps_route_without_changing_query(navigation_proxy, navigation_relay, remote):
+    client, _, forwarded = navigation_proxy
+    local_uri = f"boxteam://workspace/{WORKSPACE_ID}/resources/files/root"
+    uri = local_uri.replace("boxteam://", "boxteam://gateway_target/") if remote else local_uri
+    navigation_relay.response = {"node": {"uri": local_uri, "resource_shape": "directory",
+        "operations": ["describe", "list"], "child_path": "file_segments"}}
+    cap = time.time() + 0.5
+    query = {"uri": uri, "operation": "list", "timeout_ms": 1234}
+    response = await client.post("/api/v1/resources/navigation", json=query, headers={NAVIGATION_DEADLINE_HEADER: str(cap)})
+    assert response.status_code == 200, response.text
+    if remote:
+        call, = navigation_relay.calls
+        assert abs(call["deadline_at"] - cap) < 0.001
+        assert call["body"]["navigation"]["timeout_ms"] == 1234
+        assert not forwarded
+    else:
+        outgoing, = forwarded
+        assert abs(float(outgoing.headers[NAVIGATION_DEADLINE_HEADER]) - cap) < 0.001
+        assert json.loads(outgoing.content) == query
+        assert not navigation_relay.calls
+
+
+async def test_proxy_consumes_navigation_body_within_deadline_and_releases_route(navigation_proxy, proxy_body):
+    client, registry, _ = navigation_proxy
+
+    class Stream(httpx.AsyncByteStream):
+        closed = False
+
+        async def __aiter__(self):
+            while True:
+                await asyncio.sleep(0.01)
+                yield b" "
+
+        async def aclose(self):
+            self.closed = True
+
+    stream = proxy_body["stream"] = Stream()
+    started = time.monotonic()
+    response = await client.post("/api/v1/resources/navigation", json={
+        "uri": f"boxteam://workspace/{WORKSPACE_ID}/resources/files/root", "operation": "list", "timeout_ms": 80})
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"]["reason"] == "deadline"
+    assert time.monotonic() - started < 0.8
+    assert stream.closed and registry.route_reference_counts("original-target") == (0, 0)
 
 
 @pytest.fixture

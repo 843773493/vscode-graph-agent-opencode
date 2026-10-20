@@ -78,8 +78,8 @@ class GatewaySkillSourceOwner:
         })).hexdigest()
         self._publication = _GatewaySkillPublication(revision, tuple(entries), available)
 
-    async def navigate(self, request: ResourceNavigationRequest) -> ResourceNavigationResultDTO:
-        return await self._navigation.navigate(request, local_gateway_id=self.gateway_id)
+    async def navigate(self, request: ResourceNavigationRequest, *, deadline: float | None = None) -> ResourceNavigationResultDTO:
+        return await self._navigation.navigate(request, local_gateway_id=self.gateway_id, deadline=deadline)
 
     async def start(self) -> None:
         subscription = self.file_registry.subscribe_observation(label="Gateway raw Skill publication")

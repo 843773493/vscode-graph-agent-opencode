@@ -8,6 +8,7 @@ import hashlib
 import json
 import socket
 import ssl
+import time
 from contextvars import Context, ContextVar
 from pathlib import Path
 
@@ -763,3 +764,34 @@ def test_workspace_owner_cannot_register_gateway_directory(tmp_path: Path):
     )
     with pytest.raises(ValueError, match="已知固定根"):
         registry.register_skill_directory(root=tmp_path / "gateway-home" / "skills", scope="gateway", scope_id=GATEWAY_ID)
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_skill_navigation_transport_enforces_total_body_deadline(source_case, navigation_transport, synchronous):
+    _owner, source, _skill, _channel = source_case
+
+    class Stream(httpx.AsyncByteStream):
+        closed = False
+
+        async def __aiter__(self):
+            while True:
+                await asyncio.sleep(0.01)
+                yield b" "
+
+        async def aclose(self):
+            self.closed = True
+
+    stream = Stream()
+    navigation_transport(lambda request: httpx.Response(200, stream=stream))
+    request = ResourceNavigationRequest(
+        uri=f"boxteam://gateway/{GATEWAY_ID}/resources/skills/demo/SKILL.md", operation="read", timeout_ms=80,
+    )
+    started = time.monotonic()
+    with pytest.raises(ResourceFileOperationError) as failure:
+        if synchronous:
+            source.navigate_sync(request, gateway_id=GATEWAY_ID)
+        else:
+            await source.navigate(request, gateway_id=GATEWAY_ID)
+    assert failure.value.reason == "deadline"
+    assert time.monotonic() - started < 0.8
+    assert stream.closed and source._owners == {}
