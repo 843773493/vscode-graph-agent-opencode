@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Annotated, Literal
 
 from langchain_core.tools import BaseTool, StructuredTool
@@ -21,7 +20,6 @@ from app.agents.tools.debug_redaction import (
     redact_free_text,
     redact_variable_value,
 )
-from app.agents.workspace_tool_paths import WorkspaceToolPathResolver
 from app.schemas.internal_v2.node_debug import (
     ExtensionCatalogBindingAuditDTO,
     NodeDebugClearBreakpointActionRequest,
@@ -381,12 +379,10 @@ class DebuggingToolFactory:
         self,
         *,
         session_id: str,
-        workspace_root: Path,
         node_debug_service: NodeDebugService,
         invocation_context: ToolInvocationContext,
         thread_binding: ThreadRuntimeBinding | None = None,
     ) -> None:
-        self._path_resolver = WorkspaceToolPathResolver(workspace_root)
         self._node_debug_service = node_debug_service
         self._invocation_context = invocation_context
         self._thread_binding = thread_binding or invocation_context.thread_binding
@@ -652,15 +648,9 @@ class DebuggingToolFactory:
             return "INVALID_DEBUG_ARGUMENT"
         return "DEBUG_TOOL_FAILED"
 
-    def _relative_workspace_path(self, raw_path: str, field_name: str) -> str:
-        return self._path_resolver.workspace_relative_path(
-            raw_path,
-            field_name=field_name,
-        )
-
     def _canonical_directory(self, raw_path: str | None, field_name: str) -> str:
         """把目录规范化为与方案存储一致的相对形式（workspace 根为 ""）。"""
-        normalized = self._relative_workspace_path(raw_path or ".", field_name)
+        normalized = self._node_debug_service.workspace_relative_path(raw_path or ".", field_name)
         return "" if normalized == "." else normalized
 
     async def _select_launch_configuration(
@@ -704,7 +694,7 @@ class DebuggingToolFactory:
         if configuration.script_path is None:
             raise ValueError(f"调试方案没有目标文件: {configuration.name}")
         conflicts: dict[str, dict[str, str]] = {}
-        expected_path = self._relative_workspace_path(
+        expected_path = self._node_debug_service.workspace_relative_path(
             configuration.script_path,
             "script_path",
         )
@@ -778,7 +768,7 @@ class DebuggingToolFactory:
                     },
                 )
             selected_configuration = selection.configuration
-            path = self._relative_workspace_path(fileFullPath, "fileFullPath")
+            path = self._node_debug_service.workspace_relative_path(fileFullPath, "fileFullPath")
             working_directory = self._canonical_directory(
                 workingDirectory,
                 "workingDirectory",
@@ -847,7 +837,7 @@ class DebuggingToolFactory:
     ) -> str:
         session_id, thread_id = self._owner
         try:
-            path = self._relative_workspace_path(fileFullPath, "fileFullPath")
+            path = self._node_debug_service.workspace_relative_path(fileFullPath, "fileFullPath")
             working_directory = self._canonical_directory(
                 workingDirectory,
                 "workingDirectory",
@@ -983,7 +973,7 @@ class DebuggingToolFactory:
     ) -> str:
         session_id, thread_id = self._owner
         try:
-            path = self._relative_workspace_path(fileFullPath, "fileFullPath")
+            path = self._node_debug_service.workspace_relative_path(fileFullPath, "fileFullPath")
             return await self._invoke(
                 "add_breakpoint",
                 lambda tool_call_id: self._node_debug_service.apply_action(
@@ -1016,7 +1006,7 @@ class DebuggingToolFactory:
     ) -> str:
         session_id, thread_id = self._owner
         try:
-            path = self._relative_workspace_path(fileFullPath, "fileFullPath")
+            path = self._node_debug_service.workspace_relative_path(fileFullPath, "fileFullPath")
             return await self._invoke(
                 "add_logpoint",
                 lambda tool_call_id: self._node_debug_service.apply_action(
@@ -1043,7 +1033,7 @@ class DebuggingToolFactory:
     async def remove_breakpoint(self, fileFullPath: str, line: int) -> str:
         session_id, thread_id = self._owner
         try:
-            path = self._relative_workspace_path(fileFullPath, "fileFullPath")
+            path = self._node_debug_service.workspace_relative_path(fileFullPath, "fileFullPath")
             state = await self._node_debug_service.get_state(session_id, thread_id)
             breakpoint = next(
                 (
@@ -1190,14 +1180,12 @@ class DebuggingToolFactory:
 def create_debugging_tools(
     *,
     session_id: str,
-    workspace_root: Path,
     node_debug_service: NodeDebugService,
     invocation_context: ToolInvocationContext,
     thread_binding: ThreadRuntimeBinding | None = None,
 ) -> list[BaseTool]:
     return DebuggingToolFactory(
         session_id=session_id,
-        workspace_root=workspace_root,
         node_debug_service=node_debug_service,
         invocation_context=invocation_context,
         thread_binding=thread_binding,
@@ -1214,7 +1202,6 @@ def create_debugging_tool(context: CustomToolFactoryContext) -> BaseTool:
         raise ValueError("调试扩展工具 options.tool_name 必须是非空字符串")
     tools = DebuggingToolFactory(
         session_id=context.session_id,
-        workspace_root=context.workspace_root,
         node_debug_service=node_debug_service,
         invocation_context=context.invocation_context,
     ).build()

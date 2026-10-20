@@ -58,7 +58,6 @@ def _tool_map(
         tool.name: tool
         for tool in create_debugging_tools(
             session_id=owner.session_id,
-            workspace_root=workspace_root,
             node_debug_service=service,
             invocation_context=ToolInvocationContext(thread_binding=binding),
             thread_binding=binding,

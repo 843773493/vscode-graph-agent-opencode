@@ -15,12 +15,16 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.core.exceptions import ForbiddenError
 from app.core.hashing import sha256_hex as _raw_sha256
 from app.core.resource_uri import parse_session_thread_uri
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
     NodeDebugLaunchProfileDTO,
+)
+from app.services.infrastructure.node_debug.configuration.configuration_factory import (
+    NodeDebugConfigurationFactory,
 )
 from app.services.infrastructure.node_debug.configuration.runtime_config import (
     parse_launch_profile_configs,
@@ -31,6 +35,8 @@ from app.services.infrastructure.node_debug.session.session_store import (
 from app.services.infrastructure.node_debug.session.thread_owner import (
     resolve_node_debug_owner,
 )
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
+
 
 class NodeDebugSourceCaptureError(RuntimeError):
     """source 调试方案不能形成一致、可验证快照。"""
@@ -386,21 +392,17 @@ def capture_source_copy_snapshot(
     )
 
 
-def _workspace_path(root: Path, value: str, *, field: str) -> Path:
-    if not value:
-        return root
-    candidate = Path(value)
-    if candidate.is_absolute():
-        resolved = candidate.resolve()
-    else:
-        resolved = (root / candidate).resolve()
+def _target_path(
+    factory: NodeDebugConfigurationFactory, value: str, *, field: str,
+) -> Path:
     try:
-        resolved.relative_to(root.resolve())
-    except ValueError as error:
+        return factory.resolve_workspace_path(
+            value, script=field != "working_directory",
+        )[0]
+    except (ValueError, ForbiddenError, RuntimeError) as error:
         raise NodeDebugTargetValidationError(
-            f"target {field} 超出 workspace: {value}"
+            f"target {field} 无法在目标 workspace 解析: {error}"
         ) from error
-    return resolved
 
 
 def validate_target_prepublication(
@@ -409,7 +411,7 @@ def validate_target_prepublication(
     target_workspace_root: Path,
     target_workspace_config_revision: str,
     target_workspace_config_hash: str | None,
-    target_workspace_id: str | None = None,
+    target_workspace_id: str,
     launch_profiles: Mapping[str, NodeDebugLaunchProfileDTO],
     configuration_id_mapper: Callable[[str], str] | None = None,
 ) -> NodeDebugTargetPrepublication:
@@ -425,6 +427,11 @@ def validate_target_prepublication(
     ):
         raise NodeDebugTargetValidationError("target Workspace debug 配置 hash 已漂移")
     root = target_workspace_root.resolve()
+    factory = NodeDebugConfigurationFactory(
+        file_paths=WorkspaceFilePaths(
+            workspace=root, workspace_id=target_workspace_id, bindings=None,
+        ),
+    )
     mapped: list[tuple[str, str]] = []
     validated: list[str] = []
     for artifact in snapshot.configuration_artifacts:
@@ -450,7 +457,7 @@ def validate_target_prepublication(
         )
         if not script_value:
             raise NodeDebugTargetValidationError("target 调试方案缺少有效入口")
-        script = _workspace_path(root, script_value, field="script_path")
+        script = _target_path(factory, script_value, field="script_path")
         if not script.is_file():
             raise NodeDebugTargetValidationError(
                 f"target 调试入口不存在: {script_value}"
@@ -458,15 +465,15 @@ def validate_target_prepublication(
         working_directory_value = configuration.working_directory or (
             profile.working_directory if profile is not None else ""
         )
-        working_directory = _workspace_path(
-            root, working_directory_value, field="working_directory"
+        working_directory = _target_path(
+            factory, working_directory_value, field="working_directory"
         )
         if not working_directory.is_dir():
             raise NodeDebugTargetValidationError(
                 f"target 调试工作目录不存在: {working_directory_value}"
             )
         for breakpoint in configuration.breakpoints:
-            path = _workspace_path(root, breakpoint.path, field="breakpoint.path")
+            path = _target_path(factory, breakpoint.path, field="breakpoint.path")
             if not path.is_file():
                 raise NodeDebugTargetValidationError(
                     f"target 断点路径不存在: {breakpoint.path}"

@@ -24,6 +24,7 @@ from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
+from tests.support.node_debug_dependencies import node_debug_file_paths
 
 _SESSION_ID = "ses_00000000400070008000000000000001"
 _CONFIGURATION_ID = "dbgcfg_11111111111111111111111111111111"
@@ -181,14 +182,14 @@ def test_target_prepublication_rechecks_paths_profile_and_config_revision(
         configuration_ids=(_CONFIGURATION_ID,),
         workspace_config_revision="workspace-debug-v1",
         workspace_config_hash="config-hash-v1",
-        workspace_id="workspace-a",
+        workspace_id=node_debug_file_paths(tmp_path).workspace_id,
     )
     result = validate_target_prepublication(
         snapshot,
         target_workspace_root=tmp_path,
         target_workspace_config_revision="workspace-debug-v1",
         target_workspace_config_hash="config-hash-v1",
-        target_workspace_id="workspace-a",
+        target_workspace_id=node_debug_file_paths(tmp_path).workspace_id,
         launch_profiles={
             "node-default": NodeDebugLaunchProfileDTO(
                 name="node-default",
@@ -207,7 +208,7 @@ def test_target_prepublication_rechecks_paths_profile_and_config_revision(
             target_workspace_root=tmp_path,
             target_workspace_config_revision="workspace-debug-v2",
             target_workspace_config_hash="config-hash-v1",
-            target_workspace_id="workspace-a",
+            target_workspace_id=node_debug_file_paths(tmp_path).workspace_id,
             launch_profiles={},
         )
 
@@ -219,7 +220,7 @@ def test_target_prepublication_rechecks_paths_profile_and_config_revision(
             target_workspace_root=target_root,
             target_workspace_config_revision="target-debug-v2",
             target_workspace_config_hash="target-config-hash-v2",
-            target_workspace_id="workspace-b",
+            target_workspace_id=node_debug_file_paths(target_root).workspace_id,
             launch_profiles={},
         )
     profiles = {"node-default": NodeDebugLaunchProfileDTO(
@@ -229,13 +230,41 @@ def test_target_prepublication_rechecks_paths_profile_and_config_revision(
         validate_target_prepublication(
             snapshot, target_workspace_root=target_root,
             target_workspace_config_revision="target-debug-v2", target_workspace_config_hash="target-config-hash-v2",
-            target_workspace_id="workspace-b", launch_profiles=profiles,
+            target_workspace_id=node_debug_file_paths(target_root).workspace_id, launch_profiles=profiles,
         )
     (target_root / "main.mjs").write_text("console.log('target')", encoding="utf-8")
     foreign = validate_target_prepublication(
         snapshot, target_workspace_root=target_root,
         target_workspace_config_revision="target-debug-v2", target_workspace_config_hash="target-config-hash-v2",
-        target_workspace_id="workspace-b", launch_profiles=profiles,
+        target_workspace_id=node_debug_file_paths(target_root).workspace_id, launch_profiles=profiles,
     )
     assert foreign.active_configuration_id is None
     assert foreign.validated_configuration_ids == (_CONFIGURATION_ID,)
+
+    # fork 的目标 profile URI 只在 target 解释，不回 source 查找同名文件。
+    store.write_configuration(
+        _SESSION_ID,
+        _configuration(_CONFIGURATION_ID, "跟随目标 profile", "main.mjs").model_copy(
+            update={"script_path": None, "launch_profile_name": "node-default"},
+        ),
+        main_thread_id,
+    )
+    profile_snapshot = capture_source_copy_snapshot(
+        store, session_id=_SESSION_ID, thread_id=main_thread_id,
+        configuration_ids=(_CONFIGURATION_ID,),
+        workspace_id=node_debug_file_paths(tmp_path).workspace_id,
+    )
+    target_paths = node_debug_file_paths(target_root)
+    profiles["node-default"].program = target_paths.resolve("main.mjs")[1]
+    profiles["node-default"].working_directory = target_paths.workspace_uri
+    target_arguments = {
+        "target_workspace_root": target_root,
+        "target_workspace_config_revision": "target-debug-v2",
+        "target_workspace_config_hash": "target-config-hash-v2",
+        "target_workspace_id": target_paths.workspace_id, "launch_profiles": profiles,
+    }
+    result = validate_target_prepublication(profile_snapshot, **target_arguments)
+    assert result.validated_configuration_ids == (_CONFIGURATION_ID,)
+    profiles["node-default"].program = node_debug_file_paths(tmp_path).resolve("main.mjs")[1]
+    with pytest.raises(RuntimeError, match="工作区与固定目标不符"):
+        validate_target_prepublication(profile_snapshot, **target_arguments)

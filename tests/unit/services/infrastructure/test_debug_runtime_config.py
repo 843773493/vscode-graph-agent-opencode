@@ -6,6 +6,7 @@ from pathlib import Path
 import jsonschema
 import pytest
 
+from app.core.resource_uri import resource_display_uri
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
@@ -126,9 +127,69 @@ def test_node_debug_capabilities_hide_runtime_endpoints_and_mark_support(
     profiles = {item["name"]: item for item in payload["launch_profiles"]}
     assert profiles["node-test"]["supported"] is True
     assert profiles["python-future"]["supported"] is False
+    paths = node_debug_file_paths(tmp_path)
+    assert profiles["node-test"]["program"] == paths.resolve("fixtures/debug.mjs")[1]
+    assert profiles["python-future"]["program"] == paths.resolve("fixtures/debug.py")[1]
+    assert profiles["node-test"]["working_directory"] == paths.resolve("fixtures")[1]
     assert "inspector_host" not in payload
     assert "inspector_port" not in payload
     assert "debugpy_port" not in payload
+
+
+@pytest.mark.parametrize("input_kind", ("relative", "absolute", "uri"))
+def test_capability_profiles_project_future_files_without_native_paths(
+    tmp_path: Path, input_kind: str,
+) -> None:
+    paths = node_debug_file_paths(tmp_path)
+    expected_program = paths.resolve("future/entry.mjs")[1]
+    expected_directory = paths.resolve("future")[1]
+    program, directory = {
+        "relative": ("future/entry.mjs", "future"),
+        "absolute": (str(tmp_path / "future/entry.mjs"), str(tmp_path / "future")),
+        "uri": (expected_program, expected_directory),
+    }[input_kind]
+    config = ConfigService(config_dir=Path.cwd() / "configs", config_path=_write_config(
+        tmp_path, {"launch_profiles": {"future": {
+            "adapter": "node_inspector", "runtime": "node", "program": program,
+            "working_directory": directory, "args": ["--fixture"],
+        }}},
+    ))
+    service = NodeDebugService(
+        workspace_root=tmp_path, file_paths=paths, config_service=config,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
+    )
+    payload = service.get_capabilities().model_dump(mode="json")
+    profile = next(p for p in payload["launch_profiles"] if p["name"] == "future")
+    assert profile["program"] == expected_program
+    assert profile["working_directory"] == expected_directory
+    assert profile["args"] == ["--fixture"]
+    assert str(tmp_path) not in json.dumps(payload)
+    assert not (tmp_path / "future").exists()
+    # 能力查询不检查存在性；同一引用到真正启动校验时仍明确失败。
+    with pytest.raises(FileNotFoundError, match="调试脚本不存在"):
+        service._configuration_factory.resolve_script_path(profile["program"])
+
+
+def test_capability_profile_rejects_foreign_workspace_uri(tmp_path: Path) -> None:
+    paths = node_debug_file_paths(tmp_path)
+    foreign_uri = resource_display_uri(
+        scope="workspace", scope_id="00000000-0000-4000-8000-000000000001",
+        kind="files", tail_segments=("root", "entry.mjs"),
+    )
+    config = ConfigService(config_dir=Path.cwd() / "configs", config_path=_write_config(
+        tmp_path, {"launch_profiles": {"foreign": {
+            "adapter": "node_inspector", "runtime": "node", "program": foreign_uri,
+            "working_directory": "", "args": [],
+        }}},
+    ))
+    service = NodeDebugService(
+        workspace_root=tmp_path, file_paths=paths, config_service=config,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
+    )
+    with pytest.raises(ValueError, match="工作区与固定目标不符"):
+        service.get_capabilities()
 
 
 def test_debug_runtime_config_reads_workspace_override(tmp_path: Path) -> None:

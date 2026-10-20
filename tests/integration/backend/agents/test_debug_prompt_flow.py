@@ -290,7 +290,7 @@ def scripted_model_server() -> Iterator[tuple[ScriptedModelState, str]]:
 
 
 @pytest.fixture(scope="module")
-def integration_backend_port(request: pytest.FixtureRequest) -> int:
+def scripted_debug_backend_port(request: pytest.FixtureRequest) -> int:
     # 文件专属端口块内避开本机常驻服务占用的起始端口，不回收未知进程。
     return integration_port_block_for_file(Path(request.node.path)).port(20)
 
@@ -299,7 +299,7 @@ def integration_backend_port(request: pytest.FixtureRequest) -> int:
 def scripted_backend_process(
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
-    integration_backend_port: int,
+    scripted_debug_backend_port: int,
     scripted_model_server: tuple[ScriptedModelState, str],
 ) -> Generator[subprocess.Popen[str], None, None]:
     _state, endpoint = scripted_model_server
@@ -334,6 +334,14 @@ def scripted_backend_process(
         raise TypeError("测试配置 agents.default.model 必须是对象")
     model["primary_provider"] = "debug-e2e"
     model["fallback_providers"] = []
+    workspace_root = Path(integration_workspace_root_path)
+    config.setdefault("runtime", {}).setdefault("debug", {}).setdefault("launch_profiles", {})[
+        "capability-entry"
+    ] = {
+        "adapter": "node_inspector", "runtime": "node",
+        "program": str(workspace_root / "debug-prompt-fixture.mjs"),
+        "working_directory": str(workspace_root), "args": [],
+    }
     config_path.write_text(
         json.dumps(config, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -341,7 +349,7 @@ def scripted_backend_process(
 
     handle = start_backend_process(
         workspace_root=integration_workspace_root_path,
-        port=integration_backend_port,
+        port=scripted_debug_backend_port,
         log_name="debug-prompt-e2e",
         env_overrides={"BOXTEAM_DEFAULT_SKILL_GROUPS": '["debugging"]'},
     )
@@ -354,12 +362,12 @@ def scripted_backend_process(
 @pytest.fixture
 async def scripted_client(
     scripted_backend_process: subprocess.Popen[str],
-    integration_backend_port: int,
+    scripted_debug_backend_port: int,
     integration_workspace_root_path: str,
 ) -> AsyncIterator[httpx.AsyncClient]:
     del scripted_backend_process
     async with httpx.AsyncClient(
-        base_url=f"http://127.0.0.1:{integration_backend_port}",
+        base_url=f"http://127.0.0.1:{scripted_debug_backend_port}",
         timeout=60,
         headers={
             "X-Local-Token": "local-dev-token",
@@ -411,6 +419,19 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
 ) -> None:
     state, _endpoint = scripted_model_server
     workspace_root = Path(integration_workspace_root_path).resolve()
+    file_paths = WorkspaceFilePaths(
+        workspace=workspace_root, workspace_id=read_workspace_id(workspace_root), bindings=None,
+    )
+    assert not (workspace_root / "debug-prompt-fixture.mjs").exists()
+    capabilities_response = await scripted_client.get("/api/v1/debug/node/capabilities")
+    assert capabilities_response.status_code == 200, capabilities_response.text
+    capabilities = capabilities_response.json()
+    assert capabilities["request_id"] == capabilities_response.headers["X-Request-ID"]
+    assert str(workspace_root) not in capabilities_response.text
+    launch_profile = next(p for p in capabilities["data"]["launch_profiles"]
+                          if p["name"] == "capability-entry")
+    assert launch_profile["program"] == file_paths.resolve("debug-prompt-fixture.mjs")[1]
+    assert launch_profile["working_directory"] == file_paths.workspace_uri
     fixture_path, worker_path = _write_debug_fixture(workspace_root)
     state.fixture_path = fixture_path.relative_to(workspace_root).as_posix()
     state.worker_path = worker_path.relative_to(workspace_root).as_posix()
@@ -565,9 +586,6 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
         '"status":"exited"' in result
         for result in successful_results
     )
-    file_paths = WorkspaceFilePaths(
-        workspace=workspace_root, workspace_id=read_workspace_id(workspace_root), bindings=None,
-    )
     for result in successful_results:
         assert "file://" not in result
         assert str(workspace_root) not in result
@@ -619,7 +637,8 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
             "session_id": session_id,
             "thread_id": main_thread_id,
             "configuration_id": configuration_id,
-            "path": fixture_path.name,
+            "path": launch_profile["program"],
+            "working_directory": launch_profile["working_directory"],
         },
     )
     assert human_start.status_code == 200, human_start.text

@@ -35,8 +35,12 @@ from app.services.infrastructure.node_debug.session.thread_owner import (
 class NodeDebugConfigurationControlMixin:
     """调试方案配置控制链路的方法族（由 NodeDebugService 继承）。"""
 
+    def workspace_relative_path(self, raw_path: str, field_name: str = "path") -> str:
+        """工具参数与启动配置共享目标文件 owner，不自行读取工作区身份。"""
+        return self._configuration_factory.workspace_relative_path(raw_path, field_name)
+
     def get_capabilities(self) -> NodeDebugCapabilitiesDTO:
-        """返回供客户端选择启动配置的脱敏调试能力。"""
+        """返回供客户端选择的启动配置，文件引用只发布目标 URI。"""
         debug_config = self._get_typed_debug_runtime_config()
         profiles: list[NodeDebugLaunchProfileDTO] = []
         for name, profile in debug_config.launch_profiles.items():
@@ -49,8 +53,12 @@ class NodeDebugConfigurationControlMixin:
                         profile.adapter == "node_inspector"
                         and profile.runtime == "node"
                     ),
-                    program=profile.program,
-                    working_directory=profile.working_directory,
+                    program=(self._configuration_factory.resolve_workspace_path(
+                        profile.program, script=True,
+                    )[1] if profile.program.strip() else ""),
+                    working_directory=(self._configuration_factory.resolve_workspace_path(
+                        profile.working_directory,
+                    )[1] if profile.working_directory.strip() else ""),
                     args=list(profile.args),
                 )
             )

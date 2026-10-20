@@ -145,7 +145,7 @@ class NodeDebugService(
         #: 以免丢弃仍被并发任务持有的锁。
         self._owner_locks: dict[NodeDebugOwner, asyncio.Lock] = {}
         self._configuration_factory = NodeDebugConfigurationFactory(
-            workspace_root=self._workspace_root
+            file_paths=file_paths,
         )
         self._configuration_registry = NodeDebugConfigurationRegistry(
             store=session_store,

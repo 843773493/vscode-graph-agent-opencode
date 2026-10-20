@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.core.exceptions import ForbiddenError
 from app.core.identifier import create_prefixed_id
-from app.core.path_utils import safe_join
 from app.schemas.internal_v2.node_debug import (
     NodeDebugBreakpointDTO,
     NodeDebugBreakpointRequest,
@@ -20,6 +21,7 @@ from app.services.infrastructure.node_debug.breakpoint.breakpoints import (
     reconcile_breakpoint,
     runtime_breakpoint,
 )
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 _SUPPORTED_EXTENSIONS = {".cjs", ".js", ".mjs"}
 
@@ -32,8 +34,36 @@ class NodeDebugConfigurationFactory:
     API 请求和启动运行时使用同一套字段规则。
     """
 
-    def __init__(self, *, workspace_root: Path) -> None:
-        self._workspace_root = workspace_root.resolve()
+    def __init__(self, *, file_paths: WorkspaceFilePaths) -> None:
+        self._workspace_root = file_paths.workspace.resolve()
+        self._file_paths = file_paths
+
+    def resolve_workspace_path(
+        self, raw_path: str, *, script: bool = False,
+    ) -> tuple[Path, str]:
+        """输入在目标文件 owner 解析；能力投影允许引用尚未创建的文件。"""
+        normalized = raw_path.strip()
+        if script and "://" not in normalized:
+            normalized = normalized.replace("\\", "/")
+        target, uri = self._file_paths.resolve(normalized, allow_external=False)
+        if not target.is_relative_to(self._workspace_root):
+            raise ForbiddenError("调试路径必须位于当前 workspace 内")
+        return target, uri
+
+    def workspace_relative_path(self, raw_path: str, field_name: str = "path") -> str:
+        """模型参数只做输入约束；目标解析仍由同一文件 owner 执行。"""
+        if not raw_path:
+            raise ValueError(f"{field_name} 不能为空")
+        if "://" not in raw_path and ".." in Path(raw_path).parts:
+            raise ValueError(f"{field_name} 不是有效的工作区相对路径: 不允许上级目录")
+        try:
+            target, _ = self.resolve_workspace_path(raw_path)
+        except ForbiddenError as error:
+            raise ValueError(f"{field_name} 超出当前工作区工具的访问能力") from error
+        relative = target.relative_to(self._workspace_root).as_posix()
+        if os.name != "nt" and "\\" in relative:
+            raise ValueError(f"{field_name} 含目标平台的字面反斜杠，源码调试不支持该文件名")
+        return relative
 
     def validate_configuration(
         self,
@@ -148,36 +178,27 @@ class NodeDebugConfigurationFactory:
         return anchor_breakpoint(breakpoint, script_path)
 
     def resolve_script_path(self, raw_path: str) -> tuple[Path, str]:
-        normalized = raw_path.strip().replace("\\", "/")
-        if not normalized:
+        if not raw_path.strip():
             raise ValueError("Node 调试脚本路径不能为空")
-        script_path = safe_join(self._workspace_root, normalized)
+        script_path, _ = self.resolve_workspace_path(raw_path, script=True)
         if script_path.suffix.lower() not in _SUPPORTED_EXTENSIONS:
             raise ValueError("Node 调试目前只支持 .js、.mjs 和 .cjs 文件")
         if not script_path.is_file():
-            raise FileNotFoundError(f"Node 调试脚本不存在: {normalized}")
+            raise FileNotFoundError(f"Node 调试脚本不存在: {raw_path}")
         relative_path = script_path.relative_to(self._workspace_root).as_posix()
         return script_path, relative_path
 
     def resolve_working_directory(self, raw_path: str) -> Path:
-        normalized = raw_path.strip()
-        if not normalized:
-            return self._workspace_root
-        candidate = Path(normalized)
-        if candidate.is_absolute():
-            resolved = candidate.resolve()
-            try:
-                resolved.relative_to(self._workspace_root)
-            except ValueError as error:
+        try:
+            resolved, _ = self.resolve_workspace_path(raw_path)
+        except ForbiddenError as error:
+            if Path(raw_path.strip()).is_absolute():
                 raise ValueError(
-                    f"调试工作目录必须位于当前 workspace 内: {normalized}"
+                    f"调试工作目录必须位于当前 workspace 内: {raw_path}"
                 ) from error
-            if not resolved.is_dir():
-                raise FileNotFoundError(f"调试工作目录不存在: {normalized}")
-            return resolved
-        resolved = safe_join(self._workspace_root, normalized)
+            raise
         if not resolved.is_dir():
-            raise FileNotFoundError(f"调试工作目录不存在: {normalized}")
+            raise FileNotFoundError(f"调试工作目录不存在: {raw_path}")
         return resolved
 
     @staticmethod

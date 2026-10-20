@@ -212,7 +212,6 @@ def _tool_map(
         tool.name: tool
         for tool in create_debugging_tools(
             session_id=session_id,
-            workspace_root=workspace_root,
             node_debug_service=service,
             invocation_context=ToolInvocationContext(thread_binding=binding),
             thread_binding=binding,
@@ -272,7 +271,6 @@ def test_provider_model_schema_keeps_only_fixed_extension_envelope(
 
     debug_tools = create_debugging_tools(
         session_id="ses_api_envelope",
-        workspace_root=tmp_path,
         node_debug_service=MagicMock(),
         invocation_context=ToolInvocationContext(),
     )
@@ -436,7 +434,6 @@ async def test_node_inspector_tool_adapter_integration_isolation(
     )
     tools = create_debugging_tools(
         session_id="ses_e2e_debug_isolated",
-        workspace_root=workspace_root,
         node_debug_service=service,
         invocation_context=ToolInvocationContext(
             thread_binding=ThreadRuntimeBinding(
@@ -450,7 +447,6 @@ async def test_node_inspector_tool_adapter_integration_isolation(
         tool.name: tool
         for tool in create_debugging_tools(
             session_id="ses_other_debug_session",
-            workspace_root=workspace_root,
             node_debug_service=service,
             invocation_context=ToolInvocationContext(
                 thread_binding=ThreadRuntimeBinding(
@@ -800,7 +796,6 @@ async def test_node_debug_rejects_unimplemented_adapter(
         tool.name: tool
         for tool in create_debugging_tools(
             session_id="ses_debugpy_rejection",
-            workspace_root=workspace_root,
             node_debug_service=service,
             invocation_context=ToolInvocationContext(thread_binding=binding),
             thread_binding=binding,

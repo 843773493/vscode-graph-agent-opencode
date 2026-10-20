@@ -118,7 +118,6 @@ def _debug_tools(tmp_path: Path) -> list:
     service.record_tool_action = AsyncMock()
     return create_debugging_tools(
         session_id="ses_envelope",
-        workspace_root=tmp_path,
         node_debug_service=service,
         invocation_context=ToolInvocationContext(),
     )
@@ -175,7 +174,6 @@ async def test_envelope_rejects_unknown_and_runtime_arguments_before_target(
     service.record_tool_action = AsyncMock()
     tools = create_debugging_tools(
         session_id="ses_envelope",
-        workspace_root=tmp_path,
         node_debug_service=service,
         invocation_context=ToolInvocationContext(thread_binding=ThreadRuntimeBinding(
             "ses_envelope", "thr_01a100c4a1897a2d8d40b568d23fcbe6",
@@ -398,7 +396,6 @@ async def test_envelope_preserves_original_tool_call_id_pairing(
     ))
     tools = create_debugging_tools(
         session_id="ses_envelope",
-        workspace_root=tmp_path,
         node_debug_service=service,
         invocation_context=context,
     )

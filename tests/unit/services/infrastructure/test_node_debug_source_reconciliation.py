@@ -28,7 +28,7 @@ from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntim
 from app.services.infrastructure.node_debug.session.session_state import (
     NodeDebugSessionState,
 )
-from tests.support.node_debug_dependencies import TEST_THREAD_ID
+from tests.support.node_debug_dependencies import TEST_THREAD_ID, node_debug_file_paths
 
 _SESSION_ID = 'ses_019b9eda5cc6769489eea0a333326f77'
 _THREAD_ID = TEST_THREAD_ID
@@ -219,7 +219,7 @@ def session_state(workspace_root: Path) -> RecordingSessionState:
     registry = NodeDebugConfigurationRegistry(
         store=None,
         configuration_factory=NodeDebugConfigurationFactory(
-            workspace_root=workspace_root
+            file_paths=node_debug_file_paths(workspace_root),
         ),
     )
     return RecordingSessionState(configuration_registry=registry)

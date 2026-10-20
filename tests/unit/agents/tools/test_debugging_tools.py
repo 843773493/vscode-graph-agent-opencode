@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -27,26 +28,40 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugStateDTO,
     NodeDebugVariableDTO,
 )
+from app.services.infrastructure.node_debug.configuration.configuration_factory import (
+    NodeDebugConfigurationFactory,
+)
+from tests.support.node_debug_dependencies import node_debug_file_paths
 
 _MAIN_THREAD_ID = "thr_00000000700070008000000000000001"
 _CHILD_THREAD_ID = "thr_00000000700070008000000000000002"
 _MISSING_CONFIGURATION_ID = "dbgcfg_" + "b" * 32
 
 
+@pytest.fixture
+def debug_service_factory() -> Callable[[Path], MagicMock]:
+    def create(root: Path) -> MagicMock:
+        service = MagicMock()
+        factory = NodeDebugConfigurationFactory(file_paths=node_debug_file_paths(root))
+        service.workspace_relative_path.side_effect = factory.workspace_relative_path
+        return service
+    return create
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("input_kind", ["relative", "absolute", "uri", "outside"])
-async def test_debugging_source_targets_share_workspace_resolution(tmp_path: Path, input_kind: str) -> None:
+async def test_debugging_source_targets_share_workspace_resolution(tmp_path: Path, input_kind: str, debug_service_factory) -> None:
     workspace = tmp_path / "workspace"
     workspace_id = bind_workspace_id(workspace, "019d1b4a-1111-7000-8000-000000000001")
     session_id = "ses_debug_target"
     state = NodeDebugStateDTO(session_id=session_id, thread_id=_MAIN_THREAD_ID, status="idle")
-    service = MagicMock()
+    service = debug_service_factory(workspace)
     service.get_state = AsyncMock(return_value=state)
     service.record_tool_action = AsyncMock()
     service.apply_action = AsyncMock(return_value=state)
     context = ToolInvocationContext(thread_binding=ThreadRuntimeBinding(session_id=session_id, thread_id=_MAIN_THREAD_ID))
     context.set_tool_call_id("call_source_target")
-    tools = create_debugging_tools(session_id=session_id, workspace_root=workspace, node_debug_service=service, invocation_context=context)
+    tools = create_debugging_tools(session_id=session_id, node_debug_service=service, invocation_context=context)
     target = {
         "relative": "source.mjs",
         "absolute": str(workspace / "source.mjs"),
@@ -65,7 +80,6 @@ async def test_debugging_source_targets_share_workspace_resolution(tmp_path: Pat
 def _build_tools(tmp_path: Path):
     return create_debugging_tools(
         session_id="ses_debug_schema",
-        workspace_root=tmp_path,
         node_debug_service=MagicMock(),
         invocation_context=ToolInvocationContext(),
     )
@@ -107,10 +121,10 @@ def _configuration_summary(
 
 def _service_for_launch(
     *,
+    service: MagicMock,
     state: NodeDebugStateDTO,
     configurations: list[NodeDebugConfigurationDTO] | None = None,
 ) -> MagicMock:
-    service = MagicMock()
     service.get_state = AsyncMock(return_value=state)
     service.list_configurations = MagicMock(
         return_value=list(configurations or []),
@@ -128,7 +142,6 @@ def _tool_map(tmp_path: Path, service: MagicMock) -> dict[str, object]:
         tool.name: tool
         for tool in create_debugging_tools(
             session_id="ses_debug_launch",
-            workspace_root=tmp_path,
             node_debug_service=service,
             invocation_context=ToolInvocationContext(thread_binding=ThreadRuntimeBinding(
                 session_id="ses_debug_launch", thread_id=_MAIN_THREAD_ID,
@@ -220,19 +233,19 @@ def test_debug_tool_names_and_model_schemas_match_debug_mcp_shape(
 @pytest.mark.asyncio
 async def test_logpoint_maps_to_non_pausing_breakpoint_definition(
     tmp_path: Path,
+    debug_service_factory,
 ) -> None:
     state = NodeDebugStateDTO(
         session_id="ses_debug_logpoint",
         thread_id=_MAIN_THREAD_ID,
         status="idle",
     )
-    service = MagicMock()
+    service = debug_service_factory(tmp_path)
     service.get_state = AsyncMock(return_value=state)
     service.record_tool_action = AsyncMock()
     service.apply_action = AsyncMock(return_value=state)
     tools = create_debugging_tools(
         session_id="ses_debug_logpoint",
-        workspace_root=tmp_path,
         node_debug_service=service,
         invocation_context=ToolInvocationContext(thread_binding=ThreadRuntimeBinding(
             session_id=state.session_id, thread_id=state.thread_id,
@@ -273,6 +286,7 @@ async def test_logpoint_maps_to_non_pausing_breakpoint_definition(
 @pytest.mark.asyncio
 async def test_start_and_final_control_result_include_invalid_breakpoints(
     tmp_path: Path,
+    debug_service_factory,
 ) -> None:
     invalid_breakpoint = NodeDebugBreakpointDTO(
         breakpoint_id="node-bp-invalid",
@@ -290,14 +304,13 @@ async def test_start_and_final_control_result_include_invalid_breakpoints(
         breakpoints=[invalid_breakpoint],
     )
     finished_state = started_state.model_copy(update={"status": "exited"})
-    service = MagicMock()
+    service = debug_service_factory(tmp_path)
     service.start = AsyncMock(return_value=started_state)
     service.apply_action = AsyncMock(return_value=finished_state)
     service.get_state = AsyncMock(return_value=started_state)
     service.record_tool_action = AsyncMock()
     tools = create_debugging_tools(
         session_id=started_state.session_id,
-        workspace_root=tmp_path,
         node_debug_service=service,
         invocation_context=ToolInvocationContext(thread_binding=ThreadRuntimeBinding(
             session_id=started_state.session_id, thread_id=started_state.thread_id,
@@ -365,8 +378,9 @@ def paused_debug_state() -> NodeDebugStateDTO:
 async def test_model_state_does_not_leak_unrequested_variable_values(
     tmp_path: Path,
     paused_debug_state: NodeDebugStateDTO,
+    debug_service_factory,
 ) -> None:
-    service = MagicMock()
+    service = debug_service_factory(tmp_path)
     service.get_state = AsyncMock(return_value=paused_debug_state)
     service.get_variables = AsyncMock(
         return_value=paused_debug_state.call_stack[0].variables
@@ -374,7 +388,6 @@ async def test_model_state_does_not_leak_unrequested_variable_values(
     service.record_tool_action = AsyncMock(return_value=paused_debug_state)
     tools = create_debugging_tools(
         session_id=paused_debug_state.session_id,
-        workspace_root=tmp_path,
         node_debug_service=service,
         invocation_context=ToolInvocationContext(thread_binding=ThreadRuntimeBinding(
             session_id=paused_debug_state.session_id, thread_id=paused_debug_state.thread_id,
@@ -403,8 +416,9 @@ async def test_model_state_does_not_leak_unrequested_variable_values(
 async def test_requested_variable_values_are_redacted_before_model_response(
     tmp_path: Path,
     paused_debug_state: NodeDebugStateDTO,
+    debug_service_factory,
 ) -> None:
-    service = MagicMock()
+    service = debug_service_factory(tmp_path)
     service.get_state = AsyncMock(return_value=paused_debug_state)
     service.get_variables = AsyncMock(
         return_value=paused_debug_state.call_stack[0].variables
@@ -412,7 +426,6 @@ async def test_requested_variable_values_are_redacted_before_model_response(
     service.record_tool_action = AsyncMock(return_value=paused_debug_state)
     tools = create_debugging_tools(
         session_id=paused_debug_state.session_id,
-        workspace_root=tmp_path,
         node_debug_service=service,
         invocation_context=ToolInvocationContext(thread_binding=ThreadRuntimeBinding(
             session_id=paused_debug_state.session_id, thread_id=paused_debug_state.thread_id,
@@ -445,6 +458,7 @@ async def test_requested_variable_values_are_redacted_before_model_response(
 async def test_evaluate_expression_redacts_sensitive_expression_result(
     tmp_path: Path,
     paused_debug_state: NodeDebugStateDTO,
+    debug_service_factory,
 ) -> None:
     evaluated_state = paused_debug_state.model_copy(
         update={
@@ -456,13 +470,12 @@ async def test_evaluate_expression_redacts_sensitive_expression_result(
             )
         }
     )
-    service = MagicMock()
+    service = debug_service_factory(tmp_path)
     service.apply_action = AsyncMock(return_value=evaluated_state)
     service.get_state = AsyncMock(return_value=evaluated_state)
     service.record_tool_action = AsyncMock(return_value=evaluated_state)
     tools = create_debugging_tools(
         session_id=paused_debug_state.session_id,
-        workspace_root=tmp_path,
         node_debug_service=service,
         invocation_context=ToolInvocationContext(thread_binding=ThreadRuntimeBinding(
             session_id=paused_debug_state.session_id, thread_id=paused_debug_state.thread_id,
@@ -481,18 +494,17 @@ async def test_evaluate_expression_redacts_sensitive_expression_result(
 
 
 @pytest.mark.asyncio
-async def test_tools_resolve_owner_from_trusted_thread_binding(tmp_path: Path) -> None:
+async def test_tools_resolve_owner_from_trusted_thread_binding(tmp_path: Path, debug_service_factory) -> None:
     state = NodeDebugStateDTO(
         session_id="ses_child_debug",
         thread_id=_MAIN_THREAD_ID,
         status="idle",
     )
-    service = MagicMock()
+    service = debug_service_factory(tmp_path)
     service.get_state = AsyncMock(return_value=state)
     service.record_tool_action = AsyncMock()
     tools = create_debugging_tools(
         session_id="ses_child_debug",
-        workspace_root=tmp_path,
         node_debug_service=service,
         invocation_context=ToolInvocationContext(
             thread_binding=ThreadRuntimeBinding(
@@ -521,18 +533,18 @@ async def test_tools_resolve_owner_from_trusted_thread_binding(tmp_path: Path) -
 @pytest.mark.asyncio
 async def test_child_binding_passes_precise_session_thread_owner_to_service(
     tmp_path: Path,
+    debug_service_factory,
 ) -> None:
     state = NodeDebugStateDTO(
         session_id="ses_parent_debug",
         thread_id=_CHILD_THREAD_ID,
         status="idle",
     )
-    service = MagicMock()
+    service = debug_service_factory(tmp_path)
     service.get_state = AsyncMock(return_value=state)
     service.record_tool_action = AsyncMock()
     tools = create_debugging_tools(
         session_id="ses_parent_debug",
-        workspace_root=tmp_path,
         node_debug_service=service,
         invocation_context=ToolInvocationContext(
             thread_binding=ThreadRuntimeBinding(
@@ -553,18 +565,18 @@ async def test_child_binding_passes_precise_session_thread_owner_to_service(
 @pytest.mark.asyncio
 async def test_model_state_and_tool_schemas_hide_runtime_identity(
     tmp_path: Path,
+    debug_service_factory,
 ) -> None:
     state = NodeDebugStateDTO(
         session_id="ses_hidden_identity",
         thread_id=_CHILD_THREAD_ID,
         status="idle",
     )
-    service = MagicMock()
+    service = debug_service_factory(tmp_path)
     service.get_state = AsyncMock(return_value=state)
     service.record_tool_action = AsyncMock()
     tools = create_debugging_tools(
         session_id="ses_hidden_identity",
-        workspace_root=tmp_path,
         node_debug_service=service,
         invocation_context=ToolInvocationContext(thread_binding=ThreadRuntimeBinding(
             session_id=state.session_id, thread_id=state.thread_id,
@@ -605,13 +617,14 @@ async def test_model_state_and_tool_schemas_hide_runtime_identity(
 @pytest.mark.asyncio
 async def test_start_debugging_reports_missing_explicit_configuration_first(
     tmp_path: Path,
+    debug_service_factory,
 ) -> None:
     state = NodeDebugStateDTO(
         session_id="ses_debug_launch",
         thread_id=_MAIN_THREAD_ID,
         status="idle",
     )
-    service = _service_for_launch(state=state, configurations=[])
+    service = _service_for_launch(service=debug_service_factory(tmp_path), state=state, configurations=[])
     tools = _tool_map(tmp_path, service)
 
     payload = json.loads(
@@ -634,13 +647,14 @@ async def test_start_debugging_reports_missing_explicit_configuration_first(
 @pytest.mark.asyncio
 async def test_start_debugging_reports_missing_id_before_invalid_paths(
     tmp_path: Path,
+    debug_service_factory,
 ) -> None:
     state = NodeDebugStateDTO(
         session_id="ses_debug_launch",
         thread_id=_MAIN_THREAD_ID,
         status="idle",
     )
-    service = _service_for_launch(state=state, configurations=[])
+    service = _service_for_launch(service=debug_service_factory(tmp_path), state=state, configurations=[])
     tools = _tool_map(tmp_path, service)
 
     payload = json.loads(
@@ -662,6 +676,7 @@ async def test_start_debugging_reports_missing_id_before_invalid_paths(
 @pytest.mark.asyncio
 async def test_start_debugging_rejects_launch_parameter_conflict_with_fields(
     tmp_path: Path,
+    debug_service_factory,
 ) -> None:
     configuration = _debug_configuration(
         script_path="debug-entry.mjs",
@@ -676,7 +691,7 @@ async def test_start_debugging_rejects_launch_parameter_conflict_with_fields(
         active_configuration_name=configuration.name,
         configurations=[_configuration_summary(configuration)],
     )
-    service = _service_for_launch(state=state, configurations=[configuration])
+    service = _service_for_launch(service=debug_service_factory(tmp_path), state=state, configurations=[configuration])
     tools = _tool_map(tmp_path, service)
 
     payload = json.loads(
@@ -714,6 +729,7 @@ async def test_start_debugging_rejects_launch_parameter_conflict_with_fields(
 @pytest.mark.asyncio
 async def test_start_debugging_accepts_normalized_paths_matching_active_configuration(
     tmp_path: Path,
+    debug_service_factory,
 ) -> None:
     configuration = _debug_configuration()
     state = NodeDebugStateDTO(
@@ -723,7 +739,7 @@ async def test_start_debugging_accepts_normalized_paths_matching_active_configur
         active_configuration_id=configuration.configuration_id,
         configurations=[_configuration_summary(configuration)],
     )
-    service = _service_for_launch(state=state, configurations=[configuration])
+    service = _service_for_launch(service=debug_service_factory(tmp_path), state=state, configurations=[configuration])
     tools = _tool_map(tmp_path, service)
 
     payload = json.loads(
@@ -750,6 +766,7 @@ async def test_start_debugging_accepts_normalized_paths_matching_active_configur
 @pytest.mark.asyncio
 async def test_start_debugging_prefers_explicit_id_then_active_configuration(
     tmp_path: Path,
+    debug_service_factory,
 ) -> None:
     active = _debug_configuration(
         configuration_id="dbgcfg_" + "a" * 32,
@@ -769,7 +786,7 @@ async def test_start_debugging_prefers_explicit_id_then_active_configuration(
             _configuration_summary(explicit),
         ],
     )
-    service = _service_for_launch(state=state, configurations=[active, explicit])
+    service = _service_for_launch(service=debug_service_factory(tmp_path), state=state, configurations=[active, explicit])
     tools = _tool_map(tmp_path, service)
 
     explicit_payload = json.loads(
@@ -800,13 +817,14 @@ async def test_start_debugging_prefers_explicit_id_then_active_configuration(
 @pytest.mark.asyncio
 async def test_start_debugging_without_configuration_uses_safe_creation_path(
     tmp_path: Path,
+    debug_service_factory,
 ) -> None:
     state = NodeDebugStateDTO(
         session_id="ses_debug_launch",
         thread_id=_MAIN_THREAD_ID,
         status="idle",
     )
-    service = _service_for_launch(state=state, configurations=[])
+    service = _service_for_launch(service=debug_service_factory(tmp_path), state=state, configurations=[])
     tools = _tool_map(tmp_path, service)
 
     payload = json.loads(
