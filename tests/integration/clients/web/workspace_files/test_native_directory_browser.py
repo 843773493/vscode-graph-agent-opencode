@@ -15,6 +15,9 @@ import pytest
 
 from app.core.resource_uri import parse_resource_uri
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
+    _completed,
+)
+from tests.integration.backend.sessions.test_session_communication_pipeline import (
     communication_case as communication_case,  # noqa: PLC0414 - fixture 以当前测试路径隔离
 )
 from tests.support.api_helpers import create_session
@@ -124,3 +127,53 @@ async def test_unregistered_directory_browser_edit_and_shortcut_reopen(communica
     assert initial_state == _workspace_state(after_restart)
     assert initial_registry == _registry(case.workspace)
     assert not (external / ".boxteam").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("communication_case", [{"gateway_environment": {
+    "BOXTEAM_WEB_ASSETS": str(Path.cwd() / "src/clients/web/dist"),
+}}], indirect=True)
+async def test_chat_file_references_preserve_native_and_uri_targets(communication_case):
+    case = communication_case
+    local = case.workspace / "reference-target.ts"
+    local.write_text("本地原件\n定位第二行\n", encoding="utf-8")
+    external = case.workspace.parent / "引用 外部%2F"
+    external.mkdir(exist_ok=True)
+    native = external / local.name
+    native.write_text("外部原件\n独立第二行\n", encoding="utf-8")
+    decoy = case.workspace / str(native).lstrip("/")
+    decoy.parent.mkdir(parents=True, exist_ok=True)
+    decoy.write_text("不得打开的旧回退对照\n", encoding="utf-8")
+    local_response = await case.client.get("/api/v1/workspace/files/content", params={"path": str(local)})
+    native_response = await case.client.get("/api/v1/workspace/files/content", params={"path": str(native)})
+    assert local_response.status_code == 200, local_response.text
+    assert native_response.status_code == 200, native_response.text
+    local_uri, native_uri = local_response.json()["data"]["path"], native_response.json()["data"]["path"]
+    references = [
+        {"label": "相对文件", "target": local.name, "uri": local_uri, "content": local.read_text()},
+        {"label": "原生绝对", "target": str(local), "uri": local_uri, "content": local.read_text()},
+        {"label": "资源地址", "target": local_uri, "uri": local_uri, "content": local.read_text()},
+        {"label": "外部原生", "target": str(native), "uri": native_uri, "content": native.read_text()},
+        {"label": "外部资源", "target": native_uri, "uri": native_uri, "content": native.read_text()},
+        {"label": "文件URL", "target": native.as_uri(), "uri": native_uri, "content": native.read_text()},
+    ]
+    missing = str(external / "不存在" / local.name)
+    markdown = "\n\n".join(f'[{item["label"]}](<{item["target"]}#L2>)' for item in references)
+    markdown += f"\n\n[缺失绝对](<{missing}>)\n\n`{local_uri}`"
+    title = "文件链接统一目标"
+    session_id = await create_session(case.client, title)
+    # 受控 Provider 回显用户给定目标以验证 Markdown 文件入口；不代表系统引用生成策略。
+    case.model.response_callback = lambda _payload: {"content": markdown}
+    response = await case.client.post(f"/api/v1/sessions/{session_id}/messages", json={
+        "message": {"content": markdown}, "run": {"mode": "single_agent", "agent_id": "default"},
+    })
+    assert response.status_code == 200, response.text
+    await _completed(case.client, response.json()["data"]["job_id"])
+    result = await _browse(case, {"session_id": session_id, "session_title": title,
+        "references": references, "missing": missing, "directory": str(external)},
+        case.artifacts / f"run-{os.getpid()}/references")
+    assert result["references"] == [item["uri"] for item in references]
+    assert result["page_errors"] == []
+    assert native.read_text() == "外部原件\n独立第二行\n"
+    assert decoy.read_text() == "不得打开的旧回退对照\n"
+    assert local.read_text() == "本地原件\n定位第二行\n"

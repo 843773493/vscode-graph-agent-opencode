@@ -1,4 +1,4 @@
-// Integration：完整生产页面、Gateway 与文件 owner；模型仅为本地协议桩，本场景不调用模型。
+// Integration：完整生产页面、Gateway 与文件 owner；文件引用场景由本地 Provider 桩回显 Markdown。
 import assert from "node:assert/strict";
 import { dirname } from "node:path";
 import { mkdir, open, writeFile } from "node:fs/promises";
@@ -46,6 +46,39 @@ try {
   await page.goto(process.env.BOXTEAM_BROWSER_BASE_URL, { waitUntil: "domcontentloaded" });
   await selectSession();
   const editor = page.locator(".workspace-preview-text-editor:visible");
+  if (fixture.references) {
+    const opened = [];
+    for (const reference of fixture.references) {
+      const link = page.locator("button.chat-file-reference").filter({ hasText: reference.label });
+      await link.waitFor();
+      assert.ok((await link.getAttribute("title")).includes(reference.uri));
+      assert.ok((await link.getAttribute("title")).includes("第 2 行"));
+      await link.click();
+      await editor.waitFor();
+      assert.equal(await editor.inputValue(), reference.content);
+      opened.push(reference.uri);
+    }
+    assert.equal(await page.locator("button.chat-file-reference").filter({ hasText: "缺失绝对" }).count(), 0);
+    await page.locator(".chat-file-reference-fallback").filter({ hasText: "缺失绝对" }).waitFor();
+    const inline = page.locator("button.chat-file-reference.inline-code");
+    await inline.waitFor();
+    await inline.click();
+    assert.equal(await editor.inputValue(), fixture.references[0].content);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await selectSession();
+    const reopened = page.locator("button.chat-file-reference").filter({ hasText: fixture.references[3].label });
+    await reopened.waitFor();
+    await reopened.click();
+    await editor.waitFor();
+    assert.equal(await editor.inputValue(), fixture.references[3].content);
+    await Promise.all(pending);
+    assert.ok(exchanges.some((item) => new URL(item.url).searchParams.get("path") === fixture.missing
+      && item.status === 404));
+    assert.ok(!exchanges.some((item) => item.status === 200
+      && item.body.data?.path?.includes("不存在")));
+    assert.deepEqual(pageErrors, []);
+    await writeFile(output, JSON.stringify({ references: opened, page_errors: pageErrors, exchanges }, null, 2) + "\n");
+  } else {
   let shortcut;
   if (fixture.shortcut_uri) {
     shortcut = { path: fixture.shortcut_uri };
@@ -111,8 +144,11 @@ try {
   assert.deepEqual(pageErrors, []);
   await writeFile(output, JSON.stringify({ shortcut_uri: shortcut.path, reopened_content: await editor.inputValue(),
     page_errors: pageErrors, exchanges }, null, 2) + "\n");
+  }
   await page.screenshot({ path: `${artifacts}/native-directory-browser.png` });
 } catch (error) {
+  await Promise.allSettled(pending);
+  await writeFile(`${artifacts}/native-directory-failure-exchanges.json`, JSON.stringify({ page_errors: pageErrors, exchanges }, null, 2) + "\n");
   if (page) {
     await writeFile(`${artifacts}/native-directory-failure.html`, await page.content());
     await page.screenshot({ path: `${artifacts}/native-directory-failure.png` });

@@ -7,13 +7,13 @@ import React, {
   useRef,
 } from "react";
 import {
-  DEFAULT_BACKEND_PORT,
   HttpRequestError,
   getWorkspaceFileContent,
   getWorkspaceFiles,
 } from "../../api";
 import type { WorkspaceFileContent, WorkspaceFileNode } from "../../types/backend";
 import {
+  isExplicitWorkspaceFileTarget,
   isWorkspaceTextFilePath,
   parseWorkspaceFileReference,
   type WorkspaceFileReference,
@@ -58,10 +58,10 @@ async function findUniqueWorkspaceFilePath(
   workspaceId: string | null,
   referencePath: string,
 ): Promise<WorkspaceFilePathLookup> {
-  const normalizedReferencePath = referencePath.replace(/\\/g, "/").replace(/^\.\//, "");
+  const normalizedReferencePath = referencePath.replace(/^\.\//, "");
   const pathSegments = normalizedReferencePath.split("/").filter(Boolean);
   const fileName = pathSegments[pathSegments.length - 1] ?? "";
-  const directories: Array<{ path: string; depth: number }> = [{ path: "", depth: 0 }];
+  const directories = [{ path: "", depth: 0, relativePath: "" }];
   const matches: string[] = [];
   let visitedDirectories = 0;
 
@@ -92,23 +92,24 @@ async function findUniqueWorkspaceFilePath(
         }
         throw error;
       }
-      for (const node of (listing.items ?? []) as WorkspaceFileNode[]) {
-        if (isProtectedWorkspaceMetadataPath(node.path)) {
+      for (const node of listing.items as WorkspaceFileNode[]) {
+        const relativePath = [directory.relativePath, node.name].filter(Boolean).join("/");
+        if (isProtectedWorkspaceMetadataPath(relativePath)) {
           continue;
         }
         if (node.kind === "directory") {
           if (directory.depth < 12) {
-            directories.push({ path: node.path, depth: directory.depth + 1 });
+            directories.push({ path: node.path, depth: directory.depth + 1, relativePath });
           }
         } else if (
           node.name === fileName
           && (
             !normalizedReferencePath.includes("/")
-            || node.path === normalizedReferencePath
-            || node.path.endsWith(`/${normalizedReferencePath}`)
+            || relativePath === normalizedReferencePath
+            || relativePath.endsWith(`/${normalizedReferencePath}`)
           )
         ) {
-          matches.push(node.path.replace(/\\/g, "/"));
+          matches.push(node.path);
           if (matches.length > 1) return { status: "ambiguous" };
         }
       }
@@ -142,83 +143,56 @@ export function WorkspaceFileReferenceProvider({
   const cacheRef = useRef(
     new Map<string, Promise<WorkspaceFileLookup>>(),
   );
-  const pathCacheRef = useRef(
-    new Map<string, Promise<WorkspaceFilePathLookup>>(),
-  );
 
   useEffect(() => {
     cacheRef.current.clear();
-    pathCacheRef.current.clear();
   }, [apiPort, workspaceId]);
 
   const resolve = useCallback(
     async (target: string): Promise<WorkspaceFileReferenceResolution> => {
       if (!workspaceId) return { status: "error", message: "文件引用缺少工作区身份" };
-      let workspaceRoot: string;
+      let reference: WorkspaceFileReference | null;
       try {
-        // 根仅来自当前工作区既有的 scoped 文件响应，不进入 Gateway 展示态。
-        workspaceRoot = (await getWorkspaceFiles(apiPort, "", workspaceId)).directory_key.root;
+        reference = parseWorkspaceFileReference(target);
       } catch (error: unknown) {
         return { status: "error", message: errorDisplayMessage(error) };
       }
-      const reference = parseWorkspaceFileReference(target, workspaceRoot);
       if (!reference) {
         return { status: "missing" };
       }
       if (!isWorkspaceTextFilePath(reference.path)) {
         return { status: "missing" };
       }
-      let resolvedPath = reference.path;
-      const pathKey = `${workspaceId ?? "local"}:${reference.path}`;
-      let pathRequest = pathCacheRef.current.get(pathKey);
-      if (!pathRequest) {
-        pathRequest = findUniqueWorkspaceFilePath(
-          apiPort ?? DEFAULT_BACKEND_PORT,
-          workspaceId,
-          reference.path,
-        );
-        pathCacheRef.current.set(pathKey, pathRequest);
-      }
-      const pathLookup = await pathRequest;
-      if (pathLookup.status === "missing") return { status: "missing" };
-      if (pathLookup.status === "ambiguous") {
-        return {
-          status: "error",
-          message: `文件名不唯一，无法确定工作区中的 ${reference.path}`,
-        };
-      }
-      resolvedPath = pathLookup.path;
-
-      const resolvedReference = { ...reference, path: resolvedPath };
-      const cacheKey = `${workspaceId ?? "local"}:${resolvedPath}`;
+      const cacheKey = `${workspaceId}:${reference.path}`;
       let request = cacheRef.current.get(cacheKey);
       if (!request) {
-        request = getWorkspaceFileContent(
-          apiPort ?? DEFAULT_BACKEND_PORT,
-          resolvedPath,
-          workspaceId,
-        )
-          .then(
-            (content): WorkspaceFileLookup => ({
-              status: "resolved",
-              content,
-            }),
-          )
-          .catch((error: unknown): WorkspaceFileLookup => {
-            // 只按类型与状态码判定 404；错误文案属于展示层，可能被上游改写，
-            // 用文案判断会把「文件不存在」与「真实读取失败」混为一谈。
-            if (error instanceof HttpRequestError && error.status === 404) {
-              return { status: "missing" };
+        request = (async (): Promise<WorkspaceFileLookup> => {
+          try {
+            try {
+              return { status: "resolved", content: await getWorkspaceFileContent(apiPort, reference.path, workspaceId) };
+            } catch (error: unknown) {
+              if (!(error instanceof HttpRequestError && error.status === 404)
+                  || isExplicitWorkspaceFileTarget(reference.path) || reference.path.includes("\\")
+                  || reference.path.split("/").includes("..")) throw error;
             }
-            const message = errorDisplayMessage(error);
-            console.error(`文件引用验证失败: target=${target}`, error);
-            return { status: "error", message };
-          });
+            // 仅不存在的相对简写保留唯一文件名查找；显式目标失败绝不改投同名文件。
+            const lookup = await findUniqueWorkspaceFilePath(apiPort, workspaceId, reference.path);
+            if (lookup.status === "missing") return { status: "missing" };
+            if (lookup.status === "ambiguous") {
+              return { status: "error", message: `文件名不唯一，无法确定工作区中的 ${reference.path}` };
+            }
+            return { status: "resolved", content: await getWorkspaceFileContent(apiPort, lookup.path, workspaceId) };
+          } catch (error: unknown) {
+            return error instanceof HttpRequestError && error.status === 404
+              ? { status: "missing" }
+              : { status: "error", message: errorDisplayMessage(error) };
+          }
+        })();
         cacheRef.current.set(cacheKey, request);
       }
       return request.then((lookup): WorkspaceFileReferenceResolution =>
         lookup.status === "resolved"
-          ? { ...lookup, reference: resolvedReference }
+          ? { ...lookup, reference: { ...reference, path: lookup.content.path } }
           : lookup,
       );
     },

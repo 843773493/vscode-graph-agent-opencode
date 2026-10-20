@@ -7,9 +7,7 @@ import {
   shouldResolveWorkspaceFileReference,
 } from "./workspaceFileReferences";
 
-const workspaceRoot = "/home/user/project";
-
-const relative = parseWorkspaceFileReference("src/main.py#L12-L14", workspaceRoot);
+const relative = parseWorkspaceFileReference("src/main.py#L12-L14");
 if (
   relative?.path !== "src/main.py" ||
   relative.selection?.startLine !== 12 ||
@@ -20,24 +18,23 @@ if (
 
 const absolute = parseWorkspaceFileReference(
   "/home/user/project/src/app.ts:8:3",
-  workspaceRoot,
 );
 if (
-  absolute?.path !== "src/app.ts" ||
+  absolute?.path !== "/home/user/project/src/app.ts" ||
   absolute.selection?.startLine !== 8 ||
   absolute.selection.startColumn !== 3
 ) {
   throw new Error("工作区绝对路径或行列解析失败");
 }
 
-if (parseWorkspaceFileReference("/etc/passwd", workspaceRoot) !== null) {
-  throw new Error("工作区外绝对路径不应成为文件引用");
+if (parseWorkspaceFileReference("/etc/passwd")?.path !== "/etc/passwd") {
+  throw new Error("工作区外绝对路径必须原样交目标后端");
 }
-if (parseWorkspaceFileReference("https://example.com/app.ts", workspaceRoot) !== null) {
+if (parseWorkspaceFileReference("https://example.com/app.ts") !== null) {
   throw new Error("外部 URL 不应成为工作区文件引用");
 }
-if (parseWorkspaceFileReference("../secret.txt", workspaceRoot) !== null) {
-  throw new Error("越界相对路径不应成为文件引用");
+if (parseWorkspaceFileReference("../secret.txt")?.path !== "../secret.txt") {
+  throw new Error("相对目标的访问能力应由后端统一校验");
 }
 
 for (const target of [
@@ -53,6 +50,8 @@ for (const target of [
   "WINDUP/STRIKE",
   "A/D",
   ".html/.wasm",
+  "ftp://host/repo.ts",
+  "vscode://file/native/app.ts",
 ]) {
   if (isLikelyWorkspaceFileReference(target)) {
     throw new Error(`普通 inline code 不应触发文件探测: ${target}`);
@@ -161,3 +160,29 @@ if (
   throw new Error("中位点号的文件引用识别被破坏");
 }
 console.log("workspaceFileReferences tests passed");
+
+// URI 编码和 Windows 分隔符不得先按浏览器平台改写。
+const uri = "boxteam://workspace/ws-1/resources/files/root/空格%20%252F.txt";
+for (const target of [uri, String.raw`C:\项目 目录\文件%.txt`, String.raw`\\server\share\文件.txt`, "/native/含 空格%.txt"]) {
+  if (parseWorkspaceFileReference(`${target}#L2-L3`)?.path !== target
+      || !isLikelyWorkspaceFileReference(target)) throw new Error(`显式文件目标被改写或丢弃: ${target}`);
+}
+if (parseWorkspaceFileReference("file:///tmp/a%20b%252F.txt:8")?.path !== "/tmp/a b%2F.txt") {
+  throw new Error("file URL 只解码一次且保留原生绝对目标");
+}
+if (parseWorkspaceFileReference("file:///C:/path/file.txt")?.path !== "C:/path/file.txt"
+    || parseWorkspaceFileReference("file://remote/path.txt") !== null) {
+  throw new Error("file URL 的目标机器边界不正确");
+}
+const links = { type: "root", children: [{ type: "link", url: uri, children: [{ type: "text", value: "资源" }] }] };
+remarkWorkspaceFileReferences()(links);
+if (parseWorkspaceFileReference(links.children[0].url)?.path !== uri) throw new Error("Markdown URI 链接丢失编码");
+for (const url of ["ftp://host/repo.ts", "vscode://file/native/app.ts", "https://example.com/file.ts", "#L2"]) {
+  const tree = { type: "link", url };
+  remarkWorkspaceFileReferences()(tree);
+  if (tree.url !== url) throw new Error(`非文件引用链接被内部封装: ${url}`);
+}
+
+for (const name of ["a'b.ts", "a(b)!.ts", "空 格%.ts"]) {
+  if (parseWorkspaceFileReference(name)?.path !== name) throw new Error("相对名称被前端转码");
+}

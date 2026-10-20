@@ -49,14 +49,21 @@ export function isWorkspaceTextFilePath(path: string): boolean {
 }
 
 export function isLikelyWorkspaceFileReference(target: string): boolean {
-  const normalized = target.trim().replace(/\\/g, "/");
-  if (!normalized || /\s/u.test(normalized) || /[<>]/u.test(normalized)) {
+  const normalized = target.trim();
+  if (!normalized || /[<>]/u.test(normalized)) {
+    return false;
+  }
+  if (/^[a-z][a-z\d+.-]*:/i.test(normalized)
+      && !/^(?:boxteam|file):\/\//i.test(normalized) && !/^[A-Za-z]:/.test(normalized)) {
     return false;
   }
   // 文件引用只负责文本预览；二进制资源应通过文件树的下载/原始资源路径处理，
   // 不得为了验证它们调用文本内容接口并把预期的 400 记录成前端错误。
   if (!isWorkspaceTextFilePath(normalized)) {
     return false;
+  }
+  if (isExplicitWorkspaceFileTarget(normalized) && !/^https?:/i.test(normalized)) {
+    return true;
   }
   if (
     normalized.startsWith(GENERATED_REFERENCE_PREFIX) ||
@@ -89,14 +96,6 @@ export function shouldResolveWorkspaceFileReference(target: string): boolean {
   return normalized !== ".boxteam" && !normalized.startsWith(".boxteam/");
 }
 
-function decodedTarget(value: string): string | null {
-  try {
-    return decodeURI(value);
-  } catch {
-    return null;
-  }
-}
-
 function parseSelection(value: string): {
   target: string;
   selection: WorkspaceFileSelection | null;
@@ -125,56 +124,36 @@ function parseSelection(value: string): {
   };
 }
 
-function normalizeRelativePath(target: string, workspaceRoot: string): string | null {
-  const normalizedRoot = workspaceRoot.replace(/\\/g, "/").replace(/\/$/, "");
-  let normalizedTarget = target.replace(/\\/g, "/");
-
-  if (normalizedTarget.startsWith("file://")) {
-    normalizedTarget = normalizedTarget.slice("file://".length);
-  } else if (/^[a-z][a-z\d+.-]*:/i.test(normalizedTarget)) {
-    return null;
-  }
-
-  if (normalizedTarget.startsWith("/")) {
-    if (!normalizedRoot || normalizedTarget === normalizedRoot) {
-      return null;
-    }
-    const workspacePrefix = `${normalizedRoot}/`;
-    if (!normalizedTarget.startsWith(workspacePrefix)) {
-      return null;
-    }
-    normalizedTarget = normalizedTarget.slice(workspacePrefix.length);
-  }
-
-  normalizedTarget = normalizedTarget.replace(/^\.\//, "");
-  const segments: string[] = normalizedTarget
-    .split("/")
-    .filter((segment: string) => Boolean(segment) && segment !== ".");
-  if (segments.length === 0 || segments.some((segment) => segment === "..")) {
-    return null;
-  }
-  return segments.join("/");
+export function isExplicitWorkspaceFileTarget(path: string): boolean {
+  // 只区分是否允许相对文件名查找，不在浏览器解释目标平台或资源 URI。
+  return path.startsWith("/") || path.startsWith("\\")
+    || /^[A-Za-z]:/.test(path) || path.includes("://");
 }
 
 export function parseWorkspaceFileReference(
   rawTarget: string,
-  workspaceRoot: string,
 ): WorkspaceFileReference | null {
   let target = rawTarget.trim();
   if (target.startsWith(GENERATED_REFERENCE_PREFIX)) {
     target = new URLSearchParams(target.slice(target.indexOf("?") + 1)).get("target") ?? "";
   }
-  if (!target || target.startsWith("#")) {
+  if (!target || target.startsWith("#") || target.includes("\0")) {
     return null;
   }
-
-  const decoded = decodedTarget(target);
-  if (!decoded) {
+  const { target: pathTarget, selection } = parseSelection(target);
+  if (/^file:\/\//i.test(pathTarget)) {
+    const url = new URL(pathTarget);
+    if ((url.hostname && url.hostname !== "localhost") || url.search || url.hash) return null;
+    const decoded = decodeURIComponent(url.pathname);
+    const path = /^\/[A-Za-z]:\//.test(decoded) ? decoded.slice(1) : decoded;
+    return { path, selection };
+  }
+  if (/^[a-z][a-z\d+.-]*:/i.test(pathTarget)
+      && !pathTarget.startsWith("boxteam://") && !/^[A-Za-z]:/.test(pathTarget)) {
     return null;
   }
-  const { target: pathTarget, selection } = parseSelection(decoded);
-  const path = normalizeRelativePath(pathTarget, workspaceRoot);
-  return path ? { path, selection } : null;
+  // 原生路径及 URI 保留原字节；解码、越界与目标平台语义都由后端 owner 决定。
+  return { path: pathTarget, selection };
 }
 
 export function workspaceFileReferenceHref(target: string): string {
@@ -189,7 +168,7 @@ export function plainWorkspaceFileReferences(value: string): Array<{
   const references: Array<{ start: number; end: number; target: string }> = [];
   for (const run of value.matchAll(PLAIN_FILE_PATH_RUN_PATTERN)) {
     const text = run[0];
-    if (run.index === undefined || text.includes("://")) {
+    if (run.index === undefined || (text.includes("://") && !text.startsWith("boxteam://"))) {
       continue;
     }
     // 路径形态要求点号两侧各留一个非分隔字符。原式 A+\.A+ 在整段没有点号
@@ -245,6 +224,15 @@ function linkifyTextNode(node: MarkdownNode): MarkdownNode[] {
 }
 
 function transformMarkdownChildren(node: MarkdownNode): void {
+  // 在 Markdown 转 HTML 的 URL 编码之前封装文件目标，保留空格和字面百分号。
+  // 协议清洗只看见内部链接；真实目标仍交统一文件入口验证。
+  if (node.type === "link" && node.url
+      && !node.url.startsWith(GENERATED_REFERENCE_PREFIX)
+      && !node.url.startsWith("#")
+      && !/^(?:https?:|mailto:|tel:)/i.test(node.url)
+      && isLikelyWorkspaceFileReference(node.url)) {
+    node.url = workspaceFileReferenceHref(node.url);
+  }
   if (!node.children || ["code", "inlineCode", "link"].includes(node.type)) {
     return;
   }

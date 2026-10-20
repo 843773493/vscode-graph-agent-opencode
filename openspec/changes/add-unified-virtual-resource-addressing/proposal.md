@@ -35,7 +35,7 @@
 
 - **可导航根与轻量访问（2026-10-05 修订）**：唯一 owner 登记 directory/file/domain_object、导航和操作能力及 child path 模板；技能包根可访问 SKILL.md/references/scripts，files/root 以稳定 `workspace_id` 定位到原生 Gateway 的唯一物理根绑定，URI 与解析结果不承载该根路径。结构/身份段和文件段分别校验，文件段一次 UTF-8 解码；普通导航/搜索/读取不逐文件登记长期身份或快照。Session/assembly按领域owner的引用/view访问，附件/工具结果只公布单文件模板。
 - **文件消费边界**：独立 `add-unified-resource-file-tools` 承接现有文件工具、目标端执行、冲突/补丁/失败及旧会话产物scheme迁移；本change只拥有寻址公共合同。Skill文件读取不激活，skill_load仍归context owner；send/read/wait沿原Session计划收口。
-- **已确认的路径歧义缺陷**：`app/agents/workspace_tool_paths.py::_absolute_to_workspace_relative()` 把工作区外 POSIX 绝对路径经 `path.lstrip("/")` 改作工作区相对路径，例如 `/etc/hosts` 被改投 `/work/project/etc/hosts`。须区分用户原生路径与 DeepAgents 内部虚拟路径，全量迁齐调用方后移除该回退；三种输入同文件、外部目标不重定向、远端按目标平台执行均须从真实读写入口验收，规划修订不代表缺陷已修复。
+- **已修复的路径歧义缺陷**：原 `app/agents/workspace_tool_paths.py::_absolute_to_workspace_relative()` 曾把工作区外 POSIX 绝对路径经 `path.lstrip("/")` 改投工作区内同名路径。原生输入已接入统一目标解析，旧虚拟路径转换及所有调用方随 `d7f7b94d` 物理删除；`4af8b758` 从 Linux 真实 A→SSH→C 入口核对三种输入、外部读写及故障零回退。聊天 Markdown 文件引用的字节保留与权威 URI 回执另见 tasks 2.6 的具名验收。Windows 原生语义保留，但真实 Windows 目标验收仍归文件工具 tasks 3.4 的 TODO，不把 Linux 或字符串测试计作 Windows 实机通过。
 
 - **Fork目标与资源复用（2026-10-13）**：在既有session kind登记Workspace Session集合、Session和Thread领域模板；source/target与创建意图、view/revision/anchor分开。定义资源目标统一检查合同，复用已有归属、retention_scope、关联、修订/hash/可用性和owner操作能力，输出引用复用、必要保活、快照迁移或明确遗漏；只补缺少的owner能力，不增加实例fork布尔属性或第二生命周期registry。跨端创建和资源副作用由领域owner执行，URI解析不授予fork权限。
 
