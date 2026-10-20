@@ -8,6 +8,7 @@ import logging
 from collections.abc import Awaitable, Callable
 
 import httpx
+from pydantic import ValidationError
 
 from app.core.trace_middleware import (
     require_current_gateway_id,
@@ -16,6 +17,7 @@ from app.core.trace_middleware import (
 from app.gateway.auth import LOCAL_TOKEN
 from app.gateway.federation.errors import (
     FEDERATION_DEADLINE_EXCEEDED,
+    FEDERATION_MALFORMED_FRAME,
     FEDERATION_SESSION_MAIN_UNAVAILABLE,
     FEDERATION_TARGET_NOT_RESOLVABLE,
     FEDERATION_TARGET_OWNER_REJECTED,
@@ -23,6 +25,7 @@ from app.gateway.federation.errors import (
 )
 from app.gateway.federation.rpc import FederationSpoke
 from app.gateway.proxy_upstream import load_proxy_gateway_id
+from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
@@ -147,10 +150,12 @@ class WorkspaceSessionMainPort:
     def __init__(
         self, *, http_client: httpx.AsyncClient, request_timeout: float = 5.0,
         inventory_provider: Callable[[], Awaitable[GatewayWorkspaceListDTO]] | None = None,
+        skill_source_owner: GatewaySkillSourceOwner | None = None,
     ) -> None:
         self._request_timeout = request_timeout
         self._http_client = http_client
         self._inventory_provider = inventory_provider
+        self._skill_source_owner = skill_source_owner
         self._context_query = GatewayContextQueryService(transport=self)
         self._backend_urls: dict[str, str] = {}
         self._backend_workspace_ids: dict[str, str] = {}
@@ -190,7 +195,7 @@ class WorkspaceSessionMainPort:
                     if payload.get("request_id") != request_id or response.headers.get("X-Request-ID") != request_id:
                         raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "工作区 fork 错误响应 request_id 漂移")
                     raise FederationError(FEDERATION_TARGET_OWNER_REJECTED, "目标工作区拒绝 fork 来源捕获", detail=detail)
-            if path in {"/api/v1/context/read", "/api/v1/context/search"}:
+            if path in {"/api/v1/context/read", "/api/v1/context/search", "/api/v1/resources/navigation"}:
                 if response.status_code in {403, 404}:
                     raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "上下文资源未共享或不存在")
                 if response.headers.get("content-type", "").startswith("application/json"):
@@ -289,6 +294,55 @@ class WorkspaceSessionMainPort:
         return thread_id
 
     async def execute(self, *, operation: str, target: dict[str, object], body: dict[str, object], origin: str, timeout: float) -> dict[str, object]:
+        if set(target) == {"gateway_id", "uri"}:
+            from app.core.resource_uri import parse_resource_uri
+            from app.schemas.internal_v2.communication import (
+                ResourceNavigationRelayRequest,
+            )
+            from app.schemas.internal_v2.resource_navigation import (
+                ResourceNavigationResultDTO,
+            )
+            from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+                ResourceUriResolveError,
+            )
+
+            query = ResourceNavigationRelayRequest.model_validate(body)
+            if operation != "read" or query.navigation_target.to_payload() != target or query.source_gateway_id != origin:
+                raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "导航 envelope 与 read grant target/origin 不一致")
+            gateway_id = require_current_gateway_id("导航 target")
+            resource = parse_resource_uri(query.navigation.uri, local_gateway_id=gateway_id)
+            if resource.gateway_authority is not None or target["gateway_id"] != gateway_id:
+                raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "导航 URI 不属于当前 Gateway")
+            navigation = query.navigation.model_copy(update={"uri": resource.display_uri})
+            try:
+                async with asyncio.timeout(timeout):
+                    if resource.scope == "workspace":
+                        if resource.scope_id not in self._backend_urls:
+                            raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "导航 workspace 未共享或不存在")
+                        data = await self._request(
+                            workspace_id=resource.scope_id, method="POST", path="/api/v1/resources/navigation",
+                            origin=origin, body=navigation.model_dump(mode="json"), timeout=timeout,
+                        )
+                        result = ResourceNavigationResultDTO.model_validate(data)
+                    elif resource.scope == "gateway" and resource.scope_id == gateway_id:
+                        if self._skill_source_owner is None:
+                            raise RuntimeError("Gateway Skill navigation owner 尚未装配")
+                        result = await self._skill_source_owner.navigate(navigation)
+                    else:
+                        raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "导航 scope 未共享或不存在")
+            except ResourceUriResolveError as error:
+                raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "导航资源未共享或不存在") from error
+            except (TimeoutError, httpx.TimeoutException) as error:
+                raise FederationError(FEDERATION_DEADLINE_EXCEEDED, "资源导航超过联邦总 deadline") from error
+            except httpx.RequestError as error:
+                logger.exception("目标 Workspace 资源导航传输失败")
+                raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "目标 Workspace 资源导航传输失败", detail={"type": type(error).__name__}) from error
+            except ValidationError as error:
+                logger.exception("目标 owner 资源导航响应不符合合同")
+                raise FederationError(FEDERATION_MALFORMED_FRAME, "目标 owner 资源导航响应不符合合同") from error
+            except (OSError, UnicodeError) as error:
+                raise FederationError(FEDERATION_TARGET_OWNER_REJECTED, "目标资源读取失败", detail={"owner": "resource_navigation", "type": type(error).__name__, "errno": getattr(error, "errno", None)}) from error
+            return result.model_dump(mode="json")
         if "fork_role" in target:
             from app.core.resource_uri import parse_resource_uri
             from app.schemas.internal_v2.session_fork_transfer import (

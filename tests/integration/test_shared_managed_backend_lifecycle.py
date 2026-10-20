@@ -278,6 +278,18 @@ async def test_real_gateway_one_backend_two_mounts_and_isolated_session_jobs(sha
     ids = (primary, secondary)
     healths = [await case.data("GET", "/api/v1/workspace", headers={"X-BoxTeam-Workspace-Id": identity}) for identity in ids]
     assert len({item["workspace_id"] for item in healths}) == 2
+    await case.data("POST", f"/api/gateway/workspaces/{secondary}/activate")
+    for index, (root, health) in enumerate(zip(case.roots, healths, strict=True)):
+        probe = root / "uri-mount-probe.txt"
+        probe.write_text(f"固定挂载 {index}\n")
+        uri = f"boxteam://workspace/{health['workspace_id']}/resources/files/root/{probe.name}"
+        response = await case.client.post("/api/v1/resources/navigation", json={"uri": uri, "operation": "read"}, headers={"X-BoxTeam-Workspace-Id": ids[1 - index]})
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["content"] == f"固定挂载 {index}\n"
+        assert response.json()["data"]["node"]["uri"] == uri
+        assert str(root) not in response.text
+        assert response.headers["X-Request-ID"] == response.json()["request_id"]
+    assert (await case.data("GET", "/api/gateway/workspaces"))["active_workspace_id"] == secondary
     backend_healths = []
     sessions = []
     for index, identity in enumerate(ids):

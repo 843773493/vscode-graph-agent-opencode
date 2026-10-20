@@ -1450,6 +1450,7 @@ export interface CommunicationGatewayRequest {
     | { $case: "target"; target: GlobalThreadAddress }
     | { $case: "resource_target"; resource_target: ContextGrantTarget }
     | { $case: "fork_target"; fork_target: ForkGrantTarget }
+    | { $case: "navigation_target"; navigation_target: ResourceNavigationGrantTarget }
     | undefined;
   body: { [key: string]: any } | undefined;
 }
@@ -1458,6 +1459,18 @@ export interface ForkGrantTarget {
   gateway_id: string;
   uri: string;
   fork_role: string;
+}
+
+/** 普通导航只绑定地址；不为每个文件分配长期资源身份。 */
+export interface ResourceNavigationGrantTarget {
+  gateway_id: string;
+  uri: string;
+}
+
+export interface ResourceNavigationRelayRequest {
+  source_gateway_id: string;
+  navigation_target: ResourceNavigationGrantTarget | undefined;
+  navigation: ResourceNavigationRequest | undefined;
 }
 
 export interface ForkSourceCaptureDTO {
@@ -11576,6 +11589,11 @@ export const CommunicationGatewayRequest: MessageFns<CommunicationGatewayRequest
         ? { $case: "resource_target", resource_target: ContextGrantTarget.fromJSON(object.resource_target) }
         : isSet(object.fork_target)
         ? { $case: "fork_target", fork_target: ForkGrantTarget.fromJSON(object.fork_target) }
+        : isSet(object.navigation_target)
+        ? {
+          $case: "navigation_target",
+          navigation_target: ResourceNavigationGrantTarget.fromJSON(object.navigation_target),
+        }
         : undefined,
       body: isObject(object.body) ? object.body : undefined,
     };
@@ -11592,6 +11610,8 @@ export const CommunicationGatewayRequest: MessageFns<CommunicationGatewayRequest
       obj.resource_target = ContextGrantTarget.toJSON(message.destination.resource_target);
     } else if (message.destination?.$case === "fork_target") {
       obj.fork_target = ForkGrantTarget.toJSON(message.destination.fork_target);
+    } else if (message.destination?.$case === "navigation_target") {
+      obj.navigation_target = ResourceNavigationGrantTarget.toJSON(message.destination.navigation_target);
     }
     if (message.body !== undefined) {
       obj.body = message.body;
@@ -11626,6 +11646,15 @@ export const CommunicationGatewayRequest: MessageFns<CommunicationGatewayRequest
           message.destination = {
             $case: "fork_target",
             fork_target: ForkGrantTarget.fromPartial(object.destination.fork_target),
+          };
+        }
+        break;
+      }
+      case "navigation_target": {
+        if (object.destination?.navigation_target !== undefined && object.destination?.navigation_target !== null) {
+          message.destination = {
+            $case: "navigation_target",
+            navigation_target: ResourceNavigationGrantTarget.fromPartial(object.destination.navigation_target),
           };
         }
         break;
@@ -11671,6 +11700,89 @@ export const ForkGrantTarget: MessageFns<ForkGrantTarget> = {
     message.gateway_id = object.gateway_id ?? "";
     message.uri = object.uri ?? "";
     message.fork_role = object.fork_role ?? "";
+    return message;
+  },
+};
+
+function createBaseResourceNavigationGrantTarget(): ResourceNavigationGrantTarget {
+  return { gateway_id: "", uri: "" };
+}
+
+export const ResourceNavigationGrantTarget: MessageFns<ResourceNavigationGrantTarget> = {
+  fromJSON(object: any): ResourceNavigationGrantTarget {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
+    };
+  },
+
+  toJSON(message: ResourceNavigationGrantTarget): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.uri !== "") {
+      obj.uri = message.uri;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ResourceNavigationGrantTarget>, I>>(base?: I): ResourceNavigationGrantTarget {
+    return ResourceNavigationGrantTarget.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ResourceNavigationGrantTarget>, I>>(
+    object: I,
+  ): ResourceNavigationGrantTarget {
+    const message = createBaseResourceNavigationGrantTarget();
+    message.gateway_id = object.gateway_id ?? "";
+    message.uri = object.uri ?? "";
+    return message;
+  },
+};
+
+function createBaseResourceNavigationRelayRequest(): ResourceNavigationRelayRequest {
+  return { source_gateway_id: "", navigation_target: undefined, navigation: undefined };
+}
+
+export const ResourceNavigationRelayRequest: MessageFns<ResourceNavigationRelayRequest> = {
+  fromJSON(object: any): ResourceNavigationRelayRequest {
+    return {
+      source_gateway_id: isSet(object.source_gateway_id) ? globalThis.String(object.source_gateway_id) : "",
+      navigation_target: isSet(object.navigation_target)
+        ? ResourceNavigationGrantTarget.fromJSON(object.navigation_target)
+        : undefined,
+      navigation: isSet(object.navigation) ? ResourceNavigationRequest.fromJSON(object.navigation) : undefined,
+    };
+  },
+
+  toJSON(message: ResourceNavigationRelayRequest): unknown {
+    const obj: any = {};
+    if (message.source_gateway_id !== "") {
+      obj.source_gateway_id = message.source_gateway_id;
+    }
+    if (message.navigation_target !== undefined) {
+      obj.navigation_target = ResourceNavigationGrantTarget.toJSON(message.navigation_target);
+    }
+    if (message.navigation !== undefined) {
+      obj.navigation = ResourceNavigationRequest.toJSON(message.navigation);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ResourceNavigationRelayRequest>, I>>(base?: I): ResourceNavigationRelayRequest {
+    return ResourceNavigationRelayRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ResourceNavigationRelayRequest>, I>>(
+    object: I,
+  ): ResourceNavigationRelayRequest {
+    const message = createBaseResourceNavigationRelayRequest();
+    message.source_gateway_id = object.source_gateway_id ?? "";
+    message.navigation_target = (object.navigation_target !== undefined && object.navigation_target !== null)
+      ? ResourceNavigationGrantTarget.fromPartial(object.navigation_target)
+      : undefined;
+    message.navigation = (object.navigation !== undefined && object.navigation !== null)
+      ? ResourceNavigationRequest.fromPartial(object.navigation)
+      : undefined;
     return message;
   },
 };

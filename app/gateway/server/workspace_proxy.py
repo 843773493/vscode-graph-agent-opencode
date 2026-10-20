@@ -728,40 +728,6 @@ async def proxy_context_search(
     return await _proxy_context_request(request, payload, auth=auth, user_access=user_access)
 
 
-@router.post(
-    "/api/v1/workspaces/{backend_workspace_id}/resources/navigation",
-    openapi_extra={
-        "requestBody": {
-            "required": True,
-            "content": {
-                "application/json": {
-                    "schema": {"$ref": "#/components/schemas/ResourceNavigationRequest"},
-                },
-            },
-        },
-        "responses": {
-            "200": {
-                "content": {
-                    "application/json": {
-                        "schema": {"$ref": "#/components/schemas/APIResponse_ResourceNavigationResultDTO_"},
-                    },
-                },
-            },
-        },
-    },
-)
-async def proxy_resource_navigation(
-    backend_workspace_id: str,
-    request: Request,
-    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
-    user_access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
-) -> Response:
-    return await _proxy_workspace_request(
-        f"workspaces/{backend_workspace_id}/resources/navigation", request,
-        auth=auth, user_access=user_access, include_credentials=True,
-    )
-
-
 @router.api_route(
     "/api/v1/{path:path}",
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],

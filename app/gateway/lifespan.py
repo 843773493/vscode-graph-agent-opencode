@@ -199,6 +199,7 @@ async def lifespan(app: FastAPI):
             catalog=WorkspaceCatalogPort(),
             session_main=WorkspaceSessionMainPort(
                 http_client=app.state.http_client, inventory_provider=federation_inventory,
+                skill_source_owner=skill_source_owner,
             ),
             credential_store=app.state.federation_credential_store,
             spoke_directory=FederationSpokeDirectory(provider=lambda: registered_spokes(registry)),

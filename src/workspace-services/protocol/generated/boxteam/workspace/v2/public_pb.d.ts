@@ -6270,6 +6270,12 @@ export declare type CommunicationGatewayRequest = Message<"boxteam.workspace.v2.
      */
     value: ForkGrantTarget;
     case: "forkTarget";
+  } | {
+    /**
+     * @generated from field: boxteam.workspace.v2.ResourceNavigationGrantTarget navigation_target = 6;
+     */
+    value: ResourceNavigationGrantTarget;
+    case: "navigationTarget";
   } | { case: undefined; value?: undefined };
 
   /**
@@ -6309,6 +6315,55 @@ export declare type ForkGrantTarget = Message<"boxteam.workspace.v2.ForkGrantTar
  * Use `create(ForkGrantTargetSchema)` to create a new message.
  */
 export declare const ForkGrantTargetSchema: GenMessage<ForkGrantTarget>;
+
+/**
+ * 普通导航只绑定地址；不为每个文件分配长期资源身份。
+ *
+ * @generated from message boxteam.workspace.v2.ResourceNavigationGrantTarget
+ */
+export declare type ResourceNavigationGrantTarget = Message<"boxteam.workspace.v2.ResourceNavigationGrantTarget"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string uri = 2;
+   */
+  uri: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ResourceNavigationGrantTarget.
+ * Use `create(ResourceNavigationGrantTargetSchema)` to create a new message.
+ */
+export declare const ResourceNavigationGrantTargetSchema: GenMessage<ResourceNavigationGrantTarget>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ResourceNavigationRelayRequest
+ */
+export declare type ResourceNavigationRelayRequest = Message<"boxteam.workspace.v2.ResourceNavigationRelayRequest"> & {
+  /**
+   * @generated from field: string source_gateway_id = 1;
+   */
+  sourceGatewayId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.ResourceNavigationGrantTarget navigation_target = 2;
+   */
+  navigationTarget?: ResourceNavigationGrantTarget | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.ResourceNavigationRequest navigation = 3;
+   */
+  navigation?: ResourceNavigationRequest | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ResourceNavigationRelayRequest.
+ * Use `create(ResourceNavigationRelayRequestSchema)` to create a new message.
+ */
+export declare const ResourceNavigationRelayRequestSchema: GenMessage<ResourceNavigationRelayRequest>;
 
 /**
  * @generated from message boxteam.workspace.v2.ForkSourceCaptureDTO

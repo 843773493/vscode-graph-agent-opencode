@@ -22,6 +22,7 @@ from app.gateway.federation.grants import (
     ForkGrantTarget,
     GrantTarget,
     OperationKind,
+    ResourceNavigationGrantTarget,
     decode_grant_target,
 )
 
@@ -128,7 +129,7 @@ def require_operation(request: dict[str, object]) -> OperationKind:
     return value
 
 
-def require_target(payload: dict[str, object]) -> GrantTarget | ContextGrantTarget | ForkGrantTarget:
+def require_target(payload: dict[str, object]) -> GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget:
     return decode_grant_target(payload.get("target"))
 
 

@@ -130,6 +130,26 @@ class ContextGrantTarget:
 
 
 @dataclass(frozen=True, slots=True)
+class ResourceNavigationGrantTarget:
+    """轻量只读导航绑定固定 URI，不为普通文件访问制造持久身份。"""
+
+    gateway_id: str
+    uri: str
+
+    def __post_init__(self) -> None:
+        from app.core.resource_uri import parse_resource_uri
+
+        resource = parse_resource_uri(self.uri, local_gateway_id=self.gateway_id)
+        if resource.gateway_authority is not None or resource.scope not in {"workspace", "gateway"}:
+            raise ValueError("导航 URI 必须属于固定 audience 的 Workspace 或 Gateway")
+        if resource.scope == "gateway" and resource.scope_id != self.gateway_id:
+            raise ValueError("导航 URI 的 Gateway scope 与 audience 不一致")
+
+    def to_payload(self) -> dict[str, object]:
+        return {"gateway_id": self.gateway_id, "uri": self.uri}
+
+
+@dataclass(frozen=True, slots=True)
 class ForkGrantTarget:
     """fork capability 的精确领域 URI；来源导出和目标创建分别授权。"""
 
@@ -154,12 +174,17 @@ class ForkGrantTarget:
         return {"gateway_id": self.gateway_id, "uri": self.uri, "fork_role": self.fork_role}
 
 
-def decode_grant_target(raw: object) -> GrantTarget | ContextGrantTarget | ForkGrantTarget:
+def decode_grant_target(raw: object) -> GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget:
     """grant 和实际 RPC 请求共用同一闭集 decoder，不猜测或补齐目标字段。"""
     if not isinstance(raw, dict):
         raise FederationError(FEDERATION_MALFORMED_FRAME, "grant target 必须是对象")
     if set(raw) == {"gateway_id", "workspace_id", "session_id"}:
         return GrantTarget(**{key: _require_str(raw, key) for key in raw})
+    if set(raw) == {"gateway_id", "uri"}:
+        try:
+            return ResourceNavigationGrantTarget(**{key: _require_str(raw, key) for key in raw})
+        except ValueError as error:
+            raise FederationError(FEDERATION_MALFORMED_FRAME, "导航 grant target 无效") from error
     if set(raw) == {"gateway_id", "uri", "fork_role"}:
         try:
             return ForkGrantTarget(**{key: _require_str(raw, key) for key in raw})
@@ -174,12 +199,12 @@ def decode_grant_target(raw: object) -> GrantTarget | ContextGrantTarget | ForkG
 
 
 def validate_grant_operation(
-    target: GrantTarget | ContextGrantTarget | ForkGrantTarget, operation: OperationKind,
+    target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget, operation: OperationKind,
 ) -> None:
     """operation 与 typed target 在所有签发及 relay 入口共用一个闭集。"""
     if isinstance(target, ForkGrantTarget):
         valid = operation == "fork_" + target.fork_role
-    elif isinstance(target, ContextGrantTarget):
+    elif isinstance(target, (ContextGrantTarget, ResourceNavigationGrantTarget)):
         valid = operation == "read"
     else:
         valid = operation in {"send", "read", "wait", "reply"}
@@ -202,7 +227,7 @@ class FederationGrant:
     issued_at: datetime
     principal_ref: str
     request_hash: str
-    target: GrantTarget | ContextGrantTarget | ForkGrantTarget | None = None
+    target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | None = None
     operation: OperationKind | None = None
     source_gateway_id: str | None = None
     operation_invocation_id: str | None = None
@@ -259,7 +284,7 @@ class FederationGrant:
                     FEDERATION_GRANT_KIND_MISMATCH, f"未知 operation: {operation!r}"
                 )
             raw_target = raw.get("target")
-            target: GrantTarget | ContextGrantTarget | ForkGrantTarget | None = None
+            target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | None = None
             if raw_target is not None:
                 target = decode_grant_target(raw_target)
             raw_path = raw.get("transit_path")
@@ -343,7 +368,7 @@ def sign_grant(
     principal_ref: str,
     request_preimage: dict[str, object],
     lifetime_seconds: float,
-    target: GrantTarget | ContextGrantTarget | ForkGrantTarget | None = None,
+    target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | None = None,
     operation: OperationKind | None = None,
     source_gateway_id: str | None = None,
     operation_invocation_id: str | None = None,
@@ -488,6 +513,7 @@ __all__ = [
     "GrantKind",
     "GrantTarget",
     "OperationKind",
+    "ResourceNavigationGrantTarget",
     "decode_grant_target",
     "required_wait_grant_lifetime",
     "sign_grant",

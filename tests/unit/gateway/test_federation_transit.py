@@ -35,6 +35,7 @@ from app.gateway.federation.grants import (
     MAX_TRANSIT_GATEWAYS,
     ContextGrantTarget,
     GrantTarget,
+    ResourceNavigationGrantTarget,
 )
 from app.gateway.federation.identity import load_or_create_signing_key
 from app.gateway.federation.policy import FederationPolicyStore
@@ -832,3 +833,69 @@ async def test_qualified_discovery_and_context_rejects_share_original_star_chann
         with pytest.raises(FederationError) as error:
             await source.service.relay_operation(target=target, operation="read", body=body)
         assert error.value.code == FEDERATION_CHANNEL_CLOSED
+
+
+@pytest.mark.asyncio
+async def test_navigation_read_grant_keeps_policy_deadline_and_channel_rejections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _federation(tmp_path, c_catalog={}) as (hub, source, target):
+        address = f"boxteam://gateway_c/workspace/{WORKSPACE_ID}/resources/files/root"
+        destination = ResourceNavigationGrantTarget("gateway_c", address)
+        body = {"source_gateway_id": "gateway_b", "navigation_target": destination.to_payload(), "navigation": {"uri": address, "operation": "list"}}
+        executed = []
+        async def execute(**arguments):
+            executed.append(arguments)
+            return {"read": "completed"}
+        monkeypatch.setattr(target.service.session_main, "execute", execute)
+        seen = {}
+        original = FederationRpcService.handle_request
+        async def record(self, *, method, request, session, deadline_at):
+            seen[self.gateway_id] = deadline_at
+            return await original(self, method=method, request=request, session=session, deadline_at=deadline_at)
+        monkeypatch.setattr(FederationRpcService, "handle_request", record)
+        deadline = time.time() + 6
+        result = await source.service.relay_operation(target=destination, operation="read", body=body, deadline_at=deadline)
+        assert result["result"] == {"read": "completed"}
+        assert seen == {"gateway_hub": deadline, "gateway_c": deadline}
+        assert len(executed) == 1
+        assert executed[0]["target"] == destination.to_payload() and executed[0]["origin"] == "gateway_b"
+        assert 0 < executed[0]["timeout"] <= 6
+        from app.gateway.federation.protocol import METHOD_RELAY
+        hub_channel = source.service.hub_channel
+        assert hub_channel is not None
+        for index, override in enumerate((
+            {"visited": ["gateway_b", "gateway_extra"]},
+            {"max_gateway_hops": MAX_GATEWAY_HOPS + 1},
+            {"max_transit_gateways": MAX_TRANSIT_GATEWAYS + 1},
+        )):
+            with pytest.raises(FederationError) as error:
+                await hub_channel.request(method=METHOD_RELAY, request={
+                    "nonce": f"navigation-budget-{index}", "request_id": "req_transit_contract",
+                    "body": body, "operation": "read", "target": destination.to_payload(),
+                    "visited": ["gateway_b"], "max_transit_gateways": MAX_TRANSIT_GATEWAYS,
+                    "max_gateway_hops": MAX_GATEWAY_HOPS, **override,
+                }, timeout=5)
+            assert error.value.code == "federation-transit-limit-exceeded"
+        for operation in ("send", "wait", "reply", "fork_source", "fork_target"):
+            with pytest.raises(FederationError) as error:
+                await source.service.relay_operation(target=destination, operation=operation, body=body)
+            assert error.value.code == FEDERATION_GRANT_KIND_MISMATCH
+        with pytest.raises(FederationError) as error:
+            await source.service.relay_operation(target=destination, operation="read", body=body, deadline_at=time.time() - 1)
+        assert error.value.code == FEDERATION_DEADLINE_EXCEEDED
+        for owner, capability in ((source, "read"), (hub, "transit"), (target, "read")):
+            owner.service.policy_store.publish({"rules": [{"capability": capability, "effect": "deny"}]})
+            with pytest.raises(FederationError) as error:
+                await source.service.relay_operation(target=destination, operation="read", body=body)
+            assert error.value.code == FEDERATION_AUTHORIZATION_REVOKED
+            owner.service.policy_store.publish({"rules": []})
+        assert len(executed) == 1
+        channel = hub.service._channels["gateway_c"]
+        await channel.close()
+        await channel.join()
+        hub.service.unregister_channel(channel.channel_instance_id)
+        with pytest.raises(FederationError) as error:
+            await source.service.relay_operation(target=destination, operation="read", body=body)
+        assert error.value.code == FEDERATION_CHANNEL_CLOSED
+        assert len(executed) == 1

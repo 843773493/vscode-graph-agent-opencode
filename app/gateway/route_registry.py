@@ -19,6 +19,7 @@ from app.gateway.routes import (
     workspaces_managed,
 )
 from app.gateway.server.port_forwarding import router as port_forwards_router
+from app.gateway.server.resource_navigation import router as resource_navigation_router
 from app.gateway.server.workspace_proxy import router as workspace_proxy_router
 
 # Gateway 自有路由组保持拆分前的定义顺序，避免 openapi 路径与路由匹配顺序漂移。
@@ -43,5 +44,6 @@ def register_gateway_routes(app: FastAPI) -> None:
     app.include_router(device_connections_router)
     app.include_router(port_forwards_router)
     app.include_router(federation_router)
+    app.include_router(resource_navigation_router)
     app.include_router(auxiliary_proxy_router)
     app.include_router(workspace_proxy_router)

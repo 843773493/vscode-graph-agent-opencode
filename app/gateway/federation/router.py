@@ -95,6 +95,10 @@ async def relay_communication(payload: CommunicationGatewayRequest, request: Req
             if payload.body.get("source_gateway_id") != service.gateway_id:
                 raise ValueError("fork relay origin 不是当前 Gateway")
             target = payload.fork_target
+        elif payload.navigation_target is not None:
+            if payload.body.get("source_gateway_id") != service.gateway_id:
+                raise ValueError("资源导航 origin 不是当前 Gateway")
+            target = payload.navigation_target
         elif payload.resource_target is not None:
             if payload.body.get("source_gateway_id") != service.gateway_id:
                 raise ValueError("上下文查询 origin 不是当前 Gateway")

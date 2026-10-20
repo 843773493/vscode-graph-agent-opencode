@@ -1439,6 +1439,7 @@ message CommunicationGatewayRequest {
     GlobalThreadAddress target = 2;
     ContextGrantTarget resource_target = 4;
     ForkGrantTarget fork_target = 5;
+    ResourceNavigationGrantTarget navigation_target = 6;
   }
   google.protobuf.Struct body = 3;
 }
@@ -1447,6 +1448,18 @@ message ForkGrantTarget {
   string gateway_id = 1;
   string uri = 2;
   string fork_role = 3;
+}
+
+// 普通导航只绑定地址；不为每个文件分配长期资源身份。
+message ResourceNavigationGrantTarget {
+  string gateway_id = 1;
+  string uri = 2;
+}
+
+message ResourceNavigationRelayRequest {
+  string source_gateway_id = 1;
+  ResourceNavigationGrantTarget navigation_target = 2;
+  ResourceNavigationRequest navigation = 3;
 }
 
 message ForkSourceCaptureDTO {

@@ -8,12 +8,17 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-from app.gateway.federation.grants import ContextGrantTarget, ForkGrantTarget
-from app.schemas.internal_v2.session_fork_transfer import SessionForkTransferRequest
+from app.gateway.federation.grants import (
+    ContextGrantTarget,
+    ForkGrantTarget,
+    ResourceNavigationGrantTarget,
+)
+from app.schemas.internal_v2.resource_navigation import ResourceNavigationRequest
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
     SessionContextSearchRequest,
 )
+from app.schemas.internal_v2.session_fork_transfer import SessionForkTransferRequest
 from app.services.business.communication.addresses import GlobalThreadAddress
 from app.services.business.communication.admission import CommunicationPayload
 from app.services.business.communication.wait import DurableDeadline, WaitSelector
@@ -111,6 +116,20 @@ class ContextQueryRequest(BaseModel):
         return self
 
 
+class ResourceNavigationRelayRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_gateway_id: str = Field(min_length=1)
+    navigation_target: ResourceNavigationGrantTarget
+    navigation: ResourceNavigationRequest
+
+    @model_validator(mode="after")
+    def require_fixed_uri(self) -> ResourceNavigationRelayRequest:
+        if self.navigation.uri != self.navigation_target.uri:
+            raise ValueError("资源导航与 read grant 的固定 URI 不一致")
+        return self
+
+
 class CommunicationGatewayRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -118,11 +137,12 @@ class CommunicationGatewayRequest(BaseModel):
     target: GlobalThreadAddress | None = None
     resource_target: ContextGrantTarget | None = None
     fork_target: ForkGrantTarget | None = None
+    navigation_target: ResourceNavigationGrantTarget | None = None
     body: dict[str, object]
 
     @model_validator(mode="after")
     def validate_target(self) -> CommunicationGatewayRequest:
-        if sum(target is not None for target in (self.target, self.resource_target, self.fork_target)) != 1:
+        if sum(target is not None for target in (self.target, self.resource_target, self.fork_target, self.navigation_target)) != 1:
             raise ValueError("relay 必须恰好提供一个 typed target")
         if self.fork_target is not None:
             if self.operation != "fork_" + self.fork_target.fork_role:
@@ -138,4 +158,10 @@ class CommunicationGatewayRequest(BaseModel):
             query = ContextQueryRequest.model_validate(self.body)
             if query.resource_target != self.resource_target:
                 raise ValueError("relay resource_target 与查询 envelope 不一致")
+        if self.navigation_target is not None:
+            if self.operation != "read":
+                raise ValueError("资源导航只允许 read capability")
+            query = ResourceNavigationRelayRequest.model_validate(self.body)
+            if query.navigation_target != self.navigation_target:
+                raise ValueError("relay navigation_target 与查询 envelope 不一致")
         return self

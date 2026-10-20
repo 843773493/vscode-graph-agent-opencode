@@ -127,8 +127,9 @@ def test_communication_wire_uses_one_destination_for_existing_resource_and_fork_
     assert descriptor.fields_by_name["target"].number == 2
     assert descriptor.fields_by_name["resource_target"].number == 4
     assert descriptor.fields_by_name["fork_target"].number == 5
+    assert descriptor.fields_by_name["navigation_target"].number == 6
     assert {field.name for field in descriptor.oneofs_by_name["destination"].fields} == {
-        "target", "resource_target", "fork_target",
+        "target", "resource_target", "fork_target", "navigation_target",
     }
     value = public_pb2.CommunicationGatewayRequest(operation="read")
     value.target.gateway_id = "gateway-existing"
@@ -165,6 +166,14 @@ def test_communication_wire_uses_one_destination_for_existing_resource_and_fork_
     assert decoded.fork_target.fork_role == "source"
     assert not decoded.HasField("target")
     assert not decoded.HasField("resource_target")
+
+    value.navigation_target.gateway_id = "gateway-navigation"
+    value.navigation_target.uri = "boxteam://workspace/ws-1/resources/files/root"
+    navigation = public_pb2.CommunicationGatewayRequest.FromString(value.SerializeToString())
+    assert navigation.WhichOneof("destination") == "navigation_target"
+    assert not navigation.HasField("fork_target")
+    assert navigation.navigation_target.gateway_id == "gateway-navigation"
+    assert navigation.navigation_target.uri == value.navigation_target.uri
 
 
 @pytest.fixture
