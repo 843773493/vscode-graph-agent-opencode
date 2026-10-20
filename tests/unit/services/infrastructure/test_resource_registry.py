@@ -602,6 +602,54 @@ def registry_catalog_snapshot() -> ResourceSnapshot:
     )
 
 
+@pytest.mark.parametrize(
+    "identity",
+    [
+        "/work/project/SKILL.md", "./skills/demo", "skills/demo", r"C:\work\demo",
+        "boxteam://workspace/test/resources/skills/demo/SKILL.md",
+        "https://example.com/resource", "owner@resource", "encoded%2Fpath", "bad\nidentity",
+    ],
+)
+@pytest.mark.parametrize(
+    "field", ["descriptor_id", "source_ids", "dependency_ids", "snapshot_id", "lineage_id"],
+)
+def test_registry_rejects_locator_shaped_identity_before_publication(
+    registry_catalog_snapshot: ResourceSnapshot, identity: str, field: str,
+) -> None:
+    registry = ResourceRegistry()
+    original = registry.publish(registry_catalog_snapshot)
+    descriptor = registry.descriptor(original.resource_id)
+    before = registry.capture()
+    with pytest.raises(ValueError, match="ResourceIdentity"):
+        if field == "descriptor_id":
+            registry.register_descriptor(replace(descriptor, resource_id=identity))
+        elif field == "source_ids":
+            registry.register_descriptor(replace(descriptor, source_ids=(identity,)))
+        elif field == "dependency_ids":
+            registry.register_descriptor(replace(descriptor, dependency_resource_ids=(identity,)))
+        elif field == "snapshot_id":
+            registry.publish(replace(original, resource_id=identity))
+        else:
+            registry.publish(replace(original, source_lineage=((identity, "revision-2"),)))
+    assert registry.capture() == before
+    assert registry.snapshot(original.resource_id) is original
+    assert registry.last_valid_snapshot(original.resource_id) is original
+
+
+@pytest.mark.parametrize("identity", ["skill:demo:metadata", "mcp:catalog", "res_019abc", "019c390d-6a70-7c85-8709-afddc785bf93"])
+def test_registry_keeps_opaque_identity_independent_of_uri_and_revision(
+    registry_catalog_snapshot: ResourceSnapshot, identity: str,
+) -> None:
+    registry = ResourceRegistry()
+    snapshot = replace(registry_catalog_snapshot, resource_id=identity)
+    first = registry.publish(snapshot)
+    changed = registry.publish(replace(snapshot, revision="next-revision", payload={"guidance": "next"}))
+    assert changed.resource_id == first.resource_id == identity
+    assert changed.display_uri is first.display_uri is None
+    assert registry.descriptor(identity).resource_id == identity
+    assert registry.publish(replace(changed)) is changed
+
+
 def test_resource_snapshot_keeps_members_typed_and_separate_from_payload(
     registry_catalog_snapshot: ResourceSnapshot,
     registry_catalog_member: ResourceMemberBinding,

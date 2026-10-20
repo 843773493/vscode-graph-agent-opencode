@@ -14,6 +14,9 @@ from app.core.resource_uri import (
     parse_resource_uri,
 )
 from app.domain.itemized.resource_activation import ResourceMemberBinding
+from app.services.infrastructure.resource_platform.virtual_resources.values import (
+    validate_resource_identity,
+)
 
 _SNAPSHOT_ERROR_CODES = frozenset(
     {
@@ -49,7 +52,8 @@ class SemanticResourceDescriptor:
     loader_version: str = "v1"
 
     def __post_init__(self) -> None:
-        for field_name in ("resource_id", "resource_kind", "facet", "loader_version"):
+        validate_resource_identity(self.resource_id)
+        for field_name in ("resource_kind", "facet", "loader_version"):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value:
                 raise ValueError(
@@ -66,6 +70,8 @@ class SemanticResourceDescriptor:
                 raise ValueError(
                     f"SemanticResourceDescriptor.{tuple_field} 必须是非空字符串元组"
                 )
+            for identity in value:
+                validate_resource_identity(identity)
         if len(set(self.source_ids)) != len(self.source_ids) or len(
             set(self.dependency_resource_ids)
         ) != len(self.dependency_resource_ids):
@@ -122,7 +128,8 @@ class ResourceSnapshot:
     members: tuple[ResourceMemberBinding, ...] = ()
 
     def __post_init__(self) -> None:
-        for field_name in ("resource_id", "resource_kind", "facet"):
+        validate_resource_identity(self.resource_id)
+        for field_name in ("resource_kind", "facet"):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value:
                 raise ValueError(f"ResourceSnapshot.{field_name} 必须是非空字符串")
@@ -148,6 +155,8 @@ class ResourceSnapshot:
             raise ValueError(
                 "ResourceSnapshot.source_lineage 必须是 (identity, revision) 元组"
             )
+        for identity, _revision in lineage:
+            validate_resource_identity(identity)
         if not isinstance(self.members, tuple) or not all(
             isinstance(member, ResourceMemberBinding) for member in self.members
         ):
