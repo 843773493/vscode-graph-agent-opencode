@@ -2,11 +2,6 @@ from app.agents.tools.apply_patch.executor import (
     apply_patch_text,
     extract_apply_patch_file_paths,
 )
-from app.agents.tools.apply_patch.journal import (
-    APPLY_PATCH_JOURNAL_DIR,
-    load_apply_patch_journal_from_result,
-    update_apply_patch_journal,
-)
 from app.agents.tools.apply_patch.models import (
     ActionType,
     Commit,
@@ -29,7 +24,6 @@ from app.agents.tools.apply_patch.tool import (
 )
 
 __all__ = [
-    "APPLY_PATCH_JOURNAL_DIR",
     "APPLY_PATCH_TOOL_NAME",
     "ActionType",
     "ApplyPatchInput",
@@ -45,7 +39,5 @@ __all__ = [
     "identify_files_added",
     "identify_files_affected",
     "identify_files_needed",
-    "load_apply_patch_journal_from_result",
     "parse_patch",
-    "update_apply_patch_journal",
 ]

@@ -9,7 +9,9 @@
 - 目录观察 revision、操作冻结、依赖解析、领取执行及按原 operation 恢复。
 - 既有 create 文件/目录、paste 文本、copy、multipart upload 四入口所需的存储与文件执行闭包。
 - 同一 owner 的上传 durable staging、路径/长度/hash 清单与清理。
-- `mutation_lock.py` 提供正文保存与补丁共用的短写入临界区；`text_publication.py` 负责有界原字节读取、发布前重核和单文件发布后核实，不自动恢复旧内容。
+- `mutation_lock.py` 提供正文保存与模型文本工具共用的短写入临界区；`text_publication.py` 负责有界原字节读取、发布前重核和单文件发布后核实，不自动恢复旧内容。
+- `text_mutation.py` 唯一执行模型 write/edit/patch 的整批路径、权限、原字节版本预检和逐文件发布；补丁解析仍归 Agent 工具，不在此复制语法。
+- `text_journal.py` 保存临界区内原件与逐路径发布结果；有会话的调用通过统一解析器聚合到所属会话 `changes/text_mutations`，无会话独立工具调用只写显式工作区缓存。
 
 # 不可修改内容
 

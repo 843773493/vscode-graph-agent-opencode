@@ -11,7 +11,6 @@ from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain_core.tools import BaseTool
 
 from app.abstractions.session_changes import (
-    FileEditSnapshot,
     SessionChangesRecorderProtocol,
     StoredFileEdit,
 )
@@ -19,7 +18,6 @@ from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.model_capability_routing import MODEL_FAILED_CUSTOM_EVENT
 from app.agents.model_tool_schema import filter_tool_event_injected_arguments
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
-from app.agents.tools.apply_patch import APPLY_PATCH_TOOL_NAME
 from app.core.job_context import set_active_tool_name, set_interruptible_phase
 from app.core.job_event_bus import EventType
 from app.core.model_delta_context import AgentRunLifecycleCallbackHandler
@@ -66,14 +64,14 @@ from app.services.orchestration.event_stream.reader import (
     resolve_event_timeouts,
 )
 from app.services.orchestration.event_stream.tool_events import (
+    FILE_EDIT_TOOL_NAMES,
     SUBAGENT_TOOL_NAMES,
     activity_result_detail,
-    apply_patch_has_file_effects,
-    apply_patch_snapshots_from_result,
     build_tool_display_context,
-    file_paths_from_tool_args,
     resource_activity_binding_from_metadata,
     stored_edit_payload,
+    text_mutation_has_file_effects,
+    text_mutation_snapshots_from_result,
     tool_message_from_output,
     tool_output_status,
     tool_output_succeeded,
@@ -148,7 +146,6 @@ async def process_agent_event_stream(
     tool_scopes_by_run_id: dict[str, TurnExecutionScope] = {}
     message_stream_tool_call_ids_by_run_id: dict[str, str] = {}
     message_stream_tool_attempt_ids_by_run_id: dict[str, str] = {}
-    file_edit_snapshots_by_run_id: dict[str, list[FileEditSnapshot]] = {}
     last_tool_result_text = ""
     successful_tool_calls: list[SuccessfulToolCall] = []
     completed_custom_tool_names: list[str] = []
@@ -519,15 +516,6 @@ async def process_agent_event_stream(
                 if execution_scope is not None:
                     tool_scopes_by_run_id[run_id] = execution_scope.child(f"tool-{run_id}")
                 tool_contexts_by_run_id[run_id] = display_context
-                file_paths = file_paths_from_tool_args(
-                    display_context.tool_name,
-                    display_context.tool_args,
-                )
-                if file_paths:
-                    file_edit_snapshots_by_run_id[run_id] = [
-                        session_changes_service.capture_before(file_path)
-                        for file_path in file_paths
-                    ]
                 tool_attempt_id = run_id
                 if message_stream_runtime is not None:
                     message_stream_tool_call_id = await message_stream_runtime.tool_call_for_callback(run_id)
@@ -671,16 +659,15 @@ async def process_agent_event_stream(
                     completed_custom_tool_names.append(display_context.tool_name)
                 stored_edits: list[StoredFileEdit] = []
                 if run_id:
-                    snapshots = file_edit_snapshots_by_run_id.pop(run_id, None)
+                    snapshots = None
                     has_file_effects = tool_output_succeeded(raw_output) or (
-                        display_context.tool_name == APPLY_PATCH_TOOL_NAME and apply_patch_has_file_effects(raw_result_text)
+                        display_context.tool_name in FILE_EDIT_TOOL_NAMES and text_mutation_has_file_effects(raw_result_text)
                     )
                     if (
-                        snapshots is None
-                        and display_context.tool_name == APPLY_PATCH_TOOL_NAME
+                        display_context.tool_name in FILE_EDIT_TOOL_NAMES
                         and has_file_effects
                     ):
-                        snapshots = apply_patch_snapshots_from_result(
+                        snapshots = text_mutation_snapshots_from_result(
                             result_text=raw_result_text,
                             session_changes_service=session_changes_service,
                             workspace_root=workspace_root,

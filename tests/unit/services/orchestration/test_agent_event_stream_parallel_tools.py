@@ -25,6 +25,7 @@ from app.core.model_delta_context import (
     AgentRunLifecycleCallbackHandler,
     model_tool_invocation_scope,
 )
+from app.core.resource_uri import resource_display_uri
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.turn_execution_scope import (
     CancellationSignal,
@@ -32,11 +33,15 @@ from app.core.turn_execution_scope import (
     TurnExecutionScope,
     get_current_turn_execution_scope,
 )
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.protocol.codecs.message_stream import (
     message_stream_to_json,
     message_stream_to_proto,
 )
 from app.schemas.event import ModelTokenUsagePayload
+from app.services.infrastructure.workspace_files.text_journal import (
+    write_text_mutation_journal,
+)
 from app.services.orchestration.event_stream.contracts import (
     AgentEventStreamTimeoutError,
 )
@@ -305,8 +310,8 @@ class RecordingSessionChangesService:
     def __init__(self) -> None:
         self.recorded: list[dict[str, Any]] = []
 
-    def capture_before(self, file_path: str) -> object:
-        return {"file_path": file_path}
+    def build_snapshot(self, *, file_path: str, existed: bool, content: str) -> object:
+        return {"file_path": file_path, "existed": existed, "content": content}
 
     async def record_tool_file_edit(self, **kwargs: Any) -> None:
         self.recorded.append(kwargs)
@@ -1951,6 +1956,12 @@ async def test_successful_tool_call_keeps_arguments_for_delegation_validation(
     assert call.tool_args["target_session_id"] == "ses_parent"
 
 
+def _file_mutation_receipt(root: Path, path: str) -> str:
+    uri = resource_display_uri(scope="workspace", scope_id=load_or_create_workspace_id(root), kind="files", tail_segments=("root", *Path(path).parts))
+    journal = write_text_mutation_journal([{"file_path": "/" + path, "uri": uri, "before_exists": False, "before_content": ""}], workspace_root=root)
+    return json.dumps({"status": "success", "effect": "completed", "journal_id": journal, "files": [{"path": uri, "state": "published"}]})
+
+
 @pytest.mark.asyncio
 async def test_file_edit_keeps_model_tool_call_id_and_execution_id_separate(
     tmp_path: Path,
@@ -1971,7 +1982,7 @@ async def test_file_edit_keeps_model_tool_call_id_and_execution_id_separate(
             "name": "write_file",
             "data": {
                 "output": ToolMessage(
-                    content="写入成功",
+                    content=_file_mutation_receipt(tmp_path, "src/example.txt"),
                     tool_call_id="call_write",
                     name="write_file",
                 )
@@ -2025,7 +2036,7 @@ async def test_internal_file_edit_keeps_job_identity_without_turn_attribution(
             "name": "write_file",
             "data": {
                 "output": ToolMessage(
-                    content="写入成功",
+                    content=_file_mutation_receipt(tmp_path, "src/internal.txt"),
                     tool_call_id="call_internal_write",
                     name="write_file",
                 )

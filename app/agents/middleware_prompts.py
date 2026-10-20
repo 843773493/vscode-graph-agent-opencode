@@ -52,9 +52,9 @@ FILESYSTEM_TOOL_DESCRIPTIONS = {
         "Do not access `.boxteam` runtime data directly. max_bytes bounds the scanned prefix including skipped lines; "
         "increase it explicitly for later lines. Media must fit both byte budgets and is never partially returned."
     ),
-    "write_file": "Create a text file; prefer a workspace-relative path.",
+    "write_file": "Create a UTF-8 text file with expected_version=absent; returns a verified URI/hash receipt. Use a workspace-relative/native path or resource URI.",
     "edit_file": (
-        "Replace exact text in a file; prefer a workspace-relative path. Read the file first, "
+        "Replace exact UTF-8 text at a workspace-relative/native path or resource URI. Read first and pass its raw-byte sha256 as expected_version; "
         "preserve indentation, and use replace_all only when every occurrence should change."
     ),
     "glob": (

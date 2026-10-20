@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import time
+from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -239,6 +240,7 @@ async def test_deepagents_filesystem_tools_share_relative_path_contract(
     write_result = await tools["write_file"].coroutine(
         file_path=relative_path,
         content="before contract marker",
+        expected_version="absent",
         runtime=runtime,
     )
     ls_result = await tools["ls"].coroutine(path="src", runtime=runtime)
@@ -255,6 +257,7 @@ async def test_deepagents_filesystem_tools_share_relative_path_contract(
     edit_result = await tools["edit_file"].coroutine(
         file_path=relative_path,
         old_string="before",
+        expected_version="sha256:" + sha256(b"before contract marker").hexdigest(),
         new_string="after",
         runtime=runtime,
     )
@@ -369,13 +372,15 @@ async def test_listing_tools_hide_and_reject_boxteam_runtime(
             },
         ),
     ):
+        if tool_name in {"write_file", "edit_file"}:
+            kwargs["expected_version"] = "absent" if tool_name == "write_file" else "sha256:" + "0" * 64
         result = await tools[tool_name].coroutine(runtime=runtime, **kwargs)
         assert isinstance(result, ToolMessage)
         assert result.status == "error"
         if tool_name in {"ls", "read_file", "glob"}:
             assert json.loads(result.content)["code"] == "capability_denied"
         else:
-            assert "运行时目录" in result.content
+            assert json.loads(result.content)["code"] == "invalid_patch"
 
 
 @pytest.mark.asyncio
@@ -472,13 +477,18 @@ async def test_logical_attachment_rejects_cross_session_writes_and_old_paths(att
         ("write_file", {"file_path": ref.file_id.replace("boxteam-session://", "session-artifacts/"), "content": "spoofed"}),
         ("edit_file", {"file_path": ref.file_id, "old_string": "attachment", "new_string": "spoofed"}),
     ):
+        if tool_name in {"write_file", "edit_file"}:
+            kwargs["expected_version"] = "absent" if tool_name == "write_file" else "sha256:" + "0" * 64
         result = await tools[tool_name].coroutine(runtime=runtime, **kwargs)
         assert isinstance(result, ToolMessage)
         assert result.status == "error"
-        if tool_name == "ls":
-            assert json.loads(result.content)["code"] == "unknown_scheme"
+        code = json.loads(result.content)["code"]
+        if tool_name == "ls" or kwargs.get("file_path", "").startswith("boxteam-session://"):
+            assert code == "unknown_scheme"
+        elif tool_name == "read_file":
+            assert code == "capability_denied"
         else:
-            assert "运行时目录" in result.content or "capability" in result.content
+            assert code == "invalid_patch"
     assert store.read("ses_019b781159d47374805bc4427d081a14", ref.file_id).data == before
     assert not (store._path_resolver.resolve_session_node("ses_019b781159d47374805bc4427d081a14") / "attachments").exists()
 
@@ -581,10 +591,12 @@ async def test_filesystem_tools_share_target_resolution(
         ("read_file", {"path": target("src/main.txt")}),
         ("glob", {"path": target("src"), "pattern": "*.txt"}),
         ("grep", {"path": target("src"), "pattern": "selected target"}),
-        ("write_file", {"file_path": target("src/new.txt"), "content": "new target\n"}),
-        ("edit_file", {"file_path": target("src/main.txt"), "old_string": "selected target", "new_string": "edited target"}),
+        ("write_file", {"file_path": target("src/new.txt"), "content": "new target\n", "expected_version": "absent"}),
+        ("edit_file", {"file_path": target("src/main.txt"), "old_string": "selected target", "new_string": "edited target", "expected_version": "sha256:" + sha256(b"selected target\n").hexdigest()}),
     ]
     for name, arguments in operations:
+        if name in {"write_file", "edit_file"} and "expected_version" not in arguments:
+            arguments["expected_version"] = "absent" if name == "write_file" else "sha256:" + "0" * 64
         result = await tools[name].coroutine(**arguments, runtime=runtime)
         assert result.status == "success", (name, result.content)
     assert source.read_text(encoding="utf-8") == "edited target\n"
@@ -614,6 +626,8 @@ async def test_external_absolute_inputs_never_read_or_write_workspace_decoys(con
         ("edit_file", {"file_path": str(outside / "owned.txt"), "old_string": "DECOY", "new_string": "WRONG"}),
     ]
     for name, arguments in operations:
+        if name in {"write_file", "edit_file"} and "expected_version" not in arguments:
+            arguments["expected_version"] = "absent" if name == "write_file" else "sha256:" + "0" * 64
         result = await tools[name].coroutine(**arguments, runtime=runtime)
         assert result.status == "error", (name, result.content)
         assert "DECOY" not in result.content

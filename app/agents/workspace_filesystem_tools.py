@@ -4,10 +4,10 @@ import json
 import logging
 import mimetypes
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from functools import partial, update_wrapper
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Literal, cast
+from typing import Annotated, Literal
 
 import httpx
 from deepagents.backends import CompositeBackend
@@ -33,10 +33,10 @@ from app.agents.middleware_prompts import FILESYSTEM_TOOL_DESCRIPTIONS
 from app.agents.workspace_backend import SESSION_ARTIFACT_ROUTE, SessionArtifactBackend
 from app.agents.workspace_tool_paths import (
     WorkspaceToolPathResolver,
-    backend_virtual_to_workspace_relative,
 )
 from app.core.resource_uri import ResourceUriGrammarError, parse_resource_uri
 from app.core.trace_middleware import require_current_gateway_id
+from app.core.workspace_identity import read_workspace_id
 from app.gateway.federation.errors import FederationError
 from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationRequest,
@@ -48,6 +48,18 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
+)
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
+from app.services.infrastructure.workspace_files.text_mutation import (
+    FileSnapshot,
+    TextPublication,
+    execute_text_mutation,
+    resolve_text_target,
+    text_mutation_failure,
+)
+from app.services.infrastructure.workspace_files.text_publication import (
+    FilePreimage,
+    WorkspaceFileConflictError,
 )
 
 GrepOutputMode = Literal["files_with_matches", "content", "count"]
@@ -96,6 +108,7 @@ class WorkspaceWriteFileSchema(_ToolSchema):
         description="Destination file path; prefer a workspace-relative path."
     )
     content: str = Field(description="Text content to write.")
+    expected_version: Literal["absent"] = Field(description="Explicitly require the destination to be absent.")
     runtime: Annotated[object, InjectedToolArg]
 
 
@@ -103,6 +116,7 @@ class WorkspaceEditFileSchema(_ToolSchema):
     file_path: str = Field(
         description="File path to edit; prefer a workspace-relative path."
     )
+    expected_version: str = Field(pattern=r"^sha256:[0-9a-f]{64}$", description="Raw-byte version from the previous read_file result.")
     old_string: str = Field(description="Exact text to replace.")
     new_string: str = Field(description="Replacement text; must differ from old_string.")
     replace_all: bool = Field(
@@ -147,31 +161,6 @@ class WorkspaceGrepSchema(_SearchSchema):
     max_snippet_bytes: int = Field(default=2048, ge=16, le=8192)
 
 
-def _tool_implementations(
-    middleware: FilesystemMiddleware,
-    tool_name: str,
-) -> tuple[
-    Callable[..., ToolMessage],
-    Callable[..., Awaitable[ToolMessage]],
-]:
-    tool = next(
-        (candidate for candidate in middleware.tools if candidate.name == tool_name),
-        None,
-    )
-    if tool is None:
-        raise RuntimeError(f"FilesystemMiddleware 缺少 {tool_name} 工具")
-    if not isinstance(tool, StructuredTool):
-        raise TypeError(
-            f"FilesystemMiddleware {tool_name} 类型无效: {type(tool).__name__}"
-        )
-    if tool.func is None or tool.coroutine is None:
-        raise RuntimeError(f"FilesystemMiddleware {tool_name} 缺少同步或异步实现")
-    return (
-        cast("Callable[..., ToolMessage]", tool.func),
-        cast("Callable[..., Awaitable[ToolMessage]]", tool.coroutine),
-    )
-
-
 def _path_error(
     tool_name: str,
     runtime: ToolRuntime[None, FilesystemState],
@@ -201,26 +190,6 @@ def _path_error(
         name=tool_name,
         tool_call_id=runtime.tool_call_id,
         status="error",
-    )
-
-
-def _rewrite_known_path(
-    message: ToolMessage,
-    *,
-    virtual_path: str,
-    relative_path: str,
-) -> ToolMessage:
-    content = message.content
-    if isinstance(content, str):
-        content = content.replace(virtual_path, relative_path)
-    additional_kwargs = dict(message.additional_kwargs)
-    read_path = additional_kwargs.get("read_file_path")
-    if isinstance(read_path, str) and read_path.startswith("/"):
-        additional_kwargs["read_file_path"] = backend_virtual_to_workspace_relative(
-            read_path
-        )
-    return message.model_copy(
-        update={"content": content, "additional_kwargs": additional_kwargs}
     )
 
 
@@ -402,10 +371,7 @@ def configure_workspace_filesystem_tools(
     )
     if not isinstance(session_artifact_backend, SessionArtifactBackend):
         raise TypeError("Session artifacts route 必须由唯一 SessionArtifactBackend 装配")
-    implementations = {
-        name: _tool_implementations(middleware, name)
-        for name in ("write_file", "edit_file")
-    }
+    text_paths = WorkspaceFilePaths(workspace=workspace_root, workspace_id=read_workspace_id(workspace_root), bindings=None)
 
     def resolve_paths(
         tool_name: str,
@@ -566,93 +532,61 @@ def configure_workspace_filesystem_tools(
         except (OSError, RuntimeError, ValueError, httpx.HTTPError, FederationError) as error:
             return _path_error("read_file", runtime, error)
 
-    def sync_write_file(
-        file_path: str,
-        content: str,
-        runtime: ToolRuntime[None, FilesystemState],
-    ) -> ToolMessage:
+    def mutate_file(tool_name: str, file_path: str, expected_version: str,
+                    transform: Callable[[FilePreimage | None], bytes],
+                    runtime: ToolRuntime[None, FilesystemState]) -> ToolMessage:
         try:
-            relative_path, backend_path = resolve_paths("write_file", file_path)
-        except ValueError as error:
-            return _path_error("write_file", runtime, error)
-        result = implementations["write_file"][0](
-            file_path=backend_path,
-            content=content,
-            runtime=runtime,
-        )
-        return _rewrite_known_path(
-            result,
-            virtual_path=backend_path,
-            relative_path=relative_path,
-        )
+            actual, uri = resolve_text_target(text_paths, file_path)
+            relative = actual.relative_to(workspace_root).as_posix()
+            _validate_model_path(tool_name, relative)
 
-    async def async_write_file(
-        file_path: str,
-        content: str,
-        runtime: ToolRuntime[None, FilesystemState],
-    ) -> ToolMessage:
-        try:
-            relative_path, backend_path = resolve_paths("write_file", file_path)
-        except ValueError as error:
-            return _path_error("write_file", runtime, error)
-        result = await implementations["write_file"][1](
-            file_path=backend_path,
-            content=content,
-            runtime=runtime,
-        )
-        return _rewrite_known_path(
-            result,
-            virtual_path=backend_path,
-            relative_path=relative_path,
-        )
+            def authorize(target_uri: str) -> None:
+                parsed = parse_resource_uri(target_uri)
+                permission_path = "/" + "/".join(parsed.tail_segments[1:])
+                if _check_fs_permission(middleware._permissions, "write", permission_path) == "deny":
+                    raise ResourceUriResolveError("capability_denied", "文件目标被当前工具写入规则拒绝")
 
-    def sync_edit_file(
-        file_path: str,
-        old_string: str,
-        new_string: str,
-        runtime: ToolRuntime[None, FilesystemState],
-        replace_all: bool = False,
-    ) -> ToolMessage:
-        try:
-            relative_path, backend_path = resolve_paths("edit_file", file_path)
-        except ValueError as error:
-            return _path_error("edit_file", runtime, error)
-        result = implementations["edit_file"][0](
-            file_path=backend_path,
-            old_string=old_string,
-            new_string=new_string,
-            replace_all=replace_all,
-            runtime=runtime,
-        )
-        return _rewrite_known_path(
-            result,
-            virtual_path=backend_path,
-            relative_path=relative_path,
-        )
+            def prepare(snapshots: dict[str, FileSnapshot]) -> list[TextPublication]:
+                snapshot = snapshots[relative]
+                return [TextPublication(snapshot, transform(snapshot.before), "add" if tool_name == "write_file" else "update")]
 
-    async def async_edit_file(
-        file_path: str,
-        old_string: str,
-        new_string: str,
-        runtime: ToolRuntime[None, FilesystemState],
-        replace_all: bool = False,
-    ) -> ToolMessage:
-        try:
-            relative_path, backend_path = resolve_paths("edit_file", file_path)
-        except ValueError as error:
-            return _path_error("edit_file", runtime, error)
-        result = await implementations["edit_file"][1](
-            file_path=backend_path,
-            old_string=old_string,
-            new_string=new_string,
-            replace_all=replace_all,
-            runtime=runtime,
-        )
-        return _rewrite_known_path(
-            result,
-            virtual_path=backend_path,
-            relative_path=relative_path,
-        )
+            result = execute_text_mutation(paths=text_paths, target=".", declared=[relative],
+                expected_versions={relative: expected_version}, prepare=prepare, authorize=authorize)
+            result["target"] = uri
+        except (OSError, RuntimeError, ValueError) as error:
+            result = text_mutation_failure(error)
+        return ToolMessage(content=json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+                           name=tool_name, tool_call_id=runtime.tool_call_id, status=result["status"])
+
+    def sync_write_file(file_path: str, content: str, expected_version: str,
+                        runtime: ToolRuntime[None, FilesystemState]) -> ToolMessage:
+        def create(before: FilePreimage | None) -> bytes:
+            if expected_version != "absent" or before is not None:
+                raise WorkspaceFileConflictError("创建文件必须明确要求 expected_version=absent")
+            return content.encode("utf-8")
+        return mutate_file("write_file", file_path, expected_version, create, runtime)
+
+    async def async_write_file(file_path: str, content: str, expected_version: str,
+                               runtime: ToolRuntime[None, FilesystemState]) -> ToolMessage:
+        return await asyncio.to_thread(sync_write_file, file_path, content, expected_version, runtime)
+
+    def sync_edit_file(file_path: str, old_string: str, new_string: str, expected_version: str,
+                       runtime: ToolRuntime[None, FilesystemState], replace_all: bool = False) -> ToolMessage:
+        def replace(before: FilePreimage | None) -> bytes:
+            if before is None:
+                raise FileNotFoundError("精确编辑的目标文件不存在")
+            if not old_string or old_string == new_string:
+                raise ValueError("old_string 必须非空且与 new_string 不同")
+            original = before.content.decode("utf-8")
+            occurrences = original.count(old_string)
+            if occurrences == 0 or (not replace_all and occurrences != 1):
+                raise ValueError(f"精确编辑匹配数量无效: occurrences={occurrences}; 需要唯一匹配或明确 replace_all")
+            return original.replace(old_string, new_string, -1 if replace_all else 1).encode("utf-8")
+        return mutate_file("edit_file", file_path, expected_version, replace, runtime)
+
+    async def async_edit_file(file_path: str, old_string: str, new_string: str, expected_version: str,
+                              runtime: ToolRuntime[None, FilesystemState], replace_all: bool = False) -> ToolMessage:
+        return await asyncio.to_thread(sync_edit_file, file_path, old_string, new_string, expected_version, runtime, replace_all)
 
     def search_request(
         tool_name: str, pattern: str, path: str | None, glob: str | None,

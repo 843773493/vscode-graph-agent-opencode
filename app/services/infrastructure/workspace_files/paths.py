@@ -107,7 +107,7 @@ class WorkspaceFilePaths:
         return self.bindings
 
     def resolve(self, value: str, *, scope: str = "workspace", allow_empty: bool = True,
-                reject_symlink: bool = False) -> tuple[Path, str]:
+                reject_symlink: bool = False, allow_external: bool = True) -> tuple[Path, str]:
         if "://" in value:
             parsed = parse_resource_uri(value, local_gateway_id=get_current_gateway_id())
             if parsed.kind != "files" or parsed.scope not in {"workspace", "gateway"}:
@@ -135,7 +135,7 @@ class WorkspaceFilePaths:
                 raise ValueError("原生目录入口必须是绝对路径或资源 URI")
             target = Path(self.workspace.anchor)
         else:
-            target = resolve_native_file_path(self.workspace, value, allow_absolute_outside=True)
+            target = resolve_native_file_path(self.workspace, value, allow_absolute_outside=allow_external)
         return target, self.reference(target)
 
     def reference(self, target: Path) -> str:

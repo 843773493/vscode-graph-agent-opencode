@@ -14,7 +14,6 @@ from app.agents.tools.apply_patch import (
     InvalidContextError,
     apply_patch_text,
     create_apply_patch_tool,
-    executor,
     extract_apply_patch_file_paths,
     identify_files_affected,
 )
@@ -25,7 +24,7 @@ from app.core.model_delta_context import (
 from app.core.path_utils import get_workspace_root
 from app.core.resource_uri import parse_resource_uri
 from app.core.workspace_identity import load_or_create_workspace_id
-from app.services.infrastructure.workspace_files import text_publication
+from app.services.infrastructure.workspace_files import text_mutation, text_publication
 
 
 def _expected_versions(patch: str, root: Path) -> dict[str, str]:
@@ -370,7 +369,7 @@ def test_apply_patch_rejects_duplicate_paths_and_escapes_workspace(
 *** End Patch"""
         )
 
-    with pytest.raises(ValueError, match="apply_patch 文件路径无效"):
+    with pytest.raises(ValueError, match="相对路径无效"):
         _apply(
             """*** Begin Patch
 *** Add File: ../outside.txt
@@ -426,8 +425,8 @@ def test_apply_patch_tool_returns_json_result(
     assert result["status"] == "success"
     journal_id = result["journal_id"]
     assert isinstance(journal_id, str)
-    assert journal_id.startswith("patch_")
-    assert (workspace_root / ".boxteam" / "cache" / "apply_patch" / f"{journal_id}.json").is_file()
+    assert journal_id.startswith("text_")
+    assert (workspace_root / ".boxteam" / "cache" / "text_mutations" / f"{journal_id}.json").is_file()
     published, = result["files"]
     assert published == {
         "path": result["target"] + "/tool.txt", "operation": "add", "state": "published",
@@ -436,7 +435,7 @@ def test_apply_patch_tool_returns_json_result(
     }
     assert (workspace_root / "tool.txt").read_text(encoding="utf-8") == "created by tool"
     assert result["effect"] == "completed"
-    journal = json.loads((workspace_root / ".boxteam/cache/apply_patch" / f"{journal_id}.json").read_text())
+    journal = json.loads((workspace_root / ".boxteam/cache/text_mutations" / f"{journal_id}.json").read_text())
     assert journal["files"] == result["files"]
 
 
@@ -503,7 +502,7 @@ def test_apply_patch_tool_rejects_success_when_written_bytes_are_not_expected(
     assert result["effect"] == "unknown"
     assert result["files"][0]["state"] == "unknown"
     assert target.read_text(encoding="utf-8") == "wrong\n"
-    journal_root = workspace_root / ".boxteam" / "cache" / "apply_patch"
+    journal_root = workspace_root / ".boxteam" / "cache" / "text_mutations"
     assert len(list(journal_root.glob("*.json"))) == 1
 
 
@@ -538,21 +537,21 @@ def test_apply_patch_uses_explicit_workspace_for_write_and_journal(
         explicit_root
         / ".boxteam"
         / "cache"
-        / "apply_patch"
+        / "text_mutations"
         / f"{result['journal_id']}.json"
     )
     context_journal = (
         context_root
         / ".boxteam"
         / "cache"
-        / "apply_patch"
+        / "text_mutations"
         / f"{result['journal_id']}.json"
     )
     assert explicit_journal.is_file()
     assert not context_journal.exists()
 
 
-def test_apply_patch_tool_returns_retryable_error_for_invalid_patch(
+def test_apply_patch_tool_rejects_automatic_retry_for_invalid_patch(
     workspace_scope: tuple[str, Path],
 ) -> None:
     workspace_root = workspace_scope[1]
@@ -579,7 +578,7 @@ def test_apply_patch_tool_returns_retryable_error_for_invalid_patch(
     result = json.loads(result_text)
     assert result["status"] == "error"
     assert result["error_type"] == "DiffError"
-    assert result["retryable"] is True
+    assert result["retryable"] is False
     assert "Duplicate Path" in result["error"]
     assert (workspace_root / "same.txt").read_text(encoding="utf-8") == "same\n"
 
@@ -598,7 +597,7 @@ def test_stale_source_version_rejects_entire_patch(workspace_scope, operation):
         _apply(patch, expected_versions=versions)
     assert source.read_bytes() == b"external\n"
     assert not (root / "untouched.txt").exists() and not (root / "destination.txt").exists()
-    assert not list((root / ".boxteam/cache/apply_patch").glob("*.json"))
+    assert not list((root / ".boxteam/cache/text_mutations").glob("*.json"))
 
 
 def test_move_destination_absence_is_checked_before_any_publication(workspace_scope):
@@ -668,14 +667,14 @@ def test_external_restore_after_publication_is_unknown_not_unexecuted(workspace_
     target = workspace_scope[1] / "restored.txt"
     target.write_bytes(b"old\n")
     if after_verification:
-        publish = executor.publish_file_content
+        publish = text_mutation.publish_file_content
 
         def restore(path, *args, **kwargs):
             result = publish(path, *args, **kwargs)
             path.write_bytes(b"old\n")
             return result
 
-        monkeypatch.setattr(executor, "publish_file_content", restore)
+        monkeypatch.setattr(text_mutation, "publish_file_content", restore)
     else:
         replace = text_publication.os.replace
 
@@ -728,8 +727,7 @@ def test_patch_rejects_missing_move_destination_precondition(workspace_scope):
 def test_lock_release_failure_does_not_erase_confirmed_publication(workspace_scope, monkeypatch):
     from contextlib import contextmanager
 
-    from app.agents.tools.apply_patch import executor
-    original = executor.workspace_file_mutation_lock
+    original = text_mutation.workspace_file_mutation_lock
 
     @contextmanager
     def failed_release(root):
@@ -737,7 +735,7 @@ def test_lock_release_failure_does_not_erase_confirmed_publication(workspace_sco
             yield
         raise OSError("lock release failed after publication")
 
-    monkeypatch.setattr(executor, "workspace_file_mutation_lock", failed_release)
+    monkeypatch.setattr(text_mutation, "workspace_file_mutation_lock", failed_release)
     result = _apply("*** Begin Patch\n*** Add File: confirmed.txt\n+published\n*** End Patch")
     assert result["status"] == "error" and result["effect"] == "completed"
     assert result["files"][0]["state"] == "published"

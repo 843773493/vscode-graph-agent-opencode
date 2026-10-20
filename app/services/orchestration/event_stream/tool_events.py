@@ -17,9 +17,8 @@ from app.abstractions.session_changes import (
     StoredFileEdit,
 )
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
-from app.agents.tools.apply_patch import (
-    APPLY_PATCH_TOOL_NAME,
-    load_apply_patch_journal_from_result,
+from app.services.infrastructure.workspace_files.text_journal import (
+    load_text_mutation_snapshots,
 )
 from app.services.orchestration.agent_stream_helpers import (
     extract_tool_result_text,
@@ -27,7 +26,7 @@ from app.services.orchestration.agent_stream_helpers import (
 )
 from app.services.orchestration.event_stream.contracts import ToolEventDisplayContext
 
-FILE_EDIT_TOOL_NAMES = {"write_file", "edit_file", APPLY_PATCH_TOOL_NAME}
+FILE_EDIT_TOOL_NAMES = {"write_file", "edit_file", "apply_patch"}
 SUBAGENT_TOOL_NAMES = frozenset({"task"})
 
 
@@ -128,23 +127,12 @@ def tool_output_succeeded(output: Any) -> bool:
     return tool_output_status(output) == "success"
 
 
-def apply_patch_has_file_effects(result_text: str) -> bool:
+def text_mutation_has_file_effects(result_text: str) -> bool:
     result = json.loads(result_text)
     if not isinstance(result, Mapping):
         return False
     files = result.get("files", [])
     return isinstance(files, list) and any(isinstance(item, Mapping) and item.get("state") in {"published", "unknown"} for item in files)
-
-
-def file_paths_from_tool_args(tool_name: str, tool_args: dict[str, Any]) -> list[str]:
-    if tool_name not in FILE_EDIT_TOOL_NAMES:
-        return []
-    if tool_name == APPLY_PATCH_TOOL_NAME:
-        return []
-    value = tool_args.get("file_path")
-    if isinstance(value, str) and value.strip():
-        return [value.strip()]
-    raise RuntimeError(f"{tool_name} 工具缺少 file_path，无法记录文件变更")
 
 
 def stored_edit_payload(record: StoredFileEdit) -> dict[str, object]:
@@ -160,7 +148,7 @@ def stored_edit_payload(record: StoredFileEdit) -> dict[str, object]:
     }
 
 
-def apply_patch_snapshots_from_result(
+def text_mutation_snapshots_from_result(
     *,
     result_text: str,
     session_changes_service: SessionChangesRecorderProtocol,
@@ -169,7 +157,7 @@ def apply_patch_snapshots_from_result(
     snapshots: list[FileEditSnapshot] = []
     result = json.loads(result_text)
     changed = {item["path"] for item in result["files"] if item["state"] in {"published", "unknown"}}
-    for raw_snapshot in load_apply_patch_journal_from_result(
+    for raw_snapshot in load_text_mutation_snapshots(
         result_text,
         workspace_root=workspace_root,
     ):
@@ -179,11 +167,11 @@ def apply_patch_snapshots_from_result(
         before_exists = raw_snapshot.get("before_exists")
         before_content = raw_snapshot.get("before_content")
         if not isinstance(file_path, str):
-            raise TypeError("apply_patch journal 快照缺少 file_path")
+            raise TypeError("文本修改 journal 快照缺少 file_path")
         if not isinstance(before_exists, bool):
-            raise TypeError(f"apply_patch journal 快照 {file_path} 缺少 before_exists")
+            raise TypeError(f"文本修改 journal 快照 {file_path} 缺少 before_exists")
         if not isinstance(before_content, str):
-            raise TypeError(f"apply_patch journal 快照 {file_path} 缺少 before_content")
+            raise TypeError(f"文本修改 journal 快照 {file_path} 缺少 before_content")
         snapshots.append(
             session_changes_service.build_snapshot(
                 file_path=file_path,

@@ -46,14 +46,18 @@
 
 ## 4. 工作区源码树与条件写入
 
-- [ ] 4.1 接通files/root工作区根并平移现有write_file/edit_file/apply_patch到同一owner，绑定expected byte hash/owner revision或expected_absent；普通hash按需计算。
+- [x] 4.1 接通files/root工作区根并平移现有write_file/edit_file/apply_patch到同一owner，绑定expected byte hash/owner revision或expected_absent；普通hash按需计算。
   - 2026-10-20 读取版本前置切片：公开读取和模型正文提供完整原字节 content_hash，严格区分展示截断与未读全字节；读取变化检测包含 ctime，旧图revision10拒绝。`resource-hash-unit-001` 为151 passed/13.96秒，覆盖BOM/CRLF/空文件/媒体、三种输入、同步异步正文、响应预算、字节窗口及读取期间写入；`resource-hash-contract-001` 10 passed。后续条件写入仍未接通，本项保持未勾。
   - `resource-hash-http-001` 2 passed/128.40秒，真实公开Gateway→Workspace读取返回原字节hash；脚本模型经spoke→hub→spoke在实际Provider请求中收到目标原文件版本，两份本地同名对照不被读取，目标tracking不增加。官方Buf格式/lint/build/生成及真实e64f67df breaking、OpenAPI导出、Web真实tsc/build分别见同名前缀protocol-format/protocol-generate/openapi/web-types/web-build运行，均exit0。Gateway固定seed观测保持107路由/87路径，仅DTO schema hash变化；精确黄金迁移后`resource-hash-gateway-contract-001` 2 passed，相关14个Python文件Ruff exit0。所有运行有进程外超时/内存保护及命令、源码指纹、原始输出和退出码。
   - 正文保存前置切片将Web保存迁到共享原字节读取/发布原语，补丁锁物理下沉并与Web共用，保持同步expected_revision、BOM/mode与未注册目录能力。`file-publication-unit-001` 67 passed；最终 `file-publication-final-unit-002` 98 passed/30.00秒，包含两个service实例同旧版本竞争、发布前外部修改保留、发布后被改报未知且不反向恢复，以及现有文件operation/恢复/错误映射回归。`file-publication-static-001` 8个Python文件Ruff exit0。模型写入和补丁的调用者版本、整批preflight及部分回执尚未迁齐，本项不勾选。
   - `file-publication-http-001` 真实HTTP保存、hash与409均通过，后续激活切换断言仍误用保存前正文而失败，原件保留；修正为已保存的同一目标后，`file-publication-http-002` 1 passed/37.30秒、exit0，核Gateway→目标Workspace的同步保存回执、原字节、旧版本409、request_id与切换后目标固定。无公开DTO/前端变化，复用读取版本切片的官方生成及Web验证；`file-publication-openspec-001` strict exit0。
 - [x] 4.2 一次patch固定一个根，全部preflight后单文件原子发布；迁移既有文本新增/修改/删除/同根文件移动，source与destination都纳入能力及预期版本校验，拒绝跨根/绝对/越界路径、只读根/历史revision/领域对象。
   - 2026-10-20 条件补丁已替换旧回滚执行链，共用正文保存的短写锁和原字节发布原语；`expected_versions` 必填，包含 move 两端，禁止在执行时替调用者补造版本。整批路径/版本/文本/preflight 完成后逐文件发布；已核部分、未知及未尝试如实返回，不自动回放。graph revision12 登记 `filesystem-patch:conditional-single-root`，旧 selector 拒绝。远端补丁尚未接通，以具名 TODO 和 capability_denied 明确拒绝，归4.5，不以本地完成代替远端验收。
-- [ ] 4.3 验证并发编辑、expected_absent竞争、补丁preflight失败零写入，公布对服务内writer与外部writer不同的可验证CAS能力边界，不伪造跨文件事务。
+- [x] 4.3 验证并发编辑、expected_absent竞争、补丁preflight失败零写入，公布对服务内writer与外部writer不同的可验证CAS能力边界，不伪造跨文件事务。
+  - 2026-10-20 三个模型写工具已物理归并到 `workspace_files/text_mutation.py`；删除 DeepAgents write/edit 调用、工具外预先采集原件及 apply_patch 私有 journal。write_file 必须显式 `expected_version=absent`，edit_file 必须使用 read_file 正文提供的原字节 hash；补丁继续精确覆盖全部路径。三工具共用权限预检、临界区内原件、单文件原子发布与真实部分结果，SessionChanges 从同一 journal 消费，不创建第二份写入事实。graph revision13 记录新工具合同并拒绝旧 selector。
+  - `conditional-write-unit-002` 247 passed/14.47秒，包含真实工具三种输入、BOM/CRLF、旧版本拒绝、歧义精确匹配、edit与patch/Web同版本竞争、三种工具同规则权限拒绝零写入及原补丁 expected_absent 外部竞争、部分/未知结果回归。服务内 writer 共用锁；外部 writer 只有发布前重核和发布后核实，不能关闭操作系统竞争窗口，设计未承诺外部CAS或跨文件事务。`conditional-write-assembly-001` 11 passed，核默认工具与Agent装配。
+  - `conditional-write-model-http-001` 1 passed/97.87秒；真实 Gateway→Workspace→Provider 连续 read→patch move/delete/add→read→edit→write，核原字节、五路径changeset的内容/类型/diff、三份journal位于所属会话 `changes/text_mutations` 且工作区cache无这些journal，Provider请求无真实路径。第一次unit-001的4个失败均为旧错误域/文案、旧自动重试预期或迁移后悬空故障注入点；已按真实合同精确迁移，未放宽内容、身份、changeset或业务期限。此闭包不关闭远端写入、取消和丢响应4.4/4.5。
+  - 最终21个相关Python文件 `conditional-write-final-static-001` Ruff通过，journal诊断文案统一后 `conditional-write-final-events-001` 49 passed；`conditional-write-openspec-001` strict通过。HTTP/proto/Web字段未变，复用读取hash切片的官方生成、真实tsc和Web build。全部运行原件保留在同任务artifacts/runs，含进程外保护、命令、前后源码指纹、原始输出及退出码。
 - [ ] 4.4 故障注入覆盖多文件首个发布后失败、目标退出/响应丢失、取消尚未确认和重开核实；逐文件published/not_published/not_attempted/unknown准确，禁止自动重放/假回滚。
 - [ ] 4.5 两个真实目标验证远端patch修改目标端、source不变；独立权限、失败能力、目标固定与UTF-8/raw-byte hash合同一致。
 - [x] 4.6 复用既有apply_patch add/delete与hints/move正式测试，保留输入、内容和changeset断言；覆盖删除版本冲突、移动目的版本/expected_absent冲突及目的已发布但源未删除的逐路径部分结果，不把文本文件操作扩成通用目录mutation。

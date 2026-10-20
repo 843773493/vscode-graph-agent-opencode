@@ -5,17 +5,18 @@ import json
 from pathlib import Path
 from typing import Annotated
 
+from deepagents.middleware.filesystem import _check_fs_permission
+from deepagents.middleware.permissions import FilesystemPermission
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.tools.apply_patch.executor import apply_patch_text
-from app.agents.tools.apply_patch.models import DiffError
-from app.core.resource_uri import ResourceUriGrammarError
+from app.core.resource_uri import parse_resource_uri
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
 )
-from app.services.infrastructure.workspace_files.text_publication import (
-    WorkspaceFileConflictError,
+from app.services.infrastructure.workspace_files.text_mutation import (
+    text_mutation_failure,
 )
 
 APPLY_PATCH_TOOL_NAME = "apply_patch"
@@ -51,7 +52,16 @@ Update File 由一个或多个 @@ hunk 组成。上下文行以空格开头，�
 结果 files 公布每个 URI 的 published/not_published/not_attempted/unknown 与核实到的版本。多文件及移动不保证跨路径事务，失败不自动回滚；部分或未知结果必须重新读取原目标核实，禁止自动重放。"""
 
 
-def create_apply_patch_tool(*, workspace_root: Path | None = None) -> BaseTool:
+def create_apply_patch_tool(*, workspace_root: Path | None = None,
+                            permissions: list[FilesystemPermission] | None = None) -> BaseTool:
+    permission_rules = permissions or []
+
+    def authorize(uri: str) -> None:
+        parsed = parse_resource_uri(uri)
+        path = "/" + "/".join(parsed.tail_segments[1:])
+        if _check_fs_permission(permission_rules, "write", path) == "deny":
+            raise ResourceUriResolveError("capability_denied", "补丁文件被当前工具写入规则拒绝")
+
     def apply_patch(input: str, explanation: str, expected_versions: dict[str, str], target: str = ".") -> str:
         """使用 VS Code 的 V4A apply_patch 格式修改工作区文本文件。"""
         try:
@@ -61,30 +71,11 @@ def create_apply_patch_tool(*, workspace_root: Path | None = None) -> BaseTool:
                 workspace_root=workspace_root,
                 expected_versions=expected_versions,
                 target=target,
+                authorize=authorize,
             )
-        except (ResourceUriGrammarError, ResourceUriResolveError) as exc:
-            return json.dumps({"status": "error", "effect": "not_executed", "code": exc.reason_code,
-                "owner": "resource_uri_grammar" if isinstance(exc, ResourceUriGrammarError) else "resource_uri_resolver",
-                "error": str(exc), "retryable": False}, ensure_ascii=False)
-        except (OSError, RuntimeError, ValueError) as exc:
-            code = ("revision_conflict" if isinstance(exc, WorkspaceFileConflictError) else
-                    "invalid_encoding" if isinstance(exc, UnicodeDecodeError) else
-                    "invalid_patch" if isinstance(exc, (DiffError, ValueError)) else "execution_failed")
-            detail = (f"{type(exc).__name__}: {exc.strerror}, errno={exc.errno}"
-                      if isinstance(exc, OSError) and (exc.filename is not None or exc.filename2 is not None) else str(exc))
-            return json.dumps(
-                {
-                    "status": "error",
-                    "effect": "not_executed",
-                    "code": code,
-                    "explanation": explanation,
-                    "error_type": type(exc).__name__,
-                    "error": detail,
-                    "retryable": True,
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
+        except (OSError, RuntimeError, ValueError) as error:
+            result = text_mutation_failure(error)
+            result["explanation"] = explanation
         return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
     async def async_apply_patch(input: str, explanation: str, expected_versions: dict[str, str], target: str = ".") -> str:

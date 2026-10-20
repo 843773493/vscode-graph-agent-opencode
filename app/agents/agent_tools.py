@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from deepagents.middleware.permissions import FilesystemPermission
 from langchain_core.tools import BaseTool
 
 from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
@@ -66,6 +67,7 @@ def build_default_tools(
     session_communication_service: SessionCommunicationProtocol | None = None,
     include_test_tools: bool = False,
     include_team_tools: bool = False,
+    filesystem_permissions: list[FilesystemPermission] | None = None,
 ) -> list[BaseTool]:
     """构建默认工具集。"""
     if session_orchestrator is None:
@@ -85,7 +87,7 @@ def build_default_tools(
     if invocation_context is None:
         raise RuntimeError("build_default_tools 需要显式传入 ToolInvocationContext")
     tools = [
-        create_apply_patch_tool(workspace_root=workspace_root),
+        create_apply_patch_tool(workspace_root=workspace_root, permissions=filesystem_permissions),
         create_python_execution_tool(session_id=session_id, agent_id=agent_id),
         create_system_time_emitter_tool(
             session_id=session_id,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from contextlib import closing
 from uuid import uuid4
@@ -240,7 +241,6 @@ async def test_model_conditional_patch_preserves_file_operations_and_changesets(
         if len(results) == 1:
             return _tool("read_file", {"path": root + "/patch-delete.txt"}, "call_patch_read_delete")
         if len(results) == 2:
-            import re
             versions = {name: re.search(r"sha256:[0-9a-f]{64}", message["content"]).group()
                         for name, message in zip(("patch-source.txt", "patch-delete.txt"), results, strict=True)}
             assert versions == {"patch-source.txt": "sha256:" + hashlib.sha256(b"old\n").hexdigest(),
@@ -252,7 +252,21 @@ async def test_model_conditional_patch_preserves_file_operations_and_changesets(
         assert receipt["status"] == "success" and receipt["effect"] == "completed", receipt
         assert all(item["state"] == "published" for item in receipt["files"])
         assert receipt["target"] == root
-        return {"content": "已核实条件补丁与逐文件发布回执"}
+        if len(results) == 3:
+            assert (source.workspace / "src/patch-created.txt").read_bytes() == b"created"
+            return _tool("read_file", {"path": root + "/patch-created.txt"}, "call_edit_read")
+        if len(results) == 4:
+            version = re.search(r"sha256:[0-9a-f]{64}", results[3]["content"]).group()
+            assert version == "sha256:" + hashlib.sha256(b"created").hexdigest()
+            return _tool("edit_file", {"file_path": root + "/patch-created.txt", "old_string": "created", "new_string": "edited",
+                                      "expected_version": version}, "call_conditional_edit")
+        edited = json.loads(results[4]["content"])
+        assert edited["status"] == "success" and edited["effect"] == "completed", edited
+        if len(results) == 5:
+            return _tool("write_file", {"file_path": root + "/written.txt", "content": "written\r\n", "expected_version": "absent"}, "call_conditional_write")
+        written = json.loads(results[5]["content"])
+        assert written["status"] == "success" and written["files"][0]["state"] == "published", written
+        return {"content": "已核实条件补丁、精确编辑和创建的统一发布回执"}
 
     model.response_callback = reply
     accepted = await source.client.post(f"/api/v1/sessions/{session}/messages", json={
@@ -262,15 +276,25 @@ async def test_model_conditional_patch_preserves_file_operations_and_changesets(
     await _completed(source.client, accepted.json()["data"]["job_id"])
     assert receipt is not None
     assert (source.workspace / "src/patch-destination.txt").read_bytes() == b"new\n"
-    assert (source.workspace / "src/patch-created.txt").read_bytes() == b"created"
+    assert (source.workspace / "src/patch-created.txt").read_bytes() == b"edited"
+    assert (source.workspace / "src/written.txt").read_bytes() == b"written\r\n"
     assert not (source.workspace / "src/patch-source.txt").exists() and not (source.workspace / "src/patch-delete.txt").exists()
     response = await source.client.get(f"/api/v1/sessions/{session}/changesets/all")
     assert response.status_code == 200, response.text
     changes = {item["file_path"]: item for item in response.json()["data"]["files"]}
-    assert set(changes) == {"/src/patch-source.txt", "/src/patch-destination.txt", "/src/patch-delete.txt", "/src/patch-created.txt"}
+    assert set(changes) == {"/src/patch-source.txt", "/src/patch-destination.txt", "/src/patch-delete.txt", "/src/patch-created.txt", "/src/written.txt"}
     assert changes["/src/patch-source.txt"]["kind"] == changes["/src/patch-delete.txt"]["kind"] == "delete"
     assert changes["/src/patch-destination.txt"]["kind"] == changes["/src/patch-created.txt"]["kind"] == "create"
     assert "-old" in changes["/src/patch-source.txt"]["diff_text"] and "+new" in changes["/src/patch-destination.txt"]["diff_text"]
+    assert changes["/src/written.txt"]["kind"] == "create"
+    assert "+edited" in changes["/src/patch-created.txt"]["diff_text"]
+    assert "+written" in changes["/src/written.txt"]["diff_text"]
+    from app.core.path_utils import get_session_path_resolver
+    session_path = get_session_path_resolver(source.workspace / ".boxteam/sessions").resolve_session_node(session)
+    journals = list((session_path / "changes/text_mutations").glob("*.json"))
+    assert len(journals) == 3
+    assert all(json.loads(path.read_text())["files"] for path in journals)
+    assert not list((source.workspace / ".boxteam/cache/text_mutations").glob("*.json"))
     wire = json.dumps(model.requests)
     assert all(str(node.workspace) not in wire for node in nodes.values())
     (artifacts / "model-conditional-patch.json").write_text(json.dumps({"receipt": receipt, "changeset": response.json()}, ensure_ascii=False, indent=2) + "\n")

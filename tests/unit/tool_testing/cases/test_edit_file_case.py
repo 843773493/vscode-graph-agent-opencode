@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -53,13 +54,15 @@ def test_prepare_copies_seed_and_selects_real_edit_file_tool(
     prepared, attempt_root = prepared_case
 
     assert prepared.tool.name == "edit_file"
-    assert set(prepared.tool.args) == {
+    assert set(prepared.tool.tool_call_schema.model_json_schema()["properties"]) == {
         "file_path",
+        "expected_version",
         "old_string",
         "new_string",
         "replace_all",
     }
-    assert f"/.boxteam/tool_tests/attempt/{case.file_name}" in prepared.prompt
+    assert case.file_name in prepared.prompt
+    assert "/.boxteam/tool_tests" not in prepared.prompt
     assert json.dumps(case.old_string, ensure_ascii=False) in prepared.prompt
     assert (attempt_root / case.file_name).is_file()
 
@@ -72,7 +75,8 @@ async def test_real_edit_file_tool_and_evaluate(
 
     result = await prepared.tool.ainvoke(
         {
-            "file_path": f"/.boxteam/tool_tests/attempt/{case.file_name}",
+            "file_path": case.file_name,
+            "expected_version": "sha256:" + sha256((attempt_root / case.file_name).read_bytes()).hexdigest(),
             "old_string": case.old_string,
             "new_string": case.new_string,
             "replace_all": case.replace_all,

@@ -624,6 +624,7 @@ def create_my_deep_agent(
             session_communication_service=session_communication_service,
             include_test_tools=config_service.development_test_tools_enabled(),
             include_team_tools=include_team_tools,
+            filesystem_permissions=permissions,
         )
         custom_tool_bundle = build_custom_tool_bundle(
             custom_tool_specs or [],
