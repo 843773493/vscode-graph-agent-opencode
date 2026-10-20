@@ -277,11 +277,8 @@ class ModelCallExecution:
             raise RuntimeError("itemized context request 与当前 execution owner 不一致")
         turn_id = admission.turn_id
         prepare = getattr(self._checkpointer, "prepare_context_for_provider", None)
-        supports = getattr(self._checkpointer, "supports_itemized_context", None)
-        if not callable(prepare) or not callable(supports):
-            raise TypeError("itemized context 缺少必需的 Saver prepare/supports 端口")
-        if not supports(session_id, thread_id, checkpoint_ns=checkpoint_ns):
-            raise RuntimeError("itemized context 必须使用可用的 v2 Saver owner")
+        if not callable(prepare):
+            raise TypeError("itemized context 缺少必需的 Saver prepare 端口")
         if (
             (admission.execution_origin == "user_turn" and turn_id is None)
             or (admission.execution_origin == "internal" and turn_id is not None)
