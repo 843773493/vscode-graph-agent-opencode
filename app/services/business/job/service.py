@@ -503,10 +503,13 @@ class JobService:
         self,
         session_id: str,
         operation: Callable[[], Awaitable[T]],
+        *,
+        require_open_admission: bool = True,
     ) -> T:
-        """登记消息、附件和 Job 创建前的会话存储写入窗口。"""
+        """登记会话存储窗口；外部新准入检查 admission，既有工作恢复可显式跳过。"""
         async with self._dispatch_lock:
-            self.assert_accepting_jobs()
+            if require_open_admission:
+                self.assert_accepting_jobs()
             self._session_lifecycle_guard(session_id)
             if session_id in self._deleting_sessions:
                 raise RuntimeError(f"会话正在删除，拒绝写入新消息: {session_id}")
@@ -1623,6 +1626,26 @@ class JobService:
             job.updated_at = datetime.now()  # noqa: DTZ005
 
     async def _ensure_pending_loaded(self, session_id: str) -> None:
+        async def restore_prepared() -> None:
+            # 装载、落盘和启动队首共享同一个取消边界，结算后才能释放 preparation。
+            restore = asyncio.create_task(self._restore_pending_loaded(session_id))
+            try:
+                await asyncio.shield(restore)
+            except asyncio.CancelledError:
+                async def settle_restore() -> None:
+                    await restore
+
+                await run_cleanup_shielded(settle_restore)
+                raise
+
+        await self.run_session_preparation(
+            session_id,
+            restore_prepared,
+            require_open_admission=False,
+        )
+
+    async def _restore_pending_loaded(self, session_id: str) -> None:
+        """在会话 preparation 窗口内恢复持久化队列及其 canonical 状态。"""
         async with self._pending_restore_lock:
             async with self._dispatch_lock:
                 if session_id in self._deleting_sessions:
@@ -1630,8 +1653,8 @@ class JobService:
                         f"会话正在删除，拒绝恢复待处理队列: {session_id}"
                     )
             should_resume = False
-            records = await self._pending_requests.load_once(session_id)
-            if not records:
+            records = await self._pending_requests.load_unrestored(session_id)
+            if records is None:
                 return
             if self._input_owner is not None:
                 live_records = []
@@ -1639,7 +1662,10 @@ class JobService:
                     reference = PendingRequestControl.model_validate(record.model_dump(exclude={
                         "content", "attachments", "message_created_at", "message_metadata",
                     }))
-                    outcome = await asyncio.to_thread(self._input_owner.accepted_job_outcome, reference)
+                    outcome = await asyncio.to_thread(
+                        self._input_owner.accepted_job_outcome,
+                        reference,
+                    )
                     if outcome == "unknown":
                         live_records.append(record)
                     elif outcome not in {"completed", "completed_empty", "failed", "interrupted", "cancelled", "execution_lost"}:
@@ -1688,7 +1714,9 @@ class JobService:
                         )
                     )
                 self._pending_queue.restore(session_id, restored)
+                self._pending_requests.mark_restored(session_id)
                 should_resume = bool(restored)
+            # TODO：装载后落盘/派发发生硬错误的幂等恢复需另行闭合，不能当作调用者取消处理。
             await self._pending_requests.persist_current(session_id)
             if should_resume:
                 for restored_thread_id in dict.fromkeys(record.thread_id for record in records):

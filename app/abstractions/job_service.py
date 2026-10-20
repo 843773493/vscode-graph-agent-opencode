@@ -55,6 +55,8 @@ class JobServiceProtocol(Protocol):
         self,
         session_id: str,
         operation: Callable[[], Awaitable[T]],
+        *,
+        require_open_admission: bool = True,
     ) -> T: ...
 
     async def run_session_delete_operation(

@@ -352,6 +352,7 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
         active_session_id,
         active_session_id,
         active_session_id,
+        active_session_id,
     ]
     assert admission_harness.executor.session_ids == [active_session_id]
     assert await message_bus.list_messages(active_session_id, active_thread_id, "default") == [

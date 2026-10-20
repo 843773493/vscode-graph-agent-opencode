@@ -110,6 +110,7 @@ async def test_cancel_before_task_body_releases_fifo_head(
 @pytest.mark.asyncio
 async def test_concurrent_cancel_before_start_never_stalls_in_cancelling(
     session_lifecycle_guard,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """100 次并发「派发后立即取消」全部收敛，不允许残留 cancelling。"""
 
@@ -117,17 +118,31 @@ async def test_concurrent_cancel_before_start_never_stalls_in_cancelling(
         await _run_concurrent_cancel_case(
             index,
             session_lifecycle_guard=session_lifecycle_guard,
+            monkeypatch=monkeypatch,
         )
 
 
-async def _run_concurrent_cancel_case(index: int, session_lifecycle_guard) -> None:
+async def _run_concurrent_cancel_case(
+    index: int,
+    session_lifecycle_guard,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     service, executor = _make_service(session_lifecycle_guard=session_lifecycle_guard)
+    # 准入恢复可以让出事件循环；显式阻挡任务体，保证测到启动前取消而非执行中取消。
+    entered = asyncio.Event()
+
+    async def wait_before_task_body(*_args) -> None:
+        entered.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(service, "_run_job_background", wait_before_task_body)
     session_id = f"session_cancel_race_{index}"
     started = asyncio.Event()
     holder: list[str] = []
 
     async def stopper() -> None:
         await started.wait()
+        await entered.wait()
         await service.control(
             holder[0],
             JobControlRequest(action=ControlAction.cancel),

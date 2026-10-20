@@ -43,12 +43,14 @@ class JobPendingRequestService:
             input_owner=input_owner,
         )
 
-    async def load_once(self, session_id: str) -> list[PendingRequestDTO]:
+    async def load_unrestored(self, session_id: str) -> list[PendingRequestDTO] | None:
         if session_id in self._loaded_sessions:
-            return []
-        records = await self._store.load(session_id) if self._store is not None else []
+            return None
+        return await self._store.load(session_id) if self._store is not None else []
+
+    def mark_restored(self, session_id: str) -> None:
+        """仅在调度锁内完成队列装载后登记，读取失败仍可重试。"""
         self._loaded_sessions.add(session_id)
-        return records
 
     async def list(
         self, session_id: str, *, thread_id: str | None = None,
