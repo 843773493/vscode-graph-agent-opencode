@@ -12,6 +12,7 @@ from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.mutation_intents import ApplySourceLifecycleDecision
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceControlMutation,
     ContextSourceControlState,
     ContextSourceOwnerKey,
     ContextSourceTrackingStatus,
@@ -109,7 +110,7 @@ class ContextSourceControlStorageMixin:
       只有库尚不存在（或为空文件）时才由标准 ``initialize`` 建立完整 v2 库。
     - 写入**不得**取 rollout 文件锁 ``_lock``：它与 canonical 提交共用，在
       Turn 进行中取锁会与在途提交交错并改变 item 提交顺序（详见
-      ``write_context_source_control_state`` 的说明）。读取复用统一只读快照。
+      ``apply_context_source_control_mutation`` 的说明）。读取复用统一只读快照。
     """
 
     def _context_source_rollout_owner(
@@ -220,129 +221,138 @@ class ContextSourceControlStorageMixin:
             return ()
         return tuple(_state_from_row(tuple(row)) for row in rows)
 
-    def write_context_source_control_state(
+    def apply_context_source_control_mutation(
         self,
-        state: ContextSourceControlState,
+        mutation: ContextSourceControlMutation,
     ) -> ContextSourceControlState:
-        """在单个 owner 事务中 upsert 一条控制状态，并做乐观版本校验。
+        """同一事务读取旧控制行并消费 CSM 决策；不触碰 canonical 文件锁。
 
-        这里**不取 rollout 文件锁**：``_lock`` 同时保护 canonical JSONL/SQLite
-        的提交顺序，而在工具调用与 ``before_model`` 边界取锁会与在途提交交错，
-        使 tool-call/tool-result item 的提交顺序倒置，itemized 投影随之失去
-        tool protocol closure（实测会让刚注入的 source item 从下一次模型请求中
-        消失）。控制状态独立成表，一致性由 SQLite 事务、``state_revision`` CAS
-        和 owner 单写者约束保证，不需要 canonical writer 的文件锁。
+        只在尚未物化时 initialize，既有库不回收在途 JSONL 尾部。
+        BEGIN IMMEDIATE 在读取前取得 SQLite 写准入，CAS 和决策校验使用同一快照。
         """
-        if not isinstance(state, ContextSourceControlState):
-            raise TypeError(
-                "write_context_source_control_state 需要 ContextSourceControlState"
-            )
+        if not isinstance(mutation, ContextSourceControlMutation):
+            raise TypeError("apply_context_source_control_mutation 需要 ContextSourceControlMutation")
+        state = mutation.state
         owner = state.owner
-        thread_id = self._context_source_rollout_owner(
-            owner.session_id,
-            owner.thread_id,
-        )
+        thread_id = self._context_source_rollout_owner(owner.session_id, owner.thread_id)
         if not self._context_source_control_index_ready(owner.session_id, thread_id):
-            # 只有库尚不存在时建立完整 v2 库（initialize 自己负责取锁）；
-            # 既有库绝不走 initialize()，避免截断在途 Turn 的未提交 JSONL 尾部。
             self._storage.initialize(
-                owner.session_id,
-                "",
-                thread_id=thread_id,
-                validate_jsonl_items=False,
+                owner.session_id, "", thread_id=thread_id, validate_jsonl_items=False,
             )
         with self._storage._connect(thread_id, "", session_id=owner.session_id) as connection:
+            connection.execute("BEGIN IMMEDIATE")
             self._require_context_source_control_runtime(connection)
             self._storage._validate_schema_state(connection)
-            existing_row = connection.execute(
+            row = connection.execute(
                 f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
                 "WHERE session_id = ? AND thread_id = ? AND source_id = ?",
                 (owner.session_id, owner.thread_id, state.source_id),
             ).fetchone()
-            timestamp = _now()
-            if existing_row is not None:
-                stored = _state_from_row(tuple(existing_row))
-                if stored.durable_fields() == state.durable_fields():
-                    # 幂等写入：并发/重复 register 不能推进 state_revision。
-                    return stored
-                if state.state_revision != stored.state_revision:
-                    raise RuntimeError(
-                        "context-source-control-state-conflict: "
-                        "控制状态已被其它写入者推进: "
-                        f"session_id={owner.session_id}, "
-                        f"thread_id={owner.thread_id}, "
-                        f"source_id={state.source_id}, "
-                        f"expected={state.state_revision}, "
-                        f"stored={stored.state_revision}"
-                    )
-                next_revision = stored.state_revision + 1
-                cursor = connection.execute(
-                    f"UPDATE {_TABLE_NAME} SET source_kind = ?, name = ?, "
-                    "binding_revision = ?, tracking_status = ?, "
-                    "latest_visible_committed_revision = ?, latest_revision = ?, "
-                    "state_revision = ?, updated_at = ? "
-                    "WHERE session_id = ? AND thread_id = ? AND source_id = ? "
-                    "AND state_revision = ?",
-                    (
-                        state.source_kind,
-                        state.name,
-                        state.binding_revision,
-                        state.tracking_status,
-                        state.latest_visible_committed_revision,
-                        state.latest_revision,
-                        next_revision,
-                        timestamp,
-                        owner.session_id,
-                        owner.thread_id,
-                        state.source_id,
-                        stored.state_revision,
-                    ),
-                )
-                if cursor.rowcount != 1:
-                    raise RuntimeError(
-                        "context-source-control-state-conflict: "
-                        "控制状态更新未命中唯一 owner 行: "
-                        f"source_id={state.source_id}"
-                    )
-            else:
-                if state.state_revision != 0:
-                    raise RuntimeError(
-                        "context-source-control-state-conflict: "
-                        "控制状态尚不存在，不能携带既有 state_revision: "
-                        f"source_id={state.source_id}, "
-                        f"state_revision={state.state_revision}"
-                    )
-                next_revision = 1
-                cursor = connection.execute(
-                    f"INSERT INTO {_TABLE_NAME} "
-                    f"({_SELECT_COLUMNS}) VALUES "
-                    "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        owner.session_id,
-                        owner.thread_id,
-                        state.source_id,
-                        state.source_kind,
-                        state.name,
-                        state.binding_revision,
-                        state.tracking_status,
-                        state.latest_visible_committed_revision,
-                        state.latest_revision,
-                        next_revision,
-                        timestamp,
-                        timestamp,
-                    ),
-                )
-                if cursor.rowcount != 1:
-                    raise RuntimeError(
-                        "context-source-control-state-conflict: "
-                        f"控制状态写入失败: source_id={state.source_id}"
-                    )
+            stored = _state_from_row(tuple(row)) if row is not None else None
+            if stored is not None:
+                if mutation.operation != "register" and state.binding_revision != stored.binding_revision:
+                    raise RuntimeError("context-source-control-state-conflict: 只有 register 可以更新来源绑定")
+                if mutation.operation in {"register", "observe"} and state.tracking_status != stored.tracking_status:
+                    raise RuntimeError("context-source-control-state-conflict: tracking 变化必须使用 track/untrack")
+                if mutation.operation != "observe" and state.latest_revision != stored.latest_revision:
+                    raise RuntimeError("context-source-control-state-conflict: 内容观察必须使用 observe")
+            result = self._write_context_source_control_transaction(connection, state, stored)
             connection.commit()
-        return replace(
-            state,
-            state_revision=next_revision,
-            updated_at=timestamp,
-        )
+            return result
+
+    def _write_context_source_control_transaction(
+        self,
+        connection: sqlite3.Connection,
+        state: ContextSourceControlState,
+        stored: ContextSourceControlState | None,
+    ) -> ContextSourceControlState:
+        """来源控制的唯一行 writer；旧行必须来自调用者的同一活动事务。"""
+        if not connection.in_transaction:
+            raise RuntimeError("source control mutation 需要活动 ContextStore 事务")
+        if state.latest_visible_committed_revision != (
+            stored.latest_visible_committed_revision if stored is not None else None
+        ):
+            raise RuntimeError("context-source-control-state-conflict: applied 只能由 assembly seal 推进")
+        if stored is not None and (state.source_kind, state.name) != (stored.source_kind, stored.name):
+            raise RuntimeError("context-source-control-state-conflict: source identity 不得改绑")
+        owner = state.owner
+        timestamp = _now()
+        if stored is not None:
+            if stored.durable_fields() == state.durable_fields():
+                # 幂等写入：并发/重复 register 不能推进 state_revision。
+                return stored
+            if state.state_revision != stored.state_revision:
+                raise RuntimeError(
+                    "context-source-control-state-conflict: "
+                    "控制状态已被其它写入者推进: "
+                    f"session_id={owner.session_id}, "
+                    f"thread_id={owner.thread_id}, "
+                    f"source_id={state.source_id}, "
+                    f"expected={state.state_revision}, "
+                    f"stored={stored.state_revision}"
+                )
+            next_revision = stored.state_revision + 1
+            cursor = connection.execute(
+                f"UPDATE {_TABLE_NAME} SET source_kind = ?, name = ?, "
+                "binding_revision = ?, tracking_status = ?, "
+                "latest_revision = ?, "
+                "state_revision = ?, updated_at = ? "
+                "WHERE session_id = ? AND thread_id = ? AND source_id = ? "
+                "AND state_revision = ?",
+                (
+                    state.source_kind,
+                    state.name,
+                    state.binding_revision,
+                    state.tracking_status,
+                    state.latest_revision,
+                    next_revision,
+                    timestamp,
+                    owner.session_id,
+                    owner.thread_id,
+                    state.source_id,
+                    stored.state_revision,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError(
+                    "context-source-control-state-conflict: "
+                    "控制状态更新未命中唯一 owner 行: "
+                    f"source_id={state.source_id}"
+                )
+        else:
+            if state.state_revision != 0:
+                raise RuntimeError(
+                    "context-source-control-state-conflict: "
+                    "控制状态尚不存在，不能携带既有 state_revision: "
+                    f"source_id={state.source_id}, "
+                    f"state_revision={state.state_revision}"
+                )
+            next_revision = 1
+            cursor = connection.execute(
+                f"INSERT INTO {_TABLE_NAME} "
+                f"({_SELECT_COLUMNS}) VALUES "
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    owner.session_id,
+                    owner.thread_id,
+                    state.source_id,
+                    state.source_kind,
+                    state.name,
+                    state.binding_revision,
+                    state.tracking_status,
+                    state.latest_visible_committed_revision,
+                    state.latest_revision,
+                    next_revision,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError(
+                    "context-source-control-state-conflict: "
+                    f"控制状态写入失败: source_id={state.source_id}"
+                )
+        return replace(state, state_revision=next_revision, updated_at=timestamp)
 
     def apply_source_lifecycle_decision(
         self,
@@ -556,55 +566,7 @@ class ContextSourceControlStorageMixin:
                 latest_revision=latest_revision,
                 state_revision=stored.state_revision if stored is not None else 0,
             )
-            timestamp = _now()
-            if stored is None:
-                connection.execute(
-                    f"INSERT INTO {_TABLE_NAME} "
-                    f"({_SELECT_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        owner.session_id,
-                        owner.thread_id,
-                        state.source_id,
-                        state.source_kind,
-                        state.name,
-                        state.binding_revision,
-                        state.tracking_status,
-                        state.latest_visible_committed_revision,
-                        state.latest_revision,
-                        1,
-                        timestamp,
-                        timestamp,
-                    ),
-                )
-            elif stored.durable_fields() != state.durable_fields():
-                next_state_revision = stored.state_revision + 1
-                cursor = connection.execute(
-                    f"UPDATE {_TABLE_NAME} SET source_kind = ?, name = ?, "
-                    "binding_revision = ?, tracking_status = ?, "
-                    "latest_visible_committed_revision = ?, latest_revision = ?, "
-                    "state_revision = ?, updated_at = ? "
-                    "WHERE session_id = ? AND thread_id = ? AND source_id = ? "
-                    "AND state_revision = ?",
-                    (
-                        state.source_kind,
-                        state.name,
-                        state.binding_revision,
-                        state.tracking_status,
-                        state.latest_visible_committed_revision,
-                        state.latest_revision,
-                        next_state_revision,
-                        timestamp,
-                        owner.session_id,
-                        owner.thread_id,
-                        state.source_id,
-                        stored.state_revision,
-                    ),
-                )
-                if cursor.rowcount != 1:
-                    raise RuntimeError(
-                        "context-source-control-state-conflict: source decision "
-                        f"更新未命中 owner 行: source_id={state.source_id}"
-                    )
+            self._write_context_source_control_transaction(connection, state, stored)
         return commit_ids
 
 

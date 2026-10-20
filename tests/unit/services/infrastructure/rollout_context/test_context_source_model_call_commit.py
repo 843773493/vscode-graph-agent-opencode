@@ -413,7 +413,7 @@ def test_acknowledgment_reads_real_port_without_writing_or_consuming_intent(sour
     def refuse_write(*args, **kwargs):
         raise AssertionError("receipt 确认不得调用 source control writer")
 
-    monkeypatch.setattr(source_seal_case.saver, "save_context_source_control_state", refuse_write)
+    monkeypatch.setattr(source_seal_case.saver, "apply_context_source_control_mutation", refuse_write)
     receipt = manager.acknowledge_sealed_pending(batch, binding)
     assert receipt.deltas == batch.deltas
     assert source_seal_case.saver.load_context_source_control_states(source_seal_case.owner) == before

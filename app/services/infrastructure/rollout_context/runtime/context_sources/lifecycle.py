@@ -51,7 +51,7 @@ class SourceLifecycleMixin:
             state.latest_content = content
             state.pending_kind = "activation" if state.latest_visible_committed_revision is None else "delta"
             self._queue_delta(state)
-            self._persist_control_state(state)
+            self._persist_control_state(state, operation="observe")
             return True
 
         def mark_pending_observation(

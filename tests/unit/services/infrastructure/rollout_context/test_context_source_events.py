@@ -166,7 +166,7 @@ def test_untrack_publishes_only_after_persistence_succeeds(source_seal_case, mon
     def fail_persistence(*args, **kwargs):
         raise RuntimeError("control state storage unavailable")
 
-    monkeypatch.setattr(source_seal_case.saver, "save_context_source_control_state", fail_persistence)
+    monkeypatch.setattr(source_seal_case.saver, "apply_context_source_control_mutation", fail_persistence)
     with pytest.raises(RuntimeError, match="control state storage unavailable"):
         manager.load_skill("demo", mode="untrack")
     assert sink.events == []

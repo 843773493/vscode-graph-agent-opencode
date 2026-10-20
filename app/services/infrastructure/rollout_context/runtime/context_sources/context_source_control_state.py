@@ -133,14 +133,33 @@ class ContextSourceRebuildState:
     retained_source_refs: frozenset[tuple[str, str]] = frozenset()
 
 
-class ContextSourceControlStatePort(Protocol):
-    """CSM 控制状态在唯一 owner 上的读写端口；实现方拥有事务与锁。
+ContextSourceControlOperation = Literal["register", "observe", "track", "untrack"]
 
-    TODO: OpenSpec 2.3 要求 owner 暴露 register/observe/track/untrack/reconcile
-    四类 mutation intent 子端口，并让所有分支共享同一 read snapshot 与 owner
-    事务。当前端口只提供“按 owner 读取全部状态”和“原子 upsert 单条状态”两个
-    最小能力，mutation intent 的细分由 CSM 在内存中判定后调用这里。
+
+@dataclass(frozen=True, slots=True)
+class ContextSourceControlMutation:
+    """来源控制子端口的决策；state_revision 是本次写入的 CAS 基准。
+
+    只允许注册、观察及跟踪变更，applied 由 assembly seal 独占推进。
+    owner 在一个事务内读取旧状态、验证决策并写入，CSM 不能提交 applied。
     """
+
+    operation: ContextSourceControlOperation
+    state: ContextSourceControlState
+
+    def __post_init__(self) -> None:
+        if self.operation not in {"register", "observe", "track", "untrack"}:
+            raise ValueError("ContextSourceControlMutation.operation 非法")
+        if not isinstance(self.state, ContextSourceControlState):
+            raise TypeError("ContextSourceControlMutation.state 必须是 ContextSourceControlState")
+        if self.operation in {"track", "untrack"} and self.state.tracking_status != (
+            "tracked" if self.operation == "track" else "untracked"
+        ):
+            raise ValueError("ContextSourceControlMutation 与 tracking_status 不一致")
+
+
+class ContextSourceControlStatePort(Protocol):
+    """CSM 的注册/观察/跟踪写端口与只读 reconcile；事务归唯一 owner。"""
 
     def load_context_source_control_states(
         self,
@@ -158,11 +177,11 @@ class ContextSourceControlStatePort(Protocol):
         """只读已提交的 view rebuild；pending 不代表已应用的 prefix epoch。"""
         ...
 
-    def save_context_source_control_state(
+    def apply_context_source_control_mutation(
         self,
-        state: ContextSourceControlState,
+        mutation: ContextSourceControlMutation,
     ) -> ContextSourceControlState:
-        """在单个 owner 事务中 upsert 一条状态，返回 owner 确认后的值。
+        """在同一 owner read/write 事务中消费控制决策，返回已确认的状态。
 
         控制字段与已存记录完全一致时必须幂等返回，不推进 ``state_revision``。
         """
@@ -170,6 +189,8 @@ class ContextSourceControlStatePort(Protocol):
 
 
 __all__ = [
+    "ContextSourceControlMutation",
+    "ContextSourceControlOperation",
     "ContextSourceControlState",
     "ContextSourceControlStatePort",
     "ContextSourceOwnerKey",

@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.domain.itemized.mutation_intents import ApplySourceLifecycleDecision
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceControlMutation,
     ContextSourceControlState,
     ContextSourceOwnerKey,
 )
@@ -56,15 +57,15 @@ class ContextSourceControlOwnerMixin:
             thread_id=owner.thread_id,
         )
 
-    def save_context_source_control_state(
+    def apply_context_source_control_mutation(
         self,
-        state: ContextSourceControlState,
+        mutation: ContextSourceControlMutation,
     ) -> ContextSourceControlState:
-        if not isinstance(state, ContextSourceControlState):
+        if not isinstance(mutation, ContextSourceControlMutation):
             raise TypeError(
-                "save_context_source_control_state 需要 ContextSourceControlState"
+                "apply_context_source_control_mutation 需要 ContextSourceControlMutation"
             )
-        return self._storage.checkpoints.write_context_source_control_state(state)
+        return self._storage.checkpoints.apply_context_source_control_mutation(mutation)
 
     def apply_source_lifecycle_decision(
         self,

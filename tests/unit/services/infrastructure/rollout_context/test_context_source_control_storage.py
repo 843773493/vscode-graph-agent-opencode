@@ -10,7 +10,9 @@ import shutil
 import sqlite3
 import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -29,6 +31,8 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceControlMutation,
+    ContextSourceControlOperation,
     ContextSourceControlState,
     ContextSourceOwnerKey,
 )
@@ -352,8 +356,8 @@ def test_synthetic_session_has_no_restorable_control_state(
     assert manager.metadata() == ({"name": "debugging", "description": "调试工作流"},)
     # 写入仍必须显式失败：没有 durable owner 时不允许伪造持久化成功。
     with pytest.raises(RuntimeError, match="不是 canonical Session 身份"):
-        rollout_storage.checkpoints.write_context_source_control_state(
-            ContextSourceControlState(
+        rollout_storage.checkpoints.apply_context_source_control_mutation(
+            ContextSourceControlMutation("register", ContextSourceControlState(
                 owner=owner,
                 source_id="skill:debugging",
                 source_kind="skill",
@@ -362,7 +366,7 @@ def test_synthetic_session_has_no_restorable_control_state(
                 tracking_status="tracked",
                 latest_visible_committed_revision=None,
                 latest_revision="sha256:latest",
-            )
+            ))
         )
 
 
@@ -454,11 +458,119 @@ def test_write_is_idempotent_and_does_not_advance_state_revision(
         latest_revision="sha256:latest",
     )
 
-    first = rollout_storage.checkpoints.write_context_source_control_state(state)
-    second = rollout_storage.checkpoints.write_context_source_control_state(state)
+    first = rollout_storage.checkpoints.apply_context_source_control_mutation(ContextSourceControlMutation("register", state))
+    second = rollout_storage.checkpoints.apply_context_source_control_mutation(ContextSourceControlMutation("register", state))
 
     assert first.state_revision == 1
     assert second == first
+
+
+@pytest.mark.parametrize("operation", ["register", "observe", "track", "untrack"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_control_mutation_cannot_publish_an_applied_revision(
+    control_state_port: RolloutCheckpointSaver,
+    owner: ContextSourceOwnerKey,
+    operation: ContextSourceControlOperation,
+    existing: bool,
+) -> None:
+    state = ContextSourceControlState(
+        owner=owner, source_id="instruction:agent", source_kind="agent_instructions",
+        name="Agent 说明", binding_revision=None, tracking_status="untracked",
+        latest_revision="revision-1", latest_visible_committed_revision=None,
+    )
+    if existing:
+        state = control_state_port.apply_context_source_control_mutation(
+            ContextSourceControlMutation("register", state),
+        )
+    before = control_state_port.load_context_source_control_states(owner)
+    forged = replace(
+        state, latest_visible_committed_revision=state.latest_revision,
+        tracking_status="tracked" if operation == "track" else "untracked",
+    )
+    with pytest.raises(RuntimeError, match="applied 只能由 assembly seal 推进"):
+        control_state_port.apply_context_source_control_mutation(
+            ContextSourceControlMutation(operation, forged),
+        )
+    assert control_state_port.load_context_source_control_states(owner) == before
+
+
+def test_control_mutations_keep_observation_and_tracking_separate(
+    control_state_port: RolloutCheckpointSaver,
+    owner: ContextSourceOwnerKey,
+) -> None:
+    state = control_state_port.apply_context_source_control_mutation(
+        ContextSourceControlMutation("register", ContextSourceControlState(
+            owner=owner, source_id="instruction:agent", source_kind="agent_instructions",
+            name="Agent 说明", binding_revision="catalog-1", tracking_status="tracked",
+            latest_revision="revision-1", latest_visible_committed_revision=None,
+        )),
+    )
+    changes = (
+        ("observe", replace(state, tracking_status="untracked")),
+        ("track", replace(state, latest_revision="revision-2")),
+        ("observe", replace(state, binding_revision="catalog-2")),
+        ("register", replace(state, name="另一个来源")),
+    )
+    for operation, requested in changes:
+        with pytest.raises(RuntimeError, match="context-source-control-state-conflict"):
+            control_state_port.apply_context_source_control_mutation(
+                ContextSourceControlMutation(operation, requested),
+            )
+        assert control_state_port.load_context_source_control_states(owner) == (state,)
+    observed = control_state_port.apply_context_source_control_mutation(
+        ContextSourceControlMutation("observe", replace(state, latest_revision="revision-2")),
+    )
+    untracked = control_state_port.apply_context_source_control_mutation(
+        ContextSourceControlMutation("untrack", replace(observed, tracking_status="untracked")),
+    )
+    assert untracked.latest_revision == "revision-2"
+    assert untracked.latest_visible_committed_revision is None
+    assert untracked.state_revision == state.state_revision + 2
+
+
+def test_concurrent_control_mutations_share_one_cas_baseline(
+    control_state_port: RolloutCheckpointSaver,
+    owner: ContextSourceOwnerKey,
+) -> None:
+    state = ContextSourceControlState(
+        owner=owner, source_id="instruction:agent", source_kind="agent_instructions",
+        name="Agent 说明", binding_revision=None, tracking_status="tracked",
+        latest_revision="revision-1", latest_visible_committed_revision=None,
+    )
+    # 预先物化库，把竞争限制在控制事务，不混入首次建库。
+    control_state_port._storage.storage.initialize(owner.session_id, "", thread_id=owner.thread_id)
+    barrier = threading.Barrier(2, timeout=5)
+
+    def register() -> ContextSourceControlState:
+        barrier.wait()
+        return control_state_port.apply_context_source_control_mutation(
+            ContextSourceControlMutation("register", state),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(register) for _ in range(2)]
+        first, second = [future.result(timeout=5) for future in futures]
+    assert first == second
+    assert first.state_revision == 1
+
+    def observe(revision: str) -> ContextSourceControlState | RuntimeError:
+        barrier.wait()
+        try:
+            return control_state_port.apply_context_source_control_mutation(
+                ContextSourceControlMutation("observe", replace(first, latest_revision=revision)),
+            )
+        except RuntimeError as error:
+            return error
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(observe, revision) for revision in ("revision-2", "revision-3")]
+        results = [future.result(timeout=5) for future in futures]
+    winners = [result for result in results if isinstance(result, ContextSourceControlState)]
+    failures = [result for result in results if isinstance(result, RuntimeError)]
+    assert len(winners) == len(failures) == 1
+    assert "context-source-control-state-conflict" in str(failures[0])
+    assert winners[0].state_revision == 2
+    assert control_state_port.load_context_source_control_states(owner) == (winners[0],)
 
 
 def test_write_rejects_stale_state_revision(
@@ -475,11 +587,11 @@ def test_write_rejects_stale_state_revision(
         latest_visible_committed_revision=None,
         latest_revision="sha256:latest",
     )
-    stored = rollout_storage.checkpoints.write_context_source_control_state(state)
+    stored = rollout_storage.checkpoints.apply_context_source_control_mutation(ContextSourceControlMutation("register", state))
 
     with pytest.raises(RuntimeError, match="context-source-control-state-conflict"):
-        rollout_storage.checkpoints.write_context_source_control_state(
-            ContextSourceControlState(
+        rollout_storage.checkpoints.apply_context_source_control_mutation(
+            ContextSourceControlMutation("untrack", ContextSourceControlState(
                 owner=owner,
                 source_id="skill:debugging",
                 source_kind="skill",
@@ -489,7 +601,7 @@ def test_write_rejects_stale_state_revision(
                 latest_visible_committed_revision=None,
                 latest_revision="sha256:latest",
                 state_revision=stored.state_revision - 1,
-            )
+            ))
         )
 
 
@@ -505,8 +617,8 @@ def test_write_does_not_reconcile_uncommitted_jsonl_tail(
     size_before = jsonl_path.stat().st_size
     assert size_before > 0
 
-    rollout_storage.checkpoints.write_context_source_control_state(
-        ContextSourceControlState(
+    rollout_storage.checkpoints.apply_context_source_control_mutation(
+        ContextSourceControlMutation("register", ContextSourceControlState(
             owner=owner,
             source_id="skill:debugging",
             source_kind="skill",
@@ -515,7 +627,7 @@ def test_write_does_not_reconcile_uncommitted_jsonl_tail(
             tracking_status="tracked",
             latest_visible_committed_revision=None,
             latest_revision="sha256:latest",
-        )
+        ))
     )
 
     assert jsonl_path.stat().st_size == size_before
@@ -554,8 +666,8 @@ def test_write_does_not_take_rollout_file_lock(
     holder.start()
     try:
         assert holder_ready.wait(timeout=10)
-        stored = rollout_storage.checkpoints.write_context_source_control_state(
-            ContextSourceControlState(
+        stored = rollout_storage.checkpoints.apply_context_source_control_mutation(
+            ContextSourceControlMutation("register", ContextSourceControlState(
                 owner=owner,
                 source_id="skill:debugging",
                 source_kind="skill",
@@ -564,7 +676,7 @@ def test_write_does_not_take_rollout_file_lock(
                 tracking_status="tracked",
                 latest_visible_committed_revision=None,
                 latest_revision="sha256:latest",
-            )
+            ))
         )
         assert stored.state_revision == 1
     finally:
@@ -592,11 +704,11 @@ def test_previous_schema_without_checkpoint_source_assembly_is_rejected(
         rollout_storage.checkpoints.read_context_source_rebuild_rows(owner.session_id, owner.thread_id, checkpoint_ns="")
     assert expected in str(rebuild_error.value)
     with pytest.raises(RuntimeError, match="schema-incompatible") as write_error:
-        rollout_storage.checkpoints.write_context_source_control_state(ContextSourceControlState(
+        rollout_storage.checkpoints.apply_context_source_control_mutation(ContextSourceControlMutation("register", ContextSourceControlState(
             owner=owner, source_id="skill:debugging", source_kind="skill", name="debugging",
             binding_revision=None, tracking_status="tracked",
             latest_visible_committed_revision=None, latest_revision="sha256:latest",
-        ))
+        )))
     assert expected in str(write_error.value)
     assert index_path.read_bytes() == before
     with closing(sqlite3.connect(index_path)) as connection:
@@ -632,8 +744,8 @@ def test_current_rollout_without_control_table_is_rejected_without_repair(
     with pytest.raises(sqlite3.OperationalError, match="no such table: context_source_control_states"):
         control_state_port.load_context_source_rebuild_state(owner)
     with pytest.raises(sqlite3.OperationalError, match="no such table: context_source_control_states"):
-        rollout_storage.checkpoints.write_context_source_control_state(
-            ContextSourceControlState(
+        rollout_storage.checkpoints.apply_context_source_control_mutation(
+            ContextSourceControlMutation("register", ContextSourceControlState(
                 owner=owner,
                 source_id="skill:debugging",
                 source_kind="skill",
@@ -642,7 +754,7 @@ def test_current_rollout_without_control_table_is_rejected_without_repair(
                 tracking_status="tracked",
                 latest_visible_committed_revision=None,
                 latest_revision="sha256:latest",
-            )
+            ))
         )
     assert index_path.read_bytes() == before
     with closing(sqlite3.connect(index_path)) as connection:

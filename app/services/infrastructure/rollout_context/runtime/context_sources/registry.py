@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import replace
 
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+        ContextSourceControlMutation,
+        ContextSourceControlOperation,
         ContextSourceControlState,
         ContextSourceTrackingStatus,
 )
@@ -133,7 +135,7 @@ class SourceRegistryMixin:
             normalized_name = _normalize_skill_name(descriptor.name)
             self._source_ids_by_name.pop(normalized_name, None)
             self._source_ids_by_name[normalized_name] = descriptor.source_id
-            self._persist_control_state(state)
+            self._persist_control_state(state, operation="register")
 
         def metadata(self) -> tuple[Mapping[str, str], ...]:
             """仅返回模型可见的 name/description，不返回路径。"""
@@ -167,6 +169,8 @@ class SourceRegistryMixin:
         def _persist_control_state(
             self,
             state: SourceState,
+            *,
+            operation: ContextSourceControlOperation,
         ) -> None:
             """把具有跨重启价值的 registration 状态经唯一 owner 端口写入。
 
@@ -226,7 +230,9 @@ class SourceRegistryMixin:
                 state.persisted_state_revision = durable.state_revision
                 state.persisted_fields = durable.durable_fields()
                 return
-            stored = port.save_context_source_control_state(snapshot)
+            stored = port.apply_context_source_control_mutation(
+                ContextSourceControlMutation(operation, snapshot),
+            )
             if stored.owner != owner or stored.source_id != state.source_id:
                 raise RuntimeError(
                     "context source 控制状态端口返回了不匹配的 registration: "

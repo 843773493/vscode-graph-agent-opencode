@@ -222,7 +222,7 @@ class SkillCatalogMixin:
                 if target is not None:
                     self._set_tracking_status(target, "untracked")
                     # untrack(frozen) 状态必须跨重启保留：重启后不得恢复跟踪或重新注入。
-                    self._persist_control_state(target)
+                    self._persist_control_state(target, operation="untrack")
                     # OpenSpec 3.8-C：untrack 成功边界发布轻量事件（内存通知）。
                     self._publish_lifecycle_event(
                         source_id=target.source_id,
@@ -294,7 +294,7 @@ class SkillCatalogMixin:
                         self._freeze_rebound_registration(rebound)
                         source_rebound = True
                 self._set_tracking_status(state, "tracked")
-                self._persist_control_state(state)
+                self._persist_control_state(state, operation="track")
             status: SkillLoadStatus
             append_status: SkillLoadAppendStatus
             if source_id in self._pending:
@@ -370,7 +370,7 @@ class SkillCatalogMixin:
             的 source identity 唯一裁决，不做 name-only 猜测。
             """
             self._set_tracking_status(state, "untracked")
-            self._persist_control_state(state)
+            self._persist_control_state(state, operation="untrack")
             # OpenSpec 3.8-C：tracking 状态变化的成功边界发布轻量事件（内存通知）。
             self._publish_lifecycle_event(
                 source_id=state.source_id,
@@ -424,7 +424,7 @@ class SkillCatalogMixin:
             state.latest_content = content
             state.pending_kind = "activation" if state.latest_visible_committed_revision is None else "delta"
             self._queue_delta(state)
-            self._persist_control_state(state)
+            self._persist_control_state(state, operation="observe")
 
 
 

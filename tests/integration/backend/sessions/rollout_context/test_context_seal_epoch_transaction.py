@@ -44,6 +44,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceControlMutation,
     ContextSourceControlState,
     ContextSourceOwnerKey,
 )
@@ -78,11 +79,11 @@ def seal_inputs(registry_db):
             content_length=payload_content_length("structured_content", content),
             source_binding=SourceBinding(source_ref=identity), root_placement="root_eligible",
         ), request_content=content)
-        saver.save_context_source_control_state(ContextSourceControlState(
+        saver.apply_context_source_control_mutation(ContextSourceControlMutation("register", ContextSourceControlState(
             owner=owner, source_id=identity, source_kind=kind,
             name=name, binding_revision=None, tracking_status="tracked",
             latest_visible_committed_revision=None, latest_revision=revision,
-        ))
+        )))
 
     def build(name, *, previous=None, reason=None, selected_tools=tools):
         transition = None
@@ -413,7 +414,17 @@ def test_stale_source_revision_rejects_and_rolls_back_the_whole_seal(
         if changed_revision == "observed"
         else replace(stored, latest_visible_committed_revision=stored.latest_revision)
     )
-    saver.save_context_source_control_state(changed)
+    if changed_revision == "observed":
+        saver.apply_context_source_control_mutation(ContextSourceControlMutation("observe", changed))
+    else:
+        # 直接注入损坏，验证 seal 拒绝错误的 applied；正常控制端口禁止这种写入。
+        connection.execute(
+            "UPDATE context_source_control_states SET latest_visible_committed_revision=? "
+            "WHERE session_id=? AND thread_id=? AND source_id=?",
+            (changed.latest_visible_committed_revision, stored.owner.session_id,
+             stored.owner.thread_id, stored.source_id),
+        )
+        connection.commit()
     before = _source_rows(connection)
     with pytest.raises(RuntimeError, match="context-source-seal-conflict"):
         _seal(registry_db, (plan, preparation))
@@ -424,12 +435,12 @@ def test_source_applied_requires_a_selected_root_or_tail_frame(registry_db, seal
     saver, _session, connection, _accepted = registry_db
     plan, preparation = seal_inputs("unselected-source")
     revision = sha256_jcs("不存在于本次请求")
-    saver.save_context_source_control_state(ContextSourceControlState(
+    saver.apply_context_source_control_mutation(ContextSourceControlMutation("register", ContextSourceControlState(
         owner=ContextSourceOwnerKey(plan.session_id, plan.thread_id),
         source_id="instruction:unselected", source_kind="runtime_identity", name="未选来源",
         binding_revision=None, tracking_status="tracked",
         latest_visible_committed_revision=None, latest_revision=revision,
-    ))
+    )))
     preparation = replace(preparation, source_revisions=(
         AppliedSourceRevision("instruction:unselected", revision, "decision:unselected"),
     ))
@@ -514,7 +525,7 @@ def test_tail_source_delta_applies_the_exact_prior_revision_with_same_root(regis
     owner = ContextSourceOwnerKey(session, first.thread_id)
     stored = saver.load_context_source_control_states(owner)[0]
     revision = sha256_jcs("最新的 Agent 说明")
-    saver.save_context_source_control_state(replace(stored, latest_revision=revision))
+    saver.apply_context_source_control_mutation(ContextSourceControlMutation("observe", replace(stored, latest_revision=revision)))
     delta_content = "Agent 说明的新 delta"
     saver.register_context_contribution(session, first.thread_id, ContextContribution(
         contribution_id="source:delta", source_kind=stored.source_kind,
