@@ -464,7 +464,7 @@ def test_owner_failure_cannot_touch_either_session(
     original = target.read_bytes()
     second = _thread_node(detail_sessions, OTHER_SESSION_ID)
     second_rollout = second / "rollout"
-    if operation == "read":
+    if operation in {"read", "gc"}:
         # 历史 ref 必须在真实目标 rollout 中做本地 binding 校验；空目录会把
         # 未授权误报成 SQLite 打开失败，无法证明 source-mismatch 合同。
         _initialize_rollout_owner(detail_sessions, OTHER_SESSION_ID)
@@ -487,7 +487,7 @@ def test_owner_failure_cannot_touch_either_session(
                 record=public_record,
             )
     assert target.read_bytes() == original
-    if operation == "read":
+    if operation in {"read", "gc"}:
         assert _rollout_state(second_rollout) == second_rollout_before
     else:
         assert not second_rollout.exists()

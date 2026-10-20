@@ -269,13 +269,7 @@ class RolloutCheckpointSaver(
         eligible = []
         for index, message in enumerate(messages):
             role = codec.message_role(message)
-            metadata = getattr(message, "response_metadata", {})
-            is_context_source = (
-                role == "user" and isinstance(metadata, Mapping)
-                and isinstance(metadata.get("context_source_kind"), str)
-                and isinstance(metadata.get("context_revision"), str)
-            )
-            if role == "tool" or codec.tool_calls(message) or is_context_source:
+            if role == "tool" or codec.tool_calls(message):
                 eligible.append((index, message, codec.message_id(message, index), role))
         with self._storage.storage._lock(thread_id, checkpoint_ns, session_id=session_id):
             with self._storage.storage._connect(

@@ -1281,37 +1281,35 @@ def test_internal_execution_input_has_no_user_turn_during_checkpoint_roundtrip()
     assert item.semantic_kind == SemanticKind.RUNTIME_NOTICE
 
 
-def test_context_source_provenance_survives_canonical_roundtrip() -> None:
+def test_typed_source_manifest_survives_canonical_roundtrip() -> None:
     codec = LangChainMessageCodec()
-    message = HumanMessage(
-        content="Skill 增量",
-        id="context-source-skill-revision-delta",
-        response_metadata={
-            "context_source_kind": "skill",
-            "context_source_id": "skill:debugging",
-            "context_source_name": "debugging",
-            "context_wire_role": "user",
-            "context_revision": "sha256:revision",
-        },
+    source = CanonicalItemRecord.create(
+        item_sequence=1,
+        item_id="source-manifest-item",
+        semantic_kind="assistant_output",
+        payload_kind="text",
+        status="completed",
+        producer_ref={"producer_kind": "provider", "producer_id": "source-model-call"},
+        payload="带来源的输出",
+        created_at="2026-09-09T00:00:00+00:00",
+        turn_id="turn-1",
+        turn_scope="turn_member",
+        message_group_id="source-manifest-message",
+        wire_role="assistant",
+        source_manifest=ItemSourceManifest("sha256:revision", "public", "public"),
     )
-
+    message = codec.from_dict(codec.project_message((source,)))
     (item,) = codec.items_for_message(
         message,
         item_sequence=1,
         message_id=str(message.id),
         turn_id="turn-1",
-        timestamp="2026-09-09T00:00:00+00:00",
+        timestamp=source.created_at,
+        canonical_items=(source,),
     )
-    restored = codec.from_dict(codec.project_message((item,)))
-
-    assert (
-        item.extensions["boxteam.checkpoint.annotations"]["value"]["context_source_id"]
-        == "skill:debugging"
-    )
-    assert restored.response_metadata["context_source_kind"] == "skill"
-    assert restored.response_metadata["context_source_name"] == "debugging"
-    assert restored.response_metadata["context_wire_role"] == "user"
-    assert restored.response_metadata["context_revision"] == "sha256:revision"
+    assert item.source_manifest == source.source_manifest
+    assert item.item_id == source.item_id
+    assert item.content_hash == source.content_hash
 
 
 def test_history_and_provider_consume_the_same_sealed_selection_order(

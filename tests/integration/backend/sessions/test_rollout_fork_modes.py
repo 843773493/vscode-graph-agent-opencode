@@ -871,6 +871,8 @@ async def test_fork_deadline_caller_cancellation_waits_for_operation_cleanup(
         if not waiting.done():
             waiting.cancel()
         await asyncio.gather(waiting, *([operation_task] if operation_task is not None else []), return_exceptions=True)
+    # 已确认取消后的实际操作完成清理，结束观察，不能留下虚假的在途期限。
+    fork_deadlines.complete(deadline)
 
 
 @dataclass
@@ -3170,15 +3172,17 @@ async def test_before_root_fork_keeps_completed_prefix_without_clicked_or_future
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_anchor", ["anchor-not-in-source", "u1", "turn-1", "job-turn-1"])
 async def test_stale_fork_anchor_is_rejected_before_target_creation(
     fork_provider_prepare,
     fork_context: ForkIntegrationContext,
+    invalid_anchor: str,
 ) -> None:
     source = await _seed_source(fork_context, fork_provider_prepare)
     before = await fork_context.sessions.list(limit=100)
 
     request = await _fork_request(fork_context, source.session_id, creation_kind="new_session_main")
-    request = request.model_copy(update={"anchor_item_id": "anchor-not-in-source"})
+    request = request.model_copy(update={"anchor_item_id": invalid_anchor})
     with pytest.raises(ValueError, match="source-mismatch: 点击 item 不属于冻结 source view"):
         await fork_context.forks.fork(request)
 

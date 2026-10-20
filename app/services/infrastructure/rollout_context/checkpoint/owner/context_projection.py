@@ -370,15 +370,21 @@ class ContextProjectionOwnerMixin:
         """request source 的 typed owner 与用途必须在读取正文前一致。"""
         if prepared is not None:
             detail_ref.require_owner(session_id, thread_id)
-        record = prepared.record if prepared is not None else detail_record_from_mapping(
-            self._storage.assemblies.get_context_plan_detail(
-                session_id,
-                thread_id,
-                detail_ref=detail_ref,
-                checkpoint_ns=checkpoint_ns,
-                snapshot=snapshot,
-            )
-        )
+            record = prepared.record
+        else:
+            try:
+                raw = self._storage.assemblies.get_context_plan_detail(
+                    session_id,
+                    thread_id,
+                    detail_ref=detail_ref,
+                    checkpoint_ns=checkpoint_ns,
+                    snapshot=snapshot,
+                )
+            except KeyError as error:
+                raise DetailUnavailableError(
+                    f"detail-unavailable: request source detail missing: {ref.ref_id}"
+                ) from error
+            record = detail_record_from_mapping(raw)
         if (
             record.detail_ref != detail_ref
             or record.checkpoint_ns != checkpoint_ns

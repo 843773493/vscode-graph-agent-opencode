@@ -645,7 +645,6 @@ class LangChainMessageCodec:
             }
         if item.source_manifest is not None:
             merged["context_revision"] = item.source_manifest.source_revision
-            merged["context_wire_role"] = item.wire_role
         if item.projection_identity is not None:
             identity = item.projection_identity
             if identity.completion_reason is not None:

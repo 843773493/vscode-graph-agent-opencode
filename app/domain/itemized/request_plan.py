@@ -81,21 +81,31 @@ class SourceBinding:
 
 @dataclass(frozen=True, slots=True)
 class ContextContribution:
+    # owner-thread registry 内稳定的贡献 slot 身份，不是 assembly 顺序。
     contribution_id: str
+    # 来源类别与已经接受的语义 revision；不在请求期重新读取来源。
     source_kind: str
     source_revision: str
+    # 规范正文的内容摘要；与正文长度共同验证封存来源。
     content_hash: str | None = None
+    # 贡献本体始终 request-only，不得混入 canonical item 或 ToolSet registry。
     request_only: bool = True
     # 非决策扩展仅用于审计/展示，不参与选择、替换、归组或恢复。
     extensions: Mapping[str, object] = field(default_factory=dict)
     # 可空代表无 alias；overlay 必须由 producer 完整声明。
     source_binding: SourceBinding | None = None
+    # 贡献正文的闭合语义类别，决定 hash 域与 overlay 校验。
     contribution_kind: str = "prompt"
+    # producer 提供的冻结正文；封存后由 detail owner 保存和恢复。
     body: object | None = None
+    # 正文的逻辑长度，不复用 JSONL 行长度或 detail 文件字节数。
     content_length: int | None = None
+    # 展示可见性与正文保护等级分别校验，不从扩展推断。
     visibility: str = "internal"
     protection: str = "public"
+    # draft registry 中为空；只有 sealed selection 绑定实际 assembly。
     assembly_id: str | None = None
+    # 同一 assembly 内贡献顺序；不复用 registry 的 source_ordinal。
     contribution_ordinal: int | None = None
     # source_ordinal 是 itemized registry（SQLite context_contributions 列）
     # 分配的稳定 slot 序号；producer、CSM、watch reaction 和 ledger 都不得

@@ -194,9 +194,10 @@ class ForkOperationDeadline:
         self._watchdog.stage(self._token, stage)
 
     def complete(self) -> None:
+        """结束本次观察；是否 durable 成功由业务调用方先行校验。"""
         if self._completed or self._timed_out:
             return
-        self.last_stage = "backend_durable_completion_confirmed"
+        self.last_stage = "observed_operation_finished"
         self._completed = True
         self._watchdog.complete(self._token)
 

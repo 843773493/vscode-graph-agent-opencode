@@ -70,18 +70,24 @@ async def copy_rollout_snapshot(
         if not deadline._timed_out:
             fork_deadlines.complete(deadline)
         raise
-    result = await deadline.wait(
-        saver.forks.afork(
-            source_session_id=source_session_id, target_session_id=target_session_id,
-            source_uri=thread_resource_uri(storage._path_resolver.catalog_store.get_node(source_session_id).workspace_id,
-                                           source_session_id, source_thread_id),
-            source_owner=source_owner, target_owner=MutationIntentOwner(target_session_id, target_thread_id),
-            mode=mode, relationship=relationship, source_preflight=point, fork_id=operation_id,
-            source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
-            anchor_item_id=point.anchor_item_id,
-        ),
-        "fork.checkpoint_afork",
-    )
+    try:
+        result = await deadline.wait(
+            saver.forks.afork(
+                source_session_id=source_session_id, target_session_id=target_session_id,
+                source_uri=thread_resource_uri(storage._path_resolver.catalog_store.get_node(source_session_id).workspace_id,
+                                               source_session_id, source_thread_id),
+                source_owner=source_owner, target_owner=MutationIntentOwner(target_session_id, target_thread_id),
+                mode=mode, relationship=relationship, source_preflight=point, fork_id=operation_id,
+                source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
+                anchor_item_id=point.anchor_item_id,
+            ),
+            "fork.checkpoint_afork",
+        )
+    except Exception:
+        # 直接等待的本地协程已失败并退出；真正超时仍由原 deadline 收敛。
+        if not deadline._timed_out:
+            fork_deadlines.complete(deadline)
+        raise
     if result.journal_state != "committed":
         raise RuntimeError(f"fork 未 durable commit: {result.journal_state!r}")
     fork_deadlines.complete(deadline)

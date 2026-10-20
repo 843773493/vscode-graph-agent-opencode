@@ -31,6 +31,8 @@ def incompatible_rollout(request: pytest.FixtureRequest, session_bundle_factory)
         shape = request.param
         if shape == "frozen-schema3":
             root.mkdir(parents=True, exist_ok=True)
+            # 旧 schema 仍来自已物化的 rollout，读取应越过既有锁后拒绝 schema。
+            (root.parent / ".rollout.write.lock").touch()
             with closing(sqlite3.connect(root / "index.sqlite")) as connection, connection:
                 connection.executescript((Path.cwd() / FROZEN_SCHEMA3).read_text())
                 connection.execute(

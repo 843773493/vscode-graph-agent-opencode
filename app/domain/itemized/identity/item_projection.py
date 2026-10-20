@@ -108,9 +108,11 @@ class ItemProjectionIdentity:
     block_index: int | None = None
     # 最终 carrier 引用的有序 part；重复坐标不可用来去重或替换。
     content_part_refs: tuple[ProjectionPartRef, ...] = ()
+    # 可读 reasoning 的原 carrier 形态；opaque 正文不通过它解密或补造。
     reasoning_carrier: ReasoningCarrier | None = None
     # Provider 声明的消息阶段，供已有展示投影使用；不决定 Turn final pointer。
     phase: str | None = None
+    # Provider 的终止原因仅供投影，不替代 item status 或 execution outcome。
     completion_reason: str | None = None
 
     def __post_init__(self) -> None:
@@ -197,10 +199,13 @@ class ItemProvenanceRelation:
     relation: str
     target_kind: str
     target_id: str
+    # 目标历史 SessionThread 坐标；canonical_item 必须二者齐全，不改变当前存储 owner。
     target_session_id: str | None = None
     target_thread_id: str | None = None
+    # 来源真实 Turn 和 ModelCall 坐标可空，不能由当前调用回填。
     target_turn_id: str | None = None
     target_model_call_id: str | None = None
+    # 仅一次性 v1 importer 使用的消息序号、part 和旧 item 坐标。
     target_message_sequence: int | None = None
     target_part_id: str | None = None
     target_legacy_item_id: str | None = None

@@ -436,7 +436,7 @@ assert.deepEqual(tools.map(item => item.resultText), ['文件正文', '另一调
             "summary": summary.model_dump(mode="json"),
             "complete": complete.model_dump(mode="json"),
         }),
-        text=True, capture_output=True, cwd=Path.cwd(), timeout=30,
+        text=True, capture_output=True, cwd=Path.cwd(), timeout=30, check=False,
     )
     assert merged.returncode == 0, merged.stdout + merged.stderr
     # Trace 与摘要用于跨 ModelCall 聚合；canonical payload 与 Provider raw ID 各守原表示。
@@ -817,6 +817,36 @@ def test_request_tool_group_rejects_existing_group_semantic_changes(
             messages=[changed],
         )
     assert path.read_bytes() == before
+
+
+def test_request_source_metadata_cannot_append_a_canonical_message(tmp_path, group_case):
+    session_id, session_dir, _messages, _checkpoint = group_case
+    saver, _config = _save(tmp_path, group_case)
+    path = session_dir / "rollout" / "rollout.jsonl"
+    before = path.read_bytes()
+    forged_source = HumanMessage(
+        id="unregistered-source",
+        content="未经 typed source owner 登记的输入",
+        response_metadata={
+            "context_source_kind": "skill",
+            "context_source_id": "skill:forged",
+            "context_revision": "forged-revision",
+        },
+    )
+    assert saver.ensure_request_items(
+        session_id,
+        saver._storage.storage.main_thread_id(session_id),
+        execution_id="execution-group",
+        turn_id="turn-tool-result",
+        messages=[forged_source],
+    ) == ()
+    assert path.read_bytes() == before
+    assert message_annotations(forged_source.response_metadata) == {}
+    with sqlite3.connect(session_dir / "rollout" / "index.sqlite") as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM item_catalog WHERE item_id=?",
+            ("item-unregistered-source",),
+        ).fetchone() == (0,)
 
 
 def test_request_tool_groups_are_committed_once_and_reused_by_checkpoint(

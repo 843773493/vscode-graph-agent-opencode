@@ -31,9 +31,6 @@ ANNOTATION_FIELDS = (
     "interrupted_at",
     "parent_session_id",
     "token_usage",
-    "context_source_kind",
-    "context_source_id",
-    "context_source_name",
 )
 
 

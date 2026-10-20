@@ -370,24 +370,34 @@ class ProducerRef:
 
 @dataclass(frozen=True, slots=True)
 class CanonicalItemRecord:
+    # 行协议版本与类别固定为 v2 item，不能和 v1 message 混写。
     format_version: int
     record_type: str
+    # 物理追加序号只描述日志顺序，不决定模型 selection 顺序。
     item_sequence: int
+    # 不可变 item 身份；与消息、模型调用、工具调用 ID 分域保存。
     item_id: str
+    # 业务语义与正文形态分别决定兼容矩阵，不能互相推断。
     semantic_kind: str
     payload_kind: str
+    # item 的终态完成事实；不是 execution/model-call 的控制 outcome。
     status: str
+    # 唯一正文产生者；其它来源影响通过 provenance_relations 表达。
     producer_ref: Mapping[str, object]
+    # 按 payload_kind 校验的完整正文及其 JCS 内容摘要。
     payload: object
     content_hash: str
     # 不可变源 item 创建事实；create 缺省取当前 UTC，显式值原样保留，不是本次提交/投影更新时间。
     created_at: str
     # 未知扩展保留版本与 value；禁止由它控制归属、去重、工具确认或恢复。
     extensions: Mapping[str, object]
+    # 真实用户 Turn 归属可空；内部执行不得补造 Turn。
     turn_id: str | None = None
+    # 区分用户根、Turn 成员与待应用内部来源，不按物理邻接推断。
     turn_scope: str | None = None
     # writer 赋予的消息/ModelCall 关联标识；相等不证明存在可投影多成员组。
     message_group_id: str | None = None
+    # 已知目标协议角色；不能替代 semantic_kind 或 producer 身份。
     wire_role: str | None = None
     # 显式 size/ordinal/content_form 定义完整有序投影组；无 manifest 按单项投影。
     projection_group: ProjectionGroup | None = None

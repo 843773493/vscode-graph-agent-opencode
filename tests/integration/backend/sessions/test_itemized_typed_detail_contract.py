@@ -156,9 +156,9 @@ def test_sealed_detail_shape_is_typed_and_not_part_of_context_ref(
 
 
 @pytest.mark.parametrize(
-    "shape", ["bare_id", "physical_path", "dict", "foreign_session"]
+    "shape", ["bare_id", "physical_path", "dict"]
 )
-def test_detail_read_rejects_wrong_owner_or_untyped_input_before_storage(
+def test_detail_read_rejects_untyped_input_before_storage(
     projection_saver, projection_plan, monkeypatch, shape
 ) -> None:
     saver, session_id, session = projection_saver
@@ -167,7 +167,6 @@ def test_detail_read_rejects_wrong_owner_or_untyped_input_before_storage(
         "bare_id": detail.detail_id,
         "physical_path": str(session / detail_relative_path(detail)),
         "dict": detail.to_dict(),
-        "foreign_session": replace(detail, session_id="ses-foreign-detail"),
     }[shape]
     calls = []
 
@@ -179,6 +178,29 @@ def test_detail_read_rejects_wrong_owner_or_untyped_input_before_storage(
         patch.setattr(saver._storage.assemblies, "get_context_plan_detail", reject_lookup)
         with pytest.raises((TypeError, ValueError), match="source-mismatch"):
             saver.read_context_plan_detail(session_id, saver._storage.storage.main_thread_id(session_id), detail_ref=invalid)
+    assert calls == []
+
+
+@pytest.mark.parametrize("owner_field", ["session_id", "thread_id"])
+def test_detail_read_rejects_unbound_historical_scope_before_body(
+    projection_saver, projection_plan, monkeypatch, owner_field
+) -> None:
+    saver, session_id, _ = projection_saver
+    detail = replace(
+        projection_plan.selection[1].detail_ref,
+        **{owner_field: f"foreign-{owner_field}"},
+    )
+    calls = []
+
+    def reject_body_read(**kwargs):
+        calls.append(kwargs)
+        raise AssertionError("历史 scope 必须在正文读取前通过本地冻结 binding 校验")
+
+    monkeypatch.setattr(saver._detail_store, "read", reject_body_read)
+    with pytest.raises(ValueError, match="source-mismatch.*本地冻结 snapshot"):
+        saver.read_context_plan_detail(
+            session_id, projection_plan.thread_id, detail_ref=detail
+        )
     assert calls == []
 
 
