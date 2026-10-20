@@ -75,6 +75,7 @@ from app.services.orchestration.thread_residency import (
 )
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.support.node_debug_dependencies import (
+    node_debug_file_paths,
     permissive_node_debug_session_admission,
 )
 
@@ -477,6 +478,7 @@ async def test_restart_recovery_active_durable_claim_is_not_cold_eligible(
     tracker = _make_tracker(clock)
     service = NodeDebugService(
         workspace_root=tmp_path / "workspace",
+        file_paths=node_debug_file_paths(tmp_path / "workspace"),
         config_service=_DebugConfigStub(),
         session_store=store,
         session_admission=permissive_node_debug_session_admission(),
@@ -541,6 +543,7 @@ async def test_all_active_debug_phases_remain_resident_past_thirty_minutes(
     tracker = _make_tracker(clock)
     service = NodeDebugService(
         workspace_root=tmp_path / "workspace",
+        file_paths=node_debug_file_paths(tmp_path / "workspace"),
         config_service=_DebugConfigStub(),
         session_store=store,
         session_admission=permissive_node_debug_session_admission(),
@@ -587,6 +590,7 @@ async def test_restart_recovery_settled_claim_restarts_idle_counting(
         tracker = _make_tracker(clock)
         service = NodeDebugService(
             workspace_root=tmp_path / "workspace",
+            file_paths=node_debug_file_paths(tmp_path / "workspace"),
             config_service=_DebugConfigStub(),
             session_store=store,
             session_admission=permissive_node_debug_session_admission(),
@@ -717,6 +721,7 @@ def _make_wired_service(
     (workspace_root / "entry.mjs").write_text("console.log(1);\n", encoding="utf-8")
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
         session_store=NodeDebugSessionStore(session_tree),
@@ -805,6 +810,7 @@ async def test_reconcile_required_claim_keeps_blocker_registered(
     tracker = _make_tracker(clock)
     service = NodeDebugService(
         workspace_root=tmp_path / "workspace",
+        file_paths=node_debug_file_paths(tmp_path / "workspace"),
         config_service=_DebugConfigStub(),
         session_store=store,
         session_admission=permissive_node_debug_session_admission(),
@@ -836,6 +842,7 @@ async def test_snapshot_fields_complete_and_blocker_reasons_sanitized(
     tracker = _make_tracker(_FakeMonotonicClock())
     service = NodeDebugService(
         workspace_root=tmp_path / "workspace",
+        file_paths=node_debug_file_paths(tmp_path / "workspace"),
         config_service=_DebugConfigStub(),
         session_store=store,
         session_admission=permissive_node_debug_session_admission(),
@@ -1230,6 +1237,7 @@ async def test_configuration_mutation_blocked_by_unsettled_claim(
     store = NodeDebugSessionStore(session_tree)
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=_DebugConfigStub(),
         session_store=store,
         session_admission=permissive_node_debug_session_admission(),

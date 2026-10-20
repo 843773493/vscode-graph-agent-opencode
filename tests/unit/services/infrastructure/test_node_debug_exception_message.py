@@ -18,7 +18,7 @@ from app.services.infrastructure.node_debug.process.inspector import (
     NodeDebugInspector,
 )
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
-from tests.support.node_debug_dependencies import TEST_THREAD_ID
+from tests.support.node_debug_dependencies import TEST_THREAD_ID, node_debug_file_paths
 
 REAL_CDP_RESPONSE = (
     '{"id":3,"result":{"result":{"type":"string","value":"token xyz"},'
@@ -55,6 +55,7 @@ def inspector_runtime(tmp_path: Path) -> NodeDebugRuntime:
 def inspector(tmp_path: Path) -> NodeDebugInspector:
     return NodeDebugInspector(
         workspace_root=tmp_path,
+        file_paths=node_debug_file_paths(tmp_path),
         append_action=lambda *args, **kwargs: None,
         clear_stop_snapshot=lambda runtime: None,
     )

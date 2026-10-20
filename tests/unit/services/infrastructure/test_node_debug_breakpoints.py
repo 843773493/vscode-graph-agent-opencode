@@ -31,6 +31,7 @@ from app.services.infrastructure.node_debug.session.session_store import (
 from tests.support.canonical_id_at import thread_id_at
 from tests.support.node_debug_dependencies import (
     TEST_THREAD_ID,
+    node_debug_file_paths,
     permissive_node_debug_session_admission,
 )
 
@@ -140,6 +141,7 @@ def test_breakpoint_marks_ambiguous_and_deleted_source(tmp_path: Path) -> None:
 async def test_stopping_state_remains_visible_until_process_exits(tmp_path: Path) -> None:
     service = NodeDebugService(
         workspace_root=tmp_path,
+        file_paths=node_debug_file_paths(tmp_path),
         config_service=ConfigService(workspace_root=tmp_path),
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
@@ -178,6 +180,7 @@ async def test_pending_breakpoints_are_restored_from_session_store(
 
     first = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=ConfigService(workspace_root=workspace_root),
         session_store=store,
         session_admission=permissive_node_debug_session_admission(),
@@ -210,6 +213,7 @@ async def test_pending_breakpoints_are_restored_from_session_store(
 
     restored = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=ConfigService(workspace_root=workspace_root),
         session_store=store,
         session_admission=permissive_node_debug_session_admission(),
@@ -241,6 +245,7 @@ async def test_multiple_configurations_are_isolated_and_portable(
     store = NodeDebugSessionStore(resolver)
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=ConfigService(workspace_root=workspace_root),
         session_store=store,
         session_admission=permissive_node_debug_session_admission(),
@@ -330,6 +335,7 @@ async def test_main_and_child_thread_have_independent_debug_state(
     resolver = _SessionCatalogResolverStub(tmp_path / "sessions")
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=ConfigService(workspace_root=workspace_root),
         session_store=NodeDebugSessionStore(resolver),
         session_admission=permissive_node_debug_session_admission(),
@@ -388,6 +394,7 @@ async def test_legacy_single_configuration_file_is_not_loaded(tmp_path: Path) ->
 
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=ConfigService(workspace_root=workspace_root),
         session_store=NodeDebugSessionStore(resolver),
         session_admission=permissive_node_debug_session_admission(),
@@ -413,6 +420,7 @@ async def test_configuration_file_can_be_copied_directly_into_loaded_session(
     store = NodeDebugSessionStore(resolver)
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=ConfigService(workspace_root=workspace_root),
         session_store=store,
         session_admission=permissive_node_debug_session_admission(),
@@ -477,6 +485,7 @@ async def test_duplicate_breakpoint_is_rejected_for_shared_operators(
     )
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=ConfigService(workspace_root=workspace_root),
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
@@ -522,6 +531,7 @@ async def test_pending_breakpoint_can_be_atomically_changed_to_logpoint(
     )
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=ConfigService(workspace_root=workspace_root),
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),

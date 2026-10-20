@@ -16,6 +16,7 @@ from app.services.infrastructure.node_debug.process.inspector import (
     NodeDebugInspector,
 )
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 from tests.support.node_debug_dependencies import TEST_THREAD_ID
 
 
@@ -56,6 +57,7 @@ def _runtime_at(tmp_path: Path) -> NodeDebugRuntime:
 def _inspector() -> NodeDebugInspector:
     return NodeDebugInspector(
         workspace_root=Path("/tmp"),
+        file_paths=WorkspaceFilePaths(workspace=Path("/tmp"), workspace_id="00000000-0000-4000-8000-000000000001", bindings=None),
         append_action=lambda *args, **kwargs: None,
         clear_stop_snapshot=lambda runtime: None,
     )

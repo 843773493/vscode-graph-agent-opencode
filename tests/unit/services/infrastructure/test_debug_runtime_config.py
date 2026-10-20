@@ -12,6 +12,7 @@ from app.services.infrastructure.external_resource_leases import (
 )
 from app.services.infrastructure.node_debug.service import NodeDebugService
 from tests.support.node_debug_dependencies import (
+    node_debug_file_paths,
     permissive_node_debug_session_admission,
 )
 
@@ -112,6 +113,7 @@ def test_node_debug_capabilities_hide_runtime_endpoints_and_mark_support(
     )
     service = NodeDebugService(
         workspace_root=tmp_path,
+        file_paths=node_debug_file_paths(tmp_path),
         config_service=config_service,
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),

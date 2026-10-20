@@ -41,6 +41,7 @@ from tests.support.catalog_session_bundle import (
     seed_catalog_session_bundle,
 )
 from tests.support.node_debug_dependencies import (
+    node_debug_file_paths,
     permissive_node_debug_session_admission,
 )
 
@@ -113,6 +114,7 @@ def _service(
     )
     return NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=_FixedPortConfig(port, timeout=timeout),
         session_store=NodeDebugSessionStore(resolver),
         session_admission=permissive_node_debug_session_admission(),

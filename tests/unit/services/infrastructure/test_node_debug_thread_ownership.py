@@ -56,7 +56,7 @@ from tests.support.catalog_session_bundle import (
     seed_catalog_session_bundle,
 )
 from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING_JSON
-from tests.support.node_debug_dependencies import TEST_THREAD_ID
+from tests.support.node_debug_dependencies import TEST_THREAD_ID, node_debug_file_paths
 
 _PARENT_SESSION_ID = "ses_00000000400070008000000000000001"
 _CHILD_SESSION_ID = "ses_00000000400070008000000000000002"
@@ -176,6 +176,7 @@ def workspace_root(tmp_path: Path) -> Path:
 def _service(workspace_root: Path, resolver: object) -> NodeDebugService:
     return NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=ConfigService(workspace_root=workspace_root),
         session_store=NodeDebugSessionStore(resolver),
         session_admission=NodeDebugSessionAdmission(
@@ -537,6 +538,7 @@ async def test_mutation_admission_rejects_missing_and_deleted_session(
     parent_thread_id = resolver.main_thread_id(_PARENT_SESSION_ID)
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=ConfigService(workspace_root=workspace_root),
         session_store=NodeDebugSessionStore(resolver),
         session_admission=NodeDebugSessionAdmission(
@@ -593,6 +595,7 @@ async def test_mutation_admission_rejects_foreign_thread(
     _create_session(resolver, _OTHER_SESSION_ID)
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=ConfigService(workspace_root=workspace_root),
         session_store=NodeDebugSessionStore(resolver),
         session_admission=NodeDebugSessionAdmission(
@@ -668,6 +671,7 @@ async def test_drain_session_stops_all_catalog_thread_runtimes_before_delete(
     child_thread_id = _publish_catalog_child_thread(session_node)
     service = NodeDebugService(
         workspace_root=tmp_path,
+        file_paths=node_debug_file_paths(tmp_path),
         config_service=ConfigService(workspace_root=tmp_path),
         session_store=NodeDebugSessionStore(resolver),
         session_admission=NodeDebugSessionAdmission(

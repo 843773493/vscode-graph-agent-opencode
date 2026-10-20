@@ -63,6 +63,7 @@ from tests.support.catalog_session_bundle import (
     seed_catalog_session_bundle,
 )
 from tests.support.node_debug_dependencies import (
+    node_debug_file_paths,
     permissive_node_debug_session_admission,
 )
 
@@ -221,6 +222,7 @@ def _make_service(
     store = NodeDebugSessionStore(resolver)
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         session_store=store,
         config_service=(
             None if inspector_port is None else _DebugConfigStub(inspector_port)

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Literal, cast
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 from websockets.exceptions import ConnectionClosed
 
@@ -18,6 +20,7 @@ from app.services.infrastructure.node_debug.runtime_state import (
     NodeDebugRuntime,
     NodeDebugStopSnapshotClearer,
 )
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 
 class NodeDebugInspector:
@@ -27,10 +30,12 @@ class NodeDebugInspector:
         self,
         *,
         workspace_root: Path,
+        file_paths: WorkspaceFilePaths,
         append_action: NodeDebugActionAppender,
         clear_stop_snapshot: NodeDebugStopSnapshotClearer,
     ) -> None:
         self._workspace_root = workspace_root
+        self._file_paths = file_paths
         self._append_action = append_action
         self._clear_stop_snapshot = clear_stop_snapshot
 
@@ -205,7 +210,7 @@ class NodeDebugInspector:
                 runtime.inspector.script_urls[script_id] = url
         elif method == "Debugger.paused":
             call_frames = params.get("callFrames")
-            frames = self._parse_call_frames(runtime, call_frames)
+            frames = await asyncio.to_thread(self._parse_call_frames, runtime, call_frames)
             hit_breakpoints = params.get("hitBreakpoints")
             async with runtime.state_lock:
                 runtime.status = "paused"
@@ -403,12 +408,17 @@ class NodeDebugInspector:
                 script_id = location.get("scriptId")
                 if isinstance(script_id, str):
                     url = runtime.inspector.script_urls.get(script_id, "")
+            source_path = self._source_path(url)
             frames.append(
                 NodeDebugStackFrameDTO(
                     call_frame_id=call_frame_id,
                     function_name=str(raw_frame.get("functionName") or "<anonymous>"),
-                    url=url,
-                    path=self._url_to_workspace_path(url),
+                    url=self._file_paths.reference(source_path) if source_path is not None else url,
+                    path=(
+                        source_path.relative_to(self._workspace_root).as_posix()
+                        if source_path is not None and source_path.is_relative_to(self._workspace_root)
+                        else None
+                    ),
                     line=line + 1,
                     column=(column if isinstance(column, int) else 0) + 1,
                     scope_names=self._scope_names(raw_frame.get("scopeChain")),
@@ -459,14 +469,21 @@ class NodeDebugInspector:
     def _string_or_none(value: object) -> str | None:
         return value if isinstance(value, str) else None
 
-    def _url_to_workspace_path(self, url: str) -> str | None:
-        if not url.startswith("file:"):
+    @staticmethod
+    def _source_path(url: str) -> Path | None:
+        parsed = urlparse(url)
+        if parsed.scheme != "file":
             return None
-        path = Path(unquote(urlparse(url).path)).resolve()
-        try:
-            return path.relative_to(self._workspace_root).as_posix()
-        except ValueError:
-            return None
+        # CDP 的 file URL 在调试目标机解释；盘符、UNC 与百分号解码交给原生标准库。
+        authority = parsed.netloc
+        if authority not in {"", "localhost"} and os.name != "nt":
+            raise ValueError("Node Inspector file URL 的主机不属于当前调试目标")
+        prefix = "//" + authority if authority not in {"", "localhost"} else ""
+        native = url2pathname(prefix + parsed.path)
+        path = Path(native)
+        if not path.is_absolute():
+            raise ValueError("Node Inspector 源码 file URL 必须指向目标机绝对路径")
+        return path.resolve()
 
     @staticmethod
     def remote_value(value: object) -> str | None:

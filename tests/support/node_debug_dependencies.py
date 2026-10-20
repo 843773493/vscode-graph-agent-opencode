@@ -6,12 +6,22 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.infrastructure.node_debug.session.thread_owner import (
     NodeDebugThreadOwner,
     normalize_node_debug_owner,
 )
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 TEST_THREAD_ID = "thr_00000000000070008000000000000000"
+
+
+def node_debug_file_paths(workspace_root: Path) -> WorkspaceFilePaths:
+    """为测试显式注入工作区文件 owner，不伪造 URI 身份或原生根绑定。"""
+    root = workspace_root.resolve()
+    return WorkspaceFilePaths(
+        workspace=root, workspace_id=load_or_create_workspace_id(root), bindings=None,
+    )
 
 
 class PermissiveNodeDebugSessionAdmission:

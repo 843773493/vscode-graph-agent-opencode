@@ -15,8 +15,11 @@ import httpx
 import pytest
 
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
+from app.core.workspace_identity import read_workspace_id
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import (
     close_backend_process,
     start_backend_process,
@@ -284,6 +287,12 @@ def scripted_model_server() -> Iterator[tuple[ScriptedModelState, str]]:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+@pytest.fixture(scope="module")
+def integration_backend_port(request: pytest.FixtureRequest) -> int:
+    # 文件专属端口块内避开本机常驻服务占用的起始端口，不回收未知进程。
+    return integration_port_block_for_file(Path(request.node.path)).port(20)
 
 
 @pytest.fixture(scope="module")
@@ -556,6 +565,14 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
         '"status":"exited"' in result
         for result in successful_results
     )
+    file_paths = WorkspaceFilePaths(
+        workspace=workspace_root, workspace_id=read_workspace_id(workspace_root), bindings=None,
+    )
+    for result in successful_results:
+        assert "file://" not in result
+        assert str(workspace_root) not in result
+    assert any(file_paths.reference(fixture_path) in result for result in successful_results)
+    assert any(file_paths.reference(worker_path) in result for result in successful_results)
 
     debug_state_response = await scripted_client.get(
         "/api/v1/debug/node",
@@ -568,6 +585,7 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
     assert debug_state["active_configuration_name"] == "计数流程调试"
     assert [item["value"] for item in debug_state["evaluations"]] == ["2", "5"]
     assert debug_state["last_stopped_frame"]["path"] == worker_path.name
+    assert debug_state["last_stopped_frame"]["url"] == file_paths.reference(worker_path)
     assert debug_state["last_stopped_frame"]["line"] == 2
     assert any('{"result":15}' in line for line in debug_state["output"])
 
@@ -608,6 +626,7 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
     human_state = human_start.json()["data"]
     assert human_state["status"] == "paused"
     assert human_state["call_stack"][0]["path"] == fixture_path.name
+    assert human_state["call_stack"][0]["url"] == file_paths.reference(fixture_path)
     assert human_state["call_stack"][0]["line"] == 3
 
     for expected_path, expected_line in (

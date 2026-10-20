@@ -55,6 +55,7 @@ from tests.support.catalog_session_bundle import (
     fixture_main_thread_id,
     seed_catalog_session_bundle,
 )
+from tests.support.node_debug_dependencies import node_debug_file_paths
 
 _SESSION_ID = "ses_00000000400070008000000000000001"
 _MAIN_THREAD_ID = fixture_main_thread_id(_SESSION_ID)
@@ -181,6 +182,7 @@ async def test_session_only_api_resolves_catalog_main_thread(
     _create_session(resolver, _SESSION_ID)
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=ConfigService(workspace_root=workspace_root),
         session_store=NodeDebugSessionStore(resolver),
         session_admission=NodeDebugSessionAdmission(
@@ -259,6 +261,7 @@ async def test_mutation_requires_existing_session(
     _create_session(resolver, _SESSION_ID)
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=ConfigService(workspace_root=workspace_root),
         session_store=NodeDebugSessionStore(resolver),
         session_admission=NodeDebugSessionAdmission(
@@ -355,6 +358,7 @@ async def test_session_only_addresses_resolve_distinct_session_owners(
     _create_session(resolver, _CHILD_SESSION_ID, parent_session_id=_SESSION_ID)
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=ConfigService(workspace_root=workspace_root),
         session_store=NodeDebugSessionStore(resolver),
         session_admission=NodeDebugSessionAdmission(

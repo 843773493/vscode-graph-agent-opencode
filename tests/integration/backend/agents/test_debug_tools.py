@@ -35,6 +35,7 @@ from app.services.infrastructure.node_debug.session.session_store import (
 )
 from tests.support.node_debug_dependencies import (
     TEST_THREAD_ID,
+    node_debug_file_paths,
     permissive_node_debug_session_admission,
 )
 
@@ -312,6 +313,7 @@ async def test_node_inspector_tool_adapter_integration_session(
     config_service.validate_workspace_config()
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=config_service,
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
@@ -427,6 +429,7 @@ async def test_node_inspector_tool_adapter_integration_isolation(
     config_service.validate_workspace_config()
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=config_service,
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
@@ -606,6 +609,7 @@ async def test_node_inspector_hit_count_and_logpoint_runtime_semantics(
     )
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=config_service,
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
@@ -689,6 +693,7 @@ async def test_node_logpoint_reports_invalid_interpolation_without_pausing(
     )
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=config_service,
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
@@ -782,6 +787,7 @@ async def test_node_debug_rejects_unimplemented_adapter(
     config_service.validate_workspace_config()
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=config_service,
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
@@ -834,6 +840,7 @@ async def test_node_inspector_agent_results_enforce_least_privilege_and_redactio
     config_service.validate_workspace_config()
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=config_service,
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
@@ -905,6 +912,7 @@ async def test_human_and_agent_share_cross_file_debug_runtime(
     config_service.validate_workspace_config()
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=config_service,
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
@@ -978,6 +986,7 @@ async def test_active_debug_session_invalidates_changed_source_without_blocking_
     config_service.validate_workspace_config()
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=config_service,
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
@@ -1064,6 +1073,7 @@ async def test_start_and_finish_report_invalid_breakpoints_at_both_boundaries(
     config_service.validate_workspace_config()
     service = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=config_service,
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
@@ -1181,6 +1191,7 @@ async def test_session_launch_configuration_is_restored_after_service_restart(
     session_id = "ses_persisted_debug_configuration"
     first = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=config_service,
         session_store=store,
         session_admission=permissive_node_debug_session_admission(),
@@ -1225,6 +1236,7 @@ async def test_session_launch_configuration_is_restored_after_service_restart(
 
     restored = NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=config_service,
         session_store=store,
         session_admission=permissive_node_debug_session_admission(),

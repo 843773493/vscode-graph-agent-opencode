@@ -55,6 +55,7 @@ from app.services.infrastructure.node_debug.session.session_store import (
 from app.services.infrastructure.session_goal_store import SessionGoalStore
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.harness.python.run_context import TestRunContext
+from tests.support.node_debug_dependencies import node_debug_file_paths
 from tests.unit.core.catalog_workspace_helper import (
     CatalogWorkspaceContext,
     build_catalog_workspace,
@@ -490,6 +491,7 @@ async def test_deleting_session_rejects_all_new_short_write_endpoints(
 def _node_debug_service(harness: _Harness) -> NodeDebugService:
     return NodeDebugService(
         workspace_root=harness.workspace.workspace_root,
+        file_paths=node_debug_file_paths(harness.workspace.workspace_root),
         config_service=ConfigService(workspace_root=harness.workspace.workspace_root),
         session_store=NodeDebugSessionStore(harness.workspace.resolver),
         session_admission=NodeDebugSessionAdmission(

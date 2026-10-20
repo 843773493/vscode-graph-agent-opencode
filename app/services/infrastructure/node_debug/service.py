@@ -75,6 +75,7 @@ from app.services.infrastructure.node_debug.session.thread_owner import (
 from app.services.infrastructure.node_debug.session.tool_actions import (
     NodeDebugToolActionMixin,
 )
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 from app.services.orchestration.thread_residency import (
     ResidencyBlocker,
     ThreadResidencyTracker,
@@ -114,6 +115,7 @@ class NodeDebugService(
         self,
         *,
         workspace_root: Path,
+        file_paths: WorkspaceFilePaths,
         config_service: ConfigService,
         session_store: NodeDebugSessionStore | None = None,
         session_admission: NodeDebugSessionAdmission,
@@ -163,6 +165,7 @@ class NodeDebugService(
         self._node_bin = os.environ.get("BOXTEAM_NODE_BIN") or shutil.which("node")
         self._inspector = NodeDebugInspector(
             workspace_root=self._workspace_root,
+            file_paths=file_paths,
             append_action=self._append_action,
             clear_stop_snapshot=self._clear_stop_snapshot,
         )

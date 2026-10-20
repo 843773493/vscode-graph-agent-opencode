@@ -26,6 +26,7 @@ from app.services.infrastructure.node_debug.session.thread_owner import (
     resolve_node_debug_owner,
 )
 from tests.support.node_debug_dependencies import (
+    node_debug_file_paths,
     permissive_node_debug_session_admission,
 )
 
@@ -125,6 +126,7 @@ def _build_debug_service(
     store = NodeDebugSessionStore(resolver)
     return NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=config_service,
         session_store=store,
         session_admission=permissive_node_debug_session_admission(),

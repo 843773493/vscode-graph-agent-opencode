@@ -30,6 +30,7 @@ from app.services.infrastructure.node_debug.session.session_store import (
 )
 from tests.support.node_debug_dependencies import (
     TEST_THREAD_ID,
+    node_debug_file_paths,
     permissive_node_debug_session_admission,
 )
 
@@ -67,6 +68,7 @@ def _service(tmp_path: Path) -> NodeDebugService:
     )
     return NodeDebugService(
         workspace_root=workspace_root,
+        file_paths=node_debug_file_paths(workspace_root),
         config_service=ConfigService(workspace_root=workspace_root),
         session_store=NodeDebugSessionStore(
             _SessionCatalogResolverStub(tmp_path / "sessions")
