@@ -2426,7 +2426,10 @@ export class BrowserSession extends EventEmitter {
       const summarize = (node, path, depth) => {
         if (!(node instanceof Element) || depth > maxDepth) return null;
         const attributes = {};
-        for (const attribute of [...node.attributes].slice(0, 20)) {
+        const nodeAttributes = node.attributes;
+        const attributeCount = Math.min(nodeAttributes.length, 20);
+        for (let index = 0; index < attributeCount; index += 1) {
+          const attribute = nodeAttributes[index];
           attributes[attribute.name] = attribute.value.slice(0, 300);
         }
         const text = [...node.childNodes]
@@ -2436,15 +2439,20 @@ export class BrowserSession extends EventEmitter {
           .replace(/\s+/g, " ")
           .trim()
           .slice(0, 240);
+        const children = [];
+        if (depth < maxDepth) {
+          const childElements = node.children;
+          const childCount = Math.min(childElements.length, maxChildren);
+          for (let index = 0; index < childCount; index += 1) {
+            children.push(summarize(childElements[index], `${path}.${index}`, depth + 1));
+          }
+        }
         return {
           node_id: path,
           tag: node.tagName.toLowerCase(),
           attributes,
           text,
-          children: [...node.children]
-            .slice(0, maxChildren)
-            .map((child, index) => summarize(child, `${path}.${index}`, depth + 1))
-            .filter(Boolean),
+          children,
         };
       };
       return summarize(document.documentElement, "0", 0);

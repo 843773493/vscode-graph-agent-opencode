@@ -87,7 +87,8 @@ export class BrowserManager {
     this.workspaceRoot = path.resolve(workspaceRoot);
     this.workspaceId = validateWorkspaceId(workspaceId);
     this.stateStore = new BrowserStateStore({ workspaceRoot: this.workspaceRoot, workspaceId: this.workspaceId });
-    this.sessions = new Map();
+    /** @type {Map<string, BrowserSession>} 以browser_id定位浏览器资源实例，不是聊天Session集合。 */
+    this.browsersById = new Map();
     /** @type {Map<string, BrowserTransportGrant>} */
     this.transportGrants = new Map();
     this.stateWriteRequested = false;
@@ -124,7 +125,7 @@ export class BrowserManager {
   }
 
   runningSessions() {
-    return [...this.sessions.values()].filter((session) => session.status === "running");
+    return [...this.browsersById.values()].filter((session) => session.status === "running");
   }
 
   async runCheckpointCapture(callback) {
@@ -202,7 +203,7 @@ export class BrowserManager {
         record.client_count = 0;
       }
       const session = new BrowserSession({ manager: this, record });
-      this.sessions.set(session.id, session);
+      this.browsersById.set(session.id, session);
     }
     await this.persist();
   }
@@ -254,7 +255,7 @@ export class BrowserManager {
         this.stateWriteRequested = false;
         await this.stateStore.write({
           updated_at: nowIso(),
-          browsers: [...this.sessions.values()].map((session) => session.toRecord()),
+          browsers: [...this.browsersById.values()].map((session) => session.toRecord()),
         });
       }
     } finally {
@@ -273,13 +274,13 @@ export class BrowserManager {
   }
 
   list() {
-    return [...this.sessions.values()]
+    return [...this.browsersById.values()]
       .map((session) => session.snapshot())
       .sort((left, right) => String(right.updated_at || "").localeCompare(String(left.updated_at || "")));
   }
 
   get(id) {
-    const session = this.sessions.get(id);
+    const session = this.browsersById.get(id);
     if (!session) throw new Error(`浏览器页面不存在: ${id}`);
     return session;
   }
@@ -334,7 +335,7 @@ export class BrowserManager {
   }) {
     const admission = this.createAdmissionTail.then(async () => {
       if (workspaceId !== this.workspaceId || !/^browser_[0-9a-f]{32}$/.test(browserId)
-        || !Number.isSafeInteger(ownerRevision) || ownerRevision < 1 || this.sessions.has(browserId)) {
+        || !Number.isSafeInteger(ownerRevision) || ownerRevision < 1 || this.browsersById.has(browserId)) {
         throw new Error("Browser 创建必须使用当前 Python owner 的唯一身份、工作区与版本");
       }
       const pressureLevel = this.resourceGovernor?.snapshot().last_sample?.level || "normal";
@@ -344,7 +345,7 @@ export class BrowserManager {
         throw error;
       }
       const managedStatuses = new Set(["created", "running"]);
-      const logicalBrowserCount = [...this.sessions.values()].filter((session) => (
+      const logicalBrowserCount = [...this.browsersById.values()].filter((session) => (
         managedStatuses.has(session.status)
       )).length;
       if (logicalBrowserCount >= this.maxLogicalBrowsersPerWorkspace) {
@@ -355,7 +356,7 @@ export class BrowserManager {
         throw error;
       }
       const budget = await this.stateStore.checkpointBudgetSnapshot();
-      const uncheckpointedManagedCount = [...this.sessions.values()].filter((session) => (
+      const uncheckpointedManagedCount = [...this.browsersById.values()].filter((session) => (
         managedStatuses.has(session.status) && !session.record.checkpoint
       )).length;
       const projectedReservedBytes = budget.used_bytes
@@ -401,7 +402,7 @@ export class BrowserManager {
           updated_at: timestamp,
         },
       });
-      this.sessions.set(id, session);
+      this.browsersById.set(id, session);
       return session;
     });
     this.createAdmissionTail = admission.then(() => undefined, () => undefined);
@@ -434,7 +435,7 @@ export class BrowserManager {
   async shutdown(reason = "browser_manager_shutdown") {
     this.stopResourceGovernor();
     const checkpointFailures = [];
-    for (const session of this.sessions.values()) {
+    for (const session of this.browsersById.values()) {
       if (session.status !== "running") {
         continue;
       }

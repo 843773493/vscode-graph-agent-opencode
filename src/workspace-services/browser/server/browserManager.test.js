@@ -55,7 +55,7 @@ describe("浏览器状态持久化", () => {
     session.operationQueue.operationRevision = 13;
     session.chromiumInstanceGeneration = 7;
     const expected = structuredClone(session.snapshot());
-    manager.sessions.set(session.id, session);
+    manager.browsersById.set(session.id, session);
     session.snapshot = () => { throw new Error("持久化不能计算展示快照"); };
 
     await manager.persist();
@@ -219,7 +219,7 @@ describe("浏览器状态持久化", () => {
       }
       active -= 1;
     });
-    manager.sessions.set("browser_updates", { toRecord: () => ({ version }) });
+    manager.browsersById.set("browser_updates", { toRecord: () => ({ version }) });
     const requests = [manager.persist().then(() => { settled += 1; })];
     try {
       await firstEntered.promise;
@@ -254,7 +254,7 @@ describe("浏览器状态持久化", () => {
       entered[index].resolve();
       await release[index].promise;
     });
-    manager.sessions.set("browser_updates", { toRecord: () => ({ version }) });
+    manager.browsersById.set("browser_updates", { toRecord: () => ({ version }) });
     const requests = [manager.persist()];
     try {
       await entered[0].promise;
@@ -285,7 +285,7 @@ describe("浏览器状态持久化", () => {
       saved = structuredClone(payload.browsers);
       return Promise.resolve();
     });
-    manager.sessions.set("browser_failure", { toRecord: () => {
+    manager.browsersById.set("browser_failure", { toRecord: () => {
       if (shouldFail && failureStage === "record") throw failure;
       return { version: 2 };
     } });
@@ -305,7 +305,7 @@ describe("浏览器状态持久化", () => {
       pageEntries: new Map([["page_recovered_internal", {}]]),
       record: { page_id: "page_recovered_internal" },
     };
-    manager.sessions.set(session.id, session);
+    manager.browsersById.set(session.id, session);
 
     expect(manager.get("browser_recovered")).toBe(session);
     expect(() => manager.get("page_recovered_internal")).toThrow("浏览器页面不存在");
@@ -317,7 +317,7 @@ describe("浏览器状态持久化", () => {
       browser_id: "browser_grant", workspace_id: WORKSPACE_ID,
       status: "running", transport_owner_revision: 1, reconciliation_status: "verified",
     } });
-    manager.sessions.set(browser.id, browser);
+    manager.browsersById.set(browser.id, browser);
     const arguments_ = { ownerRevision: 1, association: { session_id: "ses_owner", thread_id: "thr_owner" } };
     const single = manager.issueTransportGrant(browser.id, arguments_);
     expect(manager.consumeTransportGrant(browser.id, single.grant_token).association).toEqual(arguments_.association);
@@ -339,7 +339,7 @@ describe("浏览器状态持久化", () => {
       browser_id: "browser_rejected_grant", workspace_id: WORKSPACE_ID,
       status: "running", transport_owner_revision: 2, reconciliation_status: "verified",
     } });
-    manager.sessions.set(browser.id, browser);
+    manager.browsersById.set(browser.id, browser);
     const existing = { browserId: browser.id, transportOwnerRevision: 2, expiresAtUnixMs: 1, association: null };
     manager.transportGrants.set("existing", existing);
     for (const [status, transportOwnerRevision] of [["running", 1], ["closed", 2], ["deleted", 2]]) {
@@ -394,7 +394,7 @@ describe("浏览器状态持久化", () => {
   test("正常关闭管理器时保留已冷回收浏览器及其检查点", async () => {
     const manager = createBrowserManagerWithStateWriter(async () => undefined);
     let closeCalls = 0;
-    manager.sessions.set("browser_discarded", {
+    manager.browsersById.set("browser_discarded", {
       status: "running",
       record: { resource_state: "discarded" },
       close: async () => { closeCalls += 1; },
@@ -414,7 +414,7 @@ describe("浏览器状态持久化", () => {
   test("正常关闭管理器时将热浏览器转为可恢复检查点", async () => {
     const manager = createBrowserManagerWithStateWriter(async () => undefined);
     const shutdownReasons = [];
-    manager.sessions.set("browser_running", {
+    manager.browsersById.set("browser_running", {
       id: "browser_running",
       status: "running",
       record: { resource_state: "background" },
@@ -441,8 +441,8 @@ describe("浏览器状态持久化", () => {
     const manager = createBrowserManagerWithStateWriter(async () => undefined, {
       maxLogicalBrowsersPerWorkspace: 2,
     });
-    manager.sessions.set("browser_a", { status: "running" });
-    manager.sessions.set("browser_b", { status: "running" });
+    manager.browsersById.set("browser_a", { status: "running" });
+    manager.browsersById.set("browser_b", { status: "running" });
 
     await expect(manager.create(createOptions())).rejects.toMatchObject({
       code: "browser_workspace_logical_limit_exceeded",
@@ -469,7 +469,7 @@ describe("浏览器状态持久化", () => {
       max_bytes: 6 * 1024 * 1024,
       remaining_bytes: 6 * 1024 * 1024,
     });
-    manager.sessions.set("browser_uncheckpointed", {
+    manager.browsersById.set("browser_uncheckpointed", {
             status: "running",
       record: { resource_state: "background", checkpoint: null },
     });

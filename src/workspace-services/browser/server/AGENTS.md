@@ -34,6 +34,8 @@ server/
 
 Manager 的状态文件保存只有一个写入者：同轮请求合并，写入期间的更新置为待保存，再取一份当前状态串行写入。所有等待方在待保存请求排空后才成功返回；快照生成或文件写入失败原样交给等待方，并释放在途 Promise，不能静默重试或让后续保存永久卡在旧失败上。合并的是完整状态保存，不合并业务操作或检查点。
 
+Manager的`browsersById`以`browser_id`定位`BrowserSession`资源实例，包含仍保留的非运行记录；不按聊天Session或Thread索引。`/health`的`browser_count`直接读取该Map大小，与列表条目数量同义；它不是活跃Chromium或context数量。健康计数不生成、排序各资源的展示快照，运行时和治理器诊断仍由各自owner提供。
+
 Session的`toRecord()`显式组装恢复事实，供Manager写入状态文件；文档与操作序号、传输授权版本及最近运行时代际取当前宿主事实。`snapshot()`仍负责对外完整展示，其中设备配置列表、参与者、当前页面、保护派生和逐连接流统计不再为保存而计算或写入。恢复事实保留设备覆盖、下载身份、操作结果和生命周期时间；实时连接数在恢复后从当前句柄取得，不能用磁盘上的观察值恢复连接。
 
 StateStore的`checkpointOperationTail`串行管理检查点读取、写入、删除和配额查询，不只是写队列；`checkpointSizeBytesByBrowserId`按浏览器ID记录磁盘文件字节数，包含JSON末尾换行。它只用于配额和目录大小变化检查，不能证明内容版本或检测同字节数的正文改写；不另建内容身份或版本来源。
@@ -55,6 +57,8 @@ Manager 的 `BrowserTransportGrant` 只保存一次连接所需的授权影子�
 Session资源保护使用Node的Unix毫秒时钟：`lastNetworkActivityAtUnixMs`是按一秒节流登记的网络观察时间，`lastWebSocketActivityAtUnixMs`是最近一次WebSocket活动观察时间；持久字段仍为ISO。`softProtectionObservedAtUnixMsByReason`按保护码保存成功页面检查的观察时刻，五分钟租约从这里或WebSocket活动起算。`protectionInspectionFailureExpiresAtUnixMs`是检查失败硬保护的到期时刻，不是五秒重试时长或定时任务；`agentLockExpiresAtUnixMs`是从ISO锁字段解析的到期时刻。`*LEASE_MS/*RETRY_MS`才是持续时长，不能与这些绝对时刻混用。
 
 页面诊断由 `diagnostics/pageDiagnostics.js` 独占记录与事件接线；Session 只在注册标签页时创建它，并通过同一入口读取和清空。诊断模块不持有 Session、不处理导航成败或资源活动保护，这两项仍归 Session。
+
+`debugSnapshot()`的DOM投影仍由Session执行：最多下探5层，每个元素直接读取前20个属性和前80个子元素，不先复制全集合。属性值、直接文本分别截取300和240字符，`node_id`按原始子元素索引生成；直接文本仍读取该元素的全部文本子节点，不能把这项前缀优化当作整个快照成本恒定的保证。
 
 网络和控制台各自有界；网络诊断跟随标签页生命周期：每页最多保留200行，按 Playwright Request 实例关联响应与失败，不按URL猜身份；记录编号在标签页内单调分配，清空不复用。弱关联在请求结束时释放，清空记录也断开旧关联。`started_at` 是 Node 观察到请求的时间，`finished_at` 是响应头或传输失败的最近观察时间，并非正文接收完成；`failed` 只表示传输失败，不能把HTTP错误状态或已收到响应头当作同一件事。
 

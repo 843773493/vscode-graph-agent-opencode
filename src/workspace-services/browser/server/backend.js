@@ -235,7 +235,7 @@ async function main() {
           ok: true,
           process_id: process.pid,
           workspace_id: workspaceId,
-          browser_count: manager.list().length,
+          browser_count: manager.browsersById.size,
           browser_runtime: manager.runtimePool.snapshot(),
           resource_governor: manager.resourceGovernorSnapshot(),
         });
