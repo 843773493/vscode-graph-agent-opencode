@@ -434,8 +434,8 @@ async def test_visible_history_omits_inline_media_payload_from_metadata(
                                 attachments=[
                                     {
                                         "file_id": (
-                                            "boxteam-session://ses_019c3567da377a6f855e1bddac8f1f76/"
-                                            "attachments/a.png"
+                                            "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/session/ses_019c3567da377a6f855e1bddac8f1f76/"
+                                            "attachments/att_0123456789abcdef0123456789abcdef"
                                         ),
                                         "name": "a.png",
                                         "content_type": "image/png",

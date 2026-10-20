@@ -11,6 +11,7 @@ from contextlib import closing
 from uuid import uuid4
 
 import commentjson
+import pytest
 
 from app.core.resource_uri import resource_display_uri
 from app.gateway.credentials import FederationCredentialStore
@@ -21,6 +22,7 @@ from app.gateway.federation.errors import (
 from tests.integration.backend.agents.test_resource_navigation import _tracking_counts
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     _completed,
+    _prepare_workspace,
     _tool,
 )
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
@@ -444,3 +446,94 @@ async def test_model_remote_text_mutations_preserve_owner_versions_and_source_ch
     assert readable.status_code == 200, readable.text
     assert readable.json()["data"]["content"] == raw.replace(b"old", b"patched").decode()
     (artifacts / "model-remote-text-mutations.json").write_text(json.dumps({"results": results, "changeset": response.json()}, ensure_ascii=False, indent=2) + "\n")
+
+
+def _prepare_media_workspace(context, model_port, gateway_port):
+    workspace = _prepare_workspace(context, model_port, gateway_port)
+    config_path = workspace / ".boxteam/workspace.jsonc"
+    config = commentjson.loads(config_path.read_text())
+    for provider in config["llm"]["providers"]:
+        provider["api_mode"]["model_info"]["supports_vision"] = True
+    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
+    return workspace
+
+
+@pytest.mark.parametrize("communication_triad", [{"prepare_workspace": _prepare_media_workspace}], indirect=True)
+async def test_model_attachment_uri_reads_media_through_original_owner(communication_triad):
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+
+    from app.core.resource_uri import parse_session_artifact_uri
+    from tests.support.session_navigation_http import submit_navigation_operation
+
+    nodes, model, artifacts = communication_triad
+    source = nodes["b"]
+    session = await create_session(source.client, "附件 URI 媒体读取")
+    image = BytesIO()
+    Image.new("RGB", (900, 600), color="navy").save(image, format="PNG")
+    original = image.getvalue()
+    references, replies = [], []
+
+    def reply(payload):
+        messages = payload["messages"]
+        user = "\n".join(str(message["content"]) for message in messages if message["role"] == "user")
+        if "artifact-media-trigger" not in user:
+            return {"content": "附件 URI 媒体读取"}
+        results = [message for message in messages if message["role"] == "tool"]
+        if not results:
+            file_id = re.search(r'<attachment [^>]*path="([^"]+)"', user).group(1)
+            parsed = parse_session_artifact_uri(file_id)
+            assert (parsed.scope_id, parsed.tail_segments[:2], parsed.gateway_authority) == (
+                source.workspace_id, (session, "attachments"), source.gateway_id,
+            )
+            references.append(file_id)
+            return _tool("read_file", {"path": file_id}, "call_attachment_media")
+        assert len(results) == 1
+        wire = json.dumps(results, ensure_ascii=False)
+        assert base64.b64encode(original).decode() in wire and "image/png" in wire, wire
+        assert "invalid_encoding" not in wire
+        replies[:] = results
+        return {"content": "附件原件经原 owner 读取并完整投影给支持图像的 Provider。"}
+
+    model.response_callback = reply
+    accepted = await source.client.post(f"/api/v1/sessions/{session}/messages", json={
+        "message": {"content": "artifact-media-trigger", "attachments": [{
+            "file_id": "inline:media.png", "name": "media.png", "content_type": "image/png",
+            "data_url": "data:image/png;base64," + base64.b64encode(original).decode(),
+        }]}, "run": {"mode": "single_agent", "agent_id": "default"},
+    })
+    assert accepted.status_code == 200, accepted.text
+    await _completed(source.client, accepted.json()["data"]["job_id"])
+    assert len(references) == len(replies) == 1
+    file_id = references[0]
+    await asyncio.to_thread(source.restart_backend)
+    receipts = []
+    for variant in ("original", "thumbnail"):
+        response = await source.client.get(f"/api/v1/sessions/{session}/attachments/content", params={
+            "file_id": file_id, "variant": variant, "max_edge": 512,
+        })
+        assert response.status_code == 200, response.text
+        assert response.headers["X-Request-ID"]
+        if variant == "original":
+            assert response.content == original and response.headers["content-type"] == "image/png"
+        else:
+            with Image.open(BytesIO(response.content)) as thumbnail:
+                assert thumbnail.size == (512, 341)
+        receipts.append({"variant": variant, "bytes": len(response.content), "mime": response.headers["content-type"]})
+    navigation = await source.client.post("/api/v1/resources/navigation", json={
+        "uri": file_id, "operation": "read", "read_format": "auto",
+    })
+    assert navigation.status_code == 200, navigation.text
+    assert base64.b64decode(navigation.json()["data"]["content"]) == original
+    assert navigation.json()["data"]["content_hash"] == "sha256:" + hashlib.sha256(original).hexdigest()
+    assert navigation.headers["X-Request-ID"] == navigation.json()["request_id"]
+    assert all(str(node.workspace) not in json.dumps(model.requests) for node in nodes.values())
+    deleted = await submit_navigation_operation(source.client, "delete_session", target_node_id=session, wait_for_settlement=True)
+    assert deleted["state"] == "committed" and deleted["settlement"] == "settled"
+    missing = await source.client.get(f"/api/v1/sessions/{session}/attachments/content", params={"file_id": file_id, "variant": "original"})
+    assert missing.status_code == 404, missing.text
+    assert missing.json()["detail"] == f"Session {session} not found"
+    (artifacts / "model-attachment-uri.json").write_text(json.dumps({"uri": file_id, "media": replies, "variants": receipts,
+        "deletion": deleted, "after_delete": missing.json()}, ensure_ascii=False, indent=2) + "\n")

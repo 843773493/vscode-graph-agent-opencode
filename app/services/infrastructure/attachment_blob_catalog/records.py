@@ -111,6 +111,7 @@ class ForkAttachmentSnapshot:
     source_session_id: str
     source_thread_id: str
     target_attachment_id: str
+    target_file_id: str
     target_owner_ref_id: str
     # 目标消费 scope；复用 main 正文时不等于下方保活 Thread。
     target_session_id: str

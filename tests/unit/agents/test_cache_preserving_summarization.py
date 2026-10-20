@@ -187,7 +187,7 @@ def _make_preflight_middleware(
     middleware._backend = object()  # type: ignore[attr-defined]
     middleware._offload_to_backend = (  # type: ignore[attr-defined]
         lambda backend, messages: offloaded.append(messages)
-        or "/session-artifacts/ses_preflight/context/thr_preflight/history.md"
+        or "/.boxteam/test-compaction-history.md"
     )
     return middleware
 
@@ -1196,7 +1196,7 @@ def test_compaction_references_callable_history_tool_without_persisting_archive_
 
         @staticmethod
         def _offload_to_backend(*_):
-            return "/session-artifacts/ses_relative/context/thr_relative/history.md"
+            return "/.boxteam/test-compaction-history.md"
 
         @staticmethod
         def _create_cache_preserving_summary(*_):
@@ -1279,7 +1279,7 @@ def test_forced_compaction_summary_failure_falls_back_to_original_context() -> N
 
         @staticmethod
         def _offload_to_backend(*_) -> str:
-            return "session-artifacts/test/context/thr_test/history.md"
+            return "/.boxteam/test-compaction-history.md"
 
         @staticmethod
         def _create_cache_preserving_summary(*_) -> str:
@@ -1337,7 +1337,7 @@ async def test_forced_compaction_async_summary_failure_falls_back_to_original_co
 
         @staticmethod
         async def _aoffload_to_backend(*_) -> str:
-            return "session-artifacts/test/context/thr_test/history.md"
+            return "/.boxteam/test-compaction-history.md"
 
         @staticmethod
         async def _acreate_cache_preserving_summary(*_) -> str:
@@ -1456,7 +1456,7 @@ async def test_async_compaction_uses_context_activity_handler(preflight_runtime:
 
         @staticmethod
         async def _aoffload_to_backend(*_: object) -> str:
-            return "session-artifacts/test/context/thr_test/history.md"
+            return "/.boxteam/test-compaction-history.md"
 
         @staticmethod
         async def _acreate_cache_preserving_summary(*_: object) -> str:

@@ -382,7 +382,7 @@ describe("上下文分支候选与冻结重试", () => {
     await act(async () => { await mounted.hook().submitForkDialog(request); });
     expect(submissions).toEqual([]);
     const current = point({ anchor_item_id: null, resource_mode: "full_rollout_copy", resources: [{
-      resource_uri: "boxteam-session://ses-source/attachments/att-current", name: "当前附件",
+      resource_uri: "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/session/ses_526468c69b637b128bacbc68e83b284b/attachments/att_b7ce3abba40fd6a19282a0da38ea7c9d", name: "当前附件",
       content_type: "text/plain", availability: "available", required_for_context: false,
     }] });
     await act(async () => { finishCurrent(current); await pendingCurrent; });

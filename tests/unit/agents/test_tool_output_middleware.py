@@ -7,6 +7,8 @@ from pathlib import Path
 from langchain_core.messages import ToolMessage
 
 from app.agents.tool_output_middleware import ToolOutputMiddleware
+from app.core.resource_uri import session_artifact_uri
+from app.core.workspace_identity import read_workspace_id
 from app.services.infrastructure.tool_output_store import (
     TOOL_OUTPUT_ARTIFACT_KEY,
     ToolOutputStore,
@@ -74,10 +76,10 @@ def test_tool_output_store_persists_exact_large_result_and_returns_preview(
     assert reference["type"] == "tool_output"
     output_name = Path(str(reference["read_path"])).name
     assert reference["path"] == (
-        f"boxteam-session://{session_id}/tool-results/{output_name}"
+        session_artifact_uri(read_workspace_id(tmp_path), session_id, "tool-results", output_name)
     )
     assert reference["read_path"] == (
-        f"session-artifacts/{session_id}/tool-results/{output_name}"
+        reference["path"]
     )
     assert reference["tool_name"] == "large_tool"
     assert reference["tool_call_id"] == "call-large"
@@ -196,3 +198,26 @@ def test_tool_output_middleware_uses_custom_target_name(
     reference = extract_tool_output_reference(result)
     assert reference is not None
     assert reference["tool_name"] == "large_custom_tool"
+
+
+def test_tool_output_uri_reopens_after_owner_restart_and_rejects_other_session(tmp_path, session_bundle_factory):
+    import pytest
+
+    session_id = "ses_019bd0aa8bb2784aaadbe51563ee17f0"
+    session_bundle_factory(tmp_path / ".boxteam/sessions", session_id)
+    store = ToolOutputStore(workspace_root=tmp_path, max_lines=8, max_bytes=1024)
+    body = "hit\r\n" * 1000
+    bounded = store.bound(session_id=session_id, tool_name="large", tool_call_id="call-reopen",
+                          message=ToolMessage(content=body, tool_call_id="call-reopen"))
+    reference = extract_tool_output_reference(bounded)
+    assert reference["path"] == reference["read_path"]
+    cold = ToolOutputStore(workspace_root=tmp_path)
+    assert cold.read(session_id, reference["path"], len(body.encode())).data == body.encode()
+    with pytest.raises(PermissionError, match="当前工作区会话"):
+        cold.read("ses_019bc4518d0079d3a53e974eea6f21a9", reference["path"], 10000)
+    path = store._path_resolver.resolve_session_node(session_id) / "tool-results"
+    original = path.with_name("original-results")
+    path.rename(original)
+    path.symlink_to(original, target_is_directory=True)
+    with pytest.raises(PermissionError, match="符号链接"):
+        cold.read(session_id, reference["path"], 10000)

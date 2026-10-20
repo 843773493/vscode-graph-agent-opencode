@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
 from deepagents.backends.state import StateBackend
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.middleware.summarization import SummarizationToolMiddleware
@@ -81,6 +82,7 @@ def _build_middleware(
         backend=StateBackend(),
         workspace_root=tmp_path,
         resource_navigation=MagicMock(),
+        artifact_reader=MagicMock(),
         text_mutations=MagicMock(),
         permissions=None,
         resolved_skills=skill_catalog,
@@ -145,15 +147,27 @@ def test_workspace_skills_uses_compact_project_template(tmp_path):
     assert "quantum computing" not in middleware.system_prompt_template
 
 
-def test_denylist_removes_tool_specific_middleware_and_prompts(tmp_path):
+@pytest.mark.parametrize("deny_history", [False, True])
+def test_denylist_removes_tool_specific_middleware_and_prompts(tmp_path, deny_history):
+    manager = ContextSourceManager()
+    denied = {"write_todos", "task", "compact_conversation", "read_file"}
+    if deny_history:
+        denied.add("read_compaction_history")
     middleware = _build_middleware(
         tmp_path,
-        denylist={"write_todos", "task", "compact_conversation", "read_file"},
+        denylist=denied,
         skill_catalog=_build_skill_catalog(tmp_path),
+        context_source_manager=manager,
     )
 
     assert not any(isinstance(item, TodoListMiddleware) for item in middleware)
-    assert not any(isinstance(item, SummarizationToolMiddleware) for item in middleware)
+    compact = _find_middleware(middleware, SummarizationToolMiddleware)
+    assert {tool.name for tool in compact.tools} == (
+        set() if deny_history else {"read_compaction_history"}
+    )
+    sources = {source.descriptor.source_id for source in manager.prepare_sources().sources}
+    assert "instruction:compact-tool-usage" not in sources
+    assert "instruction:todo-list" not in sources
 
     skills = _find_middleware(middleware, WorkspaceSkillsMiddleware)
     assert skills.system_prompt_template is None
@@ -163,9 +177,7 @@ def test_denylist_removes_tool_specific_middleware_and_prompts(tmp_path):
         for item in middleware
         for tool in getattr(item, "tools", [])
     }
-    assert not exposed_tool_names.intersection(
-        {"write_todos", "task", "compact_conversation", "read_file"}
-    )
+    assert not exposed_tool_names.intersection(denied)
 
 
 def test_filesystem_middleware_is_omitted_when_all_its_tools_are_denied(tmp_path):

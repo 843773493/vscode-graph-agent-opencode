@@ -11,12 +11,15 @@ from pathlib import Path
 
 from langchain_core.messages import ToolMessage
 
+from app.abstractions.resource_file_content import ResourceFileContent
 from app.core.path_utils import get_session_path_resolver
+from app.core.resource_uri import parse_session_artifact_uri, session_artifact_uri
+from app.core.trace_middleware import get_current_gateway_id
+from app.core.workspace_identity import read_workspace_id
 
 DEFAULT_MAX_OUTPUT_LINES = 2_000
 DEFAULT_MAX_OUTPUT_BYTES = 50 * 1024
 TOOL_OUTPUT_ARTIFACT_KEY = "tool_output"
-SESSION_ARTIFACT_SCHEME = "boxteam-session://"
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,14 +84,12 @@ class ToolOutputStore:
             tool_call_id=tool_call_id,
         )
         _write_exact_output(output_path, encoded)
-        relative_path = (
-            f"{SESSION_ARTIFACT_SCHEME}{session_id}/tool-results/{output_path.name}"
-        )
-        read_path = f"session-artifacts/{session_id}/tool-results/{output_path.name}"
+        relative_path = session_artifact_uri(read_workspace_id(self._workspace_root), session_id, "tool-results", output_path.name,
+                                            gateway_authority=get_current_gateway_id())
         reference = ToolOutputReference(
             type="tool_output",
             path=relative_path,
-            read_path=read_path,
+            read_path=relative_path,
             tool_name=tool_name,
             tool_call_id=tool_call_id,
             byte_count=len(encoded),
@@ -98,7 +99,6 @@ class ToolOutputStore:
         )
         marker = (
             f"... 工具输出过大，完整内容已保存到 {relative_path} ...\n"
-            f"模型读取路径：{read_path}\n"
             "请先用 grep 搜索该路径，再用 read_file 按行分段读取。"
         )
         preview = _bounded_structured_preview(
@@ -138,8 +138,23 @@ class ToolOutputStore:
     def _output_path(self, *, session_id: str, tool_call_id: str) -> Path:
         session_root = self._path_resolver.resolve_session_node(session_id)
         output_dir = session_root / "tool-results"
+        if output_dir.is_symlink():
+            raise PermissionError("工具结果目录不能是符号链接")
         filename_digest = hashlib.sha256(tool_call_id.encode("utf-8")).hexdigest()[:24]
         return output_dir / f"tool_{filename_digest}.txt"
+
+    def read(self, session_id: str, uri: str, max_bytes: int) -> ResourceFileContent:
+        parsed = parse_session_artifact_uri(uri, local_gateway_id=get_current_gateway_id())
+        if (parsed.gateway_authority is not None or parsed.scope_id != read_workspace_id(self._workspace_root)
+                or parsed.tail_segments[:2] != (session_id, "tool-results")):
+            raise PermissionError("工具结果引用不属于当前工作区会话")
+        directory = self._path_resolver.resolve_session_node(session_id) / "tool-results"
+        path = directory / parsed.tail_segments[2]
+        if directory.is_symlink() or path.is_symlink():
+            raise PermissionError("工具结果及其目录不能是符号链接")
+        with path.open("rb") as stream:
+            data = stream.read(max_bytes + 1)
+        return ResourceFileContent(data=data, content_type="text/plain")
 
 
 def extract_tool_output_reference(message: object) -> dict[str, object] | None:

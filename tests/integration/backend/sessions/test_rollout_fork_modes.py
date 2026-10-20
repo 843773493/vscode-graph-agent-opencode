@@ -8164,7 +8164,7 @@ async def test_http_fork_reply_preserves_committed_copy_across_target_delete(
         assert (snapshot.target_session_id, snapshot.target_thread_id, snapshot.target_owner_thread_id) == (target_session_id, target_thread_id, target_thread_id)
         assert (snapshot.digest, snapshot.length, snapshot.variant) == (digest, len(body), "original")
         assert snapshot.claim_id is not None and snapshot.availability == "available"
-        target_uri = f"boxteam-session://{target_session_id}/attachments/{snapshot.target_attachment_id}"
+        target_uri = snapshot.target_file_id
         expected_resources = [{
             "resource_uri": snapshot.source_file_id, "action": "retain_reference", "availability": "available",
             "target_uri": target_uri, "reason": None,

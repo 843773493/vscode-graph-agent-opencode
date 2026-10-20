@@ -9,6 +9,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime
 
+from app.core.resource_uri import parse_session_artifact_uri
 from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
     BlobIdentity,
 )
@@ -86,7 +87,10 @@ class ForkAttachmentClaimsMixin:
                             (datetime.now(UTC).isoformat(), snapshot.blob_id),
                         )
                 encoded = json.dumps(asdict(snapshot), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-                target_file_id = f"boxteam-session://{snapshot.target_session_id}/attachments/{snapshot.target_attachment_id}"
+                target_file_id = snapshot.target_file_id
+                target = parse_session_artifact_uri(target_file_id)
+                if target.tail_segments != (snapshot.target_session_id, "attachments", snapshot.target_attachment_id):
+                    raise RuntimeError("fork attachment target URI 与冻结身份不一致")
                 for alias in dict.fromkeys((snapshot.source_file_id, *snapshot.source_file_aliases, target_file_id)):
                     mapping = connection.execute(
                         "SELECT snapshot_json FROM fork_attachment_mappings WHERE copy_operation_id=? AND source_file_id=?",
@@ -294,6 +298,7 @@ class ForkAttachmentClaimsMixin:
 
     def project_fork_attachment(
         self, *, target_session_id: str, target_thread_id: str, source_file_id: str,
+        workspace_id: str, gateway_id: str | None,
     ) -> dict[str, str]:
         """只投影精确目标 Thread 的冻结 alias，并核当前 owner ref 是否仍保活。"""
         connection = self._connected()
@@ -313,20 +318,29 @@ class ForkAttachmentClaimsMixin:
                 (snapshot.claim_id, snapshot.target_owner_ref_id),
             ).fetchone() is not None
             return {
-                "file_id": f"boxteam-session://{target_session_id}/attachments/{snapshot.target_attachment_id}",
+                "file_id": snapshot.target_file_id,
                 "availability": "available" if snapshot.availability == "available" and published and owner is not None and tuple(owner) == (
                     "active", "available", snapshot.target_attachment_id, snapshot.blob_id, snapshot.digest,
                     snapshot.variant, snapshot.target_item_ref, snapshot.digest, snapshot.length,
                 ) else "unavailable",
             }
+        if "://" not in source_file_id:
+            return {"file_id": source_file_id, "availability": "unavailable"}
+        source = parse_session_artifact_uri(source_file_id, local_gateway_id=gateway_id)
+        if source.session_artifact_kind != "attachments":
+            raise ValueError("附件投影必须引用附件 owner 的资源")
+        if (source.gateway_authority is not None or source.scope_id != workspace_id
+                or source.tail_segments[0] != target_session_id):
+            # 未发布映射的外部引用仍可展示，但没有目标 owner 的可读正文。
+            return {"file_id": source_file_id, "availability": "unavailable"}
         owner = connection.execute(
             "SELECT owner.state,blob.availability FROM attachment_owner_refs owner "
             "JOIN attachment_blobs blob ON blob.blob_id=owner.blob_id "
             "WHERE owner.owner_session_id=? AND owner.owner_thread_id=? "
-            "AND ?='boxteam-session://' || owner.owner_session_id || '/attachments/' || owner.attachment_id "
+            "AND owner.attachment_id=? "
             "AND NOT EXISTS (SELECT 1 FROM fork_attachment_claims claim "
             "WHERE claim.target_owner_ref_id=owner.owner_ref_id AND claim.state IN ('preparing','owner_reserved'))",
-            (target_session_id, target_thread_id, source_file_id),
+            (target_session_id, target_thread_id, source.tail_segments[2]),
         ).fetchone()
         return {"file_id": source_file_id,
                 "availability": "available" if owner is not None and tuple(owner) == ("active", "available") else "unavailable"}

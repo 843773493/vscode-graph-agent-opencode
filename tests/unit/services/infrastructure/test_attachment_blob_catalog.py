@@ -32,6 +32,7 @@ from app.agents.graph_binding import (
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex
+from app.core.resource_uri import parse_session_artifact_uri, session_artifact_uri
 from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_catalog_store.contracts import ForkSourceCaptureRecord
 from app.core.session_control_store import SessionControlStore
@@ -130,7 +131,7 @@ def fork_capture(tmp_path: Path, session_bundle_factory):
         target_session_id=SESSION_B, target_thread_id=resolver.main_thread_id(SESSION_B),
         snapshot_id="1" * 32, snapshot_relative_locator="fork-source-captures/" + "1" * 32,
         fork_id="2" * 32, materialization_id="3" * 32,
-        request_json=json.dumps({"resources": [], "creation_kind": "new_session_main",
+        request_json=json.dumps({"resources": [], "creation_kind": "new_session_main", "target_gateway_id": get_current_gateway_id(),
                                  "target_main_thread_id": resolver.main_thread_id(SESSION_B),
                                  "source_storage_domain_id": resolver.catalog_store.get_node(SESSION_A).workspace_id,
                                  "target_storage_domain_id": resolver.catalog_store.get_node(SESSION_B).workspace_id}),
@@ -478,14 +479,14 @@ async def test_fork_projects_generated_attachment_blocks_without_mutating_user_t
     await store.reserve_copy_attachments(record, None, snapshots)
     assert store.project_attachment(SESSION_B, record.target_thread_id, ref.file_id)["availability"] == "unavailable"
     with pytest.raises(FileNotFoundError, match="尚未完成发布"):
-        store.read(SESSION_B, f"boxteam-session://{SESSION_B}/attachments/{captured.target_attachment_id}")
+        store.read(SESSION_B, captured.target_file_id)
     await store.finalize_copy_attachments(record, publication_preimage_hash=record.preimage_hash)
     storage, calls = fork_attachment_storage
     message = message_to_dict(HumanMessage(content=built.content, response_metadata={"attachments": [ref.model_dump(mode="json", exclude={"data_url"})]}))
     original = json.dumps(message, sort_keys=True)
     calls.clear()
     projected = storage.project_message_attachments(SESSION_B, record.target_thread_id, message)
-    target = f"boxteam-session://{SESSION_B}/attachments/{captured.target_attachment_id}"
+    target = captured.target_file_id
     assert projected["data"]["content"][0]["text"] == user_text
     manifest = projected["data"]["content"][1]
     assert manifest["metadata"]["file_id"] == manifest["metadata"]["path"] == target
@@ -519,7 +520,7 @@ async def test_fork_attachment_missing_bytes_respects_required(fork_capture, req
         assert snapshots[0].claim_id is None
         assert store._catalog.fork_attachment_claim_ids(record.copy_operation_id) == ()
         projection = store.project_attachment(SESSION_B, record.target_thread_id, ref.file_id)
-        assert projection == {"file_id": f"boxteam-session://{SESSION_B}/attachments/{snapshots[0].target_attachment_id}", "availability": "unavailable"}
+        assert projection == {"file_id": snapshots[0].target_file_id, "availability": "unavailable"}
         mappings = store._catalog._connected().execute("SELECT source_file_id,snapshot_json FROM fork_attachment_mappings WHERE copy_operation_id=?", (record.copy_operation_id,)).fetchall()
         assert {row[0] for row in mappings} == {ref.file_id, projection["file_id"]}
         assert all(json.loads(row[1])["availability"] == "unavailable" for row in mappings)
@@ -628,10 +629,13 @@ def test_resolve_blob_path_rejects_caller_supplied_escape(tmp_path: Path) -> Non
 @pytest.mark.parametrize(
     "file_id",
     [
-        f"boxteam-session://{SESSION_A}/attachments/../../etc/passwd",
-        f"boxteam-session://{SESSION_A}/attachments/att_1/../x",
-        f"boxteam-session://{SESSION_A}/other/att_1",
-        f"boxteam-session://{SESSION_A}/attachments",
+        f"boxteam://workspace/test/resources/session/{SESSION_A}/attachments/../../etc/passwd",
+        f"boxteam://workspace/test/resources/session/{SESSION_A}/attachments/att_1/../x",
+        f"boxteam://workspace/test/resources/session/{SESSION_A}/other/att_1",
+        f"boxteam://workspace/test/resources/session/{SESSION_A}/attachments",
+        f"boxteam://workspace/test/resources/session/{SESSION_A}/attachments/att_{'1' * 32}?owner=other",
+        f"boxteam://workspace/test/resources/session/{SESSION_A}/attachments/att_{'1' * 32}#other",
+        f"boxteam-session://{SESSION_A}/attachments/att_{'1' * 32}",
         "/etc/passwd",
     ],
 )
@@ -642,7 +646,7 @@ def test_parse_logical_file_id_rejects_traversal_and_foreign(file_id: str) -> No
 
 def test_parse_logical_file_id_rejects_other_session() -> None:
     with pytest.raises(ValueError, match="不属于指定会话"):
-        parse_logical_file_id(SESSION_B, f"boxteam-session://{SESSION_A}/attachments/att_1")
+        parse_logical_file_id(SESSION_B, session_artifact_uri("019d1b4a-1111-7000-8000-000000000001", SESSION_A, "attachments", "att_" + "1" * 32))
 
 
 # ----------------------------------------------------------------------
@@ -662,7 +666,7 @@ async def test_persist_inline_writes_date_bucketed_blob_and_reads_back(
     )[0]
 
     assert stored.data_url is None
-    assert stored.file_id.startswith(f"boxteam-session://{SESSION_A}/attachments/att_")
+    assert parse_session_artifact_uri(stored.file_id).tail_segments[:2] == (SESSION_A, "attachments")
     blobs = _blob_files(tmp_path)
     assert len(blobs) == 1
     identity = compute_blob_identity(payload)
@@ -767,7 +771,7 @@ async def test_relative_path_exposes_logical_ref_not_physical_locator(
 
     relative = store.relative_path(SESSION_A, stored.file_id)
     assert relative == stored.file_id
-    assert relative.startswith(f"boxteam-session://{SESSION_A}/attachments/att_")
+    assert parse_session_artifact_uri(relative).tail_segments[:2] == (SESSION_A, "attachments")
     assert ".boxteam/attachments" not in relative
     store.close()
 
@@ -1172,7 +1176,7 @@ async def test_cross_domain_fork_import_reuses_verified_target_blob_without_stre
         )
         record = replace(initial, target_thread_id=target_thread, request_json=json.dumps({
             **request.model_dump(mode="json"), "target_main_thread_id": target_thread,
-            "source_storage_domain_id": source_domain, "target_storage_domain_id": target_domain,
+            "source_storage_domain_id": source_domain, "target_storage_domain_id": target_domain, "target_gateway_id": get_current_gateway_id(),
         }))
         snapshots = source.capture_fork_attachments(
             record, same_storage_owner=False, references=((source_ref.file_id, True),),
@@ -1204,3 +1208,23 @@ async def test_cross_domain_fork_import_reuses_verified_target_blob_without_stre
         transport.fork_transfer.assert_not_awaited()
     finally:
         target.close()
+
+
+@pytest.mark.asyncio
+async def test_model_attachment_capability_normalizes_only_current_gateway(attachment_tool_owner):
+    case = attachment_tool_owner
+    gateway = "gateway_332f92ee6191880e797569a47e22922b"
+    parsed = parse_session_artifact_uri(case.ref.file_id)
+    read = {"thread_id": case.owner.thread_id, "tool_call_id": case.call_id, "model_call_id": case.model_call_id}
+    token = set_current_gateway_id(gateway)
+    try:
+        qualified = session_artifact_uri(parsed.scope_id, SESSION_A, "attachments", parsed.tail_segments[-1], gateway_authority=gateway)
+        assert case.saver.read_tool_call_attachment(SESSION_A, file_id=qualified, **read).data == b"first\noriginal attachment\n"
+        for foreign in (
+            qualified.replace(gateway, "gateway_ce27c875d842690955440795c9de8a35"),
+            qualified.replace(parsed.scope_id, "019d1b4a-1111-7000-8000-000000000001"),
+        ):
+            with pytest.raises(PermissionError, match="原始 assembly"):
+                case.saver.read_tool_call_attachment(SESSION_A, file_id=foreign, **read)
+    finally:
+        reset_current_gateway_id(token)

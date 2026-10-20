@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from typing import BinaryIO
 
 import pytest
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
@@ -77,7 +78,14 @@ def test_integrity_failure_reports_session_thread_path_and_releases_handles(
         return connection
 
     read_locks: list[rollout_index_reads._RolloutFileLock] = []
+    opened_lock_handles: list[BinaryIO] = []
     original_file_lock = rollout_index_reads._RolloutFileLock
+    original_open_handle = original_file_lock._open_handle
+
+    def track_lock_handle(lock: rollout_index_reads._RolloutFileLock) -> BinaryIO:
+        handle = original_open_handle(lock)
+        opened_lock_handles.append(handle)
+        return handle
 
     def track_file_lock(
         path: Path,
@@ -89,6 +97,7 @@ def test_integrity_failure_reports_session_thread_path_and_releases_handles(
         return file_lock
 
     monkeypatch.setattr(storage.storage, "_connect", track_connection)
+    monkeypatch.setattr(original_file_lock, "_open_handle", track_lock_handle)
     monkeypatch.setattr(rollout_index_reads, "_RolloutFileLock", track_file_lock)
 
     with pytest.raises(RuntimeError, match="integrity_check 失败") as raised:
@@ -97,7 +106,8 @@ def test_integrity_failure_reports_session_thread_path_and_releases_handles(
     assert str(index_path) in str(raised.value)
     assert len(opened_connections) == 1
     assert len(read_locks) == 1
-    assert read_locks[0]._handle is None
+    assert len(opened_lock_handles) == 1
+    assert opened_lock_handles[0].closed
     with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
         opened_connections[0].execute("SELECT 1")
 

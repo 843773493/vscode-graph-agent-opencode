@@ -14,11 +14,14 @@ from langgraph.checkpoint.base import (
 )
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
+from app.abstractions.resource_file_content import ResourceFileContent
 from app.abstractions.turn_terminal_status import ToolResultCompletion
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.history_loading import HistoryLoadingConfig
 from app.core.path_utils import get_session_path_resolver
+from app.core.resource_uri import parse_session_artifact_uri
 from app.core.sqlite_state import utc_now_text
+from app.core.trace_middleware import get_current_gateway_id
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
@@ -38,7 +41,6 @@ from app.schemas.internal_v2.turn import (
 )
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
-    StoredAttachmentContent,
 )
 from app.services.infrastructure.node_debug.session.fork import (
     NodeDebugWorkspaceForkConfig,
@@ -621,12 +623,13 @@ class RolloutCheckpointSaver(
     def read_tool_call_attachment(
         self, session_id: str, *, thread_id: str, tool_call_id: str,
         model_call_id: str, file_id: str, checkpoint_ns: str = "",
-    ) -> StoredAttachmentContent:
+    ) -> ResourceFileContent:
         """附件 capability 只来自 emitting model-call 的已封存 selection。"""
         from app.services.mapping.itemized.selection import resolve_selected_item
 
         if self._attachment_store is None:
             raise RuntimeError("附件工具未装配唯一 AttachmentBlobStore")
+        target = parse_session_artifact_uri(file_id, local_gateway_id=get_current_gateway_id()).display_uri
         assembly = self.load_tool_call_context_assembly(
             session_id, thread_id=thread_id, tool_call_id=tool_call_id,
             model_call_id=model_call_id, checkpoint_ns=checkpoint_ns,
@@ -646,7 +649,10 @@ class RolloutCheckpointSaver(
             if not isinstance(payload, Mapping):
                 continue
             attachments = payload.get("attachments", ())
-            if any(isinstance(ref, Mapping) and ref.get("file_id") == file_id for ref in attachments):
+            if any(isinstance(ref, Mapping) and isinstance(ref.get("file_id"), str)
+                   and "://" in ref["file_id"]
+                   and parse_session_artifact_uri(ref["file_id"], local_gateway_id=get_current_gateway_id()).display_uri == target
+                   for ref in attachments):
                 return self._attachment_store.read(session_id, file_id, owner_thread_id=thread_id)
         raise PermissionError("附件未属于当前工具原始 assembly 的 item/view membership")
 

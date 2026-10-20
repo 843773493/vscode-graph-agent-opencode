@@ -394,9 +394,9 @@ def test_resolve_fails_on_capability_hash_drift(
 def test_deep_agent_graph_binding_is_descriptor_stable() -> None:
     binding = DEEP_AGENT_GRAPH_BINDING
     assert binding.graph_id == DEEP_AGENT_GRAPH_ID == "deep-agent"
-    assert binding.graph_revision == 14
+    assert binding.graph_revision == 15
     assert "PatchToolCallsMiddleware" not in DEEP_AGENT_MIDDLEWARE_STACK
-    assert binding.graph_schema_hash == "sha256:f965a2099048704a2a0dfda846f983237466f02da10b40ead0d64c00b31d3c7d"
+    assert binding.graph_schema_hash == "sha256:6c06c21fcefb1ef4c3fb6abf15ee5c745f99086d9b889829a73cd2e9b5652377"
     assert binding.capability_profile_hash == "sha256:c5c064f94d290eed5e016d92c45dd5e1acd6a43753e9fd48296f031412f0b870"
     assert binding.graph_schema_hash == compute_graph_schema_hash(
         graph_id=DEEP_AGENT_GRAPH_ID,
@@ -417,7 +417,7 @@ def test_deep_agent_graph_binding_is_registered_in_process_registry() -> None:
     )
 
 
-@pytest.mark.parametrize("revision", [4, 10, 11, 12, 13])
+@pytest.mark.parametrize("revision", [4, 10, 11, 12, 13, 14])
 def test_previous_graph_revisions_are_unavailable(revision: int) -> None:
     previous = dataclasses.replace(DEEP_AGENT_GRAPH_BINDING, graph_revision=revision)
     with pytest.raises(GraphBindingUnavailableError, match="graph_revision"):

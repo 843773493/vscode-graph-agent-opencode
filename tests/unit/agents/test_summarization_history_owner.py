@@ -172,6 +172,7 @@ async def test_compaction_archives_and_appends_by_session_thread_owner(
             assert f"{own_marker}-round-{round_index}" in content
             assert f"owner-{1 - owner_index}" not in content
             assert not (archive_case.session_dir / "context" / "history.md").exists()
+            assert not (archive_case.workspace_root / "session-artifacts").exists()
 
 
 @pytest.mark.parametrize(

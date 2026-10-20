@@ -14,6 +14,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from app.abstractions.communication import SessionCommunicationProtocol
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
+from app.abstractions.resource_file_content import ResourceFileContent
 from app.abstractions.session_context import WorkspaceSessionContextClientProtocol
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.session_target import SessionTargetResolverProtocol
@@ -36,6 +37,7 @@ from app.core.path_utils import (
     workspace_context,
 )
 from app.core.phase_observer import observe_phase
+from app.core.resource_uri import parse_session_artifact_uri
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
@@ -156,6 +158,7 @@ from app.services.infrastructure.session_message_idempotency_store import (
 from app.services.infrastructure.team.store import TeamStore
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from app.services.infrastructure.tool_catalog_service import ToolCatalogService
+from app.services.infrastructure.tool_output_store import ToolOutputStore
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
 from app.services.infrastructure.tool_service import ToolService
 from app.services.infrastructure.trace_event_recorder import TraceEventRecorder
@@ -697,6 +700,15 @@ def _build_app_container(
         store=session_changes_store,
     )
     tool_selection_store = ToolSelectionStore(boxteam_root=resolved_boxteam_root)
+    artifact_outputs = ToolOutputStore(workspace_root=resolved_workspace_root)
+
+    def read_artifact(uri: str, max_bytes: int) -> ResourceFileContent:
+        artifact = parse_session_artifact_uri(uri)
+        session_id = artifact.tail_segments[0]
+        if artifact.session_artifact_kind == "attachments":
+            return attachment_blob_store.read(session_id, uri)
+        return artifact_outputs.read(session_id, uri, max_bytes)
+
     resource_platform = bootstrap_resource_platform(
         workspace_root=resolved_workspace_root,
         project_root=resolved_project_root,
@@ -707,6 +719,7 @@ def _build_app_container(
         ),
         gateway_token_supplier=get_gateway_local_token,
         file_paths=workspace_service.file_paths,
+        artifact_reader=read_artifact,
     )
     workspace_file_watch_service = resource_platform.file_watch_service
     workspace_file_resource_registry = resource_platform.file_registry

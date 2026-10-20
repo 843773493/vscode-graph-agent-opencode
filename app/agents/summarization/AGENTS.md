@@ -10,6 +10,7 @@
 - `retry.py`：摘要指令构造、媒体剥离、大型工具载荷压缩、overflow 重试中段切分、重试标记与摘要文本校验。
 - `responses.py`：把摘要 handler 的 `ModelResponse` 解释为摘要正文。
 - `middleware.py`：同步 `wrap_model_call` 与异步 `awrap_model_call`/`_awrap_model_call_impl` 两条对等 wrap 链路。
+- 压缩归档只从显式 SessionThread owner 经权威 catalog resolver 取得路径，再交内部工作区 backend；不依赖旧 `session-artifacts` 路由，不公开私有归档路径。
 - `preflight.py`：无 durable owner 装配下的压缩 preflight 显式失败端口。
 - `tool_middleware.py`：`compact_conversation` 工具的缓存优先压缩中间件。
 - `factory.py`：由 `BaseChatModel` + backend + preflight 端口构造中间件。

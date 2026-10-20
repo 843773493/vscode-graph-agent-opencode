@@ -343,3 +343,86 @@ async def test_content_search_preserves_match_position_when_excerpt_is_bounded(n
     assert match.truncated and len(match.text.encode()) <= 32 and "needle" in match.text
     assert text[match.snippet_start_column - 1:].startswith(match.text)
     assert match.uri == result.entries[0].uri == uri + "/long.txt"
+
+
+@pytest.fixture
+def artifact_case(navigation_case):
+    from app.abstractions.resource_file_content import ResourceFileContent
+    from app.core.resource_uri import session_artifact_uri
+
+    owner, _workspace, _uri = navigation_case
+    session_id = "ses_0123456789ab7def8123456789abcdef"
+    uri = session_artifact_uri(WORKSPACE_ID, session_id, "tool-results", "tool_" + "a" * 24 + ".txt")
+    state = {"data": b"hit one\nmiss\nhit two\nhit three\n", "mime": "text/plain", "reads": []}
+
+    def read(uri, maximum):
+        state["reads"].append((uri, maximum))
+        return ResourceFileContent(state["data"], state["mime"])
+
+    return owner, uri, read, state
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_artifact_search_is_single_file_bounded_and_reopenable(artifact_case, synchronous):
+    owner, uri, read, state = artifact_case
+    query = ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query="hit", limit=1)
+    matches, cursor = [], None
+    for _ in range(3):
+        request = query.model_copy(update={"cursor": cursor})
+        page = (owner.navigate_sync(request, local_gateway_id=GATEWAY_ID, artifact_reader=read) if synchronous
+                else await owner.navigate(request, local_gateway_id=GATEWAY_ID, artifact_reader=read))
+        matches.extend((match.line, match.text, match.uri) for match in page.matches)
+        cursor = page.next_cursor
+    assert matches == [(1, "hit one", uri), (3, "hit two", uri), (4, "hit three", uri)]
+    assert cursor is None and not page.truncated
+    filtered = await owner.navigate(query.model_copy(update={"file_glob": "*.json"}), local_gateway_id=GATEWAY_ID, artifact_reader=read)
+    assert not filtered.entries and not filtered.matches
+    data = await owner.navigate(ResourceNavigationRequest(uri=uri, operation="read", line_offset=3, max_lines=1),
+                                local_gateway_id=GATEWAY_ID, artifact_reader=read)
+    assert data.content == "hit two\n"
+    assert data.content_hash == "sha256:" + hashlib.sha256(state["data"]).hexdigest()
+    with pytest.raises(resource_navigation.ResourceUriResolveError, match="私有目录"):
+        await owner.navigate(ResourceNavigationRequest(uri=uri, operation="list"), local_gateway_id=GATEWAY_ID, artifact_reader=read)
+
+
+@pytest.mark.asyncio
+async def test_artifact_cursor_rejects_changed_bytes_and_query(artifact_case):
+    owner, uri, read, state = artifact_case
+    request = ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query="hit", limit=1)
+    first = await owner.navigate(request, local_gateway_id=GATEWAY_ID, artifact_reader=read)
+    for changed in ({"query": "miss"}, {"file_glob": "*.json"}, {"max_bytes": 4}):
+        with pytest.raises(ResourceFileOperationError) as invalid:
+            await owner.navigate(request.model_copy(update={"cursor": first.next_cursor, **changed}), local_gateway_id=GATEWAY_ID, artifact_reader=read)
+        assert invalid.value.reason == "invalid_cursor"
+    state["data"] += b"hit four\n"
+    with pytest.raises(ResourceFileOperationError) as stale:
+        await owner.navigate(request.model_copy(update={"cursor": first.next_cursor}), local_gateway_id=GATEWAY_ID, artifact_reader=read)
+    assert stale.value.reason == "stale_cursor"
+
+
+@pytest.mark.asyncio
+async def test_artifact_media_uses_owner_mime_and_cannot_bypass_explicit_capability(artifact_case, navigation_case):
+    from app.core.resource_uri import session_artifact_uri
+
+    owner, _uri, read, state = artifact_case
+    uri = session_artifact_uri(WORKSPACE_ID, "ses_0123456789ab7def8123456789abcdef", "attachments", "att_" + "b" * 32)
+    state.update(data=b"\x89PNG\r\n\x1a\n\xff", mime="image/png")
+    owner._artifact_reader = read
+    result = await owner.navigate(ResourceNavigationRequest(uri=uri, operation="read", read_format="auto"), local_gateway_id=GATEWAY_ID)
+    assert (result.media_type, result.mime_type) == ("image", "image/png")
+    assert base64.b64decode(result.content) == state["data"]
+
+    def denied(uri, maximum):
+        raise PermissionError("缺少 emitting model-call 的精确 membership")
+
+    with pytest.raises(resource_navigation.ResourceUriResolveError, match="membership") as denied_result:
+        await owner.navigate(ResourceNavigationRequest(uri=uri, operation="read", read_format="auto"), local_gateway_id=GATEWAY_ID, artifact_reader=denied)
+    assert denied_result.value.reason_code == "capability_denied"
+    assert len(state["reads"]) == 1
+    with pytest.raises(ResourceFileOperationError) as exceeded:
+        await owner.navigate(ResourceNavigationRequest(uri=uri, operation="read", read_format="auto", max_bytes=2), local_gateway_id=GATEWAY_ID)
+    assert exceeded.value.reason == "file_byte_limit"
+    with pytest.raises(ResourceFileOperationError) as encoding:
+        await owner.navigate(ResourceNavigationRequest(uri=uri, operation="read"), local_gateway_id=GATEWAY_ID)
+    assert encoding.value.code == "invalid_encoding"

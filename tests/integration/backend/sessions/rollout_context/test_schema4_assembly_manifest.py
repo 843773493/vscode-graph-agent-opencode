@@ -624,7 +624,7 @@ def test_captured_ref_uses_local_frozen_body_without_live_sibling_fallback(assem
     # live sibling 仍完整可读；冷恢复必须暴露冻结正文冲突，不能在线回源掩盖。
     case.connection.execute("BEGIN")
     bind_captured_namespace(case.connection, HistoricalNamespaceBinding(
-        sibling.session_id, sibling.thread_id, "boxteam-session://captured-source",
+        sibling.session_id, sibling.thread_id, "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/session/ses_0123456789ab7def8123456789abcdef/threads/thr_0123456789ab7def8123456789abcdef",
         "captured-rollout", "f" * 64,
     ))
     case.connection.commit()

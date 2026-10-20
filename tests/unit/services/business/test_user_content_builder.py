@@ -205,7 +205,7 @@ def test_generated_attachment_preview_is_optional_for_capability_routing():
                     "origin": "generated",
                     "kind": "attachment_preview",
                     "schema_version": 1,
-                    "file_id": "boxteam-session://session/attachments/a.png",
+                    "file_id": "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/session/ses_3f3af1ecebbd74108b417ec0d27bbfcb/attachments/att_7f071235805fbf58a2524f77bff76e13",
                 },
             },
         ]

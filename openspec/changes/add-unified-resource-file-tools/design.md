@@ -74,9 +74,13 @@ write/edit/patch 的内容前置使用精确原始 byte `sha256:<hex>` 或该 ow
 
 ### 6. 会话产物仍是业务文件引用
 
-附件与工具结果在 session 模板下公开单文件 URI（模板唯一登记于寻址 owner），保留原业务 ID 和 owner。当前工具输出物理文件名为tool_<digest>.txt，不能把它当成通用身份段；没有独立result ID时由原owner基于现有稳定tool_call_id派生/公布规范引用，物理文件名留在owner内部，不新增通用身份注册库。迁移清点生成器、store/parser、middleware、大输出引用、消息附件、Provider 和 Web/历史 projection，完成后删除旧 scheme 常量/分支。现有附件二进制读取通过原接口保留，不把它扩成通用文件写入能力。不迁旧开发生成数据、不暴露会话私有目录。
+附件与工具结果在 session 模板下公开单文件 URI（模板唯一登记于寻址 owner），保留原业务 ID 和 owner。工具输出沿用原 owner 基于稳定 tool_call_id 派生的 `tool_<24hex>.txt` 业务标识，作为该模板的精确单文件段；它不支持猜测或遍历产物目录，也不暴露物理绝对 locator，不新增通用身份注册库。迁移清点生成器、store/parser、middleware、大输出引用、消息附件、Provider 和 Web/历史 projection，完成后删除旧 scheme 常量/分支。现有附件二进制读取通过原接口保留，不把它扩成通用文件写入能力。不迁旧开发生成数据、不暴露会话私有目录。
 
 现有 `read_file` 经 workspace filesystem backend 返回图片媒体 block，Provider 侧已有 `project_tool_message_content`；Web 的附件 content 接口经 `AttachmentBlobStore.read/read_thumbnail` 返回原件或缩略图。附件的这两条消费者统一从资源 URI 分派到原附件 owner，不能让普通文本的 UTF-8 要求废除既有媒体读取。`original`/`thumbnail` 保留原 owner 参数，URI 只描述同一附件身份；不新增 attachment 工具、URI query/view 解析器或绕过 owner 的 SessionArtifactBackend 私有目录映射。迁移后 workspace 文件读取同样保留既有受支持媒体能力，仍归其工作区文件 owner；首批新增写入仍仅文本。
+
+2026-10-20 产物迁移使用公共 Session 单文件模板，物理删除 `boxteam-session` parser 和 `SessionArtifactBackend`。导航只分派原 owner 的字节/MIME 读取端口，随后与普通文件共用文本/媒体、原字节 hash 和预算投影。模型调用每次显式提供 SessionThread 端口；附件继续核 emitting model-call 的封存 assembly membership，本机限定和未限定 URI 仅按当前 Gateway 规范化，不能由通用 read grant 或容器端口补足授权。工具输出保留原 `tool_<24hex>.txt` 业务引用，在相同 URI 上支持精确读取与有界正文搜索；公开 `path` 和 `read_path` 均承载该 URI，不保留虚拟路径别名。产物不提供目录浏览、glob 或通用修改。
+
+fork 的完整冻结 capture 请求增加目标 Gateway，附件 snapshot 增加 `target_file_id`，与原目标 attachment_id、保活 owner、claim 和 digest 一同冻结；跨端导入必须核对实际目标归属，历史投影与复制结果复用该 URI。未发布映射的外部引用维持明确 unavailable，不因迁移改变原失败披露。原生工作区文件附件输入继续遵循原文件入口，不混入 blob/session 的生命周期。旧开发数据不双读、不自动迁移。工具面登记为 graph revision15，旧 selector 明确拒绝。
 
 ## Risks / Trade-offs
 

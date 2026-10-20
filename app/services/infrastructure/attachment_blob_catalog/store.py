@@ -29,7 +29,6 @@ import hashlib
 import mimetypes
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -37,7 +36,9 @@ from urllib.parse import unquote_to_bytes
 
 from PIL import Image, ImageOps
 
+from app.abstractions.resource_file_content import ResourceFileContent
 from app.core.path_utils import get_session_path_resolver
+from app.core.resource_uri import parse_session_artifact_uri, session_artifact_uri
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_control_store import SessionControlStore
 from app.core.session_control_store.copy_attachment_settlement import (
@@ -48,6 +49,8 @@ from app.core.session_lifecycle_gate import (
     SessionDeletionPendingError,
     SessionLifecycleGate,
 )
+from app.core.trace_middleware import get_current_gateway_id
+from app.core.workspace_identity import read_workspace_id
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
     ATTACHMENT_ROOT_DIRECTORY_NAME,
@@ -73,53 +76,28 @@ __all__ = [
     "ATTACHMENT_ROOT_DIRECTORY_NAME",
     "DERIVED_DIRECTORY_NAME",
     "MAX_ATTACHMENT_BYTES",
-    "SESSION_ATTACHMENT_SCHEME",
     "AttachmentBlobStore",
-    "StoredAttachmentContent",
     "parse_logical_file_id",
 ]
 
-# 附件逻辑定位符 scheme：外部 API/canonical ref 只暴露逻辑引用，不含物理 locator。
-SESSION_ATTACHMENT_SCHEME = "boxteam-session://"
 DERIVED_DIRECTORY_NAME = ".derived"
 MAX_ATTACHMENT_BYTES = 30 * 1024 * 1024
-
-
-@dataclass(frozen=True, slots=True)
-class StoredAttachmentContent:
-    data: bytes
-    content_type: str
 
 
 def _sha256_hex(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _logical_file_id(session_id: str, attachment_id: str) -> str:
-    """逻辑引用：`boxteam-session://{session}/attachments/{attachment_id}`。"""
-    return f"{SESSION_ATTACHMENT_SCHEME}{session_id}/attachments/{attachment_id}"
-
-
 def parse_logical_file_id(session_id: str, file_id: str) -> str:
     """解析逻辑引用并返回 attachment_id；不属于该 session 即失败。"""
-    if not isinstance(file_id, str) or not file_id.startswith(SESSION_ATTACHMENT_SCHEME):
-        raise ValueError(f"附件必须使用会话逻辑定位符: {file_id!r}")
-    remainder = file_id[len(SESSION_ATTACHMENT_SCHEME):]
-    owner, separator, tail = remainder.partition("/")
-    if not separator or owner != session_id:
+    parsed = parse_session_artifact_uri(file_id)
+    if parsed.session_artifact_kind != "attachments" or parsed.tail_segments[0] != session_id:
         raise ValueError("附件逻辑定位符不属于指定会话")
-    prefix, separator, attachment_id = tail.partition("/")
-    if not separator or prefix != "attachments" or not attachment_id:
-        raise ValueError(f"附件逻辑定位符格式无效: {file_id!r}")
-    if "/" in attachment_id or "\\" in attachment_id:
-        raise ValueError(f"附件逻辑定位符格式无效: {file_id!r}")
-    return attachment_id
+    return parsed.tail_segments[2]
 
 
 class AttachmentBlobStore(ForkAttachmentStoreMixin):
     """workspace 级内容寻址附件 store（唯一权威是 catalog.sqlite）。"""
-
-    _parse_logical_file_id = staticmethod(parse_logical_file_id)
 
     def __init__(
         self,
@@ -140,6 +118,16 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
             self._sessions_root
         )
         self._gate = SessionLifecycleGate(self._sessions_root)
+
+    def reference(self, session_id: str, attachment_id: str) -> str:
+        return session_artifact_uri(read_workspace_id(self._workspace_root), session_id, "attachments", attachment_id,
+                                    gateway_authority=get_current_gateway_id())
+
+    def _parse_logical_file_id(self, session_id: str, file_id: str) -> str:
+        parsed = parse_session_artifact_uri(file_id, local_gateway_id=get_current_gateway_id())
+        if parsed.gateway_authority is not None or parsed.scope_id != read_workspace_id(self._workspace_root):
+            raise ValueError("附件资源引用不属于本工作区 owner")
+        return parse_logical_file_id(session_id, file_id)
 
     def close(self) -> None:
         """关闭 catalog 连接。"""
@@ -350,25 +338,25 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
     # 读取
     # ------------------------------------------------------------------
 
-    def read(self, session_id: str, file_id: str, *, owner_thread_id: str | None = None) -> StoredAttachmentContent:
+    def read(self, session_id: str, file_id: str, *, owner_thread_id: str | None = None) -> ResourceFileContent:
         """按逻辑引用读取正文；逐字节复验 digest/length。"""
         ref, blob = self._resolve_published(session_id, file_id, owner_thread_id=owner_thread_id)
         path = self._verified_blob_path(blob.blob_id, blob.relative_locator)
         data = path.read_bytes()
         _verify_content(data, blob.digest, blob.length, blob.blob_id)
         content_type = ref.mime_type or _guess_content_type(path)
-        return StoredAttachmentContent(data=data, content_type=content_type)
+        return ResourceFileContent(data=data, content_type=content_type)
 
     def read_thumbnail(
         self, session_id: str, file_id: str, *, max_edge: int = 512
-    ) -> StoredAttachmentContent:
+    ) -> ResourceFileContent:
         """读取缓存缩略图；首次请求时从原图派生 WebP。"""
         if max_edge < 64 or max_edge > 1024:
             raise ValueError("图片缩略图 max_edge 必须在 64 到 1024 之间")
         source = self.read(session_id, file_id)
         if not source.content_type.startswith("image/"):
             raise ValueError(f"附件不是图片，无法生成缩略图: {file_id}")
-        attachment_id = parse_logical_file_id(session_id, file_id)
+        attachment_id = self._parse_logical_file_id(session_id, file_id)
         derived_root = self._attachments_root / DERIVED_DIRECTORY_NAME
         derived_root.mkdir(parents=True, exist_ok=True)
         target = derived_root / f"{attachment_id}-{max_edge}.webp"
@@ -392,7 +380,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
                     f"附件图片已损坏或不是有效图片，无法生成缩略图: {file_id}"
                 ) from error
             _write_once(target, output.getvalue())
-        return StoredAttachmentContent(
+        return ResourceFileContent(
             data=target.read_bytes(), content_type="image/webp"
         )
 
@@ -417,7 +405,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
                 if projected["availability"] != "available":
                     raise FileNotFoundError(f"当前 Thread 的冻结附件引用不可用: {file_id}")
                 file_id, owner_thread_id = projected["file_id"], snapshot.target_owner_thread_id
-        attachment_id = parse_logical_file_id(session_id, file_id)
+        attachment_id = self._parse_logical_file_id(session_id, file_id)
         ref = self._catalog.get_owner_ref(attachment_id)
         if ref is None:
             raise FileNotFoundError(f"会话附件不存在: {file_id}")
@@ -595,7 +583,7 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin):
             owner_thread_id=thread_id,
         )
         return AttachmentRef(
-            file_id=_logical_file_id(session_id, attachment_id),
+            file_id=self.reference(session_id, attachment_id),
             name=attachment.name,
             content_type=content_type,
         )

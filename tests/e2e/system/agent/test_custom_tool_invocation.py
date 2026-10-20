@@ -21,7 +21,8 @@ from app.agents.tools.testing import (
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.path_utils import get_session_path_resolver
-from app.core.workspace_identity import load_or_create_workspace_id
+from app.core.resource_uri import parse_session_artifact_uri
+from app.core.workspace_identity import load_or_create_workspace_id, read_workspace_id
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -415,11 +416,12 @@ async def test_large_custom_tool_output_is_persisted_and_bounded_for_model(
     assert reference["type"] == "tool_output"
     assert reference["tool_name"] == "large_test_output"
     artifact_uri = str(reference["path"])
-    artifact_prefix = f"boxteam-session://{session_id}/tool-results/"
-    assert artifact_uri.startswith(artifact_prefix)
-    output_name = artifact_uri.removeprefix(artifact_prefix)
+    parsed = parse_session_artifact_uri(artifact_uri)
+    assert parsed.scope_id == read_workspace_id(Path(e2e_workspace_root_path))
+    assert parsed.tail_segments[:2] == (session_id, "tool-results")
+    output_name = parsed.tail_segments[-1]
     assert reference["read_path"] == (
-        f"session-artifacts/{session_id}/tool-results/{output_name}"
+        artifact_uri
     )
     assert reference["byte_count"] == len(LARGE_TEST_OUTPUT.encode("utf-8"))
     assert reference["line_count"] == 2_400
@@ -461,10 +463,7 @@ async def test_large_custom_tool_output_is_persisted_and_bounded_for_model(
     grep_args = tool_start_payloads[grep_call_index].get("args")
     assert isinstance(grep_args, dict)
     assert grep_args.get("pattern") == "retrieval-target"
-    assert grep_args.get("path") in {
-        reference["read_path"],
-        str(Path(reference["read_path"]).parent),
-    }
+    assert grep_args.get("path") == reference["read_path"]
     assert grep_args.get("output_mode") == "content"
     read_args = tool_start_payloads[read_call_index].get("args")
     assert isinstance(read_args, dict)

@@ -2,7 +2,7 @@
 
 Session/thread 附件正文统一走 workspace 内容寻址 blob store
 （:class:`AttachmentBlobStore`）：逻辑引用是
-`boxteam-session://{session_id}/attachments/{attachment_id}`，物理 locator
+统一的 Workspace Session 单文件资源 URI，物理 locator
 只由 catalog 冻结，调用方不得拼路径。非 session 的工作区文件附件仍按显式
 工作区相对/绝对路径解析。
 
@@ -26,9 +26,9 @@ from app.core.path_utils import (
     safe_join,
     validate_workspace_path,
 )
+from app.core.resource_uri import parse_session_artifact_uri
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.infrastructure.attachment_blob_catalog.store import (
-    SESSION_ATTACHMENT_SCHEME,
     AttachmentBlobStore,
 )
 
@@ -50,13 +50,10 @@ VIDEO_FRAME_TIMEOUT_SECONDS = 30
 
 def _session_id_from_file_id(file_id: str) -> str:
     """从逻辑引用取出 owner session id（形态非法即失败）。"""
-    if not file_id.startswith(SESSION_ATTACHMENT_SCHEME):
-        raise ValueError(f"附件必须使用会话逻辑定位符: {file_id!r}")
-    remainder = file_id[len(SESSION_ATTACHMENT_SCHEME):]
-    session_id, separator, _tail = remainder.partition("/")
-    if not separator or not session_id:
-        raise ValueError(f"附件逻辑定位符格式无效: {file_id!r}")
-    return session_id
+    parsed = parse_session_artifact_uri(file_id)
+    if parsed.session_artifact_kind != "attachments":
+        raise ValueError("附件引用不是附件 owner 的单文件资源")
+    return parsed.tail_segments[0]
 
 
 def _resolve_workspace_file(file_id: str, workspace_root: Path | None) -> Path:
@@ -120,7 +117,7 @@ class AttachmentContentService:
         content_type = attachment.content_type
         if content_type is not None:
             return content_type
-        if attachment.file_id.startswith(SESSION_ATTACHMENT_SCHEME):
+        if "://" in attachment.file_id:
             return self._read_session_attachment(attachment).content_type
         file_path = _resolve_workspace_file(
             attachment.file_id, self._workspace_root
@@ -131,9 +128,9 @@ class AttachmentContentService:
         if attachment.data_url:
             raise ValueError(
                 "Agent 运行阶段不接受 data_url 附件；浏览器上传内容必须先持久化为 "
-                f"boxteam-session 定位符: file_id={attachment.file_id!r}"
+                f"资源 URI: file_id={attachment.file_id!r}"
             )
-        if attachment.file_id.startswith(SESSION_ATTACHMENT_SCHEME):
+        if "://" in attachment.file_id:
             session_id = _session_id_from_file_id(attachment.file_id)
             return self._attachment_store.relative_path(
                 session_id, attachment.file_id
@@ -144,7 +141,7 @@ class AttachmentContentService:
         return file_path.relative_to(self._workspace_root).as_posix()
 
     def image_preview_data_url(self, attachment: AttachmentRef) -> str:
-        if attachment.file_id.startswith(SESSION_ATTACHMENT_SCHEME):
+        if "://" in attachment.file_id:
             session_id = _session_id_from_file_id(attachment.file_id)
             preview = self._attachment_store.read_thumbnail(
                 session_id,
@@ -198,7 +195,7 @@ class AttachmentContentService:
         return self._attachment_store.read(session_id, attachment.file_id)
 
     def _read_attachment(self, attachment: AttachmentRef) -> tuple[str, bytes]:
-        if attachment.file_id.startswith(SESSION_ATTACHMENT_SCHEME):
+        if "://" in attachment.file_id:
             stored = self._read_session_attachment(attachment)
             return stored.content_type, stored.data
         file_path = _resolve_workspace_file(

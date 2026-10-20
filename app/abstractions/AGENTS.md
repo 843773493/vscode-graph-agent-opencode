@@ -6,6 +6,7 @@
 
 - 可以新增或调整 Protocol、抽象接口和跨层调用所需的类型定义。
 - 可以收紧协议参数，减少 `Any`、`kwargs` 等模糊边界。
+- `resource_file_content.py` 只定义文件 owner 之间共享的原字节/MIME 值与读取端口；会话授权仍由各业务 owner 校验。
 
 # 不可修改内容
 

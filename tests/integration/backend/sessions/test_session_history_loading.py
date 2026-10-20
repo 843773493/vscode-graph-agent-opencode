@@ -15,7 +15,9 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
+from app.core.resource_uri import session_artifact_uri
 from app.core.session_thread_context import session_thread_owner_scope
+from app.core.workspace_identity import read_workspace_id
 from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.records import (
@@ -409,7 +411,7 @@ async def test_history_user_projection_keeps_canonical_preview_out_of_display_co
 ) -> None:
     session_id = await create_session(integration_client, "用户附件 canonical 投影")
     timestamp = "2026-01-01T00:01:00+00:00"
-    file_id = f"boxteam-session://{session_id}/attachments/preview.png"
+    file_id = session_artifact_uri(read_workspace_id(Path(integration_workspace_root_path)), session_id, "attachments", "att_0123456789abcdef0123456789abcdef")
     user = HumanMessage(
         id="user-attachment-projection",
         content=[

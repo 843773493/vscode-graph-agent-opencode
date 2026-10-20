@@ -31,26 +31,24 @@ FILESYSTEM_SYSTEM_PROMPT = (
     "Workspace files URIs returned by ls and paths returned by glob and grep can be passed unchanged to "
     "read_file, write_file, edit_file, and workspace source-debugging tools. Skill directory/file URIs support ls/read_file/glob/grep "
     "without activation or tracking; only `skill_load` by name activates instructions. "
-    "Never list, glob, grep, or read any `.boxteam` path directly. read_file uses a 1-indexed `line_offset`, "
+    "Session attachment/tool-output URIs permit exact-file reads; tool outputs also permit content search. "
+    "Never access their private directories or modify these artifacts. read_file uses a 1-indexed `line_offset`, "
     "reports truncation, and has explicit byte/response/deadline budgets."
 )
 
 FILESYSTEM_TOOL_DESCRIPTIONS = {
     "ls": (
-        "List a directory using a workspace-relative/native path or a resource URI; use `.` for the workspace root. "
-        "Returns bounded JSON entries with reusable URIs, truncation_reason and next_cursor. "
-        "Continue with the same target and limits; this is a live directory view, not a historical snapshot."
+        "List a workspace-relative/native directory or resource URI; `.` is the workspace root. "
+        "Returns bounded JSON with reusable URIs, truncation_reason and next_cursor. "
+        "Continue with the same target and limits; directories are live, not snapshots."
     ),
     "read_file": (
-        "Read a file using a workspace-relative/native path or a resource URI. Paths returned by ls, glob, "
-        "and grep are reusable unchanged. Use the 1-indexed `line_offset` and "
-        "optional `max_lines` for large text files. "
-        "When all original bytes were read, returns their sha256 content_hash for conditional writes, "
-        "even if displayed lines are truncated; an incomplete byte window has no version. "
-        "Images, audio, video, and PDFs return multimodal content; do not paginate those files. "
-        "Skill file URIs return content without activation; use skill_load to activate instructions. "
-        "Do not access `.boxteam` runtime data directly. max_bytes bounds the scanned prefix including skipped lines; "
-        "increase it explicitly for later lines. Media must fit both byte budgets and is never partially returned."
+        "Read a workspace-relative/native file or reusable resource URI, including exact attachment/tool-output URIs. "
+        "Text uses 1-indexed line_offset and optional max_lines. Full-byte reads return sha256 content_hash for "
+        "conditional writes even when displayed lines are truncated; incomplete byte windows have no version. "
+        "Images, audio, video and PDFs return multimodal content without pagination; media must fit both byte budgets. "
+        "Skill reads do not activate instructions; use skill_load. Never read `.boxteam` paths directly. "
+        "max_bytes includes skipped lines; increase it explicitly for later lines."
     ),
     "write_file": "Create a UTF-8 text file with expected_version=absent; returns a verified URI/hash receipt. Use a workspace-relative/native path or resource URI.",
     "edit_file": (
@@ -62,10 +60,10 @@ FILESYSTEM_TOOL_DESCRIPTIONS = {
         "Returns bounded URI JSON; continue next_cursor with the same target, pattern and limits."
     ),
     "grep": (
-        "Search literal text below a workspace-relative/native path or resource URI with explicit scan/byte/deadline limits; prefer a "
-        "workspace-relative path and do not search `.boxteam` runtime logs or use an unscoped "
-        "workspace-root recursive search. Results contain reusable URIs, line numbers and bounded snippets; count is per page. "
-        "Continue next_cursor with the same target, query, glob and limits. Known media and NUL-containing binary files are skipped."
+        "Search literal text under a workspace-relative/native target or resource URI, including one tool-output URI, "
+        "with scan/byte/deadline limits. Do not search `.boxteam` or recurse from an unscoped workspace root. "
+        "Returns reusable URIs, line numbers, bounded snippets and per-page count. Continue next_cursor with the same "
+        "target, query, glob and limits. Known media and NUL-containing binaries are skipped."
     ),
 }
 

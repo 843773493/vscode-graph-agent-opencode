@@ -1,22 +1,16 @@
 import asyncio
-import base64
 import json
 import logging
-import mimetypes
 import time
 from functools import partial, update_wrapper
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 
 import httpx
-from deepagents.backends import CompositeBackend
-from deepagents.backends.protocol import FileData, ReadResult
 from deepagents.backends.utils import (
-    _get_file_type,
     check_empty_content,
     format_content_with_line_numbers,
     format_grep_matches,
-    slice_read_response,
 )
 from deepagents.middleware.filesystem import (
     FilesystemMiddleware,
@@ -28,11 +22,8 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import InjectedToolArg, StructuredTool
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.abstractions.resource_file_content import ResourceFileReader
 from app.agents.middleware_prompts import FILESYSTEM_TOOL_DESCRIPTIONS
-from app.agents.workspace_backend import SESSION_ARTIFACT_ROUTE, SessionArtifactBackend
-from app.agents.workspace_tool_paths import (
-    WorkspaceToolPathResolver,
-)
 from app.core.resource_uri import ResourceUriGrammarError, parse_resource_uri
 from app.core.trace_middleware import require_current_gateway_id
 from app.gateway.federation.errors import FederationError
@@ -199,34 +190,11 @@ def _validate_model_path(
     relative_path: str,
 ) -> str:
     parts = PurePosixPath(relative_path).parts
-    if len(parts) >= 3 and parts[0] == "session-artifacts" and parts[2] == "attachments" and tool_name != "read_file":
-        raise ValueError(f"{tool_name} 不提供附件写入或枚举 capability")
     if not parts or parts[0] != ".boxteam":
         return relative_path
     raise _runtime_path_error(tool_name, relative_path)
 
 
-def _read_attachment_message(
-    backend: SessionArtifactBackend, relative_path: str,
-    runtime: ToolRuntime[None, FilesystemState], line_offset: int, max_lines: int,
-) -> ToolMessage:
-    """逻辑附件按 catalog MIME 投影；文本分页复用 DeepAgents 文件格式化。"""
-    try:
-        content = backend.read_attachment(relative_path.removeprefix("session-artifacts/"))
-        mime_type = content.content_type
-        if mime_type.startswith("text/") or mime_type in {"application/json", "application/xml", "application/javascript"}:
-            sliced = slice_read_response(FileData(content=content.data.decode("utf-8"), encoding="utf-8"), line_offset - 1, max_lines)
-            if isinstance(sliced, ReadResult):
-                return _path_error("read_file", runtime, ValueError(sliced.error))
-            return ToolMessage(content=format_content_with_line_numbers(sliced, start_line=line_offset), name="read_file", tool_call_id=runtime.tool_call_id, status="success")
-        media_type = mime_type.split("/", 1)[0]
-        return ToolMessage(
-            content_blocks=[{"type": media_type if media_type in {"image", "audio", "video"} else "file", "base64": base64.b64encode(content.data).decode("ascii"), "mime_type": mime_type}],
-            name="read_file", tool_call_id=runtime.tool_call_id, status="success",
-            additional_kwargs={"read_file_path": relative_path, "read_file_media_type": mime_type},
-        )
-    except (OSError, RuntimeError, ValueError) as error:
-        return _path_error("read_file", runtime, error)
 
 
 def _read_navigation_message(
@@ -293,59 +261,8 @@ def _grep_scope_error(relative_path: str, glob: str | None) -> ValueError:
     )
 
 
-def _grep_result_error(
-    runtime: ToolRuntime[None, FilesystemState],
-    detail: str,
-) -> ToolMessage:
-    return ToolMessage(
-        content=f"Error: {detail}",
-        name="grep",
-        tool_call_id=runtime.tool_call_id,
-        status="error",
-    )
 
 
-def _run_session_artifact_grep(
-    *,
-    pattern: str,
-    relative_path: str,
-    glob: str | None,
-    output_mode: GrepOutputMode,
-    backend: SessionArtifactBackend,
-    runtime: ToolRuntime[None, FilesystemState],
-) -> ToolMessage:
-    """在模型可见的会话产物虚拟路径中搜索。"""
-
-    artifact_tail = relative_path.removeprefix("session-artifacts").lstrip("/")
-    backend_path = "/" if not artifact_tail else f"/{artifact_tail}"
-    result = backend.grep(pattern, path=backend_path, glob=glob)
-    if result.error:
-        return _grep_result_error(runtime, result.error)
-
-    matches: list[dict[str, str | int]] = []
-    for match in result.matches or []:
-        raw_path = match.get("path")
-        line_number = match.get("line")
-        line_text = match.get("text")
-        if (
-            not isinstance(raw_path, str)
-            or not isinstance(line_number, int)
-            or not isinstance(line_text, str)
-        ):
-            continue
-        matches.append(
-            {
-                "path": f"session-artifacts/{raw_path.lstrip('/')}",
-                "line": line_number,
-                "text": line_text,
-            }
-        )
-    return ToolMessage(
-        content=format_grep_matches(matches, output_mode),
-        name="grep",
-        tool_call_id=runtime.tool_call_id,
-        status="success",
-    )
 
 
 def configure_workspace_filesystem_tools(
@@ -354,31 +271,14 @@ def configure_workspace_filesystem_tools(
     workspace_root: Path,
     resource_navigation: ResourceNavigation,
     text_mutations: WorkspaceTextMutationOwner,
+    artifact_reader: ResourceFileReader | None = None,
 ) -> None:
     """普通目录和文件读取交共享 owner；产物继续交其独立业务 owner。"""
 
-    resolver = WorkspaceToolPathResolver(workspace_root)
-    session_artifact_backend = (
-        middleware.backend.routes[SESSION_ARTIFACT_ROUTE]
-        if isinstance(middleware.backend, CompositeBackend)
-        else SessionArtifactBackend(workspace_root)
-    )
-    if not isinstance(session_artifact_backend, SessionArtifactBackend):
-        raise TypeError("Session artifacts route 必须由唯一 SessionArtifactBackend 装配")
-
-    def resolve_paths(
-        tool_name: str,
-        path: str,
-    ) -> tuple[str, str]:
-        """统一模型相对路径与后端虚拟路径的规范化。
-
-        顺序固定为：先规范化为模型可见相对路径（越界、非法路径在此抛
-        ValueError），再做模型路径准入校验，最后投影为后端虚拟路径；
-        与各工具原有实现逐字一致。
-        """
-        relative_path = resolver.normalize_relative_path(path)
-        _validate_model_path(tool_name, relative_path)
-        return relative_path, "/" if relative_path == "." else f"/{relative_path}"
+    if artifact_reader is None:
+        def deny_artifact(_uri: str, _max_bytes: int):
+            raise PermissionError("产物读取缺少当前 SessionThread capability")
+        artifact_reader = deny_artifact
 
     def sync_ls(
         path: str,
@@ -395,7 +295,7 @@ def configure_workspace_filesystem_tools(
             result = resource_navigation.navigate_sync(ResourceNavigationRequest(
                 uri=uri, operation="list", limit=limit, cursor=cursor,
                 timeout_ms=timeout_ms, scan_limit=scan_limit, max_response_bytes=max_response_bytes,
-            ), local_gateway_id=gateway_id)
+            ), local_gateway_id=gateway_id, artifact_reader=artifact_reader)
             if time.monotonic() >= deadline:
                 raise ResourceFileOperationError("output_limit_exceeded", "目录导航超过本次总期限", reason="deadline")
         except (TimeoutError, httpx.TimeoutException):
@@ -421,7 +321,7 @@ def configure_workspace_filesystem_tools(
                 result = await resource_navigation.navigate(ResourceNavigationRequest(
                     uri=uri, operation="list", limit=limit, cursor=cursor,
                     timeout_ms=timeout_ms, scan_limit=scan_limit, max_response_bytes=max_response_bytes,
-                ), local_gateway_id=gateway_id)
+                ), local_gateway_id=gateway_id, artifact_reader=artifact_reader)
         except (TimeoutError, httpx.TimeoutException):
             return _path_error("ls", runtime, ResourceFileOperationError(
                 "output_limit_exceeded", "目录导航超过本次总期限", reason="deadline",
@@ -441,9 +341,6 @@ def configure_workspace_filesystem_tools(
     ) -> ToolMessage:
         deadline = time.monotonic() + timeout_ms / 1000
         try:
-            artifact = artifact_read(path, runtime, line_offset, max_lines)
-            if artifact is not None:
-                return artifact
             gateway_id = require_current_gateway_id("read_file")
             uri = resource_navigation.input_uri(path)
             require_read_permission(uri)
@@ -451,7 +348,7 @@ def configure_workspace_filesystem_tools(
                 uri=uri, operation="read", read_format="auto", line_offset=line_offset,
                 max_lines=max_lines or DEFAULT_MAX_LINES, max_bytes=max_bytes,
                 max_response_bytes=max_response_bytes, timeout_ms=timeout_ms,
-            ), local_gateway_id=gateway_id)
+            ), local_gateway_id=gateway_id, artifact_reader=artifact_reader)
             message = _read_navigation_message(result, runtime, max_response_bytes)
             if time.monotonic() >= deadline:
                 raise TimeoutError
@@ -463,32 +360,12 @@ def configure_workspace_filesystem_tools(
         except (OSError, RuntimeError, ValueError, httpx.HTTPError, FederationError) as error:
             return _path_error("read_file", runtime, error)
 
-    def artifact_read(
-        path: str, runtime: ToolRuntime[None, FilesystemState], line_offset: int, max_lines: int | None,
-    ) -> ToolMessage | None:
-        # TODO（第5组）：全部产物 URI 生成/消费同批迁齐后删除此旧地址入口。
-        if not (path.startswith(("boxteam-session://", "session-artifacts/")) or path == "session-artifacts"):
-            return None
-        relative_path, backend_path = resolve_paths("read_file", path)
-        parts = PurePosixPath(relative_path).parts
-        if len(parts) >= 3 and parts[2] == "attachments":
-            return _read_attachment_message(session_artifact_backend, relative_path, runtime, line_offset, max_lines or DEFAULT_MAX_LINES)
-        result = session_artifact_backend.read(backend_path.removeprefix("/session-artifacts"),
-                                              offset=line_offset - 1, limit=max_lines or DEFAULT_MAX_LINES)
-        if result.error or result.file_data is None:
-            raise ValueError(result.error or "产物 owner 未返回读取内容")
-        if result.file_data["encoding"] == "base64":
-            mime_type = mimetypes.guess_type("file" + Path(relative_path).suffix)[0] or "application/octet-stream"
-            return ToolMessage(content_blocks=[{"type": _get_file_type(relative_path),
-                "base64": result.file_data["content"], "mime_type": mime_type}], name="read_file",
-                tool_call_id=runtime.tool_call_id, status="success",
-                additional_kwargs={"read_file_path": relative_path, "read_file_media_type": mime_type})
-        return ToolMessage(content=check_empty_content(result.file_data["content"]) or format_content_with_line_numbers(
-            result.file_data["content"], start_line=line_offset,
-        ), name="read_file", tool_call_id=runtime.tool_call_id, status="success")
 
     def require_read_permission(uri: str) -> None:
         parsed = parse_resource_uri(uri)
+        if parsed.session_artifact_kind is not None:
+            # 会话产物沿原 owner 的精确 capability，不套用普通工作区路径规则。
+            return
         permission_path = "/" + "/".join(parsed.tail_segments[1:]) if parsed.scope == "workspace" and parsed.kind == "files" else uri
         if _check_fs_permission(middleware._permissions, "read", permission_path) == "deny":
             raise ResourceUriResolveError("capability_denied", "文件目标被当前工具读取规则拒绝")
@@ -504,16 +381,13 @@ def configure_workspace_filesystem_tools(
         try:
             gateway_id = require_current_gateway_id("read_file")
             async with asyncio.timeout(timeout_ms / 1000):
-                artifact = await asyncio.to_thread(artifact_read, path, runtime, line_offset, max_lines)
-                if artifact is not None:
-                    return artifact
                 uri = await asyncio.to_thread(resource_navigation.input_uri, path)
                 require_read_permission(uri)
                 result = await resource_navigation.navigate(ResourceNavigationRequest(
                     uri=uri, operation="read", read_format="auto", line_offset=line_offset,
                     max_lines=max_lines or DEFAULT_MAX_LINES, max_bytes=max_bytes,
                     max_response_bytes=max_response_bytes, timeout_ms=timeout_ms,
-                ), local_gateway_id=gateway_id)
+                ), local_gateway_id=gateway_id, artifact_reader=artifact_reader)
                 message = _read_navigation_message(result, runtime, max_response_bytes)
                 if time.monotonic() >= deadline:
                     raise TimeoutError
@@ -616,23 +490,6 @@ def configure_workspace_filesystem_tools(
             raise ResourceFileOperationError("output_limit_exceeded", "搜索工具回执超过字节预算，请减少 limit 或片段长度", reason="response_byte_limit")
         return message
 
-    def artifact_search(
-        tool_name: str, pattern: str, path: str | None, glob: str | None,
-        output_mode: GrepOutputMode, runtime: ToolRuntime[None, FilesystemState],
-    ) -> ToolMessage | None:
-        # TODO（第5组）：产物生成/消费迁齐后删除旧目录地址，不开放 Session 私有磁盘树。
-        if path is None or not (path == "session-artifacts" or path.startswith(("session-artifacts/", "boxteam-session://"))):
-            return None
-        relative_path, backend_path = resolve_paths(tool_name, path)
-        if tool_name == "grep":
-            return _run_session_artifact_grep(pattern=pattern, relative_path=relative_path, glob=glob,
-                output_mode=output_mode, backend=session_artifact_backend, runtime=runtime)
-        _validate_glob_pattern(pattern)
-        result = session_artifact_backend.glob(pattern, path=backend_path.removeprefix("/session-artifacts") or "/")
-        if result.error:
-            raise ValueError(result.error)
-        paths = ["session-artifacts/" + item["path"].lstrip("/") for item in result.matches or []]
-        return ToolMessage(content=str(paths), name=tool_name, tool_call_id=runtime.tool_call_id, status="success")
 
     def sync_search(
         pattern: str, runtime: ToolRuntime[None, FilesystemState], path: str | None = None,
@@ -643,15 +500,12 @@ def configure_workspace_filesystem_tools(
     ) -> ToolMessage:
         deadline = time.monotonic() + timeout_ms / 1000
         try:
-            artifact = artifact_search(tool_name, pattern, path, glob, output_mode, runtime)
-            if artifact is not None:
-                return artifact
             gateway_id = require_current_gateway_id(tool_name)
             request = search_request(tool_name, pattern, path, glob, limit, cursor, timeout_ms, scan_limit,
                                      max_response_bytes, max_bytes, max_snippet_bytes)
             if time.monotonic() >= deadline:
                 raise TimeoutError
-            result = resource_navigation.navigate_sync(request, local_gateway_id=gateway_id)
+            result = resource_navigation.navigate_sync(request, local_gateway_id=gateway_id, artifact_reader=artifact_reader)
             message = search_message(tool_name, result, output_mode, runtime, max_response_bytes)
             if time.monotonic() >= deadline:
                 raise TimeoutError
@@ -673,12 +527,9 @@ def configure_workspace_filesystem_tools(
         try:
             gateway_id = require_current_gateway_id(tool_name)
             async with asyncio.timeout(timeout_ms / 1000):
-                artifact = await asyncio.to_thread(artifact_search, tool_name, pattern, path, glob, output_mode, runtime)
-                if artifact is not None:
-                    return artifact
                 request = await asyncio.to_thread(search_request, tool_name, pattern, path, glob, limit, cursor, timeout_ms,
                     scan_limit, max_response_bytes, max_bytes, max_snippet_bytes)
-                result = await resource_navigation.navigate(request, local_gateway_id=gateway_id)
+                result = await resource_navigation.navigate(request, local_gateway_id=gateway_id, artifact_reader=artifact_reader)
                 message = search_message(tool_name, result, output_mode, runtime, max_response_bytes)
                 if time.monotonic() >= deadline:
                     raise TimeoutError

@@ -473,7 +473,7 @@ async def communication_triad(request: pytest.FixtureRequest) -> AsyncIterator[t
     ports = integration_port_block_for_file(Path(request.node.path))
     with openai_chat_stub(ports.port(10)) as model:
         async with open_communication_triad(
-            context, _prepare_workspace,
+            context, getattr(request, "param", {}).get("prepare_workspace", _prepare_workspace),
             resource_service_nodes=getattr(request, "param", {}).get("resource_service_nodes", ()),
             shared_session_ids=getattr(request, "param", {}).get("shared_session_ids", ()),
         ) as nodes:

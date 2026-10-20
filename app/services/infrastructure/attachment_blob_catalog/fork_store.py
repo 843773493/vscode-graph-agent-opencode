@@ -11,6 +11,7 @@ from pathlib import Path
 
 from app.abstractions.session_context import SessionForkTransportProtocol
 from app.core.phase_observer import observe_phase
+from app.core.resource_uri import session_artifact_uri
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import SessionCreationRecord
 from app.core.session_catalog_store.contracts import ForkSourceCaptureRecord
@@ -24,6 +25,8 @@ from app.core.session_lifecycle_gate import (
     SessionDeletionPendingError,
     SessionLifecycleGate,
 )
+from app.core.trace_middleware import get_current_gateway_id
+from app.core.workspace_identity import read_workspace_id
 from app.schemas.internal_v2.session import (
     SessionForkRequest,
     SessionForkResourceSourceDTO,
@@ -81,7 +84,7 @@ class ForkAttachmentStoreMixin:
         self._assert_session_active(target_session_id, target_thread_id)
         return self._catalog.project_fork_attachment(
             target_session_id=target_session_id, target_thread_id=target_thread_id,
-            source_file_id=file_id,
+            source_file_id=file_id, workspace_id=read_workspace_id(self._workspace_root), gateway_id=get_current_gateway_id(),
         )
 
     def _freeze_fork_attachment_candidates(
@@ -110,7 +113,7 @@ class ForkAttachmentStoreMixin:
             aliases, previous_required, previous = grouped.setdefault(source_id, (set(), False, inherited))
             if previous != inherited:
                 raise RuntimeError("fork attachment alias 的 backing owner 冻结 metadata 冲突")
-            aliases.update((file_id, f"boxteam-session://{source_session_id}/attachments/{source_id}"))
+            aliases.update((file_id, self.reference(source_session_id, source_id)))
             grouped[source_id] = aliases, previous_required or required, inherited
         source_ids = tuple(sorted(grouped))
         revision, sources = self._catalog.freeze_fork_attachment_sources(source_ids)
@@ -139,7 +142,7 @@ class ForkAttachmentStoreMixin:
             candidates.append((ForkAttachmentSnapshot(
                 source_attachment_id=source_id, source_file_id="", source_owner_ref_id=source.owner_ref_id,
                 source_session_id=source.owner_session_id, source_thread_id=source.owner_thread_id,
-                target_attachment_id="", target_owner_ref_id="",
+                target_attachment_id="", target_file_id="", target_owner_ref_id="",
                 target_session_id=target_session_id, target_thread_id=target_thread_id,
                 target_owner_thread_id=target_thread_id,
                 source_item_ref=source.item_ref, target_item_ref=None,
@@ -197,6 +200,7 @@ class ForkAttachmentStoreMixin:
                 replace(candidate, source_file_id=source_file_id, source_file_aliases=tuple(other_aliases)),
                 source_storage_domain_id=source_domain,
                 target_storage_domain_id=target_domain,
+                target_gateway_id=request["target_gateway_id"],
                 source_main_thread_id=source_main, target_main_thread_id=target_main,
                 copy_operation_id=record.copy_operation_id, required=required, choice=next(iter(actions), None),
             )
@@ -219,6 +223,7 @@ class ForkAttachmentStoreMixin:
 
     def _decide_fork_attachment(
         self, snapshot: ForkAttachmentSnapshot, *, source_storage_domain_id: str, target_storage_domain_id: str,
+        target_gateway_id: str | None,
         source_main_thread_id: str, target_main_thread_id: str, copy_operation_id: str,
         required: bool, choice: ResourceTargetAction | None,
     ) -> ForkAttachmentSnapshot:
@@ -233,7 +238,8 @@ class ForkAttachmentStoreMixin:
         if existing is not None:
             self._assert_session_active(existing.owner_session_id, existing.owner_thread_id)
         existing_facts = None if existing is None else ResourceTargetFacts(
-            resource_uri=f"boxteam-session://{existing.owner_session_id}/attachments/{existing.attachment_id}",
+            resource_uri=session_artifact_uri(target_storage_domain_id, existing.owner_session_id, "attachments", existing.attachment_id,
+                                             gateway_authority=target_gateway_id),
             storage_domain_id=target_storage_domain_id, lifecycle="owner", available=True,
             owner_session_id=existing.owner_session_id, owner_thread_id=existing.owner_thread_id,
             retention_scope="session", revision=existing.blob_id, content_hash=existing.digest,
@@ -269,6 +275,8 @@ class ForkAttachmentStoreMixin:
                 f"{copy_operation_id}|{snapshot.source_owner_ref_id}|{target_owner_ref}".encode()
             ).hexdigest()[:32] if decision.available else None)
         return replace(snapshot, target_attachment_id=target_id, target_owner_ref_id=target_owner_ref,
+                       target_file_id=session_artifact_uri(target_storage_domain_id, snapshot.target_session_id, "attachments", target_id,
+                                                          gateway_authority=target_gateway_id),
                        target_item_ref=target_item_ref, target_owner_thread_id=target_owner_thread,
                        required=required and decision.available, claim_id=claim_id,
                        availability="available" if decision.available else "unavailable",
@@ -291,6 +299,9 @@ class ForkAttachmentStoreMixin:
         if any((snapshot.target_session_id, snapshot.target_thread_id) != (capture.target_session_id, capture.target_thread_id)
                for snapshot in snapshots):
             raise RuntimeError("fork imported 附件 snapshot 不属于本 target owner")
+        for snapshot in snapshots:
+            if self._parse_logical_file_id(capture.target_session_id, snapshot.target_file_id) != snapshot.target_attachment_id:
+                raise RuntimeError("fork imported 附件 URI 与冻结 target identity 不一致")
         self._catalog.prepare_fork_attachment_claims(
             copy_operation_id=capture.copy_operation_id, source_snapshot_id=capture.snapshot_id,
             operation_preimage_hash=capture.preimage_hash, snapshots=snapshots,
@@ -432,8 +443,7 @@ class ForkAttachmentStoreMixin:
             results.append({
                 "resource_uri": snapshot.source_file_id, "action": snapshot.target_action,
                 "availability": snapshot.availability,
-                "target_uri": (f"boxteam-session://{snapshot.target_session_id}/attachments/{snapshot.target_attachment_id}"
-                               if snapshot.availability == "available" else None),
+                "target_uri": snapshot.target_file_id if snapshot.availability == "available" else None,
                 "reason": snapshot.unavailable_reason if snapshot.availability == "unavailable" else None,
             })
         return results

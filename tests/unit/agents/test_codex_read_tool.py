@@ -15,7 +15,8 @@ from langchain_core.messages import ToolMessage
 from pydantic import ValidationError
 
 from app.agents.workspace_backend import build_workspace_backend
-from app.core.resource_uri import resource_display_uri
+from app.core.resource_uri import parse_session_artifact_uri, resource_display_uri
+from app.core.trace_middleware import get_current_gateway_id
 from app.core.workspace_identity import bind_workspace_id
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.infrastructure.attachment_blob_catalog.store import (
@@ -415,31 +416,31 @@ async def attachment_tools(configure_filesystem_tools, tmp_path: Path, session_b
     data = b"\x89PNG\r\n\x1a\nattachment"
     ref = (await store.persist_inline(session_id, [AttachmentRef(file_id="inline:abc.png", name="abc.png", content_type="image/png", data_url="data:image/png;base64," + base64.b64encode(data).decode())], thread_id=store._path_resolver.main_thread_id(session_id)))[0]
 
-    def read(uri_session_id, file_id):
-        if uri_session_id != session_id:
+    def read(file_id, max_bytes):
+        if parse_session_artifact_uri(file_id).tail_segments[0] != session_id:
             raise PermissionError("附件 URI 不属于当前 Agent SessionThread")
         return store.read(session_id, file_id, owner_thread_id=store._path_resolver.main_thread_id(session_id))
 
     middleware = FilesystemMiddleware(
-        backend=build_workspace_backend(tmp_path, attachment_reader=read),
+        backend=build_workspace_backend(tmp_path),
         tool_token_limit_before_evict=None,
     )
-    configure_filesystem_tools(middleware, workspace_root=tmp_path)
+    configure_filesystem_tools(middleware, workspace_root=tmp_path, artifact_reader=read)
     tools = {item.name: item for item in middleware.tools}
     yield tmp_path, tools, ref, store
     store.close()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("alias", [False, True])
-async def test_read_file_reads_logical_attachment_with_catalog_mime(attachment_tools, alias: bool) -> None:
+@pytest.mark.parametrize("qualified", [False, True])
+async def test_read_file_reads_logical_attachment_with_catalog_mime(attachment_tools, qualified: bool) -> None:
     _root, tools, ref, _store = attachment_tools
     runtime = cast(
         "ToolRuntime[None, FilesystemState]",
         SimpleNamespace(tool_call_id="call_attachment_read"),
     )
     attachment_result = await tools["read_file"].coroutine(
-        path=ref.file_id.replace("boxteam-session://", "session-artifacts/") if alias else ref.file_id,
+        path=ref.file_id if qualified else parse_session_artifact_uri(ref.file_id, local_gateway_id=get_current_gateway_id()).display_uri,
         runtime=runtime,
     )
 
@@ -474,7 +475,7 @@ async def test_logical_attachment_rejects_cross_session_writes_and_old_paths(att
             {"path": ref.file_id},
         ),
         ("write_file", {"file_path": ref.file_id, "content": "spoofed"}),
-        ("write_file", {"file_path": ref.file_id.replace("boxteam-session://", "session-artifacts/"), "content": "spoofed"}),
+        ("read_file", {"path": "boxteam-session://ses_019b781159d47374805bc4427d081a14/attachments/" + parse_session_artifact_uri(ref.file_id).tail_segments[-1]}),
         ("edit_file", {"file_path": ref.file_id, "old_string": "attachment", "new_string": "spoofed"}),
     ):
         if tool_name in {"write_file", "edit_file"}:
@@ -483,12 +484,12 @@ async def test_logical_attachment_rejects_cross_session_writes_and_old_paths(att
         assert isinstance(result, ToolMessage)
         assert result.status == "error"
         code = json.loads(result.content)["code"]
-        if tool_name == "ls" or kwargs.get("file_path", "").startswith("boxteam-session://"):
+        if str(kwargs.get("path", "")).startswith("boxteam-session://"):
             assert code == "unknown_scheme"
-        elif tool_name == "read_file":
+        elif tool_name in {"read_file", "ls"}:
             assert code == "capability_denied"
         else:
-            assert code == "invalid_patch"
+            assert code == "capability_denied"
     assert store.read("ses_019b781159d47374805bc4427d081a14", ref.file_id).data == before
     assert not (store._path_resolver.resolve_session_node("ses_019b781159d47374805bc4427d081a14") / "attachments").exists()
 
@@ -748,7 +749,7 @@ async def test_read_file_resolves_model_visible_session_artifact_path(
         backend=build_workspace_backend(tmp_path),
         tool_token_limit_before_evict=None,
     )
-    configure_filesystem_tools(middleware, workspace_root=tmp_path)
+    configure_filesystem_tools(middleware, workspace_root=tmp_path, artifact_reader=lambda uri, maximum: store.read(session_id, uri, maximum))
     read_tool = next(item for item in middleware.tools if item.name == "read_file")
     runtime = cast(
         "ToolRuntime[None, FilesystemState]",
@@ -793,7 +794,7 @@ async def test_grep_resolves_model_visible_session_artifact_path(
         backend=build_workspace_backend(tmp_path),
         tool_token_limit_before_evict=None,
     )
-    configure_filesystem_tools(middleware, workspace_root=tmp_path)
+    configure_filesystem_tools(middleware, workspace_root=tmp_path, artifact_reader=lambda uri, maximum: store.read(session_id, uri, maximum))
     grep_tool = next(item for item in middleware.tools if item.name == "grep")
     runtime = cast(
         "ToolRuntime[None, FilesystemState]",
@@ -810,7 +811,7 @@ async def test_grep_resolves_model_visible_session_artifact_path(
     assert isinstance(result, ToolMessage)
     assert result.status == "success"
     assert "retrieval-target=BOXTEAM_TEST" in result.content
-    assert read_path in result.content
+    assert parse_session_artifact_uri(read_path, local_gateway_id=get_current_gateway_id()).display_uri in result.content
 
 
 def test_all_filesystem_tool_schemas_require_relative_paths(configure_filesystem_tools, tmp_path: Path) -> None:

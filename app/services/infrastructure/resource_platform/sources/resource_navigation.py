@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 # TODO（依赖元数据）：wcmatch 已由固定 DeepAgents 引入；根包动态 metadata 构建失败，修复构建后登记直接依赖。
 from wcmatch import glob as wcglob
 
+from app.abstractions.resource_file_content import ResourceFileReader
 from app.core.distribution_identity import load_distribution_id
 from app.core.exceptions import ForbiddenError
 from app.core.resource_uri import (
@@ -87,6 +88,7 @@ class ResourceNavigation:
         gateway_skills_root: Path | None = None, gateway_id: str | None = None,
         file_paths: WorkspaceFilePaths | None = None,
         gateway_navigation: GatewayResourceNavigation | None = None,
+        artifact_reader: ResourceFileReader | None = None,
     ) -> None:
         if (workspace_root is None) == (gateway_skills_root is None):
             raise ValueError("导航 owner 必须且只能绑定 Workspace 或 Gateway Skill 域")
@@ -104,6 +106,7 @@ class ResourceNavigation:
         self._gateway_navigation = gateway_navigation
         self._gateway_skills_root = gateway_skills_root.absolute() if gateway_skills_root is not None else None
         self._gateway_id = gateway_id
+        self._artifact_reader = artifact_reader
 
     def input_uri(self, value: str) -> str:
         """原生输入只在固定文件 owner 解释；资源 URI 留给唯一 grammar 校验。"""
@@ -127,8 +130,12 @@ class ResourceNavigation:
         ))
         return parsed
 
-    def _routed_request(self, request: ResourceNavigationRequest, gateway_id: str) -> ResourceNavigationRequest | None:
+    def _routed_request(self, request: ResourceNavigationRequest, gateway_id: str,
+                        artifact_reader: ResourceFileReader | None = None) -> ResourceNavigationRequest | None:
         parsed = parse_resource_uri(request.uri, local_gateway_id=gateway_id)
+        if parsed.session_artifact_kind is not None and artifact_reader is not None:
+            # 模型的精确 SessionThread capability 必须在源端检查，不能经 read relay 绕过。
+            return None
         if parsed.gateway_authority is None and not (
             parsed.scope == "workspace" and parsed.scope_id != self._workspace_id
         ):
@@ -141,11 +148,11 @@ class ResourceNavigation:
         )})
 
     def navigate_sync(
-        self, request: ResourceNavigationRequest, *, local_gateway_id: str,
+        self, request: ResourceNavigationRequest, *, local_gateway_id: str, artifact_reader: ResourceFileReader | None = None,
     ) -> ResourceNavigationResultDTO:
         """同步工具复用同一解析与文件执行；HTTP 传输不借用异步观察连接。"""
         deadline = time.monotonic() + request.timeout_ms / 1000
-        routed = self._routed_request(request, local_gateway_id)
+        routed = self._routed_request(request, local_gateway_id, artifact_reader)
         if routed is not None:
             result = self._gateway_navigation.navigate_sync(routed)
             return self._response(result, request, deadline)
@@ -157,15 +164,15 @@ class ResourceNavigation:
                 request.model_copy(update={"uri": parsed.display_uri}), gateway_id=local_gateway_id,
             )
             return self._response(result, request, deadline)
-        return self._navigate_local(parsed, request, local_gateway_id, deadline)
+        return self._navigate_local(parsed, request, local_gateway_id, deadline, artifact_reader)
 
     async def navigate(
-        self, request: ResourceNavigationRequest, *, local_gateway_id: str,
+        self, request: ResourceNavigationRequest, *, local_gateway_id: str, artifact_reader: ResourceFileReader | None = None,
     ) -> ResourceNavigationResultDTO:
         deadline = time.monotonic() + request.timeout_ms / 1000
         try:
             async with asyncio.timeout(max(0, deadline - time.monotonic())):
-                routed = self._routed_request(request, local_gateway_id)
+                routed = self._routed_request(request, local_gateway_id, artifact_reader)
                 if routed is not None:
                     result = await self._gateway_navigation.navigate(routed)
                     return self._response(result, request, deadline)
@@ -178,15 +185,18 @@ class ResourceNavigation:
                     )
                     return self._response(result, request, deadline)
                 # 取消等待不能中断原生阻塞 I/O；只读 worker 恢复后仍检查同一 deadline。
-                return await asyncio.to_thread(self._navigate_local, parsed, request, local_gateway_id, deadline)
+                return await asyncio.to_thread(self._navigate_local, parsed, request, local_gateway_id, deadline, artifact_reader)
         except TimeoutError as error:
             raise ResourceFileOperationError("output_limit_exceeded", "文件导航超过本次总期限", reason="deadline") from error
 
     def _navigate_local(
         self, parsed: ParsedResourceUri, request: ResourceNavigationRequest,
         gateway_id: str, deadline: float,
+        artifact_reader: ResourceFileReader | None = None,
     ) -> ResourceNavigationResultDTO:
         self._check_deadline(deadline)
+        if parsed.session_artifact_kind is not None:
+            return self._navigate_artifact(parsed, request, gateway_id, deadline, artifact_reader or self._artifact_reader)
         root, children = self._root(parsed)
         path = self._contained(root, children, parsed)
         node = self._node(parsed, path)
@@ -256,6 +266,74 @@ class ResourceNavigation:
             raise ResourceFileOperationError("execution_failed", "目录已改变，旧 cursor 的位置不存在", reason="stale_cursor")
         return self._response(ResourceNavigationResultDTO(node=node, entries=tuple(entries), matches=tuple(matches)), request, deadline)
 
+    def _navigate_artifact(
+        self, parsed: ParsedResourceUri, request: ResourceNavigationRequest, gateway_id: str,
+        deadline: float, reader: ResourceFileReader | None,
+    ) -> ResourceNavigationResultDTO:
+        if parsed.gateway_authority is not None or parsed.scope_id != self._workspace_id or reader is None:
+            raise ResourceUriResolveError("capability_denied", "会话产物缺少此目标的原 owner 读取能力")
+        node = ResourceNavigationNodeDTO.model_validate(resource_navigation_node(parsed, resource_shape="file"))
+        if request.operation not in node.operations:
+            raise ResourceUriResolveError("capability_denied", "会话产物只提供精确单文件能力，不开放私有目录")
+        try:
+            owned = reader(request.uri, request.max_bytes)
+        except PermissionError as error:
+            if error.errno is not None:
+                raise
+            # 原 owner 的领域拒绝不含物理 locator；保留其授权归属说明。
+            raise ResourceUriResolveError("capability_denied", str(error)) from error
+        self._check_deadline(deadline)
+        if request.operation == "describe":
+            return self._response(ResourceNavigationResultDTO(node=node), request, deadline)
+        mime_type = owned.content_type
+        text_mime = mime_type.startswith("text/") or mime_type in {"application/json", "application/xml", "application/javascript"}
+        media = None if text_mime or request.read_format != "auto" else mime_type.split("/", 1)[0]
+        if media not in {None, "image", "audio", "video"}:
+            media = "file"
+        if request.operation == "read":
+            return self._read_content(owned.data, node, request, deadline, media_type=media, mime_type=mime_type)
+        if request.search_mode != "content":
+            raise ResourceUriResolveError("capability_denied", "工具结果仅支持单文件正文搜索，不提供产物目录匹配")
+        binding = hashlib.sha256(json.dumps({**request.model_dump(exclude={"uri", "cursor"}), "uri": parsed.display_uri,
+                                            "gateway_id": gateway_id}, sort_keys=True).encode()).hexdigest()
+        version = hashlib.sha256(owned.data).hexdigest()
+        offset, previous = self._decode_cursor(request.cursor, binding)
+        if previous is not None and previous != version:
+            raise ResourceFileOperationError("execution_failed", "工具结果已改变，不能使用原 cursor", reason="stale_cursor")
+        if request.file_glob is not None and not self._glob_matches(parsed.tail_segments[-1], request.file_glob):
+            if offset:
+                raise ResourceFileOperationError("execution_failed", "工具结果 cursor 超出匹配范围", reason="stale_cursor")
+            return self._response(ResourceNavigationResultDTO(node=node), request, deadline)
+        if len(owned.data) > request.max_bytes:
+            raise ResourceFileOperationError("output_limit_exceeded", "工具结果超过搜索字节预算", reason="file_byte_limit")
+        try:
+            content = owned.data.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ResourceFileOperationError("invalid_encoding", "工具结果不是有效 UTF-8 文本", reason="utf8") from error
+        matches = []
+        consumed = 0
+        truncated = False
+        reason = None
+        for _, _, match in self._content_matches(node, content, request, deadline, ()):
+            if match is None:
+                continue
+            consumed += 1
+            if consumed <= offset:
+                continue
+            candidate = ResourceNavigationResultDTO(node=node, entries=(node,), matches=(*matches, match), truncated=True,
+                next_cursor=self._encode_cursor(binding, consumed, version), truncation_reason="response_byte_limit", view="live")
+            if len(matches) >= request.limit or self._size(candidate) > request.max_response_bytes:
+                truncated, reason = True, "entry_limit" if len(matches) >= request.limit else "response_byte_limit"
+                break
+            matches.append(match)
+        if truncated and not matches:
+            raise ResourceFileOperationError("output_limit_exceeded", "预算不足以容纳一条工具结果匹配", reason="response_byte_limit")
+        if consumed < offset:
+            raise ResourceFileOperationError("execution_failed", "工具结果 cursor 超出匹配范围", reason="stale_cursor")
+        return self._response(ResourceNavigationResultDTO(node=node, entries=(node,) if matches else (), matches=tuple(matches),
+            view="live", truncated=truncated, truncation_reason=reason,
+            next_cursor=self._encode_cursor(binding, offset + len(matches), version) if truncated else None), request, deadline)
+
     @staticmethod
     def _glob_matches(name: str, pattern: str) -> bool:
         # 保留原 glob 在各层目录匹配文件的语义；模式从不参与目标解析。
@@ -293,21 +371,26 @@ class ResourceNavigation:
                 content = data.decode("utf-8")
             except UnicodeDecodeError as error:
                 raise ResourceFileOperationError("invalid_encoding", "搜索文件不是有效的 UTF-8 文本", reason="utf8") from error
-            found = False
-            for line_number, line in enumerate(content.splitlines(), start=1):
-                self._check_deadline(deadline)
-                column = line.find(request.query)
-                if column < 0:
-                    continue
-                found = True
-                start = max(0, column - request.max_snippet_bytes // 8)
-                raw = line[start:].encode("utf-8")
-                snippet = codecs.getincrementaldecoder("utf-8")().decode(raw[:request.max_snippet_bytes], final=False)
-                yield child, metadata, ResourceNavigationMatchDTO(uri=child.uri, line=line_number, column=column + 1,
-                    text=snippet, snippet_start_column=start + 1, truncated=start > 0 or len(raw) > request.max_snippet_bytes)
-            if not found:
-                yield child, metadata, None
+            yield from self._content_matches(child, content, request, deadline, metadata)
 
+    def _content_matches(
+        self, child: ResourceNavigationNodeDTO, content: str, request: ResourceNavigationRequest,
+        deadline: float, metadata: tuple[int, ...],
+    ) -> Iterator[tuple[ResourceNavigationNodeDTO, tuple[int, ...], ResourceNavigationMatchDTO | None]]:
+        found = False
+        for line_number, line in enumerate(content.splitlines(), start=1):
+            self._check_deadline(deadline)
+            column = line.find(request.query)
+            if column < 0:
+                continue
+            found = True
+            start = max(0, column - request.max_snippet_bytes // 8)
+            raw = line[start:].encode("utf-8")
+            snippet = codecs.getincrementaldecoder("utf-8")().decode(raw[:request.max_snippet_bytes], final=False)
+            yield child, metadata, ResourceNavigationMatchDTO(uri=child.uri, line=line_number, column=column + 1,
+                text=snippet, snippet_start_column=start + 1, truncated=start > 0 or len(raw) > request.max_snippet_bytes)
+        if not found:
+            yield child, metadata, None
     @staticmethod
     def _stat(path: Path) -> tuple[int, ...]:
         metadata = path.stat()
@@ -324,16 +407,24 @@ class ResourceNavigation:
         self._check_deadline(deadline)
         if self._stat(path) != before:
             raise ResourceFileOperationError("execution_failed", "文件在读取期间改变，请重新读取", reason="file_changed")
-        truncated = len(data) > request.max_bytes
-        content_hash = None if truncated else "sha256:" + hashlib.sha256(data).hexdigest()
         filename = parse_resource_uri(node.uri).tail_segments[-1]
         media_type = _MEDIA_EXTENSIONS.get(Path(filename).suffix.lower()) if request.read_format == "auto" else None
+        mime_type = mimetypes.guess_type("file" + Path(filename).suffix)[0] or "application/octet-stream"
+        return self._read_content(data, node, request, deadline, media_type=media_type, mime_type=mime_type)
+
+    def _read_content(
+        self, data: bytes, node: ResourceNavigationNodeDTO, request: ResourceNavigationRequest, deadline: float,
+        *, media_type: str | None, mime_type: str,
+    ) -> ResourceNavigationResultDTO:
+        self._check_deadline(deadline)
+        truncated = len(data) > request.max_bytes
+        content_hash = None if truncated else "sha256:" + hashlib.sha256(data).hexdigest()
         if media_type is not None:
             if truncated:
                 raise ResourceFileOperationError("output_limit_exceeded", "媒体原件超过读取字节上限，请显式增加 max_bytes", reason="file_byte_limit")
             result = ResourceNavigationResultDTO(
                 node=node, content=base64.b64encode(data).decode("ascii"), content_encoding="base64",
-                media_type=media_type, mime_type=mimetypes.guess_type("file" + Path(filename).suffix)[0] or "application/octet-stream",
+                media_type=media_type, mime_type=mime_type,
                 content_hash=content_hash,
             )
             # 媒体必须完整；不能裁剪 base64 后伪报有效原件。

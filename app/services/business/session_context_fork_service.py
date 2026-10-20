@@ -465,6 +465,7 @@ class SessionContextForkService:
                 "resources": [choice.model_dump(mode="json") for choice in payload.request.resources if choice.owner_reference is None],
                 "source_storage_domain_id": source_domain,
                 "target_storage_domain_id": target_domain,
+                "target_gateway_id": destination.gateway_authority,
                 "target_main_thread_id": frozen.get("target_main_thread_id"),
                 "creation_preimage_hash": frozen.get("creation_preimage_hash"),
             }

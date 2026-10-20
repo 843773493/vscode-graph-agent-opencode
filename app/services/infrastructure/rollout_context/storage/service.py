@@ -21,6 +21,7 @@ from urllib.parse import quote
 from xml.etree.ElementTree import fromstring
 
 from app.core.path_utils import get_session_path_resolver
+from app.core.resource_uri import parse_session_artifact_uri
 from app.core.session_catalog_store import (
     SessionCreationRecord,
     validate_session_id,
@@ -209,9 +210,11 @@ class RolloutStorage(
             file_id = metadata.get("file_id")
             if not isinstance(file_id, str):
                 raise TypeError("generated attachment block 必须有 typed file_id")
-            if not file_id.startswith("boxteam-session://"):
+            if "://" not in file_id:
                 blocks.append(block)
                 continue
+            if parse_session_artifact_uri(file_id).session_artifact_kind != "attachments":
+                raise ValueError("generated attachment block 不是附件资源 URI")
             if metadata.get("schema_version") != 1 or metadata.get("path") != file_id:
                 raise ValueError("source-mismatch: generated attachment block 缺少精确 logical reference")
             reference = project(file_id)

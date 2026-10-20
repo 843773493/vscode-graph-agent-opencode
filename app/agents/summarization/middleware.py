@@ -63,6 +63,7 @@ from app.core.model_request_context import (
     SummaryCandidateScope,
     summary_candidate_scope,
 )
+from app.core.path_utils import get_session_path_resolver, get_workspace_root
 from app.core.session_thread_context import require_current_session_thread_owner
 from app.domain.itemized.hashing import sha256_jcs
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
@@ -107,7 +108,11 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         if not isinstance(thread_id, str) or not thread_id:
             raise RuntimeError("压缩历史归档缺少 LangGraph thread_id")
         owner = require_current_session_thread_owner(langgraph_thread_id=thread_id)
-        return f"/session-artifacts/{owner.session_id}/context/{owner.thread_id}/history.md"
+        workspace_root = get_workspace_root()
+        session_dir = get_session_path_resolver().resolve_session_node(owner.session_id)
+        archive = session_dir / "context" / owner.thread_id / "history.md"
+        # 仅交框架内部虚拟工作区 backend；普通文件入口不接受此私有路径。
+        return "/" + archive.relative_to(workspace_root).as_posix()
 
     @staticmethod
     def _apply_event_to_messages(

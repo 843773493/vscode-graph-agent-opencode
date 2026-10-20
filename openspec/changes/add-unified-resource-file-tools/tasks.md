@@ -80,9 +80,14 @@
 
 ## 5. 会话产物与旧链路下线
 
-- [ ] 5.1 平移附件和工具输出的新URI生成、store读取/授权、middleware/tool结果、用户消息、Provider以及Web/历史投影，保留原attachment/result业务ID和生命周期；附加文件URI不意味着可遍历Session私有目录。
-- [ ] 5.2 验证新产物发布、owner重启、授权失败与删除结果；从真实read_file图片结果和Web original/thumbnail接口核验URI分派至原附件owner、Provider媒体投影不变，文本编码失败不误拒媒体；不新增通用二进制文件写入。
-- [ ] 5.3 全仓检索旧scheme/旧路径解析的直接间接引用，全部迁移后删除boxteam-session解析分支和重复文件定位链；清开发中间数据，不迁旧数据、不留alias/双读。
+- [x] 5.1 平移附件和工具输出的新URI生成、store读取/授权、middleware/tool结果、用户消息、Provider以及Web/历史投影，保留原attachment/result业务ID和生命周期；附加文件URI不意味着可遍历Session私有目录。
+- [x] 5.2 验证新产物发布、owner重启、授权失败与删除结果；从真实read_file图片结果和Web original/thumbnail接口核验URI分派至原附件owner、Provider媒体投影不变，文本编码失败不误拒媒体；不新增通用二进制文件写入。
+- [x] 5.3 全仓检索旧scheme/旧路径解析的直接间接引用，全部迁移后删除boxteam-session解析分支和重复文件定位链；清开发中间数据，不迁旧数据、不留alias/双读。
+
+
+  - 2026-10-20 第5组：公共 Session 单文件 URI 已迁齐生成、原 owner 读取/授权、工具结果、Provider、历史及 Web 投影，原附件/结果 ID 和 fork 保活不变。冻结的 fork snapshot 包含目标 URI 及目标 Gateway；跨端导入核实际 owner，原 assembly membership 不由普通读取 grant 替代。旧 scheme/parser、虚拟产物 backend 及重复附件/搜索实现已物理删除；检索生产与调用方仅剩旧 scheme 拒绝负例。原生文件附件仍走原工作区文件能力，开发中间数据不双读或迁移。
+  - 原件均在 `out/tests/temp/openspec_takeover/artifacts/runs/`：`artifact-uri-unit-002`、`artifact-uri-final-unit-001` 的受影响通过项及 `artifact-uri-final-unit-002` 覆盖 parser、owner 归属、模型 assembly 授权、媒体、工具输出重开/符号链接拒绝和绑定内容/查询/限制的 cursor。`artifact-uri-fork-002` 通过四种 fork 附件模式及子会话输入；`artifact-uri-transfer-001` 通过三真实 Gateway/SSH 的异域完整复制、来源离线后目标冷读取、后继输入、重放及删除释放。`artifact-uri-model-media-004` 经真实 Agent/read_file 与本地模型协议桩核完整原图 Provider wire、owner 重启、original/thumbnail/hash 和删除后的原 404 合同；不是外部真实模型 E2E。`artifact-uri-history-001` 通过历史用户投影及完整 assembly manifest 文件；`artifact-uri-compaction-001` 核内部归档经 catalog resolver 写入正式 SessionThread 节点、同步/异步追加及读取，未遗留旧虚拟目录依赖。
+  - `artifact-uri-infrastructure-001` 的完整 infrastructure 初轮为1732 passed、2 failed；两项为既有 fixture 缺目标主线程及旧锁私有字段断言，未修改生产合同，补齐身份并验证实际句柄关闭后由 `artifact-uri-final-unit-002` 定向通过。提示测试保留2500字符预算并精简说明；禁用压缩仍保留可用的压缩历史读取工具，禁用两者则不暴露二者和压缩指令。最终补证未重复全套 infrastructure。`artifact-uri-web-001`、`artifact-uri-browser-001` 通过 Web 单元及真实 Chromium 附件预览；`artifact-uri-type-001` 真实 tsc、`artifact-uri-build-001` Web build、`artifact-uri-protocol-001` 官方生成检查和 `artifact-uri-compile-001` 均exit0。大型完整 Web E2E及外部真实模型未在本批运行，不能由组件或协议桩通过代替。
 
 ## 6. 验证与交付
 

@@ -88,7 +88,7 @@ try {
     const maxEdge = url.searchParams.get("max_edge");
     attachmentRequests.push({ fileId, variant, maxEdge });
 
-    if (fileId.endsWith("broken.png") && variant === "thumbnail" && brokenThumbnailAttempts++ === 0) {
+    if (fileId.endsWith("att_561d18fc1caaeb847ba561feab9afd9d") && variant === "thumbnail" && brokenThumbnailAttempts++ === 0) {
       await route.fulfill({
         status: 503,
         contentType: "application/json",
@@ -96,15 +96,15 @@ try {
       });
       return;
     }
-    if (fileId.endsWith(".png")) {
+    if (["att_ca0fdda93084dec429773195bbc9904e", "att_561d18fc1caaeb847ba561feab9afd9d"].some((id) => fileId.endsWith(id))) {
       await route.fulfill({ status: 200, contentType: "image/png", body: imageBytes });
       return;
     }
-    if (fileId.endsWith("report.pdf")) {
+    if (fileId.endsWith("att_6466e450a16b77b865c5829d6b6c56d9")) {
       await route.fulfill({ status: 200, contentType: "application/pdf", body: pdfBytes });
       return;
     }
-    if (fileId.endsWith("notes.txt")) {
+    if (fileId.endsWith("att_e39538e7f27a7bf579cd9b85a103c0f0")) {
       if (variant === "original" && failNotesOriginal) {
         await route.fulfill({
           status: 404,
@@ -147,7 +147,7 @@ try {
     await messageSurface.getByRole("heading", { name: "请检查这些附件" }).waitFor();
     await page.getByText("重新加载附件预览").waitFor({ state: "visible", timeout: 10_000 });
     result.thumbnailRequest = attachmentRequests.find(
-      (request) => request.fileId.endsWith("valid.png") && request.variant === "thumbnail",
+      (request) => request.fileId.endsWith("att_ca0fdda93084dec429773195bbc9904e") && request.variant === "thumbnail",
     ) || null;
     if (!result.thumbnailRequest || result.thumbnailRequest.maxEdge !== "512") {
       throw new Error(`缩略图请求没有使用 512 边界: ${JSON.stringify(attachmentRequests)}`);
@@ -171,21 +171,21 @@ try {
     await resourcePanel.locator('img[alt="valid.png"]').waitFor({ state: "visible", timeout: 10_000 });
     result.imageOpenedInResourcePanel = await page.locator('[role="dialog"]').count() === 0
       && attachmentRequests.some(
-        (request) => request.fileId.endsWith("valid.png") && request.variant === "original",
+        (request) => request.fileId.endsWith("att_ca0fdda93084dec429773195bbc9904e") && request.variant === "original",
       );
 
     await messageSurface.locator('button[aria-label="在右侧打开附件：report.pdf"]').click();
     await resourcePanel.getByRole("region", { name: "附件预览：report.pdf" }).waitFor({ state: "visible", timeout: 10_000 });
     await resourcePanel.locator('iframe[title="PDF 附件：report.pdf"]').waitFor({ state: "visible", timeout: 10_000 });
     result.pdfOpenedInResourcePanel = attachmentRequests.some(
-      (request) => request.fileId.endsWith("report.pdf") && request.variant === "original",
+      (request) => request.fileId.endsWith("att_6466e450a16b77b865c5829d6b6c56d9") && request.variant === "original",
     );
 
     await messageSurface.locator('button[aria-label="在右侧打开附件：notes.txt"]').click();
     await resourcePanel.getByRole("region", { name: "附件预览：notes.txt" }).waitFor({ state: "visible", timeout: 10_000 });
     await resourcePanel.getByText("这段文本来自会话附件原件。").waitFor({ state: "visible", timeout: 10_000 });
     result.textOpenedInResourcePanel = attachmentRequests.some(
-      (request) => request.fileId.endsWith("notes.txt") && request.variant === "original",
+      (request) => request.fileId.endsWith("att_e39538e7f27a7bf579cd9b85a103c0f0") && request.variant === "original",
     );
 
     failNotesOriginal = true;

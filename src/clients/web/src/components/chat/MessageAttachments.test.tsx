@@ -5,7 +5,7 @@ import MessageAttachments from "./MessageAttachments";
 import type { AttachmentRef, TurnAttachment } from "../../types/backend";
 
 const image: AttachmentRef = {
-  file_id: "boxteam-session://ses_test/attachments/image.png",
+  file_id: "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/session/ses_fea5c0c71d0f76cc8844c3a8f90afede/attachments/att_4ee84a82b5e4c9e6651b13fd27dcf615",
   name: "image.png",
   content_type: "image/png",
   data_url: "data:image/png;base64,preview",
@@ -48,7 +48,7 @@ describe("MessageAttachments", () => {
 
   test("通用文件即使没有图片预览也可以通过右侧入口打开", () => {
     const file: AttachmentRef = {
-      file_id: "boxteam-session://ses_test/attachments/report.pdf",
+      file_id: "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/session/ses_fea5c0c71d0f76cc8844c3a8f90afede/attachments/att_6466e450a16b77b865c5829d6b6c56d9",
       name: "report.pdf",
       content_type: "application/pdf",
     };

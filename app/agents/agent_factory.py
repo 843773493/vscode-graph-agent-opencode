@@ -17,6 +17,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from app.abstractions.communication import SessionCommunicationProtocol
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
+from app.abstractions.resource_file_content import ResourceFileContent
 from app.abstractions.session_context import (
     SessionContextQueryProtocol,
     WorkspaceSessionContextClientProtocol,
@@ -84,12 +85,10 @@ from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.lifecycle import LifetimeScope
 from app.core.phase_observer import observe_phase_sync
+from app.core.resource_uri import parse_session_artifact_uri
 from app.domain.itemized.hashing import sha256_jcs
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
-from app.services.infrastructure.attachment_blob_catalog.store import (
-    StoredAttachmentContent,
-)
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.events.channel_events import (
     ContextSourceEvent,
@@ -497,19 +496,26 @@ def create_my_deep_agent(
             raise RuntimeError(
                 "构建 Workspace Skill catalog 需要 WorkspaceFileResourceRegistry"
             )
-    attachment_reader: Callable[[str, str], StoredAttachmentContent] | None = None
-    if owns_thread and isinstance(checkpointer, RolloutCheckpointSaver):
-        def read_attachment(uri_session_id: str, file_id: str) -> StoredAttachmentContent:
-            binding = tool_invocation_context.thread_binding
-            if binding is None or uri_session_id != binding.session_id:
-                raise PermissionError("附件 URI 不属于当前 Agent SessionThread")
+    tool_output_store = ToolOutputStore(workspace_root=workspace_root)
+
+    def read_artifact(file_id: str, max_bytes: int) -> ResourceFileContent:
+        binding = tool_invocation_context.thread_binding
+        if not owns_thread or binding is None:
+            raise PermissionError("产物读取缺少当前 Agent SessionThread")
+        parsed = parse_session_artifact_uri(file_id)
+        if parsed.tail_segments[0] != binding.session_id:
+            raise PermissionError("产物 URI 不属于当前 Agent SessionThread")
+        if parsed.session_artifact_kind == "attachments":
+            if not isinstance(checkpointer, RolloutCheckpointSaver):
+                raise PermissionError("附件读取缺少原 checkpoint owner")
             return checkpointer.read_tool_call_attachment(
                 binding.session_id, thread_id=binding.thread_id, file_id=file_id,
                 tool_call_id=tool_invocation_context.require_tool_call_id(),
                 model_call_id=tool_invocation_context.require_model_call_id(),
             )
-        attachment_reader = read_attachment
-    backend = build_workspace_backend(workspace_root, attachment_reader=attachment_reader)
+        return tool_output_store.read(binding.session_id, file_id, max_bytes)
+
+    backend = build_workspace_backend(workspace_root)
     # CSM 的控制状态必须经唯一 RolloutCheckpointSaver/ContextStore owner 持久化。
     # 生产 checkpointer 就是该 owner；其它（测试替身）checkpointer 没有
     # ContextStore，只能退化为纯内存 CSM。合成 session（例如工具清单检查用的
@@ -859,7 +865,7 @@ def create_my_deep_agent(
 
     tool_output_middleware = ToolOutputMiddleware(
         session_id=session_id,
-        store=ToolOutputStore(workspace_root=workspace_root),
+        store=tool_output_store,
     )
     tool_invocation_context_middleware = ToolInvocationContextMiddleware(
         tool_invocation_context
@@ -871,6 +877,7 @@ def create_my_deep_agent(
         workspace_root=workspace_root,
         resource_navigation=resource_navigation,
         text_mutations=text_mutations,
+        artifact_reader=read_artifact,
         permissions=permissions,
         resolved_skills=resolved_skills,
         execution_owned_skill_catalog=resource_activation is not None,

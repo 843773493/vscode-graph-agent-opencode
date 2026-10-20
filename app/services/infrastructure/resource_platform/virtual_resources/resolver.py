@@ -139,14 +139,14 @@ def resource_navigation_node(
             raise ResourceUriResolveError("capability_denied", "已公布的资源根必须是目录")
         if resource_shape not in {"directory", "file"}:
             raise ResourceUriResolveError("capability_denied", "文件树节点不能作为领域对象")
-    elif parsed.kind in {"agent-spec", "config"}:
+    elif parsed.kind in {"agent-spec", "config"} or parsed.session_artifact_kind is not None:
         if resource_shape != "file" or (parsed.kind == "config" and len(parsed.tail_segments) != 1):
             raise ResourceUriResolveError("capability_denied", "单文件引用不允许追加子路径")
     elif resource_shape != "domain_object":
         raise ResourceUriResolveError("capability_denied", "领域资源不公开私有文件树")
     operations = (
         ("describe", "list", "search") if resource_shape == "directory"
-        else ("describe", "read", "search") if resource_shape == "file" and parsed.kind in {"files", "skills"}
+        else ("describe", "read", "search") if resource_shape == "file" and (parsed.kind in {"files", "skills"} or parsed.session_artifact_kind == "tool-results")
         else ("describe", "read") if resource_shape == "file" else ("describe",)
     )
     return ResourceNavigationNode(

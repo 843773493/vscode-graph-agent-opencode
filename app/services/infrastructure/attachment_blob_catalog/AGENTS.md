@@ -30,6 +30,7 @@ catalog 侧原先的单文件 `catalog.py` 已按垂直链路拆入本包，faca
 - ingest record 的 digest/blob_id/length + 状态 UPDATE 是单点：`ingest._update_ingest_record_identity`，`mark_ingest_hashed`（走 `hashed`）与 `publish_blob_and_owner_ref`（走 `published`）都调用它，不得在两处各写一条同型语句。
 - catalog mixin 依赖宿主提供的 `database_path`、`_closed`、`_connection`、`_connected()`、`write_transaction()` 和同一 catalog 的既有查询；`ForkAttachmentStoreMixin` 显式消费宿主的 catalog、locator、Session gate、控制库及正文验证端口，不建立第二套 store。表 DDL 与列清单常量的唯一定义点是 `schema.py`，不复制 DDL。
 - 无 claim 的复用必须冻结真实已发布 owner 引用；保活范围和消费 Thread 不混同。必要 claim 在 source guard 释放前建立，reserved 引用在 finalizer 提交前不可读取；失败、删除与 GC 只处理本 operation 的精确引用，无 claim 的操作不建立 settlement record。
+- 附件单文件 URI 只由公共 grammar 构造与解析；原 attachment_id、blob/lease/GC 语义不变。fork 快照同时冻结目标 Gateway/Workspace URI，投影不得按当前请求重新拼目标或重绑映射。
 - 错误分类沿用 `session_catalog_store`：`TypeError` 类型错、`ValueError` 形态非法、`KeyError` 目标行缺失、`RuntimeError`（含 `BlobIdentityConflictError`）语义冲突；库被外部改动一律 fail-closed。
 - GC 必须先原子提交 tombstone/availability，再删物理正文；失败可幂等重试。
 - 修改本目录后运行 `uv run ruff check`、`uv run python -m compileall` 与带进程外保护地跑 `uv run pytest tests/unit/services/infrastructure`。

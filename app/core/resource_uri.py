@@ -410,6 +410,23 @@ def resource_display_uri(
     return parse_resource_uri(uri).display_uri
 
 
+def session_artifact_uri(
+    workspace_id: str, session_id: str, artifact_kind: Literal["attachments", "tool-results"], artifact_id: str,
+    *, gateway_authority: str | None = None,
+) -> str:
+    """产物保留原业务 ID，只经公共构造器登记单文件引用。"""
+    return resource_display_uri(scope="workspace", scope_id=workspace_id, kind="session",
+                                tail_segments=(session_id, artifact_kind, artifact_id), gateway_authority=gateway_authority)
+
+
+def parse_session_artifact_uri(uri: str, *, local_gateway_id: str | None = None) -> ParsedResourceUri:
+    """复用公共 grammar；领域对象或目录不能冒充会话产物。"""
+    parsed = parse_resource_uri(uri, local_gateway_id=local_gateway_id)
+    if parsed.session_artifact_kind is None:
+        raise ResourceUriGrammarError("malformed_path", "资源引用必须精确指向一个会话产物")
+    return parsed
+
+
 def workspace_agent_spec_display_uri(workspace_id: str) -> str:
     """构造并校验 workspace AGENTS 规范 display URI。"""
     return resource_display_uri(

@@ -5667,7 +5667,7 @@ async function publishedForkOwner(source, request, fork, sourceEvidence, targetS
         [snapshot.claim_id, "committed", snapshot.target_owner_ref_id]);
     } else assert.equal(snapshot.availability, "unavailable");
     resources.push({ resource_uri: snapshot.source_file_id, action: snapshot.target_action, availability: snapshot.availability,
-      target_uri: snapshot.availability === "available" ? `boxteam-session://${target.sessionId}/attachments/${snapshot.target_attachment_id}` : null,
+      target_uri: snapshot.availability === "available" ? snapshot.target_file_id : null,
       reason: snapshot.availability === "available" ? null : snapshot.unavailable_reason });
   }
   const debug = await readFrozenRollout(target, catalog,
@@ -6495,7 +6495,7 @@ async function createAttachmentSource(surface, title, owners, { prefixTurns = 0,
   const refs = material.turn.user_messages.flatMap((message) => message.attachments);
   assert.equal(refs.length, 1);
   const attachment = refs[0];
-  assert.match(attachment.file_id, new RegExp(`^boxteam-session://${source.sessionId}/attachments/att_`));
+  assert.match(attachment.file_id, new RegExp(`^boxteam://(?:${source.gatewayId}/)?workspace/${source.workspaceIdentity}/resources/session/${source.sessionId}/attachments/att_[0-9a-f]{32}$`));
   const content = await readAttachmentContent(source, attachment.file_id);
   assert.deepEqual(Buffer.from(content.bytes), buffer);
   const blob = (await readAttachmentSql(source, "SELECT b.* FROM attachment_blobs b JOIN attachment_owner_refs r USING(blob_id) WHERE r.owner_session_id=? AND r.attachment_id=?", [source.sessionId, attachment.file_id.split("/").at(-1)]))[0];
@@ -6526,7 +6526,7 @@ async function runMessageStreamAfter20(surface) {
   const published = await publishedForkOwner(source, request, fork, before);
   const targetFile = published.targetHistory.items.flatMap((turn) => turn.user_messages)
     .flatMap((message) => message.attachments).find((item) => item.name === attachment.name)?.file_id;
-  assert.ok(targetFile?.startsWith(`boxteam-session://${published.owner.sessionId}/attachments/`));
+  assert.ok(targetFile?.startsWith(`boxteam://${published.owner.gatewayId}/workspace/${published.owner.workspaceIdentity}/resources/session/${published.owner.sessionId}/attachments/`));
   const capabilityBoundary = await runAttachmentCapabilityBoundary(published.owner, source,
     targetFile, attachment.file_id, "message-stream-after20");
   const response = messageStreamResponses.findLast((fact) => fact.status === 200
@@ -6581,14 +6581,14 @@ async function runMessageStreamAfter20(surface) {
 }
 
 async function runAttachmentCapabilityBoundary(owner, source, targetFile, sourceFile, label) {
-  const alias = targetFile.replace("boxteam-session://", "session-artifacts/");
+  const alias = targetFile.replace(`boxteam://${owner.gatewayId}/`, "boxteam://");
   const completed = await completeOwnerTurn(owner, "读取附件的规范路径，并确认其它会话引用及两种路径的写入都被明确拒绝。", [
     { label: `attachment-capability-boundary-${label}`, calls: [
       { id: "attachment-alias-read", name: "read_file", arguments: { path: alias } },
       { id: "attachment-source-read", name: "read_file", arguments: { path: sourceFile } },
-      { id: "attachment-uri-write", name: "write_file", arguments: { file_path: targetFile, content: "forbidden rewrite" } },
-      { id: "attachment-alias-write", name: "write_file", arguments: { file_path: alias, content: "forbidden rewrite" } },
-      { id: "attachment-alias-edit", name: "edit_file", arguments: { file_path: alias, old_string: "独占附件事实", new_string: "forbidden rewrite" } },
+      { id: "attachment-uri-write", name: "write_file", arguments: { file_path: targetFile, content: "forbidden rewrite", expected_version: "absent" } },
+      { id: "attachment-alias-write", name: "write_file", arguments: { file_path: alias, content: "forbidden rewrite", expected_version: "absent" } },
+      { id: "attachment-alias-edit", name: "edit_file", arguments: { file_path: alias, expected_version: `sha256:${"0".repeat(64)}`, old_string: "独占附件事实", new_string: "forbidden rewrite" } },
     ] }, finalResponse(`attachment-capability-boundary-final-${label}`, "附件规范路径可读，跨会话与写入能力已明确拒绝。"),
   ]);
   assert.equal(completed.turn.response_parts.filter((part) => part.kind === "tool_result").length, 5);
@@ -6597,9 +6597,9 @@ async function runAttachmentCapabilityBoundary(owner, source, targetFile, source
     return String(assertBoundToolResult(owner, completed.sent, completed.turn, completed.calls[0], callId, toolName).result);
   };
   assert.ok(boundaryResult("attachment-alias-read").includes(source.sessionId), "规范 alias 必须消费同一受信附件 capability");
-  assert.match(boundaryResult("attachment-source-read"), /不属于当前 Agent SessionThread/);
+  assert.match(boundaryResult("attachment-source-read"), /产物 URI 不属于当前 Agent SessionThread/);
   for (const callId of ["attachment-uri-write", "attachment-alias-write", "attachment-alias-edit"]) {
-    assert.match(boundaryResult(callId), /不提供附件写入或枚举 capability/);
+    assert.equal(JSON.parse(boundaryResult(callId)).code, "capability_denied");
   }
   return completed;
 }
@@ -6629,7 +6629,7 @@ async function runCopyAttachmentLifecycle(surface, owners) {
     assert.equal(claim.state, phase.endsWith(".preparing") ? "preparing" : "owner_reserved");
     assert.equal(claim.target_owner_state, phase.endsWith(".preparing") ? null : "active");
     const target = { ...source, sessionId: captured.target_session_id, threadId: captured.target_thread_id };
-    const targetFile = `boxteam-session://${target.sessionId}/attachments/${snapshot.target_attachment_id}`;
+    const targetFile = snapshot.target_file_id;
     let sourceDelete;
     if (!phase.endsWith(".preparing")) {
       sourceDelete = await deleteOwner(source);
@@ -6949,7 +6949,7 @@ async function runCopyMissingAttachment(surface, owners) {
   assert.equal(unavailable[0].claim_id, null);
   assert.deepEqual(await copyAttachmentClaims(surface, optionalOperation), []);
   const history = await loadCompleteThreadHistory(target.owner);
-  const targetFile = `boxteam-session://${target.owner.sessionId}/attachments/${unavailable[0].target_attachment_id}`;
+  const targetFile = unavailable[0].target_file_id;
   const card = await locateAttachmentCard(target.owner, history, targetFile, optionalAttachment.name, "unavailable");
   assert.equal(await card.getByRole("status").innerText(), "附件不可用");
   assert.ok((await card.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.disabled))).every(Boolean));
@@ -9877,7 +9877,7 @@ function classifyConsoleErrors(input = {}) {
           || ["bootstrap", "main_thread", "session", "goal"].includes(refusal.kind) && detail !== `Session ${nodeId} not found`
           || refusal.kind === "file_tree_settings" && detail !== `会话不存在: ${nodeId}`
           || refusal.kind === "attachment_content" && (typeof refusal.attachmentFileId !== "string"
-            || !refusal.attachmentFileId.startsWith(`boxteam-session://${nodeId}/attachments/`)
+            || !refusal.attachmentFileId.includes(`/resources/session/${nodeId}/attachments/`)
             || detail !== `会话附件已释放: ${refusal.attachmentFileId}`))) return null;
       if (refusal.kind === "job") {
         if (status !== 404 || detail !== `Job ${refusal.jobId} not found`) return null;

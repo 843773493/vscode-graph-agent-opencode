@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import asynccontextmanager, closing
 from contextvars import copy_context
 from dataclasses import dataclass
@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.core.phase_observer import observe_phase
+from app.core.resource_uri import parse_session_artifact_uri
 from app.core.session_catalog_store import SessionCreationRecord
 from app.core.session_catalog_store.contracts import ForkSourceCaptureRecord
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
@@ -70,6 +71,17 @@ if TYPE_CHECKING:
     from app.services.infrastructure.rollout_context.checkpoint.saver import (
         RolloutCheckpointSaver,
     )
+
+
+def _attachment_references(references: Iterable[tuple[str, int]]) -> tuple[tuple[str, bool], ...]:
+    result: list[tuple[str, bool]] = []
+    for uri, required in references:
+        if "://" not in uri:
+            continue
+        if parse_session_artifact_uri(uri).session_artifact_kind != "attachments":
+            raise ValueError("fork 的附件引用登记了非附件资源")
+        result.append((uri, bool(required)))
+    return tuple(result)
 
 @dataclass(frozen=True, slots=True)
 class RolloutForkResult:
@@ -246,8 +258,7 @@ class CheckpointForkSource:
                         )
                     references = []
                     while rows := cursor.fetchmany(256):
-                        references.extend((uri, bool(required)) for uri, required in rows
-                                          if uri.startswith("boxteam-session://"))
+                        references.extend(_attachment_references(rows))
                     source = ResourceTargetFacts(
                         resource_uri=request["source_uri"], storage_domain_id=source_domain,
                         lifecycle="snapshot", available=True, required_for_context=True, snapshot_import_supported=True,
@@ -419,7 +430,7 @@ class CheckpointForkSource:
                             (*[value for scope in local_scopes for value in scope], point.anchor_item_id,
                              source_view_id, 1 if anchor_mode == "before" else 0),
                         ).fetchall()
-                native = tuple((uri, bool(required)) for uri, required in references if uri.startswith("boxteam-session://"))
+                native = _attachment_references(references)
                 if native and self.attachment_store is None:
                     raise RuntimeError("fork source 含附件，但 Saver 未注入唯一 AttachmentBlobStore")
                 attachments = self.attachment_store.project_fork_attachment_sources(

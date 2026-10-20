@@ -89,13 +89,8 @@ def test_backend_virtual_path_is_hidden_from_model_output() -> None:
     assert backend_virtual_to_workspace_relative("/") == "."
 
 
-@pytest.mark.parametrize("raw_path", ["boxteam-session://current/attachments/att_owned", "session-artifacts/current/attachments/att_owned"])
-def test_attachment_uri_and_alias_share_one_internal_route(raw_path: str) -> None:
-    assert normalize_workspace_relative_path(raw_path) == "session-artifacts/current/attachments/att_owned"
-
-
-@pytest.mark.parametrize("raw_path", ["boxteam-session://current/attachments/../secret", "boxteam-session://current/attachments/att_owned?owner=other", "boxteam-session://current/attachments/att_owned#other"])
-def test_attachment_uri_rejects_hidden_locator_overrides(raw_path: str) -> None:
+@pytest.mark.parametrize("raw_path", ["boxteam-session://current/attachments/att_owned", "boxteam-session://current/attachments/../secret"])
+def test_ordinary_workspace_resolver_rejects_old_artifact_scheme(raw_path: str) -> None:
     with pytest.raises(ValueError):
         normalize_workspace_relative_path(raw_path)
 

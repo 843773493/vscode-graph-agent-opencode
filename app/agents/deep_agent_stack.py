@@ -18,6 +18,7 @@ from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
+from app.abstractions.resource_file_content import ResourceFileReader
 from app.agents.custom_tool_confirmation_middleware import (
     CustomToolConfirmationMiddleware,
 )
@@ -140,6 +141,7 @@ def build_deep_agent_middleware(
     workspace_root: Path,
     resource_navigation: ResourceNavigation,
     text_mutations: WorkspaceTextMutationOwner,
+    artifact_reader: ResourceFileReader,
     permissions: list[FilesystemPermission] | None,
     resolved_skills: PublishedSkillCatalog | None,
     compaction_preflight: CompactionPreflightPort,
@@ -189,6 +191,7 @@ def build_deep_agent_middleware(
         workspace_root=workspace_root,
         resource_navigation=resource_navigation,
         text_mutations=text_mutations,
+        artifact_reader=artifact_reader,
     )
     _filter_middleware_tools(
         filesystem_middleware,

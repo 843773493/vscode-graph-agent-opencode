@@ -92,7 +92,10 @@ async def test_activate_then_release_claim_by_target(
         copy_operation_id="claim-operation", creation_key=None,
         source_session_id=SOURCE_SESSION_ID, source_thread_id=source_thread_id,
         target_session_id=TARGET_SESSION_ID, target_thread_id=target_thread_id,
-        fork_id=CLAIM_ID, request={"relationship": "pinned", "checkpoint_ns": ""},
+        fork_id=CLAIM_ID, request={
+            "relationship": "pinned", "checkpoint_ns": "",
+            "target_main_thread_id": target_thread_id,
+        },
     )
     control = SessionControlStore(storage.storage._resolve_session_node(SOURCE_SESSION_ID) / "session-control.sqlite")
     try:

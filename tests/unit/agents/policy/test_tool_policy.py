@@ -171,6 +171,7 @@ def test_policy_default_names_match_actual_agent_graph_tools(text_mutations_fact
         backend=StateBackend(),
         workspace_root=tmp_path,
         resource_navigation=MagicMock(),
+        artifact_reader=MagicMock(),
         permissions=None,
         # D1 后 resolved_skills 合同是 PublishedSkillCatalog | None；
         # 本测试只关注工具名集合，不装配 Skill middleware。

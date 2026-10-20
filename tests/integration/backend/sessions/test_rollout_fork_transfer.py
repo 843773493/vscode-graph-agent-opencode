@@ -16,6 +16,7 @@ import pytest
 from app.core.identifier import create_prefixed_id
 from app.core.resource_uri import (
     parse_resource_uri,
+    parse_session_artifact_uri,
     parse_session_thread_uri,
     resource_display_uri,
     thread_resource_uri,
@@ -671,7 +672,7 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
     assert attachment_result["resource_uri"] == attachment_source["resource_uri"]
     assert attachment_result["action"] == "copy_snapshot" and attachment_result["availability"] == "available"
     target_file_id = attachment_result["target_uri"]
-    assert target_file_id.startswith(f"boxteam-session://{target_session_id}/attachments/")
+    assert parse_session_artifact_uri(target_file_id).tail_segments[:2] == (target_session_id, "attachments")
     attachment_response = await target.client.get(f"/api/v1/sessions/{target_session_id}/attachments/content", params={
         "file_id": target_file_id, "variant": "original",
     })
@@ -971,7 +972,7 @@ async def test_real_source_child_fork_cold_history_attachment_and_successor(
     assert _attachment_claims(source, key) == []
     assert len(published["resources"]) == 1
     target_file_id = published["resources"][0]["target_uri"]
-    assert target_file_id.startswith(f"boxteam-session://{target_session_id}/attachments/")
+    assert parse_session_artifact_uri(target_file_id).tail_segments[:2] == (target_session_id, "attachments")
     lifecycle = {"source_offline": source.restart_backend("kill"), "target_cold_restart": target.restart_backend()}
     assert lifecycle["target_cold_restart"]["before_pid"] != lifecycle["target_cold_restart"]["after_pid"]
     (artifacts / "source-child-backend-lifecycle.json").write_text(json.dumps(lifecycle, ensure_ascii=False, indent=2) + "\n")
@@ -1338,7 +1339,7 @@ async def test_real_fork_delivery_trace_survives_owner_failure(
     assert attachment_result["resource_uri"] == attachment_source["resource_uri"]
     assert attachment_result["action"] == "copy_snapshot" and attachment_result["availability"] == "available"
     target_file_id = attachment_result["target_uri"]
-    assert target_file_id.startswith(f"boxteam-session://{target_session_id}/attachments/")
+    assert parse_session_artifact_uri(target_file_id).tail_segments[:2] == (target_session_id, "attachments")
     assert _attachment_claims(source, key) == []
     target_claims = _attachment_claims(target, key)
     assert len(target_claims) == 1 and target_claims[0]["state"] == "committed"

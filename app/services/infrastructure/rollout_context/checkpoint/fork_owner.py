@@ -182,6 +182,7 @@ class CheckpointForkOwner:
             "checkpoint_ns": "", "creation_kind": frozen.creation_kind,
             "resources": [choice.model_dump(mode="json") for choice in self.materialized_resource_choices(frozen, intent)],
             "source_storage_domain_id": source_domain, "target_storage_domain_id": target_domain,
+            "target_gateway_id": intent["target_gateway_id"],
             "target_main_thread_id": target_main, "creation_preimage_hash": creation.preimage_hash,
         }:
             raise ValueError("fork_owner_overlap: target capture 与完整冻结 creation 请求不一致")
@@ -418,6 +419,7 @@ class CheckpointForkOwner:
                       "resources": resource_choices or [],
                        "source_storage_domain_id": source_domain,
                        "target_storage_domain_id": target_domain,
+                       "target_gateway_id": get_current_gateway_id(),
                        "target_main_thread_id": target_owner.thread_id if creation_record is not None
                        else self.source.resolve_main_thread_owner(target_session_id).thread_id,
                       "creation_preimage_hash": creation_record.preimage_hash if creation_record is not None else thread_creation_record.preimage_hash if thread_creation_record is not None else None},

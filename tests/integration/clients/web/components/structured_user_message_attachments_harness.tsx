@@ -7,22 +7,22 @@ import WorkspaceAuxiliaryPanel from "../../../../../src/clients/web/src/componen
 
 const attachments: AttachmentRef[] = [
   {
-    file_id: "boxteam-session://session-test/attachments/valid.png",
+    file_id: "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/session/ses_0a66466c292b7d138cb8baf7bd444745/attachments/att_ca0fdda93084dec429773195bbc9904e",
     name: "valid.png",
     content_type: "image/png",
   },
   {
-    file_id: "boxteam-session://session-test/attachments/broken.png",
+    file_id: "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/session/ses_0a66466c292b7d138cb8baf7bd444745/attachments/att_561d18fc1caaeb847ba561feab9afd9d",
     name: "broken.png",
     content_type: "image/png",
   },
   {
-    file_id: "boxteam-session://session-test/attachments/report.pdf",
+    file_id: "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/session/ses_0a66466c292b7d138cb8baf7bd444745/attachments/att_6466e450a16b77b865c5829d6b6c56d9",
     name: "report.pdf",
     content_type: "application/pdf",
   },
   {
-    file_id: "boxteam-session://session-test/attachments/notes.txt",
+    file_id: "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/session/ses_0a66466c292b7d138cb8baf7bd444745/attachments/att_e39538e7f27a7bf579cd9b85a103c0f0",
     name: "notes.txt",
     content_type: "text/plain",
   },

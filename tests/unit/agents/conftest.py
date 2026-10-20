@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from deepagents.middleware.filesystem import FilesystemMiddleware
 
+from app.abstractions.resource_file_content import ResourceFileReader
 from app.agents.workspace_filesystem_tools import configure_workspace_filesystem_tools
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.core.workspace_identity import load_or_create_workspace_id
@@ -21,6 +22,7 @@ def configure_filesystem_tools(text_mutations_factory) -> Iterator[Callable[...,
 
     def configure(
         middleware: FilesystemMiddleware, *, workspace_root: Path, project_root: Path | None = None,
+        artifact_reader: ResourceFileReader | None = None,
     ) -> ResourceNavigation:
         workspace_id = load_or_create_workspace_id(workspace_root)
         navigation = ResourceNavigation(
@@ -28,7 +30,7 @@ def configure_filesystem_tools(text_mutations_factory) -> Iterator[Callable[...,
             file_paths=WorkspaceFilePaths(workspace=workspace_root, workspace_id=workspace_id, bindings=None),
         )
         configure_workspace_filesystem_tools(middleware, workspace_root=workspace_root, resource_navigation=navigation,
-            text_mutations=text_mutations_factory(workspace_root))
+            text_mutations=text_mutations_factory(workspace_root), artifact_reader=artifact_reader)
         return navigation
 
     try:

@@ -11,7 +11,7 @@ def test_user_projection_excludes_generated_attachment_blocks_from_visible_text(
                 "origin": "generated",
                 "kind": "attachment_manifest",
                 "schema_version": 1,
-                "file_id": "boxteam-session://s/attachments/a.png",
+                "file_id": "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/session/ses_043a718774c572bd8a25adbeb1bfcd5c/attachments/att_7f071235805fbf58a2524f77bff76e13",
                 "path": ".boxteam/sessions/s/attachments/a.png",
             },
         },
@@ -22,7 +22,7 @@ def test_user_projection_excludes_generated_attachment_blocks_from_visible_text(
                 "origin": "generated",
                 "kind": "attachment_preview",
                 "schema_version": 1,
-                "file_id": "boxteam-session://s/attachments/a.png",
+                "file_id": "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/session/ses_043a718774c572bd8a25adbeb1bfcd5c/attachments/att_7f071235805fbf58a2524f77bff76e13",
             },
         },
     ]
@@ -32,7 +32,7 @@ def test_user_projection_excludes_generated_attachment_blocks_from_visible_text(
         {
             "attachments": [
                 {
-                    "file_id": "boxteam-session://s/attachments/a.png",
+                    "file_id": "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/session/ses_043a718774c572bd8a25adbeb1bfcd5c/attachments/att_7f071235805fbf58a2524f77bff76e13",
                     "name": "a.png",
                     "content_type": "image/png",
                 }
