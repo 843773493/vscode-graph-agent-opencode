@@ -1579,6 +1579,10 @@ message ResourceNavigationRequest {
   uint32 timeout_ms = 7;
   uint32 scan_limit = 8;
   uint32 max_response_bytes = 9;
+  // 默认严格文本；auto 仅按 owner 已支持的扩展名读取完整媒体。
+  string read_format = 10;
+  optional uint32 line_offset = 11;
+  optional uint32 max_lines = 12;
 }
 
 message ResourceNavigationNodeDTO {
@@ -1597,6 +1601,10 @@ message ResourceNavigationResultDTO {
   optional string truncation_reason = 6;
   // 普通文件目录为可变视图；续页不表示历史快照。
   string view = 7;
+  optional string content_encoding = 8;
+  optional string media_type = 9;
+  optional string mime_type = 10;
+  optional uint32 line_offset = 11;
 }
 
 message WorkspaceResourceDTO {

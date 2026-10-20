@@ -25,14 +25,14 @@ FILESYSTEM_SYSTEM_PROMPT = (
     "Do not grep or glob the .boxteam runtime directory; it contains session logs, streams, and traces. "
     "Prefer standard workspace-relative paths for every model-facing filesystem path. Use `.` for the "
     "workspace root and paths such as `src/main.js` for files; this is the unambiguous recommended "
-    "form and stays valid when the workspace moves. Absolute paths that point inside the workspace "
-    "and workspace files resource URIs are accepted and normalized to their workspace-relative form; "
+    "form and stays valid when the workspace moves. Native paths and resource URIs resolve at the fixed target owner; "
     "external targets require the target owner's native-directory capability and otherwise fail explicitly without redirection. "
     "ls returns bounded JSON with resource URIs and an optional next_cursor; pass the same target and limits when continuing. "
     "Workspace files URIs returned by ls and paths returned by glob and grep can be passed unchanged to "
-    "read_file, write_file, edit_file, and workspace source-debugging tools. Skill正文只能通过 "
-    "`skill_load` 按名称激活，不要用 read_file 读取 Skill，也不要把 Skill 的内部路径传给工具。 "
-    "Never list, glob, grep, or read any `.boxteam` path. read_file uses a 1-indexed `line_offset`."
+    "read_file, write_file, edit_file, and workspace source-debugging tools. Skill directory/file URIs support ls/read_file "
+    "without activation or tracking; only `skill_load` by name activates instructions. "
+    "Never list, glob, grep, or read any `.boxteam` path directly. read_file uses a 1-indexed `line_offset`, "
+    "reports truncation, and has explicit byte/response/deadline budgets."
 )
 
 FILESYSTEM_TOOL_DESCRIPTIONS = {
@@ -42,11 +42,13 @@ FILESYSTEM_TOOL_DESCRIPTIONS = {
         "Continue with the same target and limits; this is a live directory view, not a historical snapshot."
     ),
     "read_file": (
-        "Read a file; prefer a workspace-relative path. Paths returned by ls, glob, "
+        "Read a file using a workspace-relative/native path or a resource URI. Paths returned by ls, glob, "
         "and grep are reusable unchanged. Use the 1-indexed `line_offset` and "
         "optional `max_lines` for large text files. "
         "Images, audio, video, and PDFs return multimodal content; do not paginate those files. "
-        "Do not read `.boxteam` runtime data or Skill正文；使用 `skill_load` 并传入 Skill 名称。"
+        "Skill file URIs return content without activation; use skill_load to activate instructions. "
+        "Do not access `.boxteam` runtime data directly. max_bytes bounds the scanned prefix including skipped lines; "
+        "increase it explicitly for later lines. Media must fit both byte budgets and is never partially returned."
     ),
     "write_file": "Create a text file; prefer a workspace-relative path.",
     "edit_file": (

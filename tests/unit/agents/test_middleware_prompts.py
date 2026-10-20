@@ -126,6 +126,9 @@ def test_middleware_uses_project_prompts_without_upstream_demo_agents(tmp_path):
         "path",
         "line_offset",
         "max_lines",
+        "max_bytes",
+        "max_response_bytes",
+        "timeout_ms",
     }
 
     compact = _find_middleware(middleware, SummarizationToolMiddleware)

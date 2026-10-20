@@ -6892,6 +6892,23 @@ export declare type ResourceNavigationRequest = Message<"boxteam.workspace.v2.Re
    * @generated from field: uint32 max_response_bytes = 9;
    */
   maxResponseBytes: number;
+
+  /**
+   * 默认严格文本；auto 仅按 owner 已支持的扩展名读取完整媒体。
+   *
+   * @generated from field: string read_format = 10;
+   */
+  readFormat: string;
+
+  /**
+   * @generated from field: optional uint32 line_offset = 11;
+   */
+  lineOffset?: number | undefined;
+
+  /**
+   * @generated from field: optional uint32 max_lines = 12;
+   */
+  maxLines?: number | undefined;
 };
 
 /**
@@ -6971,6 +6988,26 @@ export declare type ResourceNavigationResultDTO = Message<"boxteam.workspace.v2.
    * @generated from field: string view = 7;
    */
   view: string;
+
+  /**
+   * @generated from field: optional string content_encoding = 8;
+   */
+  contentEncoding?: string | undefined;
+
+  /**
+   * @generated from field: optional string media_type = 9;
+   */
+  mediaType?: string | undefined;
+
+  /**
+   * @generated from field: optional string mime_type = 10;
+   */
+  mimeType?: string | undefined;
+
+  /**
+   * @generated from field: optional uint32 line_offset = 11;
+   */
+  lineOffset?: number | undefined;
 };
 
 /**

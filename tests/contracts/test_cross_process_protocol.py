@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from typing import cast
 
+from google.protobuf.json_format import MessageToDict, ParseDict
+
 from app.gateway.protocol.proxy import proxy_target_to_proto
 from app.protocol.codecs.browser import browser_page_to_json, browser_page_to_proto
 from app.protocol.codecs.session_sse import session_sse_to_json, session_sse_to_proto
@@ -12,10 +14,29 @@ from app.protocol.codecs.terminal import (
 from app.protocol.generated.boxteam.browser.v1 import browser_pb2
 from app.protocol.generated.boxteam.gateway.v1 import proxy_pb2
 from app.protocol.generated.boxteam.terminal.v1 import terminal_pb2
-from app.protocol.generated.boxteam.workspace.v2 import session_stream_pb2
+from app.protocol.generated.boxteam.workspace.v2 import public_pb2, session_stream_pb2
+from app.schemas.internal_v2.resource_navigation import (
+    ResourceNavigationRequest,
+    ResourceNavigationResultDTO,
+)
 from app.schemas.internal_v2.session_interaction import SessionExecutionSseDTO
 
 BASELINE_PATH = Path(__file__).with_name("protocol_baseline.json")
+
+
+def test_resource_read_request_and_media_result_survive_proto_wire() -> None:
+    request = ResourceNavigationRequest(uri="boxteam://gateway/gateway_test/resources/skills/demo/image.png",
+        operation="read", read_format="auto", line_offset=2, max_lines=10, max_bytes=2048)
+    encoded = ParseDict(request.model_dump(exclude_none=True), public_pb2.ResourceNavigationRequest()).SerializeToString()
+    received = public_pb2.ResourceNavigationRequest.FromString(encoded)
+    assert ResourceNavigationRequest.model_validate(MessageToDict(received, preserving_proto_field_name=True)) == request
+    result = ResourceNavigationResultDTO.model_validate({
+        "node": {"uri": request.uri, "resource_shape": "file", "operations": ["describe", "read"], "child_path": None},
+        "content": "iVBORw==", "content_encoding": "base64", "media_type": "image", "mime_type": "image/png",
+    })
+    encoded = ParseDict(result.model_dump(exclude_none=True), public_pb2.ResourceNavigationResultDTO()).SerializeToString()
+    received = public_pb2.ResourceNavigationResultDTO.FromString(encoded)
+    assert ResourceNavigationResultDTO.model_validate(MessageToDict(received, preserving_proto_field_name=True)) == result
 
 
 def _baseline() -> dict[str, object]:

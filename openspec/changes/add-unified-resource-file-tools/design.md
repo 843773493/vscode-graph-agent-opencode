@@ -32,7 +32,11 @@ read/write 的文件目标、ls/glob/grep 的根目标和 apply_patch 的根目�
 
 模型 `ls` 首先迁入该共享 owner，工具返回同一有界导航 JSON，包含节点 URI、`entries`、`truncated`、`truncation_reason`、`next_cursor` 和 `view=live`。相对路径与原生绝对路径复用已装配的 `WorkspaceFilePaths`；URI 交公共 grammar/resolver。Container 将唯一导航 owner 经 runtime provider、Agent factory 和 middleware 传入，不按 thread 重建。同步和异步工具共用本地文件执行内核；同步 HTTP 使用独立同步 client，异步 HTTP 使用独立异步 client，普通 Gateway 导航不建立来源观察 state，也不借用长期 watcher 的事件循环或连接。工具期限覆盖输入解析及结果交付；原生阻塞 I/O 不能被取消强制中断，超期结果不会伪报成功。
 
-该工具能力面变化登记为 deep-agent graph revision 8，工具声明加入 `filesystem-ls:bounded-uri-navigation` 并更新 schema hash；旧持久 selector 按既有精确匹配合同明确拒绝，不回退到新图或保留旧 ls。工作区文件 URI 可继续交现有 read_file；Skill 目录 URI 可继续 ls，Skill 文件读取、glob/grep 和写入迁移仍待各自切片完成，不能将目录节点公布的 read 能力误称为模型 read_file 已完成迁移。
+工具声明包含 `filesystem-ls:bounded-uri-navigation`，图绑定遵守既有精确匹配合同，不保留旧 ls 回退。文件 URI 可继续交共享 read_file，Skill 目录 URI 可继续 ls；glob/grep 和写入迁移仍待各自切片完成。
+
+后续 `read_file` 切片将普通文件读取交同一 `ResourceNavigation`，物理删除旧 DeepAgents 普通读取调用。公开请求的 `read_format=text|auto` 默认严格文本，auto 仅识别既有受支持媒体扩展名，不把未知非 UTF-8 字节猜成媒体；结果公布 `content_encoding`、`media_type`、`mime_type`。文本保留原始 UTF-8/BOM/换行，支持一索引 `line_offset` 与 `max_lines`，逐层披露行数、文件字节或响应字节截断；字节窗口包含跳过的行，起点超过窗口时明确要求增加预算。媒体始终返回完整 base64，原件或含媒体 block 的最终工具回执超过预算均明确失败，不生成残缺媒体。
+
+导航的既有默认字节预算不变，显式单次读取上限为32 MiB、响应上限48 MiB；模型读取默认分别为16/24 MiB，并以10秒总期限覆盖解析、目标执行和工具投影。格式化后的行号、截断提示及媒体 metadata 计入最终工具响应。普通 Skill URI 的 ls/read 不激活来源；提示词撤销普通读取禁令，`skill_load` 仍独占激活。现有工作区读取规则对相对/绝对/URI输入一致生效，附件和工具输出仍交独立原业务 owner，旧产物地址的全量迁移继续归第5组。此次工具面登记为 graph revision 9，加入 `filesystem-read:bounded-uri-media`；旧 selector 明确拒绝，未保留旧图回退。
 
 ### 4. 条件写入与多文件发布结果
 

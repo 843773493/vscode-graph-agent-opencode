@@ -1592,6 +1592,10 @@ export interface ResourceNavigationRequest {
   timeout_ms: number;
   scan_limit: number;
   max_response_bytes: number;
+  /** 默认严格文本；auto 仅按 owner 已支持的扩展名读取完整媒体。 */
+  read_format: string;
+  line_offset?: number | undefined;
+  max_lines?: number | undefined;
 }
 
 export interface ResourceNavigationNodeDTO {
@@ -1612,6 +1616,10 @@ export interface ResourceNavigationResultDTO {
     | undefined;
   /** 普通文件目录为可变视图；续页不表示历史快照。 */
   view: string;
+  content_encoding?: string | undefined;
+  media_type?: string | undefined;
+  mime_type?: string | undefined;
+  line_offset?: number | undefined;
 }
 
 export interface WorkspaceResourceDTO {
@@ -12518,6 +12526,9 @@ function createBaseResourceNavigationRequest(): ResourceNavigationRequest {
     timeout_ms: 0,
     scan_limit: 0,
     max_response_bytes: 0,
+    read_format: "",
+    line_offset: undefined,
+    max_lines: undefined,
   };
 }
 
@@ -12533,6 +12544,9 @@ export const ResourceNavigationRequest: MessageFns<ResourceNavigationRequest> = 
       timeout_ms: isSet(object.timeout_ms) ? globalThis.Number(object.timeout_ms) : 0,
       scan_limit: isSet(object.scan_limit) ? globalThis.Number(object.scan_limit) : 0,
       max_response_bytes: isSet(object.max_response_bytes) ? globalThis.Number(object.max_response_bytes) : 0,
+      read_format: isSet(object.read_format) ? globalThis.String(object.read_format) : "",
+      line_offset: isSet(object.line_offset) ? globalThis.Number(object.line_offset) : undefined,
+      max_lines: isSet(object.max_lines) ? globalThis.Number(object.max_lines) : undefined,
     };
   },
 
@@ -12565,6 +12579,15 @@ export const ResourceNavigationRequest: MessageFns<ResourceNavigationRequest> = 
     if (message.max_response_bytes !== 0) {
       obj.max_response_bytes = Math.round(message.max_response_bytes);
     }
+    if (message.read_format !== "") {
+      obj.read_format = message.read_format;
+    }
+    if (message.line_offset !== undefined) {
+      obj.line_offset = Math.round(message.line_offset);
+    }
+    if (message.max_lines !== undefined) {
+      obj.max_lines = Math.round(message.max_lines);
+    }
     return obj;
   },
 
@@ -12582,6 +12605,9 @@ export const ResourceNavigationRequest: MessageFns<ResourceNavigationRequest> = 
     message.timeout_ms = object.timeout_ms ?? 0;
     message.scan_limit = object.scan_limit ?? 0;
     message.max_response_bytes = object.max_response_bytes ?? 0;
+    message.read_format = object.read_format ?? "";
+    message.line_offset = object.line_offset ?? undefined;
+    message.max_lines = object.max_lines ?? undefined;
     return message;
   },
 };
@@ -12641,6 +12667,10 @@ function createBaseResourceNavigationResultDTO(): ResourceNavigationResultDTO {
     next_cursor: undefined,
     truncation_reason: undefined,
     view: "",
+    content_encoding: undefined,
+    media_type: undefined,
+    mime_type: undefined,
+    line_offset: undefined,
   };
 }
 
@@ -12656,6 +12686,10 @@ export const ResourceNavigationResultDTO: MessageFns<ResourceNavigationResultDTO
       next_cursor: isSet(object.next_cursor) ? globalThis.String(object.next_cursor) : undefined,
       truncation_reason: isSet(object.truncation_reason) ? globalThis.String(object.truncation_reason) : undefined,
       view: isSet(object.view) ? globalThis.String(object.view) : "",
+      content_encoding: isSet(object.content_encoding) ? globalThis.String(object.content_encoding) : undefined,
+      media_type: isSet(object.media_type) ? globalThis.String(object.media_type) : undefined,
+      mime_type: isSet(object.mime_type) ? globalThis.String(object.mime_type) : undefined,
+      line_offset: isSet(object.line_offset) ? globalThis.Number(object.line_offset) : undefined,
     };
   },
 
@@ -12682,6 +12716,18 @@ export const ResourceNavigationResultDTO: MessageFns<ResourceNavigationResultDTO
     if (message.view !== "") {
       obj.view = message.view;
     }
+    if (message.content_encoding !== undefined) {
+      obj.content_encoding = message.content_encoding;
+    }
+    if (message.media_type !== undefined) {
+      obj.media_type = message.media_type;
+    }
+    if (message.mime_type !== undefined) {
+      obj.mime_type = message.mime_type;
+    }
+    if (message.line_offset !== undefined) {
+      obj.line_offset = Math.round(message.line_offset);
+    }
     return obj;
   },
 
@@ -12699,6 +12745,10 @@ export const ResourceNavigationResultDTO: MessageFns<ResourceNavigationResultDTO
     message.next_cursor = object.next_cursor ?? undefined;
     message.truncation_reason = object.truncation_reason ?? undefined;
     message.view = object.view ?? "";
+    message.content_encoding = object.content_encoding ?? undefined;
+    message.media_type = object.media_type ?? undefined;
+    message.mime_type = object.mime_type ?? undefined;
+    message.line_offset = object.line_offset ?? undefined;
     return message;
   },
 };

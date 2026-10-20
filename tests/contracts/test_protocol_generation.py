@@ -64,6 +64,7 @@ def test_resource_navigation_wire_keeps_bounded_request_and_lightweight_nodes() 
     assert {name: field.number for name, field in request_fields.items()} == {
         "uri": 1, "operation": 2, "query": 3, "limit": 4, "max_bytes": 5,
         "cursor": 6, "timeout_ms": 7, "scan_limit": 8, "max_response_bytes": 9,
+        "read_format": 10, "line_offset": 11, "max_lines": 12,
     }
     request = public_pb2.ResourceNavigationRequest(
         uri="boxteam://workspace/ws-1/resources/files/root", operation="search",
@@ -96,6 +97,7 @@ def test_resource_navigation_wire_keeps_bounded_request_and_lightweight_nodes() 
     assert {name: field.number for name, field in result_fields.items()} == {
         "node": 1, "entries": 2, "content": 3, "truncated": 4,
         "next_cursor": 5, "truncation_reason": 6, "view": 7,
+        "content_encoding": 8, "media_type": 9, "mime_type": 10, "line_offset": 11,
     }
     listing = public_pb2.ResourceNavigationResultDTO(node=root, entries=[file], truncated=True,
         next_cursor="opaque-next", truncation_reason="entry_limit", view="live")

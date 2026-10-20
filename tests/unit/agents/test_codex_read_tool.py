@@ -43,7 +43,7 @@ def test_read_file_exposes_agent_visible_schema(configured_read_tool):
 
     schema = tool.tool_call_schema.model_json_schema()
 
-    assert set(schema["properties"]) == {"path", "line_offset", "max_lines"}
+    assert set(schema["properties"]) == {"path", "line_offset", "max_lines", "max_bytes", "max_response_bytes", "timeout_ms"}
     assert schema["required"] == ["path"]
     assert "additionalProperties" not in schema
     assert schema["properties"]["line_offset"]["default"] == 1
@@ -172,7 +172,7 @@ async def test_read_file_returns_explicit_error_for_traversal(configured_read_to
 
     assert isinstance(result, ToolMessage)
     assert result.status == "error"
-    assert "不是有效的工作区相对路径" in result.content
+    assert json.loads(result.content)["code"] == "capability_denied"
 
 
 @pytest.mark.asyncio
@@ -373,7 +373,7 @@ async def test_listing_tools_hide_and_reject_boxteam_runtime(
         result = await tools[tool_name].coroutine(runtime=runtime, **kwargs)
         assert isinstance(result, ToolMessage)
         assert result.status == "error"
-        if tool_name == "ls":
+        if tool_name in {"ls", "read_file"}:
             assert json.loads(result.content)["code"] == "capability_denied"
         else:
             assert "运行时目录" in result.content
@@ -674,7 +674,7 @@ async def test_read_file_rejects_agent_visible_bundled_skill_path(
 
     assert isinstance(result, ToolMessage)
     assert result.status == "error"
-    assert "skill_load" in result.content
+    assert json.loads(result.content)["code"] == "capability_denied"
 
 
 @pytest.mark.asyncio
@@ -700,7 +700,7 @@ async def test_read_file_rejects_non_definition_system_skill_paths(
 
     assert isinstance(result, ToolMessage)
     assert result.status == "error"
-    assert "skill_load" in result.content
+    assert json.loads(result.content)["code"] == "capability_denied"
 
 
 @pytest.mark.asyncio

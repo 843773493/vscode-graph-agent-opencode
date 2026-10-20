@@ -3,6 +3,7 @@ import asyncio
 import base64
 import json
 import logging
+import mimetypes
 import subprocess
 import time
 from collections.abc import Awaitable, Callable
@@ -13,11 +14,17 @@ import httpx
 from deepagents.backends import CompositeBackend
 from deepagents.backends.protocol import FileData, ReadResult
 from deepagents.backends.utils import (
+    _get_file_type,
+    check_empty_content,
     format_content_with_line_numbers,
     format_grep_matches,
     slice_read_response,
 )
-from deepagents.middleware.filesystem import FilesystemMiddleware, FilesystemState
+from deepagents.middleware.filesystem import (
+    FilesystemMiddleware,
+    FilesystemState,
+    _check_fs_permission,
+)
 from langchain.tools import ToolRuntime
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import InjectedToolArg, StructuredTool
@@ -29,9 +36,12 @@ from app.agents.workspace_tool_paths import (
     WorkspaceToolPathResolver,
     backend_virtual_to_workspace_relative,
 )
-from app.core.resource_uri import ResourceUriGrammarError
+from app.core.resource_uri import ResourceUriGrammarError, parse_resource_uri
 from app.core.trace_middleware import require_current_gateway_id
-from app.schemas.internal_v2.resource_navigation import ResourceNavigationRequest
+from app.schemas.internal_v2.resource_navigation import (
+    ResourceNavigationRequest,
+    ResourceNavigationResultDTO,
+)
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceFileOperationError,
     ResourceNavigation,
@@ -76,10 +86,7 @@ class WorkspaceLsSchema(_ToolSchema):
 
 class WorkspaceReadFileSchema(_ToolSchema):
     path: str = Field(
-        description=(
-            "File path to read; prefer a workspace-relative path such as "
-            "'src/main.js'."
-        )
+        description="File target: a workspace-relative/native path or a resource URI returned by ls."
     )
     line_offset: int = Field(
         default=1,
@@ -91,6 +98,9 @@ class WorkspaceReadFileSchema(_ToolSchema):
         ge=1,
         description="Maximum number of lines to return. Omit to use the bounded default.",
     )
+    max_bytes: int = Field(default=16777216, ge=1, le=33554432)
+    max_response_bytes: int = Field(default=25165824, ge=1024, le=50331648)
+    timeout_ms: int = Field(default=10000, ge=1, le=30000)
     runtime: Annotated[object, InjectedToolArg]
 
 
@@ -178,13 +188,13 @@ def _path_error(
             "owner": "resource_uri_grammar" if isinstance(error, ResourceUriGrammarError) else "resource_uri_resolver",
             "code": error.reason_code, "message": str(error),
         }, ensure_ascii=False)
-    elif tool_name == "ls" and isinstance(error, (OSError, httpx.HTTPError)):
-        logger.error("目录导航执行失败", exc_info=error)
+    elif tool_name in {"ls", "read_file"} and isinstance(error, (OSError, httpx.HTTPError)):
+        logger.error("文件导航执行失败", exc_info=error)
         content = json.dumps({
             "owner": "resource_file_operations", "code": "execution_failed",
             "reason": "filesystem" if isinstance(error, OSError) else "transport",
             "type": type(error).__name__, "errno": getattr(error, "errno", None),
-            "message": error.strerror if isinstance(error, OSError) else "目录导航传输失败",
+            "message": error.strerror if isinstance(error, OSError) else "文件导航传输失败",
         }, ensure_ascii=False)
     else:
         content = f"Error: {error}"
@@ -245,7 +255,7 @@ def _runtime_path_error(tool_name: str, relative_path: str) -> ValueError:
     return ValueError(
         f"{tool_name} 禁止访问工作区运行时目录: {relative_path!r}。"
         " .boxteam 由系统管理，不能用于普通源码搜索或读写；"
-        "Skill 正文必须通过 skill_load 按名称激活。"
+        "Skill 文件应通过已公布的资源 URI 读取；激活使用 skill_load。"
     )
 
 
@@ -282,6 +292,48 @@ def _read_attachment_message(
         )
     except (OSError, RuntimeError, ValueError) as error:
         return _path_error("read_file", runtime, error)
+
+
+def _read_navigation_message(
+    result: ResourceNavigationResultDTO, runtime: ToolRuntime[None, FilesystemState], max_response_bytes: int,
+) -> ToolMessage:
+    """普通文件 owner 的读取结果投影为既有模型文本或媒体合同。"""
+    if result.content is None:
+        raise ValueError("文件 owner 未返回读取内容")
+    metadata = {"resource_navigation": result.model_dump(exclude={"content", "entries"})}
+    if result.content_encoding == "base64":
+        message = ToolMessage(
+            content_blocks=[{"type": result.media_type, "base64": result.content, "mime_type": result.mime_type}],
+            name="read_file", tool_call_id=runtime.tool_call_id, status="success",
+            additional_kwargs={**metadata, "read_file_path": result.node.uri, "read_file_media_type": result.mime_type},
+        )
+        if len(message.model_dump_json().encode()) > max_response_bytes:
+            raise ResourceFileOperationError("output_limit_exceeded", "媒体工具结果超过响应字节上限", reason="response_byte_limit")
+        return message
+    content = (check_empty_content(result.content) if not result.truncated else None) or format_content_with_line_numbers(
+        result.content, start_line=result.line_offset or 1,
+    )
+    def message_for(text: str, reason: str | None) -> ToolMessage:
+        if reason is not None:
+            text += f"\n[内容已截断：{reason}；目标 {result.node.uri}。按行继续或显式增加字节预算。]"
+        return ToolMessage(content=text, name="read_file", tool_call_id=runtime.tool_call_id,
+                           status="success", additional_kwargs=metadata)
+
+    message = message_for(content, result.truncation_reason)
+    if len(message.model_dump_json().encode()) <= max_response_bytes:
+        return message
+    metadata["resource_navigation"].update(truncated=True, truncation_reason="response_byte_limit")
+    low, high = 0, len(content)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if len(message_for(content[:middle], "response_byte_limit").model_dump_json().encode()) <= max_response_bytes:
+            low = middle
+        else:
+            high = middle - 1
+    message = message_for(content[:low], "response_byte_limit")
+    if len(message.model_dump_json().encode()) > max_response_bytes:
+        raise ResourceFileOperationError("output_limit_exceeded", "响应预算不足以容纳读取回执", reason="response_byte_limit")
+    return message
 
 
 def _validate_glob_pattern(pattern: str) -> None:
@@ -495,7 +547,7 @@ def configure_workspace_filesystem_tools(
     workspace_root: Path,
     resource_navigation: ResourceNavigation,
 ) -> None:
-    """目录导航交共享文件 owner；其余工具在内部 backend 边界执行。"""
+    """普通目录和文件读取交共享 owner；产物继续交其独立业务 owner。"""
 
     resolver = WorkspaceToolPathResolver(workspace_root)
     session_artifact_backend = (
@@ -507,7 +559,7 @@ def configure_workspace_filesystem_tools(
         raise TypeError("Session artifacts route 必须由唯一 SessionArtifactBackend 装配")
     implementations = {
         name: _tool_implementations(middleware, name)
-        for name in ("read_file", "write_file", "edit_file", "glob")
+        for name in ("write_file", "edit_file", "glob")
     }
 
     def resolve_paths(
@@ -581,56 +633,93 @@ def configure_workspace_filesystem_tools(
         runtime: ToolRuntime[None, FilesystemState],
         line_offset: int = 1,
         max_lines: int | None = None,
+        max_bytes: int = 16777216, max_response_bytes: int = 25165824, timeout_ms: int = 10000,
     ) -> ToolMessage:
+        deadline = time.monotonic() + timeout_ms / 1000
         try:
-            relative_path, backend_path = resolve_paths(
-                "read_file",
-                path,
-            )
-        except ValueError as error:
+            artifact = artifact_read(path, runtime, line_offset, max_lines)
+            if artifact is not None:
+                return artifact
+            gateway_id = require_current_gateway_id("read_file")
+            uri = resource_navigation.input_uri(path)
+            require_read_permission(uri)
+            result = resource_navigation.navigate_sync(ResourceNavigationRequest(
+                uri=uri, operation="read", read_format="auto", line_offset=line_offset,
+                max_lines=max_lines or DEFAULT_MAX_LINES, max_bytes=max_bytes,
+                max_response_bytes=max_response_bytes, timeout_ms=timeout_ms,
+            ), local_gateway_id=gateway_id)
+            message = _read_navigation_message(result, runtime, max_response_bytes)
+            if time.monotonic() >= deadline:
+                raise TimeoutError
+            return message
+        except (TimeoutError, httpx.TimeoutException):
+            return _path_error("read_file", runtime, ResourceFileOperationError(
+                "output_limit_exceeded", "文件读取超过本次总期限", reason="deadline",
+            ))
+        except (OSError, RuntimeError, ValueError, httpx.HTTPError) as error:
             return _path_error("read_file", runtime, error)
+
+    def artifact_read(
+        path: str, runtime: ToolRuntime[None, FilesystemState], line_offset: int, max_lines: int | None,
+    ) -> ToolMessage | None:
+        # TODO（第5组）：全部产物 URI 生成/消费同批迁齐后删除此旧地址入口。
+        if not (path.startswith(("boxteam-session://", "session-artifacts/")) or path == "session-artifacts"):
+            return None
+        relative_path, backend_path = resolve_paths("read_file", path)
         parts = PurePosixPath(relative_path).parts
-        if len(parts) >= 3 and parts[0] == "session-artifacts" and parts[2] == "attachments":
+        if len(parts) >= 3 and parts[2] == "attachments":
             return _read_attachment_message(session_artifact_backend, relative_path, runtime, line_offset, max_lines or DEFAULT_MAX_LINES)
-        result = implementations["read_file"][0](
-            file_path=backend_path,
-            runtime=runtime,
-            offset=line_offset - 1,
-            limit=max_lines or DEFAULT_MAX_LINES,
-        )
-        return _rewrite_known_path(
-            result,
-            virtual_path=backend_path,
-            relative_path=relative_path,
-        )
+        result = session_artifact_backend.read(backend_path.removeprefix("/session-artifacts"),
+                                              offset=line_offset - 1, limit=max_lines or DEFAULT_MAX_LINES)
+        if result.error or result.file_data is None:
+            raise ValueError(result.error or "产物 owner 未返回读取内容")
+        if result.file_data["encoding"] == "base64":
+            mime_type = mimetypes.guess_type("file" + Path(relative_path).suffix)[0] or "application/octet-stream"
+            return ToolMessage(content_blocks=[{"type": _get_file_type(relative_path),
+                "base64": result.file_data["content"], "mime_type": mime_type}], name="read_file",
+                tool_call_id=runtime.tool_call_id, status="success",
+                additional_kwargs={"read_file_path": relative_path, "read_file_media_type": mime_type})
+        return ToolMessage(content=check_empty_content(result.file_data["content"]) or format_content_with_line_numbers(
+            result.file_data["content"], start_line=line_offset,
+        ), name="read_file", tool_call_id=runtime.tool_call_id, status="success")
+
+    def require_read_permission(uri: str) -> None:
+        parsed = parse_resource_uri(uri)
+        permission_path = "/" + "/".join(parsed.tail_segments[1:]) if parsed.scope == "workspace" and parsed.kind == "files" else uri
+        if _check_fs_permission(middleware._permissions, "read", permission_path) == "deny":
+            raise ResourceUriResolveError("capability_denied", "文件目标被当前工具读取规则拒绝")
 
     async def async_read_file(
         path: str,
         runtime: ToolRuntime[None, FilesystemState],
         line_offset: int = 1,
         max_lines: int | None = None,
+        max_bytes: int = 16777216, max_response_bytes: int = 25165824, timeout_ms: int = 10000,
     ) -> ToolMessage:
+        deadline = time.monotonic() + timeout_ms / 1000
         try:
-            relative_path, backend_path = resolve_paths(
-                "read_file",
-                path,
-            )
-        except ValueError as error:
+            gateway_id = require_current_gateway_id("read_file")
+            async with asyncio.timeout(timeout_ms / 1000):
+                artifact = await asyncio.to_thread(artifact_read, path, runtime, line_offset, max_lines)
+                if artifact is not None:
+                    return artifact
+                uri = await asyncio.to_thread(resource_navigation.input_uri, path)
+                require_read_permission(uri)
+                result = await resource_navigation.navigate(ResourceNavigationRequest(
+                    uri=uri, operation="read", read_format="auto", line_offset=line_offset,
+                    max_lines=max_lines or DEFAULT_MAX_LINES, max_bytes=max_bytes,
+                    max_response_bytes=max_response_bytes, timeout_ms=timeout_ms,
+                ), local_gateway_id=gateway_id)
+                message = _read_navigation_message(result, runtime, max_response_bytes)
+                if time.monotonic() >= deadline:
+                    raise TimeoutError
+                return message
+        except (TimeoutError, httpx.TimeoutException):
+            return _path_error("read_file", runtime, ResourceFileOperationError(
+                "output_limit_exceeded", "文件读取超过本次总期限", reason="deadline",
+            ))
+        except (OSError, RuntimeError, ValueError, httpx.HTTPError) as error:
             return _path_error("read_file", runtime, error)
-        parts = PurePosixPath(relative_path).parts
-        if len(parts) >= 3 and parts[0] == "session-artifacts" and parts[2] == "attachments":
-            return await asyncio.to_thread(_read_attachment_message, session_artifact_backend, relative_path, runtime, line_offset, max_lines or DEFAULT_MAX_LINES)
-        result = await implementations["read_file"][1](
-            file_path=backend_path,
-            runtime=runtime,
-            offset=line_offset - 1,
-            limit=max_lines or DEFAULT_MAX_LINES,
-        )
-        return _rewrite_known_path(
-            result,
-            virtual_path=backend_path,
-            relative_path=relative_path,
-        )
 
     def sync_write_file(
         file_path: str,

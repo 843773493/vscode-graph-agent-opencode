@@ -258,3 +258,24 @@ def test_cursor_is_not_a_read_or_describe_parameter(navigation_case) -> None:
     for operation in ("read", "describe"):
         with pytest.raises(ValidationError, match="cursor"):
             ResourceNavigationRequest(uri=uri, operation=operation, cursor=json.dumps({"offset": 1}))
+
+
+@pytest.mark.asyncio
+async def test_read_format_is_explicit_and_line_windows_preserve_raw_text(navigation_case) -> None:
+    owner, workspace, uri = navigation_case
+    (workspace / "data.png").write_bytes(b"\xff\x00image")
+    query = ResourceNavigationRequest(uri=uri + "/data.png", operation="read")
+    with pytest.raises(ResourceFileOperationError) as failure:
+        await owner.navigate(query, local_gateway_id=GATEWAY_ID)
+    assert failure.value.code == "invalid_encoding"
+    media = await owner.navigate(query.model_copy(update={"read_format": "auto"}), local_gateway_id=GATEWAY_ID)
+    assert media.content_encoding == "base64" and base64.b64decode(media.content) == b"\xff\x00image"
+    assert media.media_type == "image" and media.mime_type == "image/png" and not media.truncated
+    (workspace / "text.txt").write_bytes(b"\xef\xbb\xbfalpha\r\nbeta\r\ngamma\n")
+    text = await owner.navigate(ResourceNavigationRequest(uri=uri + "/text.txt", operation="read",
+        line_offset=2, max_lines=1), local_gateway_id=GATEWAY_ID)
+    assert text.content == "beta\r\n" and text.line_offset == 2 and text.content_encoding == "utf-8"
+    assert text.truncated and text.truncation_reason == "line_limit"
+    for operation in ("list", "search", "describe"):
+        with pytest.raises(ValidationError, match="格式和行范围"):
+            ResourceNavigationRequest(uri=uri, operation=operation, query="text" if operation == "search" else None, line_offset=2)

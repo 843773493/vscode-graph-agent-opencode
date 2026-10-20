@@ -7,6 +7,7 @@ import base64
 import codecs
 import hashlib
 import json
+import mimetypes
 import os
 import stat
 import time
@@ -40,6 +41,15 @@ if TYPE_CHECKING:
     from app.services.infrastructure.resource_platform.sources.gateway_skill_sources import (
         GatewaySkillSources,
     )
+
+
+# 保留既有 read_file 媒体集合；未知扩展名仍是严格文本，不猜测非 UTF-8 数据。
+_MEDIA_EXTENSIONS = {
+    **dict.fromkeys((".png", ".jpeg", ".jpg", ".webp", ".gif", ".heic", ".heif"), "image"),
+    **dict.fromkeys((".mp4", ".mpeg", ".mov", ".avi", ".flv", ".mpg", ".webm", ".wmv", ".3gpp"), "video"),
+    **dict.fromkeys((".wav", ".mp3", ".aiff", ".aac", ".ogg", ".flac"), "audio"),
+    **dict.fromkeys((".pdf", ".ppt", ".pptx"), "file"),
+}
 
 
 def _resolve_path(path: Path) -> Path:
@@ -157,33 +167,7 @@ class ResourceNavigation:
         if request.operation == "describe":
             return self._response(ResourceNavigationResultDTO(node=node), request, deadline)
         if request.operation == "read":
-            # 普通读取有界且不 hash、不经过来源 reconciler，也不产生 activation。
-            with path.open("rb") as stream:
-                data = stream.read(request.max_bytes + 1)
-            truncated = len(data) > request.max_bytes
-            content_bytes = data[:request.max_bytes]
-            # 有界窗口可能在 UTF-8 字符内部结束；增量 decoder 只保留完整字符，非法正文仍失败。
-            try:
-                content = codecs.getincrementaldecoder("utf-8")().decode(content_bytes, final=not truncated)
-            except UnicodeDecodeError as error:
-                raise ResourceFileOperationError("invalid_encoding", "文件内容不是有效的 UTF-8 文本", reason="utf8") from error
-            result = ResourceNavigationResultDTO(node=node, content=content, truncated=truncated,
-                truncation_reason="file_byte_limit" if truncated else None)
-            if self._size(result) > request.max_response_bytes:
-                # JSON 转义也计入总响应；仅裁完整字符，不伪报返回了完整文件。
-                low, high = 0, len(content)
-                while low < high:
-                    self._check_deadline(deadline)
-                    middle = (low + high + 1) // 2
-                    candidate = result.model_copy(update={"content": content[:middle], "truncated": True,
-                                                         "truncation_reason": "response_byte_limit"})
-                    if self._size(candidate) <= request.max_response_bytes:
-                        low = middle
-                    else:
-                        high = middle - 1
-                result = result.model_copy(update={"content": content[:low], "truncated": True,
-                                                  "truncation_reason": "response_byte_limit"})
-            return self._response(result, request, deadline)
+            return self._read(path, node, request, deadline)
         binding = hashlib.sha256(json.dumps(
             {**request.model_dump(exclude={"uri", "cursor"}), "uri": parsed.display_uri, "gateway_id": gateway_id},
             sort_keys=True, separators=(",", ":"),
@@ -226,6 +210,62 @@ class ResourceNavigation:
         if not prefix_checked:
             raise ResourceFileOperationError("execution_failed", "目录已改变，旧 cursor 的位置不存在", reason="stale_cursor")
         return self._response(ResourceNavigationResultDTO(node=node, entries=tuple(entries)), request, deadline)
+
+    def _read(
+        self, path: Path, node: ResourceNavigationNodeDTO,
+        request: ResourceNavigationRequest, deadline: float,
+    ) -> ResourceNavigationResultDTO:
+        # 字节预算覆盖跳过的行；不为读取登记身份、快照或 activation。
+        with path.open("rb") as stream:
+            data = stream.read(request.max_bytes + 1)
+        self._check_deadline(deadline)
+        truncated = len(data) > request.max_bytes
+        filename = parse_resource_uri(node.uri).tail_segments[-1]
+        media_type = _MEDIA_EXTENSIONS.get(Path(filename).suffix.lower()) if request.read_format == "auto" else None
+        if media_type is not None:
+            if truncated:
+                raise ResourceFileOperationError("output_limit_exceeded", "媒体原件超过读取字节上限，请显式增加 max_bytes", reason="file_byte_limit")
+            result = ResourceNavigationResultDTO(
+                node=node, content=base64.b64encode(data).decode("ascii"), content_encoding="base64",
+                media_type=media_type, mime_type=mimetypes.guess_type("file" + Path(filename).suffix)[0] or "application/octet-stream",
+            )
+            # 媒体必须完整；不能裁剪 base64 后伪报有效原件。
+            return self._response(result, request, deadline)
+        try:
+            content = codecs.getincrementaldecoder("utf-8")().decode(data[:request.max_bytes], final=not truncated)
+        except UnicodeDecodeError as error:
+            raise ResourceFileOperationError("invalid_encoding", "文件内容不是有效的 UTF-8 文本", reason="utf8") from error
+        reason = "file_byte_limit" if truncated else None
+        if request.line_offset is not None or request.max_lines is not None:
+            lines = content.splitlines(keepends=True)
+            start = (request.line_offset or 1) - 1
+            if start >= len(lines) and (start > 0 or content):
+                if truncated:
+                    raise ResourceFileOperationError("output_limit_exceeded", "行起点超过本次读取字节窗口，请显式增加 max_bytes", reason="file_byte_limit")
+                raise ResourceFileOperationError("execution_failed", "行起点超过文件行数", reason="invalid_range")
+            end = start + request.max_lines if request.max_lines is not None else len(lines)
+            if end < len(lines):
+                truncated, reason = True, "line_limit"
+            content = "".join(lines[start:end])
+        result = ResourceNavigationResultDTO(
+            node=node, content=content, content_encoding="utf-8", media_type="text",
+            line_offset=request.line_offset, truncated=truncated, truncation_reason=reason,
+        )
+        if self._size(result) > request.max_response_bytes:
+            # JSON 转义计入总响应，只裁完整字符并披露截断。
+            low, high = 0, len(content)
+            while low < high:
+                self._check_deadline(deadline)
+                middle = (low + high + 1) // 2
+                candidate = result.model_copy(update={"content": content[:middle], "truncated": True,
+                                                     "truncation_reason": "response_byte_limit"})
+                if self._size(candidate) <= request.max_response_bytes:
+                    low = middle
+                else:
+                    high = middle - 1
+            result = result.model_copy(update={"content": content[:low], "truncated": True,
+                                              "truncation_reason": "response_byte_limit"})
+        return self._response(result, request, deadline)
 
     def _walk(
         self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri,

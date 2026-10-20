@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import sqlite3
 from collections.abc import Callable
@@ -326,6 +327,8 @@ async def test_remote_skill_navigation_is_lightweight_encoded_and_fixed_to_owner
         (root / ".notes/100%.txt").write_text(f"点号目录 owner-{name}\n")
         (root / "%2e%2e.txt").write_text(f"字面百分号 owner-{name}\n")
         (root / "scripts/non-text.bin").write_bytes(b"\xff")
+        (root / "scripts/media %.PNG").write_bytes(b"\xff" + f"media-owner-{name}".encode() * 300)
+        (root / "scripts/read-range.txt").write_bytes(b"\xef\xbb\xbfalpha\r\nbeta\r\ngamma\n")
         for index in range(257):
             (root / f"references/deep/bulk-needle-{index:03}.txt").write_text(f"未追踪 owner-{name}\n")
 
@@ -374,7 +377,8 @@ async def test_remote_skill_navigation_is_lightweight_encoded_and_fixed_to_owner
         if status != 200:
             return body
         data = body["data"]
-        assert set(data) == {"node", "entries", "content", "truncated", "next_cursor", "truncation_reason", "view"}
+        assert set(data) == {"node", "entries", "content", "truncated", "next_cursor", "truncation_reason", "view",
+                             "content_encoding", "media_type", "mime_type", "line_offset"}
         assert data["view"] == "live"
         assert data["node"]["uri"] == parse_resource_uri(uri, local_gateway_id=target.gateway_id).display_uri
         for node in (data["node"], *data["entries"]):
@@ -412,6 +416,15 @@ async def test_remote_skill_navigation_is_lightweight_encoded_and_fixed_to_owner
         assert (await navigate(literal_percent["uri"], "read", route=route))["content"] == "点号目录 owner-b\n"
         assert entries["%252e%252e.txt"]["uri"] == root_uri + "/%252e%252e.txt"
         assert (await navigate(entries["%252e%252e.txt"]["uri"], "read", route=route))["content"] == "字面百分号 owner-b\n"
+        media = await navigate(root_uri + "/scripts/media%20%25.PNG", "read", route=route, read_format="auto", max_bytes=8192, max_response_bytes=16384)
+        assert media["content_encoding"] == "base64" and media["media_type"] == "image" and media["mime_type"] == "image/png"
+        assert base64.b64decode(media["content"]) == b"\xff" + b"media-owner-b" * 300
+        assert not media["truncated"]
+        rejected = await navigate(root_uri + "/scripts/media%20%25.PNG", "read", route=route, status=400, read_format="auto", max_bytes=1)
+        assert rejected["detail"]["owner"] == "resource_file_operations" and rejected["detail"]["reason"] == "file_byte_limit"
+        ranged = await navigate(root_uri + "/scripts/read-range.txt", "read", route=route, line_offset=2, max_lines=1)
+        assert ranged["content"] == "beta\r\n" and ranged["line_offset"] == 2
+        assert ranged["truncated"] and ranged["truncation_reason"] == "line_limit"
         bulk = await navigate(root_uri, "search", route=route, query="bulk-needle", limit=7)
         assert len(bulk["entries"]) == 7 and bulk["truncated"]
         assert all(node["resource_shape"] == "file" for node in bulk["entries"])
@@ -452,13 +465,13 @@ async def test_remote_skill_navigation_is_lightweight_encoded_and_fixed_to_owner
                                                   "backend_pid": target.backend.process.pid, "owner_pid": target.gateway.process.pid})
 
 
-async def test_model_ls_navigates_gateway_skill_children_without_activation(skill_gateways: SkillGatewayCase):
+async def test_model_ls_and_read_gateway_skill_children_without_activation(skill_gateways: SkillGatewayCase):
     case = skill_gateways
     target = case.nodes["b"]
     for name, node in case.nodes.items():
         directory = node.gateway_home / "skills" / SKILL_NAME / "references" / "scripts"
         directory.mkdir(parents=True)
-        (directory / f"owner-{name}-中文 %.txt").write_text(f"owner-{name}")
+        (directory / f"owner-{name}-中文 %.txt").write_text(f"read-body-owner-{name}\n")
     root_uri = resource_display_uri(scope="gateway", scope_id=target.gateway_id,
                                     kind="skills", tail_segments=(SKILL_NAME,))
     session = await create_session(target.client, "模型目录导航")
@@ -488,7 +501,8 @@ async def test_model_ls_navigates_gateway_skill_children_without_activation(skil
             before = tracking_facts()
             return _tool("ls", {"path": root_uri}, "call_model_ls_root")
         result = results[-1]
-        listed.append(result)
+        if not listed or listed[-1] != result:
+            listed.append(result)
         assert result["node"]["uri"].startswith(root_uri)
         assert not result["truncated"] and result["view"] == "live"
         if len(results) < 3:
@@ -497,9 +511,14 @@ async def test_model_ls_navigates_gateway_skill_children_without_activation(skil
             return _tool("ls", {"path": child["uri"]}, "call_model_ls_" + directory)
         child, = result["entries"]
         assert child["uri"] == root_uri + "/references/scripts/owner-b-%E4%B8%AD%E6%96%87%20%25.txt"
+        reads = [message for message in payload["messages"] if message["role"] == "tool" and message.get("name") == "read_file"]
+        if not reads:
+            return _tool("read_file", {"path": child["uri"]}, "call_model_read_child")
+        read, = reads
+        assert "1\tread-body-owner-b" in read["content"] and "read-body-owner-a" not in read["content"]
         wire = json.dumps(payload, ensure_ascii=False)
         assert "owner-a-" not in wire and "private-skill-owner-" not in wire
-        return {"content": "已验证目标 Gateway 的多层目录"}
+        return {"content": "已验证目标 Gateway 的多层目录和实际文件正文"}
 
     case.model.response_callback = reply
     accepted = await case.send("b", session, "浏览目标 Skill 目录", "req-model-ls-navigation")
@@ -507,14 +526,14 @@ async def test_model_ls_navigates_gateway_skill_children_without_activation(skil
     assert len(listed) == 3
     rows = [row for row in case.observations() if row["event"] == "workspace_response"
             and row["method"] == "POST" and row["sent_request_id"] == "req-model-ls-navigation"]
-    assert len(rows) == 3
+    assert len(rows) == 4
     for row in rows:
         assert row["sent_request_id"] == row["context_request_id"] == row["response_request_id"] == row["envelope_request_id"] == "req-model-ls-navigation"
         assert row["status"] == 200 and row["pid"] == target.backend.process.pid
-    assert {row["uri"] for row in rows} == {result["node"]["uri"] for result in listed}
+    assert {row["uri"] for row in rows} == {result["node"]["uri"] for result in listed} | {listed[-1]["entries"][0]["uri"]}
     owners = [row for row in case.observations() if row["event"] == "owner_receipt"
               and row["request_id"] == "req-model-ls-navigation" and row["kind"] == "navigation"]
-    assert len(owners) == 3
+    assert len(owners) == 4
     for row in owners:
         assert row["pid"] == target.gateway.process.pid
         assert row["owner_gateway_id"] == row["request_gateway_id"] == row["result_gateway_id"] == target.gateway_id
