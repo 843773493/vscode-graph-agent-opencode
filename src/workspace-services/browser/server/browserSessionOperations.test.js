@@ -64,7 +64,7 @@ function transitionSession(onCommand = () => undefined) {
   browser.manager.runCheckpointCapture = async (callback) => await callback();
   browser.manager.stateStore.writeCheckpoint = async () => ({ size_bytes: 1 });
   browser.manager.runtimePool = { releaseContext: async () => undefined };
-  browser.resourceSnapshot = async () => ({ resource_hard_protection_reasons: [], resource_soft_protection_reasons: [] });
+  browser.inspectResourceSnapshot = async () => ({ resource_hard_protection_reasons: [], resource_soft_protection_reasons: [] });
   browser.inspectPageEntryProtectionReasons = async () => [];
   for (const pageId of ["page_first", "page_second"]) {
     const state = { lifecycle: "active", disabled: false };
@@ -145,7 +145,7 @@ describe("浏览器统一操作队列", () => {
 
   test("冻结前的明确保护拒绝保持 verified 且没有页面副作用", async () => {
     const { browser, commands, persisted } = transitionSession();
-    browser.resourceSnapshot = async () => ({ resource_hard_protection_reasons: ["pending_dialog"], resource_soft_protection_reasons: [] });
+    browser.inspectResourceSnapshot = async () => ({ resource_hard_protection_reasons: ["pending_dialog"], resource_soft_protection_reasons: [] });
     await expect(browser.freeze()).rejects.toMatchObject({ code: "browser_resource_protected" });
     expect(commands).toEqual([]);
     expect(persisted.at(-1)).toMatchObject({ resource_state: "background", reconciliation_status: "verified" });

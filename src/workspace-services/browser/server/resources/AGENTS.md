@@ -11,7 +11,7 @@ resources/
 └── resourceGovernor.js    采样、执行有界计划及失败回执
 ```
 
-观测产生事实，策略产生计划，调度器调用 BrowserSession 执行；运行时池只管理 Chromium 句柄和 context。检查点正文通过 BrowserStateStore 落盘，不由压力观测或候选策略维护。
+观测产生事实，策略产生计划，调度器调用 BrowserSession 执行；运行时池只管理 Chromium 句柄和 context。调度扫描统一调用同步的`resourcePolicySnapshot()`读取已知保护事实，不执行页面脚本；冻结前与检查点捕获后的复核调用`inspectResourceSnapshot()`检查页面并刷新保护缓存，两者不通过布尔参数或旧入口互相回退。检查点正文通过 BrowserStateStore 落盘，不由压力观测或候选策略维护。
 
 `BrowserContextAcquisition` 返回共享 Chromium、受限句柄、独立 context 及 `chromiumInstanceGeneration`。这个代际只在当前池内每次成功启动时递增，同一实例共用；池重建从零开始，不是持久资源身份。断线回调捕获创建时的代际，Session 据此区分旧实例与当前实例；公开诊断仍使用 `generation/runtime_generation`，不得与授权版本或操作序号互换。
 

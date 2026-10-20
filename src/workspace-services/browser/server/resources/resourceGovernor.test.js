@@ -6,7 +6,7 @@ describe("浏览器资源调度器", () => {
     const frozen = [];
     const sessions = ["browser_a", "browser_b"].map((browserId) => ({
       id: browserId,
-      resourceSnapshot: async () => ({
+      resourcePolicySnapshot: () => ({
         browser_id: browserId,
         resource_state: "background",
         resource_policy: "automatic",
@@ -38,7 +38,7 @@ describe("浏览器资源调度器", () => {
     const discarded = [];
     const session = {
       id: "browser_frozen",
-      resourceSnapshot: async () => ({
+      resourcePolicySnapshot: () => ({
         browser_id: "browser_frozen",
         resource_state: "frozen",
         resource_policy: "automatic",

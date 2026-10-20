@@ -427,6 +427,7 @@ export class BrowserSession extends EventEmitter {
     return reasons;
   }
 
+  /** 只读取当前已知保护事实，不执行页面脚本或组装完整展示态。 */
   resourcePolicySnapshot() {
     const hardReasons = this.synchronousHardProtectionReasons();
     const softReasons = this.synchronousSoftProtectionReasons();
@@ -455,8 +456,8 @@ export class BrowserSession extends EventEmitter {
     };
   }
 
-  async resourceSnapshot({ inspectPage = true } = {}) {
-    if (!inspectPage) return this.resourcePolicySnapshot();
+  /** 冻结前实际检查页面并刷新保护缓存，返回本次检查后的资源快照。 */
+  async inspectResourceSnapshot() {
     const hardReasons = this.synchronousHardProtectionReasons();
     const softReasons = this.synchronousSoftProtectionReasons();
     if (["active", "background"].includes(this.record.resource_state)
@@ -534,7 +535,7 @@ export class BrowserSession extends EventEmitter {
       this.assertReconciled();
       if (this.record.resource_state === "frozen") return this.snapshot();
       this.assertRunning();
-      const state = await this.resourceSnapshot();
+      const state = await this.inspectResourceSnapshot();
       const blockingReasons = [
         ...(allowHardProtection ? [] : state.resource_hard_protection_reasons),
         ...(allowSoftProtection ? [] : state.resource_soft_protection_reasons),
@@ -552,7 +553,7 @@ export class BrowserSession extends EventEmitter {
       try {
         ({ checkpoint, checkpointWrite } = await this.manager.runCheckpointCapture(async () => {
           const captured = await captureBrowserCheckpoint(this);
-          const refreshedState = await this.resourceSnapshot();
+          const refreshedState = await this.inspectResourceSnapshot();
           const refreshedBlockingReasons = [
             ...(allowHardProtection ? [] : refreshedState.resource_hard_protection_reasons),
             ...(allowSoftProtection ? [] : refreshedState.resource_soft_protection_reasons),
@@ -2432,13 +2433,17 @@ export class BrowserSession extends EventEmitter {
           const attribute = nodeAttributes[index];
           attributes[attribute.name] = attribute.value.slice(0, 300);
         }
-        const text = [...node.childNodes]
-          .filter((child) => child.nodeType === Node.TEXT_NODE)
-          .map((child) => child.textContent || "")
-          .join(" ")
-          .replace(/\s+/g, " ")
-          .trim()
-          .slice(0, 240);
+        let text = "";
+        const childNodes = node.childNodes;
+        for (let index = 0; index < childNodes.length && text.length < 240; index += 1) {
+          const child = childNodes[index];
+          if (child.nodeType !== Node.TEXT_NODE) continue;
+          // 单次词段也限制为240字符；超长单词不必先完整匹配再截断。
+          for (const [word] of (child.textContent || "").matchAll(/\S{1,240}/g)) {
+            text = (text ? `${text} ${word}` : word).slice(0, 240);
+            if (text.length === 240) break;
+          }
+        }
         const children = [];
         if (depth < maxDepth) {
           const childElements = node.children;

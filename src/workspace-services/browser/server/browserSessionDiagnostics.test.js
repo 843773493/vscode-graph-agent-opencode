@@ -88,6 +88,55 @@ describe("浏览器调试快照的来源范围", () => {
   });
 });
 
+async function debugDirectText(childNodes) {
+  const { browser, page, entry } = await registeredPage();
+  entry.title = "直接文本诊断";
+  class Element {
+    attributes = [];
+    children = [];
+    tagName = "DIV";
+    constructor() { this.childNodes = childNodes; }
+  }
+  page.evaluate = async callback => runInNewContext(`(${callback.toString()})()`, {
+    Element, Node: { TEXT_NODE: 3 }, document: { documentElement: new Element() },
+    performance: { getEntriesByType: () => [] },
+  });
+  return (await browser.debugSnapshot()).elements.text;
+}
+
+describe("浏览器调试快照的直接文本前缀", () => {
+  test.each([
+    [[], ""],
+    [[" ", "\n\t\uFEFF"], ""],
+    [[" \t中文\n", "尾部\u00a0文本 "], "中文 尾部 文本"],
+    [["a", "", "b"], "a b"],
+    [["\uFEFF\u2028\u2029", " 空白\u2003分隔 "], "空白 分隔"],
+    [["\u0085", "\0控制字符"], "\u0085 \0控制字符"],
+    [["a".repeat(239), " ", "尾部"], "a".repeat(239) + " "],
+    [["a".repeat(240), "尾部"], "a".repeat(240)],
+    [["a".repeat(239), "😀结束"], "a".repeat(239) + " "],
+    [["a".repeat(239) + "😀结束"], "a".repeat(239) + "\uD83D"],
+    [["a".repeat(239), " ".repeat(10_000)], "a".repeat(239)],
+    [["汉".repeat(100_000)], "汉".repeat(240)],
+  ])("保持空白归一、节点分隔及240字符截断: %#", async (parts, expected) => {
+    const childNodes = parts.flatMap(textContent => [
+      { nodeType: 8, textContent: "注释不能进入正文" },
+      { nodeType: 3, textContent },
+      { nodeType: 1, textContent: "后代元素不能进入直接文本" },
+    ]);
+    expect(await debugDirectText(childNodes)).toBe(expected);
+  });
+
+  test("取得前缀后不读取后续文本节点", async () => {
+    const childNodes = [
+      { nodeType: 3, textContent: "x".repeat(240) },
+      { nodeType: 3, get textContent() { throw new Error("不应读取已截断的正文后缀"); } },
+    ];
+
+    expect(await debugDirectText(childNodes)).toBe("x".repeat(240));
+  });
+});
+
 describe("浏览器网络诊断记录的请求归属", () => {
   test("同 URL 并发请求按实际身份接收响应，不按最新未响应行匹配", async () => {
     const { page, entry } = await registeredPage();

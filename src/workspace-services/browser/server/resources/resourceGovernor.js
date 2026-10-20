@@ -126,10 +126,7 @@ export class BrowserResourceGovernor {
         }
       }
     }
-    const settled = await Promise.allSettled(sessions.map(async (session) => {
-      if (typeof session.resourcePolicySnapshot === "function") return session.resourcePolicySnapshot();
-      return await session.resourceSnapshot({ inspectPage: false });
-    }));
+    const settled = await Promise.allSettled(sessions.map(async (session) => session.resourcePolicySnapshot()));
     const snapshots = [];
     const errors = [];
     for (let index = 0; index < settled.length; index += 1) {
