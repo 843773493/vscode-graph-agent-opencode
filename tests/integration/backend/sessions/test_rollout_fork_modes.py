@@ -344,12 +344,47 @@ def production_fork_container(request: pytest.FixtureRequest,
             record = catalog.get_creation_record(key)
         except KeyError:
             record = None
+        if record is None and fork_request.creation_kind == "new_child_thread":
+            _, target_session_id, _ = parse_session_thread_uri(fork_request.target_container_uri)
+            control = service._threads.for_owner_session(target_session_id).control_store
+            try:
+                record = control.get_thread_creation_record(key)
+            except KeyError:
+                record = None
         capture = (catalog.get_fork_source_capture(creation_key=key)
                    or catalog.get_fork_source_capture(copy_operation_id=key))
         # 发布/中止并不代表远端导出已释放；同键重试失败仍必须保留原期限。
         if capture is not None and catalog.get_fork_export_release(capture.copy_operation_id)[0] == "pending":
             return False
         if record is not None:
+            if fork_request.creation_kind == "new_child_thread":
+                if record.purpose != "fork" or record.request_intent_json is None:
+                    return False
+                frozen = json.loads(record.request_intent_json)
+                normalized = fork_request.model_dump(mode="json")
+                for field in ("source_uri", "target_container_uri"):
+                    address = parse_resource_uri(normalized[field], local_gateway_id=get_current_gateway_id())
+                    normalized[field] = resource_display_uri(
+                        scope=address.scope, scope_id=address.scope_id, kind=address.kind,
+                        tail_segments=address.tail_segments,
+                        gateway_authority=address.gateway_authority or get_current_gateway_id(),
+                    )
+                if frozen["request"] != normalized or frozen["generation_origin"] is not None:
+                    return False
+                if record.state == "published" and capture is None:
+                    return False
+                if record.state == "aborted":
+                    session_node = service._session_service.path_resolver.resolve_session_node(target_session_id)
+                    if any((session_node / locator).exists() or (session_node / locator).is_symlink()
+                           for locator in (record.staging_locator, record.final_relative_locator)):
+                        return False
+                if capture is not None and (
+                    (capture.target_session_id, capture.target_thread_id) != (target_session_id, record.child_thread_id)
+                    or capture.state != {"aborted": "aborted", "published": "materialized"}.get(record.state)
+                ):
+                    return False
+                if capture is not None:
+                    service._checkpointer.forks.require_target_capture(capture, creation=record)
             return record.state in {"aborted", "published"}
         if capture is not None:
             return False
