@@ -224,7 +224,7 @@ export class TerminalManager {
     }
     await this.pruneTerminalHistory();
     await this.ensureExecutionCapacity();
-    // 只把工作区内相对路径写入持久记录；绝对路径仅在本次调用栈内解析（裁定 D-A2）。
+    // 按工作区根保存原生相对路径，允许 .. 保留外部 cwd；绝对路径只在调用栈内解析。
     const resolvedCwd = resolveTerminalCwd(this.workspaceRoot, cwd);
     const cwdRelative = path.relative(this.workspaceRoot, resolvedCwd);
     const id = terminalId;

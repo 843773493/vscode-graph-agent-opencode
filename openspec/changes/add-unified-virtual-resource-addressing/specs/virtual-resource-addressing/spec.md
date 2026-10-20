@@ -116,7 +116,7 @@
 - **唯一控制面例外**：工作区物理根是由 Gateway target ID 与 Backend `workspace_id` 组成的 mount binding 输入，不是业务资源引用或资源位置字段；它只按 requirement「工作区物理根必须绑定到唯一原生 Gateway」持久化在负责原生 target 的 Gateway registry。该特例不改变下述资源位置判据，也不授权持久化任何其它 real path。
 - **可判定为「位置」⇒ MUST NOT 落盘**：任何「位置」MUST 由 `资源身份 / ResourceIdentity` 加 `资源 URI`（必要时加并列 revision 字段）表达；当且仅当该位置可由 owner 身份（资源 id 与工作区身份）确定性推导时，MUST NOT 落盘，改为在该次 fs/进程调用栈内由 owner 身份重推导。
 - **不可由 owner 身份推导、但必须对外可寻址 ⇒ MUST 用既有 API 端点引用**，MUST NOT 落盘 real path、MUST NOT 为此自造 URI kind、MUST NOT 裸拼接 URI。
-- **唯一例外边界**：owner **自身**的运行态字段（典型为终端 shell 的当前工作目录）表达的是 owner 的运行状态而非「资源所在位置」，MUST NOT 被当作位置引用或位置表达；此类字段 MUST 以工作区内**相对路径**持久化，MUST NOT 落盘绝对路径或工作区根路径。
+- **唯一例外边界**：owner **自身**的运行态字段（典型为终端 shell 的当前工作目录）表达的是 owner 的运行状态而非「资源所在位置」，MUST NOT 被当作位置引用或位置表达；此类字段 MUST 以**相对于工作区根的原生相对路径**持久化，允许以 `..` 表达工作区外 cwd 并保留原目标，MUST NOT 落盘绝对路径或工作区根路径。
 - **real path 出现在一般持久化记录、API 响应体或系统生成的模型资源引用中 ⇒ 缺陷**：唯一持久化例外是工作区物理根作为控制面 mount binding 仅存于负责原生 target 的 Gateway registry。原生目录选择/注册与普通文件路径请求的具名输入边界引用前述 requirements，不授权将真实路径复制到业务记录、普通响应 DTO、解析结果或联邦资源投影。违反时 MUST 显式失败，MUST NOT 以脱敏、截断或 `display_uri` 静默掩盖。
 
 以上判据 MUST 是「位置 vs 非位置」的唯一判定来源；`add-workspace-persistent-resource-management` 的 D-A2/D-A3 与 owner 运行态字段例外 MUST 引用本 requirement，MUST NOT 另立一套判据。
@@ -131,10 +131,10 @@
 - **WHEN** 一条持久化记录或模型可见载荷需要对外寻址一个无法由 owner 身份推导的产物
 - **THEN** 可寻址性 MUST 由承载该能力的既有后端 API 端点引用提供；MUST NOT 自造 URI kind、MUST NOT 裸拼接 URI、MUST NOT 暴露文件系统路径
 
-#### Scenario: owner 自身运行态字段以工作区内相对路径持久化
+#### Scenario: owner 自身运行态字段以相对于工作区根的原生相对路径持久化
 
 - **WHEN** 持久化记录需要保存 owner 自身的运行态字段（典型为终端 shell 的当前工作目录）
-- **THEN** 该字段 MUST 以工作区内相对路径持久化，MUST NOT 落盘绝对路径或工作区根路径；该字段 MUST NOT 被当作「资源所在位置」的位置引用，也 MUST NOT 被扩张解释为「任何位置都可改用文件系统路径代替 URI」
+- **THEN** 该字段 MUST 以相对于工作区根的原生相对路径持久化，工作区外 cwd MUST 保留 `..` 所表达的原生目标，MUST NOT 改投工作区内目录或落盘绝对路径、工作区根路径；该字段 MUST NOT 被当作「资源所在位置」的位置引用，也 MUST NOT 被扩张解释为「任何位置都可改用文件系统路径代替 URI」
 
 #### Scenario: 物理工作区根只作为原生 Gateway 控制面绑定持久化
 

@@ -3,14 +3,22 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import httpx
 import pytest
+from fastapi import FastAPI
 
+from app.api.config import router as config_router
+from app.api.deps import get_config_service, verify_local_token
+from app.core.trace_middleware import TraceMiddleware
 from app.gateway.main import app as gateway_app
 from app.main import app as workspace_app
 from app.schemas.gateway.config import GatewayConfigEventDTO
 from app.schemas.internal_v2.config import ConfigEventDTO
+from app.services.infrastructure.config import ConfigRestartRequiredError
+from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from configs.diagnostics import diagnose_configuration
+from configs.runtime import read_jsonc_object
 
 _ACTIVATION_SCOPES = {
     "current",
@@ -212,3 +220,67 @@ def test_configuration_diagnostics_redact_pending_payload_and_keep_secret_refere
         assert fanout[0]["result"] == "applied"
     finally:
         store.close()
+
+
+@pytest.fixture
+async def pointer_event_owner(tmp_path: Path, test_config_path: str):
+    config = read_jsonc_object(Path(test_config_path))
+    config.pop("$schema", None)
+    config["config_version"] = 1
+    config["mcp"] = {"servers": {"pointer_probe": {
+        "transport": "stdio", "enabled": False, "command": "unused-pointer-probe",
+        "env": {"ROOT/~": "before"},
+    }}}
+    config_path = tmp_path / "workspace.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    workspace_root = tmp_path / "workspace"
+    store = WorkspaceStateStore(workspace_root=workspace_root)
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path,
+        workspace_root=workspace_root, workspace_state_store=store)
+    service.validate_workspace_config()
+    application = FastAPI()
+    application.add_middleware(TraceMiddleware)
+    application.include_router(config_router, prefix="/api/v1")
+    application.dependency_overrides[get_config_service] = lambda: service
+    application.dependency_overrides[verify_local_token] = lambda: "pointer-contract"
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application),
+            base_url="http://test") as client:
+            yield service, store, client, config_path, config, workspace_root
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("pending_restart", [False, True])
+async def test_real_config_diff_persists_and_serializes_json_pointers(pointer_event_owner, pending_restart: bool) -> None:
+    service, store, client, config_path, config, workspace_root = pointer_event_owner
+    # 配置值可以是原生路径；事件位置字段必须表达 JSON 键，保留 / 与 ~ 的 Pointer 转义。
+    native_value = str(workspace_root / "native-target")
+    config["mcp"]["servers"]["pointer_probe"]["env"]["ROOT/~"] = native_value
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    async def require_restart(*_snapshots: object) -> None:
+        raise ConfigRestartRequiredError("配置候选需要重启", changed_sections=("mcp",))
+
+    if pending_restart:
+        with pytest.raises(ConfigRestartRequiredError):
+            await service.reload(candidate_applier=require_restart)
+    else:
+        assert await service.reload()
+    response = await client.get("/api/v1/config/events", headers={"X-Request-ID": "pointer-event"})
+    assert response.status_code == 200, response.text
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "pointer-event"
+    event, = response.json()["data"]["events"]
+    expected = ["/mcp/servers/pointer_probe/env/ROOT~1~0"]
+    assert event["changed_paths"] == expected
+    assert event["applied_paths"] == ([] if pending_restart else expected)
+    assert event["deferred_paths"] == (expected if pending_restart else [])
+    assert event["result"] == ("restart_required" if pending_restart else "applied")
+    assert str(config_path) not in response.text and native_value not in response.text
+    # 关闭原连接后重开真正落库记录，排除只验证内存事件的情况。
+    store.close()
+    with WorkspaceStateStore(workspace_root=workspace_root) as reopened:
+        persisted, = reopened.list_config_events(config_domain="workspace")
+        assert persisted.changed_paths == tuple(expected)
+        assert persisted.applied_paths == tuple(event["applied_paths"])
+        assert persisted.deferred_paths == tuple(event["deferred_paths"])
