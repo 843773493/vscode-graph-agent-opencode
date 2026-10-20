@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import multiprocessing
 import os
@@ -3324,8 +3325,8 @@ def test_sqlite_backup_restores_authoritative_checkpoint_state(
         )
         assert restore_manifest["schema"] == "rollout-index-offline-restore:v1"
         assert restore_manifest["session_id"] == SESSION_ID
-        assert restore_manifest["source_path"] == str(backup)
-        assert restore_manifest["source_sha256"] == restore_manifest["installed_sha256"]
+        assert json.dumps(str(backup.parent))[1:-1] not in json.dumps(restore_manifest)
+        assert restore_manifest["source_sha256"] == restore_manifest["installed_sha256"] == hashlib.sha256(backup.read_bytes()).hexdigest()
         assert restore_manifest["quarantined"] == [
             {
                 "name": "index.sqlite",

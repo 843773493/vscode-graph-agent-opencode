@@ -319,7 +319,6 @@ class RolloutOfflineRestoreMixin:
                     "session_id": session_id,
                     "checkpoint_ns": checkpoint_ns,
                     "created_at": datetime.now(UTC).isoformat(),
-                    "source_path": str(source_path),
                     "source_sha256": source_hash,
                     "installed_sha256": self._file_hash(target_path),
                     "quarantined": [

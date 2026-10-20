@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import subprocess
@@ -522,8 +523,8 @@ def test_offline_restore_installs_exact_owner_backup_and_preserves_quarantine(re
     assert (quarantine / "index.sqlite").read_bytes() == b"corrupted-target"
     manifest = json.loads((quarantine / "restore-manifest.json").read_text())
     assert manifest["session_id"] == case.session
-    assert manifest["source_path"] == str(case.backup)
-    assert manifest["source_sha256"] == manifest["installed_sha256"]
+    assert json.dumps(str(case.backup.parent))[1:-1] not in json.dumps(manifest)
+    assert manifest["source_sha256"] == manifest["installed_sha256"] == hashlib.sha256(original_backup).hexdigest()
     assert case.backup.read_bytes() == original_backup
     assert storage.storage.jsonl_path(case.session).read_bytes() == original_jsonl
     restarted = RolloutCheckpointSaver(storage.storage.sessions_dir)
