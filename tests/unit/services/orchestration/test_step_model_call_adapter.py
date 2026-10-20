@@ -25,15 +25,16 @@ from app.services.orchestration.execution_step.model_call import StepModelCallAd
 
 
 @pytest.fixture(autouse=True)
-def admission_context():
+def admission_context(request: pytest.FixtureRequest):
+    origin = getattr(request, "param", "user_turn")
     admission = ExecutionAdmission(
         session_id="session_1",
         thread_id="thread_1",
         execution_id="execution_1",
         job_id="job_1",
         admission_idempotency_key="admission_1",
-        execution_origin="user_turn",
-        turn_id="turn_1",
+        execution_origin=origin,
+        turn_id="turn_1" if origin == "user_turn" else None,
     )
     owner = MutationIntentOwner(session_id="session_1", thread_id="thread_1")
     with (
@@ -167,6 +168,7 @@ def test_missing_owner_port_fails_before_dispatch(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("admission_context", ["user_turn", "internal"], indirect=True)
 async def test_registration_only_binds_prepared_assembly(
     adapter: StepModelCallAdapter, saver: MagicMock,
 ) -> None:
@@ -187,6 +189,7 @@ async def test_registration_only_binds_prepared_assembly(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("admission_context", ["user_turn", "internal"], indirect=True)
 @pytest.mark.parametrize("prepared", [
     None, {}, {"assembly_id": "assembly_1"},
     {"assembly_id": "", "execution_id": "execution_1"},
@@ -201,6 +204,7 @@ async def test_unsealed_dispatch_cannot_be_rebuilt(
         await adapter.register("model_1", 1, "provider_1")
     saver.register_model_call.assert_not_called()
     saver.append_items.assert_not_called()
+    saver.converge_execution.assert_not_called()
 
 
 @pytest.mark.asyncio

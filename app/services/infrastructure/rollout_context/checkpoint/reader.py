@@ -370,6 +370,8 @@ class RolloutContextReader:
     ) -> InternalExecutionHistoryPage:
         """同一 view/snapshot 先按 typed 内容身份择一，再读取有界正文页。"""
         view_id = self.context_view_id(chain)
+        # TODO: 将 carrier 择一改为同快照内的有界查询；当前正文页已限流，但每页仍
+        # 读取冻结上界内全部 carrier 元数据。优化须保留跨页 final/replaces 的去重语义。
         carriers = self._storage.storage.read_internal_content_carriers(
             snapshot, view_id,
             upper_logical_item_ordinal=snapshot_upper_logical_item_ordinal,
