@@ -439,6 +439,20 @@ def test_provenance_value_shape_rejections(field: str, code: str, value: str) ->
     assert excinfo.value.code in {code, "resource-activation-legacy-field-rejected"}
 
 
+@pytest.mark.parametrize("value", ["", "https://provider.invalid/skill", "boxteam://workspace/ws/.boxteam/skills/demo/SKILL.md"])
+def test_provenance_display_uri_rejects_empty_and_illegal_values(value: str) -> None:
+    with pytest.raises(ResourceActivationContractError):
+        ResourceProvenanceRef.from_dict({**binding(display_uri=None).to_dict(), "display_uri": value})
+
+
+def test_provenance_restore_requires_explicit_nullable_display_uri() -> None:
+    raw = binding(display_uri=None).to_dict()
+    assert raw["display_uri"] is None
+    del raw["display_uri"]
+    with pytest.raises(ResourceActivationContractError, match="缺少必填字段"):
+        ResourceProvenanceRef.from_dict(raw)
+
+
 def test_provenance_rejects_credential_shaped_identity_and_uri() -> None:
     with pytest.raises(ResourceActivationContractError) as excinfo:
         replace(binding(), resource_id="user@host")
