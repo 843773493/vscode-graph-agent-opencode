@@ -32,7 +32,7 @@ read/write 的文件目标、ls/glob/grep 的根目标和 apply_patch 的根目�
 
 2026-10-20 条件文本传输直接复用 `/api/gateway/federation/relay`、原 SSH channel 和星型路由。`TextMutationGrantTarget` 以闭集字段绑定固定 Gateway、Workspace files URI 和 `mutation_kind=text`，只能签发 `file_write`；原 send/read/wait/reply/fork target 不能借用该能力。签名同时覆盖正文和预期版本，每个实际路由/执行点读取最新策略；默认值沿既有联邦策略，显式 read allow 不隐含 write allow。source Workspace 必须已注册且属于来源 Gateway，目标 Gateway 只将请求透明交固定工作区后端，联邦 HTTP 凭据不能直接访问公开文本修改接口绕过 grant。
 
-create/edit/patch 传输 DTO 与公开 proto 同步，封套只接受固定 Workspace files URI；普通工具原生输入仍由其明确目标 owner 解释。目标后端调用容器内同一个 `WorkspaceTextMutationOwner`，复用原字节 preflight、单文件发布和观察 journal，不复制补丁执行链。目标原件与后件经归属、逐路径预期版本及回执身份校验后，保存到 source 所属会话 journal；SessionChanges 不读取 source 同名文件。请求上限1 MiB，回执上限8 MiB；超限在目标 preflight 可确认时零写入，否则诚实返回 unknown。目标失联、丢响应或畸形回执均保留原目标和前置版本，不猜 diff、不自动重放。原生目录根远端写入、远端原生路径输入及 Windows 验收继续由对应任务闭包处理，取消确认仍保留具名 TODO；线程取消等待不代表文件发布已停止。
+create/edit/patch 传输 DTO 与公开 proto 同步，封套只接受固定 Workspace files URI；普通工具原生输入仍由其明确目标 owner 解释。目标后端调用容器内同一个 `WorkspaceTextMutationOwner`，复用原字节 preflight、单文件发布和观察 journal，不复制补丁执行链。目标原件与后件经归属、逐路径预期版本及回执身份校验后，保存到 source 所属会话 journal；SessionChanges 不读取 source 同名文件。请求上限1 MiB，回执上限8 MiB；超限在目标 preflight 可确认时零写入，否则诚实返回 unknown。目标失联、丢响应或畸形回执均保留原目标和前置版本，不猜 diff、不自动重放。原生目录根远端写入、远端原生路径输入及 Windows 验收继续由对应任务闭包处理。异步 owner 启动工作线程前固定规范目标；取消等待携带原目标、原预期版本和逐路径 unknown、retryable=false 回执，仍传播标准 CancelledError。middleware 在传播取消前沿原 model/tool identity shield 提交 canonical 结果；局部 timeout 逐字复用该回执。目标工作线程继续记录实际发布结果，取消等待不代表文件发布已停止。真实 Agent 中断后重启 source 的 events/history 验证原未知回执不被覆写。
 
 ### 3. 轻量读取，不伪装历史快照
 
@@ -62,15 +62,15 @@ write/edit/patch 的内容前置使用精确原始 byte `sha256:<hex>` 或该 ow
 
 普通操作系统不提供针对任意外部写入者的跨文件 CAS/事务。owner 串行化只约束本服务的写入者；外部修改需前置重核和发布后核实，不能宣称关闭所有外部竞争窗口。能力不足的目标明确拒绝相应保证，不添加假 CAS。单文件不暴露半截正文；跨文件不假装全局原子事务。遇到失败立即停止，逐文件报告 published/not_published/not_attempted/unknown 与验证到的 hash；不以自动反向补丁覆盖后来写入。对于要求更强外部 CAS 的场景，另设可验证机制后再公布能力。
 
-2026-10-20 目标执行入口继续收敛为容器装配的 `WorkspaceTextMutationOwner`，通过 runtime provider 同时交 write/edit middleware 与 apply_patch。工具只把原公开字段投影为具名 create/edit/patch 请求，并传入本次权限检查；精确替换和创建规则位于文件 owner，V4A 仅准备整批路径与内容，不再自行创建工作区执行上下文。独立工具测试也显式装配同一个 owner，不保留可选参数构建的旧入口。此结构切片不代表远端授权、传输或取消验收完成。
+2026-10-20 目标执行入口继续收敛为容器装配的 `WorkspaceTextMutationOwner`，通过 runtime provider 同时交 write/edit middleware 与 apply_patch。工具只把原公开字段投影为具名 create/edit/patch 请求，并传入本次权限检查；精确替换和创建规则位于文件 owner，V4A 仅准备整批路径与内容，不再自行创建工作区执行上下文。独立工具测试也显式装配同一个 owner，不保留可选参数构建的旧入口。远端授权、传输及取消的真实进程验收分别见 tasks 4.4/4.5。
 
 ### 5. 执行结果与寻址拒绝分开
 
 后续变更记录切片将 journal 扩为文件 owner 在锁内采集的原件及最终观察到的后件，SessionChanges 不再在延迟事件消费时重读当前文件，也不解析实际宿主路径。它仅按规范文件 URI 聚合和保存 owner 提供的内容；后件不可读或非UTF-8时，在工具逐路径回执和journal中保留观察错误与未知效果，不从本机同名文件猜造diff。changeset、审查请求和审查回执中的 file_path 统一承载文件 URI；移除旧绝对/虚拟路径混用的定位回退。原内容、操作类型、调用/执行/Turn身份及审查行为不变，不迁移旧开发记录、不留双读。这为后续远端写入记录提供正确消费边界，不能代替远端执行验收。
 
-2026-10-20 普通 write_file/edit_file 与 apply_patch 已统一到 `workspace_files/text_mutation.py`，旧 DeepAgents 普通写入调用与补丁私有 journal 已删除。write_file 只做显式 absent 创建，edit_file 使用先前 read_file 的原字节 hash 做精确替换；字符串不唯一须显式 replace_all。三者均在同一短锁内校验全部文件的写权限与预期版本、捕获原件、准备结果后发布；Web 保存继续共用该锁及底层发布原语，保留其同步 expected_revision 合同。SessionChanges 仅从该锁内 journal 获取原件和 published/unknown 路径，失败不伪报成功；有会话的 journal 由统一解析器存入所属会话 changes/text_mutations，独立工具测试仅使用其显式工作区缓存。原字节/BOM/换行保留，普通响应仅含 URI。工具能力面登记 graph revision13，旧图明确拒绝；远端 mutation、取消确认和丢响应仍按独立任务验收。
+2026-10-20 普通 write_file/edit_file 与 apply_patch 已统一到 `workspace_files/text_mutation.py`，旧 DeepAgents 普通写入调用与补丁私有 journal 已删除。write_file 只做显式 absent 创建，edit_file 使用先前 read_file 的原字节 hash 做精确替换；字符串不唯一须显式 replace_all。三者均在同一短锁内校验全部文件的写权限与预期版本、捕获原件、准备结果后发布；Web 保存继续共用该锁及底层发布原语，保留其同步 expected_revision 合同。SessionChanges 仅从该锁内 journal 获取原件和 published/unknown 路径，失败不伪报成功；有会话的 journal 由统一解析器存入所属会话 changes/text_mutations，独立工具测试仅使用其显式工作区缓存。原字节/BOM/换行保留，普通响应仅含 URI。工具能力面登记 graph revision13，旧图明确拒绝；远端 mutation、取消及丢响应的真实进程验收见 tasks 4.4/4.5。
 
-2026-10-20 条件补丁切片已将原执行与自动回滚链物理替换为共享 mutation lock、原字节 preimage 和单文件发布原语。`expected_versions` 必填且精确覆盖补丁所有相对路径，移动包含源和目的；每项取先前读取的 `sha256:<hex>` 或明确 `absent`。固定根支持工作区相对路径、目标原生绝对路径和 Workspace files URI，补丁内仍只允许根下相对文件名；整批先校验版本、文本、路径别名、祖先冲突和现有父目录，再写 journal 和逐路径发布。新文件使用独占创建，已有文件原子替换，删除后核实不存在；保留 BOM、纯 CRLF 与原文件 mode。失败停止后续发布，不恢复已发布文件；最终回执给出 `published/not_published/not_attempted/unknown`、预期/目标/实际原字节版本，`retryable=false`。相同字节的外部竞争及发布后恢复原件不能冒充已确认发布或确定未执行。事件流即使收到失败回执，也把已发布或未知路径交原 SessionChanges owner，未尝试路径不进入 changeset；旧 `verification` 第二回执和反向恢复实现已删除。异步工具保留原事件循环上的生命周期回调，仅文件执行交工作线程，避免同步 StructuredTool 在另一个事件循环等待工具开始身份。远端 write/edit/patch 随后通过上述同一 owner 与独立 file_write grant 接通；取消确认继续后续实施。
+2026-10-20 条件补丁切片已将原执行与自动回滚链物理替换为共享 mutation lock、原字节 preimage 和单文件发布原语。`expected_versions` 必填且精确覆盖补丁所有相对路径，移动包含源和目的；每项取先前读取的 `sha256:<hex>` 或明确 `absent`。固定根支持工作区相对路径、目标原生绝对路径和 Workspace files URI，补丁内仍只允许根下相对文件名；整批先校验版本、文本、路径别名、祖先冲突和现有父目录，再写 journal 和逐路径发布。新文件使用独占创建，已有文件原子替换，删除后核实不存在；保留 BOM、纯 CRLF 与原文件 mode。失败停止后续发布，不恢复已发布文件；最终回执给出 `published/not_published/not_attempted/unknown`、预期/目标/实际原字节版本，`retryable=false`。相同字节的外部竞争及发布后恢复原件不能冒充已确认发布或确定未执行。事件流即使收到失败回执，也把已发布或未知路径交原 SessionChanges owner，未尝试路径不进入 changeset；旧 `verification` 第二回执和反向恢复实现已删除。异步工具保留原事件循环上的生命周期回调，仅文件执行交工作线程，避免同步 StructuredTool 在另一个事件循环等待工具开始身份。远端 write/edit/patch 随后通过上述同一 owner 与独立 file_write grant 接通。故障验收核实第二次发布失败的精确逐路径状态、发布后退出/丢响应的 unknown，以及取消等待后原线程继续发布；重开按原 URI 核实际目标，不自动重放或伪报回滚。
 
 寻址三个错误域引用统一 owner；文件执行原因只在 resource-file-operations spec 登记。确定拒绝和 preflight 失败为未执行；发布完成才为完成；中途失败为部分；无法观察实际效果为未知。调用 cancel 与确认停止分开，source deadline 不抹去目标可能的写入。未知结果先对原目标核实，禁止自动重放。复用现有工具调用身份记录诊断；不预设所有文件操作需要新 operation_id 或 durable coordinator。
 

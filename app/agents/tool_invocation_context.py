@@ -19,6 +19,7 @@ from app.core.model_delta_context import (
     model_tool_invocation_scope,
 )
 from app.core.session_catalog_store import validate_thread_id
+from app.core.shielded_cleanup import run_cleanup_shielded
 from app.core.turn_execution_scope import (
     ScopeCancelledError,
     get_current_turn_execution_scope,
@@ -30,6 +31,9 @@ from app.domain.itemized.identity.tool_call_identity import (
     matches_tool_call_id,
     provider_tool_call_id,
     software_tool_operation_id,
+)
+from app.schemas.internal_v2.text_mutation import (
+    TextMutationReceiptDTO,
 )
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogBindingRef,
@@ -204,6 +208,17 @@ class ToolInvocationContextMiddleware(AgentMiddleware):
                     self._context.require_model_call_id(), self._context.require_tool_call_id(),
                 ):
                     return await handler(request)
+            except asyncio.CancelledError as error:
+                if delta_sink is not None and len(error.args) == 1 and isinstance(error.args[0], TextMutationReceiptDTO):
+                    receipt = error.args[0]
+
+                    async def commit_file_cancellation() -> None:
+                        await delta_sink.fail_tool_invocation(
+                            self._context.require_model_call_id(),
+                            self._context.require_tool_call_id(), error=receipt.model_dump_json(exclude_none=True),
+                        )
+                    await run_cleanup_shielded(commit_file_cancellation)
+                raise
             except (TimeoutError, ScopeCancelledError):
                 raise
             except Exception as error:
@@ -308,6 +323,10 @@ def _timeout_tool_message(
     if not isinstance(tool_call_id, str) or not tool_call_id:
         raise RuntimeError("工具超时缺少 tool_call_id") from error
     tool_name = request.tool_call.get("name") or "unknown_tool"
+    cause = error.__cause__
+    if isinstance(cause, asyncio.CancelledError) and len(cause.args) == 1 and isinstance(cause.args[0], TextMutationReceiptDTO):
+        # 复用取消时已提交的原回执，不能把未知写入投影成可重试的通用超时。
+        return ToolMessage(content=cause.args[0].model_dump_json(exclude_none=True), tool_call_id=tool_call_id, status="error")
     timeout_label = "工具执行超过局部超时" if timeout_ms is not None else "工具执行超时"
     payload: dict[str, object] = {
         "status": "error",

@@ -67,7 +67,7 @@ def qualify_text_transfer(transfer: TextMutationTransferDTO, command: TextMutati
     return transfer.model_copy(update={"receipt": receipt.model_copy(update={"target": command.target, "files": files}), "snapshots": snapshots})
 
 
-def unconfirmed_text_mutation(command: TextMutation, error: Exception) -> dict[str, object]:
+def unconfirmed_text_mutation(command: TextMutation, error: BaseException) -> dict[str, object]:
     # 请求一旦交给传输，异常不能证明目标未执行；仅保留调用前已知的 URI/版本。
     return {
         "status": "error", "effect": "unknown", "owner": "federation" if isinstance(error, FederationError) else "resource_file_operations",

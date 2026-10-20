@@ -23,6 +23,9 @@ from app.core.model_delta_context import (
     set_current_model_delta_sink,
 )
 from app.core.turn_execution_scope import ScopeCancelledError, TurnExecutionScope
+from app.schemas.internal_v2.text_mutation import (
+    TextMutationReceiptDTO,
+)
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
@@ -87,6 +90,55 @@ async def test_tool_error_waits_for_original_result_commit_before_scheduler_fail
         )
         with pytest.raises(RuntimeError, match="缺少 tool_call_id"):
             context.require_tool_call_id()
+    finally:
+        case.release_commit.set()
+        reset_current_model_delta_sink(token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("local_timeout", [False, True])
+async def test_file_cancellation_commits_unknown_result_before_scheduler_continues(invocation_failure_case, local_timeout):
+    case = invocation_failure_case
+    context = ToolInvocationContext(tool_timeout_seconds=0.03 if local_timeout else None)
+    middleware = ToolInvocationContextMiddleware(context)
+    entered = asyncio.Event()
+    receipt = {"status": "error", "effect": "unknown", "code": "cancellation_requested", "retryable": False}
+
+    async def handler(_request_value):
+        entered.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            raise asyncio.CancelledError(TextMutationReceiptDTO.model_validate(receipt)) from None
+
+    token = set_current_model_delta_sink(case.sink)
+    try:
+        task = asyncio.create_task(middleware.awrap_tool_call(
+            _request("file-call", model_call_id="file-model"), handler,
+        ))
+        await asyncio.wait_for(entered.wait(), 1)
+        if not local_timeout:
+            task.cancel()
+        await asyncio.wait_for(case.commit_started.wait(), 1)
+        assert not task.done()
+        if not local_timeout:
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+        case.release_commit.set()
+        if local_timeout:
+            result = await task
+            assert isinstance(result, ToolMessage) and result.status == "error"
+            assert json.loads(result.content) == TextMutationReceiptDTO.model_validate(receipt).model_dump(mode="json", exclude_none=True)
+        else:
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        case.sink.fail_tool_invocation.assert_awaited_once()
+        call = case.sink.fail_tool_invocation.await_args
+        assert call.args == ("file-model", "file-call")
+        if local_timeout:
+            assert result.content == call.kwargs["error"]
+        assert json.loads(call.kwargs["error"]) == TextMutationReceiptDTO.model_validate(receipt).model_dump(mode="json", exclude_none=True)
     finally:
         case.release_commit.set()
         reset_current_model_delta_sink(token)

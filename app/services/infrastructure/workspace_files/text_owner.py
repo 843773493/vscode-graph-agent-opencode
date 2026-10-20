@@ -162,9 +162,18 @@ class WorkspaceTextMutationOwner:
         return result
 
     async def execute_async(self, request: TextMutation, *, authorize: Callable[[str], None] | None = None) -> dict[str, object]:
-        # TODO（文件工具4.4）：补齐取消确认回执；取消等待不会强制停止原生 I/O 或远端发布。
-        # 生命周期留在调用者事件循环；文件 I/O 和锁只在工作线程执行。
-        return await asyncio.to_thread(self.execute, request, authorize=authorize)
+        fixed = self._routed_command(request)
+        if fixed is None:
+            _, uri = resolve_text_target(self._paths, request.target)
+            fixed = request.model_copy(update={"target": uri})
+        # 生命周期留在调用者事件循环；工作线程继续记录实际发布结果。
+        try:
+            return await asyncio.to_thread(self.execute, fixed, authorize=authorize)
+        except asyncio.CancelledError as error:
+            receipt = unconfirmed_text_mutation(fixed, error)
+            receipt.update(code="cancellation_requested", error="文件调用等待已取消，目标尚未确认停止")
+            # 保留标准 CancelledError，asyncio.timeout 才能正确收敛自身的超时。
+            raise asyncio.CancelledError(TextMutationReceiptDTO.model_validate(receipt)) from error
 
 
 def _create(request: CreateText, before: FilePreimage | None) -> bytes:
