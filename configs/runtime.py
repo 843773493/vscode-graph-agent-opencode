@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import commentjson
 import jsonschema
 
+from app.core.config_sources import parse_stable_config_file, read_stable_config_file
 from app.services.infrastructure.config.policy import (
     gateway_config_policy,
     validate_policy_manifest,
@@ -13,11 +13,9 @@ from app.services.infrastructure.config.policy import (
 
 
 def read_jsonc_object(path: Path) -> dict[str, object]:
-    if not path.is_file():
-        raise FileNotFoundError(f"配置文件不存在: {path}")
-    parsed = commentjson.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(parsed, dict):
-        raise TypeError(f"配置文件根节点必须是对象: {path}")
+    parsed = parse_stable_config_file(read_stable_config_file(path))
+    if parsed is None:
+        raise FileNotFoundError("配置文件不存在")
     return parsed
 
 

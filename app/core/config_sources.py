@@ -63,41 +63,51 @@ def _config_file_stat_signature(stat_result: os.stat_result) -> tuple[int, int, 
 def read_stable_config_file(path: Path, *, attempts: int = 3) -> StableConfigFile:
     """读取稳定文件快照；文件在读取期间变化时直接报错。"""
 
-    resolved_path = path.expanduser().resolve()
     if attempts < 1:
         raise ValueError("稳定配置文件读取次数必须大于 0")
 
-    for _ in range(attempts):
-        try:
-            before = resolved_path.stat()
-        except FileNotFoundError:
-            return StableConfigFile(
-                path=resolved_path,
-                presence="absent",
-                raw_bytes=None,
-                digest=None,
-                stat_signature=None,
-            )
-        raw_bytes = resolved_path.read_bytes()
-        try:
-            after = resolved_path.stat()
-        except FileNotFoundError:
-            continue
-        if (
-            before.st_dev == after.st_dev
-            and before.st_ino == after.st_ino
-            and before.st_size == after.st_size
-            and before.st_mtime_ns == after.st_mtime_ns
-        ):
-            return StableConfigFile(
-                path=resolved_path,
-                presence="present",
-                raw_bytes=raw_bytes,
-                digest=hashlib.sha256(raw_bytes).hexdigest(),
-                stat_signature=_config_file_stat_signature(after),
-            )
+    operation = "resolve"
+    try:
+        resolved_path = path.expanduser().resolve()
+        for _ in range(attempts):
+            operation = "stat_before"
+            try:
+                before = resolved_path.stat()
+            except FileNotFoundError:
+                return StableConfigFile(
+                    path=resolved_path,
+                    presence="absent",
+                    raw_bytes=None,
+                    digest=None,
+                    stat_signature=None,
+                )
+            operation = "read"
+            raw_bytes = resolved_path.read_bytes()
+            operation = "stat_after"
+            try:
+                after = resolved_path.stat()
+            except FileNotFoundError:
+                continue
+            if (
+                before.st_dev == after.st_dev
+                and before.st_ino == after.st_ino
+                and before.st_size == after.st_size
+                and before.st_mtime_ns == after.st_mtime_ns
+            ):
+                return StableConfigFile(
+                    path=resolved_path,
+                    presence="present",
+                    raw_bytes=raw_bytes,
+                    digest=hashlib.sha256(raw_bytes).hexdigest(),
+                    stat_signature=_config_file_stat_signature(after),
+                )
+    except OSError as error:
+        # 普通状态响应会展示此异常；原生文件名仅保留在内部异常链。
+        raise type(error)(
+            error.errno, f"配置文件读取失败: operation={operation}: {error.strerror}",
+        ) from error
 
-    raise RuntimeError(f"配置文件在读取期间持续变化，无法建立稳定快照: {resolved_path}")
+    raise RuntimeError("配置文件在读取期间持续变化，无法建立稳定快照")
 
 
 def verify_stable_config_file(snapshot: StableConfigFile) -> None:
@@ -109,10 +119,7 @@ def verify_stable_config_file(snapshot: StableConfigFile) -> None:
         or current.digest != snapshot.digest
         or current.stat_signature != snapshot.stat_signature
     ):
-        raise RuntimeError(
-            "配置文件在解析后发生变化，拒绝提交 source layer: "
-            f"{snapshot.path}"
-        )
+        raise RuntimeError("配置文件在解析后发生变化，拒绝提交 source layer")
 
 
 def parse_stable_config_file(
@@ -123,10 +130,10 @@ def parse_stable_config_file(
     if snapshot.presence == "absent":
         return None
     if snapshot.raw_bytes is None:
-        raise RuntimeError(f"present 配置快照缺少文件内容: {snapshot.path}")
+        raise RuntimeError("present 配置快照缺少文件内容")
     parsed = commentjson.loads(snapshot.raw_bytes.decode("utf-8"))
     if not isinstance(parsed, dict):
-        raise TypeError(f"配置文件根节点必须是对象: {snapshot.path}")
+        raise TypeError("配置文件根节点必须是对象")
     return parsed
 
 

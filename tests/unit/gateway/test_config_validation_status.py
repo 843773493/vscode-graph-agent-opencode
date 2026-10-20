@@ -90,3 +90,52 @@ async def test_invalid_reload_exposes_schema_reason_without_native_source_paths(
         assert recovered.json()["data"]["last_error"] is None
         assert recovered.json()["data"]["reason"] is None
         assert store.get_active_config_snapshot("gateway") == active
+
+
+@pytest.mark.parametrize(("damage", "exception", "reason"), [
+    ("config_root", TypeError, "配置文件根节点必须是对象"),
+    ("schema_root", TypeError, "配置文件根节点必须是对象"),
+    ("schema_missing", FileNotFoundError, "配置文件不存在"),
+    ("schema_directory", IsADirectoryError, "配置文件读取失败"),
+])
+async def test_source_read_failure_has_no_native_path_and_preserves_active_state(
+    validation_owner, damage: str, exception: type[Exception], reason: str,
+) -> None:
+    application, service, store, config_path, schema_path, original = validation_owner
+    initial_config = service.config
+    active = store.get_active_config_snapshot("gateway")
+    schema_bytes = schema_path.read_bytes()
+    if damage == "config_root":
+        config_path.write_text("[]", encoding="utf-8")
+    elif damage == "schema_root":
+        schema_path.write_text("[]", encoding="utf-8")
+    else:
+        schema_path.unlink()
+        if damage == "schema_directory":
+            schema_path.mkdir()
+
+    with pytest.raises(exception, match=reason):
+        await service.reload()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="http://test",
+    ) as client:
+        response = await client.get("/api/gateway/config/reload-status")
+        assert response.status_code == 200, response.text
+        status = response.json()["data"]
+        assert status["healthy"] is False
+        assert status["reason"] == "invalid_config"
+        assert reason in status["last_error"]
+        assert str(config_path.parent) not in response.text
+        assert service.config is initial_config
+        assert store.get_active_config_snapshot("gateway") == active
+        assert store.get_pending_config_candidate(config_domain="gateway") is None
+        assert service.list_events() == ()
+        if damage == "schema_directory":
+            schema_path.rmdir()
+        schema_path.write_bytes(schema_bytes)
+        config_path.write_text(original, encoding="utf-8")
+        await service.reload()
+        recovered = (await client.get("/api/gateway/config/reload-status")).json()["data"]
+        assert recovered["healthy"] is True
+        assert recovered["last_error"] is None
+        assert store.get_active_config_snapshot("gateway") == active
