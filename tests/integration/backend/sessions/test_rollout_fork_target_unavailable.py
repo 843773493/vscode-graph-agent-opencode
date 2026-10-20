@@ -1,4 +1,4 @@
-"""真实跨 Gateway 目标断连必须显式失败，不能改用本地目标。"""
+"""真实跨 Gateway 授权和断连必须显式失败，不能改用本地目标。"""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import hashlib
 import json
 import sqlite3
 
+import commentjson
 import pytest
 
 from app.core.resource_uri import parse_resource_uri, resource_display_uri
@@ -105,3 +106,106 @@ async def test_authorized_remote_target_disconnect_has_no_local_fallback(transfe
     }, ensure_ascii=False, indent=2) + "\n")
     # 已通过具体断连错误与三端落盘事实证明零副作用，才结清本次绝对期限。
     deadline.complete()
+
+
+async def _publish_fork_policy(node: CommunicationNode, policy: dict[str, object]) -> None:
+    before = await node.client.get("/api/gateway/config/reload-status")
+    assert before.status_code == 200, before.text
+    assert node.gateway_home is not None
+    config_path = node.gateway_home / "config/gateway.jsonc"
+    config = commentjson.loads(config_path.read_text())
+    config.setdefault("permissions", {})["federation"] = policy
+    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
+    async with asyncio.timeout(15):
+        while True:
+            response = await node.client.get("/api/gateway/config/reload-status")
+            assert response.status_code == 200, response.text
+            status = response.json()["data"]
+            assert status["last_error"] is None, status
+            if status["active_revision"] != before.json()["data"]["active_revision"]:
+                return
+            await asyncio.sleep(0.1)
+
+
+@pytest.mark.asyncio
+async def test_remote_fork_rechecks_both_owner_permissions_without_business_side_effects(transfer_triad):
+    nodes, model, artifacts, _control, deadlines = transfer_triad
+    source, target = nodes["b"], nodes["c"]
+    model.response_callback = lambda payload: {"content": "两端授权验收来源"}
+    source_session = await create_session(source.client, "两端 fork 权限")
+    await transfer._send(source, source_session, "仅有 read 权限不能授权 fork")
+    point_response = await source.client.get(
+        f"/api/v1/sessions/{source_session}/fork-source-point", params={"mode": "full_rollout_copy"},
+    )
+    assert point_response.status_code == 200, point_response.text
+    point = point_response.json()["data"]
+    source_address = parse_resource_uri(point["source_uri"])
+    request = {
+        "source_uri": resource_display_uri(
+            scope=source_address.scope, scope_id=source_address.scope_id, kind=source_address.kind,
+            tail_segments=source_address.tail_segments, gateway_authority=source.gateway_id,
+        ),
+        "target_container_uri": resource_display_uri(
+            scope="workspace", scope_id=target.workspace_id, kind="session",
+            tail_segments=(), gateway_authority=target.gateway_id,
+        ),
+        "creation_kind": "new_session_main", "mode": "full_rollout_copy",
+        "source_view_id": point["source_view_id"], "source_view_revision": point["source_view_revision"],
+    }
+    policy = {"default_effect": "allow", "rules": [], "hardening_enabled": False}
+    receipts = []
+    # 同一真实通道先拒绝目标创建，再拒绝来源导出；read 保持可用。
+    for owner, origin, capability in (
+        (target, source, "fork_target"), (source, target, "fork_source"),
+    ):
+        await _publish_fork_policy(owner, {**policy, "rules": [{
+            "capability": capability, "effect": "deny", "origin_gateway_id": origin.gateway_id,
+        }]})
+        marker = owner.workspace / "fork-permission-proof.txt"
+        marker.write_text(capability, encoding="utf-8")
+        readable = await origin.client.post("/api/v1/resources/navigation", json={
+            "uri": resource_display_uri(
+                scope="workspace", scope_id=owner.workspace_id, kind="files",
+                tail_segments=("root", marker.name), gateway_authority=owner.gateway_id,
+            ),
+            "operation": "read",
+        })
+        assert readable.status_code == 200, readable.text
+        assert readable.json()["data"]["content"] == capability
+        frozen = request | {"idempotency_key": f"reject-and-retry-{capability}"}
+        key = "fork-" + hashlib.sha256(frozen["idempotency_key"].encode()).hexdigest()
+        before = {name: _catalog_facts(node) for name, node in nodes.items()}
+        provider_requests = len(model.requests)
+        channels = {name: node.channels() for name, node in nodes.items()}
+        deadline = transfer._fork_deadline(target, frozen, deadlines)
+        denied = await transfer._post_fork(
+            source, source_session, frozen, deadline, stage=f"reject_{capability}",
+        )
+        receipts.append({"capability": capability, "status": denied.status_code, "body": denied.json()})
+        assert denied.status_code == 502, denied.text
+        assert "authorization-revoked" in denied.text and capability in denied.text
+        assert denied.headers["X-Request-ID"] == denied.json()["request_id"]
+        after = {name: _catalog_facts(node) for name, node in nodes.items()}
+        assert after == before
+        assert len(model.requests) == provider_requests
+        for node in nodes.values():
+            assert transfer._capture_record(node, key) is None
+            assert transfer._attachment_claims(node, key) == []
+        assert {name: node.channels() for name, node in nodes.items()} == channels
+        deadline.complete()
+        await _publish_fork_policy(owner, policy)
+        # 撤销恢复不重建 channel；原 key 可以从零副作用拒绝后正常发布。
+        published = await transfer._post_fork(
+            source, source_session, frozen, transfer._fork_deadline(target, frozen, deadlines),
+            stage=f"retry_restored_{capability}",
+        )
+        assert published.status_code == 200, published.text
+        result = published.json()["data"]
+        assert result["target_gateway_id"] == target.gateway_id
+        assert result["session"]["workspace_id"] == target.workspace_id
+        assert result["export_release"] == {"state": "confirmed", "error": None}
+        assert len(model.requests) == provider_requests
+        receipts[-1].update({"before": before, "after": after, "restored_result": result})
+    (artifacts / "fork-both-owner-permissions.json").write_text(
+        json.dumps(receipts, ensure_ascii=False, indent=2) + "\n",
+    )
