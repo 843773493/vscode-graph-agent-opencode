@@ -83,6 +83,8 @@ workspace runtime API、普通 Workspace DTO、解析结果、模型载荷和跨
 
 ### Requirement: workspace_id 必须与 URI workspace scope 使用同一份身份
 
+本 capability 的多工作区寻址合同 MUST 以 `add-unified-virtual-resource-addressing` requirement「多工作区场景下寻址层必须显式承载 scope_id 身份」为准；本 capability 只承接 HTTP 身份、mount 注册表和服务图隔离，不另行定义寻址语法或身份来源。
+
 `workspace_id` MUST 是**寻址层身份**。HTTP API 中显式携带的 `workspace_id` 与**资源 URI** 的 `workspace` **作用域 / scope** 里**必填**的 `scope_id` MUST 是同一个稳定 `workspace_id`（`workspace` scope 的 `scope_id` 必填且等于 workspace_id，是 requirement「`scope_id` 必须推导自该 scope 的稳定身份，禁止硬编码」的一个实例；语法本体与取值来源表属「统一资源寻址」change）；两处 MUST NOT 各自为政或存在换算层。跨 gateway 引用另一工作区时，MUST 使用同一台机器上那个稳定 `workspace_id`，否则跨 gateway 寻址从根上不成立。本 capability MUST NOT 定义 URI 语法、`作用域 / scope` 闭合集、`scope_id` 语义或`拒绝码 / rejection code`，只引用其 owner change。
 
 #### Scenario: 同一工作区在两处取值一致
@@ -97,12 +99,12 @@ workspace runtime API、普通 Workspace DTO、解析结果、模型载荷和跨
 
 ### Requirement: scope_id 必须推导自该 scope 的稳定身份，禁止硬编码
 
-**资源 URI** 的 `scope_id` 段对所有 scope MUST 必填，且 MUST **推导自该 scope 的稳定身份**；MUST NOT 使用硬编码字面量、进程级单例或「当前激活」态补齐。`workspace` **作用域 / scope** 的 `scope_id` MUST 等于显式 workspace_id（本 capability 的核心），此原则对其它 scope **同构**：`gateway` scope 的 `scope_id` MUST 推导自真实 gateway_id，`inline` scope 的 `scope_id` MUST 推导自真实 distribution_id（其来源与编码 MUST 按「统一资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」从发行包 runtime manifest 推导，本 capability 只引用、不复述取值规则）。本 capability 只声明该推导原则与两个既存违反点的归属；`作用域 / scope` 闭合集终值、各 scope 的 `scope_id` 取值表与 `拒绝码 / rejection code` 登记，以「统一资源寻址」change 的权威表为准。
+**资源 URI** 的 `scope_id` 必填及稳定身份原则 MUST 按 `add-unified-virtual-resource-addressing` requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」执行，包括该 owner 明确登记的约定。`workspace` **作用域 / scope** 的 `scope_id` MUST 等于显式 workspace_id；本 capability 不复制其它 scope 的取值、来源、编码、闭合集或**拒绝码 / rejection code**，不使用进程级单例或「当前激活」态补齐。
 
 #### Scenario: scope_id 推导自稳定身份而非硬编码
 
 - **WHEN** 系统为任一 scope 构造**资源 URI**
-- **THEN** `scope_id` MUST 由该 scope 的稳定身份推导得到，MUST NOT 是硬编码字面量、进程级单例或「当前激活」态
+- **THEN** `scope_id` MUST 按寻址 owner 的唯一身份定义取得，包括其具名的约定；不得自行硬编码、使用进程级单例或「当前激活」态补齐
 
 #### Scenario: workspace scope 是同一推导原则的实例
 

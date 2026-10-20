@@ -42,7 +42,7 @@
 
 **备选**：仅请求头 / 仅查询参数 / 沿用「当前激活工作区」隐式 —— 前两者如上述缺陷；后者被用户显式否决（「当前工作区」不是寻址概念）。
 
-**破坏边界**：所有不带 `/workspaces/{id}` 前缀、或依赖进程激活态的工作区维度调用都会失效（404/显式拒绝）。
+**破坏边界**：直接 Backend 的工作区请求必须携带路径或等价 header 的显式身份；缺失、冲突或未挂载时明确拒绝。浏览器经 Gateway 的既有同源 `/api/v1/...` 仍可使用，由 Gateway 选择固定目标并注入相同 workspace_id，Backend 不读取激活态补齐。
 
 ### D2: 为什么必须放弃「当前激活工作区」
 
@@ -70,27 +70,11 @@
 
 **Non-Goal**：本 change 不实现解析链本身（属寻址 change），只声明 Gateway 角色与传递约定同它一致。
 
-### D6: scope_id 推导原则与 gateway/distribution 空洞（与 change 1 对齐的关键补强）
+### D6: scope_id 身份只引用统一资源寻址的定义
 
-**决策**：本 change 不只在 spec 里声明「`workspace` scope 的 `scope_id` 必填且等于 workspace_id」，而是把它**完整化**为对**所有** scope 的原则：`scope_id` MUST 必填且 MUST **推导自该 scope 的稳定身份**，MUST NOT 硬编码。
+本 change 的寻址合同以 `add-unified-virtual-resource-addressing` requirement「多工作区场景下寻址层必须显式承载 scope_id 身份」为准：本 change 负责显式 HTTP 身份、generation-local mount 与服务图隔离，工作区资源 URI 的 scope_id 直接使用相同 Backend workspace_id，不引入第二套身份或换算层。
 
-- `workspace` → 真实 workspace_id（本 change 的核心，保持）。
-- `gateway` → 真实 gateway_id，**来源与注入 owner 已裁定**：owner = Gateway 侧按请求注入，取值按「统一资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」推导（`${BOXTEAM_HOME}/gateway/identity.json` 的 `load_or_create_gateway_id`，`gateway_<32hex>`）；本 change 只引用，不复述取值规则。**通道与装配均已落地（`64ba30c8`/`53befbfc`/`9881a3b2`）**。
-- `inline`（原 `builtin`，正名由「统一资源寻址」change 的 owner 执行，本 change 只引用新名）→ 真实 distribution_id，**来源已裁定**为该发行包 runtime manifest（`packages/launcher/runtime-manifest.schema.json`）的 `distribution` + `version`（编码规则与缺失 fail-closed 见该 change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」）；本 change 只引用，不复述取值规则。
-- `user` → `local`，显式声明单用户本地程序约定（该 scope 为本次新增）。此为**已定稿终值**，见 `add-unified-virtual-resource-addressing` 的 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」中 normative 的 `user` → `local` 与「MUST 显式声明为单用户本地程序的约定，MUST NOT 虚构用户名」；本 change 只引用该定稿结论，不再标注为待定。
-
-**为什么完整化**：只要求 `workspace` 一处显式，等于允许其它 scope 继续靠硬编码隐含上下文——而「当前激活工作区」这条要根除的原则，其本质是「不得有隐含上下文」。因此把同一原则同构地施加到全部 scope，才是与 change 1 一致的做法（与 D2 同源）。
-
-**两个既存违反点（实测，权威表）**：
-
-| scope | 稳定身份 | 当前实际 scope_id | 违反点 |
-|---|---|---|---|
-| `gateway` | gateway_id | 硬编码字面量（`app/agents/skill_runtime.py:539` 的 `else` 分支） | 未推导真实 gateway_id |
-| `inline`（原 `builtin`） | distribution_id | 同一硬编码字面量（同一 `else` 分支），与 `gateway` **逐字相同** | 未推导真实 distribution_id |
-
-`distribution_id` 的来源为发行包 runtime manifest 的 `distribution` + `version`（见 `add-unified-virtual-resource-addressing` 的对应 requirement），且**装配已落地**（提交 `298ef599`+`f3bd8213`：`app/core/distribution_identity.py::load_distribution_id` 为生产赋值方、被 `app/agents/skill_runtime.py::_layer_scope_identity` 消费）——原「零生产赋值 / 尚未实现装配」的空洞已消除（**2026-10-01 第八轮复核更正**）。
-
-**边界**：本 change **不实现**这些取值来源（属「统一资源寻址」change 或 Gateway 侧），只做两件事：把原则写进 spec，并把空洞登记为本 change 的**接口前提**与风险项。
+scope 闭合集、其它 scope 的身份取值与来源、URI grammar 和拒绝码只引用该 owner 的 requirements「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」及「拒绝码必须分三套集中登记且命名不得自造」，本 change 不复制取值表。原 gateway/inline 硬编码问题的历史修复提交与验收仍保留在 tasks 1.6，不把历史表当作当前定义，也不重复实施身份来源。
 
 ### D7: 迁移策略 —— 「新写字段 + 读路径切换」，不虚构存量迁移，不留兼容层
 
@@ -143,9 +127,7 @@ Gateway自身generation proof/CAS成功前保旧共享owner/handle/完整清单�
 - [**两个 workspace_id 命名空间混淆**（后端 UUID vs Gateway `gw_`）] → 本 change 明确：寻址层 `workspace_id` 只使用**后端身份命名空间**（`workspace_identity.validate_workspace_id` 的严格 UUID 文本）；Gateway `gw_` ID 如需保留，只能是 Gateway 控制面内部标识，MUST NOT 进入工作区寻址/URI。（见 Open Questions）
 - [**惰性构造服务图导致首次请求延迟/装配竞态**] → 规定每工作区服务图构造为**进程内幂等**（同一 workspace_id 只构造一次），并沿用既有 SQLite 进程所有权锁语义 fail-closed。
 - [**旧取证误当当前生产状态**] → 原零 URI、未装配取证不能覆盖 A01 已接通的 activation；依据固定候选和真实入口收据复用已绿范围，验收当前新 writer 与恢复，不新增旧开发数据迁移。
-- [**gateway_id 通道与装配已落地（2026-10-01 第八轮复核更正）**] → `gateway` scope 的 `scope_id` 由 Gateway 侧按请求注入真实 gateway_id（owner = Gateway 侧按请求注入，取值按「统一资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」推导），装配提交 `64ba30c8`/`53befbfc`/`9881a3b2`；原硬编码字面量 `local` 分支已物理删除，跨 gateway 寻址的接口前提已满足。
-- [**distribution_id 装配已落地（2026-10-01 第八轮复核更正）**] → `distribution_id` 来源为发行包 runtime manifest 的 `distribution` + `version`（编码规则见「统一资源寻址」change 的 requirement），装配提交 `298ef599`+`f3bd8213`（`app/core/distribution_identity.py::load_distribution_id` 生产赋值、`app/agents/skill_runtime.py::_layer_scope_identity` 消费）；原「零赋值空洞」已消除。
-- [**旧 scope_id 硬编码被误当现行合同**] → 原规划基线中 gateway 与 inline 共用 `"local"` 的违反点已由前述身份装配修复；后续依赖真实 gateway_id / distribution_id，不恢复硬编码，不重复派发已完成的装配。
+- [**旧身份装配缺口被误当待实施任务**] → gateway/inline 的装配与硬编码清理已落地，历史提交和验证见 tasks 1.6、3.4-A/B/C；当前身份来源只引用 D6 指向的寻址 owner，不重复派发装配或恢复旧字面量。
 
 ## Migration Plan
 
@@ -154,7 +136,7 @@ Gateway自身generation proof/CAS成功前保旧共享owner/handle/完整清单�
 1. 引入注册表与显式身份载体，按真实调用链同步迁移全部消费者；每个集成切片只保留一个身份解析入口，不引入新旧并存读取。
 2. 把所有工作区根/数据目录定位改为「显式 workspace_id → 注册表」。
 3. 把 `build_app_container` 改为「注册表 + 按需服务图」；把 `lru_cache` 键改为 workspace 维度。
-4. 按 `scope_id` 推导原则落实身份来源：`workspace` scope 的 `scope_id` 取真实 workspace_id；`gateway`/`inline` 的硬编码字面量 MUST 改为推导自真实 gateway_id / distribution_id（`distribution_id` 来源已裁定为 manifest 的 `distribution` + `version`；`gateway_id` 来源已裁定为 `identity.json` 的 `load_or_create_gateway_id`，由 Gateway 侧按请求注入；两者均按「统一资源寻址」change 的编码/来源规则实施，缺失时 fail-closed，不得继续硬编码）。
+4. 按 D6 验证 HTTP workspace_id 与工作区 URI scope_id 同源；其它 scope 沿用寻址 owner 的身份合同及已完成装配，不再重复实施。
 5. 使只描述单工作区前提的旧字段显式失效，停止对应写入后清理开发数据；验证新字段和恢复只依赖精确 workspace 身份，不扫描、回填旧 URI。
 6. Gateway 改为显式传目标（路径前缀或等价头），并与**星型解析 / star-topology resolution** 的 hub-spoke 有界 transit 约定一致；按 D9 一次迁齐共享 Backend 唯一owner、完整组生命周期和消费者，保普通 singleton 启动语义。
 7. 重新生成 OpenAPI 快照与前端类型；更新契约测试。
@@ -162,7 +144,7 @@ Gateway自身generation proof/CAS成功前保旧共享owner/handle/完整清单�
 
 ## Open Questions
 
-- **权威表已下发，`作用域 / scope` 与 `scope_id` 取值语义已按 R1/R2/R3 定稿**：scope 闭集终值、kind 闭集、`builtin`→`inline` 正名与各 scope 的 `scope_id` 推导来源（含 `user`→`local` 为**已定稿终值**，见 `add-unified-virtual-resource-addressing` 的 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」），均以「统一资源寻址」change 的权威表为准，本 change 只引用、不复述。**未决项中不含 `user`，亦不含 `gateway_id` 的来源**：`gateway_id` 的来源与注入 owner 已裁定（owner = Gateway 侧按请求注入，取值按「统一资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」推导，**通道与装配均已落地**），`distribution_id` 的来源为 manifest 的 `distribution` + `version`（**装配已落地**）。**本 change 当前无待裁定的取值来源项**；`memory` scope 移出 URI 后的替代 owner 已由「统一资源寻址」change 声明为「domain owner 与状态本体从未接入，故无 URI 替代 owner 的需求」，不再构成待定项。多用户场景若将来出现、`user` 取值如何演进属**未来可能**，不属于当前待定项。
+- scope 闭集、身份来源和现有装配均已定稿，见 D6 的具名 owner 引用及 tasks 的历史收据；本 change 无待裁定的 scope 取值来源项。未来身份演进仍由寻址 owner 负责。
 - 后端身份命名空间（严格 UUID）与 Gateway `gw_` 工作区 ID 是**收敛为一个**还是保留「Gateway 控制面 ID + 后端寻址 UUID」两层映射？本 change 已规定**寻址层只用后端 UUID 命名空间**，此问仅影响 Gateway 控制面是否继续保留 `gw_` 别名，属可延后决定，不改变 spec 的工作区身份定义与任务分解。
 - 已挂载工作区的**发现方式**（静态配置 / Gateway 下发 / 启动参数）不影响寻址语义，可延后到实施细节。
 

@@ -31,7 +31,7 @@
 - [ ] 4.1 盘点只描述单工作区前提的旧持久化字段，按用户授权显式失效并删除旧读取分支，保留新写字段与单一读路径，不双读、不留别名。
 - [ ] 4.2 核验旧开发运行数据清理与新 writer 切换：停止对应写入后清理不兼容开发数据，保普通源码及独有未集成改动；不新增旧数据迁移/扫描/回填，fresh writer 与精确恢复错误必须修复并验证。
 - [ ] 4.3 校验**真实路径 / real path** 不变量（**三层分离 / three-layer separation**）：业务持久化记录、普通 API/Workspace DTO、解析结果、模型载荷与联邦资源投影 MUST NOT 出现 real path，只允许 `资源身份 / ResourceIdentity` + `资源 URI`（+ 独立 revision 字段）；工作区根例外是按 requirement「工作区物理根必须绑定到唯一原生 Gateway」持久化在原生 Gateway registry 的 root binding，该根不得复制到普通输出。
-- [ ] 4.4 记录代码、数据与生成快照的回滚边界及不可回滚点：旧开发数据按授权失效/清理，不承诺恢复；新形态数据不能交旧 reader。原零 URI、无装配、seal 恒为空是历史取证，A01 `16f09ee7` 已接通真实 activation freeze/seal/restore，不重复派发已完成接线，不虚构旧 URI 迁移。
+- [x] 4.4 记录代码、数据与生成快照的回滚边界及不可回滚点：旧开发数据按授权失效/清理，不承诺恢复；新形态数据不能交旧 reader。原零 URI、无装配、seal 恒为空是历史取证，A01 `16f09ee7` 已接通真实 activation freeze/seal/restore，不重复派发已完成接线，不虚构旧 URI 迁移。
 - [x] 4.5 验收 root binding 注册与恢复闭包：本地 managed token 代表本 Gateway 管理权限；远端注册/替换/移除由原生目标 Gateway 复用唯一 `permissions.federation` policy owner，以认证 peer 的 `principal_ref_for_gateway` 和显式 `managed_workspace_admin` allow 判权。授权按目标 Gateway 作用，不依赖首次创建时尚不存在的 `workspace_id`；配对、read/其他通信能力与 `default_effect="allow"` 不授予管理权，且现有通信默认保持不变。policy schema、规范化/snapshot/evaluator 与全部 callers 同批迁齐，不加 RBAC/权限 registry/路径 ACL；relay 只转送、native owner 作最终判权，未授权请求返回 403 且在 root/group/registry 状态零写入。用户提供的物理根只送达获授权的原生 owner。冷启动按完整成员身份从唯一 registry 解析根；缺 binding、target/Backend UUID 不符或 mount 成员集合不符时响亮失败，不扫描、猜根或部分启动；普通 DTO、模型载荷和联邦资源投影不含根。
   - 2026-10-19 完整根绑定验收：`root-binding-native-001` 两个真实 Gateway/Backend 进程场景通过（2 passed，95.47s，exit 0），核 direct/relay 未授权 403、目录/registry/revision/journal/进程零变化、显式 peer principal 授权注册、固定 files/root URI、Gateway 冷重启同 Backend UUID/原根、撤权及恢复后删除。`root-binding-contracts-001` 的 policy/registry/mount/reconnect 四文件 212 passed；`root-binding-cold-restore-001` 的完整 startup 文件 37 passed，核缺 root/identity、UUID 错配及不完整成员在任何写入/启动前拒绝，注册表与原文件不变，不猜默认根、不部分启动。各次命令、前后源码指纹与原始输出位于 `out/tests/temp/openspec_takeover/artifacts/runs/`；不据此关闭 4.3 全仓真实路径合同。
 
@@ -48,6 +48,8 @@
 本形态不迁移旧开发数据；验收重点为接口契约（路由路径形态、显式身份载体、拒绝路径、分区隔离）、新写入和精确恢复，不能沿用历史零 URI 取证判断当前生产状态。
 
 - [ ] 6.1 「只需加 workspace 参数」层：为受影响的服务层/API 单测显式传入 `workspace_id`（优先复用 `tests/unit/core/catalog_workspace_helper.py` 的 `build_catalog_workspace(tmp_path, workspace_id=...)`），不做语义重写。
+  - 2026-10-20 定向 caller 迁移：`mounted-contract-unit-001` 七文件为76 passed/1 failed/1 skipped（Windows-only），唯一失败是并发 request-scope 装具仍传旧两字段 mount。改为现有 MountedWorkspace.to_payload、fake业务容器接 registry 唯一 catalog owner，并用 with 关闭；40并发请求、yield/child context、两工作区正文根与缺失/冲突身份精确断言保持。`mounted-request-scope-final-002` 1 passed；不重复未变的76个通过项。限定只读审查未发现 path_utils/mount/container/pending恢复中的隐式单根 reader，但不能据此勾选6.1/6.2整体。
+  - 真实同进程双挂载补验：`mounted-scope-identity-integration-002` 正式 matrix 2 passed/37.94秒、exit0，覆盖完整 mount 输入、真实请求/编译/URI同源、反向清理及消息/Trace/后台任务/catalog锁隔离；前后源码指纹一致且无残留进程。首轮001因 PYTEST_ADDOPTS 的 `-k` 表达式未加引号，在收集前把 `or` 解释为文件参数，exit4、零测试，不计通过。原件同上，不代替6.1/6.2全部caller或8.2全闭包。
 - [ ] 6.2 「必须重写」层：重写断言单一工作区/直接读 `WORKSPACE_ROOT`/跨工作区复用解析器实例的用例。
 - [ ] 6.3 「不受影响」层：确认纯算法/值对象/语法单测无需改动，避免无谓改动。
 - [x] 6.4 新增接口契约层负向断言：`gateway`/`inline` 的 `scope_id` MUST NOT 为硬编码字面量，`workspace` scope 的 `scope_id` 与 HTTP 显式寻址的 workspace_id 同源。
@@ -55,12 +57,13 @@
 
 ## 7. 收口手续（具名、对称）与命名一致性
 
-- [ ] 7.1 具名收口（与本 change 对称）：本 change 的 workspace 身份以 **`add-unified-virtual-resource-addressing` 的 requirement「多工作区场景下寻址层必须显式承载 scope_id 身份」**（见 `openspec/changes/add-unified-virtual-resource-addressing/specs/virtual-resource-addressing/spec.md`）为唯一权威定义，本 change 承接其实现细节；收口校验以该具名 requirement 为准，不采用「`rg` 复核全仓」这类无目标的表述。
-- [ ] 7.2 校验跨 change 命名一致性：逐字使用**冻结契约 v2** 的 `资源身份 / ResourceIdentity`、`资源 URI`、`真实路径 / real path`、`作用域 / scope`、`网关授权段 / gateway authority`、`三层分离 / three-layer separation`、`拒绝码 / rejection code`、`星型解析 / star-topology resolution`，无同义异名；且本 change 不复述 scope 闭合集与 scope_id 取值语义、不新增拒绝码（**权威表已下发**，scope 闭集终值与 `builtin`→`inline` 正名以该表为准，本 change 只引用）。
+- [x] 7.1 具名收口（与本 change 对称）：本 change 的 workspace 身份以 **`add-unified-virtual-resource-addressing` 的 requirement「多工作区场景下寻址层必须显式承载 scope_id 身份」**（见 `openspec/changes/add-unified-virtual-resource-addressing/specs/virtual-resource-addressing/spec.md`）为唯一权威定义，本 change 承接其实现细节；收口校验以该具名 requirement 为准，不采用「`rg` 复核全仓」这类无目标的表述。
+- [x] 7.2 校验跨 change 命名一致性：逐字使用**冻结契约 v2** 的 `资源身份 / ResourceIdentity`、`资源 URI`、`真实路径 / real path`、`作用域 / scope`、`网关授权段 / gateway authority`、`三层分离 / three-layer separation`、`拒绝码 / rejection code`、`星型解析 / star-topology resolution`，无同义异名；且本 change 不复述 scope 闭合集与 scope_id 取值语义、不新增拒绝码（**权威表已下发**，scope 闭集终值与 `builtin`→`inline` 正名以该表为准，本 change 只引用）。
 
 ## 8. 校验与收尾
 
-- [ ] 8.1 以本 change 自己的门禁执行 `openspec validate --strict --all`，对全部受影响 change 零失败。
+- [x] 8.1 以本 change 自己的门禁执行 `openspec validate --strict --all`，对全部受影响 change 零失败。
+  - 2026-10-20 收口范围：4.4 由 design D7/Migration Plan 与 spec「回滚边界已声明」固定代码/生成快照可回退、新数据不得交旧 reader、停止 writer 后才失效及已删数据不可恢复；本次未执行额外数据清理。7.1 在两端 spec 具名互引「多工作区场景下寻址层必须显式承载 scope_id 身份」，HTTP workspace_id 与 URI 同源。7.2 删除 design D6 重复且过时的 scope 取值表，并清除 proposal、design 风险/迁移/未决项中重复的 gateway/inline 来源规则和已完成装配施工要求；只引用寻址 owner，历史修复证据留在 tasks，不定义第二语法。D1 与 README 一致：直接 Backend 必须显式身份，Gateway 同源旧路径由代理注入。最终 `mounted-contract-openspec-final-002` strict 为41 passed/0 failed、exit0；单测改动 Ruff `mounted-request-scope-static-001`、compile `mounted-request-scope-compile-001` exit0，运行前后源码指纹一致且无残留进程。原命令/raw/退出码保留在 `out/tests/temp/openspec_takeover/artifacts/runs/`；其它未勾项不由这些规划收口替代。
 - [ ] 8.2 按固定实现与原 task ID 核验已授权的 `app/**`、`src/**`、`tests/**` 改动及真实同进程隔离、显式身份拒绝和 runtime 生命周期证据，确认没有遗漏的调用方或旧双轨；受保护路径必须零改动。原“只写规划、不得改生产代码”的阶段限制已由用户授权实施取代。
 
 ## 9. 全仓越限项登记（判据式，含二级子目录）
