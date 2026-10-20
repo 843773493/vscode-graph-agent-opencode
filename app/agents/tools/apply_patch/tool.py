@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import asyncio
 import json
-from pathlib import Path
 from typing import Annotated
 
 from deepagents.middleware.filesystem import _check_fs_permission
@@ -17,8 +15,9 @@ from app.services.infrastructure.resource_platform.virtual_resources.resolver im
 from app.services.infrastructure.workspace_files.text_mutation import (
     text_mutation_failure,
 )
-from app.services.infrastructure.workspace_files.text_patch.executor import (
-    apply_patch_text,
+from app.services.infrastructure.workspace_files.text_owner import (
+    PatchText,
+    WorkspaceTextMutationOwner,
 )
 
 APPLY_PATCH_TOOL_NAME = "apply_patch"
@@ -54,7 +53,7 @@ Update File 由一个或多个 @@ hunk 组成。上下文行以空格开头，�
 结果 files 公布每个 URI 的 published/not_published/not_attempted/unknown 与核实到的版本。多文件及移动不保证跨路径事务，失败不自动回滚；部分或未知结果必须重新读取原目标核实，禁止自动重放。"""
 
 
-def create_apply_patch_tool(*, workspace_root: Path | None = None,
+def create_apply_patch_tool(*, text_mutations: WorkspaceTextMutationOwner,
                             permissions: list[FilesystemPermission] | None = None) -> BaseTool:
     permission_rules = permissions or []
 
@@ -64,25 +63,27 @@ def create_apply_patch_tool(*, workspace_root: Path | None = None,
         if _check_fs_permission(permission_rules, "write", path) == "deny":
             raise ResourceUriResolveError("capability_denied", "补丁文件被当前工具写入规则拒绝")
 
+    def request(input: str, explanation: str, expected_versions: dict[str, str], target: str) -> PatchText:
+        return PatchText(input=input, explanation=explanation, expected_versions=expected_versions, target=target)
+
+    def failure(error: Exception, explanation: str) -> dict[str, object]:
+        result = text_mutation_failure(error)
+        result["explanation"] = explanation
+        return result
+
     def apply_patch(input: str, explanation: str, expected_versions: dict[str, str], target: str = ".") -> str:
-        """使用 VS Code 的 V4A apply_patch 格式修改工作区文本文件。"""
         try:
-            result = apply_patch_text(
-                input,
-                explanation=explanation,
-                workspace_root=workspace_root,
-                expected_versions=expected_versions,
-                target=target,
-                authorize=authorize,
-            )
+            result = text_mutations.execute(request(input, explanation, expected_versions, target), authorize=authorize)
         except (OSError, RuntimeError, ValueError) as error:
-            result = text_mutation_failure(error)
-            result["explanation"] = explanation
+            result = failure(error, explanation)
         return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
     async def async_apply_patch(input: str, explanation: str, expected_versions: dict[str, str], target: str = ".") -> str:
-        # 生命周期回调留在所属事件循环；仅阻塞文件发布交工作线程。
-        return await asyncio.to_thread(apply_patch, input, explanation, expected_versions, target)
+        try:
+            result = await text_mutations.execute_async(request(input, explanation, expected_versions, target), authorize=authorize)
+        except (OSError, RuntimeError, ValueError) as error:
+            result = failure(error, explanation)
+        return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
     return StructuredTool.from_function(
         func=apply_patch,

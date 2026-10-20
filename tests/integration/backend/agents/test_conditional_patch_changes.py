@@ -24,9 +24,7 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.session_changes_store import SessionChangesStore
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.infrastructure.workspace_files import text_mutation, text_publication
-from app.services.infrastructure.workspace_files.text_patch.executor import (
-    apply_patch_text,
-)
+from app.services.infrastructure.workspace_files.text_owner import PatchText
 from app.services.orchestration.event_stream.processor import process_agent_event_stream
 
 
@@ -44,8 +42,9 @@ def patch_changes_case(integration_workspace_root_path):
         yield root, sessions, changes
 
 
-async def test_partial_patch_keeps_published_file_in_changeset(patch_changes_case, monkeypatch):
+async def test_partial_patch_keeps_published_file_in_changeset(text_mutations_factory, patch_changes_case, monkeypatch):
     root, sessions, changes = patch_changes_case
+    text_mutations = text_mutations_factory(root)
     session = await sessions.create(SessionCreateRequest(title="部分补丁变更"))
     original = text_publication.rename_entry_exclusive
 
@@ -65,7 +64,7 @@ async def test_partial_patch_keeps_published_file_in_changeset(patch_changes_cas
             metadata = kwargs["config"]["metadata"]
             yield {"event": "on_tool_start", "run_id": "run_partial_patch", "name": "apply_patch",
                    "data": {"input": {"input": patch, "explanation": "部分发布", "expected_versions": versions}}, "metadata": metadata}
-            receipt = apply_patch_text(patch, explanation="部分发布", expected_versions=versions, workspace_root=root)
+            receipt = text_mutations.execute(PatchText(input=patch, explanation="部分发布", expected_versions=versions, target="."))
             yield {"event": "on_tool_end", "run_id": "run_partial_patch", "name": "apply_patch",
                    "data": {"output": ToolMessage(content=json.dumps(receipt), name="apply_patch", tool_call_id="call_partial_patch")}, "metadata": metadata}
 
@@ -92,13 +91,12 @@ async def test_partial_patch_keeps_published_file_in_changeset(patch_changes_cas
     assert "+first" in changed.diff_text and changed.after_preview == "first"
 
 
-async def test_changeset_uses_owner_postimage_when_later_writer_precedes_tool_event(patch_changes_case):
+async def test_changeset_uses_owner_postimage_when_later_writer_precedes_tool_event(text_mutations_factory, patch_changes_case):
     root, sessions, changes = patch_changes_case
+    text_mutations = text_mutations_factory(root)
     session = await sessions.create(SessionCreateRequest(title="发布后件归属"))
-    receipt = apply_patch_text("*** Begin Patch\n*** Add File: src/observed.txt\n+first\n*** End Patch",
-        explanation="第一个调用", expected_versions={"src/observed.txt": "absent"}, workspace_root=root)
-    later = apply_patch_text("*** Begin Patch\n*** Update File: src/observed.txt\n@@\n-first\n+later\n*** End Patch",
-        explanation="稍后的writer", expected_versions={"src/observed.txt": "sha256:" + sha256_hex(b"first")}, workspace_root=root)
+    receipt = text_mutations.execute(PatchText(input="*** Begin Patch\n*** Add File: src/observed.txt\n+first\n*** End Patch", explanation="第一个调用", expected_versions={"src/observed.txt": "absent"}, target="."))
+    later = text_mutations.execute(PatchText(input="*** Begin Patch\n*** Update File: src/observed.txt\n@@\n-first\n+later\n*** End Patch", explanation="稍后的writer", expected_versions={"src/observed.txt": "sha256:" + sha256_hex(b"first")}, target="."))
     assert receipt["status"] == later["status"] == "success"
 
     class DelayedToolEvent:
@@ -122,8 +120,9 @@ async def test_changeset_uses_owner_postimage_when_later_writer_precedes_tool_ev
     assert (root / "src/observed.txt").read_bytes() == b"later"
 
 
-async def test_unknown_non_utf8_postimage_is_visible_without_fabricated_changeset(patch_changes_case, monkeypatch):
+async def test_unknown_non_utf8_postimage_is_visible_without_fabricated_changeset(text_mutations_factory, patch_changes_case, monkeypatch):
     root, sessions, changes = patch_changes_case
+    text_mutations = text_mutations_factory(root)
     session = await sessions.create(SessionCreateRequest(title="未知非文本后件"))
     original = text_mutation.publish_file_content
 
@@ -133,8 +132,7 @@ async def test_unknown_non_utf8_postimage_is_visible_without_fabricated_changese
         return result
 
     monkeypatch.setattr(text_mutation, "publish_file_content", external_writer)
-    receipt = apply_patch_text("*** Begin Patch\n*** Add File: unknown.txt\n+intended\n*** End Patch",
-        explanation="观察非文本后件", expected_versions={"unknown.txt": "absent"}, workspace_root=root)
+    receipt = text_mutations.execute(PatchText(input="*** Begin Patch\n*** Add File: unknown.txt\n+intended\n*** End Patch", explanation="观察非文本后件", expected_versions={"unknown.txt": "absent"}, target="."))
     assert receipt["effect"] == "unknown" and receipt["status"] == "error" and receipt["retryable"] is False
     assert receipt["files"][0]["state"] == "unknown"
     assert receipt["files"][0]["content_observation_error"] == "invalid_encoding"

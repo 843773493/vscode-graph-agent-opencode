@@ -17,6 +17,9 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
     ResourceNavigation,
 )
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
+from app.services.infrastructure.workspace_files.text_owner import (
+    WorkspaceTextMutationOwner,
+)
 from app.tool_testing.definitions import PreparedToolTest, ToolTestEvaluation
 
 
@@ -200,7 +203,8 @@ def _select_tool(workspace_root: Path) -> tuple[BaseTool, ToolRuntime]:
     middleware = FilesystemMiddleware(backend=build_workspace_backend(workspace_root))
     navigation = ResourceNavigation(workspace_root=workspace_root, workspace_id=workspace_id,
         file_paths=WorkspaceFilePaths(workspace=workspace_root, workspace_id=workspace_id, bindings=None))
-    configure_workspace_filesystem_tools(middleware, workspace_root=workspace_root, resource_navigation=navigation)
+    configure_workspace_filesystem_tools(middleware, workspace_root=workspace_root, resource_navigation=navigation,
+        text_mutations=WorkspaceTextMutationOwner(paths=WorkspaceFilePaths(workspace=workspace_root, workspace_id=workspace_id, bindings=None)))
     matches = [tool for tool in middleware.tools if tool.name == "edit_file"]
     if len(matches) != 1:
         raise RuntimeError(

@@ -9,7 +9,7 @@
 # 不可修改内容
 
 - 不在这里实现 Agent runtime 装配、API 路由、前端展示或会话业务。
-- 不另建文件发布、锁或 journal 链路；统一使用 `workspace_files/text_mutation.py`。
+- 不另建文件发布、锁或 journal 链路；只调用显式注入的 `WorkspaceTextMutationOwner`，不得根据当前目录或可选 workspace 参数自行重建。
 - V4A 解析、匹配与内容准备唯一属于 `workspace_files/text_patch/`，不得在工具层恢复旧实现或转发别名。
 - 不允许补丁访问当前工作区之外的文件。
 

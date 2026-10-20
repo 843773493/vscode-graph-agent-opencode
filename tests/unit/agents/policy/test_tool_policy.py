@@ -143,11 +143,11 @@ def test_capability_restriction_cannot_be_overridden_by_runtime_state() -> None:
 
 
 @pytest.mark.usefixtures("workspace_scope")
-def test_policy_default_names_match_actual_agent_graph_tools(communication_probe,
+def test_policy_default_names_match_actual_agent_graph_tools(text_mutations_factory, communication_probe,
     tmp_path: Path,
 ) -> None:
     invocation_context = ToolInvocationContext()
-    direct_tools = build_default_tools(
+    direct_tools = build_default_tools(text_mutations=text_mutations_factory(tmp_path),
         session_id="ses_policy_consistency",
         background_task_registry=MagicMock(),
         background_message_bus=MagicMock(),
@@ -166,7 +166,7 @@ def test_policy_default_names_match_actual_agent_graph_tools(communication_probe
         include_team_tools=True,
     )
     model = FakeListChatModel(responses=["ok"])
-    middleware = build_deep_agent_middleware(
+    middleware = build_deep_agent_middleware(text_mutations=text_mutations_factory(tmp_path),
         model=model,
         backend=StateBackend(),
         workspace_root=tmp_path,

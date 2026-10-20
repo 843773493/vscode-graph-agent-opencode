@@ -261,7 +261,7 @@ def test_mcp_catalog_definition_uses_extension_group_metadata():
 
 
 @pytest.mark.asyncio
-async def test_agent_includes_background_message_collection_tool(communication_probe, monkeypatch, tmp_path):
+async def test_agent_includes_background_message_collection_tool(text_mutations_factory, communication_probe, monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
     background_message_bus = _BlueprintBackgroundService()
     background_task_registry = _BlueprintBackgroundService()
@@ -271,7 +271,7 @@ async def test_agent_includes_background_message_collection_tool(communication_p
     config_service = _DummyConfigService()
     job_service = _FakeJobService()
 
-    tools = build_default_tools(session_communication_service=communication_probe,
+    tools = build_default_tools(text_mutations=text_mutations_factory(tmp_path), session_communication_service=communication_probe,
         session_id="ses_019bca51019973818b63e9d44c0e94f5",
         agent_id="deep_agent",
         background_task_registry=background_task_registry,
@@ -312,9 +312,9 @@ async def test_agent_includes_background_message_collection_tool(communication_p
 
 
 @pytest.mark.asyncio
-async def test_agent_omits_test_tool_without_development_config(communication_probe, monkeypatch, tmp_path):
+async def test_agent_omits_test_tool_without_development_config(text_mutations_factory, communication_probe, monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    tools = build_default_tools(session_communication_service=communication_probe,
+    tools = build_default_tools(text_mutations=text_mutations_factory(tmp_path), session_communication_service=communication_probe,
         session_id="session_production",
         background_task_registry=_BlueprintBackgroundService(),
         background_message_bus=_BlueprintBackgroundService(),
@@ -336,9 +336,9 @@ async def test_agent_omits_test_tool_without_development_config(communication_pr
 
 
 @pytest.mark.asyncio
-async def test_single_agent_tool_set_omits_team_board_tools(communication_probe, monkeypatch, tmp_path):
+async def test_single_agent_tool_set_omits_team_board_tools(text_mutations_factory, communication_probe, monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    tools = build_default_tools(session_communication_service=communication_probe,
+    tools = build_default_tools(text_mutations=text_mutations_factory(tmp_path), session_communication_service=communication_probe,
         session_id="session_single_agent",
         background_task_registry=_BlueprintBackgroundService(),
         background_message_bus=_BlueprintBackgroundService(),
@@ -371,7 +371,7 @@ async def test_single_agent_tool_set_omits_team_board_tools(communication_probe,
 
 
 @pytest.mark.asyncio
-async def test_agent_tool_denylist_filters_direct_and_middleware_tools(communication_probe, monkeypatch, tmp_path):
+async def test_agent_tool_denylist_filters_direct_and_middleware_tools(text_mutations_factory, communication_probe, monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
     job_event_bus = _FakeJobEventBus()
 
@@ -384,7 +384,7 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(communica
 
     config_service = _DenylistConfigService()
 
-    tools = build_default_tools(session_communication_service=communication_probe,
+    tools = build_default_tools(text_mutations=text_mutations_factory(tmp_path), session_communication_service=communication_probe,
         session_id="session_denylist",
         agent_id="deep_agent",
         background_task_registry=_BlueprintBackgroundService(),

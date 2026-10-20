@@ -38,6 +38,9 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
+from app.services.infrastructure.workspace_files.text_owner import (
+    WorkspaceTextMutationOwner,
+)
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
@@ -70,6 +73,8 @@ class AgentRuntimeDependencyProvider(Protocol):
     def get_checkpointer(self) -> BaseCheckpointSaver: ...
 
     def get_resource_navigation(self) -> ResourceNavigation: ...
+
+    def get_text_mutations(self) -> WorkspaceTextMutationOwner: ...
 
     def get_terminal_resource_owner(self) -> TerminalResourceOwner: ...
 
@@ -174,6 +179,7 @@ def build_session_agent_runtime(
         ),
         checkpointer=checkpointer,
         resource_navigation=dependency_provider.get_resource_navigation(),
+        text_mutations=dependency_provider.get_text_mutations(),
         name=name or resolved_agent_id,
         override_model=override_model,
         model_routing_enabled=model_routing_enabled,

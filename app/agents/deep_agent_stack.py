@@ -67,6 +67,9 @@ from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
+from app.services.infrastructure.workspace_files.text_owner import (
+    WorkspaceTextMutationOwner,
+)
 
 ToolDefinition = BaseTool | Callable[..., Any] | dict[str, Any]
 FILESYSTEM_INTERNAL_TOOL_DENYLIST = {"execute"}
@@ -136,6 +139,7 @@ def build_deep_agent_middleware(
     backend: BackendProtocol,
     workspace_root: Path,
     resource_navigation: ResourceNavigation,
+    text_mutations: WorkspaceTextMutationOwner,
     permissions: list[FilesystemPermission] | None,
     resolved_skills: PublishedSkillCatalog | None,
     compaction_preflight: CompactionPreflightPort,
@@ -184,6 +188,7 @@ def build_deep_agent_middleware(
         filesystem_middleware,
         workspace_root=workspace_root,
         resource_navigation=resource_navigation,
+        text_mutations=text_mutations,
     )
     _filter_middleware_tools(
         filesystem_middleware,

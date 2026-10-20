@@ -141,6 +141,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.skill_c
     skill_catalog_from_activation,
 )
 from app.services.infrastructure.tool_output_store import ToolOutputStore
+from app.services.infrastructure.workspace_files.text_owner import (
+    WorkspaceTextMutationOwner,
+)
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 
 if TYPE_CHECKING:
@@ -425,6 +428,7 @@ def create_my_deep_agent(
     resource_activation: ResourceActivationCoordinator | None,
     workspace_root: Path,
     resource_navigation: ResourceNavigation,
+    text_mutations: WorkspaceTextMutationOwner,
     include_team_tools: bool = False,
     owns_thread: bool = True,
 ) -> Any:
@@ -625,6 +629,7 @@ def create_my_deep_agent(
             include_test_tools=config_service.development_test_tools_enabled(),
             include_team_tools=include_team_tools,
             filesystem_permissions=permissions,
+            text_mutations=text_mutations,
         )
         custom_tool_bundle = build_custom_tool_bundle(
             custom_tool_specs or [],
@@ -865,6 +870,7 @@ def create_my_deep_agent(
         backend=backend,
         workspace_root=workspace_root,
         resource_navigation=resource_navigation,
+        text_mutations=text_mutations,
         permissions=permissions,
         resolved_skills=resolved_skills,
         execution_owned_skill_catalog=resource_activation is not None,
@@ -1008,6 +1014,7 @@ def create_runtime_deep_agent_for_session(
     include_team_tools: bool = False,
     graph_binding_store: GraphBindingStorePort,
     resource_navigation: ResourceNavigation,
+    text_mutations: WorkspaceTextMutationOwner,
     owns_thread: bool = True,
 ):
     if config_service is None:
@@ -1100,6 +1107,7 @@ def create_runtime_deep_agent_for_session(
         resource_activation=resource_activation,
         include_team_tools=include_team_tools,
         resource_navigation=resource_navigation,
+        text_mutations=text_mutations,
         interrupt_on={tool_name: True for tool_name in direct_confirmation_tool_names},
         custom_tool_confirmation_names=custom_tool_confirmation_names,
         config_service=service,

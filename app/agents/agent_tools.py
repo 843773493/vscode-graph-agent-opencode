@@ -40,6 +40,9 @@ from app.agents.tools.terminal import (
 from app.agents.tools.testing import create_test_tool
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
+from app.services.infrastructure.workspace_files.text_owner import (
+    WorkspaceTextMutationOwner,
+)
 
 if TYPE_CHECKING:
     from app.services.business.session_goal_service import SessionGoalService
@@ -50,6 +53,7 @@ def build_default_tools(
     agent_id: str = "default",
     sender_agent_id: str = "default",
     *,
+    text_mutations: WorkspaceTextMutationOwner,
     background_task_registry: BackgroundTaskRegistry,
     background_message_bus: BackgroundMessageBusProtocol,
     job_event_bus: JobEventBusProtocol,
@@ -87,7 +91,7 @@ def build_default_tools(
     if invocation_context is None:
         raise RuntimeError("build_default_tools 需要显式传入 ToolInvocationContext")
     tools = [
-        create_apply_patch_tool(workspace_root=workspace_root, permissions=filesystem_permissions),
+        create_apply_patch_tool(text_mutations=text_mutations, permissions=filesystem_permissions),
         create_python_execution_tool(session_id=session_id, agent_id=agent_id),
         create_system_time_emitter_tool(
             session_id=session_id,

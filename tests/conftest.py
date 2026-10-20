@@ -31,6 +31,23 @@ TEST_CONFIG_PATH = os.path.join(CONFIGS_DIR, "tests", "workspace", "default.json
 
 
 @pytest.fixture
+def text_mutations_factory():
+    """仅为显式测试工作区装配正式文件 owner，不替换执行逻辑。"""
+    from app.core.workspace_identity import load_or_create_workspace_id
+    from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
+    from app.services.infrastructure.workspace_files.text_owner import (
+        WorkspaceTextMutationOwner,
+    )
+
+    def create(root: Path) -> WorkspaceTextMutationOwner:
+        return WorkspaceTextMutationOwner(paths=WorkspaceFilePaths(
+            workspace=root, workspace_id=load_or_create_workspace_id(root), bindings=None,
+        ))
+
+    return create
+
+
+@pytest.fixture
 def test_config_path() -> str:
     return TEST_CONFIG_PATH
 

@@ -73,7 +73,7 @@ def skill_control_admission():
 
 
 @pytest.fixture
-def factory_context(registry_db, request, monkeypatch):
+def factory_context(text_mutations_factory, registry_db, request, monkeypatch):
     saver, session, connection, accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
     workspace = TestRunContext.from_test_file(Path(request.node.path)).workspace_root
@@ -143,6 +143,7 @@ def factory_context(registry_db, request, monkeypatch):
         workspace_session_context_client=MagicMock(), config_service=config,
         workspace_root=workspace, workspace_file_resource_registry=platform.file_registry, middleware=[],
         resource_registry=registry, resource_activation=coordinator,
+        text_mutations=text_mutations_factory(workspace),
         resource_navigation=ResourceNavigation(
             workspace_root=workspace, workspace_id=load_or_create_workspace_id(workspace),
             file_paths=WorkspaceFilePaths(workspace=workspace, workspace_id=load_or_create_workspace_id(workspace), bindings=None),

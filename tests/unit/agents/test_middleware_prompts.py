@@ -81,6 +81,7 @@ def _build_middleware(
         backend=StateBackend(),
         workspace_root=tmp_path,
         resource_navigation=MagicMock(),
+        text_mutations=MagicMock(),
         permissions=None,
         resolved_skills=skill_catalog,
         context_source_manager=context_source_manager or ContextSourceManager(),

@@ -19,8 +19,10 @@ from app.core.path_utils import get_workspace_root
 from app.core.resource_uri import parse_resource_uri
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.infrastructure.workspace_files import text_mutation, text_publication
-from app.services.infrastructure.workspace_files.text_patch.executor import (
-    apply_patch_text,
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
+from app.services.infrastructure.workspace_files.text_owner import (
+    PatchText,
+    WorkspaceTextMutationOwner,
 )
 from app.services.infrastructure.workspace_files.text_patch.models import (
     DiffError,
@@ -43,11 +45,14 @@ def _expected_versions(patch: str, root: Path) -> dict[str, str]:
 
 def _apply(patch: str, *, explanation: str = "单元测试补丁", expected_versions: dict[str, str] | None = None) -> dict[str, object]:
     versions = _expected_versions(patch, get_workspace_root().resolve()) if expected_versions is None else expected_versions
-    return apply_patch_text(patch, explanation=explanation, expected_versions=versions)
+    root = get_workspace_root().resolve()
+    owner = WorkspaceTextMutationOwner(paths=WorkspaceFilePaths(
+        workspace=root, workspace_id=load_or_create_workspace_id(root), bindings=None))
+    return owner.execute(PatchText(input=patch, explanation=explanation, expected_versions=versions, target="."))
 
 
-def test_apply_patch_schema_matches_vscode_required_parameters() -> None:
-    tool = create_apply_patch_tool()
+def test_apply_patch_schema_matches_vscode_required_parameters(text_mutations_factory, workspace_scope) -> None:
+    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(workspace_scope[1]))
     schema = tool.args_schema.model_json_schema()
 
     assert schema["required"] == ["input", "explanation", "expected_versions"]
@@ -72,9 +77,9 @@ async def patch_lifecycle():
     return loop, starts, AgentRunLifecycleCallbackHandler(Sink())
 
 
-async def test_async_patch_lifecycle_stays_on_owning_loop(workspace_scope, patch_lifecycle):
+async def test_async_patch_lifecycle_stays_on_owning_loop(text_mutations_factory, workspace_scope, patch_lifecycle):
     loop, starts, callback = patch_lifecycle
-    tool = create_apply_patch_tool(workspace_root=workspace_scope[1])
+    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(workspace_scope[1]))
     with model_tool_invocation_scope("model_patch", "call_patch"):
         result = await tool.ainvoke({"type": "tool_call", "id": "call_patch", "name": "apply_patch", "args": {
             "input": "*** Begin Patch\n*** Add File: async.txt\n+async\n*** End Patch",
@@ -409,11 +414,11 @@ def test_apply_patch_rejects_absolute_internal_filename_even_inside_workspace(
     assert not absolute_inside.exists()
 
 
-def test_apply_patch_tool_returns_json_result(
+def test_apply_patch_tool_returns_json_result(text_mutations_factory,
     workspace_scope: tuple[str, Path],
 ) -> None:
     workspace_root = workspace_scope[1]
-    tool = create_apply_patch_tool()
+    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(workspace_scope[1]))
 
     result_text = tool.invoke(
         {
@@ -444,12 +449,12 @@ def test_apply_patch_tool_returns_json_result(
     assert journal["files"] == result["files"]
 
 
-def test_apply_patch_tool_rejects_success_when_write_does_not_change_bytes(
+def test_apply_patch_tool_rejects_success_when_write_does_not_change_bytes(text_mutations_factory,
     workspace_scope: tuple[str, Path],
 ) -> None:
     workspace_root = workspace_scope[1]
     (workspace_root / "same.txt").write_text("same\n", encoding="utf-8")
-    tool = create_apply_patch_tool()
+    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(workspace_scope[1]))
 
     result_text = tool.invoke(
         {
@@ -470,7 +475,7 @@ def test_apply_patch_tool_rejects_success_when_write_does_not_change_bytes(
     assert (workspace_root / "same.txt").read_text(encoding="utf-8") == "same\n"
 
 
-def test_apply_patch_tool_rejects_success_when_written_bytes_are_not_expected(
+def test_apply_patch_tool_rejects_success_when_written_bytes_are_not_expected(text_mutations_factory,
     workspace_scope: tuple[str, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -485,7 +490,7 @@ def test_apply_patch_tool_rejects_success_when_written_bytes_are_not_expected(
         target.write_bytes(b"wrong\n")
 
     monkeypatch.setattr(text_publication.os, "replace", write_wrong_content)
-    tool = create_apply_patch_tool()
+    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(workspace_scope[1]))
 
     result = json.loads(
         tool.invoke(
@@ -511,14 +516,14 @@ def test_apply_patch_tool_rejects_success_when_written_bytes_are_not_expected(
     assert len(list(journal_root.glob("*.json"))) == 1
 
 
-def test_apply_patch_uses_explicit_workspace_for_write_and_journal(
+def test_apply_patch_uses_explicit_workspace_for_write_and_journal(text_mutations_factory,
     workspace_scope: tuple[str, Path],
 ) -> None:
     context_root = workspace_scope[1]
     explicit_root = context_root / "explicit"
     explicit_root.mkdir()
     load_or_create_workspace_id(explicit_root)
-    tool = create_apply_patch_tool(workspace_root=explicit_root)
+    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(explicit_root))
 
     result = json.loads(
         tool.invoke(
@@ -556,12 +561,12 @@ def test_apply_patch_uses_explicit_workspace_for_write_and_journal(
     assert not context_journal.exists()
 
 
-def test_apply_patch_tool_rejects_automatic_retry_for_invalid_patch(
+def test_apply_patch_tool_rejects_automatic_retry_for_invalid_patch(text_mutations_factory,
     workspace_scope: tuple[str, Path],
 ) -> None:
     workspace_root = workspace_scope[1]
     (workspace_root / "same.txt").write_text("same\n", encoding="utf-8")
-    tool = create_apply_patch_tool()
+    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(workspace_scope[1]))
 
     result_text = tool.invoke(
         {
@@ -695,7 +700,7 @@ def test_external_restore_after_publication_is_unknown_not_unexecuted(workspace_
 
 
 @pytest.mark.parametrize("input_form", ["relative", "absolute", "uri"])
-def test_patch_root_inputs_share_owner_and_preserve_raw_crlf_version(workspace_scope, input_form):
+def test_patch_root_inputs_share_owner_and_preserve_raw_crlf_version(text_mutations_factory, workspace_scope, input_form):
     root = workspace_scope[1]
     directory = root / "nested"
     directory.mkdir()
@@ -707,7 +712,7 @@ def test_patch_root_inputs_share_owner_and_preserve_raw_crlf_version(workspace_s
     uri = resource_display_uri(scope="workspace", scope_id=load_or_create_workspace_id(root), kind="files", tail_segments=("root", "nested"))
     address = {"relative": "nested", "absolute": str(directory), "uri": uri}[input_form]
     patch = "*** Begin Patch\n*** Update File: file.txt\n@@\n-beta\n+gamma\n*** End Patch"
-    tool = create_apply_patch_tool(workspace_root=root)
+    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(root))
     wrong = json.loads(tool.invoke({"input": patch, "explanation": "拒绝显示文本版本", "target": address,
         "expected_versions": {"file.txt": "sha256:" + sha256(raw.replace(b"\r\n", b"\n")).hexdigest()}}))
     assert wrong["code"] == "revision_conflict" and wrong["effect"] == "not_executed"
@@ -749,9 +754,9 @@ def test_lock_release_failure_does_not_erase_confirmed_publication(workspace_sco
 
 
 @pytest.mark.parametrize("target", [".boxteam", "boxteam://workspace/bad/resources/files/root", "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/skills/demo"])
-def test_patch_invalid_or_private_root_fails_before_publication(workspace_scope, target):
+def test_patch_invalid_or_private_root_fails_before_publication(text_mutations_factory, workspace_scope, target):
     root = workspace_scope[1]
-    tool = create_apply_patch_tool(workspace_root=root)
+    tool = create_apply_patch_tool(text_mutations=text_mutations_factory(root))
     result = json.loads(tool.invoke({"input": "*** Begin Patch\n*** Add File: forbidden.txt\n+private\n*** End Patch", "explanation": "边界拒绝",
                                     "target": target, "expected_versions": {"forbidden.txt": "absent"}}))
     assert result["status"] == "error" and result["effect"] == "not_executed"

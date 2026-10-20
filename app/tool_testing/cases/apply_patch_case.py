@@ -7,6 +7,10 @@ from pathlib import Path
 
 from app.agents.tools.apply_patch import create_apply_patch_tool
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
+from app.services.infrastructure.workspace_files.text_owner import (
+    WorkspaceTextMutationOwner,
+)
 from app.tool_testing.definitions import PreparedToolTest, ToolTestEvaluation
 
 
@@ -41,7 +45,8 @@ class ApplyPatchScenarioCase:
         }
         return PreparedToolTest(
             prompt=self.prompt_template + "\nexpected_versions = " + json.dumps(versions, ensure_ascii=False),
-            tool=create_apply_patch_tool(workspace_root=attempt_root),
+            tool=create_apply_patch_tool(text_mutations=WorkspaceTextMutationOwner(paths=WorkspaceFilePaths(
+                workspace=attempt_root, workspace_id=load_or_create_workspace_id(attempt_root), bindings=None))),
         )
 
     def evaluate(

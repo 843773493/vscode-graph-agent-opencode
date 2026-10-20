@@ -78,14 +78,14 @@ async def test_old_version_and_expected_absent_never_overwrite_new_content(write
 
 
 @pytest.mark.parametrize("competitor", ["patch", "web"])
-async def test_edit_competes_with_other_owner_writers_using_same_version(write_tools, competitor):
+async def test_edit_competes_with_other_owner_writers_using_same_version(text_mutations_factory, write_tools, competitor):
     root, tools, runtime = write_tools
     path = root / "concurrent.txt"
     path.write_bytes(b"old\n")
     version = await _read_version(tools, "concurrent.txt", runtime)
     edit = _invoke(tools, "edit_file", runtime, file_path="concurrent.txt", expected_version=version, old_string="old", new_string="edit")
     if competitor == "patch":
-        patch = create_apply_patch_tool(workspace_root=root)
+        patch = create_apply_patch_tool(text_mutations=text_mutations_factory(root))
         other = patch.ainvoke({"input": "*** Begin Patch\n*** Update File: concurrent.txt\n@@\n-old\n+patch\n*** End Patch",
                               "expected_versions": {"concurrent.txt": version}, "explanation": "同版本竞争"})
     else:
@@ -128,7 +128,7 @@ async def test_public_write_schema_requires_caller_version(write_tools, name, ar
 
 
 @pytest.mark.parametrize("tool_name", ["write_file", "edit_file", "apply_patch"])
-async def test_all_text_tools_reject_same_write_permission_before_any_publication(
+async def test_all_text_tools_reject_same_write_permission_before_any_publication(text_mutations_factory,
     workspace_scope, configure_filesystem_tools, tool_name,
 ):
     root = workspace_scope[1]
@@ -142,7 +142,7 @@ async def test_all_text_tools_reject_same_write_permission_before_any_publicatio
         blocked.write_bytes(b"old\r\n")
         version = await _read_version(tools, "blocked.txt", runtime)
     if tool_name == "apply_patch":
-        result = json.loads(await create_apply_patch_tool(workspace_root=root, permissions=rules).ainvoke({
+        result = json.loads(await create_apply_patch_tool(text_mutations=text_mutations_factory(root), permissions=rules).ainvoke({
             "input": "*** Begin Patch\n*** Add File: allowed.txt\n+new\n*** Update File: blocked.txt\n@@\n-old\n+new\n*** End Patch",
             "expected_versions": {"allowed.txt": "absent", "blocked.txt": version},
             "explanation": "整批必须受同一权限规则约束",

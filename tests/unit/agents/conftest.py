@@ -16,7 +16,7 @@ from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 
 @pytest.fixture
-def configure_filesystem_tools() -> Iterator[Callable[..., ResourceNavigation]]:
+def configure_filesystem_tools(text_mutations_factory) -> Iterator[Callable[..., ResourceNavigation]]:
     token = set_current_gateway_id("gateway_0123456789abcdef0123456789abcdef")
 
     def configure(
@@ -27,7 +27,8 @@ def configure_filesystem_tools() -> Iterator[Callable[..., ResourceNavigation]]:
             workspace_root=workspace_root, workspace_id=workspace_id, project_root=project_root,
             file_paths=WorkspaceFilePaths(workspace=workspace_root, workspace_id=workspace_id, bindings=None),
         )
-        configure_workspace_filesystem_tools(middleware, workspace_root=workspace_root, resource_navigation=navigation)
+        configure_workspace_filesystem_tools(middleware, workspace_root=workspace_root, resource_navigation=navigation,
+            text_mutations=text_mutations_factory(workspace_root))
         return navigation
 
     try:

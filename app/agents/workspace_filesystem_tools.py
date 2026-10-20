@@ -4,7 +4,6 @@ import json
 import logging
 import mimetypes
 import time
-from collections.abc import Callable
 from functools import partial, update_wrapper
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
@@ -36,7 +35,6 @@ from app.agents.workspace_tool_paths import (
 )
 from app.core.resource_uri import ResourceUriGrammarError, parse_resource_uri
 from app.core.trace_middleware import require_current_gateway_id
-from app.core.workspace_identity import read_workspace_id
 from app.gateway.federation.errors import FederationError
 from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationRequest,
@@ -49,17 +47,14 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
 )
-from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 from app.services.infrastructure.workspace_files.text_mutation import (
-    FileSnapshot,
-    TextPublication,
-    execute_text_mutation,
-    resolve_text_target,
     text_mutation_failure,
 )
-from app.services.infrastructure.workspace_files.text_publication import (
-    FilePreimage,
-    WorkspaceFileConflictError,
+from app.services.infrastructure.workspace_files.text_owner import (
+    CreateText,
+    EditText,
+    TextMutation,
+    WorkspaceTextMutationOwner,
 )
 
 GrepOutputMode = Literal["files_with_matches", "content", "count"]
@@ -360,6 +355,7 @@ def configure_workspace_filesystem_tools(
     *,
     workspace_root: Path,
     resource_navigation: ResourceNavigation,
+    text_mutations: WorkspaceTextMutationOwner,
 ) -> None:
     """普通目录和文件读取交共享 owner；产物继续交其独立业务 owner。"""
 
@@ -371,7 +367,6 @@ def configure_workspace_filesystem_tools(
     )
     if not isinstance(session_artifact_backend, SessionArtifactBackend):
         raise TypeError("Session artifacts route 必须由唯一 SessionArtifactBackend 装配")
-    text_paths = WorkspaceFilePaths(workspace=workspace_root, workspace_id=read_workspace_id(workspace_root), bindings=None)
 
     def resolve_paths(
         tool_name: str,
@@ -532,61 +527,48 @@ def configure_workspace_filesystem_tools(
         except (OSError, RuntimeError, ValueError, httpx.HTTPError, FederationError) as error:
             return _path_error("read_file", runtime, error)
 
-    def mutate_file(tool_name: str, file_path: str, expected_version: str,
-                    transform: Callable[[FilePreimage | None], bytes],
-                    runtime: ToolRuntime[None, FilesystemState]) -> ToolMessage:
-        try:
-            actual, uri = resolve_text_target(text_paths, file_path)
-            relative = actual.relative_to(workspace_root).as_posix()
-            _validate_model_path(tool_name, relative)
+    def authorize_write(uri: str) -> None:
+        parsed = parse_resource_uri(uri)
+        relative = "/".join(parsed.tail_segments[1:])
+        _validate_model_path("write_file", relative)
+        if _check_fs_permission(middleware._permissions, "write", "/" + relative) == "deny":
+            raise ResourceUriResolveError("capability_denied", "文件目标被当前工具写入规则拒绝")
 
-            def authorize(target_uri: str) -> None:
-                parsed = parse_resource_uri(target_uri)
-                permission_path = "/" + "/".join(parsed.tail_segments[1:])
-                if _check_fs_permission(middleware._permissions, "write", permission_path) == "deny":
-                    raise ResourceUriResolveError("capability_denied", "文件目标被当前工具写入规则拒绝")
-
-            def prepare(snapshots: dict[str, FileSnapshot]) -> list[TextPublication]:
-                snapshot = snapshots[relative]
-                return [TextPublication(snapshot, transform(snapshot.before), "add" if tool_name == "write_file" else "update")]
-
-            result = execute_text_mutation(paths=text_paths, target=".", declared=[relative],
-                expected_versions={relative: expected_version}, prepare=prepare, authorize=authorize)
-            result["target"] = uri
-        except (OSError, RuntimeError, ValueError) as error:
-            result = text_mutation_failure(error)
+    def mutation_message(tool_name: str, result: dict[str, object], runtime: ToolRuntime[None, FilesystemState]) -> ToolMessage:
         return ToolMessage(content=json.dumps(result, ensure_ascii=False, separators=(",", ":")),
                            name=tool_name, tool_call_id=runtime.tool_call_id, status=result["status"])
 
+    def mutate_file(tool_name: str, request: TextMutation, runtime: ToolRuntime[None, FilesystemState]) -> ToolMessage:
+        try:
+            result = text_mutations.execute(request, authorize=authorize_write)
+        except (OSError, RuntimeError, ValueError) as error:
+            result = text_mutation_failure(error)
+        return mutation_message(tool_name, result, runtime)
+
+    async def mutate_file_async(tool_name: str, request: TextMutation, runtime: ToolRuntime[None, FilesystemState]) -> ToolMessage:
+        try:
+            result = await text_mutations.execute_async(request, authorize=authorize_write)
+        except (OSError, RuntimeError, ValueError) as error:
+            result = text_mutation_failure(error)
+        return mutation_message(tool_name, result, runtime)
+
     def sync_write_file(file_path: str, content: str, expected_version: str,
                         runtime: ToolRuntime[None, FilesystemState]) -> ToolMessage:
-        def create(before: FilePreimage | None) -> bytes:
-            if expected_version != "absent" or before is not None:
-                raise WorkspaceFileConflictError("创建文件必须明确要求 expected_version=absent")
-            return content.encode("utf-8")
-        return mutate_file("write_file", file_path, expected_version, create, runtime)
+        return mutate_file("write_file", CreateText(target=file_path, content=content, expected_version=expected_version), runtime)
 
     async def async_write_file(file_path: str, content: str, expected_version: str,
                                runtime: ToolRuntime[None, FilesystemState]) -> ToolMessage:
-        return await asyncio.to_thread(sync_write_file, file_path, content, expected_version, runtime)
+        return await mutate_file_async("write_file", CreateText(target=file_path, content=content, expected_version=expected_version), runtime)
 
     def sync_edit_file(file_path: str, old_string: str, new_string: str, expected_version: str,
                        runtime: ToolRuntime[None, FilesystemState], replace_all: bool = False) -> ToolMessage:
-        def replace(before: FilePreimage | None) -> bytes:
-            if before is None:
-                raise FileNotFoundError("精确编辑的目标文件不存在")
-            if not old_string or old_string == new_string:
-                raise ValueError("old_string 必须非空且与 new_string 不同")
-            original = before.content.decode("utf-8")
-            occurrences = original.count(old_string)
-            if occurrences == 0 or (not replace_all and occurrences != 1):
-                raise ValueError(f"精确编辑匹配数量无效: occurrences={occurrences}; 需要唯一匹配或明确 replace_all")
-            return original.replace(old_string, new_string, -1 if replace_all else 1).encode("utf-8")
-        return mutate_file("edit_file", file_path, expected_version, replace, runtime)
+        return mutate_file("edit_file", EditText(target=file_path, old_string=old_string, new_string=new_string,
+            expected_version=expected_version, replace_all=replace_all), runtime)
 
     async def async_edit_file(file_path: str, old_string: str, new_string: str, expected_version: str,
                               runtime: ToolRuntime[None, FilesystemState], replace_all: bool = False) -> ToolMessage:
-        return await asyncio.to_thread(sync_edit_file, file_path, old_string, new_string, expected_version, runtime, replace_all)
+        return await mutate_file_async("edit_file", EditText(target=file_path, old_string=old_string, new_string=new_string,
+            expected_version=expected_version, replace_all=replace_all), runtime)
 
     def search_request(
         tool_name: str, pattern: str, path: str | None, glob: str | None,

@@ -458,7 +458,7 @@ def _tool_call_message() -> AIMessage:
 
 
 @pytest.mark.asyncio
-async def test_probe_tool_call_continues_after_reasoning_only_response(
+async def test_probe_tool_call_continues_after_reasoning_only_response(text_mutations_factory,
     tmp_path: Path,
 ) -> None:
     bound_model = _ScriptedBoundModel(
@@ -476,7 +476,7 @@ async def test_probe_tool_call_continues_after_reasoning_only_response(
     )
     result = await probe_tool_call(
         model=_ScriptedModel(bound_model),
-        tool=create_apply_patch_tool(workspace_root=tmp_path),
+        tool=create_apply_patch_tool(text_mutations=text_mutations_factory(tmp_path)),
         messages=[SystemMessage("测试"), HumanMessage("请修改文件")],
     )
 
@@ -488,11 +488,11 @@ async def test_probe_tool_call_continues_after_reasoning_only_response(
 
 
 @pytest.mark.asyncio
-async def test_probe_tool_call_does_not_retry_plain_text_response(tmp_path: Path) -> None:
+async def test_probe_tool_call_does_not_retry_plain_text_response(text_mutations_factory, tmp_path: Path) -> None:
     bound_model = _ScriptedBoundModel([AIMessage(content="我将使用工具修改文件。")])
     result = await probe_tool_call(
         model=_ScriptedModel(bound_model),
-        tool=create_apply_patch_tool(workspace_root=tmp_path),
+        tool=create_apply_patch_tool(text_mutations=text_mutations_factory(tmp_path)),
         messages=[SystemMessage("测试"), HumanMessage("请修改文件")],
     )
 
@@ -504,7 +504,7 @@ async def test_probe_tool_call_does_not_retry_plain_text_response(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_probe_tool_call_limits_consecutive_reasoning_responses(
+async def test_probe_tool_call_limits_consecutive_reasoning_responses(text_mutations_factory,
     tmp_path: Path,
 ) -> None:
     reasoning_response = AIMessage(
@@ -515,7 +515,7 @@ async def test_probe_tool_call_limits_consecutive_reasoning_responses(
     )
     result = await probe_tool_call(
         model=_ScriptedModel(bound_model),
-        tool=create_apply_patch_tool(workspace_root=tmp_path),
+        tool=create_apply_patch_tool(text_mutations=text_mutations_factory(tmp_path)),
         messages=[SystemMessage("测试"), HumanMessage("请修改文件")],
     )
 
@@ -527,7 +527,7 @@ async def test_probe_tool_call_limits_consecutive_reasoning_responses(
 
 
 @pytest.mark.asyncio
-async def test_probe_tool_call_reports_invocation_count_on_provider_error(
+async def test_probe_tool_call_reports_invocation_count_on_provider_error(text_mutations_factory,
     tmp_path: Path,
 ) -> None:
     class _FailingBoundModel(_ScriptedBoundModel):
@@ -541,7 +541,7 @@ async def test_probe_tool_call_reports_invocation_count_on_provider_error(
     with pytest.raises(ToolCallProbeInvocationError) as captured:
         await probe_tool_call(
             model=failing_model,
-            tool=create_apply_patch_tool(workspace_root=tmp_path),
+            tool=create_apply_patch_tool(text_mutations=text_mutations_factory(tmp_path)),
             messages=[SystemMessage("测试"), HumanMessage("请修改文件")],
         )
 
@@ -551,7 +551,7 @@ async def test_probe_tool_call_reports_invocation_count_on_provider_error(
 
 
 @pytest.mark.asyncio
-async def test_probe_tool_call_retries_transient_provider_error_three_times(
+async def test_probe_tool_call_retries_transient_provider_error_three_times(text_mutations_factory,
     tmp_path: Path,
 ) -> None:
     class _FlakyBoundModel(_ScriptedBoundModel):
@@ -568,7 +568,7 @@ async def test_probe_tool_call_retries_transient_provider_error_three_times(
     bound_model = _FlakyBoundModel()
     result = await probe_tool_call_with_transient_retries(
         model=_ScriptedModel(bound_model),
-        tool=create_apply_patch_tool(workspace_root=tmp_path),
+        tool=create_apply_patch_tool(text_mutations=text_mutations_factory(tmp_path)),
         messages=[SystemMessage("测试"), HumanMessage("请修改文件")],
         retry_delays=(0, 0, 0),
     )
@@ -580,7 +580,7 @@ async def test_probe_tool_call_retries_transient_provider_error_three_times(
 
 
 @pytest.mark.asyncio
-async def test_probe_tool_call_does_not_retry_non_transient_provider_error(
+async def test_probe_tool_call_does_not_retry_non_transient_provider_error(text_mutations_factory,
     tmp_path: Path,
 ) -> None:
     class _InvalidRequestBoundModel(_ScriptedBoundModel):
@@ -596,7 +596,7 @@ async def test_probe_tool_call_does_not_retry_non_transient_provider_error(
     with pytest.raises(ToolCallProbeInvocationError) as captured:
         await probe_tool_call_with_transient_retries(
             model=_ScriptedModel(bound_model),
-            tool=create_apply_patch_tool(workspace_root=tmp_path),
+            tool=create_apply_patch_tool(text_mutations=text_mutations_factory(tmp_path)),
             messages=[SystemMessage("测试"), HumanMessage("请修改文件")],
             retry_delays=(0, 0, 0),
         )
@@ -607,7 +607,7 @@ async def test_probe_tool_call_does_not_retry_non_transient_provider_error(
 
 
 @pytest.mark.asyncio
-async def test_probe_tool_call_does_not_retry_local_timeout_error(
+async def test_probe_tool_call_does_not_retry_local_timeout_error(text_mutations_factory,
     tmp_path: Path,
 ) -> None:
     class _LocalTimeoutBoundModel(_ScriptedBoundModel):
@@ -623,7 +623,7 @@ async def test_probe_tool_call_does_not_retry_local_timeout_error(
     with pytest.raises(ToolCallProbeInvocationError) as captured:
         await probe_tool_call_with_transient_retries(
             model=_ScriptedModel(bound_model),
-            tool=create_apply_patch_tool(workspace_root=tmp_path),
+            tool=create_apply_patch_tool(text_mutations=text_mutations_factory(tmp_path)),
             messages=[SystemMessage("测试"), HumanMessage("请修改文件")],
             retry_delays=(0, 0, 0),
         )
@@ -635,7 +635,7 @@ async def test_probe_tool_call_does_not_retry_local_timeout_error(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider_status", [400, 503])
-async def test_probe_tool_call_does_not_retry_local_error_with_provider_context(
+async def test_probe_tool_call_does_not_retry_local_error_with_provider_context(text_mutations_factory,
     tmp_path: Path,
     provider_status: int,
 ) -> None:
@@ -664,7 +664,7 @@ async def test_probe_tool_call_does_not_retry_local_error_with_provider_context(
     with pytest.raises(ToolCallProbeInvocationError) as captured:
         await probe_tool_call_with_transient_retries(
             model=_ScriptedModel(bound_model),
-            tool=create_apply_patch_tool(workspace_root=tmp_path),
+            tool=create_apply_patch_tool(text_mutations=text_mutations_factory(tmp_path)),
             messages=[SystemMessage("测试"), HumanMessage("请修改文件")],
             retry_delays=(0, 0, 0),
         )

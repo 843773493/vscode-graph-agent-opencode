@@ -166,6 +166,9 @@ from app.services.infrastructure.workspace_file_watch_service import (
 from app.services.infrastructure.workspace_files.paths import (
     GatewayNativeDirectoryClient,
 )
+from app.services.infrastructure.workspace_files.text_owner import (
+    WorkspaceTextMutationOwner,
+)
 from app.services.infrastructure.workspace_service import WorkspaceService
 from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
 from app.services.mapping.session_resource_mapper import SessionResourceMapper
@@ -207,6 +210,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         session_target_resolver: SessionTargetResolverProtocol,
         mcp_catalog_owner: McpCatalogOwner,
         resource_navigation: ResourceNavigation,
+        text_mutations: WorkspaceTextMutationOwner,
     ) -> None:
         self._message_service = message_service
         self._session_service = session_service
@@ -218,6 +222,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         self._session_target_resolver = session_target_resolver
         self._mcp_catalog_owner = mcp_catalog_owner
         self._resource_navigation = resource_navigation
+        self._text_mutations = text_mutations
         self._node_debug_service: NodeDebugService | None = None
         self._job_service: JobServiceProtocol | None = None
         self._session_orchestrator: SessionOrchestrator | None = None
@@ -245,6 +250,9 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
 
     def get_resource_navigation(self) -> ResourceNavigation:
         return self._resource_navigation
+
+    def get_text_mutations(self) -> WorkspaceTextMutationOwner:
+        return self._text_mutations
 
     def get_terminal_resource_owner(self) -> TerminalResourceOwner:
         return self._terminal_resource_owner
@@ -376,6 +384,7 @@ class AppContainer:
     workspace_service: WorkspaceService
     resource_platform: ResourcePlatform
     resource_navigation: ResourceNavigation
+    text_mutations: WorkspaceTextMutationOwner
     workspace_file_watch_service: WorkspaceFileWatchService
     workspace_file_resource_registry: WorkspaceFileResourceRegistry
     file_tree_settings_service: FileTreeSettingsService
@@ -701,6 +710,7 @@ def _build_app_container(
     resource_navigation = resource_platform.navigation
     if resource_navigation is None:
         raise RuntimeError("Workspace 资源导航未绑定显式身份")
+    text_mutations = WorkspaceTextMutationOwner(paths=workspace_service.file_paths)
     terminal_resource_owner = TerminalResourceOwner(
         workspace_root=resolved_workspace_root, workspace_id=workspace_id,
         sessions=session_service, threads=session_path_resolver,
@@ -733,6 +743,7 @@ def _build_app_container(
         session_target_resolver=session_target_resolver,
         mcp_catalog_owner=mcp_catalog_owner,
         resource_navigation=resource_navigation,
+        text_mutations=text_mutations,
     )
     dependency_provider.set_goal_service(goal_service)
     # ThreadResidency：30 分钟 idle 卸载判定器（OpenSpec 2.8/8.8-A）。debug 服务把
@@ -1074,6 +1085,7 @@ def _build_app_container(
         workspace_file_resource_registry=workspace_file_resource_registry,
         resource_platform=resource_platform,
         resource_navigation=resource_navigation,
+        text_mutations=text_mutations,
         file_tree_settings_service=file_tree_settings_service,
         agent_execution_service=agent_execution_service,
         node_debug_service=node_debug_service,
