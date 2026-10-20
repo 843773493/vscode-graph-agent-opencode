@@ -159,6 +159,16 @@
 - **WHEN** 一条持久化记录原本需要表达一个可由 owner 身份（资源 id 与工作区身份）确定性推导的资源或产物位置
 - **THEN** 该位置 MUST NOT 进入持久化记录，改为在该次调用栈内由 owner 身份重推导；MUST NOT 写入绝对路径或等价的文件系统路径
 
+#### Scenario: 会话文件变更的快照位置由 edit 身份推导
+
+- **WHEN** 会话变更 owner 保存、聚合或输出文件修改及其 before/after/diff 快照
+- **THEN** 修改对象只引用 files URI；快照由 session/edit 身份和阶段在 owner 的访问调用栈内定位，索引、metadata、changeset 摘要和工具事件不再保存或输出 before_file、after_file、diff_file。公开响应仍提供 diff_text 与 before/after preview；已发布字段编号与名称 reserved，不保留旧读取或兼容别名
+
+#### Scenario: 变更记录和审查状态冷读不得恢复旧路径
+
+- **WHEN** owner 冷读文件修改索引或文件审查状态，或写入新的记录
+- **THEN** 同一引用校验保留合法悬空的 Workspace/Gateway 文件 URI、规范编码与固定目标，不在 source 查找同名文件。原生路径、相对路径、非文件 URI、目录根、旧快照位置字段、非法审查状态与冲突的规范 URI 必须明确失败；原记录保持不变，不猜目标、不静默合并或改写
+
 #### Scenario: 不可推导但需寻址时用既有 API 端点
 
 - **WHEN** 一条持久化记录或模型可见载荷需要对外寻址一个无法由 owner 身份推导的产物

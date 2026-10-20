@@ -1037,9 +1037,6 @@ export interface SessionFileChangeDTO {
   tool_call_ids: string[];
   execution_ids: string[];
   turn_ids: string[];
-  before_file?: string | undefined;
-  after_file?: string | undefined;
-  diff_file: string;
   diff_text: string;
   before_preview?: string | undefined;
   after_preview?: string | undefined;
@@ -9324,9 +9321,6 @@ function createBaseSessionFileChangeDTO(): SessionFileChangeDTO {
     tool_call_ids: [],
     execution_ids: [],
     turn_ids: [],
-    before_file: undefined,
-    after_file: undefined,
-    diff_file: "",
     diff_text: "",
     before_preview: undefined,
     after_preview: undefined,
@@ -9349,9 +9343,6 @@ export const SessionFileChangeDTO: MessageFns<SessionFileChangeDTO> = {
         ? object.execution_ids.map((e: any) => globalThis.String(e))
         : [],
       turn_ids: globalThis.Array.isArray(object?.turn_ids) ? object.turn_ids.map((e: any) => globalThis.String(e)) : [],
-      before_file: isSet(object.before_file) ? globalThis.String(object.before_file) : undefined,
-      after_file: isSet(object.after_file) ? globalThis.String(object.after_file) : undefined,
-      diff_file: isSet(object.diff_file) ? globalThis.String(object.diff_file) : "",
       diff_text: isSet(object.diff_text) ? globalThis.String(object.diff_text) : "",
       before_preview: isSet(object.before_preview) ? globalThis.String(object.before_preview) : undefined,
       after_preview: isSet(object.after_preview) ? globalThis.String(object.after_preview) : undefined,
@@ -9387,15 +9378,6 @@ export const SessionFileChangeDTO: MessageFns<SessionFileChangeDTO> = {
     if (message.turn_ids?.length) {
       obj.turn_ids = message.turn_ids;
     }
-    if (message.before_file !== undefined) {
-      obj.before_file = message.before_file;
-    }
-    if (message.after_file !== undefined) {
-      obj.after_file = message.after_file;
-    }
-    if (message.diff_file !== "") {
-      obj.diff_file = message.diff_file;
-    }
     if (message.diff_text !== "") {
       obj.diff_text = message.diff_text;
     }
@@ -9422,9 +9404,6 @@ export const SessionFileChangeDTO: MessageFns<SessionFileChangeDTO> = {
     message.tool_call_ids = object.tool_call_ids?.map((e) => e) || [];
     message.execution_ids = object.execution_ids?.map((e) => e) || [];
     message.turn_ids = object.turn_ids?.map((e) => e) || [];
-    message.before_file = object.before_file ?? undefined;
-    message.after_file = object.after_file ?? undefined;
-    message.diff_file = object.diff_file ?? "";
     message.diff_text = object.diff_text ?? "";
     message.before_preview = object.before_preview ?? undefined;
     message.after_preview = object.after_preview ?? undefined;

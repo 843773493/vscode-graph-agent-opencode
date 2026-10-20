@@ -10,10 +10,18 @@
 from datetime import UTC, datetime
 from typing import Any, Literal, Self
 
-from pydantic import BaseModel, Field, JsonValue, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    field_validator,
+    model_validator,
+)
 
 from app.domain.itemized.execution_admission import ExecutionBinding
 from app.schemas.internal_v2.pending_request import DeliveryBoundary, DeliveryPolicy
+from app.schemas.internal_v2.session_changes import validate_change_file_reference
 
 # assistant 文本流的载体闭集：``markdown`` 为可见正文，``reasoning`` 为思考内容。
 TextStreamKind = Literal["markdown", "reasoning"]
@@ -173,14 +181,13 @@ class ToolCallStartPayload(BaseModel):
 
 class FileEditPayload(BaseModel):
     """工具产生的可审查文件变更摘要。"""
+    model_config = ConfigDict(extra="forbid")
     edit_id: str
     file_path: str
     kind: str
     additions: int = 0
     deletions: int = 0
-    diff_file: str
-    before_file: str | None = None
-    after_file: str | None = None
+    _file_uri = field_validator("file_path")(validate_change_file_reference)
 
 
 class ToolOutputReferencePayload(BaseModel):

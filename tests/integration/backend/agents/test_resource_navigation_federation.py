@@ -292,6 +292,7 @@ async def test_model_conditional_patch_preserves_file_operations_and_changesets(
     changes = {item["file_path"]: item for item in response.json()["data"]["files"]}
     expected_paths = {root + "/" + name for name in ("patch-source.txt", "patch-destination.txt", "patch-delete.txt", "patch-created.txt", "written.txt")}
     assert set(changes) == expected_paths
+    assert all(not {"before_file", "after_file", "diff_file"} & item.keys() for item in changes.values())
     changes = {"/src/" + path.rsplit("/", 1)[1]: value for path, value in changes.items()}
     assert set(changes) == {"/src/patch-source.txt", "/src/patch-destination.txt", "/src/patch-delete.txt", "/src/patch-created.txt", "/src/written.txt"}
     assert changes["/src/patch-source.txt"]["kind"] == changes["/src/patch-delete.txt"]["kind"] == "delete"
@@ -314,9 +315,24 @@ async def test_model_conditional_patch_preserves_file_operations_and_changesets(
     refreshed = await source.client.get(f"/api/v1/sessions/{session}/changesets/all")
     reviewed = next(item for item in refreshed.json()["data"]["files"] if item["file_path"] == file_uri)
     assert reviewed["reviewed"] is True and "+edited" in reviewed["diff_text"]
+    events = await source.client.get(f"/api/v1/jobs/{accepted.json()['data']['job_id']}/events")
+    assert events.status_code == 200, events.text
+    edits = [edit for event in events.json()["data"] for edit in event["payload"].get("file_edits", [])]
+    assert {edit["file_path"] for edit in edits} == expected_paths
+    assert all(not {"before_file", "after_file", "diff_file"} & edit.keys() for edit in edits)
+    original_index = (session_path / "changes/index.jsonl").read_bytes()
+    index_records = [json.loads(line) for line in original_index.splitlines()]
+    assert all(not {"before_file", "after_file", "diff_file"} & item.keys() for item in index_records)
+    await asyncio.to_thread(source.restart_backend)
+    cold = await source.client.get(f"/api/v1/sessions/{session}/changesets/all")
+    assert cold.status_code == 200, cold.text
+    assert cold.json()["data"]["files"] == refreshed.json()["data"]["files"]
+    assert cold.json()["request_id"] == cold.headers["X-Request-ID"]
+    assert (session_path / "changes/index.jsonl").read_bytes() == original_index
     wire = json.dumps(model.requests)
     assert all(str(node.workspace) not in wire for node in nodes.values())
-    (artifacts / "model-conditional-patch.json").write_text(json.dumps({"receipt": receipt, "changeset": response.json()}, ensure_ascii=False, indent=2) + "\n")
+    (artifacts / "model-conditional-patch.json").write_text(json.dumps({"receipt": receipt,
+        "changeset": response.json(), "events": events.json(), "cold_changeset": cold.json()}, ensure_ascii=False, indent=2) + "\n")
 
 
 async def test_model_remote_text_mutations_preserve_owner_versions_and_source_changes(communication_triad):

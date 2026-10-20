@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict
+import re
+from dataclasses import asdict, replace
 from pathlib import Path
+from typing import Literal
 
 from app.abstractions.session_changes import StoredFileEdit
 from app.core.path_utils import get_session_path_resolver, safe_join
-from app.core.resource_uri import parse_resource_uri
 from app.core.trace_middleware import get_current_gateway_id
-from app.schemas.internal_v2.session_changes import SessionChangesetDTO
+from app.schemas.internal_v2.session_changes import (
+    SessionChangesetDTO,
+    validate_change_file_reference,
+)
 
 EDIT_INDEX_FILE = "index.jsonl"
 REVIEWED_FILE = "reviewed.json"
@@ -25,10 +29,7 @@ class SessionChangesStore:
         )
 
     def normalize_file_reference(self, file_path: str) -> str:
-        resource = parse_resource_uri(file_path, local_gateway_id=get_current_gateway_id())
-        if resource.kind != "files" or resource.scope not in {"workspace", "gateway"} or len(resource.tail_segments) < 2:
-            raise ValueError("文件变更只能引用明确的 Workspace/Gateway 文件 URI")
-        return resource.display_uri
+        return validate_change_file_reference(file_path, local_gateway_id=get_current_gateway_id())
 
     def save_edit(
         self,
@@ -38,8 +39,9 @@ class SessionChangesStore:
         after_content: str,
         diff_text: str,
     ) -> None:
+        record = replace(record, file_path=self.normalize_file_reference(record.file_path))
+        edit_dir = self._edit_dir(record.session_id, record.edit_id)
         changes_dir = self._ensure_changes_dir(record.session_id)
-        edit_dir = changes_dir / "edits" / record.edit_id
         edit_dir.mkdir(parents=True, exist_ok=False)
         if record.before_exists:
             (edit_dir / "before.txt").write_text(before_content, encoding="utf-8")
@@ -69,9 +71,13 @@ class SessionChangesStore:
                     data = json.loads(stripped)
                 except json.JSONDecodeError as exc:
                     raise RuntimeError(
-                        f"文件变更索引损坏: {index_file}:{line_number}"
+                        f"文件变更索引损坏: session_id={session_id}, line={line_number}"
                     ) from exc
-                records.append(StoredFileEdit(**data))
+                record = StoredFileEdit(**data)
+                self._edit_dir(session_id, record.edit_id)
+                if record.session_id != session_id:
+                    raise ValueError(f"文件变更索引归属错误: session_id={session_id}, line={line_number}")
+                records.append(replace(record, file_path=self.normalize_file_reference(record.file_path)))
         return records
 
     def read_reviewed_map(self, session_id: str) -> dict[str, bool]:
@@ -81,24 +87,36 @@ class SessionChangesStore:
         try:
             raw = json.loads(reviewed_file.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
-            raise RuntimeError(f"文件审查状态损坏: {reviewed_file}") from exc
+            raise RuntimeError(f"文件审查状态损坏: session_id={session_id}") from exc
         if not isinstance(raw, dict):
-            raise TypeError(f"文件审查状态格式错误: {reviewed_file}")
-        return {str(key): value is True for key, value in raw.items()}
+            raise TypeError(f"文件审查状态格式错误: session_id={session_id}")
+        return self._reviewed_references(raw)
+
+    def _reviewed_references(self, reviewed: dict[str, bool]) -> dict[str, bool]:
+        normalized: dict[str, bool] = {}
+        for key, value in reviewed.items():
+            uri = self.normalize_file_reference(key)
+            if type(value) is not bool:
+                raise TypeError("文件审查状态必须是布尔值")
+            if uri in normalized:
+                raise ValueError("文件审查状态含重复的规范 URI")
+            normalized[uri] = value
+        return normalized
 
     def save_reviewed_map(self, session_id: str, reviewed: dict[str, bool]) -> None:
+        reviewed = self._reviewed_references(reviewed)
         target = self._ensure_changes_dir(session_id) / REVIEWED_FILE
         target.write_text(
             json.dumps(reviewed, ensure_ascii=False, indent=2, sort_keys=True),
             encoding="utf-8",
         )
 
-    def read_relative_text(self, session_id: str, relative_path: str | None) -> str:
-        if not relative_path:
-            return ""
-        file_path = safe_join(self._session_changes_dir(session_id), relative_path)
+    def read_edit_text(self, session_id: str, edit_id: str, phase: Literal["before", "after"]) -> str:
+        if phase not in {"before", "after"}:
+            raise ValueError("文件变更快照阶段必须为 before 或 after")
+        file_path = safe_join(self._edit_dir(session_id, edit_id), f"{phase}.txt")
         if not file_path.exists():
-            raise RuntimeError(f"文件变更内容缺失: {file_path}")
+            raise RuntimeError(f"文件变更内容缺失: session_id={session_id}, edit_id={edit_id}, phase={phase}")
         return file_path.read_text(encoding="utf-8")
 
     def save_changeset_file(
@@ -110,21 +128,17 @@ class SessionChangesStore:
         before_content: str | None,
         after_content: str | None,
         diff_text: str,
-    ) -> tuple[str | None, str | None, str]:
+    ) -> None:
+        file_path = self.normalize_file_reference(file_path)
         changeset_name = self._safe_name(changeset_id)
         stem = self._file_stem(file_path)
         file_dir = self._ensure_changes_dir(session_id) / "changesets" / changeset_name / stem
         file_dir.mkdir(parents=True, exist_ok=True)
         (file_dir / "diff.patch").write_text(diff_text, encoding="utf-8")
-        before_file = None
         if before_content is not None:
-            before_file = f"changesets/{changeset_name}/{stem}/before.txt"
             (file_dir / "before.txt").write_text(before_content, encoding="utf-8")
-        after_file = None
         if after_content is not None:
-            after_file = f"changesets/{changeset_name}/{stem}/after.txt"
             (file_dir / "after.txt").write_text(after_content, encoding="utf-8")
-        return before_file, after_file, f"changesets/{changeset_name}/{stem}/diff.patch"
 
     def save_changeset_summary(self, changeset: SessionChangesetDTO) -> None:
         target = (
@@ -138,6 +152,11 @@ class SessionChangesStore:
 
     def _session_changes_dir(self, session_id: str) -> Path:
         return self._path_resolver.resolve_session_node(session_id) / "changes"
+
+    def _edit_dir(self, session_id: str, edit_id: str) -> Path:
+        if re.fullmatch(r"edit_[0-9a-f]{12}", edit_id) is None:
+            raise ValueError("文件变更 edit_id 格式错误")
+        return safe_join(self._session_changes_dir(session_id), "edits", edit_id)
 
     def _ensure_changes_dir(self, session_id: str) -> Path:
         changes_dir = self._session_changes_dir(session_id)

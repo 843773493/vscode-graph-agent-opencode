@@ -85,6 +85,7 @@ async def test_partial_patch_keeps_published_file_in_changeset(text_mutations_fa
     file_edit, = end["file_edits"]
     uri = resource_display_uri(scope="workspace", scope_id=load_or_create_workspace_id(root), kind="files", tail_segments=("root", "src", "patch-first.txt"))
     assert file_edit["file_path"] == uri and file_edit["kind"] == "create"
+    assert not {"before_file", "after_file", "diff_file"} & file_edit.keys()
     changeset = await changes.get_changeset(session_id=session.session_id, changeset_id="all")
     changed, = changeset.files
     assert changed.file_path == uri and changed.kind == "create"

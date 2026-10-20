@@ -4,6 +4,7 @@ import difflib
 import hashlib
 import time
 from collections.abc import Callable
+from typing import Literal
 
 from app.abstractions.session_changes import AggregatedFileChange, StoredFileEdit
 from app.schemas.internal_v2.session_changes import (
@@ -67,7 +68,7 @@ def detect_change_kind(*, before_exists: bool, after_exists: bool) -> SessionFil
 def aggregate_records(
     records: list[StoredFileEdit],
     *,
-    read_relative_text: Callable[[str | None], str],
+    read_edit_text: Callable[[str, Literal["before", "after"]], str],
 ) -> list[AggregatedFileChange]:
     grouped: dict[str, list[StoredFileEdit]] = {}
     for record in records:
@@ -79,13 +80,13 @@ def aggregate_records(
         first = ordered[0]
         last = ordered[-1]
         before_content = (
-            read_relative_text(first.before_file)
-            if first.before_exists and first.before_file
+            read_edit_text(first.edit_id, "before")
+            if first.before_exists
             else None
         )
         after_content = (
-            read_relative_text(last.after_file)
-            if last.after_exists and last.after_file
+            read_edit_text(last.edit_id, "after")
+            if last.after_exists
             else None
         )
         changes.append(

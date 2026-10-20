@@ -87,9 +87,6 @@ class SessionChangesService:
             created_at=datetime.now(UTC).isoformat(),
             before_exists=before.existed,
             after_exists=after_exists,
-            before_file=f"edits/{edit_id}/before.txt" if before.existed else None,
-            after_file=f"edits/{edit_id}/after.txt" if after_exists else None,
-            diff_file=f"edits/{edit_id}/diff.patch",
         )
         self._store.save_edit(
             record=record,
@@ -174,9 +171,10 @@ class SessionChangesService:
         reviewed_map = self._store.read_reviewed_map(session_id)
         changes = aggregate_records(
             records,
-            read_relative_text=lambda path: self._store.read_relative_text(
+            read_edit_text=lambda edit_id, phase: self._store.read_edit_text(
                 session_id,
-                path,
+                edit_id,
+                phase,
             ),
         )
         files: list[SessionFileChangeDTO] = []
@@ -189,11 +187,8 @@ class SessionChangesService:
             additions, deletions = count_diff_lines(diff_text)
             if additions == 0 and deletions == 0:
                 continue
-            before_file: str | None = None
-            after_file: str | None = None
-            diff_file = ""
             if persist:
-                before_file, after_file, diff_file = self._store.save_changeset_file(
+                self._store.save_changeset_file(
                     session_id=session_id,
                     changeset_id=changeset_id,
                     file_path=change.file_path,
@@ -212,9 +207,6 @@ class SessionChangesService:
                     tool_call_ids=list(change.tool_call_ids),
                     execution_ids=list(change.execution_ids),
                     turn_ids=list(change.turn_ids),
-                    before_file=before_file,
-                    after_file=after_file,
-                    diff_file=diff_file,
                     diff_text=diff_text,
                     before_preview=preview(change.before_content),
                     after_preview=preview(change.after_content),

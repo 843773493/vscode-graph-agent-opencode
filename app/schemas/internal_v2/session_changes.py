@@ -3,10 +3,22 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.core.resource_uri import ResourceUriGrammarError, parse_resource_uri
 
 SessionChangesetKind = Literal["all", "turn"]
 SessionFileChangeKind = Literal["create", "edit", "delete"]
+
+
+def validate_change_file_reference(value: str, *, local_gateway_id: str | None = None) -> str:
+    try:
+        resource = parse_resource_uri(value, local_gateway_id=local_gateway_id)
+    except ResourceUriGrammarError as error:
+        raise ValueError(f"文件变更 URI 校验失败: reason={error.reason_code}") from error
+    if resource.kind != "files" or len(resource.tail_segments) < 2:
+        raise ValueError("文件变更只能引用明确的 Workspace/Gateway 文件 URI")
+    return resource.display_uri
 
 
 class SessionChangesSummaryDTO(BaseModel):
@@ -31,6 +43,7 @@ class SessionChangesetListDTO(BaseModel):
 
 
 class SessionFileChangeDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     file_path: str
     kind: SessionFileChangeKind
     additions: int = 0
@@ -41,12 +54,10 @@ class SessionFileChangeDTO(BaseModel):
     tool_call_ids: list[str] = Field(default_factory=list)
     execution_ids: list[str] = Field(default_factory=list)
     turn_ids: list[str] = Field(default_factory=list)
-    before_file: str | None = None
-    after_file: str | None = None
-    diff_file: str
     diff_text: str
     before_preview: str | None = None
     after_preview: str | None = None
+    _file_uri = field_validator("file_path")(validate_change_file_reference)
 
 
 class SessionChangesetDTO(BaseModel):
@@ -71,3 +82,4 @@ class SessionFileReviewResultDTO(BaseModel):
     session_id: str
     file_path: str
     reviewed: bool
+    _file_uri = field_validator("file_path")(validate_change_file_reference)

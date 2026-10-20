@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from typing import cast
 
+from google.protobuf import descriptor_pb2
 from google.protobuf.json_format import MessageToDict, ParseDict
 
 from app.gateway.protocol.proxy import proxy_target_to_proto
@@ -19,9 +20,28 @@ from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
 )
+from app.schemas.internal_v2.session_changes import SessionFileChangeDTO
 from app.schemas.internal_v2.session_interaction import SessionExecutionSseDTO
 
 BASELINE_PATH = Path(__file__).with_name("protocol_baseline.json")
+
+
+def test_session_file_change_wire_and_openapi_use_uri_and_content_without_snapshot_locations() -> None:
+    from app.main import app
+
+    value = SessionFileChangeDTO(file_path="boxteam://workspace/absent-target/resources/files/root/%e4%b8%ad.txt",
+        kind="edit", latest_edit_id="edit_0123456789ab", diff_text="-before\n+after\n",
+        before_preview="before\n", after_preview="after\n")
+    assert value.file_path.endswith("/%E4%B8%AD.txt")
+    encoded = ParseDict(value.model_dump(exclude_none=True), public_pb2.SessionFileChangeDTO()).SerializeToString()
+    received = public_pb2.SessionFileChangeDTO.FromString(encoded)
+    assert SessionFileChangeDTO.model_validate(MessageToDict(received, preserving_proto_field_name=True)) == value
+    shape = descriptor_pb2.DescriptorProto()
+    received.DESCRIPTOR.CopyToProto(shape)
+    assert {"before_file", "after_file", "diff_file"} <= set(shape.reserved_name)
+    assert all(any(span.start <= number < span.end for span in shape.reserved_range) for number in (10, 11, 12))
+    public = app.openapi()["components"]["schemas"]["SessionFileChangeDTO"]
+    assert set(public["properties"]) == set(value.model_dump())
 
 
 def test_resource_read_request_and_media_result_survive_proto_wire() -> None:

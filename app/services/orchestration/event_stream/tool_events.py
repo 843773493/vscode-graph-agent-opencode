@@ -141,9 +141,6 @@ def stored_edit_payload(record: StoredFileEdit) -> dict[str, object]:
         "kind": record.kind,
         "additions": record.additions,
         "deletions": record.deletions,
-        "diff_file": record.diff_file,
-        "before_file": record.before_file,
-        "after_file": record.after_file,
     }
 
 

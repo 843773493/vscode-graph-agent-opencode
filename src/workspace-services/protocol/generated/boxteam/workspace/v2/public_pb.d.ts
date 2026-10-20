@@ -4624,21 +4624,6 @@ export declare type SessionFileChangeDTO = Message<"boxteam.workspace.v2.Session
   turnIds: string[];
 
   /**
-   * @generated from field: optional string before_file = 10;
-   */
-  beforeFile?: string | undefined;
-
-  /**
-   * @generated from field: optional string after_file = 11;
-   */
-  afterFile?: string | undefined;
-
-  /**
-   * @generated from field: string diff_file = 12;
-   */
-  diffFile: string;
-
-  /**
    * @generated from field: string diff_text = 13;
    */
   diffText: string;

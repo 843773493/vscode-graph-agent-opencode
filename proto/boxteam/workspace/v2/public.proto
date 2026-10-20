@@ -1052,9 +1052,8 @@ message SessionFileChangeDTO {
   repeated string tool_call_ids = 7;
   repeated string execution_ids = 8;
   repeated string turn_ids = 9;
-  optional string before_file = 10;
-  optional string after_file = 11;
-  string diff_file = 12;
+  reserved 10, 11, 12;
+  reserved "before_file", "after_file", "diff_file";
   string diff_text = 13;
   optional string before_preview = 14;
   optional string after_preview = 15;

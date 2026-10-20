@@ -22,6 +22,7 @@ import type { WorkspacePreviewTab } from "./WorkspaceFilePreviewArea";
 
 const originalFetch = globalThis.fetch;
 const PORT = 49_502;
+const ROOT_URI = "boxteam://workspace/preview-boundary/resources/files/root";
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -62,8 +63,8 @@ function contentResponse(data: unknown): Response {
 }
 
 const VALID_CONTENT = {
-  root_path: "/home/test",
-  path: "src/app.ts",
+  root_path: ROOT_URI,
+  path: `${ROOT_URI}/src/app.ts`,
   name: "app.ts",
   content: "const a = 1;\n",
   language: "typescript",
@@ -143,7 +144,19 @@ describe("文件内容响应字段校验（API 边界）", () => {
 
     const result = await getWorkspaceFileContent(PORT, "src/app.ts");
     expect(result.content).toBe("const a = 1;\n");
-    expect(result.path).toBe("src/app.ts");
+    expect(result.path).toBe(VALID_CONTENT.path);
+  });
+
+  test.each([
+    { field: "root_path", value: "/home/test" },
+    { field: "path", value: "src/app.ts" },
+  ])("响应中的 $field 必须使用 URI", async ({ field, value }) => {
+    installFetch((url, method) => (
+      method === "GET" && url.pathname === "/api/v1/workspace/files/content"
+        ? contentResponse({ ...VALID_CONTENT, [field]: value })
+        : undefined
+    ));
+    await expect(getWorkspaceFileContent(PORT, "src/app.ts")).rejects.toThrow("文件内容响应必须使用资源 URI");
   });
 });
 
@@ -156,7 +169,6 @@ describe("文件预览区对畸形 content 不白屏", () => {
   function mountPreview(content: unknown): { renderer: ReactTestRenderer; error: unknown } {
     const tab = {
       ...VALID_CONTENT,
-      path: "src/app.ts",
       previewType: "file",
       selection: null,
       content,
@@ -175,7 +187,7 @@ describe("文件预览区对畸形 content 不白屏", () => {
             workspaceName="test"
             sessionTitle="会话"
             tabs={[tab]}
-            activePath="src/app.ts"
+            activePath={VALID_CONTENT.path}
             loadingPath={null}
             error={null}
             editingPath={null}

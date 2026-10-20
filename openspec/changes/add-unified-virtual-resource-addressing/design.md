@@ -39,6 +39,8 @@
 - **URI**：持久化，允许悬空，禁 revision/hash → 软件内部与模型可见载荷的默认引用形式。
 - **real path**：资源访问时仅在原生 owner 的最终 fs/sqlite 调用点及必要局部链路临时使用，不作为资源引用进入模型载荷、普通响应 DTO、解析结果或跨 Gateway 资源投影。原生目录选择/注册和普通文件原生路径是具名请求输入，不放宽输出/持久化边界。物理 workspace root 与用户显式选定的未注册目录根是两类具名控制面持久化例外，均只由原生 Gateway 持有；前者合同引用 `add-multi-workspace-backend-mounting`，后者见 D1b。
 
+会话文件变更的修改对象保存 files URI，冷读索引和 reviewed map 使用与写入相同的引用校验。before/after/diff 快照由 session/edit 身份在存储 owner 内重推导，不保存等价相对 locator，也不在 DTO/事件重复输出；前端继续使用已有 diff_text 与 preview。移除旧字段及全部消费者，protobuf 保留已发布编号和名称，旧落盘字段明确失败而非双读迁移。
+
 **理由**：审计发现的真实缺陷正是资源路径泄漏（skill 目录扫描、`skillPaths.ts` 解析物理路径、catalog URI 裸拼接、`ConfigSourceLayerRecord.source_path` 落库）。资源引用以身份和 URI 表达；原生 Gateway 根绑定是目标生命周期的控制面输入，不能作为 URI、资源记录或跨 Gateway 资源投影携带。
 
 **备选**：把 revision 编进 URI（被否：revision 变化会让同一资源产生不同地址，破坏「地址稳定、revision 独立」）；把 real path 作为可选调试字段随资源记录持久化（被否：正是当前要消除的违约）。将 workspace root 复制进 managed-group 或联邦记录同样被否；只允许原生 Gateway 控制面持有具名根绑定，注册请求必须由 `add-multi-workspace-backend-mounting` 的唯一 root-binding requirement 授权后作为控制面输入送达原生 owner，中继不持久化或转为资源数据。

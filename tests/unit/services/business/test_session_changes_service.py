@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
 
 from app.abstractions.session_changes import FileEditSnapshot
+from app.core.exceptions import ForbiddenError
 from app.core.path_utils import (
     get_session_changes_dir,
     get_session_creation_service,
@@ -117,7 +119,10 @@ async def test_records_readable_changesets_for_file_tools(
     assert index_file.exists()
     index_record = json.loads(index_file.read_text(encoding="utf-8").strip())
     assert index_record["file_path"] == _uri(tmp_path, "src/hello.txt")
-    assert (changes_dir / record.diff_file).exists()
+    assert (changes_dir / "edits" / record.edit_id / "diff.patch").exists()
+    metadata = json.loads((changes_dir / "edits" / record.edit_id / "metadata.json").read_text())
+    assert metadata == index_record == asdict(record)
+    assert not {"before_file", "after_file", "diff_file"} & metadata.keys()
 
     list_result = await service.list_changesets(session.session_id)
     assert [item.changeset_id for item in list_result.items] == ["all", "turn:job_1"]
@@ -133,11 +138,14 @@ async def test_records_readable_changesets_for_file_tools(
     assert len(detail.files) == 1
     file_change = detail.files[0]
     assert file_change.file_path == _uri(tmp_path, "src/hello.txt")
-    assert file_change.after_file is not None
-    assert file_change.diff_file.endswith("diff.patch")
     assert "+hello" in file_change.diff_text
-    assert (changes_dir / file_change.after_file).exists()
-    assert (changes_dir / file_change.diff_file).exists()
+    assert file_change.after_preview == "hello\nworld\n"
+    assert not {"before_file", "after_file", "diff_file"} & file_change.model_dump().keys()
+    saved_summary = json.loads((changes_dir / "changesets/all/summary.json").read_text())
+    assert saved_summary["files"][0] == file_change.model_dump()
+    after, = (changes_dir / "changesets/all").glob("*/after.txt")
+    diff, = (changes_dir / "changesets/all").glob("*/diff.patch")
+    assert after.read_text() == "hello\nworld\n" and "+hello" in diff.read_text()
 
 
 @pytest.mark.asyncio
@@ -400,3 +408,137 @@ async def test_remote_observation_is_recorded_without_reading_source_decoy(tmp_p
     assert reviewed.file_path == remote_uri and reviewed.reviewed
     with pytest.raises(ValueError):
         await service.set_file_reviewed(session_id=session.session_id, file_path="/same.txt", reviewed=True)
+    reopened = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=tmp_path))
+    changed, = (await reopened.get_changeset(session_id=session.session_id, changeset_id="all")).files
+    assert changed.file_path == remote_uri and changed.reviewed
+    assert changed.before_preview == "TARGET BEFORE\n" and changed.after_preview == "TARGET AFTER\n"
+    assert decoy.read_text() == "SOURCE DECOY\n"
+
+
+@pytest.fixture
+async def recorded_file_change(tmp_path, session_service):
+    session = await session_service.create(SessionCreateRequest(title="冷读变更"))
+    service = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=tmp_path))
+    record = await service.record_tool_file_edit(session_id=session.session_id, turn_id="turn_cold",
+        tool_call_id="call_cold", execution_id="execution_cold", tool_name="edit_file",
+        before=FileEditSnapshot(_uri(tmp_path, "src/cold.txt"), True, "before\n", True, "after\n"))
+    assert record is not None
+    return session, record, get_session_changes_dir(session.session_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reference", ["/private/file.txt", r"C:\private\file.txt", "src/file.txt", "",
+    "boxteam://workspace/target/resources/files/root/../file.txt",
+    "boxteam://workspace/target/resources/config/workspace", "boxteam://workspace/target/resources/files/root"])
+async def test_invalid_stored_change_reference_fails_cold_read_and_write_without_side_effects(
+    tmp_path, session_service, recorded_file_change, reference,
+):
+    session, record, changes = recorded_file_change
+    index = changes / "index.jsonl"
+    invalid = {**asdict(record), "file_path": reference}
+    index.write_text(json.dumps(invalid) + "\n")
+    originals = {path: path.read_bytes() for path in changes.rglob("*") if path.is_file()}
+    store = SessionChangesStore(workspace_root=tmp_path)
+    reopened = SessionChangesService(session_service=session_service, store=store)
+    for operation in (reopened.list_changesets(session.session_id),
+                      reopened.get_changeset(session_id=session.session_id, changeset_id="all")):
+        with pytest.raises(ValueError, match="文件变更") as failure:
+            await operation
+        if reference:
+            assert reference not in str(failure.value)
+    with pytest.raises(ValueError, match="文件变更"):
+        store.save_edit(record=replace(record, file_path=reference), before_content="before\n",
+                        after_content="after\n", diff_text="invalid")
+    assert {path: path.read_bytes() for path in changes.rglob("*") if path.is_file()} == originals
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reviewed", [
+    {"/private/file.txt": True}, {r"C:\private\file.txt": True}, {"src/file.txt": True},
+    {"boxteam://workspace/target/resources/files/root/file.txt": "true"},
+    {"boxteam://workspace/target/resources/files/root/file.txt": 1},
+    {"boxteam://workspace/target/resources/files/root/%e4%b8%ad.txt": True,
+     "boxteam://workspace/target/resources/files/root/%E4%B8%AD.txt": False},
+])
+async def test_invalid_reviewed_reference_fails_read_and_update_without_rewriting(
+    tmp_path, session_service, recorded_file_change, reviewed,
+):
+    session, record, changes = recorded_file_change
+    path = changes / "reviewed.json"
+    original = json.dumps(reviewed).encode()
+    path.write_bytes(original)
+    store = SessionChangesStore(workspace_root=tmp_path)
+    reopened = SessionChangesService(session_service=session_service, store=store)
+    with pytest.raises((ValueError, TypeError)):
+        await reopened.get_changeset(session_id=session.session_id, changeset_id="all")
+    with pytest.raises((ValueError, TypeError)):
+        await reopened.set_file_reviewed(session_id=session.session_id, file_path=record.file_path, reviewed=True)
+    with pytest.raises((ValueError, TypeError)):
+        store.save_reviewed_map(session.session_id, reviewed)
+    assert path.read_bytes() == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("obsolete_field", ["before_file", "after_file", "diff_file"])
+async def test_legacy_snapshot_locations_are_not_accepted_as_cold_read_targets(
+    tmp_path, session_service, recorded_file_change, obsolete_field,
+):
+    session, record, changes = recorded_file_change
+    index = changes / "index.jsonl"
+    original = json.dumps({**asdict(record), obsolete_field: "/private/decoy.txt"}).encode() + b"\n"
+    index.write_bytes(original)
+    reopened = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=tmp_path))
+    with pytest.raises(TypeError, match=obsolete_field):
+        await reopened.list_changesets(session.session_id)
+    assert index.read_bytes() == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reference", [
+    "boxteam://workspace/absent-target/resources/files/root/%e4%b8%ad.txt",
+    "boxteam://gateway_0123456789abcdef0123456789abcdef/gateway/gateway_01900000000070008000000000000001/resources/files/01900000000070008000000000000001/%e4%b8%ad.txt",
+])
+async def test_dangling_workspace_and_gateway_change_uris_preserve_content_after_cold_read(
+    tmp_path, session_service, reference,
+):
+    session = await session_service.create(SessionCreateRequest(title="悬空引用"))
+    service = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=tmp_path))
+    record = await service.record_tool_file_edit(session_id=session.session_id, turn_id=None,
+        tool_call_id="call_dangling", execution_id="execution_dangling", tool_name="edit_file",
+        before=FileEditSnapshot(reference, True, "before /etc/hosts\n", False, ""))
+    assert record is not None and record.kind == "delete"
+    await service.set_file_reviewed(session_id=session.session_id, file_path=reference, reviewed=True)
+    index = get_session_changes_dir(session.session_id) / "index.jsonl"
+    original = index.read_bytes()
+    reopened = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=tmp_path))
+    changed, = (await reopened.get_changeset(session_id=session.session_id, changeset_id="all")).files
+    assert changed.file_path == record.file_path == reference.replace("%e4%b8%ad", "%E4%B8%AD")
+    assert changed.reviewed and changed.kind == "delete"
+    assert changed.before_preview == "before /etc/hosts\n" and changed.after_preview is None
+    assert "-before /etc/hosts" in changed.diff_text
+    assert index.read_bytes() == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("alias", ["edit_directory", "before_snapshot"])
+async def test_derived_snapshot_lookup_keeps_containment(tmp_path, session_service, recorded_file_change, alias):
+    session, record, changes = recorded_file_change
+    edit = changes / "edits" / record.edit_id
+    if alias == "edit_directory":
+        for path in edit.iterdir():
+            path.unlink()
+        edit.rmdir()
+        external = tmp_path / "external-snapshots"
+        external.mkdir()
+        (external / "before.txt").write_text("SOURCE DECOY\n")
+        (external / "after.txt").write_text("SOURCE DECOY AFTER\n")
+        edit.symlink_to(external, target_is_directory=True)
+    else:
+        external = tmp_path / "external-snapshot.txt"
+        external.write_text("SOURCE DECOY\n")
+        (edit / "before.txt").unlink()
+        (edit / "before.txt").symlink_to(external)
+    reopened = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=tmp_path))
+    with pytest.raises(ForbiddenError):
+        await reopened.get_changeset(session_id=session.session_id, changeset_id="all")
+    assert not (changes / "changesets/all/summary.json").exists()

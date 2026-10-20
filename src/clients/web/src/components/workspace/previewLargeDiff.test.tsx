@@ -6,6 +6,7 @@ import WorkspaceFilePreviewArea, {
 } from "./WorkspaceFilePreviewArea";
 
 const MAX_RENDERED_DIFF_LINES = 2000;
+const FILE_URI = "boxteam://workspace/preview-diff/resources/files/root/src/big.ts";
 
 function diffTab(lineCount: number): WorkspacePreviewTab {
   const diffText = Array.from(
@@ -13,7 +14,7 @@ function diffTab(lineCount: number): WorkspacePreviewTab {
     (_, index) => (index % 2 === 0 ? `+line ${index}` : `-line ${index}`),
   ).join("\n");
   const change: SessionFileChange = {
-    file_path: "src/big.ts",
+    file_path: FILE_URI,
     kind: "edit",
     additions: 1,
     deletions: 1,
@@ -22,12 +23,11 @@ function diffTab(lineCount: number): WorkspacePreviewTab {
     tool_call_ids: [],
     execution_ids: [],
     turn_ids: [],
-    diff_file: "diff_1",
     diff_text: diffText,
   };
   return {
     previewType: "session-diff",
-    path: "src/big.ts",
+    path: FILE_URI,
     name: "big.ts",
     change,
     changesetLabel: "默认变更集",

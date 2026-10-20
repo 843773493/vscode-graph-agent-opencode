@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
 from app.schemas.internal_v2.session_changes import (
     SessionChangesetDTO,
@@ -33,9 +33,6 @@ class StoredFileEdit:
     created_at: str
     before_exists: bool
     after_exists: bool
-    before_file: str | None
-    after_file: str | None
-    diff_file: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +65,7 @@ class SessionChangesStoreProtocol(Protocol):
 
     def save_reviewed_map(self, session_id: str, reviewed: dict[str, bool]) -> None: ...
 
-    def read_relative_text(self, session_id: str, relative_path: str | None) -> str: ...
+    def read_edit_text(self, session_id: str, edit_id: str, phase: Literal["before", "after"]) -> str: ...
 
     def save_changeset_file(
         self,
@@ -79,7 +76,7 @@ class SessionChangesStoreProtocol(Protocol):
         before_content: str | None,
         after_content: str | None,
         diff_text: str,
-    ) -> tuple[str | None, str | None, str]: ...
+    ) -> None: ...
 
     def save_changeset_summary(self, changeset: SessionChangesetDTO) -> None: ...
 
