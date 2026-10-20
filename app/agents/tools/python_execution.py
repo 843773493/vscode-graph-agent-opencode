@@ -6,7 +6,6 @@ import sys
 import tempfile
 import textwrap
 from pathlib import Path
-from typing import Any
 
 from langchain_core.tools import BaseTool, tool
 
@@ -63,7 +62,7 @@ def create_python_execution_tool(session_id: str, agent_id: str = "default") -> 
     python_executable = get_python_executable()
 
     @tool("python_exec")
-    async def python_exec(code: str, timeout_seconds: int = 30) -> dict[str, Any]:
+    async def python_exec(code: str, timeout_seconds: int = 30) -> dict[str, str | int | None]:
         """使用工作区 .venv 虚拟环境中的 Python 解释器执行 Python 代码。"""
         if not code.strip():
             raise ValueError("code 不能为空")
@@ -122,7 +121,6 @@ def create_python_execution_tool(session_id: str, agent_id: str = "default") -> 
         stderr_text = stderr_bytes.decode("utf-8", errors="replace")
 
         result = {
-            "python_executable": str(python_executable),
             "returncode": process.returncode,
             "stdout": stdout_text,
             "stderr": stderr_text,
