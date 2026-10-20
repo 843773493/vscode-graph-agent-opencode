@@ -8,6 +8,7 @@ import pytest
 from langchain_core.messages import ToolMessage
 
 from app.agents.tools.apply_patch import apply_patch_text
+from app.core.hashing import sha256_hex
 from app.core.path_utils import (
     get_session_creation_service,
     get_session_path_resolver,
@@ -15,6 +16,7 @@ from app.core.path_utils import (
     initialize_directories,
     workspace_context,
 )
+from app.core.resource_uri import resource_display_uri
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_changes_service import SessionChangesService
@@ -22,7 +24,7 @@ from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.session_changes_store import SessionChangesStore
 from app.services.infrastructure.trace_event_store import TraceEventStore
-from app.services.infrastructure.workspace_files import text_publication
+from app.services.infrastructure.workspace_files import text_mutation, text_publication
 from app.services.orchestration.event_stream.processor import process_agent_event_stream
 
 
@@ -80,8 +82,79 @@ async def test_partial_patch_keeps_published_file_in_changeset(patch_changes_cas
     end = next(payload for _, payload in events if payload.get("tool_name") == "apply_patch" and "failed" in payload)
     assert end["failed"] and end["status"] == "error"
     file_edit, = end["file_edits"]
-    assert file_edit["file_path"] == "/src/patch-first.txt" and file_edit["kind"] == "create"
+    uri = resource_display_uri(scope="workspace", scope_id=load_or_create_workspace_id(root), kind="files", tail_segments=("root", "src", "patch-first.txt"))
+    assert file_edit["file_path"] == uri and file_edit["kind"] == "create"
     changeset = await changes.get_changeset(session_id=session.session_id, changeset_id="all")
     changed, = changeset.files
-    assert changed.file_path == "/src/patch-first.txt" and changed.kind == "create"
+    assert changed.file_path == uri and changed.kind == "create"
     assert "+first" in changed.diff_text and changed.after_preview == "first"
+
+
+async def test_changeset_uses_owner_postimage_when_later_writer_precedes_tool_event(patch_changes_case):
+    root, sessions, changes = patch_changes_case
+    session = await sessions.create(SessionCreateRequest(title="发布后件归属"))
+    receipt = apply_patch_text("*** Begin Patch\n*** Add File: src/observed.txt\n+first\n*** End Patch",
+        explanation="第一个调用", expected_versions={"src/observed.txt": "absent"}, workspace_root=root)
+    later = apply_patch_text("*** Begin Patch\n*** Update File: src/observed.txt\n@@\n-first\n+later\n*** End Patch",
+        explanation="稍后的writer", expected_versions={"src/observed.txt": "sha256:" + sha256_hex(b"first")}, workspace_root=root)
+    assert receipt["status"] == later["status"] == "success"
+
+    class DelayedToolEvent:
+        async def astream_events(self, _input, **kwargs):
+            metadata = kwargs["config"]["metadata"]
+            yield {"event": "on_tool_start", "run_id": "run_first", "name": "apply_patch",
+                "data": {"input": {"explanation": "第一个调用"}}, "metadata": metadata}
+            yield {"event": "on_tool_end", "run_id": "run_first", "name": "apply_patch",
+                "data": {"output": ToolMessage(content=json.dumps(receipt), name="apply_patch", tool_call_id="call_first")},
+                "metadata": metadata}
+
+    async def publish(_event, _payload):
+        return None
+
+    await process_agent_event_stream(agent=DelayedToolEvent(), input_payload={"messages": []}, config={},
+        session_id=session.session_id, job_id="job_first", turn_id="job_first", agent_id="default",
+        custom_tool_skill_sources={}, publish=publish, session_changes_service=changes, workspace_root=root)
+    changed, = (await changes.get_changeset(session_id=session.session_id, changeset_id="all")).files
+    assert changed.file_path == receipt["files"][0]["path"]
+    assert changed.after_preview == "first" and "+first" in changed.diff_text and "+later" not in changed.diff_text
+    assert (root / "src/observed.txt").read_bytes() == b"later"
+
+
+async def test_unknown_non_utf8_postimage_is_visible_without_fabricated_changeset(patch_changes_case, monkeypatch):
+    root, sessions, changes = patch_changes_case
+    session = await sessions.create(SessionCreateRequest(title="未知非文本后件"))
+    original = text_mutation.publish_file_content
+
+    def external_writer(path, content, **kwargs):
+        result = original(path, content, **kwargs)
+        path.write_bytes(b"\xffEXTERNAL")
+        return result
+
+    monkeypatch.setattr(text_mutation, "publish_file_content", external_writer)
+    receipt = apply_patch_text("*** Begin Patch\n*** Add File: unknown.txt\n+intended\n*** End Patch",
+        explanation="观察非文本后件", expected_versions={"unknown.txt": "absent"}, workspace_root=root)
+    assert receipt["effect"] == "unknown" and receipt["status"] == "error" and receipt["retryable"] is False
+    assert receipt["files"][0]["state"] == "unknown"
+    assert receipt["files"][0]["content_observation_error"] == "invalid_encoding"
+
+    class UnknownToolEvent:
+        async def astream_events(self, _input, **kwargs):
+            metadata = kwargs["config"]["metadata"]
+            yield {"event": "on_tool_start", "run_id": "run_unknown", "name": "apply_patch",
+                "data": {"input": {"explanation": "未知效果"}}, "metadata": metadata}
+            yield {"event": "on_tool_end", "run_id": "run_unknown", "name": "apply_patch",
+                "data": {"output": ToolMessage(content=json.dumps(receipt), name="apply_patch", tool_call_id="call_unknown")},
+                "metadata": metadata}
+
+    events = []
+    async def publish(event, payload):
+        events.append((event, payload))
+
+    result = await process_agent_event_stream(agent=UnknownToolEvent(), input_payload={"messages": []}, config={},
+        session_id=session.session_id, job_id="job_unknown", turn_id="job_unknown", agent_id="default",
+        custom_tool_skill_sources={}, publish=publish, session_changes_service=changes, workspace_root=root)
+    assert result.successful_tool_calls == ()
+    end = next(payload for _, payload in events if "failed" in payload)
+    assert end["failed"] and end["status"] == "error" and "unknown" in end["result"]
+    assert (await changes.get_changeset(session_id=session.session_id, changeset_id="all")).summary.files == 0
+    assert (root / "unknown.txt").read_bytes() == b"\xffEXTERNAL"

@@ -34,6 +34,7 @@ def update_text_mutation_journal(
     journal_id: str,
     publications: list[dict[str, object]],
     *,
+    observations: dict[str, dict[str, object]],
     workspace_root: Path | None = None,
 ) -> None:
     """把文本修改的逐文件发布结果追加到 journal。"""
@@ -47,6 +48,10 @@ def update_text_mutation_journal(
     if not isinstance(journal, dict):
         raise TypeError(f"text mutation journal 格式错误: {journal_path}")
     journal["files"] = publications
+    for snapshot in journal["snapshots"]:
+        observation = observations.get(snapshot["uri"])
+        if observation is not None:
+            snapshot.update(observation)
     journal_path.write_text(
         json.dumps(journal, ensure_ascii=False, indent=2),
         encoding="utf-8",

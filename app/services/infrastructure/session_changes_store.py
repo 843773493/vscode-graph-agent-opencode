@@ -7,6 +7,8 @@ from pathlib import Path
 
 from app.abstractions.session_changes import StoredFileEdit
 from app.core.path_utils import get_session_path_resolver, safe_join
+from app.core.resource_uri import parse_resource_uri
+from app.core.trace_middleware import get_current_gateway_id
 from app.schemas.internal_v2.session_changes import SessionChangesetDTO
 
 EDIT_INDEX_FILE = "index.jsonl"
@@ -22,38 +24,11 @@ class SessionChangesStore:
             self._workspace_root / ".boxteam" / "sessions"
         )
 
-    def resolve_file_path(self, file_path: str) -> tuple[str, Path]:
-        if not isinstance(file_path, str) or not file_path.strip():
-            raise ValueError("文件路径不能为空")
-        raw_path = file_path.strip()
-        candidate = Path(raw_path)
-        if candidate.is_absolute():
-            try:
-                relative = candidate.resolve().relative_to(self._workspace_root)
-                return "/" + relative.as_posix(), candidate.resolve()
-            except ValueError:
-                virtual_path = "/" + raw_path.lstrip("/")
-        else:
-            # TODO: Windows 将 /src 视为 rooted path 而非绝对路径，统一去除重复前导斜杠。
-            virtual_path = "/" + raw_path.lstrip("/")
-        if ".." in Path(virtual_path).parts or virtual_path.startswith("/~"):
-            raise ValueError(f"文件路径不能包含路径穿越: {file_path}")
-        real_path = (self._workspace_root / virtual_path.lstrip("/")).resolve()
-        try:
-            real_path.relative_to(self._workspace_root)
-        except ValueError as exc:
-            raise ValueError(f"文件路径超出工作区: {file_path}") from exc
-        return virtual_path, real_path
-
-    def read_text_if_exists(self, real_path: Path) -> str:
-        if not real_path.exists():
-            return ""
-        if not real_path.is_file():
-            raise RuntimeError(f"文件变更记录只支持普通文件: {real_path}")
-        try:
-            return real_path.read_text(encoding="utf-8")
-        except UnicodeDecodeError as exc:
-            raise RuntimeError(f"文件不是 UTF-8 文本，无法记录可读变更: {real_path}") from exc
+    def normalize_file_reference(self, file_path: str) -> str:
+        resource = parse_resource_uri(file_path, local_gateway_id=get_current_gateway_id())
+        if resource.kind != "files" or resource.scope not in {"workspace", "gateway"} or len(resource.tail_segments) < 2:
+            raise ValueError("文件变更只能引用明确的 Workspace/Gateway 文件 URI")
+        return resource.display_uri
 
     def save_edit(
         self,
@@ -108,7 +83,7 @@ class SessionChangesStore:
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"文件审查状态损坏: {reviewed_file}") from exc
         if not isinstance(raw, dict):
-            raise RuntimeError(f"文件审查状态格式错误: {reviewed_file}")
+            raise TypeError(f"文件审查状态格式错误: {reviewed_file}")
         return {str(key): value is True for key, value in raw.items()}
 
     def save_reviewed_map(self, session_id: str, reviewed: dict[str, bool]) -> None:

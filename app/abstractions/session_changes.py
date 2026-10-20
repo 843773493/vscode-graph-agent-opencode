@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Protocol
 
 from app.schemas.internal_v2.session_changes import (
@@ -13,9 +12,10 @@ from app.schemas.internal_v2.session_changes import (
 @dataclass(frozen=True, slots=True)
 class FileEditSnapshot:
     file_path: str
-    real_path: Path
     existed: bool
     content: str
+    after_exists: bool
+    after_content: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,9 +51,7 @@ class AggregatedFileChange:
 
 
 class SessionChangesStoreProtocol(Protocol):
-    def resolve_file_path(self, file_path: str) -> tuple[str, Path]: ...
-
-    def read_text_if_exists(self, real_path: Path) -> str: ...
+    def normalize_file_reference(self, file_path: str) -> str: ...
 
     def save_edit(
         self,
@@ -87,16 +85,6 @@ class SessionChangesStoreProtocol(Protocol):
 
 
 class SessionChangesRecorderProtocol(Protocol):
-    def capture_before(self, file_path: str) -> FileEditSnapshot: ...
-
-    def build_snapshot(
-        self,
-        *,
-        file_path: str,
-        existed: bool,
-        content: str,
-    ) -> FileEditSnapshot: ...
-
     async def record_tool_file_edit(
         self,
         *,

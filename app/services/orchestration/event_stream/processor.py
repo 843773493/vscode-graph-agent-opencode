@@ -669,7 +669,6 @@ async def process_agent_event_stream(
                     ):
                         snapshots = text_mutation_snapshots_from_result(
                             result_text=raw_result_text,
-                            session_changes_service=session_changes_service,
                             workspace_root=workspace_root,
                         )
                     if snapshots is not None and has_file_effects:

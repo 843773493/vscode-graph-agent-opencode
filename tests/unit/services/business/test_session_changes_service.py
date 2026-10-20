@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from app.abstractions.session_changes import FileEditSnapshot
 from app.core.path_utils import (
     get_session_changes_dir,
     get_session_creation_service,
@@ -13,6 +14,7 @@ from app.core.path_utils import (
     initialize_directories,
     workspace_context,
 )
+from app.core.resource_uri import resource_display_uri
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_changes_service import SessionChangesService
@@ -20,6 +22,11 @@ from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.session_changes_store import SessionChangesStore
 from app.services.infrastructure.trace_event_store import TraceEventStore
+
+
+def _uri(root: Path, path: str) -> str:
+    return resource_display_uri(scope="workspace", scope_id=load_or_create_workspace_id(root), kind="files",
+                                tail_segments=("root", *Path(path).parts))
 
 
 @pytest.fixture
@@ -90,7 +97,7 @@ async def test_records_readable_changesets_for_file_tools(
     target = tmp_path / "src" / "hello.txt"
     target.parent.mkdir(parents=True)
 
-    before = service.capture_before("/src/hello.txt")
+    before = FileEditSnapshot(_uri(tmp_path, "src/hello.txt"), False, "", True, "hello\nworld\n")
     target.write_text("hello\nworld\n", encoding="utf-8")
     record = await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -102,14 +109,14 @@ async def test_records_readable_changesets_for_file_tools(
     )
 
     assert record is not None
-    assert record.file_path == "/src/hello.txt"
+    assert record.file_path == _uri(tmp_path, "src/hello.txt")
     assert record.kind == "create"
 
     changes_dir = get_session_changes_dir(session.session_id)
     index_file = changes_dir / "index.jsonl"
     assert index_file.exists()
     index_record = json.loads(index_file.read_text(encoding="utf-8").strip())
-    assert index_record["file_path"] == "/src/hello.txt"
+    assert index_record["file_path"] == _uri(tmp_path, "src/hello.txt")
     assert (changes_dir / record.diff_file).exists()
 
     list_result = await service.list_changesets(session.session_id)
@@ -125,7 +132,7 @@ async def test_records_readable_changesets_for_file_tools(
     assert detail.summary.deletions == 0
     assert len(detail.files) == 1
     file_change = detail.files[0]
-    assert file_change.file_path == "/src/hello.txt"
+    assert file_change.file_path == _uri(tmp_path, "src/hello.txt")
     assert file_change.after_file is not None
     assert file_change.diff_file.endswith("diff.patch")
     assert "+hello" in file_change.diff_text
@@ -145,7 +152,7 @@ async def test_marks_file_changes_reviewed(
     )
     target = tmp_path / "notes.md"
     target.write_text("before\n", encoding="utf-8")
-    before = service.capture_before("/notes.md")
+    before = FileEditSnapshot(_uri(tmp_path, "notes.md"), True, "before\n", True, "after\n")
     target.write_text("after\n", encoding="utf-8")
     await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -158,7 +165,7 @@ async def test_marks_file_changes_reviewed(
 
     result = await service.set_file_reviewed(
         session_id=session.session_id,
-        file_path="/notes.md",
+        file_path=_uri(tmp_path, "notes.md"),
         reviewed=True,
     )
 
@@ -171,7 +178,7 @@ async def test_marks_file_changes_reviewed(
 
     await service.set_file_reviewed(
         session_id=session.session_id,
-        file_path="/notes.md",
+        file_path=_uri(tmp_path, "notes.md"),
         reviewed=False,
     )
     refreshed = await service.get_changeset(
@@ -195,7 +202,7 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
     second_file = tmp_path / "src" / "second.txt"
     first_file.parent.mkdir(parents=True)
 
-    before_first_create = service.capture_before("/src/first.txt")
+    before_first_create = FileEditSnapshot(_uri(tmp_path, "src/first.txt"), False, "", True, "one\n")
     first_file.write_text("one\n", encoding="utf-8")
     await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -206,7 +213,7 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
         before=before_first_create,
     )
 
-    before_first_edit = service.capture_before("/src/first.txt")
+    before_first_edit = FileEditSnapshot(_uri(tmp_path, "src/first.txt"), True, "one\n", True, "one\ntwo\n")
     first_file.write_text("one\ntwo\n", encoding="utf-8")
     await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -217,7 +224,7 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
         before=before_first_edit,
     )
 
-    before_second_create = service.capture_before("/src/second.txt")
+    before_second_create = FileEditSnapshot(_uri(tmp_path, "src/second.txt"), False, "", True, "second\n")
     second_file.write_text("second\n", encoding="utf-8")
     await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -228,7 +235,7 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
         before=before_second_create,
     )
 
-    before_second_turn = service.capture_before("/src/first.txt")
+    before_second_turn = FileEditSnapshot(_uri(tmp_path, "src/first.txt"), True, "one\ntwo\n", True, "one\ntwo\nthree\n")
     first_file.write_text("one\ntwo\nthree\n", encoding="utf-8")
     await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -255,8 +262,8 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
     assert all_changes.summary.additions == 4
     assert all_changes.summary.deletions == 0
     assert [file.file_path for file in all_changes.files] == [
-        "/src/first.txt",
-        "/src/second.txt",
+        _uri(tmp_path, "src/first.txt"),
+        _uri(tmp_path, "src/second.txt"),
     ]
     first_change = all_changes.files[0]
     assert first_change.tool_call_ids == [
@@ -279,8 +286,8 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
     assert first_turn.summary.files == 2
     assert first_turn.summary.additions == 3
     assert [file.file_path for file in first_turn.files] == [
-        "/src/first.txt",
-        "/src/second.txt",
+        _uri(tmp_path, "src/first.txt"),
+        _uri(tmp_path, "src/second.txt"),
     ]
 
     second_turn = await service.get_changeset(
@@ -290,7 +297,7 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
     assert second_turn.summary.files == 1
     assert second_turn.summary.additions == 1
     assert second_turn.summary.deletions == 0
-    assert second_turn.files[0].file_path == "/src/first.txt"
+    assert second_turn.files[0].file_path == _uri(tmp_path, "src/first.txt")
     assert "+three" in second_turn.files[0].diff_text
 
 
@@ -308,7 +315,7 @@ async def test_counts_changed_lines_that_start_with_diff_prefixes(
     target = tmp_path / "src" / "counter.txt"
     target.parent.mkdir(parents=True)
 
-    before = service.capture_before("/src/counter.txt")
+    before = FileEditSnapshot(_uri(tmp_path, "src/counter.txt"), False, "", True, "++added\n--removed\n")
     target.write_text("++added\n--removed\n", encoding="utf-8")
     record = await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -342,7 +349,7 @@ async def test_internal_file_edits_stay_in_all_changes_and_have_no_turn_changese
         store=SessionChangesStore(workspace_root=tmp_path),
     )
     target = tmp_path / "internal.txt"
-    before = service.capture_before("/internal.txt")
+    before = FileEditSnapshot(_uri(tmp_path, "internal.txt"), False, "", True, "internal output\n")
     target.write_text("internal output\n", encoding="utf-8")
 
     record = await service.record_tool_file_edit(
@@ -370,3 +377,26 @@ async def test_internal_file_edits_stay_in_all_changes_and_have_no_turn_changese
         changeset_id="turn:execution_internal",
     )
     assert turn_changes.summary.files == 0
+
+
+@pytest.mark.asyncio
+async def test_remote_observation_is_recorded_without_reading_source_decoy(tmp_path, session_service):
+    session = await session_service.create(SessionCreateRequest(title="固定目标变更"))
+    service = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=tmp_path))
+    decoy = tmp_path / "same.txt"
+    decoy.write_text("SOURCE DECOY\n", encoding="utf-8")
+    remote_uri = resource_display_uri(scope="workspace", scope_id="0191f2ab-1234-7abc-8def-0123456789ab",
+        kind="files", tail_segments=("root", "same.txt"), gateway_authority="gateway_0123456789abcdef0123456789abcdef")
+    record = await service.record_tool_file_edit(session_id=session.session_id, turn_id="turn_remote", tool_call_id="call_remote",
+        execution_id="run_remote", tool_name="edit_file",
+        before=FileEditSnapshot(remote_uri, True, "TARGET BEFORE\n", True, "TARGET AFTER\n"))
+    assert record is not None and record.file_path == remote_uri
+    changed, = (await service.get_changeset(session_id=session.session_id, changeset_id="all")).files
+    assert changed.file_path == remote_uri
+    assert "-TARGET BEFORE" in changed.diff_text and "+TARGET AFTER" in changed.diff_text
+    assert "SOURCE DECOY" not in changed.diff_text
+    assert decoy.read_text() == "SOURCE DECOY\n"
+    reviewed = await service.set_file_reviewed(session_id=session.session_id, file_path=remote_uri, reviewed=True)
+    assert reviewed.file_path == remote_uri and reviewed.reviewed
+    with pytest.raises(ValueError):
+        await service.set_file_reviewed(session_id=session.session_id, file_path="/same.txt", reviewed=True)

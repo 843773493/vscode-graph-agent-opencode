@@ -41,30 +41,6 @@ class SessionChangesService:
         self._session_service = session_service
         self._store = store
 
-    def capture_before(self, file_path: str) -> FileEditSnapshot:
-        virtual_path, real_path = self._store.resolve_file_path(file_path)
-        return FileEditSnapshot(
-            file_path=virtual_path,
-            real_path=real_path,
-            existed=real_path.exists(),
-            content=self._store.read_text_if_exists(real_path),
-        )
-
-    def build_snapshot(
-        self,
-        *,
-        file_path: str,
-        existed: bool,
-        content: str,
-    ) -> FileEditSnapshot:
-        virtual_path, real_path = self._store.resolve_file_path(file_path)
-        return FileEditSnapshot(
-            file_path=virtual_path,
-            real_path=real_path,
-            existed=existed,
-            content=content,
-        )
-
     async def record_tool_file_edit(
         self,
         *,
@@ -76,13 +52,14 @@ class SessionChangesService:
         before: FileEditSnapshot,
     ) -> StoredFileEdit | None:
         await self._session_service.get(session_id)
-        after_content = self._store.read_text_if_exists(before.real_path)
-        after_exists = before.real_path.exists()
+        file_path = self._store.normalize_file_reference(before.file_path)
+        after_content = before.after_content
+        after_exists = before.after_exists
         if before.existed == after_exists and before.content == after_content:
             return None
 
         diff_text = build_unified_diff(
-            file_path=before.file_path,
+            file_path=file_path,
             before_content=before.content if before.existed else "",
             after_content=after_content if after_exists else "",
         )
@@ -91,7 +68,7 @@ class SessionChangesService:
             turn_id=turn_id,
             execution_id=execution_id,
             tool_call_id=tool_call_id,
-            file_path=before.file_path,
+            file_path=file_path,
         )
         record = StoredFileEdit(
             edit_id=edit_id,
@@ -100,7 +77,7 @@ class SessionChangesService:
             tool_call_id=tool_call_id,
             execution_id=execution_id,
             tool_name=tool_name,
-            file_path=before.file_path,
+            file_path=file_path,
             kind=detect_change_kind(
                 before_exists=before.existed,
                 after_exists=after_exists,
@@ -173,7 +150,7 @@ class SessionChangesService:
         reviewed: bool,
     ) -> SessionFileReviewResultDTO:
         await self._session_service.get(session_id)
-        normalized_path, _ = self._store.resolve_file_path(file_path)
+        normalized_path = self._store.normalize_file_reference(file_path)
         reviewed_map = self._store.read_reviewed_map(session_id)
         if reviewed:
             reviewed_map[normalized_path] = True

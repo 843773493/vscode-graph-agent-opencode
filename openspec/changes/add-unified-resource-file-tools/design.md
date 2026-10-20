@@ -58,6 +58,8 @@ write/edit/patch 的内容前置使用精确原始 byte `sha256:<hex>` 或该 ow
 
 ### 5. 执行结果与寻址拒绝分开
 
+后续变更记录切片将 journal 扩为文件 owner 在锁内采集的原件及最终观察到的后件，SessionChanges 不再在延迟事件消费时重读当前文件，也不解析实际宿主路径。它仅按规范文件 URI 聚合和保存 owner 提供的内容；后件不可读或非UTF-8时，在工具逐路径回执和journal中保留观察错误与未知效果，不从本机同名文件猜造diff。changeset、审查请求和审查回执中的 file_path 统一承载文件 URI；移除旧绝对/虚拟路径混用的定位回退。原内容、操作类型、调用/执行/Turn身份及审查行为不变，不迁移旧开发记录、不留双读。这为后续远端写入记录提供正确消费边界，不能代替远端执行验收。
+
 2026-10-20 普通 write_file/edit_file 与 apply_patch 已统一到 `workspace_files/text_mutation.py`，旧 DeepAgents 普通写入调用与补丁私有 journal 已删除。write_file 只做显式 absent 创建，edit_file 使用先前 read_file 的原字节 hash 做精确替换；字符串不唯一须显式 replace_all。三者均在同一短锁内校验全部文件的写权限与预期版本、捕获原件、准备结果后发布；Web 保存继续共用该锁及底层发布原语，保留其同步 expected_revision 合同。SessionChanges 仅从该锁内 journal 获取原件和 published/unknown 路径，失败不伪报成功；有会话的 journal 由统一解析器存入所属会话 changes/text_mutations，独立工具测试仅使用其显式工作区缓存。原字节/BOM/换行保留，普通响应仅含 URI。工具能力面登记 graph revision13，旧图明确拒绝；远端 mutation、取消确认和丢响应仍按独立任务验收。
 
 2026-10-20 条件补丁切片已将原执行与自动回滚链物理替换为共享 mutation lock、原字节 preimage 和单文件发布原语。`expected_versions` 必填且精确覆盖补丁所有相对路径，移动包含源和目的；每项取先前读取的 `sha256:<hex>` 或明确 `absent`。固定根支持工作区相对路径、目标原生绝对路径和 Workspace files URI，补丁内仍只允许根下相对文件名；整批先校验版本、文本、路径别名、祖先冲突和现有父目录，再写 journal 和逐路径发布。新文件使用独占创建，已有文件原子替换，删除后核实不存在；保留 BOM、纯 CRLF 与原文件 mode。失败停止后续发布，不恢复已发布文件；最终回执给出 `published/not_published/not_attempted/unknown`、预期/目标/实际原字节版本，`retryable=false`。相同字节的外部竞争及发布后恢复原件不能冒充已确认发布或确定未执行。事件流即使收到失败回执，也把已发布或未知路径交原 SessionChanges owner，未尝试路径不进入 changeset；旧 `verification` 第二回执和反向恢复实现已删除。异步工具保留原事件循环上的生命周期回调，仅文件执行交工作线程，避免同步 StructuredTool 在另一个事件循环等待工具开始身份。远端补丁仍以具名 TODO 明确拒绝，write/edit 和取消/响应丢失闭包继续后续实施。

@@ -37,7 +37,6 @@ _VERSION = re.compile(r"(?:absent|sha256:[0-9a-f]{64})\Z")
 
 @dataclass(frozen=True, slots=True)
 class FileSnapshot:
-    virtual_path: str
     uri: str
     real_path: Path
     before: FilePreimage | None
@@ -89,7 +88,7 @@ def execute_text_mutation(*, paths: WorkspaceFilePaths, target: str, declared: l
             validate_text_paths(declared, root)
             if set(expected_versions) != set(declared):
                 raise ValueError("expected_versions 必须精确覆盖全部文件路径，包含移动的源与目的")
-            snapshots = _capture_snapshots(declared, root, workspace, paths, expected_versions, authorize)
+            snapshots = _capture_snapshots(declared, root, paths, expected_versions, authorize)
             steps = prepare(snapshots)
             touched: set[str] = set()
             for step in steps:
@@ -102,13 +101,13 @@ def execute_text_mutation(*, paths: WorkspaceFilePaths, target: str, declared: l
                        (step.snapshot.before is not None and step.snapshot.before.content != step.content) for step in steps):
                 raise ValueError("文本修改校验失败: 工作区文件字节未发生变化")
             journal_id = write_text_mutation_journal([
-                {"file_path": item.virtual_path, "uri": item.uri, "before_exists": item.before is not None,
+                {"uri": item.uri, "before_exists": item.before is not None,
                  "before_content": "" if item.before is None else item.before.content.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")}
                 for item in snapshots.values()
             ], workspace_root=workspace)
-            publications, failure = _publish_steps(steps)
+            publications, observations, failure = _publish_steps(steps)
             try:
-                update_text_mutation_journal(journal_id, publications, workspace_root=workspace)
+                update_text_mutation_journal(journal_id, publications, observations=observations, workspace_root=workspace)
             except (OSError, RuntimeError, ValueError) as error:
                 failure = error
             states = {item["state"] for item in publications}
@@ -132,7 +131,7 @@ def execute_text_mutation(*, paths: WorkspaceFilePaths, target: str, declared: l
     return result
 
 
-def _capture_snapshots(names: list[str], root: Path, workspace: Path, paths: WorkspaceFilePaths,
+def _capture_snapshots(names: list[str], root: Path, paths: WorkspaceFilePaths,
                        expected: dict[str, str], authorize: Callable[[str], None] | None) -> dict[str, FileSnapshot]:
     snapshots = {}
     for name in names:
@@ -149,14 +148,14 @@ def _capture_snapshots(names: list[str], root: Path, workspace: Path, paths: Wor
             if b"\x00" in before.content:
                 raise ValueError(f"补丁目标不是文本文件: {uri}")
             before.content.decode("utf-8")
-        snapshot = FileSnapshot("/" + path.relative_to(workspace).as_posix(), uri, path, before)
+        snapshot = FileSnapshot(uri, path, before)
         if snapshot.version != version:
             raise WorkspaceFileConflictError(f"补丁目标版本冲突，请重新读取: {uri}; expected={version}; actual={snapshot.version}")
         snapshots[name] = snapshot
     return snapshots
 
 
-def _publish_steps(steps: list[TextPublication]) -> tuple[list[dict[str, object]], Exception | None]:
+def _publish_steps(steps: list[TextPublication]) -> tuple[list[dict[str, object]], dict[str, dict[str, object]], Exception | None]:
     attempted = 0
     failure: Exception | None = None
     confirmed: set[int] = set()
@@ -178,8 +177,20 @@ def _publish_steps(steps: list[TextPublication]) -> tuple[list[dict[str, object]
                 unverified.add(attempted - 1)
             break
     publications = []
+    observations = {}
     for index, step in enumerate(steps):
-        observed, observation_error = _observe(step.snapshot)
+        after, observation_error = _observe(step.snapshot)
+        observed = None if observation_error is not None else "absent" if after is None else after.content_hash
+        if observation_error is None:
+            try:
+                text = "" if after is None else after.content.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+            except UnicodeError:
+                # 外部 writer 发布了非文本；保留实际 hash 和未知效果，不能伪造可读 diff。
+                observations[step.snapshot.uri] = {"after_error": "invalid_encoding"}
+            else:
+                observations[step.snapshot.uri] = {"after_exists": after is not None, "after_content": text}
+        else:
+            observations[step.snapshot.uri] = {"after_error": type(observation_error).__name__}
         after_version = "absent" if step.content is None else "sha256:" + sha256_hex(step.content)
         if index >= attempted:
             state = "not_attempted"
@@ -197,14 +208,16 @@ def _publish_steps(steps: list[TextPublication]) -> tuple[list[dict[str, object]
                              "expected_version": step.snapshot.version, "intended_version": after_version,
                              "exists": None if observed is None else observed != "absent",
                              "content_hash": observed if observed != "absent" else None})
-    return publications, failure
+        if observations[step.snapshot.uri].get("after_error"):
+            publications[-1]["content_observation_error"] = observations[step.snapshot.uri]["after_error"]
+    return publications, observations, failure
 
 
-def _observe(snapshot: FileSnapshot) -> tuple[str | None, Exception | None]:
+def _observe(snapshot: FileSnapshot) -> tuple[FilePreimage | None, Exception | None]:
     try:
         if not snapshot.real_path.exists() and not snapshot.real_path.is_symlink():
-            return "absent", None
-        return read_file_preimage(snapshot.real_path, reference=snapshot.uri, max_bytes=_MAX_FILE_BYTES).content_hash, None
+            return None, None
+        return read_file_preimage(snapshot.real_path, reference=snapshot.uri, max_bytes=_MAX_FILE_BYTES), None
     except (OSError, RuntimeError, ValueError) as error:
         return None, error
 

@@ -13,7 +13,6 @@ from langgraph.types import Command
 
 from app.abstractions.session_changes import (
     FileEditSnapshot,
-    SessionChangesRecorderProtocol,
     StoredFileEdit,
 )
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
@@ -151,7 +150,6 @@ def stored_edit_payload(record: StoredFileEdit) -> dict[str, object]:
 def text_mutation_snapshots_from_result(
     *,
     result_text: str,
-    session_changes_service: SessionChangesRecorderProtocol,
     workspace_root: Path,
 ) -> list[FileEditSnapshot]:
     snapshots: list[FileEditSnapshot] = []
@@ -163,20 +161,31 @@ def text_mutation_snapshots_from_result(
     ):
         if raw_snapshot.get("uri") not in changed:
             continue
-        file_path = raw_snapshot.get("file_path")
+        file_path = raw_snapshot.get("uri")
         before_exists = raw_snapshot.get("before_exists")
         before_content = raw_snapshot.get("before_content")
+        after_exists = raw_snapshot.get("after_exists")
+        after_content = raw_snapshot.get("after_content")
         if not isinstance(file_path, str):
-            raise TypeError("文本修改 journal 快照缺少 file_path")
+            raise TypeError("文本修改 journal 快照缺少 uri")
         if not isinstance(before_exists, bool):
             raise TypeError(f"文本修改 journal 快照 {file_path} 缺少 before_exists")
         if not isinstance(before_content, str):
             raise TypeError(f"文本修改 journal 快照 {file_path} 缺少 before_content")
+        if after_exists is None and after_content is None:
+            # 工具回执已披露未知效果；没有可核实的后件时不能从本机猜造 diff。
+            if raw_snapshot.get("after_error"):
+                continue
+            raise RuntimeError(f"文本修改 journal 快照 {file_path} 缺少后件或观察错误")
+        if not isinstance(after_exists, bool) or not isinstance(after_content, str):
+            raise TypeError(f"文本修改 journal 快照 {file_path} 的后件无效")
         snapshots.append(
-            session_changes_service.build_snapshot(
+            FileEditSnapshot(
                 file_path=file_path,
                 existed=before_exists,
                 content=before_content,
+                after_exists=after_exists,
+                after_content=after_content,
             )
         )
     return snapshots

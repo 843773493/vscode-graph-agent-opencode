@@ -8,9 +8,15 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.core.resource_uri import resource_display_uri
+from app.core.workspace_identity import read_workspace_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.sse import read_sse_events_until
 from tests.support.trace import get_trace_payload
+
+
+def _file_uri(root: Path, name: str) -> str:
+    return resource_display_uri(scope="workspace", scope_id=read_workspace_id(root), kind="files", tail_segments=("root", name))
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +108,7 @@ async def test_model_uses_apply_patch_update_hunk(
     assert changeset_response.status_code == 200
     changeset = changeset_response.json()["data"]
     assert changeset["summary"]["files"] == 1
-    assert changeset["files"][0]["file_path"] == "/apply_patch_model_target.txt"
+    assert changeset["files"][0]["file_path"] == _file_uri(workspace_root, "apply_patch_model_target.txt")
     assert changeset["files"][0]["tool_call_ids"]
     assert "+gamma" in changeset["files"][0]["diff_text"]
     assert "+delta" in changeset["files"][0]["diff_text"]
@@ -142,7 +148,7 @@ async def test_model_uses_one_apply_patch_for_add_and_delete(
     paths = {
         item["file_path"] for item in changeset_response.json()["data"]["files"]
     }
-    assert paths == {"/apply_patch_delete_me.txt", "/apply_patch_created.txt"}
+    assert paths == {_file_uri(workspace_root, "apply_patch_delete_me.txt"), _file_uri(workspace_root, "apply_patch_created.txt")}
 
 
 @pytest.mark.asyncio
@@ -194,4 +200,4 @@ class Second:
     paths = {
         item["file_path"] for item in changeset_response.json()["data"]["files"]
     }
-    assert paths == {"/apply_patch_classes.py", "/apply_patch_renamed.py"}
+    assert paths == {_file_uri(workspace_root, "apply_patch_classes.py"), _file_uri(workspace_root, "apply_patch_renamed.py")}

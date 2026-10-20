@@ -282,6 +282,9 @@ async def test_model_conditional_patch_preserves_file_operations_and_changesets(
     response = await source.client.get(f"/api/v1/sessions/{session}/changesets/all")
     assert response.status_code == 200, response.text
     changes = {item["file_path"]: item for item in response.json()["data"]["files"]}
+    expected_paths = {root + "/" + name for name in ("patch-source.txt", "patch-destination.txt", "patch-delete.txt", "patch-created.txt", "written.txt")}
+    assert set(changes) == expected_paths
+    changes = {"/src/" + path.rsplit("/", 1)[1]: value for path, value in changes.items()}
     assert set(changes) == {"/src/patch-source.txt", "/src/patch-destination.txt", "/src/patch-delete.txt", "/src/patch-created.txt", "/src/written.txt"}
     assert changes["/src/patch-source.txt"]["kind"] == changes["/src/patch-delete.txt"]["kind"] == "delete"
     assert changes["/src/patch-destination.txt"]["kind"] == changes["/src/patch-created.txt"]["kind"] == "create"
@@ -295,6 +298,14 @@ async def test_model_conditional_patch_preserves_file_operations_and_changesets(
     assert len(journals) == 3
     assert all(json.loads(path.read_text())["files"] for path in journals)
     assert not list((source.workspace / ".boxteam/cache/text_mutations").glob("*.json"))
+    file_uri = root + "/patch-created.txt"
+    review = await source.client.post(f"/api/v1/sessions/{session}/changesets/all/review",
+        json={"file_path": file_uri, "reviewed": True})
+    assert review.status_code == 200, review.text
+    assert review.json()["data"]["file_path"] == file_uri and review.json()["data"]["reviewed"]
+    refreshed = await source.client.get(f"/api/v1/sessions/{session}/changesets/all")
+    reviewed = next(item for item in refreshed.json()["data"]["files"] if item["file_path"] == file_uri)
+    assert reviewed["reviewed"] is True and "+edited" in reviewed["diff_text"]
     wire = json.dumps(model.requests)
     assert all(str(node.workspace) not in wire for node in nodes.values())
     (artifacts / "model-conditional-patch.json").write_text(json.dumps({"receipt": receipt, "changeset": response.json()}, ensure_ascii=False, indent=2) + "\n")

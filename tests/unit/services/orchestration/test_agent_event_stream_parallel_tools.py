@@ -299,9 +299,6 @@ class SlowlyStreamingModelAgent:
 
 
 class FakeSessionChangesService:
-    def capture_before(self, file_path: str) -> object:
-        raise AssertionError(f"本测试不应捕获文件快照: {file_path}")
-
     async def record_tool_file_edit(self, **kwargs: Any) -> object:
         raise AssertionError(f"本测试不应记录文件修改: {kwargs}")
 
@@ -309,9 +306,6 @@ class FakeSessionChangesService:
 class RecordingSessionChangesService:
     def __init__(self) -> None:
         self.recorded: list[dict[str, Any]] = []
-
-    def build_snapshot(self, *, file_path: str, existed: bool, content: str) -> object:
-        return {"file_path": file_path, "existed": existed, "content": content}
 
     async def record_tool_file_edit(self, **kwargs: Any) -> None:
         self.recorded.append(kwargs)
@@ -1958,7 +1952,7 @@ async def test_successful_tool_call_keeps_arguments_for_delegation_validation(
 
 def _file_mutation_receipt(root: Path, path: str) -> str:
     uri = resource_display_uri(scope="workspace", scope_id=load_or_create_workspace_id(root), kind="files", tail_segments=("root", *Path(path).parts))
-    journal = write_text_mutation_journal([{"file_path": "/" + path, "uri": uri, "before_exists": False, "before_content": ""}], workspace_root=root)
+    journal = write_text_mutation_journal([{"uri": uri, "before_exists": False, "before_content": "", "after_exists": True, "after_content": "ok"}], workspace_root=root)
     return json.dumps({"status": "success", "effect": "completed", "journal_id": journal, "files": [{"path": uri, "state": "published"}]})
 
 

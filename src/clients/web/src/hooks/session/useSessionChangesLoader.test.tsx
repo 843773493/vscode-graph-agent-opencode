@@ -15,6 +15,8 @@ import {
 
 afterEach(restoreSessionHookGlobals);
 
+const FILE_URI = "boxteam://workspace/0191f2ab-1234-7abc-8def-0123456789ab/resources/files/root/src/a.ts";
+
 function session(): Session {
   return {
     session_id: "ses_changes_loader",
@@ -72,8 +74,9 @@ async function mountChangesLoader(currentSession: Session, apiPort: number) {
 describe("会话文件变更请求协调", () => {
   test("标记已审查失败时必须给出带原因的可见诊断", async () => {
     const currentSession = session();
-    installGatewayFetch(({ path }) => {
+    installGatewayFetch(({ path, init }) => {
       if (path.endsWith("/review")) {
+        expect(JSON.parse(String(init?.body))).toEqual({ file_path: FILE_URI, reviewed: true });
         return errorResponse(500, "审查后端崩溃");
       }
       return undefined;
@@ -81,7 +84,7 @@ describe("会话文件变更请求协调", () => {
 
     const mounted = await mountChangesLoader(currentSession, 49_403);
     await mounted.loader().reviewSessionChangeFile(
-      { file_path: "src/a.ts", reviewed: false } as never,
+      { file_path: FILE_URI, reviewed: false } as never,
       true,
     ).catch(() => undefined);
 
@@ -225,7 +228,7 @@ describe("会话文件变更请求协调", () => {
 
     // 在会话 A 上发起审查，请求一直挂在途。
     const review = loader!.reviewSessionChangeFile(
-      { file_path: "src/a.ts", reviewed: false } as never,
+      { file_path: FILE_URI, reviewed: false } as never,
       true,
     ).catch(() => undefined);
     // 请求仍在途时切到会话 B：AppState 的 currentSession 与 hook 入参一起切换。
