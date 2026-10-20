@@ -254,7 +254,7 @@ export class BrowserManager {
         this.stateWriteRequested = false;
         await this.stateStore.write({
           updated_at: nowIso(),
-          browsers: [...this.sessions.values()].map((session) => session.snapshot()),
+          browsers: [...this.sessions.values()].map((session) => session.toRecord()),
         });
       }
     } finally {

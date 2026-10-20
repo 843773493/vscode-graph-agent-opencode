@@ -1288,6 +1288,68 @@ export class BrowserSession extends EventEmitter {
     }
   }
 
+  /** 保存本资源的恢复事实；展示配置、连接和实时统计只由snapshot临时组装。 */
+  toRecord() {
+    return {
+      active_operation: this.record.active_operation,
+      actual_url: this.record.actual_url,
+      agent_access_locked: this.record.agent_access_locked,
+      agent_lock_expires_at: this.record.agent_lock_expires_at,
+      agent_lock_owner_id: this.record.agent_lock_owner_id,
+      agent_lock_updated_at: this.record.agent_lock_updated_at,
+      browser_id: this.record.browser_id,
+      checkpoint: this.record.checkpoint,
+      created_at: this.record.created_at,
+      device_orientation: this.record.device_orientation,
+      device_presets: this.record.device_presets,
+      device_profile: this.record.device_profile,
+      device_scale_factor: this.record.device_scale_factor,
+      device_scale_factor_override: this.record.device_scale_factor_override,
+      discarded_at: this.record.discarded_at,
+      discarded_pages: this.record.discarded_pages,
+      document_revision: this.documentRevision,
+      download_error: this.record.download_error,
+      downloads: this.record.downloads,
+      ended_at: this.record.ended_at,
+      error_message: this.record.error_message,
+      frozen_at: this.record.frozen_at,
+      last_agent_operation_at: this.record.last_agent_operation_at,
+      last_attach_at: this.record.last_attach_at,
+      last_attach_first_frame_ms: this.record.last_attach_first_frame_ms,
+      last_detach_at: this.record.last_detach_at,
+      last_network_activity_at: this.record.last_network_activity_at,
+      last_operation: this.record.last_operation,
+      last_user_interaction_at: this.record.last_user_interaction_at,
+      last_wake_at: this.record.last_wake_at,
+      last_websocket_activity_at: this.record.last_websocket_activity_at,
+      navigation_error: this.record.navigation_error,
+      network_profile_id: this.record.network_profile_id,
+      operation_revision: this.operationQueue.operationRevision,
+      page_id: this.record.page_id,
+      reconciliation_status: this.record.status === "lost" ? "unknown" : this.record.reconciliation_status,
+      release_reason: this.record.release_reason,
+      resource_policy: this.record.resource_policy,
+      resource_state: this.record.resource_state,
+      resource_transition_error: this.record.resource_transition_error,
+      resource_transition_reason: this.record.resource_transition_reason,
+      runtime_generation: this.chromiumInstanceGeneration ?? this.record.runtime_generation ?? null,
+      sequence: this.record.sequence,
+      started_at: this.record.started_at,
+      status: this.record.status,
+      stream_error: this.record.stream_error,
+      title: this.record.title,
+      touch_simulation_enabled: this.record.touch_simulation_enabled,
+      touch_simulation_override: this.record.touch_simulation_override,
+      transport_owner_revision: this.transportOwnerRevision,
+      updated_at: this.record.updated_at,
+      url: this.record.url,
+      user_agent_override: this.record.user_agent_override,
+      viewport: this.record.viewport,
+      viewport_override: this.record.viewport_override,
+      workspace_id: this.record.workspace_id,
+    };
+  }
+
   snapshot() {
     const agentLockExpiresAtUnixMs = Date.parse(this.record.agent_lock_expires_at || "");
     const agentLockActive = this.record.agent_access_locked === true

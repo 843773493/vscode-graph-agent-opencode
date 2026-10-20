@@ -34,6 +34,8 @@ server/
 
 Manager 的状态文件保存只有一个写入者：同轮请求合并，写入期间的更新置为待保存，再取一份当前状态串行写入。所有等待方在待保存请求排空后才成功返回；快照生成或文件写入失败原样交给等待方，并释放在途 Promise，不能静默重试或让后续保存永久卡在旧失败上。合并的是完整状态保存，不合并业务操作或检查点。
 
+Session的`toRecord()`显式组装恢复事实，供Manager写入状态文件；文档与操作序号、传输授权版本及最近运行时代际取当前宿主事实。`snapshot()`仍负责对外完整展示，其中设备配置列表、参与者、当前页面、保护派生和逐连接流统计不再为保存而计算或写入。恢复事实保留设备覆盖、下载身份、操作结果和生命周期时间；实时连接数在恢复后从当前句柄取得，不能用磁盘上的观察值恢复连接。
+
 StateStore的`checkpointOperationTail`串行管理检查点读取、写入、删除和配额查询，不只是写队列；`checkpointSizeBytesByBrowserId`按浏览器ID记录磁盘文件字节数，包含JSON末尾换行。它只用于配额和目录大小变化检查，不能证明内容版本或检测同字节数的正文改写；不另建内容身份或版本来源。
 
 操作与授权有两种独立版本：队列的 `operationRevision` 是排队时分配的操作序号，对外为 `operation_revision`，不表示完成顺序；`transportOwnerRevision` 是接纳操作时冻结的传输授权版本，从 Manager 的一次性 grant 传到连接、Session 和队列，异步操作前后均与当前 owner 版本比较。公开传输 API 沿用 `owner_revision`，Session 状态沿用 `transport_owner_revision`；内部不要用无修饰的 `revision` 混指这两种事实。

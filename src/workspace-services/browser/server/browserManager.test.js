@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { BrowserManager, BrowserTransportGrantRejected } from "./browserManager.js";
@@ -16,7 +16,7 @@ function createBrowserManagerWithStateWriter(writer, options = {}) {
   mkdirSync(path.join(workspaceRoot, ".boxteam"), { recursive: true });
   writeFileSync(path.join(workspaceRoot, ".boxteam/workspace-identity.json"), JSON.stringify({ workspace_id: WORKSPACE_ID }));
   const manager = new BrowserManager({ workspaceRoot, workspaceId: WORKSPACE_ID, ...options });
-  manager.stateStore.write = writer;
+  if (writer !== null) manager.stateStore.write = writer;
   return manager;
 }
 function createOptions() {
@@ -24,6 +24,61 @@ function createOptions() {
 }
 
 describe("浏览器状态持久化", () => {
+  test("保存恢复记录不调用展示快照，真实落盘后重建同一资源快照", async () => {
+    const manager = createBrowserManagerWithStateWriter(null);
+    const session = new BrowserSession({ manager, record: {
+      browser_id: "browser_0123456789abcdef0123456789abcdef",
+      workspace_id: WORKSPACE_ID,
+      status: "closed",
+      reconciliation_status: "verified",
+      transport_owner_revision: 1,
+      document_revision: 2,
+      operation_revision: 3,
+      runtime_generation: 4,
+      title: "恢复事实",
+      url: "https://example.test/preserved",
+      created_at: "2026-10-20T00:00:00.000Z",
+      updated_at: "2026-10-20T00:00:01.000Z",
+      device_profile: "iphone-13",
+      device_orientation: "landscape",
+      viewport_override: { width: 800, height: 600 },
+      device_scale_factor_override: 2,
+      network_profile_id: "slow-3g",
+      downloads: [{ download_id: "download_abc123", filename: "报告.txt", status: "completed" }],
+      last_operation: { operation_id: "op_saved", operation_revision: 12, status: "completed" },
+      active_operation: null,
+      client_count: 99,
+      device_profiles: [{ id: "不应回存的展示副本" }],
+    } });
+    session.transportOwnerRevision = 5;
+    session.documentRevision = 17;
+    session.operationQueue.operationRevision = 13;
+    session.chromiumInstanceGeneration = 7;
+    const expected = structuredClone(session.snapshot());
+    manager.sessions.set(session.id, session);
+    session.snapshot = () => { throw new Error("持久化不能计算展示快照"); };
+
+    await manager.persist();
+
+    const stored = JSON.parse(readFileSync(manager.stateStore.stateFile, "utf8")).browsers[0];
+    expect(stored).toMatchObject({
+      browser_id: session.id,
+      transport_owner_revision: 5,
+      document_revision: 17,
+      operation_revision: 13,
+      runtime_generation: 7,
+      downloads: expected.downloads,
+      last_operation: expected.last_operation,
+    });
+    for (const derived of ["client_count", "device_emulation", "device_profiles", "network_profiles", "participants", "pages", "active_page_id", "stream_metrics", "resource_protections", "pending_dialog", "pending_file_chooser"]) {
+      expect(Object.hasOwn(stored, derived)).toBe(false);
+    }
+    const restored = new BrowserManager({ workspaceRoot: manager.workspaceRoot, workspaceId: WORKSPACE_ID });
+    await restored.init();
+
+    expect(restored.get(session.id).snapshot()).toEqual(expected);
+  });
+
   test("重启时将带检查点的冻结浏览器恢复为可懒加载资源", async () => {
     const manager = createBrowserManagerWithStateWriter(async () => undefined);
     manager.stateStore.readRecords = async () => [{
@@ -164,7 +219,7 @@ describe("浏览器状态持久化", () => {
       }
       active -= 1;
     });
-    manager.sessions.set("browser_updates", { snapshot: () => ({ version }) });
+    manager.sessions.set("browser_updates", { toRecord: () => ({ version }) });
     const requests = [manager.persist().then(() => { settled += 1; })];
     try {
       await firstEntered.promise;
@@ -199,7 +254,7 @@ describe("浏览器状态持久化", () => {
       entered[index].resolve();
       await release[index].promise;
     });
-    manager.sessions.set("browser_updates", { snapshot: () => ({ version }) });
+    manager.sessions.set("browser_updates", { toRecord: () => ({ version }) });
     const requests = [manager.persist()];
     try {
       await entered[0].promise;
@@ -220,7 +275,7 @@ describe("浏览器状态持久化", () => {
     }
   });
 
-  test.each(["snapshot", "sync_writer", "async_writer"])("%s失败传给全部等待方，修复后可再次保存", async (failureStage) => {
+  test.each(["record", "sync_writer", "async_writer"])("%s失败传给全部等待方，修复后可再次保存", async (failureStage) => {
     const failure = new Error(`保存失败: ${failureStage}`);
     let shouldFail = true;
     let saved = null;
@@ -230,8 +285,8 @@ describe("浏览器状态持久化", () => {
       saved = structuredClone(payload.browsers);
       return Promise.resolve();
     });
-    manager.sessions.set("browser_failure", { snapshot: () => {
-      if (shouldFail && failureStage === "snapshot") throw failure;
+    manager.sessions.set("browser_failure", { toRecord: () => {
+      if (shouldFail && failureStage === "record") throw failure;
       return { version: 2 };
     } });
 
@@ -343,7 +398,7 @@ describe("浏览器状态持久化", () => {
       status: "running",
       record: { resource_state: "discarded" },
       close: async () => { closeCalls += 1; },
-      snapshot: () => ({
+      toRecord: () => ({
         browser_id: "browser_discarded",
         status: "running",
         resource_state: "discarded",
@@ -369,7 +424,7 @@ describe("浏览器状态持久化", () => {
       markManagerShutdownCheckpointFailed: async () => {
         throw new Error("不应进入检查点失败分支");
       },
-      snapshot: () => ({
+      toRecord: () => ({
         browser_id: "browser_running",
         status: "running",
         resource_state: "discarded",
