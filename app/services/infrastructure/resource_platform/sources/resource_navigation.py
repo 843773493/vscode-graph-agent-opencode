@@ -307,6 +307,8 @@ class ResourceNavigation:
             raise ResourceUriResolveError("capability_denied", "会话产物只提供精确单文件能力，不开放私有目录")
         try:
             owned = reader(request.uri, request.max_bytes)
+        except FileNotFoundError as error:
+            raise ResourceUriResolveError("unknown_resource", "会话产物不存在或已不可用") from error
         except PermissionError as error:
             if error.errno is not None:
                 raise

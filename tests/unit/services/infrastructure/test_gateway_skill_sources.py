@@ -304,7 +304,7 @@ async def test_independent_poll_304_requires_valid_request_identity_and_empty_bo
             source.snapshot(gateway_id=GATEWAY_ID)
 
 
-@pytest.mark.parametrize("failure", [None, "missing-header", "header-drift", "missing-body", "body-drift"])
+@pytest.mark.parametrize("failure", [None, "missing-header", "header-drift", "missing-body", "body-drift", "node-path", "entry-path", "match-path"])
 @pytest.mark.parametrize("mode", ["sync", "async"])
 async def test_navigation_200_echoes_and_validates_request_identity(
     source_case, navigation_transport, request_identity: str, failure: str | None, mode: str,
@@ -329,6 +329,13 @@ async def test_navigation_200_echoes_and_validates_request_identity(
             payload.pop("request_id")
         elif failure == "body-drift":
             payload["request_id"] = "another-request"
+        elif failure == "node-path":
+            payload["data"]["node"]["uri"] = "/private/gateway-secret"
+        elif failure == "entry-path":
+            payload["data"]["entries"] = [{**payload["data"]["node"], "uri": "/private/gateway-secret"}]
+        elif failure == "match-path":
+            payload["data"]["matches"] = [{"uri": "/private/gateway-secret", "line": 1, "column": 1,
+                                          "text": "正文", "snippet_start_column": 1}]
         return httpx.Response(200, json=payload, headers=headers)
 
     navigation_transport(reply)
@@ -341,8 +348,9 @@ async def test_navigation_200_echoes_and_validates_request_identity(
     if failure is None:
         assert await navigate() == result
     else:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError) as raised:
             await navigate()
+        assert "/private/gateway-secret" not in str(raised.value)
     assert source._owners == {}, "普通导航不能创建来源观察 owner"
 
 

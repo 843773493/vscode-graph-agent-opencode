@@ -14,6 +14,7 @@ import pytest
 from app.core.resource_uri import resource_display_uri
 from app.core.trace_middleware import reset_current_request_id, set_current_request_id
 from app.gateway.federation.errors import (
+    FEDERATION_MALFORMED_FRAME,
     FEDERATION_TARGET_NOT_RESOLVABLE,
     FederationError,
 )
@@ -196,3 +197,40 @@ async def test_remote_failures_never_read_local_same_name(routed_case, synchrono
     elif failure == "denied":
         assert error.value.code == FEDERATION_TARGET_NOT_RESOLVABLE
     assert len(received) == 1 and (workspace / "file.txt").read_text() == "SOURCE DECOY"
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.parametrize("field", ["node", "entries", "matches"])
+@pytest.mark.parametrize("path", ["/private/target-secret", r"C:\private\target-secret", r"\\host\private\target-secret"])
+async def test_remote_path_reference_is_rejected_before_tool_projection(routed_case, synchronous, field, path):
+    owner, uri, received, reply, workspace = routed_case
+
+    def invalid_reference(envelope):
+        data = envelope["data"]
+        (data[field] if field == "node" else data[field][0])["uri"] = path
+
+    reply["change"] = invalid_reference
+    request = ResourceNavigationRequest(uri=uri, operation="read")
+    with pytest.raises(FederationError) as failure:
+        if synchronous:
+            owner.navigate_sync(request, local_gateway_id=SOURCE_GATEWAY)
+        else:
+            await owner.navigate(request, local_gateway_id=SOURCE_GATEWAY)
+    assert failure.value.code == FEDERATION_MALFORMED_FRAME
+    assert path not in str(failure.value)
+    assert len(received) == 1
+    assert (workspace / "file.txt").read_text() == "SOURCE DECOY"
+
+
+async def test_remote_file_body_and_match_text_keep_native_paths(routed_case):
+    owner, uri, _, reply, _ = routed_case
+    text = "/private/example\nC:\\private\\example\n\\\\host\\share\\example"
+
+    def native_body(envelope):
+        envelope["data"]["content"] = text
+        envelope["data"]["matches"][0]["text"] = text
+
+    reply["change"] = native_body
+    result = await owner.navigate(ResourceNavigationRequest(uri=uri, operation="read"), local_gateway_id=SOURCE_GATEWAY)
+    assert result.content == result.matches[0].text == text
+    assert result.node.uri == result.entries[0].uri == result.matches[0].uri == uri

@@ -416,11 +416,10 @@ class ThreadCatalogMixin:
             "SELECT thread_id, kind, created_at FROM thread_catalog WHERE kind = 'main'"
         ).fetchall()
         if not rows:
-            raise KeyError(f"session control 缺少 main row: path={self.database_path}")
+            raise KeyError("session control 缺少 main row")
         if len(rows) > 1:
             raise RuntimeError(
                 "session control 出现多个 main row（库被外部改动，fail closed）: "
-                f"path={self.database_path}, "
                 f"rows={[str(row['thread_id']) for row in rows]}"
             )
         return rows[0]
@@ -447,7 +446,7 @@ class ThreadCatalogMixin:
         if row is None:
             raise KeyError(
                 "thread catalog 不存在目标 child thread: "
-                f"thread_id={thread_id!r}, path={self.database_path}"
+                f"thread_id={thread_id!r}"
             )
         if str(row["kind"]) != "child":
             raise RuntimeError(
@@ -457,8 +456,7 @@ class ThreadCatalogMixin:
         if row["state"] is None:
             raise RuntimeError(
                 "child thread 缺少 thread creation record（库被外部改动，"
-                f"fail closed）: thread_id={thread_id!r}, "
-                f"path={self.database_path}"
+                f"fail closed）: thread_id={thread_id!r}"
             )
         if str(row["state"]) != "published":
             raise RuntimeError(
@@ -495,7 +493,7 @@ class ThreadCatalogMixin:
         if actual != main_thread_id:
             raise RuntimeError(
                 "session control main row 与 workspace catalog 冻结的 "
-                f"main_thread_id 不一致（fail closed）: path={self.database_path}, "
+                "main_thread_id 不一致（fail closed）: "
                 f"control_thread_id={actual!r}, catalog_main_thread_id={main_thread_id!r}"
             )
 

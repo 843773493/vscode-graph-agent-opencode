@@ -9,6 +9,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
+from pydantic import ValidationError
 
 from app.core.resource_uri import (
     ResourceUriGrammarError,
@@ -146,7 +147,10 @@ class GatewayResourceNavigation:
                 if detail.get("code") in FEDERATION_ERROR_CODES:
                     raise FederationError(detail["code"], detail["message"], detail=detail.get("detail"))
         response.raise_for_status()
-        envelope = APIResponse[ResourceNavigationResultDTO].model_validate(payload)
+        try:
+            envelope = APIResponse[ResourceNavigationResultDTO].model_validate(payload)
+        except ValidationError as error:
+            raise FederationError(FEDERATION_MALFORMED_FRAME, "Gateway 文件导航响应不符合目标 owner 合同") from error
         if envelope.code != 0 or envelope.data is None:
             raise FederationError(FEDERATION_MALFORMED_FRAME, "Gateway 文件导航响应缺少成功结果")
         if len(response.content) > request.max_response_bytes:

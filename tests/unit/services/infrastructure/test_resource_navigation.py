@@ -13,7 +13,10 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.resource_uri import resource_display_uri
-from app.schemas.internal_v2.resource_navigation import ResourceNavigationRequest
+from app.schemas.internal_v2.resource_navigation import (
+    ResourceNavigationRequest,
+    ResourceNavigationResultDTO,
+)
 from app.services.infrastructure.resource_platform.sources import resource_navigation
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceFileOperationError,
@@ -26,6 +29,62 @@ from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 WORKSPACE_ID = "019d1b4a-1111-7000-8000-000000000001"
 GATEWAY_ID = "gateway_navigation_test"
+
+
+@pytest.mark.parametrize("field", ["node", "entries", "matches"])
+@pytest.mark.parametrize("value", [
+    "", "/private/host-root/secret", r"C:\private\host-root\secret", r"\\host\share\secret",
+    "file:///private/host-root/secret",
+    "boxteam://workspace/root/resources/files/root/%2Fprivate%2Fhost-root",
+    "boxteam://workspace/root/resources/files/root/secret?revision=1",
+])
+def test_navigation_response_rejects_native_or_malformed_references(field, value):
+    uri = resource_display_uri(scope="workspace", scope_id=WORKSPACE_ID, kind="files", tail_segments=("root", "missing.txt"))
+    node = {"uri": uri, "resource_shape": "file", "operations": ["read"]}
+    payload = {"node": node.copy(), "entries": [node.copy()], "matches": [
+        {"uri": uri, "line": 1, "column": 1, "text": "/private/user-content", "snippet_start_column": 1}]}
+    (payload[field] if field == "node" else payload[field][0])["uri"] = value
+    with pytest.raises(ValidationError) as failure:
+        ResourceNavigationResultDTO.model_validate(payload)
+    assert failure.value.errors(include_input=False)[0]["loc"] == (("node", "uri") if field == "node" else (field, 0, "uri"))
+    assert "资源 URI" in str(failure.value)
+    if value:
+        assert value not in str(failure.value)
+
+
+def test_navigation_response_accepts_dangling_uri_without_rewriting_body():
+    uri = resource_display_uri(scope="workspace", scope_id=WORKSPACE_ID, kind="files", tail_segments=("root", "missing.txt"))
+    text = "/private/user-content\nC:\\private\\user-content"
+    response = ResourceNavigationResultDTO.model_validate({
+        "node": {"uri": uri, "resource_shape": "file", "operations": ["read"]}, "content": text})
+    assert response.model_dump()["node"]["uri"] == uri
+    assert response.model_dump()["content"] == text
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.parametrize("collection,artifact_id", [
+    ("attachments", "att_" + "a" * 32), ("tool-results", "tool_" + "a" * 24 + ".txt"),
+])
+async def test_missing_artifact_uses_not_found_reason_without_native_locator(navigation_case, synchronous, collection, artifact_id):
+    owner, workspace, _ = navigation_case
+    uri = resource_display_uri(scope="workspace", scope_id=WORKSPACE_ID, kind="session",
+        tail_segments=("ses_019c3567da377a6f855e1bddac8f1f76", collection, artifact_id))
+    calls = []
+
+    def missing_reader(address, max_bytes):
+        calls.append((address, max_bytes))
+        raise FileNotFoundError(2, "missing original", str(workspace / ".boxteam/private-artifact"))
+
+    request = ResourceNavigationRequest(uri=uri, operation="read")
+    with pytest.raises(ResourceUriResolveError) as failure:
+        if synchronous:
+            owner.navigate_sync(request, local_gateway_id=GATEWAY_ID, artifact_reader=missing_reader)
+        else:
+            await owner.navigate(request, local_gateway_id=GATEWAY_ID, artifact_reader=missing_reader)
+    assert failure.value.reason_code == "unknown_resource"
+    assert str(workspace) not in str(failure.value)
+    assert isinstance(failure.value.__cause__, FileNotFoundError)
+    assert calls == [(uri, request.max_bytes)]
 
 
 @pytest.mark.asyncio

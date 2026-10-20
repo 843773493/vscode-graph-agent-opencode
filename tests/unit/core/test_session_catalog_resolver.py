@@ -509,8 +509,10 @@ class TestReadMethods:
         )
         thread_dir = session_dir / "threads" / "2026" / "06" / "01" / thread_id
         shutil.rmtree(thread_dir)
-        with pytest.raises(RuntimeError, match="冻结 locator 缺失"):
+        with pytest.raises(RuntimeError, match="冻结 locator 缺失") as failure:
             resolver.resolve_thread_node(session_id, thread_id)
+        assert str(resolver.sessions_root) not in str(failure.value)
+        assert session_id in str(failure.value) and thread_id in str(failure.value)
 
     def test_resolve_folder_dir_always_runtime_error(
         self, resolver: SessionCatalogPathResolver

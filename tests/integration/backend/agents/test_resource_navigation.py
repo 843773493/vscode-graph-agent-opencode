@@ -236,7 +236,7 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
                 response = await client.post(path, json={"uri": uri, "operation": operation})
                 assert response.status_code in {400, 403, 404}, response.text
                 assert response.json()["detail"]["code"] == code
-            # 新模板只公布引用；通用文件树入口必须把私有产物留给原领域 owner。
+            # 精确产物经原领域 owner 读取；合法悬空 URI 明确未找到，不变成私有目录能力。
             session_id = "ses_019c3567da377a6f855e1bddac8f1f76"
             for collection, artifact_id in (
                 ("attachments", "att_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
@@ -249,9 +249,9 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
                 response = await client.post(path, json={"uri": uri, "operation": "read"})
                 body = response.json()
                 receipts.append({"uri": uri, "operation": "read", "status": response.status_code, "body": body})
-                assert response.status_code == 403, response.text
+                assert response.status_code == 404, response.text
                 assert body["detail"]["owner"] == "resource_uri_resolver"
-                assert body["detail"]["code"] == "capability_denied"
+                assert body["detail"]["code"] == "unknown_resource"
                 assert response.headers["X-Request-ID"] == body["request_id"]
             invalid_operation = await client.post(path, json={"uri": files_root, "operation": "write"})
             assert invalid_operation.status_code == 422

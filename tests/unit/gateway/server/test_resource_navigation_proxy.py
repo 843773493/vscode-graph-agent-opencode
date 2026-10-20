@@ -428,8 +428,6 @@ async def test_navigation_canonical_scope_mismatch_never_reaches_backend(navigat
     f"boxteam://gateway_other/workspace/{WORKSPACE_ID}/resources/files/root/src/child.txt",
     f"boxteam://workspace/{WORKSPACE_ID}/resources/files/root/outside.txt",
     f"boxteam://workspace/{WORKSPACE_ID}/resources/files/root/src",
-    "/private/host-root/secret",
-    "boxteam://workspace/root/resources/files/root/%2Fprivate%2Fhost-root",
 ])
 def test_navigation_remote_response_cannot_change_owner_or_escape_root(bad_uri: str) -> None:
     root = f"boxteam://workspace/{WORKSPACE_ID}/resources/files/root/src"
@@ -458,7 +456,7 @@ def test_search_match_uris_are_qualified_and_must_belong_to_returned_files() -> 
     assert failure.value.code == "federation-malformed-frame"
 
 
-@pytest.mark.parametrize("bad", ["uri", "shape", "extra"])
+@pytest.mark.parametrize("bad", ["uri", "entry", "match", "windows", "unc", "shape", "extra"])
 async def test_navigation_invalid_remote_frame_is_sanitized_at_http_boundary(navigation_proxy, navigation_relay: _NavigationRelay, bad: str) -> None:
     client, _, _ = navigation_proxy
     uri = f"boxteam://gateway_target/workspace/{WORKSPACE_ID}/resources/files/root"
@@ -466,6 +464,15 @@ async def test_navigation_invalid_remote_frame_is_sanitized_at_http_boundary(nav
     data = {"node": node}
     if bad == "uri":
         node["uri"] = "file:///private/target-secret"
+    elif bad == "entry":
+        data["entries"] = [{**node, "uri": "/private/target-secret"}]
+    elif bad == "match":
+        data["matches"] = [{"uri": "/private/target-secret", "line": 1, "column": 1,
+                            "text": "正文不限制路径", "snippet_start_column": 1}]
+    elif bad == "windows":
+        node["uri"] = r"C:\private\target-secret"
+    elif bad == "unc":
+        node["uri"] = r"\\host\private\target-secret"
     elif bad == "shape":
         node["resource_shape"] = "/private/target-secret"
     else:
@@ -475,6 +482,7 @@ async def test_navigation_invalid_remote_frame_is_sanitized_at_http_boundary(nav
     assert response.status_code == 409, response.text
     assert response.json()["detail"]["code"] == "federation-malformed-frame"
     assert "/private/target-secret" not in response.text
+    assert "target-secret" not in response.text
 
 
 async def test_navigation_policy_denial_and_missing_resource_are_indistinguishable(navigation_proxy, navigation_relay: _NavigationRelay) -> None:

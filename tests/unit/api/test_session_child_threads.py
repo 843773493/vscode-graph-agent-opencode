@@ -325,6 +325,36 @@ def test_child_threads_api_http_envelope_and_auth(
     assert "session_id" not in data["items"][0]
 
 
+def test_child_thread_missing_directory_http_keeps_identity_without_native_path(
+    service: SessionService,
+    thread_creation_factory: OwnerThreadCreationFactory,
+    residency_tracker: ThreadResidencyTracker,
+    saver: RolloutCheckpointSaver,
+    team_service: AsyncMock,
+) -> None:
+    session_id, thread_id, directory = asyncio.run(
+        _seed_parent_with_child_thread(service, thread_creation_factory, saver)
+    )
+    rmtree(directory)
+    app = FastAPI()
+    app.add_middleware(TraceMiddleware)
+    app.include_router(router, prefix="/api/v1")
+    app.dependency_overrides[get_session_service] = lambda: service
+    app.dependency_overrides[get_thread_residency_tracker] = lambda: residency_tracker
+    app.dependency_overrides[get_rollout_checkpoint_saver] = lambda: saver
+    app.dependency_overrides[get_team_service] = lambda: team_service
+    with TestClient(app) as client:
+        response = client.get(f"/api/v1/sessions/{session_id}/child-threads", headers={
+            "X-Local-Token": "local-dev-token", "X-Request-ID": "missing-child-native-path"})
+    assert response.status_code == 409
+    assert "冻结 locator 缺失或不是普通目录" in response.json()["detail"]
+    assert session_id in response.text and thread_id in response.text
+    assert str(directory) not in response.text
+    assert str(service._path_resolver.sessions_root) not in response.text
+    assert response.headers["X-Request-ID"] == "missing-child-native-path"
+    assert not directory.exists()
+
+
 @pytest.mark.asyncio
 async def test_child_threads_api_missing_published_locator_fails_closed(
     service: SessionService,
@@ -351,6 +381,10 @@ async def test_child_threads_api_missing_published_locator_fails_closed(
 
     assert raised.value.status_code == 409
     assert "冻结 locator 缺失或不是普通目录" in str(raised.value.detail)
+    assert parent_session_id in str(raised.value.detail)
+    assert _thread_id in str(raised.value.detail)
+    assert str(final_dir) not in str(raised.value.detail)
+    assert str(service._path_resolver.sessions_root) not in str(raised.value.detail)
 
 
 @pytest.mark.asyncio

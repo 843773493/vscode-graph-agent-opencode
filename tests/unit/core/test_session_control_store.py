@@ -392,8 +392,9 @@ def test_thread_catalog_kind_check_rejects_non_main(
 def test_get_main_thread_missing_raises_key_error(
     store: SessionControlStore,
 ) -> None:
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError) as failure:
         store.get_main_thread()
+    assert str(store.database_path) not in str(failure.value)
 
 
 def test_multiple_main_rows_fail_closed(store: SessionControlStore) -> None:
@@ -406,8 +407,9 @@ def test_multiple_main_rows_fail_closed(store: SessionControlStore) -> None:
         "VALUES (?, 'main', ?)",
         (make_thread_id(), DEFAULT_CREATED_AT.isoformat()),
     )
-    with pytest.raises(RuntimeError, match="多个 main row"):
+    with pytest.raises(RuntimeError, match="多个 main row") as failure:
         store.get_main_thread()
+    assert str(store.database_path) not in str(failure.value)
 
 
 def test_initialize_main_thread_rejects_multiple_main_rows(
@@ -657,8 +659,9 @@ def test_verify_mismatch_fails_closed(store: SessionControlStore) -> None:
     store.initialize_main_thread(
         make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
     )
-    with pytest.raises(RuntimeError, match="不一致"):
+    with pytest.raises(RuntimeError, match="不一致") as failure:
         store.verify_matches_catalog_main_thread(make_thread_id())
+    assert str(store.database_path) not in str(failure.value)
 
 
 def test_verify_rejects_invalid_thread_id_format(
@@ -1537,8 +1540,9 @@ def test_get_published_child_locator_missing_raises_key_error(
     store.initialize_main_thread(
         make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
     )
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError) as failure:
         store.get_published_child_thread_locator(make_thread_id())
+    assert str(store.database_path) not in str(failure.value)
 
 
 def test_get_published_child_locator_rejects_main_row(

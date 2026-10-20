@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.resource_uri import ResourceUriGrammarError, parse_resource_uri
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
     ResourceNavigationOperation,
     ResourceShape,
@@ -49,17 +50,27 @@ class ResourceNavigationRequest(BaseModel):
         return self
 
 
+def _require_navigation_uri(value: str) -> str:
+    try:
+        parse_resource_uri(value)
+    except ResourceUriGrammarError as error:
+        # 输出合同故障只报告字段与原因；原生输入和文件正文不走此校验。
+        raise ValueError(f"导航资源引用必须是资源 URI: code={error.reason_code}") from error
+    return value
+
+
 class ResourceNavigationNodeDTO(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, from_attributes=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, from_attributes=True, hide_input_in_errors=True)
 
     uri: str
     resource_shape: ResourceShape
     operations: tuple[ResourceNavigationOperation, ...]
     child_path: Literal["file_segments"] | None = None
+    _uri = field_validator("uri")(_require_navigation_uri)
 
 
 class ResourceNavigationMatchDTO(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     uri: str
     line: int = Field(ge=1)
@@ -67,10 +78,11 @@ class ResourceNavigationMatchDTO(BaseModel):
     text: str
     snippet_start_column: int = Field(ge=1)
     truncated: bool = False
+    _uri = field_validator("uri")(_require_navigation_uri)
 
 
 class ResourceNavigationResultDTO(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     node: ResourceNavigationNodeDTO
     entries: tuple[ResourceNavigationNodeDTO, ...] = ()

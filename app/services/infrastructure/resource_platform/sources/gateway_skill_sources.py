@@ -12,6 +12,7 @@ from contextvars import Context
 from dataclasses import dataclass, field
 
 import httpx
+from pydantic import ValidationError
 
 from app.core.resource_uri import (
     ParsedResourceUri,
@@ -156,7 +157,10 @@ class GatewaySkillSources:
             if isinstance(detail, dict) and detail.get("owner") == "resource_file_operations":
                 raise ResourceFileOperationError(detail["code"], detail["message"], reason=detail["reason"])
         response.raise_for_status()
-        envelope = APIResponse[ResourceNavigationResultDTO].model_validate_json(response.content)
+        try:
+            envelope = APIResponse[ResourceNavigationResultDTO].model_validate_json(response.content)
+        except ValidationError as error:
+            raise ValueError("Gateway Skill navigation 响应不符合目标 owner 合同") from error
         if envelope.request_id != request_id:
             raise ValueError("Gateway Skill navigation 响应正文 request_id 与创建请求不一致")
         result = envelope.data

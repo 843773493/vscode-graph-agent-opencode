@@ -434,7 +434,7 @@ class SessionCatalogPathResolver:
         if not path.is_dir() or path.is_symlink():
             raise RuntimeError(
                 "会话物理目录缺失或不是普通目录，拒绝解析（fail closed）: "
-                f"session_id={session_id}, path={path}"
+                f"session_id={session_id}"
             )
         return path
 
@@ -480,13 +480,14 @@ class SessionCatalogPathResolver:
         if staging_exists == target_exists:
             raise RuntimeError(
                 "prepared record 必须且只能定位到 staging 或 frozen locator: "
-                f"session_id={record.session_id}, staging={staging}, target={target}"
+                f"session_id={record.session_id}, staging_exists={staging_exists}, "
+                f"target_exists={target_exists}"
             )
         path = staging if staging_exists else target
         if not path.is_dir() or path.is_symlink():
             raise RuntimeError(
                 "prepared Session 物理目录缺失或不是普通目录: "
-                f"session_id={record.session_id}, path={path}"
+                f"session_id={record.session_id}"
             )
         return path
 
@@ -507,7 +508,7 @@ class SessionCatalogPathResolver:
         if (path / "threads").is_symlink() or thread_path.is_symlink() or not thread_path.is_dir():
             raise RuntimeError(
                 "prepared main thread 物理目录缺失或不是普通目录: "
-                f"session_id={record.session_id}, thread_id={thread_id}, path={thread_path}"
+                f"session_id={record.session_id}, thread_id={thread_id}"
             )
         return thread_path
 
@@ -530,7 +531,7 @@ class SessionCatalogPathResolver:
             raise RuntimeError(
                 "Session control 数据库缺失或不是普通文件，拒绝解析 "
                 f"thread（fail closed）: session_id={session_id}, "
-                f"thread_id={thread_id}, control_path={control_path}"
+                f"thread_id={thread_id}"
             )
         control_store = SessionControlStore(control_path, read_only=True)
         try:
@@ -546,7 +547,7 @@ class SessionCatalogPathResolver:
             raise RuntimeError(
                 "已发布 thread 的冻结 locator 缺失或不是普通目录，"
                 f"拒绝解析（fail closed）: session_id={session_id}, "
-                f"thread_id={thread_id}, path={thread_path}"
+                f"thread_id={thread_id}"
             )
         return thread_path
 

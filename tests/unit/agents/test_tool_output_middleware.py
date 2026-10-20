@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
 from langchain_core.messages import ToolMessage
 
 from app.agents.tool_output_middleware import ToolOutputMiddleware
@@ -14,6 +15,18 @@ from app.services.infrastructure.tool_output_store import (
     ToolOutputStore,
     extract_tool_output_reference,
 )
+
+
+def test_tool_output_missing_session_is_missing_resource(tmp_path: Path, session_bundle_factory):
+    session_bundle_factory(tmp_path / ".boxteam/sessions", "ses_019bd0aa8bb2784aaadbe51563ee17f0")
+    missing_session = "ses_019c3567da377a6f855e1bddac8f1f76"
+    uri = session_artifact_uri(read_workspace_id(tmp_path), missing_session, "tool-results", "tool_" + "a" * 24 + ".txt")
+    store = ToolOutputStore(workspace_root=tmp_path)
+    with pytest.raises(FileNotFoundError) as failure:
+        store.read(missing_session, uri, 1024)
+    assert missing_session in str(failure.value)
+    assert str(tmp_path) not in str(failure.value)
+    assert isinstance(failure.value.__cause__, KeyError)
 
 
 def test_tool_output_store_keeps_small_result_unchanged(tmp_path: Path) -> None:

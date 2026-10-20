@@ -321,8 +321,14 @@ async def test_grep_rejects_boxteam_runtime_and_unscoped_root_search(
     for result in (runtime_result, root_result):
         assert isinstance(result, ToolMessage)
         assert result.status == "error"
-        assert ".boxteam" in result.content
-        assert "缩小 path 或 glob" in result.content or "限定到源码目录" in result.content
+        assert str(tmp_path) not in result.content
+    assert json.loads(runtime_result.content) == {
+        "owner": "resource_uri_resolver",
+        "code": "capability_denied",
+        "message": "原生文件目标越出固定目录能力",
+    }
+    assert ".boxteam" in root_result.content
+    assert "限定到源码目录" in root_result.content
 
 
 @pytest.mark.asyncio
@@ -378,10 +384,10 @@ async def test_listing_tools_hide_and_reject_boxteam_runtime(
         result = await tools[tool_name].coroutine(runtime=runtime, **kwargs)
         assert isinstance(result, ToolMessage)
         assert result.status == "error"
-        if tool_name in {"ls", "read_file", "glob"}:
-            assert json.loads(result.content)["code"] == "capability_denied"
-        else:
-            assert json.loads(result.content)["code"] == "invalid_patch"
+        assert json.loads(result.content)["code"] == "capability_denied"
+        assert str(tmp_path) not in result.content
+    assert (tmp_path / ".boxteam" / "sessions" / "trace.jsonl").read_text(encoding="utf-8") == "runtime"
+    assert not (tmp_path / ".boxteam" / "sessions" / "new.txt").exists()
 
 
 @pytest.mark.asyncio

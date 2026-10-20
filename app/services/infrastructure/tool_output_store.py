@@ -148,7 +148,11 @@ class ToolOutputStore:
         if (parsed.gateway_authority is not None or parsed.scope_id != read_workspace_id(self._workspace_root)
                 or parsed.tail_segments[:2] != (session_id, "tool-results")):
             raise PermissionError("工具结果引用不属于当前工作区会话")
-        directory = self._path_resolver.resolve_session_node(session_id) / "tool-results"
+        try:
+            session_node = self._path_resolver.resolve_session_node(session_id)
+        except KeyError as error:
+            raise FileNotFoundError(f"工具结果所属会话不存在: session_id={session_id}") from error
+        directory = session_node / "tool-results"
         path = directory / parsed.tail_segments[2]
         if directory.is_symlink() or path.is_symlink():
             raise PermissionError("工具结果及其目录不能是符号链接")
