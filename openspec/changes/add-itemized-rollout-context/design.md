@@ -369,6 +369,8 @@ fork 的 normative 合同由 `specs/checkpoint-context-branching/spec.md` 唯一
 
 消息底部按钮固定点击 item inclusive、所属 view/revision，弹窗默认当前 Session 新 subthread、仅继承正文、不额外复制资源。新建侧边会话复用同一业务入口；打开已有 child只读原对象。成功后在主窗口右侧侧边栏打开新 child，不切换主线程聊天、不自动执行或回报。独立 Session/远端目标按返回 URI 导航。source thread关系与导航父链仍分离。
 
+全新空会话的普通历史读取仍不物化 rollout。仅显式选择来源且没有历史 selector 时，fork source owner 在来源生命周期保护下借唯一写锁初始化真实空 rollout；并发选择复用同一个 view，已有损坏或被删除的历史不重建。随后所有模式仍消费原冻结/复制/发布链。UI 保留默认前缀模式无 anchor 时禁止提交的行为，显式完整复制可发布 idle 空 child，首次聊天再正常建立目标执行。
+
 由统一寻址 owner登记 Workspace Session集合、Session与Thread领域URI；请求使用 source URI、view/revision/anchor和target容器URI+创建意图。source snapshot capture与target staging/publication分阶段，同 Session复用一个gate，跨端由两端owner导出/导入并复用Gateway路由，不能读远端数据库真实路径或复用send/read/wait grant。
 
 所有引用资源先经过统一目标检查：复用现有identity/URI/revision、retention_scope、关联、hash/length、availability和owner操作能力。同工作区共享附件不复制bytes；若GC生命周期仍依赖source，附件owner建立目标保活，不把“不复制”投影为不可用。跨域仅在显式选择且owner支持时复用目标已有内容或流式导入；额外资源默认不复制。只增加缺少的owner能力，不扩充ResourceIdentity或给每个资源添加fork布尔属性，也不保存第二份生命周期状态。

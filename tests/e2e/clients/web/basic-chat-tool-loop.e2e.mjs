@@ -5788,13 +5788,13 @@ async function forkOwner(source, options = {}, targetSurface = source) {
     deadlineToken: response.deadlineToken, deadlineNs: response.deadlineNs };
 }
 
-// TODO：新建未执行 Session 尚无 rollout；空来源场景需先明确冻结真实 view 的入口。
 async function runEmptyForkUi(surface) {
   const owners = [];
   const empty = await createProductSession(surface, "空来源的完整历史分支");
   owners.push(empty);
   await openOwner(empty);
-  const emptyBefore = await forkHistoryEvidence(empty);
+  assert.deepEqual((await loadCompleteThreadHistory(empty)).items, []);
+  assert.equal(await readRolloutDirectory(empty), null, "打开全新空会话及读取历史不能物化 rollout");
   const emptyMain = (await ownerApi(empty, `/api/v1/sessions/${empty.sessionId}/main-thread`)).data;
   const emptyPointPath = `/api/v1/sessions/${empty.sessionId}/fork-source-point`;
   const waitEmptyPoint = (mode) => empty.page.waitForResponse((response) => {
@@ -5810,6 +5810,9 @@ async function runEmptyForkUi(surface) {
   const emptyPoint = (await emptyPointResponse.json()).data;
   assert.equal(emptyPoint.anchor_item_id, null);
   assert.equal(emptyPoint.resource_mode, "view_prefix_fork");
+  const emptyBefore = await forkHistoryEvidence(empty);
+  assert.deepEqual([emptyPoint.source_view_id, emptyPoint.source_view_revision],
+    [emptyBefore.view.view_id, emptyBefore.view.history_view_revision], "来源选择必须冻结真实物化的空 view");
   const emptyDialog = empty.page.getByRole("dialog", { name: "创建上下文分支", exact: true });
   await emptyDialog.getByLabel("复制范围", { exact: true }).waitFor({ state: "visible" });
   assert.equal(await emptyDialog.getByLabel("复制范围", { exact: true }).inputValue(), "view_prefix_fork");
@@ -5845,8 +5848,12 @@ async function runEmptyForkUi(surface) {
   assert.equal(await empty.page.locator("#input").isVisible(), true);
   const emptyPublished = await publishedForkOwner(empty, emptyRequest, emptyFork, emptyBefore);
   assert.deepEqual(emptyFork.resources, []);
+  const successor = await completeOwnerTurn(emptyChild, "从空分支开始第一轮独立对话。", [
+    finalResponse("empty-child-fork-successor", "空分支已开始独立对话。"),
+  ]);
+  assert.deepEqual((await loadCompleteThreadHistory(empty)).items, [], "空分支首次续聊不能给 main 创建历史");
   return { source: emptyPoint, fullPoint, request: emptyRequest, fork: emptyFork, summary: emptySummary,
-    publication: emptyPublished.publication };
+    publication: emptyPublished.publication, successor };
 }
 
 async function runDefaultChildForkUi(surface) {

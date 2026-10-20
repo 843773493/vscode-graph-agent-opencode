@@ -211,6 +211,9 @@ from app.services.infrastructure.rollout_context.runtime.detail_payload import (
 from app.services.infrastructure.rollout_context.runtime.stream_accumulator import (
     CanonicalBlockAccumulator,
 )
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutNotMaterializedError,
+)
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_test_workspace import (
@@ -3193,12 +3196,25 @@ async def test_stale_fork_anchor_is_rejected_before_target_creation(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["context_fork", "full_rollout_copy"])
-async def test_empty_materialized_rollout_forks_without_execution(fork_context: ForkIntegrationContext, mode: SessionForkMode) -> None:
+@pytest.mark.parametrize("materialized", [False, True])
+@pytest.mark.parametrize("creation_kind", ["new_child_thread", "new_session_main"])
+async def test_empty_rollout_forks_without_execution(
+    fork_context: ForkIntegrationContext, mode: SessionForkMode, materialized: bool, creation_kind: str,
+) -> None:
     source = await fork_context.sessions.create(SessionCreateRequest(title="真实空 rollout"))
     source_thread = _main_thread_id(fork_context, source.session_id)
-    fork_context.saver._storage.storage.initialize(source.session_id, thread_id=source_thread)
-    display = await fork_context.forks.source_point(session_id=source.session_id)
+    storage = fork_context.saver._storage.storage
+    root = storage.root(source.session_id, thread_id=source_thread)
+    assert fork_context.saver.load_history(source.session_id, source_thread, TurnHistoryLoadRequest(direction="tail")).items == []
+    assert not root.exists() and not (root.parent / ".rollout.write.lock").exists()
+    if materialized:
+        storage.initialize(source.session_id, thread_id=source_thread)
+    display, repeated = await asyncio.gather(*(
+        fork_context.forks.source_point(session_id=source.session_id) for _ in range(2)
+    ))
+    assert repeated == display
     assert display.anchor_item_id is None and display.resource_mode == "view_prefix_fork"
+    assert root.is_dir() and (root / "index.sqlite").is_file()
     point = await fork_context.forks.source_point(
         session_id=source.session_id, source_view_id=display.source_view_id,
         source_view_revision=display.source_view_revision, mode=mode,
@@ -3207,18 +3223,58 @@ async def test_empty_materialized_rollout_forks_without_execution(fork_context: 
     result = await fork_context.forks.fork(SessionForkRequest(
         idempotency_key=f"empty-rollout-{mode}", source_uri=source.uri + "/threads/" + source_thread,
         source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
-        anchor_item_id=None, mode=mode, target_container_uri=source.uri,
-        creation_kind="new_child_thread", title="空 rollout 的分支",
+        anchor_item_id=None, mode=mode,
+        target_container_uri=source.uri if creation_kind == "new_child_thread" else display.main_container_uri,
+        creation_kind=creation_kind, title="空 rollout 的分支",
     ))
     assert result.thread_id != source_thread
-    with fork_context.saver._storage.storage.read_connection(source.session_id, result.thread_id, "") as connection:
+    target_session = result.session.session_id
+    assert (target_session == source.session_id) == (creation_kind == "new_child_thread")
+    with storage.read_connection(target_session, result.thread_id, "") as connection:
         assert connection.execute(
             "SELECT status FROM fork_materializations WHERE target_session_id=? AND target_thread_id=?",
-            (source.session_id, result.thread_id),
+            (target_session, result.thread_id),
         ).fetchone() == ("committed",)
         for table in ("item_catalog", "executions", "turn_records", "model_calls", "context_assemblies"):
             assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone() == (0,)
-    assert fork_context.saver._storage.storage.read_items(source.session_id, result.thread_id) == []
+    assert storage.read_items(target_session, result.thread_id) == []
+
+
+@pytest.mark.asyncio
+async def test_fresh_source_preflight_uses_real_empty_view(fork_context: ForkIntegrationContext) -> None:
+    source = await fork_context.sessions.create(SessionCreateRequest(title="空来源预检"))
+    point = await fork_context.saver.forks.source.preflight_fork(source_session_id=source.session_id)
+    display = await fork_context.forks.source_point(session_id=source.session_id)
+    assert (point.source_view_id, point.source_view_revision, point.source_checkpoint_id, point.anchor_item_id) == (
+        display.source_view_id, display.source_view_revision, None, None,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("damaged", ["frozen_selector", "partial_root", "removed_root"])
+async def test_fork_source_does_not_rebuild_missing_or_damaged_history(
+    fork_context: ForkIntegrationContext, damaged: str,
+) -> None:
+    source = await fork_context.sessions.create(SessionCreateRequest(title="不可重建的来源"))
+    storage = fork_context.saver._storage.storage
+    thread_id = _main_thread_id(fork_context, source.session_id)
+    root = storage.root(source.session_id, thread_id=thread_id)
+    if damaged == "frozen_selector":
+        with pytest.raises(RolloutNotMaterializedError):
+            await fork_context.forks.source_point(
+                session_id=source.session_id, mode="full_rollout_copy",
+                source_view_id="missing-view", source_view_revision=0,
+            )
+        assert not root.exists() and not (root.parent / ".rollout.write.lock").exists()
+    else:
+        if damaged == "partial_root":
+            root.mkdir()
+        else:
+            await fork_context.forks.source_point(session_id=source.session_id)
+            shutil.rmtree(root)
+        with pytest.raises((RuntimeError, sqlite3.OperationalError)):
+            await fork_context.forks.source_point(session_id=source.session_id)
+        assert not (root / "index.sqlite").exists()
 
 
 @pytest.mark.asyncio

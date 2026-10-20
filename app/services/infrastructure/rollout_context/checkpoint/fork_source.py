@@ -62,6 +62,9 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
     read_local_scopes,
     require_historical_scope,
 )
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutNotMaterializedError,
+)
 
 if TYPE_CHECKING:
     from app.services.infrastructure.rollout_context.checkpoint.saver import (
@@ -327,6 +330,8 @@ class CheckpointForkSource:
         """在创建目标之前固定真实 view/revision/item，不反序列化全 checkpoint。"""
         async with self._source_read_admission(source_session_id):
             source_owner = self._require_thread_owner(source_session_id, source_owner)
+            if source_view_id is None and source_view_revision is None and anchor_item_id is None:
+                await self._materialize_empty_source(source_owner, checkpoint_ns)
             async with self._context_reader.read_lease(
                 source_session_id, source_owner.thread_id, checkpoint_ns,
             ):
@@ -335,6 +340,17 @@ class CheckpointForkSource:
                     mode=mode, source_view_id=source_view_id, source_view_revision=source_view_revision,
                     anchor_item_id=anchor_item_id, anchor_mode=anchor_mode, checkpoint_ns=checkpoint_ns,
                 )
+
+    async def _materialize_empty_source(self, owner: MutationIntentOwner, checkpoint_ns: str) -> None:
+        """显式选择新会话为来源时建立真实空 view；既有或损坏的 rollout 不重建。"""
+        storage = self._storage.storage
+        try:
+            storage.read_lock(owner.session_id, owner.thread_id, checkpoint_ns)
+        except RolloutNotMaterializedError:
+            async with storage._lock(owner.thread_id, checkpoint_ns, session_id=owner.session_id):
+                root = storage.root(owner.session_id, checkpoint_ns, thread_id=owner.thread_id)
+                if not root.exists() and not root.is_symlink():
+                    storage.initialize(owner.session_id, checkpoint_ns, thread_id=owner.thread_id)
 
     async def project_display_resources(
         self, *, source_session_id: str, source_owner: MutationIntentOwner,
@@ -434,6 +450,8 @@ class CheckpointForkSource:
             raise ValueError("source-mismatch: 消息点击必须携带实际历史读取的 source view/revision")
         async with self._source_read_admission(source_session_id):
             source_owner = self._require_thread_owner(source_session_id, source_owner)
+            if source_view_id is None and turn_id is None and item_id is None:
+                await self._materialize_empty_source(source_owner, checkpoint_ns)
             async with self._context_reader.read_lease(
                 source_session_id, source_owner.thread_id, checkpoint_ns,
             ):

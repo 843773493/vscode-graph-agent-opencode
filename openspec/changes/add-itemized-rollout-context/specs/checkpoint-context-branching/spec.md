@@ -20,6 +20,8 @@ plan registry MUST 只保存真实创建的 plan 注册，保留原 initial/draf
 
 默认 `context_fork` MUST 只沿显式 source thread 的 active lineage 选最近已完成 normal Turn；无 normal Turn 时可使用该 thread 已完成且与 checkpoint/view 精确绑定的 internal execution/admission。空 rollout 可创建空 target。缺少真实来源、required 正文或可恢复状态时明确失败，不回退 main、sibling 或全局最新 checkpoint。选中 item 必须已提交且目标前缀满足 tool protocol closure；source 后续有执行或追加时，不得混入冻结前缀，也不得取消 source 来伪造成功。
 
+已注册且仍 active 的全新 Session/thread 尚未物化 rollout 时，显式选择 fork 来源且未携带历史 view/item selector 的入口 SHALL 在同一来源生命周期保护及唯一 rollout 写锁下初始化真实空 rollout，再冻结其 view/revision。普通历史浏览 MUST 保持只读；携带历史 selector 时不得用新空 view 替代原来源，既有目录损坏或历史文件被删除时也不得自动重建。空来源没有 item anchor，UI 的默认 `view_prefix_fork` 不可提交；用户可显式选择 `full_rollout_copy` 创建 idle 空分支，`context_fork` 继续使用既定空上下文合同，不伪造 Turn、execution 或消息。
+
 #### Scenario: view 前缀保留摘要及边界前仍有效成员
 
 - **WHEN** 冻结的 view 为 `[摘要 S, 保留 C, 新增 D, 新增 E]`，用户 inclusive 锚定 D
@@ -34,6 +36,16 @@ plan registry MUST 只保存真实创建的 plan 注册，保留原 initial/draf
 
 - **WHEN** source child 没有 normal Turn，但其 seed/reference execution 已完成且 checkpoint、selection、detail 与 admission 绑定一致
 - **THEN** fork 继承该精确 child 的有效正文，保留来源事实，不回退 main、不伪造 Turn、notice 或 target Job
+
+#### Scenario: 全新空会话显式选择完整复制
+
+- **WHEN** 用户打开尚无 rollout 的全新会话，从会话入口选择 fork 来源并显式切换为完整复制
+- **THEN** 普通打开及历史读取不创建 rollout，来源选择冻结真实初始化的空 view/revision；目标发布为空闲分支，首次聊天仅创建目标的新 Turn，main 历史保持为空
+
+#### Scenario: 缺失历史不被空来源初始化掩盖
+
+- **WHEN** fork 来源请求携带无法解析的历史 view/revision，或已物化来源的目录、索引或锁文件缺失
+- **THEN** 明确拒绝，不初始化替代历史、不创建目标，也不返回伪造的空来源
 
 #### Scenario: 未提交或协议不完整的锚点拒绝创建
 
