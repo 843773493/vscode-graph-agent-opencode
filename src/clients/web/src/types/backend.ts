@@ -650,14 +650,13 @@ export type WebUiSettings = Omit<
 
 export type WebUiSettingsUpdate = Omit<
   WebUISettingsUpdateDTO,
-  "layout" | "session_sidebar" | "workspace_file_tree" | "gateway_console" | "theme" | "recent_local_workspace_paths"
+  "layout" | "session_sidebar" | "workspace_file_tree" | "gateway_console" | "theme"
 > & {
   layout?: WebUiLayoutSettings | null;
   session_sidebar?: Partial<WebUiSessionSidebarSettings> | null;
   workspace_file_tree?: Partial<WebUiWorkspaceFileTreeSettings> | null;
   gateway_console?: Partial<WebUiGatewayConsoleSettings> | null;
   theme?: Partial<WebUiThemeSettings> | null;
-  recent_local_workspace_paths?: string[] | null;
 };
 
 export type GatewayDirectoryEntry = Required<GatewayDirectoryEntryDTO>;

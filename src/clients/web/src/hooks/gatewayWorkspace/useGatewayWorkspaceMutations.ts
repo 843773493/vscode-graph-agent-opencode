@@ -27,7 +27,6 @@ import { pauseWorkspaceObservations } from "../workspace/workspaceObservationLif
 export function useGatewayWorkspaceMutations({
   apiPort,
   activeGatewayWorkspaceId,
-  recentLocalWorkspacePaths,
   setState,
   abortCurrentStream,
   invalidateWorkspaceRefreshes,
@@ -40,7 +39,6 @@ export function useGatewayWorkspaceMutations({
 }: {
   apiPort: number | null;
   activeGatewayWorkspaceId: string | null;
-  recentLocalWorkspacePaths: WebUiSettings["recent_local_workspace_paths"];
   setState: SetAppState;
   abortCurrentStream: () => void;
   invalidateWorkspaceRefreshes: () => void;
@@ -151,26 +149,6 @@ export function useGatewayWorkspaceMutations({
       if (listReadFailed) {
         reconciliationErrors.push(`读取 Gateway 工作区列表失败: ${errorMessage(listReadError)}`);
       }
-      const normalizedPath = payload.root_path.trim();
-      if (normalizedPath && !payload.gateway_connection_id) {
-        try {
-          const recentPaths = [
-            normalizedPath,
-            ...recentLocalWorkspacePaths,
-          ].filter(
-            (path, index, paths) =>
-              path.trim() && paths.findIndex((item) => item === path) === index,
-          );
-          await updateUiSettings({
-            recent_local_workspace_paths: recentPaths,
-          });
-        } catch (error) {
-          reconciliationErrors.push(
-            `保存最近路径失败: ${errorMessage(error)}`,
-          );
-        }
-      }
-
       if (listRequest === gatewayListRequestRef.current
         && selectionIntent === selectionIntentRef.current) {
         try {
@@ -227,8 +205,8 @@ export function useGatewayWorkspaceMutations({
         throw new Error(message);
       }
     },
-    [activeGatewayWorkspaceId, apiPort, finishWorkspaceRefresh, gatewayListRequestRef, recentLocalWorkspacePaths,
-      runGatewayWorkspaceListTask, selectionIntentRef, setState, updateUiSettings],
+    [activeGatewayWorkspaceId, apiPort, finishWorkspaceRefresh, gatewayListRequestRef,
+      runGatewayWorkspaceListTask, selectionIntentRef, setState],
   );
 
   const addSshGatewayWorkspace = useCallback(

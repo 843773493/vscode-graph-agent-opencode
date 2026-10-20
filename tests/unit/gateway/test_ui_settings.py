@@ -145,6 +145,11 @@ def test_gateway_ui_settings_rejects_removed_layout_fields():
         WebUISettingsDTO.model_validate(
             {
                 "layout": {"collapsed_workspace_ids": ["workspace-b", "workspace-a"]},
-                "recent_local_workspace_paths": [],
             }
         )
+
+
+@pytest.mark.parametrize("model", [WebUISettingsDTO, WebUISettingsUpdateDTO])
+def test_ui_settings_rejects_native_directory_history(model):
+    with pytest.raises(ValidationError, match="recent_local_workspace_paths"):
+        model.model_validate({"recent_local_workspace_paths": ["/private/native-directory"]})

@@ -8,6 +8,7 @@ import pytest
 from app.gateway.config import ConfiguredTheme, GatewayConfig
 from app.gateway.control import user_profile as user_profile_module
 from app.gateway.control.user_profile import UserProfileStore
+from app.schemas.gateway.ui_settings import WebUISettingsDTO
 
 
 @pytest.fixture
@@ -38,6 +39,29 @@ def test_user_profile_rejects_invalid_user_id(tmp_path):
     store = UserProfileStore(gateway_root=tmp_path / "gateway")
     with pytest.raises(ValueError, match="非法用户 ID"):
         store.ensure_user(user_id="../outside", display_name="越界")
+
+
+def test_ui_settings_round_trip_does_not_store_native_directory_history(user_profile_store, tmp_path):
+    settings = WebUISettingsDTO(layout={"workbench_view": "gateway"})
+    user_profile_store.write_ui_settings(user_id="user-a", settings=settings)
+    profile = user_profile_store.read_profile(user_id="user-a")
+    assert set(profile["preferences"]) == {"session_sidebar", "workspace_file_tree", "gateway_console"}
+    assert "recent_local_workspace_paths" not in settings.model_dump()
+    reopened = UserProfileStore(gateway_root=tmp_path / "gateway")
+    assert reopened.read_ui_settings(user_id="user-a") == settings
+
+
+def test_user_profile_rejects_obsolete_native_directory_history_without_rewriting(user_profile_store):
+    profile_path = user_profile_store.user_path("user-a") / "profile.jsonc"
+    profile = json.loads(profile_path.read_text())
+    profile["preferences"]["recent_local_workspace_paths"] = ["/private/native-directory"]
+    original = json.dumps(profile).encode()
+    profile_path.write_bytes(original)
+    with pytest.raises(ValueError, match="recent_local_workspace_paths"):
+        user_profile_store.read_ui_settings(user_id="user-a")
+    with pytest.raises(ValueError, match="recent_local_workspace_paths"):
+        user_profile_store.write_ui_settings(user_id="user-a", settings=WebUISettingsDTO())
+    assert profile_path.read_bytes() == original
 
 
 def test_custom_themes_are_seeded_only_into_first_user_profile(tmp_path):

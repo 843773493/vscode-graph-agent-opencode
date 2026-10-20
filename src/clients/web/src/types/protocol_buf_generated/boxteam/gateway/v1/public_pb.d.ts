@@ -3311,11 +3311,6 @@ export declare type WebUISettingsDTO = Message<"boxteam.gateway.v1.WebUISettings
    * @generated from field: optional boxteam.gateway.v1.WebUIThemeSettingsDTO theme = 5;
    */
   theme?: WebUIThemeSettingsDTO | undefined;
-
-  /**
-   * @generated from field: repeated string recent_local_workspace_paths = 6;
-   */
-  recentLocalWorkspacePaths: string[];
 };
 
 /**
@@ -3352,11 +3347,6 @@ export declare type WebUISettingsUpdateDTO = Message<"boxteam.gateway.v1.WebUISe
    * @generated from field: optional boxteam.gateway.v1.WebUIThemeSettingsUpdateDTO theme = 5;
    */
   theme?: WebUIThemeSettingsUpdateDTO | undefined;
-
-  /**
-   * @generated from field: repeated string recent_local_workspace_paths = 6;
-   */
-  recentLocalWorkspacePaths: string[];
 };
 
 /**

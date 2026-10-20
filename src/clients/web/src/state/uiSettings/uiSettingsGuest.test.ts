@@ -33,7 +33,6 @@ const current: WebUiSettings = {
       "workspace-a": ["", "src"],
     },
   },
-  recent_local_workspace_paths: ["/workspace-a"],
 };
 
 const returned: WebUiSettings = {
@@ -50,13 +49,11 @@ const returned: WebUiSettings = {
     ...createDefaultWebUiSettings().session_sidebar,
     sort_mode: "created",
   },
-  recent_local_workspace_paths: ["/workspace-b"],
 };
 
 const patch: WebUiSettingsUpdate = {
   layout: { main_area_ratios: returned.layout.main_area_ratios },
   session_sidebar: { sort_mode: "created" },
-  recent_local_workspace_paths: ["/workspace-b"],
 };
 
 test("游客设置更新保留未参与本次补丁的页面内存状态", () => {
@@ -79,8 +76,5 @@ test("游客设置更新保留未参与本次补丁的页面内存状态", () =>
   }
   if (merged.workspace_file_tree.expanded_paths_by_workspace["workspace-a"]?.join(",") !== ",src") {
     throw new Error("游客布局更新不应清除文件树展开状态");
-  }
-  if (merged.recent_local_workspace_paths.join(",") !== "/workspace-b") {
-    throw new Error("游客最近工作区路径没有应用本次返回值");
   }
 });

@@ -55,7 +55,6 @@ function appState(sessionId: string = SESSION_ID): AppState {
       session_sidebar: {},
       workspace_file_tree: { expanded_paths_by_workspace: {} },
       gateway_console: { view: "routing" },
-      recent_local_workspace_paths: [],
     },
     agents: [agent()],
     pendingConversations: new Map(),

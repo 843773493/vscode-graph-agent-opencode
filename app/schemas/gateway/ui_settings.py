@@ -240,7 +240,6 @@ class WebUISettingsDTO(BaseModel):
         default_factory=WebUIGatewayConsoleSettingsDTO
     )
     theme: WebUIThemeSettingsDTO = Field(default_factory=WebUIThemeSettingsDTO)
-    recent_local_workspace_paths: list[str] = Field(default_factory=list)
 
 
 class WebUISettingsUpdateDTO(BaseModel):
@@ -251,4 +250,3 @@ class WebUISettingsUpdateDTO(BaseModel):
     workspace_file_tree: WebUIWorkspaceFileTreeSettingsDTO | None = None
     gateway_console: WebUIGatewayConsoleSettingsDTO | None = None
     theme: WebUIThemeSettingsUpdateDTO | None = None
-    recent_local_workspace_paths: list[str] | None = None

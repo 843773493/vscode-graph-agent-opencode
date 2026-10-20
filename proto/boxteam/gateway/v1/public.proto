@@ -759,21 +759,23 @@ message WebUISessionSidebarSettingsDTO {
 }
 
 message WebUISettingsDTO {
+  reserved 6;
+  reserved "recent_local_workspace_paths";
   optional WebUILayoutSettingsDTO layout = 1;
   optional WebUISessionSidebarSettingsDTO session_sidebar = 2;
   optional WebUIWorkspaceFileTreeSettingsDTO workspace_file_tree = 3;
   optional WebUIGatewayConsoleSettingsDTO gateway_console = 4;
   optional WebUIThemeSettingsDTO theme = 5;
-  repeated string recent_local_workspace_paths = 6;
 }
 
 message WebUISettingsUpdateDTO {
+  reserved 6;
+  reserved "recent_local_workspace_paths";
   optional WebUILayoutSettingsDTO layout = 1;
   optional WebUISessionSidebarSettingsDTO session_sidebar = 2;
   optional WebUIWorkspaceFileTreeSettingsDTO workspace_file_tree = 3;
   optional WebUIGatewayConsoleSettingsDTO gateway_console = 4;
   optional WebUIThemeSettingsUpdateDTO theme = 5;
-  repeated string recent_local_workspace_paths = 6;
 }
 
 message WebUIThemeSettingsDTO {

@@ -108,7 +108,6 @@ function appState(overrides: Partial<AppState> = {}): AppState {
 
 interface MountOptions {
   activeGatewayWorkspaceId?: string | null;
-  recentLocalWorkspacePaths?: string[];
   finishWorkspaceRefresh?: (
     preferredSessionId?: string | null,
     refs?: {
@@ -170,7 +169,6 @@ async function mountHook(
       apiPort: API_PORT,
       activeGatewayWorkspaceId:
         options.activeGatewayWorkspaceId ?? initialState.activeGatewayWorkspaceId,
-      recentLocalWorkspacePaths: options.recentLocalWorkspacePaths ?? [],
       setState: (update) => {
         current = typeof update === "function" ? update(current) : update;
       },
@@ -964,60 +962,28 @@ describe("Gateway 受管工作区新增", () => {
     ));
   });
 
-  test("根路径为空时跳过最近路径写入", async () => {
-    spyOnGatewayApi("addManagedGatewayWorkspace").mockResolvedValue({} as never);
+  test.each([null, "conn-1"])("添加原生目录只提交给管理入口，不写UI设置：%s", async (connectionId) => {
+    const add = spyOnGatewayApi("addManagedGatewayWorkspace").mockResolvedValue({} as never);
     const { hook, calls } = await mountHook(appState(), {
-      recentLocalWorkspacePaths: ["/tmp/old-workspace"],
+      updateUiSettings: async () => { throw new Error("不应把原生目录复制到UI设置"); },
     });
+    const payload = { root_path: "/tmp/用户选择的目录", ...(connectionId ? { gateway_connection_id: connectionId } : {}) };
 
-    await hook.addManagedGatewayWorkspace({ root_path: "   " });
+    await hook.addManagedGatewayWorkspace(payload);
 
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(add.mock.calls[0]).toEqual([API_PORT, payload]);
     expect(calls.updates).toEqual([]);
     expect(calls.finish).toBe(1);
   });
 
-  test("带 gateway_connection_id 时跳过最近路径写入", async () => {
+  test("已添加工作区但刷新失败时仍报告真实错误", async () => {
     spyOnGatewayApi("addManagedGatewayWorkspace").mockResolvedValue({} as never);
-    const { hook, calls } = await mountHook(appState(), {
-      recentLocalWorkspacePaths: ["/tmp/old-workspace"],
+    const { hook, state, calls } = await mountHook(appState(), {
+      finishWorkspaceRefresh: async () => { throw new Error("刷新失败"); },
     });
 
-    await hook.addManagedGatewayWorkspace({
-      root_path: "/tmp/new-workspace",
-      gateway_connection_id: "conn-1",
-    });
-
-    expect(calls.updates).toEqual([]);
-    expect(calls.finish).toBe(1);
-  });
-
-  test("最近路径按首次出现去重并剔除空白项", async () => {
-    spyOnGatewayApi("addManagedGatewayWorkspace").mockResolvedValue({} as never);
-    const { hook, calls } = await mountHook(appState(), {
-      recentLocalWorkspacePaths: ["/tmp/a", "/tmp/b", "   ", "/tmp/a"],
-    });
-
-    await hook.addManagedGatewayWorkspace({ root_path: "  /tmp/b  " });
-
-    expect(calls.updates).toEqual([
-      { recent_local_workspace_paths: ["/tmp/b", "/tmp/a"] },
-    ]);
-    expect(calls.finish).toBe(1);
-  });
-
-  test("最近路径写入与工作区刷新同时失败时聚合两条错误", async () => {
-    spyOnGatewayApi("addManagedGatewayWorkspace").mockResolvedValue({} as never);
-    const { hook, state } = await mountHook(appState(), {
-      recentLocalWorkspacePaths: [],
-      updateUiSettings: async () => {
-        throw new Error("设置写入失败");
-      },
-      finishWorkspaceRefresh: async () => {
-        throw new Error("刷新失败");
-      },
-    });
-
-    const message = "工作区已添加，但界面同步失败: 保存最近路径失败: 设置写入失败；刷新工作区列表失败: 刷新失败";
+    const message = "工作区已添加，但界面同步失败: 刷新工作区列表失败: 刷新失败";
     await expect(hook.addManagedGatewayWorkspace(addPayload)).rejects.toThrow(message);
 
     const next = state();
@@ -1026,6 +992,7 @@ describe("Gateway 受管工作区新增", () => {
     expect(next.status).toBe(message);
     expect(next.workspaceSwitching).toBe(false);
     expect(next.isBootstrapping).toBe(false);
+    expect(calls.updates).toEqual([]);
   });
 
   test("新增受管工作区接口失败时回读权威列表并原样抛出，活动工作区变化后刷新上下文", async () => {
@@ -1040,7 +1007,6 @@ describe("Gateway 受管工作区新增", () => {
     ]);
     const list = spyOnGatewayApi("listGatewayWorkspaces").mockResolvedValue(refreshedWorkspaces);
     const { hook, state, calls } = await mountHook(appState(), {
-      recentLocalWorkspacePaths: ["/tmp/a"],
       finishWorkspaceRefresh: async (_preferredSessionId, refs) => {
         refs!.gatewayListRequestRef.current += 1;
         refs!.setState((previous) => ({
@@ -1217,7 +1183,7 @@ describe("Gateway 受管工作区新增", () => {
     await hook.addManagedGatewayWorkspace(addPayload);
 
     expect(add).toHaveBeenCalledTimes(1);
-    expect(calls.updates).toEqual([{ recent_local_workspace_paths: [addPayload.root_path] }]);
+    expect(calls.updates).toEqual([]);
     expect(calls.finish).toBe(1);
     expect(state().gatewayWorkspaces).toBe(refreshedWorkspaces.items);
     expect(state().gatewayWorkspacesStale).toBe(false);
@@ -1427,7 +1393,6 @@ test("apiPort 为空时使用默认工作区后端端口", async () => {
       runGatewayWorkspaceListTask: queue.enqueue,
       apiPort: null,
       activeGatewayWorkspaceId: "ws-active",
-      recentLocalWorkspacePaths: [],
       setState: (update) => {
         current = typeof update === "function" ? update(current) : update;
       },

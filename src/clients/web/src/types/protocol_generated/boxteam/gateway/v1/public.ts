@@ -761,7 +761,6 @@ export interface WebUISettingsDTO {
   workspace_file_tree?: WebUIWorkspaceFileTreeSettingsDTO | undefined;
   gateway_console?: WebUIGatewayConsoleSettingsDTO | undefined;
   theme?: WebUIThemeSettingsDTO | undefined;
-  recent_local_workspace_paths: string[];
 }
 
 export interface WebUISettingsUpdateDTO {
@@ -770,7 +769,6 @@ export interface WebUISettingsUpdateDTO {
   workspace_file_tree?: WebUIWorkspaceFileTreeSettingsDTO | undefined;
   gateway_console?: WebUIGatewayConsoleSettingsDTO | undefined;
   theme?: WebUIThemeSettingsUpdateDTO | undefined;
-  recent_local_workspace_paths: string[];
 }
 
 export interface WebUIThemeSettingsDTO {
@@ -5854,7 +5852,6 @@ function createBaseWebUISettingsDTO(): WebUISettingsDTO {
     workspace_file_tree: undefined,
     gateway_console: undefined,
     theme: undefined,
-    recent_local_workspace_paths: [],
   };
 }
 
@@ -5872,9 +5869,6 @@ export const WebUISettingsDTO: MessageFns<WebUISettingsDTO> = {
         ? WebUIGatewayConsoleSettingsDTO.fromJSON(object.gateway_console)
         : undefined,
       theme: isSet(object.theme) ? WebUIThemeSettingsDTO.fromJSON(object.theme) : undefined,
-      recent_local_workspace_paths: globalThis.Array.isArray(object?.recent_local_workspace_paths)
-        ? object.recent_local_workspace_paths.map((e: any) => globalThis.String(e))
-        : [],
     };
   },
 
@@ -5894,9 +5888,6 @@ export const WebUISettingsDTO: MessageFns<WebUISettingsDTO> = {
     }
     if (message.theme !== undefined) {
       obj.theme = WebUIThemeSettingsDTO.toJSON(message.theme);
-    }
-    if (message.recent_local_workspace_paths?.length) {
-      obj.recent_local_workspace_paths = message.recent_local_workspace_paths;
     }
     return obj;
   },
@@ -5921,7 +5912,6 @@ export const WebUISettingsDTO: MessageFns<WebUISettingsDTO> = {
     message.theme = (object.theme !== undefined && object.theme !== null)
       ? WebUIThemeSettingsDTO.fromPartial(object.theme)
       : undefined;
-    message.recent_local_workspace_paths = object.recent_local_workspace_paths?.map((e) => e) || [];
     return message;
   },
 };
@@ -5933,7 +5923,6 @@ function createBaseWebUISettingsUpdateDTO(): WebUISettingsUpdateDTO {
     workspace_file_tree: undefined,
     gateway_console: undefined,
     theme: undefined,
-    recent_local_workspace_paths: [],
   };
 }
 
@@ -5951,9 +5940,6 @@ export const WebUISettingsUpdateDTO: MessageFns<WebUISettingsUpdateDTO> = {
         ? WebUIGatewayConsoleSettingsDTO.fromJSON(object.gateway_console)
         : undefined,
       theme: isSet(object.theme) ? WebUIThemeSettingsUpdateDTO.fromJSON(object.theme) : undefined,
-      recent_local_workspace_paths: globalThis.Array.isArray(object?.recent_local_workspace_paths)
-        ? object.recent_local_workspace_paths.map((e: any) => globalThis.String(e))
-        : [],
     };
   },
 
@@ -5973,9 +5959,6 @@ export const WebUISettingsUpdateDTO: MessageFns<WebUISettingsUpdateDTO> = {
     }
     if (message.theme !== undefined) {
       obj.theme = WebUIThemeSettingsUpdateDTO.toJSON(message.theme);
-    }
-    if (message.recent_local_workspace_paths?.length) {
-      obj.recent_local_workspace_paths = message.recent_local_workspace_paths;
     }
     return obj;
   },
@@ -6000,7 +5983,6 @@ export const WebUISettingsUpdateDTO: MessageFns<WebUISettingsUpdateDTO> = {
     message.theme = (object.theme !== undefined && object.theme !== null)
       ? WebUIThemeSettingsUpdateDTO.fromPartial(object.theme)
       : undefined;
-    message.recent_local_workspace_paths = object.recent_local_workspace_paths?.map((e) => e) || [];
     return message;
   },
 };

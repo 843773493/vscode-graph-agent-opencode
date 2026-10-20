@@ -424,7 +424,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   } = useGatewayWorkspaceMutations({
     apiPort: state.apiPort,
     activeGatewayWorkspaceId: state.activeGatewayWorkspaceId,
-    recentLocalWorkspacePaths: state.uiSettings.recent_local_workspace_paths,
     setState,
     abortCurrentStream,
     invalidateWorkspaceRefreshes,

@@ -127,7 +127,6 @@ function baseState(current: ReturnType<typeof session> | null): AppState {
       session_sidebar: {},
       workspace_file_tree: { expanded_paths_by_workspace: {} },
       gateway_console: { view: "routing" },
-      recent_local_workspace_paths: [],
     },
     gatewayWorkspaces: [],
     agents: [],

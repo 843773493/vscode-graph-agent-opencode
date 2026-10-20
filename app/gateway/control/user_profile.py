@@ -143,9 +143,6 @@ class UserProfileStore:
                 "session_sidebar": preferences.get("session_sidebar", {}),
                 "workspace_file_tree": preferences.get("workspace_file_tree", {}),
                 "gateway_console": preferences.get("gateway_console", {}),
-                "recent_local_workspace_paths": preferences.get(
-                    "recent_local_workspace_paths", []
-                ),
             }
         )
 
@@ -170,9 +167,6 @@ class UserProfileStore:
             "session_sidebar": serialized.pop("session_sidebar", {}),
             "workspace_file_tree": serialized.pop("workspace_file_tree", {}),
             "gateway_console": serialized.pop("gateway_console", {}),
-            "recent_local_workspace_paths": serialized.pop(
-                "recent_local_workspace_paths", []
-            ),
         }
         self._write_profile(user_id=user_id, payload=profile)
 
@@ -192,6 +186,9 @@ class UserProfileStore:
             raise ValueError(f"用户 profile 必须是 JSON 对象: {path}")
         if payload.get("config_version") != _PROFILE_VERSION:
             raise ValueError(f"用户 profile 版本不受支持: {path}")
+        preferences = payload.get("preferences", {})
+        if isinstance(preferences, dict) and "recent_local_workspace_paths" in preferences:
+            raise ValueError("用户 profile 含已移除的 recent_local_workspace_paths；请显式清理旧开发数据后重试")
         return payload
 
 

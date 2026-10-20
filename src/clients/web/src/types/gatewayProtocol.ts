@@ -194,12 +194,8 @@ export type WebUISessionSidebarSettingsDTO = Omit<
   sort_mode?: "created" | "updated";
   grouping_mode?: "workspace" | "time";
 };
-export type WebUISettingsDTO = Omit<OptionalFields<GatewayProtocol.WebUISettingsDTO>, "recent_local_workspace_paths"> & {
-  recent_local_workspace_paths: string[];
-};
-export type WebUISettingsUpdateDTO = Omit<OptionalFields<GatewayProtocol.WebUISettingsUpdateDTO>, "recent_local_workspace_paths"> & {
-  recent_local_workspace_paths?: string[] | null;
-};
+export type WebUISettingsDTO = OptionalFields<GatewayProtocol.WebUISettingsDTO>;
+export type WebUISettingsUpdateDTO = OptionalFields<GatewayProtocol.WebUISettingsUpdateDTO>;
 export type WebUIThemeSettingsDTO = Omit<OptionalFields<GatewayProtocol.WebUIThemeSettingsDTO>, "background" | "resolved_theme"> & {
   background?: GatewayThemeBackgroundDTO | null;
   resolved_theme?: ResolvedGatewayThemeDTO | null;

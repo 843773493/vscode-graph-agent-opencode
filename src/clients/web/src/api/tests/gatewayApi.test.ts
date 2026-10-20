@@ -681,7 +681,6 @@ describe("Gateway UI 设置读取边界", () => {
             workspace_file_tree: { expanded_paths_by_workspace: expandedPaths },
             gateway_console: {},
             theme: { theme_id: "warm", background: null, resolved_theme: null },
-            recent_local_workspace_paths: [],
           },
           request_id: "req_ui_settings",
         });
