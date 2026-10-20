@@ -5804,7 +5804,7 @@ async function runEmptyForkUi(surface) {
   }, { timeout: 30_000 });
   await catalogRow(empty, empty.sessionId).click({ button: "right" });
   const [emptyPointResponse] = await Promise.all([
-    waitEmptyPoint(), empty.page.getByRole("menuitem", { name: "从上下文创建子会话", exact: true }).click(),
+    waitEmptyPoint(), empty.page.getByRole("menuitem", { name: "从上下文创建分支", exact: true }).click(),
   ]);
   assert.equal(emptyPointResponse.status(), 200, await emptyPointResponse.text());
   const emptyPoint = (await emptyPointResponse.json()).data;
@@ -6110,8 +6110,92 @@ async function runDefaultChildForkUi(surface) {
   assert.deepEqual(await readRollout(childPublished.owner, "SELECT execution_id FROM executions WHERE session_id=? AND thread_id=?",
     [childPublished.owner.sessionId, childPublished.owner.threadId]), [], "右侧二次分支不得自动生成新的执行");
   assert.deepEqual((await loadCompleteThreadHistory(source)).items, before.history.items);
+
+  // 已有子线程的关闭、重开和刷新只是展示操作，不得再次创建或启动任务。
+  const existing = [source, child, childPublished.owner];
+  const controlQuery = "SELECT (SELECT COUNT(*) FROM thread_catalog) AS threads,(SELECT COUNT(*) FROM thread_creation_records) AS creations,(SELECT COUNT(*) FROM thread_execution_intents) AS intents,(SELECT COUNT(*) FROM collaboration_fanouts) AS fanouts";
+  const readExisting = async () => ({
+    control: await readControl(source, controlQuery),
+    owners: await Promise.all(existing.map(async (owner) => {
+      const history = await loadCompleteThreadHistory(owner);
+      return { threadId: owner.threadId, items: history.items, internal: history.internal_executions,
+        executions: await readRollout(owner, "SELECT * FROM executions ORDER BY execution_id"),
+        calls: await readRollout(owner, "SELECT * FROM model_calls ORDER BY model_call_id"),
+        graph: await graphLifecycle(owner) };
+    })),
+  });
+  const existingBefore = await readExisting();
+  const unexpectedRequests = [];
+  const recordMutation = (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "POST" && /\/sessions\/[^/]+\/(fork-context|(?:threads\/[^/]+\/)?messages)$/.test(path)) {
+      unexpectedRequests.push({ method: request.method(), path, body: request.postDataJSON() });
+    }
+  };
+  source.page.on("request", recordMutation);
+  try {
+    for (const owner of [childPublished.owner, child]) {
+      await source.page.getByRole("button", { name: "关闭子线程对话", exact: true }).click();
+      await source.page.locator(".child-thread-conversation").waitFor({ state: "hidden" });
+      await source.page.locator(`.child-thread-item[data-thread-id="${owner.threadId}"] .child-thread-main`).click();
+      const conversation = source.page.locator(`.child-thread-conversation[data-thread-id="${owner.threadId}"]`);
+      await conversation.waitFor({ state: "visible" });
+      await conversation.locator(`.child-thread-turn[data-turn-id="${successor.turn.turn_id}"]`).waitFor({ state: "visible" });
+      assert.equal(await catalogRow(source, source.sessionId).getAttribute("aria-current"), "true");
+      assert.equal(await source.page.locator("#input").isVisible(), true);
+    }
+    await openOwner(childPublished.owner);
+    await source.page.locator(`.child-thread-conversation[data-thread-id="${childFork.thread_id}"] .child-thread-turn[data-turn-id="${successor.turn.turn_id}"]`).waitFor({ state: "visible" });
+    assert.deepEqual(await readExisting(), existingBefore, "重开和刷新不能改变历史、执行、模型调用、线程或回报准入");
+    assert.deepEqual(unexpectedRequests, [], "重开已有子线程不能提交fork或消息");
+  } finally {
+    source.page.off("request", recordMutation);
+  }
+
+  // 左侧会话菜单与消息入口共用同一弹窗，来源仍是该 Session 的 main。
+  await catalogRow(source, source.sessionId).click({ button: "right" });
+  const [sidebarResponse] = await Promise.all([
+    waitPoint(), source.page.getByRole("menuitem", { name: "从上下文创建分支", exact: true }).click(),
+  ]);
+  assert.equal(sidebarResponse.status(), 200, await sidebarResponse.text());
+  const sidebarPoint = (await sidebarResponse.json()).data;
+  assertForkSourceOwner(sidebarPoint.source_uri, source);
+  assert.deepEqual([sidebarPoint.source_view_id, sidebarPoint.source_view_revision, sidebarPoint.anchor_item_id],
+    [before.view.view_id, before.view.history_view_revision, before.completedAnchorItemId]);
+  const sidebarDialog = source.page.getByRole("dialog", { name: "创建上下文分支", exact: true });
+  await sidebarDialog.waitFor({ state: "visible" });
+  assert.deepEqual(await Promise.all(["复制范围", "截止位置", "创建位置", "目标容器"].map((label) =>
+    sidebarDialog.getByLabel(label, { exact: true }).inputValue())),
+    ["view_prefix_fork", "inclusive", "new_child_thread", sidebarPoint.child_container_uri]);
+  await waitUntil(async () => await sidebarDialog.getByRole("button", { name: "创建分支", exact: true }).isEnabled(), "侧边菜单取得真实候选后允许默认创建");
+  const sidebarSubmission = await beginForkUiSubmission(source.page, source, source, source.sessionId,
+    (options) => sidebarDialog.getByRole("button", { name: "创建分支", exact: true }).click(options));
+  const { response: sidebarForkResponse, request: sidebarRequest, payload: sidebarPayload } = await sidebarSubmission.waitForResponse();
+  assert.equal(sidebarForkResponse.status(), 200, JSON.stringify(sidebarPayload));
+  const sidebarFork = sidebarPayload.data;
+  assert.deepEqual([sidebarRequest.source_uri, sidebarRequest.source_view_id, sidebarRequest.source_view_revision,
+    sidebarRequest.anchor_item_id, sidebarRequest.mode, sidebarRequest.anchor_mode, sidebarRequest.creation_kind,
+    sidebarRequest.target_container_uri, sidebarRequest.relationship, sidebarRequest.resources],
+    [sidebarPoint.source_uri, sidebarPoint.source_view_id, sidebarPoint.source_view_revision, sidebarPoint.anchor_item_id,
+      "view_prefix_fork", "inclusive", "new_child_thread", sidebarPoint.child_container_uri, "detached", []]);
+  assert.equal(sidebarFork.session.session_id, source.sessionId);
+  assert.ok(!existing.some((owner) => owner.threadId === sidebarFork.thread_id), "侧边新建必须发布全新thread");
+  await source.page.locator(`.child-thread-conversation[data-thread-id="${sidebarFork.thread_id}"]`).waitFor({ state: "visible" });
+  assert.equal(await catalogRow(source, source.sessionId).getAttribute("aria-current"), "true");
+  assert.deepEqual((await ownerApi(source, `/api/v1/sessions/${source.sessionId}/main-thread`)).data, main);
+  const sidebarPublished = await publishedForkOwner(source, sidebarRequest, sidebarFork, before);
+  assert.deepEqual(await graphLifecycle(sidebarPublished.owner), { compiled: [], built: [], acquired: [], closed: [] });
+  assert.deepEqual(await readRollout(sidebarPublished.owner, "SELECT execution_id FROM executions WHERE session_id=? AND thread_id=?",
+    [source.sessionId, sidebarFork.thread_id]), [], "侧边新建不得自动执行或回报");
+  const afterSidebar = await readExisting();
+  assert.deepEqual(afterSidebar.owners, existingBefore.owners, "侧边新建不得修改已有main或child事实");
+  assert.deepEqual(afterSidebar.control, [{ ...existingBefore.control[0],
+    threads: existingBefore.control[0].threads + 1, creations: existingBefore.control[0].creations + 1 }],
+    "侧边新建只增加一个thread及其创建记录，不派生执行或回报准入");
   return { source: { sessionId: source.sessionId, threadId: source.threadId },
     point, omitOption, request, fork, summary, coldHistory, displayed, successor, publication: published.publication,
+    reopen: { before: existingBefore, unexpectedRequests },
+    sidebar: { point: sidebarPoint, request: sidebarRequest, fork: sidebarFork, publication: sidebarPublished.publication },
     childBranch: { source: childPoint, request: childRequest, fork: childFork, publication: childPublished.publication,
       history: childPublished.targetHistory, displayed: childPublished.displayed } };
 }
@@ -7083,7 +7167,7 @@ async function runLiveResourceForks(surface, owners) {
     const pointPending = source.page.waitForResponse((response) => response.request().method() === "GET"
       && new URL(response.url()).pathname === `/api/v1/sessions/${source.sessionId}/fork-source-point`);
     await catalogRow(source, source.sessionId).click({ button: "right" });
-    await source.page.getByRole("menuitem", { name: "从上下文创建子会话", exact: true }).click();
+    await source.page.getByRole("menuitem", { name: "从上下文创建分支", exact: true }).click();
     const pointReply = await pointPending;
     assert.equal(pointReply.status(), 200, await pointReply.text());
     const point = (await pointReply.json()).data;

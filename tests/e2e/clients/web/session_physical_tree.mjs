@@ -434,7 +434,7 @@ try {
     (response) => response.request().method() === "GET"
       && new URL(response.url()).pathname === `/api/v1/sessions/${fixture.parentSessionId}/fork-source-point`,
   );
-  await page.getByRole("menuitem", { name: "从上下文创建子会话", exact: true }).click();
+  await page.getByRole("menuitem", { name: "从上下文创建分支", exact: true }).click();
   const pointResponse = await pointResponsePromise;
   assert.equal(pointResponse.status(), 200, await pointResponse.text());
   const point = (await pointResponse.json()).data;

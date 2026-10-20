@@ -151,7 +151,7 @@ export default function AgentSessionsContextMenus({
     void onForkSessionContext(target.workspaceId, target.sessionId).catch(
       (error: unknown) => {
         const message = errorMessage(error);
-        onStatusChange(`从上下文创建子会话失败: ${message}`);
+        onStatusChange(`从上下文创建分支失败: ${message}`);
       },
     );
   };
@@ -248,11 +248,11 @@ export default function AgentSessionsContextMenus({
           <button
             type="button"
             role="menuitem"
-            title="仅复制当前 Agent 上下文状态，并创建为当前会话的子会话"
+            title="选择上下文范围和目标，默认在当前会话中创建空闲子线程"
             onClick={handleForkSessionContext}
           >
             <span className="codicon codicon-git-branch agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">从上下文创建子会话</span>
+            <span className="agent-sessions-menu-item-label">从上下文创建分支</span>
           </button>
           <button
             type="button"
