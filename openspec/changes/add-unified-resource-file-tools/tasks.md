@@ -4,6 +4,7 @@
 - [ ] 1.2 全仓清点文件工具、backend、UI/API/CLI、附件和工具输出生成/消费、Provider、历史投影、协议与测试，建立直接/间接caller清单与唯一文件owner边界。
 - [ ] 1.3 固定工具目标/查询、limits/cursor、条件写入和逐文件执行结果类型，按spec区分寻址错误和文件执行错误；跨端操作授权独立于send/read/wait，不新增通用operation_id。
 - [ ] 1.4 按公共 owner 的原生路径输入合同清点并迁齐相对/绝对/URI 目标解析，以及 `WorkspaceToolPathResolver`、filesystem tools、debugging、apply_patch、backend 输出转换和直接/间接测试；明确用户原生路径与 DeepAgents 虚拟路径的入口/类型，保持一条操作链，不扩大 patch 内部相对文件名的能力。
+  - 2026-10-20 本地解析切片：删除 `_absolute_to_workspace_relative()` 及其去根回退；`ls/read_file/glob/grep/write_file/edit_file` 和源码调试共用显式工作区目标，接受相对路径、工作区内原生绝对路径和 Workspace files URI。原生解析复用 `core/path_utils.py::resolve_native_file_path`，URI 复用公共 grammar/文件 owner，身份只读不创建；不借中继进程 cwd。补丁内部文件名保持相对固定根，DeepAgents 虚拟根只在 backend 内部使用；调试 Skill 同步三种输入。尚未完成统一 URI 结果、其它资源根/远端与第5组产物调用迁移，本项保持未勾。
 - [ ] 1.5 核验统一寻址 owner 2.7 的未注册目录 gateway/files 根及文件树浏览/编辑、快捷目录保存/重开、响应/持久化消费者已接通，本 change 复用该闭包接入模型文件工具；真实 UI 验收实际对象、编辑结果与工作区注册表不变，不要求或自动注册、不伪造 workspace_id、不收窄既有能力。
 
 ## 2. 本地技能包目录与轻量读取
@@ -29,6 +30,8 @@
 - [ ] 4.5 两个真实目标验证远端patch修改目标端、source不变；独立权限、失败能力、目标固定与UTF-8/raw-byte hash合同一致。
 - [ ] 4.6 复用既有apply_patch add/delete与hints/move正式测试，保留输入、内容和changeset断言；覆盖删除版本冲突、移动目的版本/expected_absent冲突及目的已发布但源未删除的逐路径部分结果，不把文本文件操作扩成通用目录mutation。
 - [ ] 4.7 在隔离目标中用外部绝对路径和工作区内同名对照文件验证真实读取、授权写入或拒绝零写入，确保工作区外目标不被重定向、不被强制先注册工作区；迁齐调用方后物理删除 `_absolute_to_workspace_relative()` 的 `path.lstrip("/")` 歧义回退，并将虚拟根旧测试迁入明确 backend 边界，保留终端/shell 原生路径与 Gateway 管理目录入口。
+  - 2026-10-20 定向证据位于 `out/tests/temp/openspec_takeover/artifacts/runs/`：`file-target-final-regression-002` 129 passed、1 skipped/6.14秒，覆盖六个真实文件工具的三种输入、不同 relay cwd、外部实际文件及工作区内旧回退同名文件零误读/误写、调试入口、补丁与未注册目录 owner；Windows 原生主机用例在 Linux 上跳过，不能视为 Windows 验收。最终消除工具二次解析后，`file-target-codex-final-003` 对受影响入口补验28 passed/2.77秒；`file-target-backend-boundary-001` 6 passed/1.33秒核虚拟根仅属 backend；补齐旧 scheme 迁移 TODO 后的 `file-target-final-static-003` 对12个变更 Python 文件 Ruff exit 0。`file-target-final-openspec-001` 严格校验 exit 0。所有运行使用进程外 timeout/内存保护，保留命令、源码指纹、原始输出及退出码。
+  - 扩展调试文件有13个旧失败，均发生于 canonical thread 绑定或 thread ID 校验；完整 `git archive dd4cd794` 基线运行 `file-target-debug-baseline-001` 同样13 failed、2 passed/1.47秒，本轮未放宽这些断言，也不声称整个调试套件通过。本轮未执行真实 Windows、完整 Gateway/远端及 Web 交互验收；当前模型工具明确拒绝外部路径，未注册目录 Web 访问能力沿既有 owner 保留，本项完整验收仍未关闭。
 
 ## 5. 会话产物与旧链路下线
 

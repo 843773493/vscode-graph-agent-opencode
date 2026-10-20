@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import BinaryIO
 
 from app.agents.tools.apply_patch.journal import (
@@ -385,6 +385,8 @@ def _existing_mode(path: Path) -> int | None:
 
 def _resolve_workspace_file(file_path: str, workspace_root: Path) -> Path:
     workspace_root = workspace_root.resolve()
+    if "://" in file_path or Path(file_path).is_absolute() or PureWindowsPath(file_path).drive:
+        raise ValueError(f"apply_patch 文件路径无效: 补丁内文件名必须相对固定根: {file_path}")
     try:
         relative_path = normalize_workspace_relative_path(
             file_path,

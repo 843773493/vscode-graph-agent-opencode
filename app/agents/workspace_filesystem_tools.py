@@ -459,7 +459,7 @@ def configure_workspace_filesystem_tools(
     *,
     workspace_root: Path,
 ) -> None:
-    """将 DeepAgents 文件工具适配为模型可见的标准相对路径协议。"""
+    """用户相对/原生绝对/URI 目标经同一解析后进入 DeepAgents 虚拟后端。"""
 
     resolver = WorkspaceToolPathResolver(workspace_root)
     session_artifact_backend = (
@@ -486,7 +486,7 @@ def configure_workspace_filesystem_tools(
         """
         relative_path = resolver.normalize_relative_path(path)
         _validate_model_path(tool_name, relative_path)
-        return relative_path, resolver.backend_virtual_path(path)
+        return relative_path, "/" if relative_path == "." else f"/{relative_path}"
 
     def sync_ls(
         path: str,

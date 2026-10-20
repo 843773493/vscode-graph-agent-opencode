@@ -51,6 +51,11 @@ def _read_workspace_id(identity_path: Path) -> str:
     return validate_workspace_id(workspace_id, source=identity_path)
 
 
+def read_workspace_id(workspace_root: Path) -> str:
+    """只读既有目标身份；资源解析不能顺带创建工作区。"""
+    return _read_workspace_id(workspace_identity_path(workspace_root))
+
+
 def _create_workspace_id(identity_path: Path, workspace_id: str | None = None) -> str:
     workspace_id = validate_workspace_id(workspace_id) if workspace_id else str(uuid4())
     try:
@@ -137,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Workspace 根目录绝对路径",
     )
     args = parser.parse_args(argv)
-    print(_read_workspace_id(workspace_identity_path(args.workspace_root)) if args.read_only else load_or_create_workspace_id(args.workspace_root))
+    print(read_workspace_id(args.workspace_root) if args.read_only else load_or_create_workspace_id(args.workspace_root))
     return 0
 
 

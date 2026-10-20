@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import re
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -8,40 +8,10 @@ from urllib.parse import urlsplit
 from deepagents.backends.utils import validate_path
 
 from app.core.exceptions import ForbiddenError
-from app.core.path_utils import safe_join
-
-_WINDOWS_DRIVE_PATTERN = re.compile(r"^[a-zA-Z]:")
-
-
-def _looks_absolute(path: str) -> bool:
-    """判断输入是否以绝对路径形式出现（POSIX 前导 / 或 Windows 盘符）。"""
-    return path.startswith("/") or bool(_WINDOWS_DRIVE_PATTERN.match(path))
-
-
-def _absolute_to_workspace_relative(
-    path: str,
-    *,
-    workspace_root: Path | None,
-) -> str:
-    """把绝对路径收敛为工作区相对路径，绝不逃出工作区。
-
-    提示词优先建议相对路径，但模型仍可能传入绝对路径。这里不再直接拒绝：
-    位于工作区内的宿主机绝对路径被还原为其相对路径；其余以 `/` 开头的路径
-    按 DeepAgents 虚拟绝对路径处理，去掉前导 `/` 后锚定到工作区根目录。
-    Windows 盘符绝对路径保持原样，交由 validate_path 拒绝，避免盘符歧义。
-    """
-    if _WINDOWS_DRIVE_PATTERN.match(path):
-        return path
-    if workspace_root is not None:
-        root = workspace_root.resolve()
-        try:
-            relative = Path(path).resolve().relative_to(root)
-        except ValueError:
-            pass
-        else:
-            return relative.as_posix() or "."
-    stripped = path.lstrip("/")
-    return stripped or "."
+from app.core.path_utils import resolve_native_file_path, safe_join
+from app.core.resource_uri import parse_resource_uri
+from app.core.workspace_identity import read_workspace_id
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 
 def normalize_workspace_relative_path(
@@ -50,13 +20,8 @@ def normalize_workspace_relative_path(
     field_name: str = "path",
     workspace_root: Path | None = None,
 ) -> str:
-    """把模型输入规范化为标准工作区相对路径。
-
-    规范优先接受工作区相对路径，同时兼容模型误传的绝对路径。传入
-    workspace_root 时，工作区内的宿主机绝对路径会被精确还原为相对路径；
-    未传时按 DeepAgents 虚拟绝对路径去掉前导 `/` 处理，仍锚定在工作区根。
-    """
-    normalized_input = raw_path.strip()
+    """把受限工作区工具的用户目标转为内部相对路径；绝不猜测虚拟根。"""
+    normalized_input = raw_path
     if not normalized_input:
         raise ValueError(f"{field_name} 不能为空")
     if "\x00" in normalized_input:
@@ -65,12 +30,33 @@ def normalize_workspace_relative_path(
         normalized_input,
         field_name=field_name,
     )
-    normalized_input = normalized_input.replace("\\", "/")
-    if _looks_absolute(normalized_input):
-        normalized_input = _absolute_to_workspace_relative(
-            normalized_input,
-            workspace_root=workspace_root,
+    if "://" in normalized_input:
+        if workspace_root is None:
+            raise ValueError(f"{field_name} 的资源 URI 必须绑定明确目标工作区")
+        # 当前适配器仅公布工作区文件能力；Gateway 根交其实际 owner，不在此回退。
+        parsed = parse_resource_uri(normalized_input)
+        if parsed.scope != "workspace" or parsed.kind != "files":
+            raise ValueError(f"{field_name} 超出当前工作区工具的访问能力")
+        owner = WorkspaceFilePaths(
+            workspace=workspace_root.resolve(), workspace_id=read_workspace_id(workspace_root), bindings=None,
         )
+        try:
+            target, _uri = owner.resolve(normalized_input)
+        except ForbiddenError as error:
+            raise ValueError(f"{field_name} 超出当前工作区工具的访问能力") from error
+        normalized_input = target.relative_to(owner.workspace).as_posix()
+    elif workspace_root is not None:
+        if ".." in Path(normalized_input).parts:
+            raise ValueError(f"{field_name} 不是有效的工作区相对路径: 不允许上级目录")
+        try:
+            target = resolve_native_file_path(workspace_root, normalized_input)
+        except ForbiddenError as error:
+            raise ValueError(f"{field_name} 超出当前工作区工具的访问能力") from error
+        normalized_input = target.relative_to(workspace_root.resolve()).as_posix()
+    elif Path(normalized_input).is_absolute():
+        raise ValueError(f"{field_name} 的绝对路径必须绑定明确目标工作区")
+    if os.name != "nt" and "\\" in normalized_input:
+        raise ValueError(f"{field_name} 含目标平台的字面反斜杠，当前虚拟后端不支持该文件名")
     try:
         normalized = validate_path(normalized_input)
     except ValueError as error:
@@ -83,6 +69,7 @@ def normalize_workspace_relative_path(
 def _normalize_virtual_uri(raw_path: str, *, field_name: str) -> str:
     """把受支持的虚拟 URI 转换成内部虚拟路径。"""
 
+    # TODO（文件工具第5组）：迁齐附件及工具结果的生成、读取和历史投影后删除旧 scheme。
     if not raw_path.startswith("boxteam-session://"):
         return raw_path
     parsed = urlsplit(raw_path)

@@ -369,33 +369,31 @@ def test_apply_patch_rejects_duplicate_paths_and_escapes_workspace(
 *** End Patch"""
         )
 
-    # 工作区外的宿主机绝对路径不会逃出工作区，而是被收敛到工作区内；
-    # 文件不会写到工作区外。
     outside_file = (workspace_root.parent / "outside.txt").resolve()
-    _apply(
-        f"""*** Begin Patch
+    with pytest.raises(ValueError, match="补丁内文件名必须相对固定根"):
+        _apply(
+            f"""*** Begin Patch
 *** Add File: {outside_file}
 +content
 *** End Patch"""
-    )
+        )
     assert not outside_file.exists()
 
 
-def test_apply_patch_normalizes_in_workspace_absolute_path(
+def test_apply_patch_rejects_absolute_internal_filename_even_inside_workspace(
     workspace_scope: tuple[str, Path],
 ) -> None:
     workspace_root = workspace_scope[1]
     absolute_inside = (workspace_root / "src" / "abs.txt").resolve()
 
-    result = _apply(
-        f"""*** Begin Patch
+    with pytest.raises(ValueError, match="补丁内文件名必须相对固定根"):
+        _apply(
+            f"""*** Begin Patch
 *** Add File: {absolute_inside}
 +content
 *** End Patch"""
-    )
-
-    assert result["status"] == "success"
-    assert (workspace_root / "src" / "abs.txt").read_text(encoding="utf-8") == "content"
+        )
+    assert not absolute_inside.exists()
 
 
 def test_apply_patch_tool_returns_json_result(

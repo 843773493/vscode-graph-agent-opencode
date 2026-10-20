@@ -18,7 +18,7 @@ read/write 的文件目标、ls/glob/grep 的根目标和 apply_patch 的根目�
 
 未注册目录的文件树浏览、编辑与快捷目录保留，由统一寻址 owner 先补齐规范引用，消费者同批迁响应、持久化与重开，不私建模板、不借用工作区身份、不以注册为访问前提。真实 UI 验收需核指定目录内容、编辑实际文件、重开快捷目录和工作区注册表不变，不能用改为只读或删除目录入口来消除真实路径字段。
 
-当前 `workspace_tool_paths.py::_absolute_to_workspace_relative()` 在绝对路径不属于工作区时使用 `path.lstrip("/")`，把 `/etc/hosts` 错投工作区的 `etc/hosts`。实施先全仓清点 `WorkspaceToolPathResolver`、filesystem tools、debugging、apply_patch 及 backend 输出转换和测试，分离用户原生绝对路径与 DeepAgents 内部虚拟路径入口，再删除该歧义回退与重复执行链。`backend_virtual_to_workspace_relative` 等内部转换不得成为猜测用户路径的兜底；既有把 `/src/main.mjs` 当虚拟根的测试须转为明确的 backend 输入测试，并补真实用户绝对路径的相反断言。
+2026-10-20 本地切片已删除 `workspace_tool_paths.py::_absolute_to_workspace_relative()` 及其 `path.lstrip("/")` 歧义回退。`core/path_utils.py::resolve_native_file_path` 是目标机器原生路径的统一解释入口，显式绑定根；Web 文件 owner 按既有能力允许外部绝对路径，当前模型文件/调试工具保持工作区能力，外部目标明确拒绝。Workspace files URI 使用公共 grammar、只读既有工作区身份，再交同一文件 owner 和内部操作链；解析不创建身份。补丁内部文件名明确限制为固定根下的相对路径，不能从普通文件目标合同推导绝对文件名。`backend_virtual_to_workspace_relative` 等转换仅消费内部 backend 输出；原虚拟根断言已与真实用户绝对路径测试分开。完整 URI 输出、技能导航、远端执行和会话产物仍按后续任务迁齐，旧 `boxteam-session://` 的生成/消费统一在第5组完成后删除。
 
 ### 2. 实际 owner 就地执行，路由不是持有数据
 
@@ -62,4 +62,4 @@ write/edit/patch 的内容前置使用精确原始 byte `sha256:<hex>` 或该 ow
 4. 平移会话产物全部直接和间接消费者、协议与测试；删除旧解析链与 scheme，开发中间数据按已授权清理。
 5. 按 tasks 逐项验收。公开破坏性改动同闭包一次交付，不保留旧链兼容回退；若候选失败则不发布该候选，已发生的目标写入按真实 owner 结果处理。
 
-未注册目录引用及控制面根持久化例外只消费统一寻址 owner「原生目录根绑定必须由目标 Gateway 唯一持有」；目标端复用既有文件 owner。本 change 仍为规划，未据此开始文件工具实施。
+未注册目录引用及控制面根持久化例外只消费统一寻址 owner「原生目录根绑定必须由目标 Gateway 唯一持有」；目标端复用既有文件 owner。本 change 已开始本地原生路径解析切片，当前证据只覆盖 tasks 登记的行为，不代表全部文件工具迁移完成。

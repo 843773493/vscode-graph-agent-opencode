@@ -14,6 +14,8 @@ from app.agents.tool_invocation_context import (
 )
 from app.agents.tools.debug_redaction import REDACTION_PLACEHOLDER
 from app.agents.tools.debugging import create_debugging_tools
+from app.core.resource_uri import resource_display_uri
+from app.core.workspace_identity import bind_workspace_id
 from app.schemas.internal_v2.node_debug import (
     NodeDebugBreakpointDTO,
     NodeDebugConfigurationDTO,
@@ -28,6 +30,35 @@ from app.schemas.internal_v2.node_debug import (
 
 _MAIN_THREAD_ID = "thr_00000000700070008000000000000001"
 _MISSING_CONFIGURATION_ID = "dbgcfg_" + "b" * 32
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("input_kind", ["relative", "absolute", "uri", "outside"])
+async def test_debugging_source_targets_share_workspace_resolution(tmp_path: Path, input_kind: str) -> None:
+    workspace = tmp_path / "workspace"
+    workspace_id = bind_workspace_id(workspace, "019d1b4a-1111-7000-8000-000000000001")
+    session_id = "ses_debug_target"
+    state = NodeDebugStateDTO(session_id=session_id, thread_id=_MAIN_THREAD_ID, status="idle")
+    service = MagicMock()
+    service.get_state = AsyncMock(return_value=state)
+    service.record_tool_action = AsyncMock()
+    service.apply_action = AsyncMock(return_value=state)
+    context = ToolInvocationContext(thread_binding=ThreadRuntimeBinding(session_id=session_id, thread_id=_MAIN_THREAD_ID))
+    context.set_tool_call_id("call_source_target")
+    tools = create_debugging_tools(session_id=session_id, workspace_root=workspace, node_debug_service=service, invocation_context=context)
+    target = {
+        "relative": "source.mjs",
+        "absolute": str(workspace / "source.mjs"),
+        "uri": resource_display_uri(scope="workspace", scope_id=workspace_id, kind="files", tail_segments=("root", "source.mjs")),
+        "outside": str(tmp_path / "outside.mjs"),
+    }[input_kind]
+    result = await next(tool for tool in tools if tool.name == "add_breakpoint").ainvoke({"fileFullPath": target, "line": 2})
+    assert json.loads(result)["ok"] is (input_kind != "outside")
+    if input_kind == "outside":
+        service.apply_action.assert_not_awaited()
+    else:
+        command = service.apply_action.await_args.kwargs["command"]
+        assert (command.session_id, command.thread_id, command.params.path) == (session_id, _MAIN_THREAD_ID, "source.mjs")
 
 
 def _build_tools(tmp_path: Path):

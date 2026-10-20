@@ -8,7 +8,7 @@ from typing import Protocol
 
 import httpx
 
-from app.core.path_utils import safe_join
+from app.core.path_utils import resolve_native_file_path, safe_join
 from app.core.resource_uri import (
     ParsedResourceUri,
     parse_resource_uri,
@@ -130,14 +130,12 @@ class WorkspaceFilePaths:
         unresolved = native if native.is_absolute() else self.workspace / native
         if reject_symlink and unresolved.is_symlink():
             raise ValueError("不允许通过文件预览编辑符号链接")
-        if native.is_absolute():
-            target = native.resolve()
-        elif scope == "filesystem":
+        if not native.is_absolute() and scope == "filesystem":
             if value:
                 raise ValueError("原生目录入口必须是绝对路径或资源 URI")
             target = Path(self.workspace.anchor)
         else:
-            target = safe_join(self.workspace, value)
+            target = resolve_native_file_path(self.workspace, value, allow_absolute_outside=True)
         return target, self.reference(target)
 
     def reference(self, target: Path) -> str:

@@ -16,6 +16,8 @@ from pydantic import ValidationError
 from app.agents import workspace_filesystem_tools
 from app.agents.workspace_backend import build_workspace_backend
 from app.agents.workspace_filesystem_tools import configure_workspace_filesystem_tools
+from app.core.resource_uri import resource_display_uri
+from app.core.workspace_identity import bind_workspace_id
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
@@ -153,8 +155,9 @@ async def test_read_file_never_reads_host_absolute_path(
 
     result = await tool.coroutine(path=str(outside_file), runtime=runtime)
 
-    # 工作区外的宿主机绝对路径被收敛回工作区，绝不读取工作区外内容。
+    # 外部路径明确拒绝，不能把它改投工作区内同名文件。
     assert isinstance(result, ToolMessage)
+    assert result.status == "error"
     assert "HOST_ONLY_CONTENT" not in result.content
 
 
@@ -510,7 +513,7 @@ async def test_grep_returns_bounded_timeout_without_python_fallback(
 
 
 @pytest.mark.asyncio
-async def test_all_filesystem_tools_normalize_backend_virtual_paths(
+async def test_filesystem_tools_accept_target_native_absolute_paths(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "src").mkdir()
@@ -526,10 +529,9 @@ async def test_all_filesystem_tools_normalize_backend_virtual_paths(
         SimpleNamespace(tool_call_id="call_normalize_virtual_path"),
     )
 
-    # 模型误传虚拟绝对路径时不再直接拒绝，而是归一化为工作区相对路径。
-    ls_result = await tools["ls"].coroutine(path="/src", runtime=runtime)
+    ls_result = await tools["ls"].coroutine(path=str(tmp_path / "src"), runtime=runtime)
     read_result = await tools["read_file"].coroutine(
-        path="/src/main.mjs",
+        path=str(tmp_path / "src/main.mjs"),
         runtime=runtime,
     )
 
@@ -538,6 +540,77 @@ async def test_all_filesystem_tools_normalize_backend_virtual_paths(
     assert isinstance(read_result, ToolMessage)
     assert read_result.status == "success"
     assert "before" in read_result.content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("input_kind", ["relative", "absolute", "uri"])
+async def test_filesystem_tools_share_target_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, input_kind: str,
+) -> None:
+    workspace, relay = tmp_path / "workspace", tmp_path / "relay"
+    (workspace / "src").mkdir(parents=True)
+    relay.mkdir()
+    workspace_id = bind_workspace_id(workspace, "019d1b4a-1111-7000-8000-000000000001")
+    source = workspace / "src/main.txt"
+    source.write_text("selected target\n", encoding="utf-8")
+    monkeypatch.chdir(relay)
+    middleware = FilesystemMiddleware(backend=build_workspace_backend(workspace), tool_token_limit_before_evict=None)
+    configure_workspace_filesystem_tools(middleware, workspace_root=workspace)
+    tools = {item.name: item for item in middleware.tools}
+    runtime = cast("ToolRuntime[None, FilesystemState]", SimpleNamespace(tool_call_id="call_fixed_target"))
+
+    def target(relative: str) -> str:
+        if input_kind == "absolute":
+            return str(workspace / relative)
+        if input_kind == "uri":
+            return resource_display_uri(scope="workspace", scope_id=workspace_id, kind="files", tail_segments=("root", *Path(relative).parts))
+        return relative
+
+    operations = [
+        ("ls", {"path": target("src")}),
+        ("read_file", {"path": target("src/main.txt")}),
+        ("glob", {"path": target("src"), "pattern": "*.txt"}),
+        ("grep", {"path": target("src"), "pattern": "selected target"}),
+        ("write_file", {"file_path": target("src/new.txt"), "content": "new target\n"}),
+        ("edit_file", {"file_path": target("src/main.txt"), "old_string": "selected target", "new_string": "edited target"}),
+    ]
+    for name, arguments in operations:
+        result = await tools[name].coroutine(**arguments, runtime=runtime)
+        assert result.status == "success", (name, result.content)
+    assert source.read_text(encoding="utf-8") == "edited target\n"
+    assert (workspace / "src/new.txt").read_text(encoding="utf-8") == "new target\n"
+    assert list(relay.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_external_absolute_inputs_never_read_or_write_workspace_decoys(tmp_path: Path) -> None:
+    workspace, outside = tmp_path / "workspace", tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    decoy = workspace.joinpath(*outside.parts[1:])
+    decoy.mkdir(parents=True)
+    (outside / "owned.txt").write_text("REAL OUTSIDE", encoding="utf-8")
+    (decoy / "owned.txt").write_text("DECOY", encoding="utf-8")
+    middleware = FilesystemMiddleware(backend=build_workspace_backend(workspace), tool_token_limit_before_evict=None)
+    configure_workspace_filesystem_tools(middleware, workspace_root=workspace)
+    tools = {item.name: item for item in middleware.tools}
+    runtime = cast("ToolRuntime[None, FilesystemState]", SimpleNamespace(tool_call_id="call_no_redirect"))
+    operations = [
+        ("ls", {"path": str(outside)}),
+        ("read_file", {"path": str(outside / "owned.txt")}),
+        ("glob", {"path": str(outside), "pattern": "*.txt"}),
+        ("grep", {"path": str(outside), "pattern": "DECOY"}),
+        ("write_file", {"file_path": str(outside / "new.txt"), "content": "WRONG"}),
+        ("edit_file", {"file_path": str(outside / "owned.txt"), "old_string": "DECOY", "new_string": "WRONG"}),
+    ]
+    for name, arguments in operations:
+        result = await tools[name].coroutine(**arguments, runtime=runtime)
+        assert result.status == "error", (name, result.content)
+        assert "DECOY" not in result.content
+    assert (outside / "owned.txt").read_text(encoding="utf-8") == "REAL OUTSIDE"
+    assert (decoy / "owned.txt").read_text(encoding="utf-8") == "DECOY"
+    assert not (outside / "new.txt").exists()
+    assert not (decoy / "new.txt").exists()
 
 
 @pytest.mark.asyncio

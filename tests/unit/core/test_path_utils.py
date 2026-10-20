@@ -21,12 +21,34 @@ from app.core.path_utils import (
     get_user_workspace_root,
     get_user_workspace_schema_path,
     initialize_directories,
+    resolve_native_file_path,
     safe_join,
     validate_workspace_path,
     workspace_context,
 )
 from app.core.workspace_identity import load_or_create_workspace_id
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
+
+
+def test_native_target_preserves_spaces_and_relative_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace, relay = tmp_path / "workspace", tmp_path / "relay"
+    workspace.mkdir()
+    relay.mkdir()
+    monkeypatch.chdir(relay)
+    assert resolve_native_file_path(workspace, " file.txt ") == workspace / " file.txt "
+    outside = tmp_path / "outside.txt"
+    with pytest.raises(ForbiddenError):
+        resolve_native_file_path(workspace, str(outside))
+    assert resolve_native_file_path(workspace, str(outside), allow_absolute_outside=True) == outside
+    with pytest.raises(ForbiddenError):
+        resolve_native_file_path(workspace, "../outside.txt", allow_absolute_outside=True)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="必须由真实 Windows 目标解释盘符")
+def test_windows_native_target_rejects_drive_relative_path(tmp_path: Path) -> None:
+    assert resolve_native_file_path(tmp_path, str(tmp_path / "file.txt")) == tmp_path / "file.txt"
+    with pytest.raises(ValueError, match="盘符"):
+        resolve_native_file_path(tmp_path, tmp_path.drive + "file.txt", allow_absolute_outside=True)
 
 
 @pytest.fixture

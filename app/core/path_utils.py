@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Protocol
 
 from app.core.exceptions import ForbiddenError
@@ -392,6 +392,24 @@ def initialize_directories(workspace_id: str, workspace_root: Path) -> None:
         boxteam_root / "sessions",
         workspace_id=workspace_id,
     ).initialize()
+
+
+def resolve_native_file_path(
+    base_path: Path, value: str, *, allow_absolute_outside: bool = False,
+) -> Path:
+    """只在目标机器解释原生路径；相对输入始终锚定显式目录。"""
+    if "\x00" in value:
+        raise ValueError("文件路径不能包含 NUL 字符")
+    if os.name != "nt" and PureWindowsPath(value).drive:
+        raise ValueError("Windows 盘符或 UNC 路径必须交给 Windows 目标解释")
+    base = base_path.resolve()
+    native = Path(value).expanduser()
+    if native.drive and not native.is_absolute():
+        raise ValueError("Windows 盘符路径必须提供绝对根，不能依赖目标进程的盘符当前目录")
+    target = (native if native.is_absolute() else base / native).resolve()
+    if not target.is_relative_to(base) and not (native.is_absolute() and allow_absolute_outside):
+        raise ForbiddenError("文件路径超出当前目标目录的访问能力")
+    return target
 
 
 def safe_join(base_path: Path, *paths: str) -> Path:

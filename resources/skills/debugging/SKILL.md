@@ -39,6 +39,7 @@ allowed-tools: list_debug_configurations, create_debug_configuration, activate_d
 - 变量和求值中的疑似密钥、令牌、密码或凭据会替换为 `<redacted: possible secret>`；看到 `redaction_notice` 后只能使用类型、长度或空值判断，不得尝试编码、切片或其他表达式绕过脱敏。
 - 不请求、不拼接、不向用户传递 Inspector URL、Inspector 端口、WebSocket 地址、`threadId` 或 `frameId`。本工具只调试用户目标程序，不调试 BoxTeam Agent 自身的思考、LLM 请求或工具循环。
 - 每套方案是独立版本化 JSON，使用标准工作区相对路径且不包含 session ID、PID、Inspector 地址或动作历史；方案文件可复制到其他会话。
+- `fileFullPath` 和 `workingDirectory` 优先使用相对当前目标工作区的路径，也接受该工作区内的目标机器原生绝对路径或 Workspace files URI；后端统一解析并保存为工作区相对路径。工作区外路径明确拒绝，不去掉根目录后重新解释；路径始终由目标机器解释，不依赖中继进程的当前目录。
 
 ## 断点类型
 
@@ -61,8 +62,8 @@ allowed-tools: list_debug_configurations, create_debug_configuration, activate_d
     "required": ["name", "fileFullPath", "workingDirectory"],
     "properties": {
       "name": {"type": "string", "minLength": 1, "maxLength": 80},
-      "fileFullPath": {"type": "string", "minLength": 1, "description": "标准工作区相对路径；不能以 / 开头"},
-      "workingDirectory": {"type": "string", "minLength": 1, "description": "标准工作区相对路径；使用 . 表示 workspace 根目录"},
+      "fileFullPath": {"type": "string", "minLength": 1, "description": "优先使用工作区相对路径，也可使用同工作区内的原生绝对路径或 Workspace files URI"},
+      "workingDirectory": {"type": "string", "minLength": 1, "description": "目标工作区内的相对路径、原生绝对路径或 Workspace files URI；使用 . 表示 workspace 根目录"},
       "configurationName": {"type": ["string", "null"]},
       "arguments": {"type": "array", "maxItems": 64, "items": {"type": "string"}}
     }
@@ -96,8 +97,8 @@ allowed-tools: list_debug_configurations, create_debug_configuration, activate_d
     "additionalProperties": false,
     "required": ["fileFullPath", "workingDirectory"],
     "properties": {
-      "fileFullPath": {"type": "string", "minLength": 1, "description": "标准工作区相对路径；不能以 / 开头"},
-      "workingDirectory": {"type": "string", "minLength": 1, "description": "标准工作区相对路径；使用 . 表示 workspace 根目录"},
+      "fileFullPath": {"type": "string", "minLength": 1, "description": "优先使用工作区相对路径，也可使用同工作区内的原生绝对路径或 Workspace files URI"},
+      "workingDirectory": {"type": "string", "minLength": 1, "description": "目标工作区内的相对路径、原生绝对路径或 Workspace files URI；使用 . 表示 workspace 根目录"},
       "testName": {"type": ["string", "null"]},
       "configurationName": {"type": ["string", "null"]},
       "debugConfigurationId": {"type": ["string", "null"]}
@@ -151,7 +152,7 @@ testName 目前不支持 Node 单测试启动；不要为了满足请求而猜�
     "additionalProperties": false,
     "required": ["fileFullPath", "line"],
     "properties": {
-      "fileFullPath": {"type": "string", "minLength": 1, "description": "标准工作区相对路径；不能以 / 开头"},
+      "fileFullPath": {"type": "string", "minLength": 1, "description": "优先使用工作区相对路径，也可使用同工作区内的原生绝对路径或 Workspace files URI"},
       "line": {"type": "integer", "minimum": 1},
       "condition": {"type": ["string", "null"]},
       "hitCondition": {"type": ["integer", "null"], "minimum": 1}
@@ -166,7 +167,7 @@ testName 目前不支持 Node 单测试启动；不要为了满足请求而猜�
     "additionalProperties": false,
     "required": ["fileFullPath", "line", "logMessage"],
     "properties": {
-      "fileFullPath": {"type": "string", "minLength": 1, "description": "标准工作区相对路径；不能以 / 开头"},
+      "fileFullPath": {"type": "string", "minLength": 1, "description": "优先使用工作区相对路径，也可使用同工作区内的原生绝对路径或 Workspace files URI"},
       "line": {"type": "integer", "minimum": 1},
       "logMessage": {"type": "string", "minLength": 1, "description": "使用 {expression} 插入运行时值"},
       "condition": {"type": ["string", "null"]},
@@ -182,7 +183,7 @@ testName 目前不支持 Node 单测试启动；不要为了满足请求而猜�
     "additionalProperties": false,
     "required": ["fileFullPath", "line"],
     "properties": {
-      "fileFullPath": {"type": "string", "minLength": 1, "description": "标准工作区相对路径；不能以 / 开头"},
+      "fileFullPath": {"type": "string", "minLength": 1, "description": "优先使用工作区相对路径，也可使用同工作区内的原生绝对路径或 Workspace files URI"},
       "line": {"type": "integer", "minimum": 1}
     }
   }
