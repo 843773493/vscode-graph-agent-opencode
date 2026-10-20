@@ -9,6 +9,7 @@
 - 目录观察 revision、操作冻结、依赖解析、领取执行及按原 operation 恢复。
 - 既有 create 文件/目录、paste 文本、copy、multipart upload 四入口所需的存储与文件执行闭包。
 - 同一 owner 的上传 durable staging、路径/长度/hash 清单与清理。
+- `mutation_lock.py` 提供正文保存与补丁共用的短写入临界区；`text_publication.py` 负责有界原字节读取、发布前重核和单文件发布后核实，不自动恢复旧内容。
 
 # 不可修改内容
 

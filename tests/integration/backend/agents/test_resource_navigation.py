@@ -136,6 +136,27 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
             assert bounded["content_hash"] is None
             full = await navigate(found["entries"][0]["uri"], "read")
             assert full["content_hash"] == "sha256:" + hashlib.sha256((workspace / "src/中文 文件.v2.md").read_bytes()).hexdigest()
+            file_uri = found["entries"][0]["uri"]
+            preview = await client.get("/api/v1/workspace/files/content", params={"path": file_uri})
+            assert preview.status_code == 200, preview.text
+            original_revision = preview.json()["data"]["revision"]
+            assert "sha256:" + original_revision == full["content_hash"]
+            saved = await client.put("/api/v1/workspace/files/content", params={"path": file_uri}, json={
+                "content": "HTTP保存的正文 Ω\r\n", "expected_revision": original_revision,
+            })
+            assert saved.status_code == 200, saved.text
+            saved_raw = "HTTP保存的正文 Ω\r\n".encode()
+            assert (workspace / "src/中文 文件.v2.md").read_bytes() == saved_raw
+            assert saved.json()["data"]["content"] == saved_raw.decode()
+            assert saved.json()["data"]["revision"] == hashlib.sha256(saved_raw).hexdigest()
+            stale = await client.put("/api/v1/workspace/files/content", params={"path": file_uri}, json={
+                "content": "过时草稿不得覆盖", "expected_revision": original_revision,
+            })
+            assert stale.status_code == 409, stale.text
+            for response in (preview, saved, stale):
+                assert response.headers["X-Request-ID"] == response.json()["request_id"]
+                assert str(workspace) not in response.text
+            assert (await navigate(file_uri, "read"))["content_hash"] == "sha256:" + hashlib.sha256(saved_raw).hexdigest()
             assert (await navigate(files_root, "list", limit=1))["truncated"]
             bulk = await navigate(files_root, "search", query="bulk-needle", limit=7)
             assert len(bulk["entries"]) == 7 and bulk["truncated"]
@@ -248,7 +269,7 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
             active = await client.get("/api/v1/workspace")
             assert active.status_code == 200 and active.json()["data"]["workspace_id"] == second_id
             source_uri = resource_display_uri(scope="workspace", scope_id=workspace_id, kind="files", tail_segments=("root", "src", "中文 文件.v2.md"))
-            assert (await navigate(source_uri, "read"))["content"] == "工作区源码 Ω\n"
+            assert (await navigate(source_uri, "read"))["content"] == saved_raw.decode()
             unknown = await client.post(path.replace(workspace_id, str(uuid4())), json={"uri": source_uri, "operation": "read"})
             assert unknown.status_code == 404, unknown.text
             for base, uri in (

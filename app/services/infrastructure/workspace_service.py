@@ -6,7 +6,6 @@ import heapq
 import mimetypes
 import os
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
@@ -39,6 +38,9 @@ from app.schemas.internal_v2.workspace_file_operations import (
     WorkspaceFileOperationReceiptDTO,
 )
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.workspace_files.mutation_lock import (
+    workspace_file_mutation_lock,
+)
 from app.services.infrastructure.workspace_files.operations import (
     WorkspaceFileOperations,
 )
@@ -54,11 +56,12 @@ from app.services.infrastructure.workspace_files.store import (
     digest,
     encode_directory_cursor,
 )
-
-
-class WorkspaceFileConflictError(RuntimeError):
-    """文件打开后已被其他写入者修改。"""
-
+from app.services.infrastructure.workspace_files.text_publication import (
+    FilePreimage,
+    WorkspaceFileConflictError,
+    publish_file_content,
+    read_file_preimage,
+)
 
 LANGUAGE_BY_EXTENSION = {
     ".css": "css",
@@ -358,38 +361,25 @@ class WorkspaceService:
             scope=scope,
             allow_empty=False,
         )
-        if not target_path.exists():
-            raise FileNotFoundError(f"工作区文件不存在: {relative_path}")
-        if not target_path.is_file():
-            raise IsADirectoryError(f"工作区路径不是文件: {relative_path}")
+        observed = await asyncio.to_thread(read_file_preimage, target_path, reference=relative_path,
+                                           max_bytes=self._config_service.get_workspace_preview_max_bytes())
+        return self._file_content_dto(target_path, relative_path, observed)
 
-        stat_result = target_path.stat()
+    def _file_content_dto(self, target_path: Path, reference: str, observed: FilePreimage) -> WorkspaceFileContentDTO:
+        raw_content, metadata = observed.content, observed.metadata
         max_preview_bytes = self._config_service.get_workspace_preview_max_bytes()
-        if stat_result.st_size > max_preview_bytes:
-            raise ValueError(
-                f"文件过大，暂不预览: {relative_path} ({stat_result.st_size} bytes)"
-            )
-
-        raw_content = target_path.read_bytes()
+        if len(raw_content) > max_preview_bytes:
+            raise ValueError(f"文件过大，暂不预览: {reference} ({len(raw_content)} bytes)")
         if self._looks_like_binary(raw_content):
-            raise ValueError(f"文件不是可预览文本: {relative_path}")
-
+            raise ValueError(f"文件不是可预览文本: {reference}")
         try:
             content = raw_content.decode("utf-8-sig")
         except UnicodeDecodeError as error:
-            raise ValueError(f"文件不是 UTF-8 文本，暂不预览: {relative_path}") from error
-
+            raise ValueError(f"文件不是 UTF-8 文本，暂不预览: {reference}") from error
         return WorkspaceFileContentDTO(
-            root_path=file_uri_root(relative_path),
-            path=relative_path,
-            name=target_path.name,
-            content=content,
-            language=self._guess_language(target_path.name),
-            size=stat_result.st_size,
-            modified_at=datetime.fromtimestamp(
-                stat_result.st_mtime,
-                UTC,
-            ).isoformat(),
+            root_path=file_uri_root(reference), path=reference, name=target_path.name,
+            content=content, language=self._guess_language(target_path.name), size=len(raw_content),
+            modified_at=datetime.fromtimestamp(metadata.st_mtime, UTC).isoformat(),
             revision=sha256_hex(raw_content),
         )
 
@@ -420,69 +410,26 @@ class WorkspaceService:
         expected_revision: str,
         scope: WorkspaceFileScope = "workspace",
     ) -> WorkspaceFileContentDTO:
-        target_path, relative_path = await asyncio.to_thread(
-            self.file_paths.resolve,
-            path,
-            scope=scope,
-            allow_empty=False,
-            reject_symlink=True,
-        )
-        if not target_path.exists():
-            raise FileNotFoundError(f"工作区文件不存在: {relative_path}")
-        if not target_path.is_file():
-            raise IsADirectoryError(f"工作区路径不是文件: {relative_path}")
+        return await asyncio.to_thread(self._update_file_content, path, content, expected_revision, scope)
 
-        current_content = target_path.read_bytes()
-        current_revision = sha256_hex(current_content)
-        if current_revision != expected_revision:
-            raise WorkspaceFileConflictError(
-                f"文件已在编辑期间发生变化，请重新载入后再保存: {relative_path}"
-            )
-        if self._looks_like_binary(current_content):
-            raise ValueError(f"文件不是可编辑文本: {relative_path}")
-
-        has_utf8_bom = current_content.startswith(codecs.BOM_UTF8)
-        encoded_content = content.encode("utf-8")
-        if has_utf8_bom:
-            encoded_content = codecs.BOM_UTF8 + encoded_content
-        max_preview_bytes = self._config_service.get_workspace_preview_max_bytes()
-        if len(encoded_content) > max_preview_bytes:
-            raise ValueError(
-                f"文件过大，暂不允许保存: {relative_path} "
-                f"({len(encoded_content)} bytes)"
-            )
-        if encoded_content == current_content:
-            return await self.get_file_content(path=relative_path, scope=scope)
-
-        original_mode = stat.S_IMODE(target_path.stat().st_mode)
-        temporary_path: str | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="wb",
-                dir=target_path.parent,
-                prefix=f".{target_path.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as temporary_file:
-                temporary_path = temporary_file.name
-                temporary_file.write(encoded_content)
-                temporary_file.flush()
-                os.fsync(temporary_file.fileno())
-            # TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
-            if os.name != "nt":
-                os.chmod(temporary_path, original_mode)
-            latest_revision = sha256_hex(target_path.read_bytes())
-            if latest_revision != expected_revision:
-                raise WorkspaceFileConflictError(
-                    f"文件在保存期间发生变化，请重新载入后再保存: {relative_path}"
-                )
-            os.replace(temporary_path, target_path)
-            temporary_path = None
-        finally:
-            if temporary_path is not None and os.path.exists(temporary_path):
-                os.unlink(temporary_path)
-
-        return await self.get_file_content(path=relative_path, scope=scope)
+    def _update_file_content(self, path: str, content: str, expected_revision: str,
+                             scope: WorkspaceFileScope) -> WorkspaceFileContentDTO:
+        with workspace_file_mutation_lock(self._workspace_root):
+            target_path, reference = self.file_paths.resolve(path, scope=scope, allow_empty=False, reject_symlink=True)
+            observed = read_file_preimage(target_path, reference=reference,
+                                          max_bytes=self._config_service.get_workspace_preview_max_bytes())
+            if sha256_hex(observed.content) != expected_revision:
+                raise WorkspaceFileConflictError(f"文件已在编辑期间发生变化，请重新载入后再保存: {reference}")
+            # 先核原件的既有文本/预算能力；不把媒体或无效编码转换成文本。
+            self._file_content_dto(target_path, reference, observed)
+            encoded = content.encode("utf-8")
+            if observed.content.startswith(codecs.BOM_UTF8):
+                encoded = codecs.BOM_UTF8 + encoded
+            if len(encoded) > self._config_service.get_workspace_preview_max_bytes():
+                raise ValueError(f"文件过大，暂不允许保存: {reference} ({len(encoded)} bytes)")
+            if encoded != observed.content:
+                observed = publish_file_content(target_path, encoded, before=observed, reference=reference)
+            return self._file_content_dto(target_path, reference, observed)
 
     async def create_file_entry(self, *, directory_path: str, scope: WorkspaceFileScope,
                                 name: str, kind: str, intent: WorkspaceFileMutationIntentDTO,

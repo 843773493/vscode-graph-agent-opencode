@@ -5,6 +5,7 @@ import codecs
 import io
 import os
 import shutil
+import threading
 import zipfile
 from pathlib import Path
 from unittest.mock import Mock
@@ -20,6 +21,7 @@ from app.schemas.internal_v2.workspace_file_operations import (
 )
 from app.services.infrastructure import workspace_service as workspace_service_module
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.workspace_files import text_publication
 from app.services.infrastructure.workspace_service import (
     WorkspaceFileConflictError,
     WorkspaceService,
@@ -148,6 +150,80 @@ async def test_update_file_content_preserves_utf8_bom(
     )
 
     assert target.read_bytes() == codecs.BOM_UTF8 + b"after\n"
+
+
+@pytest.mark.asyncio
+async def test_content_saves_share_lock_across_service_instances(workspace_service, tmp_path, monkeypatch):
+    target = tmp_path / "notes.txt"
+    target.write_text("before\n")
+    opened = await workspace_service.get_file_content(path="notes.txt")
+    other = WorkspaceService(config_service=_workspace_config_service_mock(), workspace_root=tmp_path)
+    entered, release, second_read = threading.Event(), threading.Event(), threading.Event()
+    original_publish = workspace_service_module.publish_file_content
+    original_read = workspace_service_module.read_file_preimage
+
+    def blocked_publish(*args, **kwargs):
+        entered.set()
+        assert release.wait(3), "测试必须解除文件发布屏障"
+        return original_publish(*args, **kwargs)
+
+    def observed_read(*args, **kwargs):
+        if entered.is_set():
+            second_read.set()
+        return original_read(*args, **kwargs)
+
+    monkeypatch.setattr(workspace_service_module, "publish_file_content", blocked_publish)
+    monkeypatch.setattr(workspace_service_module, "read_file_preimage", observed_read)
+    first = asyncio.create_task(workspace_service.update_file_content(path="notes.txt", content="first\n", expected_revision=opened.revision))
+    second = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        second = asyncio.create_task(other.update_file_content(path="notes.txt", content="second\n", expected_revision=opened.revision))
+        assert not await asyncio.to_thread(second_read.wait, 0.1)
+    finally:
+        release.set()
+        outcomes = await asyncio.gather(*[task for task in (first, second) if task is not None], return_exceptions=True)
+    assert outcomes[0].content == "first\n"
+    assert isinstance(outcomes[1], WorkspaceFileConflictError)
+    assert target.read_text() == "first\n"
+
+
+@pytest.mark.asyncio
+async def test_external_change_before_replace_is_preserved(workspace_service, tmp_path, monkeypatch):
+    target = tmp_path / "notes.txt"
+    target.write_text("original\n")
+    opened = await workspace_service.get_file_content(path="notes.txt")
+    original_sync = text_publication.os.fsync
+
+    def change_before_preimage_check(descriptor):
+        original_sync(descriptor)
+        target.write_text("external\n")
+
+    monkeypatch.setattr(text_publication.os, "fsync", change_before_preimage_check)
+    with pytest.raises(WorkspaceFileConflictError, match="保存期间发生变化"):
+        await workspace_service.update_file_content(path="notes.txt", content="draft\n", expected_revision=opened.revision)
+    assert target.read_text() == "external\n"
+    assert not list(tmp_path.glob(".notes.txt.*.tmp"))
+
+
+@pytest.mark.asyncio
+async def test_external_change_after_publish_is_reported_without_rollback(workspace_service, tmp_path, monkeypatch):
+    target = tmp_path / "notes.txt"
+    target.write_text("original\n")
+    opened = await workspace_service.get_file_content(path="notes.txt")
+    original_replace = text_publication.os.replace
+
+    def change_after_replace(source, destination):
+        original_replace(source, destination)
+        target.write_text("other\n")
+
+    monkeypatch.setattr(text_publication.os, "replace", change_after_replace)
+    with pytest.raises(text_publication.FilePublicationUnverifiedError, match="实际效果未知") as failure:
+        await workspace_service.update_file_content(path="notes.txt", content="saved\n", expected_revision=opened.revision)
+    assert failure.value.expected_hash == "sha256:" + workspace_service_module.sha256_hex(b"saved\n")
+    assert failure.value.observed_hash == "sha256:" + workspace_service_module.sha256_hex(b"other\n")
+    assert target.read_text() == "other\n"
+    assert not list(tmp_path.glob(".notes.txt.*.tmp"))
 
 
 @pytest.mark.asyncio
