@@ -633,7 +633,6 @@ def _build_app_container(
         workspace_id=workspace_service.workspace_id,
         path_resolver=session_path_resolver,
         creation_service=session_creation_service,
-        initialize_thread_storage=checkpointer.initialize_thread_storage,
     )
     file_tree_settings_service = FileTreeSettingsService(
         workspace_root=resolved_workspace_root,

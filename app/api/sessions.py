@@ -288,7 +288,8 @@ async def get_session(
     session_service: SessionService = Depends(get_session_service),
 ):
     try:
-        result = await session_service.get(session_id)
+        async with session_service.session_read_admission(session_id):
+            result = await session_service.get(session_id)
     except NotFoundError as error:
         raise not_found_http_error(error) from error
     except (RuntimeError, TimeoutError) as error:
@@ -311,25 +312,26 @@ async def list_session_child_threads(
     team_service: Annotated[TeamCoordinationService, Depends(get_team_service)],
 ):
     try:
-        result = await session_service.list_child_threads(session_id)
-        main_thread_id = await session_service.resolve_main_thread(session_id)
-        result.teams = (await team_service.list_teams(
-            requester_session_id=session_id, requester_thread_id=main_thread_id,
-        )).items
-        for item in result.items:
-            snapshot = residency_tracker.snapshot(session_id, item.thread_id)
-            item.runtime = ChildThreadRuntimeDTO(
-                residency=snapshot.residency, cold_eligible=snapshot.cold_eligible,
-                execution_state=snapshot.execution_state, last_activity_at=snapshot.last_activity_at,
-                idle_deadline=snapshot.idle_deadline,
-                blockers=[{"kind": blocker.kind, "reason": blocker.reason} for blocker in snapshot.blockers],
-            )
-            if item.report_execution_id is not None:
-                item.report_status = saver.runtime_execution_outcome(session_id, item.thread_id, item.report_execution_id)
-                if item.report_status in {"completed", "completed_empty"}:
-                    item.status = "completed"
-                elif item.report_status in {"failed", "cancelled", "interrupted", "execution_lost"}:
-                    item.status = "failed"
+        async with session_service.session_read_admission(session_id):
+            result = await session_service.list_child_threads(session_id)
+            main_thread_id = await session_service.resolve_main_thread(session_id)
+            result.teams = (await team_service.list_teams(
+                requester_session_id=session_id, requester_thread_id=main_thread_id,
+            )).items
+            for item in result.items:
+                snapshot = residency_tracker.snapshot(session_id, item.thread_id)
+                item.runtime = ChildThreadRuntimeDTO(
+                    residency=snapshot.residency, cold_eligible=snapshot.cold_eligible,
+                    execution_state=snapshot.execution_state, last_activity_at=snapshot.last_activity_at,
+                    idle_deadline=snapshot.idle_deadline,
+                    blockers=[{"kind": blocker.kind, "reason": blocker.reason} for blocker in snapshot.blockers],
+                )
+                if item.report_execution_id is not None and item.admission_state == "bound":
+                    item.report_status = saver.runtime_execution_outcome(session_id, item.thread_id, item.report_execution_id)
+                    if item.report_status in {"completed", "completed_empty"}:
+                        item.status = "completed"
+                    elif item.report_status in {"failed", "cancelled", "interrupted", "execution_lost"}:
+                        item.status = "failed"
     except NotFoundError as error:
         raise not_found_http_error(error) from error
     except (RuntimeError, TimeoutError) as error:

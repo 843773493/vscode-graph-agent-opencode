@@ -89,7 +89,7 @@ class TestSessionService:
                     workspace_id=self.workspace_id,
                     path_resolver=self.path_resolver,
                     creation_service=self.creation_service,
-                    initialize_thread_storage=self.saver.initialize_thread_storage,
+
                 )
                 # 目录父关系变更的唯一路径：导航 SessionCatalogService（executor）。
                 self.catalog = SessionCatalogService(session_service=self.service)
@@ -163,33 +163,9 @@ class TestSessionService:
         node = self.path_resolver.catalog_store.get_node(session.session_id)
         assert node.current_agent_id == session.current_agent_id
         assert node.current_provider_id == "primary"
-        with self.saver._storage.storage.open_read_snapshot(session.session_id, node.main_thread_id) as snapshot:
-            assert snapshot.connection.execute("SELECT session_id,thread_id FROM database_meta").fetchone() == (
-                session.session_id, node.main_thread_id
-            )
-            assert snapshot.connection.execute("SELECT COUNT(*) FROM context_views").fetchone()[0] == 1
-            for table in ("turn_records", "executions", "checkpoints", "model_calls"):
-                assert snapshot.connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
-
-    @pytest.mark.asyncio
-    async def test_published_storage_failure_keeps_node_and_original_error(self, monkeypatch: pytest.MonkeyPatch):
-        failure = RuntimeError("主线程存储初始化失败")
-        owners = []
-
-        def fail(session_id: str, thread_id: str) -> None:
-            owners.append((session_id, thread_id))
-            raise failure
-
-        monkeypatch.setattr(self.service, "_initialize_thread_storage", fail)
-        with pytest.raises(RuntimeError, match="主线程存储初始化失败") as caught:
-            await self.service.create(SessionCreateRequest(title="已发布初始化失败"))
-        assert caught.value is failure
-        [(session_id, thread_id)] = owners
-        assert (await self.service.get(session_id)).thread_id == thread_id
-        records = self.path_resolver.catalog_store.list_preparing_creation_records(
-            workspace_id=self.workspace_id, purpose="normal"
-        )
-        assert not records
+        assert not self.saver._storage.storage.root(
+            session.session_id, thread_id=node.main_thread_id,
+        ).exists(), "创建Session不得在execution admission之前物化rollout"
 
     @pytest.mark.asyncio
     async def test_list_uses_index_projection_when_physical_tree_has_orphan(self):
@@ -251,7 +227,7 @@ class TestSessionService:
             workspace_id=self.workspace_id,
             path_resolver=self.path_resolver,
             creation_service=self.creation_service,
-            initialize_thread_storage=self.saver.initialize_thread_storage,
+
         )
         created = await service.create(SessionCreateRequest(title="模型持久化"))
 
@@ -267,7 +243,7 @@ class TestSessionService:
             workspace_id=self.workspace_id,
             path_resolver=self.path_resolver,
             creation_service=self.creation_service,
-            initialize_thread_storage=self.saver.initialize_thread_storage,
+
         )
         restored = await restarted_service.get(created.session_id)
         assert restored.current_provider_id == "backup"
@@ -328,7 +304,7 @@ class TestSessionService:
             workspace_id=self.workspace_id,
             path_resolver=self.path_resolver,
             creation_service=self.creation_service,
-            initialize_thread_storage=self.saver.initialize_thread_storage,
+
         )
         existing = await service.create(SessionCreateRequest(title="Existing"))
 
@@ -402,7 +378,7 @@ class TestSessionService:
                 workspace_id=self.workspace_id,
                 path_resolver=self.path_resolver,
                 creation_service=self.creation_service,
-                initialize_thread_storage=self.saver.initialize_thread_storage,
+
             )
 
         assert session_file.read_bytes() == persisted_bytes
@@ -856,7 +832,7 @@ class TestSessionListReadAmplification:
                 workspace_id=self.workspace_id,
                 path_resolver=workspace.resolver,
                 creation_service=workspace.creation_service,
-                initialize_thread_storage=RolloutCheckpointSaver(sessions_dir).initialize_thread_storage,
+
             )
             # 显式冻结 provider，使读取计数只反映 manifest 读取，不触发
             # provider 解析（与外部环境变量无关）。

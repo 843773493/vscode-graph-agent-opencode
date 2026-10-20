@@ -41,9 +41,6 @@ from app.services.business.session_navigation.queue_store import (
     NavigationQueueOwnerError,
 )
 from app.services.business.session_service import SessionService
-from app.services.infrastructure.rollout_context.checkpoint.saver import (
-    RolloutCheckpointSaver,
-)
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.harness.python.run_context import TestRunContext
 from tests.support.canonical_id_at import uuid7_hex_from_name
@@ -77,7 +74,7 @@ class _SessionService(SessionService):
             trace_event_store=TraceEventStore(sessions_dir=sessions_root),
             workspace_id=resolver.workspace_id, path_resolver=resolver,
             creation_service=get_session_creation_service(sessions_root),
-            initialize_thread_storage=RolloutCheckpointSaver(sessions_root).initialize_thread_storage,
+
         )
         self.get_calls: list[str] = []
 

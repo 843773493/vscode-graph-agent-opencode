@@ -102,8 +102,6 @@ async def producer_case(request: pytest.FixtureRequest) -> AsyncIterator[TracePr
     child_thread_id = created.child_thread_id
     workspace.resolver.resolve_thread_node(session_id, child_thread_id)
     saver = RolloutCheckpointSaver(sessions_dir=workspace.sessions_root)
-    for thread_id in (main_thread_id, child_thread_id):
-        saver.initialize_thread_storage(session_id, thread_id)
     input_owner = MessageService(
         main_thread_resolver=workspace.resolver.main_thread_id, checkpointer=saver,
         workspace_root=workspace_root,

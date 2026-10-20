@@ -33,9 +33,6 @@ from app.services.business.session_navigation.queue_store import (
 )
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.rollout_context.checkpoint.saver import (
-    RolloutCheckpointSaver,
-)
 from app.services.infrastructure.trace_event_store import TraceEventStore
 
 
@@ -102,7 +99,7 @@ def create_app() -> FastAPI:
             workspace_id=resolver.workspace_id,
             path_resolver=resolver,
             creation_service=catalog.creation_service,
-            initialize_thread_storage=RolloutCheckpointSaver(catalog.sessions_root).initialize_thread_storage,
+
         )
     route_service = _RouteCatalogService(
         session_service=session_service, operations=operations

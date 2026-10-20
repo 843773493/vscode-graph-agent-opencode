@@ -63,7 +63,7 @@ def session_service(sessions_root: Path, workspace, saver: RolloutCheckpointSave
         workspace_id=WORKSPACE_ID,
         path_resolver=workspace.resolver,
         creation_service=workspace.creation_service,
-        initialize_thread_storage=saver.initialize_thread_storage,
+
     )
 
 

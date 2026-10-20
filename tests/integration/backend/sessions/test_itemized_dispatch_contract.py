@@ -461,7 +461,7 @@ async def test_missing_saver_owner_fails_before_provider_http(
         streaming=True,
         max_retries=0,
     )
-    # 缺少强制 owner 是错误配置，不以替身伪造 prepare/supports 成功。
+    # 缺少强制 owner 是错误配置，不以替身伪造 prepare 成功。
     agent = create_dispatch_agent(
         model,
         execution=dispatch_bridge(
@@ -471,7 +471,7 @@ async def test_missing_saver_owner_fails_before_provider_http(
     )
     with (
         dispatch_execution_scope(saver, session_id, turn_id),
-        pytest.raises(TypeError, match="Saver prepare/supports"),
+        pytest.raises(TypeError, match="itemized context 缺少必需的 Saver prepare 端口"),
     ):
         if mode == "sync":
             await asyncio.to_thread(
@@ -1842,7 +1842,7 @@ def preparation_session_service(toolset_dispatch_case):
         trace_event_store=TraceEventStore(sessions_dir=case.sessions),
         workspace_id=components.resolver.workspace_id,
         path_resolver=components.resolver, creation_service=components.creation_service,
-        initialize_thread_storage=case.saver.initialize_thread_storage,
+
     )
     case.bridge._context_read_admission = lambda: service.session_read_admission(case.session)
     case.bridge._context_control_admission = lambda operation, payload, ref: service.session_context_control_admission(

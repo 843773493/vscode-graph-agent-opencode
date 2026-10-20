@@ -64,14 +64,12 @@ class SessionService:
         workspace_id: str,
         path_resolver: SessionCatalogPathResolver,
         creation_service: SessionCreationService,
-        initialize_thread_storage: Callable[[str, str], None],
     ):
         self._workspace_id = validate_workspace_id(workspace_id)
         self._config_service = config_service
         self._trace_event_store = trace_event_store
         self._path_resolver = path_resolver
         self._creation_service = creation_service
-        self._initialize_thread_storage = initialize_thread_storage
         self._navigation_topology_gate = NavigationTopologyGate(
             path_resolver.sessions_root
         )
@@ -429,6 +427,7 @@ class SessionService:
                 }
             items: list[ChildThreadSummaryDTO] = []
             for thread in threads:
+                self._path_resolver.resolve_thread_node(session_id, thread.thread_id)
                 member = members.get(thread.thread_id)
                 intent = intents.get(thread.thread_id)
                 fork = forks.get(thread.thread_id)
@@ -592,12 +591,7 @@ class SessionService:
             parent_node_id=parent_node_id,
         )
         try:
-            result = await self._creation_service.publish_prepared(
-                record,
-                on_published=lambda published: self._initialize_thread_storage(
-                    published.session_id, published.main_thread_id
-                ),
-            )
+            result = await self._creation_service.publish_prepared(record)
         except RuntimeError as error:
             current = self._path_resolver.catalog_store.get_creation_record(idempotency_key)
             if current.state != "published":

@@ -110,8 +110,6 @@ async def recovery_case(request: pytest.FixtureRequest) -> AsyncIterator[Recover
     thread_ids = (main_thread_id, child.child_thread_id)
     session_paths = {session_id: resolver.resolve_session_node(session_id)}
     saver = RolloutCheckpointSaver(sessions_dir=source.sessions_root)
-    for thread_id in thread_ids:
-        saver.initialize_thread_storage(session_id, thread_id)
     input_owner = MessageService(
         main_thread_resolver=resolver.main_thread_id, checkpointer=saver,
         workspace_root=workspace,

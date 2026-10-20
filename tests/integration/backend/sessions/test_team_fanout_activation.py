@@ -96,8 +96,7 @@ with fixture_catalog_scope(),workspace_context(load_or_create_workspace_id(works
     resolver=get_session_path_resolver(root)
     saver=RolloutCheckpointSaver(root)
     sessions=SessionService(config_service=SessionServiceConfigStub(),trace_event_store=TraceEventStore(sessions_dir=root),
-        workspace_id=resolver.workspace_id,path_resolver=resolver,creation_service=get_session_creation_service(root),
-        initialize_thread_storage=saver.initialize_thread_storage)
+        workspace_id=resolver.workspace_id,path_resolver=resolver,creation_service=get_session_creation_service(root))
     factory=OwnerThreadCreationFactory(sessions_root=root,workspace_id=resolver.workspace_id,path_resolver=resolver)
     fanout=TeamFanoutService(factory=factory,sessions=sessions,saver=saver,dispatcher=None,publication_lock=RLock())
     control=factory.for_owner_session(session).control_store
@@ -134,8 +133,7 @@ async def team_case(request):
         resolver = get_session_path_resolver(sessions_root)
         saver = RolloutCheckpointSaver(sessions_root)
         sessions = SessionService(config_service=SessionServiceConfigStub(), trace_event_store=TraceEventStore(sessions_dir=sessions_root),
-                                  workspace_id=workspace_id, path_resolver=resolver, creation_service=get_session_creation_service(sessions_root),
-                                  initialize_thread_storage=saver.initialize_thread_storage)
+                                  workspace_id=workspace_id, path_resolver=resolver, creation_service=get_session_creation_service(sessions_root))
         factory = OwnerThreadCreationFactory(sessions_root=sessions_root, workspace_id=workspace_id, path_resolver=resolver)
         lock = RLock()
         fanout = TeamFanoutService(factory=factory, sessions=sessions, saver=saver, dispatcher=RejectDispatcher(), publication_lock=lock)

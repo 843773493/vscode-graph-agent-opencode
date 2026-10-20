@@ -18,9 +18,6 @@ from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_changes_service import SessionChangesService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.rollout_context.checkpoint.saver import (
-    RolloutCheckpointSaver,
-)
 from app.services.infrastructure.session_changes_store import SessionChangesStore
 from app.services.infrastructure.trace_event_store import TraceEventStore
 
@@ -76,7 +73,7 @@ def session_service(tmp_path: Path):
             workspace_id=load_or_create_workspace_id(tmp_path),
             path_resolver=get_session_path_resolver(get_sessions_dir()),
             creation_service=get_session_creation_service(get_sessions_dir()),
-            initialize_thread_storage=RolloutCheckpointSaver(get_sessions_dir()).initialize_thread_storage,
+
         )
 
 

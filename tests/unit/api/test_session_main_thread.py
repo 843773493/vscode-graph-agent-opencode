@@ -4,20 +4,19 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from shutil import rmtree
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_session_service
+from app.api.deps import get_session_service, verify_local_token
 from app.api.sessions import resolve_session_main_thread, router
 from app.core.trace_middleware import TraceMiddleware
+from app.main import workspace_http_exception_handler
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.rollout_context.checkpoint.saver import (
-    RolloutCheckpointSaver,
-)
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 
@@ -41,13 +40,34 @@ def service(workspace) -> SessionService:
         workspace_id=WORKSPACE_ID,
         path_resolver=workspace.resolver,
         creation_service=workspace.creation_service,
-        initialize_thread_storage=RolloutCheckpointSaver(workspace.sessions_root).initialize_thread_storage,
     )
 
 
 async def _create_session(service: SessionService) -> str:
     created = await service.create(SessionCreateRequest(title="普通会话"))
     return created.session_id
+
+
+@pytest.mark.parametrize("physical_exists", [True, False])
+def test_session_detail_rejects_deleting_owner_before_physical_read(
+    service: SessionService, workspace, physical_exists: bool,
+) -> None:
+    session_id = asyncio.run(_create_session(service))
+    workspace.store.set_node_state(session_id, "deleting")
+    if not physical_exists:
+        rmtree(workspace.session_dir(session_id))
+    app = FastAPI()
+    app.add_middleware(TraceMiddleware)
+    app.add_exception_handler(HTTPException, workspace_http_exception_handler)
+    app.include_router(router, prefix="/api/v1")
+    app.dependency_overrides[get_session_service] = lambda: service
+    app.dependency_overrides[verify_local_token] = lambda: "authenticated"
+    with TestClient(app) as client:
+        response = client.get(f"/api/v1/sessions/{session_id}")
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"].startswith("session_deletion_pending:")
+    assert str(workspace.workspace_root) not in response.text
+    assert response.headers["X-Request-ID"] == response.json()["request_id"]
 
 
 @pytest.mark.asyncio
@@ -115,3 +135,4 @@ def test_main_thread_endpoint_http_envelope(service: SessionService) -> None:
     assert body["data"]["session_id"] == session_id
     assert body["data"]["thread_id"].startswith("thr_")
     assert body["data"]["thread_id"] != session_id
+    assert not (service.path_resolver.resolve_session_node(session_id) / "rollout").exists()

@@ -9067,28 +9067,14 @@ async function runTeamActivation(surface, boundary, foreign) {
     const ledgerBefore = await readControl(owner, "SELECT revision FROM collaboration_ledger WHERE id=1");
     const foreignQuery = "SELECT (SELECT COUNT(*) FROM communication_inbox) AS inbox,(SELECT revision FROM collaboration_ledger WHERE id=1) AS revision";
     const foreignBefore = await readControl(foreign, foreignQuery);
-    // Session 发布时已初始化空存储；拒绝操作不得新增业务事实或改写任何存储字节。
-    const foreignRuntimeFiles = await readRolloutDirectory(foreign);
-    assert.ok(["index.sqlite", "rollout.jsonl"].every((name) => foreignRuntimeFiles.includes(name)),
-      "foreign rollout 必须包含 SQLite 索引和 rollout JSONL");
-    assert.deepEqual(foreignRuntimeFiles.filter((name) => !["index.sqlite", "rollout.jsonl", "index.sqlite-wal", "index.sqlite-shm"].includes(name)), [],
-      "foreign rollout 只能包含业务文件及 SQLite WAL/SHM 运行文件");
-    const foreignFacts = await readRollout(foreign, "SELECT (SELECT COUNT(*) FROM item_catalog) AS items,(SELECT COUNT(*) FROM turn_records) AS turns,(SELECT COUNT(*) FROM executions) AS executions,(SELECT COUNT(*) FROM model_calls) AS model_calls,(SELECT COUNT(*) FROM context_assemblies) AS assemblies");
-    assert.deepEqual(foreignFacts, [{ items: 0, turns: 0, executions: 0, model_calls: 0, assemblies: 0 }]);
-    const foreignIndex = join(foreign.workspace, await threadRolloutLocator(foreign, await sessionCatalogNode(foreign)));
-    // mode=ro 查询也可能创建 WAL/SHM；先完成观测，再冻结目录及含 WAL 的全部持久字节。
-    // SHM 仅含 SQLite 锁与读标记，业务写入仍由 index/WAL/JSONL 的逐字节比较约束。
-    const foreignContextBefore = await readRolloutDirectory(foreign);
-    const foreignFiles = foreignContextBefore.filter((name) => name !== "index.sqlite-shm")
-      .map((name) => join(dirname(foreignIndex), name));
-    const foreignBytesBefore = await Promise.all(foreignFiles.map((path) => readFile(path)));
+    // 新会话尚未执行；拒绝操作不得创建 rollout 或新增业务事实。
+    assert.equal(await readRolloutDirectory(foreign), null, "foreign 新会话不得提前物化 rollout");
     const outboxBefore = await readControl(owner, "SELECT COUNT(*) AS count FROM communication_outbox");
     const assertNegativeIsolation = async () => {
       assert.deepEqual(await readControl(owner, "SELECT revision FROM collaboration_ledger WHERE id=1"), ledgerBefore);
       assert.deepEqual(await readControl(foreign, foreignQuery), foreignBefore);
-      assert.deepEqual(await readRolloutDirectory(foreign), foreignContextBefore);
-      assert.deepEqual(await Promise.all(foreignFiles.map((path) => readFile(path))), foreignBytesBefore,
-        "拒绝跨 Session 操作不得改写 foreign rollout 的 SQLite、WAL 或 JSONL 原始字节");
+      assert.equal(await readRolloutDirectory(foreign), null,
+        "拒绝跨 Session 操作不得物化 foreign rollout 的 SQLite、WAL 或 JSONL");
       assert.deepEqual(await readControl(owner, "SELECT COUNT(*) AS count FROM communication_outbox"), outboxBefore);
     };
     // 非成员属于确定业务失败，必须收敛 failed Job/Turn，而不是继续向模型返回 schema 错误。
@@ -9873,12 +9859,12 @@ function classifyConsoleErrors(input = {}) {
         || refusal.kind === "history" && refusal.method === "POST";
       if (!expectedRead || refusal.status !== status || !refusal.requestId || refusal.body?.request_id !== refusal.requestId
           || typeof detail !== "string") return null;
-      if (refusal.kind === "breadcrumb" && detail !== `会话目录节点不存在: ${nodeId}`
+      if (status === 404 && (refusal.kind === "breadcrumb" && detail !== `会话目录节点不存在: ${nodeId}`
           || ["bootstrap", "main_thread", "session", "goal"].includes(refusal.kind) && detail !== `Session ${nodeId} not found`
           || refusal.kind === "file_tree_settings" && detail !== `会话不存在: ${nodeId}`
           || refusal.kind === "attachment_content" && (typeof refusal.attachmentFileId !== "string"
             || !refusal.attachmentFileId.startsWith(`boxteam-session://${nodeId}/attachments/`)
-            || detail !== `会话附件已释放: ${refusal.attachmentFileId}`)) return null;
+            || detail !== `会话附件已释放: ${refusal.attachmentFileId}`))) return null;
       if (refusal.kind === "job") {
         if (status !== 404 || detail !== `Job ${refusal.jobId} not found`) return null;
         const responses = jobOwnerResponses.filter((response) => response.pageId === refusal.pageId
@@ -9911,7 +9897,7 @@ function classifyConsoleErrors(input = {}) {
         && proof.absentDomNodeIds.includes(nodeId)
         && (refusal.kind === "breadcrumb" || proof.absentChatSessionIds.includes(nodeId)));
       if (lifecycleProofIndex < 0) return null;
-      const proof = lifecycleDeletionProofs[lifecycleProofIndex];
+      const proof = deletionProofs[lifecycleProofIndex];
       return { refusalRequestId: refusal.requestId, deletionOperationId: proof.operationId,
         terminalRequestId: proof.terminalRequestId, lifecycleProofIndex,
         ...(jobOwnerRequestId ? { jobOwnerRequestId } : {}) };
@@ -10508,8 +10494,35 @@ const result = {
   forkDurabilityProofs: [],
 };
 
+function runDeletionReadClassifierSelfTest() {
+  const sessionId = "ses_deletion_classifier";
+  const url = `http://127.0.0.1:19000/api/v1/sessions/${sessionId}`;
+  const text = "Failed to load resource: the server responded with a status of 409 (Conflict)";
+  const refusal = { url, pageId: 7, documentId: 8, kind: "session", method: "GET", status: 409,
+    sessionId, workspaceHeader: "workspace-a", requestId: "request-refused", receivedAt: 100,
+    body: { request_id: "request-refused", detail: `session_deletion_pending: session_id='${sessionId}', state='deleting'` } };
+  const proof = { origin: new URL(url).origin, workspaceHeader: "workspace-a", terminalRequestId: "request-terminal",
+    journal: { state: "completed" }, remaining: [], verifiedAt: 200, sessionIds: [sessionId],
+    nodeIds: [sessionId], absentDomNodeIds: [sessionId], absentChatSessionIds: [sessionId], operationId: "delete-op" };
+  const classify = (response = refusal, proofs = [proof]) => classifyConsoleErrors({
+    consoleErrorFacts: [{ index: 0, url, text, pageId: 7, documentId: 8 }], consoleErrors: [text],
+    failedRequests: [], conflictResponses: [response], lifecycleDeletionProofs: proofs,
+    historyErrorResponses: [], lifecycleErrorResponses: [], forkDeletionRaceFacts: [],
+    messageStreamResponses: [], jobOwnerResponses: [], turnNavigationMissingTurnProofs: [],
+    historyLiveProofs: [], historyRecoveryResponses: [], controlledRestartWindows: [],
+    controlledRestartRequests: [], controlledRestartResponses: [],
+  });
+  assert.deepEqual(classify().unhandledConsoleErrors, []);
+  assert.deepEqual(classify(refusal, []).unhandledConsoleErrors, [text], "缺少删除终态不得忽略409");
+  assert.deepEqual(classify(refusal, [{ ...proof, remaining: [sessionId] }]).unhandledConsoleErrors, [text]);
+  assert.deepEqual(classify(refusal, [{ ...proof, workspaceHeader: "workspace-other" }]).unhandledConsoleErrors, [text]);
+  assert.deepEqual(classify({ ...refusal, body: { ...refusal.body, request_id: "request-other" } }).unhandledConsoleErrors, [text]);
+  assert.deepEqual(classify({ ...refusal, body: { ...refusal.body, detail: `会话物理目录缺失: ${sessionId}, path=/private/session` } }).unhandledConsoleErrors, [text]);
+}
+
 if (messageStreamDiagnosticsSelfTest) {
   runMessageStreamDiagnosticsSelfTest();
+  runDeletionReadClassifierSelfTest();
   process.stdout.write("message stream diagnostics self-test passed\n");
 } else if (forkDeadlineClassifierSelfTest) {
   await runForkDeadlineClassifierSelfTest();

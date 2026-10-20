@@ -309,7 +309,6 @@ def local_context_session_service(
         config_service=ConfigService(workspace_root=workspace_root),
         trace_event_store=TraceEventStore(sessions_root), workspace_id=workspace_id,
         path_resolver=catalog.resolver, creation_service=catalog.creation_service,
-        initialize_thread_storage=RolloutCheckpointSaver(sessions_root).initialize_thread_storage,
     )
 
 

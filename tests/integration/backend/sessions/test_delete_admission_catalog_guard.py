@@ -73,7 +73,7 @@ async def admission_harness() -> AsyncIterator[_AdmissionHarness]:
         workspace_id=workspace.workspace_id,
         path_resolver=workspace.resolver,
         creation_service=workspace.creation_service,
-        initialize_thread_storage=saver.initialize_thread_storage,
+
     )
     message_bus = BackgroundMessageBus(store=BackgroundWorkStore(sessions_dir=workspace.sessions_root))
     executor = _InstantJobExecutor()

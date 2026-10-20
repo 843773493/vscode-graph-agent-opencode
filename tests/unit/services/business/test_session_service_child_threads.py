@@ -31,9 +31,6 @@ from app.services.business.session_service import SessionService
 from app.services.business.team.board_manager import TeamBoardManager
 from app.services.business.team.rules import require_active_member
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.rollout_context.checkpoint.saver import (
-    RolloutCheckpointSaver,
-)
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
@@ -63,9 +60,7 @@ def service(workspace) -> SessionService:
         workspace_id=WORKSPACE_ID,
         path_resolver=workspace.resolver,
         creation_service=workspace.creation_service,
-        initialize_thread_storage=RolloutCheckpointSaver(
-            workspace.sessions_root
-        ).initialize_thread_storage,
+
     )
 
 

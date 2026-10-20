@@ -256,10 +256,6 @@ class RolloutCheckpointSaver(
 
 
 
-    def initialize_thread_storage(self, session_id: str, thread_id: str) -> None:
-        """由 Thread 创建 owner 建立真实空 rollout，不创建执行或 checkpoint。"""
-        self._storage.storage.initialize(session_id, thread_id=thread_id)
-
     def ensure_request_items(
         self, session_id: str, thread_id: str, *, turn_id: str | None,
         execution_id: str, messages: Sequence[object], checkpoint_ns: str = "",

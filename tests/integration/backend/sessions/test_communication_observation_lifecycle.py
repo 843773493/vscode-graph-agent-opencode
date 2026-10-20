@@ -52,9 +52,6 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.gateway_communication_client import (
     GatewayCommunicationClient,
 )
-from app.services.infrastructure.rollout_context.checkpoint.saver import (
-    RolloutCheckpointSaver,
-)
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.orchestration.communication.inbox_admission_worker import (
     InboxAdmissionTarget,
@@ -77,7 +74,7 @@ from tests.unit.core.catalog_workspace_helper import (
 
 pytest_plugins = ["tests.integration.backend.sessions.test_session_communication_pipeline"]
 
-GATEWAY = "gateway_observation_lifecycle"
+GATEWAY = "gateway_9b9b57aa1688b9a3f0d491abeaebc089"
 
 
 @dataclass
@@ -193,8 +190,7 @@ async def lifecycle_case() -> AsyncIterator[_Case]:
     if context.workspace_root.exists():
         shutil.rmtree(context.workspace_root)
     workspace = build_catalog_workspace(context.output_root)
-    sessions = SessionService(config_service=ConfigService(), trace_event_store=TraceEventStore(sessions_dir=workspace.sessions_root), workspace_id=workspace.workspace_id, path_resolver=workspace.resolver, creation_service=workspace.creation_service,
-                              initialize_thread_storage=RolloutCheckpointSaver(workspace.sessions_root).initialize_thread_storage)
+    sessions = SessionService(config_service=ConfigService(), trace_event_store=TraceEventStore(sessions_dir=workspace.sessions_root), workspace_id=workspace.workspace_id, path_resolver=workspace.resolver, creation_service=workspace.creation_service)
     source = await workspace.create_session("观察源")
     target = await workspace.create_session("观察目标")
     projection = _ColdProjection()
