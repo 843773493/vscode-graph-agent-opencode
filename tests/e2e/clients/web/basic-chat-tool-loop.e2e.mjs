@@ -9098,7 +9098,9 @@ async function runSection8Product(browser, primaryPage) {
     for (const name of section8Selection.selected) {
       assert.equal(typeof scenarios[name]?.run, "function", '未知 Section 8 场景：' + name);
       result.runningScenario = name;
-      facts[name] = await scenarios[name].run();
+      await browserStartup(`scenario_${name}`, async () => {
+        facts[name] = await scenarios[name].run();
+      });
     }
     delete result.runningScenario;
     return facts;
@@ -9668,6 +9670,10 @@ try {
   assert.deepEqual(result.diagnostics.unhandledFailedRequests, [], "浏览器请求失败缺少同一 stream 的后续恢复证据");
   await writeFile(resultPath, JSON.stringify(result, null, 2));
 } catch (error) {
+  // 先独立保存原始失败，完整证据序列化或截图失败不能覆盖业务错误。
+  const failure = { scenario: result.runningScenario ?? "final-checks", error: String(error), stack: error.stack };
+  process.stderr.write(`${failure.scenario}: ${failure.stack ?? failure.error}\n`);
+  await writeFile(`${resultPath}.error.json`, JSON.stringify(failure, null, 2));
   let screenshotError = null;
   try {
     if (page) await page.screenshot({ path: screenshotPath, fullPage: true, timeout: 30_000 });
