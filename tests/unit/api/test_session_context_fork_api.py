@@ -4,9 +4,16 @@ from datetime import UTC, datetime
 from typing import Literal
 
 import pytest
+from fastapi import HTTPException
 
-from app.api.sessions import fork_session_context, get_fork_source_point
+from app.abstractions.session_context import WorkspaceSessionContextAccessError
+from app.api.sessions import (
+    fork_session_context,
+    get_fork_source_point,
+    transfer_session_fork,
+)
 from app.core.resource_uri import thread_resource_uri
+from app.gateway.federation.grants import ForkGrantTarget
 from app.schemas.internal_v2.session import (
     SessionDTO,
     SessionForkCreationKind,
@@ -14,6 +21,10 @@ from app.schemas.internal_v2.session import (
     SessionForkRequest,
     SessionForkResultDTO,
     SessionForkSourcePointDTO,
+)
+from app.schemas.internal_v2.session_fork_transfer import (
+    SessionForkTransferRequest,
+    SessionForkTransferResultDTO,
 )
 from app.services.business.session_context_resource import (
     session_resource_identity,
@@ -71,9 +82,25 @@ class _ForkService:
         )
 
 
+class _FailingForkService:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def fork(self, request: SessionForkRequest) -> SessionForkResultDTO:
+        raise self.error
+
+    async def transfer(self, request: SessionForkTransferRequest) -> SessionForkTransferResultDTO:
+        raise self.error
+
+
 @pytest.fixture
 def fork_service() -> _ForkService:
     return _ForkService()
+
+
+@pytest.fixture
+def failing_fork_service(request: pytest.FixtureRequest) -> _FailingForkService:
+    return _FailingForkService(request.param)
 
 
 def _request(mode: SessionForkMode, creation_kind: SessionForkCreationKind, relationship: Literal["detached", "pinned"]) -> SessionForkRequest:
@@ -140,3 +167,39 @@ async def test_full_source_point_route_serializes_absent_anchor(fork_service: _F
     assert wire["request_id"] == "req_source_point"
     assert wire["data"]["anchor_item_id"] is None
     assert wire["data"]["resource_mode"] == "full_rollout_copy"
+
+
+@pytest.mark.parametrize("route", ["fork", "transfer"])
+@pytest.mark.parametrize(
+    "failing_fork_service",
+    [
+        WorkspaceSessionContextAccessError("federation-channel-closed: gateway_remote"),
+        RuntimeError("fork_response_protocol_invalid: owner/hash 不匹配"),
+    ],
+    indirect=True,
+)
+async def test_fork_routes_classify_access_failure_without_hiding_integrity_error(
+    failing_fork_service: _FailingForkService, route: str,
+) -> None:
+    payload = _request("full_rollout_copy", "new_session_main", "detached")
+    arguments = {"_": "local", "request_id": "req_fork_access_failure", "fork_service": failing_fork_service}
+    if route == "fork":
+        call = fork_session_context(SOURCE_SESSION_ID, payload=payload, **arguments)
+    else:
+        transfer_request = SessionForkTransferRequest(
+            source_gateway_id="gateway_test", action="create", request=payload,
+            fork_target=ForkGrantTarget(
+                gateway_id="gateway_test", uri=payload.target_container_uri, fork_role="target",
+            ),
+        )
+        call = transfer_session_fork(payload=transfer_request, **arguments)
+    if isinstance(failing_fork_service.error, WorkspaceSessionContextAccessError):
+        with pytest.raises(HTTPException) as raised:
+            await call
+        assert raised.value.status_code == 502
+        assert raised.value.detail == str(failing_fork_service.error)
+        assert raised.value.__cause__ is failing_fork_service.error
+    else:
+        with pytest.raises(RuntimeError) as raised:
+            await call
+        assert raised.value is failing_fork_service.error
