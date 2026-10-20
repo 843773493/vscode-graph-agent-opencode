@@ -32,6 +32,7 @@ from app.gateway.federation.errors import (
 )
 from app.gateway.federation.grants import ResourceNavigationGrantTarget
 from app.gateway.federation.messages import FEDERATION_DEADLINE_SECONDS
+from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.server.workspace_proxy import (
     _proxy_workspace_request,
     _registry,
@@ -58,6 +59,15 @@ from app.services.infrastructure.resource_platform.virtual_resources.resolver im
 )
 
 router = APIRouter()
+
+
+def _workspace_owner_gateway_id(registry: GatewayWorkspaceRegistry, target: WorkspaceTarget, gateway_id: str) -> str:
+    if target.connection_kind != "remote_gateway":
+        return gateway_id
+    connection_id = target.remote_gateway_connection_id
+    if connection_id is None:
+        raise RuntimeError("远程导航 Workspace 缺少 Gateway 连接身份")
+    return registry.remote_gateway_connection(connection_id).remote_gateway_id
 
 
 async def _navigate(
@@ -90,25 +100,31 @@ async def _navigate_target(
         resource = parse_resource_uri(payload.uri, local_gateway_id=gateway_id)
         payload = payload.model_copy(update={"uri": resource.display_uri})
         if backend_workspace_id is not None:
-            targets = [target for target in _registry(request).targets() if target.backend_workspace_id == backend_workspace_id]
+            registry = _registry(request)
+            targets = [target for target in registry.targets() if target.backend_workspace_id == backend_workspace_id]
             if not targets:
                 raise HTTPException(404, detail="workspace 未注册或不存在")
-            # TODO：同一后端注册到多个 Gateway 的固定工作区路由需按显式 owner 消歧；当前重复目标仍明确拒绝。
+            owner_gateway_id = resource.gateway_authority
+            if resource.scope == "gateway":
+                owner_gateway_id = owner_gateway_id or gateway_id
+                if resource.scope_id != owner_gateway_id:
+                    raise ResourceUriResolveError("scope_mismatch", "导航 URI 与目标 Gateway 不一致")
+            if owner_gateway_id is not None:
+                targets = [target for target in targets
+                           if _workspace_owner_gateway_id(registry, target, gateway_id) == owner_gateway_id]
+                if not targets:
+                    raise ResourceUriResolveError("scope_mismatch", "导航 URI 与固定 Workspace 路由不一致")
             if len(targets) != 1:
                 raise FederationError(FEDERATION_TARGET_AMBIGUOUS, "多个 Gateway route 指向同一导航 workspace")
             workspace_target = targets[0]
-            owner_gateway_id = gateway_id
-            if workspace_target.connection_kind == "remote_gateway":
-                connection_id = workspace_target.remote_gateway_connection_id
-                if connection_id is None:
-                    raise RuntimeError("远程导航 Workspace 缺少 Gateway 连接身份")
-                owner_gateway_id = _registry(request).remote_gateway_connection(connection_id).remote_gateway_id
+            owner_gateway_id = _workspace_owner_gateway_id(registry, workspace_target, gateway_id)
             if resource.gateway_authority not in {None, owner_gateway_id} or (resource.scope == "workspace" and resource.scope_id != backend_workspace_id):
                 raise ResourceUriResolveError("scope_mismatch", "导航 URI 与固定 Workspace 路由不一致")
             if workspace_target.connection_kind != "remote_gateway":
                 return await _proxy_workspace_request(
                     f"workspaces/{backend_workspace_id}/resources/navigation", request,
                     auth=auth, user_access=user_access, include_credentials=True,
+                    target_workspace_id=workspace_target.workspace_id,
                     request_body=payload.model_dump_json(exclude_unset=True).encode("utf-8"),
                     navigation_deadline_at=navigation_deadline_at(deadline),
                 )

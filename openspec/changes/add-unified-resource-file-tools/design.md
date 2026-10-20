@@ -24,6 +24,8 @@ read/write 的文件目标、ls/glob/grep 的根目标和 apply_patch 的根目�
 
 工作区文件操作由目标工作区 owner 执行；Gateway/inline 技能由各根所属 owner 提供内容能力，不让 Workspace 读取对端真实路径。复用 federation channel、认证和有界星型路由，分别登记文件操作授权，保留既有 send/read/wait grant 的边界。固定 target 与单次 channel lease 分开；断线不可重新裸 ID 选目标。选择沿现有路由扩展，避免另一套远程文件服务或全局业务数据库。
 
+同一个 backend 被多个 Gateway 注册时，固定 Workspace 导航先按 backend ID 筛选，再按 URI 的显式 Gateway authority 匹配注册连接 owner；Gateway scope 没有 authority 时只表示当前 Gateway，scope_id 必须与 owner 一致。选定的注册 ID 仅在 Gateway 内部传给透明代理，不由客户端请求头或当前激活态代选。未限定 owner 的重复 Workspace、同一 owner 的重复注册继续明确歧义，不能任取其一。激活切换、更换 channel 和 owner 重启均不改变已固定 URI/cursor 的 Gateway、Workspace 或根。
+
 模型只读工具现在由同一 ResourceNavigation 在任何本机文件解析前检查目标归属：远端 authority 或另一个 Workspace 交已配置 Gateway 的已注册 Workspace 服务入口 `/api/gateway/resource-navigation/workspaces/{source_workspace_id}`，不经激活工作区选择、不直连对端 backend。该入口验证本机服务凭据及来源 Workspace 注册，不要求或伪造浏览器 Cookie；公开导航入口仍保留原用户登录要求。省略 authority 的其它 Workspace 固定为本次调用 Gateway，再传完整 URI；Gateway 继续用既有 typed ResourceNavigationGrantTarget/read grant 和星型 channel 到实际 owner，通信 grant 不能作为文件目标的签名替身。Gateway 与 Workspace 侧共用同一响应归属校验，核根形态、scope/kind、子路径及每个匹配对应的文件节点，并返回可重开的限定 URI。同步/异步传输各自使用独立 HTTP client，不建立观察/activation 状态。
 
 联邦 deadline 取请求预算与既有联邦上限的较小值，不能在进入联邦时重新获得固定长预算；source 工具和导航 owner 的总期限继续包含解析、传输及最终序列化。错误保留原文件执行、寻址与联邦域及同一 request_id，不把目标拒绝改为本机回退。只读工具沿 read grant 执行；条件文本修改使用下述独立 grant，会话产物继续按第5组迁移。

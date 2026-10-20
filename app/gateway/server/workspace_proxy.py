@@ -377,6 +377,7 @@ async def _proxy_workspace_request(
         targets = [
             target for target in registry.targets()
             if target.backend_workspace_id == backend_workspace_id
+            and (target_workspace_id is None or target.workspace_id == target_workspace_id)
         ]
         if not targets:
             raise HTTPException(status_code=404, detail="workspace 未注册或不存在")

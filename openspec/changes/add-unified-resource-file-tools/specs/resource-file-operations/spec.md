@@ -37,6 +37,16 @@
 - **WHEN** 文件调用已固定目标后，用户切换当前激活工作区
 - **THEN** 本调用及其分页/写入仍指向原 Gateway、工作区和根，不重新用当前激活态解释
 
+#### Scenario: 同一后端由多个 Gateway 注册
+
+- **WHEN** 固定 Workspace 导航存在多个 backend ID 相同的注册目标
+- **THEN** URI 的显式 Gateway 归属只匹配对应注册 owner，Gateway scope 的缺省 authority 仅指本机；没有明确归属或同 owner 仍有多个候选时明确拒绝歧义，不借请求头或激活工作区代选
+
+#### Scenario: 连接更换与目标重开
+
+- **WHEN** 已固定导航目标的联邦 channel 更换，或目标 backend 退出后重开
+- **THEN** 相同 URI 和合法 cursor 仍访问原 Gateway、Workspace 和根；目标不可达期间明确失败，不能改读当前激活工作区或 source 同名文件
+
 ### Requirement: 导航与搜索结果必须有界且可继续访问
 
 目录和搜索结果 MUST 带规范资源 URI 和节点类型；搜索匹配同时带文件引用、位置和有界片段。操作 MUST 设置 entry/match、单文件读取、总响应字节及总 deadline 上限，明确返回截断原因和 continuation 能力；分页 cursor MUST 绑定目标根、操作及查询参数，不含真实路径或凭据。普通可变目录分页不得伪称历史快照；检测到影响分页的变化时明确披露或拒绝旧 cursor。不得为了分页为所有文件建立持久快照。

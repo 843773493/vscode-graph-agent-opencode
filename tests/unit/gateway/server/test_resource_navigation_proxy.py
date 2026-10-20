@@ -32,6 +32,8 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
 
 WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
 OTHER_WORKSPACE_ID = "00000000-0000-4000-8000-000000000002"
+GATEWAY_ID = "gateway_3097a8378d6e2c98a52a687e4a004769"
+REMOTE_GATEWAY_ID = "gateway_" + "c" * 32
 
 
 @dataclass
@@ -87,7 +89,7 @@ async def navigation_proxy(
         application.add_middleware(TraceMiddleware)
         application.include_router(navigation_router)
         application.include_router(router)
-        application.state.gateway_id = "gateway_3097a8378d6e2c98a52a687e4a004769"
+        application.state.gateway_id = GATEWAY_ID
         application.state.federation_rpc_service = navigation_relay
         application.state.registry = registry
         application.state.http_client = upstream
@@ -96,6 +98,85 @@ async def navigation_proxy(
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://gateway.test",
                                      headers={"X-Local-Token": get_gateway_local_token()}) as client:
             yield client, registry, forwarded
+
+
+@pytest.fixture
+def shared_backend_mapping(navigation_proxy):
+    _, registry, _ = navigation_proxy
+    registry.upsert_remote_gateway(RemoteGatewayConnection(
+        connection_id="shared-connection", name="shared", host="remote.test", port=22, username="user",
+        private_key_path=None, ssh_config_host=None, remote_gateway_port=8014,
+        remote_gateway_id=REMOTE_GATEWAY_ID, protocol_version=1, source_owner="manual",
+    ))
+    registry.upsert(WorkspaceTarget(
+        workspace_id="shared-remote-target", backend_workspace_id=WORKSPACE_ID,
+        name="shared", root_path=None, backend_url="http://remote.test", connection_kind="remote_gateway",
+        remote_gateway_connection_id="shared-connection", remote_workspace_id="shared-remote-route",
+    ), activate=False)
+
+
+@pytest.mark.parametrize("authority,scope_id,status", [
+    (None, GATEWAY_ID, 200), (GATEWAY_ID, GATEWAY_ID, 200),
+    (REMOTE_GATEWAY_ID, REMOTE_GATEWAY_ID, 200),
+    (None, REMOTE_GATEWAY_ID, 403), (REMOTE_GATEWAY_ID, GATEWAY_ID, 403),
+])
+async def test_shared_backend_gateway_scope_keeps_explicit_owner(
+    navigation_proxy, navigation_relay, shared_backend_mapping, authority, scope_id, status,
+):
+    client, registry, forwarded = navigation_proxy
+    local_uri = f"boxteam://gateway/{scope_id}/resources/skills/test/SKILL.md"
+    uri = local_uri if authority is None else local_uri.replace("boxteam://", f"boxteam://{authority}/")
+    navigation_relay.response = {"node": {"uri": local_uri, "resource_shape": "file",
+        "operations": ["describe", "read"]}, "content": "REMOTE SKILL"}
+    response = await client.post(f"/api/v1/workspaces/{WORKSPACE_ID}/resources/navigation",
+        json={"uri": uri, "operation": "read"}, headers={"X-BoxTeam-Workspace-Id": "active-target"})
+    assert response.status_code == status, response.text
+    if status != 200:
+        assert response.json()["detail"]["code"] == "scope_mismatch"
+        assert not forwarded and not navigation_relay.calls
+    elif scope_id == GATEWAY_ID:
+        outgoing, = forwarded
+        assert outgoing.url.host == "original.test"
+        assert outgoing.url.path == f"/api/v1/workspaces/{WORKSPACE_ID}/resources/navigation"
+        assert outgoing.headers["X-BoxTeam-Workspace-Id"] == WORKSPACE_ID
+        assert json.loads(outgoing.content)["uri"] == local_uri
+        assert not navigation_relay.calls
+        assert registry.route_reference_counts("original-target") == (0, 0)
+    else:
+        call, = navigation_relay.calls
+        assert call["target"].to_payload() == {"gateway_id": REMOTE_GATEWAY_ID, "uri": uri}
+        assert response.json()["data"]["content"] == "REMOTE SKILL"
+        assert response.json()["data"]["node"]["uri"] == uri
+        assert not forwarded
+    assert registry.active_workspace_id == "active-target"
+
+
+async def test_shared_backend_workspace_authority_routes_only_to_remote_owner(
+    navigation_proxy, navigation_relay, shared_backend_mapping,
+):
+    client, registry, forwarded = navigation_proxy
+    local_uri = f"boxteam://workspace/{WORKSPACE_ID}/resources/files/root"
+    uri = local_uri.replace("boxteam://", f"boxteam://{REMOTE_GATEWAY_ID}/")
+    navigation_relay.response = {"node": {"uri": local_uri, "resource_shape": "directory",
+        "operations": ["describe", "list"], "child_path": "file_segments"}}
+    response = await client.post(f"/api/v1/workspaces/{WORKSPACE_ID}/resources/navigation",
+        json={"uri": uri, "operation": "list"})
+    assert response.status_code == 200, response.text
+    call, = navigation_relay.calls
+    assert call["target"].to_payload() == {"gateway_id": REMOTE_GATEWAY_ID, "uri": uri}
+    assert response.json()["data"]["node"]["uri"] == uri
+    assert not forwarded and registry.active_workspace_id == "active-target"
+
+
+async def test_gateway_scope_does_not_choose_between_duplicate_local_routes(navigation_proxy, navigation_relay):
+    client, registry, forwarded = navigation_proxy
+    registry.upsert(WorkspaceTarget(workspace_id="duplicate-local", backend_workspace_id=WORKSPACE_ID,
+        name="duplicate", root_path="/unused", backend_url="http://duplicate.test", connection_kind="local"), activate=False)
+    response = await client.post(f"/api/v1/workspaces/{WORKSPACE_ID}/resources/navigation", json={
+        "uri": f"boxteam://gateway/{GATEWAY_ID}/resources/skills/test/SKILL.md", "operation": "read"})
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "target_ambiguous"
+    assert not forwarded and not navigation_relay.calls
 
 
 @pytest.mark.parametrize("deadline_at,reason", [("nan", "invalid_deadline"), ("inf", "invalid_deadline"),

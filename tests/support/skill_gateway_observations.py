@@ -71,8 +71,8 @@ class ObservedGatewaySkillSources(GatewaySkillSources):
             client.event_hooks["response"].append(_response)
         return client
 
-    def _navigation_request(self, request, *, gateway_id):
-        parsed, outgoing = super()._navigation_request(request, gateway_id=gateway_id)
+    def _navigation_request(self, request, *, gateway_id, deadline):
+        parsed, outgoing = super()._navigation_request(request, gateway_id=gateway_id, deadline=deadline)
         _record("workspace_request", _request_values(outgoing))
         return parsed, outgoing
 
@@ -85,8 +85,8 @@ class ObservedGatewaySkillSources(GatewaySkillSources):
 class ObservedGatewaySkillSourcePort(GatewaySkillSourcePort):
     """先执行完整生产 owner，再记录返回给原调用方的身份与状态。"""
 
-    async def execute(self, request: dict[str, object]) -> dict[str, object]:
-        result = await super().execute(request)
+    async def execute(self, request: dict[str, object], *, deadline: float | None = None) -> dict[str, object]:
+        result = await super().execute(request, deadline=deadline)
         _record("owner_receipt", {
             "owner_gateway_id": self.owner.gateway_id,
             "request_gateway_id": request.get("gateway_id"),
