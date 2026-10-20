@@ -222,10 +222,11 @@ def prepare_registered_context(
             # 成功 SQL 行仅沿本次 prepare 传给 seal writer 重读，不跨请求保存。
             validated_predecessors: _ValidatedPredecessors = {}
             # Registry 等待期间 canonical 可能推进；封存前复用唯一边界端口重新检查。
-            conflict = owner.prepare_model_call_boundary(
+            conflict, previous = owner.prepare_model_call_boundary(
                 session_id, thread_id, turn_id=turn_id, execution_id=execution_id,
                 messages=request_messages, checkpoint_ns=checkpoint_ns,
                 reconcile_request_items=summary_candidate is None,
+                validated_predecessors=validated_predecessors,
             )
             if conflict is not None:
                 raise conflict
@@ -233,10 +234,6 @@ def prepare_registered_context(
             tool_set = tool_set_supplier()
             if not isinstance(tool_set, ToolSetSnapshot):
                 raise TypeError("Tool producer 必须返回正向 ToolSetSnapshot")
-            with owner._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns) as read_snapshot:
-                previous = owner._storage.assemblies.latest_context_assembly(
-                    read_snapshot, validated_predecessors=validated_predecessors,
-                )
             # context-control gate 内先接受权威 tracking/CAS，再消费本次冻结来源。
             context_source_manager.refresh_control_states()
             frozen_skills = skill_catalog_from_activation(
@@ -330,7 +327,7 @@ def prepare_registered_context(
                 initial_assembly = previous is not None and (
                     previous.session_id, previous.thread_id
                 ) != (session_id, thread_id)
-                items = owner._storage.checkpoints.committed_context_items(read_snapshot)
+                items = owner._storage.checkpoints.committed_context_items(read_snapshot, predecessor=previous)
                 notice_acceptance, _notice_selection = owner._storage.executions.runtime_notice_acceptance(
                     admission, connection=read_snapshot.connection,
                 )

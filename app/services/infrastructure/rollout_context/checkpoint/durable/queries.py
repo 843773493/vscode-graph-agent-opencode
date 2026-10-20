@@ -37,6 +37,7 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 from app.services.mapping.itemized.carrier_dedup import superseded_item_ids
 
 if TYPE_CHECKING:
+    from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
     from app.services.infrastructure.rollout_context.storage.primitives import (
         RolloutCheckpointIndex,
         RolloutReadSnapshot,
@@ -257,6 +258,7 @@ class RolloutCheckpointQueriesMixin:
         self,
         snapshot: RolloutReadSnapshot,
         *,
+        predecessor: ContextAssemblySnapshot | None,
         include_pending_notices: bool = True,
     ) -> tuple[CanonicalItemRecord, ...]:
         """canonical 历史加当前准入来源；已 applied 前缀只精确继承。"""
@@ -272,6 +274,7 @@ class RolloutCheckpointQueriesMixin:
         selected_ids = self.execution_context_item_ids(
             snapshot.connection, session_id=snapshot.session_id, thread_id=snapshot.thread_id,
             checkpoint_ns=snapshot.checkpoint_ns, view_id=view_id,
+            predecessor=predecessor,
             include_pending_notices=include_pending_notices,
         )
         by_id = {item.item_id: item for item in self._storage.read_items(
@@ -283,6 +286,7 @@ class RolloutCheckpointQueriesMixin:
     def execution_context_item_ids(
         self, connection: sqlite3.Connection, *, session_id: str, thread_id: str,
         checkpoint_ns: str, view_id: str, include_pending_notices: bool = True,
+        predecessor: ContextAssemblySnapshot | None,
     ) -> tuple[str, ...]:
         """Provider 与 LangGraph 执行读取共用 canonical/current admission selection。"""
         selected = connection.execute(
@@ -305,11 +309,8 @@ class RolloutCheckpointQueriesMixin:
         pending_ids = []
         # 从唯一 applied assembly 携带精确前缀，再追加当前准入自己的
         # 输入、输出和 retry 来源；用户执行同样可能产生 Turn 外来源。
-        previous = self._context.assemblies._latest_context_assembly_connection(
-            connection, session_id, thread_id, checkpoint_ns=checkpoint_ns,
-        )
-        if previous is not None and self._pending_context_epoch_row(connection, checkpoint_ns) is None:
-            pending_ids.extend(entry.ref.ref_id for entry in previous.selection
+        if predecessor is not None and self._pending_context_epoch_row(connection, checkpoint_ns) is None:
+            pending_ids.extend(entry.ref.ref_id for entry in predecessor.selection
                                if entry.included and entry.ref.ref_type == "canonical_item")
         pending_ids.extend(row[0] for row in connection.execute(
             "SELECT item.item_id FROM context_view_items member "

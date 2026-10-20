@@ -85,9 +85,13 @@ class RolloutMessageViewMixin:
                     f"WHERE item.item_id IN ({placeholders})", tuple(excluded_ids),
                 )}
                 sequences = [sequence for sequence in sequences if sequence not in excluded_sequences]
+            predecessor = self._context.assemblies._latest_context_assembly_connection(
+                connection, session_id, thread_id, checkpoint_ns=checkpoint_ns,
+            )
             allowed = set(self.execution_context_item_ids(
                 connection, session_id=session_id, thread_id=thread_id,
                 checkpoint_ns=checkpoint_ns, view_id=execution_view_id or view_id,
+                predecessor=predecessor,
             ))
             # frozen raw 中的 canonical 历史保持原序；display_only 必须经过
             # 与 Provider 完全相同的 current-admission/applied-prefix selection。

@@ -41,7 +41,10 @@ def test_conflict_raises_with_code_and_zero_side_effect(
     jsonl = storage.jsonl_path(SESSION_ID, thread_id=thread)
     before_jsonl = jsonl.read_bytes()
     with storage.open_read_snapshot(SESSION_ID, thread) as snapshot:
-        sequences = paired_saver.selected_context_message_sequences(snapshot)
+        items = paired_saver._storage.checkpoints.committed_context_items(
+            snapshot, predecessor=paired_saver._storage.assemblies.latest_context_assembly(snapshot),
+        )
+        sequences = paired_saver._storage.checkpoints.selected_context_message_sequences(snapshot, items=items)
         before = tuple(snapshot.connection.iterdump())
         # call 位于 2，result 位于 4；压缩切点 3 必须拒绝真实 typed pair。
         with pytest.raises(ToolProtocolBoundaryConflict) as exc_info:
@@ -55,7 +58,10 @@ def test_closed_boundaries_pass(paired_saver: RolloutCheckpointSaver) -> None:
     storage = paired_saver._storage.storage
     thread = storage.main_thread_id(SESSION_ID)
     with storage.open_read_snapshot(SESSION_ID, thread) as snapshot:
-        sequences = paired_saver.selected_context_message_sequences(snapshot)
+        items = paired_saver._storage.checkpoints.committed_context_items(
+            snapshot, predecessor=paired_saver._storage.assemblies.latest_context_assembly(snapshot),
+        )
+        sequences = paired_saver._storage.checkpoints.selected_context_message_sequences(snapshot, items=items)
         validate_compaction_prefix_cutoffs(snapshot.connection, sequences, [1, 4])
 
 

@@ -52,6 +52,9 @@ from app.services.infrastructure.rollout_context.activation.lineage import (
 from app.services.infrastructure.rollout_context.activation.store import (
     ResourceActivationStore,
 )
+from app.services.infrastructure.rollout_context.assembly.plans.registry import (
+    _ValidatedPredecessors,
+)
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     ToolProtocolBoundaryConflict,
     validate_tool_protocol_closure,
@@ -317,7 +320,8 @@ class RolloutCheckpointSaver(
         self, session_id: str, thread_id: str, *, turn_id: str | None,
         execution_id: str, messages: Sequence[object], checkpoint_ns: str = "",
         reconcile_request_items: bool = True,
-    ) -> ToolProtocolBoundaryConflict | None:
+        validated_predecessors: _ValidatedPredecessors,
+    ) -> tuple[ToolProtocolBoundaryConflict | None, ContextAssemblySnapshot | None]:
         """先提交 canonical group 并检查闭合；预期冲突不撤销已提交事实。"""
         admission = require_current_execution_admission(langgraph_thread_id=thread_id)
         if (admission.session_id, admission.thread_id, admission.execution_id, admission.turn_id) != (
@@ -336,12 +340,18 @@ class RolloutCheckpointSaver(
                     messages=messages, checkpoint_ns=checkpoint_ns,
                 )
             with self._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns) as snapshot:
-                sequences = self.selected_context_message_sequences(snapshot)
+                predecessor = self._storage.assemblies.latest_context_assembly(
+                    snapshot, validated_predecessors=validated_predecessors,
+                )
+                items = self._storage.checkpoints.committed_context_items(
+                    snapshot, predecessor=predecessor,
+                )
+                sequences = self._storage.checkpoints.selected_context_message_sequences(snapshot, items=items)
                 try:
                     validate_tool_protocol_closure(snapshot.connection, sequences, len(sequences))
                 except ToolProtocolBoundaryConflict as conflict:
-                    return conflict
-        return None
+                    return conflict, predecessor
+        return None, predecessor
 
     def accept_turn(
         self,

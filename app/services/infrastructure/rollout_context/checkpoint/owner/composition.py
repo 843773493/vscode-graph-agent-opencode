@@ -138,11 +138,6 @@ class ContextPlanCompositionMixin:
                     (session_id, thread_id, checkpoint_ns, contribution.contribution_id)
                 ] = request_body
 
-    def selected_context_message_sequences(self, snapshot: RolloutReadSnapshot) -> list[int]:
-        """闭合校验与计划选择共用同一 typed carrier 去重规则。"""
-        items = self._storage.checkpoints.committed_context_items(snapshot)
-        return self._storage.checkpoints.selected_context_message_sequences(snapshot, items=items)
-
     def compose_committed_context_plan(
         self,
         session_id: str,
@@ -164,10 +159,10 @@ class ContextPlanCompositionMixin:
                 session_id, thread_id, checkpoint_ns,
             ):
                 raise ValueError("source-mismatch: composition snapshot owner 不一致")
-            items = self._storage.checkpoints.committed_context_items(
-                snapshot, include_pending_notices=include_pending_notices,
-            )
             predecessor = self._storage.assemblies.latest_context_assembly(snapshot)
+            items = self._storage.checkpoints.committed_context_items(
+                snapshot, predecessor=predecessor, include_pending_notices=include_pending_notices,
+            )
             return self._compose_committed_context_plan(
                 snapshot, plan_id=plan_id, tool_set=tool_set,
                 compiler_version=compiler_version, committed_items=items,

@@ -377,6 +377,7 @@ class ModelCallExecution:
             turn_id=context.admission.turn_id, execution_id=context.admission.execution_id,
             messages=request.messages, checkpoint_ns=context.checkpoint_ns,
             reconcile_request_items=current_summary_candidate() is None,
+            validated_predecessors={},
         ))
 
         async def settle() -> None:
@@ -392,7 +393,8 @@ class ModelCallExecution:
         task = asyncio.current_task()
         if cancelled is None and task is not None and task.cancelling():
             cancelled = asyncio.CancelledError()
-        return worker.result(), cancelled
+        conflict, _predecessor = worker.result()
+        return conflict, cancelled
 
     async def _aprepare(self, request: ModelRequest[Any]) -> _PreparedModelCall:
         context = self._request_preparation(request)

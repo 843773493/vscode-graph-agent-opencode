@@ -343,7 +343,7 @@ def preparation_bridge(bridge):
     bridge._request_preparation = MagicMock(return_value=SimpleNamespace(checkpoint_ns="", creation_key="unit-creation", seal_key="unit-seal", admission=SimpleNamespace(session_id="unit-session", thread_id="unit-thread", execution_id="unit-execution", turn_id="unit-turn")))
     bridge._frozen_preparation = MagicMock(return_value=(None, frozen))
     bridge._resource_activation = SimpleNamespace(capture_model_call=AsyncMock(return_value=frozen), commit_model_call=AsyncMock(return_value=frozen))
-    bridge._checkpointer = SimpleNamespace(prepare_model_call_boundary=MagicMock(return_value=None))
+    bridge._checkpointer = SimpleNamespace(prepare_model_call_boundary=MagicMock(return_value=(None, None)))
     bridge._complete_preparation = MagicMock(side_effect=lambda *_args: _args[-1])
     return bridge
 

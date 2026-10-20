@@ -126,7 +126,9 @@ def seal_inputs(registry_db):
             plan = saver.compose_committed_context_plan(
                 session, thread, plan_id=name, tool_set=selected_tools, read_snapshot=read_snapshot,
             )
-            items = saver._storage.checkpoints.committed_context_items(read_snapshot)
+            items = saver._storage.checkpoints.committed_context_items(
+                read_snapshot, predecessor=saver._storage.assemblies.latest_context_assembly(read_snapshot),
+            )
         by_id = {source.contribution_id: source for source in plan.contributions}
         sources = tuple(
             RootCandidateSource(

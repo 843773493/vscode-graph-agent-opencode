@@ -590,7 +590,10 @@ def test_compaction_preflight_uses_selected_checkpoint_carriers(
             snapshot=snapshot, include_execution_context=True,
         )["messages"]
         assert cold_state == state
-        selected = carrier_saver.selected_context_message_sequences(snapshot)
+        items = carrier_saver._storage.checkpoints.committed_context_items(
+            snapshot, predecessor=carrier_saver._storage.assemblies.latest_context_assembly(snapshot),
+        )
+        selected = carrier_saver._storage.checkpoints.selected_context_message_sequences(snapshot, items=items)
         raw = storage.storage._view_message_sequences_from_connection(
             snapshot.connection, storage.checkpoints.active_view_id(snapshot),
         )
@@ -651,7 +654,10 @@ def test_compaction_preflight_does_not_restore_hidden_declarations(
             "AND item_id IN ('item-live-call','item-request-call')", (view_id,),
         )
     with storage.storage.open_read_snapshot(SESSION_ID, thread_id) as snapshot:
-        selected = carrier_saver.selected_context_message_sequences(snapshot)
+        items = carrier_saver._storage.checkpoints.committed_context_items(
+            snapshot, predecessor=carrier_saver._storage.assemblies.latest_context_assembly(snapshot),
+        )
+        selected = carrier_saver._storage.checkpoints.selected_context_message_sequences(snapshot, items=items)
         ids = {sequence: message_id for sequence, message_id in snapshot.connection.execute(
             "SELECT message_sequence, message_id FROM messages",
         )}
@@ -752,7 +758,10 @@ def test_tool_pairing_survives_selected_carrier_replacement(
         storage.executions.append_items(SESSION_ID, thread_id, (result,), execution_id=MODEL_CALL_ID)
 
     with carrier_saver._context_reader.open_snapshot(SESSION_ID, thread_id) as snapshot:
-        sequences = carrier_saver.selected_context_message_sequences(snapshot)
+        items = carrier_saver._storage.checkpoints.committed_context_items(
+            snapshot, predecessor=carrier_saver._storage.assemblies.latest_context_assembly(snapshot),
+        )
+        sequences = carrier_saver._storage.checkpoints.selected_context_message_sequences(snapshot, items=items)
         selected_messages = {
             message_id
             for sequence, message_id in snapshot.connection.execute(
@@ -794,7 +803,10 @@ def test_shared_result_requires_visible_ordered_actual_declaration(
     committed_bytes = storage.storage.jsonl_path(SESSION_ID, thread_id=thread_id).read_bytes()
     with carrier_saver._context_reader.open_snapshot(SESSION_ID, thread_id) as snapshot:
         messages = dict(snapshot.connection.execute("SELECT message_id, message_sequence FROM messages"))
-        sequences = carrier_saver.selected_context_message_sequences(snapshot)
+        items = carrier_saver._storage.checkpoints.committed_context_items(
+            snapshot, predecessor=carrier_saver._storage.assemblies.latest_context_assembly(snapshot),
+        )
+        sequences = carrier_saver._storage.checkpoints.selected_context_message_sequences(snapshot, items=items)
         if source_order == "hidden_actual_call":
             sequences = [messages["live-call"] if sequence == messages["request-call"] else sequence
                          for sequence in sequences]
@@ -822,7 +834,10 @@ def test_tool_result_without_any_declaration_is_not_closed(
     committed_bytes = storage.storage.jsonl_path(SESSION_ID, thread_id=thread_id).read_bytes()
     with carrier_saver._context_reader.open_snapshot(SESSION_ID, thread_id) as snapshot:
         assert snapshot.connection.execute("SELECT COUNT(*) FROM tool_calls").fetchone() == (0,)
-        sequences = carrier_saver.selected_context_message_sequences(snapshot)
+        items = carrier_saver._storage.checkpoints.committed_context_items(
+            snapshot, predecessor=carrier_saver._storage.assemblies.latest_context_assembly(snapshot),
+        )
+        sequences = carrier_saver._storage.checkpoints.selected_context_message_sequences(snapshot, items=items)
         before = snapshot.connection.total_changes
         with pytest.raises(ToolProtocolBoundaryConflict) as error:
             validate_tool_protocol_closure(snapshot.connection, sequences, len(sequences))
@@ -846,7 +861,10 @@ def test_shared_result_rejects_damaged_hidden_carrier_identity(
         execution_id=MODEL_CALL_ID,
     )
     with carrier_saver._context_reader.open_snapshot(SESSION_ID, thread_id) as snapshot:
-        sequences = carrier_saver.selected_context_message_sequences(snapshot)
+        items = carrier_saver._storage.checkpoints.committed_context_items(
+            snapshot, predecessor=carrier_saver._storage.assemblies.latest_context_assembly(snapshot),
+        )
+        sequences = carrier_saver._storage.checkpoints.selected_context_message_sequences(snapshot, items=items)
         live_sequence = snapshot.connection.execute(
             "SELECT message_sequence FROM messages WHERE message_id='live-call'",
         ).fetchone()[0]
@@ -994,7 +1012,10 @@ def test_new_execution_restores_preceding_terminal_tool_group(
                     messages=messages,
                 )
                 with restored._context_reader.open_snapshot(SESSION_ID, thread_id) as snapshot:
-                    sequences = restored.selected_context_message_sequences(snapshot)
+                    items = restored._storage.checkpoints.committed_context_items(
+                        snapshot, predecessor=restored._storage.assemblies.latest_context_assembly(snapshot),
+                    )
+                    sequences = restored._storage.checkpoints.selected_context_message_sequences(snapshot, items=items)
                     validate_tool_protocol_closure(snapshot.connection, sequences, len(sequences))
                     assert snapshot.connection.execute(
                         "SELECT turn_id, execution_id FROM item_catalog WHERE semantic_kind='tool_result'",
