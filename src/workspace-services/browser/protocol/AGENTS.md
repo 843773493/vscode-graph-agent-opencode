@@ -2,6 +2,8 @@
 
 存放 Browser Manager HTTP/JSON 与 WebSocket 消息的协议 adapter。
 
+客户端消息从传输层取得已解析对象，经`normalizeBrowserClientMessage`统一完成JSON安全值规范化和schema投影；原始WebSocket文本只由`server/transport/protocol.js`解析、校验与补齐默认值，不再先序列化后送回协议层重读。编码端仍接收对象并返回线格式文本。
+
 ## 可修改内容
 
 - 可以维护页面操作、输入、帧、下载和状态消息的线格式转换。

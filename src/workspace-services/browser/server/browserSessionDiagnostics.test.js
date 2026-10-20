@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { runInNewContext } from "node:vm";
 import { describe, expect, spyOn, test } from "bun:test";
 import { BrowserSession } from "./browserSession.js";
 
@@ -35,6 +36,57 @@ function request(url = "https://example.com/api", failureText = "net::ERR_ABORTE
 function respond(page, originalRequest, status) {
   page.emit("response", { request: () => originalRequest, status: () => status });
 }
+
+async function debugSources(resources) {
+  const { browser, page, entry } = await registeredPage();
+  entry.title = "来源诊断";
+  // 执行实际传给页面的函数；隔离上下文不修改测试进程的DOM或performance全局对象。
+  page.evaluate = async (callback) => runInNewContext(`(${callback.toString()})()`, {
+    Element: class {},
+    document: { documentElement: null },
+    performance: { getEntriesByType: () => resources },
+  });
+  return (await browser.debugSnapshot()).sources;
+}
+
+describe("浏览器调试快照的来源范围", () => {
+  test("按首次有效URL去重，保留类型、原顺序和舍入耗时", async () => {
+    const resource = (name, initiatorType, duration = 1.6) => ({ name, initiatorType, duration });
+    const sources = await debugSources([
+      resource("", "script"),
+      resource("https://example.com/a.js", "img"),
+      ...Array.from({ length: 250 }, () => resource("https://example.com/a.js", "fetch", 99)),
+      resource("https://example.com/b.css?q=1", "", 2.49),
+      resource("https://example.com/c.MAP?x", "other", 4.5),
+      resource("https://example.com/ignored.js#fragment", "img"),
+      resource("https://example.com/pixel.png", "img"),
+      resource("https://example.com/pixel.png", "fetch", 3.5),
+      ...["script", "stylesheet", "link", "css", "xmlhttprequest"].map(type => resource(`https://example.com/${type}`, type)),
+    ]);
+
+    expect(sources).toEqual([
+      { url: "https://example.com/a.js", type: "img", duration_ms: 2 },
+      { url: "https://example.com/b.css?q=1", type: "resource", duration_ms: 2 },
+      { url: "https://example.com/c.MAP?x", type: "other", duration_ms: 5 },
+      { url: "https://example.com/pixel.png", type: "fetch", duration_ms: 4 },
+      ...["script", "stylesheet", "link", "css", "xmlhttprequest"].map(type => ({ url: `https://example.com/${type}`, type, duration_ms: 2 })),
+    ]);
+    expect(await debugSources([])).toEqual([]);
+  });
+
+  test("达到200个唯一来源后不再读取后续条目", async () => {
+    const resources = Array.from({ length: 200 }, (_, index) => ({
+      name: `https://example.com/${index}`, initiatorType: "fetch", duration: index,
+    }));
+    resources.push({ get name() { throw new Error("不应读取输出上限后的来源"); } });
+
+    const sources = await debugSources(resources);
+
+    expect(sources).toHaveLength(200);
+    expect(sources.map(source => source.url)).toEqual(resources.slice(0, 200).map(resource => resource.name));
+    expect(sources.at(-1)).toEqual({ url: "https://example.com/199", type: "fetch", duration_ms: 199 });
+  });
+});
 
 describe("浏览器网络诊断记录的请求归属", () => {
   test("同 URL 并发请求按实际身份接收响应，不按最新未响应行匹配", async () => {

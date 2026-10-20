@@ -371,7 +371,7 @@ export class BrowserManager {
         throw error;
       }
       const id = browserId;
-      const timestamp = nowIso();
+      const browserCreatedAtIso = nowIso();
       const deviceState = resolveBrowserDeviceState(deviceProfile, deviceOrientation);
       const session = new BrowserSession({
         manager: this,
@@ -390,7 +390,8 @@ export class BrowserManager {
           touch_simulation_enabled: deviceState.hasTouch,
           resource_state: "background",
           resource_policy: "automatic",
-          last_user_interaction_at: timestamp,
+          // 尚无用户交互观察时，以资源创建时刻初始化空闲计算基线。
+          last_user_interaction_at: browserCreatedAtIso,
           last_agent_operation_at: null,
           last_attach_at: null,
           last_detach_at: null,
@@ -398,8 +399,8 @@ export class BrowserManager {
           agent_access_locked: false,
           agent_lock_updated_at: null,
           status: "created",
-          created_at: timestamp,
-          updated_at: timestamp,
+          created_at: browserCreatedAtIso,
+          updated_at: browserCreatedAtIso,
         },
       });
       this.browsersById.set(id, session);

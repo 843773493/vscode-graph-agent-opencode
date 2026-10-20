@@ -3,17 +3,17 @@ import { describe, expect, test } from "bun:test";
 import {
   encodeBrowserClientMessage,
   encodeBrowserServerMessage,
-  parseBrowserClientMessage,
+  normalizeBrowserClientMessage,
 } from "./messages.js";
 
 describe("Browser Protobuf JSON adapter", () => {
   test("保留 attach 与 detach 的资源标识", () => {
-    const attach = parseBrowserClientMessage(JSON.stringify({
+    const attach = normalizeBrowserClientMessage({
       type: "attach",
       browserId: "browser_123",
       participantId: "user_12345678",
       grantToken: "grant-once",
-    }));
+    });
     const detach = JSON.parse(encodeBrowserClientMessage({
       type: "detach",
       browserId: "browser_123",

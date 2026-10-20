@@ -1,6 +1,6 @@
 import {
   encodeBrowserServerMessage,
-  parseBrowserClientMessage as parseBrowserProtocolMessage,
+  normalizeBrowserClientMessage,
 } from "../../protocol/messages.js";
 
 export const CLIENT_MESSAGE_TYPES = new Set([
@@ -313,7 +313,7 @@ export function parseClientMessage(raw) {
       throw new Error("find command 必须提供 query");
     }
   }
-  return parseBrowserProtocolMessage(JSON.stringify(message));
+  return normalizeBrowserClientMessage(message);
 }
 
 export function encodeServerMessage(message) {

@@ -12,6 +12,8 @@ transport/
 
 页面在 `browserSession.js` 产生帧，后端入口将连接接入本目录；同一发布帧的封包按对象身份共享，ACK 和待发帧状态则逐连接隔离。
 
+`parseClientMessage`唯一解析原始WebSocket JSON，保留本层字段校验和默认值后，把对象直接交给`browser/protocol/messages.js`的schema规范化入口；不为了跨模块调用重复序列化、解析同一消息。JSON安全值规范化仍由协议owner负责，不能绕过它改变数值或未知字段的处理。
+
 ## 可修改内容
 
 - WebSocket 输入校验、消息编码及二进制 JPEG 帧的线格式。

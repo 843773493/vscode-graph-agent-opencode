@@ -2,6 +2,16 @@ import path from "node:path";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 
+/**
+ * 文件保存成功后形成的下载记录，不含真实路径或可直接请求的下载URI。
+ * @typedef {object} BrowserSavedDownload
+ * @property {string} download_id 当前浏览器资源内的下载身份，由本地存储生成。
+ * @property {string} filename 从建议文件名取得的叶名；不包含内部存储前缀。
+ * @property {string} url Playwright报告的下载来源URL，不是本地附件的访问地址。
+ * @property {string} created_at saveAs成功后Node组装此记录的UTC ISO时刻，不是请求开始或文件系统mtime。
+ * @property {"completed"} status 本次saveAs已成功返回，不表示记录已经写入browsers.json。
+ */
+
 export const DEFAULT_CHECKPOINT_LIMITS = Object.freeze({
   perCheckpointMaxBytes: 20 * 1024 * 1024,
   workspaceCheckpointMaxBytes: 2 * 1024 * 1024 * 1024,
@@ -282,6 +292,7 @@ export class BrowserStateStore {
     return { screenshot_id: screenshotId, byte_length: buffer.byteLength };
   }
 
+  /** @returns {Promise<BrowserSavedDownload>} */
   async writeDownload(browserId, download) {
     const browserDownloadDir = path.join(this.downloadDir, browserId);
     await mkdir(browserDownloadDir, { recursive: true });

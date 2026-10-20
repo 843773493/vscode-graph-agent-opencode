@@ -20,12 +20,6 @@ function jsonSafe(value) {
   return JSON.parse(serialized);
 }
 
-function rawText(raw) {
-  if (typeof raw === "string") return raw;
-  if (raw instanceof Uint8Array) return new TextDecoder().decode(raw);
-  return String(raw);
-}
-
 function genericClientMessage(message) {
   return create(BrowserClientMessageSchema, {
     payload: {
@@ -76,8 +70,8 @@ function clientJson(message) {
   return { type: payloadCase, ...json[payloadCase] };
 }
 
-export function parseBrowserClientMessage(raw) {
-  const message = JSON.parse(rawText(raw));
+/** 将已解析的消息投影到schema合同；原始文本解析与业务输入校验归传输入口。 */
+export function normalizeBrowserClientMessage(message) {
   assertPlainObject(message, "Browser WebSocket 消息");
   if (typeof message.type !== "string" || !message.type) {
     throw new Error(`Browser WebSocket 消息缺少 type: ${message.type}`);

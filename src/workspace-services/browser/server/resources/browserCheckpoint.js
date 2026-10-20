@@ -81,6 +81,10 @@ export function checkpointRestoreUrl(pageState) {
   return actualUrl || pageState?.requested_url || "about:blank";
 }
 
+/**
+ * created_at在各页面状态采集后、context.storageState读取前由Node生成；不是落盘完成时间。
+ * pages[].created_at沿用原标签页创建时刻；页面与storage顺序采集，不表示同一原子时刻。
+ */
 export async function captureBrowserCheckpoint(session) {
   const pages = [];
   for (const entry of session.pageEntries.values()) {

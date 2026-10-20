@@ -2460,19 +2460,21 @@ export class BrowserSession extends EventEmitter {
     const sources = await entry.page.evaluate(() => {
       const sourceTypes = new Set(["script", "stylesheet", "link", "css", "fetch", "xmlhttprequest"]);
       const seen = new Set();
-      return performance.getEntriesByType("resource")
-        .filter((resource) => resource.name && (sourceTypes.has(resource.initiatorType) || /\.(?:js|css|map)(?:$|\?)/i.test(resource.name)))
-        .map((resource) => ({
-          url: resource.name,
+      const sources = [];
+      for (const resource of performance.getEntriesByType("resource")) {
+        const url = resource.name;
+        if (!url || seen.has(url)
+          || !(sourceTypes.has(resource.initiatorType) || /\.(?:js|css|map)(?:$|\?)/i.test(url))) continue;
+        seen.add(url);
+        sources.push({
+          url,
           type: resource.initiatorType || "resource",
           duration_ms: Math.round(resource.duration),
-        }))
-        .filter((resource) => {
-          if (seen.has(resource.url)) return false;
-          seen.add(resource.url);
-          return true;
-        })
-        .slice(0, 200);
+        });
+        // 保留前200个有效且唯一的来源，不为丢弃的后缀组装记录。
+        if (sources.length === 200) break;
+      }
+      return sources;
     });
     return {
       page_id: entry.pageId,
