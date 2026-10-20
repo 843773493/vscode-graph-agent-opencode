@@ -14,7 +14,11 @@ from app.core.resource_uri import (
     resource_display_uri,
 )
 from app.core.trace_middleware import get_request_id
-from app.gateway.auth import GatewayAuthContext, verify_gateway_access
+from app.gateway.auth import (
+    GatewayAuthContext,
+    verify_gateway_access,
+    verify_gateway_token,
+)
 from app.gateway.control.user_access import UserAccessContext
 from app.gateway.federation.errors import (
     FEDERATION_AUTHORIZATION_REVOKED,
@@ -38,59 +42,26 @@ from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
 )
+from app.services.infrastructure.resource_platform.sources.gateway_resource_navigation import (
+    qualify_navigation_result,
+)
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceFileOperationError,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
-    resource_navigation_node,
 )
 
 router = APIRouter()
 
 
-def _qualify_result(result: ResourceNavigationResultDTO, *, uri: str, gateway_id: str) -> ResourceNavigationResultDTO:
-    """验证目标返回的归属和子路径，再恢复跨 Gateway 可继续访问的 authority。"""
-    root = parse_resource_uri(uri, local_gateway_id=gateway_id)
-    try:
-        resource_navigation_node(root, resource_shape=result.node.resource_shape)
-    except ResourceUriResolveError as error:
-        raise FederationError(FEDERATION_MALFORMED_FRAME, "导航响应的节点形态不符合资源根合同") from error
-
-    def qualify_uri(uri: str, *, child: bool) -> str:
-        try:
-            resource = parse_resource_uri(uri, local_gateway_id=gateway_id)
-        except ResourceUriGrammarError as error:
-            raise FederationError(FEDERATION_MALFORMED_FRAME, "导航响应包含非法 URI") from error
-        if resource.gateway_authority is not None or (resource.scope, resource.scope_id, resource.kind) != (root.scope, root.scope_id, root.kind):
-            raise FederationError(FEDERATION_MALFORMED_FRAME, "导航响应改变资源归属")
-        tail = resource.tail_segments
-        same_file = result.node.resource_shape == "file" and tail == root.tail_segments
-        if (not child and tail != root.tail_segments) or (child and not same_file and (len(tail) <= len(root.tail_segments) or tail[:len(root.tail_segments)] != root.tail_segments)):
-            raise FederationError(FEDERATION_MALFORMED_FRAME, "导航响应越出请求根")
-        return resource_display_uri(
-            scope=resource.scope, scope_id=resource.scope_id, kind=resource.kind,
-            tail_segments=tail, gateway_authority=gateway_id,
-        )
-
-    file_uris = {node.uri for node in result.entries if node.resource_shape == "file"}
-    if any(match.uri not in file_uris for match in result.matches):
-        raise FederationError(FEDERATION_MALFORMED_FRAME, "搜索匹配没有对应的文件节点")
-
-    return result.model_copy(update={
-        "node": result.node.model_copy(update={"uri": qualify_uri(result.node.uri, child=False)}),
-        "entries": tuple(node.model_copy(update={"uri": qualify_uri(node.uri, child=True)}) for node in result.entries),
-        "matches": tuple(match.model_copy(update={"uri": qualify_uri(match.uri, child=True)}) for match in result.matches),
-    })
-
-
 async def _navigate(
-    payload: ResourceNavigationRequest, request: Request, *, auth: GatewayAuthContext,
+    payload: ResourceNavigationRequest, request: Request, *, auth: GatewayAuthContext | None,
     user_access: UserAccessContext | None, backend_workspace_id: str | None = None,
 ) -> Response:
     gateway_id = request.app.state.gateway_id
     try:
-        if auth.kind == "federation":
+        if auth is not None and auth.kind == "federation":
             raise HTTPException(400, detail="联邦资源导航必须通过原 read grant relay")
         resource = parse_resource_uri(payload.uri, local_gateway_id=gateway_id)
         payload = payload.model_copy(update={"uri": resource.display_uri})
@@ -156,7 +127,7 @@ async def _navigate(
             envelope = ResourceNavigationRelayRequest(source_gateway_id=gateway_id, navigation_target=target, navigation=payload)
             data = await request.app.state.federation_rpc_service.relay_operation(
                 target=target, operation="read", body=envelope.model_dump(mode="json"),
-                deadline_at=time.time() + FEDERATION_DEADLINE_SECONDS,
+                deadline_at=time.time() + min(FEDERATION_DEADLINE_SECONDS, payload.timeout_ms / 1000),
             )
             while isinstance(data.get("result"), dict) and "relayed_by" in data:
                 data = data["result"]
@@ -164,7 +135,7 @@ async def _navigate(
                 result = ResourceNavigationResultDTO.model_validate(data)
             except ValidationError as error:
                 raise FederationError(FEDERATION_MALFORMED_FRAME, "导航响应不符合目标 owner 合同") from error
-            result = _qualify_result(result, uri=payload.uri, gateway_id=target.gateway_id)
+            result = qualify_navigation_result(result, uri=payload.uri, gateway_id=target.gateway_id)
             if len(result.model_dump_json().encode("utf-8")) > payload.max_response_bytes:
                 raise ResourceFileOperationError("output_limit_exceeded", "限定 Gateway 后的导航响应超过总字节上限", reason="response_byte_limit")
     except FederationError as error:
@@ -204,3 +175,15 @@ async def navigate_workspace_resource(
     user_access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
 ) -> Response:
     return await _navigate(payload, request, auth=auth, user_access=user_access, backend_workspace_id=backend_workspace_id)
+
+
+@router.post("/api/gateway/resource-navigation/workspaces/{source_workspace_id}",
+             response_model=APIResponse[ResourceNavigationResultDTO], dependencies=[Depends(verify_gateway_token)])
+async def navigate_from_workspace(
+    source_workspace_id: str, payload: ResourceNavigationRequest, request: Request,
+) -> Response:
+    """已注册本机 Workspace 的服务调用；不伪造浏览器登录态。"""
+    if not any(target.connection_kind == "local" and target.backend_workspace_id == source_workspace_id
+               for target in _registry(request).targets()):
+        raise HTTPException(403, detail="文件导航来源不是当前 Gateway 的本机 Workspace")
+    return await _navigate(payload, request, auth=None, user_access=None)

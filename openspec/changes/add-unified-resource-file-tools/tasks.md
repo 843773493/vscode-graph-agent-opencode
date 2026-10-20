@@ -34,6 +34,11 @@
 ## 3. 目标端读取与搜索
 
 - [ ] 3.1 复用现有Gateway联邦路由将文件调用交实际owner；不返回真实路径给source代执行，固定target与attempt channel lease分离。
+  - 2026-10-20 只读模型路由切片：ResourceNavigation 在本机解析前将远端 authority 或其它 Workspace 交已配置 Gateway 的已注册Workspace服务入口并复用既有导航路由；省略 authority 时固定本次调用 Gateway，不读激活态。继续使用原 typed 导航 read grant、星型 channel 与目标文件 owner；响应根/子节点/匹配的归属核验移至唯一共享函数，Gateway 原私有实现已删除并迁齐调用测试。错误保持文件执行/寻址/联邦域，不回落本机同名文件；联邦期限已受请求 timeout_ms 约束。远端写入仍未接通，本项保持未勾。
+  - 原件 `resource-route-unit-001` 为217 passed/36.04秒，覆盖同步/异步固定目标、另一个Workspace的缺省authority冻结、错误request_id/根/匹配拒绝、目标编码错误与撤权/不存在保持原错误域，以及原Skill连接、读取/搜索/目录回归。`resource-route-final-unit-002` 为48 passed/1.26秒，补平台bootstrap与请求1234毫秒期限约束；`resource-route-final-static-002` 对9个相关Python文件Ruff exit0。首轮静态仅新增文件import格式已修，未更改行为；真实模型经spoke→hub→spoke调用与公开导航重验见后续证据。
+  - `resource-route-http-001` 为3 passed、1 failed/288.58秒：公开Workspace/Gateway、星型联邦及原Gateway Skill模型链均通过；新增远端模型链真实请求因公开入口要求浏览器Cookie而401，尚未访问文件。现增加仅允许本机凭据及已注册来源Workspace的Gateway服务入口，复用同一导航函数、typed grant和实际owner；未放宽公开登录要求。补同步/异步服务URL及来源未注册/错误本机凭据/联邦凭据拒绝测试，实际模型定向重验见后续记录。
+  - 服务入口修复后 `resource-route-model-http-002` 为1 passed/124.48秒、exit0；真实模型从spoke经hub访问另一spoke，依次ls→glob→grep→read→读取远端缺失文件，核目标正文、限定URI、缺失错误、本机两份同名对照未被读取/修改及目标tracking不增加。`resource-route-service-unit-004` 55 passed/2.52秒，核服务来源和凭据拒绝、同步/异步URL与bootstrap；`resource-route-port-unit-003` 9 passed/0.43秒，保留目标owner剩余期限及错误回执身份。原失败没有重复长跑无关成功场景。
+  - `resource-route-service-static-003` Ruff exit0，`resource-route-openspec-001` strict exit0。新服务入口没有新增DTO或改变Workspace OpenAPI/proto字段，复用搜索切片的官方生成、Web真实类型检查和构建。Gateway固定seed OpenAPI观察原件为 `resource-route-openapi-contract-fixed-002`：107路由/87路径；移除新入口后为86路径，旧黄金78路径已落后于已实施的资源导航/原生根绑定及字段。黄金已按当前实际公开合同迁为精确107/87/hash，保留重复operation ID及路由相对顺序断言，并增加新服务入口必须早于通配代理的断言；最终验证见对应运行原件。
 - [ ] 3.2 两端同名不同内容的真实Gateway场景验证远端ls/read/grep及总deadline、不可达、不支持、撤权明确失败；source同名文件不变，无本地fallback。
 - [ ] 3.3 验证调用期间切换激活工作区、重连和cursor续页不改变既定Gateway/workspace/root；跨界响应/记录不含locator或credential。
   - TODO（既有共享后端的路由消歧）：`test_shared_backend_routes_snapshot_navigation_and_concurrent_messages_to_true_owner` 中，同一后端同时由两个 Gateway 注册，固定工作区导航目前返回 `target_ambiguous`/409。原始失败保留在 `resource-navigation-bounds-gateway-integration-001`；与提交 `a6ce2bc9` 对照，该固定 Workspace 目标选择分支 AST 未变，证据为同任务 artifacts 下的 `resource-navigation-existing-route-ambiguity.json`，未重跑整套基线进程测试。源码保留同名 TODO，未改为任取一个目标或放宽测试，后续明确 owner 消歧后关闭本项。

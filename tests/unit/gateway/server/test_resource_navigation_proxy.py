@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,10 +19,12 @@ from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.federation.errors import FederationError
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from app.gateway.server.resource_navigation import _qualify_result
 from app.gateway.server.resource_navigation import router as navigation_router
 from app.gateway.server.workspace_proxy import router, verify_user_access_for_proxy
 from app.schemas.internal_v2.resource_navigation import ResourceNavigationResultDTO
+from app.services.infrastructure.resource_platform.sources.gateway_resource_navigation import (
+    qualify_navigation_result,
+)
 
 WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
 OTHER_WORKSPACE_ID = "00000000-0000-4000-8000-000000000002"
@@ -107,6 +110,29 @@ async def test_federation_http_navigation_requires_signed_read_grant(
     assert registry.active_workspace_id == "active-target"
 
 
+@pytest.mark.parametrize("access", ["registered", "unregistered", "wrong-token", "federation-token"])
+async def test_workspace_service_navigation_requires_local_credential_and_registered_source(
+    navigation_proxy, navigation_relay: _NavigationRelay, federation_headers, access: str,
+) -> None:
+    client, registry, forwarded = navigation_proxy
+    remote_gateway = "gateway_" + "c" * 32
+    local_uri = f"boxteam://workspace/{WORKSPACE_ID}/resources/files/root"
+    navigation_relay.response = {"node": {"uri": local_uri, "resource_shape": "directory",
+        "operations": ["describe", "list"], "child_path": "file_segments"}}
+    uri = local_uri.replace("boxteam://", f"boxteam://{remote_gateway}/")
+    source = "00000000-0000-4000-8000-000000000099" if access == "unregistered" else WORKSPACE_ID
+    headers = {"X-Local-Token": "wrong"} if access == "wrong-token" else federation_headers if access == "federation-token" else {}
+    response = await client.post(f"/api/gateway/resource-navigation/workspaces/{source}",
+        json={"uri": uri, "operation": "list"}, headers=headers)
+    if access == "registered":
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["node"]["uri"] == uri and len(navigation_relay.calls) == 1
+    else:
+        assert response.status_code == (403 if access == "unregistered" else 401), response.text
+        assert navigation_relay.calls == []
+    assert forwarded == [] and registry.active_workspace_id == "active-target"
+
+
 @pytest.mark.parametrize("explicit_authority", [False, True])
 async def test_canonical_remote_navigation_uses_read_grant_instead_of_http_proxy(
     navigation_proxy, navigation_relay: _NavigationRelay, explicit_authority: bool,
@@ -128,14 +154,16 @@ async def test_canonical_remote_navigation_uses_read_grant_instead_of_http_proxy
     navigation_relay.response = {"node": {"uri": uri, "resource_shape": "directory",
                                           "operations": ["describe", "list"], "child_path": "file_segments"}}
     qualified_uri = uri.replace("boxteam://", f"boxteam://{remote_gateway_id}/")
+    started = time.time()
     response = await client.post(f"/api/v1/workspaces/{remote_workspace_id}/resources/navigation", json={
-        "uri": qualified_uri if explicit_authority else uri, "operation": "list",
+        "uri": qualified_uri if explicit_authority else uri, "operation": "list", "timeout_ms": 1234,
     }, headers={"X-BoxTeam-Workspace-Id": "active-target"})
     assert response.status_code == 200, response.text
     assert response.json()["data"]["node"]["uri"] == qualified_uri
     call, = navigation_relay.calls
     assert call["target"].to_payload() == {"gateway_id": remote_gateway_id, "uri": qualified_uri}
     assert call["body"]["navigation"]["uri"] == qualified_uri
+    assert started < call["deadline_at"] <= time.time() + 1.234
     assert forwarded == [] and registry.active_workspace_id == "active-target"
 
 
@@ -259,7 +287,7 @@ def test_navigation_remote_response_cannot_change_owner_or_escape_root(bad_uri: 
         "entries": [{"uri": bad_uri, "resource_shape": "file", "operations": ["read"], "child_path": None}],
     })
     with pytest.raises(FederationError) as error:
-        _qualify_result(result, uri=root, gateway_id="gateway_target")
+        qualify_navigation_result(result, uri=root, gateway_id="gateway_target")
     assert error.value.code == "federation-malformed-frame"
 
 
@@ -270,12 +298,12 @@ def test_search_match_uris_are_qualified_and_must_belong_to_returned_files() -> 
         "entries": [{"uri": uri, "resource_shape": "file", "operations": ["read", "search"]}],
         "matches": [{"uri": uri, "line": 3, "column": 7, "text": "needle", "snippet_start_column": 7}],
     })
-    qualified = _qualify_result(result, uri=uri, gateway_id="gateway_target")
+    qualified = qualify_navigation_result(result, uri=uri, gateway_id="gateway_target")
     expected = uri.replace("boxteam://", "boxteam://gateway_target/")
     assert qualified.node.uri == qualified.entries[0].uri == qualified.matches[0].uri == expected
     bad_match = result.matches[0].model_copy(update={"uri": uri.replace("file.txt", "unreturned.txt")})
     with pytest.raises(FederationError) as failure:
-        _qualify_result(result.model_copy(update={"matches": (bad_match,)}), uri=uri, gateway_id="gateway_target")
+        qualify_navigation_result(result.model_copy(update={"matches": (bad_match,)}), uri=uri, gateway_id="gateway_target")
     assert failure.value.code == "federation-malformed-frame"
 
 

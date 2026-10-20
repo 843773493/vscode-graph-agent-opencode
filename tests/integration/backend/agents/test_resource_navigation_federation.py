@@ -12,8 +12,13 @@ from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation.errors import FEDERATION_TARGET_OWNER_REJECTED
 from tests.integration.backend.agents.test_resource_navigation import _tracking_counts
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
+    _completed,
+    _tool,
+)
+from tests.integration.backend.sessions.test_session_communication_pipeline import (
     communication_triad as communication_triad,  # noqa: PLC0414 - 正式 fixture 按当前测试文件隔离
 )
+from tests.support.api_helpers import create_session
 
 
 async def test_navigation_uses_original_star_channels_and_fixed_owner(communication_triad) -> None:
@@ -156,3 +161,57 @@ async def test_navigation_uses_original_star_channels_and_fixed_owner(communicat
     assert {(peer, direction) for peer, direction in source.channels()} == {(hub.gateway_id, "inbound")}
     assert {(peer, direction) for peer, direction in target.channels()} == {(hub.gateway_id, "inbound")}
     (artifacts / "navigation-federation.json").write_text(json.dumps({"requests": evidence, "rejected": missing_codes}, ensure_ascii=False, indent=2) + "\n")
+
+
+async def test_model_file_tools_execute_on_fixed_federated_owner(communication_triad) -> None:
+    nodes, model, artifacts = communication_triad
+    source, target = nodes["b"], nodes["c"]
+    (target.workspace / "src/remote-model.txt").write_text("needle TARGET OWNER\n")
+    (source.workspace / "src/remote-model.txt").write_text("SOURCE DECOY\n")
+    (source.workspace / "src/missing-remote.txt").write_text("LOCAL FALLBACK MUST NOT BE READ\n")
+    root = resource_display_uri(scope="workspace", scope_id=target.workspace_id, kind="files",
+        tail_segments=("root", "src"), gateway_authority=target.gateway_id)
+    file_uri, missing_uri = root + "/remote-model.txt", root + "/missing-remote.txt"
+    session = await create_session(source.client, "模型远端文件导航")
+    before = _tracking_counts(target.workspace / ".boxteam")
+    tool_results = []
+
+    def reply(payload):
+        messages = payload["messages"]
+        if not any(message["role"] == "user" and "federated-file-trigger" in str(message["content"]) for message in messages):
+            return {"content": "远端文件导航"}
+        results = [message for message in messages if message["role"] == "tool"]
+        if not results:
+            return _tool("ls", {"path": root}, "call_remote_ls")
+        listed = json.loads(results[0]["content"])
+        assert file_uri in {entry["uri"] for entry in listed["entries"]}
+        if len(results) == 1:
+            return _tool("glob", {"path": root, "pattern": "remote-model.txt"}, "call_remote_glob")
+        assert [entry["uri"] for entry in json.loads(results[1]["content"])["entries"]] == [file_uri]
+        if len(results) == 2:
+            return _tool("grep", {"path": file_uri, "pattern": "needle", "output_mode": "content"}, "call_remote_grep")
+        assert file_uri in results[2]["content"] and "TARGET OWNER" in results[2]["content"]
+        if len(results) == 3:
+            return _tool("read_file", {"path": file_uri}, "call_remote_read")
+        assert "1\tneedle TARGET OWNER" in results[3]["content"]
+        if len(results) == 4:
+            return _tool("read_file", {"path": missing_uri}, "call_remote_missing")
+        assert json.loads(results[4]["content"])["code"] == "target_not_resolvable"
+        assert "SOURCE DECOY" not in json.dumps(results) and "LOCAL FALLBACK" not in json.dumps(results)
+        tool_results[:] = results
+        return {"content": "远端文件工具完成"}
+
+    model.response_callback = reply
+    accepted = await source.client.post(f"/api/v1/sessions/{session}/messages", json={
+        "message": {"content": "federated-file-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
+    }, headers={"X-Request-ID": "req-model-federated-files"})
+    assert accepted.status_code == 200, accepted.text
+    await _completed(source.client, accepted.json()["data"]["job_id"])
+    assert len(tool_results) == 5
+    assert (source.workspace / "src/remote-model.txt").read_text() == "SOURCE DECOY\n"
+    assert _tracking_counts(target.workspace / ".boxteam") == before
+    wire = json.dumps(model.requests, ensure_ascii=False)
+    assert all(str(node.workspace) not in wire for node in nodes.values())
+    (artifacts / "model-federated-files.json").write_text(json.dumps({"results": tool_results,
+        "target_tracking_before": before, "target_tracking_after": _tracking_counts(target.workspace / ".boxteam")},
+        ensure_ascii=False, indent=2) + "\n")

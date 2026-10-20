@@ -42,6 +42,9 @@ from app.services.infrastructure.resource_platform.virtual_resources.values impo
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 if TYPE_CHECKING:
+    from app.services.infrastructure.resource_platform.sources.gateway_resource_navigation import (
+        GatewayResourceNavigation,
+    )
     from app.services.infrastructure.resource_platform.sources.gateway_skill_sources import (
         GatewaySkillSources,
     )
@@ -83,6 +86,7 @@ class ResourceNavigation:
         project_root: Path | None = None, gateway_sources: GatewaySkillSources | None = None,
         gateway_skills_root: Path | None = None, gateway_id: str | None = None,
         file_paths: WorkspaceFilePaths | None = None,
+        gateway_navigation: GatewayResourceNavigation | None = None,
     ) -> None:
         if (workspace_root is None) == (gateway_skills_root is None):
             raise ValueError("导航 owner 必须且只能绑定 Workspace 或 Gateway Skill 域")
@@ -97,6 +101,7 @@ class ResourceNavigation:
         self._file_paths = file_paths
         self._project_root = _resolve_path(project_root or Path.cwd())
         self._gateway_sources = gateway_sources
+        self._gateway_navigation = gateway_navigation
         self._gateway_skills_root = gateway_skills_root.absolute() if gateway_skills_root is not None else None
         self._gateway_id = gateway_id
 
@@ -113,8 +118,6 @@ class ResourceNavigation:
 
     def _parse_target(self, request: ResourceNavigationRequest, gateway_id: str) -> ParsedResourceUri:
         parsed = parse_resource_uri(request.uri, local_gateway_id=gateway_id)
-        if parsed.gateway_authority is not None:
-            raise ResourceUriResolveError("scope_mismatch", "此入口只解析固定本机 Gateway 的资源")
         if self._gateway_id is not None and gateway_id != self._gateway_id:
             raise ResourceUriResolveError("scope_mismatch", "Gateway Skill 导航 owner 身份不一致")
         distribution_id = load_distribution_id() if parsed.scope == "inline" else None
@@ -124,11 +127,28 @@ class ResourceNavigation:
         ))
         return parsed
 
+    def _routed_request(self, request: ResourceNavigationRequest, gateway_id: str) -> ResourceNavigationRequest | None:
+        parsed = parse_resource_uri(request.uri, local_gateway_id=gateway_id)
+        if parsed.gateway_authority is None and not (
+            parsed.scope == "workspace" and parsed.scope_id != self._workspace_id
+        ):
+            return None
+        if self._gateway_navigation is None:
+            raise ResourceUriResolveError("scope_mismatch", "此文件 owner 未装配目标 Gateway 路由")
+        return request.model_copy(update={"uri": resource_display_uri(
+            scope=parsed.scope, scope_id=parsed.scope_id, kind=parsed.kind,
+            tail_segments=parsed.tail_segments, gateway_authority=parsed.gateway_authority or gateway_id,
+        )})
+
     def navigate_sync(
         self, request: ResourceNavigationRequest, *, local_gateway_id: str,
     ) -> ResourceNavigationResultDTO:
         """同步工具复用同一解析与文件执行；HTTP 传输不借用异步观察连接。"""
         deadline = time.monotonic() + request.timeout_ms / 1000
+        routed = self._routed_request(request, local_gateway_id)
+        if routed is not None:
+            result = self._gateway_navigation.navigate_sync(routed)
+            return self._response(result, request, deadline)
         parsed = self._parse_target(request, local_gateway_id)
         if parsed.scope == "gateway" and parsed.kind == "skills" and self._workspace_root is not None:
             if self._gateway_sources is None:
@@ -143,9 +163,13 @@ class ResourceNavigation:
         self, request: ResourceNavigationRequest, *, local_gateway_id: str,
     ) -> ResourceNavigationResultDTO:
         deadline = time.monotonic() + request.timeout_ms / 1000
-        parsed = self._parse_target(request, local_gateway_id)
         try:
             async with asyncio.timeout(max(0, deadline - time.monotonic())):
+                routed = self._routed_request(request, local_gateway_id)
+                if routed is not None:
+                    result = await self._gateway_navigation.navigate(routed)
+                    return self._response(result, request, deadline)
+                parsed = self._parse_target(request, local_gateway_id)
                 if parsed.scope == "gateway" and parsed.kind == "skills" and self._workspace_root is not None:
                     if self._gateway_sources is None:
                         raise ResourceUriResolveError("unknown_resource", "没有对应的 Gateway 文件 owner")

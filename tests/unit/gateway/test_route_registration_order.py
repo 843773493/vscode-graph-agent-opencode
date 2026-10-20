@@ -1,6 +1,6 @@
 """Gateway 自有路由注册顺序与 openapi 形态的回归判据。
 
-完整 Backend 组生命周期进入现有路由后，保持自有接口与通配代理的顺序和公开 schema。
+资源导航、原生目录绑定和工作区服务入口进入现有路由后，保持自有接口与通配代理的顺序和公开 schema。
 
 注意：`operationId` 由 FastAPI 的 `generate_unique_id` 取 `list(route.methods)[0]`
 生成，而两个通配代理路由声明了多方法集合，集合迭代顺序受字符串 hash 随机化
@@ -20,10 +20,10 @@ from app.gateway.main import app
 PROJECT_ROOT = Path.cwd()
 
 BASELINE_OPENAPI_SHA256 = (
-    "824d1844ead0d28ee2689e491ceb340b824c8b8ef3438f1e40c2e4f7ef424fb4"
+    "9a47a029fc26ded8de00ea7a972798b344a659444df5829aa44f16bf2934578a"
 )
-BASELINE_ROUTE_COUNT = 98
-BASELINE_PATH_COUNT = 78
+BASELINE_ROUTE_COUNT = 107
+BASELINE_PATH_COUNT = 87
 BASELINE_DUPLICATE_OPERATION_IDS = (
     "Duplicate Operation ID proxy_auxiliary_http_api_gateway_workspaces__workspace_id___service_path___path__patch",
     "Duplicate Operation ID proxy_workspace_api_api_v1__path__patch",
@@ -60,6 +60,7 @@ def test_route_registration_order_is_stable() -> None:
     )
     assert paths.index("/api/gateway/workspaces") < auxiliary_index
     assert paths.index("/api/gateway/local-directories") < auxiliary_index
+    assert paths.index("/api/gateway/resource-navigation/workspaces/{source_workspace_id}") < auxiliary_index
     assert paths.index("/api/v1/{path:path}") > auxiliary_index
 
 

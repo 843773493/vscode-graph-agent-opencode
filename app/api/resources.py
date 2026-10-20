@@ -21,6 +21,7 @@ from app.api.deps import (
 )
 from app.core.resource_uri import ResourceUriGrammarError
 from app.core.trace_middleware import require_current_gateway_id
+from app.gateway.federation.errors import FederationError
 from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.resource_navigation import (
@@ -70,6 +71,8 @@ async def navigate_resource(
         raise HTTPException(status, detail={"owner": "resource_uri_resolver", "code": error.reason_code, "message": str(error)}) from error
     except ResourceFileOperationError as error:
         raise HTTPException(400, detail=error.detail()) from error
+    except FederationError as error:
+        raise HTTPException(409, detail=error.to_wire()) from error
     except httpx.HTTPStatusError as error:
         raise HTTPException(error.response.status_code, detail=error.response.json()["detail"]) from error
     except httpx.RequestError as error:

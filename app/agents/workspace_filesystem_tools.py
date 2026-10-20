@@ -37,6 +37,7 @@ from app.agents.workspace_tool_paths import (
 )
 from app.core.resource_uri import ResourceUriGrammarError, parse_resource_uri
 from app.core.trace_middleware import require_current_gateway_id
+from app.gateway.federation.errors import FederationError
 from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
@@ -174,10 +175,12 @@ def _tool_implementations(
 def _path_error(
     tool_name: str,
     runtime: ToolRuntime[None, FilesystemState],
-    error: OSError | RuntimeError | ValueError | httpx.HTTPError,
+    error: OSError | RuntimeError | ValueError | httpx.HTTPError | FederationError,
 ) -> ToolMessage:
     if isinstance(error, ResourceFileOperationError):
         content = json.dumps(error.detail(), ensure_ascii=False)
+    elif isinstance(error, FederationError):
+        content = json.dumps({"owner": "federation", **error.to_wire()}, ensure_ascii=False)
     elif isinstance(error, (ResourceUriGrammarError, ResourceUriResolveError)):
         content = json.dumps({
             "owner": "resource_uri_grammar" if isinstance(error, ResourceUriGrammarError) else "resource_uri_resolver",
@@ -438,7 +441,7 @@ def configure_workspace_filesystem_tools(
             return _path_error("ls", runtime, ResourceFileOperationError(
                 "output_limit_exceeded", "目录导航超过本次总期限", reason="deadline",
             ))
-        except (OSError, RuntimeError, ValueError, httpx.HTTPError) as error:
+        except (OSError, RuntimeError, ValueError, httpx.HTTPError, FederationError) as error:
             return _path_error("ls", runtime, error)
         return ToolMessage(
             content=result.model_dump_json(), name="ls", tool_call_id=runtime.tool_call_id, status="success",
@@ -462,7 +465,7 @@ def configure_workspace_filesystem_tools(
             return _path_error("ls", runtime, ResourceFileOperationError(
                 "output_limit_exceeded", "目录导航超过本次总期限", reason="deadline",
             ))
-        except (OSError, RuntimeError, ValueError, httpx.HTTPError) as error:
+        except (OSError, RuntimeError, ValueError, httpx.HTTPError, FederationError) as error:
             return _path_error("ls", runtime, error)
         return ToolMessage(
             content=result.model_dump_json(), name="ls", tool_call_id=runtime.tool_call_id, status="success",
@@ -496,7 +499,7 @@ def configure_workspace_filesystem_tools(
             return _path_error("read_file", runtime, ResourceFileOperationError(
                 "output_limit_exceeded", "文件读取超过本次总期限", reason="deadline",
             ))
-        except (OSError, RuntimeError, ValueError, httpx.HTTPError) as error:
+        except (OSError, RuntimeError, ValueError, httpx.HTTPError, FederationError) as error:
             return _path_error("read_file", runtime, error)
 
     def artifact_read(
@@ -558,7 +561,7 @@ def configure_workspace_filesystem_tools(
             return _path_error("read_file", runtime, ResourceFileOperationError(
                 "output_limit_exceeded", "文件读取超过本次总期限", reason="deadline",
             ))
-        except (OSError, RuntimeError, ValueError, httpx.HTTPError) as error:
+        except (OSError, RuntimeError, ValueError, httpx.HTTPError, FederationError) as error:
             return _path_error("read_file", runtime, error)
 
     def sync_write_file(
@@ -740,7 +743,7 @@ def configure_workspace_filesystem_tools(
         except (TimeoutError, httpx.TimeoutException):
             return _path_error(tool_name, runtime, ResourceFileOperationError(
                 "output_limit_exceeded", "文件搜索超过本次总期限", reason="deadline"))
-        except (OSError, RuntimeError, ValueError, httpx.HTTPError) as error:
+        except (OSError, RuntimeError, ValueError, httpx.HTTPError, FederationError) as error:
             return _path_error(tool_name, runtime, error)
 
     async def async_search(
@@ -767,7 +770,7 @@ def configure_workspace_filesystem_tools(
         except (TimeoutError, httpx.TimeoutException):
             return _path_error(tool_name, runtime, ResourceFileOperationError(
                 "output_limit_exceeded", "文件搜索超过本次总期限", reason="deadline"))
-        except (OSError, RuntimeError, ValueError, httpx.HTTPError) as error:
+        except (OSError, RuntimeError, ValueError, httpx.HTTPError, FederationError) as error:
             return _path_error(tool_name, runtime, error)
 
     replacements = {

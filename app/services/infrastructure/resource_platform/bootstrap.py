@@ -24,6 +24,9 @@ from app.services.infrastructure.gateway_client_common import GatewayTransportCo
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservationChannel,
 )
+from app.services.infrastructure.resource_platform.sources.gateway_resource_navigation import (
+    GatewayResourceNavigation,
+)
 from app.services.infrastructure.resource_platform.sources.gateway_skill_sources import (
     GatewaySkillSources,
 )
@@ -131,10 +134,13 @@ def bootstrap_resource_platform(
         label="workspace-file-resource-registry",
     )
     gateway_skill_sources = None
+    gateway_navigation = None
     connection_fields = (gateway_connection, gateway_token_supplier, workspace_id)
     if any(value is not None for value in connection_fields) and not all(value is not None for value in connection_fields):
         raise ValueError("Gateway Skill source 装配必须同时提供连接、凭据供应方和Workspace身份")
     if gateway_connection is not None and gateway_token_supplier is not None and workspace_id is not None:
+        gateway_navigation = GatewayResourceNavigation(workspace_id=workspace_id,
+            connection=gateway_connection, local_token_supplier=gateway_token_supplier)
         gateway_skill_sources = GatewaySkillSources(
             workspace_id=workspace_id, connection=gateway_connection,
             local_token_supplier=gateway_token_supplier, observation_channel=observation_channel,
@@ -150,6 +156,7 @@ def bootstrap_resource_platform(
         navigation=ResourceNavigation(
             workspace_root=workspace_root, workspace_id=workspace_id,
             project_root=project_root, gateway_sources=gateway_skill_sources, file_paths=file_paths,
+            gateway_navigation=gateway_navigation,
         ) if workspace_id is not None else None,
     )
 
