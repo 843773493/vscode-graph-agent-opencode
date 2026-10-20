@@ -853,6 +853,11 @@ export declare type GatewayDirectoryListDTO = Message<"boxteam.gateway.v1.Gatewa
    * @generated from field: int64 limit = 6;
    */
   limit: bigint;
+
+  /**
+   * @generated from field: string name = 7;
+   */
+  name: string;
 };
 
 /**

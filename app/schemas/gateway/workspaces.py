@@ -93,7 +93,7 @@ class GatewayManagedWorkspaceListDTO(BaseModel):
 class CreateFederationManagedWorkspaceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    root_path: str = Field(min_length=1, description="远端 Gateway 主机上的绝对目录")
+    root_path: str = Field(min_length=1, description="目标 Gateway 的目录 URI 或原生绝对目录")
     name: str | None = Field(default=None, min_length=1, max_length=200)
     create_directory: bool = Field(
         default=True,
@@ -114,7 +114,7 @@ class GatewayWorkspaceListDTO(BaseModel):
 
 
 class AddLocalWorkspaceRequest(BaseModel):
-    root_path: str = Field(description="本机工作区绝对路径")
+    root_path: str = Field(description="本机 Gateway 的目录 URI 或原生绝对目录")
     name: str | None = Field(default=None, description="工作区显示名称")
     backend_url: str | None = Field(
         default=None,

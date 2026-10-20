@@ -12,6 +12,7 @@ from fastapi import (
     Depends,
     HTTPException,
     Query,
+    Request,
 )
 
 from app.core.env import get_project_root
@@ -34,6 +35,7 @@ from app.gateway.routes._shared import (
     _managed_workspace_list,
     get_registry,
     get_workspace_runtime_controller,
+    resolve_management_directory,
 )
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
@@ -189,6 +191,7 @@ async def gateway_inbound_access(
 )
 async def create_gateway_managed_workspace(
     payload: CreateGatewayManagedWorkspaceRequest,
+    request: Request,
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
@@ -202,7 +205,7 @@ async def create_gateway_managed_workspace(
                 registry=registry,
                 project_root=get_project_root(),
                 log_dir=_gateway_root() / "logs",
-                root_path=payload.root_path,
+                root_path=str(resolve_management_directory(request, payload.root_path)),
                 name=payload.name,
                 create_directory=payload.create_directory,
             )

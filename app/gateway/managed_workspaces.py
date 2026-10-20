@@ -49,13 +49,13 @@ async def create_direct_managed_workspace(
 ) -> WorkspaceTarget:
     requested_root = Path(root_path).expanduser()
     if not requested_root.is_absolute():
-        raise ValueError(f"工作区路径必须是绝对路径: {root_path}")
+        raise ValueError("工作区路径必须是目标机器的绝对路径")
     workspace_root = requested_root.resolve()
     if workspace_root.exists() and not workspace_root.is_dir():
-        raise ValueError(f"工作区路径不是目录: {workspace_root}")
+        raise ValueError("所选工作区资源不是目录")
     if not workspace_root.exists():
         if not create_directory:
-            raise FileNotFoundError(f"工作区目录不存在: {workspace_root}")
+            raise FileNotFoundError("所选工作区目录不存在")
         workspace_root.mkdir(parents=True)
     backend_workspace_id = await asyncio.to_thread(
         resolve_backend_workspace_id,
@@ -65,7 +65,7 @@ async def create_direct_managed_workspace(
 
     workspace_id = build_managed_local_workspace_id(str(workspace_root))
     if any(target.workspace_id == workspace_id for target in registry.targets()):
-        raise ValueError(f"工作区已经由当前 Gateway 托管: {workspace_root}")
+        raise ValueError("所选工作区已经由当前 Gateway 托管")
     target = WorkspaceTarget(
         workspace_id=workspace_id,
         name=name or workspace_root.name or "workspace",

@@ -39,6 +39,7 @@ from app.gateway.routes._shared import (
     _gateway_root,
     get_registry,
     get_workspace_runtime_controller,
+    resolve_management_directory,
 )
 from app.gateway.routes.workspaces_managed import (
     _remote_gateway_credential,
@@ -84,12 +85,14 @@ def _workspace_name(root_path: str, fallback: str = "workspace") -> str:
     response_model=APIResponse[GatewayDirectoryListDTO],
 )
 async def list_local_directories(
+    request: Request,
     path: str | None = Query(
         default=None,
         description="要浏览的本机目录；为空时使用用户主目录",
     ),
     limit: int = Query(default=120, ge=1, le=500),
     gateway_connection_id: str | None = Query(default=None),
+    base_path: str | None = Query(default=None, description="相对路径所基于的目标目录 URI"),
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
@@ -98,6 +101,7 @@ async def list_local_directories(
         query = urlencode(
             {
                 **({"path": path} if path is not None else {}),
+                **({"base_path": base_path} if base_path is not None else {}),
                 "limit": limit,
             }
         )
@@ -123,7 +127,9 @@ async def list_local_directories(
         return APIResponse(data=listing, request_id=request_id)
 
     try:
-        listing = await _directory_listing(path, limit=limit)
+        listing = await _directory_listing(request, path, limit=limit, base_path=base_path)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except PermissionError as error:
@@ -169,11 +175,14 @@ async def add_local_workspace(
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
-    workspace_root = Path(payload.root_path).expanduser().resolve()
+    try:
+        workspace_root = resolve_management_directory(request, payload.root_path)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     if not workspace_root.is_dir():
         raise HTTPException(
             status_code=400,
-            detail=f"本机工作区不存在: {workspace_root}",
+            detail="所选本机工作区目录不存在或不是目录",
         )
 
     if payload.backend_url is None:

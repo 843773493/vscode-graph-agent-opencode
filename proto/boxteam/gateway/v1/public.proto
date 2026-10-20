@@ -208,6 +208,7 @@ message GatewayDirectoryListDTO {
   repeated GatewayDirectoryEntryDTO entries = 4;
   optional bool truncated = 5;
   int64 limit = 6;
+  string name = 7;
 }
 
 message GatewayHealthDTO {

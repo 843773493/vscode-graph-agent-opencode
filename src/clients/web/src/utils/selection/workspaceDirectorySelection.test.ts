@@ -1,24 +1,27 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  normalizeWorkspacePath,
   workspaceDirectoryMatchesQuery,
-  workspaceParentPath,
   workspacePathSearchParts,
 } from "./workspaceDirectorySelection";
 
 describe("工作区目录选择路径行为", () => {
-  test("规范化路径并解析父目录与查询", () => {
-    expect(normalizeWorkspacePath(" /repo/app/// ")).toBe("/repo/app");
-    expect(workspaceParentPath("/repo/app")).toBe("/repo");
-    expect(workspacePathSearchParts("/repo/ap")).toEqual({
-      parentPath: "/repo",
-      query: "ap",
-    });
-    expect(workspacePathSearchParts("/repo/")).toEqual({
-      parentPath: "/repo",
-      query: "",
-    });
+  test.each([
+    [" /repo/ap ", "/repo/", "ap"],
+    ["/repo/", "/repo/", ""],
+    ["/", "/", ""],
+    ["alpha", "", "alpha"],
+    [".", ".", ""],
+    ["..", "..", ""],
+    ["~", "~", ""],
+    ["relative/ap", "relative/", "ap"],
+    ["C:\\projects\\ap", "C:\\projects\\", "ap"],
+    ["C:\\", "C:\\", ""],
+    ["\\\\host\\share\\ap", "\\\\host\\share\\", "ap"],
+    ["/repo/literal\\name", "/repo/", "literal\\name"],
+    ["boxteam://gateway/gateway_00000000000070008000000000000001/resources/files/00000000000070008000000000000001/space%20name", "boxteam://gateway/gateway_00000000000070008000000000000001/resources/files/00000000000070008000000000000001/space%20name", ""],
+  ])("保留目标文本 %s", (input, parentPath, query) => {
+    expect(workspacePathSearchParts(input)).toEqual({ parentPath, query });
   });
 
   test("目录查询同时支持包含匹配与顺序模糊匹配", () => {

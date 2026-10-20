@@ -1,35 +1,18 @@
-export function normalizeWorkspacePath(path: string): string {
-  const trimmed = path.trim();
-  if (!trimmed || trimmed === "/") return trimmed || "/";
-  return trimmed.replace(/\/+$/, "");
-}
-
-export function workspacePathBasename(path: string): string {
-  const segments = normalizeWorkspacePath(path).split("/").filter(Boolean);
-  return segments[segments.length - 1] || "workspace";
-}
-
-export function workspaceParentPath(path: string): string {
-  const segments = normalizeWorkspacePath(path).split("/").filter(Boolean);
-  if (segments.length <= 1) return "/";
-  return `/${segments.slice(0, -1).join("/")}`;
-}
-
 export function workspacePathSearchParts(path: string): {
   parentPath: string;
   query: string;
 } {
-  const trimmedPath = path.trim();
-  if (!trimmedPath || trimmedPath === "/") {
-    return { parentPath: "/", query: "" };
+  const value = path.trim();
+  // URI 整体交给目标 owner；原生文本只拆分搜索词，不在浏览器解析真实位置。
+  if (value.includes("://") || value === "." || value === ".." || value === "~") {
+    return { parentPath: value, query: "" };
   }
-  if (trimmedPath.endsWith("/")) {
-    return { parentPath: normalizeWorkspacePath(trimmedPath), query: "" };
-  }
-  const normalized = normalizeWorkspacePath(trimmedPath);
+  const windows = /^[A-Za-z]:[\\/]|^\\\\/.test(value);
+  const index = Math.max(value.lastIndexOf("/"), windows ? value.lastIndexOf("\\") : -1);
+  if (index === value.length - 1) return { parentPath: value, query: "" };
   return {
-    parentPath: workspaceParentPath(normalized),
-    query: workspacePathBasename(normalized),
+    parentPath: index < 0 ? "" : value.slice(0, index + 1),
+    query: value.slice(index + 1),
   };
 }
 

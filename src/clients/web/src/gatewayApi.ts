@@ -745,6 +745,7 @@ export async function browseGatewayLocalDirectories(
   port: number,
   path?: string | null,
   gatewayConnectionId?: string | null,
+  basePath?: string | null,
 ): Promise<GatewayDirectoryList> {
   const query = new URLSearchParams();
   if (path?.trim()) {
@@ -753,6 +754,7 @@ export async function browseGatewayLocalDirectories(
   if (gatewayConnectionId) {
     query.set("gateway_connection_id", gatewayConnectionId);
   }
+  if (basePath) query.set("base_path", basePath);
   const suffix = query.toString();
   const requestPath = `/api/gateway/local-directories${suffix ? `?${suffix}` : ""}`;
   const requestListing = async () =>

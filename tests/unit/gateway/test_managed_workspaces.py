@@ -110,6 +110,13 @@ async def test_create_and_remove_direct_managed_workspace_preserves_directory(
     assert owner.contract.workspace_ids == (target.workspace_id,)
     assert registry.resolve(target.workspace_id).root_path == str(workspace_root)
 
+    with pytest.raises(ValueError, match="已经由当前 Gateway 托管") as duplicate:
+        await create_direct_managed_workspace(
+            registry=registry, project_root=tmp_path, log_dir=tmp_path / "logs",
+            root_path=str(workspace_root), name=None, create_directory=False,
+        )
+    assert str(workspace_root) not in str(duplicate.value)
+
     registry.upsert(
         WorkspaceTarget(
             workspace_id="kept",

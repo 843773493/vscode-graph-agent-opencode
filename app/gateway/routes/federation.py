@@ -35,6 +35,7 @@ from app.gateway.routes._shared import (
     get_gateway_config_reload_service,
     get_registry,
     get_workspace_runtime_controller,
+    resolve_management_directory,
 )
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.schemas.gateway.diagnostics import GatewayDiagnosticsDTO
@@ -204,6 +205,7 @@ async def federation_managed_workspaces(
 )
 async def create_federation_managed_workspace(
     payload: CreateFederationManagedWorkspaceRequest,
+    request: Request,
     _: None = Depends(require_managed_workspace_admin),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
@@ -213,7 +215,7 @@ async def create_federation_managed_workspace(
             registry=registry,
             project_root=get_project_root(),
             log_dir=_gateway_root() / "logs",
-            root_path=payload.root_path,
+            root_path=str(resolve_management_directory(request, payload.root_path)),
             name=payload.name,
             create_directory=payload.create_directory,
         )
@@ -264,13 +266,17 @@ async def remove_federation_managed_workspace(
     response_model=APIResponse[GatewayDirectoryListDTO],
 )
 async def list_federation_directories(
+    request: Request,
     path: str | None = Query(default=None),
     limit: int = Query(default=120, ge=1, le=500),
+    base_path: str | None = Query(default=None),
     _: object = Depends(verify_federation_token),
     request_id: str = Depends(get_request_id),
 ):
     try:
-        listing = await _directory_listing(path, limit=limit)
+        listing = await _directory_listing(request, path, limit=limit, base_path=base_path)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except PermissionError as error:

@@ -204,6 +204,7 @@ export interface GatewayDirectoryListDTO {
   entries: GatewayDirectoryEntryDTO[];
   truncated?: boolean | undefined;
   limit: number;
+  name: string;
 }
 
 export interface GatewayHealthDTO {
@@ -2070,7 +2071,7 @@ export const GatewayDirectoryEntryDTO: MessageFns<GatewayDirectoryEntryDTO> = {
 };
 
 function createBaseGatewayDirectoryListDTO(): GatewayDirectoryListDTO {
-  return { path: "", parent_path: undefined, home_path: "", entries: [], truncated: undefined, limit: 0 };
+  return { path: "", parent_path: undefined, home_path: "", entries: [], truncated: undefined, limit: 0, name: "" };
 }
 
 export const GatewayDirectoryListDTO: MessageFns<GatewayDirectoryListDTO> = {
@@ -2084,6 +2085,7 @@ export const GatewayDirectoryListDTO: MessageFns<GatewayDirectoryListDTO> = {
         : [],
       truncated: isSet(object.truncated) ? globalThis.Boolean(object.truncated) : undefined,
       limit: isSet(object.limit) ? globalThis.Number(object.limit) : 0,
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
     };
   },
 
@@ -2107,6 +2109,9 @@ export const GatewayDirectoryListDTO: MessageFns<GatewayDirectoryListDTO> = {
     if (message.limit !== 0) {
       obj.limit = Math.round(message.limit);
     }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
     return obj;
   },
 
@@ -2121,6 +2126,7 @@ export const GatewayDirectoryListDTO: MessageFns<GatewayDirectoryListDTO> = {
     message.entries = object.entries?.map((e) => GatewayDirectoryEntryDTO.fromPartial(e)) || [];
     message.truncated = object.truncated ?? undefined;
     message.limit = object.limit ?? 0;
+    message.name = object.name ?? "";
     return message;
   },
 };

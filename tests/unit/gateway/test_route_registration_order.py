@@ -20,10 +20,10 @@ from app.gateway.main import app
 PROJECT_ROOT = Path.cwd()
 
 BASELINE_OPENAPI_SHA256 = (
-    "4cd1bf1a3ec36371a84c8f5efe0cf69ab222e0115b8658d17fc69575998d34a3"
+    "99efdbd40894c88780e21299b0e6737c1078d4215d96294196e5ba2e9a642b39"
 )
-BASELINE_ROUTE_COUNT = 107
-BASELINE_PATH_COUNT = 87
+BASELINE_ROUTE_COUNT = 109
+BASELINE_PATH_COUNT = 89
 BASELINE_DUPLICATE_OPERATION_IDS = (
     "Duplicate Operation ID proxy_auxiliary_http_api_gateway_workspaces__workspace_id___service_path___path__patch",
     "Duplicate Operation ID proxy_workspace_api_api_v1__path__patch",

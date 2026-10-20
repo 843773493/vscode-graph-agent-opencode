@@ -32,6 +32,7 @@ import { requestJson } from "../../api";
 import { DEFAULT_API_REQUEST_TIMEOUT_MS, HttpRequestError } from "../http";
 
 const originalFetch = globalThis.fetch;
+const DIRECTORY_URI = "boxteam://gateway/gateway_00000000000070008000000000000001/resources/files/00000000000070008000000000000001";
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -274,10 +275,11 @@ describe("Gateway 本机目录浏览", () => {
         }
         return Response.json({
           data: {
-            path: "/workspace",
-            parent_path: "/",
-            home_path: "/home/test",
-            entries: [{ name: "project", path: "/workspace/project" }],
+            name: "workspace",
+            path: DIRECTORY_URI,
+            parent_path: DIRECTORY_URI,
+            home_path: DIRECTORY_URI,
+            entries: [{ name: "project", path: DIRECTORY_URI + "/project" }],
             truncated: false,
             limit: 120,
           },
@@ -291,7 +293,7 @@ describe("Gateway 本机目录浏览", () => {
 
     expect(requestCount).toBe(3);
     expect(listing.entries).toEqual([
-      { name: "project", path: "/workspace/project" },
+      { name: "project", path: DIRECTORY_URI + "/project" },
     ]);
   });
 
@@ -349,9 +351,10 @@ describe("Gateway 本机目录浏览", () => {
         }
         return Response.json({
           data: {
-            path: "/srv/projects",
-            parent_path: "/srv",
-            home_path: "/home/remote",
+            name: "projects",
+            path: DIRECTORY_URI,
+            parent_path: DIRECTORY_URI,
+            home_path: DIRECTORY_URI,
             entries: [],
             truncated: false,
             limit: 120,
@@ -366,11 +369,13 @@ describe("Gateway 本机目录浏览", () => {
       49_903,
       "/srv/projects",
       "rgw_remote",
+      DIRECTORY_URI,
     );
 
-    expect(requestedUrls[1]).toContain(
-      "/api/gateway/local-directories?path=%2Fsrv%2Fprojects&gateway_connection_id=rgw_remote",
-    );
+    const query = new URL(requestedUrls[1]).searchParams;
+    expect(query.get("path")).toBe("/srv/projects");
+    expect(query.get("gateway_connection_id")).toBe("rgw_remote");
+    expect(query.get("base_path")).toBe(DIRECTORY_URI);
   });
 });
 

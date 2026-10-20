@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from app.core.resource_uri import parse_resource_uri
+from app.core.workspace_identity import workspace_identity_path
 from app.services.infrastructure.workspace_files.paths import (
     file_uri_child,
     file_uri_root,
@@ -24,10 +25,17 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     communication_case as communication_case,  # noqa: PLC0414 - fixture 以当前测试路径隔离
 )
+from tests.integration.backend.sessions.test_session_communication_pipeline import (
+    communication_triad as communication_triad,  # noqa: PLC0414 - 独立 Gateway 与真实 SSH 路由
+)
 from tests.support.api_helpers import create_session
 from tests.support.gateway_processes import (
     close_gateway_process,
     start_gateway_process,
+)
+from tests.support.workspaces import (
+    install_test_workspace_config,
+    prepare_default_test_workspace,
 )
 
 
@@ -42,8 +50,9 @@ async def _browse(case, fixture: dict, artifacts: Path) -> dict:
     result_path = artifacts / "native-directory-browser.json"
     executable = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium") or shutil.which("chromium-browser")
     assert executable, "未注册目录 Web 验证需要 Chromium"
+    script = "gateway_directory_selection.mjs" if fixture.get("directory_selection") else "native_directory_browser.mjs"
     process = await asyncio.to_thread(subprocess.run, ["bun",
-        "tests/integration/clients/web/workspace_files/native_directory_browser.mjs"],
+        "tests/integration/clients/web/workspace_files/" + script],
         env={**os.environ, "BOXTEAM_BROWSER_BASE_URL": str(case.client.base_url),
              "BOXTEAM_BROWSER_FIXTURE": json.dumps({**fixture, "cookies": [
                  {"name": cookie.name, "value": cookie.value, "url": str(case.client.base_url)}
@@ -51,7 +60,7 @@ async def _browse(case, fixture: dict, artifacts: Path) -> dict:
              "BOXTEAM_BROWSER_RESULT_PATH": str(result_path),
              "BOXTEAM_BROWSER_RUNTIME_PATH": str(case.workspace.parent / "runtime/browser"),
              "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": executable},
-        cwd=Path.cwd(), capture_output=True, text=True, timeout=150, check=False)
+        cwd=Path.cwd(), capture_output=True, text=True, timeout=240, check=False)
     (artifacts / "playwright.log").write_text(process.stdout + process.stderr)
     assert process.returncode == 0, process.stdout + process.stderr
     return json.loads(result_path.read_text())
@@ -240,3 +249,92 @@ async def test_chat_file_references_preserve_native_and_uri_targets(communicatio
     assert decoy.read_text() == "不得打开的旧回退对照\n"
     assert local.read_text() == "本地原件\n定位第二行\n"
     assert private.read_text(encoding="utf-8") == "private boundary original"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("communication_case", [{"gateway_environment": {
+    "BOXTEAM_WEB_ASSETS": str(Path.cwd() / "src/clients/web/dist"),
+}}], indirect=True)
+async def test_gateway_directory_selector_registers_uri_after_native_input_and_reload(communication_case):
+    case = communication_case
+    directory = case.workspace.parent / "选择 目录% Ω"
+    target = prepare_default_test_workspace(
+        workspace_root=directory / "alpha 工程%",
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+    )
+    # 新工作区不能沿用模板固定 UUID；由实际注册 owner 创建独立身份。
+    workspace_identity_path(target).unlink()
+    install_test_workspace_config(
+        workspace_root=target, config_path=case.workspace / ".boxteam/workspace.jsonc",
+        schema_path=case.workspace / ".boxteam/workspace_schema.jsonc",
+    )
+    for path in ("/api/gateway/health", "/api/gateway/workspaces", "/api/v1/workspace"):
+        response = await case.client.get(path)
+        assert response.status_code == 200, response.text
+        assert response.json()["request_id"] == response.headers["X-Request-ID"]
+    before = await case.client.get("/api/gateway/workspaces")
+    result = await _browse(case, {"directory_selection": True, "directory": str(directory),
+        "directory_name": directory.name, "target_name": target.name},
+        case.artifacts / f"run-{os.getpid()}/directory-selection")
+    assert result["request"]["root_path"] == result["target_uri"]
+    after = await case.client.get("/api/gateway/workspaces")
+    assert after.status_code == 200, after.text
+    previous = {item["workspace_id"] for item in before.json()["data"]["items"]}
+    created = [item for item in after.json()["data"]["items"] if item["workspace_id"] not in previous]
+    assert len(created) == 1 and created[0]["name"] == target.name
+    assert created[0]["managed"] is True and created[0]["status"] == "ready"
+    assert str(directory) not in after.text
+    # 真实控制面根绑定必须精确指向所选目录；不允许按 URI 文本拼出另一个目录。
+    rows = _registry(case.workspace)
+    payload = json.loads(next(row[3] for row in rows if row[0] == created[0]["workspace_id"]))
+    assert payload["root_path"] == str(target)
+    assert result["page_errors"] == []
+
+
+@pytest.mark.asyncio
+async def test_remote_directory_selection_resolves_only_on_fixed_gateway(communication_triad):
+    nodes, _, artifacts = communication_triad
+    source, target = nodes["a"], nodes["b"]
+    directory = target.workspace / "remote 目录% Ω"
+    directory.mkdir()
+    (directory / "child").mkdir()
+    before = _registry(source.workspace)
+    with closing(sqlite3.connect(source.gateway_root / "gateway.sqlite")) as connection:
+        native_before = connection.execute("SELECT * FROM native_directory_roots ORDER BY directory_id").fetchall()
+    response = await source.client.get("/api/gateway/local-directories", params={
+        "path": str(directory), "gateway_connection_id": "rgw_c3_b",
+    })
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert response.json()["request_id"] == response.headers["X-Request-ID"]
+    assert str(directory) not in response.text
+    assert data["name"] == directory.name and [entry["name"] for entry in data["entries"]] == ["child"]
+    for uri in (data["path"], data["parent_path"], data["home_path"], data["entries"][0]["path"]):
+        parsed = parse_resource_uri(uri)
+        assert parsed.scope == "gateway" and parsed.scope_id == target.gateway_id
+    cold = await source.client.get("/api/gateway/local-directories", params={
+        "path": data["path"], "gateway_connection_id": "rgw_c3_b",
+    })
+    assert cold.status_code == 200 and cold.json()["data"] == data
+    child = await source.client.get("/api/gateway/local-directories", params={
+        "path": "child", "base_path": data["path"], "gateway_connection_id": "rgw_c3_b",
+    })
+    assert child.status_code == 200 and child.json()["data"]["name"] == "child"
+    for connection in (None, "rgw_c3_c"):
+        wrong = await source.client.get("/api/gateway/local-directories", params={
+            "path": data["path"], **({"gateway_connection_id": connection} if connection else {}),
+        })
+        assert wrong.status_code == 400, wrong.text
+        assert str(directory) not in wrong.text
+        assert wrong.json()["request_id"] == wrong.headers["X-Request-ID"]
+    assert _registry(source.workspace) == before
+    with closing(sqlite3.connect(source.gateway_root / "gateway.sqlite")) as connection:
+        assert connection.execute("SELECT * FROM native_directory_roots ORDER BY directory_id").fetchall() == native_before
+    with closing(sqlite3.connect(target.gateway_root / "gateway.sqlite")) as connection:
+        assert connection.execute("SELECT native_root FROM native_directory_roots WHERE gateway_id=? AND directory_id=?",
+            (target.gateway_id, parse_resource_uri(data["path"]).tail_segments[0])).fetchone() == (str(directory),)
+    assert not (directory / ".boxteam").exists()
+    (artifacts / "directory-owner.json").write_text(json.dumps({
+        "listing": response.json(), "reopened": cold.json(), "relative": child.json(),
+        "source_gateway": source.gateway_id, "target_gateway": target.gateway_id,
+    }, ensure_ascii=False, indent=2))

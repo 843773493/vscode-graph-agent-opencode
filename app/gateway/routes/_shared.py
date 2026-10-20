@@ -12,7 +12,9 @@ from fastapi import (
     Request,
 )
 
-from app.core.path_utils import get_gateway_root
+from app.core.exceptions import ForbiddenError
+from app.core.path_utils import get_gateway_root, resolve_native_file_path, safe_join
+from app.core.resource_uri import parse_resource_uri, resource_display_uri
 from app.gateway.config import GatewayConfigReloadService
 from app.gateway.control.user_access import (
     USER_ACCESS_COOKIE_NAME,
@@ -60,55 +62,89 @@ async def _wait_for_managed_runtime_restore_tasks(restore_tasks: object) -> None
             return
 
 
-def _resolve_local_directory(raw_path: str | None) -> Path:
-    target_path = Path(raw_path).expanduser() if raw_path else Path.home()
-    resolved_path = target_path.resolve()
-    if not resolved_path.exists():
-        raise HTTPException(status_code=400, detail=f"本机目录不存在: {resolved_path}")
-    if not resolved_path.is_dir():
-        raise HTTPException(status_code=400, detail=f"路径不是目录: {resolved_path}")
-    return resolved_path
+def resolve_management_directory(
+    request: Request, value: str, *, base_path: str | None = None,
+) -> Path:
+    """目录选择与注册共用目标 Gateway 的根绑定；相对输入必须有显式基准。"""
+    if "://" in value:
+        parsed = parse_resource_uri(value, local_gateway_id=request.app.state.gateway_id)
+        if (parsed.scope != "gateway" or parsed.kind != "files"
+                or parsed.scope_id != request.app.state.gateway_id
+                or parsed.gateway_authority is not None):
+            raise ValueError("目录 URI 不属于选定的 Gateway 原生目录")
+        try:
+            root = request.app.state.gateway_state.resolve_native_directory(
+                gateway_id=parsed.scope_id, directory_id=parsed.tail_segments[0],
+            )
+        except KeyError as error:
+            raise HTTPException(404, "所选目录绑定不存在") from error
+        try:
+            return safe_join(Path(root), *parsed.tail_segments[1:])
+        except ForbiddenError as error:
+            raise HTTPException(403, "目录 URI 超出选定根的访问能力") from error
+    native = Path(value).expanduser()
+    if not native.is_absolute() and base_path is None:
+        raise ValueError("原生目录必须是绝对路径；相对路径需要选定目录 URI")
+    base = resolve_management_directory(request, base_path) if base_path else Path.home()
+    try:
+        return resolve_native_file_path(base, value, allow_absolute_outside=True)
+    except ForbiddenError as error:
+        raise HTTPException(403, "相对路径超出选定目录的访问能力") from error
+
+
+def _management_directory_uri(request: Request, root: Path) -> str:
+    gateway_id = request.app.state.gateway_id
+    directory_id = request.app.state.gateway_state.bind_native_directory(
+        gateway_id=gateway_id, native_root=str(root),
+    )
+    return resource_display_uri(
+        scope="gateway", scope_id=gateway_id, kind="files", tail_segments=(directory_id,),
+    )
 
 
 def _scan_local_directories(
     root_path: Path,
     limit: int,
-) -> tuple[list[GatewayDirectoryEntryDTO], bool]:
+) -> tuple[list[Path], bool]:
     with os.scandir(root_path) as directory_iterator:
         directories = [
             entry for entry in directory_iterator if entry.is_dir(follow_symlinks=False)
         ]
     directories.sort(key=lambda entry: (entry.name.lower(), entry.name))
-    entries = [
-        GatewayDirectoryEntryDTO(
-            name=entry.name,
-            path=str(Path(entry.path).resolve()),
-        )
-        for entry in directories[:limit]
-    ]
+    entries = [Path(entry.path).resolve() for entry in directories[:limit]]
     return entries, len(directories) > limit
 
 
 async def _directory_listing(
+    request: Request,
     raw_path: str | None,
     *,
     limit: int,
+    base_path: str | None = None,
 ) -> GatewayDirectoryListDTO:
-    root_path = _resolve_local_directory(raw_path)
-    entries, truncated = await asyncio.to_thread(
-        _scan_local_directories,
-        root_path,
-        limit,
-    )
-    parent_path = root_path.parent if root_path.parent != root_path else None
-    return GatewayDirectoryListDTO(
-        path=str(root_path),
-        parent_path=str(parent_path) if parent_path is not None else None,
-        home_path=str(Path.home().resolve()),
-        entries=entries,
-        truncated=truncated,
-        limit=limit,
-    )
+    def collect() -> GatewayDirectoryListDTO:
+        root = resolve_management_directory(request, raw_path or str(Path.home()), base_path=base_path)
+        if not root.exists():
+            raise HTTPException(400, "所选目录不存在")
+        if not root.is_dir():
+            raise HTTPException(400, "所选资源不是目录")
+        try:
+            entries, truncated = _scan_local_directories(root, limit)
+        except OSError as error:
+            # 原异常留在本机原因链；普通响应发布阶段与系统错误码，不复制根路径。
+            raise HTTPException(403 if isinstance(error, PermissionError) else 400,
+                                f"目录枚举失败: {type(error).__name__}, errno={error.errno}") from error
+        return GatewayDirectoryListDTO(
+            name=root.name or "文件系统根目录",
+            path=_management_directory_uri(request, root),
+            parent_path=_management_directory_uri(request, root.parent) if root.parent != root else None,
+            home_path=_management_directory_uri(request, Path.home().resolve()),
+            entries=[GatewayDirectoryEntryDTO(name=entry.name, path=_management_directory_uri(request, entry))
+                     for entry in entries],
+            truncated=truncated, limit=limit,
+        )
+
+    return await asyncio.to_thread(collect)
 
 
 async def _managed_workspace_list(

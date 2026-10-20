@@ -15,9 +15,7 @@ import type {
   GatewayWorkspace,
 } from "../../types/backend";
 import {
-  normalizeWorkspacePath,
   workspaceDirectoryMatchesQuery,
-  workspaceParentPath,
   workspacePathSearchParts,
 } from "../../utils/selection/workspaceDirectorySelection";
 import { errorMessage } from "../../utils/errorMessage";
@@ -136,31 +134,29 @@ export default function WorkspaceAddDialog({
       gateway: GatewayChoice,
       path: string | null,
       nextQuery = "",
-      nextSelectedPath?: string,
+      basePath?: string,
     ) => {
       const requestNumber = directoryRequestRef.current + 1;
       directoryRequestRef.current = requestNumber;
       setLoading(true);
       setError(null);
-      if (path !== null) {
-        const normalizedPath = normalizeWorkspacePath(path) || "/";
-        setCurrentPath(normalizedPath);
-        setPathInput(nextSelectedPath ?? normalizedPath);
-        setDirectoryQuery(nextQuery);
-        setSelectedPath(nextSelectedPath ?? normalizedPath);
-      }
+      setSelectedPath("");
       try {
         const nextListing = await browseGatewayLocalDirectories(
           apiPort,
           path,
           gateway.connectionId,
+          basePath,
         );
         if (directoryRequestRef.current !== requestNumber) return;
         setListing(nextListing);
         setCurrentPath(nextListing.path);
-        setPathInput(nextSelectedPath ?? nextListing.path);
+        setPathInput(nextQuery || nextListing.path);
         setDirectoryQuery(nextQuery);
-        setSelectedPath(nextSelectedPath ?? nextListing.path);
+        const matches = nextListing.entries.filter((entry) =>
+          workspaceDirectoryMatchesQuery(entry.name, nextQuery),
+        );
+        setSelectedPath(nextQuery ? (matches.length === 1 ? matches[0].path : "") : nextListing.path);
       } catch (loadError) {
         if (directoryRequestRef.current !== requestNumber) return;
         setListing(null);
@@ -245,21 +241,17 @@ export default function WorkspaceAddDialog({
 
   const browsePath = (path: string) => {
     if (!selectedGateway) return;
-    const normalized = normalizeWorkspacePath(path) || "/";
-    void loadDirectory(selectedGateway, normalized);
+    void loadDirectory(selectedGateway, path.trim() || ".", "", currentPath);
   };
 
   const confirmPathInput = () => {
     if (!selectedGateway || !currentPath) return;
-    const normalized = normalizeWorkspacePath(pathInput) || "/";
-    if (normalized === currentPath) {
-      browsePath(normalized);
-      return;
-    }
+    const normalized = pathInput.trim();
+    if (selectedPath && (normalized === currentPath || normalized === directoryQuery)) return;
 
     const { parentPath, query } = workspacePathSearchParts(pathInput);
     const matchingDirectories =
-      parentPath === currentPath
+      !parentPath || parentPath === currentPath
         ? visibleDirectories.filter((entry) =>
             workspaceDirectoryMatchesQuery(entry.name, query),
           )
@@ -269,20 +261,20 @@ export default function WorkspaceAddDialog({
       return;
     }
     if (query) {
-      void loadDirectory(selectedGateway, parentPath, query, normalized);
+      void loadDirectory(selectedGateway, parentPath || currentPath, query, currentPath);
       return;
     }
     browsePath(parentPath);
   };
 
   const handleConfirm = async () => {
-    if (!selectedGateway || submitting || (!selectedPath && !currentPath)) return;
+    if (!selectedGateway || submitting || !selectedPath) return;
     setSubmitting(true);
     setError(null);
     try {
       await onAdd({
         gateway_connection_id: selectedGateway.connectionId,
-        root_path: selectedPath || currentPath,
+        root_path: selectedPath,
         create_directory: false,
       });
       onClose();
@@ -372,9 +364,9 @@ export default function WorkspaceAddDialog({
                 aria-label="返回上级目录"
                 title="返回上级目录"
                 disabled={
-                  loading || submitting || !currentPath || currentPath === "/"
+                  loading || submitting || !listing?.parent_path
                 }
-                onClick={() => browsePath(workspaceParentPath(currentPath))}
+                onClick={() => { if (listing?.parent_path) browsePath(listing.parent_path); }}
               >
                 <span className="codicon codicon-arrow-up" aria-hidden="true" />
               </button>
@@ -385,6 +377,7 @@ export default function WorkspaceAddDialog({
                   disabled={loading || submitting || !currentPath}
                   onChange={(event) => {
                     setPathInput(event.target.value);
+                    setSelectedPath("");
                     setError(null);
                   }}
                   onBlur={confirmPathInput}
@@ -484,7 +477,7 @@ export default function WorkspaceAddDialog({
                     <button
                       type="button"
                       className="workspace-add-directory-select"
-                      disabled={submitting}
+                      disabled={loading || submitting}
                       aria-pressed={selected}
                       onClick={() => setSelectedPath(entry.path)}
                       onDoubleClick={() => browsePath(entry.path)}
@@ -500,7 +493,7 @@ export default function WorkspaceAddDialog({
                     <button
                       type="button"
                       className="workspace-add-directory-enter"
-                      disabled={submitting}
+                      disabled={loading || submitting}
                       aria-label={`进入目录 ${entry.name}`}
                       title="进入目录"
                       onClick={() => browsePath(entry.path)}
@@ -524,8 +517,8 @@ export default function WorkspaceAddDialog({
           <footer className="workspace-add-actions">
             <div className="workspace-add-selection-summary" aria-live="polite">
               <span>将添加</span>
-              <strong title={selectedPath || currentPath || undefined}>
-                {selectedPath || currentPath || "尚未选择文件夹"}
+              <strong title={selectedPath || undefined}>
+                {selectedPath === currentPath ? listing?.name : listing?.entries.find((entry) => entry.path === selectedPath)?.name || "尚未选择文件夹"}
               </strong>
             </div>
             <div className="workspace-add-action-buttons">
@@ -536,7 +529,7 @@ export default function WorkspaceAddDialog({
                 type="button"
                 className="primary"
                 disabled={
-                  loading || submitting || (!selectedPath && !currentPath)
+                  loading || submitting || !selectedPath
                 }
                 onClick={() => void handleConfirm()}
               >
