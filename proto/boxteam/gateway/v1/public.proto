@@ -12,6 +12,18 @@ message AcquireGatewayUserRequest {
   optional string client_label = 1;
 }
 
+// 同机认证控制链专用，不作为普通文件响应或联邦资源投影。
+message NativeDirectoryBindRequest {
+  string native_root = 1;
+}
+message NativeDirectoryBindingDTO {
+  string uri = 1;
+}
+message NativeDirectoryResolveDTO {
+  string uri = 1;
+  string native_root = 2;
+}
+
 message ActivateGatewayWorkspaceResultDTO {
   string active_workspace_id = 1;
 }

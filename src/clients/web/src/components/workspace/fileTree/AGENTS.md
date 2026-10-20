@@ -9,7 +9,7 @@
 - `useWorkspaceFileTreeContextMenu.ts`：菜单目标与位置、剪贴板条目、动作错误横幅，以及菜单交互（新建/粘贴/上传/复制/下载/系统显示/刷新/快捷路径族）的唯一所有者。四个集合写入口的持久请求与恢复委托给 `useWorkspaceFileOperations.ts`；任何菜单动作失败必须显式呈现，不得静默。
 - `useWorkspaceFileOperations.ts`：已有新建、粘贴文本、复制及上传四入口的持久 intent、原请求 ID 查询、依赖与恢复编排；使用 `state/workspaceFiles/` 的单一 intent/Blob store，调用既有 API，不另存目录业务权威或定义文件执行规则。
 - `useWorkspaceFileTreeDirectories.ts`：目录缓存与懒加载的唯一所有者（并发请求去重、分页合并、失败登记、LRU 保护集、精确子树失效 `invalidateDirectoriesUnder` 与基于它的全树重同步 `reloadExpandedDirectories`）。目录失效只有精确子树这一种语义，不存在第二套 stale 标记；全树重同步也必须复用同一原语。展开态与活动文件夹在外部，经 ref 传入以读取最新值。
-- `workspaceFileTreePaths.ts`：文件树路径的唯一语义权威（根路径常量、父子推导、作用域内判断、变更路径归一、绝对路径拼接、剪贴板路径解析）。任何路径归一都必须复用这里的实现。
+- `workspaceFileTreePaths.ts`：已解析文件 URI 的父子关系、根内判断和剪贴板输入处理；根 URI 由固定目标后端提供，原生路径交目标机器解析，不在浏览器拼接真实路径。
 - `workspaceFileTreeCache.ts`：目录缓存条目结构与唯一构造入口（加载中/成功/失败/过期四种形态）、LRU 淘汰与按层恢复的并发控制。任何目录条目字面量都必须复用这里的工厂函数。
 - `workspaceFileTreeRows.ts`：把目录缓存与展开状态编译成可渲染的扁平行。
 
@@ -35,6 +35,7 @@
 
 - 文件数据只以 `api` 返回和后端事件流为准，不在本目录伪造成功状态。
 - 用户操作冻结目标、directory_key 与请求 ID；工作区切换、重连及响应丢失后沿原目标查询，owner 不匹配不能按 404 删除未确认 intent。目录缓存及 SSE 消费后端目录版本与 cursor，只收敛受影响目录。
+- 目录、操作源及持久引用使用后端返回的 URI；原生路径输入在写入 intent 之前通过同一目标文件 owner 解析。
 - 导入共享模块使用显式相对路径，禁止任何指向旧平铺路径的转发层。
 - 代码注释使用中文，专业术语除外。
 - 修改本目录后需要运行 `bun run --cwd src/clients/web build`。

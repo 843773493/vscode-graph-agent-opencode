@@ -9,6 +9,9 @@ import {
 } from "../../../state/workspaceFileTreeEvents";
 import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
 
+const ROOT = "boxteam://workspace/backend_files/resources/files/root";
+const FILESYSTEM = "boxteam://gateway/gateway_01900000000070008000000000000001/resources/files/01900000000070008000000000000001";
+
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 
@@ -52,7 +55,7 @@ function installWindow(port: number): DocumentedWindow {
 
 function apiResponse(data: unknown): Response {
   if (data && typeof data === "object" && "items" in data && "path" in data) {
-    data = { directory_key: { workspace_id: "backend_files", scope: "workspace", root: "/w/project", path: data.path },
+    data = { directory_key: { workspace_id: "backend_files", scope: "workspace", root: ROOT, path: data.path },
       directory_revision: 1, ...data };
   }
   return Response.json({
@@ -97,28 +100,29 @@ async function mountTree(port: number): Promise<Harness> {
     if (url.pathname === "/api/gateway/auth/local-credential") {
       return apiResponse({ token: "token" });
     }
+    if (url.pathname === "/api/v1/workspace/files/roots") return apiResponse({ workspace_uri: ROOT, filesystem_uri: FILESYSTEM, filesystem_label: "/" });
     if (url.pathname === "/api/gateway/users/current") {
       return apiResponse({ kind: "guest", user_id: null });
     }
     if (url.pathname !== "/api/v1/workspace/files") {
       throw new Error("未声明请求: " + url.pathname);
     }
-    const path = url.searchParams.get("path") ?? "";
+    const path = url.searchParams.get("path") || ROOT;
     listingRequests.push(path);
     listingSignals.set(
       path,
       (input instanceof Request ? input.signal : null) ?? init?.signal ?? null,
     );
-    if (path === "src/gone") {
+    if (path === `${ROOT}/src/gone`) {
       // 删除被派发之后这个响应才会到达，用来证明它不会把已删除目录写回缓存。
       deferredPaths.push(path);
       await new Promise<void>((resolve) => { deferred.push(resolve); });
     }
     const items: Array<Record<string, unknown>> = (
-      path === ""
-        ? [fileNode("src", "directory")]
-        : path === "src"
-          ? [fileNode("src/gone", "directory"), fileNode("src/kept", "directory")]
+      path === ROOT
+        ? [fileNode(`${ROOT}/src`, "directory")]
+        : path === `${ROOT}/src`
+          ? [fileNode(`${ROOT}/src/gone`, "directory"), fileNode(`${ROOT}/src/kept`, "directory")]
           : [fileNode(path + "/a.ts", "file")]
     ).filter((item) => !deletedPaths.has(String(item.path)));
     return apiResponse({ root_path: path, path, items, truncated: false, next_cursor: null });
@@ -136,7 +140,7 @@ async function mountTree(port: number): Promise<Harness> {
         activeFilePath={null}
         searchOpen={false}
         collapseVersion={0}
-        expandedPaths={[""]}
+        expandedPaths={[ROOT]}
         onExpandedPathsChange={() => {}}
         onCloseSearch={() => {}}
         onOpenFile={() => {}}
@@ -184,7 +188,7 @@ function dispatchDelete(handle: Harness, absolutePath: string): void {
       { detail: { workspaceId: "gw_changes", directories: [], snapshots: [], changes: [{ kind: "delete", path: absolutePath }] } },
     ));
   });
-  handle.deletedPaths.add(absolutePath.replace("/w/project/", ""));
+  handle.deletedPaths.add(absolutePath);
 }
 
 afterEach(() => {
@@ -200,42 +204,42 @@ describe("工作区文件树文件变更边界", () => {
     const port = 49_701;
     const handle = await mountTree(port);
     await settle();
-    clickByTitle(handle.renderer, "/w/project/src");
+    clickByTitle(handle.renderer, `${ROOT}/src`);
     await settle();
-    expect(titlesOf(handle.renderer)).toContain("/w/project/src/gone");
+    expect(titlesOf(handle.renderer)).toContain(`${ROOT}/src/gone`);
 
     // 展开 gone 会发起请求，但该请求在删除派发之后才会返回。
-    clickByTitle(handle.renderer, "/w/project/src/gone");
+    clickByTitle(handle.renderer, `${ROOT}/src/gone`);
     await settle();
-    expect(handle.deferredPaths).toEqual(["src/gone"]);
+    expect(handle.deferredPaths).toEqual([`${ROOT}/src/gone`]);
 
-    dispatchDelete(handle, "/w/project/src/gone");
+    dispatchDelete(handle, `${ROOT}/src/gone`);
     await settle(300);
-    expect(titlesOf(handle.renderer)).not.toContain("/w/project/src/gone");
+    expect(titlesOf(handle.renderer)).not.toContain(`${ROOT}/src/gone`);
     // 删除必须真正中止在途请求，而不是等它返回后再丢弃：请求所用的
     // AbortSignal 必须在删除派发后已经进入 aborted 状态。
-    const inFlightSignal = handle.listingSignals.get("src/gone");
+    const inFlightSignal = handle.listingSignals.get(`${ROOT}/src/gone`);
     expect(inFlightSignal?.aborted).toBe(true);
 
     handle.releaseDeferred();
     await settle(50);
-    expect(titlesOf(handle.renderer)).not.toContain("/w/project/src/gone");
-    expect(titlesOf(handle.renderer)).toContain("/w/project/src/kept");
+    expect(titlesOf(handle.renderer)).not.toContain(`${ROOT}/src/gone`);
+    expect(titlesOf(handle.renderer)).toContain(`${ROOT}/src/kept`);
   });
 
   test("删除子目录后父级强制重新读取后端，被删除的子目录不再渲染", async () => {
     const port = 49_702;
     const handle = await mountTree(port);
     await settle();
-    clickByTitle(handle.renderer, "/w/project/src");
+    clickByTitle(handle.renderer, `${ROOT}/src`);
     await settle();
-    expect(titlesOf(handle.renderer)).toContain("/w/project/src/kept");
-    dispatchDelete(handle, "/w/project/src/kept");
+    expect(titlesOf(handle.renderer)).toContain(`${ROOT}/src/kept`);
+    dispatchDelete(handle, `${ROOT}/src/kept`);
     await settle(300);
-    expect(handle.deletedPaths.has("src/kept")).toBe(true);
-    expect(handle.listingRequests.filter((path) => path === "src").length)
+    expect(handle.deletedPaths.has(`${ROOT}/src/kept`)).toBe(true);
+    expect(handle.listingRequests.filter((path) => path === `${ROOT}/src`).length)
       .toBeGreaterThan(1);
-    expect(titlesOf(handle.renderer)).not.toContain("/w/project/src/kept");
-    expect(titlesOf(handle.renderer)).toContain("/w/project/src/gone");
+    expect(titlesOf(handle.renderer)).not.toContain(`${ROOT}/src/kept`);
+    expect(titlesOf(handle.renderer)).toContain(`${ROOT}/src/gone`);
   });
 });

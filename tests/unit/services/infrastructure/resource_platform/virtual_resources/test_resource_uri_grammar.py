@@ -530,7 +530,7 @@ def test_workspace_files_root_uses_same_file_segment_profile(children: tuple[str
     assert parse_resource_uri(parsed.display_uri) == parsed
 
 
-@pytest.mark.parametrize("scope", ["user", "gateway", "inline"])
+@pytest.mark.parametrize("scope", ["user", "inline"])
 def test_files_root_rejects_non_workspace_scope(scope: str) -> None:
     with pytest.raises(ResourceUriGrammarError) as excinfo:
         parse_resource_uri(f"boxteam://{scope}/test/resources/files/root")
@@ -643,3 +643,16 @@ def test_session_artifact_builder_rejects_segment_injection(segments: tuple[str,
     with pytest.raises(ResourceUriGrammarError) as excinfo:
         resource_display_uri(scope="workspace", scope_id="ws-1", kind="session", tail_segments=segments)
     assert excinfo.value.reason_code == "invalid_character"
+
+
+def test_gateway_files_requires_v7_directory_and_real_gateway_identity():
+    gateway_id = "gateway_01900000000070008000000000000001"
+    directory_id = "01900000000070008000000000000002"
+    uri = resource_display_uri(scope="gateway", scope_id=gateway_id, kind="files",
+                               tail_segments=(directory_id, "中文 %.txt"))
+    assert parse_resource_uri(uri).tail_segments == (directory_id, "中文 %.txt")
+    assert "%E4%B8%AD" in uri and "%25" in uri
+    for scope_id, root in (("local", directory_id), (gateway_id, "root"),
+                           (gateway_id, directory_id.replace("7000", "4000"))):
+        with pytest.raises(ResourceUriGrammarError):
+            resource_display_uri(scope="gateway", scope_id=scope_id, kind="files", tail_segments=(root,))

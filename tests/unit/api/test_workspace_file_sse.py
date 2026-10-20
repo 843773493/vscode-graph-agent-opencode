@@ -193,3 +193,31 @@ async def workspace_service(tmp_path: Path):
     yield service
     await service.stop()
     service.close()
+
+
+@pytest.mark.asyncio
+async def test_real_watch_failure_keeps_native_path_in_log_only(
+    monkeypatch: pytest.MonkeyPatch, workspace_service: WorkspaceService, caplog: pytest.LogCaptureFixture,
+) -> None:
+    import app.services.infrastructure.workspace_file_watch_service as watch_module
+
+    root = Path(workspace_service.root_path)
+    async def failing_watch(*_roots, **_options):
+        yield set()
+        raise PermissionError(13, "Permission denied", str(root / "private.txt"))
+
+    monkeypatch.setattr(watch_module, "awatch", failing_watch)
+    watcher = watch_module.WorkspaceFileWatchService(workspace_root=root)
+    response = await stream_workspace_file_events(
+        WorkspaceFileWatchRequest(paths=[]), "local-dev-token",
+        watch_service=watcher, workspace_service=workspace_service,
+    )
+    try:
+        frame = await asyncio.wait_for(anext(response.body_iterator), timeout=3)
+        assert frame.startswith("event: error\ndata: ")
+        assert "PermissionError" in frame and "errno=13" in frame
+        assert str(root) not in frame
+        assert str(root / "private.txt") in caplog.text
+    finally:
+        await response.body_iterator.aclose()
+        await watcher.shutdown()

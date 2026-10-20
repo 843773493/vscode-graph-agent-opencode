@@ -1,121 +1,28 @@
-import {
-  decodeFileTreePath,
-  filesystemFileTreePath,
-} from "../../../api";
-
-export const ROOT_PATH = "";
-export const FILESYSTEM_ROOT_PATH = filesystemFileTreePath("/");
-
-export interface FileTreePathLocation {
-  scope: "workspace" | "filesystem";
-  path: string;
+// 这里只操作后端已通过 grammar 的 URI；不解析原生目标机器路径。
+export function parentFileTreePath(uri: string): string {
+  const files = uri.indexOf("/resources/files/");
+  if (files < 0) return "";
+  const rootEnd = uri.indexOf("/", files + "/resources/files/".length);
+  if (rootEnd < 0) return uri;
+  return uri.slice(0, uri.lastIndexOf("/"));
 }
 
-// 文件树路径的权威语义由 api.workspaceFilesystem 的 decodeFileTreePath 决定；
-// 这里只做“去掉尾部斜杠并把反斜杠折成斜杠”的展示级归一，供父子比较使用。
-export function normalizedTreePath(treePath: string): FileTreePathLocation {
-  const location = decodeFileTreePath(treePath);
-  return {
-    scope: location.scope,
-    path: location.path.replace(/\\/g, "/").replace(/\/$/, ""),
-  };
-}
-
-export function parentFileTreePath(treePath: string): string {
-  const location = normalizedTreePath(treePath);
-  const separatorIndex = location.path.lastIndexOf("/");
-  if (location.scope === "workspace") {
-    return separatorIndex < 0 ? ROOT_PATH : location.path.slice(0, separatorIndex);
-  }
-  let parent = separatorIndex <= 0 ? "/" : location.path.slice(0, separatorIndex);
-  if (/^[A-Za-z]:$/.test(parent)) {
-    parent += "/";
-  }
-  return filesystemFileTreePath(parent);
-}
-
-function isAbsolutePath(path: string): boolean {
-  return path.startsWith("/") || /^[A-Za-z]:\//.test(path);
-}
-
-// Windows 盘符大小写不敏感，POSIX 路径大小写敏感。只对盘符形态的绝对路径折叠大小写，
-// 不能全局 toLowerCase：Linux 下 `/Home` 与 `/home` 是两个不同目录，macOS 的敏感度
-// 取决于文件系统格式，都不该由前端擅自归一。
-function caseInsensitiveIfWindowsDrive(path: string): string {
-  return /^[A-Za-z]:\//.test(path) ? path.toLowerCase() : path;
-}
-
-export function changedPathToTreePath(
-  path: string,
-  workspaceRoot: string | null,
-): string | null {
-  const normalized = path.trim().replace(/\\/g, "/");
-  if (!normalized) {
-    return null;
-  }
-  if (!isAbsolutePath(normalized)) {
-    const relative = normalized.replace(/^\.\//, "");
-    if (relative.split("/").includes("..")) {
-      return null;
-    }
-    return relative;
-  }
-  const rawRoot = workspaceRoot?.replace(/\\/g, "/") ?? "";
-  const normalizedRoot = rawRoot === "/" ? "/" : rawRoot.replace(/\/$/, "");
-  const comparePath = caseInsensitiveIfWindowsDrive(normalized);
-  const compareRoot = caseInsensitiveIfWindowsDrive(normalizedRoot);
-  if (compareRoot && comparePath === compareRoot) {
-    return ROOT_PATH;
-  }
-  if (compareRoot === "/" && comparePath.startsWith("/")) {
-    return normalized.slice(1);
-  }
-  if (compareRoot && comparePath.startsWith(`${compareRoot}/`)) {
-    return normalized.slice(normalizedRoot.length + 1);
-  }
-  return filesystemFileTreePath(normalized);
+export function changedPathToTreePath(uri: string): string {
+  if (!uri.startsWith("boxteam://")) throw new Error("文件变更事件缺少资源 URI");
+  return uri;
 }
 
 export function isTreePathInside(candidate: string, ancestor: string): boolean {
-  const candidateLocation = normalizedTreePath(candidate);
-  const ancestorLocation = normalizedTreePath(ancestor);
-  if (candidateLocation.scope !== ancestorLocation.scope) {
-    return false;
-  }
-  // 与 changedPathToTreePath 保持同一大小写语义：否则同一对 Windows 盘符路径在
-  // 「变更路径改写」里被认作同一棵树，在这里却被判成两棵，展开态与失效判定会互相矛盾。
-  const candidatePath = caseInsensitiveIfWindowsDrive(candidateLocation.path);
-  const ancestorPath = caseInsensitiveIfWindowsDrive(ancestorLocation.path);
-  if (!ancestorPath) {
-    return true;
-  }
-  return candidatePath === ancestorPath
-    || candidatePath.startsWith(`${ancestorPath}/`);
+  return candidate === ancestor || Boolean(ancestor && candidate.startsWith(ancestor + "/"));
 }
 
-export function shortWorkspaceLabel(
-  workspaceRoot: string | null,
-  workspaceName: string | null,
-): string {
-  return workspaceName || workspaceRoot?.split(/[\\/]/).filter(Boolean).pop() || "workspace";
+export function shortWorkspaceLabel(_workspaceRoot: string | null, workspaceName: string | null): string {
+  return workspaceName || "workspace";
 }
 
-export function absolutePathForTreePath(
-  treePath: string,
-  workspaceRoot: string | null,
-): string {
-  const location = decodeFileTreePath(treePath);
-  if (location.scope === "filesystem") {
-    return location.path;
-  }
-  if (!workspaceRoot) {
-    throw new Error("当前工作区缺少根目录，无法添加快捷路径");
-  }
-  if (!location.path) {
-    return workspaceRoot;
-  }
-  const separator = workspaceRoot.includes("\\") ? "\\" : "/";
-  return `${workspaceRoot.replace(/[\\/]$/, "")}${separator}${location.path.split("/").join(separator)}`;
+export function referenceForTreePath(uri: string): string {
+  if (!uri.startsWith("boxteam://")) throw new Error("文件树尚未取得资源 URI");
+  return uri;
 }
 
 export function parseClipboardFilePaths(text: string): [string, ...string[]] {
@@ -159,6 +66,7 @@ export function parseClipboardFilePaths(text: string): [string, ...string[]] {
       if (unquoted.startsWith("file://")) {
         return parseFileUri(unquoted);
       }
+      if (unquoted.startsWith("boxteam://")) return unquoted;
       if (unquoted.startsWith("/") || /^[A-Za-z]:[\\/]/.test(unquoted)) {
         return unquoted;
       }

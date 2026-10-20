@@ -16,7 +16,7 @@ const emptySettings: SessionFileTreeSettings = {
 
 
 describe("工作区文件树根节点", () => {
-  test("默认同时展示当前工作区和纯路径根目录", () => {
+  test("根 URI 尚未返回时显示加载态并禁止操作", () => {
     const html = renderToStaticMarkup(
       <WorkspaceFileTree
         active
@@ -36,8 +36,9 @@ describe("工作区文件树根节点", () => {
     );
 
     expect(html).toContain("project");
-    expect(html).toContain(">/<");
-    expect(html).not.toContain("文件系统");
+    expect(html).toContain("正在读取文件根");
+    expect(html).toContain("文件系统");
+    expect(html).toContain('disabled=""');
   });
 
   test("文件树加载提示位于整个目录之后，不推移目录行", () => {

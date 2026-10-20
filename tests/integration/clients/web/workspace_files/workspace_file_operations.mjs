@@ -39,7 +39,7 @@ window.statuses = [];
 window.errors = [];
 window.committed = [];
 function Harness({ route }) {
-  const expanded = useRef(new Set(["target", "other"]));
+  const expanded = useRef(new Set());
   const shortcuts = useRef(new Set());
   const active = useRef(null);
   const directories = useWorkspaceFileTreeDirectories({ port: Number(location.port), workspaceId: route,
@@ -50,7 +50,18 @@ function Harness({ route }) {
     directoryVersion: directories.directoryVersion, onStatusChange: (message) => window.statuses.push(message),
     onError: (message) => window.errors.push(message),
     onCommitted: (parent) => { expanded.current.add(parent); window.committed.push({ route, parent }); } });
-  useEffect(() => { void directories.loadDirectory("target"); void directories.loadDirectory("other"); }, [route]);
+  useEffect(() => {
+    let cancelled = false;
+    void api.getWorkspaceFiles(Number(location.port), "", route).then((result) => {
+      if (cancelled) return;
+      window.fileRoot = result.directory_key.root;
+      window.filePath = (relative) => window.fileRoot + (relative ? "/" + relative : "");
+      expanded.current = new Set([window.filePath("target"), window.filePath("other")]);
+      void directories.loadDirectory(window.filePath("target"));
+      void directories.loadDirectory(window.filePath("other"));
+    }).catch((error) => window.errors.push(String(error)));
+    return () => { cancelled = true; };
+  }, [route]);
   window.driver = { ...operations, ...directories, route };
   return <pre>{JSON.stringify({ route, directories: directories.directories, pending: operations.pendingCreations })}</pre>;
 }
@@ -174,11 +185,11 @@ async function control(url, method = "GET") {
 }
 async function loadPage(page, base) {
   await page.goto(base, { waitUntil: "load" });
-  await page.waitForFunction(() => window.driver?.directoryVersion("target") && window.driver?.directoryVersion("other"));
+  await page.waitForFunction(() => window.filePath && window.driver?.directoryVersion(window.filePath("target")) && window.filePath && window.driver?.directoryVersion(window.filePath("other")));
 }
 function lists(inspection, route, directory) {
   return inspection.requests.filter((value) => value.route === route && value.path === "/api/v1/workspace/files"
-    && (new URLSearchParams(value.query).get("path") || "") === directory).length;
+    && (new URLSearchParams(value.query).get("path") || "") === evidence.backend.owners[route].uri + (directory ? "/" + directory : "")).length;
 }
 try {
   let ready = false;
@@ -249,11 +260,21 @@ try {
   ];
   const sampleStart = await control("/control/gw-files-a/inspect");
   for (const sample of samples) {
+    const hasSource = ["copy", "paste"].includes(sample.command.kind);
+    if (hasSource) await control("/control/gw-files-a/gate/pause", "POST");
     await page.evaluate(async ({ name, command }) => {
       if (command.kind === "upload") command.entries = [{ file: new Blob(["真实上传样本"]), name, relativePath: name }];
-      await window.driver.submit("target", command);
+      await window.driver.submit(window.filePath("target"), command);
     }, sample);
-    await page.waitForFunction((name) => window.driver.directoriesRef.current.target?.items.some((item) => item.name === name), sample.name);
+    if (hasSource) {
+      const stored = await page.evaluate(async () =>
+        (await (await window.storage.openWorkspaceFileIntentStore()).loadForWorkspace("gw-files-a"))[0]);
+      const sources = stored.command.kind === "copy" ? [stored.command.sourcePath] : stored.command.sourcePaths;
+      assert(sources.every((value) => value.startsWith("boxteam://")), "复制来源必须在真实IndexedDB中持久化为URI");
+      assert(!JSON.stringify(stored).includes(owners["gw-files-a"].root_path), "原生输入不得落入浏览器持久intent");
+      await control("/control/gw-files-a/gate/release", "POST");
+    }
+    await page.waitForFunction((name) => window.driver.directoriesRef.current[window.filePath("target")]?.items.some((item) => item.name === name), sample.name);
   }
   const sampleEnd = await control("/control/gw-files-a/inspect");
   assert(sampleEnd.operations.length === 5 && sampleEnd.operations.every((value) => value.state === "committed"), "五类入口必须真实提交");
@@ -274,7 +295,7 @@ try {
   });
   const originalUpload = await page.evaluate(async () => {
     const bytes = Uint8Array.from({ length: 65536 }, (_, index) => index % 251);
-    await window.driver.submit("target", { kind: "upload", entries: [
+    await window.driver.submit(window.filePath("target"), { kind: "upload", entries: [
       { file: new Blob([bytes]), name: "上传.bin", relativePath: "上传.bin" },
     ] });
     const records = await (await window.storage.openWorkspaceFileIntentStore()).loadForWorkspace("gw-files-a");
@@ -294,7 +315,7 @@ try {
   assert(restored.bytes.every((byte, index) => byte === index % 251) && restored.bytes.length === 65536, "真实IDB刷新后Blob正文必须完整");
   const beforeFinish = await control("/control/gw-files-a/inspect");
   await control("/control/gw-files-a/gate/release", "POST");
-  await page.waitForFunction(() => window.driver.directoriesRef.current.target?.items.some((item) => item.name === "上传.bin")
+  await page.waitForFunction(() => window.driver.directoriesRef.current[window.filePath("target")]?.items.some((item) => item.name === "上传.bin")
     && window.statuses.includes("文件操作已完成"));
   const afterFinish = await control("/control/gw-files-a/inspect");
   assert(afterFinish.operations.length === 6 && afterFinish.operations[5].operation_id === originalUpload.id, "响应丢失后必须查询原受理");
@@ -308,23 +329,23 @@ try {
 
   await page.route("**/api/v1/workspace/files/entries?*", (route) => route.abort("failed"));
   const unknown = await page.evaluate(async () => {
-    await window.driver.submit("target", { kind: "create", name: "未受理.txt", entryKind: "file" });
+    await window.driver.submit(window.filePath("target"), { kind: "create", name: "未受理.txt", entryKind: "file" });
     return (await (await window.storage.openWorkspaceFileIntentStore()).loadForWorkspace("gw-files-a"))[0].intent;
   });
   await page.unroute("**/api/v1/workspace/files/entries?*");
   await loadPage(page, base);
-  await page.waitForFunction(() => window.driver.directoriesRef.current.target?.items.some((item) => item.name === "未受理.txt"));
+  await page.waitForFunction(() => window.driver.directoriesRef.current[window.filePath("target")]?.items.some((item) => item.name === "未受理.txt"));
   const resent = await control("/control/gw-files-a/inspect");
   assert(resent.operations.length === 7 && resent.operations[6].operation_id === unknown.client_operation_id, "未受理未知结果只能沿原ID重发");
   evidence.unknownBeforeAcceptance = { original: unknown, final: resent.operations[6] };
 
   await control("/control/gw-files-a/gate/pause", "POST");
   const switched = await page.evaluate(async () => {
-    await window.driver.submit("target", { kind: "create", name: "原目标.txt", entryKind: "file" });
+    await window.driver.submit(window.filePath("target"), { kind: "create", name: "原目标.txt", entryKind: "file" });
     return (await (await window.storage.openWorkspaceFileIntentStore()).loadForWorkspace("gw-files-a"))[0];
   });
   await page.evaluate(() => window.mount("gw-files-b"));
-  await page.waitForFunction(() => window.driver.route === "gw-files-b" && window.driver.directoryVersion("target"));
+  await page.waitForFunction(() => window.driver.route === "gw-files-b" && window.driver.directoryVersion(window.filePath("target")));
   await control("/control/gw-files-a/gate/release", "POST");
   await page.waitForTimeout(600);
   const b = await control("/control/gw-files-b/inspect");
@@ -332,14 +353,14 @@ try {
     && ["/entries", "/copy", "/paste", "/upload"].some((suffix) => value.path.endsWith(suffix))), "切换不得把原操作改投B");
   await page.evaluate(() => window.mount("gw-files-a"));
   await page.waitForFunction(() => window.driver.route === "gw-files-a"
-    && window.driver.directoriesRef.current.target?.items.some((item) => item.name === "原目标.txt"));
+    && window.driver.directoriesRef.current[window.filePath("target")]?.items.some((item) => item.name === "原目标.txt"));
   await page.waitForFunction(() => window.committed.some((value) => value.route === "gw-files-a"));
   evidence.switch = { originalId: switched.intent.client_operation_id, originalScope: switched.scope,
     a: await control("/control/gw-files-a/inspect"), b };
 
   const beforeCold = await control("/control/gw-files-a/inspect");
-  await page.evaluate(() => window.driver.submit("cold", { kind: "create", name: "未展开子树", entryKind: "directory" }));
-  await page.waitForFunction(() => window.driver.directoriesRef.current.cold?.items.some((item) => item.name === "未展开子树"));
+  await page.evaluate(() => window.driver.submit(window.filePath("cold"), { kind: "create", name: "未展开子树", entryKind: "directory" }));
+  await page.waitForFunction(() => window.driver.directoriesRef.current[window.filePath("cold")]?.items.some((item) => item.name === "未展开子树"));
   const afterCold = await control("/control/gw-files-a/inspect");
   assert(lists(afterCold, "gw-files-a", "cold") - lists(beforeCold, "gw-files-a", "cold") === 1, "cold目标只按需读取原基线");
   assert(lists(afterCold, "gw-files-a", "cold/未展开子树") === 0, "成功不能请求cold子树");
@@ -364,26 +385,27 @@ try {
   const second = await context.newPage();
   await loadPage(second, base);
   const scope = { gatewayId: "controlled-file-browser-gateway", gatewayWorkspaceId: "idb-only",
-    backendWorkspaceId: owners["gw-files-a"].workspace_id, workspaceRoot: owners["gw-files-a"].root_path, actor: "local" };
-  const key = { workspace_id: scope.backendWorkspaceId, scope: "workspace", root: scope.workspaceRoot, path: "target" };
+    backendWorkspaceId: owners["gw-files-a"].workspace_id, workspaceRoot: owners["gw-files-a"].uri, actor: "local" };
+  const key = { workspace_id: scope.backendWorkspaceId, scope: "workspace", root: scope.workspaceRoot, path: scope.workspaceRoot + "/target" };
   const insert = (targetPage, name) => targetPage.evaluate(async ({ scope, key, name }) =>
-    (await window.storage.openWorkspaceFileIntentStore()).insert({ scope, directoryKey: key, directoryPath: "target",
+    (await window.storage.openWorkspaceFileIntentStore()).insert({ scope, directoryKey: key, directoryPath: key.path,
       directoryRevision: 1, command: { kind: "create", name, entryKind: "file" } }), { scope, key, name });
   const pair = await Promise.all([insert(page, "tab-a"), insert(second, "tab-b")]);
   assert(pair.map((value) => value.intent.client_sequence).sort().join(",") === "1,2", "真实多tab事务必须分配单调唯一序号");
   for (let index = 0; index < 105; index += 1) await insert(page, "frontier-" + index);
-  const alias = await page.evaluate(async ({ scope, key }) => {
+  const alias = await page.evaluate(async ({ scope, key, nativeTarget }) => {
     const store = await window.storage.openWorkspaceFileIntentStore();
     const before = await store.load(scope);
-    const aliasKey = { ...key, scope: "filesystem", root: "/", path: scope.workspaceRoot + "/target" };
-    const record = await store.insert({ scope, directoryKey: aliasKey, directoryPath: "filesystem:" + aliasKey.path,
+    const [targetUri] = await window.api.resolveWorkspaceFileReferences(Number(location.port), [nativeTarget], "gw-files-a");
+    const aliasKey = { ...key, path: targetUri };
+    const record = await store.insert({ scope, directoryKey: aliasKey, directoryPath: aliasKey.path,
       directoryRevision: 1, command: { kind: "create", name: "alias", entryKind: "file" } });
-    const source = await store.insert({ scope, directoryKey: { ...key, path: "other" }, directoryPath: "other",
-      directoryRevision: 1, command: { kind: "copy", sourceScope: "workspace", sourcePath: "target/tab-a" } });
+    const source = await store.insert({ scope, directoryKey: { ...key, path: scope.workspaceRoot + "/other" }, directoryPath: scope.workspaceRoot + "/other",
+      directoryRevision: 1, command: { kind: "copy", sourceScope: "workspace", sourcePath: scope.workspaceRoot + "/target/tab-a" } });
     return { record, source, priorId: before.at(-1).intent.client_operation_id,
       maxDependencies: Math.max(...(await store.load(scope)).map((value) => value.intent.depends_on.length)) };
-  }, { scope, key });
-  assert(alias.record.intent.directory_revision_from_operation_id === alias.priorId, "跨scope同物理目录必须依赖原前序版本");
+  }, { scope, key, nativeTarget: path.join(owners["gw-files-a"].root_path, "target") });
+  assert(alias.record.intent.directory_revision_from_operation_id === alias.priorId, "原生输入归一同一URI目录后必须依赖原前序版本");
   assert(alias.source.intent.depends_on.includes(alias.record.intent.client_operation_id), "复制来源必须纳入前序依赖");
   assert(alias.maxDependencies <= 2, "连续意图必须只保存依赖前沿，不能突破100上限");
   evidence.multiTab = { pair: pair.map((value) => value.intent), alias };

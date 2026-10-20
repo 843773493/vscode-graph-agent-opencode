@@ -5,6 +5,9 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import WorkspaceFileTree from "./WorkspaceFileTree";
 import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
 
+const ROOT = "boxteam://workspace/backend_files/resources/files/root";
+const FILESYSTEM = "boxteam://gateway/gateway_01900000000070008000000000000001/resources/files/01900000000070008000000000000001";
+
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 
@@ -34,7 +37,7 @@ function installWindow(port: number): void {
 
 function apiResponse(data: unknown): Response {
   if (data && typeof data === "object" && "items" in data && "path" in data) {
-    data = { directory_key: { workspace_id: "backend_files", scope: "workspace", root: "/w/project", path: data.path },
+    data = { directory_key: { workspace_id: "backend_files", scope: "workspace", root: ROOT, path: data.path },
       directory_revision: 1, ...data };
   }
   return Response.json({
@@ -72,6 +75,7 @@ async function mountTree(port: number, failSettings = true): Promise<Harness> {
     if (url.pathname === "/api/gateway/auth/local-credential") {
       return apiResponse({ token: "token" });
     }
+    if (url.pathname === "/api/v1/workspace/files/roots") return apiResponse({ workspace_uri: ROOT, filesystem_uri: FILESYSTEM, filesystem_label: "/" });
     if (url.pathname === "/api/gateway/users/current") {
       return apiResponse({ kind: "guest", user_id: null });
     }
@@ -94,8 +98,8 @@ async function mountTree(port: number, failSettings = true): Promise<Harness> {
     }
     if (url.pathname === "/api/v1/workspace/files") {
       return apiResponse({
-        root_path: url.searchParams.get("path") ?? "",
-        path: url.searchParams.get("path") ?? "",
+        root_path: url.searchParams.get("path") || ROOT,
+        path: url.searchParams.get("path") || ROOT,
         items: [],
         truncated: false,
         next_cursor: null,
@@ -115,7 +119,7 @@ async function mountTree(port: number, failSettings = true): Promise<Harness> {
         activeFilePath={null}
         searchOpen={false}
         collapseVersion={0}
-        expandedPaths={[""]}
+        expandedPaths={[ROOT]}
         onExpandedPathsChange={() => {}}
         onCloseSearch={() => {}}
         onOpenFile={() => {}}

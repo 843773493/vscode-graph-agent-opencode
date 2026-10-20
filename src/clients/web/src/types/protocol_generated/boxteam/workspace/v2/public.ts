@@ -2312,6 +2312,20 @@ export interface WorkspaceFileContentDTO {
   revision: string;
 }
 
+export interface WorkspaceFileRootsDTO {
+  workspace_uri: string;
+  filesystem_uri: string;
+  filesystem_label: string;
+}
+
+export interface WorkspaceFileReferencesRequest {
+  paths: string[];
+}
+
+export interface WorkspaceFileReferencesDTO {
+  uris: string[];
+}
+
 export interface WorkspaceFileCopyRequest {
   source_path: string;
   source_scope?: string | undefined;
@@ -16892,6 +16906,101 @@ export const WorkspaceFileContentDTO: MessageFns<WorkspaceFileContentDTO> = {
     message.size = object.size ?? 0;
     message.modified_at = object.modified_at ?? undefined;
     message.revision = object.revision ?? "";
+    return message;
+  },
+};
+
+function createBaseWorkspaceFileRootsDTO(): WorkspaceFileRootsDTO {
+  return { workspace_uri: "", filesystem_uri: "", filesystem_label: "" };
+}
+
+export const WorkspaceFileRootsDTO: MessageFns<WorkspaceFileRootsDTO> = {
+  fromJSON(object: any): WorkspaceFileRootsDTO {
+    return {
+      workspace_uri: isSet(object.workspace_uri) ? globalThis.String(object.workspace_uri) : "",
+      filesystem_uri: isSet(object.filesystem_uri) ? globalThis.String(object.filesystem_uri) : "",
+      filesystem_label: isSet(object.filesystem_label) ? globalThis.String(object.filesystem_label) : "",
+    };
+  },
+
+  toJSON(message: WorkspaceFileRootsDTO): unknown {
+    const obj: any = {};
+    if (message.workspace_uri !== "") {
+      obj.workspace_uri = message.workspace_uri;
+    }
+    if (message.filesystem_uri !== "") {
+      obj.filesystem_uri = message.filesystem_uri;
+    }
+    if (message.filesystem_label !== "") {
+      obj.filesystem_label = message.filesystem_label;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceFileRootsDTO>, I>>(base?: I): WorkspaceFileRootsDTO {
+    return WorkspaceFileRootsDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceFileRootsDTO>, I>>(object: I): WorkspaceFileRootsDTO {
+    const message = createBaseWorkspaceFileRootsDTO();
+    message.workspace_uri = object.workspace_uri ?? "";
+    message.filesystem_uri = object.filesystem_uri ?? "";
+    message.filesystem_label = object.filesystem_label ?? "";
+    return message;
+  },
+};
+
+function createBaseWorkspaceFileReferencesRequest(): WorkspaceFileReferencesRequest {
+  return { paths: [] };
+}
+
+export const WorkspaceFileReferencesRequest: MessageFns<WorkspaceFileReferencesRequest> = {
+  fromJSON(object: any): WorkspaceFileReferencesRequest {
+    return { paths: globalThis.Array.isArray(object?.paths) ? object.paths.map((e: any) => globalThis.String(e)) : [] };
+  },
+
+  toJSON(message: WorkspaceFileReferencesRequest): unknown {
+    const obj: any = {};
+    if (message.paths?.length) {
+      obj.paths = message.paths;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceFileReferencesRequest>, I>>(base?: I): WorkspaceFileReferencesRequest {
+    return WorkspaceFileReferencesRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceFileReferencesRequest>, I>>(
+    object: I,
+  ): WorkspaceFileReferencesRequest {
+    const message = createBaseWorkspaceFileReferencesRequest();
+    message.paths = object.paths?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseWorkspaceFileReferencesDTO(): WorkspaceFileReferencesDTO {
+  return { uris: [] };
+}
+
+export const WorkspaceFileReferencesDTO: MessageFns<WorkspaceFileReferencesDTO> = {
+  fromJSON(object: any): WorkspaceFileReferencesDTO {
+    return { uris: globalThis.Array.isArray(object?.uris) ? object.uris.map((e: any) => globalThis.String(e)) : [] };
+  },
+
+  toJSON(message: WorkspaceFileReferencesDTO): unknown {
+    const obj: any = {};
+    if (message.uris?.length) {
+      obj.uris = message.uris;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceFileReferencesDTO>, I>>(base?: I): WorkspaceFileReferencesDTO {
+    return WorkspaceFileReferencesDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceFileReferencesDTO>, I>>(object: I): WorkspaceFileReferencesDTO {
+    const message = createBaseWorkspaceFileReferencesDTO();
+    message.uris = object.uris?.map((e) => e) || [];
     return message;
   },
 };

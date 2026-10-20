@@ -104,7 +104,7 @@ async def test_durable_202_original_id_replay_and_terminal_directory_version(fil
         assert result.state == "committed" and result.effect == "complete"
         listing = await case.service.list_files(path="target")
         assert [item.name for item in listing.items] == ["中文 空格.txt"]
-        assert listing.directory_revision == next(value.directory_revision for value in result.directories if value.directory_key.path == "target")
+        assert listing.directory_revision == next(value.directory_revision for value in result.directories if value.directory_key.path == listing.path)
         assert case.owner.store.events(0)[-1]["directories"]
     finally:
         release.set()
@@ -132,7 +132,7 @@ async def test_four_entries_worker_only_and_upload_body_is_durable(file_case):
     receipt = await case.service.upload_file_entries(directory_path="target", scope="workspace", intent=command, actor="local",
                                                     entries=[("子文件夹/上传.txt", stream), ("独立.bin", io.BytesIO(b"\x00\x01"))])
     frozen = case.owner.store.get(receipt.operation_id, "local")
-    incoming = Path(frozen.payload["incoming"])
+    incoming = case.owner._incoming_path(frozen)
     assert (incoming / "body/子文件夹/上传.txt").read_bytes() == b"durable bytes"
     stream.close()
     result = await terminal(case, receipt)
@@ -187,7 +187,7 @@ async def test_created_by_dependency_uses_original_result_and_fails_without_it(f
     first = await case.service.create_file_entry(directory_path="target", scope="workspace", name="created", kind="directory",
                                                intent=await intent(case), actor="local")
     successor = WorkspaceFileMutationIntentDTO(client_operation_id="op_" + uuid4().hex, client_sequence=2,
-                                               directory_key=case.owner.store.get(first.operation_id, "local").payload["directory_key"] | {"path": "target/created"},
+                                               directory_key=case.owner.store.get(first.operation_id, "local").payload["directory_key"] | {"path": case.service.file_paths.reference(case.workspace / "target/created")},
                                                depends_on=[first.operation_id], created_by_operation_id=first.operation_id,
                                                directory_revision_from_operation_id=first.operation_id)
     second = await case.service.create_file_entry(directory_path="", scope="workspace", name="child.txt", kind="file", intent=successor, actor="local")
@@ -308,7 +308,7 @@ async def test_created_directory_replaced_by_same_named_external_directory_is_re
     creator = await case.service.create_file_entry(directory_path="target", scope="workspace",
         name="created", kind="directory", intent=await intent(case), actor="local")
     creator_result = await terminal(case, creator)
-    key = next(value.directory_key for value in creator_result.directories if value.directory_key.path == "target/created")
+    key = next(value.directory_key for value in creator_result.directories if value.directory_key.path == case.service.file_paths.reference(case.workspace / "target/created"))
     entered, release = Event(), Event()
     original = case.owner._execute
 
@@ -357,7 +357,7 @@ async def test_copy_and_upload_directory_output_owns_nested_successor(file_case,
             intent=await intent(case), actor="local", entries=entries)
         path, relative = "target/one/nested", "one/nested" if creator_kind == "upload_many" else "nested"
     creator_result = await terminal(case, creator)
-    key = next(value.directory_key for value in creator_result.directories if value.directory_key.path == path)
+    key = next(value.directory_key for value in creator_result.directories if value.directory_key.path == case.service.file_paths.reference(case.workspace / path))
     successor = WorkspaceFileMutationIntentDTO(client_operation_id="op_" + uuid4().hex, client_sequence=2,
         directory_key=key, depends_on=[creator.operation_id], created_by_operation_id=creator.operation_id,
         directory_revision_from_operation_id=creator.operation_id, relative_child_path=relative)
@@ -492,8 +492,8 @@ async def test_unverified_effect_stops_worker_without_cleanup_or_successor_execu
         result = frozen.receipt
         assert result.state == "running" and result.effect == "unverified"
         assert result.error_code == "reconcile_required" and result.items[0].state == "unverified"
-        assert frozen.token > 0 and Path(frozen.payload["incoming"]).is_dir()
-        assert all(Path(step["stage_root"]).is_dir() for step in frozen.steps)
+        assert frozen.token > 0 and case.owner._incoming_path(frozen).is_dir()
+        assert all(case.owner._stage_root(frozen, index).is_dir() for index in range(len(frozen.steps)))
         assert case.owner.store.cleanup_pending() == ()
         assert not any(value.get("operation_id") == accepted.operation_id for value in case.owner.store.events(0))
         assert case.owner.store.get(successor.operation_id, "local").state == "queued"

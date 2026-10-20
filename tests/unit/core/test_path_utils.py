@@ -47,6 +47,10 @@ class TestPathUtils:
         self.temp_dir = tempfile.mkdtemp()
         self.base_path = Path(self.temp_dir).resolve()
 
+    def test_safe_join_filesystem_root(self):
+        root = Path(self.base_path.anchor)
+        assert safe_join(root, *self.base_path.parts[1:]) == self.base_path
+
     def test_safe_join_normal_paths(self):
         """测试正常路径拼接"""
         result = safe_join(self.base_path, "test", "file.txt")

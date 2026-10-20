@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from contextlib import aclosing
 
@@ -31,7 +32,9 @@ from app.schemas.internal_v2.workspace_observation import (
 )
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.workspace_file_watch_service import WorkspaceFileWatchService
+from app.services.infrastructure.workspace_file_watch_service import (
+    WorkspaceFileWatchService,
+)
 from app.services.infrastructure.workspace_service import WorkspaceService
 from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
 from app.services.orchestration.workspace_observation import (
@@ -76,7 +79,7 @@ async def stream_workspace_observation(
             if cursor is None:
                 cursor = workspace_service.file_operations.store.latest_event_id()
             return OpenedWorkspaceObservation(
-                open_workspace_file_sse(
+                await asyncio.to_thread(open_workspace_file_sse,
                     WorkspaceFileWatchRequest(paths=subscription.paths, after_event_id=cursor),
                     watch_service, workspace_service,
                 ),

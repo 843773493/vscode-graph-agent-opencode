@@ -24,6 +24,8 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.core.identifier import create_uuid_hex
+from app.core.resource_uri import resource_display_uri
 from app.core.sqlite_state import (
     SQLiteDiagnostics,
     SQLiteStateDatabase,
@@ -151,6 +153,44 @@ class GatewayStateStore(
 
     def close(self) -> None:
         self._database.close()
+
+    def bind_native_directory(self, *, gateway_id: str, native_root: str) -> str:
+        """只登记目标文件 owner 已归一的原生根，不枚举或读写该目录。"""
+        root = Path(native_root)
+        if not root.is_absolute() or str(root) != native_root:
+            raise ValueError("原生目录根必须是目标平台的规范绝对路径")
+        directory_id = create_uuid_hex(namespace="native-directory")
+        resource_display_uri(scope="gateway", scope_id=gateway_id, kind="files", tail_segments=(directory_id,))
+        connection = self.connection()
+        try:
+            connection.execute(
+                "INSERT INTO native_directory_roots VALUES (?,?,?) ON CONFLICT(gateway_id,native_root) DO NOTHING",
+                (gateway_id, directory_id, native_root),
+            )
+            row = connection.execute(
+                "SELECT directory_id FROM native_directory_roots WHERE gateway_id=? AND native_root=?",
+                (gateway_id, native_root),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("原生目录根绑定写入后缺失")
+            return str(row[0])
+        finally:
+            connection.close()
+
+    def resolve_native_directory(self, *, gateway_id: str, directory_id: str) -> str:
+        """仅供同机认证文件 owner 临时解析；不复制到工作区业务存储。"""
+        resource_display_uri(scope="gateway", scope_id=gateway_id, kind="files", tail_segments=(directory_id,))
+        connection = self.connection()
+        try:
+            row = connection.execute(
+                "SELECT native_root FROM native_directory_roots WHERE gateway_id=? AND directory_id=?",
+                (gateway_id, directory_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"原生目录根绑定不存在: gateway_id={gateway_id}, directory_id={directory_id}")
+            return str(row[0])
+        finally:
+            connection.close()
 
     def __enter__(self) -> GatewayStateStore:
         return self

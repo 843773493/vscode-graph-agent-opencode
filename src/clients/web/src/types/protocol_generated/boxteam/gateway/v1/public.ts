@@ -12,6 +12,20 @@ export interface AcquireGatewayUserRequest {
   client_label?: string | undefined;
 }
 
+/** 同机认证控制链专用，不作为普通文件响应或联邦资源投影。 */
+export interface NativeDirectoryBindRequest {
+  native_root: string;
+}
+
+export interface NativeDirectoryBindingDTO {
+  uri: string;
+}
+
+export interface NativeDirectoryResolveDTO {
+  uri: string;
+  native_root: string;
+}
+
 export interface ActivateGatewayWorkspaceResultDTO {
   active_workspace_id: string;
 }
@@ -847,6 +861,94 @@ export const AcquireGatewayUserRequest: MessageFns<AcquireGatewayUserRequest> = 
   fromPartial<I extends Exact<DeepPartial<AcquireGatewayUserRequest>, I>>(object: I): AcquireGatewayUserRequest {
     const message = createBaseAcquireGatewayUserRequest();
     message.client_label = object.client_label ?? undefined;
+    return message;
+  },
+};
+
+function createBaseNativeDirectoryBindRequest(): NativeDirectoryBindRequest {
+  return { native_root: "" };
+}
+
+export const NativeDirectoryBindRequest: MessageFns<NativeDirectoryBindRequest> = {
+  fromJSON(object: any): NativeDirectoryBindRequest {
+    return { native_root: isSet(object.native_root) ? globalThis.String(object.native_root) : "" };
+  },
+
+  toJSON(message: NativeDirectoryBindRequest): unknown {
+    const obj: any = {};
+    if (message.native_root !== "") {
+      obj.native_root = message.native_root;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<NativeDirectoryBindRequest>, I>>(base?: I): NativeDirectoryBindRequest {
+    return NativeDirectoryBindRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<NativeDirectoryBindRequest>, I>>(object: I): NativeDirectoryBindRequest {
+    const message = createBaseNativeDirectoryBindRequest();
+    message.native_root = object.native_root ?? "";
+    return message;
+  },
+};
+
+function createBaseNativeDirectoryBindingDTO(): NativeDirectoryBindingDTO {
+  return { uri: "" };
+}
+
+export const NativeDirectoryBindingDTO: MessageFns<NativeDirectoryBindingDTO> = {
+  fromJSON(object: any): NativeDirectoryBindingDTO {
+    return { uri: isSet(object.uri) ? globalThis.String(object.uri) : "" };
+  },
+
+  toJSON(message: NativeDirectoryBindingDTO): unknown {
+    const obj: any = {};
+    if (message.uri !== "") {
+      obj.uri = message.uri;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<NativeDirectoryBindingDTO>, I>>(base?: I): NativeDirectoryBindingDTO {
+    return NativeDirectoryBindingDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<NativeDirectoryBindingDTO>, I>>(object: I): NativeDirectoryBindingDTO {
+    const message = createBaseNativeDirectoryBindingDTO();
+    message.uri = object.uri ?? "";
+    return message;
+  },
+};
+
+function createBaseNativeDirectoryResolveDTO(): NativeDirectoryResolveDTO {
+  return { uri: "", native_root: "" };
+}
+
+export const NativeDirectoryResolveDTO: MessageFns<NativeDirectoryResolveDTO> = {
+  fromJSON(object: any): NativeDirectoryResolveDTO {
+    return {
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
+      native_root: isSet(object.native_root) ? globalThis.String(object.native_root) : "",
+    };
+  },
+
+  toJSON(message: NativeDirectoryResolveDTO): unknown {
+    const obj: any = {};
+    if (message.uri !== "") {
+      obj.uri = message.uri;
+    }
+    if (message.native_root !== "") {
+      obj.native_root = message.native_root;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<NativeDirectoryResolveDTO>, I>>(base?: I): NativeDirectoryResolveDTO {
+    return NativeDirectoryResolveDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<NativeDirectoryResolveDTO>, I>>(object: I): NativeDirectoryResolveDTO {
+    const message = createBaseNativeDirectoryResolveDTO();
+    message.uri = object.uri ?? "";
+    message.native_root = object.native_root ?? "";
     return message;
   },
 };

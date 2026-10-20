@@ -9,7 +9,7 @@ import { Virtuoso } from "react-virtuoso";
 import {
   decodeFileTreePath,
   DEFAULT_BACKEND_PORT,
-  filesystemFileTreePath,
+  getWorkspaceFileRoots,
   getSessionFileTreeSettings,
 } from "../../../api";
 import type {
@@ -41,12 +41,10 @@ import {
   type WorkspaceFileTreeRow,
 } from "./workspaceFileTreeRows";
 import {
-  absolutePathForTreePath as resolveTreeAbsolutePath,
+  referenceForTreePath,
   changedPathToTreePath,
-  FILESYSTEM_ROOT_PATH,
   isTreePathInside,
   parentFileTreePath,
-  ROOT_PATH,
   shortWorkspaceLabel,
 } from "./workspaceFileTreePaths";
 
@@ -94,6 +92,22 @@ export default function WorkspaceFileTree({
   onStatusChange,
 }: WorkspaceFileTreeProps) {
   const port = apiPort ?? DEFAULT_BACKEND_PORT;
+  const [roots, setRoots] = useState<Awaited<ReturnType<typeof getWorkspaceFileRoots>> | null>(null);
+  const [rootsError, setRootsError] = useState<string | null>(null);
+  const [rootsReloadNonce, setRootsReloadNonce] = useState(0);
+  const ROOT_PATH = roots?.workspace_uri ?? "";
+  const FILESYSTEM_ROOT_PATH = roots?.filesystem_uri ?? "";
+  useEffect(() => {
+    let cancelled = false;
+    setRoots(null);
+    setRootsError(null);
+    void getWorkspaceFileRoots(port, workspaceId).then((result) => {
+      if (!cancelled) setRoots(result);
+    }).catch((error: unknown) => {
+      if (!cancelled) setRootsError(errorDisplayMessage(error));
+    });
+    return () => { cancelled = true; };
+  }, [port, workspaceId, rootsReloadNonce]);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(
     () => new Set(restoredExpandedPaths),
   );
@@ -152,7 +166,7 @@ export default function WorkspaceFileTree({
   const acceptFileTreeSettings = useCallback((result: SessionFileTreeSettings) => {
     shortcutTreePathsRef.current = new Set(
       (result.effective_shortcuts ?? []).map((shortcut) => (
-        filesystemFileTreePath(shortcut.path)
+        shortcut.path
       )),
     );
     setSettings(result);
@@ -220,7 +234,7 @@ export default function WorkspaceFileTree({
     [settings],
   );
   useWorkspaceFileWatch({
-    active: active && (!sessionId || settings !== null),
+    active: active && roots !== null && (!sessionId || settings !== null),
     port,
     workspaceId,
     paths: watchedShortcutPaths,
@@ -240,7 +254,7 @@ export default function WorkspaceFileTree({
       // 删除必须先让对应子树整体失效：丢弃缓存并中止在途请求，
       // 否则迟到的响应会把已删除目录重新写回缓存。
       for (const change of changes) {
-        const treePath = changedPathToTreePath(change.path, workspaceRoot);
+        const treePath = changedPathToTreePath(change.path);
         if (treePath === null) {
           onStatusChange(`忽略无法定位的文件变更路径: ${change.path}`);
           continue;
@@ -298,11 +312,10 @@ export default function WorkspaceFileTree({
         });
       }
       for (const change of detail.changes) {
-        const treePath = changedPathToTreePath(change.path, workspaceRoot);
+        const treePath = changedPathToTreePath(change.path);
         const parent = treePath === null ? null : parentFileTreePath(treePath);
         const covered = parent !== null && detail.directories.some((revision) => (
-          (revision.directory_key.scope === "filesystem"
-            ? filesystemFileTreePath(revision.directory_key.path) : revision.directory_key.path) === parent
+          revision.directory_key.path === parent
         ));
         if (covered && change.kind !== "delete") continue;
         pendingFileChangesRef.current.set(`${change.kind}:${change.path}`, { ...change, parentCovered: covered });
@@ -330,21 +343,18 @@ export default function WorkspaceFileTree({
     onStatusChange,
     invalidateDirectoriesUnder,
     workspaceId,
-    workspaceRoot,
+    workspaceRoot, ROOT_PATH, FILESYSTEM_ROOT_PATH, roots?.filesystem_label,
   ]);
 
-  const absolutePathForTreePath = useCallback(
-    (treePath: string): string => resolveTreeAbsolutePath(treePath, workspaceRoot),
-    [workspaceRoot],
-  );
+  const referenceForPath = referenceForTreePath;
 
   const displayPathForTreePath = useCallback((treePath: string): string => {
     const location = decodeFileTreePath(treePath);
     if (location.scope === "filesystem" || workspaceRoot) {
-      return absolutePathForTreePath(treePath);
+      return referenceForPath(treePath);
     }
     return location.path || rootLabel;
-  }, [absolutePathForTreePath, rootLabel, workspaceRoot]);
+  }, [referenceForPath, rootLabel, workspaceRoot]);
 
   useEffect(() => {
     shortcutTreePathsRef.current.clear();
@@ -387,7 +397,9 @@ export default function WorkspaceFileTree({
 
   useEffect(() => {
     abortAllDirectoryRequests();
-    const restoredPaths = new Set(restoredExpandedPathsRef.current);
+    if (!roots) return;
+    const restoredPaths = new Set(restoredExpandedPathsRef.current.filter((path) => path.startsWith("boxteam://")));
+    if (restoredPaths.size === 0) restoredPaths.add(roots.workspace_uri);
     commitExpandedPaths(restoredPaths);
     resetDirectories();
     if (activeRef.current) {
@@ -400,9 +412,10 @@ export default function WorkspaceFileTree({
     return () => {
       abortAllDirectoryRequests();
     };
-  }, [abortAllDirectoryRequests, loadDirectory, resetDirectories, workspaceId]);
+  }, [abortAllDirectoryRequests, loadDirectory, resetDirectories, workspaceId, roots]);
 
   useEffect(() => {
+    if (!roots) return;
     const resumedAfterPause = !previousActiveRef.current && active;
     previousActiveRef.current = active;
     activeRef.current = active;
@@ -429,18 +442,19 @@ export default function WorkspaceFileTree({
       (path) => loadDirectory(path, resumedAfterPause),
       parentFileTreePath,
     );
-  }, [abortAllDirectoryRequests, active, loadDirectory, updateDirectories]);
+  }, [abortAllDirectoryRequests, active, loadDirectory, updateDirectories, roots]);
 
   useEffect(() => {
     if (lastCollapseVersionRef.current === collapseVersion) {
       return;
     }
     lastCollapseVersionRef.current = collapseVersion;
+    if (!ROOT_PATH) return;
     const collapsedPaths = [ROOT_PATH];
     commitExpandedPaths(new Set(collapsedPaths));
     scheduleExpandedPathsPersistence(collapsedPaths);
     onStatusChange("文件树已全部折叠");
-  }, [collapseVersion, onStatusChange, scheduleExpandedPathsPersistence]);
+  }, [collapseVersion, onStatusChange, scheduleExpandedPathsPersistence, ROOT_PATH]);
 
   useEffect(() => {
     if (!searchOpen) {
@@ -480,7 +494,7 @@ export default function WorkspaceFileTree({
     port,
     workspaceId,
     sessionId,
-    absolutePathForTreePath,
+    referenceForTreePath: referenceForPath,
     reconcileDirectories,
     acceptSnapshots,
     directoryVersion,
@@ -500,11 +514,11 @@ export default function WorkspaceFileTree({
     if (!isExpandableFileTreeNode(node)) {
       const size = formatByteSize(node.size);
       onOpenFile(node);
-      const absolutePath = absolutePathForTreePath(node.path);
-      onStatusChange(size ? `${absolutePath} · ${size}` : absolutePath);
+      const uri = referenceForPath(node.path);
+      onStatusChange(size ? `${uri} · ${size}` : uri);
       return;
     }
-    toggleDirectory(node.path, absolutePathForTreePath(node.path));
+    toggleDirectory(node.path, referenceForPath(node.path));
   };
 
   // 与 buildVisibleFileTreeRows 的搜索判定保持同一语义：目录才向下递归，
@@ -649,9 +663,9 @@ export default function WorkspaceFileTree({
   const defaultShortcutPaths = new Set(
     (settings?.default_shortcuts ?? []).map((shortcut) => shortcut.path),
   );
-  const rootExpanded = expandedPaths.has(ROOT_PATH);
-  const filesystemRootExpanded = expandedPaths.has(FILESYSTEM_ROOT_PATH);
-  const visibleRows = useMemo(() => buildVisibleFileTreeRows({
+  const rootExpanded = Boolean(roots && expandedPaths.has(ROOT_PATH));
+  const filesystemRootExpanded = Boolean(roots && expandedPaths.has(FILESYSTEM_ROOT_PATH));
+  const visibleRows = useMemo(() => roots ? buildVisibleFileTreeRows({
     directories,
     expandedPaths,
     shortcuts,
@@ -659,15 +673,14 @@ export default function WorkspaceFileTree({
     workspaceLabel: rootLabel,
     workspaceTitle: workspaceRoot || rootLabel,
     workspaceRootPath: ROOT_PATH,
-    filesystemRootPath: FILESYSTEM_ROOT_PATH,
-    shortcutPath: filesystemFileTreePath,
-  }), [
+    filesystemRootPath: FILESYSTEM_ROOT_PATH, filesystemLabel: roots?.filesystem_label ?? "文件系统",
+  }) : [], [
     directories,
     expandedPaths,
     rootLabel,
     searchQuery,
     shortcuts,
-    workspaceRoot,
+    workspaceRoot, ROOT_PATH, FILESYSTEM_ROOT_PATH, roots?.filesystem_label,
   ]);
 
   const searchStatus = useMemo(() => {
@@ -795,6 +808,8 @@ export default function WorkspaceFileTree({
 
   return (
     <div className="workspace-file-tree">
+      {rootsError ? <div className="files-tree-error">{rootsError}<button type="button" onClick={() => setRootsReloadNonce((value) => value + 1)}>重试</button></div> : null}
+      {!roots && !rootsError ? <div className="files-tree-loading">正在读取文件根…</div> : null}
       {searchOpen ? (
         <div className="files-tree-search">
           <input
@@ -879,7 +894,7 @@ export default function WorkspaceFileTree({
         ) : (
           <>
         {shortcuts.map((shortcut) => {
-          const treePath = filesystemFileTreePath(shortcut.path);
+          const treePath = shortcut.path;
           const expanded = expandedPaths.has(treePath);
           return (
             <div className="files-tree-shortcut" key={shortcut.path}>
@@ -915,6 +930,7 @@ export default function WorkspaceFileTree({
           type="button"
           className="files-tree-item root files-tree-row"
           title={workspaceRoot || rootLabel}
+          disabled={!roots}
           aria-expanded={rootExpanded}
           onClick={() => toggleDirectory(
             ROOT_PATH,
@@ -938,13 +954,14 @@ export default function WorkspaceFileTree({
         <button
           type="button"
           className="files-tree-item root files-tree-row"
-          title="/"
+          title={roots?.filesystem_label ?? "文件系统"}
+          disabled={!roots}
           aria-expanded={filesystemRootExpanded}
-          onClick={() => toggleDirectory(FILESYSTEM_ROOT_PATH, "/")}
+          onClick={() => toggleDirectory(FILESYSTEM_ROOT_PATH, roots?.filesystem_label ?? "文件系统")}
           onContextMenu={(event) => openContextMenu(
             event,
             FILESYSTEM_ROOT_PATH,
-            "/",
+            roots?.filesystem_label ?? "文件系统",
             "directory",
           )}
         >
@@ -953,7 +970,7 @@ export default function WorkspaceFileTree({
             aria-hidden="true"
           />
           <span className="codicon codicon-file-directory file-icon directory" aria-hidden="true" />
-          <span className="file-label">/</span>
+          <span className="file-label">{roots?.filesystem_label ?? "文件系统"}</span>
         </button>
         {filesystemRootExpanded ? renderDirectory(FILESYSTEM_ROOT_PATH, 0) : null}
           </>

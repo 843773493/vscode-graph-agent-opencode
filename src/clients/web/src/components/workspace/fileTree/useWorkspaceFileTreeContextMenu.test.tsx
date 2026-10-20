@@ -13,6 +13,8 @@ import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
 
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 const originalFetch = globalThis.fetch;
+const workspaceRootUri = "boxteam://workspace/ws-1/resources/files/root";
+const treePath = (path: string): string => path ? `${workspaceRootUri}/${path}` : workspaceRootUri;
 
 function installWindow(overrides: Record<string, unknown> = {}): void {
   Object.defineProperty(globalThis, "window", {
@@ -30,8 +32,8 @@ function installWindow(overrides: Record<string, unknown> = {}): void {
 
 function menuTarget(overrides: Partial<FileTreeContextMenuTarget> = {}): FileTreeContextMenuTarget {
   return {
-    treePath: "src/a.txt",
-    absolutePath: "/ws/src/a.txt",
+    treePath: treePath("src/a.txt"),
+    uri: treePath("src/a.txt"),
     label: "a.txt",
     kind: "file",
     shortcutSource: null,
@@ -43,7 +45,7 @@ function menuTarget(overrides: Partial<FileTreeContextMenuTarget> = {}): FileTre
 
 interface HarnessOptions {
   sessionId?: string;
-  absolutePathForTreePath?: (treePath: string) => string;
+  referenceForTreePath?: (treePath: string) => string;
   reconcileDirectories?: () => Promise<void>;
   loadDirectory?: (path: string, force?: boolean, append?: boolean) => Promise<boolean>;
   acceptFileTreeSettings?: (result: SessionFileTreeSettings) => void;
@@ -66,8 +68,8 @@ function mountMenu(options: HarnessOptions = {}): {
       port: 8060,
       workspaceId: "gw_test",
       sessionId: options.sessionId ?? "ses_1",
-      absolutePathForTreePath: options.absolutePathForTreePath
-        ?? ((treePath: string) => `/ws/${treePath}`),
+      referenceForTreePath: options.referenceForTreePath
+        ?? ((treePath: string) => treePath),
       reconcileDirectories: options.reconcileDirectories ?? (async () => {}),
       acceptSnapshots: (result) => { replaced.push(result); },
       directoryVersion: () => null,
@@ -112,14 +114,14 @@ describe("文件树右键菜单", () => {
     act(() => {
       harness.api().openContextMenu(
         clickEvent() as never,
-        "src/a.txt",
+        treePath("src/a.txt"),
         "a.txt",
         "file",
       );
     });
     expect(harness.api().contextMenu).toEqual({
-      treePath: "src/a.txt",
-      absolutePath: "/ws/src/a.txt",
+      treePath: treePath("src/a.txt"),
+      uri: treePath("src/a.txt"),
       label: "a.txt",
       kind: "file",
       shortcutSource: null,
@@ -135,12 +137,12 @@ describe("文件树右键菜单", () => {
       loadDirectory: async (path: string) => { requested.push(path); return true; },
     });
     await act(async () => {
-      await harness.api().refreshTargetDirectory(menuTarget({ treePath: "src", kind: "directory" }));
+      await harness.api().refreshTargetDirectory(menuTarget({ treePath: treePath("src"), uri: treePath("src"), kind: "directory" }));
     });
     await act(async () => {
-      await harness.api().refreshTargetDirectory(menuTarget({ treePath: "src/a.txt" }));
+      await harness.api().refreshTargetDirectory(menuTarget({ treePath: treePath("src/a.txt"), uri: treePath("src/a.txt") }));
     });
-    expect(requested).toEqual(["src", "src"]);
+    expect(requested).toEqual([treePath("src"), treePath("src")]);
   });
 
   test("动作失败写入错误横幅并同步状态栏，成功时清空旧错误", async () => {
@@ -277,14 +279,14 @@ describe("文件树右键菜单", () => {
       },
     });
     act(() => {
-      harness.api().requestUpload(menuTarget({ treePath: "src", kind: "directory" }));
+      harness.api().requestUpload(menuTarget({ treePath: treePath("src"), uri: treePath("src"), kind: "directory" }));
       harness.api().handleUploadInput([new File(["x"], "a.txt")]);
     });
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(requested).toEqual([{ path: "src", force: true }]);
+    expect(requested).toEqual([{ path: treePath("src"), force: true }]);
     expect(harness.statuses.some((text) => text.startsWith("上传本地文件失败: "))).toBe(true);
   });
 });

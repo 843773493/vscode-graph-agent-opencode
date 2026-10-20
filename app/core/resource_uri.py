@@ -25,6 +25,8 @@ _SCOPE_KEYWORDS: Final = frozenset({"workspace", "user", "gateway", "inline"})
 _RESOURCE_KINDS: Final = frozenset({"agent-spec", "skills", "config", "session", "workspace", "folder", "files"})
 _NAME_CHARSET: Final = frozenset(string.ascii_letters + string.digits + "_-")
 _INVALID_PERCENT_ESCAPE: Final = re.compile(r"%(?![0-9A-Fa-f]{2})")
+_DIRECTORY_ID: Final = re.compile(r"[0-9a-f]{12}7[0-9a-f]{3}[89ab][0-9a-f]{15}")
+_GATEWAY_ID: Final = re.compile(r"gateway_[0-9a-f]{32}")
 # 产物末段保留原 owner 的业务 profile；工具结果的固定 .txt 不代表开放文件 child。
 _SESSION_ARTIFACT_ID_PATTERNS: Final = {
     "attachments": re.compile(r"att_[0-9a-f]{32}"),
@@ -180,6 +182,17 @@ def _expect_fixed_segment(segment: str, expected: str) -> None:
     )
 
 
+def _validate_files_root(scope: str, scope_id: str, root: str) -> None:
+    if scope == "workspace":
+        _expect_fixed_segment(root, "root")
+    elif scope == "gateway":
+        _validate_dynamic_segment(root, field="directory id")
+        if _GATEWAY_ID.fullmatch(scope_id) is None or _DIRECTORY_ID.fullmatch(root) is None:
+            raise ResourceUriGrammarError("invalid_character", "Gateway files 根必须使用真实 Gateway ID 和 UUIDv7 directory_id")
+    else:
+        raise ResourceUriGrammarError("malformed_path", "files 只属于 workspace 或 gateway scope")
+
+
 def _parsed(
     scope: str,
     scope_id: str,
@@ -272,9 +285,7 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
                 f"{kind} URI 必须携带已登记的目录根: {uri!r}",
             )
         if kind == "files":
-            if scope != "workspace":
-                raise ResourceUriGrammarError("malformed_path", "files/root 只属于 workspace scope")
-            _expect_fixed_segment(tails[0], "root")
+            _validate_files_root(scope, body[0], tails[0])
         else:
             _validate_dynamic_segment(tails[0], field="skill name")
         children = [_decode_file_segment(segment) for segment in tails[1:]]
@@ -385,7 +396,7 @@ def resource_display_uri(
         if kind == "skills":
             _validate_dynamic_segment(tail_segments[0], field="skill name")
         else:
-            _expect_fixed_segment(tail_segments[0], "root")
+            _validate_files_root(scope, scope_id, tail_segments[0])
         tail_segments = (
             tail_segments[0], *(_encode_file_segment(segment) for segment in tail_segments[1:])
         )

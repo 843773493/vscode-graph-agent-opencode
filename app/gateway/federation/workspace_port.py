@@ -325,9 +325,19 @@ class WorkspaceSessionMainPort:
                         )
                         result = ResourceNavigationResultDTO.model_validate(data)
                     elif resource.scope == "gateway" and resource.scope_id == gateway_id:
-                        if self._skill_source_owner is None:
-                            raise RuntimeError("Gateway Skill navigation owner 尚未装配")
-                        result = await self._skill_source_owner.navigate(navigation)
+                        if resource.kind == "files":
+                            # 与本机导航使用相同的稳定选择；URI 根始终由 Gateway binding 解析。
+                            if not self._backend_urls:
+                                raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "原生目录没有可用的同机文件 owner")
+                            data = await self._request(
+                                workspace_id=min(self._backend_urls), method="POST", path="/api/v1/resources/navigation",
+                                origin=origin, body=navigation.model_dump(mode="json"), timeout=timeout,
+                            )
+                            result = ResourceNavigationResultDTO.model_validate(data)
+                        else:
+                            if self._skill_source_owner is None:
+                                raise RuntimeError("Gateway Skill navigation owner 尚未装配")
+                            result = await self._skill_source_owner.navigate(navigation)
                     else:
                         raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "导航 scope 未共享或不存在")
             except ResourceUriResolveError as error:

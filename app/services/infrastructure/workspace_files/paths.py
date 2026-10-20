@@ -1,0 +1,151 @@
+"""文件输入在目标机器归一；持久引用只使用统一资源 URI。"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from pathlib import Path
+from typing import Protocol
+
+import httpx
+
+from app.core.path_utils import safe_join
+from app.core.resource_uri import (
+    ParsedResourceUri,
+    parse_resource_uri,
+    resource_display_uri,
+)
+from app.core.trace_middleware import get_current_gateway_id, get_current_request_id
+from app.schemas.gateway.native_directories import (
+    NativeDirectoryBindingDTO,
+    NativeDirectoryResolveDTO,
+)
+from app.schemas.internal_v2.common import APIResponse
+from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
+
+
+def file_uri_root(uri: str) -> str:
+    parsed = parse_resource_uri(uri)
+    if parsed.kind != "files":
+        raise ValueError("文件入口只接受 files 资源 URI")
+    return resource_display_uri(scope=parsed.scope, scope_id=parsed.scope_id, kind="files",
+                                tail_segments=parsed.tail_segments[:1], gateway_authority=parsed.gateway_authority)
+
+
+def file_uri_child(uri: str, *parts: str) -> str:
+    parsed = parse_resource_uri(uri)
+    if parsed.kind != "files":
+        raise ValueError("文件 child 必须属于 files 资源")
+    return resource_display_uri(scope=parsed.scope, scope_id=parsed.scope_id, kind="files",
+                                tail_segments=(*parsed.tail_segments, *parts), gateway_authority=parsed.gateway_authority)
+
+
+class NativeDirectoryBindings(Protocol):
+    def bind(self, root: Path) -> str: ...
+    def resolve(self, parsed: ParsedResourceUri) -> Path: ...
+
+
+class GatewayNativeDirectoryClient:
+    """仅经同机认证控制链临时取根；重启后不依赖请求缓存。"""
+
+    def __init__(self, *, workspace_id: str, connection: GatewayTransportConnection,
+                 local_token_supplier: Callable[[], str]) -> None:
+        self._workspace_id = workspace_id
+        self._connection = connection
+        self._token = local_token_supplier
+
+    def _request(self, method: str, suffix: str, body: dict[str, str] | None = None) -> httpx.Response:
+        gateway = httpx.URL(self._connection.resolve_gateway_url())
+        if (gateway.scheme not in {"http", "https"}
+                or gateway.host not in {"127.0.0.1", "::1", "localhost"}
+                or gateway.userinfo or gateway.path != "/" or gateway.query or gateway.fragment):
+            raise ValueError("原生目录控制链 Gateway URL 必须是无凭据、路径和查询的同机 loopback 地址")
+        request_id = get_current_request_id()
+        headers = {"X-Local-Token": self._token()}
+        if request_id is not None:
+            headers["X-Request-ID"] = request_id
+        with httpx.Client(trust_env=False, follow_redirects=False) as client:
+            response = client.request(
+                method, gateway.copy_with(path=f"/api/gateway/native-directories/workspaces/{self._workspace_id}" + suffix),
+                json=body, headers=headers, timeout=self._connection.resolve_timeout_seconds(),
+            )
+        response.raise_for_status()
+        received = response.headers.get("X-Request-ID")
+        if not received or (request_id is not None and received != request_id):
+            raise ValueError("原生根绑定控制链 request_id 不一致")
+        return response
+
+    def bind(self, root: Path) -> str:
+        response = self._request("POST", "", {"native_root": str(root)})
+        result = APIResponse[NativeDirectoryBindingDTO].model_validate_json(response.content)
+        if result.code != 0 or result.data is None or result.request_id != response.headers["X-Request-ID"]:
+            raise ValueError("原生根绑定控制链回执无效")
+        parsed = parse_resource_uri(result.data.uri)
+        if parsed.kind != "files" or parsed.scope != "gateway" or len(parsed.tail_segments) != 1 or parsed.gateway_authority is not None:
+            raise ValueError("原生根绑定控制链返回了错误资源")
+        return parsed.display_uri
+
+    def resolve(self, parsed: ParsedResourceUri) -> Path:
+        root_uri = file_uri_root(parsed.display_uri)
+        response = self._request("GET", f"/{parsed.scope_id}/{parsed.tail_segments[0]}")
+        result = APIResponse[NativeDirectoryResolveDTO].model_validate_json(response.content)
+        if result.code != 0 or result.data is None or result.request_id != response.headers["X-Request-ID"] or result.data.uri != root_uri:
+            raise ValueError("原生根解析控制链 owner 或 request_id 不一致")
+        root = Path(result.data.native_root)
+        if not root.is_absolute():
+            raise ValueError("原生根解析控制链返回了相对路径")
+        return root
+
+
+class WorkspaceFilePaths:
+    def __init__(self, *, workspace: Path, workspace_id: str, bindings: NativeDirectoryBindings | None) -> None:
+        self.workspace, self.workspace_id, self.bindings = workspace, workspace_id, bindings
+        self.workspace_uri = resource_display_uri(scope="workspace", scope_id=workspace_id, kind="files", tail_segments=("root",))
+
+    def _bindings(self) -> NativeDirectoryBindings:
+        if self.bindings is None:
+            raise RuntimeError("目标文件 owner 尚未装配原生 Gateway 目录根绑定")
+        return self.bindings
+
+    def resolve(self, value: str, *, scope: str = "workspace", allow_empty: bool = True,
+                reject_symlink: bool = False) -> tuple[Path, str]:
+        if "://" in value:
+            parsed = parse_resource_uri(value, local_gateway_id=get_current_gateway_id())
+            if parsed.kind != "files" or parsed.scope not in {"workspace", "gateway"}:
+                raise ValueError("文件入口必须指向 Workspace 或 Gateway files 资源")
+            if parsed.gateway_authority is not None:
+                raise ValueError("文件 URI 的 Gateway authority 与目标机器不符")
+            if parsed.scope == "workspace":
+                if parsed.scope_id != self.workspace_id:
+                    raise ValueError("文件 URI 的工作区与固定目标不符")
+                root = self.workspace
+            else:
+                root = self._bindings().resolve(parsed)
+            if reject_symlink and root.joinpath(*parsed.tail_segments[1:]).is_symlink():
+                raise ValueError(f"不允许编辑符号链接: {parsed.display_uri}")
+            target = safe_join(root, *parsed.tail_segments[1:])
+            return target, parsed.display_uri
+        if not value and not allow_empty:
+            raise ValueError("文件路径不能为空")
+        native = Path(value).expanduser()
+        unresolved = native if native.is_absolute() else self.workspace / native
+        if reject_symlink and unresolved.is_symlink():
+            raise ValueError("不允许通过文件预览编辑符号链接")
+        if native.is_absolute():
+            target = native.resolve()
+        elif scope == "filesystem":
+            if value:
+                raise ValueError("原生目录入口必须是绝对路径或资源 URI")
+            target = Path(self.workspace.anchor)
+        else:
+            target = safe_join(self.workspace, value)
+        return target, self.reference(target)
+
+    def reference(self, target: Path) -> str:
+        if target.is_relative_to(self.workspace):
+            return file_uri_child(self.workspace_uri, *target.relative_to(self.workspace).parts)
+        root = target if target.is_dir() else target.parent
+        uri = self._bindings().bind(root)
+        return uri if root == target else file_uri_child(uri, target.name)
+
+    def native(self, uri: str) -> Path:
+        return self.resolve(uri)[0]

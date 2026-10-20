@@ -1,6 +1,6 @@
 import type { FileTreeShortcut } from "../../../types/backend";
 import AnchoredOverlay from "../../overlays/AnchoredOverlay";
-import { FILESYSTEM_ROOT_PATH, ROOT_PATH } from "./workspaceFileTreePaths";
+import { parentFileTreePath } from "./workspaceFileTreePaths";
 import {
   type FileTreeContextMenuTarget,
   type WorkspaceFileTreeContextMenuApi,
@@ -13,7 +13,7 @@ interface WorkspaceFileTreeContextMenuProps {
 }
 
 function isRootTarget(target: FileTreeContextMenuTarget): boolean {
-  return target.treePath === ROOT_PATH || target.treePath === FILESYSTEM_ROOT_PATH;
+  return parentFileTreePath(target.treePath) === target.treePath;
 }
 
 /** 文件树右键菜单的渲染层；动作与状态全部来自 useWorkspaceFileTreeContextMenu。 */
@@ -26,9 +26,9 @@ export default function WorkspaceFileTreeContextMenu({
   if (!contextMenu) {
     return null;
   }
-  const isDefaultShortcut = defaultShortcutPaths.has(contextMenu.absolutePath);
+  const isDefaultShortcut = defaultShortcutPaths.has(contextMenu.uri);
   const targetShortcut = shortcuts.find(
-    (item) => item.path === contextMenu.absolutePath,
+    (item) => item.path === contextMenu.uri,
   );
   return (
     <AnchoredOverlay
@@ -81,7 +81,7 @@ export default function WorkspaceFileTreeContextMenu({
           const target = contextMenu;
           menu.runContextAction(
             "粘贴失败",
-            () => menu.pasteEntries(target, menu.copiedEntry?.absolutePath),
+            () => menu.pasteEntries(target, menu.copiedEntry?.uri),
           );
         }}>
           <span className="codicon codicon-clippy agent-sessions-menu-item-icon" aria-hidden="true" />
@@ -93,7 +93,7 @@ export default function WorkspaceFileTreeContextMenu({
           <div className="files-tree-context-shortcut-action">
             <button type="button" role="menuitem" onClick={() => {
               const target = contextMenu;
-              menu.runContextAction("删除快捷路径失败", () => menu.removeShortcut(target.absolutePath));
+              menu.runContextAction("删除快捷路径失败", () => menu.removeShortcut(target.uri));
             }}>
               <span className="codicon codicon-trash agent-sessions-menu-item-icon" aria-hidden="true" />
               <span className="agent-sessions-menu-item-label">删除当前会话快捷路径</span>
@@ -110,7 +110,7 @@ export default function WorkspaceFileTreeContextMenu({
               onClick={() => {
                 menu.closeContextMenu();
                 if (!targetShortcut) {
-                  menu.onStatusChange(`快捷路径已失效: ${contextMenu.absolutePath}`);
+                  menu.onStatusChange(`快捷路径已失效: ${contextMenu.uri}`);
                   return;
                 }
                 menu.runStatusAction(

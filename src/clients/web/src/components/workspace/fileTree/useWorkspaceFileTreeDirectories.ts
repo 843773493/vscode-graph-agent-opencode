@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, type MutableRefObject } from "react";
-import { filesystemFileTreePath, getWorkspaceFiles } from "../../../api";
+import { getWorkspaceFiles } from "../../../api";
 import { HttpRequestError } from "../../../api/http";
 import type { WorkspaceDirectoryKey, WorkspaceDirectoryRevision, WorkspaceFileList } from "../../../types/backend";
 import { errorDisplayMessage } from "../../../utils/errorMessage";
@@ -12,10 +12,8 @@ import {
   type DirectoryCacheEntry,
 } from "./workspaceFileTreeCache";
 import {
-  FILESYSTEM_ROOT_PATH,
   isTreePathInside,
   parentFileTreePath,
-  ROOT_PATH,
 } from "./workspaceFileTreePaths";
 
 interface DirectoryRequest {
@@ -78,8 +76,9 @@ export function useWorkspaceFileTreeDirectories({
       const current = directoriesRef.current;
       const candidate = updater(current);
       const protectedPaths = new Set(expandedPathsRef.current);
-      protectedPaths.add(ROOT_PATH);
-      protectedPaths.add(FILESYSTEM_ROOT_PATH);
+      for (const [path, entry] of Object.entries(candidate)) {
+        if (entry.directoryKey?.path === entry.directoryKey?.root) protectedPaths.add(path);
+      }
       for (const shortcutPath of shortcutTreePathsRef.current) {
         protectedPaths.add(shortcutPath);
       }
@@ -209,7 +208,7 @@ export function useWorkspaceFileTreeDirectories({
     const affected = Object.entries(directoriesRef.current).filter(([, entry]) => {
       const key = entry.directoryKey;
       if (!key) return false;
-      const absolute = (key.scope === "filesystem" ? key.path : `${key.root}/${key.path}`).replace(/\\/g, "/").replace(/\/$/, "");
+      const absolute = key.path;
       return roots.some((root) => {
         const normalized = root.replace(/\\/g, "/").replace(/\/$/, "");
         return absolute === normalized || absolute.startsWith(`${normalized}/`);
@@ -228,7 +227,7 @@ export function useWorkspaceFileTreeDirectories({
     const reload = new Set<string>();
     for (const revision of revisions) {
       const key = revision.directory_key;
-      const path = key.scope === "filesystem" ? filesystemFileTreePath(key.path) : key.path;
+      const path = key.path;
       const cached = directoriesRef.current[path];
       if (!cached && path !== forcePath) continue;
       if (cached?.directoryKey && !sameDirectoryKey(cached.directoryKey, key)) continue;
@@ -245,7 +244,7 @@ export function useWorkspaceFileTreeDirectories({
   const acceptSnapshots = useCallback((snapshots: readonly WorkspaceFileList[], forcePath?: string) => {
     for (const snapshot of snapshots) {
       const key = snapshot.directory_key;
-      const path = key.scope === "filesystem" ? filesystemFileTreePath(key.path) : key.path;
+      const path = key.path;
       const cached = directoriesRef.current[path];
       if (!cached && path !== forcePath) continue;
       if (cached?.directoryKey && !sameDirectoryKey(cached.directoryKey, key)) continue;
@@ -254,9 +253,7 @@ export function useWorkspaceFileTreeDirectories({
       request?.controller.abort();
       directoryRequestsRef.current.delete(path);
       minimumRevisionsRef.current.set(path, snapshot.directory_revision);
-      const result = { ...snapshot, path, items: snapshot.items?.map((item) => ({ ...item,
-        path: key.scope === "filesystem" && !item.path.startsWith("filesystem:") ? filesystemFileTreePath(item.path) : item.path,
-      })) };
+      const result = snapshot;
       updateDirectories((current) => ({ ...current, [path]: loadedDirectoryEntry(result, Date.now()) }));
     }
   }, [updateDirectories]);

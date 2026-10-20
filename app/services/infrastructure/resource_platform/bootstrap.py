@@ -38,6 +38,7 @@ from app.services.infrastructure.workspace_file_watch_service import (
 )
 
 logger = logging.getLogger(__name__)
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 _RESOURCE_STATE_OWNER = "workspace_resource_platform"
 _RESOURCE_STATE_ID = "workspace_resource_platform_root"
@@ -97,6 +98,7 @@ def bootstrap_resource_platform(
     workspace_id: str | None = None,
     gateway_connection: GatewayTransportConnection | None = None,
     gateway_token_supplier: Callable[[], str] | None = None,
+    file_paths: WorkspaceFilePaths | None = None,
 ) -> ResourcePlatform:
     """按固定顺序装配进程级资源平台。
 
@@ -147,7 +149,7 @@ def bootstrap_resource_platform(
         gateway_skill_sources=gateway_skill_sources,
         navigation=ResourceNavigation(
             workspace_root=workspace_root, workspace_id=workspace_id,
-            project_root=project_root, gateway_sources=gateway_skill_sources,
+            project_root=project_root, gateway_sources=gateway_skill_sources, file_paths=file_paths,
         ) if workspace_id is not None else None,
     )
 

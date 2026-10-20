@@ -9929,6 +9929,64 @@ export declare type WorkspaceFileContentDTO = Message<"boxteam.workspace.v2.Work
 export declare const WorkspaceFileContentDTOSchema: GenMessage<WorkspaceFileContentDTO>;
 
 /**
+ * @generated from message boxteam.workspace.v2.WorkspaceFileRootsDTO
+ */
+export declare type WorkspaceFileRootsDTO = Message<"boxteam.workspace.v2.WorkspaceFileRootsDTO"> & {
+  /**
+   * @generated from field: string workspace_uri = 1;
+   */
+  workspaceUri: string;
+
+  /**
+   * @generated from field: string filesystem_uri = 2;
+   */
+  filesystemUri: string;
+
+  /**
+   * @generated from field: string filesystem_label = 3;
+   */
+  filesystemLabel: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceFileRootsDTO.
+ * Use `create(WorkspaceFileRootsDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceFileRootsDTOSchema: GenMessage<WorkspaceFileRootsDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.WorkspaceFileReferencesRequest
+ */
+export declare type WorkspaceFileReferencesRequest = Message<"boxteam.workspace.v2.WorkspaceFileReferencesRequest"> & {
+  /**
+   * @generated from field: repeated string paths = 1;
+   */
+  paths: string[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceFileReferencesRequest.
+ * Use `create(WorkspaceFileReferencesRequestSchema)` to create a new message.
+ */
+export declare const WorkspaceFileReferencesRequestSchema: GenMessage<WorkspaceFileReferencesRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.WorkspaceFileReferencesDTO
+ */
+export declare type WorkspaceFileReferencesDTO = Message<"boxteam.workspace.v2.WorkspaceFileReferencesDTO"> & {
+  /**
+   * @generated from field: repeated string uris = 1;
+   */
+  uris: string[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceFileReferencesDTO.
+ * Use `create(WorkspaceFileReferencesDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceFileReferencesDTOSchema: GenMessage<WorkspaceFileReferencesDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.WorkspaceFileCopyRequest
  */
 export declare type WorkspaceFileCopyRequest = Message<"boxteam.workspace.v2.WorkspaceFileCopyRequest"> & {

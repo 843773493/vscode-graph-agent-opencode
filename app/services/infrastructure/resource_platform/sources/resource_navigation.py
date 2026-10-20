@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import codecs
 import stat
 from pathlib import Path
@@ -26,6 +27,7 @@ from app.services.infrastructure.resource_platform.virtual_resources.resolver im
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
     ResolutionContext,
 )
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 if TYPE_CHECKING:
     from app.services.infrastructure.resource_platform.sources.gateway_skill_sources import (
@@ -47,6 +49,7 @@ class ResourceNavigation:
         self, *, workspace_root: Path | None = None, workspace_id: str | None = None,
         project_root: Path | None = None, gateway_sources: GatewaySkillSources | None = None,
         gateway_skills_root: Path | None = None, gateway_id: str | None = None,
+        file_paths: WorkspaceFilePaths | None = None,
     ) -> None:
         if (workspace_root is None) == (gateway_skills_root is None):
             raise ValueError("导航 owner 必须且只能绑定 Workspace 或 Gateway Skill 域")
@@ -56,6 +59,9 @@ class ResourceNavigation:
             raise ValueError("Gateway Skill 导航必须显式绑定 gateway_id")
         self._workspace_root = _resolve_path(workspace_root) if workspace_root is not None else None
         self._workspace_id = workspace_id
+        if workspace_root is not None and file_paths is None:
+            raise ValueError("Workspace 导航必须复用已装配的文件路径 owner")
+        self._file_paths = file_paths
         self._project_root = _resolve_path(project_root or Path.cwd())
         self._gateway_sources = gateway_sources
         self._gateway_skills_root = gateway_skills_root.absolute() if gateway_skills_root is not None else None
@@ -74,13 +80,13 @@ class ResourceNavigation:
             workspace_id=self._workspace_id, gateway_id=local_gateway_id,
             distribution_id=distribution_id,
         ))
-        if parsed.scope == "gateway" and self._workspace_root is not None:
-            if parsed.kind != "skills" or self._gateway_sources is None:
+        if parsed.scope == "gateway" and parsed.kind == "skills" and self._workspace_root is not None:
+            if self._gateway_sources is None:
                 raise ResourceUriResolveError("unknown_resource", "没有对应的 Gateway 文件 owner")
             return await self._gateway_sources.navigate(
                 request.model_copy(update={"uri": parsed.display_uri}), gateway_id=local_gateway_id,
             )
-        root, children = self._root(parsed)
+        root, children = await asyncio.to_thread(self._root, parsed)
         path = self._contained(root, children, parsed)
         node = self._node(parsed, path)
         if request.operation not in node.operations:
@@ -127,8 +133,11 @@ class ResourceNavigation:
         return ResourceNavigationResultDTO(node=node, entries=tuple(entries))
 
     def _root(self, parsed: ParsedResourceUri) -> tuple[Path, tuple[str, ...]]:
-        if parsed.kind == "files" and self._workspace_root is not None:
-            return self._workspace_root, parsed.tail_segments[1:]
+        if parsed.kind == "files" and self._file_paths is not None:
+            root_uri = resource_display_uri(scope=parsed.scope, scope_id=parsed.scope_id, kind="files",
+                                            tail_segments=parsed.tail_segments[:1])
+            root, _uri = self._file_paths.resolve(root_uri)
+            return root, parsed.tail_segments[1:]
         if parsed.kind == "agent-spec" and parsed.scope == "workspace" and self._workspace_root is not None:
             return self._workspace_root, ("AGENTS.md",)
         if parsed.kind != "skills":

@@ -173,6 +173,19 @@ async def test_workspace_metadata_without_root_initializes_real_web(
     await metadata_data(client, "/api/gateway/health")
     workspaces = await metadata_data(client, "/api/gateway/workspaces")
     active = next(item for item in workspaces["items"] if item["workspace_id"] == workspaces["active_workspace_id"])
+    external = context.workspace_root / "未注册目录 Ω"
+    external.mkdir()
+    external_file = external / "未注册 %.txt"
+    external_file.write_text("未注册目录原正文\n", encoding="utf-8")
+    created = await client.post("/api/v1/sessions", json={"title": "原生目录浏览编辑"})
+    assert created.status_code == 200, created.text
+    session_id = created.json()["data"]["session_id"]
+    shortcut = await client.post(f"/api/v1/sessions/{session_id}/file-tree-shortcuts",
+                                 json={"path": str(external), "label": "未注册目录"})
+    assert shortcut.status_code == 200, shortcut.text
+    root_uri = shortcut.json()["data"]["effective_shortcuts"][0]["path"]
+    assert root_uri.startswith("boxteam://gateway/")
+    assert str(external) not in shortcut.text
     responses = {}
     for endpoint in ("/api/v1/workspace", "/api/v1/workspace/context"):
         data = await metadata_data(client, endpoint)
@@ -187,7 +200,9 @@ async def test_workspace_metadata_without_root_initializes_real_web(
     environment = {
         **os.environ,
         "BOXTEAM_BROWSER_BASE_URL": str(client.base_url).rstrip("/"),
-        "BOXTEAM_BROWSER_FIXTURE": json.dumps({"workspaceId": active["workspace_id"], "backendWorkspaceId": active["backend_workspace_id"]}),
+        "BOXTEAM_BROWSER_FIXTURE": json.dumps({"workspaceId": active["workspace_id"], "backendWorkspaceId": active["backend_workspace_id"],
+            "nativeDirectory": {"sessionId": session_id, "rootUri": root_uri, "fileName": external_file.name,
+                                "content": "未注册目录原正文\n", "edited": "浏览器修改后的未注册目录正文 Ω\n"}}),
         "BOXTEAM_BROWSER_RESULT_PATH": str(result_path),
         "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(context.artifacts_dir / "workspace-metadata-browser.png"),
         "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
@@ -205,5 +220,11 @@ async def test_workspace_metadata_without_root_initializes_real_web(
     assert result["page_errors"] == []
     assert result["route_stubs"] == []
     assert result["workspace_navigation_visible"] is True
+    assert result["native_directory_reopened"] is True
+    assert external_file.read_text(encoding="utf-8") == "浏览器修改后的未注册目录正文 Ω\n"
+    assert not (external / ".boxteam").exists()
+    after = await metadata_data(client, "/api/gateway/workspaces")
+    assert [(item["workspace_id"], item["backend_workspace_id"]) for item in after["items"]] == [
+        (item["workspace_id"], item["backend_workspace_id"]) for item in workspaces["items"]]
     assert provider.requests == [], "元数据初始化不应发送模型请求"
 

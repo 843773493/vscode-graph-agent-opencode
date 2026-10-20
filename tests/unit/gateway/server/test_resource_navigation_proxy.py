@@ -158,6 +158,19 @@ async def test_navigation_path_selects_registered_target_without_selection_heade
     assert registry.route_reference_counts("original-target") == (0, 0)
 
 
+async def test_native_directory_navigation_selects_same_machine_independent_of_active(navigation_proxy) -> None:
+    client, registry, forwarded = navigation_proxy
+    gateway_id = "gateway_3097a8378d6e2c98a52a687e4a004769"
+    uri = f"boxteam://gateway/{gateway_id}/resources/files/01900000000070008000000000000001"
+    response = await client.post("/api/v1/resources/navigation", json={"uri": uri, "operation": "list"},
+                                 headers={"X-BoxTeam-Workspace-Id": "active-target"})
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["selected"] == "original.test"
+    assert len(forwarded) == 1
+    assert json.loads(forwarded[0].content)["uri"] == uri
+    assert registry.active_workspace_id == "active-target"
+
+
 @pytest.mark.parametrize("mapping", ["unknown", "duplicate", "local_remote_duplicate"])
 @pytest.mark.parametrize("suffix", ["resources/navigation", "runtime/log-snapshot/snapshot_id/html"])
 async def test_navigation_missing_or_ambiguous_target_never_uses_active(navigation_proxy, mapping: str, suffix: str) -> None:

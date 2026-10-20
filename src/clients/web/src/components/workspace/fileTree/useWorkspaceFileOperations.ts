@@ -6,6 +6,7 @@ import {
   getWorkspaceFileOperations,
   getWorkspaceFiles,
   pasteWorkspaceFileEntries,
+  resolveWorkspaceFileReferences,
   uploadWorkspaceFileEntries,
 } from "../../../api";
 import { getGatewayHealth } from "../../../gatewayApi";
@@ -246,7 +247,14 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
       }
     }
     if (epoch !== generation.current) return;
-    await target.store.insert({ scope: target.scope, directoryPath, directoryKey,
+    if (command.kind === "copy") {
+      const [sourcePath] = await resolveWorkspaceFileReferences(port, [command.sourcePath], target.scope.gatewayWorkspaceId);
+      command = { ...command, sourcePath };
+    } else if (command.kind === "paste") {
+      command = { ...command, sourcePaths: await resolveWorkspaceFileReferences(port, command.sourcePaths, target.scope.gatewayWorkspaceId) };
+    }
+    if (epoch !== generation.current) return;
+    await target.store.insert({ scope: target.scope, directoryPath: directoryKey.path, directoryKey,
       directoryRevision: revision, command, createdByOperationId });
     if (epoch !== generation.current) return;
     callbacks.current.onStatusChange("文件操作已保存，等待受理");

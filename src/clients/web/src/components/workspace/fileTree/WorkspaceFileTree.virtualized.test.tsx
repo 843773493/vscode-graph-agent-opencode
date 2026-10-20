@@ -4,6 +4,9 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { VirtuosoMockContext } from "react-virtuoso";
 
 
+const ROOT = "boxteam://workspace/backend_files/resources/files/root";
+const FILESYSTEM = "boxteam://gateway/gateway_01900000000070008000000000000001/resources/files/01900000000070008000000000000001";
+
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 
@@ -52,7 +55,7 @@ function installWindow(port: number): void {
 
 function apiResponse(data: unknown): Response {
   if (data && typeof data === "object" && "items" in data && "path" in data) {
-    data = { directory_key: { workspace_id: "backend_files", scope: "workspace", root: "/w/project", path: data.path },
+    data = { directory_key: { workspace_id: "backend_files", scope: "workspace", root: ROOT, path: data.path },
       directory_revision: 1, ...data };
   }
   return Response.json({ code: 0, message: "ok", request_id: "req", data });
@@ -61,7 +64,7 @@ function apiResponse(data: unknown): Response {
 function fileNode(index: number): Record<string, unknown> {
   return {
     name: "file-" + index + ".ts",
-    path: "file-" + index + ".ts",
+    path: ROOT + "/file-" + index + ".ts",
     kind: "file",
     has_children: false,
     size: index,
@@ -82,16 +85,17 @@ function directoryNode(path: string): Record<string, unknown> {
 
 async function mount(port: number, activeFilePath: string | null, expanded: string[]): Promise<ReactTestRenderer> {
   installWindow(port);
-  const items = [directoryNode("big"), ...Array.from({ length: 320 }, (_, i) => fileNode(i))];
+  const items = [directoryNode(`${ROOT}/big`), ...Array.from({ length: 320 }, (_, i) => fileNode(i))];
   globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
     const url = new URL(input instanceof Request ? input.url : String(input), "http://127.0.0.1");
     if (url.pathname === "/api/gateway/auth/local-credential") return apiResponse({ token: "t" });
+    if (url.pathname === "/api/v1/workspace/files/roots") return apiResponse({ workspace_uri: ROOT, filesystem_uri: FILESYSTEM, filesystem_label: "/" });
     if (url.pathname === "/api/gateway/users/current") return apiResponse({ kind: "guest", user_id: null });
-    const path = url.searchParams.get("path") ?? "";
+    const path = url.searchParams.get("path") || ROOT;
     return apiResponse({
       root_path: path,
       path,
-      items: path === "" ? items : [fileNode(999)],
+      items: path === ROOT ? items : [fileNode(999)],
       truncated: false,
       next_cursor: null,
     });
@@ -144,8 +148,8 @@ afterEach(() => {
 describe("工作区文件树虚拟滚动扁平行", () => {
   test("超过阈值时扁平行渲染活动文件与目录折叠标记", async () => {
     const port = 49_801;
-    const renderer = await mount(port, "file-7.ts", [""]);
-    const activeRow = rowFor(renderer, "/w/project/file-7.ts");
+    const renderer = await mount(port, `${ROOT}/file-7.ts`, [ROOT]);
+    const activeRow = rowFor(renderer, `${ROOT}/file-7.ts`);
     expect(activeRow).toHaveLength(1);
     expect(classOf(activeRow[0])).toContain("active");
     const chevron = activeRow[0].find((n) => classOf(n).includes("files-tree-chevron"));
@@ -154,8 +158,8 @@ describe("工作区文件树虚拟滚动扁平行", () => {
 
   test("展开的目录扁平行带 directory 类与向下箭头", async () => {
     const port = 49_802;
-    const renderer = await mount(port, "file-7.ts", ["", "big"]);
-    const dirRow = rowFor(renderer, "/w/project/big");
+    const renderer = await mount(port, `${ROOT}/file-7.ts`, [ROOT, `${ROOT}/big`]);
+    const dirRow = rowFor(renderer, `${ROOT}/big`);
     expect(dirRow).toHaveLength(1);
     expect(classOf(dirRow[0])).toContain("directory");
     const chevron = dirRow[0].find((n) => classOf(n).includes("files-tree-chevron"));
@@ -164,8 +168,8 @@ describe("工作区文件树虚拟滚动扁平行", () => {
 
   test("未展开的目录扁平行带向右箭头", async () => {
     const port = 49_803;
-    const renderer = await mount(port, null, [""]);
-    const dirRow = rowFor(renderer, "/w/project/big");
+    const renderer = await mount(port, null, [ROOT]);
+    const dirRow = rowFor(renderer, `${ROOT}/big`);
     expect(dirRow).toHaveLength(1);
     const chevron = dirRow[0].find((n) => classOf(n).includes("files-tree-chevron"));
     expect(classOf(chevron)).toContain("codicon-chevron-right");
@@ -173,10 +177,10 @@ describe("工作区文件树虚拟滚动扁平行", () => {
 
   test("文件行展示字节大小而目录行不展示", async () => {
     const port = 49_804;
-    const renderer = await mount(port, null, [""]);
-    const fileRow = rowFor(renderer, "/w/project/file-3.ts");
+    const renderer = await mount(port, null, [ROOT]);
+    const fileRow = rowFor(renderer, `${ROOT}/file-3.ts`);
     expect(fileRow[0].findAll((n) => classOf(n) === "files-tree-meta").length).toBe(1);
-    const dirRow = rowFor(renderer, "/w/project/big");
+    const dirRow = rowFor(renderer, `${ROOT}/big`);
     expect(dirRow[0].findAll((n) => classOf(n) === "files-tree-meta").length).toBe(0);
   });
 });

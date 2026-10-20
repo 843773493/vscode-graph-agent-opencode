@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.resource_uri import parse_resource_uri, resource_display_uri
 from app.schemas.internal_v2.session_navigation.operations import (
     NavigationMutationState,
     validate_operation_id,
@@ -18,6 +19,27 @@ class WorkspaceDirectoryKeyDTO(BaseModel):
     scope: Literal["workspace", "filesystem"]
     root: str
     path: str
+
+    @model_validator(mode="after")
+    def validate_uri_key(self) -> WorkspaceDirectoryKeyDTO:
+        parsed = parse_resource_uri(self.path)
+        if parsed.kind != "files" or parsed.scope not in {"workspace", "gateway"}:
+            raise ValueError("目录键必须使用 files 资源 URI")
+        root = resource_display_uri(scope=parsed.scope, scope_id=parsed.scope_id, kind="files",
+                                    tail_segments=parsed.tail_segments[:1], gateway_authority=parsed.gateway_authority)
+        scope = "workspace" if parsed.scope == "workspace" else "filesystem"
+        if self.root != root or self.scope != scope:
+            raise ValueError("目录键的根或 scope 与 URI 不一致")
+        if parsed.scope == "workspace" and parsed.scope_id != self.workspace_id:
+            raise ValueError("目录键的工作区 URI 与执行 owner 不一致")
+        return self
+
+
+def validate_file_uri(value: str) -> str:
+    parsed = parse_resource_uri(value)
+    if parsed.kind != "files":
+        raise ValueError("文件引用必须使用 files 资源 URI")
+    return parsed.display_uri
 
 
 class WorkspaceDirectoryRevisionDTO(BaseModel):
@@ -33,6 +55,7 @@ class WorkspaceFileNodeDTO(BaseModel):
     has_children: bool = False
     size: int | None = None
     modified_at: str | None = None
+    _uri = field_validator("path")(validate_file_uri)
 
 
 class WorkspaceFileListDTO(BaseModel):
@@ -44,6 +67,7 @@ class WorkspaceFileListDTO(BaseModel):
     next_cursor: str | None = None
     directory_key: WorkspaceDirectoryKeyDTO
     directory_revision: int = Field(ge=1)
+    _uris = field_validator("root_path", "path")(validate_file_uri)
 
 
 class WorkspaceFileMutationIntentDTO(BaseModel):
@@ -86,6 +110,7 @@ class WorkspaceFileOperationItemDTO(BaseModel):
     kind: Literal["file", "directory"]
     state: Literal["pending", "published", "conflict", "unverified"]
     error: str | None = None
+    _uri = field_validator("path")(validate_file_uri)
 
 
 class WorkspaceFileOperationReceiptDTO(BaseModel):
@@ -102,6 +127,11 @@ class WorkspaceFileOperationReceiptDTO(BaseModel):
     created_path: str | None = None
     error_code: str | None = None
     error_detail: str | None = None
+
+    @field_validator("created_path")
+    @classmethod
+    def validate_created_path(cls, value: str | None) -> str | None:
+        return None if value is None else validate_file_uri(value)
 
 
 class WorkspaceFileOperationStatusDTO(BaseModel):

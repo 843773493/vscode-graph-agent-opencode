@@ -5,12 +5,14 @@ import os
 import tempfile
 from pathlib import Path
 
+from app.core.resource_uri import parse_resource_uri
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.workspace import (
     FileTreeShortcutDTO,
     FileTreeShortcutSource,
     SessionFileTreeSettingsDTO,
 )
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 
 class FileTreeSettingsService:
@@ -21,9 +23,11 @@ class FileTreeSettingsService:
         *,
         workspace_root: Path,
         path_resolver: SessionCatalogPathResolver,
+        file_paths: WorkspaceFilePaths,
     ) -> None:
         self._workspace_root = workspace_root.resolve()
         self._path_resolver = path_resolver
+        self._file_paths = file_paths
         self._workspace_settings_path = (
             self._workspace_root / ".boxteam" / "ui" / "file-tree-shortcuts.json"
         )
@@ -185,16 +189,12 @@ class FileTreeSettingsService:
             raise KeyError(f"会话不存在: {session_id}") from error
         return session_node / "ui" / "file-tree-shortcuts.json"
 
-    @staticmethod
-    def _normalize_path(path: str) -> str:
-        candidate = Path(path).expanduser()
-        if not candidate.is_absolute():
-            raise ValueError(f"快捷路径必须是绝对路径: {path}")
-        return str(candidate.resolve())
+    def _normalize_path(self, path: str) -> str:
+        return self._file_paths.resolve(path, allow_empty=False)[1]
 
     def _normalize_directory(self, path: str) -> str:
         normalized = self._normalize_path(path)
-        candidate = Path(normalized)
+        candidate = self._file_paths.native(normalized)
         if not candidate.exists():
             raise FileNotFoundError(f"快捷路径不存在: {normalized}")
         if not candidate.is_dir():
@@ -203,8 +203,8 @@ class FileTreeSettingsService:
 
     @staticmethod
     def _default_label(path: str) -> str:
-        candidate = Path(path)
-        return candidate.name or candidate.anchor or path
+        parsed = parse_resource_uri(path)
+        return parsed.tail_segments[-1] if len(parsed.tail_segments) > 1 else "目录"
 
     @classmethod
     def _upsert(

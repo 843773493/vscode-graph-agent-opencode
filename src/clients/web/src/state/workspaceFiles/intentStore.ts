@@ -46,6 +46,7 @@ export function fileIntentScopeKey(scope: FileIntentScope): string {
   for (const value of Object.values(scope)) {
     if (!value || value.includes("\u0000")) throw new Error("文件意图的固定目标身份无效");
   }
+  if (!scope.workspaceRoot.startsWith("boxteam://")) throw new Error("文件意图的资源根必须使用 URI");
   return [scope.gatewayId, scope.gatewayWorkspaceId, scope.backendWorkspaceId,
     scope.workspaceRoot, scope.actor].join("\u0000");
 }
@@ -71,27 +72,31 @@ function sameDirectory(left: WorkspaceDirectoryKey, right: WorkspaceDirectoryKey
 }
 
 function directoryPath(key: WorkspaceDirectoryKey): string {
-  return (key.scope === "filesystem" ? key.path
-    : `${key.root.replace(/[\\/]$/, "")}/${key.path}`).replace(/\\/g, "/").replace(/\/$/, "");
+  return key.path;
 }
 
 function overlappingPath(a: string, b: string): boolean {
   return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 }
 
-function sources(command: FileIntentCommand, scope: FileIntentScope): string[] {
-  if (command.kind === "paste") return command.sourcePaths.map((path) => path.replace(/\\/g, "/").replace(/\/$/, ""));
-  if (command.kind === "copy") return [directoryPath({ workspace_id: scope.backendWorkspaceId,
-    root: scope.workspaceRoot, scope: command.sourceScope, path: command.sourcePath })];
+function sources(command: FileIntentCommand): string[] {
+  if (command.kind === "paste") return command.sourcePaths;
+  if (command.kind === "copy") return [command.sourcePath];
   return [];
+}
+
+function validateReferences(directory: string, key: WorkspaceDirectoryKey, command: FileIntentCommand): void {
+  if (directory !== key.path || [directory, key.root, ...sources(command)].some((uri) => !uri.startsWith("boxteam://"))) {
+    throw new Error("文件意图的位置必须先由目标 owner 解析为资源 URI");
+  }
 }
 
 function conflictsWith(value: StoredFileIntent, input: NewFileIntent): boolean {
   const before = directoryPath(value.intent.directory_key);
   const after = directoryPath(input.directoryKey);
   return overlappingPath(before, after)
-    || sources(input.command, input.scope).some((path) => overlappingPath(before, path))
-    || sources(value.command, value.scope).some((path) => overlappingPath(after, path));
+    || sources(input.command).some((path) => overlappingPath(before, path))
+    || sources(value.command).some((path) => overlappingPath(after, path));
 }
 
 /** 只保存未确认意图；分区序号、依赖与上传 Blob 在一个事务内冻结。 */
@@ -116,6 +121,7 @@ export class WorkspaceFileIntentStore {
     );
     await done;
     for (const value of values) {
+      validateReferences(value.directoryPath, value.intent.directory_key, value.command);
       if (value.scopeKey !== fileIntentScopeKey(value.scope)
         || value.scopeKey !== scopeKey
         || value.intent.directory_key.workspace_id !== scope.backendWorkspaceId) {
@@ -126,6 +132,7 @@ export class WorkspaceFileIntentStore {
   }
 
   async insert(input: NewFileIntent): Promise<StoredFileIntent> {
+    validateReferences(input.directoryPath, input.directoryKey, input.command);
     const scopeKey = fileIntentScopeKey(input.scope);
     if (input.directoryKey.workspace_id !== input.scope.backendWorkspaceId) {
       throw new Error("目录键与固定后端工作区不一致");

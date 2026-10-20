@@ -67,7 +67,7 @@ interface BuildVisibleFileTreeRowsOptions {
   workspaceTitle: string;
   workspaceRootPath: string;
   filesystemRootPath: string;
-  shortcutPath: (path: string) => string;
+  filesystemLabel: string;
 }
 
 export function buildVisibleFileTreeRows({
@@ -79,7 +79,7 @@ export function buildVisibleFileTreeRows({
   workspaceTitle,
   workspaceRootPath,
   filesystemRootPath,
-  shortcutPath,
+  filesystemLabel,
 }: BuildVisibleFileTreeRowsOptions): WorkspaceFileTreeRow[] {
   const rows: WorkspaceFileTreeRow[] = [];
   const normalizedQuery = searchQuery.trim().toLowerCase();
@@ -233,7 +233,7 @@ export function buildVisibleFileTreeRows({
 
   for (const shortcut of shortcuts) {
     appendRoot(
-      shortcutPath(shortcut.path),
+      shortcut.path,
       shortcut.label,
       shortcut.path,
       shortcut.source,
@@ -247,6 +247,6 @@ export function buildVisibleFileTreeRows({
     null,
     "workspace",
   );
-  appendRoot(filesystemRootPath, "/", "/", null, "filesystem");
+  appendRoot(filesystemRootPath, filesystemLabel, filesystemLabel, null, "filesystem");
   return rows;
 }

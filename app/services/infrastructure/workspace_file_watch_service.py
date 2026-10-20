@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import logging
 import os
 import time
@@ -75,17 +76,17 @@ class WorkspaceFileWatchService:
         for value in extra_paths:
             candidate = Path(value).expanduser()
             if not candidate.is_absolute():
-                raise ValueError(f"文件监听路径必须是绝对目录: {value}")
+                raise ValueError("文件监听路径必须是绝对目录")
             candidates.append(candidate.resolve())
         unique = sorted(set(candidates), key=lambda path: (len(path.parts), str(path)))
         roots: list[Path] = []
         for path in unique:
             if path == Path(path.anchor):
-                raise ValueError(f"禁止递归监听文件系统根目录: {path}")
+                raise ValueError("禁止递归监听文件系统根目录")
             if not path.exists():
-                raise FileNotFoundError(f"文件监听路径不存在: {path}")
+                raise FileNotFoundError(errno.ENOENT, "文件监听路径不存在", str(path))
             if not path.is_dir():
-                raise NotADirectoryError(f"文件监听路径不是目录: {path}")
+                raise NotADirectoryError(errno.ENOTDIR, "文件监听路径不是目录", str(path))
             if any(path == root or path.is_relative_to(root) for root in roots):
                 continue
             roots.append(path)
@@ -298,7 +299,7 @@ class WorkspaceFileWatchService:
             logger.exception("共享文件监听失败: root=%s", root)
             self._publish(
                 subscribers,
-                WorkspaceFileChangeBatch(error=f"文件监听失败: {root}: {error}"),
+                WorkspaceFileChangeBatch(error=f"文件监听失败: {type(error).__name__}, errno={getattr(error, 'errno', None)}"),
             )
         finally:
             ready.set()

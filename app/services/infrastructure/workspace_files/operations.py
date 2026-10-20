@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from app.core.atomic_fs import fsync_directory
 from app.core.path_utils import safe_join
+from app.core.resource_uri import parse_resource_uri
 from app.core.session_lifecycle_gate import OperationHolderGate
 from app.schemas.internal_v2.session_navigation.operations import (
     NAVIGATION_MUTATION_TERMINAL_STATES,
@@ -35,6 +36,11 @@ from app.services.infrastructure.workspace_files.filesystem import (
     verify_published,
     write_upload,
 )
+from app.services.infrastructure.workspace_files.paths import (
+    WorkspaceFilePaths,
+    file_uri_child,
+    file_uri_root,
+)
 from app.services.infrastructure.workspace_files.store import (
     FileOperationRecord,
     WorkspaceFileOperationConflictError,
@@ -52,13 +58,16 @@ class WorkspaceFileOperations:
                  resolve: Callable[..., tuple[Path, str]], normalize: Callable[[str], str],
                  validate_name: Callable[[str], str],
                  observe: Callable[[WorkspaceDirectoryKeyDTO, Path], DirectoryObservation],
-                 snapshot: Callable[[WorkspaceDirectoryKeyDTO, Path], tuple[dict, str]]) -> None:
+                 snapshot: Callable[[WorkspaceDirectoryKeyDTO, Path], tuple[dict, str]],
+                 paths: WorkspaceFilePaths) -> None:
         self.workspace, self.workspace_id = workspace, workspace_id
         self.store = WorkspaceFileStore(workspace, workspace_id)
         # 扫描与发布观察必须同序；迟到的旧扫描不能把新事实反向发布。
         self.observation_lock = RLock()
         self._resolve, self._normalize, self._validate_name, self._observe = resolve, normalize, validate_name, observe
         self._snapshot = snapshot
+        self.paths = paths
+        self._directory_paths: dict[Path, set[WorkspaceDirectoryKeyDTO]] = {}
         # 一个已验证的 workspace worker 执行原有序意图；所有 scope 别名、源/目标
         # 与祖先链共享此 OS 执行归属，CAS 仍只核受影响目录。
         self._holder = OperationHolderGate(workspace / ".boxteam/sessions", namespace="workspace_files")
@@ -87,7 +96,7 @@ class WorkspaceFileOperations:
             self.worker_state, self.worker_error = "failed", "文件 operation worker 被意外取消"
         elif task.exception() is not None:
             error = task.exception()
-            self.worker_state, self.worker_error = "failed", repr(error)
+            self.worker_state, self.worker_error = "failed", f"{type(error).__name__}: workspace_id={self.workspace_id}"
             logger.error("文件 operation worker 失败: workspace_id=%s", self.workspace_id,
                          exc_info=(type(error), error, error.__traceback__))
         self._ready.set()
@@ -112,6 +121,8 @@ class WorkspaceFileOperations:
 
     async def _run(self) -> None:
         async with self._holder.lock_for(self.workspace_id):
+            # URI 在每次恢复时重新取原生绑定，不复制根到业务存储。
+            await asyncio.to_thread(self._restore_directory_paths)
             # 恢复只按原数据库记录与 staging 证明执行；不扫业务树推测操作。
             for operation_id, actor in self.store.cleanup_pending():
                 await asyncio.to_thread(self._cleanup, self.store.get(operation_id, actor))
@@ -144,11 +155,47 @@ class WorkspaceFileOperations:
 
     def directory_key(self, path: str, scope: str) -> tuple[WorkspaceDirectoryKeyDTO, Path]:
         target, display = self._resolve(path, scope=scope, allow_empty=True)
-        root = str(self.workspace) if scope == "workspace" else str(Path(target.anchor))
-        return WorkspaceDirectoryKeyDTO(workspace_id=self.workspace_id, scope=scope, root=root, path=display), target
+        root = file_uri_root(display)
+        scope = "workspace" if parse_resource_uri(display).scope == "workspace" else "filesystem"
+        key = WorkspaceDirectoryKeyDTO(workspace_id=self.workspace_id, scope=scope, root=root, path=display)
+        with self.observation_lock:
+            self._directory_paths.setdefault(target, set()).add(key)
+        return key, target
+
+    def _restore_directory_paths(self) -> None:
+        with self.observation_lock:
+            for key, uri in self.store.observed_directories():
+                self._directory_paths.setdefault(self.paths.native(uri), set()).add(key)
+
+    def observed_directories(self, paths: set[Path], *, removed: set[Path] | None = None):
+        with self.observation_lock:
+            return tuple((key, native) for native, keys in self._directory_paths.items()
+                         if native in paths or any(native == root or native.is_relative_to(root) for root in removed or ())
+                         for key in keys)
+
+    def _incoming_path(self, record: FileOperationRecord) -> Path | None:
+        name = record.payload["incoming"]
+        return None if name is None else safe_join(self._incoming, self._validate_name(name))
+
+    def _source_path(self, record: FileOperationRecord, entry: dict) -> Path | None:
+        source = entry["source"]
+        if source is None:
+            return None
+        if "uri" in source:
+            return self.paths.native(source["uri"])
+        incoming = self._incoming_path(record)
+        if incoming is None:
+            raise RuntimeError("上传来源缺少原 operation staging 归属")
+        return safe_join(incoming / "body", source["upload"])
+
+    def _stage_root(self, record: FileOperationRecord, index: int) -> Path:
+        target = self.paths.native(record.steps[index]["target"])
+        return target.parent / f".boxteam-file-{record.operation_id}-{index}"
 
     def observe_directories(self, directories: list[tuple[WorkspaceDirectoryKeyDTO, Path]]):
         with self.observation_lock:
+            for key, path in directories:
+                self._directory_paths.setdefault(path, set()).add(key)
             return self.store.observe([self._observe(key, path) for key, path in directories])
 
     def _target(self, directory_path: str, scope: str, intent: WorkspaceFileMutationIntentDTO,
@@ -160,17 +207,15 @@ class WorkspaceFileOperations:
         if not outputs:
             raise ValueError("created_by_operation_id 必须指向原目录输出")
         original_key = WorkspaceDirectoryKeyDTO.model_validate(creator.payload["directory_key"])
-        if original_key.scope != scope:
-            raise ValueError("创建后继不能改变原 scope/root")
         relative = self._normalize(intent.relative_child_path)
-        base = Path(creator.payload["target"])
+        base = creator.payload["target"]
         if len(outputs) == 1:
-            base /= outputs[0]["relative_path"]
+            base = file_uri_child(base, *Path(outputs[0]["relative_path"]).parts)
         elif not any(relative == entry["relative_path"] or relative.startswith(entry["relative_path"] + "/") for entry in outputs):
             raise ValueError("多目录输出的后继必须用 relative_child_path 选择原目录输出")
-        target = base / relative if relative else base
-        display = str(target.relative_to(self.workspace)).replace(os.sep, "/") if scope == "workspace" else str(target)
-        if directory_path and directory_path != display:
+        display = file_uri_child(base, *Path(relative).parts) if relative else base
+        target = self.paths.native(display)
+        if directory_path and self._resolve(directory_path, scope=scope, allow_empty=True)[1] != display:
             raise ValueError("后继路径与原创建者的输出不一致")
         return original_key.model_copy(update={"path": display}), target
 
@@ -181,7 +226,7 @@ class WorkspaceFileOperations:
         if actor != "local":
             raise PermissionError("文件 operation 必须使用原 local-token 认证 scope")
         async with self._accept_lock:
-            key, target = self._target(directory_path, scope, intent, actor)
+            key, target = await asyncio.to_thread(self._target, directory_path, scope, intent, actor)
             if intent.directory_key != key:
                 raise WorkspaceFileOperationConflictError("文件 intent 的原 workspace/scope/root/path 与路由目标不一致，禁止改投")
             request = {"workspace_id": self.workspace_id, "directory_key": key.model_dump(),
@@ -247,7 +292,7 @@ class WorkspaceFileOperations:
         preconditions = []
         if target.is_dir():
             observation = self.observe_directories([(key, target)])[0]
-            preconditions.append({"key": key.model_dump(), "path": str(target),
+            preconditions.append({"key": key.model_dump(), "path": key.path,
                                   "revision": intent.expected_directory_revision or observation.directory_revision})
         if kind == "create":
             name = self._validate_name(data["name"])
@@ -255,21 +300,15 @@ class WorkspaceFileOperations:
                 raise ValueError(f"不支持的文件条目类型: {data['kind']}")
             entries.append({"relative_path": name, "kind": data["kind"], "source": None, "source_proof": None})
         elif kind in ("copy", "paste"):
-            paths = [self._resolve(data["source_path"], scope=data["source_scope"], allow_empty=False)[0]] if kind == "copy" else []
-            if kind == "paste":
-                for raw in data["source_paths"]:
-                    source = Path(raw).expanduser()
-                    if not source.is_absolute():
-                        raise ValueError(f"粘贴来源必须是绝对路径: {raw}")
-                    if source.is_symlink():
-                        raise ValueError(f"暂不支持粘贴符号链接: {source}")
-                    paths.append(source.resolve())
-            for source in paths:
+            raw_paths = [data["source_path"]] if kind == "copy" else data["source_paths"]
+            source_scope = data["source_scope"] if kind == "copy" else "workspace"
+            paths = [self._resolve(raw, scope=source_scope, allow_empty=False) for raw in raw_paths]
+            for source, uri in paths:
                 proof = captured_source(source)
                 if not source.name or (source.is_dir() and target.is_relative_to(source)):
-                    raise ValueError(f"不能把目录复制到自身内部或复制文件系统根: {source}")
+                    raise ValueError(f"不能把目录复制到自身内部或复制文件系统根: {uri}")
                 entries.append({"relative_path": source.name, "kind": proof["manifest"]["kind"],
-                                "source": str(source), "source_proof": proof})
+                                "source": {"uri": uri}, "source_proof": proof})
         else:
             body = incoming / "body"
             groups = set()
@@ -285,46 +324,46 @@ class WorkspaceFileOperations:
                         first_missing = Path(*relative.parts[:index + 1])
                         break
                     if parent.is_symlink() or not parent.is_dir():
-                        raise ValueError(f"上传父路径不是普通目录: {parent}")
+                        raise ValueError(f"上传父路径不是普通目录: {file_uri_child(key.path, *parent.relative_to(target).parts)}")
                 groups.add(str(first_missing or relative))
             for relative in sorted(groups):
                 source = body / relative
                 proof = captured_source(source)
                 entries.append({"relative_path": relative, "kind": proof["manifest"]["kind"],
-                                "source": str(source), "source_proof": proof})
+                                "source": {"upload": relative}, "source_proof": proof})
                 parent = (target / relative).parent
                 if parent != target and parent.is_dir():
-                    parent_key, _ = self.directory_key(str(parent.relative_to(self.workspace)) if key.scope == "workspace" else str(parent), key.scope)
+                    parent_uri = file_uri_child(key.path, *parent.relative_to(target).parts)
+                    parent_key, _ = self.directory_key(parent_uri, key.scope)
                     version = self.observe_directories([(parent_key, parent)])[0]
-                    preconditions.append({"key": parent_key.model_dump(), "path": str(parent), "revision": version.directory_revision})
+                    preconditions.append({"key": parent_key.model_dump(), "path": parent_key.path, "revision": version.directory_revision})
         destinations = set()
         for entry in entries:
             destination = safe_join(target, entry["relative_path"])
             if destination in destinations:
                 raise FileExistsError(f"多个来源具有相同名称: {destination.name}")
             if destination.exists() or destination.is_symlink():
-                raise FileExistsError(f"目标已存在: {destination}")
+                raise FileExistsError(f"目标已存在: {file_uri_child(key.path, *Path(entry['relative_path']).parts)}")
             destinations.add(destination)
         payload = {"workspace_id": self.workspace_id, "actor": actor, "directory_key": key.model_dump(),
-                   "target": str(target), "intent": intent.model_dump(), "entries": entries,
+                   "target": key.path, "intent": intent.model_dump(), "entries": entries,
                    "preconditions": preconditions, "request_hash": request_hash,
-                   "incoming": None if incoming is None else str(incoming)}
+                   "incoming": None if incoming is None else incoming.name}
         if kind == "create":
-            payload["created_path"] = str(target / entries[0]["relative_path"]) if key.scope == "filesystem" else (
-                (key.path + "/" if key.path else "") + entries[0]["relative_path"])
+            payload["created_path"] = file_uri_child(key.path, entries[0]["relative_path"])
         return payload
 
     def _check_preconditions(self, record: FileOperationRecord) -> None:
         payload = record.payload
         key = WorkspaceDirectoryKeyDTO.model_validate(payload["directory_key"])
         resolved, _ = self._resolve(key.path, scope=key.scope, allow_empty=True)
-        if str(resolved) != payload["target"] or not resolved.is_dir():
+        if key.path != payload["target"] or not resolved.is_dir():
             raise WorkspaceFileOperationConflictError("文件 operation 的原目录路径事实已失效")
         intent = WorkspaceFileMutationIntentDTO.model_validate(payload["intent"])
         if intent.created_by_operation_id is not None:
             creator = self.store.get(intent.created_by_operation_id, record.actor)
-            proofs = [(step, str(resolved.relative_to(Path(step["target"])))) for step in creator.steps
-                      if step["kind"] == "directory" and resolved.is_relative_to(Path(step["target"]))]
+            proofs = [(step, str(resolved.relative_to(self.paths.native(step["target"])))) for step in creator.steps
+                      if step["kind"] == "directory" and resolved.is_relative_to(self.paths.native(step["target"]))]
             if len(proofs) != 1:
                 raise WorkspaceFileOperationConflictError("原创建结果没有后继目录的唯一发布证明")
             step, relative = proofs[0]
@@ -334,7 +373,7 @@ class WorkspaceFileOperations:
                 raise WorkspaceFileOperationConflictError("原创建目录或子目录已被替换，拒绝使用当前同名路径")
         expectations = list(payload["preconditions"])
         if not any(item["key"] == key.model_dump() for item in expectations):
-            expectations.insert(0, {"key": key.model_dump(), "path": str(resolved), "revision": None})
+            expectations.insert(0, {"key": key.model_dump(), "path": key.path, "revision": None})
         for expectation in expectations:
             directory_key = WorkspaceDirectoryKeyDTO.model_validate(expectation["key"])
             expected = expectation["revision"]
@@ -344,23 +383,23 @@ class WorkspaceFileOperations:
                 if len(candidates) != 1:
                     raise WorkspaceFileOperationConflictError("原前序结果缺少精确目录 revision，禁止借当前版本补缺")
                 expected = candidates[0]
-            observed = self.observe_directories([(directory_key, Path(expectation["path"]))])[0]
+            observed = self.observe_directories([(directory_key, self.paths.native(expectation["path"]))])[0]
             if not observed.exists or observed.directory_revision != expected:
                 raise WorkspaceFileOperationConflictError(f"文件目录 revision 冲突: {directory_key.path}, expected={expected}, actual={observed.directory_revision}")
         for entry in payload["entries"]:
-            target = Path(payload["target"]) / entry["relative_path"]
+            target = self.paths.native(payload["target"]) / entry["relative_path"]
             if target.exists() or target.is_symlink():
-                raise WorkspaceFileOperationConflictError(f"执行前目标已存在: {target}")
-            if entry["source"] is not None and captured_source(Path(entry["source"])) != entry["source_proof"]:
+                raise WorkspaceFileOperationConflictError(f"执行前目标已存在: {file_uri_child(key.path, *Path(entry['relative_path']).parts)}")
+            if entry["source"] is not None and captured_source(self._source_path(record, entry)) != entry["source_proof"]:
                 raise WorkspaceFileOperationConflictError(f"执行前原来源事实已变化: {entry['source']}")
 
     def staging_roots(self) -> set[Path]:
-        return {Path(step["stage_root"]) for operation_id, actor in self.store.staging_records()
-                for step in self.store.get(operation_id, actor).steps}
+        return {self._stage_root(record, index) for operation_id, actor in self.store.staging_records()
+                for record in (self.store.get(operation_id, actor),) for index in range(len(record.steps))}
 
     def _observations(self, record: FileOperationRecord) -> list[DirectoryObservation]:
         key = WorkspaceDirectoryKeyDTO.model_validate(record.payload["directory_key"])
-        root = Path(record.payload["target"])
+        root = self.paths.native(record.payload["target"])
         paths = {root}
         for entry in record.payload["entries"]:
             target = root / entry["relative_path"]
@@ -373,14 +412,15 @@ class WorkspaceFileOperations:
                         add_directories(base / name, child)
             add_directories(target, manifest)
         observations = []
-        aliases = dict(self.store.observed_directories(paths))
+        aliases = dict(self.observed_directories(paths))
         for path in sorted(paths):
-            display = str(path.relative_to(self.workspace)).replace(os.sep, "/") if key.scope == "workspace" else str(path)
+            display = file_uri_child(key.path, *path.relative_to(root).parts)
             directory_key = key.model_copy(update={"path": display})
-            aliases[directory_key] = str(path)
+            aliases[directory_key] = path
         for directory_key, real in aliases.items():
-            if Path(real) in paths:
-                observations.append(self._observe(directory_key, Path(real)))
+            if real in paths:
+                self._directory_paths.setdefault(real, set()).add(directory_key)
+                observations.append(self._observe(directory_key, real))
         return observations
 
     def _execute(self, original: FileOperationRecord) -> None:
@@ -401,29 +441,28 @@ class WorkspaceFileOperations:
             if not steps:
                 self._check_preconditions(record)
                 for index, entry in enumerate(record.payload["entries"]):
-                    target = Path(record.payload["target"]) / entry["relative_path"]
-                    steps.append({"target": str(target), "kind": entry["kind"], "relative_path": entry["relative_path"],
-                                  "stage_root": str(target.parent / f".boxteam-file-{record.operation_id}-{index}"),
+                    steps.append({"target": file_uri_child(record.payload["target"], *Path(entry["relative_path"]).parts),
+                                  "kind": entry["kind"], "relative_path": entry["relative_path"],
                                   "state": "preparing", "proof": None})
                 self.store.save_steps(record, steps)
             for index, step in enumerate(steps):
                 if step["state"] != "preparing":
                     continue
                 entry = record.payload["entries"][index]
-                source = None if entry["source"] is None else Path(entry["source"])
+                source = self._source_path(record, entry)
                 if source is not None and captured_source(source) != entry["source_proof"]:
-                    raise WorkspaceFileOperationConflictError(f"完整 staging 前原来源已变化: {source}")
-                _stage, proof = stage_step(stage_root=Path(step["stage_root"]), operation_id=record.operation_id,
+                    raise WorkspaceFileOperationConflictError(f"完整 staging 前原来源已变化: {entry['source']}")
+                _stage, proof = stage_step(stage_root=self._stage_root(record, index), operation_id=record.operation_id,
                                             request_hash=record.payload["request_hash"], source=source, kind=step["kind"])
                 if source is not None and (captured_source(source) != entry["source_proof"] or proof["manifest"] != entry["source_proof"]["manifest"]):
-                    raise WorkspaceFileOperationConflictError(f"staging 与原来源内容不一致: {source}")
+                    raise WorkspaceFileOperationConflictError(f"staging 与原来源内容不一致: {entry['source']}")
                 step.update(state="staged", proof=proof)
                 self.store.save_steps(record, steps)
             # 全部目标完成 preflight/staging 后才发布第一个成员。
             if all(step["state"] == "staged" for step in steps):
                 self._check_preconditions(record)
-            for step in steps:
-                target, stage = Path(step["target"]), Path(step["stage_root"]) / "entry"
+            for index, step in enumerate(steps):
+                target, stage = self.paths.native(step["target"]), self._stage_root(record, index) / "entry"
                 if step["state"] in ("publishing", "published"):
                     if verify_published(target, step["proof"]):
                         step["state"] = "published"
@@ -437,7 +476,7 @@ class WorkspaceFileOperations:
                 if step["state"] != "staged" or not verify_published(stage, step["proof"]):
                     raise FileEffectUnverifiedError(f"原 staging 证明失效: {stage}")
                 entry = record.payload["entries"][steps.index(step)]
-                if entry["source"] is not None and captured_source(Path(entry["source"])) != entry["source_proof"]:
+                if entry["source"] is not None and captured_source(self._source_path(record, entry)) != entry["source_proof"]:
                     raise WorkspaceFileOperationConflictError(f"发布前原来源事实已变化: {entry['source']}")
                 with self.observation_lock:
                     step["state"] = "publishing"
@@ -445,31 +484,31 @@ class WorkspaceFileOperations:
                     try:
                         publish_step(stage, target, step["kind"])
                     except FileExistsError as error:
-                        step.update(state="conflict", error=str(error))
+                        step.update(state="conflict", error=self._error_detail(record, error))
                         self.store.save_steps(record, steps)
-                        raise WorkspaceFileOperationConflictError(f"原发布目标被外部创建，拒绝覆盖: {target}") from error
+                        raise WorkspaceFileOperationConflictError(f"原发布目标被外部创建，拒绝覆盖: {step['target']}") from error
                     step["state"] = "published"
                     self.store.save_steps(record, steps)
             self._settle(record, state="committed", effect="complete", items=self._result_items(record, steps))
         except FileEffectUnverifiedError as error:
             self._settle(record, state="running", effect="unverified", items=self._result_items(record, steps, unverified=True),
-                         error_code="reconcile_required", error_detail=str(error))
+                         error_code="reconcile_required", error_detail=self._error_detail(record, error))
             raise
         except (OSError, ValueError, WorkspaceFileOperationConflictError) as error:
             publishing = [step for step in steps if step["state"] == "publishing"]
             for step in publishing:
-                if verify_published(Path(step["target"]), step["proof"]):
+                if verify_published(self.paths.native(step["target"]), step["proof"]):
                     step["state"] = "published"
-                elif verify_published(Path(step["stage_root"]) / "entry", step["proof"]):
+                elif verify_published(self._stage_root(record, steps.index(step)) / "entry", step["proof"]):
                     step["state"] = "staged"
                 else:
                     self._settle(record, state="running", effect="unverified", items=self._result_items(record, steps, unverified=True),
-                                 error_code="reconcile_required", error_detail=str(error))
+                                 error_code="reconcile_required", error_detail=self._error_detail(record, error))
                     raise FileEffectUnverifiedError(f"文件发布失败且原效果待核实: {error}") from error
             self.store.save_steps(record, steps)
             effect = "partial" if any(step["state"] == "published" for step in steps) else "none"
             self._settle(record, state="rejected", effect=effect, items=self._result_items(record, steps),
-                         error_code="file_operation_conflict" if isinstance(error, WorkspaceFileOperationConflictError) else "file_operation_failed", error_detail=str(error))
+                         error_code="file_operation_conflict" if isinstance(error, WorkspaceFileOperationConflictError) else "file_operation_failed", error_detail=self._error_detail(record, error))
         # terminal 与目录/outbox 已先持久化；清理失败透明停止 worker，重启只回收原暂存。
         self._cleanup(self.store.get(record.operation_id, record.actor))
 
@@ -477,21 +516,29 @@ class WorkspaceFileOperations:
         with self.observation_lock:
             observations = self._observations(record)
             parents = {record.payload["target"]} | {
-                str((Path(record.payload["target"]) / entry["relative_path"]).parent)
+                file_uri_child(record.payload["target"], *Path(entry["relative_path"]).parent.parts)
                 for entry in record.payload["entries"]
             }
             snapshots = []
             for index, (key, real, _signature, present) in enumerate(observations):
                 # 只投影受影响父目录及其已观察别名，不把新建 cold 子树全部送前端。
                 if real in parents and present:
-                    snapshot, signature = self._snapshot(key, Path(real))
+                    snapshot, signature = self._snapshot(key, self.paths.native(real))
                     observations[index] = key, real, signature, present
                     snapshots.append((key, snapshot))
             return self.store.settle(record, observations=observations, snapshots=snapshots, **result)
 
     @staticmethod
+    def _error_detail(record: FileOperationRecord, error: BaseException) -> str:
+        logger.error("文件 operation 执行失败: operation_id=%s target=%s", record.operation_id,
+                     record.payload["target"], exc_info=(type(error), error, error.__traceback__))
+        if isinstance(error, WorkspaceFileOperationConflictError):
+            return str(error)
+        return f"{type(error).__name__}: operation_id={record.operation_id}, target={record.payload['target']}, errno={getattr(error, 'errno', None)}"
+
+    @staticmethod
     def _result_items(record: FileOperationRecord, steps: list[dict], *, unverified: bool = False) -> list[dict]:
-        return [{"path": entry["relative_path"], "kind": entry["kind"],
+        return [{"path": file_uri_child(record.payload["target"], *Path(entry["relative_path"]).parts), "kind": entry["kind"],
                  "state": "published" if index < len(steps) and steps[index]["state"] == "published" else
                  "unverified" if unverified and index < len(steps) and steps[index]["state"] == "publishing" else
                  "conflict" if index < len(steps) and steps[index]["state"] == "conflict" else "pending",
@@ -500,7 +547,7 @@ class WorkspaceFileOperations:
 
     def _cleanup_incoming(self, record: FileOperationRecord) -> None:
         if record.payload["incoming"] is not None:
-            root = Path(record.payload["incoming"])
+            root = self._incoming_path(record)
             if root.exists():
                 expected = canonical_json({"workspace_id": self.workspace_id, "operation_id": record.operation_id})
                 marker = root / "owner.json"
@@ -510,18 +557,19 @@ class WorkspaceFileOperations:
                 fsync_directory(root.parent)
 
     def _cleanup(self, record: FileOperationRecord) -> None:
-        cleanup_steps(record.steps, operation_id=record.operation_id, request_hash=record.payload["request_hash"])
+        cleanup_steps([{**step, "stage_root": str(self._stage_root(record, index))} for index, step in enumerate(record.steps)],
+                      operation_id=record.operation_id, request_hash=record.payload["request_hash"])
         self._cleanup_incoming(record)
         self.store.complete_cleanup(record)
 
     def _prune_unaccepted_uploads(self) -> None:
         if not self._incoming.exists():
             return
-        retained = {record.payload["incoming"] for operation_id, actor in self.store.staging_records()
+        retained = {self._incoming_path(record) for operation_id, actor in self.store.staging_records()
                     if (record := self.store.get(operation_id, actor)).payload["incoming"] is not None}
         # 只清本 owner 专用 staging；未接受请求没有业务效果，不扫描工作区树。
         for path in self._incoming.iterdir():
-            if str(path) in retained:
+            if path in retained:
                 continue
             if path.is_symlink() or not path.is_dir():
                 raise RuntimeError(f"上传 staging 包含未知条目: {path}")

@@ -7,22 +7,26 @@ import {
   fileTreeNodeMatchesQuery,
 } from "./workspaceFileTreeRows";
 
+const workspaceRootUri = "boxteam://workspace/ws-1/resources/files/root";
+const gatewayId = "gateway_0123456789abcdef0123456789abcdef";
+const filesystemRootUri = `boxteam://${gatewayId}/gateway/${gatewayId}/resources/files/0123456789ab7abc8abc012345678901`;
+
 function node(name: string, path: string): WorkspaceFileNode {
   return { name, path, kind: "file", has_children: false, size: 0, modified_at: null };
 }
 
 describe("文件树搜索命中判定", () => {
-  test("名称与路径分别匹配，不跨分隔符拼出假命中", () => {
-    expect(fileTreeNodeMatchesQuery(node("b", "a/b"), "b")).toBe(true);
-    expect(fileTreeNodeMatchesQuery(node("b", "a/b"), "a/b")).toBe(true);
-    // 旧实现用 `${name}\n${path}` 拼接：路径里的换行会被当成真实换行，
-    // 使「名字尾 + 路径头」跨行拼成 "b\nsee" 这种并不存在的连续串。
-    const tricky = node("b", "see/b");
+  test("名称与 URI 分别匹配，不跨分隔符拼出假命中", () => {
+    expect(fileTreeNodeMatchesQuery(node("b", `${workspaceRootUri}/a/b`), "b")).toBe(true);
+    expect(fileTreeNodeMatchesQuery(node("b", `${workspaceRootUri}/a/b`), "a/b")).toBe(true);
+    // 旧实现用 `${name}\n${path}` 拼接：URI 里的换行会被当成真实换行，
+    // 使名字尾和路径头跨边界拼成并不存在的连续串。
+    const tricky = node("b", `${workspaceRootUri}/see/b`);
     expect(fileTreeNodeMatchesQuery(tricky, "b\nsee")).toBe(false);
   });
 
   test("名字本身含换行时按子串语义正常匹配", () => {
-    const multiline = node("x\ny", "dir/x\ny");
+    const multiline = node("x\ny", `${workspaceRootUri}/dir/x\ny`);
     expect(fileTreeNodeMatchesQuery(multiline, "x")).toBe(true);
     expect(fileTreeNodeMatchesQuery(multiline, "y")).toBe(true);
     expect(fileTreeNodeMatchesQuery(multiline, "dir/x")).toBe(true);
@@ -30,7 +34,7 @@ describe("文件树搜索命中判定", () => {
   });
 
   test("空查询不过滤任何节点", () => {
-    expect(fileTreeNodeMatchesQuery(node("a", "a"), "")).toBe(true);
+    expect(fileTreeNodeMatchesQuery(node("a", `${workspaceRootUri}/a`), "")).toBe(true);
   });
 });
 
@@ -46,178 +50,156 @@ function directory(items: WorkspaceFileNode[]): DirectoryCacheEntry {
   };
 }
 
+function rowOptions(
+  overrides: Partial<Parameters<typeof buildVisibleFileTreeRows>[0]> = {},
+): Parameters<typeof buildVisibleFileTreeRows>[0] {
+  return {
+    directories: {},
+    expandedPaths: new Set(),
+    shortcuts: [],
+    searchQuery: "",
+    workspaceLabel: "project",
+    workspaceTitle: workspaceRootUri,
+    workspaceRootPath: workspaceRootUri,
+    filesystemRootPath: filesystemRootUri,
+    filesystemLabel: "文件系统",
+    ...overrides,
+  };
+}
+
 test("只展开可见分支并为大目录生成扁平行", () => {
   const items = Array.from({ length: 1_000 }, (_, index): WorkspaceFileNode => ({
     name: `file-${index}.ts`,
-    path: `file-${index}.ts`,
+    path: `${workspaceRootUri}/file-${index}.ts`,
     kind: "file",
     has_children: false,
     size: index,
     modified_at: null,
   }));
-  const rows = buildVisibleFileTreeRows({
-    directories: { "": directory(items) },
-    expandedPaths: new Set([""]),
-    shortcuts: [],
-    searchQuery: "",
-    workspaceLabel: "project",
-    workspaceTitle: "/workspace/project",
-    workspaceRootPath: "",
-    filesystemRootPath: "filesystem:/",
-    shortcutPath: (path) => `filesystem:${path}`,
-  });
+  const rows = buildVisibleFileTreeRows(rowOptions({
+    directories: { [workspaceRootUri]: directory(items) },
+    expandedPaths: new Set([workspaceRootUri]),
+  }));
 
   expect(rows).toHaveLength(1_002);
-  expect(rows[0]).toMatchObject({ kind: "root", label: "project" });
+  expect(rows[0]).toMatchObject({ kind: "root", label: "project", treePath: workspaceRootUri });
   expect(rows[1]).toMatchObject({ kind: "node", depth: 0 });
-  expect(rows[rows.length - 1]).toMatchObject({ kind: "root", label: "/" });
+  expect(rows[rows.length - 1]).toMatchObject({
+    kind: "root", label: "文件系统", title: "文件系统", treePath: filesystemRootUri,
+  });
 });
 
 describe("扁平文件树搜索", () => {
   test("不加载未展开目录也能保留可继续展开的目录", () => {
-    const rows = buildVisibleFileTreeRows({
+    const srcUri = `${workspaceRootUri}/src`;
+    const rows = buildVisibleFileTreeRows(rowOptions({
       directories: {
-        "": directory([{
+        [workspaceRootUri]: directory([{
           name: "src",
-          path: "src",
+          path: srcUri,
           kind: "directory",
           has_children: true,
           size: null,
           modified_at: null,
         }]),
       },
-      expandedPaths: new Set([""]),
-      shortcuts: [],
+      expandedPaths: new Set([workspaceRootUri]),
       searchQuery: "needle",
-      workspaceLabel: "project",
-      workspaceTitle: "/workspace/project",
-      workspaceRootPath: "",
-      filesystemRootPath: "filesystem:/",
-      shortcutPath: (path) => `filesystem:${path}`,
-    });
+    }));
 
-    expect(rows.some((row) => row.kind === "node" && row.node.path === "src"))
+    expect(rows.some((row) => row.kind === "node" && row.node.path === srcUri))
       .toBe(true);
   });
 });
 
 describe("符号链接与损坏目录结构的边界", () => {
   test("符号链接即使位于展开集合内也不展开其子项", () => {
+    const linkUri = `${workspaceRootUri}/dir/link`;
+    const escapedUri = `${linkUri}/escaped.ts`;
     const link: WorkspaceFileNode = {
       name: "link",
-      path: "dir/link",
+      path: linkUri,
       kind: "symlink",
       has_children: false,
       size: 0,
       modified_at: null,
     };
-    const rows = buildVisibleFileTreeRows({
+    const rows = buildVisibleFileTreeRows(rowOptions({
       directories: {
-        dir: directory([link]),
+        [`${workspaceRootUri}/dir`]: directory([link]),
         // 即使调用方错误地提供了 symlink 的子目录缓存，也不应被展开。
-        "dir/link": directory([{
-          name: "escaped.ts",
-          path: "dir/link/escaped.ts",
-          kind: "file",
-          has_children: false,
-          size: 1,
-          modified_at: null,
-        }]),
+        [linkUri]: directory([node("escaped.ts", escapedUri)]),
       },
-      expandedPaths: new Set(["dir", "dir/link"]),
-      shortcuts: [],
-      searchQuery: "",
-      workspaceLabel: "project",
-      workspaceTitle: "/workspace/project",
-      workspaceRootPath: "dir",
-      filesystemRootPath: "filesystem:/",
-      shortcutPath: (path) => "filesystem:" + path,
-    });
+      expandedPaths: new Set([`${workspaceRootUri}/dir`, linkUri]),
+      workspaceRootPath: `${workspaceRootUri}/dir`,
+    }));
 
-    const linkRow = rows.find((row) => row.kind === "node" && row.node.path === "dir/link");
+    const linkRow = rows.find((row) => row.kind === "node" && row.node.path === linkUri);
     expect(linkRow).toMatchObject({ kind: "node", expanded: false });
-    expect(rows.some((row) => row.kind === "node" && row.node.path === "dir/link/escaped.ts"))
+    expect(rows.some((row) => row.kind === "node" && row.node.path === escapedUri))
       .toBe(false);
   });
 
   test("自引用目录不会造成无限递归", () => {
-    const rows = buildVisibleFileTreeRows({
+    const loopUri = `${workspaceRootUri}/loop`;
+    const rows = buildVisibleFileTreeRows(rowOptions({
       directories: {
-        loop: directory([{
+        [loopUri]: directory([{
           name: "loop",
-          path: "loop",
+          path: loopUri,
           kind: "directory",
           has_children: true,
           size: null,
           modified_at: null,
         }]),
       },
-      expandedPaths: new Set(["loop"]),
-      shortcuts: [],
-      searchQuery: "",
-      workspaceLabel: "project",
-      workspaceTitle: "/workspace/project",
-      workspaceRootPath: "loop",
-      filesystemRootPath: "filesystem:/",
-      shortcutPath: (path) => "filesystem:" + path,
-    });
+      expandedPaths: new Set([loopUri]),
+      workspaceRootPath: loopUri,
+    }));
 
-    expect(rows.filter((row) => row.kind === "node" && row.node.path === "loop"))
+    expect(rows.filter((row) => row.kind === "node" && row.node.path === loopUri))
       .toHaveLength(1);
   });
 
   test("搜索时自引用目录不会造成无限递归", () => {
-    const rows = buildVisibleFileTreeRows({
+    const loopUri = `${workspaceRootUri}/loop`;
+    const rows = buildVisibleFileTreeRows(rowOptions({
       directories: {
-        loop: directory([{
+        [loopUri]: directory([{
           name: "loop",
-          path: "loop",
+          path: loopUri,
           kind: "directory",
           has_children: true,
           size: null,
           modified_at: null,
         }]),
       },
-      expandedPaths: new Set(["loop"]),
-      shortcuts: [],
+      expandedPaths: new Set([loopUri]),
       searchQuery: "needle",
-      workspaceLabel: "project",
-      workspaceTitle: "/workspace/project",
-      workspaceRootPath: "loop",
-      filesystemRootPath: "filesystem:/",
-      shortcutPath: (path) => "filesystem:" + path,
-    });
+      workspaceRootPath: loopUri,
+    }));
 
-    expect(rows.filter((row) => row.kind === "node" && row.node.path === "loop"))
+    expect(rows.filter((row) => row.kind === "node" && row.node.path === loopUri))
       .toHaveLength(1);
   });
 
-  test("同一目录在互不嵌套的多条根下重复展开时仍各自渲染", () => {
-    const rows = buildVisibleFileTreeRows({
+  test("多个快捷根指向同一 URI 时各自恢复并渲染目录", () => {
+    const sharedUri = `${filesystemRootUri}/shared`;
+    const childUri = `${sharedUri}/a.ts`;
+    const rows = buildVisibleFileTreeRows(rowOptions({
       directories: {
-        "filesystem:shared": directory([{
-          name: "a.ts",
-          path: "shared/a.ts",
-          kind: "file",
-          has_children: false,
-          size: 1,
-          modified_at: null,
-        }]),
+        [sharedUri]: directory([node("a.ts", childUri)]),
       },
-      expandedPaths: new Set(["filesystem:shared"]),
+      expandedPaths: new Set([sharedUri]),
       shortcuts: [
-        { source: "workspace", label: "one", path: "shared" },
-        { source: "workspace", label: "two", path: "shared" },
+        { source: "workspace", label: "one", path: sharedUri },
+        { source: "workspace", label: "two", path: sharedUri },
       ],
-      searchQuery: "",
-      workspaceLabel: "project",
-      workspaceTitle: "/workspace/project",
-      workspaceRootPath: "",
-      filesystemRootPath: "filesystem:/",
-      shortcutPath: (path) => "filesystem:" + path,
-    });
+    }));
 
-    expect(rows.filter((row) => row.kind === "node" && row.node.path === "shared/a.ts"))
+    expect(rows.filter((row) => row.kind === "node" && row.node.path === childUri))
+      .toHaveLength(2);
+    expect(rows.filter((row) => row.kind === "root" && row.treePath === sharedUri))
       .toHaveLength(2);
   });
 });

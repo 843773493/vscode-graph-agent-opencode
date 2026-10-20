@@ -24,12 +24,12 @@ import {
   readFilePathTextFromClipboardData,
 } from "../../../utils/clipboard";
 import { filesFromClipboardData, getFileTransferHost } from "../../../utils/fileTransferHost";
-import { FILESYSTEM_ROOT_PATH, parentFileTreePath, parseClipboardFilePaths, ROOT_PATH } from "./workspaceFileTreePaths";
+import { parentFileTreePath, parseClipboardFilePaths } from "./workspaceFileTreePaths";
 import { useWorkspaceFileOperations, type PendingFileCreation } from "./useWorkspaceFileOperations";
 
 export interface FileTreeContextMenuTarget {
   treePath: string;
-  absolutePath: string;
+  uri: string;
   label: string;
   kind: WorkspaceFileNode["kind"];
   shortcutSource: "session" | "workspace" | null;
@@ -40,7 +40,7 @@ export interface FileTreeContextMenuTarget {
 
 export interface WorkspaceClipboardEntry {
   location: WorkspaceFileLocation;
-  absolutePath: string;
+  uri: string;
   label: string;
   workspaceId: string | null;
 }
@@ -54,7 +54,7 @@ export interface WorkspaceFileTreeContextMenuOptions {
   port: number;
   workspaceId: string | null;
   sessionId: string;
-  absolutePathForTreePath: (treePath: string) => string;
+  referenceForTreePath: (treePath: string) => string;
   reconcileDirectories: (directories: readonly WorkspaceDirectoryRevision[], forcePath?: string) => Promise<void>;
   acceptSnapshots: (snapshots: readonly WorkspaceFileList[], forcePath?: string) => void;
   directoryVersion: (path: string) => { key: WorkspaceDirectoryKey; revision: number } | null;
@@ -130,7 +130,7 @@ export function useWorkspaceFileTreeContextMenu({
   port,
   workspaceId,
   sessionId,
-  absolutePathForTreePath,
+  referenceForTreePath,
   reconcileDirectories,
   acceptSnapshots,
   directoryVersion,
@@ -158,7 +158,7 @@ export function useWorkspaceFileTreeContextMenu({
     event.preventDefault();
     setContextMenu({
       treePath,
-      absolutePath: absolutePathForTreePath(treePath),
+      uri: referenceForTreePath(treePath),
       label,
       kind,
       shortcutSource,
@@ -192,7 +192,7 @@ export function useWorkspaceFileTreeContextMenu({
       if (
         copiedEntry
         && sourcePaths.length === 1
-        && sourcePaths[0] === copiedEntry.absolutePath
+        && sourcePaths[0] === copiedEntry.uri
       ) {
         if (copiedEntry.workspaceId !== workspaceId) {
           throw new Error("暂不支持跨工作区粘贴，请在来源工作区下载后再上传");
@@ -226,17 +226,17 @@ export function useWorkspaceFileTreeContextMenu({
   const copyEntryToClipboard = async (target: FileTreeContextMenuTarget) => {
     setCopiedEntry({
       location: decodeFileTreePath(target.treePath),
-      absolutePath: target.absolutePath,
+      uri: target.uri,
       label: target.label,
       workspaceId,
     });
-    await copyTextToClipboard(target.absolutePath);
-    onStatusChange(`已复制文件: ${target.absolutePath}`);
+    await copyTextToClipboard(target.uri);
+    onStatusChange(`已复制文件: ${target.uri}`);
   };
 
   const copyPathToClipboard = async (target: FileTreeContextMenuTarget) => {
-    await copyTextToClipboard(target.absolutePath);
-    onStatusChange(`已复制路径: ${target.absolutePath}`);
+    await copyTextToClipboard(target.uri);
+    onStatusChange(`已复制路径: ${target.uri}`);
   };
 
   const downloadEntry = async (target: FileTreeContextMenuTarget) => {
@@ -258,7 +258,7 @@ export function useWorkspaceFileTreeContextMenu({
   const refreshTargetDirectory = async (target: FileTreeContextMenuTarget) => {
     const directoryPath = contextTargetDirectory(target);
     await loadDirectory(directoryPath, true);
-    onStatusChange(`已刷新目录: ${absolutePathForTreePath(directoryPath)}`);
+    onStatusChange(`已刷新目录: ${referenceForTreePath(directoryPath)}`);
   };
 
   const addShortcut = async (treePath: string, label: string) => {
@@ -268,7 +268,7 @@ export function useWorkspaceFileTreeContextMenu({
     const result = await addSessionFileTreeShortcut(
       port,
       sessionId,
-      { path: absolutePathForTreePath(treePath), label },
+      { path: referenceForTreePath(treePath), label },
       workspaceId,
     );
     acceptFileTreeSettings(result);
@@ -296,7 +296,7 @@ export function useWorkspaceFileTreeContextMenu({
   };
 
   const addShortcutAndDefault = async (treePath: string, label: string) => {
-    await addAbsoluteShortcutAndDefault(absolutePathForTreePath(treePath), label);
+    await addAbsoluteShortcutAndDefault(referenceForTreePath(treePath), label);
   };
 
   const removeShortcutAndDefault = async (shortcut: FileTreeShortcut) => {
@@ -381,8 +381,7 @@ export function useWorkspaceFileTreeContextMenu({
       if (
         !(event.ctrlKey || event.metaKey)
         || event.key.toLowerCase() !== "c"
-        || contextMenu.treePath === ROOT_PATH
-        || contextMenu.treePath === FILESYSTEM_ROOT_PATH
+        || parentFileTreePath(contextMenu.treePath) === contextMenu.treePath
       ) {
         return;
       }

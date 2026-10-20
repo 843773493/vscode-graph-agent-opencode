@@ -28,6 +28,61 @@ export declare type AcquireGatewayUserRequest = Message<"boxteam.gateway.v1.Acqu
 export declare const AcquireGatewayUserRequestSchema: GenMessage<AcquireGatewayUserRequest>;
 
 /**
+ * 同机认证控制链专用，不作为普通文件响应或联邦资源投影。
+ *
+ * @generated from message boxteam.gateway.v1.NativeDirectoryBindRequest
+ */
+export declare type NativeDirectoryBindRequest = Message<"boxteam.gateway.v1.NativeDirectoryBindRequest"> & {
+  /**
+   * @generated from field: string native_root = 1;
+   */
+  nativeRoot: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.NativeDirectoryBindRequest.
+ * Use `create(NativeDirectoryBindRequestSchema)` to create a new message.
+ */
+export declare const NativeDirectoryBindRequestSchema: GenMessage<NativeDirectoryBindRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v1.NativeDirectoryBindingDTO
+ */
+export declare type NativeDirectoryBindingDTO = Message<"boxteam.gateway.v1.NativeDirectoryBindingDTO"> & {
+  /**
+   * @generated from field: string uri = 1;
+   */
+  uri: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.NativeDirectoryBindingDTO.
+ * Use `create(NativeDirectoryBindingDTOSchema)` to create a new message.
+ */
+export declare const NativeDirectoryBindingDTOSchema: GenMessage<NativeDirectoryBindingDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v1.NativeDirectoryResolveDTO
+ */
+export declare type NativeDirectoryResolveDTO = Message<"boxteam.gateway.v1.NativeDirectoryResolveDTO"> & {
+  /**
+   * @generated from field: string uri = 1;
+   */
+  uri: string;
+
+  /**
+   * @generated from field: string native_root = 2;
+   */
+  nativeRoot: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.NativeDirectoryResolveDTO.
+ * Use `create(NativeDirectoryResolveDTOSchema)` to create a new message.
+ */
+export declare const NativeDirectoryResolveDTOSchema: GenMessage<NativeDirectoryResolveDTO>;
+
+/**
  * @generated from message boxteam.gateway.v1.ActivateGatewayWorkspaceResultDTO
  */
 export declare type ActivateGatewayWorkspaceResultDTO = Message<"boxteam.gateway.v1.ActivateGatewayWorkspaceResultDTO"> & {

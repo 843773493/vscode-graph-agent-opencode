@@ -412,7 +412,7 @@ def safe_join(base_path: Path, *paths: str) -> Path:
     joined = base.joinpath(*paths).resolve()
 
     # 确保生成的路径仍然在基础目录范围内
-    if not str(joined).startswith(str(base) + os.sep) and joined != base:
+    if not joined.is_relative_to(base):
         raise ForbiddenError("Path traversal detected")
 
     return joined

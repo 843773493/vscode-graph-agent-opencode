@@ -163,6 +163,9 @@ from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
+from app.services.infrastructure.workspace_files.paths import (
+    GatewayNativeDirectoryClient,
+)
 from app.services.infrastructure.workspace_service import WorkspaceService
 from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
 from app.services.mapping.session_resource_mapper import SessionResourceMapper
@@ -582,6 +585,13 @@ def _build_app_container(
     workspace_service = WorkspaceService(
         config_service=config_service,
         workspace_root=resolved_workspace_root,
+        native_directories=GatewayNativeDirectoryClient(
+            workspace_id=workspace_id,
+            connection=GatewayTransportConnection(
+                gateway_url=os.environ.get("BOXTEAM_GATEWAY_URL"), config_service=config_service,
+            ),
+            local_token_supplier=get_gateway_local_token,
+        ),
     )
     terminal_manager_client = TerminalManagerClient(
         config_service=config_service,
@@ -637,6 +647,7 @@ def _build_app_container(
     file_tree_settings_service = FileTreeSettingsService(
         workspace_root=resolved_workspace_root,
         path_resolver=session_path_resolver,
+        file_paths=workspace_service.file_paths,
     )
     session_service.register_change_listener(
         file_tree_settings_service.handle_session_change
@@ -678,6 +689,7 @@ def _build_app_container(
             gateway_url=os.environ.get("BOXTEAM_GATEWAY_URL"), config_service=config_service,
         ),
         gateway_token_supplier=get_gateway_local_token,
+        file_paths=workspace_service.file_paths,
     )
     workspace_file_watch_service = resource_platform.file_watch_service
     workspace_file_resource_registry = resource_platform.file_registry

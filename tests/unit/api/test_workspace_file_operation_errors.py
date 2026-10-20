@@ -94,5 +94,6 @@ def file_intent() -> WorkspaceFileMutationIntentDTO:
         client_operation_id="op_00000000000040008000000000000001", client_sequence=1,
         expected_directory_revision=1,
         directory_key={"workspace_id": _FailingWorkspaceService.workspace_id,
-                       "scope": "workspace", "root": "/error-mapping", "path": ""},
+                       "scope": "workspace", "root": f"boxteam://workspace/{_FailingWorkspaceService.workspace_id}/resources/files/root",
+                       "path": f"boxteam://workspace/{_FailingWorkspaceService.workspace_id}/resources/files/root"},
     )

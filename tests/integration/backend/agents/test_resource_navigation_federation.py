@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+from contextlib import closing
 from uuid import uuid4
 
 from app.core.resource_uri import resource_display_uri
@@ -16,6 +18,18 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 async def test_navigation_uses_original_star_channels_and_fixed_owner(communication_triad) -> None:
     nodes, model, artifacts = communication_triad
     source, hub, target = nodes["b"], nodes["a"], nodes["c"]
+    external = target.workspace.parent / "unregistered-native"
+    external.mkdir(exist_ok=True)
+    (external / "native.txt").write_text("目标原生目录正文 Ω\n")
+    def registry_snapshot():
+        with closing(sqlite3.connect(f"file:{target.gateway_root / 'gateway.sqlite'}?mode=ro", uri=True)) as database:
+            return database.execute("SELECT * FROM gateway_workspace_registry ORDER BY workspace_id").fetchall()
+
+    registered_before = registry_snapshot()
+    references = await target.client.post("/api/v1/workspace/files/references", json={"paths": [str(external)]})
+    assert references.status_code == 200, references.text
+    native_root = references.json()["data"]["uris"][0]
+    assert native_root.startswith(f"boxteam://gateway/{target.gateway_id}/resources/files/")
     child = target.workspace / "src/联邦 文件.v2.md"
     child.write_text("跨 Gateway 正文 Ω\n")
     skill = target.workspace / ".boxteam/skills/navigation/references"
@@ -44,6 +58,15 @@ async def test_navigation_uses_original_star_channels_and_fixed_owner(communicat
         assert data["node"]["uri"] == address
         evidence.append({"source": node.gateway_id, "uri": address, "operation": operation, "data": data})
         return data
+
+    native_uri = native_root.replace("boxteam://", f"boxteam://{target.gateway_id}/")
+    native_listing = await navigate(source, native_uri, "list")
+    assert len(native_listing["entries"]) == 1
+    assert (await navigate(source, native_listing["entries"][0]["uri"], "read"))["content"] == "目标原生目录正文 Ω\n"
+    assert (await navigate(target, native_root, "list"))["node"]["uri"] == native_root
+    assert str(external) not in json.dumps(native_listing, ensure_ascii=False)
+    assert not (external / ".boxteam").exists()
+    assert registry_snapshot() == registered_before
 
     root = uri("files", "root", "src")
     # hub 一跳直达与 spoke 经唯一 hub 的两跳返回相同可继续访问的目标 URI。

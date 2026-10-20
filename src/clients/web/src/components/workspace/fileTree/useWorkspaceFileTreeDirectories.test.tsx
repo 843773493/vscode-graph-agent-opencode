@@ -7,6 +7,8 @@ import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+const workspaceRootUri = "boxteam://workspace/ws-1/resources/files/root";
+const treePath = (path: string): string => path ? `${workspaceRootUri}/${path}` : workspaceRootUri;
 
 function installWindow(port: number): void {
   Object.defineProperty(globalThis, "window", {
@@ -21,7 +23,7 @@ function installWindow(port: number): void {
 
 function apiResponse(data: unknown): Response {
   if (data && typeof data === "object" && "items" in data && "path" in data) {
-    data = { directory_key: { workspace_id: "backend_files", scope: "workspace", root: "/w/project", path: data.path },
+    data = { directory_key: { workspace_id: "ws-1", scope: "workspace", root: workspaceRootUri, path: data.path },
       directory_revision: 1, ...data };
   }
   return Response.json({
@@ -75,7 +77,7 @@ function mountHarness(port: number): {
     };
     const api = useWorkspaceFileTreeDirectories({
       port,
-      workspaceId: "gw_test",
+      workspaceId: "ws-1",
       expandedPathsRef,
       shortcutTreePathsRef,
       activeFilePathRef,
@@ -118,9 +120,9 @@ describe("workspace 文件树目录缓存", () => {
         requests += 1;
         await new Promise((resolve) => setTimeout(resolve, 10));
         return apiResponse({
-          root_path: url.searchParams.get("path") ?? "",
+          root_path: workspaceRootUri,
           path: url.searchParams.get("path") ?? "",
-          items: [fileNode("src/a.ts")],
+          items: [fileNode(treePath("src/a.ts"))],
           truncated: false,
           next_cursor: null,
         });
@@ -131,16 +133,16 @@ describe("workspace 文件树目录缓存", () => {
     const { handle } = mountHarness(port);
     await act(async () => {
       const results = await Promise.all([
-        handle.loadDirectory("src"),
-        handle.loadDirectory("src"),
+        handle.loadDirectory(treePath("src")),
+        handle.loadDirectory(treePath("src")),
       ]);
       expect(results).toEqual([true, true]);
     });
     expect(requests).toBe(1);
-    expect(handle.directoriesRef.current["src"]).toMatchObject({
+    expect(handle.directoriesRef.current[treePath("src")]).toMatchObject({
       loading: false,
       error: null,
-      items: [{ path: "src/a.ts" }],
+      items: [{ path: treePath("src/a.ts") }],
     });
   });
 
@@ -160,14 +162,14 @@ describe("workspace 文件树目录缓存", () => {
         page += 1;
         if (page === 1) {
           return apiResponse({
-            root_path: "", path: "",
-            items: [fileNode("src/a.ts")],
+            root_path: workspaceRootUri, path: treePath("src"),
+            items: [fileNode(treePath("src/a.ts"))],
             truncated: false, next_cursor: "cursor-1",
           });
         }
         return apiResponse({
-          root_path: "src", path: "src",
-          items: [fileNode("src/a.ts"), fileNode("src/b.ts")],
+          root_path: workspaceRootUri, path: treePath("src"),
+          items: [fileNode(treePath("src/a.ts")), fileNode(treePath("src/b.ts"))],
           truncated: false, next_cursor: null,
         });
       }
@@ -176,15 +178,15 @@ describe("workspace 文件树目录缓存", () => {
 
     const { handle } = mountHarness(port);
     await act(async () => {
-      await handle.loadDirectory("src");
+      await handle.loadDirectory(treePath("src"));
     });
-    expect(handle.directoriesRef.current["src"]).toMatchObject({ nextCursor: "cursor-1" });
+    expect(handle.directoriesRef.current[treePath("src")]).toMatchObject({ nextCursor: "cursor-1" });
     await act(async () => {
-      await handle.loadDirectory("src", false, true);
+      await handle.loadDirectory(treePath("src"), false, true);
     });
-    const items = (handle.directoriesRef.current["src"] as { items: Array<{ path: string }> }).items;
-    expect(items.map((item) => item.path)).toEqual(["src/a.ts", "src/b.ts"]);
-    expect(handle.directoriesRef.current["src"]).toMatchObject({ nextCursor: null });
+    const items = (handle.directoriesRef.current[treePath("src")] as { items: Array<{ path: string }> }).items;
+    expect(items.map((item) => item.path)).toEqual([treePath("src/a.ts"), treePath("src/b.ts")]);
+    expect(handle.directoriesRef.current[treePath("src")]).toMatchObject({ nextCursor: null });
   });
 
   test("没有下一页游标时追加加载直接短路不发请求", async () => {
@@ -200,13 +202,13 @@ describe("workspace 文件树目录缓存", () => {
         return apiResponse({ kind: "guest", user_id: null });
       }
       requests += 1;
-      return apiResponse({ root_path: "", path: "", items: [], truncated: false, next_cursor: null });
+      return apiResponse({ root_path: workspaceRootUri, path: workspaceRootUri, items: [], truncated: false, next_cursor: null });
     }, { preconnect: originalFetch.preconnect });
 
     const { handle } = mountHarness(port);
     let result = false;
     await act(async () => {
-      result = await handle.loadDirectory("src", false, true);
+      result = await handle.loadDirectory(treePath("src"), false, true);
     });
     expect(result).toBe(true);
     expect(requests).toBe(0);
@@ -233,10 +235,10 @@ describe("workspace 文件树目录缓存", () => {
     const { handle, statuses } = mountHarness(port);
     let result = true;
     await act(async () => {
-      result = await handle.loadDirectory("src");
+      result = await handle.loadDirectory(treePath("src"));
     });
     expect(result).toBe(false);
-    expect(handle.directoriesRef.current["src"]).toMatchObject({
+    expect(handle.directoriesRef.current[treePath("src")]).toMatchObject({
       loading: false,
       error: "请求失败 500 Internal Server Error: 目录读取失败",
     });
@@ -258,28 +260,28 @@ describe("workspace 文件树目录缓存", () => {
       const path = url.searchParams.get("path") ?? "";
       requestedPaths.push(path);
       return apiResponse({
-        root_path: path, path,
-        items: [fileNode("src/a.ts")],
+        root_path: workspaceRootUri, path,
+        items: [fileNode(treePath("src/a.ts"))],
         truncated: false, next_cursor: null,
       });
     }, { preconnect: originalFetch.preconnect });
 
     const { handle } = mountHarness(port);
     await act(async () => {
-      await handle.loadDirectory("src");
-      await handle.loadDirectory("other");
+      await handle.loadDirectory(treePath("src"));
+      await handle.loadDirectory(treePath("other"));
     });
     await act(async () => {
       // ghost 已展开但从未加载过，不得因为它被展开就补发请求。
-      handle.commitExpanded(["src", "ghost"]);
-      handle.reloadExpandedDirectories(["/w/project"]);
+      handle.commitExpanded([treePath("src"), treePath("ghost")]);
+      handle.reloadExpandedDirectories([workspaceRootUri]);
       await Promise.resolve();
     });
-    expect(requestedPaths.filter((path) => path === "src").length).toBe(2);
-    expect(requestedPaths.filter((path) => path === "other").length).toBe(1);
-    expect(requestedPaths).not.toContain("ghost");
+    expect(requestedPaths.filter((path) => path === treePath("src")).length).toBe(2);
+    expect(requestedPaths.filter((path) => path === treePath("other")).length).toBe(1);
+    expect(requestedPaths).not.toContain(treePath("ghost"));
     // other 未处于展开态：重同步只丢弃它的缓存，不得补发请求。
-    expect(handle.directoriesRef.current["other"]).toBeUndefined();
+    expect(handle.directoriesRef.current[treePath("other")]).toBeUndefined();
   });
 
   test("中止在途请求后迟到的响应不写入缓存", async () => {
@@ -297,8 +299,8 @@ describe("workspace 文件树目录缓存", () => {
       await new Promise<void>((resolve) => { releaseList.current = resolve; });
       // 迟到的响应带真实条目，用来证明中止后它不会写进缓存。
       return apiResponse({
-        root_path: "src", path: "src",
-        items: [fileNode("src/late.ts")],
+        root_path: workspaceRootUri, path: treePath("src"),
+        items: [fileNode(treePath("src/late.ts"))],
         truncated: false, next_cursor: "late-cursor",
       });
     }, { preconnect: originalFetch.preconnect });
@@ -306,22 +308,22 @@ describe("workspace 文件树目录缓存", () => {
     const { handle } = mountHarness(port);
     let pending!: Promise<boolean>;
     await act(async () => {
-      pending = handle.loadDirectory("src");
+      pending = handle.loadDirectory(treePath("src"));
       await Promise.resolve();
     });
-    expect(handle.directoriesRef.current["src"]).toMatchObject({ loading: true });
+    expect(handle.directoriesRef.current[treePath("src")]).toMatchObject({ loading: true });
     let abortedPaths: string[] = [];
     act(() => {
       abortedPaths = handle.abortAllDirectoryRequests();
     });
-    expect(abortedPaths).toEqual(["src"]);
+    expect(abortedPaths).toEqual([treePath("src")]);
     releaseList.current?.();
     let resolved = true;
     await act(async () => {
       resolved = await pending;
     });
     expect(resolved).toBe(false);
-    expect(handle.directoriesRef.current["src"]).toMatchObject({
+    expect(handle.directoriesRef.current[treePath("src")]).toMatchObject({
       items: [],
       nextCursor: null,
     });
@@ -347,9 +349,9 @@ describe("workspace 文件树目录缓存", () => {
 
     const { handle, statuses } = mountHarness(port);
     await act(async () => {
-      await handle.loadDirectory("root");
+      await handle.loadDirectory(workspaceRootUri);
     });
-    const entry = handle.directoriesRef.current["root"] as { error?: string };
+    const entry = handle.directoriesRef.current[workspaceRootUri] as { error?: string };
     expect(entry.error).toContain("没有访问权限");
     expect(entry.error).toContain("请求失败 403 Forbidden");
     expect(entry.error).toContain("文件树路径无访问权限: root");
@@ -372,7 +374,7 @@ describe("workspace 文件树目录缓存", () => {
       await new Promise<void>((resolve) => { releaseList.current = resolve; });
       const path = url.searchParams.get("path") ?? "";
       return apiResponse({
-        root_path: path, path,
+        root_path: workspaceRootUri, path,
         items: [fileNode(path + "/stale.ts")],
         truncated: false, next_cursor: null,
       });
@@ -381,12 +383,12 @@ describe("workspace 文件树目录缓存", () => {
     const { handle } = mountHarness(port);
     let pending!: Promise<boolean>;
     await act(async () => {
-      pending = handle.loadDirectory("src/gone");
+      pending = handle.loadDirectory(treePath("src/gone"));
       await Promise.resolve();
     });
-    expect(handle.directoriesRef.current["src/gone"]).toMatchObject({ loading: true });
+    expect(handle.directoriesRef.current[treePath("src/gone")]).toMatchObject({ loading: true });
     act(() => {
-      handle.invalidateDirectoriesUnder("src");
+      handle.invalidateDirectoriesUnder(treePath("src"));
     });
     releaseList.current?.();
     let resolved = true;
@@ -394,7 +396,7 @@ describe("workspace 文件树目录缓存", () => {
       resolved = await pending;
     });
     expect(resolved).toBe(false);
-    expect(handle.directoriesRef.current["src/gone"]).toBeUndefined();
+    expect(handle.directoriesRef.current[treePath("src/gone")]).toBeUndefined();
   });
 
   test("子树失效只丢弃该路径及其后代，兄弟与父级缓存保留", async () => {
@@ -410,7 +412,7 @@ describe("workspace 文件树目录缓存", () => {
       }
       const path = url.searchParams.get("path") ?? "";
       return apiResponse({
-        root_path: path, path,
+        root_path: workspaceRootUri, path,
         items: [fileNode(path + "/a.ts")],
         truncated: false, next_cursor: null,
       });
@@ -418,24 +420,24 @@ describe("workspace 文件树目录缓存", () => {
 
     const { handle } = mountHarness(port);
     await act(async () => {
-      await handle.loadDirectory("src");
-      await handle.loadDirectory("src/gone");
-      await handle.loadDirectory("src/kept");
-      await handle.loadDirectory("other");
+      await handle.loadDirectory(treePath("src"));
+      await handle.loadDirectory(treePath("src/gone"));
+      await handle.loadDirectory(treePath("src/kept"));
+      await handle.loadDirectory(treePath("other"));
     });
     act(() => {
-      handle.invalidateDirectoriesUnder("src/gone");
+      handle.invalidateDirectoriesUnder(treePath("src/gone"));
     });
-    expect(handle.directoriesRef.current["src/gone"]).toBeUndefined();
-    expect(handle.directoriesRef.current["src"]).toBeDefined();
-    expect(handle.directoriesRef.current["src/kept"]).toBeDefined();
-    expect(handle.directoriesRef.current["other"]).toBeDefined();
+    expect(handle.directoriesRef.current[treePath("src/gone")]).toBeUndefined();
+    expect(handle.directoriesRef.current[treePath("src")]).toBeDefined();
+    expect(handle.directoriesRef.current[treePath("src/kept")]).toBeDefined();
+    expect(handle.directoriesRef.current[treePath("other")]).toBeDefined();
   });
 
   test("失效后重新加载能拿到后端最新子项，不被旧缓存污染", async () => {
     const port = 49_615;
     installWindow(port);
-    let items = [fileNode("src/old.ts")];
+    let items = [fileNode(treePath("src/old.ts"))];
     globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
       const url = requestUrl(input);
       if (url.pathname === "/api/gateway/auth/local-credential") {
@@ -446,7 +448,7 @@ describe("workspace 文件树目录缓存", () => {
       }
       const path = url.searchParams.get("path") ?? "";
       return apiResponse({
-        root_path: path, path,
+        root_path: workspaceRootUri, path,
         items,
         truncated: false, next_cursor: null,
       });
@@ -454,17 +456,17 @@ describe("workspace 文件树目录缓存", () => {
 
     const { handle } = mountHarness(port);
     await act(async () => {
-      await handle.loadDirectory("src");
+      await handle.loadDirectory(treePath("src"));
     });
-    items = [fileNode("src/new.ts")];
+    items = [fileNode(treePath("src/new.ts"))];
     act(() => {
-      handle.invalidateDirectoriesUnder("src");
+      handle.invalidateDirectoriesUnder(treePath("src"));
     });
     await act(async () => {
-      await handle.loadDirectory("src");
+      await handle.loadDirectory(treePath("src"));
     });
-    const entry = handle.directoriesRef.current["src"] as { items: Array<{ path: string }> };
-    expect(entry.items.map((item) => item.path)).toEqual(["src/new.ts"]);
+    const entry = handle.directoriesRef.current[treePath("src")] as { items: Array<{ path: string }> };
+    expect(entry.items.map((item) => item.path)).toEqual([treePath("src/new.ts")]);
   });
 
   test("失效会让叶子路径的在途请求结果一并作废", async () => {
@@ -482,7 +484,7 @@ describe("workspace 文件树目录缓存", () => {
       await new Promise<void>((resolve) => { releases.push(resolve); });
       const path = url.searchParams.get("path") ?? "";
       return apiResponse({
-        root_path: path, path,
+        root_path: workspaceRootUri, path,
         items: [fileNode(path + "/a.ts")],
         truncated: false, next_cursor: null,
       });
@@ -491,24 +493,24 @@ describe("workspace 文件树目录缓存", () => {
     const { handle } = mountHarness(port);
     let first!: Promise<boolean>;
     await act(async () => {
-      first = handle.loadDirectory("src/gone");
+      first = handle.loadDirectory(treePath("src/gone"));
       await Promise.resolve();
     });
     act(() => {
-      handle.invalidateDirectoriesUnder("src/gone");
+      handle.invalidateDirectoriesUnder(treePath("src/gone"));
     });
-    expect(handle.directoriesRef.current["src/gone"]).toBeUndefined();
+    expect(handle.directoriesRef.current[treePath("src/gone")]).toBeUndefined();
     let second!: Promise<boolean>;
     await act(async () => {
-      second = handle.loadDirectory("src/gone");
+      second = handle.loadDirectory(treePath("src/gone"));
       await Promise.resolve();
     });
-    expect(handle.directoriesRef.current["src/gone"]).toMatchObject({ loading: true });
+    expect(handle.directoriesRef.current[treePath("src/gone")]).toMatchObject({ loading: true });
     releases.forEach((release) => release());
     await act(async () => {
       await Promise.all([first, second]);
     });
-    expect(handle.directoriesRef.current["src/gone"]).toMatchObject({ loading: false });
+    expect(handle.directoriesRef.current[treePath("src/gone")]).toMatchObject({ loading: false });
   });
 
 });

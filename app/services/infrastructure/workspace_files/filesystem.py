@@ -21,7 +21,7 @@ class FileEffectUnverifiedError(RuntimeError):
 
 def content_manifest(path: Path) -> dict:
     if path.is_symlink():
-        raise ValueError(f"暂不支持复制符号链接: {path}")
+        raise ValueError(f"暂不支持复制符号链接: {path.name}")
     if path.is_file():
         hasher = hashlib.sha256()
         size = 0
@@ -31,7 +31,7 @@ def content_manifest(path: Path) -> dict:
                 size += len(chunk)
         return {"kind": "file", "size": size, "hash": hasher.hexdigest()}
     if not path.is_dir():
-        raise FileNotFoundError(f"复制来源不是文件或目录: {path}")
+        raise FileNotFoundError(f"复制来源不是文件或目录: {path.name}")
     children = {}
     for child in sorted(path.iterdir(), key=lambda item: item.name):
         children[child.name] = content_manifest(child)
@@ -43,7 +43,7 @@ def captured_source(path: Path) -> dict:
     manifest = content_manifest(path)
     after = path.stat(follow_symlinks=False)
     if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
-        raise RuntimeError(f"捕获复制来源时源发生变化: {path}")
+        raise RuntimeError(f"捕获复制来源时源发生变化: {path.name}")
     return {"device": after.st_dev, "inode": after.st_ino, "mtime_ns": after.st_mtime_ns,
             "manifest": manifest, "manifest_hash": digest(manifest)}
 

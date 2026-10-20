@@ -12,7 +12,11 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 
 from app.api import workspace as workspace_api
+from app.api import workspace_observation
 from app.api.deps import (
+    get_config_service,
+    get_session_service,
+    get_workspace_activity_service,
     get_workspace_file_watch_service,
     get_workspace_service,
     verify_local_token,
@@ -78,6 +82,7 @@ def make_app(output_root: Path) -> FastAPI:
     app = FastAPI(lifespan=lifespan)
     app.add_middleware(TraceMiddleware)
     app.include_router(workspace_api.router, prefix="/api/v1")
+    app.include_router(workspace_observation.router, prefix="/api/v1")
 
     def route_for(request: Request) -> str:
         route = request.headers.get("X-BoxTeam-Workspace-Id")
@@ -94,6 +99,9 @@ def make_app(output_root: Path) -> FastAPI:
     app.dependency_overrides[get_workspace_service] = workspace_service
     app.dependency_overrides[get_workspace_file_watch_service] = watch_service
     app.dependency_overrides[verify_local_token] = lambda: "controlled-browser-token"
+    app.dependency_overrides[get_config_service] = lambda: config
+    app.dependency_overrides[get_session_service] = lambda: Mock()
+    app.dependency_overrides[get_workspace_activity_service] = lambda: Mock()
 
     @app.middleware("http")
     async def record_request(request: Request, call_next):
@@ -120,7 +128,7 @@ def make_app(output_root: Path) -> FastAPI:
 
     @app.get("/control/info")
     async def info():
-        return {route: {"workspace_id": service.workspace_id, "root_path": service.root_path}
+        return {route: {"workspace_id": service.workspace_id, "root_path": service.root_path, "uri": service.file_paths.workspace_uri}
                 for route, service in services.items()}
 
     @app.post("/control/{route}/gate/{state}")

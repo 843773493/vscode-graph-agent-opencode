@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import os
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -87,9 +86,9 @@ class WorkspaceFileStore:
                 db.execute("CREATE TABLE owner (workspace_id TEXT PRIMARY KEY)")
                 db.execute("INSERT INTO owner VALUES (?)", (workspace_id,))
                 # 每个已访问目录只留固定宽度摘要与版本，不存逐文件身份或正文。
-                db.execute("CREATE TABLE directories (key TEXT PRIMARY KEY, real_path TEXT NOT NULL, "
+                db.execute("CREATE TABLE directories (key TEXT PRIMARY KEY, uri TEXT NOT NULL, "
                            "revision INTEGER NOT NULL, signature TEXT NOT NULL, present INTEGER NOT NULL)")
-                db.execute("CREATE INDEX file_directory_real_path ON directories(real_path)")
+                db.execute("CREATE INDEX file_directory_uri ON directories(uri)")
                 db.execute("CREATE TABLE operations (queue_seq INTEGER PRIMARY KEY AUTOINCREMENT, "
                            "operation_id TEXT NOT NULL UNIQUE, actor TEXT NOT NULL, request_hash TEXT NOT NULL, "
                            "payload TEXT NOT NULL, payload_hash TEXT NOT NULL, state TEXT NOT NULL, "
@@ -98,8 +97,8 @@ class WorkspaceFileStore:
                 db.execute("CREATE INDEX file_operations_pending ON operations(queue_seq) WHERE state IN ('queued','running')")
                 db.execute("CREATE INDEX file_operations_cleanup ON operations(cleanup_done,queue_seq)")
                 db.execute("CREATE TABLE events (event_id INTEGER PRIMARY KEY AUTOINCREMENT, payload TEXT NOT NULL)")
-                db.execute("PRAGMA user_version=2")
-        elif version != 2:
+                db.execute("PRAGMA user_version=3")
+        elif version != 3:
             self._db.close()
             raise RuntimeError(f"文件导航库 schema 不受支持: path={self.path}, version={version}")
         tables = {row[0] for row in self._db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -131,35 +130,22 @@ class WorkspaceFileStore:
             with self.transaction() as connection:
                 return self.observe(observations, db=connection)
         results = []
-        for key, real_path, signature, present in observations:
+        for key, uri, signature, present in observations:
             identity = canonical_json(key.model_dump())
             row = db.execute("SELECT * FROM directories WHERE key=?", (identity,)).fetchone()
             revision = 1 if row is None else int(row["revision"]) + int((row["signature"], bool(row["present"])) != (signature, present))
-            if row is not None and row["real_path"] != real_path:
-                raise WorkspaceFileOperationConflictError(f"目录的真实路径发生变化: {key.path}")
+            if row is not None and row["uri"] != uri:
+                raise WorkspaceFileOperationConflictError(f"目录 URI 发生变化: {key.path}")
             db.execute("INSERT INTO directories VALUES (?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET "
                        "revision=excluded.revision,signature=excluded.signature,present=excluded.present",
-                       (identity, real_path, revision, signature, present))
+                       (identity, uri, revision, signature, present))
             results.append(WorkspaceDirectoryRevisionDTO(directory_key=key, directory_revision=revision, exists=present))
         return results
 
-    def observed_directories(self, paths: set[Path] | None = None, *,
-                             removed: set[Path] | None = None) -> tuple[tuple[WorkspaceDirectoryKeyDTO, str], ...]:
+    def observed_directories(self) -> tuple[tuple[WorkspaceDirectoryKeyDTO, str], ...]:
         with self._lock:
-            if paths is None:
-                rows = self._db.execute("SELECT key,real_path FROM directories")
-                return tuple((WorkspaceDirectoryKeyDTO.model_validate(json.loads(row[0])), str(row[1])) for row in rows)
-            selected = {}
-            for path in paths:
-                for row in self._db.execute("SELECT key,real_path FROM directories WHERE real_path=?", (str(path),)):
-                    selected[row[0]] = row[1]
-            for path in removed or ():
-                # 范围查询只读取被删除的已观察子树，不枚举所有历史目录。
-                prefix = str(path) + os.sep
-                for row in self._db.execute("SELECT key,real_path FROM directories WHERE real_path=? OR (real_path>=? AND real_path<?)",
-                                            (str(path), prefix, prefix[:-1] + chr(ord(prefix[-1]) + 1))):
-                    selected[row[0]] = row[1]
-            return tuple((WorkspaceDirectoryKeyDTO.model_validate(json.loads(key)), str(real)) for key, real in selected.items())
+            rows = self._db.execute("SELECT key,uri FROM directories")
+            return tuple((WorkspaceDirectoryKeyDTO.model_validate(json.loads(row[0])), str(row[1])) for row in rows)
 
     def cleanup_pending(self) -> tuple[tuple[str, str], ...]:
         with self._lock:

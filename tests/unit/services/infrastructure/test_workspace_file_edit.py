@@ -12,6 +12,9 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.core.exceptions import ForbiddenError
+from app.core.resource_uri import parse_resource_uri, resource_display_uri
+from app.gateway.control.gateway_state import GatewayStateStore
 from app.schemas.internal_v2.workspace_file_operations import (
     WorkspaceFileMutationIntentDTO,
 )
@@ -30,6 +33,21 @@ def _workspace_config_service_mock() -> Mock:
     config_service.get_workspace_preview_max_bytes.return_value = 1024 * 1024
     config_service.get_workspace_preview_binary_sample_bytes.return_value = 8192
     return config_service
+
+
+@pytest.fixture
+def native_bindings(tmp_path):
+    """文件内容测试复用真实 Gateway 根持久化；HTTP 控制链另有集成覆盖。"""
+    gateway_id = "gateway_01900000000070008000000000000001"
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    class Bindings:
+        def bind(self, root):
+            directory_id = state.bind_native_directory(gateway_id=gateway_id, native_root=str(root))
+            return resource_display_uri(scope="gateway", scope_id=gateway_id, kind="files", tail_segments=(directory_id,))
+        def resolve(self, parsed):
+            return Path(state.resolve_native_directory(gateway_id=parsed.scope_id, directory_id=parsed.tail_segments[0]))
+    yield Bindings()
+    state.close()
 
 
 @pytest.fixture
@@ -172,13 +190,14 @@ def test_resolve_raw_file_returns_safe_path_and_media_type(
 def test_resolve_raw_file_rejects_path_outside_workspace(
     workspace_service: WorkspaceService,
 ) -> None:
-    with pytest.raises(ValueError, match="上级目录"):
+    with pytest.raises(ForbiddenError):
         workspace_service.resolve_raw_file(path="../secret.png")
 
 
 @pytest.mark.asyncio
 async def test_filesystem_scope_lists_and_reads_absolute_path(
     monkeypatch: pytest.MonkeyPatch,
+    native_bindings,
 ) -> None:
     output_root = (
         Path.cwd()
@@ -191,7 +210,7 @@ async def test_filesystem_scope_lists_and_reads_absolute_path(
     workspace_root.mkdir(parents=True)
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
     workspace_service = WorkspaceService(
-        config_service=_workspace_config_service_mock(), workspace_root=workspace_root
+        config_service=_workspace_config_service_mock(), workspace_root=workspace_root, native_directories=native_bindings,
     )
     external_root = filesystem_scope_root / "external"
     external_root.mkdir()
@@ -207,9 +226,9 @@ async def test_filesystem_scope_lists_and_reads_absolute_path(
         scope="filesystem",
     )
 
-    assert listing.path == str(external_root.resolve())
-    assert listing.items[0].path == str(external_file.resolve())
-    assert content.path == str(external_file.resolve())
+    assert parse_resource_uri(listing.path).scope == "gateway"
+    assert listing.items[0].path == content.path
+    assert workspace_service.file_paths.native(content.path) == external_file.resolve()
     assert content.content == "cached model\n"
 
 
@@ -258,6 +277,7 @@ async def test_directory_listing_rejects_invalid_cursor(
 @pytest.fixture
 async def file_manager_service(
     monkeypatch: pytest.MonkeyPatch,
+    native_bindings,
 ):
     output_root = (
         Path.cwd()
@@ -271,7 +291,7 @@ async def file_manager_service(
     source_root = output_root / "clipboard"
     source_root.mkdir()
     monkeypatch.setenv("WORKSPACE_ROOT", str(project_root))
-    service = WorkspaceService(config_service=_workspace_config_service_mock(), workspace_root=project_root)
+    service = WorkspaceService(config_service=_workspace_config_service_mock(), workspace_root=project_root, native_directories=native_bindings)
     await service.start()
     yield service, project_root, source_root
     await service.stop()
@@ -451,5 +471,5 @@ def test_file_manager_reveals_path_with_host_file_manager(
 
     revealed = service.reveal_file_entry(path="notes.txt", scope="workspace")
 
-    assert revealed == target.resolve()
+    assert service.file_paths.native(revealed) == target.resolve()
     assert popen.call_args.args[0] == ["/usr/bin/xdg-open", str(project_root.resolve())]

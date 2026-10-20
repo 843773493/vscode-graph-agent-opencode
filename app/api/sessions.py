@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import aclosing
@@ -779,7 +780,7 @@ async def add_session_file_tree_shortcut(
     service: FileTreeSettingsService = Depends(get_file_tree_settings_service),
 ):
     try:
-        result = service.add_session_shortcut(
+        result = await asyncio.to_thread(service.add_session_shortcut,
             session_id,
             path=payload.path,
             label=payload.label,
@@ -804,7 +805,7 @@ async def remove_session_file_tree_shortcut(
     service: FileTreeSettingsService = Depends(get_file_tree_settings_service),
 ):
     try:
-        result = service.remove_session_shortcut(session_id, path=path)
+        result = await asyncio.to_thread(service.remove_session_shortcut,session_id, path=path)
     except KeyError as error:
         raise not_found_http_error(error) from error
     except ValueError as error:
@@ -825,7 +826,7 @@ async def apply_file_tree_shortcut_to_workspace(
     service: FileTreeSettingsService = Depends(get_file_tree_settings_service),
 ):
     try:
-        result = service.apply_to_workspace(
+        result = await asyncio.to_thread(service.apply_to_workspace,
             session_id,
             path=payload.path,
             label=payload.label,
@@ -850,7 +851,7 @@ async def remove_workspace_file_tree_shortcut(
     service: FileTreeSettingsService = Depends(get_file_tree_settings_service),
 ):
     try:
-        result = service.remove_workspace_shortcut(session_id, path=path)
+        result = await asyncio.to_thread(service.remove_workspace_shortcut,session_id, path=path)
     except KeyError as error:
         raise not_found_http_error(error) from error
     except ValueError as error:

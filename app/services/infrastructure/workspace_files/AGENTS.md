@@ -13,13 +13,14 @@
 # 不可修改内容
 
 - 不另建文件树 writer、前端版本权威、Gateway 业务存储或 Session catalog。
-- 不新增 delete/rename/move 端点、通用文件工具、资源 URI 文件根及兼容旧同步集合 writer。
+- 不新增 delete/rename/move 端点、通用文件工具或兼容旧同步集合 writer；资源 URI 根模板只消费统一寻址 owner 的定义。
 - 不改变正文 PUT 的同步 expected_revision 合同，不把全部工作区锁定为一个 CAS。
 - 不扫描磁盘静默重建操作状态，不伪称文件系统与 SQLite 多文件原子提交。
 
 # 规范
 
 - operation 冻结明确的 workspace、scope、root、规范路径及认证 actor；不因工作区切换改投，也不把代理选项当成免认证。
+- 普通文件入口统一接受目标机器原生路径和资源 URI；业务记录、响应、游标与事件只保存或返回 URI。未注册目录根仅由原生 Gateway 绑定，后台恢复重新解析绑定，不把真实根复制进工作区存储。
 - 同目标及祖先链依赖沿既有 operation 语义；前序创建者提供 accepted 身份和 revision，禁止从执行时当前版本补缺。
 - upload 必须先完整持久保存 payload 与校验清单再返回 202，后台不持有请求 UploadFile 句柄。
 - 部分或未知外部效果透明返回；恢复只使用原 operation 的可核验证据，不盲重放或伪报回滚。响应丢失沿原 ID 查询或重试。

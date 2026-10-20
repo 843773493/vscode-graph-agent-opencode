@@ -4,7 +4,6 @@ export type WorkspaceMarkdownTarget =
   | { kind: "workspace"; path: string; fragment: string };
 
 const URI_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
-const FILESYSTEM_PATH_PREFIX = "filesystem:";
 
 export function resolveWorkspaceMarkdownTarget(
   markdownPath: string,
@@ -17,7 +16,11 @@ export function resolveWorkspaceMarkdownTarget(
   if (trimmed.startsWith("#")) {
     return { kind: "anchor", href: trimmed };
   }
-  if (URI_SCHEME.test(trimmed) || trimmed.startsWith("//")) {
+  if (trimmed.startsWith("boxteam://")) {
+    const index = trimmed.indexOf("#");
+    return { kind: "workspace", path: index < 0 ? trimmed : trimmed.slice(0, index), fragment: index < 0 ? "" : trimmed.slice(index) };
+  }
+  if ((URI_SCHEME.test(trimmed) && !/^[A-Za-z]:[\\/]/.test(trimmed)) || trimmed.startsWith("//")) {
     return { kind: "external", href: trimmed };
   }
 
@@ -35,13 +38,16 @@ export function resolveWorkspaceMarkdownTarget(
     throw new Error(`Markdown 资源地址包含非法转义: ${target}`, { cause: error });
   }
 
-  const filesystemPath = markdownPath.startsWith(FILESYSTEM_PATH_PREFIX);
-  const baseMarkdownPath = filesystemPath
-    ? markdownPath.slice(FILESYSTEM_PATH_PREFIX.length)
-    : markdownPath;
-  const baseSegments = decodedPath.startsWith("/")
-    ? []
-    : baseMarkdownPath.split("/").slice(0, -1).filter(Boolean);
+  if (decodedPath.startsWith("/") || /^[A-Za-z]:[\\/]/.test(decodedPath)) {
+    return { kind: "workspace", path: decodedPath, fragment };
+  }
+  const marker = "/resources/files/";
+  const files = markdownPath.indexOf(marker);
+  if (files < 0) throw new Error("Markdown 文件缺少资源 URI");
+  const rootEnd = markdownPath.indexOf("/", files + marker.length);
+  if (rootEnd < 0) throw new Error("Markdown 地址没有指向文件");
+  const root = markdownPath.slice(0, rootEnd);
+  const baseSegments = markdownPath.slice(rootEnd + 1).split("/").slice(0, -1).map(decodeURIComponent);
   for (const segment of decodedPath.replace(/\\/g, "/").split("/")) {
     if (!segment || segment === ".") {
       continue;
@@ -60,9 +66,7 @@ export function resolveWorkspaceMarkdownTarget(
   }
   return {
     kind: "workspace",
-    path: filesystemPath
-      ? `${FILESYSTEM_PATH_PREFIX}/${baseSegments.join("/")}`
-      : baseSegments.join("/"),
+    path: root + "/" + baseSegments.map(encodeURIComponent).join("/"),
     fragment,
   };
 }

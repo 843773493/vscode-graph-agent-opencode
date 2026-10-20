@@ -12,16 +12,25 @@ from app.schemas.internal_v2.workspace_file_operations import (
     WorkspaceFileListDTO,
 )
 from app.services.infrastructure.workspace_file_watch_service import (
+    WorkspaceFileChange,
     WorkspaceFileChangeBatch,
     WorkspaceFileWatchService,
 )
 from app.services.infrastructure.workspace_files.operations import (
     WorkspaceFileOperations,
 )
+from app.services.infrastructure.workspace_files.paths import file_uri_child
 
 
 async def file_events(owner: WorkspaceFileOperations, watcher: WorkspaceFileWatchService,
-                      roots: tuple[Path, ...], after_event_id: int | None) -> AsyncIterator[WorkspaceFileChangeBatch]:
+                      roots: tuple[Path, ...], after_event_id: int | None,
+                      references: dict[Path, str]) -> AsyncIterator[WorkspaceFileChangeBatch]:
+    def reference(path: Path) -> str:
+        matches = [root for root in references if path == root or path.is_relative_to(root)]
+        if not matches:
+            raise ValueError("文件观察事件不属于固定订阅根")
+        root = max(matches, key=lambda value: len(value.parts))
+        return file_uri_child(references[root], *path.relative_to(root).parts)
     latest = owner.store.latest_event_id()
     cursor = latest if after_event_id is None else after_event_id
     if cursor > latest:
@@ -36,7 +45,7 @@ async def file_events(owner: WorkspaceFileOperations, watcher: WorkspaceFileWatc
                     for value in event["directories"]:
                         revision = WorkspaceDirectoryRevisionDTO.model_validate(value)
                         key = revision.directory_key
-                        path = Path(key.root) / key.path if key.scope == "workspace" else Path(key.path)
+                        path = await asyncio.to_thread(owner.paths.native, key.path)
                         if any(path == root or path.is_relative_to(root) for root in roots):
                             directories.append(revision)
                     if directories:
@@ -59,14 +68,15 @@ async def file_events(owner: WorkspaceFileOperations, watcher: WorkspaceFileWatc
                 if not batch.overflow:
                     parents = {Path(change.path).parent for change in batch.changes}
                     removed = {Path(change.path) for change in batch.changes if change.kind == "delete"}
-                    for key, real in owner.store.observed_directories(parents, removed=removed):
-                        path = Path(real)
+                    for key, real in owner.observed_directories(parents, removed=removed):
+                        path = real
                         if path in parents or any(path == value or path.is_relative_to(value) for value in removed):
                             observed.append((key, path))
                 directories = await asyncio.to_thread(owner.observe_directories, observed)
-                yield WorkspaceFileChangeBatch(changes=batch.changes, overflow=batch.overflow,
+                changes = tuple(WorkspaceFileChange(kind=change.kind, path=reference(Path(change.path))) for change in batch.changes)
+                yield WorkspaceFileChangeBatch(changes=changes, overflow=batch.overflow,
                                                 directories=tuple(directories), event_id=cursor,
-                                                invalidated_roots=tuple(str(root) for root in roots) if batch.overflow else ())
+                                                invalidated_roots=tuple(references[root] for root in roots) if batch.overflow else ())
         finally:
             next_batch.cancel()
             with suppress(asyncio.CancelledError, StopAsyncIteration):

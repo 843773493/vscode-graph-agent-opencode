@@ -8,9 +8,11 @@ from typing import NamedTuple
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.infrastructure.file_tree_settings_service import (
     FileTreeSettingsService,
 )
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 
@@ -45,6 +47,7 @@ def file_tree_settings() -> FileTreeFixture:
     service = FileTreeSettingsService(
         workspace_root=workspace_root,
         path_resolver=resolver,
+        file_paths=WorkspaceFilePaths(workspace=workspace_root, workspace_id=load_or_create_workspace_id(workspace_root), bindings=None),
     )
     shortcut_path = workspace_root / "torch_home"
     shortcut_path.mkdir()
@@ -106,7 +109,7 @@ def test_upgrade_snapshots_current_defaults_for_existing_sessions(
                 "version": 1,
                 "shortcuts": [
                     {
-                        "path": str(file_tree_settings.shortcut_path),
+                        "path": file_tree_settings.service._file_paths.reference(file_tree_settings.shortcut_path),
                         "label": "Torch Home",
                     }
                 ],
@@ -118,6 +121,7 @@ def test_upgrade_snapshots_current_defaults_for_existing_sessions(
     migrated_service = FileTreeSettingsService(
         workspace_root=file_tree_settings.workspace_root,
         path_resolver=file_tree_settings.resolver,
+        file_paths=file_tree_settings.service._file_paths,
     )
 
     settings = migrated_service.get(file_tree_settings.first_session_id)
@@ -214,12 +218,9 @@ def test_shortcut_rejects_relative_or_missing_directories(
     shortcut_path = file_tree_settings.shortcut_path
     first_session_id = file_tree_settings.first_session_id
 
-    with pytest.raises(ValueError, match="绝对路径"):
-        service.add_session_shortcut(
-            first_session_id,
-            path="torch_home",
-            label=None,
-        )
+    relative = service.add_session_shortcut(first_session_id, path="torch_home", label=None)
+    assert relative.effective_shortcuts[0].path == service._file_paths.reference(shortcut_path)
+
     with pytest.raises(FileNotFoundError, match="不存在"):
         service.add_session_shortcut(
             first_session_id,

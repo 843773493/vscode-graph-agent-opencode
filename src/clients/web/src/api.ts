@@ -34,7 +34,7 @@ export {
   createWorkspaceFileDownloadRequest,
   createWorkspaceFileEntry,
   decodeFileTreePath,
-  filesystemFileTreePath,
+  getWorkspaceFileRoots,
   getSessionFileTreeSettings,
   getWorkspaceFileContent,
   getWorkspaceFiles,
@@ -43,6 +43,7 @@ export {
   pasteWorkspaceFileEntries,
   removeSessionFileTreeShortcut,
   revealWorkspaceFileEntry,
+  resolveWorkspaceFileReferences,
   updateWorkspaceFileContent,
   uploadWorkspaceFileEntries,
 } from "./api/workspaceFilesystem";

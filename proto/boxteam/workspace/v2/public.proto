@@ -2278,6 +2278,20 @@ message WorkspaceFileContentDTO {
   string revision = 8;
 }
 
+message WorkspaceFileRootsDTO {
+  string workspace_uri = 1;
+  string filesystem_uri = 2;
+  string filesystem_label = 3;
+}
+
+message WorkspaceFileReferencesRequest {
+  repeated string paths = 1;
+}
+
+message WorkspaceFileReferencesDTO {
+  repeated string uris = 1;
+}
+
 message WorkspaceFileCopyRequest {
   string source_path = 1;
   optional string source_scope = 2;

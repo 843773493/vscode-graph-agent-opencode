@@ -415,4 +415,13 @@ _GATEWAY_MIGRATIONS = (
     # 一次性显式迁移：把 legacy gateway_config 中的 config 来源层镜像行并入权威
     # config_source_layers 后物理删除这些镜像行；控制面独有 KV 必须留在该表。
     _migrate_gateway_config_into_source_layers,
+    """
+    CREATE TABLE native_directory_roots (
+        gateway_id TEXT NOT NULL,
+        directory_id TEXT NOT NULL,
+        native_root TEXT NOT NULL,
+        PRIMARY KEY (gateway_id, directory_id),
+        UNIQUE (gateway_id, native_root)
+    );
+    """,
 )

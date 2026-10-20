@@ -19,13 +19,14 @@ from app.core.hashing import sha256_hex
 from app.core.path_utils import (
     get_user_workspace_root,
     get_workspace_root,
-    safe_join,
 )
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.workspace import (
     WorkspaceContextDTO,
     WorkspaceDTO,
     WorkspaceFileContentDTO,
+    WorkspaceFileReferencesDTO,
+    WorkspaceFileRootsDTO,
     WorkspaceFileScope,
     WorkspaceIndexRebuildDTO,
     WorkspaceIndexStatusDTO,
@@ -40,6 +41,12 @@ from app.schemas.internal_v2.workspace_file_operations import (
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_files.operations import (
     WorkspaceFileOperations,
+)
+from app.services.infrastructure.workspace_files.paths import (
+    NativeDirectoryBindings,
+    WorkspaceFilePaths,
+    file_uri_child,
+    file_uri_root,
 )
 from app.services.infrastructure.workspace_files.store import (
     WorkspaceFileOperationConflictError,
@@ -86,6 +93,7 @@ class WorkspaceService:
         *,
         config_service: ConfigService,
         workspace_root: Path | None = None,
+        native_directories: NativeDirectoryBindings | None = None,
     ):
         self._workspace_root = (
             workspace_root or get_workspace_root()
@@ -96,15 +104,17 @@ class WorkspaceService:
         self.name = os.path.basename(self.root_path)
         self._config_service = config_service
         self._file_operations: WorkspaceFileOperations | None = None
+        self.file_paths = WorkspaceFilePaths(workspace=self._workspace_root, workspace_id=self.workspace_id, bindings=native_directories)
 
     @property
     def file_operations(self) -> WorkspaceFileOperations:
         if self._file_operations is None:
             self._file_operations = WorkspaceFileOperations(
                 workspace=self._workspace_root, workspace_id=self.workspace_id,
-                resolve=self._resolve_file_tree_path, normalize=self._normalize_workspace_relative_path,
+                resolve=self.file_paths.resolve, normalize=self._normalize_workspace_relative_path,
                 validate_name=self._validate_entry_name, observe=self._directory_observation,
                 snapshot=self._operation_snapshot,
+                paths=self.file_paths,
             )
         return self._file_operations
 
@@ -176,7 +186,8 @@ class WorkspaceService:
             if limit is None
             else limit
         )
-        target_path, display_path = self._resolve_file_tree_path(
+        target_path, display_path = await asyncio.to_thread(
+            self.file_paths.resolve,
             path,
             scope=scope,
             allow_empty=True,
@@ -187,7 +198,7 @@ class WorkspaceService:
             raise NotADirectoryError(f"文件树路径不是目录: {display_path or '.'}")
 
         owner = self.file_operations
-        key, _ = owner.directory_key(display_path, scope)
+        key, _ = await asyncio.to_thread(owner.directory_key, display_path, scope)
         cursor_value = decode_directory_cursor(cursor) if cursor else None
         cursor_key = None if cursor_value is None else cursor_value["after"]
         def snapshot():
@@ -195,7 +206,7 @@ class WorkspaceService:
                 items, next_key, signature = self._scan_directory(
                     target_path, display_path, scope, resolved_limit, cursor_key,
                 )
-                revision = owner.store.observe([(key, str(target_path), signature, True)])[0].directory_revision
+                revision = owner.store.observe([(key, key.path, signature, True)])[0].directory_revision
                 return items, next_key, revision
         items, next_key, revision = await asyncio.to_thread(snapshot)
         if cursor_value is not None and (cursor_value["directory_key"] != key.model_dump() or cursor_value["revision"] != revision):
@@ -203,11 +214,7 @@ class WorkspaceService:
         next_cursor = None if next_key is None else encode_directory_cursor(key, revision, next_key)
 
         return WorkspaceFileListDTO(
-            root_path=(
-                self.root_path
-                if scope == "workspace"
-                else str(self._filesystem_root())
-            ),
+            root_path=key.root,
             path=display_path,
             items=items,
             truncated=next_cursor is not None,
@@ -216,6 +223,16 @@ class WorkspaceService:
             directory_key=key,
             directory_revision=revision,
         )
+
+    async def file_roots(self) -> WorkspaceFileRootsDTO:
+        native, filesystem_uri = await asyncio.to_thread(self.file_paths.resolve, "", scope="filesystem")
+        return WorkspaceFileRootsDTO(workspace_uri=self.file_paths.workspace_uri,
+                                     filesystem_uri=filesystem_uri, filesystem_label=native.anchor)
+
+    async def file_references(self, paths: list[str]) -> WorkspaceFileReferencesDTO:
+        def resolve():
+            return [self.file_paths.resolve(path, allow_empty=False)[1] for path in paths]
+        return WorkspaceFileReferencesDTO(uris=await asyncio.to_thread(resolve))
 
     def _scan_directory(
         self,
@@ -266,14 +283,14 @@ class WorkspaceService:
 
     def _directory_observation(self, key: WorkspaceDirectoryKeyDTO, target: Path):
         if target.is_symlink() or target.resolve() != target or not target.is_dir():
-            return key, str(target), digest({"directory_missing": True}), False
+            return key, key.path, digest({"directory_missing": True}), False
         _items, _cursor, signature = self._scan_directory(target, key.path, key.scope, 0, None)
-        return key, str(target), signature, True
+        return key, key.path, signature, True
 
     def _operation_snapshot(self, key: WorkspaceDirectoryKeyDTO, target: Path):
         limit = self._config_service.get_workspace_file_default_limit()
         items, after, signature = self._scan_directory(target, key.path, key.scope, limit, None)
-        return {"root_path": self.root_path if key.scope == "workspace" else key.root,
+        return {"root_path": key.root,
                 "path": key.path, "items": [item.model_dump() for item in items],
                 "limit": limit, "after": after}, signature
 
@@ -292,40 +309,6 @@ class WorkspaceService:
 
         return "/".join(parts)
 
-    @staticmethod
-    def _filesystem_root() -> Path:
-        return Path(Path.cwd().anchor or os.path.abspath(os.sep)).resolve()
-
-    def _resolve_file_tree_path(
-        self,
-        path: str,
-        *,
-        scope: WorkspaceFileScope,
-        allow_empty: bool,
-    ) -> tuple[Path, str]:
-        if scope == "workspace":
-            relative_path = self._normalize_workspace_relative_path(path)
-            if not allow_empty and not relative_path:
-                raise ValueError("工作区文件路径不能为空")
-            return (
-                safe_join(self._workspace_root, relative_path)
-                if relative_path
-                else self._workspace_root,
-                relative_path,
-            )
-
-        normalized = path.strip()
-        if not normalized:
-            if not allow_empty:
-                raise ValueError("文件系统路径不能为空")
-            target = self._filesystem_root()
-        else:
-            target = Path(normalized).expanduser()
-            if not target.is_absolute():
-                raise ValueError(f"文件系统路径必须是绝对路径: {path}")
-            target = target.resolve()
-        return target, str(target)
-
     def _entry_to_file_node(
         self,
         entry: os.DirEntry[str],
@@ -336,11 +319,7 @@ class WorkspaceService:
         is_directory = entry.is_dir(follow_symlinks=False)
         is_symlink = entry.is_symlink()
         stat_result = None if is_directory else entry.stat(follow_symlinks=False)
-        relative_path = (
-            str(Path(parent_path) / entry.name)
-            if scope == "filesystem"
-            else f"{parent_path}/{entry.name}" if parent_path else entry.name
-        )
+        relative_path = file_uri_child(parent_path, entry.name)
 
         if is_symlink:
             kind = "symlink"
@@ -373,7 +352,8 @@ class WorkspaceService:
         path: str,
         scope: WorkspaceFileScope = "workspace",
     ) -> WorkspaceFileContentDTO:
-        target_path, relative_path = self._resolve_file_tree_path(
+        target_path, relative_path = await asyncio.to_thread(
+            self.file_paths.resolve,
             path,
             scope=scope,
             allow_empty=False,
@@ -400,7 +380,7 @@ class WorkspaceService:
             raise ValueError(f"文件不是 UTF-8 文本，暂不预览: {relative_path}") from error
 
         return WorkspaceFileContentDTO(
-            root_path=(self.root_path if scope == "workspace" else str(self._filesystem_root())),
+            root_path=file_uri_root(relative_path),
             path=relative_path,
             name=target_path.name,
             content=content,
@@ -419,7 +399,7 @@ class WorkspaceService:
         path: str,
         scope: WorkspaceFileScope = "workspace",
     ) -> tuple[Path, str]:
-        target_path, relative_path = self._resolve_file_tree_path(
+        target_path, relative_path = self.file_paths.resolve(
             path,
             scope=scope,
             allow_empty=False,
@@ -440,18 +420,13 @@ class WorkspaceService:
         expected_revision: str,
         scope: WorkspaceFileScope = "workspace",
     ) -> WorkspaceFileContentDTO:
-        target_path, relative_path = self._resolve_file_tree_path(
+        target_path, relative_path = await asyncio.to_thread(
+            self.file_paths.resolve,
             path,
             scope=scope,
             allow_empty=False,
+            reject_symlink=True,
         )
-        unresolved_path = (
-            self._workspace_root.joinpath(relative_path)
-            if scope == "workspace"
-            else Path(path).expanduser()
-        )
-        if unresolved_path.is_symlink():
-            raise ValueError(f"不允许通过文件预览编辑符号链接: {relative_path}")
         if not target_path.exists():
             raise FileNotFoundError(f"工作区文件不存在: {relative_path}")
         if not target_path.is_file():
@@ -540,7 +515,7 @@ class WorkspaceService:
         path: str,
         scope: WorkspaceFileScope,
     ) -> tuple[Path, str, str, bool]:
-        target, display_path = self._resolve_file_tree_path(
+        target, display_path = self.file_paths.resolve(
             path,
             scope=scope,
             allow_empty=False,
@@ -569,7 +544,7 @@ class WorkspaceService:
             ) as archive:
                 for child in sorted(target.rglob("*")):
                     if child.is_symlink():
-                        raise ValueError(f"下载目录包含暂不支持的符号链接: {child}")
+                        raise ValueError(f"下载目录包含暂不支持的符号链接: {file_uri_child(display_path, *child.relative_to(target).parts)}")
                     archive_name = Path(target.name) / child.relative_to(target)
                     archive.write(child, archive_name)
         except BaseException:
@@ -587,8 +562,8 @@ class WorkspaceService:
         *,
         path: str,
         scope: WorkspaceFileScope,
-    ) -> Path:
-        target, display_path = self._resolve_file_tree_path(
+    ) -> str:
+        target, display_path = self.file_paths.resolve(
             path,
             scope=scope,
             allow_empty=True,
@@ -620,7 +595,7 @@ class WorkspaceService:
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        return target
+        return display_path
 
     @staticmethod
     def _validate_entry_name(name: str) -> str:

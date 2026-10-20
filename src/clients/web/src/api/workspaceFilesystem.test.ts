@@ -7,10 +7,12 @@ import {
 
 import type { WorkspaceFileMutationIntent } from "../types/backend";
 
+const ROOT = "boxteam://workspace/backend_files/resources/files/root";
+
 const intent: WorkspaceFileMutationIntent = { client_operation_id: "op_00000000000040008000000000000001",
   client_sequence: 1, expected_directory_revision: 1, depends_on: [], created_by_operation_id: null,
   relative_child_path: "", directory_revision_from_operation_id: null, client_ref: "file-unit",
-  directory_key: { workspace_id: "backend_files", scope: "workspace", root: "/repo", path: "dest" } };
+  directory_key: { workspace_id: "backend_files", scope: "workspace", root: ROOT, path: ROOT + "/dest" } };
 
 const originalFetch = globalThis.fetch;
 
@@ -36,13 +38,13 @@ afterEach(() => {
 describe("工作区文件列表 API 的 items 契约", () => {
   test("合法空数组正常返回并完成路径编码", async () => {
     installFetchMock(() => Response.json({
-      data: { root_path: "/", path: "/repo", items: [],
-        directory_key: { workspace_id: "backend_files", scope: "workspace", root: "/", path: "/repo" }, directory_revision: 1 },
+      data: { root_path: ROOT, path: ROOT + "/repo", items: [],
+        directory_key: { workspace_id: "backend_files", scope: "workspace", root: ROOT, path: ROOT + "/repo" }, directory_revision: 1 },
       request_id: "req-files-empty",
     }));
 
     await expect(getWorkspaceFiles(48_310, "/repo", "workspace-1")).resolves
-      .toMatchObject({ path: "/repo", items: [] });
+      .toMatchObject({ path: ROOT + "/repo", items: [] });
   });
 
   test("items 非数组：响亮失败而不是静默收敛为空列表", async () => {

@@ -1,3 +1,4 @@
+import type { WorkspaceFileReferencesDTO, WorkspaceFileRootsDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
 import type {
   APIResponse,
   FileTreeShortcutRequest,
@@ -6,7 +7,6 @@ import type {
   WorkspaceFileCopyRequest,
   WorkspaceFileCreateRequest,
   WorkspaceFileList,
-  WorkspaceFileNode,
   WorkspaceFileMutationIntent,
   WorkspaceFileOperationReceipt,
   WorkspaceFileOperationStatus,
@@ -25,7 +25,6 @@ import {
   workspaceHeader,
 } from "./http";
 
-const FILESYSTEM_PATH_PREFIX = "filesystem:";
 
 /**
  * 后端 /files/upload 与 /files/paste 的批量上限（File/Form/Field 的 max_length=100）。
@@ -40,30 +39,14 @@ function assertBatchWithinLimit(count: number, action: string): void {
   }
 }
 
-export function filesystemFileTreePath(absolutePath: string): string {
-  if (!absolutePath.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(absolutePath)) {
-    throw new Error(`文件系统快捷路径必须是绝对路径: ${absolutePath}`);
-  }
-  return `${FILESYSTEM_PATH_PREFIX}${absolutePath}`;
-}
-
 export interface WorkspaceFileLocation {
   path: string;
   scope: "workspace" | "filesystem";
 }
 
+// 原生路径只作为输入原样交给固定目标；URI 的完整解析归后端唯一 grammar。
 export function decodeFileTreePath(path: string): WorkspaceFileLocation {
-  if (path.startsWith(FILESYSTEM_PATH_PREFIX)) {
-    return { path: path.slice(FILESYSTEM_PATH_PREFIX.length), scope: "filesystem" };
-  }
-  return { path, scope: "workspace" };
-}
-
-function encodeFileTreeResultPath(
-  path: string,
-  scope: "workspace" | "filesystem",
-): string {
-  return scope === "filesystem" ? filesystemFileTreePath(path) : path;
+  return { path, scope: path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path) ? "filesystem" : "workspace" };
 }
 
 /**
@@ -83,7 +66,6 @@ function fileTreeLocationQuery(path: string): {
 
 function encodeWorkspaceFileList(
   result: WorkspaceFileList,
-  scope: "workspace" | "filesystem",
 ): WorkspaceFileList {
   // 后端 WorkspaceFileListDTO.items 是 default_factory=list，序列化必为数组；
   // 非数组即契约被破坏，不得静默收敛成空列表把损坏伪装成合法结果。
@@ -92,19 +74,16 @@ function encodeWorkspaceFileList(
   }
   const key = result.directory_key;
   if (!key || typeof key.workspace_id !== "string" || !key.workspace_id
-    || key.scope !== scope || typeof key.root !== "string" || !key.root
+    || typeof key.root !== "string" || !key.root
     || typeof key.path !== "string" || key.path !== result.path
     || !Number.isSafeInteger(result.directory_revision) || result.directory_revision < 1) {
     throw new Error("工作区文件列表响应缺少配对的目录键和 revision");
   }
-  return {
-    ...result,
-    path: encodeFileTreeResultPath(result.path, scope),
-    items: result.items.map((node): WorkspaceFileNode => ({
-      ...node,
-      path: encodeFileTreeResultPath(node.path, scope),
-    })),
-  };
+  if (!result.path.startsWith("boxteam://") || !key.root.startsWith("boxteam://")
+    || result.items.some((node) => !node.path.startsWith("boxteam://"))) {
+    throw new Error("文件列表响应必须使用资源 URI");
+  }
+  return result;
 }
 
 export async function getWorkspaceFiles(
@@ -129,7 +108,7 @@ export async function getWorkspaceFiles(
       timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS,
     },
   ));
-  return encodeWorkspaceFileList(result, location.scope);
+  return encodeWorkspaceFileList(result);
 }
 
 export async function createWorkspaceFileEntry(
@@ -253,7 +232,7 @@ export async function createWorkspaceFileDownloadRequest(
   // 普通 Error 失败且不会重试（非 HttpRequestError，调用方无法按状态码降级）；待把
   // 下载改为经 requestGatewayResponse 由页面发起后即可与其余入口共享同一屏障。
   const localToken = await getGatewayToken(port);
-  const { location, query } = fileTreeLocationQuery(path);
+  const { query } = fileTreeLocationQuery(path);
   return {
     url: `${getApiBaseUrl(port)}/api/v1/workspace/files/download?${query.toString()}`,
     headers: { "X-Local-Token": localToken, ...workspaceHeader(workspaceId) },
@@ -266,7 +245,7 @@ export async function revealWorkspaceFileEntry(
   path: string,
   workspaceId?: string | null,
 ): Promise<WorkspaceFileReveal> {
-  const { location, query } = fileTreeLocationQuery(path);
+  const { query } = fileTreeLocationQuery(path);
   return unwrapApiData(await requestJson<APIResponse<WorkspaceFileReveal>>(
     port,
     `/api/v1/workspace/files/reveal?${query.toString()}`,
@@ -286,7 +265,6 @@ export async function revealWorkspaceFileEntry(
  */
 function decodeWorkspaceFileContent(
   result: WorkspaceFileContent,
-  scope: "workspace" | "filesystem",
 ): WorkspaceFileContent {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     throw new Error("工作区文件内容响应必须是对象");
@@ -297,7 +275,10 @@ function decodeWorkspaceFileContent(
   if (typeof result.path !== "string") {
     throw new Error("工作区文件内容响应 path 必须是字符串");
   }
-  return { ...result, path: encodeFileTreeResultPath(result.path, scope) };
+  if (!result.path.startsWith("boxteam://") || !result.root_path.startsWith("boxteam://")) {
+    throw new Error("文件内容响应必须使用资源 URI");
+  }
+  return result;
 }
 
 export async function getWorkspaceFileContent(
@@ -305,13 +286,13 @@ export async function getWorkspaceFileContent(
   path: string,
   workspaceId?: string | null,
 ): Promise<WorkspaceFileContent> {
-  const { location, query } = fileTreeLocationQuery(path);
+  const { query } = fileTreeLocationQuery(path);
   const result = unwrapApiData(await requestJson<APIResponse<WorkspaceFileContent>>(
     port,
     `/api/v1/workspace/files/content?${query.toString()}`,
     workspaceId ? { headers: workspaceHeader(workspaceId) } : undefined,
   ));
-  return decodeWorkspaceFileContent(result, location.scope);
+  return decodeWorkspaceFileContent(result);
 }
 
 export async function getWorkspaceRawFileBlob(
@@ -320,7 +301,7 @@ export async function getWorkspaceRawFileBlob(
   workspaceId?: string | null,
   signal?: AbortSignal,
 ): Promise<Blob> {
-  const { location, query } = fileTreeLocationQuery(path);
+  const { query } = fileTreeLocationQuery(path);
   // 二进制下载只共享统一凭据与刷新重试，不建立 Gateway 用户会话屏障。
   const response = await requestGatewayResponse(
     port,
@@ -340,7 +321,7 @@ export async function updateWorkspaceFileContent(
   payload: WorkspaceFileUpdateRequest,
   workspaceId?: string | null,
 ): Promise<WorkspaceFileContent> {
-  const { location, query } = fileTreeLocationQuery(path);
+  const { query } = fileTreeLocationQuery(path);
   const result = unwrapApiData(await requestJson<APIResponse<WorkspaceFileContent>>(
     port,
     `/api/v1/workspace/files/content?${query.toString()}`,
@@ -350,7 +331,7 @@ export async function updateWorkspaceFileContent(
       body: JSON.stringify(payload),
     },
   ));
-  return decodeWorkspaceFileContent(result, location.scope);
+  return decodeWorkspaceFileContent(result);
 }
 
 export async function getSessionFileTreeSettings(
@@ -410,4 +391,23 @@ export async function applyFileTreeShortcutToWorkspace(
       body: JSON.stringify({ path, label }),
     },
   ));
+}
+
+export async function getWorkspaceFileRoots(port: number, workspaceId: string | null): Promise<WorkspaceFileRootsDTO> {
+  return unwrapApiData(await requestJson<APIResponse<WorkspaceFileRootsDTO>>(
+    port, "/api/v1/workspace/files/roots", { headers: workspaceHeader(workspaceId) },
+  ));
+}
+
+export async function resolveWorkspaceFileReferences(port: number, paths: string[], workspaceId: string): Promise<string[]> {
+  assertBatchWithinLimit(paths.length, "解析文件引用");
+  const result = unwrapApiData(await requestJson<APIResponse<WorkspaceFileReferencesDTO>>(
+    port, "/api/v1/workspace/files/references", {
+      method: "POST", headers: workspaceHeader(workspaceId), body: JSON.stringify({ paths }),
+    },
+  ));
+  if (result.uris.length !== paths.length || result.uris.some((uri) => !uri.startsWith("boxteam://"))) {
+    throw new Error("目标文件 owner 未返回配对的资源 URI");
+  }
+  return result.uris;
 }

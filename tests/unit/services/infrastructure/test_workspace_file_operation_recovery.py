@@ -112,7 +112,7 @@ async def test_upload_crash_resumes_original_operation_and_retains_external_effe
         assert (workspace / "target/b.txt").read_bytes() == (b"external" if boundary == "partial" else b"b")
         listing = await service.list_files(path="target")
         assert [item.name for item in listing.items] == ["a.txt", "b.txt"]
-        assert listing.directory_revision == next(value.directory_revision for value in receipt.directories if value.directory_key.path == "target")
+        assert listing.directory_revision == next(value.directory_revision for value in receipt.directories if value.directory_key.path == listing.path)
         assert owner.store.pending() == () and owner.store.cleanup_pending() == ()
         assert owner.store.events(0)[-1]["operation_id"] == operation_id
         assert list((workspace / ".boxteam/navigation/workspace-files-staging").iterdir()) == []
