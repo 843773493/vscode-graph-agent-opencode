@@ -206,10 +206,9 @@ def read_source_report(
         "source_artifacts": {
             "rollout_jsonl": {
                 **files["rollout.jsonl"],
-                "path": str(source_root / "rollout.jsonl"),
                 "committed_offset": committed,
             },
-            "index_sqlite": {**files["index.sqlite"], "path": str(index)},
+            "index_sqlite": files["index.sqlite"],
         },
         "source_files": files,
         "loss": [
@@ -251,7 +250,7 @@ def read_source_report(
         report["candidates"] = [
             # 公共 report 只返回坐标和 raw_ref；正文只在显式 staging 内部
             # 继续留在 audit/source，不进入调用方返回值或 report.json。
-            candidate_audit(candidate, str(source_root))
+            candidate_audit(candidate, "rollout.jsonl")
             for candidate in report["candidates"]
         ]
     return report

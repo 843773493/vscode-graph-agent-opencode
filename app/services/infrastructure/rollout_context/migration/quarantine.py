@@ -36,7 +36,6 @@ def write_quarantine(
     write_private(destination, canonical_json_bytes(result) + b"\n")
     sync_directory(audit_root)
     return {
-        "path": str(destination),
         "schema": result["schema"],
         "candidate_count": len(entries),
         "raw_artifact_ref": raw_artifact_ref,

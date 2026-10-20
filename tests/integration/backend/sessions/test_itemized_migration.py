@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import subprocess
@@ -110,6 +111,7 @@ def test_v1_cli_uses_catalog_owner_and_round_trips_nonempty_namespace(
         )
         assert process.returncode == 0, process.stderr
         result = json.loads(process.stdout)
+        assert json.dumps(str(migration_workspace))[1:-1] not in process.stdout
         assert result["source_thread_id"] == storage.storage.main_thread_id(SOURCE_SESSION_ID)
         assert result["checkpoint_ns"] == namespace
         assert artifact_manifest(storage.storage.root(SOURCE_SESSION_ID)) == source_before
@@ -246,6 +248,12 @@ def test_v1_report_is_read_only_and_migration_installs_target_v2(
     assert source_artifacts["rollout_jsonl"]["committed_offset"] == len(source_lines)
     assert len(source_artifacts["rollout_jsonl"]["sha256"]) == 64
     assert len(source_artifacts["index_sqlite"]["sha256"]) == 64
+    assert json.dumps(str(migration_workspace))[1:-1] not in json.dumps(report)
+    for candidate in report["candidates"]:
+        for record in candidate["records"]:
+            assert record["raw_ref"] == "rollout.jsonl"
+            raw_line = source_lines[record["jsonl_offset"]:record["jsonl_offset"] + record["jsonl_length"]]
+            assert record["raw_line_sha256"] == hashlib.sha256(raw_line).hexdigest()
     assert [candidate["candidate_status"] for candidate in report["candidates"]] == [
         "accepted"
     ]
@@ -284,10 +292,14 @@ def test_v1_report_is_read_only_and_migration_installs_target_v2(
         format_version, state = connection.execute(
             "SELECT rollout_format_version, database_state FROM database_meta WHERE singleton_id = 1"
         ).fetchone()
-        migration_status = connection.execute(
-            "SELECT status FROM legacy_migration_reports"
-        ).fetchone()[0]
+        migration_status, persisted_report = connection.execute(
+            "SELECT status, report_json FROM legacy_migration_reports"
+        ).fetchone()
     assert (format_version, state, migration_status) == (2, "active", "completed")
+    assert json.loads(persisted_report) == result
+    assert json.dumps(str(migration_workspace))[1:-1] not in persisted_report
+    assert migration_audits(storage)[0]["result"] == result
+    assert json.dumps(str(migration_workspace))[1:-1] not in json.dumps(migration_audits(storage))
     assert (source_rollout / "rollout.jsonl").read_bytes() == source_lines
 
 

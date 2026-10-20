@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import sqlite3
@@ -986,10 +987,23 @@ def test_raw_quarantine_is_complete_private_and_reported(
     )
     assert snapshot.read_bytes() == original
     assert snapshot.stat().st_mode & 0o077 == 0
+    assert json.dumps(str(storage.storage.sessions_dir))[1:-1] not in json.dumps(result)
+    assert json.dumps(str(storage.storage.sessions_dir))[1:-1] not in json.dumps(migration_audits(storage))
+    for candidate in [*result["candidates"], *result["rejected"]]:
+        for record in candidate["records"]:
+            assert record["raw_ref"] == result["raw_artifact_ref"] + "/rollout.jsonl"
+            raw_line = original[record["jsonl_offset"]:record["jsonl_offset"] + record["jsonl_length"]]
+            assert record["raw_line_sha256"] == hashlib.sha256(raw_line).hexdigest()
     assert secret not in json.dumps(result)
     assert secret.encode() not in storage.storage.jsonl_path(TARGET_SESSION_ID).read_bytes()
     assert secret.encode() not in storage.storage.index_path(TARGET_SESSION_ID).read_bytes()
     if kind not in {"request_context", "provider_metadata"}:
+        audit = snapshot.parent.parent
+        quarantine = json.loads((audit / "quarantine.json").read_text())
+        assert quarantine["candidates"] == result["rejected"]
+        assert quarantine["candidate_count"] == result["quarantine"]["candidate_count"] == 1
+        assert quarantine["raw_artifact_ref"] == result["raw_artifact_ref"]
+        assert json.dumps(str(storage.storage.sessions_dir))[1:-1] not in json.dumps(quarantine)
         assert result["rejected"][0]["candidate_status"] == "legacy_unsupported_role"
         assert len(result["rejected"][0]["records"]) == 2
         assert (

@@ -225,7 +225,7 @@ def tool_identity_conflict(records: Sequence[Mapping[str, object]]) -> bool:
 
 
 def candidate_audit(candidate: Mapping[str, object], raw_ref: str) -> dict[str, object]:
-    """普通 v2 report 只存坐标；原始 prompt/provider 正文留在私有快照。"""
+    """只保存来源 artifact 坐标；正文与原生位置留在本机 owner。"""
     status = candidate["candidate_status"]
     records = []
     for record in candidate["records"]:
@@ -254,7 +254,7 @@ def candidate_audit(candidate: Mapping[str, object], raw_ref: str) -> dict[str, 
                     )
                 },
                 "disposition": disposition,
-                "raw_ref": raw_ref + "/rollout.jsonl",
+                "raw_ref": raw_ref,
                 "protection": "protected",
             }
         )

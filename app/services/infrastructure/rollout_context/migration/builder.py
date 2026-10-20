@@ -325,7 +325,7 @@ class LegacyImportBuilder:
         result = {
             **report,
             "candidates": [
-                candidate_audit(candidate, report["raw_artifact_ref"])
+                candidate_audit(candidate, report["raw_artifact_ref"] + "/rollout.jsonl")
                 for candidate in candidates
             ],
             "source_thread_id": source_thread_id,
@@ -337,7 +337,7 @@ class LegacyImportBuilder:
             "lossless": not loss and not rejected,
             "migrated": migrated,
             "rejected": [
-                candidate_audit(candidate, report["raw_artifact_ref"])
+                candidate_audit(candidate, report["raw_artifact_ref"] + "/rollout.jsonl")
                 for candidate in rejected
             ],
             "migration_quality": "partial" if loss or rejected else "lossless",
