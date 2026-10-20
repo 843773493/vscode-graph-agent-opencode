@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from contextlib import closing
+from dataclasses import replace
 
 import pytest
 
@@ -162,6 +163,8 @@ def test_untrack_publishes_only_after_persistence_succeeds(source_seal_case, mon
     _install_snapshot(manager, "hello world")
     manager.load_skill("demo", mode="tracked")
     before = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)
+    pending = manager.prepare_pending()
+    persist = source_seal_case.saver.apply_context_source_control_mutation
 
     def fail_persistence(*args, **kwargs):
         raise RuntimeError("control state storage unavailable")
@@ -171,3 +174,121 @@ def test_untrack_publishes_only_after_persistence_succeeds(source_seal_case, mon
         manager.load_skill("demo", mode="untrack")
     assert sink.events == []
     assert source_seal_case.saver.load_context_source_control_states(source_seal_case.owner) == before
+    assert manager.source_observation_state("src_skill_1")[0] == "tracked"
+    assert manager.prepare_pending() == pending
+    monkeypatch.setattr(source_seal_case.saver, "apply_context_source_control_mutation", persist)
+    assert manager.load_skill("demo", mode="untrack").status == "loaded"
+    (stored,) = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)
+    assert stored.tracking_status == "untracked"
+    assert stored.state_revision == before[0].state_revision + 1
+    assert [event.kind for event in sink.events] == ["untracked"]
+
+
+def test_failed_tracking_preserves_snapshot_and_same_manager_retries(source_seal_case, monkeypatch):
+    manager = source_seal_case.manager()
+    manager.register(_descriptor())
+    _install_snapshot(manager, "hello world")
+    snapshot = manager.load_skill("demo", mode="snapshot")
+    assert snapshot.tracked is False
+    pending = manager.prepare_pending()
+    before = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)
+    persist = source_seal_case.saver.apply_context_source_control_mutation
+
+    def fail_persistence(*args, **kwargs):
+        raise RuntimeError("control state storage unavailable")
+
+    monkeypatch.setattr(source_seal_case.saver, "apply_context_source_control_mutation", fail_persistence)
+    with pytest.raises(RuntimeError, match="control state storage unavailable"):
+        manager.load_skill("demo", mode="tracked")
+    assert manager.source_observation_state("src_skill_1") == ("untracked", snapshot.revision)
+    assert manager.prepare_pending() == pending
+    assert source_seal_case.saver.load_context_source_control_states(source_seal_case.owner) == before
+    monkeypatch.setattr(source_seal_case.saver, "apply_context_source_control_mutation", persist)
+    receipt = manager.load_skill("demo", mode="tracked")
+    assert receipt.tracked is True
+    assert receipt.revision == snapshot.revision
+    assert manager.prepare_pending() == replace(
+        pending, sources=(replace(pending.sources[0], tracked=True),),
+    )
+    (stored,) = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)
+    assert stored.tracking_status == "tracked"
+    assert stored.state_revision == before[0].state_revision + 1
+
+
+@pytest.mark.parametrize("operation", ["activate", "observe"])
+@pytest.mark.parametrize("with_baseline", [False, True])
+def test_failed_observation_preserves_pending_and_same_manager_retries(
+    source_seal_case, monkeypatch, operation, with_baseline,
+):
+    manager = source_seal_case.manager()
+    manager.register(_descriptor(), tracking_status="tracked")
+    if with_baseline:
+        manager.activate_skill_content("demo", "base\n")
+        source_seal_case.seal(manager)
+        manager.observe("src_skill_1", "pending\n")
+    before = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)
+    batch = manager.prepare_sources()
+    observation = manager.source_observation_state("src_skill_1")
+    published = dict(manager._published_source_revisions)
+    persist = source_seal_case.saver.apply_context_source_control_mutation
+
+    def fail_persistence(*args, **kwargs):
+        raise RuntimeError("control state storage unavailable")
+
+    accept = (
+        lambda: manager.activate_skill_content("demo", "retry\n")
+        if operation == "activate"
+        else manager.observe("src_skill_1", "retry\n")
+    )
+    monkeypatch.setattr(source_seal_case.saver, "apply_context_source_control_mutation", fail_persistence)
+    with pytest.raises(RuntimeError, match="control state storage unavailable"):
+        accept()
+    assert source_seal_case.saver.load_context_source_control_states(source_seal_case.owner) == before
+    assert manager.source_observation_state("src_skill_1") == observation
+    assert manager.prepare_sources() == batch
+    assert manager._published_source_revisions == published
+
+    monkeypatch.setattr(source_seal_case.saver, "apply_context_source_control_mutation", persist)
+    accept()
+    (stored,) = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)
+    assert stored.latest_revision == _revision("retry\n")
+    assert stored.state_revision == before[0].state_revision + 1
+    frozen = manager.prepare_pending()
+    assert frozen.sources[0].content == "retry\n"
+    assert frozen.deltas[0].observation_provenance == (
+        (_revision("pending\n"), _revision("retry\n"))
+        if with_baseline else (_revision("retry\n"),)
+    )
+    accept()
+    assert manager.prepare_pending() == frozen
+    assert source_seal_case.saver.load_context_source_control_states(source_seal_case.owner) == (stored,)
+
+
+@pytest.mark.parametrize("already_registered", [False, True])
+def test_failed_registration_preserves_binding_and_retries(
+    source_seal_case, monkeypatch, already_registered,
+):
+    manager = source_seal_case.manager()
+    if already_registered:
+        manager.register(_descriptor(), binding_revision="catalog-old", tracking_status="tracked")
+    before = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)
+    descriptors = manager.descriptors()
+    persist = source_seal_case.saver.apply_context_source_control_mutation
+
+    def fail_persistence(*args, **kwargs):
+        raise RuntimeError("control state storage unavailable")
+
+    monkeypatch.setattr(source_seal_case.saver, "apply_context_source_control_mutation", fail_persistence)
+    with pytest.raises(RuntimeError, match="control state storage unavailable"):
+        manager.register(_descriptor(), binding_revision="catalog-new", tracking_status="tracked")
+    assert manager.descriptors() == descriptors
+    assert source_seal_case.saver.load_context_source_control_states(source_seal_case.owner) == before
+    if already_registered:
+        assert manager._sources["src_skill_1"].binding_revision == "catalog-old"
+    else:
+        assert manager.metadata() == ()
+    monkeypatch.setattr(source_seal_case.saver, "apply_context_source_control_mutation", persist)
+    manager.register(_descriptor(), binding_revision="catalog-new", tracking_status="tracked")
+    (stored,) = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)
+    assert stored.binding_revision == "catalog-new"
+    assert stored.state_revision == (before[0].state_revision + 1 if before else 1)

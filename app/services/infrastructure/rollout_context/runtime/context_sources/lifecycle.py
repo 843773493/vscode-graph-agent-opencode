@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import EllipsisType
 
 from app.domain.itemized.epoch.seal_binding import ContextSealBinding
@@ -22,6 +23,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.models 
         PendingSourceObservation,
         PublishedContextSourceRevision,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.state import (
+        SourceState,
+)
 
 
 class SourceLifecycleMixin:
@@ -38,21 +42,31 @@ class SourceLifecycleMixin:
             if revision is not None and (not isinstance(revision, str) or not revision):
                 raise ValueError("ContextSourceManager.observe.revision 必须是非空字符串或 None")
             effective_revision = _revision(content) if revision is None else revision
+            unchanged = state.latest_revision == effective_revision and state.latest_content == content
+            # 重启恢复：已提交的同 revision 只重建 diff 基准。
+            restored = _adopt_restored_baseline(state, content, effective_revision)
+            if not unchanged and not restored:
+                self._accept_source_observation(state, content, effective_revision)
             self._published_source_revisions[source_id] = PublishedContextSourceRevision(
                 source_id, effective_revision, content,
             )
-            if state.latest_revision == effective_revision and state.latest_content == content:
-                return False
-            if _adopt_restored_baseline(state, content, effective_revision):
-                # 重启恢复：该 revision 已在已提交上下文中，只重建 diff 基准。
-                return False
-            self._record_observation(state, effective_revision)
-            state.latest_revision = effective_revision
-            state.latest_content = content
-            state.pending_kind = "activation" if state.latest_visible_committed_revision is None else "delta"
-            self._queue_delta(state)
-            self._persist_control_state(state, operation="observe")
-            return True
+            return not unchanged and not restored
+
+        def _accept_source_observation(
+            self, state: SourceState, content: str, revision: str,
+        ) -> None:
+            """普通观察与 Skill 激活共用候选提交；失败不发布正文、provenance 或 delta。"""
+            observed = list(state.observed_revisions)
+            if revision not in observed:
+                observed.append(revision)
+            candidate = replace(
+                state, latest_revision=revision, latest_content=content,
+                pending_kind="activation" if state.latest_visible_committed_revision is None else "delta",
+                observed_revisions=observed,
+            )
+            self._persist_control_state(candidate, operation="observe")
+            self._sources[state.source_id] = candidate
+            self._queue_delta(candidate)
 
         def mark_pending_observation(
             self,

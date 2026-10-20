@@ -124,18 +124,32 @@ class SourceRegistryMixin:
                     binding_revision=binding_revision,
                     tracking_status=tracking_status,
                 )
-                self._sources[descriptor.source_id] = state
             else:
+                state = replace(state)
                 state.bind_descriptor(descriptor)
                 if binding_revision is not None:
                     state.binding_revision = binding_revision
+            self._persist_control_state(state, operation="register")
+            self._sources[descriptor.source_id] = state
             # 名称索引保持最近一次 catalog 注册顺序；同名高优先级 entry 覆盖
             # 索引但不自动改绑既有 active registration（tasks 3.3-A），
             # untrack 仍按 active tracked registration 定位原 registration。
             normalized_name = _normalize_skill_name(descriptor.name)
             self._source_ids_by_name.pop(normalized_name, None)
             self._source_ids_by_name[normalized_name] = descriptor.source_id
-            self._persist_control_state(state, operation="register")
+
+        def _set_tracking_status(
+            self, state: SourceState, status: ContextSourceTrackingStatus,
+        ) -> SourceState:
+            """唯一 owner 确认 tracking 后再替换内存，写入失败允许原状态重试。"""
+            if status not in {"tracked", "untracked"}:
+                raise ValueError(f"非法 tracking_status: {status!r}")
+            candidate = replace(state, tracking_status=status)
+            self._persist_control_state(
+                candidate, operation="track" if status == "tracked" else "untrack",
+            )
+            self._sources[state.source_id] = candidate
+            return candidate
 
         def metadata(self) -> tuple[Mapping[str, str], ...]:
             """仅返回模型可见的 name/description，不返回路径。"""

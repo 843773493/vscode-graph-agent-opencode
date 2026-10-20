@@ -15,11 +15,6 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.state i
 
 
 class SourceDeltaMixin:
-        def _record_observation(self, state: SourceState, revision: str) -> None:
-            """按观察顺序记录 delta provenance；同一 revision 只记一次。"""
-            if revision not in state.observed_revisions:
-                state.observed_revisions.append(revision)
-
         def _queue_delta(self, state: SourceState) -> None:
             if state.latest_revision is None or state.latest_content is None:
                 raise RuntimeError("Context source 缺少 latest revision/content")

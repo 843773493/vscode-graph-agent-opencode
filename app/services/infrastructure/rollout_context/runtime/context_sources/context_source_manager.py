@@ -111,12 +111,6 @@ class ContextSourceManager(
         if state.latest_revision == revision and state.latest_content is None:
             state.latest_content = content
 
-    def _set_tracking_status(self, state: SourceState, status: str) -> None:
-        """由 CSM facade 统一改写来源 tracking 状态。"""
-        if status not in {"tracked", "untracked"}:
-            raise ValueError(f"非法 tracking_status: {status!r}")
-        state.tracking_status = status
-
     def bind_published_revision_supplier(
         self,
         supplier: Callable[
