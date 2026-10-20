@@ -386,6 +386,13 @@ URI kind 闭集 MUST 为 `agent-spec` | `skills` | `config` | `session` | `files
 - **WHEN** 对 Session、assembly 或单文件节点追加猜测路径并尝试列目录/写入
 - **THEN** owner 按导航/操作能力明确拒绝，不推导 SQLite、checkpoint 或私有目录位置
 
+#### Scenario: 私有存储不能借原生根或别名绕过 owner
+
+- **WHEN** 普通 files 入口通过相对路径、原生绝对路径、工作区 URI、Gateway 原生目录根或符号链接访问保留的 `.boxteam` 存储树
+- **THEN** 共用文件 owner 在内容读取或修改前明确拒绝，目录结果不公布私有树及其别名；其它点号目录不因名称以点号开头而被禁止
+- **AND** 递归复制、上传和目录下载同样不得携带或覆盖私有子树，目录下载在进入私有子树前拒绝；已受理操作的来源变成私有别名时，按原操作记录拒绝发布，不继续读取或复制该来源
+- **AND** skills、配置和 Session 产物等仍可通过各自 owner 公布的精确资源能力访问，files 边界不取代领域 owner 的访问合同
+
 #### Scenario: 读取技能入口不激活
 
 - **WHEN** 通用 read 通过技能包文件 URI 读取 SKILL.md

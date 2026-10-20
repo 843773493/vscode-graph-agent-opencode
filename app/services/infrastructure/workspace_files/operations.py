@@ -14,6 +14,7 @@ from typing import BinaryIO
 from uuid import uuid4
 
 from app.core.atomic_fs import fsync_directory
+from app.core.exceptions import ForbiddenError
 from app.core.path_utils import safe_join
 from app.core.resource_uri import parse_resource_uri
 from app.core.session_lifecycle_gate import OperationHolderGate
@@ -188,6 +189,16 @@ class WorkspaceFileOperations:
             raise RuntimeError("上传来源缺少原 operation staging 归属")
         return safe_join(incoming / "body", source["upload"])
 
+    def _capture_source(self, source: Path, entry: dict) -> dict:
+        # 上传暂存属于 owner 私有载体；公开来源递归校验，上传内容在目的路径校验。
+        validate = self.paths.require_public_path if "uri" in entry["source"] else None
+        return captured_source(source, validate=validate)
+
+    def _validate_destination(self, target: Path, manifest: dict) -> None:
+        self.paths.require_public_path(target)
+        for name, child in manifest.get("children", {}).items():
+            self._validate_destination(target / name, child)
+
     def _stage_root(self, record: FileOperationRecord, index: int) -> Path:
         target = self.paths.native(record.steps[index]["target"])
         return target.parent / f".boxteam-file-{record.operation_id}-{index}"
@@ -304,7 +315,7 @@ class WorkspaceFileOperations:
             source_scope = data["source_scope"] if kind == "copy" else "workspace"
             paths = [self._resolve(raw, scope=source_scope, allow_empty=False) for raw in raw_paths]
             for source, uri in paths:
-                proof = captured_source(source)
+                proof = captured_source(source, validate=self.paths.require_public_path)
                 if not source.name or (source.is_dir() and target.is_relative_to(source)):
                     raise ValueError(f"不能把目录复制到自身内部或复制文件系统根: {uri}")
                 entries.append({"relative_path": source.name, "kind": proof["manifest"]["kind"],
@@ -340,6 +351,8 @@ class WorkspaceFileOperations:
         destinations = set()
         for entry in entries:
             destination = safe_join(target, entry["relative_path"])
+            manifest = entry["source_proof"]["manifest"] if entry["source_proof"] is not None else {}
+            self._validate_destination(destination, manifest)
             if destination in destinations:
                 raise FileExistsError(f"多个来源具有相同名称: {destination.name}")
             if destination.exists() or destination.is_symlink():
@@ -387,10 +400,10 @@ class WorkspaceFileOperations:
             if not observed.exists or observed.directory_revision != expected:
                 raise WorkspaceFileOperationConflictError(f"文件目录 revision 冲突: {directory_key.path}, expected={expected}, actual={observed.directory_revision}")
         for entry in payload["entries"]:
-            target = self.paths.native(payload["target"]) / entry["relative_path"]
+            target = self.paths.native(file_uri_child(payload["target"], *Path(entry["relative_path"]).parts))
             if target.exists() or target.is_symlink():
                 raise WorkspaceFileOperationConflictError(f"执行前目标已存在: {file_uri_child(key.path, *Path(entry['relative_path']).parts)}")
-            if entry["source"] is not None and captured_source(self._source_path(record, entry)) != entry["source_proof"]:
+            if entry["source"] is not None and self._capture_source(self._source_path(record, entry), entry) != entry["source_proof"]:
                 raise WorkspaceFileOperationConflictError(f"执行前原来源事实已变化: {entry['source']}")
 
     def staging_roots(self) -> set[Path]:
@@ -450,11 +463,11 @@ class WorkspaceFileOperations:
                     continue
                 entry = record.payload["entries"][index]
                 source = self._source_path(record, entry)
-                if source is not None and captured_source(source) != entry["source_proof"]:
+                if source is not None and self._capture_source(source, entry) != entry["source_proof"]:
                     raise WorkspaceFileOperationConflictError(f"完整 staging 前原来源已变化: {entry['source']}")
                 _stage, proof = stage_step(stage_root=self._stage_root(record, index), operation_id=record.operation_id,
                                             request_hash=record.payload["request_hash"], source=source, kind=step["kind"])
-                if source is not None and (captured_source(source) != entry["source_proof"] or proof["manifest"] != entry["source_proof"]["manifest"]):
+                if source is not None and (self._capture_source(source, entry) != entry["source_proof"] or proof["manifest"] != entry["source_proof"]["manifest"]):
                     raise WorkspaceFileOperationConflictError(f"staging 与原来源内容不一致: {entry['source']}")
                 step.update(state="staged", proof=proof)
                 self.store.save_steps(record, steps)
@@ -476,7 +489,7 @@ class WorkspaceFileOperations:
                 if step["state"] != "staged" or not verify_published(stage, step["proof"]):
                     raise FileEffectUnverifiedError(f"原 staging 证明失效: {stage}")
                 entry = record.payload["entries"][steps.index(step)]
-                if entry["source"] is not None and captured_source(self._source_path(record, entry)) != entry["source_proof"]:
+                if entry["source"] is not None and self._capture_source(self._source_path(record, entry), entry) != entry["source_proof"]:
                     raise WorkspaceFileOperationConflictError(f"发布前原来源事实已变化: {entry['source']}")
                 with self.observation_lock:
                     step["state"] = "publishing"
@@ -494,7 +507,7 @@ class WorkspaceFileOperations:
             self._settle(record, state="running", effect="unverified", items=self._result_items(record, steps, unverified=True),
                          error_code="reconcile_required", error_detail=self._error_detail(record, error))
             raise
-        except (OSError, ValueError, WorkspaceFileOperationConflictError) as error:
+        except (OSError, ValueError, ForbiddenError, WorkspaceFileOperationConflictError) as error:
             publishing = [step for step in steps if step["state"] == "publishing"]
             for step in publishing:
                 if verify_published(self.paths.native(step["target"]), step["proof"]):

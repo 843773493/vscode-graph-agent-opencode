@@ -72,8 +72,6 @@ def resolve_text_target(paths: WorkspaceFilePaths, target: str) -> tuple[Path, s
         path, uri = paths.resolve(target, reject_symlink=True, allow_external=False)
     except ForbiddenError as error:
         raise ResourceUriResolveError("capability_denied", "文本目标越出工作区写入能力") from error
-    if path.is_relative_to(paths.workspace / ".boxteam"):
-        raise ValueError("文本工具禁止访问 .boxteam 私有存储")
     return path, uri
 
 
@@ -148,7 +146,10 @@ def _capture_snapshots(names: list[str], root: Path, paths: WorkspaceFilePaths,
         if not isinstance(version, str) or _VERSION.fullmatch(version) is None:
             raise ValueError(f"文件预期版本必须是 sha256:<hex> 或 absent: {name}")
         path = _resolve_workspace_file(name, root)
-        uri = paths.reference(path)
+        try:
+            uri = paths.reference(path)
+        except ForbiddenError as error:
+            raise ResourceUriResolveError("capability_denied", "私有存储只允许由业务 owner 访问") from error
         if authorize is not None:
             authorize(uri)
         before = read_file_preimage(path, reference=uri, max_bytes=min(_MAX_FILE_BYTES, max_bytes) if max_bytes is not None else _MAX_FILE_BYTES) if path.exists() or path.is_symlink() else None
@@ -269,8 +270,6 @@ def _resolve_workspace_file(file_path: str, workspace_root: Path) -> Path:
         raise ValueError("文本文件路径越出固定根") from error
     if path == workspace_root or not path.is_relative_to(workspace_root):
         raise ValueError(f"apply_patch 文件路径无效: 文件必须位于固定根内: {file_path}")
-    if path.relative_to(workspace_root).parts[0] == ".boxteam":
-        raise ValueError("补丁禁止访问 .boxteam 私有存储")
     return path
 
 

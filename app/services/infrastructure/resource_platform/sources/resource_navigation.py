@@ -526,7 +526,7 @@ class ResourceNavigation:
                 self._check_deadline(deadline)
                 child_parts = (*relative, child.name)
                 # 私有存储不作为文件树 child 发布；直接请求和别名仍在 _contained 拒绝。
-                if parsed.kind == "files" and child_parts[0] == ".boxteam":
+                if parsed.kind == "files" and self._file_paths.is_private(child):
                     continue
                 if request.search_mode == "content" and child.name in {".git", "node_modules", ".boxteam"}:
                     continue
@@ -584,7 +584,10 @@ class ResourceNavigation:
         if parsed.kind == "files" and self._file_paths is not None:
             root_uri = resource_display_uri(scope=parsed.scope, scope_id=parsed.scope_id, kind="files",
                                             tail_segments=parsed.tail_segments[:1])
-            root, _uri = self._file_paths.resolve(root_uri)
+            try:
+                root, _uri = self._file_paths.resolve(root_uri)
+            except ForbiddenError as error:
+                raise ResourceUriResolveError("capability_denied", "私有存储只允许由业务 owner 访问") from error
             return root, parsed.tail_segments[1:]
         if parsed.kind == "agent-spec" and parsed.scope == "workspace" and self._workspace_root is not None:
             return self._workspace_root, ("AGENTS.md",)
@@ -610,8 +613,7 @@ class ResourceNavigation:
             raise ResourceUriResolveError("unknown_resource", "Skill 包不存在")
         return _resolve_path(root), parsed.tail_segments[1:]
 
-    @staticmethod
-    def _contained(root: Path, children: tuple[str, ...], parsed: ParsedResourceUri) -> Path:
+    def _contained(self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri) -> Path:
         resolved_root = _resolve_path(root)
         if resolved_root != root:
             raise ResourceUriResolveError("capability_denied", "固定资源根已被符号链接替换")
@@ -619,9 +621,10 @@ class ResourceNavigation:
         if not path.is_relative_to(resolved_root):
             raise ResourceUriResolveError("capability_denied", "文件节点越出已公布根")
         if parsed.kind == "files":
-            relative = path.relative_to(resolved_root).parts
-            if (children and children[0] == ".boxteam") or (relative and relative[0] == ".boxteam") or path.is_relative_to(_resolve_path(resolved_root / ".boxteam")):
-                raise ResourceUriResolveError("capability_denied", "工作区私有存储只允许由业务 owner 访问")
+            try:
+                self._file_paths.require_public_path(resolved_root.joinpath(*children))
+            except ForbiddenError as error:
+                raise ResourceUriResolveError("capability_denied", "私有存储只允许由业务 owner 访问") from error
         for depth in range(1, len(children)):
             ancestor = resolved_root.joinpath(*children[:depth])
             if ancestor.exists() and not ancestor.is_dir():

@@ -258,7 +258,7 @@ class WorkspaceService:
         def observed_entries(directory_entries):
             nonlocal fingerprint, count
             for entry in directory_entries:
-                if Path(entry.path) in staging:
+                if Path(entry.path) in staging or self.file_paths.is_private(Path(entry.path)):
                     continue
                 node = self._entry_to_file_node(entry, display_path, scope=scope)
                 fingerprint ^= int(digest({"name": node.name, "kind": node.kind, "size": node.size,
@@ -489,11 +489,15 @@ class WorkspaceService:
                 mode="w",
                 compression=zipfile.ZIP_DEFLATED,
             ) as archive:
-                for child in sorted(target.rglob("*")):
-                    if child.is_symlink():
-                        raise ValueError(f"下载目录包含暂不支持的符号链接: {file_uri_child(display_path, *child.relative_to(target).parts)}")
-                    archive_name = Path(target.name) / child.relative_to(target)
-                    archive.write(child, archive_name)
+                def add_children(directory: Path) -> None:
+                    for child in sorted(directory.iterdir()):
+                        self.file_paths.require_public_path(child)
+                        if child.is_symlink():
+                            raise ValueError(f"下载目录包含暂不支持的符号链接: {file_uri_child(display_path, *child.relative_to(target).parts)}")
+                        archive.write(child, Path(target.name) / child.relative_to(target))
+                        if child.is_dir():
+                            add_children(child)
+                add_children(target)
         except BaseException:
             temporary_path.unlink(missing_ok=True)
             raise

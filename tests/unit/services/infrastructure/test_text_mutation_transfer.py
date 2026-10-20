@@ -24,6 +24,9 @@ from app.schemas.internal_v2.text_mutation import (
     TextMutationRequest,
 )
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    ResourceUriResolveError,
+)
 from app.services.infrastructure.workspace_files.gateway_text_mutation import (
     GatewayTextMutation,
 )
@@ -37,6 +40,26 @@ from app.services.infrastructure.workspace_files.text_owner import (
 
 SOURCE = "gateway_0123456789abcdef0123456789abcdef"
 TARGET = "gateway_123456789abcdef0123456789abcdef0"
+
+
+def test_create_edit_and_patch_share_private_storage_rejection(transfer_case):
+    case = transfer_case
+    private = case.source / ".boxteam/private-original.txt"
+    private.write_text("before\n", encoding="utf-8")
+    version = "sha256:" + sha256_hex(private.read_bytes())
+    requests = [
+        CreateText(target=".boxteam/forbidden.txt", content="after", expected_version="absent"),
+        EditText(target=".boxteam/private-original.txt", old_string="before", new_string="after", expected_version=version),
+        PatchText(target=".", input="*** Begin Patch\n*** Update File: .boxteam/private-original.txt\n@@\n-before\n+after\n*** End Patch",
+                  expected_versions={".boxteam/private-original.txt": version}, explanation=""),
+    ]
+    for request in requests:
+        with pytest.raises(ResourceUriResolveError) as failure:
+            case.owner.execute(request)
+        assert failure.value.reason_code == "capability_denied"
+    assert private.read_text(encoding="utf-8") == "before\n"
+    assert not (case.source / ".boxteam/forbidden.txt").exists()
+    assert not list((case.source / ".boxteam/cache/text_mutations").glob("*.json"))
 
 
 @dataclass

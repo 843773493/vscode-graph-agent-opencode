@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
 import httpx
 
+from app.core.exceptions import ForbiddenError
 from app.core.path_utils import resolve_native_file_path, safe_join
 from app.core.resource_uri import (
     ParsedResourceUri,
@@ -106,6 +108,17 @@ class WorkspaceFilePaths:
             raise RuntimeError("目标文件 owner 尚未装配原生 Gateway 目录根绑定")
         return self.bindings
 
+    def is_private(self, target: Path) -> bool:
+        """普通文件树不公布保留存储目录；原生根和 symlink 别名遵守同一边界。"""
+        # 分类保留循环/断链的 symlink 节点；真正访问仍经 resolve/safe_join 明确失败。
+        resolved = Path(os.path.realpath(target))
+        return (any(os.path.normcase(part) == ".boxteam" for part in (*target.parts, *resolved.parts))
+                or resolved.is_relative_to(Path(os.path.realpath(self.workspace / ".boxteam"))))
+
+    def require_public_path(self, target: Path) -> None:
+        if self.is_private(target):
+            raise ForbiddenError("私有存储只允许由业务 owner 访问")
+
     def resolve(self, value: str, *, scope: str = "workspace", allow_empty: bool = True,
                 reject_symlink: bool = False, allow_external: bool = True) -> tuple[Path, str]:
         if "://" in value:
@@ -120,14 +133,17 @@ class WorkspaceFilePaths:
                 root = self.workspace
             else:
                 root = self._bindings().resolve(parsed)
+            self.require_public_path(root.joinpath(*parsed.tail_segments[1:]))
             if reject_symlink and root.joinpath(*parsed.tail_segments[1:]).is_symlink():
                 raise ValueError(f"不允许编辑符号链接: {parsed.display_uri}")
             target = safe_join(root, *parsed.tail_segments[1:])
+            self.require_public_path(target)
             return target, parsed.display_uri
         if not value and not allow_empty:
             raise ValueError("文件路径不能为空")
         native = Path(value).expanduser()
         unresolved = native if native.is_absolute() else self.workspace / native
+        self.require_public_path(unresolved)
         if reject_symlink and unresolved.is_symlink():
             raise ValueError("不允许通过文件预览编辑符号链接")
         if not native.is_absolute() and scope == "filesystem":
@@ -139,6 +155,7 @@ class WorkspaceFilePaths:
         return target, self.reference(target)
 
     def reference(self, target: Path) -> str:
+        self.require_public_path(target)
         if target.is_relative_to(self.workspace):
             return file_uri_child(self.workspace_uri, *target.relative_to(self.workspace).parts)
         root = target if target.is_dir() else target.parent

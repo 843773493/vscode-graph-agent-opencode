@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 from typing import BinaryIO
 
@@ -19,7 +20,9 @@ class FileEffectUnverifiedError(RuntimeError):
     """原发布效果无法由冻结 inode/内容证明核实，禁止盲目重放。"""
 
 
-def content_manifest(path: Path) -> dict:
+def content_manifest(path: Path, *, validate: Callable[[Path], None] | None = None) -> dict:
+    if validate is not None:
+        validate(path)
     if path.is_symlink():
         raise ValueError(f"暂不支持复制符号链接: {path.name}")
     if path.is_file():
@@ -34,13 +37,13 @@ def content_manifest(path: Path) -> dict:
         raise FileNotFoundError(f"复制来源不是文件或目录: {path.name}")
     children = {}
     for child in sorted(path.iterdir(), key=lambda item: item.name):
-        children[child.name] = content_manifest(child)
+        children[child.name] = content_manifest(child, validate=validate)
     return {"kind": "directory", "children": children}
 
 
-def captured_source(path: Path) -> dict:
+def captured_source(path: Path, *, validate: Callable[[Path], None] | None = None) -> dict:
     before = path.stat(follow_symlinks=False)
-    manifest = content_manifest(path)
+    manifest = content_manifest(path, validate=validate)
     after = path.stat(follow_symlinks=False)
     if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
         raise RuntimeError(f"捕获复制来源时源发生变化: {path.name}")

@@ -399,7 +399,7 @@ async def test_file_manager_creates_file_and_directory_with_parent_snapshot(
 ) -> None:
     service, project_root, _ = file_manager_service
     original_names = {item.name for item in (await service.list_files()).items}
-    assert ".boxteam" in original_names
+    assert ".boxteam" not in original_names
 
     after_file = await service.create_file_entry(
         directory_path="",

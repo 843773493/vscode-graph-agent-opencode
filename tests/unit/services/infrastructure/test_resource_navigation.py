@@ -19,10 +19,33 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
     ResourceFileOperationError,
     ResourceNavigation,
 )
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    ResourceUriResolveError,
+)
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 WORKSPACE_ID = "019d1b4a-1111-7000-8000-000000000001"
 GATEWAY_ID = "gateway_navigation_test"
+
+
+@pytest.mark.asyncio
+async def test_files_private_boundary_is_shared_with_native_aliases_but_not_skill_owner(navigation_case):
+    owner, workspace, uri = navigation_case
+    private = workspace / ".boxteam"
+    skill = private / "skills/example/SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("skill original", encoding="utf-8")
+    (workspace / "private-alias").symlink_to(private, target_is_directory=True)
+    (workspace / ".github").mkdir()
+    for target in (uri + "/.boxteam", uri + "/private-alias/skills/example/SKILL.md"):
+        with pytest.raises(ResourceUriResolveError) as failure:
+            await owner.navigate(ResourceNavigationRequest(uri=target, operation="read"), local_gateway_id=GATEWAY_ID)
+        assert failure.value.reason_code == "capability_denied"
+    listed = await owner.navigate(ResourceNavigationRequest(uri=uri, operation="list"), local_gateway_id=GATEWAY_ID)
+    assert {child.uri for child in listed.entries} == {uri + "/.github"}
+    skill_uri = resource_display_uri(scope="workspace", scope_id=WORKSPACE_ID, kind="skills", tail_segments=("example", "SKILL.md"))
+    read = await owner.navigate(ResourceNavigationRequest(uri=skill_uri, operation="read"), local_gateway_id=GATEWAY_ID)
+    assert read.content == "skill original"
 
 
 @pytest.fixture

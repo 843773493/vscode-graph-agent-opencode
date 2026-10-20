@@ -14,6 +14,10 @@ from pathlib import Path
 import pytest
 
 from app.core.resource_uri import parse_resource_uri
+from app.services.infrastructure.workspace_files.paths import (
+    file_uri_child,
+    file_uri_root,
+)
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     _completed,
 )
@@ -149,6 +153,19 @@ async def test_chat_file_references_preserve_native_and_uri_targets(communicatio
     assert local_response.status_code == 200, local_response.text
     assert native_response.status_code == 200, native_response.text
     local_uri, native_uri = local_response.json()["data"]["path"], native_response.json()["data"]["path"]
+    private = case.workspace / ".boxteam/cache/private-boundary.txt"
+    private.parent.mkdir(parents=True, exist_ok=True)
+    private.write_text("private boundary original", encoding="utf-8")
+    private_uri = file_uri_child(file_uri_root(local_uri), ".boxteam", "cache", private.name)
+    for target in (str(private), private_uri):
+        for suffix in ("content", "raw", "download"):
+            denied = await case.client.get(f"/api/v1/workspace/files/{suffix}", params={"path": target})
+            assert denied.status_code == 403, denied.text
+            assert "private boundary original" not in denied.text
+            assert str(case.workspace) not in denied.text
+    public_tree = await case.client.get("/api/v1/workspace/files")
+    assert public_tree.status_code == 200, public_tree.text
+    assert ".boxteam" not in {item["name"] for item in public_tree.json()["data"]["items"]}
     references = [
         {"label": "相对文件", "target": local.name, "uri": local_uri, "content": local.read_text()},
         {"label": "原生绝对", "target": str(local), "uri": local_uri, "content": local.read_text()},
@@ -177,3 +194,4 @@ async def test_chat_file_references_preserve_native_and_uri_targets(communicatio
     assert native.read_text() == "外部原件\n独立第二行\n"
     assert decoy.read_text() == "不得打开的旧回退对照\n"
     assert local.read_text() == "本地原件\n定位第二行\n"
+    assert private.read_text(encoding="utf-8") == "private boundary original"

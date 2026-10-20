@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -16,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from app.api import workspace as workspace_api
 from app.api.deps import get_workspace_service, verify_local_token
+from app.core.exceptions import ForbiddenError
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_session_path_resolver
 from app.core.resource_uri import parse_resource_uri
@@ -35,6 +38,7 @@ from app.services.infrastructure.file_tree_settings_service import (
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 from app.services.infrastructure.workspace_files.paths import (
     GatewayNativeDirectoryClient,
+    file_uri_child,
 )
 from app.services.infrastructure.workspace_service import WorkspaceService
 from tests.harness.python.run_context import TestRunContext
@@ -112,6 +116,8 @@ def test_native_client_does_not_follow_remote_redirect(monkeypatch):
 async def native_case(request, monkeypatch):
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     workspace = context.workspace_root
+    if workspace.exists():
+        shutil.rmtree(workspace)
     workspace.mkdir(parents=True, exist_ok=True)
     external = workspace.parent / "未注册 目录"
     shutil.rmtree(external, ignore_errors=True)
@@ -123,6 +129,10 @@ async def native_case(request, monkeypatch):
     config.get_workspace_preview_max_bytes.return_value = 1024 * 1024
     config.get_workspace_preview_binary_sample_bytes.return_value = 8192
     identity = WorkspaceService(config_service=config, workspace_root=workspace).workspace_id
+    # Gateway 控制数据也属于本 fixture；重跑不能继承上一用例的目录绑定。
+    gateway_root = workspace.parent / "gateway"
+    if gateway_root.exists():
+        shutil.rmtree(gateway_root)
     state = GatewayStateStore(path=workspace.parent / "gateway/gateway.sqlite")
     registry_path = workspace.parent / "gateway/registry.json"
     registry = GatewayWorkspaceRegistry(storage_path=registry_path, state_store=state)
@@ -323,3 +333,141 @@ async def test_native_directory_public_navigation_reuses_bound_file_paths(native
         assert str(case.external) not in response.text
     assert case.registry.targets() == registered
     assert not (case.external / ".boxteam").exists()
+
+
+async def test_private_storage_http_rejects_native_uri_and_symlink_aliases(native_case):
+    case = native_case
+    private = case.workspace / ".boxteam/navigation/private-original.txt"
+    private.write_text("private original", encoding="utf-8")
+    link = case.external / "private-alias"
+    link.symlink_to(private.parent, target_is_directory=True)
+    (case.external / "loop").symlink_to("loop")
+    (case.external / "broken-link").symlink_to("missing-target")
+    workspace_uri = case.service.file_paths.workspace_uri
+    native_uri = await asyncio.to_thread(case.service.file_paths.bindings.bind, case.workspace)
+    private_uri = await asyncio.to_thread(case.service.file_paths.bindings.bind, private.parent)
+    targets = [".boxteam/navigation/private-original.txt", str(private),
+        file_uri_child(workspace_uri, ".boxteam", "navigation", private.name),
+        file_uri_child(native_uri, ".boxteam", "navigation", private.name),
+        file_uri_child(private_uri, private.name), str(link / private.name)]
+    app = FastAPI()
+    app.add_middleware(TraceMiddleware)
+    app.include_router(workspace_api.router, prefix="/api/v1")
+    app.dependency_overrides[get_workspace_service] = lambda: case.service
+    app.dependency_overrides[verify_local_token] = lambda: "authenticated"
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://backend.test") as client:
+        for target in targets:
+            for suffix in ("content", "raw", "download"):
+                response = await client.get(f"/api/v1/workspace/files/{suffix}", params={"path": target})
+                assert response.status_code == 403, (target, suffix, response.text)
+                assert "private original" not in response.text
+                assert str(case.workspace) not in response.text
+            saved = await client.put("/api/v1/workspace/files/content", params={"path": target},
+                json={"content": "must not publish", "expected_revision": "0" * 64})
+            assert saved.status_code == 403, saved.text
+            revealed = await client.post("/api/v1/workspace/files/reveal", params={"path": target})
+            assert revealed.status_code == 403, revealed.text
+            referenced = await client.post("/api/v1/workspace/files/references", json={"paths": [target]})
+            assert referenced.status_code == 403, referenced.text
+        for directory in (".boxteam", str(link), private_uri):
+            response = await client.get("/api/v1/workspace/files", params={"path": directory})
+            assert response.status_code == 403, response.text
+        workspace_listing = (await client.get("/api/v1/workspace/files")).json()["data"]
+        assert ".boxteam" not in {item["name"] for item in workspace_listing["items"]}
+        external_listing = (await client.get("/api/v1/workspace/files", params={"path": str(case.external)})).json()["data"]
+        assert "private-alias" not in {item["name"] for item in external_listing["items"]}
+        assert {item["name"] for item in external_listing["items"] if item["kind"] == "symlink"} == {"loop", "broken-link"}
+    assert private.read_text(encoding="utf-8") == "private original"
+
+
+async def test_private_tree_copy_upload_and_download_reject_before_publication(native_case, monkeypatch):
+    case = native_case
+    source = case.external / "nested-project"
+    (source / ".boxteam").mkdir(parents=True)
+    (source / ".boxteam/secret.txt").write_text("private source", encoding="utf-8")
+    (source / "public.txt").write_text("public source", encoding="utf-8")
+    app = FastAPI()
+    app.add_middleware(TraceMiddleware)
+    app.include_router(workspace_api.router, prefix="/api/v1")
+    app.dependency_overrides[get_workspace_service] = lambda: case.service
+    app.dependency_overrides[verify_local_token] = lambda: "authenticated"
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://backend.test") as client:
+        listing = (await client.get("/api/v1/workspace/files")).json()["data"]
+        def intent():
+            return WorkspaceFileMutationIntentDTO(client_operation_id=create_prefixed_id("op"),
+                client_sequence=1, directory_key=listing["directory_key"],
+                expected_directory_revision=listing["directory_revision"]).model_dump()
+        requests = [
+            ("entries", {"name": ".boxteam", "kind": "directory", "intent": intent()}),
+            ("copy", {"source_path": str(source), "source_scope": "filesystem", "intent": intent()}),
+            ("paste", {"source_paths": [str(source / "public.txt"), str(source / ".boxteam/secret.txt")], "intent": intent()}),
+        ]
+        for endpoint, payload in requests:
+            response = await client.post(f"/api/v1/workspace/files/{endpoint}", json=payload)
+            assert response.status_code == 403, response.text
+        uploaded = await client.post("/api/v1/workspace/files/upload",
+            data={"relative_paths": "nested-project/.boxteam/injected.txt", "intent": json.dumps(intent())},
+            files={"files": ("injected.txt", b"must not publish", "text/plain")})
+        assert uploaded.status_code == 403, uploaded.text
+        for target in (case.workspace, source):
+            response = await client.get("/api/v1/workspace/files/download", params={"path": str(target)})
+            assert response.status_code == 403, response.text
+        # 普通点号目录及未注册目录的既有文本能力继续由同一 owner 执行。
+        ordinary = case.external / ".config"
+        ordinary.mkdir()
+        (ordinary / "public.txt").write_text("before", encoding="utf-8")
+        opened = (await client.get("/api/v1/workspace/files/content", params={"path": str(ordinary / "public.txt")})).json()["data"]
+        saved = await client.put("/api/v1/workspace/files/content", params={"path": opened["path"]},
+            json={"content": "after", "expected_revision": opened["revision"]})
+        assert saved.status_code == 200, saved.text
+        assert (ordinary / "public.txt").read_text(encoding="utf-8") == "after"
+        assert (await client.get("/api/v1/workspace/files/download", params={"path": str(ordinary)})).status_code == 200
+    assert not (case.workspace / source.name).exists()
+    assert not (case.workspace / "public.txt").exists()
+    assert not list((case.workspace / ".boxteam/navigation/workspace-files-staging").iterdir())
+    assert (source / ".boxteam/secret.txt").read_text(encoding="utf-8") == "private source"
+    original_scandir = os.scandir
+    def public_scan(directory):
+        assert ".boxteam" not in Path(directory).parts, "下载已进入私有子树才拒绝"
+        return original_scandir(directory)
+    with monkeypatch.context() as guarded:
+        guarded.setattr(os, "scandir", public_scan)
+        with pytest.raises(ForbiddenError):
+            case.service.prepare_file_download(path=str(source), scope="filesystem")
+
+
+async def test_accepted_copy_rejects_source_replaced_by_private_alias(native_case, monkeypatch):
+    case = native_case
+    private = case.workspace / ".boxteam/private-original.txt"
+    private.write_text("private original", encoding="utf-8")
+    source = case.external / "文件 %.txt"
+    owner = case.service.file_operations
+    original_execute = owner._execute
+    started, release = threading.Event(), threading.Event()
+    def paused(record):
+        started.set()
+        if not release.wait(5):
+            raise TimeoutError("测试没有释放已受理文件操作")
+        original_execute(record)
+    monkeypatch.setattr(owner, "_execute", paused)
+    listing = await case.service.list_files()
+    try:
+        receipt = await case.service.copy_file_entry(directory_path="", scope="workspace",
+            source_path=str(source), source_scope="filesystem", actor="local",
+            intent=WorkspaceFileMutationIntentDTO(client_operation_id=create_prefixed_id("op"), client_sequence=1,
+                directory_key=listing.directory_key, expected_directory_revision=listing.directory_revision))
+        assert await asyncio.to_thread(started.wait, 5)
+        source.unlink()
+        source.symlink_to(private)
+    finally:
+        release.set()
+    async with asyncio.timeout(5):
+        while owner.status([receipt.operation_id], actor="local").operations[0].state in {"queued", "running"}:
+            if owner.worker_state == "failed":
+                raise AssertionError(owner.worker_error)
+            await asyncio.sleep(0.01)
+    settled = owner.status([receipt.operation_id], actor="local").operations[0]
+    assert settled.state == "rejected" and settled.effect == "none"
+    assert owner.worker_state == "running"
+    assert not (case.workspace / source.name).exists()
+    assert private.read_text(encoding="utf-8") == "private original"
