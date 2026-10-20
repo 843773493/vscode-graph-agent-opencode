@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -49,6 +50,7 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import user_input_payload
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.schemas.internal_v2.message import AttachmentRef
+from app.schemas.internal_v2.session import SessionForkRequest
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.session_context_fork_service import SessionContextForkService
 from app.services.business.user_content_builder import UserContentBuilder
@@ -238,7 +240,7 @@ def fork_source_point_service(attachment_tool_owner):
         terminal_resource_owner=SimpleNamespace(list_resources=AsyncMock(return_value=[])),
         browser_resource_owner=SimpleNamespace(list_resources=AsyncMock(return_value=[])),
     )
-    token = set_current_gateway_id("attachment-fork-gateway")
+    token = set_current_gateway_id("gateway_332f92ee6191880e797569a47e22922b")
     try:
         yield service
     finally:
@@ -450,7 +452,7 @@ async def test_fork_source_attachment_candidates_require_frozen_ref_thread(
         return await project(**kwargs)
 
     monkeypatch.setattr(case.saver.forks.source, "project_display_resources", project_resources)
-    assert get_current_gateway_id() == "attachment-fork-gateway"
+    assert get_current_gateway_id() == "gateway_332f92ee6191880e797569a47e22922b"
     point = await fork_source_point_service.source_point(
         session_id=SESSION_A, thread_id=case.owner.thread_id, item_id=answer.item_id,
         source_view_id=view, source_view_revision=revision,
@@ -1139,3 +1141,66 @@ async def test_recover_session_cleans_orphan_staging_from_record(
     assert "aborted-ingest" in actions
     assert not orphan.exists()
     store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("damage_existing", [False, True], ids=["reuse", "reject-damaged"])
+async def test_cross_domain_fork_import_reuses_verified_target_blob_without_streaming(
+    fork_capture, tmp_path: Path, session_bundle_factory, damage_existing: bool,
+) -> None:
+    source, initial = fork_capture
+    body = b"same-content-across-domains"
+    source_ref = (await source.persist_inline(SESSION_A, [_attach("source.txt", "text/plain", body)],
+                                             thread_id=initial.source_thread_id))[0]
+    target_root = tmp_path / "target"
+    target_root.mkdir()
+    target = _store(target_root, session_bundle_factory, SESSION_B)
+    try:
+        target_thread = target._path_resolver.main_thread_id(SESSION_B)
+        existing_ref = (await target.persist_inline(SESSION_B, [_attach("target.txt", "text/plain", body)],
+                                                    thread_id=target_thread))[0]
+        source_domain = source._path_resolver.catalog_store.get_node(SESSION_A).workspace_id
+        target_domain = target._path_resolver.catalog_store.get_node(SESSION_B).workspace_id
+        assert source_domain != target_domain
+        request = SessionForkRequest(
+            idempotency_key="existing-content-import",
+            source_uri=f"boxteam://workspace/{source_domain}/resources/session/{SESSION_A}/threads/{initial.source_thread_id}",
+            source_view_id="frozen-source-view", source_view_revision=0, mode="context_fork",
+            target_container_uri=f"boxteam://workspace/{target_domain}/resources/workspace_sessions",
+            creation_kind="new_session_main",
+            resources=[{"resource_uri": source_ref.file_id, "action": "copy_snapshot"}],
+        )
+        record = replace(initial, target_thread_id=target_thread, request_json=json.dumps({
+            **request.model_dump(mode="json"), "target_main_thread_id": target_thread,
+            "source_storage_domain_id": source_domain, "target_storage_domain_id": target_domain,
+        }))
+        snapshots = source.capture_fork_attachments(
+            record, same_storage_owner=False, references=((source_ref.file_id, True),),
+        )
+        assert len(snapshots) == 1 and snapshots[0].target_action == "copy_snapshot"
+        existing_owner = target._catalog.get_owner_ref(parse_logical_file_id(SESSION_B, existing_ref.file_id))
+        blob = target._catalog.get_blob(existing_owner.blob_id)
+        path = resolve_blob_path(target._attachments_root, blob.relative_locator)
+        before = path.stat()
+        if damage_existing:
+            path.write_bytes(b"x" * len(body))
+        transport = SimpleNamespace(fork_transfer=AsyncMock(side_effect=AssertionError("目标已有正文不得请求传输 chunk")))
+        if damage_existing:
+            with pytest.raises(RuntimeError, match="hash/length"):
+                await target.accept_fork_import(record, snapshots, transport=transport, request=request)
+        else:
+            await target.accept_fork_import(record, snapshots, transport=transport, request=request)
+            await target.reserve_copy_attachments(record, None, snapshots)
+            await target.finalize_copy_attachments(record, publication_preimage_hash=record.preimage_hash)
+            projection = target.project_attachment(SESSION_B, target_thread, source_ref.file_id)
+            assert projection["availability"] == "available"
+            assert target.read(SESSION_B, projection["file_id"]).data == body
+            assert path.read_bytes() == body
+            after = path.stat()
+            assert (after.st_ino, after.st_mtime_ns, after.st_ctime_ns) == (
+                before.st_ino, before.st_mtime_ns, before.st_ctime_ns,
+            )
+            assert _blob_files(target_root) == [path]
+        transport.fork_transfer.assert_not_awaited()
+    finally:
+        target.close()

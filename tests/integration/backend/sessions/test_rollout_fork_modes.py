@@ -252,7 +252,7 @@ def fork_context(
 
 @pytest.fixture
 def fork_gateway_request_context() -> Iterator[None]:
-    gateway_token = set_current_gateway_id("compaction-fork-gateway")
+    gateway_token = set_current_gateway_id("gateway_6c8b2f9317a5a2c6c4569958b1e23d84")
     request_token = set_current_request_id("compaction-fork-request")
     try:
         yield
@@ -328,8 +328,12 @@ def production_fork_container(request: pytest.FixtureRequest,
             )
         except ValueError:
             return False
-        if (target.scope != "workspace" or target.scope_id != service._session_service.workspace_id
-                or target.gateway_authority not in {None, get_current_gateway_id()}):
+        # live 跨端拒绝发生在路由/transport 前；只接受无本地创建事实的已知预检码。
+        live_cross_target_rejected = str(error).startswith("fork_live_cross_workspace_unsupported:")
+        if not live_cross_target_rejected and (
+            target.scope != "workspace" or target.scope_id != service._session_service.workspace_id
+            or target.gateway_authority not in {None, get_current_gateway_id()}
+        ):
             return False
         key = service._creation_key(fork_request.idempotency_key)
         catalog = service._session_service.path_resolver.catalog_store
@@ -337,16 +341,22 @@ def production_fork_container(request: pytest.FixtureRequest,
             record = catalog.get_creation_record(key)
         except KeyError:
             record = None
+        capture = (catalog.get_fork_source_capture(creation_key=key)
+                   or catalog.get_fork_source_capture(copy_operation_id=key))
+        # 发布/中止并不代表远端导出已释放；同键重试失败仍必须保留原期限。
+        if capture is not None and catalog.get_fork_export_release(capture.copy_operation_id)[0] == "pending":
+            return False
         if record is not None:
             return record.state in {"aborted", "published"}
-        if (catalog.get_fork_source_capture(creation_key=key) is not None
-                or catalog.get_fork_source_capture(copy_operation_id=key) is not None):
+        if capture is not None:
             return False
         # Pending、传输或运行时失败仍属未知状态；只有稳定的来源校验码
         # 才表示目标创建前发生了无写入拒绝。
         return error is not None and str(error).startswith((
             "source-mismatch:", "fork_source_not_completed:", "unknown_fork_resource:",
             "fork_owner_overlap:", "不支持的 fork mode:", "fork anchor_mode 必须",
+            "fork_live_cross_workspace_unsupported:", "fork_live_revision_conflict:",
+            "fork_live_resource_rejected:",
         ))
 
     async def fork_with_deadline(
@@ -942,7 +952,7 @@ class SourceForkOwnerTransport:
         # 网络替身只负责传输；来源 transfer/捕获/释放均走真实生产 owner。
         transferred = SessionForkTransferRequest.model_validate(payload.model_dump(mode="json"))
         self.calls.append(transferred)
-        token = set_current_gateway_id("fork-source-gateway")
+        token = set_current_gateway_id("gateway_4aae160f813ed87bcf65a8bb8bfd3729")
         try:
             result = await self.source.transfer(transferred)
             reply = SessionForkTransferResultDTO.model_validate(result.model_dump(mode="json"))
@@ -4462,11 +4472,11 @@ async def test_distinct_live_fork_owners_verify_scope_before_capture(
     request = SessionForkRequest(
         idempotency_key="verified-scope-" + creation_kind,
         source_uri=thread_resource_uri(source.workspace_id, source.session_id,
-            _main_thread_id(source_context, source.session_id), gateway_authority="fork-source-gateway"),
+            _main_thread_id(source_context, source.session_id), gateway_authority="gateway_4aae160f813ed87bcf65a8bb8bfd3729"),
         target_container_uri=resource_display_uri(
             scope="workspace", scope_id=target.workspace_id, kind="session",
             tail_segments=(parent.session_id,) if creation_kind == "new_child_thread" else (),
-            gateway_authority="fork-target-gateway",
+            gateway_authority="gateway_2d2ab24c1f08e28f5f0217140c8be744",
         ),
         creation_kind=creation_kind, mode="full_rollout_copy",
         source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
@@ -4479,7 +4489,7 @@ async def test_distinct_live_fork_owners_verify_scope_before_capture(
     attachment_before = tuple(_session_control_state(path) if path.exists() else None for path in attachment_paths)
     target_control = target_context.sessions.path_resolver.resolve_session_node(parent.session_id) / "session-control.sqlite"
     control_before = _session_control_state(target_control)
-    gateway_token = set_current_gateway_id("fork-target-gateway")
+    gateway_token = set_current_gateway_id("gateway_2d2ab24c1f08e28f5f0217140c8be744")
     request_token = set_current_request_id("verified-scope-fork")
     try:
         if source.workspace_id == target.workspace_id:
@@ -4539,16 +4549,16 @@ async def test_same_live_fork_owner_across_gateways_keeps_shared_capture_and_rep
     request = SessionForkRequest(
         idempotency_key="same-owner-gateways-" + creation_kind,
         source_uri=thread_resource_uri(source.workspace_id, source.session_id,
-            _main_thread_id(context, source.session_id), gateway_authority="fork-source-gateway"),
+            _main_thread_id(context, source.session_id), gateway_authority="gateway_4aae160f813ed87bcf65a8bb8bfd3729"),
         target_container_uri=resource_display_uri(
             scope="workspace", scope_id=source.workspace_id, kind="session",
             tail_segments=(source.session_id,) if creation_kind == "new_child_thread" else (),
-            gateway_authority="fork-target-gateway",
+            gateway_authority="gateway_2d2ab24c1f08e28f5f0217140c8be744",
         ),
         creation_kind=creation_kind, mode="full_rollout_copy",
         source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
     )
-    gateway_token = set_current_gateway_id("fork-target-gateway")
+    gateway_token = set_current_gateway_id("gateway_2d2ab24c1f08e28f5f0217140c8be744")
     request_token = set_current_request_id("same-owner-two-gateway-fork")
     try:
         result = await context.forks.fork(request)
@@ -4616,11 +4626,11 @@ async def test_shared_owner_cold_recovery_uses_frozen_creation_decision(
     point = await context.forks.source_point(session_id=source.session_id, mode="full_rollout_copy")
     request = SessionForkRequest(
         idempotency_key=f"shared-crash-{creation_kind}-{crash_phase}",
-        source_uri=thread_resource_uri(source.workspace_id, source.session_id, source_thread, gateway_authority="fork-source-gateway"),
+        source_uri=thread_resource_uri(source.workspace_id, source.session_id, source_thread, gateway_authority="gateway_4aae160f813ed87bcf65a8bb8bfd3729"),
         target_container_uri=resource_display_uri(
             scope="workspace", scope_id=source.workspace_id, kind="session",
             tail_segments=(source.session_id,) if creation_kind == "new_child_thread" else (),
-            gateway_authority="fork-target-gateway",
+            gateway_authority="gateway_2d2ab24c1f08e28f5f0217140c8be744",
         ),
         creation_kind=creation_kind, mode="full_rollout_copy",
         source_view_id=point.source_view_id, source_view_revision=point.source_view_revision,
@@ -4656,7 +4666,7 @@ async def test_shared_owner_cold_recovery_uses_frozen_creation_decision(
                         raise OwnerProcessExit(f"模拟实际 owner 在 {phase} 后退出")
 
                 crash.setattr(module, "observe_phase", interrupt_phase)
-        gateway_token = set_current_gateway_id("fork-target-gateway")
+        gateway_token = set_current_gateway_id("gateway_2d2ab24c1f08e28f5f0217140c8be744")
         request_token = set_current_request_id("shared-crash-frozen-delivery")
         try:
             with pytest.raises(OwnerProcessExit):
@@ -4779,7 +4789,7 @@ async def test_shared_owner_cold_recovery_uses_frozen_creation_decision(
                 assert not claims or terminal_claims[0][0] == claims[0][0]
             else:
                 assert terminal_claims == []
-            replay_gateway = set_current_gateway_id("fork-target-gateway")
+            replay_gateway = set_current_gateway_id("gateway_2d2ab24c1f08e28f5f0217140c8be744")
             replay_request = set_current_request_id("shared-cold-replay-request")
             try:
                 if incomplete:
@@ -5133,12 +5143,12 @@ async def test_remote_source_intent_rejects_response_rebinding_before_creation(
         **selected.model_dump(mode="json"),
         "source_uri": thread_resource_uri(
             source.workspace_id, source.session_id, _main_thread_id(source_context, source.session_id),
-            gateway_authority="fork-source-gateway",
+            gateway_authority="gateway_4aae160f813ed87bcf65a8bb8bfd3729",
         ),
         "target_container_uri": resource_display_uri(
             scope="workspace", scope_id=target.workspace_id, kind="session",
             tail_segments=(parent.session_id,) if creation_kind == "new_child_thread" else (),
-            gateway_authority="fork-target-gateway",
+            gateway_authority="gateway_2d2ab24c1f08e28f5f0217140c8be744",
         ),
     })
     original_transfer = transport.fork_transfer
@@ -5164,7 +5174,7 @@ async def test_remote_source_intent_rejects_response_rebinding_before_creation(
             intent["source_thread_id"] = other_thread
             if fault == "thread_uri":
                 intent["source_uri"] = thread_resource_uri(
-                    source.workspace_id, source.session_id, other_thread, gateway_authority="fork-source-gateway",
+                    source.workspace_id, source.session_id, other_thread, gateway_authority="gateway_4aae160f813ed87bcf65a8bb8bfd3729",
                 )
         elif fault.startswith("missing_"):
             del intent[fault.removeprefix("missing_")]
@@ -5194,7 +5204,7 @@ async def test_remote_source_intent_rejects_response_rebinding_before_creation(
         "thread_uri": "来源 URI 与固定请求不一致",
         "thread_owner": "Session/Thread 与来源 URI 不一致",
     }.get(fault, "fork_response_protocol_invalid")
-    gateway_token = set_current_gateway_id("fork-target-gateway")
+    gateway_token = set_current_gateway_id("gateway_2d2ab24c1f08e28f5f0217140c8be744")
     request_token = set_current_request_id("response-binding-intent")
     try:
         with pytest.raises(RuntimeError, match=error) as caught:
@@ -5202,9 +5212,9 @@ async def test_remote_source_intent_rejects_response_rebinding_before_creation(
                 await target_context.forks.fork(request)
             else:
                 await target_context.forks.transfer(SessionForkTransferRequest(
-                    source_gateway_id="fork-target-gateway", action="create", request=request,
+                    source_gateway_id="gateway_2d2ab24c1f08e28f5f0217140c8be744", action="create", request=request,
                     fork_target=ForkGrantTarget(
-                        gateway_id="fork-target-gateway", uri=request.target_container_uri, fork_role="target",
+                        gateway_id="gateway_2d2ab24c1f08e28f5f0217140c8be744", uri=request.target_container_uri, fork_role="target",
                     ),
                 ))
         protocol_causes = {
@@ -5252,9 +5262,9 @@ async def test_remote_source_preserves_default_thread_and_context_anchor(
         **selected.model_dump(mode="json"), "anchor_item_id": None,
         "source_uri": resource_display_uri(
             scope="workspace", scope_id=source.workspace_id, kind="session", tail_segments=(source.session_id,),
-            gateway_authority="fork-source-gateway",
+            gateway_authority="gateway_4aae160f813ed87bcf65a8bb8bfd3729",
         ),
-        "target_container_uri": workspace_session_inventory_uri(target.workspace_id, gateway_authority="fork-target-gateway"),
+        "target_container_uri": workspace_session_inventory_uri(target.workspace_id, gateway_authority="gateway_2d2ab24c1f08e28f5f0217140c8be744"),
     })
     intents: list[dict[str, object]] = []
     original_transfer = transport.fork_transfer
@@ -5267,7 +5277,7 @@ async def test_remote_source_preserves_default_thread_and_context_anchor(
         return reply
 
     monkeypatch.setattr(transport, "fork_transfer", observe_intent)
-    gateway_token = set_current_gateway_id("fork-target-gateway")
+    gateway_token = set_current_gateway_id("gateway_2d2ab24c1f08e28f5f0217140c8be744")
     request_token = set_current_request_id("response-binding-defaults")
     try:
         result = await target.session_context_fork_service.fork(request)
@@ -5278,7 +5288,7 @@ async def test_remote_source_preserves_default_thread_and_context_anchor(
         assert intents[0]["source_thread_id"] == source_main_thread_id
         assert result.source_uri == intents[0]["source_uri"]
         assert result.source_uri == thread_resource_uri(
-            source.workspace_id, source.session_id, source_main_thread_id, gateway_authority="fork-source-gateway",
+            source.workspace_id, source.session_id, source_main_thread_id, gateway_authority="gateway_4aae160f813ed87bcf65a8bb8bfd3729",
         )
         _, result_source_session_id, result_source_thread_id = parse_session_thread_uri(result.source_uri)
         assert (result_source_session_id, result_source_thread_id) == (source.session_id, source_main_thread_id)
@@ -5318,13 +5328,13 @@ async def test_remote_fork_task_cancel_recovers_same_durable_owner(
         idempotency_key=f"cancel-{creation_kind}-{cancel_window}",
         source_uri=resource_display_uri(
             scope="workspace", scope_id=source.workspace_id, kind="session",
-            tail_segments=(source.session_id, "threads", source_thread_id), gateway_authority="fork-source-gateway",
+            tail_segments=(source.session_id, "threads", source_thread_id), gateway_authority="gateway_4aae160f813ed87bcf65a8bb8bfd3729",
         ),
         target_container_uri=resource_display_uri(
             scope="workspace", scope_id=target.session_service.workspace_id,
             kind="session",
             tail_segments=(parent.session_id,) if creation_kind == "new_child_thread" else (),
-            gateway_authority="fork-target-gateway",
+            gateway_authority="gateway_2d2ab24c1f08e28f5f0217140c8be744",
         ),
         creation_kind=creation_kind, mode="full_rollout_copy", source_view_id=source_point.source_view_id,
         source_view_revision=source_point.source_view_revision,
@@ -5378,7 +5388,7 @@ async def test_remote_fork_task_cancel_recovers_same_durable_owner(
 
         monkeypatch.setattr(publisher, publish_name, pause_publication)
 
-    gateway_token = set_current_gateway_id("fork-target-gateway")
+    gateway_token = set_current_gateway_id("gateway_2d2ab24c1f08e28f5f0217140c8be744")
     request_token = set_current_request_id("cancel-frozen-delivery")
     operation = asyncio.create_task(target_context.forks.fork(request))
     try:
@@ -5499,13 +5509,13 @@ async def test_remote_partial_import_recovers_by_exact_owner_abort(
             scope="workspace", scope_id=target.session_service.workspace_id,
             kind="session",
             tail_segments=(parent.session_id,) if creation_kind == "new_child_thread" else (),
-            gateway_authority="fork-target-gateway",
+            gateway_authority="gateway_2d2ab24c1f08e28f5f0217140c8be744",
         ),
     )
     request = request.model_copy(update={"source_uri": resource_display_uri(
         scope="workspace", scope_id=source.workspace_id, kind="session",
         tail_segments=(source.session_id, "threads", _main_thread_id(source_context, source.session_id)),
-        gateway_authority="fork-source-gateway",
+        gateway_authority="gateway_4aae160f813ed87bcf65a8bb8bfd3729",
     )})
     key = target_context.forks._creation_key(request.idempotency_key)
     received_files = []
@@ -5527,7 +5537,7 @@ async def test_remote_partial_import_recovers_by_exact_owner_abort(
         assert root.is_dir() and received_files and not (root / "captured.json").exists()
         raise ImportProcessExit("模拟进程无法执行 partial import 清理")
 
-    gateway_token = set_current_gateway_id("fork-target-gateway")
+    gateway_token = set_current_gateway_id("gateway_2d2ab24c1f08e28f5f0217140c8be744")
     request_token = set_current_request_id("partial-import-frozen-delivery")
     try:
         with monkeypatch.context() as crash:
@@ -5650,13 +5660,13 @@ async def test_remote_fork_source_release_waits_for_durable_target_abort(
         source_uri=resource_display_uri(
             scope="workspace", scope_id=source.workspace_id, kind="session",
             tail_segments=(source.session_id, "threads", _main_thread_id(source_context, source.session_id)),
-            gateway_authority="fork-source-gateway",
+            gateway_authority="gateway_4aae160f813ed87bcf65a8bb8bfd3729",
         ),
         target_container_uri=resource_display_uri(
             scope="workspace", scope_id=target.session_service.workspace_id,
             kind="session",
             tail_segments=(parent.session_id,) if creation_kind == "new_child_thread" else (),
-            gateway_authority="fork-target-gateway",
+            gateway_authority="gateway_2d2ab24c1f08e28f5f0217140c8be744",
         ),
         source_view_id=source_point.source_view_id, source_view_revision=source_point.source_view_revision,
     )
@@ -5700,7 +5710,7 @@ async def test_remote_fork_source_release_waits_for_durable_target_abort(
         return reply.model_copy(update={"capture": capture_reply})
 
     monkeypatch.setattr(transport, "fork_transfer", return_release_receipt)
-    gateway_token = set_current_gateway_id("fork-target-gateway")
+    gateway_token = set_current_gateway_id("gateway_2d2ab24c1f08e28f5f0217140c8be744")
     request_token = set_current_request_id("abort-frozen-delivery")
     operation = asyncio.create_task(context.forks.fork(request))
     try:
@@ -5757,9 +5767,12 @@ async def test_lifespan_retries_pending_remote_export_without_restart_or_fork_re
     production_fork_container: AppContainer,
     remote_fork_target: tuple[AppContainer, SourceForkOwnerTransport],
     monkeypatch: pytest.MonkeyPatch,
+    live_resource_transport_factory,
 ) -> None:
     source_context = _production_fork_context(production_fork_container)
     source = await _seed_source(source_context, fork_provider_prepare)
+    live_resource_transport_factory(production_fork_container, "terminal")
+    _, live_resource = await _create_fork_live_resource(production_fork_container, "terminal", source.session_id)
     target, transport = remote_fork_target
     target_context = _production_fork_context(target)
     source_point = await source_context.forks.source_point(
@@ -5774,11 +5787,11 @@ async def test_lifespan_retries_pending_remote_export_without_restart_or_fork_re
             scope_id=source.workspace_id,
             kind="session",
             tail_segments=(source.session_id, "threads", source_thread_id),
-            gateway_authority="fork-source-gateway",
+            gateway_authority="gateway_4aae160f813ed87bcf65a8bb8bfd3729",
         ),
         target_container_uri=resource_display_uri(
             scope="workspace", scope_id=target.workspace_id, kind="session", tail_segments=(),
-            gateway_authority="fork-target-gateway",
+            gateway_authority="gateway_2d2ab24c1f08e28f5f0217140c8be744",
         ),
         creation_kind="new_session_main",
         mode="full_rollout_copy",
@@ -5786,6 +5799,22 @@ async def test_lifespan_retries_pending_remote_export_without_restart_or_fork_re
         source_view_revision=source_point.source_view_revision,
     )
     key = target_context.forks._creation_key(request.idempotency_key)
+
+    class RecordingDeadline:
+        _completed = False
+        _timed_out = False
+        target = "pending-export-regression"
+        operation_key = request.idempotency_key
+
+        async def wait(self, awaitable, _stage: str):
+            return await awaitable
+
+        def complete(self) -> None:
+            self._completed = True
+
+    deadline = RecordingDeadline()
+    monkeypatch.setattr(ForkDeadlineRegistry, "for_operation", lambda _registry, **_kwargs: deadline)
+    rejected_retry = request.model_copy(update={"resources": [_fork_live_choice(live_resource)]})
     original_transfer = transport.fork_transfer
     release_error = (
         "Gateway 上下文查询失败: workspace_id=None, method=POST, "
@@ -5830,7 +5859,7 @@ async def test_lifespan_retries_pending_remote_export_without_restart_or_fork_re
     try:
         async with main._workspace_lifespan(target):
             assert get_current_gateway_id() is None and get_current_request_id() is None
-            gateway_token = set_current_gateway_id("fork-target-gateway")
+            gateway_token = set_current_gateway_id("gateway_2d2ab24c1f08e28f5f0217140c8be744")
             request_token = set_current_request_id("frozen-export-delivery")
             try:
                 result = await target_context.forks.fork(request)
@@ -5861,9 +5890,23 @@ async def test_lifespan_retries_pending_remote_export_without_restart_or_fork_re
             await asyncio.wait_for(third_release_attempt.wait(), timeout=5)
             assert target_catalog.get_fork_export_release(key)[0] == "pending"
             assert target_catalog.get_creation_record(key).state == "published"
+            gateway_token = set_current_gateway_id("gateway_2d2ab24c1f08e28f5f0217140c8be744")
+            try:
+                with pytest.raises(ValueError, match="fork_live_cross_workspace_unsupported:"):
+                    await target_context.forks.fork(rejected_retry)
+                assert not deadline._completed
+            finally:
+                reset_current_gateway_id(gateway_token)
             source_recovered.set()
             await asyncio.wait_for(release_completed.wait(), timeout=5)
             assert target_catalog.get_fork_export_release(key) == ("confirmed", None)
+            gateway_token = set_current_gateway_id("gateway_2d2ab24c1f08e28f5f0217140c8be744")
+            try:
+                with pytest.raises(ValueError, match="fork_live_cross_workspace_unsupported:"):
+                    await target_context.forks.fork(rejected_retry)
+                assert deadline._completed
+            finally:
+                reset_current_gateway_id(gateway_token)
             finalized_source_capture = source_context.sessions.path_resolver.catalog_store.get_fork_source_capture(
                 copy_operation_id=key,
             )
@@ -5872,9 +5915,9 @@ async def test_lifespan_retries_pending_remote_export_without_restart_or_fork_re
             assert not source_snapshot_dir.exists()
             assert release_attempts == 3
             assert delivery_contexts == [
-                ("fork-target-gateway", "frozen-export-delivery"),
-                ("fork-target-gateway", "frozen-export-delivery"),
-                ("fork-target-gateway", "frozen-export-delivery"),
+                ("gateway_2d2ab24c1f08e28f5f0217140c8be744", "frozen-export-delivery"),
+                ("gateway_2d2ab24c1f08e28f5f0217140c8be744", "frozen-export-delivery"),
+                ("gateway_2d2ab24c1f08e28f5f0217140c8be744", "frozen-export-delivery"),
             ]
             assert sum(call.action == "intent" for call in transport.calls) == 2
             assert sum(call.action == "capture" for call in transport.calls) == 1
@@ -5966,19 +6009,19 @@ async def test_qualified_local_fork_lifespan_recovers_without_http_context(
 ) -> None:
     context = _production_fork_context(production_fork_container)
     source = await _seed_source(context, fork_provider_prepare)
-    gateway_token = set_current_gateway_id("qualified-local-fork-gateway")
+    gateway_token = set_current_gateway_id("gateway_bc453186347b952303da1c0634d46150")
     request_token = set_current_request_id("qualified-local-fork-preparation")
     try:
         request = await _fork_request(
             context, source.session_id, creation_kind=creation_kind, mode="context_fork",
             target_container_uri=(
                 workspace_session_inventory_uri(
-                    source.workspace_id, gateway_authority="qualified-local-fork-gateway",
+                    source.workspace_id, gateway_authority="gateway_bc453186347b952303da1c0634d46150",
                 )
                 if creation_kind == "new_session_main"
                 else resource_display_uri(
                     scope="workspace", scope_id=source.workspace_id, kind="session",
-                    tail_segments=(source.session_id,), gateway_authority="qualified-local-fork-gateway",
+                    tail_segments=(source.session_id,), gateway_authority="gateway_bc453186347b952303da1c0634d46150",
                 )
             ),
         )
@@ -5998,11 +6041,11 @@ async def test_qualified_local_fork_lifespan_recovers_without_http_context(
         intent = json.loads(frozen.request_intent_json)
         assert frozen.state == "preparing" and frozen.fork_delivery_request_id is None
         assert intent["source_remote"] is False
-        assert intent["target_gateway_id"] == "qualified-local-fork-gateway"
+        assert intent["target_gateway_id"] == "gateway_bc453186347b952303da1c0634d46150"
         qualified_request = request.model_copy(update={
             "source_uri": thread_resource_uri(
                 source.workspace_id, source.session_id, _main_thread_id(context, source.session_id),
-                gateway_authority="qualified-local-fork-gateway",
+                gateway_authority="gateway_bc453186347b952303da1c0634d46150",
             ),
         })
         assert intent["request"] == qualified_request.model_dump(mode="json")
@@ -6045,9 +6088,9 @@ async def test_qualified_local_fork_lifespan_recovers_without_http_context(
             )
             assert result.thread_uri == resource_display_uri(
                 scope="workspace", scope_id=source.workspace_id, kind="session",
-                tail_segments=(session_id, "threads", thread_id), gateway_authority="qualified-local-fork-gateway",
+                tail_segments=(session_id, "threads", thread_id), gateway_authority="gateway_bc453186347b952303da1c0634d46150",
             )
-            replay_token = set_current_gateway_id("qualified-local-fork-gateway")
+            replay_token = set_current_gateway_id("gateway_bc453186347b952303da1c0634d46150")
             try:
                 alias_request = qualified_request.model_copy(update={
                     "target_container_uri": (
@@ -7551,7 +7594,7 @@ async def test_live_fork_published_startup_preserves_dispatch_and_commit_facts(
     try:
         async with main.lifespan(main.app):
             # lifespan 在无 HTTP context 下恢复；公开 replay 仍带真实路由的 Gateway 身份。
-            replay_gateway = set_current_gateway_id("compaction-fork-gateway")
+            replay_gateway = set_current_gateway_id("gateway_6c8b2f9317a5a2c6c4569958b1e23d84")
             try:
                 repeated = await restarted.session_context_fork_service.fork(request)
                 assert (repeated.session.session_id, repeated.thread_id) == (target_session, target_thread)
@@ -7606,7 +7649,7 @@ async def test_http_live_fork_serializes_complete_owner_and_partial_failure_with
     async with main.lifespan(main.app), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main.app), base_url="http://workspace",
         headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": source.workspace_id,
-                 "X-BoxTeam-Gateway-Id": "compaction-fork-gateway", "X-Request-ID": "live-fork-wire"},
+                 "X-BoxTeam-Gateway-Id": "gateway_6c8b2f9317a5a2c6c4569958b1e23d84", "X-Request-ID": "live-fork-wire"},
     ) as client:
         point = await client.get(f"/api/v1/sessions/{source.session_id}/fork-source-point", params={"mode": "context_fork"})
         assert point.status_code == 200, point.text
@@ -7735,10 +7778,10 @@ async def test_generation_implicit_latest_fork_replays_frozen_request_after_sour
     )
     assert request.source_uri == thread_resource_uri(
         source.workspace_id, source.session_id, _main_thread_id(context, source.session_id),
-        gateway_authority="compaction-fork-gateway",
+        gateway_authority="gateway_6c8b2f9317a5a2c6c4569958b1e23d84",
     )
     assert request.target_container_uri == workspace_session_inventory_uri(
-        source.workspace_id, gateway_authority="compaction-fork-gateway",
+        source.workspace_id, gateway_authority="gateway_6c8b2f9317a5a2c6c4569958b1e23d84",
     )
     result = await context.forks.fork(request, generation_origin=origin)
     target = result.session
@@ -8097,7 +8140,7 @@ async def test_http_fork_reply_preserves_committed_copy_across_target_delete(
     async with main.lifespan(main.app), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main.app), base_url="http://workspace",
         headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": context.sessions.workspace_id,
-                 "X-BoxTeam-Gateway-Id": "compaction-fork-gateway", "X-Request-ID": "copy-delete-order"},
+                 "X-BoxTeam-Gateway-Id": "gateway_6c8b2f9317a5a2c6c4569958b1e23d84", "X-Request-ID": "copy-delete-order"},
     ) as client:
         if replay:
             first = await client.post(f"/api/v1/sessions/{source.session_id}/fork-context", json=request.model_dump(mode="json"))
@@ -8281,7 +8324,7 @@ async def test_http_published_fork_without_attachment_claim_rejects_deleting_tar
     async with main.lifespan(main.app), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main.app), base_url="http://workspace",
         headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": context.sessions.workspace_id,
-                 "X-BoxTeam-Gateway-Id": "compaction-fork-gateway", "X-Request-ID": "unclaimed-copy-delete"},
+                 "X-BoxTeam-Gateway-Id": "gateway_6c8b2f9317a5a2c6c4569958b1e23d84", "X-Request-ID": "unclaimed-copy-delete"},
     ) as client:
         if resource_case == "unavailable":
             omitted = await client.post(f"/api/v1/sessions/{source.session_id}/fork-context", json=request.model_dump(mode="json"))
