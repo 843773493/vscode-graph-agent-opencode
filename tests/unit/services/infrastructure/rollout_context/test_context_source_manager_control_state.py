@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -17,11 +20,15 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceControlMutation,
+    ContextSourceControlOperation,
+    ContextSourceControlState,
     ContextSourceOwnerKey,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceDescriptor,
     ContextSourceManager,
+    ContextSourceTrackingStateConflict,
     SkillCatalogActivationSnapshot,
     SkillCatalogBinding,
     _revision,
@@ -392,3 +399,42 @@ def test_restart_recovery_allows_tracked_registration_awaiting_first_observation
     assert status == "tracked"
     assert latest is None
     assert rebuilt.observe("workspace:rules", "v1\n") is True
+
+
+@pytest.mark.parametrize("operation", ["register", "track"])
+def test_competing_skill_tracking_has_one_durable_winner(source_seal_case, operation: ContextSourceControlOperation):
+    """不同 source 行不能绕过同一 owner/name 的唯一 tracking；冲突方保持原控制行。"""
+    port, owner = source_seal_case.saver, source_seal_case.owner
+    candidates = [ContextSourceControlState(
+        owner=owner, source_id=f"skill:{index}", source_kind="skill", name=name,
+        binding_revision=None, tracking_status="tracked",
+        latest_revision=f"revision-{index}", latest_visible_committed_revision=None,
+    ) for index, name in enumerate(("demo", " demo "))]
+    if operation == "track":
+        candidates = [replace(port.apply_context_source_control_mutation(ContextSourceControlMutation(
+            "register", replace(state, tracking_status="untracked"),
+        )).state, tracking_status="tracked") for state in candidates]
+    before = {state.source_id: state for state in port.load_context_source_control_states(owner)}
+    barrier = threading.Barrier(2)
+
+    def track(state: ContextSourceControlState) -> ContextSourceControlState | ContextSourceTrackingStateConflict:
+        barrier.wait(timeout=5)
+        try:
+            return port.apply_context_source_control_mutation(ContextSourceControlMutation(operation, state)).state
+        except ContextSourceTrackingStateConflict as error:
+            return error
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = [future.result(timeout=10) for future in [pool.submit(track, state) for state in candidates]]
+    winners = [state for state in results if isinstance(state, ContextSourceControlState)]
+    conflicts = [state for state in results if isinstance(state, ContextSourceTrackingStateConflict)]
+    assert len(winners) == len(conflicts) == 1
+    assert conflicts[0].code == "tracking-state-conflict"
+    states = {state.source_id: state for state in port.load_context_source_control_states(owner)}
+    loser = next(state for state in candidates if state.source_id != winners[0].source_id)
+    assert states[winners[0].source_id] == winners[0]
+    assert states.get(loser.source_id) == before.get(loser.source_id)
+    assert [state.source_id for state in states.values() if state.tracking_status == "tracked"] == [winners[0].source_id]
+    # 冷 manager 必须能恢复唯一 winner，而不是在下一次调用才发现脏 tracking。
+    restored = source_seal_case.manager()
+    assert restored.source_observation_state(winners[0].source_id)[0] == "tracked"

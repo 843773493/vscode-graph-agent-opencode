@@ -19,6 +19,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceTrackingStatus,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
+    ContextSourceTrackingStateConflict,
     _normalize_skill_name,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
@@ -276,17 +277,6 @@ class ContextSourceControlStorageMixin:
                     raise RuntimeError("context-source-control-state-conflict: rebind 原 tracking 已变化")
                 if stored is not None and stored.tracking_status != "untracked":
                     raise RuntimeError("context-source-control-state-conflict: rebind 目标已被跟踪")
-                tracked = connection.execute(
-                    f"SELECT source_id, name FROM {_TABLE_NAME} "
-                    "WHERE session_id = ? AND thread_id = ? AND tracking_status = 'tracked'",
-                    (owner.session_id, owner.thread_id),
-                ).fetchall()
-                if any(
-                    source_id != replaced.source_id
-                    and _normalize_skill_name(name) == _normalize_skill_name(state.name)
-                    for source_id, name in tracked
-                ):
-                    raise RuntimeError("context-source-control-state-conflict: rebind 存在其它同名 tracking")
             if stored is not None:
                 if mutation.operation != "register" and replaced is None and state.binding_revision != stored.binding_revision:
                     raise RuntimeError("context-source-control-state-conflict: 只有 register 可以更新来源绑定")
@@ -320,6 +310,17 @@ class ContextSourceControlStorageMixin:
         if stored is not None and (state.source_kind, state.name) != (stored.source_kind, stored.name):
             raise RuntimeError("context-source-control-state-conflict: source identity 不得改绑")
         owner = state.owner
+        if state.source_kind == "skill" and state.tracking_status == "tracked":
+            # 名称唯一性与 CAS 共用写事务；不同 source 行不能各自成功建立同名 tracking。
+            tracked = connection.execute(
+                f"SELECT name FROM {_TABLE_NAME} WHERE session_id = ? AND thread_id = ? "
+                "AND source_kind = 'skill' AND tracking_status = 'tracked' AND source_id != ?",
+                (owner.session_id, owner.thread_id, state.source_id),
+            ).fetchall()
+            if any(_normalize_skill_name(name) == _normalize_skill_name(state.name) for (name,) in tracked):
+                raise ContextSourceTrackingStateConflict(
+                    "tracking-state-conflict: 同一 owner 已有同名 active Skill registration"
+                )
         timestamp = _now()
         if stored is not None:
             if stored.durable_fields() == state.durable_fields():
