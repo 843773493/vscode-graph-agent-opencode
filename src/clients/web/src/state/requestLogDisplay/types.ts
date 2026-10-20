@@ -37,7 +37,7 @@ export interface RequestReplayDisplay {
 }
 
 export interface RequestLogKeyFlow {
-  readSkills: string[];
+  acceptedSkillLoads: string[];
   customInvokerNames: string[];
   customToolNames: string[];
   customToolResults: Array<{ toolName: string; invocationToolName: string; resultText: string }>;

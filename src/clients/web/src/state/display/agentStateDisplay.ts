@@ -1,27 +1,24 @@
 import { normalizeDisplayText } from "../../utils/displayText";
 import { isRecord, redactLargeData } from "../../utils/jsonDisplay";
-import { allowedToolsFromSkillMarkdownText } from "../../utils/markdown/skillMarkdown";
 import {
   compactKeyFlowText,
   createSkillKeyFlowState,
   recordFinalText,
-  recordReadSkill,
+  recordSkillLoadResult,
   skillKeyFlowSnapshot,
 } from "../skillKeyFlow";
 import {
   EXTENSION_TOOL_INVOKER_NAME,
   INVALID_CUSTOM_TOOL_CALL_NAME,
   UNKNOWN_CUSTOM_TOOL_NAME,
-  customToolCallArgs,
   customToolCallId,
-  customToolCallName,
   customToolTargetNameFromCall,
   isCustomInvokerValidationError,
 } from "../customTools/protocol";
 import { errorMessage } from "../../utils/errorMessage";
 
 export interface AgentStateSummary {
-  skills: string[];
+  acceptedSkillLoads: string[];
   customTools: string[];
   customToolResults: Array<{ toolName: string; invocationToolName: string; resultText: string }>;
   finalText: string;
@@ -175,10 +172,6 @@ export function buildAgentStateSummary(
 
   for (const record of records) {
     for (const call of toolCalls(record)) {
-      const name = customToolCallName(call);
-      if (name === "read_file") {
-        recordReadSkill(state, { toolName: name, args: customToolCallArgs(call) });
-      }
       const customToolName = customToolTargetNameFromCall(call);
       if (customToolName) {
         customTools.add(customToolName);
@@ -188,17 +181,12 @@ export function buildAgentStateSummary(
         }
       }
     }
-
-    if (record.role === "tool" && record.name === "read_file") {
-      for (const toolName of allowedToolsFromSkillMarkdownText(textContent(record.content))) {
-        customTools.add(toolName);
-      }
-    }
   }
 
   for (const record of records) {
     if (record.role === "tool") {
       const toolName = typeof record.name === "string" ? record.name : "";
+      recordSkillLoadResult(state, { toolName, result: textContent(record.content) });
       if (toolName === EXTENSION_TOOL_INVOKER_NAME) {
         const callId = customToolCallId(record);
         const customToolName = callId
@@ -239,7 +227,7 @@ export function buildAgentStateSummary(
   const snapshot = skillKeyFlowSnapshot(state);
 
   return {
-    skills: snapshot.readSkills,
+    acceptedSkillLoads: snapshot.acceptedSkillLoads,
     customTools: Array.from(customTools),
     customToolResults,
     finalText: snapshot.finalText,

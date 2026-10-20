@@ -9027,8 +9027,24 @@ async function runSkillUntrack(surface) {
   const skillPath = join(owner.workspace, ".boxteam/skills", skillName, "SKILL.md");
   const skillBytes = await readFile(skillPath);
   const receipts = [];
+  const skillLoadSummaries = {};
   try {
     await openOwner(owner);
+    for (const [view, label, selector] of [
+      ["agent", "上下文状态", ".agent-state-summary"],
+      ["events", "事件视图", ".event-queue-key-trace"],
+      ["requests", "请求视图", ".request-log-key-flow"],
+    ]) {
+      await owner.page.locator("#viewModeButton").click();
+      await owner.page.getByRole("menuitemradio", { name: new RegExp(`^${label}`) }).click();
+      const summary = owner.page.locator(selector);
+      if (view === "requests") await summary.getByRole("button", { name: /请求链路/ }).click();
+      await waitUntil(async () => (await summary.innerText()).includes(skillName)
+        && (await summary.innerText()).includes("已接受的 Skill 加载"), `${label}读取真实Skill加载回执`);
+      skillLoadSummaries[view] = await summary.innerText();
+    }
+    await owner.page.locator("#viewModeButton").click();
+    await owner.page.getByRole("menuitemradio", { name: /^默认视图/ }).click();
     // 真实源已不存在时仍可人工控制；不恢复来源、不发送 LLM 消息。
     await unlink(skillPath);
     for (const explicitThread of [false, true]) {
@@ -9065,7 +9081,7 @@ async function runSkillUntrack(surface) {
     assert.deepEqual(await readRollout(owner, callsQuery), before.calls);
     assert.deepEqual(await readRollout(owner, assembliesQuery), before.assemblies);
     assert.deepEqual(await readFile(jsonlPath), bytes);
-    return { sessionId: owner.sessionId, threadId: owner.threadId, setup, tracked, untracked, receipts,
+    return { sessionId: owner.sessionId, threadId: owner.threadId, setup, tracked, untracked, receipts, skillLoadSummaries,
       preservedJsonlSha256: createHash("sha256").update(bytes).digest("hex"), modelCallCount: before.calls.length };
   } finally {
     await writeFile(skillPath, skillBytes);

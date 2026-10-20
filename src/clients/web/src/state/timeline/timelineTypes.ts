@@ -61,7 +61,7 @@ export type TimelineItem = {
   | {
       kind: "skill_summary";
       id: string;
-      readSkills: string[];
+      acceptedSkillLoads: string[];
       toolResults: Array<{
         toolName: string;
         skillNames: string[];

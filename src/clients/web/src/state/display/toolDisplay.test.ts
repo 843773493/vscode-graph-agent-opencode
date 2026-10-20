@@ -4,6 +4,7 @@ import type { TimelineItem } from "../timeline/timelineTypes";
 import {
   formatToolCardContent,
   isRoutineInternalToolItem,
+  isSkillInternalToolItem,
   toolCollapsedText,
 } from "./toolDisplay";
 
@@ -122,11 +123,20 @@ test("未知工具结果不使用会误导为成功的折叠文案", () => {
   expect(toolCollapsedText(item)).toBe("未确认返回结果");
 });
 
-test("bundled Skill 的读取明确显示为 Skill 而不是项目文件", () => {
+test("普通文件读取不按路径推断 Skill 来源或宣称已加载", () => {
   const item = toolItem("read_file");
   item.rawStart.args = {
     path: ".boxteam/bundled-skills/browser-control/SKILL.md",
   };
 
-  expect(toolCollapsedText(item)).toBe("已读取 skill：browser-control");
+  expect(isSkillInternalToolItem(item)).toBe(false);
+  expect(toolCollapsedText(item)).toBe("read_file 处理：.boxteam/bundled-skills/browser-control/SKILL.md");
+});
+
+test("Skill 加载工具由明确工具名分类，错误回执保留原结果", () => {
+  const item = toolItem("skill_load");
+  item.resultText = '{"status":"error","name":"browser-control"}';
+  item.rawEnd.result = item.resultText;
+  expect(isSkillInternalToolItem(item)).toBe(true);
+  expect(toolCollapsedText(item)).toContain('"status":"error"');
 });

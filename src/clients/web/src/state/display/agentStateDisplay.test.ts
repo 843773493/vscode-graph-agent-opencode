@@ -33,6 +33,23 @@ test("原始消息内容为空时仍区分于找不到消息", () => {
   expect(findAgentStateMessageRawContent(jsonl, "msg_empty")).toBe("");
 });
 
+test("Skill 汇总只消费成功加载回执，不从普通读取或调用参数推断", () => {
+  const summary = buildAgentStateSummary([
+    { role: "assistant", tool_calls: [{ name: "skill_load", args: { name: "only-requested" } },
+      { name: "read_file", args: { path: ".boxteam/skills/fake/SKILL.md" } }] },
+    { role: "tool", name: "read_file", content: "---\nname: fake\nallowed-tools: fake_tool\n---" },
+    { role: "tool", name: "skill_load", content: JSON.stringify({ name: "actual", mode: "tracked",
+      status: "rebound", append_status: "appended", queued: true, error: null }) },
+    { role: "tool", name: "skill_load", content: JSON.stringify({ name: "failed", mode: "snapshot",
+      status: "error", append_status: "none", error: { code: "skill-not-found" } }) },
+    { role: "tool", name: "skill_load", content: JSON.stringify({ name: "removed", mode: "untrack",
+      status: "loaded", append_status: "none", error: null }) },
+    { role: "tool", name: "skill_load", content: '{"name":"truncated","status":"loaded"' },
+  ]);
+  expect(summary.acceptedSkillLoads).toEqual(["actual"]);
+  expect(summary.customTools).toEqual([]);
+});
+
 test("固定入口缺参数失败归为 invalid_custom_tool_call，而不是 unknown_custom_tool", () => {
   const summary = buildAgentStateSummary([
     {

@@ -1,6 +1,6 @@
 # 目录用途
 
-`src/clients/web/src/utils/markdown/` 存放浏览器前端的 Markdown 渲染与解析纯工具：一类把通用 Markdown 文本渲染为 HTML（含代码块、表格等装饰）；另一类解析工作区文件里的 Markdown 链接与图片引用目标（区分工作区相对路径与外部 URL）；还有一类从技能 Markdown 文本里提取允许的工具清单。
+`src/clients/web/src/utils/markdown/` 存放浏览器前端的 Markdown 渲染与解析纯工具：一类把通用 Markdown 文本渲染为 HTML（含代码块、表格等装饰）；另一类解析工作区文件里的 Markdown 链接与图片引用目标（区分工作区相对路径与外部 URL）。
 
 与相邻文件的边界：
 
@@ -13,7 +13,6 @@
 
 - Markdown 文本到 HTML 的渲染与装饰规则。
 - 工作区 Markdown 链接/图片目标的解析、相对路径归一与工作区归属判定。
-- 技能 Markdown 文本中允许工具清单的提取。
 - 本包内部的模块拆分与符号导出调整。
 
 # 不可修改内容

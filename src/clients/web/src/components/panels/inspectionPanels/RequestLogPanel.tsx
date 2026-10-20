@@ -21,7 +21,7 @@ export const INITIAL_VISIBLE_REQUEST_LOG_COUNT = 10;
 export const OLDER_REQUEST_LOG_BATCH_SIZE = 10;
 
 function RequestLogKeyFlowSummary({
-  readSkills,
+  acceptedSkillLoads,
   customInvokerNames,
   customToolNames,
   customToolResults,
@@ -29,7 +29,7 @@ function RequestLogKeyFlowSummary({
 }: RequestLogKeyFlow) {
   const [open, setOpen] = useState(false);
   if (
-    readSkills.length === 0 &&
+    acceptedSkillLoads.length === 0 &&
     customInvokerNames.length === 0 &&
     customToolNames.length === 0 &&
     customToolResults.length === 0 &&
@@ -40,8 +40,8 @@ function RequestLogKeyFlowSummary({
 
   const flowItems = [
     {
-      label: "读取 skill",
-      value: readSkills.join("、") || "未检测到",
+      label: "已接受的 Skill 加载",
+      value: acceptedSkillLoads.join("、") || "未检测到",
     },
     {
       label: "固定扩展入口",

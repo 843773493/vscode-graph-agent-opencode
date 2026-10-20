@@ -17,14 +17,6 @@ export function traceErrorSignature(payload: Record<string, unknown>): string {
   ].filter(Boolean).join("\n");
 }
 
-export function traceToolArgs(payload: Record<string, unknown>): Record<string, unknown> {
-  return typeof payload.args === "object" &&
-    payload.args !== null &&
-    !Array.isArray(payload.args)
-    ? payload.args as Record<string, unknown>
-    : {};
-}
-
 function traceToolInputText(payload: Record<string, unknown>): string {
   return formatToolDetail(getOptionalString(payload, "message")) ||
     formatToolDetail(getOptionalString(payload, "content")) ||

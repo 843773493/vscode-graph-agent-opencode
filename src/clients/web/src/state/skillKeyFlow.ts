@@ -1,5 +1,5 @@
 import { normalizeDisplayText } from "../utils/displayText";
-import { skillNameFromPath } from "../utils/skillPaths";
+import { isRecord } from "../utils/jsonDisplay";
 
 export interface KeyFlowToolCallSummary {
   toolName: string;
@@ -12,14 +12,14 @@ export interface KeyFlowToolResultSummary extends KeyFlowToolCallSummary {
 }
 
 export interface SkillKeyFlowState {
-  readSkills: Set<string>;
+  acceptedSkillLoads: Set<string>;
   keyFlowToolCalls: Map<string, KeyFlowToolCallSummary>;
   keyFlowToolResults: Map<string, KeyFlowToolResultSummary>;
   finalText: string;
 }
 
 export interface SkillKeyFlowSnapshot {
-  readSkills: string[];
+  acceptedSkillLoads: string[];
   keyFlowToolCalls: KeyFlowToolCallSummary[];
   keyFlowToolResults: KeyFlowToolResultSummary[];
   finalText: string;
@@ -27,7 +27,7 @@ export interface SkillKeyFlowSnapshot {
 
 export function createSkillKeyFlowState(): SkillKeyFlowState {
   return {
-    readSkills: new Set<string>(),
+    acceptedSkillLoads: new Set<string>(),
     keyFlowToolCalls: new Map<string, KeyFlowToolCallSummary>(),
     keyFlowToolResults: new Map<string, KeyFlowToolResultSummary>(),
     finalText: "",
@@ -55,17 +55,30 @@ export function keyFlowSkillNames(value: unknown): string[] {
   )));
 }
 
-export function recordReadSkill(
+export function recordSkillLoadResult(
   state: SkillKeyFlowState,
-  options: { toolName: string; args: Record<string, unknown> },
+  options: { toolName: string; result: unknown },
 ): void {
-  const { toolName, args } = options;
-  if (toolName !== "read_file") {
+  if (options.toolName !== "skill_load") {
     return;
   }
-  const skillName = skillNameFromPath(args.file_path ?? args.path);
-  if (skillName) {
-    state.readSkills.add(skillName);
+  let receipt: unknown = options.result;
+  if (typeof receipt === "string") {
+    try {
+      receipt = JSON.parse(receipt);
+    } catch {
+      // 原始失败或截断结果仍由工具卡展示，不把它汇总为成功回执。
+      return;
+    }
+  }
+  if (isRecord(receipt)
+      && typeof receipt.name === "string" && receipt.name.trim()
+      && (receipt.mode === "snapshot" || receipt.mode === "tracked")
+      && (receipt.status === "loaded" || receipt.status === "already_active" || receipt.status === "rebound")
+      && (receipt.append_status === "appended" || receipt.append_status === "already_active")
+      && receipt.error === null) {
+    // queued 只表示 owner 接受加载，不能据此声称已注入模型。
+    state.acceptedSkillLoads.add(receipt.name);
   }
 }
 
@@ -118,7 +131,7 @@ export function recordFinalText(
 
 export function skillKeyFlowSnapshot(state: SkillKeyFlowState): SkillKeyFlowSnapshot {
   return {
-    readSkills: Array.from(state.readSkills),
+    acceptedSkillLoads: Array.from(state.acceptedSkillLoads),
     keyFlowToolCalls: Array.from(state.keyFlowToolCalls.values()),
     keyFlowToolResults: Array.from(state.keyFlowToolResults.values()),
     finalText: state.finalText,

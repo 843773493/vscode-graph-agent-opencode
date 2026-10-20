@@ -22,6 +22,20 @@ function requestLog(
   };
 }
 
+test("请求日志解析完整 Skill 回执后才截断展示，不按文件读取或失败结果推断", () => {
+  const name = "long-skill-" + "x".repeat(150);
+  const receipt = JSON.stringify({ name, mode: "snapshot", status: "already_active",
+    append_status: "already_active", error: null });
+  const summary = buildRequestLogKeyFlow([requestLog({ request: { messages: [
+    { role: "assistant", tool_calls: [{ name: "read_file", args: { path: ".boxteam/skills/fake/SKILL.md" } },
+      { name: "skill_load", args: { name: "only-requested" } }] },
+    { role: "tool", name: "read_file", content: receipt },
+    { role: "tool", name: "skill_load", content: receipt },
+    { role: "tool", name: "skill_load", content: '{"name":"failed","status":"error"}' },
+  ] } })]);
+  expect(summary.acceptedSkillLoads).toEqual([name]);
+});
+
 test("buildUpstreamAttemptDisplay exposes merged upstream payloads", () => {
   const log = requestLog({
     upstream: {

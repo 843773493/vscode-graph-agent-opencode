@@ -6,7 +6,7 @@ import {
   recordFinalText,
   recordKeyFlowToolCall,
   recordKeyFlowToolResult,
-  recordReadSkill,
+  recordSkillLoadResult,
   skillKeyFlowSnapshot,
 } from "../skillKeyFlow";
 import type { TimelineItem } from "../timeline/timelineTypes";
@@ -16,7 +16,6 @@ import {
   buildCompletedToolItem,
   buildFailedToolItem,
   traceErrorSignature,
-  traceToolArgs,
   type PendingToolCall,
 } from "./toolAggregation";
 
@@ -279,8 +278,6 @@ export function aggregateConversationEvents(
         throw new Error(`事件 ${eventType} 重复开始 part_id=${id}`);
       }
       const toolName = getOptionalString(payload, "tool_name");
-      const args = traceToolArgs(payload);
-      recordReadSkill(skillFlow, { toolName, args });
       recordKeyFlowToolCall(skillFlow, {
         toolName,
         skillNames: keyFlowSkillNames(payload.skill_names),
@@ -306,6 +303,7 @@ export function aggregateConversationEvents(
       }
       pendingToolCalls.delete(id);
       const completedToolItem = buildCompletedToolItem(pending, payload);
+      recordSkillLoadResult(skillFlow, { toolName: completedToolItem.toolName, result: payload.result });
       items[pending.itemIndex] = completedToolItem;
       const startPayload = pending.payload;
       recordKeyFlowToolResult(skillFlow, {
@@ -405,7 +403,7 @@ export function aggregateConversationEvents(
     const summaryItem: TimelineItem = {
       kind: "skill_summary",
       id: `skill-summary-${convId}`,
-      readSkills: skillSnapshot.readSkills,
+      acceptedSkillLoads: skillSnapshot.acceptedSkillLoads,
       toolResults: skillSnapshot.keyFlowToolResults.map((item) => ({
         toolName: item.toolName,
         skillNames: item.skillNames,

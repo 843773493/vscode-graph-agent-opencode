@@ -61,19 +61,20 @@ const skillEvents: TraceEvent[] = [
   event(8, "text_end", { kind: "reasoning", text: "我已经找到 skill 目录，接着读取具体说明。" }, "reasoning_2"),
   event(9, "tool_call_start", {
     tool_name: "read_file",
-    args: { file_path: ".boxteam/AGENTS.md" },
+    args: { file_path: ".boxteam/skills/not-active/SKILL.md" },
   }, "tool_read_agents"),
   event(10, "tool_call_end", {
     tool_name: "read_file",
-    result: "当用户要求调用 `test_tool_2` 时，读取 `.boxteam/skills/test-tool-2/SKILL.md`。",
+    result: "---\nname: not-active\nallowed-tools: fake_tool\n---",
   }, "tool_read_agents"),
   event(11, "tool_call_start", {
-    tool_name: "read_file",
-    args: { file_path: ".boxteam/skills/test-tool-2/SKILL.md" },
+    tool_name: "skill_load",
+    args: { name: "test-tool-2", mode: "snapshot" },
   }, "tool_read_skill"),
   event(12, "tool_call_end", {
-    tool_name: "read_file",
-    result: "---\nname: test-tool-2\nallowed-tools: test_tool_2\n---",
+    tool_name: "skill_load",
+    result: JSON.stringify({ name: "test-tool-2", mode: "snapshot", status: "loaded",
+      append_status: "appended", queued: true, error: null }),
   }, "tool_read_skill"),
   event(13, "tool_call_start", {
     tool_name: "test_tool_2",
@@ -111,7 +112,7 @@ const summary = items.find(
     item.kind === "skill_summary",
 );
 assert(summary, "默认视图时间线缺少 Skill 执行验证摘要");
-assert(summary.readSkills.includes("test-tool-2"), "摘要未记录已读取的 skill");
+assert(summary.acceptedSkillLoads.join(",") === "test-tool-2", "摘要只记录Skill owner接受的加载回执，不按普通文件路径推断");
 assert(summary.finalText === "4568", "摘要最终文本应等于扩展工具返回值");
 assert(
   summary.toolResults.some(
@@ -133,7 +134,7 @@ assert(finalText?.text === "4568", "默认视图缺少最终回复文本 4568");
 const toolItems = aggregatedTools(items);
 assert(
   toolItems.length === 4,
-  "测试事件应聚合出 glob、两个 read_file 和 test_tool_2 四个工具项",
+  "测试事件应聚合出 glob、read_file、skill_load 和 test_tool_2 四个工具项",
 );
 assert(
   toolItems.some((item) => item.toolName === "glob"),

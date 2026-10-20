@@ -66,8 +66,8 @@ export default function AgentStatePanel({
       {displayJsonl ? (
         <div className="agent-state-summary">
           <div>
-            <span>Skill</span>
-            <strong>{summary.skills.join("、") || "未检测到 skill 文件读取"}</strong>
+            <span>已接受的 Skill 加载</span>
+            <strong>{summary.acceptedSkillLoads.join("、") || "未检测到 Skill 加载回执"}</strong>
           </div>
           <div>
             <span>扩展工具</span>

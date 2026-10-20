@@ -1,11 +1,11 @@
-// 请求日志关键流转投影：跨多条日志聚合读取 skill、扩展工具入口与最终文本。
+// 请求日志关键流转投影：聚合 Skill 加载回执、扩展工具入口与最终文本。
 
 import type { LLMRequestLogRecord } from "../../types/backend";
 import { isRecord } from "../../utils/jsonDisplay";
 import {
   createSkillKeyFlowState,
   recordFinalText,
-  recordReadSkill,
+  recordSkillLoadResult,
   skillKeyFlowSnapshot,
 } from "../skillKeyFlow";
 import {
@@ -30,11 +30,10 @@ function uniquePush(items: string[], seen: Set<string>, value: string): void {
   items.push(value);
 }
 
-function collectToolResultMessages(
+function* collectToolResultMessages(
   log: LLMRequestLogRecord,
-): Array<{ toolName: string; toolCallId: string; resultText: string }> {
+): Iterable<{ toolName: string; toolCallId: string; resultText: string }> {
   const messages = Array.isArray(log.request.messages) ? log.request.messages : [];
-  const results: Array<{ toolName: string; toolCallId: string; resultText: string }> = [];
   for (const message of messages) {
     if (!isRecord(message)) {
       continue;
@@ -45,19 +44,15 @@ function collectToolResultMessages(
     if (!toolName || (type !== "tool" && role !== "tool")) {
       continue;
     }
-    const resultText = compactPreview(
-      stringifyContent(message.content, { includeReasoning: false }),
-      120,
-    );
+    const resultText = stringifyContent(message.content, { includeReasoning: false });
     if (resultText) {
-      results.push({
+      yield {
         toolName,
         toolCallId: customToolCallId(message),
         resultText,
-      });
+      };
     }
   }
-  return results;
 }
 
 export function buildRequestLogKeyFlow(logs: LLMRequestLogRecord[]): RequestLogKeyFlow {
@@ -88,10 +83,6 @@ export function buildRequestLogKeyFlow(logs: LLMRequestLogRecord[]): RequestLogK
           customToolTargetsByCallId.set(callId, customToolName);
         }
       }
-
-      if (name === "read_file") {
-        recordReadSkill(state, { toolName: name, args: customToolCallArgs(call) });
-      }
     }
 
     const responseText = responsePreview(log);
@@ -102,17 +93,19 @@ export function buildRequestLogKeyFlow(logs: LLMRequestLogRecord[]): RequestLogK
 
   for (const log of orderedLogs) {
     for (const result of collectToolResultMessages(log)) {
+      recordSkillLoadResult(state, { toolName: result.toolName, result: result.resultText });
       if (result.toolName !== EXTENSION_TOOL_INVOKER_NAME) {
         continue;
       }
+      const resultText = compactPreview(result.resultText, 120);
       const customToolName = result.toolCallId
         ? customToolTargetsByCallId.get(result.toolCallId)
         : "";
       const displayToolName = customToolName ||
-        (isCustomInvokerValidationError(result.resultText)
+        (isCustomInvokerValidationError(resultText)
           ? INVALID_CUSTOM_TOOL_CALL_NAME
           : UNKNOWN_CUSTOM_TOOL_NAME);
-      const key = `${result.toolCallId || "missing-id"}\u0000${displayToolName}\u0000${EXTENSION_TOOL_INVOKER_NAME}\u0000${result.resultText}`;
+      const key = `${result.toolCallId || "missing-id"}\u0000${displayToolName}\u0000${EXTENSION_TOOL_INVOKER_NAME}\u0000${resultText}`;
       if (seenResults.has(key)) {
         continue;
       }
@@ -120,14 +113,14 @@ export function buildRequestLogKeyFlow(logs: LLMRequestLogRecord[]): RequestLogK
       customToolResults.push({
         toolName: displayToolName,
         invocationToolName: EXTENSION_TOOL_INVOKER_NAME,
-        resultText: result.resultText,
+        resultText,
       });
     }
   }
   const snapshot = skillKeyFlowSnapshot(state);
 
   return {
-    readSkills: snapshot.readSkills,
+    acceptedSkillLoads: snapshot.acceptedSkillLoads,
     customInvokerNames,
     customToolNames,
     customToolResults,

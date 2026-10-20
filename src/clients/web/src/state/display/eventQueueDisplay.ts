@@ -5,7 +5,7 @@ import {
   createSkillKeyFlowState,
   keyFlowSkillNames,
   recordFinalText,
-  recordReadSkill,
+  recordSkillLoadResult,
   skillKeyFlowSnapshot,
 } from "../skillKeyFlow";
 
@@ -162,7 +162,7 @@ export function attachmentNames(payload: Record<string, unknown>): string[] {
 }
 
 export interface EventQueueKeyTraceSummary {
-  readSkills: string[];
+  acceptedSkillLoads: string[];
   keyFlowToolCalls: Array<{ toolName: string; skillNames: string[]; invocationToolName?: string }>;
   keyFlowToolResults: Array<{
     toolName: string;
@@ -198,9 +198,6 @@ export function buildKeyTraceSummary(
     const payload = eventPayload(item);
     if (type === "tool_call_start") {
       const toolName = payloadString(payload, "tool_name");
-      if (toolName === "read_file" && isRecord(payload.args)) {
-        recordReadSkill(state, { toolName, args: payload.args });
-      }
       const skillNames = keyFlowSkillNames(payload.skill_names);
       const invocationToolName = payloadString(payload, "invocation_tool_name");
       const shouldSummarizeTool = skillNames.length > 0 || invocationToolName;
@@ -213,6 +210,7 @@ export function buildKeyTraceSummary(
 
     if (type === "tool_call_end") {
       const toolName = payloadString(payload, "tool_name");
+      recordSkillLoadResult(state, { toolName, result: payload.result });
       const skillNames = keyFlowSkillNames(payload.skill_names);
       const invocationToolName = payloadString(payload, "invocation_tool_name");
       const resultText = compactKeyFlowText(payload.result, 120);
@@ -231,7 +229,7 @@ export function buildKeyTraceSummary(
   const snapshot = skillKeyFlowSnapshot(state);
 
   return {
-    readSkills: snapshot.readSkills,
+    acceptedSkillLoads: snapshot.acceptedSkillLoads,
     keyFlowToolCalls: toolCalls.length > 0 ? toolCalls : snapshot.keyFlowToolCalls,
     keyFlowToolResults: toolResults.length > 0 ? toolResults : snapshot.keyFlowToolResults,
     finalText: snapshot.finalText,

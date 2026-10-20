@@ -1,6 +1,5 @@
 import type { TimelineItem } from "../timeline/timelineTypes";
 import { isRecord } from "../../utils/jsonDisplay";
-import { skillNameFromPath } from "../../utils/skillPaths";
 
 type AggregatedToolItem = Extract<TimelineItem, { kind: "aggregated_tool" }>;
 
@@ -176,18 +175,7 @@ function invocationLabel(item: AggregatedToolItem): string {
 }
 
 export function isSkillInternalToolItem(item: AggregatedToolItem): boolean {
-  if (skillNames(item).length > 0) {
-    return true;
-  }
-  if (item.toolName !== "read_file") {
-    return false;
-  }
-  const inputRecord = toolInputRecord(item);
-  return Boolean(
-    skillNameFromPath(
-      fieldText(inputRecord, "file_path") || fieldText(inputRecord, "path"),
-    ),
-  );
+  return item.toolName === "skill_load" || skillNames(item).length > 0;
 }
 
 export function isRoutineInternalToolItem(item: AggregatedToolItem): boolean {
@@ -244,11 +232,6 @@ export function toolCollapsedText(item: AggregatedToolItem): string {
   const inputRecord = toolInputRecord(item);
   const resultRecord = toolResultRecord(item);
   const path = fieldText(inputRecord, "file_path") || fieldText(inputRecord, "path");
-  const skillName = skillNameFromPath(path);
-  if (item.toolName === "read_file" && skillName) {
-    return `已读取 skill：${skillName}`;
-  }
-
   const names = skillNames(item);
   const prefix = names.length > 0
     ? `${names.join("、")} 记录的 ${invocationLabel(item)}`

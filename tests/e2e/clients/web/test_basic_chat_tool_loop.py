@@ -389,6 +389,16 @@ async def test_basic_chat_tool_loop_through_real_web_surface(
         assert isinstance(selected, list)
         assert result["focusedScenarios"] == requested
         assert set(result["section8"]) == set(selected)
+        if "skill_untrack" in selected:
+            skill = result["section8"]["skill_untrack"]
+            assert set(skill["skillLoadSummaries"]) == {"agent", "events", "requests"}
+            for text in skill["skillLoadSummaries"].values():
+                assert "已接受的 Skill 加载" in text and "gateway-context" in text
+            assert skill["tracked"][0]["tracking_status"] == "tracked"
+            assert skill["untracked"][0]["tracking_status"] == "untracked"
+            assert [reply["data"]["status"] for reply in skill["receipts"]] == ["loaded", "not_tracked"]
+            assert all(reply["data"]["session_id"] == skill["sessionId"]
+                       and reply["data"]["thread_id"] == skill["threadId"] for reply in skill["receipts"])
         if "basic_chat" not in selected:
             return
         assert result["firstJob"]["status"] in {"completed", "succeeded"}

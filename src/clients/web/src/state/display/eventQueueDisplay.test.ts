@@ -1,3 +1,4 @@
+import { expect, test } from "bun:test";
 import type { TraceEvent } from "../../types/backend";
 import type { ConversationView } from "../../types/frontend";
 import { buildTraceTimelineItems } from "../timeline/chatTimeline";
@@ -29,6 +30,20 @@ function event(
     raw: { payload },
   };
 }
+
+test("事件汇总只接受 Skill 加载成功回执，普通文件和失败回执不算激活", () => {
+  const receipt = { name: "actual", mode: "tracked", status: "loaded", append_status: "appended", error: null };
+  const events = [
+    event(1, "tool_call_start", { tool_name: "read_file", args: { path: ".boxteam/skills/fake/SKILL.md" } }),
+    event(2, "tool_call_end", { tool_name: "read_file", result: receipt }),
+    event(3, "tool_call_end", { tool_name: "skill_load", result: JSON.stringify(receipt) }),
+    event(4, "tool_call_end", { tool_name: "skill_load", result: { ...receipt, name: "failed", status: "error" } }),
+    event(5, "tool_call_end", { tool_name: "skill_load", result: { ...receipt, name: "untracked", mode: "untrack" } }),
+  ];
+  const summary = buildKeyTraceSummary(events.map((trace) => ({ id: trace.event_id, kind: "trace" as const,
+    source: "initial_load" as const, sessionId: trace.session_id, receivedAt: trace.timestamp, event: trace })));
+  expect(summary.acceptedSkillLoads).toEqual(["actual"]);
+});
 
 const customToolEvents: TraceEvent[] = [
   event(1, "tool_call_start", {

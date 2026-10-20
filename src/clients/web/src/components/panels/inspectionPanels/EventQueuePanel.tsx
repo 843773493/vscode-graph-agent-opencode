@@ -209,13 +209,13 @@ function TextDeltaGroupCard({
 }
 
 function KeyTraceSummary({
-  readSkills,
+  acceptedSkillLoads,
   keyFlowToolCalls,
   keyFlowToolResults,
   finalText,
 }: ReturnType<typeof buildKeyTraceSummary>) {
   if (
-    readSkills.length === 0 &&
+    acceptedSkillLoads.length === 0 &&
     keyFlowToolCalls.length === 0 &&
     keyFlowToolResults.length === 0 &&
     !finalText
@@ -227,8 +227,8 @@ function KeyTraceSummary({
     <div className="event-queue-key-trace">
       <div className="event-queue-key-trace-title">关键链路</div>
       <div className="event-queue-key-trace-items">
-        {readSkills.length > 0 ? (
-          <span>已读取 skill：{readSkills.join("、")}</span>
+        {acceptedSkillLoads.length > 0 ? (
+          <span>已接受的 Skill 加载：{acceptedSkillLoads.join("、")}</span>
         ) : null}
         {keyFlowToolCalls.map((call) => (
           <span key={`${call.invocationToolName ?? ""}:${call.toolName}:${call.skillNames.join(":")}`}>
