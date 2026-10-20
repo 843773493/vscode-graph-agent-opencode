@@ -4,13 +4,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from app.agents.tools.apply_patch.models import ActionType, Commit, DiffError
-from app.agents.tools.apply_patch.parser import (
-    identify_files_added,
-    identify_files_affected,
-    identify_files_needed,
-    parse_patch,
-)
 from app.core.path_utils import get_workspace_root
 from app.core.workspace_identity import read_workspace_id
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
@@ -18,7 +11,17 @@ from app.services.infrastructure.workspace_files.text_mutation import (
     FileSnapshot,
     TextPublication,
     execute_text_mutation,
-    validate_text_paths,
+)
+from app.services.infrastructure.workspace_files.text_patch.models import (
+    ActionType,
+    Commit,
+    DiffError,
+)
+from app.services.infrastructure.workspace_files.text_patch.parser import (
+    identify_files_added,
+    identify_files_affected,
+    identify_files_needed,
+    parse_patch,
 )
 from app.services.infrastructure.workspace_files.text_publication import (
     FilePreimage,
@@ -55,12 +58,6 @@ def apply_patch_text(patch_text: str, *, explanation: str, expected_versions: di
         raise
     result["fuzz"] = fuzz
     return result
-
-
-def extract_apply_patch_file_paths(patch_text: str, *, workspace_root: Path | None = None) -> list[str]:
-    paths = identify_files_affected(patch_text)
-    validate_text_paths(paths, (workspace_root or get_workspace_root()).resolve())
-    return paths
 
 
 def _prepare_steps(commit: Commit, snapshots: dict[str, FileSnapshot]) -> list[TextPublication]:

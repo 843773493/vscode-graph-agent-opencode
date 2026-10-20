@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 
-from app.agents.tools.apply_patch.matcher import (
+from app.services.infrastructure.workspace_files.text_patch.matcher import (
     IndentStyle,
     find_context,
     find_hint,
@@ -15,7 +15,7 @@ from app.agents.tools.apply_patch.matcher import (
     replace_explicit_tabs,
     transform_indentation,
 )
-from app.agents.tools.apply_patch.models import (
+from app.services.infrastructure.workspace_files.text_patch.models import (
     ActionType,
     Chunk,
     Commit,

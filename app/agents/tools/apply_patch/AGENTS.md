@@ -1,16 +1,16 @@
 # 目录用途
 
-实现 Agent 的 VS Code 风格 `apply_patch` 工具，包括 V4A 补丁解析、内容准备和统一文本 owner 的接入。
+实现 Agent 的 VS Code 风格 `apply_patch` 工具，声明工具协议、装配权限并接入目标文件 owner。
 
 # 可修改内容
 
-- V4A patch 的数据模型、解析、上下文匹配与内容准备。
 - `apply_patch` LangChain 工具 schema、权限装配和结果格式。
 
 # 不可修改内容
 
 - 不在这里实现 Agent runtime 装配、API 路由、前端展示或会话业务。
 - 不另建文件发布、锁或 journal 链路；统一使用 `workspace_files/text_mutation.py`。
+- V4A 解析、匹配与内容准备唯一属于 `workspace_files/text_patch/`，不得在工具层恢复旧实现或转发别名。
 - 不允许补丁访问当前工作区之外的文件。
 
 # 规范

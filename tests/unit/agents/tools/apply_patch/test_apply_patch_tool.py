@@ -9,13 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.agents.tools.apply_patch import (
-    DiffError,
-    Fuzz,
-    InvalidContextError,
-    apply_patch_text,
     create_apply_patch_tool,
-    extract_apply_patch_file_paths,
-    identify_files_affected,
 )
 from app.core.model_delta_context import (
     AgentRunLifecycleCallbackHandler,
@@ -25,6 +19,17 @@ from app.core.path_utils import get_workspace_root
 from app.core.resource_uri import parse_resource_uri
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.infrastructure.workspace_files import text_mutation, text_publication
+from app.services.infrastructure.workspace_files.text_patch.executor import (
+    apply_patch_text,
+)
+from app.services.infrastructure.workspace_files.text_patch.models import (
+    DiffError,
+    Fuzz,
+    InvalidContextError,
+)
+from app.services.infrastructure.workspace_files.text_patch.parser import (
+    identify_files_affected,
+)
 
 
 def _expected_versions(patch: str, root: Path) -> dict[str, str]:
@@ -121,7 +126,7 @@ def test_apply_patch_add_update_delete_and_records_paths(
 +new
  three
 *** End Patch"""
-    assert extract_apply_patch_file_paths(update_patch) == ["src/demo.txt"]
+    assert identify_files_affected(update_patch) == ["src/demo.txt"]
     _apply(update_patch)
     assert (workspace_root / "src" / "demo.txt").read_text(encoding="utf-8") == "one\nnew\nthree"
 

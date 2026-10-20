@@ -10,13 +10,15 @@ from deepagents.middleware.permissions import FilesystemPermission
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.agents.tools.apply_patch.executor import apply_patch_text
 from app.core.resource_uri import parse_resource_uri
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
 )
 from app.services.infrastructure.workspace_files.text_mutation import (
     text_mutation_failure,
+)
+from app.services.infrastructure.workspace_files.text_patch.executor import (
+    apply_patch_text,
 )
 
 APPLY_PATCH_TOOL_NAME = "apply_patch"

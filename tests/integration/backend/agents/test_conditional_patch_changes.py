@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import ToolMessage
 
-from app.agents.tools.apply_patch import apply_patch_text
 from app.core.hashing import sha256_hex
 from app.core.path_utils import (
     get_session_creation_service,
@@ -25,6 +24,9 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.session_changes_store import SessionChangesStore
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.infrastructure.workspace_files import text_mutation, text_publication
+from app.services.infrastructure.workspace_files.text_patch.executor import (
+    apply_patch_text,
+)
 from app.services.orchestration.event_stream.processor import process_agent_event_stream
 
 
