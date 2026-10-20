@@ -11,6 +11,7 @@
 - 同一 owner 的上传 durable staging、路径/长度/hash 清单与清理。
 - `mutation_lock.py` 提供正文保存与模型文本工具共用的短写入临界区；`text_publication.py` 负责有界原字节读取、发布前重核和单文件发布后核实，不自动恢复旧内容。
 - `text_owner.py` 是容器装配并经 runtime 显式注入的唯一模型文本入口，接受具名 create/edit/patch 请求；创建与精确替换的内容准备不留在工具层。
+- `gateway_text_mutation.py` 只通过既有签名联邦 relay 传输固定 Workspace files URI；`text_transfer.py` 核逐路径归属与原预期版本，禁止 source 文件代执行或自动重放。响应不确认时保留空观察 journal 和 unknown 逐路径结果，不猜原件或 diff。
 - `text_mutation.py` 唯一执行模型 write/edit/patch 的整批路径、权限、原字节版本预检和逐文件发布；`text_patch/` 唯一准备 V4A 补丁内容，目标端不依赖 Agent 或复制语法。
 - `text_journal.py` 保存临界区内原件、最终观察到的后件与逐路径发布结果；SessionChanges 直接消费这些 URI/内容事实，不在事件到达时重读当前文件。有会话的调用通过统一解析器聚合到所属会话 `changes/text_mutations`，无会话独立工具调用只写显式工作区缓存。
 

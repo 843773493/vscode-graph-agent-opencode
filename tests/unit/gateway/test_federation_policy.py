@@ -29,6 +29,8 @@ from app.gateway.federation.grants import (
     ForkGrantTarget,
     GrantTarget,
     OperationKind,
+    ResourceNavigationGrantTarget,
+    TextMutationGrantTarget,
     decode_grant_target,
     required_wait_grant_lifetime,
     sign_grant,
@@ -65,7 +67,7 @@ def test_default_policy_allows_all_core_capabilities() -> None:
     assert snapshot.default_effect == "allow"
     assert snapshot.rules == ()
     assert snapshot.hardening_enabled is False
-    for capability in ("discovery", "send", "read", "wait", "reply", "transit", "fork_source", "fork_target"):
+    for capability in ("discovery", "send", "read", "wait", "reply", "transit", "fork_source", "fork_target", "file_write"):
         assert snapshot.evaluate(
             capability=capability,  # type: ignore[arg-type]
             origin_gateway_id="gateway_peer",
@@ -654,3 +656,48 @@ def test_signed_read_grant_target_cannot_authorize_fork(
         with pytest.raises(FederationError) as error:
             validate_grant_operation(decoded.target, operation)
         assert error.value.code == FEDERATION_GRANT_KIND_MISMATCH
+
+
+@pytest.fixture
+def file_write_target():
+    return TextMutationGrantTarget(gateway_id="gateway_c", uri=f"boxteam://gateway_c/workspace/{WORKSPACE_ID}/resources/files/root")
+
+
+@pytest.mark.parametrize("operation", ["send", "read", "wait", "reply", "fork_source", "fork_target"])
+def test_file_write_target_rejects_other_capabilities(file_write_target, operation):
+    with pytest.raises(FederationError) as error:
+        validate_grant_operation(file_write_target, operation)
+    assert error.value.code == FEDERATION_GRANT_KIND_MISMATCH
+    with pytest.raises(FederationError) as error:
+        validate_grant_operation(ResourceNavigationGrantTarget(gateway_id=file_write_target.gateway_id, uri=file_write_target.uri), "file_write")
+    assert error.value.code == FEDERATION_GRANT_KIND_MISMATCH
+
+
+def test_file_write_policy_is_independent_of_communication_read():
+    policy = normalize_policy({"default_effect": "deny", "rules": [{"capability": "read", "effect": "allow"}]})
+    assert policy.evaluate(capability="read", origin_gateway_id="gateway_b", principal_ref="prn_b")
+    assert not policy.evaluate(capability="file_write", origin_gateway_id="gateway_b", principal_ref="prn_b")
+
+
+def test_file_write_signature_binds_fixed_target_versions_and_content(tmp_path, grant_request, file_write_target):
+    issuer = _identity(tmp_path, "gateway_hub")
+    preimage = {**grant_request, "operation": "file_write", "target": file_write_target.to_payload(),
+        "body": {"expected_versions": {"file.txt": "sha256:" + "a" * 64}, "content": "intended"}}
+    grant = sign_grant(private_key=load_or_create_signing_key(tmp_path), grant_kind="operation",
+        issuer_gateway_id="gateway_hub", origin_gateway_id="gateway_b", audience_gateway_id="gateway_c",
+        transit_path=("gateway_b", "gateway_hub", "gateway_c"), request_id="req", request_preimage=preimage,
+        principal_ref="prn_b", lifetime_seconds=30, target=file_write_target, operation="file_write")
+    decoded = FederationGrant.decode(grant.encode())
+    assert decoded.target == file_write_target and decoded.operation == "file_write"
+    verify_grant(decoded, issuer=issuer, local_gateway_id="gateway_c", expected_kind="operation", request_preimage=preimage)
+    for field in ("target", "version", "content"):
+        changed = deepcopy(preimage)
+        if field == "target":
+            changed["target"]["uri"] += "/elsewhere"
+        elif field == "version":
+            changed["body"]["expected_versions"]["file.txt"] = "absent"
+        else:
+            changed["body"]["content"] = "different"
+        with pytest.raises(FederationError) as error:
+            verify_grant(decoded, issuer=issuer, local_gateway_id="gateway_c", expected_kind="operation", request_preimage=changed)
+        assert error.value.code == FEDERATION_GRANT_INVALID_SIGNATURE

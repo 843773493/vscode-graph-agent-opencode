@@ -163,6 +163,9 @@ from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
+from app.services.infrastructure.workspace_files.gateway_text_mutation import (
+    GatewayTextMutation,
+)
 from app.services.infrastructure.workspace_files.paths import (
     GatewayNativeDirectoryClient,
 )
@@ -710,7 +713,11 @@ def _build_app_container(
     resource_navigation = resource_platform.navigation
     if resource_navigation is None:
         raise RuntimeError("Workspace 资源导航未绑定显式身份")
-    text_mutations = WorkspaceTextMutationOwner(paths=workspace_service.file_paths)
+    text_mutations = WorkspaceTextMutationOwner(paths=workspace_service.file_paths, gateway=GatewayTextMutation(
+        workspace_id=workspace_id,
+        connection=GatewayTransportConnection(gateway_url=os.environ.get("BOXTEAM_GATEWAY_URL"), config_service=config_service),
+        local_token_supplier=get_gateway_local_token,
+    ))
     terminal_resource_owner = TerminalResourceOwner(
         workspace_root=resolved_workspace_root, workspace_id=workspace_id,
         sessions=session_service, threads=session_path_resolver,

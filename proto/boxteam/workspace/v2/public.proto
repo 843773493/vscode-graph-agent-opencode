@@ -1440,6 +1440,7 @@ message CommunicationGatewayRequest {
     ContextGrantTarget resource_target = 4;
     ForkGrantTarget fork_target = 5;
     ResourceNavigationGrantTarget navigation_target = 6;
+    TextMutationGrantTarget mutation_target = 7;
   }
   google.protobuf.Struct body = 3;
 }
@@ -2467,4 +2468,93 @@ message WorkspaceIndexStatusDTO {
   string status = 1;
   optional int64 indexed_files = 2;
   optional string last_updated = 3;
+}
+
+// 文本修改与只读导航各自绑定独立能力，不借通信 grant 扩权。
+message TextMutationGrantTarget {
+  string gateway_id = 1;
+  string uri = 2;
+  string mutation_kind = 3;
+}
+
+message CreateText {
+  string target = 1;
+  string content = 2;
+  string expected_version = 3;
+}
+
+message EditText {
+  string target = 1;
+  string old_string = 2;
+  string new_string = 3;
+  string expected_version = 4;
+  bool replace_all = 5;
+}
+
+message PatchText {
+  string target = 1;
+  string input = 2;
+  map<string, string> expected_versions = 3;
+  string explanation = 4;
+}
+
+message TextMutationRequest {
+  oneof command {
+    CreateText create = 1;
+    EditText edit = 2;
+    PatchText patch = 3;
+  }
+  uint32 timeout_ms = 4;
+  uint32 max_response_bytes = 5;
+}
+
+message TextMutationRelayRequest {
+  string source_gateway_id = 1;
+  string source_workspace_id = 2;
+  TextMutationGrantTarget mutation_target = 3;
+  TextMutationRequest mutation = 4;
+}
+
+message TextMutationFileDTO {
+  string path = 1;
+  optional string operation = 2;
+  string state = 3;
+  string expected_version = 4;
+  optional string intended_version = 5;
+  optional bool exists = 6;
+  optional string content_hash = 7;
+  optional string content_observation_error = 8;
+}
+
+message TextMutationReceiptDTO {
+  string status = 1;
+  string effect = 2;
+  optional string target = 3;
+  optional string journal_id = 4;
+  repeated TextMutationFileDTO files = 5;
+  bool retryable = 6;
+  string explanation = 7;
+  optional uint32 fuzz = 8;
+  optional string owner = 9;
+  optional string code = 10;
+  optional string error_type = 11;
+  optional string error = 12;
+  optional string recovery = 13;
+  optional string lock_release_error = 14;
+  optional string journal_error = 15;
+}
+
+// 后件由目标 owner 在写入锁内观察；source 不读本机同名文件。
+message TextMutationSnapshotDTO {
+  string uri = 1;
+  bool before_exists = 2;
+  string before_content = 3;
+  optional bool after_exists = 4;
+  optional string after_content = 5;
+  optional string after_error = 6;
+}
+
+message TextMutationTransferDTO {
+  TextMutationReceiptDTO receipt = 1;
+  repeated TextMutationSnapshotDTO snapshots = 2;
 }

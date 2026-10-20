@@ -26,7 +26,11 @@ read/write 的文件目标、ls/glob/grep 的根目标和 apply_patch 的根目�
 
 模型只读工具现在由同一 ResourceNavigation 在任何本机文件解析前检查目标归属：远端 authority 或另一个 Workspace 交已配置 Gateway 的已注册 Workspace 服务入口 `/api/gateway/resource-navigation/workspaces/{source_workspace_id}`，不经激活工作区选择、不直连对端 backend。该入口验证本机服务凭据及来源 Workspace 注册，不要求或伪造浏览器 Cookie；公开导航入口仍保留原用户登录要求。省略 authority 的其它 Workspace 固定为本次调用 Gateway，再传完整 URI；Gateway 继续用既有 typed ResourceNavigationGrantTarget/read grant 和星型 channel 到实际 owner，通信 grant 不能作为文件目标的签名替身。Gateway 与 Workspace 侧共用同一响应归属校验，核根形态、scope/kind、子路径及每个匹配对应的文件节点，并返回可重开的限定 URI。同步/异步传输各自使用独立 HTTP client，不建立观察/activation 状态。
 
-联邦 deadline 取请求预算与既有联邦上限的较小值，不能在进入联邦时重新获得固定长预算；source 工具和导航 owner 的总期限继续包含解析、传输及最终序列化。错误保留原文件执行、寻址与联邦域及同一 request_id，不把目标拒绝改为本机回退。此切片只接通只读工具；远端 mutation 和会话产物仍由后续任务闭包迁齐。
+联邦 deadline 取请求预算与既有联邦上限的较小值，不能在进入联邦时重新获得固定长预算；source 工具和导航 owner 的总期限继续包含解析、传输及最终序列化。错误保留原文件执行、寻址与联邦域及同一 request_id，不把目标拒绝改为本机回退。只读工具沿 read grant 执行；条件文本修改使用下述独立 grant，会话产物继续按第5组迁移。
+
+2026-10-20 条件文本传输直接复用 `/api/gateway/federation/relay`、原 SSH channel 和星型路由。`TextMutationGrantTarget` 以闭集字段绑定固定 Gateway、Workspace files URI 和 `mutation_kind=text`，只能签发 `file_write`；原 send/read/wait/reply/fork target 不能借用该能力。签名同时覆盖正文和预期版本，每个实际路由/执行点读取最新策略；默认值沿既有联邦策略，显式 read allow 不隐含 write allow。source Workspace 必须已注册且属于来源 Gateway，目标 Gateway 只将请求透明交固定工作区后端，联邦 HTTP 凭据不能直接访问公开文本修改接口绕过 grant。
+
+create/edit/patch 传输 DTO 与公开 proto 同步，封套只接受固定 Workspace files URI；普通工具原生输入仍由其明确目标 owner 解释。目标后端调用容器内同一个 `WorkspaceTextMutationOwner`，复用原字节 preflight、单文件发布和观察 journal，不复制补丁执行链。目标原件与后件经归属、逐路径预期版本及回执身份校验后，保存到 source 所属会话 journal；SessionChanges 不读取 source 同名文件。请求上限1 MiB，回执上限8 MiB；超限在目标 preflight 可确认时零写入，否则诚实返回 unknown。目标失联、丢响应或畸形回执均保留原目标和前置版本，不猜 diff、不自动重放。原生目录根远端写入、远端原生路径输入及 Windows 验收继续由对应任务闭包处理，取消确认仍保留具名 TODO；线程取消等待不代表文件发布已停止。
 
 ### 3. 轻量读取，不伪装历史快照
 
@@ -64,7 +68,7 @@ write/edit/patch 的内容前置使用精确原始 byte `sha256:<hex>` 或该 ow
 
 2026-10-20 普通 write_file/edit_file 与 apply_patch 已统一到 `workspace_files/text_mutation.py`，旧 DeepAgents 普通写入调用与补丁私有 journal 已删除。write_file 只做显式 absent 创建，edit_file 使用先前 read_file 的原字节 hash 做精确替换；字符串不唯一须显式 replace_all。三者均在同一短锁内校验全部文件的写权限与预期版本、捕获原件、准备结果后发布；Web 保存继续共用该锁及底层发布原语，保留其同步 expected_revision 合同。SessionChanges 仅从该锁内 journal 获取原件和 published/unknown 路径，失败不伪报成功；有会话的 journal 由统一解析器存入所属会话 changes/text_mutations，独立工具测试仅使用其显式工作区缓存。原字节/BOM/换行保留，普通响应仅含 URI。工具能力面登记 graph revision13，旧图明确拒绝；远端 mutation、取消确认和丢响应仍按独立任务验收。
 
-2026-10-20 条件补丁切片已将原执行与自动回滚链物理替换为共享 mutation lock、原字节 preimage 和单文件发布原语。`expected_versions` 必填且精确覆盖补丁所有相对路径，移动包含源和目的；每项取先前读取的 `sha256:<hex>` 或明确 `absent`。固定根支持工作区相对路径、目标原生绝对路径和 Workspace files URI，补丁内仍只允许根下相对文件名；整批先校验版本、文本、路径别名、祖先冲突和现有父目录，再写 journal 和逐路径发布。新文件使用独占创建，已有文件原子替换，删除后核实不存在；保留 BOM、纯 CRLF 与原文件 mode。失败停止后续发布，不恢复已发布文件；最终回执给出 `published/not_published/not_attempted/unknown`、预期/目标/实际原字节版本，`retryable=false`。相同字节的外部竞争及发布后恢复原件不能冒充已确认发布或确定未执行。事件流即使收到失败回执，也把已发布或未知路径交原 SessionChanges owner，未尝试路径不进入 changeset；旧 `verification` 第二回执和反向恢复实现已删除。异步工具保留原事件循环上的生命周期回调，仅文件执行交工作线程，避免同步 StructuredTool 在另一个事件循环等待工具开始身份。远端补丁仍以具名 TODO 明确拒绝，write/edit 和取消/响应丢失闭包继续后续实施。
+2026-10-20 条件补丁切片已将原执行与自动回滚链物理替换为共享 mutation lock、原字节 preimage 和单文件发布原语。`expected_versions` 必填且精确覆盖补丁所有相对路径，移动包含源和目的；每项取先前读取的 `sha256:<hex>` 或明确 `absent`。固定根支持工作区相对路径、目标原生绝对路径和 Workspace files URI，补丁内仍只允许根下相对文件名；整批先校验版本、文本、路径别名、祖先冲突和现有父目录，再写 journal 和逐路径发布。新文件使用独占创建，已有文件原子替换，删除后核实不存在；保留 BOM、纯 CRLF 与原文件 mode。失败停止后续发布，不恢复已发布文件；最终回执给出 `published/not_published/not_attempted/unknown`、预期/目标/实际原字节版本，`retryable=false`。相同字节的外部竞争及发布后恢复原件不能冒充已确认发布或确定未执行。事件流即使收到失败回执，也把已发布或未知路径交原 SessionChanges owner，未尝试路径不进入 changeset；旧 `verification` 第二回执和反向恢复实现已删除。异步工具保留原事件循环上的生命周期回调，仅文件执行交工作线程，避免同步 StructuredTool 在另一个事件循环等待工具开始身份。远端 write/edit/patch 随后通过上述同一 owner 与独立 file_write grant 接通；取消确认继续后续实施。
 
 寻址三个错误域引用统一 owner；文件执行原因只在 resource-file-operations spec 登记。确定拒绝和 preflight 失败为未执行；发布完成才为完成；中途失败为部分；无法观察实际效果为未知。调用 cancel 与确认停止分开，source deadline 不抹去目标可能的写入。未知结果先对原目标核实，禁止自动重放。复用现有工具调用身份记录诊断；不预设所有文件操作需要新 operation_id 或 durable coordinator。
 

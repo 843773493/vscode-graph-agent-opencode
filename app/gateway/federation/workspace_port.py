@@ -298,6 +298,31 @@ class WorkspaceSessionMainPort:
         return thread_id
 
     async def execute(self, *, operation: str, target: dict[str, object], body: dict[str, object], origin: str, timeout: float) -> dict[str, object]:
+        if "mutation_kind" in target:
+            from app.core.resource_uri import parse_resource_uri
+            from app.schemas.internal_v2.communication import TextMutationRelayRequest
+            from app.schemas.internal_v2.text_mutation import (
+                MAX_MUTATION_REQUEST_BYTES,
+                TextMutationTransferDTO,
+            )
+
+            query = TextMutationRelayRequest.model_validate(body)
+            if (operation != "file_write" or query.mutation_target.to_payload() != target
+                    or query.source_gateway_id != origin):
+                raise FederationError(FEDERATION_MALFORMED_FRAME, "文本修改 envelope 与独立 grant target/origin 不一致")
+            resource = parse_resource_uri(query.mutation.command.target, local_gateway_id=require_current_gateway_id("文本修改 target"))
+            if resource.gateway_authority is not None or resource.scope_id not in self._backend_urls:
+                raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "文本修改 workspace 不属于当前 Gateway")
+            mutation = query.mutation
+            if len(mutation.model_dump_json().encode("utf-8")) > MAX_MUTATION_REQUEST_BYTES:
+                raise FederationError(FEDERATION_TARGET_OWNER_REJECTED, "文本修改请求超过传输预算")
+            # 剩余联邦预算沿同一次调用传到目标，不能重新获得请求的完整期限。
+            mutation = mutation.model_copy(update={"timeout_ms": max(1, min(mutation.timeout_ms, int(timeout * 1000)))})
+            data = await self._request(
+                workspace_id=resource.scope_id, method="POST", path="/api/v1/resources/text-mutations",
+                origin=origin, body=mutation.model_dump(mode="json", exclude_none=True), timeout=timeout,
+            )
+            return TextMutationTransferDTO.model_validate(data).model_dump(mode="json", exclude_none=True)
         if set(target) == {"gateway_id", "uri"}:
             from app.core.resource_uri import parse_resource_uri
             from app.schemas.internal_v2.communication import (

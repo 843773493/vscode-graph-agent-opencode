@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -9,9 +10,14 @@ import sqlite3
 from contextlib import closing
 from uuid import uuid4
 
+import commentjson
+
 from app.core.resource_uri import resource_display_uri
 from app.gateway.credentials import FederationCredentialStore
-from app.gateway.federation.errors import FEDERATION_TARGET_OWNER_REJECTED
+from app.gateway.federation.errors import (
+    FEDERATION_AUTHORIZATION_REVOKED,
+    FEDERATION_TARGET_OWNER_REJECTED,
+)
 from tests.integration.backend.agents.test_resource_navigation import _tracking_counts
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     _completed,
@@ -309,3 +315,132 @@ async def test_model_conditional_patch_preserves_file_operations_and_changesets(
     wire = json.dumps(model.requests)
     assert all(str(node.workspace) not in wire for node in nodes.values())
     (artifacts / "model-conditional-patch.json").write_text(json.dumps({"receipt": receipt, "changeset": response.json()}, ensure_ascii=False, indent=2) + "\n")
+
+
+async def test_model_remote_text_mutations_preserve_owner_versions_and_source_changes(communication_triad):
+    nodes, model, artifacts = communication_triad
+    source, target = nodes["b"], nodes["c"]
+    raw = b"\xef\xbb\xbfTARGET old\r\n"
+    (target.workspace / "src/remote-edit.txt").write_bytes(raw)
+    (target.workspace / "src/remote-delete.txt").write_bytes(b"delete on target\n")
+    names = ("remote-edit.txt", "remote-delete.txt", "remote-moved.txt", "remote-added.txt", "remote-written.txt")
+    for name in names:
+        (source.workspace / "src" / name).write_text("SOURCE DECOY " + name)
+    root = resource_display_uri(scope="workspace", scope_id=target.workspace_id, kind="files",
+        tail_segments=("root", "src"), gateway_authority=target.gateway_id)
+    session = await create_session(source.client, "模型远端条件写入")
+    results = []
+    patch = "*** Begin Patch\n*** Update File: remote-edit.txt\n*** Move to: remote-moved.txt\n@@\n-\ufeffTARGET edited\n+\ufeffTARGET patched\n*** Delete File: remote-delete.txt\n*** Add File: remote-added.txt\n+target added\n*** End Patch"
+
+    def reply(payload):
+        messages = payload["messages"]
+        if not any(message["role"] == "user" and "remote-text-mutation-trigger" in str(message["content"]) for message in messages):
+            return {"content": "远端条件写入"}
+        tools = [message for message in messages if message["role"] == "tool"]
+        if not tools:
+            return _tool("read_file", {"path": root + "/remote-edit.txt"}, "call_remote_text_read")
+        if len(tools) == 1:
+            version = re.search(r"sha256:[0-9a-f]{64}", tools[0]["content"]).group()
+            assert version == "sha256:" + hashlib.sha256(raw).hexdigest()
+            return _tool("edit_file", {"file_path": root + "/remote-edit.txt", "old_string": "old", "new_string": "edited",
+                                      "expected_version": version}, "call_remote_text_edit")
+        edited = json.loads(tools[1]["content"])
+        assert edited["status"] == "success" and edited["effect"] == "completed", edited
+        if len(tools) == 2:
+            assert edited["files"][0]["path"] == root + "/remote-edit.txt"
+            assert edited["files"][0]["content_hash"] == "sha256:" + hashlib.sha256(raw.replace(b"old", b"edited")).hexdigest()
+            return _tool("read_file", {"path": root + "/remote-delete.txt"}, "call_remote_text_delete_read")
+        if len(tools) == 3:
+            deleted_version = re.search(r"sha256:[0-9a-f]{64}", tools[2]["content"]).group()
+            return _tool("apply_patch", {"input": patch, "target": root, "explanation": "在固定远端新增、删除和移动文本",
+                "expected_versions": {"remote-edit.txt": edited["files"][0]["content_hash"], "remote-moved.txt": "absent",
+                                      "remote-delete.txt": deleted_version, "remote-added.txt": "absent"}}, "call_remote_text_patch")
+        patched = json.loads(tools[3]["content"])
+        assert patched["status"] == "success" and patched["effect"] == "completed", patched
+        if len(tools) == 4:
+            assert [item["state"] for item in patched["files"]] == ["published"] * 4
+            return _tool("write_file", {"file_path": root + "/remote-written.txt", "content": "target written\r\n",
+                                       "expected_version": "absent"}, "call_remote_text_write")
+        written = json.loads(tools[4]["content"])
+        assert written["status"] == "success" and written["effect"] == "completed", written
+        if len(tools) == 5:
+            return _tool("read_file", {"path": root + "/remote-moved.txt"}, "call_remote_text_verify")
+        assert "TARGET patched" in tools[5]["content"]
+        results[:] = tools
+        return {"content": "远端条件写入完成"}
+
+    model.response_callback = reply
+    accepted = await source.client.post(f"/api/v1/sessions/{session}/messages", json={
+        "message": {"content": "remote-text-mutation-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
+    }, headers={"X-Request-ID": "req-model-remote-text"})
+    assert accepted.status_code == 200, accepted.text
+    await _completed(source.client, accepted.json()["data"]["job_id"])
+    assert len(results) == 6
+    assert not (target.workspace / "src/remote-edit.txt").exists()
+    assert not (target.workspace / "src/remote-delete.txt").exists()
+    assert (target.workspace / "src/remote-moved.txt").read_bytes() == raw.replace(b"old", b"patched")
+    assert (target.workspace / "src/remote-added.txt").read_bytes() == b"target added"
+    assert (target.workspace / "src/remote-written.txt").read_bytes() == b"target written\r\n"
+    for name in names:
+        assert (source.workspace / "src" / name).read_text() == "SOURCE DECOY " + name
+    response = await source.client.get(f"/api/v1/sessions/{session}/changesets/all")
+    assert response.status_code == 200, response.text
+    changes = {item["file_path"]: item for item in response.json()["data"]["files"]}
+    assert set(changes) == {root + "/" + name for name in names}
+    assert changes[root + "/remote-edit.txt"]["kind"] == changes[root + "/remote-delete.txt"]["kind"] == "delete"
+    for name in ("remote-moved.txt", "remote-added.txt", "remote-written.txt"):
+        assert changes[root + "/" + name]["kind"] == "create"
+    assert "+target added" in changes[root + "/remote-added.txt"]["diff_text"]
+    assert "+target written" in changes[root + "/remote-written.txt"]["diff_text"]
+    assert "+\ufeffTARGET patched" in changes[root + "/remote-moved.txt"]["diff_text"]
+    from app.core.path_utils import get_session_path_resolver
+    session_path = get_session_path_resolver(source.workspace / ".boxteam/sessions").resolve_session_node(session)
+    journals = list((session_path / "changes/text_mutations").glob("*.json"))
+    assert len(journals) == 3
+    for path in journals:
+        journal = json.loads(path.read_text())
+        assert journal["snapshots"] and all(item["uri"].startswith(root + "/") for item in journal["snapshots"])
+        assert all("after_content" in item for item in journal["snapshots"])
+    wire = json.dumps(model.requests, ensure_ascii=False)
+    assert all(str(node.workspace) not in wire for node in nodes.values())
+    credential = FederationCredentialStore(storage_path=nodes["a"].gateway_root / "credentials/federation.json").get("rgw_c3_c")
+    for path in ("/api/v1/resources/text-mutations", f"/api/v1/workspaces/{target.workspace_id}/resources/text-mutations"):
+        denied = await target.client.post(path, json={"create": {"target": root + "/bypass.txt", "content": "forbidden", "expected_version": "absent"}},
+            headers={"X-Local-Token": "", "X-BoxTeam-Federation-Token": credential.token})
+        assert denied.status_code == 400, denied.text
+        assert denied.json()["detail"] == "联邦文本修改必须通过独立 file_write grant relay"
+    assert not (target.workspace / "src/bypass.txt").exists()
+    # 热撤销只影响写权限；现有通道与 read 能力保留，不能改投 source。
+    before = await target.client.get("/api/gateway/config/reload-status")
+    assert before.status_code == 200, before.text
+    config_path = target.gateway_home / "config/gateway.jsonc"
+    config = commentjson.loads(config_path.read_text())
+    config.setdefault("permissions", {}).setdefault("federation", {}).setdefault("rules", []).append({
+        "capability": "file_write", "effect": "deny", "origin_gateway_id": source.gateway_id,
+    })
+    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
+    async with asyncio.timeout(15):
+        while True:
+            reload = await target.client.get("/api/gateway/config/reload-status")
+            assert reload.status_code == 200, reload.text
+            status = reload.json()["data"]
+            assert status["last_error"] is None, status
+            if status["active_revision"] != before.json()["data"]["active_revision"]:
+                break
+            await asyncio.sleep(0.1)
+    frozen = {"gateway_id": target.gateway_id, "uri": root + "/revoked.txt", "mutation_kind": "text"}
+    denied = await source.client.post("/api/gateway/federation/relay", json={
+        "operation": "file_write", "mutation_target": frozen,
+        "body": {"source_gateway_id": source.gateway_id, "source_workspace_id": source.workspace_id,
+                 "mutation_target": frozen, "mutation": {"create": {
+                     "target": frozen["uri"], "content": "forbidden", "expected_version": "absent"}}},
+    })
+    assert denied.status_code == 403, denied.text
+    assert denied.json()["detail"]["code"] == FEDERATION_AUTHORIZATION_REVOKED, denied.text
+    assert denied.json()["detail"]["detail"]["capability"] == "file_write"
+    assert not (target.workspace / "src/revoked.txt").exists()
+    assert not (source.workspace / "src/revoked.txt").exists()
+    readable = await source.client.post("/api/v1/resources/navigation", json={"uri": root + "/remote-moved.txt", "operation": "read"})
+    assert readable.status_code == 200, readable.text
+    assert readable.json()["data"]["content"] == raw.replace(b"old", b"patched").decode()
+    (artifacts / "model-remote-text-mutations.json").write_text(json.dumps({"results": results, "changeset": response.json()}, ensure_ascii=False, indent=2) + "\n")

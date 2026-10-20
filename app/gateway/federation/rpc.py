@@ -67,6 +67,7 @@ from app.gateway.federation.grants import (
     GrantTarget,
     OperationKind,
     ResourceNavigationGrantTarget,
+    TextMutationGrantTarget,
     sign_grant,
     validate_grant_operation,
     verify_grant,
@@ -416,7 +417,7 @@ class FederationRpcService:
     async def relay_operation(
         self,
         *,
-        target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget,
+        target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | TextMutationGrantTarget,
         operation: OperationKind,
         body: dict[str, object],
         deadline_at: float | None = None,
@@ -452,7 +453,7 @@ class FederationRpcService:
                 operation=operation,
                 request_preimage=forwarded,
             )
-            channel = self.channel_to(target.gateway_id, qualified=isinstance(target, (ContextGrantTarget, ForkGrantTarget, ResourceNavigationGrantTarget)))
+            channel = self.channel_to(target.gateway_id, qualified=isinstance(target, (ContextGrantTarget, ForkGrantTarget, ResourceNavigationGrantTarget, TextMutationGrantTarget)))
             result = await channel.request(
                 method=METHOD_RELAY,
                 request={**forwarded, "grant": grant.encode()},
@@ -465,7 +466,7 @@ class FederationRpcService:
         hub_channel = self._hub_channel
         if hub_channel is None or hub_channel.closed:
             raise FederationError(
-                FEDERATION_CHANNEL_CLOSED if isinstance(target, (ContextGrantTarget, ForkGrantTarget, ResourceNavigationGrantTarget)) else FEDERATION_TARGET_NOT_RESOLVABLE,
+                FEDERATION_CHANNEL_CLOSED if isinstance(target, (ContextGrantTarget, ForkGrantTarget, ResourceNavigationGrantTarget, TextMutationGrantTarget)) else FEDERATION_TARGET_NOT_RESOLVABLE,
                 "本地没有可用 hub channel，无法 transit 到目标 Gateway",
             )
         self._check_channel(hub_channel)
@@ -590,7 +591,7 @@ class FederationRpcService:
             operation=operation,
             request_preimage=forwarded,
         )
-        channel = self.channel_to(target.gateway_id, qualified=isinstance(target, (ContextGrantTarget, ForkGrantTarget, ResourceNavigationGrantTarget)))
+        channel = self.channel_to(target.gateway_id, qualified=isinstance(target, (ContextGrantTarget, ForkGrantTarget, ResourceNavigationGrantTarget, TextMutationGrantTarget)))
         inner = await channel.request(
             method=METHOD_RELAY,
             request={**forwarded, "grant": grant.encode()},
@@ -774,7 +775,7 @@ class FederationRpcService:
         self._authorize(capability=capability, origin=grant.origin_gateway_id, session=session)
         return result
 
-    async def _execute_local(self, *, target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget, operation: OperationKind, body: dict[str, object], origin: str, remaining: float) -> dict[str, object]:
+    async def _execute_local(self, *, target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | TextMutationGrantTarget, operation: OperationKind, body: dict[str, object], origin: str, remaining: float) -> dict[str, object]:
         if target.gateway_id != self.gateway_id:
             raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "target audience 不是本 Gateway")
         self._authorize(capability=operation, origin=origin, session=None)
@@ -789,6 +790,13 @@ class FederationRpcService:
             transfer = SessionForkTransferRequest.model_validate(body)
             if transfer.fork_target != target or transfer.source_gateway_id != origin:
                 raise FederationError(FEDERATION_MALFORMED_FRAME, "fork operation 的 URI/role/origin 与独立 grant 不一致")
+            frozen_target = target.to_payload()
+        elif isinstance(target, TextMutationGrantTarget):
+            from app.schemas.internal_v2.communication import TextMutationRelayRequest
+
+            query = TextMutationRelayRequest.model_validate(body)
+            if query.mutation_target != target or query.source_gateway_id != origin:
+                raise FederationError(FEDERATION_MALFORMED_FRAME, "文本修改 URI/origin 与 file_write grant 不一致")
             frozen_target = target.to_payload()
         elif isinstance(target, ResourceNavigationGrantTarget):
             from app.schemas.internal_v2.communication import (
@@ -974,7 +982,7 @@ class FederationRpcService:
         principal_ref: str,
         lifetime: float,
         request_preimage: dict[str, object],
-        target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | None = None,
+        target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | TextMutationGrantTarget | None = None,
         operation: OperationKind | None = None,
     ) -> FederationGrant:
         if lifetime <= 0:

@@ -178,3 +178,28 @@ test("Gateway 完整组请求、blocker 与两种客户端绑定往返保持成�
     expect(decodedResult.status).toBe("blocked");
   }
 });
+
+
+test("Node 与 Web 的独立文本写入 destination 保留固定 URI", async () => {
+  for (const binding of [
+    await import("../../src/workspace-services/protocol/generated/boxteam/workspace/v2/public_pb.js"),
+    await import("../../src/clients/web/src/types/protocol_buf_generated/boxteam/workspace/v2/public_pb.js"),
+  ]) {
+    const schema = binding.CommunicationGatewayRequestSchema;
+    expect(schema.fields.find((field) => field.name === "mutation_target")?.number).toBe(7);
+    const value = create(schema, { operation: "file_write", destination: { case: "mutationTarget", value: {
+      gatewayId: "gateway-target", uri: "boxteam://gateway-target/workspace/ws/resources/files/root", mutationKind: "text",
+    } } });
+    const decoded = fromBinary(schema, toBinary(schema, value));
+    expect(decoded.destination.case).toBe("mutationTarget");
+    expect(decoded.destination.value.mutationKind).toBe("text");
+    expect(decoded.destination.value.uri).toBe(value.destination.value.uri);
+    const mutation = create(binding.TextMutationRequestSchema, { command: { case: "create", value: {
+      target: "boxteam://workspace/ws/resources/files/root/测试.txt", expectedVersion: "absent", content: "原件\r\n",
+    } }, timeoutMs: 2700 });
+    const roundtrip = fromBinary(binding.TextMutationRequestSchema, toBinary(binding.TextMutationRequestSchema, mutation));
+    expect(roundtrip.command.case).toBe("create");
+    expect(roundtrip.command.value.content).toBe("原件\r\n");
+    expect(roundtrip.timeoutMs).toBe(2700);
+  }
+});

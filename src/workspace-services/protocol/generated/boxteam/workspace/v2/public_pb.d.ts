@@ -6276,6 +6276,12 @@ export declare type CommunicationGatewayRequest = Message<"boxteam.workspace.v2.
      */
     value: ResourceNavigationGrantTarget;
     case: "navigationTarget";
+  } | {
+    /**
+     * @generated from field: boxteam.workspace.v2.TextMutationGrantTarget mutation_target = 7;
+     */
+    value: TextMutationGrantTarget;
+    case: "mutationTarget";
   } | { case: undefined; value?: undefined };
 
   /**
@@ -10759,4 +10765,401 @@ export declare type WorkspaceIndexStatusDTO = Message<"boxteam.workspace.v2.Work
  * Use `create(WorkspaceIndexStatusDTOSchema)` to create a new message.
  */
 export declare const WorkspaceIndexStatusDTOSchema: GenMessage<WorkspaceIndexStatusDTO>;
+
+/**
+ * 文本修改与只读导航各自绑定独立能力，不借通信 grant 扩权。
+ *
+ * @generated from message boxteam.workspace.v2.TextMutationGrantTarget
+ */
+export declare type TextMutationGrantTarget = Message<"boxteam.workspace.v2.TextMutationGrantTarget"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string uri = 2;
+   */
+  uri: string;
+
+  /**
+   * @generated from field: string mutation_kind = 3;
+   */
+  mutationKind: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TextMutationGrantTarget.
+ * Use `create(TextMutationGrantTargetSchema)` to create a new message.
+ */
+export declare const TextMutationGrantTargetSchema: GenMessage<TextMutationGrantTarget>;
+
+/**
+ * @generated from message boxteam.workspace.v2.CreateText
+ */
+export declare type CreateText = Message<"boxteam.workspace.v2.CreateText"> & {
+  /**
+   * @generated from field: string target = 1;
+   */
+  target: string;
+
+  /**
+   * @generated from field: string content = 2;
+   */
+  content: string;
+
+  /**
+   * @generated from field: string expected_version = 3;
+   */
+  expectedVersion: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.CreateText.
+ * Use `create(CreateTextSchema)` to create a new message.
+ */
+export declare const CreateTextSchema: GenMessage<CreateText>;
+
+/**
+ * @generated from message boxteam.workspace.v2.EditText
+ */
+export declare type EditText = Message<"boxteam.workspace.v2.EditText"> & {
+  /**
+   * @generated from field: string target = 1;
+   */
+  target: string;
+
+  /**
+   * @generated from field: string old_string = 2;
+   */
+  oldString: string;
+
+  /**
+   * @generated from field: string new_string = 3;
+   */
+  newString: string;
+
+  /**
+   * @generated from field: string expected_version = 4;
+   */
+  expectedVersion: string;
+
+  /**
+   * @generated from field: bool replace_all = 5;
+   */
+  replaceAll: boolean;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.EditText.
+ * Use `create(EditTextSchema)` to create a new message.
+ */
+export declare const EditTextSchema: GenMessage<EditText>;
+
+/**
+ * @generated from message boxteam.workspace.v2.PatchText
+ */
+export declare type PatchText = Message<"boxteam.workspace.v2.PatchText"> & {
+  /**
+   * @generated from field: string target = 1;
+   */
+  target: string;
+
+  /**
+   * @generated from field: string input = 2;
+   */
+  input: string;
+
+  /**
+   * @generated from field: map<string, string> expected_versions = 3;
+   */
+  expectedVersions: { [key: string]: string };
+
+  /**
+   * @generated from field: string explanation = 4;
+   */
+  explanation: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.PatchText.
+ * Use `create(PatchTextSchema)` to create a new message.
+ */
+export declare const PatchTextSchema: GenMessage<PatchText>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TextMutationRequest
+ */
+export declare type TextMutationRequest = Message<"boxteam.workspace.v2.TextMutationRequest"> & {
+  /**
+   * @generated from oneof boxteam.workspace.v2.TextMutationRequest.command
+   */
+  command: {
+    /**
+     * @generated from field: boxteam.workspace.v2.CreateText create = 1;
+     */
+    value: CreateText;
+    case: "create";
+  } | {
+    /**
+     * @generated from field: boxteam.workspace.v2.EditText edit = 2;
+     */
+    value: EditText;
+    case: "edit";
+  } | {
+    /**
+     * @generated from field: boxteam.workspace.v2.PatchText patch = 3;
+     */
+    value: PatchText;
+    case: "patch";
+  } | { case: undefined; value?: undefined };
+
+  /**
+   * @generated from field: uint32 timeout_ms = 4;
+   */
+  timeoutMs: number;
+
+  /**
+   * @generated from field: uint32 max_response_bytes = 5;
+   */
+  maxResponseBytes: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TextMutationRequest.
+ * Use `create(TextMutationRequestSchema)` to create a new message.
+ */
+export declare const TextMutationRequestSchema: GenMessage<TextMutationRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TextMutationRelayRequest
+ */
+export declare type TextMutationRelayRequest = Message<"boxteam.workspace.v2.TextMutationRelayRequest"> & {
+  /**
+   * @generated from field: string source_gateway_id = 1;
+   */
+  sourceGatewayId: string;
+
+  /**
+   * @generated from field: string source_workspace_id = 2;
+   */
+  sourceWorkspaceId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.TextMutationGrantTarget mutation_target = 3;
+   */
+  mutationTarget?: TextMutationGrantTarget | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.TextMutationRequest mutation = 4;
+   */
+  mutation?: TextMutationRequest | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TextMutationRelayRequest.
+ * Use `create(TextMutationRelayRequestSchema)` to create a new message.
+ */
+export declare const TextMutationRelayRequestSchema: GenMessage<TextMutationRelayRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TextMutationFileDTO
+ */
+export declare type TextMutationFileDTO = Message<"boxteam.workspace.v2.TextMutationFileDTO"> & {
+  /**
+   * @generated from field: string path = 1;
+   */
+  path: string;
+
+  /**
+   * @generated from field: optional string operation = 2;
+   */
+  operation?: string | undefined;
+
+  /**
+   * @generated from field: string state = 3;
+   */
+  state: string;
+
+  /**
+   * @generated from field: string expected_version = 4;
+   */
+  expectedVersion: string;
+
+  /**
+   * @generated from field: optional string intended_version = 5;
+   */
+  intendedVersion?: string | undefined;
+
+  /**
+   * @generated from field: optional bool exists = 6;
+   */
+  exists?: boolean | undefined;
+
+  /**
+   * @generated from field: optional string content_hash = 7;
+   */
+  contentHash?: string | undefined;
+
+  /**
+   * @generated from field: optional string content_observation_error = 8;
+   */
+  contentObservationError?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TextMutationFileDTO.
+ * Use `create(TextMutationFileDTOSchema)` to create a new message.
+ */
+export declare const TextMutationFileDTOSchema: GenMessage<TextMutationFileDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TextMutationReceiptDTO
+ */
+export declare type TextMutationReceiptDTO = Message<"boxteam.workspace.v2.TextMutationReceiptDTO"> & {
+  /**
+   * @generated from field: string status = 1;
+   */
+  status: string;
+
+  /**
+   * @generated from field: string effect = 2;
+   */
+  effect: string;
+
+  /**
+   * @generated from field: optional string target = 3;
+   */
+  target?: string | undefined;
+
+  /**
+   * @generated from field: optional string journal_id = 4;
+   */
+  journalId?: string | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.TextMutationFileDTO files = 5;
+   */
+  files: TextMutationFileDTO[];
+
+  /**
+   * @generated from field: bool retryable = 6;
+   */
+  retryable: boolean;
+
+  /**
+   * @generated from field: string explanation = 7;
+   */
+  explanation: string;
+
+  /**
+   * @generated from field: optional uint32 fuzz = 8;
+   */
+  fuzz?: number | undefined;
+
+  /**
+   * @generated from field: optional string owner = 9;
+   */
+  owner?: string | undefined;
+
+  /**
+   * @generated from field: optional string code = 10;
+   */
+  code?: string | undefined;
+
+  /**
+   * @generated from field: optional string error_type = 11;
+   */
+  errorType?: string | undefined;
+
+  /**
+   * @generated from field: optional string error = 12;
+   */
+  error?: string | undefined;
+
+  /**
+   * @generated from field: optional string recovery = 13;
+   */
+  recovery?: string | undefined;
+
+  /**
+   * @generated from field: optional string lock_release_error = 14;
+   */
+  lockReleaseError?: string | undefined;
+
+  /**
+   * @generated from field: optional string journal_error = 15;
+   */
+  journalError?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TextMutationReceiptDTO.
+ * Use `create(TextMutationReceiptDTOSchema)` to create a new message.
+ */
+export declare const TextMutationReceiptDTOSchema: GenMessage<TextMutationReceiptDTO>;
+
+/**
+ * 后件由目标 owner 在写入锁内观察；source 不读本机同名文件。
+ *
+ * @generated from message boxteam.workspace.v2.TextMutationSnapshotDTO
+ */
+export declare type TextMutationSnapshotDTO = Message<"boxteam.workspace.v2.TextMutationSnapshotDTO"> & {
+  /**
+   * @generated from field: string uri = 1;
+   */
+  uri: string;
+
+  /**
+   * @generated from field: bool before_exists = 2;
+   */
+  beforeExists: boolean;
+
+  /**
+   * @generated from field: string before_content = 3;
+   */
+  beforeContent: string;
+
+  /**
+   * @generated from field: optional bool after_exists = 4;
+   */
+  afterExists?: boolean | undefined;
+
+  /**
+   * @generated from field: optional string after_content = 5;
+   */
+  afterContent?: string | undefined;
+
+  /**
+   * @generated from field: optional string after_error = 6;
+   */
+  afterError?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TextMutationSnapshotDTO.
+ * Use `create(TextMutationSnapshotDTOSchema)` to create a new message.
+ */
+export declare const TextMutationSnapshotDTOSchema: GenMessage<TextMutationSnapshotDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TextMutationTransferDTO
+ */
+export declare type TextMutationTransferDTO = Message<"boxteam.workspace.v2.TextMutationTransferDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.TextMutationReceiptDTO receipt = 1;
+   */
+  receipt?: TextMutationReceiptDTO | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.TextMutationSnapshotDTO snapshots = 2;
+   */
+  snapshots: TextMutationSnapshotDTO[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TextMutationTransferDTO.
+ * Use `create(TextMutationTransferDTOSchema)` to create a new message.
+ */
+export declare const TextMutationTransferDTOSchema: GenMessage<TextMutationTransferDTO>;
 

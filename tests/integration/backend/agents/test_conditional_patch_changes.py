@@ -18,13 +18,13 @@ from app.core.path_utils import (
 from app.core.resource_uri import resource_display_uri
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.session import SessionCreateRequest
+from app.schemas.internal_v2.text_mutation import PatchText
 from app.services.business.session_changes_service import SessionChangesService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.session_changes_store import SessionChangesStore
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.infrastructure.workspace_files import text_mutation, text_publication
-from app.services.infrastructure.workspace_files.text_owner import PatchText
 from app.services.orchestration.event_stream.processor import process_agent_event_stream
 
 

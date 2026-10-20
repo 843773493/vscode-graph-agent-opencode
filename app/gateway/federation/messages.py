@@ -23,6 +23,7 @@ from app.gateway.federation.grants import (
     GrantTarget,
     OperationKind,
     ResourceNavigationGrantTarget,
+    TextMutationGrantTarget,
     decode_grant_target,
 )
 
@@ -122,14 +123,14 @@ def require_int(payload: dict[str, object], field: str) -> int:
 
 def require_operation(request: dict[str, object]) -> OperationKind:
     value = request.get("operation")
-    if value not in ("send", "read", "wait", "reply", "fork_source", "fork_target"):
+    if value not in ("send", "read", "wait", "reply", "fork_source", "fork_target", "file_write"):
         raise FederationError(
             FEDERATION_GRANT_KIND_MISMATCH, f"未知 operation: {value!r}"
         )
     return value
 
 
-def require_target(payload: dict[str, object]) -> GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget:
+def require_target(payload: dict[str, object]) -> GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | TextMutationGrantTarget:
     return decode_grant_target(payload.get("target"))
 
 

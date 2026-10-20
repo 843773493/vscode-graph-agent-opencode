@@ -136,8 +136,9 @@ def test_communication_wire_uses_one_destination_for_existing_resource_and_fork_
     assert descriptor.fields_by_name["resource_target"].number == 4
     assert descriptor.fields_by_name["fork_target"].number == 5
     assert descriptor.fields_by_name["navigation_target"].number == 6
+    assert descriptor.fields_by_name["mutation_target"].number == 7
     assert {field.name for field in descriptor.oneofs_by_name["destination"].fields} == {
-        "target", "resource_target", "fork_target", "navigation_target",
+        "target", "resource_target", "fork_target", "navigation_target", "mutation_target",
     }
     value = public_pb2.CommunicationGatewayRequest(operation="read")
     value.target.gateway_id = "gateway-existing"
@@ -287,3 +288,23 @@ def test_gateway_complete_backend_group_request_and_results_preserve_wire_contra
     decoded_result = type(restarted).FromString(restarted.SerializeToString())
     assert decoded_result.status == "blocked"
     assert decoded_result.blockers[0].workspace_id == "gateway-b"
+
+
+def test_text_mutation_wire_binds_one_command_and_preserves_unknown_observations():
+    request = public_pb2.TextMutationRequest(timeout_ms=2700, max_response_bytes=65536)
+    request.create.target = "boxteam://workspace/ws/resources/files/root/new.txt"
+    request.create.expected_version = "absent"
+    request.create.content = "你好\r\n"
+    request.edit.target = "boxteam://workspace/ws/resources/files/root/existing.txt"
+    request.edit.old_string = "old"
+    request.edit.new_string = "new"
+    request.edit.expected_version = "sha256:" + "a" * 64
+    decoded = public_pb2.TextMutationRequest.FromString(request.SerializeToString())
+    assert decoded.WhichOneof("command") == "edit" and not decoded.HasField("create")
+    assert decoded.edit.expected_version == "sha256:" + "a" * 64 and decoded.timeout_ms == 2700
+    response = public_pb2.TextMutationTransferDTO()
+    response.receipt.status, response.receipt.effect = "error", "unknown"
+    file = response.receipt.files.add(path=decoded.edit.target, state="unknown", expected_version=decoded.edit.expected_version)
+    assert not file.HasField("exists") and not file.HasField("intended_version")
+    parsed = public_pb2.TextMutationTransferDTO.FromString(response.SerializeToString())
+    assert parsed.receipt.effect == "unknown" and parsed.snapshots == []

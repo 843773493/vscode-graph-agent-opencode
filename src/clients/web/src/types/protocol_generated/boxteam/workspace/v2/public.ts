@@ -1451,6 +1451,7 @@ export interface CommunicationGatewayRequest {
     | { $case: "resource_target"; resource_target: ContextGrantTarget }
     | { $case: "fork_target"; fork_target: ForkGrantTarget }
     | { $case: "navigation_target"; navigation_target: ResourceNavigationGrantTarget }
+    | { $case: "mutation_target"; mutation_target: TextMutationGrantTarget }
     | undefined;
   body: { [key: string]: any } | undefined;
 }
@@ -2511,6 +2512,99 @@ export interface WorkspaceIndexStatusDTO {
   status: string;
   indexed_files?: number | undefined;
   last_updated?: string | undefined;
+}
+
+/** 文本修改与只读导航各自绑定独立能力，不借通信 grant 扩权。 */
+export interface TextMutationGrantTarget {
+  gateway_id: string;
+  uri: string;
+  mutation_kind: string;
+}
+
+export interface CreateText {
+  target: string;
+  content: string;
+  expected_version: string;
+}
+
+export interface EditText {
+  target: string;
+  old_string: string;
+  new_string: string;
+  expected_version: string;
+  replace_all: boolean;
+}
+
+export interface PatchText {
+  target: string;
+  input: string;
+  expected_versions: { [key: string]: string };
+  explanation: string;
+}
+
+export interface PatchText_ExpectedVersionsEntry {
+  key: string;
+  value: string;
+}
+
+export interface TextMutationRequest {
+  command: { $case: "create"; create: CreateText } | { $case: "edit"; edit: EditText } | {
+    $case: "patch";
+    patch: PatchText;
+  } | undefined;
+  timeout_ms: number;
+  max_response_bytes: number;
+}
+
+export interface TextMutationRelayRequest {
+  source_gateway_id: string;
+  source_workspace_id: string;
+  mutation_target: TextMutationGrantTarget | undefined;
+  mutation: TextMutationRequest | undefined;
+}
+
+export interface TextMutationFileDTO {
+  path: string;
+  operation?: string | undefined;
+  state: string;
+  expected_version: string;
+  intended_version?: string | undefined;
+  exists?: boolean | undefined;
+  content_hash?: string | undefined;
+  content_observation_error?: string | undefined;
+}
+
+export interface TextMutationReceiptDTO {
+  status: string;
+  effect: string;
+  target?: string | undefined;
+  journal_id?: string | undefined;
+  files: TextMutationFileDTO[];
+  retryable: boolean;
+  explanation: string;
+  fuzz?: number | undefined;
+  owner?: string | undefined;
+  code?: string | undefined;
+  error_type?: string | undefined;
+  error?: string | undefined;
+  recovery?: string | undefined;
+  lock_release_error?: string | undefined;
+  journal_error?: string | undefined;
+}
+
+/** 后件由目标 owner 在写入锁内观察；source 不读本机同名文件。 */
+export interface TextMutationSnapshotDTO {
+  uri: string;
+  before_exists: boolean;
+  before_content: string;
+  after_exists?: boolean | undefined;
+  after_content?: string | undefined;
+  after_error?: string | undefined;
+}
+
+export interface TextMutationTransferDTO {
+  receipt: TextMutationReceiptDTO | undefined;
+  snapshots: TextMutationSnapshotDTO[];
 }
 
 function createBaseAPIResponse(): APIResponse {
@@ -11648,6 +11742,8 @@ export const CommunicationGatewayRequest: MessageFns<CommunicationGatewayRequest
           $case: "navigation_target",
           navigation_target: ResourceNavigationGrantTarget.fromJSON(object.navigation_target),
         }
+        : isSet(object.mutation_target)
+        ? { $case: "mutation_target", mutation_target: TextMutationGrantTarget.fromJSON(object.mutation_target) }
         : undefined,
       body: isObject(object.body) ? object.body : undefined,
     };
@@ -11666,6 +11762,8 @@ export const CommunicationGatewayRequest: MessageFns<CommunicationGatewayRequest
       obj.fork_target = ForkGrantTarget.toJSON(message.destination.fork_target);
     } else if (message.destination?.$case === "navigation_target") {
       obj.navigation_target = ResourceNavigationGrantTarget.toJSON(message.destination.navigation_target);
+    } else if (message.destination?.$case === "mutation_target") {
+      obj.mutation_target = TextMutationGrantTarget.toJSON(message.destination.mutation_target);
     }
     if (message.body !== undefined) {
       obj.body = message.body;
@@ -11709,6 +11807,15 @@ export const CommunicationGatewayRequest: MessageFns<CommunicationGatewayRequest
           message.destination = {
             $case: "navigation_target",
             navigation_target: ResourceNavigationGrantTarget.fromPartial(object.destination.navigation_target),
+          };
+        }
+        break;
+      }
+      case "mutation_target": {
+        if (object.destination?.mutation_target !== undefined && object.destination?.mutation_target !== null) {
+          message.destination = {
+            $case: "mutation_target",
+            mutation_target: TextMutationGrantTarget.fromPartial(object.destination.mutation_target),
           };
         }
         break;
@@ -18188,6 +18295,647 @@ export const WorkspaceIndexStatusDTO: MessageFns<WorkspaceIndexStatusDTO> = {
     message.status = object.status ?? "";
     message.indexed_files = object.indexed_files ?? undefined;
     message.last_updated = object.last_updated ?? undefined;
+    return message;
+  },
+};
+
+function createBaseTextMutationGrantTarget(): TextMutationGrantTarget {
+  return { gateway_id: "", uri: "", mutation_kind: "" };
+}
+
+export const TextMutationGrantTarget: MessageFns<TextMutationGrantTarget> = {
+  fromJSON(object: any): TextMutationGrantTarget {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
+      mutation_kind: isSet(object.mutation_kind) ? globalThis.String(object.mutation_kind) : "",
+    };
+  },
+
+  toJSON(message: TextMutationGrantTarget): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.uri !== "") {
+      obj.uri = message.uri;
+    }
+    if (message.mutation_kind !== "") {
+      obj.mutation_kind = message.mutation_kind;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TextMutationGrantTarget>, I>>(base?: I): TextMutationGrantTarget {
+    return TextMutationGrantTarget.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TextMutationGrantTarget>, I>>(object: I): TextMutationGrantTarget {
+    const message = createBaseTextMutationGrantTarget();
+    message.gateway_id = object.gateway_id ?? "";
+    message.uri = object.uri ?? "";
+    message.mutation_kind = object.mutation_kind ?? "";
+    return message;
+  },
+};
+
+function createBaseCreateText(): CreateText {
+  return { target: "", content: "", expected_version: "" };
+}
+
+export const CreateText: MessageFns<CreateText> = {
+  fromJSON(object: any): CreateText {
+    return {
+      target: isSet(object.target) ? globalThis.String(object.target) : "",
+      content: isSet(object.content) ? globalThis.String(object.content) : "",
+      expected_version: isSet(object.expected_version) ? globalThis.String(object.expected_version) : "",
+    };
+  },
+
+  toJSON(message: CreateText): unknown {
+    const obj: any = {};
+    if (message.target !== "") {
+      obj.target = message.target;
+    }
+    if (message.content !== "") {
+      obj.content = message.content;
+    }
+    if (message.expected_version !== "") {
+      obj.expected_version = message.expected_version;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<CreateText>, I>>(base?: I): CreateText {
+    return CreateText.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<CreateText>, I>>(object: I): CreateText {
+    const message = createBaseCreateText();
+    message.target = object.target ?? "";
+    message.content = object.content ?? "";
+    message.expected_version = object.expected_version ?? "";
+    return message;
+  },
+};
+
+function createBaseEditText(): EditText {
+  return { target: "", old_string: "", new_string: "", expected_version: "", replace_all: false };
+}
+
+export const EditText: MessageFns<EditText> = {
+  fromJSON(object: any): EditText {
+    return {
+      target: isSet(object.target) ? globalThis.String(object.target) : "",
+      old_string: isSet(object.old_string) ? globalThis.String(object.old_string) : "",
+      new_string: isSet(object.new_string) ? globalThis.String(object.new_string) : "",
+      expected_version: isSet(object.expected_version) ? globalThis.String(object.expected_version) : "",
+      replace_all: isSet(object.replace_all) ? globalThis.Boolean(object.replace_all) : false,
+    };
+  },
+
+  toJSON(message: EditText): unknown {
+    const obj: any = {};
+    if (message.target !== "") {
+      obj.target = message.target;
+    }
+    if (message.old_string !== "") {
+      obj.old_string = message.old_string;
+    }
+    if (message.new_string !== "") {
+      obj.new_string = message.new_string;
+    }
+    if (message.expected_version !== "") {
+      obj.expected_version = message.expected_version;
+    }
+    if (message.replace_all !== false) {
+      obj.replace_all = message.replace_all;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EditText>, I>>(base?: I): EditText {
+    return EditText.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EditText>, I>>(object: I): EditText {
+    const message = createBaseEditText();
+    message.target = object.target ?? "";
+    message.old_string = object.old_string ?? "";
+    message.new_string = object.new_string ?? "";
+    message.expected_version = object.expected_version ?? "";
+    message.replace_all = object.replace_all ?? false;
+    return message;
+  },
+};
+
+function createBasePatchText(): PatchText {
+  return { target: "", input: "", expected_versions: {}, explanation: "" };
+}
+
+export const PatchText: MessageFns<PatchText> = {
+  fromJSON(object: any): PatchText {
+    return {
+      target: isSet(object.target) ? globalThis.String(object.target) : "",
+      input: isSet(object.input) ? globalThis.String(object.input) : "",
+      expected_versions: isObject(object.expected_versions)
+        ? (globalThis.Object.entries(object.expected_versions) as [string, any][]).reduce(
+          (acc: { [key: string]: string }, [key, value]: [string, any]) => {
+            globalThis.Object.defineProperty(acc, key, {
+              value: globalThis.String(value),
+              enumerable: true,
+              configurable: true,
+              writable: true,
+            });
+            return acc;
+          },
+          {},
+        )
+        : {},
+      explanation: isSet(object.explanation) ? globalThis.String(object.explanation) : "",
+    };
+  },
+
+  toJSON(message: PatchText): unknown {
+    const obj: any = {};
+    if (message.target !== "") {
+      obj.target = message.target;
+    }
+    if (message.input !== "") {
+      obj.input = message.input;
+    }
+    if (message.expected_versions) {
+      const entries = globalThis.Object.entries(message.expected_versions) as [string, string][];
+      if (entries.length > 0) {
+        obj.expected_versions = {};
+        entries.forEach(([k, v]) => {
+          obj.expected_versions[k] = v;
+        });
+      }
+    }
+    if (message.explanation !== "") {
+      obj.explanation = message.explanation;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PatchText>, I>>(base?: I): PatchText {
+    return PatchText.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PatchText>, I>>(object: I): PatchText {
+    const message = createBasePatchText();
+    message.target = object.target ?? "";
+    message.input = object.input ?? "";
+    message.expected_versions = (globalThis.Object.entries(object.expected_versions ?? {}) as [string, string][])
+      .reduce((acc: { [key: string]: string }, [key, value]: [string, string]) => {
+        if (value !== undefined) {
+          acc[key] = globalThis.String(value);
+        }
+        return acc;
+      }, {});
+    message.explanation = object.explanation ?? "";
+    return message;
+  },
+};
+
+function createBasePatchText_ExpectedVersionsEntry(): PatchText_ExpectedVersionsEntry {
+  return { key: "", value: "" };
+}
+
+export const PatchText_ExpectedVersionsEntry: MessageFns<PatchText_ExpectedVersionsEntry> = {
+  fromJSON(object: any): PatchText_ExpectedVersionsEntry {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      value: isSet(object.value) ? globalThis.String(object.value) : "",
+    };
+  },
+
+  toJSON(message: PatchText_ExpectedVersionsEntry): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.value !== "") {
+      obj.value = message.value;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PatchText_ExpectedVersionsEntry>, I>>(base?: I): PatchText_ExpectedVersionsEntry {
+    return PatchText_ExpectedVersionsEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PatchText_ExpectedVersionsEntry>, I>>(
+    object: I,
+  ): PatchText_ExpectedVersionsEntry {
+    const message = createBasePatchText_ExpectedVersionsEntry();
+    message.key = object.key ?? "";
+    message.value = object.value ?? "";
+    return message;
+  },
+};
+
+function createBaseTextMutationRequest(): TextMutationRequest {
+  return { command: undefined, timeout_ms: 0, max_response_bytes: 0 };
+}
+
+export const TextMutationRequest: MessageFns<TextMutationRequest> = {
+  fromJSON(object: any): TextMutationRequest {
+    return {
+      command: isSet(object.create)
+        ? { $case: "create", create: CreateText.fromJSON(object.create) }
+        : isSet(object.edit)
+        ? { $case: "edit", edit: EditText.fromJSON(object.edit) }
+        : isSet(object.patch)
+        ? { $case: "patch", patch: PatchText.fromJSON(object.patch) }
+        : undefined,
+      timeout_ms: isSet(object.timeout_ms) ? globalThis.Number(object.timeout_ms) : 0,
+      max_response_bytes: isSet(object.max_response_bytes) ? globalThis.Number(object.max_response_bytes) : 0,
+    };
+  },
+
+  toJSON(message: TextMutationRequest): unknown {
+    const obj: any = {};
+    if (message.command?.$case === "create") {
+      obj.create = CreateText.toJSON(message.command.create);
+    } else if (message.command?.$case === "edit") {
+      obj.edit = EditText.toJSON(message.command.edit);
+    } else if (message.command?.$case === "patch") {
+      obj.patch = PatchText.toJSON(message.command.patch);
+    }
+    if (message.timeout_ms !== 0) {
+      obj.timeout_ms = Math.round(message.timeout_ms);
+    }
+    if (message.max_response_bytes !== 0) {
+      obj.max_response_bytes = Math.round(message.max_response_bytes);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TextMutationRequest>, I>>(base?: I): TextMutationRequest {
+    return TextMutationRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TextMutationRequest>, I>>(object: I): TextMutationRequest {
+    const message = createBaseTextMutationRequest();
+    switch (object.command?.$case) {
+      case "create": {
+        if (object.command?.create !== undefined && object.command?.create !== null) {
+          message.command = { $case: "create", create: CreateText.fromPartial(object.command.create) };
+        }
+        break;
+      }
+      case "edit": {
+        if (object.command?.edit !== undefined && object.command?.edit !== null) {
+          message.command = { $case: "edit", edit: EditText.fromPartial(object.command.edit) };
+        }
+        break;
+      }
+      case "patch": {
+        if (object.command?.patch !== undefined && object.command?.patch !== null) {
+          message.command = { $case: "patch", patch: PatchText.fromPartial(object.command.patch) };
+        }
+        break;
+      }
+    }
+    message.timeout_ms = object.timeout_ms ?? 0;
+    message.max_response_bytes = object.max_response_bytes ?? 0;
+    return message;
+  },
+};
+
+function createBaseTextMutationRelayRequest(): TextMutationRelayRequest {
+  return { source_gateway_id: "", source_workspace_id: "", mutation_target: undefined, mutation: undefined };
+}
+
+export const TextMutationRelayRequest: MessageFns<TextMutationRelayRequest> = {
+  fromJSON(object: any): TextMutationRelayRequest {
+    return {
+      source_gateway_id: isSet(object.source_gateway_id) ? globalThis.String(object.source_gateway_id) : "",
+      source_workspace_id: isSet(object.source_workspace_id) ? globalThis.String(object.source_workspace_id) : "",
+      mutation_target: isSet(object.mutation_target)
+        ? TextMutationGrantTarget.fromJSON(object.mutation_target)
+        : undefined,
+      mutation: isSet(object.mutation) ? TextMutationRequest.fromJSON(object.mutation) : undefined,
+    };
+  },
+
+  toJSON(message: TextMutationRelayRequest): unknown {
+    const obj: any = {};
+    if (message.source_gateway_id !== "") {
+      obj.source_gateway_id = message.source_gateway_id;
+    }
+    if (message.source_workspace_id !== "") {
+      obj.source_workspace_id = message.source_workspace_id;
+    }
+    if (message.mutation_target !== undefined) {
+      obj.mutation_target = TextMutationGrantTarget.toJSON(message.mutation_target);
+    }
+    if (message.mutation !== undefined) {
+      obj.mutation = TextMutationRequest.toJSON(message.mutation);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TextMutationRelayRequest>, I>>(base?: I): TextMutationRelayRequest {
+    return TextMutationRelayRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TextMutationRelayRequest>, I>>(object: I): TextMutationRelayRequest {
+    const message = createBaseTextMutationRelayRequest();
+    message.source_gateway_id = object.source_gateway_id ?? "";
+    message.source_workspace_id = object.source_workspace_id ?? "";
+    message.mutation_target = (object.mutation_target !== undefined && object.mutation_target !== null)
+      ? TextMutationGrantTarget.fromPartial(object.mutation_target)
+      : undefined;
+    message.mutation = (object.mutation !== undefined && object.mutation !== null)
+      ? TextMutationRequest.fromPartial(object.mutation)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseTextMutationFileDTO(): TextMutationFileDTO {
+  return {
+    path: "",
+    operation: undefined,
+    state: "",
+    expected_version: "",
+    intended_version: undefined,
+    exists: undefined,
+    content_hash: undefined,
+    content_observation_error: undefined,
+  };
+}
+
+export const TextMutationFileDTO: MessageFns<TextMutationFileDTO> = {
+  fromJSON(object: any): TextMutationFileDTO {
+    return {
+      path: isSet(object.path) ? globalThis.String(object.path) : "",
+      operation: isSet(object.operation) ? globalThis.String(object.operation) : undefined,
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+      expected_version: isSet(object.expected_version) ? globalThis.String(object.expected_version) : "",
+      intended_version: isSet(object.intended_version) ? globalThis.String(object.intended_version) : undefined,
+      exists: isSet(object.exists) ? globalThis.Boolean(object.exists) : undefined,
+      content_hash: isSet(object.content_hash) ? globalThis.String(object.content_hash) : undefined,
+      content_observation_error: isSet(object.content_observation_error)
+        ? globalThis.String(object.content_observation_error)
+        : undefined,
+    };
+  },
+
+  toJSON(message: TextMutationFileDTO): unknown {
+    const obj: any = {};
+    if (message.path !== "") {
+      obj.path = message.path;
+    }
+    if (message.operation !== undefined) {
+      obj.operation = message.operation;
+    }
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    if (message.expected_version !== "") {
+      obj.expected_version = message.expected_version;
+    }
+    if (message.intended_version !== undefined) {
+      obj.intended_version = message.intended_version;
+    }
+    if (message.exists !== undefined) {
+      obj.exists = message.exists;
+    }
+    if (message.content_hash !== undefined) {
+      obj.content_hash = message.content_hash;
+    }
+    if (message.content_observation_error !== undefined) {
+      obj.content_observation_error = message.content_observation_error;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TextMutationFileDTO>, I>>(base?: I): TextMutationFileDTO {
+    return TextMutationFileDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TextMutationFileDTO>, I>>(object: I): TextMutationFileDTO {
+    const message = createBaseTextMutationFileDTO();
+    message.path = object.path ?? "";
+    message.operation = object.operation ?? undefined;
+    message.state = object.state ?? "";
+    message.expected_version = object.expected_version ?? "";
+    message.intended_version = object.intended_version ?? undefined;
+    message.exists = object.exists ?? undefined;
+    message.content_hash = object.content_hash ?? undefined;
+    message.content_observation_error = object.content_observation_error ?? undefined;
+    return message;
+  },
+};
+
+function createBaseTextMutationReceiptDTO(): TextMutationReceiptDTO {
+  return {
+    status: "",
+    effect: "",
+    target: undefined,
+    journal_id: undefined,
+    files: [],
+    retryable: false,
+    explanation: "",
+    fuzz: undefined,
+    owner: undefined,
+    code: undefined,
+    error_type: undefined,
+    error: undefined,
+    recovery: undefined,
+    lock_release_error: undefined,
+    journal_error: undefined,
+  };
+}
+
+export const TextMutationReceiptDTO: MessageFns<TextMutationReceiptDTO> = {
+  fromJSON(object: any): TextMutationReceiptDTO {
+    return {
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+      effect: isSet(object.effect) ? globalThis.String(object.effect) : "",
+      target: isSet(object.target) ? globalThis.String(object.target) : undefined,
+      journal_id: isSet(object.journal_id) ? globalThis.String(object.journal_id) : undefined,
+      files: globalThis.Array.isArray(object?.files)
+        ? object.files.map((e: any) => TextMutationFileDTO.fromJSON(e))
+        : [],
+      retryable: isSet(object.retryable) ? globalThis.Boolean(object.retryable) : false,
+      explanation: isSet(object.explanation) ? globalThis.String(object.explanation) : "",
+      fuzz: isSet(object.fuzz) ? globalThis.Number(object.fuzz) : undefined,
+      owner: isSet(object.owner) ? globalThis.String(object.owner) : undefined,
+      code: isSet(object.code) ? globalThis.String(object.code) : undefined,
+      error_type: isSet(object.error_type) ? globalThis.String(object.error_type) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+      recovery: isSet(object.recovery) ? globalThis.String(object.recovery) : undefined,
+      lock_release_error: isSet(object.lock_release_error) ? globalThis.String(object.lock_release_error) : undefined,
+      journal_error: isSet(object.journal_error) ? globalThis.String(object.journal_error) : undefined,
+    };
+  },
+
+  toJSON(message: TextMutationReceiptDTO): unknown {
+    const obj: any = {};
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    if (message.effect !== "") {
+      obj.effect = message.effect;
+    }
+    if (message.target !== undefined) {
+      obj.target = message.target;
+    }
+    if (message.journal_id !== undefined) {
+      obj.journal_id = message.journal_id;
+    }
+    if (message.files?.length) {
+      obj.files = message.files.map((e) => TextMutationFileDTO.toJSON(e));
+    }
+    if (message.retryable !== false) {
+      obj.retryable = message.retryable;
+    }
+    if (message.explanation !== "") {
+      obj.explanation = message.explanation;
+    }
+    if (message.fuzz !== undefined) {
+      obj.fuzz = Math.round(message.fuzz);
+    }
+    if (message.owner !== undefined) {
+      obj.owner = message.owner;
+    }
+    if (message.code !== undefined) {
+      obj.code = message.code;
+    }
+    if (message.error_type !== undefined) {
+      obj.error_type = message.error_type;
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    if (message.recovery !== undefined) {
+      obj.recovery = message.recovery;
+    }
+    if (message.lock_release_error !== undefined) {
+      obj.lock_release_error = message.lock_release_error;
+    }
+    if (message.journal_error !== undefined) {
+      obj.journal_error = message.journal_error;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TextMutationReceiptDTO>, I>>(base?: I): TextMutationReceiptDTO {
+    return TextMutationReceiptDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TextMutationReceiptDTO>, I>>(object: I): TextMutationReceiptDTO {
+    const message = createBaseTextMutationReceiptDTO();
+    message.status = object.status ?? "";
+    message.effect = object.effect ?? "";
+    message.target = object.target ?? undefined;
+    message.journal_id = object.journal_id ?? undefined;
+    message.files = object.files?.map((e) => TextMutationFileDTO.fromPartial(e)) || [];
+    message.retryable = object.retryable ?? false;
+    message.explanation = object.explanation ?? "";
+    message.fuzz = object.fuzz ?? undefined;
+    message.owner = object.owner ?? undefined;
+    message.code = object.code ?? undefined;
+    message.error_type = object.error_type ?? undefined;
+    message.error = object.error ?? undefined;
+    message.recovery = object.recovery ?? undefined;
+    message.lock_release_error = object.lock_release_error ?? undefined;
+    message.journal_error = object.journal_error ?? undefined;
+    return message;
+  },
+};
+
+function createBaseTextMutationSnapshotDTO(): TextMutationSnapshotDTO {
+  return {
+    uri: "",
+    before_exists: false,
+    before_content: "",
+    after_exists: undefined,
+    after_content: undefined,
+    after_error: undefined,
+  };
+}
+
+export const TextMutationSnapshotDTO: MessageFns<TextMutationSnapshotDTO> = {
+  fromJSON(object: any): TextMutationSnapshotDTO {
+    return {
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
+      before_exists: isSet(object.before_exists) ? globalThis.Boolean(object.before_exists) : false,
+      before_content: isSet(object.before_content) ? globalThis.String(object.before_content) : "",
+      after_exists: isSet(object.after_exists) ? globalThis.Boolean(object.after_exists) : undefined,
+      after_content: isSet(object.after_content) ? globalThis.String(object.after_content) : undefined,
+      after_error: isSet(object.after_error) ? globalThis.String(object.after_error) : undefined,
+    };
+  },
+
+  toJSON(message: TextMutationSnapshotDTO): unknown {
+    const obj: any = {};
+    if (message.uri !== "") {
+      obj.uri = message.uri;
+    }
+    if (message.before_exists !== false) {
+      obj.before_exists = message.before_exists;
+    }
+    if (message.before_content !== "") {
+      obj.before_content = message.before_content;
+    }
+    if (message.after_exists !== undefined) {
+      obj.after_exists = message.after_exists;
+    }
+    if (message.after_content !== undefined) {
+      obj.after_content = message.after_content;
+    }
+    if (message.after_error !== undefined) {
+      obj.after_error = message.after_error;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TextMutationSnapshotDTO>, I>>(base?: I): TextMutationSnapshotDTO {
+    return TextMutationSnapshotDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TextMutationSnapshotDTO>, I>>(object: I): TextMutationSnapshotDTO {
+    const message = createBaseTextMutationSnapshotDTO();
+    message.uri = object.uri ?? "";
+    message.before_exists = object.before_exists ?? false;
+    message.before_content = object.before_content ?? "";
+    message.after_exists = object.after_exists ?? undefined;
+    message.after_content = object.after_content ?? undefined;
+    message.after_error = object.after_error ?? undefined;
+    return message;
+  },
+};
+
+function createBaseTextMutationTransferDTO(): TextMutationTransferDTO {
+  return { receipt: undefined, snapshots: [] };
+}
+
+export const TextMutationTransferDTO: MessageFns<TextMutationTransferDTO> = {
+  fromJSON(object: any): TextMutationTransferDTO {
+    return {
+      receipt: isSet(object.receipt) ? TextMutationReceiptDTO.fromJSON(object.receipt) : undefined,
+      snapshots: globalThis.Array.isArray(object?.snapshots)
+        ? object.snapshots.map((e: any) => TextMutationSnapshotDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: TextMutationTransferDTO): unknown {
+    const obj: any = {};
+    if (message.receipt !== undefined) {
+      obj.receipt = TextMutationReceiptDTO.toJSON(message.receipt);
+    }
+    if (message.snapshots?.length) {
+      obj.snapshots = message.snapshots.map((e) => TextMutationSnapshotDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TextMutationTransferDTO>, I>>(base?: I): TextMutationTransferDTO {
+    return TextMutationTransferDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TextMutationTransferDTO>, I>>(object: I): TextMutationTransferDTO {
+    const message = createBaseTextMutationTransferDTO();
+    message.receipt = (object.receipt !== undefined && object.receipt !== null)
+      ? TextMutationReceiptDTO.fromPartial(object.receipt)
+      : undefined;
+    message.snapshots = object.snapshots?.map((e) => TextMutationSnapshotDTO.fromPartial(e)) || [];
     return message;
   },
 };

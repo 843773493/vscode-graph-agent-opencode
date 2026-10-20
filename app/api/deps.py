@@ -60,6 +60,9 @@ from app.services.infrastructure.tool_service import ToolService
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
+from app.services.infrastructure.workspace_files.text_owner import (
+    WorkspaceTextMutationOwner,
+)
 from app.services.infrastructure.workspace_service import WorkspaceService
 from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
 from app.services.orchestration.communication.service import SessionCommunicationService
@@ -340,6 +343,10 @@ def get_mcp_catalog_owner(request: Request) -> McpCatalogOwner:
 
 def get_workspace_service(request: Request) -> WorkspaceService:
     return _require_service(request, "workspace_service", WorkspaceService, "WorkspaceService 尚未在应用启动阶段初始化")
+
+
+def get_text_mutations(request: Request) -> WorkspaceTextMutationOwner:
+    return _require_service(request, "text_mutations", WorkspaceTextMutationOwner, "WorkspaceTextMutationOwner 尚未在应用启动阶段初始化")
 
 
 def get_resource_navigation(request: Request) -> ResourceNavigation:

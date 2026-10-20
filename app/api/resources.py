@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Annotated, Literal
@@ -16,6 +17,7 @@ from app.api.deps import (
     get_request_id,
     get_resource_navigation,
     get_terminal_resource_owner,
+    get_text_mutations,
     get_workspace_resource_owner,
     verify_local_token,
 )
@@ -27,6 +29,11 @@ from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
+)
+from app.schemas.internal_v2.text_mutation import (
+    TextMutationReceiptDTO,
+    TextMutationRequest,
+    TextMutationTransferDTO,
 )
 from app.schemas.internal_v2.workspace_resource import (
     BrowserResourceCreateRequest,
@@ -51,6 +58,12 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
+)
+from app.services.infrastructure.workspace_files.text_owner import (
+    WorkspaceTextMutationOwner,
+)
+from app.services.infrastructure.workspace_files.text_transfer import (
+    unconfirmed_text_mutation,
 )
 
 router = APIRouter(prefix="/resources", tags=["resources"])
@@ -85,6 +98,21 @@ async def navigate_resource(
             "output_limit_exceeded", "导航响应及请求回执超过总字节上限", reason="response_byte_limit",
         ).detail())
     return envelope
+
+
+@router.post("/text-mutations", response_model=APIResponse[TextMutationTransferDTO])
+async def mutate_text(
+    body: TextMutationRequest,
+    _: str = Depends(verify_local_token), request_id: str = Depends(get_request_id),
+    *, owner: Annotated[WorkspaceTextMutationOwner, Depends(get_text_mutations)],
+):
+    try:
+        async with asyncio.timeout(body.timeout_ms / 1000):
+            result = await asyncio.to_thread(owner.execute_transfer, body)
+    except TimeoutError as error:
+        # 工作线程尚未确认停止；目标 journal 继续反映实际效果，不伪报未执行。
+        result = TextMutationTransferDTO(receipt=TextMutationReceiptDTO.model_validate(unconfirmed_text_mutation(body.command, error)))
+    return APIResponse(data=result, request_id=request_id)
 
 
 @contextmanager

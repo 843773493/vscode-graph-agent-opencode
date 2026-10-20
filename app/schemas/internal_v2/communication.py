@@ -12,6 +12,7 @@ from app.gateway.federation.grants import (
     ContextGrantTarget,
     ForkGrantTarget,
     ResourceNavigationGrantTarget,
+    TextMutationGrantTarget,
 )
 from app.schemas.internal_v2.resource_navigation import ResourceNavigationRequest
 from app.schemas.internal_v2.session_context import (
@@ -19,6 +20,7 @@ from app.schemas.internal_v2.session_context import (
     SessionContextSearchRequest,
 )
 from app.schemas.internal_v2.session_fork_transfer import SessionForkTransferRequest
+from app.schemas.internal_v2.text_mutation import TextMutationRequest
 from app.services.business.communication.addresses import GlobalThreadAddress
 from app.services.business.communication.admission import CommunicationPayload
 from app.services.business.communication.wait import DurableDeadline, WaitSelector
@@ -130,20 +132,44 @@ class ResourceNavigationRelayRequest(BaseModel):
         return self
 
 
+class TextMutationRelayRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_gateway_id: str = Field(min_length=1)
+    source_workspace_id: str = Field(min_length=1)
+    mutation_target: TextMutationGrantTarget
+    mutation: TextMutationRequest
+
+    @model_validator(mode="after")
+    def require_fixed_uri(self) -> TextMutationRelayRequest:
+        if self.mutation.command.target != self.mutation_target.uri:
+            raise ValueError("文本修改与 file_write grant 的固定 URI 不一致")
+        return self
+
+
 class CommunicationGatewayRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    operation: Literal["send", "reply", "read", "wait", "fork_source", "fork_target"]
+    operation: Literal["send", "reply", "read", "wait", "fork_source", "fork_target", "file_write"]
     target: GlobalThreadAddress | None = None
     resource_target: ContextGrantTarget | None = None
     fork_target: ForkGrantTarget | None = None
     navigation_target: ResourceNavigationGrantTarget | None = None
+    mutation_target: TextMutationGrantTarget | None = None
     body: dict[str, object]
 
     @model_validator(mode="after")
     def validate_target(self) -> CommunicationGatewayRequest:
-        if sum(target is not None for target in (self.target, self.resource_target, self.fork_target, self.navigation_target)) != 1:
+        if sum(target is not None for target in (self.target, self.resource_target, self.fork_target, self.navigation_target, self.mutation_target)) != 1:
             raise ValueError("relay 必须恰好提供一个 typed target")
+        if self.mutation_target is not None:
+            if self.operation != "file_write":
+                raise ValueError("文本修改必须使用独立 file_write capability")
+            query = TextMutationRelayRequest.model_validate(self.body)
+            if query.mutation_target != self.mutation_target:
+                raise ValueError("relay mutation_target 与修改 envelope 不一致")
+        elif self.operation == "file_write":
+            raise ValueError("file_write capability 必须绑定 TextMutationGrantTarget")
         if self.fork_target is not None:
             if self.operation != "fork_" + self.fork_target.fork_role:
                 raise ValueError("fork target 必须使用对应的独立 fork capability")

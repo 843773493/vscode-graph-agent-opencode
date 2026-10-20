@@ -9,6 +9,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.resource_uri import parse_resource_uri
+from app.schemas.internal_v2.text_mutation import PatchText
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
 )
@@ -16,7 +17,6 @@ from app.services.infrastructure.workspace_files.text_mutation import (
     text_mutation_failure,
 )
 from app.services.infrastructure.workspace_files.text_owner import (
-    PatchText,
     WorkspaceTextMutationOwner,
 )
 

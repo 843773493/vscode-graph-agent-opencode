@@ -40,6 +40,7 @@ from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
 )
+from app.schemas.internal_v2.text_mutation import CreateText, EditText, TextMutation
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceFileOperationError,
     ResourceNavigation,
@@ -51,9 +52,6 @@ from app.services.infrastructure.workspace_files.text_mutation import (
     text_mutation_failure,
 )
 from app.services.infrastructure.workspace_files.text_owner import (
-    CreateText,
-    EditText,
-    TextMutation,
     WorkspaceTextMutationOwner,
 )
 

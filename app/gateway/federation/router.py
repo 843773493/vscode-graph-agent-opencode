@@ -95,6 +95,14 @@ async def relay_communication(payload: CommunicationGatewayRequest, request: Req
             if payload.body.get("source_gateway_id") != service.gateway_id:
                 raise ValueError("fork relay origin 不是当前 Gateway")
             target = payload.fork_target
+        elif payload.mutation_target is not None:
+            from app.schemas.internal_v2.communication import TextMutationRelayRequest
+
+            mutation = TextMutationRelayRequest.model_validate(payload.body)
+            service.session_main.require_local_source(service.gateway_id, {
+                "gateway_id": mutation.source_gateway_id, "workspace_id": mutation.source_workspace_id,
+            })
+            target = payload.mutation_target
         elif payload.navigation_target is not None:
             if payload.body.get("source_gateway_id") != service.gateway_id:
                 raise ValueError("资源导航 origin 不是当前 Gateway")
@@ -110,6 +118,8 @@ async def relay_communication(payload: CommunicationGatewayRequest, request: Req
             service.session_main.require_local_source(service.gateway_id, source)
             target = GrantTarget(payload.target.gateway_id, payload.target.workspace_id, payload.target.session_id)
         timeout = FEDERATION_DEADLINE_SECONDS
+        if payload.mutation_target is not None:
+            timeout = min(timeout, mutation.mutation.timeout_ms / 1000)
         if payload.operation == "wait":
             observation = CommunicationObservationRequest.model_validate(payload.body)
             deadline = observation.query["deadline"]["deadline_at_utc"]

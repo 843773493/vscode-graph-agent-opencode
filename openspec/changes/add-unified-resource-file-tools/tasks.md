@@ -2,7 +2,7 @@
 
 - [ ] 1.1 等待并核验统一寻址1.4/3.4/7.1/第8组的根、分段编码、导航能力和产物单文件模板；消费者不自行定义kind/parser，公共合同完整后再推进依赖实现。
 - [ ] 1.2 全仓清点文件工具、backend、UI/API/CLI、附件和工具输出生成/消费、Provider、历史投影、协议与测试，建立直接/间接caller清单与唯一文件owner边界。
-- [ ] 1.3 固定工具目标/查询、limits/cursor、条件写入和逐文件执行结果类型，按spec区分寻址错误和文件执行错误；跨端操作授权独立于send/read/wait，不新增通用operation_id。
+- [x] 1.3 固定工具目标/查询、limits/cursor、条件写入和逐文件执行结果类型，按spec区分寻址错误和文件执行错误；跨端操作授权独立于send/read/wait，不新增通用operation_id。
   - 2026-10-20 只读导航切片：公开 proto/DTO 增加 cursor、timeout_ms、scan_limit、max_response_bytes，以及 next_cursor、truncation_reason、view。Workspace/Gateway 共用现有 `ResourceNavigation`，文件执行错误独立于 grammar/resolver，并沿原 Gateway 来源及联邦路由传递；未增加逐文件身份或操作账本。写入前置、逐文件发布结果和模型工具调用合同仍未接通，本项保持未勾。
 - [ ] 1.4 按公共 owner 的原生路径输入合同清点并迁齐相对/绝对/URI 目标解析，以及 `WorkspaceToolPathResolver`、filesystem tools、debugging、apply_patch、backend 输出转换和直接/间接测试；明确用户原生路径与 DeepAgents 虚拟路径的入口/类型，保持一条操作链，不扩大 patch 内部相对文件名的能力。
   - 2026-10-20 本地解析切片：删除 `_absolute_to_workspace_relative()` 及其去根回退；`ls/read_file/glob/grep/write_file/edit_file` 和源码调试共用显式工作区目标，接受相对路径、工作区内原生绝对路径和 Workspace files URI。原生解析复用 `core/path_utils.py::resolve_native_file_path`，URI 复用公共 grammar/文件 owner，身份只读不创建；不借中继进程 cwd。补丁内部文件名保持相对固定根，DeepAgents 虚拟根只在 backend 内部使用；调试 Skill 同步三种输入。尚未完成统一 URI 结果、其它资源根/远端与第5组产物调用迁移，本项保持未勾。
@@ -33,7 +33,7 @@
 
 ## 3. 目标端读取与搜索
 
-- [ ] 3.1 复用现有Gateway联邦路由将文件调用交实际owner；不返回真实路径给source代执行，固定target与attempt channel lease分离。
+- [x] 3.1 复用现有Gateway联邦路由将文件调用交实际owner；不返回真实路径给source代执行，固定target与attempt channel lease分离。
   - 2026-10-20 只读模型路由切片：ResourceNavigation 在本机解析前将远端 authority 或其它 Workspace 交已配置 Gateway 的已注册Workspace服务入口并复用既有导航路由；省略 authority 时固定本次调用 Gateway，不读激活态。继续使用原 typed 导航 read grant、星型 channel 与目标文件 owner；响应根/子节点/匹配的归属核验移至唯一共享函数，Gateway 原私有实现已删除并迁齐调用测试。错误保持文件执行/寻址/联邦域，不回落本机同名文件；联邦期限已受请求 timeout_ms 约束。远端写入仍未接通，本项保持未勾。
   - 原件 `resource-route-unit-001` 为217 passed/36.04秒，覆盖同步/异步固定目标、另一个Workspace的缺省authority冻结、错误request_id/根/匹配拒绝、目标编码错误与撤权/不存在保持原错误域，以及原Skill连接、读取/搜索/目录回归。`resource-route-final-unit-002` 为48 passed/1.26秒，补平台bootstrap与请求1234毫秒期限约束；`resource-route-final-static-002` 对9个相关Python文件Ruff exit0。首轮静态仅新增文件import格式已修，未更改行为；真实模型经spoke→hub→spoke调用与公开导航重验见后续证据。
   - `resource-route-http-001` 为3 passed、1 failed/288.58秒：公开Workspace/Gateway、星型联邦及原Gateway Skill模型链均通过；新增远端模型链真实请求因公开入口要求浏览器Cookie而401，尚未访问文件。现增加仅允许本机凭据及已注册来源Workspace的Gateway服务入口，复用同一导航函数、typed grant和实际owner；未放宽公开登录要求。补同步/异步服务URL及来源未注册/错误本机凭据/联邦凭据拒绝测试，实际模型定向重验见后续记录。
@@ -59,7 +59,12 @@
   - `conditional-write-model-http-001` 1 passed/97.87秒；真实 Gateway→Workspace→Provider 连续 read→patch move/delete/add→read→edit→write，核原字节、五路径changeset的内容/类型/diff、三份journal位于所属会话 `changes/text_mutations` 且工作区cache无这些journal，Provider请求无真实路径。第一次unit-001的4个失败均为旧错误域/文案、旧自动重试预期或迁移后悬空故障注入点；已按真实合同精确迁移，未放宽内容、身份、changeset或业务期限。此闭包不关闭远端写入、取消和丢响应4.4/4.5。
   - 最终21个相关Python文件 `conditional-write-final-static-001` Ruff通过，journal诊断文案统一后 `conditional-write-final-events-001` 49 passed；`conditional-write-openspec-001` strict通过。HTTP/proto/Web字段未变，复用读取hash切片的官方生成、真实tsc和Web build。全部运行原件保留在同任务artifacts/runs，含进程外保护、命令、前后源码指纹、原始输出及退出码。
 - [ ] 4.4 故障注入覆盖多文件首个发布后失败、目标退出/响应丢失、取消尚未确认和重开核实；逐文件published/not_published/not_attempted/unknown准确，禁止自动重放/假回滚。
-- [ ] 4.5 两个真实目标验证远端patch修改目标端、source不变；独立权限、失败能力、目标固定与UTF-8/raw-byte hash合同一致。
+- [x] 4.5 两个真实目标验证远端patch修改目标端、source不变；独立权限、失败能力、目标固定与UTF-8/raw-byte hash合同一致。
+  - 2026-10-20 远端 write/edit/patch 复用原 federation relay、SSH 星型 channel 和固定 Workspace files URI，目标仍调用同一个文本 owner；新增独立 file_write grant，签名覆盖目标、内容及原预期版本，读/通信 grant 不能代用。目标观察经归属校验保存到 source 所属会话 journal，不重读 source 同名文件；丢响应/错误归属/非对象回执均 unknown、retryable=false，无伪造 snapshot 或自动重放。graph revision14；proto 官方生成同步，未新建通用 operation_id。
+  - 原件沿用同任务 artifacts/runs：`remote-text-unit-001` 189项通过/10.96秒，`remote-text-federation-regression-001` exit0/25.02秒；补畸形回执及原写工具回归 `remote-text-final-unit-003` 20项通过/7.51秒。`remote-text-model-http-002` 1项通过/103.83秒，使用脚本 Provider、三个真实 Gateway/Workspace 与 localhost SSH channel：read→edit→read→patch move/delete/add→write→read，核目标 BOM/CRLF/raw hash、source五份对照不变、五路径changeset内容/类型、三份所属会话journal、Provider无真实路径；两条联邦凭据旁路入口均拒绝，热撤权只拒绝file_write且read继续可用。此项属于真实进程集成，不是真实模型E2E。
+  - 首次真实场景在撤权断言失败：测试误写409，实际既有合同为403/authorization-revoked；按源码与原始响应修正精确预期后通过，未改权限、内容、身份或changeset断言。`remote-text-final-unit-002` 误填不存在的测试文件，收集前exit4，已更正。两次原件均保留。
+  - Node/Web二进制往返4项通过；Buf lint/build及真实23321558基线breaking、Ruff、真实 `bun x tsc --noEmit -p src/clients/web/tsconfig.json`、Web build和严格OpenSpec均exit0。直接用Bun解释tsc的首轮触发4GiB保护，既有bun x方式24.37秒通过，未改环境/上限。取消确认、远端原生路径/Windows、原生目录根写入及会话产物仍按对应未勾任务推进，不因本批通过缩窄既有Web能力。
+
   - 2026-10-20 前置的变更记录边界已迁移：journal持有文件owner最终观察后件，SessionChanges只消费URI和已核内容，删除事件到达后重读文件及绝对/虚拟路径回退。changeset及审查请求/回执使用同一文件URI；不可观察或非UTF-8后件的未知效果仍由原工具回执明确披露，不生成虚假diff。远端执行及独立grant尚待接通，本项保持未勾。
   - `file-change-observation-final-unit-003` 107 passed，覆盖延迟事件到达前另一真实writer已改动文件而原调用diff仍正确、远端URI消费不读source同名对照、非UTF-8外部后件明确unknown且不伪造changeset，以及原补丁、权限、并发和事件身份回归。首轮unit-001仅新增延迟事件fixture缺on_tool_start失败，已补真实开始/结束序列，没有放宽processor的身份配对校验；unit-002为106 passed，新增未知非文本回归后完成最终unit-003。
   - `file-change-observation-model-http-001` 1 passed/100.22秒，通过真实Gateway→Workspace→Provider核三种写工具、五路径URI/内容/类型/diff、journal会话归属及审查URI往返；最后仅补观察错误分支，由最终unit-003覆盖。`file-change-observation-web-unit-001` 17 passed，含真实客户端审查请求完整保留URI；`file-change-observation-web-types-001`真实tsc与`file-change-observation-web-build-001`正式构建（16.92秒）均exit0。未执行真实外部模型E2E或浏览器交互，不以脚本Provider集成替代它们。

@@ -1,6 +1,7 @@
 """工作区文本修改的唯一条件执行链；补丁与精确编辑共用。"""
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -35,6 +36,10 @@ _MAX_FILE_BYTES = 33554432
 _VERSION = re.compile(r"(?:absent|sha256:[0-9a-f]{64})\Z")
 
 
+class TextMutationOutputLimitError(ValueError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class FileSnapshot:
     uri: str
@@ -58,8 +63,7 @@ def resolve_text_target(paths: WorkspaceFilePaths, target: str) -> tuple[Path, s
     if "://" in target:
         parsed = parse_resource_uri(target, local_gateway_id=get_current_gateway_id())
         if parsed.gateway_authority is not None:
-            # TODO（文件工具4.5）：接通独立写入授权和联邦执行前明确拒绝，绝不本地回退。
-            raise ResourceUriResolveError("capability_denied", "目标 Gateway 的文本写入尚未接通")
+            raise ResourceUriResolveError("capability_denied", "本机条件发布入口不接受另一个 Gateway 的目标")
         if parsed.scope != "workspace" or parsed.kind != "files":
             raise ResourceUriResolveError("capability_denied", "该资源没有工作区文本写入能力")
         if parsed.scope_id != paths.workspace_id:
@@ -77,7 +81,7 @@ def execute_text_mutation(*, paths: WorkspaceFilePaths, target: str, declared: l
                           expected_versions: dict[str, str],
                           prepare: Callable[[dict[str, FileSnapshot]], list[TextPublication]],
                           authorize: Callable[[str], None] | None = None,
-                          explanation: str = "") -> dict[str, object]:
+                          explanation: str = "", max_journal_bytes: int | None = None) -> dict[str, object]:
     workspace = paths.workspace
     root, root_uri = resolve_text_target(paths, target)
     if not root.is_dir():
@@ -88,7 +92,7 @@ def execute_text_mutation(*, paths: WorkspaceFilePaths, target: str, declared: l
             validate_text_paths(declared, root)
             if set(expected_versions) != set(declared):
                 raise ValueError("expected_versions 必须精确覆盖全部文件路径，包含移动的源与目的")
-            snapshots = _capture_snapshots(declared, root, paths, expected_versions, authorize)
+            snapshots = _capture_snapshots(declared, root, paths, expected_versions, authorize, max_journal_bytes)
             steps = prepare(snapshots)
             touched: set[str] = set()
             for step in steps:
@@ -100,12 +104,16 @@ def execute_text_mutation(*, paths: WorkspaceFilePaths, target: str, declared: l
             if not any((step.snapshot.before is None) != (step.content is None) or
                        (step.snapshot.before is not None and step.snapshot.before.content != step.content) for step in steps):
                 raise ValueError("文本修改校验失败: 工作区文件字节未发生变化")
-            journal_id = write_text_mutation_journal([
-                {"uri": item.uri, "before_exists": item.before is not None,
-                 "before_content": "" if item.before is None else item.before.content.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")}
-                for item in snapshots.values()
-            ], workspace_root=workspace)
-            publications, observations, failure = _publish_steps(steps)
+            records = [{"uri": item.uri, "before_exists": item.before is not None,
+                        "before_content": "" if item.before is None else item.before.content.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")}
+                       for item in snapshots.values()]
+            if max_journal_bytes is not None:
+                planned = [{"uri": step.snapshot.uri, "after_content": "" if step.content is None else step.content.decode("utf-8")}
+                           for step in steps]
+                if len(json.dumps([records, planned], ensure_ascii=False).encode("utf-8")) + 4096 * len(steps) > max_journal_bytes:
+                    raise TextMutationOutputLimitError("文本修改的原件、后件和回执超过本次传输预算，尚未发布")
+            journal_id = write_text_mutation_journal(records, workspace_root=workspace)
+            publications, observations, failure = _publish_steps(steps, observation_budget=max_journal_bytes)
             try:
                 update_text_mutation_journal(journal_id, publications, observations=observations, workspace_root=workspace)
             except (OSError, RuntimeError, ValueError) as error:
@@ -132,8 +140,9 @@ def execute_text_mutation(*, paths: WorkspaceFilePaths, target: str, declared: l
 
 
 def _capture_snapshots(names: list[str], root: Path, paths: WorkspaceFilePaths,
-                       expected: dict[str, str], authorize: Callable[[str], None] | None) -> dict[str, FileSnapshot]:
+                       expected: dict[str, str], authorize: Callable[[str], None] | None, max_bytes: int | None) -> dict[str, FileSnapshot]:
     snapshots = {}
+    captured_bytes = 0
     for name in names:
         version = expected[name]
         if not isinstance(version, str) or _VERSION.fullmatch(version) is None:
@@ -142,12 +151,16 @@ def _capture_snapshots(names: list[str], root: Path, paths: WorkspaceFilePaths,
         uri = paths.reference(path)
         if authorize is not None:
             authorize(uri)
-        before = read_file_preimage(path, reference=uri, max_bytes=_MAX_FILE_BYTES) if path.exists() or path.is_symlink() else None
+        before = read_file_preimage(path, reference=uri, max_bytes=min(_MAX_FILE_BYTES, max_bytes) if max_bytes is not None else _MAX_FILE_BYTES) if path.exists() or path.is_symlink() else None
         if before is not None:
             # 删除和移动也只属于文本能力，不能借补丁扩成任意节点 mutation。
             if b"\x00" in before.content:
                 raise ValueError(f"补丁目标不是文本文件: {uri}")
             before.content.decode("utf-8")
+        if max_bytes is not None:
+            captured_bytes += len(json.dumps("" if before is None else before.content.decode("utf-8"), ensure_ascii=False).encode("utf-8")) + len(uri.encode("utf-8")) + 128
+            if captured_bytes > max_bytes:
+                raise TextMutationOutputLimitError("文本修改原件超过本次传输预算，尚未发布")
         snapshot = FileSnapshot(uri, path, before)
         if snapshot.version != version:
             raise WorkspaceFileConflictError(f"补丁目标版本冲突，请重新读取: {uri}; expected={version}; actual={snapshot.version}")
@@ -155,7 +168,7 @@ def _capture_snapshots(names: list[str], root: Path, paths: WorkspaceFilePaths,
     return snapshots
 
 
-def _publish_steps(steps: list[TextPublication]) -> tuple[list[dict[str, object]], dict[str, dict[str, object]], Exception | None]:
+def _publish_steps(steps: list[TextPublication], *, observation_budget: int | None = None) -> tuple[list[dict[str, object]], dict[str, dict[str, object]], Exception | None]:
     attempted = 0
     failure: Exception | None = None
     confirmed: set[int] = set()
@@ -179,7 +192,9 @@ def _publish_steps(steps: list[TextPublication]) -> tuple[list[dict[str, object]
     publications = []
     observations = {}
     for index, step in enumerate(steps):
-        after, observation_error = _observe(step.snapshot)
+        after, observation_error = _observe(step.snapshot, max_bytes=observation_budget)
+        if after is not None and observation_budget is not None:
+            observation_budget = max(0, observation_budget - len(after.content))
         observed = None if observation_error is not None else "absent" if after is None else after.content_hash
         if observation_error is None:
             try:
@@ -213,11 +228,11 @@ def _publish_steps(steps: list[TextPublication]) -> tuple[list[dict[str, object]
     return publications, observations, failure
 
 
-def _observe(snapshot: FileSnapshot) -> tuple[FilePreimage | None, Exception | None]:
+def _observe(snapshot: FileSnapshot, *, max_bytes: int | None = None) -> tuple[FilePreimage | None, Exception | None]:
     try:
         if not snapshot.real_path.exists() and not snapshot.real_path.is_symlink():
             return None, None
-        return read_file_preimage(snapshot.real_path, reference=snapshot.uri, max_bytes=_MAX_FILE_BYTES), None
+        return read_file_preimage(snapshot.real_path, reference=snapshot.uri, max_bytes=min(_MAX_FILE_BYTES, max_bytes) if max_bytes is not None else _MAX_FILE_BYTES), None
     except (OSError, RuntimeError, ValueError) as error:
         return None, error
 
@@ -265,7 +280,8 @@ def text_mutation_failure(error: Exception) -> dict[str, object]:
         code = error.reason_code
     else:
         owner = "resource_file_operations"
-        code = ("revision_conflict" if isinstance(error, WorkspaceFileConflictError) else
+        code = ("output_limit_exceeded" if isinstance(error, TextMutationOutputLimitError) else
+                "revision_conflict" if isinstance(error, WorkspaceFileConflictError) else
                 "invalid_encoding" if isinstance(error, UnicodeError) else
                 "invalid_patch" if isinstance(error, ValueError) else "execution_failed")
     return {"status": "error", "effect": "not_executed", "owner": owner, "code": code,

@@ -36,7 +36,7 @@ from app.gateway.federation.errors import (
 from app.gateway.federation.identity import FederationPeerIdentity
 
 GrantKind = Literal["discovery", "operation"]
-OperationKind = Literal["send", "read", "wait", "reply", "fork_source", "fork_target"]
+OperationKind = Literal["send", "read", "wait", "reply", "fork_source", "fork_target", "file_write"]
 
 # clock skew 与传输重放余量：wait grant 的剩余寿命必须覆盖它加 effective timeout。
 GRANT_CLOCK_SKEW_SECONDS = 5.0
@@ -150,6 +150,26 @@ class ResourceNavigationGrantTarget:
 
 
 @dataclass(frozen=True, slots=True)
+class TextMutationGrantTarget:
+    """独立 file_write grant 只授权固定工作区文件根或单文件。"""
+
+    gateway_id: str
+    uri: str
+    mutation_kind: Literal["text"] = "text"
+
+    def __post_init__(self) -> None:
+        from app.core.resource_uri import parse_resource_uri
+
+        resource = parse_resource_uri(self.uri, local_gateway_id=self.gateway_id)
+        if (self.mutation_kind != "text" or resource.gateway_authority is not None
+                or resource.scope != "workspace" or resource.kind != "files"):
+            raise ValueError("文本写入 grant 必须绑定 audience 的 Workspace files 目标")
+
+    def to_payload(self) -> dict[str, object]:
+        return {"gateway_id": self.gateway_id, "uri": self.uri, "mutation_kind": self.mutation_kind}
+
+
+@dataclass(frozen=True, slots=True)
 class ForkGrantTarget:
     """fork capability 的精确领域 URI；来源导出和目标创建分别授权。"""
 
@@ -174,7 +194,7 @@ class ForkGrantTarget:
         return {"gateway_id": self.gateway_id, "uri": self.uri, "fork_role": self.fork_role}
 
 
-def decode_grant_target(raw: object) -> GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget:
+def decode_grant_target(raw: object) -> GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | TextMutationGrantTarget:
     """grant 和实际 RPC 请求共用同一闭集 decoder，不猜测或补齐目标字段。"""
     if not isinstance(raw, dict):
         raise FederationError(FEDERATION_MALFORMED_FRAME, "grant target 必须是对象")
@@ -185,6 +205,11 @@ def decode_grant_target(raw: object) -> GrantTarget | ContextGrantTarget | ForkG
             return ResourceNavigationGrantTarget(**{key: _require_str(raw, key) for key in raw})
         except ValueError as error:
             raise FederationError(FEDERATION_MALFORMED_FRAME, "导航 grant target 无效") from error
+    if set(raw) == {"gateway_id", "uri", "mutation_kind"}:
+        try:
+            return TextMutationGrantTarget(**{key: _require_str(raw, key) for key in raw})
+        except ValueError as error:
+            raise FederationError(FEDERATION_MALFORMED_FRAME, "文本写入 grant target 无效") from error
     if set(raw) == {"gateway_id", "uri", "fork_role"}:
         try:
             return ForkGrantTarget(**{key: _require_str(raw, key) for key in raw})
@@ -199,10 +224,12 @@ def decode_grant_target(raw: object) -> GrantTarget | ContextGrantTarget | ForkG
 
 
 def validate_grant_operation(
-    target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget, operation: OperationKind,
+    target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | TextMutationGrantTarget, operation: OperationKind,
 ) -> None:
     """operation 与 typed target 在所有签发及 relay 入口共用一个闭集。"""
-    if isinstance(target, ForkGrantTarget):
+    if isinstance(target, TextMutationGrantTarget):
+        valid = operation == "file_write"
+    elif isinstance(target, ForkGrantTarget):
         valid = operation == "fork_" + target.fork_role
     elif isinstance(target, (ContextGrantTarget, ResourceNavigationGrantTarget)):
         valid = operation == "read"
@@ -227,7 +254,7 @@ class FederationGrant:
     issued_at: datetime
     principal_ref: str
     request_hash: str
-    target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | None = None
+    target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | TextMutationGrantTarget | None = None
     operation: OperationKind | None = None
     source_gateway_id: str | None = None
     operation_invocation_id: str | None = None
@@ -279,12 +306,13 @@ class FederationGrant:
                 "reply",
                 "fork_source",
                 "fork_target",
+                "file_write",
             ):
                 raise FederationError(
                     FEDERATION_GRANT_KIND_MISMATCH, f"未知 operation: {operation!r}"
                 )
             raw_target = raw.get("target")
-            target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | None = None
+            target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | TextMutationGrantTarget | None = None
             if raw_target is not None:
                 target = decode_grant_target(raw_target)
             raw_path = raw.get("transit_path")
@@ -368,7 +396,7 @@ def sign_grant(
     principal_ref: str,
     request_preimage: dict[str, object],
     lifetime_seconds: float,
-    target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | None = None,
+    target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | TextMutationGrantTarget | None = None,
     operation: OperationKind | None = None,
     source_gateway_id: str | None = None,
     operation_invocation_id: str | None = None,
@@ -514,6 +542,7 @@ __all__ = [
     "GrantTarget",
     "OperationKind",
     "ResourceNavigationGrantTarget",
+    "TextMutationGrantTarget",
     "decode_grant_target",
     "required_wait_grant_lifetime",
     "sign_grant",
