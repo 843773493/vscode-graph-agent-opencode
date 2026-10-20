@@ -183,7 +183,7 @@ Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传�
 
 ### Requirement: 持久化数据不得以「当前激活工作区」为前提
 
-新增或迁移的业务持久化字段 MUST NOT 以「当前激活工作区」作为隐含前提；凡引用工作区资源者，MUST 遵守**三层分离 / three-layer separation**：记录只承载 `资源身份 / ResourceIdentity` 与 `资源 URI`（及独立 revision 字段），其含义 MUST 只由记录内显式的 workspace 身份决定，与写入时或读取时的进程激活态无关。唯一物理根持久化例外仅为本 capability requirement「工作区物理根必须绑定到唯一原生 Gateway」的原生 Gateway control-plane registry；它不得出现在普通 API/Workspace DTO、解析结果、模型载荷或联邦资源投影。
+新增或迁移的业务持久化字段 MUST NOT 以「当前激活工作区」作为隐含前提；凡引用工作区资源者，MUST 遵守**三层分离 / three-layer separation**：记录只承载 `资源身份 / ResourceIdentity` 与 `资源 URI`（及独立 revision 字段），其含义 MUST 只由记录内显式的 workspace 身份决定，与写入时或读取时的进程激活态无关。工作区物理根的持久化例外仅为本 capability requirement「工作区物理根必须绑定到唯一原生 Gateway」的原生 Gateway control-plane registry；它不得出现在普通 API/Workspace DTO、解析结果、模型载荷或联邦资源投影。
 
 #### Scenario: 记录自带工作区身份
 
@@ -193,7 +193,7 @@ Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传�
 #### Scenario: 真实路径 / real path 不落盘
 
 - **WHEN** 系统写入一条引用工作区资源的业务持久化记录或返回普通 Workspace/API DTO
-- **THEN** 其中 MUST NOT 出现**真实路径 / real path**，只允许 `资源身份 / ResourceIdentity` 与`资源 URI`（必要时加独立 revision 字段）；唯一根绑定按本 capability 的控制面 requirement 单独保存
+- **THEN** 其中 MUST NOT 出现**真实路径 / real path**，只允许 `资源身份 / ResourceIdentity` 与`资源 URI`（必要时加独立 revision 字段）；工作区根绑定按本 capability 的控制面 requirement 单独保存
 
 ### Requirement: 破坏性迁移与回滚必须有明确边界
 
@@ -218,3 +218,5 @@ Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传�
 
 - **WHEN** 迁移执行到任一步骤
 - **THEN** 必须能明确说明该步是否可回滚及回滚后的状态，不可回滚点 MUST 显式标注
+
+未注册目录不是本 capability 的 mount 或工作区注册，不得伪造 workspace_id 或增加 WorkspaceTarget。其 URI、唯一原生 Gateway 控制面目录根绑定及路径持久化例外只引用 `add-unified-virtual-resource-addressing` requirement「原生目录根绑定必须由目标 Gateway 唯一持有」，不改变本 capability 的 workspace-root binding 合同。

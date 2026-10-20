@@ -35,7 +35,7 @@
 
 - **资源身份 / ResourceIdentity**：不透明、稳定、**不含 revision**、**不依赖当前激活工作区**，持久化，用于去重与 lineage。
 - **资源 URI**：可解析的地址，持久化，**允许悬空**（指向已不存在的资源是合法值），**禁止编码 revision 或 hash**，是软件内部与模型可见载荷中传递资源的默认形式。
-- **真实路径 / real path**：业务资源访问时在机器本地临时使用，只在原生 owner 的最终 fs/sqlite 调用点及其必要的局部调用链中存在；除「工作区物理根必须绑定到唯一原生 Gateway」定义的控制面 root binding 外，MUST NOT 持久化。真实路径 MUST NOT 作为资源引用进入模型可见载荷、普通 API/Workspace 响应 DTO、解析结果或跨 Gateway 资源投影。具名输入边界有两类：该 root-binding requirement 授权的原生目录选择/工作区注册，以及本 capability「普通文件入口必须保留原生路径输入并统一目标解析」登记的普通文件路径输入。输入许可不扩大真实路径输出或持久化例外。
+- **真实路径 / real path**：业务资源访问时在机器本地临时使用，只在原生 owner 的最终 fs/sqlite 调用点及其必要的局部调用链中存在；除本 capability「原生目录根绑定必须由目标 Gateway 唯一持有」及「工作区物理根必须绑定到唯一原生 Gateway」定义的控制面根绑定外，MUST NOT 持久化。真实路径 MUST NOT 作为资源引用进入模型可见载荷、普通 API/Workspace 响应 DTO、解析结果或跨 Gateway 资源投影。具名输入边界有两类：该 root-binding requirement 授权的原生目录选择/工作区注册，以及本 capability「普通文件入口必须保留原生路径输入并统一目标解析」登记的普通文件路径输入。输入许可不扩大真实路径输出或持久化例外。
 
 #### Scenario: 业务资源 real path 只在本地访问链中存在
 
@@ -44,10 +44,10 @@
 
 #### Scenario: real path 外泄即缺陷
 
-- **WHEN** 除唯一原生 Gateway root binding 外，API 响应体、业务持久化记录、解析结果、跨 Gateway 资源投影或系统生成的模型资源引用中出现 real path
+- **WHEN** 除上述两类原生 Gateway 控制面根绑定外，API 响应体、业务持久化记录、解析结果、跨 Gateway 资源投影或系统生成的模型资源引用中出现 real path
 - **THEN** 系统 MUST 将其判定为缺陷并显式失败，不得以 `display_uri`、日志脱敏或截断静默掩盖；root binding 也 MUST NOT 出现在上述输出中
 
-#### Scenario: 工作区根绑定是唯一控制面持久化例外
+#### Scenario: 工作区根绑定只在原生控制面持久化
 
 - **WHEN** 系统持久化已注册工作区的物理根
 - **THEN** 该根 MUST 只保存在负责原生 target 的 Gateway 控制面 registry，并按 target ID 与 Backend `workspace_id` 绑定；用户提供的注册根只可经身份认证且通过 `add-multi-workspace-backend-mounting` 目标 Gateway 授权的请求送达该 owner。managed group、业务记录、普通 DTO、解析结果、模型载荷和联邦资源投影均 MUST NOT 复制或输出该根
@@ -109,15 +109,42 @@
 - **WHEN** backend 使用内部虚拟路径 `/src/main.mjs`，而用户也可输入原生绝对路径
 - **THEN** 虚拟路径仅由明确的 backend 转换入口解释，用户输入保持目标机器绝对路径语义；不得共用去除前导斜杠的回退来猜测归属
 
+### Requirement: 原生目录根绑定必须由目标 Gateway 唯一持有
+
+未注册目录使用 `boxteam://{gateway_authority?}/gateway/{gateway_id}/resources/files/{directory_id}`；`gateway_id` 必须来自目标 Gateway 的真实身份，`directory_id` 是该 Gateway 创建的稳定不透明 UUIDv7 目录绑定 ID，不得由绝对路径、盘符、host、hash 或工作区身份编码而来。其后文件 child 段沿用中央 grammar 的 UTF-8 一次解码规则；不新增 scope、kind 或另一套 parser。工作区内目标优先使用既有 `workspace/.../files/root` URI。
+
+目标 Gateway 控制面 MUST 唯一持久化 `(gateway_id, directory_id, native_root)`，以保留用户选定目录及快捷方式跨重启重开能力。此项是具名的控制面根绑定例外，不是普通业务资源路径许可；Workspace、会话快捷方式、文件 operation、目录 revision、分页 cursor、SSE、模型与联邦 projection 只保存或传输规范 URI。目录绑定不得加入工作区注册表、创建 `.boxteam/`、伪造 workspace_id、启动新工作区或自动注册。Gateway 不枚举文件、不编辑正文、不另建文件执行 owner。
+
+目录选择/路径归一入口 MUST 先固定目标 Gateway 与已有执行路由，在目标端按原生语义解释用户相对/绝对路径；相对路径以明确的工作区或目录 URI 为基准。该入口只返回规范 URI、显示名与能力，不返回 native_root。创建和使用绑定沿用当前文件入口的身份认证与目标端文件权限，不从目录选择推导工作区管理授权。原生管理入口的工作区注册合同保持独立。
+
+实际浏览、编辑和已有集合操作 MUST 继续由目标机器上的同一 `WorkspaceService` / `WorkspaceFileOperations` 执行。执行路由所选工作区仅承载当前操作所属服务，不是该目录的资源归属；不能因执行路由或激活工作区切换重写 URI。Gateway 仅在已认证的同机控制面调用链中将根临时交给该 owner；客户端提供的内部绑定载体必须被移除，不能覆盖控制面事实。根不得出现在浏览器响应、模型、联邦消息或 source/relay 持久化中。远端由其原生 Gateway 解析目录绑定；source/relay 不解释目标路径、不用自己的根代执行。
+
+后台 operation 和 watch 恢复 MUST 从持久 URI 向同一原生 Gateway 取得当前绑定再执行，不依赖请求内临时缓存跨重启存活，也不把 root 写回业务库。绑定缺失、Gateway 身份不符、路由不在同机或能力不足时沿既有寻址拒绝域明确失败；不得扫描目录、猜测根、回退当前工作区或盲重放已发生的写入。URI 仍允许悬空。
+
+#### Scenario: 未注册目录的浏览编辑与快捷方式重开
+
+- **WHEN** 用户选择工作区外的真实目录，浏览并编辑文件，保存快捷方式后重启 Gateway/Backend 再打开该快捷方式
+- **THEN** 同一目录 URI 仍访问原目录及编辑后的内容；工作区注册表和目录内 `.boxteam/` 均无新增；真实根只存在原生 Gateway 的目录绑定，快捷方式、文件操作记录、响应、cursor 和事件不含该根
+
+#### Scenario: 跨 Gateway 目录只在原生目标执行
+
+- **WHEN** source/relay 与目标机器存在同名不同内容文件，用户按目标原生路径选择目录并以其 URI 浏览或编辑
+- **THEN** 绑定与文件操作均在目标机器完成，source/relay 文件与绑定存储不变；回包只含 URI 与内容，不能携带目标根或把目录注册成工作区
+
+#### Scenario: 后台恢复不依赖上一请求的真实路径
+
+- **WHEN** 文件 operation 已受理后 Backend 重启，或 watch/快捷方式在新进程恢复，而请求内根缓存已消失
+- **THEN** owner 按原 URI 向同一原生 Gateway 取绑定并继续原操作的恢复合同；绑定缺失明确失败，原 operation 身份、冲突前置和效果知识边界保持不变，不复制真实路径到业务存储
+
 ### Requirement: 「位置」必须有可机械判定的统一判据
 
 资源引用中的「位置 / location」判定 MUST 使用如下**可机械判定**的统一判据，MUST NOT 各 change 自行解释：一个字段承载的是「位置」，当且仅当它（或由它经确定性推导得到的值）可直接用于 `open`/`stat`/`join` 等文件系统或 sqlite 访问，且指向本体位于持久化记录 owner 之外的资源或产物。据此：
 
-- **唯一控制面例外**：工作区物理根是由 Gateway target ID 与 Backend `workspace_id` 组成的 mount binding 输入，不是业务资源引用或资源位置字段；它只按 requirement「工作区物理根必须绑定到唯一原生 Gateway」持久化在负责原生 target 的 Gateway registry。该特例不改变下述资源位置判据，也不授权持久化任何其它 real path。
+- **控制面根绑定例外**：工作区物理根按 requirement「工作区物理根必须绑定到唯一原生 Gateway」持久化；用户显式选定的未注册目录根按本 capability「原生目录根绑定必须由目标 Gateway 唯一持有」持久化。两类根均只由目标原生 Gateway 持有，均不属于业务资源记录，不改变下述位置判据，也不授权其它 real path 落盘。
 - **可判定为「位置」⇒ MUST NOT 落盘**：任何「位置」MUST 由 `资源身份 / ResourceIdentity` 加 `资源 URI`（必要时加并列 revision 字段）表达；当且仅当该位置可由 owner 身份（资源 id 与工作区身份）确定性推导时，MUST NOT 落盘，改为在该次 fs/进程调用栈内由 owner 身份重推导。
 - **不可由 owner 身份推导、但必须对外可寻址 ⇒ MUST 用既有 API 端点引用**，MUST NOT 落盘 real path、MUST NOT 为此自造 URI kind、MUST NOT 裸拼接 URI。
 - **唯一例外边界**：owner **自身**的运行态字段（典型为终端 shell 的当前工作目录）表达的是 owner 的运行状态而非「资源所在位置」，MUST NOT 被当作位置引用或位置表达；此类字段 MUST 以**相对于工作区根的原生相对路径**持久化，允许以 `..` 表达工作区外 cwd 并保留原目标，MUST NOT 落盘绝对路径或工作区根路径。
-- **real path 出现在一般持久化记录、API 响应体或系统生成的模型资源引用中 ⇒ 缺陷**：唯一持久化例外是工作区物理根作为控制面 mount binding 仅存于负责原生 target 的 Gateway registry。原生目录选择/注册与普通文件路径请求的具名输入边界引用前述 requirements，不授权将真实路径复制到业务记录、普通响应 DTO、解析结果或联邦资源投影。违反时 MUST 显式失败，MUST NOT 以脱敏、截断或 `display_uri` 静默掩盖。
+- **real path 出现在一般持久化记录、API 响应体或系统生成的模型资源引用中 ⇒ 缺陷**：持久化例外仅为上述两类原生 Gateway 控制面根绑定。原生目录选择/注册与普通文件路径请求的具名输入边界引用前述 requirements，不授权将真实路径复制到业务记录、普通响应 DTO、解析结果或联邦资源投影。违反时 MUST 显式失败，MUST NOT 以脱敏、截断或 `display_uri` 静默掩盖。
 
 以上判据 MUST 是「位置 vs 非位置」的唯一判定来源；`add-workspace-persistent-resource-management` 的 D-A2/D-A3 与 owner 运行态字段例外 MUST 引用本 requirement，MUST NOT 另立一套判据。
 
@@ -324,7 +351,7 @@ boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...canonical
 
 ### Requirement: kind 闭集定稿且描述符闭集独立不可混用
 
-URI kind 闭集 MUST 为 `agent-spec` | `skills` | `config` | `session` | `files`。新增 `files` 只用于 `workspace` scope 的可导航工作区文件树，根为 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/files/root`；其余取值保留原语义。config 定位配置逻辑来源，session 定位领域对象或由原 owner 公布的产物引用，二者不得被文件工具自行解释成私有目录。
+URI kind 闭集 MUST 为 `agent-spec` | `skills` | `config` | `session` | `files` | `workspace` | `folder`。`files` 用于 `workspace` scope 的文件树根 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/files/root`，以及 requirement「原生目录根绑定必须由目标 Gateway 唯一持有」登记的 `gateway` scope 原生目录根；`workspace`/`folder` 沿用现行领域导航模板。config 定位配置逻辑来源，session 定位领域对象或由原 owner 公布的产物引用，二者不得被文件工具自行解释成私有目录。
 
 语法 kind 与语义来源描述符 kind MUST 分开：描述符仍只有 `agent-spec`/`skills`，普通 files 导航不会创建来源描述符。后续扩展必须先在本 owner 更新模板和能力，不存在通用未知 kind fallback；旧 memory 两点式仍拒绝。
 

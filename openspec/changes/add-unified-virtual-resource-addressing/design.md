@@ -37,11 +37,11 @@
 
 - **ResourceIdentity**：持久化，无 revision，不依赖激活工作区 → 用于去重与 lineage。
 - **URI**：持久化，允许悬空，禁 revision/hash → 软件内部与模型可见载荷的默认引用形式。
-- **real path**：资源访问时仅在原生 owner 的最终 fs/sqlite 调用点及必要局部链路临时使用，不作为资源引用进入模型载荷、普通响应 DTO、解析结果或跨 Gateway 资源投影。原生目录选择/注册和普通文件原生路径是具名请求输入，不放宽输出/持久化边界。物理 workspace root 仍是唯一控制面持久化例外，由负责原生 target 的 Gateway registry 持有，合同引用 `add-multi-workspace-backend-mounting`。
+- **real path**：资源访问时仅在原生 owner 的最终 fs/sqlite 调用点及必要局部链路临时使用，不作为资源引用进入模型载荷、普通响应 DTO、解析结果或跨 Gateway 资源投影。原生目录选择/注册和普通文件原生路径是具名请求输入，不放宽输出/持久化边界。物理 workspace root 与用户显式选定的未注册目录根是两类具名控制面持久化例外，均只由原生 Gateway 持有；前者合同引用 `add-multi-workspace-backend-mounting`，后者见 D1b。
 
-**理由**：审计发现的真实缺陷正是资源路径泄漏（skill 目录扫描、`skillPaths.ts` 解析物理路径、catalog URI 裸拼接、`ConfigSourceLayerRecord.source_path` 落库）。资源引用以身份和 URI 表达；唯一 Gateway root binding 是目标生命周期的控制面输入，不能作为 URI、资源记录或跨 Gateway 资源投影携带。
+**理由**：审计发现的真实缺陷正是资源路径泄漏（skill 目录扫描、`skillPaths.ts` 解析物理路径、catalog URI 裸拼接、`ConfigSourceLayerRecord.source_path` 落库）。资源引用以身份和 URI 表达；原生 Gateway 根绑定是目标生命周期的控制面输入，不能作为 URI、资源记录或跨 Gateway 资源投影携带。
 
-**备选**：把 revision 编进 URI（被否：revision 变化会让同一资源产生不同地址，破坏「地址稳定、revision 独立」）；把 real path 作为可选调试字段随资源记录持久化（被否：正是当前要消除的违约）。将 workspace root 复制进 managed-group 或联邦记录同样被否；只允许唯一 Gateway registry 持有根绑定，注册请求必须由 `add-multi-workspace-backend-mounting` 的唯一 root-binding requirement 授权后作为控制面输入送达原生 owner，中继不持久化或转为资源数据。
+**备选**：把 revision 编进 URI（被否：revision 变化会让同一资源产生不同地址，破坏「地址稳定、revision 独立」）；把 real path 作为可选调试字段随资源记录持久化（被否：正是当前要消除的违约）。将 workspace root 复制进 managed-group 或联邦记录同样被否；只允许原生 Gateway 控制面持有具名根绑定，注册请求必须由 `add-multi-workspace-backend-mounting` 的唯一 root-binding requirement 授权后作为控制面输入送达原生 owner，中继不持久化或转为资源数据。
 
 ### D1a：保留三种文件输入，在目标端统一解释
 
@@ -52,6 +52,16 @@
 文件树的未注册目录浏览、编辑与快捷目录必须保留。迁移前由本寻址 owner 补齐这类目录的规范引用，不让消费方私建 URI 模板；目录选择本身不等于工作区注册，不得借用当前 workspace_id 冒充归属。接口/快捷方式持久化的真实路径清理必须与该能力同批迁齐，验收浏览→编辑→保存快捷目录→重开全链路，核工作区注册表没有新增或变更；不能将「先注册再访问」作为替代方案。
 
 当前 `_absolute_to_workspace_relative()` 对外部 POSIX 路径的 `path.lstrip("/")` 会把 `/etc/hosts` 改投工作区内的 `etc/hosts`，同时与 DeepAgents 的前导斜杠虚拟根混用。迁移时必须先清点并迁齐 `WorkspaceToolPathResolver`、filesystem tools、debugging、apply_patch 及直接/间接测试，使 backend 虚拟路径通过明确的内部入口转换，用户路径始终保留原生语义，然后删除歧义回退。验收从真实读写入口比较三种输入的实际对象，并用外部文件与工作区同名对照文件验证无误读/误写；跨 Gateway 和 Windows 目标须核目标端内容及 source/relay 不变，不能只测字符串 helper。
+
+### D1b：未注册目录使用 Gateway files 根，控制面绑定与文件执行分离
+
+固定模板为 `boxteam://{gateway_authority?}/gateway/{gateway_id}/resources/files/{directory_id}`，directory_id 由原生 Gateway 创建稳定 UUIDv7；文件 child 使用同一 grammar。不是工作区，不借用执行路由的 workspace_id，也不注册 `WorkspaceTarget`。工作区内路径优先归为已有 workspace files/root。
+
+Gateway 在现有控制面 SQLite 中唯一保存目录 ID→原生根绑定，作为用户明确选定目录的持久控制面事实；这与工作区 mount root 是两类具名例外，不能扩为普通记录路径许可。路径归一/选择入口固定原生 Gateway/机器，依现有文件认证与目标权限解释三种输入，返回 URI/显示名/能力。远端 Gateway 经既有目标路由接受输入并在自身平台解释；source/relay 不解析、不保存根。
+
+文件树、编辑器、快捷方式、目录版本与 operation/SSE 统一消费 URI；删除 filesystem: 展示伪协议、绝对 root_path 和业务库 real_path 等旧引用。后台 staging 只记相对 owner 的稳定 operation/step 身份，源/目的文件记 URI。保留当前精确目录 revision、条件编辑、部分/未知效果、分页快照、去重和同 ID 恢复合同，不用改预期来掩盖失败。
+
+Gateway 只为目标端现有文件 owner 提供受认证的同机临时绑定，不执行 enumerate/read/write。首次请求与后台恢复都必须能按 URI 从原生控制面取得绑定；不能只依赖一次请求注入的缓存，也不能把根复制到业务库。实际执行继续复用 WorkspaceService/WorkspaceFileOperations；执行路由是服务归属，不改变资源归属。缺绑定明确失败，不回退当前工作区。实现同批迁齐所有直接/间接消费者后下线旧路径链，不留下 URI wrapper 与旧绝对路径两套执行。
 
 ### D2：保留既有段序，scope_id 全必填
 
@@ -143,7 +153,7 @@ MCP/Skill catalog 聚合是 Registry/activation 内部语义资源，当前没�
 
 ### D8b：kind 闭集在唯一 owner 登记（owner 裁定，消除待登记）
 
-**决定**：kind 闭集定稿为 `agent-spec` | `skills` | `config` | `session` | `files`。`files` 只用于 workspace scope 的源码根；新增实现见第8组，原四值历史证据保留其验证边界。会话上下文资源（会话定位）**自身**的 kind 取 `session`，由本 change 在此登记；`config` 承载配置来源文件本身。两者都不再由别的 change 新登记。
+**决定**：kind 闭集定稿为 `agent-spec` | `skills` | `config` | `session` | `files` | `workspace` | `folder`，各模板以公共 spec 为准。`files` 承载 workspace scope 的源码根及 D1b 的 gateway scope 原生目录根；`workspace`/`folder` 承载已登记的领域导航。新增实现见第8、9组及2.7，原四值历史证据保留其验证边界。会话上下文资源（会话定位）**自身**的 kind 取 `session`，由本 change 在此登记；`config` 承载配置来源文件本身。消费方不再登记同义 kind。
 
 **理由**：闭集一旦闭合，未登记 kind 会被拒绝；若把「会话上下文资源的 kind」留成待登记，并行 change `migrate-session-context-resource-uri` 的设计就无法落地。所有权在本 change，故必须现在登记而非挂成 open question。会话上下文资源的语义本体是「定位一个 Session」，既有 kind 无一覆盖，故取其语义名 `session`。
 

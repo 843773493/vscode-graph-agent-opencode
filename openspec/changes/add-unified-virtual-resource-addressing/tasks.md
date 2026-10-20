@@ -17,15 +17,15 @@
 
 ## 2. 三层分离与不变量
 
-- [ ] 2.1 定义三层职责的类型与持久化边界：`ResourceIdentity`（不透明、稳定、revision-free、不依赖激活工作区、持久化）、`URI`（可解析、持久化、允许悬空、禁 revision/hash）、`real path`（资源访问只在原生 owner 的最终点临时使用，不进模型、普通 DTO、解析结果或跨 Gateway 资源投影）；物理 workspace root 只按多工作区 change 的唯一 Gateway binding 持久化。
-- [ ] 2.2 落实 **real path 不变量**的可机械检查：资源响应、普通响应 DTO、解析结果、联邦资源投影、业务持久化记录或系统生成的模型资源引用出现 real path 即为缺陷；唯一 root binding 是持久化例外，原生目录选择/注册及普通文件原生路径是具名请求输入边界，均不扩张输出许可；给出序列化/落盘/模型组装检查点与显式失败行为，禁止用脱敏或截断静默掩盖。
+- [ ] 2.1 定义三层职责的类型与持久化边界：`ResourceIdentity`（不透明、稳定、revision-free、不依赖激活工作区、持久化）、`URI`（可解析、持久化、允许悬空、禁 revision/hash）、`real path`（资源访问只在原生 owner 的最终点临时使用，不进模型、普通 DTO、解析结果或跨 Gateway 资源投影）；物理 workspace root 按多工作区 change 的唯一 Gateway binding 持久化，未注册目录根只按本 owner 的具名原生目录根绑定持久化。
+- [ ] 2.2 落实 **real path 不变量**的可机械检查：资源响应、普通响应 DTO、解析结果、联邦资源投影、业务持久化记录或系统生成的模型资源引用出现 real path 即为缺陷；具名的工作区/原生目录 root binding 是持久化例外，原生目录选择/注册及普通文件原生路径是具名请求输入边界，均不扩张输出许可；给出序列化/落盘/模型组装检查点与显式失败行为，禁止用脱敏或截断静默掩盖。
 - [x] 2.3 落实 **identity 独立于 URI**：同逻辑名跨两个不同 scope（如 `user` 与某个 `workspace`）为两个不同 identity；跨来源等价/覆盖是独立 concern；给出「覆盖只影响后续解析与 catalog 快照、既有 identity 与已封存绑定稳定」的验证点。
   - 2026-10-20 2.3 复核真实 Skill owner：`uri-identity-shadow-002` 通过（1 passed、1956 deselected、28.19s、exit 0）。Gateway 与 Workspace 同名 Skill 由真实 watcher/producer 发布，前后 catalog 指向不同 entry identity/URI；已 tracked 的 Gateway identity、revision、封存 frames 与正文保持原值，新 Saver 重启后分别恢复旧 catalog 与新 catalog，历史 skill_load 不 rebind。`uri-owner-runtime-closure-001` 同时覆盖同 URI revision 更新、缺历史快照明确失败、同名跨 scope 的独立身份及 provenance 无路径矩阵；生产恢复走 activation/CSM owner，不使用当前 URI 重解历史。准确原件均在 `out/tests/temp/openspec_takeover/artifacts/runs/`。
 - [x] 2.4 落实 **「locator 是输入，不是输出」**不变量：解析命中（含跨 gateway）只返回稳定身份与内容，返回值 MUST NOT 携带 locator；给出可机械检查点。
   - 2026-10-20 2.4：`SemanticResourceDescriptor`、`ResourceProvenance`、`ResolvedResourceHandle` 的闭合字段及 identity/snapshot_ref 校验拒绝 locator 形态；resolver 只返回 typed handle，导航 DTO 只返回 URI/shape/operations/child_path/内容。`uri-locator-output-001`（9 passed、exit 0）覆盖真实 provenance 序列化、locator 风格 snapshot_ref 拒绝和远端响应注入 locator 后 HTTP 显式失败且不回显。`uri-navigation-auth-real-triad-001`（1 passed、66.28s、exit 0）覆盖真实三 Gateway 直达/relay，回包不含各 node workspace/gateway_home 根；该测试与生产导航源码指纹仍与原件一致。`uri-owner-runtime-closure-001` 已通过完整 virtual_resources/Skill runtime，当前 values/resolver 指纹未变。本项只收口解析输出，不代替 2.2/7.2 全部业务持久化及普通响应的路径不变量。原件均在 `out/tests/temp/openspec_takeover/artifacts/runs/`。
 - [x] 2.5 落实 requirement「「位置」必须有可机械判定的统一判据」（6 条 Scenario）：以唯一 owner 的两项事实判据检验持久化与输出，覆盖「可由 owner 身份推导的位置不落盘」「不可推导但需寻址时用既有 API 端点」「owner 自身运行态字段以相对于工作区根的原生相对路径持久化」「物理工作区根只作为原生 Gateway 控制面绑定持久化」「判据可机械判定」「配置应用事件的路径字段不是位置」。`add-workspace-persistent-resource-management` 的 D-A2/D-A3 与运行态字段边界只引用该判据；六条 Scenario 各须至少一条真实 owner 的生产/持久化/序列化断言，不另造无生产消费者的分类器。
 - [ ] 2.6 落实「普通文件入口必须保留原生路径输入并统一目标解析」的公共边界：登记相对/绝对/URI 三种输入、明确目标目录与目标平台、工作区外既有能力/授权及具名请求输入例外，保持 URI 输出/持久引用不变量；消费者引用同一定义，不自行增 kind、parser 或独立执行链。普通文件工具实现仍由 `add-unified-resource-file-tools` 承接。
-- [ ] 2.7 由本 owner 补齐未注册目录的规范寻址，再同批迁移文件树响应、编辑、快捷目录持久引用及重开消费者；保留原浏览/编辑能力，不伪造工作区身份、不自动或强制注册。验收真实目录内容与编辑结果、快捷目录重开、工作区注册表不变及 URI 输出/持久化不变量，不能以模板缺失为由删功能。
+- [ ] 2.7 按本 owner「原生目录根绑定必须由目标 Gateway 唯一持有」已定稿的 gateway/files/{directory_id} 根，同批迁移文件树响应、编辑、快捷目录持久引用及重开消费者；保留原浏览/编辑能力，不伪造工作区身份、不自动或强制注册。验收真实目录内容与编辑结果、快捷目录重开、工作区注册表不变及 URI 输出/持久化不变量，不能以模板缺失为由删功能。
 
 ## 3. scope、scope_id 与 gateway authority
 
@@ -80,7 +80,7 @@
 ## 7. 验证与收口
 
 - [ ] 7.1 增加统一构造/解析矩阵：固定 resources/scope_id、身份闭集和大小写 profile、技能根/SKILL.md/多层child、files/root、中文/空格/点号/字面百分号、合法 escape 规范化与只解码一次；拒绝无效 escape/UTF-8/编码分隔符/点段/控制字符/query/fragment，未登记 scope/kind和错误 scope组合显式失败。身份版本的既有编码规则不因文件 profile 改变。
-- [ ] 7.2 增加三层分离与不变量测试：real path 外泄即缺陷（普通响应/DTO、业务持久化、系统生成的模型资源引用与解析输出检查点；唯一 Gateway root binding 为持久化例外，原生目录选择/注册和普通文件路径按具名请求输入边界核验）、URI 悬空合法、revision 不进 URI、identity 不承担寻址、同名跨 scope 是两个 identity、locator 不在解析输出中；内部聚合必填null在publish/seal/restart/fork/hash中一致，缺字段/空字符串/非法非空地址仍拒绝、不降级null、不伪造默认地址或额外展示内部身份。
+- [ ] 7.2 增加三层分离与不变量测试：real path 外泄即缺陷（普通响应/DTO、业务持久化、系统生成的模型资源引用与解析输出检查点；具名的工作区/原生目录 Gateway root binding 为持久化例外，原生目录选择/注册和普通文件路径按具名请求输入边界核验）、URI 悬空合法、revision 不进 URI、identity 不承担寻址、同名跨 scope 是两个 identity、locator 不在解析输出中；内部聚合必填null在publish/seal/restart/fork/hash中一致，缺字段/空字符串/非法非空地址仍拒绝、不降级null、不伪造默认地址或额外展示内部身份。
 - [ ] 7.3 增加 scope_id 推导测试：`gateway`/`inline` 的 scope_id 不再是字面量 `local` 且两者不再相同；`inline` 使用真实 `distribution_id` 并按 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」的编码规则单射（不同 (distribution, version) 必得不同 scope_id，由 version charset 不含下划线保证）、跨安装路径稳定、manifest 缺字段时 fail-closed；`gateway` 按 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」验证「按请求注入而非进程级单例」「缺失/非法时 fail-closed」「MUST NOT 用 host:port/监听端口」；`user` 恒为 `local`。
 - [x] 7.4 增加星型解析与失败语义测试：authority 缺省与本机 gateway_id 同解、hub 直连直接 spoke、spoke 经唯一 hub 一次有界 transit、上界与 deadline 为 policy 常量且超限显式失败、不可达/未共享/未知 gateway 分别返回集中登记的**联邦解析期**拒绝码（`federation-channel-closed`/`target_not_resolvable`/`federation-unknown-peer`）、「未授权存在」与「不存在」不可区分、不递归转发。
 - [ ] 7.5 增加拒绝码登记测试：grammar、resolve 与联邦解析期三套闭集各自独立、未登记码构造即失败、三套不混用、其它模块无自造同义码。
