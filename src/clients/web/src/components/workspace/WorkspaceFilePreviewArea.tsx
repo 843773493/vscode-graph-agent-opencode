@@ -255,7 +255,7 @@ export default function WorkspaceFilePreviewArea({
                   </button>
                 </div>
               ) : null}
-              {debugActiveFile && !editingActiveFile ? (
+              {!editingActiveFile ? (
                 <button type="button" onClick={() => onBeginEdit(activeTab.path)}>
                   <span className="codicon codicon-edit" aria-hidden="true" />
                   编辑文件

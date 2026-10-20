@@ -7,6 +7,7 @@
 - [ ] 1.4 按公共 owner 的原生路径输入合同清点并迁齐相对/绝对/URI 目标解析，以及 `WorkspaceToolPathResolver`、filesystem tools、debugging、apply_patch、backend 输出转换和直接/间接测试；明确用户原生路径与 DeepAgents 虚拟路径的入口/类型，保持一条操作链，不扩大 patch 内部相对文件名的能力。
   - 2026-10-20 本地解析切片：删除 `_absolute_to_workspace_relative()` 及其去根回退；`ls/read_file/glob/grep/write_file/edit_file` 和源码调试共用显式工作区目标，接受相对路径、工作区内原生绝对路径和 Workspace files URI。原生解析复用 `core/path_utils.py::resolve_native_file_path`，URI 复用公共 grammar/文件 owner，身份只读不创建；不借中继进程 cwd。补丁内部文件名保持相对固定根，DeepAgents 虚拟根只在 backend 内部使用；调试 Skill 同步三种输入。尚未完成统一 URI 结果、其它资源根/远端与第5组产物调用迁移，本项保持未勾。
 - [ ] 1.5 核验统一寻址 owner 2.7 的未注册目录 gateway/files 根及文件树浏览/编辑、快捷目录保存/重开、响应/持久化消费者已接通，本 change 复用该闭包接入模型文件工具；真实 UI 验收实际对象、编辑结果与工作区注册表不变，不要求或自动注册、不伪造 workspace_id、不收窄既有能力。
+  - 2026-10-20 统一寻址2.7已由 `native-directory-browser-006` 完成生产页面浏览/编辑、URI快捷目录刷新及双owner重启重开验收，注册表不变。文件工具继续复用该目录 owner；本项还需真实模型工具入口读取未注册目录的闭包证据，保持未勾。
 
 ## 2. 本地技能包目录与轻量读取
 

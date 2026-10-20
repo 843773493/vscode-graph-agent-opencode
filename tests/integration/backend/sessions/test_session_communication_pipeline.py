@@ -143,6 +143,7 @@ async def communication_case(request: pytest.FixtureRequest) -> AsyncIterator[Co
             gateway = await asyncio.to_thread(
                 start_gateway_process, workspace_root=workspace, port=ports.port(1),
                 default_backend_url=f"http://127.0.0.1:{backend.port}",
+                extra_env=getattr(request, "param", {}).get("gateway_environment"),
             )
             async with httpx.AsyncClient(
                 base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=90,
@@ -157,7 +158,7 @@ async def communication_case(request: pytest.FixtureRequest) -> AsyncIterator[Co
                     case.record("provider-wire", model.requests)
         finally:
             if gateway is not None:
-                await asyncio.to_thread(close_gateway_process, gateway)
+                await asyncio.to_thread(close_gateway_process, case.gateway if case is not None else gateway)
             await asyncio.to_thread(close_backend_process, case.backend if case is not None else backend)
 
 
