@@ -97,7 +97,7 @@ _prepared_fork_target: ContextVar[_PreparedForkTarget | None] = ContextVar(
 class _ForkSourceSnapshot:
     session_id: str
     thread_id: str
-    session_node: Path
+    captured_root: Path
 
 
 _fork_source_snapshot: ContextVar[_ForkSourceSnapshot | None] = ContextVar(
@@ -276,7 +276,8 @@ class RolloutStorage(
         if not isinstance(record, SessionCreationRecord):
             raise TypeError("prepared fork target 必须是 SessionCreationRecord")
         target_path = self._path_resolver.resolve_prepared_session_node(record)
-        target = _PreparedForkTarget(record.session_id, record.main_thread_id, target_path, target_path)
+        thread_path = self._path_resolver.resolve_prepared_thread_node(record, record.main_thread_id)
+        target = _PreparedForkTarget(record.session_id, record.main_thread_id, target_path, thread_path)
         token = _prepared_fork_target.set(target)
         try:
             yield target_path
@@ -317,21 +318,21 @@ class RolloutStorage(
         *,
         session_id: str,
         thread_id: str,
-        session_node: Path,
+        captured_root: Path,
     ) -> Iterator[Path]:
-        """把 source Thread 的 rollout I/O 定向到私有 snapshot session_node。
+        """把 source Thread 的 rollout I/O 定向到私有 snapshot captured_root。
 
         ``session_id``/``thread_id`` 仅标识来源历史 owner，thread_id 可为 child；
-        物理 I/O 只使用调用方传入的私有捕获副本 ``session_node``，不按 main_thread_id
+        物理 I/O 只使用调用方传入的私有捕获副本 ``captured_root``，不按 main_thread_id
         或 thread_id 推导路径。
         """
         validate_session_id(session_id)
         validate_thread_id(thread_id)
-        if not isinstance(session_node, Path):
-            raise TypeError("fork source snapshot session_node 必须是 Path")
+        if not isinstance(captured_root, Path):
+            raise TypeError("fork source snapshot captured_root 必须是 Path")
         if _fork_source_snapshot.get() is not None:
             raise RuntimeError("fork source snapshot scope 不能嵌套")
-        snapshot_node = session_node.resolve(strict=True)
+        snapshot_node = captured_root.resolve(strict=True)
         thread_node = snapshot_node
         if (
             snapshot_node.is_symlink()
@@ -340,8 +341,8 @@ class RolloutStorage(
             or not thread_node.is_dir()
         ):
             raise RuntimeError(
-                "fork source Thread 的私有 snapshot session_node 必须是普通目录: "
-                f"session_node={snapshot_node}, thread_id={thread_id}"
+                "fork source Thread 的私有 snapshot captured_root 必须是普通目录: "
+                f"captured_root={snapshot_node}, thread_id={thread_id}"
             )
         snapshot = _ForkSourceSnapshot(session_id, thread_id, snapshot_node)
         token: Token[_ForkSourceSnapshot | None] = _fork_source_snapshot.set(
@@ -372,13 +373,13 @@ class RolloutStorage(
             return record.session_node
         snapshot = self._fork_source_snapshot_for_session(session_id)
         if snapshot is not None:
-            return snapshot.session_node
+            return snapshot.captured_root
         return self._path_resolver.resolve_session_node(session_id)
 
     def _resolve_thread_node(self, session_id: str, thread_id: str) -> Path:
         snapshot = self._fork_source_snapshot_for_session(session_id)
         if snapshot is not None and thread_id == snapshot.thread_id:
-            return snapshot.session_node
+            return snapshot.captured_root
         record = self._prepared_target_record(session_id)
         if record is not None and thread_id == record.thread_id:
             return record.thread_node
@@ -436,7 +437,7 @@ class RolloutStorage(
     ) -> Path:
         """返回该 SessionThread 的 rollout 目录（OpenSpec 8.3 thread-qualified）。
 
-        main thread 折叠到 Session 根目录，child thread 位于受检 thread node；
+        main 与 child 都位于 catalog 约束的独立 thread node；
         每个 rollout、index.sqlite、rollout.jsonl 与 database_meta 都由精确
         (session_id, thread_id) 独占。checkpoint_ns 不是 owner 维度。
         thread_id 缺省时经 thread catalog 显式解析 main thread。

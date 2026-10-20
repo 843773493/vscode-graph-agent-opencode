@@ -139,17 +139,18 @@ def _restore_generation_backup(workspace_root: Path) -> None:
     )
     with registry, catalog_provider_scope(registry):
         resolver = get_session_path_resolver(workspace_root / ".boxteam" / "sessions")
-        session_dir = resolver.resolve_thread_node(
+        session_root = resolver.resolve_session_node(SESSION_ID)
+        thread_node = resolver.resolve_thread_node(
             SESSION_ID, resolver.main_thread_id(SESSION_ID)
         )
-    backups = sorted(session_dir.glob(".rollout-backup-*/"))
+    backups = sorted(session_root.glob(".rollout-backup-*/"))
     if not backups:
         return
     if len(backups) != 1:
         raise RuntimeError(f"真实模型 fixture 备份数量异常: {backups}")
     backup = backups[0]
-    rollout_dir = session_dir / "rollout"
-    failed_dir = session_dir / ".rollout-failed-regeneration"
+    rollout_dir = thread_node / "rollout"
+    failed_dir = thread_node / ".rollout-failed-regeneration"
     if failed_dir.exists():
         raise RuntimeError(f"真实模型 fixture 存在未清理失败目录: {failed_dir}")
     if rollout_dir.exists():

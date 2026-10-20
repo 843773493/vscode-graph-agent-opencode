@@ -15,6 +15,7 @@ import commentjson
 import httpx
 import pytest
 
+from app.core.path_utils import get_session_path_resolver
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.services.business.session_context_resource import (
@@ -69,6 +70,10 @@ class CommunicationCase:
         assert response.status_code == 200, response.text
         node = next(node for node in response.json()["data"]["items"] if node["node_id"] == session_id)
         return self.workspace / ".boxteam/sessions" / node["storage_relative_path"]
+
+    def main_thread_node(self, session_id: str) -> Path:
+        resolver = get_session_path_resolver(self.workspace / ".boxteam/sessions")
+        return resolver.resolve_thread_node(session_id, resolver.main_thread_id(session_id))
 
     async def hard_restart(self) -> None:
         previous = self.backend
@@ -241,7 +246,7 @@ async def test_c1_real_send_worker_wait_read(communication_case: CommunicationCa
         assert target_store.list_target_accepted_communication_inboxes() == ()
         target_job = await _completed(case.client, inbox.job_id)
         case.record("c1-binding", {"inbox": asdict(inbox), "source_job": source_job, "target_job": target_job})
-    database = target_node / "rollout/index.sqlite"
+    database = case.main_thread_node(target_session) / "rollout/index.sqlite"
     with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
         assert connection.execute("SELECT execution_origin,turn_id FROM executions").fetchall() == [("internal", None)]
         assert connection.execute("SELECT COUNT(*) FROM turn_records").fetchone()[0] == 0
@@ -260,7 +265,7 @@ async def test_main_thread_http_preserves_request_identity_and_cold_state(commun
     with closing(SessionControlStore(node / CONTROL_DATABASE_NAME)) as store:
         assert response.json()["data"] == {"session_id": session, "thread_id": store.get_main_thread()["thread_id"]}
         assert store.list_target_accepted_communication_inboxes() == ()
-    database = node / "rollout/index.sqlite"
+    database = case.main_thread_node(session) / "rollout/index.sqlite"
     if database.exists():
         with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
             assert connection.execute("SELECT COUNT(*) FROM executions").fetchone()[0] == 0
@@ -312,7 +317,7 @@ async def test_c2_hard_restart_proactively_binds_accepted_inbox(communication_ca
     with closing(SessionControlStore(target_node / CONTROL_DATABASE_NAME)) as store:
         claimed = store.get_communication_inbox(barrier["communication_id"])
         assert claimed.state == "target_accepted" and claimed.admission_claim_generation is not None
-    before = target_node / "rollout/index.sqlite"
+    before = case.main_thread_node(target_session) / "rollout/index.sqlite"
     if before.exists():
         with sqlite3.connect(before.as_uri() + "?mode=ro", uri=True) as connection:
             assert connection.execute("SELECT COUNT(*) FROM runtime_execution_wakeups").fetchone()[0] == 0
@@ -348,7 +353,7 @@ async def test_communication_crash_windows_keep_original_identity(communication_
     source_session = await create_session(case.client, "崩溃矩阵 source")
     target_session = await create_session(case.client, "崩溃矩阵 target")
     target_node = await case.session_node(target_session)
-    target_rollout = target_node / "rollout"
+    target_rollout = case.main_thread_node(target_session) / "rollout"
 
     def target_context_snapshot():
         return target_rollout.exists(), tuple(
@@ -424,7 +429,7 @@ async def test_communication_crash_windows_keep_original_identity(communication_
         else:
             assert accepted.state == "target_accepted" and accepted.job_id is None
             await _completed(case.client, response.json()["data"]["job_id"])
-            database = target_node / "rollout/index.sqlite"
+            database = case.main_thread_node(target_session) / "rollout/index.sqlite"
             with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
                 assert connection.execute("SELECT COUNT(*) FROM runtime_execution_wakeups").fetchone()[0] == 1
                 assert connection.execute("SELECT COUNT(*) FROM executions").fetchone()[0] == 1
@@ -454,7 +459,7 @@ async def test_communication_crash_windows_keep_original_identity(communication_
     if case.barrier_stage == "after_job":
         assert recovered_inbox.job_id == marker["binding"]["job_id"]
         assert recovered_inbox.execution_id == marker["binding"]["execution_id"]
-    database = target_node / "rollout/index.sqlite"
+    database = case.main_thread_node(target_session) / "rollout/index.sqlite"
     async with asyncio.timeout(40):
         while True:
             with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
@@ -471,7 +476,7 @@ async def test_communication_crash_windows_keep_original_identity(communication_
     for node, table in ((source_node, "communication_outbox"), (target_node, "communication_inbox")):
         with sqlite3.connect(node / CONTROL_DATABASE_NAME) as connection:
             assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 1
-    with sqlite3.connect((target_node / "rollout/index.sqlite").as_uri() + "?mode=ro", uri=True) as connection:
+    with sqlite3.connect((case.main_thread_node(target_session) / "rollout/index.sqlite").as_uri() + "?mode=ro", uri=True) as connection:
         assert connection.execute("SELECT execution_id,execution_origin,turn_id FROM executions").fetchall() == [(recovered_inbox.execution_id, "internal", None)]
         assert connection.execute("SELECT COUNT(*) FROM turn_records").fetchone()[0] == 0
         assert connection.execute("SELECT source_id,job_id FROM runtime_execution_wakeups").fetchall() == [(communication_id, recovered_inbox.job_id)]

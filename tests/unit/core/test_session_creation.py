@@ -140,7 +140,7 @@ def build_session_directory(
     """按服务相同格式手工构造 session 目录（staging/日期桶恢复测试用）。"""
     manifest = build_session_creation_manifest(record, metadata)
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "threads").mkdir()
+    (directory / "threads" / record.main_thread_id).mkdir(parents=True)
     (directory / "session.json").write_bytes(
         serialize_session_creation_manifest(manifest)
     )
@@ -197,7 +197,7 @@ def sessions_root_rollout_beyond_vfs_limit(tmp_path: Path) -> Path:
     sessions_root = tmp_path.resolve() / "sessions"
     rollout_sidecar = (
         sessions_root / "1970/01/01" / _SESSION_ID_PATH_PLACEHOLDER
-        / "rollout/index.sqlite-journal"
+        / "threads" / session_creation._THREAD_ID_PATH_PLACEHOLDER / "rollout/index.sqlite-journal"
     )
     padding_bytes = max(
         0, sqlite_vfs_max_pathname() + 1 - len(str(rollout_sidecar).encode("utf-8"))
@@ -288,7 +288,7 @@ async def test_rollout_index_path_budget_checked_before_record_or_staging(
     sessions_root = sessions_root_rollout_beyond_vfs_limit(tmp_path)
     rollout_database = (
         sessions_root / "1970/01/01" / _SESSION_ID_PATH_PLACEHOLDER
-        / "rollout/index.sqlite"
+        / "threads" / session_creation._THREAD_ID_PATH_PLACEHOLDER / "rollout/index.sqlite"
     )
     validated_rollouts: list[Path] = []
 
@@ -435,7 +435,7 @@ async def test_context_fork_publish_requires_committed_completion_proof(
     assert service.read_prepared_session_metadata(record) == metadata
     assert service.list_preparing_creation_records(purpose="context_fork") == [record]
     staging = sessions_root / ".staging" / record.session_id
-    staged_materialization = staging / "rollout"
+    staged_materialization = staging / "threads" / record.main_thread_id / "rollout"
     staged_materialization.mkdir()
     (staged_materialization / "checkpoint.json").write_text("{}", encoding="utf-8")
     with pytest.raises(ValueError, match="completion proof"):
@@ -457,7 +457,7 @@ async def test_context_fork_publish_requires_committed_completion_proof(
     assert store.get_creation_record("fork-key").state == "published"
     published_materialization = (
         date_bucket_dir(sessions_root, record.storage_relative_locator)
-        / "rollout"
+        / "threads" / record.main_thread_id / "rollout"
         / "checkpoint.json"
     )
     assert published_materialization.read_text(encoding="utf-8") == "{}"
@@ -563,7 +563,8 @@ async def test_create_places_directory_in_date_bucket_and_clears_staging(
         "session.json",
         "threads",
     ]
-    assert not tuple((session_dir / "threads").iterdir())
+    assert tuple(path.name for path in (session_dir / "threads").iterdir()) == (result.main_thread_id,)
+    assert not tuple((session_dir / "threads" / result.main_thread_id).iterdir())
     # staging 区已清空（目录被 rename 走）
     assert not (sessions_root / ".staging" / result.session_id).exists()
 
@@ -578,7 +579,7 @@ async def test_recovery_rejects_unregistered_child_thread_in_prepared_session(
     build_session_directory(staging, record, make_metadata())
     (staging / "threads" / "thr_019db1f0-0000-7000-8000-000000000001").mkdir()
 
-    with pytest.raises(RuntimeError, match="prepared Session 不得包含 child thread"):
+    with pytest.raises(RuntimeError, match="prepared Session 必须只含冻结的 main thread"):
         await do_create(service)
 
     assert staging.is_dir()

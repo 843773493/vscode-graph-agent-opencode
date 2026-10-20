@@ -55,7 +55,7 @@ class ForkRolloutSourceSnapshot:
     source_session_id: str
     source_thread_id: str
     # 本次 fork 的私有捕获副本节点，不指向 live 源会话；source scope 仅保留来源历史 owner 事实，不能据此反推物理路径。
-    session_node: Path
+    captured_root: Path
     files: tuple[ForkSnapshotFile, ...]
     manifest_bytes: bytes
     manifest_sha256: str
@@ -80,8 +80,8 @@ class ForkSourceSnapshot:
         return self.rollout.source_thread_id
 
     @property
-    def session_node(self) -> Path:
-        return self.rollout.session_node
+    def captured_root(self) -> Path:
+        return self.rollout.captured_root
 
     @property
     def snapshot_sha256(self) -> str:
@@ -103,7 +103,7 @@ def capture_fork_rollout_snapshot(
     *,
     source_session_id: str,
     source_thread_id: str,
-    snapshot_session_node: Path,
+    captured_root: Path,
     snapshot_id: str,
     rollout_lock_held: bool = False,
 ) -> ForkRolloutSourceSnapshot:
@@ -118,9 +118,9 @@ def capture_fork_rollout_snapshot(
         )
     if not snapshot_id or Path(snapshot_id).name != snapshot_id:
         raise ValueError("fork source snapshot id 必须是单一路径段")
-    snapshot_session_node.mkdir(parents=True, exist_ok=False, mode=0o700)
-    snapshot_rollout = snapshot_session_node / "rollout"
-    snapshot_session_node.chmod(0o700)
+    captured_root.mkdir(parents=True, exist_ok=False, mode=0o700)
+    snapshot_rollout = captured_root / "rollout"
+    captured_root.chmod(0o700)
 
     source_lock_path = source_rollout.parent / ".rollout.write.lock"
     lock = None
@@ -134,7 +134,7 @@ def capture_fork_rollout_snapshot(
         if not source_lock_path.is_file() or source_lock_path.is_symlink():
             raise RuntimeError("source-mismatch: fork source 缺少既有普通写锁文件")
         # 显式冻结副本携带既有锁，后续共享读取不得自行创建文件。
-        shutil.copy2(source_lock_path, snapshot_session_node / ".rollout.write.lock")
+        shutil.copy2(source_lock_path, captured_root / ".rollout.write.lock")
         source_files = _tree_manifest(
             source_rollout,
             excluded_root_entries=frozenset((*SQLITE_COPY_FILES, "context-plan-details")),
@@ -176,17 +176,17 @@ def capture_fork_rollout_snapshot(
                 "source-mismatch: fork source snapshot bytes 与冻结 source manifest 不一致"
             )
         copy_live_sqlite_snapshot(
-            storage.storage._resolve_session_node(source_session_id), snapshot_session_node,
+            storage.storage._resolve_session_node(source_session_id), captured_root,
             filenames=(CONTROL_DATABASE_NAME, CONTROL_DATABASE_NAME + "-wal",
                        CONTROL_DATABASE_NAME + "-journal"),
         )
-        control_path = snapshot_session_node / CONTROL_DATABASE_NAME
+        control_path = captured_root / CONTROL_DATABASE_NAME
         if not control_path.is_file() or control_path.is_symlink():
             raise RuntimeError("source-mismatch: fork source 缺少 session-control snapshot")
         control_digest = hashlib.sha256()
         for name in (CONTROL_DATABASE_NAME, CONTROL_DATABASE_NAME + "-wal",
                      CONTROL_DATABASE_NAME + "-journal"):
-            path = snapshot_session_node / name
+            path = captured_root / name
             if path.exists():
                 control_digest.update(name.encode())
                 with path.open("rb") as stream:
@@ -214,7 +214,7 @@ def capture_fork_rollout_snapshot(
         if type(source_lifecycle_generation) is not int or source_lifecycle_generation < 1:
             raise RuntimeError("source-mismatch: 冻结 lifecycle generation 非法")
     except BaseException:
-        shutil.rmtree(snapshot_session_node, ignore_errors=True)
+        shutil.rmtree(captured_root, ignore_errors=True)
         raise
     finally:
         if lock is not None:
@@ -245,7 +245,7 @@ def capture_fork_rollout_snapshot(
         )
         + "\n"
     ).encode("utf-8")
-    manifest_path = snapshot_session_node / "snapshot-manifest.json"
+    manifest_path = captured_root / "snapshot-manifest.json"
     descriptor = os.open(
         manifest_path,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
@@ -255,11 +255,11 @@ def capture_fork_rollout_snapshot(
         stream.write(manifest_bytes)
         stream.flush()
         os.fsync(stream.fileno())
-    _fsync_directory(snapshot_session_node)
+    _fsync_directory(captured_root)
     return ForkRolloutSourceSnapshot(
         source_session_id=source_session_id,
         source_thread_id=source_thread_id,
-        session_node=snapshot_session_node,
+        captured_root=captured_root,
         files=source_files,
         manifest_bytes=manifest_bytes,
         manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),

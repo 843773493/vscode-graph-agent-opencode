@@ -94,9 +94,10 @@ async def test_checkpoint_save_reload_and_survive_restart(
     first_job_data = await wait_for_job_done(client, first_job_id)
     assert first_job_data["status"] in {"completed", "succeeded"}
 
-    session_dir = get_session_path_resolver(
+    resolver = get_session_path_resolver(
         Path(e2e_workspace_root_path) / ".boxteam" / "sessions"
-    ).resolve_session_node(session_id)
+    )
+    session_dir = resolver.resolve_thread_node(session_id, resolver.main_thread_id(session_id))
     rollout_root = session_dir / "rollout"
     rollout_jsonl = rollout_root / "rollout.jsonl"
     index_sqlite = rollout_root / "index.sqlite"

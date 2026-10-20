@@ -27,6 +27,7 @@ from app.agents.graph_binding import compute_capability_profile_hash
 from app.container import AppContainer
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
+from app.core.path_utils import get_session_path_resolver
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore, ThreadExecutionIntent
 from app.core.session_thread_context import session_thread_owner_scope
@@ -1691,7 +1692,9 @@ class RestartRuntimeSourceCase:
         result: dict[str, object] = {
             "intent": identity, "frozen_seed": record.task_seed, "main_thread_id": main_thread_id,
         }
-        for name, owner_dir in (("parent", session_dir), ("child", session_dir / record.final_relative_locator)):
+        resolver = get_session_path_resolver(self.workspace / ".boxteam/sessions")
+        for name, owner_dir in (("parent", resolver.resolve_thread_node(intent.session_id, main_thread_id)),
+                                ("child", resolver.resolve_thread_node(intent.session_id, record.child_thread_id))):
             database = owner_dir / "rollout/index.sqlite"
             with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
                 result[name] = {

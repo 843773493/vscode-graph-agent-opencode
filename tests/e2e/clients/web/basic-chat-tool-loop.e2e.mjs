@@ -3087,7 +3087,7 @@ async function threadRolloutLocator(owner, node) {
   if (thread.kind === "main") {
     assert.equal(owner.child, false);
     assert.equal(thread.thread_id, node.main_thread_id, "main rollout 必须属于 Session 权威 main pointer");
-    return `${sessionPath}/rollout/index.sqlite`;
+    return `${sessionPath}/threads/${thread.thread_id}/rollout/index.sqlite`;
   }
   assert.equal(thread.kind, "child");
   assert.equal(owner.child, true);

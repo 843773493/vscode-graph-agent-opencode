@@ -15,6 +15,7 @@ from threading import Event
 
 import pytest
 
+from app.core.path_utils import get_session_path_resolver
 from app.core.resource_uri import parse_resource_uri, resource_display_uri
 from app.services.business.session_context_resource import session_resource_uri
 from tests.harness.python.run_context import TestRunContext
@@ -697,7 +698,8 @@ async def test_runtime_wakeup_cold_restore_uses_frozen_owner_without_request_con
     frozen = json.loads(marker.read_text())["wakeup"]
     assert frozen["gateway_id"] == target.gateway_id
     assert frozen["request_id"] == "req-owner-wakeup-source"
-    target_node = await target.session_node(target_session)
+    resolver = get_session_path_resolver(target.workspace / ".boxteam/sessions")
+    target_node = resolver.resolve_thread_node(target_session, resolver.main_thread_id(target_session))
     database = target_node / "rollout/index.sqlite"
 
     def row():

@@ -137,7 +137,6 @@ async def test_a04_remote_session_inventory_search_and_durable_read(communicatio
     await _completed(source.client, response.json()["data"]["job_id"])
     assert tool_result["uri"] == session_uri and tool_result["items"]
     source_node = await source.session_node(source_session)
-    target_node = await target.session_node(target_session)
     with closing(SessionControlStore(source_node / CONTROL_DATABASE_NAME)) as store:
         observations = [item for item in store.list_remote_observations() if item.side == "source"]
         assert len(observations) == 1
@@ -161,8 +160,9 @@ async def test_a04_remote_session_inventory_search_and_durable_read(communicatio
         }
         assert read["cursor"] is None
         evidence.append({"durable_read": stored})
-    with sqlite3.connect((target_node / "rollout/index.sqlite").as_uri() + "?mode=ro", uri=True) as connection:
-        assert connection.execute("SELECT count(*) FROM executions").fetchone()[0] == 0
+    resolver = get_session_path_resolver(target.workspace / ".boxteam/sessions")
+    target_thread_node = resolver.resolve_thread_node(target_session, resolver.main_thread_id(target_session))
+    assert all(count == 0 for count in cold_materialization_counts(target_thread_node).values())
     serialized = json.dumps([evidence, tool_result], ensure_ascii=False)
     assert str(source.workspace) not in serialized and str(target.workspace) not in serialized
     assert "backend_url" not in serialized and "private_key" not in serialized

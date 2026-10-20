@@ -226,8 +226,8 @@ def _seed_rollout(
                 {"source": "deterministic-rollout-stub", "turn": turn_index},
                 {"messages": str(turn_index)},
             )
-    session_dir = get_session_path_resolver(sessions_dir).resolve_session_node(session_id)
-    return session_dir / "rollout"
+    resolver = get_session_path_resolver(sessions_dir)
+    return resolver.resolve_thread_node(session_id, resolver.main_thread_id(session_id)) / "rollout"
 
 async def _load_history(
     client: httpx.AsyncClient,

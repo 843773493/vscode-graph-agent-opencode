@@ -11,6 +11,7 @@ from app.agents.workspace_agents import (
     publish_workspace_agents,
     register_workspace_agents_source,
 )
+from app.core.path_utils import get_session_path_resolver
 from app.core.resource_uri import resource_display_uri
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
@@ -401,7 +402,9 @@ async def test_cold_agents_restart_reconciles_before_second_provider(
     catalog = await case.client.get("/api/v1/session-catalog/export")
     assert catalog.status_code == 200, catalog.text
     node = next(item for item in catalog.json()["data"]["items"] if item["node_id"] == session_id)
-    session_dir = case.workspace / ".boxteam/sessions" / node["storage_relative_path"]
+    resolver = get_session_path_resolver(case.workspace / ".boxteam/sessions")
+    thread_node = resolver.resolve_thread_node(session_id, resolver.main_thread_id(session_id))
+    assert resolver.resolve_session_node(session_id) == case.workspace / ".boxteam/sessions" / node["storage_relative_path"]
     sessions = case.workspace / ".boxteam/sessions"
     with RolloutCheckpointSaver(sessions) as cold:
         owner = cold.forks.source.resolve_main_thread_owner(session_id)
@@ -497,7 +500,7 @@ async def test_cold_agents_restart_reconciles_before_second_provider(
             assert current.state_revision > before_control.state_revision
         restored_first = cold.get_context_assembly(session_id, owner.thread_id, assembly_id=first_assembly.assembly_id)
         assert canonical_json_bytes(restored_first.to_dict()) == first_bytes
-    with sqlite3.connect((session_dir / "rollout/index.sqlite").as_uri() + "?mode=ro", uri=True) as connection:
+    with sqlite3.connect((thread_node / "rollout/index.sqlite").as_uri() + "?mode=ro", uri=True) as connection:
         model_owner = connection.execute(
             "SELECT session_id,thread_id,execution_id,assembly_id FROM model_calls WHERE model_call_id=?",
             (second_assembly.model_call_id,),

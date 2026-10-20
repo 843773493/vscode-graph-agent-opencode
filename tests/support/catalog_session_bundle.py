@@ -153,7 +153,7 @@ def seed_catalog_session(spec: CatalogSessionBundleSpec) -> CatalogSessionBundle
             main_thread_id = node.main_thread_id or main_thread_id
 
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / "threads").mkdir(exist_ok=True)
+        (directory / "threads" / main_thread_id).mkdir(parents=True, exist_ok=True)
         manifest = {
             "session_id": spec.session_id,
             "workspace_id": spec.workspace_id,

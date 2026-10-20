@@ -81,7 +81,7 @@ def publish_captured_snapshot(record: ForkSourceCaptureRecord, snapshot: ForkSou
     }
     payload["claim_manifest_sha256"] = hashlib.sha256(canonical_json_bytes(payload["claim_ids"])).hexdigest()
     encoded = canonical_json_bytes(payload)
-    root = snapshot.session_node.parent
+    root = snapshot.captured_root.parent
     # 此处只遍历当前 operation 已登记的私有快照，不定位或吸收 source 业务目录。
     for directory, _, names in os.walk(root):
         for name in names:
@@ -126,14 +126,14 @@ def read_captured_snapshot(sessions_root: Path, record: ForkSourceCaptureRecord)
     if record.marker_sha256 is not None and record.marker_sha256 != marker_hash:
         raise RuntimeError("fork captured marker hash 与 journal 不一致")
     rollout = raw["rollout"]
-    session_node = root / record.source_session_id
-    manifest_bytes = (session_node / "snapshot-manifest.json").read_bytes()
+    captured_root = root / record.source_session_id
+    manifest_bytes = (captured_root / "snapshot-manifest.json").read_bytes()
     if (rollout["source_session_id"], rollout["source_thread_id"]) != (record.source_session_id, record.source_thread_id) or (
         hashlib.sha256(manifest_bytes).hexdigest() != rollout["manifest_sha256"]
     ):
         raise RuntimeError("fork captured rollout manifest/owner 不一致")
     files = tuple(ForkSnapshotFile(**item) for item in rollout["files"])
-    current_files = _tree_manifest(session_node / "rollout")
+    current_files = _tree_manifest(captured_root / "rollout")
     if current_files != files:
         frozen = {item.relative_path: (item.size_bytes, item.sha256) for item in files}
         current = {item.relative_path: (item.size_bytes, item.sha256) for item in current_files}
@@ -142,7 +142,7 @@ def read_captured_snapshot(sessions_root: Path, record: ForkSourceCaptureRecord)
         raise RuntimeError(f"fork captured rollout files hash/length 不一致: {changed}")
     digest = hashlib.sha256()
     for name in (CONTROL_DATABASE_NAME, CONTROL_DATABASE_NAME + "-wal", CONTROL_DATABASE_NAME + "-journal"):
-        path = session_node / name
+        path = captured_root / name
         if path.exists():
             if path.is_symlink() or not path.is_file():
                 raise RuntimeError("fork captured session-control 含非普通文件")
@@ -155,7 +155,7 @@ def read_captured_snapshot(sessions_root: Path, record: ForkSourceCaptureRecord)
     snapshot = ForkSourceSnapshot(
         rollout=ForkRolloutSourceSnapshot(
             source_session_id=record.source_session_id, source_thread_id=record.source_thread_id,
-            session_node=session_node, files=files, manifest_bytes=manifest_bytes,
+            captured_root=captured_root, files=files, manifest_bytes=manifest_bytes,
             manifest_sha256=rollout["manifest_sha256"], control_sha256=rollout["control_sha256"],
             source_lifecycle_generation=rollout["source_lifecycle_generation"],
         ),

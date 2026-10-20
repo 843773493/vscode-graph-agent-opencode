@@ -106,7 +106,7 @@ def storage(tmp_path: Path) -> RolloutContextStore:
     )
 
 
-def test_main_thread_resolves_to_session_node_rollout(
+def test_main_thread_resolves_to_catalog_thread_node_rollout(
     storage: RolloutContextStore,
 ) -> None:
     main_thread_id = storage.storage._path_resolver.main_thread_id(SESSION_ID)
@@ -116,7 +116,8 @@ def test_main_thread_resolves_to_session_node_rollout(
     assert storage.storage.root(SESSION_ID, thread_id=main_thread_id) == thread_node / "rollout"
     assert storage.storage.index_path(SESSION_ID) == thread_node / "rollout" / "index.sqlite"
     assert storage.storage.jsonl_path(SESSION_ID) == thread_node / "rollout" / "rollout.jsonl"
-    assert thread_node == session_node
+    assert thread_node == session_node / "threads" / main_thread_id
+    assert not (session_node / "rollout").exists()
 
 
 @pytest.mark.parametrize(("fault", "error_type", "message"), [

@@ -59,7 +59,9 @@ def test_long_session_persists_message_deltas_without_snapshot_growth(
         )
 
     root = (
-        get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+        get_session_path_resolver(sessions_dir).resolve_thread_node(
+            SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID)
+        )
         / "rollout"
     )
     rollout_path = root / "rollout.jsonl"

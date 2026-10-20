@@ -222,7 +222,7 @@ def test_thread_node_resolution_follows_catalog_ownership(
     parent_main_dir = resolver.resolve_thread_node(
         _PARENT_SESSION_ID, parent_main_thread_id
     )
-    assert parent_main_dir == parent_dir
+    assert parent_main_dir == parent_dir / "threads" / parent_main_thread_id
 
     main_owner = resolve_node_debug_owner(
         resolver,

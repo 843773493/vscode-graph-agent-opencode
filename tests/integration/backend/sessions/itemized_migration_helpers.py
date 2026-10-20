@@ -54,10 +54,10 @@ def _write_v1_source(
     # 结果取得路径，避免把显示名/目录名关系写死在迁移契约里。
     from app.core.path_utils import get_session_path_resolver
 
-    rollout_root = (
-        get_session_path_resolver(sessions_root).resolve_session_node(session_id)
-        / "rollout"
-    )
+    resolver = get_session_path_resolver(sessions_root)
+    rollout_root = resolver.resolve_thread_node(
+        session_id, resolver.main_thread_id(session_id)
+    ) / "rollout"
     rollout_root.mkdir(parents=True, exist_ok=True)
     (rollout_root.parent / ".rollout.write.lock").touch()
     source_lines = [

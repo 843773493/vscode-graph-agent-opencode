@@ -46,7 +46,7 @@ from app.services.infrastructure.rollout_history_reader import RolloutHistoryRea
 @pytest.fixture
 def group_case(tmp_path, session_bundle_factory):
     session_id = "ses_019c205391bb7a4b81b6728df70f63e6"
-    session_dir = session_bundle_factory(tmp_path, session_id)
+    session_bundle_factory(tmp_path, session_id)
     content = [
         {"type": "text", "text": "先检查", "id": "text-before"},
         {"type": "reasoning", "reasoning": "核对参数", "id": "reasoning-1", "index": 1},
@@ -98,6 +98,7 @@ def group_case(tmp_path, session_bundle_factory):
     }
     saver = RolloutCheckpointSaver(tmp_path)
     thread_id = saver._storage.storage.main_thread_id(session_id)
+    session_dir = saver._storage.storage.root(session_id, thread_id=thread_id).parent
     saver.accept_turn(
         session_id,
         thread_id=thread_id,

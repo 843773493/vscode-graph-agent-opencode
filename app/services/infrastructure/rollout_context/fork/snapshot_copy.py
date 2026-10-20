@@ -45,7 +45,7 @@ def stage_captured_rollout(
     stage = target_root.with_name(f".fork-{materialization_id}.rollout")
     stage.mkdir(mode=0o700, exist_ok=False)
     try:
-        source_root = snapshot.rollout.session_node / "rollout"
+        source_root = snapshot.rollout.captured_root / "rollout"
         for captured in snapshot.rollout.files:
             relative = Path(captured.relative_path)
             if relative.is_absolute() or ".." in relative.parts or not relative.parts:

@@ -269,6 +269,18 @@ def tool_set() -> ToolSetSnapshot:
     return ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
 
 
+def _fork_deadline_target(workspace_id: str, target_uri: str) -> str:
+    """首次调用与冻结 intent 恢复共用规范目标，不重开操作期限。"""
+    gateway_id = get_current_gateway_id()
+    target = parse_resource_uri(target_uri, local_gateway_id=gateway_id)
+    canonical_uri = resource_display_uri(
+        scope=target.scope, scope_id=target.scope_id, kind=target.kind,
+        tail_segments=target.tail_segments,
+        gateway_authority=target.gateway_authority or gateway_id,
+    )
+    return f"{workspace_id}/{canonical_uri}"
+
+
 @pytest.fixture
 def fork_provider_prepare(
     tool_set: ToolSetSnapshot,
@@ -404,7 +416,7 @@ def production_fork_container(request: pytest.FixtureRequest,
         generation_origin: SessionGenerationOriginDTO | None = None,
     ) -> SessionForkResultDTO:
         deadline = fork_deadlines.for_operation(
-            target=f"{container.workspace_id}/{fork_request.target_container_uri}",
+            target=_fork_deadline_target(container.workspace_id, fork_request.target_container_uri),
             operation_key=fork_request.idempotency_key,
         )
         try:
@@ -434,7 +446,7 @@ def production_fork_container(request: pytest.FixtureRequest,
                 target_uri = body.get("target_container_uri")
                 if isinstance(operation_key, str) and isinstance(target_uri, str):
                     deadline = fork_deadlines.for_operation(
-                        target=f"{container.workspace_id}/{target_uri}",
+                        target=_fork_deadline_target(container.workspace_id, target_uri),
                         operation_key=operation_key,
                     )
                     response_task = asyncio.create_task(
@@ -653,7 +665,7 @@ async def test_fork_deadline_starts_before_asgi_client_post(
             )
 
     assert requested_identity == [
-        (f"{production_fork_container.workspace_id}/{target_uri}", body["idempotency_key"]),
+        (_fork_deadline_target(production_fork_container.workspace_id, target_uri), body["idempotency_key"]),
     ]
     assert stages == ["ASGI fork-context HTTP request"]
     assert not deadline.completed
@@ -667,7 +679,7 @@ async def test_fork_http_response_after_deadline_error_uses_durable_completion(
     target_uri = workspace_session_inventory_uri(production_fork_container.workspace_id)
     operation_key = "fork-http-durable-response"
     expected_identity = (
-        f"{production_fork_container.workspace_id}/{target_uri}", operation_key,
+        _fork_deadline_target(production_fork_container.workspace_id, target_uri), operation_key,
     )
     original_for_operation = ForkDeadlineRegistry.for_operation
     requested_identity: list[tuple[str, str]] = []
@@ -705,7 +717,7 @@ async def test_fork_http_response_after_deadline_error_uses_durable_completion(
         async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
             payload = json.loads(request.content)
             identity = (
-                f"{production_fork_container.workspace_id}/{payload['target_container_uri']}",
+                _fork_deadline_target(production_fork_container.workspace_id, payload["target_container_uri"]),
                 payload["idempotency_key"],
             )
             assert identity == expected_identity
@@ -4981,7 +4993,7 @@ async def test_child_capture_missing_final_locator_is_not_rebuilt(
     with closing(SessionControlStore(session_node / "session-control.sqlite", read_only=True)) as cold_control:
         assert cold_control.get_thread_creation_record(key) == frozen
     assert {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()} == captured_bytes
-    assert (session_node / "rollout/rollout.jsonl").read_bytes() == source_jsonl
+    assert (_main_thread_node(context, source.session_id) / "rollout/rollout.jsonl").read_bytes() == source_jsonl
 
 
 @pytest.mark.asyncio
@@ -6036,6 +6048,15 @@ async def test_production_lifespan_recovers_unpublished_fork(
     context = _production_fork_context(production_fork_container)
     source = await _seed_source(context, fork_provider_prepare)
     request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="context_fork", relationship="pinned")
+    operation_deadlines: list[ForkOperationDeadline] = []
+    for_operation = ForkDeadlineRegistry.for_operation
+
+    def record_deadline(registry: ForkDeadlineRegistry, *, target: str, operation_key: str):
+        deadline = for_operation(registry, target=target, operation_key=operation_key)
+        operation_deadlines.append(deadline)
+        return deadline
+
+    monkeypatch.setattr(ForkDeadlineRegistry, "for_operation", record_deadline)
     storage = context.saver._storage
     method = "materialize_fork_checkpoint" if crash_state == "prepared" else "complete_fork_materialization"
 
@@ -6071,7 +6092,7 @@ async def test_production_lifespan_recovers_unpublished_fork(
         with (
             storage.storage.fork_source_snapshot_scope(
                 session_id=capture.source_session_id, thread_id=capture.source_thread_id,
-                session_node=snapshot.session_node,
+                captured_root=snapshot.captured_root,
             ),
             pytest.raises(RuntimeError, match="禁止可写 SQLite"),
         ):
@@ -6094,6 +6115,10 @@ async def test_production_lifespan_recovers_unpublished_fork(
         restored = await _get_tuple(_production_fork_context(restarted), record.session_id)
         assert restored is not None
         assert [message.content for message in restored.checkpoint["channel_values"]["messages"]] == ["问题一", "回答一"]
+    assert len(operation_deadlines) == 2
+    assert operation_deadlines[0] is operation_deadlines[1]
+    assert operation_deadlines[0]._completed
+    assert operation_deadlines[0].deadline - operation_deadlines[0].started_at == 60.0
 
 
 @pytest.mark.asyncio

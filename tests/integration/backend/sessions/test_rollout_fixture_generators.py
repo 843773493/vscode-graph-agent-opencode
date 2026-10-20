@@ -156,10 +156,12 @@ def test_provider_stub_generator_writes_real_canonical_owner_and_admissions(
         assert len(tool_results) == 1
         assert "inspect_fixture 工具调用参数校验失败" in tool_results[0]["output"]
 
-    backup = rollout.parent / ".rollout-backup-fixture"
+    backup = bundle.directory / ".rollout-backup-fixture"
     shutil.copytree(rollout, backup)
     (rollout / "failed-generation").write_text("失败产物", encoding="utf-8")
     generator._restore_generation_backup(workspace)
     assert not backup.exists()
     assert not (rollout / "failed-generation").exists()
     assert (rollout / "index.sqlite").is_file()
+    assert not (bundle.directory / "rollout").exists()
+    assert not (rollout.parent / ".rollout-failed-regeneration").exists()

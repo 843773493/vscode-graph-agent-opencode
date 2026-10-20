@@ -40,7 +40,7 @@
 
 prepared target 恢复中重建 root branch、checkpoint namespace 与更新 database_meta 的时间，来自本次 `utc_now_text()`，使用明确的恢复事件组合名；它是 UTC ISO8601 文本，与来源 Turn/message 时间及复制提交时间分别归属。改名保持该恢复事务的原写入值。
 
-复制 detail 的物理根也按 owner 命名：full copy 中 rollout 的上一级是目标 SessionThread 的物理节点，main thread 时折叠到 Session 根，child thread 时是独立 thread node。状态类型与局部变量使用明确的目标 thread 物理根名称或就地说明，不能把两者都描述成 Session 根；消歧保持现有 locator、相对路径和目录安全校验，不搬迁目录。
+复制 detail 的物理根按 owner 定位：full copy 中 rollout 的上一级是目标 SessionThread 的物理节点，main 为 `threads/{main_thread_id}`，child 使用创建 record 冻结的日期 locator。创建、prepared fork、发布与恢复统一消费该节点；不读取旧 Session 根下的 rollout。私有 source capture 是当前 Thread 的冻结容器，保存其 rollout 和独立的 Session control 快照，不照搬 live Session 目录结构，也不能反向推断 live locator。
 
 `TurnRecord`创建、Turn acceptance、root输入消息的产生、execution启动/终结与复制操作提交分别核读写链；两个事件即使当前时间相同，也只有既有owner合同保证时才能说明一致。history的`created_at`必须标明实际投影的是哪个时间；各时长字段沿真实 writer 和 mapper 核对起止事件及投影路径，不因名字改成另一事件，也不把存储时间差描述为独立执行计时。时间注释同时交代格式/时区或单位、不可变性及复制保留规则；history helper 保留已携带的时区 offset，只有无时区消息按 UTC 解释，索引则明确拒绝无时区值，不能把正常 writer 使用 UTC 描述为所有输入强制转 UTC。SQLite 原时间文本与 datetime DTO 的 ISO8601 wire 表达分别说明，等价的 UTC 后缀 `+00:00` 与 `Z` 不表示事件变化；跨层对账保留原微秒精度，复制源/目标的原始时间事实仍单独验证。排序仍由既有logical ordinal与revision决定，不能退回墙钟排序。
 

@@ -95,6 +95,7 @@ _STAGING_DIR_NAME = ".staging"
 _ORPHANED_DIR_NAME = "orphaned"
 _ORPHANED_CREATION_DIR_NAME = "session-creation"
 _SESSION_ID_PATH_PLACEHOLDER = "ses_00000000000070008000000000000000"
+_THREAD_ID_PATH_PLACEHOLDER = "thr_00000000000070008000000000000000"
 
 # 创建意图六字段闭集；发布时初始化 nodes，session.json 只保留不可变身份。
 _METADATA_CALLER_KEYS = frozenset(
@@ -762,7 +763,9 @@ class SessionCreationService:
                 validate_path_budget(base, f"{relative_database}{suffix}")
             validate_sqlite_path_budget(base / relative_database)
 
-        rollout_database = f"1970/01/01/{session_id}/rollout/index.sqlite"
+        rollout_database = (
+            f"1970/01/01/{session_id}/threads/{_THREAD_ID_PATH_PLACEHOLDER}/rollout/index.sqlite"
+        )
         for suffix in ("", "-journal", "-wal", "-shm"):
             validate_path_budget(
                 self._sessions_root, f"{rollout_database}{suffix}"
@@ -815,8 +818,11 @@ class SessionCreationService:
         self._initialize_control_database(staging, record)
         threads_root = staging / "threads"
         threads_root.mkdir()
+        main_thread = threads_root / record.main_thread_id
+        main_thread.mkdir()
+        _fsync_directory(main_thread)
         _fsync_directory(threads_root)
-        # durability barrier：session.json、控制库与 child-thread 根目录均已
+        # durability barrier：session.json、控制库与唯一 main thread 节点均已
         # 持久化；此处补 staging 目录与 .staging 父目录 fsync。
         _fsync_directory(staging)
         _fsync_directory(staging.parent)
@@ -871,11 +877,7 @@ class SessionCreationService:
             CONTROL_DATABASE_NAME,
             "threads",
         }
-        allowed_entries = (
-            required_entries | {"rollout", ".rollout.write.lock", "debug"}
-            if record.purpose == "context_fork"
-            else required_entries
-        )
+        allowed_entries = required_entries
         if (record.purpose == "context_fork" and record.request_intent_json is not None
             and json.loads(record.request_intent_json)["goal_snapshot"] is not None):
             allowed_entries = allowed_entries | {"goal.json"}
@@ -885,12 +887,6 @@ class SessionCreationService:
                 f"fail closed）: path={directory}, "
                 f"required={sorted(required_entries)}, actual={entries}"
             )
-        rollout_lock = directory / ".rollout.write.lock"
-        if rollout_lock.is_symlink() or (rollout_lock.exists() and not rollout_lock.is_file()):
-            raise RuntimeError(f"{stage}: rollout lock 必须是普通文件: {rollout_lock}")
-        debug_root = directory / "debug"
-        if debug_root.is_symlink() or (debug_root.exists() and not debug_root.is_dir()):
-            raise RuntimeError(f"{stage}: debug 必须是普通目录: {debug_root}")
         goal_path = directory / "goal.json"
         if goal_path.is_symlink() or (goal_path.exists() and not goal_path.is_file()):
             raise RuntimeError(f"{stage}: Goal 必须是普通文件: {goal_path}")
@@ -902,23 +898,32 @@ class SessionCreationService:
                 f"path={threads_root}"
             )
         thread_entries = sorted(entry.name for entry in threads_root.iterdir())
-        if thread_entries:
+        if thread_entries != [record.main_thread_id]:
             raise RuntimeError(
-                f"{stage}: prepared Session 不得包含 child thread: "
-                f"path={threads_root}, actual={thread_entries}"
+                f"{stage}: prepared Session 必须只含冻结的 main thread: "
+                f"path={threads_root}, expected={record.main_thread_id}, actual={thread_entries}"
             )
-        rollout_root = directory / "rollout"
-        if rollout_root.exists() or rollout_root.is_symlink():
-            if rollout_root.is_symlink() or not rollout_root.is_dir():
-                raise RuntimeError(
-                    f"{stage}: prepared Session rollout 必须是普通目录: "
-                    f"path={rollout_root}"
-                )
-            if record.purpose != "context_fork":
-                raise RuntimeError(
-                    f"{stage}: normal Session 不得包含 rollout: path={rollout_root}"
-                )
-
+        main_thread = threads_root / record.main_thread_id
+        if main_thread.is_symlink() or not main_thread.is_dir():
+            raise RuntimeError(f"{stage}: main thread 必须是普通目录: {main_thread}")
+        main_entries = {entry.name for entry in main_thread.iterdir()}
+        allowed_main_entries = {"rollout", ".rollout.write.lock", "debug"} if record.purpose == "context_fork" else set()
+        if main_entries - allowed_main_entries:
+            raise RuntimeError(
+                f"{stage}: prepared main thread 条目集与预期不一致: "
+                f"path={main_thread}, actual={sorted(main_entries)}"
+            )
+        rollout_lock = main_thread / ".rollout.write.lock"
+        if rollout_lock.is_symlink() or (rollout_lock.exists() and not rollout_lock.is_file()):
+            raise RuntimeError(f"{stage}: rollout lock 必须是普通文件: {rollout_lock}")
+        debug_root = main_thread / "debug"
+        if debug_root.is_symlink() or (debug_root.exists() and not debug_root.is_dir()):
+            raise RuntimeError(f"{stage}: debug 必须是普通目录: {debug_root}")
+        rollout_root = main_thread / "rollout"
+        if rollout_root.is_symlink() or (rollout_root.exists() and not rollout_root.is_dir()):
+            raise RuntimeError(
+                f"{stage}: prepared main thread rollout 必须是普通目录: path={rollout_root}"
+            )
         manifest_path = directory / _SESSION_MANIFEST_NAME
         expected_bytes = self._expected_manifest_bytes(record, session_metadata)
         try:

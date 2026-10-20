@@ -20,6 +20,7 @@ import commentjson
 import httpx
 import pytest
 
+from app.core.path_utils import get_session_path_resolver
 from app.services.orchestration.session_subagent_service import _derive_delegation_id
 from tests.support.e2e_test_control import E2ETestControlHarness
 from tests.support.gateway_processes import (
@@ -397,7 +398,9 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
             assert child_job["thread_id"] == record["child_thread_id"]
             async with asyncio.timeout(30):
                 while True:
-                    wakeups = _rows(session_node / "rollout" / "index.sqlite", "SELECT * FROM runtime_execution_wakeups WHERE source_id = ?", (f"subagent:{delegation_id}:result",))
+                    resolver = get_session_path_resolver(workspace / ".boxteam/sessions")
+                    thread_node = resolver.resolve_thread_node(session_id, main_thread_id)
+                    wakeups = _rows(thread_node / "rollout" / "index.sqlite", "SELECT * FROM runtime_execution_wakeups WHERE source_id = ?", (f"subagent:{delegation_id}:result",))
                     if wakeups:
                         break
                     await asyncio.sleep(0.05)

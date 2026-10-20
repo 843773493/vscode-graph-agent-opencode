@@ -416,7 +416,7 @@ class TestReadMethods:
         )
 
     @pytest.mark.asyncio
-    async def test_resolve_thread_node_main_folds_to_session_dir(
+    async def test_resolve_thread_node_main_uses_catalog_thread_directory(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
         session_id, session_dir = await allocated_session(resolver)
@@ -425,12 +425,31 @@ class TestReadMethods:
         catalog_main_thread_id = str(
             store_main_thread_id(resolver, session_id)
         )
-        assert resolver.resolve_thread_node(session_id, "main") == session_dir
-        assert resolver.resolve_thread_node(session_id, session_id) == session_dir
         assert (
             resolver.resolve_thread_node(session_id, catalog_main_thread_id)
-            == session_dir
+            == session_dir / "threads" / catalog_main_thread_id
         )
+        for alias in ("", "main", session_id):
+            with pytest.raises(ValueError):
+                resolver.resolve_thread_node(session_id, alias)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("missing", ["main", "threads"])
+    async def test_main_thread_missing_directory_never_uses_session_root(
+        self, resolver: SessionCatalogPathResolver, missing: str,
+    ) -> None:
+        session_id, session_dir = await allocated_session(resolver)
+        main = resolver.main_thread_id(session_id)
+        (session_dir / "threads" / main).rmdir()
+        if missing == "threads":
+            (session_dir / "threads").rmdir()
+        legacy = session_dir / "rollout"
+        legacy.mkdir()
+        marker = legacy / "index.sqlite"
+        marker.write_bytes("不可误用旧 Session 根目录".encode())
+        with pytest.raises(RuntimeError, match="已发布 thread.*冻结 locator 缺失"):
+            resolver.resolve_thread_node(session_id, main)
+        assert marker.read_bytes() == "不可误用旧 Session 根目录".encode()
 
     @pytest.mark.asyncio
     async def test_resolve_thread_node_non_main_resolves_threads_subdir(
@@ -887,9 +906,14 @@ class TestStoreCreationRecordHonorsSessionId:
         record = store.create_or_get_creation_record(**self._create_kwargs())
         staging = sessions_root / ".staging" / record.session_id
         staging.mkdir(parents=True)
+        thread_node = staging / "threads" / record.main_thread_id
+        thread_node.mkdir(parents=True)
 
         assert resolver.resolve_prepared_session_node(record) == staging
-        assert resolver.resolve_prepared_thread_node(record, "main") == staging
+        assert resolver.resolve_prepared_thread_node(record, record.main_thread_id) == thread_node
+        for alias in ("", "main", record.session_id):
+            with pytest.raises(ValueError):
+                resolver.resolve_prepared_thread_node(record, alias)
         with pytest.raises(KeyError):
             resolver.resolve_session_node(record.session_id)
         with pytest.raises(KeyError, match="尚无目标 child thread"):

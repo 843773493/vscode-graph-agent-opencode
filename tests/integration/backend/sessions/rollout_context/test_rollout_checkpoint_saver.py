@@ -79,6 +79,11 @@ SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
 LEGACY_SESSION_ID = "ses_019b9187b87f78c78ef242bbd6043bfc"
 
 
+def _main_thread_node(sessions_dir: Path, session_id: str) -> Path:
+    resolver = get_session_path_resolver(sessions_dir)
+    return resolver.resolve_thread_node(session_id, resolver.main_thread_id(session_id))
+
+
 def _accept_user_execution(
     saver: RolloutCheckpointSaver,
     session_id: str,
@@ -976,7 +981,7 @@ def test_rollout_preserves_langchain_invalid_tool_calls_field(
         records = [
             json.loads(line)
             for line in (
-                get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+                _main_thread_node(sessions_dir, SESSION_ID)
                 / "rollout"
                 / "rollout.jsonl"
             )
@@ -1034,7 +1039,7 @@ def test_put_treats_unpersisted_initial_parent_as_root(
         restored = saver.get_tuple(build_checkpoint_config(thread_id))
         assert restored is not None
         assert restored.parent_config is None
-        root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+        root = _main_thread_node(sessions_dir, SESSION_ID)
         with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
             assert (
                 connection.execute(
@@ -1417,7 +1422,7 @@ def test_read_snapshot_does_not_touch_existing_rollout_files(
     thread_id = storage.storage.main_thread_id(SESSION_ID)
     storage.storage.initialize(SESSION_ID, thread_id=thread_id)
     rollout_root = (
-        get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+        _main_thread_node(sessions_dir, SESSION_ID)
         / "rollout"
     )
     rollout_path = rollout_root / "rollout.jsonl"
@@ -1482,7 +1487,7 @@ async def test_delete_legacy_rollout_does_not_initialize_removed_layout(
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, LEGACY_SESSION_ID)
     rollout_root = (
-        get_session_path_resolver(sessions_dir).resolve_session_node(LEGACY_SESSION_ID)
+        _main_thread_node(sessions_dir, LEGACY_SESSION_ID)
         / "rollout"
     )
     rollout_root.mkdir(parents=True)
@@ -1711,7 +1716,7 @@ def test_checkpoint_envelope_and_channels_are_authoritative_sqlite(
         assert restored.checkpoint["channel_values"]["task_state"] is None
 
         rollout_root = (
-            get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+            _main_thread_node(sessions_dir, SESSION_ID)
             / "rollout"
         )
         assert (rollout_root / "rollout.jsonl").is_file()
@@ -1862,7 +1867,7 @@ def test_terminal_turn_status_convergence_is_idempotent_after_termination(
 
         def turn_status() -> str:
             with sqlite3.connect(
-                get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+                _main_thread_node(sessions_dir, SESSION_ID)
                 / "rollout"
                 / "index.sqlite"
             ) as connection:
@@ -2640,7 +2645,7 @@ def test_pending_write_corruption_is_rejected_instead_of_decoded(
             {"messages": "1"},
         )
         saver.put_writes(config, [("counter", 1)], "task-1", "node-a")
-        root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+        root = _main_thread_node(sessions_dir, SESSION_ID)
         with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
             connection.execute(
                 "UPDATE pending_writes SET value_length = value_length + 1 WHERE checkpoint_id = ?",
@@ -2672,7 +2677,7 @@ def test_uncommitted_jsonl_tail_is_truncated_but_sqlite_loss_is_explicit_failure
             {"messages": "1"},
         )
         root = (
-            get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+            _main_thread_node(sessions_dir, SESSION_ID)
             / "rollout"
         )
         path = root / "rollout.jsonl"
@@ -2702,7 +2707,7 @@ def test_half_line_and_fsync_failure_never_become_committed_messages(
     saver = RolloutCheckpointSaver(sessions_dir)
     thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
     path = (
-        get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+        _main_thread_node(sessions_dir, SESSION_ID)
         / "rollout"
         / "rollout.jsonl"
     )
@@ -2788,7 +2793,7 @@ def test_sqlite_commit_window_is_retryable_without_duplicate_jsonl(
             )
 
         rollout_path = (
-            get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+            _main_thread_node(sessions_dir, SESSION_ID)
             / "rollout"
             / "rollout.jsonl"
         )
@@ -2895,7 +2900,7 @@ def test_concurrent_checkpoint_appends_do_not_interleave_jsonl(
     with ThreadPoolExecutor(max_workers=4) as executor:
         list(executor.map(append, range(4)))
 
-    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+    root = _main_thread_node(sessions_dir, SESSION_ID)
     records = [
         json.loads(line)
         for line in (root / "rollout" / "rollout.jsonl")
@@ -2932,7 +2937,7 @@ def test_repeating_same_checkpoint_is_idempotent_but_conflicting_payload_fails(
     )
     with _execution_scope(admission):
         first_config = saver.put(config, checkpoint, metadata, versions)
-        root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+        root = _main_thread_node(sessions_dir, SESSION_ID)
         jsonl_path = root / "rollout" / "rollout.jsonl"
         original = jsonl_path.read_bytes()
 
@@ -2974,7 +2979,7 @@ def test_checkpoint_retry_rejects_corrupted_commit_pointer(
     )
     with _execution_scope(admission):
         saver.put(config, checkpoint, metadata, versions)
-        root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+        root = _main_thread_node(sessions_dir, SESSION_ID)
         with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
             connection.execute(
                 "UPDATE checkpoints SET commit_id = 999999 WHERE checkpoint_id = ?",
@@ -3024,7 +3029,7 @@ def test_checkpoint_view_without_new_items_reuses_previous_commit(
             {"messages": "2"},
         )
 
-        root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+        root = _main_thread_node(sessions_dir, SESSION_ID)
         with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
             commit_count, first_commit, second_commit, last_commit = connection.execute(
                 "SELECT COUNT(*), "
@@ -3067,7 +3072,7 @@ def test_read_rejects_broken_storage_commit_offset_chain(
             {"source": "broken-commit-chain"},
             {"messages": "1"},
         )
-        root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+        root = _main_thread_node(sessions_dir, SESSION_ID)
         with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
             connection.execute(
                 "UPDATE storage_commits SET jsonl_offset_after = jsonl_offset_after - 1 "
@@ -3101,7 +3106,7 @@ def test_read_rejects_storage_commit_with_incomplete_item_catalog(
             {"source": "broken-commit-catalog"},
             {"messages": "1"},
         )
-        root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+        root = _main_thread_node(sessions_dir, SESSION_ID)
         with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
             connection.execute(
                 "UPDATE storage_commits SET jsonl_record_count = jsonl_record_count + 1 "
@@ -3135,7 +3140,7 @@ def test_read_rejects_catalog_locator_that_does_not_match_canonical_jsonl(
             {"source": "broken-item-locator"},
             {"messages": "1"},
         )
-        root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+        root = _main_thread_node(sessions_dir, SESSION_ID)
         with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
             connection.execute(
                 "UPDATE item_catalog SET jsonl_length = jsonl_length - 1 "
@@ -3157,7 +3162,7 @@ def test_rollout_schema_exposes_all_authoritative_tables_and_core_constraints(
     storage = _storage(sessions_dir)
     thread_id = storage.storage.main_thread_id(SESSION_ID)
     storage.storage.initialize(SESSION_ID, thread_id=thread_id)
-    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+    root = _main_thread_node(sessions_dir, SESSION_ID)
     expected_columns = {
         "database_meta": {
             "schema_version",
@@ -3387,7 +3392,7 @@ def test_schema_migration_checksum_and_completion_are_authoritative(
     storage = _storage(sessions_dir)
     thread_id = storage.storage.main_thread_id(SESSION_ID)
     storage.storage.initialize(SESSION_ID, thread_id=thread_id)
-    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+    root = _main_thread_node(sessions_dir, SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         connection.execute(
             "UPDATE schema_migrations SET migration_checksum = 'broken' WHERE from_version = 0"
@@ -3424,7 +3429,7 @@ def test_schema_migration_runs_transactionally_and_keeps_backup(
         assert snapshot.manifest.rollout_id.startswith("rollout-")
     finally:
         snapshot.close()
-    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+    root = _main_thread_node(sessions_dir, SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         assert (
             connection.execute(
@@ -3474,7 +3479,7 @@ def test_failed_schema_migration_restores_backup_and_requires_recovery(
             migration_sql="ALTER TABLE table_that_does_not_exist ADD COLUMN value TEXT",
         )
 
-    root = get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+    root = _main_thread_node(sessions_dir, SESSION_ID)
     with sqlite3.connect(root / "rollout" / "index.sqlite") as connection:
         assert (
             connection.execute(

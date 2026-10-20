@@ -137,7 +137,7 @@ async def _audit_log_api(
 
 
 def _audit_call(
-    session_node: Path, *, session_id: str, thread_id: str, job_id: str,
+    session_node: Path, thread_node: Path, *, session_id: str, thread_id: str, job_id: str,
     desired_revision: str, artifacts: Path, ordinal: int, succeeded: bool,
 ) -> tuple[ContextAssemblySnapshot, dict]:
     logs = [json.loads(path.read_text(encoding="utf-8"))
@@ -169,7 +169,7 @@ def _audit_call(
             reference["callback_model_call_id"]
         }
 
-    index = session_node / "rollout" / "index.sqlite"
+    index = thread_node / "rollout" / "index.sqlite"
     with sqlite3.connect(f"file:{index}?mode=ro", uri=True) as connection:
         connection.row_factory = sqlite3.Row
         row = connection.execute(
@@ -311,8 +311,8 @@ async def _assembly_history(
     return messages
 
 
-def _checkpoint_state(session_node: Path) -> dict:
-    with sqlite3.connect(f"file:{session_node / 'rollout' / 'index.sqlite'}?mode=ro", uri=True) as connection:
+def _checkpoint_state(thread_node: Path) -> dict:
+    with sqlite3.connect(f"file:{thread_node / 'rollout' / 'index.sqlite'}?mode=ro", uri=True) as connection:
         return {
             "checkpoints": connection.execute("SELECT checkpoint_id, view_id, checkpoint_json, metadata_json FROM checkpoints ORDER BY rowid").fetchall(),
             "channels": connection.execute("SELECT checkpoint_id, channel_name, storage_kind, value_state, value_hash, context_view_id FROM checkpoint_channels ORDER BY checkpoint_id, channel_name").fetchall(),
@@ -334,7 +334,9 @@ async def test_real_provider_provenance_survives_cold_history(
     # 只选择隔离 Session 已配置的真实 Responses Provider，不改全局配置或增加请求覆盖。
     session = _response(await client.patch(f"/api/v1/sessions/{session_id}", json={"provider_id": "backup_3"}), artifacts / "selected-provider.json")["data"]
     workspace = Path(e2e_workspace_root_path)
-    session_node = get_session_path_resolver(workspace / ".boxteam" / "sessions").resolve_thread_node(session_id, thread_id)
+    resolver = get_session_path_resolver(workspace / ".boxteam" / "sessions")
+    session_node = resolver.resolve_session_node(session_id)
+    thread_node = resolver.resolve_thread_node(session_id, thread_id)
     desired = ToolSelectionStore(boxteam_root=workspace / ".boxteam").snapshot("default")
     snapshots = []
     receipts = []
@@ -351,7 +353,7 @@ async def test_real_provider_provenance_survives_cold_history(
         assert not traces["has_more"]
         assert len([event for event in traces["items"]
                     if event["job_id"] == sent["job_id"] and event["type"] == "llm_request"]) == 1
-        snapshot, receipt = _audit_call(session_node, session_id=session_id, thread_id=thread_id,
+        snapshot, receipt = _audit_call(session_node, thread_node, session_id=session_id, thread_id=thread_id,
             job_id=sent["job_id"], desired_revision=desired.revision, artifacts=artifacts,
             ordinal=ordinal, succeeded=succeeded)
         snapshots.append(snapshot)
@@ -386,7 +388,7 @@ async def test_real_provider_provenance_survives_cold_history(
         assert second.previous_assembly_id == snapshots[0].assembly_id
         assert stable_prefix_bytes(second.prefix.state.frames).startswith(stable_prefix_bytes(first.prefix.state.frames))
     assert ToolSelectionStore(boxteam_root=workspace / ".boxteam").snapshot("default").revision == desired.revision
-    before = _checkpoint_state(session_node)
+    before = _checkpoint_state(thread_node)
     _save(artifacts / "before-cold-checkpoint-state.json", before)
     live_history = _response(await client.post(f"/api/v1/sessions/{session_id}/history", json={
         "direction": "head", "turns": 2, "include": ["user", "text", "final_response", "metadata"],
@@ -408,7 +410,7 @@ async def test_real_provider_provenance_survives_cold_history(
         for snapshot, receipt in zip(snapshots, receipts, strict=True):
             await _assembly_history(client, session, snapshot, artifacts, phase="cold",
                                     selected_message_ids=receipt["selected_history_message_ids"])
-        after = _checkpoint_state(session_node)
+        after = _checkpoint_state(thread_node)
         _save(artifacts / "after-cold-checkpoint-state.json", after)
         assert after == before, "冷 history/assembly projection 不得创建或改写 checkpoint/seal"
     finally:

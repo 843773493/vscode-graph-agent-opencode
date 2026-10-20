@@ -149,13 +149,7 @@ class CheckpointForkSource:
         resolver = self._storage.storage._path_resolver
         session_path = resolver.resolve_prepared_session_node(record)
         thread_id = record.main_thread_id
-        thread_path = resolver.resolve_prepared_thread_node(record, thread_id)
-        if thread_path != session_path:
-            raise RuntimeError(
-                "prepared fork main thread 必须折叠到 Session 根目录: "
-                f"session_id={record.session_id}, thread_id={thread_id}, "
-                f"path={thread_path}"
-            )
+        resolver.resolve_prepared_thread_node(record, thread_id)
         control_path = session_path / CONTROL_DATABASE_NAME
         if not control_path.is_file() or control_path.is_symlink():
             raise RuntimeError(
@@ -202,7 +196,7 @@ class CheckpointForkSource:
                 None, copy_context().run, partial(
                     capture_fork_rollout_snapshot, self._storage,
                     source_session_id=source_session_id, source_thread_id=source_owner.thread_id,
-                    snapshot_session_node=snapshot_root / source_session_id,
+                    captured_root=snapshot_root / source_session_id,
                     snapshot_id=capture_record.snapshot_id, rollout_lock_held=True,
                 ),
             )
@@ -220,7 +214,7 @@ class CheckpointForkSource:
             await observe_phase(capture_record.copy_operation_id, "copy.source.partial")
             with self._storage.storage.fork_source_snapshot_scope(
                 session_id=source_session_id, thread_id=source_owner.thread_id,
-                session_node=rollout_snapshot.session_node,
+                captured_root=rollout_snapshot.captured_root,
             ):
                 point = self._resolve_fork_source(
                     source_session_id=source_session_id, source_thread_id=source_owner.thread_id,
@@ -231,7 +225,7 @@ class CheckpointForkSource:
                 )
                 if point.source_view_id is None:
                     raise RuntimeError("source-mismatch: captured resource selection 缺少 view")
-                stage = rollout_snapshot.session_node / "rollout"
+                stage = rollout_snapshot.captured_root / "rollout"
                 with closing(sqlite3.connect(
                     (stage / "index.sqlite").as_uri() + "?mode=ro&immutable=1", uri=True,
                 )) as connection:
@@ -275,11 +269,11 @@ class CheckpointForkSource:
                     )
                     self._storage.assemblies.check_fork_target_resources(
                         connection, source, target, choices=choices, selected_only=selected_only,
-                        captured_node=rollout_snapshot.session_node,
+                        captured_node=rollout_snapshot.captured_root,
                     )
                     self._checkpoint._activation_store().check_fork_target_resources(
                         connection, source, target, choices=choices, selected_only=selected_only,
-                        captured_node=rollout_snapshot.session_node,
+                        captured_node=rollout_snapshot.captured_root,
                     )
             if references and self.attachment_store is None:
                 raise RuntimeError("fork source 含附件，但 Saver 未注入唯一 AttachmentBlobStore")

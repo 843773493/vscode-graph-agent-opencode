@@ -167,6 +167,7 @@ def _create_child_thread(
         artifact_manifest=manifest_text,
         artifact_manifest_hash=compute_artifact_manifest_hash(artifact_manifest),
     )
+    (control.database_path.parent / record.final_relative_locator).mkdir(parents=True)
     control.publish_thread_creation_record(key, session_id=owner_session_id)
     if admission_state == "bound":
         claimed = control.claim_initial_execution_intent(

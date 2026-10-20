@@ -497,72 +497,54 @@ class SessionCatalogPathResolver:
     ) -> Path:
         """prepared target 只含 main thread，拒绝解析任何尚未发布的 child。"""
         path = self.resolve_prepared_session_node(record)
-        if thread_id not in ("main", record.session_id, record.main_thread_id):
+        validate_thread_id(thread_id)
+        if thread_id != record.main_thread_id:
             raise KeyError(
                 "prepared Session 尚无目标 child thread: "
                 f"session_id={record.session_id}, thread_id={thread_id!r}"
             )
-        return path
+        thread_path = path / "threads" / record.main_thread_id
+        if (path / "threads").is_symlink() or thread_path.is_symlink() or not thread_path.is_dir():
+            raise RuntimeError(
+                "prepared main thread 物理目录缺失或不是普通目录: "
+                f"session_id={record.session_id}, thread_id={thread_id}, path={thread_path}"
+            )
+        return thread_path
 
     def resolve_thread_node(self, session_id: str, thread_id: str) -> Path:
         """按受检 SessionThread 解析线程资源目录。
 
-        - main thread 折叠保持（R3a）：``"main"`` / session 自身 ID /
-          catalog ``main_thread_id`` 都解析到会话目录自身；
+        - main thread 使用 workspace catalog 冻结的 ``main_thread_id``，
+          物理节点为 ``threads/{main_thread_id}``，不接受线程别名；
         - 非 main thread 的可见性和物理 locator 由 owner Session 的
           ``session-control.sqlite`` 共同校验：先读取已发布
           ``thread_catalog`` child row，再读取同一发布事务冻结的
           ``thread_creation_records.final_relative_locator``；不扫描
           ``threads/``，也不从日期桶猜测路径。
         """
+        validate_thread_id(thread_id)
         session_dir = self.resolve_session_node(session_id)
         node = self._store.get_node(session_id)
-        if (
-            not thread_id
-            or thread_id == "main"
-            or thread_id == session_id
-            or thread_id == node.main_thread_id
-        ):
-            return session_dir
-        # child Session 节点是 NodeDebug 的折叠 thread owner：父会话地址携带
-        # 子会话 ID 时，直接返回子会话自身目录。该别名由 catalog 子树约束，
-        # 不扫描磁盘，也不把任意字符串当作 thread_id 接受。
-        try:
-            child_node = self._store.get_node(thread_id)
-        except KeyError:
-            if thread_id.startswith("ses_"):
-                raise KeyError(
-                    "目标 child session 不存在: "
-                    f"session_id={session_id}, thread_id={thread_id}"
-                ) from None
-            child_node = None
-        if (
-            child_node is not None
-            and child_node.kind == "session"
-        ):
-            if child_node.parent_node_id != session_id:
-                raise RuntimeError(
-                    "thread 不属于目标 session: "
-                    f"session_id={session_id}, thread_id={thread_id}"
-                )
-            return self.resolve_session_node(thread_id)
-        validate_thread_id(thread_id)
         control_path = session_dir / CONTROL_DATABASE_NAME
         if not control_path.is_file() or control_path.is_symlink():
             raise RuntimeError(
-                "Session control 数据库缺失或不是普通文件，拒绝解析 child "
+                "Session control 数据库缺失或不是普通文件，拒绝解析 "
                 f"thread（fail closed）: session_id={session_id}, "
                 f"thread_id={thread_id}, control_path={control_path}"
             )
-        control_store = SessionControlStore(control_path)
+        control_store = SessionControlStore(control_path, read_only=True)
         try:
-            locator = control_store.get_published_child_thread_locator(thread_id)
+            if thread_id == node.main_thread_id:
+                control_store.verify_matches_catalog_main_thread(thread_id)
+                locator = f"threads/{thread_id}"
+            else:
+                locator = control_store.get_published_child_thread_locator(thread_id)
         finally:
             control_store.close()
         thread_path = session_dir / locator
-        if not thread_path.is_dir() or thread_path.is_symlink():
+        if (session_dir / "threads").is_symlink() or not thread_path.is_dir() or thread_path.is_symlink():
             raise RuntimeError(
-                "已发布 child thread 的冻结 locator 缺失或不是普通目录，"
+                "已发布 thread 的冻结 locator 缺失或不是普通目录，"
                 f"拒绝解析（fail closed）: session_id={session_id}, "
                 f"thread_id={thread_id}, path={thread_path}"
             )

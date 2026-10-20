@@ -61,7 +61,7 @@ class CheckpointForkCopy:
         storage = self._storage.storage
         with storage.fork_source_snapshot_scope(
             session_id=source_session_id, thread_id=source_owner.thread_id,
-            session_node=source_snapshot.session_node,
+            captured_root=source_snapshot.captured_root,
         ), session_thread_owner_scope(source_owner, langgraph_thread_id=source_owner.thread_id):
             resolved = self._source._resolve_fork_source(
                 source_session_id=source_session_id, source_thread_id=source_owner.thread_id,
